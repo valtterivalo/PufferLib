@@ -4,7 +4,7 @@
  *
  * Handles player movement including:
  * - Tile selection (adjacent, diagonal, farcast positions)
- * - Pathfinding via step_toward_destination
+ * - Pathfinding via the shared encounter stepper
  * - Freeze mechanics integration
  * - Wilderness boundary checking
  *
@@ -211,186 +211,9 @@ static int select_farcast_tile(Player* p, int target_x, int target_y, int distan
     return 0;
 }
 
-/**
- * Move player one tile toward their destination (collision-aware).
- *
- * Tries diagonal first when both dx and dy are non-zero. If the diagonal
- * step is blocked by collision, falls back to cardinal x then cardinal y.
- * If all directions are blocked, the player doesn't move.
- *
- * When cmap is NULL, all tiles are traversable (flat arena behavior).
- *
- * @param p    Player to move
- * @param cmap Collision map (may be NULL)
- * @return 1 if moved, 0 if already at destination or blocked
- */
-static int step_toward_destination(Player* p, const CollisionMap* cmap) {
-    int dx = p->dest_x - p->x;
-    int dy = p->dest_y - p->y;
-    if (dx == 0 && dy == 0) {
-        return 0;
-    }
-
-    int step_x = (dx > 0) ? 1 : (dx < 0 ? -1 : 0);
-    int step_y = (dy > 0) ? 1 : (dy < 0 ? -1 : 0);
-
-    /* diagonal movement: try diagonal first, then cardinal fallbacks */
-    if (step_x != 0 && step_y != 0) {
-        if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, step_y)) {
-            p->x += step_x;
-            p->y += step_y;
-            return 1;
-        }
-        /* diagonal blocked — try cardinal x */
-        if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, 0)) {
-            p->x += step_x;
-            return 1;
-        }
-        /* try cardinal y */
-        if (collision_traversable_step(cmap, 0, p->x, p->y, 0, step_y)) {
-            p->y += step_y;
-            return 1;
-        }
-        /* all blocked */
-        return 0;
-    }
-
-    /* cardinal movement */
-    if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, step_y)) {
-        p->x += step_x;
-        p->y += step_y;
-        return 1;
-    }
-
-    /* blocked */
-    return 0;
-}
-
-/**
- * Set player destination and initiate movement.
- *
- * Running moves 2 tiles per tick (OSRS default for PvP).
- * Takes first step, then second step if not at destination.
- *
- * @param p      Player
- * @param dest_x Destination x coordinate
- * @param dest_y Destination y coordinate
- * @param cmap   Collision map (may be NULL)
- */
-static void set_destination(Player* p, int dest_x, int dest_y, const CollisionMap* cmap) {
-    p->dest_x = dest_x;
-    p->dest_y = dest_y;
-    if (p->x == dest_x && p->y == dest_y) {
-        p->is_moving = 0;
-        return;
-    }
-    // First step (walk)
-    if (!step_toward_destination(p, cmap)) {
-        p->is_moving = 0;
-        return;
-    }
-    // Second step (run) - only if not at destination yet
-    if (p->x != dest_x || p->y != dest_y) {
-        step_toward_destination(p, cmap);
-    }
-    // Still moving if not at destination
-    p->is_moving = (p->x != dest_x || p->y != dest_y) ? 1 : 0;
-}
-
 static int pvp_tile_walkable(void* ctx, int x, int y) {
     const CollisionMap* cmap = (const CollisionMap*)ctx;
     return is_in_wilderness(x, y) && collision_tile_walkable(cmap, 0, x, y);
-}
-
-/* process_movement: deleted. movement now flows through walk_dest +
-   osrs_encounter_player_step (see pvp_step_player_movement above). the
-   five legacy modes (adjacent / under / diagonal / farcast / none) are
-   translated to walk_dest tiles in execute_switches, keeping the same
-   semantics while using the shared SDK's BFS pathfinder. */
-
-/**
- * Simple chase movement - move toward target's position.
- *
- * Blocked by freeze. Used for basic follow behavior.
- *
- * @param p      Player to move
- * @param target Target to chase
- */
-static void move_toward_target(
-    Player* p,
-    Player* target,
-    int attack_range,
-    const CollisionMap* cmap
-) {
-    if (p->frozen_ticks > 0) {
-        return;
-    }
-    int moved = encounter_chase_attack_target(
-        p,
-        target->x,
-        target->y,
-        1,
-        attack_range,
-        cmap,
-        0,
-        0,
-        pvp_tile_walkable,
-        (void*)cmap,
-        NULL,
-        NULL,
-        NULL,
-        0,
-        0,
-        0,
-        0,
-        0);
-    p->is_moving = moved;
-}
-
-/**
- * Step out from same tile as target to an adjacent tile.
- *
- * When on the same tile as target (distance=0), you cannot attack.
- * This function steps to an adjacent tile so you can attack next tick.
- * Tries directions in order: West, East, South, North (matches Java clippedStep).
- *
- * Blocked by freeze - if frozen on same tile, you're stuck.
- *
- * @param p      Player to move
- * @param target Target (used for position reference)
- */
-static void step_out_from_same_tile(Player* p, Player* target, const CollisionMap* cmap) {
-    if (p->frozen_ticks > 0) {
-        return;
-    }
-
-    // Try West (x-1, y)
-    int dest_x = target->x - 1;
-    int dest_y = target->y;
-    if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
-        set_destination(p, dest_x, dest_y, cmap);
-        return;
-    }
-    // Try East (x+1, y)
-    dest_x = target->x + 1;
-    if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
-        set_destination(p, dest_x, dest_y, cmap);
-        return;
-    }
-    // Try South (x, y-1)
-    dest_x = target->x;
-    dest_y = target->y - 1;
-    if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
-        set_destination(p, dest_x, dest_y, cmap);
-        return;
-    }
-    // Try North (x, y+1)
-    dest_y = target->y + 1;
-    if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
-        set_destination(p, dest_x, dest_y, cmap);
-        return;
-    }
-    // All directions blocked
 }
 
 /**
@@ -463,23 +286,28 @@ static void resolve_same_tile(Player* mover, Player* blocker, const CollisionMap
  * @param out          Populated on success.
  * @return 1 if target found, 0 if slot invalid.
  */
+typedef struct {
+    OsrsEnv* env;
+    int agent_idx;
+    int has_new_target;
+    int target_slot;
+    AttackStyle style;
+    int range;
+} PvpAttackMoveIntent;
+
 static int pvp_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget* out) {
     if (target_slot < 0 || target_slot >= NUM_AGENTS) return 0;
-    OsrsEnv* env = (OsrsEnv*)ctx;
+    PvpAttackMoveIntent* intent = (PvpAttackMoveIntent*)ctx;
+    OsrsEnv* env = intent->env;
     Player* target = &env->players[target_slot];
-    Player* self = &env->players[1 - target_slot];
-    AttackStyle style = get_slot_weapon_attack_style(self);
-    int range;
-    if (style == ATTACK_STYLE_MELEE || style == ATTACK_STYLE_NONE) {
-        range = 1;
-    } else {
-        range = get_attack_range(self, style);
-    }
     out->slot = target_slot;
     out->x = target->x;
     out->y = target->y;
     out->size = 1;
-    out->attack_range = range;
+    out->attack_range = intent->range;
+    out->delivery = (intent->style == ATTACK_STYLE_MELEE || intent->style == ATTACK_STYLE_NONE)
+        ? OSRS_ATTACK_DELIVERY_MELEE
+        : OSRS_ATTACK_DELIVERY_PROJECTILE;
     return 1;
 }
 
@@ -497,8 +325,8 @@ static inline OsrsEncounterArena pvp_build_arena(OsrsEnv* env) {
     arena.walkable_ctx = (void*)arena.collision_map;
     arena.extra_blocked = NULL;
     arena.blocked_ctx = NULL;
-    arena.los_blockers = NULL;
-    arena.los_blocker_count = 0;
+    arena.projectile_occlusion = osrs_projectile_occlusion_collision_map(
+        arena.collision_map, 0);
     arena.arena_base_x = 0;
     arena.arena_base_y = 0;
     arena.arena_w = 0;
@@ -514,25 +342,38 @@ static inline OsrsEncounterArena pvp_build_arena(OsrsEnv* env) {
  * to the lookup target). EXPLICIT_FIRST policy means an in-progress walk
  * always wins over a chase. Returns the SDK result for the caller to log.
  */
-static inline OsrsPlayerStepResult pvp_step_player_movement(OsrsEnv* env, int agent_idx) {
+static inline OsrsPlayerStepResult pvp_step_player_movement(
+    OsrsEnv* env,
+    int agent_idx,
+    PvpAttackMoveIntent intent
+) {
     OsrsPlayerStepResult result = {.target_slot = -1};
     int* dest_x = &env->pvp_runtime.walk_dest_x[agent_idx];
     int* dest_y = &env->pvp_runtime.walk_dest_y[agent_idx];
-
-    /* skip when no explicit walk destination — execute_attack_movement still
-       handles attack-driven auto-chase via the legacy chase code path. */
-    if (*dest_x < 0 || *dest_y < 0) return result;
-
     Player* p = &env->players[agent_idx];
+
+    if (intent.has_new_target) {
+        *dest_x = -1;
+        *dest_y = -1;
+    }
+
+    int has_dest = *dest_x >= 0 && *dest_y >= 0;
+    if (!has_dest && !intent.has_new_target &&
+            !osrs_interaction_active(&p->interaction)) {
+        return result;
+    }
+
     OsrsEncounterArena arena = pvp_build_arena(env);
+    intent.env = env;
+    intent.agent_idx = agent_idx;
     OsrsPlayerStepInput input = {
         .player = p,
         .interaction = &p->interaction,
         .target_lookup = pvp_lookup_attack_target,
-        .target_ctx = env,
-        .has_new_target = 0,
-        .new_target_slot = -1,
-        .move_kind = OSRS_PLAYER_MOVE_DESTINATION,
+        .target_ctx = &intent,
+        .has_new_target = intent.has_new_target,
+        .new_target_slot = intent.target_slot,
+        .move_kind = has_dest ? OSRS_PLAYER_MOVE_DESTINATION : OSRS_PLAYER_MOVE_NONE,
         .target_move_policy = OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
         .move_action = 0,
         .dest_x = dest_x,
@@ -555,39 +396,6 @@ static inline void pvp_set_walk_dest_from_head_move(OsrsEnv* env, int agent_idx,
     if (move_action <= 0 || move_action >= MOVE_DIM) return;
     env->pvp_runtime.walk_dest_x[agent_idx] = p->x + ENCOUNTER_MOVE_TARGET_DX[move_action];
     env->pvp_runtime.walk_dest_y[agent_idx] = p->y + ENCOUNTER_MOVE_TARGET_DY[move_action];
-}
-
-/**
- * Continue movement for a player who is already moving.
- *
- * Used in sequential mode where movement clicks set destination but
- * don't immediately step. Each tick, players with is_moving=1 should
- * continue moving toward their destination.
- *
- * Running moves 2 tiles per tick (OSRS default for PvP).
- *
- * @param p Player to continue moving
- */
-__attribute__((unused))
-static void continue_movement(Player* p, const CollisionMap* cmap) {
-    if (!p->is_moving) {
-        return;
-    }
-    if (p->frozen_ticks > 0) {
-        p->is_moving = 0;
-        return;
-    }
-    // First step (walk)
-    if (!step_toward_destination(p, cmap)) {
-        p->is_moving = 0;
-        return;
-    }
-    // Second step (run) - only if not at destination yet
-    if (p->x != p->dest_x || p->y != p->dest_y) {
-        step_toward_destination(p, cmap);
-    }
-    // Still moving if not at destination
-    p->is_moving = (p->x != p->dest_x || p->y != p->dest_y) ? 1 : 0;
 }
 
 #endif // OSRS_PVP_MOVEMENT_H

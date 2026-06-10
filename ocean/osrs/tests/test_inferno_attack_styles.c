@@ -17,6 +17,7 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_anim.h"
+#include "ocean/osrs/osrs_projectile_orientation.h"
 #include "ocean/osrs/osrs_render_motion.h"
 #include <math.h>
 
@@ -313,6 +314,14 @@ static void init_spell_cast_test_state(InfernoState* state, InfNPCType target_ty
     state->player_dest_y = -1;
     osrs_interaction_init(&state->interaction);
     encounter_apply_loadout(&state->player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    {
+        const uint8_t* loadouts[] = {
+            INF_MAX_MAGE_LOADOUT,
+            INF_MAX_RANGE_LONG_LOADOUT,
+            INF_MAX_RANGE_FAST_LOADOUT,
+        };
+        encounter_populate_inventory(&state->player, loadouts, 3, NULL);
+    }
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state->loadout_stats[INF_GEAR_MAGE]);
@@ -1409,24 +1418,7 @@ static int test_inventory_potion_vials(int doses) {
 }
 
 static int test_player_inventory_occupied_slots(Player* p) {
-    int occupied = 0;
-
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
-            uint8_t item = p->inventory[s][i];
-            if (item == ITEM_NONE) continue;
-
-            int is_equipped = 0;
-            for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
-                if (p->equipped[e] == item) {
-                    is_equipped = 1;
-                    break;
-                }
-            }
-            if (!is_equipped)
-                occupied++;
-        }
-    }
+    int occupied = osrs_player_inventory_count(p);
 
     occupied += p->food_count;
     occupied += p->karambwan_count;
@@ -1446,11 +1438,8 @@ static int test_player_slot_inventory_contains(
     int gear_slot,
     uint8_t item
 ) {
-    for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
-        if (p->inventory[gear_slot][i] == item)
-            return 1;
-    }
-    return 0;
+    (void)gear_slot;
+    return osrs_player_inventory_has_item(p, item);
 }
 
 static void test_inferno_reset_inventory_leaves_one_empty_slot(void) {
@@ -2236,23 +2225,57 @@ static int chase_block_test_path_blocked(void* ctx, int x, int y) {
     return chase_block_test_has_block(t, x, y);
 }
 
-static void chase_block_test_run_until_attackable(
-    Player* player, const ChaseBlockTest* blocks,
-    int target_x, int target_y, int target_size, int attack_range,
-    const LOSBlocker* los_blockers, int los_blocker_count
+static OsrsEncounterArena chase_block_test_arena(
+    const ChaseBlockTest* blocks,
+    const LOSBlocker* los_blockers,
+    int los_blocker_count
 ) {
-    for (int i = 0; i < 12 && !encounter_player_can_attack(
-            player->x, player->y,
-            target_x, target_y, target_size, attack_range,
-            los_blockers, los_blocker_count); i++) {
+    return (OsrsEncounterArena){
+        .collision_map = NULL,
+        .world_offset_x = 0,
+        .world_offset_y = 0,
+        .is_walkable = chase_block_test_walkable,
+        .walkable_ctx = (void*)blocks,
+        .extra_blocked = chase_block_test_path_blocked,
+        .blocked_ctx = (void*)blocks,
+        .projectile_occlusion = los_blocker_count > 0
+            ? osrs_projectile_occlusion_los_blockers(los_blockers, los_blocker_count)
+            : osrs_projectile_occlusion_open(),
+        .arena_base_x = 0,
+        .arena_base_y = 0,
+        .arena_w = 11,
+        .arena_h = 11,
+    };
+}
+
+static OsrsAttackTarget chase_block_test_projectile_target(
+    int target_x,
+    int target_y,
+    int target_size,
+    int attack_range
+) {
+    return (OsrsAttackTarget){
+        .slot = 0,
+        .x = target_x,
+        .y = target_y,
+        .size = target_size,
+        .attack_range = attack_range,
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+    };
+}
+
+static void chase_block_test_run_until_attackable(
+    Player* player,
+    const ChaseBlockTest* blocks,
+    const OsrsAttackTarget* target,
+    const OsrsEncounterArena* arena
+) {
+    for (int i = 0; i < 12 && !encounter_attack_target_can_reach_from_tile(
+            player->x, player->y, target, arena); i++) {
         int moved = encounter_chase_attack_target(
             player,
-            target_x, target_y, target_size, attack_range,
-            NULL, 0, 0,
-            chase_block_test_walkable, (void*)blocks,
-            chase_block_test_path_blocked, (void*)blocks,
-            los_blockers, los_blocker_count,
-            0, 0, 11, 11);
+            target,
+            arena);
         ASSERT_INT_EQ("continued chase avoids blocked tiles",
             chase_block_test_has_block(blocks, player->x, player->y), 0);
         if (!moved) break;
@@ -2272,23 +2295,21 @@ static void test_attack_chase_uses_reachable_approach_tile(void) {
     player.x = 0;
     player.y = 5;
 
+    OsrsAttackTarget target = chase_block_test_projectile_target(5, 5, 1, 3);
+    OsrsEncounterArena arena = chase_block_test_arena(&blocks, NULL, 0);
     int moved = encounter_chase_attack_target(
         &player,
-        5, 5, 1, 3,
-        NULL, 0, 0,
-        chase_block_test_walkable, &blocks,
-        chase_block_test_path_blocked, &blocks,
-        NULL, 0,
-        0, 0, 11, 11);
+        &target,
+        &arena);
 
     ASSERT_INT_EQ("chase moves despite sealed nearest attack tile", moved, 1);
     ASSERT_INT_EQ("chase does not stay on start x", player.x == 0 && player.y == 5, 0);
     ASSERT_INT_EQ("chase avoids blocked tiles",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
 
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 5, 1, 3, NULL, 0);
+    chase_block_test_run_until_attackable(&player, &blocks, &target, &arena);
     ASSERT_INT_EQ("chase reaches a reachable attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 5, 1, 3, NULL, 0), 1);
+        encounter_attack_target_can_reach_from_tile(player.x, player.y, &target, &arena), 1);
 }
 
 static void test_attack_chase_routes_around_los_blocker_while_in_range(void) {
@@ -2305,24 +2326,22 @@ static void test_attack_chase_routes_around_los_blocker_while_in_range(void) {
     player.x = 0;
     player.y = 0;
 
+    OsrsAttackTarget target = chase_block_test_projectile_target(5, 0, 1, 10);
+    OsrsEncounterArena arena = chase_block_test_arena(&blocks, &pillar, 1);
     ASSERT_INT_EQ("starting tile is range-valid but LOS-blocked",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &pillar, 1), 0);
+        encounter_attack_target_can_reach_from_tile(player.x, player.y, &target, &arena), 0);
 
     int moved = encounter_chase_attack_target(
         &player,
-        5, 0, 1, 10,
-        NULL, 0, 0,
-        chase_block_test_walkable, &blocks,
-        chase_block_test_path_blocked, &blocks,
-        &pillar, 1,
-        0, 0, 11, 11);
+        &target,
+        &arena);
 
     ASSERT_INT_EQ("LOS-blocked in-range target causes movement", moved, 1);
     ASSERT_INT_EQ("chase avoids LOS blocker tile",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 10, &pillar, 1);
+    chase_block_test_run_until_attackable(&player, &blocks, &target, &arena);
     ASSERT_INT_EQ("chase reaches a clear long-range attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &pillar, 1), 1);
+        encounter_attack_target_can_reach_from_tile(player.x, player.y, &target, &arena), 1);
 }
 
 static void test_attack_chase_routes_around_los_blocker_for_short_range(void) {
@@ -2339,21 +2358,19 @@ static void test_attack_chase_routes_around_los_blocker_for_short_range(void) {
     player.x = 0;
     player.y = 0;
 
+    OsrsAttackTarget target = chase_block_test_projectile_target(5, 0, 1, 3);
+    OsrsEncounterArena arena = chase_block_test_arena(&blocks, &pillar, 1);
     int moved = encounter_chase_attack_target(
         &player,
-        5, 0, 1, 3,
-        NULL, 0, 0,
-        chase_block_test_walkable, &blocks,
-        chase_block_test_path_blocked, &blocks,
-        &pillar, 1,
-        0, 0, 11, 11);
+        &target,
+        &arena);
 
     ASSERT_INT_EQ("short-range LOS-blocked target causes movement", moved, 1);
     ASSERT_INT_EQ("short-range chase avoids LOS blocker tile",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 3, &pillar, 1);
+    chase_block_test_run_until_attackable(&player, &blocks, &target, &arena);
     ASSERT_INT_EQ("chase reaches a clear short-range attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 3, &pillar, 1), 1);
+        encounter_attack_target_can_reach_from_tile(player.x, player.y, &target, &arena), 1);
 }
 
 static void test_melee_fallback_geometry(void) {
@@ -7085,6 +7102,26 @@ static void test_player_projectile_render_uses_stored_reference_timing(void) {
         bowfa_ov.projectiles[0].impact_gfx_id, 0);
 }
 
+static void test_projectile_anchor_effect_subtile_round_trips_entity_center(void) {
+    printf("--- projectile anchor effect subtile round-trips entity center ---\n");
+
+    int player_sub_x = 10 * 128 + 64;
+    int player_sub_y = 17 * 128 + 64;
+    float anchor_x = osrs_projectile_anchor_coord_from_subtile(player_sub_x);
+    float anchor_y = osrs_projectile_anchor_coord_from_subtile(player_sub_y);
+
+    ASSERT_FLOAT_NEAR("projectile anchor x is tile origin",
+        anchor_x, 10.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile anchor y is tile origin",
+        anchor_y, 17.0f, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile effect x returns to entity center",
+        osrs_projectile_subtile_from_anchor_coord(anchor_x),
+        (float)player_sub_x, 0.0001f);
+    ASSERT_FLOAT_NEAR("projectile effect y returns to entity center",
+        osrs_projectile_subtile_from_anchor_coord(anchor_y),
+        (float)player_sub_y, 0.0001f);
+}
+
 static void test_magic_splash_landing_keeps_spell_visual_context(void) {
     printf("--- magic splash landing keeps spell visual context ---\n");
 
@@ -7910,6 +7947,7 @@ int main(void) {
     test_inferno_npc_projectile_render_tracks_target_npc_slot();
     test_inferno_zuk_projectile_render_uses_combat_visual_rows();
     test_player_projectile_render_uses_stored_reference_timing();
+    test_projectile_anchor_effect_subtile_round_trips_entity_center();
     test_magic_splash_landing_keeps_spell_visual_context();
     test_npc_overkill_hit_caps_splat_hp_and_damage_stats();
     test_blood_barrage_overkill_heals_from_capped_damage();

@@ -274,6 +274,7 @@ typedef struct {
     // GAE
     float gamma;
     float gae_lambda;
+    float state_lambda;
     // VTrace
     float vtrace_rho_clip;
     float vtrace_c_clip;
@@ -290,6 +291,7 @@ typedef struct {
     float explore_alpha;
     float explore_beta;
     float explore_decay;
+    float state_priority_decay;
     // Flags
     bool reset_state;
     int cudagraphs;
@@ -1528,7 +1530,7 @@ void train_impl(PuffeRL& pufferl) {
     if (pufferl.curriculum_enabled) {
         puf_zero(&advantages_puf, train_stream);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
+            rollouts.ratio, advantages_puf, hypers.gamma, hypers.state_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
         if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
             int apb = hypers.total_agents / hypers.num_buffers;
@@ -1786,6 +1788,10 @@ extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
     return pufferl->vec->size;
 }
 
+extern "C" void pufferl_set_env_scripted_opps(PuffeRL* pufferl, const int* scripted_opps) {
+    static_vec_set_env_scripted_opps(pufferl->vec, scripted_opps);
+}
+
 std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         const std::string& env_name, Dict* vec_kwargs, Dict* env_kwargs) {
     auto pufferl = std::make_unique<PuffeRL>();
@@ -1829,6 +1835,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
             && "state_checkpoint_interval must be positive");
         assert(hypers.explore_decay >= 0.0f && hypers.explore_decay <= 1.0f
             && "explore_decay must be in [0, 1]");
+        assert(hypers.state_lambda >= 0.0f && hypers.state_lambda <= 1.0f
+            && "state_lambda must be in [0, 1]");
+        assert(hypers.state_priority_decay >= 0.0f
+            && hypers.state_priority_decay <= 1.0f
+            && "state_priority_decay must be in [0, 1]");
     }
 
     // Sanity check action space

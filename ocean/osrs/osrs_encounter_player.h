@@ -20,30 +20,6 @@ typedef enum {
     OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
 } OsrsPlayerTargetMovePolicy;
 
-typedef struct {
-    const CollisionMap* collision_map;
-    int world_offset_x;
-    int world_offset_y;
-    encounter_walkable_fn is_walkable;
-    void* walkable_ctx;
-    pathfind_blocked_fn extra_blocked;
-    void* blocked_ctx;
-    const LOSBlocker* los_blockers;
-    int los_blocker_count;
-    int arena_base_x;
-    int arena_base_y;
-    int arena_w;
-    int arena_h;
-} OsrsEncounterArena;
-
-typedef struct {
-    int slot;
-    int x;
-    int y;
-    int size;
-    int attack_range;
-} OsrsAttackTarget;
-
 typedef int (*OsrsAttackTargetLookupFn)(
     void* ctx,
     int target_slot,
@@ -100,15 +76,11 @@ static inline int osrs_player_step_can_attack_target(
     const OsrsPlayerStepInput* input,
     const OsrsAttackTarget* target
 ) {
-    return encounter_player_can_attack(
+    return encounter_attack_target_can_reach_from_tile(
         input->player->x,
         input->player->y,
-        target->x,
-        target->y,
-        target->size,
-        target->attack_range,
-        input->arena.los_blockers,
-        input->arena.los_blocker_count);
+        target,
+        &input->arena);
 }
 
 static inline int osrs_player_step_apply_explicit_move(
@@ -151,23 +123,8 @@ static inline int osrs_player_step_chase_target(
 ) {
     return encounter_chase_attack_target(
         input->player,
-        target->x,
-        target->y,
-        target->size,
-        target->attack_range,
-        input->arena.collision_map,
-        input->arena.world_offset_x,
-        input->arena.world_offset_y,
-        input->arena.is_walkable,
-        input->arena.walkable_ctx,
-        input->arena.extra_blocked,
-        input->arena.blocked_ctx,
-        input->arena.los_blockers,
-        input->arena.los_blocker_count,
-        input->arena.arena_base_x,
-        input->arena.arena_base_y,
-        input->arena.arena_w,
-        input->arena.arena_h);
+        target,
+        &input->arena);
 }
 
 static inline OsrsPlayerStepResult osrs_encounter_player_step(

@@ -63,44 +63,61 @@
 
 // Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
 #define NUM_GEAR_SLOTS 11
-/* 9 action heads. HEAD_MOVE expresses the OSRS click-anywhere movement as
-   a 25-action delta grid (idle + 8 walk + 16 run), identical to the
-   shared ENCOUNTER_MOVE_ACTIONS used by inferno/zulrah. HEAD_COMBAT keeps
-   its existing 13 values for backward compatibility during the migration;
-   when HEAD_MOVE > 0 the COMBAT-head MOVE_* values are ignored. */
+#define OSRS_INVENTORY_SIZE 28
+#define PVP_ACTION_SCHEMA_LOADOUT_V8 8
+#define PVP_ACTION_SCHEMA_SLOTCLICK_V9 9
+#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_V9
+#define PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10 10
+#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10
 
-#define NUM_ACTION_HEADS 9
+#define PVP_EQUIP_CLICKS_PER_TICK 4
+#define EQUIP_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
+#define ATTACK_DIM 4
+#define SPECIAL_DIM 3
+#define LEGACY_LOADOUT_DIM 9
+#define LEGACY_COMBAT_DIM 13
+#define LOADOUT_DIM LEGACY_LOADOUT_DIM
+#define COMBAT_DIM LEGACY_COMBAT_DIM
 
-// Action head indices
-#define HEAD_LOADOUT    0
-#define HEAD_COMBAT     1   // attack type + legacy MOVE_* fallback for unmigrated opponents
-#define HEAD_OVERHEAD   2
-#define HEAD_FOOD       3
-#define HEAD_POTION     4
-#define HEAD_KARAMBWAN  5
-#define HEAD_VENG       6
-#define HEAD_OFFENSIVE  7   // set or refresh piety/rigour/augury
-#define HEAD_MOVE       8   // 25-action delta grid (ENCOUNTER_MOVE_TARGET_DX/DY)
+#define NUM_ACTION_HEADS 13
 
-// Per-head action dimensions
-#define LOADOUT_DIM     9   // KEEP, MELEE, RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC, GMAUL
-#define COMBAT_DIM     13   // NONE, ATK, ICE, BLOOD, ADJACENT, UNDER, DIAGONAL, FARCAST_2..7
-#define OVERHEAD_DIM    7   // no_change, off, set_refresh_{melee,ranged,magic,smite,redemption}
-#define FOOD_DIM        2   // NONE, EAT
-#define POTION_DIM      5   // PvP head only: NONE, BREW, RESTORE, COMBAT, RANGED
-#define KARAMBWAN_DIM   2   // NONE, EAT
-#define VENG_DIM        2   // NONE, CAST
-#define OFFENSIVE_DIM   5   // no_change, off, set_refresh_{piety,rigour,augury}
-#define MOVE_DIM       25   // matches ENCOUNTER_MOVE_ACTIONS in osrs_encounter.h
+#define HEAD_EQUIP_0    0
+#define HEAD_EQUIP_1    1
+#define HEAD_EQUIP_2    2
+#define HEAD_EQUIP_3    3
+#define HEAD_ATTACK     4
+#define HEAD_SPECIAL    5
+#define HEAD_OVERHEAD   6
+#define HEAD_FOOD       7
+#define HEAD_POTION     8
+#define HEAD_KARAMBWAN  9
+#define HEAD_VENG       10
+#define HEAD_OFFENSIVE  11
+#define HEAD_MOVE       12
 
-// Total action mask size: sum of all head dims
-#define ACTION_MASK_SIZE (LOADOUT_DIM + COMBAT_DIM + OVERHEAD_DIM + \
-    FOOD_DIM + POTION_DIM + KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
+#define HEAD_LOADOUT HEAD_EQUIP_0
+#define HEAD_COMBAT HEAD_ATTACK
 
-// Per-head action dims array
+#define OVERHEAD_DIM    7
+#define FOOD_DIM        2
+#define POTION_DIM      5
+#define KARAMBWAN_DIM   2
+#define VENG_DIM        2
+#define OFFENSIVE_DIM   5
+#define MOVE_DIM       25
+
+#define ACTION_MASK_SIZE ( \
+    PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM + \
+    ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM + \
+    KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
+
 static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
-    LOADOUT_DIM,
-    COMBAT_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    EQUIP_CLICK_DIM,
+    ATTACK_DIM,
+    SPECIAL_DIM,
     OVERHEAD_DIM,
     FOOD_DIM,
     POTION_DIM,
@@ -113,20 +130,28 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 // Number of item stats per item (for observations)
 #define NUM_ITEM_STATS 18
 
-// Maximum items per slot for observation padding
-#define MAX_ITEMS_PER_SLOT 10
-
-// Dynamic gear slots that change during combat
-// 8 slots: weapon, shield, body, legs, head, cape, neck, ring
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
-/* Observation size:
-   190 = 182 base + 1 voidwaker flag + 7 reward signals.
-   +4 = normalized player position (dist to N/S/E/W wilderness arena edges).
-   +2 = opponent egocentric position (signed dx, dy normalized).
-   +25 = per-HEAD_MOVE walkability flags (mirrors mask for value-head reasoning).
-   total = 221. */
-#define SLOT_NUM_OBSERVATIONS 221
+#define PVP_BASE_OBSERVATIONS 221
+#define OSRS_ITEM_FEATURE_DIM 56
+#define PVP_EQUIPPED_SELF_FEATURE_DIM 24
+#define PVP_EQUIPPED_TARGET_FEATURE_DIM 18
+#define PVP_INVENTORY_OBS_OFFSET PVP_BASE_OBSERVATIONS
+#define PVP_SELF_EQUIPPED_OBS_OFFSET \
+    (PVP_INVENTORY_OBS_OFFSET + OSRS_INVENTORY_SIZE * OSRS_ITEM_FEATURE_DIM)
+#define PVP_TARGET_EQUIPPED_OBS_OFFSET \
+    (PVP_SELF_EQUIPPED_OBS_OFFSET + NUM_GEAR_SLOTS * PVP_EQUIPPED_SELF_FEATURE_DIM)
+#define SLOT_NUM_OBSERVATIONS \
+    (PVP_TARGET_EQUIPPED_OBS_OFFSET + NUM_GEAR_SLOTS * PVP_EQUIPPED_TARGET_FEATURE_DIM)
+
+#ifdef __cplusplus
+#define OSRS_STATIC_ASSERT static_assert
+#else
+#define OSRS_STATIC_ASSERT _Static_assert
+#endif
+
+OSRS_STATIC_ASSERT(OSRS_INVENTORY_SIZE == 28, "slot-click schema assumes 28 inventory slots");
+OSRS_STATIC_ASSERT(NUM_GEAR_SLOTS == 11, "equipment feature schema assumes 11 gear slots");
 // PLAYER BASE STATS (NH maxed accounts - 99 all combat)
 
 #define MAXED_BASE_ATTACK 99
@@ -307,6 +332,12 @@ typedef enum {
 static inline int is_attack_action(int v) { return v >= ATTACK_ATK && v <= ATTACK_BLOOD; }
 static inline int is_move_action(int v) { return v >= MOVE_ADJACENT && v <= MOVE_FARCAST_7; }
 
+typedef enum {
+    SPECIAL_NOOP = 0,
+    SPECIAL_ARM,
+    SPECIAL_DISARM,
+} PvpSpecialAction;
+
 /** Overhead prayer action head options. */
 typedef enum {
     OVERHEAD_NONE = 0,
@@ -391,6 +422,7 @@ typedef struct {
     AttackStyle attack_type;
     int is_special;
     int hit_success;
+    int spell_type;
     int freeze_ticks;
     int heal_percent;
     int drain_type;
@@ -424,6 +456,41 @@ typedef struct {
     OsrsTargetKind kind;
     int id;
 } OsrsTargetRef;
+
+typedef enum {
+    OSRS_RENDER_TARGET_NONE = 0,
+    OSRS_RENDER_TARGET_PLAYER_SLOT,
+    OSRS_RENDER_TARGET_NPC_SLOT,
+    OSRS_RENDER_TARGET_ENTITY_INDEX,
+} OsrsRenderTargetKind;
+
+typedef struct {
+    OsrsRenderTargetKind kind;
+    int slot;
+} OsrsRenderTargetRef;
+
+static inline OsrsRenderTargetRef osrs_render_target_none(void) {
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_NONE, .slot = -1 };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_player_slot(int slot) {
+    if (slot < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_PLAYER_SLOT, .slot = slot };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_npc_slot(int slot) {
+    if (slot < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_NPC_SLOT, .slot = slot };
+}
+
+static inline OsrsRenderTargetRef osrs_render_target_entity_index(int index) {
+    if (index < 0) abort();
+    return (OsrsRenderTargetRef){ .kind = OSRS_RENDER_TARGET_ENTITY_INDEX, .slot = index };
+}
+
+static inline int osrs_render_target_ref_active(OsrsRenderTargetRef target) {
+    return target.kind != OSRS_RENDER_TARGET_NONE;
+}
 
 typedef enum {
     OSRS_TARGET_CLASS_STANDARD = 0,
@@ -591,11 +658,11 @@ typedef struct {
     PendingHit pending_hits[MAX_PENDING_HITS];
     int num_pending_hits;
     int damage_applied_this_tick;
-    int did_attack_auto_move;  // set in attack movement phase, read in attack combat phase
 
     // Hit event tracking for event log
     int hit_landed_this_tick;
     int hit_was_successful;
+    int hit_spell_type;
     int hit_damage;
     AttackStyle hit_style;
     OverheadPrayer hit_defender_prayer;
@@ -674,6 +741,8 @@ typedef struct {
     // Total damage
     float total_damage_dealt;
     float total_damage_received;
+    float expected_damage_dealt;
+    float expected_damage_received;
 
     // Equipment flags
     int is_lunar_spellbook;
@@ -689,18 +758,9 @@ typedef struct {
     float bolt_proc_damage;
     int bolt_ignores_defense;
 
-    // Slot-based mode equipment (per-slot item indices, 255 = empty)
-    // equipped[GEAR_SLOT_*] = item index from ITEMS_BY_SLOT table, or 255 if empty
     uint8_t equipped[NUM_GEAR_SLOTS];
+    uint8_t inventory[OSRS_INVENTORY_SIZE];
 
-    // Available items per slot (for action masking and observations)
-    // inventory[slot][item_idx] = item database index, 255 = no item
-    uint8_t inventory[NUM_GEAR_SLOTS][MAX_ITEMS_PER_SLOT];
-
-    // Number of items available per slot
-    uint8_t num_items_in_slot[NUM_GEAR_SLOTS];
-
-    // Cached bonuses for slot-based mode
     GearBonuses slot_cached_bonuses;
     OsrsEquipmentEffectProfile equipment_effect_profile;
     int slot_gear_dirty;
@@ -708,6 +768,8 @@ typedef struct {
     // Per-tick action tracking for reward shaping
     // These are set when actions actually execute (not when queued)
     AttackStyle attack_style_this_tick;  // Actual attack style used (NONE if no attack)
+    uint8_t attack_weapon_this_tick;
+    OsrsRenderTargetRef render_attack_target_this_tick;
     int magic_type_this_tick;            // 0=none, 1=ice, 2=blood (for visual effects)
     int used_special_this_tick;          // 1 if special attack was used
     int ate_food_this_tick;              // 1 if regular food was consumed
@@ -715,6 +777,22 @@ typedef struct {
     int ate_brew_this_tick;             // 1 if saradomin brew was consumed
     int cast_veng_this_tick;            // 1 if vengeance was cast (for animation)
     int clicks_this_tick;               // accumulated click count for progressive penalty
+    int weapon_equipped_this_tick;
+
+    int equip_click_attempts;
+    int equip_click_successes;
+    int special_arm_attempts;
+    int special_arm_successes;
+    int target_click_attempts;
+    int target_click_successes;
+    int spell_attack_attempts;
+    int spell_attack_successes;
+    int weapon_attack_successes;
+    int melee_attack_successes;
+    int ranged_attack_successes;
+    int magic_attack_successes;
+    int attack_after_equip_successes;
+    int spec_after_equip_successes;
 
     // Previous tick HP percent for reward shaping (premature/wasted eat checks)
     float prev_hp_percent;
@@ -726,12 +804,62 @@ typedef struct {
     int gui_strength_bonus;
 } Player;
 
+typedef enum {
+    PVP_TERMINAL_PRESENTATION_INACTIVE = 0,
+    PVP_TERMINAL_PRESENTATION_DEATH = 1,
+    PVP_TERMINAL_PRESENTATION_WINNER = 2,
+} PvpTerminalPresentationPhase;
+
+#define PVP_TERMINAL_PRESENTATION_NAME_LEN 32
+
+typedef struct {
+    PvpTerminalPresentationPhase phase;
+    int winner;
+    Player players[NUM_AGENTS];
+    char opponent_name[PVP_TERMINAL_PRESENTATION_NAME_LEN];
+} PvpTerminalPresentation;
+
+typedef enum {
+    PVP_START_RANDOMIZED = 0,
+    PVP_START_FIXED_PAIR = 1,
+} PvpStartMode;
+
+typedef struct {
+    float damage[NUM_AGENTS];
+    float expected_damage[NUM_AGENTS];
+    float damage_diff;
+    float expected_damage_diff;
+    int expected_leader;
+} PvpPerformanceTrackerValues;
+
+static inline PvpPerformanceTrackerValues pvp_performance_tracker_values(
+    const Player* p0,
+    const Player* p1
+) {
+    PvpPerformanceTrackerValues out = {0};
+    out.damage[0] = p0->total_damage_dealt;
+    out.damage[1] = p1->total_damage_dealt;
+    out.expected_damage[0] = p0->expected_damage_dealt;
+    out.expected_damage[1] = p1->expected_damage_dealt;
+    out.damage_diff = out.damage[0] - out.damage[1];
+    out.expected_damage_diff = out.expected_damage[0] - out.expected_damage[1];
+    out.expected_leader = out.expected_damage_diff > 0.001f ? 0 :
+        (out.expected_damage_diff < -0.001f ? 1 : -1);
+    return out;
+}
+
 typedef struct {
     float episode_return;
     float episode_length;
     float wins;
     float damage_dealt;
     float damage_received;
+    float expected_damage_dealt;
+    float expected_damage_received;
+    float expected_damage_diff;
+    float expected_damage_score;
+    float ko_supply_score;
+    float performance_score;
     float wave;
     float prayer_correct;
     float prayer_total;
@@ -768,6 +896,20 @@ typedef struct {
     float spec_energy_remaining;
     float attacks_landed;
     float off_prayer_hits;
+    float equip_click_attempts;
+    float equip_click_noop_rate;
+    float special_arm_attempts;
+    float special_arm_noop_rate;
+    float target_click_attempts;
+    float target_click_no_fire_rate;
+    float spell_attack_attempts;
+    float spell_attack_no_fire_rate;
+    float weapon_attack_rate;
+    float melee_attack_rate;
+    float ranged_attack_rate;
+    float magic_attack_rate;
+    float attack_after_equip_rate;
+    float spec_after_equip_rate;
     float brews_remaining_normal_died;
     float restores_remaining_normal_died;
     float prayer_at_death_normal_died;
@@ -1141,7 +1283,9 @@ typedef struct {
     OpponentState opponent;
     OpponentState opponent_p0;
     PFSPState pfsp;
+    PvpTerminalPresentation terminal_presentation;
     float gear_tier_weights[4];  /* 4 tiers, sum to 1.0 */
+    PvpStartMode start_mode;
     /* BFS walk destinations per agent (-1 = no pending walk). consumed by
        osrs_encounter_player_step via OSRS_PLAYER_MOVE_DESTINATION; cleared when
        the agent arrives. survives across ticks for human click-to-walk. */
@@ -1222,6 +1366,36 @@ typedef struct {
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
 
 } OsrsEnv;
+
+static inline int pvp_terminal_presentation_active(const OsrsEnv* env) {
+    return env->pvp_runtime.terminal_presentation.phase !=
+        PVP_TERMINAL_PRESENTATION_INACTIVE;
+}
+
+static inline int pvp_terminal_presentation_entity_count(const OsrsEnv* env) {
+    if (!pvp_terminal_presentation_active(env)) return NUM_AGENTS;
+    if (env->pvp_runtime.terminal_presentation.phase ==
+            PVP_TERMINAL_PRESENTATION_WINNER) {
+        return 1;
+    }
+    return NUM_AGENTS;
+}
+
+static inline int pvp_terminal_presentation_player_index(const OsrsEnv* env, int entity_idx) {
+    if (!pvp_terminal_presentation_active(env)) return entity_idx;
+    if (env->pvp_runtime.terminal_presentation.phase ==
+            PVP_TERMINAL_PRESENTATION_WINNER) {
+        return env->pvp_runtime.terminal_presentation.winner;
+    }
+    return entity_idx;
+}
+
+static inline void pvp_terminal_presentation_clear(OsrsEnv* env) {
+    memset(&env->pvp_runtime.terminal_presentation, 0,
+        sizeof(env->pvp_runtime.terminal_presentation));
+    env->pvp_runtime.terminal_presentation.phase =
+        PVP_TERMINAL_PRESENTATION_INACTIVE;
+}
 
 static inline int abs_int(int val) {
     return val < 0 ? -val : val;

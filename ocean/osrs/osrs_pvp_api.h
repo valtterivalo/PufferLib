@@ -19,6 +19,7 @@
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"
 #include "osrs_pvp_actions.h"
+#include "osrs_pvp_opponents.h"
 
 /**
  * Initialize a player with default pure build stats and gear.
@@ -108,6 +109,7 @@ static void init_player(Player* p) {
 
     p->just_attacked = 0;
     p->last_attack_style = ATTACK_STYLE_NONE;
+    p->attack_weapon_this_tick = ITEM_NONE;
     p->attack_was_on_prayer = 0;
     p->last_attack_dx = 0;
     p->last_attack_dy = 0;
@@ -118,11 +120,11 @@ static void init_player(Player* p) {
     memset(p->pending_hits, 0, sizeof(p->pending_hits));
     p->num_pending_hits = 0;
     p->damage_applied_this_tick = 0;
-    p->did_attack_auto_move = 0;
 
     // Hit event tracking
     p->hit_landed_this_tick = 0;
     p->hit_was_successful = 0;
+    p->hit_spell_type = 0;
     p->hit_damage = 0;
     p->hit_style = ATTACK_STYLE_NONE;
     p->hit_defender_prayer = PRAYER_NONE;
@@ -190,6 +192,23 @@ static void init_player(Player* p) {
 
     p->total_damage_dealt = 0;
     p->total_damage_received = 0;
+    p->expected_damage_dealt = 0.0f;
+    p->expected_damage_received = 0.0f;
+    p->weapon_equipped_this_tick = 0;
+    p->equip_click_attempts = 0;
+    p->equip_click_successes = 0;
+    p->special_arm_attempts = 0;
+    p->special_arm_successes = 0;
+    p->target_click_attempts = 0;
+    p->target_click_successes = 0;
+    p->spell_attack_attempts = 0;
+    p->spell_attack_successes = 0;
+    p->weapon_attack_successes = 0;
+    p->melee_attack_successes = 0;
+    p->ranged_attack_successes = 0;
+    p->magic_attack_successes = 0;
+    p->attack_after_equip_successes = 0;
+    p->spec_after_equip_successes = 0;
 
     p->is_lunar_spellbook = 0;
     p->observed_target_lunar_spellbook = 0;
@@ -205,33 +224,144 @@ static void init_player(Player* p) {
     p->prev_hp_percent = 1.0f;  // Full HP at start
 }
 
-/**
- * Set initial fight positions for both players.
- *
- * In seeded mode: deterministic positions.
- * Otherwise: random positions within fight area, nearby each other.
- *
- * @param env Environment
- */
+static int pvp_abs_int(int value) {
+    return value < 0 ? -value : value;
+}
+
+static const CollisionMap* pvp_require_collision_map(OsrsEnv* env) {
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    if (cmap == NULL) {
+        fprintf(stderr, "osrs_pvp: reset requires wilderness collision_map\n");
+        abort();
+    }
+    return cmap;
+}
+
+static int pvp_spawn_tile_valid(
+    const CollisionMap* cmap,
+    int x,
+    int y,
+    int avoid_x,
+    int avoid_y
+) {
+    if (x == avoid_x && y == avoid_y) return 0;
+    return pvp_tile_walkable((void*)cmap, x, y);
+}
+
+static int pvp_find_nearest_walkable_spawn(
+    const CollisionMap* cmap,
+    int desired_x,
+    int desired_y,
+    int avoid_x,
+    int avoid_y,
+    int* out_x,
+    int* out_y
+) {
+    int max_radius = max_int(FIGHT_AREA_WIDTH, FIGHT_AREA_HEIGHT);
+    int min_x = FIGHT_AREA_BASE_X;
+    int min_y = FIGHT_AREA_BASE_Y;
+    int max_x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH;
+    int max_y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT;
+
+    for (int radius = 0; radius <= max_radius; radius++) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (max_int(pvp_abs_int(dx), pvp_abs_int(dy)) != radius) {
+                    continue;
+                }
+                int x = desired_x + dx;
+                int y = desired_y + dy;
+                if (x < min_x || x >= max_x || y < min_y || y >= max_y) {
+                    continue;
+                }
+                if (!pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                    continue;
+                }
+                *out_x = x;
+                *out_y = y;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int pvp_find_random_walkable_spawn(
+    OsrsEnv* env,
+    const CollisionMap* cmap,
+    int min_x,
+    int min_y,
+    int max_x,
+    int max_y,
+    int avoid_x,
+    int avoid_y,
+    int* out_x,
+    int* out_y
+) {
+    int count = 0;
+    for (int y = min_y; y < max_y; y++) {
+        for (int x = min_x; x < max_x; x++) {
+            if (pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                count++;
+            }
+        }
+    }
+    if (count == 0) return 0;
+
+    int pick = rand_int(env, count);
+    for (int y = min_y; y < max_y; y++) {
+        for (int x = min_x; x < max_x; x++) {
+            if (!pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
+                continue;
+            }
+            if (pick == 0) {
+                *out_x = x;
+                *out_y = y;
+                return 1;
+            }
+            pick--;
+        }
+    }
+    return 0;
+}
+
+static void pvp_set_player_spawn(Player* p, int x, int y) {
+    p->x = x;
+    p->y = y;
+    p->dest_x = x;
+    p->dest_y = y;
+    p->is_moving = 0;
+}
+
+static PvpStartMode pvp_start_mode_from_fixed_spawns(int fixed_spawns) {
+    if (fixed_spawns == 0) return PVP_START_RANDOMIZED;
+    if (fixed_spawns == 1) return PVP_START_FIXED_PAIR;
+    fprintf(stderr, "osrs_pvp: fixed_spawns must be 0 or 1, got %d\n", fixed_spawns);
+    abort();
+}
+
 static void set_fight_positions(OsrsEnv* env) {
-    if (env->has_rng_seed) {
-        int x0 = FIGHT_AREA_BASE_X;
-        int y0 = FIGHT_AREA_BASE_Y;
-        int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
-        int y1 = FIGHT_AREA_BASE_Y;
+    const CollisionMap* cmap = pvp_require_collision_map(env);
+    int x0 = FIGHT_AREA_BASE_X;
+    int y0 = FIGHT_AREA_BASE_Y;
+    int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
+    int y1 = FIGHT_AREA_BASE_Y + 1;
 
-        env->players[0].x = x0;
-        env->players[0].y = y0;
-        env->players[0].dest_x = x0;
-        env->players[0].dest_y = y0;
-        env->players[0].is_moving = 0;
-
-        env->players[1].x = x1;
-        env->players[1].y = y1;
-        env->players[1].dest_x = x1;
-        env->players[1].dest_y = y1;
-        env->players[1].is_moving = 0;
-        return;
+    switch (env->pvp_runtime.start_mode) {
+        case PVP_START_FIXED_PAIR:
+            if (!pvp_find_nearest_walkable_spawn(cmap, x0, y0, -1, -1, &x0, &y0) ||
+                    !pvp_find_nearest_walkable_spawn(cmap, x1, y1, x0, y0, &x1, &y1)) {
+                fprintf(stderr, "osrs_pvp: no walkable fixed spawn pair in fight area\n");
+                abort();
+            }
+            pvp_set_player_spawn(&env->players[0], x0, y0);
+            pvp_set_player_spawn(&env->players[1], x1, y1);
+            return;
+        case PVP_START_RANDOMIZED:
+            break;
+        default:
+            fprintf(stderr, "osrs_pvp: invalid start_mode %d\n", (int)env->pvp_runtime.start_mode);
+            abort();
     }
 
     int base_x = FIGHT_AREA_BASE_X;
@@ -239,28 +369,28 @@ static void set_fight_positions(OsrsEnv* env) {
     int max_x = base_x + FIGHT_AREA_WIDTH;
     int max_y = base_y + FIGHT_AREA_HEIGHT;
 
-    int x0 = base_x + rand_int(env, FIGHT_AREA_WIDTH);
-    int y0 = base_y + rand_int(env, FIGHT_AREA_HEIGHT);
+    if (!pvp_find_random_walkable_spawn(
+            env, cmap, base_x, base_y, max_x, max_y, -1, -1, &x0, &y0)) {
+        fprintf(stderr, "osrs_pvp: no walkable player spawn in fight area\n");
+        abort();
+    }
 
     int near_min_x = max_int(base_x, x0 - FIGHT_NEARBY_RADIUS);
     int near_min_y = max_int(base_y, y0 - FIGHT_NEARBY_RADIUS);
-    int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS);
-    int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS);
+    int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS + 1);
+    int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS + 1);
 
-    int x1 = near_min_x + rand_int(env, near_max_x - near_min_x);
-    int y1 = near_min_y + rand_int(env, near_max_y - near_min_y);
+    if (!pvp_find_random_walkable_spawn(
+            env, cmap, near_min_x, near_min_y, near_max_x, near_max_y,
+            x0, y0, &x1, &y1) &&
+            !pvp_find_nearest_walkable_spawn(
+                cmap, x0 + FIGHT_NEARBY_RADIUS, y0, x0, y0, &x1, &y1)) {
+        fprintf(stderr, "osrs_pvp: no walkable opponent spawn in fight area\n");
+        abort();
+    }
 
-    env->players[0].x = x0;
-    env->players[0].y = y0;
-    env->players[0].dest_x = x0;
-    env->players[0].dest_y = y0;
-    env->players[0].is_moving = 0;
-
-    env->players[1].x = x1;
-    env->players[1].y = y1;
-    env->players[1].dest_x = x1;
-    env->players[1].dest_y = y1;
-    env->players[1].is_moving = 0;
+    pvp_set_player_spawn(&env->players[0], x0, y0);
+    pvp_set_player_spawn(&env->players[1], x1, y1);
 }
 
 /**
@@ -300,7 +430,9 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->pvp_runtime.opponent, 0, sizeof(env->pvp_runtime.opponent));
     memset(&env->pvp_runtime.opponent_p0, 0, sizeof(env->pvp_runtime.opponent_p0));
     memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
+    pvp_terminal_presentation_clear(env);
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
+    env->pvp_runtime.start_mode = PVP_START_RANDOMIZED;
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
         env->pvp_runtime.walk_dest_y[i] = -1;
@@ -328,6 +460,7 @@ void pvp_reset(OsrsEnv* env) {
             abort();
         }
         env->rng_state = env->rng_seed + 0x9E3779B9u * env->rng_reset_count;
+        if (env->rng_state == 0) env->rng_state = 0x6D2B79F5u;
         env->rng_reset_count += 1;
     } else {
         env->rng_state = (uint32_t)(size_t)env ^ 0xDEADBEEF;
@@ -359,12 +492,8 @@ void pvp_reset(OsrsEnv* env) {
     env->tick = 0;
     env->episode_over = 0;
     env->winner = -1;
-    if (env->has_rng_seed) {
-        env->pid_holder = 1 - (int)(env->rng_seed & 1u);
-    } else {
-        env->pid_holder = rand_int(env, 2);
-    }
-    env->pid_shuffle_countdown = 100 + rand_int(env, 51); // 100-150 ticks
+    env->pid_holder = rand_int(env, 2);
+    env->pid_shuffle_countdown = 100 + rand_int(env, 51);
 
     env->pvp_runtime.is_pvp_arena = 0;
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -420,24 +549,35 @@ void pvp_reset(OsrsEnv* env) {
     }
 }
 
-/**
- * Execute one game tick with OSRS-accurate 1-tick delay timing.
- *
- * Actions submitted on tick N are applied IMMEDIATELY in the same step,
- * producing tick N+1 state. This gives proper 1-tick delay:
- * action at tick N → effects visible at tick N+1.
- *
- * Flow:
- *   1. Copy model/external actions to env->actions
- *   2. Generate C opponent actions into env->actions
- *   3. Apply actions immediately (execute switches, then attacks)
- *   4. Increment tick
- *   5. Check win conditions
- *   6. Calculate rewards
- *   7. Generate observations
- *
- * @param env Environment
- */
+static const char* pvp_terminal_opponent_name(OsrsEnv* env) {
+    if (env->pvp_runtime.use_external_opponent_actions ||
+            env->pvp_runtime.opponent.type == OPP_SELFPLAY) {
+        return "Opponent Agent";
+    }
+    if (env->pvp_runtime.opponent.type != OPP_NONE ||
+            env->pvp_runtime.opponent.active_sub_policy != OPP_NONE) {
+        return osrs_pvp_opponent_state_display_name(&env->pvp_runtime.opponent);
+    }
+    return "Opponent";
+}
+
+static void pvp_terminal_presentation_capture(OsrsEnv* env) {
+    PvpTerminalPresentation* p = &env->pvp_runtime.terminal_presentation;
+    memset(p, 0, sizeof(*p));
+    p->phase = PVP_TERMINAL_PRESENTATION_DEATH;
+    p->winner = env->winner;
+    memcpy(p->players, env->players, sizeof(p->players));
+    snprintf(p->opponent_name, sizeof(p->opponent_name), "%s",
+        pvp_terminal_opponent_name(env));
+
+    if (env->winner >= 0 && env->winner < NUM_AGENTS) {
+        int loser = 1 - env->winner;
+        p->players[loser].current_hitpoints = 0;
+        osrs_interaction_set(&p->players[env->winner].interaction, loser);
+        osrs_interaction_set(&p->players[loser].interaction, env->winner);
+    }
+}
+
 void pvp_step(OsrsEnv* env) {
     memset(env->rewards, 0, NUM_AGENTS * sizeof(float));
     memset(env->terminals, 0, NUM_AGENTS);
@@ -447,6 +587,7 @@ void pvp_step(OsrsEnv* env) {
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
+        env->players[i].hit_spell_type = 0;
         env->players[i].hit_damage = 0;
         env->players[i].hit_style = ATTACK_STYLE_NONE;
         env->players[i].hit_defender_prayer = PRAYER_NONE;
@@ -504,21 +645,6 @@ void pvp_step(OsrsEnv* env) {
     memcpy(actions_p0, env->actions, NUM_ACTION_HEADS * sizeof(int));
     memcpy(actions_p1, env->actions + NUM_ACTION_HEADS, NUM_ACTION_HEADS * sizeof(int));
 
-    // Clamp impossible cross-head combos:
-    // - MELEE/RANGE/SPEC_MELEE/SPEC_RANGE/GMAUL cannot cast spells
-    // - MAGE/TANK cannot use ATK (except SPEC_MAGIC which forces ATK internally)
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        int* a = (i == 0) ? actions_p0 : actions_p1;
-        int lo = a[HEAD_LOADOUT];
-        int cv = a[HEAD_COMBAT];
-        if (lo == LOADOUT_MAGE || lo == LOADOUT_TANK || lo == LOADOUT_SPEC_MAGIC) {
-            if (cv == ATTACK_ATK) {
-                a[HEAD_COMBAT] = ATTACK_NONE;
-            }
-        }
-    }
-
-    // Write clamped actions back for recording and read functions
     memcpy(env->actions, actions_p0, NUM_ACTION_HEADS * sizeof(int));
     memcpy(env->actions + NUM_ACTION_HEADS, actions_p1, NUM_ACTION_HEADS * sizeof(int));
 
@@ -557,20 +683,12 @@ void pvp_step(OsrsEnv* env) {
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
     }
 
-    /* canonical movement via the shared encounter SDK. only fires when
-       walk_dest is set (HEAD_MOVE > 0, legacy HEAD_COMBAT MOVE_*, or a
-       persistent human click). attack-driven auto-chase still flows through
-       execute_attack_movement below until that path is migrated. */
-    pvp_step_player_movement(env, first);
-    pvp_step_player_movement(env, second);
+    PvpAttackMoveIntent move_intents[NUM_AGENTS];
+    move_intents[first] = pvp_attack_move_intent(env, first, agent_actions[first]);
+    move_intents[second] = pvp_attack_move_intent(env, second, agent_actions[second]);
 
-    if (env->players[0].x == env->players[1].x &&
-        env->players[0].y == env->players[1].y) {
-        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
-    }
-
-    execute_attack_movement(env, first, agent_actions[first]);
-    execute_attack_movement(env, second, agent_actions[second]);
+    pvp_step_player_movement(env, first, move_intents[first]);
+    pvp_step_player_movement(env, second, move_intents[second]);
 
     if (env->players[0].x == env->players[1].x &&
         env->players[0].y == env->players[1].y) {
@@ -619,12 +737,10 @@ void pvp_step(OsrsEnv* env) {
     }
     env->tick++;
 
-    if (!env->has_rng_seed) {
-        env->pid_shuffle_countdown--;
-        if (env->pid_shuffle_countdown <= 0) {
-            env->pid_holder = 1 - env->pid_holder;
-            env->pid_shuffle_countdown = 100 + rand_int(env, 51); // 100-150 ticks
-        }
+    env->pid_shuffle_countdown--;
+    if (env->pid_shuffle_countdown <= 0) {
+        env->pid_holder = 1 - env->pid_holder;
+        env->pid_shuffle_countdown = 100 + rand_int(env, 51);
     }
 
     memcpy(env->pending_actions, env->actions,
@@ -679,10 +795,32 @@ void pvp_step(OsrsEnv* env) {
         }
 
         Player* p0 = &env->players[0];
+        Player* p1 = &env->players[1];
+        float expected_diff = p0->expected_damage_dealt - p0->expected_damage_received;
+        float expected_damage_score = clampf(0.5f + expected_diff / 198.0f, 0.0f, 1.0f);
+        BrewResult opp_brew = osrs_brew_effect(p1->base_hitpoints, p1->base_attack,
+            p1->base_strength, p1->base_ranged, p1->base_magic);
+        float remaining_supply_hp = 20.0f * (float)p1->food_count
+            + 18.0f * (float)p1->karambwan_count
+            + (float)opp_brew.hp_healed * (float)p1->brew_doses;
+        float max_supply_hp = 20.0f * (float)MAXED_FOOD_COUNT
+            + 18.0f * (float)MAXED_KARAMBWAN_COUNT
+            + (float)opp_brew.hp_healed * (float)MAXED_BREW_DOSES;
+        float ko_supply_score = (env->winner == 0 && max_supply_hp > 0.0f)
+            ? clampf(remaining_supply_hp / max_supply_hp, 0.0f, 1.0f)
+            : 0.0f;
         env->log.episode_return = env->_episode_return;
         env->log.episode_length = (float)env->tick;
         env->log.damage_dealt = p0->total_damage_dealt;
         env->log.damage_received = p0->total_damage_received;
+        env->log.expected_damage_dealt = p0->expected_damage_dealt;
+        env->log.expected_damage_received = p0->expected_damage_received;
+        env->log.expected_damage_diff = expected_diff;
+        env->log.expected_damage_score = expected_damage_score;
+        env->log.ko_supply_score = ko_supply_score;
+        env->log.performance_score = 0.55f * expected_damage_score
+            + 0.30f * ((env->winner == 0) ? 1.0f : 0.0f)
+            + 0.15f * ko_supply_score;
         env->log.wins = (env->winner == 0) ? 1.0f : 0.0f;
         env->log.prayer_correct = (float)p0->target_pray_correct_count;
         env->log.prayer_total = (float)(p0->target_pray_melee_count +
@@ -693,9 +831,51 @@ void pvp_step(OsrsEnv* env) {
         env->log.spec_energy_remaining = (float)p0->special_energy;
         env->log.attacks_landed = (float)p0->total_target_hit_count;
         env->log.off_prayer_hits = (float)p0->target_hit_off_prayer_count;
+        env->log.equip_click_attempts = (float)p0->equip_click_attempts;
+        env->log.equip_click_noop_rate = p0->equip_click_attempts > 0
+            ? 1.0f - (float)p0->equip_click_successes /
+                (float)p0->equip_click_attempts
+            : 0.0f;
+        env->log.special_arm_attempts = (float)p0->special_arm_attempts;
+        env->log.special_arm_noop_rate = p0->special_arm_attempts > 0
+            ? 1.0f - (float)p0->special_arm_successes /
+                (float)p0->special_arm_attempts
+            : 0.0f;
+        env->log.target_click_attempts = (float)p0->target_click_attempts;
+        env->log.target_click_no_fire_rate = p0->target_click_attempts > 0
+            ? 1.0f - (float)p0->target_click_successes /
+                (float)p0->target_click_attempts
+            : 0.0f;
+        env->log.spell_attack_attempts = (float)p0->spell_attack_attempts;
+        env->log.spell_attack_no_fire_rate = p0->spell_attack_attempts > 0
+            ? 1.0f - (float)p0->spell_attack_successes /
+                (float)p0->spell_attack_attempts
+            : 0.0f;
+        float attack_successes = (float)(p0->weapon_attack_successes +
+            p0->spell_attack_successes);
+        env->log.weapon_attack_rate = attack_successes > 0.0f
+            ? (float)p0->weapon_attack_successes / attack_successes
+            : 0.0f;
+        env->log.melee_attack_rate = attack_successes > 0.0f
+            ? (float)p0->melee_attack_successes / attack_successes
+            : 0.0f;
+        env->log.ranged_attack_rate = attack_successes > 0.0f
+            ? (float)p0->ranged_attack_successes / attack_successes
+            : 0.0f;
+        env->log.magic_attack_rate = attack_successes > 0.0f
+            ? (float)p0->magic_attack_successes / attack_successes
+            : 0.0f;
+        env->log.attack_after_equip_rate = p0->target_click_successes > 0
+            ? (float)p0->attack_after_equip_successes /
+                (float)p0->target_click_successes
+            : 0.0f;
+        env->log.spec_after_equip_rate = p0->target_click_successes > 0
+            ? (float)p0->spec_after_equip_successes /
+                (float)p0->target_click_successes
+            : 0.0f;
         env->log.n = 1.0f;
+        pvp_terminal_presentation_capture(env);
 
-        // Auto-reset for next episode
         if (env->auto_reset) {
             pvp_reset(env);
         }

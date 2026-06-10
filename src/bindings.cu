@@ -8,6 +8,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include <vector>
+#include <string>
+#include <string.h>
 #include "pufferlib.cu"
 
 #define _PUFFER_STRINGIFY(x) #x
@@ -270,6 +272,62 @@ int py_num_envs(py::object pufferl_obj) {
     return pufferl_num_envs(&pufferl);
 }
 
+void py_set_env_scripted_opps(py::object pufferl_obj, py::array_t<int> scripted_opps) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = scripted_opps.request();
+    if (buf.ndim != 1) throw std::runtime_error("scripted_opps must be 1-D");
+    int num_envs = pufferl_num_envs(&pufferl);
+    if ((int)buf.shape[0] != num_envs) {
+        throw std::runtime_error("scripted_opps length must equal num_envs");
+    }
+    pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
+}
+
+extern "C" void binding_set_pfsp_weights(
+    StaticVec* vec, int* pool, int* cum_weights, int pool_size) __attribute__((weak));
+extern "C" void binding_get_pfsp_stats(
+    StaticVec* vec, float* out_wins, float* out_episodes, int* out_pool_size) __attribute__((weak));
+
+void py_set_pfsp_weights(
+        py::object pufferl_obj, py::array_t<int> pool, py::array_t<int> cum_weights) {
+    if (!binding_set_pfsp_weights) {
+        throw std::runtime_error("set_pfsp_weights: env has no binding_set_pfsp_weights");
+    }
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto pool_buf = pool.request();
+    auto weights_buf = cum_weights.request();
+    if (pool_buf.ndim != 1) throw std::runtime_error("pfsp pool must be 1-D");
+    if (weights_buf.ndim != 1) throw std::runtime_error("pfsp cum_weights must be 1-D");
+    if (pool_buf.shape[0] != weights_buf.shape[0]) {
+        throw std::runtime_error("pfsp pool and cum_weights lengths must match");
+    }
+    binding_set_pfsp_weights(
+        pufferl.vec,
+        (int*)pool_buf.ptr,
+        (int*)weights_buf.ptr,
+        (int)pool_buf.shape[0]);
+}
+
+py::dict py_get_pfsp_stats(py::object pufferl_obj) {
+    if (!binding_get_pfsp_stats) {
+        throw std::runtime_error("get_pfsp_stats: env has no binding_get_pfsp_stats");
+    }
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    const int capacity = 64;
+    std::vector<float> wins(capacity, 0.0f);
+    std::vector<float> episodes(capacity, 0.0f);
+    int pool_size = 0;
+    binding_get_pfsp_stats(pufferl.vec, wins.data(), episodes.data(), &pool_size);
+    if (pool_size < 0 || pool_size > capacity) {
+        throw std::runtime_error("get_pfsp_stats: invalid pool_size");
+    }
+    py::dict out;
+    out["pool_size"] = pool_size;
+    out["wins"] = py::array_t<float>(pool_size, wins.data());
+    out["episodes"] = py::array_t<float>(pool_size, episodes.data());
+    return out;
+}
+
 void py_puff_advantage(
         long long values_ptr, long long rewards_ptr,
         long long dones_ptr,  long long importance_ptr,
@@ -304,7 +362,12 @@ Dict* py_dict_to_c_dict(py::dict py_dict) {
         try {
             dict_set(c_dict, key, item.second.cast<double>());
         } catch (const py::cast_error&) {
-            // Skip non-numeric values
+            if (PyUnicode_Check(item.second.ptr()) ||
+                    PyList_Check(item.second.ptr()) ||
+                    PyTuple_Check(item.second.ptr())) {
+                std::string value = py::str(item.second);
+                dict_set_ptr(c_dict, key, strdup(value.c_str()));
+            }
         }
     }
     return c_dict;
@@ -433,6 +496,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // GAE
     hypers.gamma = get_config(train_kwargs, "gamma");
     hypers.gae_lambda = get_config(train_kwargs, "gae_lambda");
+    hypers.state_lambda = get_config(train_kwargs, "state_lambda");
     // VTrace
     hypers.vtrace_rho_clip = get_config(train_kwargs, "vtrace_rho_clip");
     hypers.vtrace_c_clip = get_config(train_kwargs, "vtrace_c_clip");
@@ -449,6 +513,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
     hypers.explore_beta = get_config(train_kwargs, "explore_beta");
     hypers.explore_decay = get_config(train_kwargs, "explore_decay");
+    hypers.state_priority_decay = get_config(train_kwargs, "state_priority_decay");
     hypers.reset_state = get_config(args, "reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
@@ -542,6 +607,9 @@ PYBIND11_MODULE(_C, m) {
     m.def("load_frozen_bank", &py_load_frozen_bank);
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
+    m.def("set_env_scripted_opps", &py_set_env_scripted_opps);
+    m.def("set_pfsp_weights", &py_set_pfsp_weights);
+    m.def("get_pfsp_stats", &py_get_pfsp_stats);
     m.def("count_aligned", &py_count_aligned);
     m.def("num_envs", &py_num_envs);
     m.def("python_vec_recv", &python_vec_recv);
@@ -574,6 +642,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("anneal_ent_coef", &HypersT::anneal_ent_coef)
         .def_readwrite("gamma", &HypersT::gamma)
         .def_readwrite("gae_lambda", &HypersT::gae_lambda)
+        .def_readwrite("state_lambda", &HypersT::state_lambda)
         .def_readwrite("vtrace_rho_clip", &HypersT::vtrace_rho_clip)
         .def_readwrite("vtrace_c_clip", &HypersT::vtrace_c_clip)
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
@@ -587,6 +656,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("explore_alpha", &HypersT::explore_alpha)
         .def_readwrite("explore_beta", &HypersT::explore_beta)
         .def_readwrite("explore_decay", &HypersT::explore_decay)
+        .def_readwrite("state_priority_decay", &HypersT::state_priority_decay)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

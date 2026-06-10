@@ -232,31 +232,98 @@ static void reset_tick_flags(Player* p) {
     p->last_potion_was_waste = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
-    // Reset reward shaping action flags
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
+    p->attack_weapon_this_tick = ITEM_NONE;
+    p->render_attack_target_this_tick = osrs_render_target_none();
     p->magic_type_this_tick = 0;
+    p->hit_spell_type = 0;
     p->used_special_this_tick = 0;
     p->ate_food_this_tick = 0;
     p->ate_karambwan_this_tick = 0;
     p->ate_brew_this_tick = 0;
     p->cast_veng_this_tick = 0;
     p->clicks_this_tick = 0;
+    p->weapon_equipped_this_tick = 0;
 }
 
 // Forward declarations for phased execution
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
 static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
 
-/** Resolve attack style from attack action value. */
+static inline AttackStyle pvp_target_click_attack_style(Player* p) {
+    AttackStyle weapon_style = get_slot_weapon_attack_style(p);
+    return weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+}
+
 static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_action) {
     switch (attack_action) {
         case ATTACK_ATK:
-            return get_slot_weapon_attack_style(p);
+            return pvp_target_click_attack_style(p);
         case ATTACK_ICE:
         case ATTACK_BLOOD:
             return ATTACK_STYLE_MAGIC;
         default:
             return ATTACK_STYLE_NONE;
+    }
+}
+
+static int execute_equip_clicks(OsrsEnv* env, int agent_idx, int* actions) {
+    Player* p = &env->players[agent_idx];
+    int clicks = 0;
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        int action = actions[HEAD_EQUIP_0 + h];
+        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
+
+        p->equip_click_attempts++;
+        int inventory_slot = action - 1;
+        if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot)) continue;
+
+        uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
+        if (!osrs_player_equip_from_inventory_slot(p, inventory_slot)) {
+            fprintf(stderr, "execute_equip_clicks: mask/execution mismatch slot=%d\n",
+                inventory_slot);
+            abort();
+        }
+        p->equip_click_successes++;
+        if (p->equipped[GEAR_SLOT_WEAPON] != old_weapon)
+            p->weapon_equipped_this_tick = 1;
+        clicks++;
+    }
+
+    if (clicks > 0) {
+        p->clicks_this_tick += clicks;
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
+    }
+    return clicks;
+}
+
+static void execute_special_action(Player* p, int special_action) {
+    switch (special_action) {
+        case SPECIAL_NOOP:
+            return;
+        case SPECIAL_ARM: {
+            p->special_arm_attempts++;
+            uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+            int cost = osrs_spec_cost(weapon);
+            if (cost > 0 && p->special_energy >= cost && !p->spec_armed) {
+                p->spec_armed = 1;
+                p->special_arm_successes++;
+                p->clicks_this_tick++;
+            }
+            return;
+        }
+        case SPECIAL_DISARM:
+            if (p->spec_armed) {
+                p->spec_armed = 0;
+                p->clicks_this_tick++;
+            }
+            return;
+        default:
+            fprintf(stderr, "execute_special_action: invalid action %d\n", special_action);
+            abort();
     }
 }
 
@@ -305,17 +372,8 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
     if (prayer_commanded || p->prayer != prev_prayer || p->offensive_prayer != prev_offensive)
         p->clicks_this_tick++;
-    int loadout_action = actions[HEAD_LOADOUT];
-    int loadout_switches = apply_loadout(p, loadout_action);
-    p->clicks_this_tick += loadout_switches;
-    if (loadout_switches > 0)
-        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
-
-    /* spec toggle: LOADOUT_SPEC_* arms spec for next attack */
-    if (loadout_action == LOADOUT_SPEC_MELEE || loadout_action == LOADOUT_SPEC_RANGE ||
-        loadout_action == LOADOUT_SPEC_MAGIC || loadout_action == LOADOUT_GMAUL) {
-        p->spec_armed = 1;
-    }
+    execute_equip_clicks(env, agent_idx, actions);
+    execute_special_action(p, actions[HEAD_SPECIAL]);
     int food_action = actions[HEAD_FOOD];
     if (food_action == FOOD_EAT && can_eat_food(p)) {
         eat_food(p, 0);
@@ -369,23 +427,14 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         p->clicks_this_tick++;
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
     }
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int head_move = actions[HEAD_MOVE];
-    int is_spec_loadout = (loadout_action == LOADOUT_SPEC_MELEE ||
-                           loadout_action == LOADOUT_SPEC_RANGE ||
-                           loadout_action == LOADOUT_SPEC_MAGIC ||
-                           loadout_action == LOADOUT_GMAUL);
 
-    /* set walk_dest from this tick's movement command. canonical click-anywhere
-       path: HEAD_MOVE is a 25-action delta grid (idle + 8 walk + 16 run).
-       legacy HEAD_COMBAT MOVE_* still works for unmigrated opponents — values
-       there resolve through select_*_tile helpers into the same walk_dest.
-       actual stepping happens later in pvp_step via pvp_step_player_movement. */
     int command_issued = 0;
-    if (!is_spec_loadout && head_move > 0 && head_move < MOVE_DIM) {
+    if (head_move > 0 && head_move < MOVE_DIM) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, head_move);
         command_issued = 1;
-    } else if (!is_spec_loadout && is_move_action(combat_action)) {
+    } else if (is_move_action(combat_action)) {
         int tx = p->last_obs_target_x;
         int ty = p->last_obs_target_y;
         int dest_x = -1, dest_y = -1;
@@ -443,73 +492,21 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
 }
 
-/**
- * Execute attack-phase actions for an agent (Phase 2).
- *
- * Processes attacks AFTER all switches have been applied for BOTH players.
- * SPEC loadout overrides the ATTACK head (atomic spec = equip + enable + attack).
- */
-/**
- * Attack movement phase: auto-walk to melee range + step out from same tile.
- * Called for ALL players before any attack combat checks, so positions are
- * fully resolved before range checks happen (matches OSRS tick processing).
- */
-static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
+static PvpAttackMoveIntent pvp_attack_move_intent(
+    OsrsEnv* env,
+    int agent_idx,
+    int* actions
+) {
     Player* p = &env->players[agent_idx];
-    Player* t = &env->players[1 - agent_idx];
-    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
-    int loadout_action = actions[HEAD_LOADOUT];
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
-    int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
-    /* explicit walk via HEAD_MOVE or persistent walk_dest takes precedence over
-       attack-driven auto-chase. matches OSRS: a tile click cancels attack auto-
-       walk for this tick. */
-    int explicit_move_in_progress = (actions[HEAD_MOVE] > 0 && actions[HEAD_MOVE] < MOVE_DIM)
-        || env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
 
-    /* GMAUL is instant: forces attack (spec armed by execute_switches) */
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
-    if (is_gmaul) {
-        attack_action = ATTACK_ATK;
-        move_action = MOVE_NONE;
-    }
-
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
-        attack_action = ATTACK_NONE;
-    }
-
-    /* set interaction target when explicit attack action is issued */
-    if (attack_action != ATTACK_NONE)
-        osrs_interaction_set(&p->interaction, 1 - agent_idx);
-
-    /* has_attack: explicit attack OR persistent interaction (auto-walk) */
-    int has_attack = (attack_action != ATTACK_NONE) || osrs_interaction_active(&p->interaction);
-    int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
-
-    /* resolve attack style for movement range checks */
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     if (attack_action != ATTACK_NONE) {
-        switch (attack_action) {
-            case ATTACK_ATK:
-                attack_style = get_slot_weapon_attack_style(p);
-                break;
-            case ATTACK_ICE:
-                attack_style = ATTACK_STYLE_MAGIC;
-                break;
-            case ATTACK_BLOOD:
-                attack_style = ATTACK_STYLE_MAGIC;
-                break;
-            default:
-                break;
-        }
+        attack_style = resolve_attack_style_for_action(p, attack_action);
     } else if (osrs_interaction_active(&p->interaction)) {
-        /* auto-attack: use current weapon style for movement */
-        attack_style = get_slot_weapon_attack_style(p);
+        attack_style = pvp_target_click_attack_style(p);
     }
     if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
@@ -518,30 +515,24 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    p->did_attack_auto_move = 0;
-
-    /* auto-move into melee range when player has an active attack but no
-       explicit walk this tick. explicit_move_in_progress (HEAD_MOVE or
-       persistent walk_dest) suppresses auto-walk per OSRS click semantics. */
-    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress && can_move(p)) {
-        if (attack_style == ATTACK_STYLE_MELEE && !is_in_melee_range(p, t)) {
-            int adj_x, adj_y;
-            if (select_closest_adjacent_tile(p, t->x, t->y, &adj_x, &adj_y, cmap)) {
-                set_destination(p, adj_x, adj_y, cmap);
-            }
-            p->did_attack_auto_move = 1;
-            dist = chebyshev_distance(p->x, p->y, t->x, t->y);
-        }
+    int range = 1;
+    if (attack_style != ATTACK_STYLE_NONE) {
+        range = get_attack_range(p, attack_style);
     }
 
-    /* step out from same tile (OSRS: can't attack from same tile) */
-    if (has_attack && dist == 0 && can_move(p)) {
-        step_out_from_same_tile(p, t, cmap);
-    }
+    return (PvpAttackMoveIntent){
+        .env = env,
+        .agent_idx = agent_idx,
+        .has_new_target = attack_action != ATTACK_NONE &&
+            attack_style != ATTACK_STYLE_NONE,
+        .target_slot = 1 - agent_idx,
+        .style = attack_style,
+        .range = range,
+    };
 }
 
 /**
- * Attack combat phase: range check + perform attack + post-attack chase.
+ * Attack combat phase: range check + perform attack.
  * Called for ALL players AFTER all attack movements have resolved, so
  * dist is computed from final positions (fixes PID-dependent same-tile bug).
  */
@@ -550,39 +541,17 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
-    int loadout_action = actions[HEAD_LOADOUT];
-    int combat_action = actions[HEAD_COMBAT];
+    int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
-    int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
-    int explicit_move_in_progress = (actions[HEAD_MOVE] > 0 && actions[HEAD_MOVE] < MOVE_DIM)
-        || env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
 
-    /* GMAUL is instant: forces attack (spec armed by execute_switches) */
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
-    if (is_gmaul) {
-        attack_action = ATTACK_ATK;
-        move_action = MOVE_NONE;
-    }
-
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
-        attack_action = ATTACK_NONE;
-    }
-
-    /* auto-attack: if interaction active and no explicit attack, use weapon style.
-       mage/tank auto-attack is filtered above (no autocast modeled). */
     if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
-        AttackStyle weapon_style = get_slot_weapon_attack_style(p);
-        if (weapon_style != ATTACK_STYLE_MAGIC) {
+        AttackStyle target_click_style = pvp_target_click_attack_style(p);
+        if (target_click_style != ATTACK_STYLE_NONE) {
             attack_action = ATTACK_ATK;
         }
     }
 
     int attack_ready = can_attack_now(p);
-    int has_attack = (attack_action != ATTACK_NONE);
-    /* recompute dist from CURRENT positions (after all movements resolved) */
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
@@ -590,7 +559,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
 
     switch (attack_action) {
         case ATTACK_ATK:
-            attack_style = get_slot_weapon_attack_style(p);
+            attack_style = pvp_target_click_attack_style(p);
             break;
         case ATTACK_ICE:
             attack_style = ATTACK_STYLE_MAGIC;
@@ -610,28 +579,27 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    /* gmaul is instant: bypasses attack timer */
-    int can_attack = attack_ready || (is_gmaul && is_granite_maul_attack_available(p));
+    int gmaul_spec_ready = p->spec_armed &&
+        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        is_granite_maul_attack_available(p);
+    int can_attack = attack_ready || gmaul_spec_ready;
 
     switch (attack_action) {
         case ATTACK_ATK:
+            p->target_click_attempts++;
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
-                /* ATK with magic staff uses melee (staff bash) */
-                AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
-                    ? ATTACK_STYLE_MELEE
-                    : attack_style;
-                /* melee uses cardinal adjacency check; ranged uses Chebyshev range */
-                int in_attack_range = 0;
-                if (actual_style == ATTACK_STYLE_MELEE) {
-                    in_attack_range = is_in_melee_range(p, t);
-                } else {
-                    int range = get_attack_range(p, actual_style);
-                    in_attack_range = (dist > 0 && dist <= range);
-                }
+                OsrsAttackReachQuery reach = pvp_attack_reach_query(
+                    cmap, p, t, attack_style);
+                int in_attack_range = osrs_attack_can_reach(&reach);
                 if (in_attack_range) {
-                    /* spec check: use spec_armed toggle instead of loadout-based */
-                    int is_special = p->spec_armed && is_special_ready(p, actual_style);
-                    perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
+                    int is_special = p->spec_armed && is_special_ready(p, attack_style);
+                    perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
+                    p->target_click_successes++;
+                    p->weapon_attack_successes++;
+                    if (p->weapon_equipped_this_tick)
+                        p->attack_after_equip_successes++;
+                    if (is_special && p->weapon_equipped_this_tick)
+                        p->spec_after_equip_successes++;
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);
                     p->clicks_this_tick++;
@@ -640,14 +608,17 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             break;
         case ATTACK_ICE:
         case ATTACK_BLOOD:
+            p->spell_attack_attempts++;
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 int can_cast = (attack_action == ATTACK_ICE)
                     ? can_cast_ice_spell(p)
                     : can_cast_blood_spell(p);
                 if (!can_cast) break;
-                int range = get_attack_range(p, ATTACK_STYLE_MAGIC);
-                if (dist > 0 && dist <= range) {
+                OsrsAttackReachQuery reach = pvp_attack_reach_query(
+                    cmap, p, t, ATTACK_STYLE_MAGIC);
+                if (osrs_attack_can_reach(&reach)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
+                    p->spell_attack_successes++;
                     p->clicks_this_tick++;
                 }
             }
@@ -655,54 +626,9 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         default:
             break;
     }
-
-    /* auto-walk to target if attack/interaction active but out of range.
-       suppressed when policy issued an explicit move this tick. */
-    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress
-            && can_move(p) && !p->did_attack_auto_move) {
-        int in_range = 0;
-        int auto_walk_range = 1;
-        switch (attack_style) {
-            case ATTACK_STYLE_MELEE:
-                in_range = is_in_melee_range(p, t);
-                break;
-            case ATTACK_STYLE_RANGED: {
-                int range = get_attack_range(p, ATTACK_STYLE_RANGED);
-                auto_walk_range = range;
-                in_range = (dist <= range);
-                break;
-            }
-            case ATTACK_STYLE_MAGIC: {
-                int range = get_attack_range(p, ATTACK_STYLE_MAGIC);
-                auto_walk_range = range;
-                in_range = (dist <= range);
-                break;
-            }
-            default:
-                in_range = 1;
-                break;
-        }
-        if (!in_range) {
-            if (attack_style == ATTACK_STYLE_MELEE) {
-                int adj_x, adj_y;
-                if (select_closest_adjacent_tile(p, t->x, t->y, &adj_x, &adj_y, cmap)) {
-                    set_destination(p, adj_x, adj_y, cmap);
-                }
-            } else {
-                move_toward_target(p, t, auto_walk_range, cmap);
-            }
-        }
-    }
 }
 
-/**
- * Legacy wrapper: runs both attack phases sequentially for a single player.
- * Used by execute_actions (scripted opponent convenience function).
- * For correct PID-independent behavior in pvp_step, call execute_attack_movement
- * for ALL players first, then execute_attack_combat for ALL players.
- */
 static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
-    execute_attack_movement(env, agent_idx, actions);
     execute_attack_combat(env, agent_idx, actions);
 }
 

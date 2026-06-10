@@ -260,15 +260,11 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     encounter_apply_loadout(&s->player, loadouts[INF_GEAR_MAGE], GEAR_MAGE);
     {
         encounter_populate_inventory(&s->player, loadouts, INF_NUM_WEAPON_SETS, NULL);
-
-        /* Ammo slot items (dragon darts, dragon arrows) should NOT appear as
-           swappable inventory items — in real OSRS darts live inside the
-           blowpipe and arrows inside dizana's quiver. Clear them here; the
-           equipment panel still shows the correct ammo for the active weapon. */
-        for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++) {
-            s->player.inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
+        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+            uint8_t item = s->player.inventory[i];
+            if (item == ITEM_DRAGON_DART || item == ITEM_DRAGON_ARROWS)
+                s->player.inventory[i] = ITEM_NONE;
         }
-        s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
     }
     InfSupplyDoses full_supplies = inf_full_starting_supplies();
     InfSupplyDoses start_supplies = inf_supplies_for_start_wave(

@@ -22,6 +22,16 @@ static void inf_rebuild_los(InfernoState* s) {
     }
 }
 
+static inline OsrsProjectileOcclusion inf_projectile_occlusion(const InfernoState* s) {
+    return osrs_projectile_occlusion_los_blockers(
+        s->los_blockers, s->los_blocker_count);
+}
+
+static inline int inf_npc_footprint_size(const InfNPC* npc) {
+    if (npc->type == INF_NPC_ZUK) return 7;
+    return npc->size > 0 ? npc->size : INF_NPC_STATS[npc->type].size;
+}
+
 typedef struct {
     int x;
     int y;
@@ -59,7 +69,7 @@ static InfTargetArea inf_npc_current_target_area(const InfernoState* s, const In
         return (InfTargetArea){
             .x = target->x,
             .y = target->y,
-            .size = target->size,
+            .size = inf_npc_footprint_size(target),
             .is_player = 0,
         };
     }
@@ -77,10 +87,16 @@ static int inf_npc_has_los_direct(InfernoState* s, int i) {
     InfNPC* npc = &s->npcs[i];
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     InfTargetArea target = inf_npc_current_target_area(s, npc);
-    return entity_has_line_of_sight(s->los_blockers, s->los_blocker_count,
-                                    npc->x, npc->y, npc->size,
-                                    target.x, target.y, target.size,
-                                    stats->attack_range);
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(npc->x, npc->y, inf_npc_footprint_size(npc)),
+        .target = osrs_footprint(target.x, target.y, target.size),
+        .delivery = stats->attack_range == 1
+            ? OSRS_ATTACK_DELIVERY_MELEE
+            : OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = stats->attack_range,
+        .occlusion = inf_projectile_occlusion(s),
+    };
+    return osrs_attack_can_reach(&reach);
 }
 
 /* cached LOS check — lazy: computes on first access per tick, caches for reuse.

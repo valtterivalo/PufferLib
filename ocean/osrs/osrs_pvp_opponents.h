@@ -33,6 +33,60 @@
 #define OPP_STYLE_MELEE   2
 #define OPP_STYLE_SPEC    3
 
+#define OPP_STYLE_MASK_MAGE   (1 << OPP_STYLE_MAGE)
+#define OPP_STYLE_MASK_RANGED (1 << OPP_STYLE_RANGED)
+#define OPP_STYLE_MASK_MELEE  (1 << OPP_STYLE_MELEE)
+#define OPP_STYLE_MASK_ALL    (OPP_STYLE_MASK_MAGE | OPP_STYLE_MASK_RANGED | OPP_STYLE_MASK_MELEE)
+
+static inline const char* osrs_pvp_opponent_type_name(OpponentType type) {
+    switch (type) {
+        case OPP_NONE: return "Opponent";
+        case OPP_TRUE_RANDOM: return "True Random";
+        case OPP_PANICKING: return "Panicking";
+        case OPP_WEAK_RANDOM: return "Weak Random";
+        case OPP_SEMI_RANDOM: return "Semi Random";
+        case OPP_STICKY_PRAYER: return "Sticky Prayer";
+        case OPP_RANDOM_EATER: return "Random Eater";
+        case OPP_PRAYER_ROOKIE: return "Prayer Rookie";
+        case OPP_IMPROVED: return "Improved";
+        case OPP_MIXED_EASY: return "Mixed Easy";
+        case OPP_MIXED_MEDIUM: return "Mixed Medium";
+        case OPP_ONETICK: return "Onetick";
+        case OPP_UNPREDICTABLE_IMPROVED: return "Unpredictable Improved";
+        case OPP_UNPREDICTABLE_ONETICK: return "Unpredictable Onetick";
+        case OPP_MIXED_HARD: return "Mixed Hard";
+        case OPP_MIXED_HARD_BALANCED: return "Mixed Hard Balanced";
+        case OPP_PFSP: return "PFSP";
+        case OPP_NOVICE_NH: return "Novice NH";
+        case OPP_APPRENTICE_NH: return "Apprentice NH";
+        case OPP_COMPETENT_NH: return "Competent NH";
+        case OPP_INTERMEDIATE_NH: return "Intermediate NH";
+        case OPP_ADVANCED_NH: return "Advanced NH";
+        case OPP_PROFICIENT_NH: return "Proficient NH";
+        case OPP_EXPERT_NH: return "Expert NH";
+        case OPP_MASTER_NH: return "Master NH";
+        case OPP_SAVANT_NH: return "Savant NH";
+        case OPP_NIGHTMARE_NH: return "Nightmare NH";
+        case OPP_VENG_FIGHTER: return "Veng Fighter";
+        case OPP_BLOOD_HEALER: return "Blood Healer";
+        case OPP_GMAUL_COMBO: return "Gmaul Combo";
+        case OPP_RANGE_KITER: return "Range Kiter";
+        case OPP_SELFPLAY: return "Opponent Agent";
+        default: break;
+    }
+    return "Opponent";
+}
+
+static inline const char* osrs_pvp_opponent_state_display_name(
+    const OpponentState* opponent
+) {
+    if (!opponent) return "Opponent";
+    OpponentType type = opponent->active_sub_policy
+        ? opponent->active_sub_policy
+        : opponent->type;
+    return osrs_pvp_opponent_type_name(type);
+}
+
 static inline int opp_style_to_loadout(int style) {
     switch (style) {
         case OPP_STYLE_MAGE:   return LOADOUT_MAGE;
@@ -138,6 +192,177 @@ static inline int opp_pick_from_mask(OsrsEnv* env, int mask) {
     return choices[rand_int(env, count)];
 }
 
+static inline int opp_pick_random_overhead(OsrsEnv* env) {
+    int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
+    return prayers[rand_int(env, 3)];
+}
+
+typedef struct {
+    int style;
+    int can_hit_now;
+} OppStyleChoice;
+
+static inline uint8_t opp_resolved_style_weapon(Player* self, int style) {
+    uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
+    resolve_loadout(self, opp_style_to_loadout(style), resolved);
+    return resolved[0];
+}
+
+static inline int opp_style_can_hit_now(OsrsEnv* env, Player* self, Player* target, int style) {
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (dist <= 0) return 0;
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+
+    if (style == OPP_STYLE_MELEE) {
+        return is_in_melee_range(self, target);
+    }
+
+    uint8_t weapon = opp_resolved_style_weapon(self, style);
+    int weapon_style = get_item_attack_style(weapon);
+
+    if (style == OPP_STYLE_RANGED) {
+        if (weapon_style != 2) return 0;
+    } else if (style == OPP_STYLE_MAGE) {
+        if (weapon_style != 3) return 0;
+        if (!can_cast_ice_spell(self) && !can_cast_blood_spell(self)) return 0;
+    } else {
+        return 0;
+    }
+
+    int range = ITEM_DATABASE[weapon].attack_range;
+    if (range <= 0) return 0;
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(self->x, self->y, 1),
+        .target = osrs_footprint(target->x, target->y, 1),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
+    return osrs_attack_can_reach(&reach);
+}
+
+static inline int opp_loadout_can_hit_now(
+    OsrsEnv* env, Player* self, Player* target, int loadout, int style
+) {
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (dist <= 0) return 0;
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    if (style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) {
+        return is_in_melee_range(self, target);
+    }
+
+    uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
+    resolve_loadout(self, loadout, resolved);
+    uint8_t weapon = resolved[0];
+    int weapon_style = get_item_attack_style(weapon);
+
+    if (style == OPP_STYLE_RANGED && weapon_style != 2) return 0;
+    if (style == OPP_STYLE_MAGE && weapon_style != 3) return 0;
+
+    int range = ITEM_DATABASE[weapon].attack_range;
+    if (range <= 0) return 0;
+    OsrsAttackReachQuery reach = {
+        .source = osrs_footprint(self->x, self->y, 1),
+        .target = osrs_footprint(target->x, target->y, 1),
+        .delivery = OSRS_ATTACK_DELIVERY_PROJECTILE,
+        .range = range,
+        .occlusion = osrs_projectile_occlusion_collision_map(cmap, 0),
+    };
+    return osrs_attack_can_reach(&reach);
+}
+
+static inline int opp_hit_now_style_mask(OsrsEnv* env, Player* self, Player* target, int allowed_mask) {
+    int mask = 0;
+    allowed_mask &= OPP_STYLE_MASK_ALL;
+    for (int style = 0; style < 3; style++) {
+        if (!(allowed_mask & (1 << style))) continue;
+        if (opp_style_can_hit_now(env, self, target, style)) mask |= (1 << style);
+    }
+    return mask;
+}
+
+static inline int opp_pick_biased_from_mask(
+    OsrsEnv* env, OpponentState* opp, int mask
+) {
+    float weights[3] = {0};
+    float total = 0;
+    for (int i = 0; i < 3; i++) {
+        if (mask & (1 << i)) {
+            weights[i] = opp->style_bias[i];
+            total += weights[i];
+        }
+    }
+    if (total <= 0) return opp_pick_from_mask(env, mask);
+
+    float r = rand_float(env) * total;
+    float cum = 0;
+    for (int i = 0; i < 3; i++) {
+        if (!(mask & (1 << i))) continue;
+        cum += weights[i];
+        if (r < cum) return i;
+    }
+    return opp_pick_from_mask(env, mask);
+}
+
+static inline OppStyleChoice opp_resolve_attack_style(
+    OsrsEnv* env,
+    OpponentState* opp,
+    Player* self,
+    Player* target,
+    int allowed_mask,
+    int preference_mask
+) {
+    allowed_mask &= OPP_STYLE_MASK_ALL;
+    if (allowed_mask == 0) allowed_mask = OPP_STYLE_MASK_ALL;
+
+    int hit_mask = opp_hit_now_style_mask(env, self, target, allowed_mask);
+    preference_mask &= allowed_mask;
+
+    int choice_mask = preference_mask & hit_mask;
+    if (choice_mask == 0 && hit_mask != 0) choice_mask = hit_mask;
+    if (choice_mask == 0 && preference_mask != 0) choice_mask = preference_mask;
+    if (choice_mask == 0) choice_mask = allowed_mask;
+
+    int style = opp_pick_biased_from_mask(env, opp, choice_mask);
+    OppStyleChoice choice = {
+        .style = style,
+        .can_hit_now = (hit_mask & (1 << style)) != 0,
+    };
+    return choice;
+}
+
+static inline int opp_random_style_preference(OsrsEnv* env, int allowed_mask) {
+    allowed_mask &= OPP_STYLE_MASK_ALL;
+    if (allowed_mask == 0) allowed_mask = OPP_STYLE_MASK_ALL;
+    return 1 << opp_pick_from_mask(env, allowed_mask);
+}
+
+static inline int opp_choose_attack_style(
+    OsrsEnv* env,
+    OpponentState* opp,
+    Player* self,
+    Player* target,
+    int allowed_mask
+) {
+    int preference_mask = rand_float(env) < opp->off_prayer_rate
+        ? opp_get_off_prayer_mask(self, target)
+        : opp_random_style_preference(env, allowed_mask);
+    return opp_resolve_attack_style(
+        env, opp, self, target, allowed_mask, preference_mask).style;
+}
+
+static inline int opp_choose_style_from_preference(
+    OsrsEnv* env,
+    OpponentState* opp,
+    Player* self,
+    Player* target,
+    int allowed_mask,
+    int style
+) {
+    return opp_resolve_attack_style(
+        env, opp, self, target, allowed_mask, 1 << style).style;
+}
+
 static inline int opp_is_drained(Player* self) {
     // Any combat stat below base = drained (brew drain, SWH, etc.)
     return self->current_strength < self->base_strength ||
@@ -227,37 +452,19 @@ static inline int opp_should_skip_offensive(OsrsEnv* env, OpponentState* opp) {
 }
 
 /**
- * Pick off-prayer attack style weighted by per-episode style bias.
- * Uses style_bias[3] (mage/ranged/melee weights) to sample from the off-prayer mask.
- * Falls back to uniform random if no bias styles are available off-prayer.
+ * Pick an off-prayer style when it can hit, otherwise any style that can hit.
  */
 static inline int opp_pick_off_prayer_style_biased(OsrsEnv* env, OpponentState* opp,
                                                     Player* self, Player* target) {
     int off_mask = opp_get_off_prayer_mask(self, target);
-    float weights[3] = {0};
-    float total = 0;
-    for (int i = 0; i < 3; i++) {
-        if (off_mask & (1 << i)) {
-            weights[i] = opp->style_bias[i];
-            total += weights[i];
-        }
-    }
-    if (total <= 0) return opp_pick_from_mask(env, off_mask);
-
-    float r = rand_float(env) * total;
-    float cum = 0;
-    for (int i = 0; i < 3; i++) {
-        cum += weights[i];
-        if (r < cum) return i;
-    }
-    return opp_pick_from_mask(env, off_mask);
+    return opp_resolve_attack_style(
+        env, opp, self, target, OPP_STYLE_MASK_ALL, off_mask).style;
 }
 
 /* Prayer mistake: small chance to pick random prayer instead of optimal */
 static inline int opp_apply_prayer_mistake(OsrsEnv* env, OpponentState* opp, int correct_prayer) {
     if (rand_float(env) < opp->mistake_rate) {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        return prayers[rand_int(env, 3)];
+        return opp_pick_random_overhead(env);
     }
     return correct_prayer;
 }
@@ -301,6 +508,28 @@ static inline int opp_get_defensive_prayer_with_spec(Player* target) {
     return opp_get_defensive_prayer(target);
 }
 
+typedef enum {
+    OPP_DEF_PRAYER_TARGET_GEAR,
+    OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC,
+} OppDefensivePrayerMode;
+
+static inline int opp_pick_defensive_prayer(
+    OsrsEnv* env,
+    OpponentState* opp,
+    Player* target,
+    OppDefensivePrayerMode mode
+) {
+    int prayer = (mode == OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC)
+        ? opp_get_defensive_prayer_with_spec(target)
+        : opp_get_defensive_prayer(target);
+
+    if (rand_float(env) >= opp->prayer_accuracy) {
+        prayer = opp_pick_random_overhead(env);
+    }
+
+    return opp_apply_prayer_mistake(env, opp, prayer);
+}
+
 /* Get opponent's current prayer style as OPP_STYLE_* (-1 if none) */
 static inline int opp_get_opponent_prayer_style(Player* target) {
     if (target->prayer == PRAYER_PROTECT_MAGIC)  return OPP_STYLE_MAGE;
@@ -320,6 +549,23 @@ static inline int opp_get_mage_attack(Player* self, Player* target) {
     if (can_freeze) return ATTACK_ICE;
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     return (hp_pct > 0.98f) ? ATTACK_ICE : ATTACK_BLOOD;
+}
+
+static inline void opp_resolve_normal_attack(
+    OsrsEnv* env,
+    OpponentState* opp,
+    Player* self,
+    Player* target,
+    int allowed_mask,
+    int* actual_style,
+    int* actual_attack
+) {
+    if (*actual_attack == 3) return;
+    *actual_style = opp_choose_style_from_preference(
+        env, opp, self, target, allowed_mask, *actual_style);
+    *actual_attack = (*actual_style == OPP_STYLE_MAGE)
+        ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+        : 2;
 }
 
 /* (opp_apply_tank_gear is defined above as inline loadout assignment) */
@@ -362,61 +608,161 @@ static inline int opp_check_eating_queued(int* actions) {
     return actions[HEAD_FOOD] != FOOD_NONE || actions[HEAD_KARAMBWAN] != KARAM_NONE;
 }
 
+typedef enum {
+    OPP_SURVIVAL_STANDARD,
+    OPP_SURVIVAL_STANDARD_NO_DRAIN_RESTORE,
+    OPP_SURVIVAL_LUNAR,
+    OPP_SURVIVAL_BLOOD_HEALER,
+} OppSurvivalPolicy;
+
+typedef struct {
+    int eating;
+    int potion_used;
+} OppSurvivalResult;
+
+static inline void opp_queue_food(OpponentState* opp, int* actions) {
+    actions[HEAD_FOOD] = FOOD_EAT;
+    opp->food_cooldown = 3;
+}
+
+static inline void opp_queue_brew(OpponentState* opp, int* actions) {
+    actions[HEAD_POTION] = POTION_BREW;
+    opp->potion_cooldown = 3;
+}
+
+static inline void opp_queue_restore(OpponentState* opp, int* actions) {
+    actions[HEAD_POTION] = POTION_RESTORE;
+    opp->potion_cooldown = 3;
+}
+
+static inline void opp_queue_karambwan(OpponentState* opp, int* actions) {
+    actions[HEAD_KARAMBWAN] = KARAM_EAT;
+    opp->karambwan_cooldown = 2;
+}
+
+static inline OppSurvivalResult opp_apply_survival_actions(
+    OpponentState* opp,
+    int* actions,
+    Player* self,
+    OppConsumables cons,
+    OppSurvivalPolicy policy
+) {
+    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
+    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
+    int drained = opp_is_drained(self);
+    int restore_prayer = policy != OPP_SURVIVAL_LUNAR;
+    int restore_drain = policy != OPP_SURVIVAL_STANDARD_NO_DRAIN_RESTORE;
+    int potion_used = 0;
+
+    if (policy == OPP_SURVIVAL_BLOOD_HEALER) {
+        if (hp_pct < 0.25f && cons.can_food && cons.can_brew && cons.can_karambwan) {
+            opp_queue_food(opp, actions);
+            opp_queue_brew(opp, actions);
+            opp_queue_karambwan(opp, actions);
+            potion_used = 1;
+        } else if (hp_pct < 0.35f && cons.can_food && cons.can_brew) {
+            opp_queue_food(opp, actions);
+            opp_queue_brew(opp, actions);
+            potion_used = 1;
+        } else if (hp_pct < 0.35f && cons.can_food && cons.can_karambwan) {
+            opp_queue_food(opp, actions);
+            opp_queue_karambwan(opp, actions);
+        } else if (hp_pct < 0.35f && cons.can_brew) {
+            opp_queue_brew(opp, actions);
+            potion_used = 1;
+        } else if (drained && hp_pct < 0.50f && cons.can_brew) {
+            opp_queue_brew(opp, actions);
+            potion_used = 1;
+        } else if (prayer_pct < 0.30f && cons.can_restore) {
+            opp_queue_restore(opp, actions);
+        } else if (drained && cons.can_restore) {
+            opp_queue_restore(opp, actions);
+        }
+
+        return (OppSurvivalResult){
+            .eating = opp_check_eating_queued(actions),
+            .potion_used = potion_used,
+        };
+    }
+
+    if (hp_pct < opp->eat_triple_threshold &&
+            cons.can_food && cons.can_brew && cons.can_karambwan) {
+        opp_queue_food(opp, actions);
+        opp_queue_brew(opp, actions);
+        opp_queue_karambwan(opp, actions);
+        potion_used = 1;
+    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
+        opp_queue_food(opp, actions);
+        opp_queue_brew(opp, actions);
+        potion_used = 1;
+    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
+        opp_queue_food(opp, actions);
+        opp_queue_karambwan(opp, actions);
+    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
+        opp_queue_brew(opp, actions);
+        potion_used = 1;
+    } else if (hp_pct < 0.60f && cons.can_food) {
+        opp_queue_food(opp, actions);
+    } else if (hp_pct < 0.60f && cons.can_karambwan) {
+        opp_queue_karambwan(opp, actions);
+    } else if (drained && hp_pct < 0.90f && cons.can_brew) {
+        opp_queue_brew(opp, actions);
+        potion_used = 1;
+    } else if (restore_prayer && prayer_pct < 0.30f && cons.can_restore) {
+        opp_queue_restore(opp, actions);
+    } else if (restore_drain && drained && cons.can_restore) {
+        opp_queue_restore(opp, actions);
+    }
+
+    return (OppSurvivalResult){
+        .eating = opp_check_eating_queued(actions),
+        .potion_used = potion_used,
+    };
+}
+
+static inline int opp_apply_survival_policy(
+    OpponentState* opp,
+    int* actions,
+    Player* self,
+    OppConsumables cons,
+    OppSurvivalPolicy policy
+) {
+    return opp_apply_survival_actions(opp, actions, self, cons, policy).eating;
+}
+
+static inline void opp_emit_combat_attack(int* actions, int attack) {
+    if (attack == 0) {
+        actions[HEAD_COMBAT] = ATTACK_ICE;
+    } else if (attack == 1) {
+        actions[HEAD_COMBAT] = ATTACK_BLOOD;
+    } else {
+        actions[HEAD_COMBAT] = ATTACK_ATK;
+    }
+}
+
+static inline void opp_emit_attack_with_style(
+    OsrsEnv* env,
+    OpponentState* opp,
+    int* actions,
+    int style,
+    int attack
+) {
+    if (attack != 3 && rand_float(env) < opp->offensive_prayer_miss) {
+        actions[HEAD_LOADOUT] = LOADOUT_KEEP;
+    } else {
+        opp_apply_gear_switch(actions, style);
+    }
+
+    opp_emit_combat_attack(actions, attack);
+}
+
 /* Improved-style consumable logic. Returns 1 if potion was used (for restore/boost tracking) */
 static int opp_apply_consumables(OsrsEnv* env, OpponentState* opp, int* actions,
                                   Player* self) {
-    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
     OppConsumables cons = opp_get_consumables(opp, self);
-    int potion_used = 0;
-
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        /* Triple eat: shark + brew + karambwan */
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3;
-        opp->potion_cooldown = 3;
-        opp->karambwan_cooldown = 2;
-        potion_used = 1;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        /* Double eat: shark + brew */
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3;
-        opp->potion_cooldown = 3;
-        potion_used = 1;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        /* Double eat: shark + karambwan (no brew available) */
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3;
-        opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-        potion_used = 1;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring (one restore undoes ~3 brews) */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-        potion_used = 1;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
     (void)env;
-    return potion_used;
+    return opp_apply_survival_actions(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD).potion_used;
 }
 
 /* map an OverheadPrayer to the set/refresh action that activates it. */
@@ -448,6 +794,20 @@ static inline void opp_emit_prayer(int* actions, Player* self, int target_overhe
     actions[HEAD_OVERHEAD] = (target_prayer == PRAYER_NONE)
         ? ENCOUNTER_OVERHEAD_OFF
         : opp_set_refresh_for_prayer(target_prayer);
+}
+
+static inline void opp_apply_defensive_prayer(
+    OsrsEnv* env,
+    OpponentState* opp,
+    int* actions,
+    Player* self,
+    Player* target,
+    OppDefensivePrayerMode mode
+) {
+    int prayer = opp_pick_defensive_prayer(env, opp, target, mode);
+    if (!opp_has_prayer_active(self, prayer)) {
+        opp_emit_prayer(actions, self, prayer);
+    }
 }
 
 /* Process pending prayer delay: decrement, apply if ready. Returns 1 if applied. */
@@ -517,9 +877,15 @@ static void opp_handle_delayed_prayer(OsrsEnv* env, OpponentState* opp, int* act
 
 /* --- TrueRandom: random value per action head --- */
 static void opp_true_random(OsrsEnv* env, int* actions) {
-    for (int i = 0; i < NUM_ACTION_HEADS; i++) {
-        actions[i] = rand_int(env, ACTION_HEAD_DIMS[i]);
-    }
+    actions[HEAD_LOADOUT] = rand_int(env, LOADOUT_DIM);
+    actions[HEAD_COMBAT] = rand_int(env, COMBAT_DIM);
+    actions[HEAD_OVERHEAD] = rand_int(env, OVERHEAD_DIM);
+    actions[HEAD_FOOD] = rand_int(env, FOOD_DIM);
+    actions[HEAD_POTION] = rand_int(env, POTION_DIM);
+    actions[HEAD_KARAMBWAN] = rand_int(env, KARAMBWAN_DIM);
+    actions[HEAD_VENG] = rand_int(env, VENG_DIM);
+    actions[HEAD_OFFENSIVE] = rand_int(env, OFFENSIVE_DIM);
+    actions[HEAD_MOVE] = rand_int(env, MOVE_DIM);
 }
 
 /* --- Panicking: fixed prayer, fixed style, 30% attack chance, panic eat --- */
@@ -539,13 +905,11 @@ static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
     int eating = 0;
     if (hp_pct < 0.25f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
             eating = 1;
         }
         if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
         }
     }
 
@@ -581,12 +945,10 @@ static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     int eating = 0;
     if (hp_pct < 0.30f && rand_float(env) > 0.50f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
             eating = 1;
         } else if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
             eating = 1;
         }
     }
@@ -616,19 +978,16 @@ static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* Random prayer each tick (no NONE) */
-    int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-    opp_emit_prayer(actions, self, prayers[rand_int(env, 3)]);
+    opp_emit_prayer(actions, self, opp_pick_random_overhead(env));
 
     /* Reliable eating at 30% */
     int eating = 0;
     if (hp_pct < 0.30f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
             eating = 1;
         } else if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
             eating = 1;
         }
     }
@@ -659,8 +1018,7 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* Sticky prayer: 8% chance to switch per tick (~12 tick avg) */
     if (!opp->current_prayer_set || rand_float(env) < 0.08f) {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        opp->current_prayer = prayers[rand_int(env, 3)];
+        opp->current_prayer = opp_pick_random_overhead(env);
         opp->current_prayer_set = 1;
     }
     if (!opp_has_prayer_active(self, opp->current_prayer)) {
@@ -671,12 +1029,10 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
     int eating = 0;
     if (hp_pct < 0.30f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
             eating = 1;
         } else if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
             eating = 1;
         }
     }
@@ -709,8 +1065,7 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* 1. Sticky random prayer */
     if (!opp->current_prayer_set || rand_float(env) < 0.08f) {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        opp->current_prayer = prayers[rand_int(env, 3)];
+        opp->current_prayer = opp_pick_random_overhead(env);
         opp->current_prayer_set = 1;
     }
     if (!opp_has_prayer_active(self, opp->current_prayer)) {
@@ -722,37 +1077,30 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (hp_pct < 0.35f) {
         /* Emergency: eat everything */
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
         }
         if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
             potion_used = 1;
         }
         if (cons.can_karambwan) {
-            actions[HEAD_KARAMBWAN] = KARAM_EAT;
-            opp->karambwan_cooldown = 2;
+            opp_queue_karambwan(opp, actions);
         }
     } else if (hp_pct < 0.55f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
         } else if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
             potion_used = 1;
         }
     } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
+        opp_queue_brew(opp, actions);
         potion_used = 1;
     }
 
     /* 3. Restore if low prayer */
     if (!potion_used && prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
+        opp_queue_restore(opp, actions);
     }
 
     int eating = opp_check_eating_queued(actions);
@@ -792,41 +1140,29 @@ static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
+    int def_prayer = opp_pick_defensive_prayer(
+        env, opp, target, OPP_DEF_PRAYER_TARGET_GEAR);
     opp_emit_prayer(actions, self, def_prayer);
 
     /* 2. Multi-threshold eating */
     if (hp_pct < 0.35f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
         }
         if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
         }
         if (cons.can_karambwan) {
-            actions[HEAD_KARAMBWAN] = KARAM_EAT;
-            opp->karambwan_cooldown = 2;
+            opp_queue_karambwan(opp, actions);
         }
     } else if (hp_pct < 0.55f) {
         if (cons.can_food) {
-            actions[HEAD_FOOD] = FOOD_EAT;
-            opp->food_cooldown = 3;
+            opp_queue_food(opp, actions);
         } else if (cons.can_brew) {
-            actions[HEAD_POTION] = POTION_BREW;
-            opp->potion_cooldown = 3;
+            opp_queue_brew(opp, actions);
         }
     } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
+        opp_queue_brew(opp, actions);
     }
 
     int eating = opp_check_eating_queued(actions);
@@ -859,78 +1195,25 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer based on target's weapon */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Consumables: triple/double/single eat */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3;
-        opp->potion_cooldown = 3;
-        opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3;
-        opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating was queued (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay: skip offensive actions this tick */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack decision */
     if (opp_attack_ready(self) && !eating) {
-        /* Pick off-prayer style with bias */
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -961,23 +1244,7 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
             actual_attack = 2;  /* ATK */
         }
 
-        /* Gear switch — offensive_prayer_miss: skip switch to omit auto-prayer */
-        if (actual_attack != 3 && rand_float(env) < opp->offensive_prayer_miss) {
-            actions[HEAD_LOADOUT] = LOADOUT_KEEP;
-        } else {
-            opp_apply_gear_switch(actions, actual_style);
-        }
-
-        /* Attack action */
-        if (actual_attack == 3) {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -994,72 +1261,25 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
 static void opp_novice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD_NO_DRAIN_RESTORE);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack: off-prayer based on off_prayer_rate. Random spec. Offensive prayer. */
     if (opp_attack_ready(self) && !eating) {
-        int style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            int off_mask = opp_get_off_prayer_mask(self, target);
-            style = opp_pick_from_mask(env, off_mask);
-        } else {
-            style = rand_int(env, 3);
-        }
+        int style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, style, 0);
@@ -1101,74 +1321,25 @@ static void opp_apprentice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            int off_mask = opp_get_off_prayer_mask(self, target);
-            style = opp_pick_from_mask(env, off_mask);
-        } else {
-            style = rand_int(env, 3);
-        }
+        int style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, style, 0);
@@ -1209,74 +1380,25 @@ static void opp_competent_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            int off_mask = opp_get_off_prayer_mask(self, target);
-            attack_style = opp_pick_from_mask(env, off_mask);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -1322,17 +1444,7 @@ static void opp_competent_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        /* Attack action */
-        if (actual_attack == 3) {
-
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     }
 }
 
@@ -1340,74 +1452,25 @@ static void opp_intermediate_nh(OsrsEnv* env, OpponentState* opp, int* actions) 
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            int off_mask = opp_get_off_prayer_mask(self, target);
-            attack_style = opp_pick_from_mask(env, off_mask);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -1452,17 +1515,7 @@ static void opp_intermediate_nh(OsrsEnv* env, OpponentState* opp, int* actions) 
 
         }
 
-        /* Attack action */
-        if (actual_attack == 3) {
-
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     }
 }
 
@@ -1470,73 +1523,25 @@ static void opp_advanced_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -1579,17 +1584,7 @@ static void opp_advanced_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        /* Attack action */
-        if (actual_attack == 3) {
-
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 only (no step under) */
         int mv_dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1605,73 +1600,25 @@ static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating + drain restore */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -1714,17 +1661,7 @@ static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        /* Attack action */
-        if (actual_attack == 3) {
-
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 25% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1743,73 +1680,25 @@ static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) + drain restore */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    /* Check if eating (food/karambwan cancel attacks) */
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     /* Tick-level action delay */
     if (opp_should_skip_offensive(env, opp)) return;
 
     /* 3. Attack */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
-            attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-        } else {
-            attack_style = rand_int(env, 3);
-        }
+        int attack_style = opp_choose_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL);
 
         /* Boost potions before attack */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -1852,17 +1741,7 @@ static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        /* Attack action */
-        if (actual_attack == 3) {
-
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 50% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1881,7 +1760,6 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
 
@@ -1891,17 +1769,8 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 
     /* 1. Defensive prayer with spec detection */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer_with_spec(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC);
 
     /* 2. Consumables (same thresholds as improved) */
     int potion_used = opp_apply_consumables(env, opp, actions, self);
@@ -1981,12 +1850,14 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     int should_ranged_spec = opp_attack_ready(self) && ranged_spec != ITEM_NONE &&
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* Anti-kite: cancel melee spec if target fleeing */
     if (should_melee_spec && opp->target_fleeing_ticks >= 2 && dist > 1) {
@@ -2047,6 +1918,9 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
         }
     }
 
+    opp_resolve_normal_attack(
+        env, opp, self, target, OPP_STYLE_MASK_ALL, &actual_style, &actual_attack);
+
     /* 6. Boost potions (before attack) */
     opp_apply_boost_potion(env, opp, actions, self, actual_style, potion_used);
 
@@ -2064,15 +1938,7 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_gear_switch(actions, actual_style);
         }
 
-        if (actual_attack == 3) {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
         if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
@@ -2084,7 +1950,6 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
         }
     }
 
-    (void)prayer_pct;
 }
 
 static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
@@ -2111,8 +1976,9 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
     int attack_style;
 
     if (rand_float(env) < UNPREDICTABLE_IMP_SUBOPTIMAL_ATTACK) {
-        /* Pick from all 3 styles (might be on-prayer) */
-        attack_style = rand_int(env, 3);
+        attack_style = opp_resolve_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL,
+            opp_random_style_preference(env, OPP_STYLE_MASK_ALL)).style;
     } else {
         attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
     }
@@ -2161,16 +2027,7 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
         /* 7. Attack with delay — sample delay, skip if > 0 */
         int action_delay = opp_sample_delay(env, UNPREDICTABLE_IMP_ACTION_CUM, UNPREDICTABLE_IMP_ACTION_CUM_LEN);
         if (action_delay == 0) {
-            if (actual_attack == 3) {
-
-                actions[HEAD_COMBAT] = ATTACK_ATK;
-            } else if (actual_attack == 0) {
-                actions[HEAD_COMBAT] = ATTACK_ICE;
-            } else if (actual_attack == 1) {
-                actions[HEAD_COMBAT] = ATTACK_BLOOD;
-            } else {
-                actions[HEAD_COMBAT] = ATTACK_ATK;
-            }
+            opp_emit_combat_attack(actions, actual_attack);
         }
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
@@ -2286,12 +2143,14 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
     int should_ranged_spec = opp_attack_ready(self) && ranged_spec != ITEM_NONE &&
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* Anti-kite: cancel melee spec if target fleeing */
     if (should_melee_spec && opp->target_fleeing_ticks >= 2 && dist > 1) {
@@ -2340,6 +2199,9 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
         }
     }
 
+    opp_resolve_normal_attack(
+        env, opp, self, target, OPP_STYLE_MASK_ALL, &actual_style, &actual_attack);
+
     /* 6. Boost potions */
     opp_apply_boost_potion(env, opp, actions, self, actual_style, potion_used);
 
@@ -2360,16 +2222,7 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
             }
 
 
-            if (actual_attack == 3) {
-
-                actions[HEAD_COMBAT] = ATTACK_ATK;
-            } else if (actual_attack == 0) {
-                actions[HEAD_COMBAT] = ATTACK_ICE;
-            } else if (actual_attack == 1) {
-                actions[HEAD_COMBAT] = ATTACK_BLOOD;
-            } else {
-                actions[HEAD_COMBAT] = ATTACK_ATK;
-            }
+            opp_emit_combat_attack(actions, actual_attack);
         }
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
@@ -2381,6 +2234,29 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
         }
     }
+}
+
+static uint8_t pvp_predict_action_weapon_after_equip_clicks(Player* p, const int* actions) {
+    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        int action = actions[HEAD_EQUIP_0 + h];
+        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
+
+        int inventory_slot = action - 1;
+        uint8_t item = p->inventory[inventory_slot];
+        if (item == ITEM_NONE || item >= NUM_ITEMS) continue;
+
+        int gear_slot = osrs_item_gear_slot(item);
+        if (gear_slot == GEAR_SLOT_WEAPON) {
+            weapon = item;
+        } else if (gear_slot == GEAR_SLOT_SHIELD &&
+                weapon < NUM_ITEMS && item_is_two_handed(weapon)) {
+            weapon = ITEM_NONE;
+        }
+    }
+
+    return weapon;
 }
 
 static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
@@ -2399,28 +2275,14 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
      * env->actions is populated from ocean_acts before opponent generation. */
     int* agent_actions = &env->actions[0];
 
-    /* Extract attack style: loadout determines weapon, so it takes priority.
-     * Only fall back to attack head when loadout is KEEP/TANK (no switch). */
-    int loadout = agent_actions[HEAD_LOADOUT];
-    int attack = agent_actions[HEAD_COMBAT];
+    int attack = agent_actions[HEAD_ATTACK];
 
-    if (loadout != LOADOUT_KEEP && loadout != LOADOUT_TANK) {
-        /* Loadout switch — weapon determines what's physically possible */
-        if (loadout == LOADOUT_MELEE || loadout == LOADOUT_SPEC_MELEE || loadout == LOADOUT_GMAUL) {
-            opp->read_agent_style = ATTACK_STYLE_MELEE;
-        } else if (loadout == LOADOUT_RANGE || loadout == LOADOUT_SPEC_RANGE) {
-            opp->read_agent_style = ATTACK_STYLE_RANGED;
-        } else if (loadout == LOADOUT_MAGE || loadout == LOADOUT_SPEC_MAGIC) {
-            opp->read_agent_style = ATTACK_STYLE_MAGIC;
-        }
-        opp->has_read_this_tick = 1;
-    } else if (attack == ATTACK_ICE || attack == ATTACK_BLOOD) {
-        /* KEEP/TANK + spell cast — must already be holding a staff */
+    if (attack == ATTACK_ICE || attack == ATTACK_BLOOD) {
         opp->read_agent_style = ATTACK_STYLE_MAGIC;
         opp->has_read_this_tick = 1;
     } else if (attack == ATTACK_ATK) {
-        /* KEEP/TANK + generic attack — use current equipped weapon */
-        uint8_t weapon = env->players[0].equipped[GEAR_SLOT_WEAPON];
+        uint8_t weapon = pvp_predict_action_weapon_after_equip_clicks(
+            &env->players[0], agent_actions);
         int style = get_item_attack_style(weapon);
         if (style == 1) opp->read_agent_style = ATTACK_STYLE_MELEE;
         else if (style == 2) opp->read_agent_style = ATTACK_STYLE_RANGED;
@@ -2436,7 +2298,7 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     else if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE)  opp->read_agent_prayer = PRAYER_SMITE;
     else if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION) opp->read_agent_prayer = PRAYER_REDEMPTION;
 
-    opp->read_agent_moving = is_move_action(attack) ? 1 : 0;
+    opp->read_agent_moving = (agent_actions[HEAD_MOVE] != 0 || is_move_action(attack)) ? 1 : 0;
 }
 
 static inline int opp_get_read_defensive_prayer(OpponentState* opp) {
@@ -2457,7 +2319,6 @@ static inline int opp_style_off_read_prayer(OpponentState* opp, int style) {
 static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
 
@@ -2475,14 +2336,11 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
         def_prayer = opp_get_read_defensive_prayer(opp);
     }
     if (def_prayer < 0) {
-        if (rand_float(env) < opp->prayer_accuracy) {
-            def_prayer = opp_get_defensive_prayer_with_spec(target);
-        } else {
-            int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-            def_prayer = prayers[rand_int(env, 3)];
-        }
+        def_prayer = opp_pick_defensive_prayer(
+            env, opp, target, OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC);
+    } else {
+        def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
     if (!opp_has_prayer_active(self, def_prayer)) {
         opp_emit_prayer(actions, self, def_prayer);
     }
@@ -2568,12 +2426,14 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     int should_ranged_spec = opp_attack_ready(self) && ranged_spec != ITEM_NONE &&
                       self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_RANGED &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED);
 
     int should_magic_spec = opp_attack_ready(self) && magic_spec != ITEM_NONE &&
                       self->special_energy >= get_magic_spec_cost(self->magic_spec_weapon) &&
                       target->prayer != PRAYER_PROTECT_MAGIC &&
-                      target_hp_pct < 0.55f;
+                      target_hp_pct < 0.55f &&
+                      opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MAGIC, OPP_STYLE_MAGE);
 
     /* With read, cancel specs the agent is praying against */
     if (opp->has_read_this_tick) {
@@ -2620,11 +2480,15 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
         actual_style = OPP_STYLE_MAGE;
         actual_attack = opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1;
     } else {
-        actual_style = opp_pick_from_mask(env, off_mask);
+        actual_style = opp_resolve_attack_style(
+            env, opp, self, target, OPP_STYLE_MASK_ALL, off_mask).style;
         actual_attack = (actual_style == OPP_STYLE_MAGE)
             ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
             : 2;
     }
+
+    opp_resolve_normal_attack(
+        env, opp, self, target, OPP_STYLE_MASK_ALL, &actual_style, &actual_attack);
 
     /* 6. Boost potions */
     opp_apply_boost_potion(env, opp, actions, self, actual_style, potion_used);
@@ -2643,15 +2507,7 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_gear_switch(actions, actual_style);
         }
 
-        if (actual_attack == 3) {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        } else if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
@@ -2661,8 +2517,6 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
         }
     }
-
-    (void)prayer_pct;
 }
 
 static void opp_savant_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
@@ -2678,57 +2532,17 @@ static void opp_nightmare_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer (same as expert_nh) */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as expert_nh) */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_LUNAR);
 
     /* 3. Vengeance on cooldown */
     if (!self->veng_active && remaining_ticks(self->veng_cooldown) == 0) {
@@ -2740,18 +2554,16 @@ static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* 4. Attack: melee/range only (no mage — lunar spellbook) */
     if (opp_attack_ready(self) && !eating) {
-        int attack_style;
+        int allowed_mask = OPP_STYLE_MASK_RANGED | OPP_STYLE_MASK_MELEE;
+        int preference_mask;
         if (rand_float(env) < opp->off_prayer_rate) {
-            /* Off-prayer: pick melee or range based on what target ISN'T praying */
-            int off_mask = opp_get_off_prayer_mask(self, target);
-            /* Remove mage from mask — lunar can't cast offensive spells */
-            off_mask &= ~(1 << OPP_STYLE_MAGE);
-            if (off_mask == 0) off_mask = (1 << OPP_STYLE_MELEE) | (1 << OPP_STYLE_RANGED);
-            attack_style = opp_pick_from_mask(env, off_mask);
+            preference_mask = opp_get_off_prayer_mask(self, target) & allowed_mask;
+            if (preference_mask == 0) preference_mask = allowed_mask;
         } else {
-            /* Random: melee or range only (OPP_STYLE_RANGED=1, OPP_STYLE_MELEE=2) */
-            attack_style = rand_int(env, 2) + 1;
+            preference_mask = opp_random_style_preference(env, allowed_mask);
         }
+        int attack_style = opp_resolve_attack_style(
+            env, opp, self, target, allowed_mask, preference_mask).style;
 
         /* Boost potions */
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
@@ -2796,55 +2608,18 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Reduced eating — relies on blood barrage for sustain above ~35%.
      * Emergency triple-eat below 35%, otherwise only brew/food below 25%. */
-    if (hp_pct < 0.25f && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < 0.35f && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.35f && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < 0.35f && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && hp_pct < 0.50f && cons.can_brew) {
-        /* Brew-batch: blood_healer uses lower threshold (relies on blood barrage above 50%) */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_BLOOD_HEALER);
 
     if (opp_should_skip_offensive(env, opp)) return;
 
@@ -2855,20 +2630,18 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         if (hp_pct < 0.40f) {
             /* Low HP: blood barrage for heal + triple-eat */
-            attack_style = OPP_STYLE_MAGE;
-            actual_attack = 1;  /* blood */
+            attack_style = opp_choose_style_from_preference(
+                env, opp, self, target, OPP_STYLE_MASK_ALL, OPP_STYLE_MAGE);
+            actual_attack = (attack_style == OPP_STYLE_MAGE) ? 1 : 2;
         } else if (hp_pct < 0.70f) {
             /* Medium HP: strongly prefer blood barrage (~80%) for sustain */
             if (rand_float(env) < 0.80f) {
-                attack_style = OPP_STYLE_MAGE;
-                actual_attack = 1;  /* blood */
+                attack_style = opp_choose_style_from_preference(
+                    env, opp, self, target, OPP_STYLE_MASK_ALL, OPP_STYLE_MAGE);
+                actual_attack = (attack_style == OPP_STYLE_MAGE) ? 1 : 2;
             } else {
-                /* Off-prayer attack with style bias */
-                if (rand_float(env) < opp->off_prayer_rate) {
-                    attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-                } else {
-                    attack_style = rand_int(env, 3);
-                }
+                attack_style = opp_choose_attack_style(
+                    env, opp, self, target, OPP_STYLE_MASK_ALL);
                 if (attack_style == OPP_STYLE_MAGE) {
                     /* Ice to freeze, not blood (already handled blood above) */
                     actual_attack = (target->frozen_ticks == 0 && target->freeze_immunity_ticks == 0)
@@ -2879,11 +2652,8 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
             }
         } else {
             /* High HP: normal off-prayer targeting with ice barrage for freeze */
-            if (rand_float(env) < opp->off_prayer_rate) {
-                attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-            } else {
-                attack_style = rand_int(env, 3);
-            }
+            attack_style = opp_choose_attack_style(
+                env, opp, self, target, OPP_STYLE_MASK_ALL);
             if (attack_style == OPP_STYLE_MAGE) {
                 actual_attack = (target->frozen_ticks == 0 && target->freeze_immunity_ticks == 0)
                                 ? 0 : 1;  /* ice if can freeze, else blood for sustain */
@@ -2907,14 +2677,7 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
             actions[HEAD_LOADOUT] = LOADOUT_TANK;
         }
 
-        /* Attack action */
-        if (actual_attack == 0) {
-            actions[HEAD_COMBAT] = ATTACK_ICE;
-        } else if (actual_attack == 1) {
-            actions[HEAD_COMBAT] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_COMBAT] = ATTACK_ATK;
-        }
+        opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: maintain farcast-5 distance */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -2939,63 +2702,19 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
 static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     float target_hp_pct = (float)target->current_hitpoints / (float)target->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
     int has_gmaul = player_has_gmaul(self);
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating (same as improved) */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     if (opp_should_skip_offensive(env, opp)) return;
 
@@ -3030,6 +2749,7 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
                                  target_hp_pct < opp->ko_threshold &&
                                  self->special_energy >= get_ranged_spec_cost(self->ranged_spec_weapon) &&
                                  target->prayer != PRAYER_PROTECT_RANGED &&
+                                 opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
                                  rand_float(env) < 0.25f);  /* 25% chance to use ranged spec */
 
         /* Anti-kite: cancel melee combo if target fleeing */
@@ -3050,12 +2770,8 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
             actions[HEAD_COMBAT] = ATTACK_ATK;
         } else {
             /* Normal improved-style play */
-            int attack_style;
-            if (rand_float(env) < opp->off_prayer_rate) {
-                attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
-            } else {
-                attack_style = rand_int(env, 3);
-            }
+            int attack_style = opp_choose_attack_style(
+                env, opp, self, target, OPP_STYLE_MASK_ALL);
 
             opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
 
@@ -3103,61 +2819,18 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     float target_hp_pct = (float)target->current_hitpoints / (float)target->base_hitpoints;
-    float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
 
     opp_tick_cooldowns(opp);
     OppConsumables cons = opp_get_consumables(opp, self);
 
     /* 1. Defensive prayer */
-    int def_prayer;
-    if (rand_float(env) < opp->prayer_accuracy) {
-        def_prayer = opp_get_defensive_prayer(target);
-    } else {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        def_prayer = prayers[rand_int(env, 3)];
-    }
-    def_prayer = opp_apply_prayer_mistake(env, opp, def_prayer);
-    if (!opp_has_prayer_active(self, def_prayer)) {
-        opp_emit_prayer(actions, self, def_prayer);
-    }
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR);
 
     /* 2. Multi-threshold eating + emergency blood barrage sustain */
-    if (hp_pct < opp->eat_triple_threshold && cons.can_food && cons.can_brew && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_brew) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->food_cooldown = 3; opp->potion_cooldown = 3;
-    } else if (hp_pct < opp->eat_double_threshold && cons.can_food && cons.can_karambwan) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->food_cooldown = 3; opp->karambwan_cooldown = 2;
-    } else if (hp_pct < opp->eat_brew_threshold && cons.can_brew) {
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
-        opp->food_cooldown = 3;
-    } else if (hp_pct < 0.60f && cons.can_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
-        opp->karambwan_cooldown = 2;
-    } else if (opp_is_drained(self) && hp_pct < 0.90f && cons.can_brew) {
-        /* Brew-batch: keep eating to 90%+ before restoring */
-        actions[HEAD_POTION] = POTION_BREW;
-        opp->potion_cooldown = 3;
-    } else if (prayer_pct < 0.30f && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    } else if (opp_is_drained(self) && cons.can_restore) {
-        actions[HEAD_POTION] = POTION_RESTORE;
-        opp->potion_cooldown = 3;
-    }
-
-    int eating = opp_check_eating_queued(actions);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     if (opp_should_skip_offensive(env, opp)) return;
 
@@ -3173,6 +2846,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
         int should_ranged_spec = (has_ranged_spec &&
                                  self->special_energy >= ranged_spec_cost &&
                                  target->prayer != PRAYER_PROTECT_RANGED &&
+                                 opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED) &&
                                  target_hp_pct < 0.55f);
 
         /* Anti-kite not needed for ranged — we WANT distance */
@@ -3189,13 +2863,14 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
             int prefer_ranged = (dist >= 3 || target->frozen_ticks > 0);
 
             if (force_melee) {
-                attack_style = OPP_STYLE_MELEE;
+                attack_style = opp_choose_style_from_preference(
+                    env, opp, self, target, OPP_STYLE_MASK_ALL, OPP_STYLE_MELEE);
             } else if (prefer_ranged && rand_float(env) < 0.80f) {
-                attack_style = OPP_STYLE_RANGED;
-            } else if (rand_float(env) < opp->off_prayer_rate) {
-                attack_style = opp_pick_off_prayer_style_biased(env, opp, self, target);
+                attack_style = opp_choose_style_from_preference(
+                    env, opp, self, target, OPP_STYLE_MASK_ALL, OPP_STYLE_RANGED);
             } else {
-                attack_style = rand_int(env, 3);
+                attack_style = opp_choose_attack_style(
+                    env, opp, self, target, OPP_STYLE_MASK_ALL);
             }
 
             /* Emergency blood barrage healing */
@@ -3206,7 +2881,13 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
                 actual_attack = (target->frozen_ticks == 0 &&
                                 target->freeze_immunity_ticks == 0)
                                ? 0 : 2;  /* ice if can freeze, else just ATK (ranged fallback) */
-                if (actual_attack == 2) attack_style = OPP_STYLE_RANGED;  /* fallback to ranged */
+                if (actual_attack == 2) {
+                    attack_style = opp_choose_style_from_preference(
+                        env, opp, self, target, OPP_STYLE_MASK_ALL, OPP_STYLE_RANGED);
+                    if (attack_style == OPP_STYLE_MAGE) {
+                        actual_attack = 1;
+                    }
+                }
             } else {
                 actual_attack = 2;  /* ATK */
             }
@@ -3228,13 +2909,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
                     opp_apply_gear_switch(actions, attack_style);
                 }
 
-                if (actual_attack == 0) {
-                    actions[HEAD_COMBAT] = ATTACK_ICE;
-                } else if (actual_attack == 1) {
-                    actions[HEAD_COMBAT] = ATTACK_BLOOD;
-                } else {
-                    actions[HEAD_COMBAT] = ATTACK_ATK;
-                }
+                opp_emit_combat_attack(actions, actual_attack);
             }
         }
     } else if (!opp_attack_ready(self)) {
@@ -3331,8 +3006,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
 
     /* Per-episode resets for specific policies */
     if (opp->type == OPP_PANICKING) {
-        int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
-        opp->chosen_prayer = prayers[rand_int(env, 3)];
+        opp->chosen_prayer = opp_pick_random_overhead(env);
         opp->chosen_style = rand_int(env, 3);
     }
 
@@ -3424,6 +3098,53 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->combo_state = 0;
         opp->ko_threshold = 0.45f + rand_float(env) * 0.15f;  /* 45-60% */
     }
+}
+
+static void pvp_legacy_loadout_to_slotclicks(Player* p, int legacy_loadout, int* actions) {
+    if (legacy_loadout <= LOADOUT_KEEP || legacy_loadout > LOADOUT_GMAUL) return;
+
+    uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
+    resolve_loadout(p, legacy_loadout, resolved);
+
+    int click_head = 0;
+    for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS && click_head < PVP_EQUIP_CLICKS_PER_TICK; i++) {
+        uint8_t item = resolved[i];
+        if (item == ITEM_NONE) continue;
+
+        int gear_slot = DYNAMIC_GEAR_SLOTS[i];
+        if (p->equipped[gear_slot] == item) continue;
+
+        int inventory_slot = osrs_player_inventory_find(p, item);
+        if (inventory_slot < 0) continue;
+
+        actions[HEAD_EQUIP_0 + click_head] = inventory_slot + 1;
+        click_head++;
+    }
+
+    if (legacy_loadout == LOADOUT_SPEC_MELEE ||
+            legacy_loadout == LOADOUT_SPEC_RANGE ||
+            legacy_loadout == LOADOUT_SPEC_MAGIC ||
+            legacy_loadout == LOADOUT_GMAUL) {
+        actions[HEAD_SPECIAL] = SPECIAL_ARM;
+    }
+}
+
+static void pvp_translate_legacy_loadout_action_to_slotclicks(
+    OsrsEnv* env,
+    int agent_idx,
+    int* actions
+) {
+    int legacy_loadout = actions[HEAD_LOADOUT];
+    int legacy_combat = actions[HEAD_COMBAT];
+
+    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
+        actions[HEAD_EQUIP_0 + h] = 0;
+    }
+    actions[HEAD_SPECIAL] = SPECIAL_NOOP;
+    actions[HEAD_ATTACK] = ATTACK_NONE;
+
+    pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
+    actions[HEAD_ATTACK] = legacy_combat;
 }
 
 static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
@@ -3524,6 +3245,8 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             /* OPP_NONE or unsupported: leave NOOPs */
             break;
     }
+
+    pvp_translate_legacy_loadout_action_to_slotclicks(env, 1, actions);
 }
 
 static void swap_players_and_pending(OsrsEnv* env) {
