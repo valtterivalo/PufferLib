@@ -29,6 +29,8 @@ static void col_rebuild_player_collision_flags(ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
+        /* hazard entities never block the player (bees damage from BENEATH). */
+        if (col_type_is_hazard_entity(npc->type)) continue;
         int size = col_npc_effective_size(npc);
         for (int dx = 0; dx < size; dx++) {
             for (int dy = 0; dy < size; dy++) {
@@ -50,8 +52,12 @@ static int col_find_free_npc(ColosseumState* s) {
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
-    int size = col_npc_effective_size(npc);
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
+    /* hazard entities never stamped collision; unstamping would erase a real
+       NPC's overlapping footprint. */
+    if (!col_type_is_hazard_entity(npc->type)) {
+        int size = col_npc_effective_size(npc);
+        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
+    }
     npc->active = 0;
 }
 
@@ -75,7 +81,7 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->target_y = y;
     npc->stun_timer = st->stun_on_spawn;
     npc->aggro_target = -1;
-    if (col_npc_effective_size(npc) > 0)
+    if (!col_type_is_hazard_entity(type) && col_npc_effective_size(npc) > 0)
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }
 
@@ -243,9 +249,15 @@ static const ColoNpcType COLO_WARBAND_TYPES[3] = {
  * tile (A6+D19).
  */
 static void col_spawn_wave(ColosseumState* s) {
+    /* clear the old roster. Bee swarms survive wave transitions (they respawn
+       forever, D34); totems despawn with the wave — their owners are gone —
+       and all totem bookkeeping resets. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        if (s->npcs[i].active) col_deactivate_npc(s, i);
+        if (!s->npcs[i].active) continue;
+        if (s->npcs[i].type == COLO_BEE_SWARM) continue;
+        col_deactivate_npc(s, i);
     }
+    memset(s->totems, 0, sizeof(s->totems));
     /* heal any stale footprint stamps (e.g. NPCs force-killed without cleanup). */
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
 
@@ -366,7 +378,6 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     uint32_t saved_rng = s->rng_state;
     memset(s, 0, sizeof(ColosseumState));
     s->start_wave = saved_start;
-    s->config_modifier_draft_window = ctx->config.modifier_draft_window_ticks;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
     s->player_dest_x = -1;
@@ -418,9 +429,21 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave = effective_start;
     s->wave_spawn_target = effective_start;
     s->wave_spawn_delay = 0;
-    s->wave_ready_delay = COLO_START_READY_TICKS;
     s->log.wave_reached = effective_start;
-    col_spawn_wave(s);
+
+    /* A16+B6: a wave-1 run opens with the mandatory fixed draft (Relentless /
+       Blasphemy / Frailty); the wave spawns only after the pick, then runs the
+       6-tick ready delay. start_wave>1 runs (curriculum/lab) DETERMINISTICALLY
+       SKIP every prior draft — they start modifier-free and meet their first
+       draft after clearing the start wave (auto-rolling 1..11 random modifiers
+       would make curriculum difficulty wildly seed-dependent). */
+    if (effective_start == 0) {
+        col_modifier_open_draft(s, 0);
+        assert(s->modifiers.draft_pending && "wave-1 fixed draft failed to open");
+    } else {
+        s->wave_ready_delay = COLO_START_READY_TICKS;
+        col_spawn_wave(s);
+    }
 }
 
 static void col_reset(EncounterState* state, uint32_t seed) {

@@ -198,6 +198,9 @@ static void col_lab_refresh_geometry(ColosseumState* s) {
 
 static void col_lab_remove_all_npcs(ColosseumState* s) {
     memset(s->npcs, 0, sizeof(s->npcs));
+    /* hazard bookkeeping points at NPC slots; a wiped roster orphans it. */
+    memset(s->totems, 0, sizeof(s->totems));
+    memset(s->bees, 0, sizeof(s->bees));
 }
 
 static void col_lab_clear_npcs(ColosseumState* s) {
@@ -344,6 +347,11 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             if (wave < 1 || wave > COLO_NUM_WAVES)
                 col_lab_abort("wave must be in [1,%d], got %d", COLO_NUM_WAVES, wave);
             col_lab_remove_all_npcs(s);
+            /* a direct wave jump bypasses the mandatory draft: drop any open one. */
+            s->modifiers.draft_pending = 0;
+            s->modifiers.draft_gates_spawn = 0;
+            for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+                s->modifiers.draft_options[o] = -1;
             s->wave = wave - 1;
             s->wave_spawn_target = s->wave;
             s->wave_spawn_delay = 0;
@@ -427,8 +435,10 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                 if (draft->option[o] >= 0) offered++;
             }
             if (offered == 0) col_lab_abort("draft needs at least one option");
+            /* a lab-opened draft freezes play like the real one (B6) but does
+               NOT gate a wave spawn — the pick just resumes the scenario. */
             s->modifiers.draft_pending = 1;
-            s->modifiers.draft_timer = s->config_modifier_draft_window;
+            s->modifiers.draft_gates_spawn = 0;
             return;
         }
 

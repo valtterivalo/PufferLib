@@ -78,7 +78,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->wave_spawn_delay--;
         if (s->wave_spawn_delay == 0) spawn_wave_now = 1;
     }
-    int in_wave_gap = (s->wave_spawn_delay > 0 || spawn_wave_now);
+    /* B6+D26: an open draft IS the inter-wave gap — the world pauses and the
+       player is frozen until the mandatory pick arms the next spawn. */
+    int in_wave_gap = (s->wave_spawn_delay > 0 || spawn_wave_now ||
+                       s->modifiers.draft_pending);
     if (s->wave_ready_delay > 0) s->wave_ready_delay--;
     int in_ready_gap = s->wave_ready_delay > 0;
 
@@ -130,14 +133,21 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (spawn_wave_now) {
         s->wave = s->wave_spawn_target;
         col_spawn_wave(s);
+        /* D26: every draft-gated wave start runs the 6-tick ready delay (the
+           researched click+6; the pick is the click). */
+        s->wave_ready_delay = COLO_START_READY_TICKS;
         goto finish_step;
     }
-    if (s->wave_spawn_delay > 0) goto finish_step;
+    if (s->wave_spawn_delay > 0 || s->modifiers.draft_pending) goto finish_step;
 
-    /* wave completion: all NPC slots inactive. A6: on the boss wave Sol's death
+    /* wave completion: all non-hazard NPC slots inactive — a live totem or bee
+       swarm never blocks the clear (A21+B9). A6: on the boss wave Sol's death
        alone ends the run in victory, even with a Quartet warbander alive. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        if (s->npcs[i].active) { all_dead = 0; break; }
+        if (s->npcs[i].active && !col_type_is_hazard_entity(s->npcs[i].type)) {
+            all_dead = 0;
+            break;
+        }
     }
     int wave_cleared = all_dead;
     if (s->wave == COLO_WAVE_BOSS && s->sol.started)
@@ -162,12 +172,12 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
             s->winner = COLO_OUTCOME_PLAYER_WON;
             s->reward += ctx->config.win_bonus;
         } else {
-            /* between-wave modifier draft: offered after clearing waves
-               1..COLO_MODIFIER_LAST_WAVE, during the inter-wave gap. */
-            if (s->wave <= COLO_MODIFIER_LAST_WAVE)
-                col_modifier_offer_draft(s, s->wave);
+            /* A16+B6+D26: the mandatory draft gates EVERY next wave including
+               wave 12 — the pick (no skip exists) arms the spawn. The empty-
+               pool fallback spawns ungated (unreachable in real runs). */
             s->wave_spawn_target = s->wave + 1;
-            s->wave_spawn_delay = 9;
+            col_modifier_open_draft(s, s->wave + 1);
+            if (!s->modifiers.draft_pending) s->wave_spawn_delay = 1;
             s->log.wave_reached = s->wave + 1;
         }
     }

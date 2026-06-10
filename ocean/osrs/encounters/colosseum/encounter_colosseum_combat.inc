@@ -10,14 +10,20 @@
  */
 
 static void col_apply_npc_death(ColosseumState* s, int idx) {
-    s->log.total_npc_kills++;
     ColoNPC* npc = &s->npcs[idx];
+    /* hazard entities (totems/bees) are not enemies: no kill telemetry, no
+       Volatility explosion — just their respawn bookkeeping. */
+    if (col_type_is_hazard_entity(npc->type)) {
+        col_hazard_on_npc_death(s, idx);
+        col_deactivate_npc(s, idx);
+        return;
+    }
+    s->log.total_npc_kills++;
     /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
        at tier III). Read its position/size before the slot is recycled. */
     col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));
-    /* free any totem bound to this slot. */
-    for (int t = 0; t < COLO_MAX_TOTEMS; t++)
-        if (s->totems[t].active && s->totems[t].npc_slot == idx) s->totems[t].active = 0;
+    /* A21: the owner's death despawns its totem and cancels a pending respawn. */
+    col_mod_on_owner_death(s, idx);
     col_deactivate_npc(s, idx);
 }
 
@@ -82,14 +88,17 @@ static int col_npc_dist_to_player(const ColosseumState* s, const ColoNPC* npc) {
         s->player.x, s->player.y, npc->x, npc->y, col_npc_effective_size(npc));
 }
 
-/** player defence roll against an incoming NPC attack of the given style. */
+/** player defence roll against an incoming NPC attack of the given style.
+    A23: Relentless bypasses 33/66/100% of the Defence LEVEL before the roll —
+    the gear defence bonus enters the formula fully intact. */
 static int col_player_def_roll(const ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
     int def_bonus = encounter_player_def_bonus(
         ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
         style, melee_style);
+    int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
     return osrs_player_def_roll_vs_npc(
-        s->player.current_defence, s->player.current_magic, def_bonus, style);
+        def_level, s->player.current_magic, def_bonus, style);
 }
 
 /** roll an NPC attack against the player: accuracy from levels + bonuses, damage
@@ -110,10 +119,10 @@ static int col_npc_roll_vs_player(
     int att_roll = osrs_npc_attack_roll(att_level, att_bonus);
     int def_roll = col_player_def_roll(s, style, stats->melee_style);
 
-    /* Relentless: bypass a fraction of the player's defence, add a flat max hit,
-       and (T3) ignore accuracy entirely. */
+    /* Relentless: +1/+3/+6 max hit, and (T3) ignore accuracy entirely; the
+       defence-level bypass is already inside col_player_def_roll (A23). */
     int force_hit = 0;
-    int max_hit_bonus = col_mod_relentless_apply(s, &def_roll, &force_hit);
+    int max_hit_bonus = col_mod_relentless_max_hit_bonus(s, &force_hit);
     int effective_max = max_hit + max_hit_bonus;
 
     int dmg = encounter_rand_int(&s->rng_state, effective_max + 1);
@@ -363,10 +372,18 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
         mc->pattern_copied = 0;   /* consume; copied patterns do not re-propagate */
     } else {
         if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) >= 3) {
-            /* T3 unpredictable: every orb's style is independently random. */
-            static const AttackStyle ANY[3] = { ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE };
-            for (int o = 0; o < 3; o++)
-                mc->orb_style[o] = ANY[encounter_rand_int(&s->rng_state, 3)];
+            /* A24 T3: the MELEE ORB'S POSITION is randomized — a uniform
+               shuffle of the one-each {magic, ranged, melee} set, never
+               independent per-orb styles. */
+            mc->orb_style[0] = ATTACK_STYLE_RANGED;
+            mc->orb_style[1] = ATTACK_STYLE_MAGIC;
+            mc->orb_style[2] = ATTACK_STYLE_MELEE;
+            for (int o = 2; o > 0; o--) {
+                int j = encounter_rand_int(&s->rng_state, o + 1);
+                AttackStyle tmp = mc->orb_style[o];
+                mc->orb_style[o] = mc->orb_style[j];
+                mc->orb_style[j] = tmp;
+            }
         } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
             /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
             mc->orb_style[0] = ATTACK_STYLE_RANGED;
@@ -528,6 +545,9 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
         }
         if (npc->stun_timer > 0) npc->stun_timer--;
         if (npc->frozen_ticks > 0) npc->frozen_ticks--;
+
+        /* hazard entities are driven by the modifier bookkeeping, not the AI. */
+        if (col_type_is_hazard_entity(npc->type)) continue;
 
         col_npc_move_ctx(s, ctx, i);
         col_npc_attack_ctx(s, ctx, i);

@@ -41,7 +41,10 @@
 #include <errno.h>
 
 /** Colosseum NPC roster. `type` is the discriminant for the ColoNPC union.
-    waves 1-11 draw from the warband + colossi + beasts; wave 12 is Sol Heredit. */
+    waves 1-11 draw from the warband + colossi + beasts; wave 12 is Sol Heredit.
+    The last two are 1-HP HAZARD ENTITIES (A21+B9): attackable through the
+    normal target/attack path but never counted toward wave completion, never
+    collision-stamped, and driven by the modifier bookkeeping, not the NPC AI. */
 typedef enum {
     COLO_FREMENNIK_BERSERKER = 0,  /* Fremennik Warband — melee */
     COLO_FREMENNIK_ARCHER,         /* Fremennik Warband — ranged */
@@ -53,6 +56,8 @@ typedef enum {
     COLO_MINOTAUR,                 /* heavy melee */
     COLO_MANTICORE,                /* 3-style barrage cycle */
     COLO_SOL_HEREDIT,              /* final boss */
+    COLO_HEALING_TOTEM,            /* Totemic hazard entity (npc 12825, 1 HP) */
+    COLO_BEE_SWARM,                /* Bees! hazard entity (npc 12823, 1 HP) */
     COLO_NUM_NPC_TYPES
 } ColoNpcType;
 

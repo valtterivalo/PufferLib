@@ -1,18 +1,24 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_modifiers.inc
- * @brief The between-wave handicap draft + all 14 modifier effects.
+ * @brief The mandatory pre-wave handicap draft + all 14 modifier effects.
  *
- * The draft is offered during the inter-wave gap after clearing waves
- * 1..COLO_MODIFIER_LAST_WAVE: col_modifier_offer_draft picks 3 distinct eligible
- * modifiers (a new one or the next tier of an active tiered one), respecting the
- * "not offered after wave 11" flags. col_modifier_apply_selection activates the
- * chosen option (sets the active_mask bit, bumps the tier) and persists it for the
- * run. Effects split into pull-helpers the combat/boss code queries
+ * A16+B6+D26: a draft gates EVERY wave start (12 picks per full run). The
+ * wave-1 offer is the fixed {Relentless, Blasphemy, Frailty}; later offers
+ * draw weighted-without-replacement from the eligible pool with owned tier-1/2
+ * modifiers upgrade-biased (COLO_DRAFT_UPGRADE_WEIGHT). Selection is mandatory:
+ * no skip exists, the player is frozen and the world paused until the pick,
+ * which arms the gated wave spawn. col_modifier_apply_selection activates the
+ * chosen option (sets the active_mask bit, bumps the tier) and persists it for
+ * the run. Effects split into pull-helpers the combat/boss code queries
  * (col_mod_* accessors) and push-hooks driven from the step loop
  * (col_modifiers_tick + the col_mod_on_* event hooks).
  *
- * Tier values come from COLO_MODIFIER_* tables in the model; every UNCONFIRMED
+ * A21+B9: totems and bee swarms are 1-HP hazard-entity NPCs the bookkeeping
+ * here drives (spawn, movement, heal pulses, respawn timers); the player kills
+ * them through the ordinary target/attack path.
+ *
+ * Tier values come from COLO_MODIFIER_* tables in the model; every modeled
  * assumption is a named constant there. Damage routes through the shared
  * encounter_damage_player so HP/splat/tracker bookkeeping holds.
  */
@@ -33,46 +39,83 @@ static inline int col_mod_tier(const ColosseumState* s, ColoModifier mod) {
 
 /* ----- draft offer / selection --------------------------------------------- */
 
-/** is `mod` eligible to offer after clearing `cleared_wave` (0-based)? Excludes
-    maxed tiered modifiers and pre-boss-only modifiers once past wave 11. */
-static int col_modifier_eligible(const ColosseumState* s, ColoModifier mod, int cleared_wave) {
+/** is `mod` eligible for the draft gating `next_wave` (0-based)? Excludes
+    maxed modifiers, the four pre-boss-only modifiers from the wave-12 draft
+    (Mantimayhem per UPD-0424; Reentry modeled on the same logic, D31), and
+    Red Flag / Dynamic Duo from every draft into wave 8+ (A16). */
+static int col_modifier_eligible(const ColosseumState* s, ColoModifier mod, int next_wave) {
     if (s->modifiers.tier[mod] >= COLO_MODIFIER_MAX_TIER[mod]) return 0;
-    int next_wave = cleared_wave + 1;
     if (COLO_MODIFIER_PRE_BOSS_ONLY[mod] && next_wave >= COLO_WAVE_BOSS) return 0;
+    if ((mod == COLO_MOD_RED_FLAG || mod == COLO_MOD_DYNAMIC_DUO) &&
+        next_wave > COLO_RFDD_LAST_DRAFT_WAVE) return 0;
+    return 1;
+}
+
+/** A16 MODELED: draw weight for an eligible modifier — owned upgradable
+    (tier 1/2 of a tiered modifier) gets COLO_DRAFT_UPGRADE_WEIGHT, else 1. */
+static int col_modifier_draft_weight(const ColosseumState* s, ColoModifier mod) {
+    int tier = s->modifiers.tier[mod];
+    if (col_mod_active(s, mod) && tier >= 1 && tier < COLO_MODIFIER_MAX_TIER[mod])
+        return COLO_DRAFT_UPGRADE_WEIGHT;
     return 1;
 }
 
 /**
- * Populate draft_options[3] with 3 distinct eligible modifiers and open the draft.
+ * Open the mandatory draft gating `next_wave` (0-based): populate
+ * draft_options[3] and freeze play until a pick.
  *
- * Called once during the inter-wave gap after clearing waves 1..LAST_WAVE. Offering
- * an already-active tiered modifier advances its next tier; a new one starts at
- * tier 1. If fewer than 3 are eligible, trailing slots stay -1 (the mask gates them).
+ * The wave-1 draft (next_wave 0) is the FIXED {Relentless, Blasphemy, Frailty}
+ * offer. Every later draft draws 3 distinct options weighted-without-
+ * replacement from the eligible pool (upgrade bias per
+ * col_modifier_draft_weight); offering an active tiered modifier means its
+ * next tier. If fewer than 3 are eligible, trailing slots stay -1 (the mask
+ * gates them); an empty pool leaves the draft closed and the caller spawns
+ * the wave ungated (unreachable in real runs — 12 picks cannot exhaust the
+ * 14-modifier pool).
  */
-static void col_modifier_offer_draft(ColosseumState* s, int cleared_wave) {
-    int pool[COLO_NUM_REAL_MODIFIERS];
-    int pool_n = 0;
-    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++) {
-        if (col_modifier_eligible(s, (ColoModifier)m, cleared_wave)) pool[pool_n++] = m;
-    }
-
+static void col_modifier_open_draft(ColosseumState* s, int next_wave) {
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
+
     int offered = 0;
-    while (offered < COLO_MODIFIER_DRAFT_OPTIONS && pool_n > 0) {
-        int pick = encounter_rand_int(&s->rng_state, pool_n);
-        s->modifiers.draft_options[offered++] = pool[pick];
-        pool[pick] = pool[--pool_n];   /* swap-remove keeps options distinct */
+    if (next_wave == 0) {
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+            s->modifiers.draft_options[o] = COLO_WAVE1_DRAFT_OFFER[o];
+        offered = COLO_MODIFIER_DRAFT_OPTIONS;
+    } else {
+        int pool[COLO_NUM_REAL_MODIFIERS];
+        int weight[COLO_NUM_REAL_MODIFIERS];
+        int pool_n = 0;
+        int total_weight = 0;
+        for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++) {
+            if (!col_modifier_eligible(s, (ColoModifier)m, next_wave)) continue;
+            pool[pool_n] = m;
+            weight[pool_n] = col_modifier_draft_weight(s, (ColoModifier)m);
+            total_weight += weight[pool_n];
+            pool_n++;
+        }
+        while (offered < COLO_MODIFIER_DRAFT_OPTIONS && pool_n > 0) {
+            int roll = encounter_rand_int(&s->rng_state, total_weight);
+            int pick = 0;
+            while (roll >= weight[pick]) roll -= weight[pick++];
+            s->modifiers.draft_options[offered++] = pool[pick];
+            total_weight -= weight[pick];
+            pool[pick] = pool[pool_n - 1];      /* swap-remove keeps options distinct */
+            weight[pick] = weight[pool_n - 1];
+            pool_n--;
+        }
     }
 
     if (offered == 0) return;   /* nothing left to draft: leave the draft closed */
     s->modifiers.draft_pending = 1;
-    s->modifiers.draft_timer = s->config_modifier_draft_window;
+    s->modifiers.draft_gates_spawn = 1;
 }
 
 /**
- * Activate the modifier in draft slot `option` (0..2). Sets the active_mask bit and
- * bumps that modifier's tier (capped at its max), then closes the draft. A
- * Frailty pick re-applies the player HP cut immediately so the bar reflects it.
+ * Activate the modifier in draft slot `option` (0..2). Sets the active_mask bit
+ * and bumps that modifier's tier (capped at its max), closes the draft, and —
+ * for the wave-gating drafts — arms the queued wave spawn (next tick; the
+ * spawn re-arms the 6-tick ready delay, D26). A Frailty pick re-applies the
+ * player HP cut immediately so the bar reflects it.
  */
 static void col_modifier_apply_selection(ColosseumState* s, int option) {
     if (!s->modifiers.draft_pending) return;
@@ -85,22 +128,13 @@ static void col_modifier_apply_selection(ColosseumState* s, int option) {
     s->log.modifiers_picked++;
 
     s->modifiers.draft_pending = 0;
-    s->modifiers.draft_timer = 0;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
+    if (s->modifiers.draft_gates_spawn) {
+        s->modifiers.draft_gates_spawn = 0;
+        s->wave_spawn_delay = 1;
+    }
 
     if ((ColoModifier)mod == COLO_MOD_FRAILTY) col_mod_apply_frailty_hp(s);
-}
-
-/** count down an open draft; auto-close after the window so play resumes even if
-    the policy never selects (window <= 0 keeps it open until a pick). */
-static void col_modifier_tick_draft(ColosseumState* s) {
-    if (!s->modifiers.draft_pending) return;
-    if (s->config_modifier_draft_window <= 0) return;
-    if (s->modifiers.draft_timer > 0) s->modifiers.draft_timer--;
-    if (s->modifiers.draft_timer == 0) {
-        s->modifiers.draft_pending = 0;
-        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
-    }
 }
 
 /* ----- Frailty (player max HP) ---------------------------------------------- */
@@ -118,15 +152,20 @@ static void col_mod_apply_frailty_hp(ColosseumState* s) {
 
 /* ----- Relentless (enemy accuracy / max hit) -------------------------------- */
 
-/** Relentless adjusts an NPC's defence-bypassed roll and flat max-hit bonus.
-    Returns the max-hit bonus to add; *force_hit is set to 1 at tier III (ignore
-    accuracy entirely). *def_roll is scaled down by the bypass fraction. */
-static int col_mod_relentless_apply(const ColosseumState* s, int* def_roll, int* force_hit) {
+/** A23: Relentless bypasses 33/66/100% of the player's Defence LEVEL — gear
+    defence bonuses stay fully intact. Returns the level the defence roll
+    should use. */
+static int col_mod_relentless_def_level(const ColosseumState* s, int def_level) {
     int tier = col_mod_tier(s, COLO_MOD_RELENTLESS);
-    if (tier == 0) { *force_hit = 0; return 0; }
-    int bypass = COLO_RELENTLESS_DEF_BYPASS_PCT[tier];
-    *def_roll = (*def_roll * (100 - bypass)) / 100;
-    *force_hit = (tier >= 3) ? 1 : 0;   /* T3 fully ignores accuracy checks */
+    if (tier == 0) return def_level;
+    return (def_level * (100 - COLO_RELENTLESS_DEF_BYPASS_PCT[tier])) / 100;
+}
+
+/** Relentless flat max-hit bonus; *force_hit is set at tier III (attacks
+    ignore accuracy entirely). */
+static int col_mod_relentless_max_hit_bonus(const ColosseumState* s, int* force_hit) {
+    int tier = col_mod_tier(s, COLO_MOD_RELENTLESS);
+    *force_hit = (tier >= 3) ? 1 : 0;
     return COLO_RELENTLESS_MAX_HIT_BONUS[tier];
 }
 
@@ -163,18 +202,27 @@ static int col_mod_doom_lethal(const ColosseumState* s) {
     return tier > 0 && s->doom_stacks >= COLO_DOOM_CAP[tier];
 }
 
-/* ----- Mantimayhem T2 venom ------------------------------------------------- */
+/* ----- Mantimayhem T2 venom (A25) -------------------------------------------- */
 
-/** apply venom to the player on an unprotected manticore hit (Mantimayhem >= II).
-    Resets the venom to full so repeated unprotected hits keep it stacked up. */
+/** envenom the player on an unprotected manticore hit (Mantimayhem >= II).
+    A25 standard-OSRS semantics: a fresh application starts the 6-damage /
+    30-tick cycle; reapplication while envenomed bumps the NEXT instance +2
+    toward the cap instead of resetting. */
 static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
     if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) < 2) return;
     if (!hit_success) return;
-    s->player_venom = COLO_VENOM_START;
-    if (s->player_venom_timer == 0) s->player_venom_timer = COLO_VENOM_INTERVAL;
+    if (s->player_venom == 0) {
+        s->player_venom = COLO_VENOM_START;
+        s->player_venom_timer = COLO_VENOM_INTERVAL;
+    } else {
+        s->player_venom += COLO_VENOM_STEP;
+        if (s->player_venom > COLO_VENOM_CAP) s->player_venom = COLO_VENOM_CAP;
+    }
 }
 
-/** tick the player's venom: deal decaying damage every COLO_VENOM_INTERVAL ticks. */
+/** tick the player's venom: every COLO_VENOM_INTERVAL ticks deal the current
+    venom damage, then escalate it +2 toward the cap (6, 8, 10 .. 20). Venom
+    never expires mid-wave (no cure in the loadout); it clears between waves. */
 static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom <= 0) return;
     if (s->player_venom_timer > 0) s->player_venom_timer--;
@@ -183,115 +231,216 @@ static void col_mod_tick_venom(ColosseumState* s) {
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
     s->last_hit_by_type = COLO_MANTICORE;
     col_mod_on_player_damaged(s, dmg);
-    s->player_venom -= COLO_VENOM_DECAY;
-    if (s->player_venom < 0) s->player_venom = 0;
+    s->player_venom += COLO_VENOM_STEP;
+    if (s->player_venom > COLO_VENOM_CAP) s->player_venom = COLO_VENOM_CAP;
     s->player_venom_timer = COLO_VENOM_INTERVAL;
 }
 
-/* ----- Totemic (50%-HP healing totem) --------------------------------------- */
+/* ----- hazard-entity NPC plumbing (totems + bees) ---------------------------- */
 
-/** spawn a healing totem next to an NPC that just crossed 50% HP, unless one is
-    already bound to that slot. Hook from the NPC-damage path. */
+/** spawn a 1-HP hazard NPC flush with the owner footprint's east edge, walking
+    the adjacent ring for a static-unblocked tile inside the boss clamp when
+    active. Hazards carry no collision, so NPC overlap is acceptable. */
+static int col_spawn_hazard_npc_beside(
+    ColosseumState* s, ColoNpcType type, const ColoNPC* owner
+) {
+    int size = col_npc_effective_size(owner);
+    for (int ring = 0; ring < 2; ring++) {
+        int lo_x = owner->x - 1 - ring, hi_x = owner->x + size + ring;
+        int lo_y = owner->y - 1 - ring, hi_y = owner->y + size + ring;
+        /* east column first (the visual convention), then the rest of the shell. */
+        for (int pass = 0; pass < 2; pass++) {
+            for (int y = lo_y; y <= hi_y; y++) {
+                for (int x = lo_x; x <= hi_x; x++) {
+                    int on_shell = (x == lo_x || x == hi_x || y == lo_y || y == hi_y);
+                    if (!on_shell) continue;
+                    int is_east = (x == hi_x);
+                    if ((pass == 0) != is_east) continue;
+                    if (col_static_blocked(x, y)) continue;
+                    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) continue;
+                    return col_spawn_npc_at(s, type, x, y);
+                }
+            }
+        }
+    }
+    assert(0 && "no spawn tile for a hazard entity beside its owner");
+    return -1;
+}
+
+/** owner-keyed totem bookkeeping; asserts the slot domain. */
+static ColoTotem* col_totem_for_owner(ColosseumState* s, int owner_slot) {
+    assert(owner_slot >= 0 && owner_slot < COLO_MAX_TOTEMS);
+    return &s->totems[owner_slot];
+}
+
+/** A21: hazard-entity death bookkeeping, called from col_apply_npc_death for a
+    dying totem/bee NPC: arm the matching respawn timer (totem 200t keyed to its
+    owner, bee 50t). */
+static void col_hazard_on_npc_death(ColosseumState* s, int npc_slot) {
+    const ColoNPC* npc = &s->npcs[npc_slot];
+    if (npc->type == COLO_HEALING_TOTEM) {
+        for (int o = 0; o < COLO_MAX_TOTEMS; o++) {
+            ColoTotem* tot = &s->totems[o];
+            if (tot->phase != COLO_HAZARD_ALIVE || tot->npc_slot != npc_slot) continue;
+            tot->phase = COLO_HAZARD_RESPAWNING;
+            tot->npc_slot = -1;
+            tot->respawn_timer = COLO_TOTEM_RESPAWN_TICKS;
+            return;
+        }
+        return;   /* lab-spawned ownerless totem: dies for good */
+    }
+    if (npc->type == COLO_BEE_SWARM) {
+        for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
+            ColoBeeSwarm* bee = &s->bees[b];
+            if (bee->phase != COLO_HAZARD_ALIVE || bee->npc_slot != npc_slot) continue;
+            bee->phase = COLO_HAZARD_RESPAWNING;
+            bee->npc_slot = -1;
+            bee->respawn_timer = COLO_BEE_RESPAWN_TICKS;
+            return;
+        }
+        return;   /* lab-spawned unmanaged bee: dies for good */
+    }
+}
+
+/** A21: a real NPC died — its totem despawns with it (live totem removed, a
+    pending respawn cancelled). */
+static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
+    ColoTotem* tot = col_totem_for_owner(s, owner_slot);
+    if (tot->phase == COLO_HAZARD_ALIVE && tot->npc_slot >= 0 &&
+        s->npcs[tot->npc_slot].active &&
+        s->npcs[tot->npc_slot].type == COLO_HEALING_TOTEM)
+        col_deactivate_npc(s, tot->npc_slot);
+    *tot = (ColoTotem){0};
+}
+
+/* ----- Totemic (50%-HP healing totem, A21+B5+D22) ----------------------------- */
+
+/** spawn a totem NPC for `owner_slot` and bind the bookkeeping. */
+static void col_totem_spawn_for_owner(ColosseumState* s, int owner_slot) {
+    ColoTotem* tot = col_totem_for_owner(s, owner_slot);
+    int slot = col_spawn_hazard_npc_beside(s, COLO_HEALING_TOTEM, &s->npcs[owner_slot]);
+    tot->phase = COLO_HAZARD_ALIVE;
+    tot->npc_slot = slot;
+    tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
+}
+
+/** hook from the NPC-damage path: an NPC (Sol included, B5) at or below 50% HP
+    with no totem fielded or pending gets one. */
 static void col_mod_on_npc_hp_changed(ColosseumState* s, int npc_slot) {
     if (!col_mod_active(s, COLO_MOD_TOTEMIC)) return;
     const ColoNPC* npc = &s->npcs[npc_slot];
     if (!npc->active || npc->hp <= 0 || npc->max_hp <= 0) return;
+    if (col_type_is_hazard_entity(npc->type)) return;
     if (npc->hp * 2 > npc->max_hp) return;   /* not yet at <=50% */
-    if (npc->type == COLO_SOL_HEREDIT) return;
-
-    for (int t = 0; t < COLO_MAX_TOTEMS; t++)
-        if (s->totems[t].active && s->totems[t].npc_slot == npc_slot) return;
-
-    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
-        if (s->totems[t].active) continue;
-        s->totems[t].active = 1;
-        s->totems[t].npc_slot = npc_slot;
-        int size = col_npc_effective_size(npc);
-        s->totems[t].x = npc->x + size;       /* one tile off the NPC's east edge */
-        if (col_static_blocked(s->totems[t].x, npc->y)) s->totems[t].x = npc->x - 1;
-        s->totems[t].y = npc->y;
-        s->totems[t].heal_timer = COLO_TOTEM_HEAL_INTERVAL;
-        return;
-    }
+    if (col_totem_for_owner(s, npc_slot)->phase != COLO_HAZARD_NONE) return;
+    col_totem_spawn_for_owner(s, npc_slot);
 }
 
-/** tick all totems: heal their bound NPC each pulse; a totem is destroyed when the
-    player stands adjacent to it or its NPC dies. */
+/**
+ * Tick all totems. ALIVE: pulse every 7 ticks — heal the owner 30% of max HP
+ * while the owner sits at or below 50% (the confirmed trigger, D22); Sol
+ * instead takes the flat 75 every pulse until the totem is destroyed (B5).
+ * RESPAWNING: count down 200 ticks, then respawn beside the (still live)
+ * owner. An owner that died through any path despawns its totem; a totem NPC
+ * removed externally (lab) clears its bookkeeping without a respawn.
+ */
 static void col_mod_tick_totems(ColosseumState* s) {
-    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
-        ColoTotem* tot = &s->totems[t];
-        if (!tot->active) continue;
+    for (int o = 0; o < COLO_MAX_TOTEMS; o++) {
+        ColoTotem* tot = &s->totems[o];
+        if (tot->phase == COLO_HAZARD_NONE) continue;
 
-        int slot = tot->npc_slot;
-        ColoNPC* npc = (slot >= 0 && slot < COLO_MAX_NPCS) ? &s->npcs[slot] : NULL;
-        if (!npc || !npc->active || npc->hp <= 0) { tot->active = 0; continue; }
+        ColoNPC* owner = &s->npcs[o];
+        if (!owner->active || owner->hp <= 0 ||
+            col_type_is_hazard_entity(owner->type)) {
+            col_mod_on_owner_death(s, o);
+            continue;
+        }
 
-        int pdist = encounter_rect_distance(s->player.x, s->player.y, 1, tot->x, tot->y, 1);
-        if (pdist <= 1) { tot->active = 0; continue; }   /* player destroys the totem */
+        if (tot->phase == COLO_HAZARD_RESPAWNING) {
+            if (tot->respawn_timer > 0) tot->respawn_timer--;
+            if (tot->respawn_timer == 0) col_totem_spawn_for_owner(s, o);
+            continue;
+        }
+
+        ColoNPC* totem_npc = (tot->npc_slot >= 0) ? &s->npcs[tot->npc_slot] : NULL;
+        if (!totem_npc || !totem_npc->active || totem_npc->type != COLO_HEALING_TOTEM) {
+            *tot = (ColoTotem){0};   /* removed outside the death path: no respawn */
+            continue;
+        }
 
         if (tot->heal_timer > 0) tot->heal_timer--;
-        if (tot->heal_timer == 0) {
-            int heal = (npc->max_hp * COLO_TOTEM_HEAL_PCT) / 100;
-            npc->hp += heal;
-            if (npc->hp > npc->max_hp) npc->hp = npc->max_hp;
-            tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
+        if (tot->heal_timer > 0) continue;
+        tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
+        if (owner->type == COLO_SOL_HEREDIT) {
+            owner->hp += COLO_TOTEM_SOL_HEAL;
+        } else {
+            if (owner->hp * 2 > owner->max_hp) continue;   /* pulse gated at <=50% */
+            owner->hp += (owner->max_hp * COLO_TOTEM_HEAL_PCT) / 100;
         }
+        if (owner->hp > owner->max_hp) owner->hp = owner->max_hp;
     }
 }
 
 /* ----- molten pools (Reentry / Volatility T3 on waves 1-11) ----------------- */
 
-/** add a molten pool at (x,y) living `ticks` ticks (COLO_POOL_PERMANENT = forever).
-    Overflow recycles the oldest slot so the list never asserts. */
-static void col_mod_add_molten_pool(ColosseumState* s, int x, int y, int ticks) {
+/** add a molten pool at (x,y) of the given ColoMoltenPoolKind. Overflow
+    recycles a random slot so the list never asserts. */
+static void col_mod_add_molten_pool(ColosseumState* s, int x, int y, ColoMoltenPoolKind kind) {
     if (col_static_blocked(x, y)) return;
     int slot;
     if (s->molten_count < COLO_SOL_HAZARD_TILES_MAX) slot = s->molten_count++;
     else slot = encounter_rand_int(&s->rng_state, COLO_SOL_HAZARD_TILES_MAX);
     s->molten_x[slot] = x;
     s->molten_y[slot] = y;
-    s->molten_ticks[slot] = ticks;
+    s->molten_kind[slot] = kind;
 }
 
-/** tick molten pools: expire temporary ones, burn the player standing on any. */
-static void col_mod_tick_molten_pools(ColosseumState* s) {
-    int burned = 0;
+/** A22: drop the until-wave-end pools; permanent ones survive. Called at each
+    wave spawn. */
+static void col_mod_clear_wave_end_pools(ColosseumState* s) {
+    int kept = 0;
     for (int i = 0; i < s->molten_count; i++) {
-        if (s->molten_ticks[i] != COLO_POOL_PERMANENT) {
-            s->molten_ticks[i]--;
-            if (s->molten_ticks[i] <= 0) {
-                s->molten_x[i] = s->molten_x[s->molten_count - 1];
-                s->molten_y[i] = s->molten_y[s->molten_count - 1];
-                s->molten_ticks[i] = s->molten_ticks[s->molten_count - 1];
-                s->molten_count--;
-                i--;
-                continue;
-            }
-        }
-        if (!burned && s->player.x == s->molten_x[i] && s->player.y == s->molten_y[i]) {
-            encounter_damage_player(&s->player, COLO_MOLTEN_MAX_HIT, &s->tick_scratch.damage_received);
-            s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
-            col_mod_on_player_damaged(s, COLO_MOLTEN_MAX_HIT);
-            burned = 1;
-        }
+        if (s->molten_kind[i] != COLO_POOL_PERMANENT) continue;
+        s->molten_x[kept] = s->molten_x[i];
+        s->molten_y[kept] = s->molten_y[i];
+        s->molten_kind[kept] = s->molten_kind[i];
+        kept++;
+    }
+    s->molten_count = kept;
+}
+
+/** burn the player standing on any pool for the shared 5-9 molten-sand roll —
+    one burn per tick across overlapping pools (D35). */
+static void col_mod_tick_molten_pools(ColosseumState* s) {
+    for (int i = 0; i < s->molten_count; i++) {
+        if (s->player.x != s->molten_x[i] || s->player.y != s->molten_y[i]) continue;
+        int dmg = COLO_MOLTEN_SAND_MIN_HIT
+            + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
+        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
+        col_mod_on_player_damaged(s, dmg);
+        break;
     }
 }
 
-/** Reentry hook: when a javelin skyfall lands, leave molten sand. T1 temporary,
-    T2 permanent (until wave end), T3 also melts the tile one west of the target. */
+/** A22 Reentry hook: when a javelin skyfall lands, leave molten sand. T1 = the
+    targeted tile until wave end; T2 = PERMANENT and adds the tile SOUTH-WEST of
+    the target; T3 additionally the tile WEST of it. */
 static void col_mod_reentry_on_skyfall(ColosseumState* s, int tile_x, int tile_y) {
     int tier = col_mod_tier(s, COLO_MOD_REENTRY);
     if (tier == 0) return;
-    int ticks = (tier >= 2) ? COLO_POOL_PERMANENT : COLO_REENTRY_POOL_TICKS;
-    col_mod_add_molten_pool(s, tile_x, tile_y, ticks);
-    if (tier >= 3) col_mod_add_molten_pool(s, tile_x - 1, tile_y, ticks);
+    ColoMoltenPoolKind kind = (tier >= 2) ? COLO_POOL_PERMANENT : COLO_POOL_UNTIL_WAVE_END;
+    col_mod_add_molten_pool(s, tile_x, tile_y, kind);
+    if (tier >= 2) col_mod_add_molten_pool(s, tile_x - 1, tile_y - 1, kind);
+    if (tier >= 3) col_mod_add_molten_pool(s, tile_x - 1, tile_y, kind);
 }
 
 /* ----- Volatility (death explosion) ----------------------------------------- */
 
-/** Volatility hook on NPC death: an explosion `tier` tiles beyond the NPC footprint
-    hits the player if caught in it; T3 also leaves a temporary molten pool at the
-    death centre. Call before the slot is reused (uses the NPC's last position). */
+/** Volatility hook on NPC death: an explosion `tier` tiles beyond the NPC
+    footprint hits the player if caught in it (flat 25 on the death tick, D20);
+    T3 also leaves an until-wave-end molten pool at the death centre. Call
+    before the slot is reused (uses the NPC's last position). */
 static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int size) {
     int tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
     if (tier == 0) return;
@@ -302,51 +451,83 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
         encounter_damage_player(&s->player, COLO_VOLATILITY_MAX_HIT, &s->tick_scratch.damage_received);
         col_mod_on_player_damaged(s, COLO_VOLATILITY_MAX_HIT);
     }
-    if (tier >= 3) col_mod_add_molten_pool(s, x + size / 2, y + size / 2, COLO_VOLATILITY_POOL_TICKS);
+    if (tier >= 3)
+        col_mod_add_molten_pool(s, x + size / 2, y + size / 2, COLO_POOL_UNTIL_WAVE_END);
 }
 
-/* ----- Bees! (roaming poison swarms) ---------------------------------------- */
+/* ----- Bees! (roaming 1-HP poison swarms, B9) -------------------------------- */
 
-/** sync the live bee-swarm count to the Bees! tier (1/2/3), spawning new swarms
-    on a random spawn-anchor tile (D34: spawn location unpinned) and despawning
-    extras. Called at each wave spawn. */
+/** spawn a bee NPC on a random spawn-anchor tile (D34: location unpinned). */
+static void col_bee_spawn(ColosseumState* s, int b) {
+    int pos = encounter_rand_int(&s->rng_state, COLO_NUM_SPAWN_ANCHORS);
+    int slot = col_spawn_npc_at(s, COLO_BEE_SWARM,
+        COLO_SPAWN_ANCHORS[pos][0], COLO_SPAWN_ANCHORS[pos][1]);
+    s->bees[b] = (ColoBeeSwarm){
+        .phase = COLO_HAZARD_ALIVE,
+        .npc_slot = slot,
+        .move_timer = COLO_BEE_MOVE_INTERVAL,
+    };
+}
+
+/** sync the fielded swarm count to the Bees! tier (1/2/3): spawn missing
+    swarms, despawn extras; live swarms and pending respawns carry across
+    waves. Called at each wave spawn. */
 static void col_mod_sync_bees(ColosseumState* s) {
     int want = col_mod_tier(s, COLO_MOD_BEES);
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
         ColoBeeSwarm* bee = &s->bees[b];
+        int npc_live = bee->phase == COLO_HAZARD_ALIVE && bee->npc_slot >= 0 &&
+            s->npcs[bee->npc_slot].active &&
+            s->npcs[bee->npc_slot].type == COLO_BEE_SWARM;
         if (b < want) {
-            if (bee->active) continue;
-            bee->active = 1;
-            int pos = encounter_rand_int(&s->rng_state, COLO_NUM_SPAWN_ANCHORS);
-            bee->x = COLO_SPAWN_ANCHORS[pos][0];
-            bee->y = COLO_SPAWN_ANCHORS[pos][1];
-            bee->move_timer = COLO_BEE_MOVE_INTERVAL;
+            if (npc_live || bee->phase == COLO_HAZARD_RESPAWNING) continue;
+            col_bee_spawn(s, b);
         } else {
-            bee->active = 0;
+            if (npc_live) col_deactivate_npc(s, bee->npc_slot);
+            *bee = (ColoBeeSwarm){0};
         }
     }
 }
 
-/** tick bee swarms: step one tile toward the player every COLO_BEE_MOVE_INTERVAL
-    ticks, dealing up to COLO_BEE_MAX_POISON unblockable damage on contact. */
+/** tick bee swarms: a live swarm steps one tile toward the player every 12
+    ticks (diagonal allowed, walls ignored, clamp-immune — D34) and deals up to
+    10 unblockable damage beneath the player; a killed swarm respawns 50 ticks
+    later on a fresh anchor. */
 static void col_mod_tick_bees(ColosseumState* s) {
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
         ColoBeeSwarm* bee = &s->bees[b];
-        if (!bee->active) continue;
+        if (bee->phase == COLO_HAZARD_NONE) continue;
+
+        if (bee->phase == COLO_HAZARD_RESPAWNING) {
+            if (bee->respawn_timer > 0) bee->respawn_timer--;
+            if (bee->respawn_timer == 0) col_bee_spawn(s, b);
+            continue;
+        }
+
+        ColoNPC* npc = (bee->npc_slot >= 0) ? &s->npcs[bee->npc_slot] : NULL;
+        if (!npc || !npc->active || npc->type != COLO_BEE_SWARM) {
+            *bee = (ColoBeeSwarm){0};   /* removed outside the death path: no respawn */
+            continue;
+        }
 
         if (bee->move_timer > 0) bee->move_timer--;
         if (bee->move_timer == 0) {
-            if (bee->x < s->player.x) bee->x++;
-            else if (bee->x > s->player.x) bee->x--;
-            if (bee->y < s->player.y) bee->y++;
-            else if (bee->y > s->player.y) bee->y--;
+            if (npc->x < s->player.x) npc->x++;
+            else if (npc->x > s->player.x) npc->x--;
+            if (npc->y < s->player.y) npc->y++;
+            else if (npc->y > s->player.y) npc->y--;
+            npc->target_x = s->player.x;
+            npc->target_y = s->player.y;
             bee->move_timer = COLO_BEE_MOVE_INTERVAL;
         }
 
-        if (bee->x == s->player.x && bee->y == s->player.y) {
+        if (npc->x == s->player.x && npc->y == s->player.y) {
             int dmg = encounter_rand_int(&s->rng_state, COLO_BEE_MAX_POISON + 1);
             encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
-            if (dmg > 0) col_mod_on_player_damaged(s, dmg);
+            if (dmg > 0) {
+                s->last_hit_by_type = COLO_BEE_SWARM;
+                col_mod_on_player_damaged(s, dmg);
+            }
         }
     }
 }
@@ -355,7 +536,7 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
 /** the orb path circles the four arena pillars (A27 ring geometry; the pillars
     exist on every wave, B1), ring-ordered SW -> SE -> NE -> NW. Writes the
-    `corner`-th ring node (0..3) into (*cx,*cy). Cadence retune is P5. */
+    `corner`-th ring node (0..3) into (*cx,*cy). */
 static void col_mod_solarflare_corner(const ColosseumState* s, int corner, int* cx, int* cy) {
     (void)s;
     static const int RING[4] = { 0, 1, 3, 2 };   /* COLO_PILLARS indices in ring order */
@@ -375,7 +556,7 @@ static void col_mod_sync_solarflare(ColosseumState* s) {
     col_mod_solarflare_corner(s, 0, &s->solarflare.x, &s->solarflare.y);
 }
 
-/** orb damage by tier (UNCONFIRMED higher tiers). */
+/** orb damage by tier (D21 modeled values). */
 static int col_mod_solarflare_max_hit(int tier) {
     if (tier >= 3) return COLO_SOLARFLARE_MAX_HIT_T3;
     if (tier == 2) return COLO_SOLARFLARE_MAX_HIT_T2;
@@ -383,9 +564,10 @@ static int col_mod_solarflare_max_hit(int tier) {
 }
 
 /**
- * Tick the Solarflare orb: walk it around the pillar ring at the tier cadence
- * (T1 every 2 ticks, pausing 7 at corners; T2 continuous every 2; T3 every tick),
- * and on contact deal tier damage. T3 also disables the player's overhead prayer.
+ * Tick the Solarflare orb on the A27 cadence — T1 moves every 2 ticks pausing
+ * 7 at corners, T2 every 2 ticks continuous, T3 every tick pausing 2 at
+ * corners — and on contact deal tier damage. T3 also disables the player's
+ * overhead prayer.
  */
 static void col_mod_tick_solarflare(ColosseumState* s) {
     if (!s->solarflare.active) return;
@@ -398,18 +580,24 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
     } else {
         if (orb->move_timer > 0) orb->move_timer--;
         if (orb->move_timer == 0) {
-            int c0 = (orb->step >> 1) & 3;             /* node index, 2 tiles between corners */
+            /* ring steps alternate corner (even) and midpoint (odd): step 2k
+               is corner k, step 2k+1 the midpoint between corners k and k+1. */
             int next_step = orb->step + 1;
-            int c1 = (next_step >> 1) & 3;
+            int node_a = (next_step >> 1) & 3;
+            int node_b = ((next_step + 1) >> 1) & 3;
             int ax, ay, bx, by;
-            col_mod_solarflare_corner(s, c0, &ax, &ay);
-            col_mod_solarflare_corner(s, c1, &bx, &by);
-            int frac = next_step & 1;                  /* 0 = at corner c1, 1 = midpoint */
-            orb->x = frac ? (ax + bx) / 2 : bx;
-            orb->y = frac ? (ay + by) / 2 : by;
+            col_mod_solarflare_corner(s, node_a, &ax, &ay);
+            col_mod_solarflare_corner(s, node_b, &bx, &by);
+            int frac = next_step & 1;                  /* 1 = midpoint, 0 = corner */
+            orb->x = frac ? (ax + bx) / 2 : ax;
+            orb->y = frac ? (ay + by) / 2 : ay;
             orb->step = next_step & 7;
-            orb->move_timer = (tier >= 3) ? 0 : 1;     /* T3 moves every tick */
-            if (tier == 1 && (orb->step & 1) == 0) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE;
+            orb->move_timer = (tier >= 3)
+                ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
+            if ((orb->step & 1) == 0) {                /* arrived at a corner node */
+                if (tier == 1) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE;
+                if (tier >= 3) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE_T3;
+            }
         }
     }
 
@@ -424,13 +612,13 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
 /* ----- per-tick modifier driver --------------------------------------------- */
 
 /**
- * Run all per-tick modifier hazards + draft countdown. Called from col_step after
- * combat resolves. Order: draft timer, then the hazards that damage the player
- * (bees, solarflare, molten pools, venom), then totems (heal NPCs). A lethal Doom
- * stack is surfaced via col_mod_doom_lethal and checked by the step death gate.
+ * Run all per-tick modifier hazards. Called from col_step after combat
+ * resolves, paused during wave gaps and open drafts. Order: the hazards that
+ * damage the player (bees, solarflare, molten pools, venom), then totems
+ * (heal NPCs). A lethal Doom stack is surfaced via col_mod_doom_lethal and
+ * checked by the step death gate.
  */
 static void col_modifiers_tick(ColosseumState* s) {
-    col_modifier_tick_draft(s);
     col_mod_tick_bees(s);
     col_mod_tick_solarflare(s);
     col_mod_tick_molten_pools(s);
@@ -438,12 +626,14 @@ static void col_modifiers_tick(ColosseumState* s) {
     col_mod_tick_totems(s);
 }
 
-/** per-wave-spawn modifier sync: reset Doom stacks, re-apply Frailty, sync bee
-    swarm count + the Solarflare orb. Called from col_spawn_wave after NPCs spawn. */
+/** per-wave-spawn modifier sync: reset Doom stacks + venom, drop until-wave-end
+    molten pools, re-apply Frailty, sync the bee swarms + the Solarflare orb.
+    Called from col_spawn_wave after NPCs spawn. */
 static void col_modifiers_on_wave_spawn(ColosseumState* s) {
     s->doom_stacks = 0;
     s->player_venom = 0;
     s->player_venom_timer = 0;
+    col_mod_clear_wave_end_pools(s);
     col_mod_apply_frailty_hp(s);
     col_mod_sync_bees(s);
     col_mod_sync_solarflare(s);

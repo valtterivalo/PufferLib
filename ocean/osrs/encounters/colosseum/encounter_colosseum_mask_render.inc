@@ -15,12 +15,14 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     int offset = 0;
 
     /* HEAD_MOVE (25): idle always valid; each walk/run valid iff the target tile
-       is walkable (in-arena, boss-arena bound on wave 12, not pillar/NPC-blocked). */
+       is walkable (in-arena, boss-arena bound on wave 12, not pillar/NPC-blocked).
+       B6: the player is frozen while a draft is open — only idle is valid. */
+    int frozen = s->modifiers.draft_pending;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
         int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
-        mask[offset++] = col_player_walkable(s, nx, ny) ? 1.0f : 0.0f;
+        mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
 
     /* HEAD_PRAYER (5): no_change always valid; set melee/ranged/magic valid iff
@@ -32,10 +34,10 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
     /* HEAD_TARGET (COLO_OBS_NPCS+1): none always valid; slot valid iff it holds a
-       live attackable NPC. */
+       live attackable NPC and the player is not draft-frozen (B6). */
     mask[offset++] = 1.0f;
     for (int n = 0; n < COLO_OBS_NPCS; n++)
-        mask[offset++] = col_obs_slot_is_targetable(s, n) ? 1.0f : 0.0f;
+        mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
     /* HEAD_GEAR (3): no_switch always valid; set-X valid iff not already set X. */
     mask[offset++] = 1.0f;
@@ -130,6 +132,9 @@ static void col_fill_render_entities_ctx(
     for (int i = 0; i < COLO_MAX_NPCS && n < max_entities; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
+        /* totem/bee models (12825/12823) are not exported yet and the renderer
+           aborts on an unmapped def id — skip them until the asset pass. */
+        if (col_type_is_hazard_entity(npc->type)) continue;
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
             .npc_def_id = COLO_NPC_DEF_IDS[npc->type],

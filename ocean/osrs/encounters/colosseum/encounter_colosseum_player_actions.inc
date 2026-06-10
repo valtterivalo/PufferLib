@@ -133,6 +133,9 @@ static MeleeStyle col_weapon_melee_style(const uint8_t* loadout) {
  * (style match = forced max), the B7 perfect-parry guaranteed max (armed by a
  * last-tick grapple parry, consumed by the very next attack), and the A14
  * melee-style defence lookup (the weapon's style picks stab/slash/crush def).
+ * A21+B9: 1-HP hazard entities (totem/bee) die to ANY attack of any style —
+ * the hit is guaranteed for their full HP, no rolls, and it does not consume
+ * an armed perfect-parry max; the attack still spends the weapon cycle.
  */
 static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
@@ -143,7 +146,9 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
                       ns->player_style_that_max_hits == ls->style;
 
     int damage;
-    if (s->sol.next_attack_guaranteed_max) {
+    if (col_type_is_hazard_entity(npc->type)) {
+        damage = npc->hp;
+    } else if (s->sol.next_attack_guaranteed_max) {
         damage = ls->max_hit;
         s->sol.next_attack_guaranteed_max = 0;
         s->sol.guaranteed_max_ticks = 0;
@@ -205,11 +210,17 @@ static void col_tick_player_ctx(
     if (actions[COLO_HEAD_SPEC] == 1)
         s->player.spec_armed = !s->player.spec_armed;
 
-    /* modifier draft: index 0 skips; index k activates draft option (k-1). Only
-       acts while a between-wave draft is pending (the mask gates the rest). */
+    /* modifier draft: index 0 = STILL DECIDING (no skip exists, B6); index k
+       activates draft option (k-1). Only acts while a draft is pending (the
+       mask gates the rest). */
     int modifier_act = actions[COLO_HEAD_MODIFIER_SELECT];
     if (modifier_act > 0 && s->modifiers.draft_pending)
         col_modifier_apply_selection(s, modifier_act - 1);
+
+    /* B6: the player is FROZEN while a draft is open — movement, targeting,
+       and attacks are ignored until the pick (which closes draft_pending the
+       same tick, so post-pick actions take effect from the next tick). */
+    if (s->modifiers.draft_pending) return;
 
     /* grapple parry: during an active Sol grapple, action index k clicks
        grapple slot (k-1) of the 5-slot A12 domain. A correct slot parries;

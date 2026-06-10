@@ -7,8 +7,11 @@
  *      tick across full runs, so the obs/mask running-index asserts fire on real
  *      state (the standalone --profile harness skips the obs writer);
  *   2. deterministic scenario checks that each modifier mechanic actually fires:
- *      draft offer + selection + persistence, Frailty max-HP cut, Relentless
- *      damage uplift, Quartet extra warbander, and a per-tick hazard (Bees);
+ *      the P5 mandatory draft (fixed wave-1 offer, frozen-until-pick, 12 picks
+ *      per run, pool windows, upgrade bias), Frailty max-HP cut, Relentless
+ *      defence-LEVEL bypass + damage uplift, Quartet extra warbander, the
+ *      1-HP totem/bee hazard entities with their respawn cycles, Reentry sand
+ *      tiles/lifetimes, and A25 venom escalation;
  *   3. P1 arena geometry: the los `Lr` wall-mask port (hardcoded row extents),
  *      pillar blocking, spawn-anchor placement + the B3 player-proximity
  *      exclusion, gate-gap reinforcements with the b5 yellow-line side rule,
@@ -72,6 +75,46 @@ static int draft_is_open(const ColosseumState* s) {
     return 0;
 }
 
+/* complete the mandatory pre-wave draft (A16+B6): pick `option`, then run the
+   armed spawn tick so the wave roster exists. Leaves the 6-tick ready delay
+   running, mirroring the old post-reset state. Tests that just need to get
+   past the wave-1 draft pick option 1 = Blasphemy, the most inert of the
+   fixed wave-1 offer. */
+static void complete_open_draft(ColosseumState* s, ColosseumContext* ctx, int option) {
+    int pick[COLO_NUM_ACTION_HEADS] = {0};
+    pick[COLO_HEAD_MODIFIER_SELECT] = option + 1;
+    step_and_observe(s, ctx, pick);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    while (s->wave_spawn_delay > 0) step_and_observe(s, ctx, idle);
+}
+
+/* force-kill every live non-hazard NPC so the next step registers a clear. */
+static void force_clear_wave(ColosseumState* s) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (!s->npcs[i].active) continue;
+        if (col_type_is_hazard_entity(s->npcs[i].type)) continue;
+        s->npcs[i].hp = 0;
+        s->npcs[i].active = 0;
+    }
+}
+
+/* land the player's queued attack outside the step loop: pending hits carry a
+   1-3 tick projectile delay (the scythe's range-2 path takes 3). */
+static void land_pending_player_hits(ColosseumState* s) {
+    for (int t = 0; t < 4; t++) col_resolve_player_projectiles_on_npcs(s);
+}
+
+/* clear every NPC, its collision stamps, and the hazard bookkeeping so checks
+   run on an empty arena (mirrors what col_spawn_wave does before placing a
+   roster). */
+static void geo_clear_npcs(ColosseumState* s) {
+    memset(s->npcs, 0, sizeof(s->npcs));
+    memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
+    memset(s->totems, 0, sizeof(s->totems));
+    memset(s->bees, 0, sizeof(s->bees));
+    col_rebuild_player_collision_flags(s);
+}
+
 /* ---- 1. fuzz: random actions over many full runs, obs/mask asserted each tick.
    Validates the obs/mask running-index asserts + crash-freedom across the boss and
    all waves (the standalone --profile harness never calls the obs writer). */
@@ -109,9 +152,10 @@ static void test_fuzz_obs_mask(void) {
     printf("  episodes=%d (obs+mask running-index asserts held every tick)\n", episodes);
 }
 
-/* ---- 1b. step-loop draft: clear wave 1 through the real step loop, confirm a
-   draft opens during the inter-wave gap, then a MODIFIER_SELECT action activates a
-   modifier that persists into the next wave. */
+/* ---- 1b. step-loop draft (A16+B6+D26): the wave-1 fixed offer opens at reset
+   BEFORE any NPC spawns, the player is frozen until the mandatory pick (no
+   skip, no auto-close), the pick gates the spawn + 6-tick ready delay, and the
+   next clear opens the wave-2 draft the same way. */
 static void test_step_loop_draft(void) {
     printf("test_step_loop_draft\n");
     ColosseumContext ctx;
@@ -122,44 +166,122 @@ static void test_step_loop_draft(void) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 42);
 
     int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int walk_east[COLO_NUM_ACTION_HEADS] = {0};
+    walk_east[COLO_HEAD_MOVE] = 7;
 
-    /* kill every live NPC so the next step registers a wave clear. */
-    for (int i = 0; i < COLO_MAX_NPCS; i++)
-        if (s.npcs[i].active) s.npcs[i].hp = 0, s.npcs[i].active = 0;
-    step_and_observe(&s, &ctx, idle);
-    CHECK("wave-1 clear opened a draft", draft_is_open(&s));
+    /* A16: the run opens with the draft BEFORE wave 1, fixed offer. */
+    CHECK("the wave-1 draft is open at reset, before any spawn", draft_is_open(&s));
+    CHECK("wave-1 offer is the fixed {Relentless, Blasphemy, Frailty}",
+        s.modifiers.draft_options[0] == COLO_MOD_RELENTLESS &&
+        s.modifiers.draft_options[1] == COLO_MOD_BLASPHEMY &&
+        s.modifiers.draft_options[2] == COLO_MOD_FRAILTY);
+    int spawned = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
+    CHECK("no NPC spawns before the pick", !spawned);
 
-    /* pick option 0 via the MODIFIER_SELECT head (index 1 = option 0). */
-    int chosen = s.modifiers.draft_options[0];
+    /* B6: frozen until the pick — walk actions are ignored and masked off, and
+       the world stays paused (no skip, no timer ever closes the draft). */
+    int px = s.player.x, py = s.player.y;
+    for (int t = 0; t < 12; t++) step_and_observe(&s, &ctx, walk_east);
+    CHECK("movement is ignored while the draft is open",
+        s.player.x == px && s.player.y == py);
+    CHECK("the draft never auto-closes", draft_is_open(&s));
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int any_walk_valid = 0;
+    for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++)
+        if (mask[d] > 0.0f) any_walk_valid = 1;
+    CHECK("the mask offers only idle movement while frozen", !any_walk_valid);
+
+    /* the pick spawns wave 1 (next tick) and re-arms the 6-tick ready delay. */
     int pick[COLO_NUM_ACTION_HEADS] = {0};
-    pick[COLO_HEAD_MODIFIER_SELECT] = 1;
+    pick[COLO_HEAD_MODIFIER_SELECT] = 1;   /* option 0 = Relentless */
     step_and_observe(&s, &ctx, pick);
-    CHECK("MODIFIER_SELECT activated the chosen modifier",
-        chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
-    CHECK("draft closed after the action selection", !s.modifiers.draft_pending);
+    CHECK("the pick activated the chosen modifier", col_mod_active(&s, COLO_MOD_RELENTLESS));
+    CHECK("draft closed after the pick", !s.modifiers.draft_pending);
+    step_and_observe(&s, &ctx, idle);
+    spawned = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
+    CHECK("the pick gated the wave-1 spawn", spawned);
+    CHECK("the spawn re-armed the 6-tick ready delay (D26)",
+        s.wave_ready_delay == COLO_START_READY_TICKS);
 
-    /* run out the inter-wave gap into wave 2 and confirm persistence. */
-    for (int t = 0; t < 20 && s.wave == 0; t++) step_and_observe(&s, &ctx, idle);
-    CHECK("advanced to wave 2", s.wave == 1);
-    CHECK("modifier persisted into wave 2",
-        chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
+    /* movement works again after the pick. */
+    px = s.player.x;
+    step_and_observe(&s, &ctx, walk_east);
+    CHECK("movement is effective after the pick", s.player.x == px + 1);
+
+    /* the wave-1 clear opens the (random-pool) wave-2 draft; the player is
+       frozen again until that pick, then advances. */
+    force_clear_wave(&s);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("clearing wave 1 opened the wave-2 draft", draft_is_open(&s));
+    px = s.player.x;
+    step_and_observe(&s, &ctx, walk_east);
+    CHECK("frozen again during the wave-2 draft", s.player.x == px);
+    int chosen = s.modifiers.draft_options[0];
+    complete_open_draft(&s, &ctx, 0);
+    CHECK("advanced to wave 2 after the pick", s.wave == 1);
+    CHECK("the wave-2 pick persisted", chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
 }
 
-/* ---- 2a. draft offer, selection, persistence, last-wave gate. */
+/* ---- 1c. A16: 12 mandatory drafts per full run — one before every wave
+   including wave 1 and into wave 12 — counted through the real step loop with
+   force-cleared waves. */
+static void test_twelve_drafts_per_run(void) {
+    printf("test_twelve_drafts_per_run\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int picks = 0;
+    int draft_waves_ok = 1;
+    for (long t = 0; t < 4000 && !s.episode_over; t++) {
+        if (draft_is_open(&s)) {
+            /* every draft gates the NEXT wave: picks 1..12 gate waves 1..12. */
+            if (s.wave_spawn_target != picks) draft_waves_ok = 0;
+            complete_open_draft(&s, &ctx, 0);
+            picks++;
+            continue;
+        }
+        force_clear_wave(&s);
+        /* stay alive through accumulated modifier hazards (Doom/bees/venom). */
+        s.player.current_hitpoints = s.player.base_hitpoints;
+        s.doom_stacks = 0;
+        step_and_observe(&s, &ctx, idle);
+    }
+    CHECK("the run ended in victory", s.episode_over && s.winner == COLO_OUTCOME_PLAYER_WON);
+    CHECK("exactly 12 drafts were offered and picked", picks == 12);
+    CHECK("the log counted all 12 mandatory picks", s.log.modifiers_picked == 12);
+    CHECK("draft k gated wave k for every k", draft_waves_ok);
+}
+
+/* ---- 2a. draft offer, selection, persistence + the A16/D31 pool windows. */
 static void test_draft_offer_and_select(void) {
     printf("test_draft_offer_and_select\n");
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;   /* skip the reset draft: drive open_draft directly */
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 7);
 
     /* a fresh run starts with zero modifiers. */
     CHECK("fresh run has no active modifiers", s.modifiers.active_mask == 0);
-    CHECK("fresh run draft closed", s.modifiers.draft_pending == 0);
+    CHECK("start_wave>1 runs skip the prior drafts (no draft open)",
+        s.modifiers.draft_pending == 0);
 
-    /* offer a draft as if wave 1 (index 0) was cleared. */
-    col_modifier_offer_draft(&s, 0);
+    /* the wave-1 draft is the fixed offer; later drafts are random + distinct. */
+    col_modifier_open_draft(&s, 0);
+    CHECK("the wave-1 draft is always {Relentless, Blasphemy, Frailty}",
+        s.modifiers.draft_options[0] == COLO_MOD_RELENTLESS &&
+        s.modifiers.draft_options[1] == COLO_MOD_BLASPHEMY &&
+        s.modifiers.draft_options[2] == COLO_MOD_FRAILTY);
+    col_modifier_open_draft(&s, 4);
     CHECK("draft opened with options", draft_is_open(&s));
     int distinct = 1;
     int a = s.modifiers.draft_options[0], b = s.modifiers.draft_options[1], c = s.modifiers.draft_options[2];
@@ -178,14 +300,76 @@ static void test_draft_offer_and_select(void) {
     col_spawn_wave(&s);
     CHECK("modifier persists across waves", col_mod_active(&s, (ColoModifier)chosen));
 
-    /* pre-boss-only modifiers are not offered going into wave 12. */
-    col_modifier_offer_draft(&s, COLO_MODIFIER_LAST_WAVE);
-    int offered_pre_boss_only = 0;
-    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
-        int m = s.modifiers.draft_options[o];
-        if (m >= 0 && COLO_MODIFIER_PRE_BOSS_ONLY[m]) offered_pre_boss_only = 1;
+    /* A16 pool windows over many rolls: RF/DD absent from every draft into
+       wave 8+ (0-based >= 7) yet present in the open window; the wave-12 draft
+       excludes all four pre-boss-only modifiers (Mantimayhem per UPD-0424,
+       Reentry per D31, RF/DD per the wiki). */
+    int rfdd_late = 0, rfdd_window = 0, boss_excluded_seen = 0;
+    for (int rep = 0; rep < 400; rep++) {
+        int late_wave = 7 + rep % 4;   /* drafts into waves 8..11 (0-based 7..10) */
+        col_modifier_open_draft(&s, late_wave);
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int m = s.modifiers.draft_options[o];
+            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_late = 1;
+        }
+        col_modifier_open_draft(&s, 2 + rep % 5);   /* drafts into waves 3..7 */
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int m = s.modifiers.draft_options[o];
+            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_window = 1;
+        }
+        col_modifier_open_draft(&s, COLO_WAVE_BOSS);
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int m = s.modifiers.draft_options[o];
+            if (m >= 0 && COLO_MODIFIER_PRE_BOSS_ONLY[m]) boss_excluded_seen = 1;
+        }
     }
-    CHECK("no pre-boss-only modifier offered before wave 12", offered_pre_boss_only == 0);
+    s.modifiers.draft_pending = 0;
+    CHECK("Red Flag / Dynamic Duo never offered into wave 8+", rfdd_late == 0);
+    CHECK("Red Flag / Dynamic Duo do appear in drafts before wave 7", rfdd_window == 1);
+    CHECK("the wave-12 draft excludes RF/DD/Mantimayhem/Reentry", boss_excluded_seen == 0);
+}
+
+/* ---- 2a2. A16 MODELED upgrade bias: an owned tier-1 modifier reappears (as
+   its tier-2 offer) with measurably elevated frequency vs an unowned peer over
+   many drafts (weight 2 vs 1). */
+static void test_draft_upgrade_bias(void) {
+    printf("test_draft_upgrade_bias\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 11);
+
+    s.modifiers.active_mask |= (1u << COLO_MOD_RELENTLESS);
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 1;   /* owned T1: upgradable */
+
+    const int N = 4000;
+    int owned_offers = 0, unowned_offers = 0;
+    for (int rep = 0; rep < N; rep++) {
+        col_modifier_open_draft(&s, 4);
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int m = s.modifiers.draft_options[o];
+            if (m == COLO_MOD_RELENTLESS) owned_offers++;
+            if (m == COLO_MOD_DOOM) unowned_offers++;   /* unowned tiered baseline */
+        }
+        s.modifiers.draft_pending = 0;
+    }
+    CHECK("both modifiers appear across the sample", owned_offers > 0 && unowned_offers > 0);
+    CHECK("the owned T1 modifier is offered with clearly elevated frequency (~2x weight)",
+        owned_offers * 2 > unowned_offers * 3);   /* owned/unowned > 1.5 */
+    printf("  owned=%d unowned=%d over %d drafts\n", owned_offers, unowned_offers, N);
+
+    /* a maxed modifier leaves the pool entirely. */
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 3;
+    int maxed_seen = 0;
+    for (int rep = 0; rep < 200; rep++) {
+        col_modifier_open_draft(&s, 4);
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+            if (s.modifiers.draft_options[o] == COLO_MOD_RELENTLESS) maxed_seen = 1;
+        s.modifiers.draft_pending = 0;
+    }
+    CHECK("a maxed modifier is never offered again", maxed_seen == 0);
 }
 
 /* ---- 2b. Frailty lowers the player's max HP by tier. */
@@ -293,7 +477,10 @@ static void test_quartet_extra_spawn(void) {
     CHECK("Quartet adds a warbander on wave 12", warband == 1);
 }
 
-/* ---- 2e. Bees spawn and converge, dealing contact damage. */
+/* ---- 2e. B9: bee swarms are attackable 1-HP NPCs — they spawn per tier,
+   converge every 12 ticks, deal up-to-10 unblockable under-player damage, die
+   to a single hit of any style, respawn 50 ticks later, and never block the
+   wave clear. */
 static void test_bees_hazard(void) {
     printf("test_bees_hazard\n");
     ColosseumContext ctx;
@@ -306,25 +493,412 @@ static void test_bees_hazard(void) {
     s.wave = 0;
     col_spawn_wave(&s);
 
-    int active_bees = 0;
-    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) if (s.bees[b].active) active_bees++;
-    CHECK("Bees II spawns two swarms", active_bees == 2);
+    int bee_npcs = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s.npcs[i].active && s.npcs[i].type == COLO_BEE_SWARM) bee_npcs++;
+    CHECK("Bees II fields two 1-HP bee NPCs", bee_npcs == 2 &&
+        s.bees[0].phase == COLO_HAZARD_ALIVE && s.bees[1].phase == COLO_HAZARD_ALIVE);
+    CHECK("a bee NPC has exactly 1 HP", s.npcs[s.bees[0].npc_slot].hp == 1);
 
-    /* park a swarm on the player and tick: contact must deal unblockable damage. */
-    s.bees[0].x = s.player.x;
-    s.bees[0].y = s.player.y;
-    s.bees[0].move_timer = COLO_BEE_MOVE_INTERVAL;
-    int hp_before = s.player.current_hitpoints;
+    /* movement: a fresh swarm steps one tile toward the player every 12 ticks. */
+    ColoNPC* bee_npc = &s.npcs[s.bees[0].npc_slot];
+    int bx = bee_npc->x, by = bee_npc->y;
+    for (int t = 0; t < COLO_BEE_MOVE_INTERVAL - 1; t++) col_mod_tick_bees(&s);
+    CHECK("the swarm holds for 11 ticks", bee_npc->x == bx && bee_npc->y == by);
+    col_mod_tick_bees(&s);
+    int stepped = abs(bee_npc->x - bx) <= 1 && abs(bee_npc->y - by) <= 1 &&
+        (bee_npc->x != bx || bee_npc->y != by);
+    CHECK("the 12th tick steps one tile (diagonal allowed) toward the player", stepped);
+
+    /* park the swarm under the player: unblockable contact damage. */
+    bee_npc->x = s.player.x;
+    bee_npc->y = s.player.y;
+    s.player.prayer = PRAYER_PROTECT_MELEE;
     int damaged = 0;
     for (int t = 0; t < 64 && !damaged; t++) {
-        s.bees[0].x = s.player.x;
-        s.bees[0].y = s.player.y;
+        bee_npc->x = s.player.x;
+        bee_npc->y = s.player.y;
+        s.player.current_hitpoints = 99;
         col_mod_tick_bees(&s);
-        if (s.player.current_hitpoints < hp_before) damaged = 1;
-        hp_before = s.player.current_hitpoints;
-        if (s.player.current_hitpoints <= 0) break;
+        if (s.player.current_hitpoints < 99) damaged = 1;
     }
-    CHECK("a bee swarm on the player deals contact damage", damaged);
+    CHECK("a swarm beneath the player deals unblockable damage", damaged);
+
+    /* B9: one player attack of any style kills the swarm; it respawns 50t later. */
+    int slot = s.bees[0].npc_slot;
+    col_player_attack_target(&s, slot);
+    land_pending_player_hits(&s);
+    CHECK("a single hit kills the swarm", !s.npcs[slot].active);
+    CHECK("the killed swarm enters its 50-tick respawn",
+        s.bees[0].phase == COLO_HAZARD_RESPAWNING &&
+        s.bees[0].respawn_timer == COLO_BEE_RESPAWN_TICKS);
+    for (int t = 0; t < COLO_BEE_RESPAWN_TICKS - 1; t++) col_mod_tick_bees(&s);
+    CHECK("still respawning one tick early", s.bees[0].phase == COLO_HAZARD_RESPAWNING);
+    col_mod_tick_bees(&s);
+    CHECK("the swarm respawns exactly 50 ticks after death",
+        s.bees[0].phase == COLO_HAZARD_ALIVE &&
+        s.npcs[s.bees[0].npc_slot].active &&
+        s.npcs[s.bees[0].npc_slot].type == COLO_BEE_SWARM);
+
+    /* A21+B9: live hazard entities never block the wave clear. */
+    ColosseumState sc;
+    memset(&sc, 0, sizeof(sc));
+    ctx.config.start_wave = 0;
+    col_reset_ctx((EncounterState*)&sc, (EncounterContext*)&ctx, 13);
+    sc.modifiers.active_mask |= (1u << COLO_MOD_BEES);
+    sc.modifiers.tier[COLO_MOD_BEES] = 1;
+    complete_open_draft(&sc, &ctx, 1);
+    int live_bee = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (sc.npcs[i].active && sc.npcs[i].type == COLO_BEE_SWARM) live_bee = 1;
+    CHECK("a bee NPC is live going into the clear check", live_bee);
+    force_clear_wave(&sc);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    step_and_observe(&sc, &ctx, idle);
+    CHECK("the wave clears (next draft opens) with the bee swarm still alive",
+        draft_is_open(&sc) && sc.wave_spawn_target == 1);
+}
+
+/* ---- 2e2. A21+D22: totem lifecycle — spawns at the owner's <=50% crossing as
+   an attackable 1-HP NPC, pulses 30% of max HP every 7 ticks while the owner
+   sits at or below 50%, dies to one hit, respawns 200 ticks later, and
+   despawns with its owner's death (respawn cancelled). */
+static void test_totem_lifecycle(void) {
+    printf("test_totem_lifecycle\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;   /* skip the reset draft */
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 211);
+    geo_clear_npcs(&s);
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    s.player.x = 25; s.player.y = 18;
+    col_rebuild_player_collision_flags(&s);
+
+    /* shaman (125 max HP) damaged to 60 (48%): the hp-changed hook spawns a totem. */
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 16);
+    s.npcs[0].hp = 70;
+    col_mod_on_npc_hp_changed(&s, 0);
+    CHECK("no totem above 50% HP", s.totems[0].phase == COLO_HAZARD_NONE);
+    s.npcs[0].hp = 60;
+    col_mod_on_npc_hp_changed(&s, 0);
+    CHECK("crossing <=50% spawns a totem", s.totems[0].phase == COLO_HAZARD_ALIVE);
+    int tslot = s.totems[0].npc_slot;
+    CHECK("the totem is a live 1-HP NPC beside its owner",
+        tslot >= 0 && s.npcs[tslot].active &&
+        s.npcs[tslot].type == COLO_HEALING_TOTEM && s.npcs[tslot].hp == 1);
+    col_mod_on_npc_hp_changed(&s, 0);
+    CHECK("no duplicate totem for the same owner", s.totems[0].phase == COLO_HAZARD_ALIVE);
+
+    /* D22 pulse: 7 ticks -> +30% of 125 = +37 (60 -> 97); the next pulse is
+       gated off because the owner now sits above 50%. */
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL - 1; t++) col_mod_tick_totems(&s);
+    CHECK("no heal before the 7th tick", s.npcs[0].hp == 60);
+    col_mod_tick_totems(&s);
+    CHECK("the 7th tick heals 30% of the owner's max HP", s.npcs[0].hp == 60 + 37);
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("the pulse is gated while the owner is above 50%", s.npcs[0].hp == 97);
+    s.npcs[0].hp = 50;
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("the pulse resumes once the owner re-crosses 50%", s.npcs[0].hp == 87);
+
+    /* A21: one player attack of any style kills the totem; 200-tick respawn. */
+    col_player_attack_target(&s, tslot);
+    land_pending_player_hits(&s);
+    CHECK("a single attack destroys the totem", !s.npcs[tslot].active);
+    CHECK("destruction arms the 200-tick respawn",
+        s.totems[0].phase == COLO_HAZARD_RESPAWNING &&
+        s.totems[0].respawn_timer == COLO_TOTEM_RESPAWN_TICKS);
+    for (int t = 0; t < COLO_TOTEM_RESPAWN_TICKS - 1; t++) col_mod_tick_totems(&s);
+    CHECK("still down one tick early", s.totems[0].phase == COLO_HAZARD_RESPAWNING);
+    col_mod_tick_totems(&s);
+    CHECK("the totem respawns exactly 200 ticks after destruction",
+        s.totems[0].phase == COLO_HAZARD_ALIVE &&
+        s.npcs[s.totems[0].npc_slot].active &&
+        s.npcs[s.totems[0].npc_slot].type == COLO_HEALING_TOTEM);
+
+    /* the owner's death despawns the live totem outright. */
+    int tslot2 = s.totems[0].npc_slot;
+    col_apply_npc_death(&s, 0);
+    CHECK("the owner's death despawns its totem",
+        !s.npcs[tslot2].active && s.totems[0].phase == COLO_HAZARD_NONE);
+
+    /* an owner dying while the totem is respawning cancels the respawn. */
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 16);
+    s.npcs[0].hp = 60;
+    col_mod_on_npc_hp_changed(&s, 0);
+    int tslot3 = s.totems[0].npc_slot;
+    col_player_attack_target(&s, tslot3);
+    land_pending_player_hits(&s);
+    CHECK("second totem down and respawning", s.totems[0].phase == COLO_HAZARD_RESPAWNING);
+    col_apply_npc_death(&s, 0);
+    CHECK("the owner's death cancels a pending totem respawn",
+        s.totems[0].phase == COLO_HAZARD_NONE);
+
+    /* a live totem never blocks the wave clear: its owner is dead by clear time
+       (totems despawn with the owner), and a lab-orphaned one self-clears. */
+}
+
+/* ---- 2e3. B5: wave 12 with Totemic — totems start spawning when Sol reaches
+   50% and heal HIM a flat 75 every 7 ticks until destroyed (no <=50% pulse
+   gate for Sol). */
+static void test_totemic_sol_wave12(void) {
+    printf("test_totemic_sol_wave12\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 11;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 223);
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    int sol = col_sol_find_idx(&s);
+    CHECK("Sol is live", sol >= 0);
+
+    s.npcs[sol].hp = COLO_SOL_HP_MAX * 60 / 100;
+    col_mod_on_npc_hp_changed(&s, sol);
+    CHECK("no totem while Sol is above 50%", s.totems[sol].phase == COLO_HAZARD_NONE);
+    s.npcs[sol].hp = COLO_SOL_HP_MAX / 2;
+    col_mod_on_npc_hp_changed(&s, sol);
+    CHECK("Sol at 50% spawns a totem", s.totems[sol].phase == COLO_HAZARD_ALIVE);
+    int tslot = s.totems[sol].npc_slot;
+    CHECK("Sol's totem is an attackable 1-HP NPC inside the boss arena",
+        s.npcs[tslot].type == COLO_HEALING_TOTEM && s.npcs[tslot].hp == 1 &&
+        col_in_boss_arena(&s, s.npcs[tslot].x, s.npcs[tslot].y));
+
+    int hp0 = s.npcs[sol].hp;
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL - 1; t++) col_mod_tick_totems(&s);
+    CHECK("no Sol heal before the 7th tick", s.npcs[sol].hp == hp0);
+    col_mod_tick_totems(&s);
+    CHECK("the pulse heals Sol exactly 75", s.npcs[sol].hp == hp0 + COLO_TOTEM_SOL_HEAL);
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("Sol keeps healing 75/7t even above 50% (until destroyed)",
+        s.npcs[sol].hp == hp0 + 2 * COLO_TOTEM_SOL_HEAL);
+
+    col_player_attack_target(&s, tslot);
+    land_pending_player_hits(&s);
+    int hp1 = s.npcs[sol].hp;
+    for (int t = 0; t < 3 * COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("a destroyed totem stops the Sol heal (until the 200t respawn)",
+        !s.npcs[tslot].active && s.npcs[sol].hp == hp1 &&
+        s.totems[sol].phase == COLO_HAZARD_RESPAWNING);
+}
+
+/* ---- 2e4. A22: Reentry sand tiles + lifetimes — T1 marks the targeted tile
+   until wave end; T2 is permanent and adds the SOUTH-WEST tile; T3 adds the
+   WEST tile; all pools burn the shared 5-9 roll. */
+static void test_reentry_sand_tiles(void) {
+    printf("test_reentry_sand_tiles\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 227);
+    geo_clear_npcs(&s);
+
+    s.modifiers.active_mask |= (1u << COLO_MOD_REENTRY);
+    s.modifiers.tier[COLO_MOD_REENTRY] = 1;
+    col_mod_reentry_on_skyfall(&s, 20, 12);
+    CHECK("T1 leaves one pool on the targeted tile",
+        s.molten_count == 1 && s.molten_x[0] == 20 && s.molten_y[0] == 12);
+    CHECK("the T1 pool lasts until wave end (not tick-counted)",
+        s.molten_kind[0] == COLO_POOL_UNTIL_WAVE_END);
+
+    /* A22: pools burn the shared 5-9 molten-sand roll every tick stood on. */
+    s.player.x = 20; s.player.y = 12;
+    int burn_ok = 1;
+    for (int t = 0; t < 24; t++) {
+        s.player.current_hitpoints = 99;
+        col_mod_tick_molten_pools(&s);
+        int dmg = 99 - s.player.current_hitpoints;
+        if (dmg < COLO_MOLTEN_SAND_MIN_HIT ||
+            dmg > COLO_MOLTEN_SAND_MIN_HIT + COLO_MOLTEN_SAND_RAND - 1) burn_ok = 0;
+    }
+    CHECK("standing on Reentry sand burns the shared 5-9 roll", burn_ok);
+
+    /* the T1 pool persists through arbitrary mid-wave time but clears at the
+       next wave spawn. */
+    for (int t = 0; t < 500; t++) col_mod_tick_molten_pools(&s);
+    CHECK("the T1 pool persists all wave (old 8-tick lifetime deleted)",
+        s.molten_count == 1);
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("wave end clears the temporary pool", s.molten_count == 0);
+
+    /* T2: permanent + the SW tile. */
+    s.modifiers.tier[COLO_MOD_REENTRY] = 2;
+    col_mod_reentry_on_skyfall(&s, 20, 12);
+    int has_target = 0, has_sw = 0, has_w = 0, all_permanent = 1;
+    for (int i = 0; i < s.molten_count; i++) {
+        if (s.molten_x[i] == 20 && s.molten_y[i] == 12) has_target = 1;
+        if (s.molten_x[i] == 19 && s.molten_y[i] == 11) has_sw = 1;
+        if (s.molten_x[i] == 19 && s.molten_y[i] == 12) has_w = 1;
+        if (s.molten_kind[i] != COLO_POOL_PERMANENT) all_permanent = 0;
+    }
+    CHECK("T2 covers the targeted tile + the tile SOUTH-WEST of it",
+        s.molten_count == 2 && has_target && has_sw && !has_w);
+    CHECK("T2 pools are permanent", all_permanent);
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("permanent pools survive the wave end", s.molten_count == 2);
+
+    /* T3: adds the WEST tile. */
+    s.molten_count = 0;
+    s.modifiers.tier[COLO_MOD_REENTRY] = 3;
+    col_mod_reentry_on_skyfall(&s, 20, 12);
+    has_target = has_sw = has_w = 0;
+    for (int i = 0; i < s.molten_count; i++) {
+        if (s.molten_x[i] == 20 && s.molten_y[i] == 12) has_target = 1;
+        if (s.molten_x[i] == 19 && s.molten_y[i] == 11) has_sw = 1;
+        if (s.molten_x[i] == 19 && s.molten_y[i] == 12) has_w = 1;
+    }
+    CHECK("T3 additionally covers the WEST tile", s.molten_count == 3 &&
+        has_target && has_sw && has_w);
+
+    /* D20: Volatility T3 leaves an until-wave-end pool at the death centre. */
+    s.molten_count = 0;
+    s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
+    s.modifiers.tier[COLO_MOD_VOLATILITY] = 3;
+    s.player.x = 5; s.player.y = 18;
+    col_mod_volatility_on_death(&s, 20, 16, 1);
+    CHECK("Volatility T3 leaves an until-wave-end pool at the centre",
+        s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_UNTIL_WAVE_END);
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("the Volatility pool clears at wave end", s.molten_count == 0);
+}
+
+/* ---- 2e5. A25: venom escalation — first proc 6, +2 per damage tick toward
+   the 20 cap on a 30-tick cadence; reapplication bumps the NEXT instance +2
+   instead of resetting to 6. */
+static void test_venom_escalation(void) {
+    printf("test_venom_escalation\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 229);
+    s.modifiers.active_mask |= (1u << COLO_MOD_MANTIMAYHEM);
+    s.modifiers.tier[COLO_MOD_MANTIMAYHEM] = 2;
+
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("the first proc arms 6 damage on the 30-tick clock",
+        s.player_venom == COLO_VENOM_START && s.player_venom_timer == COLO_VENOM_INTERVAL);
+
+    /* damage sequence 6, 8, 10 .. 20 every 30 ticks, then held at the cap. */
+    static const int EXPECT[9] = { 6, 8, 10, 12, 14, 16, 18, 20, 20 };
+    int seq_ok = 1, cadence_ok = 1;
+    for (int k = 0; k < 9; k++) {
+        for (int t = 0; t < COLO_VENOM_INTERVAL - 1; t++) {
+            s.player.current_hitpoints = 99;
+            col_mod_tick_venom(&s);
+            if (s.player.current_hitpoints != 99) cadence_ok = 0;
+        }
+        s.player.current_hitpoints = 99;
+        col_mod_tick_venom(&s);
+        if (99 - s.player.current_hitpoints != EXPECT[k]) seq_ok = 0;
+    }
+    CHECK("venom deals 6,8,10..20 then holds the cap", seq_ok);
+    CHECK("venom damage lands exactly every 30 ticks", cadence_ok);
+
+    /* reapplication while envenomed: +2 to the NEXT instance, timer untouched. */
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = 17;
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("reapplication bumps the next damage +2 without resetting the clock",
+        s.player_venom == COLO_VENOM_START + COLO_VENOM_STEP &&
+        s.player_venom_timer == 17);
+    s.player_venom = COLO_VENOM_CAP;
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("reapplication never exceeds the 20 cap", s.player_venom == COLO_VENOM_CAP);
+
+    /* venom clears between waves (the modeled anti-venom sip point). */
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("venom clears at the wave boundary", s.player_venom == 0);
+}
+
+/* ---- 2e5b. A24: Mantimayhem T3 shuffles the one-each {magic, ranged, melee}
+   orb set — the melee orb's POSITION randomizes (all 3 slots seen), but a
+   barrage never rolls duplicate styles. */
+static void test_mantimayhem_t3_shuffle(void) {
+    printf("test_mantimayhem_t3_shuffle\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 239);
+    geo_clear_npcs(&s);
+    s.modifiers.active_mask |= (1u << COLO_MOD_MANTIMAYHEM);
+    s.modifiers.tier[COLO_MOD_MANTIMAYHEM] = 3;
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+
+    int one_each_ok = 1;
+    int melee_slot_seen[3] = { 0, 0, 0 };
+    for (int rep = 0; rep < 300; rep++) {
+        mc->cycle_step = -1;
+        mc->pattern_copied = 0;
+        s.npcs[0].attack_timer = 0;
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);   /* starts a barrage: rolls the set */
+        int counts[3] = { 0, 0, 0 };
+        for (int o = 0; o < 3; o++) {
+            if (mc->orb_style[o] == ATTACK_STYLE_RANGED) counts[0]++;
+            if (mc->orb_style[o] == ATTACK_STYLE_MAGIC) counts[1]++;
+            if (mc->orb_style[o] == ATTACK_STYLE_MELEE) {
+                counts[2]++;
+                melee_slot_seen[o] = 1;
+            }
+        }
+        if (counts[0] != 1 || counts[1] != 1 || counts[2] != 1) one_each_ok = 0;
+    }
+    CHECK("T3 barrages always carry exactly one of each style (no iid rolls)",
+        one_each_ok);
+    CHECK("the melee orb appears in every position across the sample",
+        melee_slot_seen[0] && melee_slot_seen[1] && melee_slot_seen[2]);
+}
+
+/* ---- 2e6. A23: Relentless bypasses the player's Defence LEVEL only — the
+   geared defence roll shrinks by exactly the level share, with the gear bonus
+   term fully intact. */
+static void test_relentless_def_level_bypass(void) {
+    printf("test_relentless_def_level_bypass\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 233);
+
+    const EncounterLoadoutStats* ls = &s.loadout_stats[s.weapon_set];
+    int def_bonus = encounter_player_def_bonus(
+        ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
+        ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
+    CHECK("rig sanity: the geared player has a positive melee defence bonus", def_bonus > 0);
+
+    /* (eff level + 8) * (bonus + 64) with the LEVEL scaled by the bypass. */
+    int t0 = col_player_def_roll(&s, ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
+    CHECK("tier 0 uses the full 99 defence level", t0 == (99 + 8) * (def_bonus + 64));
+
+    s.modifiers.active_mask |= (1u << COLO_MOD_RELENTLESS);
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 1;
+    int t1 = col_player_def_roll(&s, ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
+    CHECK("tier I keeps exactly 67% of the level (99 -> 66), bonus intact",
+        t1 == (66 + 8) * (def_bonus + 64));
+
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 2;
+    int t2 = col_player_def_roll(&s, ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
+    CHECK("tier II keeps exactly 34% of the level (99 -> 33), bonus intact",
+        t2 == (33 + 8) * (def_bonus + 64));
+
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 3;
+    int t3 = col_player_def_roll(&s, ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
+    CHECK("tier III zeroes the level share; the gear term alone remains",
+        t3 == 8 * (def_bonus + 64));
 }
 
 /* ---- 2f. Mantimayhem stress: T1 doubles manticore orbs; with two manticores on
@@ -362,7 +936,27 @@ static void test_mantimayhem_stress(void) {
     CHECK("Mantimayhem T2 inflicted venom on the player", venom_seen);
 }
 
-/* ---- 2g. Solarflare orb moves around the ring and damages on contact. */
+/* collect the gaps (in ticks) between successive orb moves over `ticks`. */
+static int sf_collect_move_gaps(ColosseumState* s, int ticks, int* gaps, int max_gaps) {
+    int n = 0;
+    int last_move_t = -1;
+    int ox = s->solarflare.x, oy = s->solarflare.y;
+    for (int t = 1; t <= ticks; t++) {
+        col_mod_tick_solarflare(s);
+        if (s->solarflare.x != ox || s->solarflare.y != oy) {
+            if (last_move_t >= 0 && n < max_gaps) gaps[n++] = t - last_move_t;
+            last_move_t = t;
+            ox = s->solarflare.x;
+            oy = s->solarflare.y;
+        }
+    }
+    return n;
+}
+
+/* ---- 2g. A27: Solarflare cadence per tier — T1 moves every 2 ticks pausing 7
+   at corners (move gaps alternate 2/9), T2 every 2 ticks continuous (all gaps
+   2), T3 every tick pausing 2 at corners (gaps alternate 1/3) — plus contact
+   damage and the T3 prayer disable. */
 static void test_solarflare_orb(void) {
     printf("test_solarflare_orb\n");
     ColosseumContext ctx;
@@ -375,18 +969,43 @@ static void test_solarflare_orb(void) {
     s.wave = 0;
     col_spawn_wave(&s);
     CHECK("Solarflare orb is active", s.solarflare.active);
+    /* park the player away from the ring so cadence runs damage-free. */
+    s.player.x = 16; s.player.y = 16;
 
-    /* the orb visits distinct tiles over time (it is not stuck). */
-    int ox = s.solarflare.x, oy = s.solarflare.y;
-    int moved = 0;
-    for (int t = 0; t < 40 && !moved; t++) {
-        col_mod_tick_solarflare(&s);
-        if (s.solarflare.x != ox || s.solarflare.y != oy) moved = 1;
+    int gaps[32];
+    int n = sf_collect_move_gaps(&s, 40, gaps, 32);
+    int t2_ok = n >= 8;
+    for (int g = 0; g < n; g++) if (gaps[g] != 2) t2_ok = 0;
+    CHECK("T2 moves every 2 ticks with no corner pause", t2_ok);
+
+    /* T1: 2-tick steps, 7-tick corner pause -> gaps alternate 2 and 9. */
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 1;
+    s.solarflare.active = 0;
+    col_mod_sync_solarflare(&s);
+    n = sf_collect_move_gaps(&s, 60, gaps, 32);
+    int t1_ok = n >= 6;
+    for (int g = 0; g < n; g++)
+        if (gaps[g] != 2 && gaps[g] != 2 + COLO_SOLARFLARE_CORNER_PAUSE) t1_ok = 0;
+    int t1_paused = 0;
+    for (int g = 0; g < n; g++)
+        if (gaps[g] == 2 + COLO_SOLARFLARE_CORNER_PAUSE) t1_paused = 1;
+    CHECK("T1 moves every 2 ticks and pauses 7 at each corner", t1_ok && t1_paused);
+
+    /* A27 T3: every-tick steps, 2-tick corner pause -> gaps alternate 1 and 3. */
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 3;
+    s.solarflare.active = 0;
+    col_mod_sync_solarflare(&s);
+    n = sf_collect_move_gaps(&s, 40, gaps, 32);
+    int t3_ok = n >= 8, t3_paused = 0, t3_fast = 0;
+    for (int g = 0; g < n; g++) {
+        if (gaps[g] != 1 && gaps[g] != 1 + COLO_SOLARFLARE_CORNER_PAUSE_T3) t3_ok = 0;
+        if (gaps[g] == 1 + COLO_SOLARFLARE_CORNER_PAUSE_T3) t3_paused = 1;
+        if (gaps[g] == 1) t3_fast = 1;
     }
-    CHECK("Solarflare orb moves around the ring", moved);
+    CHECK("T3 moves every tick AND stops 2 ticks at each corner (A27)",
+        t3_ok && t3_paused && t3_fast);
 
     /* parking the player on the orb tile takes contact damage (T3 also drops prayer). */
-    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 3;
     s.player.prayer = PRAYER_PROTECT_MAGIC;
     s.player.current_hitpoints = 99;
     int damaged = 0;
@@ -423,14 +1042,6 @@ static void test_volatility_explosion(void) {
 }
 
 /* ---- 3. P1 arena geometry ------------------------------------------------- */
-
-/* clear every NPC and its collision stamps so geometry checks run on an empty
-   arena (mirrors what col_spawn_wave does before placing a roster). */
-static void geo_clear_npcs(ColosseumState* s) {
-    memset(s->npcs, 0, sizeof(s->npcs));
-    memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
-    col_rebuild_player_collision_flags(s);
-}
 
 /* 3a. los `Lr` port spot-checks: hardcoded row/column extents, the gate doors +
    flanks, the west entrance, the fully walled east edge, and the one
@@ -792,6 +1403,7 @@ static void test_warband_cycle_offsets(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 51);
+    complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy, inert here) */
     wb_isolate_warband(&s);
 
     /* park the trio on its formation tiles so every window is eligible. */
@@ -841,6 +1453,7 @@ static void test_warband_move_skip(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 53);
+    complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy, inert here) */
     wb_isolate_warband(&s);
     wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_BERSERKER), s.player.x, s.player.y + 1);
     wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_SEER), s.player.x + 1, s.player.y);
@@ -922,6 +1535,7 @@ static void test_warband_formation_convergence(void) {
         ColosseumState s;
         memset(&s, 0, sizeof(s));
         col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 59 + (uint32_t)quartet);
+        complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy) */
         if (quartet) {
             s.modifiers.active_mask |= (1u << COLO_MOD_QUARTET);
             s.modifiers.tier[COLO_MOD_QUARTET] = 1;
@@ -987,6 +1601,7 @@ static void test_warband_pillar_routefind_vs_shaman_safespot(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy) */
     geo_clear_npcs(&s);
     s.player.x = 7; s.player.y = 9;
     col_rebuild_player_collision_flags(&s);
@@ -1009,6 +1624,7 @@ static void test_warband_pillar_routefind_vs_shaman_safespot(void) {
        attacks — the shaman is MEANT to be pillar-safespottable. */
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    complete_open_draft(&s, &ctx, 1);
     geo_clear_npcs(&s);
     s.player.x = 7; s.player.y = 9;
     col_rebuild_player_collision_flags(&s);
@@ -1236,6 +1852,7 @@ static void test_manticore_orb_same_tick_flick(void) {
        blockable; only orb 0's 50/50 lead can connect. */
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy) */
     geo_clear_npcs(&s);
     s.player.x = 17; s.player.y = 16;
     col_rebuild_player_collision_flags(&s);
@@ -2019,14 +2636,22 @@ static void test_sol_beams_become_pools(void) {
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
+    test_twelve_drafts_per_run();
     test_solarflare_orb();
     test_volatility_explosion();
     test_draft_offer_and_select();
+    test_draft_upgrade_bias();
     test_mantimayhem_stress();
     test_frailty_hp();
     test_relentless_damage();
+    test_relentless_def_level_bypass();
     test_quartet_extra_spawn();
     test_bees_hazard();
+    test_totem_lifecycle();
+    test_totemic_sol_wave12();
+    test_reentry_sand_tiles();
+    test_venom_escalation();
+    test_mantimayhem_t3_shuffle();
     test_static_arena_mask();
     test_static_los_and_attack_gate();
     test_spawn_anchor_exclusion();

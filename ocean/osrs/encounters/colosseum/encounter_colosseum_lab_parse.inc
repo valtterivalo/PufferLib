@@ -23,6 +23,8 @@ static const char* col_lab_npc_type_name(int type) {
         case COLO_MINOTAUR:            return "minotaur";
         case COLO_MANTICORE:           return "manticore";
         case COLO_SOL_HEREDIT:         return "sol";
+        case COLO_HEALING_TOTEM:       return "totem";
+        case COLO_BEE_SWARM:           return "bee";
         default:                       return "unknown";
     }
 }
@@ -42,6 +44,9 @@ static int col_lab_parse_npc_type(const char* value) {
     if (strcmp(value, "manticore") == 0) return COLO_MANTICORE;
     if (strcmp(value, "sol") == 0 || strcmp(value, "heredit") == 0)
         return COLO_SOL_HEREDIT;
+    if (strcmp(value, "totem") == 0)     return COLO_HEALING_TOTEM;
+    if (strcmp(value, "bee") == 0 || strcmp(value, "bees") == 0)
+        return COLO_BEE_SWARM;
 
     char* end = NULL;
     errno = 0;

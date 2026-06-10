@@ -4,8 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(29) + npc slots(12 * 22) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7).
+ *   player(29) + npc slots(12 * 24) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) = 533.
+ * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
+ * NPC-slot citizens, A21+B9), taking the obs from 509 to 533.
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
  * contract that keeps the obs honest as the layout grows.
@@ -18,8 +20,8 @@
 /* ----- obs section sizes ---------------------------------------------------- */
 
 #define COLO_PLAYER_OBS_SIZE      29
-#define COLO_FEATURES_PER_NPC     22
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 264 */
+#define COLO_FEATURES_PER_NPC     24   /* 12-type one-hot + 12 scalars */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 288 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
     venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
@@ -403,19 +405,21 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
     obs[i++] = doom_cap > 0 ? col_clamp01((float)s->doom_stacks / (float)doom_cap) : 0.0f;
 
     obs[i++] = s->player_venom > 0 ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_START);
+    obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_CAP);
 
-    int bee = -1, bee_d = 1 << 30;
+    int bee_x = 0, bee_y = 0, bee_found = 0, bee_d = 1 << 30;
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
-        if (!s->bees[b].active) continue;
-        int dx = abs(s->bees[b].x - s->player.x);
-        int dy = abs(s->bees[b].y - s->player.y);
+        if (s->bees[b].phase != COLO_HAZARD_ALIVE) continue;
+        const ColoNPC* npc = &s->npcs[s->bees[b].npc_slot];
+        if (!npc->active || npc->type != COLO_BEE_SWARM) continue;
+        int dx = abs(npc->x - s->player.x);
+        int dy = abs(npc->y - s->player.y);
         int d = dx > dy ? dx : dy;
-        if (d < bee_d) { bee_d = d; bee = b; }
+        if (d < bee_d) { bee_d = d; bee_x = npc->x; bee_y = npc->y; bee_found = 1; }
     }
-    if (bee >= 0) {
-        obs[i++] = col_obs_rel_x(s->bees[bee].x, s->player.x);
-        obs[i++] = col_obs_rel_y(s->bees[bee].y, s->player.y);
+    if (bee_found) {
+        obs[i++] = col_obs_rel_x(bee_x, s->player.x);
+        obs[i++] = col_obs_rel_y(bee_y, s->player.y);
         obs[i++] = 1.0f;
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
@@ -502,10 +506,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     col_write_modifier_hazards(s, obs, &i);
     assert(i == COLO_OBS_AFTER_MODS);
 
-    /* wave block (4) */
+    /* wave block (4). npcs_remaining tracks wave progress, so hazard entities
+       (totems/bees — visible in the per-NPC slots) are excluded. */
     int npcs_remaining = 0;
     for (int n = 0; n < COLO_MAX_NPCS; n++)
-        if (s->npcs[n].active && s->npcs[n].death_ticks == 0) npcs_remaining++;
+        if (s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
+            !col_type_is_hazard_entity(s->npcs[n].type)) npcs_remaining++;
     obs[i++] = col_clamp01((float)(s->wave + 1) / (float)COLO_NUM_WAVES);
     obs[i++] = col_clamp01((float)npcs_remaining / (float)COLO_MAX_NPCS);
     obs[i++] = (s->reinforcement_timer > 0)
@@ -513,7 +519,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) ? 1.0f : 0.0f;
     assert(i == COLO_OBS_AFTER_WAVE);
 
-    /* boss block (45) */
+    /* boss block (51) */
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
 

@@ -224,7 +224,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: single-source (colosim).
 - Impact: 4. This is the boss fight's core skill check.
 
-### A16. Modifier draft schedule + pool rules (ledger 5.3, 5.4)
+### A16. Modifier draft schedule + pool rules (ledger 5.3, 5.4) — IMPLEMENTED P5
 - Sim: draft offered only in gaps after clearing waves 1-11 (11 picks), uniform pool over
   eligible modifiers (model:333-365, mods:38-92).
 - Correct: a draft occurs BEFORE EVERY wave including wave 1 (money-making guide: "Pick the
@@ -281,7 +281,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 3.
 
-### A21. Totemic totem entity model (ledger 5.24-part)
+### A21. Totemic totem entity model (ledger 5.24-part) — IMPLEMENTED P5
 - Sim: totem destroyed by player adjacency (rect distance 1), no HP, never respawns
   (mods:195-240).
 - Correct: the totem is an attackable NPC (id 12825) with 1 HP, killed by an attack, and it
@@ -292,7 +292,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified.
 - Impact: 3. Adjacency-destroy removes the attack-or-ignore decision and the 2-min re-threat.
 
-### A22. Molten sand: damage and lifetimes (ledger 5.26, 5.17-part, 5.25-part, 6.26-part)
+### A22. Molten sand: damage and lifetimes (ledger 5.26, 5.17-part, 5.25-part, 6.26-part) — IMPLEMENTED P5
 - Sim: all pools deal flat 12/tick; Reentry T1 pool lives 8 ticks; Volatility T3 pool 10
   ticks; pools never cleared between waves (model:435-437, mods:246-306).
 - Correct: standard molten sand deals ~6-8/tick (W-STRAT) / 5 + rand(0..4) = 5-9 (colosim) —
@@ -304,7 +304,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source for lifetimes/tiles; multi-source for the 5-9 damage band.
 - Impact: 3. Sim sand is ~2x too hot but vanishes too fast; threat profile inverted.
 
-### A23. Relentless bypass basis (ledger 5.19-part)
+### A23. Relentless bypass basis (ledger 5.19-part) — IMPLEMENTED P5
 - Sim: bypass scales the player's whole defence ROLL (level+bonus product) (mods:124-131).
 - Correct: bypasses 33/66/100% of the player's Defence LEVEL (gear defence bonuses intact):
   "Enemy attacks will now bypass 33% of the player's Defence level". Max-hit +1/+3/+6 and
@@ -313,7 +313,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source (consistent wiki phrasing; no contrary source).
 - Impact: 2.
 
-### A24. Mantimayhem T3 orb randomization (ledger 5.14-part)
+### A24. Mantimayhem T3 orb randomization (ledger 5.14-part) — IMPLEMENTED P5
 - Sim: all 3 orb styles independently uniform-random (can roll 3x melee) (mods:170-175).
 - Correct: T3 randomizes the MELEE ORB'S POSITION in the sequence — a shuffle of the fixed
   {magic, ranged, melee} set, one of each ("Melee orbs can appear anywhere in the sequence";
@@ -322,7 +322,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 2.
 
-### A25. Mantimayhem venom model (ledger 5.15)
+### A25. Mantimayhem venom model (ledger 5.15) — IMPLEMENTED P5
 - Sim: venom starts 6, ticks every 5 ticks, DECAYS by 1 to 0; reapplication resets to 6
   (model:454-456, mods:178-189).
 - Correct: standard OSRS venom ESCALATES — starts 6, +2 per subsequent proc up to cap 20,
@@ -341,7 +341,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: single-source (wiki, explicit).
 - Impact: 2.
 
-### A27. Solarflare path nodes + T3 corner stop (ledger 5.20, 5.21-part)
+### A27. Solarflare path nodes + T3 corner stop (ledger 5.20, 5.21-part) — IMPLEMENTED P5
 - Sim: pre-boss ring nodes = the 4 arena spawn corners; T3 moves every tick with NO corner
   pause (mods:358-414).
 - Correct: the orb circles THE PILLARS — which exist on all waves (B1) at the researched 3x3
@@ -450,14 +450,14 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: multi-source.
 - Impact: 4. Without this, the triple parry is trivial instead of the fight's signature check.
 
-### B5. Totemic wave-12: totems heal Sol (ledger 5.24 "never Sol" contradicted)
+### B5. Totemic wave-12: totems heal Sol (ledger 5.24 "never Sol" contradicted) — IMPLEMENTED P5
 - Missing: with Totemic active, totems begin spawning when SOL reaches 50% HP and heal him
   75 HP every 4.2 s (7 ticks) until destroyed. The sim excludes Sol from Totemic entirely.
 - Source: WSM#GAP3e (W-STRAT verbatim).
 - Confidence: single-source (explicit).
 - Impact: 4. A boss DPS check the modifier is supposed to impose.
 
-### B6. Mandatory modifier pick, player frozen until selected (ledger 5.7 contradicted)
+### B6. Mandatory modifier pick, player frozen until selected (ledger 5.7 contradicted) — IMPLEMENTED P5
 - Missing: selection is mandatory to proceed; after a wave clears the player CANNOT MOVE when
   Minimus appears until a pick is made. No skip mechanic exists anywhere. The sim's skip
   action (pact:182-186) and auto-close window are training affordances that diverge from the
@@ -485,7 +485,7 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: multi-source for gates; single-source for the centre-spawn quirk.
 - Impact: 3.
 
-### B9. Bees are killable: 1 HP + 50-tick respawn (ledger 5.9-part)
+### B9. Bees are killable: 1 HP + 50-tick respawn (ledger 5.9-part) — IMPLEMENTED P5
 - Missing: bee swarms have 1 Hitpoint, can be attacked/killed, and respawn 50 ticks (30 s)
   after death (UPD-0410 values current). The sim models them as unkillable movers, removing
   the kill-the-bee tempo decision. Movement (12t) and ≤10/t under-player damage are ✓ (C).
@@ -678,10 +678,12 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     the reduced arena, ≥4 tiles from the player (mirrors the primary-spawn exclusion). IMPLEMENTED P1.
 20. Volatility explosion damage + timing (5.25): sim flat 25 on overlap | no damage number in
     any source, trigger timing undocumented | keep flat 25, trigger on the death tick.
+    IMPLEMENTED P5 (kept; T3 pool now until-wave-end).
 21. Solarflare contact damage (5.22): sim 12/18/24 by tier | no numbers anywhere; T2+ only
-    "deals more damage" | keep 12/18/24.
+    "deals more damage" | keep 12/18/24. IMPLEMENTED P5 (kept, D21-tagged).
 22. Totemic heal pulse, waves 1-11 (5.24): sim every 5t | wiki "every few ticks"; only the
     wave-12 figure (75 HP / 7t) is pinned | 7 ticks, mirroring the wave-12 cadence.
+    IMPLEMENTED P5.
 23. Shockwave Colossus when player is adjacent (4.14-part): sim keeps casting (range floor 1)
     | explicitly UNKNOWN in research | keep casting.
 24. Shaman/reinforcement-shaman movement ("wiggle") + standard projectile travel times
@@ -693,6 +695,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 26. Inter-wave pacing (2.23, 5.7-part): sim 9-tick gap + optional draft auto-close | real
     pacing is player-gated by the mandatory draft (B6); no fixed gap documented | replace the
     9t gap with draft-gate + short fixed post-pick delay; keep the 6t ready delay (C).
+    IMPLEMENTED P5 (pick arms the spawn next tick; every wave start runs the 6t ready delay).
 27. Boss-wave player start/teleport (1.10): sim teleports to (19,26) | no teleport in any
     source; player is wherever they are when gladiators barricade; sim tile sits on the
     researched wall row (A8) | keep the teleport affordance but move the start tile inside
@@ -709,7 +712,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     launch-week) | assume yes. IMPLEMENTED P2.
 31. Reentry offered after wave 11 (5.5): sim excludes it | only Red Flag/Dynamic Duo/
     Mantimayhem exclusions are sourced | keep excluding (it is inert vs Sol, same logic
-    Jagex applied to Mantimayhem).
+    Jagex applied to Mantimayhem). IMPLEMENTED P5.
 32. Episode tick cap (1.14): sim 9000t | the real game has no run timer | keep (training
     affordance).
 33. Melee gate diagonals (7.10): sim Chebyshev-1 for all | minotaur heal text implies

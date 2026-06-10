@@ -33,10 +33,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "modifier_draft_window_ticks") == 0) {
-        ctx->config.modifier_draft_window_ticks = value;
-        s->config_modifier_draft_window = value;
-    }
     else encounter_abort_unknown_config("colosseum", "int", key);
 }
 
@@ -288,7 +284,10 @@ static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
 /* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
-#define COLO_SNAPSHOT_VERSION 2u  /* v2: P4 SolHereditState rewrite (A1-A15, B4, B7) */
+/* v2: P4 SolHereditState rewrite (A1-A15, B4, B7).
+   v3: P5 draft rework (draft_gates_spawn replaces draft_timer), hazard-entity
+   totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields. */
+#define COLO_SNAPSHOT_VERSION 3u
 
 typedef struct {
     uint32_t magic;

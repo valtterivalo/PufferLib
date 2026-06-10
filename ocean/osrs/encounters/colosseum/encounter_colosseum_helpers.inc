@@ -30,6 +30,7 @@ static int col_in_boss_arena(const ColosseumState* s, int x, int y);
    which is included before it. */
 static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
+static void col_modifier_open_draft(ColosseumState* s, int next_wave);
 
 
 /** queue a player-attack hit on an NPC's pending-hit queue. */
@@ -103,7 +104,6 @@ static ColConfig col_default_config(void) {
         .death_penalty_coeff = 0.0f,
         .terminal_penalty_enabled = 0,
         .curriculum_agent = 0,
-        .modifier_draft_window_ticks = 0,   /* 0 = draft stays open until acted on */
     };
 }
 
