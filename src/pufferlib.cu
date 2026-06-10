@@ -2242,9 +2242,13 @@ void close_impl(PuffeRL& pufferl) {
         cudaProfilerStop();
     }
 
-    cudaGraphExecDestroy(pufferl.train_cudagraph);
-    for (int i = 0; i < pufferl.hypers.horizon * pufferl.hypers.num_buffers; i++) {
-        cudaGraphExecDestroy(pufferl.fused_rollout_cudagraphs[i]);
+    if (pufferl.train_captured) {
+        cudaGraphExecDestroy(pufferl.train_cudagraph);
+    }
+    if (pufferl.rollout_captured) {
+        for (int i = 0; i < pufferl.hypers.horizon * pufferl.hypers.num_buffers; i++) {
+            cudaGraphExecDestroy(pufferl.fused_rollout_cudagraphs[i]);
+        }
     }
 
     policy_weights_free(&pufferl.policy, &pufferl.weights);
@@ -2269,8 +2273,10 @@ void close_impl(PuffeRL& pufferl) {
     alloc_free(&pufferl.grads_alloc);
     alloc_free(&pufferl.activations_alloc);
 
-    for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
-        cudaStreamDestroy(pufferl.streams[i]);
+    if (pufferl.streams) {
+        for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
+            cudaStreamDestroy(pufferl.streams[i]);
+        }
     }
     for (int i = 0; i < NUM_TRAIN_EVENTS; i++) {
         cudaEventDestroy(pufferl.profile.events[i]);
