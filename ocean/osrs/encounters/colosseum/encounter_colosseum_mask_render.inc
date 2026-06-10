@@ -132,12 +132,12 @@ static void col_fill_render_entities_ctx(
     for (int i = 0; i < COLO_MAX_NPCS && n < max_entities; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
-        /* totem/bee models (12825/12823) are not exported yet and the renderer
-           aborts on an unmapped def id — skip them until the asset pass. */
-        if (col_type_is_hazard_entity(npc->type)) continue;
+        int def_id = COLO_NPC_DEF_IDS[npc->type];
+        if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG))
+            def_id = COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND;
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
-            .npc_def_id = COLO_NPC_DEF_IDS[npc->type],
+            .npc_def_id = def_id,
             .npc_slot = i,
             .npc_instance_id = npc->render_id,
             .npc_visible = npc->active,

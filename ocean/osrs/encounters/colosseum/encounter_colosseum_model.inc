@@ -207,16 +207,21 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
     [COLO_JAGUAR_WARRIOR]      = 12810,
     [COLO_JAVELIN_COLOSSUS]    = 12817,
     [COLO_SHOCKWAVE_COLOSSUS]  = 12819,
-    [COLO_MINOTAUR]            = 12812,  /* A30: Red Flag variant 12813 deferred — no exported model yet */
+    [COLO_MINOTAUR]            = 12812,
     [COLO_MANTICORE]           = 12818,
     [COLO_SOL_HEREDIT]         = 12821,
-    [COLO_HEALING_TOTEM]       = 12825,  /* real cache id; model export deferred, not rendered yet */
-    [COLO_BEE_SWARM]           = 12823,  /* real cache id; model export deferred, not rendered yet */
+    [COLO_HEALING_TOTEM]       = 12825,
+    [COLO_BEE_SWARM]           = 12823,
 };
 
+/** A30: the routefinding "Red Flag" minotaur is cache npc 12813 (same model set
+    and anims as 12812). The sim type stays COLO_MINOTAUR — only the def id
+    reported to the renderer switches while COLO_MOD_RED_FLAG is active. */
+#define COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND 12813
+
 /** A21+B9: hazard entities — attackable 1-HP modifier spawns. Excluded from
-    wave-clear/reinforcement predicates, collision stamps, render entities
-    (no exported models yet), and the death hooks real NPCs trigger. */
+    wave-clear/reinforcement predicates, collision stamps, and the death hooks
+    real NPCs trigger; they render and are clickable like any other NPC. */
 static int col_type_is_hazard_entity(ColoNpcType type) {
     return type == COLO_HEALING_TOTEM || type == COLO_BEE_SWARM;
 }

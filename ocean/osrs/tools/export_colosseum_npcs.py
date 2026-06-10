@@ -1,7 +1,7 @@
 """Export Fortis Colosseum NPC models and animations from the modern OSRS cache.
 
-Reads NPC definitions for the ten Colosseum monsters, extracts model and
-animation ids, decodes and merges meshes into ``colosseum_npcs.models``,
+Reads NPC definitions for the Colosseum monsters and hazard entities, extracts
+model and animation ids, decodes and merges meshes into ``colosseum_npcs.models``,
 writes their sequences into ``colosseum_npcs.anims``, and emits a standalone
 ``npc_models_colosseum.h`` whose ``NPC_MODEL_MAP_COLOSSEUM_GEN`` table mirrors
 ``npc_models_inferno.h``.
@@ -79,8 +79,11 @@ COLOSSEUM_NPC_IDS = {
     12817: "Javelin Colossus",
     12819: "Shockwave Colossus",
     12812: "Minotaur",
+    12813: "Minotaur (Red Flag)",
     12818: "Manticore",
     12821: "Sol Heredit",
+    12823: "Bee Swarm",
+    12825: "Healing totem",
 }
 
 
