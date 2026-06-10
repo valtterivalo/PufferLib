@@ -194,19 +194,20 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
     return r;
 }
 
-/* saradomin brew effect: heals HP, boosts def, drains att/str/range/magic.
-   all parameters are BASE levels (99 typically).
-   ref: osrs wiki "saradomin brew" */
-static inline BrewResult osrs_brew_effect(int base_hp, int base_att,
-                                           int base_str, int base_range,
-                                           int base_magic) {
+/* saradomin brew effect. wiki-exact bases: the HP heal (15% + 2) and the
+   defence boost (20% + 2) compute from BASE levels; the att/str/range/magic
+   drains (10% + 2) compute from CURRENT levels, so repeated sips drain
+   diminishingly. ref: OSRS wiki Saradomin brew. */
+static inline BrewResult osrs_brew_effect(int base_hp, int base_def,
+                                           int current_att, int current_str,
+                                           int current_range, int current_magic) {
     BrewResult r;
     r.hp_healed = osrs_brew_heal_amount(base_hp);
-    r.def_boost = base_hp * 20 / 100 + 2;  /* floor(base*0.20) + 2 (uses HP base for def) */
-    r.att_drain = base_att * 10 / 100 + 2;
-    r.str_drain = base_str * 10 / 100 + 2;
-    r.range_drain = base_range * 10 / 100 + 2;
-    r.magic_drain = base_magic * 10 / 100 + 2;
+    r.def_boost = base_def * 20 / 100 + 2;
+    r.att_drain = current_att * 10 / 100 + 2;
+    r.str_drain = current_str * 10 / 100 + 2;
+    r.range_drain = current_range * 10 / 100 + 2;
+    r.magic_drain = current_magic * 10 / 100 + 2;
     return r;
 }
 

@@ -74,7 +74,15 @@ static void test_consumable_amounts_and_laws(void) {
         osrs_drink_potion(POTION_SUPER_COMBAT, 0, 99, 0).level_boost ==
         osrs_super_combat_boost_amount(99));
     CHECK("osrs_brew_effect heal matches the amount helper",
-        osrs_brew_effect(99, 99, 99, 99, 99).hp_healed == osrs_brew_heal_amount(99));
+        osrs_brew_effect(99, 99, 99, 99, 99, 99).hp_healed == osrs_brew_heal_amount(99));
+
+    /* wiki bases: heal + def boost from BASE levels, drains from CURRENT */
+    BrewResult fresh = osrs_brew_effect(99, 99, 99, 99, 99, 99);
+    BrewResult drained = osrs_brew_effect(99, 99, 50, 50, 50, 50);
+    CHECK("brew def boost computes from base defence (21 at 99)",
+        fresh.def_boost == 21 && drained.def_boost == 21);
+    CHECK("brew drains diminish with the current level",
+        drained.att_drain < fresh.att_drain && drained.att_drain == 7);
 
     /* law: restore caps at base from any drained start */
     Player p = make_maxed_player();
@@ -94,10 +102,18 @@ static void test_consumable_amounts_and_laws(void) {
     encounter_ranging_boost(&p);
     CHECK("ranging caps at base + boost (112)", p.current_ranged == 112);
 
-    /* law: brew drains recover fully under repeated restores */
+    /* law: brew drains recover fully under repeated restores; the def boost
+       comes from BASE defence so double-brews never compound it */
     p = make_maxed_player();
     for (int i = 0; i < 4; i++) encounter_brew_drain_stats(&p);
     CHECK("brews drain offensive stats", p.current_attack < 99 && p.current_magic < 99);
+    CHECK("repeated brews cap defence at base + base-level boost (120)",
+        p.current_defence == 99 + 21);
+    Player half_def = make_maxed_player();
+    half_def.current_defence = 50;
+    encounter_brew_drain_stats(&half_def);
+    CHECK("brew def boost is base-derived even when defence is drained",
+        half_def.current_defence == 50 + 21);
     for (int i = 0; i < 20; i++) encounter_restore_stats(&p);
     CHECK("restores recover every brewed-down stat to base",
         p.current_attack == 99 && p.current_strength == 99 &&

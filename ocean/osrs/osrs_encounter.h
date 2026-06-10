@@ -1953,28 +1953,26 @@ static inline int encounter_decay_player_combat_stats_toward_base(Player* p) {
 }
 
 /** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
-    drains att/str/ranged/magic by floor(current/10)+2 each (uses CURRENT level).
-    boosts defence by floor(current_def/5)+2, capped at base + max boost from base.
-    floors at 0 for drained stats.
-    ref: OSRS wiki Saradomin brew. */
+    applies osrs_brew_effect: drains att/str/ranged/magic by floor(current/10)+2
+    (CURRENT levels, diminishing on repeat sips), boosts defence by
+    floor(base/5)+2 (BASE level), capped at base + boost. floors drained stats
+    at 0. ref: OSRS wiki Saradomin brew. */
 static inline void encounter_brew_drain_stats(Player* p) {
-    int att_drain = p->current_attack / 10 + 2;
-    int str_drain = p->current_strength / 10 + 2;
-    int rng_drain = p->current_ranged / 10 + 2;
-    int mag_drain = p->current_magic / 10 + 2;
-    int def_boost = p->current_defence / 5 + 2;
+    BrewResult brew = osrs_brew_effect(p->base_hitpoints, p->base_defence,
+                                       p->current_attack, p->current_strength,
+                                       p->current_ranged, p->current_magic);
 
-    p->current_attack -= att_drain;
+    p->current_attack -= brew.att_drain;
     if (p->current_attack < 0) p->current_attack = 0;
-    p->current_strength -= str_drain;
+    p->current_strength -= brew.str_drain;
     if (p->current_strength < 0) p->current_strength = 0;
-    p->current_ranged -= rng_drain;
+    p->current_ranged -= brew.range_drain;
     if (p->current_ranged < 0) p->current_ranged = 0;
-    p->current_magic -= mag_drain;
+    p->current_magic -= brew.magic_drain;
     if (p->current_magic < 0) p->current_magic = 0;
 
-    p->current_defence += def_boost;
-    int def_cap = p->base_defence + (p->base_defence / 5 + 2);
+    p->current_defence += brew.def_boost;
+    int def_cap = p->base_defence + brew.def_boost;
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 

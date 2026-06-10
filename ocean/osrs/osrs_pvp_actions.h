@@ -55,10 +55,9 @@ static void drink_potion(Player* p, int potion_type) {
         case 1: {
             if (p->brew_doses <= 0) return;
             p->brew_doses--;
-            // pass current levels for drain params — brew drains 10% of CURRENT not base
-            BrewResult br = osrs_brew_effect(p->base_hitpoints, p->current_attack,
-                                             p->current_strength, p->current_ranged,
-                                             p->current_magic);
+            BrewResult br = osrs_brew_effect(p->base_hitpoints, p->base_defence,
+                                             p->current_attack, p->current_strength,
+                                             p->current_ranged, p->current_magic);
             int hp_before = p->current_hitpoints;
             int max_hp = p->base_hitpoints + br.hp_healed;
             int actual_heal = max_int(0, min_int(br.hp_healed, max_hp - hp_before));
