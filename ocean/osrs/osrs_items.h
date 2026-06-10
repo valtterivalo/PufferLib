@@ -43,6 +43,8 @@ typedef enum {
     OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR = 1u << 8,
     OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND = 1u << 9,
     OSRS_ITEM_EFFECT_ECHO_BOOTS = 1u << 10,
+    OSRS_ITEM_EFFECT_BLOOD_FURY = 1u << 11,
+    OSRS_ITEM_EFFECT_VENOM_IMMUNE = 1u << 12,
 } OsrsItemEffectMask;
 
 typedef struct {

@@ -352,6 +352,15 @@ static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
         result.heal_amount = damage_dealt / 2;
     }
 
+    /* amulet of blood fury: 20% chance on any melee damage to heal 30% of the
+       damage dealt. ref: OSRS wiki Amulet of blood fury. */
+    if (damage_dealt > 0 &&
+        style == ATTACK_STYLE_MELEE &&
+        osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_BLOOD_FURY) &&
+        encounter_rand_int(rng_state, 5) == 0) {
+        result.heal_amount += damage_dealt * 30 / 100;
+    }
+
     return result;
 }
 

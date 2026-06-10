@@ -146,7 +146,13 @@ typedef enum {
     ITEM_DRAGONFIRE_SHIELD = 133,  /* Dragonfire shield */
     ITEM_DRAGON_HUNTER_WAND = 134,  /* Dragon hunter wand */
     ITEM_ECHO_BOOTS = 135,  /* Echo boots */
-    NUM_ITEMS = 136,
+    ITEM_SERPENTINE_HELM = 136,  /* Serpentine helm */
+    ITEM_AMULET_OF_BLOOD_FURY = 137,  /* Amulet of blood fury */
+    ITEM_FIGHTER_TORSO = 138,  /* Fighter torso */
+    ITEM_AMULET_OF_RANCOUR = 139,  /* Amulet of rancour */
+    ITEM_OATHPLATE_CHEST = 140,  /* Oathplate chest */
+    ITEM_OATHPLATE_LEGS = 141,  /* Oathplate legs */
+    NUM_ITEMS = 142,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1374,6 +1380,60 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 32, .defence_slash = 32, .defence_crush = 32,
         .defence_magic = -3, .defence_ranged = 24,
         .melee_strength = 3, .ranged_strength = 0, .magic_damage = 0, .prayer = 4, .effect_mask = OSRS_ITEM_EFFECT_ECHO_BOOTS
+    },
+    [ITEM_SERPENTINE_HELM] = { /* Serpentine helm (charged) */
+        .item_id = 12931, .name = "Serpentine helm", .slot = SLOT_HEAD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -5, .attack_ranged = -5,
+        .defence_stab = 52, .defence_slash = 55, .defence_crush = 58,
+        .defence_magic = 0, .defence_ranged = 50,
+        .melee_strength = 5, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_VENOM_IMMUNE
+    },
+    [ITEM_AMULET_OF_BLOOD_FURY] = { /* Amulet of blood fury */
+        .item_id = 24780, .name = "Amulet of blood fury", .slot = SLOT_NECK,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 10, .attack_slash = 10, .attack_crush = 10,
+        .attack_magic = 10, .attack_ranged = 10,
+        .defence_stab = 15, .defence_slash = 15, .defence_crush = 15,
+        .defence_magic = 15, .defence_ranged = 15,
+        .melee_strength = 8, .ranged_strength = 0, .magic_damage = 0, .prayer = 5, .effect_mask = OSRS_ITEM_EFFECT_BLOOD_FURY
+    },
+    [ITEM_FIGHTER_TORSO] = { /* Fighter torso */
+        .item_id = 10551, .name = "Fighter torso", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -40, .attack_ranged = 0,
+        .defence_stab = 62, .defence_slash = 85, .defence_crush = 62,
+        .defence_magic = -10, .defence_ranged = 67,
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_AMULET_OF_RANCOUR] = { /* Amulet of rancour */
+        .item_id = 29801, .name = "Amulet of rancour", .slot = SLOT_NECK,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 25, .attack_slash = 25, .attack_crush = 25,
+        .attack_magic = -6, .attack_ranged = -8,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 12, .ranged_strength = 0, .magic_damage = 0, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_OATHPLATE_CHEST] = { /* Oathplate chest */
+        .item_id = 30753, .name = "Oathplate chest", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 16, .attack_crush = 0,
+        .attack_magic = -16, .attack_ranged = -18,
+        .defence_stab = 105, .defence_slash = 128, .defence_crush = 100,
+        .defence_magic = -5, .defence_ranged = 112,
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_OATHPLATE_LEGS] = { /* Oathplate legs */
+        .item_id = 30756, .name = "Oathplate legs", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 12, .attack_crush = 0,
+        .attack_magic = -12, .attack_ranged = -14,
+        .defence_stab = 75, .defence_slash = 100, .defence_crush = 73,
+        .defence_magic = -3, .defence_ranged = 81,
+        .melee_strength = 2, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
 };
 
