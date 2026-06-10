@@ -277,6 +277,10 @@ def test_fixed_eval_can_include_one_learned_policy_opponent(tmp_path):
     assert logs["env/fixed_eval_performance_score"] == pytest.approx(0.625)
     assert fake.loaded_weights == ["candidate.bin", "candidate.bin"]
     assert fake.loaded_banks == [(0, str(policy_path))]
+    assert fake.created_args[0]["vec"]["num_frozen_banks"] == 0
+    assert fake.created_args[0]["vec"]["frozen_bank_pct"] == 0.0
+    assert fake.created_args[1]["vec"]["num_frozen_banks"] == 1
+    assert fake.created_args[1]["vec"]["frozen_bank_pct"] == 0.5
     assert fake.closed == 2
 
     policy_args = fake.created_args[1]

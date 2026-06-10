@@ -10,6 +10,7 @@ import glob
 import json
 import ast
 import time
+import hashlib
 import argparse
 import configparser
 from collections import defaultdict
@@ -216,7 +217,10 @@ def _finite_scalar_or_none(value):
     arr = np.asarray(value)
     if arr.shape != ():
         return None
-    scalar = float(arr)
+    try:
+        scalar = float(arr)
+    except (TypeError, ValueError):
+        return None
     if not np.isfinite(scalar):
         return None
     return scalar
@@ -258,6 +262,66 @@ PVP_FIXED_EVAL_KEYS = (
 def _fixed_eval_enabled(args):
     return bool(args.get('fixed_eval', {}).get('enabled', 0))
 
+def _should_save_checkpoint(sweep_obj, checkpoint_interval, epoch, is_final, match_mode):
+    interval = int(checkpoint_interval)
+    periodic = interval > 0 and epoch % interval == 0
+    return (sweep_obj is None and (periodic or is_final)) or (match_mode and is_final)
+
+def _mean_metric_values(values, fallback):
+    if not values:
+        return fallback
+    scalars = [_finite_scalar_or_none(value) for value in values]
+    if all(value is not None for value in scalars):
+        return float(np.mean(scalars))
+    return fallback
+
+def _deterministic_step_bin_metrics(logs, downsample):
+    if not logs:
+        return {}
+
+    n = max(1, int(downsample))
+    final_steps = _finite_scalar_or_none(logs[-1].get('agent_steps'))
+    if final_steps is None:
+        raise ValueError('deterministic metric bins require final agent_steps')
+
+    metrics = {}
+    last_metric_values = {}
+    metric_bin_idx = 0
+    next_bin = final_steps / (n - 1) if n > 1 else np.inf
+    for log in logs:
+        steps = _finite_scalar_or_none(log.get('agent_steps'))
+        if steps is None:
+            raise ValueError('deterministic metric bins require agent_steps in every log')
+
+        for k, v in log.items():
+            if k not in metrics:
+                metrics[k] = [[] for _ in range(metric_bin_idx + 1)]
+            metrics[k][metric_bin_idx].append(v)
+            last_metric_values[k] = v
+
+        while steps >= next_bin and metric_bin_idx < n - 1:
+            next_bin += final_steps / (n - 1)
+            for k in metrics:
+                values = metrics[k][metric_bin_idx]
+                metrics[k][metric_bin_idx] = _mean_metric_values(
+                    values,
+                    last_metric_values[k],
+                )
+                metrics[k].append([])
+            metric_bin_idx += 1
+
+    for k in metrics:
+        metrics[k][-1] = last_metric_values[k]
+
+    return metrics
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
 def _fixed_eval_args(args, opponent, seed):
     eval_args = deepcopy(args)
     eval_args['wandb'] = False
@@ -270,6 +334,8 @@ def _fixed_eval_args(args, opponent, seed):
     vec = eval_args.setdefault('vec', {})
     vec['total_agents'] = int(cfg.get('total_agents', min(512, vec['total_agents'])))
     vec['num_buffers'] = int(cfg.get('num_buffers', min(2, vec.get('num_buffers', 1))))
+    vec['num_frozen_banks'] = 0
+    vec['frozen_bank_pct'] = 0.0
     if vec['total_agents'] % vec['num_buffers'] != 0:
         raise ValueError('fixed_eval.total_agents must be divisible by fixed_eval.num_buffers')
 
@@ -527,8 +593,6 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     total_timesteps = args['train']['total_timesteps']
     all_logs = []
 
-    # When sweeping, optionally score each trial by winrate vs a fixed enemy
-    # checkpoint (match mode) instead of the training-time self-play metric.
     match_mode = (sweep_obj is not None
         and bool(args.get('sweep', {}).get('match_enemy_model_path')))
 
@@ -552,8 +616,6 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         flat_logs = dict(unroll_nested_dict(backend.log(pufferl)))
         print_dashboard(args, model_size, flat_logs, clear=True)
 
-    # Selfplay-pool curriculum (no-op unless selfplay.enabled). Disabled
-    # under match-mode sweeps since match() owns its own perm/frozen bank.
     pool_state = None
     try:
         pool_state = selfplay.setup(pufferl, backend, args, run_id)
@@ -569,24 +631,24 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     fixed_eval_enabled = _fixed_eval_enabled(args)
     train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
     eval_epochs = 0 if fixed_eval_enabled else train_epochs // 2
+    next_display_log_time = 0.0
     for epoch in range(train_epochs + eval_epochs):
         backend.rollouts(pufferl)
 
         if epoch < train_epochs:
             backend.train(pufferl)
 
-        # In match-sweep mode we need the final checkpoint to feed into match().
         is_final = epoch == train_epochs - 1
-        should_save = (sweep_obj is None
-            and (epoch % args['checkpoint_interval'] == 0 or is_final)
-        ) or (match_mode and is_final)
+        should_save = _should_save_checkpoint(
+            sweep_obj,
+            args['checkpoint_interval'],
+            epoch,
+            is_final,
+            match_mode,
+        )
         if should_save:
             model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
             backend.save_weights(pufferl, model_path)
-
-        # Rate limit, but always log for eval to maintain determinism
-        if time.time() < pufferl.last_log_time + 0.6 and epoch < train_epochs - 1:
-            continue
 
         logs = backend.eval_log(pufferl) if epoch >= train_epochs else backend.log(pufferl)
         flat_logs = {**flat_logs, **dict(unroll_nested_dict(logs))}
@@ -594,15 +656,20 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         if epoch < train_epochs:
             selfplay.step(pufferl, backend, pool_state, flat_logs, epoch)
 
-        if verbose:
+        now = time.time()
+        should_emit_display_log = now >= next_display_log_time or is_final or epoch >= train_epochs
+        if should_emit_display_log:
+            next_display_log_time = now + 0.6
+
+        if verbose and should_emit_display_log:
             print_dashboard(args, model_size, flat_logs)
 
-        if args['wandb']:
+        if args['wandb'] and should_emit_display_log:
             wandb.log(flat_logs, step=flat_logs['agent_steps'])
 
         has_target_metric = target_key in flat_logs
         if epoch < train_epochs:
-            all_logs.append(flat_logs)
+            all_logs.append(dict(flat_logs))
 
             if (sweep_obj is not None
                     and has_target_metric
@@ -645,8 +712,6 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             flat_logs['uptime'] += fixed_eval_logs['env/fixed_eval_elapsed_sec']
         if args['wandb']:
             wandb.log(fixed_eval_logs, step=flat_logs.get('agent_steps', 0))
-        if not args.get('fixed_eval', {}).get('keep_weights', 0):
-            os.remove(fixed_eval_model_path)
 
     if target_key not in flat_logs:
         if result_queue is not None:
@@ -668,34 +733,12 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         if args['wandb']:
             wandb.log({'env/match_score': match_score}, step=flat_logs['agent_steps'])
 
-    all_logs.append(flat_logs)
+    if all_logs and all_logs[-1].get('agent_steps') == flat_logs.get('agent_steps'):
+        all_logs[-1] = dict(flat_logs)
+    else:
+        all_logs.append(dict(flat_logs))
 
-    n = args['sweep']['downsample']
-    metrics = {}
-    last_metric_values = {}
-    metric_bin_idx = 0
-    logged_timesteps = all_logs[-1]['agent_steps']
-    next_bin = logged_timesteps / (n - 1) if n > 1 else np.inf
-    for log in all_logs:
-        for k, v in log.items():
-            if k not in metrics:
-                metrics[k] = [[] for _ in range(metric_bin_idx + 1)]
-            metrics[k][metric_bin_idx].append(v)
-            last_metric_values[k] = v
-
-        if log['agent_steps'] < next_bin:
-            continue
-
-        next_bin += logged_timesteps / (n - 1)
-        for k in metrics:
-            values = metrics[k][metric_bin_idx]
-            metrics[k][metric_bin_idx] = (
-                np.mean(values) if values else last_metric_values[k])
-            metrics[k].append([])
-        metric_bin_idx += 1
-
-    for k in metrics:
-        metrics[k][-1] = last_metric_values[k]
+    metrics = _deterministic_step_bin_metrics(all_logs, args['sweep']['downsample'])
 
     if match_mode:
         metrics['env/match_score'] = [match_score] * len(metrics['agent_steps'])
@@ -706,7 +749,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         json.dump({**args, 'metrics': metrics}, f)
 
     if args['wandb']:
-        if sweep_obj is None and model_path: # Don't spam uploads during sweeps
+        if sweep_obj is None and model_path:
             artifact = wandb.Artifact(run_id, type='model')
             artifact.add_file(model_path)
             wandb.run.log_artifact(artifact)
@@ -732,7 +775,7 @@ def train(env_name, args=None, gpus=None, **kwargs):
     args['nccl_id'] = _C.get_nccl_id() if len(gpus) > 1 else b''
 
     if not subprocess:
-        gpus = gpus[-1:] + gpus[:-1]  # Main process gets rank 0
+        gpus = gpus[-1:] + gpus[:-1]
 
     ctx = mp.get_context('spawn')
     for rank, gpu_id in reversed(list(enumerate(gpus))):
@@ -742,11 +785,121 @@ def train(env_name, args=None, gpus=None, **kwargs):
         if rank == 0 and not subprocess:
             _train(env_name, worker_args, verbose=True)
         else:
-            # Protein's GP models live on cuda:0 on non-WSL setups; spawn-pickling
-            # them works fine via CUDA IPC. On WSL, sweep.py forces device='cpu'
-            # at construction so there's nothing to move.
             ctx.Process(target=_train, args=(env_name, worker_args),
                 kwargs=kwargs).start()
+
+class _ReproSweep:
+    def early_stop(self, logs, target_key):
+        return False
+
+def _prepare_repro_args(env_name, args):
+    trial_path = args.get('trial_json')
+    output_dir = args.get('output_dir')
+    if not trial_path:
+        raise ValueError('puffer repro requires --trial-json')
+    if not output_dir:
+        raise ValueError('puffer repro requires --output-dir')
+
+    with open(trial_path) as f:
+        trial_args = json.load(f)
+    trial_args.pop('metrics', None)
+    if trial_args.get('env_name') != env_name:
+        raise ValueError(
+            f'trial env_name {trial_args.get("env_name")} does not match {env_name}')
+
+    output_dir = os.path.abspath(output_dir)
+    resolved = deepcopy(trial_args)
+    resolved['checkpoint_dir'] = os.path.join(output_dir, 'checkpoints')
+    resolved['log_dir'] = os.path.join(output_dir, 'logs')
+    resolved['wandb'] = bool(args.get('wandb', False))
+    resolved['rank'] = 0
+    resolved['gpu_id'] = int(args.get('gpu_id', 0))
+    resolved['world_size'] = 1
+    resolved['nccl_id'] = b''
+    resolved['no_model_upload'] = True
+    return resolved
+
+def _find_single_repro_artifact(pattern, label):
+    matches = glob.glob(pattern)
+    if not matches:
+        raise FileNotFoundError(f'no {label} found at {pattern}')
+    return max(matches, key=os.path.getmtime)
+
+def _write_repro_comparison(env_name, cli_args, repro_args):
+    output_dir = os.path.dirname(repro_args['checkpoint_dir'])
+    trial_path = os.path.abspath(cli_args['trial_json'])
+    log_path = _find_single_repro_artifact(
+        os.path.join(repro_args['log_dir'], env_name, '*.json'),
+        'repro trial log',
+    )
+    weight_path = _find_single_repro_artifact(
+        os.path.join(repro_args['checkpoint_dir'], env_name, '*', 'fixed_eval_weights.bin'),
+        'repro fixed eval weights',
+    )
+
+    with open(log_path) as f:
+        trial_log = json.load(f)
+    metrics = trial_log.get('metrics', {})
+    target_key = f'env/{repro_args["sweep"]["metric"]}'
+
+    with open(trial_path) as f:
+        source_trial = json.load(f)
+    source_run_id = os.path.splitext(os.path.basename(trial_path))[0]
+    source_weight_path = os.path.join(
+        source_trial.get('checkpoint_dir', ''),
+        env_name,
+        source_run_id,
+        'fixed_eval_weights.bin',
+    )
+    comparison = {
+        'source_trial_path': trial_path,
+        'source_trial_sha256': _sha256_file(trial_path),
+        'source_weight_path': source_weight_path if os.path.exists(source_weight_path) else '',
+        'source_weight_sha256': (
+            _sha256_file(source_weight_path) if os.path.exists(source_weight_path) else ''),
+        'output_trial_path': log_path,
+        'output_weight_path': weight_path,
+        'output_weight_sha256': _sha256_file(weight_path),
+        'score': _last_finite_scalar(metrics.get(target_key)),
+        'holdout_score': _last_finite_scalar(metrics.get('env/fixed_eval_holdout_score')),
+        'holdout_performance_score': _last_finite_scalar(
+            metrics.get('env/fixed_eval_holdout_performance_score')),
+        'holdout_wins': _last_finite_scalar(metrics.get('env/fixed_eval_holdout_wins')),
+    }
+
+    comparison_path = os.path.join(output_dir, 'comparison.json')
+    with open(comparison_path, 'w') as f:
+        json.dump(comparison, f, indent=2)
+    return comparison
+
+def repro(env_name, args=None):
+    args = args or load_config(env_name)
+    repro_args = _prepare_repro_args(env_name, args)
+
+    output_dir = os.path.dirname(repro_args['checkpoint_dir'])
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, 'resolved_config.json'), 'w') as f:
+        json.dump(repro_args, f, indent=2, default=str)
+
+    validate_config(repro_args)
+    ctx = mp.get_context('spawn')
+    result_queue = ctx.Queue()
+    proc = ctx.Process(
+        target=_train,
+        args=(env_name, repro_args),
+        kwargs={'sweep_obj': _ReproSweep(), 'result_queue': result_queue},
+    )
+    proc.start()
+    proc.join()
+    if proc.exitcode != 0:
+        raise RuntimeError(f'repro worker exited with code {proc.exitcode}')
+
+    gpu_id, scores, costs, timesteps = result_queue.get()
+    if scores is None:
+        raise RuntimeError(f'repro worker on gpu {gpu_id} did not produce metrics')
+
+    comparison = _write_repro_comparison(env_name, args, repro_args)
+    print(json.dumps(comparison, indent=2))
 
 def _last_finite_scalar(values):
     if not isinstance(values, list):
@@ -815,6 +968,7 @@ def sweep(env_name, args=None, pareto=False):
 
             if not scores:
                 sweep_obj.observe(done_args, 0, 0, is_failure=True)
+                continue
             else:
                 completed += 1
 
@@ -968,6 +1122,10 @@ def load_config(env_name):
         help='Path to a pretrained checkpoint')
     parser.add_argument('--load-enemy-model-path', type=str, default=None,
         help='Path to opponent checkpoint for `puffer match` (slot 1 / black in chess)')
+    parser.add_argument('--trial-json', type=str, default=None,
+        help='Path to a sweep trial JSON for `puffer repro`')
+    parser.add_argument('--output-dir', type=str, default=None,
+        help='Output directory for `puffer repro` artifacts')
     parser.add_argument('--num-games', type=int, default=4096,
         help='Number of games to play in `puffer match`')
     parser.add_argument('--enemy-hidden-size', type=int, default=None,
@@ -1047,7 +1205,7 @@ def load_config(env_name):
     return dict(args)
 
 def main():
-    err = 'Usage: puffer [train, eval, sweep, paretosweep, match] [env_name] [optional args]. --help for more info'
+    err = 'Usage: puffer [train, eval, sweep, paretosweep, match, repro] [env_name] [optional args]. --help for more info'
     if len(sys.argv) < 3:
         raise ValueError(err)
 
@@ -1068,6 +1226,8 @@ def main():
             raise ValueError('puffer match requires --load-model-path and --load-enemy-model-path')
         match(env_name=env_name, policy_a_path=a_path, policy_b_path=b_path,
             num_games=args.get('num_games', 4096), args=args)
+    elif 'repro' in mode:
+        repro(env_name=env_name, args=args)
     else:
         raise ValueError(err)
 
