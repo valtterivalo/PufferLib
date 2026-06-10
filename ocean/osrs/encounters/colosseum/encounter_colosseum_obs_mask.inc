@@ -4,10 +4,13 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(29) + npc slots(12 * 24) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) = 533.
+ *   player(37) + npc slots(12 * 24) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) = 541.
  * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
- * NPC-slot citizens, A21+B9), taking the obs from 509 to 533.
+ * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
+ * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
+ * +2 spec-armed one-hot), 533 -> 541; the loadout profile itself is implicit
+ * in the gear-derived stats + supply normalization (inferno precedent).
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
  * contract that keeps the obs honest as the layout grows.
@@ -19,7 +22,7 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      29
+#define COLO_PLAYER_OBS_SIZE      37
 #define COLO_FEATURES_PER_NPC     24   /* 12-type one-hot + 12 scalars */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 288 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
@@ -479,6 +482,22 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
+    /* researched-inventory block: supply fractions normalized by the profile's
+       full doses (a profile without a supply reads 0), surge state, and the
+       armed spec weapon one-hot. */
+    obs[i++] = s->full_supplies.brew_doses > 0
+        ? col_clamp01((float)s->player.brew_doses / (float)s->full_supplies.brew_doses) : 0.0f;
+    obs[i++] = s->full_supplies.restore_doses > 0
+        ? col_clamp01((float)s->player.restore_doses / (float)s->full_supplies.restore_doses) : 0.0f;
+    obs[i++] = s->full_supplies.combat_doses > 0
+        ? col_clamp01((float)s->player.combat_potion_doses / (float)s->full_supplies.combat_doses) : 0.0f;
+    obs[i++] = s->full_supplies.ranged_doses > 0
+        ? col_clamp01((float)s->player.ranged_potion_doses / (float)s->full_supplies.ranged_doses) : 0.0f;
+    obs[i++] = s->full_supplies.surge_doses > 0
+        ? col_clamp01((float)s->surge_doses / (float)s->full_supplies.surge_doses) : 0.0f;
+    obs[i++] = col_clamp01((float)s->surge_cooldown / (float)COLO_SURGE_COOLDOWN_TICKS);
+    obs[i++] = (s->spec_armed_kind == 1) ? 1.0f : 0.0f;
+    obs[i++] = (s->spec_armed_kind == 2) ? 1.0f : 0.0f;
     assert(i == COLO_OBS_AFTER_PLAYER);
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */

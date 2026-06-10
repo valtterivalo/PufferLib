@@ -33,6 +33,13 @@ static void col_put_int_ctx(
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "loadout_profile_mode") == 0) {
+        if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
+            fprintf(stderr, "colosseum: loadout_profile_mode must be 0..2, got %d\n", value);
+            abort();
+        }
+        ctx->config.loadout_profile_mode = value;
+    }
     else encounter_abort_unknown_config("colosseum", "int", key);
 }
 
@@ -53,6 +60,14 @@ static void col_put_float_ctx(
     else if (strcmp(key, "prayer_correct_reward") == 0)
         ctx->config.prayer_correct_reward = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
+    else if (strcmp(key, "beginner_loadout_fraction") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr, "colosseum: beginner_loadout_fraction must be in [0,1], got %.6f\n",
+                    value);
+            abort();
+        }
+        ctx->config.beginner_loadout_fraction = value;
+    }
     else encounter_abort_unknown_config("colosseum", "float", key);
 }
 
@@ -179,9 +194,21 @@ static void col_translate_human_input_ctx(
     }
 
     if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
-    if (hi->pending_food) actions[COLO_HEAD_EAT] = 1;
-    if (hi->pending_potion) actions[COLO_HEAD_POTION] = 1;
+    /* the colosseum EAT head IS the brew (L14); potion intents map onto the
+       researched 5-dim potion head; the spec key arms/disarms spec weapon A
+       (B is agent/lab-reachable; no second human key yet). */
+    if (hi->pending_food || hi->pending_potion == POTION_BREW)
+        actions[COLO_HEAD_EAT] = 1;
+    if (hi->pending_potion == POTION_RESTORE)
+        actions[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    else if (hi->pending_potion == POTION_COMBAT)
+        actions[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+    else if (hi->pending_potion == POTION_RANGED)
+        actions[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+    else if (hi->pending_potion == POTION_SURGE)
+        actions[COLO_HEAD_POTION] = COLO_POTION_SURGE;
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
+    encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
     /* Colosseum-only heads: draft pick (0=none, 1..3) + grapple body slot. */
     if (hi->pending_modifier_select > 0 &&
@@ -287,7 +314,7 @@ static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
 /* v2: P4 SolHereditState rewrite (A1-A15, B4, B7).
    v3: P5 draft rework (draft_gates_spawn replaces draft_timer), hazard-entity
    totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields. */
-#define COLO_SNAPSHOT_VERSION 3u
+#define COLO_SNAPSHOT_VERSION 4u
 
 typedef struct {
     uint32_t magic;
@@ -299,12 +326,26 @@ typedef struct {
 
 static void col_refresh_after_state_load(ColosseumState* s, ColosseumContext* ctx) {
     col_build_npc_stats();
-    encounter_compute_loadout_stats(COLO_LOADOUTS[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
         s->player.offensive_prayer, s->player.current_strength,
         FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(COLO_LOADOUTS[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
         s->player.offensive_prayer, s->player.current_ranged,
         FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
+    encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
+    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
+        uint8_t spec_loadout[NUM_GEAR_SLOTS];
+        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
+        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
+        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
+            s->player.offensive_prayer, s->player.current_strength,
+            FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
+        osrs_derive_equipment_effect_profile(spec_loadout, &s->spec_effects[k]);
+    }
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
+        osrs_derive_equipment_effect_profile(loadouts[set], &s->set_effects[set]);
     col_rebuild_player_collision_flags(s);
     col_refresh_current_obs_slots_ctx(s, ctx);
 }

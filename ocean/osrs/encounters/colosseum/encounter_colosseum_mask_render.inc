@@ -44,19 +44,52 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = (s->weapon_set != COLO_GEAR_MELEE) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != COLO_GEAR_RANGED) ? 1.0f : 0.0f;
 
-    /* HEAD_EAT (2): none always valid; eat valid iff food available + off-timer +
-       below max HP. */
+    /* HEAD_EAT (2): none always valid; brew valid iff doses + off-timer + hurt. */
     mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.food_count > 0 && s->player.food_timer == 0 &&
+    mask[offset++] = (s->player.brew_doses > 0 && s->player.potion_timer == 0 &&
                       s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
 
-    /* HEAD_POTION (2): none always valid; drink valid iff doses available + off-timer. */
+    /* HEAD_POTION (5): none, restore, super combat, ranging, surge (L15).
+       restore unmasks when a stat is drained, prayer is meaningfully low, or
+       (sanfew) venom is ticking; boost pots mirror inferno's bastion window
+       [base, base+5] so a drained player restores first; surge needs a dose,
+       no cooldown, and missing spec energy. */
     mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.restore_doses > 0 && s->player.potion_timer == 0) ? 1.0f : 0.0f;
+    {
+        int pray_missing = s->player.base_prayer - s->player.current_prayer;
+        int restore_amount = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW)
+            ? COLO_SANFEW_PRAYER : COLO_RESTORE_PRAYER;
+        int stats_drained =
+            s->player.current_attack < s->player.base_attack ||
+            s->player.current_strength < s->player.base_strength ||
+            s->player.current_defence < s->player.base_defence ||
+            s->player.current_ranged < s->player.base_ranged ||
+            s->player.current_magic < s->player.base_magic;
+        int pray_worth = pray_missing >= (restore_amount + 1) / 2;
+        int venom_cure = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW &&
+                          s->player_venom > 0);
+        mask[offset++] = (s->player.restore_doses > 0 &&
+                          s->player.potion_timer == 0 &&
+                          (stats_drained || pray_worth || venom_cure)) ? 1.0f : 0.0f;
+    }
+    mask[offset++] = (s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
+                      s->player.current_attack >= s->player.base_attack &&
+                      s->player.current_attack <= s->player.base_attack + 5) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
+                      s->player.current_ranged >= s->player.base_ranged &&
+                      s->player.current_ranged <= s->player.base_ranged + 5) ? 1.0f : 0.0f;
+    mask[offset++] = (s->surge_doses > 0 && s->player.potion_timer == 0 &&
+                      s->surge_cooldown == 0 &&
+                      s->player.special_energy < 100) ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (2): no_change always valid; toggle valid iff enough special energy. */
+    /* HEAD_SPEC (3): none always valid; arm spec k valid iff energy covers that
+       weapon's cost, or it is already armed (so the press disarms). */
     mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.special_energy >= 25) ? 1.0f : 0.0f;
+    for (int k = 1; k <= COLO_NUM_SPEC_WEAPONS; k++) {
+        uint8_t spec_item = COLO_SPEC_WEAPONS[s->active_loadout_profile][k - 1];
+        int can_arm = s->player.special_energy >= osrs_spec_cost(spec_item);
+        mask[offset++] = (can_arm || s->spec_armed_kind == k) ? 1.0f : 0.0f;
+    }
 
     /* HEAD_MODIFIER_SELECT (4): none always valid; pick option k valid ONLY while a
        draft is pending and that option slot holds a real modifier id. */
@@ -70,6 +103,17 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = 1.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
+
+    /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
+       piety/rigour valid with prayer points; augury stays masked — the kits
+       carry no magic weapon set (L1). */
+    mask[offset++] = 1.0f;
+    mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 &&
+                      s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
+    mask[offset++] = (s->player.current_prayer > 0 &&
+                      s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
+    mask[offset++] = 0.0f;
 
     if (offset != COLO_ACTION_MASK_SIZE) {
         fprintf(stderr, "colosseum mask index mismatch: wrote %d, expected %d\n",

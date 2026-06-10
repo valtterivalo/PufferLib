@@ -96,6 +96,9 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
         col_modifiers_tick(s);
+        /* L13: the surge cooldown pauses between waves (wiki), so it only
+           counts down while gameplay is live. */
+        if (s->surge_cooldown > 0) s->surge_cooldown--;
     }
 
     /* early death check before player actions: a lethal hit can't be brewed back.

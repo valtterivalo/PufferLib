@@ -337,6 +337,7 @@ typedef enum {
     POTION_BASTION,     /* inferno human mode only */
     POTION_STAMINA,     /* inferno human mode only */
     POTION_PRAYER_POT,  /* distinct from super restore; not auto-aliased */
+    POTION_SURGE,       /* colosseum speedrun kit — special attack energy */
 } PotionAction;
 
 /** Karambwan action head options. */

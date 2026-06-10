@@ -404,8 +404,40 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     osrs_item_effect_state_init(&s->player.item_effect_state);
 
     s->weapon_set = COLO_GEAR_MELEE;
-    encounter_apply_loadout(&s->player, COLO_LOADOUTS[COLO_GEAR_MELEE], GEAR_MELEE);
-    encounter_populate_inventory(&s->player, COLO_LOADOUTS, COLO_NUM_WEAPON_SETS, NULL);
+    s->active_loadout_profile = col_sample_loadout_profile(
+        ctx->config.loadout_profile_mode,
+        ctx->config.beginner_loadout_fraction,
+        &s->rng_state);
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
+    encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
+    encounter_populate_inventory(&s->player, loadouts, COLO_NUM_WEAPON_SETS, NULL);
+    {
+        /* spec weapons are weapon-slot inventory citizens (GUI switches, L2) */
+        int n = s->player.num_items_in_slot[GEAR_SLOT_WEAPON];
+        for (int k = 0; k < COLO_NUM_SPEC_WEAPONS && n < MAX_ITEMS_PER_SLOT; k++) {
+            int dup = 0;
+            for (int j = 0; j < n; j++)
+                if (s->player.inventory[GEAR_SLOT_WEAPON][j] == spec_weapons[k]) dup = 1;
+            if (!dup) s->player.inventory[GEAR_SLOT_WEAPON][n++] = spec_weapons[k];
+        }
+        s->player.num_items_in_slot[GEAR_SLOT_WEAPON] = n;
+        /* arrows live in the quiver/bow, blessings are not switches (inferno rule) */
+        for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++)
+            s->player.inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
+        s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
+    }
+
+    /* researched supplies (doses); currents live on Player, denominators here */
+    const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
+    s->full_supplies = *supplies;
+    s->player.brew_doses = supplies->brew_doses;
+    s->player.restore_doses = supplies->restore_doses;
+    s->player.combat_potion_doses = supplies->combat_doses;
+    s->player.ranged_potion_doses = supplies->ranged_doses;
+    s->surge_doses = supplies->surge_doses;
+    s->surge_cooldown = 0;
+    s->spec_armed_kind = 0;
 
     s->player.prayer = PRAYER_NONE;
     s->player.offensive_prayer = OFFENSIVE_PRAYER_NONE;
@@ -414,10 +446,23 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.special_energy = 100;
     s->player.run_energy = 10000;
 
-    encounter_compute_loadout_stats(COLO_LOADOUTS[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(COLO_LOADOUTS[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
+
+    /* spec loadout stats + per-set effect profiles: spec weapons fire off the
+       melee gear base with only the weapon slot swapped (L2). */
+    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
+        uint8_t spec_loadout[NUM_GEAR_SLOTS];
+        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
+        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
+        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
+            OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
+        osrs_derive_equipment_effect_profile(spec_loadout, &s->spec_effects[k]);
+    }
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
+        osrs_derive_equipment_effect_profile(loadouts[set], &s->set_effects[set]);
 
     s->player.x = COLO_PLAYER_START_X;
     s->player.y = COLO_PLAYER_START_Y;

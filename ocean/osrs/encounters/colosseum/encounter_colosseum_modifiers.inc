@@ -209,6 +209,11 @@ static int col_mod_doom_lethal(const ColosseumState* s) {
     30-tick cycle; reapplication while envenomed bumps the NEXT instance +2
     toward the cap instead of resetting. */
 static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
+    /* serpentine helm blocks NEW venom while worn (active set only); it does
+       not cure an existing stack (wiki). beginner camps it on the melee set. */
+    if (osrs_effect_profile_has(&s->set_effects[s->weapon_set],
+                                OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+        return;
     if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) < 2) return;
     if (!hit_success) return;
     if (s->player_venom == 0) {

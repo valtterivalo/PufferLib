@@ -93,12 +93,18 @@ static char* col_lab_alloc_json(ColosseumState* s) {
         "{\"tick\":%d,\"wave\":%d,"
         "\"player\":{\"x\":%d,\"y\":%d,\"hp\":%d,\"max_hp\":%d,\"prayer\":\"%s\","
         "\"attack_timer\":%d,\"weapon_set\":%d,\"attacked\":%d,"
-        "\"attack_target\":%d,\"attack_damage\":%d},",
+        "\"attack_target\":%d,\"attack_damage\":%d,"
+        "\"loadout_profile\":%d,\"brew_doses\":%d,\"restore_doses\":%d,"
+        "\"combat_doses\":%d,\"ranged_doses\":%d,\"surge_doses\":%d,"
+        "\"surge_cooldown\":%d,\"spec_energy\":%d,\"spec_armed\":%d},",
         s->tick, s->wave + 1,
         s->player.x, s->player.y, s->player.current_hitpoints,
         s->player.base_hitpoints, col_lab_overhead_name(s->player.prayer),
         s->player.attack_timer, s->weapon_set, s->tick_scratch.player_attacked,
-        s->player_attack_npc_idx, s->player_attack_dmg);
+        s->player_attack_npc_idx, s->player_attack_dmg,
+        s->active_loadout_profile, s->player.brew_doses, s->player.restore_doses,
+        s->player.combat_potion_doses, s->player.ranged_potion_doses, s->surge_doses,
+        s->surge_cooldown, s->player.special_energy, s->spec_armed_kind);
     col_lab_append_modifiers_json(s, &out);
     col_lab_string_append(&out, ",");
     col_lab_string_append(&out,

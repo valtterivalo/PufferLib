@@ -29,7 +29,7 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 9
+#define COLO_NUM_ACTION_HEADS 10
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC) */
 #define COLO_MAX_NPCS 24
@@ -921,6 +921,7 @@ typedef struct {
     int target_x, target_y;
     int stun_timer;
     int frozen_ticks;
+    int def_drained;       /* defence levels drained by player specs (elder maul) */
 
     /* type-specific state keyed on `type`; reach only via colo_npc_*(). */
     union {
@@ -1029,41 +1030,171 @@ typedef enum {
     COLO_NUM_WEAPON_SETS
 } ColoWeaponSet;
 
-/* melee + ranged loadout arrays (placeholder maxed gear, reused from inferno's
-   items). A14: the melee weapon is the scythe of Vitur — a real SLASH weapon —
-   so Sol's slash-5 weakness is reachable (W-STRAT names the scythe the
-   canonical Sol option; the old ITEM_KODAI_WAND was a placeholder wand). */
-static const uint8_t COLO_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
-    [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
-    [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
-    [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
-    [GEAR_SLOT_WEAPON] = ITEM_SCYTHE_OF_VITUR,
-    [GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD,
-    [GEAR_SLOT_BODY]   = ITEM_VIRTUS_ROBE_TOP,
-    [GEAR_SLOT_LEGS]   = ITEM_VIRTUS_ROBE_BOTTOM,
-    [GEAR_SLOT_HANDS]  = ITEM_CONFLICTION_GAUNTLETS,
-    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
-    [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
+/** researched loadout profiles (.colosseum-notes/research/loadout-*.md):
+    BEGINNER = wiki Budget tab tier-1 + budget example inventory (first-quiver
+    floor), SPEEDRUN = wiki High efficiency tab (sub-20 kit). Spec weapons swap
+    onto the melee gear base (L2); modeled decisions L1-L16 live in
+    loadout-implementation-spec.md. A14 still holds: every melee weapon here is
+    a real SLASH weapon (fang/scythe) so Sol's slash-5 weakness is reachable. */
+typedef enum {
+    COLO_LOADOUT_PROFILE_SPEEDRUN = 0,
+    COLO_LOADOUT_PROFILE_BEGINNER,
+    COLO_NUM_LOADOUT_PROFILES
+} ColoLoadoutProfile;
+
+typedef enum {
+    COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY = 0,
+    COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY,
+    COLO_LOADOUT_PROFILE_MODE_MIXED,
+} ColoLoadoutProfileMode;
+
+typedef enum {
+    COLO_RESTORE_SUPER_RESTORE = 0,
+    COLO_RESTORE_SANFEW,        /* L5: sanfew serum — weaker formula, cures venom */
+} ColoRestoreKind;
+
+#define COLO_NUM_SPEC_WEAPONS 2
+
+static const uint8_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_BLOOD_FURY,
+    [GEAR_SLOT_AMMO]   = ITEM_GOD_BLESSING,   /* L7: no phantom arrow str */
+    [GEAR_SLOT_WEAPON] = ITEM_OSMUMTENS_FANG,
+    [GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER,
+    [GEAR_SLOT_BODY]   = ITEM_FIGHTER_TORSO,
+    [GEAR_SLOT_LEGS]   = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET]   = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
 };
 
-static const uint8_t COLO_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
+static const uint8_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_CRYSTAL_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
+    [GEAR_SLOT_AMMO]   = ITEM_GOD_BLESSING,
+    [GEAR_SLOT_WEAPON] = ITEM_BOW_OF_FAERDHINEN,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bowfa is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_CRYSTAL_BODY,
+    [GEAR_SLOT_LEGS]   = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET]   = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
+};
+
+static const uint8_t COLO_SPEEDRUN_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_RANCOUR,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_SCYTHE_OF_VITUR,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* scythe is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_OATHPLATE_CHEST,
+    [GEAR_SLOT_LEGS]   = ITEM_OATHPLATE_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_FEROCIOUS_GLOVES,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
+};
+
+static const uint8_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
     [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
     [GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW,
-    [GEAR_SLOT_SHIELD] = ITEM_NONE,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* tbow is 2h */
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
     [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
     [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
     [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
-    [GEAR_SLOT_RING]   = ITEM_VENATOR_RING,
+    [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
-static const uint8_t* const COLO_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
-    COLO_MELEE_LOADOUT,
-    COLO_RANGED_LOADOUT,
+static const uint8_t* const COLO_SPEEDRUN_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
+    COLO_SPEEDRUN_MELEE_LOADOUT,
+    COLO_SPEEDRUN_RANGED_LOADOUT,
 };
+
+static const uint8_t* const COLO_BEGINNER_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
+    COLO_BEGINNER_MELEE_LOADOUT,
+    COLO_BEGINNER_RANGED_LOADOUT,
+};
+
+static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = COLO_SPEEDRUN_LOADOUTS,
+    [COLO_LOADOUT_PROFILE_BEGINNER] = COLO_BEGINNER_LOADOUTS,
+};
+
+/** spec weapons per profile, fired off the melee gear base (L2). Speedrun:
+    "Burning claws / Dragon claws + Elder maul / Dragon warhammer" — the
+    resolver-implemented members are claws + elder maul (L16). Beginner: SGS +
+    dragon claws (tier-1 in every first-quiver tab). */
+static const uint8_t COLO_SPEC_WEAPONS[COLO_NUM_LOADOUT_PROFILES][COLO_NUM_SPEC_WEAPONS] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = { ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL },
+    [COLO_LOADOUT_PROFILE_BEGINNER] = { ITEM_SGS, ITEM_DRAGON_CLAWS },
+};
+
+/** full starting supplies per profile, in DOSES (4 per potion). Beginner = the
+    wiki budget example (6 brews, 8 super restores, 1+1 super combat, 1+1
+    ranging — divine variants pooled, L4). Speedrun = High efficiency (1 brew,
+    7 sanfews, 1 divine super combat, 1 divine ranging, 1 surge potion).
+    No solid food and no staminas exist in ANY wiki colosseum inventory (L8/L14). */
+typedef struct {
+    int brew_doses;
+    int restore_doses;
+    int combat_doses;
+    int ranged_doses;
+    int surge_doses;
+    ColoRestoreKind restore_kind;
+} ColoSupplyLoadout;
+
+static const ColoSupplyLoadout COLO_SUPPLY_LOADOUTS[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
+        .brew_doses = 4, .restore_doses = 28, .combat_doses = 4,
+        .ranged_doses = 4, .surge_doses = 4, .restore_kind = COLO_RESTORE_SANFEW,
+    },
+    [COLO_LOADOUT_PROFILE_BEGINNER] = {
+        .brew_doses = 24, .restore_doses = 32, .combat_doses = 8,
+        .ranged_doses = 8, .surge_doses = 0, .restore_kind = COLO_RESTORE_SUPER_RESTORE,
+    },
+};
+
+static const uint8_t* const* col_loadouts_for_profile(int profile) {
+    if (profile < 0 || profile >= COLO_NUM_LOADOUT_PROFILES) {
+        fprintf(stderr, "colosseum: invalid loadout profile %d\n", profile);
+        abort();
+    }
+    return COLO_LOADOUT_PROFILES[profile];
+}
+
+/** sample the episode's loadout profile from the config mode (L9). */
+static ColoLoadoutProfile col_sample_loadout_profile(
+    int mode, float beginner_fraction, uint32_t* rng_state
+) {
+    if (mode == COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY)
+        return COLO_LOADOUT_PROFILE_SPEEDRUN;
+    if (mode == COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY)
+        return COLO_LOADOUT_PROFILE_BEGINNER;
+    if (mode != COLO_LOADOUT_PROFILE_MODE_MIXED) {
+        fprintf(stderr, "colosseum: invalid loadout_profile_mode %d\n", mode);
+        abort();
+    }
+    if (!(beginner_fraction >= 0.0f && beginner_fraction <= 1.0f)) {
+        fprintf(stderr, "colosseum: beginner_loadout_fraction must be in [0,1], got %.6f\n",
+                beginner_fraction);
+        abort();
+    }
+    return encounter_rand_float(rng_state) < beginner_fraction
+        ? COLO_LOADOUT_PROFILE_BEGINNER
+        : COLO_LOADOUT_PROFILE_SPEEDRUN;
+}
+
+/* L13: surge potion — +25 spec energy per dose, one dose per 500 ticks (300s);
+   the cooldown is frozen during wave gaps (wiki: "timer pauses between waves
+   in the Fortis Colosseum"). */
+#define COLO_SURGE_RESTORE_AMOUNT 25
+#define COLO_SURGE_COOLDOWN_TICKS 500
 
 
 /** Colosseum env-knob struct. Sparse-leaning reward terms; the lead tunes these.
@@ -1080,6 +1211,8 @@ typedef struct {
     float death_penalty_coeff;       /* magnitude of the death reward when enabled */
     int terminal_penalty_enabled;
     int curriculum_agent;
+    int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
+    float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
 } ColConfig;
 
 typedef struct {
@@ -1174,6 +1307,16 @@ typedef struct {
     OsrsInteraction interaction;
     ColoWeaponSet weapon_set;
     EncounterLoadoutStats loadout_stats[COLO_NUM_WEAPON_SETS];
+
+    /* loadout profile + inventory state (researched setups, L1-L16) */
+    ColoLoadoutProfile active_loadout_profile;
+    ColoSupplyLoadout full_supplies;   /* obs normalization denominators */
+    int surge_doses;
+    int surge_cooldown;                /* ticks until the next surge dose (L13) */
+    int spec_armed_kind;               /* 0 = none, 1 = spec A, 2 = spec B */
+    EncounterLoadoutStats spec_stats[COLO_NUM_SPEC_WEAPONS];
+    OsrsEquipmentEffectProfile set_effects[COLO_NUM_WEAPON_SETS];
+    OsrsEquipmentEffectProfile spec_effects[COLO_NUM_SPEC_WEAPONS];
 
     /* per-tick player attack event for the renderer */
     int player_attack_npc_idx;
