@@ -58,7 +58,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
         int restore_amount = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW)
-            ? COLO_SANFEW_PRAYER : COLO_RESTORE_PRAYER;
+            ? osrs_sanfew_restore_amount(s->player.base_prayer)
+            : osrs_super_restore_amount(s->player.base_prayer);
         int stats_drained =
             s->player.current_attack < s->player.base_attack ||
             s->player.current_strength < s->player.base_strength ||

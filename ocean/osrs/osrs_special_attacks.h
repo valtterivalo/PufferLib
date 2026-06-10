@@ -219,6 +219,8 @@ static inline SpecResult osrs_resolve_spec(
     /* SGS: 2.0x accuracy, 1.1x str (godsword), heals floor(dmg/2) HP,
        restores floor(dmg/4) prayer.
        ref: osrs-dps-calc [2,1] acc, [11,10] str */
+    /* SGS: 2x accuracy, 1.1x str; a LANDED hit heals 50% of damage (min 10)
+       and restores 25% as prayer (min 5). ref: OSRS wiki Saradomin godsword. */
     case ITEM_SGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -227,8 +229,12 @@ static inline SpecResult osrs_resolve_spec(
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
         r.total_damage = r.damage[0];
-        r.heal = r.total_damage / 2;
-        r.prayer_restore = r.total_damage / 4;
+        if (r.total_damage > 0) {
+            r.heal = r.total_damage / 2;
+            if (r.heal < 10) r.heal = 10;
+            r.prayer_restore = r.total_damage / 4;
+            if (r.prayer_restore < 5) r.prayer_restore = 5;
+        }
         break;
     }
 

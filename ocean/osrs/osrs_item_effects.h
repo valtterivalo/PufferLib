@@ -97,6 +97,13 @@ static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint8_t ring_item
     return OSRS_SPEC_REGEN_MODE_NORMAL;
 }
 
+/** scythe of vitur splat count by target size: 3 vs 3x3+, 2 vs 2x2, 1 vs 1x1;
+    splat k caps at max_hit >> k, each rolled independently (the caller rolls).
+    ref: OSRS wiki Scythe of vitur. */
+static inline int osrs_scythe_splats_for_target_size(int target_size) {
+    return target_size >= 3 ? 3 : target_size == 2 ? 2 : 1;
+}
+
 static inline uint8_t osrs_crystal_armour_points(uint8_t item_index) {
     switch (item_index) {
         case ITEM_CRYSTAL_HELM: return 1;

@@ -174,10 +174,10 @@ static int inf_lookup_player_attack_target(
     return 1;
 }
 
-/* sara brew heal at base HP 99: floor(99*0.15)+2 = 16. ref: osrs_consumables.h osrs_brew_effect */
-#define INF_BREW_HEAL       (99 * 15 / 100 + 2)
-/* super restore at base prayer 99: 8 + floor(99/4) = 32. ref: osrs_consumables.h osrs_drink_potion */
-#define INF_RESTORE_AMOUNT  (8 + 99 / 4)
+/* sara brew heal / super restore amounts from the shared formula home, at the
+   inferno player's fixed base 99 (16 and 32). */
+#define INF_BREW_HEAL       osrs_brew_heal_amount(99)
+#define INF_RESTORE_AMOUNT  osrs_super_restore_amount(99)
 #define INF_NPC_DEATH_LINGER_TICKS 3
 
 /* apply NPC death: blob split, mager resurrection store, jad healer cleanup.

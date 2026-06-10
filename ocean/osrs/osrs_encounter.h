@@ -1978,39 +1978,73 @@ static inline void encounter_brew_drain_stats(Player* p) {
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 
-/** super restore stat recovery. restores all combat stats toward base level.
-    each dose restores floor(base * 0.25) + 8 per stat. caps at base level.
-    ref: OSRS wiki Super restore. */
-static inline void encounter_restore_stats(Player* p) {
-    int restore = 8 + p->base_attack / 4;  /* same formula for all stats at 99 base */
+/** restore every combat stat toward base by amount(base), capped at base.
+    the shared shape under super restore and sanfew serum. */
+static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
+    int restore = amount(p->base_attack);
     p->current_attack += restore;
     if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
-    restore = 8 + p->base_strength / 4;
+    restore = amount(p->base_strength);
     p->current_strength += restore;
     if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;
-    restore = 8 + p->base_defence / 4;
+    restore = amount(p->base_defence);
     p->current_defence += restore;
     if (p->current_defence > p->base_defence) p->current_defence = p->base_defence;
-    restore = 8 + p->base_ranged / 4;
+    restore = amount(p->base_ranged);
     p->current_ranged += restore;
     if (p->current_ranged > p->base_ranged) p->current_ranged = p->base_ranged;
-    restore = 8 + p->base_magic / 4;
+    restore = amount(p->base_magic);
     p->current_magic += restore;
     if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
+}
+
+/** super restore stat recovery: floor(base * 0.25) + 8 per stat, capped at base.
+    ref: OSRS wiki Super restore. */
+static inline void encounter_restore_stats(Player* p) {
+    encounter_apply_stat_restore(p, osrs_super_restore_amount);
+}
+
+/** sanfew serum stat recovery: floor(base * 0.30) + 4 per stat, capped at base
+    (out-restores super restore above level 80). the drink also cures venom —
+    the caller owns venom state. ref: OSRS wiki Sanfew serum. */
+static inline void encounter_sanfew_restore_stats(Player* p) {
+    encounter_apply_stat_restore(p, osrs_sanfew_restore_amount);
 }
 
 /** bastion potion boost. boosts ranged by floor(base * 0.10) + 4. can exceed base.
     also boosts defence by floor(base * 0.15) + 5. can exceed base.
     ref: OSRS wiki Bastion potion. */
 static inline void encounter_bastion_boost(Player* p) {
-    int rng_boost = 4 + p->base_ranged / 10;
-    int def_boost = 5 + p->base_defence * 15 / 100;
+    int rng_boost = osrs_ranging_boost_amount(p->base_ranged);
+    int def_boost = osrs_super_combat_boost_amount(p->base_defence);
     p->current_ranged += rng_boost;
     int rng_cap = p->base_ranged + rng_boost;
     if (p->current_ranged > rng_cap) p->current_ranged = rng_cap;
     p->current_defence += def_boost;
     int def_cap = p->base_defence + def_boost;
     if (p->current_defence > def_cap) p->current_defence = def_cap;
+}
+
+/** super combat boost: att/str/def each +floor(base * 0.15) + 5, capped at
+    base + boost. ref: OSRS wiki Super combat potion. */
+static inline void encounter_super_combat_boost(Player* p) {
+    int boost = osrs_super_combat_boost_amount(p->base_attack);
+    p->current_attack += boost;
+    if (p->current_attack > p->base_attack + boost) p->current_attack = p->base_attack + boost;
+    boost = osrs_super_combat_boost_amount(p->base_strength);
+    p->current_strength += boost;
+    if (p->current_strength > p->base_strength + boost) p->current_strength = p->base_strength + boost;
+    boost = osrs_super_combat_boost_amount(p->base_defence);
+    p->current_defence += boost;
+    if (p->current_defence > p->base_defence + boost) p->current_defence = p->base_defence + boost;
+}
+
+/** ranging potion boost: ranged +floor(base * 0.10) + 4, capped at base + boost.
+    ref: OSRS wiki Ranging potion. */
+static inline void encounter_ranging_boost(Player* p) {
+    int boost = osrs_ranging_boost_amount(p->base_ranged);
+    p->current_ranged += boost;
+    if (p->current_ranged > p->base_ranged + boost) p->current_ranged = p->base_ranged + boost;
 }
 
 /** recompute max hit for all loadouts after a stat change or prayer change.

@@ -31,10 +31,6 @@
 #define COLO_POTION_RANGING 3
 #define COLO_POTION_SURGE   4
 
-/* consumable amounts at base 99 (shared formulas; L4/L5) */
-#define COLO_BREW_HEAL          (99 * 15 / 100 + 2)
-#define COLO_RESTORE_PRAYER     (8 + 99 / 4)
-#define COLO_SANFEW_PRAYER      (4 + 99 * 3 / 10)
 #define COLO_MODIFIER_SELECT_DIM (1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 4 */
 /** grapple-parry head: index 0 = no click, index k = click grapple slot (k-1).
     A12: the domain is the 5-slot ColoGrappleSlot callout set, matching
@@ -66,6 +62,13 @@ static int col_action_head_mask_offset(int head) {
 }
 
 
+/** L12: recompute every loadout's effective levels + max hits (weapon sets and
+    spec weapons) after any stat-moving drink or offensive prayer change. */
+static void col_recompute_all_loadout_stats(ColosseumState* s) {
+    encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
+    encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
+}
+
 /** apply prayer actions + drain, before movement and attack. an offensive
     prayer change recomputes every loadout's prayer multipliers (L12). */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
@@ -74,10 +77,8 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
         s->player.prayer_just_activated = 1;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     encounter_apply_offensive_action(&s->player.offensive_prayer, actions[COLO_HEAD_OFFENSIVE]);
-    if (s->player.offensive_prayer != prev_offensive) {
-        encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-        encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
-    }
+    if (s->player.offensive_prayer != prev_offensive)
+        col_recompute_all_loadout_stats(s);
     encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
 }
 
@@ -105,50 +106,6 @@ static int col_tile_walkable(void* ctx, int x, int y) {
 static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     ColoWalkCtx* wc = (ColoWalkCtx*)ctx;
     return col_player_walkable(wc->s, abs_x, abs_y) ? 0 : 1;
-}
-
-/** L5: sanfew serum stat recovery — 4 + floor(30% base) per combat stat,
-    capped at base. weaker per-stat than super restore (8 + 25%) but cures venom.
-    ref: OSRS wiki Sanfew serum. */
-static void col_sanfew_restore_stats(Player* p) {
-    int restore = 4 + p->base_attack * 30 / 100;
-    p->current_attack += restore;
-    if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
-    restore = 4 + p->base_strength * 30 / 100;
-    p->current_strength += restore;
-    if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;
-    restore = 4 + p->base_defence * 30 / 100;
-    p->current_defence += restore;
-    if (p->current_defence > p->base_defence) p->current_defence = p->base_defence;
-    restore = 4 + p->base_ranged * 30 / 100;
-    p->current_ranged += restore;
-    if (p->current_ranged > p->base_ranged) p->current_ranged = p->base_ranged;
-    restore = 4 + p->base_magic * 30 / 100;
-    p->current_magic += restore;
-    if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
-}
-
-/** super combat boost: att/str/def each +5 + floor(15% base), cap base + boost.
-    L4: divine variants share this (re-boost behavior not modeled).
-    ref: OSRS wiki Super combat potion. */
-static void col_super_combat_boost(Player* p) {
-    int boost = 5 + p->base_attack * 15 / 100;
-    p->current_attack += boost;
-    if (p->current_attack > p->base_attack + boost) p->current_attack = p->base_attack + boost;
-    boost = 5 + p->base_strength * 15 / 100;
-    p->current_strength += boost;
-    if (p->current_strength > p->base_strength + boost) p->current_strength = p->base_strength + boost;
-    boost = 5 + p->base_defence * 15 / 100;
-    p->current_defence += boost;
-    if (p->current_defence > p->base_defence + boost) p->current_defence = p->base_defence + boost;
-}
-
-/** ranging potion boost: ranged +4 + floor(10% base), cap base + boost (L4).
-    ref: OSRS wiki Ranging potion. */
-static void col_ranging_boost(Player* p) {
-    int boost = 4 + p->base_ranged / 10;
-    p->current_ranged += boost;
-    if (p->current_ranged > p->base_ranged + boost) p->current_ranged = p->base_ranged + boost;
 }
 
 /** the player's effective attack reach, after Myopia's range reduction. an
@@ -226,8 +183,8 @@ static int col_melee_def_bonus(const ColoNpcStats* ns, MeleeStyle ms) {
 /** L2/L3: fire the armed special attack with the spec weapon's loadout stats
     (melee gear base, weapon slot swapped). Queues one pending hit per splat
     (claws cascade = 4), spends energy via the shared resolver cost, applies
-    the SGS heal/prayer with the wiki minimums (10/5) and the elder maul 35%%
-    defence drain, and runs the post-attack item effects (blood fury heal). */
+    the resolver's SGS heal/prayer restore and the elder maul 35%% defence
+    drain, and runs the post-attack item effects (blood fury heal). */
 static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
@@ -258,13 +215,13 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
         npc->def_drained += r.def_drain;
         if (npc->def_drained > ns->def_level) npc->def_drained = ns->def_level;
     }
-    if (item == ITEM_SGS && total > 0) {
-        int heal = r.heal > 10 ? r.heal : 10;
-        int pray = r.prayer_restore > 5 ? r.prayer_restore : 5;
-        s->player.current_hitpoints += heal;
+    if (r.heal > 0) {
+        s->player.current_hitpoints += r.heal;
         if (s->player.current_hitpoints > s->player.base_hitpoints)
             s->player.current_hitpoints = s->player.base_hitpoints;
-        s->player.current_prayer += pray;
+    }
+    if (r.prayer_restore > 0) {
+        s->player.current_prayer += r.prayer_restore;
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
     }
@@ -318,10 +275,8 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
        the speedrun weapon into 5x5 Sol while the fang wins on 1x1 warbanders
        (wiki Budget footnote j). ref: OSRS wiki Scythe of vitur. */
     int num_splats = 1;
-    if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type)) {
-        int npc_size = col_npc_effective_size(npc);
-        num_splats = npc_size >= 3 ? 3 : npc_size == 2 ? 2 : 1;
-    }
+    if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type))
+        num_splats = osrs_scythe_splats_for_target_size(col_npc_effective_size(npc));
 
     int def_bonus;
     if (ls->style == ATTACK_STYLE_MAGIC) {
@@ -399,50 +354,47 @@ static void col_tick_player_ctx(
     int eat_act = actions[COLO_HEAD_EAT];
     if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
-        s->player.current_hitpoints += COLO_BREW_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints + COLO_BREW_HEAL)
-            s->player.current_hitpoints = s->player.base_hitpoints + COLO_BREW_HEAL;
+        int brew_heal = osrs_brew_heal_amount(s->player.base_hitpoints);
+        s->player.current_hitpoints += brew_heal;
+        if (s->player.current_hitpoints > s->player.base_hitpoints + brew_heal)
+            s->player.current_hitpoints = s->player.base_hitpoints + brew_heal;
         s->player.brew_doses--;
         s->player.potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         encounter_brew_drain_stats(&s->player);
-        encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-        encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
+        col_recompute_all_loadout_stats(s);
     }
 
     int pot_act = actions[COLO_HEAD_POTION];
     if (pot_act == COLO_POTION_RESTORE &&
             s->player.restore_doses > 0 && s->player.potion_timer == 0) {
         if (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW) {
-            s->player.current_prayer += COLO_SANFEW_PRAYER;
-            col_sanfew_restore_stats(&s->player);
+            s->player.current_prayer += osrs_sanfew_restore_amount(s->player.base_prayer);
+            encounter_sanfew_restore_stats(&s->player);
             /* L5: the sanfew drink clears Mantimayhem venom */
             s->player_venom = 0;
             s->player_venom_timer = 0;
         } else {
-            s->player.current_prayer += COLO_RESTORE_PRAYER;
+            s->player.current_prayer += osrs_super_restore_amount(s->player.base_prayer);
             encounter_restore_stats(&s->player);
         }
         if (s->player.current_prayer > s->player.base_prayer)
             s->player.current_prayer = s->player.base_prayer;
         s->player.restore_doses--;
         s->player.potion_timer = 3;
-        encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-        encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
+        col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_COMBAT &&
             s->player.combat_potion_doses > 0 && s->player.potion_timer == 0) {
-        col_super_combat_boost(&s->player);
+        encounter_super_combat_boost(&s->player);
         s->player.combat_potion_doses--;
         s->player.potion_timer = 3;
-        encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-        encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
+        col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_RANGING &&
             s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0) {
-        col_ranging_boost(&s->player);
+        encounter_ranging_boost(&s->player);
         s->player.ranged_potion_doses--;
         s->player.potion_timer = 3;
-        encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-        encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
+        col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_SURGE &&
             s->surge_doses > 0 && s->player.potion_timer == 0 &&
             s->surge_cooldown == 0 && s->player.special_energy < 100) {

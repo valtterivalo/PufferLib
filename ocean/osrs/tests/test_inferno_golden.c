@@ -14,6 +14,11 @@
  *
  * The law under test: refactor => identical trajectory.
  *
+ * BASELINE is branch-local: re-seeded 2026-06-10 on valtteri/osrs-colosseum
+ * after the shared consumable/spec dedup (digests verified bit-identical
+ * across that refactor). The previous baseline predated this branch's shared
+ * items/effects work and no longer corresponded to any blessed state.
+ *
  * BUILD:
  *   cc -std=c11 -O2 -I. -o /tmp/test_inferno_golden \
  *       ocean/osrs/tests/test_inferno_golden.c -lm
@@ -140,21 +145,21 @@ static const GoldenConfig CONFIGS[] = {
 /* baseline digests captured on the pre-refactor commit. regenerate with
    --print only when an intentional behavior change is made, and explain why. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xedd0891d9c989453ULL,  /* wave1_a */
-    0xebf9eeab026a1a6eULL,  /* wave1_b */
-    0xaa3a8c231b1cdf05ULL,  /* wave1_c */
-    0x475ff3d00ab8f5e9ULL,  /* meleer_a */
-    0x2b1efb7280b314b1ULL,  /* meleer_b */
-    0x0460fa2a3bbf748aULL,  /* ranger_a */
-    0x7a77b4b9d6d3546eULL,  /* ranger_b */
-    0x1c33f72182f375a1ULL,  /* mager_a */
-    0x49b891bf5154ab31ULL,  /* mager_b */
-    0x6e163506a4a3aabcULL,  /* jad_a */
-    0xa0fa046c872a6580ULL,  /* jad_b */
-    0x99c910e532cb08f4ULL,  /* jad_c */
-    0x896e9b459e42ec5aULL,  /* zuk_a */
-    0xcd80891d974a5643ULL,  /* zuk_b */
-    0x907aed0bd291e1e8ULL,  /* zuk_c */
+    0x8b5b754c26c82822ULL,  /* wave1_a */
+    0xcee535f8947e69c7ULL,  /* wave1_b */
+    0x2f037285fba496e0ULL,  /* wave1_c */
+    0x470e44514c01ef1cULL,  /* meleer_a */
+    0x0d63b202e904ea0dULL,  /* meleer_b */
+    0x75ad082f11f8febaULL,  /* ranger_a */
+    0x799ba5f34647a85fULL,  /* ranger_b */
+    0x362a09d876d6070dULL,  /* mager_a */
+    0x437655bfabd32761ULL,  /* mager_b */
+    0xec1e81fe834cff6cULL,  /* jad_a */
+    0x172ec48cbdd57890ULL,  /* jad_b */
+    0x6e319d1be3a2ce54ULL,  /* jad_c */
+    0x28a344f12f028e3aULL,  /* zuk_a */
+    0xfc353ed16ea0bec3ULL,  /* zuk_b */
+    0x66ebf7e402cb3a68ULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {

@@ -1,76 +1,54 @@
 # OSRS test suite
 
-standalone C test binaries that verify combat math, item interactions, and special
-attacks against the osrs-dps-calc TypeScript reference. no test framework — each file
-is a self-contained binary with its own `main()`.
+standalone C test binaries for the shared OSRS layers and the encounter envs.
+no test framework — each file is a self-contained binary with its own `main()`.
+exit code 0 = all passed.
 
 ## building and running
 
 all commands run from the repo root (`pufferlib-metal/`):
 
 ```bash
-# build + run all tests (copy-paste block):
-cc -std=c11 -O0 -g -I. -o test_combat_math ocean/osrs/tests/test_combat_math.c -lm && ./test_combat_math
-cc -std=c11 -O0 -g -I. -o test_item_effects ocean/osrs/tests/test_item_effects.c -lm && ./test_item_effects
-cc -std=c11 -O0 -g -I. -o test_special_attacks ocean/osrs/tests/test_special_attacks.c -lm && ./test_special_attacks
-cc -std=c11 -O0 -g -I. -o test_player_combat ocean/osrs/tests/test_player_combat.c -lm && ./test_player_combat
-cc -std=c11 -O0 -g -I. -o test_consumables ocean/osrs/tests/test_consumables.c -lm && ./test_consumables
-cc -std=c11 -O0 -g -I. -o test_bolt_procs ocean/osrs/tests/test_bolt_procs.c -lm && ./test_bolt_procs
-cc -std=c11 -O0 -g -I. -o test_damage ocean/osrs/tests/test_damage.c -lm && ./test_damage
-cc -std=c11 -O0 -g -I. -o test_inventory ocean/osrs/tests/test_inventory.c -lm && ./test_inventory
-cc -std=c11 -O0 -g -I. -o test_interaction ocean/osrs/tests/test_interaction.c -lm && ./test_interaction
+cc -std=c11 -O0 -g -I. -o /tmp/t ocean/osrs/tests/<file>.c -lm && /tmp/t
 ```
 
-each binary prints `=== results: N/N passed ===` on the last line. exit code 0 = all passed.
+the inferno golden test wants `-O2` (2000-tick trajectories x 15 configs).
 
 ## test files
 
-| file | tests | what it covers |
-|---|---|---|
-| `test_combat_math.c` | 155 | NPC combat formulas (hit chance, tbow scaling, barrage AoE, NPC max hits, NPC attack rolls), player defence rolls vs NPCs, loadout stat computation from ITEM_DATABASE, prayer drain |
-| `test_item_effects.c` | 164 | tbow accuracy/damage edge cases and monotonicity, PvP/PvE prayer reduction, NPC defence rolls for specific monsters, player attack rolls with full gear loadouts, two-handed weapon logic, end-to-end hit chance, defence bonus selection by style |
-| `test_special_attacks.c` | 222+ | spec weapon costs, accuracy/strength multipliers, dragon claws cascade, DWH/BGS defence drain, dark bow double-hit clamping, morrigan's bleed, voidwaker magic hit, VLS reduced defence, volatile staff, godsword variants, blowpipe spec |
-| `test_player_combat.c` | ~30+ | player effective level (all prayers + style bonuses), player attack roll, player melee/ranged/magic max hit, prayer damage reduction (PvE vs PvP), osmumten's fang double accuracy roll, equipment bonus summation |
-| `test_consumables.c` | ~25+ | food healing amounts, eat timing/clamping, anglerfish overheal, potion restore formulas, antivenom immunity, saradomin brew effects, combo eat timing |
-| `test_bolt_procs.c` | 131 | diamond/opal/ruby bolt proc chances, effect formulas, ZCB guaranteed procs, miss behavior, caps, edge cases |
-| `test_damage.c` | 66 | damage pipeline (prayer reduction, vengeance reflect, recoil, smite drain), full PvP/PvE pipeline, edge cases, osrs_has_recoil_ring helper |
-| `test_inventory.c` | 148 | inventory add/remove/find, equip from inventory, equip swap, two-handed weapon logic, unequip, gear slot mapping |
-| `test_interaction.c` | — | entity interaction system (attack/follow/spec toggle), shared across encounters |
-| `test_collision.c` | — | collision map loading, tile walkability, BFS pathfinding (moved from osrs/ root) |
+| file | what it covers |
+|---|---|
+| `test_osrs_combat_rolls.c` | shared hit-chance fractions and roll-ratio RNG consumption (assert-based, silent on pass) |
+| `test_osrs_pending_hit_queue.c` | shared pending-hit queue contract |
+| `test_osrs_pvp_pending_hits.c` | PvP pending-hit semantics on the shared queue |
+| `test_osrs_special_attacks.c` | shared spec resolver (costs, SGS minimums, claws cascade bounds, def drains), item-effect laws (identity, tbow monotonicity, crystal scaling, blood fury proc rate, scythe splat rule), consumable formula home + Player-application laws (restore convergence, boost caps) |
+| `test_inferno_attack_styles.c` | inferno NPC attack-style fidelity battery |
+| `test_inferno_lab.c` | inferno lab command grammar + snapshot/restore (also the cross-encounter shared-plumbing regression guard) |
+| `test_inferno_golden.c` | inferno characterization digests: refactor => bit-identical trajectory. BASELINE is branch-local (re-seeded 2026-06-10 on valtteri/osrs-colosseum); re-seed with `--print` after any INTENDED behavior change |
+| `test_inferno_replay_best.c` | inferno replay regression on a recorded best episode |
+| `test_colosseum_modifiers.c` | colosseum battery: obs/mask fuzz, modifiers/drafts, arena geometry, warband, NPC mechanics, Sol Heredit, researched loadout profiles + consumables + specs |
+| `bench_inferno_forecast.c` | inferno step-out forecast benchmark (not a test) |
+| `inferno_lab_cli.c` | interactive lab harness (not a test) |
+
+## layering rule
+
+shared-layer behavior (osrs_combat.h, osrs_consumables.h, osrs_special_attacks.h,
+osrs_item_effects.h, osrs_encounter.h helpers) is tested ONCE in the `test_osrs_*`
+files, property-style where possible. encounter test files only cover behavior the
+encounter itself owns. when an encounter test wants to assert a shared formula,
+the assertion belongs in the shared file instead.
+
+## when to run
+
+- after any change to the shared headers above: the full battery
+- after any change to items (`osrs_items.h`, `osrs_items_generated.h`) or monsters
+- after any encounter combat change: that encounter's tests + `test_inferno_golden`
+  (drift guard) + `test_inferno_lab` (shared plumbing)
+- before committing changes to any of the above
 
 ## reference data
 
 tests are cross-referenced against:
 
-- `.refs/osrs-dps-calc/src/lib/` — authoritative TypeScript reference for all player combat formulas
-- `.refs/osrs-dps-calc/src/tests/` — existing reference test values
-- `.refs/osrs-sdk/src/weapons/` — special attack implementations
-- `.refs/InfernoTrainer/src/` — NPC behavior, hit delays
-- OSRS wiki — high-level formula descriptions
-
-## adding tests
-
-each test file uses the same harness pattern:
-
-```c
-static int total_tests = 0;
-static int passed_tests = 0;
-
-#define ASSERT_EQ(a, b, msg) do { \
-    total_tests++; \
-    if ((a) != (b)) { \
-        printf("FAIL: %s: got %d, expected %d\n", msg, (int)(a), (int)(b)); \
-    } else { passed_tests++; } \
-} while(0)
-```
-
-group related tests in `static void test_*()` functions, call them from `main()`,
-print the section name with `printf("--- section name ---\n")`.
-
-## when to run
-
-- after any change to combat math (`osrs_combat.h`)
-- after any change to items (`osrs_items.h`, `osrs_items_generated.h`, codegen)
-- after any change to monsters (`osrs_monsters_generated.h`, codegen)
-- after any change to encounter combat logic
-- before committing changes to any of the above
+- `.refs/` reference repos where checked out (osrs-dps-calc, osrs-sdk, InfernoTrainer)
+- OSRS wiki formula descriptions (cited in the code under test)

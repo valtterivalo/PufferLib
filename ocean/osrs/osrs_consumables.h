@@ -39,6 +39,7 @@ typedef enum {
     POTION_SUPER_COMBAT,
     POTION_IMBUED_HEART,
     POTION_SATURATED_HEART,
+    POTION_SANFEW,
     NUM_POTION_TYPES
 } PotionType;
 
@@ -90,6 +91,29 @@ static inline int osrs_saturated_heart_magic_boost(int base_magic) {
     return 4 + base_magic / 10;
 }
 
+/* per-stat amount formulas (wiki-sourced). THE single formula home: the
+   encounter Player-application helpers and the PvP drink layer both build on
+   these. all take the relevant BASE level. */
+static inline int osrs_super_restore_amount(int level) {
+    return 8 + level / 4;            /* ref: OSRS wiki Super restore */
+}
+
+static inline int osrs_sanfew_restore_amount(int level) {
+    return 4 + level * 30 / 100;     /* ref: OSRS wiki Sanfew serum */
+}
+
+static inline int osrs_super_combat_boost_amount(int level) {
+    return 5 + level * 15 / 100;     /* ref: OSRS wiki Super combat potion */
+}
+
+static inline int osrs_ranging_boost_amount(int level) {
+    return 4 + level / 10;           /* ref: OSRS wiki Ranging potion */
+}
+
+static inline int osrs_brew_heal_amount(int base_hp) {
+    return base_hp * 15 / 100 + 2;   /* ref: OSRS wiki Saradomin brew */
+}
+
 /* eat food: compute result. caller applies hp change and timer.
    anglerfish can overheal (eat at full HP). all others require HP < max.
    heal is clamped so HP doesn't exceed max (except anglerfish overheal). */
@@ -136,7 +160,12 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
         case POTION_SUPER_RESTORE:
             if (current_prayer >= prayer_level) return r;
             r.consumed = 1;
-            r.prayer_restored = 8 + prayer_level / 4;
+            r.prayer_restored = osrs_super_restore_amount(prayer_level);
+            break;
+        case POTION_SANFEW:
+            r.consumed = 1;
+            r.prayer_restored = osrs_sanfew_restore_amount(prayer_level);
+            r.venom_cured = 1;
             break;
         case POTION_ANTIVENOM_PLUS:
             r.consumed = 1;
@@ -145,11 +174,11 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
             break;
         case POTION_RANGING:
             r.consumed = 1;
-            r.level_boost = 4 + prayer_level / 10;  /* +4 + 10% of level. ref: osrs wiki "ranging potion" */
+            r.level_boost = osrs_ranging_boost_amount(prayer_level);
             break;
         case POTION_SUPER_COMBAT:
             r.consumed = 1;
-            r.level_boost = 5 + prayer_level * 15 / 100;  /* +5 + 15% of level */
+            r.level_boost = osrs_super_combat_boost_amount(prayer_level);
             break;
         case POTION_IMBUED_HEART:
             r.consumed = 1;
@@ -172,7 +201,7 @@ static inline BrewResult osrs_brew_effect(int base_hp, int base_att,
                                            int base_str, int base_range,
                                            int base_magic) {
     BrewResult r;
-    r.hp_healed = base_hp * 15 / 100 + 2;  /* floor(base*0.15) + 2 */
+    r.hp_healed = osrs_brew_heal_amount(base_hp);
     r.def_boost = base_hp * 20 / 100 + 2;  /* floor(base*0.20) + 2 (uses HP base for def) */
     r.att_drain = base_att * 10 / 100 + 2;
     r.str_drain = base_str * 10 / 100 + 2;
