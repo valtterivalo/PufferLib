@@ -84,7 +84,7 @@ typedef struct HumanInput {
     int pending_target_idx;                /* NPC entity index to attack, -1 = none */
     int pending_gear;                      /* gear switch action value, 0 = none */
     int pending_modifier_select;           /* Colosseum draft: 0=none, 1..N = pick option N-1 */
-    int pending_grapple_slot;              /* Colosseum Sol grapple: 0=none, 1..NUM_GEAR_SLOTS = click slot N-1 */
+    int pending_grapple_slot;              /* Colosseum Sol grapple: 0=none, 1..5 = the A12 callout slots */
 
     CursorMode cursor_mode;
     int selected_item_inventory_slot;       /* inventory slot selected with Use. -1 = none */

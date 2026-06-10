@@ -22,7 +22,15 @@
  *      <75%/7-tile/centre-LoS gates + melee priority (A13+D9), the manticore
  *      10-tick barrage period (A19), travel-time-0 orbs with fire-tick flicks
  *      (D12), the wave-9 pair pattern-copy (B10), and the gateless javelin
- *      skyfall (D7).
+ *      skyfall (D7);
+ *   6. P4 Sol Heredit overhaul: the A2 adjacency gate + kiting delay + per-
+ *      attack delays, A1 pool selection invariants (forced spears, 2-normal
+ *      special cooldown, variant alternation), the A20+B4 parry schedule with
+ *      the early-prayer punish + per-hit deactivation, the A12+B7 grapple
+ *      (5-slot domain, perfect-parry guaranteed max consumed by the player
+ *      attack), A3 shield safe rings + spear lines, A9/A10 accumulating
+ *      crystals with 25-35t cooldowns + 60-75 spheres, and A11 beams becoming
+ *      permanent 5-9/tick molten pools.
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_modifiers \
@@ -1425,6 +1433,589 @@ static void test_javelin_skyfall_no_defence_gate(void) {
         s.player.current_hitpoints == 99 && jv->skyfall_pending == 0);
 }
 
+/* ---- 6. P4 Sol Heredit overhaul --------------------------------------------- */
+
+/* start a clean wave-12 fight via the step loop, run out the ready delay, and
+   return Sol's NPC slot. */
+static int sol_setup(ColosseumState* s, ColosseumContext* ctx, uint32_t seed) {
+    col_init_context_typed(ctx);
+    ctx->config.start_wave = 11;
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    while (s->wave_ready_delay > 0) step_and_observe(s, ctx, idle);
+    return col_sol_find_idx(s);
+}
+
+/* teleport the player with clean interaction + collision state. */
+static void sol_move_player(ColosseumState* s, int x, int y) {
+    s->player.x = x;
+    s->player.y = y;
+    s->player_dest_x = -1;
+    s->player_dest_y = -1;
+    osrs_interaction_clear(&s->interaction);
+    col_rebuild_player_collision_flags(s);
+}
+
+static int sol_count_active_beams(const ColosseumState* s) {
+    int n = 0;
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++)
+        if (s->sol.beams[b].active) n++;
+    return n;
+}
+
+/* park Sol at (x, y) and silence his engine + movement: geometry rigs need a
+   pinned hazard anchor (Sol takes one live chase step during sol_setup). */
+static void sol_pin(ColosseumState* s, int idx, int x, int y) {
+    wb_move_npc(s, idx, x, y);
+    s->sol.attack_delay = 30000;
+    s->sol.immobile_ticks = 30000;
+}
+
+/* 6a. A2: Sol never initiates without start-of-tick adjacency, the fight opens
+   with a forced spear, a stationary player eats the exact 7-tick spear delay
+   (A1+D28), and kiting on the cooldown measurably delays the next attack. */
+static void test_sol_adjacency_gate_and_kiting(void) {
+    printf("test_sol_adjacency_gate_and_kiting\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 101);
+    CHECK("Sol spawned on wave 12", idx >= 0);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int moved = 0;
+    int first_attack_tick = -1;
+    int dist_at_first_attack = -1;
+    for (int t = 0; t < 30 && first_attack_tick < 0; t++) {
+        s.player.current_hitpoints = 99;
+        int pre_dist = encounter_dist_to_npc(
+            s.player.x, s.player.y, s.npcs[idx].x, s.npcs[idx].y, 5);
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].moved_this_tick) moved++;
+        if (s.npcs[idx].attacked_this_tick) {
+            first_attack_tick = s.tick;
+            dist_at_first_attack = pre_dist;
+        }
+    }
+    CHECK("Sol chases the player across the arena", moved >= 5);
+    CHECK("Sol initiates only when adjacent at the start of a tick",
+        first_attack_tick > 0 && dist_at_first_attack == 1);
+    CHECK("the fight opener is a forced Spear (variant 1)",
+        s.sol.last_attack_kind == COLO_SOL_ATTACK_SPEAR &&
+        s.sol.aoe_attack == COLO_SOL_AOE_SPEAR1);
+
+    /* stationary player: the next attack initiates exactly 7 ticks later. */
+    int second_attack_tick = -1;
+    for (int t = 0; t < 12 && second_attack_tick < 0; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].attacked_this_tick) second_attack_tick = s.tick;
+    }
+    CHECK("a stationary player eats the next attack exactly 7 ticks later",
+        second_attack_tick == first_attack_tick + COLO_SOL_SPEAR_DELAY);
+
+    /* kiting: walking away (east along the open row) during the cooldown
+       pushes the third attack well past another per-attack delay. */
+    int walk_east[COLO_NUM_ACTION_HEADS] = {0};
+    walk_east[COLO_HEAD_MOVE] = 7;
+    int third_attack_tick = -1;
+    for (int t = 0; t < 40 && third_attack_tick < 0; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, t < 8 ? walk_east : idle);
+        if (s.npcs[idx].attacked_this_tick) third_attack_tick = s.tick;
+    }
+    CHECK("kiting on the cooldown delays the next attack beyond its delay",
+        third_attack_tick > second_attack_tick + COLO_SOL_SPEAR_DELAY);
+}
+
+/* 6b. A1: selection invariants — forced draws are spears, specials need 2
+   normals since the last special (held across 100 draws), no specials above
+   90%, and variants alternate 1/2/1 with type switches resetting to 1. A
+   step-loop coda checks a real transition freezes Sol and forces a spear with
+   its phase hazards (beams + crystal). */
+static void test_sol_attack_selection_invariants(void) {
+    printf("test_sol_attack_selection_invariants\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 103);
+    CHECK("the fight opens with the forced-spear flag armed", s.sol.force_spear == 1);
+    CHECK("a forced draw is a Spear", col_sol_select_attack(&s) == COLO_SOL_ATTACK_SPEAR);
+
+    s.sol.phase = 3;   /* triple-long + grapple both in the pool */
+    s.sol.special_cooldown = 0;
+    int normals_since_special = 99;
+    int specials = 0, normals = 0, violations = 0;
+    for (int n = 0; n < 100; n++) {
+        int kind = col_sol_select_attack(&s);
+        if (kind == COLO_SOL_ATTACK_TRIPLE || kind == COLO_SOL_ATTACK_GRAPPLE) {
+            if (normals_since_special < COLO_SOL_SPECIAL_COOLDOWN) violations++;
+            specials++;
+            normals_since_special = 0;
+        } else {
+            normals++;
+            normals_since_special++;
+        }
+    }
+    CHECK("specials appear in the 100-draw mix", specials > 0);
+    CHECK("the double-weighted normals dominate", normals > specials);
+    CHECK("every special has >= 2 normals since the previous special", violations == 0);
+
+    s.sol.phase = 0;
+    s.sol.special_cooldown = 0;
+    int early_specials = 0;
+    for (int n = 0; n < 50; n++) {
+        int kind = col_sol_select_attack(&s);
+        if (kind != COLO_SOL_ATTACK_SPEAR && kind != COLO_SOL_ATTACK_SHIELD)
+            early_specials++;
+    }
+    CHECK("above 90% HP only spear/shield are drawn", early_specials == 0);
+
+    s.sol.last_attack_kind = COLO_SOL_ATTACK_NONE;
+    s.sol.last_variant = 0;
+    int v1 = col_sol_pick_variant(&s.sol, COLO_SOL_ATTACK_SPEAR);
+    int v2 = col_sol_pick_variant(&s.sol, COLO_SOL_ATTACK_SPEAR);
+    int v3 = col_sol_pick_variant(&s.sol, COLO_SOL_ATTACK_SPEAR);
+    int v4 = col_sol_pick_variant(&s.sol, COLO_SOL_ATTACK_SHIELD);
+    int v5 = col_sol_pick_variant(&s.sol, COLO_SOL_ATTACK_SPEAR);
+    CHECK("consecutive same-type casts alternate 1 -> 2 -> 1", v1 == 1 && v2 == 2 && v3 == 1);
+    CHECK("a type switch resets the variant to 1", v4 == 1 && v5 == 1);
+
+    /* step-loop transition: dropping below 90% freezes Sol, drops 6 beams,
+       spawns the phase crystal, and forces the next attack to be a Spear. */
+    idx = sol_setup(&s, &ctx, 107);
+    sol_move_player(&s, s.npcs[idx].x + 2, s.npcs[idx].y - 1);  /* flush south-centre */
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int opener_tick = -1;
+    for (int t = 0; t < 10 && opener_tick < 0; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].attacked_this_tick) opener_tick = s.tick;
+    }
+    CHECK("opener landed against the adjacent player", opener_tick > 0);
+
+    s.npcs[idx].hp = (COLO_SOL_HP_MAX * 89) / 100;
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the 90% crossing enters phase 1", s.sol.phase == 1);
+    CHECK("the transition spawns the phase crystal", s.sol.crystal_count == 1);
+    CHECK("the transition drops 6 beams around the player",
+        sol_count_active_beams(&s) == 6);
+    CHECK("Sol is frozen through the transition", s.sol.immobile_ticks > 0);
+    CHECK("the post-transition attack is forced to Spear", s.sol.force_spear == 1);
+    int next_kind = -1;
+    for (int t = 0; t < 20 && next_kind < 0; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].attacked_this_tick) next_kind = s.sol.last_attack_kind;
+    }
+    CHECK("the first attack after the transition is a Spear",
+        next_kind == COLO_SOL_ATTACK_SPEAR);
+}
+
+/* 6c. A20: the parry hit schedule + damages per combo and phase — 15/25/35 at
+   +3/+6/+9 in the 50-90% band, 15/30/45 at +3/+6/+10 below 50% — with no
+   off-schedule damage. */
+static void test_sol_parry_schedule_and_damage(void) {
+    printf("test_sol_parry_schedule_and_damage\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    for (int low = 0; low <= 1; low++) {
+        int idx = sol_setup(&s, &ctx, 109 + (uint32_t)low);
+        s.npcs[idx].hp = low ? (COLO_SOL_HP_MAX * 40) / 100 : (COLO_SOL_HP_MAX * 80) / 100;
+        s.sol.phase = low ? 3 : 1;
+        s.sol.attack_delay = 1000;   /* silence the engine: isolate the combo */
+        sol_move_player(&s, 12, 12);
+        col_sol_start_triple_parry(&s, idx);
+        s.player.current_hitpoints = 99;
+
+        int dmg_at[13] = {0};
+        int hp_prev = 99;
+        for (int t = 1; t <= 12; t++) {
+            step_and_observe(&s, &ctx, idle);
+            dmg_at[t] = hp_prev - s.player.current_hitpoints;
+            hp_prev = s.player.current_hitpoints;
+        }
+        int h3 = low ? 10 : 9;
+        int d2 = low ? 30 : 25;
+        int d3 = low ? 45 : 35;
+        CHECK(low ? "low band: 15/30/45 land at +3/+6/+10"
+                  : "high band: 15/25/35 land at +3/+6/+9",
+            dmg_at[3] == 15 && dmg_at[6] == d2 && dmg_at[h3] == d3);
+        int clean = 1;
+        for (int t = 1; t <= 12; t++)
+            if (t != 3 && t != 6 && t != h3 && dmg_at[t] != 0) clean = 0;
+        CHECK("no parry damage lands off-schedule", clean);
+        CHECK("the combo retires after the third hit", s.sol.parry_hits_left == 0);
+    }
+}
+
+/* 6d. B4+D18: flicking Protect from Melee exactly at each land tick blocks all
+   three hits, every hit force-deactivates the overheads, and camping the
+   prayer early makes every hit unblockable. */
+static void test_sol_parry_prayer_punish(void) {
+    printf("test_sol_parry_prayer_punish\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 113);
+    s.npcs[idx].hp = (COLO_SOL_HP_MAX * 80) / 100;
+    s.sol.phase = 1;
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 12, 12);
+
+    /* flick at land: prayer OFF through every lookback window, ON exactly on
+       the land tick. */
+    col_sol_start_triple_parry(&s, idx);
+    s.player.current_hitpoints = 99;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    int deactivated_after_each = 1;
+    int prayer_correct_before = s.log.total_prayer_correct;
+    for (int t = 1; t <= 9; t++) {
+        actions[COLO_HEAD_PRAYER] = (t == 3 || t == 6 || t == 9)
+            ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE : ENCOUNTER_OVERHEAD_NO_CHANGE;
+        step_and_observe(&s, &ctx, actions);
+        if ((t == 3 || t == 6 || t == 9) && s.player.prayer != PRAYER_NONE)
+            deactivated_after_each = 0;
+    }
+    CHECK("flicking Protect from Melee exactly at land blocks all three hits",
+        s.player.current_hitpoints == 99);
+    CHECK("every parry hit force-deactivates the overhead prayers",
+        deactivated_after_each);
+    CHECK("blocked parry hits count prayer_correct",
+        s.log.total_prayer_correct >= prayer_correct_before + 3);
+
+    /* early prayer: camping the overhead through the combo punishes every hit
+       as unblockable — 15+25+35 lands through the active prayer. */
+    col_sol_start_triple_parry(&s, idx);
+    s.player.current_hitpoints = 99;
+    for (int t = 1; t <= 9; t++) {
+        actions[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+        step_and_observe(&s, &ctx, actions);
+    }
+    CHECK("camping the prayer early makes every hit unblockable (75 total)",
+        s.player.current_hitpoints == 99 - (15 + 25 + 35));
+}
+
+/* 6e. A12+A28+B7: the grapple calls one of exactly 5 slots; no response lands
+   20-44 unblockable; an early correct click parries without the bonus; a
+   last-tick click is a PERFECT parry whose guaranteed max the very next player
+   attack consumes at exactly max_hit, expiring after 5 unconsumed ticks. */
+static void test_sol_grapple_perfect_parry(void) {
+    printf("test_sol_grapple_perfect_parry\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 127);
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 18, 18);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+
+    /* fail: no response across the 4-tick window. */
+    col_sol_start_grapple(&s);
+    CHECK("the called slot is inside the 5-slot A12 domain",
+        s.sol.grapple_body_slot >= 0 && s.sol.grapple_body_slot < COLO_NUM_GRAPPLE_SLOTS);
+    s.player.current_hitpoints = 99;
+    for (int t = 0; t < COLO_SOL_GRAPPLE_WINDOW; t++) step_and_observe(&s, &ctx, idle);
+    int fail_dmg = 99 - s.player.current_hitpoints;
+    CHECK("an unanswered grapple lands 20-44", fail_dmg >= 20 && fail_dmg <= 44);
+
+    /* ordinary parry: a correct click before the last tick, no bonus. */
+    col_sol_start_grapple(&s);
+    s.player.current_hitpoints = 99;
+    actions[COLO_HEAD_GRAPPLE_PARRY] = s.sol.grapple_body_slot + 1;
+    step_and_observe(&s, &ctx, actions);
+    CHECK("an early correct click parries without the perfect bonus",
+        !s.sol.grapple_active && s.player.current_hitpoints == 99 &&
+        s.sol.next_attack_guaranteed_max == 0);
+    actions[COLO_HEAD_GRAPPLE_PARRY] = 0;
+
+    /* perfect parry on the last window tick (grapple_timer 1 at the click). */
+    col_sol_start_grapple(&s);
+    s.player.current_hitpoints = 99;
+    int slot = s.sol.grapple_body_slot;
+    while (s.sol.grapple_timer > 2) step_and_observe(&s, &ctx, idle);
+    actions[COLO_HEAD_GRAPPLE_PARRY] = slot + 1;
+    step_and_observe(&s, &ctx, actions);
+    actions[COLO_HEAD_GRAPPLE_PARRY] = 0;
+    CHECK("a last-tick click is a perfect parry: no damage, max armed",
+        s.player.current_hitpoints == 99 && s.sol.next_attack_guaranteed_max == 1);
+
+    /* B7: the next player attack consumes the guaranteed max at exactly max_hit. */
+    int max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+    CHECK("rig sanity: the melee loadout has a positive max hit", max_hit > 0);
+    col_player_attack_target(&s, idx);
+    CHECK("the guaranteed max is consumed at exactly the loadout max hit",
+        s.player_attack_dmg == max_hit && s.sol.next_attack_guaranteed_max == 0 &&
+        s.sol.guaranteed_max_ticks == 0);
+
+    /* expiry: an armed window not consumed within 5 ticks lapses. */
+    col_sol_start_grapple(&s);
+    s.player.current_hitpoints = 99;
+    while (s.sol.grapple_timer > 2) step_and_observe(&s, &ctx, idle);
+    actions[COLO_HEAD_GRAPPLE_PARRY] = s.sol.grapple_body_slot + 1;
+    step_and_observe(&s, &ctx, actions);
+    actions[COLO_HEAD_GRAPPLE_PARRY] = 0;
+    CHECK("second perfect parry armed", s.sol.next_attack_guaranteed_max == 1);
+    for (int t = 0; t < COLO_SOL_PERFECT_MAX_TICKS; t++) step_and_observe(&s, &ctx, idle);
+    CHECK("an unconsumed guaranteed max expires after 5 ticks",
+        s.sol.next_attack_guaranteed_max == 0);
+}
+
+/* 6f. A3: shield safe-ring geometry for both variants — the Chebyshev ring is
+   safe, the inner block and the rest of the arena both burn — checked on the
+   predicate and through the step loop at the bite tick. */
+static void test_sol_shield_safe_rings(void) {
+    printf("test_sol_shield_safe_rings\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 131);
+    sol_pin(&s, idx, COLO_SOL_SPAWN_X, COLO_SOL_SPAWN_Y);
+    ColoNPC* boss = &s.npcs[idx];
+    int cx = boss->x + 2, cy = boss->y + 2;   /* (18,21) */
+    s.sol.aoe_x = boss->x;
+    s.sol.aoe_y = boss->y;
+
+    s.sol.aoe_attack = COLO_SOL_AOE_SHIELD1;
+    CHECK("shield1: the inner 7x7 burns",
+        col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 3));
+    CHECK("shield1: the Chebyshev-4 ring face is safe",
+        !col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 4));
+    CHECK("shield1: the ring corner is safe",
+        !col_sol_aoe_tile_is_hazard(&s.sol, cx - 4, cy - 4));
+    CHECK("shield1: one past the ring burns",
+        col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 5));
+    CHECK("shield1: the far arena burns",
+        col_sol_aoe_tile_is_hazard(&s.sol, cx - 8, cy - 8));
+
+    s.sol.aoe_attack = COLO_SOL_AOE_SHIELD2;
+    CHECK("shield2: Chebyshev 4 is inside the 9x9 block",
+        col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 4));
+    CHECK("shield2: the Chebyshev-5 ring is safe",
+        !col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 5) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, cx - 5, cy - 5));
+    CHECK("shield2: one past the ring burns",
+        col_sol_aoe_tile_is_hazard(&s.sol, cx, cy - 6));
+
+    /* step-loop bite checks: ring / inside / outside for both variants. */
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    s.sol.attack_delay = 1000;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    for (int variant = 1; variant <= 2; variant++) {
+        int ring = variant == 1 ? COLO_SOL_SHIELD1_RING : COLO_SOL_SHIELD2_RING;
+        for (int spot = 0; spot < 3; spot++) {
+            int off = spot == 0 ? ring : (spot == 1 ? ring - 1 : ring + 1);
+            sol_move_player(&s, cx, cy - off);
+            col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SHIELD, variant);
+            s.player.current_hitpoints = 99;
+            step_and_observe(&s, &ctx, idle);
+            int dmg = 99 - s.player.current_hitpoints;
+            if (spot == 0)
+                CHECK(variant == 1 ? "shield1 bite: the ring tile is safe"
+                                   : "shield2 bite: the ring tile is safe", dmg == 0);
+            else
+                CHECK(spot == 1 ? "shield bite: inside the block lands 20-44"
+                                : "shield bite: outside the ring lands 20-44",
+                    dmg >= 20 && dmg <= 44);
+            s.sol.aoe_attack = COLO_SOL_AOE_NONE;   /* clear residue between casts */
+        }
+    }
+}
+
+/* 6g. A3+A15+D14: spear hazard frames point at the player — front coverage,
+   lines at the documented columns, length 4 — and the tiles bite exactly 1
+   tick after appearing, so stepping to a documented dodge tile during the cast
+   tick avoids everything. */
+static void test_sol_spear_lines(void) {
+    printf("test_sol_spear_lines\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 137);
+    sol_pin(&s, idx, COLO_SOL_SPAWN_X, COLO_SOL_SPAWN_Y);
+
+    /* player due south of the (16..20, 19..23) footprint: direction (0,-1). */
+    sol_move_player(&s, 18, 18);
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
+    CHECK("spear lines aim at the player (south)",
+        s.sol.aoe_dir_x == 0 && s.sol.aoe_dir_y == -1);
+    int front_ok = 1;
+    for (int x = 16; x <= 20; x++)
+        if (!col_sol_aoe_tile_is_hazard(&s.sol, x, 18)) front_ok = 0;
+    CHECK("spear1 front row covers all 5 columns", front_ok);
+    CHECK("spear1 runs TWO lines at the off-centre columns",
+        col_sol_aoe_tile_is_hazard(&s.sol, 17, 17) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 19, 17));
+    CHECK("spear1 centre + corner columns are safe 1 back (the dodge)",
+        !col_sol_aoe_tile_is_hazard(&s.sol, 16, 17) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 18, 17) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 20, 17));
+    CHECK("spear lines reach exactly 4 tiles from the boss edge",
+        col_sol_aoe_tile_is_hazard(&s.sol, 17, 15) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 14));
+
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 2);
+    CHECK("spear2 runs THREE lines at the corner + centre columns",
+        col_sol_aoe_tile_is_hazard(&s.sol, 16, 18) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 18, 18) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 20, 18));
+    CHECK("spear2 off-centre flush tiles are safe (the diagonal dodge)",
+        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 18) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 19, 18));
+
+    /* the direction tracks the player: cast again with the player east. */
+    sol_move_player(&s, 21, 21);
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
+    CHECK("spear lines aim at the player (east)",
+        s.sol.aoe_dir_x == 1 && s.sol.aoe_dir_y == 0);
+    CHECK("east cast: the front column burns and lines run east",
+        col_sol_aoe_tile_is_hazard(&s.sol, 21, 21) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 22, 20) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 22, 22) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 22, 21));
+
+    /* A15: standing still eats the per-tile 20-44 one tick after the cast;
+       the documented 1-back centre dodge taken during the cast tick is clean. */
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    s.sol.attack_delay = 1000;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    sol_move_player(&s, 18, 18);
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    int dmg = 99 - s.player.current_hitpoints;
+    CHECK("standing on a spear tile at the bite tick lands 20-44",
+        dmg >= 20 && dmg <= 44);
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    sol_move_player(&s, 18, 18);
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
+    sol_move_player(&s, 18, 17);   /* the centre-column 1-back dodge */
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the 1-tick dodge to the centre column avoids spear1 fully",
+        s.player.current_hitpoints == 99);
+}
+
+/* 6h. A9+A10+D15+D16: one crystal accumulates per transition (none at enrage),
+   cooldowns roll 25-35 (12 at enrage), the crystal walks the edge ring every 4
+   ticks, and firing telegraphs 4 ticks then launches a 60-75 sphere at the
+   player's tile that lands 4 ticks later. */
+static void test_sol_crystal_lifecycle(void) {
+    printf("test_sol_crystal_lifecycle\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 139);
+    (void)idx;
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 16, 14);
+
+    int accumulates = 1;
+    for (int p = 1; p <= 4; p++) {
+        col_sol_enter_phase(&s, p);
+        if (s.sol.crystal_count != p) accumulates = 0;
+    }
+    CHECK("one crystal spawns at each transition (4 by 25%)", accumulates);
+    col_sol_enter_phase(&s, 5);
+    CHECK("the enrage transition adds no fifth crystal", s.sol.crystal_count == 4);
+    s.sol.phase = 4;   /* hold pre-enrage for the cooldown checks below */
+    int cooldowns_ok = 1;
+    for (int c = 0; c < 4; c++)
+        if (s.sol.crystals[c].fire_cooldown < 25 || s.sol.crystals[c].fire_cooldown > 35)
+            cooldowns_ok = 0;
+    CHECK("fresh crystal cooldowns roll uniform 25-35", cooldowns_ok);
+
+    /* ring motion: a crystal advances one ring step every 4 ticks. */
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    for (int c = 0; c < 4; c++) s.sol.crystals[c].fire_cooldown = 1000;
+    int step_before = s.sol.crystals[0].perim_step;
+    for (int t = 0; t < 4; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    CHECK("the crystal advances exactly one ring step per 4 ticks",
+        s.sol.crystals[0].perim_step == step_before + 1);
+
+    /* firing: cooldown -> 4-tick telegraph -> sphere on the player's tile. */
+    s.sol.crystals[0].perim_step = 7;   /* (16,9): clear column to the player */
+    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
+    s.sol.crystals[0].fire_cooldown = 1;
+    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    int sphere = -1;
+    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
+        if (s.sol.spheres[i].active) sphere = i;
+    CHECK("the telegraph launches a sphere marking the player's tile",
+        sphere >= 0 &&
+        s.sol.spheres[sphere].tile_x == s.player.x &&
+        s.sol.spheres[sphere].tile_y == s.player.y);
+    CHECK("sphere damage rolls 60-75",
+        sphere >= 0 && s.sol.spheres[sphere].damage >= 60 &&
+        s.sol.spheres[sphere].damage <= 75);
+    CHECK("the post-fire cooldown rerolls 25-35 before enrage",
+        s.sol.crystals[0].fire_cooldown >= 25 && s.sol.crystals[0].fire_cooldown <= 35);
+
+    int expected = sphere >= 0 ? s.sol.spheres[sphere].damage : 0;
+    s.player.current_hitpoints = 99;
+    for (int t = 0; t < COLO_SOL_SPHERE_DELAY; t++) step_and_observe(&s, &ctx, idle);
+    CHECK("the sphere lands on the marked tile 4 ticks after launch",
+        99 - s.player.current_hitpoints == expected);
+
+    /* enrage: the post-fire cooldown drops to 12. */
+    s.sol.phase = 5;
+    s.sol.crystals[0].fire_cooldown = 1;
+    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    CHECK("at enrage the post-fire cooldown is 12",
+        s.sol.crystals[0].fire_cooldown == COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE);
+}
+
+/* 6i. A11+D25: 6 beams drop in the 9x9 around the player and become PERMANENT
+   molten pools after 2 ticks, burning 5-9 per tick stood on. */
+static void test_sol_beams_become_pools(void) {
+    printf("test_sol_beams_become_pools\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 149);
+    (void)idx;
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 17, 14);
+
+    col_sol_drop_beams(&s);
+    int beams = sol_count_active_beams(&s);
+    int in_box = 1;
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
+        if (!s.sol.beams[b].active) continue;
+        int dx = abs(s.sol.beams[b].x - s.player.x);
+        int dy = abs(s.sol.beams[b].y - s.player.y);
+        if (dx > COLO_SOL_BEAM_SPREAD || dy > COLO_SOL_BEAM_SPREAD) in_box = 0;
+        if (col_static_blocked(s.sol.beams[b].x, s.sol.beams[b].y)) in_box = 0;
+    }
+    CHECK("6 beams drop inside the 9x9 around the player", beams == 6 && in_box);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    for (int t = 0; t < COLO_SOL_BEAM_TO_POOL_TICKS; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    CHECK("every beam becomes a molten pool after 2 ticks",
+        s.sol.hazard_tile_count == 6 && sol_count_active_beams(&s) == 0);
+
+    sol_move_player(&s, s.sol.hazard_tile_x[0], s.sol.hazard_tile_y[0]);
+    int burns_ok = 1;
+    for (int t = 0; t < 30; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        int dmg = 99 - s.player.current_hitpoints;
+        if (dmg < COLO_MOLTEN_SAND_MIN_HIT ||
+            dmg > COLO_MOLTEN_SAND_MIN_HIT + COLO_MOLTEN_SAND_RAND - 1) burns_ok = 0;
+    }
+    CHECK("standing on a pool burns 5-9 every tick", burns_ok);
+    CHECK("pools persist for the rest of the fight", s.sol.hazard_tile_count == 6);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_step_loop_draft();
@@ -1454,6 +2045,15 @@ int main(void) {
     test_manticore_orb_same_tick_flick();
     test_manticore_pattern_copy();
     test_javelin_skyfall_no_defence_gate();
+    test_sol_adjacency_gate_and_kiting();
+    test_sol_attack_selection_invariants();
+    test_sol_parry_schedule_and_damage();
+    test_sol_parry_prayer_punish();
+    test_sol_grapple_perfect_parry();
+    test_sol_shield_safe_rings();
+    test_sol_spear_lines();
+    test_sol_crystal_lifecycle();
+    test_sol_beams_become_pools();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

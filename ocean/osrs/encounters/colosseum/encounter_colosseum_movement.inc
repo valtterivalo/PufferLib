@@ -189,6 +189,7 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     (void)ctx;
     ColoNPC* npc = &s->npcs[idx];
     const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
+    if (npc->type == COLO_SOL_HEREDIT) return;  /* A2: the boss machine owns Sol's chase */
     if (!st->can_move) return;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
 

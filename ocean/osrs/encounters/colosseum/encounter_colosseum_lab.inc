@@ -375,7 +375,13 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             s->npcs[idx].hp = PHASE_HP[phase];
             if (!s->sol.started) col_sol_begin_boss_arena(s);
             s->sol.boss_idx = idx;
-            while (s->sol.phase < phase) col_sol_enter_phase(s, s->sol.phase + 1);
+            /* entering upward mirrors a real transition: per-phase hazards via
+               col_sol_enter_phase, then the D28 freeze + forced spear (A1). */
+            if (s->sol.phase < phase) {
+                while (s->sol.phase < phase) col_sol_enter_phase(s, s->sol.phase + 1);
+                s->sol.immobile_ticks = COLO_SOL_TRANSITION_FREEZE;
+                s->sol.force_spear = 1;
+            }
             s->sol.phase = phase;
             col_lab_refresh_geometry(s);
             return;

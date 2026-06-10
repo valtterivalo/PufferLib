@@ -105,7 +105,7 @@ static char* col_lab_alloc_json(ColosseumState* s) {
         "\"boss\":{\"started\":%d,\"phase\":%d,\"grapple_active\":%d,"
         "\"grapple_slot\":%d,\"parry_active\":%d},",
         s->sol.started, s->sol.phase, s->sol.grapple_active,
-        s->sol.grapple_body_slot, s->sol.parry_sequence_active);
+        s->sol.grapple_body_slot, s->sol.parry_hits_left > 0 ? 1 : 0);
     col_lab_append_npcs_json(s, &out);
     col_lab_string_append(&out, "}");
     return out.data;

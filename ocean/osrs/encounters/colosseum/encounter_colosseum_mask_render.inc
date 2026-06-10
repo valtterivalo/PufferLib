@@ -63,10 +63,10 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
             ? 1.0f : 0.0f;
 
-    /* HEAD_GRAPPLE_PARRY (NUM_GEAR_SLOTS+1): none always valid; clicking a body
-       slot valid ONLY while a Sol grapple is active. */
+    /* HEAD_GRAPPLE_PARRY (COLO_NUM_GRAPPLE_SLOTS+1): none always valid;
+       clicking a callout slot valid ONLY while a Sol grapple is active (A12). */
     mask[offset++] = 1.0f;
-    for (int g = 0; g < NUM_GEAR_SLOTS; g++)
+    for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
     if (offset != COLO_ACTION_MASK_SIZE) {

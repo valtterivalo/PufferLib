@@ -4,7 +4,7 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(29) + npc slots(12 * 22) + modifiers(36) + wave(4) + boss(45)
+ *   player(29) + npc slots(12 * 22) + modifiers(49) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7).
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
@@ -29,7 +29,7 @@
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 13
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 49 */
 #define COLO_WAVE_OBS_SIZE        4
-#define COLO_BOSS_OBS_SIZE        45
+#define COLO_BOSS_OBS_SIZE        51
 /** obs surfaces the soonest-landing pending hits only (the 32-deep queue rarely
     fills; 16 covers a jaguar triple + manticore barrage + a parry combo at once). */
 #define COLO_OBS_PENDING_HITS     16
@@ -205,19 +205,65 @@ static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* i
     *idx = i;
 }
 
-/** is the player currently standing inside the telegraphed AoE dust footprint? */
+/** is the player currently standing on a live telegraphed AoE hazard tile? */
 static int col_player_in_aoe_danger(const ColosseumState* s) {
     const SolHereditState* sol = &s->sol;
-    if (sol->aoe_attack == COLO_SOL_AOE_NONE || sol->boss_idx < 0) return 0;
-    const ColoNPC* boss = &s->npcs[sol->boss_idx];
-    int span = col_sol_aoe_span(sol->aoe_attack);
-    int ox, oy;
-    col_sol_aoe_block_origin(boss, span, &ox, &oy);
-    return encounter_entity_footprints_overlap(ox, oy, span, s->player.x, s->player.y, 1);
+    if (sol->aoe_attack == COLO_SOL_AOE_NONE) return 0;
+    return col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y);
+}
+
+/** nearest active crystal to the player: dx, dy, telegraphing flag, telegraph
+    ticks frac (4 floats; zeros when no crystal is up). */
+static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int best = -1, best_d = 1 << 30, bx = 0, by = 0;
+    for (int k = 0; k < s->sol.crystal_count; k++) {
+        if (!s->sol.crystals[k].active) continue;
+        int cx, cy;
+        col_sol_crystal_pos(s, s->sol.crystals[k].perim_step, &cx, &cy);
+        int dx = abs(cx - s->player.x), dy = abs(cy - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < best_d) { best_d = d; best = k; bx = cx; by = cy; }
+    }
+    if (best >= 0) {
+        const ColoSolCrystal* c = &s->sol.crystals[best];
+        obs[i++] = col_obs_rel_x(bx, s->player.x);
+        obs[i++] = col_obs_rel_y(by, s->player.y);
+        obs[i++] = c->telegraph_ticks > 0 ? 1.0f : 0.0f;
+        obs[i++] = col_clamp01((float)c->telegraph_ticks / (float)COLO_SOL_CRYSTAL_TELEGRAPH);
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** nearest active light beam to the player: dx, dy, ticks-to-pool frac,
+    present flag (4 floats). */
+static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int best = -1, best_d = 1 << 30;
+    for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
+        if (!s->sol.beams[k].active) continue;
+        int dx = abs(s->sol.beams[k].x - s->player.x);
+        int dy = abs(s->sol.beams[k].y - s->player.y);
+        int d = dx > dy ? dx : dy;
+        if (d < best_d) { best_d = d; best = k; }
+    }
+    if (best >= 0) {
+        obs[i++] = col_obs_rel_x(s->sol.beams[best].x, s->player.x);
+        obs[i++] = col_obs_rel_y(s->sol.beams[best].y, s->player.y);
+        obs[i++] = col_clamp01((float)s->sol.beams[best].ticks_to_pool
+            / (float)COLO_SOL_BEAM_TO_POOL_TICKS);
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
+    }
+    *idx = i;
 }
 
 /** write the Sol Heredit boss block (COLO_BOSS_OBS_SIZE floats). Rich enough to
-    learn the dodge / triple-parry / grapple responses. All zeros pre-wave-12. */
+    learn the dodge / kite / triple-parry / grapple responses. All zeros
+    pre-wave-12. */
 static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     const SolHereditState* sol = &s->sol;
@@ -227,56 +273,68 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     for (int p = 0; p < COLO_SOL_NUM_PHASES; p++)
         obs[i++] = (sol->phase == p) ? 1.0f : 0.0f;
 
-    /* current AoE one-hot (none/spear1/spear2/shield1/shield2) + resolve timer */
+    /* live AoE one-hot (none/spear1/spear2/shield1/shield2) + age + danger +
+       boss-relative player offset + line direction: the dodge cue set. */
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_NONE) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR1) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR2) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD1) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD2) ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)sol->aoe_resolve_timer / (float)COLO_SOL_AOE_TELEGRAPH);
-
-    /* safe-direction cue: boss-relative player offset + danger flag + dust span.
-       lets the policy learn which way to step off the telegraphed footprint. */
+    obs[i++] = col_clamp01((float)sol->aoe_age / (float)COLO_SOL_AOE_LIFETIME);
+    obs[i++] = col_player_in_aoe_danger(s) ? 1.0f : 0.0f;
     if (sol->boss_idx >= 0) {
         const ColoNPC* boss = &s->npcs[sol->boss_idx];
         int bsz = boss->size > 0 ? boss->size : 5;
-        int bcx = boss->x + bsz / 2, bcy = boss->y + bsz / 2;
-        obs[i++] = col_obs_rel_x(px, bcx);   /* player offset FROM boss centre */
-        obs[i++] = col_obs_rel_y(py, bcy);
+        obs[i++] = col_obs_rel_x(px, boss->x + bsz / 2);
+        obs[i++] = col_obs_rel_y(py, boss->y + bsz / 2);
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
     }
-    obs[i++] = col_player_in_aoe_danger(s) ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)col_sol_aoe_span(sol->aoe_attack) / 9.0f);
+    obs[i++] = (float)sol->aoe_dir_x;
+    obs[i++] = (float)sol->aoe_dir_y;
 
-    /* triple parry: active, ticks-to-next-hit, combo id, combo cursor */
-    obs[i++] = sol->parry_sequence_active ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)sol->parry_ticks_remaining / 10.0f);
-    obs[i++] = sol->parry_combo_b ? 1.0f : 0.0f;
-    obs[i++] = sol->combo_len > 0
-        ? col_clamp01((float)sol->combo_cursor / (float)sol->combo_len) : 0.0f;
+    /* attack engine tells (A1+A2): the kiting clock. */
+    obs[i++] = col_clamp01((float)sol->attack_delay / 12.0f);
+    obs[i++] = col_clamp01((float)sol->immobile_ticks / 10.0f);
+    obs[i++] = sol->special_cooldown <= 0 ? 1.0f : 0.0f;
+    obs[i++] = sol->force_spear ? 1.0f : 0.0f;
 
-    /* grapple: active, called body-slot one-hot (NUM_GEAR_SLOTS), timer,
-       guaranteed-max-armed flag */
+    /* triple parry: active, ticks-to-next-hit, next-hit damage, hits left,
+       long-combo flag (15/30/45 from phase 3). */
+    int next_land = 0, next_dmg = 0;
+    for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
+        if (sol->parry_land_in[h] <= 0) continue;
+        if (next_land == 0 || sol->parry_land_in[h] < next_land) {
+            next_land = sol->parry_land_in[h];
+            next_dmg = sol->parry_damage[h];
+        }
+    }
+    obs[i++] = sol->parry_hits_left > 0 ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)next_land / 10.0f);
+    obs[i++] = col_clamp01((float)next_dmg / 45.0f);
+    obs[i++] = col_clamp01((float)sol->parry_hits_left / (float)COLO_SOL_PARRY_HITS);
+    obs[i++] = sol->phase >= 3 ? 1.0f : 0.0f;
+
+    /* grapple: active, called-slot one-hot (the 5-slot A12 domain), timer,
+       guaranteed-max-armed flag. */
     obs[i++] = sol->grapple_active ? 1.0f : 0.0f;
-    for (int g = 0; g < NUM_GEAR_SLOTS; g++)
+    for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         obs[i++] = (sol->grapple_active && sol->grapple_body_slot == g) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)sol->grapple_timer / (float)COLO_SOL_GRAPPLE_WINDOW);
     obs[i++] = sol->next_attack_guaranteed_max ? 1.0f : 0.0f;
 
-    /* rotating crystal + nearest sphere (active, dx, dy, ticks, present) */
-    obs[i++] = sol->crystal_active ? 1.0f : 0.0f;
+    /* crystals: count + nearest (dx, dy, telegraphing, telegraph frac), then
+       the nearest in-flight sphere (dx, dy, ticks, present). */
+    obs[i++] = col_clamp01((float)sol->crystal_count / (float)COLO_SOL_MAX_CRYSTALS);
     *idx = i;
+    col_write_nearest_crystal(s, obs, idx);
     col_write_nearest_sphere(s, obs, idx);
 
     /* nearest molten-sand pool (dx, dy, present) */
     col_write_nearest_molten(s, obs, idx);
-    i = *idx;
 
-    /* phase-transition light beams (active, ticks frac) */
-    obs[i++] = sol->beam_count > 0 ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)sol->beam_ticks_remaining / (float)COLO_SOL_BEAM_TICKS);
-    *idx = i;
+    /* nearest phase-transition beam (dx, dy, ticks-to-pool, present) */
+    col_write_nearest_beam(s, obs, idx);
 }
 
 

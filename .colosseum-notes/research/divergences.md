@@ -35,7 +35,7 @@ File keys (hdr/model/spawn/move/combat/boss/mods/pact/step) as in the ledger, al
 
 Format: ledger | sim value (file:line) | correct value | source | confidence | impact.
 
-### A1. Sol attack cadence + selection model (ledger 6.3, 6.4, 6.9-part)
+### A1. Sol attack cadence + selection model (ledger 6.3, 6.4, 6.9-part) — IMPLEMENTED P4
 - Sim: new special rolled every 5 ticks (COLO_SOL_ATTACK_INTERVAL, model:545); iid roll
   35% triple / 25% grapple / 40% AoE (boss:375-414); style flips spear↔shield p=0.6.
 - Correct: per-attack next-attack delays — spear 7t (6t below 75% HP), shield 6t (5t below
@@ -49,7 +49,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source (delays/cooldown colosim-only but corroborated in shape by wiki).
 - Impact: 5.
 
-### A2. Sol is stationary (ledger 6.7)
+### A2. Sol is stationary (ledger 6.7) — IMPLEMENTED P4
 - Sim: can_move=0, fixed at [17,21]² all fight (model:213, boss).
 - Correct: Sol chases the player (pathfinds toward aggro), must be ADJACENT to the player at
   the start of a tick to initiate an AoE, must be stationary to attack, and is frozen in
@@ -61,7 +61,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 5. The entire boss dance (kite between attacks, melee uptime windows) depends on it.
 
-### A3. Sol AoE shapes + damage model (ledger 6.8, 6.11)
+### A3. Sol AoE shapes + damage model (ledger 6.8, 6.11) — IMPLEMENTED P4
 - Sim: solid centred squares Spear1 6x6, Spear2 6x6, Shield1 7x7, Shield2 9x9; flat 44 typeless
   if inside at resolve (model:459-468, boss:80-147).
 - Correct shapes: Spear1 = 5x6 hazard (under him + in front) + TWO 1-wide lines toward the
@@ -151,7 +151,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
   (private-server verified) for the blocked-edge rows and Sol tile.
 - Impact: 4. Pillar size 3x3 vs 1x1 changes sphere-LoS cover and pathing chokes completely.
 
-### A9. Crystal lifecycle (ledger 6.22, 6.23, 6.24)
+### A9. Crystal lifecycle (ledger 6.22, 6.23, 6.24) — IMPLEMENTED P4
 - Sim: one crystal, appears at <75% HP, advances 1 perimeter step/tick continuously, fires
   every 6 ticks (every 2 at enrage) while moving (boss:265-338).
 - Correct: a crystal spawns at EACH phase transition starting at 90% (they accumulate; final
@@ -165,7 +165,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
   (colosim) for 25-35/12 cooldown and moveTick 4; W-STRAT corroborates enrage ~7 s ≈ 12t.
 - Impact: 4. Multiple accumulating crystals with long cooldowns ≠ one fast metronome.
 
-### A10. Sphere damage distribution (ledger 6.25-part)
+### A10. Sphere damage distribution (ledger 6.25-part) — IMPLEMENTED P4
 - Sim: uniform 0..75 typeless (model:553-554).
 - Correct: high-min heavy roll — colosim 60 + rand(0..19) = 60-79; wiki "up to 75" / "70+
   damage" (exact range → D15). Unprayable. A 0..75 uniform makes tanking spheres viable;
@@ -174,7 +174,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source that damage is ~60+; exact bounds conflict.
 - Impact: 4.
 
-### A11. Phase-transition beams spawn molten sand (ledger 6.21, 6.26-part)
+### A11. Phase-transition beams spawn molten sand (ledger 6.21, 6.26-part) — IMPLEMENTED P4
 - Sim: 6 light beams linger 4 ticks, deal nothing, purely cosmetic (boss:379-389).
 - Correct: each phase start places 6 beams randomly in a 9x9 area around the PLAYER; each
   spawns a molten sand pool after 2 ticks; pools persist for the rest of the fight and deal
@@ -185,7 +185,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 4. Arena denial is the boss fight's accumulating clock; sim has none until enrage.
 
-### A12. Grapple slot domain (ledger 6.17-part)
+### A12. Grapple slot domain (ledger 6.17-part) — IMPLEMENTED P4
 - Sim: called slot uniform over all 11 equipment slots (boss:217-223).
 - Correct: exactly 5 slots — body, back, hands, legs, feet — chosen uniformly, announced via
   overhead text ("I'LL CRUSH YOUR BODY" etc.).
@@ -206,7 +206,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source (the 6 vs 7 wording conflict reconciles as edge vs centre).
 - Impact: 4. Heal-to-full makes the minotaur a hard kill-priority; 0..10/5t is ignorable.
 
-### A14. Player melee always rolls vs Sol's stab defence (ledger 6.28, 7.16-part)
+### A14. Player melee always rolls vs Sol's stab defence (ledger 6.28, 7.16-part) — IMPLEMENTED P4
 - Sim: player-attack path uses stab_def for all melee (pact:135-138); Sol slash_def 5 unreachable.
 - Correct: Sol is weak to SLASH (stab 65 / slash 5 / crush 30; "Sol is weak to slash, making
   the scythe of Vitur the strongest option"). The melee lookup must use the weapon's melee
@@ -215,7 +215,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified.
 - Impact: 4. Boss TTK and enrage exposure are inflated ~stab/slash accuracy ratio otherwise.
 
-### A15. AoE telegraph window (ledger 6.10)
+### A15. AoE telegraph window (ledger 6.10) — IMPLEMENTED P4
 - Sim: 2 ticks between telegraph and resolution (model:546).
 - Correct: hazard tiles deal damage 1 tick after they appear (colosim SolGroundSlam age==1;
   tile lives ~3 ticks). The effective dodge window comes from the attack animation lead-in,
@@ -272,7 +272,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 3 (~17% manticore DPS understated).
 
-### A20. Triple-parry combo selection (ledger 6.14-part)
+### A20. Triple-parry combo selection (ledger 6.14-part) — IMPLEMENTED P4
 - Sim: combos A (15/25/35) and B (15/30/45) strictly alternate per invocation (boss:183-186).
 - Correct: phase-gated, not alternating — 15/25/35 ("Triple Parry 1", colosim TRIPLE_SHORT)
   while HP is 50-90%; 15/30/45 ("Triple Parry 2", TRIPLE_LONG, with the +4 third gap) REPLACES
@@ -351,7 +351,7 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: multi-source.
 - Impact: 2.
 
-### A28. Grapple fail damage (ledger 6.20-part)
+### A28. Grapple fail damage (ledger 6.20-part) — IMPLEMENTED P4
 - Sim: flat 44 typeless on timer expiry (model:548, boss:249-260).
 - Correct: rolled — colosim 20 + rand(0..24) = 20-44 (wiki cap 44/45 conflict → D13),
   resolving 4 ticks after attack start (window ✓ C); 0 on successful parry.
@@ -439,7 +439,7 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: multi-source.
 - Impact: 5. Spawn fixing/manipulation is a real, documented player skill the sim must allow.
 
-### B4. Sol parry prayer punish layer (ledger 6.15 extension)
+### B4. Sol parry prayer punish layer (ledger 6.15 extension) — IMPLEMENTED P4
 - Missing: (a) EARLY-PRAYER PUNISH — having an overhead protect prayer on during the pre-hit
   window makes that parry hit UNBLOCKABLE ("Turning on your prayer early ... will turn it
   off, forcing the player to take a hit"; colosim lookback windows 3/2/2-3 ticks); (b) every
@@ -466,7 +466,7 @@ already carries post-3-April-2024 warband stats, so there is no launch-stat skew
 - Confidence: multi-source.
 - Impact: 4.
 
-### B7. Perfect-parry guaranteed-max consumption (ledger 6.19)
+### B7. Perfect-parry guaranteed-max consumption (ledger 6.19) — IMPLEMENTED P4
 - Missing: the `next_attack_guaranteed_max` flag is set and decremented but never read by the
   player-attack path — the advertised reward (next attack within 5 ticks is a guaranteed max
   hit) has zero effect. Wire it into pact's damage roll.
@@ -657,21 +657,23 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 13. Sol AoE/grapple max hit 44 vs 45 + slam minimum (6.11, 6.20): sim 44 flat | W-MAIN live
     fetch says 44/44, RuneC wiki-cache infobox says 45/45, W-STRAT prose "up to 45", colosim
     20-44 with an author comment doubting the min | adopt colosim 20 + rand(0..24) = 20-44
-    for both AoE tiles and failed grapple.
+    for both AoE tiles and failed grapple. IMPLEMENTED P4.
 14. Spear line length (A3): n/a in sim yet | W-STRAT "4x1 lines" vs colosim LINE_LENGTH 7 |
     use 4 (maintained wiki text, post-hotfix); revisit if the boss feels under-lethal.
+    IMPLEMENTED P4.
 15. Sphere/laser damage range (A10): sim 0..75 | colosim 60-79 vs W-MAIN ≤75 vs W-STRAT 70+ |
-    60 + rand(0..15) = 60-75 (colosim min ∩ wiki cap).
+    60 + rand(0..15) = 60-75 (colosim min ∩ wiki cap). IMPLEMENTED P4.
 16. Crystal count by enrage (6.22): sim 1 | W-MAIN implies 5 (each phase), W-STRAT describes
     3 (phases 2/3/5), colosim spawns 4 (transitions at 90/75/50/25) | 4 per colosim; enrage
-    raises cadence, not count.
+    raises cadence, not count. IMPLEMENTED P4.
 17. Sol immobility-while-attacking ticks (A2): n/a in sim | wiki 4t for AoEs vs colosim 6
     (spear) / 4 (shield) / 5 (grapple) / 5 (transition) | colosim per-attack values (more
-    specific, engine-derived).
+    specific, engine-derived). IMPLEMENTED P4.
 18. Parry/perfect-parry input-tick convention (6.15, 6.18): sim prayer-at-land, grapple_timer
     ≤1 | wiki "on the tick before he lands" vs colosim hit-tick check with 3/2/2-3-tick
     prior-off windows; grapple "last possible tick" undefined in ticks | keep prayer-at-land
-    + the B4 lookback windows from colosim; keep grapple_timer ≤1 as "last tick".
+    + the B4 lookback windows from colosim (3/2/2); keep grapple_timer ≤1 as "last
+    tick". IMPLEMENTED P4.
 19. Quartet wave-12 spawn tile (A6): n/a | no source states it | random walkable tile inside
     the reduced arena, ≥4 tiles from the player (mirrors the primary-spawn exclusion). IMPLEMENTED P1.
 20. Volatility explosion damage + timing (5.25): sim flat 25 on overlap | no damage number in
@@ -687,7 +689,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     colosseum-specific travel times unpinned | keep both as-is.
 25. Enrage pool placement (6.26): sim uniform-random arena tile | W-MAIN "random tile around
     the arena" vs colosim within ±4 tiles of the player | colosim ±4-of-player (keeps enrage
-    pressure on the agent; wiki phrasing does not exclude it).
+    pressure on the agent; wiki phrasing does not exclude it). IMPLEMENTED P4.
 26. Inter-wave pacing (2.23, 5.7-part): sim 9-tick gap + optional draft auto-close | real
     pacing is player-gated by the mandatory draft (B6); no fixed gap documented | replace the
     9t gap with draft-gate + short fixed post-pick delay; keep the 6t ready delay (C).
@@ -697,7 +699,7 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     the researched 16x16 (e.g. south-centre world (1824,3100) = local (17,11)). IMPLEMENTED P1.
 28. Sol repositioning during phase transitions: n/a | arena jump/land anims exist (10876/7);
     colosim freezes him 5t in place; no source describes movement | stationary during
-    transition, forced Spear after (A1).
+    transition, forced Spear after (A1). IMPLEMENTED P4.
 29. Wave-12 corner detail (A8): n/a | okronos rows give 2x2 pillar intrusions into the 16x16
     interior; Skairunner says "four tiles jutting out from the corners" | model pillars as
     3x3 blockers at the cache anchors and let the intersection define the corners. IMPLEMENTED P1.

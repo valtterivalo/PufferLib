@@ -191,7 +191,7 @@ static void col_translate_human_input_ctx(
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
-    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= NUM_GEAR_SLOTS)
+    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
         actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
 }
 
@@ -257,7 +257,7 @@ static void col_translate_human_commands_ctx(
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
-    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= NUM_GEAR_SLOTS)
+    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
         actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
 }
 
@@ -288,7 +288,7 @@ static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
 /* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
-#define COLO_SNAPSHOT_VERSION 1u
+#define COLO_SNAPSHOT_VERSION 2u  /* v2: P4 SolHereditState rewrite (A1-A15, B4, B7) */
 
 typedef struct {
     uint32_t magic;

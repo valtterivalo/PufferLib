@@ -17,16 +17,17 @@
 #define COLO_HEAD_POTION          5  /* none, drink */
 #define COLO_HEAD_SPEC            6  /* no_change, toggle spec */
 #define COLO_HEAD_MODIFIER_SELECT 7  /* none + pick draft option 0/1/2 */
-#define COLO_HEAD_GRAPPLE_PARRY   8  /* none + click one of the NUM_GEAR_SLOTS body parts */
+#define COLO_HEAD_GRAPPLE_PARRY   8  /* none + the 5 grapple callout slots (A12) */
 
 #define COLO_GEAR_DIM 3
 #define COLO_EAT_DIM 2
 #define COLO_POTION_DIM 2
 #define COLO_SPEC_DIM 2
 #define COLO_MODIFIER_SELECT_DIM (1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 4 */
-/** grapple-parry head: index 0 = no click, index k = click gear slot (k-1). The
-    domain matches SolHereditState.grapple_body_slot, drawn over NUM_GEAR_SLOTS. */
-#define COLO_GRAPPLE_PARRY_DIM (1 + NUM_GEAR_SLOTS)  /* 12 */
+/** grapple-parry head: index 0 = no click, index k = click grapple slot (k-1).
+    A12: the domain is the 5-slot ColoGrappleSlot callout set, matching
+    SolHereditState.grapple_body_slot. */
+#define COLO_GRAPPLE_PARRY_DIM (1 + COLO_NUM_GRAPPLE_SLOTS)  /* 6 */
 
 #define COLO_ACTION_DIMS_INIT { \
     ENCOUNTER_MOVE_ACTIONS, \
@@ -114,11 +115,24 @@ static int col_obs_slot_to_npc(const ColosseumState* s, int obs_slot) {
 }
 
 
+/** A14: the active weapon's melee style = the argmax of its stab/slash/crush
+    attack bonuses (the scythe is slash, so Sol's slash-5 weakness is live). */
+static MeleeStyle col_weapon_melee_style(const uint8_t* loadout) {
+    const Item* weapon = get_item(loadout[GEAR_SLOT_WEAPON]);
+    if (!weapon) return MELEE_STYLE_STAB;
+    MeleeStyle style = MELEE_STYLE_STAB;
+    int best = weapon->attack_stab;
+    if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
+    if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
+    return style;
+}
+
 /**
  * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
- * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness:
- * when the player's style matches the NPC's player_style_that_max_hits, the hit is
- * a forced max (full accuracy + max damage).
+ * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness
+ * (style match = forced max), the B7 perfect-parry guaranteed max (armed by a
+ * last-tick grapple parry, consumed by the very next attack), and the A14
+ * melee-style defence lookup (the weapon's style picks stab/slash/crush def).
  */
 static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
@@ -129,12 +143,24 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
                       ns->player_style_that_max_hits == ls->style;
 
     int damage;
-    if (rps_max_hit) {
+    if (s->sol.next_attack_guaranteed_max) {
+        damage = ls->max_hit;
+        s->sol.next_attack_guaranteed_max = 0;
+        s->sol.guaranteed_max_ticks = 0;
+    } else if (rps_max_hit) {
         damage = ls->max_hit;
     } else {
-        int def_bonus = ls->style == ATTACK_STYLE_MAGIC ? ns->magic_def_bonus
-            : ls->style == ATTACK_STYLE_RANGED ? ns->ranged_def_bonus
-            : ns->stab_def;
+        int def_bonus;
+        if (ls->style == ATTACK_STYLE_MAGIC) {
+            def_bonus = ns->magic_def_bonus;
+        } else if (ls->style == ATTACK_STYLE_RANGED) {
+            def_bonus = ns->ranged_def_bonus;
+        } else {
+            MeleeStyle ms = col_weapon_melee_style(COLO_LOADOUTS[s->weapon_set]);
+            def_bonus = ms == MELEE_STYLE_SLASH ? ns->slash_def
+                : ms == MELEE_STYLE_CRUSH ? ns->crush_def
+                : ns->stab_def;
+        }
         int target_def_roll = (ns->def_level + 9) * (def_bonus + 64);
         int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
         damage = encounter_npc_roll_attack(att_roll, target_def_roll, ls->max_hit, &s->rng_state);
@@ -185,10 +211,11 @@ static void col_tick_player_ctx(
     if (modifier_act > 0 && s->modifiers.draft_pending)
         col_modifier_apply_selection(s, modifier_act - 1);
 
-    /* grapple parry: during an active Sol grapple, action index k clicks gear slot
-       (k-1). A correct slot parries; clicking on the last tick is a perfect parry. */
+    /* grapple parry: during an active Sol grapple, action index k clicks
+       grapple slot (k-1) of the 5-slot A12 domain. A correct slot parries;
+       clicking on the last tick is a perfect parry. */
     int grapple_act = actions[COLO_HEAD_GRAPPLE_PARRY];
-    if (grapple_act > 0 && grapple_act <= NUM_GEAR_SLOTS)
+    if (grapple_act > 0 && grapple_act <= COLO_NUM_GRAPPLE_SLOTS)
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
     /* target acquisition: translate the obs-slot target action into an NPC slot */
