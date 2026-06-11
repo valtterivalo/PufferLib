@@ -49,6 +49,7 @@ class FakeTrainBackend:
             },
             "env": {
                 "score": 0.5,
+                "performance_score": 0.25 + 0.01 * self.log_calls,
                 "n": 1.0,
             },
         }
@@ -69,6 +70,7 @@ class FakeTrainBackend:
             },
             "env": {
                 "score": 0.5,
+                "performance_score": 0.5,
                 "n": 1.0,
             },
         }
@@ -161,6 +163,35 @@ def test_wall_clock_does_not_change_selfplay_step_sequence(monkeypatch, tmp_path
     assert constant_steps == [(0, 1, 1), (1, 2, 2), (2, 3, 3), (3, 4, 4)]
     assert constant_backend.log_calls == 4
     assert fast_backend.log_calls == 4
+
+
+def test_sweep_early_stop_uses_configured_training_metric(monkeypatch, tmp_path):
+    backend = FakeTrainBackend()
+    args = train_args(tmp_path)
+    args["train"]["total_timesteps"] = 10
+    args["sweep"]["metric"] = "fixed_eval_performance_score"
+    args["sweep"]["early_stop_metric"] = "performance_score"
+    calls = []
+
+    class FakeSweep:
+        def early_stop(self, logs, target_key):
+            calls.append((target_key, logs["env"]["performance_score"]))
+            return True
+
+    monkeypatch.setattr(pufferl, "_resolve_backend", lambda args: backend)
+    monkeypatch.setattr(pufferl.selfplay, "setup", lambda *args: object())
+    monkeypatch.setattr(pufferl.selfplay, "step", lambda *args: None)
+    monkeypatch.setattr(pufferl, "print_dashboard", lambda *args, **kwargs: None)
+
+    pufferl._train(
+        "fake_env",
+        args,
+        sweep_obj=FakeSweep(),
+    )
+
+    assert calls
+    assert calls[0][0] == "env/performance_score"
+    assert backend.closed is True
 
 
 def test_checkpoint_interval_zero_disables_periodic_saves():

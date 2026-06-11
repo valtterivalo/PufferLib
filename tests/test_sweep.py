@@ -23,6 +23,7 @@ def test_sweep_only_matches_nested_parameter_paths():
         'metric_distribution': 'linear',
         'goal': 'maximize',
         'resume_from_log_dir': '/tmp/puffer-sweep-logs',
+        'early_stop_metric': 'env/performance_score',
         'sweep_only': 'train.total_timesteps, policy.hidden_size',
         'train': {
             'total_timesteps': {
@@ -54,6 +55,19 @@ def test_sweep_only_matches_nested_parameter_paths():
         'train/total_timesteps',
         'policy/hidden_size',
     }
+
+
+def test_nested_log_value_resolves_flat_and_nested_keys():
+    logs = {
+        'uptime': 12.0,
+        'env': {
+            'performance_score': 0.75,
+        },
+    }
+
+    assert pufferlib.sweep.nested_log_value(logs, 'uptime') == 12.0
+    assert pufferlib.sweep.nested_log_value(logs, 'env/performance_score') == 0.75
+    assert pufferlib.sweep.nested_log_value(logs, 'env/missing') is None
 
 def synthetic_basic_task(args):
     train_args = args['train']

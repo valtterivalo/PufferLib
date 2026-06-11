@@ -262,6 +262,12 @@ PVP_FIXED_EVAL_KEYS = (
 def _fixed_eval_enabled(args):
     return bool(args.get('fixed_eval', {}).get('enabled', 0))
 
+def _sweep_metric_key(metric):
+    metric = str(metric).strip()
+    if not metric:
+        raise ValueError('sweep metric cannot be empty')
+    return metric if '/' in metric else f'env/{metric}'
+
 def _should_save_checkpoint(sweep_obj, checkpoint_interval, epoch, is_final, match_mode):
     interval = int(checkpoint_interval)
     periodic = interval > 0 and epoch % interval == 0
@@ -589,7 +595,9 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             settings=wandb.Settings(console="off"),
         )
 
-    target_key = f'env/{args["sweep"]["metric"]}'
+    target_key = _sweep_metric_key(args["sweep"]["metric"])
+    early_stop_key = _sweep_metric_key(
+        args["sweep"].get("early_stop_metric", args["sweep"]["metric"]))
     total_timesteps = args['train']['total_timesteps']
     all_logs = []
 
@@ -668,13 +676,14 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             wandb.log(flat_logs, step=flat_logs['agent_steps'])
 
         has_target_metric = target_key in flat_logs
+        has_early_stop_metric = early_stop_key in flat_logs
         if epoch < train_epochs:
             all_logs.append(dict(flat_logs))
 
             if (sweep_obj is not None
-                    and has_target_metric
+                    and has_early_stop_metric
                     and pufferl.global_step > min(0.20*total_timesteps, 100_000_000) and
-                    sweep_obj.early_stop(logs, target_key)):
+                    sweep_obj.early_stop(logs, early_stop_key)):
                 break
         elif has_target_metric and flat_logs['env/n'] > args['eval_episodes']:
             break
@@ -840,7 +849,7 @@ def _write_repro_comparison(env_name, cli_args, repro_args):
     with open(log_path) as f:
         trial_log = json.load(f)
     metrics = trial_log.get('metrics', {})
-    target_key = f'env/{repro_args["sweep"]["metric"]}'
+    target_key = _sweep_metric_key(repro_args["sweep"]["metric"])
 
     with open(trial_path) as f:
         source_trial = json.load(f)
@@ -915,7 +924,7 @@ def _resume_sweep_observations(args, sweep_obj):
     if not log_dir:
         return 0
 
-    target_key = f'env/{args["sweep"]["metric"]}'
+    target_key = _sweep_metric_key(args["sweep"]["metric"])
     resumed = 0
     pattern = os.path.join(log_dir, args['env_name'], '*.json')
     for path in sorted(glob.glob(pattern), key=os.path.getmtime):

@@ -34,6 +34,17 @@ def unroll_nested_dict(d):
         else:
             yield k, v
 
+def nested_log_value(logs, key):
+    if key in logs:
+        return logs[key]
+
+    current = logs
+    for part in key.split('/'):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
 @contextmanager
 def default_tensor_dtype(dtype):
     old_dtype = torch.get_default_dtype()
@@ -154,7 +165,7 @@ def _params_from_puffer_sweep(sweep_config, only_include=None, prefix=()):
                 'max_suggestion_cost', 'early_stop_quantile', 'gpus',
                 'max_runs', 'match_enemy_model_path', 'match_num_games',
                 'match_enemy_hidden_size', 'match_enemy_num_layers',
-                'resume_from_log_dir'):
+                'resume_from_log_dir', 'early_stop_metric'):
             continue
 
         assert isinstance(param, dict), f'Param {name} is not a dict'
@@ -972,10 +983,11 @@ class Protein:
                 logs['is_loss_nan'] = True
                 return True
 
-        if 'uptime' not in logs or target_key not in logs:
+        metric_val = nested_log_value(logs, target_key)
+        cost = nested_log_value(logs, 'uptime')
+        if metric_val is None or cost is None:
             return False
 
-        metric_val, cost = logs['env'][target_key], logs['uptime']
         self._running_target_buffer.append(metric_val)
         target_running_mean = np.mean(self._running_target_buffer)
         threshold = self.get_early_stop_threshold(cost)
