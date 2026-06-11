@@ -463,8 +463,100 @@ static void pvp_write_item_policy_features(
     }
 }
 
+static float PVP_ITEM_POLICY_FEATURE_TEMPLATES[NUM_ITEMS + 1][OSRS_ITEM_FEATURE_DIM];
+static float PVP_TARGET_ITEM_STAT_TEMPLATES[NUM_ITEMS + 1][PVP_EQUIPPED_TARGET_FEATURE_DIM];
+static int _pvp_item_obs_templates_initialized = 0;
+
+static inline int pvp_item_template_index(uint8_t item_idx) {
+    return item_idx < NUM_ITEMS ? item_idx : NUM_ITEMS;
+}
+
+static void pvp_init_item_obs_templates(void) {
+    if (_pvp_item_obs_templates_initialized) return;
+
+#ifdef _OPENMP
+#pragma omp critical(pvp_item_obs_templates)
+#endif
+    {
+        if (!_pvp_item_obs_templates_initialized) {
+            for (int i = 0; i <= NUM_ITEMS; i++) {
+                uint8_t item_idx = i < NUM_ITEMS ? (uint8_t)i : ITEM_NONE;
+                pvp_write_item_policy_features(
+                    item_idx,
+                    -1,
+                    0,
+                    NULL,
+                    NULL,
+                    PVP_ITEM_POLICY_FEATURE_TEMPLATES[i]);
+
+                float target_stats[NUM_ITEM_STATS];
+                get_item_stats_normalized(item_idx, target_stats);
+                memcpy(
+                    PVP_TARGET_ITEM_STAT_TEMPLATES[i],
+                    target_stats,
+                    PVP_EQUIPPED_TARGET_FEATURE_DIM * sizeof(float));
+            }
+
+            _pvp_item_obs_templates_initialized = 1;
+        }
+    }
+}
+
+static void pvp_write_item_policy_features_cached(
+    uint8_t item_idx,
+    int physical_inventory_slot,
+    int can_equip,
+    const GearBonuses* current,
+    const GearBonuses* post_equip,
+    float* out
+) {
+    pvp_init_item_obs_templates();
+    memcpy(
+        out,
+        PVP_ITEM_POLICY_FEATURE_TEMPLATES[pvp_item_template_index(item_idx)],
+        OSRS_ITEM_FEATURE_DIM * sizeof(float));
+    if (item_idx >= NUM_ITEMS) return;
+
+    out[31] = can_equip ? 1.0f : 0.0f;
+    out[32] = physical_inventory_slot >= 0
+        ? (float)(physical_inventory_slot + 1) / (float)OSRS_INVENTORY_SIZE
+        : 0.0f;
+
+    if (current != NULL && post_equip != NULL) {
+        out[50] = pvp_gear_melee_attack_score(post_equip)
+            - pvp_gear_melee_attack_score(current);
+        out[51] = (float)(post_equip->ranged_attack - current->ranged_attack) /
+            STAT_NORM_ATTACK;
+        out[52] = (float)(post_equip->magic_attack - current->magic_attack) /
+            STAT_NORM_ATTACK;
+        out[53] = pvp_gear_melee_def_score(post_equip)
+            - pvp_gear_melee_def_score(current);
+        out[54] = (float)(post_equip->ranged_defence - current->ranged_defence) /
+            STAT_NORM_DEFENCE;
+        out[55] = (float)(post_equip->magic_defence - current->magic_defence) /
+            STAT_NORM_DEFENCE;
+    }
+}
+
+static void pvp_write_equipped_self_item_features_cached(uint8_t item_idx, float* out) {
+    pvp_init_item_obs_templates();
+    memcpy(
+        out,
+        PVP_ITEM_POLICY_FEATURE_TEMPLATES[pvp_item_template_index(item_idx)],
+        PVP_EQUIPPED_SELF_FEATURE_DIM * sizeof(float));
+}
+
+static void pvp_write_target_item_stats_cached(uint8_t item_idx, float* out) {
+    pvp_init_item_obs_templates();
+    memcpy(
+        out,
+        PVP_TARGET_ITEM_STAT_TEMPLATES[pvp_item_template_index(item_idx)],
+        PVP_EQUIPPED_TARGET_FEATURE_DIM * sizeof(float));
+}
+
 typedef struct {
     int can_equip[OSRS_INVENTORY_SIZE];
+    unsigned char equip_click_mask[EQUIP_CLICK_DIM];
     int gear_slot[OSRS_INVENTORY_SIZE];
     int is_weapon[OSRS_INVENTORY_SIZE];
     int has_post_equip_bonuses[OSRS_INVENTORY_SIZE];
@@ -550,6 +642,7 @@ static void pvp_collect_inventory_affordances(
     PvpInventoryAffordances* out
 ) {
     memset(out, 0, sizeof(*out));
+    out->equip_click_mask[0] = 1;
     EquipmentBonuses current_bonuses;
     osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -558,6 +651,7 @@ static void pvp_collect_inventory_affordances(
         out->is_weapon[slot] = out->gear_slot[slot] == GEAR_SLOT_WEAPON;
         out->can_equip[slot] = osrs_player_can_equip_from_inventory_slot(
             attacker, slot);
+        out->equip_click_mask[slot + 1] = out->can_equip[slot] ? 1 : 0;
         if (!out->can_equip[slot]) {
             continue;
         }
@@ -580,7 +674,7 @@ static void pvp_write_inventory_policy_observations(
         if (affordances->has_post_equip_bonuses[slot]) {
             post_ptr = &affordances->post_equip_bonuses[slot];
         }
-        pvp_write_item_policy_features(
+        pvp_write_item_policy_features_cached(
             p->inventory[slot],
             slot,
             affordances->can_equip[slot],
@@ -592,19 +686,13 @@ static void pvp_write_inventory_policy_observations(
 
 static void pvp_write_equipped_policy_observations(Player* self, Player* target, float* obs) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        float tmp[OSRS_ITEM_FEATURE_DIM];
-        pvp_write_item_policy_features(self->equipped[slot], -1, 0, NULL, NULL, tmp);
         float* self_row = obs + PVP_SELF_EQUIPPED_OBS_OFFSET +
             slot * PVP_EQUIPPED_SELF_FEATURE_DIM;
-        for (int i = 0; i < PVP_EQUIPPED_SELF_FEATURE_DIM; i++) self_row[i] = tmp[i];
+        pvp_write_equipped_self_item_features_cached(self->equipped[slot], self_row);
 
-        float target_stats[NUM_ITEM_STATS];
-        get_item_stats_normalized(target->equipped[slot], target_stats);
         float* target_row = obs + PVP_TARGET_EQUIPPED_OBS_OFFSET +
             slot * PVP_EQUIPPED_TARGET_FEATURE_DIM;
-        for (int i = 0; i < PVP_EQUIPPED_TARGET_FEATURE_DIM; i++) {
-            target_row[i] = target_stats[i];
-        }
+        pvp_write_target_item_stats_cached(target->equipped[slot], target_row);
     }
 }
 
@@ -1072,10 +1160,7 @@ static void compute_action_masks_with_inventory_affordances(
     int offset = 0;
 
     for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
-        mask[offset] = 1;
-        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-            mask[offset + slot + 1] = affordances->can_equip[slot] ? 1 : 0;
-        }
+        memcpy(mask + offset, affordances->equip_click_mask, EQUIP_CLICK_DIM);
         offset += EQUIP_CLICK_DIM;
     }
 

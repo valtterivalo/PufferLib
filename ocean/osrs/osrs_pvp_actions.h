@@ -246,9 +246,8 @@ static void reset_tick_flags(Player* p) {
     p->weapon_equipped_this_tick = 0;
 }
 
-// Forward declarations for phased execution
-static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
+static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions);
+static void execute_attacks(OsrsEnv* env, int agent_idx, const int* actions);
 
 static inline AttackStyle pvp_target_click_attack_style(Player* p) {
     AttackStyle weapon_style = get_slot_weapon_attack_style(p);
@@ -269,7 +268,7 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
     }
 }
 
-static int execute_equip_clicks(OsrsEnv* env, int agent_idx, int* actions) {
+static int execute_equip_clicks(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     int clicks = 0;
     uint8_t clicked_slots[OSRS_INVENTORY_SIZE] = {0};
@@ -331,17 +330,7 @@ static void execute_special_action(Player* p, int special_action) {
     }
 }
 
-/**
- * Execute switch-phase actions for an agent (Phase 1).
- *
- * Execution order: overhead prayer → loadout → auto-offensive prayer →
- * consumables → movement → vengeance.
- *
- * CRITICAL: Prayer switches MUST be processed for BOTH players BEFORE
- * any attacks are processed. This ensures attacks check the correct
- * prayer state (the state after this tick's switches, not before).
- */
-static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
@@ -350,7 +339,6 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     int overhead_action = actions[HEAD_OVERHEAD];
     int offensive_action = actions[HEAD_OFFENSIVE];
 
-    /* LMS restricts smite/redemption. */
     if (env->is_lms &&
         (overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE ||
          overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)) {
@@ -460,7 +448,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
 static PvpAttackMoveIntent pvp_attack_move_intent(
     OsrsEnv* env,
     int agent_idx,
-    int* actions
+    const int* actions
 ) {
     Player* p = &env->players[agent_idx];
 
@@ -496,12 +484,7 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     };
 }
 
-/**
- * Attack combat phase: range check + perform attack.
- * Called for ALL players AFTER all attack movements have resolved, so
- * dist is computed from final positions (fixes PID-dependent same-tile bug).
- */
-static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
@@ -593,17 +576,12 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     }
 }
 
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_attacks(OsrsEnv* env, int agent_idx, const int* actions) {
     execute_attack_combat(env, agent_idx, actions);
 }
 
-/**
- * Execute all actions for an agent (convenience for opponents).
- * For correct prayer timing, c_step calls execute_switches for both
- * players FIRST, then execute_attacks for both players.
- */
 __attribute__((unused))
-static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_actions(OsrsEnv* env, int agent_idx, const int* actions) {
     execute_switches(env, agent_idx, actions);
     execute_attacks(env, agent_idx, actions);
 }

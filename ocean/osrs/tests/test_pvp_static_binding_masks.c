@@ -1159,6 +1159,99 @@ static void test_inventory_observation_item_facts(void) {
     collision_map_free(cmap);
 }
 
+static void assert_float_rows_near(
+    const char* label,
+    const float* actual,
+    const float* expected,
+    int len,
+    uint8_t item_idx
+) {
+    for (int i = 0; i < len; i++) {
+        tests_run++;
+        if (fabsf(actual[i] - expected[i]) <= 1e-6f) {
+            tests_passed++;
+        } else {
+            tests_failed++;
+            printf("  FAIL: %s item %u idx %d got %.6f expected %.6f\n",
+                label, (unsigned)item_idx, i, actual[i], expected[i]);
+        }
+    }
+}
+
+static void test_item_observation_templates_match_direct_writers(void) {
+    printf("--- PvP item observation templates match direct writers ---\n");
+
+    GearBonuses current = {
+        .stab_attack = 1,
+        .slash_attack = 2,
+        .crush_attack = 3,
+        .magic_attack = 4,
+        .ranged_attack = 5,
+        .stab_defence = 6,
+        .slash_defence = 7,
+        .crush_defence = 8,
+        .magic_defence = 9,
+        .ranged_defence = 10,
+        .melee_strength = 11,
+        .ranged_strength = 12,
+        .magic_strength = 13,
+        .attack_speed = 4,
+        .attack_range = 5,
+    };
+    GearBonuses post = {
+        .stab_attack = 21,
+        .slash_attack = 23,
+        .crush_attack = 25,
+        .magic_attack = 27,
+        .ranged_attack = 29,
+        .stab_defence = 31,
+        .slash_defence = 33,
+        .crush_defence = 35,
+        .magic_defence = 37,
+        .ranged_defence = 39,
+        .melee_strength = 41,
+        .ranged_strength = 43,
+        .magic_strength = 45,
+        .attack_speed = 6,
+        .attack_range = 7,
+    };
+
+    for (int item = 0; item <= NUM_ITEMS; item++) {
+        uint8_t item_idx = item < NUM_ITEMS ? (uint8_t)item : ITEM_NONE;
+        float direct[OSRS_ITEM_FEATURE_DIM];
+        float cached[OSRS_ITEM_FEATURE_DIM];
+        pvp_write_item_policy_features(
+            item_idx, 7, 1, &current, &post, direct);
+        pvp_write_item_policy_features_cached(
+            item_idx, 7, 1, &current, &post, cached);
+        assert_float_rows_near(
+            "item policy template", cached, direct, OSRS_ITEM_FEATURE_DIM, item_idx);
+
+        float direct_self[OSRS_ITEM_FEATURE_DIM];
+        float cached_self[PVP_EQUIPPED_SELF_FEATURE_DIM];
+        pvp_write_item_policy_features(
+            item_idx, -1, 0, NULL, NULL, direct_self);
+        pvp_write_equipped_self_item_features_cached(item_idx, cached_self);
+        assert_float_rows_near(
+            "equipped self template",
+            cached_self,
+            direct_self,
+            PVP_EQUIPPED_SELF_FEATURE_DIM,
+            item_idx);
+
+        float direct_target[NUM_ITEM_STATS];
+        float cached_target[PVP_EQUIPPED_TARGET_FEATURE_DIM];
+        get_item_stats_normalized(item_idx, direct_target);
+        pvp_write_target_item_stats_cached(item_idx, cached_target);
+        assert_float_rows_near(
+            "target item stats template",
+            cached_target,
+            direct_target,
+            PVP_EQUIPPED_TARGET_FEATURE_DIM,
+            item_idx);
+    }
+}
+
 static void setup_affordance_projection_player(Player* player, int state) {
     memset(player, 0, sizeof(*player));
     memset(player->equipped, ITEM_NONE, sizeof(player->equipped));
@@ -1925,6 +2018,7 @@ int main(void) {
     test_attack_reach_short_circuits_mobile_without_collision_map();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
+    test_item_observation_templates_match_direct_writers();
     test_inventory_affordance_projection_matches_copy_equip();
     test_pvp_log_emits_command_diagnostics();
     test_no_weapon_observation_has_zero_attack_profile();

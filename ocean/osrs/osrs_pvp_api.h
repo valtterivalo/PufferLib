@@ -676,16 +676,6 @@ void pvp_step(OsrsEnv* env) {
     int first = env->pid_holder;
     int second = 1 - env->pid_holder;
 
-    // Copy actions to local arrays for each agent
-    int actions_p0[NUM_ACTION_HEADS];
-    int actions_p1[NUM_ACTION_HEADS];
-    memcpy(actions_p0, env->actions, NUM_ACTION_HEADS * sizeof(int));
-    memcpy(actions_p1, env->actions + NUM_ACTION_HEADS, NUM_ACTION_HEADS * sizeof(int));
-
-    memcpy(env->actions, actions_p0, NUM_ACTION_HEADS * sizeof(int));
-    memcpy(env->actions + NUM_ACTION_HEADS, actions_p1, NUM_ACTION_HEADS * sizeof(int));
-
-    // Save executed actions for recording
     memcpy(
         env->last_executed_actions,
         env->actions,
@@ -700,9 +690,9 @@ void pvp_step(OsrsEnv* env) {
         pi->prev_hp_percent = (float)pi->current_hitpoints / (float)pi->base_hitpoints;
     }
 
-    int* agent_actions[NUM_AGENTS];
-    agent_actions[0] = actions_p0;
-    agent_actions[1] = actions_p1;
+    const int* agent_actions[NUM_AGENTS];
+    agent_actions[0] = env->actions;
+    agent_actions[1] = env->actions + NUM_ACTION_HEADS;
 
     int pre_move_x[NUM_AGENTS], pre_move_y[NUM_AGENTS];
     for (int i = 0; i < NUM_AGENTS; i++) {

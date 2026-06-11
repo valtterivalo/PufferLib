@@ -125,7 +125,6 @@ typedef struct {
     PvpStateSnapshot state;
 
     int ocean_acts_staging[NUM_ACTION_HEADS];
-    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
     unsigned char ocean_term_staging;
 
     float ticks_per_second;
@@ -334,8 +333,8 @@ void c_step(Env* env) {
             env->pvp.pvp_runtime.use_external_opponent_actions = 1;
             env->pvp.pvp_runtime.use_c_opponent = 0;
             for (int i = 0; i < NUM_ATNS; i++) {
-                env->ocean_acts_staging_p1[i] = (int)env->action_ptr[1][i];
-                env->pvp.pvp_runtime.external_opponent_actions[i] = env->ocean_acts_staging_p1[i];
+                env->pvp.pvp_runtime.external_opponent_actions[i] =
+                    (int)env->action_ptr[1][i];
             }
         }
         PVP_PROFILE_MARK(PVP_PROF_OPPONENT_ROUTE);
