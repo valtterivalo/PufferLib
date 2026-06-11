@@ -16,6 +16,8 @@ class FakeTrainBackend:
     def __init__(self):
         self.log_calls = 0
         self.eval_log_calls = 0
+        self.rollout_calls = 0
+        self.train_calls = 0
         self.saved_weights = []
         self.closed = False
 
@@ -28,9 +30,11 @@ class FakeTrainBackend:
         )
 
     def rollouts(self, pufferl_obj):
+        self.rollout_calls += 1
         pufferl_obj.global_step += 1
 
     def train(self, pufferl_obj):
+        self.train_calls += 1
         return None
 
     def log(self, pufferl_obj):
@@ -49,6 +53,7 @@ class FakeTrainBackend:
             },
             "env": {
                 "score": 0.5,
+                "wins": 0.5,
                 "performance_score": 0.25 + 0.01 * self.log_calls,
                 "n": 1.0,
             },
@@ -97,6 +102,11 @@ def train_args(tmp_path):
         "eval_episodes": 0,
         "fixed_eval": {
             "enabled": 0,
+        },
+        "rollout_eval": {
+            "mode": "off",
+            "episodes": 4096,
+            "keep_weights": 0,
         },
         "sweep": {
             "metric": "score",
@@ -192,6 +202,110 @@ def test_sweep_early_stop_uses_configured_training_metric(monkeypatch, tmp_path)
     assert calls
     assert calls[0][0] == "env/performance_score"
     assert backend.closed is True
+
+
+def test_rollout_eval_runs_without_extra_train_or_selfplay(monkeypatch, tmp_path):
+    backend = FakeTrainBackend()
+    args = train_args(tmp_path)
+    args["sweep"]["metric"] = "rollout_eval_performance_score"
+    args["rollout_eval"] = {
+        "mode": "pvp_training_distribution",
+        "episodes": 2,
+        "keep_weights": 1,
+    }
+    step_calls = []
+    result_items = []
+
+    monkeypatch.setattr(pufferl, "_resolve_backend", lambda args: backend)
+    monkeypatch.setattr(pufferl.selfplay, "setup", lambda *args: object())
+    monkeypatch.setattr(
+        pufferl.selfplay,
+        "step",
+        lambda pufferl_obj, backend_obj, pool_state, flat_logs, epoch:
+            step_calls.append(epoch),
+    )
+    monkeypatch.setattr(pufferl, "print_dashboard", lambda *args, **kwargs: None)
+
+    pufferl._train(
+        "fake_env",
+        args,
+        sweep_obj=pufferl._ReproSweep(),
+        result_queue=SimpleNamespace(put=result_items.append),
+    )
+
+    assert backend.train_calls == 4
+    assert backend.rollout_calls == 6
+    assert step_calls == [0, 1, 2, 3]
+    assert backend.saved_weights
+    assert backend.saved_weights[-1].endswith("rollout_eval_weights.bin")
+    assert backend.closed is True
+    assert result_items
+    assert result_items[-1][1] == [0.305, 0.305]
+
+
+def test_rollout_eval_aggregates_metrics_by_episode_count():
+    backend = FakeTrainBackend()
+    pufferl_obj = backend.create_pufferl({})
+
+    logs = pufferl._run_pvp_rollout_eval(
+        backend,
+        pufferl_obj,
+        {
+            "rollout_eval": {
+                "mode": "pvp_training_distribution",
+                "episodes": 2,
+            },
+        },
+    )
+
+    assert backend.rollout_calls == 2
+    assert backend.train_calls == 0
+    assert logs["env/rollout_eval_n"] == pytest.approx(2.0)
+    assert logs["env/rollout_eval_wins"] == pytest.approx(0.5)
+    assert logs["env/rollout_eval_performance_score"] == pytest.approx(0.265)
+
+
+def test_rollout_eval_caps_final_batch_weight():
+    backend = FakeTrainBackend()
+    pufferl_obj = backend.create_pufferl({})
+
+    def log(_pufferl_obj):
+        value = 0.2 if backend.rollout_calls == 1 else 0.8
+        return {
+            "env": {
+                "n": 5.0,
+                "score": value,
+                "wins": value,
+                "performance_score": value,
+                "expected_damage_score": value,
+                "ko_supply_score": value,
+                "damage_dealt": 0.0,
+                "damage_received": 0.0,
+            },
+        }
+
+    backend.log = log
+    logs = pufferl._run_pvp_rollout_eval(
+        backend,
+        pufferl_obj,
+        {
+            "rollout_eval": {
+                "mode": "pvp_training_distribution",
+                "episodes": 7,
+            },
+        },
+    )
+
+    assert backend.rollout_calls == 2
+    assert logs["env/rollout_eval_n"] == pytest.approx(7.0)
+    assert logs["env/rollout_eval_performance_score"] == pytest.approx(
+        (0.2 * 5.0 + 0.8 * 2.0) / 7.0,
+    )
+
+
+def test_rollout_eval_invalid_mode_fails_loud():
+    with pytest.raises(ValueError, match="unknown rollout_eval.mode"):
+        pufferl._rollout_eval_mode({"rollout_eval": {"mode": "mystery"}})
 
 
 def test_checkpoint_interval_zero_disables_periodic_saves():

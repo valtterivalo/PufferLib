@@ -31,3 +31,23 @@ def test_load_config_includes_state_curriculum_hypers(monkeypatch: pytest.Monkey
     assert "state_priority_decay" in args["train"]
     assert args["train"]["state_lambda"] == pytest.approx(args["train"]["gae_lambda"])
     assert args["train"]["state_priority_decay"] == pytest.approx(args["train"]["explore_decay"])
+
+
+def test_load_config_includes_rollout_eval_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["puffer"])
+
+    args = pufferl.load_config("osrs_pvp")
+
+    assert args["rollout_eval"]["mode"] == "off"
+    assert args["rollout_eval"]["episodes"] == 4096
+    assert args["rollout_eval"]["keep_weights"] == 1
+
+
+def test_load_config_includes_sweep_early_stop_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.argv", ["puffer"])
+
+    args = pufferl.load_config("osrs_pvp")
+
+    assert args["sweep"]["early_stop_metric"] == "score"

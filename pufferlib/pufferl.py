@@ -262,6 +262,15 @@ PVP_FIXED_EVAL_KEYS = (
 def _fixed_eval_enabled(args):
     return bool(args.get('fixed_eval', {}).get('enabled', 0))
 
+def _rollout_eval_mode(args):
+    mode = str(args.get('rollout_eval', {}).get('mode', 'off')).strip()
+    if mode not in ('off', 'pvp_training_distribution'):
+        raise ValueError(f'unknown rollout_eval.mode: {mode}')
+    return mode
+
+def _rollout_eval_enabled(args):
+    return _rollout_eval_mode(args) != 'off'
+
 def _sweep_metric_key(metric):
     metric = str(metric).strip()
     if not metric:
@@ -371,15 +380,19 @@ def _collect_pvp_eval_means(backend, pufferl, episodes):
         n = float(flat.get('env/n', 0.0))
         if n <= 0.0:
             continue
-        total_n += n
+        used_n = min(n, episodes - total_n)
+        total_n += used_n
         for key in PVP_FIXED_EVAL_KEYS:
             if key in flat:
-                sums[key] += float(flat[key]) * n
+                sums[key] += float(flat[key]) * used_n
 
     means = {key: value / total_n for key, value in sums.items()}
     wins = means.get('env/wins', 0.0)
     damage_dealt = means.get('env/damage_dealt', 0.0)
     damage_received = means.get('env/damage_received', 0.0)
+    means.setdefault('env/wins', wins)
+    means.setdefault('env/damage_dealt', damage_dealt)
+    means.setdefault('env/damage_received', damage_received)
     score, dmg_diff_score = _pvp_score_from_means(wins, damage_dealt, damage_received)
     means['env/score'] = score
     means['env/dmg_diff_score'] = dmg_diff_score
@@ -473,6 +486,34 @@ def _write_pvp_fixed_eval_means(logs, prefix, means):
     logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
     logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
     logs[f'{prefix}_n'] = means['env/n']
+
+def _write_pvp_rollout_eval_means(logs, means):
+    logs['env/rollout_eval_score'] = means['env/score']
+    logs['env/rollout_eval_performance_score'] = means['env/performance_score']
+    logs['env/rollout_eval_wins'] = means['env/wins']
+    logs['env/rollout_eval_dmg_diff_score'] = means['env/dmg_diff_score']
+    logs['env/rollout_eval_expected_damage_score'] = means['env/expected_damage_score']
+    logs['env/rollout_eval_ko_supply_score'] = means['env/ko_supply_score']
+    logs['env/rollout_eval_n'] = means['env/n']
+
+def _run_pvp_rollout_eval(backend, pufferl, args):
+    mode = _rollout_eval_mode(args)
+    if mode == 'off':
+        return {}
+    if mode != 'pvp_training_distribution':
+        raise ValueError(f'unknown rollout_eval.mode: {mode}')
+
+    cfg = args.get('rollout_eval', {})
+    episodes = int(cfg.get('episodes', 4096))
+    if episodes <= 0:
+        raise ValueError('rollout_eval.episodes must be positive')
+
+    started = time.time()
+    means = _collect_pvp_eval_means(backend, pufferl, episodes)
+    logs = {}
+    _write_pvp_rollout_eval_means(logs, means)
+    logs['env/rollout_eval_elapsed_sec'] = time.time() - started
+    return logs
 
 def _run_pvp_fixed_eval_suite(backend, args, model_path):
     cfg = args.get('fixed_eval', {})
@@ -637,8 +678,9 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     model_path = ''
     flat_logs = {}
     fixed_eval_enabled = _fixed_eval_enabled(args)
+    rollout_eval_enabled = _rollout_eval_enabled(args)
     train_epochs = int(total_timesteps // (args['vec']['total_agents'] * args['train']['horizon']))
-    eval_epochs = 0 if fixed_eval_enabled else train_epochs // 2
+    eval_epochs = 0 if fixed_eval_enabled or rollout_eval_enabled else train_epochs // 2
     next_display_log_time = 0.0
     for epoch in range(train_epochs + eval_epochs):
         backend.rollouts(pufferl)
@@ -693,6 +735,17 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     if match_mode and not model_path:
         model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
         backend.save_weights(pufferl, model_path)
+    if rollout_eval_enabled:
+        rollout_eval_logs = _run_pvp_rollout_eval(backend, pufferl, args)
+        flat_logs = {**flat_logs, **rollout_eval_logs}
+        if 'uptime' in flat_logs:
+            flat_logs['uptime'] += rollout_eval_logs['env/rollout_eval_elapsed_sec']
+        if args['wandb']:
+            wandb.log(rollout_eval_logs, step=flat_logs.get('agent_steps', 0))
+        if args.get('rollout_eval', {}).get('keep_weights', 0):
+            model_path = os.path.join(checkpoint_dir, 'rollout_eval_weights.bin')
+            backend.save_weights(pufferl, model_path)
+
     fixed_eval_model_path = ''
     if fixed_eval_enabled:
         fixed_eval_model_path = os.path.join(checkpoint_dir, 'fixed_eval_weights.bin')
@@ -841,9 +894,14 @@ def _write_repro_comparison(env_name, cli_args, repro_args):
         os.path.join(repro_args['log_dir'], env_name, '*.json'),
         'repro trial log',
     )
+    weight_name = (
+        'fixed_eval_weights.bin' if _fixed_eval_enabled(repro_args)
+        else 'rollout_eval_weights.bin' if _rollout_eval_enabled(repro_args)
+        else '*.bin'
+    )
     weight_path = _find_single_repro_artifact(
-        os.path.join(repro_args['checkpoint_dir'], env_name, '*', 'fixed_eval_weights.bin'),
-        'repro fixed eval weights',
+        os.path.join(repro_args['checkpoint_dir'], env_name, '*', weight_name),
+        'repro final weights',
     )
 
     with open(log_path) as f:
@@ -858,7 +916,7 @@ def _write_repro_comparison(env_name, cli_args, repro_args):
         source_trial.get('checkpoint_dir', ''),
         env_name,
         source_run_id,
-        'fixed_eval_weights.bin',
+        weight_name,
     )
     comparison = {
         'source_trial_path': trial_path,
