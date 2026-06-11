@@ -268,6 +268,18 @@ static void init_obs_norm_divisors(float* d) {
 }
 
 static float OBS_NORM_DIVISORS[SLOT_NUM_OBSERVATIONS];
+static const int OBS_NORM_NON_IDENTITY_INDICES[] = {
+    4, 21, 22, 23, 24, 25, 26, 27,
+    29, 30, 31, 32,
+    39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+    60, 61, 62, 65,
+    96, 97, 98, 99, 100, 101, 102,
+    106,
+    119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
+    139, 140,
+};
+#define OBS_NORM_NON_IDENTITY_COUNT \
+    ((int)(sizeof(OBS_NORM_NON_IDENTITY_INDICES) / sizeof(OBS_NORM_NON_IDENTITY_INDICES[0])))
 static int _obs_norm_initialized = 0;
 
 static void ensure_obs_norm_initialized(void) {
@@ -277,17 +289,20 @@ static void ensure_obs_norm_initialized(void) {
     }
 }
 
+static inline void ocean_write_normalized_slot_obs(float* dst, const float* src) {
+    memcpy(dst, src, SLOT_NUM_OBSERVATIONS * sizeof(float));
+    for (int i = 0; i < OBS_NORM_NON_IDENTITY_COUNT; i++) {
+        int obs_idx = OBS_NORM_NON_IDENTITY_INDICES[i];
+        dst[obs_idx] = src[obs_idx] / OBS_NORM_DIVISORS[obs_idx];
+    }
+}
+
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_io.agent_obs;
-    float* src = env->observations;  // agent 0 obs (internal buffer)
+    float* src = env->observations;
+    ocean_write_normalized_slot_obs(dst, src);
 
-    // Normalize observations
-    for (int i = 0; i < SLOT_NUM_OBSERVATIONS; i++) {
-        dst[i] = src[i] / OBS_NORM_DIVISORS[i];
-    }
-
-    // Append action mask as float (agent 0 only)
     unsigned char* mask = env->action_masks;
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
         dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
@@ -297,13 +312,10 @@ static void ocean_write_obs(OsrsEnv* env) {
 static void ocean_write_obs_p1(OsrsEnv* env) {
     ensure_obs_norm_initialized();
     float* dst = env->ocean_io.agent_obs_p1;
-    float* src = env->observations + SLOT_NUM_OBSERVATIONS;  // agent 1 offset
+    float* src = env->observations + SLOT_NUM_OBSERVATIONS;
+    ocean_write_normalized_slot_obs(dst, src);
 
-    for (int i = 0; i < SLOT_NUM_OBSERVATIONS; i++) {
-        dst[i] = src[i] / OBS_NORM_DIVISORS[i];
-    }
-
-    unsigned char* mask = env->action_masks + ACTION_MASK_SIZE;  // agent 1 mask offset
+    unsigned char* mask = env->action_masks + ACTION_MASK_SIZE;
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
         dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
     }

@@ -1153,6 +1153,94 @@ static void test_static_binding_exposes_separate_action_mask(void) {
     c_close(&env);
 }
 
+static void test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors(void) {
+    printf("--- PvP obs norm sparse indices cover non-identity divisors ---\n");
+
+    ensure_obs_norm_initialized();
+
+    ASSERT_INT_EQ("slot obs size", SLOT_NUM_OBSERVATIONS, 2251);
+    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
+    ASSERT_INT_EQ("ocean obs size", OCEAN_OBS_SIZE, 2422);
+
+    int expected_count = 0;
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        expected_count += OBS_NORM_DIVISORS[obs_idx] != 1.0f;
+    }
+    ASSERT_INT_EQ("sparse norm index count", OBS_NORM_NON_IDENTITY_COUNT, expected_count);
+
+    for (int sparse_idx = 0; sparse_idx < OBS_NORM_NON_IDENTITY_COUNT; sparse_idx++) {
+        int obs_idx = OBS_NORM_NON_IDENTITY_INDICES[sparse_idx];
+        ASSERT_TRUE("sparse norm index in bounds",
+            obs_idx >= 0 && obs_idx < SLOT_NUM_OBSERVATIONS);
+        ASSERT_TRUE("sparse norm index divisor non-identity",
+            OBS_NORM_DIVISORS[obs_idx] != 1.0f);
+    }
+
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        if (OBS_NORM_DIVISORS[obs_idx] == 1.0f) {
+            continue;
+        }
+
+        int found = 0;
+        for (int sparse_idx = 0; sparse_idx < OBS_NORM_NON_IDENTITY_COUNT; sparse_idx++) {
+            found |= OBS_NORM_NON_IDENTITY_INDICES[sparse_idx] == obs_idx;
+        }
+        ASSERT_TRUE("non-identity divisor appears in sparse index list", found);
+    }
+}
+
+static void test_pvp_obs_sparse_normalization_matches_full_division(void) {
+    printf("--- PvP obs sparse normalization matches full division ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+
+    float p0_obs[OCEAN_OBS_SIZE];
+    float p1_obs[OCEAN_OBS_SIZE];
+    float expected_p0[OCEAN_OBS_SIZE];
+    float expected_p1[OCEAN_OBS_SIZE];
+    memset(p0_obs, 0, sizeof(p0_obs));
+    memset(p1_obs, 0, sizeof(p1_obs));
+    memset(expected_p0, 0, sizeof(expected_p0));
+    memset(expected_p1, 0, sizeof(expected_p1));
+
+    env.ocean_io.agent_obs = p0_obs;
+    env.ocean_io.agent_obs_p1 = p1_obs;
+
+    for (int obs_idx = 0; obs_idx < NUM_AGENTS * SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        env.observations[obs_idx] = (float)((obs_idx % 97) - 41) * 0.25f;
+    }
+    for (int mask_idx = 0; mask_idx < NUM_AGENTS * ACTION_MASK_SIZE; mask_idx++) {
+        env.action_masks[mask_idx] = (unsigned char)((mask_idx % 3) == 0);
+    }
+
+    ensure_obs_norm_initialized();
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        expected_p0[obs_idx] =
+            env.observations[obs_idx] / OBS_NORM_DIVISORS[obs_idx];
+        expected_p1[obs_idx] =
+            env.observations[SLOT_NUM_OBSERVATIONS + obs_idx] /
+            OBS_NORM_DIVISORS[obs_idx];
+    }
+    for (int mask_idx = 0; mask_idx < ACTION_MASK_SIZE; mask_idx++) {
+        expected_p0[SLOT_NUM_OBSERVATIONS + mask_idx] =
+            (float)env.action_masks[mask_idx];
+        expected_p1[SLOT_NUM_OBSERVATIONS + mask_idx] =
+            (float)env.action_masks[ACTION_MASK_SIZE + mask_idx];
+    }
+
+    ocean_write_obs(&env);
+    ocean_write_obs_p1(&env);
+
+    for (int obs_idx = 0; obs_idx < OCEAN_OBS_SIZE; obs_idx++) {
+        ASSERT_FLOAT_NEAR("p0 sparse normalized obs",
+            p0_obs[obs_idx], expected_p0[obs_idx], 1e-6f);
+        ASSERT_FLOAT_NEAR("p1 sparse normalized obs",
+            p1_obs[obs_idx], expected_p1[obs_idx], 1e-6f);
+    }
+}
+
 static void test_static_binding_sets_scripted_opponents(void) {
     printf("--- PvP static binding sets scripted opponents ---\n");
 
@@ -1294,6 +1382,8 @@ int main(void) {
     test_shared_player_step_destination_clears_interaction();
     test_persistent_staff_target_click_executes_melee();
     test_static_binding_exposes_separate_action_mask();
+    test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors();
+    test_pvp_obs_sparse_normalization_matches_full_division();
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();
     test_expected_damage_prayer_modifier();
