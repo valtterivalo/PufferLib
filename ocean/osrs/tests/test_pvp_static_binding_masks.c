@@ -586,6 +586,7 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     ASSERT_TRUE("crossbow inventory slot", slot >= 0);
 
     compute_action_masks(&env, 0);
+    generate_slot_observations(&env, 0);
 
     int equip_offset = action_head_offset(HEAD_EQUIP_0);
     int special_offset = action_head_offset(HEAD_SPECIAL);
@@ -594,6 +595,64 @@ static void test_slotclick_schema_and_inventory_mask(void) {
         env.action_masks[equip_offset + slot + 1], 1);
     ASSERT_INT_EQ("special noop valid",
         env.action_masks[special_offset + SPECIAL_NOOP], 1);
+
+    for (int slot_idx = 0; slot_idx < OSRS_INVENTORY_SIZE; slot_idx++) {
+        float* row = env.observations + PVP_INVENTORY_OBS_OFFSET +
+            slot_idx * OSRS_ITEM_FEATURE_DIM;
+        int row_can_equip = row[31] > 0.5f ? 1 : 0;
+        for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+            int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+            ASSERT_INT_EQ("inventory can_equip mirrors equip head mask",
+                row_can_equip, env.action_masks[head_offset + slot_idx + 1]);
+        }
+    }
+
+    collision_map_free(cmap);
+}
+
+static void test_two_handed_full_inventory_affordance_matches_masks(void) {
+    printf("--- PvP two-handed full inventory affordance matches masks ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER);
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        agent->inventory[slot] = ITEM_DRAGON_DAGGER;
+    }
+    agent->inventory[0] = ITEM_AGS;
+
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+
+    float* row = env.observations + PVP_INVENTORY_OBS_OFFSET;
+    ASSERT_FLOAT_NEAR("full inventory two-handed row can_equip",
+        row[31], 0.0f, 1e-6f);
+    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+        ASSERT_INT_EQ("full inventory two-handed equip mask",
+            env.action_masks[head_offset + 1], 0);
+    }
+
+    agent->inventory[1] = ITEM_NONE;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+
+    ASSERT_FLOAT_NEAR("free slot two-handed row can_equip",
+        row[31], 1.0f, 1e-6f);
+    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+        ASSERT_INT_EQ("free slot two-handed equip mask",
+            env.action_masks[head_offset + 1], 1);
+    }
 
     collision_map_free(cmap);
 }
@@ -1367,6 +1426,7 @@ int main(void) {
     test_seeded_pid_shuffles_during_episode();
     test_movement_masks_respect_blocked_tiles();
     test_slotclick_schema_and_inventory_mask();
+    test_two_handed_full_inventory_affordance_matches_masks();
     test_attack_mask_allows_post_equip_weapon_target_click();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();

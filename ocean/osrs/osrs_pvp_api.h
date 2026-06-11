@@ -544,10 +544,7 @@ void pvp_reset(OsrsEnv* env) {
     }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
-        generate_slot_observations(env, i);
-        if (env->action_masks != NULL && (env->action_masks_agents & (1 << i))) {
-            compute_action_masks(env, i);
-        }
+        pvp_generate_slot_observations_and_masks(env, i);
     }
 }
 
@@ -771,10 +768,7 @@ void pvp_step(OsrsEnv* env) {
     // Accumulate agent 0's episode return (written to log at episode end)
     env->_episode_return += env->rewards[0];
     for (int i = 0; i < NUM_AGENTS; i++) {
-        generate_slot_observations(env, i);
-        if (env->action_masks != NULL && (env->action_masks_agents & (1 << i))) {
-            compute_action_masks(env, i);
-        }
+        pvp_generate_slot_observations_and_masks(env, i);
     }
 
     // Write observations to PufferLib shared buffer
