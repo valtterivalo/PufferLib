@@ -43,10 +43,24 @@ static void pvp_profile_mark(int enabled, double* last_ms, int slot);
 #pragma GCC diagnostic pop
 
 typedef struct {
-    OsrsEnv pvp;
-    int ocean_acts_staging[NUM_ACTION_HEADS];
-    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
-    unsigned char ocean_term_staging;
+    Log log;
+    Player players[NUM_AGENTS];
+    int tick;
+    int episode_over;
+    int winner;
+    int auto_reset;
+    int pid_holder;
+    int pid_shuffle_countdown;
+    int is_lms;
+    uint32_t rng_state;
+    uint32_t rng_seed;
+    uint32_t rng_reset_count;
+    int has_rng_seed;
+    int pending_actions[NUM_AGENTS * NUM_ACTION_HEADS];
+    int last_executed_actions[NUM_AGENTS * NUM_ACTION_HEADS];
+    RewardShapingConfig shaping;
+    OsrsPvpRuntime pvp_runtime;
+    float episode_return;
 } PvpStateSnapshot;
 
 typedef PvpStateSnapshot State;
@@ -199,10 +213,25 @@ static void pvp_env_copy_action_masks_to_rollout(Env* env) {
 }
 
 static void pvp_state_store(Env* env, PvpStateSnapshot* out) {
-    out->pvp = env->pvp;
-    memcpy(out->ocean_acts_staging, env->ocean_acts_staging, sizeof(out->ocean_acts_staging));
-    memcpy(out->ocean_acts_staging_p1, env->ocean_acts_staging_p1, sizeof(out->ocean_acts_staging_p1));
-    out->ocean_term_staging = env->ocean_term_staging;
+    out->log = env->pvp.log;
+    memcpy(out->players, env->pvp.players, sizeof(out->players));
+    out->tick = env->pvp.tick;
+    out->episode_over = env->pvp.episode_over;
+    out->winner = env->pvp.winner;
+    out->auto_reset = env->pvp.auto_reset;
+    out->pid_holder = env->pvp.pid_holder;
+    out->pid_shuffle_countdown = env->pvp.pid_shuffle_countdown;
+    out->is_lms = env->pvp.is_lms;
+    out->rng_state = env->pvp.rng_state;
+    out->rng_seed = env->pvp.rng_seed;
+    out->rng_reset_count = env->pvp.rng_reset_count;
+    out->has_rng_seed = env->pvp.has_rng_seed;
+    memcpy(out->pending_actions, env->pvp.pending_actions, sizeof(out->pending_actions));
+    memcpy(out->last_executed_actions, env->pvp.last_executed_actions,
+        sizeof(out->last_executed_actions));
+    out->shaping = env->pvp.shaping;
+    out->pvp_runtime = env->pvp.pvp_runtime;
+    out->episode_return = env->pvp._episode_return;
 }
 
 static void pvp_state_load(Env* env, const PvpStateSnapshot* in) {
@@ -211,16 +240,34 @@ static void pvp_state_load(Env* env, const PvpStateSnapshot* in) {
     const void* encounter_def = env->pvp.encounter_def;
     void* encounter_state = env->pvp.encounter_state;
     void* encounter_context = env->pvp.encounter_context;
-    env->pvp = in->pvp;
-    memcpy(env->ocean_acts_staging, in->ocean_acts_staging, sizeof(env->ocean_acts_staging));
-    memcpy(env->ocean_acts_staging_p1, in->ocean_acts_staging_p1, sizeof(env->ocean_acts_staging_p1));
-    env->ocean_term_staging = in->ocean_term_staging;
+    env->pvp.log = in->log;
+    memcpy(env->pvp.players, in->players, sizeof(env->pvp.players));
+    env->pvp.tick = in->tick;
+    env->pvp.episode_over = in->episode_over;
+    env->pvp.winner = in->winner;
+    env->pvp.auto_reset = in->auto_reset;
+    env->pvp.pid_holder = in->pid_holder;
+    env->pvp.pid_shuffle_countdown = in->pid_shuffle_countdown;
+    env->pvp.is_lms = in->is_lms;
+    env->pvp.rng_state = in->rng_state;
+    env->pvp.rng_seed = in->rng_seed;
+    env->pvp.rng_reset_count = in->rng_reset_count;
+    env->pvp.has_rng_seed = in->has_rng_seed;
+    memcpy(env->pvp.pending_actions, in->pending_actions, sizeof(env->pvp.pending_actions));
+    memcpy(env->pvp.last_executed_actions, in->last_executed_actions,
+        sizeof(env->pvp.last_executed_actions));
+    env->pvp.shaping = in->shaping;
+    env->pvp.pvp_runtime = in->pvp_runtime;
+    env->pvp._episode_return = in->episode_return;
     pvp_env_rewire_after_load(env, collision_map, client,
         encounter_def, encounter_state, encounter_context);
 }
 
 static void puffer_state_refresh(Env* env) {
     pvp_state_load(env, &env->state);
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        pvp_generate_slot_observations_and_masks(&env->pvp, i);
+    }
     ocean_write_obs(&env->pvp);
     if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     pvp_env_copy_action_masks_to_rollout(env);

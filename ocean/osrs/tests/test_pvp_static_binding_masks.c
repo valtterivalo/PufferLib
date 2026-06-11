@@ -497,6 +497,79 @@ static void test_static_vec_train_mask_round_trip(void) {
     static_vec_close(vec);
 }
 
+static void test_pvp_state_snapshot_restores_logical_state(void) {
+    printf("--- PvP state snapshot restores logical state ---\n");
+
+    StaticVec* vec = pvp_test_vec(4, 1);
+    Env* src = &vec->envs[0];
+    Env* dst = &vec->envs[1];
+
+    src->pvp.players[0].current_hitpoints = 57;
+    src->pvp.players[1].current_hitpoints = 63;
+    src->pvp.players[0].attack_timer = 2;
+    src->pvp.players[1].frozen_ticks = 8;
+    src->pvp.tick = 42;
+    src->pvp.rng_state = 1234567u;
+    src->pvp.pending_actions[HEAD_ATTACK] = ATTACK_ICE;
+    src->pvp.last_executed_actions[NUM_ACTION_HEADS + HEAD_OVERHEAD] =
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    src->pvp.pvp_runtime.walk_dest_x[0] = src->pvp.players[0].x + 1;
+    src->pvp.pvp_runtime.walk_dest_y[0] = src->pvp.players[0].y;
+    src->pvp.pvp_runtime.opponent.type = OPP_NIGHTMARE_NH;
+
+    pvp_generate_slot_observations_and_masks(&src->pvp, 0);
+    pvp_generate_slot_observations_and_masks(&src->pvp, 1);
+    ocean_write_obs(&src->pvp);
+    ocean_write_obs_p1(&src->pvp);
+    pvp_env_copy_action_masks_to_rollout(src);
+    pvp_state_store(src, &src->state);
+
+    void* dst_collision_map = dst->pvp.collision_map;
+    void* dst_agent_obs = dst->pvp.ocean_io.agent_obs;
+    void* dst_agent_obs_p1 = dst->pvp.ocean_io.agent_obs_p1;
+    unsigned char* dst_action_mask = dst->pvp.action_masks;
+    memset(dst->pvp._obs_buf, 0x5a, sizeof(dst->pvp._obs_buf));
+    memset(dst->pvp._masks_buf, 0xa5, sizeof(dst->pvp._masks_buf));
+
+    dst->state = src->state;
+    puffer_state_refresh(dst);
+
+    ASSERT_TRUE("snapshot smaller than full env",
+        sizeof(PvpStateSnapshot) < sizeof(OsrsEnv));
+    ASSERT_TRUE("restore keeps collision map pointer",
+        dst->pvp.collision_map == dst_collision_map);
+    ASSERT_TRUE("restore keeps p0 rollout obs pointer",
+        dst->pvp.ocean_io.agent_obs == dst_agent_obs);
+    ASSERT_TRUE("restore keeps p1 rollout obs pointer",
+        dst->pvp.ocean_io.agent_obs_p1 == dst_agent_obs_p1);
+    ASSERT_TRUE("restore keeps action mask pointer",
+        dst->pvp.action_masks == dst_action_mask);
+    ASSERT_INT_EQ("restore tick", dst->pvp.tick, src->pvp.tick);
+    ASSERT_INT_EQ("restore rng", (int)dst->pvp.rng_state, (int)src->pvp.rng_state);
+    ASSERT_INT_EQ("restore p0 hp",
+        dst->pvp.players[0].current_hitpoints,
+        src->pvp.players[0].current_hitpoints);
+    ASSERT_INT_EQ("restore p1 frozen",
+        remaining_ticks(dst->pvp.players[1].frozen_ticks),
+        remaining_ticks(src->pvp.players[1].frozen_ticks));
+    ASSERT_INT_EQ("restore pending attack",
+        dst->pvp.pending_actions[HEAD_ATTACK],
+        src->pvp.pending_actions[HEAD_ATTACK]);
+    ASSERT_INT_EQ("restore runtime opponent",
+        (int)dst->pvp.pvp_runtime.opponent.type,
+        (int)src->pvp.pvp_runtime.opponent.type);
+    ASSERT_TRUE("restore p0 rollout obs",
+        memcmp(dst->obs_ptr[0], src->obs_ptr[0], OBS_SIZE * sizeof(float)) == 0);
+    ASSERT_TRUE("restore p1 rollout obs",
+        memcmp(dst->obs_ptr[1], src->obs_ptr[1], OBS_SIZE * sizeof(float)) == 0);
+    ASSERT_TRUE("restore p0 mask",
+        memcmp(dst->action_mask_ptr[0], src->action_mask_ptr[0], ACTION_MASK_SIZE) == 0);
+    ASSERT_TRUE("restore p1 mask",
+        memcmp(dst->action_mask_ptr[1], src->action_mask_ptr[1], ACTION_MASK_SIZE) == 0);
+
+    static_vec_close(vec);
+}
+
 static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
     printf("--- PvP native init loads collision map and walkable spawns ---\n");
 
@@ -970,7 +1043,7 @@ static void test_attack_mask_lazy_reach_matches_eager_reference(void) {
         unsigned char expected[ATTACK_DIM];
         pvp_test_eager_attack_head_mask(&env, 0, &affordances, expected);
 
-        compute_action_masks_with_inventory_affordances(&env, 0, &affordances);
+        compute_action_masks_with_inventory_affordances(&env, 0, &affordances, NULL);
 
         int attack_offset = action_head_offset(HEAD_ATTACK);
         for (int action = 0; action < ATTACK_DIM; action++) {
@@ -1839,6 +1912,7 @@ int main(void) {
     test_scripted_legacy_movement_maps_to_head_move();
     test_duplicate_equip_clicks_apply_once();
     test_static_vec_train_mask_round_trip();
+    test_pvp_state_snapshot_restores_logical_state();
     test_native_init_loads_collision_map_and_walkable_spawns();
     test_fixed_spawn_override_uses_walkable_pair();
     test_seeded_resets_replay_varied_setup_sequence();

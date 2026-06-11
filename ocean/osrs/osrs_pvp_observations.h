@@ -163,6 +163,19 @@ static inline int can_move_action(Player* p) {
     return can_move(p);
 }
 
+static inline void pvp_collect_move_walkability(
+    const Player* p,
+    const CollisionMap* cmap,
+    unsigned char out[MOVE_DIM]
+) {
+    out[0] = 1;
+    for (int m = 1; m < MOVE_DIM; m++) {
+        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[m];
+        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
+        out[m] = pvp_tile_walkable((void*)cmap, nx, ny) ? 1 : 0;
+    }
+}
+
 /** Check if moving to adjacent tile is useful. */
 static inline int can_move_adjacent(Player* p, Player* target, const CollisionMap* cmap) {
     (void)target;
@@ -687,10 +700,17 @@ static int pvp_special_arm_available_after_any_weapon_equip_cached(
 static void generate_slot_observations_with_inventory_affordances(
     OsrsEnv* env,
     int agent_idx,
-    const PvpInventoryAffordances* affordances
+    const PvpInventoryAffordances* affordances,
+    const unsigned char move_walkable[MOVE_DIM]
 ) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
+    const CollisionMap* cmap_obs = (const CollisionMap*)env->collision_map;
+    unsigned char local_move_walkable[MOVE_DIM];
+    if (move_walkable == NULL) {
+        pvp_collect_move_walkability(p, cmap_obs, local_move_walkable);
+        move_walkable = local_move_walkable;
+    }
 
     float* obs = env->observations + agent_idx * SLOT_NUM_OBSERVATIONS;
 
@@ -1017,15 +1037,8 @@ static void generate_slot_observations_with_inventory_affordances(
     /* per-HEAD_MOVE walkability (25 floats). matches the mask but exposed to
        the value head so the policy can reason about its movement options
        even before the mask gates them out. */
-    const CollisionMap* cmap_obs = (const CollisionMap*)env->collision_map;
     for (int m = 0; m < MOVE_DIM; m++) {
-        if (m == 0) {
-            obs[196 + m] = 1.0f;
-            continue;
-        }
-        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[m];
-        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
-        obs[196 + m] = pvp_tile_walkable((void*)cmap_obs, nx, ny) ? 1.0f : 0.0f;
+        obs[196 + m] = move_walkable[m] ? 1.0f : 0.0f;
     }
 
     pvp_write_inventory_policy_observations(p, affordances, obs);
@@ -1037,16 +1050,23 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     PvpInventoryAffordances affordances;
     pvp_collect_inventory_affordances(p, &affordances);
     generate_slot_observations_with_inventory_affordances(
-        env, agent_idx, &affordances);
+        env, agent_idx, &affordances, NULL);
 }
 
 static void compute_action_masks_with_inventory_affordances(
     OsrsEnv* env,
     int agent_idx,
-    const PvpInventoryAffordances* affordances
+    const PvpInventoryAffordances* affordances,
+    const unsigned char move_walkable[MOVE_DIM]
 ) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    unsigned char local_move_walkable[MOVE_DIM];
+    if (move_walkable == NULL) {
+        pvp_collect_move_walkability(p, cmap, local_move_walkable);
+        move_walkable = local_move_walkable;
+    }
 
     unsigned char* mask = env->action_masks + agent_idx * ACTION_MASK_SIZE;
     int offset = 0;
@@ -1061,7 +1081,6 @@ static void compute_action_masks_with_inventory_affordances(
 
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
     int can_move_now = can_move(p);
-    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
     mask[offset + ATTACK_NONE] = 1;
     int gmaul_spec_ready = p->spec_armed &&
         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
@@ -1140,9 +1159,7 @@ static void compute_action_masks_with_inventory_affordances(
             mask[offset + m] = 0;
             continue;
         }
-        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[m];
-        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[m];
-        mask[offset + m] = pvp_tile_walkable((void*)cmap, nx, ny) ? 1 : 0;
+        mask[offset + m] = move_walkable[m] ? 1 : 0;
     }
     offset += MOVE_DIM;
 }
@@ -1152,18 +1169,21 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
     PvpInventoryAffordances affordances;
     pvp_collect_inventory_affordances(p, &affordances);
     compute_action_masks_with_inventory_affordances(
-        env, agent_idx, &affordances);
+        env, agent_idx, &affordances, NULL);
 }
 
 static void pvp_generate_slot_observations_and_masks(OsrsEnv* env, int agent_idx) {
     Player* p = &env->players[agent_idx];
     PvpInventoryAffordances affordances;
     pvp_collect_inventory_affordances(p, &affordances);
+    unsigned char move_walkable[MOVE_DIM];
+    pvp_collect_move_walkability(
+        p, (const CollisionMap*)env->collision_map, move_walkable);
     generate_slot_observations_with_inventory_affordances(
-        env, agent_idx, &affordances);
+        env, agent_idx, &affordances, move_walkable);
     if (env->action_masks != NULL && (env->action_masks_agents & (1 << agent_idx))) {
         compute_action_masks_with_inventory_affordances(
-            env, agent_idx, &affordances);
+            env, agent_idx, &affordances, move_walkable);
     }
 }
 
