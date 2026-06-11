@@ -132,6 +132,72 @@ static int test_pvp_projectile_can_reach(
     } \
 } while (0)
 
+static int test_gear_bonuses_equal(GearBonuses a, GearBonuses b) {
+    return a.stab_attack == b.stab_attack &&
+        a.slash_attack == b.slash_attack &&
+        a.crush_attack == b.crush_attack &&
+        a.magic_attack == b.magic_attack &&
+        a.ranged_attack == b.ranged_attack &&
+        a.stab_defence == b.stab_defence &&
+        a.slash_defence == b.slash_defence &&
+        a.crush_defence == b.crush_defence &&
+        a.magic_defence == b.magic_defence &&
+        a.ranged_defence == b.ranged_defence &&
+        a.melee_strength == b.melee_strength &&
+        a.ranged_strength == b.ranged_strength &&
+        a.magic_strength == b.magic_strength &&
+        a.attack_speed == b.attack_speed &&
+        a.attack_range == b.attack_range;
+}
+
+static void assert_projection_int_eq(
+    const char* label,
+    int actual,
+    int expected,
+    int state,
+    uint8_t item_idx
+) {
+    tests_run++;
+    if (actual == expected) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s state %d item %u got %d expected %d\n",
+            label, state, (unsigned)item_idx, actual, expected);
+    }
+}
+
+static void assert_projection_gear_eq(
+    const char* label,
+    GearBonuses actual,
+    GearBonuses expected,
+    int state,
+    uint8_t item_idx
+) {
+    tests_run++;
+    if (test_gear_bonuses_equal(actual, expected)) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s state %d item %u\n", label, state, (unsigned)item_idx);
+        printf("    attack got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.stab_attack, actual.slash_attack, actual.crush_attack,
+            actual.magic_attack, actual.ranged_attack,
+            expected.stab_attack, expected.slash_attack, expected.crush_attack,
+            expected.magic_attack, expected.ranged_attack);
+        printf("    defence got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.stab_defence, actual.slash_defence, actual.crush_defence,
+            actual.magic_defence, actual.ranged_defence,
+            expected.stab_defence, expected.slash_defence, expected.crush_defence,
+            expected.magic_defence, expected.ranged_defence);
+        printf("    strength speed range got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.melee_strength, actual.ranged_strength, actual.magic_strength,
+            actual.attack_speed, actual.attack_range,
+            expected.melee_strength, expected.ranged_strength, expected.magic_strength,
+            expected.attack_speed, expected.attack_range);
+    }
+}
+
 static Dict* pvp_kwargs(void) {
     Dict* kwargs = create_dict(8);
     dict_set(kwargs, "seed", 73);
@@ -696,6 +762,256 @@ static void test_attack_mask_allows_post_equip_weapon_target_click(void) {
     collision_map_free(cmap);
 }
 
+static int pvp_test_eager_attack_head_reachable_for_player(
+    const CollisionMap* cmap,
+    Player* attacker,
+    Player* target,
+    int can_move_now
+) {
+    AttackStyle weapon_style = get_slot_weapon_attack_style(attacker);
+    if (weapon_style == ATTACK_STYLE_NONE) return 0;
+
+    AttackStyle actual_style = weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+    OsrsAttackReachQuery reach = pvp_attack_reach_query(
+        cmap, attacker, target, actual_style);
+    return osrs_attack_can_reach(&reach) || can_move_now;
+}
+
+static int pvp_test_eager_attack_head_reachable_after_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int inventory_slot,
+    int can_move_now,
+    const PvpInventoryAffordances* affordances
+) {
+    if (!affordances->can_equip[inventory_slot]) return 0;
+    if (!affordances->is_weapon[inventory_slot]) return 0;
+
+    Player next = *attacker;
+    if (!osrs_player_equip_from_inventory_slot(&next, inventory_slot)) {
+        fprintf(stderr,
+            "pvp_test_eager_attack_head_reachable_after_equip: slot %d precheck failed\n",
+            inventory_slot);
+        abort();
+    }
+    return pvp_test_eager_attack_head_reachable_for_player(
+        cmap, &next, target, can_move_now);
+}
+
+static int pvp_test_eager_attack_head_reachable_after_any_weapon_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int can_move_now,
+    const PvpInventoryAffordances* affordances
+) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        if (pvp_test_eager_attack_head_reachable_after_equip(
+                cmap, attacker, target, slot, can_move_now, affordances)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void pvp_test_eager_attack_head_mask(
+    OsrsEnv* env,
+    int agent_idx,
+    const PvpInventoryAffordances* affordances,
+    unsigned char out[ATTACK_DIM]
+) {
+    Player* p = &env->players[agent_idx];
+    Player* t = &env->players[1 - agent_idx];
+    int attack_ready = remaining_ticks(p->attack_timer) == 0;
+    int can_move_now = can_move(p);
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    int weapon_reachable = pvp_test_eager_attack_head_reachable_for_player(
+        cmap, p, t, can_move_now) ||
+        pvp_test_eager_attack_head_reachable_after_any_weapon_equip(
+            cmap, p, t, can_move_now, affordances);
+    OsrsAttackReachQuery magic_reach = pvp_attack_reach_query(
+        cmap, p, t, ATTACK_STYLE_MAGIC);
+    int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
+    int gmaul_spec_ready = p->spec_armed &&
+        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        is_granite_maul_attack_available(p);
+
+    memset(out, 0, ATTACK_DIM);
+    out[ATTACK_NONE] = 1;
+    out[ATTACK_ATK] = (attack_ready || gmaul_spec_ready) && weapon_reachable;
+    out[ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
+    out[ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
+}
+
+typedef enum {
+    PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE,
+    PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS,
+    PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS,
+    PVP_ATTACK_MASK_CURRENT_WEAPON,
+    PVP_ATTACK_MASK_POST_EQUIP_WEAPON,
+    PVP_ATTACK_MASK_GMAUL_SPEC,
+    PVP_ATTACK_MASK_BARRAGE
+} PvpAttackMaskParityCase;
+
+static const char* pvp_attack_mask_parity_case_label(PvpAttackMaskParityCase test_case) {
+    switch (test_case) {
+        case PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE:
+            return "attack timer active";
+        case PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS:
+            return "can move through blocked LOS";
+        case PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS:
+            return "frozen blocked LOS";
+        case PVP_ATTACK_MASK_CURRENT_WEAPON:
+            return "current weapon";
+        case PVP_ATTACK_MASK_POST_EQUIP_WEAPON:
+            return "post-equip weapon";
+        case PVP_ATTACK_MASK_GMAUL_SPEC:
+            return "gmaul spec";
+        case PVP_ATTACK_MASK_BARRAGE:
+            return "barrage";
+        default:
+            fprintf(stderr, "invalid PvP attack mask parity case: %d\n", test_case);
+            abort();
+    }
+}
+
+static void pvp_setup_attack_mask_parity_case(
+    OsrsEnv* env,
+    CollisionMap* cmap,
+    PvpAttackMaskParityCase test_case
+) {
+    memset(env, 0, sizeof(*env));
+    pvp_init(env);
+    env->collision_map = cmap;
+    pvp_seed(env, 73);
+    pvp_reset(env);
+
+    Player* agent = &env->players[0];
+    Player* target = &env->players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    agent->last_obs_target_x = target->x;
+    agent->last_obs_target_y = target->y;
+    target->last_obs_target_x = agent->x;
+    target->last_obs_target_y = agent->y;
+    agent->current_magic = 0;
+    agent->attack_timer = 0;
+    agent->spec_armed = 0;
+    agent->special_energy = 100;
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+
+    switch (test_case) {
+        case PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE:
+            agent->attack_timer = 3;
+            break;
+        case PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+            break;
+        case PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            agent->frozen_ticks = 8;
+            collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+            break;
+        case PVP_ATTACK_MASK_CURRENT_WEAPON:
+            pvp_set_player_spawn(target, 3042, 3530);
+            agent->frozen_ticks = 8;
+            break;
+        case PVP_ATTACK_MASK_POST_EQUIP_WEAPON:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->frozen_ticks = 8;
+            ASSERT_TRUE("post-equip crossbow added",
+                osrs_player_inventory_add(agent, ITEM_RUNE_CROSSBOW) >= 0);
+            break;
+        case PVP_ATTACK_MASK_GMAUL_SPEC:
+            pvp_set_player_spawn(target, 3042, 3530);
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_GRANITE_MAUL);
+            agent->attack_timer = 3;
+            agent->frozen_ticks = 8;
+            agent->spec_armed = 1;
+            break;
+        case PVP_ATTACK_MASK_BARRAGE:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            agent->frozen_ticks = 8;
+            break;
+        default:
+            fprintf(stderr, "invalid PvP attack mask parity case: %d\n", test_case);
+            abort();
+    }
+}
+
+static void test_attack_mask_lazy_reach_matches_eager_reference(void) {
+    printf("--- PvP attack mask lazy reach matches eager reference ---\n");
+
+    PvpAttackMaskParityCase cases[] = {
+        PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE,
+        PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS,
+        PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS,
+        PVP_ATTACK_MASK_CURRENT_WEAPON,
+        PVP_ATTACK_MASK_POST_EQUIP_WEAPON,
+        PVP_ATTACK_MASK_GMAUL_SPEC,
+        PVP_ATTACK_MASK_BARRAGE,
+    };
+
+    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        CollisionMap* cmap = collision_map_create();
+        OsrsEnv env;
+        pvp_setup_attack_mask_parity_case(&env, cmap, cases[i]);
+
+        PvpInventoryAffordances affordances;
+        pvp_collect_inventory_affordances(&env.players[0], &affordances);
+        unsigned char expected[ATTACK_DIM];
+        pvp_test_eager_attack_head_mask(&env, 0, &affordances, expected);
+
+        compute_action_masks_with_inventory_affordances(&env, 0, &affordances);
+
+        int attack_offset = action_head_offset(HEAD_ATTACK);
+        for (int action = 0; action < ATTACK_DIM; action++) {
+            ASSERT_INT_EQ(pvp_attack_mask_parity_case_label(cases[i]),
+                env.action_masks[attack_offset + action], expected[action]);
+        }
+
+        collision_map_free(cmap);
+    }
+}
+
+static void test_attack_reach_short_circuits_mobile_without_collision_map(void) {
+    printf("--- PvP attack reach short-circuits mobile without collision map ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_attack_mask_parity_case(
+        &env, cmap, PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    PvpInventoryAffordances affordances;
+    pvp_collect_inventory_affordances(agent, &affordances);
+
+    ASSERT_INT_EQ("mobile current weapon short-circuit",
+        pvp_attack_head_reachable_for_player(NULL, agent, target, 1), 1);
+    ASSERT_INT_EQ("mobile magic short-circuit",
+        pvp_magic_attack_reachable_for_player(NULL, agent, target, 1), 1);
+
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_NONE);
+    osrs_player_inventory_clear(agent);
+    ASSERT_TRUE("mobile post-equip crossbow added",
+        osrs_player_inventory_add(agent, ITEM_RUNE_CROSSBOW) >= 0);
+    pvp_collect_inventory_affordances(agent, &affordances);
+    ASSERT_INT_EQ("mobile post-equip weapon short-circuit",
+        pvp_attack_head_reachable_after_any_weapon_equip(
+            NULL, agent, target, 1, &affordances), 1);
+
+    collision_map_free(cmap);
+}
+
 static void test_special_mask_allows_post_equip_weapon_spec_arm(void) {
     printf("--- PvP special mask allows post-equip weapon spec arm ---\n");
 
@@ -768,6 +1084,109 @@ static void test_inventory_observation_item_facts(void) {
         env.observations[182], 1.0f, 1e-6f);
 
     collision_map_free(cmap);
+}
+
+static void setup_affordance_projection_player(Player* player, int state) {
+    memset(player, 0, sizeof(*player));
+    memset(player->equipped, ITEM_NONE, sizeof(player->equipped));
+    memset(player->inventory, ITEM_NONE, sizeof(player->inventory));
+
+    if (state == 0) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_WHIP;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_AHRIMS_ROBETOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_AHRIMS_ROBESKIRT;
+        player->equipped[GEAR_SLOT_RING] = ITEM_BERSERKER_RING;
+    } else if (state == 1) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_AGS;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_KARILS_TOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_BLACK_DHIDE_CHAPS;
+        player->equipped[GEAR_SLOT_RING] = ITEM_LIGHTBEARER;
+    } else if (state == 2) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_MYSTIC_TOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_MYSTIC_BOTTOM;
+        player->equipped[GEAR_SLOT_RING] = ITEM_SEERS_RING_I;
+    } else {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_RUNE_CROSSBOW;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_BANDOS_CHESTPLATE;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
+        player->equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    }
+
+    osrs_refresh_player_equipment(player);
+}
+
+static void fill_affordance_projection_inventory(
+    Player* player,
+    uint8_t item_idx,
+    int full_inventory
+) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        player->inventory[slot] = full_inventory ? ITEM_DRAGON_DAGGER : ITEM_NONE;
+    }
+    player->inventory[0] = item_idx;
+}
+
+static void test_inventory_affordance_projection_matches_copy_equip(void) {
+    printf("--- PvP inventory affordance projection matches copy equip ---\n");
+
+    Player player;
+    for (int state = 0; state < 4; state++) {
+        for (int full_inventory = 0; full_inventory <= 1; full_inventory++) {
+            for (int item = 0; item < NUM_ITEMS; item++) {
+                setup_affordance_projection_player(&player, state);
+                fill_affordance_projection_inventory(
+                    &player, (uint8_t)item, full_inventory);
+
+                PvpInventoryAffordances affordances;
+                pvp_collect_inventory_affordances(&player, &affordances);
+
+                int expected_gear_slot = osrs_item_gear_slot((uint8_t)item);
+                int expected_can_equip =
+                    osrs_player_can_equip_from_inventory_slot(&player, 0);
+                int expected_is_weapon = expected_gear_slot == GEAR_SLOT_WEAPON;
+
+                assert_projection_int_eq("gear slot",
+                    affordances.gear_slot[0], expected_gear_slot, state, (uint8_t)item);
+                assert_projection_int_eq("weapon flag",
+                    affordances.is_weapon[0], expected_is_weapon, state, (uint8_t)item);
+                assert_projection_int_eq("can equip",
+                    affordances.can_equip[0], expected_can_equip, state, (uint8_t)item);
+
+                if (expected_can_equip) {
+                    Player next = player;
+                    ASSERT_TRUE("copy equip succeeds",
+                        osrs_player_equip_from_inventory_slot(&next, 0));
+                    assert_projection_int_eq("has post bonuses",
+                        affordances.has_post_equip_bonuses[0], 1, state, (uint8_t)item);
+                    assert_projection_gear_eq("post equip bonuses",
+                        affordances.post_equip_bonuses[0],
+                        *get_slot_gear_bonuses(&next),
+                        state, (uint8_t)item);
+                } else {
+                    assert_projection_int_eq("no post bonuses",
+                        affordances.has_post_equip_bonuses[0], 0, state, (uint8_t)item);
+                }
+            }
+        }
+    }
+
+    setup_affordance_projection_player(&player, 2);
+    fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
+    PvpInventoryAffordances affordances;
+    pvp_collect_inventory_affordances(&player, &affordances);
+    assert_projection_int_eq("empty weapon full inventory two-handed can equip",
+        affordances.can_equip[0], 1, 2, ITEM_AGS);
+
+    setup_affordance_projection_player(&player, 0);
+    fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
+    pvp_collect_inventory_affordances(&player, &affordances);
+    assert_projection_int_eq("occupied weapon full inventory two-handed cannot equip",
+        affordances.can_equip[0], 0, 0, ITEM_AGS);
 }
 
 static void test_pvp_log_emits_command_diagnostics(void) {
@@ -1428,8 +1847,11 @@ int main(void) {
     test_slotclick_schema_and_inventory_mask();
     test_two_handed_full_inventory_affordance_matches_masks();
     test_attack_mask_allows_post_equip_weapon_target_click();
+    test_attack_mask_lazy_reach_matches_eager_reference();
+    test_attack_reach_short_circuits_mobile_without_collision_map();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
+    test_inventory_affordance_projection_matches_copy_equip();
     test_pvp_log_emits_command_diagnostics();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();

@@ -467,11 +467,78 @@ static int pvp_attack_head_reachable_for_player(
 
 static int pvp_special_arm_available_for_weapon(uint8_t weapon, int special_energy);
 
+static void pvp_apply_item_bonus_delta(
+    EquipmentBonuses* bonuses,
+    uint8_t item_idx,
+    int sign
+) {
+    if (item_idx >= NUM_ITEMS) return;
+
+    const Item* item = &ITEM_DATABASE[item_idx];
+    bonuses->attack_stab += sign * item->attack_stab;
+    bonuses->attack_slash += sign * item->attack_slash;
+    bonuses->attack_crush += sign * item->attack_crush;
+    bonuses->attack_magic += sign * item->attack_magic;
+    bonuses->attack_ranged += sign * item->attack_ranged;
+    bonuses->defence_stab += sign * item->defence_stab;
+    bonuses->defence_slash += sign * item->defence_slash;
+    bonuses->defence_crush += sign * item->defence_crush;
+    bonuses->defence_magic += sign * item->defence_magic;
+    bonuses->defence_ranged += sign * item->defence_ranged;
+    bonuses->melee_strength += sign * item->melee_strength;
+    bonuses->ranged_strength += sign * item->ranged_strength;
+    bonuses->magic_damage += sign * item->magic_damage;
+    bonuses->prayer += sign * item->prayer;
+}
+
+static GearBonuses pvp_project_post_equip_bonuses(
+    const Player* player,
+    const EquipmentBonuses* current_bonuses,
+    int gear_slot,
+    uint8_t item_idx
+) {
+    EquipmentBonuses projected = *current_bonuses;
+    uint8_t old_item = player->equipped[gear_slot];
+    uint8_t old_weapon = player->equipped[GEAR_SLOT_WEAPON];
+    uint8_t old_shield = player->equipped[GEAR_SLOT_SHIELD];
+    uint8_t projected_weapon = old_weapon;
+
+    pvp_apply_item_bonus_delta(&projected, old_item, -1);
+    pvp_apply_item_bonus_delta(&projected, item_idx, 1);
+
+    if (gear_slot == GEAR_SLOT_WEAPON) {
+        projected_weapon = item_idx;
+        if (old_shield != ITEM_NONE && item_is_two_handed(item_idx)) {
+            pvp_apply_item_bonus_delta(&projected, old_shield, -1);
+        }
+    } else if (
+        gear_slot == GEAR_SLOT_SHIELD &&
+        old_weapon < NUM_ITEMS &&
+        item_is_two_handed(old_weapon)
+    ) {
+        projected_weapon = ITEM_NONE;
+        pvp_apply_item_bonus_delta(&projected, old_weapon, -1);
+    }
+
+    if (projected_weapon < NUM_ITEMS) {
+        const Item* weapon = &ITEM_DATABASE[projected_weapon];
+        projected.attack_speed = weapon->attack_speed;
+        projected.attack_range = weapon->attack_range;
+    } else {
+        projected.attack_speed = 0;
+        projected.attack_range = 0;
+    }
+
+    return osrs_gear_bonuses_from_equipment_bonuses(&projected);
+}
+
 static void pvp_collect_inventory_affordances(
     const Player* attacker,
     PvpInventoryAffordances* out
 ) {
     memset(out, 0, sizeof(*out));
+    EquipmentBonuses current_bonuses;
+    osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         uint8_t item_idx = attacker->inventory[slot];
         out->gear_slot[slot] = osrs_item_gear_slot(item_idx);
@@ -482,15 +549,9 @@ static void pvp_collect_inventory_affordances(
             continue;
         }
 
-        Player next = *attacker;
-        if (!osrs_player_equip_from_inventory_slot(&next, slot)) {
-            fprintf(stderr, "pvp_collect_inventory_affordances: slot %d precheck failed\n",
-                slot);
-            abort();
-        }
-
         out->has_post_equip_bonuses[slot] = 1;
-        out->post_equip_bonuses[slot] = *get_slot_gear_bonuses(&next);
+        out->post_equip_bonuses[slot] = pvp_project_post_equip_bonuses(
+            attacker, &current_bonuses, out->gear_slot[slot], item_idx);
     }
 }
 
@@ -542,6 +603,7 @@ static int pvp_attack_head_reachable_for_player(
 ) {
     AttackStyle weapon_style = get_slot_weapon_attack_style(attacker);
     if (weapon_style == ATTACK_STYLE_NONE) return 0;
+    if (can_move_now) return 1;
 
     AttackStyle actual_style = weapon_style == ATTACK_STYLE_MAGIC
         ? ATTACK_STYLE_MELEE
@@ -561,6 +623,9 @@ static int pvp_attack_head_reachable_after_equip(
 ) {
     if (!affordances->can_equip[inventory_slot]) return 0;
     if (!affordances->is_weapon[inventory_slot]) return 0;
+    if (can_move_now) {
+        return get_item_attack_style(attacker->inventory[inventory_slot]) != 0;
+    }
 
     Player next = *attacker;
     if (!osrs_player_equip_from_inventory_slot(&next, inventory_slot)) {
@@ -585,6 +650,18 @@ static int pvp_attack_head_reachable_after_any_weapon_equip(
         }
     }
     return 0;
+}
+
+static int pvp_magic_attack_reachable_for_player(
+    const CollisionMap* cmap,
+    Player* attacker,
+    Player* target,
+    int can_move_now
+) {
+    if (can_move_now) return 1;
+    OsrsAttackReachQuery reach = pvp_attack_reach_query(
+        cmap, attacker, target, ATTACK_STYLE_MAGIC);
+    return osrs_attack_can_reach(&reach);
 }
 
 static int pvp_special_arm_available_for_weapon(uint8_t weapon, int special_energy) {
@@ -985,21 +1062,29 @@ static void compute_action_masks_with_inventory_affordances(
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
     int can_move_now = can_move(p);
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-    int weapon_reachable = pvp_attack_head_reachable_for_player(
-        cmap, p, t, can_move_now) ||
-        pvp_attack_head_reachable_after_any_weapon_equip(
-            cmap, p, t, can_move_now, affordances);
-    OsrsAttackReachQuery magic_reach = pvp_attack_reach_query(
-        cmap, p, t, ATTACK_STYLE_MAGIC);
-    int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
     mask[offset + ATTACK_NONE] = 1;
     int gmaul_spec_ready = p->spec_armed &&
         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
         is_granite_maul_attack_available(p);
+    int can_weapon_attack = attack_ready || gmaul_spec_ready;
+    int weapon_reachable = 0;
+    if (can_weapon_attack) {
+        weapon_reachable = pvp_attack_head_reachable_for_player(
+            cmap, p, t, can_move_now) ||
+            pvp_attack_head_reachable_after_any_weapon_equip(
+                cmap, p, t, can_move_now, affordances);
+    }
     mask[offset + ATTACK_ATK] = (attack_ready || gmaul_spec_ready) &&
         weapon_reachable;
-    mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
-    mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
+    int ice_castable = attack_ready && can_cast_ice_spell(p);
+    int blood_castable = attack_ready && can_cast_blood_spell(p);
+    int magic_reachable = 0;
+    if (ice_castable || blood_castable) {
+        magic_reachable = pvp_magic_attack_reachable_for_player(
+            cmap, p, t, can_move_now);
+    }
+    mask[offset + ATTACK_ICE] = ice_castable && magic_reachable;
+    mask[offset + ATTACK_BLOOD] = blood_castable && magic_reachable;
     offset += ATTACK_DIM;
 
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
