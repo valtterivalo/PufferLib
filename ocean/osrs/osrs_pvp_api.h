@@ -21,6 +21,37 @@
 #include "osrs_pvp_actions.h"
 #include "osrs_pvp_opponents.h"
 
+typedef enum {
+    PVP_PROF_C_STEP_TOTAL,
+    PVP_PROF_ACTION_DECODE,
+    PVP_PROF_OPPONENT_ROUTE,
+    PVP_PROF_PVP_STEP,
+    PVP_PROF_TERMINAL_LOG,
+    PVP_PROF_RESET_OBS,
+    PVP_PROF_MASK_COPY,
+    PVP_PROF_STATE_STORE,
+    PVP_PROF_API_TOTAL,
+    PVP_PROF_API_CLEAR_FLAGS,
+    PVP_PROF_API_ACTION_COPY,
+    PVP_PROF_API_C_OPPONENT,
+    PVP_PROF_API_SWITCHES,
+    PVP_PROF_API_MOVEMENT,
+    PVP_PROF_API_COMBAT,
+    PVP_PROF_API_PENDING_HITS,
+    PVP_PROF_API_REWARD_TERMINAL,
+    PVP_PROF_API_OBS_MASK,
+    PVP_PROF_API_TERMINAL_SCORING,
+    PVP_PROF_API_AUTO_RESET,
+    PVP_PROF_COUNT,
+} PvpProfileSlot;
+
+#ifndef OSRS_PVP_PROFILE_ENABLED
+#define OSRS_PVP_PROFILE_ENABLED() 0
+#define OSRS_PVP_PROFILE_NOW_MS() 0.0
+#define OSRS_PVP_PROFILE_MARK(slot) ((void)0)
+#define OSRS_PVP_PROFILE_ADD(slot, ms) ((void)0)
+#endif
+
 /**
  * Initialize a player with default pure build stats and gear.
  *
@@ -578,6 +609,10 @@ static void pvp_terminal_presentation_capture(OsrsEnv* env) {
 }
 
 void pvp_step(OsrsEnv* env) {
+    int osrs_pvp_prof_enabled = OSRS_PVP_PROFILE_ENABLED();
+    double osrs_pvp_prof_start = osrs_pvp_prof_enabled ? OSRS_PVP_PROFILE_NOW_MS() : 0.0;
+    double osrs_pvp_prof_t0 = osrs_pvp_prof_start;
+
     memset(env->rewards, 0, NUM_AGENTS * sizeof(float));
     memset(env->terminals, 0, NUM_AGENTS);
 
@@ -596,6 +631,7 @@ void pvp_step(OsrsEnv* env) {
     }
     reset_tick_flags(&env->players[0]);
     reset_tick_flags(&env->players[1]);
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_CLEAR_FLAGS);
 
     // Copy model's actions (player 0) or clear if C opponent controls p0
     if (env->pvp_runtime.use_c_opponent_p0) {
@@ -614,6 +650,7 @@ void pvp_step(OsrsEnv* env) {
     } else {
         memset(env->actions + NUM_ACTION_HEADS, 0, NUM_ACTION_HEADS * sizeof(int));
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_ACTION_COPY);
 
     // Generate C opponent actions (writes to pending_actions, then copy to actions)
     if (env->pvp_runtime.use_c_opponent && !env->pvp_runtime.use_external_opponent_actions) {
@@ -634,6 +671,7 @@ void pvp_step(OsrsEnv* env) {
             NUM_ACTION_HEADS * sizeof(int)
         );
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_C_OPPONENT);
 
     int first = env->pid_holder;
     int second = 1 - env->pid_holder;
@@ -674,6 +712,7 @@ void pvp_step(OsrsEnv* env) {
 
     execute_switches(env, first, agent_actions[first]);
     execute_switches(env, second, agent_actions[second]);
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_SWITCHES);
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         Player* pi = &env->players[i];
@@ -693,6 +732,7 @@ void pvp_step(OsrsEnv* env) {
         env->players[0].y == env->players[1].y) {
         resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_MOVEMENT);
 
     execute_attack_combat(env, first, agent_actions[first]);
     execute_attack_combat(env, second, agent_actions[second]);
@@ -708,6 +748,7 @@ void pvp_step(OsrsEnv* env) {
         int dist = (dx > dy) ? dx : dy;
         env->players[i].is_running = (dist >= 2) ? 1 : 0;
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_COMBAT);
 
     process_pending_hits(env, 0, 1);
     process_pending_hits(env, 1, 0);
@@ -741,6 +782,7 @@ void pvp_step(OsrsEnv* env) {
         env->pid_holder = 1 - env->pid_holder;
         env->pid_shuffle_countdown = 100 + rand_int(env, 51);
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_PENDING_HITS);
 
     memcpy(env->pending_actions, env->actions,
            NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
@@ -764,6 +806,7 @@ void pvp_step(OsrsEnv* env) {
         env->step_rewards[i] = env->rewards[i];
         env->step_terminals[i] = env->terminals[i];
     }
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_REWARD_TERMINAL);
 
     // Accumulate agent 0's episode return (written to log at episode end)
     env->_episode_return += env->rewards[0];
@@ -777,6 +820,7 @@ void pvp_step(OsrsEnv* env) {
         ocean_write_obs_p1(env);
     }
     env->ocean_io.agent_rewards[0] = env->rewards[0];
+    OSRS_PVP_PROFILE_MARK(PVP_PROF_API_OBS_MASK);
 
     if (env->episode_over) {
         env->ocean_io.agent_terminals[0] = 1;
@@ -873,12 +917,20 @@ void pvp_step(OsrsEnv* env) {
             : 0.0f;
         env->log.n = 1.0f;
         pvp_terminal_presentation_capture(env);
+        OSRS_PVP_PROFILE_MARK(PVP_PROF_API_TERMINAL_SCORING);
 
         if (env->auto_reset) {
             pvp_reset(env);
         }
+        OSRS_PVP_PROFILE_MARK(PVP_PROF_API_AUTO_RESET);
     } else {
         env->ocean_io.agent_terminals[0] = 0;
+        OSRS_PVP_PROFILE_MARK(PVP_PROF_API_TERMINAL_SCORING);
+        OSRS_PVP_PROFILE_MARK(PVP_PROF_API_AUTO_RESET);
+    }
+    if (osrs_pvp_prof_enabled) {
+        OSRS_PVP_PROFILE_ADD(
+            PVP_PROF_API_TOTAL, OSRS_PVP_PROFILE_NOW_MS() - osrs_pvp_prof_start);
     }
 }
 

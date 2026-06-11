@@ -7,6 +7,20 @@
  * struct. PVP source headers are untouched.
  */
 
+#include <time.h>
+#include <stdlib.h>
+
+static int pvp_profile_enabled(void);
+static double pvp_profile_now_ms(void);
+static void pvp_profile_add(int slot, double ms);
+static void pvp_profile_mark(int enabled, double* last_ms, int slot);
+
+#define OSRS_PVP_PROFILE_ENABLED() pvp_profile_enabled()
+#define OSRS_PVP_PROFILE_NOW_MS() pvp_profile_now_ms()
+#define OSRS_PVP_PROFILE_ADD(slot, ms) pvp_profile_add((slot), (ms))
+#define OSRS_PVP_PROFILE_MARK(slot) \
+    pvp_profile_mark(osrs_pvp_prof_enabled, &osrs_pvp_prof_t0, (slot))
+
 #include "../osrs/osrs_env.h"
 
 #pragma GCC diagnostic push
@@ -36,6 +50,51 @@ typedef struct {
 } PvpStateSnapshot;
 
 typedef PvpStateSnapshot State;
+
+static int g_pvp_profile_enabled = -1;
+static double g_pvp_profile_ms[PVP_PROF_COUNT];
+
+static int pvp_profile_enabled(void) {
+    if (g_pvp_profile_enabled < 0) {
+        const char* text = getenv("PUFFER_PVP_PROFILE");
+        g_pvp_profile_enabled = (text && text[0] && text[0] != '0') ? 1 : 0;
+    }
+    return g_pvp_profile_enabled;
+}
+
+static double pvp_profile_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+static void pvp_profile_add(int slot, double ms) {
+    if (slot < 0 || slot >= PVP_PROF_COUNT) abort();
+    #pragma omp atomic update
+    g_pvp_profile_ms[slot] += ms;
+}
+
+static void pvp_profile_mark(int enabled, double* last_ms, int slot) {
+    if (!enabled) return;
+    double now = pvp_profile_now_ms();
+    pvp_profile_add(slot, now - *last_ms);
+    *last_ms = now;
+}
+
+static double pvp_profile_read_reset_ms(int slot) {
+    if (slot < 0 || slot >= PVP_PROF_COUNT) abort();
+    double value;
+    #pragma omp atomic read
+    value = g_pvp_profile_ms[slot];
+    #pragma omp atomic write
+    g_pvp_profile_ms[slot] = 0.0;
+    return value;
+}
+
+#define PVP_PROFILE_ENABLED() pvp_profile_enabled()
+#define PVP_PROFILE_NOW_MS() pvp_profile_now_ms()
+#define PVP_PROFILE_ADD(slot, ms) pvp_profile_add((slot), (ms))
+#define PVP_PROFILE_MARK(slot) pvp_profile_mark(pvp_prof_enabled, &pvp_prof_t0, (slot))
 
 /* vecenv-compatible header fields must stay first. */
 typedef struct {
@@ -194,6 +253,10 @@ static void pvp_env_set_gear_tier(Env* env, int tier) {
 }
 
 void c_step(Env* env) {
+    int pvp_prof_enabled = PVP_PROFILE_ENABLED();
+    double pvp_prof_start = pvp_prof_enabled ? PVP_PROFILE_NOW_MS() : 0.0;
+    double pvp_prof_t0 = pvp_prof_start;
+
 #ifdef OSRS_VISUAL
     RenderClient* rc = (RenderClient*)env->pvp.client;
     int used_human_commands = 0;
@@ -215,10 +278,7 @@ void c_step(Env* env) {
         for (int i = 0; i < NUM_ATNS; i++) {
             env->ocean_acts_staging[i] = (int)p0_acts[i];
         }
-        /* Slot 1 routing — three modes:
-             scripted_opp_type >= 0 → C-heuristic of that specific type drives p1
-             use_rollout_opponent && action_ptr[1] → rollout drives p1 (pure selfplay)
-             else → legacy default opponent_type C-heuristic */
+        PVP_PROFILE_MARK(PVP_PROF_ACTION_DECODE);
         if (env->scripted_opp_type >= 0) {
             env->pvp.pvp_runtime.opponent.type = (OpponentType)env->scripted_opp_type;
             env->pvp.pvp_runtime.use_external_opponent_actions = 0;
@@ -231,12 +291,10 @@ void c_step(Env* env) {
                 env->pvp.pvp_runtime.external_opponent_actions[i] = env->ocean_acts_staging_p1[i];
             }
         }
+        PVP_PROFILE_MARK(PVP_PROF_OPPONENT_ROUTE);
         pvp_step(&env->pvp);
+        PVP_PROFILE_MARK(PVP_PROF_PVP_STEP);
 
-        /* For scripted-opp envs, slot 1's reward reflects what the C-heuristic
-           did, not what the policy's slot 1 logits chose. Zero it to suppress
-           that noisy training signal — the policy only trains on slot 0
-           (learner) in scripted-opp envs. */
         if (env->scripted_opp_type >= 0) {
             env->pvp._rews_buf[1] = 0.0f;
             env->pvp.step_rewards[1] = 0.0f;
@@ -251,14 +309,9 @@ void c_step(Env* env) {
     if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp.step_rewards[1];
 
     if (env->pvp.step_terminals[0]) {
-        /* Self-play per-bank attribution. When env->tag > 0, this env is the
-           learner playing against frozen bank (tag - 1). Accumulate the win
-           (1.0) or loss (0.0) and game count so selfplay.step() sees this
-           bank's winrate via my_log -> hist_score_bank_<tag-1>. Also set
-           boundary_reached for static_vec_count_aligned. */
         if (env->tag > 0 && env->tag <= 8) {
             int b = env->tag - 1;
-            float win = env->pvp.log.wins;  /* 1.0 if learner won, 0.0 otherwise */
+            float win = env->pvp.log.wins;
             env->log.hist_score_bank[b] += win;
             env->log.hist_n_bank[b] += 1.0f;
         }
@@ -286,13 +339,20 @@ void c_step(Env* env) {
         env->log.n += env->pvp.log.n;
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
+    PVP_PROFILE_MARK(PVP_PROF_TERMINAL_LOG);
 
     if (env->pvp.step_terminals[0] && env->pvp.auto_reset) {
         ocean_write_obs(&env->pvp);
         if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     }
+    PVP_PROFILE_MARK(PVP_PROF_RESET_OBS);
     pvp_env_copy_action_masks_to_rollout(env);
+    PVP_PROFILE_MARK(PVP_PROF_MASK_COPY);
     pvp_state_store(env, &env->state);
+    PVP_PROFILE_MARK(PVP_PROF_STATE_STORE);
+    if (pvp_prof_enabled) {
+        PVP_PROFILE_ADD(PVP_PROF_C_STEP_TOTAL, PVP_PROFILE_NOW_MS() - pvp_prof_start);
+    }
 }
 
 void c_reset(Env* env) {
@@ -631,6 +691,33 @@ void my_log(Log* log, Dict* out) {
     float score = 0.7f * wr + 0.3f * dmg_diff_score;
     dict_set(out, "score", score);
     dict_set(out, "dmg_diff_score", dmg_diff_score);
+    if (PVP_PROFILE_ENABLED()) {
+        static const char* keys[PVP_PROF_COUNT] = {
+            "profile_pvp_c_step_total_ms",
+            "profile_pvp_action_decode_ms",
+            "profile_pvp_opponent_route_ms",
+            "profile_pvp_pvp_step_ms",
+            "profile_pvp_terminal_log_ms",
+            "profile_pvp_reset_obs_ms",
+            "profile_pvp_mask_copy_ms",
+            "profile_pvp_state_store_ms",
+            "profile_pvp_api_total_ms",
+            "profile_pvp_api_clear_flags_ms",
+            "profile_pvp_api_action_copy_ms",
+            "profile_pvp_api_c_opponent_ms",
+            "profile_pvp_api_switches_ms",
+            "profile_pvp_api_movement_ms",
+            "profile_pvp_api_combat_ms",
+            "profile_pvp_api_pending_hits_ms",
+            "profile_pvp_api_reward_terminal_ms",
+            "profile_pvp_api_obs_mask_ms",
+            "profile_pvp_api_terminal_scoring_ms",
+            "profile_pvp_api_auto_reset_ms",
+        };
+        for (int i = 0; i < PVP_PROF_COUNT; i++) {
+            dict_set(out, keys[i], pvp_profile_read_reset_ms(i));
+        }
+    }
 }
 
 #ifdef __cplusplus
