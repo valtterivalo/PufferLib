@@ -2342,10 +2342,17 @@ static void inferno_log_idle_metric(
         "zuk_healers",
         "zuk_post_healers",
     };
+    /* dict_set stores the key POINTER (vecenv.h dict_set, see the chess binding
+       warning) — a per-iteration stack buffer aliases every phase key onto one
+       dict entry. Keys live in a static pool instead: slots are unique within
+       one my_log flush (one Dict lifetime) and deterministic across flushes. */
+    static char key_pool[64][96];
+    static int key_pool_next = 0;
     dict_set(out, name, total);
     for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
-        char key[96];
-        snprintf(key, sizeof(key), "%s_%s", name, phases[i]);
+        char* key = key_pool[key_pool_next];
+        key_pool_next = (key_pool_next + 1) & 63;
+        snprintf(key, sizeof(key_pool[0]), "%s_%s", name, phases[i]);
         dict_set(out, key, by_phase[i]);
     }
 }

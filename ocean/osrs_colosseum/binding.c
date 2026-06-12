@@ -386,18 +386,24 @@ void my_log(Log* log, Dict* out) {
 
     /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
        overhead per prayer-checkable hit faced) + mean off-prayer damage taken
-       per episode. Indexed by ColoNpcType. */
-    static const char* COLO_TYPE_KEYS[COLO_NUM_NPC_TYPES] = {
-        "berserker", "archer", "seer", "serpent", "jaguar", "javelin",
-        "shockwave", "minotaur", "manticore", "sol", "totem", "bee"};
+       per episode. Indexed by ColoNpcType. Keys are string literals because
+       dict_set stores the key POINTER (no copy) — formatted stack buffers
+       alias every entry onto one item. */
+    static const char* OFFPRAY_RATE_KEYS[COLO_NUM_NPC_TYPES] = {
+        "offpray_rate_berserker", "offpray_rate_archer", "offpray_rate_seer",
+        "offpray_rate_serpent", "offpray_rate_jaguar", "offpray_rate_javelin",
+        "offpray_rate_shockwave", "offpray_rate_minotaur", "offpray_rate_manticore",
+        "offpray_rate_sol", "offpray_rate_totem", "offpray_rate_bee"};
+    static const char* OFFPRAY_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
+        "offpray_dmg_berserker", "offpray_dmg_archer", "offpray_dmg_seer",
+        "offpray_dmg_serpent", "offpray_dmg_jaguar", "offpray_dmg_javelin",
+        "offpray_dmg_shockwave", "offpray_dmg_minotaur", "offpray_dmg_manticore",
+        "offpray_dmg_sol", "offpray_dmg_totem", "offpray_dmg_bee"};
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
-        char key[64];
         float faced = log->colo_pray_faced_by_type[t];
         float off_rate = faced > 0.0f
             ? (faced - log->colo_pray_correct_by_type[t]) / faced : 0.0f;
-        snprintf(key, sizeof(key), "offpray_rate_%s", COLO_TYPE_KEYS[t]);
-        dict_set(out, key, off_rate);
-        snprintf(key, sizeof(key), "offpray_dmg_%s", COLO_TYPE_KEYS[t]);
-        dict_set(out, key, log->colo_offpray_damage_by_type[t]);
+        dict_set(out, OFFPRAY_RATE_KEYS[t], off_rate);
+        dict_set(out, OFFPRAY_DMG_KEYS[t], log->colo_offpray_damage_by_type[t]);
     }
 }
