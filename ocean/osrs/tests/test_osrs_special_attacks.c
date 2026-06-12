@@ -11,8 +11,8 @@
  *   2. spec resolver: cost table, SGS heal/prayer wiki minimums on landed
  *      specs only, claws cascade bounds, elder maul / statius defence drains;
  *   3. item effects: identity law for an empty profile, tbow target-magic
- *      monotonicity, exact crystal armour scaling, blood fury proc rate and
- *      heal fraction (melee-only).
+ *      monotonicity, exact crystal armour scaling, fang bounds and stab-only
+ *      accuracy, blood fury proc rate and heal fraction (melee-only).
  *
  * BUILD:
  *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_special_attacks \
@@ -165,28 +165,113 @@ static void test_spec_costs_and_sgs(void) {
     CHECK("SGS heal/prayer follow max(d/2,10) / max(d/4,5)", 1);
 }
 
+/** dps-calc claws.ts splat table for a drawn total at success branch k (0-3).
+    Splats are floor fractions of the total and need NOT sum back to it — that
+    residue loss is the reference model, not a bug (audit E5 resolution). */
+static void claws_expected_splats(int branch, int total, int out[4]) {
+    out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0;
+    switch (branch) {
+        case 0:
+            out[0] = total / 2; out[1] = total / 4;
+            out[2] = total / 8; out[3] = total / 8 + 1;
+            break;
+        case 1:
+            out[0] = total / 2; out[1] = total / 4; out[2] = total / 4 + 1;
+            break;
+        case 2:
+            out[0] = total / 2; out[1] = total / 2 + 1;
+            break;
+        case 3:
+            out[0] = total + 1;
+            break;
+    }
+}
+
+/** Classifies an observed claws SpecResult against the dps-calc tables.
+    Returns 1 with branch 0-3 (success), 4 ([1,1] all-miss), or 5 (zero
+    all-miss); returns 0 if no branch/total in range reproduces the splats. */
+static int claws_classify(const SpecResult* r, int max_hit, int* out_branch) {
+    if (r->damage[0] == 0 && r->damage[1] == 0 &&
+        r->damage[2] == 0 && r->damage[3] == 0) {
+        *out_branch = 5;
+        return 1;
+    }
+    if (r->damage[0] == 1 && r->damage[1] == 1 &&
+        r->damage[2] == 0 && r->damage[3] == 0) {
+        *out_branch = 4;
+        return 1;
+    }
+    for (int k = 0; k < 4; k++) {
+        int low = max_hit * (4 - k) / 4;
+        int high = max_hit + low - 1;
+        for (int t = low; t <= high; t++) {
+            int e[4];
+            claws_expected_splats(k, t, e);
+            if (r->damage[0] == e[0] && r->damage[1] == e[1] &&
+                r->damage[2] == e[2] && r->damage[3] == e[3]) {
+                *out_branch = k;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void test_claws_and_def_drains(void) {
     printf("test_claws_and_def_drains\n");
 
-    /* claws cascade: always 4 splats, total bounded by the roll-0 branch's
-       2*max - 1 ceiling (+1 rounding slack), all splats non-negative. */
+    /* near-certain accuracy: the first-success branch dominates. dps-calc
+       claws.ts: total uniform in [max, 2*max-1], splats [t/2,t/4,t/8,t/8+1]. */
     uint32_t rng = 1337;
-    int max_total = 0;
-    int ok = 1;
-    for (int i = 0; i < 5000; i++) {
-        SpecResult r = osrs_resolve_spec(ITEM_DRAGON_CLAWS, 18000, 40, 9000, 99, &rng);
-        if (r.num_hits != 4) ok = 0;
-        int total = 0;
-        for (int h = 0; h < 4; h++) {
-            if (r.damage[h] < 0) ok = 0;
-            total += r.damage[h];
+    int seen_total[40] = {0};
+    int classified_ok = 1, branch0 = 0, min_total = 1 << 30, max_total = 0;
+    for (int i = 0; i < 20000; i++) {
+        SpecResult r = osrs_resolve_spec(ITEM_DRAGON_CLAWS, 2000000, 40, 1, 99, &rng);
+        int branch;
+        if (!claws_classify(&r, 40, &branch)) { classified_ok = 0; break; }
+        if (branch != 0) continue;
+        branch0++;
+        int total = r.damage[0] + r.damage[1] + r.damage[2] + r.damage[3];
+        if (total != r.total_damage) { classified_ok = 0; break; }
+        /* adjacent totals can floor-split to the same tuple (78 and 79 both
+           give [39,19,9,10]), so mark every total the tuple matches */
+        for (int t = 40; t <= 79; t++) {
+            int e[4];
+            claws_expected_splats(0, t, e);
+            if (r.damage[0] == e[0] && r.damage[1] == e[1] &&
+                r.damage[2] == e[2] && r.damage[3] == e[3]) {
+                seen_total[t - 40] = 1;
+            }
         }
-        if (total != r.total_damage) ok = 0;
+        if (total < min_total) min_total = total;
         if (total > max_total) max_total = total;
     }
-    CHECK("claws cascade shape holds across 5k resolves", ok);
-    CHECK("claws total stays within the 2x max-hit ceiling",
-        max_total <= 2 * 40 + 2 && max_total > 40);
+    int covered = 1;
+    for (int i = 0; i < 40; i++) covered &= seen_total[i];
+    CHECK("claws splats always match a dps-calc branch table", classified_ok);
+    CHECK("claws first-success branch dominates at p~=1", branch0 >= 19990);
+    CHECK("claws first-success draws cover every total in [40, 79]", covered);
+    CHECK("claws observable extremes match the floor splits (41 / 77 at max 40)",
+        min_total == 20 + 10 + 5 + 6 && max_total == 39 + 19 + 9 + 10);
+
+    /* contested accuracy: all four success branches and both all-miss
+       outcomes appear, and every observed tuple matches its branch table */
+    rng = 777;
+    int seen_class[6] = {0};
+    int contested_ok = 1;
+    for (int i = 0; i < 50000; i++) {
+        SpecResult r = osrs_resolve_spec(ITEM_DRAGON_CLAWS, 10000, 40, 10000, 99, &rng);
+        int branch;
+        if (r.num_hits != 4 || !claws_classify(&r, 40, &branch)) {
+            contested_ok = 0;
+            break;
+        }
+        seen_class[branch] = 1;
+    }
+    CHECK("claws contested-accuracy tuples all match dps-calc tables", contested_ok);
+    CHECK("claws all four branches and both all-miss outcomes observed",
+        seen_class[0] && seen_class[1] && seen_class[2] &&
+        seen_class[3] && seen_class[4] && seen_class[5]);
 
     /* defence drains: elder maul 35%, statius 30%, both only on a hit */
     rng = 99;
@@ -253,6 +338,47 @@ static void test_item_effect_laws(void) {
         osrs_target_effect_context_magic(100, 0), 99, 99);
     CHECK("full crystal scales bowfa by 26/20 accuracy and 46/40 damage",
         bowfa.attack_roll == 20000 * 26 / 20 && bowfa.max_hit == 40 * 46 / 40);
+
+    OsrsEquipmentEffectProfile fang;
+    memset(&fang, 0, sizeof(fang));
+    fang.effect_mask = OSRS_ITEM_EFFECT_FANG;
+    CHECK("fang generated item carries the shared fang effect",
+        ITEM_DATABASE[ITEM_OSMUMTENS_FANG].effect_mask == OSRS_ITEM_EFFECT_FANG);
+
+    int fang_bounds_ok = 1;
+    for (int max_hit = 1; max_hit <= 99; max_hit++) {
+        OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects_for_melee_style(
+            &fang, &state, ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE,
+            MELEE_STYLE_STAB, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
+            12345, max_hit, osrs_target_effect_context_none(), 99, 99);
+        int shrink = osrs_fang_hit_bound_shrink(max_hit);
+        if (prepared.min_hit != shrink || prepared.max_hit != max_hit - shrink) {
+            fang_bounds_ok = 0;
+        }
+    }
+    CHECK("fang min/max bounds follow floor(max*3/20) shrink", fang_bounds_ok);
+
+    OsrsPreparedAttackEffects fang_stab = osrs_prepare_attack_effects_for_melee_style(
+        &fang, &state, ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE,
+        MELEE_STYLE_STAB, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
+        20000, 50, osrs_target_effect_context_none(), 99, 99);
+    OsrsPreparedAttackEffects fang_slash = osrs_prepare_attack_effects_for_melee_style(
+        &fang, &state, ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE,
+        MELEE_STYLE_SLASH, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
+        20000, 50, osrs_target_effect_context_none(), 99, 99);
+    CHECK("fang accuracy reroll applies only on stab",
+        fang_stab.use_fang_accuracy == 1 && fang_slash.use_fang_accuracy == 0);
+
+    int double_accuracy_monotone = 1;
+    for (int attack_roll = 1; attack_roll <= 20000; attack_roll += 137) {
+        for (int def_roll = 1; def_roll <= 20000; def_roll += 251) {
+            if (osrs_hit_chance_double(attack_roll, def_roll) + 0.000001f <
+                osrs_hit_chance(attack_roll, def_roll)) {
+                double_accuracy_monotone = 0;
+            }
+        }
+    }
+    CHECK("fang double-roll accuracy never lowers hit chance", double_accuracy_monotone);
 
     /* scythe splat rule */
     CHECK("scythe splats: 1 vs 1x1, 2 vs 2x2, 3 vs 3x3+",

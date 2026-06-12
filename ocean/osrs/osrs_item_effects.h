@@ -9,6 +9,7 @@
 #ifndef OSRS_ITEM_EFFECTS_H
 #define OSRS_ITEM_EFFECTS_H
 
+#include <assert.h>
 #include <string.h>
 
 #include "osrs_damage.h"
@@ -21,7 +22,9 @@
 typedef struct {
     int attack_roll;
     int max_hit;
+    int min_hit;
     int use_double_accuracy;
+    int use_fang_accuracy;
 } OsrsPreparedAttackEffects;
 
 typedef struct {
@@ -258,11 +261,18 @@ static inline int osrs_confliction_is_match(
            osrs_target_ref_equal(state->confliction_target, target_ref);
 }
 
-static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
+/** Returns the fang max-hit shrink used for min-hit and max-hit bounds.
+    Audit E1 keeps the outside-ToA formula from osrs-dps-calc: trunc(max * 3 / 20). */
+static inline int osrs_fang_hit_bound_shrink(int max_hit) {
+    return max_hit * 3 / 20;
+}
+
+static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects_for_melee_style(
     const OsrsEquipmentEffectProfile* profile,
     const OsrsItemEffectState* state,
     uint8_t weapon_item,
     AttackStyle style,
+    MeleeStyle melee_style,
     OsrsMagicAttackKind magic_kind,
     OsrsTargetRef target_ref,
     int is_primary_target,
@@ -275,7 +285,9 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
     OsrsPreparedAttackEffects result = {
         .attack_roll = base_attack_roll,
         .max_hit = base_max_hit,
+        .min_hit = 0,
         .use_double_accuracy = 0,
+        .use_fang_accuracy = 0,
     };
 
     if (style == ATTACK_STYLE_RANGED &&
@@ -315,12 +327,61 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
         result.max_hit = (int)(result.max_hit * (1.0f + hp_ratio * hp_ratio));
     }
 
+    if (style == ATTACK_STYLE_MELEE &&
+        weapon_item == ITEM_OSMUMTENS_FANG &&
+        osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_FANG)) {
+        int fang_shrink = osrs_fang_hit_bound_shrink(result.max_hit);
+        result.min_hit = fang_shrink;
+        result.max_hit -= fang_shrink;
+        if (melee_style == MELEE_STYLE_STAB) {
+            result.use_fang_accuracy = 1;
+        }
+    }
+
     if (osrs_confliction_can_apply(profile, style, weapon_item, is_primary_target) &&
         osrs_confliction_is_match(state, weapon_item, magic_kind, target_ref)) {
         result.use_double_accuracy = 1;
     }
 
     return result;
+}
+
+static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
+    const OsrsEquipmentEffectProfile* profile,
+    const OsrsItemEffectState* state,
+    uint8_t weapon_item,
+    AttackStyle style,
+    OsrsMagicAttackKind magic_kind,
+    OsrsTargetRef target_ref,
+    int is_primary_target,
+    int base_attack_roll,
+    int base_max_hit,
+    OsrsTargetEffectContext target_context,
+    int attacker_current_hitpoints,
+    int attacker_base_hitpoints
+) {
+    return osrs_prepare_attack_effects_for_melee_style(
+        profile, state, weapon_item, style, MELEE_STYLE_STAB, magic_kind,
+        target_ref, is_primary_target, base_attack_roll, base_max_hit,
+        target_context, attacker_current_hitpoints, attacker_base_hitpoints);
+}
+
+/** Rolls a prepared attack's accuracy and bounded damage.
+    Audit E1 makes fang min/max bounds and fang's stab-only double accuracy a
+    prepared-attack contract, so encounters consume this helper without item branches. */
+static inline int osrs_roll_prepared_attack_damage(
+    const OsrsPreparedAttackEffects* prepared,
+    int def_roll,
+    int splat_max_hit,
+    uint32_t* rng_state
+) {
+    assert(prepared->min_hit <= splat_max_hit);
+    int damage = prepared->min_hit +
+                 encounter_rand_int(rng_state, splat_max_hit - prepared->min_hit + 1);
+    int hit = (prepared->use_fang_accuracy || prepared->use_double_accuracy)
+        ? encounter_roll_hit_chance_double(rng_state, prepared->attack_roll, def_roll)
+        : encounter_roll_hit_chance(rng_state, prepared->attack_roll, def_roll);
+    return hit ? damage : 0;
 }
 
 static inline OsrsPostAttackEffects osrs_finalize_attack_effects(

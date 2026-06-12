@@ -1068,7 +1068,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_SCYTHE_OF_VITUR] = { /* Scythe of vitur */
         .item_id = 22325, .name = "Scythe of vitur", .slot = SLOT_WEAPON,
-        .attack_speed = 5, .attack_range = 2,
+        .attack_speed = 5, .attack_range = 1,
         .attack_stab = 70, .attack_slash = 125, .attack_crush = 30,
         .attack_magic = -6, .attack_ranged = 0,
         .defence_stab = -2, .defence_slash = 8, .defence_crush = 10,
@@ -1091,7 +1091,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 103, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 103, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_FANG
     },
     [ITEM_SOULREAPER_AXE] = { /* Soulreaper axe */
         .item_id = 28338, .name = "Soulreaper axe", .slot = SLOT_WEAPON,
