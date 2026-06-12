@@ -40,6 +40,8 @@ typedef enum {
     PVP_PROF_API_PENDING_HITS,
     PVP_PROF_API_REWARD_TERMINAL,
     PVP_PROF_API_OBS_MASK,
+    PVP_PROF_API_OBS_GENERATE,
+    PVP_PROF_API_OCEAN_WRITE,
     PVP_PROF_API_TERMINAL_SCORING,
     PVP_PROF_API_AUTO_RESET,
     PVP_PROF_COUNT,
@@ -474,18 +476,28 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->log, 0, sizeof(env->log));
 }
 
-/* pvp_render: forward declaration only.
-   binding.c provides the stub, or osrs_render.h provides the real impl. */
 void pvp_render(OsrsEnv* env);
 
-/**
- * Reset the environment to initial state.
- *
- * Initializes both players, sets fight positions, resets tick counter,
- * and generates initial observations.
- *
- * @param env Environment to reset
- */
+static inline int pvp_should_generate_slot_observations_and_masks(
+    const OsrsEnv* env,
+    int agent_idx
+) {
+    if (agent_idx == 0) return 1;
+    if (agent_idx == 1 && env->ocean_io.agent_obs_p1 != NULL) return 1;
+    if (env->action_masks != NULL && (env->action_masks_agents & (1 << agent_idx))) {
+        return 1;
+    }
+    return 0;
+}
+
+static inline void pvp_generate_exported_slot_observations_and_masks(OsrsEnv* env) {
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        if (pvp_should_generate_slot_observations_and_masks(env, i)) {
+            pvp_generate_slot_observations_and_masks(env, i);
+        }
+    }
+}
+
 void pvp_reset(OsrsEnv* env) {
     if (env->has_rng_seed) {
         if (env->rng_seed == 0) {
@@ -574,9 +586,7 @@ void pvp_reset(OsrsEnv* env) {
         opponent_reset(env, &env->pvp_runtime.opponent_p0);
     }
 
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        pvp_generate_slot_observations_and_masks(env, i);
-    }
+    pvp_generate_exported_slot_observations_and_masks(env);
 }
 
 static const char* pvp_terminal_opponent_name(OsrsEnv* env) {
@@ -798,16 +808,24 @@ void pvp_step(OsrsEnv* env) {
     }
     OSRS_PVP_PROFILE_MARK(PVP_PROF_API_REWARD_TERMINAL);
 
-    // Accumulate agent 0's episode return (written to log at episode end)
     env->_episode_return += env->rewards[0];
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        pvp_generate_slot_observations_and_masks(env, i);
+    double pvp_obs_generate_start = osrs_pvp_prof_enabled ? OSRS_PVP_PROFILE_NOW_MS() : 0.0;
+    pvp_generate_exported_slot_observations_and_masks(env);
+    if (osrs_pvp_prof_enabled) {
+        OSRS_PVP_PROFILE_ADD(
+            PVP_PROF_API_OBS_GENERATE,
+            OSRS_PVP_PROFILE_NOW_MS() - pvp_obs_generate_start);
     }
 
-    // Write observations to PufferLib shared buffer
+    double pvp_obs_write_start = osrs_pvp_prof_enabled ? OSRS_PVP_PROFILE_NOW_MS() : 0.0;
     ocean_write_obs(env);
     if (env->ocean_io.agent_obs_p1 != NULL) {
         ocean_write_obs_p1(env);
+    }
+    if (osrs_pvp_prof_enabled) {
+        OSRS_PVP_PROFILE_ADD(
+            PVP_PROF_API_OCEAN_WRITE,
+            OSRS_PVP_PROFILE_NOW_MS() - pvp_obs_write_start);
     }
     env->ocean_io.agent_rewards[0] = env->rewards[0];
     OSRS_PVP_PROFILE_MARK(PVP_PROF_API_OBS_MASK);

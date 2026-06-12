@@ -559,6 +559,7 @@ typedef struct {
     unsigned char equip_click_mask[EQUIP_CLICK_DIM];
     int gear_slot[OSRS_INVENTORY_SIZE];
     int is_weapon[OSRS_INVENTORY_SIZE];
+    int has_equippable_affordable_spec_weapon;
     int has_post_equip_bonuses[OSRS_INVENTORY_SIZE];
     GearBonuses post_equip_bonuses[OSRS_INVENTORY_SIZE];
 } PvpInventoryAffordances;
@@ -637,23 +638,54 @@ static GearBonuses pvp_project_post_equip_bonuses(
     return osrs_gear_bonuses_from_equipment_bonuses(&projected);
 }
 
+static inline int pvp_can_equip_inventory_slot_cached(
+    const Player* player,
+    uint8_t item_idx,
+    int gear_slot,
+    int free_slots
+) {
+    if (item_idx == ITEM_NONE) return 0;
+    if (gear_slot < 0) return 0;
+    if (player->equipped[gear_slot] == item_idx) return 0;
+
+    uint8_t old_item = player->equipped[gear_slot];
+    uint8_t old_shield = player->equipped[GEAR_SLOT_SHIELD];
+
+    int equipping_two_handed =
+        gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx);
+
+    if (equipping_two_handed && old_shield != ITEM_NONE &&
+            old_item != ITEM_NONE && free_slots <= 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
 static void pvp_collect_inventory_affordances(
     const Player* attacker,
     PvpInventoryAffordances* out
 ) {
-    memset(out, 0, sizeof(*out));
+    out->has_equippable_affordable_spec_weapon = 0;
     out->equip_click_mask[0] = 1;
     EquipmentBonuses current_bonuses;
     osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
+    int free_slots = osrs_player_inventory_free_slots(attacker);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         uint8_t item_idx = attacker->inventory[slot];
         out->gear_slot[slot] = osrs_item_gear_slot(item_idx);
         out->is_weapon[slot] = out->gear_slot[slot] == GEAR_SLOT_WEAPON;
-        out->can_equip[slot] = osrs_player_can_equip_from_inventory_slot(
-            attacker, slot);
+        out->can_equip[slot] = pvp_can_equip_inventory_slot_cached(
+            attacker, item_idx, out->gear_slot[slot], free_slots);
         out->equip_click_mask[slot + 1] = out->can_equip[slot] ? 1 : 0;
+        out->has_post_equip_bonuses[slot] = 0;
         if (!out->can_equip[slot]) {
             continue;
+        }
+
+        if (out->is_weapon[slot] &&
+                pvp_special_arm_available_for_weapon(item_idx, attacker->special_energy)) {
+            out->has_equippable_affordable_spec_weapon = 1;
         }
 
         out->has_post_equip_bonuses[slot] = 1;
@@ -714,6 +746,54 @@ static int pvp_attack_head_reachable_for_player(
     return osrs_attack_can_reach(&reach) || can_move_now;
 }
 
+static int pvp_attack_head_reachable_for_weapon_item(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    uint8_t weapon_item,
+    int can_move_now
+) {
+    AttackStyle weapon_style = get_item_attack_style(weapon_item);
+    if (weapon_style == ATTACK_STYLE_NONE) return 0;
+    if (can_move_now) return 1;
+
+    AttackStyle actual_style = weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+
+    OsrsAttackDelivery delivery;
+    int range;
+    switch (actual_style) {
+        case ATTACK_STYLE_MELEE:
+            delivery = OSRS_ATTACK_DELIVERY_MELEE;
+            range = 1;
+            break;
+        case ATTACK_STYLE_RANGED: {
+            OsrsPlayerAttackProfileQuery query;
+            memset(&query, 0, sizeof(query));
+            query.weapon_item = weapon_item;
+            query.action_kind = OSRS_PLAYER_ATTACK_ACTION_WEAPON;
+            query.action_style = actual_style;
+            query.fight_style = attacker->fight_style;
+            OsrsPlayerAttackProfile profile = osrs_player_attack_profile(&query);
+            delivery = profile.delivery;
+            range = profile.range;
+            break;
+        }
+        default:
+            fprintf(stderr, "invalid target-click weapon style: %d\n", actual_style);
+            abort();
+    }
+
+    OsrsAttackReachQuery reach;
+    reach.source = osrs_footprint(attacker->x, attacker->y, 1);
+    reach.target = osrs_footprint(target->x, target->y, 1);
+    reach.delivery = delivery;
+    reach.range = range;
+    reach.occlusion = osrs_projectile_occlusion_collision_map(cmap, 0);
+    return osrs_attack_can_reach(&reach);
+}
+
 static int pvp_attack_head_reachable_after_equip(
     const CollisionMap* cmap,
     const Player* attacker,
@@ -724,17 +804,8 @@ static int pvp_attack_head_reachable_after_equip(
 ) {
     if (!affordances->can_equip[inventory_slot]) return 0;
     if (!affordances->is_weapon[inventory_slot]) return 0;
-    if (can_move_now) {
-        return get_item_attack_style(attacker->inventory[inventory_slot]) != 0;
-    }
-
-    Player next = *attacker;
-    if (!osrs_player_equip_from_inventory_slot(&next, inventory_slot)) {
-        fprintf(stderr, "pvp_attack_head_reachable_after_equip: slot %d precheck failed\n",
-            inventory_slot);
-        abort();
-    }
-    return pvp_attack_head_reachable_for_player(cmap, &next, target, can_move_now);
+    return pvp_attack_head_reachable_for_weapon_item(
+        cmap, attacker, target, attacker->inventory[inventory_slot], can_move_now);
 }
 
 static int pvp_attack_head_reachable_after_any_weapon_equip(
@@ -771,18 +842,9 @@ static int pvp_special_arm_available_for_weapon(uint8_t weapon, int special_ener
 }
 
 static int pvp_special_arm_available_after_any_weapon_equip_cached(
-    const Player* p,
     const PvpInventoryAffordances* affordances
 ) {
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint8_t item_idx = p->inventory[slot];
-        if (!affordances->can_equip[slot]) continue;
-        if (!affordances->is_weapon[slot]) continue;
-        if (pvp_special_arm_available_for_weapon(item_idx, p->special_energy)) {
-            return 1;
-        }
-    }
-    return 0;
+    return affordances->has_equippable_affordable_spec_weapon;
 }
 
 static void generate_slot_observations_with_inventory_affordances(
@@ -1194,7 +1256,7 @@ static void compute_action_masks_with_inventory_affordances(
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
     int special_arm_available = pvp_special_arm_available_for_weapon(
         weapon, p->special_energy) ||
-        pvp_special_arm_available_after_any_weapon_equip_cached(p, affordances);
+        pvp_special_arm_available_after_any_weapon_equip_cached(affordances);
     mask[offset + SPECIAL_NOOP] = 1;
     mask[offset + SPECIAL_ARM] = special_arm_available && !p->spec_armed;
     mask[offset + SPECIAL_DISARM] = p->spec_armed ? 1 : 0;

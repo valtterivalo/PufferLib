@@ -890,6 +890,18 @@ static int pvp_test_eager_attack_head_reachable_after_any_weapon_equip(
     return 0;
 }
 
+static int pvp_test_special_arm_after_any_weapon_equip_reference(const Player* p) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        uint8_t item_idx = p->inventory[slot];
+        if (!osrs_player_can_equip_from_inventory_slot(p, slot)) continue;
+        if (osrs_item_gear_slot(item_idx) != GEAR_SLOT_WEAPON) continue;
+        if (pvp_special_arm_available_for_weapon(item_idx, p->special_energy)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void pvp_test_eager_attack_head_mask(
     OsrsEnv* env,
     int agent_idx,
@@ -1111,6 +1123,13 @@ static void test_special_mask_allows_post_equip_weapon_spec_arm(void) {
     int dagger_slot = osrs_player_inventory_add(agent, ITEM_DRAGON_DAGGER);
     ASSERT_TRUE("dagger added", dagger_slot >= 0);
 
+    PvpInventoryAffordances affordances;
+    memset(&affordances, 0xA5, sizeof(affordances));
+    pvp_collect_inventory_affordances(agent, &affordances);
+    ASSERT_INT_EQ("cached post-equip special arm",
+        affordances.has_equippable_affordable_spec_weapon,
+        pvp_test_special_arm_after_any_weapon_equip_reference(agent));
+
     compute_action_masks(&env, 0);
 
     ASSERT_INT_EQ("post-equip special arm valid",
@@ -1309,12 +1328,15 @@ static void test_inventory_affordance_projection_matches_copy_equip(void) {
                     &player, (uint8_t)item, full_inventory);
 
                 PvpInventoryAffordances affordances;
+                memset(&affordances, 0xA5, sizeof(affordances));
                 pvp_collect_inventory_affordances(&player, &affordances);
 
                 int expected_gear_slot = osrs_item_gear_slot((uint8_t)item);
                 int expected_can_equip =
                     osrs_player_can_equip_from_inventory_slot(&player, 0);
                 int expected_is_weapon = expected_gear_slot == GEAR_SLOT_WEAPON;
+                int expected_spec_arm =
+                    pvp_test_special_arm_after_any_weapon_equip_reference(&player);
 
                 assert_projection_int_eq("gear slot",
                     affordances.gear_slot[0], expected_gear_slot, state, (uint8_t)item);
@@ -1322,6 +1344,9 @@ static void test_inventory_affordance_projection_matches_copy_equip(void) {
                     affordances.is_weapon[0], expected_is_weapon, state, (uint8_t)item);
                 assert_projection_int_eq("can equip",
                     affordances.can_equip[0], expected_can_equip, state, (uint8_t)item);
+                assert_projection_int_eq("special arm cache",
+                    affordances.has_equippable_affordable_spec_weapon,
+                    expected_spec_arm, state, (uint8_t)item);
 
                 if (expected_can_equip) {
                     Player next = player;
@@ -1344,12 +1369,14 @@ static void test_inventory_affordance_projection_matches_copy_equip(void) {
     setup_affordance_projection_player(&player, 2);
     fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
     PvpInventoryAffordances affordances;
+    memset(&affordances, 0xA5, sizeof(affordances));
     pvp_collect_inventory_affordances(&player, &affordances);
     assert_projection_int_eq("empty weapon full inventory two-handed can equip",
         affordances.can_equip[0], 1, 2, ITEM_AGS);
 
     setup_affordance_projection_player(&player, 0);
     fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
+    memset(&affordances, 0xA5, sizeof(affordances));
     pvp_collect_inventory_affordances(&player, &affordances);
     assert_projection_int_eq("occupied weapon full inventory two-handed cannot equip",
         affordances.can_equip[0], 0, 0, ITEM_AGS);
@@ -1398,6 +1425,60 @@ static void test_pvp_log_emits_command_diagnostics(void) {
 
     free(out->items);
     free(out);
+}
+
+static void test_terminal_log_accumulates_command_diagnostics(void) {
+    printf("--- PvP terminal log accumulates command diagnostics ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+    env.tag = 3;
+    env.pvp.log.wins = 1.0f;
+    env.pvp.log.episode_return = 1.0f;
+    env.pvp.log.episode_length = 64.0f;
+    env.pvp.log.equip_click_attempts = 8.0f;
+    env.pvp.log.equip_click_noop_rate = 0.25f;
+    env.pvp.log.special_arm_attempts = 3.0f;
+    env.pvp.log.special_arm_noop_rate = 0.33333334f;
+    env.pvp.log.target_click_attempts = 10.0f;
+    env.pvp.log.target_click_no_fire_rate = 0.4f;
+    env.pvp.log.spell_attack_attempts = 5.0f;
+    env.pvp.log.spell_attack_no_fire_rate = 0.2f;
+    env.pvp.log.weapon_attack_rate = 0.7f;
+    env.pvp.log.melee_attack_rate = 0.1f;
+    env.pvp.log.ranged_attack_rate = 0.2f;
+    env.pvp.log.magic_attack_rate = 0.4f;
+    env.pvp.log.attack_after_equip_rate = 0.5f;
+    env.pvp.log.spec_after_equip_rate = 0.125f;
+    env.pvp.log.n = 1.0f;
+
+    pvp_env_accumulate_terminal_log(&env);
+
+    ASSERT_FLOAT_NEAR("accumulated equip attempts",
+        env.log.equip_click_attempts, 8.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated special attempts",
+        env.log.special_arm_attempts, 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target attempts",
+        env.log.target_click_attempts, 10.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spell attempts",
+        env.log.spell_attack_attempts, 5.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated weapon rate",
+        env.log.weapon_attack_rate, 0.7f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated melee rate",
+        env.log.melee_attack_rate, 0.1f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated ranged rate",
+        env.log.ranged_attack_rate, 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated magic rate",
+        env.log.magic_attack_rate, 0.4f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated attack after equip",
+        env.log.attack_after_equip_rate, 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spec after equip",
+        env.log.spec_after_equip_rate, 0.125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated tagged bank score",
+        env.log.hist_score_bank[2], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated n",
+        env.log.n, 1.0f, 1e-6f);
+    ASSERT_INT_EQ("boundary reached", env.boundary_reached, 1);
 }
 
 static void test_no_weapon_observation_has_zero_attack_profile(void) {
@@ -1702,6 +1783,113 @@ static void test_shared_player_step_destination_clears_interaction(void) {
     collision_map_free(cmap);
 }
 
+static void test_pvp_local_pathfind_window_only_handles_near_destinations(void) {
+    printf("--- PvP local pathfind window only handles near destinations ---\n");
+
+    Player player;
+    memset(&player, 0, sizeof(player));
+    player.x = 3041;
+    player.y = 3530;
+
+    int base_x = 0;
+    int base_y = 0;
+    int w = 0;
+    int h = 0;
+    int ok = pvp_local_pathfind_window(
+        &player, 3043, 3530, &base_x, &base_y, &w, &h);
+
+    ASSERT_INT_EQ("near pathfind window enabled", ok, 1);
+    ASSERT_TRUE("near pathfind window width bounded", w <= PATHFIND_ARENA_MAX);
+    ASSERT_TRUE("near pathfind window height bounded", h <= PATHFIND_ARENA_MAX);
+    ASSERT_TRUE("near pathfind window contains source",
+        player.x >= base_x && player.x < base_x + w &&
+        player.y >= base_y && player.y < base_y + h);
+    ASSERT_TRUE("near pathfind window contains destination",
+        3043 >= base_x && 3043 < base_x + w &&
+        3530 >= base_y && 3530 < base_y + h);
+
+    ok = pvp_local_pathfind_window(
+        &player, 3100, 3530, &base_x, &base_y, &w, &h);
+    ASSERT_INT_EQ("far pathfind window falls back to full BFS", ok, 0);
+}
+
+static void assert_pvp_local_path_matches_full(
+    const CollisionMap* cmap,
+    int src_x,
+    int src_y,
+    int dest_x,
+    int dest_y
+) {
+    Player player;
+    memset(&player, 0, sizeof(player));
+    player.x = src_x;
+    player.y = src_y;
+
+    int base_x = 0;
+    int base_y = 0;
+    int w = 0;
+    int h = 0;
+    int ok = pvp_local_pathfind_window(
+        &player, dest_x, dest_y, &base_x, &base_y, &w, &h);
+    ASSERT_INT_EQ("representative local path window exists", ok, 1);
+    if (!ok) return;
+
+    PathResult full = encounter_pathfind(
+        cmap, 0, 0, src_x, src_y, dest_x, dest_y, NULL, NULL);
+    PathResult local = encounter_pathfind_arena(
+        cmap, 0, 0, src_x, src_y, dest_x, dest_y, NULL, NULL,
+        base_x, base_y, w, h);
+
+    ASSERT_INT_EQ("local path found matches full", local.found, full.found);
+    ASSERT_INT_EQ("local path dx matches full", local.next_dx, full.next_dx);
+    ASSERT_INT_EQ("local path dy matches full", local.next_dy, full.next_dy);
+    ASSERT_INT_EQ("local fallback x matches full", local.dest_x, full.dest_x);
+    ASSERT_INT_EQ("local fallback y matches full", local.dest_y, full.dest_y);
+}
+
+static void test_pvp_local_pathfind_matches_full_for_head_moves(void) {
+    printf("--- PvP local pathfind matches full BFS for head moves ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+
+    Dict* kwargs = pvp_kwargs();
+    my_init(&env, kwargs);
+
+    const CollisionMap* cmap = (const CollisionMap*)env.pvp.collision_map;
+    int starts[][2] = {
+        {3041, 3530},
+        {3046, 3531},
+        {3048, 3537},
+        {3055, 3540},
+        {3070, 3542},
+        {3095, 3550},
+    };
+    int start_count = (int)(sizeof(starts) / sizeof(starts[0]));
+
+    for (int i = 0; i < start_count; i++) {
+        int src_x = starts[i][0];
+        int src_y = starts[i][1];
+        if (!collision_tile_walkable(cmap, 0, src_x, src_y))
+            continue;
+
+        for (int action = 1; action < MOVE_DIM; action++) {
+            int dest_x = src_x + ENCOUNTER_MOVE_TARGET_DX[action];
+            int dest_y = src_y + ENCOUNTER_MOVE_TARGET_DY[action];
+            if (!is_in_wilderness(dest_x, dest_y))
+                continue;
+            if (!collision_tile_walkable(cmap, 0, dest_x, dest_y))
+                continue;
+            assert_pvp_local_path_matches_full(
+                cmap, src_x, src_y, dest_x, dest_y);
+        }
+    }
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
 static void test_persistent_staff_target_click_executes_melee(void) {
     printf("--- PvP persistent staff target click executes melee ---\n");
 
@@ -1791,6 +1979,58 @@ static void test_static_binding_exposes_separate_action_mask(void) {
         offset += ACTION_HEAD_DIMS[head];
     }
     ASSERT_INT_EQ("mask offset reaches ACTION_MASK_SIZE", offset, ACTION_MASK_SIZE);
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
+static void test_static_binding_one_agent_skips_unexported_p1_generation(void) {
+    printf("--- PvP static binding one-agent skips unexported p1 generation ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+    StaticVec vec;
+    memset(&vec, 0, sizeof(vec));
+
+    float observations[OBS_SIZE];
+    float actions[NUM_ATNS];
+    float rewards[1];
+    float terminals[1];
+    unsigned char action_mask[MY_ACTION_MASK];
+    memset(observations, 0, sizeof(observations));
+    memset(actions, 0, sizeof(actions));
+    memset(rewards, 0, sizeof(rewards));
+    memset(terminals, 0, sizeof(terminals));
+    memset(action_mask, 0, sizeof(action_mask));
+
+    static_obs_set(&vec.observations, observations, 1);
+    vec.actions = actions;
+    vec.rewards = rewards;
+    vec.terminals = terminals;
+    vec.action_mask = action_mask;
+    vec.total_agents = 1;
+    vec.action_mask_size = MY_ACTION_MASK;
+
+    Dict* kwargs = pvp_kwargs();
+    dict_set(kwargs, "use_rollout_opponent", 0);
+    my_init(&env, kwargs);
+    my_setup_perm(&vec, &env, 0);
+    memset(env.pvp._masks_buf + ACTION_MASK_SIZE, 0xA5, ACTION_MASK_SIZE);
+    c_reset(&env);
+
+    ASSERT_TRUE("slot 0 obs pointer exported", env.obs_ptr[0] == observations);
+    ASSERT_TRUE("slot 1 obs pointer absent", env.obs_ptr[1] == NULL);
+    ASSERT_TRUE("slot 1 mask pointer absent", env.action_mask_ptr[1] == NULL);
+    ASSERT_INT_EQ("generated agent mask narrows to p0", env.pvp.action_masks_agents, 0x1);
+
+    int p0_valid = 0;
+    for (int i = 0; i < ACTION_MASK_SIZE; i++) {
+        p0_valid += action_mask[i] != 0;
+        ASSERT_INT_EQ("internal p1 mask remains untouched",
+            env.pvp._masks_buf[ACTION_MASK_SIZE + i], 0xA5);
+    }
+    ASSERT_TRUE("p0 exported mask has valid actions", p0_valid > 0);
 
     free(kwargs->items);
     free(kwargs);
@@ -2021,6 +2261,7 @@ int main(void) {
     test_item_observation_templates_match_direct_writers();
     test_inventory_affordance_projection_matches_copy_equip();
     test_pvp_log_emits_command_diagnostics();
+    test_terminal_log_accumulates_command_diagnostics();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
@@ -2030,8 +2271,11 @@ int main(void) {
     test_target_click_staff_bash_chases_into_melee_range();
     test_target_click_overrides_stale_walk_destination();
     test_shared_player_step_destination_clears_interaction();
+    test_pvp_local_pathfind_window_only_handles_near_destinations();
+    test_pvp_local_pathfind_matches_full_for_head_moves();
     test_persistent_staff_target_click_executes_melee();
     test_static_binding_exposes_separate_action_mask();
+    test_static_binding_one_agent_skips_unexported_p1_generation();
     test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors();
     test_pvp_obs_sparse_normalization_matches_full_division();
     test_static_binding_sets_scripted_opponents();
