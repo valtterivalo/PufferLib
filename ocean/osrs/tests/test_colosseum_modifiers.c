@@ -160,6 +160,31 @@ static void test_fuzz_obs_mask(void) {
     printf("  episodes=%d (obs+mask running-index asserts held every tick)\n", episodes);
 }
 
+/* ---- 1a-bis. timeout is unconditional: an all-"none" action stream parks the
+   episode at the mandatory wave-1 draft forever, and the draft-frozen path used
+   to skip the MAX_TICKS check entirely (training-iter-1 freeze bug). */
+static void test_zero_actions_hit_timeout(void) {
+    printf("test_zero_actions_hit_timeout\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 12345);
+    CHECK("reset opens the mandatory wave-1 draft", s.modifiers.draft_pending == 1);
+
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    long t = 0;
+    for (; t < COLO_MAX_TICKS + 10 && !s.episode_over; t++)
+        step_and_observe(&s, &ctx, actions);
+
+    CHECK("all-none actions terminate at the tick cap", s.episode_over == 1);
+    CHECK("timeout fires exactly at MAX_TICKS", s.tick == COLO_MAX_TICKS);
+    CHECK("timeout counts as a loss", s.winner == COLO_OUTCOME_PLAYER_DIED);
+    CHECK("the draft was still pending when time ran out", s.modifiers.draft_pending == 1);
+}
+
 /* ---- 1b. step-loop draft (A16+B6+D26): the wave-1 fixed offer opens at reset
    BEFORE any NPC spawns, the player is frozen until the mandatory pick (no
    skip, no auto-close), the pick gates the spawn + 6-tick ready delay, and the
@@ -3438,6 +3463,7 @@ static void test_loadout_offensive_prayers(void) {
 
 int main(void) {
     test_fuzz_obs_mask();
+    test_zero_actions_hit_timeout();
     test_step_loop_draft();
     test_twelve_drafts_per_run();
     test_solarflare_orb();

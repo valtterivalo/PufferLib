@@ -66,6 +66,16 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->npcs[i].hit_spell_type = 0;
     }
     s->tick++;
+    /* unconditional timeout: checked before the gap/draft gotos so a frozen
+       draft can never produce an unterminating episode (training-iter-1 bug). */
+    if (s->tick >= COLO_MAX_TICKS) {
+        (void)col_compute_reward_ctx(s, ctx);
+        s->episode_over = 1;
+        s->winner = COLO_OUTCOME_PLAYER_DIED;
+        s->reward = col_terminal_loss_reward(s, ctx);
+        s->episode_return += s->reward;
+        return;
+    }
     col_player_pretick(s, ctx, actions);
 
     int spawn_wave_now = 0;
@@ -180,12 +190,6 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
             if (!s->modifiers.draft_pending) s->wave_spawn_delay = 1;
             s->log.wave_reached = s->wave + 1;
         }
-    }
-
-    if (s->tick >= COLO_MAX_TICKS) {
-        s->episode_over = 1;
-        s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_loss_reward(s, ctx);
     }
 
 finish_step:

@@ -118,6 +118,7 @@ void c_step(Env* env) {
         ColosseumLog* clog = (ColosseumLog*)ENCOUNTER_COLOSSEUM.get_log(
             COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
         if (s->start_wave == env->config_start_wave) {
+            env->log.n += 1.0f;
             env->log.episode_return += clog->episode_return;
             env->log.episode_length += (float)clog->episode_length;
             env->log.wins += (float)clog->win;
