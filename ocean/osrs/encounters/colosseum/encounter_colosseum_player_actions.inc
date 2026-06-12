@@ -69,6 +69,79 @@ static void col_recompute_all_loadout_stats(ColosseumState* s) {
     encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
 }
 
+/** true when the profile's combat potion slot is the divine speedrun dose. */
+static int col_combat_potion_is_divine(const ColosseumState* s) {
+    return s->full_supplies.combat_boost_kind == COLO_BOOST_POTION_DIVINE;
+}
+
+/** true when the profile's ranging potion slot is the divine speedrun dose. */
+static int col_ranged_potion_is_divine(const ColosseumState* s) {
+    return s->full_supplies.ranged_boost_kind == COLO_BOOST_POTION_DIVINE;
+}
+
+/** E13: derive active divine stat floors from Colosseum's live timers. */
+static EncounterStatDriftPins col_divine_stat_drift_pins(const ColosseumState* s) {
+    EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
+    if (s->divine_combat_timer > 0) {
+        pins = encounter_merge_stat_drift_pins(
+            pins, encounter_divine_super_combat_pins(&s->player));
+    }
+    if (s->divine_ranged_timer > 0) {
+        pins = encounter_merge_stat_drift_pins(
+            pins, encounter_divine_ranging_pins(&s->player));
+    }
+    return pins;
+}
+
+/** E13: active divine boosts prevent their potion stats from draining below
+    the boosted floor. Returns 1 when loadout max hits need recomputing. */
+static int col_enforce_divine_stat_floors(ColosseumState* s) {
+    return encounter_enforce_stat_drift_pins(&s->player, col_divine_stat_drift_pins(s));
+}
+
+/** E13: expire a divine combat timer and drop its potion stats to base. */
+static int col_tick_divine_combat_timer(ColosseumState* s) {
+    if (s->divine_combat_timer <= 0) return 0;
+    s->divine_combat_timer--;
+    if (s->divine_combat_timer > 0) return 0;
+    s->player.current_attack = s->player.base_attack;
+    s->player.current_strength = s->player.base_strength;
+    s->player.current_defence = s->player.base_defence;
+    return 1;
+}
+
+/** E13: expire a divine ranging timer and drop Ranged to base. */
+static int col_tick_divine_ranged_timer(ColosseumState* s) {
+    if (s->divine_ranged_timer <= 0) return 0;
+    s->divine_ranged_timer--;
+    if (s->divine_ranged_timer > 0) return 0;
+    s->player.current_ranged = s->player.base_ranged;
+    return 1;
+}
+
+/** E13: live-gameplay stat drift and divine timers freeze during draft and
+    ready gaps, matching the existing surge and venom gap precedent. */
+static void col_tick_live_stat_drift_and_divines(ColosseumState* s) {
+    int changed = 0;
+    changed |= col_tick_divine_combat_timer(s);
+    changed |= col_tick_divine_ranged_timer(s);
+    changed |= encounter_tick_stat_drift(
+        &s->player, &s->stat_drift_timer, col_divine_stat_drift_pins(s));
+    if (changed) col_recompute_all_loadout_stats(s);
+}
+
+/** apply the 10 HP divine potion self-damage and arm the duration timer. */
+static void col_apply_divine_combat_potion_effect(ColosseumState* s) {
+    encounter_damage_player(&s->player, 10, &s->tick_scratch.damage_received);
+    s->divine_combat_timer = ENCOUNTER_DIVINE_POTION_TICKS;
+}
+
+/** apply the 10 HP divine potion self-damage and arm the duration timer. */
+static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
+    encounter_damage_player(&s->player, 10, &s->tick_scratch.damage_received);
+    s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
+}
+
 /** apply prayer actions + drain, before movement and attack. an offensive
     prayer change recomputes every loadout's prayer multipliers (L12). */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
@@ -184,7 +257,8 @@ static int col_melee_def_bonus(const ColoNpcStats* ns, MeleeStyle ms) {
     (melee gear base, weapon slot swapped). Queues one pending hit per splat
     (claws cascade = 4), spends energy via the shared resolver cost, applies
     the resolver's SGS heal/prayer restore and the elder maul 35%% defence
-    drain, and runs the post-attack item effects (blood fury heal). */
+    drain, consumes Sol perfect-parry guaranteed max for specs too (E2), and
+    runs the post-attack item effects (blood fury heal). */
 static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
@@ -202,6 +276,11 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
 
     SpecResult r = osrs_resolve_spec(item, att_roll, ls->max_hit, def_roll,
                                      eff_def, &s->rng_state);
+    if (s->wave == COLO_WAVE_BOSS && s->sol.started && s->sol.next_attack_guaranteed_max) {
+        osrs_spec_result_force_max(&r, item, ls->max_hit, eff_def);
+        s->sol.next_attack_guaranteed_max = 0;
+        s->sol.guaranteed_max_ticks = 0;
+    }
 
     int total = 0;
     int num_hits = r.num_hits > 0 ? r.num_hits : 1;
@@ -363,6 +442,7 @@ static void col_tick_player_ctx(
         s->player.potion_timer = 3;
         s->player.ate_food_this_tick = 1;
         encounter_brew_drain_stats(&s->player);
+        col_enforce_divine_stat_floors(s);
         col_recompute_all_loadout_stats(s);
     }
 
@@ -384,16 +464,25 @@ static void col_tick_player_ctx(
             s->player.current_prayer = s->player.base_prayer;
         s->player.restore_doses--;
         s->player.potion_timer = 3;
+        col_enforce_divine_stat_floors(s);
         col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_COMBAT &&
-            s->player.combat_potion_doses > 0 && s->player.potion_timer == 0) {
+            s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
+            (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
         encounter_super_combat_boost(&s->player);
+        if (col_combat_potion_is_divine(s))
+            col_apply_divine_combat_potion_effect(s);
+        col_enforce_divine_stat_floors(s);
         s->player.combat_potion_doses--;
         s->player.potion_timer = 3;
         col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_RANGING &&
-            s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0) {
+            s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
+            (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
         encounter_ranging_boost(&s->player);
+        if (col_ranged_potion_is_divine(s))
+            col_apply_divine_ranged_potion_effect(s);
+        col_enforce_divine_stat_floors(s);
         s->player.ranged_potion_doses--;
         s->player.potion_timer = 3;
         col_recompute_all_loadout_stats(s);

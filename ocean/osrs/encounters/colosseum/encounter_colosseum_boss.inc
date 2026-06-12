@@ -433,32 +433,61 @@ static void col_sol_add_pool(ColosseumState* s, int x, int y) {
     sol->hazard_tile_y[slot] = y;
 }
 
-/** uniform walkable tile within Chebyshev `spread` of the player, inside the
-    boss arena; up to 8 rejection draws, else reports no placement. */
-static int col_sol_draw_tile_near_player(ColosseumState* s, int spread, int* ox, int* oy) {
-    for (int t = 0; t < 8; t++) {
-        int x = s->player.x - spread + encounter_rand_int(&s->rng_state, 2 * spread + 1);
-        int y = s->player.y - spread + encounter_rand_int(&s->rng_state, 2 * spread + 1);
-        if (!col_in_boss_arena(s, x, y)) continue;
-        if (col_static_blocked(x, y)) continue;
-        *ox = x;
-        *oy = y;
-        return 1;
+typedef struct {
+    int x, y;
+} ColSolMoltenCandidate;
+
+/** Build every valid molten-sand candidate in the 9x9 around the player, then
+    sample without replacement. Phase-transition beams force the player tile
+    first (E6). Enrage opening/spam pools do not, because the cited enrage
+    sources say random tiles within +-4 of the player (web-sol-mods h). */
+static int col_sol_sample_molten_candidates(
+    ColosseumState* s,
+    int spread,
+    int count,
+    int force_player_tile,
+    ColSolMoltenCandidate* out
+) {
+    ColSolMoltenCandidate pool[81];
+    int pool_count = 0;
+    int player_idx = -1;
+    for (int x = s->player.x - spread; x <= s->player.x + spread; x++) {
+        for (int y = s->player.y - spread; y <= s->player.y + spread; y++) {
+            if (!col_in_boss_arena(s, x, y)) continue;
+            if (col_static_blocked(x, y)) continue;
+            if (pool_count >= (int)(sizeof(pool) / sizeof(pool[0]))) break;
+            if (x == s->player.x && y == s->player.y) player_idx = pool_count;
+            pool[pool_count++] = (ColSolMoltenCandidate){ .x = x, .y = y };
+        }
     }
-    return 0;
+
+    int out_count = 0;
+    if (force_player_tile && player_idx >= 0 && out_count < count) {
+        out[out_count++] = pool[player_idx];
+        pool[player_idx] = pool[--pool_count];
+    }
+
+    while (out_count < count && pool_count > 0) {
+        int idx = encounter_rand_int(&s->rng_state, pool_count);
+        out[out_count++] = pool[idx];
+        pool[idx] = pool[--pool_count];
+    }
+
+    return out_count;
 }
 
-/** A11: 6 light beams uniformly in the 9x9 around the PLAYER; each becomes a
-    permanent molten pool 2 ticks later. */
+/** A11+E6: 6 light beams in the 9x9 around the player, with the first on the
+    player's current tile; each becomes a permanent molten pool 2 ticks later. */
 static void col_sol_drop_beams(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
-    for (int n = 0; n < COLO_SOL_BEAM_COUNT; n++) {
-        int x, y;
-        if (!col_sol_draw_tile_near_player(s, COLO_SOL_BEAM_SPREAD, &x, &y)) continue;
+    ColSolMoltenCandidate tiles[COLO_SOL_BEAM_COUNT];
+    int ntiles = col_sol_sample_molten_candidates(
+        s, COLO_SOL_BEAM_SPREAD, COLO_SOL_BEAM_COUNT, 1, tiles);
+    for (int n = 0; n < ntiles; n++) {
         for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
             if (sol->beams[b].active) continue;
             sol->beams[b] = (ColoSolBeam){
-                .active = 1, .x = x, .y = y,
+                .active = 1, .x = tiles[n].x, .y = tiles[n].y,
                 .ticks_to_pool = COLO_SOL_BEAM_TO_POOL_TICKS };
             break;
         }
@@ -481,9 +510,10 @@ static void col_sol_tick_molten(ColosseumState* s) {
     if (sol->phase >= 5) {
         if (sol->enrage_pool_timer > 0) sol->enrage_pool_timer--;
         if (sol->enrage_pool_timer == 0) {
-            int x, y;
-            if (col_sol_draw_tile_near_player(s, COLO_SOL_ENRAGE_POOL_SPREAD, &x, &y))
-                col_sol_add_pool(s, x, y);
+            ColSolMoltenCandidate tile[1];
+            int ntiles = col_sol_sample_molten_candidates(
+                s, COLO_SOL_ENRAGE_POOL_SPREAD, 1, 0, tile);
+            if (ntiles > 0) col_sol_add_pool(s, tile[0].x, tile[0].y);
             sol->enrage_pool_timer = COLO_SOL_MOLTEN_INTERVAL;
         }
     }
@@ -628,11 +658,11 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     col_sol_drop_beams(s);
     if (new_phase >= 1 && new_phase <= 4) col_sol_spawn_crystal(s);
     if (new_phase >= 5) {
-        for (int p = 0; p < COLO_SOL_ENRAGE_OPEN_POOLS; p++) {
-            int x, y;
-            if (col_sol_draw_tile_near_player(s, COLO_SOL_ENRAGE_POOL_SPREAD, &x, &y))
-                col_sol_add_pool(s, x, y);
-        }
+        ColSolMoltenCandidate tiles[COLO_SOL_ENRAGE_OPEN_POOLS];
+        int ntiles = col_sol_sample_molten_candidates(
+            s, COLO_SOL_ENRAGE_POOL_SPREAD, COLO_SOL_ENRAGE_OPEN_POOLS, 0, tiles);
+        for (int p = 0; p < ntiles; p++)
+            col_sol_add_pool(s, tiles[p].x, tiles[p].y);
         sol->enrage_pool_timer = COLO_SOL_MOLTEN_INTERVAL;
     }
     if (new_phase > s->log.boss_phase_reached) s->log.boss_phase_reached = new_phase;

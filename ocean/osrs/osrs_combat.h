@@ -531,32 +531,24 @@ static inline void encounter_shuffle(int* arr, int n, uint32_t* rng) {
 /* pure math for player effective levels, attack rolls, and max hits.        */
 /* ref: .refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts                      */
 /*      .refs/osrs-dps-calc/src/lib/BaseCalc.ts:105-110                     */
-/* player effective level: floor(base * prayer_mult) + style_bonus + 8.
-   prayer_mult: 1.0 (none), 1.20 (piety/rigour att), 1.23 (piety/rigour str),
-   1.25 (augury). style_bonus: 0 (rapid/autocast), +3 (accurate), +1 (controlled).
-   ref: PlayerVsNPCCalc.ts lines 191-208 */
+/** Generic standard effective-level formula:
+    floor(base * prayer_mult) + style_bonus + 8.
+    E12 magic accuracy is the exception: powered staff Accurate contributes
+    +2, Longrange contributes no attack level, and magic callers account for
+    the folded +9 constant from PlayerVsNPCCalc.ts. */
 static inline int osrs_player_eff_level(int base_level, float prayer_mult, int style_bonus) {
     return (int)(base_level * prayer_mult) + style_bonus + 8;
 }
-/* stance (FightStyle) → combat modifiers.                                   */
-/*                                                                           */
-/* single source of truth for "what does this stance do". replaces the raw   */
-/* `int style_bonus` that callers used to pass around — that discarded the   */
-/* why (rapid? autocast? both 0 but speed differs), and forced each caller   */
-/* to re-derive the mapping.                                                 */
-/*                                                                           */
-/* ref: osrs wiki "Combat Options", .refs/osrs-dps-calc PlayerVsNPCCalc.ts   */
-/*      and Equipment.ts:245-270 (rapid speed -1).                           */
-/* attack level bonus for the stance.
-   melee: accurate +3, controlled +1.
-   ranged: accurate +3.
-   magic powered staff: accurate +3 (wiki) — passed only when style is MAGIC.
-   all autocast stances and rapid/longrange give 0. */
+
+/** Return the stance contribution to effective attack level.
+    E12 keeps magic powered staff stances aligned with dps-calc:
+    Accurate contributes +2 before the folded +9 magic constant, while
+    Longrange contributes defence and range only. */
 static inline int osrs_stance_att_bonus(FightStyle fs, AttackStyle atk) {
     switch (fs) {
-        case FIGHT_STYLE_ACCURATE:   return 3;
+        case FIGHT_STYLE_ACCURATE:   return atk == ATTACK_STYLE_MAGIC ? 2 : 3;
         case FIGHT_STYLE_CONTROLLED: return atk == ATTACK_STYLE_MELEE ? 1 : 0;
-        case FIGHT_STYLE_LONGRANGE:  return atk == ATTACK_STYLE_MAGIC ? 1 : 0;  /* powered staff longrange = +1 magic */
+        case FIGHT_STYLE_LONGRANGE:  return 0;
         default:                     return 0;
     }
 }

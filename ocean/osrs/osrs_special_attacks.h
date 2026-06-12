@@ -8,6 +8,7 @@
  * SHARED FUNCTIONS:
  *   osrs_spec_cost(weapon_idx)            spec energy cost for a weapon
  *   osrs_resolve_spec(weapon, ...)        resolve spec attack, return result
+ *   osrs_spec_result_force_max(...)       rewrite a resolved spec to its max
  *   osrs_blowpipe_spec_resolve(...)       blowpipe spec helper
  *
  * ref: .refs/osrs-dps-calc/src/lib/ for multipliers,
@@ -18,6 +19,8 @@
 
 #ifndef OSRS_SPECIAL_ATTACKS_H
 #define OSRS_SPECIAL_ATTACKS_H
+
+#include <assert.h>
 
 #include "osrs_combat.h"
 #include "osrs_items.h"
@@ -461,6 +464,159 @@ static inline SpecResult osrs_resolve_spec(
     }
 
     return r;
+}
+
+/** Rewrite an already-resolved special attack to the weapon's deterministic
+    best outcome for Sol perfect-parry guaranteed max (E2). */
+static inline void osrs_spec_result_force_max(
+    SpecResult* r, int weapon_item_idx, int max_hit, int target_def_level
+) {
+    assert(r != NULL);
+    SpecResult forced = {0, {0, 0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, 0};
+    forced.spec_cost = osrs_spec_cost(weapon_item_idx);
+
+    switch (weapon_item_idx) {
+    case ITEM_AGS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 11 / 8;
+        break;
+
+    case ITEM_DRAGON_CLAWS: {
+        int total = 2 * max_hit - 1;
+        forced.num_hits = 4;
+        forced.damage[0] = total / 2;
+        forced.damage[1] = total / 4;
+        forced.damage[2] = total / 8;
+        forced.damage[3] = total / 8 + 1;
+        break;
+    }
+
+    case ITEM_STATIUS_WARHAMMER:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 5 / 4;
+        forced.def_drain = target_def_level * 30 / 100;
+        break;
+
+    case ITEM_BGS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 121 / 100;
+        forced.def_drain = forced.damage[0];
+        break;
+
+    case ITEM_ZGS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 11 / 10;
+        if (forced.damage[0] > 0) forced.freeze_ticks = 32;
+        break;
+
+    case ITEM_SGS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 11 / 10;
+        if (forced.damage[0] > 0) {
+            forced.heal = forced.damage[0] / 2;
+            if (forced.heal < 10) forced.heal = 10;
+            forced.prayer_restore = forced.damage[0] / 4;
+            if (forced.prayer_restore < 5) forced.prayer_restore = 5;
+        }
+        break;
+
+    case ITEM_ANCIENT_GS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 11 / 10;
+        break;
+
+    case ITEM_VESTAS:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 6 / 5;
+        break;
+
+    case ITEM_VOIDWAKER:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 3 / 2;
+        break;
+
+    case ITEM_GRANITE_MAUL:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit;
+        forced.attack_speed_override = 1;
+        break;
+
+    case ITEM_DRAGON_DAGGER: {
+        int spec_max = max_hit * 23 / 20;
+        forced.num_hits = 2;
+        forced.damage[0] = spec_max;
+        forced.damage[1] = spec_max;
+        break;
+    }
+
+    case ITEM_ELDER_MAUL:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit;
+        forced.def_drain = target_def_level * 35 / 100;
+        break;
+
+    case ITEM_TOXIC_BLOWPIPE:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 3 / 2;
+        forced.heal = forced.damage[0] / 2;
+        break;
+
+    case ITEM_MAGIC_SHORTBOW_I:
+        forced.num_hits = 2;
+        forced.damage[0] = max_hit;
+        forced.damage[1] = max_hit;
+        break;
+
+    case ITEM_DARK_BOW: {
+        int spec_max = max_hit * 3 / 2;
+        if (spec_max > 48) spec_max = 48;
+        if (spec_max < 8) spec_max = 8;
+        forced.num_hits = 2;
+        forced.damage[0] = spec_max;
+        forced.damage[1] = spec_max;
+        break;
+    }
+
+    case ITEM_HEAVY_BALLISTA:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 5 / 4;
+        break;
+
+    case ITEM_ZARYTE_CROSSBOW:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit;
+        break;
+
+    case ITEM_MORRIGANS_JAVELIN:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 6 / 5;
+        break;
+
+    case ITEM_ARMADYL_CROSSBOW:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit;
+        break;
+
+    case ITEM_VOLATILE_STAFF:
+        forced.num_hits = 1;
+        forced.damage[0] = 58;
+        break;
+
+    case ITEM_EYE_OF_AYAK:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 13 / 10;
+        forced.magic_def_drain = forced.damage[0];
+        forced.attack_speed_override = 5;
+        break;
+
+    default:
+        assert(!"osrs_spec_result_force_max called for a non-special weapon");
+        break;
+    }
+
+    for (int i = 0; i < forced.num_hits && i < 4; i++)
+        forced.total_damage += forced.damage[i];
+    *r = forced;
 }
 
 #endif /* OSRS_SPECIAL_ATTACKS_H */

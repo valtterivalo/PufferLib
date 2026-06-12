@@ -393,6 +393,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_AGS] = { /* Armadyl godsword */
         .item_id = 11802, .name = "Armadyl godsword", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
         .attack_magic = 0, .attack_ranged = 0,
@@ -402,6 +403,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_ANCIENT_GS] = { /* Ancient godsword */
         .item_id = 26233, .name = "Ancient godsword", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
         .attack_magic = 0, .attack_ranged = 0,
@@ -411,6 +413,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_GRANITE_MAUL] = { /* Granite maul */
         .item_id = 4153, .name = "Granite maul", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 7, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 81,
         .attack_magic = 0, .attack_ranged = 0,
@@ -420,6 +423,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_ELDER_MAUL] = { /* Elder maul */
         .item_id = 21003, .name = "Elder maul", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 135,
         .attack_magic = 0, .attack_ranged = 0,
@@ -429,6 +433,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_DARK_BOW] = { /* Dark bow */
         .item_id = 11235, .name = "Dark bow", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 9, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 95,
@@ -438,6 +443,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_HEAVY_BALLISTA] = { /* Heavy ballista */
         .item_id = 19481, .name = "Heavy ballista", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 7, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 125,
@@ -753,6 +759,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_TWISTED_BOW] = { /* Twisted bow */
         .item_id = 20997, .name = "Twisted bow", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 70,
@@ -816,6 +823,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_TOXIC_BLOWPIPE] = { /* Toxic blowpipe */
         .item_id = 12926, .name = "Toxic blowpipe", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 3, .attack_range = 5,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 30,
@@ -915,6 +923,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_BOW_OF_FAERDHINEN] = { /* Bow of faerdhinen (c) */
         .item_id = 25865, .name = "Bow of faerdhinen", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 5, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 128,
@@ -996,6 +1005,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_MAGIC_SHORTBOW_I] = { /* Magic shortbow (i) */
         .item_id = 12788, .name = "Magic shortbow (i)", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 4, .attack_range = 7,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 0, .attack_ranged = 75,
@@ -1068,6 +1078,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_SCYTHE_OF_VITUR] = { /* Scythe of vitur */
         .item_id = 22325, .name = "Scythe of vitur", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 5, .attack_range = 1,
         .attack_stab = 70, .attack_slash = 125, .attack_crush = 30,
         .attack_magic = -6, .attack_ranged = 0,
@@ -1095,6 +1106,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_SOULREAPER_AXE] = { /* Soulreaper axe */
         .item_id = 28338, .name = "Soulreaper axe", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 5, .attack_range = 1,
         .attack_stab = 28, .attack_slash = 134, .attack_crush = 66,
         .attack_magic = 0, .attack_ranged = 0,
@@ -1248,6 +1260,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_TUMEKENS_SHADOW] = { /* Tumeken's shadow */
         .item_id = 27275, .name = "Tumeken's shadow", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 5, .attack_range = 10,
         .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
         .attack_magic = 35, .attack_ranged = 0,
@@ -1257,6 +1270,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_BGS] = { /* Bandos godsword */
         .item_id = 11804, .name = "Bandos godsword", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
         .attack_magic = 0, .attack_ranged = 0,
@@ -1266,6 +1280,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_SGS] = { /* Saradomin godsword */
         .item_id = 11806, .name = "Saradomin godsword", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
         .attack_magic = 0, .attack_ranged = 0,
@@ -1275,6 +1290,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_ZGS] = { /* Zamorak godsword */
         .item_id = 11808, .name = "Zamorak godsword", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 6, .attack_range = 1,
         .attack_stab = 0, .attack_slash = 132, .attack_crush = 80,
         .attack_magic = 0, .attack_ranged = 0,
@@ -1284,6 +1300,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
     },
     [ITEM_CRYSTAL_HALBERD] = { /* Crystal halberd */
         .item_id = 23987, .name = "Crystal halberd", .slot = SLOT_WEAPON,
+        .two_handed = 1,
         .attack_speed = 7, .attack_range = 2,
         .attack_stab = 85, .attack_slash = 110, .attack_crush = 5,
         .attack_magic = -4, .attack_ranged = 0,

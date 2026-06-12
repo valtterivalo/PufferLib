@@ -50,6 +50,25 @@ static Player make_maxed_player(void) {
     return p;
 }
 
+static int loadout_stats_equal(const EncounterLoadoutStats* a, const EncounterLoadoutStats* b) {
+    return a->attack_bonus == b->attack_bonus &&
+           a->strength_bonus == b->strength_bonus &&
+           a->eff_level == b->eff_level &&
+           a->max_hit == b->max_hit &&
+           a->attack_speed == b->attack_speed &&
+           a->attack_range == b->attack_range &&
+           a->style == b->style &&
+           a->fight_style == b->fight_style &&
+           a->def_stab == b->def_stab &&
+           a->def_slash == b->def_slash &&
+           a->def_crush == b->def_crush &&
+           a->def_magic == b->def_magic &&
+           a->def_ranged == b->def_ranged &&
+           a->att_prayer_mult == b->att_prayer_mult &&
+           a->str_prayer_mult == b->str_prayer_mult &&
+           a->spell_base_damage == b->spell_base_damage;
+}
+
 static void test_consumable_amounts_and_laws(void) {
     printf("test_consumable_amounts_and_laws\n");
 
@@ -128,6 +147,91 @@ static void test_consumable_amounts_and_laws(void) {
         a.current_attack == 33 && b.current_attack == 34);
 }
 
+/** drive the shared E13 stat drift helper for a known tick count. */
+static void drift_ticks(Player* p, int* timer, EncounterStatDriftPins pins, int ticks) {
+    for (int i = 0; i < ticks; i++) encounter_tick_stat_drift(p, timer, pins);
+}
+
+static int player_combat_and_hp_at_base(const Player* p) {
+    return p->current_attack == p->base_attack &&
+           p->current_strength == p->base_strength &&
+           p->current_defence == p->base_defence &&
+           p->current_ranged == p->base_ranged &&
+           p->current_magic == p->base_magic &&
+           p->current_hitpoints == p->base_hitpoints;
+}
+
+static void test_stat_drift_laws(void) {
+    printf("test_stat_drift_laws\n");
+
+    Player p = make_maxed_player();
+    p.current_attack = 118;
+    p.current_strength = 80;
+    p.current_defence = 120;
+    p.current_ranged = 112;
+    p.current_magic = 70;
+    p.current_hitpoints = 50;
+    int timer = 0;
+    drift_ticks(&p, &timer, encounter_stat_drift_no_pins(), 99);
+    CHECK("stat drift waits for a complete 100-tick cycle",
+        p.current_attack == 118 && p.current_strength == 80 &&
+        p.current_hitpoints == 50 && timer == 99);
+    drift_ticks(&p, &timer, encounter_stat_drift_no_pins(), 1);
+    CHECK("stat drift moves every combat stat and HP one toward base",
+        p.current_attack == 117 && p.current_strength == 81 &&
+        p.current_defence == 119 && p.current_ranged == 111 &&
+        p.current_magic == 71 && p.current_hitpoints == 51 && timer == 0);
+
+    p = make_maxed_player();
+    p.current_hitpoints = 115;
+    timer = 0;
+    drift_ticks(&p, &timer, encounter_stat_drift_no_pins(), 100);
+    CHECK("overhealed hitpoints decay one per 100-tick cycle",
+        p.current_hitpoints == 114);
+
+    p = make_maxed_player();
+    p.current_hitpoints = 0;
+    timer = ENCOUNTER_STAT_DRIFT_TICKS - 1;
+    drift_ticks(&p, &timer, encounter_stat_drift_no_pins(), 1);
+    CHECK("natural HP regeneration does not revive a dead player",
+        p.current_hitpoints == 0);
+
+    p = make_maxed_player();
+    p.current_attack = 118;
+    p.current_strength = 80;
+    p.current_defence = 120;
+    p.current_ranged = 112;
+    p.current_magic = 70;
+    p.current_hitpoints = 115;
+    timer = 0;
+    for (int cycle = 0; cycle < 50; cycle++)
+        drift_ticks(&p, &timer, encounter_stat_drift_no_pins(), ENCOUNTER_STAT_DRIFT_TICKS);
+    CHECK("repeated stat drift converges every combat stat and HP to base",
+        player_combat_and_hp_at_base(&p));
+
+    p = make_maxed_player();
+    encounter_super_combat_boost(&p);
+    p.current_strength = 122;
+    p.current_defence = 50;
+    timer = 0;
+    EncounterStatDriftPins pins = encounter_divine_super_combat_pins(&p);
+    drift_ticks(&p, &timer, pins, ENCOUNTER_STAT_DRIFT_TICKS);
+    CHECK("divine super combat pins boosted stats through drift",
+        p.current_attack == 118 && p.current_strength == 121 &&
+        p.current_defence == 118);
+    drift_ticks(&p, &timer, pins, ENCOUNTER_STAT_DRIFT_TICKS * 4);
+    CHECK("divine super combat floor holds for later drift cycles",
+        p.current_attack == 118 && p.current_strength == 118 &&
+        p.current_defence == 118);
+
+    p = make_maxed_player();
+    encounter_ranging_boost(&p);
+    timer = 0;
+    pins = encounter_divine_ranging_pins(&p);
+    drift_ticks(&p, &timer, pins, ENCOUNTER_STAT_DRIFT_TICKS * 3);
+    CHECK("divine ranging pins ranged through drift", p.current_ranged == 112);
+}
+
 static void test_spec_costs_and_sgs(void) {
     printf("test_spec_costs_and_sgs\n");
 
@@ -163,6 +267,184 @@ static void test_spec_costs_and_sgs(void) {
     }
     CHECK("SGS sample hit both outcomes", landed > 0 && missed > 0);
     CHECK("SGS heal/prayer follow max(d/2,10) / max(d/4,5)", 1);
+}
+
+/** E3: two-handed weapons derive stats and effect profiles as if the shield slot
+    were empty, while one-handed weapons retain shield-slot contributions. */
+static void test_two_handed_loadout_shield_suppression(void) {
+    printf("test_two_handed_loadout_shield_suppression\n");
+
+    uint8_t two_handed_with_shield[NUM_GEAR_SLOTS];
+    uint8_t two_handed_without_shield[NUM_GEAR_SLOTS];
+    uint8_t one_handed_with_shield[NUM_GEAR_SLOTS];
+    uint8_t one_handed_without_shield[NUM_GEAR_SLOTS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        two_handed_with_shield[slot] = ITEM_NONE;
+        two_handed_without_shield[slot] = ITEM_NONE;
+        one_handed_with_shield[slot] = ITEM_NONE;
+        one_handed_without_shield[slot] = ITEM_NONE;
+    }
+
+    two_handed_with_shield[GEAR_SLOT_WEAPON] = ITEM_SGS;
+    two_handed_with_shield[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+    two_handed_without_shield[GEAR_SLOT_WEAPON] = ITEM_SGS;
+    one_handed_with_shield[GEAR_SLOT_WEAPON] = ITEM_DRAGON_CLAWS;
+    one_handed_with_shield[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+    one_handed_without_shield[GEAR_SLOT_WEAPON] = ITEM_DRAGON_CLAWS;
+
+    EncounterLoadoutStats sgs_with_shield;
+    EncounterLoadoutStats sgs_without_shield;
+    EncounterLoadoutStats claws_with_shield;
+    EncounterLoadoutStats claws_without_shield;
+    encounter_compute_loadout_stats(two_handed_with_shield, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &sgs_with_shield);
+    encounter_compute_loadout_stats(two_handed_without_shield, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &sgs_without_shield);
+    encounter_compute_loadout_stats(one_handed_with_shield, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &claws_with_shield);
+    encounter_compute_loadout_stats(one_handed_without_shield, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &claws_without_shield);
+
+    CHECK("SGS is marked two-handed and dragon claws are marked one-handed",
+        item_is_two_handed(ITEM_SGS) == 1 &&
+        item_is_two_handed(ITEM_DRAGON_CLAWS) == 0);
+    CHECK("2h loadout stats ignore an occupied shield slot",
+        loadout_stats_equal(&sgs_with_shield, &sgs_without_shield));
+    CHECK("1h loadout stats keep dragon defender bonuses",
+        claws_with_shield.attack_bonus > claws_without_shield.attack_bonus &&
+        claws_with_shield.strength_bonus ==
+            claws_without_shield.strength_bonus +
+            ITEM_DATABASE[ITEM_DRAGON_DEFENDER].melee_strength);
+
+    uint8_t two_handed_with_effect_shield[NUM_GEAR_SLOTS];
+    uint8_t one_handed_with_effect_shield[NUM_GEAR_SLOTS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        two_handed_with_effect_shield[slot] = ITEM_NONE;
+        one_handed_with_effect_shield[slot] = ITEM_NONE;
+    }
+    two_handed_with_effect_shield[GEAR_SLOT_WEAPON] = ITEM_SGS;
+    two_handed_with_effect_shield[GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD;
+    one_handed_with_effect_shield[GEAR_SLOT_WEAPON] = ITEM_DRAGON_CLAWS;
+    one_handed_with_effect_shield[GEAR_SLOT_SHIELD] = ITEM_ELYSIAN_SPIRIT_SHIELD;
+
+    OsrsEquipmentEffectProfile two_handed_profile;
+    OsrsEquipmentEffectProfile one_handed_profile;
+    encounter_derive_loadout_effect_profile(
+        two_handed_with_effect_shield, &two_handed_profile);
+    encounter_derive_loadout_effect_profile(
+        one_handed_with_effect_shield, &one_handed_profile);
+    CHECK("2h effect profile ignores shield effect bits",
+        two_handed_profile.shield_item == ITEM_NONE &&
+        !osrs_effect_profile_has(&two_handed_profile, OSRS_ITEM_EFFECT_ELYSIAN));
+    CHECK("1h effect profile keeps shield effect bits",
+        one_handed_profile.shield_item == ITEM_ELYSIAN_SPIRIT_SHIELD &&
+        osrs_effect_profile_has(&one_handed_profile, OSRS_ITEM_EFFECT_ELYSIAN));
+}
+
+/** E12: dps-calc magic accuracy applies prayer first, adds +2 only for Accurate,
+    then adds the folded +9 magic constant. Powered-staff Longrange has no attack
+    stance bonus. */
+static void test_magic_effective_attack_level_law(void) {
+    printf("test_magic_effective_attack_level_law\n");
+
+    uint8_t powered_staff_loadout[NUM_GEAR_SLOTS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        powered_staff_loadout[slot] = ITEM_NONE;
+    }
+    powered_staff_loadout[GEAR_SLOT_WEAPON] = ITEM_TRIDENT_OF_SWAMP;
+
+    EncounterLoadoutStats accurate;
+    EncounterLoadoutStats longrange;
+    encounter_compute_loadout_stats(powered_staff_loadout, ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_AUGURY, 82, FIGHT_STYLE_ACCURATE, 30, &accurate);
+    encounter_compute_loadout_stats(powered_staff_loadout, ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_AUGURY, 82, FIGHT_STYLE_LONGRANGE, 30, &longrange);
+
+    CHECK("E12 accurate magic eff is floor(82*1.25)+2+9 = 113",
+        accurate.eff_level == 113);
+    CHECK("E12 longrange magic eff is floor(82*1.25)+9 = 111",
+        longrange.eff_level == 111);
+
+    encounter_update_loadout_level(&accurate, OFFENSIVE_PRAYER_AUGURY, 82, 82);
+    encounter_update_loadout_level(&longrange, OFFENSIVE_PRAYER_AUGURY, 82, 82);
+    CHECK("E12 dynamic magic recompute preserves accurate and longrange laws",
+        accurate.eff_level == 113 && longrange.eff_level == 111);
+}
+
+/** E2: Sol perfect-parry force-max rewrites every supported special to the
+    resolver's own deterministic best outcome, including weapon side effects. */
+static void test_spec_force_max_laws(void) {
+    printf("test_spec_force_max_laws\n");
+
+    typedef struct {
+        int item;
+        int total;
+        int hits;
+        int def_drain;
+        int magic_def_drain;
+        int freeze_ticks;
+        int attack_speed_override;
+        int heal;
+        int prayer_restore;
+    } ForceMaxCase;
+
+    const ForceMaxCase cases[] = {
+        { ITEM_AGS, 55, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_DRAGON_CLAWS, 77, 4, 0, 0, 0, 0, 0, 0 },
+        { ITEM_STATIUS_WARHAMMER, 50, 1, 60, 0, 0, 0, 0, 0 },
+        { ITEM_BGS, 48, 1, 48, 0, 0, 0, 0, 0 },
+        { ITEM_ZGS, 44, 1, 0, 0, 32, 0, 0, 0 },
+        { ITEM_SGS, 44, 1, 0, 0, 0, 0, 22, 11 },
+        { ITEM_ANCIENT_GS, 44, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_VESTAS, 48, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_VOIDWAKER, 60, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_GRANITE_MAUL, 40, 1, 0, 0, 0, 1, 0, 0 },
+        { ITEM_DRAGON_DAGGER, 92, 2, 0, 0, 0, 0, 0, 0 },
+        { ITEM_ELDER_MAUL, 40, 1, 70, 0, 0, 0, 0, 0 },
+        { ITEM_TOXIC_BLOWPIPE, 60, 1, 0, 0, 0, 0, 30, 0 },
+        { ITEM_MAGIC_SHORTBOW_I, 80, 2, 0, 0, 0, 0, 0, 0 },
+        { ITEM_DARK_BOW, 96, 2, 0, 0, 0, 0, 0, 0 },
+        { ITEM_HEAVY_BALLISTA, 50, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_ZARYTE_CROSSBOW, 40, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_MORRIGANS_JAVELIN, 48, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_ARMADYL_CROSSBOW, 40, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_VOLATILE_STAFF, 58, 1, 0, 0, 0, 0, 0, 0 },
+        { ITEM_EYE_OF_AYAK, 52, 1, 0, 52, 0, 5, 0, 0 },
+    };
+
+    int all_cases_match = 1;
+    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        SpecResult r = {0};
+        osrs_spec_result_force_max(&r, cases[i].item, 40, 200);
+        if (r.total_damage != cases[i].total || r.num_hits != cases[i].hits ||
+            r.def_drain != cases[i].def_drain ||
+            r.magic_def_drain != cases[i].magic_def_drain ||
+            r.freeze_ticks != cases[i].freeze_ticks ||
+            r.attack_speed_override != cases[i].attack_speed_override ||
+            r.heal != cases[i].heal ||
+            r.prayer_restore != cases[i].prayer_restore ||
+            r.spec_cost != osrs_spec_cost(cases[i].item)) {
+            all_cases_match = 0;
+        }
+    }
+    CHECK("force-max covers every resolver weapon's best outcome", all_cases_match);
+
+    SpecResult claws = {0};
+    osrs_spec_result_force_max(&claws, ITEM_DRAGON_CLAWS, 40, 200);
+    CHECK("force-max claws uses first-success t=79 floor split with observable total 77",
+        claws.damage[0] == 39 && claws.damage[1] == 19 &&
+        claws.damage[2] == 9 && claws.damage[3] == 10 &&
+        claws.total_damage == 77);
+
+    SpecResult sgs = {0};
+    osrs_spec_result_force_max(&sgs, ITEM_SGS, 8, 200);
+    CHECK("force-max SGS recomputes heal/prayer minimums from the forced total",
+        sgs.total_damage == 8 && sgs.heal == 10 && sgs.prayer_restore == 5);
+
+    SpecResult elder = {0};
+    osrs_spec_result_force_max(&elder, ITEM_ELDER_MAUL, 40, 200);
+    CHECK("force-max elder maul re-applies 35% target defence drain",
+        elder.total_damage == 40 && elder.def_drain == 70);
 }
 
 /** dps-calc claws.ts splat table for a drawn total at success branch k (0-3).
@@ -412,7 +694,11 @@ static void test_item_effect_laws(void) {
 
 int main(void) {
     test_consumable_amounts_and_laws();
+    test_stat_drift_laws();
     test_spec_costs_and_sgs();
+    test_two_handed_loadout_shield_suppression();
+    test_magic_effective_attack_level_law();
+    test_spec_force_max_laws();
     test_claws_and_def_drains();
     test_item_effect_laws();
 

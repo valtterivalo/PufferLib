@@ -93,6 +93,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         /* B2(a): anchor the shared warband cycle to the wave's first actionable
            tick N (the ready delay models the researched click+6). */
         if (s->warband_cycle_anchor < 0) s->warband_cycle_anchor = s->tick;
+        col_tick_live_stat_drift_and_divines(s);
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
         col_modifiers_tick(s);

@@ -1145,27 +1145,41 @@ static const uint8_t COLO_SPEC_WEAPONS[COLO_NUM_LOADOUT_PROFILES][COLO_NUM_SPEC_
 };
 
 /** full starting supplies per profile, in DOSES (4 per potion). Beginner = the
-    wiki budget example (6 brews, 8 super restores, 1+1 super combat, 1+1
-    ranging — divine variants pooled, L4). Speedrun = High efficiency (1 brew,
-    7 sanfews, 1 divine super combat, 1 divine ranging, 1 surge potion).
+    wiki budget example (6 brews, 8 super restores, regular combat, regular
+    ranging). Speedrun = High efficiency (1 brew, 7 sanfews, 1 divine super
+    combat, 1 divine ranging, 1 surge potion). E13 supersedes the old L4
+    base-boost shortcut for the speedrun kit's divine doses.
     No solid food and no staminas exist in ANY wiki colosseum inventory (L8/L14). */
+typedef enum {
+    COLO_BOOST_POTION_REGULAR = 0,
+    COLO_BOOST_POTION_DIVINE,
+} ColoBoostPotionKind;
+
 typedef struct {
     int brew_doses;
     int restore_doses;
     int combat_doses;
     int ranged_doses;
     int surge_doses;
+    ColoBoostPotionKind combat_boost_kind;
+    ColoBoostPotionKind ranged_boost_kind;
     ColoRestoreKind restore_kind;
 } ColoSupplyLoadout;
 
 static const ColoSupplyLoadout COLO_SUPPLY_LOADOUTS[COLO_NUM_LOADOUT_PROFILES] = {
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
         .brew_doses = 4, .restore_doses = 28, .combat_doses = 4,
-        .ranged_doses = 4, .surge_doses = 4, .restore_kind = COLO_RESTORE_SANFEW,
+        .ranged_doses = 4, .surge_doses = 4,
+        .combat_boost_kind = COLO_BOOST_POTION_DIVINE,
+        .ranged_boost_kind = COLO_BOOST_POTION_DIVINE,
+        .restore_kind = COLO_RESTORE_SANFEW,
     },
     [COLO_LOADOUT_PROFILE_BEGINNER] = {
         .brew_doses = 24, .restore_doses = 32, .combat_doses = 8,
-        .ranged_doses = 8, .surge_doses = 0, .restore_kind = COLO_RESTORE_SUPER_RESTORE,
+        .ranged_doses = 8, .surge_doses = 0,
+        .combat_boost_kind = COLO_BOOST_POTION_REGULAR,
+        .ranged_boost_kind = COLO_BOOST_POTION_REGULAR,
+        .restore_kind = COLO_RESTORE_SUPER_RESTORE,
     },
 };
 
@@ -1322,6 +1336,11 @@ typedef struct {
     /* loadout profile + inventory state (researched setups, L1-L16) */
     ColoLoadoutProfile active_loadout_profile;
     ColoSupplyLoadout full_supplies;   /* obs normalization denominators */
+    /** E13: Colosseum-owned live-gameplay timers for 100-tick stat drift and
+        divine boost holds. The obs vector intentionally stays unchanged. */
+    int stat_drift_timer;
+    int divine_combat_timer;
+    int divine_ranged_timer;
     int surge_doses;
     int surge_cooldown;                /* ticks until the next surge dose (L13) */
     int spec_armed_kind;               /* 0 = none, 1 = spec A, 2 = spec B */

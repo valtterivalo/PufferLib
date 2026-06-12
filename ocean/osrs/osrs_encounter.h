@@ -1690,6 +1690,39 @@ typedef struct {
     int spell_base_damage;
 } EncounterLoadoutStats;
 
+/** E12 magic accuracy effective level from dps-calc:
+    floor(magic * prayer) + 2 for Accurate powered staff stance, then +9.
+    Longrange is selectable for powered staffs but contributes no attack level. */
+static inline int encounter_magic_effective_attack_level(
+    int magic_level, float prayer_mult, FightStyle fight_style
+) {
+    return (int)(magic_level * prayer_mult) +
+        osrs_stance_att_bonus(fight_style, ATTACK_STYLE_MAGIC) + 9;
+}
+
+/** Copy a loadout and suppress the shield slot when the weapon is two-handed.
+    E3 requires the shared equipment interpretation to ignore both shield stats
+    and shield effect bits for two-handed weapons. */
+static inline void encounter_effective_loadout_for_equipment(
+    const uint8_t loadout[NUM_GEAR_SLOTS],
+    uint8_t out[NUM_GEAR_SLOTS]
+) {
+    memcpy(out, loadout, NUM_GEAR_SLOTS);
+    if (item_is_two_handed(out[GEAR_SLOT_WEAPON])) {
+        out[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    }
+}
+
+/** Derive item effects from the same two-handed-compatible loadout used for stats. */
+static inline void encounter_derive_loadout_effect_profile(
+    const uint8_t loadout[NUM_GEAR_SLOTS],
+    OsrsEquipmentEffectProfile* out
+) {
+    uint8_t effective_loadout[NUM_GEAR_SLOTS];
+    encounter_effective_loadout_for_equipment(loadout, effective_loadout);
+    osrs_derive_equipment_effect_profile(effective_loadout, out);
+}
+
 /** offensive prayer multipliers for effective level computation.
     single source of truth: the multipliers used in encounter_compute_loadout_stats()
     and encounter_update_loadout_level(). also used by PvP combat math (via
@@ -1745,9 +1778,12 @@ static inline void encounter_compute_loadout_stats(
     out->style = style;
     out->fight_style = fight_style;
 
+    uint8_t effective_loadout[NUM_GEAR_SLOTS];
+    encounter_effective_loadout_for_equipment(loadout, effective_loadout);
+
     /* sum equipment bonuses using shared function */
     EquipmentBonuses eb;
-    osrs_sum_equipment_bonuses(loadout, &eb);
+    osrs_sum_equipment_bonuses(effective_loadout, &eb);
 
     out->def_stab = eb.defence_stab;
     out->def_slash = eb.defence_slash;
@@ -1784,11 +1820,9 @@ static inline void encounter_compute_loadout_stats(
     int att_stance_bonus = osrs_stance_att_bonus(fight_style, style);
     int str_stance_bonus = osrs_stance_str_bonus(fight_style);
 
-    /* effective attack level: floor(base * prayer_mult) + stance_att_bonus + 8.
-       magic uses +9 (OSRS invisible +1 boost) instead of +8. powered-staff stance
-       bonus (accurate +3, longrange +1) is picked up via osrs_stance_att_bonus(MAGIC). */
     if (style == ATTACK_STYLE_MAGIC) {
-        out->eff_level = (int)(base_level * att_prayer_mult) + att_stance_bonus + 9;
+        out->eff_level = encounter_magic_effective_attack_level(
+            base_level, att_prayer_mult, fight_style);
     } else {
         out->eff_level = (int)(base_level * att_prayer_mult) + att_stance_bonus + 8;
     }
@@ -1838,9 +1872,9 @@ static inline void encounter_update_loadout_level(
 
     int att_stance_bonus = osrs_stance_att_bonus(ls->fight_style, ls->style);
     int str_stance_bonus = osrs_stance_str_bonus(ls->fight_style);
-    /* magic uses +9 invisible boost (matches encounter_compute_loadout_stats) */
     if (ls->style == ATTACK_STYLE_MAGIC) {
-        ls->eff_level = (int)(current_att_level * att_prayer_mult) + att_stance_bonus + 9;
+        ls->eff_level = encounter_magic_effective_attack_level(
+            current_att_level, att_prayer_mult, ls->fight_style);
         float magic_dmg_mult = encounter_offensive_magic_dmg_mult(offensive_prayer);
         ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0) * magic_dmg_mult);
     } else {
@@ -1949,6 +1983,147 @@ static inline int encounter_decay_player_combat_stats_toward_base(Player* p) {
     changed |= encounter_decay_stat_toward_base(&p->current_ranged, p->base_ranged);
     if (!encounter_saturated_heart_protects_magic(p))
         changed |= encounter_decay_stat_toward_base(&p->current_magic, p->base_magic);
+    return changed;
+}
+
+#define ENCOUNTER_STAT_DRIFT_TICKS 100
+#define ENCOUNTER_DIVINE_POTION_TICKS 500
+#define ENCOUNTER_STAT_DRIFT_UNPINNED (-1)
+
+typedef struct {
+    int attack_floor;
+    int strength_floor;
+    int defence_floor;
+    int ranged_floor;
+    int magic_floor;
+} EncounterStatDriftPins;
+
+/** no active divine potion floor for the 100-tick stat drift helper. */
+static inline EncounterStatDriftPins encounter_stat_drift_no_pins(void) {
+    return (EncounterStatDriftPins){
+        .attack_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
+        .strength_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
+        .defence_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
+        .ranged_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
+        .magic_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
+    };
+}
+
+/** merge active divine floors so overlapping potion timers compose by maximum. */
+static inline int encounter_merge_stat_drift_floor(int a, int b) {
+    if (a == ENCOUNTER_STAT_DRIFT_UNPINNED) return b;
+    if (b == ENCOUNTER_STAT_DRIFT_UNPINNED) return a;
+    return a > b ? a : b;
+}
+
+/** merge two sets of active divine floors by per-stat maximum. */
+static inline EncounterStatDriftPins encounter_merge_stat_drift_pins(
+    EncounterStatDriftPins a,
+    EncounterStatDriftPins b
+) {
+    return (EncounterStatDriftPins){
+        .attack_floor = encounter_merge_stat_drift_floor(a.attack_floor, b.attack_floor),
+        .strength_floor = encounter_merge_stat_drift_floor(a.strength_floor, b.strength_floor),
+        .defence_floor = encounter_merge_stat_drift_floor(a.defence_floor, b.defence_floor),
+        .ranged_floor = encounter_merge_stat_drift_floor(a.ranged_floor, b.ranged_floor),
+        .magic_floor = encounter_merge_stat_drift_floor(a.magic_floor, b.magic_floor),
+    };
+}
+
+/** divine super combat floor values for Attack, Strength, and Defence. */
+static inline EncounterStatDriftPins encounter_divine_super_combat_pins(const Player* p) {
+    EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
+    pins.attack_floor = p->base_attack + osrs_super_combat_boost_amount(p->base_attack);
+    pins.strength_floor =
+        p->base_strength + osrs_super_combat_boost_amount(p->base_strength);
+    pins.defence_floor = p->base_defence + osrs_super_combat_boost_amount(p->base_defence);
+    return pins;
+}
+
+/** divine ranging floor value for Ranged. */
+static inline EncounterStatDriftPins encounter_divine_ranging_pins(const Player* p) {
+    EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
+    pins.ranged_floor = p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
+    return pins;
+}
+
+/** apply one active divine floor. Floors below or equal to base are ignored. */
+static inline int encounter_enforce_stat_drift_floor(int* current, int base, int floor) {
+    if (floor <= base) return 0;
+    if (*current >= floor) return 0;
+    *current = floor;
+    return 1;
+}
+
+/** apply every active divine floor to the player's combat levels. */
+static inline int encounter_enforce_stat_drift_pins(Player* p, EncounterStatDriftPins pins) {
+    int changed = 0;
+    changed |= encounter_enforce_stat_drift_floor(
+        &p->current_attack, p->base_attack, pins.attack_floor);
+    changed |= encounter_enforce_stat_drift_floor(
+        &p->current_strength, p->base_strength, pins.strength_floor);
+    changed |= encounter_enforce_stat_drift_floor(
+        &p->current_defence, p->base_defence, pins.defence_floor);
+    changed |= encounter_enforce_stat_drift_floor(
+        &p->current_ranged, p->base_ranged, pins.ranged_floor);
+    changed |= encounter_enforce_stat_drift_floor(
+        &p->current_magic, p->base_magic, pins.magic_floor);
+    return changed;
+}
+
+/** move one stat one level toward base without crossing an active divine floor. */
+static inline int encounter_drift_stat_toward_base_with_floor(
+    int* current,
+    int base,
+    int floor
+) {
+    if (floor > base && *current <= floor) {
+        if (*current == floor) return 0;
+        *current = floor;
+        return 1;
+    }
+    if (*current > base) {
+        *current -= 1;
+        if (floor > base && *current < floor) *current = floor;
+        return 1;
+    }
+    if (*current < base) {
+        *current += 1;
+        return 1;
+    }
+    return 0;
+}
+
+/** E13: tick the OSRS 100-tick natural stat drift cycle once.
+    Every completed cycle moves Attack, Strength, Defence, Ranged, Magic, and
+    Hitpoints one level toward base from either direction. Active divine pins
+    hold their potion stats at the boosted floor until the caller expires the
+    potion timer. */
+static inline int encounter_tick_stat_drift(
+    Player* p,
+    int* stat_drift_timer,
+    EncounterStatDriftPins pins
+) {
+    assert(p && stat_drift_timer);
+    assert(*stat_drift_timer >= 0 && *stat_drift_timer < ENCOUNTER_STAT_DRIFT_TICKS);
+
+    int changed = encounter_enforce_stat_drift_pins(p, pins);
+    *stat_drift_timer += 1;
+    if (*stat_drift_timer < ENCOUNTER_STAT_DRIFT_TICKS) return changed;
+    *stat_drift_timer = 0;
+
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_attack, p->base_attack, pins.attack_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_strength, p->base_strength, pins.strength_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_defence, p->base_defence, pins.defence_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_ranged, p->base_ranged, pins.ranged_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_magic, p->base_magic, pins.magic_floor);
+    if (p->current_hitpoints > 0)
+        changed |= encounter_decay_stat_toward_base(&p->current_hitpoints, p->base_hitpoints);
     return changed;
 }
 
@@ -2089,7 +2264,7 @@ static inline int encounter_use_spec(Player* p, int cost) {
 static inline void encounter_apply_loadout(
     Player* p, const uint8_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
 ) {
-    memcpy(p->equipped, loadout, NUM_GEAR_SLOTS);
+    encounter_effective_loadout_for_equipment(loadout, p->equipped);
     p->current_gear = gear_set;
     p->visible_gear = gear_set;
     osrs_refresh_player_equipment(p);

@@ -459,10 +459,10 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
         spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
         encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
             OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
-        osrs_derive_equipment_effect_profile(spec_loadout, &s->spec_effects[k]);
+        encounter_derive_loadout_effect_profile(spec_loadout, &s->spec_effects[k]);
     }
     for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        osrs_derive_equipment_effect_profile(loadouts[set], &s->set_effects[set]);
+        encounter_derive_loadout_effect_profile(loadouts[set], &s->set_effects[set]);
 
     s->player.x = COLO_PLAYER_START_X;
     s->player.y = COLO_PLAYER_START_Y;

@@ -51,9 +51,10 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
 
     /* HEAD_POTION (5): none, restore, super combat, ranging, surge (L15).
        restore unmasks when a stat is drained, prayer is meaningfully low, or
-       (sanfew) venom is ticking; boost pots mirror inferno's bastion window
-       [base, base+5] so a drained player restores first; surge needs a dose,
-       no cooldown, and missing spec energy. */
+       (sanfew) venom is ticking. Boost pots mirror inferno's bastion window
+       [base, base+5] so a drained player restores first. E13 divine boost
+       pots also require more than 10 Hitpoints. Surge needs a dose, no
+       cooldown, and missing spec energy. */
     mask[offset++] = 1.0f;
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
@@ -74,9 +75,11 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
                           (stats_drained || pray_worth || venom_cure)) ? 1.0f : 0.0f;
     }
     mask[offset++] = (s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
+                      (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
                       s->player.current_attack >= s->player.base_attack &&
                       s->player.current_attack <= s->player.base_attack + 5) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
+                      (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
                       s->player.current_ranged >= s->player.base_ranged &&
                       s->player.current_ranged <= s->player.base_ranged + 5) ? 1.0f : 0.0f;
     mask[offset++] = (s->surge_doses > 0 && s->player.potion_timer == 0 &&

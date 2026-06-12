@@ -2160,6 +2160,18 @@ static int sol_setup(ColosseumState* s, ColosseumContext* ctx, uint32_t seed) {
     return col_sol_find_idx(s);
 }
 
+/** start a clean wave-12 fight with the speedrun profile pinned. */
+static int sol_setup_speedrun(ColosseumState* s, ColosseumContext* ctx, uint32_t seed) {
+    col_init_context_typed(ctx);
+    ctx->config.start_wave = 11;
+    ctx->config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY;
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    while (s->wave_ready_delay > 0) step_and_observe(s, ctx, idle);
+    return col_sol_find_idx(s);
+}
+
 /* teleport the player with clean interaction + collision state. */
 static void sol_move_player(ColosseumState* s, int x, int y) {
     s->player.x = x;
@@ -2175,6 +2187,30 @@ static int sol_count_active_beams(const ColosseumState* s) {
     for (int b = 0; b < COLO_SOL_BEAM_MAX; b++)
         if (s->sol.beams[b].active) n++;
     return n;
+}
+
+/** Clear Sol's molten-sand layer when a test has already asserted transition
+    hazards and needs to isolate an unrelated boss subsystem. */
+static void sol_clear_beams_and_sand(ColosseumState* s) {
+    memset(s->sol.beams, 0, sizeof(s->sol.beams));
+    s->sol.hazard_tile_count = 0;
+}
+
+/** Validate E6 molten-sand placement after phase beams have converted. */
+static int sol_phase_sand_invariants_hold(const ColosseumState* s, int expected_count) {
+    if (s->sol.hazard_tile_count != expected_count) return 0;
+    int player_tile_seen = 0;
+    for (int i = 0; i < s->sol.hazard_tile_count; i++) {
+        int x = s->sol.hazard_tile_x[i];
+        int y = s->sol.hazard_tile_y[i];
+        if (!col_in_boss_arena(s, x, y)) return 0;
+        if (col_static_blocked(x, y)) return 0;
+        if (x == s->player.x && y == s->player.y) player_tile_seen = 1;
+        for (int j = 0; j < i; j++)
+            if (x == s->sol.hazard_tile_x[j] && y == s->sol.hazard_tile_y[j])
+                return 0;
+    }
+    return player_tile_seen;
 }
 
 /* park Sol at (x, y) and silence his engine + movement: geometry rigs need a
@@ -2476,6 +2512,41 @@ static void test_sol_grapple_perfect_parry(void) {
         s.sol.next_attack_guaranteed_max == 0);
 }
 
+/** E2: a perfect-parry guaranteed max also applies to special attacks, so the
+    canonical parry-into-claws line forces the claws first-success best split
+    and consumes the armed flag. */
+static void test_sol_perfect_parry_forces_spec_attack(void) {
+    printf("test_sol_perfect_parry_forces_spec_attack\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup_speedrun(&s, &ctx, 128);
+    CHECK("speedrun Sol setup succeeded", idx >= 0);
+    CHECK("speedrun spec A is dragon claws",
+        COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_DRAGON_CLAWS);
+
+    int max_hit = s.spec_stats[0].max_hit;
+    int claws_total = 2 * max_hit - 1;
+    int expected_total = claws_total / 2 + claws_total / 4 +
+        claws_total / 8 + claws_total / 8 + 1;
+    CHECK("rig sanity: claws max hit is positive", max_hit > 0);
+
+    s.sol.attack_delay = 1000;
+    s.player.special_energy = 100;
+    s.spec_armed_kind = 1;
+    s.sol.next_attack_guaranteed_max = 1;
+    s.sol.guaranteed_max_ticks = COLO_SOL_PERFECT_MAX_TICKS;
+    col_player_attack_target(&s, idx);
+
+    CHECK("perfect-parry claws uses the forced first-success best total",
+        s.player_attack_dmg == expected_total &&
+        s.npcs[idx].pending_hits.count == 4);
+    CHECK("perfect-parry spec consumes and clears the max flag",
+        s.sol.next_attack_guaranteed_max == 0 &&
+        s.sol.guaranteed_max_ticks == 0);
+    CHECK("perfect-parry spec still spends claws energy",
+        s.player.special_energy == 50 && s.spec_armed_kind == 0);
+}
+
 /* 6f. A3: shield safe-ring geometry for both variants — the Chebyshev ring is
    safe, the inner block and the rest of the arena both burn — checked on the
    predicate and through the step loop at the bite tick. */
@@ -2636,6 +2707,7 @@ static void test_sol_crystal_lifecycle(void) {
         if (s.sol.crystals[c].fire_cooldown < 25 || s.sol.crystals[c].fire_cooldown > 35)
             cooldowns_ok = 0;
     CHECK("fresh crystal cooldowns roll uniform 25-35", cooldowns_ok);
+    sol_clear_beams_and_sand(&s);
 
     /* ring motion: a crystal advances one ring step every 4 ticks. */
     int idle[COLO_NUM_ACTION_HEADS] = {0};
@@ -2684,6 +2756,46 @@ static void test_sol_crystal_lifecycle(void) {
     }
     CHECK("at enrage the post-fire cooldown is 12",
         s.sol.crystals[0].fire_cooldown == COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE);
+}
+
+/** E6: phase-transition molten sand always includes the player's tile and
+    fills all 6 in-arena tiles when the valid 9x9 candidate pool has room. */
+static void test_sol_phase_transition_sand_guarantees(void) {
+    printf("test_sol_phase_transition_sand_guarantees\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int seeded_ok = 1;
+
+    for (uint32_t seed = 150; seed < 230; seed++) {
+        int idx = sol_setup(&s, &ctx, seed);
+        (void)idx;
+        s.sol.attack_delay = 1000;
+        sol_move_player(&s, 17, 14);
+        col_sol_enter_phase(&s, 1);
+        for (int t = 0; t < COLO_SOL_BEAM_TO_POOL_TICKS; t++)
+            col_sol_tick_molten(&s);
+        if (!sol_phase_sand_invariants_hold(&s, COLO_SOL_BEAM_COUNT)) {
+            seeded_ok = 0;
+            break;
+        }
+    }
+    CHECK("seeded phase transitions place exactly 6 unique in-arena sand tiles with one under player",
+        seeded_ok);
+
+    int idx = sol_setup(&s, &ctx, 231);
+    (void)idx;
+    s.sol.attack_delay = 1000;
+    int corner_x = COLO_BOSS_ARENA_MIN_X + 2;
+    int corner_y = COLO_BOSS_ARENA_MIN_Y;
+    sol_move_player(&s, corner_x, corner_y);
+    CHECK("rig sanity: corner-edge player tile is walkable",
+        col_in_boss_arena(&s, s.player.x, s.player.y) &&
+        !col_static_blocked(s.player.x, s.player.y));
+    col_sol_enter_phase(&s, 1);
+    for (int t = 0; t < COLO_SOL_BEAM_TO_POOL_TICKS; t++)
+        col_sol_tick_molten(&s);
+    CHECK("corner-edge phase transition still places 6 in-arena sand tiles including player",
+        sol_phase_sand_invariants_hold(&s, COLO_SOL_BEAM_COUNT));
 }
 
 /* 6i. A11+D25: 6 beams drop in the 9x9 around the player and become PERMANENT
@@ -2743,6 +2855,28 @@ static void loadout_reset(ColosseumState* s, ColosseumContext* ctx, int mode,
     col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
 }
 
+static int col_loadout_stats_equal(
+    const EncounterLoadoutStats* a,
+    const EncounterLoadoutStats* b
+) {
+    return a->attack_bonus == b->attack_bonus &&
+           a->strength_bonus == b->strength_bonus &&
+           a->eff_level == b->eff_level &&
+           a->max_hit == b->max_hit &&
+           a->attack_speed == b->attack_speed &&
+           a->attack_range == b->attack_range &&
+           a->style == b->style &&
+           a->fight_style == b->fight_style &&
+           a->def_stab == b->def_stab &&
+           a->def_slash == b->def_slash &&
+           a->def_crush == b->def_crush &&
+           a->def_magic == b->def_magic &&
+           a->def_ranged == b->def_ranged &&
+           a->att_prayer_mult == b->att_prayer_mult &&
+           a->str_prayer_mult == b->str_prayer_mult &&
+           a->spell_base_damage == b->spell_base_damage;
+}
+
 static void test_loadout_profiles_and_supplies(void) {
     printf("test_loadout_profiles_and_supplies\n");
     ColosseumContext ctx;
@@ -2766,6 +2900,43 @@ static void test_loadout_profiles_and_supplies(void) {
     CHECK("beginner melee head carries venom immunity",
         osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_VENOM_IMMUNE));
     int beginner_melee_max = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+    CHECK("beginner spec weapons are SGS then claws",
+        COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_SGS &&
+        COLO_SPEC_WEAPONS[s.active_loadout_profile][1] == ITEM_DRAGON_CLAWS);
+
+    uint8_t beginner_sgs_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_sgs_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
+    beginner_sgs_without_defender[GEAR_SLOT_WEAPON] = ITEM_SGS;
+    beginner_sgs_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    EncounterLoadoutStats beginner_sgs_expected;
+    encounter_compute_loadout_stats(beginner_sgs_without_defender, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &beginner_sgs_expected);
+    CHECK("beginner SGS spec stats exclude dragon defender bonuses",
+        col_loadout_stats_equal(&s.spec_stats[0], &beginner_sgs_expected));
+
+    uint8_t beginner_claws_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_claws_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
+    beginner_claws_without_defender[GEAR_SLOT_WEAPON] = ITEM_DRAGON_CLAWS;
+    beginner_claws_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    EncounterLoadoutStats beginner_claws_without;
+    encounter_compute_loadout_stats(beginner_claws_without_defender, ATTACK_STYLE_MELEE,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &beginner_claws_without);
+    CHECK("beginner claws spec stats keep dragon defender strength",
+        s.spec_stats[1].strength_bonus ==
+            beginner_claws_without.strength_bonus +
+            ITEM_DATABASE[ITEM_DRAGON_DEFENDER].melee_strength);
+    CHECK("beginner claws spec stats keep dragon defender accuracy",
+        s.spec_stats[1].attack_bonus > beginner_claws_without.attack_bonus);
+
+    uint8_t beginner_bowfa_with_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_bowfa_with_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS);
+    beginner_bowfa_with_defender[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+    EncounterLoadoutStats beginner_bowfa_illegal_shield;
+    encounter_compute_loadout_stats(beginner_bowfa_with_defender, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &beginner_bowfa_illegal_shield);
+    CHECK("beginner bowfa ranged stats are unchanged by an occupied shield slot",
+        col_loadout_stats_equal(
+            &s.loadout_stats[COLO_GEAR_RANGED], &beginner_bowfa_illegal_shield));
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 1.0f, 12);
     CHECK("speedrun mode pins the speedrun profile",
@@ -2861,6 +3032,105 @@ static void test_loadout_consumables(void) {
     s.player.current_prayer = 40;
     step_and_observe(&s, &ctx, restore);
     CHECK("super restore gives +32 prayer", s.player.current_prayer == 72);
+}
+
+/** E13: divine boost potions self-damage, pin boosted stats for 500 live ticks,
+    and share the 100-tick natural stat drift contract. */
+static void test_loadout_divine_potions_and_stat_drift(void) {
+    printf("test_loadout_divine_potions_and_stat_drift\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    float mask[COLO_ACTION_MASK_SIZE];
+    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 81);
+    CHECK("speedrun combat and ranging potions are divine",
+        col_combat_potion_is_divine(&s) && col_ranged_potion_is_divine(&s));
+    s.player.current_hitpoints = 10;
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    CHECK("divine boost potions are masked at 10 HP",
+        mask[pot_off + COLO_POTION_COMBAT] == 0.0f &&
+        mask[pot_off + COLO_POTION_RANGING] == 0.0f);
+    s.player.current_hitpoints = 11;
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    CHECK("divine boost potions unmask above 10 HP",
+        mask[pot_off + COLO_POTION_COMBAT] == 1.0f &&
+        mask[pot_off + COLO_POTION_RANGING] == 1.0f);
+
+    s.player.current_hitpoints = 50;
+    int combat[COLO_NUM_ACTION_HEADS] = {0};
+    combat[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+    step_and_observe(&s, &ctx, combat);
+    CHECK("divine combat chunks 10 HP and starts a 500-tick hold",
+        s.player.current_hitpoints == 40 &&
+        s.divine_combat_timer == ENCOUNTER_DIVINE_POTION_TICKS &&
+        s.player.combat_potion_doses == 3);
+    CHECK("divine combat boosts to the held floor",
+        s.player.current_attack == 118 && s.player.current_strength == 118 &&
+        s.player.current_defence == 118);
+    for (int t = 0; t < ENCOUNTER_DIVINE_POTION_TICKS - 1; t++)
+        col_tick_live_stat_drift_and_divines(&s);
+    CHECK("divine combat stats survive through tick 499",
+        s.player.current_attack == 118 && s.player.current_strength == 118 &&
+        s.player.current_defence == 118 && s.divine_combat_timer == 1);
+    col_tick_live_stat_drift_and_divines(&s);
+    CHECK("divine combat expiry drops its stats to base instantly",
+        s.player.current_attack == 99 && s.player.current_strength == 99 &&
+        s.player.current_defence == 99 && s.divine_combat_timer == 0);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 82);
+    s.player.current_hitpoints = 50;
+    int ranged[COLO_NUM_ACTION_HEADS] = {0};
+    ranged[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+    step_and_observe(&s, &ctx, ranged);
+    CHECK("divine ranging chunks 10 HP and starts a 500-tick hold",
+        s.player.current_hitpoints == 40 &&
+        s.divine_ranged_timer == ENCOUNTER_DIVINE_POTION_TICKS &&
+        s.player.ranged_potion_doses == 3);
+    for (int t = 0; t < ENCOUNTER_DIVINE_POTION_TICKS; t++)
+        col_tick_live_stat_drift_and_divines(&s);
+    CHECK("divine ranging expiry drops Ranged to base instantly",
+        s.player.current_ranged == 99 && s.divine_ranged_timer == 0);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 83);
+    CHECK("beginner boost potions are regular",
+        !col_combat_potion_is_divine(&s) && !col_ranged_potion_is_divine(&s));
+    step_and_observe(&s, &ctx, combat);
+    CHECK("regular beginner combat boost does not arm a divine timer",
+        s.player.current_hitpoints == 99 && s.divine_combat_timer == 0 &&
+        s.player.current_attack == 118);
+    for (int t = 0; t < ENCOUNTER_STAT_DRIFT_TICKS; t++)
+        col_tick_live_stat_drift_and_divines(&s);
+    CHECK("regular beginner combat boost decays one level after 100 live ticks",
+        s.player.current_attack == 117 && s.player.current_strength == 117 &&
+        s.player.current_defence == 117);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 84);
+    s.stat_drift_timer = ENCOUNTER_STAT_DRIFT_TICKS - 1;
+    s.divine_combat_timer = 1;
+    s.player.current_attack = 118;
+    s.player.current_strength = 118;
+    s.player.current_defence = 118;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("stat drift and divine timers freeze during the draft gap",
+        s.stat_drift_timer == ENCOUNTER_STAT_DRIFT_TICKS - 1 &&
+        s.divine_combat_timer == 1 && s.player.current_attack == 118);
+
+    s.stat_drift_timer = 37;
+    s.divine_combat_timer = 123;
+    s.divine_ranged_timer = 234;
+    ColoSnapshot snap;
+    col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
+    CHECK("snapshot version is v6 for stat drift fields",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 6u);
+    ColosseumState restored;
+    memset(&restored, 0, sizeof(restored));
+    col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
+    CHECK("snapshot v6 round-trips stat drift and divine timers",
+        restored.stat_drift_timer == 37 &&
+        restored.divine_combat_timer == 123 &&
+        restored.divine_ranged_timer == 234);
 }
 
 static void test_loadout_sanfew_and_serp_helm(void) {
@@ -3209,12 +3479,15 @@ int main(void) {
     test_sol_parry_schedule_and_damage();
     test_sol_parry_prayer_punish();
     test_sol_grapple_perfect_parry();
+    test_sol_perfect_parry_forces_spec_attack();
     test_sol_shield_safe_rings();
     test_sol_spear_lines();
     test_sol_crystal_lifecycle();
+    test_sol_phase_transition_sand_guarantees();
     test_sol_beams_become_pools();
     test_loadout_profiles_and_supplies();
     test_loadout_consumables();
+    test_loadout_divine_potions_and_stat_drift();
     test_loadout_sanfew_and_serp_helm();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();

@@ -314,8 +314,9 @@ static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
 /* v2: P4 SolHereditState rewrite (A1-A15, B4, B7).
    v3: P5 draft rework (draft_gates_spawn replaces draft_timer), hazard-entity
    totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields.
-   v5: E8 bee-contact poison state fields. */
-#define COLO_SNAPSHOT_VERSION 5u
+   v5: E8 bee-contact poison state fields.
+   v6: E13 stat drift and divine potion timers. */
+#define COLO_SNAPSHOT_VERSION 6u
 
 typedef struct {
     uint32_t magic;

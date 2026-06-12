@@ -52,6 +52,7 @@ typedef struct {
     uint16_t item_id;           // Real OSRS item ID
     char name[32];              // Human-readable name
     uint8_t slot;               // Equipment slot (EquipmentSlot enum)
+    uint8_t two_handed;
     uint8_t attack_speed;       // Weapon attack speed (ticks)
     uint8_t attack_range;       // Weapon attack range (tiles)
     int16_t attack_stab;
@@ -193,24 +194,12 @@ static inline int get_item_attack_style(uint8_t item_index) {
     }
 }
 
-/** Check if weapon is two-handed. */
+/** Check if weapon is two-handed.
+    E3 keeps two-handed state in item data so shield suppression is shared. */
 static inline int item_is_two_handed(uint8_t item_index) {
-    switch (item_index) {
-        case ITEM_AGS:
-        case ITEM_ANCIENT_GS:
-        case ITEM_DRAGON_CLAWS:
-        case ITEM_GRANITE_MAUL:
-        case ITEM_ELDER_MAUL:
-        case ITEM_DARK_BOW:
-        case ITEM_HEAVY_BALLISTA:
-        case ITEM_MAGIC_SHORTBOW_I:
-        case ITEM_BOW_OF_FAERDHINEN:
-        case ITEM_TWISTED_BOW:
-        case ITEM_TOXIC_BLOWPIPE:
-            return 1;
-        default:
-            return 0;
-    }
+    if (item_index >= NUM_ITEMS) return 0;
+    return ITEM_DATABASE[item_index].slot == SLOT_WEAPON &&
+           ITEM_DATABASE[item_index].two_handed;
 }
 // ITEM STATS EXTRACTION (for observations)
 
