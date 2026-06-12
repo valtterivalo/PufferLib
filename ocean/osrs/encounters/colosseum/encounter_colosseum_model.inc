@@ -1262,6 +1262,14 @@ typedef struct {
     int total_npc_attacks;
     int modifiers_picked;      /* mandatory draft selections made this run */
     int active_tier_sum;       /* sum of active modifier tiers (run difficulty proxy) */
+
+    /* per-NPC-type prayer outcomes ("who is hitting us off-prayer"): faced =
+       prayer-checkable hits that landed, correct = overhead matched at land
+       time, offpray_damage = HP lost to mismatched-overhead hits. Floats so
+       the binding can aggregate per-episode means directly. */
+    float pray_faced_by_type[COLO_NUM_NPC_TYPES];
+    float pray_correct_by_type[COLO_NUM_NPC_TYPES];
+    float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
 } ColosseumLog;
 
 

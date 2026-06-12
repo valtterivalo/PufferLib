@@ -1498,11 +1498,22 @@ static inline int encounter_resolve_npc_pending_hit(
     encounters MUST call this each tick for projectile-based NPC attacks.
     prayer_correct_count: incremented for each deferred prayer check that succeeds.
     multiple hits can land on the same tick (e.g. mager + ranger). */
-static inline void encounter_resolve_player_pending_hits(
+/** per-landing-hit observer for the _observed resolver variant: fires once per
+    landing hit with a real attack style, with the post-prayer damage.
+    prayer_was_checked=0 means the landing bypassed the Protect check (ignore-
+    prayer pushes, or jad-style hits whose deferred check already ran earlier) —
+    deferred decisions are NOT re-observed at land time, so encounters that use
+    prayer_check_delay > 0 see those hits only as unchecked landings. */
+typedef void (*EncounterPendingHitObserver)(
+    void* user, const EncounterPendingHit* hit, int damage_after_prayer,
+    int prayer_was_correct, int prayer_was_checked);
+
+static inline void encounter_resolve_player_pending_hits_observed(
     EncounterPendingHitQueue* queue,
     Player* player, OverheadPrayer active_prayer,
     float* damage_received_acc, int* prayer_correct_count,
-    int* off_prayer_hit_count
+    int* off_prayer_hit_count,
+    EncounterPendingHitObserver observer, void* observer_user
 ) {
     for (int i = 0; i < queue->count; i++) {
         EncounterPendingHit* hit = &queue->hits[i];
@@ -1526,8 +1537,11 @@ static inline void encounter_resolve_player_pending_hits(
         hit->ticks_remaining--;
         if (hit->ticks_remaining <= 0) {
             int dmg = hit->damage;
+            int checked = hit->check_prayer;
+            int prayed = 0;
             if (hit->check_prayer) {
-                if (encounter_prayer_correct_for_style(active_prayer, hit->attack_style)) {
+                prayed = encounter_prayer_correct_for_style(active_prayer, hit->attack_style);
+                if (prayed) {
                     dmg = 0;
                     if (prayer_correct_count) (*prayer_correct_count)++;
                 } else if (dmg > 0 && hit->attack_style != ATTACK_STYLE_NONE) {
@@ -1537,11 +1551,24 @@ static inline void encounter_resolve_player_pending_hits(
                 if (off_prayer_hit_count) (*off_prayer_hit_count)++;
             }
 
+            if (observer && hit->attack_style != ATTACK_STYLE_NONE)
+                observer(observer_user, hit, dmg, prayed, checked);
             encounter_damage_player(player, dmg, damage_received_acc);
             encounter_pending_hit_queue_remove(queue, i, "player");
             i--;
         }
     }
+}
+
+static inline void encounter_resolve_player_pending_hits(
+    EncounterPendingHitQueue* queue,
+    Player* player, OverheadPrayer active_prayer,
+    float* damage_received_acc, int* prayer_correct_count,
+    int* off_prayer_hit_count
+) {
+    encounter_resolve_player_pending_hits_observed(
+        queue, player, active_prayer, damage_received_acc,
+        prayer_correct_count, off_prayer_hit_count, NULL, NULL);
 }
 
 

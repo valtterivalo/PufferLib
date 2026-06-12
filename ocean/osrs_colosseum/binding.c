@@ -128,6 +128,11 @@ void c_step(Env* env) {
             env->log.npc_kills += (float)clog->total_npc_kills;
             env->log.prayer_correct += (float)clog->total_prayer_correct;
             env->log.prayer_total += (float)clog->total_npc_attacks;
+            for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+                env->log.colo_pray_faced_by_type[t] += clog->pray_faced_by_type[t];
+                env->log.colo_pray_correct_by_type[t] += clog->pray_correct_by_type[t];
+                env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
+            }
         }
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
         ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
@@ -378,4 +383,21 @@ void my_log(Log* log, Dict* out) {
     float wave_frac = log->wave / (float)COLO_NUM_WAVES;
     float score = wr + (1.0f - wr) * wave_frac * 0.5f;
     dict_set(out, "score", score);
+
+    /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
+       overhead per prayer-checkable hit faced) + mean off-prayer damage taken
+       per episode. Indexed by ColoNpcType. */
+    static const char* COLO_TYPE_KEYS[COLO_NUM_NPC_TYPES] = {
+        "berserker", "archer", "seer", "serpent", "jaguar", "javelin",
+        "shockwave", "minotaur", "manticore", "sol", "totem", "bee"};
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+        char key[64];
+        float faced = log->colo_pray_faced_by_type[t];
+        float off_rate = faced > 0.0f
+            ? (faced - log->colo_pray_correct_by_type[t]) / faced : 0.0f;
+        snprintf(key, sizeof(key), "offpray_rate_%s", COLO_TYPE_KEYS[t]);
+        dict_set(out, key, off_rate);
+        snprintf(key, sizeof(key), "offpray_dmg_%s", COLO_TYPE_KEYS[t]);
+        dict_set(out, key, log->colo_offpray_damage_by_type[t]);
+    }
 }

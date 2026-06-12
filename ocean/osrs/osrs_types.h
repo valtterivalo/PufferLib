@@ -1003,6 +1003,13 @@ typedef struct {
        update + opponent swap logic. Up to 8 banks (matches chess + CHESS_MAX_BANKS). */
     float hist_score_bank[8];
     float hist_n_bank[8];
+
+    /* Colosseum per-NPC-type prayer outcomes, indexed by ColoNpcType (12 types).
+       faced = prayer-checkable hits landed, correct = overhead matched,
+       offpray_damage = HP lost to mismatched-overhead hits. */
+    float colo_pray_faced_by_type[12];
+    float colo_pray_correct_by_type[12];
+    float colo_offpray_damage_by_type[12];
 } Log;
 
 typedef struct {

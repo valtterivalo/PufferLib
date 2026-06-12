@@ -185,6 +185,42 @@ static void test_zero_actions_hit_timeout(void) {
     CHECK("the draft was still pending when time ran out", s.modifiers.draft_pending == 1);
 }
 
+/* ---- 1a-ter. per-NPC-type prayer attribution: off-prayer hits attribute their
+   damage to the source type, prayed hits count correct, ignore-prayer hits
+   (javelin skyfall style) stay out of the prayer log entirely. */
+static void test_offpray_attribution_log(void) {
+    printf("test_offpray_attribution_log\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 777);
+    int hp0 = s.player.current_hitpoints;
+
+    s.player.prayer = PRAYER_PROTECT_MELEE;
+    col_queue_player_pending_hit(&s, 0, COLO_SERPENT_SHAMAN, 11, 1, ATTACK_STYLE_MAGIC, 1, 1);
+    col_resolve_player_pending_hits(&s);
+    CHECK("off-prayer hit counted as faced", s.log.pray_faced_by_type[COLO_SERPENT_SHAMAN] == 1.0f);
+    CHECK("off-prayer hit not counted correct", s.log.pray_correct_by_type[COLO_SERPENT_SHAMAN] == 0.0f);
+    CHECK("off-prayer damage attributed to the shaman", s.log.offpray_damage_by_type[COLO_SERPENT_SHAMAN] == 11.0f);
+    CHECK("off-prayer damage landed", s.player.current_hitpoints == hp0 - 11);
+
+    s.player.prayer = PRAYER_PROTECT_MAGIC;
+    col_queue_player_pending_hit(&s, 0, COLO_SERPENT_SHAMAN, 11, 1, ATTACK_STYLE_MAGIC, 1, 1);
+    col_resolve_player_pending_hits(&s);
+    CHECK("prayed hit counted as faced", s.log.pray_faced_by_type[COLO_SERPENT_SHAMAN] == 2.0f);
+    CHECK("prayed hit counted correct", s.log.pray_correct_by_type[COLO_SERPENT_SHAMAN] == 1.0f);
+    CHECK("prayed hit dealt no damage", s.player.current_hitpoints == hp0 - 11);
+
+    col_queue_player_pending_hit(&s, 0, COLO_JAVELIN_COLOSSUS, 7, 1, ATTACK_STYLE_RANGED, 0, 1);
+    col_resolve_player_pending_hits(&s);
+    CHECK("ignore-prayer hit stays out of the prayer log",
+        s.log.pray_faced_by_type[COLO_JAVELIN_COLOSSUS] == 0.0f);
+    CHECK("ignore-prayer damage still landed", s.player.current_hitpoints == hp0 - 18);
+}
+
 /* ---- 1b. step-loop draft (A16+B6+D26): the wave-1 fixed offer opens at reset
    BEFORE any NPC spawns, the player is frozen until the mandatory pick (no
    skip, no auto-close), the pick gates the spawn + 6-tick ready delay, and the
@@ -3464,6 +3500,7 @@ static void test_loadout_offensive_prayers(void) {
 int main(void) {
     test_fuzz_obs_mask();
     test_zero_actions_hit_timeout();
+    test_offpray_attribution_log();
     test_step_loop_draft();
     test_twelve_drafts_per_run();
     test_solarflare_orb();

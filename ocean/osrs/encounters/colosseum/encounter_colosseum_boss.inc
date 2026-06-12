@@ -590,6 +590,7 @@ static void col_sol_tick_triple_parry(ColosseumState* s) {
             s->last_hit_by_type = COLO_SOL_HEREDIT;
             col_mod_on_player_damaged(s, sol->parry_damage[h]);
         }
+        col_log_prayer_event(s, COLO_SOL_HEREDIT, blocked, blocked ? 0 : sol->parry_damage[h]);
         s->player.prayer = PRAYER_NONE;
     }
 }

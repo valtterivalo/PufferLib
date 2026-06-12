@@ -60,6 +60,21 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
     }
 }
 
+/** per-NPC-type prayer outcome tally (the "who is hitting us off-prayer" log).
+    prayed hits count toward correct; unprayed hits attribute their landed damage. */
+static void col_log_prayer_event(ColosseumState* s, int npc_type, int prayed, int dmg) {
+    assert(npc_type >= 0 && npc_type < COLO_NUM_NPC_TYPES);
+    s->log.pray_faced_by_type[npc_type] += 1.0f;
+    if (prayed) s->log.pray_correct_by_type[npc_type] += 1.0f;
+    else s->log.offpray_damage_by_type[npc_type] += (float)dmg;
+}
+
+static void col_pending_hit_prayer_observer(
+    void* user, const EncounterPendingHit* hit, int dmg, int prayed, int checked) {
+    if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
+    col_log_prayer_event((ColosseumState*)user, hit->source_npc_type, prayed, dmg);
+}
+
 /** resolve NPC attack projectiles landing on the player. Blasphemy drains prayer
     by a fraction of the damage taken this tick; Doom adds one stack per damaging
     instance (off-prayer hits that dealt damage). */
@@ -67,9 +82,10 @@ static void col_resolve_player_pending_hits(ColosseumState* s) {
     int prayer_correct = 0;
     int off_prayer = 0;
     float dmg_received = 0.0f;
-    encounter_resolve_player_pending_hits(
+    encounter_resolve_player_pending_hits_observed(
         &s->player_pending_hits, &s->player, s->player.prayer,
-        &dmg_received, &prayer_correct, &off_prayer);
+        &dmg_received, &prayer_correct, &off_prayer,
+        col_pending_hit_prayer_observer, s);
     s->tick_scratch.damage_received += dmg_received;
     s->tick_scratch.prayer_correct += prayer_correct;
 
@@ -299,6 +315,7 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
             s->tick_scratch.prayer_correct++;
         }
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        col_log_prayer_event(s, npc->type, prayed, dmg);
         if (dmg > 0) {
             s->last_hit_by_type = npc->type;
             col_mod_on_player_damaged(s, dmg);
