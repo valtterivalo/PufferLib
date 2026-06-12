@@ -222,6 +222,8 @@ static void reset_tick_flags(Player* p) {
     p->tick_damage_scale = 0.0f;
     p->damage_dealt_scale = 0.0f;
     p->damage_received_scale = 0.0f;
+    p->expected_damage_dealt_tick = 0.0f;
+    p->expected_damage_received_tick = 0.0f;
     p->last_food_heal = 0;
     p->last_food_waste = 0;
     p->last_karambwan_heal = 0;
@@ -586,15 +588,32 @@ static void execute_actions(OsrsEnv* env, int agent_idx, const int* actions) {
     execute_attacks(env, agent_idx, actions);
 }
 
+static float pvp_remaining_supply_hp_fraction(const Player* p) {
+    BrewResult brew = osrs_brew_effect(p->base_hitpoints, p->base_attack,
+        p->base_strength, p->base_ranged, p->base_magic);
+    float remaining = 20.0f * (float)p->food_count
+        + 18.0f * (float)p->karambwan_count
+        + (float)brew.hp_healed * (float)p->brew_doses;
+    float max_supply = 20.0f * (float)MAXED_FOOD_COUNT
+        + 18.0f * (float)MAXED_KARAMBWAN_COUNT
+        + (float)brew.hp_healed * (float)MAXED_BREW_DOSES;
+    return max_supply > 0.0f
+        ? clampf(remaining / max_supply, 0.0f, 1.0f)
+        : 0.0f;
+}
+
 static float calculate_reward(OsrsEnv* env, int agent_idx) {
     float reward = 0.0f;
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const RewardShapingConfig* cfg = &env->shaping;
 
+    reward += cfg->expected_damage_reward_coef * p->expected_damage_dealt_tick;
+
     if (env->episode_over) {
         if (env->winner == agent_idx) {
             reward += 1.0f;
+            reward += cfg->ko_supply_reward_coef * pvp_remaining_supply_hp_fraction(t);
         }
     }
 

@@ -589,6 +589,8 @@ static void register_expected_damage(
     Player* defender = &env->players[defender_idx];
     attacker->expected_damage_dealt += expected_damage;
     defender->expected_damage_received += expected_damage;
+    attacker->expected_damage_dealt_tick += expected_damage;
+    defender->expected_damage_received_tick += expected_damage;
 }
 
 

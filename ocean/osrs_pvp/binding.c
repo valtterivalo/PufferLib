@@ -642,6 +642,15 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* shaping_en = dict_get_unsafe(kwargs, "shaping_enabled");
     env->pvp.shaping.enabled = shaping_en ? (int)shaping_en->value : 0;
 
+    DictItem* expected_damage_reward = dict_get_unsafe(
+        kwargs, "expected_damage_reward_coef");
+    env->pvp.shaping.expected_damage_reward_coef = expected_damage_reward
+        ? (float)expected_damage_reward->value : 0.0f;
+
+    DictItem* ko_supply_reward = dict_get_unsafe(kwargs, "ko_supply_reward_coef");
+    env->pvp.shaping.ko_supply_reward_coef = ko_supply_reward
+        ? (float)ko_supply_reward->value : 0.0f;
+
     env->pvp.shaping.damage_dealt_coef = 0.005f;
     env->pvp.shaping.damage_received_coef = -0.005f;
     env->pvp.shaping.correct_prayer_bonus = 0.03f;
@@ -663,9 +672,6 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.premature_eat_threshold = 0.7071f;
     env->pvp.shaping.ko_bonus = 0.15f;
     env->pvp.shaping.wasted_resources_penalty = -0.07f;
-    /* ko_supplies_bonus_coef: proportional bonus when KO'ing with opponent
-       supplies remaining. Sweep over [0, ~0.5] to find if fast-KO incentive
-       helps. Defaults to 0 so existing OPP_IMPROVED training is unchanged. */
     DictItem* ko_sup = dict_get_unsafe(kwargs, "ko_supplies_bonus_coef");
     env->pvp.shaping.ko_supplies_bonus_coef = ko_sup ? (float)ko_sup->value : 0.0f;
     env->pvp.shaping.prayer_penalty_enabled = 1;

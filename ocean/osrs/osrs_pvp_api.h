@@ -169,6 +169,8 @@ static void init_player(Player* p) {
     p->tick_damage_scale = 0.0f;
     p->damage_dealt_scale = 0.0f;
     p->damage_received_scale = 0.0f;
+    p->expected_damage_dealt_tick = 0.0f;
+    p->expected_damage_received_tick = 0.0f;
 
     p->total_target_hit_count = 0;
     p->target_hit_melee_count = 0;

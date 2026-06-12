@@ -401,6 +401,71 @@ static void test_shaping_disabled_emits_only_terminal_reward(void) {
     collision_map_free(cmap);
 }
 
+static void test_expected_damage_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP expected damage reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.expected_damage_reward_coef = 0.01f;
+    env.players[0].expected_damage_dealt_tick = 25.0f;
+
+    ASSERT_FLOAT_NEAR("expected damage dense reward",
+        calculate_reward(&env, 0), 0.25f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_ko_supply_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP KO supply reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.ko_supply_reward_coef = 0.5f;
+    env.episode_over = 1;
+    env.winner = 0;
+
+    Player* target = &env.players[1];
+    target->food_count = 1;
+    target->karambwan_count = 1;
+    target->brew_doses = 1;
+    float expected = 1.0f
+        + 0.5f * pvp_remaining_supply_hp_fraction(target);
+
+    ASSERT_FLOAT_NEAR("KO supply terminal reward",
+        calculate_reward(&env, 0), expected, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_reward_coefficients_parse_from_binding_kwargs(void) {
+    printf("--- PvP reward coefficients parse from binding kwargs ---\n");
+
+    Dict* kwargs = pvp_kwargs();
+    dict_set(kwargs, "expected_damage_reward_coef", 0.0125);
+    dict_set(kwargs, "ko_supply_reward_coef", 0.75);
+    Dict* vec_kwargs = pvp_vec_kwargs(2, 1);
+
+    StaticVec* vec = create_static_vec(2, 1, 0, vec_kwargs, kwargs);
+    Env* env = &vec->envs[0];
+
+    ASSERT_FLOAT_NEAR("expected damage reward coef",
+        env->pvp.shaping.expected_damage_reward_coef, 0.0125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO supply reward coef",
+        env->pvp.shaping.ko_supply_reward_coef, 0.75f, 1e-6f);
+
+    static_vec_close(vec);
+    free(vec_kwargs->items);
+    free(vec_kwargs);
+    free(kwargs->items);
+    free(kwargs);
+}
+
 static void test_shaping_uses_encounter_overhead_and_spec_prayer_style(void) {
     printf("--- PvP shaping overhead and spec prayer style ---\n");
 
@@ -2241,6 +2306,9 @@ int main(void) {
     test_p1_reset_obs_refreshes_after_auto_reset();
     test_target_hp_observation_is_current();
     test_shaping_disabled_emits_only_terminal_reward();
+    test_expected_damage_reward_works_without_legacy_shaping();
+    test_ko_supply_reward_works_without_legacy_shaping();
+    test_reward_coefficients_parse_from_binding_kwargs();
     test_shaping_uses_encounter_overhead_and_spec_prayer_style();
     test_scripted_legacy_movement_maps_to_head_move();
     test_duplicate_equip_clicks_apply_once();

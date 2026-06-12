@@ -680,6 +680,8 @@ typedef struct {
     float tick_damage_scale;
     float damage_dealt_scale;
     float damage_received_scale;
+    float expected_damage_dealt_tick;
+    float expected_damage_received_tick;
 
     // Hit statistics
     int total_target_hit_count;
@@ -1170,6 +1172,8 @@ typedef struct {
     float ko_bonus;                  // bonus for KO (opponent had food left)
     float ko_supplies_bonus_coef;    // bonus per unit of opponent supply fraction remaining at KO
     float wasted_resources_penalty;  // dying with food/brews left
+    float expected_damage_reward_coef;
+    float ko_supply_reward_coef;
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training
     int   enabled;                   // 0 = sparse only, 1 = full shaping
