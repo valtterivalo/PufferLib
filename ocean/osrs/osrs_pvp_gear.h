@@ -269,9 +269,9 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
         }
     }
 
-    // Handle 2H weapons: unequip shield
-    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx)) {
-        p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    if (gear_slot == GEAR_SLOT_WEAPON) {
+        p->equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
+            item_idx, p->equipped[GEAR_SLOT_SHIELD]);
     }
 
     osrs_refresh_player_equipment(p);
@@ -349,7 +349,7 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
                 uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MELEE_SHIELD_PRIORITY, MELEE_SHIELD_PRIORITY_LEN);
                 if (shield != ITEM_NONE) out[1] = shield;
             } else {
-                out[1] = ITEM_NONE;
+                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
             }
             uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
             if (body != ITEM_NONE) out[2] = body;
@@ -422,12 +422,11 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
         case LOADOUT_SPEC_MELEE: {
             uint8_t weapon = find_best_melee_spec(p);
             if (weapon != ITEM_NONE) out[0] = weapon;
-            // If 2H, shield gets cleared by slot_equip_item
             if (!item_is_two_handed(out[0])) {
                 uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MELEE_SHIELD_PRIORITY, MELEE_SHIELD_PRIORITY_LEN);
                 if (shield != ITEM_NONE) out[1] = shield;
             } else {
-                out[1] = ITEM_NONE;
+                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
             }
             uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
             if (body != ITEM_NONE) out[2] = body;
@@ -450,7 +449,7 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
                 uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, TANK_SHIELD_PRIORITY, TANK_SHIELD_PRIORITY_LEN);
                 if (shield != ITEM_NONE) out[1] = shield;
             } else {
-                out[1] = ITEM_NONE;
+                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
             }
             uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
             if (body != ITEM_NONE) out[2] = body;
@@ -486,9 +485,8 @@ static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAM
             break;
         }
         case LOADOUT_GMAUL: {
-            // GMAUL: 2H weapon, must clear shield
             out[0] = ITEM_GRANITE_MAUL;
-            out[1] = ITEM_NONE;
+            out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
             break;
         }
         default:

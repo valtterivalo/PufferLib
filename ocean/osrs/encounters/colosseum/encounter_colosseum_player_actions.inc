@@ -99,6 +99,12 @@ static int col_enforce_divine_stat_floors(ColosseumState* s) {
     return encounter_enforce_stat_drift_pins(&s->player, col_divine_stat_drift_pins(s));
 }
 
+/** Apply colosseum's divine floor tail and recompute every loadout after stat changes. */
+static void col_finish_stat_moving_consumable(ColosseumState* s) {
+    col_enforce_divine_stat_floors(s);
+    col_recompute_all_loadout_stats(s);
+}
+
 /** E13: expire a divine combat timer and drop its potion stats to base. */
 static int col_tick_divine_combat_timer(ColosseumState* s) {
     if (s->divine_combat_timer <= 0) return 0;
@@ -224,10 +230,6 @@ static MeleeStyle col_item_melee_style(uint8_t weapon_item) {
     if (weapon->attack_slash > best) { best = weapon->attack_slash; style = MELEE_STYLE_SLASH; }
     if (weapon->attack_crush > best) { style = MELEE_STYLE_CRUSH; }
     return style;
-}
-
-static MeleeStyle col_weapon_melee_style(const uint8_t* loadout) {
-    return col_item_melee_style(loadout[GEAR_SLOT_WEAPON]);
 }
 
 /** effective NPC defence level after player spec drains (elder maul). */
@@ -434,38 +436,34 @@ static void col_tick_player_ctx(
     int eat_act = actions[COLO_HEAD_EAT];
     if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
-        int brew_heal = osrs_brew_heal_amount(s->player.base_hitpoints);
-        s->player.current_hitpoints += brew_heal;
-        if (s->player.current_hitpoints > s->player.base_hitpoints + brew_heal)
-            s->player.current_hitpoints = s->player.base_hitpoints + brew_heal;
-        s->player.brew_doses--;
-        s->player.potion_timer = 3;
-        s->player.ate_food_this_tick = 1;
-        encounter_brew_drain_stats(&s->player);
-        col_enforce_divine_stat_floors(s);
-        col_recompute_all_loadout_stats(s);
+        encounter_apply_brew_heal_and_timer(
+            &s->player, osrs_brew_heal_amount(s->player.base_hitpoints));
+        encounter_apply_consumable_stat_effect(
+            &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
+        col_finish_stat_moving_consumable(s);
     }
 
     int pot_act = actions[COLO_HEAD_POTION];
     if (pot_act == COLO_POTION_RESTORE &&
             s->player.restore_doses > 0 && s->player.potion_timer == 0) {
         if (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW) {
-            s->player.current_prayer += osrs_sanfew_restore_amount(s->player.base_prayer);
-            encounter_sanfew_restore_stats(&s->player);
+            encounter_add_prayer_restore(
+                &s->player, osrs_sanfew_restore_amount(s->player.base_prayer));
+            encounter_apply_consumable_stat_effect(
+                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW);
             s->player_venom = 0;
             s->player_venom_timer = 0;
             s->player_poison = 0;
             s->player_poison_timer = 0;
         } else {
-            s->player.current_prayer += osrs_super_restore_amount(s->player.base_prayer);
-            encounter_restore_stats(&s->player);
+            encounter_add_prayer_restore(
+                &s->player, osrs_super_restore_amount(s->player.base_prayer));
+            encounter_apply_consumable_stat_effect(
+                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
         }
-        if (s->player.current_prayer > s->player.base_prayer)
-            s->player.current_prayer = s->player.base_prayer;
-        s->player.restore_doses--;
-        s->player.potion_timer = 3;
-        col_enforce_divine_stat_floors(s);
-        col_recompute_all_loadout_stats(s);
+        encounter_cap_prayer_restore(&s->player);
+        encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
+        col_finish_stat_moving_consumable(s);
     } else if (pot_act == COLO_POTION_COMBAT &&
             s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
             (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
@@ -473,8 +471,7 @@ static void col_tick_player_ctx(
         if (col_combat_potion_is_divine(s))
             col_apply_divine_combat_potion_effect(s);
         col_enforce_divine_stat_floors(s);
-        s->player.combat_potion_doses--;
-        s->player.potion_timer = 3;
+        encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
         col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_RANGING &&
             s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
@@ -483,8 +480,7 @@ static void col_tick_player_ctx(
         if (col_ranged_potion_is_divine(s))
             col_apply_divine_ranged_potion_effect(s);
         col_enforce_divine_stat_floors(s);
-        s->player.ranged_potion_doses--;
-        s->player.potion_timer = 3;
+        encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
         col_recompute_all_loadout_stats(s);
     } else if (pot_act == COLO_POTION_SURGE &&
             s->surge_doses > 0 && s->player.potion_timer == 0 &&
@@ -539,21 +535,11 @@ static void col_tick_player_ctx(
             new_target_slot = npc_slot;
         }
     }
-    if (has_new_target)
-        osrs_interaction_set(&s->interaction, new_target_slot);
 
     int has_explicit_move = (actions[COLO_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
-    if (!has_new_target && has_explicit_move)
-        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
-    if (osrs_interaction_active(&s->interaction)) {
-        int slot = s->interaction.target_slot;
-        if (slot < 0 || slot >= COLO_MAX_NPCS || !s->npcs[slot].active)
-            osrs_interaction_clear(&s->interaction);
-    }
-
     OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
     int move_act = actions[COLO_HEAD_MOVE];
-    if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
+    if (has_explicit_move) {
         if (s->player_dest_x >= 0) move_kind = OSRS_PLAYER_MOVE_DESTINATION;
         else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)
             move_kind = OSRS_PLAYER_MOVE_ACTION;

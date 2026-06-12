@@ -237,17 +237,6 @@ static int inf_get_winner(EncounterState* state) {
     return inf_get_winner_ctx(state, (EncounterContext*)inf_legacy_context());
 }
 
-static void inf_write_terminal_status_text(const InfernoState* s, char* out, size_t cap) {
-    if (cap == 0) return;
-    out[0] = '\0';
-    if (!s->episode_over) return;
-    if (s->winner == INF_OUTCOME_PLAYER_WON) {
-        snprintf(out, cap, "Inferno cleared");
-        return;
-    }
-    snprintf(out, cap, "Killed by %s", inf_npc_type_name(s->last_hit_by_type));
-}
-
 static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
     InfernoState* s = (InfernoState*)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
@@ -373,7 +362,14 @@ static void inf_render_post_tick_ctx(
     (void)context;
     InfernoState* s = (InfernoState*)state;
     ov->projectile_count = 0;
-    inf_write_terminal_status_text(s, ov->status_text, sizeof(ov->status_text));
+    encounter_write_terminal_status_text(
+        s->episode_over,
+        s->winner,
+        INF_OUTCOME_PLAYER_WON,
+        "Inferno cleared",
+        inf_npc_type_name(s->last_hit_by_type),
+        ov->status_text,
+        sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
 
     /* NPC attack projectiles — per-NPC-type flight parameters */
@@ -1123,12 +1119,12 @@ static size_t inf_snapshot_size(EncounterState* state) {
 static void inf_snapshot_ctx(EncounterState* state, EncounterContext* context, void* out) {
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
     InfSnapshot* snap = (InfSnapshot*)out;
-    memset(snap, 0, sizeof(*snap));
-    snap->magic = INF_SNAPSHOT_MAGIC;
-    snap->version = INF_SNAPSHOT_VERSION;
-    snap->state_size = (uint32_t)sizeof(InfernoState);
+    encounter_snapshot_write_frame(
+        snap, sizeof(*snap), INF_SNAPSHOT_MAGIC, INF_SNAPSHOT_VERSION,
+        sizeof(InfernoState));
     snap->config_fingerprint = inf_config_fingerprint(&ctx->config);
-    snap->state = *(InfernoState*)state;
+    encounter_snapshot_copy_state_to(
+        snap, offsetof(InfSnapshot, state), state, sizeof(InfernoState));
 }
 
 static void inf_snapshot(EncounterState* state, void* out) {
@@ -1142,26 +1138,10 @@ static void inf_restore_ctx(
     size_t n
 ) {
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
-    if (n != sizeof(InfSnapshot)) {
-        fprintf(stderr,
-            "inf_restore: bad snapshot size %zu (expected %zu)\n",
-            n, sizeof(InfSnapshot));
-        abort();
-    }
     const InfSnapshot* snap = (const InfSnapshot*)data;
-    if (snap->magic != INF_SNAPSHOT_MAGIC || snap->version != INF_SNAPSHOT_VERSION) {
-        fprintf(stderr,
-            "inf_restore: bad magic/version (got 0x%08x v%u, want 0x%08x v%u)\n",
-            snap->magic, snap->version,
-            INF_SNAPSHOT_MAGIC, INF_SNAPSHOT_VERSION);
-        abort();
-    }
-    if (snap->state_size != sizeof(InfernoState)) {
-        fprintf(stderr,
-            "inf_restore: state size mismatch (got %u, want %zu)\n",
-            snap->state_size, sizeof(InfernoState));
-        abort();
-    }
+    encounter_snapshot_validate_frame(
+        "inf_restore", data, n, sizeof(InfSnapshot),
+        INF_SNAPSHOT_MAGIC, INF_SNAPSHOT_VERSION, sizeof(InfernoState));
     uint64_t live_fingerprint = inf_config_fingerprint(&ctx->config);
     if (snap->config_fingerprint != live_fingerprint) {
         fprintf(stderr,
@@ -1172,7 +1152,8 @@ static void inf_restore_ctx(
     }
 
     InfernoState* dst = (InfernoState*)state;
-    *dst = snap->state;
+    encounter_snapshot_copy_state_from(
+        dst, data, offsetof(InfSnapshot, state), sizeof(InfernoState));
     inf_refresh_after_state_load(dst, ctx);
 }
 
@@ -1181,24 +1162,20 @@ static void inf_restore(EncounterState* state, const void* data, size_t n) {
 }
 
 
-/* scenario-lab vtable hook: route one command line through the inferno lab parser.
-   on a dump line the parser allocates the JSON, which we print and free here so the
-   viewer's apply path stays encounter-neutral. */
+static int inf_lab_apply_script_line_alloc_json_void(
+    void* state, const char* line, char** out_json
+) {
+    return inf_lab_apply_script_line_alloc_json((InfernoState*)state, line, out_json);
+}
+
 static int inf_apply_lab_command_ctx(
     EncounterState* state,
     EncounterContext* context,
     const char* line
 ) {
     (void)context;
-    InfernoState* s = (InfernoState*)state;
-    char* json = NULL;
-    InfLabLineResult result = inf_lab_apply_script_line_alloc_json(s, line, &json);
-    if (result == INF_LAB_LINE_DUMP && json) {
-        printf("%s\n", json);
-        fflush(stdout);
-    }
-    free(json);
-    return result == INF_LAB_LINE_DUMP ? 1 : 0;
+    return encounter_apply_lab_command_dump_wrapper(
+        state, line, INF_LAB_LINE_DUMP, inf_lab_apply_script_line_alloc_json_void);
 }
 
 

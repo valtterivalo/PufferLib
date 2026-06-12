@@ -93,12 +93,11 @@ static int col_npc_dist_to_player(const ColosseumState* s, const ColoNPC* npc) {
     the gear defence bonus enters the formula fully intact. */
 static int col_player_def_roll(const ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
-    int def_bonus = encounter_player_def_bonus(
+    int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
+    return encounter_player_def_roll_from_loadout(
+        def_level, s->player.current_magic,
         ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
         style, melee_style);
-    int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
-    return osrs_player_def_roll_vs_npc(
-        def_level, s->player.current_magic, def_bonus, style);
 }
 
 /** roll an NPC attack against the player: accuracy from levels + bonuses, damage

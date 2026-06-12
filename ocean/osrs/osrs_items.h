@@ -201,6 +201,15 @@ static inline int item_is_two_handed(uint8_t item_index) {
     return ITEM_DATABASE[item_index].slot == SLOT_WEAPON &&
            ITEM_DATABASE[item_index].two_handed;
 }
+
+/** Return the effective shield item after a weapon's two-handed suppression rule. */
+static inline uint8_t osrs_suppress_shield_for_two_handed_weapon(
+    uint8_t weapon_item,
+    uint8_t shield_item
+) {
+    return item_is_two_handed(weapon_item) ? ITEM_NONE : shield_item;
+}
+
 // ITEM STATS EXTRACTION (for observations)
 
 /** Normalization constants for item stats (max observed values in game). */

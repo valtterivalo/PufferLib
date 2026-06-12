@@ -325,6 +325,27 @@ static inline int encounter_player_def_bonus(
     return def_stab;                           /* MELEE_STYLE_STAB */
 }
 
+/** Select the player loadout defence bonus for an incoming NPC attack, then
+    compute the OSRS defence roll. Callers pass any encounter-specific adjusted
+    Defence level before this helper. */
+static inline int encounter_player_def_roll_from_loadout(
+    int def_level,
+    int magic_level,
+    int def_stab,
+    int def_slash,
+    int def_crush,
+    int def_magic,
+    int def_ranged,
+    int attack_style,
+    int melee_style
+) {
+    int def_bonus = encounter_player_def_bonus(
+        def_stab, def_slash, def_crush, def_magic, def_ranged,
+        attack_style, melee_style);
+    return osrs_player_def_roll_vs_npc(
+        def_level, magic_level, def_bonus, attack_style);
+}
+
 /* NPC max hit by style: dispatches to melee/ranged/magic formula.
    for magic, uses magic_base_dmg * magic_dmg_pct / 100. */
 static inline int osrs_npc_max_hit(
@@ -551,6 +572,20 @@ static inline int osrs_stance_att_bonus(FightStyle fs, AttackStyle atk) {
         case FIGHT_STYLE_LONGRANGE:  return 0;
         default:                     return 0;
     }
+}
+
+/** Magic accuracy effective level from dps-calc:
+    floor(magic * prayer) + powered-staff attack stance contribution + 9. */
+static inline int osrs_magic_effective_attack_level(
+    int magic_level, float prayer_mult, FightStyle fight_style
+) {
+    return (int)(magic_level * prayer_mult) +
+        osrs_stance_att_bonus(fight_style, ATTACK_STYLE_MAGIC) + 9;
+}
+
+/** Augury adds +4% magic damage on top of its accuracy multiplier. */
+static inline float osrs_offensive_magic_dmg_mult(OffensivePrayer op) {
+    return (op == OFFENSIVE_PRAYER_AUGURY) ? 1.04f : 1.0f;
 }
 
 /* strength level bonus (melee only). aggressive +3, controlled +1. */

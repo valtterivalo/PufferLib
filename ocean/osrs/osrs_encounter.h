@@ -57,6 +57,11 @@
 #ifndef OSRS_ENCOUNTER_H
 #define OSRS_ENCOUNTER_H
 
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1696,8 +1701,7 @@ typedef struct {
 static inline int encounter_magic_effective_attack_level(
     int magic_level, float prayer_mult, FightStyle fight_style
 ) {
-    return (int)(magic_level * prayer_mult) +
-        osrs_stance_att_bonus(fight_style, ATTACK_STYLE_MAGIC) + 9;
+    return osrs_magic_effective_attack_level(magic_level, prayer_mult, fight_style);
 }
 
 /** Copy a loadout and suppress the shield slot when the weapon is two-handed.
@@ -1708,9 +1712,8 @@ static inline void encounter_effective_loadout_for_equipment(
     uint8_t out[NUM_GEAR_SLOTS]
 ) {
     memcpy(out, loadout, NUM_GEAR_SLOTS);
-    if (item_is_two_handed(out[GEAR_SLOT_WEAPON])) {
-        out[GEAR_SLOT_SHIELD] = ITEM_NONE;
-    }
+    out[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
+        out[GEAR_SLOT_WEAPON], out[GEAR_SLOT_SHIELD]);
 }
 
 /** Derive item effects from the same two-handed-compatible loadout used for stats. */
@@ -1747,7 +1750,7 @@ static inline void encounter_offensive_prayer_mults(
 
 /** augury adds +4% magic damage on top of its accuracy mult (PvP parity). */
 static inline float encounter_offensive_magic_dmg_mult(OffensivePrayer op) {
-    return (op == OFFENSIVE_PRAYER_AUGURY) ? 1.04f : 1.0f;
+    return osrs_offensive_magic_dmg_mult(op);
 }
 
 /** derive all combat stats from a loadout array + prayer + fight stance.
@@ -2127,6 +2130,40 @@ static inline int encounter_tick_stat_drift(
     return changed;
 }
 
+typedef enum {
+    ENCOUNTER_CONSUMABLE_STAT_EFFECT_NONE = 0,
+    ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN,
+    ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE,
+    ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
+} EncounterConsumableStatEffect;
+
+/** Apply the shared brew HP, dose, timer, and food-event state. */
+static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
+    p->current_hitpoints += brew_heal;
+    if (p->current_hitpoints > p->base_hitpoints + brew_heal)
+        p->current_hitpoints = p->base_hitpoints + brew_heal;
+    p->brew_doses--;
+    p->potion_timer = 3;
+    p->ate_food_this_tick = 1;
+}
+
+/** Add a prayer restore amount before the caller applies any local hooks. */
+static inline void encounter_add_prayer_restore(Player* p, int restore_amount) {
+    p->current_prayer += restore_amount;
+}
+
+/** Cap current prayer at the player's base prayer after a restore drink. */
+static inline void encounter_cap_prayer_restore(Player* p) {
+    if (p->current_prayer > p->base_prayer)
+        p->current_prayer = p->base_prayer;
+}
+
+/** Decrement a potion dose counter and arm the shared 3-tick potion timer. */
+static inline void encounter_finish_potion_dose(Player* p, int* doses) {
+    (*doses)--;
+    p->potion_timer = 3;
+}
+
 /** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
     applies osrs_brew_effect: drains att/str/ranged/magic by floor(current/10)+2
     (CURRENT levels, diminishing on repeat sips), boosts defence by
@@ -2182,6 +2219,27 @@ static inline void encounter_restore_stats(Player* p) {
     the caller owns venom state. ref: OSRS wiki Sanfew serum. */
 static inline void encounter_sanfew_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_sanfew_restore_amount);
+}
+
+/** Apply the shared stat side of a consumable effect. */
+static inline void encounter_apply_consumable_stat_effect(
+    Player* p,
+    EncounterConsumableStatEffect effect
+) {
+    switch (effect) {
+        case ENCOUNTER_CONSUMABLE_STAT_EFFECT_NONE:
+            return;
+        case ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN:
+            encounter_brew_drain_stats(p);
+            return;
+        case ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE:
+            encounter_restore_stats(p);
+            return;
+        case ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW:
+            encounter_sanfew_restore_stats(p);
+            return;
+    }
+    abort();
 }
 
 /** bastion potion boost. boosts ranged by floor(base * 0.10) + 4. can exceed base.
@@ -2300,6 +2358,15 @@ static void encounter_populate_inventory(
     }
 }
 
+/**
+ * Clear ammo-slot switch candidates after loadout inventory population.
+ */
+static inline void encounter_clear_ammo_inventory_slot(Player* p) {
+    for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++)
+        p->inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
+    p->num_items_in_slot[GEAR_SLOT_AMMO] = 0;
+}
+
 
 /** translate movement: convert absolute tile to 8-directional walk action.
     writes to actions[head_move]. head_move < 0 = skip. */
@@ -2349,6 +2416,19 @@ static inline void encounter_translate_target(HumanInput* hi, int* actions, int 
     actions[head_target] = hi->pending_target_idx + 1;
 }
 
+/**
+ * Find the observed NPC target slot for a raw encounter NPC slot.
+ */
+static inline int encounter_find_observed_target_slot(
+    const int* current_obs_slots,
+    int observed_slot_count,
+    int raw_npc_slot
+) {
+    for (int slot = 0; slot < observed_slot_count; slot++)
+        if (current_obs_slots[slot] == raw_npc_slot) return slot;
+    return -1;
+}
+
 /** translate human attack-or-move click for encounters with a merged combat head
     (ATTACK_*, MOVE_UNDER/ADJACENT/DIAGONAL, MOVE_FARCAST_2..7).
     pending_attack takes precedence; otherwise the move click is resolved against
@@ -2384,6 +2464,289 @@ static inline void encounter_translate_attack_or_move(
         int fc = dist < 2 ? 2 : (dist > 7 ? 7 : dist);
         actions[head_combat] = MOVE_FARCAST_2 + (fc - 2);
     }
+}
+
+
+/**
+ * Scenario lab optional integer.
+ */
+typedef enum {
+    ENCOUNTER_LAB_OPTIONAL_INT_UNSET = 0,
+    ENCOUNTER_LAB_OPTIONAL_INT_SET,
+} EncounterLabOptionalIntKind;
+
+typedef struct {
+    EncounterLabOptionalIntKind kind;
+    int value;
+} EncounterLabOptionalInt;
+
+static inline EncounterLabOptionalInt encounter_lab_optional_int_unset(void) {
+    return (EncounterLabOptionalInt){ .kind = ENCOUNTER_LAB_OPTIONAL_INT_UNSET };
+}
+
+static inline EncounterLabOptionalInt encounter_lab_optional_int_set(int value) {
+    return (EncounterLabOptionalInt){
+        .kind = ENCOUNTER_LAB_OPTIONAL_INT_SET,
+        .value = value,
+    };
+}
+
+/**
+ * Growable scenario lab string buffer for JSON dump assembly.
+ */
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+    const char* owner_label;
+} EncounterLabString;
+
+static inline void encounter_lab_abort(const char* owner_label, const char* fmt, ...) {
+    va_list args;
+    fprintf(stderr, "%s: ", owner_label);
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    abort();
+}
+
+static inline void encounter_lab_string_init(
+    EncounterLabString* out, const char* owner_label
+) {
+    out->len = 0;
+    out->cap = 4096;
+    out->owner_label = owner_label;
+    out->data = (char*)malloc(out->cap);
+    if (!out->data) encounter_lab_abort(owner_label, "out of memory");
+    out->data[0] = '\0';
+}
+
+static inline void encounter_lab_string_reserve(EncounterLabString* out, size_t need) {
+    if (need <= out->cap) return;
+    size_t next = out->cap;
+    while (next < need) {
+        if (next > SIZE_MAX / 2)
+            encounter_lab_abort(out->owner_label, "json output too large");
+        next *= 2;
+    }
+    char* data = (char*)realloc(out->data, next);
+    if (!data) encounter_lab_abort(out->owner_label, "out of memory");
+    out->data = data;
+    out->cap = next;
+}
+
+static inline void encounter_lab_string_append(EncounterLabString* out, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0) encounter_lab_abort(out->owner_label, "json formatting failed");
+    encounter_lab_string_reserve(out, out->len + (size_t)needed + 1);
+    int written = vsnprintf(out->data + out->len, out->cap - out->len, fmt, args);
+    va_end(args);
+    if (written != needed)
+        encounter_lab_abort(out->owner_label, "json formatting length mismatch");
+    out->len += (size_t)written;
+}
+
+static inline void encounter_lab_string_free(EncounterLabString* out) {
+    if (!out) return;
+    free(out->data);
+    out->data = NULL;
+    out->len = 0;
+    out->cap = 0;
+    out->owner_label = NULL;
+}
+
+static inline int encounter_lab_parse_int_value(
+    const char* owner_label, const char* value
+) {
+    char* end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || !end || *end != '\0' ||
+            parsed < INT32_MIN || parsed > INT32_MAX) {
+        encounter_lab_abort(owner_label, "invalid integer %s", value);
+    }
+    return (int)parsed;
+}
+
+static inline uint32_t encounter_lab_parse_seed_value(
+    const char* owner_label, const char* value
+) {
+    char* end = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(value, &end, 10);
+    if (errno != 0 || !end || *end != '\0' || parsed > UINT32_MAX)
+        encounter_lab_abort(owner_label, "invalid seed %s", value);
+    return (uint32_t)parsed;
+}
+
+static inline EncounterLabOptionalInt encounter_lab_parse_optional_full_int(
+    const char* owner_label, const char* value
+) {
+    if (strcmp(value, "full") == 0) return encounter_lab_optional_int_unset();
+    return encounter_lab_optional_int_set(
+        encounter_lab_parse_int_value(owner_label, value));
+}
+
+static inline char* encounter_lab_trim(char* s) {
+    while (*s && isspace((unsigned char)*s)) s++;
+    char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) end--;
+    *end = '\0';
+    return s;
+}
+
+static inline void encounter_lab_parse_key_value(
+    const char* owner_label, char* token, const char** key, const char** value
+) {
+    char* eq = strchr(token, '=');
+    if (!eq || eq == token || eq[1] == '\0')
+        encounter_lab_abort(owner_label, "expected key=value token, got %s", token);
+    *eq = '\0';
+    *key = token;
+    *value = eq + 1;
+}
+
+static inline char* encounter_lab_next_token(const char* owner_label, char** cursor) {
+    if (!cursor || !*cursor) encounter_lab_abort(owner_label, "null token cursor");
+    char* start = *cursor + strspn(*cursor, " \t\r\n");
+    if (*start == '\0') {
+        *cursor = start;
+        return NULL;
+    }
+    char* end = start + strcspn(start, " \t\r\n");
+    if (*end != '\0') {
+        *end = '\0';
+        *cursor = end + 1;
+    } else {
+        *cursor = end;
+    }
+    return start;
+}
+
+/**
+ * Command alias row for scenario lab command tables.
+ */
+typedef struct {
+    const char* name;
+    int kind;
+} EncounterLabCommandAlias;
+
+static inline int encounter_lab_lookup_command_kind(
+    const char* owner_label,
+    const char* command,
+    const EncounterLabCommandAlias* aliases,
+    size_t alias_count
+) {
+    for (size_t i = 0; i < alias_count; i++) {
+        if (strcmp(command, aliases[i].name) == 0) return aliases[i].kind;
+    }
+    encounter_lab_abort(owner_label, "unknown script command %s", command);
+    return 0;
+}
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t state_size;
+    uint32_t reserved;
+} EncounterSnapshotFrame;
+
+static inline void encounter_snapshot_write_frame(
+    void* snapshot,
+    size_t snapshot_size,
+    uint32_t magic,
+    uint32_t version,
+    size_t state_size
+) {
+    memset(snapshot, 0, snapshot_size);
+    EncounterSnapshotFrame* frame = (EncounterSnapshotFrame*)snapshot;
+    frame->magic = magic;
+    frame->version = version;
+    frame->state_size = (uint32_t)state_size;
+}
+
+static inline const EncounterSnapshotFrame* encounter_snapshot_validate_frame(
+    const char* owner_label,
+    const void* data,
+    size_t actual_size,
+    size_t expected_size,
+    uint32_t magic,
+    uint32_t version,
+    size_t state_size
+) {
+    if (actual_size != expected_size) {
+        fprintf(stderr, "%s: bad snapshot size %zu (expected %zu)\n",
+            owner_label, actual_size, expected_size);
+        abort();
+    }
+    const EncounterSnapshotFrame* frame = (const EncounterSnapshotFrame*)data;
+    if (frame->magic != magic || frame->version != version) {
+        fprintf(stderr, "%s: bad magic/version (got 0x%08x v%u, want 0x%08x v%u)\n",
+            owner_label, frame->magic, frame->version, magic, version);
+        abort();
+    }
+    if (frame->state_size != state_size) {
+        fprintf(stderr, "%s: state size mismatch (got %u, want %zu)\n",
+            owner_label, frame->state_size, state_size);
+        abort();
+    }
+    return frame;
+}
+
+static inline void encounter_snapshot_copy_state_to(
+    void* snapshot, size_t state_offset, const void* state, size_t state_size
+) {
+    memcpy((uint8_t*)snapshot + state_offset, state, state_size);
+}
+
+static inline void encounter_snapshot_copy_state_from(
+    void* state, const void* snapshot, size_t state_offset, size_t state_size
+) {
+    memcpy(state, (const uint8_t*)snapshot + state_offset, state_size);
+}
+
+static inline void encounter_write_terminal_status_text(
+    int episode_over,
+    int winner,
+    int win_outcome,
+    const char* win_text,
+    const char* killed_by_name,
+    char* out,
+    size_t cap
+) {
+    if (cap == 0) return;
+    out[0] = '\0';
+    if (!episode_over) return;
+    if (winner == win_outcome) {
+        snprintf(out, cap, "%s", win_text);
+        return;
+    }
+    snprintf(out, cap, "Killed by %s", killed_by_name);
+}
+
+typedef int (*EncounterLabApplyLineAllocJsonFn)(
+    void* lab_state, const char* line, char** out_json);
+
+static inline int encounter_apply_lab_command_dump_wrapper(
+    void* lab_state,
+    const char* line,
+    int dump_result,
+    EncounterLabApplyLineAllocJsonFn apply_line_alloc_json
+) {
+    char* json = NULL;
+    int result = apply_line_alloc_json(lab_state, line, &json);
+    if (result == dump_result && json) {
+        printf("%s\n", json);
+        fflush(stdout);
+    }
+    free(json);
+    return result == dump_result ? 1 : 0;
 }
 
 

@@ -2,10 +2,6 @@
  * @file encounter_colosseum.h
  * @brief Fortis Colosseum — 12-wave PvM gauntlet ending in the Sol Heredit boss.
  *
- * Scaffold milestone: the data model, vtable, and binding are complete and
- * compiling, but gameplay (NPC stats, combat, wave scripts, boss state machine)
- * is left as placeholder for the lead to fill from OSRS Wiki values.
- *
  * waves 1-12 spawn Fremennik warband + colossi + beasts with a 40s reinforcement
  * cadence and a between-wave modifier draft. wave 12 is Sol Heredit (spear/shield
  * AoE combos, triple-parry, grapple, molten-sand hazards).

@@ -868,14 +868,6 @@ typedef struct {
 #define COLO_MOLTEN_SAND_RAND    5
 
 
-/** jaguar 3-hit combo state. valid iff type is COLO_JAGUAR_WARRIOR;
-    reach it through colo_npc_jaguar(). The 3 hits resolve in one attack cycle, so
-    no per-hit cursor persists across ticks. Placeholder field keeps the union
-    arm non-empty for future combo extensions. */
-typedef struct {
-    int unused;
-} ColoJaguarState;
-
 static int col_type_is_warbander(ColoNpcType type) {
     return type == COLO_FREMENNIK_BERSERKER || type == COLO_FREMENNIK_ARCHER ||
            type == COLO_FREMENNIK_SEER;
@@ -934,7 +926,6 @@ typedef struct {
 
     /* type-specific state keyed on `type`; reach only via colo_npc_*(). */
     union {
-        ColoJaguarState jaguar;       /* COLO_JAGUAR_WARRIOR */
         ColoManticoreState manticore; /* COLO_MANTICORE */
         ColoJavelinState javelin;     /* COLO_JAVELIN_COLOSSUS */
         ColoWarbandState warband;     /* col_type_is_warbander(type) */
@@ -955,11 +946,6 @@ typedef struct {
     int hit_was_successful_this_tick;
     int hit_spell_type;
 } ColoNPC;
-
-static inline ColoJaguarState* colo_npc_jaguar(ColoNPC* npc) {
-    assert(npc->type == COLO_JAGUAR_WARRIOR);
-    return &npc->type_state.jaguar;
-}
 
 static inline ColoManticoreState* colo_npc_manticore(ColoNPC* npc) {
     assert(npc->type == COLO_MANTICORE);
@@ -1014,9 +1000,6 @@ static void colo_npc_init_type_state(ColoNPC* npc) {
             break;
         case COLO_FREMENNIK_ARCHER:
             npc->type_state.warband = (ColoWarbandState){ .formation_dir = COLO_WARBAND_FORM_WEST };
-            break;
-        case COLO_JAGUAR_WARRIOR:
-            npc->type_state.jaguar = (ColoJaguarState){0};
             break;
         case COLO_MANTICORE:
             npc->type_state.manticore = (ColoManticoreState){

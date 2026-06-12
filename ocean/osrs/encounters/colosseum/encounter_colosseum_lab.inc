@@ -40,23 +40,9 @@ typedef enum {
     COLO_LAB_LINE_DUMP,
 } ColoLabLineResult;
 
-typedef enum {
-    COLO_LAB_OPTIONAL_INT_UNSET = 0,
-    COLO_LAB_OPTIONAL_INT_SET,
-} ColoLabOptionalIntKind;
-
-typedef struct {
-    ColoLabOptionalIntKind kind;
-    int value;
-} ColoLabOptionalInt;
-
-static inline ColoLabOptionalInt col_lab_optional_int_unset(void) {
-    return (ColoLabOptionalInt){ .kind = COLO_LAB_OPTIONAL_INT_UNSET };
-}
-
-static inline ColoLabOptionalInt col_lab_optional_int_set(int value) {
-    return (ColoLabOptionalInt){ .kind = COLO_LAB_OPTIONAL_INT_SET, .value = value };
-}
+typedef EncounterLabOptionalInt ColoLabOptionalInt;
+#define COLO_LAB_OPTIONAL_INT_UNSET ENCOUNTER_LAB_OPTIONAL_INT_UNSET
+#define COLO_LAB_OPTIONAL_INT_SET ENCOUNTER_LAB_OPTIONAL_INT_SET
 
 typedef struct {
     int x;
@@ -137,11 +123,7 @@ typedef struct {
     } as;
 } ColosseumLabCommand;
 
-typedef struct {
-    char* data;
-    size_t len;
-    size_t cap;
-} ColoLabString;
+typedef EncounterLabString ColoLabString;
 
 static void col_lab_abort(const char* fmt, ...) {
     va_list args;
@@ -228,14 +210,14 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                 col_lab_abort("player tile out of arena: (%d,%d)", p->x, p->y);
             s->player.x = p->x;
             s->player.y = p->y;
-            if (p->hp.kind == COLO_LAB_OPTIONAL_INT_SET) {
+            if (p->hp.kind == ENCOUNTER_LAB_OPTIONAL_INT_SET) {
                 int hp = p->hp.value;
                 if (hp < 0) col_lab_abort("player hp must be nonnegative");
                 if (hp > s->player.base_hitpoints)
                     col_lab_abort("player hp %d exceeds max %d", hp, s->player.base_hitpoints);
                 s->player.current_hitpoints = hp;
             }
-            if (p->prayer.kind == COLO_LAB_OPTIONAL_INT_SET)
+            if (p->prayer.kind == ENCOUNTER_LAB_OPTIONAL_INT_SET)
                 s->player.prayer = p->prayer.value;
             col_lab_clear_transient(s);
             col_lab_refresh_geometry(s);
@@ -257,7 +239,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             if (s->npcs[spawn->slot].active)
                 col_deactivate_npc(s, spawn->slot);
             col_init_npc(s, spawn->slot, spawn->type, spawn->x, spawn->y);
-            if (spawn->hp.kind == COLO_LAB_OPTIONAL_INT_SET) {
+            if (spawn->hp.kind == ENCOUNTER_LAB_OPTIONAL_INT_SET) {
                 int hp = spawn->hp.value;
                 if (hp < 0) col_lab_abort("npc hp must be nonnegative");
                 if (hp > s->npcs[spawn->slot].max_hp)
@@ -265,7 +247,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                         hp, s->npcs[spawn->slot].max_hp);
                 s->npcs[spawn->slot].hp = hp;
             }
-            if (spawn->timer.kind == COLO_LAB_OPTIONAL_INT_SET) {
+            if (spawn->timer.kind == ENCOUNTER_LAB_OPTIONAL_INT_SET) {
                 if (spawn->timer.value < 0)
                     col_lab_abort("npc timer must be nonnegative");
                 s->npcs[spawn->slot].attack_timer = spawn->timer.value;

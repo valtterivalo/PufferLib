@@ -1070,11 +1070,10 @@ static void zul_try_envenom(ZulrahState* s) {
 static int zul_player_def_roll(ZulrahState* s, int attack_style) {
     const EncounterLoadoutStats* ls = zul_current_loadout_stats(
         s, s->player_gear == ZUL_GEAR_MAGE);
-    /* melee_style=2 (crush) for zulrah tail whip */
-    int def_bonus = encounter_player_def_bonus(
+    int roll = encounter_player_def_roll_from_loadout(
+        99, 99,
         ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
         attack_style, 2);
-    int roll = osrs_player_def_roll_vs_npc(99, 99, def_bonus, attack_style);
     return roll > 0 ? roll : 0;
 }
 

@@ -45,11 +45,6 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     return reward;
 }
 
-static float col_compute_reward(ColosseumState* s) {
-    return col_compute_reward_ctx(s, col_legacy_context());
-}
-
-
 static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();

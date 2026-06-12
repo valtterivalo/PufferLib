@@ -69,6 +69,100 @@ static inline float col_obs_rel_y(int ny, int py) {
     return (float)(ny - py) / (float)COLO_ARENA_HEIGHT;
 }
 
+typedef struct {
+    int found;
+    int index;
+    int x;
+    int y;
+    int distance;
+} ColoNearestHazardTile;
+
+static inline ColoNearestHazardTile col_nearest_hazard_tile_none(void) {
+    return (ColoNearestHazardTile){
+        .found = 0,
+        .index = -1,
+        .x = 0,
+        .y = 0,
+        .distance = 1 << 30,
+    };
+}
+
+static inline void col_nearest_hazard_tile_consider(
+    ColoNearestHazardTile* nearest,
+    int index,
+    int x,
+    int y,
+    int player_x,
+    int player_y
+) {
+    int dx = abs(x - player_x);
+    int dy = abs(y - player_y);
+    int distance = dx > dy ? dx : dy;
+    if (distance < nearest->distance) {
+        nearest->found = 1;
+        nearest->index = index;
+        nearest->x = x;
+        nearest->y = y;
+        nearest->distance = distance;
+    }
+}
+
+static inline void col_write_hazard_xy_value_if(
+    const ColosseumState* s,
+    int present,
+    int x,
+    int y,
+    float value,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    if (present) {
+        obs[i++] = col_obs_rel_x(x, s->player.x);
+        obs[i++] = col_obs_rel_y(y, s->player.y);
+        obs[i++] = value;
+    } else {
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+static inline void col_write_nearest_hazard_xy_value(
+    const ColosseumState* s,
+    const ColoNearestHazardTile* nearest,
+    float value,
+    float* obs,
+    int* idx
+) {
+    col_write_hazard_xy_value_if(
+        s, nearest->found, nearest->x, nearest->y, value, obs, idx);
+}
+
+static inline void col_write_nearest_hazard_xy_values(
+    const ColosseumState* s,
+    const ColoNearestHazardTile* nearest,
+    float value0,
+    float value1,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    if (nearest->found) {
+        obs[i++] = col_obs_rel_x(nearest->x, s->player.x);
+        obs[i++] = col_obs_rel_y(nearest->y, s->player.y);
+        obs[i++] = value0;
+        obs[i++] = value1;
+    } else {
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
 
 /** assign each active NPC to a fixed obs slot in array order. */
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx) {
@@ -168,46 +262,29 @@ static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, floa
 /** nearest in-flight crystal sphere to the player: writes dx, dy, ticks frac,
     present flag (4 floats). dx/dy are egocentric tile-to-player offsets. */
 static void col_write_nearest_sphere(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    int best = -1, best_d = 1 << 30;
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < COLO_SOL_SPHERE_QUEUE_MAX; k++) {
         const ColoSolSphere* sp = &s->sol.spheres[k];
         if (!sp->active) continue;
-        int dx = abs(sp->tile_x - s->player.x);
-        int dy = abs(sp->tile_y - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < best_d) { best_d = d; best = k; }
+        col_nearest_hazard_tile_consider(
+            &nearest, k, sp->tile_x, sp->tile_y, s->player.x, s->player.y);
     }
-    if (best >= 0) {
-        const ColoSolSphere* sp = &s->sol.spheres[best];
-        obs[i++] = col_obs_rel_x(sp->tile_x, s->player.x);
-        obs[i++] = col_obs_rel_y(sp->tile_y, s->player.y);
-        obs[i++] = col_clamp01((float)sp->ticks_remaining / (float)COLO_SOL_SPHERE_DELAY);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-    *idx = i;
+    float ticks_frac = nearest.found
+        ? col_clamp01((float)s->sol.spheres[nearest.index].ticks_remaining /
+              (float)COLO_SOL_SPHERE_DELAY)
+        : 0.0f;
+    col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
 
 /** nearest molten-sand pool to the player: dx, dy, present flag (3 floats). */
 static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    int best = -1, best_d = 1 << 30;
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.hazard_tile_count; k++) {
-        int dx = abs(s->sol.hazard_tile_x[k] - s->player.x);
-        int dy = abs(s->sol.hazard_tile_y[k] - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < best_d) { best_d = d; best = k; }
+        col_nearest_hazard_tile_consider(
+            &nearest, k, s->sol.hazard_tile_x[k], s->sol.hazard_tile_y[k],
+            s->player.x, s->player.y);
     }
-    if (best >= 0) {
-        obs[i++] = col_obs_rel_x(s->sol.hazard_tile_x[best], s->player.x);
-        obs[i++] = col_obs_rel_y(s->sol.hazard_tile_y[best], s->player.y);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-    *idx = i;
+    col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
 }
 
 /** is the player currently standing on a live telegraphed AoE hazard tile? */
@@ -220,50 +297,39 @@ static int col_player_in_aoe_danger(const ColosseumState* s) {
 /** nearest active crystal to the player: dx, dy, telegraphing flag, telegraph
     ticks frac (4 floats; zeros when no crystal is up). */
 static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    int best = -1, best_d = 1 << 30, bx = 0, by = 0;
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.crystal_count; k++) {
         if (!s->sol.crystals[k].active) continue;
         int cx, cy;
         col_sol_crystal_pos(s, s->sol.crystals[k].perim_step, &cx, &cy);
-        int dx = abs(cx - s->player.x), dy = abs(cy - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < best_d) { best_d = d; best = k; bx = cx; by = cy; }
+        col_nearest_hazard_tile_consider(
+            &nearest, k, cx, cy, s->player.x, s->player.y);
     }
-    if (best >= 0) {
-        const ColoSolCrystal* c = &s->sol.crystals[best];
-        obs[i++] = col_obs_rel_x(bx, s->player.x);
-        obs[i++] = col_obs_rel_y(by, s->player.y);
-        obs[i++] = c->telegraph_ticks > 0 ? 1.0f : 0.0f;
-        obs[i++] = col_clamp01((float)c->telegraph_ticks / (float)COLO_SOL_CRYSTAL_TELEGRAPH);
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-    *idx = i;
+    const ColoSolCrystal* c = nearest.found ? &s->sol.crystals[nearest.index] : NULL;
+    col_write_nearest_hazard_xy_values(
+        s,
+        &nearest,
+        c && c->telegraph_ticks > 0 ? 1.0f : 0.0f,
+        c ? col_clamp01((float)c->telegraph_ticks / (float)COLO_SOL_CRYSTAL_TELEGRAPH) : 0.0f,
+        obs,
+        idx);
 }
 
 /** nearest active light beam to the player: dx, dy, ticks-to-pool frac,
     present flag (4 floats). */
 static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    int best = -1, best_d = 1 << 30;
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
         if (!s->sol.beams[k].active) continue;
-        int dx = abs(s->sol.beams[k].x - s->player.x);
-        int dy = abs(s->sol.beams[k].y - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < best_d) { best_d = d; best = k; }
+        col_nearest_hazard_tile_consider(
+            &nearest, k, s->sol.beams[k].x, s->sol.beams[k].y,
+            s->player.x, s->player.y);
     }
-    if (best >= 0) {
-        obs[i++] = col_obs_rel_x(s->sol.beams[best].x, s->player.x);
-        obs[i++] = col_obs_rel_y(s->sol.beams[best].y, s->player.y);
-        obs[i++] = col_clamp01((float)s->sol.beams[best].ticks_to_pool
-            / (float)COLO_SOL_BEAM_TO_POOL_TICKS);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-    *idx = i;
+    float ticks_frac = nearest.found
+        ? col_clamp01((float)s->sol.beams[nearest.index].ticks_to_pool /
+              (float)COLO_SOL_BEAM_TO_POOL_TICKS)
+        : 0.0f;
+    col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
 
 /** write the Sol Heredit boss block (COLO_BOSS_OBS_SIZE floats). Rich enough to
@@ -379,22 +445,12 @@ static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
 /** nearest non-boss molten pool (Reentry / Volatility) to the player: writes
     dx, dy, present (3 floats). */
 static void col_write_nearest_modifier_molten(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    int best = -1, best_d = 1 << 30;
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->molten_count; k++) {
-        int dx = abs(s->molten_x[k] - s->player.x);
-        int dy = abs(s->molten_y[k] - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < best_d) { best_d = d; best = k; }
+        col_nearest_hazard_tile_consider(
+            &nearest, k, s->molten_x[k], s->molten_y[k], s->player.x, s->player.y);
     }
-    if (best >= 0) {
-        obs[i++] = col_obs_rel_x(s->molten_x[best], s->player.x);
-        obs[i++] = col_obs_rel_y(s->molten_y[best], s->player.y);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-    *idx = i;
+    col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
 }
 
 /** write the modifier-hazard obs tail (COLO_MODIFIER_HAZARD_OBS_SIZE floats):
@@ -410,31 +466,20 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
     obs[i++] = s->player_venom > 0 ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_CAP);
 
-    int bee_x = 0, bee_y = 0, bee_found = 0, bee_d = 1 << 30;
+    ColoNearestHazardTile nearest_bee = col_nearest_hazard_tile_none();
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
         if (s->bees[b].phase != COLO_HAZARD_ALIVE) continue;
         const ColoNPC* npc = &s->npcs[s->bees[b].npc_slot];
         if (!npc->active || npc->type != COLO_BEE_SWARM) continue;
-        int dx = abs(npc->x - s->player.x);
-        int dy = abs(npc->y - s->player.y);
-        int d = dx > dy ? dx : dy;
-        if (d < bee_d) { bee_d = d; bee_x = npc->x; bee_y = npc->y; bee_found = 1; }
+        col_nearest_hazard_tile_consider(
+            &nearest_bee, b, npc->x, npc->y, s->player.x, s->player.y);
     }
-    if (bee_found) {
-        obs[i++] = col_obs_rel_x(bee_x, s->player.x);
-        obs[i++] = col_obs_rel_y(bee_y, s->player.y);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
+    *idx = i;
+    col_write_nearest_hazard_xy_value(s, &nearest_bee, 1.0f, obs, idx);
+    i = *idx;
 
-    if (s->solarflare.active) {
-        obs[i++] = col_obs_rel_x(s->solarflare.x, s->player.x);
-        obs[i++] = col_obs_rel_y(s->solarflare.y, s->player.y);
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
+    col_write_hazard_xy_value_if(
+        s, s->solarflare.active, s->solarflare.x, s->solarflare.y, 1.0f, obs, &i);
     *idx = i;
 
     col_write_nearest_modifier_molten(s, obs, idx);
@@ -563,8 +608,4 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);
         abort();
     }
-}
-
-static void col_write_obs(EncounterState* state, float* obs) {
-    col_write_obs_ctx(state, (EncounterContext*)col_legacy_context(), obs);
 }

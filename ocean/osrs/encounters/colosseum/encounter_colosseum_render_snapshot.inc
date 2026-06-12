@@ -93,17 +93,6 @@ static int col_get_winner_ctx(EncounterState* state, EncounterContext* context) 
     return ((ColosseumState*)state)->winner;
 }
 
-static void col_write_terminal_status_text(const ColosseumState* s, char* out, size_t cap) {
-    if (cap == 0) return;
-    out[0] = '\0';
-    if (!s->episode_over) return;
-    if (s->winner == COLO_OUTCOME_PLAYER_WON) {
-        snprintf(out, cap, "Colosseum cleared");
-        return;
-    }
-    snprintf(out, cap, "Killed by %s", colo_npc_type_name(s->last_hit_by_type));
-}
-
 static void* col_get_log_ctx(EncounterState* state, EncounterContext* context) {
     ColosseumState* s = (ColosseumState*)state;
     (void)context;
@@ -125,7 +114,14 @@ static void col_render_post_tick_ctx(
     (void)context;
     ColosseumState* s = (ColosseumState*)state;
     ov->projectile_count = 0;
-    col_write_terminal_status_text(s, ov->status_text, sizeof(ov->status_text));
+    encounter_write_terminal_status_text(
+        s->episode_over,
+        s->winner,
+        COLO_OUTCOME_PLAYER_WON,
+        "Colosseum cleared",
+        colo_npc_type_name(s->last_hit_by_type),
+        ov->status_text,
+        sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
 }
 
@@ -145,9 +141,8 @@ static void* col_get_player_for_input(void* state, int idx) {
 /** obs slot the agent sees for a raw NPC array index, or -1. Inverse of
     current_obs_slots, refreshed by the caller. */
 static int col_find_target_obs_slot(const ColosseumState* s, int npc_slot) {
-    for (int o = 0; o < COLO_OBS_NPCS; o++)
-        if (s->current_obs_slots[o] == npc_slot) return o;
-    return -1;
+    return encounter_find_observed_target_slot(
+        s->current_obs_slots, COLO_OBS_NPCS, npc_slot);
 }
 
 static int col_is_human_targetable_npc_slot_ctx(
@@ -161,11 +156,6 @@ static int col_is_human_targetable_npc_slot_ctx(
     int obs_slot = col_find_target_obs_slot(s, npc_slot);
     if (obs_slot < 0) return 0;
     return col_obs_slot_is_targetable(s, obs_slot);
-}
-
-static int col_is_human_targetable_npc_slot(EncounterState* state, int npc_slot) {
-    return col_is_human_targetable_npc_slot_ctx(
-        state, (EncounterContext*)col_legacy_context(), npc_slot);
 }
 
 static void col_translate_human_input_ctx(
@@ -216,11 +206,6 @@ static void col_translate_human_input_ctx(
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
     if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
         actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
-}
-
-static void col_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
-    col_translate_human_input_ctx(
-        hi, actions, state, (EncounterContext*)col_legacy_context());
 }
 
 static void col_translate_human_commands_ctx(
@@ -302,12 +287,6 @@ static void col_step_human_commands_ctx(
     human_input_clear_pending(hi);
 }
 
-static void col_step_human_commands(EncounterState* state, HumanInput* hi) {
-    col_step_human_commands_ctx(
-        state, (EncounterContext*)col_legacy_context(), hi);
-}
-
-
 /* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
@@ -361,11 +340,11 @@ static size_t col_snapshot_size_ctx(EncounterState* state, EncounterContext* con
 static void col_snapshot_ctx(EncounterState* state, EncounterContext* context, void* out) {
     (void)context;
     ColoSnapshot* snap = (ColoSnapshot*)out;
-    memset(snap, 0, sizeof(*snap));
-    snap->magic = COLO_SNAPSHOT_MAGIC;
-    snap->version = COLO_SNAPSHOT_VERSION;
-    snap->state_size = (uint32_t)sizeof(ColosseumState);
-    snap->state = *(ColosseumState*)state;
+    encounter_snapshot_write_frame(
+        snap, sizeof(*snap), COLO_SNAPSHOT_MAGIC, COLO_SNAPSHOT_VERSION,
+        sizeof(ColosseumState));
+    encounter_snapshot_copy_state_to(
+        snap, offsetof(ColoSnapshot, state), state, sizeof(ColosseumState));
 }
 
 static void col_restore_ctx(
@@ -375,46 +354,30 @@ static void col_restore_ctx(
     size_t n
 ) {
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
-    if (n != sizeof(ColoSnapshot)) {
-        fprintf(stderr, "col_restore: bad snapshot size %zu (expected %zu)\n",
-            n, sizeof(ColoSnapshot));
-        abort();
-    }
-    const ColoSnapshot* snap = (const ColoSnapshot*)data;
-    if (snap->magic != COLO_SNAPSHOT_MAGIC || snap->version != COLO_SNAPSHOT_VERSION) {
-        fprintf(stderr, "col_restore: bad magic/version (got 0x%08x v%u, want 0x%08x v%u)\n",
-            snap->magic, snap->version, COLO_SNAPSHOT_MAGIC, COLO_SNAPSHOT_VERSION);
-        abort();
-    }
-    if (snap->state_size != sizeof(ColosseumState)) {
-        fprintf(stderr, "col_restore: state size mismatch (got %u, want %zu)\n",
-            snap->state_size, sizeof(ColosseumState));
-        abort();
-    }
     ColosseumState* dst = (ColosseumState*)state;
-    *dst = snap->state;
+    encounter_snapshot_validate_frame(
+        "col_restore", data, n, sizeof(ColoSnapshot),
+        COLO_SNAPSHOT_MAGIC, COLO_SNAPSHOT_VERSION, sizeof(ColosseumState));
+    encounter_snapshot_copy_state_from(
+        dst, data, offsetof(ColoSnapshot, state), sizeof(ColosseumState));
     col_refresh_after_state_load(dst, ctx);
 }
 
 
-/* scenario-lab vtable hook: route one command line through the Colosseum lab
-   parser. on a dump line the parser allocates the JSON, which we print and free
-   here so the viewer's apply path stays encounter-neutral. */
+static int col_lab_apply_script_line_alloc_json_void(
+    void* state, const char* line, char** out_json
+) {
+    return col_lab_apply_script_line_alloc_json((ColosseumState*)state, line, out_json);
+}
+
 static int col_apply_lab_command_ctx(
     EncounterState* state,
     EncounterContext* context,
     const char* line
 ) {
     (void)context;
-    ColosseumState* s = (ColosseumState*)state;
-    char* json = NULL;
-    ColoLabLineResult result = col_lab_apply_script_line_alloc_json(s, line, &json);
-    if (result == COLO_LAB_LINE_DUMP && json) {
-        printf("%s\n", json);
-        fflush(stdout);
-    }
-    free(json);
-    return result == COLO_LAB_LINE_DUMP ? 1 : 0;
+    return encounter_apply_lab_command_dump_wrapper(
+        state, line, COLO_LAB_LINE_DUMP, col_lab_apply_script_line_alloc_json_void);
 }
 
 

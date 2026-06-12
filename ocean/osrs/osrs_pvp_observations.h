@@ -22,13 +22,13 @@
  * Normalized to 0-1 range based on max possible boosted level.
  */
 static inline float get_relative_level_combat(int current, int base) {
-    int max_level = base + (int)floorf(base * 0.15f) + 5;
+    int max_level = base + osrs_super_combat_boost_amount(base);
     return (float)current / (float)max_level;
 }
 
 /** Get relative ranged level (10% boost formula). */
 static inline float get_relative_level_ranged(int current, int base) {
-    int max_level = base + (int)floorf(base * 0.10f) + 4;
+    int max_level = base + osrs_ranging_boost_amount(base);
     return (float)current / (float)max_level;
 }
 
@@ -44,7 +44,7 @@ static inline float get_relative_level_magic(int current, int base) {
  * @return 1 if defence not capped or HP not full
  */
 static inline int can_use_brew_boost(Player* p) {
-    int def_boost = (int)floorf(2.0f + (0.20f * p->base_defence));
+    int def_boost = osrs_brew_defence_boost_amount(p->base_defence);
     int def_cap = p->is_lms ? p->base_defence : p->base_defence + def_boost;
     if (p->current_defence < def_cap - 1) {
         return 1;
@@ -67,9 +67,9 @@ static inline int can_restore_stats(Player* p) {
 
 /** Check if combat potion boost would be beneficial. */
 static inline int can_boost_combat_skills(Player* p) {
-    int max_att = (int)floorf(p->base_attack * 0.15f) + 5 + p->base_attack;
-    int max_str = (int)floorf(p->base_strength * 0.15f) + 5 + p->base_strength;
-    int def_boost = (int)floorf(p->base_defence * 0.15f) + 5;
+    int max_att = p->base_attack + osrs_super_combat_boost_amount(p->base_attack);
+    int max_str = p->base_strength + osrs_super_combat_boost_amount(p->base_strength);
+    int def_boost = osrs_super_combat_boost_amount(p->base_defence);
     int max_def = p->is_lms ? p->base_defence : p->base_defence + def_boost;
     return max_att > p->current_attack + 1 ||
            max_def > p->current_defence + 1 ||
@@ -78,7 +78,7 @@ static inline int can_boost_combat_skills(Player* p) {
 
 /** Check if ranged potion boost would be beneficial. */
 static inline int can_boost_ranged(Player* p) {
-    int max_ranged = (int)floorf(p->base_ranged * 0.10f) + 4 + p->base_ranged;
+    int max_ranged = p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
     return max_ranged > p->current_ranged + 1;
 }
 

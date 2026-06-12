@@ -114,6 +114,10 @@ static inline int osrs_brew_heal_amount(int base_hp) {
     return base_hp * 15 / 100 + 2;   /* ref: OSRS wiki Saradomin brew */
 }
 
+static inline int osrs_brew_defence_boost_amount(int base_defence) {
+    return base_defence * 20 / 100 + 2;   /* ref: OSRS wiki Saradomin brew */
+}
+
 /* eat food: compute result. caller applies hp change and timer.
    anglerfish can overheal (eat at full HP). all others require HP < max.
    heal is clamped so HP doesn't exceed max (except anglerfish overheal). */
@@ -203,7 +207,7 @@ static inline BrewResult osrs_brew_effect(int base_hp, int base_def,
                                            int current_range, int current_magic) {
     BrewResult r;
     r.hp_healed = osrs_brew_heal_amount(base_hp);
-    r.def_boost = base_def * 20 / 100 + 2;
+    r.def_boost = osrs_brew_defence_boost_amount(base_def);
     r.att_drain = current_att * 10 / 100 + 2;
     r.str_drain = current_str * 10 / 100 + 2;
     r.range_drain = current_range * 10 / 100 + 2;

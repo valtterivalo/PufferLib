@@ -316,20 +316,7 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
 
     /* player */
     s->player.entity_type = ENTITY_PLAYER;
-    s->player.base_hitpoints = 99;
-    s->player.current_hitpoints = 99;
-    s->player.base_prayer = 99;
-    s->player.current_prayer = 99;
-    s->player.base_attack = 99;
-    s->player.base_strength = 99;
-    s->player.base_defence = 99;
-    s->player.base_ranged = 99;
-    s->player.base_magic = 99;
-    s->player.current_ranged = 99;
-    s->player.current_magic = 99;
-    s->player.current_attack = 99;
-    s->player.current_strength = 99;
-    s->player.current_defence = 99;
+    encounter_init_maxed_player_combat_stats(&s->player, 99);
     osrs_item_effect_state_init(&s->player.item_effect_state);
     /* start in mage gear */
     s->weapon_set = INF_GEAR_MAGE;
@@ -343,14 +330,7 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     {
         encounter_populate_inventory(&s->player, loadouts, INF_NUM_WEAPON_SETS, NULL);
 
-        /* Ammo slot items (dragon darts, dragon arrows) should NOT appear as
-           swappable inventory items — in real OSRS darts live inside the
-           blowpipe and arrows inside dizana's quiver. Clear them here; the
-           equipment panel still shows the correct ammo for the active weapon. */
-        for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++) {
-            s->player.inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
-        }
-        s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
+        encounter_clear_ammo_inventory_slot(&s->player);
     }
     InfSupplyDoses full_supplies = inf_full_starting_supplies();
     InfSupplyDoses start_supplies = inf_supplies_for_start_wave(

@@ -29,8 +29,6 @@ static const char* col_lab_npc_type_name(int type) {
     }
 }
 
-static int col_lab_parse_int_value(const char* value);
-
 static int col_lab_parse_npc_type(const char* value) {
     if (strcmp(value, "berserker") == 0) return COLO_FREMENNIK_BERSERKER;
     if (strcmp(value, "archer") == 0)    return COLO_FREMENNIK_ARCHER;
@@ -113,48 +111,8 @@ static int col_lab_overhead_for_name(const char* value) {
 }
 
 
-/* ----- scalar value parsers ------------------------------------------------- */
-
-static int col_lab_parse_int_value(const char* value) {
-    char* end = NULL;
-    errno = 0;
-    long parsed = strtol(value, &end, 10);
-    if (errno != 0 || !end || *end != '\0' ||
-            parsed < INT32_MIN || parsed > INT32_MAX) {
-        col_lab_abort("invalid integer %s", value);
-    }
-    return (int)parsed;
-}
-
-static uint32_t col_lab_parse_seed_value(const char* value) {
-    char* end = NULL;
-    errno = 0;
-    unsigned long parsed = strtoul(value, &end, 10);
-    if (errno != 0 || !end || *end != '\0' || parsed > UINT32_MAX)
-        col_lab_abort("invalid seed %s", value);
-    return (uint32_t)parsed;
-}
-
 static ColoLabOptionalInt col_lab_parse_optional_hp_value(const char* value) {
-    if (strcmp(value, "full") == 0) return col_lab_optional_int_unset();
-    return col_lab_optional_int_set(col_lab_parse_int_value(value));
-}
-
-static char* col_lab_trim(char* s) {
-    while (*s && isspace((unsigned char)*s)) s++;
-    char* end = s + strlen(s);
-    while (end > s && isspace((unsigned char)end[-1])) end--;
-    *end = '\0';
-    return s;
-}
-
-static void col_lab_parse_key_value(char* token, const char** key, const char** value) {
-    char* eq = strchr(token, '=');
-    if (!eq || eq == token || eq[1] == '\0')
-        col_lab_abort("expected key=value token, got %s", token);
-    *eq = '\0';
-    *key = token;
-    *value = eq + 1;
+    return encounter_lab_parse_optional_full_int("colosseum lab", value);
 }
 
 
@@ -183,9 +141,9 @@ static ColoLabParsedArgs col_lab_parsed_args_default(void) {
         .type = -1,
         .x = INT32_MIN,
         .y = INT32_MIN,
-        .hp = { .kind = COLO_LAB_OPTIONAL_INT_UNSET },
-        .timer = { .kind = COLO_LAB_OPTIONAL_INT_UNSET },
-        .prayer = { .kind = COLO_LAB_OPTIONAL_INT_UNSET },
+        .hp = { .kind = ENCOUNTER_LAB_OPTIONAL_INT_UNSET },
+        .timer = { .kind = ENCOUNTER_LAB_OPTIONAL_INT_UNSET },
+        .prayer = { .kind = ENCOUNTER_LAB_OPTIONAL_INT_UNSET },
         .wave = -1,
         .phase = -1,
         .modifier = -1,
@@ -206,64 +164,109 @@ static void col_lab_apply_script_arg(
 ) {
     switch (kind) {
         case COLO_LAB_COMMAND_RESET:
-            if (strcmp(key, "seed") == 0) { args->seed = col_lab_parse_seed_value(value); return; }
+            if (strcmp(key, "seed") == 0) {
+                args->seed = encounter_lab_parse_seed_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_SET_PLAYER:
-            if (strcmp(key, "x") == 0) { args->x = col_lab_parse_int_value(value); return; }
-            if (strcmp(key, "y") == 0) { args->y = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "x") == 0) {
+                args->x = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             if (strcmp(key, "hp") == 0) { args->hp = col_lab_parse_optional_hp_value(value); return; }
             if (strcmp(key, "prayer") == 0) {
-                args->prayer = col_lab_optional_int_set(col_lab_overhead_for_name(value));
+                args->prayer = encounter_lab_optional_int_set(col_lab_overhead_for_name(value));
                 return;
             }
             break;
 
         case COLO_LAB_COMMAND_SPAWN_NPC:
-            if (strcmp(key, "slot") == 0) { args->slot = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "slot") == 0) {
+                args->slot = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             if (strcmp(key, "type") == 0) { args->type = col_lab_parse_npc_type(value); return; }
-            if (strcmp(key, "x") == 0) { args->x = col_lab_parse_int_value(value); return; }
-            if (strcmp(key, "y") == 0) { args->y = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "x") == 0) {
+                args->x = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             if (strcmp(key, "hp") == 0) { args->hp = col_lab_parse_optional_hp_value(value); return; }
             if (strcmp(key, "timer") == 0) {
-                args->timer = col_lab_optional_int_set(col_lab_parse_int_value(value));
+                args->timer = encounter_lab_optional_int_set(
+                    encounter_lab_parse_int_value("colosseum lab", value));
                 return;
             }
             break;
 
         case COLO_LAB_COMMAND_MOVE_NPC:
-            if (strcmp(key, "slot") == 0) { args->slot = col_lab_parse_int_value(value); return; }
-            if (strcmp(key, "x") == 0) { args->x = col_lab_parse_int_value(value); return; }
-            if (strcmp(key, "y") == 0) { args->y = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "slot") == 0) {
+                args->slot = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
+            if (strcmp(key, "x") == 0) {
+                args->x = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
+            if (strcmp(key, "y") == 0) {
+                args->y = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_DELETE_NPC:
         case COLO_LAB_COMMAND_KILL_NPC:
-            if (strcmp(key, "slot") == 0) { args->slot = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "slot") == 0) {
+                args->slot = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_SET_NPC_HP:
-            if (strcmp(key, "slot") == 0) { args->slot = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "slot") == 0) {
+                args->slot = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             if (strcmp(key, "hp") == 0) {
-                args->hp = col_lab_optional_int_set(col_lab_parse_int_value(value));
+                args->hp = encounter_lab_optional_int_set(
+                    encounter_lab_parse_int_value("colosseum lab", value));
                 return;
             }
             break;
 
         case COLO_LAB_COMMAND_SET_NPC_TIMER:
-            if (strcmp(key, "slot") == 0) { args->slot = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "slot") == 0) {
+                args->slot = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             if (strcmp(key, "timer") == 0) {
-                args->timer = col_lab_optional_int_set(col_lab_parse_int_value(value));
+                args->timer = encounter_lab_optional_int_set(
+                    encounter_lab_parse_int_value("colosseum lab", value));
                 return;
             }
             break;
 
         case COLO_LAB_COMMAND_SPAWN_WAVE:
-            if (strcmp(key, "wave") == 0) { args->wave = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "wave") == 0) {
+                args->wave = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_SET_BOSS_PHASE:
-            if (strcmp(key, "phase") == 0) { args->phase = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "phase") == 0) {
+                args->phase = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_SET_MODIFIER:
@@ -271,7 +274,10 @@ static void col_lab_apply_script_arg(
                 args->modifier = col_lab_parse_modifier(value);
                 return;
             }
-            if (strcmp(key, "tier") == 0) { args->tier = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "tier") == 0) {
+                args->tier = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_OPEN_DRAFT:
@@ -281,7 +287,10 @@ static void col_lab_apply_script_arg(
             break;
 
         case COLO_LAB_COMMAND_STEP_TICKS:
-            if (strcmp(key, "ticks") == 0) { args->ticks = col_lab_parse_int_value(value); return; }
+            if (strcmp(key, "ticks") == 0) {
+                args->ticks = encounter_lab_parse_int_value("colosseum lab", value);
+                return;
+            }
             break;
 
         case COLO_LAB_COMMAND_START_GRAPPLE:
@@ -348,7 +357,7 @@ static ColosseumLabCommand col_lab_build_script_command(
 
         case COLO_LAB_COMMAND_SET_NPC_HP:
             if (args->slot < 0) col_lab_abort("command %s requires slot", command);
-            if (args->hp.kind != COLO_LAB_OPTIONAL_INT_SET)
+            if (args->hp.kind != ENCOUNTER_LAB_OPTIONAL_INT_SET)
                 col_lab_abort("set_npc_hp requires hp");
             out.as.npc_hp.slot = args->slot;
             out.as.npc_hp.hp = args->hp.value;
@@ -356,7 +365,7 @@ static ColosseumLabCommand col_lab_build_script_command(
 
         case COLO_LAB_COMMAND_SET_NPC_TIMER:
             if (args->slot < 0) col_lab_abort("command %s requires slot", command);
-            if (args->timer.kind != COLO_LAB_OPTIONAL_INT_SET)
+            if (args->timer.kind != ENCOUNTER_LAB_OPTIONAL_INT_SET)
                 col_lab_abort("set_npc_timer requires timer");
             out.as.npc_timer.slot = args->slot;
             out.as.npc_timer.timer = args->timer.value;
@@ -407,41 +416,33 @@ static char* col_lab_alloc_json(ColosseumState* s);
 
 /* ----- top-level line parser ------------------------------------------------ */
 
-static char* col_lab_next_token(char** cursor) {
-    if (!cursor || !*cursor) col_lab_abort("null token cursor");
-    char* start = *cursor + strspn(*cursor, " \t\r\n");
-    if (*start == '\0') { *cursor = start; return NULL; }
-    char* end = start + strcspn(start, " \t\r\n");
-    if (*end != '\0') { *end = '\0'; *cursor = end + 1; }
-    else { *cursor = end; }
-    return start;
-}
-
 static ColoLabCommandKind col_lab_command_kind_for(const char* command) {
-    if (strcmp(command, "reset") == 0) return COLO_LAB_COMMAND_RESET;
-    if (strcmp(command, "player") == 0 || strcmp(command, "set_player") == 0)
-        return COLO_LAB_COMMAND_SET_PLAYER;
-    if (strcmp(command, "npc") == 0 || strcmp(command, "spawn_npc") == 0)
-        return COLO_LAB_COMMAND_SPAWN_NPC;
-    if (strcmp(command, "move_npc") == 0) return COLO_LAB_COMMAND_MOVE_NPC;
-    if (strcmp(command, "delete_npc") == 0) return COLO_LAB_COMMAND_DELETE_NPC;
-    if (strcmp(command, "kill_npc") == 0) return COLO_LAB_COMMAND_KILL_NPC;
-    if (strcmp(command, "set_npc_hp") == 0) return COLO_LAB_COMMAND_SET_NPC_HP;
-    if (strcmp(command, "set_npc_timer") == 0) return COLO_LAB_COMMAND_SET_NPC_TIMER;
-    if (strcmp(command, "wave") == 0 || strcmp(command, "spawn_wave") == 0)
-        return COLO_LAB_COMMAND_SPAWN_WAVE;
-    if (strcmp(command, "boss_phase") == 0 || strcmp(command, "phase") == 0)
-        return COLO_LAB_COMMAND_SET_BOSS_PHASE;
-    if (strcmp(command, "grapple") == 0 || strcmp(command, "start_grapple") == 0)
-        return COLO_LAB_COMMAND_START_GRAPPLE;
-    if (strcmp(command, "modifier") == 0 || strcmp(command, "mod") == 0)
-        return COLO_LAB_COMMAND_SET_MODIFIER;
-    if (strcmp(command, "draft") == 0) return COLO_LAB_COMMAND_OPEN_DRAFT;
-    if (strcmp(command, "clear_npcs") == 0) return COLO_LAB_COMMAND_CLEAR_NPCS;
-    if (strcmp(command, "step") == 0 || strcmp(command, "step_ticks") == 0)
-        return COLO_LAB_COMMAND_STEP_TICKS;
-    col_lab_abort("unknown script command %s", command);
-    return COLO_LAB_COMMAND_NONE;
+    static const EncounterLabCommandAlias aliases[] = {
+        { "reset", COLO_LAB_COMMAND_RESET },
+        { "player", COLO_LAB_COMMAND_SET_PLAYER },
+        { "set_player", COLO_LAB_COMMAND_SET_PLAYER },
+        { "npc", COLO_LAB_COMMAND_SPAWN_NPC },
+        { "spawn_npc", COLO_LAB_COMMAND_SPAWN_NPC },
+        { "move_npc", COLO_LAB_COMMAND_MOVE_NPC },
+        { "delete_npc", COLO_LAB_COMMAND_DELETE_NPC },
+        { "kill_npc", COLO_LAB_COMMAND_KILL_NPC },
+        { "set_npc_hp", COLO_LAB_COMMAND_SET_NPC_HP },
+        { "set_npc_timer", COLO_LAB_COMMAND_SET_NPC_TIMER },
+        { "wave", COLO_LAB_COMMAND_SPAWN_WAVE },
+        { "spawn_wave", COLO_LAB_COMMAND_SPAWN_WAVE },
+        { "boss_phase", COLO_LAB_COMMAND_SET_BOSS_PHASE },
+        { "phase", COLO_LAB_COMMAND_SET_BOSS_PHASE },
+        { "grapple", COLO_LAB_COMMAND_START_GRAPPLE },
+        { "start_grapple", COLO_LAB_COMMAND_START_GRAPPLE },
+        { "modifier", COLO_LAB_COMMAND_SET_MODIFIER },
+        { "mod", COLO_LAB_COMMAND_SET_MODIFIER },
+        { "draft", COLO_LAB_COMMAND_OPEN_DRAFT },
+        { "clear_npcs", COLO_LAB_COMMAND_CLEAR_NPCS },
+        { "step", COLO_LAB_COMMAND_STEP_TICKS },
+        { "step_ticks", COLO_LAB_COMMAND_STEP_TICKS },
+    };
+    return (ColoLabCommandKind)encounter_lab_lookup_command_kind(
+        "colosseum lab", command, aliases, sizeof(aliases) / sizeof(aliases[0]));
 }
 
 static ColoLabLineResult col_lab_apply_script_line_impl(
@@ -453,11 +454,11 @@ static ColoLabLineResult col_lab_apply_script_line_impl(
     if (!copy) col_lab_abort("out of memory");
     memcpy(copy, line, len + 1);
 
-    char* text = col_lab_trim(copy);
+    char* text = encounter_lab_trim(copy);
     if (*text == '\0' || *text == '#') { free(copy); return COLO_LAB_LINE_NONE; }
 
     char* cursor = text;
-    char* command = col_lab_next_token(&cursor);
+    char* command = encounter_lab_next_token("colosseum lab", &cursor);
     if (!command) { free(copy); return COLO_LAB_LINE_NONE; }
 
     if (strcmp(command, "dump") == 0 || strcmp(command, "dump_json") == 0) {
@@ -469,12 +470,12 @@ static ColoLabLineResult col_lab_apply_script_line_impl(
     ColoLabCommandKind kind = col_lab_command_kind_for(command);
     ColoLabParsedArgs args = col_lab_parsed_args_default();
 
-    for (char* token = col_lab_next_token(&cursor);
+    for (char* token = encounter_lab_next_token("colosseum lab", &cursor);
             token != NULL;
-            token = col_lab_next_token(&cursor)) {
+            token = encounter_lab_next_token("colosseum lab", &cursor)) {
         const char* key = NULL;
         const char* value = NULL;
-        col_lab_parse_key_value(token, &key, &value);
+        encounter_lab_parse_key_value("colosseum lab", token, &key, &value);
         col_lab_apply_script_arg(&args, kind, command, key, value);
     }
 

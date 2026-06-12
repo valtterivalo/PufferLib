@@ -583,10 +583,8 @@ static void inf_write_obs_ctx(
 
 static int inf_find_target_obs_slot(const InfernoState* s, int npc_slot) {
     if (npc_slot < 0 || npc_slot >= INF_MAX_NPCS) return -1;
-    for (int j = 0; j < INF_OBS_NPCS; j++) {
-        if (s->current_obs_slots[j] == npc_slot) return j;
-    }
-    return -1;
+    return encounter_find_observed_target_slot(
+        s->current_obs_slots, INF_OBS_NPCS, npc_slot);
 }
 
 static void inf_write_obs(EncounterState* state, float* obs) {

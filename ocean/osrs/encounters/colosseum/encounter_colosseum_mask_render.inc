@@ -126,11 +126,6 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     }
 }
 
-static void col_write_mask(EncounterState* state, float* mask) {
-    col_write_mask_ctx(state, (EncounterContext*)col_legacy_context(), mask);
-}
-
-
 static float col_get_reward_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     return ((ColosseumState*)state)->reward;

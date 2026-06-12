@@ -567,14 +567,10 @@ static void inf_tick_player_ctx(
     int eat_act = actions[INF_HEAD_EAT];
     if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
-        s->player.current_hitpoints += INF_BREW_HEAL;
-        if (s->player.current_hitpoints > s->player.base_hitpoints + INF_BREW_HEAL)
-            s->player.current_hitpoints = s->player.base_hitpoints + INF_BREW_HEAL;
-        s->player.brew_doses--;
-        s->player.potion_timer = 3;
-        s->player.ate_food_this_tick = 1;
+        encounter_apply_brew_heal_and_timer(&s->player, INF_BREW_HEAL);
         s->tick_scratch.brewed = 1;
-        encounter_brew_drain_stats(&s->player);
+        encounter_apply_consumable_stat_effect(
+            &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
             inf_refresh_human_loadout_stats(s);
@@ -583,20 +579,17 @@ static void inf_tick_player_ctx(
     /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
     if (pot_act == 1 && s->player.restore_doses > 0 && s->player.potion_timer == 0) {
-        /* super restore: restores prayer + all combat stats */
-        s->player.current_prayer += INF_RESTORE_AMOUNT;
-        if (s->player.current_prayer > s->player.base_prayer)
-            s->player.current_prayer = s->player.base_prayer;
-        encounter_restore_stats(&s->player);
-        s->player.restore_doses--;
-        s->player.potion_timer = 3;
+        encounter_add_prayer_restore(&s->player, INF_RESTORE_AMOUNT);
+        encounter_cap_prayer_restore(&s->player);
+        encounter_apply_consumable_stat_effect(
+            &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
+        encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
             inf_refresh_human_loadout_stats(s);
     } else if (pot_act == 2 && s->player.bastion_doses > 0 && s->player.potion_timer == 0) {
         encounter_bastion_boost(&s->player);
-        s->player.bastion_doses--;
-        s->player.potion_timer = 3;
+        encounter_finish_potion_dose(&s->player, &s->player.bastion_doses);
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
             inf_refresh_human_loadout_stats(s);
@@ -1026,11 +1019,10 @@ static int inf_roll_delayed_jad_damage(
 
     int att_roll = osrs_npc_attack_roll(att_lvl, att_bonus);
     const EncounterLoadoutStats* ls = inf_current_loadout_stats(s, ctx);
-    int def_bonus = encounter_player_def_bonus(
+    int def_roll = encounter_player_def_roll_from_loadout(
+        s->player.current_defence, s->player.current_magic,
         ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
         attack_style, stats->melee_style);
-    int def_roll = osrs_player_def_roll_vs_npc(
-        s->player.current_defence, s->player.current_magic, def_bonus, attack_style);
     if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll))
         dmg = 0;
     return dmg;

@@ -97,11 +97,8 @@ static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
 /** B3: true if any tile of a size x size footprint at SW (x, y) lies within
     Chebyshev COLO_SPAWN_EXCLUSION_CHEB of the player's tile. */
 static int col_spawn_excluded_near_player(const ColosseumState* s, int x, int y, int size) {
-    int hi_x = x + size - 1, hi_y = y + size - 1;
-    int dx = s->player.x < x ? x - s->player.x : (s->player.x > hi_x ? s->player.x - hi_x : 0);
-    int dy = s->player.y < y ? y - s->player.y : (s->player.y > hi_y ? s->player.y - hi_y : 0);
-    int cheb = dx > dy ? dx : dy;
-    return cheb <= COLO_SPAWN_EXCLUSION_CHEB;
+    return encounter_entity_footprint_distance(
+        s->player.x, s->player.y, 1, x, y, size) <= COLO_SPAWN_EXCLUSION_CHEB;
 }
 
 /** a size x size footprint at SW (x, y) is spawnable: off the static mask,
@@ -387,20 +384,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
 
     /* player: maxed combat stats + a melee/ranged loadout via shared helpers */
     s->player.entity_type = ENTITY_PLAYER;
-    s->player.base_hitpoints = 99;
-    s->player.current_hitpoints = 99;
-    s->player.base_prayer = 99;
-    s->player.current_prayer = 99;
-    s->player.base_attack = 99;
-    s->player.base_strength = 99;
-    s->player.base_defence = 99;
-    s->player.base_ranged = 99;
-    s->player.base_magic = 99;
-    s->player.current_attack = 99;
-    s->player.current_strength = 99;
-    s->player.current_defence = 99;
-    s->player.current_ranged = 99;
-    s->player.current_magic = 99;
+    encounter_init_maxed_player_combat_stats(&s->player, 99);
     osrs_item_effect_state_init(&s->player.item_effect_state);
 
     s->weapon_set = COLO_GEAR_MELEE;
@@ -422,10 +406,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
             if (!dup) s->player.inventory[GEAR_SLOT_WEAPON][n++] = spec_weapons[k];
         }
         s->player.num_items_in_slot[GEAR_SLOT_WEAPON] = n;
-        /* arrows live in the quiver/bow, blessings are not switches (inferno rule) */
-        for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++)
-            s->player.inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
-        s->player.num_items_in_slot[GEAR_SLOT_AMMO] = 0;
+        encounter_clear_ammo_inventory_slot(&s->player);
     }
 
     /* researched supplies (doses); currents live on Player, denominators here */

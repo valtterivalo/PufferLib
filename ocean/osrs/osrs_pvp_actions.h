@@ -88,14 +88,14 @@ static void drink_potion(Player* p, int potion_type) {
                 p->current_magic < p->base_magic ||
                 p->current_prayer < p->base_prayer
             );
-            // super restore: 8 + floor(level/4) for prayer and all stats
-            DrinkResult dr = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_prayer, 0);
-            p->current_prayer = clamp(p->current_prayer + dr.prayer_restored, 0, p->base_prayer);
-            int atk_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_attack, 0).prayer_restored;
-            int str_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_strength, 0).prayer_restored;
-            int def_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_defence, 0).prayer_restored;
-            int rng_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_ranged, 0).prayer_restored;
-            int mag_restore = osrs_drink_potion(POTION_SUPER_RESTORE, 0, p->base_magic, 0).prayer_restored;
+            p->current_prayer = clamp(
+                p->current_prayer + osrs_super_restore_amount(p->base_prayer),
+                0, p->base_prayer);
+            int atk_restore = osrs_super_restore_amount(p->base_attack);
+            int str_restore = osrs_super_restore_amount(p->base_strength);
+            int def_restore = osrs_super_restore_amount(p->base_defence);
+            int rng_restore = osrs_super_restore_amount(p->base_ranged);
+            int mag_restore = osrs_super_restore_amount(p->base_magic);
             if (p->current_attack < p->base_attack) {
                 p->current_attack = clamp(p->current_attack + atk_restore, 0, p->base_attack);
             }
@@ -119,9 +119,9 @@ static void drink_potion(Player* p, int potion_type) {
         case 3: {
             if (p->combat_potion_doses <= 0) return;
             p->combat_potion_doses--;
-            int atk_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_attack, 0).level_boost;
-            int str_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_strength, 0).level_boost;
-            int def_boost = osrs_drink_potion(POTION_SUPER_COMBAT, 0, p->base_defence, 0).level_boost;
+            int atk_boost = osrs_super_combat_boost_amount(p->base_attack);
+            int str_boost = osrs_super_combat_boost_amount(p->base_strength);
+            int def_boost = osrs_super_combat_boost_amount(p->base_defence);
             int atk_cap = p->base_attack + atk_boost;
             int str_cap = p->base_strength + str_boost;
             int def_cap = p->is_lms ? p->base_defence : p->base_defence + def_boost;
@@ -147,7 +147,7 @@ static void drink_potion(Player* p, int potion_type) {
         case 4: {
             if (p->ranged_potion_doses <= 0) return;
             p->ranged_potion_doses--;
-            int rng_boost = osrs_drink_potion(POTION_RANGING, 0, p->base_ranged, 0).level_boost;
+            int rng_boost = osrs_ranging_boost_amount(p->base_ranged);
             int rng_cap = p->base_ranged + rng_boost;
             int had_boost_need = p->current_ranged < rng_cap;
             if (p->current_ranged < rng_cap) {

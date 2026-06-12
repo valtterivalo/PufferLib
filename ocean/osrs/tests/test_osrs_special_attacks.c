@@ -80,6 +80,21 @@ static void test_consumable_amounts_and_laws(void) {
     CHECK("super combat boost at 99 is 19", osrs_super_combat_boost_amount(99) == 19);
     CHECK("ranging boost at 99 is 13", osrs_ranging_boost_amount(99) == 13);
     CHECK("brew heal at 99 is 16", osrs_brew_heal_amount(99) == 16);
+    CHECK("brew defence boost at 99 is 21", osrs_brew_defence_boost_amount(99) == 21);
+
+    int pvp_float_caps_match_integer_helpers = 1;
+    for (int level = 1; level <= 99; level++) {
+        int old_combat = (int)floorf(level * 0.15f) + 5;
+        int old_ranged = (int)floorf(level * 0.10f) + 4;
+        int old_brew_defence = (int)floorf(2.0f + (0.20f * level));
+        if (old_combat != osrs_super_combat_boost_amount(level) ||
+                old_ranged != osrs_ranging_boost_amount(level) ||
+                old_brew_defence != osrs_brew_defence_boost_amount(level)) {
+            pvp_float_caps_match_integer_helpers = 0;
+        }
+    }
+    CHECK("PvP float cap expressions match integer helpers for levels 1..99",
+        pvp_float_caps_match_integer_helpers);
 
     /* the drink layer and the amount helpers agree (one formula home) */
     CHECK("osrs_drink_potion super restore matches the amount helper",

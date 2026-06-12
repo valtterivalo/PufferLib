@@ -223,9 +223,8 @@ static int calculate_effective_attack(Player* p, AttackStyle style) {
 
     int style_bonus = osrs_stance_att_bonus(p->fight_style, style);
 
-    /* magic uses +9 instead of +8 (invisible +1 for magic attack) */
     if (style == ATTACK_STYLE_MAGIC)
-        return osrs_player_eff_level(base_level, prayer_mult, style_bonus) + 1;
+        return osrs_magic_effective_attack_level(base_level, prayer_mult, p->fight_style);
     return osrs_player_eff_level(base_level, prayer_mult, style_bonus);
 }
 
@@ -362,8 +361,7 @@ static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int m
     int max_hit;
     if (style == ATTACK_STYLE_MAGIC) {
         int base_damage = magic_base_hit;
-        float magic_mult = 1.0f;
-        if (p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY) magic_mult = 1.04f;
+        float magic_mult = osrs_offensive_magic_dmg_mult(p->offensive_prayer);
         max_hit = (int)(base_damage * (1.0f + strength_bonus / 100.0f) * str_mult * magic_mult);
     } else if (style == ATTACK_STYLE_RANGED) {
         max_hit = (int)(osrs_player_ranged_max_hit(eff_strength, strength_bonus) * str_mult);
