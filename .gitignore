@@ -172,3 +172,9 @@ pufferlib/ocean/impulse_wars/benchmark/
 resources/drive/data/*
 resources/drive/binaries/*
 
+
+# Local env binaries (build.sh --local output at repo root)
+/osrs_colosseum
+/osrs_inferno
+/osrs_pvp
+*.dSYM/
