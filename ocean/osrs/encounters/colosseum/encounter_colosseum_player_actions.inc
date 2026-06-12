@@ -263,9 +263,10 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     uint8_t weapon_item =
         col_loadouts_for_profile(s->active_loadout_profile)[s->weapon_set][GEAR_SLOT_WEAPON];
     int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
-    OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects(
+    MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
+    OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects_for_melee_style(
         effects, &s->player.item_effect_state, weapon_item, ls->style,
-        OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
+        weapon_melee_style, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
         base_att_roll, ls->max_hit,
         osrs_target_effect_context_magic(ns->magic_level, ns->magic_att_bonus),
         s->player.current_hitpoints, s->player.base_hitpoints);
@@ -284,7 +285,7 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     } else if (ls->style == ATTACK_STYLE_RANGED) {
         def_bonus = ns->ranged_def_bonus;
     } else {
-        def_bonus = col_melee_def_bonus(ns, col_item_melee_style(weapon_item));
+        def_bonus = col_melee_def_bonus(ns, weapon_melee_style);
     }
     int target_def_roll =
         (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
@@ -303,8 +304,8 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         } else if (rps_max_hit) {
             splat_damage = splat_max;
         } else {
-            splat_damage = encounter_npc_roll_attack(prepared.attack_roll,
-                target_def_roll, splat_max, &s->rng_state);
+            splat_damage = osrs_roll_prepared_attack_damage(
+                &prepared, target_def_roll, splat_max, &s->rng_state);
         }
         col_queue_npc_pending_hit(s, npc_slot, splat_damage, ticks, ls->style,
                                   ENCOUNTER_SPELL_NONE);
@@ -371,9 +372,10 @@ static void col_tick_player_ctx(
         if (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW) {
             s->player.current_prayer += osrs_sanfew_restore_amount(s->player.base_prayer);
             encounter_sanfew_restore_stats(&s->player);
-            /* L5: the sanfew drink clears Mantimayhem venom */
             s->player_venom = 0;
             s->player_venom_timer = 0;
+            s->player_poison = 0;
+            s->player_poison_timer = 0;
         } else {
             s->player.current_prayer += osrs_super_restore_amount(s->player.base_prayer);
             encounter_restore_stats(&s->player);

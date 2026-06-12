@@ -730,3 +730,47 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     colosseum scope but A14 requires a slash option vs Sol; warband freeze interactions
     (attack up to 2 tiles frozen) only matter if a freeze loadout is added | add a slash
     melee set; defer freezes.
+
+## E. Dual-model audit decisions (2026-06-12, Valtteri-reviewed)
+
+Outcomes of the Claude (wf_389c44ff-a37) + codex (omegacode wf_a77f3df668d3) correctness
+audit, each adversarially verified, then reviewed by Valtteri. These are the binding
+decisions for the fix pass.
+
+1. Osmumten's fang passive (double accuracy roll + 15% min hit floor) gets modeled in the
+   shared item-effects layer. Reference implementation: .refs/osrs-dps-calc.
+2. Sol perfect-parry guaranteed-max MUST apply to special attacks too (claws-after-parry is
+   the canonical real-world use). Spec path consumes sol.next_attack_guaranteed_max.
+3. Two-handed weapons can never benefit from shield-slot stats. Enforced at the shared
+   header level so encounters cannot reintroduce it (audit: SGS spec kept dragon defender).
+4. Scythe of vitur attack_range corrected 2 -> 1 (only halberds reach 2). DONE inline.
+5. Dragon claws: RESOLVED AS FALSE POSITIVE during the fix pass. .refs/osrs-dps-calc
+   src/lib/dists/claws.ts (re-cloned 2026-06-12, the gold standard) draws a TOTAL uniformly
+   (first success: [max, 2max-1]) and splits with floor fractions [t/2, t/4, t/8, t/8+1] --
+   the splats genuinely do not sum back to the drawn total. The old sim code was already
+   dps-calc-exact; the audit finding rested on pvp-performance-tracker's remainder-forcing
+   approximation. The codex roll-based rewrite was REVERTED; the dps-calc laws are now
+   frozen property-style in test_osrs_special_attacks.c (branch tables, [41, 77] observable
+   extremes at max 40, all-miss 2/3 [1,1] / 1/3 [0]).
+6. Sol phase-transition beams: exactly 6 tiles, one always on the player's tile, all 6
+   placed in-arena whenever space exists (replaces 8-draw rejection sampling).
+7. Venom never self-cures: the wave-spawn auto-clear is removed. Sanfew serum and
+   serpentine helm are the modeled counters (supersedes the old code-comment affordance).
+8. Bee swarm is size 2x2 (cache npc 12823) and additionally applies standard poison status
+   starting at 1 damage on contact. Poison state stays out of the obs vector for now
+   (contract freeze) — flagged for a future obs pass.
+9. Bee contact damage band: wiki self-conflict (Bee_Swarm page 15-20/t vs Modifiers page
+   <=10/t). KEEP <=10 with a TODO at COLO_BEE_MAX_POISON until video evidence settles it.
+10. Volatility III + Reentry "permanent" pools: Valtteri's game experience says wave end
+    clears ALL ground effects from Volatility and Reentry; the wiki "permanent" wording is
+    poor. Decision: every such pool is until-wave-end. Reentry>=2 COLO_POOL_PERMANENT
+    becomes until-wave-end. Supersedes the wiki Modifiers reading flagged by the audit.
+11. A31 (warband offensive bonuses follow decoded cache, not the wiki infobox 150s) is a
+    standing intentional decision — recorded here so audits using the B/C/D exemption rule
+    stop re-flagging it. Combat-irrelevant: the archer never melees, neither NPC casts.
+12. Magic effective attack level: sort out the +9 vs +8 discrepancy for good against
+    .refs/osrs-dps-calc and pvp-performance-tracker, align osrs_encounter.h with the
+    canonical formula. Colosseum-moot (no magic set), PvP-real.
+13. Player natural HP regeneration (and the wider 100-tick stat drift toward base) is core
+    game logic and gets modeled wiki-exactly in the shared layer. Colosseum wires it now;
+    inferno opts in as its own later decision (golden digests stay valid until then).

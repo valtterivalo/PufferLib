@@ -216,6 +216,8 @@ static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
         return;
     if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) < 2) return;
     if (!hit_success) return;
+    s->player_poison = 0;
+    s->player_poison_timer = 0;
     if (s->player_venom == 0) {
         s->player_venom = COLO_VENOM_START;
         s->player_venom_timer = COLO_VENOM_INTERVAL;
@@ -227,8 +229,8 @@ static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
 
 /** tick the player's venom: every COLO_VENOM_INTERVAL ticks deal the current
     venom damage, then escalate it +2 toward the cap (6, 8, 10 .. 20). Venom
-    never expires mid-wave on its own (it clears between waves), but the
-    speedrun kit's sanfew serum cures it on drink (L5). */
+    never self-cures and persists across waves. E7: the timer freezes during
+    wave gaps because the simulator abstracts gap time. */
 static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom <= 0) return;
     if (s->player_venom_timer > 0) s->player_venom_timer--;
@@ -240,6 +242,42 @@ static void col_mod_tick_venom(ColosseumState* s) {
     s->player_venom += COLO_VENOM_STEP;
     if (s->player_venom > COLO_VENOM_CAP) s->player_venom = COLO_VENOM_CAP;
     s->player_venom_timer = COLO_VENOM_INTERVAL;
+}
+
+/** apply E8 bee-contact poison at the OSRS severity that starts at 1 damage.
+    The serpentine helm immunizes poison as well as venom (one item bit covers
+    both, wiki Serpentine_helm), and an active venom supersedes poison — they
+    share a single status slot in OSRS, so venom application also clears
+    poison and a venomed player cannot be poisoned. */
+static void col_mod_apply_bee_poison(ColosseumState* s) {
+    if (osrs_effect_profile_has(&s->set_effects[s->weapon_set],
+                                OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+        return;
+    if (s->player_venom > 0) return;
+    if (s->player_poison <= 0) s->player_poison_timer = COLO_POISON_INTERVAL;
+    if (s->player_poison < COLO_POISON_BEE_CONTACT_SEVERITY)
+        s->player_poison = COLO_POISON_BEE_CONTACT_SEVERITY;
+}
+
+/** tick standard poison during live gameplay only. E8 keeps poison out of the
+    observation vector for the current contract. */
+static void col_mod_tick_poison(ColosseumState* s) {
+    if (s->player_poison <= 0) return;
+    if (s->player_poison_timer > 0) s->player_poison_timer--;
+    if (s->player_poison_timer > 0) return;
+    int dmg = (s->player_poison + 4) / 5;
+    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    if (dmg > 0) {
+        s->last_hit_by_type = COLO_BEE_SWARM;
+        col_mod_on_player_damaged(s, dmg);
+    }
+    s->player_poison--;
+    if (s->player_poison <= 0) {
+        s->player_poison = 0;
+        s->player_poison_timer = 0;
+    } else {
+        s->player_poison_timer = COLO_POISON_INTERVAL;
+    }
 }
 
 /* ----- hazard-entity NPC plumbing (totems + bees) ---------------------------- */
@@ -401,18 +439,9 @@ static void col_mod_add_molten_pool(ColosseumState* s, int x, int y, ColoMoltenP
     s->molten_kind[slot] = kind;
 }
 
-/** A22: drop the until-wave-end pools; permanent ones survive. Called at each
-    wave spawn. */
+/** E10: every Reentry and Volatility pool is until-wave-end. */
 static void col_mod_clear_wave_end_pools(ColosseumState* s) {
-    int kept = 0;
-    for (int i = 0; i < s->molten_count; i++) {
-        if (s->molten_kind[i] != COLO_POOL_PERMANENT) continue;
-        s->molten_x[kept] = s->molten_x[i];
-        s->molten_y[kept] = s->molten_y[i];
-        s->molten_kind[kept] = s->molten_kind[i];
-        kept++;
-    }
-    s->molten_count = kept;
+    s->molten_count = 0;
 }
 
 /** burn the player standing on any pool for the shared 5-9 molten-sand roll —
@@ -429,13 +458,12 @@ static void col_mod_tick_molten_pools(ColosseumState* s) {
     }
 }
 
-/** A22 Reentry hook: when a javelin skyfall lands, leave molten sand. T1 = the
-    targeted tile until wave end; T2 = PERMANENT and adds the tile SOUTH-WEST of
-    the target; T3 additionally the tile WEST of it. */
+/** E10 Reentry hook: when a javelin skyfall lands, leave molten sand until wave
+    end. T2 adds the SOUTH-WEST tile; T3 additionally adds the WEST tile. */
 static void col_mod_reentry_on_skyfall(ColosseumState* s, int tile_x, int tile_y) {
     int tier = col_mod_tier(s, COLO_MOD_REENTRY);
     if (tier == 0) return;
-    ColoMoltenPoolKind kind = (tier >= 2) ? COLO_POOL_PERMANENT : COLO_POOL_UNTIL_WAVE_END;
+    ColoMoltenPoolKind kind = COLO_POOL_UNTIL_WAVE_END;
     col_mod_add_molten_pool(s, tile_x, tile_y, kind);
     if (tier >= 2) col_mod_add_molten_pool(s, tile_x - 1, tile_y - 1, kind);
     if (tier >= 3) col_mod_add_molten_pool(s, tile_x - 1, tile_y, kind);
@@ -463,11 +491,26 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
 
 /* ----- Bees! (roaming 1-HP poison swarms, B9) -------------------------------- */
 
-/** spawn a bee NPC on a random spawn-anchor tile (D34: location unpinned). */
+/** clamp a bee swarm's SW tile to the full arena, not the wave-12 boss box. */
+static void col_clamp_bee_swarm_to_arena(ColoNPC* npc) {
+    int size = col_npc_effective_size(npc);
+    int max_x = COLO_ARENA_MAX_X - size + 1;
+    int max_y = COLO_ARENA_MAX_Y - size + 1;
+    if (npc->x < COLO_ARENA_MIN_X) npc->x = COLO_ARENA_MIN_X;
+    if (npc->y < COLO_ARENA_MIN_Y) npc->y = COLO_ARENA_MIN_Y;
+    if (npc->x > max_x) npc->x = max_x;
+    if (npc->y > max_y) npc->y = max_y;
+}
+
+/** E8: spawn a 2x2 bee NPC on a random spawn-anchor tile. */
 static void col_bee_spawn(ColosseumState* s, int b) {
     int pos = encounter_rand_int(&s->rng_state, COLO_NUM_SPAWN_ANCHORS);
     int slot = col_spawn_npc_at(s, COLO_BEE_SWARM,
         COLO_SPAWN_ANCHORS[pos][0], COLO_SPAWN_ANCHORS[pos][1]);
+    ColoNPC* npc = &s->npcs[slot];
+    col_clamp_bee_swarm_to_arena(npc);
+    npc->target_x = npc->x;
+    npc->target_y = npc->y;
     s->bees[b] = (ColoBeeSwarm){
         .phase = COLO_HAZARD_ALIVE,
         .npc_slot = slot,
@@ -495,10 +538,31 @@ static void col_mod_sync_bees(ColosseumState* s) {
     }
 }
 
-/** tick bee swarms: a live swarm steps one tile toward the player every 12
-    ticks (diagonal allowed, walls ignored, clamp-immune — D34) and deals up to
-    10 unblockable damage beneath the player; a killed swarm respawns 50 ticks
-    later on a fresh anchor. */
+/** true when the player's tile overlaps any tile in the swarm's 2x2 footprint. */
+static int col_bee_swarm_contacts_player(const ColosseumState* s, const ColoNPC* npc) {
+    int size = col_npc_effective_size(npc);
+    return encounter_entity_footprints_overlap(npc->x, npc->y, size, s->player.x, s->player.y, 1);
+}
+
+/** move the 2x2 bee footprint one tile toward the player's tile when the player
+    is outside the current x or y span. */
+static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
+    int size = col_npc_effective_size(npc);
+    int hi_x = npc->x + size - 1;
+    int hi_y = npc->y + size - 1;
+    if (s->player.x < npc->x) npc->x--;
+    else if (s->player.x > hi_x) npc->x++;
+    if (s->player.y < npc->y) npc->y--;
+    else if (s->player.y > hi_y) npc->y++;
+    col_clamp_bee_swarm_to_arena(npc);
+    npc->target_x = s->player.x;
+    npc->target_y = s->player.y;
+}
+
+/** tick bee swarms: a live E8 2x2 swarm steps one tile toward the player every
+    12 ticks, ignoring walls and the wave-12 boss-box clamp, and contact with
+    any footprint tile deals up to 10 unblockable damage plus standard poison.
+    A killed swarm respawns 50 ticks later on a fresh anchor. */
 static void col_mod_tick_bees(ColosseumState* s) {
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
         ColoBeeSwarm* bee = &s->bees[b];
@@ -518,16 +582,12 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
         if (bee->move_timer > 0) bee->move_timer--;
         if (bee->move_timer == 0) {
-            if (npc->x < s->player.x) npc->x++;
-            else if (npc->x > s->player.x) npc->x--;
-            if (npc->y < s->player.y) npc->y++;
-            else if (npc->y > s->player.y) npc->y--;
-            npc->target_x = s->player.x;
-            npc->target_y = s->player.y;
+            col_bee_swarm_step_toward_player(s, npc);
             bee->move_timer = COLO_BEE_MOVE_INTERVAL;
         }
 
-        if (npc->x == s->player.x && npc->y == s->player.y) {
+        if (col_bee_swarm_contacts_player(s, npc)) {
+            col_mod_apply_bee_poison(s);
             int dmg = encounter_rand_int(&s->rng_state, COLO_BEE_MAX_POISON + 1);
             encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
             if (dmg > 0) {
@@ -629,16 +689,15 @@ static void col_modifiers_tick(ColosseumState* s) {
     col_mod_tick_solarflare(s);
     col_mod_tick_molten_pools(s);
     col_mod_tick_venom(s);
+    col_mod_tick_poison(s);
     col_mod_tick_totems(s);
 }
 
-/** per-wave-spawn modifier sync: reset Doom stacks + venom, drop until-wave-end
-    molten pools, re-apply Frailty, sync the bee swarms + the Solarflare orb.
-    Called from col_spawn_wave after NPCs spawn. */
+/** per-wave-spawn modifier sync: reset Doom stacks, drop E10 wave-end pools,
+    re-apply Frailty, sync the bee swarms and the Solarflare orb. Called from
+    col_spawn_wave after NPCs spawn. */
 static void col_modifiers_on_wave_spawn(ColosseumState* s) {
     s->doom_stacks = 0;
-    s->player_venom = 0;
-    s->player_venom_timer = 0;
     col_mod_clear_wave_end_pools(s);
     col_mod_apply_frailty_hp(s);
     col_mod_sync_bees(s);

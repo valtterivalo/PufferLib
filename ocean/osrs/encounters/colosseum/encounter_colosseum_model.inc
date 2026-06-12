@@ -342,7 +342,7 @@ static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
         .attack_speed=0,.size=1,.max_hit=0 },
     [COLO_BEE_SWARM] = { .npc_id=12823, .name="Bee swarm",
         .hp=1, .att_level=1,.str_level=1,.def_level=1,.magic_level=1,.range_level=1,
-        .attack_speed=0,.size=1,.max_hit=0 },
+        .attack_speed=0,.size=2,.max_hit=0 },
 };
 
 /** per-style barrage max hits for the Manticore (mechanics-to-code.md). */
@@ -565,7 +565,11 @@ typedef enum {
     1/2/3 swarms. D34: random-anchor spawn, diagonal steps, clamp immunity kept. */
 #define COLO_MAX_BEE_SWARMS 3
 #define COLO_BEE_MOVE_INTERVAL 12   /* swarm steps one tile every 12 ticks */
-#define COLO_BEE_MAX_POISON 10      /* up to 10 unblockable contact damage/tick */
+#define COLO_BEE_MAX_POISON 10      /* up to 10 unblockable contact damage/tick.
+                                       TODO: wiki self-conflicts — Bee_Swarm page says
+                                       15-20/tick, Fortis_Colosseum/Modifiers says <=10.
+                                       Following the Modifiers page until video evidence
+                                       settles it (audit E3, 2026-06-12). */
 #define COLO_BEE_RESPAWN_TICKS 50   /* 30s respawn after a swarm is killed */
 
 typedef struct {
@@ -626,13 +630,10 @@ static const int COLO_DOOM_CAP[4] = { 0, 15, 10, 5 };  /* indexed by tier (1..3)
     the death tick is the modeled value. */
 #define COLO_VOLATILITY_MAX_HIT 25       /* explosion contact damage (D20 modeled) */
 
-/** A22: general-arena molten pool lifetime kinds (Reentry / Volatility T3 on
-    waves 1-11). "Temporary" pools persist UNTIL WAVE END, permanent ones for
-    the rest of the run; no tick-counted lifetime exists. Damage is the shared
-    5-9 molten-sand roll (COLO_MOLTEN_SAND_*). */
+/** E10: general-arena molten pools from Reentry and Volatility T3 persist
+    until wave end. The old Reentry permanent lifetime is intentionally gone. */
 typedef enum {
-    COLO_POOL_UNTIL_WAVE_END = 0,   /* Reentry T1, Volatility T3 */
-    COLO_POOL_PERMANENT = 1,        /* Reentry T2+ */
+    COLO_POOL_UNTIL_WAVE_END = 0,
 } ColoMoltenPoolKind;
 
 /** Relentless: defence-bypass fraction (percent) and flat max-hit bonus by tier. */
@@ -648,17 +649,23 @@ static const int COLO_FRAILTY_HP_CUT_PCT[4] = { 0, 10, 20, 40 };
 /** Myopia: player attack-range reduction (tiles) by tier. */
 static const int COLO_MYOPIA_RANGE_CUT[4] = { 0, 2, 4, 6 };
 
-/** A25: Mantimayhem T2 venom is STANDARD OSRS venom — first proc 6, each
+/** A25+E7: Mantimayhem T2 venom is STANDARD OSRS venom — first proc 6, each
     damage tick escalates +2 toward the 20 cap, damage every 30 ticks (18s);
     a reapplication while envenomed bumps the next damage +2 instead of
     resetting. The speedrun kit's sanfew cures it (L5), the beginner's serp
     helm blocks new applications while the melee set is worn (active-set
-    check); otherwise venom clears between waves (the
-    modeled anti-venom sip point). */
+    check). Venom persists across waves and the tick timer freezes during wave
+    gaps because the simulator abstracts gap time. */
 #define COLO_VENOM_START 6      /* first venom hit */
 #define COLO_VENOM_STEP 2       /* escalation per damage tick / reapplication */
 #define COLO_VENOM_CAP 20       /* venom damage ceiling */
 #define COLO_VENOM_INTERVAL 30  /* ticks between venom damage instances */
+
+/** E8: bee contact applies standard poison starting at 1 damage. Poison ticks
+    every 30 game ticks, damage is floor((severity + 4) / 5), each hit reduces
+    severity by 1, and severity 0 expires. */
+#define COLO_POISON_BEE_CONTACT_SEVERITY 5
+#define COLO_POISON_INTERVAL 30
 
 
 /** Sol Heredit AoE variants (A3, W-STRAT verbatim shapes; geometry lives in
@@ -1291,9 +1298,11 @@ typedef struct {
     ColoSolarflareOrb solarflare;
     int player_venom;                      /* Mantimayhem T2: next venom damage (0 = none) */
     int player_venom_timer;                /* ticks until the next venom instance */
+    int player_poison;                     /* E8: standard poison severity (0 = none) */
+    int player_poison_timer;               /* ticks until the next poison instance */
     /* general-arena molten pools (Reentry / Volatility T3) for waves 1-11. Boss
        wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog.
-       A22: kind is ColoMoltenPoolKind — until-wave-end or run-permanent. */
+       E10: kind is retained for snapshot shape and all values clear at wave end. */
     int molten_x[COLO_SOL_HAZARD_TILES_MAX];
     int molten_y[COLO_SOL_HAZARD_TILES_MAX];
     int molten_kind[COLO_SOL_HAZARD_TILES_MAX];

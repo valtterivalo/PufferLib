@@ -36,7 +36,7 @@
  *      permanent 5-9/tick molten pools;
  *   7. researched loadout profiles (L1-L16): profile sampling + gear/supply
  *      tables, brew/restore/combat/ranging/surge consumables with the L12
- *      max-hit recompute invariant, sanfew venom cure + serp-helm immunity,
+ *      max-hit recompute invariant, sanfew venom/poison cure + serp-helm immunity,
  *      claws/elder-maul/SGS spec weapons, scythe splats, tbow/crystal/blood-
  *      fury item effects, and the offensive prayer head.
  *
@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
@@ -484,10 +485,10 @@ static void test_quartet_extra_spawn(void) {
     CHECK("Quartet adds a warbander on wave 12", warband == 1);
 }
 
-/* ---- 2e. B9: bee swarms are attackable 1-HP NPCs — they spawn per tier,
-   converge every 12 ticks, deal up-to-10 unblockable under-player damage, die
-   to a single hit of any style, respawn 50 ticks later, and never block the
-   wave clear. */
+/* ---- 2e. B9+E8: bee swarms are attackable 1-HP 2x2 NPCs — they spawn per
+   tier, converge every 12 ticks, deal up-to-10 unblockable contact damage,
+   apply standard poison, die to a single hit of any style, respawn 50 ticks
+   later, and never block the wave clear. */
 static void test_bees_hazard(void) {
     printf("test_bees_hazard\n");
     ColosseumContext ctx;
@@ -506,6 +507,7 @@ static void test_bees_hazard(void) {
     CHECK("Bees II fields two 1-HP bee NPCs", bee_npcs == 2 &&
         s.bees[0].phase == COLO_HAZARD_ALIVE && s.bees[1].phase == COLO_HAZARD_ALIVE);
     CHECK("a bee NPC has exactly 1 HP", s.npcs[s.bees[0].npc_slot].hp == 1);
+    CHECK("a bee swarm uses its cache 2x2 footprint", s.npcs[s.bees[0].npc_slot].size == 2);
 
     /* movement: a fresh swarm steps one tile toward the player every 12 ticks. */
     ColoNPC* bee_npc = &s.npcs[s.bees[0].npc_slot];
@@ -517,7 +519,25 @@ static void test_bees_hazard(void) {
         (bee_npc->x != bx || bee_npc->y != by);
     CHECK("the 12th tick steps one tile (diagonal allowed) toward the player", stepped);
 
-    /* park the swarm under the player: unblockable contact damage. */
+    /* park the 2x2 swarm over each player-footprint tile. */
+    int all_tiles_poison = 1;
+    for (int dx = 0; dx < 2; dx++) {
+        for (int dy = 0; dy < 2; dy++) {
+            bee_npc->x = 10;
+            bee_npc->y = 10;
+            s.player.x = 10 + dx;
+            s.player.y = 10 + dy;
+            s.player_poison = 0;
+            s.player_poison_timer = 0;
+            s.bees[0].move_timer = COLO_BEE_MOVE_INTERVAL;
+            col_mod_tick_bees(&s);
+            if (s.player_poison != COLO_POISON_BEE_CONTACT_SEVERITY ||
+                    s.player_poison_timer != COLO_POISON_INTERVAL)
+                all_tiles_poison = 0;
+        }
+    }
+    CHECK("bee contact applies poison from all four footprint tiles", all_tiles_poison);
+
     bee_npc->x = s.player.x;
     bee_npc->y = s.player.y;
     s.player.prayer = PRAYER_PROTECT_MELEE;
@@ -530,6 +550,21 @@ static void test_bees_hazard(void) {
         if (s.player.current_hitpoints < 99) damaged = 1;
     }
     CHECK("a swarm beneath the player deals unblockable damage", damaged);
+
+    s.wave = COLO_WAVE_BOSS;
+    col_sol_begin_boss_arena(&s);
+    bee_npc->x = COLO_BOSS_ARENA_MIN_X;
+    bee_npc->y = COLO_BOSS_ARENA_MIN_Y + 2;
+    s.player.x = COLO_BOSS_ARENA_MIN_X - 3;
+    s.player.y = bee_npc->y;
+    s.bees[0].move_timer = 1;
+    col_mod_tick_bees(&s);
+    CHECK("bee movement ignores the wave-12 boss-box clamp",
+        bee_npc->x == COLO_BOSS_ARENA_MIN_X - 1);
+    s.wave = 0;
+    s.sol = (SolHereditState){0};
+    s.player.x = bee_npc->x;
+    s.player.y = bee_npc->y;
 
     /* B9: one player attack of any style kills the swarm; it respawns 50t later. */
     int slot = s.bees[0].npc_slot;
@@ -734,21 +769,21 @@ static void test_reentry_sand_tiles(void) {
     col_modifiers_on_wave_spawn(&s);
     CHECK("wave end clears the temporary pool", s.molten_count == 0);
 
-    /* T2: permanent + the SW tile. */
+    /* T2: until-wave-end + the SW tile. */
     s.modifiers.tier[COLO_MOD_REENTRY] = 2;
     col_mod_reentry_on_skyfall(&s, 20, 12);
-    int has_target = 0, has_sw = 0, has_w = 0, all_permanent = 1;
+    int has_target = 0, has_sw = 0, has_w = 0, all_until_wave_end = 1;
     for (int i = 0; i < s.molten_count; i++) {
         if (s.molten_x[i] == 20 && s.molten_y[i] == 12) has_target = 1;
         if (s.molten_x[i] == 19 && s.molten_y[i] == 11) has_sw = 1;
         if (s.molten_x[i] == 19 && s.molten_y[i] == 12) has_w = 1;
-        if (s.molten_kind[i] != COLO_POOL_PERMANENT) all_permanent = 0;
+        if (s.molten_kind[i] != COLO_POOL_UNTIL_WAVE_END) all_until_wave_end = 0;
     }
     CHECK("T2 covers the targeted tile + the tile SOUTH-WEST of it",
         s.molten_count == 2 && has_target && has_sw && !has_w);
-    CHECK("T2 pools are permanent", all_permanent);
+    CHECK("T2 pools last until wave end", all_until_wave_end);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("permanent pools survive the wave end", s.molten_count == 2);
+    CHECK("Reentry T2 pools clear at wave end", s.molten_count == 0);
 
     /* T3: adds the WEST tile. */
     s.molten_count = 0;
@@ -762,6 +797,8 @@ static void test_reentry_sand_tiles(void) {
     }
     CHECK("T3 additionally covers the WEST tile", s.molten_count == 3 &&
         has_target && has_sw && has_w);
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("Reentry T3 pools clear at wave end", s.molten_count == 0);
 
     /* D20: Volatility T3 leaves an until-wave-end pool at the death centre. */
     s.molten_count = 0;
@@ -820,9 +857,61 @@ static void test_venom_escalation(void) {
     col_mod_manticore_apply_venom(&s, 1);
     CHECK("reapplication never exceeds the 20 cap", s.player_venom == COLO_VENOM_CAP);
 
-    /* venom clears between waves (the modeled anti-venom sip point). */
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = 17;
+    s.modifiers.draft_pending = 1;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    step_and_observe(&s, &ctx, idle);
+    CHECK("venom timer freezes during the draft gap", s.player_venom_timer == 17);
+    s.modifiers.draft_pending = 0;
+
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = 2;
     col_modifiers_on_wave_spawn(&s);
-    CHECK("venom clears at the wave boundary", s.player_venom == 0);
+    CHECK("venom survives the wave boundary",
+        s.player_venom == COLO_VENOM_START && s.player_venom_timer == 2);
+    s.player.current_hitpoints = 99;
+    col_mod_tick_venom(&s);
+    CHECK("venom does not tick early after the wave boundary", s.player.current_hitpoints == 99);
+    col_mod_tick_venom(&s);
+    CHECK("venom still ticks on the next wave",
+        s.player.current_hitpoints == 99 - COLO_VENOM_START &&
+        s.player_venom == COLO_VENOM_START + COLO_VENOM_STEP);
+}
+
+/* ---- 2e6. E8: bee poison is standard OSRS poison starting at 1 damage. */
+static void test_bee_poison_status(void) {
+    printf("test_bee_poison_status\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 230);
+
+    col_mod_apply_bee_poison(&s);
+    CHECK("bee poison starts at severity 5",
+        s.player_poison == COLO_POISON_BEE_CONTACT_SEVERITY &&
+        s.player_poison_timer == COLO_POISON_INTERVAL);
+
+    int cadence_ok = 1;
+    int hits_ok = 1;
+    for (int hit = 0; hit < COLO_POISON_BEE_CONTACT_SEVERITY; hit++) {
+        int severity_before = s.player_poison;
+        for (int t = 0; t < COLO_POISON_INTERVAL - 1; t++) {
+            s.player.current_hitpoints = 99;
+            col_mod_tick_poison(&s);
+            if (s.player.current_hitpoints != 99) cadence_ok = 0;
+        }
+        s.player.current_hitpoints = 99;
+        col_mod_tick_poison(&s);
+        if (99 - s.player.current_hitpoints != 1 ||
+                s.player_poison != severity_before - 1)
+            hits_ok = 0;
+    }
+    CHECK("bee poison deals exactly five 1-damage hits", hits_ok);
+    CHECK("bee poison hits exactly 30 ticks apart", cadence_ok);
+    CHECK("bee poison expires at severity 0",
+        s.player_poison == 0 && s.player_poison_timer == 0);
 }
 
 /* ---- 2e5b. A24: Mantimayhem T3 shuffles the one-each {magic, ranged, melee}
@@ -2784,11 +2873,14 @@ static void test_loadout_sanfew_and_serp_helm(void) {
     complete_open_draft(&s, &ctx, 1);
     s.player_venom = 8;
     s.player_venom_timer = 12;
+    s.player_poison = COLO_POISON_BEE_CONTACT_SEVERITY;
+    s.player_poison_timer = 9;
     s.player.current_prayer = 40;
     int restore[COLO_NUM_ACTION_HEADS] = {0};
     restore[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
     step_and_observe(&s, &ctx, restore);
     CHECK("sanfew clears venom", s.player_venom == 0 && s.player_venom_timer == 0);
+    CHECK("sanfew clears poison", s.player_poison == 0 && s.player_poison_timer == 0);
     CHECK("sanfew gives +33 prayer", s.player.current_prayer == 73);
     CHECK("sanfew consumed a restore dose", s.player.restore_doses == 27);
 
@@ -2809,6 +2901,25 @@ static void test_loadout_sanfew_and_serp_helm(void) {
     col_mod_manticore_apply_venom(&s, 1);
     CHECK("serp helm does not cure or escalate an existing stack",
         s.player_venom == venom_before);
+
+    /* serp helm immunizes poison too, and venom supersedes poison: the two
+       share one status slot in OSRS (wiki Serpentine_helm + Venom). */
+    s.player_poison = 0;
+    s.player_poison_timer = 0;
+    col_mod_apply_bee_poison(&s);
+    CHECK("serp helm blocks bee poison in the melee set", s.player_poison == 0);
+    s.weapon_set = COLO_GEAR_RANGED;
+    col_mod_apply_bee_poison(&s);
+    CHECK("a venomed player cannot also be poisoned", s.player_poison == 0);
+    s.player_venom = 0;
+    s.player_venom_timer = 0;
+    col_mod_apply_bee_poison(&s);
+    CHECK("bee poison applies in the ranged set once venom is gone",
+        s.player_poison == COLO_POISON_BEE_CONTACT_SEVERITY);
+    col_mod_manticore_apply_venom(&s, 1);
+    CHECK("venom application replaces an active poison",
+        s.player_venom == COLO_VENOM_START && s.player_poison == 0 &&
+        s.player_poison_timer == 0);
 }
 
 static void test_loadout_surge_potion(void) {
@@ -3073,6 +3184,7 @@ int main(void) {
     test_totemic_sol_wave12();
     test_reentry_sand_tiles();
     test_venom_escalation();
+    test_bee_poison_status();
     test_mantimayhem_t3_shuffle();
     test_static_arena_mask();
     test_static_los_and_attack_gate();
