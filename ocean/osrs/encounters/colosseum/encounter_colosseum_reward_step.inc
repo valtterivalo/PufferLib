@@ -120,6 +120,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     s->reward = col_compute_reward_ctx(s, ctx);
     int all_dead = 1;
+    int wave_cleared = 0;
 
     /* post-action death check (HP or a lethal Doom stack). */
     if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
@@ -148,7 +149,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
             break;
         }
     }
-    int wave_cleared = all_dead;
+    wave_cleared = all_dead;
     if (s->wave == COLO_WAVE_BOSS && s->sol.started)
         wave_cleared = col_sol_find_idx(s) < 0;
 

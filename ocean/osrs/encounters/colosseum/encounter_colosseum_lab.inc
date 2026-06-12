@@ -218,7 +218,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                 s->player.current_hitpoints = hp;
             }
             if (p->prayer.kind == ENCOUNTER_LAB_OPTIONAL_INT_SET)
-                s->player.prayer = p->prayer.value;
+                s->player.prayer = (OverheadPrayer)p->prayer.value;
             col_lab_clear_transient(s);
             col_lab_refresh_geometry(s);
             return;

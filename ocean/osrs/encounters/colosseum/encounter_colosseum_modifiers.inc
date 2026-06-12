@@ -354,7 +354,7 @@ static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
         s->npcs[tot->npc_slot].active &&
         s->npcs[tot->npc_slot].type == COLO_HEALING_TOTEM)
         col_deactivate_npc(s, tot->npc_slot);
-    *tot = (ColoTotem){0};
+    *tot = (ColoTotem){ .phase = COLO_HAZARD_NONE };
 }
 
 /* ----- Totemic (50%-HP healing totem, A21+B5+D22) ----------------------------- */
@@ -408,7 +408,7 @@ static void col_mod_tick_totems(ColosseumState* s) {
 
         ColoNPC* totem_npc = (tot->npc_slot >= 0) ? &s->npcs[tot->npc_slot] : NULL;
         if (!totem_npc || !totem_npc->active || totem_npc->type != COLO_HEALING_TOTEM) {
-            *tot = (ColoTotem){0};   /* removed outside the death path: no respawn */
+            *tot = (ColoTotem){ .phase = COLO_HAZARD_NONE };   /* removed outside the death path: no respawn */
             continue;
         }
 
@@ -533,7 +533,7 @@ static void col_mod_sync_bees(ColosseumState* s) {
             col_bee_spawn(s, b);
         } else {
             if (npc_live) col_deactivate_npc(s, bee->npc_slot);
-            *bee = (ColoBeeSwarm){0};
+            *bee = (ColoBeeSwarm){ .phase = COLO_HAZARD_NONE };
         }
     }
 }
@@ -576,7 +576,7 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
         ColoNPC* npc = (bee->npc_slot >= 0) ? &s->npcs[bee->npc_slot] : NULL;
         if (!npc || !npc->active || npc->type != COLO_BEE_SWARM) {
-            *bee = (ColoBeeSwarm){0};   /* removed outside the death path: no respawn */
+            *bee = (ColoBeeSwarm){ .phase = COLO_HAZARD_NONE };   /* removed outside the death path: no respawn */
             continue;
         }
 
