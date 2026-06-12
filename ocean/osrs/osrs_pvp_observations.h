@@ -753,7 +753,7 @@ static int pvp_attack_head_reachable_for_weapon_item(
     uint8_t weapon_item,
     int can_move_now
 ) {
-    AttackStyle weapon_style = get_item_attack_style(weapon_item);
+    AttackStyle weapon_style = (AttackStyle)get_item_attack_style(weapon_item);
     if (weapon_style == ATTACK_STYLE_NONE) return 0;
     if (can_move_now) return 1;
 
