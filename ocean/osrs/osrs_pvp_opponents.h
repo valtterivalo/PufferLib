@@ -2995,100 +2995,20 @@ static inline void pvp_adaptive_nh_apply_defensive_prayer(
     }
 }
 
-static inline int pvp_adaptive_nh_preferred_attack_mask(
-    Player* self,
-    Player* target,
-    PvpMageCampMeleeSignal signal
-) {
-    int off_mask = opp_get_off_prayer_mask(self, target);
-    if (pvp_should_counter_mage_camp_melee(signal)) {
-        int counter_mask = off_mask & (OPP_STYLE_MASK_MELEE | OPP_STYLE_MASK_RANGED);
-        return counter_mask ? counter_mask : off_mask;
-    }
-    return off_mask;
-}
-
-static inline int pvp_adaptive_nh_pick_style(
-    OsrsEnv* env,
-    Player* self,
-    Player* target,
-    int preferred_mask
-) {
-    const int order[] = {OPP_STYLE_MELEE, OPP_STYLE_RANGED, OPP_STYLE_MAGE};
-    for (int i = 0; i < 3; i++) {
-        int style = order[i];
-        if ((preferred_mask & (1 << style)) &&
-                opp_style_can_hit_now(env, self, target, style)) {
-            return style;
-        }
-    }
-    for (int i = 0; i < 3; i++) {
-        int style = order[i];
-        if (opp_style_can_hit_now(env, self, target, style)) {
-            return style;
-        }
-    }
-    for (int i = 0; i < 3; i++) {
-        int style = order[i];
-        if (preferred_mask & (1 << style)) return style;
-    }
-    return OPP_STYLE_MAGE;
-}
-
-static inline int pvp_adaptive_nh_attack_for_style(
-    Player* self,
-    Player* target,
-    int style
-) {
-    switch (style) {
-        case OPP_STYLE_MAGE:
-            return opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1;
-        case OPP_STYLE_RANGED:
-        case OPP_STYLE_MELEE:
-            return 2;
-        default:
-            abort();
-    }
-}
-
 static void opp_adaptive_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(self, target);
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
 
-    opp_tick_cooldowns(opp);
-    OppConsumables cons = opp_get_consumables(opp, self);
+    opp_nightmare_nh(env, opp, actions);
 
     pvp_adaptive_nh_apply_defensive_prayer(actions, self, target, signal);
-
-    int eating = opp_apply_survival_policy(
-        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
-
-    if (opp_should_skip_offensive(env, opp)) return;
-
-    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-    if (opp_attack_ready(self) && !eating) {
-        int preferred_mask = pvp_adaptive_nh_preferred_attack_mask(
-            self, target, signal);
-        int attack_style = pvp_adaptive_nh_pick_style(
-            env, self, target, preferred_mask);
-        int actual_attack = pvp_adaptive_nh_attack_for_style(
-            self, target, attack_style);
-
-        opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
-        opp_emit_attack_with_style(env, opp, actions, attack_style, actual_attack);
-    } else if (!opp_attack_ready(self)) {
-        if (pvp_should_counter_mage_camp_melee(signal) &&
-                dist <= 1 &&
-                self->frozen_ticks == 0) {
-            actions[HEAD_COMBAT] = MOVE_FARCAST_5;
-        } else if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
-            actions[HEAD_COMBAT] = MOVE_UNDER;
-        } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
-            actions[HEAD_COMBAT] = MOVE_FARCAST_3;
-        } else if (opp_should_fc3(self, target) && target->prayer != PRAYER_PROTECT_MELEE) {
-            actions[HEAD_COMBAT] = MOVE_FARCAST_3;
-        }
+    if (!opp_attack_ready(self) &&
+            pvp_should_counter_mage_camp_melee(signal) &&
+            dist <= 1 &&
+            self->frozen_ticks == 0) {
+        actions[HEAD_COMBAT] = MOVE_FARCAST_5;
     }
 }
 
@@ -3232,7 +3152,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->read_chance = 0.10f;
     } else if (resolved == OPP_SAVANT_NH) {
         opp->read_chance = 0.25f;
-    } else if (resolved == OPP_NIGHTMARE_NH) {
+    } else if (resolved == OPP_NIGHTMARE_NH || resolved == OPP_ADAPTIVE_NH) {
         opp->read_chance = 0.50f;
     }
 
