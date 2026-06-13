@@ -3077,6 +3077,13 @@ static inline void pvp_adaptive_nh_apply_counter_attack(
         return;
     }
 
+    if (target->frozen_ticks == 0 &&
+            target->freeze_immunity_ticks == 0 &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MAGE, 0);
+        return;
+    }
+
     if (signal.adjacent && self->frozen_ticks == 0 && target->frozen_ticks == 0) {
         actions[HEAD_COMBAT] = MOVE_FARCAST_5;
         return;
