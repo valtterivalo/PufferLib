@@ -4,6 +4,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 import json
 
+import numpy as np
 import pytest
 
 
@@ -19,19 +20,28 @@ class FakeTrainBackend:
         self.rollout_calls = 0
         self.train_calls = 0
         self.saved_weights = []
+        self.loaded_weights = []
+        self.loaded_banks = []
+        self.agent_perms = []
+        self.scripted_opps = []
+        self.created_args = []
         self.closed = False
 
     def create_pufferl(self, args):
+        self.created_args.append(deepcopy(args))
         return SimpleNamespace(
+            args=deepcopy(args),
             global_step=0,
             last_log_time=0.0,
             last_log_step=0,
+            rollouts=0,
             num_params=lambda: 1,
         )
 
     def rollouts(self, pufferl_obj):
         self.rollout_calls += 1
         pufferl_obj.global_step += 1
+        pufferl_obj.rollouts += 1
 
     def train(self, pufferl_obj):
         self.train_calls += 1
@@ -39,6 +49,15 @@ class FakeTrainBackend:
 
     def log(self, pufferl_obj):
         self.log_calls += 1
+        panel = getattr(pufferl_obj, "panel", "train")
+        wins = {
+            "scripted": 0.8,
+            "policy": 0.2,
+        }.get(panel, 0.5)
+        performance_score = {
+            "scripted": 0.7,
+            "policy": 0.3,
+        }.get(panel, 0.25 + 0.01 * self.log_calls)
         return {
             "agent_steps": pufferl_obj.global_step,
             "uptime": float(self.log_calls),
@@ -53,8 +72,12 @@ class FakeTrainBackend:
             },
             "env": {
                 "score": 0.5,
-                "wins": 0.5,
-                "performance_score": 0.25 + 0.01 * self.log_calls,
+                "wins": wins,
+                "performance_score": performance_score,
+                "expected_damage_score": performance_score,
+                "ko_supply_score": 0.0,
+                "damage_dealt": 0.0,
+                "damage_received": 0.0,
                 "n": 1.0,
             },
         }
@@ -82,6 +105,23 @@ class FakeTrainBackend:
 
     def save_weights(self, pufferl_obj, path):
         self.saved_weights.append(path)
+
+    def load_weights(self, pufferl_obj, path):
+        self.loaded_weights.append(path)
+
+    def load_frozen_bank(self, pufferl_obj, bank_idx, path):
+        self.loaded_banks.append((bank_idx, path))
+        pufferl_obj.panel = "policy"
+
+    def set_agent_perm(self, pufferl_obj, perm):
+        self.agent_perms.append(np.asarray(perm, dtype=np.int32))
+
+    def num_envs(self, pufferl_obj):
+        return int(pufferl_obj.args["vec"]["total_agents"]) // 2
+
+    def set_env_scripted_opps(self, pufferl_obj, scripted_opps):
+        self.scripted_opps.append(np.asarray(scripted_opps, dtype=np.int32))
+        pufferl_obj.panel = "scripted"
 
     def close(self, pufferl_obj):
         self.closed = True
@@ -301,6 +341,82 @@ def test_rollout_eval_caps_final_batch_weight():
     assert logs["env/rollout_eval_performance_score"] == pytest.approx(
         (0.2 * 5.0 + 0.8 * 2.0) / 7.0,
     )
+
+
+def test_static_mixed_rollout_eval_uses_fixed_scripted_and_policy_panels(tmp_path):
+    backend = FakeTrainBackend()
+    policy_path = tmp_path / "policy.bin"
+    policy_path.write_bytes(b"policy")
+
+    logs = pufferl._run_pvp_rollout_eval(
+        backend,
+        backend.create_pufferl({}),
+        {
+            "policy": {
+                "hidden_size": 512,
+                "num_layers": 1,
+            },
+            "rollout_eval": {
+                "mode": "pvp_static_mixed_panel",
+                "episodes": 2,
+                "seed": 123,
+                "total_agents": 4,
+                "num_buffers": 2,
+                "horizon": 1,
+                "scripted_weight": 0.7,
+                "scripted_opponents": [1, 8],
+                "scripted_opponent_weights": [1, 3],
+                "policy_weight": 0.3,
+                "policy_opponent_path": str(policy_path),
+                "policy_opponent_name": "anchor",
+                "policy_opponent_hidden_size": 0,
+                "policy_opponent_num_layers": 0,
+            },
+            "selfplay": {
+                "enabled": 1,
+            },
+            "env": {
+                "seed": 73,
+                "use_rollout_opponent": 1,
+            },
+            "vec": {
+                "total_agents": 4,
+                "num_buffers": 2,
+                "num_frozen_banks": 2,
+                "frozen_bank_pct": 0.005,
+            },
+            "train": {
+                "horizon": 1,
+                "minibatch_size": 4,
+            },
+        },
+        model_path="candidate.bin",
+    )
+
+    assert backend.loaded_weights == ["candidate.bin", "candidate.bin"]
+    assert backend.loaded_banks == [(0, str(policy_path))]
+    assert len(backend.scripted_opps) == 1
+    assert backend.scripted_opps[0].shape == (2,)
+    assert backend.agent_perms[0].tolist() == [0, 1, 2, 3]
+    assert backend.created_args[-1]["vec"]["frozen_bank_hidden_size"] == 512
+    assert backend.created_args[-1]["vec"]["frozen_bank_num_layers"] == 1
+    assert logs["env/rollout_eval_scripted_wins"] == pytest.approx(0.8)
+    assert logs["env/rollout_eval_policy_anchor_wins"] == pytest.approx(0.2)
+    assert logs["env/rollout_eval_policy_wins"] == pytest.approx(0.2)
+    assert logs["env/rollout_eval_wins"] == pytest.approx(0.7 * 0.8 + 0.3 * 0.2)
+    assert logs["env/rollout_eval_performance_score"] == pytest.approx(
+        0.7 * 0.7 + 0.3 * 0.3,
+    )
+
+
+def test_static_mixed_rollout_eval_requires_saved_model_path():
+    backend = FakeTrainBackend()
+    with pytest.raises(ValueError, match="saved model path"):
+        pufferl._run_pvp_rollout_eval(
+            backend,
+            backend.create_pufferl({}),
+            {"rollout_eval": {"mode": "pvp_static_mixed_panel"}},
+        )
 
 
 def test_rollout_eval_invalid_mode_fails_loud():

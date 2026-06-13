@@ -264,7 +264,7 @@ def _fixed_eval_enabled(args):
 
 def _rollout_eval_mode(args):
     mode = str(args.get('rollout_eval', {}).get('mode', 'off')).strip()
-    if mode not in ('off', 'pvp_training_distribution'):
+    if mode not in ('off', 'pvp_training_distribution', 'pvp_static_mixed_panel'):
         raise ValueError(f'unknown rollout_eval.mode: {mode}')
     return mode
 
@@ -468,6 +468,105 @@ def _collect_pvp_fixed_eval_policy_opponent(backend, args, model_path, policy_pa
     backend.close(pufferl)
     return means
 
+def _rollout_eval_base_args(args, cfg, seed):
+    eval_args = deepcopy(args)
+    eval_args['wandb'] = False
+    eval_args['checkpoint_interval'] = 0
+    eval_args['reset_state'] = True
+    eval_args.setdefault('nccl_id', b'')
+    eval_args.setdefault('selfplay', {})['enabled'] = 0
+
+    vec = eval_args.setdefault('vec', {})
+    vec['total_agents'] = int(cfg.get('total_agents', vec['total_agents']))
+    vec['num_buffers'] = int(cfg.get('num_buffers', vec.get('num_buffers', 1)))
+    vec['num_frozen_banks'] = 0
+    vec['frozen_bank_pct'] = 0.0
+    if vec['total_agents'] % vec['num_buffers'] != 0:
+        raise ValueError('rollout_eval.total_agents must be divisible by rollout_eval.num_buffers')
+
+    train = eval_args.setdefault('train', {})
+    train['horizon'] = int(cfg.get('horizon', train['horizon']))
+    eval_batch_size = train['horizon'] * vec['total_agents']
+    train['minibatch_size'] = int(cfg.get('minibatch_size', eval_batch_size))
+    train['total_timesteps'] = eval_batch_size
+    train['cpu_inference'] = 1
+    train['state_curriculum_mode'] = 0
+    train['state_buffer_size'] = 0
+    train['cl_frac'] = 0
+    train['warmup_states'] = 0
+
+    env = eval_args.setdefault('env', {})
+    env['opponent_type'] = 0
+    env['use_rollout_opponent'] = 1
+    env['seed'] = int(seed)
+    return eval_args
+
+def _rollout_eval_fixed_eval_args(args, cfg, seed):
+    eval_args = _rollout_eval_base_args(args, cfg, seed)
+    policy_hidden_size = int(cfg.get('policy_opponent_hidden_size', 0))
+    policy_num_layers = int(cfg.get('policy_opponent_num_layers', 0))
+    if policy_hidden_size == 0:
+        policy_hidden_size = int(args.get('policy', {}).get('hidden_size', 0))
+    if policy_num_layers == 0:
+        policy_num_layers = int(args.get('policy', {}).get('num_layers', 0))
+    eval_args['fixed_eval'] = {
+        'total_agents': eval_args['vec']['total_agents'],
+        'num_buffers': eval_args['vec']['num_buffers'],
+        'horizon': eval_args['train']['horizon'],
+        'minibatch_size': eval_args['train']['minibatch_size'],
+        'policy_opponent_hidden_size': int(policy_hidden_size),
+        'policy_opponent_num_layers': int(policy_num_layers),
+    }
+    return eval_args
+
+def _set_static_scripted_eval_opponents(backend, pufferl, cfg, seed):
+    if not hasattr(backend, 'set_env_scripted_opps'):
+        raise RuntimeError('pvp_static_mixed_panel requires set_env_scripted_opps')
+    opponents = _config_sequence(cfg, 'scripted_opponents', int)
+    if not opponents:
+        raise ValueError('pvp_static_mixed_panel requires rollout_eval.scripted_opponents')
+    weights = _config_sequence(cfg, 'scripted_opponent_weights', float)
+    if weights and len(weights) != len(opponents):
+        raise ValueError('rollout_eval.scripted_opponent_weights length must match scripted_opponents')
+    if not weights:
+        weights = [1.0] * len(opponents)
+    probs = np.asarray(weights, dtype=np.float64)
+    if np.any(probs < 0.0) or probs.sum() <= 0.0:
+        raise ValueError('rollout_eval.scripted_opponent_weights must contain positive total weight')
+    probs /= probs.sum()
+
+    num_envs = int(backend.num_envs(pufferl))
+    rng = np.random.default_rng(int(seed))
+    scripted_opps = rng.choice(
+        np.asarray(opponents, dtype=np.int32),
+        size=num_envs,
+        p=probs,
+    ).astype(np.int32)
+    backend.set_env_scripted_opps(pufferl, scripted_opps)
+
+def _collect_pvp_static_scripted_panel(backend, args, model_path, cfg, episodes, seed):
+    eval_args = _rollout_eval_base_args(args, cfg, seed)
+    pufferl = backend.create_pufferl(eval_args)
+    backend.load_weights(pufferl, model_path)
+    _set_static_scripted_eval_opponents(backend, pufferl, cfg, seed)
+    means = _collect_pvp_eval_means(backend, pufferl, episodes)
+    backend.close(pufferl)
+    return means
+
+def _collect_pvp_static_policy_panel(backend, args, model_path, cfg, episodes, seed):
+    policy_path = str(cfg.get('policy_opponent_path', '')).strip()
+    if not policy_path:
+        raise ValueError('rollout_eval.policy_opponent_path is required when policy_weight > 0')
+    eval_args = _rollout_eval_fixed_eval_args(args, cfg, seed)
+    return _collect_pvp_fixed_eval_policy_opponent(
+        backend,
+        eval_args,
+        model_path,
+        policy_path,
+        episodes,
+        seed,
+    )
+
 def _fixed_eval_log_suffix(value):
     suffix = ''.join(ch if ch.isalnum() else '_' for ch in str(value).strip())
     suffix = suffix.strip('_').lower()
@@ -496,12 +595,87 @@ def _write_pvp_rollout_eval_means(logs, means):
     logs['env/rollout_eval_ko_supply_score'] = means['env/ko_supply_score']
     logs['env/rollout_eval_n'] = means['env/n']
 
-def _run_pvp_rollout_eval(backend, pufferl, args):
+def _write_static_rollout_panel(logs, prefix, means):
+    logs[f'env/rollout_eval_{prefix}_score'] = means['env/score']
+    logs[f'env/rollout_eval_{prefix}_performance_score'] = means['env/performance_score']
+    logs[f'env/rollout_eval_{prefix}_wins'] = means['env/wins']
+    logs[f'env/rollout_eval_{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
+    logs[f'env/rollout_eval_{prefix}_expected_damage_score'] = means['env/expected_damage_score']
+    logs[f'env/rollout_eval_{prefix}_ko_supply_score'] = means['env/ko_supply_score']
+    logs[f'env/rollout_eval_{prefix}_n'] = means['env/n']
+
+def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
+    if not model_path:
+        raise ValueError('pvp_static_mixed_panel rollout eval requires a saved model path')
+
+    cfg = args.get('rollout_eval', {})
+    episodes = int(cfg.get('episodes', 4096))
+    if episodes <= 0:
+        raise ValueError('rollout_eval.episodes must be positive')
+    seed = int(cfg.get('seed', 424242))
+    if seed <= 0:
+        raise ValueError('rollout_eval.seed must be positive')
+
+    scripted_weight = float(cfg.get('scripted_weight', 1.0))
+    policy_weight = float(cfg.get('policy_weight', 0.0))
+    if scripted_weight < 0.0 or policy_weight < 0.0:
+        raise ValueError('rollout_eval scripted_weight and policy_weight must be non-negative')
+    if scripted_weight + policy_weight <= 0.0:
+        raise ValueError('rollout_eval requires scripted_weight or policy_weight')
+
+    started = time.time()
+    logs = {}
+    scores, wins, dmg_scores, performance_scores, expected_scores, ko_supply_scores, ns, weights = (
+        [], [], [], [], [], [], [], [])
+
+    if scripted_weight > 0.0:
+        means = _collect_pvp_static_scripted_panel(
+            backend, args, model_path, cfg, episodes, seed)
+        _write_static_rollout_panel(logs, 'scripted', means)
+        scores.append(means['env/score'])
+        wins.append(means['env/wins'])
+        dmg_scores.append(means['env/dmg_diff_score'])
+        performance_scores.append(means['env/performance_score'])
+        expected_scores.append(means['env/expected_damage_score'])
+        ko_supply_scores.append(means['env/ko_supply_score'])
+        ns.append(means['env/n'])
+        weights.append(scripted_weight)
+
+    if policy_weight > 0.0:
+        means = _collect_pvp_static_policy_panel(
+            backend, args, model_path, cfg, episodes, seed + 9_000_000)
+        policy_name = _fixed_eval_log_suffix(cfg.get('policy_opponent_name', 'policy'))
+        _write_static_rollout_panel(logs, f'policy_{policy_name}', means)
+        logs['env/rollout_eval_policy_score'] = means['env/score']
+        logs['env/rollout_eval_policy_performance_score'] = means['env/performance_score']
+        logs['env/rollout_eval_policy_wins'] = means['env/wins']
+        scores.append(means['env/score'])
+        wins.append(means['env/wins'])
+        dmg_scores.append(means['env/dmg_diff_score'])
+        performance_scores.append(means['env/performance_score'])
+        expected_scores.append(means['env/expected_damage_score'])
+        ko_supply_scores.append(means['env/ko_supply_score'])
+        ns.append(means['env/n'])
+        weights.append(policy_weight)
+
+    logs['env/rollout_eval_score'] = _weighted_mean(scores, weights)
+    logs['env/rollout_eval_performance_score'] = _weighted_mean(performance_scores, weights)
+    logs['env/rollout_eval_wins'] = _weighted_mean(wins, weights)
+    logs['env/rollout_eval_dmg_diff_score'] = _weighted_mean(dmg_scores, weights)
+    logs['env/rollout_eval_expected_damage_score'] = _weighted_mean(expected_scores, weights)
+    logs['env/rollout_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
+    logs['env/rollout_eval_n'] = float(np.sum(ns))
+    logs['env/rollout_eval_scripted_weight'] = scripted_weight
+    logs['env/rollout_eval_policy_weight'] = policy_weight
+    logs['env/rollout_eval_elapsed_sec'] = time.time() - started
+    return logs
+
+def _run_pvp_rollout_eval(backend, pufferl, args, model_path=''):
     mode = _rollout_eval_mode(args)
     if mode == 'off':
         return {}
-    if mode != 'pvp_training_distribution':
-        raise ValueError(f'unknown rollout_eval.mode: {mode}')
+    if mode == 'pvp_static_mixed_panel':
+        return _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path)
 
     cfg = args.get('rollout_eval', {})
     episodes = int(cfg.get('episodes', 4096))
@@ -735,22 +909,43 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     if match_mode and not model_path:
         model_path = os.path.join(checkpoint_dir, f'{pufferl.global_step:016d}.bin')
         backend.save_weights(pufferl, model_path)
+    training_pufferl_closed = False
     if rollout_eval_enabled:
-        rollout_eval_logs = _run_pvp_rollout_eval(backend, pufferl, args)
+        rollout_eval_model_path = ''
+        rollout_mode = _rollout_eval_mode(args)
+        if rollout_mode == 'pvp_static_mixed_panel':
+            keep_rollout_weights = bool(args.get('rollout_eval', {}).get('keep_weights', 0))
+            rollout_eval_model_path = os.path.join(
+                checkpoint_dir,
+                'rollout_eval_weights.bin' if keep_rollout_weights else '_rollout_eval_tmp_weights.bin',
+            )
+            backend.save_weights(pufferl, rollout_eval_model_path)
+            if not fixed_eval_enabled:
+                backend.close(pufferl)
+                training_pufferl_closed = True
+        rollout_eval_logs = _run_pvp_rollout_eval(
+            backend, pufferl, args, rollout_eval_model_path)
         flat_logs = {**flat_logs, **rollout_eval_logs}
         if 'uptime' in flat_logs:
             flat_logs['uptime'] += rollout_eval_logs['env/rollout_eval_elapsed_sec']
         if args['wandb']:
             wandb.log(rollout_eval_logs, step=flat_logs.get('agent_steps', 0))
-        if args.get('rollout_eval', {}).get('keep_weights', 0):
+        if (args.get('rollout_eval', {}).get('keep_weights', 0)
+                and not rollout_eval_model_path):
             model_path = os.path.join(checkpoint_dir, 'rollout_eval_weights.bin')
             backend.save_weights(pufferl, model_path)
+        elif rollout_eval_model_path:
+            if args.get('rollout_eval', {}).get('keep_weights', 0):
+                model_path = rollout_eval_model_path
+            elif os.path.exists(rollout_eval_model_path):
+                os.remove(rollout_eval_model_path)
 
     fixed_eval_model_path = ''
     if fixed_eval_enabled:
         fixed_eval_model_path = os.path.join(checkpoint_dir, 'fixed_eval_weights.bin')
         backend.save_weights(pufferl, fixed_eval_model_path)
-    backend.close(pufferl)
+    if not training_pufferl_closed:
+        backend.close(pufferl)
 
     if fixed_eval_model_path:
         try:
