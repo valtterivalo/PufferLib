@@ -337,6 +337,23 @@ static void pvp_env_accumulate_terminal_log(Env* env) {
     env->log.target_click_no_fire_rate += env->pvp.log.target_click_no_fire_rate;
     env->log.spell_attack_attempts += env->pvp.log.spell_attack_attempts;
     env->log.spell_attack_no_fire_rate += env->pvp.log.spell_attack_no_fire_rate;
+    env->log.selected_melee_attack_rate += env->pvp.log.selected_melee_attack_rate;
+    env->log.selected_ranged_attack_rate += env->pvp.log.selected_ranged_attack_rate;
+    env->log.selected_magic_attack_rate += env->pvp.log.selected_magic_attack_rate;
+    env->log.target_click_chase_ticks += env->pvp.log.target_click_chase_ticks;
+    env->log.explicit_move_ticks += env->pvp.log.explicit_move_ticks;
+    env->log.target_click_pre_move_dist += env->pvp.log.target_click_pre_move_dist;
+    env->log.target_click_post_move_dist += env->pvp.log.target_click_post_move_dist;
+    env->log.target_click_success_pre_move_dist +=
+        env->pvp.log.target_click_success_pre_move_dist;
+    env->log.target_click_success_post_move_dist +=
+        env->pvp.log.target_click_success_post_move_dist;
+    env->log.spell_attack_pre_move_dist += env->pvp.log.spell_attack_pre_move_dist;
+    env->log.spell_attack_post_move_dist += env->pvp.log.spell_attack_post_move_dist;
+    env->log.spell_attack_success_pre_move_dist +=
+        env->pvp.log.spell_attack_success_pre_move_dist;
+    env->log.spell_attack_success_post_move_dist +=
+        env->pvp.log.spell_attack_success_post_move_dist;
     env->log.weapon_attack_rate += env->pvp.log.weapon_attack_rate;
     env->log.melee_attack_rate += env->pvp.log.melee_attack_rate;
     env->log.ranged_attack_rate += env->pvp.log.ranged_attack_rate;
@@ -731,6 +748,23 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "target_click_no_fire_rate", log->target_click_no_fire_rate);
     dict_set(out, "spell_attack_attempts", log->spell_attack_attempts);
     dict_set(out, "spell_attack_no_fire_rate", log->spell_attack_no_fire_rate);
+    dict_set(out, "selected_melee_attack_rate", log->selected_melee_attack_rate);
+    dict_set(out, "selected_ranged_attack_rate", log->selected_ranged_attack_rate);
+    dict_set(out, "selected_magic_attack_rate", log->selected_magic_attack_rate);
+    dict_set(out, "target_click_chase_ticks", log->target_click_chase_ticks);
+    dict_set(out, "explicit_move_ticks", log->explicit_move_ticks);
+    dict_set(out, "target_click_pre_move_dist", log->target_click_pre_move_dist);
+    dict_set(out, "target_click_post_move_dist", log->target_click_post_move_dist);
+    dict_set(out, "target_click_success_pre_move_dist",
+        log->target_click_success_pre_move_dist);
+    dict_set(out, "target_click_success_post_move_dist",
+        log->target_click_success_post_move_dist);
+    dict_set(out, "spell_attack_pre_move_dist", log->spell_attack_pre_move_dist);
+    dict_set(out, "spell_attack_post_move_dist", log->spell_attack_post_move_dist);
+    dict_set(out, "spell_attack_success_pre_move_dist",
+        log->spell_attack_success_pre_move_dist);
+    dict_set(out, "spell_attack_success_post_move_dist",
+        log->spell_attack_success_post_move_dist);
     dict_set(out, "weapon_attack_rate", log->weapon_attack_rate);
     dict_set(out, "melee_attack_rate", log->melee_attack_rate);
     dict_set(out, "ranged_attack_rate", log->ranged_attack_rate);

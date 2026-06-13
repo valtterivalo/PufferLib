@@ -1486,6 +1486,19 @@ static void test_pvp_log_emits_command_diagnostics(void) {
     log.target_click_no_fire_rate = 0.25f;
     log.spell_attack_attempts = 3.0f;
     log.spell_attack_no_fire_rate = 0.33333334f;
+    log.selected_melee_attack_rate = 0.15f;
+    log.selected_ranged_attack_rate = 0.25f;
+    log.selected_magic_attack_rate = 0.60f;
+    log.target_click_chase_ticks = 7.0f;
+    log.explicit_move_ticks = 2.0f;
+    log.target_click_pre_move_dist = 3.0f;
+    log.target_click_post_move_dist = 1.0f;
+    log.target_click_success_pre_move_dist = 2.0f;
+    log.target_click_success_post_move_dist = 1.0f;
+    log.spell_attack_pre_move_dist = 6.0f;
+    log.spell_attack_post_move_dist = 5.0f;
+    log.spell_attack_success_pre_move_dist = 7.0f;
+    log.spell_attack_success_post_move_dist = 6.0f;
     log.weapon_attack_rate = 0.6f;
     log.melee_attack_rate = 0.2f;
     log.ranged_attack_rate = 0.3f;
@@ -1508,6 +1521,16 @@ static void test_pvp_log_emits_command_diagnostics(void) {
         dict_get(out, "expected_damage_prevented")->value, 9.5f, 1e-6f);
     ASSERT_FLOAT_NEAR("log weapon attack rate",
         dict_get(out, "weapon_attack_rate")->value, 0.6f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log selected magic attack rate",
+        dict_get(out, "selected_magic_attack_rate")->value, 0.60f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log target click chase ticks",
+        dict_get(out, "target_click_chase_ticks")->value, 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log explicit move ticks",
+        dict_get(out, "explicit_move_ticks")->value, 2.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log target click pre move dist",
+        dict_get(out, "target_click_pre_move_dist")->value, 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log spell success post move dist",
+        dict_get(out, "spell_attack_success_post_move_dist")->value, 6.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("log spec after equip",
         dict_get(out, "spec_after_equip_rate")->value, 0.1f, 1e-6f);
 
@@ -1533,6 +1556,19 @@ static void test_terminal_log_accumulates_command_diagnostics(void) {
     env.pvp.log.target_click_no_fire_rate = 0.4f;
     env.pvp.log.spell_attack_attempts = 5.0f;
     env.pvp.log.spell_attack_no_fire_rate = 0.2f;
+    env.pvp.log.selected_melee_attack_rate = 0.2f;
+    env.pvp.log.selected_ranged_attack_rate = 0.3f;
+    env.pvp.log.selected_magic_attack_rate = 0.5f;
+    env.pvp.log.target_click_chase_ticks = 9.0f;
+    env.pvp.log.explicit_move_ticks = 4.0f;
+    env.pvp.log.target_click_pre_move_dist = 5.0f;
+    env.pvp.log.target_click_post_move_dist = 2.0f;
+    env.pvp.log.target_click_success_pre_move_dist = 4.0f;
+    env.pvp.log.target_click_success_post_move_dist = 1.0f;
+    env.pvp.log.spell_attack_pre_move_dist = 6.0f;
+    env.pvp.log.spell_attack_post_move_dist = 5.0f;
+    env.pvp.log.spell_attack_success_pre_move_dist = 8.0f;
+    env.pvp.log.spell_attack_success_post_move_dist = 7.0f;
     env.pvp.log.weapon_attack_rate = 0.7f;
     env.pvp.log.melee_attack_rate = 0.1f;
     env.pvp.log.ranged_attack_rate = 0.2f;
@@ -1555,6 +1591,16 @@ static void test_terminal_log_accumulates_command_diagnostics(void) {
         env.log.spell_attack_attempts, 5.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("accumulated weapon rate",
         env.log.weapon_attack_rate, 0.7f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated selected ranged rate",
+        env.log.selected_ranged_attack_rate, 0.3f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target chase ticks",
+        env.log.target_click_chase_ticks, 9.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated explicit move ticks",
+        env.log.explicit_move_ticks, 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target success pre move dist",
+        env.log.target_click_success_pre_move_dist, 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spell post move dist",
+        env.log.spell_attack_post_move_dist, 5.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("accumulated melee rate",
         env.log.melee_attack_rate, 0.1f, 1e-6f);
     ASSERT_FLOAT_NEAR("accumulated ranged rate",

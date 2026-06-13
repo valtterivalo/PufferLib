@@ -318,6 +318,8 @@ static inline OsrsPlayerStepResult pvp_step_player_movement(
         .arena = arena,
     };
     result = osrs_encounter_player_step(&input);
+    if (result.chased_target) p->target_click_chase_ticks++;
+    if (result.explicit_moved) p->explicit_move_ticks++;
     p->is_moving = (*dest_x >= 0) ? 1 : 0;
     return result;
 }

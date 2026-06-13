@@ -235,6 +235,7 @@ static void reset_tick_flags(Player* p) {
     p->last_potion_was_waste = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
+    p->attack_intent_pre_move_dist = 0;
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->attack_weapon_this_tick = ITEM_NONE;
     p->render_attack_target_this_tick = osrs_render_target_none();
@@ -268,6 +269,22 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
             return ATTACK_STYLE_MAGIC;
         default:
             return ATTACK_STYLE_NONE;
+    }
+}
+
+static inline void pvp_record_selected_attack_style(Player* p, AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            p->selected_melee_attack_attempts++;
+            break;
+        case ATTACK_STYLE_RANGED:
+            p->selected_ranged_attack_attempts++;
+            break;
+        case ATTACK_STYLE_MAGIC:
+            p->selected_magic_attack_attempts++;
+            break;
+        default:
+            break;
     }
 }
 
@@ -470,6 +487,11 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
+    if (attack_style != ATTACK_STYLE_NONE) {
+        Player* target = &env->players[1 - agent_idx];
+        p->attack_intent_pre_move_dist = chebyshev_distance(
+            p->x, p->y, target->x, target->y);
+    }
 
     int range = 1;
     if (attack_style != ATTACK_STYLE_NONE) {
@@ -494,6 +516,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
 
     int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
+    int selected_attack_action = attack_action;
 
     if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
         AttackStyle target_click_style = pvp_target_click_attack_style(p);
@@ -529,6 +552,9 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
     if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
+    if (selected_attack_action != ATTACK_NONE && attack_style != ATTACK_STYLE_NONE) {
+        pvp_record_selected_attack_style(p, attack_style);
+    }
 
     int gmaul_spec_ready = p->spec_armed &&
         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
@@ -538,6 +564,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
     switch (attack_action) {
         case ATTACK_ATK:
             p->target_click_attempts++;
+            p->target_click_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+            p->target_click_post_move_dist_sum += dist;
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
                 OsrsAttackReachQuery reach = pvp_attack_reach_query(
                     cmap, p, t, attack_style);
@@ -546,6 +574,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
                     int is_special = p->spec_armed && is_special_ready(p, attack_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
                     p->target_click_successes++;
+                    p->target_click_success_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+                    p->target_click_success_post_move_dist_sum += dist;
                     p->weapon_attack_successes++;
                     if (p->weapon_equipped_this_tick)
                         p->attack_after_equip_successes++;
@@ -560,6 +590,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
         case ATTACK_ICE:
         case ATTACK_BLOOD:
             p->spell_attack_attempts++;
+            p->spell_attack_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+            p->spell_attack_post_move_dist_sum += dist;
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 int can_cast = (attack_action == ATTACK_ICE)
                     ? can_cast_ice_spell(p)
@@ -570,6 +602,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
                 if (osrs_attack_can_reach(&reach)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
                     p->spell_attack_successes++;
+                    p->spell_attack_success_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+                    p->spell_attack_success_post_move_dist_sum += dist;
                     p->clicks_this_tick++;
                 }
             }

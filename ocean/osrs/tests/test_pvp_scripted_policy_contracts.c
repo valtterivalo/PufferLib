@@ -156,6 +156,41 @@ static void set_dead_zone_state(OsrsEnv* env, OpponentType type, int distance) {
     memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
 }
 
+static void set_adjacent_non_melee_spacing_state(OsrsEnv* env, OpponentType type) {
+    force_clean_policy_decision(env, type);
+
+    Player* target = &env->players[0];
+    Player* self = &env->players[1];
+    set_basic_hybrid_weapons(self);
+    set_player_position(self, 3042, 3531);
+    set_player_position(target, 3043, 3531);
+
+    self->last_obs_target_x = target->x;
+    self->last_obs_target_y = target->y;
+    target->last_obs_target_x = self->x;
+    target->last_obs_target_y = self->y;
+    target->prayer = PRAYER_PROTECT_MELEE;
+    target->frozen_ticks = 0;
+    target->freeze_immunity_ticks = 0;
+    self->prayer = PRAYER_NONE;
+    self->is_lunar_spellbook = 0;
+    self->attack_timer = 0;
+    self->special_energy = 0;
+    self->frozen_ticks = 0;
+    self->food_count = 0;
+    self->karambwan_count = 0;
+    self->brew_doses = 0;
+    self->restore_doses = 0;
+    self->current_hitpoints = self->base_hitpoints;
+    self->current_magic = self->base_magic;
+    self->current_ranged = self->base_ranged;
+    self->current_attack = self->base_attack;
+    self->current_strength = self->base_strength;
+    self->current_defence = self->base_defence;
+    memset(env->pending_actions, 0, sizeof(env->pending_actions));
+    memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
+}
+
 static int opponent_combat(const OsrsEnv* env) {
     return env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
 }
@@ -218,6 +253,56 @@ static void test_adaptive_nh_name_maps_correctly(void) {
     ASSERT_TRUE(
         "adaptive NH name",
         strcmp(osrs_pvp_opponent_type_name(OPP_ADAPTIVE_NH), "Adaptive NH") == 0);
+    ASSERT_TRUE(
+        "strict kiter name",
+        strcmp(osrs_pvp_opponent_type_name(OPP_STRICT_KITER), "Strict Kiter") == 0);
+}
+
+static void assert_hard_policy_moves_instead_of_adjacent_non_melee(
+    OpponentType type,
+    const char* label
+) {
+    OsrsEnv env;
+    setup_pvp_env(&env, type);
+    set_adjacent_non_melee_spacing_state(&env, type);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    char combat_label[128];
+    char move_label[128];
+    snprintf(combat_label, sizeof(combat_label), "%s combat", label);
+    snprintf(move_label, sizeof(move_label), "%s move", label);
+    ASSERT_INT_EQ(combat_label, opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE(move_label, opponent_move(&env) != MOVE_NONE);
+}
+
+static void test_hard_policies_do_not_farcast_while_adjacent(void) {
+    printf("--- Hard policies move before adjacent non-melee attacks ---\n");
+
+    assert_hard_policy_moves_instead_of_adjacent_non_melee(
+        OPP_MASTER_NH, "master NH adjacent non-melee");
+    assert_hard_policy_moves_instead_of_adjacent_non_melee(
+        OPP_NIGHTMARE_NH, "nightmare NH adjacent non-melee");
+    assert_hard_policy_moves_instead_of_adjacent_non_melee(
+        OPP_RANGE_KITER, "range kiter adjacent non-melee");
+    assert_hard_policy_moves_instead_of_adjacent_non_melee(
+        OPP_ADAPTIVE_NH, "adaptive NH adjacent non-melee");
+    assert_hard_policy_moves_instead_of_adjacent_non_melee(
+        OPP_STRICT_KITER, "strict kiter adjacent non-melee");
+}
+
+static void test_hard_policy_walks_under_frozen_adjacent_target(void) {
+    printf("--- Hard policy walks under frozen adjacent target ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 10;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("frozen adjacent combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("frozen adjacent move", opponent_move(&env) != MOVE_NONE);
 }
 
 static void test_adaptive_nh_read_chance_exceeds_nightmare(void) {
@@ -301,8 +386,8 @@ static void test_adaptive_nh_attacks_mage_prayer_camp_with_melee(void) {
         ATTACK_ATK);
 }
 
-static void test_adaptive_nh_freezes_unrooted_mage_prayer_camp(void) {
-    printf("--- Adaptive NH freezes unrooted mage-prayer camp ---\n");
+static void test_adaptive_nh_kites_unrooted_mage_prayer_camp(void) {
+    printf("--- Adaptive NH kites unrooted mage-prayer camp ---\n");
 
     OsrsEnv env;
     setup_pvp_env(&env, OPP_ADAPTIVE_NH);
@@ -310,8 +395,10 @@ static void test_adaptive_nh_freezes_unrooted_mage_prayer_camp(void) {
 
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
-    ASSERT_INT_EQ("adaptive NH casts ice first",
-        opponent_combat(&env), ATTACK_ICE);
+    ASSERT_INT_EQ("adaptive NH does not freeze while adjacent",
+        opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("adaptive NH moves before freezing while adjacent",
+        opponent_move(&env) != 0);
 }
 
 static void test_adaptive_nh_kites_freeze_immune_camp_without_spec(void) {
@@ -530,12 +617,14 @@ static void test_spec_range_gate_respects_weapon_range(void) {
 
 int main(void) {
     test_adaptive_nh_name_maps_correctly();
+    test_hard_policies_do_not_farcast_while_adjacent();
+    test_hard_policy_walks_under_frozen_adjacent_target();
     test_adaptive_nh_read_chance_exceeds_nightmare();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();
     test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
-    test_adaptive_nh_freezes_unrooted_mage_prayer_camp();
+    test_adaptive_nh_kites_unrooted_mage_prayer_camp();
     test_adaptive_nh_kites_freeze_immune_camp_without_spec();
     test_adaptive_nh_specs_mage_prayer_camp();
     test_adaptive_nh_reads_static_camp_action();

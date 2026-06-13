@@ -73,6 +73,7 @@ static inline const char* osrs_pvp_opponent_type_name(OpponentType type) {
         case OPP_RANGE_KITER: return "Range Kiter";
         case OPP_ADAPTIVE_NH: return "Adaptive NH";
         case OPP_SELFPLAY: return "Opponent Agent";
+        case OPP_STRICT_KITER: return "Strict Kiter";
         default: break;
     }
     return "Opponent";
@@ -406,7 +407,7 @@ typedef struct {
 #define RR(b, v) {(b), (v)}
 
 /*                                    pray_acc      off_pray      off_pray_r    act_delay      mistake        off_pray_miss */
-static const OpponentRandRanges OPP_RAND_RANGES[OPP_ADAPTIVE_NH + 1] = {
+static const OpponentRandRanges OPP_RAND_RANGES[OPP_STRICT_KITER + 1] = {
     [OPP_NONE]                  = { RR(0,0),      RR(0,0),      RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
     [OPP_TRUE_RANDOM]           = { RR(0.33,0),   RR(0.33,0),   RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
     [OPP_PANICKING]             = { RR(0.33,0.1), RR(0.33,0),   RR(0,0),      RR(0.10,0.05), RR(0,0),       RR(0,0) },
@@ -439,6 +440,8 @@ static const OpponentRandRanges OPP_RAND_RANGES[OPP_ADAPTIVE_NH + 1] = {
     [OPP_GMAUL_COMBO]           = { RR(0.96,0.03),RR(0.95,0.03),RR(0.90,0.05),RR(0.03,0.02), RR(0.02,0.01), RR(0.02,0.01) },
     [OPP_RANGE_KITER]           = { RR(0.93,0.04),RR(0.93,0.04),RR(0.85,0.08),RR(0.04,0.02), RR(0.03,0.02), RR(0.04,0.02) },
     [OPP_ADAPTIVE_NH]           = { RR(1.00,0),   RR(1.00,0),   RR(0.90,0),   RR(0,0),       RR(0,0),       RR(0,0) },
+    [OPP_SELFPLAY]              = { RR(0,0),      RR(0,0),      RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
+    [OPP_STRICT_KITER]          = { RR(1.00,0),   RR(1.00,0),   RR(0.95,0),   RR(0,0),       RR(0,0),       RR(0,0) },
 };
 
 #undef RR
@@ -2931,6 +2934,63 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
+static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+
+    opp_tick_cooldowns(opp);
+    opp_read_agent_action(env, opp);
+    OppConsumables cons = opp_get_consumables(opp, self);
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
+
+    if (self->frozen_ticks == 0 && dist <= 1) {
+        actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
+            ? MOVE_UNDER
+            : MOVE_FARCAST_5;
+        return;
+    }
+
+    if (opp_should_skip_offensive(env, opp)) return;
+
+    if (!opp_attack_ready(self) || eating) {
+        if (self->frozen_ticks == 0) {
+            if (target->frozen_ticks > 0 && dist < 5) {
+                actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+            } else if (dist > 7) {
+                actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+            }
+        }
+        return;
+    }
+
+    int actual_style;
+    int actual_attack;
+    if (target->frozen_ticks == 0 &&
+            target->freeze_immunity_ticks == 0 &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE)) {
+        actual_style = OPP_STYLE_MAGE;
+        actual_attack = 0;
+    } else {
+        int allowed = OPP_STYLE_MASK_MAGE | OPP_STYLE_MASK_RANGED;
+        if (dist <= 1 && target->prayer != PRAYER_PROTECT_MELEE) {
+            allowed |= OPP_STYLE_MASK_MELEE;
+        }
+        OppStyleChoice choice = opp_resolve_attack_style(
+            env, opp, self, target, allowed, opp_get_off_prayer_mask(self, target));
+        actual_style = choice.style;
+        actual_attack = actual_style == OPP_STYLE_MAGE
+            ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+            : 2;
+    }
+
+    opp_apply_boost_potion(env, opp, actions, self, actual_style, 0);
+    opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
+}
+
 typedef struct {
     int presents_mage;
     int protects_magic;
@@ -3262,7 +3322,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     /* Per-episode randomized decision parameters — resolved from sub-policy
      * so PFSP and mixed pools get the correct ranges. */
     OpponentType resolved = opp->active_sub_policy ? opp->active_sub_policy : opp->type;
-    if (resolved > 0 && resolved <= OPP_ADAPTIVE_NH) {
+    if (resolved > 0 && resolved <= OPP_STRICT_KITER &&
+            resolved != OPP_SELFPLAY) {
         const OpponentRandRanges* r = &OPP_RAND_RANGES[resolved];
         opp->prayer_accuracy = rand_range(env, r->prayer_accuracy);
         opp->off_prayer_rate = rand_range(env, r->off_prayer_rate);
@@ -3281,6 +3342,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->read_chance = 0.50f;
     } else if (resolved == OPP_ADAPTIVE_NH) {
         opp->read_chance = 0.75f;
+    } else if (resolved == OPP_STRICT_KITER) {
+        opp->read_chance = 0.50f;
     }
 
     /* Vengeance fighter: lunar spellbook (no freeze/blood, has veng) */
@@ -3294,7 +3357,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         resolved == OPP_UNPREDICTABLE_IMPROVED || resolved == OPP_UNPREDICTABLE_ONETICK ||
         (resolved >= OPP_ADVANCED_NH && resolved <= OPP_NIGHTMARE_NH) ||
         resolved == OPP_BLOOD_HEALER || resolved == OPP_GMAUL_COMBO ||
-        resolved == OPP_RANGE_KITER || resolved == OPP_ADAPTIVE_NH) {
+        resolved == OPP_RANGE_KITER || resolved == OPP_ADAPTIVE_NH ||
+        resolved == OPP_STRICT_KITER) {
         float raw[3];
         for (int i = 0; i < 3; i++) raw[i] = 0.33f + (rand_float(env) - 0.5f) * 0.4f;
         float sum = raw[0] + raw[1] + raw[2];
@@ -3361,6 +3425,71 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     } else {
         actions[HEAD_ATTACK] = legacy_combat;
     }
+}
+
+static inline int opp_type_uses_hard_spacing_guard(OpponentType type) {
+    return (type >= OPP_ADVANCED_NH && type <= OPP_NIGHTMARE_NH) ||
+        type == OPP_BLOOD_HEALER ||
+        type == OPP_GMAUL_COMBO ||
+        type == OPP_RANGE_KITER ||
+        type == OPP_ADAPTIVE_NH ||
+        type == OPP_STRICT_KITER;
+}
+
+static inline int opp_target_click_style_from_weapon(uint8_t weapon) {
+    int weapon_style = get_item_attack_style(weapon);
+    if (weapon_style == 2) return OPP_STYLE_RANGED;
+    return OPP_STYLE_MELEE;
+}
+
+static inline int opp_legacy_attack_style_for_actions(Player* self, int* actions) {
+    int legacy_combat = actions[HEAD_COMBAT];
+    if (legacy_combat == ATTACK_ICE || legacy_combat == ATTACK_BLOOD) {
+        return OPP_STYLE_MAGE;
+    }
+    if (legacy_combat != ATTACK_ATK) {
+        return -1;
+    }
+
+    int legacy_loadout = actions[HEAD_LOADOUT];
+    switch (legacy_loadout) {
+        case LOADOUT_RANGE:
+        case LOADOUT_SPEC_RANGE:
+            return OPP_STYLE_RANGED;
+        case LOADOUT_SPEC_MAGIC:
+            return OPP_STYLE_MAGE;
+        case LOADOUT_MELEE:
+        case LOADOUT_MAGE:
+        case LOADOUT_TANK:
+        case LOADOUT_SPEC_MELEE:
+        case LOADOUT_GMAUL:
+            return OPP_STYLE_MELEE;
+        case LOADOUT_KEEP:
+            return opp_target_click_style_from_weapon(self->equipped[GEAR_SLOT_WEAPON]);
+        default:
+            return -1;
+    }
+}
+
+static inline void opp_apply_hard_spacing_guard(
+    OsrsEnv* env,
+    OpponentType active,
+    int* actions
+) {
+    if (!opp_type_uses_hard_spacing_guard(active)) return;
+
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    int style = opp_legacy_attack_style_for_actions(self, actions);
+    if (style < 0 || style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) return;
+    if (self->frozen_ticks > 0) return;
+
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (dist > 1) return;
+
+    actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
+        ? MOVE_UNDER
+        : MOVE_FARCAST_5;
 }
 
 static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
@@ -3460,11 +3589,14 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
         case OPP_ADAPTIVE_NH:
             opp_adaptive_nh(env, opp, actions);
             break;
+        case OPP_STRICT_KITER:
+            opp_strict_kiter(env, opp, actions);
+            break;
         default:
-            /* OPP_NONE or unsupported: leave NOOPs */
             break;
     }
 
+    opp_apply_hard_spacing_guard(env, active, actions);
     pvp_translate_legacy_loadout_action_to_slotclicks(env, 1, actions);
 }
 

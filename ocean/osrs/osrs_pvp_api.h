@@ -147,6 +147,7 @@ static void init_player(Player* p) {
     p->last_attack_dx = 0;
     p->last_attack_dy = 0;
     p->last_attack_dist = 0;
+    p->attack_intent_pre_move_dist = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
 
@@ -240,6 +241,19 @@ static void init_player(Player* p) {
     p->target_click_successes = 0;
     p->spell_attack_attempts = 0;
     p->spell_attack_successes = 0;
+    p->selected_melee_attack_attempts = 0;
+    p->selected_ranged_attack_attempts = 0;
+    p->selected_magic_attack_attempts = 0;
+    p->target_click_chase_ticks = 0;
+    p->explicit_move_ticks = 0;
+    p->target_click_pre_move_dist_sum = 0;
+    p->target_click_post_move_dist_sum = 0;
+    p->target_click_success_pre_move_dist_sum = 0;
+    p->target_click_success_post_move_dist_sum = 0;
+    p->spell_attack_pre_move_dist_sum = 0;
+    p->spell_attack_post_move_dist_sum = 0;
+    p->spell_attack_success_pre_move_dist_sum = 0;
+    p->spell_attack_success_post_move_dist_sum = 0;
     p->weapon_attack_successes = 0;
     p->melee_attack_successes = 0;
     p->ranged_attack_successes = 0;
@@ -905,6 +919,52 @@ void pvp_step(OsrsEnv* env) {
         env->log.spell_attack_no_fire_rate = p0->spell_attack_attempts > 0
             ? 1.0f - (float)p0->spell_attack_successes /
                 (float)p0->spell_attack_attempts
+            : 0.0f;
+        float selected_attacks = (float)(p0->selected_melee_attack_attempts +
+            p0->selected_ranged_attack_attempts +
+            p0->selected_magic_attack_attempts);
+        env->log.selected_melee_attack_rate = selected_attacks > 0.0f
+            ? (float)p0->selected_melee_attack_attempts / selected_attacks
+            : 0.0f;
+        env->log.selected_ranged_attack_rate = selected_attacks > 0.0f
+            ? (float)p0->selected_ranged_attack_attempts / selected_attacks
+            : 0.0f;
+        env->log.selected_magic_attack_rate = selected_attacks > 0.0f
+            ? (float)p0->selected_magic_attack_attempts / selected_attacks
+            : 0.0f;
+        env->log.target_click_chase_ticks = (float)p0->target_click_chase_ticks;
+        env->log.explicit_move_ticks = (float)p0->explicit_move_ticks;
+        env->log.target_click_pre_move_dist = p0->target_click_attempts > 0
+            ? (float)p0->target_click_pre_move_dist_sum /
+                (float)p0->target_click_attempts
+            : 0.0f;
+        env->log.target_click_post_move_dist = p0->target_click_attempts > 0
+            ? (float)p0->target_click_post_move_dist_sum /
+                (float)p0->target_click_attempts
+            : 0.0f;
+        env->log.target_click_success_pre_move_dist = p0->target_click_successes > 0
+            ? (float)p0->target_click_success_pre_move_dist_sum /
+                (float)p0->target_click_successes
+            : 0.0f;
+        env->log.target_click_success_post_move_dist = p0->target_click_successes > 0
+            ? (float)p0->target_click_success_post_move_dist_sum /
+                (float)p0->target_click_successes
+            : 0.0f;
+        env->log.spell_attack_pre_move_dist = p0->spell_attack_attempts > 0
+            ? (float)p0->spell_attack_pre_move_dist_sum /
+                (float)p0->spell_attack_attempts
+            : 0.0f;
+        env->log.spell_attack_post_move_dist = p0->spell_attack_attempts > 0
+            ? (float)p0->spell_attack_post_move_dist_sum /
+                (float)p0->spell_attack_attempts
+            : 0.0f;
+        env->log.spell_attack_success_pre_move_dist = p0->spell_attack_successes > 0
+            ? (float)p0->spell_attack_success_pre_move_dist_sum /
+                (float)p0->spell_attack_successes
+            : 0.0f;
+        env->log.spell_attack_success_post_move_dist = p0->spell_attack_successes > 0
+            ? (float)p0->spell_attack_success_post_move_dist_sum /
+                (float)p0->spell_attack_successes
             : 0.0f;
         float attack_successes = (float)(p0->weapon_attack_successes +
             p0->spell_attack_successes);
