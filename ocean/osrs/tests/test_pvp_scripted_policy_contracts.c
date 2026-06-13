@@ -241,6 +241,37 @@ static void test_adaptive_nh_prays_magic_without_learned_adjacent_melee(void) {
         ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
 }
 
+static void test_adaptive_nh_learns_static_mage_camp(void) {
+    printf("--- Adaptive NH learns static mage camp ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 0);
+    env.pvp_runtime.opponent.adaptive_mage_camp_ticks = 3;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH prays melee after repeated camp ticks",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
+}
+
+static void test_adaptive_nh_attacks_mage_prayer_camp_with_melee(void) {
+    printf("--- Adaptive NH attacks mage-prayer camp with melee ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 1);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH attacks camp with current melee weapon",
+        opponent_combat(&env),
+        ATTACK_ATK);
+}
+
 static void test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready(void) {
     printf("--- Adaptive NH moves out of adjacent camp when not ready ---\n");
 
@@ -386,6 +417,8 @@ int main(void) {
     test_adaptive_nh_name_maps_correctly();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
+    test_adaptive_nh_learns_static_mage_camp();
+    test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
     test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready();
     test_resolver_distance_10_uses_mage_into_prayer();
     test_resolver_distance_7_uses_crossbow_off_prayer();

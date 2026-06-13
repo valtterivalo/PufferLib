@@ -1276,6 +1276,8 @@ typedef struct {
 
     int combo_state;                 /* 0=idle, 1=spec_fired (follow with gmaul next tick) */
     float ko_threshold;              /* target HP fraction to trigger KO sequence */
+    int adaptive_mage_camp_ticks;
+    int adaptive_melee_threat_ticks;
 
     /* Offensive prayer miss: chance to attack without switching loadout (skipping auto-prayer) */
     float offensive_prayer_miss;

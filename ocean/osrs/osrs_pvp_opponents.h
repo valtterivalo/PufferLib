@@ -2937,6 +2937,8 @@ typedef struct {
     int adjacent;
     int melee_attack_resolved;
     int melee_recent_count;
+    int mage_camp_ticks;
+    int melee_threat_ticks;
     int attack_ready_soon;
 } PvpMageCampMeleeSignal;
 
@@ -2951,7 +2953,35 @@ static inline int pvp_recent_attack_style_count(
     return count;
 }
 
+static inline void pvp_adaptive_nh_update_memory(
+    OpponentState* opp,
+    const Player* self,
+    const Player* target
+) {
+    int adjacent = chebyshev_distance(self->x, self->y, target->x, target->y) <= 1;
+    int mage_camp =
+        target->visible_gear == GEAR_MAGE &&
+        target->prayer == PRAYER_PROTECT_MAGIC &&
+        adjacent;
+    int melee_threat =
+        target->last_attack_style == ATTACK_STYLE_MELEE ||
+        target->attack_style_this_tick == ATTACK_STYLE_MELEE;
+
+    if (mage_camp) {
+        opp->adaptive_mage_camp_ticks++;
+    } else if (opp->adaptive_mage_camp_ticks > 0) {
+        opp->adaptive_mage_camp_ticks--;
+    }
+
+    if (melee_threat) {
+        opp->adaptive_melee_threat_ticks = 16;
+    } else if (opp->adaptive_melee_threat_ticks > 0) {
+        opp->adaptive_melee_threat_ticks--;
+    }
+}
+
 static inline PvpMageCampMeleeSignal pvp_mage_camp_melee_signal(
+    const OpponentState* opp,
     const Player* self,
     const Player* target
 ) {
@@ -2965,6 +2995,8 @@ static inline PvpMageCampMeleeSignal pvp_mage_camp_melee_signal(
     out.melee_recent_count = pvp_recent_attack_style_count(
         self->recent_target_attack_styles,
         ATTACK_STYLE_MELEE);
+    out.mage_camp_ticks = opp->adaptive_mage_camp_ticks;
+    out.melee_threat_ticks = opp->adaptive_melee_threat_ticks;
     out.attack_ready_soon = remaining_ticks(target->attack_timer) <= 1;
     return out;
 }
@@ -2973,12 +3005,18 @@ static inline int pvp_should_counter_mage_camp_melee(PvpMageCampMeleeSignal s) {
     return s.presents_mage &&
         s.protects_magic &&
         s.adjacent &&
-        (s.melee_attack_resolved || s.melee_recent_count >= 2);
+        (s.melee_attack_resolved ||
+         s.melee_recent_count >= 1 ||
+         s.melee_threat_ticks > 0 ||
+         s.mage_camp_ticks >= 4);
 }
 
 static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal s) {
     return pvp_should_counter_mage_camp_melee(s) &&
-        (s.attack_ready_soon || s.melee_recent_count >= 2);
+        (s.attack_ready_soon ||
+         s.melee_recent_count >= 1 ||
+         s.melee_threat_ticks > 0 ||
+         s.mage_camp_ticks >= 4);
 }
 
 static inline void pvp_adaptive_nh_apply_defensive_prayer(
@@ -2995,15 +3033,41 @@ static inline void pvp_adaptive_nh_apply_defensive_prayer(
     }
 }
 
+static inline void pvp_adaptive_nh_apply_counter_attack(
+    OsrsEnv* env,
+    OpponentState* opp,
+    int* actions,
+    Player* self,
+    Player* target,
+    PvpMageCampMeleeSignal signal
+) {
+    if (!pvp_should_counter_mage_camp_melee(signal)) return;
+    if (!opp_attack_ready(self)) return;
+    if (opp_check_eating_queued(actions)) return;
+
+    if (target->prayer != PRAYER_PROTECT_MELEE &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MELEE)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MELEE, 2);
+        return;
+    }
+
+    if (target->prayer != PRAYER_PROTECT_RANGED &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_RANGED)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_RANGED, 2);
+    }
+}
+
 static void opp_adaptive_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
-    PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(self, target);
+    pvp_adaptive_nh_update_memory(opp, self, target);
+    PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(opp, self, target);
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
 
     opp_nightmare_nh(env, opp, actions);
 
     pvp_adaptive_nh_apply_defensive_prayer(actions, self, target, signal);
+    pvp_adaptive_nh_apply_counter_attack(env, opp, actions, self, target, signal);
     if (!opp_attack_ready(self) &&
             pvp_should_counter_mage_camp_melee(signal) &&
             dist <= 1 &&
@@ -3086,6 +3150,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = 0;
     opp->prev_dist_to_target = 0;
     opp->target_fleeing_ticks = 0;
+    opp->adaptive_mage_camp_ticks = 0;
+    opp->adaptive_melee_threat_ticks = 0;
 
     /* Per-episode resets for specific policies */
     if (opp->type == OPP_PANICKING) {
