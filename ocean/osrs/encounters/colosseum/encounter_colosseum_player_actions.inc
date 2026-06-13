@@ -595,9 +595,15 @@ static void col_tick_player_ctx(
         int slot = s->interaction.target_slot;
         ColoNPC* npc = &s->npcs[slot];
         if (npc->active) {
-            if (encounter_player_can_attack(s->player.x, s->player.y,
+            /* B1: ranged/magic attacks need LoS from the player to the NPC's
+               nearest footprint tile, symmetric with the NPC attack gate
+               (col_npc_has_los_to_player) — a pillar between them safespots the
+               shot. Melee (range 1) is pure adjacency and needs no LoS line. */
+            int player_range = col_player_attack_range(s);
+            int has_los = player_range <= 1 || col_npc_has_los_to_player(s, npc);
+            if (has_los && encounter_player_can_attack(s->player.x, s->player.y,
                     npc->x, npc->y, col_npc_effective_size(npc),
-                    col_player_attack_range(s), NULL, 0)) {
+                    player_range, NULL, 0)) {
                 col_player_attack_target(s, slot);
             }
         }

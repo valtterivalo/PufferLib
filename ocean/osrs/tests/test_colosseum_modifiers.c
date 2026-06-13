@@ -3742,8 +3742,61 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         s.player.num_items_in_slot[GEAR_SLOT_WEAPON] > 0);
 }
 
+/* SIM BUG (2026-06-13): the player could fire ranged/magic THROUGH pillars — the
+   attack gate (col_tick_player_ctx) did a range-only check and never consulted
+   LoS, unlike the NPC gate. A ranged attack now requires LoS to the NPC's
+   nearest footprint tile (symmetric with col_npc_has_los_to_player); a pillar on
+   the line safespots the shot. Melee (range 1) stays pure adjacency. */
+static void test_player_ranged_los_blocked_by_pillar(void) {
+    printf("test_player_ranged_los_blocked_by_pillar\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;   /* unfreeze (skip the wave-1 draft) so the attack gate runs */
+    s.weapon_set = COLO_GEAR_RANGED;
+    CHECK("ranged loadout reaches past 1 tile", col_player_attack_range(&s) > 1);
+
+    /* pillar 0 fills tiles (8..10, 8..10). Player W of it, 1x1 target E of it, on
+       the same row so the LoS line crosses the pillar. */
+    s.player.x = 5; s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 13, 9);
+    ColoNPC* npc = &s.npcs[0];
+    CHECK("player + target tiles are clear of static blockers",
+        !col_static_blocked(5, 9) && !col_static_blocked(13, 9));
+    CHECK("pillar 0 sits on the line between them", col_static_blocked(9, 9));
+    CHECK("no LoS through the pillar", col_npc_has_los_to_player(&s, npc) == 0);
+
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    osrs_interaction_set(&s.interaction, 0);
+    s.player.attack_timer = 0;
+    s.player_dest_x = -1; s.player_dest_y = -1;   /* no stale chase path from a prior phase */
+    s.tick_scratch.player_attacked = 0;
+    col_tick_player_ctx(&s, &ctx, actions, 1);
+    CHECK("a ranged attack through a pillar does NOT fire",
+        s.tick_scratch.player_attacked == 0);
+
+    /* move into the target's column — the vertical line is pillar-free. */
+    s.player.x = 13; s.player.y = 4;
+    col_rebuild_player_collision_flags(&s);
+    CHECK("the clear column tile is walkable", !col_static_blocked(13, 4));
+    CHECK("LoS is clear down the column", col_npc_has_los_to_player(&s, npc) == 1);
+    osrs_interaction_set(&s.interaction, 0);
+    s.player.attack_timer = 0;
+    s.player_dest_x = -1; s.player_dest_y = -1;   /* no stale chase path from a prior phase */
+    s.tick_scratch.player_attacked = 0;
+    col_tick_player_ctx(&s, &ctx, actions, 1);
+    CHECK("a ranged attack with clear LoS fires",
+        s.tick_scratch.player_attacked == 1);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
+    test_player_ranged_los_blocked_by_pillar();
     test_zero_actions_hit_timeout();
     test_offpray_attribution_log();
     test_step_loop_draft();
