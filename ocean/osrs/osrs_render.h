@@ -3447,7 +3447,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 int dur = ov->projectiles[i].duration_ticks > 0 ? ov->projectiles[i].duration_ticks : 35;
                 int sh  = ov->projectiles[i].start_h > 0 ? ov->projectiles[i].start_h : 85;
                 int eh  = ov->projectiles[i].end_h > 0 ? ov->projectiles[i].end_h : 40;
-                int cv  = ov->projectiles[i].curve > 0 ? ov->projectiles[i].curve : 16;
+                int cv  = ov->projectiles[i].curve != 0 ? ov->projectiles[i].curve : 16;
                 float arc = ov->projectiles[i].arc_height;
                 int trk = ov->projectiles[i].tracks_target;
 

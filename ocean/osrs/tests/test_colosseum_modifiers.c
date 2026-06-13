@@ -2357,7 +2357,7 @@ static void test_javelin_skyfall_no_defence_gate(void) {
     jv->skyfall_damage = 37;
     jv->skyfall_tile_x = s.player.x;
     jv->skyfall_tile_y = s.player.y;
-    col_npc_resolve_javelin_skyfall(&s, 0);
+    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
     CHECK("on the marked tile the skyfall lands through Protect-from-Missiles",
         s.player.current_hitpoints == 99 - 37 && jv->skyfall_pending == 0);
 
@@ -2367,7 +2367,7 @@ static void test_javelin_skyfall_no_defence_gate(void) {
     jv->skyfall_damage = 37;
     jv->skyfall_tile_x = s.player.x + 1;
     jv->skyfall_tile_y = s.player.y;
-    col_npc_resolve_javelin_skyfall(&s, 0);
+    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
     CHECK("off the marked tile the skyfall misses entirely",
         s.player.current_hitpoints == 99 && jv->skyfall_pending == 0);
 }
@@ -3841,6 +3841,21 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     col_npc_attack_ctx(&s, &ctx, 0);
     CHECK("javelin skyfall launch marks the attack tick",
         s.npcs[0].attacked_this_tick == 1);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall launch emits the slow artillery lob",
+        ov.projectile_count == 1 &&
+        ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[0].source_npc_slot == 0 &&
+        ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
+        ov.projectiles[0].dst_x == jv->skyfall_tile_x &&
+        ov.projectiles[0].dst_y == jv->skyfall_tile_y &&
+        ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID &&
+        ov.projectiles[0].travel_gfx_id != 2673 &&
+        ov.projectiles[0].impact_gfx_id == 0 &&
+        ov.projectiles[0].start_h < ov.projectiles[0].end_h &&
+        ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_LAUNCH_CURVE &&
+        ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DELAY * 30);
     memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
     npc_anim_count = 0;
     col_fill_render_entities_ctx(
@@ -3861,6 +3876,33 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         npc_anim_entities, 4, &npc_anim_count);
     CHECK("javelin normal attack after skyfall uses throw body animation",
         npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10892);
+
+    init_forecast_test_state(&s, &ctx, 504, 17, 16);
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_timer = 1;
+    jv->skyfall_tile_x = s.player.x;
+    jv->skyfall_tile_y = s.player.y;
+    jv->skyfall_damage = 37;
+    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall landing emits fast drop and fiery impact",
+        ov.projectile_count == 1 &&
+        ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
+        ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
+        ov.projectiles[0].src_x == jv->skyfall_tile_x &&
+        ov.projectiles[0].src_y == jv->skyfall_tile_y &&
+        ov.projectiles[0].dst_x == jv->skyfall_tile_x &&
+        ov.projectiles[0].dst_y == jv->skyfall_tile_y &&
+        ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID &&
+        ov.projectiles[0].travel_gfx_id != 2673 &&
+        ov.projectiles[0].impact_gfx_id == COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID &&
+        ov.projectiles[0].damage == 37 &&
+        ov.projectiles[0].start_h > ov.projectiles[0].end_h &&
+        ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_DROP_CURVE &&
+        ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);

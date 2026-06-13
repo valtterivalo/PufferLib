@@ -137,6 +137,17 @@ static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
     return row;
 }
 
+enum {
+    COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID = 2674,
+    COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID = 2675,
+    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2677,
+    COLO_JAVELIN_SKYFALL_SKY_HEIGHT = 1536,
+    COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
+    COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
+    COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
+    COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS = 18,
+};
+
 static EncounterProjectileTiming col_npc_projectile_timing(
     ColoNpcType type,
     AttackStyle style,
@@ -147,8 +158,81 @@ static EncounterProjectileTiming col_npc_projectile_timing(
         distance, 0, col_projectile_delay_kind_for_style(style), options);
 }
 
+static void col_emit_javelin_skyfall_launch_projectile(
+    ColosseumState* s,
+    EncounterOverlay* ov,
+    int npc_slot
+) {
+    ColoNPC* npc = &s->npcs[npc_slot];
+    ColoJavelinState* jv = colo_npc_javelin(npc);
+    if (!jv->skyfall_pending) {
+        fprintf(stderr, "colosseum: skyfall launch render event without pending skyfall\n");
+        abort();
+    }
+
+    int npc_size = col_npc_effective_size(npc);
+    encounter_require_projectile_slots(ov, 1);
+    int projectile_idx = osrs_emit_projectile_with_spec(
+        ov,
+        &(OsrsProjectileEventSpec){
+            .src_x = npc->x,
+            .src_y = npc->y,
+            .dst_x = jv->skyfall_tile_x,
+            .dst_y = jv->skyfall_tile_y,
+            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+            .damage = 0,
+            .duration_ticks = COLO_JAVELIN_SKYFALL_DELAY * 30,
+            .start_h = (int)(npc_size * 0.75f * 128),
+            .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
+            .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
+            .arc_height = 0.0f,
+            .src_size = npc_size,
+            .dst_size = 1,
+            .model_id = 0u,
+            .anim_id = -1,
+            .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
+            .impact_gfx_id = 0,
+            .start_delay = 0,
+        },
+        0);
+    encounter_set_projectile_source_npc_slot(ov, projectile_idx, npc_slot);
+}
+
+static void col_emit_javelin_skyfall_landing_projectile(
+    EncounterOverlay* ov,
+    const ColoJavelinSkyfallLandingRenderEvent* event
+) {
+    if (!event || !event->active)
+        return;
+    encounter_require_projectile_slots(ov, 1);
+    (void)osrs_emit_projectile_with_spec(
+        ov,
+        &(OsrsProjectileEventSpec){
+            .src_x = event->tile_x,
+            .src_y = event->tile_y,
+            .dst_x = event->tile_x,
+            .dst_y = event->tile_y,
+            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+            .damage = event->damage,
+            .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS,
+            .start_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
+            .end_h = COLO_JAVELIN_SKYFALL_GROUND_HEIGHT,
+            .curve = COLO_JAVELIN_SKYFALL_DROP_CURVE,
+            .arc_height = 0.0f,
+            .src_size = 1,
+            .dst_size = 1,
+            .model_id = 0u,
+            .anim_id = -1,
+            .travel_gfx_id = COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID,
+            .impact_gfx_id = COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID,
+            .start_delay = 0,
+        },
+        0);
+}
+
 static void col_emit_npc_attack_projectile(
     ColosseumState* s,
+    ColosseumContext* ctx,
     EncounterOverlay* ov,
     int npc_slot
 ) {
@@ -160,6 +244,12 @@ static void col_emit_npc_attack_projectile(
         return;
     if (col_type_is_hazard_entity(npc->type))
         return;
+    if (ctx && npc->type == COLO_JAVELIN_COLOSSUS &&
+            ctx->npc_render_attack_anim[npc_slot] ==
+                COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL) {
+        col_emit_javelin_skyfall_launch_projectile(s, ov, npc_slot);
+        return;
+    }
 
     int npc_size = col_npc_effective_size(npc);
     int start_h = (int)(npc_size * 0.75f * 128);
@@ -347,8 +437,8 @@ static void col_render_post_tick_ctx(
     EncounterContext* context,
     EncounterOverlay* ov
 ) {
-    (void)context;
     ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     ov->projectile_count = 0;
     encounter_write_terminal_status_text(
         s->episode_over,
@@ -364,7 +454,11 @@ static void col_render_post_tick_ctx(
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active || !npc->attacked_this_tick)
             continue;
-        col_emit_npc_attack_projectile(s, ov, i);
+        col_emit_npc_attack_projectile(s, ctx, ov, i);
+    }
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        col_emit_javelin_skyfall_landing_projectile(
+            ov, &ctx->javelin_skyfall_landing[i]);
     }
     col_emit_player_attack_projectiles(s, ov);
 }
@@ -604,7 +698,7 @@ static void col_restore_ctx(
         COLO_SNAPSHOT_MAGIC, COLO_SNAPSHOT_VERSION, sizeof(ColosseumState));
     encounter_snapshot_copy_state_from(
         dst, data, offsetof(ColoSnapshot, state), sizeof(ColosseumState));
-    col_context_clear_render_attack_anims(ctx);
+    col_context_clear_render_events(ctx);
     col_refresh_after_state_load(dst, ctx);
 }
 
@@ -621,7 +715,7 @@ static int col_apply_lab_command_ctx(
     const char* line
 ) {
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
-    col_context_clear_render_attack_anims(ctx);
+    col_context_clear_render_events(ctx);
     return encounter_apply_lab_command_dump_wrapper(
         state, line, COLO_LAB_LINE_DUMP, col_lab_apply_script_line_alloc_json_void);
 }

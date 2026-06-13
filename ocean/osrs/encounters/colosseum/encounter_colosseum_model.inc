@@ -1273,6 +1273,14 @@ typedef enum {
 } ColoNpcRenderAttackAnim;
 
 typedef struct {
+    int active;
+    int npc_slot;
+    int tile_x;
+    int tile_y;
+    int damage;
+} ColoJavelinSkyfallLandingRenderEvent;
+
+typedef struct {
     ColConfig config;
     const CollisionMap* collision_map;
     int world_offset_x;
@@ -1282,11 +1290,13 @@ typedef struct {
     int human_command_count;
     int human_command_mode;
     ColoNpcRenderAttackAnim npc_render_attack_anim[COLO_MAX_NPCS];
+    ColoJavelinSkyfallLandingRenderEvent javelin_skyfall_landing[COLO_MAX_NPCS];
 } ColosseumContext;
 
-static inline void col_context_clear_render_attack_anims(ColosseumContext* ctx) {
+static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     if (!ctx) return;
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
+    memset(ctx->javelin_skyfall_landing, 0, sizeof(ctx->javelin_skyfall_landing));
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single

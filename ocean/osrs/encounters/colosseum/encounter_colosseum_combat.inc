@@ -276,7 +276,11 @@ static void col_npc_attack_javelin(
     Protect-from-Missiles (D7: no defence gate either — on-tile means hit). The
     player dodges by standing off the tile at land time; resolution runs before
     NPC and player movement of the land tick (D8). */
-static void col_npc_resolve_javelin_skyfall(ColosseumState* s, int idx) {
+static void col_npc_resolve_javelin_skyfall(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    int idx
+) {
     ColoNPC* npc = &s->npcs[idx];
     ColoJavelinState* jv = colo_npc_javelin(npc);
     if (!jv->skyfall_pending) return;
@@ -285,6 +289,15 @@ static void col_npc_resolve_javelin_skyfall(ColosseumState* s, int idx) {
     jv->skyfall_pending = 0;
     int on_tile = (s->player.x == jv->skyfall_tile_x && s->player.y == jv->skyfall_tile_y);
     int dmg = on_tile ? jv->skyfall_damage : 0;
+    if (ctx) {
+        ctx->javelin_skyfall_landing[idx] = (ColoJavelinSkyfallLandingRenderEvent){
+            .active = 1,
+            .npc_slot = idx,
+            .tile_x = jv->skyfall_tile_x,
+            .tile_y = jv->skyfall_tile_y,
+            .damage = dmg,
+        };
+    }
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
     if (dmg > 0) {
         s->last_hit_by_type = npc->type;
@@ -566,7 +579,7 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (col_npc_is_live_target(npc) && npc->type == COLO_JAVELIN_COLOSSUS)
-            col_npc_resolve_javelin_skyfall(s, i);
+            col_npc_resolve_javelin_skyfall(s, ctx, i);
     }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
