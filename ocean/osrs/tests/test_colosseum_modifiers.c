@@ -3803,7 +3803,10 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         (EncounterState*)&s, (EncounterContext*)&ctx,
         npc_anim_entities, 4, &npc_anim_count);
     CHECK("manticore attack drives body attack animation",
-        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10866);
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10869);
+    CHECK("alive manticore attack does not select death animation",
+        npc_anim_count >= 2 &&
+        npc_anim_entities[1].npc_anim_id != col_npc_death_anim_id(COLO_MANTICORE));
     int manticore_dist = encounter_projectile_distance(
         s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0]),
         s.player.x, s.player.y, 1, ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);

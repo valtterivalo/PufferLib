@@ -91,7 +91,7 @@ typedef struct {
     uint16_t           frame_count;
     uint8_t            interleave_count;
     uint8_t*           interleave_order;
-    int8_t             walk_flag;  /* -1=default (no stall), 0=stall movement during anim */
+    int8_t             walk_flag;  /* -1=legacy default, 0=stall movement, >0=movement allowed */
     AnimSequenceFrame* frames;
 } AnimSequence;
 

@@ -681,6 +681,12 @@ static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id)
     return seq;
 }
 
+static int render_sequence_stalls_movement(const AnimSequence* seq) {
+    if (!seq) return 0;
+    if (seq->walk_flag >= 0) return seq->walk_flag == 0;
+    return seq->interleave_count == 0;
+}
+
 /** Look up an animation framebase, checking secondary NPC cache as fallback. */
 static AnimFrameBase* render_get_framebase(RenderClient* rc, uint16_t base_id) {
     AnimFrameBase* fb = NULL;
@@ -3497,18 +3503,12 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         rc->visual_moving[player_idx] = 0;
         rc->step_tracker[player_idx] = 0;
     } else {
-        /* animations without interleave_order (cast, ranged, death) stall
-           sub-tile movement. animations WITH interleave (melee, eat, block)
-           allow walking — the interleave blends upper body attack with lower
-           body walk. matches the real client. */
         int stall = 0;
         if (rc->anim[player_idx].primary_seq_id >= 0 &&
-            rc->anim[player_idx].primary_loops == 0 && rc->anim_cache) {
+            rc->anim[player_idx].primary_loops == 0) {
             AnimSequence* seq = render_get_anim_sequence(
                 rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
-            if (seq && seq->interleave_count == 0) {
-                stall = 1;
-            }
+            stall = render_sequence_stalls_movement(seq);
         }
 
         if (stall) {
@@ -3606,7 +3606,7 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     }
 
     /* advance secondary frame timing */
-    if (rc->anim_cache && rc->anim[player_idx].secondary_seq_id >= 0) {
+    if (rc->anim[player_idx].secondary_seq_id >= 0) {
         AnimSequence* seq = render_get_anim_sequence(
             rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
         if (seq && seq->frame_count > 0) {
@@ -3622,7 +3622,7 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     }
 
     /* advance primary frame timing (if active) */
-    if (rc->anim_cache && rc->anim[player_idx].primary_seq_id >= 0) {
+    if (rc->anim[player_idx].primary_seq_id >= 0) {
         AnimSequence* seq = render_get_anim_sequence(
             rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
         if (seq && seq->frame_count > 0) {
@@ -4434,7 +4434,7 @@ static void render_player_composite(
         }
     }
 
-    if (!rc->anim_cache || !comp->anim_state) {
+    if ((!rc->anim_cache && !rc->npc_anim_cache) || !comp->anim_state) {
         /* no animation: draw static */
         if (comp->face_count > 0) {
             int exp_verts = comp->face_count * 3;

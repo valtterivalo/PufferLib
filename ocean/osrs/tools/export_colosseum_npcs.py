@@ -129,7 +129,7 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12815: 10853,
     12816: 10856,
     12817: 10890,
-    12818: 10866,
+    12818: 10869,
     12819: 10903,
     12821: 10876,
     12823: 10823,
@@ -259,7 +259,8 @@ class ColosseumSequence:
     forced_priority: int = 5
     max_loops: int = 99
     precedence_animating: int = -1
-    priority: int = -1
+    walk_flag: int = -1
+    anim_maya_masks: list[int] = field(default_factory=list)
     maya_id: int = -1
     maya_start: int = -1
     maya_end: int = -1
@@ -300,7 +301,7 @@ def parse_colosseum_sequence(seq_id: int, data: bytes) -> ColosseumSequence:
         elif opcode == 9:
             seq.precedence_animating = buf.read_u8()
         elif opcode == 10:
-            seq.priority = buf.read_u8()
+            seq.walk_flag = buf.read_u8()
         elif opcode == 11:
             buf.read_u8()
         elif opcode == 12:
@@ -320,8 +321,7 @@ def parse_colosseum_sequence(seq_id: int, data: bytes) -> ColosseumSequence:
         elif opcode == 16:
             buf.read_u8()
         elif opcode == 17:
-            for _ in range(buf.read_u8()):
-                buf.read_u8()
+            seq.anim_maya_masks = [buf.read_u8() for _ in range(buf.read_u8())]
         elif opcode == 18:
             buf.read_string()
         elif opcode == 19:
@@ -340,6 +340,8 @@ def parse_colosseum_sequence(seq_id: int, data: bytes) -> ColosseumSequence:
         seq.frame_count = 1
         seq.frame_delays = [1]
         seq.primary_frame_ids = [-1]
+    if seq.walk_flag == -1:
+        seq.walk_flag = 0 if not seq.interleave_order and not seq.anim_maya_masks else 2
     return seq
 
 
@@ -1271,7 +1273,7 @@ def write_colosseum_animations_binary(
             f.write(struct.pack("B", len(seq.interleave_order)))
             for value in seq.interleave_order:
                 f.write(struct.pack("B", value))
-            f.write(struct.pack("b", _as_i8(seq.priority)))
+            f.write(struct.pack("b", _as_i8(seq.walk_flag)))
             for frame_index in range(seq.frame_count):
                 delay = seq.frame_delays[frame_index]
                 f.write(struct.pack("<H", max(0, delay)))
