@@ -29,7 +29,8 @@
 #include <string.h>
 
 #define ANIM2_MAGIC 0x324D4E41
-#define ANIM_FORMAT_VERSION 2
+#define ANIM_FORMAT_VERSION_MIN 2
+#define ANIM_FORMAT_VERSION_MAX 3
 #define ANIM_HEADER_SIZE_V2 24
 #define ANIM_MAX_SLOTS 256
 #define ANIM_MAX_LABELS 256
@@ -66,10 +67,18 @@ typedef struct {
     int16_t  dx, dy, dz;
 } AnimTransform;
 
+typedef enum {
+    ANIM_FRAME_LEGACY = 0,
+    ANIM_FRAME_MAYA_BAKED = 1,
+} AnimFrameKind;
+
 typedef struct {
+    uint8_t        kind;
     uint16_t       framebase_id;
     uint8_t        transform_count;
     AnimTransform* transforms;
+    uint16_t       maya_vertex_count;
+    int16_t*       maya_vertices;
 } AnimFrameData;
 
 typedef struct {
@@ -191,7 +200,9 @@ static AnimCache* anim_cache_load(const char* path) {
 
     uint16_t version = anim_read_u16(&r);
     uint16_t header_size = anim_read_u16(&r);
-    if (version != ANIM_FORMAT_VERSION || header_size < ANIM_HEADER_SIZE_V2) {
+    if (version < ANIM_FORMAT_VERSION_MIN ||
+            version > ANIM_FORMAT_VERSION_MAX ||
+            header_size < ANIM_HEADER_SIZE_V2) {
         fprintf(stderr,
             "anim_cache_load: unsupported ANM2 header version=%u size=%u in %s\n",
             version, header_size, path);
@@ -273,20 +284,44 @@ static AnimCache* anim_cache_load(const char* path) {
         for (int fi = 0; fi < seq->frame_count; fi++) {
             AnimSequenceFrame* sf = &seq->frames[fi];
             sf->delay = anim_read_u16(&r);
-            sf->frame.framebase_id = anim_read_u16(&r);
-            sf->frame.transform_count = anim_read_u8(&r);
+            sf->frame.kind = version >= 3 ? anim_read_u8(&r) : ANIM_FRAME_LEGACY;
             sequence_frames_read++;
 
-            if (sf->frame.transform_count > 0) {
-                sf->frame.transforms = (AnimTransform*)osrs_malloc_or_abort(
-                    sf->frame.transform_count * sizeof(AnimTransform),
-                    "animation transforms");
-                for (int t = 0; t < sf->frame.transform_count; t++) {
-                    sf->frame.transforms[t].slot_index = anim_read_u8(&r);
-                    sf->frame.transforms[t].dx = anim_read_i16(&r);
-                    sf->frame.transforms[t].dy = anim_read_i16(&r);
-                    sf->frame.transforms[t].dz = anim_read_i16(&r);
+            if (sf->frame.kind == ANIM_FRAME_LEGACY) {
+                sf->frame.framebase_id = anim_read_u16(&r);
+                sf->frame.transform_count = anim_read_u8(&r);
+                if (sf->frame.transform_count > 0) {
+                    sf->frame.transforms = (AnimTransform*)osrs_malloc_or_abort(
+                        sf->frame.transform_count * sizeof(AnimTransform),
+                        "animation transforms");
+                    for (int t = 0; t < sf->frame.transform_count; t++) {
+                        sf->frame.transforms[t].slot_index = anim_read_u8(&r);
+                        sf->frame.transforms[t].dx = anim_read_i16(&r);
+                        sf->frame.transforms[t].dy = anim_read_i16(&r);
+                        sf->frame.transforms[t].dz = anim_read_i16(&r);
+                    }
                 }
+            } else if (sf->frame.kind == ANIM_FRAME_MAYA_BAKED) {
+                sf->frame.framebase_id = 0xFFFF;
+                sf->frame.transform_count = 0;
+                sf->frame.maya_vertex_count = anim_read_u16(&r);
+                if (sf->frame.maya_vertex_count == 0) {
+                    fprintf(stderr,
+                        "anim_cache_load: Maya baked frame has zero vertices in %s\n",
+                        path);
+                    abort();
+                }
+                sf->frame.maya_vertices = (int16_t*)osrs_malloc_or_abort(
+                    (size_t)sf->frame.maya_vertex_count * 3 * sizeof(int16_t),
+                    "Maya baked animation vertices");
+                for (int v = 0; v < sf->frame.maya_vertex_count * 3; v++) {
+                    sf->frame.maya_vertices[v] = anim_read_i16(&r);
+                }
+            } else {
+                fprintf(stderr,
+                    "anim_cache_load: unknown frame kind %u in sequence %u from %s\n",
+                    sf->frame.kind, seq->seq_id, path);
+                abort();
             }
         }
     }
@@ -307,7 +342,7 @@ static AnimCache* anim_cache_load(const char* path) {
     fprintf(stderr,
         "anim_cache_load: loaded ANM%d flags=0x%08X %d framebases, "
         "%d sequences, %u sequence frames from %s\n",
-        ANIM_FORMAT_VERSION, flags, cache->base_count, cache->seq_count,
+        version, flags, cache->base_count, cache->seq_count,
         sequence_frames_read, path);
     return cache;
 }
@@ -488,6 +523,10 @@ static void anim_apply_frame(
     const AnimFrameData* frame,
     const AnimFrameBase* fb
 ) {
+    if (frame->kind != ANIM_FRAME_LEGACY) {
+        fprintf(stderr, "anim_apply_frame: non-legacy frame passed to legacy path\n");
+        abort();
+    }
     /* reset to base pose */
     anim_apply_rest_pose(state, base_verts_src);
 
@@ -613,6 +652,27 @@ static void anim_apply_frame(
     }
 }
 
+static void anim_apply_maya_baked_frame(
+    AnimModelState* state,
+    const AnimFrameData* frame
+) {
+    if (frame->kind != ANIM_FRAME_MAYA_BAKED) {
+        fprintf(stderr, "anim_apply_maya_baked_frame: non-Maya frame passed\n");
+        abort();
+    }
+    if ((int)frame->maya_vertex_count != state->vert_count) {
+        fprintf(stderr,
+            "anim_apply_maya_baked_frame: vertex count mismatch frame=%u model=%d\n",
+            frame->maya_vertex_count, state->vert_count);
+        abort();
+    }
+    memcpy(state->verts, frame->maya_vertices,
+        (size_t)state->vert_count * 3 * sizeof(int16_t));
+    if (state->face_alphas && state->base_face_alphas) {
+        memcpy(state->face_alphas, state->base_face_alphas, state->face_count);
+    }
+}
+
 
 /**
  * Apply a single transform slot to the vertex state (extracted from anim_apply_frame
@@ -725,6 +785,11 @@ static void anim_apply_frame_interleaved(
     const AnimFrameData* primary_frame, const AnimFrameBase* primary_fb,
     const uint8_t* interleave_order, int interleave_count
 ) {
+    if (secondary_frame->kind != ANIM_FRAME_LEGACY ||
+            primary_frame->kind != ANIM_FRAME_LEGACY) {
+        fprintf(stderr, "anim_apply_frame_interleaved: Maya frames cannot be interleaved\n");
+        abort();
+    }
     /* reset to base pose */
     anim_apply_rest_pose(state, base_verts_src);
 
@@ -857,6 +922,7 @@ static void anim_cache_free(AnimCache* cache) {
         free(seq->interleave_order);
         for (int fi = 0; fi < seq->frame_count; fi++) {
             free(seq->frames[fi].frame.transforms);
+            free(seq->frames[fi].frame.maya_vertices);
         }
         free(seq->frames);
     }

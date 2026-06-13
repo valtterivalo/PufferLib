@@ -19,8 +19,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
+import struct
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -46,7 +49,6 @@ CACHE_PIPELINE = _find_cache_pipeline()
 sys.path.insert(0, str(CACHE_PIPELINE))
 
 from modern_cache_reader import ModernCacheReader
-from modern_cache_reader import parse_sequence as parse_modern_sequence
 from rc_cache.definitions import decode_npc_definition
 from export_models import (
     ModelData,
@@ -57,18 +59,49 @@ from export_models import (
 )
 from export_animations import (
     FrameDef,
-    SequenceDef,
+    FrameBaseDef,
     _parse_normal_frame,
     load_modern_framebases,
-    write_animations_binary,
 )
 from export_inferno_npcs import apply_recolors, apply_scale
 
 MODERN_NPC_CONFIG_GROUP = 9
 MODERN_SEQ_CONFIG_GROUP = 12
 MODERN_FRAME_INDEX = 0
+MODERN_FRAMEBASE_INDEX = 1
+MODERN_MAYA_ANIM_INDEX = 22
 
 SYNTHETIC_MODEL_BASE = 0xC0000
+
+ANIM2_MAGIC = b"ANM2"
+ANIM_FORMAT_VERSION_MAYA = 3
+ANIM_HEADER_SIZE = 24
+ANIM_FLAG_NORMAL_FRAMES = 1 << 0
+ANIM_FLAG_PRESENTATION_METADATA_OMITTED = 1 << 1
+ANIM_FLAG_MAYA_BAKED_FRAMES = 1 << 2
+ANIM_FRAME_LEGACY = 0
+ANIM_FRAME_MAYA_BAKED = 1
+
+MAYA_GROUP_BONE_TRANSFORMS = 1
+MAYA_GROUP_ALPHA = 4
+MAYA_COMPONENT_INDEX = {
+    1: 0,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 0,
+    11: 1,
+    12: 2,
+    13: 3,
+    14: 4,
+    15: 5,
+    16: 0,
+}
 
 COLOSSEUM_NPC_IDS = {
     12816: "Fremennik warband berserker",
@@ -118,11 +151,800 @@ COLOSSEUM_DEATH_ANIM_IDS = {
     12825: 0xFFFF,
 }
 
+COLOSSEUM_PROJECTILE_ANIM_IDS = {
+    10327,
+    10328,
+    10329,
+    10330,
+    10811,
+    10812,
+    10896,
+    10900,
+}
+
+COLOSSEUM_PROJECTILE_ANIM_MODEL_IDS = {
+    10896: 52586,
+    10900: 52587,
+}
+
+
+class CacheBinaryReader:
+    """Small big-endian reader for modern cache config and Maya payloads."""
+
+    def __init__(self, data: bytes, label: str) -> None:
+        self.data = data
+        self.label = label
+        self.offset = 0
+
+    def need(self, size: int) -> None:
+        if self.offset + size > len(self.data):
+            raise SystemExit(f"{self.label}: truncated at offset {self.offset}")
+
+    def read_u8(self) -> int:
+        self.need(1)
+        value = self.data[self.offset]
+        self.offset += 1
+        return value
+
+    def read_i8(self) -> int:
+        value = self.read_u8()
+        return value - 256 if value >= 128 else value
+
+    def read_u16(self) -> int:
+        self.need(2)
+        value = (self.data[self.offset] << 8) | self.data[self.offset + 1]
+        self.offset += 2
+        return value
+
+    def read_i16(self) -> int:
+        value = self.read_u16()
+        return value - 65536 if value >= 32768 else value
+
+    def read_i32(self) -> int:
+        self.need(4)
+        value = int.from_bytes(self.data[self.offset:self.offset + 4], "big", signed=True)
+        self.offset += 4
+        return value
+
+    def read_medium(self) -> int:
+        self.need(3)
+        value = (
+            (self.data[self.offset] << 16) |
+            (self.data[self.offset + 1] << 8) |
+            self.data[self.offset + 2]
+        )
+        self.offset += 3
+        return value
+
+    def read_float(self) -> float:
+        self.need(4)
+        value = struct.unpack(">f", self.data[self.offset:self.offset + 4])[0]
+        self.offset += 4
+        return value
+
+    def read_short_smart(self) -> int:
+        self.need(1)
+        if self.data[self.offset] < 128:
+            return self.read_u8() - 64
+        return self.read_u16() - 49152
+
+    def remaining(self) -> int:
+        return len(self.data) - self.offset
+
+    def skip(self, size: int) -> None:
+        self.need(size)
+        self.offset += size
+
+    def read_string(self) -> str:
+        start = self.offset
+        while self.offset < len(self.data) and self.data[self.offset] != 0:
+            self.offset += 1
+        self.need(1)
+        value = self.data[start:self.offset].decode("cp1252")
+        self.offset += 1
+        return value
+
+
+@dataclass
+class ColosseumSequence:
+    """Modern sequence data with retained Maya fields."""
+
+    seq_id: int
+    frame_count: int = 0
+    frame_delays: list[int] = field(default_factory=list)
+    primary_frame_ids: list[int] = field(default_factory=list)
+    frame_step: int = -1
+    interleave_order: list[int] = field(default_factory=list)
+    forced_priority: int = 5
+    max_loops: int = 99
+    precedence_animating: int = -1
+    priority: int = -1
+    maya_id: int = -1
+    maya_start: int = -1
+    maya_end: int = -1
+    maya_frames: list[list[int]] = field(default_factory=list)
+
+    def has_maya(self) -> bool:
+        """Return whether this sequence is backed by a Maya cached model."""
+        return self.maya_id >= 0
+
+def parse_colosseum_sequence(seq_id: int, data: bytes) -> ColosseumSequence:
+    """Parse a modern sequence and retain opcode 13 Maya metadata."""
+    seq = ColosseumSequence(seq_id=seq_id)
+    buf = CacheBinaryReader(data, f"sequence {seq_id}")
+    while True:
+        opcode = buf.read_u8()
+        if opcode == 0:
+            break
+        if opcode == 1:
+            seq.frame_count = buf.read_u16()
+            seq.frame_delays = [buf.read_u16() for _ in range(seq.frame_count)]
+            file_ids = [buf.read_u16() for _ in range(seq.frame_count)]
+            group_ids = [buf.read_u16() for _ in range(seq.frame_count)]
+            seq.primary_frame_ids = [
+                (group_ids[i] << 16) | file_ids[i] for i in range(seq.frame_count)
+            ]
+        elif opcode == 2:
+            seq.frame_step = buf.read_u16()
+        elif opcode == 3:
+            seq.interleave_order = [buf.read_u8() for _ in range(buf.read_u8())]
+        elif opcode == 4:
+            pass
+        elif opcode == 5:
+            seq.forced_priority = buf.read_u8()
+        elif opcode in (6, 7):
+            buf.read_u16()
+        elif opcode == 8:
+            seq.max_loops = buf.read_u8()
+        elif opcode == 9:
+            seq.precedence_animating = buf.read_u8()
+        elif opcode == 10:
+            seq.priority = buf.read_u8()
+        elif opcode == 11:
+            buf.read_u8()
+        elif opcode == 12:
+            count = buf.read_u8()
+            for _ in range(count * 2):
+                buf.read_u16()
+        elif opcode == 13:
+            seq.maya_id = buf.read_i32()
+        elif opcode == 14:
+            count = buf.read_u16()
+            for _ in range(count):
+                buf.read_u16()
+                buf.skip(6)
+        elif opcode == 15:
+            seq.maya_start = buf.read_u16()
+            seq.maya_end = buf.read_u16()
+        elif opcode == 16:
+            buf.read_u8()
+        elif opcode == 17:
+            for _ in range(buf.read_u8()):
+                buf.read_u8()
+        elif opcode == 18:
+            buf.read_string()
+        elif opcode == 19:
+            pass
+        else:
+            raise SystemExit(f"export_colosseum_npcs: unknown sequence opcode {opcode} in {seq_id}")
+
+    if seq.has_maya():
+        if seq.maya_start < 0 or seq.maya_end <= seq.maya_start:
+            raise SystemExit(f"export_colosseum_npcs: Maya sequence {seq_id} missing valid range")
+        seq.frame_count = seq.maya_end - seq.maya_start
+        seq.frame_delays = [1] * seq.frame_count
+        seq.primary_frame_ids = [-1] * seq.frame_count
+        seq.interleave_order = []
+    elif seq.frame_count == 0:
+        seq.frame_count = 1
+        seq.frame_delays = [1]
+        seq.primary_frame_ids = [-1]
+    return seq
+
+
+def _decode_type3_animaya_weights(raw: bytes, vertex_count: int) -> tuple[list[list[int]], list[list[int]]]:
+    """Decode type-3 model Animaya bone indices and weights."""
+    if len(raw) < 26 or raw[-2:] != b"\xff\xfd":
+        return [[] for _ in range(vertex_count)], [[] for _ in range(vertex_count)]
+
+    footer = len(raw) - 26
+    var9 = int.from_bytes(raw[footer:footer + 2], "big")
+    var10 = int.from_bytes(raw[footer + 2:footer + 4], "big")
+    var11 = raw[footer + 4]
+    var12 = raw[footer + 5]
+    var13 = raw[footer + 6]
+    var14 = raw[footer + 7]
+    var15 = raw[footer + 8]
+    var16 = raw[footer + 9]
+    var17 = raw[footer + 10]
+    var18 = raw[footer + 11]
+    var22 = int.from_bytes(raw[footer + 18:footer + 20], "big")
+    var23 = int.from_bytes(raw[footer + 20:footer + 22], "big")
+    var24 = int.from_bytes(raw[footer + 22:footer + 24], "big")
+    if var9 != vertex_count:
+        raise SystemExit("export_colosseum_npcs: Animaya vertex count mismatch")
+
+    tex_type0 = 0
+    tex_type13 = 0
+    tex_type2 = 0
+    for tex_idx in range(var11):
+        tex_type = raw[tex_idx]
+        if tex_type == 0:
+            tex_type0 += 1
+        if 1 <= tex_type <= 3:
+            tex_type13 += 1
+        if tex_type == 2:
+            tex_type2 += 1
+
+    offset = var11 + var9
+    if var12 == 1:
+        offset += var10
+    offset += var10
+    if var13 == 255:
+        offset += var10
+    if var15 == 1:
+        offset += var10
+    animaya_stream_offset = offset
+    offset += var24
+    if var14 == 1:
+        offset += var10
+    offset += var22
+    if var16 == 1:
+        offset += var10 * 2
+    offset += var23
+    offset += var10 * 2
+    offset += int.from_bytes(raw[footer + 12:footer + 14], "big")
+    offset += int.from_bytes(raw[footer + 14:footer + 16], "big")
+    offset += int.from_bytes(raw[footer + 16:footer + 18], "big")
+    offset += tex_type0 * 6
+    offset += tex_type13 * 14
+    offset += tex_type2 * 2
+
+    bone_indices = [[] for _ in range(vertex_count)]
+    bone_weights = [[] for _ in range(vertex_count)]
+    if var18 != 1:
+        return bone_indices, bone_weights
+
+    reader = CacheBinaryReader(raw, "type3 Animaya weights")
+    reader.offset = animaya_stream_offset + (var9 if var17 == 1 else 0)
+    for vertex in range(vertex_count):
+        count = reader.read_u8()
+        for _ in range(count):
+            bone_indices[vertex].append(reader.read_u8())
+            bone_weights[vertex].append(reader.read_u8())
+    return bone_indices, bone_weights
+
+
+def attach_animaya_weights(model: ModelData, raw: bytes) -> None:
+    """Attach Animaya bone weights to a decoded model object."""
+    bone_indices, bone_weights = _decode_type3_animaya_weights(raw, model.vertex_count)
+    setattr(model, "maya_bone_indices", bone_indices)
+    setattr(model, "maya_bone_weights", bone_weights)
+
+
+def merge_animaya_weights(merged: ModelData, parts: list[ModelData]) -> None:
+    """Attach merged Animaya weights after concatenating model parts."""
+    merged_indices: list[list[int]] = []
+    merged_weights: list[list[int]] = []
+    for part in parts:
+        part_indices = getattr(part, "maya_bone_indices", [[] for _ in range(part.vertex_count)])
+        part_weights = getattr(part, "maya_bone_weights", [[] for _ in range(part.vertex_count)])
+        merged_indices.extend([list(values) for values in part_indices])
+        merged_weights.extend([list(values) for values in part_weights])
+    if len(merged_indices) != merged.vertex_count:
+        raise SystemExit("export_colosseum_npcs: merged Animaya weight count mismatch")
+    setattr(merged, "maya_bone_indices", merged_indices)
+    setattr(merged, "maya_bone_weights", merged_weights)
+
+
+@dataclass
+class MayaCurveKey:
+    """One key in a Maya curve channel."""
+
+    frame: int
+    value: float
+    in_x: float
+    in_y: float
+    out_x: float
+    out_y: float
+
+
+@dataclass
+class MayaCurve:
+    """Evaluable Maya animation curve."""
+
+    weighted: bool
+    keys: list[MayaCurveKey]
+
+    def evaluate(self, frame: int) -> float:
+        """Evaluate the curve at an integer Maya frame."""
+        if not self.keys:
+            return 0.0
+        if frame <= self.keys[0].frame:
+            return self.keys[0].value
+        if frame >= self.keys[-1].frame:
+            return self.keys[-1].value
+        left = self.keys[0]
+        right = self.keys[-1]
+        for idx in range(len(self.keys) - 1):
+            if self.keys[idx].frame <= frame <= self.keys[idx + 1].frame:
+                left = self.keys[idx]
+                right = self.keys[idx + 1]
+                break
+        if left.out_x == 0.0 and left.out_y == 0.0:
+            return left.value
+        if left.out_x >= 3.3e38 and left.out_y >= 3.3e38:
+            return right.value if frame != left.frame else left.value
+        if right.frame == left.frame:
+            return left.value
+
+        p0x = float(left.frame)
+        p0y = left.value
+        p1x = p0x + left.out_x / 3.0
+        p1y = p0y + left.out_y / 3.0
+        p3x = float(right.frame)
+        p3y = right.value
+        p2x = p3x - right.in_x / 3.0
+        p2y = p3y - right.in_y / 3.0
+        lo = 0.0
+        hi = 1.0
+        target = float(frame)
+        for _ in range(24):
+            mid = (lo + hi) * 0.5
+            x = cubic_bezier(p0x, p1x, p2x, p3x, mid)
+            if x < target:
+                lo = mid
+            else:
+                hi = mid
+        t = (lo + hi) * 0.5
+        return cubic_bezier(p0y, p1y, p2y, p3y, t)
+
+
+@dataclass
+class MayaBone:
+    """Skeleton bone data needed for Maya skinning."""
+
+    parent_index: int
+    base_matrices: list[list[float]]
+    default_rotations: list[list[float]]
+    default_translations: list[list[float]]
+    default_scales: list[list[float]]
+
+
+@dataclass
+class MayaSkeleton:
+    """Parsed modern skeleton with optional Animaya bone transforms."""
+
+    skeleton_id: int
+    legacy_count: int
+    bones: list[MayaBone]
+    bind_frame_count: int
+
+
+@dataclass
+class MayaAnimation:
+    """Parsed Maya animation payload and resolved skeleton."""
+
+    maya_id: int
+    version: int
+    skeleton: MayaSkeleton
+    bind_frame: int
+    bone_curves: list[list[MayaCurve | None]]
+
+
+def cubic_bezier(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
+    """Evaluate a scalar cubic Bezier."""
+    u = 1.0 - t
+    return u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
+
+
+def mat_identity() -> list[float]:
+    """Return the client matrix identity."""
+    return [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def mat_zero() -> list[float]:
+    """Return the client matrix zero value."""
+    return [0.0] * 16
+
+
+def mat_add_in_place(dst: list[float], src: list[float]) -> None:
+    """Add src into dst elementwise."""
+    for idx in range(16):
+        dst[idx] += src[idx]
+
+
+def mat_scale_uniform(m: list[float], scale: float) -> list[float]:
+    """Scale every matrix element by a uniform scalar."""
+    return [value * scale for value in m]
+
+
+def mat_mul(a: list[float], b: list[float]) -> list[float]:
+    """Port TransformationMatrix.method9426 for the client matrix layout."""
+    return [
+        b[12] * a[3] + b[8] * a[2] + a[0] * b[0] + b[4] * a[1],
+        a[2] * b[9] + a[0] * b[1] + b[5] * a[1] + a[3] * b[13],
+        a[3] * b[14] + b[6] * a[1] + b[2] * a[0] + a[2] * b[10],
+        a[3] * b[15] + a[2] * b[11] + b[3] * a[0] + b[7] * a[1],
+        a[6] * b[8] + a[5] * b[4] + b[0] * a[4] + a[7] * b[12],
+        b[13] * a[7] + a[5] * b[5] + b[1] * a[4] + a[6] * b[9],
+        b[14] * a[7] + a[6] * b[10] + b[2] * a[4] + a[5] * b[6],
+        b[15] * a[7] + a[4] * b[3] + a[5] * b[7] + a[6] * b[11],
+        b[12] * a[11] + b[8] * a[10] + a[8] * b[0] + a[9] * b[4],
+        b[13] * a[11] + b[1] * a[8] + b[5] * a[9] + a[10] * b[9],
+        b[14] * a[11] + a[8] * b[2] + b[6] * a[9] + a[10] * b[10],
+        a[10] * b[11] + a[9] * b[7] + a[8] * b[3] + a[11] * b[15],
+        b[12] * a[15] + b[4] * a[13] + b[0] * a[12] + a[14] * b[8],
+        b[13] * a[15] + b[1] * a[12] + b[5] * a[13] + b[9] * a[14],
+        a[15] * b[14] + b[10] * a[14] + b[6] * a[13] + a[12] * b[2],
+        a[14] * b[11] + a[13] * b[7] + b[3] * a[12] + a[15] * b[15],
+    ]
+
+
+def mat_inverse(m: list[float]) -> list[float]:
+    """Invert a 4x4 matrix with Gauss-Jordan elimination."""
+    rows = [[m[r * 4 + c] for c in range(4)] + [1.0 if r == c else 0.0 for c in range(4)]
+            for r in range(4)]
+    for col in range(4):
+        pivot = max(range(col, 4), key=lambda r: abs(rows[r][col]))
+        if abs(rows[pivot][col]) < 1e-8:
+            raise SystemExit("export_colosseum_npcs: singular Maya bind matrix")
+        rows[col], rows[pivot] = rows[pivot], rows[col]
+        factor = rows[col][col]
+        rows[col] = [value / factor for value in rows[col]]
+        for row in range(4):
+            if row == col:
+                continue
+            scale = rows[row][col]
+            rows[row] = [rows[row][i] - scale * rows[col][i] for i in range(8)]
+    return [rows[r][c + 4] for r in range(4) for c in range(4)]
+
+
+def mat_default_rotation(m: list[float]) -> list[float]:
+    """Port TransformationMatrix.method9420 rotation extraction."""
+    x = -math.asin(max(-1.0, min(1.0, m[6])))
+    cos_x = math.cos(x)
+    y = 0.0
+    z = 0.0
+    if abs(cos_x) > 0.005:
+        y = math.atan2(m[2], m[10])
+        z = math.atan2(m[4], m[5])
+    else:
+        if m[6] < 0.0:
+            y = math.atan2(m[1], m[0])
+        else:
+            y = -math.atan2(m[1], m[0])
+    return [x, y, z]
+
+
+def mat_default_scale(m: list[float]) -> list[float]:
+    """Port TransformationMatrix.method9495 scale extraction."""
+    return [
+        math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]),
+        math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]),
+        math.sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]),
+    ]
+
+
+def rotation_x(angle: float) -> list[float]:
+    """Return a client-layout X rotation matrix."""
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, c, s, 0.0,
+        0.0, -s, c, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def rotation_y(angle: float) -> list[float]:
+    """Return a client-layout Y rotation matrix."""
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        c, 0.0, -s, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        s, 0.0, c, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def rotation_z(angle: float) -> list[float]:
+    """Return a client-layout Z rotation matrix."""
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        c, s, 0.0, 0.0,
+        -s, c, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+
+
+def scale_xyz(x: float, y: float, z: float) -> list[float]:
+    """Return a non-uniform scale matrix."""
+    out = mat_identity()
+    out[0] = x
+    out[5] = y
+    out[10] = z
+    return out
+
+
+def compose_local_transform(rotation: list[float], translation: list[float], scale: list[float]) -> list[float]:
+    """Build the local bone transform in class146 order."""
+    matrix = mat_identity()
+    matrix = mat_mul(matrix, rotation_z(rotation[2]))
+    matrix = mat_mul(matrix, rotation_x(rotation[0]))
+    matrix = mat_mul(matrix, rotation_y(rotation[1]))
+    matrix = mat_mul(matrix, scale_xyz(scale[0], scale[1], scale[2]))
+    matrix[12] = translation[0]
+    matrix[13] = translation[1]
+    matrix[14] = translation[2]
+    return matrix
+
+
+def transform_vertex(matrix: list[float], x: int, y: int, z: int) -> tuple[int, int, int]:
+    """Apply the client Maya transform to one model vertex."""
+    fx = float(x)
+    fy = float(-y)
+    fz = float(-z)
+    out_x = matrix[0] * fx + matrix[4] * fy + matrix[8] * fz + matrix[12]
+    out_y = -(matrix[1] * fx + matrix[5] * fy + matrix[9] * fz + matrix[13])
+    out_z = -(matrix[2] * fx + matrix[6] * fy + matrix[10] * fz + matrix[14])
+    return int(out_x), int(out_y), int(out_z)
+
+
+def clamp_i16(value: int) -> int:
+    """Clamp a baked vertex coordinate to the renderer's int16 storage."""
+    return max(-32768, min(32767, value))
+
+
+def parse_maya_curve(reader: CacheBinaryReader, version: int) -> MayaCurve:
+    """Parse class139 curve data."""
+    key_count = reader.read_u16()
+    reader.read_u8()
+    reader.read_u8()
+    reader.read_u8()
+    weighted = reader.read_u8() != 0
+    keys: list[MayaCurveKey] = []
+    for _ in range(key_count):
+        keys.append(MayaCurveKey(
+            frame=reader.read_i16(),
+            value=reader.read_float(),
+            in_x=reader.read_float(),
+            in_y=reader.read_float(),
+            out_x=reader.read_float(),
+            out_y=reader.read_float(),
+        ))
+    return MayaCurve(weighted=weighted, keys=keys)
+
+
+def parse_maya_skeleton(skeleton_id: int, data: bytes) -> MayaSkeleton:
+    """Parse a modern Skeleton including optional class251 bone transforms."""
+    reader = CacheBinaryReader(data, f"skeleton {skeleton_id}")
+    legacy_count = reader.read_u8()
+    for _ in range(legacy_count):
+        reader.read_u8()
+    label_lengths = [reader.read_u8() for _ in range(legacy_count)]
+    for length in label_lengths:
+        for _ in range(length):
+            reader.read_u8()
+    if reader.remaining() <= 0:
+        raise SystemExit(f"export_colosseum_npcs: skeleton {skeleton_id} missing Maya bone data")
+
+    bone_count = reader.read_u16()
+    if bone_count <= 0:
+        raise SystemExit(f"export_colosseum_npcs: skeleton {skeleton_id} has zero Maya bones")
+    bind_frame_count = reader.read_u8()
+    bones: list[MayaBone] = []
+    for _ in range(bone_count):
+        parent_index = reader.read_i16()
+        base_matrices: list[list[float]] = []
+        for _frame in range(bind_frame_count):
+            matrix = [reader.read_float() for _ in range(16)]
+            reader.read_float()
+            reader.read_float()
+            reader.read_float()
+            base_matrices.append(matrix)
+        default_rotations: list[list[float]] = []
+        default_translations: list[list[float]] = []
+        default_scales: list[list[float]] = []
+        for matrix in base_matrices:
+            default_rotations.append(mat_default_rotation(mat_inverse(matrix)))
+            default_translations.append([matrix[12], matrix[13], matrix[14]])
+            default_scales.append(mat_default_scale(matrix))
+        bones.append(MayaBone(
+            parent_index=parent_index,
+            base_matrices=base_matrices,
+            default_rotations=default_rotations,
+            default_translations=default_translations,
+            default_scales=default_scales,
+        ))
+    return MayaSkeleton(
+        skeleton_id=skeleton_id,
+        legacy_count=legacy_count,
+        bones=bones,
+        bind_frame_count=bind_frame_count,
+    )
+
+
+def read_maya_animation(reader: ModernCacheReader, maya_id: int) -> MayaAnimation:
+    """Load a Maya animation payload from cache index 22 and its skeleton from index 1."""
+    group_id = (maya_id >> 16) & 0xFFFF
+    file_id = maya_id & 0xFFFF
+    files = reader.read_group(MODERN_MAYA_ANIM_INDEX, group_id)
+    if file_id not in files:
+        raise SystemExit(f"export_colosseum_npcs: Maya file {maya_id} missing from index 22")
+    payload = files[file_id]
+    payload_reader = CacheBinaryReader(payload, f"Maya animation {maya_id}")
+    version = payload_reader.read_u8()
+    skeleton_id = payload_reader.read_u16()
+    skeleton_files = reader.read_group(MODERN_FRAMEBASE_INDEX, skeleton_id)
+    if 0 not in skeleton_files:
+        raise SystemExit(f"export_colosseum_npcs: Maya skeleton {skeleton_id} file 0 missing")
+    skeleton = parse_maya_skeleton(skeleton_id, skeleton_files[0])
+    payload_reader.read_u16()
+    payload_reader.read_u16()
+    bind_frame = payload_reader.read_u8()
+    curve_count = payload_reader.read_u16()
+    if bind_frame < 0 or bind_frame >= skeleton.bind_frame_count:
+        raise SystemExit(
+            f"export_colosseum_npcs: Maya {maya_id} bind frame {bind_frame} outside skeleton range"
+        )
+    bone_curves: list[list[MayaCurve | None]] = [
+        [None] * 9 for _ in range(len(skeleton.bones))
+    ]
+    for _ in range(curve_count):
+        group = payload_reader.read_u8()
+        bone_index = payload_reader.read_short_smart()
+        component_ordinal = payload_reader.read_u8()
+        curve = parse_maya_curve(payload_reader, version)
+        if group == MAYA_GROUP_ALPHA:
+            continue
+        if group != MAYA_GROUP_BONE_TRANSFORMS:
+            raise SystemExit(f"export_colosseum_npcs: Maya {maya_id} has unsupported curve group {group}")
+        component = MAYA_COMPONENT_INDEX.get(component_ordinal)
+        if component is None or component >= 9:
+            raise SystemExit(
+                f"export_colosseum_npcs: Maya {maya_id} has unsupported component {component_ordinal}"
+            )
+        if bone_index < 0 or bone_index >= len(bone_curves):
+            raise SystemExit(f"export_colosseum_npcs: Maya {maya_id} bone index {bone_index} invalid")
+        bone_curves[bone_index][component] = curve
+    return MayaAnimation(
+        maya_id=maya_id,
+        version=version,
+        skeleton=skeleton,
+        bind_frame=bind_frame,
+        bone_curves=bone_curves,
+    )
+
+
+def maya_bone_local_transform(animation: MayaAnimation, bone_index: int, frame: int) -> list[float]:
+    """Evaluate one bone's local transform for a Maya frame."""
+    bone = animation.skeleton.bones[bone_index]
+    rotation = list(bone.default_rotations[animation.bind_frame])
+    translation = list(bone.default_translations[animation.bind_frame])
+    scale = list(bone.default_scales[animation.bind_frame])
+    curves = animation.bone_curves[bone_index]
+    for component in range(3):
+        if curves[component] is not None:
+            rotation[component] = curves[component].evaluate(frame)
+    for component in range(3):
+        curve = curves[component + 3]
+        if curve is not None:
+            translation[component] = curve.evaluate(frame)
+    for component in range(3):
+        curve = curves[component + 6]
+        if curve is not None:
+            scale[component] = curve.evaluate(frame)
+    return compose_local_transform(rotation, translation, scale)
+
+
+def maya_world_matrices(animation: MayaAnimation, frame: int) -> list[list[float]]:
+    """Evaluate every final bone matrix for one Maya frame."""
+    skeleton = animation.skeleton
+    local = [
+        maya_bone_local_transform(animation, bone_index, frame)
+        for bone_index in range(len(skeleton.bones))
+    ]
+    current_world: list[list[float] | None] = [None] * len(skeleton.bones)
+    bind_world: list[list[float] | None] = [None] * len(skeleton.bones)
+
+    def current_for(index: int) -> list[float]:
+        cached = current_world[index]
+        if cached is not None:
+            return cached
+        parent = skeleton.bones[index].parent_index
+        matrix = local[index]
+        if parent >= 0:
+            matrix = mat_mul(matrix, current_for(parent))
+        current_world[index] = matrix
+        return matrix
+
+    def bind_for(index: int) -> list[float]:
+        cached = bind_world[index]
+        if cached is not None:
+            return cached
+        bone = skeleton.bones[index]
+        matrix = bone.base_matrices[animation.bind_frame]
+        if bone.parent_index >= 0:
+            matrix = mat_mul(matrix, bind_for(bone.parent_index))
+        bind_world[index] = matrix
+        return matrix
+
+    final_matrices: list[list[float]] = []
+    for bone_index in range(len(skeleton.bones)):
+        final_matrices.append(mat_mul(mat_inverse(bind_for(bone_index)), current_for(bone_index)))
+    return final_matrices
+
+
+def bake_maya_frame(animation: MayaAnimation, model: ModelData, frame: int) -> list[int]:
+    """Bake a Maya animation frame into renderer-ready vertex triples."""
+    bone_indices: list[list[int]] = getattr(model, "maya_bone_indices", [])
+    bone_weights: list[list[int]] = getattr(model, "maya_bone_weights", [])
+    if len(bone_indices) != model.vertex_count or len(bone_weights) != model.vertex_count:
+        raise SystemExit(f"export_colosseum_npcs: model {model.model_id} missing Animaya weights")
+    matrices = maya_world_matrices(animation, frame)
+    baked: list[int] = []
+    animated_vertices = 0
+    for vertex in range(model.vertex_count):
+        x = model.vertices_x[vertex]
+        y = model.vertices_y[vertex]
+        z = model.vertices_z[vertex]
+        if bone_indices[vertex]:
+            weighted = mat_zero()
+            for bone_index, weight in zip(bone_indices[vertex], bone_weights[vertex], strict=True):
+                if bone_index >= len(matrices):
+                    raise SystemExit(
+                        f"export_colosseum_npcs: model {model.model_id} references missing Maya bone {bone_index}"
+                    )
+                mat_add_in_place(weighted, mat_scale_uniform(matrices[bone_index], weight / 255.0))
+            x, y, z = transform_vertex(weighted, x, y, z)
+            animated_vertices += 1
+        baked.extend([clamp_i16(x), clamp_i16(y), clamp_i16(z)])
+    if animated_vertices == 0:
+        raise SystemExit(f"export_colosseum_npcs: model {model.model_id} has no animated Maya vertices")
+    return baked
+
+
+def bake_maya_sequence(
+    reader: ModernCacheReader,
+    seq: ColosseumSequence,
+    model: ModelData,
+) -> None:
+    """Bake every frame in a Maya-backed sequence against its NPC model."""
+    animation = read_maya_animation(reader, seq.maya_id)
+    seq.maya_frames = [
+        bake_maya_frame(animation, model, frame)
+        for frame in range(seq.maya_start, seq.maya_end)
+    ]
+    if len(seq.maya_frames) != seq.frame_count:
+        raise SystemExit(f"export_colosseum_npcs: Maya sequence {seq.seq_id} frame count drift")
+
+
+def load_animation_model(reader: ModernCacheReader, model_id: int) -> ModelData:
+    """Decode a model used only for baked animation frames."""
+    raw = load_model_modern(reader, model_id)
+    if raw is None:
+        raise SystemExit(f"export_colosseum_npcs: animation model {model_id} missing")
+    model = decode_model(model_id, raw)
+    if model is None:
+        raise SystemExit(f"export_colosseum_npcs: animation model {model_id} failed to decode")
+    attach_animaya_weights(model, raw)
+    return model
+
 
 def build_npc_models(
     reader: ModernCacheReader,
     npc_files: dict[int, bytes],
-) -> tuple[list[ModelData], dict[int, dict[str, int]]]:
+) -> tuple[list[ModelData], dict[int, dict[str, int]], dict[int, ModelData]]:
     """Decode, merge, recolor, and scale each Colosseum NPC mesh.
 
     Returns the merged models keyed by synthetic id plus a mapping from npc id
@@ -143,6 +965,7 @@ def build_npc_models(
 
     models: list[ModelData] = []
     mapping: dict[int, dict[str, int]] = {}
+    sequence_models: dict[int, ModelData] = {}
 
     for npc_id, label in sorted(COLOSSEUM_NPC_IDS.items()):
         if npc_id not in npc_files:
@@ -168,9 +991,11 @@ def build_npc_models(
                 raise SystemExit(
                     f"export_colosseum_npcs: model {model_id} failed to decode for npc {npc_id}"
                 )
+            attach_animaya_weights(decoded, raw)
             parts.append(decoded)
 
         merged = parts[0] if len(parts) == 1 else _merge_models(parts)
+        merge_animaya_weights(merged, parts)
         if npc.recolor_from:
             apply_recolors(merged, npc.recolor_from, npc.recolor_to)
         apply_scale(merged, npc.width_scale, npc.height_scale)
@@ -188,17 +1013,20 @@ def build_npc_models(
             "walk_anim": walk_anim,
             "death_anim": death_anim,
         }
+        for anim_id in (idle_anim, attack_anim, walk_anim, death_anim):
+            if anim_id != 0xFFFF:
+                sequence_models[anim_id] = merged
         print(
             f"  npc {npc_id} ({npc.name}): {merged.vertex_count}v {merged.face_count}f "
             f"idle={idle_anim} attack={attack_anim} walk={walk_anim} death={death_anim}"
         )
 
-    return models, mapping
+    return models, mapping, sequence_models
 
 
 def collect_anim_ids(mapping: dict[int, dict[str, int]]) -> set[int]:
     """Gather every non-sentinel idle, attack, walk, and death sequence id."""
-    anim_ids: set[int] = set()
+    anim_ids: set[int] = set(COLOSSEUM_PROJECTILE_ANIM_IDS)
     for entry in mapping.values():
         for key in ("idle_anim", "attack_anim", "walk_anim", "death_anim"):
             value = entry[key]
@@ -211,30 +1039,36 @@ def export_animations(
     reader: ModernCacheReader,
     output_path: Path,
     anim_ids: set[int],
+    sequence_models: dict[int, ModelData],
 ) -> None:
-    """Resolve sequences and frames for the requested ids and write the binary."""
+    """Resolve legacy and Maya sequences for the requested ids and write v3 binary."""
     seq_files = reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
 
-    sequences: dict[int, SequenceDef] = {}
+    sequences: dict[int, ColosseumSequence] = {}
     for seq_id in sorted(anim_ids):
         if seq_id not in seq_files:
             raise SystemExit(f"export_colosseum_npcs: sequence {seq_id} missing from cache")
-        modern_seq = parse_modern_sequence(seq_id, seq_files[seq_id])
-        sequences[seq_id] = SequenceDef(
-            seq_id=modern_seq.seq_id,
-            frame_count=modern_seq.frame_count,
-            frame_delays=modern_seq.frame_delays,
-            primary_frame_ids=modern_seq.primary_frame_ids,
-            frame_step=modern_seq.frame_step,
-            interleave_order=modern_seq.interleave_order,
-            priority=modern_seq.forced_priority,
-            loop_count=modern_seq.max_loops,
-            walk_flag=modern_seq.priority,
-            run_flag=modern_seq.precedence_animating,
-        )
+        seq = parse_colosseum_sequence(seq_id, seq_files[seq_id])
+        if seq.has_maya():
+            model = sequence_models.get(seq_id)
+            if model is None:
+                model_id = COLOSSEUM_PROJECTILE_ANIM_MODEL_IDS.get(seq_id)
+                if model_id is None:
+                    raise SystemExit(
+                        f"export_colosseum_npcs: Maya sequence {seq_id} has no owning model"
+                    )
+                model = load_animation_model(reader, model_id)
+            bake_maya_sequence(reader, seq, model)
+            print(
+                f"  sequence {seq_id}: Maya id={seq.maya_id} "
+                f"frames={seq.frame_count} vertices={model.vertex_count}"
+            )
+        sequences[seq_id] = seq
 
     needed_groups: set[int] = set()
     for seq in sequences.values():
+        if seq.has_maya():
+            continue
         for frame_id in seq.primary_frame_ids:
             if frame_id != -1:
                 needed_groups.add(frame_id >> 16)
@@ -265,8 +1099,105 @@ def export_animations(
         if frames:
             all_frames[group_id] = frames
 
-    write_animations_binary(
-        output_path, framebases, all_frames, sequences, set(sequences.keys())
+    write_colosseum_animations_binary(output_path, framebases, all_frames, sequences)
+
+
+def _as_i8(value: int) -> int:
+    """Clamp a value into signed int8 range."""
+    return max(-128, min(127, int(value)))
+
+
+def write_colosseum_animations_binary(
+    output_path: Path,
+    framebases: dict[int, FrameBaseDef],
+    all_frames: dict[int, dict[int, FrameDef]],
+    sequences: dict[int, ColosseumSequence],
+) -> None:
+    """Write Colosseum animation data with explicit legacy and Maya frame kinds."""
+    needed_bases: set[int] = set()
+    for seq in sequences.values():
+        if seq.has_maya():
+            if len(seq.maya_frames) != seq.frame_count:
+                raise SystemExit(f"export_colosseum_npcs: Maya sequence {seq.seq_id} was not baked")
+            continue
+        for frame_id in seq.primary_frame_ids:
+            if frame_id == -1:
+                continue
+            group_id = frame_id >> 16
+            file_id = frame_id & 0xFFFF
+            group = all_frames.get(group_id)
+            if group is None or file_id not in group:
+                raise SystemExit(
+                    f"export_colosseum_npcs: frame {frame_id} missing for sequence {seq.seq_id}"
+                )
+            needed_bases.add(group[file_id].framebase_id)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_bases = sorted(needed_bases)
+    sequence_frame_count = sum(seq.frame_count for seq in sequences.values())
+    with output_path.open("wb") as f:
+        f.write(ANIM2_MAGIC)
+        f.write(struct.pack(
+            "<HHIIII",
+            ANIM_FORMAT_VERSION_MAYA,
+            ANIM_HEADER_SIZE,
+            len(sorted_bases),
+            len(sequences),
+            sequence_frame_count,
+            ANIM_FLAG_NORMAL_FRAMES |
+            ANIM_FLAG_PRESENTATION_METADATA_OMITTED |
+            ANIM_FLAG_MAYA_BAKED_FRAMES,
+        ))
+
+        for base_id in sorted_bases:
+            fb = framebases[base_id]
+            f.write(struct.pack("<H", base_id))
+            f.write(struct.pack("B", fb.slot_count))
+            for transform_type in fb.types:
+                f.write(struct.pack("B", transform_type))
+            for frame_map in fb.frame_maps:
+                f.write(struct.pack("B", len(frame_map)))
+                for entry in frame_map:
+                    f.write(struct.pack("B", entry))
+
+        for seq in sequences.values():
+            f.write(struct.pack("<H", seq.seq_id))
+            f.write(struct.pack("<H", seq.frame_count))
+            f.write(struct.pack("B", len(seq.interleave_order)))
+            for value in seq.interleave_order:
+                f.write(struct.pack("B", value))
+            f.write(struct.pack("b", _as_i8(seq.priority)))
+            for frame_index in range(seq.frame_count):
+                delay = seq.frame_delays[frame_index]
+                f.write(struct.pack("<H", max(0, delay)))
+                if seq.has_maya():
+                    frame = seq.maya_frames[frame_index]
+                    vertex_count = len(frame) // 3
+                    f.write(struct.pack("B", ANIM_FRAME_MAYA_BAKED))
+                    f.write(struct.pack("<H", vertex_count))
+                    for coord in frame:
+                        f.write(struct.pack("<h", coord))
+                    continue
+
+                f.write(struct.pack("B", ANIM_FRAME_LEGACY))
+                frame_id = seq.primary_frame_ids[frame_index]
+                if frame_id == -1:
+                    f.write(struct.pack("<HB", 0xFFFF, 0))
+                    continue
+                group_id = frame_id >> 16
+                file_id = frame_id & 0xFFFF
+                frame = all_frames[group_id][file_id]
+                f.write(struct.pack("<H", frame.framebase_id))
+                f.write(struct.pack("B", frame.translator_count))
+                for transform_index in range(frame.translator_count):
+                    f.write(struct.pack("B", frame.slot_indices[transform_index]))
+                    f.write(struct.pack("<h", frame.dx[transform_index]))
+                    f.write(struct.pack("<h", frame.dy[transform_index]))
+                    f.write(struct.pack("<h", frame.dz[transform_index]))
+
+    print(
+        f"  wrote {output_path}: {len(sorted_bases)} framebases, "
+        f"{len(sequences)} sequences, {sequence_frame_count} frames"
     )
 
 
@@ -359,14 +1290,14 @@ def main() -> None:
     npc_files = reader.read_group(2, MODERN_NPC_CONFIG_GROUP)
     print(f"read {len(npc_files)} NPC defs; building {len(COLOSSEUM_NPC_IDS)} Colosseum NPCs")
 
-    models, mapping = build_npc_models(reader, npc_files)
+    models, mapping, sequence_models = build_npc_models(reader, npc_files)
     models_path = args.output_dir / "colosseum_npcs.models"
     write_models_binary(models_path, models)
     print(f"wrote {len(models)} models ({models_path.stat().st_size:,} bytes) to {models_path}")
 
     anim_ids = collect_anim_ids(mapping)
     anims_path = args.output_dir / "colosseum_npcs.anims"
-    export_animations(reader, anims_path, anim_ids)
+    export_animations(reader, anims_path, anim_ids, sequence_models)
     print(f"wrote {len(anim_ids)} sequences ({anims_path.stat().st_size:,} bytes) to {anims_path}")
 
     header_path = args.output_dir / "npc_models_colosseum.h"

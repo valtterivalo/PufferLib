@@ -73,6 +73,7 @@ typedef struct {
     int death_ticks;
     int cycle_step;
     AttackStyle orb_style[3];
+    AttackStyle fixed_orb_style[3];
     int formation_dir;
     int javelin_attack_count;
     int sol_attack_delay;
@@ -926,16 +927,14 @@ typedef struct {
 } ColoWarbandState;
 
 /** manticore 3-orb barrage cycle. valid iff type is COLO_MANTICORE; reach it
-    through colo_npc_manticore(). cycle_step counts ticks within a barrage:
-    -1 = idle (waiting on attack_timer), 0/1/2 = next orb to fire 1 tick apart.
-    orb_style holds the resolved per-orb styles (orbs 0&1 are {ranged,magic} in
-    random order, orb 2 is always melee). pattern_copied (B10): orb_style holds
-    a pattern copied from a peer's fresh draw, consumed at the next barrage
-    start instead of rolling. D11: movement is NOT restricted while charging
-    (a "charge-up" is described but no movement rule exists in any source). */
+    through colo_npc_manticore(). fixed_orb_style is the persistent spawn-time
+    cycle. orb_style is the visible active telegraph and firing queue only.
+    cycle_step counts ticks within a barrage: -1 = idle, 0/1/2 = next orb.
+    D11: movement is NOT restricted while charging. */
 typedef struct {
     int cycle_step;
     AttackStyle orb_style[3];
+    AttackStyle fixed_orb_style[3];
     int pattern_copied;
 } ColoManticoreState;
 
@@ -1049,6 +1048,7 @@ static void colo_npc_init_type_state(ColoNPC* npc) {
             npc->type_state.manticore = (ColoManticoreState){
                 .cycle_step = -1,
                 .orb_style = { ATTACK_STYLE_NONE, ATTACK_STYLE_NONE, ATTACK_STYLE_NONE },
+                .fixed_orb_style = { ATTACK_STYLE_NONE, ATTACK_STYLE_NONE, ATTACK_STYLE_NONE },
             };
             break;
         case COLO_JAVELIN_COLOSSUS:

@@ -61,12 +61,42 @@ static void col_deactivate_npc(ColosseumState* s, int idx) {
     npc->active = 0;
 }
 
+/** Roll the persistent manticore cycle once at spawn. */
+static void col_roll_manticore_fixed_orb_cycle(ColosseumState* s, ColoManticoreState* mc) {
+    int mantimayhem = s->modifiers.tier[COLO_MOD_MANTIMAYHEM];
+    if ((s->modifiers.active_mask & (1u << COLO_MOD_MANTIMAYHEM)) == 0) {
+        mantimayhem = 0;
+    }
+    if (mantimayhem >= 3) {
+        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
+        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
+        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        for (int o = 2; o > 0; o--) {
+            int j = encounter_rand_int(&s->rng_state, o + 1);
+            AttackStyle tmp = mc->fixed_orb_style[o];
+            mc->fixed_orb_style[o] = mc->fixed_orb_style[j];
+            mc->fixed_orb_style[j] = tmp;
+        }
+    } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
+        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
+        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
+        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+    } else {
+        mc->fixed_orb_style[0] = ATTACK_STYLE_MAGIC;
+        mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
+        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+    }
+}
+
 /** initialize a fresh NPC of `type` at (x, y) from the placeholder stat table. */
 static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, int y) {
     ColoNPC* npc = &s->npcs[idx];
     memset(npc, 0, sizeof(*npc));
     npc->type = type;
     colo_npc_init_type_state(npc);
+    if (type == COLO_MANTICORE) {
+        col_roll_manticore_fixed_orb_cycle(s, colo_npc_manticore(npc));
+    }
     const ColoNpcStats* st = &COLO_NPC_STATS[type];
     npc->x = x;
     npc->y = y;

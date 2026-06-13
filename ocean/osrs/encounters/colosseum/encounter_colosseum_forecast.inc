@@ -211,8 +211,11 @@ static void col_forecast_local_copy_npcs(
         if (!src->active) continue;
         if (src->type == COLO_MANTICORE) {
             dst->cycle_step = src->type_state.manticore.cycle_step;
-            for (int orb = 0; orb < 3; orb++)
+            for (int orb = 0; orb < 3; orb++) {
                 dst->orb_style[orb] = src->type_state.manticore.orb_style[orb];
+                dst->fixed_orb_style[orb] =
+                    src->type_state.manticore.fixed_orb_style[orb];
+            }
         } else if (col_type_is_warbander(src->type)) {
             dst->formation_dir = src->type_state.warband.formation_dir;
         } else if (src->type == COLO_JAVELIN_COLOSSUS) {
@@ -379,7 +382,7 @@ static int col_forecast_any_other_manticore_mid_barrage(
         ColoForecastNpcLocal* other = &npcs[i];
         if (!other->active || other->death_ticks > 0 || other->hp <= 0) continue;
         if (other->type != COLO_MANTICORE) continue;
-        if (other->cycle_step >= 0) return 1;
+        if (other->cycle_step > 0) return 1;
     }
     return 0;
 }
@@ -410,7 +413,7 @@ static void col_forecast_local_attack_manticore(
     int tick_idx
 ) {
     ColoForecastNpcLocal* npc = &npcs[idx];
-    if (npc->cycle_step >= 0) {
+    if (npc->cycle_step > 0) {
         if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
         col_forecast_local_fire_manticore_orb(npc, action, tick_idx);
         return;
@@ -423,14 +426,16 @@ static void col_forecast_local_attack_manticore(
     int dist = col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
     if (dist < 1 || dist > stats->attack_range) return;
     if (!col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y)) return;
-    if (npc->orb_style[0] == ATTACK_STYLE_NONE) return;
+    if (npc->orb_style[0] == ATTACK_STYLE_NONE) {
+        for (int orb = 0; orb < 3; orb++) npc->orb_style[orb] = npc->fixed_orb_style[orb];
+        npc->cycle_step = 0;
+    }
     if (npc->attack_timer > 0) return;
     if (col_forecast_any_other_manticore_mid_barrage(npcs, idx)) {
         npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
         return;
     }
 
-    npc->cycle_step = 0;
     col_forecast_local_fire_manticore_orb(npc, action, tick_idx);
 }
 

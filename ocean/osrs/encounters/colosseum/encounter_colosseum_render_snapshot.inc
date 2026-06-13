@@ -142,13 +142,6 @@ static EncounterProjectileTiming col_npc_projectile_timing(
     AttackStyle style,
     int distance
 ) {
-    if (type == COLO_MANTICORE) {
-        return (EncounterProjectileTiming){
-            .damage_delay_ticks = 0,
-            .visual_start_delay_ticks = 0,
-            .visual_duration_ticks = 1,
-        };
-    }
     EncounterProjectileDelayOptions options = {0};
     return encounter_projectile_timing(
         distance, 0, col_projectile_delay_kind_for_style(style), options);
@@ -161,7 +154,9 @@ static void col_emit_npc_attack_projectile(
 ) {
     ColoNPC* npc = &s->npcs[npc_slot];
     AttackStyle actual_style = npc->attack_style_this_tick;
-    if (actual_style == ATTACK_STYLE_NONE || actual_style == ATTACK_STYLE_MELEE)
+    if (actual_style == ATTACK_STYLE_NONE)
+        return;
+    if (actual_style == ATTACK_STYLE_MELEE && npc->type != COLO_MANTICORE)
         return;
     if (col_type_is_hazard_entity(npc->type))
         return;
@@ -195,8 +190,6 @@ static void col_emit_npc_attack_projectile(
     EncounterProjectileTiming timing =
         col_npc_projectile_timing(npc->type, actual_style, dist);
     int duration = timing.visual_duration_ticks * 30;
-    if (npc->type == COLO_MANTICORE)
-        duration = 1;
     int start_delay = timing.visual_start_delay_ticks * 30;
 
     const OsrsCombatVisualRow* npc_visual =
@@ -544,8 +537,9 @@ static void col_step_human_commands_ctx(
    v3: P5 draft rework (draft_gates_spawn replaces draft_timer), hazard-entity
    totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields.
    v5: E8 bee-contact poison state fields.
-   v6: E13 stat drift and divine potion timers. */
-#define COLO_SNAPSHOT_VERSION 6u
+   v6: E13 stat drift and divine potion timers.
+   v7: manticore fixed orb cycle split from active telegraph state. */
+#define COLO_SNAPSHOT_VERSION 7u
 
 typedef struct {
     uint32_t magic;

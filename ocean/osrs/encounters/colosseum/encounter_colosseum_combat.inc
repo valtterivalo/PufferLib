@@ -297,7 +297,7 @@ static int col_any_other_manticore_mid_barrage(const ColosseumState* s, int idx)
         if (i == idx) continue;
         const ColoNPC* other = &s->npcs[i];
         if (!col_npc_is_live_target(other) || other->type != COLO_MANTICORE) continue;
-        if (other->type_state.manticore.cycle_step >= 0) return 1;
+        if (other->type_state.manticore.cycle_step > 0) return 1;
     }
     return 0;
 }
@@ -345,9 +345,6 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     mc->cycle_step++;
     if (mc->cycle_step >= 3) {
         mc->cycle_step = -1;
-        /* disarm: clearing the locked pattern marks the manticore idle so the
-           next charge re-rolls (and re-telegraphs). orb_style[0] == NONE is the
-           "not armed" sentinel the obs + arm path both read. */
         mc->orb_style[0] = ATTACK_STYLE_NONE;
         mc->orb_style[1] = ATTACK_STYLE_NONE;
         mc->orb_style[2] = ATTACK_STYLE_NONE;
@@ -367,71 +364,38 @@ static void col_npc_manticore_advance_barrage(ColosseumState* s, int idx, const 
     col_npc_manticore_fire_orb(s, idx, stats);
 }
 
-/** B10: from wave 9, a freshly-drawn orb pattern is copied onto every other
-    manticore within COLO_MANTICORE_COPY_RANGE tiles (centre-to-centre) with
-    line of sight that has not committed its own pattern (a mid-barrage peer
-    keeps its own). Modeled: a CONSUMED copy does not re-propagate — only fresh
-    draws count as "selecting" a pattern, so a pair cannot echo-lock one
-    pattern forever. */
+/** B10: from wave 9, a manticore's fixed cycle is copied onto idle peers within
+    range and line of sight. The peer still exposes it only after arming. */
 static void col_manticore_copy_pattern_to_peers(ColosseumState* s, int idx) {
     if (s->wave < COLO_MANTICORE_COPY_MIN_WAVE) return;
     ColoNPC* src = &s->npcs[idx];
     ColoManticoreState* smc = colo_npc_manticore(src);
-    int scx = src->x + 1, scy = src->y + 1;   /* centre of the 3x3 */
+    int scx = src->x + 1, scy = src->y + 1;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
         ColoNPC* other = &s->npcs[i];
         if (!col_npc_is_live_target(other)) continue;
         if (other->type != COLO_MANTICORE) continue;
         ColoManticoreState* omc = colo_npc_manticore(other);
-        if (omc->cycle_step >= 0) continue;   /* mid-barrage = committed */
-        if (omc->orb_style[0] != ATTACK_STYLE_NONE) continue;   /* already armed: keep its own */
+        if (omc->cycle_step >= 0) continue;
+        if (omc->orb_style[0] != ATTACK_STYLE_NONE) continue;
         int ocx = other->x + 1, ocy = other->y + 1;
         int dx = ocx > scx ? ocx - scx : scx - ocx;
         int dy = ocy > scy ? ocy - scy : scy - ocy;
         if ((dx > dy ? dx : dy) > COLO_MANTICORE_COPY_RANGE) continue;
         if (!col_tiles_have_los(s, scx, scy, ocx, ocy)) continue;
-        for (int o = 0; o < 3; o++) omc->orb_style[o] = smc->orb_style[o];
+        for (int o = 0; o < 3; o++) omc->fixed_orb_style[o] = smc->fixed_orb_style[o];
         omc->pattern_copied = 1;
     }
 }
 
-/** arm the next barrage: lock the 3-orb pattern so it is visible for the whole
-    charge-up, mirroring the orbs a player watches charge above the manticore.
-    Called every idle in-range tick; idempotent within a charge — a manticore
-    already holding a pattern (orb_style[0] set) or mid-barrage does not re-roll.
-    A fresh roll propagates to uncommitted peers (B10); a peer-copied pattern
-    (orb_style already set by col_manticore_copy_pattern_to_peers) does not
-    re-roll or re-propagate. Arming never touches attack_timer, so the researched
-    10-tick cadence is unchanged — only the moment the pattern is DECIDED moves
-    from fire-time to charge-start, which is what lets the agent see it coming. */
+/** Arm the next barrage by copying the fixed cycle into the visible queue. */
 static void col_npc_manticore_arm(ColosseumState* s, int idx) {
     ColoManticoreState* mc = colo_npc_manticore(&s->npcs[idx]);
-    if (mc->cycle_step >= 0) return;                    /* already firing */
-    if (mc->orb_style[0] != ATTACK_STYLE_NONE) return;  /* already armed/charging */
-
-    if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) >= 3) {
-        /* A24 T3: the MELEE ORB'S POSITION is randomized — a uniform shuffle of
-           the one-each {magic, ranged, melee} set, never independent per-orb. */
-        mc->orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->orb_style[2] = ATTACK_STYLE_MELEE;
-        for (int o = 2; o > 0; o--) {
-            int j = encounter_rand_int(&s->rng_state, o + 1);
-            AttackStyle tmp = mc->orb_style[o];
-            mc->orb_style[o] = mc->orb_style[j];
-            mc->orb_style[j] = tmp;
-        }
-    } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
-        /* orbs 0 & 1 are {ranged, magic} in random order; orb 2 is always melee. */
-        mc->orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->orb_style[2] = ATTACK_STYLE_MELEE;
-    } else {
-        mc->orb_style[0] = ATTACK_STYLE_MAGIC;
-        mc->orb_style[1] = ATTACK_STYLE_RANGED;
-        mc->orb_style[2] = ATTACK_STYLE_MELEE;
-    }
+    if (mc->cycle_step >= 0) return;
+    if (mc->orb_style[0] != ATTACK_STYLE_NONE) return;
+    for (int o = 0; o < 3; o++) mc->orb_style[o] = mc->fixed_orb_style[o];
+    mc->cycle_step = 0;
     col_manticore_copy_pattern_to_peers(s, idx);
 }
 
@@ -446,7 +410,7 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
         npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
         return;
     }
-    mc->pattern_copied = 0;   /* consume the copy at barrage start (no re-propagation) */
+    mc->pattern_copied = 0;
     mc->cycle_step = 0;
     col_npc_manticore_fire_orb(s, idx, stats);
 }
@@ -469,7 +433,7 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
 
     /* an in-flight manticore barrage fires its remaining orbs 1 tick apart,
        independent of the main attack cadence. */
-    if (npc->type == COLO_MANTICORE && npc->type_state.manticore.cycle_step >= 0) {
+    if (npc->type == COLO_MANTICORE && npc->type_state.manticore.cycle_step > 0) {
         col_npc_manticore_advance_barrage(s, idx, stats);
         return;
     }

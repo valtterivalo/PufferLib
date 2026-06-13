@@ -689,6 +689,93 @@ static AnimFrameBase* render_get_framebase(RenderClient* rc, uint16_t base_id) {
     return fb;
 }
 
+typedef struct {
+    AnimSequenceFrame* sequence_frame;
+    AnimFrameBase* framebase;
+} RenderAnimTrackFrame;
+
+/** Resolve a current sequence frame into a legacy framebase-backed frame or a
+    baked Maya frame. Legacy sentinel and missing framebase handling matches the
+    old render path. */
+static RenderAnimTrackFrame render_resolve_anim_track_frame(
+    RenderClient* rc,
+    AnimSequence* seq,
+    int frame_idx
+) {
+    RenderAnimTrackFrame out = {0};
+    if (!seq || seq->frame_count <= 0) return out;
+    int fidx = frame_idx % seq->frame_count;
+    AnimSequenceFrame* sf = &seq->frames[fidx];
+    if (sf->frame.kind == ANIM_FRAME_LEGACY) {
+        if (sf->frame.framebase_id != 0xFFFF) {
+            AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
+            if (fb) {
+                out.sequence_frame = sf;
+                out.framebase = fb;
+            }
+        }
+    } else if (sf->frame.kind == ANIM_FRAME_MAYA_BAKED) {
+        if (!sf->frame.maya_vertices || sf->frame.maya_vertex_count == 0) {
+            fprintf(stderr,
+                "render: Maya baked animation frame missing vertices in sequence %u\n",
+                seq->seq_id);
+            abort();
+        }
+        out.sequence_frame = sf;
+    } else {
+        fprintf(stderr, "render: unknown animation frame kind %u in sequence %u\n",
+            sf->frame.kind, seq->seq_id);
+        abort();
+    }
+    return out;
+}
+
+/** Apply one legacy or baked Maya sequence frame to a standalone OSRS model. */
+static void render_apply_anim_sequence_frame_to_model_state(
+    RenderClient* rc,
+    AnimModelState* anim_state,
+    OsrsModel* om,
+    AnimSequence* seq,
+    int frame_idx,
+    const char* context
+) {
+    if (!anim_state || !om || !seq || seq->frame_count <= 0) {
+        fprintf(stderr, "render: %s animation state is incomplete\n", context);
+        abort();
+    }
+    AnimSequenceFrame* sf = &seq->frames[frame_idx % seq->frame_count];
+    if (sf->frame.kind == ANIM_FRAME_LEGACY) {
+        if (sf->frame.framebase_id == 0xFFFF) {
+            fprintf(stderr, "render: %s legacy animation frame has no framebase\n",
+                context);
+            abort();
+        }
+        AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
+        if (!fb) {
+            fprintf(stderr, "render: %s legacy animation framebase %u is missing\n",
+                context, sf->frame.framebase_id);
+            abort();
+        }
+        anim_apply_frame(anim_state, om->base_vertices, &sf->frame, fb);
+    } else if (sf->frame.kind == ANIM_FRAME_MAYA_BAKED) {
+        anim_apply_maya_baked_frame(anim_state, &sf->frame);
+    } else {
+        fprintf(stderr, "render: %s unknown animation frame kind %u in sequence %u\n",
+            context, sf->frame.kind, seq->seq_id);
+        abort();
+    }
+    anim_update_mesh(om->mesh.vertices, anim_state,
+        om->face_indices, om->mesh.triangleCount);
+    UpdateMeshBuffer(om->mesh, 0, om->mesh.vertices,
+        om->mesh.triangleCount * 9 * sizeof(float), 0);
+    anim_update_mesh_alpha(om->mesh.colors, anim_state,
+        om->mesh.triangleCount);
+    if (anim_state->face_alphas) {
+        UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
+            om->mesh.vertexCount * 4, 0);
+    }
+}
+
 static InfernoState* render_inferno_state_from_env(OsrsEnv* env) {
     if (!env || !env->encounter_def || !env->encounter_state) return NULL;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
@@ -4234,20 +4321,33 @@ static void composite_animate_and_draw(
 
     /* apply animation transforms to base vertices */
     if (primary_frame && secondary_frame && interleave_order && interleave_count > 0) {
-        /* two-track: primary owns upper body, secondary owns legs */
         anim_apply_frame_interleaved(
             comp->anim_state, comp->base_vertices,
             secondary_frame, secondary_fb,
             primary_frame, primary_fb,
             interleave_order, interleave_count);
     } else if (primary_frame) {
-        /* primary only (death, or anims without interleave_order) */
-        anim_apply_frame(comp->anim_state, comp->base_vertices,
-                         primary_frame, primary_fb);
+        if (primary_frame->kind == ANIM_FRAME_LEGACY) {
+            anim_apply_frame(comp->anim_state, comp->base_vertices,
+                primary_frame, primary_fb);
+        } else if (primary_frame->kind == ANIM_FRAME_MAYA_BAKED) {
+            anim_apply_maya_baked_frame(comp->anim_state, primary_frame);
+        } else {
+            fprintf(stderr, "render: unknown primary animation frame kind %u\n",
+                primary_frame->kind);
+            abort();
+        }
     } else if (secondary_frame) {
-        /* secondary only (walk/idle, no action) */
-        anim_apply_frame(comp->anim_state, comp->base_vertices,
-                         secondary_frame, secondary_fb);
+        if (secondary_frame->kind == ANIM_FRAME_LEGACY) {
+            anim_apply_frame(comp->anim_state, comp->base_vertices,
+                secondary_frame, secondary_fb);
+        } else if (secondary_frame->kind == ANIM_FRAME_MAYA_BAKED) {
+            anim_apply_maya_baked_frame(comp->anim_state, secondary_frame);
+        } else {
+            fprintf(stderr, "render: unknown secondary animation frame kind %u\n",
+                secondary_frame->kind);
+            abort();
+        }
     } else {
         anim_apply_rest_pose(comp->anim_state, comp->base_vertices);
     }
@@ -4391,41 +4491,29 @@ static void render_player_composite(
     }
 
     /* --- read current frame data (set by render_client_tick at 50 Hz) --- */
-    AnimSequenceFrame *sec_sf = NULL, *pri_sf = NULL;
-    AnimFrameBase *sec_fb = NULL, *pri_fb = NULL;
+    RenderAnimTrackFrame sec_track = {0};
+    RenderAnimTrackFrame pri_track = {0};
 
     /* secondary frame */
     if (rc->anim[player_idx].secondary_seq_id >= 0) {
         AnimSequence* seq = render_get_anim_sequence(
             rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
-        if (seq && seq->frame_count > 0) {
-            int fidx = rc->anim[player_idx].secondary_frame_idx % seq->frame_count;
-            AnimSequenceFrame* sf = &seq->frames[fidx];
-            if (sf->frame.framebase_id != 0xFFFF) {
-                AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
-                if (fb) { sec_sf = sf; sec_fb = fb; }
-            }
-        }
+        sec_track = render_resolve_anim_track_frame(
+            rc, seq, rc->anim[player_idx].secondary_frame_idx);
     }
 
     /* primary frame */
     if (rc->anim[player_idx].primary_seq_id >= 0) {
         AnimSequence* seq = render_get_anim_sequence(
             rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
-        if (seq && seq->frame_count > 0) {
-            int fidx = rc->anim[player_idx].primary_frame_idx % seq->frame_count;
-            AnimSequenceFrame* sf = &seq->frames[fidx];
-            if (sf->frame.framebase_id != 0xFFFF) {
-                AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
-                if (fb) { pri_sf = sf; pri_fb = fb; }
-            }
-        }
+        pri_track = render_resolve_anim_track_frame(
+            rc, seq, rc->anim[player_idx].primary_frame_idx);
     }
 
     /* --- resolve interleave_order from the primary sequence --- */
     const uint8_t* interleave = NULL;
     int interleave_count = 0;
-    if (pri_sf) {
+    if (pri_track.sequence_frame) {
         AnimSequence* prim_seq = render_get_anim_sequence(
             rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
         if (prim_seq && prim_seq->interleave_order) {
@@ -4437,8 +4525,10 @@ static void render_player_composite(
     /* --- animate and draw --- */
     composite_animate_and_draw(
         comp,
-        sec_sf ? &sec_sf->frame : NULL, sec_fb,
-        pri_sf ? &pri_sf->frame : NULL, pri_fb,
+        sec_track.sequence_frame ? &sec_track.sequence_frame->frame : NULL,
+        sec_track.framebase,
+        pri_track.sequence_frame ? &pri_track.sequence_frame->frame : NULL,
+        pri_track.framebase,
         interleave, interleave_count,
         transform);
 }
@@ -4758,24 +4848,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                     abort();
                 }
                 if (fp->anim_frame >= seq->frame_count) fp->anim_frame = 0;
-                AnimSequenceFrame* sf = &seq->frames[fp->anim_frame];
-                AnimFrameBase* fb = render_get_framebase(rc, sf->frame.framebase_id);
-                if (!fb) {
-                    fprintf(stderr, "render: projectile animation framebase %u is missing\n",
-                            sf->frame.framebase_id);
-                    abort();
-                }
-                anim_apply_frame(fp->anim_state, om->base_vertices, &sf->frame, fb);
-                anim_update_mesh(om->mesh.vertices, fp->anim_state,
-                    om->face_indices, om->mesh.triangleCount);
-                UpdateMeshBuffer(om->mesh, 0, om->mesh.vertices,
-                    om->mesh.triangleCount * 9 * sizeof(float), 0);
-                anim_update_mesh_alpha(om->mesh.colors, fp->anim_state,
-                    om->mesh.triangleCount);
-                if (fp->anim_state->face_alphas) {
-                    UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
-                        om->mesh.vertexCount * 4, 0);
-                }
+                render_apply_anim_sequence_frame_to_model_state(
+                    rc, fp->anim_state, om, seq, fp->anim_frame,
+                    "projectile");
                 proj_model = &om->model;
             } else if (fp->travel_gfx_drives_model) {
                 OsrsModel* om = render_get_flight_osrs_model(rc, fp);
@@ -5000,23 +5075,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                 && om->face_indices) {
                 AnimSequence* seq = render_get_anim_sequence(rc, e->meta->animation_id);
                 if (seq && e->anim_frame < seq->frame_count) {
-                    AnimSequenceFrame* sf = &seq->frames[e->anim_frame];
-                    AnimFrameBase* fb = render_get_framebase(rc,
-                        sf->frame.framebase_id);
-                    if (fb) {
-                        anim_apply_frame(e->anim_state, om->base_vertices,
-                            &sf->frame, fb);
-                        anim_update_mesh(om->mesh.vertices, e->anim_state,
-                            om->face_indices, om->mesh.triangleCount);
-                        UpdateMeshBuffer(om->mesh, 0, om->mesh.vertices,
-                            om->mesh.triangleCount * 9 * sizeof(float), 0);
-                        anim_update_mesh_alpha(om->mesh.colors, e->anim_state,
-                            om->mesh.triangleCount);
-                        if (e->anim_state->face_alphas) {
-                            UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
-                                om->mesh.vertexCount * 4, 0);
-                        }
-                    }
+                    render_apply_anim_sequence_frame_to_model_state(
+                        rc, e->anim_state, om, seq, e->anim_frame,
+                        "spotanim");
                 }
             }
 

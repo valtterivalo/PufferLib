@@ -1008,9 +1008,8 @@ static void test_bee_poison_status(void) {
         s.player_poison == 0 && s.player_poison_timer == 0);
 }
 
-/* ---- 2e5b. A24: Mantimayhem T3 shuffles the one-each {magic, ranged, melee}
-   orb set — the melee orb's POSITION randomizes (all 3 slots seen), but a
-   barrage never rolls duplicate styles. */
+/* ---- 2e5b. A24: Mantimayhem T3 shuffles the fixed one-each cycle at spawn.
+   The melee orb's POSITION randomizes, but a barrage never rolls duplicates. */
 static void test_mantimayhem_t3_shuffle(void) {
     printf("test_mantimayhem_t3_shuffle\n");
     ColosseumContext ctx;
@@ -1024,33 +1023,38 @@ static void test_mantimayhem_t3_shuffle(void) {
     s.modifiers.tier[COLO_MOD_MANTIMAYHEM] = 3;
     s.player.x = 17; s.player.y = 16;
     col_rebuild_player_collision_flags(&s);
-    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
-    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
-
     int one_each_ok = 1;
+    int arm_copies_fixed_ok = 1;
     int melee_slot_seen[3] = { 0, 0, 0 };
     for (int rep = 0; rep < 300; rep++) {
-        mc->cycle_step = -1;
-        mc->pattern_copied = 0;
-        mc->orb_style[0] = ATTACK_STYLE_NONE;   /* force a fresh arm/roll each rep */
-        mc->orb_style[1] = ATTACK_STYLE_NONE;
-        mc->orb_style[2] = ATTACK_STYLE_NONE;
+        geo_clear_npcs(&s);
+        col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+        ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+        if (mc->orb_style[0] != ATTACK_STYLE_NONE ||
+                mc->orb_style[1] != ATTACK_STYLE_NONE ||
+                mc->orb_style[2] != ATTACK_STYLE_NONE) {
+            arm_copies_fixed_ok = 0;
+        }
         s.npcs[0].attack_timer = 0;
         s.player.current_hitpoints = 99;
-        col_npc_attack_ctx(&s, &ctx, 0);   /* arms (rolls the set) then fires orb 0 */
+        col_npc_manticore_arm(&s, 0);
+        if (mc->cycle_step != 0) arm_copies_fixed_ok = 0;
         int counts[3] = { 0, 0, 0 };
         for (int o = 0; o < 3; o++) {
-            if (mc->orb_style[o] == ATTACK_STYLE_RANGED) counts[0]++;
-            if (mc->orb_style[o] == ATTACK_STYLE_MAGIC) counts[1]++;
-            if (mc->orb_style[o] == ATTACK_STYLE_MELEE) {
+            if (mc->fixed_orb_style[o] == ATTACK_STYLE_RANGED) counts[0]++;
+            if (mc->fixed_orb_style[o] == ATTACK_STYLE_MAGIC) counts[1]++;
+            if (mc->fixed_orb_style[o] == ATTACK_STYLE_MELEE) {
                 counts[2]++;
                 melee_slot_seen[o] = 1;
             }
+            if (mc->orb_style[o] != mc->fixed_orb_style[o]) arm_copies_fixed_ok = 0;
         }
         if (counts[0] != 1 || counts[1] != 1 || counts[2] != 1) one_each_ok = 0;
     }
-    CHECK("T3 barrages always carry exactly one of each style (no iid rolls)",
+    CHECK("T3 fixed cycles always carry exactly one of each style",
         one_each_ok);
+    CHECK("arming copies the fixed cycle into the active telegraph",
+        arm_copies_fixed_ok);
     CHECK("the melee orb appears in every position across the sample",
         melee_slot_seen[0] && melee_slot_seen[1] && melee_slot_seen[2]);
 }
@@ -2032,7 +2036,7 @@ static void test_manticore_barrage_period(void) {
         s.player.current_hitpoints = 99;   /* orbs land inline now; stay alive */
         int prev = mc->cycle_step;
         col_npc_attack_ctx(&s, &ctx, 0);
-        if (prev < 0 && mc->cycle_step >= 0 && nstarts < 8) starts[nstarts++] = t;
+        if (prev == 0 && mc->cycle_step == 1 && nstarts < 8) starts[nstarts++] = t;
     }
     CHECK("4 barrage starts inside 36 ticks", nstarts == 4);
     int period_ok = nstarts >= 4;
@@ -2041,11 +2045,8 @@ static void test_manticore_barrage_period(void) {
     CHECK("barrage-to-barrage period is exactly 10 ticks across 3 gaps", period_ok);
 }
 
-/* 5b-bis. The barrage pattern is decided + telegraphed during the charge-up, not
-   at fire time: while the manticore is still charging (cycle_step < 0, timer > 0)
-   the full 3-orb sequence is locked and stable, so a player (and the obs) can see
-   the orbs coming. Pre-praying the telegraphed orb 0 blocks it on its fire tick —
-   the capability this change exists to enable. */
+/* 5b-bis. The fixed barrage pattern is hidden while idle, copied into the active
+   telegraph during charge-up, and stable until the barrage completes. */
 static void test_manticore_telegraph_during_windup(void) {
     printf("test_manticore_telegraph_during_windup\n");
     ColosseumContext ctx;
@@ -2059,21 +2060,26 @@ static void test_manticore_telegraph_during_windup(void) {
     col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);   /* dist 2, clear LoS */
     s.npcs[0].attack_timer = 6;                     /* a 6-tick charge ahead of orb 0 */
     ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+    CHECK("spawn rolls a hidden fixed cycle",
+        mc->fixed_orb_style[0] != ATTACK_STYLE_NONE &&
+        mc->fixed_orb_style[1] != ATTACK_STYLE_NONE &&
+        mc->fixed_orb_style[2] != ATTACK_STYLE_NONE &&
+        mc->orb_style[0] == ATTACK_STYLE_NONE &&
+        mc->orb_style[1] == ATTACK_STYLE_NONE &&
+        mc->orb_style[2] == ATTACK_STYLE_NONE);
 
-    /* one idle tick arms the manticore: the full pattern locks while it is still
-       charging (cycle_step < 0, attack_timer > 0) — visible before any orb lands. */
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("manticore arms during the charge-up (still idle)", mc->cycle_step < 0);
-    CHECK("the full barrage pattern locks before any orb fires",
-        mc->orb_style[0] != ATTACK_STYLE_NONE &&
-        mc->orb_style[1] != ATTACK_STYLE_NONE &&
-        mc->orb_style[2] != ATTACK_STYLE_NONE);
+    CHECK("manticore arms during the charge-up at orb 0", mc->cycle_step == 0);
+    CHECK("the active telegraph matches the fixed cycle before any orb fires",
+        mc->orb_style[0] == mc->fixed_orb_style[0] &&
+        mc->orb_style[1] == mc->fixed_orb_style[1] &&
+        mc->orb_style[2] == mc->fixed_orb_style[2]);
     CHECK("orb 2 is melee (the range+magic pair leads, melee last)",
         mc->orb_style[2] == ATTACK_STYLE_MELEE);
 
     AttackStyle locked0 = mc->orb_style[0];
-    for (int t = 0; t < 4 && mc->cycle_step < 0; t++) {
+    for (int t = 0; t < 4 && mc->cycle_step == 0; t++) {
         s.player.current_hitpoints = 99;
         col_npc_attack_ctx(&s, &ctx, 0);
     }
@@ -2091,7 +2097,7 @@ static void test_manticore_telegraph_during_windup(void) {
     mc = colo_npc_manticore(&s.npcs[0]);
     int orb0_blocked = 0;
     for (int t = 0; t < 12; t++) {
-        if (mc->cycle_step < 0 && mc->orb_style[0] != ATTACK_STYLE_NONE) {
+        if (mc->cycle_step == 0 && mc->orb_style[0] != ATTACK_STYLE_NONE) {
             AttackStyle s0 = mc->orb_style[0];
             s.player.prayer = s0 == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC :
                               s0 == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED :
@@ -2100,12 +2106,20 @@ static void test_manticore_telegraph_during_windup(void) {
         s.player.current_hitpoints = 99;
         int step_before = mc->cycle_step;
         col_npc_attack_ctx(&s, &ctx, 0);
-        if (step_before < 0 && mc->cycle_step == 1) {
+        if (step_before == 0 && mc->cycle_step == 1) {
             orb0_blocked = (s.player.current_hitpoints == 99);
             break;
         }
     }
     CHECK("a pre-prayed telegraphed orb 0 is blocked on its fire tick", orb0_blocked);
+
+    while (mc->cycle_step >= 0) {
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+    }
+    CHECK("disarm clears only the active telegraph",
+        mc->orb_style[0] == ATTACK_STYLE_NONE &&
+        mc->fixed_orb_style[0] != ATTACK_STYLE_NONE);
 }
 
 /* 5c. D12: orbs land ON their launch tick — nothing enters the pending queue,
@@ -2199,11 +2213,8 @@ static void test_manticore_orb_same_tick_flick(void) {
         !flicked_damage);
 }
 
-/* 5d. B10: from wave 9 a freshly drawn orb pattern is copied by the other
-   manticore when within 15 tiles (centre-to-centre) with LoS; out-of-LoS,
-   out-of-range, and pre-wave-9 peers do not copy. The copy is consumed at the
-   peer's own barrage start without re-propagating, and the 5-tick stagger is
-   unchanged. */
+/* 5d. B10: from wave 9 a manticore's fixed cycle is copied into idle peers when
+   within 15 tiles with LoS. The peer reveals it only after arming. */
 static void test_manticore_pattern_copy(void) {
     printf("test_manticore_pattern_copy\n");
     ColosseumContext ctx;
@@ -2212,7 +2223,7 @@ static void test_manticore_pattern_copy(void) {
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
 
-    /* wave 9, in range + LoS: the idle peer copies A's fresh draw. */
+    /* wave 9, in range + LoS: the idle peer copies A's fixed cycle. */
     geo_clear_npcs(&s);
     s.wave = 8;   /* wave 9, 0-based */
     s.player.x = 13; s.player.y = 12;
@@ -2226,22 +2237,24 @@ static void test_manticore_pattern_copy(void) {
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 0);
     CHECK("A committed and fired orb 0", amc->cycle_step == 1);
-    CHECK("the in-LoS peer copied the fresh pattern",
+    CHECK("the in-LoS peer copied A's fixed pattern without revealing it",
         bmc->pattern_copied == 1 &&
-        bmc->orb_style[0] == amc->orb_style[0] &&
-        bmc->orb_style[1] == amc->orb_style[1] &&
-        bmc->orb_style[2] == amc->orb_style[2]);
+        bmc->orb_style[0] == ATTACK_STYLE_NONE &&
+        bmc->fixed_orb_style[0] == amc->fixed_orb_style[0] &&
+        bmc->fixed_orb_style[1] == amc->fixed_orb_style[1] &&
+        bmc->fixed_orb_style[2] == amc->fixed_orb_style[2]);
 
     /* stagger unchanged: a ready B mid-A-barrage delays 5 ticks, copy intact. */
     s.npcs[1].attack_timer = 0;
     col_npc_attack_ctx(&s, &ctx, 1);
-    CHECK("a ready peer still staggers 5 ticks during A's barrage",
+    CHECK("a ready peer arms the copied pattern and staggers 5 ticks during A's barrage",
         s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS &&
-        bmc->cycle_step == -1 && bmc->pattern_copied == 1);
+        bmc->cycle_step == 0 && bmc->pattern_copied == 1 &&
+        bmc->orb_style[0] == bmc->fixed_orb_style[0]);
 
-    /* B consumes the copy at its barrage start; a consumed copy does not
-       re-propagate back onto the now-idle A (no echo-lock). */
-    AttackStyle a0 = amc->orb_style[0], a1 = amc->orb_style[1], a2 = amc->orb_style[2];
+    AttackStyle a0 = amc->fixed_orb_style[0];
+    AttackStyle a1 = amc->fixed_orb_style[1];
+    AttackStyle a2 = amc->fixed_orb_style[2];
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 0);   /* A orb 1 */
     s.player.current_hitpoints = 99;
@@ -2249,11 +2262,9 @@ static void test_manticore_pattern_copy(void) {
     s.npcs[1].attack_timer = 0;
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 1);   /* B starts on the copied pattern */
-    CHECK("B fired the copied pattern (consumed, not re-rolled)",
+    CHECK("B fired the copied fixed pattern",
         bmc->cycle_step == 1 && bmc->pattern_copied == 0 &&
         bmc->orb_style[0] == a0 && bmc->orb_style[1] == a1 && bmc->orb_style[2] == a2);
-    CHECK("a consumed copy does not re-propagate to the idle peer",
-        amc->pattern_copied == 0);
 
     /* wave gate: identical rig on wave 8 (index 7) never copies. */
     geo_clear_npcs(&s);
@@ -2265,7 +2276,7 @@ static void test_manticore_pattern_copy(void) {
     s.npcs[1].attack_timer = 30;
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("before wave 9 the pattern is never copied", bmc->pattern_copied == 0);
+    CHECK("before wave 9 the fixed cycle is never copied", bmc->pattern_copied == 0);
 
     /* pillar LoS: a peer behind the SW pillar does not copy. */
     geo_clear_npcs(&s);
@@ -3337,12 +3348,12 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v6 for stat drift fields",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 6u);
+    CHECK("snapshot version is v7 for manticore fixed-cycle state",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 7u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
-    CHECK("snapshot v6 round-trips stat drift and divine timers",
+    CHECK("snapshot v7 round-trips stat drift and divine timers",
         restored.stat_drift_timer == 37 &&
         restored.divine_combat_timer == 123 &&
         restored.divine_ranged_timer == 234);
@@ -3659,7 +3670,7 @@ static void test_step_out_forecast_manticore_armed_pattern(void) {
     col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
     s.npcs[0].attack_timer = 1;
     ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
-    mc->cycle_step = -1;
+    mc->cycle_step = 0;
     mc->orb_style[0] = ATTACK_STYLE_MAGIC;
     mc->orb_style[1] = ATTACK_STYLE_RANGED;
     mc->orb_style[2] = ATTACK_STYLE_MELEE;
@@ -3768,6 +3779,30 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     memset(&ov, 0, sizeof(ov));
     col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
     CHECK("melee NPC attack emits no projectile", ov.projectile_count == 0);
+
+    init_forecast_test_state(&s, &ctx, 503, 17, 16);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+    mc->fixed_orb_style[0] = ATTACK_STYLE_MELEE;
+    mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
+    mc->fixed_orb_style[2] = ATTACK_STYLE_MAGIC;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    int manticore_dist = encounter_projectile_distance(
+        s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0]),
+        s.player.x, s.player.y, 1, ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming manticore_timing =
+        col_npc_projectile_timing(COLO_MANTICORE, ATTACK_STYLE_MELEE, manticore_dist);
+    CHECK("manticore melee orb emits the 51213 projectile with scaled duration",
+        ov.projectile_count == 1 &&
+        ov.projectiles[0].model_id == 51213u &&
+        ov.projectiles[0].anim_id == 10328 &&
+        ov.projectiles[0].travel_gfx_id == 2685 &&
+        ov.projectiles[0].impact_gfx_id == 2686 &&
+        ov.projectiles[0].duration_ticks == manticore_timing.visual_duration_ticks * 30 &&
+        ov.projectiles[0].duration_ticks > 1);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);
