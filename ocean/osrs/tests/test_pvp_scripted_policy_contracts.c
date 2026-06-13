@@ -297,6 +297,26 @@ static void test_adaptive_nh_specs_mage_prayer_camp(void) {
         SPECIAL_ARM);
 }
 
+static void test_adaptive_nh_reads_static_camp_action(void) {
+    printf("--- Adaptive NH exact-reads static camp action ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 0);
+    env.pvp_runtime.opponent.adaptive_mage_camp_ticks = 3;
+    env.actions[HEAD_ATTACK] = ATTACK_ICE;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_TRUE(
+        "adaptive NH read succeeded",
+        env.pvp_runtime.opponent.has_read_this_tick);
+    ASSERT_INT_EQ(
+        "adaptive NH exact read beats camp heuristic",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+}
+
 static void test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready(void) {
     printf("--- Adaptive NH moves out of adjacent camp when not ready ---\n");
 
@@ -445,6 +465,7 @@ int main(void) {
     test_adaptive_nh_learns_static_mage_camp();
     test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
     test_adaptive_nh_specs_mage_prayer_camp();
+    test_adaptive_nh_reads_static_camp_action();
     test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready();
     test_resolver_distance_10_uses_mage_into_prayer();
     test_resolver_distance_7_uses_crossbow_off_prayer();

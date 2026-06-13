@@ -2303,7 +2303,7 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = (agent_actions[HEAD_MOVE] != 0 || is_move_action(attack)) ? 1 : 0;
 }
 
-static inline int opp_get_read_defensive_prayer(OpponentState* opp) {
+static inline int opp_get_read_defensive_prayer(const OpponentState* opp) {
     if (opp->read_agent_style == ATTACK_STYLE_MAGIC) return OVERHEAD_MAGE;
     if (opp->read_agent_style == ATTACK_STYLE_RANGED) return OVERHEAD_RANGED;
     if (opp->read_agent_style == ATTACK_STYLE_MELEE) return OVERHEAD_MELEE;
@@ -3020,14 +3020,21 @@ static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal
 }
 
 static inline void pvp_adaptive_nh_apply_defensive_prayer(
+    const OpponentState* opp,
     int* actions,
     Player* self,
     Player* target,
     PvpMageCampMeleeSignal signal
 ) {
-    int prayer = pvp_should_pray_melee_against_mage_camp(signal)
-        ? OVERHEAD_MELEE
-        : opp_get_defensive_prayer_with_spec(target);
+    int prayer = -1;
+    if (opp->has_read_this_tick && opp->read_agent_style != ATTACK_STYLE_NONE) {
+        prayer = opp_get_read_defensive_prayer(opp);
+    }
+    if (prayer < 0) {
+        prayer = pvp_should_pray_melee_against_mage_camp(signal)
+            ? OVERHEAD_MELEE
+            : opp_get_defensive_prayer_with_spec(target);
+    }
     if (!opp_has_prayer_active(self, prayer)) {
         opp_emit_prayer(actions, self, prayer);
     }
@@ -3088,10 +3095,15 @@ static void opp_adaptive_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     pvp_adaptive_nh_update_memory(opp, self, target);
     PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(opp, self, target);
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    float base_read_chance = opp->read_chance;
 
+    if (pvp_should_counter_mage_camp_melee(signal)) {
+        opp->read_chance = 1.0f;
+    }
     opp_nightmare_nh(env, opp, actions);
+    opp->read_chance = base_read_chance;
 
-    pvp_adaptive_nh_apply_defensive_prayer(actions, self, target, signal);
+    pvp_adaptive_nh_apply_defensive_prayer(opp, actions, self, target, signal);
     pvp_adaptive_nh_apply_counter_attack(env, opp, actions, self, target, signal);
     if (!opp_attack_ready(self) &&
             pvp_should_counter_mage_camp_melee(signal) &&
