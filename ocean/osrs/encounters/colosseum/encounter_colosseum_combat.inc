@@ -244,7 +244,14 @@ static void col_npc_minotaur_heal_ally(ColosseumState* s, int idx) {
     D7: the skyfall has NO accuracy/defence gate — a player on the marked tile at
     land eats the raw 0..max roll (Relentless still raises the max); stepping off
     the tile dodges it fully. */
-static void col_npc_attack_javelin(ColosseumState* s, int idx, const ColoNpcStats* stats) {
+static void col_npc_attack_javelin(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    int idx,
+    const ColoNpcStats* stats
+) {
+    assert(ctx);
+    ctx->npc_render_attack_anim[idx] = COLO_NPC_RENDER_ATTACK_NORMAL;
     ColoNPC* npc = &s->npcs[idx];
     ColoJavelinState* jv = colo_npc_javelin(npc);
     jv->attack_count++;
@@ -258,6 +265,7 @@ static void col_npc_attack_javelin(ColosseumState* s, int idx, const ColoNpcStat
         jv->skyfall_damage = encounter_rand_int(&s->rng_state, max_hit + 1);
         npc->attacked_this_tick = 1;
         npc->attack_style_this_tick = ATTACK_STYLE_RANGED;
+        ctx->npc_render_attack_anim[idx] = COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL;
         s->tick_scratch.attacks_fired++;
         return;
     }
@@ -422,7 +430,7 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
  * Heredit is driven by col_sol_tick, not here.
  */
 static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) {
-    (void)ctx;
+    assert(ctx);
     ColoNPC* npc = &s->npcs[idx];
     const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
 
@@ -484,7 +492,7 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
             col_npc_attack_jaguar(s, idx, stats);
             break;
         case COLO_JAVELIN_COLOSSUS:
-            col_npc_attack_javelin(s, idx, stats);
+            col_npc_attack_javelin(s, ctx, idx, stats);
             break;
         case COLO_SERPENT_SHAMAN:
         case COLO_SHOCKWAVE_COLOSSUS:

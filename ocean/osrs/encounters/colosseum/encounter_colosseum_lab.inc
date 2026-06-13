@@ -151,6 +151,7 @@ static int col_lab_in_arena(int x, int y) {
 }
 
 static void col_lab_clear_transient(ColosseumState* s) {
+    col_context_clear_render_attack_anims(col_legacy_context());
     osrs_interaction_init(&s->interaction);
     s->player_dest_x = -1;
     s->player_dest_y = -1;

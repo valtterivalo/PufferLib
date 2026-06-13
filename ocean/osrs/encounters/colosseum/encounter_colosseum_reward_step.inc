@@ -53,6 +53,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     /* clear per-tick state. one assignment resets every accumulator/flag. */
     s->reward = 0.0f;
     s->tick_scratch = (ColoTickScratch){0};
+    col_context_clear_render_attack_anims(ctx);
     s->player_attack_timing = (EncounterProjectileTiming){0};
     encounter_clear_tick_flags(&s->player);
     for (int i = 0; i < COLO_MAX_NPCS; i++) {

@@ -2328,10 +2328,10 @@ static void test_javelin_skyfall_no_defence_gate(void) {
 
     /* cadence: throws 1-4 queue normal (prayable) projectiles, the 5th marks. */
     int queue_before = s.player_pending_hits.count;
-    for (int a = 0; a < 4; a++) col_npc_attack_javelin(&s, 0, stats);
+    for (int a = 0; a < 4; a++) col_npc_attack_javelin(&s, &ctx, 0, stats);
     CHECK("attacks 1-4 are normal queued throws",
         s.player_pending_hits.count == queue_before + 4 && jv->skyfall_pending == 0);
-    col_npc_attack_javelin(&s, 0, stats);
+    col_npc_attack_javelin(&s, &ctx, 0, stats);
     CHECK("the 5th attack marks the player's tile with the D6 3-tick delay",
         jv->skyfall_pending == 1 && jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DELAY &&
         jv->skyfall_tile_x == s.player.x && jv->skyfall_tile_y == s.player.y);
@@ -2341,7 +2341,7 @@ static void test_javelin_skyfall_no_defence_gate(void) {
     for (int rep = 0; rep < 300; rep++) {
         jv->attack_count = 4;
         jv->skyfall_pending = 0;
-        col_npc_attack_javelin(&s, 0, stats);
+        col_npc_attack_javelin(&s, &ctx, 0, stats);
         if (jv->skyfall_damage > 0) nonzero++;
         if (jv->skyfall_damage < 0 || jv->skyfall_damage > stats->max_hit) in_range_ok = 0;
         if (jv->skyfall_damage >= 45) high_roll = 1;
@@ -3831,7 +3831,36 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         (EncounterState*)&s, (EncounterContext*)&ctx,
         npc_anim_entities, 4, &npc_anim_count);
     CHECK("javelin colossus attack drives body attack animation",
-        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10890);
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10892);
+
+    init_forecast_test_state(&s, &ctx, 503, 17, 16);
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->attack_count = 4;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("javelin skyfall launch marks the attack tick",
+        s.npcs[0].attacked_this_tick == 1);
+    memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
+    npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("javelin skyfall launch drives lob body animation",
+        npc_anim_count >= 2 &&
+        npc_anim_entities[1].npc_anim_id == COLO_JAVELIN_SKYFALL_ANIM_ID);
+    int clear_anim[COLO_NUM_ACTION_HEADS] = {0};
+    step_and_observe(&s, &ctx, clear_anim);
+    jv->attack_count = 5;
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
+    npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("javelin normal attack after skyfall uses throw body animation",
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10892);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);

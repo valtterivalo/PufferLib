@@ -404,6 +404,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     int saved_start = ctx->config.start_wave;
     uint32_t saved_rng = s->rng_state;
+    col_context_clear_render_attack_anims(ctx);
     memset(s, 0, sizeof(ColosseumState));
     s->start_wave = saved_start;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);

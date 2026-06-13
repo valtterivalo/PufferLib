@@ -1020,6 +1020,7 @@ static inline int col_warband_window_offset(ColoNpcType type) {
 /** ticks the marked skyfall tile lands after the javelin throws it (D6: wiki
     says only "a few ticks"; 3 is the modeled value). */
 #define COLO_JAVELIN_SKYFALL_DELAY 3
+#define COLO_JAVELIN_SKYFALL_ANIM_ID 10893
 /** a ready manticore delays its barrage start while another is mid-barrage. */
 #define COLO_MANTICORE_STAGGER_TICKS 5
 /** B10: from this wave (0-based; wave 9), a manticore's freshly-drawn orb
@@ -1266,6 +1267,11 @@ typedef struct {
     int step_out_forecast_obs_enabled;
 } ColConfig;
 
+typedef enum {
+    COLO_NPC_RENDER_ATTACK_NORMAL = 0,
+    COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL,
+} ColoNpcRenderAttackAnim;
+
 typedef struct {
     ColConfig config;
     const CollisionMap* collision_map;
@@ -1275,7 +1281,13 @@ typedef struct {
     const HumanCommand* human_commands;
     int human_command_count;
     int human_command_mode;
+    ColoNpcRenderAttackAnim npc_render_attack_anim[COLO_MAX_NPCS];
 } ColosseumContext;
+
+static inline void col_context_clear_render_attack_anims(ColosseumContext* ctx) {
+    if (!ctx) return;
+    memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
+}
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single
     assignment so a new field is reset for free. */

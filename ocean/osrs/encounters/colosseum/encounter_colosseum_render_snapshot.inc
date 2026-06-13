@@ -604,6 +604,7 @@ static void col_restore_ctx(
         COLO_SNAPSHOT_MAGIC, COLO_SNAPSHOT_VERSION, sizeof(ColosseumState));
     encounter_snapshot_copy_state_from(
         dst, data, offsetof(ColoSnapshot, state), sizeof(ColosseumState));
+    col_context_clear_render_attack_anims(ctx);
     col_refresh_after_state_load(dst, ctx);
 }
 
@@ -619,7 +620,8 @@ static int col_apply_lab_command_ctx(
     EncounterContext* context,
     const char* line
 ) {
-    (void)context;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    col_context_clear_render_attack_anims(ctx);
     return encounter_apply_lab_command_dump_wrapper(
         state, line, COLO_LAB_LINE_DUMP, col_lab_apply_script_line_alloc_json_void);
 }

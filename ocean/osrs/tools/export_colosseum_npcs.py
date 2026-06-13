@@ -128,12 +128,16 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12814: 10850,
     12815: 10853,
     12816: 10856,
-    12817: 10890,
+    12817: 10892,
     12818: 10869,
     12819: 10903,
     12821: 10876,
     12823: 10823,
     12825: 10828,
+}
+
+COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
+    12817: (10893,),
 }
 
 COLOSSEUM_DEATH_ANIM_IDS = {
@@ -1056,6 +1060,14 @@ def build_npc_models(
             "export_colosseum_npcs: death animation missing for npc ids "
             + ", ".join(str(npc_id) for npc_id in missing_death_anim_npc_ids)
         )
+    unknown_render_only_anim_npc_ids = sorted(
+        set(COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC) - set(COLOSSEUM_NPC_IDS)
+    )
+    if unknown_render_only_anim_npc_ids:
+        raise SystemExit(
+            "export_colosseum_npcs: render-only animation configured for unknown npc ids "
+            + ", ".join(str(npc_id) for npc_id in unknown_render_only_anim_npc_ids)
+        )
 
     models: list[ModelData] = []
     mapping: dict[int, dict[str, int]] = {}
@@ -1114,7 +1126,8 @@ def build_npc_models(
             "walk_anim": walk_anim,
             "death_anim": death_anim,
         }
-        for anim_id in (idle_anim, attack_anim, walk_anim, death_anim):
+        render_only_anim_ids = COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC.get(npc_id, ())
+        for anim_id in (idle_anim, attack_anim, walk_anim, death_anim, *render_only_anim_ids):
             if anim_id != 0xFFFF:
                 sequence_models[anim_id] = bake_target
         print(
@@ -1126,13 +1139,15 @@ def build_npc_models(
 
 
 def collect_anim_ids(mapping: dict[int, dict[str, int]]) -> set[int]:
-    """Gather every non-sentinel idle, attack, walk, and death sequence id."""
+    """Gather every non-sentinel exported sequence id."""
     anim_ids: set[int] = set(COLOSSEUM_PROJECTILE_ANIM_IDS)
     for entry in mapping.values():
         for key in ("idle_anim", "attack_anim", "walk_anim", "death_anim"):
             value = entry[key]
             if value != 0xFFFF:
                 anim_ids.add(value)
+    for render_only_anim_ids in COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC.values():
+        anim_ids.update(render_only_anim_ids)
     return anim_ids
 
 

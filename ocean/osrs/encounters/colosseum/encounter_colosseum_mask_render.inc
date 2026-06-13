@@ -161,6 +161,23 @@ static void col_prepare_render_player(const ColosseumState* s, Player* out) {
     out->visible_gear = gear;
 }
 
+static int col_npc_render_attack_anim_id(
+    const ColosseumContext* ctx,
+    int npc_slot,
+    const ColoNPC* npc,
+    int def_id
+) {
+    assert(ctx);
+    switch (ctx->npc_render_attack_anim[npc_slot]) {
+        case COLO_NPC_RENDER_ATTACK_NORMAL:
+            return col_npc_attack_anim_id(def_id);
+        case COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL:
+            assert(npc->type == COLO_JAVELIN_COLOSSUS);
+            return COLO_JAVELIN_SKYFALL_ANIM_ID;
+    }
+    abort();
+}
+
 /** populate render entities (player + active NPCs). */
 static void col_fill_render_entities_ctx(
     EncounterState* state,
@@ -169,7 +186,7 @@ static void col_fill_render_entities_ctx(
     int max_entities,
     int* count
 ) {
-    (void)context;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     ColosseumState* s = (ColosseumState*)state;
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
     s->player.gui_max_hit = ls->max_hit;
@@ -194,7 +211,7 @@ static void col_fill_render_entities_ctx(
         if (npc->death_ticks > 0)
             npc_anim_id = col_npc_death_anim_id(npc->type);
         else if (npc->attacked_this_tick)
-            npc_anim_id = col_npc_attack_anim_id(def_id);
+            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
             .npc_def_id = def_id,
