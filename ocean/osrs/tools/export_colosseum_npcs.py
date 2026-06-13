@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import math
 import os
 import struct
@@ -532,6 +533,16 @@ class MayaAnimation:
     bone_curves: list[list[MayaCurve | None]]
 
 
+@dataclass
+class MayaBakeTarget:
+    """Model-space inputs for client-order Maya baking."""
+
+    renderer_model: ModelData
+    skin_model: ModelData
+    width_scale: int
+    height_scale: int
+
+
 def cubic_bezier(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
     """Evaluate a scalar cubic Bezier."""
     u = 1.0 - t
@@ -703,6 +714,32 @@ def transform_vertex(matrix: list[float], x: int, y: int, z: int) -> tuple[int, 
 def clamp_i16(value: int) -> int:
     """Clamp a baked vertex coordinate to the renderer's int16 storage."""
     return max(-32768, min(32767, value))
+
+
+def scale_model_coord(value: int, scale: int) -> int:
+    """Scale a model coordinate with client integer truncation semantics."""
+    scaled = value * scale
+    if scaled >= 0:
+        return scaled // 128
+    return -((-scaled) // 128)
+
+
+def apply_npc_scale_to_baked_frame(
+    frame: list[int],
+    width_scale: int,
+    height_scale: int,
+) -> list[int]:
+    """Apply NPC resize to a baked client-space vertex frame."""
+    if width_scale == 128 and height_scale == 128:
+        return frame
+    scaled: list[int] = []
+    for offset in range(0, len(frame), 3):
+        scaled.extend([
+            clamp_i16(scale_model_coord(frame[offset], width_scale)),
+            clamp_i16(scale_model_coord(frame[offset + 1], height_scale)),
+            clamp_i16(scale_model_coord(frame[offset + 2], width_scale)),
+        ])
+    return scaled
 
 
 def parse_maya_curve(reader: CacheBinaryReader, version: int) -> MayaCurve:
@@ -886,7 +923,7 @@ def maya_world_matrices(animation: MayaAnimation, frame: int) -> list[list[float
 
 
 def bake_maya_frame(animation: MayaAnimation, model: ModelData, frame: int) -> list[int]:
-    """Bake a Maya animation frame into renderer-ready vertex triples."""
+    """Bake a Maya animation frame into model-space vertex triples."""
     bone_indices: list[list[int]] = getattr(model, "maya_bone_indices", [])
     bone_weights: list[list[int]] = getattr(model, "maya_bone_weights", [])
     if len(bone_indices) != model.vertex_count or len(bone_weights) != model.vertex_count:
@@ -914,15 +951,70 @@ def bake_maya_frame(animation: MayaAnimation, model: ModelData, frame: int) -> l
     return baked
 
 
+def assert_maya_bind_pose_matches_renderer_model(
+    animation: MayaAnimation,
+    target: MayaBakeTarget,
+    seq_id: int,
+) -> None:
+    """Assert no-animation Maya skinning reproduces the exported base mesh."""
+    rest_animation = MayaAnimation(
+        maya_id=animation.maya_id,
+        version=animation.version,
+        skeleton=animation.skeleton,
+        bind_frame=animation.bind_frame,
+        bone_curves=[[None] * 9 for _ in animation.skeleton.bones],
+    )
+    baked = bake_maya_frame(rest_animation, target.skin_model, animation.bind_frame)
+    baked = apply_npc_scale_to_baked_frame(
+        baked, target.width_scale, target.height_scale)
+    model = target.renderer_model
+    if len(baked) != model.vertex_count * 3:
+        raise SystemExit(
+            f"export_colosseum_npcs: Maya bind-pose vertex count drift "
+            f"seq {seq_id} frame={len(baked) // 3} model={model.vertex_count}"
+        )
+
+    epsilon = 3
+    max_abs = 0
+    worst_vertex = -1
+    worst_base = (0, 0, 0)
+    worst_baked = (0, 0, 0)
+    for vertex in range(model.vertex_count):
+        base = (
+            model.vertices_x[vertex],
+            model.vertices_y[vertex],
+            model.vertices_z[vertex],
+        )
+        got = tuple(baked[vertex * 3 + axis] for axis in range(3))
+        local = max(abs(got[axis] - base[axis]) for axis in range(3))
+        if local > max_abs:
+            max_abs = local
+            worst_vertex = vertex
+            worst_base = base
+            worst_baked = got
+
+    if max_abs > epsilon:
+        raise SystemExit(
+            f"export_colosseum_npcs: Maya bind pose mismatch seq {seq_id} "
+            f"maya {animation.maya_id} max_abs={max_abs} vertex={worst_vertex} "
+            f"base={worst_base} baked={worst_baked}"
+        )
+
+
 def bake_maya_sequence(
     reader: ModernCacheReader,
     seq: ColosseumSequence,
-    model: ModelData,
+    target: MayaBakeTarget,
 ) -> None:
     """Bake every frame in a Maya-backed sequence against its NPC model."""
     animation = read_maya_animation(reader, seq.maya_id)
+    assert_maya_bind_pose_matches_renderer_model(animation, target, seq.seq_id)
     seq.maya_frames = [
-        bake_maya_frame(animation, model, frame)
+        apply_npc_scale_to_baked_frame(
+            bake_maya_frame(animation, target.skin_model, frame),
+            target.width_scale,
+            target.height_scale,
+        )
         for frame in range(seq.maya_start, seq.maya_end)
     ]
     if len(seq.maya_frames) != seq.frame_count:
@@ -944,7 +1036,7 @@ def load_animation_model(reader: ModernCacheReader, model_id: int) -> ModelData:
 def build_npc_models(
     reader: ModernCacheReader,
     npc_files: dict[int, bytes],
-) -> tuple[list[ModelData], dict[int, dict[str, int]], dict[int, ModelData]]:
+) -> tuple[list[ModelData], dict[int, dict[str, int]], dict[int, MayaBakeTarget]]:
     """Decode, merge, recolor, and scale each Colosseum NPC mesh.
 
     Returns the merged models keyed by synthetic id plus a mapping from npc id
@@ -965,7 +1057,7 @@ def build_npc_models(
 
     models: list[ModelData] = []
     mapping: dict[int, dict[str, int]] = {}
-    sequence_models: dict[int, ModelData] = {}
+    sequence_models: dict[int, MayaBakeTarget] = {}
 
     for npc_id, label in sorted(COLOSSEUM_NPC_IDS.items()):
         if npc_id not in npc_files:
@@ -998,9 +1090,16 @@ def build_npc_models(
         merge_animaya_weights(merged, parts)
         if npc.recolor_from:
             apply_recolors(merged, npc.recolor_from, npc.recolor_to)
+        skin_model = copy.deepcopy(merged)
         apply_scale(merged, npc.width_scale, npc.height_scale)
         merged.model_id = SYNTHETIC_MODEL_BASE + npc_id
         models.append(merged)
+        bake_target = MayaBakeTarget(
+            renderer_model=merged,
+            skin_model=skin_model,
+            width_scale=npc.width_scale,
+            height_scale=npc.height_scale,
+        )
 
         idle_anim = npc.stand_anim if npc.stand_anim >= 0 else 0xFFFF
         attack_anim = COLOSSEUM_ATTACK_ANIM_IDS[npc_id]
@@ -1015,7 +1114,7 @@ def build_npc_models(
         }
         for anim_id in (idle_anim, attack_anim, walk_anim, death_anim):
             if anim_id != 0xFFFF:
-                sequence_models[anim_id] = merged
+                sequence_models[anim_id] = bake_target
         print(
             f"  npc {npc_id} ({npc.name}): {merged.vertex_count}v {merged.face_count}f "
             f"idle={idle_anim} attack={attack_anim} walk={walk_anim} death={death_anim}"
@@ -1039,7 +1138,7 @@ def export_animations(
     reader: ModernCacheReader,
     output_path: Path,
     anim_ids: set[int],
-    sequence_models: dict[int, ModelData],
+    sequence_models: dict[int, MayaBakeTarget],
 ) -> None:
     """Resolve legacy and Maya sequences for the requested ids and write v3 binary."""
     seq_files = reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
@@ -1050,18 +1149,24 @@ def export_animations(
             raise SystemExit(f"export_colosseum_npcs: sequence {seq_id} missing from cache")
         seq = parse_colosseum_sequence(seq_id, seq_files[seq_id])
         if seq.has_maya():
-            model = sequence_models.get(seq_id)
-            if model is None:
+            target = sequence_models.get(seq_id)
+            if target is None:
                 model_id = COLOSSEUM_PROJECTILE_ANIM_MODEL_IDS.get(seq_id)
                 if model_id is None:
                     raise SystemExit(
                         f"export_colosseum_npcs: Maya sequence {seq_id} has no owning model"
                     )
                 model = load_animation_model(reader, model_id)
-            bake_maya_sequence(reader, seq, model)
+                target = MayaBakeTarget(
+                    renderer_model=model,
+                    skin_model=model,
+                    width_scale=128,
+                    height_scale=128,
+                )
+            bake_maya_sequence(reader, seq, target)
             print(
                 f"  sequence {seq_id}: Maya id={seq.maya_id} "
-                f"frames={seq.frame_count} vertices={model.vertex_count}"
+                f"frames={seq.frame_count} vertices={target.renderer_model.vertex_count}"
             )
         sequences[seq_id] = seq
 

@@ -3771,6 +3771,13 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     CHECK("magic NPC projectile tracks the player",
         ov.projectiles[0].source_npc_slot == 0 &&
         ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+    RenderEntity npc_anim_entities[4];
+    int npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("serpent shaman attack drives body attack animation",
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10861);
 
     init_forecast_test_state(&s, &ctx, 502, 17, 16);
     col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 18, 16);
@@ -3790,6 +3797,13 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     col_npc_attack_ctx(&s, &ctx, 0);
     memset(&ov, 0, sizeof(ov));
     col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
+    npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("manticore attack drives body attack animation",
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10866);
     int manticore_dist = encounter_projectile_distance(
         s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0]),
         s.player.x, s.player.y, 1, ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
@@ -3803,6 +3817,18 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].impact_gfx_id == 2686 &&
         ov.projectiles[0].duration_ticks == manticore_timing.visual_duration_ticks * 30 &&
         ov.projectiles[0].duration_ticks > 1);
+
+    init_forecast_test_state(&s, &ctx, 503, 17, 16);
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
+    npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("javelin colossus attack drives body attack animation",
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10890);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);
