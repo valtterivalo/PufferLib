@@ -1221,6 +1221,7 @@ typedef enum {
     OPP_BLOOD_HEALER,
     OPP_GMAUL_COMBO,
     OPP_RANGE_KITER,
+    OPP_ADAPTIVE_NH,
     OPP_SELFPLAY,
 } OpponentType;
 
