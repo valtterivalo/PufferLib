@@ -3033,6 +3033,20 @@ static inline void pvp_adaptive_nh_apply_defensive_prayer(
     }
 }
 
+static inline MeleeSpecWeapon pvp_adaptive_nh_melee_spec_for_item(uint8_t item) {
+    switch (item) {
+        case ITEM_AGS:              return MELEE_SPEC_AGS;
+        case ITEM_DRAGON_CLAWS:     return MELEE_SPEC_DRAGON_CLAWS;
+        case ITEM_GRANITE_MAUL:     return MELEE_SPEC_GRANITE_MAUL;
+        case ITEM_DRAGON_DAGGER:    return MELEE_SPEC_DRAGON_DAGGER;
+        case ITEM_VOIDWAKER:        return MELEE_SPEC_VOIDWAKER;
+        case ITEM_STATIUS_WARHAMMER:return MELEE_SPEC_DWH;
+        case ITEM_ANCIENT_GS:       return MELEE_SPEC_ANCIENT_GS;
+        case ITEM_VESTAS:           return MELEE_SPEC_VESTAS;
+        default:                    return MELEE_SPEC_NONE;
+    }
+}
+
 static inline void pvp_adaptive_nh_apply_counter_attack(
     OsrsEnv* env,
     OpponentState* opp,
@@ -3044,6 +3058,17 @@ static inline void pvp_adaptive_nh_apply_counter_attack(
     if (!pvp_should_counter_mage_camp_melee(signal)) return;
     if (!opp_attack_ready(self)) return;
     if (opp_check_eating_queued(actions)) return;
+
+    uint8_t melee_spec_item = find_best_melee_spec(self);
+    MeleeSpecWeapon melee_spec = pvp_adaptive_nh_melee_spec_for_item(melee_spec_item);
+    if (target->prayer != PRAYER_PROTECT_MELEE &&
+            melee_spec != MELEE_SPEC_NONE &&
+            self->special_energy >= get_melee_spec_cost(melee_spec) &&
+            opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MELEE, OPP_STYLE_SPEC)) {
+        actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
+        actions[HEAD_COMBAT] = ATTACK_ATK;
+        return;
+    }
 
     if (target->prayer != PRAYER_PROTECT_MELEE &&
             opp_style_can_hit_now(env, self, target, OPP_STYLE_MELEE)) {

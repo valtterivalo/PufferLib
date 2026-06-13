@@ -168,6 +168,10 @@ static int opponent_move(const OsrsEnv* env) {
     return env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE];
 }
 
+static int opponent_special(const OsrsEnv* env) {
+    return env->pending_actions[NUM_ACTION_HEADS + HEAD_SPECIAL];
+}
+
 static int opponent_casts_spell(const OsrsEnv* env) {
     int combat = opponent_combat(env);
     return combat == ATTACK_ICE || combat == ATTACK_BLOOD;
@@ -193,6 +197,7 @@ static void set_adaptive_mage_staff_camp_state(OsrsEnv* env, int recent_melee_co
     target->attack_timer = 0;
     self->prayer = PRAYER_NONE;
     self->attack_timer = 0;
+    self->special_energy = 0;
     self->frozen_ticks = 0;
     self->food_count = 0;
     self->karambwan_count = 0;
@@ -270,6 +275,26 @@ static void test_adaptive_nh_attacks_mage_prayer_camp_with_melee(void) {
         "adaptive NH attacks camp with current melee weapon",
         opponent_combat(&env),
         ATTACK_ATK);
+}
+
+static void test_adaptive_nh_specs_mage_prayer_camp(void) {
+    printf("--- Adaptive NH specs mage-prayer camp ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 1);
+    env.players[1].special_energy = 100;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH attacks camp with melee spec",
+        opponent_combat(&env),
+        ATTACK_ATK);
+    ASSERT_INT_EQ(
+        "adaptive NH arms spec",
+        opponent_special(&env),
+        SPECIAL_ARM);
 }
 
 static void test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready(void) {
@@ -419,6 +444,7 @@ int main(void) {
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();
     test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
+    test_adaptive_nh_specs_mage_prayer_camp();
     test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready();
     test_resolver_distance_10_uses_mage_into_prayer();
     test_resolver_distance_7_uses_crossbow_off_prayer();
