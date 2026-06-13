@@ -172,6 +172,10 @@ static int opponent_special(const OsrsEnv* env) {
     return env->pending_actions[NUM_ACTION_HEADS + HEAD_SPECIAL];
 }
 
+static int opponent_potion(const OsrsEnv* env) {
+    return env->pending_actions[NUM_ACTION_HEADS + HEAD_POTION];
+}
+
 static int opponent_casts_spell(const OsrsEnv* env) {
     int combat = opponent_combat(env);
     return combat == ATTACK_ICE || combat == ATTACK_BLOOD;
@@ -315,6 +319,24 @@ static void test_adaptive_nh_reads_static_camp_action(void) {
         "adaptive NH exact read beats camp heuristic",
         opponent_overhead(&env),
         ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
+}
+
+static void test_adaptive_nh_brews_early_in_static_camp(void) {
+    printf("--- Adaptive NH brews early in static camp ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 0);
+    env.pvp_runtime.opponent.adaptive_mage_camp_ticks = 3;
+    env.players[1].current_hitpoints = env.players[1].base_hitpoints * 4 / 5;
+    env.players[1].brew_doses = 1;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH brews before low hp in camp",
+        opponent_potion(&env),
+        POTION_BREW);
 }
 
 static void test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready(void) {
@@ -466,6 +488,7 @@ int main(void) {
     test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
     test_adaptive_nh_specs_mage_prayer_camp();
     test_adaptive_nh_reads_static_camp_action();
+    test_adaptive_nh_brews_early_in_static_camp();
     test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready();
     test_resolver_distance_10_uses_mage_into_prayer();
     test_resolver_distance_7_uses_crossbow_off_prayer();

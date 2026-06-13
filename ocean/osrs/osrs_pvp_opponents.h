@@ -3095,18 +3095,28 @@ static void opp_adaptive_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     pvp_adaptive_nh_update_memory(opp, self, target);
     PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(opp, self, target);
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    int counter_camp = pvp_should_counter_mage_camp_melee(signal);
     float base_read_chance = opp->read_chance;
+    float base_triple_threshold = opp->eat_triple_threshold;
+    float base_double_threshold = opp->eat_double_threshold;
+    float base_brew_threshold = opp->eat_brew_threshold;
 
-    if (pvp_should_counter_mage_camp_melee(signal)) {
+    if (counter_camp) {
         opp->read_chance = 1.0f;
+        if (opp->eat_triple_threshold < 0.45f) opp->eat_triple_threshold = 0.45f;
+        if (opp->eat_double_threshold < 0.65f) opp->eat_double_threshold = 0.65f;
+        if (opp->eat_brew_threshold < 0.88f) opp->eat_brew_threshold = 0.88f;
     }
     opp_nightmare_nh(env, opp, actions);
     opp->read_chance = base_read_chance;
+    opp->eat_triple_threshold = base_triple_threshold;
+    opp->eat_double_threshold = base_double_threshold;
+    opp->eat_brew_threshold = base_brew_threshold;
 
     pvp_adaptive_nh_apply_defensive_prayer(opp, actions, self, target, signal);
     pvp_adaptive_nh_apply_counter_attack(env, opp, actions, self, target, signal);
     if (!opp_attack_ready(self) &&
-            pvp_should_counter_mage_camp_melee(signal) &&
+            counter_camp &&
             dist <= 1 &&
             self->frozen_ticks == 0) {
         actions[HEAD_COMBAT] = MOVE_FARCAST_5;
