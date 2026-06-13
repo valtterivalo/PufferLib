@@ -182,7 +182,7 @@ static int col_obs_slot_is_targetable(const ColosseumState* s, int obs_slot) {
     int npc_idx = s->current_obs_slots[obs_slot];
     if (npc_idx < 0 || npc_idx >= COLO_MAX_NPCS) return 0;
     const ColoNPC* npc = &s->npcs[npc_idx];
-    return npc->active && npc->death_ticks == 0;
+    return col_npc_is_live_target(npc);
 }
 
 
@@ -594,8 +594,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
        (totems/bees — visible in the per-NPC slots) are excluded. */
     int npcs_remaining = 0;
     for (int n = 0; n < COLO_MAX_NPCS; n++)
-        if (s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
-            !col_type_is_hazard_entity(s->npcs[n].type)) npcs_remaining++;
+        if (col_npc_is_live_enemy(&s->npcs[n])) npcs_remaining++;
     obs[i++] = col_clamp01((float)(s->wave + 1) / (float)COLO_NUM_WAVES);
     obs[i++] = col_clamp01((float)npcs_remaining / (float)COLO_MAX_NPCS);
     obs[i++] = (s->reinforcement_timer > 0)

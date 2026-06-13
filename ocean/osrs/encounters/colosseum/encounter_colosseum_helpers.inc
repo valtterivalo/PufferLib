@@ -71,6 +71,55 @@ static inline int col_npc_attack_anim_id(int npc_def_id) {
     return -1;
 }
 
+typedef struct {
+    int anim_id;
+    int client_ticks;
+    int linger_ticks;
+} ColoNpcDeathVisual;
+
+/**
+ * Cache-derived Colosseum death sequence metadata.
+ *
+ * client_ticks is the summed modern sequence frame delay. linger_ticks is the
+ * same duration converted to simulator ticks with ceil(client_ticks / 30).
+ * Hazard entities keep instant despawn and never consult this table.
+ */
+static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
+    [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
+    [COLO_FREMENNIK_ARCHER]    = { .anim_id = 10851, .client_ticks = 63,  .linger_ticks = 3 },
+    [COLO_FREMENNIK_SEER]      = { .anim_id = 10854, .client_ticks = 63,  .linger_ticks = 3 },
+    [COLO_SERPENT_SHAMAN]      = { .anim_id = 10859, .client_ticks = 100, .linger_ticks = 4 },
+    [COLO_JAGUAR_WARRIOR]      = { .anim_id = 10848, .client_ticks = 63,  .linger_ticks = 3 },
+    [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10897, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10904, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_MINOTAUR]            = { .anim_id = 10845, .client_ticks = 150, .linger_ticks = 5 },
+    [COLO_MANTICORE]           = { .anim_id = 10872, .client_ticks = 80,  .linger_ticks = 3 },
+    [COLO_SOL_HEREDIT]         = { .anim_id = 10873, .client_ticks = 230, .linger_ticks = 8 },
+    [COLO_HEALING_TOTEM]       = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
+    [COLO_BEE_SWARM]           = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
+};
+
+static inline const ColoNpcDeathVisual* col_npc_death_visual(ColoNpcType type) {
+    assert(type >= 0 && type < COLO_NUM_NPC_TYPES);
+    return &COLO_NPC_DEATH_VISUALS[type];
+}
+
+static inline int col_npc_death_anim_id(ColoNpcType type) {
+    return col_npc_death_visual(type)->anim_id;
+}
+
+static inline int col_npc_death_linger_ticks(ColoNpcType type) {
+    return col_npc_death_visual(type)->linger_ticks;
+}
+
+static inline int col_npc_is_live_target(const ColoNPC* npc) {
+    return npc && npc->active && npc->death_ticks == 0 && npc->hp > 0;
+}
+
+static inline int col_npc_is_live_enemy(const ColoNPC* npc) {
+    return col_npc_is_live_target(npc) && !col_type_is_hazard_entity(npc->type);
+}
+
 
 /** queue a player-attack hit on an NPC's pending-hit queue. */
 static void col_queue_npc_pending_hit(

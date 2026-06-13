@@ -755,6 +755,7 @@ static void test_totem_lifecycle(void) {
 
     /* the owner's death despawns the live totem outright. */
     int tslot2 = s.totems[0].npc_slot;
+    s.npcs[0].hp = 0;
     col_apply_npc_death(&s, 0);
     CHECK("the owner's death despawns its totem",
         !s.npcs[tslot2].active && s.totems[0].phase == COLO_HAZARD_NONE);
@@ -767,6 +768,7 @@ static void test_totem_lifecycle(void) {
     col_player_attack_target(&s, tslot3);
     land_pending_player_hits(&s);
     CHECK("second totem down and respawning", s.totems[0].phase == COLO_HAZARD_RESPAWNING);
+    s.npcs[0].hp = 0;
     col_apply_npc_death(&s, 0);
     CHECK("the owner's death cancels a pending totem respawn",
         s.totems[0].phase == COLO_HAZARD_NONE);
@@ -1228,8 +1230,58 @@ static void test_volatility_explosion(void) {
     int idx = 0;
     col_init_npc(&s, idx, COLO_FREMENNIK_BERSERKER, 18, 17);
     int hp_before = s.player.current_hitpoints;
+    s.npcs[idx].hp = 0;
     col_apply_npc_death(&s, idx);
     CHECK("Volatility explosion hits an adjacent player", s.player.current_hitpoints < hp_before);
+}
+
+static void test_death_linger_wave_clear_and_render(void) {
+    printf("test_death_linger_wave_clear_and_render\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 31);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave = 0;
+    s.wave_spawn_delay = 0;
+    s.wave_ready_delay = 0;
+    s.reinforcement_timer = COLO_REINFORCEMENT_TICKS;
+    s.player.x = 12;
+    s.player.y = 16;
+
+    int idx = 0;
+    col_init_npc(&s, idx, COLO_FREMENNIK_BERSERKER, 14, 16);
+    s.npcs[idx].hp = 1;
+    int dealt = encounter_damage_npc(
+        &s.npcs[idx].hp, &s.npcs[idx].hit_landed_this_tick,
+        &s.npcs[idx].hit_damage, 1);
+    s.npcs[idx].hit_was_successful_this_tick = dealt > 0;
+    col_apply_npc_death(&s, idx);
+
+    int linger_ticks = col_npc_death_linger_ticks(COLO_FREMENNIK_BERSERKER);
+    CHECK("lethal hit starts NPC death linger", s.npcs[idx].active &&
+        s.npcs[idx].death_ticks == linger_ticks);
+
+    RenderEntity entities[4];
+    int entity_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx, entities, 4, &entity_count);
+    CHECK("dying NPC is still rendered", entity_count == 2 && entities[1].npc_slot == idx);
+    CHECK("dying NPC uses death animation",
+        entities[1].npc_anim_id == col_npc_death_anim_id(COLO_FREMENNIK_BERSERKER));
+    CHECK("lethal hitsplat remains on death frame",
+        entities[1].hit_landed_this_tick == 1 && entities[1].hit_damage == 1);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    step_and_observe(&s, &ctx, idle);
+    CHECK("wave clears while corpse is dying", s.tick_scratch.wave_completed == 1);
+    CHECK("dying corpse remains active after wave clear",
+        s.npcs[idx].active && s.npcs[idx].death_ticks == linger_ticks - 1);
+
+    for (int t = 0; t < linger_ticks; t++) step_and_observe(&s, &ctx, idle);
+    CHECK("dying corpse despawns after linger", !s.npcs[idx].active);
 }
 
 /* ---- 3. P1 arena geometry ------------------------------------------------- */
@@ -1537,6 +1589,7 @@ static void test_wave12_quartet_and_win(void) {
         /* A6: killing Sol ends the run in victory with the warbander alive. */
         int sol = col_sol_find_idx(&s);
         if (sol < 0) { win_ok = 0; continue; }
+        s.npcs[sol].hp = 0;
         col_apply_npc_death(&s, sol);
         int idle[COLO_NUM_ACTION_HEADS] = {0};
         step_and_observe(&s, &ctx, idle);
@@ -3899,6 +3952,7 @@ int main(void) {
     test_twelve_drafts_per_run();
     test_solarflare_orb();
     test_volatility_explosion();
+    test_death_linger_wave_clear_and_render();
     test_draft_offer_and_select();
     test_draft_upgrade_bias();
     test_mantimayhem_stress();

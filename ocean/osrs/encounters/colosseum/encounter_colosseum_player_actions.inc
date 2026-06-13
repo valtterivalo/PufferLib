@@ -203,7 +203,7 @@ static int col_lookup_player_attack_target(void* ctx, int target_slot, OsrsAttac
     ColosseumState* s = (ColosseumState*)ctx;
     if (target_slot < 0 || target_slot >= COLO_MAX_NPCS) return 0;
     ColoNPC* npc = &s->npcs[target_slot];
-    if (!npc->active) return 0;
+    if (!col_npc_is_live_target(npc)) return 0;
     out->slot = target_slot;
     out->x = npc->x;
     out->y = npc->y;

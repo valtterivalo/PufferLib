@@ -18,13 +18,19 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
         col_deactivate_npc(s, idx);
         return;
     }
+    if (npc->death_ticks > 0) return;
+    assert(npc->active && npc->hp <= 0);
     s->log.total_npc_kills++;
     /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
        at tier III). Read its position/size before the slot is recycled. */
     col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));
     /* A21: the owner's death despawns its totem and cancels a pending respawn. */
     col_mod_on_owner_death(s, idx);
-    col_deactivate_npc(s, idx);
+    if (!osrs_npc_death_linger_start(
+            npc->hp, npc->active, &npc->death_ticks,
+            col_npc_death_linger_ticks(npc->type)))
+        return;
+    encounter_pending_hit_queue_clear(&npc->pending_hits);
 }
 
 /** resolve player attack projectiles landing on NPCs. A hit that lands this tick
@@ -33,7 +39,7 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
 static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
-        if (!npc->active) continue;
+        if (!col_npc_is_live_target(npc)) continue;
         for (int h = 0; h < npc->pending_hits.count; h++) {
             EncounterPendingHit* ph = &npc->pending_hits.hits[h];
             int landed = 0, hit_damage = 0;
@@ -57,6 +63,16 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
                 h--;
             }
         }
+    }
+}
+
+/** advance dying NPC lifetimes even while wave-gap logic pauses active AI. */
+static void col_tick_npc_death_lingers(ColosseumState* s) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->death_ticks <= 0) continue;
+        if (osrs_npc_death_linger_tick(&npc->death_ticks))
+            col_deactivate_npc(s, i);
     }
 }
 
@@ -206,7 +222,7 @@ static void col_npc_minotaur_heal_ally(ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
         ColoNPC* other = &s->npcs[i];
-        if (!other->active || other->death_ticks > 0 || other->hp <= 0) continue;
+        if (!col_npc_is_live_target(other)) continue;
         if (other->type == COLO_MINOTAUR) continue;
         if (other->hp * 4 >= other->max_hp * 3) continue;   /* at/above 75% */
         int osz = col_npc_effective_size(other);
@@ -280,7 +296,7 @@ static int col_any_other_manticore_mid_barrage(const ColosseumState* s, int idx)
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
         const ColoNPC* other = &s->npcs[i];
-        if (!other->active || other->type != COLO_MANTICORE) continue;
+        if (!col_npc_is_live_target(other) || other->type != COLO_MANTICORE) continue;
         if (other->type_state.manticore.cycle_step >= 0) return 1;
     }
     return 0;
@@ -365,7 +381,7 @@ static void col_manticore_copy_pattern_to_peers(ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
         ColoNPC* other = &s->npcs[i];
-        if (!other->active || other->death_ticks > 0) continue;
+        if (!col_npc_is_live_target(other)) continue;
         if (other->type != COLO_MANTICORE) continue;
         ColoManticoreState* omc = colo_npc_manticore(other);
         if (omc->cycle_step >= 0) continue;   /* mid-barrage = committed */
@@ -541,7 +557,7 @@ static void col_warband_attack_phase(ColosseumState* s) {
     int phase = (s->tick - s->warband_cycle_anchor) % COLO_WARBAND_CYCLE_TICKS;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
-        if (!npc->active || npc->death_ticks > 0) continue;
+        if (!col_npc_is_live_target(npc)) continue;
         if (!col_type_is_warbander(npc->type)) continue;
         int wait = (col_warband_window_offset(npc->type) - phase
                     + COLO_WARBAND_CYCLE_TICKS) % COLO_WARBAND_CYCLE_TICKS;
@@ -577,7 +593,7 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
        whatever tile the player occupied this tick (dodged if they have stepped off). */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
-        if (npc->active && npc->type == COLO_JAVELIN_COLOSSUS)
+        if (col_npc_is_live_target(npc) && npc->type == COLO_JAVELIN_COLOSSUS)
             col_npc_resolve_javelin_skyfall(s, i);
     }
 
@@ -585,11 +601,7 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active) continue;
 
-        if (npc->death_ticks > 0) {
-            npc->death_ticks--;
-            if (npc->death_ticks == 0) col_deactivate_npc(s, i);
-            continue;
-        }
+        if (npc->death_ticks > 0) continue;
         if (npc->stun_timer > 0) npc->stun_timer--;
         if (npc->frozen_ticks > 0) npc->frozen_ticks--;
 

@@ -93,6 +93,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     /* resolve in-flight projectiles (always, even during gaps) */
     col_resolve_player_projectiles_on_npcs(s);
     col_resolve_player_pending_hits(s);
+    col_tick_npc_death_lingers(s);
 
     if (!in_wave_gap && !in_ready_gap) {
         /* B2(a): anchor the shared warband cycle to the wave's first actionable
@@ -150,11 +151,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     if (s->wave_spawn_delay > 0 || s->modifiers.draft_pending) goto finish_step;
 
-    /* wave completion: all non-hazard NPC slots inactive — a live totem or bee
-       swarm never blocks the clear (A21+B9). A6: on the boss wave Sol's death
-       alone ends the run in victory, even with a Quartet warbander alive. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        if (s->npcs[i].active && !col_type_is_hazard_entity(s->npcs[i].type)) {
+        if (col_npc_is_live_enemy(&s->npcs[i])) {
             all_dead = 0;
             break;
         }

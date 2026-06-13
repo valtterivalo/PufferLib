@@ -190,9 +190,11 @@ static void col_fill_render_entities_ctx(
         int def_id = COLO_NPC_DEF_IDS[npc->type];
         if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG))
             def_id = COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND;
-        int npc_anim_id = npc->attacked_this_tick
-            ? col_npc_attack_anim_id(def_id)
-            : -1;
+        int npc_anim_id = -1;
+        if (npc->death_ticks > 0)
+            npc_anim_id = col_npc_death_anim_id(npc->type);
+        else if (npc->attacked_this_tick)
+            npc_anim_id = col_npc_attack_anim_id(def_id);
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
             .npc_def_id = def_id,

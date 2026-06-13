@@ -102,6 +102,22 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12825: 10828,
 }
 
+COLOSSEUM_DEATH_ANIM_IDS = {
+    12810: 10848,
+    12811: 10859,
+    12812: 10845,
+    12813: 10845,
+    12814: 10851,
+    12815: 10854,
+    12816: 10857,
+    12817: 10897,
+    12818: 10872,
+    12819: 10904,
+    12821: 10873,
+    12823: 0xFFFF,
+    12825: 0xFFFF,
+}
+
 
 def build_npc_models(
     reader: ModernCacheReader,
@@ -117,6 +133,12 @@ def build_npc_models(
         raise SystemExit(
             "export_colosseum_npcs: attack animation missing for npc ids "
             + ", ".join(str(npc_id) for npc_id in missing_attack_anim_npc_ids)
+        )
+    missing_death_anim_npc_ids = sorted(set(COLOSSEUM_NPC_IDS) - set(COLOSSEUM_DEATH_ANIM_IDS))
+    if missing_death_anim_npc_ids:
+        raise SystemExit(
+            "export_colosseum_npcs: death animation missing for npc ids "
+            + ", ".join(str(npc_id) for npc_id in missing_death_anim_npc_ids)
         )
 
     models: list[ModelData] = []
@@ -158,25 +180,27 @@ def build_npc_models(
         idle_anim = npc.stand_anim if npc.stand_anim >= 0 else 0xFFFF
         attack_anim = COLOSSEUM_ATTACK_ANIM_IDS[npc_id]
         walk_anim = npc.walk_anim if npc.walk_anim >= 0 else 0xFFFF
+        death_anim = COLOSSEUM_DEATH_ANIM_IDS[npc_id]
         mapping[npc_id] = {
             "synthetic_model_id": merged.model_id,
             "idle_anim": idle_anim,
             "attack_anim": attack_anim,
             "walk_anim": walk_anim,
+            "death_anim": death_anim,
         }
         print(
             f"  npc {npc_id} ({npc.name}): {merged.vertex_count}v {merged.face_count}f "
-            f"idle={idle_anim} attack={attack_anim} walk={walk_anim}"
+            f"idle={idle_anim} attack={attack_anim} walk={walk_anim} death={death_anim}"
         )
 
     return models, mapping
 
 
 def collect_anim_ids(mapping: dict[int, dict[str, int]]) -> set[int]:
-    """Gather every non-sentinel idle, attack, and walk sequence id."""
+    """Gather every non-sentinel idle, attack, walk, and death sequence id."""
     anim_ids: set[int] = set()
     for entry in mapping.values():
-        for key in ("idle_anim", "attack_anim", "walk_anim"):
+        for key in ("idle_anim", "attack_anim", "walk_anim", "death_anim"):
             value = entry[key]
             if value != 0xFFFF:
                 anim_ids.add(value)

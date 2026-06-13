@@ -43,7 +43,7 @@ static int col_sol_phase_for_hp(int hp) {
 static int col_sol_find_idx(const ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         const ColoNPC* npc = &s->npcs[i];
-        if (npc->active && npc->death_ticks == 0 && npc->type == COLO_SOL_HEREDIT)
+        if (col_npc_is_live_target(npc) && npc->type == COLO_SOL_HEREDIT)
             return i;
     }
     return -1;

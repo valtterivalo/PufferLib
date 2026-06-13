@@ -46,6 +46,7 @@ typedef struct {
     int dst_size;
     uint32_t model_id;
     int anim_id;
+    int travel_gfx_id;
     int launch_gfx_id;
     int impact_gfx_id;
     int start_delay;
@@ -235,6 +236,8 @@ static inline int osrs_emit_projectile_with_spec(
         spec->impact_gfx_id);
     if (spec->anim_id >= 0)
         encounter_set_projectile_animation(overlay, idx, spec->anim_id);
+    if (spec->travel_gfx_id > 0)
+        encounter_set_projectile_travel_gfx(overlay, idx, spec->travel_gfx_id);
     if (spec->launch_gfx_id > 0)
         encounter_set_projectile_launch_gfx(overlay, idx, spec->launch_gfx_id);
     overlay->projectiles[idx].start_delay = spec->start_delay;

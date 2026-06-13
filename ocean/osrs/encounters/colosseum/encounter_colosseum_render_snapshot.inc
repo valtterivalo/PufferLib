@@ -127,8 +127,8 @@ static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
     int npc_def_id = COLO_NPC_DEF_IDS[type];
     const OsrsCombatVisualRow* row = osrs_combat_visual_find_npc_id(
         (uint16_t)npc_def_id, style);
-    if (!row || row->projectile.travel_spotanim_id <= 0 ||
-            row->projectile.projectile_model_id <= 0) {
+    if (!row || (row->projectile.travel_spotanim_id <= 0 &&
+            row->projectile.projectile_model_id <= 0)) {
         fprintf(stderr,
             "colosseum: missing real combat visual projectile for npc def id %d style %s\n",
             npc_def_id, col_attack_style_debug_name(style));
@@ -178,7 +178,7 @@ static void col_emit_npc_attack_projectile(
 
     if (npc->attack_visual_target >= 0 && npc->attack_visual_target < COLO_MAX_NPCS) {
         ColoNPC* target = &s->npcs[npc->attack_visual_target];
-        if (target->active) {
+        if (col_npc_is_live_target(target)) {
             target_tile_x = target->x;
             target_tile_y = target->y;
             target_size = col_npc_effective_size(target);
@@ -202,8 +202,14 @@ static void col_emit_npc_attack_projectile(
     const OsrsCombatVisualRow* npc_visual =
         col_require_npc_combat_visual_projectile_row(npc->type, actual_style);
     const OsrsCombatProjectileProfile* projectile = &npc_visual->projectile;
-    uint32_t model_id = (uint32_t)projectile->projectile_model_id;
-    int anim_id = projectile->projectile_anim_id;
+    uint32_t model_id = projectile->projectile_model_id > 0
+        ? (uint32_t)projectile->projectile_model_id
+        : 0u;
+    int anim_id = projectile->projectile_model_id > 0
+        ? projectile->projectile_anim_id
+        : OSRS_COMBAT_PROJECTILE_MISSING;
+    int travel_gfx_id = osrs_combat_projectile_value_or(
+        projectile->travel_spotanim_id, 0);
     int launch_gfx_id = osrs_combat_projectile_value_or(
         projectile->launch_spotanim_id, 0);
     int impact_gfx_id = osrs_combat_projectile_value_or(
@@ -227,6 +233,7 @@ static void col_emit_npc_attack_projectile(
         .dst_size = target_size,
         .model_id = model_id,
         .anim_id = anim_id,
+        .travel_gfx_id = travel_gfx_id,
         .launch_gfx_id = launch_gfx_id,
         .impact_gfx_id = impact_gfx_id,
         .start_delay = start_delay,

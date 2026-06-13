@@ -149,6 +149,8 @@ typedef struct {
     float offset_x, offset_y, offset_z;
     uint32_t model_id;          /* GFX model from cache (0 = style-based fallback) */
     int anim_id;                /* spotanim animation sequence (-1 = static model) */
+    int travel_gfx_id;
+    int travel_gfx_drives_model;
     int anim_frame;
     int anim_tick_counter;
     AnimModelState* anim_state;
@@ -1864,11 +1866,60 @@ static OsrsModel* render_get_projectile_osrs_model(RenderClient* rc, uint32_t mo
     return om;
 }
 
-static AnimModelState* render_create_projectile_anim_state(
-    RenderClient* rc, uint32_t model_id, int anim_id
+static const OsrsSpotAnimDef* render_require_travel_spotanim(
+    RenderClient* rc,
+    int travel_gfx_id
 ) {
-    if (anim_id < 0 || model_id == 0) return NULL;
-    OsrsModel* om = render_get_projectile_osrs_model(rc, model_id);
+    const OsrsSpotAnimDef* meta = osrs_spotanim_find(rc->spotanims, travel_gfx_id);
+    if (!meta || meta->model_id < 0) {
+        fprintf(stderr, "render: travel spotanim %d is missing a model\n",
+                travel_gfx_id);
+        abort();
+    }
+    return meta;
+}
+
+static OsrsModel* render_get_travel_spotanim_osrs_model(
+    RenderClient* rc,
+    int travel_gfx_id
+) {
+    const OsrsSpotAnimDef* meta = render_require_travel_spotanim(rc, travel_gfx_id);
+    OsrsModel* om = effect_find_model(
+        meta, rc->model_cache, rc->npc_model_cache, rc->projectile_model_cache);
+    if (!om) {
+        fprintf(stderr, "render: travel spotanim %d model %d is missing from loaded caches\n",
+                travel_gfx_id, meta->model_id);
+        abort();
+    }
+    return om;
+}
+
+static OsrsModel* render_get_flight_osrs_model(
+    RenderClient* rc,
+    const FlightProjectile* fp
+) {
+    if (fp->travel_gfx_drives_model)
+        return render_get_travel_spotanim_osrs_model(rc, fp->travel_gfx_id);
+    return render_get_projectile_osrs_model(rc, fp->model_id);
+}
+
+static int render_projectile_anim_has_dynamic_frames(RenderClient* rc, int anim_id) {
+    if (anim_id < 0) return 0;
+    AnimSequence* seq = render_get_anim_sequence(rc, (uint16_t)anim_id);
+    if (!seq || seq->frame_count <= 0) {
+        fprintf(stderr, "render: projectile animation %d is missing\n", anim_id);
+        abort();
+    }
+    return !(seq->frame_count == 1 &&
+             (seq->frames[0].delay == 0 || seq->frames[0].delay >= 0x8000u));
+}
+
+static AnimModelState* render_create_projectile_anim_state_from_model(
+    OsrsModel* om,
+    uint32_t model_id,
+    int anim_id
+) {
+    if (anim_id < 0 || !om) return NULL;
     if (!om->vertex_skins || om->base_vert_count == 0) {
         fprintf(stderr, "render: projectile model %u cannot play animation %d\n",
                 model_id, anim_id);
@@ -2021,7 +2072,8 @@ static void flight_spawn(RenderClient* rc,
                          int style, int damage,
                          int duration_ticks, int start_h, int end_h, int curve,
                          float arc_height, int tracks_target, uint32_t model_id,
-                         int anim_id, int launch_gfx_id, int impact_gfx_id,
+                         int anim_id, int travel_gfx_id,
+                         int launch_gfx_id, int impact_gfx_id,
                          int start_delay, int motion_mode,
                          float offset_x, float offset_y, float offset_z,
                          int source_kind, int source_npc_slot,
@@ -2060,9 +2112,22 @@ static void flight_spawn(RenderClient* rc,
     fp->target_npc_slot = target_npc_slot;
     fp->model_id = model_id;
     fp->anim_id = anim_id;
+    fp->travel_gfx_id = travel_gfx_id;
+    fp->travel_gfx_drives_model = (model_id == 0 && travel_gfx_id > 0);
+    if (travel_gfx_id > 0) {
+        const OsrsSpotAnimDef* meta = render_require_travel_spotanim(rc, travel_gfx_id);
+        if (fp->travel_gfx_drives_model) {
+            fp->model_id = (uint32_t)meta->model_id;
+            if (fp->anim_id < 0)
+                fp->anim_id = meta->animation_id;
+        }
+        if (!render_projectile_anim_has_dynamic_frames(rc, fp->anim_id))
+            fp->anim_id = -1;
+    }
     fp->anim_frame = 0;
     fp->anim_tick_counter = 0;
-    fp->anim_state = render_create_projectile_anim_state(rc, model_id, anim_id);
+    fp->anim_state = render_create_projectile_anim_state_from_model(
+        render_get_flight_osrs_model(rc, fp), fp->model_id, fp->anim_id);
     fp->launch_gfx_id = launch_gfx_id;
     fp->impact_gfx_id = impact_gfx_id;
     fp->start_delay = start_delay;
@@ -3304,6 +3369,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                     dur, sh, eh, cv, arc, trk,
                     ov->projectiles[i].model_id,
                     ov->projectiles[i].anim_id,
+                    ov->projectiles[i].travel_gfx_id,
                     ov->projectiles[i].launch_gfx_id,
                     ov->projectiles[i].impact_gfx_id,
                     ov->projectiles[i].start_delay,
@@ -4683,8 +4749,8 @@ static void render_draw_3d_world(RenderClient* rc) {
             Vector3 pos = flight_get_position(fp, src_ground, dst_ground);
 
             Model* proj_model = NULL;
-            if (fp->anim_id >= 0 && fp->model_id > 0) {
-                OsrsModel* om = render_get_projectile_osrs_model(rc, fp->model_id);
+            if (fp->anim_id >= 0 && (fp->model_id > 0 || fp->travel_gfx_drives_model)) {
+                OsrsModel* om = render_get_flight_osrs_model(rc, fp);
                 AnimSequence* seq = render_get_anim_sequence(rc, (uint16_t)fp->anim_id);
                 if (!fp->anim_state || !seq || seq->frame_count <= 0 || !om->face_indices) {
                     fprintf(stderr, "render: projectile model %u cannot render animation %d\n",
@@ -4710,6 +4776,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                     UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
                         om->mesh.vertexCount * 4, 0);
                 }
+                proj_model = &om->model;
+            } else if (fp->travel_gfx_drives_model) {
+                OsrsModel* om = render_get_flight_osrs_model(rc, fp);
                 proj_model = &om->model;
             } else if (fp->model_id > 0) {
                 proj_model = render_get_proj_model(rc, fp->model_id);
