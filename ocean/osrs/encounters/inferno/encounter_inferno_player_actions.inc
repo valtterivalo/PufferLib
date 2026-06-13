@@ -723,6 +723,7 @@ static void inf_tick_player_ctx(
         .ctx = ctx,
         .manual_spell = manual_spell,
     };
+    OsrsLosQuery los_query = inf_player_los_query(s);
     (void)osrs_encounter_player_step(&(OsrsPlayerStepInput){
         .player = &s->player,
         .interaction = &s->interaction,
@@ -740,8 +741,7 @@ static void inf_tick_player_ctx(
             .walkable_ctx = &wc,
             .extra_blocked = inf_pathfind_blocked,
             .blocked_ctx = &wc,
-            .los_blockers = s->los_blockers,
-            .los_blocker_count = s->los_blocker_count,
+            .los_query = &los_query,
             .arena_base_x = INF_ARENA_MIN_X,
             .arena_base_y = INF_ARENA_MIN_Y,
             .arena_w = INF_ARENA_WIDTH,
@@ -765,7 +765,7 @@ static void inf_tick_player_ctx(
             int has_healer_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &healer_attack);
             if (has_healer_attack && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
-                    healer_attack.stats.attack_range, s->los_blockers, s->los_blocker_count)) {
+                    healer_attack.stats.attack_range, &los_query)) {
                 s->total_zuk_healer_attackable_ticks++;
             } else {
                 s->total_zuk_healer_out_of_range_ticks++;
@@ -789,7 +789,7 @@ static void inf_tick_player_ctx(
                 osrs_interaction_clear(&s->interaction);
             } else if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
-                    ls->attack_range, s->los_blockers, s->los_blocker_count)) {
+                    ls->attack_range, &los_query)) {
                 int is_blowpipe_spec_attack = weapon_is_blowpipe &&
                     s->player.spec_armed && s->player.special_energy >= BLOWPIPE_SPEC_COST;
                 EncounterProjectileDistanceMode distance_mode = is_magic_attack

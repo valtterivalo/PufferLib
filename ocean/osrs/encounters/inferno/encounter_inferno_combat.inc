@@ -222,6 +222,7 @@ static int inf_player_can_attack_npc_from_current_tile(
     if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0) return 0;
 
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    OsrsLosQuery los_query = inf_player_los_query(s);
     return encounter_player_can_attack(
         s->player.x,
         s->player.y,
@@ -229,8 +230,7 @@ static int inf_player_can_attack_npc_from_current_tile(
         npc->y,
         npc->size,
         ls->attack_range,
-        s->los_blockers,
-        s->los_blocker_count);
+        &los_query);
 }
 
 static int inf_player_has_los_to_npc_from_current_tile(
@@ -276,6 +276,7 @@ static InfPlayerNpcLoadoutReach inf_player_loadout_reach_to_npc(
 
     const InfNPC* npc = &s->npcs[npc_idx];
     const EncounterLoadoutStats* ls = &s->loadout_stats[weapon_set];
+    OsrsLosQuery los_query = inf_player_los_query(s);
     int edge_distance = encounter_dist_to_npc(
         s->player.x, s->player.y, npc->x, npc->y, npc->size);
     out.range_deficit = edge_distance > ls->attack_range
@@ -288,8 +289,7 @@ static InfPlayerNpcLoadoutReach inf_player_loadout_reach_to_npc(
         npc->y,
         npc->size,
         ls->attack_range,
-        s->los_blockers,
-        s->los_blocker_count);
+        &los_query);
     return out;
 }
 
@@ -307,6 +307,7 @@ static int inf_player_can_phantom_barrage_npc(
 
     if (!inf_player_has_any_barrage_spell_available(s)) return 0;
 
+    OsrsLosQuery los_query = inf_player_los_query(s);
     return encounter_player_can_attack(
         s->player.x,
         s->player.y,
@@ -314,8 +315,7 @@ static int inf_player_can_phantom_barrage_npc(
         npc->y,
         npc->size,
         10,
-        s->los_blockers,
-        s->los_blocker_count);
+        &los_query);
 }
 
 static int inf_npc_is_phantom_barrage_obs_candidate(

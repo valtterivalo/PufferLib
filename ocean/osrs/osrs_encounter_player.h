@@ -28,8 +28,7 @@ typedef struct {
     void* walkable_ctx;
     pathfind_blocked_fn extra_blocked;
     void* blocked_ctx;
-    const LOSBlocker* los_blockers;
-    int los_blocker_count;
+    const OsrsLosQuery* los_query;
     int arena_base_x;
     int arena_base_y;
     int arena_w;
@@ -107,8 +106,7 @@ static inline int osrs_player_step_can_attack_target(
         target->y,
         target->size,
         target->attack_range,
-        input->arena.los_blockers,
-        input->arena.los_blocker_count);
+        input->arena.los_query);
 }
 
 static inline int osrs_player_step_apply_explicit_move(
@@ -162,8 +160,7 @@ static inline int osrs_player_step_chase_target(
         input->arena.walkable_ctx,
         input->arena.extra_blocked,
         input->arena.blocked_ctx,
-        input->arena.los_blockers,
-        input->arena.los_blocker_count,
+        input->arena.los_query,
         input->arena.arena_base_x,
         input->arena.arena_base_y,
         input->arena.arena_w,

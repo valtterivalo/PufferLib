@@ -15,51 +15,28 @@ static int col_player_walkable(void* ctx, int x, int y) {
     return s->player_collision_flags[gx][gy] ? 0 : 1;
 }
 
+/** Static tile predicate for shared line-of-sight queries (player and NPC). */
+static int col_los_tile_blocked(void* ctx, int x, int y) {
+    (void)ctx;
+    return col_static_blocked(x, y);
+}
+
 /**
- * B1: centre-to-centre tile line of sight over the static mask. Mirrors the
- * shared has_line_of_sight Q16 ray walk (osrs_collision.h) with an O(1) grid
- * lookup instead of a blocker list; walls and pillars block fully. Checks every
- * tile the ray enters including the destination; the SOURCE tile is exempt so a
- * perimeter emitter (the wave-12 crystal) can fire out of a blocked corner.
+ * B1: centre-to-centre tile line of sight over the static mask. Delegates to the
+ * shared Q16 ray walk (osrs_los_tile_ray_clear) so the player attack gate and the
+ * NPC attack gate resolve byte-identical sight lines over one implementation; walls
+ * and pillars block fully. Checks every tile the ray enters including the
+ * destination; the SOURCE tile is exempt so a perimeter emitter (the wave-12
+ * crystal) can fire out of a blocked corner.
  */
 static int col_tiles_have_los(const ColosseumState* s, int x0, int y0, int x1, int y1) {
-    (void)s;
-    int dx = x1 - x0, dy = y1 - y0;
-    int adx = dx < 0 ? -dx : dx;
-    int ady = dy < 0 ? -dy : dy;
-    if (adx == 0 && ady == 0) return 1;
-    if (col_static_blocked(x1, y1)) return 0;
+    OsrsLosQuery query = osrs_los_tile(col_los_tile_blocked, (void*)s);
+    return osrs_los_tile_ray_clear(&query, x0, y0, x1, y1);
+}
 
-    if (adx > ady) {
-        int x = x0;
-        int y_fp = y0 * LOS_FP_SCALE + LOS_FP_HALF;
-        int slope = (dy * LOS_FP_SCALE) / adx;
-        int x_inc = dx > 0 ? 1 : -1;
-        if (dy < 0) y_fp -= 1;
-        while (x != x1) {
-            x += x_inc;
-            int y = y_fp >> 16;
-            if (col_static_blocked(x, y)) return 0;
-            y_fp += slope;
-            int new_y = y_fp >> 16;
-            if (new_y != y && col_static_blocked(x, new_y)) return 0;
-        }
-    } else {
-        int y = y0;
-        int x_fp = x0 * LOS_FP_SCALE + LOS_FP_HALF;
-        int slope = (dx * LOS_FP_SCALE) / ady;
-        int y_inc = dy > 0 ? 1 : -1;
-        if (dx < 0) x_fp -= 1;
-        while (y != y1) {
-            y += y_inc;
-            int x = x_fp >> 16;
-            if (col_static_blocked(x, y)) return 0;
-            x_fp += slope;
-            int new_x = x_fp >> 16;
-            if (new_x != x && col_static_blocked(new_x, y)) return 0;
-        }
-    }
-    return 1;
+/** Shared player LoS source for the Colosseum static tile mask. */
+static OsrsLosQuery col_player_los_query(ColosseumState* s) {
+    return osrs_los_tile(col_los_tile_blocked, s);
 }
 
 /** B1: ranged/magic attacks need LoS from the closest tile of the NPC's

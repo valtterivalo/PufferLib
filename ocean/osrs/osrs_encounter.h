@@ -825,22 +825,214 @@ static inline int encounter_entity_footprints_overlap(
              ay + a_size <= by || by + b_size <= ay);
 }
 
-/* check if player can attack: in range AND has LOS (if blockers present).
-   returns 1 if ready to attack, 0 if blocked or out of range.
-   encounters without LOS blockers pass NULL/0 for unconditional range check. */
+typedef enum {
+    OSRS_LOS_OPEN = 0,
+    OSRS_LOS_BLOCKERS,
+    OSRS_LOS_TILE,
+} OsrsLosKind;
+
+typedef struct {
+    OsrsLosKind kind;
+    const LOSBlocker* blockers;
+    int blocker_count;
+    int (*tile_blocked)(void* ctx, int x, int y);
+    void* tile_ctx;
+} OsrsLosQuery;
+
+/** Declare an arena with no line-of-sight obstacles. */
+static inline OsrsLosQuery osrs_los_open(void) {
+    OsrsLosQuery query;
+    query.kind = OSRS_LOS_OPEN;
+    query.blockers = NULL;
+    query.blocker_count = 0;
+    query.tile_blocked = NULL;
+    query.tile_ctx = NULL;
+    return query;
+}
+
+/** Declare an arena whose line of sight is backed by LOSBlocker footprints. */
+static inline OsrsLosQuery osrs_los_blockers(
+    const LOSBlocker* blockers,
+    int blocker_count
+) {
+    OsrsLosQuery query;
+    query.kind = OSRS_LOS_BLOCKERS;
+    query.blockers = blockers;
+    query.blocker_count = blocker_count;
+    query.tile_blocked = NULL;
+    query.tile_ctx = NULL;
+    return query;
+}
+
+/** Declare an arena whose line of sight is backed by a blocked-tile predicate. */
+static inline OsrsLosQuery osrs_los_tile(
+    int (*tile_blocked)(void* ctx, int x, int y),
+    void* tile_ctx
+) {
+    OsrsLosQuery query;
+    query.kind = OSRS_LOS_TILE;
+    query.blockers = NULL;
+    query.blocker_count = 0;
+    query.tile_blocked = tile_blocked;
+    query.tile_ctx = tile_ctx;
+    return query;
+}
+
+/** Shared open-arena query for callers that need a stable pointer. */
+static inline const OsrsLosQuery* osrs_los_open_query(void) {
+    static const OsrsLosQuery query = {
+        OSRS_LOS_OPEN,
+        NULL,
+        0,
+        NULL,
+        NULL,
+    };
+    return &query;
+}
+
+static inline void osrs_los_require_query(
+    const OsrsLosQuery* query,
+    int attack_range
+) {
+    if (attack_range <= 1) return;
+    if (!query) {
+        fprintf(stderr, "missing OSRS LoS query for ranged attack\n");
+        abort();
+    }
+    if (query->kind < OSRS_LOS_OPEN || query->kind > OSRS_LOS_TILE) {
+        fprintf(stderr, "invalid OSRS LoS query kind: %d\n", (int)query->kind);
+        abort();
+    }
+    if (query->kind == OSRS_LOS_BLOCKERS) {
+        if (query->blocker_count < 0) {
+            fprintf(stderr, "negative OSRS LoS blocker count: %d\n",
+                query->blocker_count);
+            abort();
+        }
+        if (query->blocker_count > 0 && !query->blockers) {
+            fprintf(stderr, "OSRS LoS blocker query is missing blockers\n");
+            abort();
+        }
+    }
+    if (query->kind == OSRS_LOS_TILE && !query->tile_blocked) {
+        fprintf(stderr, "OSRS tile LoS query is missing tile_blocked\n");
+        abort();
+    }
+}
+
+static inline int osrs_los_tile_ray_clear(
+    const OsrsLosQuery* query,
+    int x0, int y0,
+    int x1, int y1
+) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+    if (adx == 0 && ady == 0) return 1;
+    if (query->tile_blocked(query->tile_ctx, x1, y1)) return 0;
+
+    if (adx > ady) {
+        int x = x0;
+        int y_fp = y0 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dy * LOS_FP_SCALE) / adx;
+        int x_inc = dx > 0 ? 1 : -1;
+        if (dy < 0) y_fp -= 1;
+        while (x != x1) {
+            x += x_inc;
+            int y = y_fp >> 16;
+            if (query->tile_blocked(query->tile_ctx, x, y)) return 0;
+            y_fp += slope;
+            int new_y = y_fp >> 16;
+            if (new_y != y &&
+                    query->tile_blocked(query->tile_ctx, x, new_y))
+                return 0;
+        }
+    } else {
+        int y = y0;
+        int x_fp = x0 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dx * LOS_FP_SCALE) / ady;
+        int y_inc = dy > 0 ? 1 : -1;
+        if (dx < 0) x_fp -= 1;
+        while (y != y1) {
+            y += y_inc;
+            int x = x_fp >> 16;
+            if (query->tile_blocked(query->tile_ctx, x, y)) return 0;
+            x_fp += slope;
+            int new_x = x_fp >> 16;
+            if (new_x != x &&
+                    query->tile_blocked(query->tile_ctx, new_x, y))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+static inline int osrs_los_clear(
+    const OsrsLosQuery* query,
+    int px, int py, int psize,
+    int tx, int ty, int tsize,
+    int attack_range
+) {
+    osrs_los_require_query(query, attack_range);
+    if (attack_range <= 1) return 1;
+
+    switch (query->kind) {
+        case OSRS_LOS_OPEN:
+            return 1;
+
+        case OSRS_LOS_BLOCKERS:
+            return entity_has_line_of_sight(
+                query->blockers,
+                query->blocker_count,
+                px,
+                py,
+                psize,
+                tx,
+                ty,
+                tsize,
+                attack_range);
+
+        case OSRS_LOS_TILE: {
+            int p_los_x = tx;
+            if (p_los_x < px) p_los_x = px;
+            if (p_los_x >= px + psize) p_los_x = px + psize - 1;
+            int p_los_y = ty;
+            if (p_los_y < py) p_los_y = py;
+            if (p_los_y >= py + psize) p_los_y = py + psize - 1;
+
+            int t_los_x = px;
+            if (t_los_x < tx) t_los_x = tx;
+            if (t_los_x >= tx + tsize) t_los_x = tx + tsize - 1;
+            int t_los_y = py;
+            if (t_los_y < ty) t_los_y = ty;
+            if (t_los_y >= ty + tsize) t_los_y = ty + tsize - 1;
+
+            return osrs_los_tile_ray_clear(
+                query, t_los_x, t_los_y, p_los_x, p_los_y);
+        }
+    }
+
+    fprintf(stderr, "unhandled OSRS LoS query kind: %d\n", (int)query->kind);
+    abort();
+}
+
+/* check if player can attack: in range and has explicit line-of-sight source.
+   returns 1 if ready to attack, 0 if blocked or out of range. */
 static inline int encounter_player_can_attack(
     int player_x, int player_y,
     int target_x, int target_y, int target_size, int attack_range,
-    const LOSBlocker* los_blockers, int los_blocker_count
+    const OsrsLosQuery* los_query
 ) {
+    osrs_los_require_query(los_query, attack_range);
     int dist = encounter_entity_footprint_distance(player_x, player_y, 1,
                                                    target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
-    if (!los_blockers || los_blocker_count == 0) return 1;
-    return entity_has_line_of_sight(los_blockers, los_blocker_count,
-                                    player_x, player_y, 1,
-                                    target_x, target_y, target_size,
-                                    attack_range);
+    if (attack_range == 1) return 1;
+    return osrs_los_clear(los_query,
+        player_x, player_y, 1,
+        target_x, target_y, target_size,
+        attack_range);
 }
 
 #define ENCOUNTER_ATTACK_SEEK_MAX_TILES 128
@@ -895,7 +1087,7 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
     int target_x, int target_y, int target_size, int attack_range,
     encounter_walkable_fn is_walkable, void* ctx,
     pathfind_blocked_fn extra_blocked, void* blocked_ctx,
-    const LOSBlocker* los_blockers, int los_blocker_count,
+    const OsrsLosQuery* los_query,
     int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
     PathResult result = {0, 0, 0, src_x, src_y};
@@ -993,7 +1185,7 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
                         tile_x, tile_y, seek_tiles, seek_count)
                     : encounter_player_can_attack(
                         tile_x, tile_y, target_x, target_y, target_size,
-                        attack_range, los_blockers, los_blocker_count))) {
+                        attack_range, los_query))) {
             selected_x = cur_x;
             selected_y = cur_y;
             break;
@@ -1122,14 +1314,13 @@ approach_done:
 
 /* auto-walk toward attack target: handles out-of-range, blocked LOS, and under-NPC.
    the caller owns the policy; this helper only computes the chase step.
-   los_blockers/los_blocker_count: LOS blocking entities (pillars). NULL/0 = no LOS check.
    returns 1 if player moved (chasing), 0 if ready to attack or stuck. */
 static inline int encounter_chase_attack_target(
     Player* p, int target_x, int target_y, int target_size, int attack_range,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     encounter_walkable_fn is_walkable, void* ctx,
     pathfind_blocked_fn extra_blocked, void* blocked_ctx,
-    const LOSBlocker* los_blockers, int los_blocker_count,
+    const OsrsLosQuery* los_query,
     int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
     int dist = encounter_entity_footprint_distance(p->x, p->y, 1,
@@ -1177,7 +1368,7 @@ static inline int encounter_chase_attack_target(
     /* in range + LOS: ready to attack, no movement needed */
     if (encounter_player_can_attack(p->x, p->y, target_x, target_y,
                                      target_size, attack_range,
-                                     los_blockers, los_blocker_count))
+                                     los_query))
         return 0;
 
     int cx, cy;
@@ -1200,7 +1391,7 @@ static inline int encounter_chase_attack_target(
                     if (!is_walkable(ctx, xx, yy)) continue;
                     if (!encounter_player_can_attack(xx, yy, target_x, target_y,
                             target_size, attack_range,
-                            los_blockers, los_blocker_count))
+                            los_query))
                         continue;
                     int dx = xx - p->x;
                     int dy = yy - p->y;
@@ -1231,7 +1422,7 @@ static inline int encounter_chase_attack_target(
     for (int step = 0; step < 2; step++) {
         if (encounter_player_can_attack(p->x, p->y, target_x, target_y,
                                          target_size, attack_range,
-                                         los_blockers, los_blocker_count))
+                                         los_query))
             break;
         PathResult pr = (arena_w > 0)
             ? encounter_pathfind_arena_attack_approach(
@@ -1240,7 +1431,7 @@ static inline int encounter_chase_attack_target(
                 target_x, target_y, target_size, attack_range,
                 is_walkable, ctx,
                 extra_blocked, blocked_ctx,
-                los_blockers, los_blocker_count,
+                los_query,
                 arena_base_x, arena_base_y, arena_w, arena_h)
             : encounter_pathfind(cmap, world_offset_x, world_offset_y,
                 p->x, p->y, cx, cy,

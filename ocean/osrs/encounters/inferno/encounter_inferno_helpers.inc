@@ -70,6 +70,11 @@ static void inf_rebuild_los(InfernoState* s) {
     }
 }
 
+/** Shared player LoS source for Inferno pillar blockers. */
+static OsrsLosQuery inf_player_los_query(const InfernoState* s) {
+    return osrs_los_blockers(s->los_blockers, s->los_blocker_count);
+}
+
 typedef struct {
     int x;
     int y;

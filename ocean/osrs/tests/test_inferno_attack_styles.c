@@ -2689,19 +2689,19 @@ static int chase_block_test_path_blocked(void* ctx, int x, int y) {
 static void chase_block_test_run_until_attackable(
     Player* player, const ChaseBlockTest* blocks,
     int target_x, int target_y, int target_size, int attack_range,
-    const LOSBlocker* los_blockers, int los_blocker_count
+    const OsrsLosQuery* los_query
 ) {
     for (int i = 0; i < 12 && !encounter_player_can_attack(
             player->x, player->y,
             target_x, target_y, target_size, attack_range,
-            los_blockers, los_blocker_count); i++) {
+            los_query); i++) {
         int moved = encounter_chase_attack_target(
             player,
             target_x, target_y, target_size, attack_range,
             NULL, 0, 0,
             chase_block_test_walkable, (void*)blocks,
             chase_block_test_path_blocked, (void*)blocks,
-            los_blockers, los_blocker_count,
+            los_query,
             0, 0, 11, 11);
         ASSERT_INT_EQ("continued chase avoids blocked tiles",
             chase_block_test_has_block(blocks, player->x, player->y), 0);
@@ -2721,6 +2721,7 @@ static void test_attack_chase_uses_reachable_approach_tile(void) {
     memset(&player, 0, sizeof(player));
     player.x = 0;
     player.y = 5;
+    OsrsLosQuery los_query = osrs_los_open();
 
     int moved = encounter_chase_attack_target(
         &player,
@@ -2728,7 +2729,7 @@ static void test_attack_chase_uses_reachable_approach_tile(void) {
         NULL, 0, 0,
         chase_block_test_walkable, &blocks,
         chase_block_test_path_blocked, &blocks,
-        NULL, 0,
+        &los_query,
         0, 0, 11, 11);
 
     ASSERT_INT_EQ("chase moves despite sealed nearest attack tile", moved, 1);
@@ -2736,9 +2737,9 @@ static void test_attack_chase_uses_reachable_approach_tile(void) {
     ASSERT_INT_EQ("chase avoids blocked tiles",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
 
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 5, 1, 3, NULL, 0);
+    chase_block_test_run_until_attackable(&player, &blocks, 5, 5, 1, 3, &los_query);
     ASSERT_INT_EQ("chase reaches a reachable attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 5, 1, 3, NULL, 0), 1);
+        encounter_player_can_attack(player.x, player.y, 5, 5, 1, 3, &los_query), 1);
 }
 
 static void test_attack_chase_routes_around_los_blocker_while_in_range(void) {
@@ -2750,13 +2751,14 @@ static void test_attack_chase_routes_around_los_blocker_while_in_range(void) {
         .count = 1,
     };
     LOSBlocker pillar = {2, 0, 1, LOS_FULL_MASK};
+    OsrsLosQuery los_query = osrs_los_blockers(&pillar, 1);
     Player player;
     memset(&player, 0, sizeof(player));
     player.x = 0;
     player.y = 0;
 
     ASSERT_INT_EQ("starting tile is range-valid but LOS-blocked",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &pillar, 1), 0);
+        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &los_query), 0);
 
     int moved = encounter_chase_attack_target(
         &player,
@@ -2764,15 +2766,15 @@ static void test_attack_chase_routes_around_los_blocker_while_in_range(void) {
         NULL, 0, 0,
         chase_block_test_walkable, &blocks,
         chase_block_test_path_blocked, &blocks,
-        &pillar, 1,
+        &los_query,
         0, 0, 11, 11);
 
     ASSERT_INT_EQ("LOS-blocked in-range target causes movement", moved, 1);
     ASSERT_INT_EQ("chase avoids LOS blocker tile",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 10, &pillar, 1);
+    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 10, &los_query);
     ASSERT_INT_EQ("chase reaches a clear long-range attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &pillar, 1), 1);
+        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 10, &los_query), 1);
 }
 
 static void test_attack_chase_routes_around_los_blocker_for_short_range(void) {
@@ -2784,6 +2786,7 @@ static void test_attack_chase_routes_around_los_blocker_for_short_range(void) {
         .count = 1,
     };
     LOSBlocker pillar = {2, 0, 1, LOS_FULL_MASK};
+    OsrsLosQuery los_query = osrs_los_blockers(&pillar, 1);
     Player player;
     memset(&player, 0, sizeof(player));
     player.x = 0;
@@ -2795,15 +2798,15 @@ static void test_attack_chase_routes_around_los_blocker_for_short_range(void) {
         NULL, 0, 0,
         chase_block_test_walkable, &blocks,
         chase_block_test_path_blocked, &blocks,
-        &pillar, 1,
+        &los_query,
         0, 0, 11, 11);
 
     ASSERT_INT_EQ("short-range LOS-blocked target causes movement", moved, 1);
     ASSERT_INT_EQ("short-range chase avoids LOS blocker tile",
         chase_block_test_has_block(&blocks, player.x, player.y), 0);
-    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 3, &pillar, 1);
+    chase_block_test_run_until_attackable(&player, &blocks, 5, 0, 1, 3, &los_query);
     ASSERT_INT_EQ("chase reaches a clear short-range attack tile",
-        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 3, &pillar, 1), 1);
+        encounter_player_can_attack(player.x, player.y, 5, 0, 1, 3, &los_query), 1);
 }
 
 static void test_melee_fallback_geometry(void) {

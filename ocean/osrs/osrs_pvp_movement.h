@@ -338,8 +338,7 @@ static void move_toward_target(
         (void*)cmap,
         NULL,
         NULL,
-        NULL,
-        0,
+        osrs_los_open_query(),
         0,
         0,
         0,
@@ -497,8 +496,7 @@ static inline OsrsEncounterArena pvp_build_arena(OsrsEnv* env) {
     arena.walkable_ctx = (void*)arena.collision_map;
     arena.extra_blocked = NULL;
     arena.blocked_ctx = NULL;
-    arena.los_blockers = NULL;
-    arena.los_blocker_count = 0;
+    arena.los_query = osrs_los_open_query();
     arena.arena_base_x = 0;
     arena.arena_base_y = 0;
     arena.arena_w = 0;

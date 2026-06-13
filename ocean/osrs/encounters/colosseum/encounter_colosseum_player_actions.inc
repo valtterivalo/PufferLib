@@ -560,6 +560,7 @@ static void col_tick_player_ctx(
             move_kind = OSRS_PLAYER_MOVE_ACTION;
     }
     ColoWalkCtx wc = { s };
+    OsrsLosQuery los_query = col_player_los_query(s);
     (void)osrs_encounter_player_step(&(OsrsPlayerStepInput){
         .player = &s->player,
         .interaction = &s->interaction,
@@ -579,8 +580,7 @@ static void col_tick_player_ctx(
             .walkable_ctx = &wc,
             .extra_blocked = col_pathfind_blocked,
             .blocked_ctx = &wc,
-            .los_blockers = NULL,
-            .los_blocker_count = 0,
+            .los_query = &los_query,
             .arena_base_x = COLO_ARENA_MIN_X,
             .arena_base_y = COLO_ARENA_MIN_Y,
             .arena_w = COLO_ARENA_WIDTH,
@@ -595,15 +595,10 @@ static void col_tick_player_ctx(
         int slot = s->interaction.target_slot;
         ColoNPC* npc = &s->npcs[slot];
         if (npc->active) {
-            /* B1: ranged/magic attacks need LoS from the player to the NPC's
-               nearest footprint tile, symmetric with the NPC attack gate
-               (col_npc_has_los_to_player) — a pillar between them safespots the
-               shot. Melee (range 1) is pure adjacency and needs no LoS line. */
             int player_range = col_player_attack_range(s);
-            int has_los = player_range <= 1 || col_npc_has_los_to_player(s, npc);
-            if (has_los && encounter_player_can_attack(s->player.x, s->player.y,
+            if (encounter_player_can_attack(s->player.x, s->player.y,
                     npc->x, npc->y, col_npc_effective_size(npc),
-                    player_range, NULL, 0)) {
+                    player_range, &los_query)) {
                 col_player_attack_target(s, slot);
             }
         }

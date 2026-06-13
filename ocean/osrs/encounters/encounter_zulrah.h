@@ -1263,7 +1263,7 @@ static int zul_player_can_attack_zulrah(
     return encounter_player_can_attack(
         s->player.x, s->player.y,
         s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE,
-        loadout_stats->attack_range, NULL, 0);
+        loadout_stats->attack_range, osrs_los_open_query());
 }
 
 static int zul_player_attack_hits(
@@ -2606,6 +2606,7 @@ static void zul_step(EncounterState* state, const int* actions) {
             .world_offset_y = s->world_offset_y,
             .is_walkable = zul_tile_walkable,
             .walkable_ctx = s,
+            .los_query = osrs_los_open_query(),
             .arena_base_x = 0,
             .arena_base_y = 0,
             .arena_w = ZUL_ARENA_SIZE,
