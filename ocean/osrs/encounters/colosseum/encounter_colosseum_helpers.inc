@@ -104,6 +104,7 @@ static ColConfig col_default_config(void) {
         .death_penalty_coeff = 0.0f,
         .terminal_penalty_enabled = 0,
         .curriculum_agent = 0,
+        .step_out_forecast_obs_enabled = 1,
     };
 }
 

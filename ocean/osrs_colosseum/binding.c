@@ -261,6 +261,7 @@ void my_init(Env* env, Dict* kwargs) {
     static const char* const optional_int_keys[] = {
         "terminal_penalty_enabled",
         "loadout_profile_mode",
+        "step_out_forecast_obs_enabled",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

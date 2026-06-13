@@ -4,8 +4,8 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(37) + npc slots(12 * 24) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) = 541.
+ *   player(37) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) = 813.
  * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
  * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
  * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
@@ -24,7 +24,7 @@
 
 #define COLO_PLAYER_OBS_SIZE      37
 #define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 288 */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 360 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
     venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
@@ -42,7 +42,8 @@
 #define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)  /* 112 */
 
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
-    COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE)
+    COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
+    COLO_STEP_OUT_FORECAST_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -50,6 +51,9 @@
 #define COLO_OBS_AFTER_MODS     (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_OBS_SIZE)
 #define COLO_OBS_AFTER_WAVE     (COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE)
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
+#define COLO_OBS_AFTER_PENDING_HITS (COLO_OBS_AFTER_BOSS + COLO_PENDING_HIT_OBS_SIZE)
+#define COLO_OBS_AFTER_STEP_OUT_FORECAST \
+    (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -620,6 +624,43 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
             i += COLO_FEATURES_PER_HIT;
         }
     }
+    assert(i == COLO_OBS_AFTER_PENDING_HITS);
+
+    if (ctx->config.step_out_forecast_obs_enabled) {
+        ColoStepOutForecast forecast;
+        col_build_step_out_forecast_ctx(s, &forecast);
+        for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+            const ColoStepOutForecastAction* action = &forecast.actions[action_idx];
+            int first_attack_tick = 0;
+            int first_style_mask = 0;
+            int max_hit = 0;
+            int ranged_magic_same_tick = 0;
+            for (int tick_idx = 0; tick_idx < COLO_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+                const ColoStepOutForecastTick* tick = &action->ticks[tick_idx];
+                int style_mask = col_step_out_forecast_tick_style_mask(tick);
+                if (first_attack_tick == 0 &&
+                        col_step_out_forecast_tick_has_event(tick)) {
+                    first_attack_tick = tick_idx + 1;
+                    first_style_mask = style_mask;
+                }
+                if (tick->max_hit > max_hit) max_hit = tick->max_hit;
+                if (tick->ranged_count > 0 && tick->magic_count > 0)
+                    ranged_magic_same_tick = 1;
+            }
+            obs[i++] = action->valid ? 1.0f : 0.0f;
+            obs[i++] = (float)first_attack_tick / (float)COLO_STEP_OUT_FORECAST_HORIZON;
+            obs[i++] = (float)first_style_mask / 7.0f;
+            obs[i++] = (float)max_hit / 150.0f;
+            obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
+            obs[i++] = ranged_magic_same_tick ? 1.0f : 0.0f;
+            obs[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
+            obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+        }
+    } else {
+        i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
+    }
+    assert(i == COLO_OBS_AFTER_STEP_OUT_FORECAST);
+
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);
         abort();

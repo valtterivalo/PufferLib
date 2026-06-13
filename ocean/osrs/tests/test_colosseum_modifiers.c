@@ -121,6 +121,37 @@ static void geo_clear_npcs(ColosseumState* s) {
     col_rebuild_player_collision_flags(s);
 }
 
+static void init_forecast_test_state(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    uint32_t seed,
+    int player_x,
+    int player_y
+) {
+    col_init_context_typed(ctx);
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    geo_clear_npcs(s);
+    s->modifiers.draft_pending = 0;
+    s->player.x = player_x;
+    s->player.y = player_y;
+    col_rebuild_player_collision_flags(s);
+}
+
+static int forecast_move_action_for_delta(int dx, int dy) {
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++)
+        if (ENCOUNTER_MOVE_TARGET_DX[action] == dx &&
+            ENCOUNTER_MOVE_TARGET_DY[action] == dy) return action;
+    assert(0 && "missing movement action delta");
+    return 0;
+}
+
+static int forecast_action_has_event(const ColoStepOutForecastAction* action) {
+    for (int tick = 0; tick < COLO_STEP_OUT_FORECAST_HORIZON; tick++)
+        if (col_step_out_forecast_tick_has_event(&action->ticks[tick])) return 1;
+    return 0;
+}
+
 /* ---- 1. fuzz: random actions over many full runs, obs/mask asserted each tick.
    Validates the obs/mask running-index asserts + crash-freedom across the boss and
    all waves (the standalone --profile harness never calls the obs writer). */
@@ -3567,6 +3598,101 @@ static void test_loadout_offensive_prayers(void) {
         mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] == 1.0f);
 }
 
+static void test_step_out_forecast_manticore_armed_pattern(void) {
+    printf("test_step_out_forecast_manticore_armed_pattern\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 401, 17, 16);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    s.npcs[0].attack_timer = 1;
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+    mc->cycle_step = -1;
+    mc->orb_style[0] = ATTACK_STYLE_MAGIC;
+    mc->orb_style[1] = ATTACK_STYLE_RANGED;
+    mc->orb_style[2] = ATTACK_STYLE_MELEE;
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    const ColoStepOutForecastAction* idle = &forecast.actions[0];
+    CHECK("armed manticore idle forecast is valid", idle->valid == 1);
+    CHECK("armed manticore orb 0 records magic on tick 1",
+        idle->ticks[0].magic_count == 1 && idle->ticks[0].max_hit == COLO_MANTICORE_MAX_HIT_MAGIC);
+    CHECK("armed manticore orb 1 records ranged on tick 2",
+        idle->ticks[1].ranged_count == 1 && idle->ticks[1].max_hit == COLO_MANTICORE_MAX_HIT_RANGED);
+    CHECK("armed manticore orb 2 records melee on tick 3",
+        idle->ticks[2].melee_count == 1 && idle->melee_fallback_exposure == 1);
+}
+
+static void test_step_out_forecast_warband_window_and_break(void) {
+    printf("test_step_out_forecast_warband_window_and_break\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 402, 7, 18);
+    s.tick = 100;
+    s.warband_cycle_anchor = 100;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 8, 18);
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    int run_west = forecast_move_action_for_delta(-2, 0);
+    CHECK("adjacent berserker records melee on its next window",
+        forecast.actions[0].ticks[0].melee_count == 1);
+    CHECK("running west breaks the berserker forecast adjacency",
+        !forecast_action_has_event(&forecast.actions[run_west]));
+}
+
+static void test_step_out_forecast_ranged_los_candidate_tiles(void) {
+    printf("test_step_out_forecast_ranged_los_candidate_tiles\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 403, 7, 9);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
+    s.npcs[0].attack_timer = 1;
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    int run_north = forecast_move_action_for_delta(0, 2);
+    CHECK("pillar-blocked idle tile records no shaman forecast",
+        !forecast_action_has_event(&forecast.actions[0]));
+    CHECK("clear run-north tile records the shaman magic forecast",
+        forecast.actions[run_north].ticks[0].magic_count == 1);
+}
+
+static void test_step_out_forecast_valid_flags(void) {
+    printf("test_step_out_forecast_valid_flags\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 404, 7, 9);
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    int walk_east = forecast_move_action_for_delta(1, 0);
+    int walk_west = forecast_move_action_for_delta(-1, 0);
+    CHECK("pillar move has invalid step-out forecast flag",
+        forecast.actions[walk_east].valid == 0);
+    CHECK("clear move has valid step-out forecast flag",
+        forecast.actions[walk_west].valid == 1);
+}
+
+static void test_step_out_forecast_same_tick_mixed_styles(void) {
+    printf("test_step_out_forecast_same_tick_mixed_styles\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 405, 17, 16);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 16);
+    col_init_npc(&s, 1, COLO_JAVELIN_COLOSSUS, 20, 15);
+    s.npcs[0].attack_timer = 1;
+    s.npcs[1].attack_timer = 1;
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    const ColoStepOutForecastAction* idle = &forecast.actions[0];
+    CHECK("same tick magic and ranged forecast conflict is flagged",
+        idle->same_tick_mixed_style_conflict == 1);
+    CHECK("same tick magic and ranged counts are both recorded",
+        idle->ticks[0].magic_count == 1 && idle->ticks[0].ranged_count == 1);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_zero_actions_hit_timeout();
@@ -3627,6 +3753,11 @@ int main(void) {
     test_loadout_spec_weapons();
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
+    test_step_out_forecast_manticore_armed_pattern();
+    test_step_out_forecast_warband_window_and_break();
+    test_step_out_forecast_ranged_los_candidate_tiles();
+    test_step_out_forecast_valid_flags();
+    test_step_out_forecast_same_tick_mixed_styles();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

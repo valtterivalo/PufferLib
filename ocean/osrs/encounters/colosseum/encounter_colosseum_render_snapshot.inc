@@ -33,6 +33,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
+        ctx->config.step_out_forecast_obs_enabled =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
             fprintf(stderr, "colosseum: loadout_profile_mode must be 0..2, got %d\n", value);

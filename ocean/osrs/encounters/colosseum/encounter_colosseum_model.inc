@@ -34,6 +34,50 @@
 /* max active NPCs at once + obs slot count (one obs slot per active NPC) */
 #define COLO_MAX_NPCS 24
 #define COLO_OBS_NPCS 12
+#define COLO_STEP_OUT_FORECAST_HORIZON 4
+#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 8
+#define COLO_STEP_OUT_FORECAST_OBS_SIZE \
+    (ENCOUNTER_MOVE_ACTIONS * COLO_STEP_OUT_FORECAST_ACTION_FEATURES)
+
+typedef struct {
+    int melee_count;
+    int ranged_count;
+    int magic_count;
+    int max_hit;
+} ColoStepOutForecastTick;
+
+typedef struct {
+    int valid;
+    int land_x;
+    int land_y;
+    ColoStepOutForecastTick ticks[COLO_STEP_OUT_FORECAST_HORIZON];
+    int same_tick_mixed_style_conflict;
+    int ranged_magic_offtick_opportunity;
+    int melee_fallback_exposure;
+} ColoStepOutForecastAction;
+
+typedef struct {
+    ColoStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
+} ColoStepOutForecast;
+
+typedef struct {
+    int active;
+    ColoNpcType type;
+    int x;
+    int y;
+    int size;
+    int hp;
+    int attack_timer;
+    int stun_timer;
+    int frozen_ticks;
+    int death_ticks;
+    int cycle_step;
+    AttackStyle orb_style[3];
+    int formation_dir;
+    int javelin_attack_count;
+    int sol_attack_delay;
+    int sol_immobile_ticks;
+} ColoForecastNpcLocal;
 
 /* A7+B1: static arena terrain. Walls: the los `Lr` per-row blocked x-extents
    (half-open [lo,hi)), row-flipped into sim rows, cross-verified against the wiki
@@ -1219,6 +1263,7 @@ typedef struct {
     int curriculum_agent;
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
+    int step_out_forecast_obs_enabled;
 } ColConfig;
 
 typedef struct {
