@@ -109,28 +109,32 @@ static void* col_get_log_ctx(EncounterState* state, EncounterContext* context) {
     return &s->log;
 }
 
-static const OsrsCombatVisualRow* col_npc_combat_visual_row(
+static const char* col_attack_style_debug_name(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_NONE: return "none";
+        case ATTACK_STYLE_MELEE: return "melee";
+        case ATTACK_STYLE_RANGED: return "ranged";
+        case ATTACK_STYLE_MAGIC: return "magic";
+    }
+    abort();
+}
+
+static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
     ColoNpcType type,
     AttackStyle style
 ) {
     assert(type >= 0 && type < COLO_NUM_NPC_TYPES);
-    return osrs_combat_visual_find_npc_id(
-        (uint16_t)COLO_NPC_DEF_IDS[type], style);
-}
-
-static const OsrsCombatProjectileProfile* col_style_projectile_profile(
-    AttackStyle style
-) {
-    switch (style) {
-        case ATTACK_STYLE_RANGED:
-            return osrs_combat_projectile_profile(OSRS_COMBAT_PROJECTILE_RUNE_ARROW);
-        case ATTACK_STYLE_MAGIC:
-            return &OSRS_POWERED_STAFF_PROJECTILE_PROFILE;
-        case ATTACK_STYLE_MELEE:
-        case ATTACK_STYLE_NONE:
-            return NULL;
+    int npc_def_id = COLO_NPC_DEF_IDS[type];
+    const OsrsCombatVisualRow* row = osrs_combat_visual_find_npc_id(
+        (uint16_t)npc_def_id, style);
+    if (!row || row->projectile.travel_spotanim_id <= 0 ||
+            row->projectile.projectile_model_id <= 0) {
+        fprintf(stderr,
+            "colosseum: missing real combat visual projectile for npc def id %d style %s\n",
+            npc_def_id, col_attack_style_debug_name(style));
+        abort();
     }
-    abort();
+    return row;
 }
 
 static EncounterProjectileTiming col_npc_projectile_timing(
@@ -196,43 +200,16 @@ static void col_emit_npc_attack_projectile(
     int start_delay = timing.visual_start_delay_ticks * 30;
 
     const OsrsCombatVisualRow* npc_visual =
-        col_npc_combat_visual_row(npc->type, actual_style);
-    const OsrsCombatProjectileProfile* fallback =
-        col_style_projectile_profile(actual_style);
-    uint32_t model_id = 0;
-    int anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
-    int launch_gfx_id = 0;
-    int impact_gfx_id = 0;
-
-    if (npc_visual) {
-        if (npc_visual->projectile.projectile_model_id > 0)
-            model_id = (uint32_t)npc_visual->projectile.projectile_model_id;
-        if (npc_visual->projectile.projectile_anim_id > 0)
-            anim_id = npc_visual->projectile.projectile_anim_id;
-        if (npc_visual->projectile.launch_spotanim_id > 0)
-            launch_gfx_id = npc_visual->projectile.launch_spotanim_id;
-        if (npc_visual->projectile.impact_spotanim_id > 0)
-            impact_gfx_id = npc_visual->projectile.impact_spotanim_id;
-    }
-
-    if (model_id == 0 && fallback) {
-        if (fallback->projectile_model_id > 0)
-            model_id = (uint32_t)fallback->projectile_model_id;
-        anim_id = fallback->projectile_anim_id;
-        launch_gfx_id = osrs_combat_projectile_value_or(
-            fallback->launch_spotanim_id, 0);
-        impact_gfx_id = osrs_combat_projectile_value_or(
-            fallback->impact_spotanim_id, 0);
-    }
-    if (model_id == 0)
-        return;
-
-    int curve = fallback
-        ? osrs_combat_projectile_value_or(fallback->projectile_angle, 16)
-        : 16;
-    float arc = fallback
-        ? osrs_combat_projectile_profile_arc_height(fallback, actual_style)
-        : 0.0f;
+        col_require_npc_combat_visual_projectile_row(npc->type, actual_style);
+    const OsrsCombatProjectileProfile* projectile = &npc_visual->projectile;
+    uint32_t model_id = (uint32_t)projectile->projectile_model_id;
+    int anim_id = projectile->projectile_anim_id;
+    int launch_gfx_id = osrs_combat_projectile_value_or(
+        projectile->launch_spotanim_id, 0);
+    int impact_gfx_id = osrs_combat_projectile_value_or(
+        projectile->impact_spotanim_id, 0);
+    int curve = osrs_combat_projectile_value_or(projectile->projectile_angle, 16);
+    float arc = osrs_combat_projectile_profile_arc_height(projectile, actual_style);
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec spec = {
         .src_x = npc->x,

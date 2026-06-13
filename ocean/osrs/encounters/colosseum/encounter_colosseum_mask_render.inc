@@ -215,6 +215,18 @@ static void col_fill_render_entities_ctx(
             .hit_spell_type = npc->hit_spell_type,
             .attack_target_entity_idx = 0,
         }, re);
+        re->is_running = col_type_is_warbander(npc->type) ? 1 : 0;
+        re->frozen_ticks = npc->frozen_ticks;
+        re->debug_npc_type_name = colo_npc_type_name(npc->type);
+        re->debug_attack_timer = npc->attack_timer;
+        re->debug_attack_style = npc->attack_style;
+        if (npc->type == COLO_MANTICORE) {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            re->debug_manticore_state_active = 1;
+            re->debug_manticore_cycle_step = mc->cycle_step;
+            for (int orb = 0; orb < 3; orb++)
+                re->debug_manticore_orb_style[orb] = mc->orb_style[orb];
+        }
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

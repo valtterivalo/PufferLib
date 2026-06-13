@@ -887,10 +887,30 @@ static int render_select_secondary(RenderClient* rc, int player_idx);
 /* forward declaration: inferno_npc_name is defined later in drawing section */
 static const char* inferno_npc_name(int npc_def_id);
 
+/** Resolve Fortis Colosseum NPC display names from cache definition ids. */
+static const char* colosseum_npc_name(int npc_def_id) {
+    switch (npc_def_id) {
+        case 12810: return "Jaguar Warrior";
+        case 12811: return "Serpent Shaman";
+        case 12812: return "Minotaur";
+        case 12813: return "Minotaur";
+        case 12814: return "Fremennik Archer";
+        case 12815: return "Fremennik Seer";
+        case 12816: return "Fremennik Berserker";
+        case 12817: return "Javelin Colossus";
+        case 12818: return "Manticore";
+        case 12819: return "Shockwave Colossus";
+        case 12821: return "Sol Heredit";
+        case 12823: return "Bee Swarm";
+        case 12825: return "Healing Totem";
+        default: return NULL;
+    }
+}
+
 
 /** Resolve display name for a render entity (NPC or player).
     Uses the same lookup chain as render_draw_panel_npc: zulrah forms,
-    inferno NPCs, then fallback to "NPC <def_id>". */
+    inferno NPCs, colosseum NPCs, then fallback to "NPC <def_id>". */
 static const char* render_entity_display_name(RenderEntity* ent) {
     if (ent->entity_type == ENTITY_PLAYER) return "Player";
 
@@ -902,6 +922,9 @@ static const char* render_entity_display_name(RenderEntity* ent) {
     /* inferno NPCs */
     const char* inf = inferno_npc_name(ent->npc_def_id);
     if (inf) return inf;
+
+    const char* colo = colosseum_npc_name(ent->npc_def_id);
+    if (colo) return colo;
 
     return TextFormat("NPC %d", ent->npc_def_id);
 }
@@ -3648,6 +3671,14 @@ static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsEnv* env) {
         }
     }
 
+    if (!npc_name) {
+        const char* colo_name = colosseum_npc_name(p->npc_def_id);
+        if (colo_name) {
+            npc_name = colo_name;
+            name_color = CLITERAL(Color){ 230, 200, 110, 255 };
+        }
+    }
+
     if (!npc_name) npc_name = TextFormat("NPC %d", p->npc_def_id);
 
     DrawText(npc_name, x, y, 14, name_color);
@@ -3732,6 +3763,78 @@ static Camera3D render_build_3d_camera(RenderClient* rc) {
     cam.fovy = 60.0f;
     cam.projection = CAMERA_PERSPECTIVE;
     return cam;
+}
+
+
+/** Return the short debug label for an attack style. */
+static const char* render_debug_attack_style_name(int style) {
+    switch (style) {
+        case ATTACK_STYLE_NONE: return "NONE";
+        case ATTACK_STYLE_MELEE: return "MEL";
+        case ATTACK_STYLE_RANGED: return "RNG";
+        case ATTACK_STYLE_MAGIC: return "MAG";
+        default: return "???";
+    }
+}
+
+/** Return the debug text color for an attack style. */
+static Color render_debug_attack_style_color(int style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE: return RED;
+        case ATTACK_STYLE_RANGED: return GREEN;
+        case ATTACK_STYLE_MAGIC: return BLUE;
+        default: return WHITE;
+    }
+}
+
+/** Draw one centered debug line and advance the vertical cursor. */
+static void render_draw_centered_debug_line(
+    const char* text, int center_x, int* y, int font_size, Color color
+) {
+    int text_width = MeasureText(text, font_size);
+    DrawText(text, center_x - text_width / 2, *y, font_size, color);
+    *y += font_size + 1;
+}
+
+/** Draw render-entity debug metadata populated by an encounter fill hook. */
+static void render_draw_entity_debug_metadata(
+    const RenderEntity* entity, Vector2 screen_head
+) {
+    int y = (int)screen_head.y + 10;
+    int x = (int)screen_head.x;
+    int font_size = 10;
+
+    if (entity->debug_npc_type_name) {
+        render_draw_centered_debug_line(
+            entity->debug_npc_type_name, x, &y, font_size, COLOR_TEXT);
+    }
+
+    render_draw_centered_debug_line(
+        TextFormat("HP:%d/%d", entity->current_hitpoints, entity->base_hitpoints),
+        x, &y, font_size, COLOR_TEXT);
+
+    int style = entity->debug_attack_style;
+    render_draw_centered_debug_line(
+        TextFormat("ATK:%d %s",
+            entity->debug_attack_timer,
+            render_debug_attack_style_name(style)),
+        x, &y, font_size, render_debug_attack_style_color(style));
+
+    if (entity->frozen_ticks > 0) {
+        render_draw_centered_debug_line(
+            TextFormat("FRZ:%d", entity->frozen_ticks),
+            x, &y, font_size, CLITERAL(Color){100, 200, 255, 255});
+    }
+
+    if (entity->debug_manticore_state_active) {
+        render_draw_centered_debug_line(
+            TextFormat("MC:%d %s/%s/%s",
+                entity->debug_manticore_cycle_step,
+                render_debug_attack_style_name(entity->debug_manticore_orb_style[0]),
+                render_debug_attack_style_name(entity->debug_manticore_orb_style[1]),
+                render_debug_attack_style_name(entity->debug_manticore_orb_style[2])),
+            x, &y, font_size, YELLOW);
+    }
 }
 
 
@@ -5098,7 +5201,10 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         }
 
         /* debug: per-NPC combat state below the entity (only for NPCs) */
-        if (rc->show_debug && p->entity_type == ENTITY_NPC && debug_state) {
+        if (rc->show_debug && p->entity_type == ENTITY_NPC &&
+                p->debug_npc_type_name) {
+            render_draw_entity_debug_metadata(p, screen_head);
+        } else if (rc->show_debug && p->entity_type == ENTITY_NPC && debug_state) {
             InfernoState* is = debug_state;
             int slot = p->npc_slot;
             if (slot >= 0 && slot < INF_MAX_NPCS && is->npcs[slot].active) {

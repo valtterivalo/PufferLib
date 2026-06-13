@@ -467,6 +467,12 @@ typedef struct {
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
     uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
+    const char* debug_npc_type_name;
+    int debug_attack_timer;
+    int debug_attack_style;
+    int debug_manticore_state_active;
+    int debug_manticore_cycle_step;
+    int debug_manticore_orb_style[3];
 } RenderEntity;
 
 typedef enum {

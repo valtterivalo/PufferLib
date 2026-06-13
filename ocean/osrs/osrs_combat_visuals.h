@@ -145,6 +145,103 @@ enum {
 
 #include "osrs_combat_visuals_generated.h"
 
+#define OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING OSRS_COMBAT_PROJECTILE_MISSING
+#define OSRS_COMBAT_VISUAL_COLOSSEUM_ALT_NONE \
+    {OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, \
+     OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, \
+     OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, \
+     OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING}
+#define OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(launch, travel, impact, model, anim, hit, client, start, end, delay, angle, len, progress, step, count) \
+    {launch, travel, impact, model, anim, hit, client, start, end, delay, angle, \
+     len, progress, step, count}
+#define OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(npc_id, attack_style, attack_anim, projectile_profile) \
+    {(uint8_t)OSRS_COMBAT_VISUAL_KIND_NPC, npc_id, "", (int8_t)attack_style, \
+     (int8_t)OSRS_COMBAT_VISUAL_STANCE_ANY, (int16_t)attack_anim, \
+     projectile_profile, OSRS_COMBAT_VISUAL_COLOSSEUM_ALT_NONE, \
+     OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, \
+     OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, \
+     (int8_t)0, OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING}
+
+static const OsrsCombatVisualRow OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[] = {
+    OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
+        12811, ATTACK_STYLE_MAGIC, 10859,
+        OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2698,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            51243, 10812,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 16,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 1)),
+    OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
+        12817, ATTACK_STYLE_RANGED, 10892,
+        OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2673,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            52586, 10896,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 16,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 1)),
+    OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
+        12818, ATTACK_STYLE_RANGED, 10869,
+        OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2683, 2684,
+            51221, 10327,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 16,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 1)),
+    OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
+        12818, ATTACK_STYLE_MAGIC, 10869,
+        OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2681, 2682,
+            51215, 10329,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 16,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 1)),
+    OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
+        12819, ATTACK_STYLE_MAGIC, 10903,
+        OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2679,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            51210, 10903,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 16,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 1)),
+};
+
+static const size_t OSRS_COMBAT_VISUAL_COLOSSEUM_ROW_COUNT =
+    sizeof(OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS) /
+    sizeof(OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[0]);
+
+#undef OSRS_COMBAT_VISUAL_COLOSSEUM_NPC
+#undef OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE
+#undef OSRS_COMBAT_VISUAL_COLOSSEUM_ALT_NONE
+#undef OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING
+
 typedef struct {
     uint16_t item_id;
     int16_t special_attack_anim_id;
@@ -333,7 +430,7 @@ static inline int osrs_combat_visual_build_projectile_sequence(
                 .projectile_length_adjustment = OSRS_COMBAT_PROJECTILE_MISSING,
                 .projectile_progress = OSRS_COMBAT_PROJECTILE_MISSING,
                 .projectile_step_multiplier = OSRS_COMBAT_PROJECTILE_MISSING,
-                .projectile_count = sequence_count,
+                .projectile_count = (int16_t)sequence_count,
             };
             osrs_combat_projectile_apply_timing(&aux, timing);
             if (use_alt)
@@ -422,7 +519,9 @@ static inline int osrs_combat_visual_key_matches(
         strcmp(row->key_name, key_name) == 0;
 }
 
-static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row_in_table(
+    const OsrsCombatVisualRow* rows,
+    size_t row_count,
     int kind,
     int32_t key_id,
     const char* key_name,
@@ -434,8 +533,8 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
     const OsrsCombatVisualRow* fallback = NULL;
     const OsrsCombatVisualRow* style_fallback = NULL;
     const OsrsCombatVisualRow* stance_fallback = NULL;
-    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_ROW_COUNT; i++) {
-        const OsrsCombatVisualRow* row = &OSRS_COMBAT_VISUAL_ROWS[i];
+    for (size_t i = 0; i < row_count; i++) {
+        const OsrsCombatVisualRow* row = &rows[i];
         if (!osrs_combat_visual_key_matches(row, kind, key_id, key_name)) continue;
         if (!osrs_combat_visual_style_matches(row, style)) continue;
         if (!osrs_combat_visual_stance_matches(row, stance_idx)) continue;
@@ -460,6 +559,29 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
     }
     return style_fallback ? style_fallback
         : (stance_fallback ? stance_fallback : fallback);
+}
+
+static inline const OsrsCombatVisualRow* osrs_combat_visual_find_row(
+    int kind,
+    int32_t key_id,
+    const char* key_name,
+    AttackStyle style,
+    int stance_idx,
+    int require_attack_anim,
+    int require_projectile
+) {
+    const OsrsCombatVisualRow* colosseum_row =
+        osrs_combat_visual_find_row_in_table(
+            OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_ROW_COUNT,
+            kind, key_id, key_name, style, stance_idx,
+            require_attack_anim, require_projectile);
+    if (colosseum_row) return colosseum_row;
+    return osrs_combat_visual_find_row_in_table(
+        OSRS_COMBAT_VISUAL_ROWS,
+        OSRS_COMBAT_VISUAL_ROW_COUNT,
+        kind, key_id, key_name, style, stance_idx,
+        require_attack_anim, require_projectile);
 }
 
 static inline const OsrsCombatVisualRow* osrs_combat_visual_find_item_id(

@@ -3742,6 +3742,41 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         s.player.num_items_in_slot[GEAR_SLOT_WEAPON] > 0);
 }
 
+static void test_render_bridge_npc_debug_and_warband_motion(void) {
+    printf("test_render_bridge_npc_debug_and_warband_motion\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 504, 17, 16);
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 20, 18);
+    col_init_npc(&s, 1, COLO_MANTICORE, 20, 12);
+    s.npcs[0].attack_timer = 5;
+    s.npcs[1].attack_timer = 3;
+    s.npcs[1].type_state.manticore.cycle_step = 1;
+    s.npcs[1].type_state.manticore.orb_style[0] = ATTACK_STYLE_RANGED;
+    s.npcs[1].type_state.manticore.orb_style[1] = ATTACK_STYLE_MAGIC;
+    s.npcs[1].type_state.manticore.orb_style[2] = ATTACK_STYLE_MELEE;
+
+    RenderEntity entities[4];
+    int count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx, entities, 4, &count);
+
+    CHECK("warband render entity uses run-speed interpolation",
+        count >= 3 && entities[1].npc_slot == 0 && entities[1].is_running == 1);
+    CHECK("warband render entity carries debug stats",
+        count >= 3 &&
+        strcmp(entities[1].debug_npc_type_name, "Fremennik Archer") == 0 &&
+        entities[1].debug_attack_timer == 5 &&
+        entities[1].debug_attack_style == ATTACK_STYLE_RANGED);
+    CHECK("manticore render entity carries cycle and orb debug state",
+        count >= 3 &&
+        entities[2].debug_manticore_state_active == 1 &&
+        entities[2].debug_manticore_cycle_step == 1 &&
+        entities[2].debug_manticore_orb_style[0] == ATTACK_STYLE_RANGED &&
+        entities[2].debug_manticore_orb_style[1] == ATTACK_STYLE_MAGIC &&
+        entities[2].debug_manticore_orb_style[2] == ATTACK_STYLE_MELEE);
+}
+
 /* SIM BUG (2026-06-13): the player could fire ranged/magic THROUGH pillars — the
    attack gate (col_tick_player_ctx) did a range-only check and never consulted
    LoS, unlike the NPC gate. A ranged attack now requires LoS to the NPC's
@@ -3861,6 +3896,7 @@ int main(void) {
     test_step_out_forecast_valid_flags();
     test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();
+    test_render_bridge_npc_debug_and_warband_motion();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

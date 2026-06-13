@@ -86,6 +86,22 @@ COLOSSEUM_NPC_IDS = {
     12825: "Healing totem",
 }
 
+COLOSSEUM_ATTACK_ANIM_IDS = {
+    12810: 10847,
+    12811: 10861,
+    12812: 10843,
+    12813: 10843,
+    12814: 10850,
+    12815: 10853,
+    12816: 10856,
+    12817: 10890,
+    12818: 10866,
+    12819: 10903,
+    12821: 10876,
+    12823: 10823,
+    12825: 10828,
+}
+
 
 def build_npc_models(
     reader: ModernCacheReader,
@@ -94,8 +110,15 @@ def build_npc_models(
     """Decode, merge, recolor, and scale each Colosseum NPC mesh.
 
     Returns the merged models keyed by synthetic id plus a mapping from npc id
-    to {synthetic_model_id, idle_anim, walk_anim} for the C header.
+    to {synthetic_model_id, idle_anim, attack_anim, walk_anim} for the C header.
     """
+    missing_attack_anim_npc_ids = sorted(set(COLOSSEUM_NPC_IDS) - set(COLOSSEUM_ATTACK_ANIM_IDS))
+    if missing_attack_anim_npc_ids:
+        raise SystemExit(
+            "export_colosseum_npcs: attack animation missing for npc ids "
+            + ", ".join(str(npc_id) for npc_id in missing_attack_anim_npc_ids)
+        )
+
     models: list[ModelData] = []
     mapping: dict[int, dict[str, int]] = {}
 
@@ -133,25 +156,27 @@ def build_npc_models(
         models.append(merged)
 
         idle_anim = npc.stand_anim if npc.stand_anim >= 0 else 0xFFFF
+        attack_anim = COLOSSEUM_ATTACK_ANIM_IDS[npc_id]
         walk_anim = npc.walk_anim if npc.walk_anim >= 0 else 0xFFFF
         mapping[npc_id] = {
             "synthetic_model_id": merged.model_id,
             "idle_anim": idle_anim,
+            "attack_anim": attack_anim,
             "walk_anim": walk_anim,
         }
         print(
             f"  npc {npc_id} ({npc.name}): {merged.vertex_count}v {merged.face_count}f "
-            f"idle={idle_anim} walk={walk_anim}"
+            f"idle={idle_anim} attack={attack_anim} walk={walk_anim}"
         )
 
     return models, mapping
 
 
 def collect_anim_ids(mapping: dict[int, dict[str, int]]) -> set[int]:
-    """Gather every non-sentinel idle and walk sequence id."""
+    """Gather every non-sentinel idle, attack, and walk sequence id."""
     anim_ids: set[int] = set()
     for entry in mapping.values():
-        for key in ("idle_anim", "walk_anim"):
+        for key in ("idle_anim", "attack_anim", "walk_anim"):
             value = entry[key]
             if value != 0xFFFF:
                 anim_ids.add(value)
@@ -239,7 +264,8 @@ def write_colosseum_header(
         label = COLOSSEUM_NPC_IDS[npc_id]
         lines.append(
             f"    {{{npc_id}, 0x{entry['synthetic_model_id']:X}, "
-            f"{entry['idle_anim']}, 0xFFFF, {entry['walk_anim']}}},  /* {label} */"
+            f"{entry['idle_anim']}, {entry['attack_anim']}, "
+            f"{entry['walk_anim']}}},  /* {label} */"
         )
     lines.append("};")
     lines.append("")
