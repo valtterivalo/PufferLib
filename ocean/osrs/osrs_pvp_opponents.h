@@ -3277,8 +3277,10 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->read_chance = 0.10f;
     } else if (resolved == OPP_SAVANT_NH) {
         opp->read_chance = 0.25f;
-    } else if (resolved == OPP_NIGHTMARE_NH || resolved == OPP_ADAPTIVE_NH) {
+    } else if (resolved == OPP_NIGHTMARE_NH) {
         opp->read_chance = 0.50f;
+    } else if (resolved == OPP_ADAPTIVE_NH) {
+        opp->read_chance = 0.75f;
     }
 
     /* Vengeance fighter: lunar spellbook (no freeze/blood, has veng) */

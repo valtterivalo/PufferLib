@@ -220,6 +220,23 @@ static void test_adaptive_nh_name_maps_correctly(void) {
         strcmp(osrs_pvp_opponent_type_name(OPP_ADAPTIVE_NH), "Adaptive NH") == 0);
 }
 
+static void test_adaptive_nh_read_chance_exceeds_nightmare(void) {
+    printf("--- Adaptive NH read chance exceeds Nightmare ---\n");
+
+    OsrsEnv nightmare;
+    setup_pvp_env(&nightmare, OPP_NIGHTMARE_NH);
+
+    OsrsEnv adaptive;
+    setup_pvp_env(&adaptive, OPP_ADAPTIVE_NH);
+
+    ASSERT_TRUE(
+        "nightmare read chance",
+        nightmare.pvp_runtime.opponent.read_chance == 0.50f);
+    ASSERT_TRUE(
+        "adaptive read chance",
+        adaptive.pvp_runtime.opponent.read_chance == 0.75f);
+}
+
 static void test_adaptive_nh_prays_melee_against_learned_mage_camp(void) {
     printf("--- Adaptive NH counters learned mage camp melee ---\n");
 
@@ -513,6 +530,7 @@ static void test_spec_range_gate_respects_weapon_range(void) {
 
 int main(void) {
     test_adaptive_nh_name_maps_correctly();
+    test_adaptive_nh_read_chance_exceeds_nightmare();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();
