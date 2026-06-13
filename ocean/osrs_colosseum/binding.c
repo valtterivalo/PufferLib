@@ -162,22 +162,28 @@ void c_render(Env* env) {
         re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
+        /* Fortis Colosseum stadium scene, mirroring the standalone osrs_visual
+           setup: colosseum terrain/objects/NPC models at the world SW anchor
+           (1808, 3090). The old inferno scene here was a scaffold copy that
+           never rendered colosseum-only NPCs (e.g. the Fremennik warband), so
+           the eval-render path aborted on the first missing model. */
         EncounterSceneConfig scene = {
             .required_groups = {
-                OSRS_ASSET_GROUP_INFERNO,
+                OSRS_ASSET_GROUP_COLOSSEUM,
                 OSRS_ASSET_GROUP_COMBAT_VISUALS,
                 (OsrsAssetGroupKind)-1,
                 (OsrsAssetGroupKind)-1,
             },
-            .terrain_path = OSRS_ASSET("inferno.terrain"),
-            .objects_path = OSRS_ASSET("inferno.objects"),
+            .terrain_path = OSRS_ASSET("colosseum.terrain"),
+            .objects_path = OSRS_ASSET("colosseum.objects"),
             .objects_secondary_path = NULL,
-            .npc_models_path = OSRS_ASSET("inferno.models"),
-            .npc_anims_path = OSRS_ASSET("inferno.anims"),
-            .world_origin_x = 2246,
-            .world_origin_y = 5315,
+            .cmap_path = OSRS_ASSET("colosseum.cmap"),
+            .npc_models_path = OSRS_ASSET("colosseum_npcs.models"),
+            .npc_anims_path = OSRS_ASSET("colosseum_npcs.anims"),
+            .world_origin_x = 1808,
+            .world_origin_y = 3090,
         };
-        encounter_load_scene_assets(rc, &scene);
+        re->collision_map = encounter_load_scene_assets(rc, &scene);
         render_populate_entities(rc, re);
         rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
         rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
