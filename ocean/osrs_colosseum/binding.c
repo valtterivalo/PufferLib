@@ -235,6 +235,10 @@ static inline void puffer_state_refresh(Env* env) {
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
+    /* render at the real OSRS tick rate (600ms/tick) by default, like inferno;
+       0 would render uncapped (every eval step) and look fast-forwarded. */
+    env->ticks_per_second = 1.667f;
+    env->last_step_time = 0.0;
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     memset(&env->log, 0, sizeof(Log));
