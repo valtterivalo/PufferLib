@@ -81,6 +81,7 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->target_y = y;
     npc->stun_timer = st->stun_on_spawn;
     npc->aggro_target = -1;
+    npc->attack_visual_target = -1;
     if (!col_type_is_hazard_entity(type) && col_npc_effective_size(npc) > 0)
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }

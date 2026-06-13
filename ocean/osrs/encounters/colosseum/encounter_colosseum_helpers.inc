@@ -32,6 +32,45 @@ static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
 
+static inline EncounterProjectileDelayKind col_projectile_delay_kind_for_style(
+    AttackStyle style
+) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
+        case ATTACK_STYLE_MAGIC:
+            return ENCOUNTER_PROJECTILE_DELAY_MAGIC;
+        case ATTACK_STYLE_RANGED:
+            return ENCOUNTER_PROJECTILE_DELAY_RANGED;
+        case ATTACK_STYLE_NONE:
+            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
+    }
+    abort();
+}
+
+static inline EncounterProjectileTiming col_player_projectile_timing(
+    AttackStyle style,
+    uint8_t weapon,
+    int distance
+) {
+    EncounterProjectileDelayKind kind = col_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayOptions options = {0};
+    if (style == ATTACK_STYLE_RANGED && weapon == ITEM_TWISTED_BOW)
+        options.visual_delay_ticks = 1;
+    return encounter_projectile_timing(distance, 1, kind, options);
+}
+
+static inline int col_npc_attack_anim_id(int npc_def_id) {
+    const NpcModelMapping* nm = npc_model_lookup((uint16_t)npc_def_id);
+    if (!nm)
+        return -1;
+    if (nm->attack_anim != 65535)
+        return (int)nm->attack_anim;
+    if (nm->walk_anim != 65535 && nm->walk_anim != nm->idle_anim)
+        return (int)nm->walk_anim;
+    return -1;
+}
+
 
 /** queue a player-attack hit on an NPC's pending-hit queue. */
 static void col_queue_npc_pending_hit(

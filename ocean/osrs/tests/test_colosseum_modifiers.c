@@ -3693,6 +3693,55 @@ static void test_step_out_forecast_same_tick_mixed_styles(void) {
         idle->ticks[0].magic_count == 1 && idle->ticks[0].ranged_count == 1);
 }
 
+static void test_render_bridge_combat_visuals_and_loadout(void) {
+    printf("test_render_bridge_combat_visuals_and_loadout\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 501, 17, 16);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 16);
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    EncounterOverlay ov = {0};
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("magic NPC attack emits a render projectile", ov.projectile_count > 0);
+    CHECK("magic NPC projectile tracks the player",
+        ov.projectiles[0].source_npc_slot == 0 &&
+        ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+
+    init_forecast_test_state(&s, &ctx, 502, 17, 16);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 18, 16);
+    s.npcs[0].attack_timer = 0;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("melee NPC attack emits no projectile", ov.projectile_count == 0);
+
+    init_forecast_test_state(&s, &ctx, 503, 17, 16);
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
+    int target_slot = col_spawn_npc_at(&s, COLO_JAVELIN_COLOSSUS, 22, 15);
+    s.interaction.target_slot = target_slot;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    col_tick_player_ctx(&s, &ctx, idle, 1);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("player ranged attack emits a render projectile", ov.projectile_count > 0);
+    CHECK("player projectile targets the attacked NPC",
+        ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_PLAYER &&
+        ov.projectiles[0].target_npc_slot == target_slot);
+
+    RenderEntity entities[4];
+    int count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx, entities, 4, &count);
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s.active_loadout_profile);
+    CHECK("render player uses the active loadout weapon",
+        count > 0 &&
+        entities[0].equipped[GEAR_SLOT_WEAPON] ==
+            loadouts[s.weapon_set][GEAR_SLOT_WEAPON]);
+    CHECK("player slot inventory is populated for the GUI",
+        s.player.num_items_in_slot[GEAR_SLOT_WEAPON] > 0);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_zero_actions_hit_timeout();
@@ -3758,6 +3807,7 @@ int main(void) {
     test_step_out_forecast_ranged_los_candidate_tiles();
     test_step_out_forecast_valid_flags();
     test_step_out_forecast_same_tick_mixed_styles();
+    test_render_bridge_combat_visuals_and_loadout();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

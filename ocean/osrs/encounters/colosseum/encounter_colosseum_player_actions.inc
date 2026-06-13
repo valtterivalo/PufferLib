@@ -321,6 +321,13 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     s->player_attack_npc_idx = npc_slot;
     s->player_attack_dmg = total;
     s->player_attack_style_id = ATTACK_STYLE_MELEE;
+    s->player_attack_timing = (EncounterProjectileTiming){
+        .damage_delay_ticks = 1,
+        .visual_start_delay_ticks = 0,
+        .visual_duration_ticks = 1,
+    };
+    s->player.attack_style_this_tick = ATTACK_STYLE_MELEE;
+    s->player.used_special_this_tick = 1;
     s->tick_scratch.player_attacked = 1;
     s->tick_scratch.attacks_fired++;
 }
@@ -343,6 +350,12 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     const OsrsEquipmentEffectProfile* effects = &s->set_effects[s->weapon_set];
     uint8_t weapon_item =
         col_loadouts_for_profile(s->active_loadout_profile)[s->weapon_set][GEAR_SLOT_WEAPON];
+    int projectile_dist = encounter_projectile_distance(
+        s->player.x, s->player.y, 1,
+        npc->x, npc->y, col_npc_effective_size(npc),
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming hit_timing =
+        col_player_projectile_timing(ls->style, weapon_item, projectile_dist);
     int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
     OsrsPreparedAttackEffects prepared = osrs_prepare_attack_effects_for_melee_style(
@@ -408,6 +421,8 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     s->player_attack_npc_idx = npc_slot;
     s->player_attack_dmg = damage;
     s->player_attack_style_id = ls->style;
+    s->player_attack_timing = hit_timing;
+    s->player.attack_style_this_tick = ls->style;
     s->tick_scratch.player_attacked = 1;
     s->tick_scratch.attacks_fired++;
 }

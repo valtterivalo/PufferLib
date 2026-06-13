@@ -152,6 +152,15 @@ static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context
     return NULL;
 }
 
+static void col_prepare_render_player(const ColosseumState* s, Player* out) {
+    *out = s->player;
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    encounter_effective_loadout_for_equipment(loadouts[s->weapon_set], out->equipped);
+    GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED : GEAR_MELEE;
+    out->current_gear = gear;
+    out->visible_gear = gear;
+}
+
 /** populate render entities (player + active NPCs). */
 static void col_fill_render_entities_ctx(
     EncounterState* state,
@@ -169,8 +178,11 @@ static void col_fill_render_entities_ctx(
     s->player.gui_strength_bonus = ls->strength_bonus;
 
     int n = 0;
-    if (n < max_entities)
-        osrs_render_entity_from_player_entity(&s->player, &out[n++]);
+    if (n < max_entities) {
+        Player render_player;
+        col_prepare_render_player(s, &render_player);
+        osrs_render_entity_from_player_entity(&render_player, &out[n++]);
+    }
 
     for (int i = 0; i < COLO_MAX_NPCS && n < max_entities; i++) {
         ColoNPC* npc = &s->npcs[i];
@@ -178,6 +190,9 @@ static void col_fill_render_entities_ctx(
         int def_id = COLO_NPC_DEF_IDS[npc->type];
         if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG))
             def_id = COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND;
+        int npc_anim_id = npc->attacked_this_tick
+            ? col_npc_attack_anim_id(def_id)
+            : -1;
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
             .npc_def_id = def_id,
@@ -185,7 +200,7 @@ static void col_fill_render_entities_ctx(
             .npc_instance_id = npc->render_id,
             .npc_visible = npc->active,
             .npc_size = npc->size,
-            .npc_anim_id = -1,
+            .npc_anim_id = npc_anim_id,
             .x = npc->x,
             .y = npc->y,
             .dest_x = npc->target_x,

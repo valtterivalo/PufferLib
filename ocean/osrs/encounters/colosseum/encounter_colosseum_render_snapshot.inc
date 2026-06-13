@@ -109,6 +109,262 @@ static void* col_get_log_ctx(EncounterState* state, EncounterContext* context) {
     return &s->log;
 }
 
+static const OsrsCombatVisualRow* col_npc_combat_visual_row(
+    ColoNpcType type,
+    AttackStyle style
+) {
+    assert(type >= 0 && type < COLO_NUM_NPC_TYPES);
+    return osrs_combat_visual_find_npc_id(
+        (uint16_t)COLO_NPC_DEF_IDS[type], style);
+}
+
+static const OsrsCombatProjectileProfile* col_style_projectile_profile(
+    AttackStyle style
+) {
+    switch (style) {
+        case ATTACK_STYLE_RANGED:
+            return osrs_combat_projectile_profile(OSRS_COMBAT_PROJECTILE_RUNE_ARROW);
+        case ATTACK_STYLE_MAGIC:
+            return &OSRS_POWERED_STAFF_PROJECTILE_PROFILE;
+        case ATTACK_STYLE_MELEE:
+        case ATTACK_STYLE_NONE:
+            return NULL;
+    }
+    abort();
+}
+
+static EncounterProjectileTiming col_npc_projectile_timing(
+    ColoNpcType type,
+    AttackStyle style,
+    int distance
+) {
+    if (type == COLO_MANTICORE) {
+        return (EncounterProjectileTiming){
+            .damage_delay_ticks = 0,
+            .visual_start_delay_ticks = 0,
+            .visual_duration_ticks = 1,
+        };
+    }
+    EncounterProjectileDelayOptions options = {0};
+    return encounter_projectile_timing(
+        distance, 0, col_projectile_delay_kind_for_style(style), options);
+}
+
+static void col_emit_npc_attack_projectile(
+    ColosseumState* s,
+    EncounterOverlay* ov,
+    int npc_slot
+) {
+    ColoNPC* npc = &s->npcs[npc_slot];
+    AttackStyle actual_style = npc->attack_style_this_tick;
+    if (actual_style == ATTACK_STYLE_NONE || actual_style == ATTACK_STYLE_MELEE)
+        return;
+    if (col_type_is_hazard_entity(npc->type))
+        return;
+
+    int npc_size = col_npc_effective_size(npc);
+    int start_h = (int)(npc_size * 0.75f * 128);
+    int end_h = 64;
+    int target_tile_x = s->player.x;
+    int target_tile_y = s->player.y;
+    int target_x = s->player.x;
+    int target_y = s->player.y;
+    int target_size = 1;
+    int target_npc_slot = -1;
+
+    if (npc->attack_visual_target >= 0 && npc->attack_visual_target < COLO_MAX_NPCS) {
+        ColoNPC* target = &s->npcs[npc->attack_visual_target];
+        if (target->active) {
+            target_tile_x = target->x;
+            target_tile_y = target->y;
+            target_size = col_npc_effective_size(target);
+            target_x = target->x + target_size / 2;
+            target_y = target->y + target_size / 2;
+            end_h = (int)(target_size * 0.5f * 128);
+            target_npc_slot = npc->attack_visual_target;
+        }
+    }
+
+    int dist = encounter_projectile_distance(
+        npc->x, npc->y, npc_size, target_tile_x, target_tile_y, target_size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming timing =
+        col_npc_projectile_timing(npc->type, actual_style, dist);
+    int duration = timing.visual_duration_ticks * 30;
+    if (npc->type == COLO_MANTICORE)
+        duration = 1;
+    int start_delay = timing.visual_start_delay_ticks * 30;
+
+    const OsrsCombatVisualRow* npc_visual =
+        col_npc_combat_visual_row(npc->type, actual_style);
+    const OsrsCombatProjectileProfile* fallback =
+        col_style_projectile_profile(actual_style);
+    uint32_t model_id = 0;
+    int anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
+    int launch_gfx_id = 0;
+    int impact_gfx_id = 0;
+
+    if (npc_visual) {
+        if (npc_visual->projectile.projectile_model_id > 0)
+            model_id = (uint32_t)npc_visual->projectile.projectile_model_id;
+        if (npc_visual->projectile.projectile_anim_id > 0)
+            anim_id = npc_visual->projectile.projectile_anim_id;
+        if (npc_visual->projectile.launch_spotanim_id > 0)
+            launch_gfx_id = npc_visual->projectile.launch_spotanim_id;
+        if (npc_visual->projectile.impact_spotanim_id > 0)
+            impact_gfx_id = npc_visual->projectile.impact_spotanim_id;
+    }
+
+    if (model_id == 0 && fallback) {
+        if (fallback->projectile_model_id > 0)
+            model_id = (uint32_t)fallback->projectile_model_id;
+        anim_id = fallback->projectile_anim_id;
+        launch_gfx_id = osrs_combat_projectile_value_or(
+            fallback->launch_spotanim_id, 0);
+        impact_gfx_id = osrs_combat_projectile_value_or(
+            fallback->impact_spotanim_id, 0);
+    }
+    if (model_id == 0)
+        return;
+
+    int curve = fallback
+        ? osrs_combat_projectile_value_or(fallback->projectile_angle, 16)
+        : 16;
+    float arc = fallback
+        ? osrs_combat_projectile_profile_arc_height(fallback, actual_style)
+        : 0.0f;
+    encounter_require_projectile_slots(ov, 1);
+    OsrsProjectileEventSpec spec = {
+        .src_x = npc->x,
+        .src_y = npc->y,
+        .dst_x = target_x,
+        .dst_y = target_y,
+        .style = encounter_attack_style_to_proj_style(actual_style),
+        .damage = (int)s->tick_scratch.damage_received,
+        .duration_ticks = duration,
+        .start_h = start_h,
+        .end_h = end_h,
+        .curve = curve,
+        .arc_height = arc,
+        .src_size = npc_size,
+        .dst_size = target_size,
+        .model_id = model_id,
+        .anim_id = anim_id,
+        .launch_gfx_id = launch_gfx_id,
+        .impact_gfx_id = impact_gfx_id,
+        .start_delay = start_delay,
+    };
+
+    if (target_npc_slot >= 0) {
+        (void)osrs_emit_projectile_npc_to_npc(
+            ov, &spec, npc_slot, target_npc_slot);
+    } else {
+        (void)osrs_emit_projectile_npc_to_player(ov, &spec, npc_slot);
+    }
+}
+
+static void col_emit_player_attack_projectiles(
+    ColosseumState* s,
+    EncounterOverlay* ov
+) {
+    if (!s->tick_scratch.player_attacked ||
+            s->player_attack_style_id == ATTACK_STYLE_MELEE) {
+        return;
+    }
+
+    int target_idx = s->player_attack_npc_idx;
+    if (target_idx < 0 || target_idx >= COLO_MAX_NPCS)
+        return;
+    ColoNPC* target = &s->npcs[target_idx];
+    if (!target->active)
+        return;
+
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    uint8_t weapon = loadouts[s->weapon_set][GEAR_SLOT_WEAPON];
+    int target_size = col_npc_effective_size(target);
+    int p_start_h = 64;
+    int p_end_h = (int)(target_size * 0.5f * 128);
+    EncounterProjectileTiming timing = s->player_attack_timing;
+    if (timing.visual_duration_ticks <= 0) {
+        int dist = encounter_projectile_distance(
+            s->player.x, s->player.y, 1, target->x, target->y, target_size,
+            ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+        timing = col_player_projectile_timing(
+            s->player_attack_style_id, weapon, dist);
+    }
+    int p_duration = timing.visual_duration_ticks * 30;
+    int p_start_delay = timing.visual_start_delay_ticks * 30;
+
+    if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
+        const OsrsCombatProjectileProfile* profile =
+            osrs_combat_visual_magic_projectile_profile(weapon);
+        if (!profile || profile->projectile_model_id <= 0)
+            return;
+        (void)osrs_emit_combat_projectile_profile_player_to_npc(
+            ov,
+            profile,
+            &(OsrsCombatProjectileEmitSpec){
+                .src_x = s->player.x,
+                .src_y = s->player.y,
+                .dst_x = target->x,
+                .dst_y = target->y,
+                .src_size = 1,
+                .dst_size = target_size,
+                .target_npc_slot = target_idx,
+                .attack_style = s->player_attack_style_id,
+                .damage = s->player_attack_dmg,
+                .duration_ticks = p_duration,
+                .start_delay = p_start_delay,
+                .fallback_start_h = p_start_h,
+                .fallback_end_h = p_end_h,
+                .curve = 16,
+            });
+        return;
+    }
+
+    const OsrsCombatProjectileProfile* base_profile =
+        osrs_combat_visual_ranged_projectile_profile(
+            weapon, OSRS_COMBAT_PROJECTILE_NONE);
+    const OsrsCombatVisualRow* effect = NULL;
+    if (s->player.used_special_this_tick && weapon < NUM_ITEMS) {
+        effect = osrs_combat_visual_find_special_projectile_item_id(
+            ITEM_DATABASE[weapon].item_id, ATTACK_STYLE_RANGED);
+    }
+    OsrsCombatProjectileSequencePart parts[OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX];
+    int part_count = osrs_combat_visual_build_projectile_sequence(
+        base_profile, effect, parts, OSRS_COMBAT_PROJECTILE_SEQUENCE_MAX);
+    if (part_count < 0)
+        abort();
+    encounter_require_projectile_slots(ov, part_count);
+    for (int part_i = 0; part_i < part_count; part_i++) {
+        const OsrsCombatProjectileProfile* profile = &parts[part_i].projectile;
+        if (profile->projectile_model_id <= 0)
+            continue;
+        int visual_damage = part_i == part_count - 1
+            ? s->player_attack_dmg
+            : 0;
+        (void)osrs_emit_combat_projectile_profile_player_to_npc(
+            ov,
+            profile,
+            &(OsrsCombatProjectileEmitSpec){
+                .src_x = s->player.x,
+                .src_y = s->player.y,
+                .dst_x = target->x,
+                .dst_y = target->y,
+                .src_size = 1,
+                .dst_size = target_size,
+                .target_npc_slot = target_idx,
+                .attack_style = s->player_attack_style_id,
+                .damage = visual_damage,
+                .duration_ticks = p_duration,
+                .start_delay = p_start_delay,
+                .fallback_start_h = p_start_h,
+                .fallback_end_h = p_end_h,
+                .curve = 16,
+            });
+    }
+}
+
 static void col_render_post_tick_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -126,8 +382,15 @@ static void col_render_post_tick_ctx(
         ov->status_text,
         sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
-}
 
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active || !npc->attacked_this_tick)
+            continue;
+        col_emit_npc_attack_projectile(s, ov, i);
+    }
+    col_emit_player_attack_projectiles(s, ov);
+}
 
 /* ----- human mode --------------------------------------------------------- */
 /* Maps semantic HumanInput intents onto the 9 Colosseum action heads. Mirrors
