@@ -3008,7 +3008,7 @@ static inline int pvp_should_counter_mage_camp_melee(PvpMageCampMeleeSignal s) {
         (s.melee_attack_resolved ||
          s.melee_recent_count >= 1 ||
          s.melee_threat_ticks > 0 ||
-         s.mage_camp_ticks >= 4);
+         s.mage_camp_ticks >= 1);
 }
 
 static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal s) {
@@ -3016,7 +3016,7 @@ static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal
         (s.attack_ready_soon ||
          s.melee_recent_count >= 1 ||
          s.melee_threat_ticks > 0 ||
-         s.mage_camp_ticks >= 4);
+         s.mage_camp_ticks >= 1);
 }
 
 static inline void pvp_adaptive_nh_apply_defensive_prayer(

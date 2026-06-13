@@ -241,6 +241,7 @@ static void test_adaptive_nh_prays_magic_without_learned_adjacent_melee(void) {
     OsrsEnv env;
     setup_pvp_env(&env, OPP_ADAPTIVE_NH);
     set_adaptive_mage_staff_camp_state(&env, 0);
+    set_player_position(&env.players[0], 3045, 3520);
 
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
