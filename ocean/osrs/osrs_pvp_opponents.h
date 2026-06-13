@@ -3008,7 +3008,7 @@ static inline int pvp_should_counter_mage_camp_melee(PvpMageCampMeleeSignal s) {
         (s.melee_attack_resolved ||
          s.melee_recent_count >= 1 ||
          s.melee_threat_ticks > 0 ||
-         s.mage_camp_ticks >= 1);
+         s.mage_camp_ticks >= 4);
 }
 
 static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal s) {
@@ -3016,7 +3016,7 @@ static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal
         (s.attack_ready_soon ||
          s.melee_recent_count >= 1 ||
          s.melee_threat_ticks > 0 ||
-         s.mage_camp_ticks >= 1);
+         s.mage_camp_ticks >= 4);
 }
 
 static inline void pvp_adaptive_nh_apply_defensive_prayer(
@@ -3074,6 +3074,11 @@ static inline void pvp_adaptive_nh_apply_counter_attack(
             opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MELEE, OPP_STYLE_SPEC)) {
         actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
         actions[HEAD_COMBAT] = ATTACK_ATK;
+        return;
+    }
+
+    if (signal.adjacent && self->frozen_ticks == 0 && target->frozen_ticks == 0) {
+        actions[HEAD_COMBAT] = MOVE_FARCAST_5;
         return;
     }
 

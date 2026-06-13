@@ -268,11 +268,12 @@ static void test_adaptive_nh_learns_static_mage_camp(void) {
 }
 
 static void test_adaptive_nh_attacks_mage_prayer_camp_with_melee(void) {
-    printf("--- Adaptive NH attacks mage-prayer camp with melee ---\n");
+    printf("--- Adaptive NH attacks mage-prayer camp with melee when frozen ---\n");
 
     OsrsEnv env;
     setup_pvp_env(&env, OPP_ADAPTIVE_NH);
     set_adaptive_mage_staff_camp_state(&env, 1);
+    env.players[1].frozen_ticks = 1;
 
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
@@ -280,6 +281,20 @@ static void test_adaptive_nh_attacks_mage_prayer_camp_with_melee(void) {
         "adaptive NH attacks camp with current melee weapon",
         opponent_combat(&env),
         ATTACK_ATK);
+}
+
+static void test_adaptive_nh_kites_mage_prayer_camp_without_spec(void) {
+    printf("--- Adaptive NH kites mage-prayer camp without spec ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_mage_staff_camp_state(&env, 1);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_TRUE("adaptive NH kites when free to move", opponent_move(&env) != 0);
+    ASSERT_INT_EQ("adaptive NH does not take normal melee trade",
+        opponent_combat(&env), ATTACK_NONE);
 }
 
 static void test_adaptive_nh_specs_mage_prayer_camp(void) {
@@ -487,6 +502,7 @@ int main(void) {
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();
     test_adaptive_nh_attacks_mage_prayer_camp_with_melee();
+    test_adaptive_nh_kites_mage_prayer_camp_without_spec();
     test_adaptive_nh_specs_mage_prayer_camp();
     test_adaptive_nh_reads_static_camp_action();
     test_adaptive_nh_brews_early_in_static_camp();
