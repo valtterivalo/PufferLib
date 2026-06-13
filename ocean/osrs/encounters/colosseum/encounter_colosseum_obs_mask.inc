@@ -23,7 +23,7 @@
 /* ----- obs section sizes ---------------------------------------------------- */
 
 #define COLO_PLAYER_OBS_SIZE      37
-#define COLO_FEATURES_PER_NPC     24   /* 12-type one-hot + 12 scalars */
+#define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 288 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
@@ -184,32 +184,51 @@ static int col_obs_slot_is_targetable(const ColosseumState* s, int obs_slot) {
 
 /* ----- per-NPC obs ---------------------------------------------------------- */
 
-/** write the 4-wide per-type tell block for an NPC slot (always 4 floats):
-    manticore  -> [barrage cycle frac, next-orb ranged, next-orb magic, next-orb melee]
-    javelin    -> [skyfall incoming, skyfall ticks frac, 0, 0]
-    minotaur   -> [in heal-cast range (player not in its melee), 0, 0, 0]
-    jaguar     -> [multi-hit marker, 0, 0, 0]
+/** one-hot an attack style into a 3-wide [ranged, magic, melee] slice. */
+static void col_tell_style_onehot(AttackStyle style, float* out3) {
+    out3[0] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    out3[1] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    out3[2] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+}
+
+/** write the 10-wide per-type tell block for an NPC slot (always 10 floats).
+
+    manticore (the prayer puzzle — full upcoming barrage, like the orbs a player
+    watches charge): [ticks-until-next-orb frac, then the REMAINING orbs as three
+    [ranged,magic,melee] one-hots, slot 0 = the next orb to land]. During the
+    charge-up the locked pattern shows all three orbs before any land; mid-barrage
+    the fired orbs drop off so slot 0 is always the orb to pray next. All zero
+    when idle (no pattern locked).
+    javelin    -> [skyfall incoming, skyfall ticks frac, 0...]
+    minotaur   -> [in heal-cast range (player not in its melee), 0...]
+    jaguar     -> [multi-hit marker, 0...]
     everything else -> zeros. */
 static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
     int i = *idx;
-    float t0 = 0.0f, t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
+    float tells[10] = {0};
     switch (npc->type) {
         case COLO_MANTICORE: {
             const ColoManticoreState* mc = &npc->type_state.manticore;
-            int step = mc->cycle_step < 0 ? 0 : mc->cycle_step;
-            t0 = (float)step / 3.0f;
-            if (mc->cycle_step >= 0 && mc->cycle_step < 3) {
-                AttackStyle next = mc->orb_style[mc->cycle_step];
-                t1 = (next == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-                t2 = (next == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-                t3 = (next == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+            int firing = mc->cycle_step >= 0;
+            int armed = firing || mc->orb_style[0] != ATTACK_STYLE_NONE;
+            if (armed) {
+                int start = firing ? mc->cycle_step : 0;
+                int speed = COLO_NPC_STATS[npc->type].attack_speed;
+                /* ticks until the next orb lands: the charge countdown while
+                   arming, ~0 once firing (orbs are one tick apart). */
+                tells[0] = firing ? 0.0f
+                    : col_clamp01((float)npc->attack_timer / (float)(speed > 0 ? speed : 1));
+                for (int slot = 0; slot < 3; slot++) {
+                    int orb = start + slot;
+                    if (orb < 3) col_tell_style_onehot(mc->orb_style[orb], &tells[1 + slot * 3]);
+                }
             }
             break;
         }
         case COLO_JAVELIN_COLOSSUS: {
             const ColoJavelinState* jv = &npc->type_state.javelin;
-            t0 = jv->skyfall_pending ? 1.0f : 0.0f;
-            t1 = jv->skyfall_pending
+            tells[0] = jv->skyfall_pending ? 1.0f : 0.0f;
+            tells[1] = jv->skyfall_pending
                 ? col_clamp01((float)jv->skyfall_timer / (float)COLO_JAVELIN_SKYFALL_DELAY)
                 : 0.0f;
             break;
@@ -217,19 +236,16 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
         case COLO_MINOTAUR: {
             int size = col_npc_effective_size(npc);
             int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
-            t0 = (dist > 1) ? 1.0f : 0.0f;  /* heals allies when player not in its melee */
+            tells[0] = (dist > 1) ? 1.0f : 0.0f;  /* heals allies when player not in its melee */
             break;
         }
         case COLO_JAGUAR_WARRIOR:
-            t0 = 1.0f;  /* multi-hit (3 independent rolls per attack) marker */
+            tells[0] = 1.0f;  /* multi-hit (3 independent rolls per attack) marker */
             break;
         default:
             break;
     }
-    obs[i++] = t0;
-    obs[i++] = t1;
-    obs[i++] = t2;
-    obs[i++] = t3;
+    for (int t = 0; t < 10; t++) obs[i++] = tells[t];
     *idx = i;
 }
 

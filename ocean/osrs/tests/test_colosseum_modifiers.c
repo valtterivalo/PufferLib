@@ -999,9 +999,12 @@ static void test_mantimayhem_t3_shuffle(void) {
     for (int rep = 0; rep < 300; rep++) {
         mc->cycle_step = -1;
         mc->pattern_copied = 0;
+        mc->orb_style[0] = ATTACK_STYLE_NONE;   /* force a fresh arm/roll each rep */
+        mc->orb_style[1] = ATTACK_STYLE_NONE;
+        mc->orb_style[2] = ATTACK_STYLE_NONE;
         s.npcs[0].attack_timer = 0;
         s.player.current_hitpoints = 99;
-        col_npc_attack_ctx(&s, &ctx, 0);   /* starts a barrage: rolls the set */
+        col_npc_attack_ctx(&s, &ctx, 0);   /* arms (rolls the set) then fires orb 0 */
         int counts[3] = { 0, 0, 0 };
         for (int o = 0; o < 3; o++) {
             if (mc->orb_style[o] == ATTACK_STYLE_RANGED) counts[0]++;
@@ -1952,6 +1955,73 @@ static void test_manticore_barrage_period(void) {
     for (int b = 1; b < nstarts; b++)
         if (starts[b] - starts[b - 1] != 10) period_ok = 0;
     CHECK("barrage-to-barrage period is exactly 10 ticks across 3 gaps", period_ok);
+}
+
+/* 5b-bis. The barrage pattern is decided + telegraphed during the charge-up, not
+   at fire time: while the manticore is still charging (cycle_step < 0, timer > 0)
+   the full 3-orb sequence is locked and stable, so a player (and the obs) can see
+   the orbs coming. Pre-praying the telegraphed orb 0 blocks it on its fire tick —
+   the capability this change exists to enable. */
+static void test_manticore_telegraph_during_windup(void) {
+    printf("test_manticore_telegraph_during_windup\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 131);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);   /* dist 2, clear LoS */
+    s.npcs[0].attack_timer = 6;                     /* a 6-tick charge ahead of orb 0 */
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+
+    /* one idle tick arms the manticore: the full pattern locks while it is still
+       charging (cycle_step < 0, attack_timer > 0) — visible before any orb lands. */
+    s.player.current_hitpoints = 99;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    CHECK("manticore arms during the charge-up (still idle)", mc->cycle_step < 0);
+    CHECK("the full barrage pattern locks before any orb fires",
+        mc->orb_style[0] != ATTACK_STYLE_NONE &&
+        mc->orb_style[1] != ATTACK_STYLE_NONE &&
+        mc->orb_style[2] != ATTACK_STYLE_NONE);
+    CHECK("orb 2 is melee (the range+magic pair leads, melee last)",
+        mc->orb_style[2] == ATTACK_STYLE_MELEE);
+
+    AttackStyle locked0 = mc->orb_style[0];
+    for (int t = 0; t < 4 && mc->cycle_step < 0; t++) {
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+    }
+    CHECK("the charge pattern stays stable until orb 0 fires (no per-tick re-roll)",
+        mc->orb_style[0] == locked0);
+
+    /* pre-praying the telegraphed orb 0 blocks it on the first fire tick. */
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 131);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    s.npcs[0].attack_timer = 3;
+    mc = colo_npc_manticore(&s.npcs[0]);
+    int orb0_blocked = 0;
+    for (int t = 0; t < 12; t++) {
+        if (mc->cycle_step < 0 && mc->orb_style[0] != ATTACK_STYLE_NONE) {
+            AttackStyle s0 = mc->orb_style[0];
+            s.player.prayer = s0 == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC :
+                              s0 == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED :
+                              PRAYER_PROTECT_MELEE;
+        }
+        s.player.current_hitpoints = 99;
+        int step_before = mc->cycle_step;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (step_before < 0 && mc->cycle_step == 1) {
+            orb0_blocked = (s.player.current_hitpoints == 99);
+            break;
+        }
+    }
+    CHECK("a pre-prayed telegraphed orb 0 is blocked on its fire tick", orb0_blocked);
 }
 
 /* 5c. D12: orbs land ON their launch tick — nothing enters the pending queue,
@@ -3534,6 +3604,7 @@ int main(void) {
     test_red_flag_minotaur_routefind();
     test_minotaur_heal_semantics();
     test_manticore_barrage_period();
+    test_manticore_telegraph_during_windup();
     test_manticore_orb_same_tick_flick();
     test_manticore_pattern_copy();
     test_javelin_skyfall_no_defence_gate();
