@@ -171,6 +171,7 @@ static void init_player(Player* p) {
     p->damage_received_scale = 0.0f;
     p->expected_damage_dealt_tick = 0.0f;
     p->expected_damage_received_tick = 0.0f;
+    p->expected_damage_prevented_tick = 0.0f;
 
     p->total_target_hit_count = 0;
     p->target_hit_melee_count = 0;
@@ -229,6 +230,7 @@ static void init_player(Player* p) {
     p->total_damage_received = 0;
     p->expected_damage_dealt = 0.0f;
     p->expected_damage_received = 0.0f;
+    p->expected_damage_prevented = 0.0f;
     p->weapon_equipped_this_tick = 0;
     p->equip_click_attempts = 0;
     p->equip_click_successes = 0;
@@ -866,6 +868,7 @@ void pvp_step(OsrsEnv* env) {
         env->log.damage_received = p0->total_damage_received;
         env->log.expected_damage_dealt = p0->expected_damage_dealt;
         env->log.expected_damage_received = p0->expected_damage_received;
+        env->log.expected_damage_prevented = p0->expected_damage_prevented;
         env->log.expected_damage_diff = expected_diff;
         env->log.expected_damage_score = expected_damage_score;
         env->log.ko_supply_score = ko_supply_score;

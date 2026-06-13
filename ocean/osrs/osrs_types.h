@@ -682,6 +682,7 @@ typedef struct {
     float damage_received_scale;
     float expected_damage_dealt_tick;
     float expected_damage_received_tick;
+    float expected_damage_prevented_tick;
 
     // Hit statistics
     int total_target_hit_count;
@@ -745,6 +746,7 @@ typedef struct {
     float total_damage_received;
     float expected_damage_dealt;
     float expected_damage_received;
+    float expected_damage_prevented;
 
     // Equipment flags
     int is_lunar_spellbook;
@@ -859,6 +861,7 @@ typedef struct {
     float damage_received;
     float expected_damage_dealt;
     float expected_damage_received;
+    float expected_damage_prevented;
     float expected_damage_diff;
     float expected_damage_score;
     float ko_supply_score;
@@ -1173,6 +1176,7 @@ typedef struct {
     float ko_supplies_bonus_coef;    // bonus per unit of opponent supply fraction remaining at KO
     float wasted_resources_penalty;  // dying with food/brews left
     float expected_damage_reward_coef;
+    float incoming_damage_avoidance_reward_coef;
     float ko_supply_reward_coef;
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training

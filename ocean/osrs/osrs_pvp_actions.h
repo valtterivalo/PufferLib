@@ -224,6 +224,7 @@ static void reset_tick_flags(Player* p) {
     p->damage_received_scale = 0.0f;
     p->expected_damage_dealt_tick = 0.0f;
     p->expected_damage_received_tick = 0.0f;
+    p->expected_damage_prevented_tick = 0.0f;
     p->last_food_heal = 0;
     p->last_food_waste = 0;
     p->last_karambwan_heal = 0;
@@ -609,6 +610,8 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     const RewardShapingConfig* cfg = &env->shaping;
 
     reward += cfg->expected_damage_reward_coef * p->expected_damage_dealt_tick;
+    reward += cfg->incoming_damage_avoidance_reward_coef
+        * p->expected_damage_prevented_tick;
 
     if (env->episode_over) {
         if (env->winner == agent_idx) {

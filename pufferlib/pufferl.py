@@ -244,6 +244,7 @@ PVP_FIXED_EVAL_KEYS = (
     'env/damage_received',
     'env/expected_damage_dealt',
     'env/expected_damage_received',
+    'env/expected_damage_prevented',
     'env/expected_damage_diff',
     'env/expected_damage_score',
     'env/ko_supply_score',
@@ -581,6 +582,8 @@ def _write_pvp_fixed_eval_means(logs, prefix, means):
     logs[f'{prefix}_expected_damage_diff'] = means['env/expected_damage_diff']
     logs[f'{prefix}_expected_damage_dealt'] = means.get('env/expected_damage_dealt', 0.0)
     logs[f'{prefix}_expected_damage_received'] = means.get('env/expected_damage_received', 0.0)
+    logs[f'{prefix}_expected_damage_prevented'] = means.get(
+        'env/expected_damage_prevented', 0.0)
     logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
     logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
     logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
@@ -592,6 +595,8 @@ def _write_pvp_rollout_eval_means(logs, means):
     logs['env/rollout_eval_wins'] = means['env/wins']
     logs['env/rollout_eval_dmg_diff_score'] = means['env/dmg_diff_score']
     logs['env/rollout_eval_expected_damage_score'] = means['env/expected_damage_score']
+    logs['env/rollout_eval_expected_damage_prevented'] = means.get(
+        'env/expected_damage_prevented', 0.0)
     logs['env/rollout_eval_ko_supply_score'] = means['env/ko_supply_score']
     logs['env/rollout_eval_n'] = means['env/n']
 
@@ -601,6 +606,8 @@ def _write_static_rollout_panel(logs, prefix, means):
     logs[f'env/rollout_eval_{prefix}_wins'] = means['env/wins']
     logs[f'env/rollout_eval_{prefix}_dmg_diff_score'] = means['env/dmg_diff_score']
     logs[f'env/rollout_eval_{prefix}_expected_damage_score'] = means['env/expected_damage_score']
+    logs[f'env/rollout_eval_{prefix}_expected_damage_prevented'] = means.get(
+        'env/expected_damage_prevented', 0.0)
     logs[f'env/rollout_eval_{prefix}_ko_supply_score'] = means['env/ko_supply_score']
     logs[f'env/rollout_eval_{prefix}_n'] = means['env/n']
 
@@ -625,8 +632,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
 
     started = time.time()
     logs = {}
-    scores, wins, dmg_scores, performance_scores, expected_scores, ko_supply_scores, ns, weights = (
-        [], [], [], [], [], [], [], [])
+    scores, wins, dmg_scores, performance_scores, expected_scores = [], [], [], [], []
+    expected_prevented, ko_supply_scores, ns, weights = [], [], [], []
 
     if scripted_weight > 0.0:
         means = _collect_pvp_static_scripted_panel(
@@ -637,6 +644,7 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
         dmg_scores.append(means['env/dmg_diff_score'])
         performance_scores.append(means['env/performance_score'])
         expected_scores.append(means['env/expected_damage_score'])
+        expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
         weights.append(scripted_weight)
@@ -654,6 +662,7 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
         dmg_scores.append(means['env/dmg_diff_score'])
         performance_scores.append(means['env/performance_score'])
         expected_scores.append(means['env/expected_damage_score'])
+        expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
         weights.append(policy_weight)
@@ -663,6 +672,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
     logs['env/rollout_eval_wins'] = _weighted_mean(wins, weights)
     logs['env/rollout_eval_dmg_diff_score'] = _weighted_mean(dmg_scores, weights)
     logs['env/rollout_eval_expected_damage_score'] = _weighted_mean(expected_scores, weights)
+    logs['env/rollout_eval_expected_damage_prevented'] = _weighted_mean(
+        expected_prevented, weights)
     logs['env/rollout_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
     logs['env/rollout_eval_n'] = float(np.sum(ns))
     logs['env/rollout_eval_scripted_weight'] = scripted_weight
@@ -713,8 +724,8 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
 
     started = time.time()
     logs = {}
-    scores, wins, dmg_scores, performance_scores, expected_scores, ko_supply_scores, ns = (
-        [], [], [], [], [], [], [])
+    scores, wins, dmg_scores, performance_scores, expected_scores = [], [], [], [], []
+    expected_prevented, ko_supply_scores, ns = [], [], []
     for idx, opponent in enumerate(opponents):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 100_000 * idx)
@@ -725,6 +736,7 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         dmg_scores.append(means['env/dmg_diff_score'])
         performance_scores.append(means['env/performance_score'])
         expected_scores.append(means['env/expected_damage_score'])
+        expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
 
@@ -755,6 +767,7 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         dmg_scores.append(means['env/dmg_diff_score'])
         performance_scores.append(means['env/performance_score'])
         expected_scores.append(means['env/expected_damage_score'])
+        expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
         ns.append(means['env/n'])
         weights.append(policy_opponent_weight)
@@ -774,6 +787,8 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
     logs['env/fixed_eval_wins'] = _weighted_mean(wins, weights)
     logs['env/fixed_eval_dmg_diff_score'] = _weighted_mean(dmg_scores, weights)
     logs['env/fixed_eval_expected_damage_score'] = _weighted_mean(expected_scores, weights)
+    logs['env/fixed_eval_expected_damage_prevented'] = _weighted_mean(
+        expected_prevented, weights)
     logs['env/fixed_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
     logs['env/fixed_eval_score_unweighted'] = float(np.mean(scores))
     logs['env/fixed_eval_performance_score_unweighted'] = float(np.mean(performance_scores))

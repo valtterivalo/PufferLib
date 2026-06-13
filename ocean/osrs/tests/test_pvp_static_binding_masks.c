@@ -199,7 +199,7 @@ static void assert_projection_gear_eq(
 }
 
 static Dict* pvp_kwargs(void) {
-    Dict* kwargs = create_dict(8);
+    Dict* kwargs = create_dict(12);
     dict_set(kwargs, "seed", 73);
     dict_set(kwargs, "use_rollout_opponent", 1);
     dict_set(kwargs, "opponent_type", OPP_IMPROVED);
@@ -418,6 +418,23 @@ static void test_expected_damage_reward_works_without_legacy_shaping(void) {
     collision_map_free(cmap);
 }
 
+static void test_incoming_damage_avoidance_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP incoming damage avoidance reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.incoming_damage_avoidance_reward_coef = 0.02f;
+    env.players[0].expected_damage_prevented_tick = 10.0f;
+
+    ASSERT_FLOAT_NEAR("incoming damage avoidance dense reward",
+        calculate_reward(&env, 0), 0.2f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_ko_supply_reward_works_without_legacy_shaping(void) {
     printf("--- PvP KO supply reward works without legacy shaping ---\n");
 
@@ -448,6 +465,7 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
 
     Dict* kwargs = pvp_kwargs();
     dict_set(kwargs, "expected_damage_reward_coef", 0.0125);
+    dict_set(kwargs, "incoming_damage_avoidance_reward_coef", 0.025);
     dict_set(kwargs, "ko_supply_reward_coef", 0.75);
     Dict* vec_kwargs = pvp_vec_kwargs(2, 1);
 
@@ -456,6 +474,8 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
 
     ASSERT_FLOAT_NEAR("expected damage reward coef",
         env->pvp.shaping.expected_damage_reward_coef, 0.0125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("incoming damage avoidance reward coef",
+        env->pvp.shaping.incoming_damage_avoidance_reward_coef, 0.025f, 1e-6f);
     ASSERT_FLOAT_NEAR("KO supply reward coef",
         env->pvp.shaping.ko_supply_reward_coef, 0.75f, 1e-6f);
 
@@ -1457,6 +1477,7 @@ static void test_pvp_log_emits_command_diagnostics(void) {
     log.damage_received = 10.0f;
     log.performance_score = 0.75f;
     log.attacks_landed = 4.0f;
+    log.expected_damage_prevented = 9.5f;
     log.equip_click_attempts = 5.0f;
     log.equip_click_noop_rate = 0.2f;
     log.special_arm_attempts = 2.0f;
@@ -1483,6 +1504,8 @@ static void test_pvp_log_emits_command_diagnostics(void) {
         dict_get(out, "equip_click_noop_rate")->value, 0.2f, 1e-6f);
     ASSERT_FLOAT_NEAR("log target click no fire",
         dict_get(out, "target_click_no_fire_rate")->value, 0.25f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log expected damage prevented",
+        dict_get(out, "expected_damage_prevented")->value, 9.5f, 1e-6f);
     ASSERT_FLOAT_NEAR("log weapon attack rate",
         dict_get(out, "weapon_attack_rate")->value, 0.6f, 1e-6f);
     ASSERT_FLOAT_NEAR("log spec after equip",
@@ -1501,6 +1524,7 @@ static void test_terminal_log_accumulates_command_diagnostics(void) {
     env.pvp.log.wins = 1.0f;
     env.pvp.log.episode_return = 1.0f;
     env.pvp.log.episode_length = 64.0f;
+    env.pvp.log.expected_damage_prevented = 12.0f;
     env.pvp.log.equip_click_attempts = 8.0f;
     env.pvp.log.equip_click_noop_rate = 0.25f;
     env.pvp.log.special_arm_attempts = 3.0f;
@@ -1521,6 +1545,8 @@ static void test_terminal_log_accumulates_command_diagnostics(void) {
 
     ASSERT_FLOAT_NEAR("accumulated equip attempts",
         env.log.equip_click_attempts, 8.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated expected damage prevented",
+        env.log.expected_damage_prevented, 12.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("accumulated special attempts",
         env.log.special_arm_attempts, 3.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("accumulated target attempts",
@@ -2258,6 +2284,60 @@ static void test_expected_damage_prayer_modifier(void) {
     ASSERT_FLOAT_NEAR("on-prayer EV ratio", on_prayer / off_prayer, 0.59f, 0.02f);
 }
 
+static void pvp_setup_ranged_pressure_counterfactual(Player* attacker, Player* defender) {
+    osrs_player_inventory_clear(attacker);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_WEAPON, ITEM_RUNE_CROSSBOW);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_AMMO, ITEM_DIAMOND_BOLTS_E);
+    attacker->current_gear = GEAR_RANGED;
+
+    osrs_player_inventory_clear(defender);
+    osrs_player_set_equipment_slot(defender, GEAR_SLOT_BODY, ITEM_KARILS_TOP);
+    osrs_player_set_equipment_slot(defender, GEAR_SLOT_LEGS, ITEM_DHAROKS_PLATELEGS);
+    osrs_player_inventory_add(defender, ITEM_MYSTIC_TOP);
+    osrs_player_inventory_add(defender, ITEM_MYSTIC_BOTTOM);
+    defender->prayer = PRAYER_NONE;
+}
+
+static void test_expected_damage_prevention_uses_available_gear_and_prayer(void) {
+    printf("--- PvP expected damage prevention uses available gear and prayer ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    Player* defender = &env.players[0];
+    Player* attacker = &env.players[1];
+    pvp_setup_ranged_pressure_counterfactual(attacker, defender);
+
+    float no_prayer_ev = pvp_expected_attack_damage(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, PRAYER_NONE);
+    float gear_saved = pvp_expected_damage_prevented_by_available_defence(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, no_prayer_ev);
+
+    defender->prayer = PRAYER_PROTECT_RANGED;
+    float protected_ev = pvp_expected_attack_damage(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, defender->prayer);
+    float protected_saved = pvp_expected_damage_prevented_by_available_defence(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, protected_ev);
+
+    ASSERT_TRUE("defensive gear saves expected damage", gear_saved > 0.0f);
+    ASSERT_TRUE("correct prayer lowers actual EV", protected_ev < no_prayer_ev);
+    ASSERT_TRUE("correct prayer increases prevented EV", protected_saved > gear_saved);
+
+    defender->expected_damage_prevented = 0.0f;
+    defender->expected_damage_prevented_tick = 0.0f;
+    env.shaping.incoming_damage_avoidance_reward_coef = 1.0f;
+    perform_attack(&env, 1, 0, ATTACK_STYLE_RANGED, 0, 0, 5);
+    ASSERT_TRUE("attack registers prevented EV",
+        defender->expected_damage_prevented_tick > 0.0f);
+    ASSERT_FLOAT_NEAR("tick and total prevented EV match",
+        defender->expected_damage_prevented_tick,
+        defender->expected_damage_prevented,
+        1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_expected_damage_zero_accuracy(void) {
     printf("--- PvP expected damage zero accuracy ---\n");
 
@@ -2307,6 +2387,7 @@ int main(void) {
     test_target_hp_observation_is_current();
     test_shaping_disabled_emits_only_terminal_reward();
     test_expected_damage_reward_works_without_legacy_shaping();
+    test_incoming_damage_avoidance_reward_works_without_legacy_shaping();
     test_ko_supply_reward_works_without_legacy_shaping();
     test_reward_coefficients_parse_from_binding_kwargs();
     test_shaping_uses_encounter_overhead_and_spec_prayer_style();
@@ -2349,6 +2430,7 @@ int main(void) {
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();
     test_expected_damage_prayer_modifier();
+    test_expected_damage_prevention_uses_available_gear_and_prayer();
     test_expected_damage_zero_accuracy();
     test_expected_damage_standard_uniform();
     test_expected_damage_representative_specs();

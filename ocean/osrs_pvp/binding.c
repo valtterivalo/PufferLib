@@ -316,6 +316,7 @@ static void pvp_env_accumulate_terminal_log(Env* env) {
     env->log.damage_received += env->pvp.log.damage_received;
     env->log.expected_damage_dealt += env->pvp.log.expected_damage_dealt;
     env->log.expected_damage_received += env->pvp.log.expected_damage_received;
+    env->log.expected_damage_prevented += env->pvp.log.expected_damage_prevented;
     env->log.expected_damage_diff += env->pvp.log.expected_damage_diff;
     env->log.expected_damage_score += env->pvp.log.expected_damage_score;
     env->log.ko_supply_score += env->pvp.log.ko_supply_score;
@@ -647,6 +648,12 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.expected_damage_reward_coef = expected_damage_reward
         ? (float)expected_damage_reward->value : 0.0f;
 
+    DictItem* incoming_damage_avoidance_reward = dict_get_unsafe(
+        kwargs, "incoming_damage_avoidance_reward_coef");
+    env->pvp.shaping.incoming_damage_avoidance_reward_coef =
+        incoming_damage_avoidance_reward
+        ? (float)incoming_damage_avoidance_reward->value : 0.0f;
+
     DictItem* ko_supply_reward = dict_get_unsafe(kwargs, "ko_supply_reward_coef");
     env->pvp.shaping.ko_supply_reward_coef = ko_supply_reward
         ? (float)ko_supply_reward->value : 0.0f;
@@ -700,6 +707,7 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "expected_damage_dealt", log->expected_damage_dealt);
     dict_set(out, "expected_damage_received", log->expected_damage_received);
+    dict_set(out, "expected_damage_prevented", log->expected_damage_prevented);
     dict_set(out, "expected_damage_diff", log->expected_damage_diff);
     dict_set(out, "expected_damage_score", log->expected_damage_score);
     dict_set(out, "ko_supply_score", log->ko_supply_score);
