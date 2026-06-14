@@ -444,6 +444,14 @@ static inline int pvp_head_move_toward_tile(const Player* p, int dest_x, int des
     return 0;
 }
 
+static inline int pvp_exact_head_move_toward_tile(const Player* p, int dest_x, int dest_y) {
+    int action = pvp_head_move_toward_tile(p, dest_x, dest_y);
+    if (action == MOVE_NONE) return MOVE_NONE;
+    int action_x = p->x + ENCOUNTER_MOVE_TARGET_DX[action];
+    int action_y = p->y + ENCOUNTER_MOVE_TARGET_DY[action];
+    return action_x == dest_x && action_y == dest_y ? action : MOVE_NONE;
+}
+
 static inline int pvp_head_move_from_legacy_target_move(
     OsrsEnv* env,
     int agent_idx,
@@ -457,7 +465,8 @@ static inline int pvp_head_move_from_legacy_target_move(
         return 0;
     }
 
-    return pvp_head_move_toward_tile(&env->players[agent_idx], dest_x, dest_y);
+    return pvp_exact_head_move_toward_tile(
+        &env->players[agent_idx], dest_x, dest_y);
 }
 
 #endif // OSRS_PVP_MOVEMENT_H

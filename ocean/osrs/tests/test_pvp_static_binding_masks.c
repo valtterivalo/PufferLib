@@ -528,17 +528,36 @@ static void test_scripted_legacy_movement_maps_to_head_move(void) {
     Player* p = &env->pvp.players[1];
     Player* target = &env->pvp.players[0];
     pvp_set_player_spawn(p, 3041, 3530);
-    pvp_set_player_spawn(target, 3046, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
     p->last_obs_target_x = target->x;
     p->last_obs_target_y = target->y;
 
     int actions[NUM_ACTION_HEADS] = {0};
     actions[HEAD_LOADOUT] = LOADOUT_KEEP;
-    actions[HEAD_COMBAT] = MOVE_FARCAST_3;
+    actions[HEAD_COMBAT] = MOVE_UNDER;
     pvp_translate_legacy_loadout_action_to_slotclicks(&env->pvp, 1, actions);
 
     ASSERT_INT_EQ("legacy movement clears attack head", actions[HEAD_ATTACK], ATTACK_NONE);
     ASSERT_TRUE("legacy movement sets head move", actions[HEAD_MOVE] > 0);
+    ASSERT_INT_EQ("legacy movement head exact x",
+        p->x + ENCOUNTER_MOVE_TARGET_DX[actions[HEAD_MOVE]], target->x);
+    ASSERT_INT_EQ("legacy movement head exact y",
+        p->y + ENCOUNTER_MOVE_TARGET_DY[actions[HEAD_MOVE]], target->y);
+
+    actions[HEAD_MOVE] = pvp_head_move_toward_tile(p, p->x - 1, p->y);
+    actions[HEAD_COMBAT] = MOVE_UNDER;
+    pvp_set_player_spawn(p, 3041, 3530);
+    pvp_set_player_spawn(target, 3046, 3530);
+    p->last_obs_target_x = target->x;
+    p->last_obs_target_y = target->y;
+    pvp_translate_legacy_loadout_action_to_slotclicks(&env->pvp, 1, actions);
+
+    ASSERT_INT_EQ("nonexact movement clears attack head", actions[HEAD_ATTACK], ATTACK_NONE);
+    ASSERT_INT_EQ("nonexact movement clears stale head move", actions[HEAD_MOVE], MOVE_NONE);
+    ASSERT_INT_EQ("nonexact movement walk dest x",
+        env->pvp.pvp_runtime.walk_dest_x[1], target->x);
+    ASSERT_INT_EQ("nonexact movement walk dest y",
+        env->pvp.pvp_runtime.walk_dest_y[1], target->y);
 
     static_vec_close(vec);
 }
