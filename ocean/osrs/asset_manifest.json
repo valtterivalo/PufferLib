@@ -1,10 +1,10 @@
 {
   "format": "puffer-osrs-asset-manifest-v1",
-  "asset_version": "osrs-assets-v11",
+  "asset_version": "osrs-assets-v18",
   "archive": {
-    "name": "osrs-assets-v11.tar.gz",
-    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v11/osrs-assets-v11.tar.gz",
-    "sha256": "453203c72bc2c7617085ba8fb7c93224d30b284749156c375e0a8ed67888f526",
+    "name": "osrs-assets-v18.tar.gz",
+    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v18/osrs-assets-v18.tar.gz",
+    "sha256": "02b89833adb6bf1b35ae074dcaf2877e4435f28bd344bc367b88ed590e594501",
     "strip_components": 1
   },
   "required_groups": [
@@ -130,7 +130,8 @@
         "player_models.h",
         "npc_models.h",
         "npc_models_inferno.h",
-        "npc_models_zulrah.h"
+        "npc_models_zulrah.h",
+        "npc_models_colosseum.h"
       ]
     },
     {

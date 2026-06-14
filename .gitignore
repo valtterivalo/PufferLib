@@ -179,3 +179,4 @@ resources/drive/binaries/*
 /osrs_pvp
 *.dSYM/
 .omegacode/
+ocean/osrs/data
