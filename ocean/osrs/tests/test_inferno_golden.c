@@ -143,7 +143,14 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 2000
 
 /* baseline digests captured on the pre-refactor commit. regenerate with
-   --print only when an intentional behavior change is made, and explain why. */
+   --print only when an intentional behavior change is made, and explain why.
+   2026-06-14: the 6 jad and zuk digests were re-seeded for the no-active-pillar
+   forecast gate. On pillar-less waves (Jad, Zuk) the step-out forecast skips its
+   rollout and emits zero danger features (the forecast is useless there: no
+   safespotting, no attack overlap). Obs-only change on those waves; sim and
+   reward stay byte-identical (verified: state-hash + reward unchanged on every
+   record, obs differs only by danger features going to zero with valid
+   preserved). The 9 pillar-ful configs are unchanged. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x8b5b754c26c82822ULL,  /* wave1_a */
     0xcee535f8947e69c7ULL,  /* wave1_b */
@@ -154,12 +161,12 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x799ba5f34647a85fULL,  /* ranger_b */
     0x362a09d876d6070dULL,  /* mager_a */
     0x437655bfabd32761ULL,  /* mager_b */
-    0xec1e81fe834cff6cULL,  /* jad_a */
-    0x172ec48cbdd57890ULL,  /* jad_b */
-    0x6e319d1be3a2ce54ULL,  /* jad_c */
-    0x28a344f12f028e3aULL,  /* zuk_a */
-    0xfc353ed16ea0bec3ULL,  /* zuk_b */
-    0x66ebf7e402cb3a68ULL,  /* zuk_c */
+    0xb6206c4a2192fd4eULL,  /* jad_a */
+    0x42b9b1d5bc586ab5ULL,  /* jad_b */
+    0xeeb78eb3f418246fULL,  /* jad_c */
+    0xe34ad53c7c7d1d8aULL,  /* zuk_a */
+    0x28aeb435e56e6527ULL,  /* zuk_b */
+    0x7d34388640e2036fULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {

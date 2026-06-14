@@ -1157,6 +1157,16 @@ static void inf_build_step_out_forecast_exact_ctx(
     int forecast_slots[INF_MAX_NPCS];
     int forecast_slot_count = inf_collect_step_out_forecast_slots(
         s, forecast_slots);
+
+    /* The forecast exists for pillar safespotting + multi-NPC attack-overlap
+       avoidance. With no active pillars (Jad/Zuk waves) neither applies, so the
+       heavy per-action rollout is skipped below: each action still emits its
+       cheap landing + validity, and the danger features stay zero. Obs-affecting
+       on pillar-less waves only; the sim is untouched (the forecast is read-only). */
+    int forecast_has_active_pillar = 0;
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        if (s->pillars[p].active) { forecast_has_active_pillar = 1; break; }
+    }
 #ifdef INF_PROFILE_ENABLED
     double base_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
 #endif
@@ -1206,6 +1216,7 @@ static void inf_build_step_out_forecast_exact_ctx(
         }
 #endif
         if (!action->valid || forecast_slot_count == 0) continue;
+        if (!forecast_has_active_pillar) continue;
 
 #ifdef INF_PROFILE_ENABLED
         double state_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
