@@ -5132,7 +5132,13 @@ static void render_draw_3d_world(RenderClient* rc) {
     if (rc->model_cache) {
         float ms = 1.0f / 128.0f;
 
-        rlDisableBackfaceCulling();
+        /* OSRS models are one-sided: the client culls every face by screen-space
+           winding (Model.draw0). Our mesh applies two reflections before draw
+           (anim_update_mesh writes x,-y,z then the model matrix mirrors x via
+           MatrixScale(-ms,ms,ms)), which preserves handedness, so the standard
+           back-face cull is correct. Culling the front side inverts every model. */
+        rlEnableBackfaceCulling();
+        rlSetCullFace(RL_CULL_FACE_BACK);
         for (int i = 0; i < rc->entity_count; i++) {
             RenderEntity* ep = &rc->entities[i];
 
