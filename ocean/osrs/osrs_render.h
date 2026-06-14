@@ -5132,8 +5132,7 @@ static void render_draw_3d_world(RenderClient* rc) {
     if (rc->model_cache) {
         float ms = 1.0f / 128.0f;
 
-        rlEnableBackfaceCulling();
-        rlSetCullFace(RL_CULL_FACE_FRONT);
+        rlDisableBackfaceCulling();
         for (int i = 0; i < rc->entity_count; i++) {
             RenderEntity* ep = &rc->entities[i];
 
@@ -5212,7 +5211,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
             hull_compute(hull_xs, hull_ys, hull_n, &rc->entity_hulls[i]);
         }
-        rlSetCullFace(RL_CULL_FACE_BACK);
+        rlEnableBackfaceCulling();
     }
 
     /* visual effects: spell impacts, projectiles */
