@@ -276,6 +276,44 @@ static inline void pvp_enable_local_pathfind_for_dest(
     arena->arena_h = h;
 }
 
+static inline int pvp_destination_reachable_this_tick(
+    const Player* p,
+    int dest_x,
+    int dest_y,
+    const CollisionMap* cmap
+) {
+    if (!is_in_wilderness(dest_x, dest_y)) return 0;
+    if (!collision_tile_walkable(cmap, 0, dest_x, dest_y)) return 0;
+
+    int base_x;
+    int base_y;
+    int w;
+    int h;
+    if (!pvp_local_pathfind_window(p, dest_x, dest_y, &base_x, &base_y, &w, &h))
+        return 0;
+
+    Player probe = *p;
+    int walk_dest_x = dest_x;
+    int walk_dest_y = dest_y;
+    int steps = encounter_move_toward_dest(
+        &probe,
+        &walk_dest_x,
+        &walk_dest_y,
+        cmap,
+        0,
+        0,
+        pvp_tile_walkable,
+        (void*)cmap,
+        NULL,
+        NULL,
+        base_x,
+        base_y,
+        w,
+        h);
+
+    return steps > 0 && probe.x == dest_x && probe.y == dest_y;
+}
+
 static inline OsrsPlayerStepResult pvp_step_player_movement(
     OsrsEnv* env,
     int agent_idx,

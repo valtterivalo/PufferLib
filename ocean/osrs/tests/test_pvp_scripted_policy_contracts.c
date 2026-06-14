@@ -97,6 +97,12 @@ static void set_style_bias_flat(OpponentState* opp) {
     opp->style_bias[OPP_STYLE_MELEE] = 1.0f;
 }
 
+static void set_style_bias_ranged_only(OpponentState* opp) {
+    opp->style_bias[OPP_STYLE_MAGE] = 0.0f;
+    opp->style_bias[OPP_STYLE_RANGED] = 1.0f;
+    opp->style_bias[OPP_STYLE_MELEE] = 0.0f;
+}
+
 static void set_recent_target_attack_count(
     Player* self,
     AttackStyle style,
@@ -191,6 +197,19 @@ static void set_adjacent_non_melee_spacing_state(OsrsEnv* env, OpponentType type
     memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
 }
 
+static void set_under_non_melee_spacing_state(OsrsEnv* env, OpponentType type) {
+    set_adjacent_non_melee_spacing_state(env, type);
+
+    Player* target = &env->players[0];
+    Player* self = &env->players[1];
+    set_player_position(self, target->x, target->y);
+    self->last_obs_target_x = target->x;
+    self->last_obs_target_y = target->y;
+    target->last_obs_target_x = self->x;
+    target->last_obs_target_y = self->y;
+    set_style_bias_ranged_only(&env->pvp_runtime.opponent);
+}
+
 static int opponent_combat(const OsrsEnv* env) {
     return env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
 }
@@ -201,6 +220,14 @@ static int opponent_overhead(const OsrsEnv* env) {
 
 static int opponent_move(const OsrsEnv* env) {
     return env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE];
+}
+
+static int opponent_move_dest_x(const OsrsEnv* env) {
+    return env->players[1].x + ENCOUNTER_MOVE_TARGET_DX[opponent_move(env)];
+}
+
+static int opponent_move_dest_y(const OsrsEnv* env) {
+    return env->players[1].y + ENCOUNTER_MOVE_TARGET_DY[opponent_move(env)];
 }
 
 static int opponent_special(const OsrsEnv* env) {
@@ -291,8 +318,8 @@ static void test_hard_policies_do_not_farcast_while_adjacent(void) {
         OPP_STRICT_KITER, "strict kiter adjacent non-melee");
 }
 
-static void test_hard_policy_walks_under_frozen_adjacent_target(void) {
-    printf("--- Hard policy walks under frozen adjacent target ---\n");
+static void test_smart_hard_policy_avoids_cardinal_step_out(void) {
+    printf("--- Smart hard policy avoids cardinal frozen step-out ---\n");
 
     OsrsEnv env;
     setup_pvp_env(&env, OPP_NIGHTMARE_NH);
@@ -303,6 +330,132 @@ static void test_hard_policy_walks_under_frozen_adjacent_target(void) {
 
     ASSERT_INT_EQ("frozen adjacent combat", opponent_combat(&env), ATTACK_NONE);
     ASSERT_TRUE("frozen adjacent move", opponent_move(&env) != MOVE_NONE);
+    ASSERT_TRUE("frozen adjacent not under",
+        opponent_move_dest_x(&env) != env.players[0].x ||
+        opponent_move_dest_y(&env) != env.players[0].y);
+    ASSERT_TRUE("frozen adjacent avoids cardinal melee tile",
+        abs_int(opponent_move_dest_x(&env) - env.players[0].x) +
+        abs_int(opponent_move_dest_y(&env) - env.players[0].y) != 1);
+}
+
+static void test_smart_hard_policy_converts_under_ranged_attack_to_move_only(void) {
+    printf("--- Smart hard policy moves before ranged target-click from under ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_under_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 10;
+
+    int* actions = &env.pending_actions[NUM_ACTION_HEADS];
+    memset(actions, 0, NUM_ACTION_HEADS * sizeof(int));
+    actions[HEAD_LOADOUT] = LOADOUT_RANGE;
+    actions[HEAD_COMBAT] = ATTACK_ATK;
+
+    opp_apply_hard_spacing_guard(&env, OPP_NIGHTMARE_NH, actions);
+
+    ASSERT_INT_EQ("under ranged combat cleared", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("under ranged move queued", opponent_move(&env) != MOVE_NONE);
+    ASSERT_TRUE("under ranged destination leaves target tile",
+        opponent_move_dest_x(&env) != env.players[0].x ||
+        opponent_move_dest_y(&env) != env.players[0].y);
+    ASSERT_TRUE("under ranged destination avoids cardinal melee tile",
+        abs_int(opponent_move_dest_x(&env) - env.players[0].x) +
+        abs_int(opponent_move_dest_y(&env) - env.players[0].y) != 1);
+}
+
+static void test_smart_hard_policy_allows_diagonal_projectile_attack(void) {
+    printf("--- Smart hard policy allows diagonal projectile attack ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    set_player_position(&env.players[1], env.players[0].x - 1, env.players[0].y - 1);
+    env.players[0].frozen_ticks = 10;
+
+    int* actions = &env.pending_actions[NUM_ACTION_HEADS];
+    memset(actions, 0, NUM_ACTION_HEADS * sizeof(int));
+    actions[HEAD_LOADOUT] = LOADOUT_RANGE;
+    actions[HEAD_COMBAT] = ATTACK_ATK;
+
+    opp_apply_hard_spacing_guard(&env, OPP_NIGHTMARE_NH, actions);
+
+    ASSERT_INT_EQ("diagonal ranged combat preserved", opponent_combat(&env), ATTACK_ATK);
+    ASSERT_INT_EQ("diagonal ranged move idle", opponent_move(&env), MOVE_NONE);
+}
+
+static void test_smart_hard_policy_full_step_under_ranged_attack_does_not_attack(void) {
+    printf("--- Smart hard policy full step waits after ranged move-out ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_under_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 10;
+    memset(env.ocean_io.agent_actions, 0, NUM_ACTION_HEADS * sizeof(int));
+
+    pvp_step(&env);
+
+    int* executed = env.last_executed_actions + NUM_ACTION_HEADS;
+    int dx = abs_int(env.players[1].x - env.players[0].x);
+    int dy = abs_int(env.players[1].y - env.players[0].y);
+    ASSERT_INT_EQ("full step ranged attack cleared",
+        executed[HEAD_ATTACK], ATTACK_NONE);
+    ASSERT_TRUE("full step move queued", executed[HEAD_MOVE] != MOVE_NONE);
+    ASSERT_INT_EQ("full step opponent did not attack",
+        env.players[1].just_attacked, 0);
+    ASSERT_TRUE("full step leaves same tile", dx != 0 || dy != 0);
+    ASSERT_TRUE("full step avoids cardinal melee tile", dx + dy != 1);
+}
+
+static void test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen(void) {
+    printf("--- Smart hard policy treats last freeze tick as unfrozen ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 1;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("last freeze tick combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("last freeze tick move", opponent_move(&env) != MOVE_NONE);
+    ASSERT_TRUE("last freeze tick farcasts",
+        chebyshev_distance(
+            opponent_move_dest_x(&env),
+            opponent_move_dest_y(&env),
+            env.players[0].x,
+            env.players[0].y) > 1);
+}
+
+static void test_dumb_hard_policy_still_walks_under_frozen_adjacent_target(void) {
+    printf("--- Dumb hard policy still walks under frozen adjacent target ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADVANCED_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_ADVANCED_NH);
+    env.players[0].frozen_ticks = 10;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("dumb frozen adjacent combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("dumb frozen adjacent move", opponent_move(&env) != MOVE_NONE);
+    ASSERT_INT_EQ("dumb frozen adjacent x",
+        opponent_move_dest_x(&env), env.players[0].x);
+    ASSERT_INT_EQ("dumb frozen adjacent y",
+        opponent_move_dest_y(&env), env.players[0].y);
+}
+
+static void test_hard_spacing_guard_does_not_move_when_self_frozen(void) {
+    printf("--- Hard spacing guard does not move when self frozen ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 10;
+    env.players[1].frozen_ticks = 10;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("self frozen move", opponent_move(&env), MOVE_NONE);
 }
 
 static void test_adaptive_nh_read_chance_exceeds_nightmare(void) {
@@ -618,7 +771,13 @@ static void test_spec_range_gate_respects_weapon_range(void) {
 int main(void) {
     test_adaptive_nh_name_maps_correctly();
     test_hard_policies_do_not_farcast_while_adjacent();
-    test_hard_policy_walks_under_frozen_adjacent_target();
+    test_smart_hard_policy_avoids_cardinal_step_out();
+    test_smart_hard_policy_converts_under_ranged_attack_to_move_only();
+    test_smart_hard_policy_allows_diagonal_projectile_attack();
+    test_smart_hard_policy_full_step_under_ranged_attack_does_not_attack();
+    test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen();
+    test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
+    test_hard_spacing_guard_does_not_move_when_self_frozen();
     test_adaptive_nh_read_chance_exceeds_nightmare();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();

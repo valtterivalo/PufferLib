@@ -3436,6 +3436,48 @@ static inline int opp_type_uses_hard_spacing_guard(OpponentType type) {
         type == OPP_STRICT_KITER;
 }
 
+typedef enum {
+    OPP_STEP_OUT_DUMB,
+    OPP_STEP_OUT_SMART,
+} OppStepOutMode;
+
+typedef enum {
+    OPP_SPACING_KEEP,
+    OPP_SPACING_LEGACY_MOVE,
+    OPP_SPACING_HEAD_MOVE,
+} OppSpacingDecisionKind;
+
+typedef struct {
+    OppSpacingDecisionKind kind;
+    int move;
+} OppSpacingDecision;
+
+static inline OppSpacingDecision opp_spacing_keep(void) {
+    return (OppSpacingDecision){.kind = OPP_SPACING_KEEP, .move = 0};
+}
+
+static inline OppSpacingDecision opp_spacing_legacy_move(int legacy_move) {
+    return (OppSpacingDecision){.kind = OPP_SPACING_LEGACY_MOVE, .move = legacy_move};
+}
+
+static inline OppSpacingDecision opp_spacing_head_move(int head_move) {
+    return (OppSpacingDecision){.kind = OPP_SPACING_HEAD_MOVE, .move = head_move};
+}
+
+static inline OppStepOutMode opp_step_out_mode_for_type(OpponentType type) {
+    switch (type) {
+        case OPP_MASTER_NH:
+        case OPP_SAVANT_NH:
+        case OPP_NIGHTMARE_NH:
+        case OPP_RANGE_KITER:
+        case OPP_ADAPTIVE_NH:
+        case OPP_STRICT_KITER:
+            return OPP_STEP_OUT_SMART;
+        default:
+            return OPP_STEP_OUT_DUMB;
+    }
+}
+
 static inline int opp_target_click_style_from_weapon(uint8_t weapon) {
     int weapon_style = get_item_attack_style(weapon);
     if (weapon_style == 2) return OPP_STYLE_RANGED;
@@ -3471,6 +3513,164 @@ static inline int opp_legacy_attack_style_for_actions(Player* self, int* actions
     }
 }
 
+static inline AttackStyle opp_attack_style_from_internal(int style) {
+    switch (style) {
+        case OPP_STYLE_MAGE: return ATTACK_STYLE_MAGIC;
+        case OPP_STYLE_RANGED: return ATTACK_STYLE_RANGED;
+        case OPP_STYLE_MELEE: return ATTACK_STYLE_MELEE;
+        default:
+            fprintf(stderr, "invalid opponent attack style: %d\n", style);
+            abort();
+    }
+}
+
+static inline int opp_smart_step_candidate_can_projectile_attack(
+    OsrsEnv* env,
+    AttackStyle style,
+    int legacy_loadout,
+    int dest_x,
+    int dest_y
+) {
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    if (dest_x == target->x && dest_y == target->y) return 0;
+    if (abs_int(dest_x - target->x) + abs_int(dest_y - target->y) == 1)
+        return 0;
+    if (!pvp_destination_reachable_this_tick(self, dest_x, dest_y, cmap))
+        return 0;
+
+    Player probe = *self;
+    if (legacy_loadout > LOADOUT_KEEP && legacy_loadout <= LOADOUT_GMAUL)
+        apply_loadout(&probe, legacy_loadout);
+    probe.x = dest_x;
+    probe.y = dest_y;
+    probe.dest_x = dest_x;
+    probe.dest_y = dest_y;
+    OsrsAttackReachQuery reach =
+        pvp_attack_reach_query(cmap, &probe, target, style);
+    return osrs_attack_can_reach(&reach);
+}
+
+static inline OppSpacingDecision opp_select_smart_projectile_step_out(
+    OsrsEnv* env,
+    AttackStyle style,
+    int legacy_loadout,
+    const int offsets[][2],
+    int offset_count
+) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    int has_best = 0;
+    int best_move = MOVE_NONE;
+    int best_dist = 0;
+    int best_hash = 0;
+
+    for (int i = 0; i < offset_count; i++) {
+        int dest_x = target->x + offsets[i][0];
+        int dest_y = target->y + offsets[i][1];
+        if (!opp_smart_step_candidate_can_projectile_attack(
+                env, style, legacy_loadout, dest_x, dest_y)) {
+            continue;
+        }
+        int head_move = pvp_head_move_toward_tile(self, dest_x, dest_y);
+        if (head_move == MOVE_NONE) continue;
+        int dist = chebyshev_distance(self->x, self->y, dest_x, dest_y);
+        int hash = tile_hash(dest_x, dest_y);
+        if (!has_best || dist < best_dist ||
+                (dist == best_dist && hash < best_hash)) {
+            has_best = 1;
+            best_move = head_move;
+            best_dist = dist;
+            best_hash = hash;
+        }
+    }
+
+    return has_best ? opp_spacing_head_move(best_move) : opp_spacing_keep();
+}
+
+static inline OppSpacingDecision opp_smart_projectile_spacing_decision(
+    OsrsEnv* env,
+    AttackStyle style,
+    int legacy_loadout
+) {
+    Player* target = &env->players[0];
+    Player* self = &env->players[1];
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+
+    if (target->frozen_ticks <= 1) {
+        int dest_x = -1;
+        int dest_y = -1;
+        if (select_farcast_tile(self, target->x, target->y, 5, &dest_x, &dest_y, cmap)) {
+            int move = pvp_head_move_toward_tile(self, dest_x, dest_y);
+            if (move != MOVE_NONE) return opp_spacing_head_move(move);
+        }
+        return opp_spacing_legacy_move(MOVE_FARCAST_5);
+    }
+
+    static const int diagonal_offsets[4][2] = {
+        {1, 1}, {1, -1}, {-1, -1}, {-1, 1}
+    };
+    OppSpacingDecision diagonal =
+        opp_select_smart_projectile_step_out(
+            env, style, legacy_loadout, diagonal_offsets, 4);
+    if (diagonal.kind != OPP_SPACING_KEEP) return diagonal;
+
+    int farcast_offsets[16][2];
+    int count = 0;
+    for (int dx = -2; dx <= 2; dx++) {
+        for (int dy = -2; dy <= 2; dy++) {
+            if (max_int(abs_int(dx), abs_int(dy)) != 2) continue;
+            farcast_offsets[count][0] = dx;
+            farcast_offsets[count][1] = dy;
+            count++;
+        }
+    }
+
+    OppSpacingDecision farcast =
+        opp_select_smart_projectile_step_out(
+            env, style, legacy_loadout, farcast_offsets, count);
+    if (farcast.kind != OPP_SPACING_KEEP) return farcast;
+
+    int dest_x = -1;
+    int dest_y = -1;
+    if (select_farcast_tile(self, target->x, target->y, 5, &dest_x, &dest_y, cmap)) {
+        int move = pvp_head_move_toward_tile(self, dest_x, dest_y);
+        if (move != MOVE_NONE) return opp_spacing_head_move(move);
+    }
+    return opp_spacing_legacy_move(MOVE_FARCAST_5);
+}
+
+static inline OppSpacingDecision opp_dumb_projectile_spacing_decision(
+    Player* target,
+    int dist
+) {
+    return target->frozen_ticks > 0 && dist > 0
+        ? opp_spacing_legacy_move(MOVE_UNDER)
+        : opp_spacing_legacy_move(MOVE_FARCAST_5);
+}
+
+static inline void opp_apply_spacing_decision(
+    int* actions,
+    OppSpacingDecision decision
+) {
+    switch (decision.kind) {
+        case OPP_SPACING_KEEP:
+            return;
+        case OPP_SPACING_LEGACY_MOVE:
+            actions[HEAD_COMBAT] = decision.move;
+            return;
+        case OPP_SPACING_HEAD_MOVE:
+            actions[HEAD_COMBAT] = ATTACK_NONE;
+            actions[HEAD_MOVE] = decision.move;
+            return;
+        default:
+            fprintf(stderr, "invalid opponent spacing decision: %d\n",
+                decision.kind);
+            abort();
+    }
+}
+
 static inline void opp_apply_hard_spacing_guard(
     OsrsEnv* env,
     OpponentType active,
@@ -3484,12 +3684,19 @@ static inline void opp_apply_hard_spacing_guard(
     if (style < 0 || style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) return;
     if (self->frozen_ticks > 0) return;
 
-    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-    if (dist > 1) return;
+    int dx = abs_int(self->x - target->x);
+    int dy = abs_int(self->y - target->y);
+    int same_tile = dx == 0 && dy == 0;
+    int cardinal_adjacent = dx + dy == 1;
+    if (!same_tile && !cardinal_adjacent) return;
+    int dist = max_int(dx, dy);
 
-    actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
-        ? MOVE_UNDER
-        : MOVE_FARCAST_5;
+    OppSpacingDecision decision =
+        opp_step_out_mode_for_type(active) == OPP_STEP_OUT_SMART
+            ? opp_smart_projectile_spacing_decision(
+                env, opp_attack_style_from_internal(style), actions[HEAD_LOADOUT])
+            : opp_dumb_projectile_spacing_decision(target, dist);
+    opp_apply_spacing_decision(actions, decision);
 }
 
 static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
