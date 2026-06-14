@@ -478,6 +478,8 @@ static void test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movemen
     set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
     env.players[0].frozen_ticks = 2;
     env.players[1].attack_timer = 3;
+    env.players[1].last_obs_target_x = env.players[0].x - 1;
+    env.players[1].last_obs_target_y = env.players[0].y;
 
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
@@ -488,6 +490,25 @@ static void test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movemen
     ASSERT_INT_EQ("not-ready live freeze under x",
         opponent_move_dest_x(&env), env.players[0].x);
     ASSERT_INT_EQ("not-ready live freeze under y",
+        opponent_move_dest_y(&env), env.players[0].y);
+}
+
+static void test_nightmare_nh_move_under_uses_current_target_tile(void) {
+    printf("--- Nightmare NH move-under uses current target tile ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 2;
+    env.players[1].attack_timer = 3;
+    env.players[1].last_obs_target_x = env.players[0].x - 1;
+    env.players[1].last_obs_target_y = env.players[0].y;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("stale obs not used for under x",
+        opponent_move_dest_x(&env), env.players[0].x);
+    ASSERT_INT_EQ("stale obs not used for under y",
         opponent_move_dest_y(&env), env.players[0].y);
 }
 
@@ -974,6 +995,7 @@ int main(void) {
     test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen();
     test_nightmare_nh_not_ready_does_not_step_under_on_last_freeze_tick();
     test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movement();
+    test_nightmare_nh_move_under_uses_current_target_tile();
     test_nightmare_nh_full_step_under_persists_until_frozen_target_tile();
     test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
     test_hard_spacing_guard_does_not_move_when_self_frozen();

@@ -3479,13 +3479,21 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
     int dest_x = -1;
     int dest_y = -1;
-    if (!pvp_select_legacy_target_move_destination(
-            env, agent_idx, legacy_combat, cmap, &dest_x, &dest_y)) {
+    Player* self = &env->players[agent_idx];
+    Player* target = &env->players[1 - agent_idx];
+    if (!pvp_select_target_move_destination(
+            self,
+            target->x,
+            target->y,
+            legacy_combat,
+            cmap,
+            &dest_x,
+            &dest_y)) {
         return;
     }
 
     int head_move = pvp_exact_head_move_toward_tile(
-        &env->players[agent_idx], dest_x, dest_y);
+        self, dest_x, dest_y);
     if (head_move != MOVE_NONE) {
         actions[HEAD_MOVE] = head_move;
         return;
