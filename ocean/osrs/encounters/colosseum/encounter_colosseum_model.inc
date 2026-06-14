@@ -576,10 +576,10 @@ static const uint8_t COLO_MODIFIER_MAX_TIER[COLO_NUM_REAL_MODIFIERS] = {
 /** modifiers whose affected entities only spawn before the boss, so the spec
     flags them "not offered after wave 11". 1 = pre-boss-only. */
 static const uint8_t COLO_MODIFIER_PRE_BOSS_ONLY[COLO_NUM_REAL_MODIFIERS] = {
-    [COLO_MOD_DYNAMIC_DUO] = 1,
-    [COLO_MOD_MANTIMAYHEM] = 1,
-    [COLO_MOD_REENTRY]     = 1,
-    [COLO_MOD_RED_FLAG]    = 1,
+    0, 0, 0, 1,
+    0, 1, 0, 1,
+    1, 0, 0, 0,
+    0, 0,
 };
 
 /** B6: while draft_pending the player is FROZEN — movement/attack actions are
