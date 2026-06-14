@@ -2450,6 +2450,9 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
     int can_melee_spec_range = (self->frozen_ticks > 0) ? (dist <= 1) : (dist <= 3);
     float target_hp_pct = (float)target->current_hitpoints / (float)target->base_hitpoints;
+    int should_control_freeze = target->frozen_ticks == 0 &&
+        target->freeze_immunity_ticks == 0 &&
+        (dist == 0 || opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE));
 
     /* Spec checks: melee, ranged, magic */
     uint8_t ranged_spec = find_best_ranged_spec(self);
@@ -2499,7 +2502,7 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     int spec_loadout = LOADOUT_SPEC_MELEE;
 
     if (counter_mage_camp && mage_camp_signal.adjacent && self->frozen_ticks == 0 &&
-            target->frozen_ticks == 0 && target->freeze_immunity_ticks == 0) {
+            should_control_freeze) {
         actual_style = OPP_STYLE_MAGE;
         actual_attack = 0;
     } else if (counter_mage_camp && mage_camp_signal.adjacent && self->frozen_ticks == 0) {
@@ -2516,6 +2519,9 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (should_melee_spec) {
         actual_style = OPP_STYLE_SPEC;
         actual_attack = 3;
+    } else if (should_control_freeze) {
+        actual_style = OPP_STYLE_MAGE;
+        actual_attack = 0;
     } else if (preferred_style >= 0) {
         actual_style = preferred_style;
         actual_attack = (preferred_style == OPP_STYLE_MAGE)
