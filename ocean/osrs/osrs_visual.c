@@ -141,8 +141,55 @@ static void visual_destroy_encounter_context(
     *context = NULL;
 }
 
-static void run_profile(OsrsEnv* env, const char* encounter_name) {
-    printf("Profiling %s for 10 seconds...\n", encounter_name ? encounter_name : "pvp");
+static double osrs_profile_now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+}
+
+#ifdef COLO_PROFILE_ENABLED
+static void osrs_print_colosseum_profile_results(void) {
+    int count = colosseum_env_profile_count();
+    if (count <= 0) return;
+    double values[COLO_PROF_COUNT];
+    int order[COLO_PROF_COUNT];
+    for (int i = 0; i < count; i++) {
+        values[i] = colosseum_env_profile_read_reset_ms(i);
+        order[i] = i;
+    }
+    for (int i = 0; i < count; i++) {
+        int best = i;
+        for (int j = i + 1; j < count; j++) {
+            if (values[order[j]] > values[order[best]]) best = j;
+        }
+        int tmp = order[i];
+        order[i] = order[best];
+        order[best] = tmp;
+    }
+    double total = values[COLO_PROF_C_STEP_TOTAL];
+    printf("Colosseum profile buckets:\n");
+    for (int r = 0; r < count; r++) {
+        int slot = order[r];
+        double pct = total > 0.0 ? 100.0 * values[slot] / total : 0.0;
+        printf("  %-28s %.3f ms  %.2f%%\n",
+            colosseum_env_profile_name(slot), values[slot], pct);
+    }
+}
+#endif
+
+static void run_profile(
+    OsrsEnv* env,
+    const char* encounter_name,
+    int start_wave,
+    int profile_steps
+) {
+    if (profile_steps > 0) {
+        printf("Profiling %s for %d steps...\n",
+            encounter_name ? encounter_name : "pvp",
+            profile_steps);
+    } else {
+        printf("Profiling %s for 10 seconds...\n", encounter_name ? encounter_name : "pvp");
+    }
 
     if (encounter_name) {
         const EncounterDef* edef = encounter_find(encounter_name);
@@ -188,6 +235,14 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
                 env->collision_map = cmap;
             }
         }
+        if (start_wave >= 0 && edef->put_int) {
+            edef->put_int(
+                env->encounter_state,
+                env->encounter_context,
+                "start_wave",
+                start_wave);
+            fprintf(stderr, "start_wave: %d\n", start_wave);
+        }
         edef->reset(env->encounter_state, env->encounter_context, 0);
     } else {
         env->pvp_runtime.use_c_opponent = 1;
@@ -196,22 +251,101 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
         pvp_reset(env);
     }
 
-    clock_t start = clock();
+    const EncounterDef* profile_edef = (const EncounterDef*)env->encounter_def;
+    float* encounter_obs = NULL;
+    if (profile_edef) {
+        encounter_obs = (float*)calloc(
+            (size_t)(profile_edef->obs_size + profile_edef->mask_size),
+            sizeof(float));
+        if (!encounter_obs) abort();
+        profile_edef->write_obs(
+            env->encounter_state,
+            (EncounterContext*)env->encounter_context,
+            encounter_obs);
+        profile_edef->write_mask(
+            env->encounter_state,
+            (EncounterContext*)env->encounter_context,
+            encounter_obs + profile_edef->obs_size);
+#ifdef COLO_PROFILE_ENABLED
+        if (strcmp(profile_edef->name, "colosseum") == 0) {
+            int count = colosseum_env_profile_count();
+            for (int i = 0; i < count; i++)
+                (void)colosseum_env_profile_read_reset_ms(i);
+        }
+#endif
+    }
+
+    double start = osrs_profile_now_seconds();
     double elapsed = 0;
     int total_steps = 0;
     int enc_actions[16] = {0};
 
-    while (elapsed < 10.0) {
+    while ((profile_steps > 0 && total_steps < profile_steps) ||
+           (profile_steps <= 0 && elapsed < 10.0)) {
         if (env->encounter_def && env->encounter_state) {
             const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
+#ifdef COLO_PROFILE_ENABLED
+            int col_profile_this_step = strcmp(edef->name, "colosseum") == 0;
+            int col_prof_enabled = col_profile_this_step ? COLO_PROFILE_ENABLED() : 0;
+            double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+            double col_prof_t0 = col_prof_total_t0;
+#endif
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
+#ifdef COLO_PROFILE_ENABLED
+            COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
+#endif
             edef->step(env->encounter_state, env->encounter_context, enc_actions);
+#ifdef COLO_PROFILE_ENABLED
+            COLO_PROFILE_MARK(COLO_PROF_C_ENCOUNTER_STEP);
+#endif
+            edef->write_obs(
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                encounter_obs);
+#ifdef COLO_PROFILE_ENABLED
+            COLO_PROFILE_MARK(COLO_PROF_C_WRITE_OBS);
+#endif
+            edef->write_mask(
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                encounter_obs + edef->obs_size);
+#ifdef COLO_PROFILE_ENABLED
+            COLO_PROFILE_MARK(COLO_PROF_C_WRITE_MASK);
+#endif
+            (void)edef->get_reward(
+                env->encounter_state,
+                (EncounterContext*)env->encounter_context);
             if (edef->is_terminal(env->encounter_state, env->encounter_context)) {
+#ifdef COLO_PROFILE_ENABLED
+                COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
+                COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
+#endif
                 edef->reset(
                     env->encounter_state, env->encounter_context, (uint32_t)rand());
+                edef->write_obs(
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    encounter_obs);
+                edef->write_mask(
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    encounter_obs + edef->obs_size);
+#ifdef COLO_PROFILE_ENABLED
+                COLO_PROFILE_MARK(COLO_PROF_C_RESET);
+#endif
+            } else {
+#ifdef COLO_PROFILE_ENABLED
+                COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
+#endif
             }
+#ifdef COLO_PROFILE_ENABLED
+            if (col_prof_enabled)
+                COLO_PROFILE_ADD(
+                    COLO_PROF_C_STEP_TOTAL,
+                    COLO_PROFILE_NOW_MS() - col_prof_total_t0);
+#endif
         } else {
             for (int agent = 0; agent < NUM_AGENTS; agent++) {
                 int* actions = env->actions + agent * NUM_ACTION_HEADS;
@@ -227,15 +361,19 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
 
         total_steps++;
         if (total_steps % 1000 == 0) {
-            clock_t now = clock();
-            elapsed = (double)(now - start) / CLOCKS_PER_SEC;
+            elapsed = osrs_profile_now_seconds() - start;
         }
     }
+    elapsed = osrs_profile_now_seconds() - start;
 
     printf("Results:\n");
     printf("  Total steps: %d\n", total_steps);
     printf("  Time: %.3f seconds\n", elapsed);
     printf("  Steps/sec: %.0f\n", total_steps / elapsed);
+#ifdef COLO_PROFILE_ENABLED
+    if (encounter_name && strcmp(encounter_name, "colosseum") == 0)
+        osrs_print_colosseum_profile_results();
+#endif
 
     if (env->encounter_def && env->encounter_state) {
         ((const EncounterDef*)env->encounter_def)->destroy(env->encounter_state);
@@ -244,6 +382,7 @@ static void run_profile(OsrsEnv* env, const char* encounter_name) {
             (const EncounterDef*)env->encounter_def,
             (EncounterContext**)&env->encounter_context);
     }
+    free(encounter_obs);
 }
 
 #ifdef OSRS_VISUAL
@@ -1253,6 +1392,7 @@ int main(int argc, char** argv) {
     int use_profile = 0;
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     int start_wave = -1; /* -1 = default (wave 0) */
+    int profile_steps = 0;
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
@@ -1275,6 +1415,11 @@ int main(int argc, char** argv) {
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
             start_wave = atoi(argv[++i]);
+        else if ((strcmp(argv[i], "--start-wave") == 0 ||
+                  strcmp(argv[i], "--start_wave") == 0) && i + 1 < argc)
+            start_wave = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--profile-steps") == 0 && i + 1 < argc)
+            profile_steps = atoi(argv[++i]);
     }
 
 #ifdef __EMSCRIPTEN__
@@ -1307,7 +1452,7 @@ int main(int argc, char** argv) {
         env.ocean_io.agent_rewards = env.rewards;
         env.ocean_io.agent_terminals = env.terminals;
 
-        run_profile(&env, encounter_name);
+        run_profile(&env, encounter_name, start_wave, profile_steps);
 
         free(env.observations);
         free(env.actions);

@@ -695,12 +695,19 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
  * checked by the step death gate.
  */
 static void col_modifiers_tick(ColosseumState* s) {
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     col_mod_tick_bees(s);
     col_mod_tick_solarflare(s);
     col_mod_tick_molten_pools(s);
     col_mod_tick_venom(s);
     col_mod_tick_poison(s);
     col_mod_tick_totems(s);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_MODIFIERS_HAZARDS);
+#endif
 }
 
 /** per-wave-spawn modifier sync: reset Doom stacks, drop E10 wave-end pools,

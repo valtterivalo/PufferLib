@@ -378,6 +378,10 @@ static int col_manticore_orb_max_hit(AttackStyle style) {
     Mantimayhem T1 fires a second projectile of the same orb; T2 inflicts venom
     on an unprotected successful hit. */
 static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpcStats* stats) {
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     ColoNPC* npc = &s->npcs[idx];
     ColoManticoreState* mc = colo_npc_manticore(npc);
     AttackStyle style = mc->orb_style[mc->cycle_step];
@@ -417,6 +421,9 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
            — the 7-tick recharge + 3 orb ticks of the researched cycle. */
         npc->attack_timer = stats->attack_speed - 2;
     }
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_MANTICORE_BARRAGE);
+#endif
 }
 
 /** advance a manticore's in-flight barrage (fires the next queued orb). */
@@ -586,7 +593,16 @@ static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* np
  * as ticks-until-window so the obs slot stays meaningful.
  */
 static void col_warband_attack_phase(ColosseumState* s) {
-    if (s->warband_cycle_anchor < 0) return;
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
+    if (s->warband_cycle_anchor < 0) {
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_MARK(COLO_PROF_STEP_WARBAND_ATTACK);
+#endif
+        return;
+    }
     int phase = (s->tick - s->warband_cycle_anchor) % COLO_WARBAND_CYCLE_TICKS;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
@@ -606,6 +622,9 @@ static void col_warband_attack_phase(ColosseumState* s) {
         else
             col_npc_queue_projectile(s, i, stats, stats->default_style, stats->max_hit);
     }
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_WARBAND_ATTACK);
+#endif
 }
 
 /**
@@ -620,7 +639,15 @@ static void col_sol_tick(ColosseumState* s, ColosseumContext* ctx) {
 
 /** the NPC update loop, mirroring inferno's tick_npcs. */
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+    double col_prof_t0 = col_prof_total_t0;
+#endif
     col_sol_tick(s, ctx);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_SOL_BOSS);
+#endif
 
     /* resolve in-flight javelin skyfalls before movement: the marked tile lands on
        whatever tile the player occupied this tick (dodged if they have stepped off). */
@@ -629,6 +656,9 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
         if (col_npc_is_live_target(npc) && npc->type == COLO_JAVELIN_COLOSSUS)
             col_npc_resolve_javelin_skyfall(s, ctx, i);
     }
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_JAVELIN_SKYFALL);
+#endif
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
@@ -641,7 +671,27 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
         /* hazard entities are driven by the modifier bookkeeping, not the AI. */
         if (col_type_is_hazard_entity(npc->type)) continue;
 
+#ifdef COLO_PROFILE_ENABLED
+        double col_prof_call_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
         col_npc_move_ctx(s, ctx, i);
+#ifdef COLO_PROFILE_ENABLED
+        if (col_prof_enabled)
+            COLO_PROFILE_ADD(
+                COLO_PROF_STEP_NPC_MOVEMENT,
+                COLO_PROFILE_NOW_MS() - col_prof_call_t0);
+        col_prof_call_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
         col_npc_attack_ctx(s, ctx, i);
+#ifdef COLO_PROFILE_ENABLED
+        if (col_prof_enabled)
+            COLO_PROFILE_ADD(
+                COLO_PROF_STEP_NPC_ATTACK,
+                COLO_PROFILE_NOW_MS() - col_prof_call_t0);
+#endif
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_prof_enabled)
+        COLO_PROFILE_ADD(COLO_PROF_STEP_NPC_TOTAL, COLO_PROFILE_NOW_MS() - col_prof_total_t0);
+#endif
 }

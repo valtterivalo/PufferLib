@@ -94,9 +94,16 @@ static int col_npc_path_step(ColosseumState* s, int* x, int* y, int size, int tx
     if (ty > COLO_ARENA_MAX_Y) ty = COLO_ARENA_MAX_Y;
     if (*x == tx && *y == ty) return 0;
     ColoNpcPathCtx pc = { s, size };
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     PathResult pr = pathfind_step_arena(NULL, 0, *x, *y, tx, ty,
         col_npc_path_blocked, &pc,
         COLO_ARENA_MIN_X, COLO_ARENA_MIN_Y, COLO_ARENA_WIDTH, COLO_ARENA_HEIGHT);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_NPC_PATHFINDING);
+#endif
     if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) return 0;
     *x += pr.next_dx;
     *y += pr.next_dy;

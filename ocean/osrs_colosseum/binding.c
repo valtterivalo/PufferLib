@@ -25,6 +25,8 @@
 
 #define COLOSSEUM_ENV_EXPORT __attribute__((visibility("default")))
 
+#include "colosseum_profile.h"
+
 /* encounter headers + render.h have many static helpers only used by the
    standalone viewer (not c_render) — suppress unused-function noise. */
 #pragma GCC diagnostic push
@@ -89,6 +91,9 @@ void c_reset(Env* env) {
 }
 
 void c_step(Env* env) {
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+    double col_prof_t0 = col_prof_total_t0;
     RenderClient* render_client = (RenderClient*)env->render_env.client;
     int used_human_commands = 0;
     if (render_client && render_client->human_input.enabled &&
@@ -101,17 +106,23 @@ void c_step(Env* env) {
             env->acts_staging[i] = (int)env->actions[i];
     }
 
+    COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
+
     if (!used_human_commands)
         ENCOUNTER_COLOSSEUM.step(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), env->acts_staging);
+    COLO_PROFILE_MARK(COLO_PROF_C_ENCOUNTER_STEP);
 
     float* obs = (float*)env->observations;
     ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
+    COLO_PROFILE_MARK(COLO_PROF_C_WRITE_OBS);
     ENCOUNTER_COLOSSEUM.write_mask(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs + COLO_NUM_OBS);
+    COLO_PROFILE_MARK(COLO_PROF_C_WRITE_MASK);
 
     env->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_term = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)is_term;
+    COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
 
     if (is_term) {
         ColosseumState* s = &env->state;
@@ -134,12 +145,16 @@ void c_step(Env* env) {
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
             }
         }
+        COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
         ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
         ENCOUNTER_COLOSSEUM.write_mask(
             COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs + COLO_NUM_OBS);
         env->pending_render_reset = 1;
+        COLO_PROFILE_MARK(COLO_PROF_C_RESET);
     }
+    if (col_prof_enabled)
+        COLO_PROFILE_ADD(COLO_PROF_C_STEP_TOTAL, COLO_PROFILE_NOW_MS() - col_prof_total_t0);
 }
 
 void c_close(Env* env) {

@@ -511,7 +511,14 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     col_refresh_current_obs_slots_ctx(s, ctx);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_REFRESH_SLOTS);
+#endif
     memset(obs, 0, COLO_NUM_OBS * sizeof(float));
     int i = 0;
     int px = s->player.x, py = s->player.y;
@@ -564,6 +571,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = (s->spec_armed_kind == 1) ? 1.0f : 0.0f;
     obs[i++] = (s->spec_armed_kind == 2) ? 1.0f : 0.0f;
     assert(i == COLO_OBS_AFTER_PLAYER);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);
+#endif
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {
@@ -575,6 +585,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         col_write_npc_slot(s, &s->npcs[npc_idx], obs, &i);
     }
     assert(i == COLO_OBS_AFTER_NPCS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_NPC_SLOTS);
+#endif
 
     /* modifiers: per-modifier active flag + tier, then draft state */
     for (int m = 0; m < COLO_NUM_MODIFIERS; m++) {
@@ -589,6 +602,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     }
     col_write_modifier_hazards(s, obs, &i);
     assert(i == COLO_OBS_AFTER_MODS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_MODIFIERS);
+#endif
 
     /* wave block (4). npcs_remaining tracks wave progress, so hazard entities
        (totems/bees — visible in the per-NPC slots) are excluded. */
@@ -605,6 +621,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     /* boss block (51) */
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);
+#endif
 
     /* pending-hit forecast on the player (soonest-landing first) */
     int order[ENCOUNTER_MAX_PENDING_HITS];
@@ -624,6 +643,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         }
     }
     assert(i == COLO_OBS_AFTER_PENDING_HITS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_PENDING_HITS);
+#endif
 
     if (ctx->config.step_out_forecast_obs_enabled) {
         ColoStepOutForecast forecast;
@@ -659,6 +681,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
     }
     assert(i == COLO_OBS_AFTER_STEP_OUT_FORECAST);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
+#endif
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);
