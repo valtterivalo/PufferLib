@@ -22,16 +22,19 @@ static int col_los_tile_blocked(void* ctx, int x, int y) {
 }
 
 /**
- * B1: centre-to-centre tile line of sight over the static mask. Delegates to the
- * shared Q16 ray walk (osrs_los_tile_ray_clear) so the player attack gate and the
- * NPC attack gate resolve byte-identical sight lines over one implementation; walls
- * and pillars block fully. Checks every tile the ray enters including the
- * destination; the SOURCE tile is exempt so a perimeter emitter (the wave-12
- * crystal) can fire out of a blocked corner.
+ * B1: centre-to-centre tile line of sight over the static mask. In-bounds arena
+ * endpoints use a directional bitset built once from osrs_los_tile_ray_clear.
+ * Out-of-bounds endpoints use the same slow ray directly. Checks every tile the
+ * ray enters including the destination. The SOURCE tile is exempt so a perimeter
+ * emitter can fire out of a blocked corner.
  */
 static int col_tiles_have_los(const ColosseumState* s, int x0, int y0, int x1, int y1) {
-    OsrsLosQuery query = osrs_los_tile(col_los_tile_blocked, (void*)s);
-    return osrs_los_tile_ray_clear(&query, x0, y0, x1, y1);
+    (void)s;
+    if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
+    if (col_static_los_endpoint_in_bounds(x0, y0) &&
+            col_static_los_endpoint_in_bounds(x1, y1))
+        return col_static_los_get(x0, y0, x1, y1);
+    return col_tiles_have_los_reference_slowpath(x0, y0, x1, y1);
 }
 
 /** Shared player LoS source for the Colosseum static tile mask. */
@@ -56,10 +59,11 @@ static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc
     (A7+B1), the wave-12 boss clamp, and other NPC footprints. */
 static int col_npc_blocked(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
+    if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
+    int sol_clamp_active = col_sol_clamp_active(s);
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
-            if (col_static_blocked(x + dx, y + dy)) return 1;
-            if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x + dx, y + dy)) return 1;
+            if (sol_clamp_active && !col_in_boss_arena(s, x + dx, y + dy)) return 1;
             int gx, gy;
             if (!col_grid_index(x + dx, y + dy, &gx, &gy)) return 1;
             if (s->npc_collision_flags[gx][gy]) return 1;
@@ -71,17 +75,31 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
 typedef struct {
     ColosseumState* s;
     int size;
+    uint8_t blocked_seen[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
+    uint8_t blocked_value[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
 } ColoNpcPathCtx;
+
+static int col_npc_path_blocked_uncached(ColoNpcPathCtx* pc, int x, int y) {
+    ColosseumState* s = pc->s;
+    if (s->player.x >= x && s->player.x < x + pc->size &&
+        s->player.y >= y && s->player.y < y + pc->size) return 1;
+    return col_npc_blocked(s, x, y, pc->size);
+}
 
 /** BFS blocked predicate for NPC routefinding (B2(e)+A30): a size x size
     footprint at SW (x, y) vs the static mask, the boss clamp, other NPC bodies,
     and the player's tile. Caller lifts the moving NPC's own footprint stamp. */
 static int col_npc_path_blocked(void* ctx, int x, int y) {
     ColoNpcPathCtx* pc = (ColoNpcPathCtx*)ctx;
-    ColosseumState* s = pc->s;
-    if (s->player.x >= x && s->player.x < x + pc->size &&
-        s->player.y >= y && s->player.y < y + pc->size) return 1;
-    return col_npc_blocked(s, x, y, pc->size);
+    int gx, gy;
+    if (!col_grid_index(x, y, &gx, &gy))
+        return col_npc_path_blocked_uncached(pc, x, y);
+    if (!pc->blocked_seen[gx][gy]) {
+        pc->blocked_seen[gx][gy] = 1;
+        pc->blocked_value[gx][gy] =
+            (uint8_t)col_npc_path_blocked_uncached(pc, x, y);
+    }
+    return pc->blocked_value[gx][gy];
 }
 
 /** one routefinding step (D3) of a size x size NPC toward SW-anchor dest over
