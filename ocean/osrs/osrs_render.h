@@ -30,6 +30,8 @@
 #include "osrs_objects.h"
 #include "osrs_gui.h"
 #include "osrs_human_input.h"
+#include <ctype.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -313,6 +315,9 @@ typedef struct {
     float dest_y;
     int visual_moving;
     int visual_running;
+    int visual_explicit_running;
+    int visual_backlog;
+    float visual_effective_speed;
     int step_tracker;
     float yaw;
     float target_yaw;
@@ -512,6 +517,9 @@ typedef struct RenderClient {
     float dest_x[MAX_RENDER_ENTITIES], dest_y[MAX_RENDER_ENTITIES];
     int visual_moving[MAX_RENDER_ENTITIES];
     int visual_running[MAX_RENDER_ENTITIES];
+    int visual_explicit_running[MAX_RENDER_ENTITIES];
+    int visual_backlog[MAX_RENDER_ENTITIES];
+    float visual_effective_speed[MAX_RENDER_ENTITIES];
     int step_tracker[MAX_RENDER_ENTITIES];
     float yaw[MAX_RENDER_ENTITIES];
     float target_yaw[MAX_RENDER_ENTITIES];
@@ -845,6 +853,9 @@ static void render_lab_snap_entity_visual(RenderClient* rc, int entity_idx) {
     if (entity_idx < 0 || entity_idx >= rc->entity_count) return;
     render_seed_entity_visual_slot(rc, entity_idx);
     rc->visual_moving[entity_idx] = 0;
+    rc->visual_running[entity_idx] = 0;
+    rc->visual_backlog[entity_idx] = 0;
+    rc->visual_effective_speed[entity_idx] = 0.0f;
     rc->step_tracker[entity_idx] = 0;
 }
 
@@ -852,6 +863,60 @@ static void render_lab_snap_all_visuals(RenderClient* rc) {
     for (int i = 0; i < rc->entity_count; i++)
         render_lab_snap_entity_visual(rc, i);
     rc->prev_entity_count = rc->entity_count;
+}
+
+static int render_lab_line_command_is(const char* line, const char* command) {
+    while (*line && isspace((unsigned char)*line)) line++;
+    size_t command_len = strlen(command);
+    return strncmp(line, command, command_len) == 0 &&
+        (line[command_len] == '\0' ||
+            isspace((unsigned char)line[command_len]));
+}
+
+static int render_lab_line_slot_value(const char* line, int* slot) {
+    const char* token = strstr(line, "slot=");
+    if (!token) return 0;
+    char* end = NULL;
+    long value = strtol(token + 5, &end, 10);
+    if (end == token + 5 || value < 0 || value > INT_MAX) return 0;
+    *slot = (int)value;
+    return 1;
+}
+
+static int render_npc_entity_idx_for_slot(RenderClient* rc, int slot) {
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].entity_type == ENTITY_NPC &&
+                rc->entities[i].npc_slot == slot)
+            return i;
+    }
+    return -1;
+}
+
+static void render_lab_snap_line_visuals(RenderClient* rc, const char* line) {
+    if (render_lab_line_command_is(line, "player") ||
+            render_lab_line_command_is(line, "set_player")) {
+        render_lab_snap_entity_visual(rc, 0);
+        return;
+    }
+    if (render_lab_line_command_is(line, "move_npc")) {
+        int slot = -1;
+        if (render_lab_line_slot_value(line, &slot)) {
+            int entity_idx = render_npc_entity_idx_for_slot(rc, slot);
+            if (entity_idx >= 0) {
+                render_lab_snap_entity_visual(rc, entity_idx);
+                return;
+            }
+        }
+    }
+    if (render_lab_line_command_is(line, "npc") ||
+            render_lab_line_command_is(line, "spawn_npc") ||
+            render_lab_line_command_is(line, "reset") ||
+            render_lab_line_command_is(line, "wave") ||
+            render_lab_line_command_is(line, "spawn_wave") ||
+            render_lab_line_command_is(line, "delete_npc") ||
+            render_lab_line_command_is(line, "clear_npcs")) {
+        render_lab_snap_all_visuals(rc);
+    }
 }
 
 /** the active encounter def iff it supports the scenario lab (a command hook plus
@@ -888,7 +953,7 @@ static void render_lab_apply_line(RenderClient* rc, OsrsEnv* env, const char* li
         }
         if (!still_active) rc->lab_selected_npc_slot = -1;
     }
-    render_lab_snap_all_visuals(rc);
+    render_lab_snap_line_visuals(rc, line);
 }
 
 static void render_lab_clear_entry_snapshot(RenderClient* rc) {
@@ -3009,6 +3074,10 @@ static int render_default_secondary_for_entity(const RenderEntity* entity) {
     return nm ? (int)nm->idle_anim : -1;
 }
 
+static int render_entity_is_visible(const RenderEntity* entity) {
+    return entity->entity_type != ENTITY_NPC || entity->npc_visible;
+}
+
 static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     rc->anim[i].primary_seq_id = -1;
     rc->anim[i].primary_frame_idx = 0;
@@ -3028,6 +3097,9 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     rc->step_tracker[i] = 0;
     rc->visual_moving[i] = 0;
     rc->visual_running[i] = 0;
+    rc->visual_explicit_running[i] = 0;
+    rc->visual_backlog[i] = 0;
+    rc->visual_effective_speed[i] = 0.0f;
     rc->facing_opponent[i] = 0;
     rc->yaw[i] = 0.0f;
     rc->target_yaw[i] = 0.0f;
@@ -3053,6 +3125,9 @@ static RenderVisualSlotSnapshot render_snapshot_entity_visual_slot(
     out.dest_y = rc->dest_y[i];
     out.visual_moving = rc->visual_moving[i];
     out.visual_running = rc->visual_running[i];
+    out.visual_explicit_running = rc->visual_explicit_running[i];
+    out.visual_backlog = rc->visual_backlog[i];
+    out.visual_effective_speed = rc->visual_effective_speed[i];
     out.step_tracker = rc->step_tracker[i];
     out.yaw = rc->yaw[i];
     out.target_yaw = rc->target_yaw[i];
@@ -3074,6 +3149,9 @@ static void render_restore_entity_visual_slot(
     rc->dest_y[i] = snapshot->dest_y;
     rc->visual_moving[i] = snapshot->visual_moving;
     rc->visual_running[i] = snapshot->visual_running;
+    rc->visual_explicit_running[i] = snapshot->visual_explicit_running;
+    rc->visual_backlog[i] = snapshot->visual_backlog;
+    rc->visual_effective_speed[i] = snapshot->visual_effective_speed;
     rc->step_tracker[i] = snapshot->step_tracker;
     rc->yaw[i] = snapshot->yaw;
     rc->target_yaw[i] = snapshot->target_yaw;
@@ -3088,6 +3166,10 @@ static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
     rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
     rc->dest_x[i] = rc->sub_x[i];
     rc->dest_y[i] = rc->sub_y[i];
+    rc->visual_explicit_running[i] = rc->entities[i].is_running;
+    rc->visual_backlog[i] = 0;
+    rc->visual_effective_speed[i] = 0.0f;
+    rc->visual_running[i] = 0;
     rc->anim[i].secondary_seq_id = render_default_secondary_for_entity(&rc->entities[i]);
     rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
 }
@@ -3133,13 +3215,16 @@ static void render_pre_tick(RenderClient* rc, OsrsEnv* env) {
  * - positions stored as sub-tile coords (128 units per tile)
  * - each client frame, visual position moves toward destination at fixed speed
  * - walk = 4 sub-units/frame, run = 8 sub-units/frame (at 50 FPS client ticks)
- * - if distance > 256 sub-units (2 tiles), snap instantly (teleport)
+ * - new identity, visible appearance, and explicit teleports seed instantly
+ * - persistent visible identities catch up without distance-based snapping
  * - animation stalls (walkFlag=0) pause movement, then catch up at double speed
  */
 static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
     RenderEntity previous_entities[MAX_RENDER_ENTITIES];
     RenderVisualSlotSnapshot previous_visuals[MAX_RENDER_ENTITIES];
     int previous_used[MAX_RENDER_ENTITIES] = {0};
+    int new_identity[MAX_RENDER_ENTITIES] = {0};
+    int became_visible[MAX_RENDER_ENTITIES] = {0};
     int previous_count = rc->entity_count;
     memcpy(previous_entities, rc->entities,
         (size_t)previous_count * sizeof(previous_entities[0]));
@@ -3153,11 +3238,15 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             previous_entities, previous_count, previous_used, &rc->entities[i]);
         if (previous_idx >= 0) {
             previous_used[previous_idx] = 1;
+            became_visible[i] =
+                render_entity_is_visible(&rc->entities[i]) &&
+                !render_entity_is_visible(&previous_entities[previous_idx]);
             if (previous_idx != i) {
                 render_restore_entity_visual_slot(rc, i, &previous_visuals[previous_idx]);
                 rc->composites[i].needs_rebuild = 1;
             }
         } else {
+            new_identity[i] = 1;
             render_reset_entity_visual_slot(rc, i);
         }
         rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
@@ -3177,22 +3266,12 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         int new_dest_x = p->x * 128 + size * 64;
         int new_dest_y = p->y * 128 + size * 64;
 
-        /* NPC teleport: snap position when entity appears far from tracked position.
-           this handles Zulrah dive→surface, new NPC spawns, and entity slot reuse.
-           snap if distance > 2 tiles (matching deob client Canvas.method334 which
-           snaps at >256 sub-units = 2 tiles). the 1-tile threshold was too aggressive
-           and caused snapping during normal attack-anim stall catch-up. */
-        if (p->entity_type == ENTITY_NPC && p->npc_visible) {
-            /* distance to destination in tiles — uses dest center, not SW anchor,
-               so large NPCs (size 5 shield) don't false-trigger the snap. */
-            float tile_dx = fabsf(rc->sub_x[i] - new_dest_x) / 128.0f;
-            float tile_dy = fabsf(rc->sub_y[i] - new_dest_y) / 128.0f;
-            if (tile_dx > 2.0f || tile_dy > 2.0f || (rc->sub_x[i] == 0.0f && rc->sub_y[i] == 0.0f)) {
-                rc->sub_x[i] = new_dest_x;
-                rc->sub_y[i] = new_dest_y;
-                rc->dest_x[i] = new_dest_x;
-                rc->dest_y[i] = new_dest_y;
-            }
+        if (osrs_render_should_seed_visual_position(
+                render_entity_is_visible(p),
+                new_identity[i],
+                became_visible[i],
+                p->render_movement_kind)) {
+            render_seed_entity_visual_slot(rc, i);
         }
 
         /* detect if player moved this tick (destination changed) */
@@ -3206,10 +3285,11 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         rc->dest_x[i] = new_dest_x;
         rc->dest_y[i] = new_dest_y;
 
-        /* latch walk/run state from the game — this drives the secondary
-           animation selection in the client-tick loop. the game's is_running
-           flag tells us whether the player was running this tick. */
-        rc->visual_running[i] = p->is_running;
+        /* latch explicit run state from the game. effective speed drives pose
+           selection in the client-tick loop. */
+        rc->visual_explicit_running[i] = p->is_running;
+        rc->visual_backlog[i] = osrs_render_visual_backlog(
+            rc->sub_x[i], rc->sub_y[i], (float)new_dest_x, (float)new_dest_y);
 
         RenderEntityFacingMode facing_mode = render_entity_select_facing_mode(p, moved);
         if (facing_mode == RENDER_ENTITY_FACE_ATTACK_TARGET) {
@@ -3494,15 +3574,23 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
        faithful to Entity.nextStep() (Client.java:13074-13213).
 
        when a non-melee animation is playing (walkFlag==0), sub-tile
-       movement stalls. stepTracker accumulates stalled frames, then
-       drives 2x catch-up speed once the animation ends. */
+       movement stalls. stepTracker accumulates stalled frames, then raises
+       speed when the visible position has backlog to drain. */
     float dx = rc->dest_x[player_idx] - rc->sub_x[player_idx];
     float dy = rc->dest_y[player_idx] - rc->sub_y[player_idx];
 
     if (dx == 0.0f && dy == 0.0f) {
         rc->visual_moving[player_idx] = 0;
+        rc->visual_running[player_idx] = 0;
+        rc->visual_backlog[player_idx] = 0;
+        rc->visual_effective_speed[player_idx] = 0.0f;
         rc->step_tracker[player_idx] = 0;
     } else {
+        rc->visual_backlog[player_idx] = osrs_render_visual_backlog(
+            rc->sub_x[player_idx],
+            rc->sub_y[player_idx],
+            rc->dest_x[player_idx],
+            rc->dest_y[player_idx]);
         int stall = 0;
         if (rc->anim[player_idx].primary_seq_id >= 0 &&
             rc->anim[player_idx].primary_loops == 0) {
@@ -3514,15 +3602,27 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         if (stall) {
             rc->step_tracker[player_idx]++;
             rc->visual_moving[player_idx] = 0;
+            rc->visual_running[player_idx] = 0;
+            rc->visual_effective_speed[player_idx] = 0.0f;
         } else {
             rc->visual_moving[player_idx] = 1;
 
-            float speed = osrs_render_walk_speed_one_client_tick(
-                rc->visual_running[player_idx], &rc->step_tracker[player_idx]);
+            float speed = osrs_render_effective_speed_one_client_tick(
+                rc->visual_explicit_running[player_idx],
+                rc->visual_backlog[player_idx],
+                &rc->step_tracker[player_idx]);
+            rc->visual_effective_speed[player_idx] = speed;
+            rc->visual_running[player_idx] =
+                osrs_render_speed_uses_run_pose(speed);
             rc->sub_x[player_idx] = osrs_render_advance_axis_toward(
                 rc->sub_x[player_idx], rc->dest_x[player_idx], speed);
             rc->sub_y[player_idx] = osrs_render_advance_axis_toward(
                 rc->sub_y[player_idx], rc->dest_y[player_idx], speed);
+            rc->visual_backlog[player_idx] = osrs_render_visual_backlog(
+                rc->sub_x[player_idx],
+                rc->sub_y[player_idx],
+                rc->dest_x[player_idx],
+                rc->dest_y[player_idx]);
 
             /* when walking (not facing opponent), update target_yaw to movement
                direction each client tick, matching nextStep's turnDirection
@@ -3590,9 +3690,17 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
         const NpcModelMapping* nm = npc_model_lookup(
             (uint16_t)rc->entities[player_idx].npc_def_id);
         if (nm) {
-            new_secondary = rc->visual_moving[player_idx]
-                ? (nm->walk_anim != 65535 ? (int)nm->walk_anim : (int)nm->idle_anim)
-                : (int)nm->idle_anim;
+            if (!rc->visual_moving[player_idx]) {
+                new_secondary = (int)nm->idle_anim;
+            } else if (osrs_render_speed_uses_run_pose(
+                    rc->visual_effective_speed[player_idx]) &&
+                    nm->run_anim != 65535) {
+                new_secondary = (int)nm->run_anim;
+            } else {
+                new_secondary = nm->walk_anim != 65535
+                    ? (int)nm->walk_anim
+                    : (int)nm->idle_anim;
+            }
         } else {
             new_secondary = -1;
         }
@@ -4065,15 +4173,15 @@ static int render_weapon_anim_or_fallback(
  * Determine the secondary (pose) animation based on VISUAL movement state.
  *
  * In the real client (nextStep), this is set based on the entity's sub-tile
- * movement: idle when not moving, walk or run based on moveSpeed. We use the
- * visual_moving/visual_running flags set by the client-tick loop.
+ * movement: idle when not moving, walk or run based on moveSpeed. We use
+ * visual_moving plus the effective speed from the client-tick loop.
  */
 static int render_select_secondary(RenderClient* rc, int player_idx) {
     const RenderEntity* p = &rc->entities[player_idx];
     if (!rc->visual_moving[player_idx]) {
         return render_weapon_anim_or_fallback(rc, p, RENDER_ITEM_READY_ANIM, ANIM_SEQ_IDLE);
     }
-    if (rc->visual_running[player_idx]) {
+    if (osrs_render_speed_uses_run_pose(rc->visual_effective_speed[player_idx])) {
         return render_weapon_anim_or_fallback(rc, p, RENDER_ITEM_RUN_ANIM, ANIM_SEQ_RUN);
     }
     return render_weapon_anim_or_fallback(rc, p, RENDER_ITEM_WALK_ANIM, ANIM_SEQ_WALK);

@@ -20,6 +20,7 @@ typedef struct {
     int y;
     int dest_x;
     int dest_y;
+    RenderMovementKind render_movement_kind;
     int current_hitpoints;
     int base_hitpoints;
     AttackStyle attack_style_this_tick;
@@ -118,6 +119,7 @@ static inline void osrs_render_entity_from_npc_spec(
     out->y = spec->y;
     out->dest_x = spec->dest_x;
     out->dest_y = spec->dest_y;
+    out->render_movement_kind = spec->render_movement_kind;
     out->current_hitpoints = spec->current_hitpoints;
     out->base_hitpoints = spec->base_hitpoints;
     out->attack_style_this_tick = spec->attack_style_this_tick;

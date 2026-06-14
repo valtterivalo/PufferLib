@@ -865,6 +865,11 @@ static void inf_fill_render_entities_ctx(
             npc_anim_id = inf_npc_attack_anim_id(npc, nm);
         }
 
+        RenderMovementKind render_movement_kind =
+            (npc->type == INF_NPC_MELEER && npc->dig_attack_delay == 6)
+                ? RENDER_MOVEMENT_TELEPORT
+                : RENDER_MOVEMENT_NORMAL;
+
         int dest_x = npc->target_x;
         int dest_y = npc->target_y;
         if (npc->type == INF_NPC_NIBBLER) {
@@ -901,6 +906,7 @@ static void inf_fill_render_entities_ctx(
             .y = npc->y,
             .dest_x = dest_x,
             .dest_y = dest_y,
+            .render_movement_kind = render_movement_kind,
             .current_hitpoints = npc->hp,
             .base_hitpoints = npc->max_hp,
             .attack_style_this_tick = npc->attacked_this_tick

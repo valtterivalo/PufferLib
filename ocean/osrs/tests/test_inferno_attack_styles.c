@@ -5409,6 +5409,130 @@ static void test_sub_x_run_arrives_at_two_tiles_in_one_game_tick(void) {
         reached, 1);
 }
 
+static void test_render_motion_catchup_speed_scales_with_backlog(void) {
+    printf("--- render motion catch-up speed scales with backlog ---\n");
+
+    float base = osrs_render_base_walk_speed_one_client_tick();
+    int stall_debt = 0;
+
+    ASSERT_FLOAT_NEAR("backlog two stays walk speed",
+        osrs_render_effective_speed_one_client_tick(0, 2, &stall_debt),
+        base,
+        1e-6f);
+    ASSERT_FLOAT_NEAR("backlog three uses one and a half walk speed",
+        osrs_render_effective_speed_one_client_tick(0, 3, &stall_debt),
+        base * 1.5f,
+        1e-6f);
+    ASSERT_FLOAT_NEAR("backlog four uses double walk speed",
+        osrs_render_effective_speed_one_client_tick(0, 4, &stall_debt),
+        base * 2.0f,
+        1e-6f);
+
+    stall_debt = 3;
+    ASSERT_FLOAT_NEAR("stall debt with backlog drains at double speed",
+        osrs_render_effective_speed_one_client_tick(0, 2, &stall_debt),
+        base * 2.0f,
+        1e-6f);
+    ASSERT_INT_EQ("stall debt drains one client tick", stall_debt, 2);
+
+    stall_debt = 3;
+    ASSERT_FLOAT_NEAR("single-waypoint backlog does not spend stall debt",
+        osrs_render_effective_speed_one_client_tick(0, 1, &stall_debt),
+        base,
+        1e-6f);
+    ASSERT_INT_EQ("single-waypoint backlog keeps stall debt", stall_debt, 3);
+
+    ASSERT_FLOAT_NEAR("explicit run doubles final catch-up speed",
+        osrs_render_effective_speed_one_client_tick(1, 3, NULL),
+        base * 3.0f,
+        1e-6f);
+}
+
+static void test_render_motion_stalled_three_tile_gap_uses_run_threshold(void) {
+    printf("--- render motion stalled three-tile gap uses run threshold ---\n");
+
+    float base = osrs_render_base_walk_speed_one_client_tick();
+    float dest = 3.0f * OSRS_RENDER_SUB_UNITS_PER_TILE;
+    int backlog = osrs_render_visual_backlog(0.0f, 0.0f, dest, 0.0f);
+    int stall_debt = 5;
+    float speed = osrs_render_effective_speed_one_client_tick(
+        0, backlog, &stall_debt);
+
+    ASSERT_INT_EQ("three-tile visual gap has backlog three", backlog, 3);
+    ASSERT_FLOAT_NEAR("stalled three-tile gap uses double walk catch-up",
+        speed, base * 2.0f, 1e-6f);
+    ASSERT_INT_EQ("stalled three-tile gap drains stall debt", stall_debt, 4);
+    ASSERT_INT_EQ("double walk catch-up selects run threshold",
+        osrs_render_speed_uses_run_pose(speed), 1);
+    ASSERT_INT_EQ("one and a half walk catch-up stays below run threshold",
+        osrs_render_speed_uses_run_pose(base * 1.5f), 0);
+}
+
+static void test_render_motion_seed_classification_uses_explicit_teleport(void) {
+    printf("--- render motion seed classification uses explicit teleport ---\n");
+
+    int backlog = osrs_render_visual_backlog(
+        0.0f, 0.0f, 3.0f * OSRS_RENDER_SUB_UNITS_PER_TILE, 0.0f);
+
+    ASSERT_INT_EQ("test gap is more than two visual waypoints", backlog, 3);
+    ASSERT_INT_EQ("persistent normal entity does not seed from distance",
+        osrs_render_should_seed_visual_position(
+            1, 0, 0, RENDER_MOVEMENT_NORMAL),
+        0);
+    ASSERT_INT_EQ("explicit teleport seeds visual position",
+        osrs_render_should_seed_visual_position(
+            1, 0, 0, RENDER_MOVEMENT_TELEPORT),
+        1);
+    ASSERT_INT_EQ("new identity seeds visual position",
+        osrs_render_should_seed_visual_position(
+            1, 1, 0, RENDER_MOVEMENT_NORMAL),
+        1);
+    ASSERT_INT_EQ("invisible to visible appearance seeds visual position",
+        osrs_render_should_seed_visual_position(
+            1, 0, 1, RENDER_MOVEMENT_NORMAL),
+        1);
+}
+
+static void test_render_post_tick_removed_distance_snap_branch(void) {
+    printf("--- render post tick removed distance snap branch ---\n");
+
+    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
+        "render post tick does not snap from tile distance",
+        "ocean/osrs/osrs_render.h",
+        "static void render_post_tick",
+        "static void render_client_tick",
+        "tile_dx > 2.0f");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "render post tick seeds only by movement kind classification",
+        "ocean/osrs/osrs_render.h",
+        "static void render_post_tick",
+        "static void render_client_tick",
+        "osrs_render_should_seed_visual_position");
+}
+
+static void test_render_bridge_marks_genuine_teleports(void) {
+    printf("--- render bridge marks genuine teleports ---\n");
+
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "inferno meleer dig-up marks render teleport",
+        "ocean/osrs/encounters/inferno/encounter_inferno_obs_mask.inc",
+        "RenderMovementKind render_movement_kind",
+        "RenderEntity* re = &out[n++];",
+        "RENDER_MOVEMENT_TELEPORT");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "zulrah surface marks render teleport",
+        "ocean/osrs/encounters/encounter_zulrah.h",
+        "static void zul_fill_render_entities",
+        "for (int i = 0; i < ZUL_MAX_SNAKELINGS",
+        "RENDER_MOVEMENT_TELEPORT");
+    ASSERT_SOURCE_BLOCK_CONTAINS(
+        "lab move command snaps only render visual state",
+        "ocean/osrs/osrs_render.h",
+        "static void render_lab_snap_line_visuals",
+        "static const EncounterDef* render_lab_def",
+        "render_lab_line_command_is(line, \"move_npc\")");
+}
+
 static void test_entity_model_ground_lift_keeps_floor_planes_above_terrain(void) {
     printf("--- entity model ground lift keeps floor planes above terrain ---\n");
 
@@ -9673,6 +9797,11 @@ int main(void) {
     test_render_identity_single_player_unchanged();
     test_sub_x_walk_arrives_at_dest_in_one_game_tick();
     test_sub_x_run_arrives_at_two_tiles_in_one_game_tick();
+    test_render_motion_catchup_speed_scales_with_backlog();
+    test_render_motion_stalled_three_tile_gap_uses_run_threshold();
+    test_render_motion_seed_classification_uses_explicit_teleport();
+    test_render_post_tick_removed_distance_snap_branch();
+    test_render_bridge_marks_genuine_teleports();
     test_entity_model_ground_lift_keeps_floor_planes_above_terrain();
     test_spotanim_lookup_prefers_recolored_model_alias();
     test_inferno_npc_spawn_id_changes_on_slot_reuse();

@@ -73,6 +73,7 @@
 #include "osrs_consumables.h"
 #include "osrs_item_effects.h"
 #include "osrs_human_input_types.h"
+#include "osrs_render_motion.h"
 
 /* opaque encounter runtime pieces — each encounter defines its own structs */
 typedef struct EncounterState EncounterState;
@@ -506,6 +507,7 @@ typedef struct {
     uint8_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
     uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
+    RenderMovementKind render_movement_kind;
     int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
     const char* debug_npc_type_name;
     int debug_attack_timer;
@@ -601,6 +603,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
     out->npc_slot = -1;  /* player, not an NPC */
     out->npc_instance_id = 0;
+    out->render_movement_kind = RENDER_MOVEMENT_NORMAL;
     out->attack_target_entity_idx = -1;
 }
 

@@ -2816,6 +2816,8 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
             &s->zulrah, &out[n], 0, s->zulrah_npc_instance_id);
         out[n].dest_x = s->zulrah.x + ZUL_NPC_SIZE / 2;
         out[n].dest_y = s->zulrah.y + ZUL_NPC_SIZE / 2;
+        if (s->surface_timer > 0)
+            out[n].render_movement_kind = RENDER_MOVEMENT_TELEPORT;
         if (s->is_diving && s->tick >= s->zulrah_anim_until_tick)
             out[n].npc_visible = 0;
         osrs_render_entity_suppress_pose_anims(
