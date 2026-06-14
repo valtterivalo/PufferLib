@@ -405,6 +405,87 @@ static void inf_step_out_forecast_tick_profiled(
 }
 #endif
 
+static void inf_restore_step_out_forecast_player_collision_flags(
+    InfernoState* sim,
+    int prev_player_x,
+    int prev_player_y
+) {
+    int gx, gy;
+    if (inf_grid_index(prev_player_x, prev_player_y, &gx, &gy))
+        sim->player_collision_flags[gx][gy] = 0;
+    if (inf_grid_index(sim->player.x, sim->player.y, &gx, &gy))
+        sim->player_collision_flags[gx][gy] = 1;
+}
+
+static void inf_restore_step_out_forecast_action_state(
+    InfernoState* sim,
+    const InfernoState* s,
+    const int slots[INF_MAX_NPCS],
+    int slot_count,
+    const Player* moved
+) {
+    int prev_player_x = sim->player.x;
+    int prev_player_y = sim->player.y;
+    sim->player.x = moved->x;
+    sim->player.y = moved->y;
+    sim->player.is_running = moved->is_running;
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        sim->npcs[i] = s->npcs[i];
+    }
+    sim->rng_state = s->rng_state;
+    inf_invalidate_los_cache(sim);
+    memcpy(
+        sim->npc_collision_flags,
+        s->npc_collision_flags,
+        sizeof(sim->npc_collision_flags));
+    inf_restore_step_out_forecast_player_collision_flags(
+        sim, prev_player_x, prev_player_y);
+}
+
+#ifdef INF_POISON_FORECAST
+static void inf_poison_step_out_forecast_restore_source(
+    InfernoState* restore_source,
+    const InfernoState* s,
+    const int slots[INF_MAX_NPCS],
+    int slot_count
+) {
+    memset(restore_source, 0xAA, sizeof(*restore_source));
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        restore_source->npcs[i] = s->npcs[i];
+    }
+    restore_source->rng_state = s->rng_state;
+    memcpy(
+        restore_source->npc_collision_flags,
+        s->npc_collision_flags,
+        sizeof(restore_source->npc_collision_flags));
+}
+
+static void inf_poison_step_out_forecast_check_player_flags(
+    const InfernoState* sim,
+    const InfernoState* s,
+    const Player* moved
+) {
+    InfernoState oracle = *s;
+    memset(
+        oracle.player_collision_flags,
+        0xAA,
+        sizeof(oracle.player_collision_flags));
+    oracle.player.x = moved->x;
+    oracle.player.y = moved->y;
+    oracle.player.is_running = moved->is_running;
+    inf_rebuild_player_collision_flags(&oracle);
+    if (memcmp(
+            sim->player_collision_flags,
+            oracle.player_collision_flags,
+            sizeof(sim->player_collision_flags)) != 0) {
+        fprintf(stderr, "inferno forecast player collision restore mismatch\n");
+        abort();
+    }
+}
+#endif
+
 static void inf_step_out_forecast_finalize_action(
     InfStepOutForecastAction* action
 ) {
@@ -1076,6 +1157,24 @@ static void inf_build_step_out_forecast_exact_ctx(
     int forecast_slots[INF_MAX_NPCS];
     int forecast_slot_count = inf_collect_step_out_forecast_slots(
         s, forecast_slots);
+#ifdef INF_PROFILE_ENABLED
+    double base_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+#endif
+    InfernoState sim = *s;
+#ifdef INF_PROFILE_ENABLED
+    if (inf_prof_enabled) {
+        INF_PROFILE_ADD(
+            INF_PROF_FORECAST_STATE_COPY,
+            INF_PROFILE_NOW_MS() - base_copy_t0);
+    }
+#endif
+    const InfernoState* restore_source = s;
+#ifdef INF_POISON_FORECAST
+    InfernoState poison_restore_source;
+    inf_poison_step_out_forecast_restore_source(
+        &poison_restore_source, s, forecast_slots, forecast_slot_count);
+    restore_source = &poison_restore_source;
+#endif
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
 #ifdef INF_PROFILE_ENABLED
@@ -1111,12 +1210,11 @@ static void inf_build_step_out_forecast_exact_ctx(
 #ifdef INF_PROFILE_ENABLED
         double state_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
 #endif
-        InfernoState sim = *s;
-        sim.player.x = moved.x;
-        sim.player.y = moved.y;
-        sim.player.is_running = moved.is_running;
-        inf_invalidate_los_cache(&sim);
-        inf_rebuild_player_collision_flags(&sim);
+        inf_restore_step_out_forecast_action_state(
+            &sim, restore_source, forecast_slots, forecast_slot_count, &moved);
+#ifdef INF_POISON_FORECAST
+        inf_poison_step_out_forecast_check_player_flags(&sim, s, &moved);
+#endif
 #ifdef INF_PROFILE_ENABLED
         if (inf_prof_enabled) {
             INF_PROFILE_ADD(
