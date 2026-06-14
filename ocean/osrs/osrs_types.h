@@ -1523,7 +1523,7 @@ static inline int remaining_ticks(int ticks) {
     return ticks > 0 ? ticks : 0;
 }
 
-static inline int get_attack_timer_uncapped(Player* p) {
+static inline int get_attack_timer_uncapped(const Player* p) {
     return p->has_attack_timer ? p->attack_timer_uncapped : -100;
 }
 

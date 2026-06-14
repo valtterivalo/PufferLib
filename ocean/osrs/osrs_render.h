@@ -20,6 +20,7 @@
 #include "osrs_combat_visuals.h"
 #include "osrs_combat.h"
 #include "osrs_pvp_combat.h"
+#include "osrs_pvp_debug_status.h"
 #include "osrs_pvp_effects.h"
 #include "osrs_projectile_orientation.h"
 #include "osrs_render_motion.h"
@@ -5843,6 +5844,49 @@ static void render_draw_pvp_performance_tracker(RenderClient* rc, OsrsEnv* env) 
         x + 74, y + 78, fs, COLOR_TEXT);
 }
 
+static void render_draw_pvp_status_debug(RenderClient* rc, OsrsEnv* env) {
+    if (!rc->show_debug || !render_scene_is_pvp(env))
+        return;
+
+    const Player* players[NUM_AGENTS] = {0};
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        players[i] = render_get_player_ptr(env, i);
+        if (!players[i]) return;
+    }
+
+    OsrsPvpDebugStatusLines lines[NUM_AGENTS];
+    osrs_pvp_debug_status_lines(
+        players[0], render_pvp_tracker_player_name(rc, env, 0), &lines[0]);
+    osrs_pvp_debug_status_lines(
+        players[1], render_pvp_tracker_player_name(rc, env, 1), &lines[1]);
+
+    int x = 10;
+    int y = 70;
+    int w = 700;
+    int h = 126;
+    int fs = 11;
+    int col_w = 334;
+    Color panel = (Color){18, 20, 24, 220};
+    Color edge = (Color){90, 96, 108, 180};
+    Color title = (Color){235, 235, 230, 255};
+
+    DrawRectangle(x, y, w, h, panel);
+    DrawRectangleLinesEx((Rectangle){(float)x, (float)y, (float)w, (float)h}, 1.0f, edge);
+    DrawText("PvP Debug", x + 10, y + 8, 14, COLOR_TEXT);
+
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        int dx = x + 10 + i * col_w;
+        int dy = y + 28;
+        DrawText(lines[i].title, dx, dy, fs, title);
+        dy += 17;
+        DrawText(lines[i].combat, dx, dy, fs, COLOR_TEXT);
+        dy += 17;
+        DrawText(lines[i].status, dx, dy, fs, COLOR_TEXT);
+        dy += 17;
+        DrawText(lines[i].resources, dx, dy, fs, COLOR_TEXT_DIM);
+    }
+}
+
 
 void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
@@ -5991,6 +6035,7 @@ void pvp_render(OsrsEnv* env) {
     }
 
     render_draw_pvp_performance_tracker(rc, env);
+    render_draw_pvp_status_debug(rc, env);
 
     DrawText("Right-drag: orbit  Mid-drag: pan  Scroll: zoom  SPACE: pause  S: safe spots  D: debug  G: cycle entity  H: human",
              10, RENDER_WINDOW_H - 20, 10, COLOR_TEXT_DIM);
