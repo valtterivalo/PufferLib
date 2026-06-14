@@ -148,6 +148,26 @@ enum {
     COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS = 18,
 };
 
+static float col_javelin_skyfall_shadow_scale(const ColoJavelinState* jv) {
+    if (!jv->skyfall_pending || jv->skyfall_timer <= 0 ||
+            jv->skyfall_timer > COLO_JAVELIN_SKYFALL_DELAY) {
+        fprintf(stderr, "colosseum: invalid skyfall shadow timer %d pending %d\n",
+            jv->skyfall_timer, jv->skyfall_pending);
+        abort();
+    }
+    float progress = (float)(COLO_JAVELIN_SKYFALL_DELAY - jv->skyfall_timer) /
+        (float)(COLO_JAVELIN_SKYFALL_DELAY - 1);
+    return 0.35f + 0.65f * progress;
+}
+
+static void col_emit_javelin_skyfall_shadow(EncounterOverlay* ov, const ColoJavelinState* jv) {
+    encounter_emit_tile_shadow(
+        ov,
+        jv->skyfall_tile_x,
+        jv->skyfall_tile_y,
+        col_javelin_skyfall_shadow_scale(jv));
+}
+
 static EncounterProjectileTiming col_npc_projectile_timing(
     ColoNpcType type,
     AttackStyle style,
@@ -439,6 +459,7 @@ static void col_render_post_tick_ctx(
 ) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    ov->tile_shadow_count = 0;
     ov->projectile_count = 0;
     encounter_write_terminal_status_text(
         s->episode_over,
@@ -449,6 +470,15 @@ static void col_render_post_tick_ctx(
         ov->status_text,
         sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
+
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->type != COLO_JAVELIN_COLOSSUS)
+            continue;
+        ColoJavelinState* jv = colo_npc_javelin(npc);
+        if (jv->skyfall_pending)
+            col_emit_javelin_skyfall_shadow(ov, jv);
+    }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];

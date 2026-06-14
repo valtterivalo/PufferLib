@@ -361,6 +361,7 @@ static void inf_render_post_tick_ctx(
 ) {
     (void)context;
     InfernoState* s = (InfernoState*)state;
+    ov->tile_shadow_count = 0;
     ov->projectile_count = 0;
     encounter_write_terminal_status_text(
         s->episode_over,

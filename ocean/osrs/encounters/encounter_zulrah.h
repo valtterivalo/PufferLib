@@ -3079,6 +3079,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     ZulrahState* s = (ZulrahState*)state;
 
     /* hazards */
+    ov->tile_shadow_count = 0;
     ov->hazard_count = 0;
     for (int i = 0; i < ZUL_MAX_CLOUDS && ov->hazard_count < ENCOUNTER_MAX_OVERLAY_TILES; i++) {
         if (!s->clouds[i].active) continue;

@@ -4732,6 +4732,23 @@ static void render_draw_3d_world(RenderClient* rc) {
 
         /* current hazard renderer: object 11700 centered on a 3x3 damage area */
         float ms = 1.0f / 128.0f;
+        for (int i = 0; i < ov->tile_shadow_count; i++) {
+            EncounterTileShadow* shadow = &ov->tile_shadows[i];
+            if (!shadow->active) continue;
+            float ground = OV_GROUND(shadow->x, shadow->y);
+            float cx = (float)shadow->x + 0.5f;
+            float cz = -(float)(shadow->y + 1) + 0.5f;
+            float radius = 0.45f * shadow->scale;
+            unsigned char alpha = (unsigned char)(70.0f + 70.0f * shadow->scale);
+            DrawCylinder(
+                (Vector3){ cx, ground + 0.045f, cz },
+                radius,
+                radius,
+                0.025f,
+                36,
+                CLITERAL(Color){ 8, 6, 4, alpha });
+        }
+
         for (int i = 0; i < ov->hazard_count; i++) {
             if (!ov->hazards[i].active) continue;
             float ground = OV_GROUND(ov->hazards[i].x + 1, ov->hazards[i].y + 1);

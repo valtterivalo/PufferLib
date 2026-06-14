@@ -224,6 +224,7 @@ static inline int encounter_pending_hit_queue_damage_sum(
    encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
+#define ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS 48
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
 /* inferno can legitimately exceed single-digit projectile counts in one tick,
    especially during Zuk healer spark volleys. size this from real encounter
@@ -242,6 +243,12 @@ typedef enum {
 } EncounterProjectileTargetKind;
 
 typedef struct {
+    int active;
+    int x, y;
+    float scale;
+} EncounterTileShadow;
+
+typedef struct {
     /* encounter-defined area hazards. current users write 3x3 poison clouds. */
     struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
     int hazard_count;
@@ -254,6 +261,9 @@ typedef struct {
     /* encounter adds or secondary mobs. variant is encounter-defined. */
     struct { int x, y, active, variant; } adds[ENCOUNTER_MAX_OVERLAY_ADDS];
     int add_count;
+
+    EncounterTileShadow tile_shadows[ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS];
+    int tile_shadow_count;
 
     /* visual projectiles: brief flash from source to target.
        encounters fire attacks instantly, but we show a 1-tick projectile
@@ -355,6 +365,27 @@ static inline int encounter_emit_projectile(
     ov->projectiles[i].launch_gfx_id = 0;
     ov->projectiles[i].impact_gfx_id = impact_gfx_id;
     return i;
+}
+
+static inline void encounter_emit_tile_shadow(
+    EncounterOverlay* ov, int x, int y, float scale
+) {
+    if (scale <= 0.0f) {
+        fprintf(stderr, "encounter tile shadow scale must be positive: %f\n", scale);
+        abort();
+    }
+    if (ov->tile_shadow_count >= ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS) {
+        fprintf(stderr, "encounter overlay tile shadow capacity exceeded: %d\n",
+            ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS);
+        abort();
+    }
+    int i = ov->tile_shadow_count++;
+    ov->tile_shadows[i] = (EncounterTileShadow){
+        .active = 1,
+        .x = x,
+        .y = y,
+        .scale = scale,
+    };
 }
 
 static inline void encounter_require_projectile_slots(const EncounterOverlay* ov, int slots) {

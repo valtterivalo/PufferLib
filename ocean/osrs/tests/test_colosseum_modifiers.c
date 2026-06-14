@@ -3856,6 +3856,28 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].start_h < ov.projectiles[0].end_h &&
         ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_LAUNCH_CURVE &&
         ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DELAY * 30);
+    CHECK("javelin skyfall launch emits growing target shadow",
+        ov.tile_shadow_count == 1 &&
+        ov.tile_shadows[0].active == 1 &&
+        ov.tile_shadows[0].x == jv->skyfall_tile_x &&
+        ov.tile_shadows[0].y == jv->skyfall_tile_y &&
+        ov.tile_shadows[0].scale > 0.0f &&
+        ov.tile_shadows[0].scale < 1.0f);
+    float initial_shadow_scale = ov.tile_shadows[0].scale;
+    int saved_skyfall_timer = jv->skyfall_timer;
+    int saved_attacked_this_tick = s.npcs[0].attacked_this_tick;
+    jv->skyfall_timer = 1;
+    s.npcs[0].attacked_this_tick = 0;
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall target shadow grows to full before landing",
+        ov.tile_shadow_count == 1 &&
+        ov.tile_shadows[0].x == jv->skyfall_tile_x &&
+        ov.tile_shadows[0].y == jv->skyfall_tile_y &&
+        ov.tile_shadows[0].scale > initial_shadow_scale &&
+        ov.tile_shadows[0].scale >= 0.99f);
+    jv->skyfall_timer = saved_skyfall_timer;
+    s.npcs[0].attacked_this_tick = saved_attacked_this_tick;
     memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
     npc_anim_count = 0;
     col_fill_render_entities_ctx(
@@ -3888,6 +3910,7 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
     memset(&ov, 0, sizeof(ov));
     col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall landing clears target shadow", ov.tile_shadow_count == 0);
     CHECK("javelin skyfall landing emits fast drop and fiery impact",
         ov.projectile_count == 1 &&
         ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
