@@ -680,7 +680,7 @@ static void col_tick_player_ctx(
     }
     ColoWalkCtx wc = { s };
     OsrsLosQuery los_query = col_player_los_query(s);
-    (void)osrs_encounter_player_step(&(OsrsPlayerStepInput){
+    OsrsPlayerStepInput step_input = {
         .player = &s->player,
         .interaction = &s->interaction,
         .target_lookup = col_lookup_player_attack_target,
@@ -705,7 +705,8 @@ static void col_tick_player_ctx(
             .arena_w = COLO_ARENA_WIDTH,
             .arena_h = COLO_ARENA_HEIGHT,
         },
-    });
+    };
+    (void)osrs_encounter_player_step(&step_input);
     col_rebuild_player_collision_flags(s);
 
     /* attack */

@@ -139,8 +139,8 @@ static void col_queue_npc_pending_hit(
         .damage = damage,
         .ticks_remaining = ticks,
         .attack_style = style,
-        .spell_type = spell_type,
         .check_prayer = 0,
+        .spell_type = spell_type,
         .source_npc_slot = -1,
     };
     encounter_pending_hit_queue_push(

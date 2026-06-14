@@ -226,7 +226,7 @@ static void col_fill_render_entities_ctx(
         else if (npc->attacked_this_tick)
             npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];
-        osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
+        OsrsNpcRenderEntitySpec npc_spec = {
             .npc_def_id = def_id,
             .npc_slot = i,
             .npc_instance_id = npc->render_id,
@@ -246,7 +246,8 @@ static void col_fill_render_entities_ctx(
             .hit_was_successful = npc->hit_was_successful_this_tick,
             .hit_spell_type = npc->hit_spell_type,
             .attack_target_entity_idx = 0,
-        }, re);
+        };
+        osrs_render_entity_from_npc_spec(&npc_spec, re);
         if (ctx->npc_render_hit_count[i] < 0 ||
                 ctx->npc_render_hit_count[i] > ENCOUNTER_RENDER_HITS_MAX) {
             fprintf(stderr, "invalid npc render hit count\n");

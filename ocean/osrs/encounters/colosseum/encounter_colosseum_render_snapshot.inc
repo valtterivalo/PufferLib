@@ -219,29 +219,30 @@ static void col_emit_javelin_skyfall_launch_projectile(
 
     int npc_size = col_npc_effective_size(npc);
     encounter_require_projectile_slots(ov, 1);
+    OsrsProjectileEventSpec projectile_spec = {
+        .src_x = npc->x,
+        .src_y = npc->y,
+        .dst_x = jv->skyfall_tile_x,
+        .dst_y = jv->skyfall_tile_y,
+        .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+        .damage = 0,
+        .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
+            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
+        .start_h = (int)(npc_size * 0.75f * 128),
+        .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
+        .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
+        .arc_height = 0.0f,
+        .src_size = npc_size,
+        .dst_size = 1,
+        .model_id = 0u,
+        .anim_id = -1,
+        .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
+        .impact_gfx_id = 0,
+        .start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30,
+    };
     int projectile_idx = osrs_emit_projectile_with_spec(
         ov,
-        &(OsrsProjectileEventSpec){
-            .src_x = npc->x,
-            .src_y = npc->y,
-            .dst_x = jv->skyfall_tile_x,
-            .dst_y = jv->skyfall_tile_y,
-            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
-            .damage = 0,
-            .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
-                COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
-            .start_h = (int)(npc_size * 0.75f * 128),
-            .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
-            .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
-            .arc_height = 0.0f,
-            .src_size = npc_size,
-            .dst_size = 1,
-            .model_id = 0u,
-            .anim_id = -1,
-            .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
-            .impact_gfx_id = 0,
-            .start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30,
-        },
+        &projectile_spec,
         0);
     encounter_set_projectile_source_npc_slot(ov, projectile_idx, npc_slot);
 }
@@ -282,28 +283,29 @@ static void col_emit_javelin_skyfall_landing_projectile(
     if (!event || !event->active)
         return;
     encounter_require_projectile_slots(ov, 1);
+    OsrsProjectileEventSpec projectile_spec = {
+        .src_x = event->tile_x,
+        .src_y = event->tile_y,
+        .dst_x = event->tile_x,
+        .dst_y = event->tile_y,
+        .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+        .damage = event->damage,
+        .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS,
+        .start_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
+        .end_h = COLO_JAVELIN_SKYFALL_GROUND_HEIGHT,
+        .curve = COLO_JAVELIN_SKYFALL_DROP_CURVE,
+        .arc_height = 0.0f,
+        .src_size = 1,
+        .dst_size = 1,
+        .model_id = 0u,
+        .anim_id = -1,
+        .travel_gfx_id = COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID,
+        .impact_gfx_id = COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID,
+        .start_delay = 0,
+    };
     (void)osrs_emit_projectile_with_spec(
         ov,
-        &(OsrsProjectileEventSpec){
-            .src_x = event->tile_x,
-            .src_y = event->tile_y,
-            .dst_x = event->tile_x,
-            .dst_y = event->tile_y,
-            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
-            .damage = event->damage,
-            .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS,
-            .start_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
-            .end_h = COLO_JAVELIN_SKYFALL_GROUND_HEIGHT,
-            .curve = COLO_JAVELIN_SKYFALL_DROP_CURVE,
-            .arc_height = 0.0f,
-            .src_size = 1,
-            .dst_size = 1,
-            .model_id = 0u,
-            .anim_id = -1,
-            .travel_gfx_id = COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID,
-            .impact_gfx_id = COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID,
-            .start_delay = 0,
-        },
+        &projectile_spec,
         0);
 }
 
@@ -444,25 +446,26 @@ static void col_emit_player_attack_projectiles(
             osrs_combat_visual_magic_projectile_profile(weapon);
         if (!profile || profile->projectile_model_id <= 0)
             return;
+        OsrsCombatProjectileEmitSpec emit_spec = {
+            .src_x = s->player.x,
+            .src_y = s->player.y,
+            .dst_x = target->x,
+            .dst_y = target->y,
+            .src_size = 1,
+            .dst_size = target_size,
+            .target_npc_slot = target_idx,
+            .attack_style = s->player_attack_style_id,
+            .damage = s->player_attack_dmg,
+            .duration_ticks = p_duration,
+            .start_delay = p_start_delay,
+            .fallback_start_h = p_start_h,
+            .fallback_end_h = p_end_h,
+            .curve = 16,
+        };
         (void)osrs_emit_combat_projectile_profile_player_to_npc(
             ov,
             profile,
-            &(OsrsCombatProjectileEmitSpec){
-                .src_x = s->player.x,
-                .src_y = s->player.y,
-                .dst_x = target->x,
-                .dst_y = target->y,
-                .src_size = 1,
-                .dst_size = target_size,
-                .target_npc_slot = target_idx,
-                .attack_style = s->player_attack_style_id,
-                .damage = s->player_attack_dmg,
-                .duration_ticks = p_duration,
-                .start_delay = p_start_delay,
-                .fallback_start_h = p_start_h,
-                .fallback_end_h = p_end_h,
-                .curve = 16,
-            });
+            &emit_spec);
         return;
     }
 
@@ -487,25 +490,26 @@ static void col_emit_player_attack_projectiles(
         int visual_damage = part_i == part_count - 1
             ? s->player_attack_dmg
             : 0;
+        OsrsCombatProjectileEmitSpec emit_spec = {
+            .src_x = s->player.x,
+            .src_y = s->player.y,
+            .dst_x = target->x,
+            .dst_y = target->y,
+            .src_size = 1,
+            .dst_size = target_size,
+            .target_npc_slot = target_idx,
+            .attack_style = s->player_attack_style_id,
+            .damage = visual_damage,
+            .duration_ticks = p_duration,
+            .start_delay = p_start_delay,
+            .fallback_start_h = p_start_h,
+            .fallback_end_h = p_end_h,
+            .curve = 16,
+        };
         (void)osrs_emit_combat_projectile_profile_player_to_npc(
             ov,
             profile,
-            &(OsrsCombatProjectileEmitSpec){
-                .src_x = s->player.x,
-                .src_y = s->player.y,
-                .dst_x = target->x,
-                .dst_y = target->y,
-                .src_size = 1,
-                .dst_size = target_size,
-                .target_npc_slot = target_idx,
-                .attack_style = s->player_attack_style_id,
-                .damage = visual_damage,
-                .duration_ticks = p_duration,
-                .start_delay = p_start_delay,
-                .fallback_start_h = p_start_h,
-                .fallback_end_h = p_end_h,
-                .curve = 16,
-            });
+            &emit_spec);
     }
 }
 
