@@ -17,6 +17,7 @@
 #include "ocean/osrs/osrs_anim.h"
 #include "ocean/osrs/osrs_gui.h"
 #include "ocean/osrs/osrs_models.h"
+#include "ocean/osrs/osrs_pvp_debug_status.h"
 #include "ocean/osrs/osrs_pvp_effects.h"
 #include "ocean/osrs/osrs_spotanims.h"
 
@@ -1727,6 +1728,49 @@ static void test_osrs_render_window_title_uses_encounter_name(void) {
     free(text);
 }
 
+static void test_pvp_debug_status_lines_include_combat_state(void) {
+    printf("--- PvP debug status lines include combat state ---\n");
+
+    Player p = {0};
+    p.current_hitpoints = 73;
+    p.base_hitpoints = 99;
+    p.current_prayer = 48;
+    p.base_prayer = 77;
+    p.attack_timer = 3;
+    p.attack_timer_uncapped = 4;
+    p.has_attack_timer = 1;
+    p.fight_style = FIGHT_STYLE_RAPID;
+    p.autocast_enabled = 1;
+    p.autocast_spell = ENCOUNTER_SPELL_ICE;
+    p.special_energy = 55;
+    p.spec_armed = 1;
+    p.frozen_ticks = 11;
+    p.freeze_immunity_ticks = 7;
+    p.prayer = PRAYER_PROTECT_MAGIC;
+    p.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    p.veng_active = 1;
+    p.veng_cooldown = 8;
+    p.food_count = 12;
+    p.karambwan_count = 3;
+    p.brew_doses = 5;
+    p.restore_doses = 4;
+    p.food_timer = 2;
+    p.potion_timer = 1;
+    p.karambwan_timer = 3;
+
+    OsrsPvpDebugStatusLines lines;
+    osrs_pvp_debug_status_lines(&p, "Player 0", &lines);
+
+    ASSERT_STR_EQ("debug title line",
+        lines.title, "Player 0  HP:73/99  Pray:48/77");
+    ASSERT_STR_EQ("debug combat line",
+        lines.combat, "ATK:3 UC:4  FS:rapid  AC:ice  SPEC:55*");
+    ASSERT_STR_EQ("debug status line",
+        lines.status, "FRZ:11 IMM:7  OH:mage OFF:rigour  VENG:1/8");
+    ASSERT_STR_EQ("debug resources line",
+        lines.resources, "Food:12 K:3 Brew:5 Rest:4  TMR F:2 P:1 K:3");
+}
+
 int main(void) {
     test_wilderness_collision_asset_spans_pvp_area();
     test_runtime_animation_assets_are_anm2();
@@ -1779,6 +1823,7 @@ int main(void) {
     test_pvp_render_uses_wilderness_world_bounds();
     test_shared_special_effect_render_contract();
     test_osrs_render_window_title_uses_encounter_name();
+    test_pvp_debug_status_lines_include_combat_state();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_failed == 0 ? 0 : 1;
