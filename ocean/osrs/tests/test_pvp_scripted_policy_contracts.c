@@ -548,6 +548,24 @@ static void test_nightmare_nh_freezes_from_diagonal_mage_prayer_camp(void) {
         ATTACK_ICE);
 }
 
+static void test_nightmare_nh_freezes_through_protect_magic(void) {
+    printf("--- Nightmare NH freezes through protect magic ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_dead_zone_state(&env, OPP_NIGHTMARE_NH, 4);
+    env.players[0].prayer = PRAYER_PROTECT_MAGIC;
+    env.players[0].frozen_ticks = 0;
+    env.players[0].freeze_immunity_ticks = 0;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "nightmare NH casts ice into protect magic",
+        opponent_combat(&env),
+        ATTACK_ICE);
+}
+
 static void test_adaptive_nh_prays_melee_against_learned_mage_camp(void) {
     printf("--- Adaptive NH counters learned mage camp melee ---\n");
 
@@ -856,6 +874,7 @@ int main(void) {
     test_nightmare_nh_prays_melee_against_learned_mage_camp();
     test_nightmare_nh_kites_unrooted_mage_prayer_camp();
     test_nightmare_nh_freezes_from_diagonal_mage_prayer_camp();
+    test_nightmare_nh_freezes_through_protect_magic();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();
