@@ -1676,7 +1676,7 @@ void c_render(Env* env) {
 
     int first_call = (re->client == NULL);
     if (first_call) {
-        re->client = render_make_client();
+        re->client = render_make_client_for_encounter(&ENCOUNTER_INFERNO);
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
         EncounterSceneConfig scene = {

@@ -114,9 +114,7 @@ pybind11::dict puf_eval_log(pybind11::object pufferl_obj) {
     pufferl.last_log_step = pufferl.global_step;
  
     pybind11::dict env_dict;
-    // Capacity 64 to fit chess's per-bank hist_score_bank/hist_n_bank entries
-    // (16 keys across 8 banks) on top of base env-log fields.
-    Dict* env_out = create_dict(64);
+    Dict* env_out = create_dict(128);
     static_vec_eval_log(pufferl.vec, env_out);
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
@@ -281,6 +279,16 @@ void py_set_env_scripted_opps(py::object pufferl_obj, py::array_t<int> scripted_
         throw std::runtime_error("scripted_opps length must equal num_envs");
     }
     pufferl_set_env_scripted_opps(&pufferl, (const int*)buf.ptr);
+}
+
+void py_set_train_mask(py::object pufferl_obj, py::array_t<unsigned char> train_mask) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    auto buf = train_mask.request();
+    if (buf.ndim != 1) throw std::runtime_error("train_mask must be 1-D");
+    if ((int)buf.shape[0] != pufferl.vec->total_agents) {
+        throw std::runtime_error("train_mask length must equal total_agents");
+    }
+    pufferl_set_train_mask(&pufferl, (const unsigned char*)buf.ptr);
 }
 
 extern "C" void binding_set_pfsp_weights(
@@ -608,6 +616,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
     m.def("set_env_scripted_opps", &py_set_env_scripted_opps);
+    m.def("set_train_mask", &py_set_train_mask);
     m.def("set_pfsp_weights", &py_set_pfsp_weights);
     m.def("get_pfsp_stats", &py_get_pfsp_stats);
     m.def("count_aligned", &py_count_aligned);

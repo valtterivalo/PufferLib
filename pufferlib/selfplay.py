@@ -283,6 +283,18 @@ def build_perm_tags(num_buffers, agents_per_buffer, agents_per_env, frozen_sizes
     return perm, tags, num_hist_envs_per_bank
 
 
+def scripted_train_mask(total_agents, agents_per_env, perm, scripted_envs):
+    team_size = agents_per_env // 2
+    train_mask = np.ones(total_agents, dtype=np.uint8)
+    for env_idx, opp in enumerate(scripted_envs):
+        if opp < 0:
+            continue
+        slot_base = env_idx * agents_per_env
+        for slot in range(slot_base + team_size, slot_base + agents_per_env):
+            train_mask[int(perm[slot])] = 0
+    return train_mask
+
+
 def setup(pufferl, backend, args, run_id):
     '''Wire up agent_perm/tags and bootstrap the frozen bank with the current
     weights so historical envs have an opponent from rollout 1. Returns a
@@ -392,6 +404,8 @@ def setup(pufferl, backend, args, run_id):
         raise RuntimeError('adaptive scripted env schedule requires scripted_opp_pool')
     if scripted_env_pct > 0.0 and scripted_opps_list and not hasattr(backend, 'set_env_scripted_opps'):
         raise RuntimeError('scripted-opponent pool requires set_env_scripted_opps')
+    if scripted_env_pct > 0.0 and scripted_opps_list and not hasattr(backend, 'set_train_mask'):
+        raise RuntimeError('scripted-opponent pool requires set_train_mask')
 
     scripted_env_indices = np.where(tags == 0)[0].astype(np.int32)
     scripted_pfsp_enabled = (
@@ -439,6 +453,9 @@ def setup(pufferl, backend, args, run_id):
         'scripted_opps_list': scripted_opps_list,
         'scripted_env_indices': scripted_env_indices,
         'scripted_envs': np.full(num_envs, -1, dtype=np.int32),
+        'agent_perm': perm,
+        'total_agents': total_agents,
+        'agents_per_env': agents_per_env,
         'scripted_env_schedule': scripted_env_schedule,
         'scripted_env_cap_pct': scripted_env_pct,
         'scripted_env_floor_frac': scripted_env_floor_frac,
@@ -508,6 +525,8 @@ def refresh_scripted_env_mix(pufferl, backend, pool_state, force=False):
         return
     if not hasattr(backend, 'set_env_scripted_opps'):
         raise RuntimeError('scripted-opponent pool requires set_env_scripted_opps')
+    if not hasattr(backend, 'set_train_mask'):
+        raise RuntimeError('scripted-opponent pool requires set_train_mask')
 
     scripted_envs = assign_scripted_envs(
         backend.num_envs(pufferl),
@@ -521,6 +540,15 @@ def refresh_scripted_env_mix(pufferl, backend, pool_state, force=False):
     )
     pool_state['scripted_envs'] = scripted_envs
     backend.set_env_scripted_opps(pufferl, scripted_envs)
+    backend.set_train_mask(
+        pufferl,
+        scripted_train_mask(
+            pool_state['total_agents'],
+            pool_state['agents_per_env'],
+            pool_state['agent_perm'],
+            scripted_envs,
+        ),
+    )
 
 
 def update_scripted_pfsp(pufferl, backend, pool_state):

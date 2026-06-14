@@ -583,12 +583,292 @@ static float pvp_expected_normal_bolt_damage(
     }
 }
 
+#define PVP_DEFENCE_CANDIDATE_MAX (OSRS_INVENTORY_SIZE + 2)
+
+typedef enum {
+    PVP_DEFENCE_SELECT_WORST = 0,
+    PVP_DEFENCE_SELECT_BEST = 1,
+} PvpDefenceSelection;
+
+static int pvp_add_unique_defence_candidate(uint8_t* items, int count, uint8_t item_idx) {
+    if (item_idx != ITEM_NONE && item_idx >= NUM_ITEMS) {
+        fprintf(stderr, "invalid PvP defence candidate %u\n", (unsigned)item_idx);
+        abort();
+    }
+    for (int i = 0; i < count; i++) {
+        if (items[i] == item_idx) return count;
+    }
+    if (count >= PVP_DEFENCE_CANDIDATE_MAX) {
+        fprintf(stderr, "too many PvP defence candidates\n");
+        abort();
+    }
+    items[count++] = item_idx;
+    return count;
+}
+
+static int pvp_collect_defence_candidates(
+        const Player* p, int gear_slot, uint8_t* items) {
+    int count = 0;
+    count = pvp_add_unique_defence_candidate(items, count, p->equipped[gear_slot]);
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        uint8_t item = p->inventory[i];
+        if (item != ITEM_NONE && osrs_item_gear_slot(item) == gear_slot) {
+            count = pvp_add_unique_defence_candidate(items, count, item);
+        }
+    }
+    return count;
+}
+
+static int pvp_defence_candidate_has_non_none(const uint8_t* items, int count) {
+    for (int i = 0; i < count; i++) {
+        if (items[i] != ITEM_NONE) return 1;
+    }
+    return 0;
+}
+
+static int pvp_defence_candidate_has_two_handed_weapon(const uint8_t* items, int count) {
+    for (int i = 0; i < count; i++) {
+        if (items[i] != ITEM_NONE && item_is_two_handed(items[i])) return 1;
+    }
+    return 0;
+}
+
+static int pvp_item_defence_bonus(
+        uint8_t item_idx, AttackStyle style, MeleeBonusType melee_type) {
+    if (item_idx == ITEM_NONE) return 0;
+    if (item_idx >= NUM_ITEMS) {
+        fprintf(stderr, "invalid PvP defence item %u\n", (unsigned)item_idx);
+        abort();
+    }
+    const Item* item = &ITEM_DATABASE[item_idx];
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            switch (melee_type) {
+                case MELEE_BONUS_STAB: return item->defence_stab;
+                case MELEE_BONUS_SLASH: return item->defence_slash;
+                case MELEE_BONUS_CRUSH: return item->defence_crush;
+                default:
+                    fprintf(stderr, "invalid melee bonus type %d\n", melee_type);
+                    abort();
+            }
+        case ATTACK_STYLE_RANGED:
+            return item->defence_ranged;
+        case ATTACK_STYLE_MAGIC:
+            return item->defence_magic;
+        default:
+            fprintf(stderr, "invalid PvP defence style %d\n", style);
+            abort();
+    }
+}
+
+static uint8_t pvp_select_defence_item(
+        const Player* source, Player* attacker, int gear_slot,
+        AttackStyle style, PvpDefenceSelection selection) {
+    uint8_t items[PVP_DEFENCE_CANDIDATE_MAX];
+    int count = pvp_collect_defence_candidates(source, gear_slot, items);
+    MeleeBonusType melee_type = get_melee_bonus_type(attacker);
+    uint8_t selected = items[0];
+    int selected_bonus = pvp_item_defence_bonus(selected, style, melee_type);
+    for (int i = 1; i < count; i++) {
+        int bonus = pvp_item_defence_bonus(items[i], style, melee_type);
+        if ((selection == PVP_DEFENCE_SELECT_BEST && bonus > selected_bonus) ||
+                (selection == PVP_DEFENCE_SELECT_WORST && bonus < selected_bonus)) {
+            selected = items[i];
+            selected_bonus = bonus;
+        }
+    }
+    return selected;
+}
+
+static void pvp_select_defensive_weapon_shield(
+        Player* out, const Player* source, Player* attacker,
+        AttackStyle style, PvpDefenceSelection selection) {
+    uint8_t weapons[PVP_DEFENCE_CANDIDATE_MAX];
+    uint8_t shields[PVP_DEFENCE_CANDIDATE_MAX];
+    int weapon_count = pvp_collect_defence_candidates(source, GEAR_SLOT_WEAPON, weapons);
+    int shield_count = pvp_collect_defence_candidates(source, GEAR_SLOT_SHIELD, shields);
+    if (source->equipped[GEAR_SLOT_WEAPON] == ITEM_NONE ||
+            pvp_defence_candidate_has_non_none(shields, shield_count)) {
+        weapon_count = pvp_add_unique_defence_candidate(weapons, weapon_count, ITEM_NONE);
+    }
+    if (source->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE ||
+            pvp_defence_candidate_has_two_handed_weapon(weapons, weapon_count)) {
+        shield_count = pvp_add_unique_defence_candidate(shields, shield_count, ITEM_NONE);
+    }
+
+    MeleeBonusType melee_type = get_melee_bonus_type(attacker);
+    uint8_t selected_weapon = source->equipped[GEAR_SLOT_WEAPON];
+    uint8_t selected_shield = source->equipped[GEAR_SLOT_SHIELD];
+    int selected_bonus = 0;
+    int initialized = 0;
+
+    for (int w = 0; w < weapon_count; w++) {
+        for (int s = 0; s < shield_count; s++) {
+            uint8_t weapon = weapons[w];
+            uint8_t shield = (weapon != ITEM_NONE && item_is_two_handed(weapon))
+                ? ITEM_NONE : shields[s];
+            int bonus = pvp_item_defence_bonus(weapon, style, melee_type)
+                + pvp_item_defence_bonus(shield, style, melee_type);
+            if (!initialized ||
+                    (selection == PVP_DEFENCE_SELECT_BEST && bonus > selected_bonus) ||
+                    (selection == PVP_DEFENCE_SELECT_WORST && bonus < selected_bonus)) {
+                initialized = 1;
+                selected_weapon = weapon;
+                selected_shield = shield;
+                selected_bonus = bonus;
+            }
+        }
+    }
+
+    out->equipped[GEAR_SLOT_WEAPON] = selected_weapon;
+    out->equipped[GEAR_SLOT_SHIELD] = selected_shield;
+}
+
+static void pvp_select_available_defensive_gear(
+        Player* out, const Player* source, Player* attacker,
+        AttackStyle style, PvpDefenceSelection selection) {
+    *out = *source;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        if (slot == GEAR_SLOT_WEAPON || slot == GEAR_SLOT_SHIELD) continue;
+        out->equipped[slot] = pvp_select_defence_item(
+            source, attacker, slot, style, selection);
+    }
+    pvp_select_defensive_weapon_shield(out, source, attacker, style, selection);
+    out->slot_gear_dirty = 1;
+    osrs_refresh_player_equipment(out);
+}
+
+static int pvp_attack_roll_for_expected_damage(
+        Player* attacker, AttackStyle style, float acc_mult) {
+    int eff_attack = calculate_effective_attack(attacker, style);
+    int attack_bonus = get_attack_bonus(attacker, style);
+    return (int)(eff_attack * (attack_bonus + 64) * acc_mult);
+}
+
+static int pvp_defence_roll_for_expected_damage(
+        Player* attacker, Player* defender, AttackStyle style) {
+    int eff_defence = calculate_effective_defence(defender, style);
+    int defence_bonus = get_defence_bonus(defender, style, attacker);
+    return eff_defence * (defence_bonus + 64);
+}
+
+static int pvp_magic_base_hit_for_expected_damage(Player* attacker, int magic_type) {
+    if (magic_type == 1) {
+        if (attacker->current_magic >= ICE_BARRAGE_LEVEL) return ICE_BARRAGE_MAX_HIT;
+        if (attacker->current_magic >= ICE_BLITZ_LEVEL) return ICE_BLITZ_MAX_HIT;
+        if (attacker->current_magic >= ICE_BURST_LEVEL) return ICE_BURST_MAX_HIT;
+        return ICE_RUSH_MAX_HIT;
+    }
+    if (magic_type == 2) {
+        if (attacker->current_magic >= BLOOD_BARRAGE_LEVEL) return BLOOD_BARRAGE_MAX_HIT;
+        if (attacker->current_magic >= BLOOD_BLITZ_LEVEL) return BLOOD_BLITZ_MAX_HIT;
+        if (attacker->current_magic >= BLOOD_BURST_LEVEL) return BLOOD_BURST_MAX_HIT;
+        return BLOOD_RUSH_MAX_HIT;
+    }
+    return 30;
+}
+
+static float pvp_normal_attack_accuracy_multiplier(
+        Player* attacker, AttackStyle style, int magic_type) {
+    int has_zuriels = attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZURIELS_STAFF;
+    return has_zuriels && style == ATTACK_STYLE_MAGIC && magic_type == 1
+        ? 1.10f : 1.0f;
+}
+
+static float pvp_expected_special_attack_damage(
+        Player* attacker, Player* defender, AttackStyle style,
+        int spec_item_idx, int target_prayer) {
+    int att_roll = pvp_attack_roll_for_expected_damage(attacker, style, 1.0f);
+    int def_roll = pvp_defence_roll_for_expected_damage(attacker, defender, style);
+    int max_hit = calculate_max_hit(attacker, style, 1.0f, 30);
+    return pvp_expected_spec_damage(
+        spec_item_idx, att_roll, max_hit, def_roll, target_prayer, style);
+}
+
+static float pvp_expected_normal_attack_damage(
+        Player* attacker, Player* defender, AttackStyle style,
+        int magic_type, int target_prayer) {
+    float acc_mult = pvp_normal_attack_accuracy_multiplier(attacker, style, magic_type);
+    float hit_chance = calculate_hit_chance(NULL, attacker, defender, style, acc_mult);
+    int max_hit = calculate_max_hit(
+        attacker, style, 1.0f,
+        pvp_magic_base_hit_for_expected_damage(attacker, magic_type));
+    if (style == ATTACK_STYLE_RANGED) {
+        return pvp_expected_normal_bolt_damage(
+            attacker->equipped[GEAR_SLOT_AMMO],
+            hit_chance,
+            max_hit,
+            attacker->current_ranged,
+            defender->current_hitpoints,
+            target_prayer,
+            style);
+    }
+    return hit_chance * pvp_expected_reduced_uniform_damage(
+        0, max_hit, target_prayer, style);
+}
+
+static float pvp_expected_attack_damage(
+        Player* attacker, Player* defender, AttackStyle style,
+        int is_special, int spec_item_idx, int magic_type, int target_prayer) {
+    if (is_special && spec_item_idx != ITEM_NONE) {
+        return pvp_expected_special_attack_damage(
+            attacker, defender, style, spec_item_idx, target_prayer);
+    }
+    return pvp_expected_normal_attack_damage(
+        attacker, defender, style, magic_type, target_prayer);
+}
+
+static float pvp_best_prayer_expected_attack_damage(
+        Player* attacker, Player* defender, AttackStyle style,
+        int is_special, int spec_item_idx, int magic_type) {
+    const int prayers[] = {
+        PRAYER_NONE,
+        PRAYER_PROTECT_MAGIC,
+        PRAYER_PROTECT_RANGED,
+        PRAYER_PROTECT_MELEE,
+    };
+    float best = pvp_expected_attack_damage(
+        attacker, defender, style, is_special, spec_item_idx, magic_type, prayers[0]);
+    for (int i = 1; i < 4; i++) {
+        float ev = pvp_expected_attack_damage(
+            attacker, defender, style, is_special, spec_item_idx, magic_type, prayers[i]);
+        if (ev < best) best = ev;
+    }
+    return best;
+}
+
+static float pvp_expected_damage_prevented_by_available_defence(
+        Player* attacker, Player* defender, AttackStyle style,
+        int is_special, int spec_item_idx, int magic_type, float actual_ev) {
+    Player worst;
+    pvp_select_available_defensive_gear(
+        &worst, defender, attacker, style, PVP_DEFENCE_SELECT_WORST);
+    float worst_ev = pvp_expected_attack_damage(
+        attacker, &worst, style, is_special, spec_item_idx, magic_type, PRAYER_NONE);
+
+    Player best;
+    pvp_select_available_defensive_gear(
+        &best, defender, attacker, style, PVP_DEFENCE_SELECT_BEST);
+    float best_ev = pvp_best_prayer_expected_attack_damage(
+        attacker, &best, style, is_special, spec_item_idx, magic_type);
+
+    float max_saved = worst_ev - best_ev;
+    float saved = worst_ev - actual_ev;
+    if (max_saved <= 0.0f || saved <= 0.0f) return 0.0f;
+    return saved > max_saved ? max_saved : saved;
+}
+
 static void register_expected_damage(
-        OsrsEnv* env, int attacker_idx, int defender_idx, float expected_damage) {
+        OsrsEnv* env, int attacker_idx, int defender_idx,
+        float expected_damage, float expected_damage_prevented) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
     attacker->expected_damage_dealt += expected_damage;
     defender->expected_damage_received += expected_damage;
+    defender->expected_damage_prevented += expected_damage_prevented;
+    attacker->expected_damage_dealt_tick += expected_damage;
+    defender->expected_damage_received_tick += expected_damage;
+    defender->expected_damage_prevented_tick += expected_damage_prevented;
 }
 
 
@@ -1231,7 +1511,13 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int max_hit = calculate_max_hit(attacker, style, 1.0f, magic_base_hit);
         float expected_damage = pvp_expected_spec_damage(
             spec_item_idx, att_roll, max_hit, def_roll, defender->prayer, style);
-        register_expected_damage(env, attacker_idx, defender_idx, expected_damage);
+        float expected_damage_prevented = 0.0f;
+        if (env->shaping.incoming_damage_avoidance_reward_coef != 0.0f) {
+            expected_damage_prevented = pvp_expected_damage_prevented_by_available_defence(
+                attacker, defender, style, 1, spec_item_idx, magic_type, expected_damage);
+        }
+        register_expected_damage(
+            env, attacker_idx, defender_idx, expected_damage, expected_damage_prevented);
 
         resolved_spec = osrs_resolve_spec(
             spec_item_idx, att_roll, max_hit, def_roll,
@@ -1349,7 +1635,13 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 defender->current_hitpoints, defender->prayer, style)
             : hit_chance * pvp_expected_reduced_uniform_damage(
                 0, max_hit, defender->prayer, style);
-        register_expected_damage(env, attacker_idx, defender_idx, expected_damage);
+        float expected_damage_prevented = 0.0f;
+        if (env->shaping.incoming_damage_avoidance_reward_coef != 0.0f) {
+            expected_damage_prevented = pvp_expected_damage_prevented_by_available_defence(
+                attacker, defender, style, 0, ITEM_NONE, magic_type, expected_damage);
+        }
+        register_expected_damage(
+            env, attacker_idx, defender_idx, expected_damage, expected_damage_prevented);
 
         int hit_count = 1;
         for (int i = 0; i < hit_count; i++) {

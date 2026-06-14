@@ -247,6 +247,21 @@ static void assert_pvp_item_sprite_exists(uint8_t item) {
     ASSERT_INT_EQ("PvP gear-pool sprite exists", osrs_asset_exists(path), 1);
 }
 
+static void assert_assets_differ_if_both_exist(
+    const char* label,
+    const char* left_path,
+    const char* right_path
+) {
+    if (!osrs_asset_exists(left_path) || !osrs_asset_exists(right_path)) return;
+    OsrsAssetBytes left = osrs_asset_read_all(left_path);
+    OsrsAssetBytes right = osrs_asset_read_all(right_path);
+    int same = left.size == right.size &&
+        memcmp(left.data, right.data, left.size) == 0;
+    free(left.data);
+    free(right.data);
+    ASSERT_INT_EQ(label, same, 0);
+}
+
 static void assert_pvp_weapon_model_exists(uint8_t item) {
     if (item == ITEM_NONE) return;
     if (osrs_item_gear_slot(item) != GEAR_SLOT_WEAPON) return;
@@ -790,6 +805,44 @@ static void test_pvp_item_sprites_exist(void) {
     setup_pvp_state(&state);
     assert_player_item_sprites_exist(&state.env.players[0]);
     assert_player_item_sprites_exist(&state.env.players[1]);
+}
+
+static void test_pvp_manual_item_sprite_ids_are_canonical(void) {
+    printf("--- PvP manual item sprite IDs are canonical ---\n");
+
+    ASSERT_INT_EQ("Zuriel uses LMS item id",
+        ITEM_DATABASE[ITEM_ZURIELS_STAFF].item_id, 23617);
+    ASSERT_INT_EQ("Ancient godsword uses item id",
+        ITEM_DATABASE[ITEM_ANCIENT_GS].item_id, 26233);
+    ASSERT_INT_EQ("Zuriel sprite exists",
+        osrs_asset_exists("sprites/items/23617.png"), 1);
+    ASSERT_INT_EQ("Ancient godsword sprite exists",
+        osrs_asset_exists("sprites/items/26233.png"), 1);
+    const ItemModelMapping* ancient_model =
+        item_model_mapping_for_item(ITEM_DATABASE[ITEM_ANCIENT_GS].item_id);
+    const ItemModelMapping* zaryte_vambraces_model =
+        item_model_mapping_for_item(ITEM_DATABASE[ITEM_ZARYTE_VAMBRACES].item_id);
+    ASSERT_INT_EQ("Ancient godsword model row exists",
+        ancient_model != NULL, 1);
+    ASSERT_INT_EQ("Zaryte vambraces model row exists",
+        zaryte_vambraces_model != NULL, 1);
+    ASSERT_INT_EQ("Ancient godsword inventory model is cache model",
+        ancient_model->inv_model, 43226);
+    ASSERT_INT_EQ("Ancient godsword wield model differs from Zaryte vambraces",
+        ancient_model->wield_model != zaryte_vambraces_model->wield_model, 1);
+    ASSERT_INT_EQ("Zuriel wield model exists",
+        item_to_wield_model(ITEM_DATABASE[ITEM_ZURIELS_STAFF].item_id) !=
+            ITEM_RENDER_MODEL_MISSING,
+        1);
+    ASSERT_INT_EQ("Zuriel visual row exists",
+        osrs_combat_visual_find_item_id(
+            ITEM_DATABASE[ITEM_ZURIELS_STAFF].item_id,
+            OSRS_COMBAT_VISUAL_STYLE_ANY) != NULL,
+        1);
+    assert_assets_differ_if_both_exist("Zuriel sprite differs from old mushroom id",
+        "sprites/items/23617.png", "sprites/items/13867.png");
+    assert_assets_differ_if_both_exist("Ancient godsword sprite differs from range object id",
+        "sprites/items/26233.png", "sprites/items/25730.png");
 }
 
 static void test_pvp_gear_pool_assets_exist(void) {
@@ -1562,6 +1615,78 @@ static void test_shared_special_effect_render_contract(void) {
     free(text);
 }
 
+static void test_osrs_render_window_title_uses_encounter_name(void) {
+    printf("--- OSRS render window title uses encounter name ---\n");
+
+    FILE* f = fopen("ocean/osrs/osrs_render.h", "rb");
+    ASSERT_INT_EQ("render source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    rewind(f);
+    char* text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("render source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    size_t read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+
+    ASSERT_INT_EQ("render title helper exists",
+        strstr(text, "render_window_title") != NULL, 1);
+    ASSERT_INT_EQ("PvP encounter title is mapped",
+        strstr(text, "return \"PvP\"") != NULL, 1);
+    ASSERT_INT_EQ("Inferno encounter title is mapped",
+        strstr(text, "return \"Inferno\"") != NULL, 1);
+    ASSERT_INT_EQ("Zulrah encounter title is mapped",
+        strstr(text, "return \"Zulrah\"") != NULL, 1);
+    ASSERT_INT_EQ("window title uses Puffer OSRS prefix",
+        strstr(text, "Puffer OSRS %s") != NULL, 1);
+    ASSERT_INT_EQ("old hardcoded PvP debug title removed",
+        strstr(text, "OSRS PvP Debug Viewer") == NULL, 1);
+    free(text);
+
+    f = fopen("ocean/osrs_pvp/binding.c", "rb");
+    ASSERT_INT_EQ("PvP binding source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewind(f);
+    text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("PvP binding source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+    ASSERT_INT_EQ("PvP eval render passes encounter",
+        strstr(text, "render_make_client_for_encounter(&ENCOUNTER_NH_PVP)") != NULL, 1);
+    free(text);
+
+    f = fopen("ocean/osrs_inferno/binding.c", "rb");
+    ASSERT_INT_EQ("Inferno binding source opens", f != NULL, 1);
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewind(f);
+    text = (char*)malloc((size_t)n + 1);
+    ASSERT_INT_EQ("Inferno binding source allocates", text != NULL, 1);
+    if (!text) {
+        fclose(f);
+        return;
+    }
+    read_n = fread(text, 1, (size_t)n, f);
+    text[read_n] = '\0';
+    fclose(f);
+    ASSERT_INT_EQ("Inferno eval render passes encounter",
+        strstr(text, "render_make_client_for_encounter(&ENCOUNTER_INFERNO)") != NULL, 1);
+    free(text);
+}
+
 int main(void) {
     test_wilderness_collision_asset_spans_pvp_area();
     test_runtime_animation_assets_are_anm2();
@@ -1588,6 +1713,7 @@ int main(void) {
     test_pvp_human_walk_persists_until_runtime_clears();
     test_pvp_human_walk_clears_active_attack_interaction();
     test_pvp_item_sprites_exist();
+    test_pvp_manual_item_sprite_ids_are_canonical();
     test_pvp_gear_pool_assets_exist();
     test_pvp_display_names_and_label_target();
     test_terminal_presentation_captures_loser_before_auto_reset();
@@ -1611,6 +1737,7 @@ int main(void) {
     test_terminal_render_clear_resets_visual_state_source();
     test_pvp_render_uses_wilderness_world_bounds();
     test_shared_special_effect_render_contract();
+    test_osrs_render_window_title_uses_encounter_name();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_failed == 0 ? 0 : 1;

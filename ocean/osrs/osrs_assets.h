@@ -89,6 +89,8 @@ static const char* const OSRS_ASSET_ITEMS_PATHS[] = {
     "sprites/items/30070.png",
     "sprites/items/28945.png",
     "sprites/items/27641.png",
+    "sprites/items/23617.png",
+    "sprites/items/26233.png",
     "sprites/items/item_stack_variants.tsv",
 };
 

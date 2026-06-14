@@ -132,8 +132,74 @@ static int test_pvp_projectile_can_reach(
     } \
 } while (0)
 
+static int test_gear_bonuses_equal(GearBonuses a, GearBonuses b) {
+    return a.stab_attack == b.stab_attack &&
+        a.slash_attack == b.slash_attack &&
+        a.crush_attack == b.crush_attack &&
+        a.magic_attack == b.magic_attack &&
+        a.ranged_attack == b.ranged_attack &&
+        a.stab_defence == b.stab_defence &&
+        a.slash_defence == b.slash_defence &&
+        a.crush_defence == b.crush_defence &&
+        a.magic_defence == b.magic_defence &&
+        a.ranged_defence == b.ranged_defence &&
+        a.melee_strength == b.melee_strength &&
+        a.ranged_strength == b.ranged_strength &&
+        a.magic_strength == b.magic_strength &&
+        a.attack_speed == b.attack_speed &&
+        a.attack_range == b.attack_range;
+}
+
+static void assert_projection_int_eq(
+    const char* label,
+    int actual,
+    int expected,
+    int state,
+    uint8_t item_idx
+) {
+    tests_run++;
+    if (actual == expected) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s state %d item %u got %d expected %d\n",
+            label, state, (unsigned)item_idx, actual, expected);
+    }
+}
+
+static void assert_projection_gear_eq(
+    const char* label,
+    GearBonuses actual,
+    GearBonuses expected,
+    int state,
+    uint8_t item_idx
+) {
+    tests_run++;
+    if (test_gear_bonuses_equal(actual, expected)) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL: %s state %d item %u\n", label, state, (unsigned)item_idx);
+        printf("    attack got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.stab_attack, actual.slash_attack, actual.crush_attack,
+            actual.magic_attack, actual.ranged_attack,
+            expected.stab_attack, expected.slash_attack, expected.crush_attack,
+            expected.magic_attack, expected.ranged_attack);
+        printf("    defence got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.stab_defence, actual.slash_defence, actual.crush_defence,
+            actual.magic_defence, actual.ranged_defence,
+            expected.stab_defence, expected.slash_defence, expected.crush_defence,
+            expected.magic_defence, expected.ranged_defence);
+        printf("    strength speed range got %d/%d/%d/%d/%d expected %d/%d/%d/%d/%d\n",
+            actual.melee_strength, actual.ranged_strength, actual.magic_strength,
+            actual.attack_speed, actual.attack_range,
+            expected.melee_strength, expected.ranged_strength, expected.magic_strength,
+            expected.attack_speed, expected.attack_range);
+    }
+}
+
 static Dict* pvp_kwargs(void) {
-    Dict* kwargs = create_dict(8);
+    Dict* kwargs = create_dict(12);
     dict_set(kwargs, "seed", 73);
     dict_set(kwargs, "use_rollout_opponent", 1);
     dict_set(kwargs, "opponent_type", OPP_IMPROVED);
@@ -141,6 +207,25 @@ static Dict* pvp_kwargs(void) {
     dict_set(kwargs, "shaping_enabled", 1);
     dict_set(kwargs, "shaping_scale", 1.0);
     return kwargs;
+}
+
+static Dict* pvp_vec_kwargs(int total_agents, int num_buffers) {
+    Dict* kwargs = create_dict(4);
+    dict_set(kwargs, "total_agents", total_agents);
+    dict_set(kwargs, "num_buffers", num_buffers);
+    return kwargs;
+}
+
+static StaticVec* pvp_test_vec(int total_agents, int num_buffers) {
+    Dict* vec_kwargs = pvp_vec_kwargs(total_agents, num_buffers);
+    Dict* env_kwargs = pvp_kwargs();
+    StaticVec* vec = create_static_vec(total_agents, num_buffers, 0, vec_kwargs, env_kwargs);
+    static_vec_reset(vec);
+    free(vec_kwargs->items);
+    free(vec_kwargs);
+    free(env_kwargs->items);
+    free(env_kwargs);
+    return vec;
 }
 
 static int action_head_offset(int head) {
@@ -187,6 +272,387 @@ static int pvp_reset_signature_equal(PvpResetSignature a, PvpResetSignature b) {
         a.p1_x == b.p1_x &&
         a.p1_y == b.p1_y &&
         a.pid_holder == b.pid_holder;
+}
+
+static void test_terminal_reward_survives_auto_reset(void) {
+    printf("--- PvP terminal reward survives auto-reset ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    env->pvp.shaping.enabled = 0;
+    env->pvp.players[1].current_hitpoints = 0;
+
+    c_step(env);
+
+    ASSERT_FLOAT_NEAR("p0 terminal win reward", vec->rewards[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 terminal loss reward", vec->rewards[1], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p0 terminal flag", vec->terminals[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 terminal flag", vec->terminals[1], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_terminal_loss_and_draw_rewards_zero(void) {
+    printf("--- PvP terminal loss and draw rewards are zero ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.episode_over = 1;
+
+    env.winner = 1;
+    ASSERT_FLOAT_NEAR("p0 loss reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 win reward", calculate_reward(&env, 1), 1.0f, 1e-6f);
+
+    env.winner = -1;
+    ASSERT_FLOAT_NEAR("p0 draw reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 draw reward", calculate_reward(&env, 1), 0.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_timeout_and_simultaneous_death_are_draws(void) {
+    printf("--- PvP timeout and simultaneous death are draws ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    env.auto_reset = 0;
+    pvp_reset(&env);
+    env.tick = MAX_EPISODE_TICKS - 1;
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("timeout winner draw", env.winner, -1);
+    ASSERT_FLOAT_NEAR("timeout p0 reward", env.step_rewards[0], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("timeout p1 reward", env.step_rewards[1], 0.0f, 1e-6f);
+
+    pvp_reset(&env);
+    env.auto_reset = 0;
+    env.players[0].current_hitpoints = 0;
+    env.players[1].current_hitpoints = 0;
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("sim death winner draw", env.winner, -1);
+    ASSERT_FLOAT_NEAR("sim death p0 reward", env.step_rewards[0], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("sim death p1 reward", env.step_rewards[1], 0.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_p1_reset_obs_refreshes_after_auto_reset(void) {
+    printf("--- PvP p1 reset obs refreshes after auto-reset ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    env->pvp.shaping.enabled = 0;
+    env->pvp.players[1].current_hitpoints = 0;
+
+    c_step(env);
+
+    ASSERT_FLOAT_NEAR("p1 reset self hp obs", vec->observations.data[OBS_SIZE + 10], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_target_hp_observation_is_current(void) {
+    printf("--- PvP target HP obs is current ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+
+    ASSERT_FLOAT_NEAR("target hp starts full", vec->observations.data[11], 1.0f, 1e-6f);
+
+    env->pvp.players[1].current_hitpoints = env->pvp.players[1].base_hitpoints / 2;
+    generate_slot_observations(&env->pvp, 0);
+    ocean_write_obs(&env->pvp);
+
+    float expected = (float)env->pvp.players[1].current_hitpoints /
+        (float)env->pvp.players[1].base_hitpoints;
+    ASSERT_FLOAT_NEAR("target hp reflects damage", vec->observations.data[11], expected, 1e-6f);
+
+    env->pvp.players[1].current_hitpoints = env->pvp.players[1].base_hitpoints;
+    generate_slot_observations(&env->pvp, 0);
+    ocean_write_obs(&env->pvp);
+    ASSERT_FLOAT_NEAR("target hp reflects healing", vec->observations.data[11], 1.0f, 1e-6f);
+
+    static_vec_close(vec);
+}
+
+static void test_shaping_disabled_emits_only_terminal_reward(void) {
+    printf("--- PvP shaping disabled emits only terminal reward ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.players[0].damage_dealt_scale = 1.0f;
+    env.players[1].just_attacked = 1;
+    env.players[0].player_prayed_correct = 1;
+
+    ASSERT_FLOAT_NEAR("nonterminal sparse reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    env.episode_over = 1;
+    env.winner = 0;
+    ASSERT_FLOAT_NEAR("terminal sparse win reward", calculate_reward(&env, 0), 1.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_expected_damage_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP expected damage reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.expected_damage_reward_coef = 0.01f;
+    env.players[0].expected_damage_dealt_tick = 25.0f;
+
+    ASSERT_FLOAT_NEAR("expected damage dense reward",
+        calculate_reward(&env, 0), 0.25f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_incoming_damage_avoidance_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP incoming damage avoidance reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.incoming_damage_avoidance_reward_coef = 0.02f;
+    env.players[0].expected_damage_prevented_tick = 10.0f;
+
+    ASSERT_FLOAT_NEAR("incoming damage avoidance dense reward",
+        calculate_reward(&env, 0), 0.2f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_ko_supply_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP KO supply reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.ko_supply_reward_coef = 0.5f;
+    env.episode_over = 1;
+    env.winner = 0;
+
+    Player* target = &env.players[1];
+    target->food_count = 1;
+    target->karambwan_count = 1;
+    target->brew_doses = 1;
+    float expected = 1.0f
+        + 0.5f * pvp_remaining_supply_hp_fraction(target);
+
+    ASSERT_FLOAT_NEAR("KO supply terminal reward",
+        calculate_reward(&env, 0), expected, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_reward_coefficients_parse_from_binding_kwargs(void) {
+    printf("--- PvP reward coefficients parse from binding kwargs ---\n");
+
+    Dict* kwargs = pvp_kwargs();
+    dict_set(kwargs, "expected_damage_reward_coef", 0.0125);
+    dict_set(kwargs, "incoming_damage_avoidance_reward_coef", 0.025);
+    dict_set(kwargs, "ko_supply_reward_coef", 0.75);
+    Dict* vec_kwargs = pvp_vec_kwargs(2, 1);
+
+    StaticVec* vec = create_static_vec(2, 1, 0, vec_kwargs, kwargs);
+    Env* env = &vec->envs[0];
+
+    ASSERT_FLOAT_NEAR("expected damage reward coef",
+        env->pvp.shaping.expected_damage_reward_coef, 0.0125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("incoming damage avoidance reward coef",
+        env->pvp.shaping.incoming_damage_avoidance_reward_coef, 0.025f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO supply reward coef",
+        env->pvp.shaping.ko_supply_reward_coef, 0.75f, 1e-6f);
+
+    static_vec_close(vec);
+    free(vec_kwargs->items);
+    free(vec_kwargs);
+    free(kwargs->items);
+    free(kwargs);
+}
+
+static void test_shaping_uses_encounter_overhead_and_spec_prayer_style(void) {
+    printf("--- PvP shaping overhead and spec prayer style ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 1;
+    env.shaping.shaping_scale = 1.0f;
+    env.shaping.prayer_penalty_enabled = 1;
+    env.shaping.prayer_switch_no_attack_penalty = -0.25f;
+    env.players[1].just_attacked = 0;
+    env.last_executed_actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+
+    ASSERT_FLOAT_NEAR("encounter overhead penalty", calculate_reward(&env, 0), -0.25f, 1e-6f);
+
+    env.last_executed_actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_OFF;
+    ASSERT_FLOAT_NEAR("overhead off no penalty", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    pvp_reset(&env);
+    env.shaping.enabled = 1;
+    env.shaping.shaping_scale = 1.0f;
+    env.shaping.spec_off_prayer_bonus = 0.75f;
+    env.players[0].just_attacked = 1;
+    env.players[0].used_special_this_tick = 1;
+    env.players[0].target_prayed_correct = 1;
+    ASSERT_FLOAT_NEAR("spec on-prayer no bonus", calculate_reward(&env, 0), 0.0f, 1e-6f);
+
+    env.players[0].target_prayed_correct = 0;
+    ASSERT_FLOAT_NEAR("spec off-prayer bonus", calculate_reward(&env, 0), 0.75f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_scripted_legacy_movement_maps_to_head_move(void) {
+    printf("--- PvP scripted legacy movement maps to HEAD_MOVE ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    Player* p = &env->pvp.players[1];
+    Player* target = &env->pvp.players[0];
+    pvp_set_player_spawn(p, 3041, 3530);
+    pvp_set_player_spawn(target, 3046, 3530);
+    p->last_obs_target_x = target->x;
+    p->last_obs_target_y = target->y;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_LOADOUT] = LOADOUT_KEEP;
+    actions[HEAD_COMBAT] = MOVE_FARCAST_3;
+    pvp_translate_legacy_loadout_action_to_slotclicks(&env->pvp, 1, actions);
+
+    ASSERT_INT_EQ("legacy movement clears attack head", actions[HEAD_ATTACK], ATTACK_NONE);
+    ASSERT_TRUE("legacy movement sets head move", actions[HEAD_MOVE] > 0);
+
+    static_vec_close(vec);
+}
+
+static void test_duplicate_equip_clicks_apply_once(void) {
+    printf("--- PvP duplicate equip clicks apply once ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    Player* p = &env.players[0];
+    osrs_player_inventory_clear(p);
+    osrs_player_set_equipment_slot(p, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    p->inventory[0] = ITEM_RUNE_CROSSBOW;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_EQUIP_0] = 1;
+    actions[HEAD_EQUIP_1] = 1;
+    int clicks = execute_equip_clicks(&env, 0, actions);
+
+    ASSERT_INT_EQ("duplicate equip click success count", clicks, 1);
+    ASSERT_INT_EQ("crossbow equipped once", p->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("old weapon swapped into slot", p->inventory[0], ITEM_AHRIM_STAFF);
+
+    collision_map_free(cmap);
+}
+
+static void test_static_vec_train_mask_round_trip(void) {
+    printf("--- Static vec train mask round trip ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    unsigned char train_mask[2] = {1, 0};
+    static_vec_set_train_mask(vec, train_mask);
+
+    ASSERT_INT_EQ("host train mask p0", vec->train_mask[0], 1);
+    ASSERT_INT_EQ("host train mask p1", vec->train_mask[1], 0);
+    ASSERT_INT_EQ("device train mask p0", vec->gpu_train_mask[0], 1);
+    ASSERT_INT_EQ("device train mask p1", vec->gpu_train_mask[1], 0);
+
+    static_vec_close(vec);
+}
+
+static void test_pvp_state_snapshot_restores_logical_state(void) {
+    printf("--- PvP state snapshot restores logical state ---\n");
+
+    StaticVec* vec = pvp_test_vec(4, 1);
+    Env* src = &vec->envs[0];
+    Env* dst = &vec->envs[1];
+
+    src->pvp.players[0].current_hitpoints = 57;
+    src->pvp.players[1].current_hitpoints = 63;
+    src->pvp.players[0].attack_timer = 2;
+    src->pvp.players[1].frozen_ticks = 8;
+    src->pvp.tick = 42;
+    src->pvp.rng_state = 1234567u;
+    src->pvp.pending_actions[HEAD_ATTACK] = ATTACK_ICE;
+    src->pvp.last_executed_actions[NUM_ACTION_HEADS + HEAD_OVERHEAD] =
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    src->pvp.pvp_runtime.walk_dest_x[0] = src->pvp.players[0].x + 1;
+    src->pvp.pvp_runtime.walk_dest_y[0] = src->pvp.players[0].y;
+    src->pvp.pvp_runtime.opponent.type = OPP_NIGHTMARE_NH;
+
+    pvp_generate_slot_observations_and_masks(&src->pvp, 0);
+    pvp_generate_slot_observations_and_masks(&src->pvp, 1);
+    ocean_write_obs(&src->pvp);
+    ocean_write_obs_p1(&src->pvp);
+    pvp_env_copy_action_masks_to_rollout(src);
+    pvp_state_store(src, &src->state);
+
+    void* dst_collision_map = dst->pvp.collision_map;
+    void* dst_agent_obs = dst->pvp.ocean_io.agent_obs;
+    void* dst_agent_obs_p1 = dst->pvp.ocean_io.agent_obs_p1;
+    unsigned char* dst_action_mask = dst->pvp.action_masks;
+    memset(dst->pvp._obs_buf, 0x5a, sizeof(dst->pvp._obs_buf));
+    memset(dst->pvp._masks_buf, 0xa5, sizeof(dst->pvp._masks_buf));
+
+    dst->state = src->state;
+    puffer_state_refresh(dst);
+
+    ASSERT_TRUE("snapshot smaller than full env",
+        sizeof(PvpStateSnapshot) < sizeof(OsrsEnv));
+    ASSERT_TRUE("restore keeps collision map pointer",
+        dst->pvp.collision_map == dst_collision_map);
+    ASSERT_TRUE("restore keeps p0 rollout obs pointer",
+        dst->pvp.ocean_io.agent_obs == dst_agent_obs);
+    ASSERT_TRUE("restore keeps p1 rollout obs pointer",
+        dst->pvp.ocean_io.agent_obs_p1 == dst_agent_obs_p1);
+    ASSERT_TRUE("restore keeps action mask pointer",
+        dst->pvp.action_masks == dst_action_mask);
+    ASSERT_INT_EQ("restore tick", dst->pvp.tick, src->pvp.tick);
+    ASSERT_INT_EQ("restore rng", (int)dst->pvp.rng_state, (int)src->pvp.rng_state);
+    ASSERT_INT_EQ("restore p0 hp",
+        dst->pvp.players[0].current_hitpoints,
+        src->pvp.players[0].current_hitpoints);
+    ASSERT_INT_EQ("restore p1 frozen",
+        remaining_ticks(dst->pvp.players[1].frozen_ticks),
+        remaining_ticks(src->pvp.players[1].frozen_ticks));
+    ASSERT_INT_EQ("restore pending attack",
+        dst->pvp.pending_actions[HEAD_ATTACK],
+        src->pvp.pending_actions[HEAD_ATTACK]);
+    ASSERT_INT_EQ("restore runtime opponent",
+        (int)dst->pvp.pvp_runtime.opponent.type,
+        (int)src->pvp.pvp_runtime.opponent.type);
+    ASSERT_TRUE("restore p0 rollout obs",
+        memcmp(dst->obs_ptr[0], src->obs_ptr[0], OBS_SIZE * sizeof(float)) == 0);
+    ASSERT_TRUE("restore p1 rollout obs",
+        memcmp(dst->obs_ptr[1], src->obs_ptr[1], OBS_SIZE * sizeof(float)) == 0);
+    ASSERT_TRUE("restore p0 mask",
+        memcmp(dst->action_mask_ptr[0], src->action_mask_ptr[0], ACTION_MASK_SIZE) == 0);
+    ASSERT_TRUE("restore p1 mask",
+        memcmp(dst->action_mask_ptr[1], src->action_mask_ptr[1], ACTION_MASK_SIZE) == 0);
+
+    static_vec_close(vec);
 }
 
 static void test_native_init_loads_collision_map_and_walkable_spawns(void) {
@@ -344,6 +810,7 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     ASSERT_TRUE("crossbow inventory slot", slot >= 0);
 
     compute_action_masks(&env, 0);
+    generate_slot_observations(&env, 0);
 
     int equip_offset = action_head_offset(HEAD_EQUIP_0);
     int special_offset = action_head_offset(HEAD_SPECIAL);
@@ -352,6 +819,64 @@ static void test_slotclick_schema_and_inventory_mask(void) {
         env.action_masks[equip_offset + slot + 1], 1);
     ASSERT_INT_EQ("special noop valid",
         env.action_masks[special_offset + SPECIAL_NOOP], 1);
+
+    for (int slot_idx = 0; slot_idx < OSRS_INVENTORY_SIZE; slot_idx++) {
+        float* row = env.observations + PVP_INVENTORY_OBS_OFFSET +
+            slot_idx * OSRS_ITEM_FEATURE_DIM;
+        int row_can_equip = row[31] > 0.5f ? 1 : 0;
+        for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+            int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+            ASSERT_INT_EQ("inventory can_equip mirrors equip head mask",
+                row_can_equip, env.action_masks[head_offset + slot_idx + 1]);
+        }
+    }
+
+    collision_map_free(cmap);
+}
+
+static void test_two_handed_full_inventory_affordance_matches_masks(void) {
+    printf("--- PvP two-handed full inventory affordance matches masks ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER);
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        agent->inventory[slot] = ITEM_DRAGON_DAGGER;
+    }
+    agent->inventory[0] = ITEM_AGS;
+
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+
+    float* row = env.observations + PVP_INVENTORY_OBS_OFFSET;
+    ASSERT_FLOAT_NEAR("full inventory two-handed row can_equip",
+        row[31], 0.0f, 1e-6f);
+    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+        ASSERT_INT_EQ("full inventory two-handed equip mask",
+            env.action_masks[head_offset + 1], 0);
+    }
+
+    agent->inventory[1] = ITEM_NONE;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+
+    ASSERT_FLOAT_NEAR("free slot two-handed row can_equip",
+        row[31], 1.0f, 1e-6f);
+    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+        ASSERT_INT_EQ("free slot two-handed equip mask",
+            env.action_masks[head_offset + 1], 1);
+    }
 
     collision_map_free(cmap);
 }
@@ -395,6 +920,268 @@ static void test_attack_mask_allows_post_equip_weapon_target_click(void) {
     collision_map_free(cmap);
 }
 
+static int pvp_test_eager_attack_head_reachable_for_player(
+    const CollisionMap* cmap,
+    Player* attacker,
+    Player* target,
+    int can_move_now
+) {
+    AttackStyle weapon_style = get_slot_weapon_attack_style(attacker);
+    if (weapon_style == ATTACK_STYLE_NONE) return 0;
+
+    AttackStyle actual_style = weapon_style == ATTACK_STYLE_MAGIC
+        ? ATTACK_STYLE_MELEE
+        : weapon_style;
+    OsrsAttackReachQuery reach = pvp_attack_reach_query(
+        cmap, attacker, target, actual_style);
+    return osrs_attack_can_reach(&reach) || can_move_now;
+}
+
+static int pvp_test_eager_attack_head_reachable_after_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int inventory_slot,
+    int can_move_now,
+    const PvpInventoryAffordances* affordances
+) {
+    if (!affordances->can_equip[inventory_slot]) return 0;
+    if (!affordances->is_weapon[inventory_slot]) return 0;
+
+    Player next = *attacker;
+    if (!osrs_player_equip_from_inventory_slot(&next, inventory_slot)) {
+        fprintf(stderr,
+            "pvp_test_eager_attack_head_reachable_after_equip: slot %d precheck failed\n",
+            inventory_slot);
+        abort();
+    }
+    return pvp_test_eager_attack_head_reachable_for_player(
+        cmap, &next, target, can_move_now);
+}
+
+static int pvp_test_eager_attack_head_reachable_after_any_weapon_equip(
+    const CollisionMap* cmap,
+    const Player* attacker,
+    Player* target,
+    int can_move_now,
+    const PvpInventoryAffordances* affordances
+) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        if (pvp_test_eager_attack_head_reachable_after_equip(
+                cmap, attacker, target, slot, can_move_now, affordances)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int pvp_test_special_arm_after_any_weapon_equip_reference(const Player* p) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        uint8_t item_idx = p->inventory[slot];
+        if (!osrs_player_can_equip_from_inventory_slot(p, slot)) continue;
+        if (osrs_item_gear_slot(item_idx) != GEAR_SLOT_WEAPON) continue;
+        if (pvp_special_arm_available_for_weapon(item_idx, p->special_energy)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void pvp_test_eager_attack_head_mask(
+    OsrsEnv* env,
+    int agent_idx,
+    const PvpInventoryAffordances* affordances,
+    unsigned char out[ATTACK_DIM]
+) {
+    Player* p = &env->players[agent_idx];
+    Player* t = &env->players[1 - agent_idx];
+    int attack_ready = remaining_ticks(p->attack_timer) == 0;
+    int can_move_now = can_move(p);
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    int weapon_reachable = pvp_test_eager_attack_head_reachable_for_player(
+        cmap, p, t, can_move_now) ||
+        pvp_test_eager_attack_head_reachable_after_any_weapon_equip(
+            cmap, p, t, can_move_now, affordances);
+    OsrsAttackReachQuery magic_reach = pvp_attack_reach_query(
+        cmap, p, t, ATTACK_STYLE_MAGIC);
+    int magic_reachable = osrs_attack_can_reach(&magic_reach) || can_move_now;
+    int gmaul_spec_ready = p->spec_armed &&
+        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        is_granite_maul_attack_available(p);
+
+    memset(out, 0, ATTACK_DIM);
+    out[ATTACK_NONE] = 1;
+    out[ATTACK_ATK] = (attack_ready || gmaul_spec_ready) && weapon_reachable;
+    out[ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
+    out[ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
+}
+
+typedef enum {
+    PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE,
+    PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS,
+    PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS,
+    PVP_ATTACK_MASK_CURRENT_WEAPON,
+    PVP_ATTACK_MASK_POST_EQUIP_WEAPON,
+    PVP_ATTACK_MASK_GMAUL_SPEC,
+    PVP_ATTACK_MASK_BARRAGE
+} PvpAttackMaskParityCase;
+
+static const char* pvp_attack_mask_parity_case_label(PvpAttackMaskParityCase test_case) {
+    switch (test_case) {
+        case PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE:
+            return "attack timer active";
+        case PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS:
+            return "can move through blocked LOS";
+        case PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS:
+            return "frozen blocked LOS";
+        case PVP_ATTACK_MASK_CURRENT_WEAPON:
+            return "current weapon";
+        case PVP_ATTACK_MASK_POST_EQUIP_WEAPON:
+            return "post-equip weapon";
+        case PVP_ATTACK_MASK_GMAUL_SPEC:
+            return "gmaul spec";
+        case PVP_ATTACK_MASK_BARRAGE:
+            return "barrage";
+        default:
+            fprintf(stderr, "invalid PvP attack mask parity case: %d\n", test_case);
+            abort();
+    }
+}
+
+static void pvp_setup_attack_mask_parity_case(
+    OsrsEnv* env,
+    CollisionMap* cmap,
+    PvpAttackMaskParityCase test_case
+) {
+    memset(env, 0, sizeof(*env));
+    pvp_init(env);
+    env->collision_map = cmap;
+    pvp_seed(env, 73);
+    pvp_reset(env);
+
+    Player* agent = &env->players[0];
+    Player* target = &env->players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3043, 3530);
+    agent->last_obs_target_x = target->x;
+    agent->last_obs_target_y = target->y;
+    target->last_obs_target_x = agent->x;
+    target->last_obs_target_y = agent->y;
+    agent->current_magic = 0;
+    agent->attack_timer = 0;
+    agent->spec_armed = 0;
+    agent->special_energy = 100;
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+
+    switch (test_case) {
+        case PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE:
+            agent->attack_timer = 3;
+            break;
+        case PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+            break;
+        case PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            agent->frozen_ticks = 8;
+            collision_mark_occupant(cmap, 0, 3042, 3530, 1, 1, 1);
+            break;
+        case PVP_ATTACK_MASK_CURRENT_WEAPON:
+            pvp_set_player_spawn(target, 3042, 3530);
+            agent->frozen_ticks = 8;
+            break;
+        case PVP_ATTACK_MASK_POST_EQUIP_WEAPON:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->frozen_ticks = 8;
+            ASSERT_TRUE("post-equip crossbow added",
+                osrs_player_inventory_add(agent, ITEM_RUNE_CROSSBOW) >= 0);
+            break;
+        case PVP_ATTACK_MASK_GMAUL_SPEC:
+            pvp_set_player_spawn(target, 3042, 3530);
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_GRANITE_MAUL);
+            agent->attack_timer = 3;
+            agent->frozen_ticks = 8;
+            agent->spec_armed = 1;
+            break;
+        case PVP_ATTACK_MASK_BARRAGE:
+            osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+            agent->current_magic = 99;
+            agent->frozen_ticks = 8;
+            break;
+        default:
+            fprintf(stderr, "invalid PvP attack mask parity case: %d\n", test_case);
+            abort();
+    }
+}
+
+static void test_attack_mask_lazy_reach_matches_eager_reference(void) {
+    printf("--- PvP attack mask lazy reach matches eager reference ---\n");
+
+    PvpAttackMaskParityCase cases[] = {
+        PVP_ATTACK_MASK_ATTACK_TIMER_ACTIVE,
+        PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS,
+        PVP_ATTACK_MASK_FROZEN_BLOCKED_LOS,
+        PVP_ATTACK_MASK_CURRENT_WEAPON,
+        PVP_ATTACK_MASK_POST_EQUIP_WEAPON,
+        PVP_ATTACK_MASK_GMAUL_SPEC,
+        PVP_ATTACK_MASK_BARRAGE,
+    };
+
+    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        CollisionMap* cmap = collision_map_create();
+        OsrsEnv env;
+        pvp_setup_attack_mask_parity_case(&env, cmap, cases[i]);
+
+        PvpInventoryAffordances affordances;
+        pvp_collect_inventory_affordances(&env.players[0], &affordances);
+        unsigned char expected[ATTACK_DIM];
+        pvp_test_eager_attack_head_mask(&env, 0, &affordances, expected);
+
+        compute_action_masks_with_inventory_affordances(&env, 0, &affordances, NULL);
+
+        int attack_offset = action_head_offset(HEAD_ATTACK);
+        for (int action = 0; action < ATTACK_DIM; action++) {
+            ASSERT_INT_EQ(pvp_attack_mask_parity_case_label(cases[i]),
+                env.action_masks[attack_offset + action], expected[action]);
+        }
+
+        collision_map_free(cmap);
+    }
+}
+
+static void test_attack_reach_short_circuits_mobile_without_collision_map(void) {
+    printf("--- PvP attack reach short-circuits mobile without collision map ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_attack_mask_parity_case(
+        &env, cmap, PVP_ATTACK_MASK_CAN_MOVE_THROUGH_BLOCKED_LOS);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    PvpInventoryAffordances affordances;
+    pvp_collect_inventory_affordances(agent, &affordances);
+
+    ASSERT_INT_EQ("mobile current weapon short-circuit",
+        pvp_attack_head_reachable_for_player(NULL, agent, target, 1), 1);
+    ASSERT_INT_EQ("mobile magic short-circuit",
+        pvp_magic_attack_reachable_for_player(NULL, agent, target, 1), 1);
+
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_NONE);
+    osrs_player_inventory_clear(agent);
+    ASSERT_TRUE("mobile post-equip crossbow added",
+        osrs_player_inventory_add(agent, ITEM_RUNE_CROSSBOW) >= 0);
+    pvp_collect_inventory_affordances(agent, &affordances);
+    ASSERT_INT_EQ("mobile post-equip weapon short-circuit",
+        pvp_attack_head_reachable_after_any_weapon_equip(
+            NULL, agent, target, 1, &affordances), 1);
+
+    collision_map_free(cmap);
+}
+
 static void test_special_mask_allows_post_equip_weapon_spec_arm(void) {
     printf("--- PvP special mask allows post-equip weapon spec arm ---\n");
 
@@ -420,6 +1207,13 @@ static void test_special_mask_allows_post_equip_weapon_spec_arm(void) {
 
     int dagger_slot = osrs_player_inventory_add(agent, ITEM_DRAGON_DAGGER);
     ASSERT_TRUE("dagger added", dagger_slot >= 0);
+
+    PvpInventoryAffordances affordances;
+    memset(&affordances, 0xA5, sizeof(affordances));
+    pvp_collect_inventory_affordances(agent, &affordances);
+    ASSERT_INT_EQ("cached post-equip special arm",
+        affordances.has_equippable_affordable_spec_weapon,
+        pvp_test_special_arm_after_any_weapon_equip_reference(agent));
 
     compute_action_masks(&env, 0);
 
@@ -469,6 +1263,210 @@ static void test_inventory_observation_item_facts(void) {
     collision_map_free(cmap);
 }
 
+static void assert_float_rows_near(
+    const char* label,
+    const float* actual,
+    const float* expected,
+    int len,
+    uint8_t item_idx
+) {
+    for (int i = 0; i < len; i++) {
+        tests_run++;
+        if (fabsf(actual[i] - expected[i]) <= 1e-6f) {
+            tests_passed++;
+        } else {
+            tests_failed++;
+            printf("  FAIL: %s item %u idx %d got %.6f expected %.6f\n",
+                label, (unsigned)item_idx, i, actual[i], expected[i]);
+        }
+    }
+}
+
+static void test_item_observation_templates_match_direct_writers(void) {
+    printf("--- PvP item observation templates match direct writers ---\n");
+
+    GearBonuses current = {
+        .stab_attack = 1,
+        .slash_attack = 2,
+        .crush_attack = 3,
+        .magic_attack = 4,
+        .ranged_attack = 5,
+        .stab_defence = 6,
+        .slash_defence = 7,
+        .crush_defence = 8,
+        .magic_defence = 9,
+        .ranged_defence = 10,
+        .melee_strength = 11,
+        .ranged_strength = 12,
+        .magic_strength = 13,
+        .attack_speed = 4,
+        .attack_range = 5,
+    };
+    GearBonuses post = {
+        .stab_attack = 21,
+        .slash_attack = 23,
+        .crush_attack = 25,
+        .magic_attack = 27,
+        .ranged_attack = 29,
+        .stab_defence = 31,
+        .slash_defence = 33,
+        .crush_defence = 35,
+        .magic_defence = 37,
+        .ranged_defence = 39,
+        .melee_strength = 41,
+        .ranged_strength = 43,
+        .magic_strength = 45,
+        .attack_speed = 6,
+        .attack_range = 7,
+    };
+
+    for (int item = 0; item <= NUM_ITEMS; item++) {
+        uint8_t item_idx = item < NUM_ITEMS ? (uint8_t)item : ITEM_NONE;
+        float direct[OSRS_ITEM_FEATURE_DIM];
+        float cached[OSRS_ITEM_FEATURE_DIM];
+        pvp_write_item_policy_features(
+            item_idx, 7, 1, &current, &post, direct);
+        pvp_write_item_policy_features_cached(
+            item_idx, 7, 1, &current, &post, cached);
+        assert_float_rows_near(
+            "item policy template", cached, direct, OSRS_ITEM_FEATURE_DIM, item_idx);
+
+        float direct_self[OSRS_ITEM_FEATURE_DIM];
+        float cached_self[PVP_EQUIPPED_SELF_FEATURE_DIM];
+        pvp_write_item_policy_features(
+            item_idx, -1, 0, NULL, NULL, direct_self);
+        pvp_write_equipped_self_item_features_cached(item_idx, cached_self);
+        assert_float_rows_near(
+            "equipped self template",
+            cached_self,
+            direct_self,
+            PVP_EQUIPPED_SELF_FEATURE_DIM,
+            item_idx);
+
+        float direct_target[NUM_ITEM_STATS];
+        float cached_target[PVP_EQUIPPED_TARGET_FEATURE_DIM];
+        get_item_stats_normalized(item_idx, direct_target);
+        pvp_write_target_item_stats_cached(item_idx, cached_target);
+        assert_float_rows_near(
+            "target item stats template",
+            cached_target,
+            direct_target,
+            PVP_EQUIPPED_TARGET_FEATURE_DIM,
+            item_idx);
+    }
+}
+
+static void setup_affordance_projection_player(Player* player, int state) {
+    memset(player, 0, sizeof(*player));
+    memset(player->equipped, ITEM_NONE, sizeof(player->equipped));
+    memset(player->inventory, ITEM_NONE, sizeof(player->inventory));
+
+    if (state == 0) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_WHIP;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_AHRIMS_ROBETOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_AHRIMS_ROBESKIRT;
+        player->equipped[GEAR_SLOT_RING] = ITEM_BERSERKER_RING;
+    } else if (state == 1) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_AGS;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_KARILS_TOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_BLACK_DHIDE_CHAPS;
+        player->equipped[GEAR_SLOT_RING] = ITEM_LIGHTBEARER;
+    } else if (state == 2) {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_MYSTIC_TOP;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_MYSTIC_BOTTOM;
+        player->equipped[GEAR_SLOT_RING] = ITEM_SEERS_RING_I;
+    } else {
+        player->equipped[GEAR_SLOT_WEAPON] = ITEM_RUNE_CROSSBOW;
+        player->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        player->equipped[GEAR_SLOT_BODY] = ITEM_BANDOS_CHESTPLATE;
+        player->equipped[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
+        player->equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    }
+
+    osrs_refresh_player_equipment(player);
+}
+
+static void fill_affordance_projection_inventory(
+    Player* player,
+    uint8_t item_idx,
+    int full_inventory
+) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        player->inventory[slot] = full_inventory ? ITEM_DRAGON_DAGGER : ITEM_NONE;
+    }
+    player->inventory[0] = item_idx;
+}
+
+static void test_inventory_affordance_projection_matches_copy_equip(void) {
+    printf("--- PvP inventory affordance projection matches copy equip ---\n");
+
+    Player player;
+    for (int state = 0; state < 4; state++) {
+        for (int full_inventory = 0; full_inventory <= 1; full_inventory++) {
+            for (int item = 0; item < NUM_ITEMS; item++) {
+                setup_affordance_projection_player(&player, state);
+                fill_affordance_projection_inventory(
+                    &player, (uint8_t)item, full_inventory);
+
+                PvpInventoryAffordances affordances;
+                memset(&affordances, 0xA5, sizeof(affordances));
+                pvp_collect_inventory_affordances(&player, &affordances);
+
+                int expected_gear_slot = osrs_item_gear_slot((uint8_t)item);
+                int expected_can_equip =
+                    osrs_player_can_equip_from_inventory_slot(&player, 0);
+                int expected_is_weapon = expected_gear_slot == GEAR_SLOT_WEAPON;
+                int expected_spec_arm =
+                    pvp_test_special_arm_after_any_weapon_equip_reference(&player);
+
+                assert_projection_int_eq("gear slot",
+                    affordances.gear_slot[0], expected_gear_slot, state, (uint8_t)item);
+                assert_projection_int_eq("weapon flag",
+                    affordances.is_weapon[0], expected_is_weapon, state, (uint8_t)item);
+                assert_projection_int_eq("can equip",
+                    affordances.can_equip[0], expected_can_equip, state, (uint8_t)item);
+                assert_projection_int_eq("special arm cache",
+                    affordances.has_equippable_affordable_spec_weapon,
+                    expected_spec_arm, state, (uint8_t)item);
+
+                if (expected_can_equip) {
+                    Player next = player;
+                    ASSERT_TRUE("copy equip succeeds",
+                        osrs_player_equip_from_inventory_slot(&next, 0));
+                    assert_projection_int_eq("has post bonuses",
+                        affordances.has_post_equip_bonuses[0], 1, state, (uint8_t)item);
+                    assert_projection_gear_eq("post equip bonuses",
+                        affordances.post_equip_bonuses[0],
+                        *get_slot_gear_bonuses(&next),
+                        state, (uint8_t)item);
+                } else {
+                    assert_projection_int_eq("no post bonuses",
+                        affordances.has_post_equip_bonuses[0], 0, state, (uint8_t)item);
+                }
+            }
+        }
+    }
+
+    setup_affordance_projection_player(&player, 2);
+    fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
+    PvpInventoryAffordances affordances;
+    memset(&affordances, 0xA5, sizeof(affordances));
+    pvp_collect_inventory_affordances(&player, &affordances);
+    assert_projection_int_eq("empty weapon full inventory two-handed can equip",
+        affordances.can_equip[0], 1, 2, ITEM_AGS);
+
+    setup_affordance_projection_player(&player, 0);
+    fill_affordance_projection_inventory(&player, ITEM_AGS, 1);
+    memset(&affordances, 0xA5, sizeof(affordances));
+    pvp_collect_inventory_affordances(&player, &affordances);
+    assert_projection_int_eq("occupied weapon full inventory two-handed cannot equip",
+        affordances.can_equip[0], 0, 0, ITEM_AGS);
+}
+
 static void test_pvp_log_emits_command_diagnostics(void) {
     printf("--- PvP log emits command diagnostics ---\n");
 
@@ -479,6 +1477,7 @@ static void test_pvp_log_emits_command_diagnostics(void) {
     log.damage_received = 10.0f;
     log.performance_score = 0.75f;
     log.attacks_landed = 4.0f;
+    log.expected_damage_prevented = 9.5f;
     log.equip_click_attempts = 5.0f;
     log.equip_click_noop_rate = 0.2f;
     log.special_arm_attempts = 2.0f;
@@ -487,6 +1486,19 @@ static void test_pvp_log_emits_command_diagnostics(void) {
     log.target_click_no_fire_rate = 0.25f;
     log.spell_attack_attempts = 3.0f;
     log.spell_attack_no_fire_rate = 0.33333334f;
+    log.selected_melee_attack_rate = 0.15f;
+    log.selected_ranged_attack_rate = 0.25f;
+    log.selected_magic_attack_rate = 0.60f;
+    log.target_click_chase_ticks = 7.0f;
+    log.explicit_move_ticks = 2.0f;
+    log.target_click_pre_move_dist = 3.0f;
+    log.target_click_post_move_dist = 1.0f;
+    log.target_click_success_pre_move_dist = 2.0f;
+    log.target_click_success_post_move_dist = 1.0f;
+    log.spell_attack_pre_move_dist = 6.0f;
+    log.spell_attack_post_move_dist = 5.0f;
+    log.spell_attack_success_pre_move_dist = 7.0f;
+    log.spell_attack_success_post_move_dist = 6.0f;
     log.weapon_attack_rate = 0.6f;
     log.melee_attack_rate = 0.2f;
     log.ranged_attack_rate = 0.3f;
@@ -505,13 +1517,105 @@ static void test_pvp_log_emits_command_diagnostics(void) {
         dict_get(out, "equip_click_noop_rate")->value, 0.2f, 1e-6f);
     ASSERT_FLOAT_NEAR("log target click no fire",
         dict_get(out, "target_click_no_fire_rate")->value, 0.25f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log expected damage prevented",
+        dict_get(out, "expected_damage_prevented")->value, 9.5f, 1e-6f);
     ASSERT_FLOAT_NEAR("log weapon attack rate",
         dict_get(out, "weapon_attack_rate")->value, 0.6f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log selected magic attack rate",
+        dict_get(out, "selected_magic_attack_rate")->value, 0.60f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log target click chase ticks",
+        dict_get(out, "target_click_chase_ticks")->value, 7.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log explicit move ticks",
+        dict_get(out, "explicit_move_ticks")->value, 2.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log target click pre move dist",
+        dict_get(out, "target_click_pre_move_dist")->value, 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log spell success post move dist",
+        dict_get(out, "spell_attack_success_post_move_dist")->value, 6.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("log spec after equip",
         dict_get(out, "spec_after_equip_rate")->value, 0.1f, 1e-6f);
 
     free(out->items);
     free(out);
+}
+
+static void test_terminal_log_accumulates_command_diagnostics(void) {
+    printf("--- PvP terminal log accumulates command diagnostics ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+    env.tag = 3;
+    env.pvp.log.wins = 1.0f;
+    env.pvp.log.episode_return = 1.0f;
+    env.pvp.log.episode_length = 64.0f;
+    env.pvp.log.expected_damage_prevented = 12.0f;
+    env.pvp.log.equip_click_attempts = 8.0f;
+    env.pvp.log.equip_click_noop_rate = 0.25f;
+    env.pvp.log.special_arm_attempts = 3.0f;
+    env.pvp.log.special_arm_noop_rate = 0.33333334f;
+    env.pvp.log.target_click_attempts = 10.0f;
+    env.pvp.log.target_click_no_fire_rate = 0.4f;
+    env.pvp.log.spell_attack_attempts = 5.0f;
+    env.pvp.log.spell_attack_no_fire_rate = 0.2f;
+    env.pvp.log.selected_melee_attack_rate = 0.2f;
+    env.pvp.log.selected_ranged_attack_rate = 0.3f;
+    env.pvp.log.selected_magic_attack_rate = 0.5f;
+    env.pvp.log.target_click_chase_ticks = 9.0f;
+    env.pvp.log.explicit_move_ticks = 4.0f;
+    env.pvp.log.target_click_pre_move_dist = 5.0f;
+    env.pvp.log.target_click_post_move_dist = 2.0f;
+    env.pvp.log.target_click_success_pre_move_dist = 4.0f;
+    env.pvp.log.target_click_success_post_move_dist = 1.0f;
+    env.pvp.log.spell_attack_pre_move_dist = 6.0f;
+    env.pvp.log.spell_attack_post_move_dist = 5.0f;
+    env.pvp.log.spell_attack_success_pre_move_dist = 8.0f;
+    env.pvp.log.spell_attack_success_post_move_dist = 7.0f;
+    env.pvp.log.weapon_attack_rate = 0.7f;
+    env.pvp.log.melee_attack_rate = 0.1f;
+    env.pvp.log.ranged_attack_rate = 0.2f;
+    env.pvp.log.magic_attack_rate = 0.4f;
+    env.pvp.log.attack_after_equip_rate = 0.5f;
+    env.pvp.log.spec_after_equip_rate = 0.125f;
+    env.pvp.log.n = 1.0f;
+
+    pvp_env_accumulate_terminal_log(&env);
+
+    ASSERT_FLOAT_NEAR("accumulated equip attempts",
+        env.log.equip_click_attempts, 8.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated expected damage prevented",
+        env.log.expected_damage_prevented, 12.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated special attempts",
+        env.log.special_arm_attempts, 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target attempts",
+        env.log.target_click_attempts, 10.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spell attempts",
+        env.log.spell_attack_attempts, 5.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated weapon rate",
+        env.log.weapon_attack_rate, 0.7f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated selected ranged rate",
+        env.log.selected_ranged_attack_rate, 0.3f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target chase ticks",
+        env.log.target_click_chase_ticks, 9.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated explicit move ticks",
+        env.log.explicit_move_ticks, 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated target success pre move dist",
+        env.log.target_click_success_pre_move_dist, 4.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spell post move dist",
+        env.log.spell_attack_post_move_dist, 5.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated melee rate",
+        env.log.melee_attack_rate, 0.1f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated ranged rate",
+        env.log.ranged_attack_rate, 0.2f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated magic rate",
+        env.log.magic_attack_rate, 0.4f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated attack after equip",
+        env.log.attack_after_equip_rate, 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated spec after equip",
+        env.log.spec_after_equip_rate, 0.125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated tagged bank score",
+        env.log.hist_score_bank[2], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("accumulated n",
+        env.log.n, 1.0f, 1e-6f);
+    ASSERT_INT_EQ("boundary reached", env.boundary_reached, 1);
 }
 
 static void test_no_weapon_observation_has_zero_attack_profile(void) {
@@ -816,6 +1920,113 @@ static void test_shared_player_step_destination_clears_interaction(void) {
     collision_map_free(cmap);
 }
 
+static void test_pvp_local_pathfind_window_only_handles_near_destinations(void) {
+    printf("--- PvP local pathfind window only handles near destinations ---\n");
+
+    Player player;
+    memset(&player, 0, sizeof(player));
+    player.x = 3041;
+    player.y = 3530;
+
+    int base_x = 0;
+    int base_y = 0;
+    int w = 0;
+    int h = 0;
+    int ok = pvp_local_pathfind_window(
+        &player, 3043, 3530, &base_x, &base_y, &w, &h);
+
+    ASSERT_INT_EQ("near pathfind window enabled", ok, 1);
+    ASSERT_TRUE("near pathfind window width bounded", w <= PATHFIND_ARENA_MAX);
+    ASSERT_TRUE("near pathfind window height bounded", h <= PATHFIND_ARENA_MAX);
+    ASSERT_TRUE("near pathfind window contains source",
+        player.x >= base_x && player.x < base_x + w &&
+        player.y >= base_y && player.y < base_y + h);
+    ASSERT_TRUE("near pathfind window contains destination",
+        3043 >= base_x && 3043 < base_x + w &&
+        3530 >= base_y && 3530 < base_y + h);
+
+    ok = pvp_local_pathfind_window(
+        &player, 3100, 3530, &base_x, &base_y, &w, &h);
+    ASSERT_INT_EQ("far pathfind window falls back to full BFS", ok, 0);
+}
+
+static void assert_pvp_local_path_matches_full(
+    const CollisionMap* cmap,
+    int src_x,
+    int src_y,
+    int dest_x,
+    int dest_y
+) {
+    Player player;
+    memset(&player, 0, sizeof(player));
+    player.x = src_x;
+    player.y = src_y;
+
+    int base_x = 0;
+    int base_y = 0;
+    int w = 0;
+    int h = 0;
+    int ok = pvp_local_pathfind_window(
+        &player, dest_x, dest_y, &base_x, &base_y, &w, &h);
+    ASSERT_INT_EQ("representative local path window exists", ok, 1);
+    if (!ok) return;
+
+    PathResult full = encounter_pathfind(
+        cmap, 0, 0, src_x, src_y, dest_x, dest_y, NULL, NULL);
+    PathResult local = encounter_pathfind_arena(
+        cmap, 0, 0, src_x, src_y, dest_x, dest_y, NULL, NULL,
+        base_x, base_y, w, h);
+
+    ASSERT_INT_EQ("local path found matches full", local.found, full.found);
+    ASSERT_INT_EQ("local path dx matches full", local.next_dx, full.next_dx);
+    ASSERT_INT_EQ("local path dy matches full", local.next_dy, full.next_dy);
+    ASSERT_INT_EQ("local fallback x matches full", local.dest_x, full.dest_x);
+    ASSERT_INT_EQ("local fallback y matches full", local.dest_y, full.dest_y);
+}
+
+static void test_pvp_local_pathfind_matches_full_for_head_moves(void) {
+    printf("--- PvP local pathfind matches full BFS for head moves ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+
+    Dict* kwargs = pvp_kwargs();
+    my_init(&env, kwargs);
+
+    const CollisionMap* cmap = (const CollisionMap*)env.pvp.collision_map;
+    int starts[][2] = {
+        {3041, 3530},
+        {3046, 3531},
+        {3048, 3537},
+        {3055, 3540},
+        {3070, 3542},
+        {3095, 3550},
+    };
+    int start_count = (int)(sizeof(starts) / sizeof(starts[0]));
+
+    for (int i = 0; i < start_count; i++) {
+        int src_x = starts[i][0];
+        int src_y = starts[i][1];
+        if (!collision_tile_walkable(cmap, 0, src_x, src_y))
+            continue;
+
+        for (int action = 1; action < MOVE_DIM; action++) {
+            int dest_x = src_x + ENCOUNTER_MOVE_TARGET_DX[action];
+            int dest_y = src_y + ENCOUNTER_MOVE_TARGET_DY[action];
+            if (!is_in_wilderness(dest_x, dest_y))
+                continue;
+            if (!collision_tile_walkable(cmap, 0, dest_x, dest_y))
+                continue;
+            assert_pvp_local_path_matches_full(
+                cmap, src_x, src_y, dest_x, dest_y);
+        }
+    }
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
 static void test_persistent_staff_target_click_executes_melee(void) {
     printf("--- PvP persistent staff target click executes melee ---\n");
 
@@ -911,6 +2122,146 @@ static void test_static_binding_exposes_separate_action_mask(void) {
     c_close(&env);
 }
 
+static void test_static_binding_one_agent_skips_unexported_p1_generation(void) {
+    printf("--- PvP static binding one-agent skips unexported p1 generation ---\n");
+
+    Env env;
+    memset(&env, 0, sizeof(env));
+    StaticVec vec;
+    memset(&vec, 0, sizeof(vec));
+
+    float observations[OBS_SIZE];
+    float actions[NUM_ATNS];
+    float rewards[1];
+    float terminals[1];
+    unsigned char action_mask[MY_ACTION_MASK];
+    memset(observations, 0, sizeof(observations));
+    memset(actions, 0, sizeof(actions));
+    memset(rewards, 0, sizeof(rewards));
+    memset(terminals, 0, sizeof(terminals));
+    memset(action_mask, 0, sizeof(action_mask));
+
+    static_obs_set(&vec.observations, observations, 1);
+    vec.actions = actions;
+    vec.rewards = rewards;
+    vec.terminals = terminals;
+    vec.action_mask = action_mask;
+    vec.total_agents = 1;
+    vec.action_mask_size = MY_ACTION_MASK;
+
+    Dict* kwargs = pvp_kwargs();
+    dict_set(kwargs, "use_rollout_opponent", 0);
+    my_init(&env, kwargs);
+    my_setup_perm(&vec, &env, 0);
+    memset(env.pvp._masks_buf + ACTION_MASK_SIZE, 0xA5, ACTION_MASK_SIZE);
+    c_reset(&env);
+
+    ASSERT_TRUE("slot 0 obs pointer exported", env.obs_ptr[0] == observations);
+    ASSERT_TRUE("slot 1 obs pointer absent", env.obs_ptr[1] == NULL);
+    ASSERT_TRUE("slot 1 mask pointer absent", env.action_mask_ptr[1] == NULL);
+    ASSERT_INT_EQ("generated agent mask narrows to p0", env.pvp.action_masks_agents, 0x1);
+
+    int p0_valid = 0;
+    for (int i = 0; i < ACTION_MASK_SIZE; i++) {
+        p0_valid += action_mask[i] != 0;
+        ASSERT_INT_EQ("internal p1 mask remains untouched",
+            env.pvp._masks_buf[ACTION_MASK_SIZE + i], 0xA5);
+    }
+    ASSERT_TRUE("p0 exported mask has valid actions", p0_valid > 0);
+
+    free(kwargs->items);
+    free(kwargs);
+    c_close(&env);
+}
+
+static void test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors(void) {
+    printf("--- PvP obs norm sparse indices cover non-identity divisors ---\n");
+
+    ensure_obs_norm_initialized();
+
+    ASSERT_INT_EQ("slot obs size", SLOT_NUM_OBSERVATIONS, 2251);
+    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
+    ASSERT_INT_EQ("ocean obs size", OCEAN_OBS_SIZE, 2422);
+
+    int expected_count = 0;
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        expected_count += OBS_NORM_DIVISORS[obs_idx] != 1.0f;
+    }
+    ASSERT_INT_EQ("sparse norm index count", OBS_NORM_NON_IDENTITY_COUNT, expected_count);
+
+    for (int sparse_idx = 0; sparse_idx < OBS_NORM_NON_IDENTITY_COUNT; sparse_idx++) {
+        int obs_idx = OBS_NORM_NON_IDENTITY_INDICES[sparse_idx];
+        ASSERT_TRUE("sparse norm index in bounds",
+            obs_idx >= 0 && obs_idx < SLOT_NUM_OBSERVATIONS);
+        ASSERT_TRUE("sparse norm index divisor non-identity",
+            OBS_NORM_DIVISORS[obs_idx] != 1.0f);
+    }
+
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        if (OBS_NORM_DIVISORS[obs_idx] == 1.0f) {
+            continue;
+        }
+
+        int found = 0;
+        for (int sparse_idx = 0; sparse_idx < OBS_NORM_NON_IDENTITY_COUNT; sparse_idx++) {
+            found |= OBS_NORM_NON_IDENTITY_INDICES[sparse_idx] == obs_idx;
+        }
+        ASSERT_TRUE("non-identity divisor appears in sparse index list", found);
+    }
+}
+
+static void test_pvp_obs_sparse_normalization_matches_full_division(void) {
+    printf("--- PvP obs sparse normalization matches full division ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+
+    float p0_obs[OCEAN_OBS_SIZE];
+    float p1_obs[OCEAN_OBS_SIZE];
+    float expected_p0[OCEAN_OBS_SIZE];
+    float expected_p1[OCEAN_OBS_SIZE];
+    memset(p0_obs, 0, sizeof(p0_obs));
+    memset(p1_obs, 0, sizeof(p1_obs));
+    memset(expected_p0, 0, sizeof(expected_p0));
+    memset(expected_p1, 0, sizeof(expected_p1));
+
+    env.ocean_io.agent_obs = p0_obs;
+    env.ocean_io.agent_obs_p1 = p1_obs;
+
+    for (int obs_idx = 0; obs_idx < NUM_AGENTS * SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        env.observations[obs_idx] = (float)((obs_idx % 97) - 41) * 0.25f;
+    }
+    for (int mask_idx = 0; mask_idx < NUM_AGENTS * ACTION_MASK_SIZE; mask_idx++) {
+        env.action_masks[mask_idx] = (unsigned char)((mask_idx % 3) == 0);
+    }
+
+    ensure_obs_norm_initialized();
+    for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
+        expected_p0[obs_idx] =
+            env.observations[obs_idx] / OBS_NORM_DIVISORS[obs_idx];
+        expected_p1[obs_idx] =
+            env.observations[SLOT_NUM_OBSERVATIONS + obs_idx] /
+            OBS_NORM_DIVISORS[obs_idx];
+    }
+    for (int mask_idx = 0; mask_idx < ACTION_MASK_SIZE; mask_idx++) {
+        expected_p0[SLOT_NUM_OBSERVATIONS + mask_idx] =
+            (float)env.action_masks[mask_idx];
+        expected_p1[SLOT_NUM_OBSERVATIONS + mask_idx] =
+            (float)env.action_masks[ACTION_MASK_SIZE + mask_idx];
+    }
+
+    ocean_write_obs(&env);
+    ocean_write_obs_p1(&env);
+
+    for (int obs_idx = 0; obs_idx < OCEAN_OBS_SIZE; obs_idx++) {
+        ASSERT_FLOAT_NEAR("p0 sparse normalized obs",
+            p0_obs[obs_idx], expected_p0[obs_idx], 1e-6f);
+        ASSERT_FLOAT_NEAR("p1 sparse normalized obs",
+            p1_obs[obs_idx], expected_p1[obs_idx], 1e-6f);
+    }
+}
+
 static void test_static_binding_sets_scripted_opponents(void) {
     printf("--- PvP static binding sets scripted opponents ---\n");
 
@@ -979,6 +2330,60 @@ static void test_expected_damage_prayer_modifier(void) {
     ASSERT_FLOAT_NEAR("on-prayer EV ratio", on_prayer / off_prayer, 0.59f, 0.02f);
 }
 
+static void pvp_setup_ranged_pressure_counterfactual(Player* attacker, Player* defender) {
+    osrs_player_inventory_clear(attacker);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_WEAPON, ITEM_RUNE_CROSSBOW);
+    osrs_player_set_equipment_slot(attacker, GEAR_SLOT_AMMO, ITEM_DIAMOND_BOLTS_E);
+    attacker->current_gear = GEAR_RANGED;
+
+    osrs_player_inventory_clear(defender);
+    osrs_player_set_equipment_slot(defender, GEAR_SLOT_BODY, ITEM_KARILS_TOP);
+    osrs_player_set_equipment_slot(defender, GEAR_SLOT_LEGS, ITEM_DHAROKS_PLATELEGS);
+    osrs_player_inventory_add(defender, ITEM_MYSTIC_TOP);
+    osrs_player_inventory_add(defender, ITEM_MYSTIC_BOTTOM);
+    defender->prayer = PRAYER_NONE;
+}
+
+static void test_expected_damage_prevention_uses_available_gear_and_prayer(void) {
+    printf("--- PvP expected damage prevention uses available gear and prayer ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    Player* defender = &env.players[0];
+    Player* attacker = &env.players[1];
+    pvp_setup_ranged_pressure_counterfactual(attacker, defender);
+
+    float no_prayer_ev = pvp_expected_attack_damage(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, PRAYER_NONE);
+    float gear_saved = pvp_expected_damage_prevented_by_available_defence(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, no_prayer_ev);
+
+    defender->prayer = PRAYER_PROTECT_RANGED;
+    float protected_ev = pvp_expected_attack_damage(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, defender->prayer);
+    float protected_saved = pvp_expected_damage_prevented_by_available_defence(
+        attacker, defender, ATTACK_STYLE_RANGED, 0, ITEM_NONE, 0, protected_ev);
+
+    ASSERT_TRUE("defensive gear saves expected damage", gear_saved > 0.0f);
+    ASSERT_TRUE("correct prayer lowers actual EV", protected_ev < no_prayer_ev);
+    ASSERT_TRUE("correct prayer increases prevented EV", protected_saved > gear_saved);
+
+    defender->expected_damage_prevented = 0.0f;
+    defender->expected_damage_prevented_tick = 0.0f;
+    env.shaping.incoming_damage_avoidance_reward_coef = 1.0f;
+    perform_attack(&env, 1, 0, ATTACK_STYLE_RANGED, 0, 0, 5);
+    ASSERT_TRUE("attack registers prevented EV",
+        defender->expected_damage_prevented_tick > 0.0f);
+    ASSERT_FLOAT_NEAR("tick and total prevented EV match",
+        defender->expected_damage_prevented_tick,
+        defender->expected_damage_prevented,
+        1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_expected_damage_zero_accuracy(void) {
     printf("--- PvP expected damage zero accuracy ---\n");
 
@@ -1021,16 +2426,37 @@ static void test_expected_damage_representative_specs(void) {
 
 int main(void) {
     setbuf(stdout, NULL);
+    test_terminal_reward_survives_auto_reset();
+    test_terminal_loss_and_draw_rewards_zero();
+    test_timeout_and_simultaneous_death_are_draws();
+    test_p1_reset_obs_refreshes_after_auto_reset();
+    test_target_hp_observation_is_current();
+    test_shaping_disabled_emits_only_terminal_reward();
+    test_expected_damage_reward_works_without_legacy_shaping();
+    test_incoming_damage_avoidance_reward_works_without_legacy_shaping();
+    test_ko_supply_reward_works_without_legacy_shaping();
+    test_reward_coefficients_parse_from_binding_kwargs();
+    test_shaping_uses_encounter_overhead_and_spec_prayer_style();
+    test_scripted_legacy_movement_maps_to_head_move();
+    test_duplicate_equip_clicks_apply_once();
+    test_static_vec_train_mask_round_trip();
+    test_pvp_state_snapshot_restores_logical_state();
     test_native_init_loads_collision_map_and_walkable_spawns();
     test_fixed_spawn_override_uses_walkable_pair();
     test_seeded_resets_replay_varied_setup_sequence();
     test_seeded_pid_shuffles_during_episode();
     test_movement_masks_respect_blocked_tiles();
     test_slotclick_schema_and_inventory_mask();
+    test_two_handed_full_inventory_affordance_matches_masks();
     test_attack_mask_allows_post_equip_weapon_target_click();
+    test_attack_mask_lazy_reach_matches_eager_reference();
+    test_attack_reach_short_circuits_mobile_without_collision_map();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
+    test_item_observation_templates_match_direct_writers();
+    test_inventory_affordance_projection_matches_copy_equip();
     test_pvp_log_emits_command_diagnostics();
+    test_terminal_log_accumulates_command_diagnostics();
     test_no_weapon_observation_has_zero_attack_profile();
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
@@ -1040,11 +2466,17 @@ int main(void) {
     test_target_click_staff_bash_chases_into_melee_range();
     test_target_click_overrides_stale_walk_destination();
     test_shared_player_step_destination_clears_interaction();
+    test_pvp_local_pathfind_window_only_handles_near_destinations();
+    test_pvp_local_pathfind_matches_full_for_head_moves();
     test_persistent_staff_target_click_executes_melee();
     test_static_binding_exposes_separate_action_mask();
+    test_static_binding_one_agent_skips_unexported_p1_generation();
+    test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors();
+    test_pvp_obs_sparse_normalization_matches_full_division();
     test_static_binding_sets_scripted_opponents();
     test_binding_pfsp_stats_round_trip();
     test_expected_damage_prayer_modifier();
+    test_expected_damage_prevention_uses_available_gear_and_prayer();
     test_expected_damage_zero_accuracy();
     test_expected_damage_standard_uniform();
     test_expected_damage_representative_specs();

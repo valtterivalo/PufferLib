@@ -653,6 +653,7 @@ typedef struct {
     int last_attack_dx;
     int last_attack_dy;
     int last_attack_dist;
+    int attack_intent_pre_move_dist;
 
     // Pending hits queue
     PendingHit pending_hits[MAX_PENDING_HITS];
@@ -680,6 +681,9 @@ typedef struct {
     float tick_damage_scale;
     float damage_dealt_scale;
     float damage_received_scale;
+    float expected_damage_dealt_tick;
+    float expected_damage_received_tick;
+    float expected_damage_prevented_tick;
 
     // Hit statistics
     int total_target_hit_count;
@@ -743,6 +747,7 @@ typedef struct {
     float total_damage_received;
     float expected_damage_dealt;
     float expected_damage_received;
+    float expected_damage_prevented;
 
     // Equipment flags
     int is_lunar_spellbook;
@@ -787,6 +792,19 @@ typedef struct {
     int target_click_successes;
     int spell_attack_attempts;
     int spell_attack_successes;
+    int selected_melee_attack_attempts;
+    int selected_ranged_attack_attempts;
+    int selected_magic_attack_attempts;
+    int target_click_chase_ticks;
+    int explicit_move_ticks;
+    int target_click_pre_move_dist_sum;
+    int target_click_post_move_dist_sum;
+    int target_click_success_pre_move_dist_sum;
+    int target_click_success_post_move_dist_sum;
+    int spell_attack_pre_move_dist_sum;
+    int spell_attack_post_move_dist_sum;
+    int spell_attack_success_pre_move_dist_sum;
+    int spell_attack_success_post_move_dist_sum;
     int weapon_attack_successes;
     int melee_attack_successes;
     int ranged_attack_successes;
@@ -852,10 +870,12 @@ typedef struct {
     float episode_return;
     float episode_length;
     float wins;
+    float draws;
     float damage_dealt;
     float damage_received;
     float expected_damage_dealt;
     float expected_damage_received;
+    float expected_damage_prevented;
     float expected_damage_diff;
     float expected_damage_score;
     float ko_supply_score;
@@ -904,6 +924,19 @@ typedef struct {
     float target_click_no_fire_rate;
     float spell_attack_attempts;
     float spell_attack_no_fire_rate;
+    float selected_melee_attack_rate;
+    float selected_ranged_attack_rate;
+    float selected_magic_attack_rate;
+    float target_click_chase_ticks;
+    float explicit_move_ticks;
+    float target_click_pre_move_dist;
+    float target_click_post_move_dist;
+    float target_click_success_pre_move_dist;
+    float target_click_success_post_move_dist;
+    float spell_attack_pre_move_dist;
+    float spell_attack_post_move_dist;
+    float spell_attack_success_pre_move_dist;
+    float spell_attack_success_post_move_dist;
     float weapon_attack_rate;
     float melee_attack_rate;
     float ranged_attack_rate;
@@ -1169,6 +1202,9 @@ typedef struct {
     float ko_bonus;                  // bonus for KO (opponent had food left)
     float ko_supplies_bonus_coef;    // bonus per unit of opponent supply fraction remaining at KO
     float wasted_resources_penalty;  // dying with food/brews left
+    float expected_damage_reward_coef;
+    float incoming_damage_avoidance_reward_coef;
+    float ko_supply_reward_coef;
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training
     int   enabled;                   // 0 = sparse only, 1 = full shaping
@@ -1212,7 +1248,9 @@ typedef enum {
     OPP_BLOOD_HEALER,
     OPP_GMAUL_COMBO,
     OPP_RANGE_KITER,
+    OPP_ADAPTIVE_NH,
     OPP_SELFPLAY,
+    OPP_STRICT_KITER,
 } OpponentType;
 
 #define MAX_OPPONENT_POOL 32
@@ -1266,6 +1304,8 @@ typedef struct {
 
     int combo_state;                 /* 0=idle, 1=spec_fired (follow with gmaul next tick) */
     float ko_threshold;              /* target HP fraction to trigger KO sequence */
+    int adaptive_mage_camp_ticks;
+    int adaptive_melee_threat_ticks;
 
     /* Offensive prayer miss: chance to attack without switching loadout (skipping auto-prayer) */
     float offensive_prayer_miss;
@@ -1364,6 +1404,8 @@ typedef struct {
     float _rews_buf[NUM_AGENTS];
     unsigned char _terms_buf[NUM_AGENTS];
     unsigned char _masks_buf[NUM_AGENTS * ACTION_MASK_SIZE];
+    float step_rewards[NUM_AGENTS];
+    unsigned char step_terminals[NUM_AGENTS];
 
 } OsrsEnv;
 

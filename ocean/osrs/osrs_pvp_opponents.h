@@ -71,7 +71,9 @@ static inline const char* osrs_pvp_opponent_type_name(OpponentType type) {
         case OPP_BLOOD_HEALER: return "Blood Healer";
         case OPP_GMAUL_COMBO: return "Gmaul Combo";
         case OPP_RANGE_KITER: return "Range Kiter";
+        case OPP_ADAPTIVE_NH: return "Adaptive NH";
         case OPP_SELFPLAY: return "Opponent Agent";
+        case OPP_STRICT_KITER: return "Strict Kiter";
         default: break;
     }
     return "Opponent";
@@ -405,7 +407,7 @@ typedef struct {
 #define RR(b, v) {(b), (v)}
 
 /*                                    pray_acc      off_pray      off_pray_r    act_delay      mistake        off_pray_miss */
-static const OpponentRandRanges OPP_RAND_RANGES[OPP_RANGE_KITER + 1] = {
+static const OpponentRandRanges OPP_RAND_RANGES[OPP_STRICT_KITER + 1] = {
     [OPP_NONE]                  = { RR(0,0),      RR(0,0),      RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
     [OPP_TRUE_RANDOM]           = { RR(0.33,0),   RR(0.33,0),   RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
     [OPP_PANICKING]             = { RR(0.33,0.1), RR(0.33,0),   RR(0,0),      RR(0.10,0.05), RR(0,0),       RR(0,0) },
@@ -437,6 +439,9 @@ static const OpponentRandRanges OPP_RAND_RANGES[OPP_RANGE_KITER + 1] = {
     [OPP_BLOOD_HEALER]          = { RR(0.90,0.05),RR(0.88,0.05),RR(0.80,0.10),RR(0.05,0.03), RR(0.04,0.02), RR(0.05,0.03) },
     [OPP_GMAUL_COMBO]           = { RR(0.96,0.03),RR(0.95,0.03),RR(0.90,0.05),RR(0.03,0.02), RR(0.02,0.01), RR(0.02,0.01) },
     [OPP_RANGE_KITER]           = { RR(0.93,0.04),RR(0.93,0.04),RR(0.85,0.08),RR(0.04,0.02), RR(0.03,0.02), RR(0.04,0.02) },
+    [OPP_ADAPTIVE_NH]           = { RR(1.00,0),   RR(1.00,0),   RR(0.90,0),   RR(0,0),       RR(0,0),       RR(0,0) },
+    [OPP_SELFPLAY]              = { RR(0,0),      RR(0,0),      RR(0,0),      RR(0,0),       RR(0,0),       RR(0,0) },
+    [OPP_STRICT_KITER]          = { RR(1.00,0),   RR(1.00,0),   RR(0.95,0),   RR(0,0),       RR(0,0),       RR(0,0) },
 };
 
 #undef RR
@@ -2301,7 +2306,7 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = (agent_actions[HEAD_MOVE] != 0 || is_move_action(attack)) ? 1 : 0;
 }
 
-static inline int opp_get_read_defensive_prayer(OpponentState* opp) {
+static inline int opp_get_read_defensive_prayer(const OpponentState* opp) {
     if (opp->read_agent_style == ATTACK_STYLE_MAGIC) return OVERHEAD_MAGE;
     if (opp->read_agent_style == ATTACK_STYLE_RANGED) return OVERHEAD_RANGED;
     if (opp->read_agent_style == ATTACK_STYLE_MELEE) return OVERHEAD_MELEE;
@@ -2929,6 +2934,267 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
+static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+
+    opp_tick_cooldowns(opp);
+    opp_read_agent_action(env, opp);
+    OppConsumables cons = opp_get_consumables(opp, self);
+    opp_apply_defensive_prayer(
+        env, opp, actions, self, target, OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC);
+    int eating = opp_apply_survival_policy(
+        opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
+
+    if (self->frozen_ticks == 0 && dist <= 1) {
+        actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
+            ? MOVE_UNDER
+            : MOVE_FARCAST_5;
+        return;
+    }
+
+    if (opp_should_skip_offensive(env, opp)) return;
+
+    if (!opp_attack_ready(self) || eating) {
+        if (self->frozen_ticks == 0) {
+            if (target->frozen_ticks > 0 && dist < 5) {
+                actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+            } else if (dist > 7) {
+                actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+            }
+        }
+        return;
+    }
+
+    int actual_style;
+    int actual_attack;
+    if (target->frozen_ticks == 0 &&
+            target->freeze_immunity_ticks == 0 &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE)) {
+        actual_style = OPP_STYLE_MAGE;
+        actual_attack = 0;
+    } else {
+        int allowed = OPP_STYLE_MASK_MAGE | OPP_STYLE_MASK_RANGED;
+        if (dist <= 1 && target->prayer != PRAYER_PROTECT_MELEE) {
+            allowed |= OPP_STYLE_MASK_MELEE;
+        }
+        OppStyleChoice choice = opp_resolve_attack_style(
+            env, opp, self, target, allowed, opp_get_off_prayer_mask(self, target));
+        actual_style = choice.style;
+        actual_attack = actual_style == OPP_STYLE_MAGE
+            ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+            : 2;
+    }
+
+    opp_apply_boost_potion(env, opp, actions, self, actual_style, 0);
+    opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
+}
+
+typedef struct {
+    int presents_mage;
+    int protects_magic;
+    int adjacent;
+    int melee_attack_resolved;
+    int melee_recent_count;
+    int mage_camp_ticks;
+    int melee_threat_ticks;
+    int attack_ready_soon;
+} PvpMageCampMeleeSignal;
+
+static inline int pvp_recent_attack_style_count(
+    const AttackStyle attacks[HISTORY_SIZE],
+    AttackStyle style
+) {
+    int count = 0;
+    for (int i = 0; i < HISTORY_SIZE; i++) {
+        if (attacks[i] == style) count++;
+    }
+    return count;
+}
+
+static inline void pvp_adaptive_nh_update_memory(
+    OpponentState* opp,
+    const Player* self,
+    const Player* target
+) {
+    int adjacent = chebyshev_distance(self->x, self->y, target->x, target->y) <= 1;
+    int mage_camp =
+        target->visible_gear == GEAR_MAGE &&
+        target->prayer == PRAYER_PROTECT_MAGIC &&
+        adjacent;
+    int melee_threat =
+        target->last_attack_style == ATTACK_STYLE_MELEE ||
+        target->attack_style_this_tick == ATTACK_STYLE_MELEE;
+
+    if (mage_camp) {
+        opp->adaptive_mage_camp_ticks++;
+    } else if (opp->adaptive_mage_camp_ticks > 0) {
+        opp->adaptive_mage_camp_ticks--;
+    }
+
+    if (melee_threat) {
+        opp->adaptive_melee_threat_ticks = 16;
+    } else if (opp->adaptive_melee_threat_ticks > 0) {
+        opp->adaptive_melee_threat_ticks--;
+    }
+}
+
+static inline PvpMageCampMeleeSignal pvp_mage_camp_melee_signal(
+    const OpponentState* opp,
+    const Player* self,
+    const Player* target
+) {
+    PvpMageCampMeleeSignal out;
+    out.presents_mage = target->visible_gear == GEAR_MAGE;
+    out.protects_magic = target->prayer == PRAYER_PROTECT_MAGIC;
+    out.adjacent = chebyshev_distance(self->x, self->y, target->x, target->y) <= 1;
+    out.melee_attack_resolved =
+        target->last_attack_style == ATTACK_STYLE_MELEE ||
+        target->attack_style_this_tick == ATTACK_STYLE_MELEE;
+    out.melee_recent_count = pvp_recent_attack_style_count(
+        self->recent_target_attack_styles,
+        ATTACK_STYLE_MELEE);
+    out.mage_camp_ticks = opp->adaptive_mage_camp_ticks;
+    out.melee_threat_ticks = opp->adaptive_melee_threat_ticks;
+    out.attack_ready_soon = remaining_ticks(target->attack_timer) <= 1;
+    return out;
+}
+
+static inline int pvp_should_counter_mage_camp_melee(PvpMageCampMeleeSignal s) {
+    return s.presents_mage &&
+        s.protects_magic &&
+        s.adjacent &&
+        (s.melee_attack_resolved ||
+         s.melee_recent_count >= 1 ||
+         s.melee_threat_ticks > 0 ||
+         s.mage_camp_ticks >= 4);
+}
+
+static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal s) {
+    return pvp_should_counter_mage_camp_melee(s) &&
+        (s.attack_ready_soon ||
+         s.melee_recent_count >= 1 ||
+         s.melee_threat_ticks > 0 ||
+         s.mage_camp_ticks >= 4);
+}
+
+static inline void pvp_adaptive_nh_apply_defensive_prayer(
+    const OpponentState* opp,
+    int* actions,
+    Player* self,
+    Player* target,
+    PvpMageCampMeleeSignal signal
+) {
+    int prayer = -1;
+    if (opp->has_read_this_tick && opp->read_agent_style != ATTACK_STYLE_NONE) {
+        prayer = opp_get_read_defensive_prayer(opp);
+    }
+    if (prayer < 0) {
+        prayer = pvp_should_pray_melee_against_mage_camp(signal)
+            ? OVERHEAD_MELEE
+            : opp_get_defensive_prayer_with_spec(target);
+    }
+    if (!opp_has_prayer_active(self, prayer)) {
+        opp_emit_prayer(actions, self, prayer);
+    }
+}
+
+static inline MeleeSpecWeapon pvp_adaptive_nh_melee_spec_for_item(uint8_t item) {
+    switch (item) {
+        case ITEM_AGS:              return MELEE_SPEC_AGS;
+        case ITEM_DRAGON_CLAWS:     return MELEE_SPEC_DRAGON_CLAWS;
+        case ITEM_GRANITE_MAUL:     return MELEE_SPEC_GRANITE_MAUL;
+        case ITEM_DRAGON_DAGGER:    return MELEE_SPEC_DRAGON_DAGGER;
+        case ITEM_VOIDWAKER:        return MELEE_SPEC_VOIDWAKER;
+        case ITEM_STATIUS_WARHAMMER:return MELEE_SPEC_DWH;
+        case ITEM_ANCIENT_GS:       return MELEE_SPEC_ANCIENT_GS;
+        case ITEM_VESTAS:           return MELEE_SPEC_VESTAS;
+        default:                    return MELEE_SPEC_NONE;
+    }
+}
+
+static inline void pvp_adaptive_nh_apply_counter_attack(
+    OsrsEnv* env,
+    OpponentState* opp,
+    int* actions,
+    Player* self,
+    Player* target,
+    PvpMageCampMeleeSignal signal
+) {
+    if (!pvp_should_counter_mage_camp_melee(signal)) return;
+    if (!opp_attack_ready(self)) return;
+    if (opp_check_eating_queued(actions)) return;
+
+    uint8_t melee_spec_item = find_best_melee_spec(self);
+    MeleeSpecWeapon melee_spec = pvp_adaptive_nh_melee_spec_for_item(melee_spec_item);
+    if (target->prayer != PRAYER_PROTECT_MELEE &&
+            melee_spec != MELEE_SPEC_NONE &&
+            self->special_energy >= get_melee_spec_cost(melee_spec) &&
+            opp_loadout_can_hit_now(env, self, target, LOADOUT_SPEC_MELEE, OPP_STYLE_SPEC)) {
+        actions[HEAD_LOADOUT] = LOADOUT_SPEC_MELEE;
+        actions[HEAD_COMBAT] = ATTACK_ATK;
+        return;
+    }
+
+    if (target->frozen_ticks == 0 &&
+            target->freeze_immunity_ticks == 0 &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MAGE, 0);
+        return;
+    }
+
+    if (signal.adjacent && self->frozen_ticks == 0 && target->frozen_ticks == 0) {
+        actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+        return;
+    }
+
+    if (target->prayer != PRAYER_PROTECT_MELEE &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_MELEE)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MELEE, 2);
+        return;
+    }
+
+    if (target->prayer != PRAYER_PROTECT_RANGED &&
+            opp_style_can_hit_now(env, self, target, OPP_STYLE_RANGED)) {
+        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_RANGED, 2);
+    }
+}
+
+static void opp_adaptive_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    pvp_adaptive_nh_update_memory(opp, self, target);
+    PvpMageCampMeleeSignal signal = pvp_mage_camp_melee_signal(opp, self, target);
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    int counter_camp = pvp_should_counter_mage_camp_melee(signal);
+    float base_read_chance = opp->read_chance;
+    float base_triple_threshold = opp->eat_triple_threshold;
+    float base_double_threshold = opp->eat_double_threshold;
+    float base_brew_threshold = opp->eat_brew_threshold;
+
+    if (counter_camp) {
+        opp->read_chance = 1.0f;
+        if (opp->eat_triple_threshold < 0.45f) opp->eat_triple_threshold = 0.45f;
+        if (opp->eat_double_threshold < 0.65f) opp->eat_double_threshold = 0.65f;
+        if (opp->eat_brew_threshold < 0.88f) opp->eat_brew_threshold = 0.88f;
+    }
+    opp_nightmare_nh(env, opp, actions);
+    opp->read_chance = base_read_chance;
+    opp->eat_triple_threshold = base_triple_threshold;
+    opp->eat_double_threshold = base_double_threshold;
+    opp->eat_brew_threshold = base_brew_threshold;
+
+    pvp_adaptive_nh_apply_defensive_prayer(opp, actions, self, target, signal);
+    pvp_adaptive_nh_apply_counter_attack(env, opp, actions, self, target, signal);
+    if (!opp_attack_ready(self) &&
+            counter_camp &&
+            dist <= 1 &&
+            self->frozen_ticks == 0) {
+        actions[HEAD_COMBAT] = MOVE_FARCAST_5;
+    }
+}
+
 /* MixedEasy weights: panicking=0.18, true_random=0.18, weak_random=0.18,
    semi_random=0.15, sticky_prayer=0.10, random_eater=0.10, prayer_rookie=0.06,
    improved=0.05 */
@@ -3003,6 +3269,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = 0;
     opp->prev_dist_to_target = 0;
     opp->target_fleeing_ticks = 0;
+    opp->adaptive_mage_camp_ticks = 0;
+    opp->adaptive_melee_threat_ticks = 0;
 
     /* Per-episode resets for specific policies */
     if (opp->type == OPP_PANICKING) {
@@ -3054,7 +3322,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     /* Per-episode randomized decision parameters — resolved from sub-policy
      * so PFSP and mixed pools get the correct ranges. */
     OpponentType resolved = opp->active_sub_policy ? opp->active_sub_policy : opp->type;
-    if (resolved > 0 && resolved <= OPP_RANGE_KITER) {
+    if (resolved > 0 && resolved <= OPP_STRICT_KITER &&
+            resolved != OPP_SELFPLAY) {
         const OpponentRandRanges* r = &OPP_RAND_RANGES[resolved];
         opp->prayer_accuracy = rand_range(env, r->prayer_accuracy);
         opp->off_prayer_rate = rand_range(env, r->off_prayer_rate);
@@ -3071,6 +3340,10 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->read_chance = 0.25f;
     } else if (resolved == OPP_NIGHTMARE_NH) {
         opp->read_chance = 0.50f;
+    } else if (resolved == OPP_ADAPTIVE_NH) {
+        opp->read_chance = 0.75f;
+    } else if (resolved == OPP_STRICT_KITER) {
+        opp->read_chance = 0.50f;
     }
 
     /* Vengeance fighter: lunar spellbook (no freeze/blood, has veng) */
@@ -3084,7 +3357,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         resolved == OPP_UNPREDICTABLE_IMPROVED || resolved == OPP_UNPREDICTABLE_ONETICK ||
         (resolved >= OPP_ADVANCED_NH && resolved <= OPP_NIGHTMARE_NH) ||
         resolved == OPP_BLOOD_HEALER || resolved == OPP_GMAUL_COMBO ||
-        resolved == OPP_RANGE_KITER) {
+        resolved == OPP_RANGE_KITER || resolved == OPP_ADAPTIVE_NH ||
+        resolved == OPP_STRICT_KITER) {
         float raw[3];
         for (int i = 0; i < 3; i++) raw[i] = 0.33f + (rand_float(env) - 0.5f) * 0.4f;
         float sum = raw[0] + raw[1] + raw[2];
@@ -3144,7 +3418,78 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     actions[HEAD_ATTACK] = ATTACK_NONE;
 
     pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
-    actions[HEAD_ATTACK] = legacy_combat;
+    if (is_move_action(legacy_combat)) {
+        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+        actions[HEAD_MOVE] = pvp_head_move_from_legacy_target_move(
+            env, agent_idx, legacy_combat, cmap);
+    } else {
+        actions[HEAD_ATTACK] = legacy_combat;
+    }
+}
+
+static inline int opp_type_uses_hard_spacing_guard(OpponentType type) {
+    return (type >= OPP_ADVANCED_NH && type <= OPP_NIGHTMARE_NH) ||
+        type == OPP_BLOOD_HEALER ||
+        type == OPP_GMAUL_COMBO ||
+        type == OPP_RANGE_KITER ||
+        type == OPP_ADAPTIVE_NH ||
+        type == OPP_STRICT_KITER;
+}
+
+static inline int opp_target_click_style_from_weapon(uint8_t weapon) {
+    int weapon_style = get_item_attack_style(weapon);
+    if (weapon_style == 2) return OPP_STYLE_RANGED;
+    return OPP_STYLE_MELEE;
+}
+
+static inline int opp_legacy_attack_style_for_actions(Player* self, int* actions) {
+    int legacy_combat = actions[HEAD_COMBAT];
+    if (legacy_combat == ATTACK_ICE || legacy_combat == ATTACK_BLOOD) {
+        return OPP_STYLE_MAGE;
+    }
+    if (legacy_combat != ATTACK_ATK) {
+        return -1;
+    }
+
+    int legacy_loadout = actions[HEAD_LOADOUT];
+    switch (legacy_loadout) {
+        case LOADOUT_RANGE:
+        case LOADOUT_SPEC_RANGE:
+            return OPP_STYLE_RANGED;
+        case LOADOUT_SPEC_MAGIC:
+            return OPP_STYLE_MAGE;
+        case LOADOUT_MELEE:
+        case LOADOUT_MAGE:
+        case LOADOUT_TANK:
+        case LOADOUT_SPEC_MELEE:
+        case LOADOUT_GMAUL:
+            return OPP_STYLE_MELEE;
+        case LOADOUT_KEEP:
+            return opp_target_click_style_from_weapon(self->equipped[GEAR_SLOT_WEAPON]);
+        default:
+            return -1;
+    }
+}
+
+static inline void opp_apply_hard_spacing_guard(
+    OsrsEnv* env,
+    OpponentType active,
+    int* actions
+) {
+    if (!opp_type_uses_hard_spacing_guard(active)) return;
+
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    int style = opp_legacy_attack_style_for_actions(self, actions);
+    if (style < 0 || style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) return;
+    if (self->frozen_ticks > 0) return;
+
+    int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (dist > 1) return;
+
+    actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
+        ? MOVE_UNDER
+        : MOVE_FARCAST_5;
 }
 
 static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
@@ -3241,11 +3586,17 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
         case OPP_RANGE_KITER:
             opp_range_kiter(env, opp, actions);
             break;
+        case OPP_ADAPTIVE_NH:
+            opp_adaptive_nh(env, opp, actions);
+            break;
+        case OPP_STRICT_KITER:
+            opp_strict_kiter(env, opp, actions);
+            break;
         default:
-            /* OPP_NONE or unsupported: leave NOOPs */
             break;
     }
 
+    opp_apply_hard_spacing_guard(env, active, actions);
     pvp_translate_legacy_loadout_action_to_slotclicks(env, 1, actions);
 }
 

@@ -222,6 +222,9 @@ static void reset_tick_flags(Player* p) {
     p->tick_damage_scale = 0.0f;
     p->damage_dealt_scale = 0.0f;
     p->damage_received_scale = 0.0f;
+    p->expected_damage_dealt_tick = 0.0f;
+    p->expected_damage_received_tick = 0.0f;
+    p->expected_damage_prevented_tick = 0.0f;
     p->last_food_heal = 0;
     p->last_food_waste = 0;
     p->last_karambwan_heal = 0;
@@ -232,6 +235,7 @@ static void reset_tick_flags(Player* p) {
     p->last_potion_was_waste = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
+    p->attack_intent_pre_move_dist = 0;
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->attack_weapon_this_tick = ITEM_NONE;
     p->render_attack_target_this_tick = osrs_render_target_none();
@@ -246,9 +250,8 @@ static void reset_tick_flags(Player* p) {
     p->weapon_equipped_this_tick = 0;
 }
 
-// Forward declarations for phased execution
-static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
+static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions);
+static void execute_attacks(OsrsEnv* env, int agent_idx, const int* actions);
 
 static inline AttackStyle pvp_target_click_attack_style(Player* p) {
     AttackStyle weapon_style = get_slot_weapon_attack_style(p);
@@ -269,16 +272,36 @@ static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_
     }
 }
 
-static int execute_equip_clicks(OsrsEnv* env, int agent_idx, int* actions) {
+static inline void pvp_record_selected_attack_style(Player* p, AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            p->selected_melee_attack_attempts++;
+            break;
+        case ATTACK_STYLE_RANGED:
+            p->selected_ranged_attack_attempts++;
+            break;
+        case ATTACK_STYLE_MAGIC:
+            p->selected_magic_attack_attempts++;
+            break;
+        default:
+            break;
+    }
+}
+
+static int execute_equip_clicks(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     int clicks = 0;
+    uint8_t clicked_slots[OSRS_INVENTORY_SIZE] = {0};
 
     for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
         int action = actions[HEAD_EQUIP_0 + h];
         if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
 
-        p->equip_click_attempts++;
         int inventory_slot = action - 1;
+        if (clicked_slots[inventory_slot]) continue;
+        clicked_slots[inventory_slot] = 1;
+
+        p->equip_click_attempts++;
         if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot)) continue;
 
         uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
@@ -327,17 +350,7 @@ static void execute_special_action(Player* p, int special_action) {
     }
 }
 
-/**
- * Execute switch-phase actions for an agent (Phase 1).
- *
- * Execution order: overhead prayer → loadout → auto-offensive prayer →
- * consumables → movement → vengeance.
- *
- * CRITICAL: Prayer switches MUST be processed for BOTH players BEFORE
- * any attacks are processed. This ensures attacks check the correct
- * prayer state (the state after this tick's switches, not before).
- */
-static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
@@ -346,7 +359,6 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     int overhead_action = actions[HEAD_OVERHEAD];
     int offensive_action = actions[HEAD_OFFENSIVE];
 
-    /* LMS restricts smite/redemption. */
     if (env->is_lms &&
         (overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE ||
          overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)) {
@@ -435,48 +447,9 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, head_move);
         command_issued = 1;
     } else if (is_move_action(combat_action)) {
-        int tx = p->last_obs_target_x;
-        int ty = p->last_obs_target_y;
-        int dest_x = -1, dest_y = -1;
-        switch (combat_action) {
-            case MOVE_ADJACENT:
-                if (!select_closest_adjacent_tile(p, tx, ty, &dest_x, &dest_y, cmap)) {
-                    dest_x = -1; dest_y = -1;
-                }
-                break;
-            case MOVE_UNDER:
-                if (is_in_wilderness(tx, ty) && collision_tile_walkable(cmap, 0, tx, ty)) {
-                    dest_x = tx; dest_y = ty;
-                }
-                break;
-            case MOVE_DIAGONAL:
-                if (!select_closest_diagonal_tile(p, tx, ty, &dest_x, &dest_y, cmap)) {
-                    dest_x = -1; dest_y = -1;
-                }
-                break;
-            case MOVE_FARCAST_2:
-            case MOVE_FARCAST_3:
-            case MOVE_FARCAST_4:
-            case MOVE_FARCAST_5:
-            case MOVE_FARCAST_6:
-            case MOVE_FARCAST_7: {
-                int fd = combat_action - MOVE_FARCAST_2 + 2;
-                if (!select_farcast_tile(p, tx, ty, fd, &dest_x, &dest_y, cmap)) {
-                    dest_x = -1; dest_y = -1;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-        env->pvp_runtime.walk_dest_x[agent_idx] = dest_x;
-        env->pvp_runtime.walk_dest_y[agent_idx] = dest_y;
-        command_issued = (dest_x >= 0);
+        command_issued = pvp_set_walk_dest_from_legacy_target_move(
+            env, agent_idx, combat_action, cmap);
     }
-    /* no else: when no movement command is issued this tick, walk_dest
-       persists from a prior tick. matches OSRS click semantics — a click
-       walks the player until arrival or a new command overrides it. the
-       shared SDK clears walk_dest = -1 when the player arrives. */
     if (command_issued) {
         p->clicks_this_tick++;
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_MOVE);
@@ -495,7 +468,7 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
 static PvpAttackMoveIntent pvp_attack_move_intent(
     OsrsEnv* env,
     int agent_idx,
-    int* actions
+    const int* actions
 ) {
     Player* p = &env->players[agent_idx];
 
@@ -514,6 +487,11 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
+    if (attack_style != ATTACK_STYLE_NONE) {
+        Player* target = &env->players[1 - agent_idx];
+        p->attack_intent_pre_move_dist = chebyshev_distance(
+            p->x, p->y, target->x, target->y);
+    }
 
     int range = 1;
     if (attack_style != ATTACK_STYLE_NONE) {
@@ -531,18 +509,14 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     };
 }
 
-/**
- * Attack combat phase: range check + perform attack.
- * Called for ALL players AFTER all attack movements have resolved, so
- * dist is computed from final positions (fixes PID-dependent same-tile bug).
- */
-static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
     int combat_action = actions[HEAD_ATTACK];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
+    int selected_attack_action = attack_action;
 
     if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
         AttackStyle target_click_style = pvp_target_click_attack_style(p);
@@ -578,6 +552,9 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
+    if (selected_attack_action != ATTACK_NONE && attack_style != ATTACK_STYLE_NONE) {
+        pvp_record_selected_attack_style(p, attack_style);
+    }
 
     int gmaul_spec_ready = p->spec_armed &&
         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
@@ -587,6 +564,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     switch (attack_action) {
         case ATTACK_ATK:
             p->target_click_attempts++;
+            p->target_click_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+            p->target_click_post_move_dist_sum += dist;
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
                 OsrsAttackReachQuery reach = pvp_attack_reach_query(
                     cmap, p, t, attack_style);
@@ -595,6 +574,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                     int is_special = p->spec_armed && is_special_ready(p, attack_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
                     p->target_click_successes++;
+                    p->target_click_success_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+                    p->target_click_success_post_move_dist_sum += dist;
                     p->weapon_attack_successes++;
                     if (p->weapon_equipped_this_tick)
                         p->attack_after_equip_successes++;
@@ -609,6 +590,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         case ATTACK_ICE:
         case ATTACK_BLOOD:
             p->spell_attack_attempts++;
+            p->spell_attack_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+            p->spell_attack_post_move_dist_sum += dist;
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 int can_cast = (attack_action == ATTACK_ICE)
                     ? can_cast_ice_spell(p)
@@ -619,6 +602,8 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
                 if (osrs_attack_can_reach(&reach)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
                     p->spell_attack_successes++;
+                    p->spell_attack_success_pre_move_dist_sum += p->attack_intent_pre_move_dist;
+                    p->spell_attack_success_post_move_dist_sum += dist;
                     p->clicks_this_tick++;
                 }
             }
@@ -628,19 +613,28 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     }
 }
 
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_attacks(OsrsEnv* env, int agent_idx, const int* actions) {
     execute_attack_combat(env, agent_idx, actions);
 }
 
-/**
- * Execute all actions for an agent (convenience for opponents).
- * For correct prayer timing, c_step calls execute_switches for both
- * players FIRST, then execute_attacks for both players.
- */
 __attribute__((unused))
-static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
+static void execute_actions(OsrsEnv* env, int agent_idx, const int* actions) {
     execute_switches(env, agent_idx, actions);
     execute_attacks(env, agent_idx, actions);
+}
+
+static float pvp_remaining_supply_hp_fraction(const Player* p) {
+    BrewResult brew = osrs_brew_effect(p->base_hitpoints, p->base_attack,
+        p->base_strength, p->base_ranged, p->base_magic);
+    float remaining = 20.0f * (float)p->food_count
+        + 18.0f * (float)p->karambwan_count
+        + (float)brew.hp_healed * (float)p->brew_doses;
+    float max_supply = 20.0f * (float)MAXED_FOOD_COUNT
+        + 18.0f * (float)MAXED_KARAMBWAN_COUNT
+        + (float)brew.hp_healed * (float)MAXED_BREW_DOSES;
+    return max_supply > 0.0f
+        ? clampf(remaining / max_supply, 0.0f, 1.0f)
+        : 0.0f;
 }
 
 static float calculate_reward(OsrsEnv* env, int agent_idx) {
@@ -649,52 +643,44 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     Player* t = &env->players[1 - agent_idx];
     const RewardShapingConfig* cfg = &env->shaping;
 
-    // Sparse terminal reward: +1 win, 0 loss (forfeiting future rewards is the penalty)
+    reward += cfg->expected_damage_reward_coef * p->expected_damage_dealt_tick;
+    reward += cfg->incoming_damage_avoidance_reward_coef
+        * p->expected_damage_prevented_tick;
+
     if (env->episode_over) {
         if (env->winner == agent_idx) {
             reward += 1.0f;
+            reward += cfg->ko_supply_reward_coef * pvp_remaining_supply_hp_fraction(t);
         }
-    }
-
-    // Always-on behavioral penalties (independent of reward_shaping toggle)
-
-    // Prayer switch penalty: switched protection prayer but opponent didn't attack
-    if (cfg->prayer_penalty_enabled && !t->just_attacked) {
-        int overhead = env->last_executed_actions[agent_idx * NUM_ACTION_HEADS + HEAD_OVERHEAD];
-        if (overhead == OVERHEAD_MAGE || overhead == OVERHEAD_RANGED || overhead == OVERHEAD_MELEE) {
-            reward += cfg->prayer_switch_no_attack_penalty;
-        }
-    }
-
-    // Progressive click penalty: linear ramp above threshold
-    if (cfg->click_penalty_enabled && p->clicks_this_tick > cfg->click_penalty_threshold) {
-        int excess = p->clicks_this_tick - cfg->click_penalty_threshold;
-        reward += cfg->click_penalty_coef * (float)excess;
-    }
-
-    // Always-on positive signals (dense reward for bootstrapping learning)
-    float base_hp = (float)p->base_hitpoints;
-    if (p->damage_dealt_scale > 0.0f) {
-        reward += p->damage_dealt_scale * base_hp * 0.005f;
-    }
-    if (t->just_attacked && p->player_prayed_correct) {
-        reward += 0.01f;
     }
 
     if (!cfg->enabled) {
         return reward;
     }
 
-    // Terminal shaping bonuses (only when shaping enabled)
+    float shaping = 0.0f;
+
+    if (cfg->prayer_penalty_enabled && !t->just_attacked) {
+        int overhead = env->last_executed_actions[agent_idx * NUM_ACTION_HEADS + HEAD_OVERHEAD];
+        if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE ||
+            overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED ||
+            overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC) {
+            shaping += cfg->prayer_switch_no_attack_penalty;
+        }
+    }
+
+    if (cfg->click_penalty_enabled && p->clicks_this_tick > cfg->click_penalty_threshold) {
+        int excess = p->clicks_this_tick - cfg->click_penalty_threshold;
+        shaping += cfg->click_penalty_coef * (float)excess;
+    }
+
+    float base_hp = (float)p->base_hitpoints;
+
     if (env->episode_over) {
         if (env->winner == agent_idx) {
-            // KO bonus: opponent still had food — we killed through supplies
             if (t->food_count > 0 || t->karambwan_count > 0 || t->brew_doses > 0) {
-                reward += cfg->ko_bonus;
+                shaping += cfg->ko_bonus;
             }
-            // Proportional KO supplies bonus: linear in fraction of starting
-            // supplies the opponent still had at death. Sweep this coef in
-            // [0, ~0.5] to find if "fast KOs" matter as a training signal.
             float opp_total = (float)(t->food_count + t->karambwan_count
                                        + t->brew_doses + t->restore_doses
                                        + t->combat_potion_doses
@@ -704,82 +690,67 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
                                       + MAXED_COMBAT_POTION_DOSES
                                       + MAXED_RANGED_POTION_DOSES);
             if (max_total > 0.0f) {
-                reward += cfg->ko_supplies_bonus_coef * (opp_total / max_total);
+                shaping += cfg->ko_supplies_bonus_coef * (opp_total / max_total);
             }
         } else if (env->winner == (1 - agent_idx)) {
-            // Wasted resources: we died with food left — failed to use supplies
             if (p->food_count > 0 || p->karambwan_count > 0 || p->brew_doses > 0) {
-                reward += cfg->wasted_resources_penalty;
+                shaping += cfg->wasted_resources_penalty;
             }
         }
     }
-    // Per-tick reward shaping
-    float tick_shaping = 0.0f;
 
-    // Damage dealt: reward aggression
     if (p->damage_dealt_scale > 0.0f) {
         float damage_hp = p->damage_dealt_scale * base_hp;
-        tick_shaping += damage_hp * cfg->damage_dealt_coef;
-        // Burst bonus: reward big hits that set up KOs
+        shaping += damage_hp * cfg->damage_dealt_coef;
         if (damage_hp >= (float)cfg->damage_burst_threshold) {
-            tick_shaping += (damage_hp - (float)cfg->damage_burst_threshold + 1.0f)
+            shaping += (damage_hp - (float)cfg->damage_burst_threshold + 1.0f)
                           * cfg->damage_burst_bonus;
         }
     }
 
-    // Damage received: small penalty
     if (p->damage_received_scale > 0.0f) {
-        tick_shaping += p->damage_received_scale * base_hp * cfg->damage_received_coef;
+        shaping += p->damage_received_scale * base_hp * cfg->damage_received_coef;
     }
 
-    // Correct defensive prayer: opponent attacked and we prayed correctly
     if (t->just_attacked) {
         if (p->player_prayed_correct) {
-            tick_shaping += cfg->correct_prayer_bonus;
+            shaping += cfg->correct_prayer_bonus;
         } else {
-            tick_shaping += cfg->wrong_prayer_penalty;
+            shaping += cfg->wrong_prayer_penalty;
         }
     }
 
-    // Off-prayer hit and offensive prayer checks: we attacked
     if (p->just_attacked) {
         if (!p->target_prayed_correct) {
-            tick_shaping += cfg->off_prayer_hit_bonus;
+            shaping += cfg->off_prayer_hit_bonus;
         }
 
-        // Bad behavior: melee attack when frozen and out of range
         if (p->attack_style_this_tick == ATTACK_STYLE_MELEE
             && p->frozen_ticks > 0 && !is_in_melee_range(p, t)) {
-            tick_shaping += cfg->melee_frozen_penalty;
+            shaping += cfg->melee_frozen_penalty;
         }
 
-        // Spec timing rewards
         if (p->used_special_this_tick) {
-            // Off prayer: target NOT praying melee
-            if (t->prayer != PRAYER_PROTECT_MELEE) {
-                tick_shaping += cfg->spec_off_prayer_bonus;
+            if (!p->target_prayed_correct) {
+                shaping += cfg->spec_off_prayer_bonus;
             }
-            // Low defence: target in mage gear (mystic has no melee def)
             AttackStyle target_style = get_slot_weapon_attack_style(t);
             if (target_style == ATTACK_STYLE_MAGIC) {
-                tick_shaping += cfg->spec_low_defence_bonus;
+                shaping += cfg->spec_low_defence_bonus;
             }
-            // Low HP: target below 50%
             float target_hp_pct = (float)t->current_hitpoints / (float)t->base_hitpoints;
             if (target_hp_pct < 0.5f) {
-                tick_shaping += cfg->spec_low_hp_bonus;
+                shaping += cfg->spec_low_hp_bonus;
             }
         }
 
-        // Bad behavior: magic attack without staff equipped
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
             AttackStyle weapon_style = get_slot_weapon_attack_style(p);
             if (weapon_style != ATTACK_STYLE_MAGIC) {
-                tick_shaping += cfg->magic_no_staff_penalty;
+                shaping += cfg->magic_no_staff_penalty;
             }
         }
 
-        // Gear mismatch penalty: attacking with negative attack bonus for the style
         GearBonuses* gear = get_slot_gear_bonuses(p);
         int attack_bonus = 0;
         switch (p->attack_style_this_tick) {
@@ -790,7 +761,6 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
                 attack_bonus = gear->ranged_attack;
                 break;
             case ATTACK_STYLE_MELEE:
-                // Use max of stab/slash/crush for melee
                 attack_bonus = gear->slash_attack;
                 if (gear->stab_attack > attack_bonus) attack_bonus = gear->stab_attack;
                 if (gear->crush_attack > attack_bonus) attack_bonus = gear->crush_attack;
@@ -799,41 +769,37 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
                 break;
         }
         if (attack_bonus < 0) {
-            tick_shaping += cfg->gear_mismatch_penalty;
+            shaping += cfg->gear_mismatch_penalty;
         }
     }
 
-    // Eating penalties (not attack-related)
     int ate_food = p->ate_food_this_tick;
     int ate_karam = p->ate_karambwan_this_tick;
     int ate_brew = p->ate_brew_this_tick;
 
     if (ate_food || ate_karam) {
         float hp_before = p->prev_hp_percent;
-        // Premature eating: penalize eating above threshold
         if (hp_before > cfg->premature_eat_threshold) {
-            tick_shaping += cfg->premature_eat_penalty;
+            shaping += cfg->premature_eat_penalty;
         }
-        // Wasted healing: penalize overflow past max HP
         float max_heal;
         if (ate_food) {
-            max_heal = 20.0f / base_hp;  // Sharks heal 20
+            max_heal = 20.0f / base_hp;
         } else {
-            max_heal = 18.0f / base_hp;  // Karambwan heals 18
+            max_heal = 18.0f / base_hp;
         }
         float wasted = hp_before + max_heal - 1.0f;
         if (wasted > 0.0f) {
             float wasted_hp = wasted * base_hp;
-            tick_shaping += cfg->wasted_eat_penalty * wasted_hp;
+            shaping += cfg->wasted_eat_penalty * wasted_hp;
         }
     }
 
-    // Triple eat timing (shark + brew + karam = 54 HP)
     if (ate_food && ate_brew && ate_karam) {
         float hp_before = p->prev_hp_percent;
         float hp_threshold = 45.0f / base_hp;
         if (hp_before <= hp_threshold) {
-            tick_shaping += cfg->smart_triple_eat_bonus;
+            shaping += cfg->smart_triple_eat_bonus;
         } else {
             float food_brew_heal = (20.0f + 16.0f) / base_hp;
             float hp_after_food_brew = hp_before + food_brew_heal;
@@ -843,15 +809,12 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
             float wasted_karam = karam_heal_norm - missing_after;
             if (wasted_karam > 0.0f) {
                 float wasted_karam_hp = wasted_karam * base_hp;
-                tick_shaping += cfg->wasted_triple_eat_penalty * wasted_karam_hp;
+                shaping += cfg->wasted_triple_eat_penalty * wasted_karam_hp;
             }
         }
     }
 
-    reward += tick_shaping * cfg->shaping_scale;
-
-    // KO bonus and wasted resources are in the base terminal reward (not shaped)
-
+    reward += shaping * cfg->shaping_scale;
     return reward;
 }
 

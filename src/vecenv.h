@@ -95,11 +95,13 @@ typedef struct StaticVec {
     float* actions;
     float* rewards;
     float* terminals;
+    unsigned char* train_mask;
     unsigned char* action_mask;  // NULL unless env defines MY_ACTION_MASK
     StaticObsTensor gpu_observations;
     float* gpu_actions;
     float* gpu_rewards;
     float* gpu_terminals;
+    unsigned char* gpu_train_mask;
     unsigned char* gpu_action_mask;  // NULL unless env defines MY_ACTION_MASK
     cudaStream_t* streams;
     StaticThreading* threading;
@@ -156,6 +158,7 @@ void cpu_vec_step(StaticVec* vec);
 // via my_setup_perm. Only defined when env opted in via MY_USES_PERM; otherwise
 // emits an error and leaves the perm unset.
 void static_vec_set_perm(StaticVec* vec, const int* perm);
+void static_vec_set_train_mask(StaticVec* vec, const unsigned char* train_mask);
 
 // Optional per-env tagging + boundary tracking for selfplay-pool curricula.
 // Env must opt in via MY_USES_TAGS and provide `int tag` and
@@ -430,30 +433,38 @@ StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* v
         cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->train_mask, total_agents * sizeof(unsigned char), cudaHostAllocPortable);
 
         cudaMalloc(&gpu_observations, total_agents * OBS_SIZE * obs_elem_size);
         cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
         cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
         cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
+        cudaMalloc((void**)&vec->gpu_train_mask, total_agents * sizeof(unsigned char));
 
         static_obs_set(&vec->observations, observations, total_agents);
         static_obs_set(&vec->gpu_observations, gpu_observations, total_agents);
 
+        memset(vec->train_mask, 1, total_agents * sizeof(unsigned char));
         cudaMemset(vec->gpu_observations.data, 0, total_agents * OBS_SIZE * obs_elem_size);
         cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
         cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
         cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
+        cudaMemcpy(vec->gpu_train_mask, vec->train_mask,
+            total_agents * sizeof(unsigned char), cudaMemcpyHostToDevice);
     } else {
         static_obs_set(&vec->observations,
             calloc(total_agents * OBS_SIZE, obs_elem_size), total_agents);
         vec->actions = (float*)calloc(total_agents * NUM_ATNS, sizeof(float));
         vec->rewards = (float*)calloc(total_agents, sizeof(float));
         vec->terminals = (float*)calloc(total_agents, sizeof(float));
+        vec->train_mask = (unsigned char*)malloc(total_agents * sizeof(unsigned char));
+        memset(vec->train_mask, 1, total_agents * sizeof(unsigned char));
         // CPU mode: gpu pointers alias the same buffers (no copy needed)
         vec->gpu_observations = vec->observations;
         vec->gpu_actions = vec->actions;
         vec->gpu_rewards = vec->rewards;
         vec->gpu_terminals = vec->terminals;
+        vec->gpu_train_mask = vec->train_mask;
     }
 
 #ifdef MY_ACTION_MASK
@@ -529,6 +540,15 @@ void static_vec_set_perm(StaticVec* vec, const int* perm) {
         }
     }
 #endif
+}
+
+void static_vec_set_train_mask(StaticVec* vec, const unsigned char* train_mask) {
+    int N = vec->total_agents;
+    memcpy(vec->train_mask, train_mask, N * sizeof(unsigned char));
+    if (vec->gpu) {
+        cudaMemcpy(vec->gpu_train_mask, vec->train_mask,
+            N * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    }
 }
 
 #ifdef MY_USES_TAGS
@@ -665,10 +685,12 @@ void static_vec_close(StaticVec* vec) {
         cudaFree(vec->gpu_actions);
         cudaFree(vec->gpu_rewards);
         cudaFree(vec->gpu_terminals);
+        cudaFree(vec->gpu_train_mask);
         cudaFreeHost(vec->observations.data);
         cudaFreeHost(vec->actions);
         cudaFreeHost(vec->rewards);
         cudaFreeHost(vec->terminals);
+        cudaFreeHost(vec->train_mask);
 #ifdef MY_ACTION_MASK
         cudaFree(vec->gpu_action_mask);
         cudaFreeHost(vec->action_mask);
@@ -678,6 +700,7 @@ void static_vec_close(StaticVec* vec) {
         free(vec->actions);
         free(vec->rewards);
         free(vec->terminals);
+        free(vec->train_mask);
 #ifdef MY_ACTION_MASK
         free(vec->action_mask);
 #endif

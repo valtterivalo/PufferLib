@@ -7,6 +7,20 @@
  * struct. PVP source headers are untouched.
  */
 
+#include <time.h>
+#include <stdlib.h>
+
+static int pvp_profile_enabled(void);
+static double pvp_profile_now_ms(void);
+static void pvp_profile_add(int slot, double ms);
+static void pvp_profile_mark(int enabled, double* last_ms, int slot);
+
+#define OSRS_PVP_PROFILE_ENABLED() pvp_profile_enabled()
+#define OSRS_PVP_PROFILE_NOW_MS() pvp_profile_now_ms()
+#define OSRS_PVP_PROFILE_ADD(slot, ms) pvp_profile_add((slot), (ms))
+#define OSRS_PVP_PROFILE_MARK(slot) \
+    pvp_profile_mark(osrs_pvp_prof_enabled, &osrs_pvp_prof_t0, (slot))
+
 #include "../osrs/osrs_env.h"
 
 #pragma GCC diagnostic push
@@ -29,13 +43,72 @@
 #pragma GCC diagnostic pop
 
 typedef struct {
-    OsrsEnv pvp;
-    int ocean_acts_staging[NUM_ACTION_HEADS];
-    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
-    unsigned char ocean_term_staging;
+    Log log;
+    Player players[NUM_AGENTS];
+    int tick;
+    int episode_over;
+    int winner;
+    int auto_reset;
+    int pid_holder;
+    int pid_shuffle_countdown;
+    int is_lms;
+    uint32_t rng_state;
+    uint32_t rng_seed;
+    uint32_t rng_reset_count;
+    int has_rng_seed;
+    int pending_actions[NUM_AGENTS * NUM_ACTION_HEADS];
+    int last_executed_actions[NUM_AGENTS * NUM_ACTION_HEADS];
+    RewardShapingConfig shaping;
+    OsrsPvpRuntime pvp_runtime;
+    float episode_return;
 } PvpStateSnapshot;
 
 typedef PvpStateSnapshot State;
+
+static int g_pvp_profile_enabled = -1;
+static double g_pvp_profile_ms[PVP_PROF_COUNT];
+
+static int pvp_profile_enabled(void) {
+    if (g_pvp_profile_enabled < 0) {
+        const char* text = getenv("PUFFER_PVP_PROFILE");
+        g_pvp_profile_enabled = (text && text[0] && text[0] != '0') ? 1 : 0;
+    }
+    return g_pvp_profile_enabled;
+}
+
+static double pvp_profile_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+static void pvp_profile_add(int slot, double ms) {
+    if (slot < 0 || slot >= PVP_PROF_COUNT) abort();
+    #pragma omp atomic update
+    g_pvp_profile_ms[slot] += ms;
+}
+
+static void pvp_profile_mark(int enabled, double* last_ms, int slot) {
+    if (!enabled) return;
+    double now = pvp_profile_now_ms();
+    pvp_profile_add(slot, now - *last_ms);
+    *last_ms = now;
+}
+
+static double pvp_profile_read_reset_ms(int slot) {
+    if (slot < 0 || slot >= PVP_PROF_COUNT) abort();
+    double value;
+    #pragma omp atomic read
+    value = g_pvp_profile_ms[slot];
+    #pragma omp atomic write
+    g_pvp_profile_ms[slot] = 0.0;
+    return value;
+}
+
+#define PVP_PROFILE_ENABLED() pvp_profile_enabled()
+#define PVP_PROFILE_NOW_MS() pvp_profile_now_ms()
+#define PVP_PROFILE_ADD(slot, ms) pvp_profile_add((slot), (ms))
+#define PVP_PROFILE_MARK(slot) pvp_profile_mark(pvp_prof_enabled, &pvp_prof_t0, (slot))
 
 /* vecenv-compatible header fields must stay first. */
 typedef struct {
@@ -52,7 +125,6 @@ typedef struct {
     PvpStateSnapshot state;
 
     int ocean_acts_staging[NUM_ACTION_HEADS];
-    int ocean_acts_staging_p1[NUM_ACTION_HEADS];
     unsigned char ocean_term_staging;
 
     float ticks_per_second;
@@ -116,6 +188,10 @@ static void pvp_env_rewire_rollout_buffers(Env* env) {
     env->pvp.ocean_io.agent_rewards = env->rewards;
     env->pvp.ocean_io.agent_actions = env->ocean_acts_staging;
     env->pvp.ocean_io.agent_terminals = &env->ocean_term_staging;
+    env->pvp.action_masks_agents = 0x1;
+    if (env->action_mask_ptr[1] != NULL) {
+        env->pvp.action_masks_agents |= 0x2;
+    }
 }
 
 static void pvp_env_rewire_after_load(Env* env, void* collision_map, void* client,
@@ -140,10 +216,25 @@ static void pvp_env_copy_action_masks_to_rollout(Env* env) {
 }
 
 static void pvp_state_store(Env* env, PvpStateSnapshot* out) {
-    out->pvp = env->pvp;
-    memcpy(out->ocean_acts_staging, env->ocean_acts_staging, sizeof(out->ocean_acts_staging));
-    memcpy(out->ocean_acts_staging_p1, env->ocean_acts_staging_p1, sizeof(out->ocean_acts_staging_p1));
-    out->ocean_term_staging = env->ocean_term_staging;
+    out->log = env->pvp.log;
+    memcpy(out->players, env->pvp.players, sizeof(out->players));
+    out->tick = env->pvp.tick;
+    out->episode_over = env->pvp.episode_over;
+    out->winner = env->pvp.winner;
+    out->auto_reset = env->pvp.auto_reset;
+    out->pid_holder = env->pvp.pid_holder;
+    out->pid_shuffle_countdown = env->pvp.pid_shuffle_countdown;
+    out->is_lms = env->pvp.is_lms;
+    out->rng_state = env->pvp.rng_state;
+    out->rng_seed = env->pvp.rng_seed;
+    out->rng_reset_count = env->pvp.rng_reset_count;
+    out->has_rng_seed = env->pvp.has_rng_seed;
+    memcpy(out->pending_actions, env->pvp.pending_actions, sizeof(out->pending_actions));
+    memcpy(out->last_executed_actions, env->pvp.last_executed_actions,
+        sizeof(out->last_executed_actions));
+    out->shaping = env->pvp.shaping;
+    out->pvp_runtime = env->pvp.pvp_runtime;
+    out->episode_return = env->pvp._episode_return;
 }
 
 static void pvp_state_load(Env* env, const PvpStateSnapshot* in) {
@@ -152,21 +243,39 @@ static void pvp_state_load(Env* env, const PvpStateSnapshot* in) {
     const void* encounter_def = env->pvp.encounter_def;
     void* encounter_state = env->pvp.encounter_state;
     void* encounter_context = env->pvp.encounter_context;
-    env->pvp = in->pvp;
-    memcpy(env->ocean_acts_staging, in->ocean_acts_staging, sizeof(env->ocean_acts_staging));
-    memcpy(env->ocean_acts_staging_p1, in->ocean_acts_staging_p1, sizeof(env->ocean_acts_staging_p1));
-    env->ocean_term_staging = in->ocean_term_staging;
+    env->pvp.log = in->log;
+    memcpy(env->pvp.players, in->players, sizeof(env->pvp.players));
+    env->pvp.tick = in->tick;
+    env->pvp.episode_over = in->episode_over;
+    env->pvp.winner = in->winner;
+    env->pvp.auto_reset = in->auto_reset;
+    env->pvp.pid_holder = in->pid_holder;
+    env->pvp.pid_shuffle_countdown = in->pid_shuffle_countdown;
+    env->pvp.is_lms = in->is_lms;
+    env->pvp.rng_state = in->rng_state;
+    env->pvp.rng_seed = in->rng_seed;
+    env->pvp.rng_reset_count = in->rng_reset_count;
+    env->pvp.has_rng_seed = in->has_rng_seed;
+    memcpy(env->pvp.pending_actions, in->pending_actions, sizeof(env->pvp.pending_actions));
+    memcpy(env->pvp.last_executed_actions, in->last_executed_actions,
+        sizeof(env->pvp.last_executed_actions));
+    env->pvp.shaping = in->shaping;
+    env->pvp.pvp_runtime = in->pvp_runtime;
+    env->pvp._episode_return = in->episode_return;
     pvp_env_rewire_after_load(env, collision_map, client,
         encounter_def, encounter_state, encounter_context);
 }
 
 static void puffer_state_refresh(Env* env) {
     pvp_state_load(env, &env->state);
+    pvp_generate_exported_slot_observations_and_masks(&env->pvp);
     ocean_write_obs(&env->pvp);
     if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
+    memset(env->pvp.step_rewards, 0, sizeof(env->pvp.step_rewards));
+    memset(env->pvp.step_terminals, 0, sizeof(env->pvp.step_terminals));
     env->terminals[0] = 0.0f;
     if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
     if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
@@ -191,7 +300,74 @@ static void pvp_env_set_gear_tier(Env* env, int tier) {
     env->pvp.pvp_runtime.gear_tier_weights[tier] = 1.0f;
 }
 
+static void pvp_env_accumulate_terminal_log(Env* env) {
+    if (env->tag > 0 && env->tag <= 8) {
+        int b = env->tag - 1;
+        float win = env->pvp.log.wins;
+        env->log.hist_score_bank[b] += win;
+        env->log.hist_n_bank[b] += 1.0f;
+    }
+    env->boundary_reached = 1;
+    env->log.episode_return += env->pvp.log.episode_return;
+    env->log.episode_length += env->pvp.log.episode_length;
+    env->log.wins += env->pvp.log.wins;
+    env->log.draws += env->pvp.log.draws;
+    env->log.damage_dealt += env->pvp.log.damage_dealt;
+    env->log.damage_received += env->pvp.log.damage_received;
+    env->log.expected_damage_dealt += env->pvp.log.expected_damage_dealt;
+    env->log.expected_damage_received += env->pvp.log.expected_damage_received;
+    env->log.expected_damage_prevented += env->pvp.log.expected_damage_prevented;
+    env->log.expected_damage_diff += env->pvp.log.expected_damage_diff;
+    env->log.expected_damage_score += env->pvp.log.expected_damage_score;
+    env->log.ko_supply_score += env->pvp.log.ko_supply_score;
+    env->log.performance_score += env->pvp.log.performance_score;
+    env->log.prayer_correct += env->pvp.log.prayer_correct;
+    env->log.prayer_total += env->pvp.log.prayer_total;
+    env->log.food_remaining += env->pvp.log.food_remaining;
+    env->log.karambwan_remaining += env->pvp.log.karambwan_remaining;
+    env->log.brews_remaining += env->pvp.log.brews_remaining;
+    env->log.spec_energy_remaining += env->pvp.log.spec_energy_remaining;
+    env->log.attacks_landed += env->pvp.log.attacks_landed;
+    env->log.off_prayer_hits += env->pvp.log.off_prayer_hits;
+    env->log.equip_click_attempts += env->pvp.log.equip_click_attempts;
+    env->log.equip_click_noop_rate += env->pvp.log.equip_click_noop_rate;
+    env->log.special_arm_attempts += env->pvp.log.special_arm_attempts;
+    env->log.special_arm_noop_rate += env->pvp.log.special_arm_noop_rate;
+    env->log.target_click_attempts += env->pvp.log.target_click_attempts;
+    env->log.target_click_no_fire_rate += env->pvp.log.target_click_no_fire_rate;
+    env->log.spell_attack_attempts += env->pvp.log.spell_attack_attempts;
+    env->log.spell_attack_no_fire_rate += env->pvp.log.spell_attack_no_fire_rate;
+    env->log.selected_melee_attack_rate += env->pvp.log.selected_melee_attack_rate;
+    env->log.selected_ranged_attack_rate += env->pvp.log.selected_ranged_attack_rate;
+    env->log.selected_magic_attack_rate += env->pvp.log.selected_magic_attack_rate;
+    env->log.target_click_chase_ticks += env->pvp.log.target_click_chase_ticks;
+    env->log.explicit_move_ticks += env->pvp.log.explicit_move_ticks;
+    env->log.target_click_pre_move_dist += env->pvp.log.target_click_pre_move_dist;
+    env->log.target_click_post_move_dist += env->pvp.log.target_click_post_move_dist;
+    env->log.target_click_success_pre_move_dist +=
+        env->pvp.log.target_click_success_pre_move_dist;
+    env->log.target_click_success_post_move_dist +=
+        env->pvp.log.target_click_success_post_move_dist;
+    env->log.spell_attack_pre_move_dist += env->pvp.log.spell_attack_pre_move_dist;
+    env->log.spell_attack_post_move_dist += env->pvp.log.spell_attack_post_move_dist;
+    env->log.spell_attack_success_pre_move_dist +=
+        env->pvp.log.spell_attack_success_pre_move_dist;
+    env->log.spell_attack_success_post_move_dist +=
+        env->pvp.log.spell_attack_success_post_move_dist;
+    env->log.weapon_attack_rate += env->pvp.log.weapon_attack_rate;
+    env->log.melee_attack_rate += env->pvp.log.melee_attack_rate;
+    env->log.ranged_attack_rate += env->pvp.log.ranged_attack_rate;
+    env->log.magic_attack_rate += env->pvp.log.magic_attack_rate;
+    env->log.attack_after_equip_rate += env->pvp.log.attack_after_equip_rate;
+    env->log.spec_after_equip_rate += env->pvp.log.spec_after_equip_rate;
+    env->log.n += env->pvp.log.n;
+}
+
 void c_step(Env* env) {
+    int pvp_prof_enabled = PVP_PROFILE_ENABLED();
+    double pvp_prof_start = pvp_prof_enabled ? PVP_PROFILE_NOW_MS() : 0.0;
+    double pvp_prof_t0 = pvp_prof_start;
+
 #ifdef OSRS_VISUAL
     RenderClient* rc = (RenderClient*)env->pvp.client;
     int used_human_commands = 0;
@@ -213,10 +389,7 @@ void c_step(Env* env) {
         for (int i = 0; i < NUM_ATNS; i++) {
             env->ocean_acts_staging[i] = (int)p0_acts[i];
         }
-        /* Slot 1 routing — three modes:
-             scripted_opp_type >= 0 → C-heuristic of that specific type drives p1
-             use_rollout_opponent && action_ptr[1] → rollout drives p1 (pure selfplay)
-             else → legacy default opponent_type C-heuristic */
+        PVP_PROFILE_MARK(PVP_PROF_ACTION_DECODE);
         if (env->scripted_opp_type >= 0) {
             env->pvp.pvp_runtime.opponent.type = (OpponentType)env->scripted_opp_type;
             env->pvp.pvp_runtime.use_external_opponent_actions = 0;
@@ -225,72 +398,45 @@ void c_step(Env* env) {
             env->pvp.pvp_runtime.use_external_opponent_actions = 1;
             env->pvp.pvp_runtime.use_c_opponent = 0;
             for (int i = 0; i < NUM_ATNS; i++) {
-                env->ocean_acts_staging_p1[i] = (int)env->action_ptr[1][i];
-                env->pvp.pvp_runtime.external_opponent_actions[i] = env->ocean_acts_staging_p1[i];
+                env->pvp.pvp_runtime.external_opponent_actions[i] =
+                    (int)env->action_ptr[1][i];
             }
         }
+        PVP_PROFILE_MARK(PVP_PROF_OPPONENT_ROUTE);
         pvp_step(&env->pvp);
+        PVP_PROFILE_MARK(PVP_PROF_PVP_STEP);
 
-        /* For scripted-opp envs, slot 1's reward reflects what the C-heuristic
-           did, not what the policy's slot 1 logits chose. Zero it to suppress
-           that noisy training signal — the policy only trains on slot 0
-           (learner) in scripted-opp envs. */
         if (env->scripted_opp_type >= 0) {
             env->pvp._rews_buf[1] = 0.0f;
+            env->pvp.step_rewards[1] = 0.0f;
         }
     }
 
-    /* Terminals: mirror to both slots. pvp_step writes the shared episode_over
-       to env->pvp.terminals[0..1]; copy each cell into its rollout slot. */
-    env->terminals[0] = (float)env->ocean_term_staging;
+    env->terminals[0] = (float)env->pvp.step_terminals[0];
     if (env->terminal_ptr[1]) {
-        *env->terminal_ptr[1] = (float)env->ocean_term_staging;
+        *env->terminal_ptr[1] = (float)env->pvp.step_terminals[1];
     }
-    /* Rewards: p0 from pvp internal _rews_buf[0], p1 from _rews_buf[1]. */
-    if (env->reward_ptr[0]) *env->reward_ptr[0] = env->pvp._rews_buf[0];
-    if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp._rews_buf[1];
+    if (env->reward_ptr[0]) *env->reward_ptr[0] = env->pvp.step_rewards[0];
+    if (env->reward_ptr[1]) *env->reward_ptr[1] = env->pvp.step_rewards[1];
 
-    if (env->ocean_term_staging) {
-        /* Self-play per-bank attribution. When env->tag > 0, this env is the
-           learner playing against frozen bank (tag - 1). Accumulate the win
-           (1.0) or loss (0.0) and game count so selfplay.step() sees this
-           bank's winrate via my_log -> hist_score_bank_<tag-1>. Also set
-           boundary_reached for static_vec_count_aligned. */
-        if (env->tag > 0 && env->tag <= 8) {
-            int b = env->tag - 1;
-            float win = env->pvp.log.wins;  /* 1.0 if learner won, 0.0 otherwise */
-            env->log.hist_score_bank[b] += win;
-            env->log.hist_n_bank[b] += 1.0f;
-        }
-        env->boundary_reached = 1;
-        env->log.episode_return += env->pvp.log.episode_return;
-        env->log.episode_length += env->pvp.log.episode_length;
-        env->log.wins += env->pvp.log.wins;
-        env->log.damage_dealt += env->pvp.log.damage_dealt;
-        env->log.damage_received += env->pvp.log.damage_received;
-        env->log.expected_damage_dealt += env->pvp.log.expected_damage_dealt;
-        env->log.expected_damage_received += env->pvp.log.expected_damage_received;
-        env->log.expected_damage_diff += env->pvp.log.expected_damage_diff;
-        env->log.expected_damage_score += env->pvp.log.expected_damage_score;
-        env->log.ko_supply_score += env->pvp.log.ko_supply_score;
-        env->log.performance_score += env->pvp.log.performance_score;
-        env->log.prayer_correct += env->pvp.log.prayer_correct;
-        env->log.prayer_total += env->pvp.log.prayer_total;
-        env->log.food_remaining += env->pvp.log.food_remaining;
-        env->log.karambwan_remaining += env->pvp.log.karambwan_remaining;
-        env->log.brews_remaining += env->pvp.log.brews_remaining;
-        env->log.spec_energy_remaining += env->pvp.log.spec_energy_remaining;
-        env->log.attacks_landed += env->pvp.log.attacks_landed;
-        env->log.off_prayer_hits += env->pvp.log.off_prayer_hits;
-        env->log.n += env->pvp.log.n;
+    if (env->pvp.step_terminals[0]) {
+        pvp_env_accumulate_terminal_log(env);
         memset(&env->pvp.log, 0, sizeof(env->pvp.log));
     }
+    PVP_PROFILE_MARK(PVP_PROF_TERMINAL_LOG);
 
-    if (env->ocean_term_staging && env->pvp.auto_reset) {
+    if (env->pvp.step_terminals[0] && env->pvp.auto_reset) {
         ocean_write_obs(&env->pvp);
+        if (env->pvp.ocean_io.agent_obs_p1) ocean_write_obs_p1(&env->pvp);
     }
+    PVP_PROFILE_MARK(PVP_PROF_RESET_OBS);
     pvp_env_copy_action_masks_to_rollout(env);
+    PVP_PROFILE_MARK(PVP_PROF_MASK_COPY);
     pvp_state_store(env, &env->state);
+    PVP_PROFILE_MARK(PVP_PROF_STATE_STORE);
+    if (pvp_prof_enabled) {
+        PVP_PROFILE_ADD(PVP_PROF_C_STEP_TOTAL, PVP_PROFILE_NOW_MS() - pvp_prof_start);
+    }
 }
 
 void c_reset(Env* env) {
@@ -303,6 +449,8 @@ void c_reset(Env* env) {
     pvp_env_copy_action_masks_to_rollout(env);
     env->pvp.ocean_io.agent_rewards[0] = 0.0f;
     env->pvp.ocean_io.agent_terminals[0] = 0;
+    memset(env->pvp.step_rewards, 0, sizeof(env->pvp.step_rewards));
+    memset(env->pvp.step_terminals, 0, sizeof(env->pvp.step_terminals));
     env->terminals[0] = 0.0f;
     if (env->terminal_ptr[1]) *env->terminal_ptr[1] = 0.0f;
     if (env->reward_ptr[1]) *env->reward_ptr[1] = 0.0f;
@@ -355,7 +503,7 @@ void c_render(Env* env) {
 
     int first_call = env->pvp.client == NULL;
     if (first_call) {
-        env->pvp.client = render_make_client();
+        env->pvp.client = render_make_client_for_encounter(&ENCOUNTER_NH_PVP);
         RenderClient* rc = (RenderClient*)env->pvp.client;
         rc->ticks_per_second = env->ticks_per_second;
         EncounterSceneConfig scene = {
@@ -444,6 +592,8 @@ void my_setup_perm(StaticVec* vec, Env* env, int slot_base) {
     env->pvp.ocean_io.agent_obs    = (float*)env->obs_ptr[0];
     if (n >= 2) {
         env->pvp.ocean_io.agent_obs_p1 = (float*)env->obs_ptr[1];
+    } else {
+        env->pvp.ocean_io.agent_obs_p1 = NULL;
     }
 }
 
@@ -510,6 +660,21 @@ void my_init(Env* env, Dict* kwargs) {
     DictItem* shaping_en = dict_get_unsafe(kwargs, "shaping_enabled");
     env->pvp.shaping.enabled = shaping_en ? (int)shaping_en->value : 0;
 
+    DictItem* expected_damage_reward = dict_get_unsafe(
+        kwargs, "expected_damage_reward_coef");
+    env->pvp.shaping.expected_damage_reward_coef = expected_damage_reward
+        ? (float)expected_damage_reward->value : 0.0f;
+
+    DictItem* incoming_damage_avoidance_reward = dict_get_unsafe(
+        kwargs, "incoming_damage_avoidance_reward_coef");
+    env->pvp.shaping.incoming_damage_avoidance_reward_coef =
+        incoming_damage_avoidance_reward
+        ? (float)incoming_damage_avoidance_reward->value : 0.0f;
+
+    DictItem* ko_supply_reward = dict_get_unsafe(kwargs, "ko_supply_reward_coef");
+    env->pvp.shaping.ko_supply_reward_coef = ko_supply_reward
+        ? (float)ko_supply_reward->value : 0.0f;
+
     env->pvp.shaping.damage_dealt_coef = 0.005f;
     env->pvp.shaping.damage_received_coef = -0.005f;
     env->pvp.shaping.correct_prayer_bonus = 0.03f;
@@ -531,9 +696,6 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.premature_eat_threshold = 0.7071f;
     env->pvp.shaping.ko_bonus = 0.15f;
     env->pvp.shaping.wasted_resources_penalty = -0.07f;
-    /* ko_supplies_bonus_coef: proportional bonus when KO'ing with opponent
-       supplies remaining. Sweep over [0, ~0.5] to find if fast-KO incentive
-       helps. Defaults to 0 so existing OPP_IMPROVED training is unchanged. */
     DictItem* ko_sup = dict_get_unsafe(kwargs, "ko_supplies_bonus_coef");
     env->pvp.shaping.ko_supplies_bonus_coef = ko_sup ? (float)ko_sup->value : 0.0f;
     env->pvp.shaping.prayer_penalty_enabled = 1;
@@ -556,12 +718,13 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
     dict_set(out, "slot_0_score", log->wins);
-    dict_set(out, "slot_1_score", 1.0f - log->wins);
-    dict_set(out, "draw_rate", 0.0f);
+    dict_set(out, "slot_1_score", 1.0f - log->wins - log->draws);
+    dict_set(out, "draw_rate", log->draws);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "expected_damage_dealt", log->expected_damage_dealt);
     dict_set(out, "expected_damage_received", log->expected_damage_received);
+    dict_set(out, "expected_damage_prevented", log->expected_damage_prevented);
     dict_set(out, "expected_damage_diff", log->expected_damage_diff);
     dict_set(out, "expected_damage_score", log->expected_damage_score);
     dict_set(out, "ko_supply_score", log->ko_supply_score);
@@ -585,6 +748,23 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "target_click_no_fire_rate", log->target_click_no_fire_rate);
     dict_set(out, "spell_attack_attempts", log->spell_attack_attempts);
     dict_set(out, "spell_attack_no_fire_rate", log->spell_attack_no_fire_rate);
+    dict_set(out, "selected_melee_attack_rate", log->selected_melee_attack_rate);
+    dict_set(out, "selected_ranged_attack_rate", log->selected_ranged_attack_rate);
+    dict_set(out, "selected_magic_attack_rate", log->selected_magic_attack_rate);
+    dict_set(out, "target_click_chase_ticks", log->target_click_chase_ticks);
+    dict_set(out, "explicit_move_ticks", log->explicit_move_ticks);
+    dict_set(out, "target_click_pre_move_dist", log->target_click_pre_move_dist);
+    dict_set(out, "target_click_post_move_dist", log->target_click_post_move_dist);
+    dict_set(out, "target_click_success_pre_move_dist",
+        log->target_click_success_pre_move_dist);
+    dict_set(out, "target_click_success_post_move_dist",
+        log->target_click_success_post_move_dist);
+    dict_set(out, "spell_attack_pre_move_dist", log->spell_attack_pre_move_dist);
+    dict_set(out, "spell_attack_post_move_dist", log->spell_attack_post_move_dist);
+    dict_set(out, "spell_attack_success_pre_move_dist",
+        log->spell_attack_success_pre_move_dist);
+    dict_set(out, "spell_attack_success_post_move_dist",
+        log->spell_attack_success_post_move_dist);
     dict_set(out, "weapon_attack_rate", log->weapon_attack_rate);
     dict_set(out, "melee_attack_rate", log->melee_attack_rate);
     dict_set(out, "ranged_attack_rate", log->ranged_attack_rate);
@@ -617,8 +797,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "damage_per_hit", dph);
 
     float wr = log->wins;
-    float dmg_dealt_norm = log->damage_dealt / 99.0f;
-    float dmg_recv_norm  = log->damage_received / 99.0f;
+    float dmg_dealt_norm = log->damage_dealt;
+    float dmg_recv_norm  = log->damage_received;
     float dmg_diff = dmg_dealt_norm - dmg_recv_norm;
     float dmg_diff_score = 0.5f + 0.25f * dmg_diff;
     if (dmg_diff_score < 0.0f) dmg_diff_score = 0.0f;
@@ -627,6 +807,35 @@ void my_log(Log* log, Dict* out) {
     float score = 0.7f * wr + 0.3f * dmg_diff_score;
     dict_set(out, "score", score);
     dict_set(out, "dmg_diff_score", dmg_diff_score);
+    if (PVP_PROFILE_ENABLED()) {
+        static const char* keys[PVP_PROF_COUNT] = {
+            "profile_pvp_c_step_total_ms",
+            "profile_pvp_action_decode_ms",
+            "profile_pvp_opponent_route_ms",
+            "profile_pvp_pvp_step_ms",
+            "profile_pvp_terminal_log_ms",
+            "profile_pvp_reset_obs_ms",
+            "profile_pvp_mask_copy_ms",
+            "profile_pvp_state_store_ms",
+            "profile_pvp_api_total_ms",
+            "profile_pvp_api_clear_flags_ms",
+            "profile_pvp_api_action_copy_ms",
+            "profile_pvp_api_c_opponent_ms",
+            "profile_pvp_api_switches_ms",
+            "profile_pvp_api_movement_ms",
+            "profile_pvp_api_combat_ms",
+            "profile_pvp_api_pending_hits_ms",
+            "profile_pvp_api_reward_terminal_ms",
+            "profile_pvp_api_obs_mask_ms",
+            "profile_pvp_api_obs_generate_ms",
+            "profile_pvp_api_ocean_write_ms",
+            "profile_pvp_api_terminal_scoring_ms",
+            "profile_pvp_api_auto_reset_ms",
+        };
+        for (int i = 0; i < PVP_PROF_COUNT; i++) {
+            dict_set(out, keys[i], pvp_profile_read_reset_ms(i));
+        }
+    }
 }
 
 #ifdef __cplusplus
