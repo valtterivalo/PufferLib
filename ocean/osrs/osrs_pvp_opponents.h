@@ -3469,7 +3469,30 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     actions[HEAD_ATTACK] = ATTACK_NONE;
 
     pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
-    actions[HEAD_ATTACK] = legacy_combat;
+    if (is_attack_action(legacy_combat)) {
+        actions[HEAD_ATTACK] = legacy_combat;
+        return;
+    }
+    if (!is_move_action(legacy_combat)) return;
+
+    actions[HEAD_MOVE] = MOVE_NONE;
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    int dest_x = -1;
+    int dest_y = -1;
+    if (!pvp_select_legacy_target_move_destination(
+            env, agent_idx, legacy_combat, cmap, &dest_x, &dest_y)) {
+        return;
+    }
+
+    int head_move = pvp_exact_head_move_toward_tile(
+        &env->players[agent_idx], dest_x, dest_y);
+    if (head_move != MOVE_NONE) {
+        actions[HEAD_MOVE] = head_move;
+        return;
+    }
+
+    env->pvp_runtime.walk_dest_x[agent_idx] = dest_x;
+    env->pvp_runtime.walk_dest_y[agent_idx] = dest_y;
 }
 
 static inline int opp_type_uses_hard_spacing_guard(OpponentType type) {
@@ -3703,6 +3726,7 @@ static inline void opp_apply_spacing_decision(
         case OPP_SPACING_KEEP:
             return;
         case OPP_SPACING_LEGACY_MOVE:
+            actions[HEAD_MOVE] = MOVE_NONE;
             actions[HEAD_COMBAT] = decision.move;
             return;
         case OPP_SPACING_HEAD_MOVE:
@@ -3856,6 +3880,13 @@ static void swap_players_and_pending(OsrsEnv* env) {
     Player tmp_player = env->players[0];
     env->players[0] = env->players[1];
     env->players[1] = tmp_player;
+
+    int tmp_walk_dest_x = env->pvp_runtime.walk_dest_x[0];
+    int tmp_walk_dest_y = env->pvp_runtime.walk_dest_y[0];
+    env->pvp_runtime.walk_dest_x[0] = env->pvp_runtime.walk_dest_x[1];
+    env->pvp_runtime.walk_dest_y[0] = env->pvp_runtime.walk_dest_y[1];
+    env->pvp_runtime.walk_dest_x[1] = tmp_walk_dest_x;
+    env->pvp_runtime.walk_dest_y[1] = tmp_walk_dest_y;
 
     int tmp_actions[NUM_ACTION_HEADS];
     memcpy(tmp_actions, env->pending_actions, NUM_ACTION_HEADS * sizeof(int));

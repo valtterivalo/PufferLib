@@ -223,41 +223,28 @@ static int opponent_move(const OsrsEnv* env) {
     int head_move = env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE];
     if (head_move != MOVE_NONE) return head_move;
 
-    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
-    if (!is_move_action(action)) return MOVE_NONE;
+    if (env->pvp_runtime.walk_dest_x[1] < 0 ||
+            env->pvp_runtime.walk_dest_y[1] < 0) {
+        return MOVE_NONE;
+    }
+    return pvp_head_move_toward_tile(
+        &env->players[1],
+        env->pvp_runtime.walk_dest_x[1],
+        env->pvp_runtime.walk_dest_y[1]);
+}
 
-    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-    return pvp_head_move_from_legacy_target_move(
-        (OsrsEnv*)env, 1, action, cmap);
+static int opponent_has_exact_walk_dest(const OsrsEnv* env) {
+    return env->pvp_runtime.walk_dest_x[1] >= 0 &&
+        env->pvp_runtime.walk_dest_y[1] >= 0;
 }
 
 static int opponent_move_dest_x(const OsrsEnv* env) {
-    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
-    if (is_move_action(action) &&
-            env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE] == MOVE_NONE) {
-        int dest_x = -1;
-        int dest_y = -1;
-        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-        if (pvp_select_legacy_target_move_destination(
-                (OsrsEnv*)env, 1, action, cmap, &dest_x, &dest_y)) {
-            return dest_x;
-        }
-    }
+    if (opponent_has_exact_walk_dest(env)) return env->pvp_runtime.walk_dest_x[1];
     return env->players[1].x + ENCOUNTER_MOVE_TARGET_DX[opponent_move(env)];
 }
 
 static int opponent_move_dest_y(const OsrsEnv* env) {
-    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
-    if (is_move_action(action) &&
-            env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE] == MOVE_NONE) {
-        int dest_x = -1;
-        int dest_y = -1;
-        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-        if (pvp_select_legacy_target_move_destination(
-                (OsrsEnv*)env, 1, action, cmap, &dest_x, &dest_y)) {
-            return dest_y;
-        }
-    }
+    if (opponent_has_exact_walk_dest(env)) return env->pvp_runtime.walk_dest_y[1];
     return env->players[1].y + ENCOUNTER_MOVE_TARGET_DY[opponent_move(env)];
 }
 
@@ -495,6 +482,8 @@ static void test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movemen
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
     ASSERT_INT_EQ("not-ready live freeze combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_INT_EQ("not-ready live freeze raw attack",
+        env.pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK], ATTACK_NONE);
     ASSERT_TRUE("not-ready live freeze moves", opponent_move(&env) != MOVE_NONE);
     ASSERT_INT_EQ("not-ready live freeze under x",
         opponent_move_dest_x(&env), env.players[0].x);
@@ -516,6 +505,21 @@ static void test_nightmare_nh_full_step_under_persists_until_frozen_target_tile(
     env.players[1].last_obs_target_y = env.players[0].y;
     env.players[0].frozen_ticks = 10;
     env.players[1].attack_timer = 3;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("long under raw attack",
+        env.pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK], ATTACK_NONE);
+    ASSERT_INT_EQ("long under raw head move",
+        env.pending_actions[NUM_ACTION_HEADS + HEAD_MOVE], MOVE_NONE);
+    ASSERT_INT_EQ("long under exact destination x",
+        env.pvp_runtime.walk_dest_x[1], env.players[0].x);
+    ASSERT_INT_EQ("long under exact destination y",
+        env.pvp_runtime.walk_dest_y[1], env.players[0].y);
+
+    memset(env.pending_actions, 0, sizeof(env.pending_actions));
+    env.pvp_runtime.walk_dest_x[1] = -1;
+    env.pvp_runtime.walk_dest_y[1] = -1;
     memset(env.ocean_io.agent_actions, 0, NUM_ACTION_HEADS * sizeof(int));
 
     pvp_step(&env);
