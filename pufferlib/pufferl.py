@@ -403,6 +403,59 @@ def train(env_name, args=None, gpus=None, **kwargs):
             ctx.Process(target=_train, args=(env_name, worker_args),
                 kwargs=kwargs).start()
 
+def _finite_scalar_or_none(value):
+    if value is None:
+        return None
+    arr = np.asarray(value)
+    if arr.shape != ():
+        return None
+    try:
+        scalar = float(arr)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(scalar):
+        return None
+    return scalar
+
+def _last_finite_scalar(values):
+    if not isinstance(values, list):
+        return _finite_scalar_or_none(values)
+    for value in reversed(values):
+        scalar = _finite_scalar_or_none(value)
+        if scalar is not None:
+            return scalar
+    return None
+
+def _resume_sweep_observations(args, sweep_obj):
+    '''Replay finished trials from a prior sweep's per-trial JSON logs into the
+    fresh Protein so a restarted sweep keeps its surrogate. Set
+    sweep.resume_from_log_dir to the log dir (e.g. "logs"); reads
+    <log_dir>/<env_name>/*.json oldest-first and observes each trial's final
+    score, cost (uptime), and timesteps. Returns the count resumed.'''
+    log_dir = args['sweep'].get('resume_from_log_dir')
+    if not log_dir:
+        return 0
+
+    target_key = f'env/{args["sweep"]["metric"]}'
+    resumed = 0
+    pattern = os.path.join(log_dir, args['env_name'], '*.json')
+    for path in sorted(glob.glob(pattern), key=os.path.getmtime):
+        with open(path) as f:
+            trial = json.load(f)
+        metrics = trial.get('metrics', {})
+        score = _last_finite_scalar(metrics.get(target_key))
+        cost = _last_finite_scalar(metrics.get('uptime'))
+        timesteps = _last_finite_scalar(metrics.get('agent_steps'))
+        if score is None or cost is None or timesteps is None:
+            continue
+        trial.setdefault('train', {})['total_timesteps'] = timesteps
+        sweep_obj.observe(trial, score, cost, is_failure=False)
+        resumed += 1
+
+    if resumed:
+        print(f'Resumed {resumed} sweep observations from {log_dir}', flush=True)
+    return resumed
+
 def sweep(env_name, args=None, pareto=False):
     '''Train entry point. Handles single-GPU, multi-GPU DDP, and sweeps.'''
     args = args or load_config(env_name)
@@ -428,7 +481,7 @@ def sweep(env_name, args=None, pareto=False):
     result_queue = mp.get_context('spawn').Queue()
 
     active = {}
-    completed = 0
+    completed = _resume_sweep_observations(args, sweep_obj)
     while completed < num_experiments:
         if len(active) >= sweep_gpus//exp_gpus: # Collect completed runs
             gpu_id, scores, costs, timesteps = result_queue.get()
