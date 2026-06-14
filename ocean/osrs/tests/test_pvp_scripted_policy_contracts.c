@@ -243,8 +243,12 @@ static int opponent_casts_spell(const OsrsEnv* env) {
     return combat == ATTACK_ICE || combat == ATTACK_BLOOD;
 }
 
-static void set_adaptive_mage_staff_camp_state(OsrsEnv* env, int recent_melee_count) {
-    force_clean_policy_decision(env, OPP_ADAPTIVE_NH);
+static void set_mage_staff_camp_state(
+    OsrsEnv* env,
+    OpponentType type,
+    int recent_melee_count
+) {
+    force_clean_policy_decision(env, type);
 
     Player* target = &env->players[0];
     Player* self = &env->players[1];
@@ -272,6 +276,10 @@ static void set_adaptive_mage_staff_camp_state(OsrsEnv* env, int recent_melee_co
     set_recent_target_attack_count(self, ATTACK_STYLE_MELEE, recent_melee_count);
     memset(env->pending_actions, 0, sizeof(env->pending_actions));
     memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
+}
+
+static void set_adaptive_mage_staff_camp_state(OsrsEnv* env, int recent_melee_count) {
+    set_mage_staff_camp_state(env, OPP_ADAPTIVE_NH, recent_melee_count);
 }
 
 static void test_adaptive_nh_name_maps_correctly(void) {
@@ -473,6 +481,71 @@ static void test_adaptive_nh_read_chance_exceeds_nightmare(void) {
     ASSERT_TRUE(
         "adaptive read chance",
         adaptive.pvp_runtime.opponent.read_chance == 0.75f);
+}
+
+static void test_off_prayer_mask_excludes_frozen_diagonal_melee(void) {
+    printf("--- Off-prayer mask excludes frozen diagonal melee ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_mage_staff_camp_state(&env, OPP_NIGHTMARE_NH, 0);
+    set_player_position(&env.players[1], 3042, 3520);
+    set_player_position(&env.players[0], 3043, 3521);
+    env.players[1].frozen_ticks = 10;
+
+    int mask = opp_get_off_prayer_mask(&env.players[1], &env.players[0]);
+
+    ASSERT_INT_EQ(
+        "frozen diagonal melee absent",
+        (mask & OPP_STYLE_MASK_MELEE) != 0,
+        0);
+}
+
+static void test_nightmare_nh_prays_melee_against_learned_mage_camp(void) {
+    printf("--- Nightmare NH counters learned mage camp melee ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_mage_staff_camp_state(&env, OPP_NIGHTMARE_NH, 2);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "nightmare NH prays melee",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
+}
+
+static void test_nightmare_nh_kites_unrooted_mage_prayer_camp(void) {
+    printf("--- Nightmare NH kites unrooted mage-prayer camp ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_mage_staff_camp_state(&env, OPP_NIGHTMARE_NH, 1);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("nightmare NH waits before adjacent freeze",
+        opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("nightmare NH moves before adjacent freeze",
+        opponent_move(&env) != 0);
+}
+
+static void test_nightmare_nh_freezes_from_diagonal_mage_prayer_camp(void) {
+    printf("--- Nightmare NH freezes diagonal mage-prayer camp ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_mage_staff_camp_state(&env, OPP_NIGHTMARE_NH, 1);
+    set_player_position(&env.players[1], 3042, 3520);
+    set_player_position(&env.players[0], 3043, 3521);
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "nightmare NH casts ice from diagonal",
+        opponent_combat(&env),
+        ATTACK_ICE);
 }
 
 static void test_adaptive_nh_prays_melee_against_learned_mage_camp(void) {
@@ -779,6 +852,10 @@ int main(void) {
     test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
     test_hard_spacing_guard_does_not_move_when_self_frozen();
     test_adaptive_nh_read_chance_exceeds_nightmare();
+    test_off_prayer_mask_excludes_frozen_diagonal_melee();
+    test_nightmare_nh_prays_melee_against_learned_mage_camp();
+    test_nightmare_nh_kites_unrooted_mage_prayer_camp();
+    test_nightmare_nh_freezes_from_diagonal_mage_prayer_camp();
     test_adaptive_nh_prays_melee_against_learned_mage_camp();
     test_adaptive_nh_prays_magic_without_learned_adjacent_melee();
     test_adaptive_nh_learns_static_mage_camp();

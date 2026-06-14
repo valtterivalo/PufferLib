@@ -165,9 +165,11 @@ static inline int opp_attack_ready(Player* self) {
     return self->attack_timer <= 0;
 }
 
-static inline int opp_can_reach_melee(Player* self, Player* target) {
+static inline int opp_melee_is_credible(Player* self, Player* target) {
+    if (is_in_melee_range(self, target)) return 1;
+    if (self->frozen_ticks > 0) return 0;
     int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-    return dist <= 1 || (self->frozen_ticks == 0 && dist <= 5);
+    return dist <= 5;
 }
 
 /**
@@ -178,7 +180,7 @@ static inline int opp_get_off_prayer_mask(Player* self, Player* target) {
     int mask = 0;
     if (target->prayer != PRAYER_PROTECT_MAGIC)   mask |= (1 << OPP_STYLE_MAGE);
     if (target->prayer != PRAYER_PROTECT_RANGED)  mask |= (1 << OPP_STYLE_RANGED);
-    if (target->prayer != PRAYER_PROTECT_MELEE && opp_can_reach_melee(self, target))
+    if (target->prayer != PRAYER_PROTECT_MELEE && opp_melee_is_credible(self, target))
         mask |= (1 << OPP_STYLE_MELEE);
     if (mask == 0) mask = (1 << OPP_STYLE_MAGE);  /* Fallback to mage */
     return mask;
@@ -2321,6 +2323,31 @@ static inline int opp_style_off_read_prayer(OpponentState* opp, int style) {
     return 0;  /* Would hit on-prayer */
 }
 
+typedef struct {
+    int presents_mage;
+    int protects_magic;
+    int adjacent;
+    int melee_attack_resolved;
+    int melee_recent_count;
+    int mage_camp_ticks;
+    int melee_threat_ticks;
+    int attack_ready_soon;
+} PvpMageCampMeleeSignal;
+
+static inline int pvp_recent_attack_style_count(
+    const AttackStyle attacks[HISTORY_SIZE],
+    AttackStyle style
+);
+
+static inline PvpMageCampMeleeSignal pvp_mage_camp_melee_signal(
+    const OpponentState* opp,
+    const Player* self,
+    const Player* target
+);
+
+static inline int pvp_should_counter_mage_camp_melee(PvpMageCampMeleeSignal s);
+static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal s);
+
 static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
@@ -2329,6 +2356,10 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     /* Attempt to read agent's pending action */
     opp_read_agent_action(env, opp);
+    PvpMageCampMeleeSignal mage_camp_signal =
+        pvp_mage_camp_melee_signal(opp, self, target);
+    int counter_mage_camp =
+        pvp_should_counter_mage_camp_melee(mage_camp_signal);
 
     /* 0. Tank gear switch when not about to attack */
     if (!opp_attack_ready(self)) {
@@ -2339,6 +2370,9 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     int def_prayer = -1;
     if (opp->has_read_this_tick && opp->read_agent_style != ATTACK_STYLE_NONE) {
         def_prayer = opp_get_read_defensive_prayer(opp);
+    }
+    if (def_prayer < 0 && pvp_should_pray_melee_against_mage_camp(mage_camp_signal)) {
+        def_prayer = OVERHEAD_MELEE;
     }
     if (def_prayer < 0) {
         def_prayer = opp_pick_defensive_prayer(
@@ -2464,8 +2498,14 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     int actual_attack;
     int spec_loadout = LOADOUT_SPEC_MELEE;
 
-    /* Spec priority: ranged at distance > magic off-prayer > melee in range */
-    if (should_ranged_spec && (dist >= 3 || target->frozen_ticks > 0)) {
+    if (counter_mage_camp && mage_camp_signal.adjacent && self->frozen_ticks == 0 &&
+            target->frozen_ticks == 0 && target->freeze_immunity_ticks == 0) {
+        actual_style = OPP_STYLE_MAGE;
+        actual_attack = 0;
+    } else if (counter_mage_camp && mage_camp_signal.adjacent && self->frozen_ticks == 0) {
+        actual_style = OPP_STYLE_RANGED;
+        actual_attack = 2;
+    } else if (should_ranged_spec && (dist >= 3 || target->frozen_ticks > 0)) {
         actual_style = OPP_STYLE_RANGED;
         actual_attack = 3;
         spec_loadout = LOADOUT_SPEC_RANGE;
@@ -2990,17 +3030,6 @@ static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     opp_apply_boost_potion(env, opp, actions, self, actual_style, 0);
     opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
 }
-
-typedef struct {
-    int presents_mage;
-    int protects_magic;
-    int adjacent;
-    int melee_attack_resolved;
-    int melee_recent_count;
-    int mage_camp_ticks;
-    int melee_threat_ticks;
-    int attack_ready_soon;
-} PvpMageCampMeleeSignal;
 
 static inline int pvp_recent_attack_style_count(
     const AttackStyle attacks[HISTORY_SIZE],
