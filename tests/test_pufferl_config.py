@@ -49,8 +49,9 @@ def test_osrs_pvp_uses_static_scripted_rollout_eval(monkeypatch: pytest.MonkeyPa
     args = pufferl.load_config("osrs_pvp")
 
     assert args["rollout_eval"]["mode"] == "pvp_static_mixed_panel"
-    assert args["rollout_eval"]["scripted_weight"] == pytest.approx(1.0)
-    assert args["rollout_eval"]["policy_weight"] == pytest.approx(0.0)
+    assert args["rollout_eval"]["scripted_weight"] == pytest.approx(0.8)
+    assert args["rollout_eval"]["policy_weight"] == pytest.approx(0.2)
+    assert args["rollout_eval"]["policy_opponent_name"] == "wins_v1_yl8a2o0q"
     assert len(args["rollout_eval"]["scripted_opponents"]) == 29
     assert 31 in args["rollout_eval"]["scripted_opponents"]
 
