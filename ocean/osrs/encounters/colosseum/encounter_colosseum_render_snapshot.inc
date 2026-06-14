@@ -146,6 +146,7 @@ enum {
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
     COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
     COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS = 18,
+    COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
 };
 
 static float col_javelin_skyfall_shadow_scale(const ColoJavelinState* jv) {
@@ -174,8 +175,34 @@ static EncounterProjectileTiming col_npc_projectile_timing(
     int distance
 ) {
     EncounterProjectileDelayOptions options = {0};
+    if (type == COLO_JAVELIN_COLOSSUS && style == ATTACK_STYLE_RANGED)
+        options.start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS;
     return encounter_projectile_timing(
         distance, 0, col_projectile_delay_kind_for_style(style), options);
+}
+
+static uint32_t col_manticore_orb_model_id(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_RANGED: return 51221u;
+        case ATTACK_STYLE_MAGIC: return 51215u;
+        case ATTACK_STYLE_MELEE: return 51213u;
+        case ATTACK_STYLE_NONE: break;
+    }
+    fprintf(stderr, "colosseum: invalid manticore orb style %d for telegraph model\n",
+        (int)style);
+    abort();
+}
+
+static int col_manticore_orb_anim_id(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_RANGED: return 10327;
+        case ATTACK_STYLE_MAGIC: return 10329;
+        case ATTACK_STYLE_MELEE: return 10328;
+        case ATTACK_STYLE_NONE: break;
+    }
+    fprintf(stderr, "colosseum: invalid manticore orb style %d for telegraph anim\n",
+        (int)style);
+    abort();
 }
 
 static void col_emit_javelin_skyfall_launch_projectile(
@@ -201,7 +228,8 @@ static void col_emit_javelin_skyfall_launch_projectile(
             .dst_y = jv->skyfall_tile_y,
             .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
             .damage = 0,
-            .duration_ticks = COLO_JAVELIN_SKYFALL_DELAY * 30,
+            .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
+                COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
             .start_h = (int)(npc_size * 0.75f * 128),
             .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
             .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
@@ -212,10 +240,39 @@ static void col_emit_javelin_skyfall_launch_projectile(
             .anim_id = -1,
             .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
             .impact_gfx_id = 0,
-            .start_delay = 0,
+            .start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30,
         },
         0);
     encounter_set_projectile_source_npc_slot(ov, projectile_idx, npc_slot);
+}
+
+static void col_emit_manticore_orb_telegraphs(
+    EncounterOverlay* ov,
+    const ColoNPC* npc,
+    int npc_slot
+) {
+    const ColoManticoreState* mc = &npc->type_state.manticore;
+    if (mc->cycle_step < 0) return;
+    if (mc->cycle_step >= 3) {
+        fprintf(stderr, "colosseum: invalid manticore cycle_step %d\n", mc->cycle_step);
+        abort();
+    }
+    int npc_size = col_npc_effective_size(npc);
+    for (int orb = mc->cycle_step; orb < 3; orb++) {
+        AttackStyle style = mc->orb_style[orb];
+        int stack_index = orb - mc->cycle_step;
+        encounter_emit_floating_model(
+            ov,
+            ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
+            npc_slot,
+            npc->x,
+            npc->y,
+            col_manticore_orb_model_id(style),
+            col_manticore_orb_anim_id(style),
+            2.35f + (float)stack_index * 0.42f,
+            0.0f,
+            0.72f + 0.05f * (float)(npc_size - 1));
+    }
 }
 
 static void col_emit_javelin_skyfall_landing_projectile(
@@ -460,6 +517,8 @@ static void col_render_post_tick_ctx(
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     ov->tile_shadow_count = 0;
+    ov->floating_model_count = 0;
+    ov->active_modifier_count = 0;
     ov->projectile_count = 0;
     encounter_write_terminal_status_text(
         s->episode_over,
@@ -471,6 +530,17 @@ static void col_render_post_tick_ctx(
         sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
 
+    for (int mod = 0; mod < COLO_NUM_REAL_MODIFIERS; mod++) {
+        int tier = col_mod_tier(s, (ColoModifier)mod);
+        if (tier <= 0) continue;
+        if (tier > COLO_MODIFIER_MAX_TIER[mod] || tier > 3) {
+            fprintf(stderr, "colosseum: active modifier %d has invalid tier %d\n",
+                mod, tier);
+            abort();
+        }
+        encounter_emit_active_modifier(ov, mod, tier);
+    }
+
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (!npc->active || npc->type != COLO_JAVELIN_COLOSSUS)
@@ -478,6 +548,13 @@ static void col_render_post_tick_ctx(
         ColoJavelinState* jv = colo_npc_javelin(npc);
         if (jv->skyfall_pending)
             col_emit_javelin_skyfall_shadow(ov, jv);
+    }
+
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active || npc->type != COLO_MANTICORE)
+            continue;
+        col_emit_manticore_orb_telegraphs(ov, npc, i);
     }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {

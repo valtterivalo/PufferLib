@@ -436,6 +436,7 @@ typedef enum {
 typedef struct {
     int set_delay;
     int reduce_delay;
+    int start_delay;
     int visual_delay_ticks;
     int visual_hit_early_ticks;
 } EncounterProjectileDelayOptions;
@@ -524,11 +525,14 @@ static inline EncounterProjectileTiming encounter_projectile_timing(
     EncounterProjectileDelayOptions options
 ) {
     int delay = encounter_projectile_hit_delay(distance, is_player, kind, options);
-    int duration = delay - options.visual_delay_ticks - options.visual_hit_early_ticks;
+    int start_delay = options.start_delay > 0
+        ? options.start_delay
+        : options.visual_delay_ticks;
+    int duration = delay - start_delay - options.visual_hit_early_ticks;
     if (duration < 1) duration = 1;
     return (EncounterProjectileTiming){
         .damage_delay_ticks = delay,
-        .visual_start_delay_ticks = options.visual_delay_ticks,
+        .visual_start_delay_ticks = start_delay,
         .visual_duration_ticks = duration,
     };
 }

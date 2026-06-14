@@ -470,7 +470,13 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
         int mdist = col_npc_dist_to_player(s, npc);
         if (mdist < 1 || mdist > stats->attack_range) return;
         if (!col_npc_has_los_to_player(s, npc)) return;
+        int cycle_step_before_arm = npc->type_state.manticore.cycle_step;
         col_npc_manticore_arm(s, idx);
+        if (cycle_step_before_arm < 0 &&
+                npc->type_state.manticore.cycle_step == 0 &&
+                npc->attack_timer > 0) {
+            ctx->manticore_charge_started[idx] = 1;
+        }
         if (npc->attack_timer > 0) return;          /* still charging */
         col_npc_attack_manticore(s, idx, stats);    /* fire orb 0 (or stagger) */
         return;

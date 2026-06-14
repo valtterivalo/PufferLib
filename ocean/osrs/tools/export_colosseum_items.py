@@ -73,6 +73,12 @@ from export_models import (  # noqa: E402
 from export_terrain import load_texture_average_colors_modern  # noqa: E402
 from export_textures import TextureAtlas  # noqa: E402
 from modern_cache_reader import ModernCacheReader  # noqa: E402
+from rc_cache import RcCacheStore, decode_sprite_group  # noqa: E402
+
+try:
+    from PIL import Image
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit("export_colosseum_items: Pillow is required for modifier sprites") from exc
 
 
 MODERN_OBJ_GROUP = 10
@@ -83,6 +89,7 @@ ITEM_MODEL_BASE = 0xE0000
 DRAGON_BOLT_MODEL_ID = 0xD0001
 
 SPOTANIM_MODELS = {3080, 3135, 6375, 6381, 14215}
+COLOSSEUM_WATER_SURGE_MODELS = {3116, 34617, 34618}
 ENCOUNTER_MODELS = {
     14407,
     14408,
@@ -104,6 +111,29 @@ ENCOUNTER_MODELS = {
     3131,
     29421,
 }
+
+COLOSSEUM_MODIFIER_SPRITE_IDS_BY_MODIFIER = {
+    "bees": (5544, 5559, 5574),
+    "blasphemy": (5538, 5553, 5568),
+    "doom": (5543, 5558, 5573),
+    "dynamic_duo": (5545,),
+    "frailty": (5541, 5556, 5571),
+    "mantimayhem": (5539, 5554, 5569),
+    "myopia": (5547, 5562, 5577),
+    "reentry": (5536, 5551, 5566),
+    "red_flag": (5540,),
+    "relentless": (5535, 5550, 5565),
+    "solarflare": (5537, 5552, 5567),
+    "quartet": (5546,),
+    "totemic": (5542,),
+    "volatility": (5534, 5549, 5564),
+}
+
+COLOSSEUM_MODIFIER_SPRITE_IDS = sorted({
+    sprite_id
+    for tiers in COLOSSEUM_MODIFIER_SPRITE_IDS_BY_MODIFIER.values()
+    for sprite_id in tiers
+})
 
 SLOT_NAMES = {
     "SLOT_HEAD": 0,
@@ -997,6 +1027,31 @@ def verify_pngs(paths: list[Path]) -> None:
             raise SystemExit(f"export_colosseum_items: invalid PNG output: {path}")
 
 
+def export_modifier_sprites(cache_dir: Path, output_dir: Path) -> list[Path]:
+    """Export cache sprite groups for active Colosseum modifier HUD icons."""
+    sprite_dir = output_dir / "sprites" / "colosseum" / "modifiers"
+    sprite_dir.mkdir(parents=True, exist_ok=True)
+    store = RcCacheStore(cache_dir)
+    paths: list[Path] = []
+    for sprite_id in COLOSSEUM_MODIFIER_SPRITE_IDS:
+        data = store.read_container(8, sprite_id)
+        if data is None:
+            raise SystemExit(f"export_colosseum_items: modifier sprite {sprite_id} missing")
+        sprites = decode_sprite_group(data)
+        if len(sprites) != 1:
+            raise SystemExit(
+                f"export_colosseum_items: modifier sprite {sprite_id} has "
+                f"{len(sprites)} frames, expected 1"
+            )
+        sprite = sprites[0]
+        path = sprite_dir / f"{sprite_id}.png"
+        image = Image.frombytes("RGBA", (sprite.width, sprite.height), sprite.pixels)
+        image.save(path)
+        paths.append(path)
+    verify_pngs(paths)
+    return paths
+
+
 def export_assets(args: argparse.Namespace) -> ExportReport:
     repo_root = Path(__file__).resolve().parents[3]
     output_dir = args.output_dir
@@ -1027,7 +1082,7 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
     cache_items = load_cache_items(reader, ordered_ids)
     body_models = build_body_models(reader)
     item_models, wield_by_id, raw_model_ids = build_item_models(reader, ordered_ids, cache_items)
-    raw_model_ids |= SPOTANIM_MODELS | ENCOUNTER_MODELS
+    raw_model_ids |= SPOTANIM_MODELS | COLOSSEUM_WATER_SURGE_MODELS | ENCOUNTER_MODELS
     raw_models = build_raw_models(reader, raw_model_ids)
     all_models = body_models + item_models + raw_models
 
@@ -1056,6 +1111,7 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
 
     sprite_paths = [sprite_dir / f"{item_id}.png" for item_id in sorted(set(colosseum_ids))]
     verify_pngs(sprite_paths)
+    modifier_sprite_paths = export_modifier_sprites(args.modern_cache, output_dir)
 
     rows_by_id = {row.item_id: row for row in rows}
     missing_model_rows = [item_id for item_id in colosseum_ids if item_id not in rows_by_id]
@@ -1082,6 +1138,10 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
     print(f"wrote {len(all_models)} models to {model_path}")
     print(f"wrote {len(rows)} item rows to {item_header_path}")
     print(f"wrote {len(sprite_paths)} Colosseum sprites to {sprite_dir}")
+    print(
+        f"wrote {len(modifier_sprite_paths)} Colosseum modifier sprites to "
+        f"{output_dir / 'sprites' / 'colosseum' / 'modifiers'}"
+    )
     return ExportReport(
         loadout_item_ids=sorted(set(colosseum_ids)),
         visible_worn_item_ids=sorted(set(visible_worn_item_ids)),

@@ -168,6 +168,8 @@ static int col_npc_render_attack_anim_id(
     int def_id
 ) {
     assert(ctx);
+    if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[npc_slot])
+        return 10868;
     switch (ctx->npc_render_attack_anim[npc_slot]) {
         case COLO_NPC_RENDER_ATTACK_NORMAL:
             return col_npc_attack_anim_id(def_id);
@@ -210,6 +212,8 @@ static void col_fill_render_entities_ctx(
         int npc_anim_id = -1;
         if (npc->death_ticks > 0)
             npc_anim_id = col_npc_death_anim_id(npc->type);
+        else if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[i])
+            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
         else if (npc->attacked_this_tick)
             npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];

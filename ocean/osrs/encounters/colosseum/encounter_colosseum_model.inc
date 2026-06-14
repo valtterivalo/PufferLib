@@ -1290,12 +1290,14 @@ typedef struct {
     int human_command_count;
     int human_command_mode;
     ColoNpcRenderAttackAnim npc_render_attack_anim[COLO_MAX_NPCS];
+    int manticore_charge_started[COLO_MAX_NPCS];
     ColoJavelinSkyfallLandingRenderEvent javelin_skyfall_landing[COLO_MAX_NPCS];
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     if (!ctx) return;
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
+    memset(ctx->manticore_charge_started, 0, sizeof(ctx->manticore_charge_started));
     memset(ctx->javelin_skyfall_landing, 0, sizeof(ctx->javelin_skyfall_landing));
 }
 

@@ -3771,6 +3771,10 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     CHECK("magic NPC projectile tracks the player",
         ov.projectiles[0].source_npc_slot == 0 &&
         ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_PLAYER);
+    CHECK("serpent shaman uses Water Surge projectile ids",
+        ov.projectiles[0].launch_gfx_id == 1458 &&
+        ov.projectiles[0].travel_gfx_id == 1459 &&
+        ov.projectiles[0].impact_gfx_id == 1460);
     RenderEntity npc_anim_entities[4];
     int npc_anim_count = 0;
     col_fill_render_entities_ctx(
@@ -3790,6 +3794,37 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
     ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+    mc->fixed_orb_style[0] = ATTACK_STYLE_MAGIC;
+    mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
+    mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+    s.npcs[0].attack_timer = 2;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    memset(npc_anim_entities, 0, sizeof(npc_anim_entities));
+    npc_anim_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        npc_anim_entities, 4, &npc_anim_count);
+    CHECK("manticore arm tick drives charge animation once",
+        s.npcs[0].attacked_this_tick == 0 &&
+        npc_anim_count >= 2 &&
+        npc_anim_entities[1].npc_anim_id == 10868);
+    CHECK("manticore windup renders stacked remaining orbs bottom first",
+        ov.projectile_count == 0 &&
+        ov.floating_model_count == 3 &&
+        ov.floating_models[0].model_id == 51215u &&
+        ov.floating_models[0].anim_id == 10329 &&
+        ov.floating_models[1].model_id == 51221u &&
+        ov.floating_models[1].anim_id == 10327 &&
+        ov.floating_models[2].model_id == 51213u &&
+        ov.floating_models[2].anim_id == 10328 &&
+        ov.floating_models[0].height_offset < ov.floating_models[1].height_offset &&
+        ov.floating_models[1].height_offset < ov.floating_models[2].height_offset);
+
+    init_forecast_test_state(&s, &ctx, 503, 17, 16);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    mc = colo_npc_manticore(&s.npcs[0]);
     mc->fixed_orb_style[0] = ATTACK_STYLE_MELEE;
     mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
     mc->fixed_orb_style[2] = ATTACK_STYLE_MAGIC;
@@ -3832,6 +3867,12 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         npc_anim_entities, 4, &npc_anim_count);
     CHECK("javelin colossus attack drives body attack animation",
         npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10892);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin normal ranged throw waits one tick before visual release",
+        ov.projectile_count == 1 &&
+        ov.projectiles[0].start_delay ==
+            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
@@ -3855,7 +3896,11 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].impact_gfx_id == 0 &&
         ov.projectiles[0].start_h < ov.projectiles[0].end_h &&
         ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_LAUNCH_CURVE &&
-        ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DELAY * 30);
+        ov.projectiles[0].start_delay ==
+            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30 &&
+        ov.projectiles[0].duration_ticks ==
+            (COLO_JAVELIN_SKYFALL_DELAY -
+             COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30);
     CHECK("javelin skyfall launch emits growing target shadow",
         ov.tile_shadow_count == 1 &&
         ov.tile_shadows[0].active == 1 &&
@@ -3951,6 +3996,20 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
             loadouts[s.weapon_set][GEAR_SLOT_WEAPON]);
     CHECK("player slot inventory is populated for the GUI",
         s.player.num_items_in_slot[GEAR_SLOT_WEAPON] > 0);
+
+    s.modifiers.active_mask =
+        (1u << (unsigned)COLO_MOD_RELENTLESS) |
+        (1u << (unsigned)COLO_MOD_FRAILTY);
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 2;
+    s.modifiers.tier[COLO_MOD_FRAILTY] = 3;
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("render overlay exposes active modifier tiers",
+        ov.active_modifier_count == 2 &&
+        ov.active_modifiers[0].modifier == COLO_MOD_FRAILTY &&
+        ov.active_modifiers[0].tier == 3 &&
+        ov.active_modifiers[1].modifier == COLO_MOD_RELENTLESS &&
+        ov.active_modifiers[1].tier == 2);
 }
 
 static void test_render_bridge_npc_debug_and_warband_motion(void) {

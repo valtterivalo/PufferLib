@@ -226,6 +226,8 @@ static inline int encounter_pending_hit_queue_damage_sum(
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
 #define ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS 48
+#define ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS 16
+#define ENCOUNTER_MAX_ACTIVE_MODIFIERS 16
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
 /* inferno can legitimately exceed single-digit projectile counts in one tick,
    especially during Zuk healer spark volleys. size this from real encounter
@@ -250,6 +252,24 @@ typedef struct {
 } EncounterTileShadow;
 
 typedef struct {
+    int active;
+    int anchor_kind;
+    int npc_slot;
+    int x, y;
+    uint32_t model_id;
+    int anim_id;
+    float height_offset;
+    float lateral_offset;
+    float scale;
+} EncounterFloatingModel;
+
+typedef struct {
+    int active;
+    int modifier;
+    int tier;
+} EncounterActiveModifier;
+
+typedef struct {
     /* encounter-defined area hazards. current users write 3x3 poison clouds. */
     struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
     int hazard_count;
@@ -265,6 +285,12 @@ typedef struct {
 
     EncounterTileShadow tile_shadows[ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS];
     int tile_shadow_count;
+
+    EncounterFloatingModel floating_models[ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS];
+    int floating_model_count;
+
+    EncounterActiveModifier active_modifiers[ENCOUNTER_MAX_ACTIVE_MODIFIERS];
+    int active_modifier_count;
 
     /* visual projectiles: brief flash from source to target.
        encounters fire attacks instantly, but we show a 1-tick projectile
@@ -386,6 +412,66 @@ static inline void encounter_emit_tile_shadow(
         .x = x,
         .y = y,
         .scale = scale,
+    };
+}
+
+static inline void encounter_emit_floating_model(
+    EncounterOverlay* ov,
+    int anchor_kind,
+    int npc_slot,
+    int x,
+    int y,
+    uint32_t model_id,
+    int anim_id,
+    float height_offset,
+    float lateral_offset,
+    float scale
+) {
+    if (model_id == 0 || scale <= 0.0f) {
+        fprintf(stderr, "encounter floating model invalid model=%u scale=%f\n",
+            model_id, scale);
+        abort();
+    }
+    if (ov->floating_model_count >= ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS) {
+        fprintf(stderr, "encounter floating model capacity exceeded: %d\n",
+            ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS);
+        abort();
+    }
+    int i = ov->floating_model_count++;
+    ov->floating_models[i] = (EncounterFloatingModel){
+        .active = 1,
+        .anchor_kind = anchor_kind,
+        .npc_slot = npc_slot,
+        .x = x,
+        .y = y,
+        .model_id = model_id,
+        .anim_id = anim_id,
+        .height_offset = height_offset,
+        .lateral_offset = lateral_offset,
+        .scale = scale,
+    };
+}
+
+static inline void encounter_emit_active_modifier(
+    EncounterOverlay* ov,
+    int modifier,
+    int tier
+) {
+    if (modifier < 0 || tier <= 0) {
+        fprintf(stderr, "encounter active modifier invalid modifier=%d tier=%d\n",
+            modifier, tier);
+        abort();
+    }
+    if (ov->active_modifier_count >= ENCOUNTER_MAX_ACTIVE_MODIFIERS) {
+        fprintf(stderr, "encounter active modifier capacity exceeded: %d\n",
+            ENCOUNTER_MAX_ACTIVE_MODIFIERS);
+        abort();
+    }
+    int i = ov->active_modifier_count++;
+    ov->active_modifiers[i] = (EncounterActiveModifier){
+        .active = 1,
+        .modifier = modifier,
+        .tier = tier,
     };
 }
 

@@ -30,6 +30,7 @@
 #include "osrs_objects.h"
 #include "osrs_gui.h"
 #include "osrs_human_input.h"
+#include "encounters/encounter_colosseum.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -447,6 +448,8 @@ typedef struct RenderClient {
     /* overhead prayer icon textures (from headicons_prayer sprites) */
     Texture2D prayer_icons[6];  /* indexed by headIcon: 0=melee,1=ranged,2=magic,3=retri,4=smite,5=redemp */
     int prayer_icons_loaded;
+
+    Texture2D colosseum_modifier_icons[COLO_NUM_REAL_MODIFIERS][3];
 
     /* hitsplat sprite textures (from hitmarks sprites, 317 mode 0).
        0=blue(miss), 1=red(regular), 2=green(poison), 3=dark(venom), 4=yellow(shield) */
@@ -2509,6 +2512,12 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     if (rc->prayer_icons_loaded) {
         for (int i = 0; i < 6; i++) {
             UnloadTexture(rc->prayer_icons[i]);
+        }
+    }
+    for (int mod = 0; mod < COLO_NUM_REAL_MODIFIERS; mod++) {
+        for (int tier = 0; tier < 3; tier++) {
+            if (rc->colosseum_modifier_icons[mod][tier].id != 0)
+                UnloadTexture(rc->colosseum_modifier_icons[mod][tier]);
         }
     }
     /* free hitsplat sprite textures */
@@ -4857,6 +4866,36 @@ static void render_draw_3d_world(RenderClient* rc) {
                 CLITERAL(Color){ 8, 6, 4, alpha });
         }
 
+        if (ov->floating_model_count > 0) {
+            render_load_projectile_assets(rc);
+        }
+        for (int i = 0; i < ov->floating_model_count; i++) {
+            EncounterFloatingModel* floating = &ov->floating_models[i];
+            if (!floating->active) continue;
+            float anchor_x = 0.0f;
+            float anchor_y = 0.0f;
+            if (!render_resolve_projectile_anchor(
+                    rc, floating->anchor_kind, floating->npc_slot,
+                    (float)floating->x, (float)floating->y,
+                    &anchor_x, &anchor_y)) {
+                continue;
+            }
+            Model* model = render_get_proj_model(rc, floating->model_id);
+            float ground = OV_GROUND((int)anchor_x, (int)anchor_y);
+            Vector3 pos = {
+                anchor_x + 0.5f + floating->lateral_offset,
+                ground + floating->height_offset,
+                -(anchor_y + 1.0f) + 0.5f
+            };
+            float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
+            rlDisableBackfaceCulling();
+            model->transform = MatrixMultiply(
+                MatrixScale(-model_scale, model_scale, model_scale),
+                MatrixTranslate(pos.x, pos.y, pos.z));
+            DrawModel(*model, (Vector3){0,0,0}, 1.0f, WHITE);
+            rlEnableBackfaceCulling();
+        }
+
         for (int i = 0; i < ov->hazard_count; i++) {
             if (!ov->hazards[i].active) continue;
             float ground = OV_GROUND(ov->hazards[i].x + 1, ov->hazards[i].y + 1);
@@ -5938,6 +5977,77 @@ static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
         display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
 }
 
+static const int COLOSSEUM_MODIFIER_ICON_SPRITE_IDS[COLO_NUM_REAL_MODIFIERS][3] = {
+    [COLO_MOD_BEES] = {5544, 5559, 5574},
+    [COLO_MOD_BLASPHEMY] = {5538, 5553, 5568},
+    [COLO_MOD_DOOM] = {5543, 5558, 5573},
+    [COLO_MOD_DYNAMIC_DUO] = {5545, 0, 0},
+    [COLO_MOD_FRAILTY] = {5541, 5556, 5571},
+    [COLO_MOD_MANTIMAYHEM] = {5539, 5554, 5569},
+    [COLO_MOD_MYOPIA] = {5547, 5562, 5577},
+    [COLO_MOD_REENTRY] = {5536, 5551, 5566},
+    [COLO_MOD_RED_FLAG] = {5540, 0, 0},
+    [COLO_MOD_RELENTLESS] = {5535, 5550, 5565},
+    [COLO_MOD_SOLARFLARE] = {5537, 5552, 5567},
+    [COLO_MOD_QUARTET] = {5546, 0, 0},
+    [COLO_MOD_TOTEMIC] = {5542, 0, 0},
+    [COLO_MOD_VOLATILITY] = {5534, 5549, 5564},
+};
+
+static Texture2D* render_require_colosseum_modifier_icon(
+    RenderClient* rc,
+    int modifier,
+    int tier
+) {
+    if (modifier < 0 || modifier >= COLO_NUM_REAL_MODIFIERS || tier < 1 || tier > 3) {
+        fprintf(stderr, "render: invalid colosseum modifier icon modifier=%d tier=%d\n",
+            modifier, tier);
+        abort();
+    }
+    int sprite_id = COLOSSEUM_MODIFIER_ICON_SPRITE_IDS[modifier][tier - 1];
+    if (sprite_id <= 0) {
+        fprintf(stderr, "render: missing colosseum modifier icon mapping modifier=%d tier=%d\n",
+            modifier, tier);
+        abort();
+    }
+    Texture2D* texture = &rc->colosseum_modifier_icons[modifier][tier - 1];
+    if (texture->id == 0) {
+        char path[96];
+        snprintf(path, sizeof(path),
+            "sprites/colosseum/modifiers/%d.png", sprite_id);
+        *texture = osrs_asset_load_texture(OSRS_ASSET(path));
+        if (texture->id == 0) {
+            fprintf(stderr, "render: missing colosseum modifier icon asset %s\n", path);
+            abort();
+        }
+        SetTextureFilter(*texture, TEXTURE_FILTER_POINT);
+    }
+    return texture;
+}
+
+static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
+    EncounterOverlay* ov = &rc->encounter_overlay;
+    if (ov->active_modifier_count <= 0) return;
+    const int icon_size = 24;
+    const int gap = 4;
+    const int x0 = 10;
+    const int y0 = 36;
+    for (int i = 0; i < ov->active_modifier_count; i++) {
+        EncounterActiveModifier* active = &ov->active_modifiers[i];
+        if (!active->active) continue;
+        Texture2D* texture = render_require_colosseum_modifier_icon(
+            rc, active->modifier, active->tier);
+        int x = x0 + i * (icon_size + gap);
+        DrawRectangle(x - 2, y0 - 2, icon_size + 4, icon_size + 4,
+            CLITERAL(Color){22, 19, 17, 210});
+        DrawRectangleLines(x - 2, y0 - 2, icon_size + 4, icon_size + 4,
+            CLITERAL(Color){184, 146, 72, 230});
+        Rectangle src = {0, 0, (float)texture->width, (float)texture->height};
+        Rectangle dst = {(float)x, (float)y0, (float)icon_size, (float)icon_size};
+        DrawTexturePro(*texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+    }
+}
+
 static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
     int display_tick = render_display_tick(env);
     if (render_scene_is_inferno(env)) {
@@ -5945,6 +6055,10 @@ static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
         return;
     }
     render_draw_default_top_hud(rc, display_tick);
+    if (env->encounter_def &&
+            strcmp(((const EncounterDef*)env->encounter_def)->name, "colosseum") == 0) {
+        render_draw_colosseum_modifier_hud(rc);
+    }
 }
 
 static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
