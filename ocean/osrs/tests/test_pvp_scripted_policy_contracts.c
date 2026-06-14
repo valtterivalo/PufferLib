@@ -434,6 +434,43 @@ static void test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen(void) {
             env.players[0].y) > 1);
 }
 
+static void test_nightmare_nh_not_ready_does_not_step_under_on_last_freeze_tick(void) {
+    printf("--- Nightmare NH not-ready movement treats last freeze tick as unfrozen ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 1;
+    env.players[1].attack_timer = 3;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("not-ready last tick combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("not-ready last tick does not target under tile",
+        opponent_move(&env) == MOVE_NONE ||
+        opponent_move_dest_x(&env) != env.players[0].x ||
+        opponent_move_dest_y(&env) != env.players[0].y);
+}
+
+static void test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movement(void) {
+    printf("--- Nightmare NH not-ready movement steps under on live freeze ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    env.players[0].frozen_ticks = 2;
+    env.players[1].attack_timer = 3;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("not-ready live freeze combat", opponent_combat(&env), ATTACK_NONE);
+    ASSERT_TRUE("not-ready live freeze moves", opponent_move(&env) != MOVE_NONE);
+    ASSERT_INT_EQ("not-ready live freeze under x",
+        opponent_move_dest_x(&env), env.players[0].x);
+    ASSERT_INT_EQ("not-ready live freeze under y",
+        opponent_move_dest_y(&env), env.players[0].y);
+}
+
 static void test_dumb_hard_policy_still_walks_under_frozen_adjacent_target(void) {
     printf("--- Dumb hard policy still walks under frozen adjacent target ---\n");
 
@@ -867,6 +904,8 @@ int main(void) {
     test_smart_hard_policy_allows_diagonal_projectile_attack();
     test_smart_hard_policy_full_step_under_ranged_attack_does_not_attack();
     test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen();
+    test_nightmare_nh_not_ready_does_not_step_under_on_last_freeze_tick();
+    test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movement();
     test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
     test_hard_spacing_guard_does_not_move_when_self_frozen();
     test_adaptive_nh_read_chance_exceeds_nightmare();

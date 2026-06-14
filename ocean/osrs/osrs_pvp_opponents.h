@@ -165,6 +165,10 @@ static inline int opp_attack_ready(Player* self) {
     return self->attack_timer <= 0;
 }
 
+static inline int opp_target_frozen_after_pvp_timer_update(const Player* target) {
+    return target->frozen_ticks > 1;
+}
+
 static inline int opp_melee_is_credible(Player* self, Player* target) {
     if (is_in_melee_range(self, target)) return 1;
     if (self->frozen_ticks > 0) return 0;
@@ -1255,7 +1259,8 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -1672,7 +1677,8 @@ static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 25% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0 &&
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+            self->frozen_ticks == 0 && dist > 0 &&
             rand_float(env) < 0.25f) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
@@ -1752,7 +1758,8 @@ static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 50% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0 &&
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+            self->frozen_ticks == 0 && dist > 0 &&
             rand_float(env) < 0.50f) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
@@ -1820,7 +1827,8 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
 
             /* Step under if target frozen */
             int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-            if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+            if (opp_target_frozen_after_pvp_timer_update(target) &&
+                    self->frozen_ticks == 0 && dist > 0) {
                 actions[HEAD_COMBAT] = MOVE_UNDER;
             }
 
@@ -1948,7 +1956,8 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -2039,7 +2048,8 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -2107,7 +2117,8 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
             opp_apply_fake_switch(actions, opp->fake_switch_style);
 
             int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-            if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+            if (opp_target_frozen_after_pvp_timer_update(target) &&
+                    self->frozen_ticks == 0 && dist > 0) {
                 actions[HEAD_COMBAT] = MOVE_UNDER;
             }
 
@@ -2233,7 +2244,8 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
         }
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -2417,7 +2429,8 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_fake_switch(actions, opp->fake_switch_style);
 
             int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-            if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+            if (opp_target_frozen_after_pvp_timer_update(target) &&
+                    self->frozen_ticks == 0 && dist > 0) {
                 actions[HEAD_COMBAT] = MOVE_UNDER;
             }
             return;
@@ -2560,7 +2573,8 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         opp_emit_combat_attack(actions, actual_attack);
     } else if (!opp_attack_ready(self)) {
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -2646,7 +2660,8 @@ static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement: step under frozen target */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0 &&
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+            self->frozen_ticks == 0 && dist > 0 &&
             rand_float(env) < 0.40f) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
@@ -2733,7 +2748,7 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
         /* Movement: maintain farcast-5 distance */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
         if (self->frozen_ticks == 0) {
-            if (target->frozen_ticks > 0 && dist < 5) {
+            if (opp_target_frozen_after_pvp_timer_update(target) && dist < 5) {
                 /* Step back to range 5 from frozen target */
                 actions[HEAD_COMBAT] = MOVE_FARCAST_5;
             } else if (dist < 4 && target->frozen_ticks == 0) {
@@ -2855,7 +2870,8 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement: step under frozen target, farcast-3 for anti-kite */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
-        if (target->frozen_ticks > 0 && self->frozen_ticks == 0 && dist > 0) {
+        if (opp_target_frozen_after_pvp_timer_update(target) &&
+                self->frozen_ticks == 0 && dist > 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (opp->target_fleeing_ticks >= 2 && dist > 3 && self->frozen_ticks == 0) {
             actions[HEAD_COMBAT] = MOVE_FARCAST_3;
@@ -2966,7 +2982,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (!opp_attack_ready(self)) {
         /* Movement: maintain farcast-5, step back after freeze */
         if (self->frozen_ticks == 0) {
-            if (target->frozen_ticks > 0 && dist < 5) {
+            if (opp_target_frozen_after_pvp_timer_update(target) && dist < 5) {
                 /* Step back to range 5 from frozen target */
                 actions[HEAD_COMBAT] = MOVE_FARCAST_5;
             } else if (dist < 4) {
@@ -2994,7 +3010,7 @@ static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp, actions, self, cons, OPP_SURVIVAL_STANDARD);
 
     if (self->frozen_ticks == 0 && dist <= 1) {
-        actions[HEAD_COMBAT] = target->frozen_ticks > 0 && dist > 0
+        actions[HEAD_COMBAT] = opp_target_frozen_after_pvp_timer_update(target) && dist > 0
             ? MOVE_UNDER
             : MOVE_FARCAST_5;
         return;
@@ -3004,7 +3020,7 @@ static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
 
     if (!opp_attack_ready(self) || eating) {
         if (self->frozen_ticks == 0) {
-            if (target->frozen_ticks > 0 && dist < 5) {
+            if (opp_target_frozen_after_pvp_timer_update(target) && dist < 5) {
                 actions[HEAD_COMBAT] = MOVE_FARCAST_5;
             } else if (dist > 7) {
                 actions[HEAD_COMBAT] = MOVE_FARCAST_5;
@@ -3680,7 +3696,7 @@ static inline OppSpacingDecision opp_dumb_projectile_spacing_decision(
     Player* target,
     int dist
 ) {
-    return target->frozen_ticks > 0 && dist > 0
+    return opp_target_frozen_after_pvp_timer_update(target) && dist > 0
         ? opp_spacing_legacy_move(MOVE_UNDER)
         : opp_spacing_legacy_move(MOVE_FARCAST_5);
 }
