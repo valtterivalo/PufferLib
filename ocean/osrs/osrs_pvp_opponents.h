@@ -3469,13 +3469,7 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     actions[HEAD_ATTACK] = ATTACK_NONE;
 
     pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
-    if (is_move_action(legacy_combat)) {
-        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-        actions[HEAD_MOVE] = pvp_head_move_from_legacy_target_move(
-            env, agent_idx, legacy_combat, cmap);
-    } else {
-        actions[HEAD_ATTACK] = legacy_combat;
-    }
+    actions[HEAD_ATTACK] = legacy_combat;
 }
 
 static inline int opp_type_uses_hard_spacing_guard(OpponentType type) {

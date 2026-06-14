@@ -211,7 +211,8 @@ static void set_under_non_melee_spacing_state(OsrsEnv* env, OpponentType type) {
 }
 
 static int opponent_combat(const OsrsEnv* env) {
-    return env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
+    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
+    return is_attack_action(action) ? action : ATTACK_NONE;
 }
 
 static int opponent_overhead(const OsrsEnv* env) {
@@ -219,14 +220,44 @@ static int opponent_overhead(const OsrsEnv* env) {
 }
 
 static int opponent_move(const OsrsEnv* env) {
-    return env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE];
+    int head_move = env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE];
+    if (head_move != MOVE_NONE) return head_move;
+
+    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
+    if (!is_move_action(action)) return MOVE_NONE;
+
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+    return pvp_head_move_from_legacy_target_move(
+        (OsrsEnv*)env, 1, action, cmap);
 }
 
 static int opponent_move_dest_x(const OsrsEnv* env) {
+    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
+    if (is_move_action(action) &&
+            env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE] == MOVE_NONE) {
+        int dest_x = -1;
+        int dest_y = -1;
+        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+        if (pvp_select_legacy_target_move_destination(
+                (OsrsEnv*)env, 1, action, cmap, &dest_x, &dest_y)) {
+            return dest_x;
+        }
+    }
     return env->players[1].x + ENCOUNTER_MOVE_TARGET_DX[opponent_move(env)];
 }
 
 static int opponent_move_dest_y(const OsrsEnv* env) {
+    int action = env->pending_actions[NUM_ACTION_HEADS + HEAD_ATTACK];
+    if (is_move_action(action) &&
+            env->pending_actions[NUM_ACTION_HEADS + HEAD_MOVE] == MOVE_NONE) {
+        int dest_x = -1;
+        int dest_y = -1;
+        const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+        if (pvp_select_legacy_target_move_destination(
+                (OsrsEnv*)env, 1, action, cmap, &dest_x, &dest_y)) {
+            return dest_y;
+        }
+    }
     return env->players[1].y + ENCOUNTER_MOVE_TARGET_DY[opponent_move(env)];
 }
 
@@ -469,6 +500,39 @@ static void test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movemen
         opponent_move_dest_x(&env), env.players[0].x);
     ASSERT_INT_EQ("not-ready live freeze under y",
         opponent_move_dest_y(&env), env.players[0].y);
+}
+
+static void test_nightmare_nh_full_step_under_persists_until_frozen_target_tile(void) {
+    printf("--- Nightmare NH full step-under keeps exact target destination ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_adjacent_non_melee_spacing_state(&env, OPP_NIGHTMARE_NH);
+    set_player_position(&env.players[0], 3045, 3531);
+    set_player_position(&env.players[1], 3042, 3531);
+    env.players[0].last_obs_target_x = env.players[1].x;
+    env.players[0].last_obs_target_y = env.players[1].y;
+    env.players[1].last_obs_target_x = env.players[0].x;
+    env.players[1].last_obs_target_y = env.players[0].y;
+    env.players[0].frozen_ticks = 10;
+    env.players[1].attack_timer = 3;
+    memset(env.ocean_io.agent_actions, 0, NUM_ACTION_HEADS * sizeof(int));
+
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("first under step runs east", env.players[1].x, 3044);
+    ASSERT_INT_EQ("first under step stays on row", env.players[1].y, 3531);
+    ASSERT_INT_EQ("under walk destination persists x",
+        env.pvp_runtime.walk_dest_x[1], env.players[0].x);
+    ASSERT_INT_EQ("under walk destination persists y",
+        env.pvp_runtime.walk_dest_y[1], env.players[0].y);
+
+    pvp_step(&env);
+
+    ASSERT_INT_EQ("second under step reaches target x",
+        env.players[1].x, env.players[0].x);
+    ASSERT_INT_EQ("second under step reaches target y",
+        env.players[1].y, env.players[0].y);
 }
 
 static void test_dumb_hard_policy_still_walks_under_frozen_adjacent_target(void) {
@@ -906,6 +970,7 @@ int main(void) {
     test_smart_hard_policy_treats_last_freeze_tick_as_unfrozen();
     test_nightmare_nh_not_ready_does_not_step_under_on_last_freeze_tick();
     test_nightmare_nh_not_ready_steps_under_when_freeze_survives_movement();
+    test_nightmare_nh_full_step_under_persists_until_frozen_target_tile();
     test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
     test_hard_spacing_guard_does_not_move_when_self_frozen();
     test_adaptive_nh_read_chance_exceeds_nightmare();
