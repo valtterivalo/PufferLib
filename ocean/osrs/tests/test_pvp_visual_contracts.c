@@ -1203,6 +1203,46 @@ static void test_pvp_weapon_pose_anims_are_mapped(void) {
     assert_item_pose_anims("Voidwaker", ITEM_VOIDWAKER, 244, 247, 248);
 }
 
+static void test_pvp_kodai_staff_bash_uses_cache_visual(void) {
+    printf("--- PvP Kodai staff bash uses cache visual ---\n");
+
+    int kodai_melee_anim =
+        osrs_combat_visual_weapon_attack_anim_for_fight_style(
+            ITEM_KODAI_WAND,
+            ATTACK_STYLE_MELEE,
+            FIGHT_STYLE_ACCURATE,
+            0,
+            OSRS_PLAYER_UNARMED_ATTACK_ANIM);
+    int ahrim_melee_anim =
+        osrs_combat_visual_weapon_attack_anim_for_fight_style(
+            ITEM_AHRIM_STAFF,
+            ATTACK_STYLE_MELEE,
+            FIGHT_STYLE_ACCURATE,
+            0,
+            OSRS_PLAYER_UNARMED_ATTACK_ANIM);
+    int kodai_spell_anim =
+        osrs_combat_visual_magic_attack_anim_for_fight_style(
+            ITEM_KODAI_WAND,
+            FIGHT_STYLE_AUTOCAST,
+            0,
+            1979);
+    uint32_t kodai_wield_model =
+        item_to_wield_model(ITEM_DATABASE[ITEM_KODAI_WAND].item_id);
+    uint32_t ahrim_wield_model =
+        item_to_wield_model(ITEM_DATABASE[ITEM_AHRIM_STAFF].item_id);
+
+    ASSERT_INT_EQ("Kodai melee staff bash anim", kodai_melee_anim, 414);
+    ASSERT_INT_EQ("Kodai melee differs from Ahrim", kodai_melee_anim != ahrim_melee_anim, 1);
+    ASSERT_INT_EQ("Kodai melee anim cached",
+        anim_get_sequence(test_equipment_animation_cache(), kodai_melee_anim) != NULL,
+        1);
+    ASSERT_INT_EQ("Kodai wield model exists",
+        kodai_wield_model != ITEM_RENDER_MODEL_MISSING, 1);
+    ASSERT_INT_EQ("Kodai wield model differs from Ahrim",
+        kodai_wield_model != ahrim_wield_model, 1);
+    ASSERT_INT_EQ("Kodai spell keeps spell anim", kodai_spell_anim, 1979);
+}
+
 static void test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage(void) {
     printf("--- PvP Voidwaker special visual and damage styles ---\n");
 
@@ -1726,6 +1766,7 @@ int main(void) {
     test_pvp_ancient_priority_has_wield_model();
     test_special_visual_fallbacks_do_not_overlap_local_rows();
     test_pvp_weapon_pose_anims_are_mapped();
+    test_pvp_kodai_staff_bash_uses_cache_visual();
     test_pvp_voidwaker_special_uses_melee_visual_and_magic_damage();
     test_pvp_special_attack_visual_weapon_and_effect_contract();
     test_pvp_magic_landing_keeps_spell_visual_context();
