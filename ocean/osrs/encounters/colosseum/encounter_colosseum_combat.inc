@@ -33,10 +33,26 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     encounter_pending_hit_queue_clear(&npc->pending_hits);
 }
 
+static void col_render_hit_events_add(
+    int* count,
+    int damage[ENCOUNTER_RENDER_HITS_MAX],
+    int hit_damage
+) {
+    if (!count || !damage || *count < 0 || *count >= ENCOUNTER_RENDER_HITS_MAX) {
+        fprintf(stderr, "invalid colosseum render hit event\n");
+        abort();
+    }
+    damage[*count] = hit_damage > 0 ? hit_damage : 0;
+    *count += 1;
+}
+
 /** resolve player attack projectiles landing on NPCs. A hit that lands this tick
     is removed from the queue (the shared resolver only flags it inactive), so a
     long fight like Sol does not pile up resolved hits until the queue overflows. */
-static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
+static void col_resolve_player_projectiles_on_npcs_ctx(
+    ColosseumState* s,
+    ColosseumContext* ctx
+) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         ColoNPC* npc = &s->npcs[i];
         if (!col_npc_is_live_target(npc)) continue;
@@ -50,6 +66,10 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
                 npc->hit_landed_this_tick = landed;
                 npc->hit_damage = hit_damage;
                 npc->hit_was_successful_this_tick = (hit_damage > 0);
+                col_render_hit_events_add(
+                    &ctx->npc_render_hit_count[i],
+                    ctx->npc_render_hit_damage[i],
+                    hit_damage);
                 s->tick_scratch.damage_dealt += dmg_acc;
                 if (npc->type == COLO_SOL_HEREDIT)
                     s->tick_scratch.damage_boss += dmg_acc;
@@ -64,6 +84,10 @@ static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
             }
         }
     }
+}
+
+static void col_resolve_player_projectiles_on_npcs(ColosseumState* s) {
+    col_resolve_player_projectiles_on_npcs_ctx(s, col_legacy_context());
 }
 
 /** advance dying NPC lifetimes even while wave-gap logic pauses active AI. */
@@ -85,23 +109,37 @@ static void col_log_prayer_event(ColosseumState* s, int npc_type, int prayed, in
     else s->log.offpray_damage_by_type[npc_type] += (float)dmg;
 }
 
+typedef struct {
+    ColosseumState* state;
+    ColosseumContext* context;
+} ColPendingHitObserverContext;
+
 static void col_pending_hit_prayer_observer(
     void* user, const EncounterPendingHit* hit, int dmg, int prayed, int checked) {
+    ColPendingHitObserverContext* observer_ctx = (ColPendingHitObserverContext*)user;
+    ColosseumState* s = observer_ctx->state;
+    ColosseumContext* ctx = observer_ctx->context;
+    col_render_hit_events_add(
+        &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
-    col_log_prayer_event((ColosseumState*)user, hit->source_npc_type, prayed, dmg);
+    col_log_prayer_event(s, hit->source_npc_type, prayed, dmg);
 }
 
 /** resolve NPC attack projectiles landing on the player. Blasphemy drains prayer
     by a fraction of the damage taken this tick; Doom adds one stack per damaging
     instance (off-prayer hits that dealt damage). */
-static void col_resolve_player_pending_hits(ColosseumState* s) {
+static void col_resolve_player_pending_hits_ctx(ColosseumState* s, ColosseumContext* ctx) {
     int prayer_correct = 0;
     int off_prayer = 0;
     float dmg_received = 0.0f;
+    ColPendingHitObserverContext observer_ctx = {
+        .state = s,
+        .context = ctx,
+    };
     encounter_resolve_player_pending_hits_observed(
         &s->player_pending_hits, &s->player, s->player.prayer,
         &dmg_received, &prayer_correct, &off_prayer,
-        col_pending_hit_prayer_observer, s);
+        col_pending_hit_prayer_observer, &observer_ctx);
     s->tick_scratch.damage_received += dmg_received;
     s->tick_scratch.prayer_correct += prayer_correct;
 
@@ -112,6 +150,10 @@ static void col_resolve_player_pending_hits(ColosseumState* s) {
         if (s->player.current_prayer < 0) s->player.current_prayer = 0;
     }
     if (col_mod_active(s, COLO_MOD_DOOM)) s->doom_stacks += off_prayer;
+}
+
+static void col_resolve_player_pending_hits(ColosseumState* s) {
+    col_resolve_player_pending_hits_ctx(s, col_legacy_context());
 }
 
 /** rect distance from the player to an NPC footprint (closest tile). */

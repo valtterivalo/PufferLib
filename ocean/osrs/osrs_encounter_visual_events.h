@@ -26,6 +26,8 @@ typedef struct {
     AttackStyle attack_style_this_tick;
     int hit_landed_this_tick;
     int hit_damage;
+    int render_hit_count;
+    int render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int hit_was_successful;
     int hit_spell_type;
     int attack_target_entity_idx;
@@ -125,6 +127,18 @@ static inline void osrs_render_entity_from_npc_spec(
     out->attack_style_this_tick = spec->attack_style_this_tick;
     out->hit_landed_this_tick = spec->hit_landed_this_tick;
     out->hit_damage = spec->hit_damage;
+    if (spec->render_hit_count < 0 ||
+            spec->render_hit_count > ENCOUNTER_RENDER_HITS_MAX) {
+        fprintf(stderr, "invalid npc render hit count\n");
+        abort();
+    }
+    out->render_hit_count = spec->render_hit_count;
+    for (int i = 0; i < spec->render_hit_count; i++)
+        out->render_hit_damage[i] = spec->render_hit_damage[i];
+    if (out->render_hit_count == 0 && out->hit_landed_this_tick) {
+        out->render_hit_count = 1;
+        out->render_hit_damage[0] = out->hit_damage;
+    }
     out->hit_was_successful = spec->hit_was_successful;
     out->hit_spell_type = spec->hit_spell_type;
     out->attack_target_entity_idx = spec->attack_target_entity_idx;

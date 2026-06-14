@@ -15,6 +15,9 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx);
 static void col_tick_player_ctx(
     ColosseumState* s, ColosseumContext* ctx, const int* actions, int can_attack);
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions);
+static void col_resolve_player_projectiles_on_npcs_ctx(
+    ColosseumState* s, ColosseumContext* ctx);
+static void col_resolve_player_pending_hits_ctx(ColosseumState* s, ColosseumContext* ctx);
 static void col_resolve_player_pending_hits(ColosseumState* s);
 static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
@@ -88,7 +91,7 @@ static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_FREMENNIK_ARCHER]    = { .anim_id = 10851, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_FREMENNIK_SEER]      = { .anim_id = 10854, .client_ticks = 63,  .linger_ticks = 3 },
-    [COLO_SERPENT_SHAMAN]      = { .anim_id = 10859, .client_ticks = 100, .linger_ticks = 4 },
+    [COLO_SERPENT_SHAMAN]      = { .anim_id = 10860, .client_ticks = 47,  .linger_ticks = 2 },
     [COLO_JAGUAR_WARRIOR]      = { .anim_id = 10848, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10897, .client_ticks = 60,  .linger_ticks = 2 },
     [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10904, .client_ticks = 60,  .linger_ticks = 2 },

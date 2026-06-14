@@ -79,6 +79,8 @@
 typedef struct EncounterState EncounterState;
 typedef struct EncounterContext EncounterContext;
 
+#define ENCOUNTER_RENDER_HITS_MAX 32
+
 typedef struct {
     EncounterState* state;
     EncounterContext* context;
@@ -583,6 +585,8 @@ typedef struct {
     int magic_type_this_tick;
     int hit_landed_this_tick;
     int hit_damage;
+    int render_hit_count;
+    int render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int hit_was_successful;
     int hit_spell_type;  /* ENCOUNTER_SPELL_* for barrage impact effects on NPCs */
     int elysian_proc_this_tick;
@@ -679,6 +683,10 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->magic_type_this_tick = p->magic_type_this_tick;
     out->hit_landed_this_tick = p->hit_landed_this_tick;
     out->hit_damage = p->hit_damage;
+    if (p->hit_landed_this_tick) {
+        out->render_hit_count = 1;
+        out->render_hit_damage[0] = p->hit_damage;
+    }
     out->hit_was_successful = p->hit_was_successful;
     out->hit_spell_type = 0;
     out->elysian_proc_this_tick = p->elysian_proc_this_tick;

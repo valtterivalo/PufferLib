@@ -92,8 +92,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int in_ready_gap = s->wave_ready_delay > 0;
 
     /* resolve in-flight projectiles (always, even during gaps) */
-    col_resolve_player_projectiles_on_npcs(s);
-    col_resolve_player_pending_hits(s);
+    col_resolve_player_projectiles_on_npcs_ctx(s, ctx);
+    col_resolve_player_pending_hits_ctx(s, ctx);
     col_tick_npc_death_lingers(s);
 
     if (!in_wave_gap && !in_ready_gap) {

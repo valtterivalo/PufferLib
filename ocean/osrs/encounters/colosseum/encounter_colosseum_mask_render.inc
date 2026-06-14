@@ -200,7 +200,16 @@ static void col_fill_render_entities_ctx(
     if (n < max_entities) {
         Player render_player;
         col_prepare_render_player(s, &render_player);
-        osrs_render_entity_from_player_entity(&render_player, &out[n++]);
+        RenderEntity* re = &out[n++];
+        osrs_render_entity_from_player_entity(&render_player, re);
+        if (ctx->player_render_hit_count < 0 ||
+                ctx->player_render_hit_count > ENCOUNTER_RENDER_HITS_MAX) {
+            fprintf(stderr, "invalid player render hit count\n");
+            abort();
+        }
+        re->render_hit_count = ctx->player_render_hit_count;
+        for (int h = 0; h < ctx->player_render_hit_count; h++)
+            re->render_hit_damage[h] = ctx->player_render_hit_damage[h];
     }
 
     for (int i = 0; i < COLO_MAX_NPCS && n < max_entities; i++) {
@@ -238,6 +247,14 @@ static void col_fill_render_entities_ctx(
             .hit_spell_type = npc->hit_spell_type,
             .attack_target_entity_idx = 0,
         }, re);
+        if (ctx->npc_render_hit_count[i] < 0 ||
+                ctx->npc_render_hit_count[i] > ENCOUNTER_RENDER_HITS_MAX) {
+            fprintf(stderr, "invalid npc render hit count\n");
+            abort();
+        }
+        re->render_hit_count = ctx->npc_render_hit_count[i];
+        for (int h = 0; h < ctx->npc_render_hit_count[i]; h++)
+            re->render_hit_damage[h] = ctx->npc_render_hit_damage[i][h];
         re->is_running = col_type_is_warbander(npc->type) ? 1 : 0;
         re->frozen_ticks = npc->frozen_ticks;
         re->debug_npc_type_name = colo_npc_type_name(npc->type);

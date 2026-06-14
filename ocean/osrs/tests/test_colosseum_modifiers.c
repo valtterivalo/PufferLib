@@ -3496,6 +3496,83 @@ static void test_loadout_spec_weapons(void) {
     CHECK("scythe queues 1 splat into a 1x1 warbander",
         s.npcs[0].pending_hits.count == 1);
 
+    geo_clear_npcs(&s);
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 15, 16);
+    col_init_npc(&s, 1, COLO_FREMENNIK_ARCHER, 15, 15);
+    col_init_npc(&s, 2, COLO_FREMENNIK_ARCHER, 15, 17);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    int scythe_max = s.loadout_stats[s.weapon_set].max_hit;
+    CHECK("scythe arc queues rank-0 hit on the forward target",
+        s.npcs[0].pending_hits.count == 1 &&
+        s.npcs[0].pending_hits.hits[0].damage == scythe_max);
+    CHECK("scythe arc queues rank-1 hit on the player's left target",
+        s.npcs[1].pending_hits.count == 1 &&
+        s.npcs[1].pending_hits.hits[0].damage == (scythe_max >> 1));
+    CHECK("scythe arc queues rank-2 hit on the player's right target",
+        s.npcs[2].pending_hits.count == 1 &&
+        s.npcs[2].pending_hits.hits[0].damage == (scythe_max >> 2));
+    for (int t = 0; t < 4; t++)
+        col_resolve_player_projectiles_on_npcs_ctx(&s, &ctx);
+    CHECK("scythe landed hits create one render hit per target",
+        ctx.npc_render_hit_count[0] == 1 &&
+        ctx.npc_render_hit_count[1] == 1 &&
+        ctx.npc_render_hit_count[2] == 1);
+
+    geo_clear_npcs(&s);
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 15, 16);
+    col_init_npc(&s, 1, COLO_HEALING_TOTEM, 15, 15);
+    col_init_npc(&s, 2, COLO_FREMENNIK_ARCHER, 15, 17);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("scythe arc skips incidental hazard entities",
+        s.npcs[0].pending_hits.count == 1 &&
+        s.npcs[1].pending_hits.count == 0 &&
+        s.npcs[2].pending_hits.count == 1);
+
+    int per_target_roll_seen = 0;
+    for (uint32_t seed = 90; seed < 240 && !per_target_roll_seen; seed++) {
+        loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, seed);
+        geo_clear_npcs(&s);
+        s.modifiers.draft_pending = 0;
+        s.wave_ready_delay = 0;
+        s.player.x = 16; s.player.y = 16;
+        col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 15, 16);
+        col_init_npc(&s, 1, COLO_FREMENNIK_BERSERKER, 15, 15);
+        s.player.attack_timer = 0;
+        col_player_attack_target(&s, 0);
+        scythe_max = s.loadout_stats[s.weapon_set].max_hit;
+        if (s.npcs[0].pending_hits.count == 1 &&
+                s.npcs[1].pending_hits.count == 1 &&
+                s.npcs[0].pending_hits.hits[0].damage == scythe_max &&
+                s.npcs[1].pending_hits.hits[0].damage != (scythe_max >> 1)) {
+            per_target_roll_seen = 1;
+        }
+    }
+    CHECK("scythe rolls incidental targets against their own defence",
+        per_target_roll_seen);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 55);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 16; s.player.y = 16;
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 15, 16);
+    col_npc_attack_jaguar(&s, 0, &COLO_NPC_STATS[COLO_JAGUAR_WARRIOR]);
+    col_resolve_player_pending_hits_ctx(&s, &ctx);
+    CHECK("jaguar multi-hit records three player render splats",
+        ctx.player_render_hit_count == 3);
+    RenderEntity scythe_entities[4];
+    int scythe_entity_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        scythe_entities, 4, &scythe_entity_count);
+    CHECK("render entity carries jaguar multi-hit splats",
+        scythe_entity_count >= 1 &&
+        scythe_entities[0].render_hit_count == 3);
+
     /* speedrun spec B = elder maul: a landed spec drains 35% of current def */
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 52);
     geo_clear_npcs(&s);
@@ -3781,7 +3858,7 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         (EncounterState*)&s, (EncounterContext*)&ctx,
         npc_anim_entities, 4, &npc_anim_count);
     CHECK("serpent shaman attack drives body attack animation",
-        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10861);
+        npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10859);
 
     init_forecast_test_state(&s, &ctx, 502, 17, 16);
     col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 18, 16);

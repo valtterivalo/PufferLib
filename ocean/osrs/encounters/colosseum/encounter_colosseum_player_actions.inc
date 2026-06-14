@@ -332,6 +332,130 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     s->tick_scratch.attacks_fired++;
 }
 
+typedef struct {
+    int npc_slot;
+    int splat_rank;
+} ColScytheResolvedHit;
+
+static int col_signum(int value) {
+    return (value > 0) - (value < 0);
+}
+
+static int col_npc_occupies_tile(const ColoNPC* npc, int x, int y) {
+    int size = col_npc_effective_size(npc);
+    return x >= npc->x && x < npc->x + size &&
+           y >= npc->y && y < npc->y + size;
+}
+
+static int col_scythe_tile_target(
+    const ColosseumState* s,
+    int primary_slot,
+    int x,
+    int y
+) {
+    const ColoNPC* primary = &s->npcs[primary_slot];
+    if (col_npc_is_live_target(primary) && col_npc_occupies_tile(primary, x, y))
+        return primary_slot;
+
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (i == primary_slot) continue;
+        const ColoNPC* npc = &s->npcs[i];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        if (col_npc_occupies_tile(npc, x, y))
+            return i;
+    }
+    return -1;
+}
+
+static void col_scythe_front_arc_tiles(
+    const ColosseumState* s,
+    const ColoNPC* primary,
+    int tile_x[3],
+    int tile_y[3]
+) {
+    int size = col_npc_effective_size(primary);
+    int closest_x = s->player.x;
+    int closest_y = s->player.y;
+    if (closest_x < primary->x) closest_x = primary->x;
+    else if (closest_x >= primary->x + size) closest_x = primary->x + size - 1;
+    if (closest_y < primary->y) closest_y = primary->y;
+    else if (closest_y >= primary->y + size) closest_y = primary->y + size - 1;
+
+    int dx = col_signum(closest_x - s->player.x);
+    int dy = col_signum(closest_y - s->player.y);
+    if (dx == 0 && dy == 0) {
+        fprintf(stderr, "invalid scythe target direction\n");
+        abort();
+    }
+
+    tile_x[0] = s->player.x + dx;
+    tile_y[0] = s->player.y + dy;
+    if (dx != 0 && dy != 0) {
+        tile_x[1] = s->player.x + dx;
+        tile_y[1] = s->player.y;
+        tile_x[2] = s->player.x;
+        tile_y[2] = s->player.y + dy;
+        return;
+    }
+
+    int left_x = -dy;
+    int left_y = dx;
+    tile_x[1] = tile_x[0] + left_x;
+    tile_y[1] = tile_y[0] + left_y;
+    tile_x[2] = tile_x[0] - left_x;
+    tile_y[2] = tile_y[0] - left_y;
+}
+
+static int col_resolve_scythe_hits(
+    const ColosseumState* s,
+    int primary_slot,
+    ColScytheResolvedHit out[3]
+) {
+    const ColoNPC* primary = &s->npcs[primary_slot];
+    if (col_npc_occupies_tile(primary, s->player.x, s->player.y)) {
+        int splats = osrs_scythe_splats_for_target_size(col_npc_effective_size(primary));
+        for (int rank = 0; rank < splats; rank++) {
+            out[rank] = (ColScytheResolvedHit){
+                .npc_slot = primary_slot,
+                .splat_rank = rank,
+            };
+        }
+        return splats;
+    }
+
+    int tile_x[3];
+    int tile_y[3];
+    col_scythe_front_arc_tiles(s, primary, tile_x, tile_y);
+
+    int count = 0;
+    for (int rank = 0; rank < 3; rank++) {
+        int target_slot = col_scythe_tile_target(s, primary_slot, tile_x[rank], tile_y[rank]);
+        if (target_slot < 0) continue;
+        out[count++] = (ColScytheResolvedHit){
+            .npc_slot = target_slot,
+            .splat_rank = rank,
+        };
+    }
+    return count;
+}
+
+static int col_npc_target_def_roll(
+    const ColoNPC* npc,
+    const ColoNpcStats* ns,
+    AttackStyle style,
+    MeleeStyle weapon_melee_style
+) {
+    int def_bonus;
+    if (style == ATTACK_STYLE_MAGIC) {
+        def_bonus = ns->magic_def_bonus;
+    } else if (style == ATTACK_STYLE_RANGED) {
+        def_bonus = ns->ranged_def_bonus;
+    } else {
+        def_bonus = col_melee_def_bonus(ns, weapon_melee_style);
+    }
+    return (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
+}
+
 static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
@@ -341,9 +465,6 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         col_player_spec_attack(s, npc_slot);
         return;
     }
-
-    int rps_max_hit = ns->player_style_that_max_hits != ATTACK_STYLE_NONE &&
-                      ns->player_style_that_max_hits == ls->style;
 
     /* L11: per-set item effects (tbow target-magic scaling, bowfa + crystal
        armour) scale the base roll and max hit before any branch uses them. */
@@ -365,32 +486,30 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         osrs_target_effect_context_magic(ns->magic_level, ns->magic_att_bonus),
         s->player.current_hitpoints, s->player.base_hitpoints);
 
-    /* scythe of vitur: 3 splats vs 3x3+ targets, 2 vs 2x2, 1 vs 1x1; splat k
-       caps at max/2^k, each rolled independently. This is WHY the scythe is
-       the speedrun weapon into 5x5 Sol while the fang wins on 1x1 warbanders
-       (wiki Budget footnote j). ref: OSRS wiki Scythe of vitur. */
-    int num_splats = 1;
+    ColScytheResolvedHit resolved_hits[3];
+    int resolved_count = 1;
+    resolved_hits[0] = (ColScytheResolvedHit){ .npc_slot = npc_slot, .splat_rank = 0 };
     if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type))
-        num_splats = osrs_scythe_splats_for_target_size(col_npc_effective_size(npc));
-
-    int def_bonus;
-    if (ls->style == ATTACK_STYLE_MAGIC) {
-        def_bonus = ns->magic_def_bonus;
-    } else if (ls->style == ATTACK_STYLE_RANGED) {
-        def_bonus = ns->ranged_def_bonus;
-    } else {
-        def_bonus = col_melee_def_bonus(ns, weapon_melee_style);
+        resolved_count = col_resolve_scythe_hits(s, npc_slot, resolved_hits);
+    if (resolved_count <= 0) {
+        fprintf(stderr, "scythe attack resolved no targets\n");
+        abort();
     }
-    int target_def_roll =
-        (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
 
     int ticks = ls->attack_range > 1 ? 3 : 1;
     int damage = 0;
-    for (int splat = 0; splat < num_splats; splat++) {
-        int splat_max = prepared.max_hit >> splat;
+    for (int splat = 0; splat < resolved_count; splat++) {
+        ColScytheResolvedHit hit = resolved_hits[splat];
+        ColoNPC* hit_npc = &s->npcs[hit.npc_slot];
+        const ColoNpcStats* hit_ns = &COLO_NPC_STATS[hit_npc->type];
+        int rps_max_hit = hit_ns->player_style_that_max_hits != ATTACK_STYLE_NONE &&
+                          hit_ns->player_style_that_max_hits == ls->style;
+        int target_def_roll = col_npc_target_def_roll(
+            hit_npc, hit_ns, ls->style, weapon_melee_style);
+        int splat_max = prepared.max_hit >> hit.splat_rank;
         int splat_damage;
-        if (col_type_is_hazard_entity(npc->type)) {
-            splat_damage = npc->hp;
+        if (col_type_is_hazard_entity(hit_npc->type)) {
+            splat_damage = hit_npc->hp;
         } else if (s->sol.next_attack_guaranteed_max) {
             splat_damage = splat_max;
             s->sol.next_attack_guaranteed_max = 0;
@@ -401,7 +520,7 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
             splat_damage = osrs_roll_prepared_attack_damage(
                 &prepared, target_def_roll, splat_max, &s->rng_state);
         }
-        col_queue_npc_pending_hit(s, npc_slot, splat_damage, ticks, ls->style,
+        col_queue_npc_pending_hit(s, hit.npc_slot, splat_damage, ticks, ls->style,
                                   ENCOUNTER_SPELL_NONE);
         damage += splat_damage;
     }

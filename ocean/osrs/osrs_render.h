@@ -3020,8 +3020,8 @@ static void render_clear_history(RenderClient* rc) {
 
 static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type);
 
-static int render_entity_hit_splat_type(const RenderEntity* entity) {
-    return entity->hit_damage > 0 ? 1 : 0;
+static int render_hit_splat_type_for_damage(int damage) {
+    return damage > 0 ? 1 : 0;
 }
 
 
@@ -3328,10 +3328,21 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         /* HP bar + hitsplat: triggered once per game tick when a hit lands.
            HP bar: OSRS cycleStatus = clientTick + 300 (6s = 10 game ticks).
            hitsplat: one splat per hit, fills the next available slot (0-3). */
-        if (p->hit_landed_this_tick) {
+        int render_hit_count = p->render_hit_count;
+        if (render_hit_count == 0 && p->hit_landed_this_tick)
+            render_hit_count = 1;
+        if (render_hit_count < 0 || render_hit_count > ENCOUNTER_RENDER_HITS_MAX) {
+            fprintf(stderr, "invalid render hit count\n");
+            abort();
+        }
+        if (render_hit_count > 0) {
             rc->hp_bar_visible_until[i] = env->tick + 10;
-            render_push_splat_type(rc, p->hit_damage, i,
-                render_entity_hit_splat_type(p));
+            for (int h = 0; h < render_hit_count; h++) {
+                int damage = p->render_hit_count > 0
+                    ? p->render_hit_damage[h] : p->hit_damage;
+                render_push_splat_type(
+                    rc, damage, i, render_hit_splat_type_for_damage(damage));
+            }
         }
         if (p->npc_anim_id >= 0 ||
             p->attack_style_this_tick != ATTACK_STYLE_NONE ||
@@ -3339,7 +3350,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             p->ate_food_this_tick ||
             p->ate_karambwan_this_tick ||
             p->used_special_this_tick ||
-            p->hit_landed_this_tick) {
+            render_hit_count > 0) {
             rc->primary_event_tick[i] = env->tick;
         }
     }
@@ -5121,7 +5132,8 @@ static void render_draw_3d_world(RenderClient* rc) {
     if (rc->model_cache) {
         float ms = 1.0f / 128.0f;
 
-        rlDisableBackfaceCulling();
+        rlEnableBackfaceCulling();
+        rlSetCullFace(RL_CULL_FACE_FRONT);
         for (int i = 0; i < rc->entity_count; i++) {
             RenderEntity* ep = &rc->entities[i];
 
@@ -5200,7 +5212,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             }
             hull_compute(hull_xs, hull_ys, hull_n, &rc->entity_hulls[i]);
         }
-        rlEnableBackfaceCulling();
+        rlSetCullFace(RL_CULL_FACE_BACK);
     }
 
     /* visual effects: spell impacts, projectiles */
