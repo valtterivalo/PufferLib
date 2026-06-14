@@ -307,7 +307,9 @@ static int col_spawn_hazard_npc_beside(
             }
         }
     }
-    assert(0 && "no spawn tile for a hazard entity beside its owner");
+    /* no static-free tile in the 2-ring shell (owner cornered against walls/
+       pillars or outside the boss clamp): a legitimate crowded state, not a
+       defect. Return -1 so the caller defers and retries rather than aborting. */
     return -1;
 }
 
@@ -363,6 +365,14 @@ static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
 static void col_totem_spawn_for_owner(ColosseumState* s, int owner_slot) {
     ColoTotem* tot = col_totem_for_owner(s, owner_slot);
     int slot = col_spawn_hazard_npc_beside(s, COLO_HEALING_TOTEM, &s->npcs[owner_slot]);
+    if (slot < 0) {
+        /* no free tile beside the owner this tick; defer one tick via the
+           respawn path (the owner may move or a neighbour may die). */
+        tot->phase = COLO_HAZARD_RESPAWNING;
+        tot->npc_slot = -1;
+        tot->respawn_timer = 1;
+        return;
+    }
     tot->phase = COLO_HAZARD_ALIVE;
     tot->npc_slot = slot;
     tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
