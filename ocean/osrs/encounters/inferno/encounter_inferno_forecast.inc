@@ -378,6 +378,33 @@ static void inf_step_out_forecast_tick(
     }
 }
 
+#ifdef INF_PROFILE_ENABLED
+static void inf_step_out_forecast_tick_profiled(
+    InfernoState* sim,
+    const InfernoContext* ctx,
+    InfStepOutForecastAction* action,
+    int tick_idx,
+    const int slots[INF_MAX_NPCS],
+    int slot_count
+) {
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        InfNPC* npc = &sim->npcs[i];
+        if (npc->frozen_ticks > 0) npc->frozen_ticks--;
+        if (npc->type == INF_NPC_MAGER && npc->resurrect_cooldown > 0)
+            npc->resurrect_cooldown--;
+        double t0 = INF_PROFILE_NOW_MS();
+        inf_npc_move_ctx(sim, ctx, i);
+        double t1 = INF_PROFILE_NOW_MS();
+        INF_PROFILE_ADD(INF_PROF_FORECAST_NPC_MOVE, t1 - t0);
+        inf_step_out_forecast_npc_attack(sim, i, action, tick_idx);
+        INF_PROFILE_ADD(
+            INF_PROF_FORECAST_NPC_ATTACK,
+            INF_PROFILE_NOW_MS() - t1);
+    }
+}
+#endif
+
 static void inf_step_out_forecast_finalize_action(
     InfStepOutForecastAction* action
 ) {
@@ -1038,29 +1065,89 @@ static void inf_build_step_out_forecast_exact_ctx(
     const InfernoContext* ctx,
     InfStepOutForecast* out
 ) {
+#ifdef INF_PROFILE_ENABLED
+    int inf_prof_enabled = INF_PROFILE_ENABLED();
+    int prof_valid_actions = 0;
+    int prof_distinct_landings = 0;
+    if (inf_prof_enabled)
+        INF_PROFILE_ADD(INF_PROF_FORECAST_CALLS, 1.0);
+#endif
     memset(out, 0, sizeof(*out));
     int forecast_slots[INF_MAX_NPCS];
     int forecast_slot_count = inf_collect_step_out_forecast_slots(
         s, forecast_slots);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
+#ifdef INF_PROFILE_ENABLED
+        double landing_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+#endif
         Player moved = inf_step_out_forecast_set_action_landing_ctx(
             s, ctx, action_idx, action);
+#ifdef INF_PROFILE_ENABLED
+        if (inf_prof_enabled) {
+            INF_PROFILE_ADD(
+                INF_PROF_FORECAST_LANDING,
+                INF_PROFILE_NOW_MS() - landing_t0);
+            if (action->valid) {
+                prof_valid_actions++;
+                int duplicate_landing = 0;
+                for (int prior_idx = 0; prior_idx < action_idx; prior_idx++) {
+                    const InfStepOutForecastAction* prior =
+                        &out->actions[prior_idx];
+                    if (prior->valid &&
+                            prior->land_x == action->land_x &&
+                            prior->land_y == action->land_y) {
+                        duplicate_landing = 1;
+                        break;
+                    }
+                }
+                if (!duplicate_landing)
+                    prof_distinct_landings++;
+            }
+        }
+#endif
         if (!action->valid || forecast_slot_count == 0) continue;
 
+#ifdef INF_PROFILE_ENABLED
+        double state_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+#endif
         InfernoState sim = *s;
         sim.player.x = moved.x;
         sim.player.y = moved.y;
         sim.player.is_running = moved.is_running;
         inf_invalidate_los_cache(&sim);
         inf_rebuild_player_collision_flags(&sim);
+#ifdef INF_PROFILE_ENABLED
+        if (inf_prof_enabled) {
+            INF_PROFILE_ADD(
+                INF_PROF_FORECAST_STATE_COPY,
+                INF_PROFILE_NOW_MS() - state_copy_t0);
+        }
+#endif
 
         for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+#ifdef INF_PROFILE_ENABLED
+            if (inf_prof_enabled) {
+                inf_step_out_forecast_tick_profiled(
+                    &sim, ctx, action, tick_idx, forecast_slots, forecast_slot_count);
+                continue;
+            }
+#endif
             inf_step_out_forecast_tick(
                 &sim, ctx, action, tick_idx, forecast_slots, forecast_slot_count);
         }
         inf_step_out_forecast_finalize_action(action);
     }
+#ifdef INF_PROFILE_ENABLED
+    if (inf_prof_enabled) {
+        INF_PROFILE_ADD(
+            INF_PROF_FORECAST_VALID_ACTIONS,
+            (double)prof_valid_actions);
+        INF_PROFILE_ADD(
+            INF_PROF_FORECAST_DISTINCT_LANDINGS,
+            (double)prof_distinct_landings);
+    }
+#endif
 }
 
 static void inf_build_step_out_forecast_ctx(
