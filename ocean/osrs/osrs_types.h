@@ -1414,11 +1414,16 @@ static inline int pvp_terminal_presentation_active(const OsrsEnv* env) {
         PVP_TERMINAL_PRESENTATION_INACTIVE;
 }
 
+static inline int pvp_terminal_presentation_has_winner(const OsrsEnv* env) {
+    int winner = env->pvp_runtime.terminal_presentation.winner;
+    return winner >= 0 && winner < NUM_AGENTS;
+}
+
 static inline int pvp_terminal_presentation_entity_count(const OsrsEnv* env) {
     if (!pvp_terminal_presentation_active(env)) return NUM_AGENTS;
     if (env->pvp_runtime.terminal_presentation.phase ==
             PVP_TERMINAL_PRESENTATION_WINNER) {
-        return 1;
+        return pvp_terminal_presentation_has_winner(env) ? 1 : 0;
     }
     return NUM_AGENTS;
 }
@@ -1427,6 +1432,7 @@ static inline int pvp_terminal_presentation_player_index(const OsrsEnv* env, int
     if (!pvp_terminal_presentation_active(env)) return entity_idx;
     if (env->pvp_runtime.terminal_presentation.phase ==
             PVP_TERMINAL_PRESENTATION_WINNER) {
+        if (!pvp_terminal_presentation_has_winner(env)) return -1;
         return env->pvp_runtime.terminal_presentation.winner;
     }
     return entity_idx;

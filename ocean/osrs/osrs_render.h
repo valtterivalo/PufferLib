@@ -3553,14 +3553,10 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     }
 }
 
-/**
- * Get world position from sub-tile coordinates (128 units = 1 tile).
- */
 static void render_get_visual_pos(
     RenderClient* rc, int player_idx,
     float* out_x, float* out_z, float* out_ground
 ) {
-    /* convert sub-tile to world (128 units per tile) */
     float tile_x = (float)rc->sub_x[player_idx] / 128.0f;
     float tile_y = (float)rc->sub_y[player_idx] / 128.0f;
 
@@ -4940,14 +4936,12 @@ static void render_draw_3d_world(RenderClient* rc) {
         }
     }
 
-    /* NPC models at spawn positions */
     if (rc->npcs && rc->npcs->loaded) {
         rlDisableBackfaceCulling();
         DrawModel(rc->npcs->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
         rlEnableBackfaceCulling();
     }
 
-    /* entity 3D models: composite body + equipment, animated as one unit */
     if (rc->model_cache) {
         float ms = 1.0f / 128.0f;
 
@@ -4955,18 +4949,11 @@ static void render_draw_3d_world(RenderClient* rc) {
         for (int i = 0; i < rc->entity_count; i++) {
             RenderEntity* ep = &rc->entities[i];
 
-            /* skip invisible NPCs (diving, dead, etc.) */
             if (ep->entity_type == ENTITY_NPC && !ep->npc_visible) continue;
-
-            /* hide opponent player when stacked on the camera-followed tile
-               (real OSRS draws only the local player when stacked) */
-            if (ep->entity_type == ENTITY_PLAYER && i != rc->gui.gui_entity_idx) {
-                int fi = rc->gui.gui_entity_idx;
-                if (fi >= 0 && fi < rc->entity_count &&
-                        ep->x == rc->entities[fi].x &&
-                        ep->y == rc->entities[fi].y) {
-                    continue;
-                }
+            if (osrs_render_player_hidden_under_followed_visual_tile(
+                    rc->entities, rc->entity_count, i, rc->gui.gui_entity_idx,
+                    rc->sub_x, rc->sub_y)) {
+                continue;
             }
 
             float px, pz, ground;

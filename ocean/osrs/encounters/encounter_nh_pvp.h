@@ -355,8 +355,12 @@ static void nh_pvp_render_post_tick(
     if (!pvp_terminal_presentation_active(&s->env)) return;
 
     PvpTerminalPresentation* p = &s->env.pvp_runtime.terminal_presentation;
-    const char* winner_name = p->winner == 0 ? "Player 0" : p->opponent_name;
-    snprintf(overlay->status_text, sizeof(overlay->status_text), "%s won", winner_name);
+    if (!pvp_terminal_presentation_has_winner(&s->env)) {
+        snprintf(overlay->status_text, sizeof(overlay->status_text), "Draw");
+    } else {
+        const char* winner_name = p->winner == 0 ? "Player 0" : p->opponent_name;
+        snprintf(overlay->status_text, sizeof(overlay->status_text), "%s won", winner_name);
+    }
     overlay->status_text_active = 1;
 }
 
