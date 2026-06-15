@@ -5,7 +5,7 @@
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
  *   player(37) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) = 813.
+ *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) + threat-LoS(3) = 816.
  * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
  * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
  * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
@@ -40,10 +40,16 @@
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
 #define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)  /* 112 */
+/** current threat composition: count of live NPCs that can hit the player THIS
+    tick (in attack range + line of sight), split into the 3 attack styles
+    [magic, ranged, melee]. The direct de-confliction signal — the agent must
+    position so at most one style is "live" (a same-tick multi-style stack is
+    exactly what a single overhead prayer cannot block). */
+#define COLO_THREAT_LOS_OBS_SIZE  3
 
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
     COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
-    COLO_STEP_OUT_FORECAST_OBS_SIZE)
+    COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -54,6 +60,8 @@
 #define COLO_OBS_AFTER_PENDING_HITS (COLO_OBS_AFTER_BOSS + COLO_PENDING_HIT_OBS_SIZE)
 #define COLO_OBS_AFTER_STEP_OUT_FORECAST \
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
+#define COLO_OBS_AFTER_THREAT_LOS \
+    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -508,6 +516,40 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 
 /* ----- top-level obs writer ------------------------------------------------- */
 
+/** COLO_THREAT_LOS_OBS_SIZE floats: count of live NPCs that can currently hit the
+    player (within attack range, and with line of sight for the ranged/magic ones),
+    split by the style they threaten with [magic, ranged, melee], each normalized by
+    a small cap. This is the direct de-confliction signal — when two of the three are
+    nonzero, a single overhead prayer cannot cover the stack and the agent must
+    reposition (LoS-block or offtick) to drive all-but-one style to zero. The
+    manticore is counted as its next orb's style. */
+static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int magic = 0, ranged = 0, melee = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+        if (ns->attack_range < 1) continue;   /* non-attackers (e.g. healing totem) */
+        int dist = col_npc_dist_to_player(s, npc);
+        if (dist < 1 || dist > ns->attack_range) continue;
+        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
+        AttackStyle style = ns->default_style;
+        if (npc->type == COLO_MANTICORE) {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
+            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
+        }
+        if (style == ATTACK_STYLE_MAGIC) magic++;
+        else if (style == ATTACK_STYLE_RANGED) ranged++;
+        else if (style == ATTACK_STYLE_MELEE) melee++;
+    }
+    obs[i++] = col_clamp01((float)magic / 4.0f);
+    obs[i++] = col_clamp01((float)ranged / 4.0f);
+    obs[i++] = col_clamp01((float)melee / 4.0f);
+    *idx = i;
+}
+
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -689,6 +731,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
 #endif
+
+    col_write_threat_los_counts(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_THREAT_LOS);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);
