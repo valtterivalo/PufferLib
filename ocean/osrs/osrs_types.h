@@ -1306,6 +1306,9 @@ typedef struct {
     float ko_threshold;              /* target HP fraction to trigger KO sequence */
     int adaptive_mage_camp_ticks;
     int adaptive_melee_threat_ticks;
+    int adaptive_magic_prayer_pressure;
+    int adaptive_ranged_prayer_pressure;
+    int adaptive_melee_prayer_pressure;
 
     /* Offensive prayer miss: chance to attack without switching loadout (skipping auto-prayer) */
     float offensive_prayer_miss;

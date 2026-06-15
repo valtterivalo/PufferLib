@@ -337,6 +337,58 @@ static int pvp_find_nearest_walkable_spawn(
     return 0;
 }
 
+#define PVP_MAX_RANDOM_SPAWN_TILES (FIGHT_AREA_WIDTH * FIGHT_AREA_HEIGHT)
+
+typedef struct {
+    const CollisionMap* cmap;
+    int count;
+    int x[PVP_MAX_RANDOM_SPAWN_TILES];
+    int y[PVP_MAX_RANDOM_SPAWN_TILES];
+} PvpRandomSpawnCache;
+
+static PvpRandomSpawnCache PVP_RANDOM_SPAWN_CACHE = {0};
+
+static void pvp_init_random_spawn_cache(const CollisionMap* cmap) {
+    if (PVP_RANDOM_SPAWN_CACHE.cmap == cmap) return;
+
+#ifdef _OPENMP
+#pragma omp critical(pvp_random_spawn_cache)
+#endif
+    {
+        if (PVP_RANDOM_SPAWN_CACHE.cmap != cmap) {
+            PVP_RANDOM_SPAWN_CACHE.count = 0;
+            for (int y = FIGHT_AREA_BASE_Y; y < FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT; y++) {
+                for (int x = FIGHT_AREA_BASE_X; x < FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH; x++) {
+                    if (!pvp_spawn_tile_valid(cmap, x, y, -1, -1)) continue;
+                    int idx = PVP_RANDOM_SPAWN_CACHE.count;
+                    if (idx >= PVP_MAX_RANDOM_SPAWN_TILES) {
+                        fprintf(stderr, "osrs_pvp: random spawn cache overflow\n");
+                        abort();
+                    }
+                    PVP_RANDOM_SPAWN_CACHE.x[idx] = x;
+                    PVP_RANDOM_SPAWN_CACHE.y[idx] = y;
+                    PVP_RANDOM_SPAWN_CACHE.count++;
+                }
+            }
+            PVP_RANDOM_SPAWN_CACHE.cmap = cmap;
+        }
+    }
+}
+
+static inline int pvp_random_spawn_cache_tile_matches(
+    int x,
+    int y,
+    int min_x,
+    int min_y,
+    int max_x,
+    int max_y,
+    int avoid_x,
+    int avoid_y
+) {
+    if (x < min_x || x >= max_x || y < min_y || y >= max_y) return 0;
+    return x != avoid_x || y != avoid_y;
+}
+
 static int pvp_find_random_walkable_spawn(
     OsrsEnv* env,
     const CollisionMap* cmap,
@@ -349,29 +401,35 @@ static int pvp_find_random_walkable_spawn(
     int* out_x,
     int* out_y
 ) {
+    pvp_init_random_spawn_cache(cmap);
     int count = 0;
-    for (int y = min_y; y < max_y; y++) {
-        for (int x = min_x; x < max_x; x++) {
-            if (pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
-                count++;
-            }
-        }
+    for (int i = 0; i < PVP_RANDOM_SPAWN_CACHE.count; i++) {
+        count += pvp_random_spawn_cache_tile_matches(
+            PVP_RANDOM_SPAWN_CACHE.x[i],
+            PVP_RANDOM_SPAWN_CACHE.y[i],
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+            avoid_x,
+            avoid_y);
     }
     if (count == 0) return 0;
 
     int pick = rand_int(env, count);
-    for (int y = min_y; y < max_y; y++) {
-        for (int x = min_x; x < max_x; x++) {
-            if (!pvp_spawn_tile_valid(cmap, x, y, avoid_x, avoid_y)) {
-                continue;
-            }
-            if (pick == 0) {
-                *out_x = x;
-                *out_y = y;
-                return 1;
-            }
-            pick--;
+    for (int i = 0; i < PVP_RANDOM_SPAWN_CACHE.count; i++) {
+        int x = PVP_RANDOM_SPAWN_CACHE.x[i];
+        int y = PVP_RANDOM_SPAWN_CACHE.y[i];
+        if (!pvp_random_spawn_cache_tile_matches(
+                x, y, min_x, min_y, max_x, max_y, avoid_x, avoid_y)) {
+            continue;
         }
+        if (pick == 0) {
+            *out_x = x;
+            *out_y = y;
+            return 1;
+        }
+        pick--;
     }
     return 0;
 }

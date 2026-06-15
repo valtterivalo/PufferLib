@@ -448,6 +448,14 @@ static inline int pvp_set_walk_dest_from_legacy_target_move(
     return 1;
 }
 
+static const int PVP_HEAD_MOVE_BY_CLAMPED_DELTA[5][5] = {
+    {9, 10, 11, 12, 13},
+    {14, 1, 2, 3, 15},
+    {16, 4, 0, 5, 17},
+    {18, 6, 7, 8, 19},
+    {20, 21, 22, 23, 24},
+};
+
 static inline int pvp_head_move_toward_tile(const Player* p, int dest_x, int dest_y) {
     int dx = dest_x - p->x;
     int dy = dest_y - p->y;
@@ -456,13 +464,7 @@ static inline int pvp_head_move_toward_tile(const Player* p, int dest_x, int des
     if (dy < -2) dy = -2;
     if (dy > 2) dy = 2;
 
-    for (int action = 1; action < MOVE_DIM; action++) {
-        if (ENCOUNTER_MOVE_TARGET_DX[action] == dx &&
-                ENCOUNTER_MOVE_TARGET_DY[action] == dy) {
-            return action;
-        }
-    }
-    return 0;
+    return PVP_HEAD_MOVE_BY_CLAMPED_DELTA[dx + 2][dy + 2];
 }
 
 static inline int pvp_exact_head_move_toward_tile(const Player* p, int dest_x, int dest_y) {

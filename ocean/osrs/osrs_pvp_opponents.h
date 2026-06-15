@@ -453,7 +453,11 @@ static const OpponentRandRanges OPP_RAND_RANGES[OPP_STRICT_KITER + 1] = {
 #undef RR
 
 static inline float rand_range(OsrsEnv* env, RandRange r) {
-    float v = r.base + (rand_float(env) * 2.0f - 1.0f) * r.variance;
+    float roll = rand_float(env);
+    if (r.variance == 0.0f) {
+        return r.base < 0.0f ? 0.0f : (r.base > 1.0f ? 1.0f : r.base);
+    }
+    float v = r.base + (roll * 2.0f - 1.0f) * r.variance;
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
@@ -3130,6 +3134,30 @@ static inline int pvp_should_pray_melee_against_mage_camp(PvpMageCampMeleeSignal
          s.mage_camp_ticks >= 4);
 }
 
+static inline int pvp_adaptive_nh_learned_prayer(const OpponentState* opp) {
+    int best_pressure = opp->adaptive_magic_prayer_pressure;
+    int best_prayer = OVERHEAD_MAGE;
+    int tie = 0;
+
+    if (opp->adaptive_ranged_prayer_pressure > best_pressure) {
+        best_pressure = opp->adaptive_ranged_prayer_pressure;
+        best_prayer = OVERHEAD_RANGED;
+        tie = 0;
+    } else if (opp->adaptive_ranged_prayer_pressure == best_pressure) {
+        tie = 1;
+    }
+
+    if (opp->adaptive_melee_prayer_pressure > best_pressure) {
+        best_pressure = opp->adaptive_melee_prayer_pressure;
+        best_prayer = OVERHEAD_MELEE;
+        tie = 0;
+    } else if (opp->adaptive_melee_prayer_pressure == best_pressure) {
+        tie = 1;
+    }
+
+    return best_pressure >= 2 && !tie ? best_prayer : -1;
+}
+
 static inline void pvp_adaptive_nh_apply_defensive_prayer(
     const OpponentState* opp,
     int* actions,
@@ -3142,11 +3170,16 @@ static inline void pvp_adaptive_nh_apply_defensive_prayer(
         prayer = opp_get_read_defensive_prayer(opp);
     }
     if (prayer < 0) {
+        prayer = pvp_adaptive_nh_learned_prayer(opp);
+    }
+    if (prayer < 0) {
         prayer = pvp_should_pray_melee_against_mage_camp(signal)
             ? OVERHEAD_MELEE
             : opp_get_defensive_prayer_with_spec(target);
     }
-    if (!opp_has_prayer_active(self, prayer)) {
+    if (opp_has_prayer_active(self, prayer)) {
+        actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    } else {
         opp_emit_prayer(actions, self, prayer);
     }
 }
@@ -3322,6 +3355,9 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->target_fleeing_ticks = 0;
     opp->adaptive_mage_camp_ticks = 0;
     opp->adaptive_melee_threat_ticks = 0;
+    opp->adaptive_magic_prayer_pressure = 0;
+    opp->adaptive_ranged_prayer_pressure = 0;
+    opp->adaptive_melee_prayer_pressure = 0;
 
     /* Per-episode resets for specific policies */
     if (opp->type == OPP_PANICKING) {
@@ -3476,6 +3512,8 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     if (!is_move_action(legacy_combat)) return;
 
     actions[HEAD_MOVE] = MOVE_NONE;
+    env->pvp_runtime.walk_dest_x[agent_idx] = -1;
+    env->pvp_runtime.walk_dest_y[agent_idx] = -1;
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
     int dest_x = -1;
     int dest_y = -1;
@@ -3496,6 +3534,11 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
         self, dest_x, dest_y);
     if (head_move != MOVE_NONE) {
         actions[HEAD_MOVE] = head_move;
+        return;
+    }
+
+    if (legacy_combat != MOVE_UNDER || target->frozen_ticks <= 1) {
+        actions[HEAD_MOVE] = pvp_head_move_toward_tile(self, dest_x, dest_y);
         return;
     }
 
@@ -3692,20 +3735,17 @@ static inline OppSpacingDecision opp_smart_projectile_spacing_decision(
             env, style, legacy_loadout, diagonal_offsets, 4);
     if (diagonal.kind != OPP_SPACING_KEEP) return diagonal;
 
-    int farcast_offsets[16][2];
-    int count = 0;
-    for (int dx = -2; dx <= 2; dx++) {
-        for (int dy = -2; dy <= 2; dy++) {
-            if (max_int(abs_int(dx), abs_int(dy)) != 2) continue;
-            farcast_offsets[count][0] = dx;
-            farcast_offsets[count][1] = dy;
-            count++;
-        }
-    }
+    static const int farcast_offsets[16][2] = {
+        {-2, -2}, {-2, -1}, {-2, 0}, {-2, 1}, {-2, 2},
+        {-1, -2}, {-1, 2},
+        {0, -2}, {0, 2},
+        {1, -2}, {1, 2},
+        {2, -2}, {2, -1}, {2, 0}, {2, 1}, {2, 2},
+    };
 
     OppSpacingDecision farcast =
         opp_select_smart_projectile_step_out(
-            env, style, legacy_loadout, farcast_offsets, count);
+            env, style, legacy_loadout, farcast_offsets, 16);
     if (farcast.kind != OPP_SPACING_KEEP) return farcast;
 
     int dest_x = -1;
@@ -3881,6 +3921,10 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
     }
 
     opp_apply_hard_spacing_guard(env, active, actions);
+    if (actions[HEAD_MOVE] != MOVE_NONE) {
+        env->pvp_runtime.walk_dest_x[1] = -1;
+        env->pvp_runtime.walk_dest_y[1] = -1;
+    }
     pvp_translate_legacy_loadout_action_to_slotclicks(env, 1, actions);
 }
 

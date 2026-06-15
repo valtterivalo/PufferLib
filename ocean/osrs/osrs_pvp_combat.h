@@ -387,9 +387,50 @@ static inline float pvp_expected_reduced_fixed_damage(
     return (float)osrs_prayer_reduce_damage(damage, target_prayer, style, 1);
 }
 
+#define PVP_EXPECTED_DAMAGE_PREFIX_MAX 512
+
+static float PVP_EXPECTED_REDUCED_DAMAGE_PREFIX
+    [PRAYER_REDEMPTION + 1][ATTACK_STYLE_MAGIC + 1][PVP_EXPECTED_DAMAGE_PREFIX_MAX + 2];
+static int _pvp_expected_damage_prefix_initialized = 0;
+
+static void pvp_init_expected_damage_prefix(void) {
+    if (_pvp_expected_damage_prefix_initialized) return;
+
+#ifdef _OPENMP
+#pragma omp critical(pvp_expected_damage_prefix)
+#endif
+    {
+        if (!_pvp_expected_damage_prefix_initialized) {
+            for (int prayer = 0; prayer <= PRAYER_REDEMPTION; prayer++) {
+                for (int style = 0; style <= ATTACK_STYLE_MAGIC; style++) {
+                    float total = 0.0f;
+                    PVP_EXPECTED_REDUCED_DAMAGE_PREFIX[prayer][style][0] = 0.0f;
+                    for (int damage = 0; damage <= PVP_EXPECTED_DAMAGE_PREFIX_MAX; damage++) {
+                        total += pvp_expected_reduced_fixed_damage(
+                            damage, prayer, (AttackStyle)style);
+                        PVP_EXPECTED_REDUCED_DAMAGE_PREFIX[prayer][style][damage + 1] = total;
+                    }
+                }
+            }
+            _pvp_expected_damage_prefix_initialized = 1;
+        }
+    }
+}
+
 static float pvp_expected_reduced_uniform_damage(
         int low, int high, int target_prayer, AttackStyle style) {
     if (high < low) return 0.0f;
+    if (low >= 0 &&
+            high <= PVP_EXPECTED_DAMAGE_PREFIX_MAX &&
+            target_prayer >= PRAYER_NONE &&
+            target_prayer <= PRAYER_REDEMPTION &&
+            style >= ATTACK_STYLE_NONE &&
+            style <= ATTACK_STYLE_MAGIC) {
+        pvp_init_expected_damage_prefix();
+        float total = PVP_EXPECTED_REDUCED_DAMAGE_PREFIX[target_prayer][style][high + 1]
+            - PVP_EXPECTED_REDUCED_DAMAGE_PREFIX[target_prayer][style][low];
+        return total / (float)(high - low + 1);
+    }
     float total = 0.0f;
     for (int damage = low; damage <= high; damage++) {
         total += pvp_expected_reduced_fixed_damage(damage, target_prayer, style);
@@ -871,6 +912,64 @@ static void register_expected_damage(
     defender->expected_damage_prevented_tick += expected_damage_prevented;
 }
 
+static inline OpponentType pvp_resolved_scripted_type(
+        const OpponentState* opp) {
+    return opp->active_sub_policy ? opp->active_sub_policy : opp->type;
+}
+
+static inline OpponentState* pvp_adaptive_scripted_defender(
+        OsrsEnv* env, int defender_idx) {
+    if (defender_idx == 1 && env->pvp_runtime.use_c_opponent) {
+        OpponentState* opp = &env->pvp_runtime.opponent;
+        return pvp_resolved_scripted_type(opp) == OPP_ADAPTIVE_NH ? opp : NULL;
+    }
+    if (defender_idx == 0 && env->pvp_runtime.use_c_opponent_p0) {
+        OpponentState* opp = &env->pvp_runtime.opponent_p0;
+        return pvp_resolved_scripted_type(opp) == OPP_ADAPTIVE_NH ? opp : NULL;
+    }
+    return NULL;
+}
+
+static inline int* pvp_adaptive_pressure_for_style(
+        OpponentState* opp, AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MAGIC:
+            return &opp->adaptive_magic_prayer_pressure;
+        case ATTACK_STYLE_RANGED:
+            return &opp->adaptive_ranged_prayer_pressure;
+        case ATTACK_STYLE_MELEE:
+            return &opp->adaptive_melee_prayer_pressure;
+        default:
+            return NULL;
+    }
+}
+
+static inline void pvp_adaptive_update_resolved_pressure(
+        OsrsEnv* env, int defender_idx, PendingHit* hit, DamageResult dr,
+        int damage) {
+    if (!hit->hit_success || damage <= 0) return;
+    OpponentState* opp = pvp_adaptive_scripted_defender(env, defender_idx);
+    if (opp == NULL) return;
+    int* pressure = pvp_adaptive_pressure_for_style(opp, hit->attack_type);
+    if (pressure == NULL) return;
+
+    if (dr.prayer_blocked) {
+        if (*pressure > 0) *pressure -= 1;
+        return;
+    }
+
+    if (*pressure < 8) *pressure += 1;
+    if (hit->attack_type != ATTACK_STYLE_MAGIC &&
+            opp->adaptive_magic_prayer_pressure > 0)
+        opp->adaptive_magic_prayer_pressure -= 1;
+    if (hit->attack_type != ATTACK_STYLE_RANGED &&
+            opp->adaptive_ranged_prayer_pressure > 0)
+        opp->adaptive_ranged_prayer_pressure -= 1;
+    if (hit->attack_type != ATTACK_STYLE_MELEE &&
+            opp->adaptive_melee_prayer_pressure > 0)
+        opp->adaptive_melee_prayer_pressure -= 1;
+}
+
 
 static inline int get_ice_freeze_ticks(int current_magic) {
     if (current_magic >= ICE_BARRAGE_LEVEL) return 32;
@@ -995,6 +1094,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     );
 
     int damage = dr.final_damage;
+    pvp_adaptive_update_resolved_pressure(env, defender_idx, hit, dr, damage);
 
     /* hit event recording for observations */
     defender->hit_landed_this_tick = 1;

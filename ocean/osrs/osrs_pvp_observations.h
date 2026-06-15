@@ -291,8 +291,22 @@ static const int OBS_NORM_NON_IDENTITY_INDICES[] = {
     119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     139, 140,
 };
+static const float OBS_NORM_NON_IDENTITY_DIVISORS[] = {
+    100.0f, 100.0f, 10.0f, 10.0f, 16.0f, 20.0f, 15.0f, 4.0f,
+    32.0f, 32.0f, 32.0f, 32.0f,
+    6.0f, 3.0f, 3.0f, 3.0f, 4.0f, 6.0f, 3.0f, 2.0f, 6.0f, 6.0f,
+    7.0f, 7.0f, 7.0f, 2.0f,
+    99.0f, 99.0f, 99.0f, 99.0f, 99.0f, 99.0f, 99.0f,
+    4.0f,
+    170.0f, 170.0f, 170.0f, 170.0f, 6.0f, 10.0f,
+    170.0f, 170.0f, 170.0f, 170.0f, 170.0f, 170.0f, 170.0f, 170.0f,
+    50.0f, 50.0f,
+};
 #define OBS_NORM_NON_IDENTITY_COUNT \
     ((int)(sizeof(OBS_NORM_NON_IDENTITY_INDICES) / sizeof(OBS_NORM_NON_IDENTITY_INDICES[0])))
+OSRS_STATIC_ASSERT(
+    sizeof(OBS_NORM_NON_IDENTITY_INDICES) == sizeof(OBS_NORM_NON_IDENTITY_DIVISORS),
+    "obs sparse norm indices and divisors must stay aligned");
 static int _obs_norm_initialized = 0;
 
 static void ensure_obs_norm_initialized(void) {
@@ -306,9 +320,11 @@ static inline void ocean_write_normalized_slot_obs(float* dst, const float* src)
     memcpy(dst, src, SLOT_NUM_OBSERVATIONS * sizeof(float));
     for (int i = 0; i < OBS_NORM_NON_IDENTITY_COUNT; i++) {
         int obs_idx = OBS_NORM_NON_IDENTITY_INDICES[i];
-        dst[obs_idx] = src[obs_idx] / OBS_NORM_DIVISORS[obs_idx];
+        dst[obs_idx] = src[obs_idx] / OBS_NORM_NON_IDENTITY_DIVISORS[i];
     }
 }
+
+static const float ACTION_MASK_FLOAT_VALUES[2] = {0.0f, 1.0f};
 
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
@@ -318,7 +334,7 @@ static void ocean_write_obs(OsrsEnv* env) {
 
     unsigned char* mask = env->action_masks;
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
-        dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
+        dst[SLOT_NUM_OBSERVATIONS + i] = ACTION_MASK_FLOAT_VALUES[mask[i]];
     }
 }
 
@@ -330,7 +346,7 @@ static void ocean_write_obs_p1(OsrsEnv* env) {
 
     unsigned char* mask = env->action_masks + ACTION_MASK_SIZE;
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
-        dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
+        dst[SLOT_NUM_OBSERVATIONS + i] = ACTION_MASK_FLOAT_VALUES[mask[i]];
     }
 }
 
@@ -506,11 +522,9 @@ static void pvp_write_item_policy_features_cached(
     uint8_t item_idx,
     int physical_inventory_slot,
     int can_equip,
-    const GearBonuses* current,
-    const GearBonuses* post_equip,
+    const float* post_equip_deltas,
     float* out
 ) {
-    pvp_init_item_obs_templates();
     memcpy(
         out,
         PVP_ITEM_POLICY_FEATURE_TEMPLATES[pvp_item_template_index(item_idx)],
@@ -522,24 +536,12 @@ static void pvp_write_item_policy_features_cached(
         ? (float)(physical_inventory_slot + 1) / (float)OSRS_INVENTORY_SIZE
         : 0.0f;
 
-    if (current != NULL && post_equip != NULL) {
-        out[50] = pvp_gear_melee_attack_score(post_equip)
-            - pvp_gear_melee_attack_score(current);
-        out[51] = (float)(post_equip->ranged_attack - current->ranged_attack) /
-            STAT_NORM_ATTACK;
-        out[52] = (float)(post_equip->magic_attack - current->magic_attack) /
-            STAT_NORM_ATTACK;
-        out[53] = pvp_gear_melee_def_score(post_equip)
-            - pvp_gear_melee_def_score(current);
-        out[54] = (float)(post_equip->ranged_defence - current->ranged_defence) /
-            STAT_NORM_DEFENCE;
-        out[55] = (float)(post_equip->magic_defence - current->magic_defence) /
-            STAT_NORM_DEFENCE;
+    if (post_equip_deltas != NULL) {
+        memcpy(out + 50, post_equip_deltas, 6 * sizeof(float));
     }
 }
 
 static void pvp_write_equipped_self_item_features_cached(uint8_t item_idx, float* out) {
-    pvp_init_item_obs_templates();
     memcpy(
         out,
         PVP_ITEM_POLICY_FEATURE_TEMPLATES[pvp_item_template_index(item_idx)],
@@ -547,11 +549,47 @@ static void pvp_write_equipped_self_item_features_cached(uint8_t item_idx, float
 }
 
 static void pvp_write_target_item_stats_cached(uint8_t item_idx, float* out) {
-    pvp_init_item_obs_templates();
     memcpy(
         out,
         PVP_TARGET_ITEM_STAT_TEMPLATES[pvp_item_template_index(item_idx)],
         PVP_EQUIPPED_TARGET_FEATURE_DIM * sizeof(float));
+}
+
+typedef struct {
+    int gear_slot;
+    int is_weapon;
+    int is_two_handed;
+    int spec_cost;
+} PvpItemAffordanceMeta;
+
+static PvpItemAffordanceMeta PVP_ITEM_AFFORDANCE_META[NUM_ITEMS + 1];
+static int _pvp_item_affordance_meta_initialized = 0;
+
+static inline int pvp_item_affordance_meta_index(uint8_t item_idx) {
+    return item_idx < NUM_ITEMS ? item_idx : NUM_ITEMS;
+}
+
+static void pvp_init_item_affordance_meta(void) {
+    if (_pvp_item_affordance_meta_initialized) return;
+
+#ifdef _OPENMP
+#pragma omp critical(pvp_item_affordance_meta)
+#endif
+    {
+        if (!_pvp_item_affordance_meta_initialized) {
+            for (int i = 0; i <= NUM_ITEMS; i++) {
+                uint8_t item_idx = i < NUM_ITEMS ? (uint8_t)i : ITEM_NONE;
+                int gear_slot = osrs_item_gear_slot(item_idx);
+                PVP_ITEM_AFFORDANCE_META[i] = (PvpItemAffordanceMeta){
+                    .gear_slot = gear_slot,
+                    .is_weapon = gear_slot == GEAR_SLOT_WEAPON,
+                    .is_two_handed = item_is_two_handed(item_idx),
+                    .spec_cost = osrs_spec_cost(item_idx),
+                };
+            }
+            _pvp_item_affordance_meta_initialized = 1;
+        }
+    }
 }
 
 typedef struct {
@@ -560,8 +598,8 @@ typedef struct {
     int gear_slot[OSRS_INVENTORY_SIZE];
     int is_weapon[OSRS_INVENTORY_SIZE];
     int has_equippable_affordable_spec_weapon;
-    int has_post_equip_bonuses[OSRS_INVENTORY_SIZE];
-    GearBonuses post_equip_bonuses[OSRS_INVENTORY_SIZE];
+    int has_post_equip_deltas[OSRS_INVENTORY_SIZE];
+    float post_equip_deltas[OSRS_INVENTORY_SIZE][6];
 } PvpInventoryAffordances;
 
 static int pvp_attack_head_reachable_for_player(
@@ -638,10 +676,30 @@ static GearBonuses pvp_project_post_equip_bonuses(
     return osrs_gear_bonuses_from_equipment_bonuses(&projected);
 }
 
+static void pvp_write_post_equip_bonus_deltas(
+    const GearBonuses* current,
+    const GearBonuses* post_equip,
+    float out[6]
+) {
+    out[0] = pvp_gear_melee_attack_score(post_equip)
+        - pvp_gear_melee_attack_score(current);
+    out[1] = (float)(post_equip->ranged_attack - current->ranged_attack) /
+        STAT_NORM_ATTACK;
+    out[2] = (float)(post_equip->magic_attack - current->magic_attack) /
+        STAT_NORM_ATTACK;
+    out[3] = pvp_gear_melee_def_score(post_equip)
+        - pvp_gear_melee_def_score(current);
+    out[4] = (float)(post_equip->ranged_defence - current->ranged_defence) /
+        STAT_NORM_DEFENCE;
+    out[5] = (float)(post_equip->magic_defence - current->magic_defence) /
+        STAT_NORM_DEFENCE;
+}
+
 static inline int pvp_can_equip_inventory_slot_cached(
     const Player* player,
     uint8_t item_idx,
     int gear_slot,
+    int is_two_handed,
     int free_slots
 ) {
     if (item_idx == ITEM_NONE) return 0;
@@ -652,7 +710,7 @@ static inline int pvp_can_equip_inventory_slot_cached(
     uint8_t old_shield = player->equipped[GEAR_SLOT_SHIELD];
 
     int equipping_two_handed =
-        gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx);
+        gear_slot == GEAR_SLOT_WEAPON && is_two_handed;
 
     if (equipping_two_handed && old_shield != ITEM_NONE &&
             old_item != ITEM_NONE && free_slots <= 0) {
@@ -666,31 +724,37 @@ static void pvp_collect_inventory_affordances(
     const Player* attacker,
     PvpInventoryAffordances* out
 ) {
+    pvp_init_item_affordance_meta();
     out->has_equippable_affordable_spec_weapon = 0;
     out->equip_click_mask[0] = 1;
     EquipmentBonuses current_bonuses;
     osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
+    GearBonuses current_gear = osrs_gear_bonuses_from_equipment_bonuses(&current_bonuses);
     int free_slots = osrs_player_inventory_free_slots(attacker);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         uint8_t item_idx = attacker->inventory[slot];
-        out->gear_slot[slot] = osrs_item_gear_slot(item_idx);
-        out->is_weapon[slot] = out->gear_slot[slot] == GEAR_SLOT_WEAPON;
+        const PvpItemAffordanceMeta* meta =
+            &PVP_ITEM_AFFORDANCE_META[pvp_item_affordance_meta_index(item_idx)];
+        out->gear_slot[slot] = meta->gear_slot;
+        out->is_weapon[slot] = meta->is_weapon;
         out->can_equip[slot] = pvp_can_equip_inventory_slot_cached(
-            attacker, item_idx, out->gear_slot[slot], free_slots);
+            attacker, item_idx, out->gear_slot[slot], meta->is_two_handed, free_slots);
         out->equip_click_mask[slot + 1] = out->can_equip[slot] ? 1 : 0;
-        out->has_post_equip_bonuses[slot] = 0;
+        out->has_post_equip_deltas[slot] = 0;
         if (!out->can_equip[slot]) {
             continue;
         }
 
-        if (out->is_weapon[slot] &&
-                pvp_special_arm_available_for_weapon(item_idx, attacker->special_energy)) {
+        if (out->is_weapon[slot] && meta->spec_cost > 0 &&
+                attacker->special_energy >= meta->spec_cost) {
             out->has_equippable_affordable_spec_weapon = 1;
         }
 
-        out->has_post_equip_bonuses[slot] = 1;
-        out->post_equip_bonuses[slot] = pvp_project_post_equip_bonuses(
+        out->has_post_equip_deltas[slot] = 1;
+        GearBonuses post_equip = pvp_project_post_equip_bonuses(
             attacker, &current_bonuses, out->gear_slot[slot], item_idx);
+        pvp_write_post_equip_bonus_deltas(
+            &current_gear, &post_equip, out->post_equip_deltas[slot]);
     }
 }
 
@@ -699,19 +763,17 @@ static void pvp_write_inventory_policy_observations(
     const PvpInventoryAffordances* affordances,
     float* obs
 ) {
-    GearBonuses current = *get_slot_gear_bonuses(p);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         float* row = obs + PVP_INVENTORY_OBS_OFFSET + slot * OSRS_ITEM_FEATURE_DIM;
-        const GearBonuses* post_ptr = NULL;
-        if (affordances->has_post_equip_bonuses[slot]) {
-            post_ptr = &affordances->post_equip_bonuses[slot];
+        const float* post_equip_deltas = NULL;
+        if (affordances->has_post_equip_deltas[slot]) {
+            post_equip_deltas = affordances->post_equip_deltas[slot];
         }
         pvp_write_item_policy_features_cached(
             p->inventory[slot],
             slot,
             affordances->can_equip[slot],
-            &current,
-            post_ptr,
+            post_equip_deltas,
             row);
     }
 }
@@ -853,6 +915,7 @@ static void generate_slot_observations_with_inventory_affordances(
     const PvpInventoryAffordances* affordances,
     const unsigned char move_walkable[MOVE_DIM]
 ) {
+    pvp_init_item_obs_templates();
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap_obs = (const CollisionMap*)env->collision_map;
@@ -1300,9 +1363,8 @@ static void compute_action_masks_with_inventory_affordances(
     offset += OFFENSIVE_DIM;
 
     mask[offset + 0] = 1;
-    int can_move_for_move_head = can_move(p);
     for (int m = 1; m < MOVE_DIM; m++) {
-        if (!can_move_for_move_head) {
+        if (!can_move_now) {
             mask[offset + m] = 0;
             continue;
         }

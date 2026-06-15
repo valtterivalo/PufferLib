@@ -300,6 +300,53 @@ static void set_adaptive_mage_staff_camp_state(OsrsEnv* env, int recent_melee_co
     set_mage_staff_camp_state(env, OPP_ADAPTIVE_NH, recent_melee_count);
 }
 
+static void set_adaptive_visible_mage_state(OsrsEnv* env) {
+    force_clean_policy_decision(env, OPP_ADAPTIVE_NH);
+
+    Player* target = &env->players[0];
+    Player* self = &env->players[1];
+    const uint8_t target_weapons[] = {ITEM_AHRIM_STAFF};
+    set_basic_hybrid_weapons(self);
+    set_weapon_inventory(target, target_weapons, 1);
+    set_player_position(self, 3042, 3520);
+    set_player_position(target, 3045, 3520);
+
+    target->visible_gear = GEAR_MAGE;
+    target->current_gear = GEAR_MAGE;
+    target->prayer = PRAYER_PROTECT_MAGIC;
+    target->last_attack_style = ATTACK_STYLE_NONE;
+    target->attack_style_this_tick = ATTACK_STYLE_NONE;
+    target->attack_timer = 0;
+    self->prayer = PRAYER_NONE;
+    self->attack_timer = 0;
+    memset(env->pending_actions, 0, sizeof(env->pending_actions));
+    memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
+}
+
+static void apply_agent_hit_to_adaptive_nh(
+    OsrsEnv* env,
+    AttackStyle style,
+    OverheadPrayer defender_prayer
+) {
+    env->players[1].prayer = defender_prayer;
+    PendingHit hit = {
+        .damage = 10,
+        .ticks_until_hit = 0,
+        .attack_type = style,
+        .is_special = 0,
+        .hit_success = 1,
+        .spell_type = 0,
+        .freeze_ticks = 0,
+        .heal_percent = 0,
+        .drain_type = 0,
+        .drain_percent = 0,
+        .flat_heal = 0,
+        .is_morr_bleed = 0,
+        .defender_prayer_at_attack = defender_prayer,
+    };
+    apply_damage(env, 0, 1, &hit);
+}
+
 static void test_adaptive_nh_name_maps_correctly(void) {
     printf("--- Adaptive NH name maps correctly ---\n");
 
@@ -762,6 +809,8 @@ static void test_adaptive_nh_kites_unrooted_mage_prayer_camp(void) {
     OsrsEnv env;
     setup_pvp_env(&env, OPP_ADAPTIVE_NH);
     set_adaptive_mage_staff_camp_state(&env, 1);
+    env.pvp_runtime.walk_dest_x[1] = 3049;
+    env.pvp_runtime.walk_dest_y[1] = 3520;
 
     generate_opponent_action(&env, &env.pvp_runtime.opponent);
 
@@ -769,6 +818,10 @@ static void test_adaptive_nh_kites_unrooted_mage_prayer_camp(void) {
         opponent_combat(&env), ATTACK_NONE);
     ASSERT_TRUE("adaptive NH moves before freezing while adjacent",
         opponent_move(&env) != 0);
+    ASSERT_INT_EQ("adaptive NH clears stale exact farcast x",
+        env.pvp_runtime.walk_dest_x[1], -1);
+    ASSERT_INT_EQ("adaptive NH clears stale exact farcast y",
+        env.pvp_runtime.walk_dest_y[1], -1);
 }
 
 static void test_adaptive_nh_kites_freeze_immune_camp_without_spec(void) {
@@ -856,6 +909,93 @@ static void test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready(void) {
 
     ASSERT_TRUE("adaptive NH moves while unable to attack", opponent_move(&env) != 0);
     ASSERT_INT_EQ("adaptive NH does not attack while moving", opponent_combat(&env), ATTACK_NONE);
+}
+
+static void test_adaptive_nh_learns_ranged_from_resolved_off_prayer_hits(void) {
+    printf("--- Adaptive NH learns ranged from resolved off-prayer hits ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_visible_mage_state(&env);
+    apply_agent_hit_to_adaptive_nh(&env, ATTACK_STYLE_RANGED, PRAYER_NONE);
+    apply_agent_hit_to_adaptive_nh(&env, ATTACK_STYLE_RANGED, PRAYER_NONE);
+    memset(env.pending_actions, 0, sizeof(env.pending_actions));
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH prays ranged over visible mage bait",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+}
+
+static void test_adaptive_nh_keeps_active_learned_prayer(void) {
+    printf("--- Adaptive NH keeps active learned prayer ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_visible_mage_state(&env);
+    env.players[1].prayer = PRAYER_PROTECT_RANGED;
+    env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure = 2;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ(
+        "adaptive NH cancels visible mage switch when ranged already active",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_NO_CHANGE);
+}
+
+static void test_adaptive_nh_does_not_learn_from_unresolved_hit(void) {
+    printf("--- Adaptive NH ignores unresolved queued hit ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_visible_mage_state(&env);
+    queue_hit(
+        &env.players[0], &env.players[1],
+        10, ATTACK_STYLE_RANGED, 2, 0, 1, 0, 0, 0, 0, 0, 0);
+
+    ASSERT_INT_EQ(
+        "adaptive NH ranged pressure stays zero before hit lands",
+        env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure,
+        0);
+}
+
+static void test_adaptive_nh_on_prayer_hit_reduces_pressure(void) {
+    printf("--- Adaptive NH correct prayer reduces learned pressure ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    set_adaptive_visible_mage_state(&env);
+    env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure = 2;
+
+    apply_agent_hit_to_adaptive_nh(
+        &env, ATTACK_STYLE_RANGED, PRAYER_PROTECT_RANGED);
+
+    ASSERT_INT_EQ(
+        "adaptive NH ranged pressure falls on protected hit",
+        env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure,
+        1);
+}
+
+static void test_adaptive_nh_reset_clears_resolved_attack_memory(void) {
+    printf("--- Adaptive NH reset clears resolved attack memory ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_ADAPTIVE_NH);
+    env.pvp_runtime.opponent.adaptive_magic_prayer_pressure = 3;
+    env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure = 4;
+    env.pvp_runtime.opponent.adaptive_melee_prayer_pressure = 5;
+
+    opponent_reset(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_INT_EQ("adaptive NH magic pressure reset",
+        env.pvp_runtime.opponent.adaptive_magic_prayer_pressure, 0);
+    ASSERT_INT_EQ("adaptive NH ranged pressure reset",
+        env.pvp_runtime.opponent.adaptive_ranged_prayer_pressure, 0);
+    ASSERT_INT_EQ("adaptive NH melee pressure reset",
+        env.pvp_runtime.opponent.adaptive_melee_prayer_pressure, 0);
 }
 
 static void test_resolver_distance_10_uses_mage_into_prayer(void) {
@@ -1015,6 +1155,11 @@ int main(void) {
     test_adaptive_nh_reads_static_camp_action();
     test_adaptive_nh_brews_early_in_static_camp();
     test_adaptive_nh_moves_out_of_adjacent_camp_when_not_ready();
+    test_adaptive_nh_learns_ranged_from_resolved_off_prayer_hits();
+    test_adaptive_nh_keeps_active_learned_prayer();
+    test_adaptive_nh_does_not_learn_from_unresolved_hit();
+    test_adaptive_nh_on_prayer_hit_reduces_pressure();
+    test_adaptive_nh_reset_clears_resolved_attack_memory();
     test_resolver_distance_10_uses_mage_into_prayer();
     test_resolver_distance_7_uses_crossbow_off_prayer();
     test_resolver_protect_ranged_uses_mage();
