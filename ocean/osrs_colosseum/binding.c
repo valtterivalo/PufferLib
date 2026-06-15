@@ -304,6 +304,24 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int agents_per_buffer = total_agents / num_buffers;
     DictItem* base_start_wave_item = dict_get_unsafe(env_kwargs, "start_wave");
     int base_start_wave = base_start_wave_item ? (int)base_start_wave_item->value : 0;
+    DictItem* classic_curriculum_mode_item =
+        dict_get_unsafe(env_kwargs, "classic_curriculum_mode");
+    int classic_curriculum_mode = classic_curriculum_mode_item
+        ? (int)classic_curriculum_mode_item->value : 1;
+    if (classic_curriculum_mode < 0 || classic_curriculum_mode > 1) {
+        fprintf(stderr, "classic_curriculum_mode must be 0 or 1, got %d\n",
+            classic_curriculum_mode);
+        abort();
+    }
+    DictItem* curriculum_num_tiers_item =
+        dict_get_unsafe(env_kwargs, "curriculum_num_tiers");
+    int curriculum_num_tiers = curriculum_num_tiers_item
+        ? (int)curriculum_num_tiers_item->value : MAX_CURRICULUM_TIERS;
+    if (curriculum_num_tiers < 0 || curriculum_num_tiers > MAX_CURRICULUM_TIERS) {
+        fprintf(stderr, "curriculum_num_tiers must be between 0 and %d, got %d\n",
+            MAX_CURRICULUM_TIERS, curriculum_num_tiers);
+        abort();
+    }
 
     static const char* wave_keys[] = {
         "curriculum_wave_1", "curriculum_wave_2", "curriculum_wave_3", "curriculum_wave_4",
@@ -316,13 +334,15 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int curriculum_waves[MAX_CURRICULUM_TIERS];
     float curriculum_fracs[MAX_CURRICULUM_TIERS];
     int num_tiers = 0;
-    for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
-        DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
-        DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
-        if (w && f && f->value > 0.0) {
-            curriculum_waves[num_tiers] = (int)w->value;
-            curriculum_fracs[num_tiers] = (float)f->value;
-            num_tiers++;
+    if (classic_curriculum_mode == 1) {
+        for (int i = 0; i < curriculum_num_tiers; i++) {
+            DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
+            DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
+            if (w && f && f->value > 0.0) {
+                curriculum_waves[num_tiers] = (int)w->value;
+                curriculum_fracs[num_tiers] = (float)f->value;
+                num_tiers++;
+            }
         }
     }
 
