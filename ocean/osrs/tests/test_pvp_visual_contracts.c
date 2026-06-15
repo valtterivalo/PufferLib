@@ -239,6 +239,34 @@ static void test_player_stack_hiding_uses_visual_tile(void) {
         1);
 }
 
+static void test_pvp_camera_focus_uses_weighted_focused_fighter(void) {
+    printf("--- PvP camera focus uses weighted focused fighter ---\n");
+
+    RenderEntity entities[2] = {0};
+    entities[0].entity_type = ENTITY_PLAYER;
+    entities[0].player_slot = 0;
+    entities[1].entity_type = ENTITY_PLAYER;
+    entities[1].player_slot = 1;
+
+    float sub_x[2] = {10 * 128.0f, 30 * 128.0f};
+    float sub_y[2] = {20 * 128.0f, 40 * 128.0f};
+    OsrsRenderWeightedSubtile target = {0};
+
+    ASSERT_INT_EQ("focused p0 target resolves",
+        osrs_render_pvp_weighted_focus_subtile(
+            entities, 2, 0, sub_x, sub_y, 0.75f, &target),
+        1);
+    ASSERT_FLOAT_NEAR("focused p0 x", target.sub_x / 128.0f, 15.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("focused p0 y", target.sub_y / 128.0f, 25.0f, 1e-6f);
+
+    ASSERT_INT_EQ("focused p1 target resolves",
+        osrs_render_pvp_weighted_focus_subtile(
+            entities, 2, 1, sub_x, sub_y, 0.75f, &target),
+        1);
+    ASSERT_FLOAT_NEAR("focused p1 x", target.sub_x / 128.0f, 25.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("focused p1 y", target.sub_y / 128.0f, 35.0f, 1e-6f);
+}
+
 static void set_agent_actions(NhPvpState* state, const int* actions) {
     memcpy(state->env.ocean_io.agent_actions, actions,
         NUM_ACTION_HEADS * sizeof(int));
@@ -1838,6 +1866,7 @@ int main(void) {
     test_runtime_animation_assets_are_anm2();
     test_shared_render_target_refs_resolve();
     test_player_stack_hiding_uses_visual_tile();
+    test_pvp_camera_focus_uses_weighted_focused_fighter();
     test_reset_has_no_forced_targets();
     test_attack_sets_render_target();
     test_attack_event_faces_target_after_interaction_clear();

@@ -5753,16 +5753,19 @@ static int render_scene_is_pvp(OsrsEnv* env) {
     return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
 }
 
-static void render_follow_pvp_fighter_midpoint(RenderClient* rc, OsrsEnv* env, double frame_dt) {
+static void render_follow_pvp_focused_fighter(RenderClient* rc, OsrsEnv* env, double frame_dt) {
     if (!render_scene_is_pvp(env) || rc->human_input.enabled || rc->entity_count < 2)
         return;
 
-    float x0 = (float)rc->sub_x[0] / 128.0f;
-    float y0 = (float)rc->sub_y[0] / 128.0f;
-    float x1 = (float)rc->sub_x[1] / 128.0f;
-    float y1 = (float)rc->sub_y[1] / 128.0f;
-    float target_x = (x0 + x1) * 0.5f;
-    float target_z = -((y0 + y1) * 0.5f);
+    OsrsRenderWeightedSubtile target;
+    if (!osrs_render_pvp_weighted_focus_subtile(
+            rc->entities, rc->entity_count, rc->gui.gui_entity_idx,
+            rc->sub_x, rc->sub_y, 0.75f, &target)) {
+        return;
+    }
+
+    float target_x = target.sub_x / 128.0f;
+    float target_z = -(target.sub_y / 128.0f);
     float lerp = 1.0f - powf(0.85f, (float)frame_dt * 60.0f);
 
     rc->cam_target_x += (target_x - rc->cam_target_x) * lerp;
@@ -5889,7 +5892,7 @@ void pvp_render(OsrsEnv* env) {
     render_handle_input(rc, env);
     double frame_dt = GetFrameTime();
     double visual_dt = render_scaled_frame_dt(rc, frame_dt);
-    render_follow_pvp_fighter_midpoint(rc, env, frame_dt);
+    render_follow_pvp_focused_fighter(rc, env, frame_dt);
     model_cache_update_texture_anims(rc->model_cache, (float)visual_dt);
     model_cache_update_texture_anims(rc->npc_model_cache, (float)visual_dt);
     model_cache_update_texture_anims(rc->projectile_model_cache, (float)visual_dt);
