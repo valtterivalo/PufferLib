@@ -143,7 +143,9 @@ void c_step(Env* env) {
                 env->log.colo_pray_faced_by_type[t] += clog->pray_faced_by_type[t];
                 env->log.colo_pray_correct_by_type[t] += clog->pray_correct_by_type[t];
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
+                env->log.colo_death_by_type[t] += clog->death_by_type[t];
             }
+            env->log.colo_death_fatal_damage += clog->death_fatal_damage;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -454,4 +456,15 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, OFFPRAY_RATE_KEYS[t], off_rate);
         dict_set(out, OFFPRAY_DMG_KEYS[t], log->colo_offpray_damage_by_type[t]);
     }
+
+    /* death attribution (diagnostic): kill-share per NPC type (which landed the
+       killing blow) + mean fatal-tick damage. Same literal-key rule as above. */
+    static const char* DEATH_BY_KEYS[COLO_NUM_NPC_TYPES] = {
+        "death_by_berserker", "death_by_archer", "death_by_seer",
+        "death_by_serpent", "death_by_jaguar", "death_by_javelin",
+        "death_by_shockwave", "death_by_minotaur", "death_by_manticore",
+        "death_by_sol", "death_by_totem", "death_by_bee"};
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+        dict_set(out, DEATH_BY_KEYS[t], log->colo_death_by_type[t]);
+    dict_set(out, "death_fatal_damage", log->colo_death_fatal_damage);
 }

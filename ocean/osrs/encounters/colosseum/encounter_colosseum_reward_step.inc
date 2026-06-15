@@ -45,6 +45,16 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     return reward;
 }
 
+/** Diagnostic death attribution: record which NPC type landed the killing blow
+    (s->last_hit_by_type) and the fatal tick's total damage_received (a single big
+    off-prayer hit vs a same-tick multi-style combo). Called only on a real HP/Doom
+    death, never on the tick-timeout path (where last_hit_by_type would be stale). */
+static void col_record_death_attribution(ColosseumState* s) {
+    int kt = s->last_hit_by_type;
+    if (kt >= 0 && kt < COLO_NUM_NPC_TYPES) s->log.death_by_type[kt] += 1.0f;
+    s->log.death_fatal_damage += s->tick_scratch.damage_received;
+}
+
 static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -113,6 +123,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
        Doom reaching its tier stack cap is also lethal. */
     if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);
+        col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_loss_reward(s, ctx);
@@ -136,6 +147,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     /* post-action death check (HP or a lethal Doom stack). */
     if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
+        col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_loss_reward(s, ctx);

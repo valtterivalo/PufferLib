@@ -1516,6 +1516,12 @@ typedef struct {
     float pray_faced_by_type[COLO_NUM_NPC_TYPES];
     float pray_correct_by_type[COLO_NUM_NPC_TYPES];
     float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
+
+    /* death attribution (diagnostic): death_by_type[killer] = 1 on the episode's
+       fatal tick (which NPC type dealt the killing blow), death_fatal_damage =
+       that tick's total damage_received (single big hit vs same-tick combo). */
+    float death_by_type[COLO_NUM_NPC_TYPES];
+    float death_fatal_damage;
 } ColosseumLog;
 
 

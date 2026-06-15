@@ -1010,6 +1010,13 @@ typedef struct {
     float colo_pray_faced_by_type[12];
     float colo_pray_correct_by_type[12];
     float colo_offpray_damage_by_type[12];
+    /* Colosseum death attribution (diagnostic): colo_death_by_type[t] is the
+       kill-share for NPC type t (1.0 for the type that landed the killing blow,
+       per dead episode -> per-episode mean = fraction of deaths it caused);
+       colo_death_fatal_damage is the mean total damage on the fatal tick (a
+       single big off-prayer hit vs a same-tick multi-style combo). */
+    float colo_death_by_type[12];
+    float colo_death_fatal_damage;
 } Log;
 
 typedef struct {
