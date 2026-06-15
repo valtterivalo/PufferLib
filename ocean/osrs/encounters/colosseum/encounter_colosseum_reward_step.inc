@@ -37,6 +37,7 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     reward += cfg->damage_reward_coeff * t->damage_dealt;
     reward += cfg->boss_damage_reward_coeff * t->damage_boss;
     reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
+    reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;
 
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
         reward += cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);

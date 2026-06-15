@@ -277,6 +277,7 @@ void my_init(Env* env, Dict* kwargs) {
         "boss_phase_bonus",
         "win_bonus",
         "prayer_correct_reward",
+        "offpray_damage_penalty_coeff",
         "death_penalty_coeff",
         "beginner_loadout_fraction",
     };

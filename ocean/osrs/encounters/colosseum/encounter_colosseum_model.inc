@@ -1417,6 +1417,9 @@ typedef struct {
     float boss_phase_bonus;          /* per Sol HP-threshold phase crossed */
     float win_bonus;                 /* on Sol death (wave 12 cleared) */
     float prayer_correct_reward;     /* per correctly-prayed incoming hit */
+    float offpray_damage_penalty_coeff; /* per-HP penalty for off-prayer damage taken
+                                           this tick: immediate credit for praying/
+                                           positioning to avoid hits (default 0). */
     float death_penalty_coeff;       /* magnitude of the death reward when enabled */
     int terminal_penalty_enabled;
     int curriculum_agent;
