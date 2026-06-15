@@ -460,6 +460,28 @@ static void test_ko_supply_reward_works_without_legacy_shaping(void) {
     collision_map_free(cmap);
 }
 
+static void test_ko_chance_reward_works_without_legacy_shaping(void) {
+    printf("--- PvP KO chance reward works without legacy shaping ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    env.shaping.enabled = 0;
+    env.shaping.ko_chance_reward_coef = 0.5f;
+
+    register_ko_chance(&env, 0, 0.25f);
+
+    ASSERT_FLOAT_NEAR("KO chance dense reward",
+        calculate_reward(&env, 0), 0.125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO chance count",
+        env.players[0].ko_chance_count, 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO chance survival product",
+        env.players[0].ko_chance_survival_prob, 0.75f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
 static void test_reward_coefficients_parse_from_binding_kwargs(void) {
     printf("--- PvP reward coefficients parse from binding kwargs ---\n");
 
@@ -467,6 +489,7 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
     dict_set(kwargs, "expected_damage_reward_coef", 0.0125);
     dict_set(kwargs, "incoming_damage_avoidance_reward_coef", 0.025);
     dict_set(kwargs, "ko_supply_reward_coef", 0.75);
+    dict_set(kwargs, "ko_chance_reward_coef", 1.25);
     Dict* vec_kwargs = pvp_vec_kwargs(2, 1);
 
     StaticVec* vec = create_static_vec(2, 1, 0, vec_kwargs, kwargs);
@@ -478,6 +501,8 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
         env->pvp.shaping.incoming_damage_avoidance_reward_coef, 0.025f, 1e-6f);
     ASSERT_FLOAT_NEAR("KO supply reward coef",
         env->pvp.shaping.ko_supply_reward_coef, 0.75f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO chance reward coef",
+        env->pvp.shaping.ko_chance_reward_coef, 1.25f, 1e-6f);
 
     static_vec_close(vec);
     free(vec_kwargs->items);
@@ -547,7 +572,8 @@ static void test_scripted_legacy_movement_maps_to_head_move(void) {
     actions[HEAD_MOVE] = pvp_head_move_toward_tile(p, p->x - 1, p->y);
     actions[HEAD_COMBAT] = MOVE_UNDER;
     pvp_set_player_spawn(p, 3041, 3530);
-    pvp_set_player_spawn(target, 3046, 3530);
+    pvp_set_player_spawn(target, 3046, 3531);
+    target->frozen_ticks = 5;
     p->last_obs_target_x = target->x;
     p->last_obs_target_y = target->y;
     pvp_translate_legacy_loadout_action_to_slotclicks(&env->pvp, 1, actions);
@@ -1343,10 +1369,12 @@ static void test_item_observation_templates_match_direct_writers(void) {
         uint8_t item_idx = item < NUM_ITEMS ? (uint8_t)item : ITEM_NONE;
         float direct[OSRS_ITEM_FEATURE_DIM];
         float cached[OSRS_ITEM_FEATURE_DIM];
+        float post_equip_deltas[6];
+        pvp_write_post_equip_bonus_deltas(&current, &post, post_equip_deltas);
         pvp_write_item_policy_features(
             item_idx, 7, 1, &current, &post, direct);
         pvp_write_item_policy_features_cached(
-            item_idx, 7, 1, &current, &post, cached);
+            item_idx, 7, 1, post_equip_deltas, cached);
         assert_float_rows_near(
             "item policy template", cached, direct, OSRS_ITEM_FEATURE_DIM, item_idx);
 
@@ -1456,15 +1484,27 @@ static void test_inventory_affordance_projection_matches_copy_equip(void) {
                     Player next = player;
                     ASSERT_TRUE("copy equip succeeds",
                         osrs_player_equip_from_inventory_slot(&next, 0));
-                    assert_projection_int_eq("has post bonuses",
-                        affordances.has_post_equip_bonuses[0], 1, state, (uint8_t)item);
-                    assert_projection_gear_eq("post equip bonuses",
-                        affordances.post_equip_bonuses[0],
-                        *get_slot_gear_bonuses(&next),
-                        state, (uint8_t)item);
+                    EquipmentBonuses current_bonuses;
+                    EquipmentBonuses next_bonuses;
+                    osrs_sum_equipment_bonuses(player.equipped, &current_bonuses);
+                    osrs_sum_equipment_bonuses(next.equipped, &next_bonuses);
+                    GearBonuses current_gear =
+                        osrs_gear_bonuses_from_equipment_bonuses(&current_bonuses);
+                    GearBonuses next_gear =
+                        osrs_gear_bonuses_from_equipment_bonuses(&next_bonuses);
+                    float expected_deltas[6];
+                    pvp_write_post_equip_bonus_deltas(
+                        &current_gear, &next_gear, expected_deltas);
+                    assert_projection_int_eq("has post deltas",
+                        affordances.has_post_equip_deltas[0], 1, state, (uint8_t)item);
+                    assert_float_rows_near("post equip deltas",
+                        affordances.post_equip_deltas[0],
+                        expected_deltas,
+                        6,
+                        (uint8_t)item);
                 } else {
-                    assert_projection_int_eq("no post bonuses",
-                        affordances.has_post_equip_bonuses[0], 0, state, (uint8_t)item);
+                    assert_projection_int_eq("no post deltas",
+                        affordances.has_post_equip_deltas[0], 0, state, (uint8_t)item);
                 }
             }
         }
@@ -1497,6 +1537,8 @@ static void test_pvp_log_emits_command_diagnostics(void) {
     log.performance_score = 0.75f;
     log.attacks_landed = 4.0f;
     log.expected_damage_prevented = 9.5f;
+    log.ko_chance_count = 3.0f;
+    log.ko_chance_prob = 0.55f;
     log.equip_click_attempts = 5.0f;
     log.equip_click_noop_rate = 0.2f;
     log.special_arm_attempts = 2.0f;
@@ -1538,6 +1580,10 @@ static void test_pvp_log_emits_command_diagnostics(void) {
         dict_get(out, "target_click_no_fire_rate")->value, 0.25f, 1e-6f);
     ASSERT_FLOAT_NEAR("log expected damage prevented",
         dict_get(out, "expected_damage_prevented")->value, 9.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log KO chance count",
+        dict_get(out, "ko_chance_count")->value, 3.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("log KO chance prob",
+        dict_get(out, "ko_chance_prob")->value, 0.55f, 1e-6f);
     ASSERT_FLOAT_NEAR("log weapon attack rate",
         dict_get(out, "weapon_attack_rate")->value, 0.6f, 1e-6f);
     ASSERT_FLOAT_NEAR("log selected magic attack rate",
@@ -2421,6 +2467,64 @@ static void test_expected_damage_standard_uniform(void) {
     ASSERT_FLOAT_NEAR("uniform 0..10 EV", ev, 5.0f, 1e-6f);
 }
 
+static void test_ko_chance_uniform_formula_matches_tracker(void) {
+    printf("--- PvP KO chance uniform formula matches tracker ---\n");
+
+    float chance = pvp_ko_chance_uniform_damage(
+        1.0f, 0, 50, 20, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float protected_chance = pvp_ko_chance_uniform_damage(
+        1.0f, 0, 50, 20, PRAYER_PROTECT_MELEE, ATTACK_STYLE_MELEE);
+
+    ASSERT_FLOAT_NEAR("unprotected KO chance",
+        chance, 31.0f / 51.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("protected KO chance",
+        protected_chance, 17.0f / 51.0f, 1e-6f);
+}
+
+static void test_ko_chance_tracker_survival_aggregation(void) {
+    printf("--- PvP KO chance tracker survival aggregation ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    register_ko_chance(&env, 0, 0.20f);
+    register_ko_chance(&env, 0, 0.50f);
+
+    ASSERT_FLOAT_NEAR("KO chance tick capless sum",
+        env.players[0].ko_chance_prob_tick, 0.70f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO chance count",
+        env.players[0].ko_chance_count, 2.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("KO chance survival product",
+        env.players[0].ko_chance_survival_prob, 0.40f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_ko_chance_representative_specs(void) {
+    printf("--- PvP KO chance representative specs ---\n");
+
+    float ags = pvp_ko_chance_spec_damage(
+        ITEM_AGS, 100000, 40, 0, 20, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float claws = pvp_ko_chance_spec_damage(
+        ITEM_DRAGON_CLAWS, 100000, 40, 0, 20, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float dark_bow = pvp_ko_chance_spec_damage(
+        ITEM_DARK_BOW, 100000, 40, 0, 16, PRAYER_NONE, ATTACK_STYLE_RANGED);
+    float voidwaker_off_prayer = pvp_ko_chance_spec_damage(
+        ITEM_VOIDWAKER, 100000, 40, 0, 40, PRAYER_NONE, ATTACK_STYLE_MELEE);
+    float voidwaker_on_prayer = pvp_ko_chance_spec_damage(
+        ITEM_VOIDWAKER, 100000, 40, 0, 40, PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE);
+
+    ASSERT_FLOAT_NEAR("AGS KO chance",
+        ags, osrs_hit_chance(200000, 0) * 25.0f / 45.0f, 1e-6f);
+    ASSERT_TRUE("claws KO chance positive", claws > 0.0f);
+    ASSERT_FLOAT_NEAR("dark bow guaranteed min KO chance",
+        dark_bow, 1.0f, 1e-4f);
+    ASSERT_TRUE("voidwaker magic prayer reduces KO chance",
+        voidwaker_on_prayer < voidwaker_off_prayer);
+}
+
 static void test_expected_damage_representative_specs(void) {
     printf("--- PvP expected damage representative specs ---\n");
 
@@ -2454,6 +2558,7 @@ int main(void) {
     test_expected_damage_reward_works_without_legacy_shaping();
     test_incoming_damage_avoidance_reward_works_without_legacy_shaping();
     test_ko_supply_reward_works_without_legacy_shaping();
+    test_ko_chance_reward_works_without_legacy_shaping();
     test_reward_coefficients_parse_from_binding_kwargs();
     test_shaping_uses_encounter_overhead_and_spec_prayer_style();
     test_scripted_legacy_movement_maps_to_head_move();
@@ -2498,6 +2603,9 @@ int main(void) {
     test_expected_damage_prevention_uses_available_gear_and_prayer();
     test_expected_damage_zero_accuracy();
     test_expected_damage_standard_uniform();
+    test_ko_chance_uniform_formula_matches_tracker();
+    test_ko_chance_tracker_survival_aggregation();
+    test_ko_chance_representative_specs();
     test_expected_damage_representative_specs();
 
     printf("\n=== results: %d/%d passed ===\n", tests_passed, tests_run);

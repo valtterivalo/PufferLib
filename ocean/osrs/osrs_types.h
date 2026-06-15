@@ -684,6 +684,7 @@ typedef struct {
     float expected_damage_dealt_tick;
     float expected_damage_received_tick;
     float expected_damage_prevented_tick;
+    float ko_chance_prob_tick;
 
     // Hit statistics
     int total_target_hit_count;
@@ -748,6 +749,8 @@ typedef struct {
     float expected_damage_dealt;
     float expected_damage_received;
     float expected_damage_prevented;
+    float ko_chance_survival_prob;
+    float ko_chance_count;
 
     // Equipment flags
     int is_lunar_spellbook;
@@ -879,6 +882,8 @@ typedef struct {
     float expected_damage_diff;
     float expected_damage_score;
     float ko_supply_score;
+    float ko_chance_count;
+    float ko_chance_prob;
     float performance_score;
     float wave;
     float prayer_correct;
@@ -1205,6 +1210,7 @@ typedef struct {
     float expected_damage_reward_coef;
     float incoming_damage_avoidance_reward_coef;
     float ko_supply_reward_coef;
+    float ko_chance_reward_coef;
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training
     int   enabled;                   // 0 = sparse only, 1 = full shaping

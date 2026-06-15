@@ -248,6 +248,8 @@ PVP_FIXED_EVAL_KEYS = (
     'env/expected_damage_diff',
     'env/expected_damage_score',
     'env/ko_supply_score',
+    'env/ko_chance_count',
+    'env/ko_chance_prob',
     'env/performance_score',
     'env/episode_return',
     'env/episode_length',
@@ -403,6 +405,8 @@ def _collect_pvp_eval_means(backend, pufferl, episodes):
     means.setdefault('env/expected_damage_score',
         min(1.0, max(0.0, 0.5 + means['env/expected_damage_diff'] / 198.0)))
     means.setdefault('env/ko_supply_score', 0.0)
+    means.setdefault('env/ko_chance_count', 0.0)
+    means.setdefault('env/ko_chance_prob', 0.0)
     means.setdefault('env/performance_score',
         0.55 * means['env/expected_damage_score']
         + 0.30 * wins
@@ -585,6 +589,8 @@ def _write_pvp_fixed_eval_means(logs, prefix, means):
     logs[f'{prefix}_expected_damage_prevented'] = means.get(
         'env/expected_damage_prevented', 0.0)
     logs[f'{prefix}_ko_supply_score'] = means['env/ko_supply_score']
+    logs[f'{prefix}_ko_chance_count'] = means['env/ko_chance_count']
+    logs[f'{prefix}_ko_chance_prob'] = means['env/ko_chance_prob']
     logs[f'{prefix}_damage_dealt'] = means.get('env/damage_dealt', 0.0)
     logs[f'{prefix}_damage_received'] = means.get('env/damage_received', 0.0)
     logs[f'{prefix}_n'] = means['env/n']
@@ -598,6 +604,8 @@ def _write_pvp_rollout_eval_means(logs, means):
     logs['env/rollout_eval_expected_damage_prevented'] = means.get(
         'env/expected_damage_prevented', 0.0)
     logs['env/rollout_eval_ko_supply_score'] = means['env/ko_supply_score']
+    logs['env/rollout_eval_ko_chance_count'] = means['env/ko_chance_count']
+    logs['env/rollout_eval_ko_chance_prob'] = means['env/ko_chance_prob']
     logs['env/rollout_eval_n'] = means['env/n']
 
 def _write_static_rollout_panel(logs, prefix, means):
@@ -609,6 +617,8 @@ def _write_static_rollout_panel(logs, prefix, means):
     logs[f'env/rollout_eval_{prefix}_expected_damage_prevented'] = means.get(
         'env/expected_damage_prevented', 0.0)
     logs[f'env/rollout_eval_{prefix}_ko_supply_score'] = means['env/ko_supply_score']
+    logs[f'env/rollout_eval_{prefix}_ko_chance_count'] = means['env/ko_chance_count']
+    logs[f'env/rollout_eval_{prefix}_ko_chance_prob'] = means['env/ko_chance_prob']
     logs[f'env/rollout_eval_{prefix}_n'] = means['env/n']
 
 def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
@@ -633,7 +643,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
     started = time.time()
     logs = {}
     scores, wins, dmg_scores, performance_scores, expected_scores = [], [], [], [], []
-    expected_prevented, ko_supply_scores, ns, weights = [], [], [], []
+    expected_prevented, ko_supply_scores, ko_chance_counts = [], [], []
+    ko_chance_probs, ns, weights = [], [], []
 
     if scripted_weight > 0.0:
         means = _collect_pvp_static_scripted_panel(
@@ -646,6 +657,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
         expected_scores.append(means['env/expected_damage_score'])
         expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
+        ko_chance_counts.append(means['env/ko_chance_count'])
+        ko_chance_probs.append(means['env/ko_chance_prob'])
         ns.append(means['env/n'])
         weights.append(scripted_weight)
 
@@ -664,6 +677,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
         expected_scores.append(means['env/expected_damage_score'])
         expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
+        ko_chance_counts.append(means['env/ko_chance_count'])
+        ko_chance_probs.append(means['env/ko_chance_prob'])
         ns.append(means['env/n'])
         weights.append(policy_weight)
 
@@ -675,6 +690,8 @@ def _run_pvp_static_mixed_panel_rollout_eval(backend, args, model_path):
     logs['env/rollout_eval_expected_damage_prevented'] = _weighted_mean(
         expected_prevented, weights)
     logs['env/rollout_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
+    logs['env/rollout_eval_ko_chance_count'] = _weighted_mean(ko_chance_counts, weights)
+    logs['env/rollout_eval_ko_chance_prob'] = _weighted_mean(ko_chance_probs, weights)
     logs['env/rollout_eval_n'] = float(np.sum(ns))
     logs['env/rollout_eval_scripted_weight'] = scripted_weight
     logs['env/rollout_eval_policy_weight'] = policy_weight
@@ -725,7 +742,7 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
     started = time.time()
     logs = {}
     scores, wins, dmg_scores, performance_scores, expected_scores = [], [], [], [], []
-    expected_prevented, ko_supply_scores, ns = [], [], []
+    expected_prevented, ko_supply_scores, ko_chance_counts, ko_chance_probs, ns = [], [], [], [], []
     for idx, opponent in enumerate(opponents):
         means = _collect_pvp_fixed_eval_opponent(
             backend, args, model_path, opponent, episodes, seed + 100_000 * idx)
@@ -738,6 +755,8 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         expected_scores.append(means['env/expected_damage_score'])
         expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
+        ko_chance_counts.append(means['env/ko_chance_count'])
+        ko_chance_probs.append(means['env/ko_chance_prob'])
         ns.append(means['env/n'])
 
     if opponents:
@@ -769,6 +788,8 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
         expected_scores.append(means['env/expected_damage_score'])
         expected_prevented.append(means.get('env/expected_damage_prevented', 0.0))
         ko_supply_scores.append(means['env/ko_supply_score'])
+        ko_chance_counts.append(means['env/ko_chance_count'])
+        ko_chance_probs.append(means['env/ko_chance_prob'])
         ns.append(means['env/n'])
         weights.append(policy_opponent_weight)
 
@@ -790,6 +811,8 @@ def _run_pvp_fixed_eval_suite(backend, args, model_path):
     logs['env/fixed_eval_expected_damage_prevented'] = _weighted_mean(
         expected_prevented, weights)
     logs['env/fixed_eval_ko_supply_score'] = _weighted_mean(ko_supply_scores, weights)
+    logs['env/fixed_eval_ko_chance_count'] = _weighted_mean(ko_chance_counts, weights)
+    logs['env/fixed_eval_ko_chance_prob'] = _weighted_mean(ko_chance_probs, weights)
     logs['env/fixed_eval_score_unweighted'] = float(np.mean(scores))
     logs['env/fixed_eval_performance_score_unweighted'] = float(np.mean(performance_scores))
     logs['env/fixed_eval_wins_unweighted'] = float(np.mean(wins))

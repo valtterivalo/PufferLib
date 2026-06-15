@@ -58,6 +58,10 @@ class FakeTrainBackend:
             "scripted": 0.7,
             "policy": 0.3,
         }.get(panel, 0.25 + 0.01 * self.log_calls)
+        ko_chance_prob = {
+            "scripted": 0.4,
+            "policy": 0.1,
+        }.get(panel, 0.05)
         return {
             "agent_steps": pufferl_obj.global_step,
             "uptime": float(self.log_calls),
@@ -76,6 +80,8 @@ class FakeTrainBackend:
                 "performance_score": performance_score,
                 "expected_damage_score": performance_score,
                 "ko_supply_score": 0.0,
+                "ko_chance_count": 2.0,
+                "ko_chance_prob": ko_chance_prob,
                 "damage_dealt": 0.0,
                 "damage_received": 0.0,
                 "n": 1.0,
@@ -303,6 +309,8 @@ def test_rollout_eval_aggregates_metrics_by_episode_count():
     assert logs["env/rollout_eval_n"] == pytest.approx(2.0)
     assert logs["env/rollout_eval_wins"] == pytest.approx(0.5)
     assert logs["env/rollout_eval_performance_score"] == pytest.approx(0.265)
+    assert logs["env/rollout_eval_ko_chance_count"] == pytest.approx(2.0)
+    assert logs["env/rollout_eval_ko_chance_prob"] == pytest.approx(0.05)
 
 
 def test_rollout_eval_caps_final_batch_weight():
@@ -407,6 +415,11 @@ def test_static_mixed_rollout_eval_uses_fixed_scripted_and_policy_panels(tmp_pat
     assert logs["env/rollout_eval_performance_score"] == pytest.approx(
         0.7 * 0.7 + 0.3 * 0.3,
     )
+    assert logs["env/rollout_eval_ko_chance_prob"] == pytest.approx(
+        0.7 * 0.4 + 0.3 * 0.1,
+    )
+    assert logs["env/rollout_eval_scripted_ko_chance_prob"] == pytest.approx(0.4)
+    assert logs["env/rollout_eval_policy_anchor_ko_chance_prob"] == pytest.approx(0.1)
 
 
 def test_static_mixed_rollout_eval_requires_saved_model_path():

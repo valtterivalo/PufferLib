@@ -320,6 +320,8 @@ static void pvp_env_accumulate_terminal_log(Env* env) {
     env->log.expected_damage_diff += env->pvp.log.expected_damage_diff;
     env->log.expected_damage_score += env->pvp.log.expected_damage_score;
     env->log.ko_supply_score += env->pvp.log.ko_supply_score;
+    env->log.ko_chance_count += env->pvp.log.ko_chance_count;
+    env->log.ko_chance_prob += env->pvp.log.ko_chance_prob;
     env->log.performance_score += env->pvp.log.performance_score;
     env->log.prayer_correct += env->pvp.log.prayer_correct;
     env->log.prayer_total += env->pvp.log.prayer_total;
@@ -675,6 +677,10 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.ko_supply_reward_coef = ko_supply_reward
         ? (float)ko_supply_reward->value : 0.0f;
 
+    DictItem* ko_chance_reward = dict_get_unsafe(kwargs, "ko_chance_reward_coef");
+    env->pvp.shaping.ko_chance_reward_coef = ko_chance_reward
+        ? (float)ko_chance_reward->value : 0.0f;
+
     env->pvp.shaping.damage_dealt_coef = 0.005f;
     env->pvp.shaping.damage_received_coef = -0.005f;
     env->pvp.shaping.correct_prayer_bonus = 0.03f;
@@ -728,6 +734,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "expected_damage_diff", log->expected_damage_diff);
     dict_set(out, "expected_damage_score", log->expected_damage_score);
     dict_set(out, "ko_supply_score", log->ko_supply_score);
+    dict_set(out, "ko_chance_count", log->ko_chance_count);
+    dict_set(out, "ko_chance_prob", log->ko_chance_prob);
     dict_set(out, "performance_score", log->performance_score);
 
     float prayer_rate = (log->prayer_total > 0.0f)
