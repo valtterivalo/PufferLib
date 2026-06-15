@@ -1017,6 +1017,13 @@ typedef struct {
        single big off-prayer hit vs a same-tick multi-style combo). */
     float colo_death_by_type[12];
     float colo_death_fatal_damage;
+    /* Colosseum bleed avoidability (diagnostic): off-prayer HP taken on same-tick
+       >=2-style conflict ticks (unavoidable) vs single-style ticks (avoidable
+       mis-flick); colo_death_on_conflict_tick = fraction of deaths whose fatal
+       tick was a multi-style conflict. */
+    float colo_offpray_damage_conflict;
+    float colo_offpray_damage_solo;
+    float colo_death_on_conflict_tick;
 } Log;
 
 typedef struct {

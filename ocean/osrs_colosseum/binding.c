@@ -146,6 +146,9 @@ void c_step(Env* env) {
                 env->log.colo_death_by_type[t] += clog->death_by_type[t];
             }
             env->log.colo_death_fatal_damage += clog->death_fatal_damage;
+            env->log.colo_offpray_damage_conflict += clog->offpray_damage_conflict;
+            env->log.colo_offpray_damage_solo += clog->offpray_damage_solo;
+            env->log.colo_death_on_conflict_tick += clog->death_on_conflict_tick;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -467,4 +470,7 @@ void my_log(Log* log, Dict* out) {
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
         dict_set(out, DEATH_BY_KEYS[t], log->colo_death_by_type[t]);
     dict_set(out, "death_fatal_damage", log->colo_death_fatal_damage);
+    dict_set(out, "offpray_dmg_conflict", log->colo_offpray_damage_conflict);
+    dict_set(out, "offpray_dmg_solo", log->colo_offpray_damage_solo);
+    dict_set(out, "death_on_conflict_tick", log->colo_death_on_conflict_tick);
 }

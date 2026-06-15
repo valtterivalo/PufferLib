@@ -53,6 +53,22 @@ static void col_record_death_attribution(ColosseumState* s) {
     int kt = s->last_hit_by_type;
     if (kt >= 0 && kt < COLO_NUM_NPC_TYPES) s->log.death_by_type[kt] += 1.0f;
     s->log.death_fatal_damage += s->tick_scratch.damage_received;
+    if (__builtin_popcount(s->tick_scratch.styles_faced_mask) >= 2)
+        s->log.death_on_conflict_tick += 1.0f;
+}
+
+/** Diagnostic bleed split: route this tick's off-prayer HP into the conflict
+    bucket (>=2 distinct prayer-checkable styles landed, so a single overhead
+    could not block all of them -> unavoidable) or the solo bucket (1 style, a
+    wrong-overhead mis-flick -> avoidable). Call once per tick after all incoming
+    hits have resolved (pending-hit resolve + manticore orbs), before tick reset. */
+static void col_classify_tick_offpray(ColosseumState* s) {
+    float d = s->tick_scratch.offpray_damage_this_tick;
+    if (d <= 0.0f) return;
+    if (__builtin_popcount(s->tick_scratch.styles_faced_mask) >= 2)
+        s->log.offpray_damage_conflict += d;
+    else
+        s->log.offpray_damage_solo += d;
 }
 
 static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
@@ -118,6 +134,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
            counts down while gameplay is live. */
         if (s->surge_cooldown > 0) s->surge_cooldown--;
     }
+
+    /* classify this tick's off-prayer bleed (all incoming prayer-checkable hits
+       have now resolved) before the death check so the fatal tick is bucketed. */
+    col_classify_tick_offpray(s);
 
     /* early death check before player actions: a lethal hit can't be brewed back.
        Doom reaching its tier stack cap is also lethal. */

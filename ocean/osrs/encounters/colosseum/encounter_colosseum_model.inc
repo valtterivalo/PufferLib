@@ -1489,6 +1489,12 @@ typedef struct {
     int wave_completed;
     int player_moved;
     int player_attacked;
+    /* diagnostic: which prayer-checkable styles landed on the player THIS tick
+       (bitmask over ATTACK_STYLE_*) and the off-prayer HP taken this tick. >=2
+       distinct styles = a same-tick conflict a single overhead cannot fully
+       block (unavoidable bleed); 1 style = an avoidable mis-flick. */
+    int styles_faced_mask;
+    float offpray_damage_this_tick;
 } ColoTickScratch;
 
 /** Colosseum telemetry surfaced through the get_log hook (NOT the shared Log). */
@@ -1522,6 +1528,14 @@ typedef struct {
        that tick's total damage_received (single big hit vs same-tick combo). */
     float death_by_type[COLO_NUM_NPC_TYPES];
     float death_fatal_damage;
+
+    /* bleed avoidability (diagnostic): off-prayer HP taken on ticks with >=2
+       distinct prayer-checkable styles landing (conflict = unavoidable, single
+       overhead cannot block both) vs ticks with 1 style (solo = an avoidable
+       mis-flick). death_on_conflict_tick = 1 if the fatal tick was a conflict. */
+    float offpray_damage_conflict;
+    float offpray_damage_solo;
+    float death_on_conflict_tick;
 } ColosseumLog;
 
 

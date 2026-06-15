@@ -122,6 +122,8 @@ static void col_pending_hit_prayer_observer(
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
+    s->tick_scratch.styles_faced_mask |= (1 << hit->attack_style);
+    if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, hit->source_npc_type, prayed, dmg);
 }
 
@@ -399,6 +401,8 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
         }
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
         col_log_prayer_event(s, npc->type, prayed, dmg);
+        s->tick_scratch.styles_faced_mask |= (1 << style);
+        if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
         if (dmg > 0) {
             s->last_hit_by_type = npc->type;
             col_mod_on_player_damaged(s, dmg);
