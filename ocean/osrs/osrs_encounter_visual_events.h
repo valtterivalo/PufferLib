@@ -69,6 +69,11 @@ typedef struct {
     int splash_gfx_id;
 } OsrsCombatProjectileEmitSpec;
 
+typedef struct {
+    float sub_x;
+    float sub_y;
+} OsrsRenderWeightedSubtile;
+
 static inline int osrs_render_target_ref_resolve_entity_idx(
     const RenderEntity* entities,
     int count,
@@ -150,6 +155,30 @@ static inline int osrs_render_player_hidden_under_followed_visual_tile(
             osrs_render_visual_tile_from_subtile(sub_x[followed_idx]) &&
         osrs_render_visual_tile_from_subtile(sub_y[entity_idx]) ==
             osrs_render_visual_tile_from_subtile(sub_y[followed_idx]);
+}
+
+static inline int osrs_render_pvp_weighted_focus_subtile(
+    const RenderEntity* entities,
+    int count,
+    int focus_idx,
+    const float* sub_x,
+    const float* sub_y,
+    float focus_weight,
+    OsrsRenderWeightedSubtile* out
+) {
+    if (!entities || !sub_x || !sub_y || !out) abort();
+    if (focus_weight < 0.0f || focus_weight > 1.0f) abort();
+    if (count != 2) return 0;
+    if (focus_idx < 0 || focus_idx >= count) return 0;
+    int opponent_idx = 1 - focus_idx;
+    if (entities[focus_idx].entity_type != ENTITY_PLAYER) return 0;
+    if (entities[opponent_idx].entity_type != ENTITY_PLAYER) return 0;
+    float opponent_weight = 1.0f - focus_weight;
+    out->sub_x = sub_x[focus_idx] * focus_weight +
+        sub_x[opponent_idx] * opponent_weight;
+    out->sub_y = sub_y[focus_idx] * focus_weight +
+        sub_y[opponent_idx] * opponent_weight;
+    return 1;
 }
 
 static inline int osrs_npc_death_linger_start(
