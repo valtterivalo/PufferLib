@@ -218,16 +218,10 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
             if (armed) {
                 int start = firing ? mc->cycle_step : 0;
                 int speed = COLO_NPC_STATS[npc->type].attack_speed;
-                /* ticks until orb 0 lands: a real countdown DURING the charge
-                   (cycle_step pins to 0 while attack_timer ticks down to the
-                   fire tick), then 0 once orbs are in flight (one tick apart).
-                   The old `firing ? 0` read 0 for the whole ~9-tick charge
-                   because arm() sets cycle_step=0 before attack_timer expires,
-                   so the agent could never time the barrage flick. */
-                int charging = (mc->cycle_step == 0 && npc->attack_timer > 0);
-                tells[0] = charging
-                    ? col_clamp01((float)npc->attack_timer / (float)(speed > 0 ? speed : 1))
-                    : 0.0f;
+                /* ticks until the next orb lands: the charge countdown while
+                   arming, ~0 once firing (orbs are one tick apart). */
+                tells[0] = firing ? 0.0f
+                    : col_clamp01((float)npc->attack_timer / (float)(speed > 0 ? speed : 1));
                 for (int slot = 0; slot < 3; slot++) {
                     int orb = start + slot;
                     if (orb < 3) col_tell_style_onehot(mc->orb_style[orb], &tells[1 + slot * 3]);
@@ -259,29 +253,6 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
     *idx = i;
 }
 
-/** The style to encode in the per-slot style one-hot: the NPC's NEXT resolving
-    attack style, not the static spawn label (npc->attack_style is written once at
-    spawn and never updated). Single-style NPCs report their fixed style; the
-    manticore reports its next orb's style (its barrage cycles ranged/magic/melee,
-    so the spawn label said RANGED ~2/3 wrongly); a javelin with a skyfall pending
-    reports NONE because skyfall ignores overhead prayer. NONE -> all-zero one-hot
-    ("no overhead blocks the next hit"). */
-static AttackStyle col_npc_obs_upcoming_style(const ColoNPC* npc) {
-    switch (npc->type) {
-        case COLO_MANTICORE: {
-            const ColoManticoreState* mc = &npc->type_state.manticore;
-            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
-            return (orb < 3) ? mc->orb_style[orb] : ATTACK_STYLE_NONE;
-        }
-        case COLO_JAVELIN_COLOSSUS:
-            return npc->type_state.javelin.skyfall_pending
-                ? ATTACK_STYLE_NONE
-                : npc->attack_style;
-        default:
-            return npc->attack_style;
-    }
-}
-
 /** write one NPC slot (COLO_FEATURES_PER_NPC floats). Caller has cleared obs to 0. */
 static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
     int i = *idx;
@@ -294,10 +265,9 @@ static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, floa
     obs[i++] = col_obs_rel_x(npc->x, px);
     obs[i++] = col_obs_rel_y(npc->y, py);
     obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
-    AttackStyle obs_style = col_npc_obs_upcoming_style(npc);
-    obs[i++] = (obs_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (obs_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (obs_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)npc->attack_timer / 8.0f);
     int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
     int range = ns->attack_range > 0 ? ns->attack_range : 1;
