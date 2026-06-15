@@ -207,6 +207,38 @@ static void test_shared_render_target_refs_resolve(void) {
         entities[0].attack_target_entity_idx, 2);
 }
 
+static void test_player_stack_hiding_uses_visual_tile(void) {
+    printf("--- player stack hiding uses visual tile ---\n");
+
+    RenderEntity entities[2] = {0};
+    entities[0].entity_type = ENTITY_PLAYER;
+    entities[0].player_slot = 0;
+    entities[0].x = 10;
+    entities[0].y = 10;
+    entities[1].entity_type = ENTITY_PLAYER;
+    entities[1].player_slot = 1;
+    entities[1].x = 10;
+    entities[1].y = 10;
+
+    float sub_x[2] = {10 * 128.0f + 64.0f, 9 * 128.0f + 64.0f};
+    float sub_y[2] = {10 * 128.0f + 64.0f, 10 * 128.0f + 64.0f};
+
+    ASSERT_INT_EQ("backend overlap alone does not hide",
+        osrs_render_player_hidden_under_followed_visual_tile(
+            entities, 2, 1, 0, sub_x, sub_y),
+        0);
+
+    entities[1].x = 12;
+    entities[1].y = 12;
+    sub_x[1] = sub_x[0];
+    sub_y[1] = sub_y[0];
+
+    ASSERT_INT_EQ("visual overlap hides",
+        osrs_render_player_hidden_under_followed_visual_tile(
+            entities, 2, 1, 0, sub_x, sub_y),
+        1);
+}
+
 static void set_agent_actions(NhPvpState* state, const int* actions) {
     memcpy(state->env.ocean_io.agent_actions, actions,
         NUM_ACTION_HEADS * sizeof(int));
@@ -967,6 +999,36 @@ static void test_terminal_winner_phase_removes_loser(void) {
     ASSERT_INT_EQ("winner phase entity maps opponent", shown == NULL ? -1 : shown->current_hitpoints,
         state.env.pvp_runtime.terminal_presentation.players[1].current_hitpoints);
     ASSERT_INT_EQ("winner phase target inactive", entities[0].attack_target_entity_idx, -1);
+}
+
+static void test_terminal_draw_winner_phase_has_no_entities(void) {
+    printf("--- PvP terminal draw winner phase has no entities ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    state.env.pvp_runtime.opponent.type = OPP_NIGHTMARE_NH;
+    state.env.players[0].current_hitpoints = 0;
+    state.env.players[1].current_hitpoints = 0;
+    pvp_step(&state.env);
+
+    PvpTerminalPresentation* p = &state.env.pvp_runtime.terminal_presentation;
+    ASSERT_INT_EQ("draw presentation phase", p->phase, PVP_TERMINAL_PRESENTATION_DEATH);
+    ASSERT_INT_EQ("draw presentation winner", p->winner, -1);
+
+    EncounterOverlay overlay = {0};
+    nh_pvp_render_post_tick((EncounterState*)&state, NULL, &overlay);
+    ASSERT_INT_EQ("draw status active", overlay.status_text_active, 1);
+    ASSERT_STR_EQ("draw status text", overlay.status_text, "Draw");
+
+    p->phase = PVP_TERMINAL_PRESENTATION_WINNER;
+
+    RenderEntity entities[NUM_AGENTS];
+    int count = 0;
+    fill_pvp_entities_raw(&state, entities, &count);
+    Player* shown = nh_pvp_get_entity((EncounterState*)&state, NULL, 0);
+
+    ASSERT_INT_EQ("draw winner phase count", count, 0);
+    ASSERT_INT_EQ("draw winner phase entity absent", shown == NULL, 1);
 }
 
 static void test_performance_tracker_values(void) {
@@ -1775,6 +1837,7 @@ int main(void) {
     test_wilderness_collision_asset_spans_pvp_area();
     test_runtime_animation_assets_are_anm2();
     test_shared_render_target_refs_resolve();
+    test_player_stack_hiding_uses_visual_tile();
     test_reset_has_no_forced_targets();
     test_attack_sets_render_target();
     test_attack_event_faces_target_after_interaction_clear();
@@ -1804,6 +1867,7 @@ int main(void) {
     test_terminal_status_text_for_player_and_opponent_wins();
     test_terminal_render_entities_use_snapshot();
     test_terminal_winner_phase_removes_loser();
+    test_terminal_draw_winner_phase_has_no_entities();
     test_performance_tracker_values();
     test_pvp_current_special_visual_rows();
     test_pvp_godsword_and_voidwaker_specials_are_distinct();

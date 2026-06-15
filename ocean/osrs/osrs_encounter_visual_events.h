@@ -128,6 +128,30 @@ static inline void osrs_render_entity_set_preferred_attack_target_ref(
     entities[source_entity_idx].attack_target_entity_idx = target;
 }
 
+static inline int osrs_render_visual_tile_from_subtile(float subtile) {
+    return (int)(subtile / 128.0f);
+}
+
+static inline int osrs_render_player_hidden_under_followed_visual_tile(
+    const RenderEntity* entities,
+    int count,
+    int entity_idx,
+    int followed_idx,
+    const float* sub_x,
+    const float* sub_y
+) {
+    if (!entities || !sub_x || !sub_y) abort();
+    if (entity_idx < 0 || entity_idx >= count) abort();
+    if (entities[entity_idx].entity_type != ENTITY_PLAYER) return 0;
+    if (entity_idx == followed_idx) return 0;
+    if (followed_idx < 0 || followed_idx >= count) return 0;
+    if (entities[followed_idx].entity_type != ENTITY_PLAYER) return 0;
+    return osrs_render_visual_tile_from_subtile(sub_x[entity_idx]) ==
+            osrs_render_visual_tile_from_subtile(sub_x[followed_idx]) &&
+        osrs_render_visual_tile_from_subtile(sub_y[entity_idx]) ==
+            osrs_render_visual_tile_from_subtile(sub_y[followed_idx]);
+}
+
 static inline int osrs_npc_death_linger_start(
     int current_hitpoints,
     int active,
