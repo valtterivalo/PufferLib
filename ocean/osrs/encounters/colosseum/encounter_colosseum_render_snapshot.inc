@@ -36,6 +36,22 @@ static void col_put_int_ctx(
     else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
         ctx->config.step_out_forecast_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "forecast_horizon") == 0) {
+        if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
+            fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
+                COLO_STEP_OUT_FORECAST_HORIZON, value);
+            abort();
+        }
+        ctx->config.forecast_horizon = value;
+    }
+    else if (strcmp(key, "forecast_run_tile_mode") == 0) {
+        if (value < 0 || value > COLO_FORECAST_RUN_TILE_STATIC_THREAT) {
+            fprintf(stderr, "colosseum: forecast_run_tile_mode must be 0..%d, got %d\n",
+                COLO_FORECAST_RUN_TILE_STATIC_THREAT, value);
+            abort();
+        }
+        ctx->config.forecast_run_tile_mode = value;
+    }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
             fprintf(stderr, "colosseum: loadout_profile_mode must be 0..2, got %d\n", value);

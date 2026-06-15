@@ -648,15 +648,20 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #endif
 
     if (ctx->config.step_out_forecast_obs_enabled) {
+        int horizon = ctx->config.forecast_horizon;
+        if (horizon < 1) horizon = 1;
+        if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
+            horizon = COLO_STEP_OUT_FORECAST_HORIZON;
         ColoStepOutForecast forecast;
-        col_build_step_out_forecast_ctx(s, &forecast);
+        col_build_step_out_forecast_horizon_mode(
+            s, &forecast, horizon, ctx->config.forecast_run_tile_mode);
         for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
             const ColoStepOutForecastAction* action = &forecast.actions[action_idx];
             int first_attack_tick = 0;
             int first_style_mask = 0;
             int max_hit = 0;
             int ranged_magic_same_tick = 0;
-            for (int tick_idx = 0; tick_idx < COLO_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
+            for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
                 const ColoStepOutForecastTick* tick = &action->ticks[tick_idx];
                 int style_mask = col_step_out_forecast_tick_style_mask(tick);
                 if (first_attack_tick == 0 &&
@@ -669,7 +674,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
                     ranged_magic_same_tick = 1;
             }
             obs[i++] = action->valid ? 1.0f : 0.0f;
-            obs[i++] = (float)first_attack_tick / (float)COLO_STEP_OUT_FORECAST_HORIZON;
+            obs[i++] = (float)first_attack_tick / (float)horizon;
             obs[i++] = (float)first_style_mask / 7.0f;
             obs[i++] = (float)max_hit / 150.0f;
             obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;

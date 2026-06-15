@@ -34,6 +34,8 @@
 /* max active NPCs at once + obs slot count (one obs slot per active NPC) */
 #define COLO_MAX_NPCS 24
 #define COLO_OBS_NPCS 12
+/* compile-time MAX rollout depth (ticks[] array size). The live depth is the
+   runtime ColConfig.forecast_horizon, clamped to [1, this]; default == this. */
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
 #define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 8
 #define COLO_STEP_OUT_FORECAST_OBS_SIZE \
@@ -1421,7 +1423,18 @@ typedef struct {
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
     int step_out_forecast_obs_enabled;
+    int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
+    int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
 } ColConfig;
+
+/** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
+    FULL runs the same multi-tick rollout as walk tiles. STATIC_THREAT skips NPC
+    movement and records a single static range/LoS attack gate at the true run
+    landing, trading horizon fidelity for the cost of the run-tile rollouts. */
+typedef enum {
+    COLO_FORECAST_RUN_TILE_FULL = 0,
+    COLO_FORECAST_RUN_TILE_STATIC_THREAT = 1,
+} ColoForecastRunTileMode;
 
 typedef enum {
     COLO_NPC_RENDER_ATTACK_NORMAL = 0,
