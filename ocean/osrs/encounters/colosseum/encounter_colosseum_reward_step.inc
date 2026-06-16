@@ -160,7 +160,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     /* B2(b): warband windows resolve after the player's move phase of the same
        tick, so "the player is moving" is exact on the window tick itself. */
-    if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s);
+    if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s, ctx);
 
     s->reward = col_compute_reward_ctx(s, ctx);
     int all_dead = 1;

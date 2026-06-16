@@ -1752,20 +1752,20 @@ static void test_warband_melee_distance_gate(void) {
     CHECK("rig sanity: the ranged archer has clear LoS",
         col_npc_has_los_to_player(&s, &s.npcs[0]));
     s.warband_cycle_anchor = s.tick - 3;   /* phase 3 = archer window NOW */
-    col_warband_attack_phase(&s);
+    col_warband_attack_phase(&s, &ctx);
     CHECK("archer at distance never attacks, even with LoS on its window",
         s.npcs[0].attacked_this_tick == 0);
 
     /* cardinal contact on the window attacks. */
     wb_move_npc(&s, 0, 8, 18);
-    col_warband_attack_phase(&s);
+    col_warband_attack_phase(&s, &ctx);
     CHECK("cardinally adjacent archer attacks on its window",
         s.npcs[0].attacked_this_tick == 1);
 
     /* diagonal contact is not melee distance for a 1x1 warbander (D33). */
     s.npcs[0].attacked_this_tick = 0;
     wb_move_npc(&s, 0, 8, 19);
-    col_warband_attack_phase(&s);
+    col_warband_attack_phase(&s, &ctx);
     CHECK("diagonally adjacent archer does not attack (cardinal-only)",
         s.npcs[0].attacked_this_tick == 0);
 }
@@ -1995,7 +1995,8 @@ static void test_minotaur_heal_semantics(void) {
     CHECK("the clear-LoS ally heals instead", s.npcs[2].hp == 125);
 
     /* melee priority: a (diagonally) adjacent player preempts the heal, and the
-       crush is queued with the confirmed 1-tick delay (tick-eatable). */
+       crush resolves INSTANTLY on the throw tick (OSRS melee is not reactable),
+       queuing nothing for a later landing. */
     geo_clear_npcs(&s);
     s.player.x = 11; s.player.y = 11;   /* diagonal corner contact, rect dist 1 */
     col_rebuild_player_collision_flags(&s);
@@ -2005,12 +2006,13 @@ static void test_minotaur_heal_semantics(void) {
     s.npcs[0].attack_timer = 0;
     s.player.current_hitpoints = 99;
     int queue_before = s.player_pending_hits.count;
+    float mino_faced_before = s.log.pray_faced_by_type[COLO_MINOTAUR];
     col_npc_attack_ctx(&s, &ctx, 0);
     CHECK("player in melee distance: the minotaur attacks instead of healing",
         s.npcs[0].attacked_this_tick == 1 && s.npcs[1].hp == 30);
-    CHECK("the crush is 1-tick-delayed (queued, no damage this tick)",
-        s.player_pending_hits.count == queue_before + 1 &&
-        s.player.current_hitpoints == 99);
+    CHECK("the crush resolves instantly, queuing nothing for a later tick",
+        s.player_pending_hits.count == queue_before &&
+        s.log.pray_faced_by_type[COLO_MINOTAUR] > mino_faced_before);
 }
 
 /* 5b. A19: barrage-to-barrage period is exactly 10 ticks — 3 orbs on consecutive
@@ -3560,8 +3562,7 @@ static void test_loadout_spec_weapons(void) {
     s.wave_ready_delay = 0;
     s.player.x = 16; s.player.y = 16;
     col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 15, 16);
-    col_npc_attack_jaguar(&s, 0, &COLO_NPC_STATS[COLO_JAGUAR_WARRIOR]);
-    col_resolve_player_pending_hits_ctx(&s, &ctx);
+    col_npc_attack_jaguar(&s, &ctx, 0, &COLO_NPC_STATS[COLO_JAGUAR_WARRIOR]);
     CHECK("jaguar multi-hit records three player render splats",
         ctx.player_render_hit_count == 3);
     RenderEntity scythe_entities[4];
@@ -4235,6 +4236,70 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
             npc->x, npc->y, col_npc_effective_size(npc)) <= attack_range);
 }
 
+/* 4d. NPC melee lands INSTANTLY on the throw tick (OSRS melee is not reactable),
+   not deferred a tick. Regression guard for the old col_npc_queue_melee bug that
+   queued melee with ticks=1 + check_prayer=1, giving the agent a free reaction
+   tick to flick Protect-from-Melee after the swing. The guard: a melee attack
+   resolves on the SAME call (damage applied, prayer tallied) and queues NOTHING
+   for a later landing — so there is no future hit left to react to. Mirrors the
+   D12 manticore same-tick-orb test. */
+static void test_npc_melee_instant_unprayable(void) {
+    printf("test_npc_melee_instant_unprayable\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 91);
+    geo_clear_npcs(&s);
+    /* the jaguar is a 2x2 (16,16)-(17,17); the player one tile east of its east
+       edge is cardinally adjacent (rect dist 1) and outside the footprint. */
+    s.player.x = 18; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 16, 16);
+
+    /* prayed: all three jaguar hits blocked, nothing queued, prayer_correct tallied. */
+    int blocked_ok = 1, queued = 0;
+    float correct_before = s.log.pray_correct_by_type[COLO_JAGUAR_WARRIOR];
+    for (int rep = 0; rep < 8; rep++) {
+        ctx.player_render_hit_count = 0;   /* per-tick reset the env does in col_step */
+        s.npcs[0].attack_timer = 0;
+        s.player.prayer = PRAYER_PROTECT_MELEE;
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (s.player.current_hitpoints != 99) blocked_ok = 0;
+        queued += s.player_pending_hits.count;
+    }
+    CHECK("Protect-from-Melee on the swing tick blocks every jaguar hit", blocked_ok);
+    CHECK("instant melee queues nothing for a later landing (prayed)", queued == 0);
+    CHECK("a blocked melee hit still counts prayer_correct",
+        s.log.pray_correct_by_type[COLO_JAGUAR_WARRIOR] > correct_before);
+
+    /* wrong prayer: hits are faced + tallied off-prayer on the same call, never
+       counted correct, and damage lands the same call. No RNG dependence on the
+       accounting; the damage check accumulates over the loop. */
+    float faced_before = s.log.pray_faced_by_type[COLO_JAGUAR_WARRIOR];
+    float wrong_correct_before = s.log.pray_correct_by_type[COLO_JAGUAR_WARRIOR];
+    float offpray_before = s.log.offpray_damage_by_type[COLO_JAGUAR_WARRIOR];
+    int wrong_faced = 0, wrong_queued = 0;
+    for (int rep = 0; rep < 64; rep++) {
+        ctx.player_render_hit_count = 0;   /* per-tick reset the env does in col_step */
+        s.npcs[0].attack_timer = 0;
+        s.player.prayer = PRAYER_PROTECT_MAGIC;   /* wrong overhead */
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        wrong_queued += s.player_pending_hits.count;
+        wrong_faced += 3;
+    }
+    CHECK("each off-prayer jaguar swing is faced on the same call",
+        s.log.pray_faced_by_type[COLO_JAGUAR_WARRIOR] - faced_before == (float)wrong_faced);
+    CHECK("an off-prayer melee swing is never counted correct",
+        s.log.pray_correct_by_type[COLO_JAGUAR_WARRIOR] == wrong_correct_before);
+    CHECK("instant melee queues nothing for a later landing (off-prayer)",
+        wrong_queued == 0);
+    CHECK("an unprayed melee hit deals damage on the same call",
+        s.log.offpray_damage_by_type[COLO_JAGUAR_WARRIOR] > offpray_before);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_osrs_los_query_contracts();
@@ -4278,6 +4343,7 @@ int main(void) {
     test_manticore_barrage_period();
     test_manticore_telegraph_during_windup();
     test_manticore_orb_same_tick_flick();
+    test_npc_melee_instant_unprayable();
     test_manticore_pattern_copy();
     test_javelin_skyfall_no_defence_gate();
     test_sol_adjacency_gate_and_kiting();
