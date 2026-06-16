@@ -612,6 +612,53 @@ static void test_duplicate_equip_clicks_apply_once(void) {
     collision_map_free(cmap);
 }
 
+static void test_food_brew_karambwan_can_resolve_same_tick(void) {
+    printf("--- PvP food brew karambwan same tick ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+    Player* p = &env.players[0];
+
+    p->base_hitpoints = 99;
+    p->current_hitpoints = 30;
+    p->base_attack = 99;
+    p->base_strength = 99;
+    p->base_defence = 99;
+    p->base_ranged = 99;
+    p->base_magic = 99;
+    p->current_attack = 99;
+    p->current_strength = 99;
+    p->current_defence = 99;
+    p->current_ranged = 99;
+    p->current_magic = 99;
+    p->food_count = 1;
+    p->brew_doses = 1;
+    p->karambwan_count = 1;
+    p->food_timer = 0;
+    p->potion_timer = 0;
+    p->karambwan_timer = 0;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_FOOD] = FOOD_EAT;
+    actions[HEAD_POTION] = POTION_BREW;
+    actions[HEAD_KARAMBWAN] = KARAM_EAT;
+    execute_switches(&env, 0, actions);
+
+    ASSERT_INT_EQ("same tick triple eat hp", p->current_hitpoints, 84);
+    ASSERT_INT_EQ("same tick food consumed", p->food_count, 0);
+    ASSERT_INT_EQ("same tick brew consumed", p->brew_doses, 0);
+    ASSERT_INT_EQ("same tick karambwan consumed", p->karambwan_count, 0);
+    ASSERT_INT_EQ("same tick food flag", p->ate_food_this_tick, 1);
+    ASSERT_INT_EQ("same tick brew flag", p->ate_brew_this_tick, 1);
+    ASSERT_INT_EQ("same tick karambwan flag", p->ate_karambwan_this_tick, 1);
+    ASSERT_INT_EQ("same tick brew heal", p->last_brew_heal, 16);
+    ASSERT_INT_EQ("same tick karambwan locks potion", p->potion_timer, 3);
+
+    collision_map_free(cmap);
+}
+
 static void test_static_vec_train_mask_round_trip(void) {
     printf("--- Static vec train mask round trip ---\n");
 
@@ -832,14 +879,18 @@ static void test_movement_masks_respect_blocked_tiles(void) {
 static void test_slotclick_schema_and_inventory_mask(void) {
     printf("--- PvP slot-click schema and inventory mask ---\n");
 
-    ASSERT_INT_EQ("PvP action schema", PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_SLOTCLICK_V9);
+    ASSERT_INT_EQ("PvP action schema",
+        PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11);
     ASSERT_INT_EQ("PvP obs schema",
-        PVP_OBS_SCHEMA, PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10);
+        PVP_OBS_SCHEMA, PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11);
     ASSERT_INT_EQ("PvP action head count", NUM_ACTION_HEADS, 13);
     ASSERT_INT_EQ("equip click dim", ACTION_HEAD_DIMS[HEAD_EQUIP_0], OSRS_INVENTORY_SIZE + 1);
     ASSERT_INT_EQ("attack dim", ACTION_HEAD_DIMS[HEAD_ATTACK], ATTACK_DIM);
     ASSERT_INT_EQ("special dim", ACTION_HEAD_DIMS[HEAD_SPECIAL], SPECIAL_DIM);
-    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
+    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE,
+        PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM +
+        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM +
+        KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM);
     ASSERT_INT_EQ("item feature dim", OSRS_ITEM_FEATURE_DIM, 56);
 
     OsrsEnv env;
@@ -1057,8 +1108,22 @@ static void pvp_test_eager_attack_head_mask(
     memset(out, 0, ATTACK_DIM);
     out[ATTACK_NONE] = 1;
     out[ATTACK_ATK] = (attack_ready || gmaul_spec_ready) && weapon_reachable;
-    out[ATTACK_ICE] = attack_ready && can_cast_ice_spell(p) && magic_reachable;
-    out[ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p) && magic_reachable;
+    out[ATTACK_ICE_RUSH] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_RUSH);
+    out[ATTACK_ICE_BURST] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BURST);
+    out[ATTACK_ICE_BLITZ] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BLITZ);
+    out[ATTACK_ICE_BARRAGE] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BARRAGE);
+    out[ATTACK_BLOOD_RUSH] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_RUSH);
+    out[ATTACK_BLOOD_BURST] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BURST);
+    out[ATTACK_BLOOD_BLITZ] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BLITZ);
+    out[ATTACK_BLOOD_BARRAGE] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BARRAGE);
 }
 
 typedef enum {
@@ -1304,6 +1369,49 @@ static void test_inventory_observation_item_facts(void) {
     generate_slot_observations(&env, 0);
     ASSERT_FLOAT_NEAR("current weapon special affordance",
         env.observations[182], 1.0f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_mage_inventory_observation_item_facts(void) {
+    printf("--- PvP mage inventory observation item facts ---\n");
+
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    CollisionMap* cmap = collision_map_create();
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    osrs_player_inventory_clear(agent);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_WEAPON, ITEM_WHIP);
+    osrs_player_set_equipment_slot(agent, GEAR_SLOT_BODY, ITEM_BLACK_DHIDE_BODY);
+    agent->inventory[0] = ITEM_KODAI_WAND;
+    agent->inventory[1] = ITEM_ANCESTRAL_TOP;
+    generate_slot_observations(&env, 0);
+
+    float* staff_row = env.observations + PVP_INVENTORY_OBS_OFFSET;
+    ASSERT_FLOAT_NEAR("mage staff present", staff_row[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mage staff item id normalized",
+        staff_row[1], (float)ITEM_KODAI_WAND / (float)(NUM_ITEMS - 1), 1e-6f);
+    ASSERT_FLOAT_NEAR("mage staff style magic", staff_row[7], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mage staff can equip", staff_row[31], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mage staff weapon slot onehot",
+        staff_row[33 + GEAR_SLOT_WEAPON], 1.0f, 1e-6f);
+    ASSERT_TRUE("mage staff attack stat visible", staff_row[20] > 0.0f);
+    ASSERT_TRUE("mage staff post-equip magic delta visible", staff_row[52] > 0.0f);
+
+    float* top_row = staff_row + OSRS_ITEM_FEATURE_DIM;
+    ASSERT_FLOAT_NEAR("mage top present", top_row[0], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mage top item id normalized",
+        top_row[1], (float)ITEM_ANCESTRAL_TOP / (float)(NUM_ITEMS - 1), 1e-6f);
+    ASSERT_FLOAT_NEAR("mage top can equip", top_row[31], 1.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("mage top body slot onehot",
+        top_row[33 + GEAR_SLOT_BODY], 1.0f, 1e-6f);
+    ASSERT_TRUE("mage top attack stat visible", top_row[20] > 0.0f);
+    ASSERT_TRUE("mage top post-equip magic delta visible", top_row[52] > 0.0f);
 
     collision_map_free(cmap);
 }
@@ -1801,6 +1909,175 @@ static void test_pvp_barrage_uses_shared_five_tick_cadence(void) {
     collision_map_free(cmap);
 }
 
+static void test_pvp_explicit_spell_masks_by_current_magic(void) {
+    printf("--- PvP explicit spell masks by current magic ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    Player* target = &env.players[1];
+    pvp_set_player_spawn(agent, 3041, 3530);
+    pvp_set_player_spawn(target, 3044, 3530);
+    apply_loadout(agent, LOADOUT_MAGE);
+    agent->attack_timer = 0;
+    agent->is_lunar_spellbook = 0;
+
+    int attack_offset = action_head_offset(HEAD_ATTACK);
+
+    agent->current_magic = ICE_RUSH_LEVEL - 1;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("ice rush below level masked",
+        env.action_masks[attack_offset + ATTACK_ICE_RUSH], 0);
+    ASSERT_INT_EQ("blood rush available below ice rush",
+        env.action_masks[attack_offset + ATTACK_BLOOD_RUSH], 1);
+    ASSERT_FLOAT_NEAR("ice tier unavailable obs",
+        env.observations[58], 0.0f, 1e-6f);
+
+    agent->current_magic = ICE_RUSH_LEVEL;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("ice rush at level valid",
+        env.action_masks[attack_offset + ATTACK_ICE_RUSH], 1);
+    ASSERT_INT_EQ("ice burst below level masked",
+        env.action_masks[attack_offset + ATTACK_ICE_BURST], 0);
+    ASSERT_FLOAT_NEAR("ice rush tier obs",
+        env.observations[58], 0.25f, 1e-6f);
+
+    agent->current_magic = ICE_BURST_LEVEL;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("ice burst at level valid",
+        env.action_masks[attack_offset + ATTACK_ICE_BURST], 1);
+    ASSERT_INT_EQ("ice blitz below level masked",
+        env.action_masks[attack_offset + ATTACK_ICE_BLITZ], 0);
+    ASSERT_FLOAT_NEAR("ice burst tier obs",
+        env.observations[58], 0.50f, 1e-6f);
+
+    agent->current_magic = ICE_BLITZ_LEVEL;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("ice blitz at level valid",
+        env.action_masks[attack_offset + ATTACK_ICE_BLITZ], 1);
+    ASSERT_INT_EQ("ice barrage below level masked",
+        env.action_masks[attack_offset + ATTACK_ICE_BARRAGE], 0);
+    ASSERT_FLOAT_NEAR("ice blitz tier obs",
+        env.observations[58], 0.75f, 1e-6f);
+
+    agent->current_magic = ICE_BARRAGE_LEVEL;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("ice barrage at level valid",
+        env.action_masks[attack_offset + ATTACK_ICE_BARRAGE], 1);
+    ASSERT_FLOAT_NEAR("ice barrage tier obs",
+        env.observations[58], 1.0f, 1e-6f);
+
+    agent->current_magic = BLOOD_BLITZ_LEVEL;
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+    ASSERT_INT_EQ("blood rush valid",
+        env.action_masks[attack_offset + ATTACK_BLOOD_RUSH], 1);
+    ASSERT_INT_EQ("blood burst valid",
+        env.action_masks[attack_offset + ATTACK_BLOOD_BURST], 1);
+    ASSERT_INT_EQ("blood blitz valid",
+        env.action_masks[attack_offset + ATTACK_BLOOD_BLITZ], 1);
+    ASSERT_INT_EQ("blood barrage below level masked",
+        env.action_masks[attack_offset + ATTACK_BLOOD_BARRAGE], 0);
+    ASSERT_FLOAT_NEAR("blood blitz tier obs",
+        env.observations[59], 0.75f, 1e-6f);
+
+    collision_map_free(cmap);
+}
+
+static void test_pvp_explicit_spell_profiles(void) {
+    printf("--- PvP explicit spell profiles ---\n");
+
+    PvpAncientSpellProfile ice_rush =
+        pvp_spell_profile_for_action(ATTACK_ICE_RUSH);
+    ASSERT_INT_EQ("ice rush required level", ice_rush.required_magic, ICE_RUSH_LEVEL);
+    ASSERT_INT_EQ("ice rush max hit", ice_rush.max_hit, 16);
+    ASSERT_INT_EQ("ice rush freeze ticks", ice_rush.freeze_ticks, 8);
+    ASSERT_INT_EQ("ice rush visual", ice_rush.visual_spell,
+        OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH);
+
+    PvpAncientSpellProfile ice_burst =
+        pvp_spell_profile_for_action(ATTACK_ICE_BURST);
+    ASSERT_INT_EQ("ice burst max hit", ice_burst.max_hit, ICE_BURST_MAX_HIT);
+    ASSERT_INT_EQ("ice burst freeze ticks", ice_burst.freeze_ticks, 16);
+
+    PvpAncientSpellProfile ice_blitz =
+        pvp_spell_profile_for_action(ATTACK_ICE_BLITZ);
+    ASSERT_INT_EQ("ice blitz max hit", ice_blitz.max_hit, ICE_BLITZ_MAX_HIT);
+    ASSERT_INT_EQ("ice blitz freeze ticks", ice_blitz.freeze_ticks, 24);
+
+    PvpAncientSpellProfile ice_barrage =
+        pvp_spell_profile_for_action(ATTACK_ICE_BARRAGE);
+    ASSERT_INT_EQ("ice barrage max hit", ice_barrage.max_hit, ICE_BARRAGE_MAX_HIT);
+    ASSERT_INT_EQ("ice barrage freeze ticks",
+        ice_barrage.freeze_ticks, BARRAGE_FREEZE_TICKS);
+
+    PvpAncientSpellProfile blood_rush =
+        pvp_spell_profile_for_action(ATTACK_BLOOD_RUSH);
+    ASSERT_INT_EQ("blood rush max hit", blood_rush.max_hit, BLOOD_RUSH_MAX_HIT);
+    ASSERT_INT_EQ("blood rush heal percent", blood_rush.heal_percent, 10);
+
+    PvpAncientSpellProfile blood_burst =
+        pvp_spell_profile_for_action(ATTACK_BLOOD_BURST);
+    ASSERT_INT_EQ("blood burst max hit", blood_burst.max_hit, BLOOD_BURST_MAX_HIT);
+    ASSERT_INT_EQ("blood burst heal percent", blood_burst.heal_percent, 15);
+
+    PvpAncientSpellProfile blood_blitz =
+        pvp_spell_profile_for_action(ATTACK_BLOOD_BLITZ);
+    ASSERT_INT_EQ("blood blitz max hit", blood_blitz.max_hit, BLOOD_BLITZ_MAX_HIT);
+    ASSERT_INT_EQ("blood blitz heal percent", blood_blitz.heal_percent, 20);
+
+    PvpAncientSpellProfile blood_barrage =
+        pvp_spell_profile_for_action(ATTACK_BLOOD_BARRAGE);
+    ASSERT_INT_EQ("blood barrage max hit",
+        blood_barrage.max_hit, BLOOD_BARRAGE_MAX_HIT);
+    ASSERT_INT_EQ("blood barrage heal percent", blood_barrage.heal_percent, 25);
+    ASSERT_INT_EQ("expected blood blitz base hit",
+        pvp_magic_base_hit_for_expected_damage(NULL, blood_blitz.visual_spell),
+        BLOOD_BLITZ_MAX_HIT);
+}
+
+static void test_pvp_drained_magic_obs_and_restore_mask(void) {
+    printf("--- PvP drained magic obs and restore mask ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    pvp_init(&env);
+    env.collision_map = cmap;
+    pvp_seed(&env, 73);
+    pvp_reset(&env);
+
+    Player* agent = &env.players[0];
+    agent->base_magic = 99;
+    agent->current_magic = ICE_BURST_LEVEL;
+    agent->restore_doses = 1;
+    agent->potion_timer = 0;
+
+    generate_slot_observations(&env, 0);
+    compute_action_masks(&env, 0);
+
+    int potion_offset = action_head_offset(HEAD_POTION);
+    ASSERT_TRUE("drained magic obs below full",
+        env.observations[38] < 1.0f);
+    ASSERT_FLOAT_NEAR("best ice spell tier is burst",
+        env.observations[58], 0.50f, 1e-6f);
+    ASSERT_INT_EQ("restore valid when magic drained",
+        env.action_masks[potion_offset + POTION_RESTORE], 1);
+
+    collision_map_free(cmap);
+}
+
 static void test_attack_masks_respect_frozen_collision_los(void) {
     printf("--- PvP attack masks respect frozen collision LOS ---\n");
 
@@ -1813,15 +2090,19 @@ static void test_attack_masks_respect_frozen_collision_los(void) {
     compute_action_masks(&env, 0);
 
     int combat_offset = action_head_offset(HEAD_COMBAT);
-    ASSERT_INT_EQ("frozen ice through LOS blocker masked",
-        env.action_masks[combat_offset + ATTACK_ICE], 0);
-    ASSERT_INT_EQ("frozen blood through LOS blocker masked",
-        env.action_masks[combat_offset + ATTACK_BLOOD], 0);
+    ASSERT_INT_EQ("frozen ice rush through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_ICE_RUSH], 0);
+    ASSERT_INT_EQ("frozen ice barrage through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_ICE_BARRAGE], 0);
+    ASSERT_INT_EQ("frozen blood rush through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_BLOOD_RUSH], 0);
+    ASSERT_INT_EQ("frozen blood barrage through LOS blocker masked",
+        env.action_masks[combat_offset + ATTACK_BLOOD_BARRAGE], 0);
 
     agent->frozen_ticks = 0;
     compute_action_masks(&env, 0);
-    ASSERT_INT_EQ("mobile ice attack-click remains valid",
-        env.action_masks[combat_offset + ATTACK_ICE], 1);
+    ASSERT_INT_EQ("mobile ice barrage attack-click remains valid",
+        env.action_masks[combat_offset + ATTACK_ICE_BARRAGE], 1);
 
     collision_map_free(cmap);
 }
@@ -2245,8 +2526,12 @@ static void test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors(void) {
     ensure_obs_norm_initialized();
 
     ASSERT_INT_EQ("slot obs size", SLOT_NUM_OBSERVATIONS, 2251);
-    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE, 171);
-    ASSERT_INT_EQ("ocean obs size", OCEAN_OBS_SIZE, 2422);
+    ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE,
+        PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM +
+        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM +
+        KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM);
+    ASSERT_INT_EQ("ocean obs size", OCEAN_OBS_SIZE,
+        SLOT_NUM_OBSERVATIONS + ACTION_MASK_SIZE);
 
     int expected_count = 0;
     for (int obs_idx = 0; obs_idx < SLOT_NUM_OBSERVATIONS; obs_idx++) {
@@ -2563,6 +2848,7 @@ int main(void) {
     test_shaping_uses_encounter_overhead_and_spec_prayer_style();
     test_scripted_legacy_movement_maps_to_head_move();
     test_duplicate_equip_clicks_apply_once();
+    test_food_brew_karambwan_can_resolve_same_tick();
     test_static_vec_train_mask_round_trip();
     test_pvp_state_snapshot_restores_logical_state();
     test_native_init_loads_collision_map_and_walkable_spawns();
@@ -2577,6 +2863,7 @@ int main(void) {
     test_attack_reach_short_circuits_mobile_without_collision_map();
     test_special_mask_allows_post_equip_weapon_spec_arm();
     test_inventory_observation_item_facts();
+    test_mage_inventory_observation_item_facts();
     test_item_observation_templates_match_direct_writers();
     test_inventory_affordance_projection_matches_copy_equip();
     test_pvp_log_emits_command_diagnostics();
@@ -2585,6 +2872,9 @@ int main(void) {
     test_collision_los_blocks_impenetrable_tiles();
     test_magic_attack_execution_respects_collision_los();
     test_pvp_barrage_uses_shared_five_tick_cadence();
+    test_pvp_explicit_spell_masks_by_current_magic();
+    test_pvp_explicit_spell_profiles();
+    test_pvp_drained_magic_obs_and_restore_mask();
     test_attack_masks_respect_frozen_collision_los();
     test_mobile_attack_click_chases_around_collision_los();
     test_target_click_staff_bash_chases_into_melee_range();

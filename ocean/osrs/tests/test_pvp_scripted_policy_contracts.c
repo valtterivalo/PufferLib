@@ -258,7 +258,7 @@ static int opponent_potion(const OsrsEnv* env) {
 
 static int opponent_casts_spell(const OsrsEnv* env) {
     int combat = opponent_combat(env);
-    return combat == ATTACK_ICE || combat == ATTACK_BLOOD;
+    return is_spell_attack_action(combat);
 }
 
 static void set_mage_staff_camp_state(
@@ -1125,6 +1125,30 @@ static void test_spec_range_gate_respects_weapon_range(void) {
         opp_loadout_can_hit_now(&env, self, target, LOADOUT_SPEC_RANGE, OPP_STYLE_RANGED), 1);
 }
 
+static void test_scripted_mage_family_downgrades_to_castable_spell(void) {
+    printf("--- Scripted mage family downgrades to castable spell ---\n");
+
+    Player self;
+    memset(&self, 0, sizeof(self));
+    int actions[NUM_ACTION_HEADS] = {0};
+
+    self.current_magic = ICE_BURST_LEVEL;
+    opp_emit_combat_attack(actions, &self, 0);
+    ASSERT_INT_EQ("ice family emits burst when drained",
+        actions[HEAD_COMBAT], ATTACK_ICE_BURST);
+
+    memset(actions, 0, sizeof(actions));
+    self.current_magic = ICE_RUSH_LEVEL - 1;
+    opp_emit_combat_attack(actions, &self, 0);
+    ASSERT_INT_EQ("ice family emits no spell below rush",
+        actions[HEAD_COMBAT], ATTACK_NONE);
+
+    memset(actions, 0, sizeof(actions));
+    opp_emit_combat_attack(actions, &self, 1);
+    ASSERT_INT_EQ("blood family still emits rush at same level",
+        actions[HEAD_COMBAT], ATTACK_BLOOD_RUSH);
+}
+
 int main(void) {
     test_adaptive_nh_name_maps_correctly();
     test_hard_policies_do_not_farcast_while_adjacent();
@@ -1167,6 +1191,7 @@ int main(void) {
     test_scripted_policies_do_not_emit_unreachable_ranged();
     test_veng_fighter_excludes_mage();
     test_spec_range_gate_respects_weapon_range();
+    test_scripted_mage_family_downgrades_to_castable_spell();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_failed == 0 ? 0 : 1;

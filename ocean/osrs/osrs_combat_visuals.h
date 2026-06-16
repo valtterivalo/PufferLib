@@ -78,12 +78,6 @@ typedef enum {
     OSRS_COMBAT_PROJECTILE_TRIDENT,
 } OsrsCombatProjectileVisual;
 
-typedef enum {
-    OSRS_COMBAT_VISUAL_SPELL_NONE = 0,
-    OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE = 1,
-    OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE = 2,
-} OsrsCombatVisualSpell;
-
 typedef struct {
     int32_t launch_spotanim_id;
     int32_t travel_spotanim_id;
@@ -536,7 +530,13 @@ static inline const OsrsCombatVisualRow* osrs_combat_visual_find_npc_id(
 
 static inline const char* osrs_combat_visual_spell_name(int spell_type) {
     switch (spell_type) {
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH: return "Ice Rush";
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_BURST: return "Ice Burst";
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_BLITZ: return "Ice Blitz";
         case OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE: return "Ice Barrage";
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_RUSH: return "Blood Rush";
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BURST: return "Blood Burst";
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BLITZ: return "Blood Blitz";
         case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE: return "Blood Barrage";
         default: return NULL;
     }

@@ -49,7 +49,7 @@
 #define BLOOD_BLITZ_LEVEL 80
 #define BLOOD_BARRAGE_LEVEL 92
 
-#define ICE_RUSH_MAX_HIT 18
+#define ICE_RUSH_MAX_HIT 16
 #define ICE_BURST_MAX_HIT 22
 #define ICE_BLITZ_MAX_HIT 26
 #define ICE_BARRAGE_MAX_HIT 30
@@ -66,13 +66,15 @@
 #define OSRS_INVENTORY_SIZE 28
 #define PVP_ACTION_SCHEMA_LOADOUT_V8 8
 #define PVP_ACTION_SCHEMA_SLOTCLICK_V9 9
-#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_V9
+#define PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11 11
+#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11
 #define PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10 10
-#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10
+#define PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11 11
+#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11
 
 #define PVP_EQUIP_CLICKS_PER_TICK 4
 #define EQUIP_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
-#define ATTACK_DIM 4
+#define ATTACK_DIM 19
 #define SPECIAL_DIM 3
 #define LEGACY_LOADOUT_DIM 9
 #define LEGACY_COMBAT_DIM 13
@@ -314,22 +316,57 @@ typedef enum {
  * Attacks and movement are mutually exclusive per tick.
  * OSRS melee requires cardinal adjacency; auto-walk handles positioning.
  */
-#define ATTACK_NONE      0
-#define ATTACK_ATK       1
-#define ATTACK_ICE       2
-#define ATTACK_BLOOD     3
-#define MOVE_ADJACENT    4
-#define MOVE_UNDER       5
-#define MOVE_DIAGONAL    6
-#define MOVE_FARCAST_2   7
-#define MOVE_FARCAST_3   8
-#define MOVE_FARCAST_4   9
-#define MOVE_FARCAST_5  10
-#define MOVE_FARCAST_6  11
-#define MOVE_FARCAST_7  12
+#define ATTACK_NONE           0
+#define ATTACK_ATK            1
+#define ATTACK_ICE_BARRAGE    2
+#define ATTACK_BLOOD_BARRAGE  3
+#define ATTACK_ICE ATTACK_ICE_BARRAGE
+#define ATTACK_BLOOD ATTACK_BLOOD_BARRAGE
+#define MOVE_ADJACENT         4
+#define MOVE_UNDER            5
+#define MOVE_DIAGONAL         6
+#define MOVE_FARCAST_2        7
+#define MOVE_FARCAST_3        8
+#define MOVE_FARCAST_4        9
+#define MOVE_FARCAST_5       10
+#define MOVE_FARCAST_6       11
+#define MOVE_FARCAST_7       12
+#define ATTACK_ICE_RUSH      13
+#define ATTACK_ICE_BURST     14
+#define ATTACK_ICE_BLITZ     15
+#define ATTACK_BLOOD_RUSH    16
+#define ATTACK_BLOOD_BURST   17
+#define ATTACK_BLOOD_BLITZ   18
 #define MOVE_NONE ATTACK_NONE
 
-static inline int is_attack_action(int v) { return v >= ATTACK_ATK && v <= ATTACK_BLOOD; }
+static inline int is_spell_attack_action(int v) {
+    return v == ATTACK_ICE_BARRAGE ||
+        v == ATTACK_ICE_BLITZ ||
+        v == ATTACK_ICE_BURST ||
+        v == ATTACK_ICE_RUSH ||
+        v == ATTACK_BLOOD_BARRAGE ||
+        v == ATTACK_BLOOD_BLITZ ||
+        v == ATTACK_BLOOD_BURST ||
+        v == ATTACK_BLOOD_RUSH;
+}
+
+static inline int is_ice_spell_attack_action(int v) {
+    return v == ATTACK_ICE_BARRAGE ||
+        v == ATTACK_ICE_BLITZ ||
+        v == ATTACK_ICE_BURST ||
+        v == ATTACK_ICE_RUSH;
+}
+
+static inline int is_blood_spell_attack_action(int v) {
+    return v == ATTACK_BLOOD_BARRAGE ||
+        v == ATTACK_BLOOD_BLITZ ||
+        v == ATTACK_BLOOD_BURST ||
+        v == ATTACK_BLOOD_RUSH;
+}
+
+static inline int is_attack_action(int v) {
+    return v == ATTACK_ATK || is_spell_attack_action(v);
+}
 static inline int is_move_action(int v) { return v >= MOVE_ADJACENT && v <= MOVE_FARCAST_7; }
 
 typedef enum {
@@ -445,6 +482,18 @@ typedef enum {
     OSRS_MAGIC_ATTACK_STANDARD_SPELL,
     OSRS_MAGIC_ATTACK_POWERED_STAFF,
 } OsrsMagicAttackKind;
+
+typedef enum {
+    OSRS_COMBAT_VISUAL_SPELL_NONE = 0,
+    OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE = 1,
+    OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE = 2,
+    OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH = 3,
+    OSRS_COMBAT_VISUAL_SPELL_ICE_BURST = 4,
+    OSRS_COMBAT_VISUAL_SPELL_ICE_BLITZ = 5,
+    OSRS_COMBAT_VISUAL_SPELL_BLOOD_RUSH = 6,
+    OSRS_COMBAT_VISUAL_SPELL_BLOOD_BURST = 7,
+    OSRS_COMBAT_VISUAL_SPELL_BLOOD_BLITZ = 8,
+} OsrsCombatVisualSpell;
 
 typedef enum {
     OSRS_TARGET_NONE = 0,

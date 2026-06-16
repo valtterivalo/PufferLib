@@ -120,10 +120,8 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
         env->pvp_runtime.walk_dest_x[0] = frame.walk_x;
         env->pvp_runtime.walk_dest_y[0] = frame.walk_y;
     } else if (frame.has_spell_target) {
-        if (frame.spell == ATTACK_ICE)
-            actions[HEAD_ATTACK] = ATTACK_ICE;
-        else if (frame.spell == ATTACK_BLOOD)
-            actions[HEAD_ATTACK] = ATTACK_BLOOD;
+        if (is_spell_attack_action(frame.spell))
+            actions[HEAD_ATTACK] = frame.spell;
     } else if (frame.has_attack_target) {
         uint8_t weapon = frame.queued_weapon;
         AttackStyle style = weapon < NUM_ITEMS
@@ -131,10 +129,10 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
             : ATTACK_STYLE_NONE;
         if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
                 agent->autocast_spell == ENCOUNTER_SPELL_BLOOD) {
-            actions[HEAD_ATTACK] = ATTACK_BLOOD;
+            actions[HEAD_ATTACK] = pvp_best_blood_spell_action(agent);
         } else if (style == ATTACK_STYLE_MAGIC && agent->autocast_enabled &&
                 agent->autocast_spell == ENCOUNTER_SPELL_ICE) {
-            actions[HEAD_ATTACK] = ATTACK_ICE;
+            actions[HEAD_ATTACK] = pvp_best_ice_spell_action(agent);
         } else {
             actions[HEAD_ATTACK] = ATTACK_ATK;
         }

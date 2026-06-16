@@ -1019,8 +1019,8 @@ static void generate_slot_observations_with_inventory_affordances(
 
     obs[57] = (agent_idx == env->pid_holder) ? 1.0f : 0.0f;
 
-    obs[58] = (!p->is_lunar_spellbook && p->current_magic >= 94) ? 1.0f : 0.0f;
-    obs[59] = (!p->is_lunar_spellbook && p->current_magic >= 92) ? 1.0f : 0.0f;
+    obs[58] = pvp_spell_tier_obs(p, PVP_ANCIENT_SPELL_ICE);
+    obs[59] = pvp_spell_tier_obs(p, PVP_ANCIENT_SPELL_BLOOD);
 
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
     int destination_distance = p->is_moving
@@ -1282,6 +1282,7 @@ static void compute_action_masks_with_inventory_affordances(
     }
 
     unsigned char* mask = env->action_masks + agent_idx * ACTION_MASK_SIZE;
+    memset(mask, 0, ACTION_MASK_SIZE);
     int offset = 0;
 
     for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
@@ -1312,8 +1313,22 @@ static void compute_action_masks_with_inventory_affordances(
         magic_reachable = pvp_magic_attack_reachable_for_player(
             cmap, p, t, can_move_now);
     }
-    mask[offset + ATTACK_ICE] = ice_castable && magic_reachable;
-    mask[offset + ATTACK_BLOOD] = blood_castable && magic_reachable;
+    mask[offset + ATTACK_ICE_RUSH] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_RUSH);
+    mask[offset + ATTACK_ICE_BURST] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BURST);
+    mask[offset + ATTACK_ICE_BLITZ] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BLITZ);
+    mask[offset + ATTACK_ICE_BARRAGE] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_ICE_BARRAGE);
+    mask[offset + ATTACK_BLOOD_RUSH] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_RUSH);
+    mask[offset + ATTACK_BLOOD_BURST] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BURST);
+    mask[offset + ATTACK_BLOOD_BLITZ] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BLITZ);
+    mask[offset + ATTACK_BLOOD_BARRAGE] =
+        attack_ready && magic_reachable && pvp_spell_action_can_cast(p, ATTACK_BLOOD_BARRAGE);
     offset += ATTACK_DIM;
 
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
