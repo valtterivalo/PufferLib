@@ -211,7 +211,7 @@ static void col_summon_thrall(ColosseumState* s, int target_slot) {
     fires a uniform 0..3 magic hit every 4 ticks routed through the player-credited
     NPC queue, and despawns when its lifetime expires. The Death-Charge window
     closes silently on expiry (no cooldown until a kill consumes it). */
-static void col_tick_thrall_and_death_charge(ColosseumState* s) {
+static void col_tick_thrall_and_death_charge(ColosseumState* s, ColosseumContext* ctx) {
     if (s->thrall_recast_cd > 0) s->thrall_recast_cd--;
     if (s->death_charge_cd > 0) s->death_charge_cd--;
     if (s->death_charge_window_left > 0) s->death_charge_window_left--;
@@ -238,6 +238,7 @@ static void col_tick_thrall_and_death_charge(ColosseumState* s) {
                 int dmg = encounter_rand_int(&s->rng_state, COLO_THRALL_MAX_HIT + 1);
                 col_queue_npc_pending_hit(s, s->thrall_target_slot, dmg, 2,
                     ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_NONE);
+                if (ctx) ctx->thrall_attacked_this_tick = 1;
             }
         }
     }
@@ -814,7 +815,7 @@ static void col_tick_player_ctx(
 
     /* the thrall auto-attacks + Death-Charge timers advance only during live
        gameplay (paused across wave/ready gaps, like the surge cooldown). */
-    if (can_attack) col_tick_thrall_and_death_charge(s);
+    if (can_attack) col_tick_thrall_and_death_charge(s, ctx);
 }
 
 static void col_tick_player(ColosseumState* s, const int* actions, int can_attack) {

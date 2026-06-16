@@ -118,6 +118,7 @@ COLOSSEUM_NPC_IDS = {
     12821: "Sol Heredit",
     12823: "Bee Swarm",
     12825: "Healing totem",
+    10880: "Arceuus greater ghost thrall",
 }
 
 COLOSSEUM_ATTACK_ANIM_IDS = {
@@ -134,6 +135,7 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12821: 10876,
     12823: 10823,
     12825: 10828,
+    10880: 11101,
 }
 
 COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
@@ -155,6 +157,7 @@ COLOSSEUM_DEATH_ANIM_IDS = {
     12821: 10888,
     12823: 0xFFFF,
     12825: 0xFFFF,
+    10880: 11595,
 }
 
 COLOSSEUM_PROJECTILE_ANIM_IDS = {

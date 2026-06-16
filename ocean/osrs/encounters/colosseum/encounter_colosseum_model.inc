@@ -422,6 +422,17 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
     reported to the renderer switches while COLO_MOD_RED_FLAG is active. */
 #define COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND 12813
 
+/** Arceuus greater ghost thrall (cache npc 10880). Render-only: the thrall is a
+    sim allied auto-attacker with no ColoNPC slot, so it borrows this def id for
+    its model + attack/death anims when surfaced as a render entity. */
+#define COLO_NPC_DEF_ID_THRALL 10880
+
+/** Render-only thrall identity: npc_slot one past the real slots (never collides
+    with a ColoNPC index) and a fixed nonzero instance id, so the renderer matches
+    the thrall entity frame-to-frame for animation + movement continuity. */
+#define COLO_NPC_SLOT_THRALL    COLO_MAX_NPCS
+#define COLO_THRALL_RENDER_INSTANCE_ID 0xC01055EEu
+
 /** A21+B9: hazard entities — attackable 1-HP modifier spawns. Excluded from
     wave-clear/reinforcement predicates, collision stamps, and the death hooks
     real NPCs trigger; they render and are clickable like any other NPC. */
@@ -1539,6 +1550,10 @@ typedef struct {
     int player_render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int npc_render_hit_count[COLO_MAX_NPCS];
     int npc_render_hit_damage[COLO_MAX_NPCS][ENCOUNTER_RENDER_HITS_MAX];
+    /* render-only: set on the tick the allied thrall queues its magic hit, so the
+       render-entity emitter plays its attack anim and the projectile emitter fires
+       a tracking magic bolt. Not serialized; the sim never reads it. */
+    int thrall_attacked_this_tick;
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
@@ -1550,6 +1565,7 @@ static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     memset(ctx->player_render_hit_damage, 0, sizeof(ctx->player_render_hit_damage));
     memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));
     memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
+    ctx->thrall_attacked_this_tick = 0;
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single

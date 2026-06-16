@@ -539,6 +539,53 @@ static void col_emit_player_attack_projectiles(
     }
 }
 
+/** Render-only: the allied thrall's magic bolt, lobbed from its parked render
+    tile to the NPC it hit this tick. Mirrors the NPC magic projectile path
+    (Water Surge spotanims 1907 travel / 1908 impact, arc_height forced positive
+    so magic lobs up) but keeps the source fixed at the thrall tile and tracks
+    the target so it lands. The damage is cosmetic; the sim already queued it. */
+static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) {
+    int slot = s->thrall_target_slot;
+    if (!col_npc_is_thrall_target(s, slot))
+        return;
+    ColoNPC* target = &s->npcs[slot];
+    int target_size = col_npc_effective_size(target);
+
+    int src_x, src_y;
+    col_thrall_render_tile(s, &src_x, &src_y);
+
+    int dist = encounter_projectile_distance(
+        src_x, src_y, 1, target->x, target->y, target_size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming timing =
+        col_player_projectile_timing(ATTACK_STYLE_MAGIC, 0, dist);
+
+    encounter_require_projectile_slots(ov, 1);
+    OsrsProjectileEventSpec spec = {
+        .src_x = src_x,
+        .src_y = src_y,
+        .dst_x = target->x + target_size / 2,
+        .dst_y = target->y + target_size / 2,
+        .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
+        .damage = 0,
+        .duration_ticks = timing.visual_duration_ticks * 30,
+        .start_h = 64,
+        .end_h = (int)(target_size * 0.5f * 128),
+        .curve = 16,
+        .arc_height = 1.0f,
+        .src_size = 1,
+        .dst_size = target_size,
+        .model_id = 0,
+        .anim_id = -1,
+        .travel_gfx_id = 1907,
+        .launch_gfx_id = 0,
+        .impact_gfx_id = 1908,
+        .start_delay = timing.visual_start_delay_ticks * 30,
+    };
+    int idx = osrs_emit_projectile_with_spec(ov, &spec, 1);
+    encounter_set_projectile_target_npc_slot(ov, idx, slot);
+}
+
 static void col_render_post_tick_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -598,6 +645,8 @@ static void col_render_post_tick_ctx(
             ov, &ctx->javelin_skyfall_landing[i]);
     }
     col_emit_player_attack_projectiles(s, ov);
+    if (ctx->thrall_attacked_this_tick)
+        col_emit_thrall_projectile(s, ov);
 }
 
 /* ----- human mode --------------------------------------------------------- */

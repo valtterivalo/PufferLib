@@ -197,6 +197,29 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
+/** Render-only: a deterministic player-adjacent free tile for the allied thrall.
+    The sim never positions the thrall (its damage is not range-gated), so the
+    viewer parks it on the first walkable tile in the warbander adjacency order
+    (cardinals before diagonals), falling back to the player's own tile when the
+    player is boxed in. Both the render-entity and projectile emitters call this
+    so the model and its bolt share one source tile. */
+static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
+    static const int ADJ[8][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
+    for (int a = 0; a < 8; a++) {
+        int x = s->player.x + ADJ[a][0];
+        int y = s->player.y + ADJ[a][1];
+        if (col_player_walkable((void*)s, x, y)) {
+            *out_x = x;
+            *out_y = y;
+            return;
+        }
+    }
+    *out_x = s->player.x;
+    *out_y = s->player.y;
+}
+
 /** populate render entities (player + active NPCs). */
 static void col_fill_render_entities_ctx(
     EncounterState* state,
@@ -285,6 +308,34 @@ static void col_fill_render_entities_ctx(
             for (int orb = 0; orb < 3; orb++)
                 re->debug_manticore_orb_style[orb] = mc->orb_style[orb];
         }
+    }
+
+    if (s->thrall_active && n < max_entities) {
+        int tx, ty;
+        col_thrall_render_tile(s, &tx, &ty);
+        RenderEntity* re = &out[n++];
+        OsrsNpcRenderEntitySpec thrall_spec = {
+            .npc_def_id = COLO_NPC_DEF_ID_THRALL,
+            .npc_slot = COLO_NPC_SLOT_THRALL,
+            .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
+            .npc_visible = 1,
+            .npc_size = 1,
+            .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
+            .x = tx,
+            .y = ty,
+            .dest_x = tx,
+            .dest_y = ty,
+            .current_hitpoints = 1,
+            .base_hitpoints = 1,
+            .attack_style_this_tick = ATTACK_STYLE_NONE,
+            .hit_landed_this_tick = 0,
+            .hit_damage = 0,
+            .hit_was_successful = 0,
+            .hit_spell_type = ENCOUNTER_SPELL_NONE,
+            .attack_target_entity_idx = 0,
+        };
+        osrs_render_entity_from_npc_spec(&thrall_spec, re);
+        re->debug_npc_type_name = "Arceuus Thrall";
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);
