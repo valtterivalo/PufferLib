@@ -167,7 +167,7 @@ static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context
     return NULL;
 }
 
-static void col_prepare_render_player(const ColosseumState* s, Player* out) {
+static void col_prepare_render_player(const ColosseumState* s, int spec_fired_kind, Player* out) {
     *out = s->player;
     const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     encounter_effective_loadout_for_equipment(loadouts[s->weapon_set], out->equipped);
@@ -176,6 +176,16 @@ static void col_prepare_render_player(const ColosseumState* s, Player* out) {
                  : GEAR_MELEE;
     out->current_gear = gear;
     out->visible_gear = gear;
+    /* render-only: a fired spec attack runs off the melee gear with the spec
+       weapon swapped in, so the spec weapon's attack anim resolves (render keys
+       the player anim off the equipped weapon + used_special_this_tick). */
+    if (spec_fired_kind > 0 && spec_fired_kind <= COLO_NUM_SPEC_WEAPONS) {
+        encounter_effective_loadout_for_equipment(loadouts[COLO_GEAR_MELEE], out->equipped);
+        out->equipped[GEAR_SLOT_WEAPON] =
+            COLO_SPEC_WEAPONS[s->active_loadout_profile][spec_fired_kind - 1];
+        out->current_gear = GEAR_MELEE;
+        out->visible_gear = GEAR_MELEE;
+    }
 }
 
 static int col_npc_render_attack_anim_id(
@@ -197,16 +207,51 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
-/** Render-only: a deterministic player-adjacent free tile for the allied thrall.
-    The sim never positions the thrall (its damage is not range-gated), so the
-    viewer parks it on the first walkable tile in the warbander adjacency order
-    (cardinals before diagonals), falling back to the player's own tile when the
-    player is boxed in. Both the render-entity and projectile emitters call this
-    so the model and its bolt share one source tile. */
+/** Render-only: a deterministic free tile adjacent to the thrall's current sim
+    target NPC (s->thrall_target_slot), so the viewer shows it standing to attack
+    the enemy it auto-attacks rather than glued to the player. The sim never
+    positions the thrall (its damage is not range-gated), so the viewer scans the
+    ring around the target footprint and picks the walkable tile nearest the
+    player (the near side a melee/ranged actor would stand on). Falls back to the
+    target's own tile, then to the player-adjacent scan, then the player tile when
+    the thrall has no live target. Both the render-entity and projectile emitters
+    call this so the model and its bolt share one source tile. */
 static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
     static const int ADJ[8][2] = {
         {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
+    int slot = s->thrall_target_slot;
+    if (col_npc_is_thrall_target(s, slot)) {
+        const ColoNPC* target = &s->npcs[slot];
+        int size = col_npc_effective_size(target);
+        int best_x = -1, best_y = -1, best_dist = 0;
+        for (int dx = -1; dx <= size; dx++) {
+            for (int dy = -1; dy <= size; dy++) {
+                int on_footprint = dx >= 0 && dx < size && dy >= 0 && dy < size;
+                if (on_footprint) continue;
+                int x = target->x + dx;
+                int y = target->y + dy;
+                if (!col_player_walkable((void*)s, x, y)) continue;
+                int ddx = x - s->player.x;
+                int ddy = y - s->player.y;
+                int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
+                    ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
+                if (best_x < 0 || dist < best_dist) {
+                    best_x = x;
+                    best_y = y;
+                    best_dist = dist;
+                }
+            }
+        }
+        if (best_x >= 0) {
+            *out_x = best_x;
+            *out_y = best_y;
+            return;
+        }
+        *out_x = target->x;
+        *out_y = target->y;
+        return;
+    }
     for (int a = 0; a < 8; a++) {
         int x = s->player.x + ADJ[a][0];
         int y = s->player.y + ADJ[a][1];
@@ -239,7 +284,7 @@ static void col_fill_render_entities_ctx(
     int n = 0;
     if (n < max_entities) {
         Player render_player;
-        col_prepare_render_player(s, &render_player);
+        col_prepare_render_player(s, ctx->player_spec_fired_kind, &render_player);
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_player_entity(&render_player, re);
         if (ctx->player_render_hit_count < 0 ||
@@ -336,6 +381,32 @@ static void col_fill_render_entities_ctx(
         };
         osrs_render_entity_from_npc_spec(&thrall_spec, re);
         re->debug_npc_type_name = "Arceuus Thrall";
+    }
+
+    if (s->solarflare.active && n < max_entities) {
+        RenderEntity* re = &out[n++];
+        OsrsNpcRenderEntitySpec orb_spec = {
+            .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
+            .npc_slot = COLO_NPC_SLOT_SOLARFLARE,
+            .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID,
+            .npc_visible = 1,
+            .npc_size = 1,
+            .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
+            .x = s->solarflare.x,
+            .y = s->solarflare.y,
+            .dest_x = s->solarflare.x,
+            .dest_y = s->solarflare.y,
+            .current_hitpoints = 1,
+            .base_hitpoints = 1,
+            .attack_style_this_tick = ATTACK_STYLE_NONE,
+            .hit_landed_this_tick = 0,
+            .hit_damage = 0,
+            .hit_was_successful = 0,
+            .hit_spell_type = ENCOUNTER_SPELL_NONE,
+            .attack_target_entity_idx = 0,
+        };
+        osrs_render_entity_from_npc_spec(&orb_spec, re);
+        re->debug_npc_type_name = "Solar flare";
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

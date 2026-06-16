@@ -808,7 +808,13 @@ static void col_tick_player_ctx(
             if (encounter_player_can_attack(s->player.x, s->player.y,
                     npc->x, npc->y, col_npc_effective_size(npc),
                     player_range, &los_query)) {
+                /* render-only: capture the armed spec kind before the attack
+                   consumes it, so the player render swaps to the spec weapon. */
+                int armed_kind = (!col_type_is_hazard_entity(npc->type) &&
+                                  s->spec_armed_kind > 0) ? s->spec_armed_kind : 0;
                 col_player_attack_target(s, slot);
+                if (ctx && armed_kind > 0 && s->player.used_special_this_tick)
+                    ctx->player_spec_fired_kind = armed_kind;
             }
         }
     }

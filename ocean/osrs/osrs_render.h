@@ -6042,6 +6042,16 @@ static void render_draw_inferno_top_hud(OsrsEnv* env, int display_tick) {
         display_tick, s->wave + 1, INF_NUM_WAVES), 10, 12, 16, COLOR_TEXT);
 }
 
+static void render_draw_colosseum_top_hud(RenderClient* rc, OsrsEnv* env) {
+    ColosseumState* s = render_colosseum_state_from_env(env);
+    if (!s) return;
+    const char* wave_txt = s->wave == COLO_WAVE_BOSS
+        ? TextFormat("Wave: %d / %d  (Sol Heredit)", s->wave + 1, COLO_NUM_WAVES)
+        : TextFormat("Wave: %d / %d", s->wave + 1, COLO_NUM_WAVES);
+    int wave_w = MeasureText(wave_txt, 16);
+    DrawText(wave_txt, (RENDER_GRID_W - wave_w) / 2, 12, 16, COLOR_TEXT);
+}
+
 static const int COLOSSEUM_MODIFIER_ICON_SPRITE_IDS[COLO_NUM_REAL_MODIFIERS][3] = {
     [COLO_MOD_BEES] = {5544, 5559, 5574},
     [COLO_MOD_BLASPHEMY] = {5538, 5553, 5568},
@@ -6187,6 +6197,7 @@ static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
     render_draw_default_top_hud(rc, display_tick);
     if (env->encounter_def &&
             strcmp(((const EncounterDef*)env->encounter_def)->name, "colosseum") == 0) {
+        render_draw_colosseum_top_hud(rc, env);
         render_draw_colosseum_modifier_hud(rc);
     }
 }
@@ -6376,6 +6387,20 @@ void pvp_render(OsrsEnv* env) {
         rc->gui.pending_spell_highlight = -1;
         if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
             rc->gui.pending_spell_highlight = rc->human_input.selected_spell_gui_idx;
+        }
+        /* render-only: feed the colosseum kit's exact 28-slot wiki inventory so the
+           panel reads 1:1; other encounters leave the derived grid (count 0). */
+        rc->gui.display_inventory_count = 0;
+        {
+            ColosseumState* colo_inv = render_colosseum_state_from_env(env);
+            if (colo_inv && colo_inv->active_loadout_profile >= 0 &&
+                    colo_inv->active_loadout_profile < COLO_NUM_LOADOUT_PROFILES) {
+                const int* kit = COLO_INVENTORY_DISPLAY[colo_inv->active_loadout_profile];
+                for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS &&
+                        i < INV_GRID_SLOTS; i++)
+                    rc->gui.display_inventory_osrs_ids[i] = kit[i];
+                rc->gui.display_inventory_count = COLO_INVENTORY_DISPLAY_SLOTS;
+            }
         }
         if (gui_player) gui_draw(&rc->gui, gui_player);
 

@@ -158,7 +158,7 @@ static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
 enum {
     COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID = 2674,
     COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID = 2675,
-    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2677,
+    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2676,
     COLO_JAVELIN_SKYFALL_SKY_HEIGHT = 1536,
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
@@ -539,11 +539,12 @@ static void col_emit_player_attack_projectiles(
     }
 }
 
-/** Render-only: the allied thrall's magic bolt, lobbed from its parked render
-    tile to the NPC it hit this tick. Mirrors the NPC magic projectile path
-    (Water Surge spotanims 1907 travel / 1908 impact, arc_height forced positive
-    so magic lobs up) but keeps the source fixed at the thrall tile and tracks
-    the target so it lands. The damage is cosmetic; the sim already queued it. */
+/** Render-only: the allied thrall's magic bolt, lobbed from its render tile to
+    the NPC it hit this tick. Mirrors the NPC magic projectile path (thrall magic
+    spotanims THRALL_MAGIC_TRAVEL 1907 / THRALL_MAGIC_IMPACT 1908, arc_height
+    forced positive so magic lobs up) but keeps the source fixed at the thrall
+    tile and tracks the target so it lands. The damage is cosmetic; the sim
+    already queued it. */
 static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) {
     int slot = s->thrall_target_slot;
     if (!col_npc_is_thrall_target(s, slot))

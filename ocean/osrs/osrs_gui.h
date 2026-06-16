@@ -448,6 +448,14 @@ typedef struct {
     InvSlot inv_grid[INV_GRID_SLOTS];
     int inv_grid_dirty;   /* 1 = needs full rebuild from player state */
 
+    /* render-only inventory override: when display_inventory_count > 0, the panel
+       renders this fixed list of OSRS item ids instead of the derived grid. The
+       colosseum render bridge sets it to the wiki kit's exact 28-slot inventory so
+       the panel matches the reference 1:1; 0 = use the derived grid. Never read by
+       the sim. */
+    int display_inventory_osrs_ids[INV_GRID_SLOTS];
+    int display_inventory_count;
+
     /* previous player state for incremental inventory updates.
        compared each tick to detect gear switches and consumable use. */
     uint8_t inv_prev_equipped[NUM_GEAR_SLOTS];
@@ -992,6 +1000,27 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
+        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
+        if (osrs_asset_exists(path)) {
+            int idx = gs->item_sprite_count;
+            gs->item_sprite_ids[idx] = cid;
+            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
+            gs->item_sprite_count++;
+        }
+    }
+
+    /* colosseum render-only display-inventory ids that are NOT in ITEM_DATABASE
+       nor the consumable list above (Venator bow, Abyssal tentacle, divine pots,
+       sanfew, Guthix rest, surge, Divine rune pouch). The export pipeline writes
+       their PNGs; load any that exist so the 1:1 kit panel can resolve them. */
+    static const int colosseum_display_ids[] = {
+        27610, 12006, 27281,             /* Venator bow, Abyssal tentacle, Divine rune pouch */
+        23685, 23733,                    /* Divine super combat(4), Divine ranging(4) */
+        10925, 4417, 30875,              /* Sanfew serum(4), Guthix rest(4), Surge potion(4) */
+    };
+    for (int i = 0; i < (int)(sizeof(colosseum_display_ids)/sizeof(colosseum_display_ids[0])); i++) {
+        if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
+        int cid = colosseum_display_ids[i];
         const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
         if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
@@ -2762,7 +2791,34 @@ static void gui_draw_inventory_manual(GuiState* gs) {
     gui_draw_inventory_drag(gs);
 }
 
+/** Render-only: load the panel from a fixed per-kit OSRS-id list (the colosseum
+    wiki inventory) instead of deriving it from sets + dose counts. Every entry is
+    drawn as an equipment-style display slot keyed by osrs_id; no sim state reads
+    this. */
+static void gui_load_display_inventory(GuiState* gs) {
+    memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
+    int count = gs->display_inventory_count;
+    if (count > INV_GRID_SLOTS) count = INV_GRID_SLOTS;
+    for (int i = 0; i < count; i++) {
+        int osrs_id = gs->display_inventory_osrs_ids[i];
+        if (osrs_id <= 0) continue;
+        gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
+        gs->inv_grid[i].item_db_idx = ITEM_NONE;
+        gs->inv_grid[i].osrs_id = osrs_id;
+    }
+}
+
 static void gui_draw_inventory(GuiState* gs, Player* p) {
+    if (gs->display_inventory_count > 0) {
+        gui_load_display_inventory(gs);
+        gs->inv_grid_dirty = 0;
+        if (gui_draw_inventory_decoded(gs)) {
+            gui_draw_inventory_drag(gs);
+            return;
+        }
+        gui_draw_inventory_manual(gs);
+        return;
+    }
     if (gs->inv_grid_dirty) {
         gui_populate_inventory(gs, p);
         gs->inv_grid_dirty = 0;

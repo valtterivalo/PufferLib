@@ -90,6 +90,22 @@ DRAGON_BOLT_MODEL_ID = 0xD0001
 
 SPOTANIM_MODELS = {3080, 3135, 6375, 6381, 14215}
 COLOSSEUM_WATER_SURGE_MODELS = {3116, 34617, 34618}
+
+# Render-only inventory-sprite ids the viewer's 1:1 kit panel displays but the sim
+# has no gear/dose concept of (so they are not in the loadout symbol block). The
+# divine potions also have distinct vial sprites vs the base super-combat/ranging
+# potions, so their real ids must be exported to render correctly. These get an
+# inventory sprite only (no worn model, no header row).
+COLOSSEUM_DISPLAY_ONLY_ITEM_IDS = [
+    27610,  # Venator bow
+    12006,  # Abyssal tentacle
+    27281,  # Divine rune pouch
+    23685,  # Divine super combat potion(4)
+    23733,  # Divine ranging potion(4)
+    10925,  # Sanfew serum(4)
+    4417,   # Guthix rest(4)
+    30875,  # Surge potion(4)
+]
 ENCOUNTER_MODELS = {
     14407,
     14408,
@@ -1073,6 +1089,10 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
             + ", ".join(missing_symbols)
         )
     colosseum_ids = [generated_items[symbol].item_id for symbol in colosseum_symbols]
+    display_only_ids = [
+        item_id for item_id in COLOSSEUM_DISPLAY_ONLY_ITEM_IDS
+        if item_id not in colosseum_ids
+    ]
 
     existing_rows = parse_existing_header(item_header_path)
     existing_by_id = {row.item_id: row for row in existing_rows}
@@ -1080,6 +1100,10 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
 
     reader = ModernCacheReader(args.modern_cache)
     cache_items = load_cache_items(reader, ordered_ids)
+    # display-only sprites: load their cache defs for the sprite TSV but keep them
+    # out of the gear/header/worn-model paths.
+    display_cache_items = load_cache_items(reader, display_only_ids)
+    cache_items.update(display_cache_items)
     body_models = build_body_models(reader)
     item_models, wield_by_id, raw_model_ids = build_item_models(reader, ordered_ids, cache_items)
     raw_model_ids |= SPOTANIM_MODELS | COLOSSEUM_WATER_SURGE_MODELS | ENCOUNTER_MODELS
@@ -1100,16 +1124,17 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
         texture_tsv = tmp_path / "textures.tsv"
         write_item_sprite_tsv(item_tsv, cache_items)
         write_texture_tsv(texture_tsv, reader)
+        sprite_export_ids = sorted(set(colosseum_ids) | set(display_only_ids))
         run_sprite_exporter(
             args.modern_cache,
             sprite_dir,
             item_tsv,
             texture_tsv,
-            sorted(set(colosseum_ids)),
+            sprite_export_ids,
             repo_root / "ocean" / "osrs" / "tools" / "ExportModernItemSprites.java",
         )
 
-    sprite_paths = [sprite_dir / f"{item_id}.png" for item_id in sorted(set(colosseum_ids))]
+    sprite_paths = [sprite_dir / f"{item_id}.png" for item_id in sprite_export_ids]
     verify_pngs(sprite_paths)
     modifier_sprite_paths = export_modifier_sprites(args.modern_cache, output_dir)
 

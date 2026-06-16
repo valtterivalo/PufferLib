@@ -433,6 +433,15 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
 #define COLO_NPC_SLOT_THRALL    COLO_MAX_NPCS
 #define COLO_THRALL_RENDER_INSTANCE_ID 0xC01055EEu
 
+/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render-only: the
+    sim models the orb as a slotless ColoSolarflareOrb hazard, so the viewer
+    surfaces it as a render entity on a synthetic slot one past the thrall (never
+    collides with a ColoNPC index or the thrall slot). */
+#define COLO_NPC_DEF_ID_SOLARFLARE 12826
+#define COLO_SOLARFLARE_IDLE_ANIM_ID 10817
+#define COLO_NPC_SLOT_SOLARFLARE    (COLO_MAX_NPCS + 1)
+#define COLO_SOLARFLARE_RENDER_INSTANCE_ID 0xC0105F1Au
+
 /** A21+B9: hazard entities — attackable 1-HP modifier spawns. Excluded from
     wave-clear/reinforcement predicates, collision stamps, and the death hooks
     real NPCs trigger; they render and are clickable like any other NPC. */
@@ -1438,6 +1447,40 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
     return COLO_LOADOUT_PROFILES[profile];
 }
 
+#define COLO_INVENTORY_DISPLAY_SLOTS 28
+
+/** Render-only: the exact 28-slot wiki inventory per kit, as OSRS item ids, so the
+    viewer's inventory panel matches the reference image 1:1. The sim never models a
+    literal inventory (it derives one from weapon SETS + spec weapons + dose counts),
+    so this static start-state list is the source of truth for the panel only.
+    Doses use the GUI's 4-dose sprite ids; the rest are raw wiki item ids. The
+    speedrun kit also carries display-only items the sim has no concept of (Venator
+    bow, Confliction gauntlets switch, surge potion, divine pots, sanfew, etc.).
+    Ground truth: .colosseum-notes/research/wiki-budget-and-high-efficiency-setups.md. */
+static const int COLO_INVENTORY_DISPLAY[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTORY_DISPLAY_SLOTS] = {
+    [COLO_LOADOUT_PROFILE_BEGINNER] = {
+        27610, 26219, 25865, 19547,   /* Venator bow, Fang, Bowfa, Anguish */
+        11806, 13652, 23975, 23971,   /* SGS, Dragon claws, Crystal body, Crystal helm */
+        6685, 6685, 3024, 3024,       /* Sara brew(4) x2, Super restore(4) x2 */
+        6685, 6685, 3024, 3024,
+        6685, 6685, 3024, 3024,
+        12695, 2444, 3024, 3024,      /* Super combat(4), Ranging(4), Super restore(4) x2 */
+        23685, 23733, 12006, 27281,   /* Divine super combat(4), Divine ranging(4),
+                                         Abyssal tentacle, Divine rune pouch */
+    },
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
+        20997, 27238, 27235, 28947,   /* Twisted bow, Masori body(f), mask(f), Dizana's quiver */
+        26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
+        27275, 31106, 27610, 24780,   /* Tumeken's shadow, Confliction gauntlets, Venator bow,
+                                         Amulet of blood fury */
+        30875, 12002, 22325, 21003,   /* Surge potion(4), Occult necklace, Scythe of vitur, Elder maul */
+        23685, 23733, 6685, 4417,     /* Divine super combat(4), Divine ranging(4), Sara brew(4),
+                                         Guthix rest(4) */
+        10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */
+        10925, 10925, 10925, 27281,   /* ...continued, Divine rune pouch */
+    },
+};
+
 /** Arceuus thrall (one allied auto-attacker, full fidelity): greater-thrall max
     hit 3 both kits, uniform 0..3 (accuracy ignored), 4-tick cadence, 17-tick
     recast gate. Damage routes through col_queue_npc_pending_hit (source -1) so
@@ -1554,6 +1597,11 @@ typedef struct {
        render-entity emitter plays its attack anim and the projectile emitter fires
        a tracking magic bolt. Not serialized; the sim never reads it. */
     int thrall_attacked_this_tick;
+    /* render-only: the spec-weapon kind (1..COLO_NUM_SPEC_WEAPONS) fired this tick,
+       captured before the sim zeroes s->spec_armed_kind. Lets the player render
+       swap to the spec weapon (so its anim + self-graphic show) without putting
+       the fired kind in the serialized state. 0 = no spec this tick. */
+    int player_spec_fired_kind;
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
@@ -1566,6 +1614,7 @@ static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));
     memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
     ctx->thrall_attacked_this_tick = 0;
+    ctx->player_spec_fired_kind = 0;
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single
