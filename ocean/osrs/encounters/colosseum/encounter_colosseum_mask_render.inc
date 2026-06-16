@@ -358,29 +358,34 @@ static void col_fill_render_entities_ctx(
     if (s->thrall_active && n < max_entities) {
         int tx, ty;
         col_thrall_render_tile(s, &tx, &ty);
-        RenderEntity* re = &out[n++];
-        OsrsNpcRenderEntitySpec thrall_spec = {
-            .npc_def_id = COLO_NPC_DEF_ID_THRALL,
-            .npc_slot = COLO_NPC_SLOT_THRALL,
-            .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
-            .npc_visible = 1,
-            .npc_size = 1,
-            .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
-            .x = tx,
-            .y = ty,
-            .dest_x = tx,
-            .dest_y = ty,
-            .current_hitpoints = 1,
-            .base_hitpoints = 1,
-            .attack_style_this_tick = ATTACK_STYLE_NONE,
-            .hit_landed_this_tick = 0,
-            .hit_damage = 0,
-            .hit_was_successful = 0,
-            .hit_spell_type = ENCOUNTER_SPELL_NONE,
-            .attack_target_entity_idx = 0,
-        };
-        osrs_render_entity_from_npc_spec(&thrall_spec, re);
-        re->debug_npc_type_name = "Arceuus Thrall";
+        /* hide the thrall when the player stands on its render tile: the tile
+           picker falls back to the player's own tile when no walkable neighbour
+           exists, and drawing the thrall under the player looks wrong. */
+        if (tx != s->player.x || ty != s->player.y) {
+            RenderEntity* re = &out[n++];
+            OsrsNpcRenderEntitySpec thrall_spec = {
+                .npc_def_id = COLO_NPC_DEF_ID_THRALL,
+                .npc_slot = COLO_NPC_SLOT_THRALL,
+                .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
+                .npc_visible = 1,
+                .npc_size = 1,
+                .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
+                .x = tx,
+                .y = ty,
+                .dest_x = tx,
+                .dest_y = ty,
+                .current_hitpoints = 1,
+                .base_hitpoints = 1,
+                .attack_style_this_tick = ATTACK_STYLE_NONE,
+                .hit_landed_this_tick = 0,
+                .hit_damage = 0,
+                .hit_was_successful = 0,
+                .hit_spell_type = ENCOUNTER_SPELL_NONE,
+                .attack_target_entity_idx = 0,
+            };
+            osrs_render_entity_from_npc_spec(&thrall_spec, re);
+            re->debug_npc_type_name = "Arceuus Thrall";
+        }
     }
 
     if (s->solarflare.active && n < max_entities) {

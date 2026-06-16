@@ -288,7 +288,7 @@ static void col_emit_manticore_orb_telegraphs(
             npc->y,
             col_manticore_orb_model_id(style),
             col_manticore_orb_anim_id(style),
-            2.35f + (float)stack_index * 0.42f,
+            2.35f + (float)stack_index * 0.62f,
             0.0f,
             0.72f + 0.05f * (float)(npc_size - 1));
     }

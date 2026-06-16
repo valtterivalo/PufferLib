@@ -4801,6 +4801,49 @@ static void test_npc_melee_instant_unprayable(void) {
         s.log.offpray_damage_by_type[COLO_JAGUAR_WARRIOR] > offpray_before);
 }
 
+/* ---- the viewer inventory panel must track live sim state, not freeze on the
+   wiki start kit. Guards the regression where the display_inventory override
+   bypassed the live path: drinking a dose must change the vial sprite / empty the
+   slot, and switching weapon set must move the worn weapon out of the grid. */
+static void test_colosseum_live_inventory_display(void) {
+    printf("test_colosseum_live_inventory_display\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 7);
+
+    int kit[COLO_INVENTORY_DISPLAY_SLOTS];
+    col_build_live_inventory_display(&s, kit);
+    /* speedrun start: scythe (22325) is the worn melee weapon -> its slot 14 is
+       empty; the twisted bow switch (20997) stays; potion vials read full. */
+    CHECK("worn scythe removed from grid at start", kit[14] == 0);
+    CHECK("tbow switch stays in grid", kit[0] == 20997);
+    CHECK("brew vial full at start", kit[18] == 6685);
+    CHECK("divine combat vial full at start", kit[16] == 23685);
+    CHECK("surge vial full at start", kit[12] == 30875);
+
+    /* drink one dose from each tracked pool -> the vial sprite drops to 3-dose. */
+    s.player.brew_doses -= 1;
+    s.player.combat_potion_doses -= 1;
+    s.surge_doses -= 1;
+    col_build_live_inventory_display(&s, kit);
+    CHECK("brew vial shows 3-dose after a drink", kit[18] == 6687);
+    CHECK("divine combat vial shows 3-dose after a drink", kit[16] == 23688);
+    CHECK("surge vial shows 3-dose after a drink", kit[12] == 30878);
+
+    /* deplete a pool fully -> the slot empties. */
+    s.player.brew_doses = 0;
+    col_build_live_inventory_display(&s, kit);
+    CHECK("emptied brew slot clears", kit[18] == 0);
+
+    /* switch the worn weapon to the ranged set -> tbow leaves the grid and the
+       scythe returns to its home slot. */
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s.active_loadout_profile);
+    s.player.equipped[GEAR_SLOT_WEAPON] = loadouts[COLO_GEAR_RANGED][GEAR_SLOT_WEAPON];
+    col_build_live_inventory_display(&s, kit);
+    CHECK("worn tbow removed after switch to ranged", kit[0] == 0);
+    CHECK("unworn scythe returns to grid after switch", kit[14] == 22325);
+}
+
 int main(void) {
     test_fuzz_obs_mask();
     test_osrs_los_query_contracts();
@@ -4864,6 +4907,7 @@ int main(void) {
     test_loadout_sanfew_and_serp_helm();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();
+    test_colosseum_live_inventory_display();
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
     test_combat_fidelity_contract_sizes();

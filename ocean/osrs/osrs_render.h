@@ -4909,19 +4909,29 @@ static void render_draw_3d_world(RenderClient* rc) {
                 -(anchor_y + 1.0f) + 0.5f
             };
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
-            float spin_yaw = 0.0f;
+            float spin = 0.0f;
             if (floating_bob_spin) {
                 float bob_phase = floating_anim_t * (2.0f * PI / 100.0f)
                     + (float)i * 1.7f;
                 pos.y += 0.08f * sinf(bob_phase);
-                spin_yaw = floating_anim_t * (2.0f * PI / 150.0f)
+                spin = floating_anim_t * (2.0f * PI / 150.0f)
                     + (float)i * 0.9f;
+            }
+            /* manticore orbs spin on the axis the real game uses per style: the
+               melee orb (model 51213) pitches toward its front (X), the magic orb
+               (51215) yaws like a spinning top (Y), the ranged orb (51221) rolls
+               (Z). Any other floating model keeps the default yaw. */
+            Matrix spin_rot;
+            switch (floating->model_id) {
+                case 51213u: spin_rot = MatrixRotateX(spin); break;
+                case 51221u: spin_rot = MatrixRotateZ(spin); break;
+                default:     spin_rot = MatrixRotateY(spin); break;
             }
             rlDisableBackfaceCulling();
             model->transform = MatrixMultiply(
                 MatrixMultiply(
                     MatrixScale(-model_scale, model_scale, model_scale),
-                    MatrixRotateY(spin_yaw)),
+                    spin_rot),
                 MatrixTranslate(pos.x, pos.y, pos.z));
             DrawModel(*model, (Vector3){0,0,0}, 1.0f, WHITE);
             rlEnableBackfaceCulling();
@@ -6049,7 +6059,9 @@ static void render_draw_colosseum_top_hud(RenderClient* rc, OsrsEnv* env) {
         ? TextFormat("Wave: %d / %d  (Sol Heredit)", s->wave + 1, COLO_NUM_WAVES)
         : TextFormat("Wave: %d / %d", s->wave + 1, COLO_NUM_WAVES);
     int wave_w = MeasureText(wave_txt, 16);
-    DrawText(wave_txt, (RENDER_GRID_W - wave_w) / 2, 12, 16, COLOR_TEXT);
+    /* second line (y=32): the default HUD already centers the "Target:" label at
+       y=12, so the wave readout sits just below it to avoid overlapping. */
+    DrawText(wave_txt, (RENDER_GRID_W - wave_w) / 2, 32, 16, COLOR_TEXT);
 }
 
 static const int COLOSSEUM_MODIFIER_ICON_SPRITE_IDS[COLO_NUM_REAL_MODIFIERS][3] = {
@@ -6388,17 +6400,20 @@ void pvp_render(OsrsEnv* env) {
         if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
             rc->gui.pending_spell_highlight = rc->human_input.selected_spell_gui_idx;
         }
-        /* render-only: feed the colosseum kit's exact 28-slot wiki inventory so the
-           panel reads 1:1; other encounters leave the derived grid (count 0). */
+        /* render-only: feed the colosseum kit's 28-slot wiki inventory so the panel
+           reads 1:1 at the start, recomputed live each frame so vials deplete and
+           the worn weapon leaves the grid; other encounters leave the derived
+           grid (count 0). */
         rc->gui.display_inventory_count = 0;
         {
             ColosseumState* colo_inv = render_colosseum_state_from_env(env);
             if (colo_inv && colo_inv->active_loadout_profile >= 0 &&
                     colo_inv->active_loadout_profile < COLO_NUM_LOADOUT_PROFILES) {
-                const int* kit = COLO_INVENTORY_DISPLAY[colo_inv->active_loadout_profile];
+                int live_kit[COLO_INVENTORY_DISPLAY_SLOTS];
+                col_build_live_inventory_display(colo_inv, live_kit);
                 for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS &&
                         i < INV_GRID_SLOTS; i++)
-                    rc->gui.display_inventory_osrs_ids[i] = kit[i];
+                    rc->gui.display_inventory_osrs_ids[i] = live_kit[i];
                 rc->gui.display_inventory_count = COLO_INVENTORY_DISPLAY_SLOTS;
             }
         }
