@@ -157,6 +157,7 @@ typedef struct {
 #define MY_USES_PERM
 #define MY_USES_SCRIPTED_OPPS
 #define MY_ACTION_MASK ACTION_MASK_SIZE
+#define PUFFER_RESET_WITH_STATE
 
 static CollisionMap* pvp_shared_wilderness_collision_map(void) {
     static CollisionMap* cmap = NULL;
@@ -441,7 +442,13 @@ void c_step(Env* env) {
     }
 }
 
-void c_reset(Env* env) {
+void c_reset(Env* env, const State* state) {
+    if (state != NULL) {
+        env->state = *state;
+        puffer_state_refresh(env);
+        return;
+    }
+
     pvp_env_rewire_internal_buffers(env);
     pvp_env_rewire_rollout_buffers(env);
 
@@ -871,7 +878,7 @@ void binding_set_pfsp_weights(StaticVec* vec, int* pool, int* cum_weights, int p
             envs[e].pvp.pvp_runtime.pfsp.cum_weights[i] = cum_weights[i];
         }
         if (was_unconfigured) {
-            c_reset(&envs[e]);
+            c_reset(&envs[e], NULL);
         }
     }
 }
