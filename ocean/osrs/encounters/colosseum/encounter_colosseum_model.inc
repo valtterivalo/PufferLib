@@ -1460,16 +1460,6 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
     bow, Confliction gauntlets switch, surge potion, divine pots, sanfew, etc.).
     Ground truth: .colosseum-notes/research/wiki-budget-and-high-efficiency-setups.md. */
 static const int COLO_INVENTORY_DISPLAY[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTORY_DISPLAY_SLOTS] = {
-    [COLO_LOADOUT_PROFILE_BEGINNER] = {
-        27610, 26219, 25865, 19547,   /* Venator bow, Fang, Bowfa, Anguish */
-        11806, 13652, 23975, 23971,   /* SGS, Dragon claws, Crystal body, Crystal helm */
-        6685, 6685, 3024, 3024,       /* Sara brew(4) x2, Super restore(4) x2 */
-        6685, 6685, 3024, 3024,
-        6685, 6685, 3024, 3024,
-        12695, 2444, 3024, 3024,      /* Super combat(4), Ranging(4), Super restore(4) x2 */
-        23685, 23733, 12006, 27281,   /* Divine super combat(4), Divine ranging(4),
-                                         Abyssal tentacle, Divine rune pouch */
-    },
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
         20997, 27238, 27235, 28947,   /* Twisted bow, Masori body(f), mask(f), Dizana's quiver */
         26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
@@ -1480,6 +1470,16 @@ static const int COLO_INVENTORY_DISPLAY[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTOR
                                          Guthix rest(4) */
         10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */
         10925, 10925, 10925, 27281,   /* ...continued, Divine rune pouch */
+    },
+    [COLO_LOADOUT_PROFILE_BEGINNER] = {
+        27610, 26219, 25865, 19547,   /* Venator bow, Fang, Bowfa, Anguish */
+        11806, 13652, 23975, 23971,   /* SGS, Dragon claws, Crystal body, Crystal helm */
+        6685, 6685, 3024, 3024,       /* Sara brew(4) x2, Super restore(4) x2 */
+        6685, 6685, 3024, 3024,
+        6685, 6685, 3024, 3024,
+        12695, 2444, 3024, 3024,      /* Super combat(4), Ranging(4), Super restore(4) x2 */
+        23685, 23733, 12006, 27281,   /* Divine super combat(4), Divine ranging(4),
+                                         Abyssal tentacle, Divine rune pouch */
     },
 };
 
