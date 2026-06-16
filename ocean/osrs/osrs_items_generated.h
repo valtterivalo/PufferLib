@@ -1266,7 +1266,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 35, .attack_ranged = 0,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 20, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0, .prayer = 1, .effect_mask = OSRS_ITEM_EFFECT_TUMEKENS_SHADOW
     },
     [ITEM_BGS] = { /* Bandos godsword */
         .item_id = 11804, .name = "Bandos godsword", .slot = SLOT_WEAPON,

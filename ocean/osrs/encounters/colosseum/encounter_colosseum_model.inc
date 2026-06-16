@@ -29,7 +29,7 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 10
+#define COLO_NUM_ACTION_HEADS 11
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC) */
 #define COLO_MAX_NPCS 24
@@ -1222,6 +1222,7 @@ static void colo_npc_init_type_state(ColoNPC* npc) {
 typedef enum {
     COLO_GEAR_MELEE = 0,
     COLO_GEAR_RANGED,
+    COLO_GEAR_MAGIC,
     COLO_NUM_WEAPON_SETS
 } ColoWeaponSet;
 
@@ -1278,6 +1279,25 @@ static const uint8_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
 };
 
+/** budget magic set = the budget general/melee armor with the weapon swapped to
+    the Trident of the swamp (1h, so the Dragon defender shield is kept). The
+    budget kit carries NO Occult, so this set's gear magic_damage% is 0 and the
+    Trident two-shots the melee frem off its 31 base. Faithful to the kit (the
+    wiki budget magic example is literally Trident-on-the-melee-base). */
+static const uint8_t COLO_BEGINNER_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_BLOOD_FURY,
+    [GEAR_SLOT_AMMO]   = ITEM_GOD_BLESSING,
+    [GEAR_SLOT_WEAPON] = ITEM_TRIDENT_OF_SWAMP,
+    [GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER,  /* Trident is 1h */
+    [GEAR_SLOT_BODY]   = ITEM_FIGHTER_TORSO,
+    [GEAR_SLOT_LEGS]   = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET]   = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
+};
+
 static const uint8_t COLO_SPEEDRUN_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
@@ -1306,14 +1326,44 @@ static const uint8_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
+/** high-efficiency magic set = the speedrun general/melee armor with the weapon
+    swapped to Tumeken's shadow (2h, so no shield), the Occult necklace, and the
+    Confliction gauntlets the kit carries as its mage hand switch. Shadow triples
+    this set's gear magic_damage% (Occult 5 + Confliction 7 + Avernic treads 2 =
+    14 -> 42). */
+static const uint8_t COLO_SPEEDRUN_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_TUMEKENS_SHADOW,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* shadow is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_OATHPLATE_CHEST,
+    [GEAR_SLOT_LEGS]   = ITEM_OATHPLATE_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_CONFLICTION_GAUNTLETS,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
+};
+
 static const uint8_t* const COLO_SPEEDRUN_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_SPEEDRUN_MELEE_LOADOUT,
     COLO_SPEEDRUN_RANGED_LOADOUT,
+    COLO_SPEEDRUN_MAGIC_LOADOUT,
 };
 
 static const uint8_t* const COLO_BEGINNER_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_BEGINNER_MELEE_LOADOUT,
     COLO_BEGINNER_RANGED_LOADOUT,
+    COLO_BEGINNER_MAGIC_LOADOUT,
+};
+
+/** powered-staff base max hit fed as spell_base_damage at the magic compute site
+    (the magic max-hit formula is base*(1+magic_damage%), magic LEVEL only feeds
+    accuracy). Trident of the swamp = floor(99/3)-2 = 31; Tumeken's shadow =
+    floor(99/3)+1 = 34, both at the env's hardcoded base_level 99. */
+static const int COLO_MAGIC_SPELL_BASE_DAMAGE[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = 34,
+    [COLO_LOADOUT_PROFILE_BEGINNER] = 31,
 };
 
 static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFILES] = {
@@ -1376,6 +1426,27 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
     }
     return COLO_LOADOUT_PROFILES[profile];
 }
+
+/** Arceuus thrall (one allied auto-attacker, full fidelity): greater-thrall max
+    hit 3 both kits, uniform 0..3 (accuracy ignored), 4-tick cadence, 17-tick
+    recast gate. Damage routes through col_queue_npc_pending_hit (source -1) so
+    kills + damage credit the player. Per-kit lifetime: high-eff carries the
+    Master combat-achievement x2 (198 ticks); budget runs the base 99. Sol
+    Heredit is immune (never summon-target, never damaged). */
+#define COLO_THRALL_MAX_HIT  3
+#define COLO_THRALL_TICK     4
+#define COLO_THRALL_RECAST_CD 17
+static const int COLO_THRALL_LIFETIME_TICKS[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = 198,
+    [COLO_LOADOUT_PROFILE_BEGINNER] = 99,
+};
+
+/** Death Charge (Arceuus): cast arms a 100-tick window; the first player-credited
+    killing blow inside it grants +15% spec energy and starts the 100-tick
+    cooldown. An unused window closes silently WITHOUT starting the cooldown. */
+#define COLO_DEATH_CHARGE_WINDOW   100
+#define COLO_DEATH_CHARGE_CD       100
+#define COLO_DEATH_CHARGE_SPEC_GAIN 15
 
 /** sample the episode's loadout profile from the config mode (L9). */
 static ColoLoadoutProfile col_sample_loadout_profile(
@@ -1607,6 +1678,17 @@ typedef struct {
     EncounterLoadoutStats spec_stats[COLO_NUM_SPEC_WEAPONS];
     OsrsEquipmentEffectProfile set_effects[COLO_NUM_WEAPON_SETS];
     OsrsEquipmentEffectProfile spec_effects[COLO_NUM_SPEC_WEAPONS];
+
+    /* Arceuus thrall (one allied auto-attacker; not a ColoNPC slot). */
+    int thrall_active;          /* 0/1 */
+    int thrall_target_slot;     /* NPC array index it auto-attacks, -1 = none */
+    int thrall_lifetime_left;   /* ticks until despawn (set per profile on summon) */
+    int thrall_attack_timer;    /* ticks until the next thrall hit (4-tick cadence) */
+    int thrall_recast_cd;       /* ticks until re-summon allowed (17) */
+
+    /* Death Charge armed window + cooldown. */
+    int death_charge_window_left; /* ticks left in the armed window, 0 = not armed */
+    int death_charge_cd;          /* ticks until Death Charge can re-arm, 0 = ready */
 
     /* per-tick player attack event for the renderer */
     int player_attack_npc_idx;

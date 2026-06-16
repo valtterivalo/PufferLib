@@ -39,10 +39,11 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
-    /* HEAD_GEAR (3): no_switch always valid; set-X valid iff not already set X. */
+    /* HEAD_GEAR (4): no_switch always valid; set-X valid iff not already set X. */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->weapon_set != COLO_GEAR_MELEE) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != COLO_GEAR_RANGED) ? 1.0f : 0.0f;
+    mask[offset++] = (s->weapon_set != COLO_GEAR_MAGIC) ? 1.0f : 0.0f;
 
     /* HEAD_EAT (2): none always valid; brew valid iff doses + off-timer + hurt. */
     mask[offset++] = 1.0f;
@@ -109,15 +110,29 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
     /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
-       piety/rigour valid with prayer points; augury stays masked — the kits
-       carry no magic weapon set (L1). */
+       piety/rigour valid with prayer points; augury valid only in the magic set
+       (it boosts magic accuracy + damage). */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = 0.0f;
+    mask[offset++] = (s->weapon_set == COLO_GEAR_MAGIC && s->player.current_prayer > 0 &&
+                      s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
+
+    /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,
+       the recast gate is up, and the current target is a thrall-eligible (live,
+       non-Sol) NPC (a summon replaces a live thrall); death-charge valid iff not
+       frozen, ready (cd==0), and not already armed. */
+    mask[offset++] = 1.0f;
+    {
+        int target = col_player_target_slot(s);
+        mask[offset++] = (!frozen && s->thrall_recast_cd == 0 &&
+                          col_npc_is_thrall_target(s, target)) ? 1.0f : 0.0f;
+    }
+    mask[offset++] = (!frozen && s->death_charge_cd == 0 &&
+                      s->death_charge_window_left == 0) ? 1.0f : 0.0f;
 
     if (offset != COLO_ACTION_MASK_SIZE) {
         fprintf(stderr, "colosseum mask index mismatch: wrote %d, expected %d\n",
@@ -156,7 +171,9 @@ static void col_prepare_render_player(const ColosseumState* s, Player* out) {
     *out = s->player;
     const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     encounter_effective_loadout_for_equipment(loadouts[s->weapon_set], out->equipped);
-    GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED : GEAR_MELEE;
+    GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED
+                 : s->weapon_set == COLO_GEAR_MAGIC ? GEAR_MAGE
+                 : GEAR_MELEE;
     out->current_gear = gear;
     out->visible_gear = gear;
 }

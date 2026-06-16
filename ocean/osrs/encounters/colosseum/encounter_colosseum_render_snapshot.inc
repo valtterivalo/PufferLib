@@ -769,8 +769,10 @@ static void col_step_human_commands_ctx(
    totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields.
    v5: E8 bee-contact poison state fields.
    v6: E13 stat drift and divine potion timers.
-   v7: manticore fixed orb cycle split from active telegraph state. */
-#define COLO_SNAPSHOT_VERSION 7u
+   v7: manticore fixed orb cycle split from active telegraph state.
+   v8: combat-fidelity pass — magic weapon set (COLO_GEAR_MAGIC), Arceuus thrall
+       fields, and Death Charge window/cooldown added to ColosseumState. */
+#define COLO_SNAPSHOT_VERSION 8u
 
 typedef struct {
     uint32_t magic;
@@ -790,6 +792,10 @@ static void col_refresh_after_state_load(ColosseumState* s, ColosseumContext* ct
     encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
         s->player.offensive_prayer, s->player.current_ranged,
         FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MAGIC], ATTACK_STYLE_MAGIC,
+        s->player.offensive_prayer, s->player.current_magic,
+        FIGHT_STYLE_ACCURATE, COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile],
+        &s->loadout_stats[COLO_GEAR_MAGIC]);
     encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
     for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
         uint8_t spec_loadout[NUM_GEAR_SLOTS];

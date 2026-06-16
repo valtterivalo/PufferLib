@@ -12,18 +12,24 @@
 #define COLO_HEAD_MOVE            0  /* 25: idle + 8 walk + 16 run */
 #define COLO_HEAD_PRAYER          1  /* overhead protect set */
 #define COLO_HEAD_TARGET          2  /* COLO_OBS_NPCS+1: none or obs slot */
-#define COLO_HEAD_GEAR            3  /* no_switch, melee, ranged */
+#define COLO_HEAD_GEAR            3  /* no_switch, melee, ranged, magic */
 #define COLO_HEAD_EAT             4  /* none, brew (L14: no solid food in any kit) */
 #define COLO_HEAD_POTION          5  /* none, restore, super combat, ranging, surge (L15) */
 #define COLO_HEAD_SPEC            6  /* none + arm/disarm spec weapon A/B (L2) */
 #define COLO_HEAD_MODIFIER_SELECT 7  /* none + pick draft option 0/1/2 */
 #define COLO_HEAD_GRAPPLE_PARRY   8  /* none + the 5 grapple callout slots (A12) */
 #define COLO_HEAD_OFFENSIVE       9  /* no_change, off, piety, rigour, augury */
+#define COLO_HEAD_SPELL          10  /* none, summon-thrall, death-charge (Arceuus) */
 
-#define COLO_GEAR_DIM 3
+#define COLO_GEAR_DIM 4
 #define COLO_EAT_DIM 2
 #define COLO_POTION_DIM 5
 #define COLO_SPEC_DIM (1 + COLO_NUM_SPEC_WEAPONS)  /* 3 */
+#define COLO_SPELL_DIM 3   /* none, summon-thrall, death-charge */
+
+/* COLO_HEAD_SPELL action indices */
+#define COLO_SPELL_SUMMON_THRALL 1
+#define COLO_SPELL_DEATH_CHARGE  2
 
 /* COLO_HEAD_POTION action indices */
 #define COLO_POTION_RESTORE 1
@@ -47,12 +53,14 @@
     COLO_SPEC_DIM, \
     COLO_MODIFIER_SELECT_DIM, \
     COLO_GRAPPLE_PARRY_DIM, \
-    ENCOUNTER_OFFENSIVE_DIM \
+    ENCOUNTER_OFFENSIVE_DIM, \
+    COLO_SPELL_DIM \
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
 #define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + \
     COLO_OBS_NPCS + 1 + COLO_GEAR_DIM + COLO_EAT_DIM + COLO_POTION_DIM + COLO_SPEC_DIM + \
-    COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM + ENCOUNTER_OFFENSIVE_DIM)
+    COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM + ENCOUNTER_OFFENSIVE_DIM + \
+    COLO_SPELL_DIM)
 
 static int col_action_head_mask_offset(int head) {
     int offset = 0;
@@ -166,12 +174,74 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
 static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
     if (set < 0 || set >= COLO_NUM_WEAPON_SETS) return;
     if (s->weapon_set == set) return;
-    GearSet gear = (set == COLO_GEAR_RANGED) ? GEAR_RANGED : GEAR_MELEE;
+    GearSet gear = (set == COLO_GEAR_RANGED) ? GEAR_RANGED
+                 : (set == COLO_GEAR_MAGIC) ? GEAR_MAGE
+                 : GEAR_MELEE;
     encounter_apply_loadout(&s->player,
         col_loadouts_for_profile(s->active_loadout_profile)[set], gear);
     s->weapon_set = set;
 }
 
+
+/** a thrall-eligible NPC slot: live, non-hazard, and NOT Sol Heredit (immune). */
+static int col_npc_is_thrall_target(const ColosseumState* s, int slot) {
+    if (slot < 0 || slot >= COLO_MAX_NPCS) return 0;
+    const ColoNPC* npc = &s->npcs[slot];
+    return col_npc_is_live_enemy(npc) && npc->type != COLO_SOL_HEREDIT;
+}
+
+/** the player's current attack target as an NPC slot, or -1. */
+static int col_player_target_slot(const ColosseumState* s) {
+    if (!osrs_interaction_active(&s->interaction)) return -1;
+    return s->interaction.target_slot;
+}
+
+/** summon (or re-summon) the Arceuus thrall onto a thrall-eligible target. The
+    17-tick recast gate is the caller's responsibility (the mask + handler). */
+static void col_summon_thrall(ColosseumState* s, int target_slot) {
+    s->thrall_active = 1;
+    s->thrall_target_slot = target_slot;
+    s->thrall_lifetime_left = COLO_THRALL_LIFETIME_TICKS[s->active_loadout_profile];
+    s->thrall_attack_timer = COLO_THRALL_TICK;
+    s->thrall_recast_cd = COLO_THRALL_RECAST_CD;
+}
+
+/** advance the thrall + Death-Charge timers one tick. The thrall retargets to the
+    player's current target each tick (holding its slot if the player has none),
+    fires a uniform 0..3 magic hit every 4 ticks routed through the player-credited
+    NPC queue, and despawns when its lifetime expires. The Death-Charge window
+    closes silently on expiry (no cooldown until a kill consumes it). */
+static void col_tick_thrall_and_death_charge(ColosseumState* s) {
+    if (s->thrall_recast_cd > 0) s->thrall_recast_cd--;
+    if (s->death_charge_cd > 0) s->death_charge_cd--;
+    if (s->death_charge_window_left > 0) s->death_charge_window_left--;
+
+    if (s->thrall_active) {
+        s->thrall_lifetime_left--;
+        if (s->thrall_lifetime_left <= 0) {
+            s->thrall_active = 0;
+            s->thrall_target_slot = -1;
+            s->thrall_lifetime_left = 0;
+            s->thrall_attack_timer = 0;
+            return;
+        }
+        int player_target = col_player_target_slot(s);
+        if (col_npc_is_thrall_target(s, player_target))
+            s->thrall_target_slot = player_target;
+        else if (!col_npc_is_thrall_target(s, s->thrall_target_slot))
+            s->thrall_target_slot = -1;
+
+        if (s->thrall_attack_timer > 0) s->thrall_attack_timer--;
+        if (s->thrall_attack_timer == 0) {
+            s->thrall_attack_timer = COLO_THRALL_TICK;
+            if (col_npc_is_thrall_target(s, s->thrall_target_slot)) {
+                int dmg = encounter_rand_int(&s->rng_state, COLO_THRALL_MAX_HIT + 1);
+                col_queue_npc_pending_hit(s, s->thrall_target_slot, dmg, 2,
+                    ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_NONE);
+            }
+        }
+    }
+}
 
 typedef struct {
     ColosseumState* s;
@@ -558,6 +628,7 @@ static void col_tick_player_ctx(
     int gear_act = actions[COLO_HEAD_GEAR];
     if (gear_act == 1) col_apply_weapon_set(s, COLO_GEAR_MELEE);
     else if (gear_act == 2) col_apply_weapon_set(s, COLO_GEAR_RANGED);
+    else if (gear_act == 3) col_apply_weapon_set(s, COLO_GEAR_MAGIC);
 
     /* spec energy regen runs every tick, gaps included (OSRS regen never pauses) */
     encounter_tick_spec_regen(&s->player);
@@ -637,6 +708,23 @@ static void col_tick_player_ctx(
             if (s->player.special_energy >= osrs_spec_cost(spec_item))
                 s->spec_armed_kind = spec_act;
         }
+    }
+
+    /* Arceuus spells (L: thralls + Death Charge). summon-thrall is gated on
+       recast_cd==0 && a thrall-eligible (live, non-Sol) current target; a summon
+       while a thrall is already up REPLACES it (only one thrall at a time, OSRS),
+       still paying the 17-tick recast. death-charge arms the 100-tick window when
+       ready (cd==0 && not already armed). Frozen while a draft is open (B6), like
+       move/target; the thrall tick + timers are separately can_attack-gated so
+       nothing acts during any gap. The mask enforces these gates; the handler
+       re-checks defensively. */
+    int spell_act = s->modifiers.draft_pending ? 0 : actions[COLO_HEAD_SPELL];
+    if (spell_act == COLO_SPELL_SUMMON_THRALL && s->thrall_recast_cd == 0) {
+        int target = col_player_target_slot(s);
+        if (col_npc_is_thrall_target(s, target)) col_summon_thrall(s, target);
+    } else if (spell_act == COLO_SPELL_DEATH_CHARGE &&
+            s->death_charge_cd == 0 && s->death_charge_window_left == 0) {
+        s->death_charge_window_left = COLO_DEATH_CHARGE_WINDOW;
     }
 
     /* modifier draft: index 0 = STILL DECIDING (no skip exists, B6); index k
@@ -723,6 +811,10 @@ static void col_tick_player_ctx(
             }
         }
     }
+
+    /* the thrall auto-attacks + Death-Charge timers advance only during live
+       gameplay (paused across wave/ready gaps, like the surge cooldown). */
+    if (can_attack) col_tick_thrall_and_death_charge(s);
 }
 
 static void col_tick_player(ColosseumState* s, const int* actions, int can_attack) {

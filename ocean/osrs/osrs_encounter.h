@@ -2149,6 +2149,17 @@ static inline void encounter_compute_loadout_stats(
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(effective_loadout, &eb);
 
+    /* Tumeken's shadow triples the wearer's gear magic-damage% (the staff itself
+       contributes 0%, so no self-inclusion), capped at +100%. This is the only
+       multiplier — it does not touch spell_base_damage (the Tbow effect-mask
+       pattern, applied here so the recompute path inherits it via strength_bonus). */
+    const Item* weapon_item = get_item(loadout[GEAR_SLOT_WEAPON]);
+    if (style == ATTACK_STYLE_MAGIC && weapon_item &&
+            (weapon_item->effect_mask & OSRS_ITEM_EFFECT_TUMEKENS_SHADOW)) {
+        eb.magic_damage *= 3;
+        if (eb.magic_damage > 100) eb.magic_damage = 100;
+    }
+
     out->def_stab = eb.defence_stab;
     out->def_slash = eb.defence_slash;
     out->def_crush = eb.defence_crush;

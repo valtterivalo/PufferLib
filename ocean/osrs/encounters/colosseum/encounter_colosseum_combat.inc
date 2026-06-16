@@ -21,6 +21,17 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     if (npc->death_ticks > 0) return;
     assert(npc->active && npc->hp <= 0);
     s->log.total_npc_kills++;
+    /* Death Charge: the first player-credited killing blow inside the armed
+       window grants +15% spec energy and starts the 100-tick cooldown. All kills
+       reaching this path are player-credited (NPC->NPC damage never routes here),
+       and thrall kills proc it too (the thrall queues through the same path).
+       Multiple kills in one tick consume the charge once (the window is zeroed). */
+    if (s->death_charge_window_left > 0) {
+        s->player.special_energy += COLO_DEATH_CHARGE_SPEC_GAIN;
+        if (s->player.special_energy > 100) s->player.special_energy = 100;
+        s->death_charge_window_left = 0;
+        s->death_charge_cd = COLO_DEATH_CHARGE_CD;
+    }
     /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
        at tier III). Read its position/size before the slot is recycled. */
     col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));

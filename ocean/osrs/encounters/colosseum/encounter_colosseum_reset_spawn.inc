@@ -463,6 +463,13 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
     encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
+    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MAGIC], ATTACK_STYLE_MAGIC,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_ACCURATE,
+        COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile],
+        &s->loadout_stats[COLO_GEAR_MAGIC]);
+
+    /* the thrall has no target until summoned (slot 0 is a real NPC index). */
+    s->thrall_target_slot = -1;
 
     /* spec loadout stats + per-set effect profiles: spec weapons fire off the
        melee gear base with only the weapon slot swapped (L2). */

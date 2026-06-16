@@ -4,8 +4,9 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(37) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) + threat-LoS(3) = 816.
+ *   player(38) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) + threat-LoS(3)
+ *   + thrall/Death-Charge(6) = 823.
  * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
  * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
  * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
@@ -22,7 +23,7 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      37
+#define COLO_PLAYER_OBS_SIZE      38   /* +1 magic weapon-set one-hot (combat-fidelity) */
 #define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 360 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
@@ -46,10 +47,15 @@
     position so at most one style is "live" (a same-tick multi-style stack is
     exactly what a single overhead prayer cannot block). */
 #define COLO_THREAT_LOS_OBS_SIZE  3
+/** Arceuus thrall + Death-Charge state (combat-fidelity pass), appended after
+    THREAT_LOS: thrall_active, thrall_lifetime_norm, thrall_recast_norm, dc_armed,
+    dc_window_norm, dc_cd_norm. The +15% spec from a Death-Charge proc surfaces
+    downstream via the existing spec_energy obs. */
+#define COLO_THRALL_DC_OBS_SIZE   6
 
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
     COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
-    COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE)
+    COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -62,6 +68,8 @@
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
     (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
+#define COLO_OBS_AFTER_THRALL_DC \
+    (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -550,6 +558,21 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     *idx = i;
 }
 
+/** COLO_THRALL_DC_OBS_SIZE floats: the Arceuus thrall + Death-Charge state the
+    policy needs to time summons/recasts and the kill-window. */
+static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int lifetime_full = COLO_THRALL_LIFETIME_TICKS[s->active_loadout_profile];
+    obs[i++] = s->thrall_active ? 1.0f : 0.0f;
+    obs[i++] = (s->thrall_active && lifetime_full > 0)
+        ? col_clamp01((float)s->thrall_lifetime_left / (float)lifetime_full) : 0.0f;
+    obs[i++] = col_clamp01((float)s->thrall_recast_cd / (float)COLO_THRALL_RECAST_CD);
+    obs[i++] = s->death_charge_window_left > 0 ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)s->death_charge_window_left / (float)COLO_DEATH_CHARGE_WINDOW);
+    obs[i++] = col_clamp01((float)s->death_charge_cd / (float)COLO_DEATH_CHARGE_CD);
+    *idx = i;
+}
+
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -583,6 +606,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)s->player.special_energy / 100.0f);
     obs[i++] = (s->weapon_set == COLO_GEAR_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->weapon_set == COLO_GEAR_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (s->weapon_set == COLO_GEAR_MAGIC) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player.attack_timer / 8.0f);
     obs[i++] = col_clamp01((float)s->player.food_timer / 3.0f);
     obs[i++] = col_clamp01((float)s->player.potion_timer / 3.0f);
@@ -734,6 +758,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_threat_los_counts(s, obs, &i);
     assert(i == COLO_OBS_AFTER_THREAT_LOS);
+
+    col_write_thrall_dc(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_THRALL_DC);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);
