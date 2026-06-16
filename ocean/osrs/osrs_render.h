@@ -4880,6 +4880,16 @@ static void render_draw_3d_world(RenderClient* rc) {
         if (ov->floating_model_count > 0) {
             render_load_projectile_assets(rc);
         }
+        /* colosseum-only: manticore orbs bob + spin so the telegraph reads as
+           a live hovering projectile rather than a frozen model. Gated on the
+           encounter name; no other encounter emits floating models, and this
+           branch is never taken for inferno/zulrah/pvp. */
+        int floating_bob_spin = 0;
+        if (rc->gui.encounter_def) {
+            const EncounterDef* fm_def = (const EncounterDef*)rc->gui.encounter_def;
+            floating_bob_spin = (strcmp(fm_def->name, "colosseum") == 0);
+        }
+        float floating_anim_t = (float)rc->effect_client_tick_counter;
         for (int i = 0; i < ov->floating_model_count; i++) {
             EncounterFloatingModel* floating = &ov->floating_models[i];
             if (!floating->active) continue;
@@ -4899,9 +4909,19 @@ static void render_draw_3d_world(RenderClient* rc) {
                 -(anchor_y + 1.0f) + 0.5f
             };
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
+            float spin_yaw = 0.0f;
+            if (floating_bob_spin) {
+                float bob_phase = floating_anim_t * (2.0f * PI / 100.0f)
+                    + (float)i * 1.7f;
+                pos.y += 0.08f * sinf(bob_phase);
+                spin_yaw = floating_anim_t * (2.0f * PI / 150.0f)
+                    + (float)i * 0.9f;
+            }
             rlDisableBackfaceCulling();
             model->transform = MatrixMultiply(
-                MatrixScale(-model_scale, model_scale, model_scale),
+                MatrixMultiply(
+                    MatrixScale(-model_scale, model_scale, model_scale),
+                    MatrixRotateY(spin_yaw)),
                 MatrixTranslate(pos.x, pos.y, pos.z));
             DrawModel(*model, (Vector3){0,0,0}, 1.0f, WHITE);
             rlEnableBackfaceCulling();
@@ -4968,6 +4988,34 @@ static void render_draw_3d_world(RenderClient* rc) {
             DrawLine3D((Vector3){x1, border_y, z0}, (Vector3){x1, border_y, z1}, border_col);
             DrawLine3D((Vector3){x1, border_y, z1}, (Vector3){x0, border_y, z1}, border_col);
             DrawLine3D((Vector3){x0, border_y, z1}, (Vector3){x0, border_y, z0}, border_col);
+        }
+
+        /* colosseum molten pools (Reentry / Volatility T3): orange-red ground
+           decals on each damaging sand tile. Gated colosseum-only by encounter
+           name; reads ColosseumState directly like the zulrah safe-spot block
+           below. Does NOT touch any shared overlay channel, so inferno/zulrah/
+           pvp rendering is unchanged. Tile->world mapping matches the boss
+           hitbox decal block above. */
+        {
+            const EncounterDef* edef_molten =
+                (const EncounterDef*)rc->gui.encounter_def;
+            if (edef_molten && rc->gui.encounter_state &&
+                    strcmp(edef_molten->name, "colosseum") == 0) {
+                ColosseumState* cs_molten = (ColosseumState*)rc->gui.encounter_state;
+                int molten_n = cs_molten->molten_count;
+                if (molten_n > COLO_SOL_HAZARD_TILES_MAX)
+                    molten_n = COLO_SOL_HAZARD_TILES_MAX;
+                for (int mi = 0; mi < molten_n; mi++) {
+                    int tx = cs_molten->molten_x[mi];
+                    int ty = cs_molten->molten_y[mi];
+                    float ground = OV_GROUND(tx, ty);
+                    float fx = (float)tx + 0.5f;
+                    float fz = -(float)(ty + 1) + 0.5f;
+                    DrawCube((Vector3){ fx, ground + 0.05f, fz },
+                             0.95f, 0.04f, 0.95f,
+                             CLITERAL(Color){ 220, 90, 30, 150 });
+                }
+            }
         }
 
         /* melee targeting indicator: red tile where boss is aiming */
@@ -6042,6 +6090,33 @@ static Texture2D* render_require_colosseum_modifier_icon(
     return texture;
 }
 
+/* Colosseum-only: display name + one-line effect for the modifier HUD hover
+   tooltip. Text mirrors the ColoModifier enum comments in
+   encounters/encounter_colosseum.h. Names/descs are file-local to the render TU
+   and used only by render_draw_colosseum_modifier_hud, so nothing here is
+   reachable from inferno/zulrah/pvp draw paths. */
+static void render_colosseum_modifier_tooltip_text(
+    int modifier, const char** out_name, const char** out_desc
+) {
+    switch (modifier) {
+        case COLO_MOD_BEES:        *out_name = "Bees!";        *out_desc = "Roaming poison swarms (1/2/3 per tier)."; break;
+        case COLO_MOD_BLASPHEMY:   *out_name = "Blasphemy";    *out_desc = "Drains prayer for 20/40/60% of damage taken."; break;
+        case COLO_MOD_DOOM:        *out_name = "Doom";         *out_desc = "Stacks on damage; die at 15/10/5 stacks."; break;
+        case COLO_MOD_DYNAMIC_DUO: *out_name = "Dynamic Duo";  *out_desc = "Shockwave Colossi spawn in pairs."; break;
+        case COLO_MOD_FRAILTY:     *out_name = "Frailty";      *out_desc = "-10/-20/-40% max HP (T1+ disables overheal)."; break;
+        case COLO_MOD_MANTIMAYHEM: *out_name = "Mantimayhem";  *out_desc = "Manticore: extra orb / venom / unpredictable."; break;
+        case COLO_MOD_MYOPIA:      *out_name = "Myopia";       *out_desc = "Player attack range -2/-4/-6."; break;
+        case COLO_MOD_REENTRY:     *out_name = "Reentry";      *out_desc = "Javelin skyfall leaves molten sand."; break;
+        case COLO_MOD_RED_FLAG:    *out_name = "Red Flag";     *out_desc = "Minotaurs route around obstacles."; break;
+        case COLO_MOD_RELENTLESS:  *out_name = "Relentless";   *out_desc = "Bypass 33/66/100% def, +1/+3/+6 max hit."; break;
+        case COLO_MOD_SOLARFLARE:  *out_name = "Solarflare";   *out_desc = "Orb circling the boss pillars."; break;
+        case COLO_MOD_QUARTET:     *out_name = "Quartet";      *out_desc = "+1 random warbander each wave (incl. W12)."; break;
+        case COLO_MOD_TOTEMIC:     *out_name = "Totemic";      *out_desc = "NPCs at 50% HP spawn a healing totem."; break;
+        case COLO_MOD_VOLATILITY:  *out_name = "Volatility";   *out_desc = "Death explosion / molten pool."; break;
+        default:                   *out_name = "Unknown";      *out_desc = ""; break;
+    }
+}
+
 static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
     EncounterOverlay* ov = &rc->encounter_overlay;
     if (ov->active_modifier_count <= 0) return;
@@ -6049,6 +6124,10 @@ static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
     const int gap = 4;
     const int x0 = 10;
     const int y0 = 36;
+    Vector2 mouse = GetMousePosition();
+    int hover_modifier = -1;
+    int hover_tier = 0;
+    int hover_x = 0;
     for (int i = 0; i < ov->active_modifier_count; i++) {
         EncounterActiveModifier* active = &ov->active_modifiers[i];
         if (!active->active) continue;
@@ -6062,6 +6141,40 @@ static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
         Rectangle src = {0, 0, (float)texture->width, (float)texture->height};
         Rectangle dst = {(float)x, (float)y0, (float)icon_size, (float)icon_size};
         DrawTexturePro(*texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+        Rectangle hit = {(float)(x - 2), (float)(y0 - 2),
+            (float)(icon_size + 4), (float)(icon_size + 4)};
+        if (CheckCollisionPointRec(mouse, hit)) {
+            hover_modifier = active->modifier;
+            hover_tier = active->tier;
+            hover_x = x;
+        }
+    }
+    if (hover_modifier >= 0) {
+        const char* name = NULL;
+        const char* desc = NULL;
+        render_colosseum_modifier_tooltip_text(hover_modifier, &name, &desc);
+        char title[64];
+        if (hover_tier >= 1 && hover_tier <= 3) {
+            static const char* roman[4] = {"", "I", "II", "III"};
+            snprintf(title, sizeof(title), "%s %s", name, roman[hover_tier]);
+        } else {
+            snprintf(title, sizeof(title), "%s", name);
+        }
+        const int title_fs = 12;
+        const int desc_fs = 10;
+        const int pad = 6;
+        int title_w = MeasureText(title, title_fs);
+        int desc_w = MeasureText(desc, desc_fs);
+        int box_w = (title_w > desc_w ? title_w : desc_w) + pad * 2;
+        int box_h = title_fs + desc_fs + pad * 2 + 2;
+        int box_x = hover_x;
+        int box_y = y0 + icon_size + 6;
+        if (box_x + box_w > RENDER_WINDOW_W - 4) box_x = RENDER_WINDOW_W - 4 - box_w;
+        if (box_x < 4) box_x = 4;
+        DrawRectangle(box_x, box_y, box_w, box_h, CLITERAL(Color){18, 16, 14, 235});
+        DrawRectangleLines(box_x, box_y, box_w, box_h, CLITERAL(Color){184, 146, 72, 230});
+        DrawText(title, box_x + pad, box_y + pad, title_fs, CLITERAL(Color){238, 222, 180, 255});
+        DrawText(desc, box_x + pad, box_y + pad + title_fs + 2, desc_fs, CLITERAL(Color){200, 200, 200, 255});
     }
 }
 

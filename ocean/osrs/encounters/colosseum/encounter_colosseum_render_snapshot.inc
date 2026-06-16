@@ -396,6 +396,14 @@ static void col_emit_npc_attack_projectile(
         projectile->impact_spotanim_id, 0);
     int curve = osrs_combat_projectile_value_or(projectile->projectile_angle, 16);
     float arc = osrs_combat_projectile_profile_arc_height(projectile, actual_style);
+    /* Colosseum-only: magic casters (serpent shaman Water Surge, seer, shockwave)
+       must lob UP. The shared arc-height helper returns 0 for ATTACK_STYLE_MAGIC,
+       which drops them into the quadratic path where the positive projectile_angle
+       (curve=16) gives a negative height_vel and the arc dips into the ground.
+       A positive arc_height routes them into the always-upward sinusoidal path,
+       matching inferno's Jad/Zuk magic projectiles. */
+    if (actual_style == ATTACK_STYLE_MAGIC && arc <= 0.0f)
+        arc = 1.0f;
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec spec = {
         .src_x = npc->x,
