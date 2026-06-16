@@ -597,7 +597,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     memset(obs, 0, COLO_NUM_OBS * sizeof(float));
     int i = 0;
     int px = s->player.x, py = s->player.y;
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
     /* player block (45) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);

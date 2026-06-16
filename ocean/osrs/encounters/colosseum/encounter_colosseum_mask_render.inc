@@ -169,20 +169,15 @@ static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context
 
 static void col_prepare_render_player(const ColosseumState* s, int spec_fired_kind, Player* out) {
     *out = s->player;
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    encounter_effective_loadout_for_equipment(loadouts[s->weapon_set], out->equipped);
     GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED
                  : s->weapon_set == COLO_GEAR_MAGIC ? GEAR_MAGE
                  : GEAR_MELEE;
     out->current_gear = gear;
     out->visible_gear = gear;
-    /* render-only: a fired spec attack runs off the melee gear with the spec
-       weapon swapped in, so the spec weapon's attack anim resolves (render keys
-       the player anim off the equipped weapon + used_special_this_tick). */
     if (spec_fired_kind > 0 && spec_fired_kind <= COLO_NUM_SPEC_WEAPONS) {
-        encounter_effective_loadout_for_equipment(loadouts[COLO_GEAR_MELEE], out->equipped);
-        out->equipped[GEAR_SLOT_WEAPON] =
-            COLO_SPEC_WEAPONS[s->active_loadout_profile][spec_fired_kind - 1];
+        out->equipped[GEAR_SLOT_WEAPON] = col_spec_weapon_for_kind(s, spec_fired_kind);
+        out->equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
+            out->equipped[GEAR_SLOT_WEAPON], out->equipped[GEAR_SLOT_SHIELD]);
         out->current_gear = GEAR_MELEE;
         out->visible_gear = GEAR_MELEE;
     }
@@ -275,7 +270,7 @@ static void col_fill_render_entities_ctx(
 ) {
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     ColosseumState* s = (ColosseumState*)state;
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     s->player.gui_max_hit = ls->max_hit;
     s->player.gui_attack_speed = ls->attack_speed;
     s->player.gui_attack_range = ls->attack_range;

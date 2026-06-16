@@ -35,6 +35,159 @@ static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
 
+typedef struct {
+    EncounterLoadoutStats stats;
+    OsrsEquipmentEffectProfile effects;
+    uint8_t weapon_item;
+} ColoSpecLoadout;
+
+static void col_abort_invalid_weapon_set(ColoWeaponSet set) {
+    fprintf(stderr, "invalid Colosseum weapon set %d\n", (int)set);
+    abort();
+}
+
+static AttackStyle col_weapon_set_attack_style(ColoWeaponSet set) {
+    switch (set) {
+        case COLO_GEAR_MELEE:
+            return ATTACK_STYLE_MELEE;
+        case COLO_GEAR_RANGED:
+            return ATTACK_STYLE_RANGED;
+        case COLO_GEAR_MAGIC:
+            return ATTACK_STYLE_MAGIC;
+        case COLO_NUM_WEAPON_SETS:
+            break;
+    }
+    col_abort_invalid_weapon_set(set);
+    return ATTACK_STYLE_MELEE;
+}
+
+static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
+    switch (set) {
+        case COLO_GEAR_MELEE:
+            return FIGHT_STYLE_AGGRESSIVE;
+        case COLO_GEAR_RANGED:
+            return FIGHT_STYLE_RAPID;
+        case COLO_GEAR_MAGIC:
+            return FIGHT_STYLE_ACCURATE;
+        case COLO_NUM_WEAPON_SETS:
+            break;
+    }
+    col_abort_invalid_weapon_set(set);
+    return FIGHT_STYLE_AGGRESSIVE;
+}
+
+static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
+    if (set != COLO_GEAR_MAGIC) return 0;
+    if (s->active_loadout_profile < 0 ||
+            s->active_loadout_profile >= COLO_NUM_LOADOUT_PROFILES) {
+        fprintf(stderr, "invalid Colosseum loadout profile %d\n",
+            (int)s->active_loadout_profile);
+        abort();
+    }
+    return COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile];
+}
+
+static void col_current_style_levels(
+    const Player* p,
+    AttackStyle style,
+    int* current_att_level,
+    int* current_str_level
+) {
+    if (style == ATTACK_STYLE_RANGED) {
+        *current_att_level = p->current_ranged;
+        *current_str_level = p->current_ranged;
+        return;
+    }
+    if (style == ATTACK_STYLE_MAGIC) {
+        *current_att_level = p->current_magic;
+        *current_str_level = p->current_magic;
+        return;
+    }
+    *current_att_level = p->current_attack;
+    *current_str_level = p->current_strength;
+}
+
+static void col_mark_live_loadout_dirty(ColosseumState* s) {
+    s->loadout_stats_dirty = 1;
+}
+
+static void col_recompute_live_loadout_stats(ColosseumState* s) {
+    AttackStyle style = col_weapon_set_attack_style(s->weapon_set);
+    FightStyle fight_style = col_weapon_set_fight_style(s->weapon_set);
+    int current_att_level;
+    int current_str_level;
+    col_current_style_levels(&s->player, style, &current_att_level, &current_str_level);
+    encounter_compute_loadout_stats(
+        s->player.equipped,
+        style,
+        s->player.offensive_prayer,
+        current_att_level,
+        fight_style,
+        col_weapon_set_spell_base_damage(s, s->weapon_set),
+        &s->loadout_stats_live);
+    encounter_update_loadout_level(
+        &s->loadout_stats_live,
+        s->player.offensive_prayer,
+        current_att_level,
+        current_str_level);
+    encounter_derive_loadout_effect_profile(s->player.equipped, &s->effects_live);
+    s->loadout_stats_dirty = 0;
+}
+
+static void col_ensure_live_loadout_stats(ColosseumState* s) {
+    if (s->loadout_stats_dirty)
+        col_recompute_live_loadout_stats(s);
+}
+
+static const EncounterLoadoutStats* col_live_loadout_stats(ColosseumState* s) {
+    col_ensure_live_loadout_stats(s);
+    return &s->loadout_stats_live;
+}
+
+static const OsrsEquipmentEffectProfile* col_live_effects(ColosseumState* s) {
+    col_ensure_live_loadout_stats(s);
+    return &s->effects_live;
+}
+
+static uint8_t col_spec_weapon_for_kind(const ColosseumState* s, int kind) {
+    if (kind <= 0 || kind > COLO_NUM_SPEC_WEAPONS) {
+        fprintf(stderr, "invalid Colosseum spec kind %d\n", kind);
+        abort();
+    }
+    if (s->active_loadout_profile < 0 ||
+            s->active_loadout_profile >= COLO_NUM_LOADOUT_PROFILES) {
+        fprintf(stderr, "invalid Colosseum loadout profile %d\n",
+            (int)s->active_loadout_profile);
+        abort();
+    }
+    return COLO_SPEC_WEAPONS[s->active_loadout_profile][kind - 1];
+}
+
+static void col_compute_spec_loadout(
+    ColosseumState* s,
+    int kind,
+    ColoSpecLoadout* out
+) {
+    uint8_t spec_loadout[NUM_GEAR_SLOTS];
+    memcpy(spec_loadout, s->player.equipped, NUM_GEAR_SLOTS);
+    out->weapon_item = col_spec_weapon_for_kind(s, kind);
+    spec_loadout[GEAR_SLOT_WEAPON] = out->weapon_item;
+    encounter_compute_loadout_stats(
+        spec_loadout,
+        ATTACK_STYLE_MELEE,
+        s->player.offensive_prayer,
+        s->player.current_attack,
+        FIGHT_STYLE_AGGRESSIVE,
+        0,
+        &out->stats);
+    encounter_update_loadout_level(
+        &out->stats,
+        s->player.offensive_prayer,
+        s->player.current_attack,
+        s->player.current_strength);
+    encounter_derive_loadout_effect_profile(spec_loadout, &out->effects);
+}
+
 static inline EncounterProjectileDelayKind col_projectile_delay_kind_for_style(
     AttackStyle style
 ) {

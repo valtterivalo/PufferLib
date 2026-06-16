@@ -70,13 +70,6 @@ static int col_action_head_mask_offset(int head) {
 }
 
 
-/** L12: recompute every loadout's effective levels + max hits (weapon sets and
-    spec weapons) after any stat-moving drink or offensive prayer change. */
-static void col_recompute_all_loadout_stats(ColosseumState* s) {
-    encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-    encounter_recompute_loadout_max_hits(s->spec_stats, COLO_NUM_SPEC_WEAPONS, &s->player);
-}
-
 /** true when the profile's combat potion slot is the divine speedrun dose. */
 static int col_combat_potion_is_divine(const ColosseumState* s) {
     return s->full_supplies.combat_boost_kind == COLO_BOOST_POTION_DIVINE;
@@ -110,7 +103,7 @@ static int col_enforce_divine_stat_floors(ColosseumState* s) {
 /** Apply colosseum's divine floor tail and recompute every loadout after stat changes. */
 static void col_finish_stat_moving_consumable(ColosseumState* s) {
     col_enforce_divine_stat_floors(s);
-    col_recompute_all_loadout_stats(s);
+    col_mark_live_loadout_dirty(s);
 }
 
 /** E13: expire a divine combat timer and drop its potion stats to base. */
@@ -141,7 +134,7 @@ static void col_tick_live_stat_drift_and_divines(ColosseumState* s) {
     changed |= col_tick_divine_ranged_timer(s);
     changed |= encounter_tick_stat_drift(
         &s->player, &s->stat_drift_timer, col_divine_stat_drift_pins(s));
-    if (changed) col_recompute_all_loadout_stats(s);
+    if (changed) col_mark_live_loadout_dirty(s);
 }
 
 /** apply the 10 HP divine potion self-damage and arm the duration timer. */
@@ -165,14 +158,15 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     encounter_apply_offensive_action(&s->player.offensive_prayer, actions[COLO_HEAD_OFFENSIVE]);
     if (s->player.offensive_prayer != prev_offensive)
-        col_recompute_all_loadout_stats(s);
+        col_mark_live_loadout_dirty(s);
     encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
 }
 
 
 /** apply the active weapon set's loadout to the player. */
 static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
-    if (set < 0 || set >= COLO_NUM_WEAPON_SETS) return;
+    if (set < 0 || set >= COLO_NUM_WEAPON_SETS)
+        col_abort_invalid_weapon_set(set);
     if (s->weapon_set == set) return;
     GearSet gear = (set == COLO_GEAR_RANGED) ? GEAR_RANGED
                  : (set == COLO_GEAR_MAGIC) ? GEAR_MAGE
@@ -180,6 +174,7 @@ static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
     encounter_apply_loadout(&s->player,
         col_loadouts_for_profile(s->active_loadout_profile)[set], gear);
     s->weapon_set = set;
+    col_mark_live_loadout_dirty(s);
 }
 
 
@@ -260,10 +255,13 @@ static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
 
 /** the player's effective attack reach, after Myopia's range reduction. an
     armed spec weapon (all melee) pulls the reach to its own range (L2). */
-static int col_player_attack_range(const ColosseumState* s) {
-    const EncounterLoadoutStats* ls = (s->spec_armed_kind > 0)
-        ? &s->spec_stats[s->spec_armed_kind - 1]
-        : &s->loadout_stats[s->weapon_set];
+static int col_player_attack_range(ColosseumState* s) {
+    ColoSpecLoadout spec_loadout;
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
+    if (s->spec_armed_kind > 0) {
+        col_compute_spec_loadout(s, s->spec_armed_kind, &spec_loadout);
+        ls = &spec_loadout.stats;
+    }
     int base = ls->attack_range > 0 ? ls->attack_range : 1;
     return col_mod_myopia_range(s, base);
 }
@@ -336,8 +334,10 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     int kind = s->spec_armed_kind;
-    uint8_t item = COLO_SPEC_WEAPONS[s->active_loadout_profile][kind - 1];
-    const EncounterLoadoutStats* ls = &s->spec_stats[kind - 1];
+    ColoSpecLoadout spec_loadout;
+    col_compute_spec_loadout(s, kind, &spec_loadout);
+    uint8_t item = spec_loadout.weapon_item;
+    const EncounterLoadoutStats* ls = &spec_loadout.stats;
 
     s->spec_armed_kind = 0;
     if (!encounter_use_spec(&s->player, osrs_spec_cost(item))) return;
@@ -379,7 +379,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     }
 
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(
-        &s->spec_effects[kind - 1], &s->player.item_effect_state, item,
+        &spec_loadout.effects, &s->player.item_effect_state, item,
         ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
         0, total > 0, total, &s->rng_state);
     if (post.heal_amount > 0) {
@@ -545,7 +545,7 @@ static int col_npc_target_def_roll(
 static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
     if (!col_type_is_hazard_entity(npc->type) && s->spec_armed_kind > 0) {
         col_player_spec_attack(s, npc_slot);
@@ -554,9 +554,8 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
 
     /* L11: per-set item effects (tbow target-magic scaling, bowfa + crystal
        armour) scale the base roll and max hit before any branch uses them. */
-    const OsrsEquipmentEffectProfile* effects = &s->set_effects[s->weapon_set];
-    uint8_t weapon_item =
-        col_loadouts_for_profile(s->active_loadout_profile)[s->weapon_set][GEAR_SLOT_WEAPON];
+    const OsrsEquipmentEffectProfile* effects = col_live_effects(s);
+    uint8_t weapon_item = s->player.equipped[GEAR_SLOT_WEAPON];
     int projectile_dist = encounter_projectile_distance(
         s->player.x, s->player.y, 1,
         npc->x, npc->y, col_npc_effective_size(npc),
@@ -693,7 +692,7 @@ static void col_tick_player_ctx(
             col_apply_divine_combat_potion_effect(s);
         col_enforce_divine_stat_floors(s);
         encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
-        col_recompute_all_loadout_stats(s);
+        col_mark_live_loadout_dirty(s);
     } else if (pot_act == COLO_POTION_RANGING &&
             s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
             (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
@@ -702,7 +701,7 @@ static void col_tick_player_ctx(
             col_apply_divine_ranged_potion_effect(s);
         col_enforce_divine_stat_floors(s);
         encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
-        col_recompute_all_loadout_stats(s);
+        col_mark_live_loadout_dirty(s);
     } else if (pot_act == COLO_POTION_SURGE &&
             s->surge_doses > 0 && s->player.potion_timer == 0 &&
             s->surge_cooldown == 0 && s->player.special_energy < 100) {

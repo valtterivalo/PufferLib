@@ -459,30 +459,11 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.special_energy = 100;
     s->player.run_energy = 10000;
 
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MAGIC], ATTACK_STYLE_MAGIC,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_ACCURATE,
-        COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile],
-        &s->loadout_stats[COLO_GEAR_MAGIC]);
+    col_mark_live_loadout_dirty(s);
+    col_ensure_live_loadout_stats(s);
 
     /* the thrall has no target until summoned (slot 0 is a real NPC index). */
     s->thrall_target_slot = -1;
-
-    /* spec loadout stats + per-set effect profiles: spec weapons fire off the
-       melee gear base with only the weapon slot swapped (L2). */
-    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_loadout[NUM_GEAR_SLOTS];
-        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
-        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
-        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
-            OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
-        encounter_derive_loadout_effect_profile(spec_loadout, &s->spec_effects[k]);
-    }
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        encounter_derive_loadout_effect_profile(loadouts[set], &s->set_effects[set]);
 
     s->player.x = COLO_PLAYER_START_X;
     s->player.y = COLO_PLAYER_START_Y;

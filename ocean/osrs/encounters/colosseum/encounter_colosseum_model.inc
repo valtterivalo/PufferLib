@@ -1729,7 +1729,9 @@ typedef struct {
     /* player combat state */
     OsrsInteraction interaction;
     ColoWeaponSet weapon_set;
-    EncounterLoadoutStats loadout_stats[COLO_NUM_WEAPON_SETS];
+    EncounterLoadoutStats loadout_stats_live;
+    OsrsEquipmentEffectProfile effects_live;
+    int loadout_stats_dirty;
 
     /* loadout profile + inventory state (researched setups, L1-L16) */
     ColoLoadoutProfile active_loadout_profile;
@@ -1742,9 +1744,6 @@ typedef struct {
     int surge_doses;
     int surge_cooldown;                /* ticks until the next surge dose (L13) */
     int spec_armed_kind;               /* 0 = none, 1 = spec A, 2 = spec B */
-    EncounterLoadoutStats spec_stats[COLO_NUM_SPEC_WEAPONS];
-    OsrsEquipmentEffectProfile set_effects[COLO_NUM_WEAPON_SETS];
-    OsrsEquipmentEffectProfile spec_effects[COLO_NUM_SPEC_WEAPONS];
 
     /* Arceuus thrall (one allied auto-attacker; not a ColoNPC slot). */
     int thrall_active;          /* 0/1 */

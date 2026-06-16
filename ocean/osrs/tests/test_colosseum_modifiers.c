@@ -64,6 +64,19 @@ static int tests_failed = 0;
     else { tests_failed++; printf("  FAIL: %s\n", (label)); } \
 } while (0)
 
+static EncounterLoadoutStats test_col_live_stats_for_set(
+    const ColosseumState* s,
+    ColoWeaponSet set
+);
+static OsrsEquipmentEffectProfile test_col_live_effects_for_set(
+    const ColosseumState* s,
+    ColoWeaponSet set
+);
+static EncounterLoadoutStats test_col_spec_stats_for_kind(
+    const ColosseumState* s,
+    int kind
+);
+
 /* drive one step with a fixed action vector, then exercise the obs + mask writers
    (their internal running-index asserts validate the layout each tick). */
 static void step_and_observe(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
@@ -1072,7 +1085,7 @@ static void test_relentless_def_level_bypass(void) {
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 233);
 
-    const EncounterLoadoutStats* ls = &s.loadout_stats[s.weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(&s);
     int def_bonus = encounter_player_def_bonus(
         ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
         ATTACK_STYLE_MELEE, MELEE_STYLE_STAB);
@@ -2721,7 +2734,7 @@ static void test_sol_grapple_perfect_parry(void) {
 
     /* B7: the next player attack consumes the guaranteed max on its FIRST splat
        (the scythe's extra splats into 5x5 Sol roll normally on top). */
-    int max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+    int max_hit = col_live_loadout_stats(&s)->max_hit;
     CHECK("rig sanity: the melee loadout has a positive max hit", max_hit > 0);
     col_player_attack_target(&s, idx);
     CHECK("the guaranteed max is consumed at no less than the loadout max hit",
@@ -2753,7 +2766,7 @@ static void test_sol_perfect_parry_forces_spec_attack(void) {
     CHECK("speedrun spec A is dragon claws",
         COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_DRAGON_CLAWS);
 
-    int max_hit = s.spec_stats[0].max_hit;
+    int max_hit = test_col_spec_stats_for_kind(&s, 1).max_hit;
     int claws_total = 2 * max_hit - 1;
     int expected_total = claws_total / 2 + claws_total / 4 +
         claws_total / 8 + claws_total / 8 + 1;
@@ -3106,6 +3119,37 @@ static int col_loadout_stats_equal(
            a->spell_base_damage == b->spell_base_damage;
 }
 
+/** Return live loadout stats for a set without mutating the caller's state. */
+static EncounterLoadoutStats test_col_live_stats_for_set(
+    const ColosseumState* s,
+    ColoWeaponSet set
+) {
+    ColosseumState copy = *s;
+    col_apply_weapon_set(&copy, set);
+    return *col_live_loadout_stats(&copy);
+}
+
+/** Return live equipment effects for a set without mutating the caller's state. */
+static OsrsEquipmentEffectProfile test_col_live_effects_for_set(
+    const ColosseumState* s,
+    ColoWeaponSet set
+) {
+    ColosseumState copy = *s;
+    col_apply_weapon_set(&copy, set);
+    return *col_live_effects(&copy);
+}
+
+/** Return on-demand spec stats for a spec kind without mutating the caller's state. */
+static EncounterLoadoutStats test_col_spec_stats_for_kind(
+    const ColosseumState* s,
+    int kind
+) {
+    ColosseumState copy = *s;
+    ColoSpecLoadout spec_loadout;
+    col_compute_spec_loadout(&copy, kind, &spec_loadout);
+    return spec_loadout.stats;
+}
+
 static void test_loadout_profiles_and_supplies(void) {
     printf("test_loadout_profiles_and_supplies\n");
     ColosseumContext ctx;
@@ -3122,13 +3166,17 @@ static void test_loadout_profiles_and_supplies(void) {
         s.surge_doses == 0);
     CHECK("beginner restore kind is super restore",
         s.full_supplies.restore_kind == COLO_RESTORE_SUPER_RESTORE);
+    OsrsEquipmentEffectProfile beginner_ranged_effects =
+        test_col_live_effects_for_set(&s, COLO_GEAR_RANGED);
+    OsrsEquipmentEffectProfile beginner_melee_effects =
+        test_col_live_effects_for_set(&s, COLO_GEAR_MELEE);
     CHECK("beginner bowfa set carries full crystal points (1+2+3)",
-        s.set_effects[COLO_GEAR_RANGED].crystal_armour_points == 6);
+        beginner_ranged_effects.crystal_armour_points == 6);
     CHECK("beginner melee neck carries blood fury",
-        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_BLOOD_FURY));
+        osrs_effect_profile_has(&beginner_melee_effects, OSRS_ITEM_EFFECT_BLOOD_FURY));
     CHECK("beginner melee head carries venom immunity",
-        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_VENOM_IMMUNE));
-    int beginner_melee_max = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+        osrs_effect_profile_has(&beginner_melee_effects, OSRS_ITEM_EFFECT_VENOM_IMMUNE));
+    int beginner_melee_max = col_live_loadout_stats(&s)->max_hit;
     CHECK("beginner spec weapons are SGS then claws",
         COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_SGS &&
         COLO_SPEC_WEAPONS[s.active_loadout_profile][1] == ITEM_DRAGON_CLAWS);
@@ -3140,8 +3188,9 @@ static void test_loadout_profiles_and_supplies(void) {
     EncounterLoadoutStats beginner_sgs_expected;
     encounter_compute_loadout_stats(beginner_sgs_without_defender, ATTACK_STYLE_MELEE,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &beginner_sgs_expected);
+    EncounterLoadoutStats beginner_sgs_spec = test_col_spec_stats_for_kind(&s, 1);
     CHECK("beginner SGS spec stats exclude dragon defender bonuses",
-        col_loadout_stats_equal(&s.spec_stats[0], &beginner_sgs_expected));
+        col_loadout_stats_equal(&beginner_sgs_spec, &beginner_sgs_expected));
 
     uint8_t beginner_claws_without_defender[NUM_GEAR_SLOTS];
     memcpy(beginner_claws_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
@@ -3150,12 +3199,13 @@ static void test_loadout_profiles_and_supplies(void) {
     EncounterLoadoutStats beginner_claws_without;
     encounter_compute_loadout_stats(beginner_claws_without_defender, ATTACK_STYLE_MELEE,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &beginner_claws_without);
+    EncounterLoadoutStats beginner_claws_spec = test_col_spec_stats_for_kind(&s, 2);
     CHECK("beginner claws spec stats keep dragon defender strength",
-        s.spec_stats[1].strength_bonus ==
+        beginner_claws_spec.strength_bonus ==
             beginner_claws_without.strength_bonus +
             ITEM_DATABASE[ITEM_DRAGON_DEFENDER].melee_strength);
     CHECK("beginner claws spec stats keep dragon defender accuracy",
-        s.spec_stats[1].attack_bonus > beginner_claws_without.attack_bonus);
+        beginner_claws_spec.attack_bonus > beginner_claws_without.attack_bonus);
 
     uint8_t beginner_bowfa_with_defender[NUM_GEAR_SLOTS];
     memcpy(beginner_bowfa_with_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS);
@@ -3163,9 +3213,11 @@ static void test_loadout_profiles_and_supplies(void) {
     EncounterLoadoutStats beginner_bowfa_illegal_shield;
     encounter_compute_loadout_stats(beginner_bowfa_with_defender, ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &beginner_bowfa_illegal_shield);
+    EncounterLoadoutStats beginner_ranged_stats =
+        test_col_live_stats_for_set(&s, COLO_GEAR_RANGED);
     CHECK("beginner bowfa ranged stats are unchanged by an occupied shield slot",
         col_loadout_stats_equal(
-            &s.loadout_stats[COLO_GEAR_RANGED], &beginner_bowfa_illegal_shield));
+            &beginner_ranged_stats, &beginner_bowfa_illegal_shield));
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 1.0f, 12);
     CHECK("speedrun mode pins the speedrun profile",
@@ -3178,17 +3230,23 @@ static void test_loadout_profiles_and_supplies(void) {
         s.surge_doses == 4);
     CHECK("speedrun restore kind is sanfew",
         s.full_supplies.restore_kind == COLO_RESTORE_SANFEW);
+    OsrsEquipmentEffectProfile speedrun_ranged_effects =
+        test_col_live_effects_for_set(&s, COLO_GEAR_RANGED);
     CHECK("speedrun ranged set has the tbow effect",
-        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_RANGED], OSRS_ITEM_EFFECT_TWISTED_BOW));
+        osrs_effect_profile_has(&speedrun_ranged_effects, OSRS_ITEM_EFFECT_TWISTED_BOW));
     /* per-splat the fang can rival the scythe (wiki Budget footnote j: the fang
        wins on 1x1s); the scythe's edge is the 7/4 splat total into 3x3+ NPCs. */
+    EncounterLoadoutStats speedrun_melee_stats = *col_live_loadout_stats(&s);
+    EncounterLoadoutStats speedrun_ranged_stats =
+        test_col_live_stats_for_set(&s, COLO_GEAR_RANGED);
     CHECK("speedrun scythe total (7/4 splats) out-hits the beginner fang",
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit * 7 / 4 > beginner_melee_max);
+        speedrun_melee_stats.max_hit * 7 / 4 > beginner_melee_max);
     CHECK("both loadouts melee-style on the melee set",
-        s.loadout_stats[COLO_GEAR_MELEE].style == ATTACK_STYLE_MELEE &&
-        s.loadout_stats[COLO_GEAR_RANGED].style == ATTACK_STYLE_RANGED);
+        speedrun_melee_stats.style == ATTACK_STYLE_MELEE &&
+        speedrun_ranged_stats.style == ATTACK_STYLE_RANGED);
     CHECK("spec stats computed for both spec weapons",
-        s.spec_stats[0].max_hit > 0 && s.spec_stats[1].max_hit > 0);
+        test_col_spec_stats_for_kind(&s, 1).max_hit > 0 &&
+        test_col_spec_stats_for_kind(&s, 2).max_hit > 0);
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_MIXED, 1.0f, 13);
     CHECK("mixed fraction 1.0 always samples beginner",
@@ -3205,7 +3263,7 @@ static void test_loadout_consumables(void) {
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 21);
     complete_open_draft(&s, &ctx, 1);
     int idle[COLO_NUM_ACTION_HEADS] = {0};
-    int base_max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+    int base_max_hit = col_live_loadout_stats(&s)->max_hit;
 
     /* brew: heals 16, drains stats, melee max hit drops (L12) */
     s.player.current_hitpoints = 50;
@@ -3217,7 +3275,7 @@ static void test_loadout_consumables(void) {
         s.player.brew_doses == 23 && s.player.potion_timer == 3);
     CHECK("brew drains attack below base", s.player.current_attack < 99);
     CHECK("brew drain lowers the melee max hit",
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit < base_max_hit);
+        col_live_loadout_stats(&s)->max_hit < base_max_hit);
 
     /* restore: stats (and the max hit) come back once the timer clears */
     for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
@@ -3226,7 +3284,7 @@ static void test_loadout_consumables(void) {
     step_and_observe(&s, &ctx, restore);
     CHECK("super restore returns attack to base", s.player.current_attack == 99);
     CHECK("restore recovers the melee max hit",
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit == base_max_hit);
+        col_live_loadout_stats(&s)->max_hit == base_max_hit);
     CHECK("restore consumed a dose", s.player.restore_doses == 31);
 
     /* super combat: boosts att/str/def to 118 and raises the max hit */
@@ -3237,7 +3295,7 @@ static void test_loadout_consumables(void) {
     CHECK("super combat boosts attack to 118", s.player.current_attack == 118);
     CHECK("super combat boosts strength to 118", s.player.current_strength == 118);
     CHECK("super combat raises the melee max hit",
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit > base_max_hit);
+        col_live_loadout_stats(&s)->max_hit > base_max_hit);
     CHECK("combat pot consumed a dose", s.player.combat_potion_doses == 7);
 
     /* boosted: the combat-pot mask entry closes (inferno [base, base+5] window) */
@@ -3392,10 +3450,10 @@ static void test_loadout_sanfew_and_serp_helm(void) {
         s.weapon_set == COLO_GEAR_MELEE);
     col_mod_manticore_apply_venom(&s, 1);
     CHECK("serp helm blocks venom in the melee set", s.player_venom == 0);
-    s.weapon_set = COLO_GEAR_RANGED;   /* crystal helm: no immunity */
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     col_mod_manticore_apply_venom(&s, 1);
     CHECK("venom applies in the ranged set", s.player_venom == COLO_VENOM_START);
-    s.weapon_set = COLO_GEAR_MELEE;
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     int venom_before = s.player_venom;
     col_mod_manticore_apply_venom(&s, 1);
     CHECK("serp helm does not cure or escalate an existing stack",
@@ -3407,7 +3465,7 @@ static void test_loadout_sanfew_and_serp_helm(void) {
     s.player_poison_timer = 0;
     col_mod_apply_bee_poison(&s);
     CHECK("serp helm blocks bee poison in the melee set", s.player_poison == 0);
-    s.weapon_set = COLO_GEAR_RANGED;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     col_mod_apply_bee_poison(&s);
     CHECK("a venomed player cannot also be poisoned", s.player_poison == 0);
     s.player_venom = 0;
@@ -3552,7 +3610,7 @@ static void test_loadout_spec_weapons(void) {
         col_init_npc(&s, 1, COLO_FREMENNIK_BERSERKER, 15, 15);
         s.player.attack_timer = 0;
         col_player_attack_target(&s, 0);
-        int scythe_max = s.loadout_stats[s.weapon_set].max_hit;
+        int scythe_max = col_live_loadout_stats(&s)->max_hit;
         if (s.npcs[0].pending_hits.count == 1 &&
                 s.npcs[1].pending_hits.count == 1 &&
                 s.npcs[0].pending_hits.hits[0].damage == scythe_max &&
@@ -3639,10 +3697,10 @@ static void test_loadout_spec_weapons(void) {
     s.player.special_energy = 100;
     col_tick_player_ctx(&s, &ctx, arm, 0);
     CHECK("arming succeeds with the energy", s.spec_armed_kind == 1);
-    s.weapon_set = COLO_GEAR_RANGED;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     CHECK("an armed melee spec pulls the reach to 1",
         col_player_attack_range(&s) == 1);
-    s.weapon_set = COLO_GEAR_MELEE;
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     col_tick_player_ctx(&s, &ctx, arm, 0);
     CHECK("re-pressing the armed spec disarms it", s.spec_armed_kind == 0);
 }
@@ -3655,18 +3713,20 @@ static void test_loadout_item_effects(void) {
     /* L11 tbow scaling: max hit vs Sol (magic 300) beats max hit vs the jaguar
        (magic 100) with the same base stats. */
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 61);
-    const EncounterLoadoutStats* rls = &s.loadout_stats[COLO_GEAR_RANGED];
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
+    const EncounterLoadoutStats* rls = col_live_loadout_stats(&s);
+    const OsrsEquipmentEffectProfile* ranged_effects = col_live_effects(&s);
     int base_att = osrs_player_att_roll(rls->eff_level, rls->attack_bonus);
     const ColoNpcStats* sol = &COLO_NPC_STATS[COLO_SOL_HEREDIT];
     const ColoNpcStats* jag = &COLO_NPC_STATS[COLO_JAGUAR_WARRIOR];
     OsrsPreparedAttackEffects vs_sol = osrs_prepare_attack_effects(
-        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ranged_effects, &s.player.item_effect_state,
         ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
         osrs_target_ref_none(), 1, base_att, rls->max_hit,
         osrs_target_effect_context_magic(sol->magic_level, sol->magic_att_bonus),
         s.player.current_hitpoints, s.player.base_hitpoints);
     OsrsPreparedAttackEffects vs_jag = osrs_prepare_attack_effects(
-        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ranged_effects, &s.player.item_effect_state,
         ITEM_TWISTED_BOW, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
         osrs_target_ref_none(), 1, base_att, rls->max_hit,
         osrs_target_effect_context_magic(jag->magic_level, jag->magic_att_bonus),
@@ -3676,10 +3736,12 @@ static void test_loadout_item_effects(void) {
 
     /* L11 crystal armour: bowfa + full crystal = x26/20 accuracy, x46/40 damage */
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 62);
-    const EncounterLoadoutStats* bls = &s.loadout_stats[COLO_GEAR_RANGED];
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
+    const EncounterLoadoutStats* bls = col_live_loadout_stats(&s);
+    ranged_effects = col_live_effects(&s);
     int bowfa_att = osrs_player_att_roll(bls->eff_level, bls->attack_bonus);
     OsrsPreparedAttackEffects bowfa = osrs_prepare_attack_effects(
-        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ranged_effects, &s.player.item_effect_state,
         ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
         osrs_target_ref_none(), 1, bowfa_att, bls->max_hit,
         osrs_target_effect_context_magic(100, 0),
@@ -3692,9 +3754,11 @@ static void test_loadout_item_effects(void) {
     /* blood fury: ~20% of melee damage events heal 30% of the damage */
     int procs = 0;
     uint32_t rng = 777;
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
+    const OsrsEquipmentEffectProfile* melee_effects = col_live_effects(&s);
     for (int i = 0; i < 400; i++) {
         OsrsPostAttackEffects post = osrs_finalize_attack_effects(
-            &s.set_effects[COLO_GEAR_MELEE], &s.player.item_effect_state,
+            melee_effects, &s.player.item_effect_state,
             ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE,
             osrs_target_ref_none(), 1, 0, 1, 30, &rng);
         if (post.heal_amount > 0) {
@@ -3706,8 +3770,10 @@ static void test_loadout_item_effects(void) {
     CHECK("blood fury procs at a plausible 20% rate", procs > 40 && procs < 130);
 
     /* no blood fury on the ranged set */
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
+    ranged_effects = col_live_effects(&s);
     OsrsPostAttackEffects ranged_post = osrs_finalize_attack_effects(
-        &s.set_effects[COLO_GEAR_RANGED], &s.player.item_effect_state,
+        ranged_effects, &s.player.item_effect_state,
         ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
         osrs_target_ref_none(), 1, 0, 1, 30, &rng);
     CHECK("no blood fury heal on the ranged set", ranged_post.heal_amount == 0);
@@ -3719,23 +3785,24 @@ static void test_loadout_offensive_prayers(void) {
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
     complete_open_draft(&s, &ctx, 1);
-    int base_max_hit = s.loadout_stats[COLO_GEAR_MELEE].max_hit;
+    int base_max_hit = col_live_loadout_stats(&s)->max_hit;
 
     int piety[COLO_NUM_ACTION_HEADS] = {0};
     piety[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
     step_and_observe(&s, &ctx, piety);
     CHECK("piety activates", s.player.offensive_prayer == OFFENSIVE_PRAYER_PIETY);
     CHECK("piety raises the melee max hit (L12)",
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit > base_max_hit);
+        col_live_loadout_stats(&s)->max_hit > base_max_hit);
     CHECK("piety raises the spec max hits too",
-        s.spec_stats[0].max_hit > 0 && s.spec_stats[1].max_hit > 0);
+        test_col_spec_stats_for_kind(&s, 1).max_hit > 0 &&
+        test_col_spec_stats_for_kind(&s, 2).max_hit > 0);
 
     int off[COLO_NUM_ACTION_HEADS] = {0};
     off[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_OFF;
     step_and_observe(&s, &ctx, off);
     CHECK("offensive off restores the base max hit",
         s.player.offensive_prayer == OFFENSIVE_PRAYER_NONE &&
-        s.loadout_stats[COLO_GEAR_MELEE].max_hit == base_max_hit);
+        col_live_loadout_stats(&s)->max_hit == base_max_hit);
 
     float mask[COLO_ACTION_MASK_SIZE];
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
@@ -3851,7 +3918,7 @@ static void test_bee_contact_damage_band(void) {
     /* beginner RANGED set wears the crystal helm: no venom immunity, so the bee
        contact damage lands and the band can be observed directly. */
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 4242);
-    s.weapon_set = COLO_GEAR_RANGED;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     geo_clear_npcs(&s);
     s.modifiers.active_mask |= (1u << COLO_MOD_BEES);
     s.modifiers.tier[COLO_MOD_BEES] = 1;
@@ -3874,9 +3941,9 @@ static void test_bee_contact_damage_band(void) {
 
     /* the melee set wears the serpentine helm: full venom immunity zeroes the
        bee contact damage. */
-    s.weapon_set = COLO_GEAR_MELEE;
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     CHECK("rig sanity: the melee set is venom-immune",
-        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_VENOM_IMMUNE));
+        osrs_effect_profile_has(col_live_effects(&s), OSRS_ITEM_EFFECT_VENOM_IMMUNE));
     bee->x = s.player.x;
     bee->y = s.player.y;
     s.player.current_hitpoints = 99;
@@ -3971,14 +4038,16 @@ static void test_magic_set_max_hit_math(void) {
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 91);
-    CHECK("env budget magic set max hit == 31", s.loadout_stats[COLO_GEAR_MAGIC].max_hit == 31);
+    col_apply_weapon_set(&s, COLO_GEAR_MAGIC);
+    CHECK("env budget magic set max hit == 31", col_live_loadout_stats(&s)->max_hit == 31);
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 92);
-    CHECK("env high-eff magic set max hit == 48", s.loadout_stats[COLO_GEAR_MAGIC].max_hit == 48);
+    col_apply_weapon_set(&s, COLO_GEAR_MAGIC);
+    CHECK("env high-eff magic set max hit == 48", col_live_loadout_stats(&s)->max_hit == 48);
 
     /* the GEAR action head can actually REACH the magic set: gear action 3 must
        switch the player to COLO_GEAR_MAGIC (regression — act 3 was an unmapped
        no-op, leaving the whole magic set unreachable by the policy). */
-    s.weapon_set = COLO_GEAR_MELEE;
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     int gear_magic[COLO_NUM_ACTION_HEADS] = {0};
     gear_magic[COLO_HEAD_GEAR] = 3;
     col_tick_player_ctx(&s, &ctx, gear_magic, 1);
@@ -4232,7 +4301,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
     CHECK("magic weapon set survives the round-trip",
         restored.weapon_set == COLO_GEAR_MAGIC);
     CHECK("the recomputed magic set max hit matches the live high-eff value (48)",
-        restored.loadout_stats[COLO_GEAR_MAGIC].max_hit == 48);
+        col_live_loadout_stats(&restored)->max_hit == 48);
     CHECK("thrall fields round-trip bit-identically",
         restored.thrall_active == 1 && restored.thrall_target_slot == slot &&
         restored.thrall_lifetime_left == 123 && restored.thrall_attack_timer == 2 &&
@@ -4654,7 +4723,7 @@ static void test_player_ranged_los_blocked_by_pillar(void) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
     geo_clear_npcs(&s);
     s.modifiers.draft_pending = 0;   /* unfreeze (skip the wave-1 draft) so the attack gate runs */
-    s.weapon_set = COLO_GEAR_RANGED;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     CHECK("ranged loadout reaches past 1 tile", col_player_attack_range(&s) > 1);
 
     /* pillar 0 fills tiles (8..10, 8..10). Player W of it, 1x1 target E of it, on
@@ -4697,7 +4766,7 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 5151);
     geo_clear_npcs(&s);
     s.modifiers.draft_pending = 0;
-    s.weapon_set = COLO_GEAR_RANGED;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
 
     s.player.x = 5;
     s.player.y = 9;

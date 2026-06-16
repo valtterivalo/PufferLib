@@ -178,8 +178,8 @@ static int col_npc_dist_to_player(const ColosseumState* s, const ColoNPC* npc) {
 /** player defence roll against an incoming NPC attack of the given style.
     A23: Relentless bypasses 33/66/100% of the Defence LEVEL before the roll —
     the gear defence bonus enters the formula fully intact. */
-static int col_player_def_roll(const ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+static int col_player_def_roll(ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
     return encounter_player_def_roll_from_loadout(
         def_level, s->player.current_magic,

@@ -451,8 +451,7 @@ static void col_emit_player_attack_projectiles(
     if (!target->active)
         return;
 
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    uint8_t weapon = loadouts[s->weapon_set][GEAR_SLOT_WEAPON];
+    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     int target_size = col_npc_effective_size(target);
     int p_start_h = 64;
     int p_end_h = (int)(target_size * 0.5f * 128);
@@ -834,30 +833,8 @@ typedef struct {
 
 static void col_refresh_after_state_load(ColosseumState* s, ColosseumContext* ctx) {
     col_build_npc_stats();
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
-        s->player.offensive_prayer, s->player.current_strength,
-        FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
-        s->player.offensive_prayer, s->player.current_ranged,
-        FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MAGIC], ATTACK_STYLE_MAGIC,
-        s->player.offensive_prayer, s->player.current_magic,
-        FIGHT_STYLE_ACCURATE, COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile],
-        &s->loadout_stats[COLO_GEAR_MAGIC]);
-    encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_loadout[NUM_GEAR_SLOTS];
-        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
-        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
-        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
-            s->player.offensive_prayer, s->player.current_strength,
-            FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
-        osrs_derive_equipment_effect_profile(spec_loadout, &s->spec_effects[k]);
-    }
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        osrs_derive_equipment_effect_profile(loadouts[set], &s->set_effects[set]);
+    col_mark_live_loadout_dirty(s);
+    col_ensure_live_loadout_stats(s);
     col_rebuild_player_collision_flags(s);
     col_refresh_current_obs_slots_ctx(s, ctx);
 }
