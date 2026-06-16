@@ -135,9 +135,10 @@ def match_args(render_mode: str = "auto") -> dict:
         "train": {
             "horizon": 8,
             "minibatch_size": 16384,
-            "num_start_states": 4096,
+            "num_start_states": 64,
             "cl_frac": 0.05,
             "fresh_frac": 0.0,
+            "state_trajectory_max_len": 512,
         },
         "sweep": {},
     }
