@@ -28,9 +28,13 @@ def test_load_config_includes_state_curriculum_hypers(monkeypatch: pytest.Monkey
     args = pufferl.load_config("default")
 
     assert "state_lambda" in args["train"]
-    assert "state_priority_decay" in args["train"]
+    assert "num_start_states" in args["train"]
+    assert "fresh_frac" in args["train"]
+    assert "state_trajectory_max_len" in args["train"]
     assert args["train"]["state_lambda"] == pytest.approx(args["train"]["gae_lambda"])
-    assert args["train"]["state_priority_decay"] == pytest.approx(0.95)
+    assert args["train"]["num_start_states"] == 1
+    assert args["train"]["fresh_frac"] == pytest.approx(0.0)
+    assert args["train"]["state_trajectory_max_len"] == 1024
 
 
 def test_load_config_includes_rollout_eval_section(monkeypatch: pytest.MonkeyPatch) -> None:

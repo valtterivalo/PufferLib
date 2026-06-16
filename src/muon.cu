@@ -364,7 +364,8 @@ void muon_step(Muon* m, FloatTensor weights, PrecisionTensor grads, float max_gr
         }
 
         muon_weight_update<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-            wb_ptr, update_ptr, m->lr_ptr, (float)m->weight_decay, scale, (int)ne);
+            wb_ptr, update_ptr, m->lr_ptr, (float)m->weight_decay,
+            scale, (int)ne);
         offset += ne;
     }
 }

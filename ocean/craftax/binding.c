@@ -15,11 +15,14 @@
 #define MY_VEC_STEP craftax_vec_step
 #define MY_VEC_STEP_RANGE craftax_vec_step_range
 #define Env Craftax
+static inline void puffer_state_refresh(Craftax* env) {
+    craftax_encode_native_observation(&env->state, env->observations);
+}
 #include "vecenv.h"
 
 // Tiled vector step: process agents in tiles that fit comfortably in cache.
-// Each thread processes a contiguous block of lightweight env handles while
-// the heavier CraftaxState storage lives in a separate arena.
+// Each thread processes a contiguous block of env handles and their embedded
+// Puffer 5 State payloads.
 void craftax_vec_step(StaticVec* vec) {
     memset(vec->rewards, 0, vec->total_agents * sizeof(float));
     memset(vec->terminals, 0, vec->total_agents * sizeof(float));
@@ -50,10 +53,6 @@ void craftax_vec_step_range(StaticVec* vec, int env_start, int env_count, int nu
     }
 }
 
-static CraftaxState* craftax_alloc_state_arena(int num_envs) {
-    return (CraftaxState*)calloc((size_t)num_envs, sizeof(CraftaxState));
-}
-
 Env* my_vec_init(
     int* num_envs_out,
     int* buffer_env_starts,
@@ -67,12 +66,6 @@ Env* my_vec_init(
     int num_envs = total_agents;
 
     Env* envs = (Env*)calloc((size_t)num_envs, sizeof(Env));
-    CraftaxArena* arena = (CraftaxArena*)calloc(1, sizeof(CraftaxArena));
-    arena->states = craftax_alloc_state_arena(num_envs);
-    arena->num_envs = num_envs;
-    arena->packet_size = CRAFTAX_ARENA_PACKET_SIZE;
-    arena->num_packets = (num_envs + CRAFTAX_ARENA_PACKET_SIZE - 1)
-        / CRAFTAX_ARENA_PACKET_SIZE;
 
     int buf = 0;
     int buf_agents = 0;
@@ -82,11 +75,6 @@ Env* my_vec_init(
     for (int i = 0; i < num_envs; i++) {
         Env* env = &envs[i];
         env->rng = (unsigned int)i;
-        env->arena = arena;
-        env->state = &arena->states[i];
-        env->packet_id = i / arena->packet_size;
-        env->lane_id = i % arena->packet_size;
-        env->owns_state_storage = false;
         my_init(env, env_kwargs);
 
         buf_agents += env->num_agents;
@@ -104,13 +92,7 @@ Env* my_vec_init(
 }
 
 void my_vec_close(Env* envs) {
-    if (envs == NULL || envs[0].arena == NULL) {
-        return;
-    }
-
-    CraftaxArena* arena = envs[0].arena;
-    free(arena->states);
-    free(arena);
+    (void)envs;
 }
 
 void my_init(Env* env, Dict* kwargs) {

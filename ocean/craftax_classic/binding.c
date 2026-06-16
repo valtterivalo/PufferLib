@@ -6,6 +6,9 @@
 #define OBS_TENSOR_T FloatTensor
 
 #define Env CraftaxClassic
+static inline void puffer_state_refresh(CraftaxClassic* env) {
+    compute_observations(&env->state, env->observations);
+}
 #include "vecenv.h"
 
 void my_init(Env* env, Dict* kwargs) {

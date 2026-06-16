@@ -345,7 +345,7 @@ typedef struct CraftaxMobs2 {
     int32_t type_id[CRAFTAX_NUM_LEVELS][2];
 } CraftaxMobs2;
 
-typedef struct CraftaxState {
+typedef struct State {
     // === Hot data (accessed every step) ===
     int32_t player_position[2];
     int32_t player_level;
@@ -416,7 +416,9 @@ typedef struct CraftaxState {
     int32_t up_ladders[CRAFTAX_NUM_LEVELS][2];
     bool chests_opened[CRAFTAX_NUM_LEVELS];
     int32_t monsters_killed[CRAFTAX_NUM_LEVELS];
-} CraftaxState;
+} State;
+
+typedef State CraftaxState;
 
 typedef char CraftaxStateMatchesWorldState[
     (sizeof(CraftaxState) == sizeof(CraftaxWorldState)) ? 1 : -1
@@ -493,15 +495,6 @@ static inline void craftax_refresh_spawn_bits_all(CraftaxState* state) {
         }
     }
 }
-
-#define CRAFTAX_ARENA_PACKET_SIZE 64
-
-typedef struct CraftaxArena {
-    CraftaxState* states;
-    int num_envs;
-    int packet_size;
-    int num_packets;
-} CraftaxArena;
 
 #ifdef CRAFTAX_ENABLE_ENV_IMPL
 static inline void craftax_change_floor_native(CraftaxState* state, int32_t action);
@@ -587,11 +580,7 @@ typedef struct Craftax {
     unsigned int rng;
     uint64_t seed;
     CraftaxThreefryKey rng_key;
-    CraftaxArena* arena;
-    CraftaxState* state;
-    int32_t packet_id;
-    int32_t lane_id;
-    bool owns_state_storage;
+    State state;
 
     float achievements[CRAFTAX_NUM_ACHIEVEMENTS];
     float episode_return_accum;
@@ -678,37 +667,18 @@ static inline void craftax_set_reset_pool_size(int n) {
     g_craftax_reset_pool_ready = 1;
 }
 
-static inline void craftax_ensure_state_storage(Craftax* env) {
-    if (env->state != NULL) {
-        return;
-    }
-
-    CraftaxArena* arena = (CraftaxArena*)calloc(1, sizeof(CraftaxArena));
-    arena->states = (CraftaxState*)calloc(1, sizeof(CraftaxState));
-    arena->num_envs = 1;
-    arena->packet_size = 1;
-    arena->num_packets = 1;
-
-    env->arena = arena;
-    env->state = arena->states;
-    env->packet_id = 0;
-    env->lane_id = 0;
-    env->owns_state_storage = true;
-}
-
 static inline void craftax_reset_state_from_seed(Craftax* env) {
-    craftax_ensure_state_storage(env);
     CraftaxThreefryKey initial_key = craftax_prng_key((uint32_t)env->seed);
     if (g_craftax_reset_pool_size > 0) {
         CraftaxThreefryKey discard;
         craftax_threefry_split(initial_key, &env->rng_key, &discard);
         int idx = (int)(env->seed % (uint64_t)g_craftax_reset_pool_size);
-        memcpy(env->state, &g_craftax_reset_pool[idx], sizeof(CraftaxState));
+        memcpy(&env->state, &g_craftax_reset_pool[idx], sizeof(CraftaxState));
         return;
     }
     CraftaxThreefryKey reset_key;
     craftax_threefry_split(initial_key, &env->rng_key, &reset_key);
-    craftax_reset_state_from_reset_key(env->state, reset_key);
+    craftax_reset_state_from_reset_key(&env->state, reset_key);
 }
 
 // Hot-path reset used by c_step on episode-done. Consults the reset pool
@@ -865,7 +835,6 @@ static float craftax_gameplay_step_native(
 static void c_init(Craftax* env) {
     env->client = NULL;
     env->num_agents = 1;
-    craftax_ensure_state_storage(env);
     env->episode_return_accum = 0.0f;
     env->episode_length_accum = 0;
     memset(env->achievements, 0, sizeof(env->achievements));
@@ -886,7 +855,7 @@ static void c_reset(Craftax* env) {
     memset(env->achievements, 0, sizeof(env->achievements));
 
     craftax_reset_state_from_seed(env);
-    craftax_encode_native_observation(env->state, env->observations);
+    craftax_encode_native_observation(&env->state, env->observations);
 }
 
 #ifdef CRAFTAX_PROFILE
@@ -912,14 +881,14 @@ static void c_step_native(Craftax* env) {
     craftax_threefry_split(step_key, &step_rng, &reset_key);
     CRAFTAX_PROFILE_END(12);
 
-    float reward = craftax_gameplay_step_native(env->state, action, step_rng);
+    float reward = craftax_gameplay_step_native(&env->state, action, step_rng);
 
     CRAFTAX_PROFILE_ZONE(13);
-    bool done = craftax_is_game_over_native(env->state);
+    bool done = craftax_is_game_over_native(&env->state);
     CRAFTAX_PROFILE_END(13);
 
     CRAFTAX_PROFILE_ZONE(15);
-    craftax_copy_achievements_to_env(env, env->state);
+    craftax_copy_achievements_to_env(env, &env->state);
     CRAFTAX_PROFILE_END(15);
 
     CRAFTAX_PROFILE_ZONE(16);
@@ -935,12 +904,12 @@ static void c_step_native(Craftax* env) {
         env->episode_length_accum = 0;
         memset(env->achievements, 0, sizeof(env->achievements));
         CRAFTAX_PROFILE_ZONE(14);
-        craftax_reset_state_on_done(env->state, reset_key);
+        craftax_reset_state_on_done(&env->state, reset_key);
         CRAFTAX_PROFILE_END(14);
     }
 
     CRAFTAX_PROFILE_ZONE(11);
-    craftax_encode_native_observation(env->state, env->observations);
+    craftax_encode_native_observation(&env->state, env->observations);
     CRAFTAX_PROFILE_END(11);
 
     // Record unprofiled time
@@ -974,9 +943,9 @@ static void c_step_gameplay(Craftax* env) {
     CraftaxThreefryKey reset_key;
     craftax_threefry_split(step_key, &step_rng, &reset_key);
 
-    float reward = craftax_gameplay_step_native(env->state, action, step_rng);
-    bool done = craftax_is_game_over_native(env->state);
-    craftax_copy_achievements_to_env(env, env->state);
+    float reward = craftax_gameplay_step_native(&env->state, action, step_rng);
+    bool done = craftax_is_game_over_native(&env->state);
+    craftax_copy_achievements_to_env(env, &env->state);
 
     env->rewards[0] = reward;
     env->terminals[0] = done ? 1.0f : 0.0f;
@@ -988,12 +957,12 @@ static void c_step_gameplay(Craftax* env) {
         env->episode_return_accum = 0.0f;
         env->episode_length_accum = 0;
         memset(env->achievements, 0, sizeof(env->achievements));
-        craftax_reset_state_on_done(env->state, reset_key);
+        craftax_reset_state_on_done(&env->state, reset_key);
     }
 }
 
 static void c_step_encode(Craftax* env) {
-    craftax_encode_native_observation(env->state, env->observations);
+    craftax_encode_native_observation(&env->state, env->observations);
 }
 
 static void c_step(Craftax* env) {
@@ -1002,14 +971,7 @@ static void c_step(Craftax* env) {
 }
 
 static void c_close(Craftax* env) {
-    if (!env->owns_state_storage || env->arena == NULL) {
-        return;
-    }
-    free(env->arena->states);
-    free(env->arena);
-    env->arena = NULL;
-    env->state = NULL;
-    env->owns_state_storage = false;
+    (void)env;
 }
 
 // ------------------------------------------------------------
@@ -1108,7 +1070,7 @@ static void c_render(Craftax* env) {
     if (!craftax_textures_loaded) craftax_load_textures();
     if (IsKeyDown(KEY_ESCAPE)) exit(0);
 
-    CraftaxState* s = env->state;
+    State* s = &env->state;
     int lvl = s->player_level;
     int pr = s->player_position[0];
     int pc = s->player_position[1];

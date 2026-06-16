@@ -17,7 +17,6 @@ static const unsigned char WALLS = 1;
 static const unsigned char BOXES = 2;
 static const unsigned char TARGET = 3;
 
-
 // Required struct. Only use floats!
 typedef struct {
     float perf; // Recommended 0-1 normalized single real number perf metric
@@ -51,6 +50,7 @@ typedef struct State {
     int curriculum_difficulty;
     int largest_solved_difficulty;
     int episode_maps_solved;
+    int sequence_pos;
     bool initialized;
     float episode_return;
     unsigned char observations[BOXOBAN_PUZZLE_OBS_BYTES];
@@ -60,7 +60,7 @@ typedef struct State {
 // Recommended that you name it the same as the env file
 typedef struct {
     Log log; // Required field. Env binding code uses this to aggregate logs
-    unsigned char* observations; // Required. You can use any obs type, but make sure it matches in Python!
+    float* observations; // Required. Exposed obs are floats; map state is byte-packed.
     float* actions; // Required. int* for discrete/multidiscrete, float* for box
     float* rewards; // Required
     float* terminals; // Required. We don't yet have truncations as standard yet
@@ -68,6 +68,10 @@ typedef struct {
     int size;
     int num_agents;
     int max_steps;
+    int num_levels; // -1 uses every puzzle in the selected map bin
+    int map_idx; // -1 samples normally; >=0 always loads this puzzle index
+    int map_sequence_len; // 0 disables ordered map progression
+    int* map_sequence;
     float int_r_coeff;
     int difficulty_id; // 0=basic,1=easy,2=medium,3=hard,4=unfiltered,5=incremental
     int curriculum_mode; // 1 when using incremental difficulty mode
@@ -76,6 +80,113 @@ typedef struct {
 } Boxoban;
 
 void ensure_map_loaded(void);
+
+static bool boxoban_ends_with(const char* value, const char* suffix) {
+    size_t value_len = strlen(value);
+    size_t suffix_len = strlen(suffix);
+    if (suffix_len > value_len) {
+        return false;
+    }
+    return strcmp(value + value_len - suffix_len, suffix) == 0;
+}
+
+static char* boxoban_read_text_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+
+    char* text = (char*)malloc((size_t)size + 1);
+    if (text == NULL) {
+        fclose(f);
+        return NULL;
+    }
+    size_t nread = fread(text, 1, (size_t)size, f);
+    fclose(f);
+    text[nread] = '\0';
+    return text;
+}
+
+static int boxoban_parse_map_sequence_text(const char* text, int** out_maps) {
+    int count = 0;
+    int cap = 0;
+    int* maps = NULL;
+    const char* p = text;
+    while (*p != '\0') {
+        while (*p != '\0' && (*p < '0' || *p > '9')) {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        char* end = NULL;
+        long value = strtol(p, &end, 10);
+        if (end == p || value < 0 || value > INT32_MAX) {
+            free(maps);
+            return -1;
+        }
+        if (count == cap) {
+            int next_cap = cap == 0 ? 16 : cap * 2;
+            int* next = (int*)realloc(maps, (size_t)next_cap * sizeof(int));
+            if (next == NULL) {
+                free(maps);
+                return -1;
+            }
+            maps = next;
+            cap = next_cap;
+        }
+        maps[count++] = (int)value;
+        p = end;
+    }
+
+    *out_maps = maps;
+    return count;
+}
+
+static void boxoban_free_map_sequence(Boxoban* env) {
+    free(env->map_sequence);
+    env->map_sequence = NULL;
+    env->map_sequence_len = 0;
+}
+
+static int boxoban_set_map_sequence(Boxoban* env, const char* spec) {
+    boxoban_free_map_sequence(env);
+    if (spec == NULL || spec[0] == '\0' || strcmp(spec, "-") == 0) {
+        return 0;
+    }
+
+    char* file_text = boxoban_read_text_file(spec);
+    if (file_text == NULL && (strchr(spec, '/') != NULL ||
+            boxoban_ends_with(spec, ".txt"))) {
+        fprintf(stderr, "Failed to read Boxoban map_sequence file: %s\n", spec);
+        return -1;
+    }
+
+    const char* text = file_text != NULL ? file_text : spec;
+    int* maps = NULL;
+    int count = boxoban_parse_map_sequence_text(text, &maps);
+    free(file_text);
+    if (count <= 0) {
+        free(maps);
+        fprintf(stderr, "Boxoban map_sequence must contain at least one map index\n");
+        return -1;
+    }
+
+    env->map_sequence = maps;
+    env->map_sequence_len = count;
+    return 0;
+}
 
 static int boxoban_configure_maps_from_env(Boxoban* env) {
     env->curriculum_mode = (env->difficulty_id == BOXOBAN_DIFFICULTY_INCREMENTAL);
@@ -126,7 +237,20 @@ static inline uint32_t get_random_puzzle_idx(Boxoban* env, size_t puzzle_count) 
 
 void refresh_state(Boxoban* env) {
     if (env->observations != NULL) {
-        memcpy(env->observations, env->state.observations, PUZZLE_OBS_BYTES);
+        for (size_t i = 0; i < PUZZLE_OBS_BYTES; i++) {
+            env->observations[i] = (float)env->state.observations[i];
+        }
+        float remaining = 0.0f;
+        if (env->max_steps > 0) {
+            int remaining_ticks = env->max_steps - env->state.puzzle_tick;
+            if (remaining_ticks < 0) {
+                remaining_ticks = 0;
+            } else if (remaining_ticks > env->max_steps) {
+                remaining_ticks = env->max_steps;
+            }
+            remaining = (float)remaining_ticks / (float)env->max_steps;
+        }
+        env->observations[PUZZLE_OBS_BYTES] = remaining;
     }
 }
 
@@ -140,6 +264,10 @@ void init(Boxoban* env) {
     }
 
     env->curriculum_mode = (env->difficulty_id == BOXOBAN_DIFFICULTY_INCREMENTAL);
+    if (env->curriculum_mode && env->map_sequence_len > 0) {
+        fprintf(stderr, "Boxoban map_sequence is not supported with incremental difficulty\n");
+        abort();
+    }
     if (!boxoban_maps_ready || configured_difficulty_id != env->difficulty_id) {
         if (boxoban_configure_maps_from_env(env) != 0) {
             fprintf(stderr, "Failed to configure Boxoban maps\n");
@@ -164,7 +292,10 @@ void add_log(Boxoban* env) {
     if (s->n_targets > 0) {
         targets_hit = (float)s->on_target / (float)s->n_targets;
     }
-    if (env->curriculum_mode) {
+    if (env->map_sequence_len > 0) {
+        score = (float)s->episode_maps_solved;
+        perf = score / (float)env->map_sequence_len;
+    } else if (env->curriculum_mode) {
         score = 0.0f;
         if (s->largest_solved_difficulty >= 0) {
             score = (float)(s->largest_solved_difficulty + 1);
@@ -201,8 +332,33 @@ static void load_random_puzzle(Boxoban* env) {
         map_base = INCREMENTAL_MAP_BASES[slot];
         puzzle_count = INCREMENTAL_PUZZLE_COUNTS[slot];
     }
+    uint32_t i;
+    if (env->map_sequence_len > 0) {
+        if (s->sequence_pos < 0 || s->sequence_pos >= env->map_sequence_len) {
+            fprintf(stderr, "Boxoban sequence_pos %d out of range for sequence length %d\n",
+                s->sequence_pos, env->map_sequence_len);
+            abort();
+        }
+        i = (uint32_t)env->map_sequence[s->sequence_pos];
+        if ((size_t)i >= puzzle_count) {
+            fprintf(stderr, "Boxoban map_sequence index %u out of range for %zu puzzles\n",
+                i, puzzle_count);
+            abort();
+        }
+    } else if (env->map_idx >= 0) {
+        if ((size_t)env->map_idx >= puzzle_count) {
+            fprintf(stderr, "Boxoban map_idx %d out of range for %zu puzzles\n",
+                env->map_idx, puzzle_count);
+            abort();
+        }
+        i = (uint32_t)env->map_idx;
+    } else {
+        if (env->num_levels > 0 && (size_t)env->num_levels < puzzle_count) {
+            puzzle_count = (size_t)env->num_levels;
+        }
+        i = get_random_puzzle_idx(env, puzzle_count);
+    }
 
-    const uint32_t i = get_random_puzzle_idx(env, puzzle_count);
     const uint8_t* puzzle = map_base + (size_t)i * PUZZLE_SIZE;
     memcpy(s->observations, puzzle, PUZZLE_OBS_BYTES);
 
@@ -217,8 +373,14 @@ static void load_random_puzzle(Boxoban* env) {
 }
 
 // Required function
-void c_reset(Boxoban* env) {
+void c_reset(Boxoban* env, const State* state) {
     State* s = &env->state;
+    if (state != NULL) {
+        env->state = *state;
+        refresh_state(env);
+        return;
+    }
+
     s->tick = 0;
     s->puzzle_tick = 0;
     s->win = 0;
@@ -226,6 +388,10 @@ void c_reset(Boxoban* env) {
     if (env->curriculum_mode) {
         s->curriculum_difficulty = 0;
         s->largest_solved_difficulty = -1;
+        s->episode_maps_solved = 0;
+    }
+    if (env->map_sequence_len > 0) {
+        s->sequence_pos = 0;
         s->episode_maps_solved = 0;
     }
 
@@ -329,9 +495,19 @@ void c_step(Boxoban* env) {
             refresh_state(env);
             return;
         }
+        if (env->map_sequence_len > 0) {
+            s->episode_maps_solved += 1;
+            if (s->sequence_pos + 1 < env->map_sequence_len) {
+                s->sequence_pos += 1;
+                s->win = 0;
+                load_random_puzzle(env);
+                refresh_state(env);
+                return;
+            }
+        }
         env->terminals[0] = 1;
         add_log(env);
-        c_reset(env);
+        c_reset(env, NULL);
         return;
     }
 
@@ -340,7 +516,7 @@ void c_step(Boxoban* env) {
         //env->rewards[0] -= 1.0f;
         s->episode_return += env->rewards[0];
         add_log(env);
-        c_reset(env);
+        c_reset(env, NULL);
         return;
     }
 
@@ -438,6 +614,7 @@ void c_render(Boxoban* env) {
 // Required function. Should clean up anything you allocated.
 // Do not free env->observations, actions, rewards, terminals.
 void c_close(Boxoban* env) {
+    boxoban_free_map_sequence(env);
     if (IsWindowReady()) {
         if (env->client) {
             UnloadTexture(env->client->wall);

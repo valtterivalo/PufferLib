@@ -135,10 +135,9 @@ def match_args(render_mode: str = "auto") -> dict:
         "train": {
             "horizon": 8,
             "minibatch_size": 16384,
-            "state_curriculum_mode": 1,
-            "state_buffer_size": 16384,
+            "num_start_states": 4096,
             "cl_frac": 0.05,
-            "warmup_states": 4096,
+            "fresh_frac": 0.0,
         },
         "sweep": {},
     }
@@ -170,10 +169,9 @@ def test_match_pins_pvp_checkpoint_selfplay_routing(monkeypatch):
     assert args["vec"]["frozen_bank_pct"] == 0.5
     assert args["train"]["horizon"] == 1
     assert args["train"]["minibatch_size"] == 8192
-    assert args["train"]["state_curriculum_mode"] == 0
-    assert args["train"]["state_buffer_size"] == 0
+    assert args["train"]["num_start_states"] == 0
     assert args["train"]["cl_frac"] == 0
-    assert args["train"]["warmup_states"] == 0
+    assert args["train"]["fresh_frac"] == 0
     assert fake.loaded_weights == ["player0.bin"]
     assert fake.loaded_banks == [(0, "past.bin")]
     assert fake.agent_perm[0] == 0

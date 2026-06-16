@@ -220,7 +220,7 @@ static StaticVec* pvp_test_vec(int total_agents, int num_buffers) {
     Dict* vec_kwargs = pvp_vec_kwargs(total_agents, num_buffers);
     Dict* env_kwargs = pvp_kwargs();
     StaticVec* vec = create_static_vec(total_agents, num_buffers, 0, vec_kwargs, env_kwargs);
-    static_vec_reset(vec);
+    static_vec_reset(vec, 0, -1, NULL);
     free(vec_kwargs->items);
     free(vec_kwargs);
     free(env_kwargs->items);

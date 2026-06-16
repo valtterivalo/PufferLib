@@ -363,10 +363,9 @@ def _fixed_eval_args(args, opponent, seed):
     train['minibatch_size'] = int(cfg.get('minibatch_size', eval_batch_size))
     train['total_timesteps'] = eval_batch_size
     train['cpu_inference'] = 1
-    train['state_curriculum_mode'] = 0
-    train['state_buffer_size'] = 0
+    train['num_start_states'] = 0
     train['cl_frac'] = 0
-    train['warmup_states'] = 0
+    train['fresh_frac'] = 0
 
     env = eval_args.setdefault('env', {})
     env['opponent_type'] = int(opponent)
@@ -495,10 +494,9 @@ def _rollout_eval_base_args(args, cfg, seed):
     train['minibatch_size'] = int(cfg.get('minibatch_size', eval_batch_size))
     train['total_timesteps'] = eval_batch_size
     train['cpu_inference'] = 1
-    train['state_curriculum_mode'] = 0
-    train['state_buffer_size'] = 0
+    train['num_start_states'] = 0
     train['cl_frac'] = 0
-    train['warmup_states'] = 0
+    train['fresh_frac'] = 0
 
     env = eval_args.setdefault('env', {})
     env['opponent_type'] = 0
@@ -1341,10 +1339,9 @@ def _pin_match_eval_args(args):
     args['vec']['total_agents'] = total_agents
     args.setdefault('train', {})['horizon'] = 1
     args['train']['minibatch_size'] = total_agents
-    args['train']['state_curriculum_mode'] = 0
-    args['train']['state_buffer_size'] = 0
+    args['train']['num_start_states'] = 0
     args['train']['cl_frac'] = 0
-    args['train']['warmup_states'] = 0
+    args['train']['fresh_frac'] = 0
 
 def match(env_name, policy_a_path, policy_b_path, num_games=4096, args=None, verbose=True):
     '''Head-to-head match between two trained policies in a 2-agent selfplay env.

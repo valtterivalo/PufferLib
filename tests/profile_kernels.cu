@@ -847,7 +847,7 @@ EnvSpeedArgs* create_envspeed(int total_agents, int num_buffers, int num_threads
 
     printf("Created %d envs (%s) for %d total_agents\n", vec->size, TOSTRING(ENV_NAME), total_agents);
     create_static_threads(vec, num_threads, horizon, nullptr, empty_net_callback, empty_thread_init);
-    static_vec_reset(vec);
+    static_vec_reset(vec, 0, -1, NULL);
     cudaDeviceSynchronize();
 
     EnvSpeedArgs* args = (EnvSpeedArgs*)calloc(1, sizeof(EnvSpeedArgs));

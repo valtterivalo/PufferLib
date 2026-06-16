@@ -140,37 +140,7 @@ void render(pybind11::object pufferl_obj, int env_id) {
 void rollouts(pybind11::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     pybind11::gil_scoped_release no_gil;
-    double t0 = wall_clock();
-
-    // Zero state buffers (primary + every frozen bank, so all banks see fresh
-    // state symmetrically — otherwise frozen banks accumulate indefinitely while
-    // primary resets, giving primary an unfair in-distribution advantage).
-    if (pufferl.hypers.reset_state) {
-        for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
-            puf_zero(&pufferl.buffer_states[i], pufferl.default_stream);
-        }
-        for (int b = 0; b < pufferl.num_frozen_banks; b++) {
-            for (int i = 0; i < pufferl.hypers.num_buffers; i++) {
-                puf_zero(&pufferl.frozen_banks[b].buffer_states[i], pufferl.default_stream);
-            }
-        }
-    }
-
-    if (pufferl.curriculum_enabled) {
-        curriculum_rollout_begin(&pufferl);
-    } else {
-        pufferl.vec->log_env_limit = 0;
-    }
-
-    static_vec_omp_step(pufferl.vec);
-    float sec = (float)(wall_clock() - t0);
-    pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;  // store as ms
-
-    float eval_prof[NUM_EVAL_PROF];
-    static_vec_read_profile(pufferl.vec, eval_prof);
-    pufferl.profile.accum[PROF_EVAL_GPU] += eval_prof[EVAL_GPU];
-    pufferl.profile.accum[PROF_EVAL_ENV] += eval_prof[EVAL_ENV_STEP];
-    pufferl.global_step += pufferl.hypers.horizon * pufferl.hypers.total_agents;
+    pufferl_rollout(&pufferl);
 }
 
 pybind11::dict train(pybind11::object pufferl_obj) {
@@ -429,7 +399,7 @@ std::unique_ptr<VecEnv> create_vec(py::dict args, int gpu) {
 
 void vec_reset(VecEnv& ve) {
     py::gil_scoped_release no_gil;
-    static_vec_reset(ve.vec);
+    static_vec_reset(ve.vec, 0, -1, NULL);
 }
 
 void gpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
@@ -494,6 +464,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.replay_ratio = get_config(train_kwargs, "replay_ratio");
     hypers.total_timesteps = get_config(train_kwargs, "total_timesteps");
     hypers.max_grad_norm = get_config(train_kwargs, "max_grad_norm");
+    hypers.reward_scale_max = get_config(train_kwargs, "reward_scale_max");
     // PPO
     hypers.clip_coef = get_config(train_kwargs, "clip_coef");
     hypers.vf_clip_coef = get_config(train_kwargs, "vf_clip_coef");
@@ -512,16 +483,12 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
     hypers.anneal_prio_beta = get_config(train_kwargs, "anneal_prio_beta");
-    // Curriculum state buffer
-    hypers.state_buffer_size = get_config(train_kwargs, "state_buffer_size");
+    // Curriculum best-trajectory slots
+    hypers.num_start_states = get_config(train_kwargs, "num_start_states");
     hypers.cl_frac = get_config(train_kwargs, "cl_frac");
-    hypers.anneal_cl = get_config(train_kwargs, "anneal_cl");
-    hypers.warmup_states = get_config(train_kwargs, "warmup_states");
+    hypers.fresh_frac = get_config(train_kwargs, "fresh_frac");
+    hypers.state_trajectory_max_len = get_config(train_kwargs, "state_trajectory_max_len");
     hypers.state_checkpoint_interval = get_config(train_kwargs, "state_checkpoint_interval");
-    hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
-    hypers.explore_beta = get_config(train_kwargs, "explore_beta");
-    hypers.explore_decay = get_config(train_kwargs, "explore_decay");
-    hypers.state_priority_decay = get_config(train_kwargs, "state_priority_decay");
     hypers.reset_state = get_config(args, "reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
@@ -643,6 +610,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("momentum", &HypersT::momentum)
         .def_readwrite("total_timesteps", &HypersT::total_timesteps)
         .def_readwrite("max_grad_norm", &HypersT::max_grad_norm)
+        .def_readwrite("reward_scale_max", &HypersT::reward_scale_max)
         .def_readwrite("clip_coef", &HypersT::clip_coef)
         .def_readwrite("vf_clip_coef", &HypersT::vf_clip_coef)
         .def_readwrite("vf_coef", &HypersT::vf_coef)
@@ -657,15 +625,11 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
         .def_readwrite("anneal_prio_beta", &HypersT::anneal_prio_beta)
-        .def_readwrite("state_buffer_size", &HypersT::state_buffer_size)
+        .def_readwrite("num_start_states", &HypersT::num_start_states)
         .def_readwrite("cl_frac", &HypersT::cl_frac)
-        .def_readwrite("anneal_cl", &HypersT::anneal_cl)
-        .def_readwrite("warmup_states", &HypersT::warmup_states)
+        .def_readwrite("fresh_frac", &HypersT::fresh_frac)
+        .def_readwrite("state_trajectory_max_len", &HypersT::state_trajectory_max_len)
         .def_readwrite("state_checkpoint_interval", &HypersT::state_checkpoint_interval)
-        .def_readwrite("explore_alpha", &HypersT::explore_alpha)
-        .def_readwrite("explore_beta", &HypersT::explore_beta)
-        .def_readwrite("explore_decay", &HypersT::explore_decay)
-        .def_readwrite("state_priority_decay", &HypersT::state_priority_decay)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

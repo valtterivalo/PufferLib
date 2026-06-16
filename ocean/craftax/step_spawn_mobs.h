@@ -38,6 +38,30 @@ static int32_t craftax_spawn_hostile_span_count = 0;
 static int32_t craftax_spawn_boss_span_count = 0;
 static int32_t craftax_spawn_offsets_initialized = 0;
 
+static const uint8_t CRAFTAX_SPAWN_ALL_VALID_BLOCK_FLAGS[CRAFTAX_NUM_BLOCK_TYPES] = {
+    0, 0, 1, 0, 0, 0, 0, 1,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 1, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+};
+
+static const uint8_t CRAFTAX_SPAWN_GRAVE_BLOCK_FLAGS[CRAFTAX_NUM_BLOCK_TYPES] = {
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 1, 1, 0,
+};
+
+static const uint8_t CRAFTAX_SPAWN_WATER_BLOCK_FLAGS[CRAFTAX_NUM_BLOCK_TYPES] = {
+    0, 0, 0, 1, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+};
+
 static inline void craftax_spawn_append_span(
     CraftaxSpawnOffsetSpan* spans,
     int32_t* count,
@@ -208,32 +232,18 @@ static inline float craftax_spawn_mob_type_health(
 }
 
 static inline bool craftax_spawn_is_all_valid_block(int32_t block) {
-    static const uint8_t flags[CRAFTAX_NUM_BLOCK_TYPES] = {
-        [CRAFTAX_BLOCK_GRASS] = 1,
-        [CRAFTAX_BLOCK_PATH] = 1,
-        [CRAFTAX_BLOCK_FIRE_GRASS] = 1,
-        [CRAFTAX_BLOCK_ICE_GRASS] = 1,
-    };
     int32_t idx = craftax_step_jax_index(block, CRAFTAX_NUM_BLOCK_TYPES);
-    return flags[idx] != 0;
+    return CRAFTAX_SPAWN_ALL_VALID_BLOCK_FLAGS[idx] != 0;
 }
 
 static inline bool craftax_spawn_is_grave_block(int32_t block) {
-    static const uint8_t flags[CRAFTAX_NUM_BLOCK_TYPES] = {
-        [CRAFTAX_BLOCK_GRAVE] = 1,
-        [CRAFTAX_BLOCK_GRAVE2] = 1,
-        [CRAFTAX_BLOCK_GRAVE3] = 1,
-    };
     int32_t idx = craftax_step_jax_index(block, CRAFTAX_NUM_BLOCK_TYPES);
-    return flags[idx] != 0;
+    return CRAFTAX_SPAWN_GRAVE_BLOCK_FLAGS[idx] != 0;
 }
 
 static inline bool craftax_spawn_is_water_block(int32_t block) {
-    static const uint8_t flags[CRAFTAX_NUM_BLOCK_TYPES] = {
-        [CRAFTAX_BLOCK_WATER] = 1,
-    };
     int32_t idx = craftax_step_jax_index(block, CRAFTAX_NUM_BLOCK_TYPES);
-    return flags[idx] != 0;
+    return CRAFTAX_SPAWN_WATER_BLOCK_FLAGS[idx] != 0;
 }
 
 static inline int32_t craftax_spawn_player_distance_squared(

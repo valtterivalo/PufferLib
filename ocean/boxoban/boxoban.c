@@ -45,11 +45,12 @@ static int setup_demo_env(Boxoban* env, const char* chosen_path) {
     env->size = 10;
     env->num_agents = 1;
     env->max_steps = 500;
+    env->num_levels = -1;
+    env->map_idx = -1;
     env->int_r_coeff = 0.1f;
     env->difficulty_id = -1;
 
-    size_t obs_count = 4u * (size_t)env->size * (size_t)env->size;
-    env->observations = (unsigned char*)calloc(obs_count, sizeof(unsigned char));
+    env->observations = (float*)calloc(BOXOBAN_OBS_SIZE, sizeof(float));
     env->actions = (float*)calloc(1, sizeof(float));
     env->rewards = (float*)calloc(1, sizeof(float));
     env->terminals = (float*)calloc(1, sizeof(float));
@@ -64,7 +65,7 @@ static int setup_demo_env(Boxoban* env, const char* chosen_path) {
     }
 
     init(env);
-    c_reset(env);
+    c_reset(env, NULL);
     return 0;
 }
 

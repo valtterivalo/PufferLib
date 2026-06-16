@@ -67,9 +67,9 @@ def test_inferno_config_keeps_upstream_state_curriculum_off() -> None:
     config = read("config/ocean/osrs_inferno.ini")
 
     for line in (
-        "state_buffer_size = 0",
+        "num_start_states = 0",
         "cl_frac = 0",
-        "warmup_states = 0",
+        "fresh_frac = 0",
     ):
         assert line in config
 
@@ -78,10 +78,9 @@ def test_inferno_config_keeps_upstream_state_curriculum_off() -> None:
         "phase2",
         "record_best_replay_path",
         "play_replay_path",
-        "train.state_buffer_size",
+        "train.num_start_states",
         "train.cl_frac",
-        "train.explore_alpha",
-        "train.explore_beta",
+        "train.fresh_frac",
     ):
         assert forbidden not in config
 

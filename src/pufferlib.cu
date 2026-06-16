@@ -11,6 +11,18 @@
 #include "muon.cu"
 #include "vecenv.h"
 
+#ifndef PUFFER_SCALE_REWARDS
+#define PUFFER_SCALE_REWARDS 0
+#endif
+
+#ifndef PUFFER_ADV_LOSS_SCALE
+#define PUFFER_ADV_LOSS_SCALE 1
+#endif
+
+#ifndef PUFFER_CENTER_ADVANTAGES
+#define PUFFER_CENTER_ADVANTAGES 0
+#endif
+
 static double wall_clock() {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -166,11 +178,13 @@ struct PPOKernelArgs {
     const precision_t* values_pred;
     const float* adv_mean;
     const float* adv_var;
+    const float* reward_stats;
     const int* act_sizes;
     const precision_t* action_mask; // (N, T, A_total) or nullptr
     int mask_stride_n, mask_stride_t;
     int num_atns;
     float clip_coef, vf_clip_coef, vf_coef, ent_coef;
+    float reward_scale_max;
     int T_seq, A_total, N;
     int logits_stride_n, logits_stride_t, logits_stride_a;
     int values_stride_n, values_stride_t;
@@ -180,7 +194,8 @@ struct PPOKernelArgs {
 struct PPOBuffersPuf {
     FloatTensor loss_output, grad_loss;
     FloatTensor saved_for_bwd;
-    FloatTensor grad_logits, grad_values, grad_logstd, adv_scratch, partials;
+    FloatTensor grad_logits, grad_values, grad_logstd, partials;
+    FloatTensor adv_scratch;
 };
 
 void register_ppo_buffers(PPOBuffersPuf& bufs, Allocator* alloc, int N, int T, int A_total, bool is_continuous) {
@@ -193,8 +208,8 @@ void register_ppo_buffers(PPOBuffersPuf& bufs, Allocator* alloc, int N, int T, i
         .grad_logits = {.shape = {N, T, A_total}},
         .grad_values = {.shape = {N, T, 1}},
         .grad_logstd = {.shape = {N, T, A_total}},
-        .adv_scratch = {.shape = {2}},
         .partials = {.shape = {partial_blocks * (LOSS_N + 1)}},
+        .adv_scratch = {.shape = {2}},
     };
     alloc_register(alloc, &bufs.loss_output);
     alloc_register(alloc, &bufs.saved_for_bwd);
@@ -204,8 +219,8 @@ void register_ppo_buffers(PPOBuffersPuf& bufs, Allocator* alloc, int N, int T, i
     if (is_continuous) {
         alloc_register(alloc, &bufs.grad_logstd);
     }
-    alloc_register(alloc, &bufs.adv_scratch);
     alloc_register(alloc, &bufs.partials);
+    alloc_register(alloc, &bufs.adv_scratch);
 }
 
 #define PUFFER_CURRICULUM_TYPES
@@ -270,6 +285,7 @@ typedef struct {
     float replay_ratio;
     long total_timesteps;
     float max_grad_norm;
+    float reward_scale_max;
     // PPO
     float clip_coef;
     float vf_clip_coef;
@@ -291,16 +307,12 @@ typedef struct {
     float prio_alpha;
     float prio_beta0;
     bool anneal_prio_beta;
-    // Curriculum state buffer
-    int state_buffer_size;
+    // Curriculum best-trajectory slots
+    int num_start_states;
     float cl_frac;
-    bool anneal_cl;
-    int warmup_states;
+    float fresh_frac;
+    int state_trajectory_max_len;
     int state_checkpoint_interval;
-    float explore_alpha;
-    float explore_beta;
-    float explore_decay;
-    float state_priority_decay;
     // Flags
     bool reset_state;
     int cudagraphs;
@@ -357,6 +369,7 @@ typedef struct {
     cudaStream_t default_stream;  // main-thread stream (captured once at init)
     IntTensor act_sizes_puf;    // CUDA int32 tensor of action head sizes
     FloatTensor losses_puf;     // (NUM_LOSSES,) f32 accumulator
+    FloatTensor reward_stats;   // running reward mean/var for scale-only reward normalization
     PPOBuffersPuf ppo_bufs_puf; // Pre-allocated buffers for ppo_loss_fwd_bwd
     PrioBuffers prio_bufs;      // Pre-allocated buffers for prio_replay
     StateBuffer state_buf;      // Optional curriculum state buffer
@@ -405,15 +418,6 @@ inline void profile_begin(const char* tag, bool enable) {
 
 inline void profile_end(bool enable) {
     if (enable) nvtxRangePop();
-}
-
-// Thread-local stream for per-buffer threads (set once by thread_init_wrapper)
-static thread_local cudaStream_t tl_stream = 0;
-
-// Thread initialization callback - sets thread-local stream once per thread
-extern "C" void thread_init_wrapper(void* ctx, int buf) {
-    PuffeRL* pufferl = (PuffeRL*)ctx;
-    tl_stream = pufferl->streams[buf];
 }
 
 __global__ void rng_init(curandStatePhilox4_32_10_t* states, uint64_t seed, int n) {
@@ -577,16 +581,12 @@ __global__ void sample_logits(
 
 // Single step rollout forward pass. Called by each environment worker in their
 // own buffer thread. This operation is cudagraphed.
-extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
-    PuffeRL* pufferl = (PuffeRL*)ctx;
+static void rollout_forward_step(PuffeRL* pufferl, int buf, int t,
+        cudaStream_t current_stream) {
     HypersT& hypers = pufferl->hypers;
-    if (pufferl->curriculum_enabled) {
-        capture_curriculum_checkpoint(pufferl, buf, t);
-    }
     int graph = t * hypers.num_buffers + buf;
     profile_begin("fused_rollout", hypers.profile);
 
-    cudaStream_t current_stream = tl_stream;
     if (pufferl->rollout_captured) {
         assert(cudaGraphLaunch(pufferl->fused_rollout_cudagraphs[graph], current_stream) == cudaSuccess
                 && "cudaGraphLaunch failed");
@@ -713,6 +713,175 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     profile_end(hypers.profile);
 }
 
+typedef struct PufferRolloutArg {
+    PuffeRL* pufferl;
+    int buf;
+    int horizon;
+} PufferRolloutArg;
+
+static void* pufferl_rollout_threadmanager(void* arg) {
+    PufferRolloutArg* worker_arg = (PufferRolloutArg*)arg;
+    PuffeRL* pufferl = worker_arg->pufferl;
+    StaticVec* vec = pufferl->vec;
+    StaticThreading* threading = vec->threading;
+    int buf = worker_arg->buf;
+    int horizon = worker_arg->horizon;
+
+    int agents_per_buffer = vec->agents_per_buffer;
+    int agent_start = buf * agents_per_buffer;
+    int env_start = vec->buffer_env_starts[buf];
+    int env_count = vec->buffer_env_counts[buf];
+    atomic_int* buffer_states = threading->buffer_states;
+    int num_workers = threading->num_threads / vec->buffers;
+    if (num_workers < 1) num_workers = 1;
+
+    Env* envs = vec->envs;
+
+    printf("Num workers: %d\n", num_workers);
+    while (true) {
+        while (atomic_load(&buffer_states[buf]) != OMP_RUNNING) {
+            if (atomic_load(&threading->shutdown)) {
+                return NULL;
+            }
+        }
+        cudaStream_t stream = pufferl->streams[buf];
+        int curriculum_enabled = pufferl->curriculum_enabled;
+        int vanilla_envs = curriculum_enabled ? pufferl->state_buf.num_vanilla_envs : 0;
+        int fresh_envs = curriculum_enabled ? pufferl->state_buf.num_fresh_envs : 0;
+
+        float* my_accum = &threading->accum[buf * NUM_EVAL_PROF];
+        struct timespec t0, t1;
+
+        for (int t = 0; t < horizon; t++) {
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            rollout_forward_step(pufferl, buf, t, stream);
+
+            cudaMemcpyAsync(
+                &vec->actions[agent_start * NUM_ATNS],
+                &vec->gpu_actions[agent_start * NUM_ATNS],
+                agents_per_buffer * NUM_ATNS * sizeof(float),
+                cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            my_accum[EVAL_GPU] += (t1.tv_sec - t0.tv_sec) * 1000.0f
+                + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
+
+            memset(&vec->rewards[agent_start], 0,
+                agents_per_buffer * sizeof(float));
+            memset(&vec->terminals[agent_start], 0,
+                agents_per_buffer * sizeof(float));
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            #pragma omp parallel for schedule(static) num_threads(num_workers)
+            for (int i = env_start; i < env_start + env_count; i++) {
+                c_step(&envs[i]);
+                if (curriculum_enabled && i >= vanilla_envs) {
+                    int row = i - vanilla_envs;
+                    int is_cl = row >= fresh_envs;
+                    curriculum_post_active_step(pufferl, buf, i, row, is_cl);
+                }
+            }
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f
+                + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
+
+            cudaMemcpyAsync(
+                vec->gpu_observations.data + agent_start * OBS_SIZE,
+                vec->observations.data + agent_start * OBS_SIZE,
+                agents_per_buffer * OBS_SIZE * obs_element_size(),
+                cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(
+                &vec->gpu_rewards[agent_start],
+                &vec->rewards[agent_start],
+                agents_per_buffer * sizeof(float),
+                cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(
+                &vec->gpu_terminals[agent_start],
+                &vec->terminals[agent_start],
+                agents_per_buffer * sizeof(float),
+                cudaMemcpyHostToDevice, stream);
+#ifdef MY_ACTION_MASK
+            cudaMemcpyAsync(
+                vec->gpu_action_mask + agent_start * MY_ACTION_MASK,
+                vec->action_mask + agent_start * MY_ACTION_MASK,
+                agents_per_buffer * MY_ACTION_MASK * sizeof(unsigned char),
+                cudaMemcpyHostToDevice, stream);
+#endif
+        }
+        cudaStreamSynchronize(stream);
+        atomic_store(&buffer_states[buf], OMP_WAITING);
+    }
+}
+
+static void create_pufferl_threads(PuffeRL* pufferl, int num_threads, int horizon) {
+    StaticVec* vec = pufferl->vec;
+    vec->threading = (StaticThreading*)calloc(1, sizeof(StaticThreading));
+    vec->threading->num_threads = num_threads;
+    vec->threading->num_buffers = vec->buffers;
+    vec->threading->buffer_states =
+        (atomic_int*)calloc(vec->buffers, sizeof(atomic_int));
+    vec->threading->threads =
+        (pthread_t*)calloc(vec->buffers, sizeof(pthread_t));
+    vec->threading->accum =
+        (float*)calloc(vec->buffers * NUM_EVAL_PROF, sizeof(float));
+
+    PufferRolloutArg* args =
+        (PufferRolloutArg*)calloc(vec->buffers, sizeof(PufferRolloutArg));
+    for (int i = 0; i < vec->buffers; i++) {
+        args[i].pufferl = pufferl;
+        args[i].buf = i;
+        args[i].horizon = horizon;
+        pthread_create(&vec->threading->threads[i], NULL,
+            pufferl_rollout_threadmanager, &args[i]);
+    }
+}
+
+static void pufferl_omp_step(PuffeRL* pufferl) {
+    StaticThreading* threading = pufferl->vec->threading;
+    for (int buf = 0; buf < pufferl->vec->buffers; buf++) {
+        atomic_store(&threading->buffer_states[buf], OMP_RUNNING);
+    }
+    for (int buf = 0; buf < pufferl->vec->buffers; buf++) {
+        while (atomic_load(&threading->buffer_states[buf]) != OMP_WAITING) {}
+    }
+}
+
+static void pufferl_rollout(PuffeRL* pufferl) {
+    double t0 = wall_clock();
+
+    // Zero state buffers (primary + every frozen bank, so all banks see fresh
+    // state symmetrically.
+    if (pufferl->hypers.reset_state) {
+        for (int i = 0; i < pufferl->hypers.num_buffers; i++) {
+            puf_zero(&pufferl->buffer_states[i], pufferl->default_stream);
+        }
+        for (int b = 0; b < pufferl->num_frozen_banks; b++) {
+            for (int i = 0; i < pufferl->hypers.num_buffers; i++) {
+                puf_zero(&pufferl->frozen_banks[b].buffer_states[i],
+                    pufferl->default_stream);
+            }
+        }
+    }
+
+    if (!pufferl->curriculum_enabled) {
+        pufferl->vec->log_env_limit = 0;
+    }
+
+    pufferl_omp_step(pufferl);
+    if (pufferl->curriculum_enabled) {
+        curriculum_rollout_end(pufferl);
+    }
+
+    float sec = (float)(wall_clock() - t0);
+    pufferl->profile.accum[PROF_ROLLOUT] += sec * 1000.0f;
+
+    float eval_prof[NUM_EVAL_PROF];
+    static_vec_read_profile(pufferl->vec, eval_prof);
+    pufferl->profile.accum[PROF_EVAL_GPU] += eval_prof[EVAL_GPU];
+    pufferl->profile.accum[PROF_EVAL_ENV] += eval_prof[EVAL_ENV_STEP];
+    pufferl->global_step +=
+        pufferl->hypers.horizon * pufferl->hypers.total_agents;
+}
+
 
 __device__ __forceinline__ float load_logit_masked(
         const precision_t* __restrict__ logits, int logits_base,
@@ -811,9 +980,20 @@ __global__ void ppo_loss_compute(
     float ret = to_float(g.returns[nt]);
     float val_pred = to_float(a.values_pred[values_idx]);
     g.out_newvalue[nt] = from_float(val_pred);
-
-    float adv_std = sqrtf(float(a.adv_var[0]));
-    float adv_normalized = (adv - float(a.adv_mean[0])) / (adv_std + 1e-8f);
+    float adv_policy = adv;
+#if PUFFER_CENTER_ADVANTAGES
+    float adv_std = sqrtf(fmaxf(a.adv_var[0], 0.0f));
+    adv_policy = (adv - a.adv_mean[0]) / (adv_std + 1e-8f);
+#endif
+#if PUFFER_ADV_LOSS_SCALE
+    if (a.reward_stats != nullptr) {
+        float reward_scale = rsqrtf(fmaxf(a.reward_stats[1], 0.0f) + 1e-8f);
+        if (a.reward_scale_max > 0.0f) {
+            reward_scale = fminf(reward_scale, a.reward_scale_max);
+        }
+        adv_policy *= reward_scale;
+    }
+#endif
 
     // grad_loss is always 1.0 (set in post_create, never changes)
     float dL = inv_NT * train_weight;
@@ -886,7 +1066,7 @@ __global__ void ppo_loss_compute(
     ratio = __expf(logratio);
     g.out_ratio[nt] = from_float(ratio);
     float ratio_clipped = fmaxf(1.0f - a.clip_coef, fminf(1.0f + a.clip_coef, ratio));
-    float wa = -w * adv_normalized;
+    float wa = -w * adv_policy;
     float pg_loss1 = wa * ratio;
     float pg_loss2 = wa * ratio_clipped;
     pg_loss = fmaxf(pg_loss1, pg_loss2);
@@ -998,6 +1178,14 @@ __global__ void ppo_var_mean(const precision_t* __restrict__ src,
         float* __restrict__ var_out, float* __restrict__ mean_out, int n) {
     __shared__ float sdata[256];
     int tid = threadIdx.x;
+    if (n <= 1) {
+        if (tid == 0) {
+            *mean_out = n == 1 ? to_float(src[0]) : 0.0f;
+            *var_out = 0.0f;
+        }
+        return;
+    }
+
     float sum = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
         sum += to_float(src[i]);
@@ -1015,6 +1203,7 @@ __global__ void ppo_var_mean(const precision_t* __restrict__ src,
         *mean_out = mean;
     }
     __syncthreads();
+
     float ss = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
         float d = to_float(src[i]) - mean;
@@ -1043,6 +1232,7 @@ void ppo_loss_fwd_bwd(
         IntTensor& act_sizes, FloatTensor& losses_acc,
         float clip_coef, float vf_clip_coef, float vf_coef, float ent_coef,
         PPOBuffersPuf& bufs, bool is_continuous,
+        FloatTensor& reward_stats, float reward_scale_max,
         cudaStream_t stream) {
     int N = dec_out.shape[0], T = dec_out.shape[1], fused_cols = dec_out.shape[2];
     int A_total = fused_cols - 1;  // last column is value
@@ -1053,8 +1243,11 @@ void ppo_loss_fwd_bwd(
 
     float* adv_var_ptr = bufs.adv_scratch.data;
     float* adv_mean_ptr = adv_var_ptr + 1;
+#if PUFFER_CENTER_ADVANTAGES
     ppo_var_mean<<<1, 256, 0, stream>>>(
-        graph.mb_advantages.data, adv_var_ptr, adv_mean_ptr, numel(graph.mb_advantages.shape));
+        graph.mb_advantages.data, adv_var_ptr, adv_mean_ptr,
+        numel(graph.mb_advantages.shape));
+#endif
 
     int ppo_grid = (total + PPO_THREADS - 1) / PPO_THREADS;
 
@@ -1086,6 +1279,7 @@ void ppo_loss_fwd_bwd(
         .values_pred = logits_ptr + A_total,
         .adv_mean = adv_mean_ptr,
         .adv_var = adv_var_ptr,
+        .reward_stats = reward_stats.data,
         .act_sizes = act_sizes.data,
         .action_mask = has_mask ? graph.mb_action_mask.data : nullptr,
         .mask_stride_n = has_mask ? T * A_total : 0,
@@ -1093,6 +1287,7 @@ void ppo_loss_fwd_bwd(
         .num_atns = (int)numel(act_sizes.shape),
         .clip_coef = clip_coef, .vf_clip_coef = vf_clip_coef,
         .vf_coef = vf_coef, .ent_coef = ent_coef,
+        .reward_scale_max = reward_scale_max,
         .T_seq = T, .A_total = A_total, .N = N,
         .logits_stride_n = T * fused_cols, .logits_stride_t = fused_cols, .logits_stride_a = 1,
         .values_stride_n = T * fused_cols, .values_stride_t = fused_cols,
@@ -1358,8 +1553,7 @@ __device__ __forceinline__ void copy_values_adv_returns(
 
 __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         const int* __restrict__ idx, const precision_t* __restrict__ advantages,
-        const precision_t* __restrict__ mb_prio,
-        const precision_t* __restrict__ row_importance) {
+        const precision_t* __restrict__ mb_prio) {
     int mb = blockIdx.x;
     int ch = blockIdx.y;
     int src_row = idx[mb];
@@ -1388,11 +1582,7 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         break;
     case 4:
         if (threadIdx.x == 0) {
-            float prio = to_float(mb_prio[mb]);
-            if (row_importance != nullptr) {
-                prio *= to_float(row_importance[src_row]);
-            }
-            graph.mb_prio.data[mb] = from_float(prio);
+            graph.mb_prio.data[mb] = mb_prio[mb];
         }
         break;
     case 5:
@@ -1415,6 +1605,52 @@ inline float cosine_annealing(float lr_base, float lr_min, long t, long T) {
     float ratio = (double )t / (double) T;
     ratio = std::max(0.0f, std::min(1.0f, ratio));
     return lr_min + 0.5f*(lr_base - lr_min)*(1.0f + std::cos(M_PI * ratio));
+}
+
+__global__ void scale_rewards_by_running_std(
+        precision_t* __restrict__ rewards, float* __restrict__ stats,
+        int n, float decay, float eps, float max_scale, int apply_scale) {
+    __shared__ float sums[2][256];
+    int tid = threadIdx.x;
+    float sum = 0.0f;
+    float sumsq = 0.0f;
+    for (int i = tid; i < n; i += blockDim.x) {
+        float reward = to_float(rewards[i]);
+        sum += reward;
+        sumsq += reward * reward;
+    }
+    sums[0][tid] = sum;
+    sums[1][tid] = sumsq;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sums[0][tid] += sums[0][tid + s];
+            sums[1][tid] += sums[1][tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        float inv_n = 1.0f / (float)n;
+        float mean = sums[0][0] * inv_n;
+        float var = fmaxf(sums[1][0] * inv_n - mean * mean, 0.0f);
+        stats[0] = decay * stats[0] + (1.0f - decay) * mean;
+        stats[1] = decay * stats[1] + (1.0f - decay) * var;
+        float scale = rsqrtf(stats[1] + eps);
+        if (max_scale > 0.0f) {
+            scale = fminf(scale, max_scale);
+        }
+        sums[0][0] = scale;
+    }
+    __syncthreads();
+
+    float scale = sums[0][0];
+    if (apply_scale) {
+        for (int i = tid; i < n; i += blockDim.x) {
+            rewards[i] = from_float(to_float(rewards[i]) * scale);
+        }
+    }
 }
 
 void train_impl(PuffeRL& pufferl) {
@@ -1455,9 +1691,14 @@ void train_impl(PuffeRL& pufferl) {
             rollouts.action_mask.data, src.action_mask.data, T, B, mask_size);
     }
 
-    // We hard-clamp rewards to -1, 1. Our envs are mostly designed to respect this range
     clamp_precision_kernel<<<grid_size(numel(rollouts.rewards.shape)), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.rewards.data, -1.0f, 1.0f, numel(rollouts.rewards.shape));
+#if PUFFER_SCALE_REWARDS || PUFFER_ADV_LOSS_SCALE
+    scale_rewards_by_running_std<<<1, 256, 0, train_stream>>>(
+        rollouts.rewards.data, pufferl.reward_stats.data,
+        numel(rollouts.rewards.shape), 0.99f, 1e-8f, hypers.reward_scale_max,
+        PUFFER_SCALE_REWARDS);
+#endif
 
     // Set importance weights to 1.0
     fill_precision_kernel<<<grid_size(numel(rollouts.ratio.shape)), BLOCK_SIZE, 0, train_stream>>>(
@@ -1533,7 +1774,7 @@ void train_impl(PuffeRL& pufferl) {
             train_stream);
         sample_prio_indices(&pufferl.prio_bufs, prio_rows, minibatch_segments,
             pufferl.seed, train_rng_offset, pufferl.prio_bufs.mb_prio.data,
-            NULL, 0, 1, anneal_beta, train_stream);
+            anneal_beta, train_stream);
         profile_end(hypers.profile);
 
         profile_begin("train_select_and_copy", hypers.profile);
@@ -1543,12 +1784,9 @@ void train_impl(PuffeRL& pufferl) {
             sel_src.values = rollouts.values;
             int mb_segs = pufferl.prio_bufs.idx.shape[0];
             int channels = (graph.mb_action_mask.data != nullptr) ? 7 : 6;
-            const precision_t* row_importance = pufferl.curriculum_enabled
-                ? pufferl.state_buf.importance.data : nullptr;
             select_copy<<<dim3(mb_segs, channels), SELECT_COPY_THREADS, 0, train_stream>>>(
                 sel_src, graph, pufferl.prio_bufs.idx.data,
-                advantages_puf.data, pufferl.prio_bufs.mb_prio.data,
-                row_importance);
+                advantages_puf.data, pufferl.prio_bufs.mb_prio.data);
         }
         profile_end(hypers.profile);
 
@@ -1576,7 +1814,8 @@ void train_impl(PuffeRL& pufferl) {
             ppo_loss_fwd_bwd(dec_puf, p_logstd, graph,
                 pufferl.act_sizes_puf, pufferl.losses_puf,
                 hypers.clip_coef, hypers.vf_clip_coef, hypers.vf_coef, current_ent_coef,
-                pufferl.ppo_bufs_puf, pufferl.is_continuous, stream);
+                pufferl.ppo_bufs_puf, pufferl.is_continuous,
+                pufferl.reward_stats, hypers.reward_scale_max, stream);
 
             FloatTensor grad_logits_puf = pufferl.ppo_bufs_puf.grad_logits;
             FloatTensor grad_logstd_puf = pufferl.is_continuous ? pufferl.ppo_bufs_puf.grad_logstd : FloatTensor();
@@ -1621,19 +1860,6 @@ void train_impl(PuffeRL& pufferl) {
                 (const char*)graph.mb_newvalue.data, num_idx, row_bytes);
         }
         cudaEventRecord(pufferl.profile.events[4]);  // end forward
-    }
-    if (pufferl.curriculum_enabled) {
-        puf_zero(&advantages_puf, train_stream);
-        puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.state_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-        int apb = hypers.total_agents / hypers.num_buffers;
-        int primary_per_buffer = (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL)
-            ? pufferl.bank_layout[1]
-            : -1;
-        zero_excluded_advantages_cuda(
-            advantages_puf, rollouts.train_mask, apb, primary_per_buffer, train_stream);
-        curriculum_update_advantages(&pufferl, &advantages_puf, train_stream);
     }
     pufferl.epoch += 1;
 
@@ -1921,25 +2147,23 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         env_name, vec_kwargs, env_kwargs, pufferl->env);
     pufferl->vec = vec;
     assert(hypers.cl_frac >= 0.0f && "cl_frac must be nonnegative");
-    assert(hypers.cl_frac <= 0.9f && "cl_frac must be <= 0.9");
+    assert(hypers.cl_frac <= 1.0f && "cl_frac must be <= 1.0");
+    assert(hypers.fresh_frac >= 0.0f && "fresh_frac must be nonnegative");
+    assert(hypers.fresh_frac <= 1.0f && "fresh_frac must be <= 1.0");
+    assert(hypers.cl_frac + hypers.fresh_frac <= 1.0f
+        && "cl_frac + fresh_frac must be <= 1.0");
     int initial_num_cl_envs = clamp_int(
         (int)(hypers.cl_frac * (float)vec->size), 0, vec->size);
-    pufferl->curriculum_enabled = hypers.state_buffer_size > 0 && initial_num_cl_envs > 0;
-    int agents_per_env = 0;
+    int initial_num_fresh_envs = clamp_int(
+        (int)(hypers.fresh_frac * (float)vec->size), 0, vec->size);
+    pufferl->curriculum_enabled = hypers.num_start_states > 0
+        && initial_num_cl_envs + initial_num_fresh_envs > 0;
     if (pufferl->curriculum_enabled) {
-        agents_per_env = fixed_agents_per_env(vec);
-        assert(hypers.warmup_states >= 0 && "warmup_states must be nonnegative");
-        assert(hypers.warmup_states <= hypers.state_buffer_size
-            && "warmup_states must be <= state_buffer_size");
+        fixed_agents_per_env(vec);
+        assert(hypers.state_trajectory_max_len > 0
+            && "state_trajectory_max_len must be positive");
         assert(hypers.state_checkpoint_interval > 0
             && "state_checkpoint_interval must be positive");
-        assert(hypers.explore_decay >= 0.0f && hypers.explore_decay <= 1.0f
-            && "explore_decay must be in [0, 1]");
-        assert(hypers.state_lambda >= 0.0f && hypers.state_lambda <= 1.0f
-            && "state_lambda must be in [0, 1]");
-        assert(hypers.state_priority_decay >= 0.0f
-            && hypers.state_priority_decay <= 1.0f
-            && "state_priority_decay must be in [0, 1]");
     }
 
     // Sanity check action space
@@ -1990,6 +2214,10 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int num_cl_envs = pufferl->curriculum_enabled
         ? clamp_int((int)(hypers.cl_frac * (float)vec->size), 0, vec->size)
         : 0;
+    int num_fresh_envs = pufferl->curriculum_enabled
+        ? clamp_int((int)(hypers.fresh_frac * (float)vec->size), 0, vec->size)
+        : 0;
+    int max_active_envs = num_cl_envs + num_fresh_envs;
 
     pufferl->policy = build_policy(env_name.c_str(), input_size, hidden_size,
         num_layers, decoder_output_size, act_n, is_continuous, hypers.horizon);
@@ -2026,12 +2254,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         acts, hypers.total_agents, minibatch_segments);
     if (pufferl->curriculum_enabled) {
         register_state_buffer(&pufferl->state_buf,
-            acts, hypers.state_buffer_size, total_agents, vec->size,
-            agents_per_env, num_cl_envs, horizon, hypers.state_checkpoint_interval);
+            vec->size, max_active_envs,
+            hypers.num_start_states, hypers.state_trajectory_max_len,
+            hypers.state_checkpoint_interval, hypers.horizon,
+            num_buffers, hypers.num_threads, (unsigned int)pufferl->seed);
     }
 
     // Extra cuda buffers just reuse activ allocator
-    pufferl->rng_offset_puf = {.shape = {num_buffers + 1 + (int)pufferl->curriculum_enabled}};
+    pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
     alloc_register(acts, &pufferl->rng_offset_puf);
 
     pufferl->act_sizes_puf  = {.shape = {num_action_heads}};
@@ -2039,6 +2269,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     pufferl->losses_puf = {.shape = {NUM_LOSSES}};
     alloc_register(acts, &pufferl->losses_puf);
+
+    pufferl->reward_stats = {.shape = {2}};
+    alloc_register(acts, &pufferl->reward_stats);
 
     pufferl->advantages_puf = {.shape = {total_agents, horizon}};
     alloc_register(acts, &pufferl->advantages_puf);
@@ -2061,12 +2294,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->grad_puf = {.data = (precision_t*)grads->mem, .shape = {grads->total_elems}};
     pufferl->param_puf = {.data = (precision_t*)params->mem, .shape = {params->total_elems}};
     if (pufferl->curriculum_enabled) {
-        if (!init_state_buffer(&pufferl->state_buf, hypers.total_agents)) {
-            alloc_free(params);
-            alloc_free(grads);
-            alloc_free(acts);
-            return nullptr;
-        }
+        init_state_buffer(&pufferl->state_buf);
     }
 
     ulong init_seed = hypers.seed;
@@ -2096,6 +2324,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     // Post-create initialization
     cudaMemcpy(pufferl->act_sizes_puf.data, raw_act_sizes, num_action_heads * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemset(pufferl->losses_puf.data, 0, NUM_LOSSES * sizeof(float));
+    float reward_stats_init[2] = {0.0f, 1.0f};
+    cudaMemcpy(pufferl->reward_stats.data, reward_stats_init, sizeof(reward_stats_init), cudaMemcpyHostToDevice);
     float one = 1.0f;
     cudaMemcpy(pufferl->ppo_bufs_puf.grad_loss.data, &one, sizeof(float), cudaMemcpyHostToDevice);
     muon_post_create(&pufferl->muon);
@@ -2155,7 +2385,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         }
 
         cudaStream_t saved_default = pufferl->default_stream;
-        cudaStream_t saved_tl = tl_stream;
         cudaStream_t warmup_stream;
         cudaStreamCreate(&warmup_stream);
         pufferl->default_stream = warmup_stream;
@@ -2165,14 +2394,13 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         for (pufferl->epoch = 0; pufferl->epoch <= hypers.cudagraphs; pufferl->epoch++) {
             for (int i = 0; i < num_buffers * horizon; ++i) {
                 int buf = i % num_buffers;
-                tl_stream = pufferl->streams[buf];
-                net_callback_wrapper(pufferl.get(), buf, i / num_buffers);
+                rollout_forward_step(pufferl.get(), buf, i / num_buffers,
+                    pufferl->streams[buf]);
                 cudaDeviceSynchronize();
             }
         }
         pufferl->rollout_captured = true;
 
-        tl_stream = warmup_stream;
         for (int i = 0; i <= hypers.cudagraphs; i++) {
             train_impl(*pufferl);
         }
@@ -2180,7 +2408,6 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         cudaStreamSynchronize(warmup_stream);
         cudaDeviceSynchronize();
         pufferl->default_stream = saved_default;
-        tl_stream = saved_tl;
         pufferl->curriculum_enabled = saved_curriculum_enabled;
         cudaStreamDestroy(warmup_stream);
 
@@ -2202,6 +2429,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         }
         cudaMemset(pufferl->rng_offset_puf.data, 0,
             numel(pufferl->rng_offset_puf.shape) * sizeof(long));
+        cudaMemcpy(pufferl->reward_stats.data, reward_stats_init,
+            sizeof(reward_stats_init), cudaMemcpyHostToDevice);
         cudaDeviceSynchronize();
 
         pufferl->epoch = 0;
@@ -2217,9 +2446,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         }
     }
 
-    create_static_threads(vec, hypers.num_threads, horizon, pufferl.get(),
-        net_callback_wrapper, thread_init_wrapper);
-    static_vec_reset(vec);
+    create_pufferl_threads(pufferl.get(), hypers.num_threads, horizon);
+    static_vec_reset(vec, 0, -1, NULL);
+    if (pufferl->curriculum_enabled) {
+        curriculum_init_active_envs(pufferl.get());
+    }
 
     if (hypers.profile) {
         cudaDeviceSynchronize();

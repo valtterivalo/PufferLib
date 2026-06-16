@@ -31,6 +31,14 @@
 #include <immintrin.h>
 #include "raylib.h"
 
+#ifdef __cplusplus
+#define CRAFTAX_CLASSIC_ALIGNAS(n) alignas(n)
+#elif defined(__clang__) || defined(__GNUC__)
+#define CRAFTAX_CLASSIC_ALIGNAS(n) __attribute__((aligned(n)))
+#else
+#define CRAFTAX_CLASSIC_ALIGNAS(n)
+#endif
+
 // ============================================================
 // Constants
 // ============================================================
@@ -146,22 +154,9 @@ typedef struct Client {
 } Client;
 
 // ============================================================
-// Env struct
+// Puffer 5 state + lightweight env record
 // ============================================================
-typedef struct CraftaxClassic {
-    Client* client;
-    Log log;
-
-    float* observations;                // (OBS_DIM,) fp32, PufferLib-owned
-    float* actions;                     // (1,) fp32
-    float* rewards;                     // (1,)
-    float* terminals;                   // (1,)
-
-    int num_agents;                     // = 1
-
-    unsigned int rng;                   // populated by default my_vec_init (env index)
-    uint64_t pcg;                       // actual RNG state (seeded from rng in my_init)
-
+typedef struct State {
     // Packed map (2 blocks/byte)
     uint8_t map_packed[MAP_PACKED_SIZE];
 
@@ -217,17 +212,33 @@ typedef struct CraftaxClassic {
     // Scratch for per-step reward computation
     int8_t old_health;
     bool   old_achievements[NUM_ACHIEVEMENTS];
+} State;
+
+typedef struct CraftaxClassic {
+    Client* client;
+    Log log;
+
+    float* observations;                // (OBS_DIM,) fp32, PufferLib-owned
+    float* actions;                     // (1,) fp32
+    float* rewards;                     // (1,)
+    float* terminals;                   // (1,)
+
+    int num_agents;                     // = 1
+
+    unsigned int rng;                   // populated by default my_vec_init (env index)
+    uint64_t pcg;                       // RNG intentionally excluded from State
+    State state;
 } CraftaxClassic;
 
 // ============================================================
 // Map accessors + small helpers
 // ============================================================
-static inline int8_t map_get(const CraftaxClassic* s, int r, int c) {
+static inline int8_t map_get(const State* s, int r, int c) {
     int idx = r * MAP_PACKED_ROW + (c >> 1);
     uint8_t b = s->map_packed[idx];
     return (c & 1) ? (int8_t)(b >> 4) : (int8_t)(b & 0x0F);
 }
-static inline void map_set(CraftaxClassic* s, int r, int c, int8_t v) {
+static inline void map_set(State* s, int r, int c, int8_t v) {
     int idx = r * MAP_PACKED_ROW + (c >> 1);
     uint8_t b = s->map_packed[idx];
     if (c & 1) s->map_packed[idx] = (b & 0x0F) | ((v & 0x0F) << 4);
@@ -256,12 +267,12 @@ static inline void mb_set(uint64_t* bits, int r, int c)   { bits[r] |=  (1ULL <<
 static inline void mb_clear(uint64_t* bits, int r, int c) { bits[r] &= ~(1ULL << c); }
 static inline bool mb_get(const uint64_t* bits, int r, int c) { return (bits[r] >> c) & 1ULL; }
 
-static inline bool has_mob_at(const CraftaxClassic* s, int r, int c) {
+static inline bool has_mob_at(const State* s, int r, int c) {
     if ((unsigned)r >= MAP_SIZE || (unsigned)c >= MAP_SIZE) return false;
     return ((s->mob_bits[r] >> c) & 1ULL) != 0;
 }
 
-static bool is_near_block(const CraftaxClassic* s, int8_t blk) {
+static bool is_near_block(const State* s, int8_t blk) {
     int pr = s->player_r, pc = s->player_c;
     static const int dr8[8] = {0, 0, -1, 1, -1, -1, 1, 1};
     static const int dc8[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
@@ -272,7 +283,7 @@ static bool is_near_block(const CraftaxClassic* s, int8_t blk) {
     return false;
 }
 
-static inline int get_damage(const CraftaxClassic* s) {
+static inline int get_damage(const State* s) {
     if (s->inv[11] > 0) return 5;
     if (s->inv[10] > 0) return 3;
     if (s->inv[9]  > 0) return 2;
@@ -287,7 +298,7 @@ static inline float perlin_interp(float t) { return t*t*t*(t*(t*6.0f-15.0f)+10.0
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((target("avx512f,avx512bw,avx512dq,avx512vl")))
 #endif
-static void generate_world(CraftaxClassic* s) {
+static void generate_world(State* s, uint64_t* rng) {
     // Reset maps and bitmaps
     for (int i = 0; i < MAP_PACKED_SIZE; i++)
         s->map_packed[i] = (uint8_t)(BLK_GRASS | (BLK_GRASS << 4));
@@ -301,11 +312,11 @@ static void generate_world(CraftaxClassic* s) {
     // Padded by +16 floats so AVX-512 permute-load at the last grid row doesn't
     // read out of bounds.
     enum { GRID = 10, GRID_PAD = GRID * GRID + 16 };
-    _Alignas(64) float cos_a[4][GRID_PAD];
-    _Alignas(64) float sin_a[4][GRID_PAD];
+    CRAFTAX_CLASSIC_ALIGNAS(64) float cos_a[4][GRID_PAD];
+    CRAFTAX_CLASSIC_ALIGNAS(64) float sin_a[4][GRID_PAD];
     for (int layer = 0; layer < 4; layer++) {
         for (int i = 0; i < GRID * GRID; i++) {
-            float a = cr_rf(&s->pcg) * 2.0f * 3.14159265f;
+            float a = cr_rf(rng) * 2.0f * 3.14159265f;
             cos_a[layer][i] = cosf(a);
             sin_a[layer][i] = sinf(a);
         }
@@ -316,7 +327,7 @@ static void generate_world(CraftaxClassic* s) {
     float inv_scale = 1.0f / scale;
     int center = MAP_SIZE / 2;
 
-    _Alignas(64) float noise[4][MAP_SIZE][MAP_SIZE];
+    CRAFTAX_CLASSIC_ALIGNAS(64) float noise[4][MAP_SIZE][MAP_SIZE];
     {
         const __m512 c_lane = _mm512_setr_ps(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
         const __m512 one    = _mm512_set1_ps(1.0f);
@@ -407,12 +418,12 @@ static void generate_world(CraftaxClassic* s) {
                 if (mountain_val > 0.85f && tree_noise > 0.7f)  blk = BLK_LAVA;
             }
             if (blk == BLK_STONE) {
-                float ore = cr_rf(&s->pcg);
+                float ore = cr_rf(rng);
                 if (ore < 0.005f && mountain_val > 0.8f) blk = BLK_DIAMOND;
                 else if (ore < 0.035f) blk = BLK_IRON;
                 else if (ore < 0.075f) blk = BLK_COAL;
             }
-            if (blk == BLK_GRASS && tree_noise > 0.5f && cr_rf(&s->pcg) > 0.8f)
+            if (blk == BLK_GRASS && tree_noise > 0.5f && cr_rf(rng) > 0.8f)
                 blk = BLK_TREE;
             map_set(s, r, c, blk);
         }
@@ -426,7 +437,7 @@ static void generate_world(CraftaxClassic* s) {
             if (map_get(s, r, c) == BLK_DIAMOND) has_diamond = true;
     if (!has_diamond) {
         for (int att = 0; att < 1000; att++) {
-            int r = cr_ri(&s->pcg, MAP_SIZE), c = cr_ri(&s->pcg, MAP_SIZE);
+            int r = cr_ri(rng, MAP_SIZE), c = cr_ri(rng, MAP_SIZE);
             if (map_get(s, r, c) == BLK_STONE) { map_set(s, r, c, BLK_DIAMOND); break; }
         }
     }
@@ -456,7 +467,7 @@ static void generate_world(CraftaxClassic* s) {
 // ============================================================
 // Step sub-actions
 // ============================================================
-static void do_crafting(CraftaxClassic* s, int action) {
+static void do_crafting(State* s, int action) {
     bool t = is_near_block(s, BLK_TABLE);
     bool f = is_near_block(s, BLK_FURNACE);
     if (action == ACT_MAKE_WOOD_PICK  && t && s->inv[0] >= 1) { s->inv[0]--; s->inv[6]++; s->achievements[ACH_MAKE_WOOD_PICK] = true; }
@@ -471,7 +482,7 @@ static void do_crafting(CraftaxClassic* s, int action) {
     }
 }
 
-static void do_action(CraftaxClassic* s) {
+static void do_action(State* s, uint64_t* rng) {
     int tr = s->player_r + DIR_DR[s->player_dir];
     int tc = s->player_c + DIR_DC[s->player_dir];
     if (!in_bounds(tr, tc)) return;
@@ -542,7 +553,7 @@ static void do_action(CraftaxClassic* s) {
                 s->achievements[ACH_COLLECT_DIAMOND] = true;
             } break;
         case BLK_GRASS:
-            if (cr_rf(&s->pcg) < 0.1f) {
+            if (cr_rf(rng) < 0.1f) {
                 s->inv[5] = (int8_t)cr_min_i(9, s->inv[5] + 1);
                 s->achievements[ACH_COLLECT_SAPLING] = true;
             } break;
@@ -561,7 +572,7 @@ static void do_action(CraftaxClassic* s) {
     }
 }
 
-static void place_block(CraftaxClassic* s, int action) {
+static void place_block(State* s, int action) {
     int tr = s->player_r + DIR_DR[s->player_dir];
     int tc = s->player_c + DIR_DC[s->player_dir];
     if (!in_bounds(tr, tc)) return;
@@ -588,7 +599,7 @@ static void place_block(CraftaxClassic* s, int action) {
     }
 }
 
-static void move_player(CraftaxClassic* s, int action) {
+static void move_player(State* s, int action) {
     if (action < 1 || action > 4) return;
     int nr = s->player_r + DIR_DR[action];
     int nc = s->player_c + DIR_DC[action];
@@ -599,7 +610,7 @@ static void move_player(CraftaxClassic* s, int action) {
     s->player_r = (int16_t)nr; s->player_c = (int16_t)nc;
 }
 
-static bool can_move_mob(const CraftaxClassic* s, int r, int c) {
+static bool can_move_mob(const State* s, int r, int c) {
     if (!in_bounds(r, c)) return false;
     int8_t blk = map_get(s, r, c);
     if (is_solid(blk)) return false;
@@ -609,7 +620,7 @@ static bool can_move_mob(const CraftaxClassic* s, int r, int c) {
     return true;
 }
 
-static void update_mobs(CraftaxClassic* s) {
+static void update_mobs(State* s, uint64_t* rng) {
     int pr = s->player_r, pc = s->player_c;
 
     for (int i = 0; i < MAX_ZOMBIES; i++) {
@@ -630,12 +641,12 @@ static void update_mobs(CraftaxClassic* s) {
         s->zombie_cd[i] = (int8_t)cr_max_i(0, s->zombie_cd[i] - 1);
 
         int dr = 0, dc = 0;
-        if (dist < 10 && cr_rf(&s->pcg) < 0.75f) {
+        if (dist < 10 && cr_rf(rng) < 0.75f) {
             int adr = abs(pr - zr), adc = abs(pc - zc);
-            if (adr > adc || (adr == adc && cr_rf(&s->pcg) < 0.5f)) dr = cr_sign_i(pr - zr);
+            if (adr > adc || (adr == adc && cr_rf(rng) < 0.5f)) dr = cr_sign_i(pr - zr);
             else                                                    dc = cr_sign_i(pc - zc);
         } else {
-            int d = cr_ri(&s->pcg, 4);
+            int d = cr_ri(rng, 4);
             dr = DIR_DR[d+1]; dc = DIR_DC[d+1];
         }
         int nr = zr + dr, nc = zc + dc;
@@ -655,7 +666,7 @@ static void update_mobs(CraftaxClassic* s) {
             mb_clear(s->mob_bits, cr, cc); mb_clear(s->cow_bits, cr, cc);
             continue;
         }
-        int d = cr_ri(&s->pcg, 8);
+        int d = cr_ri(rng, 8);
         if (d < 4) {
             int dr = DIR_DR[d+1], dc2 = DIR_DC[d+1];
             int nr = cr + dr, nc = cc + dc2;
@@ -693,22 +704,22 @@ static void update_mobs(CraftaxClassic* s) {
         s->skel_cd[i] = (int8_t)cr_max_i(0, s->skel_cd[i] - 1);
 
         int dr = 0, dc = 0;
-        bool random_move = cr_rf(&s->pcg) < 0.15f;
+        bool random_move = cr_rf(rng) < 0.15f;
         if (!random_move) {
             if (dist >= 10) {
                 int adr = abs(pr - sr), adc = abs(pc - sc);
-                if (adr > adc || (adr == adc && cr_rf(&s->pcg) < 0.5f)) dr = cr_sign_i(pr - sr);
+                if (adr > adc || (adr == adc && cr_rf(rng) < 0.5f)) dr = cr_sign_i(pr - sr);
                 else                                                    dc = cr_sign_i(pc - sc);
             } else if (dist <= 3) {
                 int adr = abs(pr - sr), adc = abs(pc - sc);
-                if (adr > adc || (adr == adc && cr_rf(&s->pcg) < 0.5f)) dr = -cr_sign_i(pr - sr);
+                if (adr > adc || (adr == adc && cr_rf(rng) < 0.5f)) dr = -cr_sign_i(pr - sr);
                 else                                                    dc = -cr_sign_i(pc - sc);
             } else {
                 random_move = true;
             }
         }
         if (random_move) {
-            int d = cr_ri(&s->pcg, 4);
+            int d = cr_ri(rng, 4);
             dr = DIR_DR[d+1]; dc = DIR_DC[d+1];
         }
         int nr = sr + dr, nc = sc + dc;
@@ -739,11 +750,11 @@ static void update_mobs(CraftaxClassic* s) {
     }
 }
 
-static bool try_spawn(CraftaxClassic* s, int min_d, int max_d, bool need_grass, bool need_path,
-                      int* or_, int* oc_) {
+static bool try_spawn(State* s, uint64_t* rng, int min_d, int max_d,
+                      bool need_grass, bool need_path, int* or_, int* oc_) {
     int pr = s->player_r, pc = s->player_c;
     for (int att = 0; att < 20; att++) {
-        int r = cr_ri(&s->pcg, MAP_SIZE), c = cr_ri(&s->pcg, MAP_SIZE);
+        int r = cr_ri(rng, MAP_SIZE), c = cr_ri(rng, MAP_SIZE);
         int dist = l1_dist(r, c, pr, pc);
         if (dist < min_d || dist >= max_d) continue;
         if (has_mob_at(s, r, c)) continue;
@@ -757,15 +768,15 @@ static bool try_spawn(CraftaxClassic* s, int min_d, int max_d, bool need_grass, 
     return false;
 }
 
-static void spawn_mobs(CraftaxClassic* s) {
+static void spawn_mobs(State* s, uint64_t* rng) {
     int n_cows = 0, n_z = 0, n_sk = 0;
     for (int i = 0; i < MAX_COWS;      i++) n_cows += s->cow_mask[i];
     for (int i = 0; i < MAX_ZOMBIES;   i++) n_z    += s->zombie_mask[i];
     for (int i = 0; i < MAX_SKELETONS; i++) n_sk   += s->skel_mask[i];
 
-    if (n_cows < MAX_COWS && cr_rf(&s->pcg) < 0.1f) {
+    if (n_cows < MAX_COWS && cr_rf(rng) < 0.1f) {
         int r, c;
-        if (try_spawn(s, 3, MOB_DESPAWN_DIST, true, false, &r, &c)) {
+        if (try_spawn(s, rng, 3, MOB_DESPAWN_DIST, true, false, &r, &c)) {
             for (int i = 0; i < MAX_COWS; i++) if (!s->cow_mask[i]) {
                 s->cow_mask[i] = true; s->cow_r[i] = (int16_t)r; s->cow_c[i] = (int16_t)c; s->cow_hp[i] = 3;
                 mb_set(s->mob_bits, r, c); mb_set(s->cow_bits, r, c);
@@ -774,9 +785,9 @@ static void spawn_mobs(CraftaxClassic* s) {
         }
     }
     float zombie_chance = 0.02f + 0.1f * (1.0f - s->light_level) * (1.0f - s->light_level);
-    if (n_z < MAX_ZOMBIES && cr_rf(&s->pcg) < zombie_chance) {
+    if (n_z < MAX_ZOMBIES && cr_rf(rng) < zombie_chance) {
         int r, c;
-        if (try_spawn(s, 9, MOB_DESPAWN_DIST, false, false, &r, &c)) {
+        if (try_spawn(s, rng, 9, MOB_DESPAWN_DIST, false, false, &r, &c)) {
             for (int i = 0; i < MAX_ZOMBIES; i++) if (!s->zombie_mask[i]) {
                 s->zombie_mask[i] = true; s->zombie_r[i] = (int16_t)r; s->zombie_c[i] = (int16_t)c;
                 s->zombie_hp[i] = 5; s->zombie_cd[i] = 0;
@@ -785,9 +796,9 @@ static void spawn_mobs(CraftaxClassic* s) {
             }
         }
     }
-    if (n_sk < MAX_SKELETONS && cr_rf(&s->pcg) < 0.05f) {
+    if (n_sk < MAX_SKELETONS && cr_rf(rng) < 0.05f) {
         int r, c;
-        if (try_spawn(s, 9, MOB_DESPAWN_DIST, false, true, &r, &c)) {
+        if (try_spawn(s, rng, 9, MOB_DESPAWN_DIST, false, true, &r, &c)) {
             for (int i = 0; i < MAX_SKELETONS; i++) if (!s->skel_mask[i]) {
                 s->skel_mask[i] = true; s->skel_r[i] = (int16_t)r; s->skel_c[i] = (int16_t)c;
                 s->skel_hp[i] = 3; s->skel_cd[i] = 0;
@@ -798,7 +809,7 @@ static void spawn_mobs(CraftaxClassic* s) {
     }
 }
 
-static void update_plants(CraftaxClassic* s) {
+static void update_plants(State* s) {
     for (int i = 0; i < MAX_PLANTS; i++) {
         if (!s->plant_mask[i]) continue;
         s->plant_age[i]++;
@@ -810,7 +821,7 @@ static void update_plants(CraftaxClassic* s) {
     }
 }
 
-static void update_intrinsics(CraftaxClassic* s, int action) {
+static void update_intrinsics(State* s, int action) {
     if (action == ACT_SLEEP && s->energy < 9) s->is_sleeping = true;
     if (s->energy >= 9 && s->is_sleeping) {
         s->is_sleeping = false;
@@ -832,8 +843,7 @@ static void update_intrinsics(CraftaxClassic* s, int action) {
 // ============================================================
 // Observation builder (writes OBS_DIM floats into env->observations)
 // ============================================================
-static void compute_observations(CraftaxClassic* s) {
-    float* obs = s->observations;
+static void compute_observations(const State* s, float* obs) {
     int pr = s->player_r, pc = s->player_c;
     int idx = 0;
     for (int dr = -3; dr <= 3; dr++) {
@@ -875,17 +885,18 @@ static void compute_observations(CraftaxClassic* s) {
 // Logging (stats accumulated into env->log; flushed at vec-level by PufferLib)
 // ============================================================
 static void add_log(CraftaxClassic* env) {
+    State* s = &env->state;
     int unlocked = 0;
     for (int i = 0; i < NUM_ACHIEVEMENTS; i++) {
-        if (env->achievements[i]) {
+        if (s->achievements[i]) {
             unlocked++;
             env->log.achievements[i] += 1.0f;
         }
     }
     env->log.perf           += (float)unlocked / (float)NUM_ACHIEVEMENTS;
-    env->log.score          += env->episode_return_accum;
-    env->log.episode_return += env->episode_return_accum;
-    env->log.episode_length += (float)env->episode_length_accum;
+    env->log.score          += s->episode_return_accum;
+    env->log.episode_return += s->episode_return_accum;
+    env->log.episode_length += (float)s->episode_length_accum;
     env->log.n              += 1.0f;
 }
 
@@ -905,13 +916,15 @@ static void c_init(CraftaxClassic* env) {
 }
 
 static void c_reset(CraftaxClassic* env) {
-    env->episode_return_accum = 0.0f;
-    env->episode_length_accum = 0;
-    generate_world(env);
-    compute_observations(env);
+    State* s = &env->state;
+    s->episode_return_accum = 0.0f;
+    s->episode_length_accum = 0;
+    generate_world(s, &env->pcg);
+    compute_observations(s, env->observations);
 }
 
 static void c_step(CraftaxClassic* env) {
+    State* s = &env->state;
     env->rewards[0] = 0.0f;
     env->terminals[0] = 0.0f;
 
@@ -920,48 +933,48 @@ static void c_step(CraftaxClassic* env) {
     if (action >= NUM_ACTIONS) action = NUM_ACTIONS - 1;
 
     // Snapshot for reward computation
-    env->old_health = env->health;
-    memcpy(env->old_achievements, env->achievements, sizeof(env->achievements));
+    s->old_health = s->health;
+    memcpy(s->old_achievements, s->achievements, sizeof(s->achievements));
 
-    int eff_action = env->is_sleeping ? ACT_NOOP : action;
-    do_crafting(env, eff_action);
-    if (eff_action == ACT_DO) do_action(env);
-    if (eff_action >= ACT_PLACE_STONE && eff_action <= ACT_PLACE_PLANT) place_block(env, eff_action);
-    move_player(env, eff_action);
-    update_mobs(env);
-    spawn_mobs(env);
-    update_plants(env);
-    update_intrinsics(env, action);
+    int eff_action = s->is_sleeping ? ACT_NOOP : action;
+    do_crafting(s, eff_action);
+    if (eff_action == ACT_DO) do_action(s, &env->pcg);
+    if (eff_action >= ACT_PLACE_STONE && eff_action <= ACT_PLACE_PLANT) place_block(s, eff_action);
+    move_player(s, eff_action);
+    update_mobs(s, &env->pcg);
+    spawn_mobs(s, &env->pcg);
+    update_plants(s);
+    update_intrinsics(s, action);
 
     for (int i = 0; i < NUM_INVENTORY; i++)
-        env->inv[i] = (int8_t)cr_clamp_i(env->inv[i], 0, 9);
+        s->inv[i] = (int8_t)cr_clamp_i(s->inv[i], 0, 9);
 
-    env->timestep++;
-    float t_frac = fmodf((float)env->timestep / (float)DAY_LENGTH, 1.0f) + 0.3f;
+    s->timestep++;
+    float t_frac = fmodf((float)s->timestep / (float)DAY_LENGTH, 1.0f) + 0.3f;
     float cv = cosf(3.14159265f * t_frac);
-    env->light_level = 1.0f - fabsf(cv * cv * cv);
+    s->light_level = 1.0f - fabsf(cv * cv * cv);
 
     // Reward: new achievements + health change * 0.1
     float ach_r = 0.0f;
     for (int i = 0; i < NUM_ACHIEVEMENTS; i++)
-        ach_r += (float)(env->achievements[i] && !env->old_achievements[i]);
-    float hp_r = (float)(env->health - env->old_health) * 0.1f;
+        ach_r += (float)(s->achievements[i] && !s->old_achievements[i]);
+    float hp_r = (float)(s->health - s->old_health) * 0.1f;
     float r = ach_r + hp_r;
     env->rewards[0] = r;
-    env->episode_return_accum += r;
-    env->episode_length_accum += 1;
+    s->episode_return_accum += r;
+    s->episode_length_accum += 1;
 
     // Terminal conditions
-    bool done = (env->timestep >= MAX_TIMESTEPS) || (env->health <= 0);
-    if (in_bounds(env->player_r, env->player_c)
-        && map_get(env, env->player_r, env->player_c) == BLK_LAVA) done = true;
+    bool done = (s->timestep >= MAX_TIMESTEPS) || (s->health <= 0);
+    if (in_bounds(s->player_r, s->player_c)
+        && map_get(s, s->player_r, s->player_c) == BLK_LAVA) done = true;
 
     if (done) {
         env->terminals[0] = 1.0f;
         add_log(env);
         c_reset(env);   // auto-reset (observation written inside)
     } else {
-        compute_observations(env);
+        compute_observations(s, env->observations);
     }
 }
 
@@ -1069,6 +1082,7 @@ static void cc_draw_tile(int tex_id, int dst_x, int dst_y) {
 }
 
 static void c_render(CraftaxClassic* env) {
+    State* s = &env->state;
     const int view_w = CC_RENDER_COLS * CC_TEX_DRAW_PX;
     const int view_h = CC_RENDER_ROWS * CC_TEX_DRAW_PX;
     const int hud_h = 60;
@@ -1080,8 +1094,8 @@ static void c_render(CraftaxClassic* env) {
     if (!cc_textures_loaded) cc_load_textures();
     if (IsKeyDown(KEY_ESCAPE)) exit(0);
 
-    int pr = env->player_r;
-    int pc = env->player_c;
+    int pr = s->player_r;
+    int pc = s->player_c;
     int half_r = CC_RENDER_ROWS / 2;
     int half_c = CC_RENDER_COLS / 2;
 
@@ -1096,7 +1110,7 @@ static void c_render(CraftaxClassic* env) {
             int dst_y = vr * CC_TEX_DRAW_PX;
 
             int blk = BLK_OUT_OF_BOUNDS;
-            if (in_bounds(wr, wc)) blk = map_get(env, wr, wc);
+            if (in_bounds(wr, wc)) blk = map_get(s, wr, wc);
             if (blk < 0 || blk >= 17) blk = 0;
             cc_draw_tile(blk, dst_x, dst_y);
         }
@@ -1104,42 +1118,42 @@ static void c_render(CraftaxClassic* env) {
 
     // Mobs
     for (int i = 0; i < MAX_ZOMBIES; i++) {
-        if (!env->zombie_mask[i]) continue;
-        int vr = env->zombie_r[i] - pr + half_r;
-        int vc = env->zombie_c[i] - pc + half_c;
+        if (!s->zombie_mask[i]) continue;
+        int vr = s->zombie_r[i] - pr + half_r;
+        int vc = s->zombie_c[i] - pc + half_c;
         if (vr < 0 || vr >= CC_RENDER_ROWS || vc < 0 || vc >= CC_RENDER_COLS) continue;
         cc_draw_tile(CC_TEX_MOB_ZOMBIE, vc * CC_TEX_DRAW_PX, vr * CC_TEX_DRAW_PX);
     }
     for (int i = 0; i < MAX_SKELETONS; i++) {
-        if (!env->skel_mask[i]) continue;
-        int vr = env->skel_r[i] - pr + half_r;
-        int vc = env->skel_c[i] - pc + half_c;
+        if (!s->skel_mask[i]) continue;
+        int vr = s->skel_r[i] - pr + half_r;
+        int vc = s->skel_c[i] - pc + half_c;
         if (vr < 0 || vr >= CC_RENDER_ROWS || vc < 0 || vc >= CC_RENDER_COLS) continue;
         cc_draw_tile(CC_TEX_MOB_SKELETON, vc * CC_TEX_DRAW_PX, vr * CC_TEX_DRAW_PX);
     }
     for (int i = 0; i < MAX_COWS; i++) {
-        if (!env->cow_mask[i]) continue;
-        int vr = env->cow_r[i] - pr + half_r;
-        int vc = env->cow_c[i] - pc + half_c;
+        if (!s->cow_mask[i]) continue;
+        int vr = s->cow_r[i] - pr + half_r;
+        int vc = s->cow_c[i] - pc + half_c;
         if (vr < 0 || vr >= CC_RENDER_ROWS || vc < 0 || vc >= CC_RENDER_COLS) continue;
         cc_draw_tile(CC_TEX_MOB_COW, vc * CC_TEX_DRAW_PX, vr * CC_TEX_DRAW_PX);
     }
     for (int i = 0; i < MAX_ARROWS; i++) {
-        if (!env->arrow_mask[i]) continue;
-        int vr = env->arrow_r[i] - pr + half_r;
-        int vc = env->arrow_c[i] - pc + half_c;
+        if (!s->arrow_mask[i]) continue;
+        int vr = s->arrow_r[i] - pr + half_r;
+        int vc = s->arrow_c[i] - pc + half_c;
         if (vr < 0 || vr >= CC_RENDER_ROWS || vc < 0 || vc >= CC_RENDER_COLS) continue;
-        cc_draw_tile(cc_arrow_tex_id(env->arrow_dr[i], env->arrow_dc[i]),
+        cc_draw_tile(cc_arrow_tex_id(s->arrow_dr[i], s->arrow_dc[i]),
                      vc * CC_TEX_DRAW_PX, vr * CC_TEX_DRAW_PX);
     }
 
     // Player in center
-    cc_draw_tile(cc_player_tex_id(env->player_dir, env->is_sleeping),
+    cc_draw_tile(cc_player_tex_id(s->player_dir, s->is_sleeping),
                  half_c * CC_TEX_DRAW_PX, half_r * CC_TEX_DRAW_PX);
 
     // Night dim
-    if (env->light_level < 1.0f) {
-        unsigned char a = (unsigned char)((1.0f - env->light_level) * 140.0f);
+    if (s->light_level < 1.0f) {
+        unsigned char a = (unsigned char)((1.0f - s->light_level) * 140.0f);
         DrawRectangle(0, 0, view_w, view_h, (Color){0, 0, 40, a});
     }
 
@@ -1147,17 +1161,17 @@ static void c_render(CraftaxClassic* env) {
     int hud_y = view_h;
     DrawRectangle(0, hud_y, view_w, hud_h, (Color){20, 20, 20, 255});
     DrawText(TextFormat("HP:%d  F:%d  D:%d  E:%d  t:%d  light:%.2f",
-             env->health, env->food, env->drink, env->energy,
-             env->timestep, env->light_level),
+             s->health, s->food, s->drink, s->energy,
+             s->timestep, s->light_level),
              4, hud_y + 4, 14, WHITE);
     int ach_count = 0;
-    for (int i = 0; i < NUM_ACHIEVEMENTS; i++) ach_count += env->achievements[i] ? 1 : 0;
+    for (int i = 0; i < NUM_ACHIEVEMENTS; i++) ach_count += s->achievements[i] ? 1 : 0;
     DrawText(TextFormat("ach:%d/%d  ret:%.2f  len:%d", ach_count, NUM_ACHIEVEMENTS,
-             env->episode_return_accum, env->episode_length_accum),
+             s->episode_return_accum, s->episode_length_accum),
              4, hud_y + 22, 14, (Color){180, 220, 180, 255});
     DrawText(TextFormat("inv: w=%d s=%d c=%d i=%d d=%d sap=%d  pick w/s/i:%d/%d/%d  sword w/s/i:%d/%d/%d",
-             env->inv[0], env->inv[1], env->inv[2], env->inv[3], env->inv[4], env->inv[5],
-             env->inv[6], env->inv[7], env->inv[8], env->inv[9], env->inv[10], env->inv[11]),
+             s->inv[0], s->inv[1], s->inv[2], s->inv[3], s->inv[4], s->inv[5],
+             s->inv[6], s->inv[7], s->inv[8], s->inv[9], s->inv[10], s->inv[11]),
              4, hud_y + 40, 12, (Color){180, 180, 180, 255});
     EndDrawing();
 }
