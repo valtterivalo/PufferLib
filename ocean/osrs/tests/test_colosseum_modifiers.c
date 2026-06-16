@@ -50,6 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
@@ -3503,18 +3504,24 @@ static void test_loadout_spec_weapons(void) {
     col_init_npc(&s, 0, COLO_FREMENNIK_ARCHER, 15, 16);
     col_init_npc(&s, 1, COLO_FREMENNIK_ARCHER, 15, 15);
     col_init_npc(&s, 2, COLO_FREMENNIK_ARCHER, 15, 17);
+    /* each separate 1x1 in the frontal arc is a distinct full-100% (rank 0) hit
+       — the 100/50/25 taxing is only for multihit on ONE large monster. */
+    ColScytheResolvedHit arc_hits[COLO_SCYTHE_MAX_HITS];
+    int arc_count = col_resolve_scythe_hits(&s, 0, arc_hits);
+    int all_rank0 = 1;
+    for (int h = 0; h < arc_count; h++)
+        if (arc_hits[h].splat_rank != 0) all_rank0 = 0;
+    CHECK("scythe arc resolves three distinct full-100% hits",
+        arc_count == 3 && all_rank0 &&
+        arc_hits[0].npc_slot != arc_hits[1].npc_slot &&
+        arc_hits[1].npc_slot != arc_hits[2].npc_slot &&
+        arc_hits[0].npc_slot != arc_hits[2].npc_slot);
     s.player.attack_timer = 0;
     col_player_attack_target(&s, 0);
-    int scythe_max = s.loadout_stats[s.weapon_set].max_hit;
-    CHECK("scythe arc queues rank-0 hit on the forward target",
+    CHECK("scythe arc queues one hit per distinct arc target",
         s.npcs[0].pending_hits.count == 1 &&
-        s.npcs[0].pending_hits.hits[0].damage == scythe_max);
-    CHECK("scythe arc queues rank-1 hit on the player's left target",
         s.npcs[1].pending_hits.count == 1 &&
-        s.npcs[1].pending_hits.hits[0].damage == (scythe_max >> 1));
-    CHECK("scythe arc queues rank-2 hit on the player's right target",
-        s.npcs[2].pending_hits.count == 1 &&
-        s.npcs[2].pending_hits.hits[0].damage == (scythe_max >> 2));
+        s.npcs[2].pending_hits.count == 1);
     for (int t = 0; t < 4; t++)
         col_resolve_player_projectiles_on_npcs_ctx(&s, &ctx);
     CHECK("scythe landed hits create one render hit per target",
@@ -3545,7 +3552,7 @@ static void test_loadout_spec_weapons(void) {
         col_init_npc(&s, 1, COLO_FREMENNIK_BERSERKER, 15, 15);
         s.player.attack_timer = 0;
         col_player_attack_target(&s, 0);
-        scythe_max = s.loadout_stats[s.weapon_set].max_hit;
+        int scythe_max = s.loadout_stats[s.weapon_set].max_hit;
         if (s.npcs[0].pending_hits.count == 1 &&
                 s.npcs[1].pending_hits.count == 1 &&
                 s.npcs[0].pending_hits.hits[0].damage == scythe_max &&
@@ -3748,20 +3755,165 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("eleven action heads (added SPELL)", COLO_NUM_ACTION_HEADS == 11);
     CHECK("gear head dim is 4 (no_switch/melee/ranged/magic)", COLO_GEAR_DIM == 4);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 823", COLO_NUM_OBS == 823);
+    CHECK("obs width is 1190", COLO_NUM_OBS == 1190);
     CHECK("snapshot version is v8", COLO_SNAPSHOT_VERSION == 8u);
+    CHECK("every active NPC gets an obs slot (no busy-wave drop)",
+        COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
+    CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
+    CHECK("player block carries the 7 boost-state floats", COLO_PLAYER_OBS_SIZE == 45);
 
     /* recompute the mask size independently from the head dims and compare. */
     int mask_sum = 0;
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) mask_sum += COLO_ACTION_DIMS[h];
     CHECK("mask size equals the summed action-head dims",
-        COLO_ACTION_MASK_SIZE == mask_sum);
+        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 87);
 
     /* recompute the obs width independently from the section constants. */
     int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE +
         COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE +
         COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
+}
+
+/* spawn a non-hazard enemy at (x,y) with an explicit footprint size into a
+   chosen slot, so the scythe resolver can be exercised on known geometry. */
+static void scythe_spawn_enemy(ColosseumState* s, int slot, int x, int y, int size) {
+    ColoNPC* npc = &s->npcs[slot];
+    memset(npc, 0, sizeof(*npc));
+    npc->active = 1;
+    npc->type = COLO_FREMENNIK_BERSERKER;   /* a melee, non-hazard enemy */
+    npc->x = x;
+    npc->y = y;
+    npc->size = size;
+    npc->hp = 200;
+    npc->death_ticks = 0;
+}
+
+/* the two distinct scythe mechanics: size-based multihit on one large monster
+   (100/50/25 by hit order) vs a full 100% hit on each separate 1x1 in the arc. */
+static void test_scythe_multihit_per_size(void) {
+    printf("test_scythe_multihit_per_size\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 909, 15, 15);
+
+    ColScytheResolvedHit out[COLO_SCYTHE_MAX_HITS];
+
+    /* (a) a 3x3 primary the player stands inside: 3 hits at ranks 0/1/2. */
+    geo_clear_npcs(&s);
+    scythe_spawn_enemy(&s, 0, 14, 14, 3);   /* footprint 14..16 covers player (15,15) */
+    int n3 = col_resolve_scythe_hits(&s, 0, out);
+    CHECK("3x3 primary yields exactly 3 hits", n3 == 3);
+    CHECK("3x3 hits are all on the primary with ranks 0/1/2",
+        out[0].npc_slot == 0 && out[0].splat_rank == 0 &&
+        out[1].npc_slot == 0 && out[1].splat_rank == 1 &&
+        out[2].npc_slot == 0 && out[2].splat_rank == 2);
+
+    /* (b) a 2x2 primary: 2 hits at ranks 0/1 (100/50), no third. */
+    geo_clear_npcs(&s);
+    scythe_spawn_enemy(&s, 0, 15, 15, 2);   /* footprint 15..16 covers the player */
+    int n2 = col_resolve_scythe_hits(&s, 0, out);
+    CHECK("2x2 primary yields exactly 2 hits", n2 == 2);
+    CHECK("2x2 hits are on the primary at ranks 0/1",
+        out[0].npc_slot == 0 && out[0].splat_rank == 0 &&
+        out[1].npc_slot == 0 && out[1].splat_rank == 1);
+
+    /* (c) three separate 1x1 enemies in the frontal arc: the player faces east
+       at a 1x1 primary on (16,15); the cardinal arc also covers (16,14) and
+       (16,16). Each distinct enemy takes ONE full-100% (rank 0) hit. */
+    geo_clear_npcs(&s);
+    scythe_spawn_enemy(&s, 0, 16, 15, 1);   /* primary, east of the player */
+    scythe_spawn_enemy(&s, 1, 16, 14, 1);   /* arc side target */
+    scythe_spawn_enemy(&s, 2, 16, 16, 1);   /* arc side target */
+    int narc = col_resolve_scythe_hits(&s, 0, out);
+    CHECK("three separate 1x1s in the arc yield exactly 3 hits", narc == 3);
+    int distinct_full = 1;
+    int seen_slot[3] = {0, 0, 0};
+    for (int h = 0; h < narc; h++) {
+        if (out[h].splat_rank != 0) distinct_full = 0;   /* each separate target is full 100% */
+        if (out[h].npc_slot >= 0 && out[h].npc_slot < 3) seen_slot[out[h].npc_slot]++;
+    }
+    CHECK("each separate 1x1 takes a full-100% (rank 0) hit", distinct_full);
+    CHECK("the three separate enemies are distinct targets",
+        seen_slot[0] == 1 && seen_slot[1] == 1 && seen_slot[2] == 1);
+
+    CHECK("scythe never exceeds the resolved-hit buffer",
+        n3 <= COLO_SCYTHE_MAX_HITS && n2 <= COLO_SCYTHE_MAX_HITS &&
+        narc <= COLO_SCYTHE_MAX_HITS);
+}
+
+/* bee contact damage now rolls the 15-20 band every overlapping tick (no zero
+   ticks); serpentine-helm venom immunity zeroes it. */
+static void test_bee_contact_damage_band(void) {
+    printf("test_bee_contact_damage_band\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    /* beginner RANGED set wears the crystal helm: no venom immunity, so the bee
+       contact damage lands and the band can be observed directly. */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 4242);
+    s.weapon_set = COLO_GEAR_RANGED;
+    geo_clear_npcs(&s);
+    s.modifiers.active_mask |= (1u << COLO_MOD_BEES);
+    s.modifiers.tier[COLO_MOD_BEES] = 1;
+    col_mod_sync_bees(&s);
+    ColoNPC* bee = &s.npcs[s.bees[0].npc_slot];
+
+    int in_band = 1, any_zero = 0;
+    for (int t = 0; t < 200; t++) {
+        bee->x = s.player.x;
+        bee->y = s.player.y;
+        s.player.current_hitpoints = 99;
+        int hp0 = s.player.current_hitpoints;
+        col_mod_tick_bees(&s);
+        int dmg = hp0 - s.player.current_hitpoints;
+        if (dmg < COLO_BEE_MIN_DAMAGE || dmg > COLO_BEE_MAX_DAMAGE) in_band = 0;
+        if (dmg == 0) any_zero = 1;
+    }
+    CHECK("bee contact damage stays inside the 15-20 band", in_band);
+    CHECK("bee contact never deals a zero-damage tick while overlapping", !any_zero);
+
+    /* the melee set wears the serpentine helm: full venom immunity zeroes the
+       bee contact damage. */
+    s.weapon_set = COLO_GEAR_MELEE;
+    CHECK("rig sanity: the melee set is venom-immune",
+        osrs_effect_profile_has(&s.set_effects[COLO_GEAR_MELEE], OSRS_ITEM_EFFECT_VENOM_IMMUNE));
+    bee->x = s.player.x;
+    bee->y = s.player.y;
+    s.player.current_hitpoints = 99;
+    col_mod_tick_bees(&s);
+    CHECK("serpentine-helm immunity zeroes bee contact damage",
+        s.player.current_hitpoints == 99);
+}
+
+/* the divine-boost obs features reflect a divine-boosted vs base player. */
+static void test_divine_state_obs_presence(void) {
+    printf("test_divine_state_obs_presence\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    /* speedrun kit carries the divine super combat + divine ranging doses. */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+    s.modifiers.draft_pending = 0;
+
+    static float obs_base[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_base);
+    /* the boost block sits at the tail of the player section: 5 stat deltas
+       (centered at 0.5 = base) then the 2 divine timer fractions. */
+    int boost0 = COLO_OBS_AFTER_PLAYER - 7;
+    CHECK("base player reads no divine boost (att delta at base, timers 0)",
+        fabsf(obs_base[boost0 + 0] - 0.5f) < 1e-4f &&
+        obs_base[boost0 + 5] == 0.0f && obs_base[boost0 + 6] == 0.0f);
+
+    /* arm a divine super combat boost: attack/strength/defence rise above base
+       and the combat timer fraction becomes positive. */
+    col_apply_divine_combat_potion_effect(&s);
+    s.divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
+    col_enforce_divine_stat_floors(&s);   /* the drink path pins the boosted stats */
+    static float obs_boost[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_boost);
+    CHECK("a divine-boosted player reads attack above base",
+        obs_boost[boost0 + 0] > obs_base[boost0 + 0]);
+    CHECK("the divine combat + ranging boost timers read positive",
+        obs_boost[boost0 + 5] > 0.0f && obs_boost[boost0 + 6] > 0.0f);
 }
 
 static void test_magic_set_max_hit_math(void) {
@@ -4715,6 +4867,9 @@ int main(void) {
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
     test_combat_fidelity_contract_sizes();
+    test_scythe_multihit_per_size();
+    test_bee_contact_damage_band();
+    test_divine_state_obs_presence();
     test_magic_set_max_hit_math();
     test_thrall_regression();
     test_death_charge_regression();

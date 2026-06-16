@@ -403,6 +403,10 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     s->tick_scratch.attacks_fired++;
 }
 
+/** scythe resolution caps: up to 3 size-based hits on the primary (100/50/25)
+    plus up to 2 distinct extra 1x1 targets in the frontal arc (each full 100%). */
+#define COLO_SCYTHE_MAX_HITS 5
+
 typedef struct {
     int npc_slot;
     int splat_rank;
@@ -477,34 +481,45 @@ static void col_scythe_front_arc_tiles(
     tile_y[2] = tile_y[0] - left_y;
 }
 
+/** Resolve the two distinct OSRS scythe mechanics into independent hits:
+    (A) the PRIMARY target takes size-based multihit — 1/2/3 hits at splat ranks
+        0/1/2 (100%/50%/25% of max), capped at 3 (osrs_scythe_splats_for_target_size);
+    (B) the 1x3 frontal arc additionally catches SEPARATE live enemies, each of
+        which takes one full 100% hit (splat rank 0), deduped by slot.
+    The caller rolls accuracy + strength independently per resolved hit. Matches
+    .refs/osrs-dps-calc PlayerVsNPCCalc.ts (plain max>>i, no even/div-4 bonus). */
 static int col_resolve_scythe_hits(
     const ColosseumState* s,
     int primary_slot,
-    ColScytheResolvedHit out[3]
+    ColScytheResolvedHit out[COLO_SCYTHE_MAX_HITS]
 ) {
     const ColoNPC* primary = &s->npcs[primary_slot];
-    if (col_npc_occupies_tile(primary, s->player.x, s->player.y)) {
-        int splats = osrs_scythe_splats_for_target_size(col_npc_effective_size(primary));
-        for (int rank = 0; rank < splats; rank++) {
-            out[rank] = (ColScytheResolvedHit){
-                .npc_slot = primary_slot,
-                .splat_rank = rank,
-            };
-        }
-        return splats;
+    int count = 0;
+
+    int primary_splats = osrs_scythe_splats_for_target_size(col_npc_effective_size(primary));
+    for (int rank = 0; rank < primary_splats; rank++) {
+        out[count++] = (ColScytheResolvedHit){
+            .npc_slot = primary_slot,
+            .splat_rank = rank,
+        };
     }
+
+    if (col_npc_occupies_tile(primary, s->player.x, s->player.y))
+        return count;
 
     int tile_x[3];
     int tile_y[3];
     col_scythe_front_arc_tiles(s, primary, tile_x, tile_y);
-
-    int count = 0;
-    for (int rank = 0; rank < 3; rank++) {
-        int target_slot = col_scythe_tile_target(s, primary_slot, tile_x[rank], tile_y[rank]);
-        if (target_slot < 0) continue;
+    for (int t = 0; t < 3 && count < COLO_SCYTHE_MAX_HITS; t++) {
+        int target_slot = col_scythe_tile_target(s, primary_slot, tile_x[t], tile_y[t]);
+        if (target_slot < 0 || target_slot == primary_slot) continue;
+        int already = 0;
+        for (int j = 0; j < count; j++)
+            if (out[j].npc_slot == target_slot) { already = 1; break; }
+        if (already) continue;
         out[count++] = (ColScytheResolvedHit){
             .npc_slot = target_slot,
-            .splat_rank = rank,
+            .splat_rank = 0,
         };
     }
     return count;
@@ -557,7 +572,7 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         osrs_target_effect_context_magic(ns->magic_level, ns->magic_att_bonus),
         s->player.current_hitpoints, s->player.base_hitpoints);
 
-    ColScytheResolvedHit resolved_hits[3];
+    ColScytheResolvedHit resolved_hits[COLO_SCYTHE_MAX_HITS];
     int resolved_count = 1;
     resolved_hits[0] = (ColScytheResolvedHit){ .npc_slot = npc_slot, .splat_rank = 0 };
     if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type))

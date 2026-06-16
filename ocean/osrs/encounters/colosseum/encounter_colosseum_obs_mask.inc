@@ -4,14 +4,17 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(38) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   player(45) + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) + threat-LoS(3)
- *   + thrall/Death-Charge(6) = 823.
- * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
- * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
- * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
- * +2 spec-armed one-hot), 533 -> 541; the loadout profile itself is implicit
- * in the gear-derived stats + supply normalization (inferno precedent).
+ *   + thrall/Death-Charge(6) = 1190.
+ * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
+ * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
+ * + spec-armed one-hots to the player block; the loadout profile is implicit in
+ * the gear-derived stats + supply normalization (inferno precedent).
+ * The eval-fix pass raised COLO_OBS_NPCS 12 -> 24 (== COLO_MAX_NPCS, so a busy
+ * wave never drops a live NPC from obs or the TARGET head) and grew the player
+ * block 38 -> 45 (+5 current-vs-base offensive level deltas + 2 divine boost
+ * timer fractions), so the policy can see its own boost-hold state.
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
  * contract that keeps the obs honest as the layout grows.
@@ -23,9 +26,9 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      38   /* +1 magic weapon-set one-hot (combat-fidelity) */
+#define COLO_PLAYER_OBS_SIZE      45   /* +5 offensive level deltas + 2 divine boost timers */
 #define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 360 */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 720 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
     venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
@@ -78,6 +81,13 @@ static inline float col_clamp01(float v) {
     if (v < 0.0f) return 0.0f;
     if (v > 1.0f) return 1.0f;
     return v;
+}
+
+/** current-vs-base level as a [0,1] feature centered at 0.5 (base): boosts read
+    above 0.5, brew drains below. base 0 reads 0.5 (no signal). */
+static inline float col_stat_delta_norm(int current, int base) {
+    if (base <= 0) return 0.5f;
+    return col_clamp01(0.5f + (float)(current - base) / (2.0f * (float)base));
 }
 
 /** egocentric x offset, normalized to [-1, 1] by arena width. */
@@ -589,7 +599,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     int px = s->player.x, py = s->player.y;
     const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
 
-    /* player block (29) */
+    /* player block (45) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
     obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
     obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
@@ -636,6 +646,17 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)s->surge_cooldown / (float)COLO_SURGE_COOLDOWN_TICKS);
     obs[i++] = (s->spec_armed_kind == 1) ? 1.0f : 0.0f;
     obs[i++] = (s->spec_armed_kind == 2) ? 1.0f : 0.0f;
+    /* boost-hold state: per-stat current-vs-base offensive levels (so the policy
+       sees a boost above base or a brew drain below it) + the divine combat and
+       ranging boost-timer fractions. Closes the partial-observability hole that
+       made the divine/brew loop blind (E13 left these out of obs). */
+    obs[i++] = col_stat_delta_norm(s->player.current_attack, s->player.base_attack);
+    obs[i++] = col_stat_delta_norm(s->player.current_strength, s->player.base_strength);
+    obs[i++] = col_stat_delta_norm(s->player.current_defence, s->player.base_defence);
+    obs[i++] = col_stat_delta_norm(s->player.current_ranged, s->player.base_ranged);
+    obs[i++] = col_stat_delta_norm(s->player.current_magic, s->player.base_magic);
+    obs[i++] = col_clamp01((float)s->divine_combat_timer / (float)ENCOUNTER_DIVINE_POTION_TICKS);
+    obs[i++] = col_clamp01((float)s->divine_ranged_timer / (float)ENCOUNTER_DIVINE_POTION_TICKS);
     assert(i == COLO_OBS_AFTER_PLAYER);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);

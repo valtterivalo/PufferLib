@@ -31,9 +31,11 @@
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
 #define COLO_NUM_ACTION_HEADS 11
 
-/* max active NPCs at once + obs slot count (one obs slot per active NPC) */
+/* max active NPCs at once + obs slot count (one obs slot per active NPC).
+   COLO_OBS_NPCS == COLO_MAX_NPCS so no live NPC is ever dropped from the obs
+   window or the TARGET action head at busy waves. */
 #define COLO_MAX_NPCS 24
-#define COLO_OBS_NPCS 12
+#define COLO_OBS_NPCS COLO_MAX_NPCS
 /* compile-time MAX rollout depth (ticks[] array size). The live depth is the
    runtime ColConfig.forecast_horizon, clamped to [1, this]; default == this. */
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
@@ -782,17 +784,17 @@ typedef enum {
 } ColoHazardPhase;
 
 /** Bees! hazard (B9): each swarm is an attackable 1-HP NPC (COLO_BEE_SWARM)
-    converging on the player every COLO_BEE_MOVE_INTERVAL ticks and dealing up
-    to COLO_BEE_MAX_POISON unblockable damage beneath the player; killed swarms
-    respawn COLO_BEE_RESPAWN_TICKS later (UPD-0410 values). Tier I/II/III field
-    1/2/3 swarms. D34: random-anchor spawn, diagonal steps, clamp immunity kept. */
+    converging on the player every COLO_BEE_MOVE_INTERVAL ticks and dealing
+    COLO_BEE_MIN_DAMAGE..COLO_BEE_MAX_DAMAGE unblockable damage beneath the
+    player; killed swarms respawn COLO_BEE_RESPAWN_TICKS later (UPD-0410 values).
+    Tier I/II/III field 1/2/3 swarms. D34: random-anchor spawn, diagonal steps,
+    clamp immunity kept. */
 #define COLO_MAX_BEE_SWARMS 3
 #define COLO_BEE_MOVE_INTERVAL 12   /* swarm steps one tile every 12 ticks */
-#define COLO_BEE_MAX_POISON 10      /* up to 10 unblockable contact damage/tick.
-                                       TODO: wiki self-conflicts — Bee_Swarm page says
-                                       15-20/tick, Fortis_Colosseum/Modifiers says <=10.
-                                       Following the Modifiers page until video evidence
-                                       settles it (audit E3, 2026-06-12). */
+/* unblockable contact damage band, dedicated Bee_Swarm wiki page (15-20/tick).
+   Halved with an active antipoison; serpentine helm grants full immunity. */
+#define COLO_BEE_MIN_DAMAGE 15
+#define COLO_BEE_MAX_DAMAGE 20
 #define COLO_BEE_RESPAWN_TICKS 50   /* 30s respawn after a swarm is killed */
 
 typedef struct {
