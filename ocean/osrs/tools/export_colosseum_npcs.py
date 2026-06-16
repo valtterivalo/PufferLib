@@ -149,10 +149,10 @@ COLOSSEUM_DEATH_ANIM_IDS = {
     12814: 10851,
     12815: 10854,
     12816: 10857,
-    12817: 10897,
-    12818: 10872,
-    12819: 10904,
-    12821: 10873,
+    12817: 10894,
+    12818: 10866,
+    12819: 10895,
+    12821: 10888,
     12823: 0xFFFF,
     12825: 0xFFFF,
 }
@@ -1166,11 +1166,42 @@ def collect_anim_ids(mapping: dict[int, dict[str, int]]) -> set[int]:
     return anim_ids
 
 
+def assert_rigged_death_anims_are_maya(
+    sequences: dict[int, ColosseumSequence],
+    mapping: dict[int, dict[str, int]],
+) -> None:
+    """Abort if an Animaya-rigged NPC keeps a legacy framebase death sequence.
+
+    A model whose idle or attack sequence baked as Maya is Animaya-rigged: its
+    vertices carry Maya bone weights, not the legacy label-groups a framebase
+    animation drives. Playing a legacy death sequence on that mesh flings vertex
+    groups into the sky. Enforce a Maya death for every rigged NPC so a wrong id
+    fails the export instead of shipping a skyward-warp death to the viewer.
+    """
+    for npc_id, entry in sorted(mapping.items()):
+        idle = entry["idle_anim"]
+        attack = entry["attack_anim"]
+        death = entry["death_anim"]
+        rigged = (idle != 0xFFFF and sequences[idle].has_maya()) or (
+            attack != 0xFFFF and sequences[attack].has_maya()
+        )
+        if not rigged or death == 0xFFFF:
+            continue
+        if not sequences[death].has_maya():
+            raise SystemExit(
+                f"export_colosseum_npcs: npc {npc_id} is Animaya-rigged but death "
+                f"sequence {death} is a legacy framebase animation; a legacy frame on "
+                f"a Maya-skinned mesh warps the corpse into the sky. Set the model's "
+                f"Maya death sequence id in COLOSSEUM_DEATH_ANIM_IDS."
+            )
+
+
 def export_animations(
     reader: ModernCacheReader,
     output_path: Path,
     anim_ids: set[int],
     sequence_models: dict[int, MayaBakeTarget],
+    mapping: dict[int, dict[str, int]],
 ) -> None:
     """Resolve legacy and Maya sequences for the requested ids and write v3 binary."""
     seq_files = reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
@@ -1201,6 +1232,8 @@ def export_animations(
                 f"frames={seq.frame_count} vertices={target.renderer_model.vertex_count}"
             )
         sequences[seq_id] = seq
+
+    assert_rigged_death_anims_are_maya(sequences, mapping)
 
     needed_groups: set[int] = set()
     for seq in sequences.values():
@@ -1434,7 +1467,7 @@ def main() -> None:
 
     anim_ids = collect_anim_ids(mapping)
     anims_path = args.output_dir / "colosseum_npcs.anims"
-    export_animations(reader, anims_path, anim_ids, sequence_models)
+    export_animations(reader, anims_path, anim_ids, sequence_models, mapping)
     print(f"wrote {len(anim_ids)} sequences ({anims_path.stat().st_size:,} bytes) to {anims_path}")
 
     header_path = args.output_dir / "npc_models_colosseum.h"

@@ -81,11 +81,17 @@ typedef struct {
 } ColoNpcDeathVisual;
 
 /**
- * Cache-derived Colosseum death sequence metadata.
+ * Colosseum death-sequence and corpse-linger metadata.
  *
- * client_ticks is the summed modern sequence frame delay. linger_ticks is the
- * same duration converted to simulator ticks with ceil(client_ticks / 30).
- * Hazard entities keep instant despawn and never consult this table.
+ * anim_id is render-only (played by the viewer, ignored by the simulator).
+ * linger_ticks is the simulator corpse despawn budget consumed by
+ * osrs_npc_death_linger_start, normally ceil(client_ticks / 30) where
+ * client_ticks is the death sequence's summed frame delay. The four
+ * Animaya-rigged colossi (Javelin, Shockwave, Manticore, Sol) render their
+ * cache Maya death sequence, which plays once then holds its final pose. Their
+ * client_ticks and linger_ticks stay at the pre-Maya despawn budget so corpse
+ * timing, and thus training, is unchanged by the render fix. Hazard entities
+ * despawn instantly and never consult this table.
  */
 static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
@@ -93,11 +99,11 @@ static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_SEER]      = { .anim_id = 10854, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_SERPENT_SHAMAN]      = { .anim_id = 10860, .client_ticks = 47,  .linger_ticks = 2 },
     [COLO_JAGUAR_WARRIOR]      = { .anim_id = 10848, .client_ticks = 63,  .linger_ticks = 3 },
-    [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10897, .client_ticks = 60,  .linger_ticks = 2 },
-    [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10904, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10894, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10895, .client_ticks = 60,  .linger_ticks = 2 },
     [COLO_MINOTAUR]            = { .anim_id = 10845, .client_ticks = 150, .linger_ticks = 5 },
-    [COLO_MANTICORE]           = { .anim_id = 10872, .client_ticks = 80,  .linger_ticks = 3 },
-    [COLO_SOL_HEREDIT]         = { .anim_id = 10873, .client_ticks = 230, .linger_ticks = 8 },
+    [COLO_MANTICORE]           = { .anim_id = 10866, .client_ticks = 80,  .linger_ticks = 3 },
+    [COLO_SOL_HEREDIT]         = { .anim_id = 10888, .client_ticks = 230, .linger_ticks = 8 },
     [COLO_HEALING_TOTEM]       = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
     [COLO_BEE_SWARM]           = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
 };
