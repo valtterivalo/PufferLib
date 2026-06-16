@@ -1260,6 +1260,8 @@ typedef struct {
     float incoming_damage_avoidance_reward_coef;
     float ko_supply_reward_coef;
     float ko_chance_reward_coef;
+    float terminal_death_penalty_coef;
+    float terminal_draw_penalty_coef;
     // Scale (annealed from Python during training)
     float shaping_scale;             // 1.0 → floor over training
     int   enabled;                   // 0 = sparse only, 1 = full shaping

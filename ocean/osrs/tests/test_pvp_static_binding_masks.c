@@ -292,8 +292,8 @@ static void test_terminal_reward_survives_auto_reset(void) {
     static_vec_close(vec);
 }
 
-static void test_terminal_loss_and_draw_rewards_zero(void) {
-    printf("--- PvP terminal loss and draw rewards are zero ---\n");
+static void test_terminal_loss_and_draw_rewards(void) {
+    printf("--- PvP terminal loss and draw rewards ---\n");
 
     CollisionMap* cmap = collision_map_create();
     OsrsEnv env;
@@ -309,6 +309,21 @@ static void test_terminal_loss_and_draw_rewards_zero(void) {
     env.winner = -1;
     ASSERT_FLOAT_NEAR("p0 draw reward", calculate_reward(&env, 0), 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("p1 draw reward", calculate_reward(&env, 1), 0.0f, 1e-6f);
+
+    env.shaping.terminal_death_penalty_coef = 0.25f;
+    env.shaping.terminal_draw_penalty_coef = 0.125f;
+
+    env.winner = 1;
+    ASSERT_FLOAT_NEAR("p0 death penalty reward",
+        calculate_reward(&env, 0), -0.25f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 win reward ignores death penalty",
+        calculate_reward(&env, 1), 1.0f, 1e-6f);
+
+    env.winner = -1;
+    ASSERT_FLOAT_NEAR("p0 draw penalty reward",
+        calculate_reward(&env, 0), -0.125f, 1e-6f);
+    ASSERT_FLOAT_NEAR("p1 draw penalty reward",
+        calculate_reward(&env, 1), -0.125f, 1e-6f);
 
     collision_map_free(cmap);
 }
@@ -490,6 +505,8 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
     dict_set(kwargs, "incoming_damage_avoidance_reward_coef", 0.025);
     dict_set(kwargs, "ko_supply_reward_coef", 0.75);
     dict_set(kwargs, "ko_chance_reward_coef", 1.25);
+    dict_set(kwargs, "terminal_death_penalty_coef", 0.375);
+    dict_set(kwargs, "terminal_draw_penalty_coef", 0.1875);
     Dict* vec_kwargs = pvp_vec_kwargs(2, 1);
 
     StaticVec* vec = create_static_vec(2, 1, 0, vec_kwargs, kwargs);
@@ -503,6 +520,10 @@ static void test_reward_coefficients_parse_from_binding_kwargs(void) {
         env->pvp.shaping.ko_supply_reward_coef, 0.75f, 1e-6f);
     ASSERT_FLOAT_NEAR("KO chance reward coef",
         env->pvp.shaping.ko_chance_reward_coef, 1.25f, 1e-6f);
+    ASSERT_FLOAT_NEAR("terminal death penalty coef",
+        env->pvp.shaping.terminal_death_penalty_coef, 0.375f, 1e-6f);
+    ASSERT_FLOAT_NEAR("terminal draw penalty coef",
+        env->pvp.shaping.terminal_draw_penalty_coef, 0.1875f, 1e-6f);
 
     static_vec_close(vec);
     free(vec_kwargs->items);
@@ -2835,7 +2856,7 @@ static void test_expected_damage_representative_specs(void) {
 int main(void) {
     setbuf(stdout, NULL);
     test_terminal_reward_survives_auto_reset();
-    test_terminal_loss_and_draw_rewards_zero();
+    test_terminal_loss_and_draw_rewards();
     test_timeout_and_simultaneous_death_are_draws();
     test_p1_reset_obs_refreshes_after_auto_reset();
     test_target_hp_observation_is_current();

@@ -681,6 +681,16 @@ void my_init(Env* env, Dict* kwargs) {
     env->pvp.shaping.ko_chance_reward_coef = ko_chance_reward
         ? (float)ko_chance_reward->value : 0.0f;
 
+    DictItem* terminal_death_penalty = dict_get_unsafe(
+        kwargs, "terminal_death_penalty_coef");
+    env->pvp.shaping.terminal_death_penalty_coef = terminal_death_penalty
+        ? (float)terminal_death_penalty->value : 0.0f;
+
+    DictItem* terminal_draw_penalty = dict_get_unsafe(
+        kwargs, "terminal_draw_penalty_coef");
+    env->pvp.shaping.terminal_draw_penalty_coef = terminal_draw_penalty
+        ? (float)terminal_draw_penalty->value : 0.0f;
+
     env->pvp.shaping.damage_dealt_coef = 0.005f;
     env->pvp.shaping.damage_received_coef = -0.005f;
     env->pvp.shaping.correct_prayer_bonus = 0.03f;

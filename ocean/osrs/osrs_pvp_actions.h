@@ -642,6 +642,10 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
         if (env->winner == agent_idx) {
             reward += 1.0f;
             reward += cfg->ko_supply_reward_coef * pvp_remaining_supply_hp_fraction(t);
+        } else if (env->winner == 1 - agent_idx) {
+            reward -= cfg->terminal_death_penalty_coef;
+        } else {
+            reward -= cfg->terminal_draw_penalty_coef;
         }
     }
 
