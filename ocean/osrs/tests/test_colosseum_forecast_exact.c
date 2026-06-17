@@ -15,7 +15,7 @@
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
 #define EXACT_MAGIC "COLOEXACTv1"
-#define EXACT_VERSION 1u
+#define EXACT_VERSION 2u
 #define EXACT_CHUNK_BYTES 65536
 
 typedef struct {
@@ -25,6 +25,7 @@ typedef struct {
     uint32_t forecast_size;
     uint32_t forecast_obs_size;
     uint32_t obs_size;
+    uint32_t action_mask_size;
     uint32_t action_features;
     uint32_t record_count;
 } ColoExactFileHeader;
@@ -38,11 +39,13 @@ typedef struct {
     uint32_t winner;
     uint32_t state_size;
     uint32_t obs_size;
+    uint32_t action_mask_size;
     uint32_t forecast_size;
     uint64_t state_hash;
     uint64_t forecast_hash;
     uint64_t forecast_obs_hash;
     uint64_t obs_hash;
+    uint64_t action_mask_hash;
     float reward;
 } ColoExactRecordHeader;
 
@@ -141,6 +144,7 @@ static void exact_writer_open(ColoExactWriter* writer, const char* path) {
     header.forecast_size = (uint32_t)sizeof(ColoStepOutForecast);
     header.forecast_obs_size = COLO_STEP_OUT_FORECAST_OBS_SIZE;
     header.obs_size = COLO_NUM_OBS;
+    header.action_mask_size = COLO_ACTION_MASK_SIZE;
     header.action_features = COLO_STEP_OUT_FORECAST_ACTION_FEATURES;
     exact_write_all(writer->file, &header, sizeof(header));
 }
@@ -153,6 +157,7 @@ static void exact_writer_close(ColoExactWriter* writer) {
     header.forecast_size = (uint32_t)sizeof(ColoStepOutForecast);
     header.forecast_obs_size = COLO_STEP_OUT_FORECAST_OBS_SIZE;
     header.obs_size = COLO_NUM_OBS;
+    header.action_mask_size = COLO_ACTION_MASK_SIZE;
     header.action_features = COLO_STEP_OUT_FORECAST_ACTION_FEATURES;
     header.record_count = writer->record_count;
     if (fseek(writer->file, 0, SEEK_SET) != 0) {
@@ -177,10 +182,12 @@ static void exact_capture(
     ColoStepOutForecast forecast;
     float forecast_obs[COLO_STEP_OUT_FORECAST_OBS_SIZE];
     float obs[COLO_NUM_OBS];
+    float action_mask[COLO_ACTION_MASK_SIZE];
 
     col_build_step_out_forecast_ctx(s, &forecast);
     exact_encode_step_out_forecast_obs(&forecast, forecast_obs);
     col_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
+    col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, action_mask);
 
     ColoExactRecordHeader record = {0};
     record.scenario_id = scenario_id;
@@ -192,17 +199,20 @@ static void exact_capture(
     record.winner = (uint32_t)s->winner;
     record.state_size = (uint32_t)sizeof(*s);
     record.obs_size = COLO_NUM_OBS;
+    record.action_mask_size = COLO_ACTION_MASK_SIZE;
     record.forecast_size = (uint32_t)sizeof(forecast);
     record.state_hash = exact_hash_bytes(s, sizeof(*s));
     record.forecast_hash = exact_hash_bytes(&forecast, sizeof(forecast));
     record.forecast_obs_hash = exact_hash_bytes(forecast_obs, sizeof(forecast_obs));
     record.obs_hash = exact_hash_bytes(obs, sizeof(obs));
+    record.action_mask_hash = exact_hash_bytes(action_mask, sizeof(action_mask));
     record.reward = col_get_reward_ctx((EncounterState*)s, (EncounterContext*)ctx);
 
     exact_write_all(writer->file, &record, sizeof(record));
     exact_write_all(writer->file, &forecast, sizeof(forecast));
     exact_write_all(writer->file, forecast_obs, sizeof(forecast_obs));
     exact_write_all(writer->file, obs, sizeof(obs));
+    exact_write_all(writer->file, action_mask, sizeof(action_mask));
     exact_write_all(writer->file, s, sizeof(*s));
     writer->record_count++;
 }

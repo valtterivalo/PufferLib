@@ -71,6 +71,10 @@ typedef struct {
     int y;
     int size;
     int hp;
+    int attack_range;
+    int attack_speed;
+    int can_move;
+    AttackStyle default_style;
     int attack_timer;
     int stun_timer;
     int frozen_ticks;

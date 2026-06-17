@@ -38,11 +38,15 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
+    int inventory_cell_actionable[COLO_INVENTORY_DISPLAY_SLOTS];
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        inventory_cell_actionable[cell] = col_inventory_cell_actionable(s, cell);
+    int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
     for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
         mask[offset++] = 1.0f;
         for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-            mask[offset++] = (!ctx->config.mask_inventory_heads &&
-                col_inventory_cell_actionable(s, cell)) ? 1.0f : 0.0f;
+            mask[offset++] = (inventory_heads_enabled &&
+                inventory_cell_actionable[cell]) ? 1.0f : 0.0f;
         }
     }
 

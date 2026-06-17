@@ -13,6 +13,7 @@ typedef struct {
     uint8_t (*npc_flags)[COLO_ARENA_HEIGHT];
     int player_x;
     int player_y;
+    int sol_clamp_active;
 } ColoForecastMoveCtx;
 
 typedef struct {
@@ -308,6 +309,7 @@ static void col_forecast_local_copy_npc_slots(
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
         const ColoNPC* src = &s->npcs[i];
+        const ColoNpcStats* stats = &COLO_NPC_STATS[src->type];
         ColoForecastNpcLocal* dst = &out[i];
         *dst = (ColoForecastNpcLocal){0};
         dst->active = src->active;
@@ -316,6 +318,10 @@ static void col_forecast_local_copy_npc_slots(
         dst->y = src->y;
         dst->size = src->size;
         dst->hp = src->hp;
+        dst->attack_range = stats->attack_range;
+        dst->attack_speed = stats->attack_speed;
+        dst->can_move = stats->can_move;
+        dst->default_style = stats->default_style;
         dst->attack_timer = src->attack_timer;
         dst->stun_timer = src->stun_timer;
         dst->frozen_ticks = src->frozen_ticks;
@@ -372,12 +378,11 @@ static int col_forecast_local_npc_blocked(void* user, int x, int y, int size) {
     ColoForecastMoveCtx* ctx = (ColoForecastMoveCtx*)user;
     const ColosseumState* s = ctx->state;
     if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
-    int sol_clamp_active = col_sol_clamp_active(s);
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int tx = x + dx;
             int ty = y + dy;
-            if (sol_clamp_active && !col_in_boss_arena(s, tx, ty)) return 1;
+            if (ctx->sol_clamp_active && !col_in_boss_arena(s, tx, ty)) return 1;
             int gx, gy;
             if (!col_grid_index(tx, ty, &gx, &gy)) return 1;
             if (ctx->npc_flags[gx][gy]) return 1;
@@ -446,15 +451,14 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return result;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return result;
     if (col_type_is_hazard_entity(npc->type)) return result;
-    const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
-    if (!stats->can_move) return result;
+    if (!npc->can_move) return result;
     if (npc->type == COLO_SOL_HEREDIT && npc->sol_immobile_ticks > 0) return result;
 
-    int ranged_hold = stats->attack_range > 1 && npc->type != COLO_SOL_HEREDIT;
+    int ranged_hold = npc->attack_range > 1 && npc->type != COLO_SOL_HEREDIT;
     if (ranged_hold) {
         int dist = col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
         int los = 0;
-        if (dist >= 1 && dist <= stats->attack_range &&
+        if (dist >= 1 && dist <= npc->attack_range &&
                 (los = col_forecast_local_has_los_to_player(
                     s, npc, action->land_x, action->land_y))) {
             result.held = 1;
@@ -472,7 +476,7 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
 
     int tx = action->land_x;
     int ty = action->land_y;
-    int stop_at_melee = stats->attack_range == 1 ? 1 : 0;
+    int stop_at_melee = npc->attack_range == 1 ? 1 : 0;
     int steps = 1;
     if (col_type_is_warbander(npc->type)) {
         tx = action->land_x + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][0];
@@ -490,6 +494,7 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     move_ctx.npc_flags = npc_flags;
     move_ctx.player_x = action->land_x;
     move_ctx.player_y = action->land_y;
+    move_ctx.sol_clamp_active = col_sol_clamp_active(s);
     for (int step = 0; step < steps; step++) {
         if (!encounter_npc_step_toward(
                 &npc->x, &npc->y, tx, ty, npc->size, 1,
@@ -570,7 +575,7 @@ static void col_forecast_local_fire_manticore_orb(
         npc->orb_style[0] = ATTACK_STYLE_NONE;
         npc->orb_style[1] = ATTACK_STYLE_NONE;
         npc->orb_style[2] = ATTACK_STYLE_NONE;
-        npc->attack_timer = COLO_NPC_STATS[npc->type].attack_speed - 2;
+        npc->attack_timer = npc->attack_speed - 2;
     }
 }
 
@@ -595,11 +600,10 @@ static void col_forecast_local_attack_manticore(
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
 
-    const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
     int dist = col_forecast_move_result_matches(move_result, npc, action) ?
         move_result->dist :
         col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
-    if (dist < 1 || dist > stats->attack_range) return;
+    if (dist < 1 || dist > npc->attack_range) return;
     int los = col_forecast_move_result_matches(move_result, npc, action) ?
         move_result->los :
         col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
@@ -629,7 +633,7 @@ static void col_forecast_local_attack_warband(
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
     if (!col_forecast_warband_adjacent(npc, action->land_x, action->land_y)) return;
     col_step_out_forecast_record_style(
-        action, tick_idx, npc->type, COLO_NPC_STATS[npc->type].default_style);
+        action, tick_idx, npc->type, npc->default_style);
 }
 
 static void col_forecast_local_attack_sol(
@@ -663,7 +667,6 @@ static void col_forecast_local_attack_standard(
     int tick_idx,
     const ColoForecastMoveResult* move_result
 ) {
-    const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
     if (npc->attack_timer > 0) return;
@@ -676,20 +679,20 @@ static void col_forecast_local_attack_standard(
             col_step_out_forecast_record_style(
                 action, tick_idx, npc->type, ATTACK_STYLE_MELEE);
         }
-        npc->attack_timer = stats->attack_speed;
+        npc->attack_timer = npc->attack_speed;
         return;
     }
     if (npc->type == COLO_JAGUAR_WARRIOR) {
         if (dist == 1) {
             col_step_out_forecast_record_style(
                 action, tick_idx, npc->type, ATTACK_STYLE_MELEE);
-            npc->attack_timer = stats->attack_speed;
+            npc->attack_timer = npc->attack_speed;
         }
         return;
     }
 
-    if (stats->attack_range > 1) {
-        if (dist < 1 || dist > stats->attack_range) return;
+    if (npc->attack_range > 1) {
+        if (dist < 1 || dist > npc->attack_range) return;
         int los = move_result_matches ? move_result->los :
             col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
         if (!los)
@@ -704,15 +707,15 @@ static void col_forecast_local_attack_standard(
             col_step_out_forecast_record_style(
                 action, tick_idx, npc->type, ATTACK_STYLE_RANGED);
         }
-        npc->attack_timer = stats->attack_speed;
+        npc->attack_timer = npc->attack_speed;
         return;
     }
 
     if (npc->type == COLO_SERPENT_SHAMAN ||
             npc->type == COLO_SHOCKWAVE_COLOSSUS) {
         col_step_out_forecast_record_style(
-            action, tick_idx, npc->type, stats->default_style);
-        npc->attack_timer = stats->attack_speed;
+            action, tick_idx, npc->type, npc->default_style);
+        npc->attack_timer = npc->attack_speed;
     }
 }
 
@@ -806,14 +809,13 @@ static void col_forecast_static_threat_npc(
     if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
     if (col_type_is_hazard_entity(npc->type)) return;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
-    const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
     int lx = action->land_x;
     int ly = action->land_y;
     int dist = col_forecast_local_dist_to_player(npc, lx, ly);
 
     if (col_type_is_warbander(npc->type)) {
         if (col_forecast_warband_adjacent(npc, lx, ly))
-            col_step_out_forecast_record_style(action, 0, npc->type, stats->default_style);
+            col_step_out_forecast_record_style(action, 0, npc->type, npc->default_style);
         return;
     }
     if (npc->type == COLO_SOL_HEREDIT) {
@@ -831,10 +833,10 @@ static void col_forecast_static_threat_npc(
             col_step_out_forecast_record_style(action, 0, npc->type, ATTACK_STYLE_MELEE);
         return;
     }
-    if (stats->attack_range > 1) {
-        if (dist < 1 || dist > stats->attack_range) return;
+    if (npc->attack_range > 1) {
+        if (dist < 1 || dist > npc->attack_range) return;
         if (!col_forecast_local_has_los_to_player(s, npc, lx, ly)) return;
-        AttackStyle style = stats->default_style;
+        AttackStyle style = npc->default_style;
         if (npc->type == COLO_MANTICORE) {
             int orb = npc->cycle_step > 0 ? npc->cycle_step : 0;
             AttackStyle cur = npc->cycle_step > 0 ? npc->orb_style[orb]
@@ -845,7 +847,7 @@ static void col_forecast_static_threat_npc(
         return;
     }
     if (dist == 1)
-        col_step_out_forecast_record_style(action, 0, npc->type, stats->default_style);
+        col_step_out_forecast_record_style(action, 0, npc->type, npc->default_style);
 }
 
 /** B3 STATIC_THREAT pass over all forecast NPCs for one run-tile action. */

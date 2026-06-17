@@ -141,6 +141,19 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
     if (ty < COLO_ARENA_MIN_Y) ty = COLO_ARENA_MIN_Y;
     if (ty > COLO_ARENA_MAX_Y) ty = COLO_ARENA_MAX_Y;
     if (*x == tx && *y == ty) return 0;
+    int direct_dx = (tx > *x) - (tx < *x);
+    int direct_dy = (ty > *y) - (ty < *y);
+    int direct_abs_dx = tx > *x ? tx - *x : *x - tx;
+    int direct_abs_dy = ty > *y ? ty - *y : *y - ty;
+    if (direct_abs_dx <= 1 && direct_abs_dy <= 1 &&
+            !col_npc_path_blocked(pc, tx, ty) &&
+            (direct_dx == 0 || direct_dy == 0 ||
+             (!col_npc_path_blocked(pc, *x + direct_dx, *y) &&
+              !col_npc_path_blocked(pc, *x, *y + direct_dy)))) {
+        *x = tx;
+        *y = ty;
+        return 1;
+    }
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;

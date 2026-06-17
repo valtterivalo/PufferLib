@@ -639,15 +639,14 @@ static void col_hypothetical_equipment_after_cell(
 static void col_inventory_cell_post_use_deltas(
     const ColosseumState* s,
     int cell_idx,
+    const float before[6],
     float out[6]
 ) {
     for (int i = 0; i < 6; i++) out[i] = 0.0f;
     if (s->inventory_cells[cell_idx].item_idx == ITEM_NONE) return;
 
-    float before[6];
     float after[6];
     uint8_t hypothetical[NUM_GEAR_SLOTS];
-    col_equipment_bonus_projection(s->player.equipped, before);
     col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
     col_equipment_bonus_projection(hypothetical, after);
     for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
@@ -659,10 +658,13 @@ static void col_write_inventory_and_equipped_obs(
     int* idx
 ) {
     int i = *idx;
+    float current_equipment_projection[6];
+    col_equipment_bonus_projection(s->player.equipped, current_equipment_projection);
     for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
         float deltas[6];
         const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-        col_inventory_cell_post_use_deltas(s, cell_idx, deltas);
+        col_inventory_cell_post_use_deltas(
+            s, cell_idx, current_equipment_projection, deltas);
         osrs_write_inventory_cell_affordance_features(
             &obs[i],
             cell->item_idx,
