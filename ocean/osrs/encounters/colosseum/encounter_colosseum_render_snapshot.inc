@@ -884,8 +884,10 @@ static void col_step_human_commands_ctx(
    v8: combat-fidelity pass — magic weapon set (COLO_GEAR_MAGIC), Arceuus thrall
        fields, and Death Charge window/cooldown added to ColosseumState.
    v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
-       special attack contract. */
-#define COLO_SNAPSHOT_VERSION 9u
+       special attack contract.
+   v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
+       + player offensive/spec/profile scalars. */
+#define COLO_SNAPSHOT_VERSION 10u
 
 typedef struct {
     uint32_t magic;

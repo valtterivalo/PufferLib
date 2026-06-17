@@ -3467,8 +3467,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v9 for the inventory-click contract",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 9u);
+    CHECK("snapshot version is v10 for the enriched inventory-obs contract",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 10u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -3884,12 +3884,12 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("thirty-six action heads (28 inventory click heads)", COLO_NUM_ACTION_HEADS == 36);
     CHECK("inventory click head dim is 29", COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 1753", COLO_NUM_OBS == 1753);
-    CHECK("snapshot version is v9", COLO_SNAPSHOT_VERSION == 9u);
+    CHECK("obs width is 2359", COLO_NUM_OBS == 2359);
+    CHECK("snapshot version is v10", COLO_SNAPSHOT_VERSION == 10u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
-    CHECK("player block is the lean v9 prefix", COLO_PLAYER_OBS_SIZE == 28);
+    CHECK("player block is the v10 prefix", COLO_PLAYER_OBS_SIZE == 36);
 
     /* recompute the mask size independently from the head dims and compare. */
     int mask_sum = 0;
@@ -4024,7 +4024,7 @@ static void test_divine_state_obs_presence(void) {
 
     static float obs_base[COLO_NUM_OBS];
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_base);
-    CHECK("v9 player block has no divine timer tail", COLO_PLAYER_OBS_SIZE == 28);
+    CHECK("v10 player block has no divine timer tail", COLO_PLAYER_OBS_SIZE == 36);
 
     col_apply_divine_combat_potion_effect(&s);
     s.divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
@@ -4345,7 +4345,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v9", snap.version == 9u);
+    CHECK("snapshot frame is v10", snap.version == 10u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -5108,7 +5108,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1753);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2359);
     CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 

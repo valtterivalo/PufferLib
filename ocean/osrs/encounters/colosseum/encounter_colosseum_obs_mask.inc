@@ -4,10 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(28) + inventory cells(28 * 16) + equipped self(11 * 12)
+ *   player(36) + inventory cells(28 * 35) + equipped self(11 * 18)
  *   + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 1753.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2359.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -27,7 +27,7 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      28
+#define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
@@ -670,7 +670,10 @@ static void col_write_inventory_and_equipped_obs(
             cell->dose,
             col_inventory_cell_actionable(s, cell_idx),
             col_inventory_cell_holds_equipped_item(s, cell_idx),
-            deltas);
+            deltas,
+            s->player.base_hitpoints,
+            s->player.base_prayer,
+            s->player.base_attack);
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
@@ -699,7 +702,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     int px = s->player.x, py = s->player.y;
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
-    /* player block (28) */
+    /* player block (36) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
     obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
     obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
@@ -728,6 +731,18 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
+    /* REC6 live offensive scalars; divisors sized for boosted+prayer BIS so top loadouts don't flatten to 1.0 (eff_level peaks ~158 melee+Piety, attack_bonus ~180 BIS mage magic-attack, strength_bonus ~150 BIS melee); col_clamp01 is the backstop */
+    obs[i++] = col_clamp01((float)ls->eff_level / 165.0f);
+    obs[i++] = col_clamp01((float)ls->attack_bonus / 200.0f);
+    obs[i++] = col_clamp01((float)ls->strength_bonus / 160.0f);
+    /* REC7 spec detail */
+    int colo_spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
+    obs[i++] = col_clamp01((float)colo_spec_cost / 100.0f);
+    obs[i++] = colo_spec_cost > 0 ? 1.0f : 0.0f;
+    /* REC8 profile + spell base */
+    obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN ? 1.0f : 0.0f;
+    obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)ls->spell_base_damage / 40.0f);
     assert(i == COLO_OBS_AFTER_PLAYER);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);

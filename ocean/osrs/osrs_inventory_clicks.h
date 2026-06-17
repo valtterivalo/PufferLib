@@ -21,6 +21,7 @@
 #define OSRS_INVENTORY_CLICKS_H
 
 #include "osrs_items.h"
+#include "osrs_consumables.h"
 
 typedef enum {
     OSRS_CLICK_NONE = 0,
@@ -64,8 +65,8 @@ typedef struct {
     uint16_t raw_osrs_id_after_drink;
 } OsrsInventoryClickResolution;
 
-#define OSRS_INVENTORY_CELL_OBS_FEATURES 16
-#define OSRS_EQUIPPED_SELF_OBS_FEATURES 12
+#define OSRS_INVENTORY_CELL_OBS_FEATURES 35   /* was 16; +19 = REC1(4)+REC2(6)+REC3(3)+REC4(4)+REC5(2) */
+#define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* was 12; +6  = REC4(4)+REC5(2) */
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {6685, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BREW, 4},
@@ -137,6 +138,118 @@ static inline float osrs_clamp_unit(float v) {
 }
 
 /**
+ * Collapses the 12 consumable kinds into a 6-way role one-hot for obs.
+ *
+ * Exhaustive over OsrsConsumableKind with no default, so a future kind addition
+ * fails to compile under -Wswitch rather than silently mapping to NONE. The trap
+ * after the switch is only reachable on a corrupt enum value (a defect).
+ */
+typedef enum {
+    COL_CKIND6_NONE = 0,
+    COL_CKIND6_BREW,
+    COL_CKIND6_RESTORE,
+    COL_CKIND6_COMBAT_BOOST,
+    COL_CKIND6_RANGED_BOOST,
+    COL_CKIND6_SPECIAL,
+    COL_CKIND6_FOOD,
+} OsrsConsumableKind6;
+
+static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
+    switch (k) {
+        case OSRS_CONSUMABLE_BREW:            return COL_CKIND6_BREW;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+        case OSRS_CONSUMABLE_SANFEW:          return COL_CKIND6_RESTORE;
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:   return COL_CKIND6_COMBAT_BOOST;
+        case OSRS_CONSUMABLE_RANGING:
+        case OSRS_CONSUMABLE_DIVINE_RANGING:  return COL_CKIND6_RANGED_BOOST;
+        case OSRS_CONSUMABLE_SURGE:
+        case OSRS_CONSUMABLE_GUTHIX_REST:
+        case OSRS_CONSUMABLE_SATURATED_HEART: return COL_CKIND6_SPECIAL;
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+        case OSRS_CONSUMABLE_KARAMBWAN:       return COL_CKIND6_FOOD;
+        case OSRS_CONSUMABLE_NONE:            return COL_CKIND6_NONE;
+    }
+    osrs_inventory_clicks_trap();
+    return COL_CKIND6_NONE;
+}
+
+/**
+ * Raw HP-heal magnitude for a consumable kind; the cell writer normalizes.
+ *
+ * Returns 0 for kinds that do not heal HP. A default branch is intentional:
+ * most kinds have no HP-heal magnitude, and listing all 12 would be noise.
+ */
+static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_hp) {
+    switch (k) {
+        case OSRS_CONSUMABLE_BREW:       return osrs_brew_heal_amount(base_hp);
+        case OSRS_CONSUMABLE_SHARK_FOOD: return osrs_food_heal_amount(FOOD_SHARK);
+        case OSRS_CONSUMABLE_KARAMBWAN:  return osrs_food_heal_amount(FOOD_KARAMBWAN);
+        default:                         return 0;
+    }
+}
+
+/**
+ * Raw prayer-restore magnitude for a consumable kind; the cell writer normalizes.
+ *
+ * Returns 0 for kinds that do not restore prayer.
+ */
+static inline int osrs_consumable_prayer_restore_amount(OsrsConsumableKind k, int base_prayer) {
+    switch (k) {
+        case OSRS_CONSUMABLE_SUPER_RESTORE: return osrs_super_restore_amount(base_prayer);
+        case OSRS_CONSUMABLE_SANFEW:        return osrs_sanfew_restore_amount(base_prayer);
+        default:                            return 0;
+    }
+}
+
+/**
+ * Raw offensive-boost magnitude for a consumable kind; the cell writer normalizes.
+ *
+ * Divine combat/ranging share the base boost magnitude with their non-divine
+ * variants (the "divine" part is sustain, no separate amount helper). Saturated
+ * heart routes here because its magic boost is offensive. Returns 0 otherwise.
+ *
+ * base_level is the style-relevant base level (attack for combat, ranged for
+ * ranging, magic for saturated heart). Callers that pass a single base level
+ * for all kinds rely on base_attack == base_ranged == base_magic, which holds
+ * for the colosseum maxed player (all 99); the boost formulas are shallow
+ * (4 + level/10) so even an off-style level differs by at most a point or two.
+ */
+static inline int osrs_consumable_offensive_boost_amount(OsrsConsumableKind k, int base_level) {
+    switch (k) {
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:   return osrs_super_combat_boost_amount(base_level);
+        case OSRS_CONSUMABLE_RANGING:
+        case OSRS_CONSUMABLE_DIVINE_RANGING:  return osrs_ranging_boost_amount(base_level);
+        case OSRS_CONSUMABLE_SATURATED_HEART: return osrs_saturated_heart_magic_boost(base_level);
+        default:                              return 0;
+    }
+}
+
+/**
+ * Decodes an item effect mask into a 4-way effect-class one-hot.
+ *
+ * out[0] lifesteal, out[1] damage_amp, out[2] defensive, out[3] util. Every
+ * effect bit (1<<0 .. 1<<14) is covered exactly once across the four classes.
+ * Read-only descriptors already in {0, 1}; no clamp required.
+ */
+static inline void osrs_item_effect_class4(uint32_t effect_mask, float out[4]) {
+    uint32_t lifesteal = OSRS_ITEM_EFFECT_BLOOD_FURY | OSRS_ITEM_EFFECT_SANG_HEAL;
+    uint32_t damage_amp = OSRS_ITEM_EFFECT_TWISTED_BOW | OSRS_ITEM_EFFECT_FANG |
+        OSRS_ITEM_EFFECT_TUMEKENS_SHADOW | OSRS_ITEM_EFFECT_DHAROK_PIECE |
+        OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND;
+    uint32_t defensive = OSRS_ITEM_EFFECT_ELYSIAN | OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR |
+        OSRS_ITEM_EFFECT_RECOIL_RING | OSRS_ITEM_EFFECT_VENOM_IMMUNE |
+        OSRS_ITEM_EFFECT_ECHO_BOOTS | OSRS_ITEM_EFFECT_CONFLICTION |
+        OSRS_ITEM_EFFECT_VIRTUS_PIECE;
+    uint32_t util = OSRS_ITEM_EFFECT_LIGHTBEARER;
+    out[0] = (effect_mask & lifesteal)  ? 1.0f : 0.0f;
+    out[1] = (effect_mask & damage_amp) ? 1.0f : 0.0f;
+    out[2] = (effect_mask & defensive)  ? 1.0f : 0.0f;
+    out[3] = (effect_mask & util)       ? 1.0f : 0.0f;
+}
+
+/**
  * Finds an ITEM_DATABASE index by raw OSRS item id.
  *
  * Returns ITEM_NONE when the raw id is not an equippable database item.
@@ -149,7 +262,7 @@ static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
 }
 
 /**
- * Writes the shared 16-float inventory-cell affordance layout.
+ * Writes the shared 35-float inventory-cell affordance layout.
  *
  * Layout:
  * [0] present
@@ -168,6 +281,25 @@ static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
  * [13] magic attack plus damage delta
  * [14] aggregate defence delta
  * [15] has item effect
+ * [16] REC1 is food
+ * [17] REC1 is potion family
+ * [18] REC1 is armor
+ * [19] REC1 is weapon
+ * [20] REC2 kind = brew
+ * [21] REC2 kind = restore
+ * [22] REC2 kind = combat boost
+ * [23] REC2 kind = ranged boost
+ * [24] REC2 kind = special
+ * [25] REC2 kind = food
+ * [26] REC3 hp heal normalized
+ * [27] REC3 prayer restore normalized
+ * [28] REC3 offensive boost normalized
+ * [29] REC4 effect class = lifesteal
+ * [30] REC4 effect class = damage amp
+ * [31] REC4 effect class = defensive
+ * [32] REC4 effect class = util
+ * [33] REC5 weapon attack speed normalized
+ * [34] REC5 weapon attack range normalized
  */
 static inline void osrs_write_inventory_cell_affordance_features(
     float* out,
@@ -176,7 +308,10 @@ static inline void osrs_write_inventory_cell_affordance_features(
     uint8_t dose,
     int can_use,
     int is_equipped,
-    const float post_use_deltas[6]
+    const float post_use_deltas[6],
+    int base_hitpoints,
+    int base_prayer,
+    int base_level
 ) {
     OsrsConsumableClick consumable =
         osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
@@ -197,10 +332,45 @@ static inline void osrs_write_inventory_cell_affordance_features(
     out[8] = style == 3 ? 1.0f : 0.0f;
     for (int i = 0; i < 6; i++) out[9 + i] = osrs_clamp_unit(post_use_deltas[i]);
     out[15] = effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
+
+    /* REC1 role one-hot */
+    int is_weapon = is_gear && ITEM_DATABASE[item_idx].slot == SLOT_WEAPON;
+    out[16] = consumable.click_action == OSRS_CLICK_EAT ? 1.0f : 0.0f;
+    out[17] = consumable.click_action == OSRS_CLICK_DRINK ? 1.0f : 0.0f;
+    out[18] = (is_gear && !is_weapon) ? 1.0f : 0.0f;
+    out[19] = is_weapon ? 1.0f : 0.0f;
+    /* REC2 consumable kind6 */
+    OsrsConsumableKind6 k6 = col_consumable_kind6(consumable.consumable_kind);
+    out[20] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
+    out[21] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
+    out[22] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
+    out[23] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
+    out[24] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
+    out[25] = k6 == COL_CKIND6_FOOD ? 1.0f : 0.0f;
+    /* REC3 consumable magnitudes */
+    OsrsConsumableKind ck = consumable.consumable_kind;
+    int hp_heal = osrs_consumable_hp_heal_amount(ck, base_hitpoints);
+    int pray_restore = osrs_consumable_prayer_restore_amount(ck, base_prayer);
+    int off_boost = osrs_consumable_offensive_boost_amount(ck, base_level);
+    out[26] = base_hitpoints > 0 ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
+    out[27] = base_prayer > 0 ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
+    out[28] = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
+    /* REC4 effect class */
+    float eff4[4];
+    osrs_item_effect_class4(effect_mask, eff4);
+    out[29] = eff4[0];
+    out[30] = eff4[1];
+    out[31] = eff4[2];
+    out[32] = eff4[3];
+    /* REC5 weapon speed + range */
+    out[33] = is_weapon
+        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED) : 0.0f;
+    out[34] = is_weapon
+        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_range / STAT_NORM_RANGE) : 0.0f;
 }
 
 /**
- * Writes the shared 12-float equipped-item self layout.
+ * Writes the shared 18-float equipped-item self layout.
  *
  * Layout:
  * [0] present
@@ -215,6 +385,12 @@ static inline void osrs_write_inventory_cell_affordance_features(
  * [9] aggregate defence
  * [10] has item effect
  * [11] is weapon
+ * [12] REC4 effect class = lifesteal
+ * [13] REC4 effect class = damage amp
+ * [14] REC4 effect class = defensive
+ * [15] REC4 effect class = util
+ * [16] REC5 weapon attack speed normalized
+ * [17] REC5 weapon attack range normalized
  */
 static inline void osrs_write_equipped_self_features(float* out, uint8_t item_idx) {
     for (int i = 0; i < OSRS_EQUIPPED_SELF_OBS_FEATURES; i++) out[i] = 0.0f;
@@ -238,6 +414,19 @@ static inline void osrs_write_equipped_self_features(float* out, uint8_t item_id
         (5.0f * STAT_NORM_DEFENCE));
     out[10] = item->effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
     out[11] = item->slot == SLOT_WEAPON ? 1.0f : 0.0f;
+
+    /* REC4 effect class */
+    float eff4[4];
+    osrs_item_effect_class4(item->effect_mask, eff4);
+    out[12] = eff4[0];
+    out[13] = eff4[1];
+    out[14] = eff4[2];
+    out[15] = eff4[3];
+    /* REC5 weapon speed + range */
+    out[16] = item->slot == SLOT_WEAPON
+        ? osrs_clamp_unit((float)item->attack_speed / STAT_NORM_SPEED) : 0.0f;
+    out[17] = item->slot == SLOT_WEAPON
+        ? osrs_clamp_unit((float)item->attack_range / STAT_NORM_RANGE) : 0.0f;
 }
 
 /**

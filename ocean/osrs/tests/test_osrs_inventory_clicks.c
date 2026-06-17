@@ -9,6 +9,7 @@
  */
 
 #include <stdio.h>
+#include <math.h>
 
 #include "ocean/osrs/osrs_inventory_clicks.h"
 
@@ -123,12 +124,129 @@ static int test_pure_click_interpreter(void) {
     return 0;
 }
 
+static int cell_in_unit_range(const float* out) {
+    for (int i = 0; i < OSRS_INVENTORY_CELL_OBS_FEATURES; i++) {
+        if (out[i] < -1.0f || out[i] > 1.0f) return 0;
+    }
+    return 1;
+}
+
+static int test_enriched_feature_counts(void) {
+    CHECK("cell obs features is 35", OSRS_INVENTORY_CELL_OBS_FEATURES == 35);
+    CHECK("equipped obs features is 18", OSRS_EQUIPPED_SELF_OBS_FEATURES == 18);
+    return 0;
+}
+
+static int test_brew_cell_semantics(void) {
+    float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
+    float zero_deltas[6] = {0};
+    /* 4-dose Saradomin brew (raw id 6685), no gear, base levels 99. */
+    osrs_write_inventory_cell_affordance_features(
+        out, ITEM_NONE, 6685, 4, 1, 0, zero_deltas, 99, 99, 99);
+    CHECK("brew is potion family (drink)", out[17] == 1.0f);
+    CHECK("brew is not food", out[16] == 0.0f);
+    CHECK("brew is not armor", out[18] == 0.0f);
+    CHECK("brew is not weapon", out[19] == 0.0f);
+    CHECK("brew kind6 is brew", out[20] == 1.0f);
+    /* osrs_brew_heal_amount(99) == 99*15/100 + 2 == 16; norm == 16/99. */
+    CHECK("brew hp-heal norm ~= 16/99",
+          fabsf(out[26] - (16.0f / 99.0f)) < 1e-4f);
+    CHECK("brew has no prayer restore", out[27] == 0.0f);
+    CHECK("brew weapon speed/range are zero", out[33] == 0.0f && out[34] == 0.0f);
+    CHECK("brew cell within [-1,1]", cell_in_unit_range(out));
+    return 0;
+}
+
+static int test_weapon_cell_semantics(void) {
+    float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
+    float zero_deltas[6] = {0};
+    /* Osmumten's fang: weapon, attack_speed 5, attack_range 1, effect FANG. */
+    uint16_t fang_raw = ITEM_DATABASE[ITEM_OSMUMTENS_FANG].item_id;
+    osrs_write_inventory_cell_affordance_features(
+        out, ITEM_OSMUMTENS_FANG, fang_raw, 0, 1, 0, zero_deltas, 99, 99, 99);
+    CHECK("fang is weapon", out[19] == 1.0f);
+    CHECK("fang is not armor", out[18] == 0.0f);
+    CHECK("fang is not consumable", out[16] == 0.0f && out[17] == 0.0f);
+    CHECK("fang weapon speed norm > 0", out[33] > 0.0f);
+    CHECK("fang weapon range norm > 0", out[34] > 0.0f);
+    CHECK("fang effect class is damage amp", out[30] == 1.0f);
+    CHECK("fang is not lifesteal/defensive/util",
+          out[29] == 0.0f && out[31] == 0.0f && out[32] == 0.0f);
+    CHECK("fang cell within [-1,1]", cell_in_unit_range(out));
+    return 0;
+}
+
+static int test_effect_class4_decoder(void) {
+    float eff4[4];
+    osrs_item_effect_class4(OSRS_ITEM_EFFECT_BLOOD_FURY, eff4);
+    CHECK("blood fury is lifesteal only",
+          eff4[0] == 1.0f && eff4[1] == 0.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
+    osrs_item_effect_class4(OSRS_ITEM_EFFECT_TWISTED_BOW, eff4);
+    CHECK("twisted bow is damage amp only",
+          eff4[0] == 0.0f && eff4[1] == 1.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
+    osrs_item_effect_class4(OSRS_ITEM_EFFECT_LIGHTBEARER, eff4);
+    CHECK("lightbearer is util only",
+          eff4[0] == 0.0f && eff4[1] == 0.0f && eff4[2] == 0.0f && eff4[3] == 1.0f);
+
+    /* equipped-writer end-to-end: blood fury amulet sets lifesteal class. */
+    float eq[OSRS_EQUIPPED_SELF_OBS_FEATURES];
+    osrs_write_equipped_self_features(eq, ITEM_AMULET_OF_BLOOD_FURY);
+    CHECK("equipped blood fury lifesteal", eq[12] == 1.0f);
+    CHECK("equipped blood fury no other class",
+          eq[13] == 0.0f && eq[14] == 0.0f && eq[15] == 0.0f);
+    return 0;
+}
+
+static int test_kind6_totality(void) {
+    CHECK("none -> none", col_consumable_kind6(OSRS_CONSUMABLE_NONE) == COL_CKIND6_NONE);
+    CHECK("brew -> brew", col_consumable_kind6(OSRS_CONSUMABLE_BREW) == COL_CKIND6_BREW);
+    CHECK("super restore -> restore",
+          col_consumable_kind6(OSRS_CONSUMABLE_SUPER_RESTORE) == COL_CKIND6_RESTORE);
+    CHECK("sanfew -> restore",
+          col_consumable_kind6(OSRS_CONSUMABLE_SANFEW) == COL_CKIND6_RESTORE);
+    CHECK("super combat -> combat boost",
+          col_consumable_kind6(OSRS_CONSUMABLE_SUPER_COMBAT) == COL_CKIND6_COMBAT_BOOST);
+    CHECK("divine combat -> combat boost",
+          col_consumable_kind6(OSRS_CONSUMABLE_DIVINE_COMBAT) == COL_CKIND6_COMBAT_BOOST);
+    CHECK("ranging -> ranged boost",
+          col_consumable_kind6(OSRS_CONSUMABLE_RANGING) == COL_CKIND6_RANGED_BOOST);
+    CHECK("divine ranging -> ranged boost",
+          col_consumable_kind6(OSRS_CONSUMABLE_DIVINE_RANGING) == COL_CKIND6_RANGED_BOOST);
+    CHECK("surge -> special",
+          col_consumable_kind6(OSRS_CONSUMABLE_SURGE) == COL_CKIND6_SPECIAL);
+    CHECK("guthix rest -> special",
+          col_consumable_kind6(OSRS_CONSUMABLE_GUTHIX_REST) == COL_CKIND6_SPECIAL);
+    CHECK("saturated heart -> special",
+          col_consumable_kind6(OSRS_CONSUMABLE_SATURATED_HEART) == COL_CKIND6_SPECIAL);
+    CHECK("shark -> food",
+          col_consumable_kind6(OSRS_CONSUMABLE_SHARK_FOOD) == COL_CKIND6_FOOD);
+    CHECK("karambwan -> food",
+          col_consumable_kind6(OSRS_CONSUMABLE_KARAMBWAN) == COL_CKIND6_FOOD);
+    return 0;
+}
+
+static int test_empty_cell_clamp(void) {
+    float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
+    float zero_deltas[6] = {0};
+    osrs_write_inventory_cell_affordance_features(
+        out, ITEM_NONE, 0, 0, 0, 0, zero_deltas, 99, 99, 99);
+    CHECK("empty cell not present", out[0] == 0.0f);
+    CHECK("empty cell within [-1,1]", cell_in_unit_range(out));
+    return 0;
+}
+
 int main(void) {
     if (test_item_index_classification()) return 1;
     if (test_raw_consumable_classification()) return 1;
     if (test_sara_brew_dose_variants()) return 1;
     if (test_dose_after_drink()) return 1;
     if (test_pure_click_interpreter()) return 1;
+    if (test_enriched_feature_counts()) return 1;
+    if (test_brew_cell_semantics()) return 1;
+    if (test_weapon_cell_semantics()) return 1;
+    if (test_effect_class4_decoder()) return 1;
+    if (test_kind6_totality()) return 1;
+    if (test_empty_cell_clamp()) return 1;
 
     printf("test_osrs_inventory_clicks: OK\n");
     return 0;
