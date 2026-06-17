@@ -36,6 +36,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
         ctx->config.step_out_forecast_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "mask_inventory_heads") == 0)
+        ctx->config.mask_inventory_heads =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",

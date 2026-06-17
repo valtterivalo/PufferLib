@@ -1550,6 +1550,7 @@ typedef struct {
     int step_out_forecast_obs_enabled;
     int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
+    int mask_inventory_heads;
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
@@ -1690,6 +1691,7 @@ typedef struct {
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
     int episode_over;
+    int time_limit_truncated;
     ColoOutcome winner;       /* valid only when episode_over is set */
 
     ColoModifierState modifiers;

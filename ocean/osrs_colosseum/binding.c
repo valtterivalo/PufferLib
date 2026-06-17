@@ -53,6 +53,7 @@ typedef struct ColosseumEnv {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     int num_agents;
     int rng;
     Log log;
@@ -79,6 +80,7 @@ typedef struct ColosseumEnv {
 #define ACT_SIZES COLO_ACTION_DIMS_INIT
 #define OBS_TENSOR_T FloatTensor
 #define Env ColosseumEnv
+#define MY_TRUNCATIONS 1
 
 #define MAX_CURRICULUM_TIERS 8
 
@@ -120,8 +122,10 @@ void c_step(Env* env) {
 
     env->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_term = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
+    int is_trunc = is_term && env->state.time_limit_truncated;
     env->term_staging = (unsigned char)is_term;
-    env->terminals[0] = (float)is_term;
+    env->terminals[0] = (float)(is_term && !is_trunc);
+    env->truncations[0] = (float)is_trunc;
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
 
     if (is_term) {
@@ -295,6 +299,7 @@ void my_init(Env* env, Dict* kwargs) {
         "step_out_forecast_obs_enabled",
         "forecast_horizon",
         "forecast_run_tile_mode",
+        "mask_inventory_heads",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

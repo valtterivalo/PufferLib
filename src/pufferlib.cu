@@ -55,6 +55,7 @@ struct RolloutBuf {
     PrecisionTensor logprobs;      // ...
     PrecisionTensor rewards;
     PrecisionTensor terminals;
+    PrecisionTensor truncations;
     PrecisionTensor ratio;
     PrecisionTensor importance;
     PrecisionTensor action_mask;   // (horizon, agents, mask_size); .data=nullptr when env opts out
@@ -71,6 +72,7 @@ void register_rollout_buffers(RolloutBuf& bufs, Allocator* alloc, int T, int B, 
         .logprobs     = {.shape = {T, B}},
         .rewards      = {.shape = {T, B}},
         .terminals    = {.shape = {T, B}},
+        .truncations  = {.shape = {T, B}},
         .ratio        = {.shape = {T, B}},
         .importance   = {.shape = {T, B}},
         .action_mask  = {},
@@ -81,6 +83,7 @@ void register_rollout_buffers(RolloutBuf& bufs, Allocator* alloc, int T, int B, 
     alloc_register(alloc, &bufs.logprobs);
     alloc_register(alloc, &bufs.rewards);
     alloc_register(alloc, &bufs.terminals);
+    alloc_register(alloc, &bufs.truncations);
     alloc_register(alloc, &bufs.ratio);
     alloc_register(alloc, &bufs.importance);
     if (mask_size > 0) {
@@ -222,6 +225,7 @@ struct EnvBuf {
     FloatTensor actions;   // (total_agents, num_atns)
     FloatTensor rewards;   // (total_agents,)
     FloatTensor terminals; // (total_agents,)
+    FloatTensor truncations;
     ByteTensor action_mask; // (total_agents, mask_size); .data=nullptr when env opts out
 };
 
@@ -232,6 +236,7 @@ StaticVec* create_environments(int num_buffers, int total_agents,
     env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, get_num_atns()} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };
     env.terminals = { .data = (float*)vec->gpu_terminals, .shape = {total_agents} };
+    env.truncations = { .data = (float*)vec->gpu_truncations, .shape = {total_agents} };
     if (vec->action_mask_size > 0) {
         env.action_mask = { .data = vec->gpu_action_mask,
                             .shape = {total_agents, vec->action_mask_size} };
@@ -612,6 +617,10 @@ extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PrecisionTensor term_dst = puf_slice(rollouts.terminals, t, start, block_size);
     cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
         term_dst.data, env.terminals.data + start, n);
+
+    PrecisionTensor trunc_dst = puf_slice(rollouts.truncations, t, start, block_size);
+    cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+        trunc_dst.data, env.truncations.data + start, n);
 
     // Copy action mask from env into rollout buffer (if env opted in)
     PrecisionTensor mask_slice = {};
@@ -1107,12 +1116,15 @@ void ppo_loss_fwd_bwd(
 // importance sampling correction in a single streamlined operation
 __device__ void puff_advantage_row_scalar(
         const precision_t* values, const precision_t* rewards, const precision_t* dones,
-        const precision_t* importance, precision_t* advantages, float gamma, float lambda,
+        const precision_t* truncations, const precision_t* importance,
+        precision_t* advantages, float gamma, float lambda,
         float rho_clip, float c_clip, int horizon) {
     float lastpufferlam = 0;
     for (int t = horizon-2; t >= 0; t--) {
         int t_next = t + 1;
         float nextnonterminal = 1.0f - to_float(dones[t_next]);
+        float next_truncated = truncations == nullptr ? 0.0f : to_float(truncations[t_next]);
+        float nextboundary = next_truncated != 0.0f ? 0.0f : nextnonterminal;
         float imp = to_float(importance[t]);
         float rho_t = fminf(imp, rho_clip);
         float c_t = fminf(imp, c_clip);
@@ -1120,7 +1132,7 @@ __device__ void puff_advantage_row_scalar(
         float v = to_float(values[t]);
         float v_nxt = to_float(values[t_next]);
         float delta = rho_t*r_nxt + gamma*v_nxt*nextnonterminal - v;
-        lastpufferlam = delta + gamma*lambda*c_t*lastpufferlam*nextnonterminal;
+        lastpufferlam = delta + gamma*lambda*c_t*lastpufferlam*nextboundary;
         advantages[t] = from_float(lastpufferlam);
     }
 }
@@ -1156,7 +1168,8 @@ __device__ __forceinline__ void adv_vec_store(__nv_bfloat16* ptr, const float* v
 
 __device__ __forceinline__ void puff_advantage_row_vec(
         const precision_t* values, const precision_t* rewards, const precision_t* dones,
-        const precision_t* importance, precision_t* advantages, float gamma, float lambda,
+        const precision_t* truncations, const precision_t* importance,
+        precision_t* advantages, float gamma, float lambda,
         float rho_clip, float c_clip, int horizon) {
     constexpr int N = 16 / sizeof(precision_t);
 
@@ -1165,15 +1178,22 @@ __device__ __forceinline__ void puff_advantage_row_vec(
 
     float next_value = to_float(values[horizon - 1]);
     float next_done = to_float(dones[horizon - 1]);
+    float next_truncated = truncations == nullptr ? 0.0f : to_float(truncations[horizon - 1]);
     float next_reward = to_float(rewards[horizon - 1]);
 
     for (int chunk = num_chunks - 1; chunk >= 0; chunk--) {
         int base = chunk * N;
 
-        float v[N], r[N], d[N], imp[N];
+        float v[N], r[N], d[N], tr[N], imp[N];
         adv_vec_load(values + base, v);
         adv_vec_load(rewards + base, r);
         adv_vec_load(dones + base, d);
+        if (truncations != nullptr) {
+            adv_vec_load(truncations + base, tr);
+        } else {
+            #pragma unroll
+            for (int i = 0; i < N; i++) tr[i] = 0.0f;
+        }
         adv_vec_load(importance + base, imp);
 
         float adv[N] = {0};
@@ -1182,13 +1202,15 @@ __device__ __forceinline__ void puff_advantage_row_vec(
         #pragma unroll
         for (int i = start_idx; i >= 0; i--) {
             float nextnonterminal = 1.0f - next_done;
+            float nextboundary = next_truncated != 0.0f ? 0.0f : nextnonterminal;
             float rho_t = fminf(imp[i], rho_clip);
             float c_t = fminf(imp[i], c_clip);
             float delta = rho_t * (next_reward + gamma * next_value * nextnonterminal - v[i]);
-            lastpufferlam = delta + gamma * lambda * c_t * lastpufferlam * nextnonterminal;
+            lastpufferlam = delta + gamma * lambda * c_t * lastpufferlam * nextboundary;
             adv[i] = lastpufferlam;
             next_value = v[i];
             next_done = d[i];
+            next_truncated = tr[i];
             next_reward = r[i];
         }
 
@@ -1197,38 +1219,43 @@ __device__ __forceinline__ void puff_advantage_row_vec(
 }
 
 __global__ void puff_advantage(const precision_t* values, const precision_t* rewards,
-        const precision_t* dones, const precision_t* importance, precision_t* advantages, float gamma,
-        float lambda, float rho_clip, float c_clip, int num_steps, int horizon) {
+        const precision_t* dones, const precision_t* truncations, const precision_t* importance,
+        precision_t* advantages, float gamma, float lambda, float rho_clip, float c_clip,
+        int num_steps, int horizon) {
     int row = blockIdx.x*blockDim.x + threadIdx.x;
     if (row >= num_steps) {
         return;
     }
     int offset = row*horizon;
-    puff_advantage_row_vec(values + offset, rewards + offset, dones + offset,
+    const precision_t* trunc_row = truncations == nullptr ? nullptr : truncations + offset;
+    puff_advantage_row_vec(values + offset, rewards + offset, dones + offset, trunc_row,
         importance + offset, advantages + offset, gamma, lambda, rho_clip, c_clip, horizon);
 }
 
 __global__ void puff_advantage_scalar(const precision_t* values, const precision_t* rewards,
-        const precision_t* dones, const precision_t* importance, precision_t* advantages, float gamma,
-        float lambda, float rho_clip, float c_clip, int num_steps, int horizon) {
+        const precision_t* dones, const precision_t* truncations, const precision_t* importance,
+        precision_t* advantages, float gamma, float lambda, float rho_clip, float c_clip,
+        int num_steps, int horizon) {
     int row = blockIdx.x*blockDim.x + threadIdx.x;
     if (row >= num_steps) {
         return;
     }
     int offset = row*horizon;
-    puff_advantage_row_scalar(values + offset, rewards + offset, dones + offset,
+    const precision_t* trunc_row = truncations == nullptr ? nullptr : truncations + offset;
+    puff_advantage_row_scalar(values + offset, rewards + offset, dones + offset, trunc_row,
         importance + offset, advantages + offset, gamma, lambda, rho_clip, c_clip, horizon);
 }
 
 void puff_advantage_cuda(PrecisionTensor& values, PrecisionTensor& rewards,
-        PrecisionTensor& dones, PrecisionTensor& importance, PrecisionTensor& advantages,
-        float gamma, float lambda, float rho_clip, float c_clip, cudaStream_t stream) {
+        PrecisionTensor& dones, PrecisionTensor& truncations, PrecisionTensor& importance,
+        PrecisionTensor& advantages, float gamma, float lambda, float rho_clip, float c_clip,
+        cudaStream_t stream) {
     int num_steps = values.shape[0], horizon = values.shape[1];
     int blocks = grid_size(num_steps);
     constexpr int N = 16 / sizeof(precision_t);
     auto kernel = (horizon % N == 0) ? puff_advantage : puff_advantage_scalar;
     kernel<<<blocks, 256, 0, stream>>>(
-        values.data, rewards.data, dones.data, importance.data,
+        values.data, rewards.data, dones.data, truncations.data, importance.data,
         advantages.data, gamma, lambda, rho_clip, c_clip, num_steps, horizon);
 }
 
@@ -1370,6 +1397,8 @@ void train_impl(PuffeRL& pufferl) {
     transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.terminals.data, src.terminals.data, T, B, 1);
     transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
+        rollouts.truncations.data, src.truncations.data, T, B, 1);
+    transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.ratio.data, src.ratio.data, T, B, 1);
     transpose_102<<<grid_size(T*B), BLOCK_SIZE, 0, train_stream>>>(
         rollouts.values.data, src.values.data, T, B, 1);
@@ -1430,7 +1459,7 @@ void train_impl(PuffeRL& pufferl) {
 
         profile_begin("compute_advantage", hypers.profile);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
+            rollouts.truncations, rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
         if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
             int apb = hypers.total_agents / hypers.num_buffers;
@@ -1541,7 +1570,7 @@ void train_impl(PuffeRL& pufferl) {
     if (pufferl.curriculum_enabled) {
         puf_zero(&advantages_puf, train_stream);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
+            rollouts.truncations, rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
             hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
         if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
             int apb = hypers.total_agents / hypers.num_buffers;

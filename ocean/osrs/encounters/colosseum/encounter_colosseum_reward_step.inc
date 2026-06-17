@@ -99,6 +99,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (s->tick >= COLO_MAX_TICKS) {
         (void)col_compute_reward_ctx(s, ctx);
         s->episode_over = 1;
+        s->time_limit_truncated = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_loss_reward(s, ctx);
         s->episode_return += s->reward;

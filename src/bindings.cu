@@ -275,13 +275,15 @@ void py_puff_advantage(
         long long dones_ptr,  long long importance_ptr,
         long long advantages_ptr,
         int num_steps, int horizon,
-        float gamma, float lambda, float rho_clip, float c_clip) {
+        float gamma, float lambda, float rho_clip, float c_clip,
+        long long truncations_ptr) {
     constexpr int N = 16 / sizeof(precision_t);
     int blocks = grid_size(num_steps);
     auto kernel = (horizon % N == 0) ? puff_advantage : puff_advantage_scalar;
     kernel<<<blocks, 256>>>(
         (const precision_t*)values_ptr, (const precision_t*)rewards_ptr,
-        (const precision_t*)dones_ptr,  (const precision_t*)importance_ptr,
+        (const precision_t*)dones_ptr, (const precision_t*)truncations_ptr,
+        (const precision_t*)importance_ptr,
         (precision_t*)advantages_ptr,
         gamma, lambda, rho_clip, c_clip, num_steps, horizon);
 }
@@ -610,6 +612,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("logprobs", &RolloutBuf::logprobs)
         .def_readwrite("rewards", &RolloutBuf::rewards)
         .def_readwrite("terminals", &RolloutBuf::terminals)
+        .def_readwrite("truncations", &RolloutBuf::truncations)
         .def_readwrite("ratio", &RolloutBuf::ratio)
         .def_readwrite("importance", &RolloutBuf::importance);
 
@@ -618,7 +621,12 @@ PYBIND11_MODULE(_C, m) {
         double now = wall_clock();
         return now - pufferl.start_time;
     });
-    m.def("puff_advantage", &py_puff_advantage);
+    m.def("puff_advantage", &py_puff_advantage,
+        py::arg("values_ptr"), py::arg("rewards_ptr"), py::arg("dones_ptr"),
+        py::arg("importance_ptr"), py::arg("advantages_ptr"),
+        py::arg("num_steps"), py::arg("horizon"),
+        py::arg("gamma"), py::arg("lambda"), py::arg("rho_clip"), py::arg("c_clip"),
+        py::arg("truncations_ptr") = 0);
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 1);
     py::class_<VecEnv, std::unique_ptr<VecEnv>>(m, "VecEnv")
         .def_readonly("total_agents",  &VecEnv::total_agents)
@@ -632,10 +640,12 @@ PYBIND11_MODULE(_C, m) {
         .def_property_readonly("gpu_obs_ptr",       [](VecEnv& ve) { return (long long)ve.vec->gpu_observations.data; })
         .def_property_readonly("gpu_rewards_ptr",   [](VecEnv& ve) { return (long long)ve.vec->gpu_rewards; })
         .def_property_readonly("gpu_terminals_ptr", [](VecEnv& ve) { return (long long)ve.vec->gpu_terminals; })
+        .def_property_readonly("gpu_truncations_ptr", [](VecEnv& ve) { return (long long)ve.vec->gpu_truncations; })
         // CPU buffer pointers (same as gpu_ in CPU mode since they alias)
         .def_property_readonly("obs_ptr",       [](VecEnv& ve) { return (long long)ve.vec->observations.data; })
         .def_property_readonly("rewards_ptr",   [](VecEnv& ve) { return (long long)ve.vec->rewards; })
         .def_property_readonly("terminals_ptr", [](VecEnv& ve) { return (long long)ve.vec->terminals; })
+        .def_property_readonly("truncations_ptr", [](VecEnv& ve) { return (long long)ve.vec->truncations; })
         .def("reset", &vec_reset)
         .def("gpu_step", &gpu_vec_step_py)
         .def("cpu_step", &cpu_vec_step_py)

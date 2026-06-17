@@ -41,7 +41,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
         mask[offset++] = 1.0f;
         for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-            mask[offset++] = col_inventory_cell_actionable(s, cell) ? 1.0f : 0.0f;
+            mask[offset++] = (!ctx->config.mask_inventory_heads &&
+                col_inventory_cell_actionable(s, cell)) ? 1.0f : 0.0f;
         }
     }
 

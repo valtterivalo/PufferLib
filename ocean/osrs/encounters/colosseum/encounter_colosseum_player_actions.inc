@@ -998,20 +998,22 @@ static void col_tick_player_ctx(
     if (encounter_tick_saturated_heart(&s->player))
         col_mark_live_loadout_dirty(s);
 
-    int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-        int action = actions[COLO_HEAD_INV_CLICK_0 + head];
-        if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
-        int cell_idx = action - 1;
-        if (clicked[cell_idx]) {
-            (void)osrs_inventory_click_interpret(
-                s->inventory_cells[cell_idx].item_idx,
-                s->inventory_cells[cell_idx].osrs_id,
-                OSRS_CLICK_TICK_DUPLICATE);
-            continue;
+    if (!ctx->config.mask_inventory_heads) {
+        int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
+        for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+            int action = actions[COLO_HEAD_INV_CLICK_0 + head];
+            if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
+            int cell_idx = action - 1;
+            if (clicked[cell_idx]) {
+                (void)osrs_inventory_click_interpret(
+                    s->inventory_cells[cell_idx].item_idx,
+                    s->inventory_cells[cell_idx].osrs_id,
+                    OSRS_CLICK_TICK_DUPLICATE);
+                continue;
+            }
+            clicked[cell_idx] = 1;
+            col_click_inventory_cell(s, cell_idx);
         }
-        clicked[cell_idx] = 1;
-        col_click_inventory_cell(s, cell_idx);
     }
 
     int spec_act = actions[COLO_HEAD_SPEC];

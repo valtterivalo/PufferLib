@@ -271,6 +271,7 @@ static void test_zero_actions_hit_timeout(void) {
     CHECK("all-none actions terminate at the tick cap", s.episode_over == 1);
     CHECK("timeout fires exactly at MAX_TICKS", s.tick == COLO_MAX_TICKS);
     CHECK("timeout counts as a loss", s.winner == COLO_OUTCOME_PLAYER_DIED);
+    CHECK("timeout is marked as a truncation", s.time_limit_truncated == 1);
     CHECK("the draft was still pending when time ran out", s.modifiers.draft_pending == 1);
 }
 
@@ -5070,6 +5071,40 @@ static void test_stage3_t4_click_mask_bits(void) {
         mask[spec_off + 1] == 0.0f);
 }
 
+static void test_stage3_t4_mask_inventory_heads_flag(void) {
+    printf("test_stage3_t4_mask_inventory_heads_flag\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 507);
+    ctx.config.mask_inventory_heads = 1;
+
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int all_inventory_heads_pinned_to_noop = 1;
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        int offset = col_action_head_mask_offset(COLO_HEAD_INV_CLICK_0 + head);
+        if (mask[offset] != 1.0f) all_inventory_heads_pinned_to_noop = 0;
+        for (int action = 1; action < COLO_INV_CLICK_DIM; action++)
+            if (mask[offset + action] != 0.0f) all_inventory_heads_pinned_to_noop = 0;
+    }
+    CHECK("mask_inventory_heads pins every inventory head to noop only",
+        all_inventory_heads_pinned_to_noop);
+    CHECK("mask_inventory_heads leaves the action-mask size unchanged",
+        COLO_ACTION_MASK_SIZE == 887);
+
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.current_hitpoints = 50;
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    int brew_doses_before = s.player.brew_doses;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(actions, brew_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("mask_inventory_heads makes sampled inventory clicks no-op in dispatch",
+        s.player.current_hitpoints == 50 && s.player.brew_doses == brew_doses_before);
+}
+
 static void test_stage3_t5_claws_click_spec_fires(void) {
     printf("test_stage3_t5_claws_click_spec_fires\n");
     ColosseumContext ctx;
@@ -5117,6 +5152,7 @@ int main(void) {
     test_stage3_t2_brew_click_decrements_dose();
     test_stage3_t3_one_dose_vial_empties();
     test_stage3_t4_click_mask_bits();
+    test_stage3_t4_mask_inventory_heads_flag();
     test_stage3_t5_claws_click_spec_fires();
     test_stage3_t6_obs_mask_fuzz_contract();
     test_fuzz_obs_mask();

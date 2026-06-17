@@ -136,12 +136,16 @@ class PuffeRL:
                 (total_agents,), torch.float32))
             self.vec_terminals = torch.as_tensor(_CudaPtr(vec.gpu_terminals_ptr,
                 (total_agents,), torch.float32))
+            self.vec_truncations = torch.as_tensor(_CudaPtr(vec.gpu_truncations_ptr,
+                (total_agents,), torch.float32))
         else:
             self.vec_obs = _cpu_tensor(vec.obs_ptr,
                 (total_agents, vec.obs_size), obs_dtype)
             self.vec_rewards = _cpu_tensor(vec.rewards_ptr,
                 (total_agents,), torch.float32)
             self.vec_terminals = _cpu_tensor(vec.terminals_ptr,
+                (total_agents,), torch.float32)
+            self.vec_truncations = _cpu_tensor(vec.truncations_ptr,
                 (total_agents,), torch.float32)
 
         vec.reset()
@@ -155,6 +159,7 @@ class PuffeRL:
         self.logprobs = torch.zeros(horizon, total_agents, device=device)
         self.rewards = torch.zeros(horizon, total_agents, device=device)
         self.terminals = torch.zeros(horizon, total_agents, device=device)
+        self.truncations = torch.zeros(horizon, total_agents, device=device)
         self.ratio = torch.ones(total_agents, horizon, device=device)
         self.state = policy.initial_state(total_agents, device=device)
 
@@ -210,6 +215,7 @@ class PuffeRL:
         o = self.vec_obs
         r = torch.zeros(self.total_agents, device=device)
         d = torch.zeros(self.total_agents, device=device)
+        u = torch.zeros(self.total_agents, device=device)
 
         P = Profile
         prof.mark(0)
@@ -229,6 +235,7 @@ class PuffeRL:
                 self.logprobs[t] = logprob
                 self.rewards[t] = torch.as_tensor(r, device=device)
                 self.terminals[t] = torch.as_tensor(d, device=device).float()
+                self.truncations[t] = torch.as_tensor(u, device=device).float()
                 self.values[t] = value.flatten()
 
             prof.mark(2)
@@ -240,7 +247,10 @@ class PuffeRL:
             else:
                 self._vec.cpu_step(actions_flat.data_ptr())
 
-            o, r, d = self.vec_obs, self.vec_rewards, self.vec_terminals
+            o = self.vec_obs
+            r = self.vec_rewards
+            d = self.vec_terminals
+            u = self.vec_truncations
             prof.mark(3)
             prof.elapsed(P.EVAL_GPU, 1, 2)
             prof.elapsed(P.EVAL_ENV, 2, 3)
@@ -277,6 +287,7 @@ class PuffeRL:
         lp = self.logprobs.T.contiguous()
         rew = self.rewards.T.contiguous().clamp(-1, 1)
         ter = self.terminals.T.contiguous()
+        tru = self.truncations.T.contiguous()
 
         P = Profile
         prof.mark(0)
@@ -286,7 +297,8 @@ class PuffeRL:
             advantages = torch.zeros(shape, device=device)
             advantages = compute_puff_advantage(val, rew,
                 ter, self.ratio, advantages, config['gamma'],
-                config['gae_lambda'], config['vtrace_rho_clip'], config['vtrace_c_clip'])
+                config['gae_lambda'], config['vtrace_rho_clip'], config['vtrace_c_clip'],
+                truncations=tru)
 
             adv = advantages.abs().sum(axis=1)
             prio_weights = torch.nan_to_num(adv**a, 0, 0, 0)
@@ -402,6 +414,7 @@ class PuffeRL:
         self.vec_obs = None
         self.vec_rewards = None
         self.vec_terminals = None
+        self.vec_truncations = None
         self._vec.close()
 
     @classmethod
@@ -432,14 +445,16 @@ class PuffeRL:
         return cls(args, vec, policy)
 
 def compute_puff_advantage(values, rewards, terminals,
-        ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip):
+        ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip,
+        truncations=None):
     num_steps, horizon = values.shape
     fn = _C.puff_advantage if values.is_cuda else _C.puff_advantage_cpu
+    truncations_ptr = 0 if truncations is None else truncations.data_ptr()
     fn(
         values.data_ptr(), rewards.data_ptr(), terminals.data_ptr(),
         ratio.data_ptr(), advantages.data_ptr(),
         num_steps, horizon,
-        gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip)
+        gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip, truncations_ptr)
     return advantages
 
 class Profile:
