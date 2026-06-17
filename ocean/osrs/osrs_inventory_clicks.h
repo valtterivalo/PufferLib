@@ -359,9 +359,15 @@ static inline OsrsInventoryClickResolution osrs_inventory_click_interpret(
     uint16_t raw_osrs_id,
     OsrsClickTickMultiplicity tick_multiplicity
 ) {
+    OsrsInventoryClickResolution none_resolution = {
+        .click_action = OSRS_CLICK_NONE,
+        .consumable_kind = OSRS_CONSUMABLE_NONE,
+        .dose_count = 0,
+        .raw_osrs_id_after_drink = 0,
+    };
     switch (tick_multiplicity) {
         case OSRS_CLICK_TICK_DUPLICATE:
-            return (OsrsInventoryClickResolution){0};
+            return none_resolution;
         case OSRS_CLICK_TICK_FIRST:
             break;
         default:
@@ -382,7 +388,7 @@ static inline OsrsInventoryClickResolution osrs_inventory_click_interpret(
     }
 
     if (raw_osrs_id == 0) {
-        return (OsrsInventoryClickResolution){0};
+        return none_resolution;
     }
 
     OsrsConsumableClick consumable =
