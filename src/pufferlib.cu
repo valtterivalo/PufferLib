@@ -762,6 +762,19 @@ __device__ __forceinline__ void ppo_continuous_head(
     *out_entropy = HALF_1_PLUS_LOG_2PI + log_std;
 }
 
+/* Clamp the PPO log-ratio before exp() so a joint log-prob summed over many action
+ * heads cannot overflow exp() (which it does past ~88) into an inf ratio; the
+ * unbounded negative-advantage PG branch would otherwise turn that inf into +inf
+ * loss and then NaN. Written with comparisons rather than fmaxf/fminf so a
+ * pre-existing NaN propagates loudly instead of being silently replaced by IEEE
+ * max/min semantics. Identity for any |logratio| <= 10, so healthy low-head-count
+ * training is bitwise unaffected. */
+__device__ __forceinline__ float ppo_clamp_logratio(float logratio) {
+    if (logratio > 10.0f) return 10.0f;
+    if (logratio < -10.0f) return -10.0f;
+    return logratio;
+}
+
 __global__ void ppo_loss_compute(
         float* __restrict__ ppo_partials,
         PPOKernelArgs a, PPOGraphArgs g) {
@@ -868,7 +881,7 @@ __global__ void ppo_loss_compute(
     }
 
     // Shared pg loss computation
-    logratio = total_log_prob - old_logp;
+    logratio = ppo_clamp_logratio(total_log_prob - old_logp);
     ratio = __expf(logratio);
     g.out_ratio[nt] = from_float(ratio);
     float ratio_clipped = fmaxf(1.0f - a.clip_coef, fminf(1.0f + a.clip_coef, ratio));
