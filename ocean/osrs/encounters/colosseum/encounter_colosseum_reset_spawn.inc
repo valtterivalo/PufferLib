@@ -397,6 +397,59 @@ static void col_spawn_reinforcements(ColosseumState* s) {
     s->reinforcement_timer = COLO_REINFORCE_FIRED;
 }
 
+static void col_init_empty_inventory_cells(ColosseumState* s) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        s->inventory_cells[i] = (ColoInvCell){
+            .osrs_id = 0,
+            .item_idx = ITEM_NONE,
+            .dose = 0,
+        };
+    }
+}
+
+static void col_seed_inventory_cells_from_display(ColosseumState* s) {
+    col_init_empty_inventory_cells(s);
+    const int* kit = COLO_INVENTORY_DISPLAY[s->active_loadout_profile];
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        uint16_t raw_id = (uint16_t)kit[i];
+        if (raw_id == 0) continue;
+
+        uint8_t item_idx = osrs_item_index_for_raw_osrs_id(raw_id);
+        if (item_idx != ITEM_NONE) {
+            s->inventory_cells[i] = (ColoInvCell){
+                .osrs_id = raw_id,
+                .item_idx = item_idx,
+                .dose = 0,
+            };
+            continue;
+        }
+
+        OsrsConsumableClick consumable =
+            osrs_consumable_click_lookup_raw_osrs_id(raw_id);
+        if (consumable.click_action != OSRS_CLICK_NONE) {
+            s->inventory_cells[i] = (ColoInvCell){
+                .osrs_id = raw_id,
+                .item_idx = ITEM_NONE,
+                .dose = consumable.dose_count,
+            };
+            continue;
+        }
+
+        if (raw_id == 27281) {
+            s->inventory_cells[i] = (ColoInvCell){
+                .osrs_id = raw_id,
+                .item_idx = ITEM_NONE,
+                .dose = 0,
+            };
+            continue;
+        }
+
+        fprintf(stderr, "colosseum: inventory display raw id %u has no cell mapping\n",
+            raw_id);
+        abort();
+    }
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
@@ -414,7 +467,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->last_hit_by_type = -1;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
-    /* player: maxed combat stats + a melee/ranged loadout via shared helpers */
+    /* player: maxed combat stats + live equipped melee loadout */
     s->player.entity_type = ENTITY_PLAYER;
     encounter_init_maxed_player_combat_stats(&s->player, 99);
     osrs_item_effect_state_init(&s->player.item_effect_state);
@@ -425,21 +478,10 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
         ctx->config.beginner_loadout_fraction,
         &s->rng_state);
     const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
     encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
-    encounter_populate_inventory(&s->player, loadouts, COLO_NUM_WEAPON_SETS, NULL);
-    {
-        /* spec weapons are weapon-slot inventory citizens (GUI switches, L2) */
-        int n = s->player.num_items_in_slot[GEAR_SLOT_WEAPON];
-        for (int k = 0; k < COLO_NUM_SPEC_WEAPONS && n < MAX_ITEMS_PER_SLOT; k++) {
-            int dup = 0;
-            for (int j = 0; j < n; j++)
-                if (s->player.inventory[GEAR_SLOT_WEAPON][j] == spec_weapons[k]) dup = 1;
-            if (!dup) s->player.inventory[GEAR_SLOT_WEAPON][n++] = spec_weapons[k];
-        }
-        s->player.num_items_in_slot[GEAR_SLOT_WEAPON] = n;
-        encounter_clear_ammo_inventory_slot(&s->player);
-    }
+    memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));
+    memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
+    col_seed_inventory_cells_from_display(s);
 
     /* researched supplies (doses); currents live on Player, denominators here */
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
@@ -450,7 +492,6 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.ranged_potion_doses = supplies->ranged_doses;
     s->surge_doses = supplies->surge_doses;
     s->surge_cooldown = 0;
-    s->spec_armed_kind = 0;
 
     s->player.prayer = PRAYER_NONE;
     s->player.offensive_prayer = OFFENSIVE_PRAYER_NONE;

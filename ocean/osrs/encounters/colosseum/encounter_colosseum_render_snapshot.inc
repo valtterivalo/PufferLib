@@ -681,6 +681,59 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
+static void col_queue_inventory_click_action(int* actions, int inventory_slot) {
+    if (inventory_slot < 0 || inventory_slot >= COLO_INVENTORY_DISPLAY_SLOTS) return;
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        int action_head = COLO_HEAD_INV_CLICK_0 + head;
+        if (actions[action_head] == 0) {
+            actions[action_head] = inventory_slot + 1;
+            return;
+        }
+    }
+}
+
+static int col_find_inventory_cell_for_consumable(
+    const ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        const ColoInvCell* cell = &s->inventory_cells[i];
+        OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
+            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        if (r.consumable_kind == kind && col_inventory_cell_actionable(s, i))
+            return i;
+    }
+    return -1;
+}
+
+static int col_find_inventory_cell_for_any_consumable(
+    const ColosseumState* s,
+    OsrsConsumableKind a,
+    OsrsConsumableKind b
+) {
+    int cell = col_find_inventory_cell_for_consumable(s, a);
+    if (cell >= 0) return cell;
+    return col_find_inventory_cell_for_consumable(s, b);
+}
+
+static int col_local_overhead_action(int shared_action) {
+    switch (shared_action) {
+        case ENCOUNTER_OVERHEAD_NO_CHANGE:
+        case ENCOUNTER_OVERHEAD_OFF:
+            return COLO_OVERHEAD_NO_CHANGE;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE:
+            return COLO_OVERHEAD_MELEE;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED:
+            return COLO_OVERHEAD_RANGED;
+        case ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC:
+            return COLO_OVERHEAD_MAGIC;
+        default:
+            fprintf(stderr, "colosseum human prayer: unsupported shared action %d\n",
+                shared_action);
+            abort();
+    }
+}
+
 static void col_translate_human_input_ctx(
     HumanInput* hi,
     int* actions,
@@ -691,6 +744,7 @@ static void col_translate_human_input_ctx(
 
     encounter_translate_movement(hi, actions, COLO_HEAD_MOVE, col_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
+    actions[COLO_HEAD_PRAYER] = col_local_overhead_action(actions[COLO_HEAD_PRAYER]);
 
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -706,20 +760,27 @@ static void col_translate_human_input_ctx(
         actions[COLO_HEAD_TARGET] = 0;
     }
 
-    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
-    /* the colosseum EAT head IS the brew (L14); potion intents map onto the
-       researched 5-dim potion head; the spec key arms/disarms spec weapon A
-       (B is agent/lab-reachable; no second human key yet). */
-    if (hi->pending_food || hi->pending_potion == POTION_BREW)
-        actions[COLO_HEAD_EAT] = 1;
-    if (hi->pending_potion == POTION_RESTORE)
-        actions[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    if (hi->pending_potion == POTION_BREW)
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_BREW));
+    else if (hi->pending_potion == POTION_RESTORE)
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_any_consumable(
+                s, OSRS_CONSUMABLE_SUPER_RESTORE, OSRS_CONSUMABLE_SANFEW));
     else if (hi->pending_potion == POTION_COMBAT)
-        actions[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_any_consumable(
+                s, OSRS_CONSUMABLE_SUPER_COMBAT, OSRS_CONSUMABLE_DIVINE_COMBAT));
     else if (hi->pending_potion == POTION_RANGED)
-        actions[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_any_consumable(
+                s, OSRS_CONSUMABLE_RANGING, OSRS_CONSUMABLE_DIVINE_RANGING));
     else if (hi->pending_potion == POTION_SURGE)
-        actions[COLO_HEAD_POTION] = COLO_POTION_SURGE;
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_SURGE));
+    if (hi->pending_food)
+        col_queue_inventory_click_action(
+            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_SHARK_FOOD));
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
     encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
@@ -758,20 +819,22 @@ static void col_translate_human_commands_ctx(
                 break;
             }
             case HUMAN_COMMAND_OVERHEAD_PRAYER:
-                actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
+                actions[COLO_HEAD_PRAYER] = col_local_overhead_action(cmd->overhead_prayer);
                 break;
             case HUMAN_COMMAND_EAT:
-                actions[COLO_HEAD_EAT] = 1;
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_DRINK:
-                actions[COLO_HEAD_POTION] = 1;
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
                 actions[COLO_HEAD_SPEC] = 1;
                 break;
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                break;
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
             case HUMAN_COMMAND_SPELL_TARGET:
-            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
             case HUMAN_COMMAND_FIGHT_STYLE:
             case HUMAN_COMMAND_SET_AUTOCAST:
             case HUMAN_COMMAND_ITEM_ON_ITEM:
@@ -784,7 +847,6 @@ static void col_translate_human_commands_ctx(
 
     /* gear/draft/grapple intents are staged on pending_* (not the command queue),
        so fold them in here exactly as the per-tick translate path does. */
-    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
@@ -820,8 +882,10 @@ static void col_step_human_commands_ctx(
    v6: E13 stat drift and divine potion timers.
    v7: manticore fixed orb cycle split from active telegraph state.
    v8: combat-fidelity pass — magic weapon set (COLO_GEAR_MAGIC), Arceuus thrall
-       fields, and Death Charge window/cooldown added to ColosseumState. */
-#define COLO_SNAPSHOT_VERSION 8u
+       fields, and Death Charge window/cooldown added to ColosseumState.
+   v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
+       special attack contract. */
+#define COLO_SNAPSHOT_VERSION 9u
 
 typedef struct {
     uint32_t magic;

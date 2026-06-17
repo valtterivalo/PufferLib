@@ -163,6 +163,10 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_ANCIENT_GS:
         case ITEM_GRANITE_MAUL:
         case ITEM_ELDER_MAUL:
+        case ITEM_SGS:
+        case ITEM_SCYTHE_OF_VITUR:
+        case ITEM_OSMUMTENS_FANG:
+        case ITEM_ABYSSAL_TENTACLE:
         case ITEM_VESTAS:
         case ITEM_VOIDWAKER:
         case ITEM_STATIUS_WARHAMMER:
@@ -178,6 +182,7 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_BOW_OF_FAERDHINEN:
         case ITEM_TWISTED_BOW:
         case ITEM_TOXIC_BLOWPIPE:
+        case ITEM_VENATOR_BOW:
             return 2;  // ATTACK_STYLE_RANGED
         // Magic weapons
         case ITEM_AHRIM_STAFF:
@@ -189,6 +194,7 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_TRIDENT_OF_SWAMP:
         case ITEM_SANGUINESTI_STAFF:
         case ITEM_EYE_OF_AYAK:
+        case ITEM_TUMEKENS_SHADOW:
             return 3;  // ATTACK_STYLE_MAGIC
         default:
             return 0;  // ATTACK_STYLE_NONE

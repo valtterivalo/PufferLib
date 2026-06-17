@@ -25,10 +25,9 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (5): no_change always valid; set melee/ranged/magic valid iff
-       prayer points remain; off valid iff a prayer is active. */
+    /* HEAD_PRAYER (4): no_change always valid; set melee/ranged/magic valid iff
+       prayer points remain. */
     mask[offset++] = 1.0f;
-    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
@@ -39,62 +38,20 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
-    /* HEAD_GEAR (4): no_switch always valid; set-X valid iff not already set X. */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_RANGED) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_MAGIC) ? 1.0f : 0.0f;
-
-    /* HEAD_EAT (2): none always valid; brew valid iff doses + off-timer + hurt. */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.brew_doses > 0 && s->player.potion_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
-
-    /* HEAD_POTION (5): none, restore, super combat, ranging, surge (L15).
-       restore unmasks when a stat is drained, prayer is meaningfully low, or
-       (sanfew) venom is ticking. Boost pots mirror inferno's bastion window
-       [base, base+5] so a drained player restores first. E13 divine boost
-       pots also require more than 10 Hitpoints. Surge needs a dose, no
-       cooldown, and missing spec energy. */
-    mask[offset++] = 1.0f;
-    {
-        int pray_missing = s->player.base_prayer - s->player.current_prayer;
-        int restore_amount = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW)
-            ? osrs_sanfew_restore_amount(s->player.base_prayer)
-            : osrs_super_restore_amount(s->player.base_prayer);
-        int stats_drained =
-            s->player.current_attack < s->player.base_attack ||
-            s->player.current_strength < s->player.base_strength ||
-            s->player.current_defence < s->player.base_defence ||
-            s->player.current_ranged < s->player.base_ranged ||
-            s->player.current_magic < s->player.base_magic;
-        int pray_worth = pray_missing >= (restore_amount + 1) / 2;
-        int venom_cure = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW &&
-                          s->player_venom > 0);
-        mask[offset++] = (s->player.restore_doses > 0 &&
-                          s->player.potion_timer == 0 &&
-                          (stats_drained || pray_worth || venom_cure)) ? 1.0f : 0.0f;
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        mask[offset++] = 1.0f;
+        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+            mask[offset++] = col_inventory_cell_actionable(s, cell) ? 1.0f : 0.0f;
+        }
     }
-    mask[offset++] = (s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
-                      (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
-                      s->player.current_attack >= s->player.base_attack &&
-                      s->player.current_attack <= s->player.base_attack + 5) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
-                      (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
-                      s->player.current_ranged >= s->player.base_ranged &&
-                      s->player.current_ranged <= s->player.base_ranged + 5) ? 1.0f : 0.0f;
-    mask[offset++] = (s->surge_doses > 0 && s->player.potion_timer == 0 &&
-                      s->surge_cooldown == 0 &&
-                      s->player.special_energy < 100) ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (3): none always valid; arm spec k valid iff energy covers that
-       weapon's cost, or it is already armed (so the press disarms). */
+    /* HEAD_SPEC (3): none, arm equipped spec weapon, disarm. */
     mask[offset++] = 1.0f;
-    for (int k = 1; k <= COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_item = COLO_SPEC_WEAPONS[s->active_loadout_profile][k - 1];
-        int can_arm = s->player.special_energy >= osrs_spec_cost(spec_item);
-        mask[offset++] = (can_arm || s->spec_armed_kind == k) ? 1.0f : 0.0f;
-    }
+    int spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
+    mask[offset++] = (spec_cost > 0 &&
+                      (s->player.special_energy >= spec_cost || s->player.spec_armed))
+        ? 1.0f : 0.0f;
+    mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
     /* HEAD_MODIFIER_SELECT (4): none always valid; pick option k valid ONLY while a
        draft is pending and that option slot holds a real modifier id. */
@@ -118,7 +75,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set == COLO_GEAR_MAGIC && s->player.current_prayer > 0 &&
+    mask[offset++] = (col_equipped_weapon_attack_style(&s->player) == ATTACK_STYLE_MAGIC &&
+                      s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 
     /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,
@@ -169,13 +127,11 @@ static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context
 
 static void col_prepare_render_player(const ColosseumState* s, int spec_fired_kind, Player* out) {
     *out = s->player;
-    GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED
-                 : s->weapon_set == COLO_GEAR_MAGIC ? GEAR_MAGE
-                 : GEAR_MELEE;
+    GearSet gear = col_gear_set_for_attack_style(col_equipped_weapon_attack_style(&s->player));
     out->current_gear = gear;
     out->visible_gear = gear;
-    if (spec_fired_kind > 0 && spec_fired_kind <= COLO_NUM_SPEC_WEAPONS) {
-        out->equipped[GEAR_SLOT_WEAPON] = col_spec_weapon_for_kind(s, spec_fired_kind);
+    if (spec_fired_kind > 0 && spec_fired_kind < NUM_ITEMS) {
+        out->equipped[GEAR_SLOT_WEAPON] = (uint8_t)spec_fired_kind;
         out->equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
             out->equipped[GEAR_SLOT_WEAPON], out->equipped[GEAR_SLOT_SHIELD]);
         out->current_gear = GEAR_MELEE;

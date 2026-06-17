@@ -70,7 +70,7 @@ static char* col_lab_alloc_json(ColosseumState* s) {
         s->player_attack_npc_idx, s->player_attack_dmg,
         s->active_loadout_profile, s->player.brew_doses, s->player.restore_doses,
         s->player.combat_potion_doses, s->player.ranged_potion_doses, s->surge_doses,
-        s->surge_cooldown, s->player.special_energy, s->spec_armed_kind,
+        s->surge_cooldown, s->player.special_energy, s->player.spec_armed,
         s->thrall_active, s->thrall_target_slot, s->thrall_lifetime_left,
         s->thrall_recast_cd, s->death_charge_window_left, s->death_charge_cd);
     col_lab_append_modifiers_json(s, &out);

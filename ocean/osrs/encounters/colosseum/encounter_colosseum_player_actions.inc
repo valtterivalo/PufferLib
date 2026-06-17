@@ -3,39 +3,62 @@
  * @file encounter_colosseum_player_actions.inc
  * @brief Action head layout + player tick, mirroring inferno player_actions.
  *
- * Action heads (10): MOVE, PRAYER, TARGET, GEAR, EAT, POTION, SPEC,
- * MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE. The player tick reuses the shared
- * osrs_encounter_player_step orchestrator for target acquisition, movement, and
- * chase-into-range.
+ * Action heads (36): MOVE, PRAYER, TARGET, 28 inventory-click heads, SPEC,
+ * MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL. Inventory heads share the
+ * same 29-way domain: 0=noop, k=click inventory cell k-1.
  */
 
 #define COLO_HEAD_MOVE            0  /* 25: idle + 8 walk + 16 run */
-#define COLO_HEAD_PRAYER          1  /* overhead protect set */
+#define COLO_HEAD_PRAYER          1  /* none, melee, ranged, magic */
 #define COLO_HEAD_TARGET          2  /* COLO_OBS_NPCS+1: none or obs slot */
-#define COLO_HEAD_GEAR            3  /* no_switch, melee, ranged, magic */
-#define COLO_HEAD_EAT             4  /* none, brew (L14: no solid food in any kit) */
-#define COLO_HEAD_POTION          5  /* none, restore, super combat, ranging, surge (L15) */
-#define COLO_HEAD_SPEC            6  /* none + arm/disarm spec weapon A/B (L2) */
-#define COLO_HEAD_MODIFIER_SELECT 7  /* none + pick draft option 0/1/2 */
-#define COLO_HEAD_GRAPPLE_PARRY   8  /* none + the 5 grapple callout slots (A12) */
-#define COLO_HEAD_OFFENSIVE       9  /* no_change, off, piety, rigour, augury */
-#define COLO_HEAD_SPELL          10  /* none, summon-thrall, death-charge (Arceuus) */
+#define COLO_HEAD_INV_CLICK_0     3
+#define COLO_HEAD_INV_CLICK_1     4
+#define COLO_HEAD_INV_CLICK_2     5
+#define COLO_HEAD_INV_CLICK_3     6
+#define COLO_HEAD_INV_CLICK_4     7
+#define COLO_HEAD_INV_CLICK_5     8
+#define COLO_HEAD_INV_CLICK_6     9
+#define COLO_HEAD_INV_CLICK_7    10
+#define COLO_HEAD_INV_CLICK_8    11
+#define COLO_HEAD_INV_CLICK_9    12
+#define COLO_HEAD_INV_CLICK_10   13
+#define COLO_HEAD_INV_CLICK_11   14
+#define COLO_HEAD_INV_CLICK_12   15
+#define COLO_HEAD_INV_CLICK_13   16
+#define COLO_HEAD_INV_CLICK_14   17
+#define COLO_HEAD_INV_CLICK_15   18
+#define COLO_HEAD_INV_CLICK_16   19
+#define COLO_HEAD_INV_CLICK_17   20
+#define COLO_HEAD_INV_CLICK_18   21
+#define COLO_HEAD_INV_CLICK_19   22
+#define COLO_HEAD_INV_CLICK_20   23
+#define COLO_HEAD_INV_CLICK_21   24
+#define COLO_HEAD_INV_CLICK_22   25
+#define COLO_HEAD_INV_CLICK_23   26
+#define COLO_HEAD_INV_CLICK_24   27
+#define COLO_HEAD_INV_CLICK_25   28
+#define COLO_HEAD_INV_CLICK_26   29
+#define COLO_HEAD_INV_CLICK_27   30
+#define COLO_HEAD_SPEC           31  /* none, arm equipped spec, disarm */
+#define COLO_HEAD_MODIFIER_SELECT 32  /* none + pick draft option 0/1/2 */
+#define COLO_HEAD_GRAPPLE_PARRY  33  /* none + the 5 grapple callout slots (A12) */
+#define COLO_HEAD_OFFENSIVE      34  /* no_change, off, piety, rigour, augury */
+#define COLO_HEAD_SPELL          35  /* none, summon-thrall, death-charge (Arceuus) */
 
-#define COLO_GEAR_DIM 4
-#define COLO_EAT_DIM 2
-#define COLO_POTION_DIM 5
-#define COLO_SPEC_DIM (1 + COLO_NUM_SPEC_WEAPONS)  /* 3 */
+#define COLO_INV_CLICK_HEADS 28
+#define COLO_INV_CLICK_DIM 29
+#define COLO_OVERHEAD_DIM 4
+#define COLO_SPEC_DIM 3
 #define COLO_SPELL_DIM 3   /* none, summon-thrall, death-charge */
+
+#define COLO_OVERHEAD_NO_CHANGE 0
+#define COLO_OVERHEAD_MELEE 1
+#define COLO_OVERHEAD_RANGED 2
+#define COLO_OVERHEAD_MAGIC 3
 
 /* COLO_HEAD_SPELL action indices */
 #define COLO_SPELL_SUMMON_THRALL 1
 #define COLO_SPELL_DEATH_CHARGE  2
-
-/* COLO_HEAD_POTION action indices */
-#define COLO_POTION_RESTORE 1
-#define COLO_POTION_COMBAT  2
-#define COLO_POTION_RANGING 3
-#define COLO_POTION_SURGE   4
 
 #define COLO_MODIFIER_SELECT_DIM (1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 4 */
 /** grapple-parry head: index 0 = no click, index k = click grapple slot (k-1).
@@ -45,11 +68,15 @@
 
 #define COLO_ACTION_DIMS_INIT { \
     ENCOUNTER_MOVE_ACTIONS, \
-    ENCOUNTER_OVERHEAD_DIM_PVE, \
+    COLO_OVERHEAD_DIM, \
     COLO_OBS_NPCS + 1, \
-    COLO_GEAR_DIM, \
-    COLO_EAT_DIM, \
-    COLO_POTION_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
     COLO_SPEC_DIM, \
     COLO_MODIFIER_SELECT_DIM, \
     COLO_GRAPPLE_PARRY_DIM, \
@@ -57,8 +84,8 @@
     COLO_SPELL_DIM \
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
-#define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + ENCOUNTER_OVERHEAD_DIM_PVE + \
-    COLO_OBS_NPCS + 1 + COLO_GEAR_DIM + COLO_EAT_DIM + COLO_POTION_DIM + COLO_SPEC_DIM + \
+#define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + COLO_OVERHEAD_DIM + \
+    COLO_OBS_NPCS + 1 + COLO_INV_CLICK_HEADS * COLO_INV_CLICK_DIM + COLO_SPEC_DIM + \
     COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM + ENCOUNTER_OFFENSIVE_DIM + \
     COLO_SPELL_DIM)
 
@@ -69,16 +96,6 @@ static int col_action_head_mask_offset(int head) {
     return offset;
 }
 
-
-/** true when the profile's combat potion slot is the divine speedrun dose. */
-static int col_combat_potion_is_divine(const ColosseumState* s) {
-    return s->full_supplies.combat_boost_kind == COLO_BOOST_POTION_DIVINE;
-}
-
-/** true when the profile's ranging potion slot is the divine speedrun dose. */
-static int col_ranged_potion_is_divine(const ColosseumState* s) {
-    return s->full_supplies.ranged_boost_kind == COLO_BOOST_POTION_DIVINE;
-}
 
 /** E13: derive active divine stat floors from Colosseum's live timers. */
 static EncounterStatDriftPins col_divine_stat_drift_pins(const ColosseumState* s) {
@@ -149,11 +166,30 @@ static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
     s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 
+static int col_apply_overhead_action(OverheadPrayer* overhead, int action) {
+    switch (action) {
+        case COLO_OVERHEAD_NO_CHANGE:
+            return 0;
+        case COLO_OVERHEAD_MELEE:
+            *overhead = PRAYER_PROTECT_MELEE;
+            return 1;
+        case COLO_OVERHEAD_RANGED:
+            *overhead = PRAYER_PROTECT_RANGED;
+            return 1;
+        case COLO_OVERHEAD_MAGIC:
+            *overhead = PRAYER_PROTECT_MAGIC;
+            return 1;
+        default:
+            fprintf(stderr, "colosseum prayer: invalid action %d\n", action);
+            abort();
+    }
+}
+
 /** apply prayer actions + drain, before movement and attack. an offensive
     prayer change recomputes every loadout's prayer multipliers (L12). */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
     (void)ctx;
-    if (encounter_apply_overhead_action(&s->player.prayer, actions[COLO_HEAD_PRAYER]))
+    if (col_apply_overhead_action(&s->player.prayer, actions[COLO_HEAD_PRAYER]))
         s->player.prayer_just_activated = 1;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     encounter_apply_offensive_action(&s->player.offensive_prayer, actions[COLO_HEAD_OFFENSIVE]);
@@ -175,6 +211,328 @@ static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
         col_loadouts_for_profile(s->active_loadout_profile)[set], gear);
     s->weapon_set = set;
     col_mark_live_loadout_dirty(s);
+}
+
+static void col_sync_weapon_set_from_equipped_weapon(ColosseumState* s) {
+    AttackStyle style = col_equipped_weapon_attack_style(&s->player);
+    s->weapon_set = style == ATTACK_STYLE_RANGED ? COLO_GEAR_RANGED
+        : style == ATTACK_STYLE_MAGIC ? COLO_GEAR_MAGIC
+        : COLO_GEAR_MELEE;
+    s->player.current_gear = col_gear_set_for_attack_style(style);
+    s->player.visible_gear = s->player.current_gear;
+}
+
+static ColoInvCell col_inventory_cell_from_item(uint8_t item_idx) {
+    if (item_idx == ITEM_NONE) return (ColoInvCell){0};
+    if (item_idx >= NUM_ITEMS) {
+        fprintf(stderr, "colosseum: invalid item index %u for inventory cell\n", item_idx);
+        abort();
+    }
+    return (ColoInvCell){
+        .osrs_id = ITEM_DATABASE[item_idx].item_id,
+        .item_idx = item_idx,
+        .dose = 0,
+    };
+}
+
+static int col_first_empty_inventory_cell(const ColosseumState* s, int except_slot) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        if (i == except_slot) continue;
+        if (s->inventory_cells[i].osrs_id == 0 &&
+                s->inventory_cells[i].item_idx == ITEM_NONE) return i;
+    }
+    return -1;
+}
+
+static int col_inventory_cell_holds_equipped_item(const ColosseumState* s, int cell_idx) {
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (cell->item_idx == ITEM_NONE) return 0;
+    int slot = osrs_item_gear_slot(cell->item_idx);
+    if (slot < 0) return 0;
+    return s->player.equipped[slot] == cell->item_idx;
+}
+
+static int col_can_equip_from_cell(const ColosseumState* s, int cell_idx) {
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (cell->item_idx == ITEM_NONE) return 0;
+    if (col_inventory_cell_holds_equipped_item(s, cell_idx)) return 0;
+
+    uint8_t item_idx = cell->item_idx;
+    int gear_slot = osrs_item_gear_slot(item_idx);
+    if (gear_slot < 0) return 0;
+    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx) &&
+            s->player.equipped[GEAR_SLOT_SHIELD] != ITEM_NONE &&
+            s->player.equipped[GEAR_SLOT_WEAPON] != ITEM_NONE &&
+            col_first_empty_inventory_cell(s, cell_idx) < 0) return 0;
+    if (gear_slot == GEAR_SLOT_SHIELD &&
+            item_is_two_handed(s->player.equipped[GEAR_SLOT_WEAPON]) &&
+            col_first_empty_inventory_cell(s, cell_idx) < 0) return 0;
+    return 1;
+}
+
+static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
+    if (!col_can_equip_from_cell(s, cell_idx)) return;
+
+    ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    uint8_t item_idx = cell->item_idx;
+    int gear_slot = osrs_item_gear_slot(item_idx);
+    if (gear_slot < 0) {
+        fprintf(stderr, "colosseum equip: item %u has no gear slot\n", item_idx);
+        abort();
+    }
+    uint8_t displaced = s->player.equipped[gear_slot];
+
+    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx)) {
+        uint8_t shield = s->player.equipped[GEAR_SLOT_SHIELD];
+        if (shield != ITEM_NONE) {
+            if (displaced == ITEM_NONE) {
+                displaced = shield;
+            } else {
+                int empty = col_first_empty_inventory_cell(s, cell_idx);
+                if (empty < 0) return;
+                s->inventory_cells[empty] = col_inventory_cell_from_item(shield);
+            }
+            s->player.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        }
+    } else if (gear_slot == GEAR_SLOT_SHIELD &&
+            item_is_two_handed(s->player.equipped[GEAR_SLOT_WEAPON])) {
+        displaced = s->player.equipped[GEAR_SLOT_WEAPON];
+        s->player.equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
+    }
+
+    s->player.equipped[gear_slot] = item_idx;
+    *cell = col_inventory_cell_from_item(displaced);
+    if (gear_slot == GEAR_SLOT_WEAPON) s->player.spec_armed = 0;
+    osrs_refresh_player_equipment(&s->player);
+    col_sync_weapon_set_from_equipped_weapon(s);
+    col_mark_live_loadout_dirty(s);
+}
+
+static int col_can_use_consumable_kind(
+    const ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    if (s->player.potion_timer > 0) return 0;
+    switch (kind) {
+        case OSRS_CONSUMABLE_BREW:
+            return s->player.current_hitpoints < s->player.base_hitpoints;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+        case OSRS_CONSUMABLE_SANFEW: {
+            int pray_missing = s->player.base_prayer - s->player.current_prayer;
+            int restore_amount = kind == OSRS_CONSUMABLE_SANFEW
+                ? osrs_sanfew_restore_amount(s->player.base_prayer)
+                : osrs_super_restore_amount(s->player.base_prayer);
+            int stats_drained =
+                s->player.current_attack < s->player.base_attack ||
+                s->player.current_strength < s->player.base_strength ||
+                s->player.current_defence < s->player.base_defence ||
+                s->player.current_ranged < s->player.base_ranged ||
+                s->player.current_magic < s->player.base_magic;
+            int pray_worth = pray_missing >= (restore_amount + 1) / 2;
+            int venom_cure = kind == OSRS_CONSUMABLE_SANFEW && s->player_venom > 0;
+            return stats_drained || pray_worth || venom_cure;
+        }
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+            return s->player.current_attack >= s->player.base_attack &&
+                s->player.current_attack <= s->player.base_attack + 5;
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+            return s->player.current_hitpoints > 10 &&
+                s->player.current_attack >= s->player.base_attack &&
+                s->player.current_attack <= s->player.base_attack + 5;
+        case OSRS_CONSUMABLE_RANGING:
+            return s->player.current_ranged >= s->player.base_ranged &&
+                s->player.current_ranged <= s->player.base_ranged + 5;
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+            return s->player.current_hitpoints > 10 &&
+                s->player.current_ranged >= s->player.base_ranged &&
+                s->player.current_ranged <= s->player.base_ranged + 5;
+        case OSRS_CONSUMABLE_SURGE:
+            return s->surge_cooldown == 0 && s->player.special_energy < 100;
+        case OSRS_CONSUMABLE_GUTHIX_REST:
+            return s->player.current_hitpoints < s->player.base_hitpoints ||
+                s->player_venom > 0 || s->player_poison > 0;
+        case OSRS_CONSUMABLE_SATURATED_HEART:
+            return s->player.current_magic <= s->player.base_magic;
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+            return s->player.food_timer == 0 &&
+                s->player.current_hitpoints < s->player.base_hitpoints;
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            return s->player.karambwan_timer == 0 &&
+                s->player.current_hitpoints < s->player.base_hitpoints;
+        case OSRS_CONSUMABLE_NONE:
+            return 0;
+    }
+    abort();
+}
+
+static int col_inventory_cell_actionable(const ColosseumState* s, int cell_idx) {
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
+        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+    if (r.click_action == OSRS_CLICK_EQUIP) return col_can_equip_from_cell(s, cell_idx);
+    if (r.click_action == OSRS_CLICK_DRINK)
+        return cell->dose > 0 && col_can_use_consumable_kind(s, r.consumable_kind);
+    if (r.click_action == OSRS_CLICK_EAT)
+        return col_can_use_consumable_kind(s, r.consumable_kind);
+    return 0;
+}
+
+static void col_empty_inventory_cell(ColosseumState* s, int cell_idx) {
+    s->inventory_cells[cell_idx] = (ColoInvCell){
+        .osrs_id = 0,
+        .item_idx = ITEM_NONE,
+        .dose = 0,
+    };
+}
+
+static void col_decrement_consumable_cell(
+    ColosseumState* s,
+    int cell_idx,
+    OsrsInventoryClickResolution resolution
+) {
+    ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (resolution.click_action == OSRS_CLICK_EAT || resolution.raw_osrs_id_after_drink == 0) {
+        col_empty_inventory_cell(s, cell_idx);
+        return;
+    }
+    cell->osrs_id = resolution.raw_osrs_id_after_drink;
+    cell->item_idx = ITEM_NONE;
+    cell->dose = osrs_consumable_dose_count_after_drink(cell->dose);
+}
+
+static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
+    FoodType type;
+    if (kind == OSRS_CONSUMABLE_SHARK_FOOD) type = FOOD_SHARK;
+    else if (kind == OSRS_CONSUMABLE_KARAMBWAN) type = FOOD_KARAMBWAN;
+    else {
+        fprintf(stderr, "colosseum: consumable kind %d is not food\n", (int)kind);
+        abort();
+    }
+
+    EatResult r = osrs_eat_food(type, s->player.current_hitpoints,
+        s->player.base_hitpoints, osrs_player_food_timer(&s->player, type));
+    if (!r.consumed) return;
+    if (type == FOOD_KARAMBWAN) {
+        s->player.karambwan_timer = 2;
+        s->player.food_timer = 3;
+        s->player.potion_timer = 3;
+        s->player.ate_karambwan_this_tick = 1;
+        s->player.last_karambwan_heal = r.hp_healed;
+    } else {
+        s->player.food_timer = 3;
+        s->player.ate_food_this_tick = 1;
+        s->player.last_food_heal = r.hp_healed;
+    }
+    s->player.current_hitpoints += r.hp_healed;
+    if (s->player.current_hitpoints > s->player.base_hitpoints)
+        s->player.current_hitpoints = s->player.base_hitpoints;
+}
+
+static void col_apply_drink_cell(ColosseumState* s, OsrsConsumableKind kind) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_BREW:
+            encounter_apply_brew_heal_and_timer(
+                &s->player, osrs_brew_heal_amount(s->player.base_hitpoints));
+            encounter_apply_consumable_stat_effect(
+                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
+            col_finish_stat_moving_consumable(s);
+            return;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+            encounter_add_prayer_restore(
+                &s->player, osrs_super_restore_amount(s->player.base_prayer));
+            encounter_apply_consumable_stat_effect(
+                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
+            encounter_cap_prayer_restore(&s->player);
+            encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
+            col_finish_stat_moving_consumable(s);
+            return;
+        case OSRS_CONSUMABLE_SANFEW:
+            encounter_add_prayer_restore(
+                &s->player, osrs_sanfew_restore_amount(s->player.base_prayer));
+            encounter_apply_consumable_stat_effect(
+                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW);
+            s->player_venom = 0;
+            s->player_venom_timer = 0;
+            s->player_poison = 0;
+            s->player_poison_timer = 0;
+            encounter_cap_prayer_restore(&s->player);
+            encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
+            col_finish_stat_moving_consumable(s);
+            return;
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+            encounter_super_combat_boost(&s->player);
+            col_enforce_divine_stat_floors(s);
+            encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
+            col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+            encounter_super_combat_boost(&s->player);
+            col_apply_divine_combat_potion_effect(s);
+            col_enforce_divine_stat_floors(s);
+            encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
+            col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_RANGING:
+            encounter_ranging_boost(&s->player);
+            col_enforce_divine_stat_floors(s);
+            encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
+            col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+            encounter_ranging_boost(&s->player);
+            col_apply_divine_ranged_potion_effect(s);
+            col_enforce_divine_stat_floors(s);
+            encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
+            col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_SURGE:
+            s->player.special_energy += COLO_SURGE_RESTORE_AMOUNT;
+            if (s->player.special_energy > 100) s->player.special_energy = 100;
+            s->surge_doses--;
+            s->surge_cooldown = COLO_SURGE_COOLDOWN_TICKS;
+            s->player.potion_timer = 3;
+            return;
+        case OSRS_CONSUMABLE_GUTHIX_REST:
+            s->player.current_hitpoints += 5;
+            if (s->player.current_hitpoints > s->player.base_hitpoints)
+                s->player.current_hitpoints = s->player.base_hitpoints;
+            s->player_venom = 0;
+            s->player_venom_timer = 0;
+            s->player_poison = 0;
+            s->player_poison_timer = 0;
+            s->player.potion_timer = 3;
+            return;
+        case OSRS_CONSUMABLE_SATURATED_HEART:
+            encounter_apply_saturated_heart_boost(&s->player);
+            col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_NONE:
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            fprintf(stderr, "colosseum: consumable kind %d is not drinkable\n", (int)kind);
+            abort();
+    }
+    abort();
+}
+
+static void col_click_inventory_cell(ColosseumState* s, int cell_idx) {
+    if (cell_idx < 0 || cell_idx >= COLO_INVENTORY_DISPLAY_SLOTS) return;
+    ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+    if (resolution.click_action == OSRS_CLICK_EQUIP) {
+        col_equip_from_cell(s, cell_idx);
+    } else if (resolution.click_action == OSRS_CLICK_DRINK) {
+        if (cell->dose > 0 && col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+            col_apply_drink_cell(s, resolution.consumable_kind);
+            col_decrement_consumable_cell(s, cell_idx, resolution);
+        }
+    } else if (resolution.click_action == OSRS_CLICK_EAT) {
+        if (col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+            col_apply_food_cell(s, resolution.consumable_kind);
+            col_empty_inventory_cell(s, cell_idx);
+        }
+    }
 }
 
 
@@ -253,15 +611,9 @@ static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     return col_player_walkable(wc->s, abs_x, abs_y) ? 0 : 1;
 }
 
-/** the player's effective attack reach, after Myopia's range reduction. an
-    armed spec weapon (all melee) pulls the reach to its own range (L2). */
+/** the player's effective attack reach, after Myopia's range reduction. */
 static int col_player_attack_range(ColosseumState* s) {
-    ColoSpecLoadout spec_loadout;
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
-    if (s->spec_armed_kind > 0) {
-        col_compute_spec_loadout(s, s->spec_armed_kind, &spec_loadout);
-        ls = &spec_loadout.stats;
-    }
     int base = ls->attack_range > 0 ? ls->attack_range : 1;
     return col_mod_myopia_range(s, base);
 }
@@ -333,13 +685,11 @@ static int col_melee_def_bonus(const ColoNpcStats* ns, MeleeStyle ms) {
 static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-    int kind = s->spec_armed_kind;
-    ColoSpecLoadout spec_loadout;
-    col_compute_spec_loadout(s, kind, &spec_loadout);
-    uint8_t item = spec_loadout.weapon_item;
-    const EncounterLoadoutStats* ls = &spec_loadout.stats;
+    uint8_t item = s->player.equipped[GEAR_SLOT_WEAPON];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
+    const OsrsEquipmentEffectProfile* effects = col_live_effects(s);
 
-    s->spec_armed_kind = 0;
+    s->player.spec_armed = 0;
     if (!encounter_use_spec(&s->player, osrs_spec_cost(item))) return;
 
     int eff_def = col_npc_effective_def_level(npc, ns);
@@ -379,7 +729,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     }
 
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(
-        &spec_loadout.effects, &s->player.item_effect_state, item,
+        effects, &s->player.item_effect_state, item,
         ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
         0, total > 0, total, &s->rng_state);
     if (post.heal_amount > 0) {
@@ -547,7 +897,7 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
-    if (!col_type_is_hazard_entity(npc->type) && s->spec_armed_kind > 0) {
+    if (!col_type_is_hazard_entity(npc->type) && s->player.spec_armed) {
         col_player_spec_attack(s, npc_slot);
         return;
     }
@@ -639,90 +989,38 @@ static void col_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
-    /* gear switch */
-    int gear_act = actions[COLO_HEAD_GEAR];
-    if (gear_act == 1) col_apply_weapon_set(s, COLO_GEAR_MELEE);
-    else if (gear_act == 2) col_apply_weapon_set(s, COLO_GEAR_RANGED);
-    else if (gear_act == 3) col_apply_weapon_set(s, COLO_GEAR_MAGIC);
-
     /* spec energy regen runs every tick, gaps included (OSRS regen never pauses) */
     encounter_tick_spec_regen(&s->player);
 
-    /* consumables — shared 3-tick potion timer; supplies are the researched
-       profile inventory (L4/L5/L14/L15). every stat-moving drink recomputes the
-       loadout max hits (L12). */
     if (s->player.potion_timer > 0) s->player.potion_timer--;
+    if (s->player.food_timer > 0) s->player.food_timer--;
+    if (s->player.karambwan_timer > 0) s->player.karambwan_timer--;
+    if (encounter_tick_saturated_heart(&s->player))
+        col_mark_live_loadout_dirty(s);
 
-    int eat_act = actions[COLO_HEAD_EAT];
-    if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
-        && s->player.current_hitpoints < s->player.base_hitpoints) {
-        encounter_apply_brew_heal_and_timer(
-            &s->player, osrs_brew_heal_amount(s->player.base_hitpoints));
-        encounter_apply_consumable_stat_effect(
-            &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
-        col_finish_stat_moving_consumable(s);
-    }
-
-    int pot_act = actions[COLO_HEAD_POTION];
-    if (pot_act == COLO_POTION_RESTORE &&
-            s->player.restore_doses > 0 && s->player.potion_timer == 0) {
-        if (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW) {
-            encounter_add_prayer_restore(
-                &s->player, osrs_sanfew_restore_amount(s->player.base_prayer));
-            encounter_apply_consumable_stat_effect(
-                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW);
-            s->player_venom = 0;
-            s->player_venom_timer = 0;
-            s->player_poison = 0;
-            s->player_poison_timer = 0;
-        } else {
-            encounter_add_prayer_restore(
-                &s->player, osrs_super_restore_amount(s->player.base_prayer));
-            encounter_apply_consumable_stat_effect(
-                &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
+    int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        int action = actions[COLO_HEAD_INV_CLICK_0 + head];
+        if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
+        int cell_idx = action - 1;
+        if (clicked[cell_idx]) {
+            (void)osrs_inventory_click_interpret(
+                s->inventory_cells[cell_idx].item_idx,
+                s->inventory_cells[cell_idx].osrs_id,
+                OSRS_CLICK_TICK_DUPLICATE);
+            continue;
         }
-        encounter_cap_prayer_restore(&s->player);
-        encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
-        col_finish_stat_moving_consumable(s);
-    } else if (pot_act == COLO_POTION_COMBAT &&
-            s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
-            (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
-        encounter_super_combat_boost(&s->player);
-        if (col_combat_potion_is_divine(s))
-            col_apply_divine_combat_potion_effect(s);
-        col_enforce_divine_stat_floors(s);
-        encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
-        col_mark_live_loadout_dirty(s);
-    } else if (pot_act == COLO_POTION_RANGING &&
-            s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
-            (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10)) {
-        encounter_ranging_boost(&s->player);
-        if (col_ranged_potion_is_divine(s))
-            col_apply_divine_ranged_potion_effect(s);
-        col_enforce_divine_stat_floors(s);
-        encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
-        col_mark_live_loadout_dirty(s);
-    } else if (pot_act == COLO_POTION_SURGE &&
-            s->surge_doses > 0 && s->player.potion_timer == 0 &&
-            s->surge_cooldown == 0 && s->player.special_energy < 100) {
-        s->player.special_energy += COLO_SURGE_RESTORE_AMOUNT;
-        if (s->player.special_energy > 100) s->player.special_energy = 100;
-        s->surge_doses--;
-        s->surge_cooldown = COLO_SURGE_COOLDOWN_TICKS;
-        s->player.potion_timer = 3;
+        clicked[cell_idx] = 1;
+        col_click_inventory_cell(s, cell_idx);
     }
 
-    /* spec arm/disarm (L2): action k toggles spec weapon k-1; arming requires
-       the energy for that weapon's cost. firing clears the armed state. */
     int spec_act = actions[COLO_HEAD_SPEC];
-    if (spec_act > 0 && spec_act <= COLO_NUM_SPEC_WEAPONS) {
-        if (s->spec_armed_kind == spec_act) {
-            s->spec_armed_kind = 0;
-        } else {
-            uint8_t spec_item = COLO_SPEC_WEAPONS[s->active_loadout_profile][spec_act - 1];
-            if (s->player.special_energy >= osrs_spec_cost(spec_item))
-                s->spec_armed_kind = spec_act;
-        }
+    uint8_t equipped_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
+    int spec_cost = osrs_spec_cost(equipped_weapon);
+    if (spec_act == 1 && spec_cost > 0 && s->player.special_energy >= spec_cost) {
+        s->player.spec_armed = 1;
+    } else if (spec_act == 2) {
+        s->player.spec_armed = 0;
     }
 
     /* Arceuus spells (L: thralls + Death Charge). summon-thrall is gated on
@@ -825,7 +1123,8 @@ static void col_tick_player_ctx(
                 /* render-only: capture the armed spec kind before the attack
                    consumes it, so the player render swaps to the spec weapon. */
                 int armed_kind = (!col_type_is_hazard_entity(npc->type) &&
-                                  s->spec_armed_kind > 0) ? s->spec_armed_kind : 0;
+                                  s->player.spec_armed)
+                    ? s->player.equipped[GEAR_SLOT_WEAPON] : 0;
                 col_player_attack_target(s, slot);
                 if (ctx && armed_kind > 0 && s->player.used_special_this_tick)
                     ctx->player_spec_fired_kind = armed_kind;

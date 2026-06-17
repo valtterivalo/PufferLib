@@ -64,6 +64,9 @@ typedef struct {
     uint16_t raw_osrs_id_after_drink;
 } OsrsInventoryClickResolution;
 
+#define OSRS_INVENTORY_CELL_OBS_FEATURES 16
+#define OSRS_EQUIPPED_SELF_OBS_FEATURES 12
+
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {6685, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BREW, 4},
     {6687, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BREW, 3},
@@ -106,12 +109,120 @@ static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {3144, OSRS_CLICK_EAT, OSRS_CONSUMABLE_KARAMBWAN, 0},
 };
 
+static inline OsrsConsumableClick osrs_consumable_click_lookup_raw_osrs_id(
+    uint16_t raw_osrs_id
+);
+
 static inline void osrs_inventory_clicks_trap(void) {
 #if defined(__clang__) || defined(__GNUC__)
     __builtin_trap();
 #else
     *(volatile int*)0 = 0;
 #endif
+}
+
+/**
+ * Finds an ITEM_DATABASE index by raw OSRS item id.
+ *
+ * Returns ITEM_NONE when the raw id is not an equippable database item.
+ */
+static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
+    for (int i = 0; i < NUM_ITEMS; i++) {
+        if (ITEM_DATABASE[i].item_id == raw_osrs_id) return (uint8_t)i;
+    }
+    return ITEM_NONE;
+}
+
+/**
+ * Writes the shared 16-float inventory-cell affordance layout.
+ *
+ * Layout:
+ * [0] present
+ * [1] is gear
+ * [2] is consumable
+ * [3] can use
+ * [4] is equipped
+ * [5] dose fraction
+ * [6] weapon melee style
+ * [7] weapon ranged style
+ * [8] weapon magic style
+ * [9] slash attack delta
+ * [10] melee strength delta
+ * [11] ranged attack delta
+ * [12] ranged strength delta
+ * [13] magic attack plus damage delta
+ * [14] aggregate defence delta
+ * [15] has item effect
+ */
+static inline void osrs_write_inventory_cell_affordance_features(
+    float* out,
+    uint8_t item_idx,
+    uint16_t raw_osrs_id,
+    uint8_t dose,
+    int can_use,
+    int is_equipped,
+    const float post_use_deltas[6]
+) {
+    OsrsConsumableClick consumable =
+        osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
+    int present = raw_osrs_id != 0 || item_idx != ITEM_NONE;
+    int is_gear = item_idx != ITEM_NONE;
+    int is_consumable = consumable.click_action != OSRS_CLICK_NONE;
+    int style = is_gear ? get_item_attack_style(item_idx) : 0;
+    uint32_t effect_mask = is_gear ? ITEM_DATABASE[item_idx].effect_mask : OSRS_ITEM_EFFECT_NONE;
+
+    out[0] = present ? 1.0f : 0.0f;
+    out[1] = is_gear ? 1.0f : 0.0f;
+    out[2] = is_consumable ? 1.0f : 0.0f;
+    out[3] = can_use ? 1.0f : 0.0f;
+    out[4] = is_equipped ? 1.0f : 0.0f;
+    out[5] = dose > 0 ? (float)dose / 4.0f : 0.0f;
+    out[6] = style == 1 ? 1.0f : 0.0f;
+    out[7] = style == 2 ? 1.0f : 0.0f;
+    out[8] = style == 3 ? 1.0f : 0.0f;
+    for (int i = 0; i < 6; i++) out[9 + i] = post_use_deltas[i];
+    out[15] = effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
+}
+
+/**
+ * Writes the shared 12-float equipped-item self layout.
+ *
+ * Layout:
+ * [0] present
+ * [1] melee style
+ * [2] ranged style
+ * [3] magic style
+ * [4] slash attack
+ * [5] melee strength
+ * [6] ranged attack
+ * [7] ranged strength
+ * [8] magic attack plus damage
+ * [9] aggregate defence
+ * [10] has item effect
+ * [11] is weapon
+ */
+static inline void osrs_write_equipped_self_features(float* out, uint8_t item_idx) {
+    for (int i = 0; i < OSRS_EQUIPPED_SELF_OBS_FEATURES; i++) out[i] = 0.0f;
+    if (item_idx == ITEM_NONE) return;
+    if (item_idx >= NUM_ITEMS) osrs_inventory_clicks_trap();
+
+    const Item* item = &ITEM_DATABASE[item_idx];
+    int style = get_item_attack_style(item_idx);
+    out[0] = 1.0f;
+    out[1] = style == 1 ? 1.0f : 0.0f;
+    out[2] = style == 2 ? 1.0f : 0.0f;
+    out[3] = style == 3 ? 1.0f : 0.0f;
+    out[4] = (float)item->attack_slash / STAT_NORM_ATTACK;
+    out[5] = (float)item->melee_strength / STAT_NORM_STRENGTH;
+    out[6] = (float)item->attack_ranged / STAT_NORM_ATTACK;
+    out[7] = (float)item->ranged_strength / STAT_NORM_STRENGTH;
+    out[8] = ((float)item->attack_magic / STAT_NORM_ATTACK) +
+        ((float)item->magic_damage / STAT_NORM_MAGIC_DMG);
+    out[9] = (float)(item->defence_stab + item->defence_slash +
+        item->defence_crush + item->defence_magic + item->defence_ranged) /
+        (5.0f * STAT_NORM_DEFENCE);
+    out[10] = item->effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
+    out[11] = item->slot == SLOT_WEAPON ? 1.0f : 0.0f;
 }
 
 /**

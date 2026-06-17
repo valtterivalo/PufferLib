@@ -4,9 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(45) + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) + threat-LoS(3)
- *   + thrall/Death-Charge(6) = 1190.
+ *   player(28) + inventory cells(28 * 16) + equipped self(11 * 12)
+ *   + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 1753.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -26,7 +27,11 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      45   /* +5 offensive level deltas + 2 divine boost timers */
+#define COLO_PLAYER_OBS_SIZE      28
+#define COLO_INVENTORY_OBS_SIZE \
+    (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
+#define COLO_EQUIPPED_SELF_OBS_SIZE \
+    (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
 #define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 720 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
@@ -56,13 +61,17 @@
     downstream via the existing spec_energy obs. */
 #define COLO_THRALL_DC_OBS_SIZE   6
 
-#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
+#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_INVENTORY_OBS_SIZE + \
+    COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
     COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
     COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
-#define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_PLAYER + COLO_NPC_OBS_SIZE)
+#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PLAYER + COLO_INVENTORY_OBS_SIZE)
+#define COLO_OBS_AFTER_EQUIPPED_SELF \
+    (COLO_OBS_AFTER_INVENTORY + COLO_EQUIPPED_SELF_OBS_SIZE)
+#define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_OBS_SIZE)
 #define COLO_OBS_AFTER_MODS     (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_OBS_SIZE)
 #define COLO_OBS_AFTER_WAVE     (COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE)
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
@@ -81,13 +90,6 @@ static inline float col_clamp01(float v) {
     if (v < 0.0f) return 0.0f;
     if (v > 1.0f) return 1.0f;
     return v;
-}
-
-/** current-vs-base level as a [0,1] feature centered at 0.5 (base): boosts read
-    above 0.5, brew drains below. base 0 reads 0.5 (no signal). */
-static inline float col_stat_delta_norm(int current, int base) {
-    if (base <= 0) return 0.5f;
-    return col_clamp01(0.5f + (float)(current - base) / (2.0f * (float)base));
 }
 
 /** egocentric x offset, normalized to [-1, 1] by arena width. */
@@ -583,6 +585,104 @@ static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
     *idx = i;
 }
 
+static void col_equipment_bonus_projection(
+    const uint8_t equipment[NUM_GEAR_SLOTS],
+    float out[6]
+) {
+    int slash = 0;
+    int melee_str = 0;
+    int ranged_att = 0;
+    int ranged_str = 0;
+    int magic = 0;
+    int defence = 0;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t item_idx = equipment[slot];
+        if (item_idx == ITEM_NONE) continue;
+        if (item_idx >= NUM_ITEMS) {
+            fprintf(stderr, "colosseum obs: invalid equipped item %u\n", item_idx);
+            abort();
+        }
+        const Item* item = &ITEM_DATABASE[item_idx];
+        slash += item->attack_slash;
+        melee_str += item->melee_strength;
+        ranged_att += item->attack_ranged;
+        ranged_str += item->ranged_strength;
+        magic += item->attack_magic + item->magic_damage;
+        defence += item->defence_stab + item->defence_slash + item->defence_crush +
+            item->defence_magic + item->defence_ranged;
+    }
+    out[0] = (float)slash / STAT_NORM_ATTACK;
+    out[1] = (float)melee_str / STAT_NORM_STRENGTH;
+    out[2] = (float)ranged_att / STAT_NORM_ATTACK;
+    out[3] = (float)ranged_str / STAT_NORM_STRENGTH;
+    out[4] = (float)magic / (STAT_NORM_ATTACK + STAT_NORM_MAGIC_DMG);
+    out[5] = (float)defence / (5.0f * STAT_NORM_DEFENCE);
+}
+
+static void col_hypothetical_equipment_after_cell(
+    const ColosseumState* s,
+    int cell_idx,
+    uint8_t out[NUM_GEAR_SLOTS]
+) {
+    memcpy(out, s->player.equipped, NUM_GEAR_SLOTS);
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (cell->item_idx == ITEM_NONE) return;
+    int gear_slot = osrs_item_gear_slot(cell->item_idx);
+    if (gear_slot < 0) return;
+    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(cell->item_idx))
+        out[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    if (gear_slot == GEAR_SLOT_SHIELD && item_is_two_handed(out[GEAR_SLOT_WEAPON]))
+        out[GEAR_SLOT_WEAPON] = ITEM_NONE;
+    out[gear_slot] = cell->item_idx;
+}
+
+static void col_inventory_cell_post_use_deltas(
+    const ColosseumState* s,
+    int cell_idx,
+    float out[6]
+) {
+    for (int i = 0; i < 6; i++) out[i] = 0.0f;
+    if (s->inventory_cells[cell_idx].item_idx == ITEM_NONE) return;
+
+    float before[6];
+    float after[6];
+    uint8_t hypothetical[NUM_GEAR_SLOTS];
+    col_equipment_bonus_projection(s->player.equipped, before);
+    col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
+    col_equipment_bonus_projection(hypothetical, after);
+    for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
+}
+
+static void col_write_inventory_and_equipped_obs(
+    const ColosseumState* s,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
+        float deltas[6];
+        const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+        col_inventory_cell_post_use_deltas(s, cell_idx, deltas);
+        osrs_write_inventory_cell_affordance_features(
+            &obs[i],
+            cell->item_idx,
+            cell->osrs_id,
+            cell->dose,
+            col_inventory_cell_actionable(s, cell_idx),
+            col_inventory_cell_holds_equipped_item(s, cell_idx),
+            deltas);
+        i += OSRS_INVENTORY_CELL_OBS_FEATURES;
+    }
+    assert(i == COLO_OBS_AFTER_INVENTORY);
+
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        osrs_write_equipped_self_features(&obs[i], s->player.equipped[slot]);
+        i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
+    }
+    assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
+    *idx = i;
+}
+
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -599,7 +699,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     int px = s->player.x, py = s->player.y;
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
-    /* player block (45) */
+    /* player block (28) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
     obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
     obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
@@ -614,9 +714,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)s->player.current_prayer / 99.0f);
     obs[i++] = col_clamp01((float)s->player.run_energy / 10000.0f);
     obs[i++] = col_clamp01((float)s->player.special_energy / 100.0f);
-    obs[i++] = (s->weapon_set == COLO_GEAR_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (s->weapon_set == COLO_GEAR_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (s->weapon_set == COLO_GEAR_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = s->player.spec_armed ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player.attack_timer / 8.0f);
     obs[i++] = col_clamp01((float)s->player.food_timer / 3.0f);
     obs[i++] = col_clamp01((float)s->player.potion_timer / 3.0f);
@@ -630,37 +728,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
-    /* researched-inventory block: supply fractions normalized by the profile's
-       full doses (a profile without a supply reads 0), surge state, and the
-       armed spec weapon one-hot. */
-    obs[i++] = s->full_supplies.brew_doses > 0
-        ? col_clamp01((float)s->player.brew_doses / (float)s->full_supplies.brew_doses) : 0.0f;
-    obs[i++] = s->full_supplies.restore_doses > 0
-        ? col_clamp01((float)s->player.restore_doses / (float)s->full_supplies.restore_doses) : 0.0f;
-    obs[i++] = s->full_supplies.combat_doses > 0
-        ? col_clamp01((float)s->player.combat_potion_doses / (float)s->full_supplies.combat_doses) : 0.0f;
-    obs[i++] = s->full_supplies.ranged_doses > 0
-        ? col_clamp01((float)s->player.ranged_potion_doses / (float)s->full_supplies.ranged_doses) : 0.0f;
-    obs[i++] = s->full_supplies.surge_doses > 0
-        ? col_clamp01((float)s->surge_doses / (float)s->full_supplies.surge_doses) : 0.0f;
-    obs[i++] = col_clamp01((float)s->surge_cooldown / (float)COLO_SURGE_COOLDOWN_TICKS);
-    obs[i++] = (s->spec_armed_kind == 1) ? 1.0f : 0.0f;
-    obs[i++] = (s->spec_armed_kind == 2) ? 1.0f : 0.0f;
-    /* boost-hold state: per-stat current-vs-base offensive levels (so the policy
-       sees a boost above base or a brew drain below it) + the divine combat and
-       ranging boost-timer fractions. Closes the partial-observability hole that
-       made the divine/brew loop blind (E13 left these out of obs). */
-    obs[i++] = col_stat_delta_norm(s->player.current_attack, s->player.base_attack);
-    obs[i++] = col_stat_delta_norm(s->player.current_strength, s->player.base_strength);
-    obs[i++] = col_stat_delta_norm(s->player.current_defence, s->player.base_defence);
-    obs[i++] = col_stat_delta_norm(s->player.current_ranged, s->player.base_ranged);
-    obs[i++] = col_stat_delta_norm(s->player.current_magic, s->player.base_magic);
-    obs[i++] = col_clamp01((float)s->divine_combat_timer / (float)ENCOUNTER_DIVINE_POTION_TICKS);
-    obs[i++] = col_clamp01((float)s->divine_ranged_timer / (float)ENCOUNTER_DIVINE_POTION_TICKS);
     assert(i == COLO_OBS_AFTER_PLAYER);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);
 #endif
+
+    col_write_inventory_and_equipped_obs(s, obs, &i);
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {

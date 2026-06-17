@@ -166,6 +166,50 @@ static int forecast_action_has_event(const ColoStepOutForecastAction* action) {
     return 0;
 }
 
+static int test_find_inventory_cell_with_item(const ColosseumState* s, uint8_t item_idx) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
+        if (s->inventory_cells[i].item_idx == item_idx) return i;
+    return -1;
+}
+
+static int test_find_inventory_cell_with_consumable(
+    const ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        const ColoInvCell* cell = &s->inventory_cells[i];
+        OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
+            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        if (r.consumable_kind == kind) return i;
+    }
+    return -1;
+}
+
+static void test_click_inventory_cell_action(int actions[COLO_NUM_ACTION_HEADS], int cell) {
+    assert(cell >= 0 && cell < COLO_INVENTORY_DISPLAY_SLOTS);
+    actions[COLO_HEAD_INV_CLICK_0] = cell + 1;
+}
+
+static void test_click_consumable_action(
+    const ColosseumState* s,
+    int actions[COLO_NUM_ACTION_HEADS],
+    OsrsConsumableKind kind
+) {
+    test_click_inventory_cell_action(actions, test_find_inventory_cell_with_consumable(s, kind));
+}
+
+static float test_click_mask_for_cell(const float mask[COLO_ACTION_MASK_SIZE], int cell) {
+    return mask[col_action_head_mask_offset(COLO_HEAD_INV_CLICK_0) + 1 + cell];
+}
+
+static uint8_t test_profile_spec_item(ColoLoadoutProfile profile, int kind) {
+    if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 1) return ITEM_DRAGON_CLAWS;
+    if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 2) return ITEM_ELDER_MAUL;
+    if (profile == COLO_LOADOUT_PROFILE_BEGINNER && kind == 1) return ITEM_SGS;
+    if (profile == COLO_LOADOUT_PROFILE_BEGINNER && kind == 2) return ITEM_DRAGON_CLAWS;
+    abort();
+}
+
 /* ---- 1. fuzz: random actions over many full runs, obs/mask asserted each tick.
    Validates the obs/mask running-index asserts + crash-freedom across the boss and
    all waves (the standalone --profile harness never calls the obs writer). */
@@ -2208,11 +2252,11 @@ static void test_manticore_orb_same_tick_flick(void) {
         if (expect_orb) {
             AttackStyle next = mc->orb_style[mc->cycle_step];
             actions[COLO_HEAD_PRAYER] =
-                next == ATTACK_STYLE_MAGIC ? ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC :
-                next == ATTACK_STYLE_RANGED ? ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED :
-                ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+                next == ATTACK_STYLE_MAGIC ? COLO_OVERHEAD_MAGIC :
+                next == ATTACK_STYLE_RANGED ? COLO_OVERHEAD_RANGED :
+                COLO_OVERHEAD_MELEE;
         } else {
-            actions[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_NO_CHANGE;
+            actions[COLO_HEAD_PRAYER] = COLO_OVERHEAD_NO_CHANGE;
         }
         int hp_before = s.player.current_hitpoints;
         step_and_observe(&s, &ctx, actions);
@@ -2664,7 +2708,7 @@ static void test_sol_parry_prayer_punish(void) {
     int prayer_correct_before = s.log.total_prayer_correct;
     for (int t = 1; t <= 9; t++) {
         actions[COLO_HEAD_PRAYER] = (t == 3 || t == 6 || t == 9)
-            ? ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE : ENCOUNTER_OVERHEAD_NO_CHANGE;
+            ? COLO_OVERHEAD_MELEE : COLO_OVERHEAD_NO_CHANGE;
         step_and_observe(&s, &ctx, actions);
         if ((t == 3 || t == 6 || t == 9) && s.player.prayer != PRAYER_NONE)
             deactivated_after_each = 0;
@@ -2681,7 +2725,7 @@ static void test_sol_parry_prayer_punish(void) {
     col_sol_start_triple_parry(&s, idx);
     s.player.current_hitpoints = 99;
     for (int t = 1; t <= 9; t++) {
-        actions[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+        actions[COLO_HEAD_PRAYER] = COLO_OVERHEAD_MELEE;
         step_and_observe(&s, &ctx, actions);
     }
     CHECK("camping the prayer early makes every hit unblockable (75 total)",
@@ -2763,8 +2807,8 @@ static void test_sol_perfect_parry_forces_spec_attack(void) {
     ColosseumState s;
     int idx = sol_setup_speedrun(&s, &ctx, 128);
     CHECK("speedrun Sol setup succeeded", idx >= 0);
-    CHECK("speedrun spec A is dragon claws",
-        COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_DRAGON_CLAWS);
+    CHECK("speedrun inventory carries dragon claws",
+        test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS) >= 0);
 
     int max_hit = test_col_spec_stats_for_kind(&s, 1).max_hit;
     int claws_total = 2 * max_hit - 1;
@@ -2774,7 +2818,8 @@ static void test_sol_perfect_parry_forces_spec_attack(void) {
 
     s.sol.attack_delay = 1000;
     s.player.special_energy = 100;
-    s.spec_armed_kind = 1;
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS));
+    s.player.spec_armed = 1;
     s.sol.next_attack_guaranteed_max = 1;
     s.sol.guaranteed_max_ticks = COLO_SOL_PERFECT_MAX_TICKS;
     col_player_attack_target(&s, idx);
@@ -2786,7 +2831,7 @@ static void test_sol_perfect_parry_forces_spec_attack(void) {
         s.sol.next_attack_guaranteed_max == 0 &&
         s.sol.guaranteed_max_ticks == 0);
     CHECK("perfect-parry spec still spends claws energy",
-        s.player.special_energy == 50 && s.spec_armed_kind == 0);
+        s.player.special_energy == 50 && s.player.spec_armed == 0);
 }
 
 /* 6f. A3: shield safe-ring geometry for both variants — the Chebyshev ring is
@@ -3145,9 +3190,14 @@ static EncounterLoadoutStats test_col_spec_stats_for_kind(
     int kind
 ) {
     ColosseumState copy = *s;
-    ColoSpecLoadout spec_loadout;
-    col_compute_spec_loadout(&copy, kind, &spec_loadout);
-    return spec_loadout.stats;
+    copy.player.equipped[GEAR_SLOT_WEAPON] =
+        test_profile_spec_item(copy.active_loadout_profile, kind);
+    copy.player.equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
+        copy.player.equipped[GEAR_SLOT_WEAPON],
+        copy.player.equipped[GEAR_SLOT_SHIELD]);
+    col_sync_weapon_set_from_equipped_weapon(&copy);
+    col_mark_live_loadout_dirty(&copy);
+    return *col_live_loadout_stats(&copy);
 }
 
 static void test_loadout_profiles_and_supplies(void) {
@@ -3178,8 +3228,8 @@ static void test_loadout_profiles_and_supplies(void) {
         osrs_effect_profile_has(&beginner_melee_effects, OSRS_ITEM_EFFECT_VENOM_IMMUNE));
     int beginner_melee_max = col_live_loadout_stats(&s)->max_hit;
     CHECK("beginner spec weapons are SGS then claws",
-        COLO_SPEC_WEAPONS[s.active_loadout_profile][0] == ITEM_SGS &&
-        COLO_SPEC_WEAPONS[s.active_loadout_profile][1] == ITEM_DRAGON_CLAWS);
+        test_find_inventory_cell_with_item(&s, ITEM_SGS) >= 0 &&
+        test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS) >= 0);
 
     uint8_t beginner_sgs_without_defender[NUM_GEAR_SLOTS];
     memcpy(beginner_sgs_without_defender, COLO_BEGINNER_MELEE_LOADOUT, NUM_GEAR_SLOTS);
@@ -3207,17 +3257,17 @@ static void test_loadout_profiles_and_supplies(void) {
     CHECK("beginner claws spec stats keep dragon defender accuracy",
         beginner_claws_spec.attack_bonus > beginner_claws_without.attack_bonus);
 
-    uint8_t beginner_bowfa_with_defender[NUM_GEAR_SLOTS];
-    memcpy(beginner_bowfa_with_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS);
-    beginner_bowfa_with_defender[GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER;
-    EncounterLoadoutStats beginner_bowfa_illegal_shield;
-    encounter_compute_loadout_stats(beginner_bowfa_with_defender, ATTACK_STYLE_RANGED,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &beginner_bowfa_illegal_shield);
+    uint8_t beginner_bowfa_without_defender[NUM_GEAR_SLOTS];
+    memcpy(beginner_bowfa_without_defender, COLO_BEGINNER_RANGED_LOADOUT, NUM_GEAR_SLOTS);
+    beginner_bowfa_without_defender[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    EncounterLoadoutStats beginner_bowfa_legal_2h;
+    encounter_compute_loadout_stats(beginner_bowfa_without_defender, ATTACK_STYLE_RANGED,
+        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &beginner_bowfa_legal_2h);
     EncounterLoadoutStats beginner_ranged_stats =
         test_col_live_stats_for_set(&s, COLO_GEAR_RANGED);
-    CHECK("beginner bowfa ranged stats are unchanged by an occupied shield slot",
+    CHECK("beginner bowfa ranged stats suppress the shield slot",
         col_loadout_stats_equal(
-            &beginner_ranged_stats, &beginner_bowfa_illegal_shield));
+            &beginner_ranged_stats, &beginner_bowfa_legal_2h));
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 1.0f, 12);
     CHECK("speedrun mode pins the speedrun profile",
@@ -3268,7 +3318,7 @@ static void test_loadout_consumables(void) {
     /* brew: heals 16, drains stats, melee max hit drops (L12) */
     s.player.current_hitpoints = 50;
     int brew[COLO_NUM_ACTION_HEADS] = {0};
-    brew[COLO_HEAD_EAT] = 1;
+    test_click_consumable_action(&s, brew, OSRS_CONSUMABLE_BREW);
     step_and_observe(&s, &ctx, brew);
     CHECK("brew heals 16", s.player.current_hitpoints == 66);
     CHECK("brew consumes a dose and starts the timer",
@@ -3280,7 +3330,7 @@ static void test_loadout_consumables(void) {
     /* restore: stats (and the max hit) come back once the timer clears */
     for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
     int restore[COLO_NUM_ACTION_HEADS] = {0};
-    restore[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    test_click_consumable_action(&s, restore, OSRS_CONSUMABLE_SUPER_RESTORE);
     step_and_observe(&s, &ctx, restore);
     CHECK("super restore returns attack to base", s.player.current_attack == 99);
     CHECK("restore recovers the melee max hit",
@@ -3290,7 +3340,7 @@ static void test_loadout_consumables(void) {
     /* super combat: boosts att/str/def to 118 and raises the max hit */
     for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
     int combat[COLO_NUM_ACTION_HEADS] = {0};
-    combat[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+    test_click_consumable_action(&s, combat, OSRS_CONSUMABLE_SUPER_COMBAT);
     step_and_observe(&s, &ctx, combat);
     CHECK("super combat boosts attack to 118", s.player.current_attack == 118);
     CHECK("super combat boosts strength to 118", s.player.current_strength == 118);
@@ -3301,16 +3351,17 @@ static void test_loadout_consumables(void) {
     /* boosted: the combat-pot mask entry closes (inferno [base, base+5] window) */
     float mask[COLO_ACTION_MASK_SIZE];
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
-    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
+    int combat_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SUPER_COMBAT);
+    int surge_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SURGE);
     CHECK("combat pot masked while boosted past the window",
-        mask[pot_off + COLO_POTION_COMBAT] == 0.0f);
+        test_click_mask_for_cell(mask, combat_cell) == 0.0f);
     CHECK("surge masked for the beginner (no doses)",
-        mask[pot_off + COLO_POTION_SURGE] == 0.0f);
+        surge_cell < 0);
 
     /* ranging potion boosts ranged to 112 */
     for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
     int rng_pot[COLO_NUM_ACTION_HEADS] = {0};
-    rng_pot[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+    test_click_consumable_action(&s, rng_pot, OSRS_CONSUMABLE_RANGING);
     step_and_observe(&s, &ctx, rng_pot);
     CHECK("ranging potion boosts ranged to 112", s.player.current_ranged == 112);
 
@@ -3329,25 +3380,29 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     ColosseumState s;
     int idle[COLO_NUM_ACTION_HEADS] = {0};
     float mask[COLO_ACTION_MASK_SIZE];
-    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 81);
     CHECK("speedrun combat and ranging potions are divine",
-        col_combat_potion_is_divine(&s) && col_ranged_potion_is_divine(&s));
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT) >= 0 &&
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_RANGING) >= 0);
+    int divine_combat_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    int divine_ranged_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_RANGING);
     s.player.current_hitpoints = 10;
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
     CHECK("divine boost potions are masked at 10 HP",
-        mask[pot_off + COLO_POTION_COMBAT] == 0.0f &&
-        mask[pot_off + COLO_POTION_RANGING] == 0.0f);
+        test_click_mask_for_cell(mask, divine_combat_cell) == 0.0f &&
+        test_click_mask_for_cell(mask, divine_ranged_cell) == 0.0f);
     s.player.current_hitpoints = 11;
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
     CHECK("divine boost potions unmask above 10 HP",
-        mask[pot_off + COLO_POTION_COMBAT] == 1.0f &&
-        mask[pot_off + COLO_POTION_RANGING] == 1.0f);
+        test_click_mask_for_cell(mask, divine_combat_cell) == 1.0f &&
+        test_click_mask_for_cell(mask, divine_ranged_cell) == 1.0f);
 
     s.player.current_hitpoints = 50;
     int combat[COLO_NUM_ACTION_HEADS] = {0};
-    combat[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
+    test_click_inventory_cell_action(combat, divine_combat_cell);
     step_and_observe(&s, &ctx, combat);
     CHECK("divine combat chunks 10 HP and starts a 500-tick hold",
         s.player.current_hitpoints == 40 &&
@@ -3369,7 +3424,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 82);
     s.player.current_hitpoints = 50;
     int ranged[COLO_NUM_ACTION_HEADS] = {0};
-    ranged[COLO_HEAD_POTION] = COLO_POTION_RANGING;
+    test_click_consumable_action(&s, ranged, OSRS_CONSUMABLE_DIVINE_RANGING);
     step_and_observe(&s, &ctx, ranged);
     CHECK("divine ranging chunks 10 HP and starts a 500-tick hold",
         s.player.current_hitpoints == 40 &&
@@ -3382,8 +3437,11 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
 
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 83);
     CHECK("beginner boost potions are regular",
-        !col_combat_potion_is_divine(&s) && !col_ranged_potion_is_divine(&s));
-    step_and_observe(&s, &ctx, combat);
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SUPER_COMBAT) >= 0 &&
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_RANGING) >= 0);
+    int regular_combat[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_consumable_action(&s, regular_combat, OSRS_CONSUMABLE_SUPER_COMBAT);
+    step_and_observe(&s, &ctx, regular_combat);
     CHECK("regular beginner combat boost does not arm a divine timer",
         s.player.current_hitpoints == 99 && s.divine_combat_timer == 0 &&
         s.player.current_attack == 118);
@@ -3409,8 +3467,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v8 for the combat-fidelity pass",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 8u);
+    CHECK("snapshot version is v9 for the inventory-click contract",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 9u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -3434,7 +3492,7 @@ static void test_loadout_sanfew_and_serp_helm(void) {
     s.player_poison_timer = 9;
     s.player.current_prayer = 40;
     int restore[COLO_NUM_ACTION_HEADS] = {0};
-    restore[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
+    test_click_consumable_action(&s, restore, OSRS_CONSUMABLE_SANFEW);
     step_and_observe(&s, &ctx, restore);
     CHECK("sanfew clears venom", s.player_venom == 0 && s.player_venom_timer == 0);
     CHECK("sanfew clears poison", s.player_poison == 0 && s.player_poison_timer == 0);
@@ -3490,7 +3548,7 @@ static void test_loadout_surge_potion(void) {
        cooldown frozen until gameplay starts (L13). */
     s.player.special_energy = 40;
     int surge[COLO_NUM_ACTION_HEADS] = {0};
-    surge[COLO_HEAD_POTION] = COLO_POTION_SURGE;
+    test_click_consumable_action(&s, surge, OSRS_CONSUMABLE_SURGE);
     step_and_observe(&s, &ctx, surge);
     CHECK("surge restores 25 energy", s.player.special_energy == 65);
     CHECK("surge consumes a dose and arms the cooldown",
@@ -3510,9 +3568,9 @@ static void test_loadout_surge_potion(void) {
     s.player.potion_timer = 0;
     float mask[COLO_ACTION_MASK_SIZE];
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
-    int pot_off = col_action_head_mask_offset(COLO_HEAD_POTION);
+    int surge_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SURGE);
     CHECK("surge masked at full special energy",
-        mask[pot_off + COLO_POTION_SURGE] == 0.0f);
+        test_click_mask_for_cell(mask, surge_cell) == 0.0f);
 }
 
 static void test_loadout_spec_weapons(void) {
@@ -3528,12 +3586,13 @@ static void test_loadout_spec_weapons(void) {
     s.player.x = 16; s.player.y = 16;
     col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 17);
     s.player.special_energy = 100;
-    s.spec_armed_kind = 1;
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS));
+    s.player.spec_armed = 1;
     osrs_interaction_set(&s.interaction, 0);
     s.player.attack_timer = 0;
     col_player_attack_target(&s, 0);
     CHECK("claws spec drains 50 energy", s.player.special_energy == 50);
-    CHECK("claws spec disarms after firing", s.spec_armed_kind == 0);
+    CHECK("claws spec disarms after firing", s.player.spec_armed == 0);
     CHECK("claws spec queues the 4-splat cascade",
         s.npcs[0].pending_hits.count == 4);
     CHECK("spec sets the claws attack speed", s.player.attack_timer ==
@@ -3647,10 +3706,11 @@ static void test_loadout_spec_weapons(void) {
     s.player.x = 16; s.player.y = 16;
     col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 17);
     const ColoNpcStats* zerk = &COLO_NPC_STATS[COLO_FREMENNIK_BERSERKER];
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_ELDER_MAUL));
     int tries = 0;
     while (s.npcs[0].def_drained == 0 && tries < 200) {
         s.player.special_energy = 100;
-        s.spec_armed_kind = 2;
+        s.player.spec_armed = 1;
         s.player.attack_timer = 0;
         s.npcs[0].hp = zerk->hp;
         col_player_attack_target(&s, 0);
@@ -3668,13 +3728,15 @@ static void test_loadout_spec_weapons(void) {
     s.player.x = 16; s.player.y = 16;
     col_init_npc(&s, 0, COLO_FREMENNIK_SEER, 16, 17);
     const ColoNpcStats* seer = &COLO_NPC_STATS[COLO_FREMENNIK_SEER];
+    s.player.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_SGS));
     int healed = 0;
     tries = 0;
     while (!healed && tries < 200) {
         s.player.current_hitpoints = 20;
         s.player.current_prayer = 10;
         s.player.special_energy = 100;
-        s.spec_armed_kind = 1;
+        s.player.spec_armed = 1;
         s.player.attack_timer = 0;
         s.npcs[0].hp = seer->hp;
         col_player_attack_target(&s, 0);
@@ -3688,21 +3750,21 @@ static void test_loadout_spec_weapons(void) {
         s.player.current_prayer >= 15);
 
     /* arming gates on energy; an armed spec pulls the reach to melee */
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS));
     s.player.special_energy = 10;
-    s.spec_armed_kind = 0;
+    s.player.spec_armed = 0;
     int arm[COLO_NUM_ACTION_HEADS] = {0};
     arm[COLO_HEAD_SPEC] = 1;
     col_tick_player_ctx(&s, &ctx, arm, 0);
-    CHECK("arming is refused without the energy", s.spec_armed_kind == 0);
+    CHECK("arming is refused without the energy", s.player.spec_armed == 0);
     s.player.special_energy = 100;
     col_tick_player_ctx(&s, &ctx, arm, 0);
-    CHECK("arming succeeds with the energy", s.spec_armed_kind == 1);
-    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
-    CHECK("an armed melee spec pulls the reach to 1",
+    CHECK("arming succeeds with the energy", s.player.spec_armed == 1);
+    CHECK("equipped claws reach is melee range",
         col_player_attack_range(&s) == 1);
-    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
+    arm[COLO_HEAD_SPEC] = 2;
     col_tick_player_ctx(&s, &ctx, arm, 0);
-    CHECK("re-pressing the armed spec disarms it", s.spec_armed_kind == 0);
+    CHECK("disarm action clears the armed spec", s.player.spec_armed == 0);
 }
 
 static void test_loadout_item_effects(void) {
@@ -3819,24 +3881,25 @@ static void test_loadout_offensive_prayers(void) {
 static void test_combat_fidelity_contract_sizes(void) {
     printf("test_combat_fidelity_contract_sizes\n");
     CHECK("three weapon sets (melee/ranged/magic)", COLO_NUM_WEAPON_SETS == 3);
-    CHECK("eleven action heads (added SPELL)", COLO_NUM_ACTION_HEADS == 11);
-    CHECK("gear head dim is 4 (no_switch/melee/ranged/magic)", COLO_GEAR_DIM == 4);
+    CHECK("thirty-six action heads (28 inventory click heads)", COLO_NUM_ACTION_HEADS == 36);
+    CHECK("inventory click head dim is 29", COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 1190", COLO_NUM_OBS == 1190);
-    CHECK("snapshot version is v8", COLO_SNAPSHOT_VERSION == 8u);
+    CHECK("obs width is 1753", COLO_NUM_OBS == 1753);
+    CHECK("snapshot version is v9", COLO_SNAPSHOT_VERSION == 9u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
-    CHECK("player block carries the 7 boost-state floats", COLO_PLAYER_OBS_SIZE == 45);
+    CHECK("player block is the lean v9 prefix", COLO_PLAYER_OBS_SIZE == 28);
 
     /* recompute the mask size independently from the head dims and compare. */
     int mask_sum = 0;
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) mask_sum += COLO_ACTION_DIMS[h];
     CHECK("mask size equals the summed action-head dims",
-        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 87);
+        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 887);
 
     /* recompute the obs width independently from the section constants. */
-    int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE +
+    int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_INVENTORY_OBS_SIZE +
+        COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE +
         COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE +
         COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
@@ -3952,35 +4015,25 @@ static void test_bee_contact_damage_band(void) {
         s.player.current_hitpoints == 99);
 }
 
-/* the divine-boost obs features reflect a divine-boosted vs base player. */
 static void test_divine_state_obs_presence(void) {
     printf("test_divine_state_obs_presence\n");
     ColosseumContext ctx;
     ColosseumState s;
-    /* speedrun kit carries the divine super combat + divine ranging doses. */
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
     s.modifiers.draft_pending = 0;
 
     static float obs_base[COLO_NUM_OBS];
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_base);
-    /* the boost block sits at the tail of the player section: 5 stat deltas
-       (centered at 0.5 = base) then the 2 divine timer fractions. */
-    int boost0 = COLO_OBS_AFTER_PLAYER - 7;
-    CHECK("base player reads no divine boost (att delta at base, timers 0)",
-        fabsf(obs_base[boost0 + 0] - 0.5f) < 1e-4f &&
-        obs_base[boost0 + 5] == 0.0f && obs_base[boost0 + 6] == 0.0f);
+    CHECK("v9 player block has no divine timer tail", COLO_PLAYER_OBS_SIZE == 28);
 
-    /* arm a divine super combat boost: attack/strength/defence rise above base
-       and the combat timer fraction becomes positive. */
     col_apply_divine_combat_potion_effect(&s);
     s.divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
-    col_enforce_divine_stat_floors(&s);   /* the drink path pins the boosted stats */
+    col_enforce_divine_stat_floors(&s);
+    col_mark_live_loadout_dirty(&s);
     static float obs_boost[COLO_NUM_OBS];
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_boost);
-    CHECK("a divine-boosted player reads attack above base",
-        obs_boost[boost0 + 0] > obs_base[boost0 + 0]);
-    CHECK("the divine combat + ranging boost timers read positive",
-        obs_boost[boost0 + 5] > 0.0f && obs_boost[boost0 + 6] > 0.0f);
+    CHECK("divine boosts still surface through live max-hit scalar",
+        obs_boost[20] > obs_base[20]);
 }
 
 static void test_magic_set_max_hit_math(void) {
@@ -4044,14 +4097,13 @@ static void test_magic_set_max_hit_math(void) {
     col_apply_weapon_set(&s, COLO_GEAR_MAGIC);
     CHECK("env high-eff magic set max hit == 48", col_live_loadout_stats(&s)->max_hit == 48);
 
-    /* the GEAR action head can actually REACH the magic set: gear action 3 must
-       switch the player to COLO_GEAR_MAGIC (regression — act 3 was an unmapped
-       no-op, leaving the whole magic set unreachable by the policy). */
+    /* the inventory-click heads can reach the magic weapon. */
     col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     int gear_magic[COLO_NUM_ACTION_HEADS] = {0};
-    gear_magic[COLO_HEAD_GEAR] = 3;
+    test_click_inventory_cell_action(
+        gear_magic, test_find_inventory_cell_with_item(&s, ITEM_TUMEKENS_SHADOW));
     col_tick_player_ctx(&s, &ctx, gear_magic, 1);
-    CHECK("GEAR action 3 switches the player to the magic weapon set",
+    CHECK("clicking the magic weapon switches the player to the magic style",
         s.weapon_set == COLO_GEAR_MAGIC);
 }
 
@@ -4293,7 +4345,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v8", snap.version == 8u);
+    CHECK("snapshot frame is v9", snap.version == 9u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -4642,8 +4694,9 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         count > 0 &&
         entities[0].equipped[GEAR_SLOT_WEAPON] ==
             loadouts[s.weapon_set][GEAR_SLOT_WEAPON]);
-    CHECK("player slot inventory is populated for the GUI",
-        s.player.num_items_in_slot[GEAR_SLOT_WEAPON] > 0);
+    CHECK("player inventory cells are populated for the GUI",
+        test_find_inventory_cell_with_item(
+            &s, loadouts[s.weapon_set][GEAR_SLOT_WEAPON]) >= 0);
 
     s.modifiers.active_mask =
         (1u << (unsigned)COLO_MOD_RELENTLESS) |
@@ -4882,38 +4935,190 @@ static void test_colosseum_live_inventory_display(void) {
 
     int kit[COLO_INVENTORY_DISPLAY_SLOTS];
     col_build_live_inventory_display(&s, kit);
-    /* speedrun start: scythe (22325) is the worn melee weapon -> its slot 14 is
-       empty; the twisted bow switch (20997) stays; potion vials read full. */
-    CHECK("worn scythe removed from grid at start", kit[14] == 0);
+    CHECK("seeded scythe cell is visible even when worn", kit[14] == 22325);
     CHECK("tbow switch stays in grid", kit[0] == 20997);
     CHECK("brew vial full at start", kit[18] == 6685);
     CHECK("divine combat vial full at start", kit[16] == 23685);
     CHECK("surge vial full at start", kit[12] == 30875);
 
-    /* drink one dose from each tracked pool -> the vial sprite drops to 3-dose. */
-    s.player.brew_doses -= 1;
-    s.player.combat_potion_doses -= 1;
-    s.surge_doses -= 1;
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    s.player.current_hitpoints = 50;
+    int brew[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(brew, brew_cell);
+    step_and_observe(&s, &ctx, brew);
     col_build_live_inventory_display(&s, kit);
     CHECK("brew vial shows 3-dose after a drink", kit[18] == 6687);
+
+    s.player.current_hitpoints = 99;
+    s.player.current_attack = s.player.base_attack;
+    s.player.current_strength = s.player.base_strength;
+    s.player.current_defence = s.player.base_defence;
+    s.player.potion_timer = 0;
+    int divine_combat_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    int combat[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(combat, divine_combat_cell);
+    step_and_observe(&s, &ctx, combat);
+    col_build_live_inventory_display(&s, kit);
     CHECK("divine combat vial shows 3-dose after a drink", kit[16] == 23688);
+
+    s.player.special_energy = 50;
+    s.surge_cooldown = 0;
+    s.player.potion_timer = 0;
+    int surge_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SURGE);
+    int surge[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(surge, surge_cell);
+    step_and_observe(&s, &ctx, surge);
+    col_build_live_inventory_display(&s, kit);
     CHECK("surge vial shows 3-dose after a drink", kit[12] == 30878);
 
-    /* deplete a pool fully -> the slot empties. */
-    s.player.brew_doses = 0;
+    s.inventory_cells[brew_cell] = (ColoInvCell){
+        .osrs_id = 6691,
+        .item_idx = ITEM_NONE,
+        .dose = 1,
+    };
+    s.player.potion_timer = 0;
+    s.player.current_hitpoints = 50;
+    int last_brew[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(last_brew, brew_cell);
+    step_and_observe(&s, &ctx, last_brew);
     col_build_live_inventory_display(&s, kit);
     CHECK("emptied brew slot clears", kit[18] == 0);
 
-    /* switch the worn weapon to the ranged set -> tbow leaves the grid and the
-       scythe returns to its home slot. */
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s.active_loadout_profile);
-    s.player.equipped[GEAR_SLOT_WEAPON] = loadouts[COLO_GEAR_RANGED][GEAR_SLOT_WEAPON];
+    int tbow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
+    int ranged[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(ranged, tbow_cell);
+    step_and_observe(&s, &ctx, ranged);
     col_build_live_inventory_display(&s, kit);
-    CHECK("worn tbow removed after switch to ranged", kit[0] == 0);
-    CHECK("unworn scythe returns to grid after switch", kit[14] == 22325);
+    CHECK("ranged weapon click swaps scythe into the tbow cell", kit[0] == 22325);
+}
+
+static void test_stage3_t1_inventory_ranged_weapon_swap(void) {
+    printf("test_stage3_t1_inventory_ranged_weapon_swap\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 501);
+    uint8_t melee_weapon = s.player.equipped[GEAR_SLOT_WEAPON];
+    int bow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(actions, bow_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("T1 ranged weapon click equips tbow",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_TWISTED_BOW);
+    CHECK("T1 displaced melee weapon returns to clicked cell",
+        s.inventory_cells[bow_cell].item_idx == melee_weapon);
+}
+
+static void test_stage3_t2_brew_click_decrements_dose(void) {
+    printf("test_stage3_t2_brew_click_decrements_dose\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 502);
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    s.player.current_hitpoints = 50;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(actions, brew_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("T2 brew raises HP", s.player.current_hitpoints > 50);
+    CHECK("T2 brew cell dose drops 4 to 3",
+        s.inventory_cells[brew_cell].dose == 3 &&
+        s.inventory_cells[brew_cell].osrs_id == 6687);
+    CHECK("T2 brew starts potion timer", s.player.potion_timer == 3);
+}
+
+static void test_stage3_t3_one_dose_vial_empties(void) {
+    printf("test_stage3_t3_one_dose_vial_empties\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 503);
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    s.inventory_cells[brew_cell] = (ColoInvCell){
+        .osrs_id = 6691,
+        .item_idx = ITEM_NONE,
+        .dose = 1,
+    };
+    s.player.current_hitpoints = 50;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(actions, brew_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("T3 one-dose vial cell becomes empty",
+        s.inventory_cells[brew_cell].osrs_id == 0 &&
+        s.inventory_cells[brew_cell].item_idx == ITEM_NONE &&
+        s.inventory_cells[brew_cell].dose == 0);
+}
+
+static void test_stage3_t4_click_mask_bits(void) {
+    printf("test_stage3_t4_click_mask_bits\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 504);
+    int equipped_scythe_cell = test_find_inventory_cell_with_item(&s, ITEM_SCYTHE_OF_VITUR);
+    int empty_cell = 27;
+    s.inventory_cells[empty_cell] = (ColoInvCell){ .item_idx = ITEM_NONE };
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    s.player.current_hitpoints = 50;
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int spec_off = col_action_head_mask_offset(COLO_HEAD_SPEC);
+    CHECK("T4 already-equipped gear cell click bit is 0",
+        test_click_mask_for_cell(mask, equipped_scythe_cell) == 0.0f);
+    CHECK("T4 empty cell click bit is 0",
+        test_click_mask_for_cell(mask, empty_cell) == 0.0f);
+    CHECK("T4 beneficial full-dose brew cell click bit is 1",
+        test_click_mask_for_cell(mask, brew_cell) == 1.0f);
+    CHECK("T4 spec arm bit is 0 for non-spec equipped weapon",
+        mask[spec_off + 1] == 0.0f);
+}
+
+static void test_stage3_t5_claws_click_spec_fires(void) {
+    printf("test_stage3_t5_claws_click_spec_fires\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 505);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 16;
+    s.player.y = 16;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 17);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(actions, test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS));
+    actions[COLO_HEAD_SPEC] = 1;
+    step_and_observe(&s, &ctx, actions);
+    CHECK("T5 claws click equips claws",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_DRAGON_CLAWS);
+    CHECK("T5 SPEC arms equipped claws", s.player.spec_armed == 1);
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("T5 claws special fires four splats",
+        s.npcs[0].pending_hits.count == 4 && s.player.special_energy == 50);
+}
+
+static void test_stage3_t6_obs_mask_fuzz_contract(void) {
+    printf("test_stage3_t6_obs_mask_fuzz_contract\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_MIXED, 0.5f, 506);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    uint32_t rng = 506;
+    for (int t = 0; t < 256 && !s.episode_over; t++) {
+        for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) {
+            rng = rng * 1664525u + 1013904223u;
+            actions[h] = (int)((rng >> 16) % (uint32_t)COLO_ACTION_DIMS[h]);
+        }
+        step_and_observe(&s, &ctx, actions);
+    }
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1753);
+    CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 
 int main(void) {
+    test_stage3_t1_inventory_ranged_weapon_swap();
+    test_stage3_t2_brew_click_decrements_dose();
+    test_stage3_t3_one_dose_vial_empties();
+    test_stage3_t4_click_mask_bits();
+    test_stage3_t5_claws_click_spec_fires();
+    test_stage3_t6_obs_mask_fuzz_contract();
     test_fuzz_obs_mask();
     test_osrs_los_query_contracts();
     test_player_ranged_los_blocked_by_pillar();

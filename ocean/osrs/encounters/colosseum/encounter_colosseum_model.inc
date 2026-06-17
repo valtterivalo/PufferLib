@@ -29,7 +29,7 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 11
+#define COLO_NUM_ACTION_HEADS 36
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC).
    COLO_OBS_NPCS == COLO_MAX_NPCS so no live NPC is ever dropped from the obs
@@ -1271,8 +1271,6 @@ typedef enum {
     COLO_RESTORE_SANFEW,        /* L5: sanfew serum — weaker formula, cures venom */
 } ColoRestoreKind;
 
-#define COLO_NUM_SPEC_WEAPONS 2
-
 static const uint8_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
@@ -1393,15 +1391,6 @@ static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFIL
     [COLO_LOADOUT_PROFILE_BEGINNER] = COLO_BEGINNER_LOADOUTS,
 };
 
-/** spec weapons per profile, fired off the melee gear base (L2). Speedrun:
-    "Burning claws / Dragon claws + Elder maul / Dragon warhammer" — the
-    resolver-implemented members are claws + elder maul (L16). Beginner: SGS +
-    dragon claws (tier-1 in every first-quiver tab). */
-static const uint8_t COLO_SPEC_WEAPONS[COLO_NUM_LOADOUT_PROFILES][COLO_NUM_SPEC_WEAPONS] = {
-    [COLO_LOADOUT_PROFILE_SPEEDRUN] = { ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL },
-    [COLO_LOADOUT_PROFILE_BEGINNER] = { ITEM_SGS, ITEM_DRAGON_CLAWS },
-};
-
 /** full starting supplies per profile, in DOSES (4 per potion). Beginner = the
     wiki budget example (6 brews, 8 super restores, regular combat, regular
     ranging). Speedrun = High efficiency (1 brew, 7 sanfews, 1 divine super
@@ -1450,6 +1439,12 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
 }
 
 #define COLO_INVENTORY_DISPLAY_SLOTS 28
+
+typedef struct {
+    uint16_t osrs_id;
+    uint8_t item_idx;
+    uint8_t dose;
+} ColoInvCell;
 
 /** Render-only: the exact 28-slot wiki inventory per kit, as OSRS item ids, so the
     viewer's inventory panel matches the reference image 1:1. The sim never models a
@@ -1599,10 +1594,7 @@ typedef struct {
        render-entity emitter plays its attack anim and the projectile emitter fires
        a tracking magic bolt. Not serialized; the sim never reads it. */
     int thrall_attacked_this_tick;
-    /* render-only: the spec-weapon kind (1..COLO_NUM_SPEC_WEAPONS) fired this tick,
-       captured before the sim zeroes s->spec_armed_kind. Lets the player render
-       swap to the spec weapon (so its anim + self-graphic show) without putting
-       the fired kind in the serialized state. 0 = no spec this tick. */
+    /* render-only: the equipped spec weapon item index fired this tick. */
     int player_spec_fired_kind;
 } ColosseumContext;
 
@@ -1743,7 +1735,7 @@ typedef struct {
     int divine_ranged_timer;
     int surge_doses;
     int surge_cooldown;                /* ticks until the next surge dose (L13) */
-    int spec_armed_kind;               /* 0 = none, 1 = spec A, 2 = spec B */
+    ColoInvCell inventory_cells[COLO_INVENTORY_DISPLAY_SLOTS];
 
     /* Arceuus thrall (one allied auto-attacker; not a ColoNPC slot). */
     int thrall_active;          /* 0/1 */
@@ -1779,83 +1771,10 @@ typedef struct {
     uint32_t rng_state;
 } ColosseumState;
 
-/** Live colosseum inventory display (render-only). The viewer panel starts from
-    the exact wiki 28-slot kit (COLO_INVENTORY_DISPLAY) but must track sim state:
-    potion vials deplete as doses are drunk and the worn weapon leaves the grid.
-    The sim models a SUBSET of the kit (four dose pools on Player plus surge on
-    State); display-only switches (Venator bow, Confliction gauntlets, Abyssal
-    tentacle, guthix rest, rune pouch) stay fixed. Never read by the sim. */
-typedef enum {
-    COLO_DOSE_POOL_BREW = 0,
-    COLO_DOSE_POOL_RESTORE,
-    COLO_DOSE_POOL_COMBAT,
-    COLO_DOSE_POOL_RANGED,
-    COLO_DOSE_POOL_SURGE,
-    COLO_NUM_DOSE_POOLS,
-} ColoDosePool;
-
-typedef struct {
-    int id_4dose;       /* the 4-dose OSRS id as it appears in COLO_INVENTORY_DISPLAY */
-    ColoDosePool pool;
-    int dose_ids[4];    /* OSRS ids for 4, 3, 2, 1 dose, in that order */
-} ColoDoseFamily;
-
-/** dose-id families keyed by their 4-dose id. Both the regular and divine combat
-    (and ranged) variants map to the same sim pool, so a kit carrying both depletes
-    them together. ids verified against gameval/ItemID.java. */
-static const ColoDoseFamily COLO_DOSE_FAMILIES[] = {
-    { 6685,  COLO_DOSE_POOL_BREW,    { 6685, 6687, 6689, 6691 } },      /* Saradomin brew */
-    { 3024,  COLO_DOSE_POOL_RESTORE, { 3024, 3026, 3028, 3030 } },      /* Super restore */
-    { 10925, COLO_DOSE_POOL_RESTORE, { 10925, 10927, 10929, 10931 } },  /* Sanfew serum */
-    { 12695, COLO_DOSE_POOL_COMBAT,  { 12695, 12697, 12699, 12701 } },  /* Super combat */
-    { 23685, COLO_DOSE_POOL_COMBAT,  { 23685, 23688, 23691, 23694 } },  /* Divine super combat */
-    { 2444,  COLO_DOSE_POOL_RANGED,  { 2444, 169, 171, 173 } },         /* Ranging potion */
-    { 23733, COLO_DOSE_POOL_RANGED,  { 23733, 23736, 23739, 23742 } },  /* Divine ranging */
-    { 30875, COLO_DOSE_POOL_SURGE,   { 30875, 30878, 30881, 30884 } },  /* Surge potion */
-};
-
-static const ColoDoseFamily* col_dose_family_for_id(int osrs_id) {
-    int count = (int)(sizeof(COLO_DOSE_FAMILIES) / sizeof(COLO_DOSE_FAMILIES[0]));
-    for (int i = 0; i < count; i++)
-        if (COLO_DOSE_FAMILIES[i].id_4dose == osrs_id) return &COLO_DOSE_FAMILIES[i];
-    return NULL;
-}
-
 static void col_build_live_inventory_display(
     const ColosseumState* s,
     int out[COLO_INVENTORY_DISPLAY_SLOTS]
 ) {
-    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) out[i] = 0;
-    if (s->active_loadout_profile < 0 ||
-            s->active_loadout_profile >= COLO_NUM_LOADOUT_PROFILES)
-        return;
-
-    const int* kit = COLO_INVENTORY_DISPLAY[s->active_loadout_profile];
-    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) out[i] = kit[i];
-
-    /* deplete each live dose pool across its vials in slot order, 4-dose first,
-       emptying spent slots; each slot keeps its own potion family's sprite. */
-    int remaining[COLO_NUM_DOSE_POOLS];
-    remaining[COLO_DOSE_POOL_BREW]    = s->player.brew_doses;
-    remaining[COLO_DOSE_POOL_RESTORE] = s->player.restore_doses;
-    remaining[COLO_DOSE_POOL_COMBAT]  = s->player.combat_potion_doses;
-    remaining[COLO_DOSE_POOL_RANGED]  = s->player.ranged_potion_doses;
-    remaining[COLO_DOSE_POOL_SURGE]   = s->surge_doses;
-    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
-        const ColoDoseFamily* fam = col_dose_family_for_id(kit[i]);
-        if (!fam) continue;
-        int give = remaining[fam->pool] >= 4 ? 4 : remaining[fam->pool];
-        if (give < 0) give = 0;
-        remaining[fam->pool] -= give;
-        out[i] = give > 0 ? fam->dose_ids[4 - give] : 0;
-    }
-
-    /* the worn weapon is not in the inventory: clear the slot holding whatever
-       the player currently wields (active weapon set, or an armed spec weapon). */
-    uint8_t worn = s->player.equipped[GEAR_SLOT_WEAPON];
-    if (worn != ITEM_NONE) {
-        int worn_osrs = ITEM_DATABASE[worn].item_id;
-        for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
-            if (out[i] == worn_osrs) { out[i] = 0; break; }
-    }
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
+        out[i] = s->inventory_cells[i].osrs_id;
 }
