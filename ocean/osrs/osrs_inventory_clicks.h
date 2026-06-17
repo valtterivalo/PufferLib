@@ -122,6 +122,21 @@ static inline void osrs_inventory_clicks_trap(void) {
 }
 
 /**
+ * Clamps an observation feature to [-1, 1].
+ *
+ * Per-item stat/delta features divide raw bonuses by fixed STAT_NORM divisors
+ * that are not guaranteed upper bounds (e.g. aggregate defence, magic damage, or
+ * a large gear-swap delta can exceed 1.0). Unbounded obs destabilize the policy
+ * net under a learned policy, so every emitted feature is clamped to the
+ * normalized obs contract here, matching the rest of the OSRS obs vector.
+ */
+static inline float osrs_clamp_unit(float v) {
+    if (v < -1.0f) return -1.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+/**
  * Finds an ITEM_DATABASE index by raw OSRS item id.
  *
  * Returns ITEM_NONE when the raw id is not an equippable database item.
@@ -176,11 +191,11 @@ static inline void osrs_write_inventory_cell_affordance_features(
     out[2] = is_consumable ? 1.0f : 0.0f;
     out[3] = can_use ? 1.0f : 0.0f;
     out[4] = is_equipped ? 1.0f : 0.0f;
-    out[5] = dose > 0 ? (float)dose / 4.0f : 0.0f;
+    out[5] = dose > 0 ? osrs_clamp_unit((float)dose / 4.0f) : 0.0f;
     out[6] = style == 1 ? 1.0f : 0.0f;
     out[7] = style == 2 ? 1.0f : 0.0f;
     out[8] = style == 3 ? 1.0f : 0.0f;
-    for (int i = 0; i < 6; i++) out[9 + i] = post_use_deltas[i];
+    for (int i = 0; i < 6; i++) out[9 + i] = osrs_clamp_unit(post_use_deltas[i]);
     out[15] = effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
 }
 
@@ -212,15 +227,15 @@ static inline void osrs_write_equipped_self_features(float* out, uint8_t item_id
     out[1] = style == 1 ? 1.0f : 0.0f;
     out[2] = style == 2 ? 1.0f : 0.0f;
     out[3] = style == 3 ? 1.0f : 0.0f;
-    out[4] = (float)item->attack_slash / STAT_NORM_ATTACK;
-    out[5] = (float)item->melee_strength / STAT_NORM_STRENGTH;
-    out[6] = (float)item->attack_ranged / STAT_NORM_ATTACK;
-    out[7] = (float)item->ranged_strength / STAT_NORM_STRENGTH;
-    out[8] = ((float)item->attack_magic / STAT_NORM_ATTACK) +
-        ((float)item->magic_damage / STAT_NORM_MAGIC_DMG);
-    out[9] = (float)(item->defence_stab + item->defence_slash +
+    out[4] = osrs_clamp_unit((float)item->attack_slash / STAT_NORM_ATTACK);
+    out[5] = osrs_clamp_unit((float)item->melee_strength / STAT_NORM_STRENGTH);
+    out[6] = osrs_clamp_unit((float)item->attack_ranged / STAT_NORM_ATTACK);
+    out[7] = osrs_clamp_unit((float)item->ranged_strength / STAT_NORM_STRENGTH);
+    out[8] = osrs_clamp_unit(((float)item->attack_magic / STAT_NORM_ATTACK) +
+        ((float)item->magic_damage / STAT_NORM_MAGIC_DMG));
+    out[9] = osrs_clamp_unit((float)(item->defence_stab + item->defence_slash +
         item->defence_crush + item->defence_magic + item->defence_ranged) /
-        (5.0f * STAT_NORM_DEFENCE);
+        (5.0f * STAT_NORM_DEFENCE));
     out[10] = item->effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
     out[11] = item->slot == SLOT_WEAPON ? 1.0f : 0.0f;
 }
