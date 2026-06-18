@@ -64,9 +64,17 @@ typedef struct {
     ColoStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
 } ColoStepOutForecast;
 
+typedef enum {
+    COLO_FORECAST_BEHAVIOR_STANDARD = 0,
+    COLO_FORECAST_BEHAVIOR_WARBAND,
+    COLO_FORECAST_BEHAVIOR_MANTICORE,
+    COLO_FORECAST_BEHAVIOR_SOL,
+} ColoForecastBehaviorKind;
+
 typedef struct {
     int active;
     ColoNpcType type;
+    ColoForecastBehaviorKind forecast_behavior;
     int x;
     int y;
     int size;
