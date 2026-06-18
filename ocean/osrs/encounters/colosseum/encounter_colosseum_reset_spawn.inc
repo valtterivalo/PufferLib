@@ -26,20 +26,9 @@ static void col_stamp_npc_collision_footprint(ColosseumState* s, int x, int y, i
 
 static void col_rebuild_player_collision_flags(ColosseumState* s) {
     memset(s->player_collision_flags, 0, sizeof(s->player_collision_flags));
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        ColoNPC* npc = &s->npcs[i];
-        if (!npc->active) continue;
-        /* hazard entities never block the player (bees damage from BENEATH). */
-        if (col_type_is_hazard_entity(npc->type)) continue;
-        int size = col_npc_effective_size(npc);
-        for (int dx = 0; dx < size; dx++) {
-            for (int dy = 0; dy < size; dy++) {
-                int gx, gy;
-                if (col_grid_index(npc->x + dx, npc->y + dy, &gx, &gy))
-                    s->player_collision_flags[gx][gy] = 1;
-            }
-        }
-    }
+    int gx, gy;
+    if (col_grid_index(s->player.x, s->player.y, &gx, &gy))
+        s->player_collision_flags[gx][gy] = 1;
 }
 
 /** find a free NPC slot, return index or -1. */

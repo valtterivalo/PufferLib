@@ -754,7 +754,15 @@ static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     ColoWalkCtx* wc = (ColoWalkCtx*)ctx;
     int x = abs_x - wc->ctx->world_offset_x;
     int y = abs_y - wc->ctx->world_offset_y;
-    return col_player_walkable(wc->s, x, y) ? 0 : 1;
+    if (col_static_blocked(x, y)) return 1;
+    if (col_sol_clamp_active(wc->s) && !col_in_boss_arena(wc->s, x, y)) return 1;
+    return 0;
+}
+
+static int col_npc_collision_flag_at(const ColosseumState* s, int x, int y) {
+    int gx, gy;
+    if (!col_grid_index(x, y, &gx, &gy)) return 0;
+    return s->npc_collision_flags[gx][gy] != 0;
 }
 
 /** the player's effective attack reach, after Myopia's range reduction. */
@@ -1219,6 +1227,8 @@ static void col_tick_player_ctx(
     }
     int player_x_before_step = s->player.x;
     int player_y_before_step = s->player.y;
+    int npc_flag_before_step =
+        col_npc_collision_flag_at(s, player_x_before_step, player_y_before_step);
     int interaction_before_step = osrs_interaction_active(&s->interaction)
         ? s->interaction.target_slot : -1;
     ColoWalkCtx wc = { s, ctx };
@@ -1261,6 +1271,19 @@ static void col_tick_player_ctx(
             s->player.x, s->player.y, step_result.moved,
             step_result.explicit_moved, step_result.chased_target,
             step_result.can_attack);
+        fprintf(stderr,
+            "colo_action tick=%d movement_walkability npc_flag=%d->%d "
+            "walkable=%d->%d path_extra=%d->%d\n",
+            s->tick, npc_flag_before_step,
+            col_npc_collision_flag_at(s, s->player.x, s->player.y),
+            col_player_walkable(s, player_x_before_step, player_y_before_step),
+            col_player_walkable(s, s->player.x, s->player.y),
+            col_pathfind_blocked(&wc,
+                player_x_before_step + ctx->world_offset_x,
+                player_y_before_step + ctx->world_offset_y),
+            col_pathfind_blocked(&wc,
+                s->player.x + ctx->world_offset_x,
+                s->player.y + ctx->world_offset_y));
     }
     col_rebuild_player_collision_flags(s);
 

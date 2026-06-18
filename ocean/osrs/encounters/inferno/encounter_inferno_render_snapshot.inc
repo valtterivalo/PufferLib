@@ -793,6 +793,7 @@ static void inf_translate_human_commands_ctx(
             case HUMAN_COMMAND_ITEM_ON_ITEM:
             case HUMAN_COMMAND_ITEM_ON_WIDGET:
             case HUMAN_COMMAND_SPELL_ON_WIDGET:
+            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
             case HUMAN_COMMAND_NONE:
                 break;
         }

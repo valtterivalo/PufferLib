@@ -41,6 +41,7 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_pvp_gear.h"
+#include "osrs_inventory_clicks.h"
 #include "osrs_ui_interfaces.h"
 
 
@@ -2393,8 +2394,34 @@ static int gui_inv_slot_at(GuiState* gs, int mx, int my) {
 }
 
 static const char* gui_inv_primary_action_label(const InvSlot* inv) {
+    uint16_t raw_osrs_id =
+        inv->osrs_id > 0 && inv->osrs_id <= UINT16_MAX ? (uint16_t)inv->osrs_id : 0;
+    uint8_t item_idx = inv->type == INV_SLOT_EQUIPMENT
+        ? inv->item_db_idx
+        : ITEM_NONE;
+    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+        item_idx, raw_osrs_id, OSRS_CLICK_TICK_FIRST);
+    switch (resolution.click_action) {
+        case OSRS_CLICK_EQUIP: {
+            int gear_slot = item_idx != ITEM_NONE ? item_to_gear_slot(item_idx) : -1;
+            return gear_slot == GEAR_SLOT_WEAPON || gear_slot == GEAR_SLOT_AMMO
+                ? "Wield"
+                : "Wear";
+        }
+        case OSRS_CLICK_EAT:
+            return "Eat";
+        case OSRS_CLICK_DRINK:
+            return "Drink";
+        case OSRS_CLICK_NONE:
+            break;
+        default:
+            fprintf(stderr, "gui inventory: bad click action %d\n",
+                (int)resolution.click_action);
+            abort();
+    }
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT: {
+            if (inv->item_db_idx == ITEM_NONE) return NULL;
             int gear_slot = item_to_gear_slot(inv->item_db_idx);
             return gear_slot == GEAR_SLOT_WEAPON || gear_slot == GEAR_SLOT_AMMO
                 ? "Wield"
@@ -2420,10 +2447,34 @@ static const char* gui_inv_primary_action_label(const InvSlot* inv) {
     }
 }
 
+static const char* gui_inv_raw_osrs_id_display_name(int osrs_id) {
+    switch (osrs_id) {
+        case 27610:
+            return "Venator bow";
+        case 12006:
+            return "Abyssal tentacle";
+        case 27281:
+            return "Divine rune pouch";
+        case 23685:
+            return "Divine super combat";
+        case 23733:
+            return "Divine ranging potion";
+        case 10925:
+            return "Sanfew serum";
+        case 4417:
+            return "Guthix rest";
+        case 30875:
+            return "Surge potion";
+        default:
+            return "";
+    }
+}
+
 static const char* gui_inv_slot_display_name(const InvSlot* inv) {
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT:
-            return gui_item_short_name(inv->item_db_idx);
+            if (inv->item_db_idx != ITEM_NONE) return gui_item_short_name(inv->item_db_idx);
+            return gui_inv_raw_osrs_id_display_name(inv->osrs_id);
         case INV_SLOT_FOOD:
             return "Shark";
         case INV_SLOT_KARAMBWAN:
@@ -2502,6 +2553,11 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
 
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT: {
+            if (human_active && gs->display_inventory_count > 0) {
+                human_input_queue_inventory_primary_click(hi, slot);
+                gs->human_clicked_inv_slot = slot;
+                return INV_ACTION_EQUIP;
+            }
             int gear_slot = item_to_gear_slot(inv->item_db_idx);
             if (gear_slot >= 0) {
                 if (human_active) {
@@ -2516,7 +2572,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_FOOD:
             if (human_active) {
                 hi->pending_food = 1;
-                human_input_queue_eat(hi, 0);
+                human_input_queue_eat(hi, 0, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 0); }
@@ -2524,7 +2580,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_KARAMBWAN:
             if (human_active) {
                 hi->pending_karambwan = 1;
-                human_input_queue_eat(hi, 1);
+                human_input_queue_eat(hi, 1, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 1); }
@@ -2802,8 +2858,11 @@ static void gui_load_display_inventory(GuiState* gs) {
     for (int i = 0; i < count; i++) {
         int osrs_id = gs->display_inventory_osrs_ids[i];
         if (osrs_id <= 0) continue;
+        uint8_t item_idx = osrs_id <= UINT16_MAX
+            ? osrs_item_index_for_raw_osrs_id((uint16_t)osrs_id)
+            : ITEM_NONE;
         gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
-        gs->inv_grid[i].item_db_idx = ITEM_NONE;
+        gs->inv_grid[i].item_db_idx = item_idx;
         gs->inv_grid[i].osrs_id = osrs_id;
     }
 }

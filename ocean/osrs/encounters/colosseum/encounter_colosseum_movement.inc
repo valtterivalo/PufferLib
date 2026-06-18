@@ -4,15 +4,14 @@
  * @brief Arena predicates + per-NPC movement, mirroring inferno movement.
  */
 
-/** player-walkability callback for shared movement helpers: the static mask
-    (walls + pillars, A7+B1), the wave-12 boss clamp, and NPC bodies. */
+/** player-walkability callback for shared movement helpers. */
 static int col_player_walkable(void* ctx, int x, int y) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (col_static_blocked(x, y)) return 0;
     if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
     int gx, gy;
     if (!col_grid_index(x, y, &gx, &gy)) return 0;
-    return s->player_collision_flags[gx][gy] ? 0 : 1;
+    return 1;
 }
 
 /** Static tile predicate for shared line-of-sight queries (player and NPC). */

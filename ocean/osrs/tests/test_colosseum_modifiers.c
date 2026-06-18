@@ -1780,6 +1780,30 @@ static void test_wave12_quartet_and_win(void) {
     CHECK("the surviving warbander does not block the win", survivor_ok);
 }
 
+static void test_player_walks_through_npc_footprint(void) {
+    printf("test_player_walks_through_npc_footprint\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 510, 16, 16);
+    col_init_npc(&s, 0, COLO_SOL_HEREDIT, 17, 16);
+    col_rebuild_player_collision_flags(&s);
+    int gx, gy;
+    int npc_flag = col_grid_index(17, 16, &gx, &gy) && s.npc_collision_flags[gx][gy];
+    int player_flag = col_grid_index(17, 16, &gx, &gy) && s.player_collision_flags[gx][gy];
+    ColoWalkCtx wc = { .s = &s, .ctx = &ctx };
+    CHECK("NPC footprint remains stamped for NPC systems", npc_flag != 0);
+    CHECK("NPC footprint is not stamped as player collision", player_flag == 0);
+    CHECK("player walkability ignores NPC footprint",
+        col_player_walkable(&s, 17, 16) == 1);
+    CHECK("player pathfinding extra block ignores NPC footprint",
+        col_pathfind_blocked(&wc, 17 + ctx.world_offset_x, 16 + ctx.world_offset_y) == 0);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    actions[COLO_HEAD_MOVE] = forecast_move_action_for_delta(1, 0);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("explicit movement can step onto Sol footprint",
+        s.player.x == 17 && s.player.y == 16);
+}
+
 /* ---- 4. P2 warband rework + Red Flag routefinding -------------------------- */
 
 static int wb_find_npc(const ColosseumState* s, ColoNpcType type) {
@@ -5172,6 +5196,32 @@ static void test_stage3_t1_inventory_weapon_slot_last_click_wins(void) {
         s.inventory_cells[bow_cell].item_idx == ITEM_TWISTED_BOW);
 }
 
+static void test_stage3_t1_human_inventory_primary_click_uses_resolver(void) {
+    printf("test_stage3_t1_human_inventory_primary_click_uses_resolver\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 509);
+    int bow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
+    int claws_cell = test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS);
+    HumanInput hi;
+    human_input_init(&hi);
+    hi.enabled = 1;
+    human_input_queue_inventory_primary_click(&hi, bow_cell);
+    human_input_queue_inventory_primary_click(&hi, claws_cell);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    col_translate_human_commands_ctx(&hi, actions, &s, &ctx);
+    CHECK("human inventory click lands in the first inventory head",
+        actions[COLO_HEAD_INV_CLICK_0] == bow_cell + 1);
+    CHECK("human inventory click lands in the next inventory head",
+        actions[COLO_HEAD_INV_CLICK_1] == claws_cell + 1);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("human inventory clicks use resolver last-click-wins semantics",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_DRAGON_CLAWS);
+    CHECK("human earlier same-slot click is ignored by resolver",
+        s.inventory_cells[bow_cell].item_idx == ITEM_TWISTED_BOW);
+    human_input_destroy(&hi);
+}
+
 static void test_stage3_t2_brew_click_decrements_dose(void) {
     printf("test_stage3_t2_brew_click_decrements_dose\n");
     ColosseumContext ctx;
@@ -5312,6 +5362,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
 int main(void) {
     test_stage3_t1_inventory_ranged_weapon_swap();
     test_stage3_t1_inventory_weapon_slot_last_click_wins();
+    test_stage3_t1_human_inventory_primary_click_uses_resolver();
     test_stage3_t2_brew_click_decrements_dose();
     test_stage3_t3_one_dose_vial_empties();
     test_stage3_t4_click_mask_bits();
@@ -5353,6 +5404,7 @@ int main(void) {
     test_outcome_score_sol_uses_boss_progress_only();
     test_roster_cap_nine();
     test_wave12_quartet_and_win();
+    test_player_walks_through_npc_footprint();
     test_warband_cycle_offsets();
     test_warband_move_skip();
     test_warband_melee_distance_gate();

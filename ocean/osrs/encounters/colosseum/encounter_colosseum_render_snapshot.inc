@@ -687,15 +687,16 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
-static void col_queue_inventory_click_action(int* actions, int inventory_slot) {
-    if (inventory_slot < 0 || inventory_slot >= COLO_INVENTORY_DISPLAY_SLOTS) return;
+static int col_queue_inventory_click_action(int* actions, int inventory_slot) {
+    if (inventory_slot < 0 || inventory_slot >= COLO_INVENTORY_DISPLAY_SLOTS) return -1;
     for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
         int action_head = COLO_HEAD_INV_CLICK_0 + head;
         if (actions[action_head] == 0) {
             actions[action_head] = inventory_slot + 1;
-            return;
+            return action_head;
         }
     }
+    return -1;
 }
 
 static int col_find_inventory_cell_for_consumable(
@@ -820,6 +821,17 @@ static void col_translate_human_commands_ctx(
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
                 col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
+            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: {
+                int action_head =
+                    col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                if (ctx->config.action_debug_log) {
+                    fprintf(stderr,
+                        "colo_action tick=%d human_inventory_click slot=%d head=%d action=%d\n",
+                        s->tick, cmd->inventory_slot, action_head,
+                        action_head >= 0 ? actions[action_head] : 0);
+                }
+                break;
+            }
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
                 actions[COLO_HEAD_OFFENSIVE] = cmd->offensive_prayer;
                 break;
