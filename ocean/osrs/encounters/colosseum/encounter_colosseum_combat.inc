@@ -134,6 +134,7 @@ static void col_pending_hit_prayer_observer(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
     s->tick_scratch.styles_faced_mask |= (1 << hit->attack_style);
+    s->tick_scratch.avoidable_threat_by_style[hit->attack_style] += (float)hit->damage;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, hit->source_npc_type, prayed, dmg);
 }
@@ -255,6 +256,7 @@ static void col_apply_instant_melee_hit(
     ColosseumState* s, ColosseumContext* ctx, int npc_type, int dmg, int hit_success
 ) {
     (void)hit_success;
+    int rolled_dmg = dmg;
     int prayed = encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE);
     if (prayed) {
         dmg = 0;
@@ -263,6 +265,7 @@ static void col_apply_instant_melee_hit(
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     s->tick_scratch.styles_faced_mask |= (1 << ATTACK_STYLE_MELEE);
+    s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] += (float)rolled_dmg;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, npc_type, prayed, dmg);
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
@@ -445,6 +448,7 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     for (int shot = 0; shot < shots; shot++) {
         int hit_success = 0;
         int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
+        int rolled_dmg = dmg;
         if (prayed) {
             dmg = 0;
             s->tick_scratch.prayer_correct++;
@@ -452,6 +456,7 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
         col_log_prayer_event(s, npc->type, prayed, dmg);
         s->tick_scratch.styles_faced_mask |= (1 << style);
+        s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
         if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
         if (dmg > 0) {
             s->last_hit_by_type = npc->type;

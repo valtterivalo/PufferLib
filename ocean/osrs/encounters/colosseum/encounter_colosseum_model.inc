@@ -25,6 +25,8 @@
 #define COLO_PLAYER_START_Y 18
 
 #define COLO_MAX_TICKS      9000   /* 90 minutes at 0.6s/tick */
+#define COLO_SPEEDRUN_MAX_TICKS 4000
+#define COLO_BEGINNER_MAX_TICKS 6000
 #define COLO_NUM_WAVES      12
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
@@ -1547,15 +1549,16 @@ typedef struct {
     int start_wave;        /* internal wave index (0-based) */
     float damage_reward_coeff;       /* per-point reward for damage dealt to NPCs */
     float boss_damage_reward_coeff;  /* per-point reward for damage dealt to Sol */
-    float wave_clear_bonus;          /* added on top of the +1 each wave cleared */
+    float wave_clear_bonus;          /* per-wave clear reward */
     float boss_phase_bonus;          /* per Sol HP-threshold phase crossed */
     float win_bonus;                 /* on Sol death (wave 12 cleared) */
     float prayer_correct_reward;     /* per correctly-prayed incoming hit */
     float offpray_damage_penalty_coeff; /* per-HP penalty for off-prayer damage taken
                                            this tick: immediate credit for praying/
                                            positioning to avoid hits (default 0). */
-    float death_penalty_coeff;       /* magnitude of the death reward when enabled */
-    int terminal_penalty_enabled;
+    float avoided_damage_coeff;
+    float death_penalty_coeff;       /* magnitude of the terminal death reward */
+    float timeout_penalty;
     int curriculum_agent;
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
@@ -1641,6 +1644,7 @@ typedef struct {
        block (unavoidable bleed); 1 style = an avoidable mis-flick. */
     int styles_faced_mask;
     float offpray_damage_this_tick;
+    float avoidable_threat_by_style[4];
 } ColoTickScratch;
 
 /** Colosseum telemetry surfaced through the get_log hook (NOT the shared Log). */
@@ -1682,6 +1686,7 @@ typedef struct {
     float offpray_damage_conflict;
     float offpray_damage_solo;
     float death_on_conflict_tick;
+    float outcome_score;
 } ColosseumLog;
 
 
@@ -1700,6 +1705,7 @@ typedef struct {
     int tick;
     int wave_spawn_delay;
     int wave_ready_delay;
+    int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
     int episode_over;
@@ -1731,6 +1737,8 @@ typedef struct {
     float episode_return;
     int last_hit_by_type;     /* NPC type that last damaged the player (-1 = none) */
     int rewarded_boss_phase;  /* highest Sol phase already paid a boss_phase_bonus */
+    float avoided_damage_already_rewarded;
+    int min_sol_hp_seen;
 
     /* player combat state */
     OsrsInteraction interaction;

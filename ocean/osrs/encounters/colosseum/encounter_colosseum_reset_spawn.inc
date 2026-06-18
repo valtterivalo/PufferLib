@@ -465,6 +465,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_x = -1;
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
+    s->min_sol_hp_seen = COLO_SOL_HP_MAX;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
     /* player: maxed combat stats + live equipped melee loadout */
@@ -477,6 +478,18 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
         ctx->config.loadout_profile_mode,
         ctx->config.beginner_loadout_fraction,
         &s->rng_state);
+    switch (s->active_loadout_profile) {
+        case COLO_LOADOUT_PROFILE_SPEEDRUN:
+            s->episode_max_ticks = COLO_SPEEDRUN_MAX_TICKS;
+            break;
+        case COLO_LOADOUT_PROFILE_BEGINNER:
+            s->episode_max_ticks = COLO_BEGINNER_MAX_TICKS;
+            break;
+        default:
+            fprintf(stderr, "colosseum: invalid active_loadout_profile %d\n",
+                (int)s->active_loadout_profile);
+            abort();
+    }
     const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
     memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));

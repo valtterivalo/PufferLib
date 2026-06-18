@@ -21,7 +21,6 @@ static void col_resolve_player_pending_hits_ctx(ColosseumState* s, ColosseumCont
 static void col_resolve_player_pending_hits(ColosseumState* s);
 static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
-static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx);
 
 /* Sol Heredit boss machine (encounter_colosseum_boss.inc, included after combat). */
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx);
@@ -332,13 +331,14 @@ static ColConfig col_default_config(void) {
         .start_wave = 0,
         .damage_reward_coeff = 0.0f,
         .boss_damage_reward_coeff = 0.0f,
-        .wave_clear_bonus = 0.0f,
+        .wave_clear_bonus = 1.0f,
         .boss_phase_bonus = 0.0f,
         .win_bonus = 0.0f,
         .prayer_correct_reward = 0.0f,
         .offpray_damage_penalty_coeff = 0.0f,
+        .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
-        .terminal_penalty_enabled = 0,
+        .timeout_penalty = 0.0f,
         .curriculum_agent = 0,
         .step_out_forecast_obs_enabled = 1,
         .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
@@ -377,6 +377,8 @@ static void col_init_state_typed(ColosseumState* s, ColosseumContext* ctx) {
     memset(s, 0, sizeof(*s));
     s->rng_state = 12345;
     s->start_wave = ctx ? ctx->config.start_wave : 0;
+    s->episode_max_ticks = COLO_MAX_TICKS;
+    s->min_sol_hp_seen = COLO_SOL_HP_MAX;
 }
 
 static void col_init_state(EncounterState* state, EncounterContext* context) {

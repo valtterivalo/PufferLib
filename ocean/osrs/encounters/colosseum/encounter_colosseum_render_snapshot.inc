@@ -27,9 +27,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
         ctx->human_command_mode = encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "terminal_penalty_enabled") == 0)
-        ctx->config.terminal_penalty_enabled =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
@@ -83,7 +80,10 @@ static void col_put_float_ctx(
         ctx->config.prayer_correct_reward = value;
     else if (strcmp(key, "offpray_damage_penalty_coeff") == 0)
         ctx->config.offpray_damage_penalty_coeff = value;
+    else if (strcmp(key, "avoided_damage_coeff") == 0)
+        ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
+    else if (strcmp(key, "timeout_penalty") == 0) ctx->config.timeout_penalty = value;
     else if (strcmp(key, "beginner_loadout_fraction") == 0) {
         if (!(value >= 0.0f && value <= 1.0f)) {
             fprintf(stderr, "colosseum: beginner_loadout_fraction must be in [0,1], got %.6f\n",

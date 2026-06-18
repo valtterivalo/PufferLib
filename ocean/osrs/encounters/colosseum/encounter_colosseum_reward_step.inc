@@ -10,10 +10,76 @@
  * ordering so gameplay can be filled in without re-plumbing.
  */
 
-static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx) {
+static float col_terminal_death_reward(const ColosseumState* s, const ColosseumContext* ctx) {
     (void)s;
-    if (ctx->config.terminal_penalty_enabled) return -1.0f;
     return -ctx->config.death_penalty_coeff;
+}
+
+static float col_terminal_timeout_reward(const ColosseumState* s, const ColosseumContext* ctx) {
+    (void)s;
+    return -ctx->config.timeout_penalty;
+}
+
+static void col_update_min_sol_hp_seen(ColosseumState* s) {
+    if (!s->sol.started) return;
+    int idx = col_sol_find_idx(s);
+    if (idx < 0) return;
+    int hp = s->npcs[idx].hp;
+    if (hp < 0) hp = 0;
+    if (hp < s->min_sol_hp_seen) s->min_sol_hp_seen = hp;
+}
+
+static int col_sol_score_phase_for_min_hp(int hp) {
+    if (hp > 1350) return 0;
+    if (hp > 1125) return 1;
+    if (hp > 750) return 2;
+    if (hp > 375) return 3;
+    if (hp > 150) return 4;
+    return 5;
+}
+
+static float col_sol_score_progress(const ColosseumState* s) {
+    if (!s->sol.started) return 0.0f;
+    int hp = s->min_sol_hp_seen;
+    if (hp < 0) hp = 0;
+    if (hp > COLO_SOL_HP_MAX) hp = COLO_SOL_HP_MAX;
+
+    static const int phase_hi_hp[COLO_SOL_NUM_PHASES] = {
+        1500, 1350, 1125, 750, 375, 150,
+    };
+    static const int phase_lo_hp[COLO_SOL_NUM_PHASES] = {
+        1350, 1125, 750, 375, 150, 0,
+    };
+    int phase = col_sol_score_phase_for_min_hp(hp);
+    float denom = (float)(phase_hi_hp[phase] - phase_lo_hp[phase]);
+    float within_phase = ((float)phase_hi_hp[phase] - (float)hp) / denom;
+    if (within_phase < 0.0f) within_phase = 0.0f;
+    if (within_phase > 1.0f) within_phase = 1.0f;
+    return ((float)phase + within_phase) / (float)COLO_SOL_NUM_PHASES;
+}
+
+static float col_episode_outcome_score(const ColosseumState* s) {
+    if (s->winner == COLO_OUTCOME_PLAYER_WON) return 1.0f;
+    int waves_cleared = s->log.waves_cleared;
+    if (waves_cleared > COLO_WAVE_BOSS) waves_cleared = COLO_WAVE_BOSS;
+    float depth = (float)waves_cleared + col_sol_score_progress(s);
+    float ratio = depth / (float)COLO_NUM_WAVES;
+    return 0.99f * ratio * ratio;
+}
+
+static void col_record_terminal_outcome_score(ColosseumState* s) {
+    s->log.outcome_score = col_episode_outcome_score(s);
+}
+
+static float col_rewardable_avoided_damage(ColosseumState* s) {
+    ColoTickScratch* t = &s->tick_scratch;
+    if (__builtin_popcount((unsigned)t->styles_faced_mask) != 1) return 0.0f;
+    int style = __builtin_ctz((unsigned)t->styles_faced_mask);
+    float raw_avoided = t->avoidable_threat_by_style[style] - t->offpray_damage_this_tick;
+    if (raw_avoided <= 0.0f) return 0.0f;
+    float progress_budget = s->log.total_damage_dealt - s->avoided_damage_already_rewarded;
+    if (progress_budget <= 0.0f) return 0.0f;
+    return raw_avoided < progress_budget ? raw_avoided : progress_budget;
 }
 
 /**
@@ -31,6 +97,7 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     s->log.total_damage_received += t->damage_received;
     s->log.total_prayer_correct += t->prayer_correct;
     s->log.total_npc_attacks += t->attacks_fired;
+    col_update_min_sol_hp_seen(s);
     if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
 
     float reward = 0.0f;
@@ -38,6 +105,9 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     reward += cfg->boss_damage_reward_coeff * t->damage_boss;
     reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
     reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;
+    float rewardable_avoided = col_rewardable_avoided_damage(s);
+    reward += cfg->avoided_damage_coeff * rewardable_avoided;
+    s->avoided_damage_already_rewarded += rewardable_avoided;
 
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
         reward += cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
@@ -96,12 +166,13 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     s->tick++;
     /* unconditional timeout: checked before the gap/draft gotos so a frozen
        draft can never produce an unterminating episode (training-iter-1 bug). */
-    if (s->tick >= COLO_MAX_TICKS) {
+    if (s->tick >= s->episode_max_ticks) {
         (void)col_compute_reward_ctx(s, ctx);
         s->episode_over = 1;
         s->time_limit_truncated = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_loss_reward(s, ctx);
+        s->reward = col_terminal_timeout_reward(s, ctx);
+        col_record_terminal_outcome_score(s);
         s->episode_return += s->reward;
         return;
     }
@@ -148,7 +219,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_loss_reward(s, ctx);
+        s->reward = col_terminal_death_reward(s, ctx);
+        col_record_terminal_outcome_score(s);
         s->episode_return += s->reward;
         return;
     }
@@ -172,7 +244,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_loss_reward(s, ctx);
+        s->reward = col_terminal_death_reward(s, ctx);
         goto finish_step;
     }
 
@@ -209,7 +281,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (wave_cleared) {
         s->tick_scratch.wave_completed = 1;
         s->log.waves_cleared++;
-        s->reward += 1.0f + ctx->config.wave_clear_bonus;
+        s->reward += ctx->config.wave_clear_bonus;
         if (s->wave + 1 >= COLO_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = COLO_OUTCOME_PLAYER_WON;
@@ -226,6 +298,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
 
 finish_step:
+    if (s->episode_over) col_record_terminal_outcome_score(s);
     s->episode_return += s->reward;
 }
 

@@ -265,11 +265,11 @@ static void test_zero_actions_hit_timeout(void) {
 
     int actions[COLO_NUM_ACTION_HEADS] = {0};
     long t = 0;
-    for (; t < COLO_MAX_TICKS + 10 && !s.episode_over; t++)
+    for (; t < s.episode_max_ticks + 10 && !s.episode_over; t++)
         step_and_observe(&s, &ctx, actions);
 
     CHECK("all-none actions terminate at the tick cap", s.episode_over == 1);
-    CHECK("timeout fires exactly at MAX_TICKS", s.tick == COLO_MAX_TICKS);
+    CHECK("timeout fires exactly at the episode cap", s.tick == s.episode_max_ticks);
     CHECK("timeout counts as a loss", s.winner == COLO_OUTCOME_PLAYER_DIED);
     CHECK("timeout is marked as a truncation", s.time_limit_truncated == 1);
     CHECK("the draft was still pending when time ran out", s.modifiers.draft_pending == 1);

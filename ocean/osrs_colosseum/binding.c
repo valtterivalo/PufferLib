@@ -141,6 +141,8 @@ void c_step(Env* env) {
             env->log.damage_dealt += clog->total_damage_dealt;
             env->log.damage_received += clog->total_damage_received;
             env->log.npc_kills += (float)clog->total_npc_kills;
+            env->log.colo_outcome_score += clog->outcome_score;
+            env->log.colo_min_sol_hp += (float)s->min_sol_hp_seen;
             env->log.prayer_correct += (float)clog->total_prayer_correct;
             env->log.prayer_total += (float)clog->total_npc_attacks;
             for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
@@ -282,7 +284,9 @@ void my_init(Env* env, Dict* kwargs) {
         "win_bonus",
         "prayer_correct_reward",
         "offpray_damage_penalty_coeff",
+        "avoided_damage_coeff",
         "death_penalty_coeff",
+        "timeout_penalty",
         "beginner_loadout_fraction",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
@@ -294,7 +298,6 @@ void my_init(Env* env, Dict* kwargs) {
     }
 
     static const char* const optional_int_keys[] = {
-        "terminal_penalty_enabled",
         "loadout_profile_mode",
         "step_out_forecast_obs_enabled",
         "forecast_horizon",
@@ -437,11 +440,8 @@ void my_log(Log* log, Dict* out) {
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
 
-    /* score: win-rate plus partial credit for wave progress on losses. */
-    float wr = log->wins;
-    float wave_frac = log->wave / (float)COLO_NUM_WAVES;
-    float score = wr + (1.0f - wr) * wave_frac * 0.5f;
-    dict_set(out, "score", score);
+    dict_set(out, "score", log->colo_outcome_score);
+    dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
 
     /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
        overhead per prayer-checkable hit faced) + mean off-prayer damage taken

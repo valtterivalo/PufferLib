@@ -1024,6 +1024,8 @@ typedef struct {
     float colo_offpray_damage_conflict;
     float colo_offpray_damage_solo;
     float colo_death_on_conflict_tick;
+    float colo_outcome_score;
+    float colo_min_sol_hp;
 } Log;
 
 typedef struct {
