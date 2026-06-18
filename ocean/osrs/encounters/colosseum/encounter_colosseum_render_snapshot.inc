@@ -36,6 +36,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "mask_inventory_heads") == 0)
         ctx->config.mask_inventory_heads =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "action_debug_log") == 0)
+        ctx->config.action_debug_log =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
@@ -719,24 +722,6 @@ static int col_find_inventory_cell_for_any_consumable(
     return col_find_inventory_cell_for_consumable(s, b);
 }
 
-static int col_local_overhead_action(int shared_action) {
-    switch (shared_action) {
-        case ENCOUNTER_OVERHEAD_NO_CHANGE:
-        case ENCOUNTER_OVERHEAD_OFF:
-            return COLO_OVERHEAD_NO_CHANGE;
-        case ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE:
-            return COLO_OVERHEAD_MELEE;
-        case ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED:
-            return COLO_OVERHEAD_RANGED;
-        case ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC:
-            return COLO_OVERHEAD_MAGIC;
-        default:
-            fprintf(stderr, "colosseum human prayer: unsupported shared action %d\n",
-                shared_action);
-            abort();
-    }
-}
-
 static void col_translate_human_input_ctx(
     HumanInput* hi,
     int* actions,
@@ -747,7 +732,6 @@ static void col_translate_human_input_ctx(
 
     encounter_translate_movement(hi, actions, COLO_HEAD_MOVE, col_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
-    actions[COLO_HEAD_PRAYER] = col_local_overhead_action(actions[COLO_HEAD_PRAYER]);
 
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -822,7 +806,7 @@ static void col_translate_human_commands_ctx(
                 break;
             }
             case HUMAN_COMMAND_OVERHEAD_PRAYER:
-                actions[COLO_HEAD_PRAYER] = col_local_overhead_action(cmd->overhead_prayer);
+                actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
                 break;
             case HUMAN_COMMAND_EAT:
                 col_queue_inventory_click_action(actions, cmd->inventory_slot);
@@ -837,6 +821,8 @@ static void col_translate_human_commands_ctx(
                 col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
+                actions[COLO_HEAD_OFFENSIVE] = cmd->offensive_prayer;
+                break;
             case HUMAN_COMMAND_SPELL_TARGET:
             case HUMAN_COMMAND_FIGHT_STYLE:
             case HUMAN_COMMAND_SET_AUTOCAST:

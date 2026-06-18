@@ -25,9 +25,10 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (4): no_change always valid; set melee/ranged/magic valid iff
-       prayer points remain. */
+    /* HEAD_PRAYER (5): no_change always valid; off valid iff one is active;
+       set melee/ranged/magic valid iff prayer points remain. */
     mask[offset++] = 1.0f;
+    mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;

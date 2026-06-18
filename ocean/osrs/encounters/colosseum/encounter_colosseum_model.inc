@@ -1566,6 +1566,7 @@ typedef struct {
     int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
     int mask_inventory_heads;
+    int action_debug_log;
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).

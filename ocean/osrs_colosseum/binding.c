@@ -210,6 +210,12 @@ void c_render(Env* env) {
             .world_origin_y = 3090,
         };
         re->collision_map = encounter_load_scene_assets(rc, &scene);
+        ENCOUNTER_COLOSSEUM.put_ptr(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "collision_map", re->collision_map);
+        ENCOUNTER_COLOSSEUM.put_int(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "world_offset_x", 1808);
+        ENCOUNTER_COLOSSEUM.put_int(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "world_offset_y", 3090);
         render_populate_entities(rc, re);
         rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
         rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
@@ -303,6 +309,7 @@ void my_init(Env* env, Dict* kwargs) {
         "forecast_horizon",
         "forecast_run_tile_mode",
         "mask_inventory_heads",
+        "action_debug_log",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

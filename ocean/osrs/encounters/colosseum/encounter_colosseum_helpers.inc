@@ -326,6 +326,15 @@ static void col_queue_player_pending_hit(
 }
 
 
+static int col_default_action_debug_log(void) {
+    const char* value = getenv("OSRS_COLOSSEUM_ACTION_LOG");
+    if (!value || value[0] == '\0') return 0;
+    if (strcmp(value, "1") == 0) return 1;
+    if (strcmp(value, "0") == 0) return 0;
+    fprintf(stderr, "OSRS_COLOSSEUM_ACTION_LOG must be 0 or 1, got %s\n", value);
+    abort();
+}
+
 static ColConfig col_default_config(void) {
     return (ColConfig){
         .start_wave = 0,
@@ -344,6 +353,7 @@ static ColConfig col_default_config(void) {
         .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
         .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
         .mask_inventory_heads = 0,
+        .action_debug_log = col_default_action_debug_log(),
     };
 }
 

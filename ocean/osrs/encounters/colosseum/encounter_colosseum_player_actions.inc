@@ -9,7 +9,7 @@
  */
 
 #define COLO_HEAD_MOVE            0  /* 25: idle + 8 walk + 16 run */
-#define COLO_HEAD_PRAYER          1  /* none, melee, ranged, magic */
+#define COLO_HEAD_PRAYER          1  /* no_change, off, set_refresh_melee/ranged/magic */
 #define COLO_HEAD_TARGET          2  /* COLO_OBS_NPCS+1: none or obs slot */
 #define COLO_HEAD_INV_CLICK_0     3
 #define COLO_HEAD_INV_CLICK_1     4
@@ -47,14 +47,15 @@
 
 #define COLO_INV_CLICK_HEADS 28
 #define COLO_INV_CLICK_DIM 29
-#define COLO_OVERHEAD_DIM 4
+#define COLO_OVERHEAD_DIM ENCOUNTER_OVERHEAD_DIM_PVE
 #define COLO_SPEC_DIM 3
 #define COLO_SPELL_DIM 3   /* none, summon-thrall, death-charge */
 
-#define COLO_OVERHEAD_NO_CHANGE 0
-#define COLO_OVERHEAD_MELEE 1
-#define COLO_OVERHEAD_RANGED 2
-#define COLO_OVERHEAD_MAGIC 3
+#define COLO_OVERHEAD_NO_CHANGE ENCOUNTER_OVERHEAD_NO_CHANGE
+#define COLO_OVERHEAD_OFF ENCOUNTER_OVERHEAD_OFF
+#define COLO_OVERHEAD_MELEE ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE
+#define COLO_OVERHEAD_RANGED ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED
+#define COLO_OVERHEAD_MAGIC ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC
 
 /* COLO_HEAD_SPELL action indices */
 #define COLO_SPELL_SUMMON_THRALL 1
@@ -166,36 +167,30 @@ static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
     s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 
-static int col_apply_overhead_action(OverheadPrayer* overhead, int action) {
-    switch (action) {
-        case COLO_OVERHEAD_NO_CHANGE:
-            return 0;
-        case COLO_OVERHEAD_MELEE:
-            *overhead = PRAYER_PROTECT_MELEE;
-            return 1;
-        case COLO_OVERHEAD_RANGED:
-            *overhead = PRAYER_PROTECT_RANGED;
-            return 1;
-        case COLO_OVERHEAD_MAGIC:
-            *overhead = PRAYER_PROTECT_MAGIC;
-            return 1;
-        default:
-            fprintf(stderr, "colosseum prayer: invalid action %d\n", action);
-            abort();
-    }
-}
-
 /** apply prayer actions + drain, before movement and attack. an offensive
     prayer change recomputes every loadout's prayer multipliers (L12). */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
-    (void)ctx;
-    if (col_apply_overhead_action(&s->player.prayer, actions[COLO_HEAD_PRAYER]))
-        s->player.prayer_just_activated = 1;
+    OverheadPrayer prev_prayer = s->player.prayer;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
-    encounter_apply_offensive_action(&s->player.offensive_prayer, actions[COLO_HEAD_OFFENSIVE]);
+    int prayer_before = s->player.current_prayer;
+    if (encounter_apply_overhead_action(&s->player.prayer, actions[COLO_HEAD_PRAYER]))
+        s->player.prayer_just_activated = 1;
+    if (encounter_apply_offensive_action(&s->player.offensive_prayer,
+            actions[COLO_HEAD_OFFENSIVE]))
+        s->player.offensive_prayer_just_activated = 1;
+    encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.offensive_prayer != prev_offensive)
         col_mark_live_loadout_dirty(s);
-    encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
+    if (ctx && ctx->config.action_debug_log) {
+        fprintf(stderr,
+            "colo_action tick=%d pretick move=%d prayer_action=%d target=%d "
+            "offensive_action=%d spell=%d prayer=%d->%d offensive=%d->%d pp=%d->%d\n",
+            s->tick, actions[COLO_HEAD_MOVE], actions[COLO_HEAD_PRAYER],
+            actions[COLO_HEAD_TARGET], actions[COLO_HEAD_OFFENSIVE],
+            actions[COLO_HEAD_SPELL], prev_prayer, s->player.prayer,
+            prev_offensive, s->player.offensive_prayer, prayer_before,
+            s->player.current_prayer);
+    }
 }
 
 
@@ -515,24 +510,172 @@ static void col_apply_drink_cell(ColosseumState* s, OsrsConsumableKind kind) {
     abort();
 }
 
-static void col_click_inventory_cell(ColosseumState* s, int cell_idx) {
-    if (cell_idx < 0 || cell_idx >= COLO_INVENTORY_DISPLAY_SLOTS) return;
-    ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
-        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
-    if (resolution.click_action == OSRS_CLICK_EQUIP) {
-        col_equip_from_cell(s, cell_idx);
-    } else if (resolution.click_action == OSRS_CLICK_DRINK) {
-        if (cell->dose > 0 && col_can_use_consumable_kind(s, resolution.consumable_kind)) {
-            col_apply_drink_cell(s, resolution.consumable_kind);
-            col_decrement_consumable_cell(s, cell_idx, resolution);
+typedef struct {
+    int clicked_cells[COLO_INV_CLICK_HEADS];
+    int clicked_count;
+    int duplicate_cells[COLO_INV_CLICK_HEADS];
+    int duplicate_count;
+    int equip_cell_by_slot[NUM_GEAR_SLOTS];
+    int equip_order_by_slot[NUM_GEAR_SLOTS];
+    int eat_cell;
+    int eat_order;
+    OsrsInventoryClickResolution eat_resolution;
+    int drink_cell;
+    int drink_order;
+    OsrsInventoryClickResolution drink_resolution;
+} ColoInventoryTickIntent;
+
+static ColoInventoryTickIntent col_inventory_tick_intent_empty(void) {
+    ColoInventoryTickIntent intent;
+    memset(&intent, 0, sizeof(intent));
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        intent.equip_cell_by_slot[slot] = -1;
+        intent.equip_order_by_slot[slot] = -1;
+    }
+    intent.eat_cell = -1;
+    intent.eat_order = -1;
+    intent.drink_cell = -1;
+    intent.drink_order = -1;
+    return intent;
+}
+
+static void col_record_inventory_click_debug_cell(int* cells, int* count, int cell_idx) {
+    if (*count >= COLO_INV_CLICK_HEADS) {
+        fprintf(stderr, "colosseum inventory debug cell overflow\n");
+        abort();
+    }
+    cells[*count] = cell_idx;
+    *count += 1;
+}
+
+static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
+    const ColosseumState* s,
+    const int* actions
+) {
+    ColoInventoryTickIntent intent = col_inventory_tick_intent_empty();
+    int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        int action = actions[COLO_HEAD_INV_CLICK_0 + head];
+        if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
+        int cell_idx = action - 1;
+        if (clicked[cell_idx]) {
+            (void)osrs_inventory_click_interpret(
+                s->inventory_cells[cell_idx].item_idx,
+                s->inventory_cells[cell_idx].osrs_id,
+                OSRS_CLICK_TICK_DUPLICATE);
+            col_record_inventory_click_debug_cell(
+                intent.duplicate_cells, &intent.duplicate_count, cell_idx);
+            continue;
         }
-    } else if (resolution.click_action == OSRS_CLICK_EAT) {
-        if (col_can_use_consumable_kind(s, resolution.consumable_kind)) {
-            col_apply_food_cell(s, resolution.consumable_kind);
-            col_empty_inventory_cell(s, cell_idx);
+        clicked[cell_idx] = 1;
+        col_record_inventory_click_debug_cell(
+            intent.clicked_cells, &intent.clicked_count, cell_idx);
+
+        const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+        OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        if (resolution.click_action == OSRS_CLICK_EQUIP) {
+            if (!col_can_equip_from_cell(s, cell_idx)) continue;
+            int gear_slot = osrs_item_gear_slot(cell->item_idx);
+            if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) {
+                fprintf(stderr, "colosseum equip intent: invalid gear slot %d\n", gear_slot);
+                abort();
+            }
+            intent.equip_cell_by_slot[gear_slot] = cell_idx;
+            intent.equip_order_by_slot[gear_slot] = head;
+        } else if (resolution.click_action == OSRS_CLICK_DRINK) {
+            if (intent.drink_cell >= 0) continue;
+            if (cell->dose > 0 && col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+                intent.drink_cell = cell_idx;
+                intent.drink_order = head;
+                intent.drink_resolution = resolution;
+            }
+        } else if (resolution.click_action == OSRS_CLICK_EAT) {
+            if (intent.eat_cell >= 0) continue;
+            if (col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+                intent.eat_cell = cell_idx;
+                intent.eat_order = head;
+                intent.eat_resolution = resolution;
+            }
         }
     }
+    return intent;
+}
+
+static int col_inventory_tick_intent_has_effect(const ColoInventoryTickIntent* intent) {
+    if (intent->eat_cell >= 0 || intent->drink_cell >= 0) return 1;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        if (intent->equip_cell_by_slot[slot] >= 0) return 1;
+    return 0;
+}
+
+static int col_next_inventory_apply_order(const ColoInventoryTickIntent* intent) {
+    int best = COLO_INV_CLICK_HEADS + 1;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        int order = intent->equip_order_by_slot[slot];
+        if (order >= 0 && order < best) best = order;
+    }
+    if (intent->eat_order >= 0 && intent->eat_order < best) best = intent->eat_order;
+    if (intent->drink_order >= 0 && intent->drink_order < best) best = intent->drink_order;
+    return best == COLO_INV_CLICK_HEADS + 1 ? -1 : best;
+}
+
+static void col_apply_inventory_tick_intent(
+    ColosseumState* s,
+    ColoInventoryTickIntent* intent
+) {
+    if (col_inventory_tick_intent_has_effect(intent))
+        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EQUIP);
+
+    int order;
+    while ((order = col_next_inventory_apply_order(intent)) >= 0) {
+        for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+            if (intent->equip_order_by_slot[slot] != order) continue;
+            col_equip_from_cell(s, intent->equip_cell_by_slot[slot]);
+            intent->equip_order_by_slot[slot] = -1;
+            intent->equip_cell_by_slot[slot] = -1;
+        }
+        if (intent->eat_order == order) {
+            col_apply_food_cell(s, intent->eat_resolution.consumable_kind);
+            col_empty_inventory_cell(s, intent->eat_cell);
+            intent->eat_order = -1;
+            intent->eat_cell = -1;
+        }
+        if (intent->drink_order == order) {
+            col_apply_drink_cell(s, intent->drink_resolution.consumable_kind);
+            col_decrement_consumable_cell(s, intent->drink_cell, intent->drink_resolution);
+            intent->drink_order = -1;
+            intent->drink_cell = -1;
+        }
+    }
+}
+
+static void col_log_inventory_tick_intent(
+    const ColosseumState* s,
+    const ColoInventoryTickIntent* intent,
+    const int* actions,
+    int interrupted
+) {
+    fprintf(stderr, "colo_action tick=%d inventory raw=", s->tick);
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++)
+        fprintf(stderr, "%s%d", head == 0 ? "" : ",",
+            actions[COLO_HEAD_INV_CLICK_0 + head]);
+    fprintf(stderr, " clicked=");
+    for (int i = 0; i < intent->clicked_count; i++)
+        fprintf(stderr, "%s%d", i == 0 ? "" : ",", intent->clicked_cells[i]);
+    fprintf(stderr, " duplicates=");
+    for (int i = 0; i < intent->duplicate_count; i++)
+        fprintf(stderr, "%s%d", i == 0 ? "" : ",", intent->duplicate_cells[i]);
+    fprintf(stderr, " equips=");
+    int wrote = 0;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        if (intent->equip_cell_by_slot[slot] < 0) continue;
+        fprintf(stderr, "%sslot%d:cell%d", wrote ? "," : "",
+            slot, intent->equip_cell_by_slot[slot]);
+        wrote = 1;
+    }
+    fprintf(stderr, " eat_cell=%d drink_cell=%d interrupted=%d\n",
+        intent->eat_cell, intent->drink_cell, interrupted);
 }
 
 
@@ -599,6 +742,7 @@ static void col_tick_thrall_and_death_charge(ColosseumState* s, ColosseumContext
 
 typedef struct {
     ColosseumState* s;
+    const ColosseumContext* ctx;
 } ColoWalkCtx;
 
 static int col_tile_walkable(void* ctx, int x, int y) {
@@ -608,7 +752,9 @@ static int col_tile_walkable(void* ctx, int x, int y) {
 
 static int col_pathfind_blocked(void* ctx, int abs_x, int abs_y) {
     ColoWalkCtx* wc = (ColoWalkCtx*)ctx;
-    return col_player_walkable(wc->s, abs_x, abs_y) ? 0 : 1;
+    int x = abs_x - wc->ctx->world_offset_x;
+    int y = abs_y - wc->ctx->world_offset_y;
+    return col_player_walkable(wc->s, x, y) ? 0 : 1;
 }
 
 /** the player's effective attack reach, after Myopia's range reduction. */
@@ -999,21 +1145,11 @@ static void col_tick_player_ctx(
         col_mark_live_loadout_dirty(s);
 
     if (!ctx->config.mask_inventory_heads) {
-        int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
-        for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-            int action = actions[COLO_HEAD_INV_CLICK_0 + head];
-            if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
-            int cell_idx = action - 1;
-            if (clicked[cell_idx]) {
-                (void)osrs_inventory_click_interpret(
-                    s->inventory_cells[cell_idx].item_idx,
-                    s->inventory_cells[cell_idx].osrs_id,
-                    OSRS_CLICK_TICK_DUPLICATE);
-                continue;
-            }
-            clicked[cell_idx] = 1;
-            col_click_inventory_cell(s, cell_idx);
-        }
+        ColoInventoryTickIntent intent = col_resolve_inventory_tick_intent(s, actions);
+        if (ctx->config.action_debug_log)
+            col_log_inventory_tick_intent(
+                s, &intent, actions, col_inventory_tick_intent_has_effect(&intent));
+        col_apply_inventory_tick_intent(s, &intent);
     }
 
     int spec_act = actions[COLO_HEAD_SPEC];
@@ -1081,7 +1217,11 @@ static void col_tick_player_ctx(
         else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)
             move_kind = OSRS_PLAYER_MOVE_ACTION;
     }
-    ColoWalkCtx wc = { s };
+    int player_x_before_step = s->player.x;
+    int player_y_before_step = s->player.y;
+    int interaction_before_step = osrs_interaction_active(&s->interaction)
+        ? s->interaction.target_slot : -1;
+    ColoWalkCtx wc = { s, ctx };
     OsrsLosQuery los_query = col_player_los_query(s);
     OsrsPlayerStepInput step_input = {
         .player = &s->player,
@@ -1109,7 +1249,19 @@ static void col_tick_player_ctx(
             .arena_h = COLO_ARENA_HEIGHT,
         },
     };
-    (void)osrs_encounter_player_step(&step_input);
+    OsrsPlayerStepResult step_result = osrs_encounter_player_step(&step_input);
+    if (ctx->config.action_debug_log) {
+        fprintf(stderr,
+            "colo_action tick=%d movement move_kind=%d move_action=%d "
+            "dest=%d,%d has_new_target=%d new_target=%d interaction=%d->%d "
+            "pos=%d,%d->%d,%d moved=%d explicit=%d chased=%d can_attack=%d\n",
+            s->tick, move_kind, move_act, s->player_dest_x, s->player_dest_y,
+            has_new_target, new_target_slot, interaction_before_step,
+            step_result.target_slot, player_x_before_step, player_y_before_step,
+            s->player.x, s->player.y, step_result.moved,
+            step_result.explicit_moved, step_result.chased_target,
+            step_result.can_attack);
+    }
     col_rebuild_player_collision_flags(s);
 
     /* attack */

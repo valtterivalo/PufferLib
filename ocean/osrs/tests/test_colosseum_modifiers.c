@@ -238,6 +238,8 @@ static void test_fuzz_obs_mask(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
+    ctx.world_offset_x = 1808;
+    ctx.world_offset_y = 3090;
     ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_MIXED;
     ctx.config.beginner_loadout_fraction = 0.5f;
 
@@ -3987,6 +3989,33 @@ static void test_loadout_offensive_prayers(void) {
     CHECK("piety and rigour are offered",
         mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY] == 1.0f &&
         mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] == 1.0f);
+
+    int overhead[COLO_NUM_ACTION_HEADS] = {0};
+    overhead[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+    step_and_observe(&s, &ctx, overhead);
+    CHECK("shared overhead melee activates protect melee",
+        s.player.prayer == PRAYER_PROTECT_MELEE);
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int prayer_offset = col_action_head_mask_offset(COLO_HEAD_PRAYER);
+    CHECK("shared overhead off is valid while overhead prayer is active",
+        mask[prayer_offset + ENCOUNTER_OVERHEAD_OFF] == 1.0f);
+    int overhead_off[COLO_NUM_ACTION_HEADS] = {0};
+    overhead_off[COLO_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_OFF;
+    step_and_observe(&s, &ctx, overhead_off);
+    CHECK("shared overhead off clears active overhead prayer",
+        s.player.prayer == PRAYER_NONE);
+
+    piety[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+    col_player_pretick(&s, &ctx, piety);
+    CHECK("piety reactivates before drain-zero regression",
+        s.player.offensive_prayer == OFFENSIVE_PRAYER_PIETY &&
+        col_live_loadout_stats(&s)->max_hit > base_max_hit);
+    s.player.current_prayer = 0;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    col_player_pretick(&s, &ctx, idle);
+    CHECK("prayer drain auto-clear recomputes offensive loadout stats",
+        s.player.offensive_prayer == OFFENSIVE_PRAYER_NONE &&
+        col_live_loadout_stats(&s)->max_hit == base_max_hit);
 }
 
 /* ----- combat-fidelity pass: magic set + thralls + Death Charge ------------- */
@@ -3996,6 +4025,8 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("three weapon sets (melee/ranged/magic)", COLO_NUM_WEAPON_SETS == 3);
     CHECK("thirty-six action heads (28 inventory click heads)", COLO_NUM_ACTION_HEADS == 36);
     CHECK("inventory click head dim is 29", COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
+    CHECK("prayer head uses shared PVE overhead dim",
+        COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
     CHECK("obs width is 2359", COLO_NUM_OBS == 2359);
     CHECK("snapshot version is v10", COLO_SNAPSHOT_VERSION == 10u);
@@ -4008,7 +4039,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     int mask_sum = 0;
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) mask_sum += COLO_ACTION_DIMS[h];
     CHECK("mask size equals the summed action-head dims",
-        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 887);
+        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 888);
 
     /* recompute the obs width independently from the section constants. */
     int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_INVENTORY_OBS_SIZE +
@@ -4927,6 +4958,8 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
+    ctx.world_offset_x = 1808;
+    ctx.world_offset_y = 3090;
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 5151);
@@ -5122,6 +5155,23 @@ static void test_stage3_t1_inventory_ranged_weapon_swap(void) {
         s.inventory_cells[bow_cell].item_idx == melee_weapon);
 }
 
+static void test_stage3_t1_inventory_weapon_slot_last_click_wins(void) {
+    printf("test_stage3_t1_inventory_weapon_slot_last_click_wins\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 508);
+    int bow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
+    int claws_cell = test_find_inventory_cell_with_item(&s, ITEM_DRAGON_CLAWS);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    actions[COLO_HEAD_INV_CLICK_0] = bow_cell + 1;
+    actions[COLO_HEAD_INV_CLICK_1] = claws_cell + 1;
+    step_and_observe(&s, &ctx, actions);
+    CHECK("last weapon click wins the weapon slot",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_DRAGON_CLAWS);
+    CHECK("earlier weapon click is ignored for the same tick",
+        s.inventory_cells[bow_cell].item_idx == ITEM_TWISTED_BOW);
+}
+
 static void test_stage3_t2_brew_click_decrements_dose(void) {
     printf("test_stage3_t2_brew_click_decrements_dose\n");
     ColosseumContext ctx;
@@ -5202,7 +5252,7 @@ static void test_stage3_t4_mask_inventory_heads_flag(void) {
     CHECK("mask_inventory_heads pins every inventory head to noop only",
         all_inventory_heads_pinned_to_noop);
     CHECK("mask_inventory_heads leaves the action-mask size unchanged",
-        COLO_ACTION_MASK_SIZE == 887);
+        COLO_ACTION_MASK_SIZE == 888);
 
     geo_clear_npcs(&s);
     s.modifiers.draft_pending = 0;
@@ -5256,11 +5306,12 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         step_and_observe(&s, &ctx, actions);
     }
     CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2359);
-    CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
+    CHECK("T6 mask running-index assert reached 888", COLO_ACTION_MASK_SIZE == 888);
 }
 
 int main(void) {
     test_stage3_t1_inventory_ranged_weapon_swap();
+    test_stage3_t1_inventory_weapon_slot_last_click_wins();
     test_stage3_t2_brew_click_decrements_dose();
     test_stage3_t3_one_dose_vial_empties();
     test_stage3_t4_click_mask_bits();
