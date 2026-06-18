@@ -344,7 +344,7 @@ static void run_profile(
     double start = osrs_profile_now_seconds();
     double elapsed = 0;
     int total_steps = 0;
-    int enc_actions[16] = {0};
+    int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
 
     while ((profile_steps > 0 && total_steps < profile_steps) ||
            (profile_steps <= 0 && elapsed < 10.0)) {
@@ -575,7 +575,7 @@ static void __attribute__((unused)) replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf->initial_snapshot); free(rf); }
 }
 
-#define VISUAL_POLICY_MAX_ACTION_HEADS 16
+#define VISUAL_POLICY_MAX_ACTION_HEADS 64
 
 typedef enum {
     VISUAL_POLICY_NONE = 0,
@@ -1014,7 +1014,7 @@ static void visual_frame(void* arg) {
     if (env->encounter_def && env->encounter_state) {
         /* encounter mode */
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
-        int enc_actions[16] = {0};
+        int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
         int used_human_step = 0;
 
         if (rc->human_input.enabled && edef->step_human_commands) {
