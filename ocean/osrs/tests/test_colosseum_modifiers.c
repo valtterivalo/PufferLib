@@ -118,6 +118,26 @@ static void force_clear_wave(ColosseumState* s) {
     }
 }
 
+static int first_live_score_enemy(const ColosseumState* s) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (col_npc_is_live_enemy(&s->npcs[i])) return i;
+    }
+    return -1;
+}
+
+static void kill_first_live_score_enemy(ColosseumState* s) {
+    int slot = first_live_score_enemy(s);
+    CHECK("a live score enemy exists", slot >= 0);
+    if (slot < 0) return;
+    s->npcs[slot].hp = 0;
+    col_apply_npc_death(s, slot);
+}
+
+static float score_for_depth(float depth) {
+    float ratio = depth / (float)COLO_NUM_WAVES;
+    return 0.99f * ratio * ratio;
+}
+
 /* land the player's queued attack outside the step loop: pending hits carry a
    1-3 tick projectile delay (the scythe's range-2 path takes 3). */
 static void land_pending_player_hits(ColosseumState* s) {
@@ -1563,6 +1583,98 @@ static void test_reinforcement_gates(void) {
         CHECK(north ? "player y=16 -> north gate row (yellow line, not nearest)"
                     : "player y=15 -> south gate row", row_ok);
     }
+}
+
+static void test_outcome_score_uses_current_wave_kills(void) {
+    printf("test_outcome_score_uses_current_wave_kills\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 101);
+    complete_open_draft(&s, &ctx, 1);
+
+    CHECK("wave 1 starts with four score enemies", s.current_wave_total_killable == 4);
+
+    int slot = first_live_score_enemy(&s);
+    CHECK("wave has a score enemy to damage", slot >= 0);
+    int hp = s.npcs[slot].hp;
+    s.npcs[slot].hp = hp / 2;
+    float before_kill = col_episode_outcome_score(&s);
+    s.npcs[slot].hp = hp;
+    CHECK("damage and healing do not change score",
+        fabsf(col_episode_outcome_score(&s) - before_kill) < 0.000001f);
+
+    kill_first_live_score_enemy(&s);
+    float one_kill = col_episode_outcome_score(&s);
+    CHECK("one kill gives one quarter wave progress",
+        fabsf(one_kill - score_for_depth(0.25f)) < 0.000001f);
+
+    kill_first_live_score_enemy(&s);
+    float two_kills = col_episode_outcome_score(&s);
+    CHECK("second kill increases the score", two_kills > one_kill);
+    CHECK("two kills give half wave progress",
+        fabsf(two_kills - score_for_depth(0.5f)) < 0.000001f);
+}
+
+static void test_outcome_score_reinforcement_progress_is_monotonic(void) {
+    printf("test_outcome_score_reinforcement_progress_is_monotonic\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 10;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 202);
+
+    CHECK("wave 11 starts with seven score enemies", s.current_wave_total_killable == 7);
+    for (int i = 0; i < 6; i++) kill_first_live_score_enemy(&s);
+    float before_reinforcement = col_episode_outcome_score(&s);
+
+    col_spawn_reinforcements(&s);
+    CHECK("reinforcements enter the score denominator", s.current_wave_total_killable == 9);
+    CHECK("reinforcements do not reduce score",
+        fabsf(col_episode_outcome_score(&s) - before_reinforcement) < 0.000001f);
+
+    kill_first_live_score_enemy(&s);
+    CHECK("first post-reinforcement kill preserves the watermark",
+        fabsf(col_episode_outcome_score(&s) - before_reinforcement) < 0.000001f);
+    kill_first_live_score_enemy(&s);
+    CHECK("second post-reinforcement kill climbs again",
+        col_episode_outcome_score(&s) > before_reinforcement);
+}
+
+static void test_outcome_score_wave_clear_has_no_double_count(void) {
+    printf("test_outcome_score_wave_clear_has_no_double_count\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 303);
+    complete_open_draft(&s, &ctx, 1);
+
+    while (first_live_score_enemy(&s) >= 0) kill_first_live_score_enemy(&s);
+    s.log.waves_cleared = 1;
+    CHECK("within-wave progress is zero after all wave enemies are killed",
+        col_current_wave_score_progress(&s) == 0.0f);
+    CHECK("cleared-wave score comes only from waves_cleared",
+        fabsf(col_episode_outcome_score(&s) - score_for_depth(1.0f)) < 0.000001f);
+}
+
+static void test_outcome_score_sol_uses_boss_progress_only(void) {
+    printf("test_outcome_score_sol_uses_boss_progress_only\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = COLO_WAVE_BOSS;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 404);
+
+    s.min_sol_hp_seen = 750;
+    float expected = score_for_depth(col_sol_score_progress(&s));
+    CHECK("boss wave has no within-wave kill denominator",
+        s.current_wave_total_killable == 0 && col_current_wave_score_progress(&s) == 0.0f);
+    CHECK("Sol score is boss progress only",
+        fabsf(col_episode_outcome_score(&s) - expected) < 0.000001f);
 }
 
 /* 3d2. A29 roster cap: the largest initial spawn set (wave 8's 7 scripted NPCs +
@@ -5184,6 +5296,10 @@ int main(void) {
     test_static_los_and_attack_gate();
     test_spawn_anchor_exclusion();
     test_reinforcement_gates();
+    test_outcome_score_uses_current_wave_kills();
+    test_outcome_score_reinforcement_progress_is_monotonic();
+    test_outcome_score_wave_clear_has_no_double_count();
+    test_outcome_score_sol_uses_boss_progress_only();
     test_roster_cap_nine();
     test_wave12_quartet_and_win();
     test_warband_cycle_offsets();

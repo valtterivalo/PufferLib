@@ -58,11 +58,23 @@ static float col_sol_score_progress(const ColosseumState* s) {
     return ((float)phase + within_phase) / (float)COLO_SOL_NUM_PHASES;
 }
 
+static float col_current_wave_score_progress(const ColosseumState* s) {
+    if (s->wave == COLO_WAVE_BOSS || s->sol.started) return 0.0f;
+    if (s->current_wave_total_killable <= 0) return 0.0f;
+    if (s->current_wave_kills >= s->current_wave_total_killable) return 0.0f;
+    float progress = s->current_wave_kill_progress;
+    if (progress < 0.0f) return 0.0f;
+    if (progress >= 1.0f) return 0.0f;
+    return progress;
+}
+
 static float col_episode_outcome_score(const ColosseumState* s) {
-    if (s->winner == COLO_OUTCOME_PLAYER_WON) return 1.0f;
+    if (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_WON) return 1.0f;
     int waves_cleared = s->log.waves_cleared;
     if (waves_cleared > COLO_WAVE_BOSS) waves_cleared = COLO_WAVE_BOSS;
-    float depth = (float)waves_cleared + col_sol_score_progress(s);
+    float depth = (float)waves_cleared +
+        col_current_wave_score_progress(s) +
+        col_sol_score_progress(s);
     float ratio = depth / (float)COLO_NUM_WAVES;
     return 0.99f * ratio * ratio;
 }

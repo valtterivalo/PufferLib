@@ -21,6 +21,15 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     if (npc->death_ticks > 0) return;
     assert(npc->active && npc->hp <= 0);
     s->log.total_npc_kills++;
+    if (s->wave != COLO_WAVE_BOSS && s->current_wave_total_killable > 0) {
+        if (s->current_wave_kills < s->current_wave_total_killable) {
+            s->current_wave_kills++;
+            float progress = (float)s->current_wave_kills /
+                (float)s->current_wave_total_killable;
+            if (progress > s->current_wave_kill_progress)
+                s->current_wave_kill_progress = progress;
+        }
+    }
     /* Death Charge: the first player-credited killing blow inside the armed
        window grants +15% spec energy and starts the 100-tick cooldown. All kills
        reaching this path are player-credited (NPC->NPC damage never routes here),

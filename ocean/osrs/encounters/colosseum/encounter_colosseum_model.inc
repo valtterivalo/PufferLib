@@ -1708,6 +1708,9 @@ typedef struct {
     int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
+    int current_wave_kills;
+    int current_wave_total_killable;
+    float current_wave_kill_progress;
     int episode_over;
     int time_limit_truncated;
     ColoOutcome winner;       /* valid only when episode_over is set */

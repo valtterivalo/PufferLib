@@ -50,6 +50,18 @@ static int col_find_free_npc(ColosseumState* s) {
     return -1;
 }
 
+static void col_reset_current_wave_score_progress(ColosseumState* s) {
+    s->current_wave_kills = 0;
+    s->current_wave_total_killable = 0;
+    s->current_wave_kill_progress = 0.0f;
+}
+
+static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
+    if (s->wave == COLO_WAVE_BOSS) return;
+    if (col_type_is_hazard_entity(type)) return;
+    s->current_wave_total_killable++;
+}
+
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
     /* hazard entities never stamped collision; unstamping would erase a real
@@ -122,6 +134,7 @@ static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
     int slot = col_find_free_npc(s);
     assert(slot >= 0 && "colosseum NPC slots exhausted");
     col_init_npc(s, slot, type, x, y);
+    col_record_score_spawn(s, type);
     return slot;
 }
 
@@ -277,6 +290,8 @@ static const ColoNpcType COLO_WARBAND_TYPES[3] = {
  * tile (A6+D19).
  */
 static void col_spawn_wave(ColosseumState* s) {
+    col_reset_current_wave_score_progress(s);
+
     /* clear the old roster. Bee swarms survive wave transitions (they respawn
        forever, D34); totems despawn with the wave — their owners are gone —
        and all totem bookkeeping resets. */
