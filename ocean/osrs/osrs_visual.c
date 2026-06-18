@@ -765,12 +765,16 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
     return (float)((visual_policy_next_u32(policy) >> 8) * (1.0 / 16777216.0));
 }
 
+static int g_cli_hidden_size = -1;
+static int g_cli_num_layers = -1;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
     const char* model_path,
     VisualPolicyMode mode,
-    uint32_t seed
+    uint32_t seed,
+    int cli_hidden_size,
+    int cli_num_layers
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
@@ -805,6 +809,8 @@ static void visual_policy_init(
     int hidden_size = (strcmp(edef->name, "inferno") == 0 ||
                        strcmp(edef->name, "colosseum") == 0) ? 512 : 128;
     int num_layers = 2;
+    if (cli_hidden_size > 0) hidden_size = cli_hidden_size;
+    if (cli_num_layers > 0) num_layers = cli_num_layers;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
         policy, edef, hidden_size, num_layers);
     policy->net = visual_policy_make_puffernet(
@@ -1439,7 +1445,9 @@ static void run_visual(
         (const EncounterDef*)env->encounter_def,
         model_path,
         policy_mode,
-        policy_seed);
+        policy_seed,
+        g_cli_hidden_size,
+        g_cli_num_layers);
 
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
@@ -1515,6 +1523,10 @@ int main(int argc, char** argv) {
             policy_mode_name = argv[++i];
         else if (strcmp(argv[i], "--policy-seed") == 0 && i + 1 < argc)
             policy_seed = visual_policy_parse_seed(argv[++i]);
+        else if (strcmp(argv[i], "--hidden-size") == 0 && i + 1 < argc)
+            g_cli_hidden_size = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--num-layers") == 0 && i + 1 < argc)
+            g_cli_num_layers = atoi(argv[++i]);
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
