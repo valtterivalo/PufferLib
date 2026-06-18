@@ -423,7 +423,7 @@ static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
         s->player.current_hitpoints = s->player.base_hitpoints;
 }
 
-static void col_apply_drink_cell(ColosseumState* s, OsrsConsumableKind kind) {
+static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
     switch (kind) {
         case OSRS_CONSUMABLE_BREW:
             encounter_apply_brew_heal_and_timer(
@@ -508,6 +508,21 @@ static void col_apply_drink_cell(ColosseumState* s, OsrsConsumableKind kind) {
             abort();
     }
     abort();
+}
+
+static int col_apply_drink_cell(ColosseumState* s, int cell_idx) {
+    if (cell_idx < 0 || cell_idx >= COLO_INVENTORY_DISPLAY_SLOTS) return 0;
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+    if (resolution.click_action != OSRS_CLICK_DRINK) return 0;
+    if (cell->dose == 0 || resolution.raw_osrs_id_after_drink == cell->osrs_id) return 0;
+    if (!col_can_use_consumable_kind(s, resolution.consumable_kind)) return 0;
+
+    col_apply_drink_kind(s, resolution.consumable_kind);
+    col_decrement_consumable_cell(s, cell_idx, resolution);
+    col_sync_consumable_counters_from_inventory(s);
+    return 1;
 }
 
 typedef struct {
@@ -642,8 +657,7 @@ static void col_apply_inventory_tick_intent(
             intent->eat_cell = -1;
         }
         if (intent->drink_order == order) {
-            col_apply_drink_cell(s, intent->drink_resolution.consumable_kind);
-            col_decrement_consumable_cell(s, intent->drink_cell, intent->drink_resolution);
+            (void)col_apply_drink_cell(s, intent->drink_cell);
             intent->drink_order = -1;
             intent->drink_cell = -1;
         }

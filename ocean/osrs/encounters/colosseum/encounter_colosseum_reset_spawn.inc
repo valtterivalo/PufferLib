@@ -454,6 +454,52 @@ static void col_seed_inventory_cells_from_display(ColosseumState* s) {
     }
 }
 
+static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
+    int brew_doses = 0;
+    int restore_doses = 0;
+    int combat_doses = 0;
+    int ranged_doses = 0;
+    int surge_doses = 0;
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        const ColoInvCell* cell = &s->inventory_cells[i];
+        if (cell->dose == 0) continue;
+        OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        if (resolution.click_action != OSRS_CLICK_DRINK) continue;
+        switch (resolution.consumable_kind) {
+            case OSRS_CONSUMABLE_BREW:
+                brew_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SUPER_RESTORE:
+            case OSRS_CONSUMABLE_SANFEW:
+                restore_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SUPER_COMBAT:
+            case OSRS_CONSUMABLE_DIVINE_COMBAT:
+                combat_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_RANGING:
+            case OSRS_CONSUMABLE_DIVINE_RANGING:
+                ranged_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SURGE:
+                surge_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_GUTHIX_REST:
+            case OSRS_CONSUMABLE_SATURATED_HEART:
+            case OSRS_CONSUMABLE_NONE:
+            case OSRS_CONSUMABLE_SHARK_FOOD:
+            case OSRS_CONSUMABLE_KARAMBWAN:
+                break;
+        }
+    }
+    s->player.brew_doses = brew_doses;
+    s->player.restore_doses = restore_doses;
+    s->player.combat_potion_doses = combat_doses;
+    s->player.ranged_potion_doses = ranged_doses;
+    s->surge_doses = surge_doses;
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
@@ -500,14 +546,9 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
     col_seed_inventory_cells_from_display(s);
 
-    /* researched supplies (doses); currents live on Player, denominators here */
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
     s->full_supplies = *supplies;
-    s->player.brew_doses = supplies->brew_doses;
-    s->player.restore_doses = supplies->restore_doses;
-    s->player.combat_potion_doses = supplies->combat_doses;
-    s->player.ranged_potion_doses = supplies->ranged_doses;
-    s->surge_doses = supplies->surge_doses;
+    col_sync_consumable_counters_from_inventory(s);
     s->surge_cooldown = 0;
 
     s->player.prayer = PRAYER_NONE;

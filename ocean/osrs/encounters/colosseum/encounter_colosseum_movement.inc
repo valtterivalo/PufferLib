@@ -56,7 +56,7 @@ static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc
 
 /** NPC-blocked callback (size-aware) for the shared chase step: the static mask
     (A7+B1), the wave-12 boss clamp, and other NPC footprints. */
-static int col_npc_blocked(void* ctx, int x, int y, int size) {
+static int col_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
     int sol_clamp_active = col_sol_clamp_active(s);
@@ -66,6 +66,19 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
             int gx, gy;
             if (!col_grid_index(x + dx, y + dy, &gx, &gy)) return 1;
             if (s->npc_collision_flags[gx][gy]) return 1;
+        }
+    }
+    return 0;
+}
+
+static int col_npc_blocked(void* ctx, int x, int y, int size) {
+    ColosseumState* s = (ColosseumState*)ctx;
+    if (col_npc_blocked_ignore_player(ctx, x, y, size)) return 1;
+    for (int dx = 0; dx < size; dx++) {
+        for (int dy = 0; dy < size; dy++) {
+            int gx, gy;
+            if (!col_grid_index(x + dx, y + dy, &gx, &gy)) return 1;
+            if (s->player_collision_flags[gx][gy]) return 1;
         }
     }
     return 0;
@@ -258,16 +271,26 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     npc->target_x = tx;
     npc->target_y = ty;
 
+    col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
+    int stepped_under = encounter_npc_step_out_from_under(
+        &npc->x, &npc->y, size, tx, ty,
+        col_npc_blocked_ignore_player, s, NULL, &s->rng_state);
+    if (stepped_under == ENCOUNTER_NPC_UNDER_PLAYER_MOVED) {
+        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
+        npc->moved_this_tick = 1;
+        return;
+    }
+
     int is_ranged = st->attack_range > 1;
     if (is_ranged) {
         int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
         if (dist >= 1 && dist <= st->attack_range && col_npc_has_los_to_player(s, npc)) {
+            col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
             npc->moved_this_tick = 0;
             return;  /* in range with LoS: hold position */
         }
     }
 
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
     int moved;
     if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG)) {
         /* A30: BFS toward the footprint-on-player anchor; the blocked dest

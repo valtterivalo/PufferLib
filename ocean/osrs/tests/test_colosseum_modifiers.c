@@ -222,6 +222,26 @@ static float test_click_mask_for_cell(const float mask[COLO_ACTION_MASK_SIZE], i
     return mask[col_action_head_mask_offset(COLO_HEAD_INV_CLICK_0) + 1 + cell];
 }
 
+static int test_sum_inventory_doses_for_kind(
+    const ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    int doses = 0;
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        const ColoInvCell* cell = &s->inventory_cells[i];
+        OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
+            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        if (r.consumable_kind == kind) doses += cell->dose;
+    }
+    return doses;
+}
+
+static int test_npc_covers_player(const ColosseumState* s, const ColoNPC* npc) {
+    int size = col_npc_effective_size(npc);
+    return s->player.x >= npc->x && s->player.x < npc->x + size &&
+        s->player.y >= npc->y && s->player.y < npc->y + size;
+}
+
 static uint8_t test_profile_spec_item(ColoLoadoutProfile profile, int kind) {
     if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 1) return ITEM_DRAGON_CLAWS;
     if (profile == COLO_LOADOUT_PROFILE_SPEEDRUN && kind == 2) return ITEM_ELDER_MAUL;
@@ -5029,6 +5049,81 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
             npc->x, npc->y, col_npc_effective_size(npc)) <= attack_range);
 }
 
+static void test_colosseum_npc_movement_player_tile_guards(void) {
+    printf("test_colosseum_npc_movement_player_tile_guards\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 6161);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.player.x = 16;
+    s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 16, 16);
+    col_tick_npcs_ctx(&s, &ctx);
+    CHECK("overlapped ranged NPC shuffles off the player tile",
+        !test_npc_covers_player(&s, &s.npcs[0]) && s.npcs[0].moved_this_tick == 1);
+
+    geo_clear_npcs(&s);
+    s.player.x = 16;
+    s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 7, 16);
+    int shaman_x = s.npcs[0].x;
+    int shaman_y = s.npcs[0].y;
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("ranged NPC already in range and LoS holds its attack tile",
+        s.npcs[0].x == shaman_x && s.npcs[0].y == shaman_y &&
+        encounter_dist_to_npc(s.player.x, s.player.y,
+            s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) <=
+                COLO_NPC_STATS[COLO_SERPENT_SHAMAN].attack_range &&
+        col_npc_has_los_to_player(&s, &s.npcs[0]));
+
+    geo_clear_npcs(&s);
+    s.player.x = 18;
+    s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 14, 16);
+    int jaguar_covered_player = 0;
+    int jaguar_reached_melee = 0;
+    for (int tick = 0; tick < 4; tick++) {
+        col_npc_move_ctx(&s, &ctx, 0);
+        if (test_npc_covers_player(&s, &s.npcs[0])) jaguar_covered_player = 1;
+        if (encounter_dist_to_npc(s.player.x, s.player.y,
+                s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) == 1) {
+            jaguar_reached_melee = 1;
+            break;
+        }
+    }
+    CHECK("melee NPC stops adjacent and never covers the player",
+        jaguar_reached_melee == 1 && jaguar_covered_player == 0);
+
+    geo_clear_npcs(&s);
+    s.modifiers.active_mask |= (1u << COLO_MOD_RED_FLAG);
+    s.modifiers.tier[COLO_MOD_RED_FLAG] = 1;
+    s.player.x = 7;
+    s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MINOTAUR, 11, 9);
+    int covered_player = 0;
+    int reached_melee = 0;
+    for (int tick = 0; tick < 32; tick++) {
+        col_npc_move_ctx(&s, &ctx, 0);
+        if (test_npc_covers_player(&s, &s.npcs[0])) covered_player = 1;
+        if (encounter_dist_to_npc(s.player.x, s.player.y,
+                s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) == 1) {
+            reached_melee = 1;
+            break;
+        }
+    }
+    CHECK("routefinding minotaur paths around the pillar to melee",
+        reached_melee == 1);
+    CHECK("routefinding minotaur never covers the player tile",
+        covered_player == 0);
+}
+
 /* 4d. NPC melee lands INSTANTLY on the throw tick (OSRS melee is not reactable),
    not deferred a tick. Regression guard for the old col_npc_queue_melee bug that
    queued melee with ticks=1 + check_prayer=1, giving the agent a free reaction
@@ -5260,6 +5355,100 @@ static void test_stage3_t3_one_dose_vial_empties(void) {
         s.inventory_cells[brew_cell].dose == 0);
 }
 
+static void test_colosseum_potion_click_source_of_truth(void) {
+    printf("test_colosseum_potion_click_source_of_truth\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 510);
+    int restore_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SUPER_RESTORE);
+    int restore_sum_before =
+        test_sum_inventory_doses_for_kind(&s, OSRS_CONSUMABLE_SUPER_RESTORE);
+    s.player.current_prayer = 40;
+    s.player.restore_doses = 99;
+    test_click_inventory_cell_action(actions, restore_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("super restore consumes exactly one clicked-cell dose",
+        s.inventory_cells[restore_cell].dose == 3);
+    CHECK("super restore aggregate is rebuilt from cells",
+        s.player.restore_doses == restore_sum_before - 1);
+
+    memset(actions, 0, sizeof(actions));
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 511);
+    int sanfew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SANFEW);
+    int sanfew_sum_before = test_sum_inventory_doses_for_kind(&s, OSRS_CONSUMABLE_SANFEW);
+    s.player.current_prayer = 40;
+    s.player.restore_doses = 99;
+    test_click_inventory_cell_action(actions, sanfew_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("sanfew consumes exactly one clicked-cell dose",
+        s.inventory_cells[sanfew_cell].dose == 3);
+    CHECK("sanfew aggregate is rebuilt from cells",
+        s.player.restore_doses == sanfew_sum_before - 1);
+
+    memset(actions, 0, sizeof(actions));
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 512);
+    int divine_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    int divine_sum_before =
+        test_sum_inventory_doses_for_kind(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    s.player.current_hitpoints = 99;
+    s.player.combat_potion_doses = 99;
+    test_click_inventory_cell_action(actions, divine_cell);
+    step_and_observe(&s, &ctx, actions);
+    CHECK("divine combat consumes exactly one clicked-cell dose",
+        s.inventory_cells[divine_cell].dose == 3);
+    CHECK("divine combat aggregate is rebuilt from cells",
+        s.player.combat_potion_doses == divine_sum_before - 1);
+    CHECK("divine combat drink starts the potion timer", s.player.potion_timer == 3);
+}
+
+static void test_colosseum_potion_timer_and_same_tick_gate(void) {
+    printf("test_colosseum_potion_timer_and_same_tick_gate\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 513);
+    int brew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    s.player.current_hitpoints = 50;
+    int brew[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(brew, brew_cell);
+    step_and_observe(&s, &ctx, brew);
+    int brew_dose_after_first = s.inventory_cells[brew_cell].dose;
+    int brew_aggregate_after_first = s.player.brew_doses;
+    s.player.current_hitpoints = 50;
+    step_and_observe(&s, &ctx, brew);
+    CHECK("second potion click before timer expiry is blocked",
+        s.inventory_cells[brew_cell].dose == brew_dose_after_first &&
+        s.player.brew_doses == brew_aggregate_after_first &&
+        s.player.potion_timer == 2);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 514);
+    int sanfew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SANFEW);
+    int divine_cell =
+        test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    s.player.current_prayer = 40;
+    int both[COLO_NUM_ACTION_HEADS] = {0};
+    both[COLO_HEAD_INV_CLICK_0] = sanfew_cell + 1;
+    both[COLO_HEAD_INV_CLICK_1] = divine_cell + 1;
+    step_and_observe(&s, &ctx, both);
+    CHECK("two potion clicks in one tick consume only the first drink",
+        s.inventory_cells[sanfew_cell].dose == 3 &&
+        s.inventory_cells[divine_cell].dose == 4);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 515);
+    sanfew_cell = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SANFEW);
+    s.player.current_prayer = 40;
+    int duplicate[COLO_NUM_ACTION_HEADS] = {0};
+    duplicate[COLO_HEAD_INV_CLICK_0] = sanfew_cell + 1;
+    duplicate[COLO_HEAD_INV_CLICK_1] = sanfew_cell + 1;
+    step_and_observe(&s, &ctx, duplicate);
+    CHECK("duplicate same-cell drink heads consume one dose total",
+        s.inventory_cells[sanfew_cell].dose == 3);
+}
+
 static void test_stage3_t4_click_mask_bits(void) {
     printf("test_stage3_t4_click_mask_bits\n");
     ColosseumContext ctx;
@@ -5365,6 +5554,8 @@ int main(void) {
     test_stage3_t1_human_inventory_primary_click_uses_resolver();
     test_stage3_t2_brew_click_decrements_dose();
     test_stage3_t3_one_dose_vial_empties();
+    test_colosseum_potion_click_source_of_truth();
+    test_colosseum_potion_timer_and_same_tick_gate();
     test_stage3_t4_click_mask_bits();
     test_stage3_t4_mask_inventory_heads_flag();
     test_stage3_t5_claws_click_spec_fires();
@@ -5373,6 +5564,7 @@ int main(void) {
     test_osrs_los_query_contracts();
     test_player_ranged_los_blocked_by_pillar();
     test_player_chase_routes_around_pillar_for_los();
+    test_colosseum_npc_movement_player_tile_guards();
     test_zero_actions_hit_timeout();
     test_offpray_attribution_log();
     test_step_loop_draft();

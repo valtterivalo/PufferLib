@@ -407,7 +407,7 @@ static void col_forecast_local_rebuild_npc_flags(
     }
 }
 
-static int col_forecast_local_npc_blocked(void* user, int x, int y, int size) {
+static int col_forecast_local_npc_blocked_ignore_player(void* user, int x, int y, int size) {
     ColoForecastMoveCtx* ctx = (ColoForecastMoveCtx*)user;
     const ColosseumState* s = ctx->state;
     if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
@@ -422,6 +422,13 @@ static int col_forecast_local_npc_blocked(void* user, int x, int y, int size) {
         }
     }
     return 0;
+}
+
+static int col_forecast_local_npc_blocked(void* user, int x, int y, int size) {
+    ColoForecastMoveCtx* ctx = (ColoForecastMoveCtx*)user;
+    if (col_forecast_local_npc_blocked_ignore_player(user, x, y, size)) return 1;
+    return ctx->player_x >= x && ctx->player_x < x + size &&
+        ctx->player_y >= y && ctx->player_y < y + size;
 }
 
 static int col_forecast_local_has_los_to_player(
@@ -488,6 +495,23 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             npc->sol_immobile_ticks > 0)
         return result;
 
+    ColoForecastMoveCtx move_ctx;
+    move_ctx.state = s;
+    move_ctx.npc_flags = npc_flags;
+    move_ctx.player_x = action->land_x;
+    move_ctx.player_y = action->land_y;
+    move_ctx.sol_clamp_active = sol_clamp_active;
+
+    col_forecast_local_stamp_npc(npc_flags, npc, 0);
+    uint32_t rng = s->rng_state;
+    int stepped_under = encounter_npc_step_out_from_under(
+        &npc->x, &npc->y, npc->size, action->land_x, action->land_y,
+        col_forecast_local_npc_blocked_ignore_player, &move_ctx, NULL, &rng);
+    if (stepped_under == ENCOUNTER_NPC_UNDER_PLAYER_MOVED) {
+        col_forecast_local_stamp_npc(npc_flags, npc, 1);
+        return result;
+    }
+
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
@@ -503,11 +527,10 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             result.npc_y = npc->y;
             result.land_x = action->land_x;
             result.land_y = action->land_y;
+            col_forecast_local_stamp_npc(npc_flags, npc, 1);
             return result;
         }
     }
-
-    col_forecast_local_stamp_npc(npc_flags, npc, 0);
 
     int tx = action->land_x;
     int ty = action->land_y;
@@ -524,12 +547,6 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
         steps = 1;
     }
 
-    ColoForecastMoveCtx move_ctx;
-    move_ctx.state = s;
-    move_ctx.npc_flags = npc_flags;
-    move_ctx.player_x = action->land_x;
-    move_ctx.player_y = action->land_y;
-    move_ctx.sol_clamp_active = sol_clamp_active;
     for (int step = 0; step < steps; step++) {
         if (!encounter_npc_step_toward(
                 &npc->x, &npc->y, tx, ty, npc->size, 1,
