@@ -2522,14 +2522,19 @@ typedef enum {
     ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
 } EncounterConsumableStatEffect;
 
-/** Apply the shared brew HP, dose, timer, and food-event state. */
-static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
+/** Apply one brew heal and food-event state without consuming a dose. */
+static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
     p->current_hitpoints += brew_heal;
     if (p->current_hitpoints > p->base_hitpoints + brew_heal)
         p->current_hitpoints = p->base_hitpoints + brew_heal;
+    p->ate_food_this_tick = 1;
+}
+
+/** Apply the aggregate-model brew HP, dose, timer, and food-event state. */
+static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
+    encounter_apply_brew_heal(p, brew_heal);
     p->brew_doses--;
     p->potion_timer = 3;
-    p->ate_food_this_tick = 1;
 }
 
 /** Add a prayer restore amount before the caller applies any local hooks. */

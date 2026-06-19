@@ -314,6 +314,7 @@ static int col_can_eat_consumable_kind(
         case OSRS_CONSUMABLE_SURGE:
         case OSRS_CONSUMABLE_GUTHIX_REST:
         case OSRS_CONSUMABLE_SATURATED_HEART:
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
         case OSRS_CONSUMABLE_NONE:
             return 0;
     }
@@ -334,19 +335,6 @@ static int col_inventory_cell_actionable(const ColosseumState* s, int cell_idx) 
 
 static void col_empty_inventory_cell(ColosseumState* s, int cell_idx) {
     s->inventory_cells[cell_idx] = osrs_inventory_cell_empty();
-}
-
-static void col_decrement_consumable_cell(
-    ColosseumState* s,
-    int cell_idx,
-    OsrsInventoryClickResolution resolution
-) {
-    ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    if (resolution.click_action == OSRS_CLICK_EAT) {
-        osrs_inventory_cell_consume_eat(cell);
-        return;
-    }
-    osrs_inventory_cell_decrement_drink(cell, resolution);
 }
 
 static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
@@ -377,10 +365,11 @@ static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
         s->player.current_hitpoints = s->player.base_hitpoints;
 }
 
-static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
+static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) {
+    ColosseumState* s = (ColosseumState*)ctx;
     switch (kind) {
         case OSRS_CONSUMABLE_BREW:
-            encounter_apply_brew_heal_and_timer(
+            encounter_apply_brew_heal(
                 &s->player, osrs_brew_heal_amount(s->player.base_hitpoints));
             encounter_apply_consumable_stat_effect(
                 &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
@@ -392,7 +381,6 @@ static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
             encounter_apply_consumable_stat_effect(
                 &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
             encounter_cap_prayer_restore(&s->player);
-            encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
             col_finish_stat_moving_consumable(s);
             return;
         case OSRS_CONSUMABLE_SANFEW:
@@ -405,41 +393,34 @@ static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
             s->player_poison = 0;
             s->player_poison_timer = 0;
             encounter_cap_prayer_restore(&s->player);
-            encounter_finish_potion_dose(&s->player, &s->player.restore_doses);
             col_finish_stat_moving_consumable(s);
             return;
         case OSRS_CONSUMABLE_SUPER_COMBAT:
             encounter_super_combat_boost(&s->player);
             col_enforce_divine_stat_floors(s);
-            encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
             col_mark_live_loadout_dirty(s);
             return;
         case OSRS_CONSUMABLE_DIVINE_COMBAT:
             encounter_super_combat_boost(&s->player);
             col_apply_divine_combat_potion_effect(s);
             col_enforce_divine_stat_floors(s);
-            encounter_finish_potion_dose(&s->player, &s->player.combat_potion_doses);
             col_mark_live_loadout_dirty(s);
             return;
         case OSRS_CONSUMABLE_RANGING:
             encounter_ranging_boost(&s->player);
             col_enforce_divine_stat_floors(s);
-            encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
             col_mark_live_loadout_dirty(s);
             return;
         case OSRS_CONSUMABLE_DIVINE_RANGING:
             encounter_ranging_boost(&s->player);
             col_apply_divine_ranged_potion_effect(s);
             col_enforce_divine_stat_floors(s);
-            encounter_finish_potion_dose(&s->player, &s->player.ranged_potion_doses);
             col_mark_live_loadout_dirty(s);
             return;
         case OSRS_CONSUMABLE_SURGE:
             s->player.special_energy += COLO_SURGE_RESTORE_AMOUNT;
             if (s->player.special_energy > 100) s->player.special_energy = 100;
-            s->surge_doses--;
             s->surge_cooldown = COLO_SURGE_COOLDOWN_TICKS;
-            s->player.potion_timer = 3;
             return;
         case OSRS_CONSUMABLE_GUTHIX_REST:
             s->player.current_hitpoints += 5;
@@ -449,11 +430,16 @@ static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
             s->player_venom_timer = 0;
             s->player_poison = 0;
             s->player_poison_timer = 0;
-            s->player.potion_timer = 3;
             return;
         case OSRS_CONSUMABLE_SATURATED_HEART:
             encounter_apply_saturated_heart_boost(&s->player);
             col_mark_live_loadout_dirty(s);
+            return;
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+            s->player_venom = 0;
+            s->player_venom_timer = 0;
+            s->player_poison = 0;
+            s->player_poison_timer = 0;
             return;
         case OSRS_CONSUMABLE_NONE:
         case OSRS_CONSUMABLE_SHARK_FOOD:
@@ -472,11 +458,14 @@ static int col_apply_drink_cell(
     if (cell_idx < 0 || cell_idx >= COLO_INVENTORY_DISPLAY_SLOTS) return 0;
     ColoInvCell* cell = &s->inventory_cells[cell_idx];
     if (resolution.click_action != OSRS_CLICK_DRINK) return 0;
-    if (cell->dose == 0) return 0;
-    if (s->player.potion_timer > 0) return 0;
-
-    col_apply_drink_kind(s, resolution.consumable_kind);
-    col_decrement_consumable_cell(s, cell_idx, resolution);
+    OsrsInventoryDrinkConsumeResult consume =
+        osrs_inventory_cell_consume_drink_one_dose(
+            cell,
+            resolution,
+            &s->player.potion_timer,
+            col_apply_drink_one_dose_effect,
+            s);
+    if (!consume.consumed) return 0;
     col_sync_consumable_counters_from_inventory(s);
     return 1;
 }

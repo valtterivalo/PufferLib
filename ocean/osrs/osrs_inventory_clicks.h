@@ -43,8 +43,9 @@ typedef enum {
     OSRS_CONSUMABLE_SURGE = 8,
     OSRS_CONSUMABLE_GUTHIX_REST = 9,
     OSRS_CONSUMABLE_SATURATED_HEART = 10,
-    OSRS_CONSUMABLE_SHARK_FOOD = 11,
-    OSRS_CONSUMABLE_KARAMBWAN = 12,
+    OSRS_CONSUMABLE_ANTIVENOM_PLUS = 11,
+    OSRS_CONSUMABLE_SHARK_FOOD = 12,
+    OSRS_CONSUMABLE_KARAMBWAN = 13,
 } OsrsConsumableKind;
 
 typedef enum {
@@ -65,6 +66,20 @@ typedef struct {
     uint8_t dose_count;
     uint16_t raw_osrs_id_after_drink;
 } OsrsInventoryClickResolution;
+
+typedef struct {
+    int consumed;
+    OsrsConsumableKind consumable_kind;
+    uint8_t dose_count_before;
+    uint8_t dose_count_after;
+    uint16_t raw_osrs_id_before;
+    uint16_t raw_osrs_id_after_drink;
+} OsrsInventoryDrinkConsumeResult;
+
+typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
+    void* ctx,
+    OsrsConsumableKind kind
+);
 
 #define OSRS_INVENTORY_CELL_OBS_FEATURES 35   /* was 16; +19 = REC1(4)+REC2(6)+REC3(3)+REC4(4)+REC5(2) */
 #define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* was 12; +6  = REC4(4)+REC5(2) */
@@ -107,6 +122,10 @@ static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {4421, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_GUTHIX_REST, 2},
     {4423, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_GUTHIX_REST, 1},
     {27641, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_SATURATED_HEART, 1},
+    {12913, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 4},
+    {12915, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 3},
+    {12917, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 2},
+    {12919, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 1},
     {385, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SHARK_FOOD, 0},
     {3144, OSRS_CLICK_EAT, OSRS_CONSUMABLE_KARAMBWAN, 0},
 };
@@ -166,7 +185,8 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
         case OSRS_CONSUMABLE_DIVINE_RANGING:  return COL_CKIND6_RANGED_BOOST;
         case OSRS_CONSUMABLE_SURGE:
         case OSRS_CONSUMABLE_GUTHIX_REST:
-        case OSRS_CONSUMABLE_SATURATED_HEART: return COL_CKIND6_SPECIAL;
+        case OSRS_CONSUMABLE_SATURATED_HEART:
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:  return COL_CKIND6_SPECIAL;
         case OSRS_CONSUMABLE_SHARK_FOOD:
         case OSRS_CONSUMABLE_KARAMBWAN:       return COL_CKIND6_FOOD;
         case OSRS_CONSUMABLE_NONE:            return COL_CKIND6_NONE;
@@ -674,6 +694,53 @@ static inline void osrs_inventory_cell_decrement_drink(
     cell->item_idx = ITEM_NONE;
     cell->raw_osrs_id = resolution.raw_osrs_id_after_drink;
     cell->dose = osrs_consumable_dose_count_after_drink(resolution.dose_count);
+}
+
+/**
+ * Consumes exactly one clicked drink cell and applies the one-dose effect.
+ *
+ * The shared slot-model contract owns the potion timer and raw-id transition.
+ * Encounters provide only the effect of one accepted dose. A live timer returns
+ * consumed=0 without mutating the cell or applying the effect. Invalid drink
+ * resolution, dose mismatch, or a missing callback are defects and abort.
+ */
+static inline OsrsInventoryDrinkConsumeResult osrs_inventory_cell_consume_drink_one_dose(
+    OsrsInventoryCell* cell,
+    OsrsInventoryClickResolution resolution,
+    int* potion_timer,
+    OsrsInventoryDrinkOneDoseEffectFn apply_one_dose,
+    void* ctx
+) {
+    if (cell == NULL || potion_timer == NULL || apply_one_dose == NULL) {
+        fprintf(stderr, "inventory drink consume: null argument\n");
+        abort();
+    }
+    if (resolution.click_action != OSRS_CLICK_DRINK ||
+            resolution.dose_count == 0 ||
+            cell->dose != resolution.dose_count) {
+        fprintf(stderr, "inventory drink consume: invalid cell raw=%u dose=%u action=%d resolved_dose=%u\n",
+            cell->raw_osrs_id, cell->dose, (int)resolution.click_action,
+            resolution.dose_count);
+        abort();
+    }
+
+    uint8_t dose_after =
+        osrs_consumable_dose_count_after_drink(resolution.dose_count);
+    OsrsInventoryDrinkConsumeResult result = {
+        .consumed = 0,
+        .consumable_kind = resolution.consumable_kind,
+        .dose_count_before = resolution.dose_count,
+        .dose_count_after = dose_after,
+        .raw_osrs_id_before = cell->raw_osrs_id,
+        .raw_osrs_id_after_drink = resolution.raw_osrs_id_after_drink,
+    };
+    if (*potion_timer > 0) return result;
+
+    osrs_inventory_cell_decrement_drink(cell, resolution);
+    *potion_timer = 3;
+    apply_one_dose(ctx, resolution.consumable_kind);
+    result.consumed = 1;
+    return result;
 }
 
 static inline void osrs_inventory_cell_consume_eat(OsrsInventoryCell* cell) {

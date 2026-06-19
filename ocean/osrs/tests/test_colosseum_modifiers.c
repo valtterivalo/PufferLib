@@ -236,6 +236,55 @@ static int test_sum_inventory_doses_for_kind(
     return doses;
 }
 
+static int test_aggregate_doses_for_kind(
+    const ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_BREW:
+            return s->player.brew_doses;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+        case OSRS_CONSUMABLE_SANFEW:
+            return s->player.restore_doses;
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+            return s->player.combat_potion_doses;
+        case OSRS_CONSUMABLE_RANGING:
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+            return s->player.ranged_potion_doses;
+        case OSRS_CONSUMABLE_SURGE:
+            return s->surge_doses;
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+            return s->player.antivenom_doses;
+        case OSRS_CONSUMABLE_GUTHIX_REST:
+        case OSRS_CONSUMABLE_SATURATED_HEART:
+        case OSRS_CONSUMABLE_NONE:
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            return -1;
+    }
+    abort();
+}
+
+static void test_prepare_for_drink_kind(
+    ColosseumState* s,
+    OsrsConsumableKind kind
+) {
+    s->player.potion_timer = 0;
+    s->player.current_hitpoints = 50;
+    s->player.current_prayer = 40;
+    s->player.special_energy = 50;
+    s->surge_cooldown = 0;
+    s->player_venom = COLO_VENOM_START;
+    s->player_venom_timer = 17;
+    s->player_poison = COLO_POISON_BEE_CONTACT_SEVERITY;
+    s->player_poison_timer = 11;
+    if (kind == OSRS_CONSUMABLE_DIVINE_COMBAT ||
+            kind == OSRS_CONSUMABLE_DIVINE_RANGING) {
+        s->player.current_hitpoints = 99;
+    }
+}
+
 static int test_count_item_in_equipment_and_inventory(
     const ColosseumState* s,
     uint8_t item_idx
@@ -5573,6 +5622,92 @@ static void test_colosseum_potion_timer_and_same_tick_gate(void) {
         s.inventory_cells[sanfew_cell].dose == 3);
 }
 
+typedef struct {
+    const char* label;
+    OsrsConsumableKind kind;
+    uint16_t raw4;
+    uint16_t raw3;
+    uint16_t raw2;
+    uint16_t raw1;
+} TestDrinkKindDoseChain;
+
+static void test_colosseum_all_drink_kinds_shared_one_dose_path(void) {
+    printf("test_colosseum_all_drink_kinds_shared_one_dose_path\n");
+    const TestDrinkKindDoseChain cases[] = {
+        {"brew", OSRS_CONSUMABLE_BREW, 6685, 6687, 6689, 6691},
+        {"super restore", OSRS_CONSUMABLE_SUPER_RESTORE, 3024, 3026, 3028, 3030},
+        {"sanfew", OSRS_CONSUMABLE_SANFEW, 10925, 10927, 10929, 10931},
+        {"super combat", OSRS_CONSUMABLE_SUPER_COMBAT, 12695, 12697, 12699, 12701},
+        {"divine combat", OSRS_CONSUMABLE_DIVINE_COMBAT, 23685, 23688, 23691, 23694},
+        {"ranging", OSRS_CONSUMABLE_RANGING, 2444, 169, 171, 173},
+        {"divine ranging", OSRS_CONSUMABLE_DIVINE_RANGING, 23733, 23736, 23739, 23742},
+        {"surge", OSRS_CONSUMABLE_SURGE, 30875, 30878, 30881, 30884},
+        {"guthix rest", OSRS_CONSUMABLE_GUTHIX_REST, 4417, 4419, 4421, 4423},
+        {"anti-venom+", OSRS_CONSUMABLE_ANTIVENOM_PLUS, 12913, 12915, 12917, 12919},
+        {"saturated heart", OSRS_CONSUMABLE_SATURATED_HEART, 0, 0, 0, 27641},
+    };
+
+    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        const TestDrinkKindDoseChain* c = &cases[i];
+        ColosseumContext ctx;
+        ColosseumState s;
+        loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f,
+            (uint32_t)(700 + i));
+        int cell = 0;
+        uint16_t start_raw = c->raw4 ? c->raw4 : c->raw1;
+        col_init_empty_inventory_cells(&s);
+        s.inventory_cells[cell] = osrs_inventory_cell_from_raw_osrs_id(start_raw);
+        col_sync_consumable_counters_from_inventory(&s);
+        test_prepare_for_drink_kind(&s, c->kind);
+
+        int actions[COLO_NUM_ACTION_HEADS] = {0};
+        test_click_inventory_cell_action(actions, cell);
+        step_and_observe(&s, &ctx, actions);
+        uint16_t expected_after_first = c->raw4 ? c->raw3 : 0;
+        uint8_t expected_dose_after_first = c->raw4 ? 3 : 0;
+        char label[160];
+        snprintf(label, sizeof(label), "%s first click decrements one dose", c->label);
+        CHECK(label,
+            s.inventory_cells[cell].raw_osrs_id == expected_after_first &&
+            s.inventory_cells[cell].dose == expected_dose_after_first);
+        snprintf(label, sizeof(label), "%s first click arms potion timer", c->label);
+        CHECK(label, s.player.potion_timer == 3);
+        int aggregate = test_aggregate_doses_for_kind(&s, c->kind);
+        if (aggregate >= 0) {
+            snprintf(label, sizeof(label), "%s aggregate rebuilds from clicked cell",
+                c->label);
+            CHECK(label, aggregate == test_sum_inventory_doses_for_kind(&s, c->kind));
+        }
+
+        if (!c->raw4) {
+            s.inventory_cells[cell] = osrs_inventory_cell_from_raw_osrs_id(c->raw1);
+        }
+        uint16_t raw_before_gate = s.inventory_cells[cell].raw_osrs_id;
+        uint8_t dose_before_gate = s.inventory_cells[cell].dose;
+        step_and_observe(&s, &ctx, actions);
+        snprintf(label, sizeof(label), "%s timer gate blocks next click", c->label);
+        CHECK(label,
+            s.inventory_cells[cell].raw_osrs_id == raw_before_gate &&
+            s.inventory_cells[cell].dose == dose_before_gate);
+
+        const uint16_t chain[] = {c->raw4, c->raw3, c->raw2, c->raw1, 0};
+        int start = c->raw4 ? 0 : 3;
+        s.inventory_cells[cell] = osrs_inventory_cell_from_raw_osrs_id(chain[start]);
+        col_sync_consumable_counters_from_inventory(&s);
+        for (int step = start; step < 4; step++) {
+            test_prepare_for_drink_kind(&s, c->kind);
+            memset(actions, 0, sizeof(actions));
+            test_click_inventory_cell_action(actions, cell);
+            step_and_observe(&s, &ctx, actions);
+            snprintf(label, sizeof(label), "%s chain step %d raw id", c->label, step);
+            CHECK(label, s.inventory_cells[cell].raw_osrs_id == chain[step + 1]);
+            uint8_t expected_dose = chain[step + 1] == 0 ? 0 : (uint8_t)(3 - step);
+            snprintf(label, sizeof(label), "%s chain step %d dose", c->label, step);
+            CHECK(label, s.inventory_cells[cell].dose == expected_dose);
+        }
+    }
+}
+
 static void test_stage3_t4_click_mask_bits(void) {
     printf("test_stage3_t4_click_mask_bits\n");
     ColosseumContext ctx;
@@ -5681,6 +5816,7 @@ int main(void) {
     test_stage3_t3_one_dose_vial_empties();
     test_colosseum_potion_click_source_of_truth();
     test_colosseum_potion_timer_and_same_tick_gate();
+    test_colosseum_all_drink_kinds_shared_one_dose_path();
     test_stage3_t4_click_mask_bits();
     test_stage3_t4_mask_inventory_heads_flag();
     test_stage3_t5_claws_click_spec_fires();

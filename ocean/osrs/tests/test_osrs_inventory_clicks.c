@@ -159,6 +159,54 @@ static int test_cell_drink_decrements_one_dose(void) {
     return 0;
 }
 
+typedef struct {
+    int calls;
+    OsrsConsumableKind kind;
+} TestDrinkEffect;
+
+static void test_record_drink_effect(void* ctx, OsrsConsumableKind kind) {
+    TestDrinkEffect* effect = (TestDrinkEffect*)ctx;
+    effect->calls++;
+    effect->kind = kind;
+}
+
+static int test_shared_drink_consume_owns_timer_and_one_dose(void) {
+    OsrsInventoryCell restore = osrs_inventory_cell_from_raw_osrs_id(3024);
+    OsrsInventoryClickResolution resolution =
+        osrs_inventory_cell_click_interpret(&restore, OSRS_CLICK_TICK_FIRST);
+    int potion_timer = 0;
+    TestDrinkEffect effect = {0};
+    OsrsInventoryDrinkConsumeResult first =
+        osrs_inventory_cell_consume_drink_one_dose(
+            &restore,
+            resolution,
+            &potion_timer,
+            test_record_drink_effect,
+            &effect);
+
+    CHECK("shared consume accepts first drink", first.consumed == 1);
+    CHECK("shared consume decrements one dose",
+          restore.dose == 3 && restore.raw_osrs_id == 3026);
+    CHECK("shared consume arms potion timer", potion_timer == 3);
+    CHECK("shared consume applies one effect",
+          effect.calls == 1 && effect.kind == OSRS_CONSUMABLE_SUPER_RESTORE);
+
+    resolution =
+        osrs_inventory_cell_click_interpret(&restore, OSRS_CLICK_TICK_FIRST);
+    OsrsInventoryDrinkConsumeResult gated =
+        osrs_inventory_cell_consume_drink_one_dose(
+            &restore,
+            resolution,
+            &potion_timer,
+            test_record_drink_effect,
+            &effect);
+    CHECK("shared consume blocks live timer", gated.consumed == 0);
+    CHECK("timer-gated shared consume leaves cell intact",
+          restore.dose == 3 && restore.raw_osrs_id == 3026);
+    CHECK("timer-gated shared consume skips effect", effect.calls == 1);
+    return 0;
+}
+
 static int test_cell_rearrange_swaps_two_slots(void) {
     OsrsInventoryCell cells[OSRS_INVENTORY_SIZE];
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
@@ -269,6 +317,8 @@ static int test_kind6_totality(void) {
           col_consumable_kind6(OSRS_CONSUMABLE_GUTHIX_REST) == COL_CKIND6_SPECIAL);
     CHECK("saturated heart -> special",
           col_consumable_kind6(OSRS_CONSUMABLE_SATURATED_HEART) == COL_CKIND6_SPECIAL);
+    CHECK("anti-venom+ -> special",
+          col_consumable_kind6(OSRS_CONSUMABLE_ANTIVENOM_PLUS) == COL_CKIND6_SPECIAL);
     CHECK("shark -> food",
           col_consumable_kind6(OSRS_CONSUMABLE_SHARK_FOOD) == COL_CKIND6_FOOD);
     CHECK("karambwan -> food",
@@ -294,6 +344,7 @@ int main(void) {
     if (test_pure_click_interpreter()) return 1;
     if (test_cell_click_attributes_to_slot_item()) return 1;
     if (test_cell_drink_decrements_one_dose()) return 1;
+    if (test_shared_drink_consume_owns_timer_and_one_dose()) return 1;
     if (test_cell_rearrange_swaps_two_slots()) return 1;
     if (test_enriched_feature_counts()) return 1;
     if (test_brew_cell_semantics()) return 1;

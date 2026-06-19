@@ -431,6 +431,7 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     int combat_doses = 0;
     int ranged_doses = 0;
     int surge_doses = 0;
+    int antivenom_doses = 0;
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         const ColoInvCell* cell = &s->inventory_cells[i];
         if (cell->dose == 0) continue;
@@ -456,6 +457,9 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
             case OSRS_CONSUMABLE_SURGE:
                 surge_doses += cell->dose;
                 break;
+            case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+                antivenom_doses += cell->dose;
+                break;
             case OSRS_CONSUMABLE_GUTHIX_REST:
             case OSRS_CONSUMABLE_SATURATED_HEART:
             case OSRS_CONSUMABLE_NONE:
@@ -468,6 +472,7 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     s->player.restore_doses = restore_doses;
     s->player.combat_potion_doses = combat_doses;
     s->player.ranged_potion_doses = ranged_doses;
+    s->player.antivenom_doses = antivenom_doses;
     s->surge_doses = surge_doses;
 }
 
