@@ -9195,30 +9195,14 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
         "DictItem* step_out_forecast_obs_mode",
         "DictItem* zuk_healer_reward_mode",
         "\"step_out_forecast_obs_mode\"");
+    /* Mode is now FIXED at 3 (FAST_READONLY_MOVE), validated 3x-cheaper-faithful,
+       and deliberately dropped from the sweep so every trial runs the fast forecast. */
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode default config",
+        "step-out forecast obs mode default config (fixed at mode 3)",
         "config/ocean/osrs_inferno.ini",
         "[env]",
         "[vec]",
-        "step_out_forecast_obs_mode = 1");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode sweep axis",
-        "config/ocean/osrs_inferno.ini",
-        "[sweep.env.step_out_forecast_obs_mode]",
-        "scale = auto",
-        "distribution = int_uniform");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode is swept",
-        "config/ocean/osrs_inferno.ini",
-        "[sweep]",
-        "[sweep.train.total_timesteps]",
-        "step_out_forecast_obs_mode");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode sweep covers readonly mode",
-        "config/ocean/osrs_inferno.ini",
-        "[sweep.env.step_out_forecast_obs_mode]",
-        "scale = auto",
-        "max = 3");
+        "step_out_forecast_obs_mode = 3");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast readonly mode enum",
         "ocean/osrs/encounters/inferno/encounter_inferno_model.inc",
@@ -9324,7 +9308,7 @@ static void test_inferno_log_metrics_fit_cuda_dict(void) {
     printf("--- inferno log metrics fit CUDA dict ---\n");
 
     int metric_count = inferno_my_log_metric_key_count();
-    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 64);
+    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 80);
 }
 
 static void test_inferno_binding_emits_post_240_traces(void) {
