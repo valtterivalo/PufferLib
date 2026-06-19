@@ -1077,7 +1077,7 @@ static inline void inferno_env_emit_lab_restore_terminal(
     Env* env,
     RenderClient* rc
 ) {
-    rc->inferno_lab_restore_requested = 0;
+    rc->lab_restore_requested = 0;
     inferno_env_clear_render_input(env, rc);
     human_input_clear_selected_ui_target(&rc->human_input);
     inferno_env_refresh_after_state_load(env);
@@ -1121,7 +1121,7 @@ void c_step(Env* env) {
     int used_human_commands = 0;
     RenderClient* render_client = (RenderClient*)env->render_env.client;
 
-    if (render_client && render_client->inferno_lab_restore_requested) {
+    if (render_client && render_client->lab_restore_requested) {
         inferno_env_emit_lab_restore_terminal(env, render_client);
         if (inf_prof_enabled)
             INF_PROFILE_ADD(INF_PROF_C_STEP_TOTAL,
@@ -1129,7 +1129,7 @@ void c_step(Env* env) {
         return;
     }
 
-    if (render_client && render_client->inferno_lab_enabled) {
+    if (render_client && render_client->lab_enabled) {
         inferno_env_freeze_for_lab(env, render_client);
         if (inf_prof_enabled)
             INF_PROFILE_ADD(INF_PROF_C_STEP_TOTAL,
@@ -1214,7 +1214,13 @@ void c_step(Env* env) {
        instead of noisy mid-episode snapshots. */
     if (is_term) {
         InfernoState* s = INF_ENV_INFERNO(env);
-        inf_write_terminal_status_text(s, env->render_status_text,
+        encounter_write_terminal_status_text(
+            s->episode_over,
+            s->winner,
+            INF_OUTCOME_PLAYER_WON,
+            "Inferno cleared",
+            inf_npc_type_name(s->last_hit_by_type),
+            env->render_status_text,
             sizeof(env->render_status_text));
         env->render_status_frames =
             env->render_status_text[0] != '\0' ? INF_RENDER_STATUS_FRAMES : 0;
@@ -1604,7 +1610,7 @@ void c_step(Env* env) {
         INF_PROFILE_MARK(INF_PROF_C_TERMINAL_LOG);
 
         if (render_client)
-            render_inferno_lab_clear_entry_snapshot(render_client);
+            render_lab_clear_entry_snapshot(render_client);
         ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
         ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs);
         ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), obs + INF_NUM_OBS);
@@ -1621,7 +1627,7 @@ void c_reset(Env* env) {
     inferno_stall_trace_close(env, "reset");
     env->stall_trace_ticks = 0;
     if (env->render_env.client)
-        render_inferno_lab_clear_entry_snapshot(
+        render_lab_clear_entry_snapshot(
             (RenderClient*)env->render_env.client);
     uint32_t seed = env->replay_actions ? env->replay_rng_seed : 0;
     if (env->replay_actions && env->replay_has_initial_snapshot) {
@@ -1720,7 +1726,7 @@ void c_render(Env* env) {
         env->pending_render_reset = 0;
     }
 
-    if (!rc->inferno_lab_enabled) {
+    if (!rc->lab_enabled) {
         /* update NPC visual positions once per tick (not per frame).
            render_post_tick snapshots the existing rc->entities before repopulating
            so it can detect new NPC identities and clear stale splats/HP bars. */
