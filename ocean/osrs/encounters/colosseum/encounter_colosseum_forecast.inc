@@ -454,6 +454,44 @@ static int col_forecast_local_dist_to_player(
     return encounter_dist_to_npc(player_x, player_y, npc->x, npc->y, npc->size);
 }
 
+/** Conservative distance proof that a forecast NPC cannot threaten a landing. */
+static int col_forecast_npc_threat_distance_impossible(
+    const ColoForecastNpcLocal* npc,
+    int player_x,
+    int player_y,
+    int horizon
+) {
+    int attack_reach = npc->attack_range;
+    int steps_per_tick = npc->can_move ? 1 : 0;
+    if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
+        attack_reach = 1;
+        steps_per_tick = COLO_WARBAND_TILES_PER_TICK;
+    } else if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_SOL) {
+        attack_reach = 15;
+        steps_per_tick = npc->can_move ? 1 : 0;
+    }
+    int dist = col_forecast_local_dist_to_player(npc, player_x, player_y);
+    return dist > attack_reach + steps_per_tick * horizon;
+}
+
+/** Return true when all live forecast NPCs are too far away to write threats. */
+static int col_forecast_action_rollout_writes_no_threats(
+    const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
+    const int slots[COLO_MAX_NPCS],
+    int slot_count,
+    const ColoStepOutForecastAction* action,
+    int horizon
+) {
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        if (!col_forecast_npc_threat_distance_impossible(
+                &base_npcs[i], action->land_x, action->land_y, horizon)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int col_forecast_warband_adjacent(
     const ColoForecastNpcLocal* npc,
     int player_x,
@@ -967,6 +1005,10 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
+        if (col_forecast_action_rollout_writes_no_threats(
+                base_npcs, forecast_slots, forecast_slot_count, action, horizon)) {
+            continue;
+        }
         if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
                 col_forecast_action_is_run_tile(action_idx)) {
             col_forecast_static_threat_action(

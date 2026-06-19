@@ -139,7 +139,7 @@ static int col_npc_path_blocked_uncached(ColoNpcPathCtx* pc, int x, int y) {
     ColosseumState* s = pc->s;
     if (s->player.x >= x && s->player.x < x + pc->size &&
         s->player.y >= y && s->player.y < y + pc->size) return 1;
-    return col_npc_blocked(s, x, y, pc->size);
+    return col_npc_blocked_ignore_player(s, x, y, pc->size);
 }
 
 /** BFS blocked predicate for NPC routefinding (B2(e)+A30): a size x size
