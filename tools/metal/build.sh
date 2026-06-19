@@ -113,6 +113,10 @@ COMMON_FLAGS=(
     -fopenmp
 )
 
+if [[ "$ENV" == osrs_* ]]; then
+    COMMON_FLAGS+=(-DOSRS_VISUAL)
+fi
+
 echo "Compiling Metal overlay for $ENV"
 clang++ -c "${COMMON_FLAGS[@]}" src/metal/bindings.mm -o build/metal/bindings.o
 clang++ -c "${COMMON_FLAGS[@]}" src/metal/platform.mm -o build/metal/platform.o

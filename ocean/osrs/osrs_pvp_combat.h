@@ -752,27 +752,146 @@ static int pvp_defence_roll_for_expected_damage(
     return eff_defence * (defence_bonus + 64);
 }
 
+typedef enum {
+    PVP_ANCIENT_SPELL_NONE = 0,
+    PVP_ANCIENT_SPELL_ICE,
+    PVP_ANCIENT_SPELL_BLOOD,
+} PvpAncientSpellFamily;
+
+typedef struct {
+    int action;
+    int visual_spell;
+    PvpAncientSpellFamily family;
+    int required_magic;
+    int max_hit;
+    int freeze_ticks;
+    int heal_percent;
+} PvpAncientSpellProfile;
+
+static inline PvpAncientSpellProfile pvp_no_ancient_spell_profile(void) {
+    return (PvpAncientSpellProfile){0};
+}
+
+static inline PvpAncientSpellProfile pvp_spell_profile_for_action(int action) {
+    switch (action) {
+        case ATTACK_ICE_RUSH:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH,
+                PVP_ANCIENT_SPELL_ICE, ICE_RUSH_LEVEL, ICE_RUSH_MAX_HIT, 8, 0};
+        case ATTACK_ICE_BURST:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_ICE_BURST,
+                PVP_ANCIENT_SPELL_ICE, ICE_BURST_LEVEL, ICE_BURST_MAX_HIT, 16, 0};
+        case ATTACK_ICE_BLITZ:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_ICE_BLITZ,
+                PVP_ANCIENT_SPELL_ICE, ICE_BLITZ_LEVEL, ICE_BLITZ_MAX_HIT, 24, 0};
+        case ATTACK_ICE_BARRAGE:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE,
+                PVP_ANCIENT_SPELL_ICE, ICE_BARRAGE_LEVEL, ICE_BARRAGE_MAX_HIT,
+                BARRAGE_FREEZE_TICKS, 0};
+        case ATTACK_BLOOD_RUSH:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_BLOOD_RUSH,
+                PVP_ANCIENT_SPELL_BLOOD, BLOOD_RUSH_LEVEL, BLOOD_RUSH_MAX_HIT, 0, 10};
+        case ATTACK_BLOOD_BURST:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_BLOOD_BURST,
+                PVP_ANCIENT_SPELL_BLOOD, BLOOD_BURST_LEVEL, BLOOD_BURST_MAX_HIT, 0, 15};
+        case ATTACK_BLOOD_BLITZ:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_BLOOD_BLITZ,
+                PVP_ANCIENT_SPELL_BLOOD, BLOOD_BLITZ_LEVEL, BLOOD_BLITZ_MAX_HIT, 0, 20};
+        case ATTACK_BLOOD_BARRAGE:
+            return (PvpAncientSpellProfile){
+                action, OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE,
+                PVP_ANCIENT_SPELL_BLOOD, BLOOD_BARRAGE_LEVEL, BLOOD_BARRAGE_MAX_HIT, 0, 25};
+        default:
+            return pvp_no_ancient_spell_profile();
+    }
+}
+
+static inline PvpAncientSpellProfile pvp_spell_profile_for_visual(int visual_spell) {
+    switch (visual_spell) {
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH:
+            return pvp_spell_profile_for_action(ATTACK_ICE_RUSH);
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_BURST:
+            return pvp_spell_profile_for_action(ATTACK_ICE_BURST);
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_BLITZ:
+            return pvp_spell_profile_for_action(ATTACK_ICE_BLITZ);
+        case OSRS_COMBAT_VISUAL_SPELL_ICE_BARRAGE:
+            return pvp_spell_profile_for_action(ATTACK_ICE_BARRAGE);
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_RUSH:
+            return pvp_spell_profile_for_action(ATTACK_BLOOD_RUSH);
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BURST:
+            return pvp_spell_profile_for_action(ATTACK_BLOOD_BURST);
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BLITZ:
+            return pvp_spell_profile_for_action(ATTACK_BLOOD_BLITZ);
+        case OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE:
+            return pvp_spell_profile_for_action(ATTACK_BLOOD_BARRAGE);
+        default:
+            return pvp_no_ancient_spell_profile();
+    }
+}
+
+static inline int pvp_spell_profile_active(PvpAncientSpellProfile profile) {
+    return profile.family != PVP_ANCIENT_SPELL_NONE;
+}
+
+static inline int pvp_spell_action_can_cast(Player* p, int action) {
+    if (p->is_lunar_spellbook) return 0;
+    PvpAncientSpellProfile profile = pvp_spell_profile_for_action(action);
+    return pvp_spell_profile_active(profile) &&
+        p->current_magic >= profile.required_magic;
+}
+
+static inline int pvp_best_ice_spell_action(Player* p) {
+    if (p->is_lunar_spellbook) return ATTACK_NONE;
+    if (p->current_magic >= ICE_BARRAGE_LEVEL) return ATTACK_ICE_BARRAGE;
+    if (p->current_magic >= ICE_BLITZ_LEVEL) return ATTACK_ICE_BLITZ;
+    if (p->current_magic >= ICE_BURST_LEVEL) return ATTACK_ICE_BURST;
+    if (p->current_magic >= ICE_RUSH_LEVEL) return ATTACK_ICE_RUSH;
+    return ATTACK_NONE;
+}
+
+static inline int pvp_best_blood_spell_action(Player* p) {
+    if (p->is_lunar_spellbook) return ATTACK_NONE;
+    if (p->current_magic >= BLOOD_BARRAGE_LEVEL) return ATTACK_BLOOD_BARRAGE;
+    if (p->current_magic >= BLOOD_BLITZ_LEVEL) return ATTACK_BLOOD_BLITZ;
+    if (p->current_magic >= BLOOD_BURST_LEVEL) return ATTACK_BLOOD_BURST;
+    if (p->current_magic >= BLOOD_RUSH_LEVEL) return ATTACK_BLOOD_RUSH;
+    return ATTACK_NONE;
+}
+
+static inline float pvp_spell_tier_obs(Player* p, PvpAncientSpellFamily family) {
+    int action = family == PVP_ANCIENT_SPELL_ICE
+        ? pvp_best_ice_spell_action(p)
+        : pvp_best_blood_spell_action(p);
+    PvpAncientSpellProfile profile = pvp_spell_profile_for_action(action);
+    if (!pvp_spell_profile_active(profile)) return 0.0f;
+    if (profile.required_magic == ICE_RUSH_LEVEL ||
+            profile.required_magic == BLOOD_RUSH_LEVEL) return 0.25f;
+    if (profile.required_magic == ICE_BURST_LEVEL ||
+            profile.required_magic == BLOOD_BURST_LEVEL) return 0.50f;
+    if (profile.required_magic == ICE_BLITZ_LEVEL ||
+            profile.required_magic == BLOOD_BLITZ_LEVEL) return 0.75f;
+    return 1.0f;
+}
+
 static int pvp_magic_base_hit_for_expected_damage(Player* attacker, int magic_type) {
-    if (magic_type == 1) {
-        if (attacker->current_magic >= ICE_BARRAGE_LEVEL) return ICE_BARRAGE_MAX_HIT;
-        if (attacker->current_magic >= ICE_BLITZ_LEVEL) return ICE_BLITZ_MAX_HIT;
-        if (attacker->current_magic >= ICE_BURST_LEVEL) return ICE_BURST_MAX_HIT;
-        return ICE_RUSH_MAX_HIT;
-    }
-    if (magic_type == 2) {
-        if (attacker->current_magic >= BLOOD_BARRAGE_LEVEL) return BLOOD_BARRAGE_MAX_HIT;
-        if (attacker->current_magic >= BLOOD_BLITZ_LEVEL) return BLOOD_BLITZ_MAX_HIT;
-        if (attacker->current_magic >= BLOOD_BURST_LEVEL) return BLOOD_BURST_MAX_HIT;
-        return BLOOD_RUSH_MAX_HIT;
-    }
+    (void)attacker;
+    PvpAncientSpellProfile profile = pvp_spell_profile_for_visual(magic_type);
+    if (pvp_spell_profile_active(profile)) return profile.max_hit;
     return 30;
 }
 
 static float pvp_normal_attack_accuracy_multiplier(
         Player* attacker, AttackStyle style, int magic_type) {
     int has_zuriels = attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZURIELS_STAFF;
-    return has_zuriels && style == ATTACK_STYLE_MAGIC && magic_type == 1
-        ? 1.10f : 1.0f;
+    PvpAncientSpellProfile profile = pvp_spell_profile_for_visual(magic_type);
+    return has_zuriels && style == ATTACK_STYLE_MAGIC &&
+        profile.family == PVP_ANCIENT_SPELL_ICE ? 1.10f : 1.0f;
 }
 
 static float pvp_expected_special_attack_damage(
@@ -871,34 +990,6 @@ static void register_expected_damage(
     defender->expected_damage_prevented_tick += expected_damage_prevented;
 }
 
-
-static inline int get_ice_freeze_ticks(int current_magic) {
-    if (current_magic >= ICE_BARRAGE_LEVEL) return 32;
-    if (current_magic >= ICE_BLITZ_LEVEL) return 24;
-    if (current_magic >= ICE_BURST_LEVEL) return 16;
-    return 8;
-}
-
-static inline int get_ice_base_hit(int current_magic) {
-    if (current_magic >= ICE_BARRAGE_LEVEL) return ICE_BARRAGE_MAX_HIT;
-    if (current_magic >= ICE_BLITZ_LEVEL) return ICE_BLITZ_MAX_HIT;
-    if (current_magic >= ICE_BURST_LEVEL) return ICE_BURST_MAX_HIT;
-    return ICE_RUSH_MAX_HIT;
-}
-
-static inline int get_blood_base_hit(int current_magic) {
-    if (current_magic >= BLOOD_BARRAGE_LEVEL) return BLOOD_BARRAGE_MAX_HIT;
-    if (current_magic >= BLOOD_BLITZ_LEVEL) return BLOOD_BLITZ_MAX_HIT;
-    if (current_magic >= BLOOD_BURST_LEVEL) return BLOOD_BURST_MAX_HIT;
-    return BLOOD_RUSH_MAX_HIT;
-}
-
-static inline int get_blood_heal_percent(int current_magic) {
-    if (current_magic >= BLOOD_BARRAGE_LEVEL) return 25;
-    if (current_magic >= BLOOD_BLITZ_LEVEL) return 20;
-    if (current_magic >= BLOOD_BURST_LEVEL) return 15;
-    return 10;
-}
 
 /* PvP-specific: dark bow second arrow and weapon-specific ranged delays.
    standard delays use encounter_magic_hit_delay / encounter_ranged_hit_delay
@@ -1246,13 +1337,11 @@ static inline int is_magic_spec_weapon_equipped(Player* p) {
 }
 
 static inline int can_cast_ice_spell(Player* p) {
-    if (p->is_lunar_spellbook) return 0;
-    return p->current_magic >= ICE_RUSH_LEVEL;
+    return pvp_best_ice_spell_action(p) != ATTACK_NONE;
 }
 
 static inline int can_cast_blood_spell(Player* p) {
-    if (p->is_lunar_spellbook) return 0;
-    return p->current_magic >= BLOOD_RUSH_LEVEL;
+    return pvp_best_blood_spell_action(p) != ATTACK_NONE;
 }
 
 static inline int is_ranged_attack_available(Player* p) {
@@ -1590,16 +1679,16 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
     /* === NORMAL ATTACK === */
     {
-        /* zuriel's staff passive: 10% increased accuracy on ice spells */
         int has_zuriels = (attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZURIELS_STAFF);
-        if (has_zuriels && style == ATTACK_STYLE_MAGIC && magic_type == 1)
+        PvpAncientSpellProfile magic_profile = pvp_spell_profile_for_visual(magic_type);
+        if (has_zuriels && style == ATTACK_STYLE_MAGIC &&
+                magic_profile.family == PVP_ANCIENT_SPELL_ICE)
             acc_mult *= 1.10f;
 
         float hit_chance = calculate_hit_chance(env, attacker, defender, style, acc_mult);
         int magic_base_hit = 30;
-        if (style == ATTACK_STYLE_MAGIC) {
-            if (magic_type == 1) magic_base_hit = get_ice_base_hit(attacker->current_magic);
-            else if (magic_type == 2) magic_base_hit = get_blood_base_hit(attacker->current_magic);
+        if (style == ATTACK_STYLE_MAGIC && pvp_spell_profile_active(magic_profile)) {
+            magic_base_hit = magic_profile.max_hit;
         }
         int max_hit = calculate_max_hit(attacker, style, str_mult, magic_base_hit);
 
@@ -1613,18 +1702,20 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         int freeze_ticks = 0, heal_percent = 0;
 
-        if (style == ATTACK_STYLE_MAGIC) {
-            if (magic_type == 1) {
-                freeze_ticks = get_ice_freeze_ticks(attacker->current_magic);
+        if (style == ATTACK_STYLE_MAGIC && pvp_spell_profile_active(magic_profile)) {
+            if (magic_profile.family == PVP_ANCIENT_SPELL_ICE) {
+                freeze_ticks = magic_profile.freeze_ticks;
                 if (has_zuriels) freeze_ticks = (int)(freeze_ticks * 1.10f);
-            } else if (magic_type == 2) {
-                heal_percent = get_blood_heal_percent(attacker->current_magic);
+            } else if (magic_profile.family == PVP_ANCIENT_SPELL_BLOOD) {
+                heal_percent = magic_profile.heal_percent;
                 if (has_zuriels) heal_percent = (int)(heal_percent * 1.50f);
             }
         }
 
         int total_damage = 0;
-        int apply_magic_freeze_on_calc = (style == ATTACK_STYLE_MAGIC && magic_type == 1);
+        int apply_magic_freeze_on_calc =
+            style == ATTACK_STYLE_MAGIC &&
+            magic_profile.family == PVP_ANCIENT_SPELL_ICE;
 
         /* bolt proc setup */
         int ammo_item = attacker->equipped[GEAR_SLOT_AMMO];
@@ -1705,13 +1796,14 @@ post_attack:;
             style == ATTACK_STYLE_MAGIC && magic_type != 0 ? 30 : 0);
         profile_query.action_style = style;
         profile_query.fight_style = attacker->fight_style;
-        profile_query.magic_kind = style == ATTACK_STYLE_MAGIC
-            ? (magic_type == 1
-                ? OSRS_MAGIC_ATTACK_ANCIENT_ICE
-                : magic_type == 2
-                    ? OSRS_MAGIC_ATTACK_ANCIENT_BLOOD
-                    : OSRS_MAGIC_ATTACK_NONE)
-            : OSRS_MAGIC_ATTACK_NONE;
+        PvpAncientSpellProfile magic_profile = pvp_spell_profile_for_visual(magic_type);
+        profile_query.magic_kind = OSRS_MAGIC_ATTACK_NONE;
+        if (style == ATTACK_STYLE_MAGIC) {
+            if (magic_profile.family == PVP_ANCIENT_SPELL_ICE)
+                profile_query.magic_kind = OSRS_MAGIC_ATTACK_ANCIENT_ICE;
+            else if (magic_profile.family == PVP_ANCIENT_SPELL_BLOOD)
+                profile_query.magic_kind = OSRS_MAGIC_ATTACK_ANCIENT_BLOOD;
+        }
         profile_query.special_item = ITEM_NONE;
         profile_query.special_result = no_spec;
         attack_profile = osrs_player_attack_profile(&profile_query);

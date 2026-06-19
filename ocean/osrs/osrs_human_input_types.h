@@ -80,7 +80,7 @@ typedef struct HumanInput {
     int pending_potion;                    /* PotionAction-style intent, 0 = none */
     int pending_veng;                      /* 1 = cast vengeance */
     int pending_spec;                      /* 1 = use special attack */
-    int pending_spell;                     /* 0=none, ATTACK_ICE or ATTACK_BLOOD */
+    int pending_spell;
     int pending_target_idx;                /* NPC entity index to attack, -1 = none */
     int pending_gear;                      /* gear switch action value, 0 = none */
 
@@ -88,7 +88,7 @@ typedef struct HumanInput {
     int selected_item_inventory_slot;       /* inventory slot selected with Use. -1 = none */
     int selected_item_db_idx;               /* ITEM_DATABASE index for selected item */
     int selected_item_osrs_id;              /* OSRS item id for selected item source */
-    int selected_spell;                    /* ATTACK_ICE or ATTACK_BLOOD for targeting */
+    int selected_spell;
     int selected_spell_gui_idx;            /* GuiSpellIdx of the exact spell cell clicked, for UI highlight. -1 = none */
 
     /* visual feedback: click cross at screen-space position (like real OSRS client) */

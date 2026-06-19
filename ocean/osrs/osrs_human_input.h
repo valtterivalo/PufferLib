@@ -152,18 +152,26 @@ static const char* human_gui_spell_name(GuiSpellIdx sidx) {
     return NULL;
 }
 
+static int human_attack_action_for_gui_spell_idx(GuiSpellIdx sidx) {
+    switch (sidx) {
+        case GUI_SPELL_ICE_RUSH: return ATTACK_ICE_RUSH;
+        case GUI_SPELL_ICE_BURST: return ATTACK_ICE_BURST;
+        case GUI_SPELL_ICE_BLITZ: return ATTACK_ICE_BLITZ;
+        case GUI_SPELL_ICE_BARRAGE: return ATTACK_ICE_BARRAGE;
+        case GUI_SPELL_BLOOD_RUSH: return ATTACK_BLOOD_RUSH;
+        case GUI_SPELL_BLOOD_BURST: return ATTACK_BLOOD_BURST;
+        case GUI_SPELL_BLOOD_BLITZ: return ATTACK_BLOOD_BLITZ;
+        case GUI_SPELL_BLOOD_BARRAGE: return ATTACK_BLOOD_BARRAGE;
+        default: return ATTACK_NONE;
+    }
+}
+
 static int human_select_spell_idx(HumanInput* hi, GuiSpellIdx sidx) {
     if (!gui_spell_castable(sidx)) return 0;
-
-    if (gui_spell_is_ice(sidx)) {
+    int spell_action = human_attack_action_for_gui_spell_idx(sidx);
+    if (spell_action != ATTACK_NONE) {
         human_input_apply_ui_intent(
-            hi, osrs_ui_intent_select_spell(ATTACK_ICE, (int)sidx));
-        return 1;
-    }
-
-    if (gui_spell_is_blood(sidx)) {
-        human_input_apply_ui_intent(
-            hi, osrs_ui_intent_select_spell(ATTACK_BLOOD, (int)sidx));
+            hi, osrs_ui_intent_select_spell(spell_action, (int)sidx));
         return 1;
     }
 
@@ -365,13 +373,9 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
 
     if (hi->pending_attack) {
-        if (hi->pending_spell == ATTACK_ICE) {
-            actions[HEAD_ATTACK] = ATTACK_ICE;
-        } else if (hi->pending_spell == ATTACK_BLOOD) {
-            actions[HEAD_ATTACK] = ATTACK_BLOOD;
-        } else {
-            actions[HEAD_ATTACK] = ATTACK_ATK;
-        }
+        actions[HEAD_ATTACK] = is_spell_attack_action(hi->pending_spell)
+            ? hi->pending_spell
+            : ATTACK_ATK;
     } else if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
         int dx = hi->pending_move_x - target->x;
         int dy = hi->pending_move_y - target->y;

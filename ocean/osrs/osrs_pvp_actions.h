@@ -261,15 +261,9 @@ static inline AttackStyle pvp_target_click_attack_style(Player* p) {
 }
 
 static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_action) {
-    switch (attack_action) {
-        case ATTACK_ATK:
-            return pvp_target_click_attack_style(p);
-        case ATTACK_ICE:
-        case ATTACK_BLOOD:
-            return ATTACK_STYLE_MAGIC;
-        default:
-            return ATTACK_STYLE_NONE;
-    }
+    if (attack_action == ATTACK_ATK) return pvp_target_click_attack_style(p);
+    if (is_spell_attack_action(attack_action)) return ATTACK_STYLE_MAGIC;
+    return ATTACK_STYLE_NONE;
 }
 
 static inline void pvp_record_selected_attack_style(Player* p, AttackStyle style) {
@@ -481,10 +475,8 @@ static PvpAttackMoveIntent pvp_attack_move_intent(
     } else if (osrs_interaction_active(&p->interaction)) {
         attack_style = pvp_target_click_attack_style(p);
     }
-    if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
-        attack_style = ATTACK_STYLE_NONE;
-    }
-    if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
+    if (is_spell_attack_action(attack_action) &&
+            !pvp_spell_action_can_cast(p, attack_action)) {
         attack_style = ATTACK_STYLE_NONE;
     }
     if (attack_style != ATTACK_STYLE_NONE) {
@@ -531,25 +523,18 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     int magic_type = 0;
 
-    switch (attack_action) {
-        case ATTACK_ATK:
-            attack_style = pvp_target_click_attack_style(p);
-            break;
-        case ATTACK_ICE:
+    if (attack_action == ATTACK_ATK) {
+        attack_style = pvp_target_click_attack_style(p);
+    } else if (is_spell_attack_action(attack_action)) {
+        PvpAncientSpellProfile spell_profile =
+            pvp_spell_profile_for_action(attack_action);
+        if (pvp_spell_profile_active(spell_profile)) {
             attack_style = ATTACK_STYLE_MAGIC;
-            magic_type = 1;
-            break;
-        case ATTACK_BLOOD:
-            attack_style = ATTACK_STYLE_MAGIC;
-            magic_type = 2;
-            break;
-        default:
-            break;
+            magic_type = spell_profile.visual_spell;
+        }
     }
-    if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
-        attack_style = ATTACK_STYLE_NONE;
-    }
-    if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
+    if (is_spell_attack_action(attack_action) &&
+            !pvp_spell_action_can_cast(p, attack_action)) {
         attack_style = ATTACK_STYLE_NONE;
     }
     if (selected_attack_action != ATTACK_NONE && attack_style != ATTACK_STYLE_NONE) {
@@ -587,15 +572,19 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, const int* action
                 }
             }
             break;
-        case ATTACK_ICE:
-        case ATTACK_BLOOD:
+        case ATTACK_ICE_RUSH:
+        case ATTACK_ICE_BURST:
+        case ATTACK_ICE_BLITZ:
+        case ATTACK_ICE_BARRAGE:
+        case ATTACK_BLOOD_RUSH:
+        case ATTACK_BLOOD_BURST:
+        case ATTACK_BLOOD_BLITZ:
+        case ATTACK_BLOOD_BARRAGE:
             p->spell_attack_attempts++;
             p->spell_attack_pre_move_dist_sum += p->attack_intent_pre_move_dist;
             p->spell_attack_post_move_dist_sum += dist;
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
-                int can_cast = (attack_action == ATTACK_ICE)
-                    ? can_cast_ice_spell(p)
-                    : can_cast_blood_spell(p);
+                int can_cast = pvp_spell_action_can_cast(p, attack_action);
                 if (!can_cast) break;
                 OsrsAttackReachQuery reach = pvp_attack_reach_query(
                     cmap, p, t, ATTACK_STYLE_MAGIC);

@@ -554,12 +554,22 @@ static inline int opp_get_target_gear_style(Player* target) {
     return (int)target->visible_gear;
 }
 
-/* Choose ice vs blood barrage based on freeze state and HP */
+static inline int opp_get_random_mage_attack(OsrsEnv* env, Player* self) {
+    int ice = pvp_best_ice_spell_action(self);
+    int blood = pvp_best_blood_spell_action(self);
+    if (ice == ATTACK_NONE) return blood;
+    if (blood == ATTACK_NONE) return ice;
+    return rand_int(env, 2) == 0 ? ice : blood;
+}
+
 static inline int opp_get_mage_attack(Player* self, Player* target) {
     int can_freeze = target->freeze_immunity_ticks <= 1 && target->frozen_ticks == 0;
-    if (can_freeze) return ATTACK_ICE;
+    if (can_freeze) return pvp_best_ice_spell_action(self);
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
-    return (hp_pct > 0.98f) ? ATTACK_ICE : ATTACK_BLOOD;
+    int ice = pvp_best_ice_spell_action(self);
+    int blood = pvp_best_blood_spell_action(self);
+    if (hp_pct <= 0.98f && blood != ATTACK_NONE) return blood;
+    return ice != ATTACK_NONE ? ice : blood;
 }
 
 static inline void opp_resolve_normal_attack(
@@ -575,7 +585,7 @@ static inline void opp_resolve_normal_attack(
     *actual_style = opp_choose_style_from_preference(
         env, opp, self, target, allowed_mask, *actual_style);
     *actual_attack = (*actual_style == OPP_STYLE_MAGE)
-        ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+        ? (is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1)
         : 2;
 }
 
@@ -741,11 +751,11 @@ static inline int opp_apply_survival_policy(
     return opp_apply_survival_actions(opp, actions, self, cons, policy).eating;
 }
 
-static inline void opp_emit_combat_attack(int* actions, int attack) {
+static inline void opp_emit_combat_attack(int* actions, Player* self, int attack) {
     if (attack == 0) {
-        actions[HEAD_COMBAT] = ATTACK_ICE;
+        actions[HEAD_COMBAT] = pvp_best_ice_spell_action(self);
     } else if (attack == 1) {
-        actions[HEAD_COMBAT] = ATTACK_BLOOD;
+        actions[HEAD_COMBAT] = pvp_best_blood_spell_action(self);
     } else {
         actions[HEAD_COMBAT] = ATTACK_ATK;
     }
@@ -755,6 +765,7 @@ static inline void opp_emit_attack_with_style(
     OsrsEnv* env,
     OpponentState* opp,
     int* actions,
+    Player* self,
     int style,
     int attack
 ) {
@@ -764,7 +775,7 @@ static inline void opp_emit_attack_with_style(
         opp_apply_gear_switch(actions, style);
     }
 
-    opp_emit_combat_attack(actions, attack);
+    opp_emit_combat_attack(actions, self, attack);
 }
 
 /* Improved-style consumable logic. Returns 1 if potion was used (for restore/boost tracking) */
@@ -932,7 +943,7 @@ static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp_apply_gear_switch(actions, opp->chosen_style);
 
         if (opp->chosen_style == OPP_STYLE_MAGE) {
-            int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+            int spell = opp_get_random_mage_attack(env, self);
             actions[HEAD_COMBAT] = spell;
         } else {
             actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -972,7 +983,7 @@ static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
         int style = rand_int(env, 3);  /* 0=mage, 1=ranged, 2=melee */
         opp_apply_gear_switch(actions, style);
         if (style == OPP_STYLE_MAGE) {
-            int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+            int spell = opp_get_random_mage_attack(env, self);
             actions[HEAD_COMBAT] = spell;
         } else {
             actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1011,7 +1022,7 @@ static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
         int style = rand_int(env, 3);
         opp_apply_gear_switch(actions, style);
         if (style == OPP_STYLE_MAGE) {
-            int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+            int spell = opp_get_random_mage_attack(env, self);
             actions[HEAD_COMBAT] = spell;
         } else {
             actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1056,7 +1067,7 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
         int style = rand_int(env, 3);
         opp_apply_gear_switch(actions, style);
         if (style == OPP_STYLE_MAGE) {
-            int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+            int spell = opp_get_random_mage_attack(env, self);
             actions[HEAD_COMBAT] = spell;
         } else {
             actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1130,7 +1141,7 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
         } else {
             opp_apply_gear_switch(actions, style);
             if (style == OPP_STYLE_MAGE) {
-                int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+                int spell = opp_get_random_mage_attack(env, self);
                 actions[HEAD_COMBAT] = spell;
             } else {
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1191,7 +1202,7 @@ static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
         } else {
             opp_apply_gear_switch(actions, style);
             if (style == OPP_STYLE_MAGE) {
-                int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+                int spell = opp_get_random_mage_attack(env, self);
                 actions[HEAD_COMBAT] = spell;
             } else {
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1255,7 +1266,7 @@ static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
             actual_attack = 2;  /* ATK */
         }
 
-        opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
+        opp_emit_attack_with_style(env, opp, actions, self, actual_style, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1301,7 +1312,7 @@ static void opp_novice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             if (opp->target_fleeing_ticks >= 2 && dist > 1) {
                 /* Anti-kite: cancel spec, use mage */
                 opp_apply_gear_switch(actions, OPP_STYLE_MAGE);
-                actions[HEAD_COMBAT] = ATTACK_ICE;
+                actions[HEAD_COMBAT] = pvp_best_ice_spell_action(self);
             } else {
                 opp_apply_gear_switch(actions, OPP_STYLE_SPEC);
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1320,7 +1331,7 @@ static void opp_novice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             }
 
             if (style == OPP_STYLE_MAGE) {
-                int spell = (rand_int(env, 2) == 0) ? ATTACK_ICE : ATTACK_BLOOD;
+                int spell = opp_get_random_mage_attack(env, self);
                 actions[HEAD_COMBAT] = spell;
             } else {
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1360,7 +1371,7 @@ static void opp_apprentice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
             if (opp->target_fleeing_ticks >= 2 && dist > 1) {
                 opp_apply_gear_switch(actions, OPP_STYLE_MAGE);
-                actions[HEAD_COMBAT] = ATTACK_ICE;
+                actions[HEAD_COMBAT] = pvp_best_ice_spell_action(self);
             } else {
                 opp_apply_gear_switch(actions, OPP_STYLE_SPEC);
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1379,7 +1390,9 @@ static void opp_apprentice_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             }
 
             if (style == OPP_STYLE_MAGE) {
-                int spell = (hp_pct < 0.30f) ? ATTACK_BLOOD : ATTACK_ICE;
+                int spell = (hp_pct < 0.30f)
+                    ? pvp_best_blood_spell_action(self)
+                    : pvp_best_ice_spell_action(self);
                 actions[HEAD_COMBAT] = spell;
             } else {
                 actions[HEAD_COMBAT] = ATTACK_ATK;
@@ -1456,7 +1469,7 @@ static void opp_competent_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     }
 }
 
@@ -1527,7 +1540,7 @@ static void opp_intermediate_nh(OsrsEnv* env, OpponentState* opp, int* actions) 
 
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     }
 }
 
@@ -1596,7 +1609,7 @@ static void opp_advanced_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 only (no step under) */
         int mv_dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1673,7 +1686,7 @@ static void opp_proficient_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 25% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1754,7 +1767,7 @@ static void opp_expert_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: farcast 3 + 50% step under */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -1900,8 +1913,8 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
         actual_attack = (hp_pct < 0.98f)
             ? ((target->freeze_immunity_ticks <= 1 && target->frozen_ticks == 0) ? 0 : 1)
             : 0;  /* ice at full HP */
-        /* Simplified: use opp_get_mage_attack for ice/blood decision */
-        actual_attack = opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1;
+        actual_attack =
+            is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1;
     } else {
         /* Target frozen or mage not off-prayer — choose based on fake anticipation */
         int can_use_preferred = preferred_style >= 0 &&
@@ -1953,7 +1966,7 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_gear_switch(actions, actual_style);
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement when not attacking */
         if (opp_target_frozen_after_pvp_timer_update(target) &&
@@ -2043,7 +2056,7 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
         /* 7. Attack with delay — sample delay, skip if > 0 */
         int action_delay = opp_sample_delay(env, UNPREDICTABLE_IMP_ACTION_CUM, UNPREDICTABLE_IMP_ACTION_CUM_LEN);
         if (action_delay == 0) {
-            opp_emit_combat_attack(actions, actual_attack);
+            opp_emit_combat_attack(actions, self, actual_attack);
         }
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
@@ -2193,7 +2206,8 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
         actual_attack = 3;
     } else if (target->frozen_ticks == 0 && (off_mask & (1 << OPP_STYLE_MAGE))) {
         actual_style = OPP_STYLE_MAGE;
-        actual_attack = opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1;
+        actual_attack =
+            is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1;
     } else {
         int can_use_preferred = preferred_style >= 0 &&
             (preferred_style != OPP_STYLE_MELEE || self->frozen_ticks <= 10 || dist <= 1);
@@ -2240,7 +2254,7 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
             }
 
 
-            opp_emit_combat_attack(actions, actual_attack);
+            opp_emit_combat_attack(actions, self, actual_attack);
         }
         /* else: missed attack window due to delay */
     } else if (!opp_attack_ready(self)) {
@@ -2296,7 +2310,7 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
 
     int attack = agent_actions[HEAD_ATTACK];
 
-    if (attack == ATTACK_ICE || attack == ATTACK_BLOOD) {
+    if (is_spell_attack_action(attack)) {
         opp->read_agent_style = ATTACK_STYLE_MAGIC;
         opp->has_read_this_tick = 1;
     } else if (attack == ATTACK_ATK) {
@@ -2538,16 +2552,17 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     } else if (preferred_style >= 0) {
         actual_style = preferred_style;
         actual_attack = (preferred_style == OPP_STYLE_MAGE)
-            ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+            ? (is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1)
             : 2;
     } else if (target->frozen_ticks == 0 && (off_mask & (1 << OPP_STYLE_MAGE))) {
         actual_style = OPP_STYLE_MAGE;
-        actual_attack = opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1;
+        actual_attack =
+            is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1;
     } else {
         actual_style = opp_resolve_attack_style(
             env, opp, self, target, OPP_STYLE_MASK_ALL, off_mask).style;
         actual_attack = (actual_style == OPP_STYLE_MAGE)
-            ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+            ? (is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1)
             : 2;
     }
 
@@ -2571,7 +2586,7 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_gear_switch(actions, actual_style);
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         if (opp_target_frozen_after_pvp_timer_update(target) &&
                 self->frozen_ticks == 0 && dist > 0) {
@@ -2743,7 +2758,7 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
             actions[HEAD_LOADOUT] = LOADOUT_TANK;
         }
 
-        opp_emit_combat_attack(actions, actual_attack);
+        opp_emit_combat_attack(actions, self, actual_attack);
     } else if (!opp_attack_ready(self)) {
         /* Movement: maintain farcast-5 distance */
         int dist = chebyshev_distance(self->x, self->y, target->x, target->y);
@@ -2861,7 +2876,8 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
                 if (attack_style == OPP_STYLE_MAGE) {
                     actions[HEAD_COMBAT] = (target->frozen_ticks == 0 &&
                                            target->freeze_immunity_ticks == 0)
-                                          ? ATTACK_ICE : ATTACK_BLOOD;
+                                          ? pvp_best_ice_spell_action(self)
+                                          : pvp_best_blood_spell_action(self);
                 } else {
                     actions[HEAD_COMBAT] = ATTACK_ATK;
                 }
@@ -2976,7 +2992,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
                     opp_apply_gear_switch(actions, attack_style);
                 }
 
-                opp_emit_combat_attack(actions, actual_attack);
+                opp_emit_combat_attack(actions, self, actual_attack);
             }
         }
     } else if (!opp_attack_ready(self)) {
@@ -3045,12 +3061,12 @@ static void opp_strict_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
             env, opp, self, target, allowed, opp_get_off_prayer_mask(self, target));
         actual_style = choice.style;
         actual_attack = actual_style == OPP_STYLE_MAGE
-            ? (opp_get_mage_attack(self, target) == ATTACK_ICE ? 0 : 1)
+            ? (is_ice_spell_attack_action(opp_get_mage_attack(self, target)) ? 0 : 1)
             : 2;
     }
 
     opp_apply_boost_potion(env, opp, actions, self, actual_style, 0);
-    opp_emit_attack_with_style(env, opp, actions, actual_style, actual_attack);
+    opp_emit_attack_with_style(env, opp, actions, self, actual_style, actual_attack);
 }
 
 static inline int pvp_recent_attack_style_count(
@@ -3191,7 +3207,7 @@ static inline void pvp_adaptive_nh_apply_counter_attack(
     if (target->frozen_ticks == 0 &&
             target->freeze_immunity_ticks == 0 &&
             opp_style_can_hit_now(env, self, target, OPP_STYLE_MAGE)) {
-        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MAGE, 0);
+        opp_emit_attack_with_style(env, opp, actions, self, OPP_STYLE_MAGE, 0);
         return;
     }
 
@@ -3202,13 +3218,13 @@ static inline void pvp_adaptive_nh_apply_counter_attack(
 
     if (target->prayer != PRAYER_PROTECT_MELEE &&
             opp_style_can_hit_now(env, self, target, OPP_STYLE_MELEE)) {
-        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_MELEE, 2);
+        opp_emit_attack_with_style(env, opp, actions, self, OPP_STYLE_MELEE, 2);
         return;
     }
 
     if (target->prayer != PRAYER_PROTECT_RANGED &&
             opp_style_can_hit_now(env, self, target, OPP_STYLE_RANGED)) {
-        opp_emit_attack_with_style(env, opp, actions, OPP_STYLE_RANGED, 2);
+        opp_emit_attack_with_style(env, opp, actions, self, OPP_STYLE_RANGED, 2);
     }
 }
 
@@ -3562,7 +3578,7 @@ static inline int opp_target_click_style_from_weapon(uint8_t weapon) {
 
 static inline int opp_legacy_attack_style_for_actions(Player* self, int* actions) {
     int legacy_combat = actions[HEAD_COMBAT];
-    if (legacy_combat == ATTACK_ICE || legacy_combat == ATTACK_BLOOD) {
+    if (is_spell_attack_action(legacy_combat)) {
         return OPP_STYLE_MAGE;
     }
     if (legacy_combat != ATTACK_ATK) {

@@ -66,7 +66,7 @@ static inline void osrs_human_command_frame_apply_legacy_pending(
         frame->path_command_seen = 1;
     }
     if (!frame->path_command_seen && hi->pending_attack) {
-        if (hi->pending_spell == ATTACK_ICE || hi->pending_spell == ATTACK_BLOOD) {
+        if (is_spell_attack_action(hi->pending_spell)) {
             frame->has_spell_target = 1;
             frame->spell_target_slot = hi->pending_target_idx;
             frame->spell = hi->pending_spell;

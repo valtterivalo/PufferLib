@@ -1489,6 +1489,22 @@ static void test_pvp_magic_landing_keeps_spell_visual_context(void) {
         osrs_combat_visual_spell_impact_gfx(
             OSRS_COMBAT_VISUAL_SPELL_BLOOD_BARRAGE, 1),
         GFX_BLOOD_BARRAGE_HIT);
+    ASSERT_INT_EQ("ice rush hit uses ice rush impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_ICE_RUSH, 1),
+        GFX_ICE_RUSH_HIT);
+    ASSERT_INT_EQ("ice blitz hit uses ice blitz impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_ICE_BLITZ, 1),
+        GFX_ICE_BLITZ_HIT);
+    ASSERT_INT_EQ("blood rush hit uses blood rush impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_BLOOD_RUSH, 1),
+        GFX_BLOOD_RUSH_HIT);
+    ASSERT_INT_EQ("blood burst hit uses blood burst impact gfx",
+        osrs_combat_visual_spell_impact_gfx(
+            OSRS_COMBAT_VISUAL_SPELL_BLOOD_BURST, 1),
+        GFX_BLOOD_BURST_HIT);
 }
 
 static void test_spell_impact_entity_center_normalizes_size(void) {
