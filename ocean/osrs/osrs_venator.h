@@ -471,7 +471,7 @@ static inline OsrsVenatorCandidateSearch osrs_venator_find_next_candidate(
     if (candidate_count < 0) abort();
     if (candidate_count > 0 && candidates == NULL) abort();
 
-    OsrsVenatorCandidateSearch search = {0};
+    OsrsVenatorCandidateSearch search = { OSRS_VENATOR_CANDIDATE_MISSING };
     if (primary_candidate_mode == OSRS_VENATOR_PRIMARY_CANDIDATE_INCLUDED &&
             primary.life == OSRS_VENATOR_MONSTER_ALIVE) {
         osrs_venator_consider_candidate(

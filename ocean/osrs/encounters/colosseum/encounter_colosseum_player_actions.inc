@@ -1079,7 +1079,7 @@ static void col_player_attack_target_ctx(
         s->player.current_hitpoints, s->player.base_hitpoints);
 
     ColScytheResolvedHit resolved_hits[COLO_SCYTHE_MAX_HITS];
-    OsrsVenatorChain venator_chain = {0};
+    OsrsVenatorChain venator_chain = { OSRS_VENATOR_CHAIN_LENGTH_ONE };
     int resolved_count = 1;
     resolved_hits[0] = (ColScytheResolvedHit){ .npc_slot = npc_slot, .splat_rank = 0 };
     int venator_attack =
