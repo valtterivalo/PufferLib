@@ -668,7 +668,7 @@ static void col_write_inventory_and_equipped_obs(
         osrs_write_inventory_cell_affordance_features(
             &obs[i],
             cell->item_idx,
-            cell->osrs_id,
+            cell->raw_osrs_id,
             cell->dose,
             col_inventory_cell_actionable(s, cell_idx),
             col_inventory_cell_holds_equipped_item(s, cell_idx),

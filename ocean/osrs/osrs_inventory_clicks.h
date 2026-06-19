@@ -20,6 +20,7 @@
 #ifndef OSRS_INVENTORY_CLICKS_H
 #define OSRS_INVENTORY_CLICKS_H
 
+#include "osrs_inventory.h"
 #include "osrs_items.h"
 #include "osrs_consumables.h"
 
@@ -609,6 +610,74 @@ static inline OsrsInventoryClickResolution osrs_inventory_click_interpret(
         .dose_count = consumable.dose_count,
         .raw_osrs_id_after_drink = after_drink,
     };
+}
+
+static inline OsrsInventoryClickResolution osrs_inventory_cell_click_interpret(
+    const OsrsInventoryCell* cell,
+    OsrsClickTickMultiplicity tick_multiplicity
+) {
+    return osrs_inventory_click_interpret(
+        cell->item_idx,
+        cell->raw_osrs_id,
+        tick_multiplicity);
+}
+
+static inline OsrsInventoryClickResolution osrs_inventory_snapshot_click_interpret(
+    const OsrsInventorySlotSnapshot* snapshot,
+    int slot,
+    OsrsClickTickMultiplicity tick_multiplicity
+) {
+    if (!osrs_inventory_slot_valid(slot)) {
+        fprintf(stderr, "inventory click: invalid slot %d\n", slot);
+        abort();
+    }
+    return osrs_inventory_cell_click_interpret(
+        &snapshot->cells[slot],
+        tick_multiplicity);
+}
+
+static inline OsrsInventoryCell osrs_inventory_cell_from_raw_osrs_id(
+    uint16_t raw_osrs_id
+) {
+    if (raw_osrs_id == 0) return osrs_inventory_cell_empty();
+
+    uint8_t item_idx = osrs_item_index_for_raw_osrs_id(raw_osrs_id);
+    if (item_idx != ITEM_NONE) return osrs_inventory_cell_from_item(item_idx);
+
+    OsrsConsumableClick consumable =
+        osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
+    return (OsrsInventoryCell){
+        .item_idx = ITEM_NONE,
+        .raw_osrs_id = raw_osrs_id,
+        .dose = consumable.dose_count,
+    };
+}
+
+static inline void osrs_inventory_cell_decrement_drink(
+    OsrsInventoryCell* cell,
+    OsrsInventoryClickResolution resolution
+) {
+    if (resolution.click_action != OSRS_CLICK_DRINK ||
+            resolution.dose_count == 0 ||
+            cell->dose != resolution.dose_count) {
+        fprintf(stderr, "inventory drink decrement: invalid cell raw=%u dose=%u action=%d resolved_dose=%u\n",
+            cell->raw_osrs_id, cell->dose, (int)resolution.click_action,
+            resolution.dose_count);
+        abort();
+    }
+
+    if (resolution.raw_osrs_id_after_drink == 0) {
+        *cell = osrs_inventory_cell_empty();
+        return;
+    }
+
+    cell->item_idx = ITEM_NONE;
+    cell->raw_osrs_id = resolution.raw_osrs_id_after_drink;
+    cell->dose = osrs_consumable_dose_count_after_drink(resolution.dose_count);
+}
+
+static inline void osrs_inventory_cell_consume_eat(OsrsInventoryCell* cell) {
+    *cell = osrs_inventory_cell_empty();
 }
 
 #endif

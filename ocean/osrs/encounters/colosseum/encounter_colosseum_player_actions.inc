@@ -218,23 +218,13 @@ static void col_sync_weapon_set_from_equipped_weapon(ColosseumState* s) {
 }
 
 static ColoInvCell col_inventory_cell_from_item(uint8_t item_idx) {
-    if (item_idx == ITEM_NONE) return (ColoInvCell){0};
-    if (item_idx >= NUM_ITEMS) {
-        fprintf(stderr, "colosseum: invalid item index %u for inventory cell\n", item_idx);
-        abort();
-    }
-    return (ColoInvCell){
-        .osrs_id = ITEM_DATABASE[item_idx].item_id,
-        .item_idx = item_idx,
-        .dose = 0,
-    };
+    return osrs_inventory_cell_from_item(item_idx);
 }
 
 static int col_first_empty_inventory_cell(const ColosseumState* s, int except_slot) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         if (i == except_slot) continue;
-        if (s->inventory_cells[i].osrs_id == 0 &&
-                s->inventory_cells[i].item_idx == ITEM_NONE) return i;
+        if (osrs_inventory_cell_is_empty(&s->inventory_cells[i])) return i;
     }
     return -1;
 }
@@ -303,57 +293,27 @@ static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
     col_mark_live_loadout_dirty(s);
 }
 
-static int col_can_use_consumable_kind(
+static int col_can_eat_consumable_kind(
     const ColosseumState* s,
     OsrsConsumableKind kind
 ) {
-    if (s->player.potion_timer > 0) return 0;
     switch (kind) {
-        case OSRS_CONSUMABLE_BREW:
-            return s->player.current_hitpoints < s->player.base_hitpoints;
-        case OSRS_CONSUMABLE_SUPER_RESTORE:
-        case OSRS_CONSUMABLE_SANFEW: {
-            int pray_missing = s->player.base_prayer - s->player.current_prayer;
-            int restore_amount = kind == OSRS_CONSUMABLE_SANFEW
-                ? osrs_sanfew_restore_amount(s->player.base_prayer)
-                : osrs_super_restore_amount(s->player.base_prayer);
-            int stats_drained =
-                s->player.current_attack < s->player.base_attack ||
-                s->player.current_strength < s->player.base_strength ||
-                s->player.current_defence < s->player.base_defence ||
-                s->player.current_ranged < s->player.base_ranged ||
-                s->player.current_magic < s->player.base_magic;
-            int pray_worth = pray_missing >= (restore_amount + 1) / 2;
-            int venom_cure = kind == OSRS_CONSUMABLE_SANFEW && s->player_venom > 0;
-            return stats_drained || pray_worth || venom_cure;
-        }
-        case OSRS_CONSUMABLE_SUPER_COMBAT:
-            return s->player.current_attack >= s->player.base_attack &&
-                s->player.current_attack <= s->player.base_attack + 5;
-        case OSRS_CONSUMABLE_DIVINE_COMBAT:
-            return s->player.current_hitpoints > 10 &&
-                s->player.current_attack >= s->player.base_attack &&
-                s->player.current_attack <= s->player.base_attack + 5;
-        case OSRS_CONSUMABLE_RANGING:
-            return s->player.current_ranged >= s->player.base_ranged &&
-                s->player.current_ranged <= s->player.base_ranged + 5;
-        case OSRS_CONSUMABLE_DIVINE_RANGING:
-            return s->player.current_hitpoints > 10 &&
-                s->player.current_ranged >= s->player.base_ranged &&
-                s->player.current_ranged <= s->player.base_ranged + 5;
-        case OSRS_CONSUMABLE_SURGE:
-            return s->surge_cooldown == 0 && s->player.special_energy < 100;
-        case OSRS_CONSUMABLE_GUTHIX_REST:
-            return s->player.current_hitpoints < s->player.base_hitpoints ||
-                s->player_venom > 0 || s->player_poison > 0;
-        case OSRS_CONSUMABLE_SATURATED_HEART:
-            return s->player.current_magic <= s->player.base_magic;
         case OSRS_CONSUMABLE_SHARK_FOOD:
             return s->player.food_timer == 0 &&
                 s->player.current_hitpoints < s->player.base_hitpoints;
         case OSRS_CONSUMABLE_KARAMBWAN:
             return s->player.karambwan_timer == 0 &&
                 s->player.current_hitpoints < s->player.base_hitpoints;
+        case OSRS_CONSUMABLE_BREW:
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+        case OSRS_CONSUMABLE_SANFEW:
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+        case OSRS_CONSUMABLE_RANGING:
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+        case OSRS_CONSUMABLE_SURGE:
+        case OSRS_CONSUMABLE_GUTHIX_REST:
+        case OSRS_CONSUMABLE_SATURATED_HEART:
         case OSRS_CONSUMABLE_NONE:
             return 0;
     }
@@ -362,22 +322,18 @@ static int col_can_use_consumable_kind(
 
 static int col_inventory_cell_actionable(const ColosseumState* s, int cell_idx) {
     const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
-        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+    OsrsInventoryClickResolution r =
+        osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
     if (r.click_action == OSRS_CLICK_EQUIP) return col_can_equip_from_cell(s, cell_idx);
     if (r.click_action == OSRS_CLICK_DRINK)
-        return cell->dose > 0 && col_can_use_consumable_kind(s, r.consumable_kind);
+        return cell->dose > 0 && s->player.potion_timer == 0;
     if (r.click_action == OSRS_CLICK_EAT)
-        return col_can_use_consumable_kind(s, r.consumable_kind);
+        return col_can_eat_consumable_kind(s, r.consumable_kind);
     return 0;
 }
 
 static void col_empty_inventory_cell(ColosseumState* s, int cell_idx) {
-    s->inventory_cells[cell_idx] = (ColoInvCell){
-        .osrs_id = 0,
-        .item_idx = ITEM_NONE,
-        .dose = 0,
-    };
+    s->inventory_cells[cell_idx] = osrs_inventory_cell_empty();
 }
 
 static void col_decrement_consumable_cell(
@@ -386,13 +342,11 @@ static void col_decrement_consumable_cell(
     OsrsInventoryClickResolution resolution
 ) {
     ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    if (resolution.click_action == OSRS_CLICK_EAT || resolution.raw_osrs_id_after_drink == 0) {
-        col_empty_inventory_cell(s, cell_idx);
+    if (resolution.click_action == OSRS_CLICK_EAT) {
+        osrs_inventory_cell_consume_eat(cell);
         return;
     }
-    cell->osrs_id = resolution.raw_osrs_id_after_drink;
-    cell->item_idx = ITEM_NONE;
-    cell->dose = osrs_consumable_dose_count_after_drink(cell->dose);
+    osrs_inventory_cell_decrement_drink(cell, resolution);
 }
 
 static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
@@ -510,14 +464,16 @@ static void col_apply_drink_kind(ColosseumState* s, OsrsConsumableKind kind) {
     abort();
 }
 
-static int col_apply_drink_cell(ColosseumState* s, int cell_idx) {
+static int col_apply_drink_cell(
+    ColosseumState* s,
+    int cell_idx,
+    OsrsInventoryClickResolution resolution
+) {
     if (cell_idx < 0 || cell_idx >= COLO_INVENTORY_DISPLAY_SLOTS) return 0;
-    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
-        cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+    ColoInvCell* cell = &s->inventory_cells[cell_idx];
     if (resolution.click_action != OSRS_CLICK_DRINK) return 0;
-    if (cell->dose == 0 || resolution.raw_osrs_id_after_drink == cell->osrs_id) return 0;
-    if (!col_can_use_consumable_kind(s, resolution.consumable_kind)) return 0;
+    if (cell->dose == 0) return 0;
+    if (s->player.potion_timer > 0) return 0;
 
     col_apply_drink_kind(s, resolution.consumable_kind);
     col_decrement_consumable_cell(s, cell_idx, resolution);
@@ -568,15 +524,17 @@ static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
     const int* actions
 ) {
     ColoInventoryTickIntent intent = col_inventory_tick_intent_empty();
+    OsrsInventorySlotSnapshot slot_snapshot =
+        osrs_inventory_slot_snapshot(s->inventory_cells);
     int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
     for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
         int action = actions[COLO_HEAD_INV_CLICK_0 + head];
         if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
         int cell_idx = action - 1;
         if (clicked[cell_idx]) {
-            (void)osrs_inventory_click_interpret(
-                s->inventory_cells[cell_idx].item_idx,
-                s->inventory_cells[cell_idx].osrs_id,
+            (void)osrs_inventory_snapshot_click_interpret(
+                &slot_snapshot,
+                cell_idx,
                 OSRS_CLICK_TICK_DUPLICATE);
             col_record_inventory_click_debug_cell(
                 intent.duplicate_cells, &intent.duplicate_count, cell_idx);
@@ -586,9 +544,10 @@ static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
         col_record_inventory_click_debug_cell(
             intent.clicked_cells, &intent.clicked_count, cell_idx);
 
-        const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-        OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
-            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        const ColoInvCell* cell = &slot_snapshot.cells[cell_idx];
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_snapshot_click_interpret(
+                &slot_snapshot, cell_idx, OSRS_CLICK_TICK_FIRST);
         if (resolution.click_action == OSRS_CLICK_EQUIP) {
             if (!col_can_equip_from_cell(s, cell_idx)) continue;
             int gear_slot = osrs_item_gear_slot(cell->item_idx);
@@ -600,14 +559,14 @@ static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
             intent.equip_order_by_slot[gear_slot] = head;
         } else if (resolution.click_action == OSRS_CLICK_DRINK) {
             if (intent.drink_cell >= 0) continue;
-            if (cell->dose > 0 && col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+            if (cell->dose > 0 && s->player.potion_timer == 0) {
                 intent.drink_cell = cell_idx;
                 intent.drink_order = head;
                 intent.drink_resolution = resolution;
             }
         } else if (resolution.click_action == OSRS_CLICK_EAT) {
             if (intent.eat_cell >= 0) continue;
-            if (col_can_use_consumable_kind(s, resolution.consumable_kind)) {
+            if (col_can_eat_consumable_kind(s, resolution.consumable_kind)) {
                 intent.eat_cell = cell_idx;
                 intent.eat_order = head;
                 intent.eat_resolution = resolution;
@@ -657,7 +616,8 @@ static void col_apply_inventory_tick_intent(
             intent->eat_cell = -1;
         }
         if (intent->drink_order == order) {
-            (void)col_apply_drink_cell(s, intent->drink_cell);
+            (void)col_apply_drink_cell(
+                s, intent->drink_cell, intent->drink_resolution);
             intent->drink_order = -1;
             intent->drink_cell = -1;
         }

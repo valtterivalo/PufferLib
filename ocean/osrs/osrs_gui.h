@@ -2664,6 +2664,17 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
             /* drop: swap src and target slots */
             int target = gui_inv_slot_at(gs, mx, my);
             if (target >= 0 && target != gs->inv_drag_src_slot) {
+                InvSlot source = gs->inv_grid[gs->inv_drag_src_slot];
+                if (hi && hi->enabled) {
+                    human_input_queue_item_on_item(
+                        hi,
+                        gs->inv_drag_src_slot,
+                        target,
+                        source.type == INV_SLOT_EQUIPMENT
+                            ? source.item_db_idx
+                            : ITEM_NONE,
+                        source.osrs_id);
+                }
                 InvSlot tmp = gs->inv_grid[target];
                 gs->inv_grid[target] = gs->inv_grid[gs->inv_drag_src_slot];
                 gs->inv_grid[gs->inv_drag_src_slot] = tmp;

@@ -699,28 +699,12 @@ static int col_queue_inventory_click_action(int* actions, int inventory_slot) {
     return -1;
 }
 
-static int col_find_inventory_cell_for_consumable(
-    const ColosseumState* s,
-    OsrsConsumableKind kind
+static void col_rearrange_inventory_cells(
+    ColosseumState* s,
+    int source_slot,
+    int target_slot
 ) {
-    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
-        const ColoInvCell* cell = &s->inventory_cells[i];
-        OsrsInventoryClickResolution r = osrs_inventory_click_interpret(
-            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
-        if (r.consumable_kind == kind && col_inventory_cell_actionable(s, i))
-            return i;
-    }
-    return -1;
-}
-
-static int col_find_inventory_cell_for_any_consumable(
-    const ColosseumState* s,
-    OsrsConsumableKind a,
-    OsrsConsumableKind b
-) {
-    int cell = col_find_inventory_cell_for_consumable(s, a);
-    if (cell >= 0) return cell;
-    return col_find_inventory_cell_for_consumable(s, b);
+    osrs_inventory_swap_cells(s->inventory_cells, source_slot, target_slot);
 }
 
 static void col_translate_human_input_ctx(
@@ -748,27 +732,6 @@ static void col_translate_human_input_ctx(
         actions[COLO_HEAD_TARGET] = 0;
     }
 
-    if (hi->pending_potion == POTION_BREW)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_BREW));
-    else if (hi->pending_potion == POTION_RESTORE)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_any_consumable(
-                s, OSRS_CONSUMABLE_SUPER_RESTORE, OSRS_CONSUMABLE_SANFEW));
-    else if (hi->pending_potion == POTION_COMBAT)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_any_consumable(
-                s, OSRS_CONSUMABLE_SUPER_COMBAT, OSRS_CONSUMABLE_DIVINE_COMBAT));
-    else if (hi->pending_potion == POTION_RANGED)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_any_consumable(
-                s, OSRS_CONSUMABLE_RANGING, OSRS_CONSUMABLE_DIVINE_RANGING));
-    else if (hi->pending_potion == POTION_SURGE)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_SURGE));
-    if (hi->pending_food)
-        col_queue_inventory_click_action(
-            actions, col_find_inventory_cell_for_consumable(s, OSRS_CONSUMABLE_SHARK_FOOD));
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
     encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
@@ -832,13 +795,16 @@ static void col_translate_human_commands_ctx(
                 }
                 break;
             }
+            case HUMAN_COMMAND_ITEM_ON_ITEM:
+                col_rearrange_inventory_cells(
+                    s, cmd->inventory_slot, cmd->target_inventory_slot);
+                break;
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
                 actions[COLO_HEAD_OFFENSIVE] = cmd->offensive_prayer;
                 break;
             case HUMAN_COMMAND_SPELL_TARGET:
             case HUMAN_COMMAND_FIGHT_STYLE:
             case HUMAN_COMMAND_SET_AUTOCAST:
-            case HUMAN_COMMAND_ITEM_ON_ITEM:
             case HUMAN_COMMAND_ITEM_ON_WIDGET:
             case HUMAN_COMMAND_SPELL_ON_WIDGET:
             case HUMAN_COMMAND_NONE:

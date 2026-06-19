@@ -403,54 +403,25 @@ static void col_spawn_reinforcements(ColosseumState* s) {
 
 static void col_init_empty_inventory_cells(ColosseumState* s) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
-        s->inventory_cells[i] = (ColoInvCell){
-            .osrs_id = 0,
-            .item_idx = ITEM_NONE,
-            .dose = 0,
-        };
+        s->inventory_cells[i] = osrs_inventory_cell_empty();
     }
 }
 
-static void col_seed_inventory_cells_from_display(ColosseumState* s) {
+static void col_seed_inventory_cells_from_gameplay_loadout(ColosseumState* s) {
     col_init_empty_inventory_cells(s);
-    const int* kit = COLO_INVENTORY_DISPLAY[s->active_loadout_profile];
+    const int* kit = COLO_GAMEPLAY_INVENTORY_LOADOUT[s->active_loadout_profile];
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         uint16_t raw_id = (uint16_t)kit[i];
         if (raw_id == 0) continue;
 
-        uint8_t item_idx = osrs_item_index_for_raw_osrs_id(raw_id);
-        if (item_idx != ITEM_NONE) {
-            s->inventory_cells[i] = (ColoInvCell){
-                .osrs_id = raw_id,
-                .item_idx = item_idx,
-                .dose = 0,
-            };
-            continue;
+        s->inventory_cells[i] = osrs_inventory_cell_from_raw_osrs_id(raw_id);
+        if (s->inventory_cells[i].item_idx == ITEM_NONE &&
+                s->inventory_cells[i].dose == 0 &&
+                raw_id != 27281) {
+            fprintf(stderr, "colosseum: gameplay inventory raw id %u has no cell mapping\n",
+                raw_id);
+            abort();
         }
-
-        OsrsConsumableClick consumable =
-            osrs_consumable_click_lookup_raw_osrs_id(raw_id);
-        if (consumable.click_action != OSRS_CLICK_NONE) {
-            s->inventory_cells[i] = (ColoInvCell){
-                .osrs_id = raw_id,
-                .item_idx = ITEM_NONE,
-                .dose = consumable.dose_count,
-            };
-            continue;
-        }
-
-        if (raw_id == 27281) {
-            s->inventory_cells[i] = (ColoInvCell){
-                .osrs_id = raw_id,
-                .item_idx = ITEM_NONE,
-                .dose = 0,
-            };
-            continue;
-        }
-
-        fprintf(stderr, "colosseum: inventory display raw id %u has no cell mapping\n",
-            raw_id);
-        abort();
     }
 }
 
@@ -463,8 +434,8 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         const ColoInvCell* cell = &s->inventory_cells[i];
         if (cell->dose == 0) continue;
-        OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
-            cell->item_idx, cell->osrs_id, OSRS_CLICK_TICK_FIRST);
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
         if (resolution.click_action != OSRS_CLICK_DRINK) continue;
         switch (resolution.consumable_kind) {
             case OSRS_CONSUMABLE_BREW:
@@ -544,7 +515,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
     memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));
     memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
-    col_seed_inventory_cells_from_display(s);
+    col_seed_inventory_cells_from_gameplay_loadout(s);
 
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
     s->full_supplies = *supplies;

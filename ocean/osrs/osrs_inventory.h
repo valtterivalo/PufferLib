@@ -13,10 +13,24 @@
 #ifndef OSRS_INVENTORY_H
 #define OSRS_INVENTORY_H
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "osrs_types.h"
 #include "osrs_items.h"
 
 #define OSRS_INVENTORY_SIZE 28
+
+typedef struct {
+    uint8_t item_idx;
+    uint16_t raw_osrs_id;
+    uint8_t dose;
+} OsrsInventoryCell;
+
+typedef struct {
+    OsrsInventoryCell cells[OSRS_INVENTORY_SIZE];
+} OsrsInventorySlotSnapshot;
 
 /* a complete player equipment state: worn gear + inventory bag.
    encounters that don't need full inventory (like current inferno) can ignore
@@ -25,6 +39,60 @@ typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
     uint8_t inventory[OSRS_INVENTORY_SIZE];
 } OsrsInventory;
+
+static inline int osrs_inventory_slot_valid(int slot) {
+    return slot >= 0 && slot < OSRS_INVENTORY_SIZE;
+}
+
+static inline OsrsInventoryCell osrs_inventory_cell_empty(void) {
+    return (OsrsInventoryCell){
+        .item_idx = ITEM_NONE,
+        .raw_osrs_id = 0,
+        .dose = 0,
+    };
+}
+
+static inline int osrs_inventory_cell_is_empty(const OsrsInventoryCell* cell) {
+    return cell->item_idx == ITEM_NONE && cell->raw_osrs_id == 0;
+}
+
+static inline OsrsInventoryCell osrs_inventory_cell_from_item(uint8_t item_idx) {
+    if (item_idx == ITEM_NONE) return osrs_inventory_cell_empty();
+    if (item_idx >= NUM_ITEMS) {
+        fprintf(stderr, "inventory cell: invalid item index %u\n", item_idx);
+        abort();
+    }
+    return (OsrsInventoryCell){
+        .item_idx = item_idx,
+        .raw_osrs_id = ITEM_DATABASE[item_idx].item_id,
+        .dose = 0,
+    };
+}
+
+static inline void osrs_inventory_swap_cells(
+    OsrsInventoryCell cells[OSRS_INVENTORY_SIZE],
+    int source_slot,
+    int target_slot
+) {
+    if (!osrs_inventory_slot_valid(source_slot) ||
+            !osrs_inventory_slot_valid(target_slot)) {
+        fprintf(stderr, "inventory swap: invalid slots %d -> %d\n",
+            source_slot, target_slot);
+        abort();
+    }
+    if (source_slot == target_slot) return;
+    OsrsInventoryCell tmp = cells[target_slot];
+    cells[target_slot] = cells[source_slot];
+    cells[source_slot] = tmp;
+}
+
+static inline OsrsInventorySlotSnapshot osrs_inventory_slot_snapshot(
+    const OsrsInventoryCell cells[OSRS_INVENTORY_SIZE]
+) {
+    OsrsInventorySlotSnapshot snapshot;
+    memcpy(snapshot.cells, cells, sizeof(snapshot.cells));
+    return snapshot;
+}
 
 
 /** initialize inventory: all slots to ITEM_NONE. */

@@ -124,6 +124,57 @@ static int test_pure_click_interpreter(void) {
     return 0;
 }
 
+static int test_cell_click_attributes_to_slot_item(void) {
+    OsrsInventoryCell cells[OSRS_INVENTORY_SIZE];
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        cells[i] = osrs_inventory_cell_empty();
+    cells[3] = osrs_inventory_cell_from_raw_osrs_id(3024);
+    cells[4] = osrs_inventory_cell_from_item(ITEM_TWISTED_BOW);
+
+    OsrsInventorySlotSnapshot snapshot = osrs_inventory_slot_snapshot(cells);
+    OsrsInventoryClickResolution restore =
+        osrs_inventory_snapshot_click_interpret(
+            &snapshot, 3, OSRS_CLICK_TICK_FIRST);
+    OsrsInventoryClickResolution bow =
+        osrs_inventory_snapshot_click_interpret(
+            &snapshot, 4, OSRS_CLICK_TICK_FIRST);
+
+    CHECK("slot 3 resolves restore, not adjacent bow",
+          restore.click_action == OSRS_CLICK_DRINK &&
+          restore.consumable_kind == OSRS_CONSUMABLE_SUPER_RESTORE);
+    CHECK("slot 4 resolves bow equip, not adjacent restore",
+          bow.click_action == OSRS_CLICK_EQUIP);
+    return 0;
+}
+
+static int test_cell_drink_decrements_one_dose(void) {
+    OsrsInventoryCell restore = osrs_inventory_cell_from_raw_osrs_id(3024);
+    OsrsInventoryClickResolution resolution =
+        osrs_inventory_cell_click_interpret(&restore, OSRS_CLICK_TICK_FIRST);
+    osrs_inventory_cell_decrement_drink(&restore, resolution);
+
+    CHECK("restore one drink leaves three doses", restore.dose == 3);
+    CHECK("restore one drink updates raw id to three-dose",
+          restore.raw_osrs_id == 3026);
+    return 0;
+}
+
+static int test_cell_rearrange_swaps_two_slots(void) {
+    OsrsInventoryCell cells[OSRS_INVENTORY_SIZE];
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        cells[i] = osrs_inventory_cell_empty();
+    cells[1] = osrs_inventory_cell_from_item(ITEM_TWISTED_BOW);
+    cells[9] = osrs_inventory_cell_from_raw_osrs_id(6685);
+
+    osrs_inventory_swap_cells(cells, 1, 9);
+
+    CHECK("swap moves bow to target slot",
+          cells[9].item_idx == ITEM_TWISTED_BOW);
+    CHECK("swap moves brew to source slot",
+          cells[1].raw_osrs_id == 6685 && cells[1].dose == 4);
+    return 0;
+}
+
 static int cell_in_unit_range(const float* out) {
     for (int i = 0; i < OSRS_INVENTORY_CELL_OBS_FEATURES; i++) {
         if (out[i] < -1.0f || out[i] > 1.0f) return 0;
@@ -241,6 +292,9 @@ int main(void) {
     if (test_sara_brew_dose_variants()) return 1;
     if (test_dose_after_drink()) return 1;
     if (test_pure_click_interpreter()) return 1;
+    if (test_cell_click_attributes_to_slot_item()) return 1;
+    if (test_cell_drink_decrements_one_dose()) return 1;
+    if (test_cell_rearrange_swaps_two_slots()) return 1;
     if (test_enriched_feature_counts()) return 1;
     if (test_brew_cell_semantics()) return 1;
     if (test_weapon_cell_semantics()) return 1;

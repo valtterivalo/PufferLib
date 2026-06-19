@@ -1453,28 +1453,22 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
 }
 
 #define COLO_INVENTORY_DISPLAY_SLOTS 28
+#if COLO_INVENTORY_DISPLAY_SLOTS != OSRS_INVENTORY_SIZE
+#error "Colosseum inventory size must match shared OSRS inventory size"
+#endif
 
-typedef struct {
-    uint16_t osrs_id;
-    uint8_t item_idx;
-    uint8_t dose;
-} ColoInvCell;
+typedef OsrsInventoryCell ColoInvCell;
 
-/** Render-only: the exact 28-slot wiki inventory per kit, as OSRS item ids, so the
-    viewer's inventory panel matches the reference image 1:1. The sim never models a
-    literal inventory (it derives one from weapon SETS + spec weapons + dose counts),
-    so this static start-state list is the source of truth for the panel only.
-    Doses use the GUI's 4-dose sprite ids; the rest are raw wiki item ids. The
-    speedrun kit also carries display-only items the sim has no concept of (Venator
-    bow, Confliction gauntlets switch, surge potion, divine pots, sanfew, etc.).
-    Ground truth: .colosseum-notes/research/wiki-budget-and-high-efficiency-setups.md. */
-static const int COLO_INVENTORY_DISPLAY[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTORY_DISPLAY_SLOTS] = {
+/** Canonical gameplay inventory per kit, as raw OSRS item ids.
+    This 28-slot bag seeds the shared slot model at reset and the renderer reads
+    live cells back from that model. Doses use the GUI's dose-specific ids. */
+static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTORY_DISPLAY_SLOTS] = {
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
         20997, 27238, 27235, 28947,   /* Twisted bow, Masori body(f), mask(f), Dizana's quiver */
         26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
         27275, 31106, 27610, 24780,   /* Tumeken's shadow, Confliction gauntlets, Venator bow,
                                          Amulet of blood fury */
-        30875, 12002, 22325, 21003,   /* Surge potion(4), Occult necklace, Scythe of vitur, Elder maul */
+        30875, 12002, 0,     21003,   /* Surge potion(4), Occult necklace, empty worn-scythe slot, Elder maul */
         23685, 23733, 6685, 4417,     /* Divine super combat(4), Divine ranging(4), Sara brew(4),
                                          Guthix rest(4) */
         10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */
@@ -1763,7 +1757,7 @@ typedef struct {
     int divine_ranged_timer;
     int surge_doses;
     int surge_cooldown;                /* ticks until the next surge dose (L13) */
-    ColoInvCell inventory_cells[COLO_INVENTORY_DISPLAY_SLOTS];
+    OsrsInventoryCell inventory_cells[OSRS_INVENTORY_SIZE];
 
     /* Arceuus thrall (one allied auto-attacker; not a ColoNPC slot). */
     int thrall_active;          /* 0/1 */
@@ -1804,5 +1798,5 @@ static void col_build_live_inventory_display(
     int out[COLO_INVENTORY_DISPLAY_SLOTS]
 ) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
-        out[i] = s->inventory_cells[i].osrs_id;
+        out[i] = s->inventory_cells[i].raw_osrs_id;
 }
