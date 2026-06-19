@@ -18,13 +18,10 @@
 #include "../osrs_human_commands.h"
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
+#include "../osrs_inventory_clicks.h"
 
 /* obs/action dimensions from osrs_types.h. order must match HEAD_* indices. */
-static const int NH_PVP_ACTION_DIMS[] = {
-    EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM,
-    ATTACK_DIM, SPECIAL_DIM, OVERHEAD_DIM,
-    FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM
-};
+static const int NH_PVP_ACTION_DIMS[] = PVP_ACTION_DIMS_LITERAL;
 
 
 typedef struct {
@@ -35,32 +32,12 @@ typedef struct {
     int unused;
 } NhPvpContext;
 
-static FightStyle nh_pvp_default_fight_style_for_style(AttackStyle style) {
-    if (style == ATTACK_STYLE_MAGIC) return FIGHT_STYLE_AUTOCAST;
-    if (style == ATTACK_STYLE_RANGED) return FIGHT_STYLE_RAPID;
-    return FIGHT_STYLE_ACCURATE;
-}
-
 static void nh_pvp_apply_human_player_commands(OsrsEnv* env, HumanInput* hi) {
     Player* agent = &env->players[0];
     for (int i = 0; i < hi->commands.count; i++) {
         const HumanCommand* cmd = &hi->commands.items[i];
         switch (cmd->kind) {
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-                if (cmd->item_db_idx >= 0 && cmd->item_db_idx < NUM_ITEMS) {
-                    int changed = osrs_player_equip_command_item(
-                        agent, cmd->inventory_slot, (uint8_t)cmd->item_db_idx);
-                    if (changed && cmd->gear_slot == GEAR_SLOT_WEAPON) {
-                        AttackStyle style = osrs_player_weapon_attack_style(agent);
-                        if (item_supports_ancient_autocast(agent->equipped[GEAR_SLOT_WEAPON])) {
-                            agent->fight_style = agent->autocast_defensive
-                                ? FIGHT_STYLE_DEFENSIVE_AUTOCAST
-                                : FIGHT_STYLE_AUTOCAST;
-                        } else {
-                            agent->fight_style = nh_pvp_default_fight_style_for_style(style);
-                        }
-                    }
-                }
                 break;
             case HUMAN_COMMAND_FIGHT_STYLE:
                 if (cmd->fight_style >= FIGHT_STYLE_ACCURATE &&
@@ -88,7 +65,6 @@ static void nh_pvp_apply_human_player_commands(OsrsEnv* env, HumanInput* hi) {
                 }
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
-                agent->spec_armed = 1;
                 break;
             case HUMAN_COMMAND_WALK:
             case HUMAN_COMMAND_ATTACK_NPC:
@@ -110,11 +86,29 @@ static void nh_pvp_apply_human_player_commands(OsrsEnv* env, HumanInput* hi) {
     }
 }
 
+static void nh_pvp_queue_inventory_kind_click(
+    Player* agent,
+    int* actions,
+    OsrsInventorySlotKind kind
+) {
+    osrs_inventory_click_queue_kind(
+        agent,
+        actions + HEAD_INVENTORY_0,
+        PVP_INVENTORY_CLICKS_PER_TICK,
+        kind);
+}
+
 static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEnv* env) {
     Player* agent = &env->players[0];
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
     OsrsHumanCommandFrame frame =
         osrs_human_command_frame_from_input(hi, agent->equipped[GEAR_SLOT_WEAPON]);
+
+    osrs_human_queue_inventory_command_clicks(
+        hi,
+        agent,
+        actions + HEAD_INVENTORY_0,
+        PVP_INVENTORY_CLICKS_PER_TICK);
 
     if (frame.has_walk) {
         env->pvp_runtime.walk_dest_x[0] = frame.walk_x;
@@ -143,11 +137,14 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
     if (frame.offensive_prayer >= 0)
         actions[HEAD_OFFENSIVE] = frame.offensive_prayer;
     if (frame.food)
-        actions[HEAD_FOOD] = FOOD_EAT;
+        nh_pvp_queue_inventory_kind_click(agent, actions, OSRS_INVENTORY_SLOT_FOOD);
     if (frame.potion > 0)
-        actions[HEAD_POTION] = frame.potion;
+        nh_pvp_queue_inventory_kind_click(
+            agent,
+            actions,
+            osrs_inventory_slot_kind_for_potion_action(frame.potion));
     if (frame.karambwan)
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
+        nh_pvp_queue_inventory_kind_click(agent, actions, OSRS_INVENTORY_SLOT_KARAMBWAN);
     if (frame.vengeance)
         actions[HEAD_VENG] = VENG_CAST;
     if (frame.spec_toggle)

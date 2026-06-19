@@ -164,6 +164,70 @@ static void drink_potion(Player* p, int potion_type) {
     p->food_timer = 3;
 }
 
+static int pvp_can_use_inventory_consumable(Player* p, OsrsConsumableKind kind) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+            return can_eat_food(p);
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            return can_eat_karambwan(p);
+        case OSRS_CONSUMABLE_BREW:
+            return can_use_potion(p, POTION_BREW) && can_use_brew_boost(p);
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+            return can_use_potion(p, POTION_RESTORE) && can_restore_stats(p);
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+            return can_use_potion(p, POTION_COMBAT) && can_boost_combat_skills(p);
+        case OSRS_CONSUMABLE_RANGING:
+            return can_use_potion(p, POTION_RANGED) && can_boost_ranged(p);
+        case OSRS_CONSUMABLE_NONE:
+            return 0;
+        default:
+            fprintf(stderr, "pvp_can_use_inventory_consumable: unsupported kind %d\n", (int)kind);
+            abort();
+    }
+}
+
+static void pvp_apply_inventory_consumable(Player* p, OsrsConsumableKind kind) {
+    switch (kind) {
+        case OSRS_CONSUMABLE_SHARK_FOOD:
+            eat_food(p, 0);
+            return;
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            eat_food(p, 1);
+            return;
+        case OSRS_CONSUMABLE_BREW:
+            drink_potion(p, POTION_BREW);
+            return;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+            drink_potion(p, POTION_RESTORE);
+            return;
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+            drink_potion(p, POTION_COMBAT);
+            return;
+        case OSRS_CONSUMABLE_RANGING:
+            drink_potion(p, POTION_RANGED);
+            return;
+        default:
+            fprintf(stderr, "pvp_apply_inventory_consumable: unsupported kind %d\n", (int)kind);
+            abort();
+    }
+}
+
+static int pvp_inventory_interaction_action(OsrsClickAction action) {
+    switch (action) {
+        case OSRS_CLICK_EQUIP:
+            return OSRS_IACT_EQUIP;
+        case OSRS_CLICK_EAT:
+            return OSRS_IACT_EAT;
+        case OSRS_CLICK_DRINK:
+            return OSRS_IACT_DRINK;
+        case OSRS_CLICK_NONE:
+            return OSRS_IACT_NONE;
+        default:
+            fprintf(stderr, "pvp_inventory_interaction_action: invalid action %d\n", (int)action);
+            abort();
+    }
+}
+
 /** Update all per-tick timers for a player. */
 static void update_timers(Player* p) {
     p->damage_applied_this_tick = 0;
@@ -283,37 +347,62 @@ static inline void pvp_record_selected_attack_style(Player* p, AttackStyle style
     }
 }
 
-static int execute_equip_clicks(OsrsEnv* env, int agent_idx, const int* actions) {
+static int execute_inventory_clicks(OsrsEnv* env, int agent_idx, const int* actions) {
     Player* p = &env->players[agent_idx];
     int clicks = 0;
-    uint8_t clicked_slots[OSRS_INVENTORY_SIZE] = {0};
+    OsrsInventoryView view;
+    OsrsInventoryClickEvent events[OSRS_INVENTORY_SIZE];
+    osrs_inventory_view_build(p, &view);
+    int event_count = osrs_inventory_click_collect_events(
+        &view,
+        actions + HEAD_INVENTORY_0,
+        PVP_INVENTORY_CLICKS_PER_TICK,
+        events,
+        OSRS_INVENTORY_SIZE);
 
-    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
-        int action = actions[HEAD_EQUIP_0 + h];
-        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
-
-        int inventory_slot = action - 1;
-        if (clicked_slots[inventory_slot]) continue;
-        clicked_slots[inventory_slot] = 1;
-
-        p->equip_click_attempts++;
-        if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot)) continue;
-
-        uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
-        if (!osrs_player_equip_from_inventory_slot(p, inventory_slot)) {
-            fprintf(stderr, "execute_equip_clicks: mask/execution mismatch slot=%d\n",
-                inventory_slot);
-            abort();
+    for (int i = 0; i < event_count; i++) {
+        OsrsInventoryClickEvent event = events[i];
+        switch (event.resolution.click_action) {
+            case OSRS_CLICK_EQUIP: {
+                p->equip_click_attempts++;
+                if (!osrs_player_can_equip_from_inventory_slot(p, event.inventory_slot) &&
+                        !osrs_player_inventory_has_item(p, event.cell.item_idx)) {
+                    continue;
+                }
+                uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
+                if (!osrs_player_equip_command_item(
+                        p, event.inventory_slot, event.cell.item_idx)) {
+                    continue;
+                }
+                p->equip_click_successes++;
+                if (p->equipped[GEAR_SLOT_WEAPON] != old_weapon)
+                    p->weapon_equipped_this_tick = 1;
+                p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
+                clicks++;
+                break;
+            }
+            case OSRS_CLICK_EAT:
+            case OSRS_CLICK_DRINK:
+                if (!pvp_can_use_inventory_consumable(
+                        p, event.resolution.consumable_kind)) {
+                    break;
+                }
+                pvp_apply_inventory_consumable(p, event.resolution.consumable_kind);
+                p->consumable_used_this_tick = 1;
+                p->clicks_this_tick++;
+                osrs_interaction_check_interrupt(
+                    &p->interaction,
+                    pvp_inventory_interaction_action(event.resolution.click_action));
+                clicks++;
+                break;
+            case OSRS_CLICK_NONE:
+                break;
+            default:
+                fprintf(stderr, "execute_inventory_clicks: invalid action %d\n",
+                    (int)event.resolution.click_action);
+                abort();
         }
-        p->equip_click_successes++;
-        if (p->equipped[GEAR_SLOT_WEAPON] != old_weapon)
-            p->weapon_equipped_this_tick = 1;
-        clicks++;
-    }
-
-    if (clicks > 0) {
-        p->clicks_this_tick += clicks;
-        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EQUIP);
     }
     return clicks;
 }
@@ -379,61 +468,8 @@ static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions) {
     }
     if (prayer_commanded || p->prayer != prev_prayer || p->offensive_prayer != prev_offensive)
         p->clicks_this_tick++;
-    execute_equip_clicks(env, agent_idx, actions);
+    execute_inventory_clicks(env, agent_idx, actions);
     execute_special_action(p, actions[HEAD_SPECIAL]);
-    int food_action = actions[HEAD_FOOD];
-    if (food_action == FOOD_EAT && can_eat_food(p)) {
-        eat_food(p, 0);
-        p->consumable_used_this_tick = 1;
-        p->clicks_this_tick++;
-        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
-    }
-
-    int potion_action = actions[HEAD_POTION];
-    switch (potion_action) {
-        case POTION_BREW:
-            if (can_use_potion(p, 1) && can_use_brew_boost(p)) {
-                drink_potion(p, 1);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
-            break;
-        case POTION_RESTORE:
-            if (can_use_potion(p, 2) && can_restore_stats(p)) {
-                drink_potion(p, 2);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
-            break;
-        case POTION_COMBAT:
-            if (can_use_potion(p, 3) && can_boost_combat_skills(p)) {
-                drink_potion(p, 3);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
-            break;
-        case POTION_RANGED:
-            if (can_use_potion(p, 4) && can_boost_ranged(p)) {
-                drink_potion(p, 4);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
-            break;
-        default:
-            break;
-    }
-
-    int karam_action = actions[HEAD_KARAMBWAN];
-    if (karam_action == KARAM_EAT && can_eat_karambwan(p)) {
-        eat_food(p, 1);
-        p->consumable_used_this_tick = 1;
-        p->clicks_this_tick++;
-        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
-    }
     int combat_action = actions[HEAD_ATTACK];
     int head_move = actions[HEAD_MOVE];
 

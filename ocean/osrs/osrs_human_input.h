@@ -16,7 +16,9 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_human_input_types.h"
+#include "osrs_human_commands.h"
 #include "osrs_encounter.h"
+#include "osrs_inventory_clicks.h"
 
 /* forward declare — full struct lives in osrs_pvp_render.h */
 struct RenderClient;
@@ -368,9 +370,26 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
 }
 
 
+static void human_pvp_queue_inventory_kind(
+    Player* agent,
+    int* actions,
+    OsrsInventorySlotKind kind
+) {
+    osrs_inventory_click_queue_kind(
+        agent,
+        actions + HEAD_INVENTORY_0,
+        PVP_INVENTORY_CLICKS_PER_TICK,
+        kind);
+}
+
 static void human_to_pvp_actions(HumanInput* hi, int* actions,
                                   Player* agent, Player* target) {
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
+    osrs_human_queue_inventory_command_clicks(
+        hi,
+        agent,
+        actions + HEAD_INVENTORY_0,
+        PVP_INVENTORY_CLICKS_PER_TICK);
 
     if (hi->pending_attack) {
         actions[HEAD_ATTACK] = is_spell_attack_action(hi->pending_spell)
@@ -402,15 +421,18 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
     }
 
     if (hi->pending_food) {
-        actions[HEAD_FOOD] = FOOD_EAT;
+        human_pvp_queue_inventory_kind(agent, actions, OSRS_INVENTORY_SLOT_FOOD);
     }
 
     if (hi->pending_potion > 0) {
-        actions[HEAD_POTION] = hi->pending_potion;
+        human_pvp_queue_inventory_kind(
+            agent,
+            actions,
+            osrs_inventory_slot_kind_for_potion_action(hi->pending_potion));
     }
 
     if (hi->pending_karambwan) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
+        human_pvp_queue_inventory_kind(agent, actions, OSRS_INVENTORY_SLOT_KARAMBWAN);
     }
 
     if (hi->pending_veng) {
@@ -420,8 +442,6 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
     if (hi->pending_spec) {
         actions[HEAD_SPECIAL] = SPECIAL_ARM;
     }
-
-    (void)agent;
 }
 
 /* shared translate helpers (encounter_translate_movement/prayer/target)

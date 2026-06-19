@@ -146,11 +146,7 @@ typedef struct {
 
 #define OBS_SIZE OCEAN_OBS_SIZE
 #define NUM_ATNS NUM_ACTION_HEADS
-#define ACT_SIZES { \
-    EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, EQUIP_CLICK_DIM, \
-    ATTACK_DIM, SPECIAL_DIM, OVERHEAD_DIM, FOOD_DIM, POTION_DIM, \
-    KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM \
-}
+#define ACT_SIZES PVP_ACTION_DIMS_LITERAL
 #define OBS_TENSOR_T FloatTensor
 #define Env PvpEnv
 #define MY_USES_TAGS
@@ -636,6 +632,17 @@ void my_init(Env* env, Dict* kwargs) {
     if (fixed_spawns) {
         env->pvp.pvp_runtime.start_mode =
             pvp_start_mode_from_fixed_spawns((int)fixed_spawns->value);
+    }
+    DictItem* prayer_reaction = dict_get_unsafe(kwargs, "scripted_prayer_reaction_mode");
+    if (prayer_reaction) {
+        int mode = (int)prayer_reaction->value;
+        if (mode < PVP_SCRIPTED_PRAYER_REACTION_LEGACY ||
+                mode > PVP_SCRIPTED_PRAYER_REACTION_HUMANIZED) {
+            fprintf(stderr, "osrs_pvp invalid scripted_prayer_reaction_mode %d\n", mode);
+            abort();
+        }
+        env->pvp.pvp_runtime.scripted_prayer_reaction_mode =
+            (PvpScriptedPrayerReactionMode)mode;
     }
 
     env->pvp.ocean_io.agent_obs = NULL;

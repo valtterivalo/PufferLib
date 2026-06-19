@@ -141,8 +141,8 @@ static void benchmark_fill_agent_action(int* actions, int tick, int mode) {
 
     int phase = tick % 24;
     if (phase == 0) {
-        actions[HEAD_EQUIP_0] = 1 + (tick % OSRS_INVENTORY_SIZE);
-        actions[HEAD_EQUIP_1] = 1 + ((tick + 7) % OSRS_INVENTORY_SIZE);
+        actions[HEAD_INVENTORY_0] = 1 + (tick % OSRS_INVENTORY_SIZE);
+        actions[(HEAD_INVENTORY_0 + 1)] = 1 + ((tick + 7) % OSRS_INVENTORY_SIZE);
     }
     if (phase == 3) {
         actions[HEAD_SPECIAL] = SPECIAL_ARM;
@@ -162,13 +162,13 @@ static void benchmark_fill_agent_action(int* actions, int tick, int mode) {
         actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
     }
     if ((tick % 37) == 5) {
-        actions[HEAD_FOOD] = FOOD_EAT;
+        actions[HEAD_INVENTORY_0 + 2] = 1 + ((tick + 3) % OSRS_INVENTORY_SIZE);
     }
     if ((tick % 53) == 9) {
-        actions[HEAD_KARAMBWAN] = KARAM_EAT;
+        actions[HEAD_INVENTORY_0 + 3] = 1 + ((tick + 11) % OSRS_INVENTORY_SIZE);
     }
     if ((tick % 71) == 17) {
-        actions[HEAD_POTION] = POTION_RESTORE;
+        actions[HEAD_INVENTORY_0 + 4] = 1 + ((tick + 19) % OSRS_INVENTORY_SIZE);
     }
     if ((tick % 29) == 6) {
         actions[HEAD_MOVE] = 1 + (tick % (MOVE_DIM - 1));

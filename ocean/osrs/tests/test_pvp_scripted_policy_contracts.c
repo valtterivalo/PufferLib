@@ -253,7 +253,21 @@ static int opponent_special(const OsrsEnv* env) {
 }
 
 static int opponent_potion(const OsrsEnv* env) {
-    return env->pending_actions[NUM_ACTION_HEADS + HEAD_POTION];
+    OsrsInventoryView view;
+    osrs_inventory_view_build(&env->players[1], &view);
+    const int* actions = env->pending_actions + NUM_ACTION_HEADS;
+    for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
+        int action = actions[HEAD_INVENTORY_0 + h];
+        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
+        switch (view.slots[action - 1].kind) {
+            case OSRS_INVENTORY_SLOT_BREW: return POTION_BREW;
+            case OSRS_INVENTORY_SLOT_RESTORE: return POTION_RESTORE;
+            case OSRS_INVENTORY_SLOT_COMBAT_POTION: return POTION_COMBAT;
+            case OSRS_INVENTORY_SLOT_RANGED_POTION: return POTION_RANGED;
+            default: break;
+        }
+    }
+    return POTION_NONE;
 }
 
 static int opponent_casts_spell(const OsrsEnv* env) {
@@ -321,6 +335,38 @@ static void set_adaptive_visible_mage_state(OsrsEnv* env) {
     self->attack_timer = 0;
     memset(env->pending_actions, 0, sizeof(env->pending_actions));
     memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
+}
+
+static void set_visible_prayer_reaction_state(OsrsEnv* env, OpponentType type) {
+    force_clean_policy_decision(env, type);
+
+    Player* target = &env->players[0];
+    Player* self = &env->players[1];
+    set_basic_hybrid_weapons(target);
+    set_basic_hybrid_weapons(self);
+    set_player_position(self, 3042, 3520);
+    set_player_position(target, 3047, 3520);
+
+    target->visible_gear = GEAR_MAGE;
+    target->current_gear = GEAR_MAGE;
+    self->prayer = PRAYER_PROTECT_MAGIC;
+    self->attack_timer = 0;
+    env->pvp_runtime.opponent.last_target_prayer_signal = OVERHEAD_MAGE;
+    memset(env->pending_actions, 0, sizeof(env->pending_actions));
+    memset(env->actions, 0, NUM_AGENTS * NUM_ACTION_HEADS * sizeof(int));
+}
+
+static int apply_p1_visible_defensive_prayer(OsrsEnv* env) {
+    int* actions = &env->pending_actions[NUM_ACTION_HEADS];
+    memset(actions, 0, NUM_ACTION_HEADS * sizeof(int));
+    opp_apply_defensive_prayer(
+        env,
+        &env->pvp_runtime.opponent,
+        actions,
+        &env->players[1],
+        &env->players[0],
+        OPP_DEF_PRAYER_TARGET_GEAR_WITH_SPEC);
+    return actions[HEAD_OVERHEAD];
 }
 
 static void apply_agent_hit_to_adaptive_nh(
@@ -654,6 +700,99 @@ static void test_adaptive_nh_read_chance_exceeds_nightmare(void) {
     ASSERT_TRUE(
         "adaptive read chance",
         adaptive.pvp_runtime.opponent.read_chance == 0.75f);
+}
+
+static void test_humanized_prayer_first_observation_is_immediate(void) {
+    printf("--- Humanized visible prayer first observation is immediate ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_visible_prayer_reaction_state(&env, OPP_NIGHTMARE_NH);
+    env.pvp_runtime.opponent.last_target_prayer_signal = -1;
+    env.players[0].visible_gear = GEAR_RANGED;
+
+    int overhead = apply_p1_visible_defensive_prayer(&env);
+
+    ASSERT_INT_EQ(
+        "first visible style prays ranged",
+        overhead,
+        ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+}
+
+static void test_legacy_visible_prayer_style_change_is_immediate(void) {
+    printf("--- Legacy visible prayer reacts immediately ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_visible_prayer_reaction_state(&env, OPP_NIGHTMARE_NH);
+    env.pvp_runtime.scripted_prayer_reaction_mode =
+        PVP_SCRIPTED_PRAYER_REACTION_LEGACY;
+    env.players[0].visible_gear = GEAR_RANGED;
+
+    int overhead = apply_p1_visible_defensive_prayer(&env);
+
+    ASSERT_INT_EQ(
+        "legacy visible change prays ranged",
+        overhead,
+        ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+}
+
+static void test_humanized_visible_prayer_style_change_can_delay(void) {
+    printf("--- Humanized visible prayer can delay style change ---\n");
+
+    OsrsEnv found;
+    int found_delayed_seed = 0;
+
+    for (uint32_t seed = 1; seed < 10000; seed++) {
+        OsrsEnv env;
+        setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+        set_visible_prayer_reaction_state(&env, OPP_NIGHTMARE_NH);
+        env.rng_state = seed;
+        env.players[0].visible_gear = GEAR_RANGED;
+
+        int overhead = apply_p1_visible_defensive_prayer(&env);
+        if (overhead == ENCOUNTER_OVERHEAD_NO_CHANGE &&
+                env.pvp_runtime.opponent.pending_prayer_value == OVERHEAD_RANGED &&
+                env.pvp_runtime.opponent.pending_prayer_delay == 0) {
+            found = env;
+            found_delayed_seed = 1;
+            break;
+        }
+    }
+
+    ASSERT_TRUE("found delayed visible prayer seed", found_delayed_seed);
+    if (!found_delayed_seed) return;
+
+    int overhead = apply_p1_visible_defensive_prayer(&found);
+    ASSERT_INT_EQ(
+        "delayed visible change applies next tick",
+        overhead,
+        ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+}
+
+static void test_nightmare_exact_read_prayer_bypasses_visible_delay(void) {
+    printf("--- Nightmare exact read prayer bypasses visible delay ---\n");
+
+    OsrsEnv env;
+    setup_pvp_env(&env, OPP_NIGHTMARE_NH);
+    set_visible_prayer_reaction_state(&env, OPP_NIGHTMARE_NH);
+    const uint8_t target_weapons[] = {ITEM_WHIP};
+    set_weapon_inventory(&env.players[0], target_weapons, 1);
+    env.players[0].visible_gear = GEAR_MAGE;
+    env.players[0].current_gear = GEAR_MAGE;
+    env.players[1].prayer = PRAYER_PROTECT_MAGIC;
+    env.pvp_runtime.opponent.read_chance = 1.0f;
+    env.actions[HEAD_ATTACK] = ATTACK_ATK;
+
+    generate_opponent_action(&env, &env.pvp_runtime.opponent);
+
+    ASSERT_TRUE(
+        "nightmare read succeeded",
+        env.pvp_runtime.opponent.has_read_this_tick);
+    ASSERT_INT_EQ(
+        "read melee prays melee",
+        opponent_overhead(&env),
+        ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
 }
 
 static void test_off_prayer_mask_excludes_frozen_diagonal_melee(void) {
@@ -1164,6 +1303,10 @@ int main(void) {
     test_dumb_hard_policy_still_walks_under_frozen_adjacent_target();
     test_hard_spacing_guard_does_not_move_when_self_frozen();
     test_adaptive_nh_read_chance_exceeds_nightmare();
+    test_humanized_prayer_first_observation_is_immediate();
+    test_legacy_visible_prayer_style_change_is_immediate();
+    test_humanized_visible_prayer_style_change_can_delay();
+    test_nightmare_exact_read_prayer_bypasses_visible_delay();
     test_off_prayer_mask_excludes_frozen_diagonal_melee();
     test_nightmare_nh_prays_melee_against_learned_mage_camp();
     test_nightmare_nh_kites_unrooted_mage_prayer_camp();

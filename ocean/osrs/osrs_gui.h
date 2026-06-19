@@ -40,6 +40,7 @@
 #endif
 #include "osrs_types.h"
 #include "osrs_items.h"
+#include "osrs_inventory_clicks.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_ui_interfaces.h"
 
@@ -217,43 +218,6 @@ typedef enum {
     INV_SLOT_STAMINA_POT,   /* stamina potion (OSRS IDs 12625/12627/12629/12631) */
     INV_SLOT_SATURATED_HEART, /* saturated heart (OSRS ID 27641) */
 } InvSlotType;
-
-/* OSRS item IDs for consumable sprites (4-dose shown by default) */
-#define OSRS_ID_SHARK         385
-#define OSRS_ID_KARAMBWAN     3144
-#define OSRS_ID_BREW_4        6685
-#define OSRS_ID_BREW_3        6687
-#define OSRS_ID_BREW_2        6689
-#define OSRS_ID_BREW_1        6691
-#define OSRS_ID_RESTORE_4     3024
-#define OSRS_ID_RESTORE_3     3026
-#define OSRS_ID_RESTORE_2     3028
-#define OSRS_ID_RESTORE_1     3030
-#define OSRS_ID_COMBAT_4      12695
-#define OSRS_ID_COMBAT_3      12697
-#define OSRS_ID_COMBAT_2      12699
-#define OSRS_ID_COMBAT_1      12701
-#define OSRS_ID_RANGED_4      2444
-#define OSRS_ID_RANGED_3      169
-#define OSRS_ID_RANGED_2      171
-#define OSRS_ID_RANGED_1      173
-#define OSRS_ID_ANTIVENOM_4   12913
-#define OSRS_ID_ANTIVENOM_3   12915
-#define OSRS_ID_ANTIVENOM_2   12917
-#define OSRS_ID_ANTIVENOM_1   12919
-#define OSRS_ID_PRAYER_POT_4  2434
-#define OSRS_ID_PRAYER_POT_3  139
-#define OSRS_ID_PRAYER_POT_2  141
-#define OSRS_ID_PRAYER_POT_1  143
-#define OSRS_ID_BASTION_4     22461
-#define OSRS_ID_BASTION_3     22464
-#define OSRS_ID_BASTION_2     22467
-#define OSRS_ID_BASTION_1     22470
-#define OSRS_ID_STAMINA_4     12625
-#define OSRS_ID_STAMINA_3     12627
-#define OSRS_ID_STAMINA_2     12629
-#define OSRS_ID_STAMINA_1     12631
-#define OSRS_ID_SATURATED_HEART 27641
 
 #define INV_GRID_SLOTS 28  /* 4 columns x 7 rows */
 
@@ -949,21 +913,9 @@ static void gui_load_sprites(GuiState* gs) {
     }
 
     /* consumable sprites: not in ITEM_DATABASE, load by OSRS item ID directly */
-    static const int consumable_ids[] = {
-        OSRS_ID_SHARK, OSRS_ID_KARAMBWAN,
-        OSRS_ID_BREW_4, OSRS_ID_BREW_3, OSRS_ID_BREW_2, OSRS_ID_BREW_1,
-        OSRS_ID_RESTORE_4, OSRS_ID_RESTORE_3, OSRS_ID_RESTORE_2, OSRS_ID_RESTORE_1,
-        OSRS_ID_COMBAT_4, OSRS_ID_COMBAT_3, OSRS_ID_COMBAT_2, OSRS_ID_COMBAT_1,
-        OSRS_ID_RANGED_4, OSRS_ID_RANGED_3, OSRS_ID_RANGED_2, OSRS_ID_RANGED_1,
-        OSRS_ID_ANTIVENOM_4, OSRS_ID_ANTIVENOM_3, OSRS_ID_ANTIVENOM_2, OSRS_ID_ANTIVENOM_1,
-        OSRS_ID_PRAYER_POT_4, OSRS_ID_PRAYER_POT_3, OSRS_ID_PRAYER_POT_2, OSRS_ID_PRAYER_POT_1,
-        OSRS_ID_BASTION_4, OSRS_ID_BASTION_3, OSRS_ID_BASTION_2, OSRS_ID_BASTION_1,
-        OSRS_ID_STAMINA_4, OSRS_ID_STAMINA_3, OSRS_ID_STAMINA_2, OSRS_ID_STAMINA_1,
-        OSRS_ID_SATURATED_HEART,
-    };
-    for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
+    for (int i = 0; i < osrs_consumable_click_registry_count(); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
-        int cid = consumable_ids[i];
+        int cid = OSRS_CONSUMABLE_CLICK_REGISTRY[i].raw_osrs_id;
         const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
         if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
@@ -1862,55 +1814,33 @@ static int gui_content_y(GuiState* gs) {
 #define INV_SPRITE_W 32
 #define INV_SPRITE_H 32
 
+static OsrsInventorySlotKind gui_osrs_slot_kind_from_inv_type(InvSlotType type) {
+    switch (type) {
+        case INV_SLOT_FOOD: return OSRS_INVENTORY_SLOT_FOOD;
+        case INV_SLOT_KARAMBWAN: return OSRS_INVENTORY_SLOT_KARAMBWAN;
+        case INV_SLOT_BREW: return OSRS_INVENTORY_SLOT_BREW;
+        case INV_SLOT_RESTORE: return OSRS_INVENTORY_SLOT_RESTORE;
+        case INV_SLOT_COMBAT_POT: return OSRS_INVENTORY_SLOT_COMBAT_POTION;
+        case INV_SLOT_RANGED_POT: return OSRS_INVENTORY_SLOT_RANGED_POTION;
+        case INV_SLOT_ANTIVENOM: return OSRS_INVENTORY_SLOT_ANTIVENOM;
+        case INV_SLOT_PRAYER_POT: return OSRS_INVENTORY_SLOT_PRAYER_POTION;
+        case INV_SLOT_BASTION_POT: return OSRS_INVENTORY_SLOT_BASTION_POTION;
+        case INV_SLOT_STAMINA_POT: return OSRS_INVENTORY_SLOT_STAMINA_POTION;
+        case INV_SLOT_SATURATED_HEART: return OSRS_INVENTORY_SLOT_SATURATED_HEART;
+        case INV_SLOT_EMPTY:
+        case INV_SLOT_EQUIPMENT:
+            return OSRS_INVENTORY_SLOT_EMPTY;
+        default:
+            fprintf(stderr, "gui_osrs_slot_kind_from_inv_type: bad type %d\n", (int)type);
+            abort();
+    }
+}
+
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
 static int gui_consumable_osrs_id(InvSlotType type, int doses) {
-    switch (type) {
-        case INV_SLOT_FOOD:       return OSRS_ID_SHARK;
-        case INV_SLOT_KARAMBWAN:  return OSRS_ID_KARAMBWAN;
-        case INV_SLOT_BREW:
-            if (doses >= 4) return OSRS_ID_BREW_4;
-            if (doses == 3) return OSRS_ID_BREW_3;
-            if (doses == 2) return OSRS_ID_BREW_2;
-            return OSRS_ID_BREW_1;
-        case INV_SLOT_RESTORE:
-            if (doses >= 4) return OSRS_ID_RESTORE_4;
-            if (doses == 3) return OSRS_ID_RESTORE_3;
-            if (doses == 2) return OSRS_ID_RESTORE_2;
-            return OSRS_ID_RESTORE_1;
-        case INV_SLOT_COMBAT_POT:
-            if (doses >= 4) return OSRS_ID_COMBAT_4;
-            if (doses == 3) return OSRS_ID_COMBAT_3;
-            if (doses == 2) return OSRS_ID_COMBAT_2;
-            return OSRS_ID_COMBAT_1;
-        case INV_SLOT_RANGED_POT:
-            if (doses >= 4) return OSRS_ID_RANGED_4;
-            if (doses == 3) return OSRS_ID_RANGED_3;
-            if (doses == 2) return OSRS_ID_RANGED_2;
-            return OSRS_ID_RANGED_1;
-        case INV_SLOT_ANTIVENOM:
-            if (doses >= 4) return OSRS_ID_ANTIVENOM_4;
-            if (doses == 3) return OSRS_ID_ANTIVENOM_3;
-            if (doses == 2) return OSRS_ID_ANTIVENOM_2;
-            return OSRS_ID_ANTIVENOM_1;
-        case INV_SLOT_PRAYER_POT:
-            if (doses >= 4) return OSRS_ID_PRAYER_POT_4;
-            if (doses == 3) return OSRS_ID_PRAYER_POT_3;
-            if (doses == 2) return OSRS_ID_PRAYER_POT_2;
-            return OSRS_ID_PRAYER_POT_1;
-        case INV_SLOT_BASTION_POT:
-            if (doses >= 4) return OSRS_ID_BASTION_4;
-            if (doses == 3) return OSRS_ID_BASTION_3;
-            if (doses == 2) return OSRS_ID_BASTION_2;
-            return OSRS_ID_BASTION_1;
-        case INV_SLOT_STAMINA_POT:
-            if (doses >= 4) return OSRS_ID_STAMINA_4;
-            if (doses == 3) return OSRS_ID_STAMINA_3;
-            if (doses == 2) return OSRS_ID_STAMINA_2;
-            return OSRS_ID_STAMINA_1;
-        case INV_SLOT_SATURATED_HEART:
-            return OSRS_ID_SATURATED_HEART;
-        default: return 0;
-    }
+    return osrs_inventory_slot_kind_raw_osrs_id(
+        gui_osrs_slot_kind_from_inv_type(type),
+        doses);
 }
 
 /** Find first empty slot in inventory grid (scanning left→right, top→bottom).
@@ -1920,6 +1850,27 @@ static int gui_inv_first_empty(GuiState* gs) {
         if (gs->inv_grid[i].type == INV_SLOT_EMPTY) return i;
     }
     return -1;
+}
+
+static InvSlotType gui_inv_type_from_osrs_slot_kind(OsrsInventorySlotKind kind) {
+    switch (kind) {
+        case OSRS_INVENTORY_SLOT_EMPTY: return INV_SLOT_EMPTY;
+        case OSRS_INVENTORY_SLOT_EQUIPMENT: return INV_SLOT_EQUIPMENT;
+        case OSRS_INVENTORY_SLOT_FOOD: return INV_SLOT_FOOD;
+        case OSRS_INVENTORY_SLOT_KARAMBWAN: return INV_SLOT_KARAMBWAN;
+        case OSRS_INVENTORY_SLOT_BREW: return INV_SLOT_BREW;
+        case OSRS_INVENTORY_SLOT_RESTORE: return INV_SLOT_RESTORE;
+        case OSRS_INVENTORY_SLOT_COMBAT_POTION: return INV_SLOT_COMBAT_POT;
+        case OSRS_INVENTORY_SLOT_RANGED_POTION: return INV_SLOT_RANGED_POT;
+        case OSRS_INVENTORY_SLOT_ANTIVENOM: return INV_SLOT_ANTIVENOM;
+        case OSRS_INVENTORY_SLOT_PRAYER_POTION: return INV_SLOT_PRAYER_POT;
+        case OSRS_INVENTORY_SLOT_BASTION_POTION: return INV_SLOT_BASTION_POT;
+        case OSRS_INVENTORY_SLOT_STAMINA_POTION: return INV_SLOT_STAMINA_POT;
+        case OSRS_INVENTORY_SLOT_SATURATED_HEART: return INV_SLOT_SATURATED_HEART;
+        default:
+            fprintf(stderr, "gui_inv_type_from_osrs_slot_kind: bad kind %d\n", (int)kind);
+            abort();
+    }
 }
 
 /** Find the slot index of an equipment item in the inventory grid.
@@ -2015,57 +1966,20 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
 static void gui_populate_inventory(GuiState* gs, Player* p) {
     memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
 
-    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
-        uint8_t item = p->inventory[i];
-        if (item == ITEM_NONE) continue;
-        gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
-        gs->inv_grid[i].item_db_idx = item;
-        gs->inv_grid[i].osrs_id = ITEM_DATABASE[item].item_id;
+    OsrsInventoryView view;
+    osrs_inventory_view_build(p, &view);
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        OsrsInventorySlotView cell = view.slots[slot];
+        gs->inv_grid[slot].type = gui_inv_type_from_osrs_slot_kind(cell.kind);
+        gs->inv_grid[slot].item_db_idx = cell.item_idx;
+        if (cell.kind == OSRS_INVENTORY_SLOT_EQUIPMENT && cell.item_idx < NUM_ITEMS) {
+            gs->inv_grid[slot].osrs_id = ITEM_DATABASE[cell.item_idx].item_id;
+        } else {
+            gs->inv_grid[slot].osrs_id =
+                gui_consumable_osrs_id(gs->inv_grid[slot].type, cell.doses);
+        }
     }
 
-    for (int i = 0; i < p->food_count; i++) {
-        int slot = gui_inv_first_empty(gs);
-        if (slot < 0) break;
-        gs->inv_grid[slot].type = INV_SLOT_FOOD;
-        gs->inv_grid[slot].osrs_id = OSRS_ID_SHARK;
-    }
-    for (int i = 0; i < p->karambwan_count; i++) {
-        int slot = gui_inv_first_empty(gs);
-        if (slot < 0) break;
-        gs->inv_grid[slot].type = INV_SLOT_KARAMBWAN;
-        gs->inv_grid[slot].osrs_id = OSRS_ID_KARAMBWAN;
-    }
-
-    #define ADD_POTION_VIALS(doses_total, slot_type) do { \
-        int _rem = (doses_total); \
-        while (_rem > 0) { \
-            int _slot = gui_inv_first_empty(gs); \
-            if (_slot < 0) break; \
-            int _d = (_rem >= 4) ? 4 : _rem; \
-            gs->inv_grid[_slot].type = (slot_type); \
-            gs->inv_grid[_slot].osrs_id = gui_consumable_osrs_id((slot_type), _d); \
-            _rem -= _d; \
-        } \
-    } while(0)
-
-    ADD_POTION_VIALS(p->brew_doses, INV_SLOT_BREW);
-    ADD_POTION_VIALS(p->restore_doses, INV_SLOT_RESTORE);
-    ADD_POTION_VIALS(p->combat_potion_doses, INV_SLOT_COMBAT_POT);
-    ADD_POTION_VIALS(p->ranged_potion_doses, INV_SLOT_RANGED_POT);
-    ADD_POTION_VIALS(p->bastion_doses, INV_SLOT_BASTION_POT);
-    ADD_POTION_VIALS(p->stamina_doses, INV_SLOT_STAMINA_POT);
-    ADD_POTION_VIALS(p->antivenom_doses, INV_SLOT_ANTIVENOM);
-    ADD_POTION_VIALS(p->prayer_pot_doses, INV_SLOT_PRAYER_POT);
-    #undef ADD_POTION_VIALS
-
-    for (int i = 0; i < p->saturated_heart_count; i++) {
-        int slot = gui_inv_first_empty(gs);
-        if (slot < 0) break;
-        gs->inv_grid[slot].type = INV_SLOT_SATURATED_HEART;
-        gs->inv_grid[slot].osrs_id = OSRS_ID_SATURATED_HEART;
-    }
-
-    /* snapshot player state for incremental change detection */
     gui_snapshot_inventory_state(gs, p);
     gs->inv_owner_entity_idx = gs->gui_entity_idx;
 }
@@ -2269,7 +2183,7 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         int slot = gui_inv_first_empty(gs);
         if (slot < 0) break;
         gs->inv_grid[slot].type = INV_SLOT_SATURATED_HEART;
-        gs->inv_grid[slot].osrs_id = OSRS_ID_SATURATED_HEART;
+        gs->inv_grid[slot].osrs_id = OSRS_RAW_ID_SATURATED_HEART;
     }
 
     /* only clear human click when a consumable was actually used this frame.
@@ -2429,7 +2343,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_FOOD:
             if (human_active) {
                 hi->pending_food = 1;
-                human_input_queue_eat(hi, 0);
+                human_input_queue_eat_slot(hi, 0, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 0); }
@@ -2437,7 +2351,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_KARAMBWAN:
             if (human_active) {
                 hi->pending_karambwan = 1;
-                human_input_queue_eat(hi, 1);
+                human_input_queue_eat_slot(hi, 1, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 1); }

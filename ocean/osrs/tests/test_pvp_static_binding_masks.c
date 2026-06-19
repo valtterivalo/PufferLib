@@ -622,9 +622,9 @@ static void test_duplicate_equip_clicks_apply_once(void) {
     p->inventory[0] = ITEM_RUNE_CROSSBOW;
 
     int actions[NUM_ACTION_HEADS] = {0};
-    actions[HEAD_EQUIP_0] = 1;
-    actions[HEAD_EQUIP_1] = 1;
-    int clicks = execute_equip_clicks(&env, 0, actions);
+    actions[HEAD_INVENTORY_0] = 1;
+    actions[(HEAD_INVENTORY_0 + 1)] = 1;
+    int clicks = execute_inventory_clicks(&env, 0, actions);
 
     ASSERT_INT_EQ("duplicate equip click success count", clicks, 1);
     ASSERT_INT_EQ("crossbow equipped once", p->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
@@ -660,11 +660,21 @@ static void test_food_brew_karambwan_can_resolve_same_tick(void) {
     p->food_timer = 0;
     p->potion_timer = 0;
     p->karambwan_timer = 0;
+    osrs_player_inventory_clear(p);
+
+    OsrsInventoryView view;
+    osrs_inventory_view_build(p, &view);
+    int food_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_FOOD);
+    int brew_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_BREW);
+    int karambwan_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_KARAMBWAN);
+    ASSERT_TRUE("food slot projected", food_slot >= 0);
+    ASSERT_TRUE("brew slot projected", brew_slot >= 0);
+    ASSERT_TRUE("karambwan slot projected", karambwan_slot >= 0);
 
     int actions[NUM_ACTION_HEADS] = {0};
-    actions[HEAD_FOOD] = FOOD_EAT;
-    actions[HEAD_POTION] = POTION_BREW;
-    actions[HEAD_KARAMBWAN] = KARAM_EAT;
+    actions[HEAD_INVENTORY_0] = food_slot + 1;
+    actions[HEAD_INVENTORY_0 + 1] = brew_slot + 1;
+    actions[HEAD_INVENTORY_0 + 2] = karambwan_slot + 1;
     execute_switches(&env, 0, actions);
 
     ASSERT_INT_EQ("same tick triple eat hp", p->current_hitpoints, 84);
@@ -901,18 +911,20 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     printf("--- PvP slot-click schema and inventory mask ---\n");
 
     ASSERT_INT_EQ("PvP action schema",
-        PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11);
+        PVP_ACTION_SCHEMA, PVP_ACTION_SCHEMA_INVENTORY_CLICK_V12);
     ASSERT_INT_EQ("PvP obs schema",
-        PVP_OBS_SCHEMA, PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11);
-    ASSERT_INT_EQ("PvP action head count", NUM_ACTION_HEADS, 13);
-    ASSERT_INT_EQ("equip click dim", ACTION_HEAD_DIMS[HEAD_EQUIP_0], OSRS_INVENTORY_SIZE + 1);
+        PVP_OBS_SCHEMA, PVP_OBS_SCHEMA_INVENTORY_CLICK_V12);
+    ASSERT_INT_EQ("PvP action head count",
+        NUM_ACTION_HEADS, PVP_INVENTORY_CLICKS_PER_TICK + 6);
+    ASSERT_INT_EQ("inventory click dim",
+        ACTION_HEAD_DIMS[HEAD_INVENTORY_0], INVENTORY_CLICK_DIM);
     ASSERT_INT_EQ("attack dim", ACTION_HEAD_DIMS[HEAD_ATTACK], ATTACK_DIM);
     ASSERT_INT_EQ("special dim", ACTION_HEAD_DIMS[HEAD_SPECIAL], SPECIAL_DIM);
     ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE,
-        PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM +
-        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM +
-        KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM);
-    ASSERT_INT_EQ("item feature dim", OSRS_ITEM_FEATURE_DIM, 56);
+        PVP_INVENTORY_CLICKS_PER_TICK * INVENTORY_CLICK_DIM +
+        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + VENG_DIM +
+        OFFENSIVE_DIM + MOVE_DIM);
+    ASSERT_INT_EQ("item feature dim", OSRS_ITEM_FEATURE_DIM, 64);
 
     OsrsEnv env;
     memset(&env, 0, sizeof(env));
@@ -929,7 +941,7 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     compute_action_masks(&env, 0);
     generate_slot_observations(&env, 0);
 
-    int equip_offset = action_head_offset(HEAD_EQUIP_0);
+    int equip_offset = action_head_offset(HEAD_INVENTORY_0);
     int special_offset = action_head_offset(HEAD_SPECIAL);
     ASSERT_INT_EQ("equip noop valid", env.action_masks[equip_offset], 1);
     ASSERT_INT_EQ("crossbow slot-click valid",
@@ -940,11 +952,11 @@ static void test_slotclick_schema_and_inventory_mask(void) {
     for (int slot_idx = 0; slot_idx < OSRS_INVENTORY_SIZE; slot_idx++) {
         float* row = env.observations + PVP_INVENTORY_OBS_OFFSET +
             slot_idx * OSRS_ITEM_FEATURE_DIM;
-        int row_can_equip = row[31] > 0.5f ? 1 : 0;
-        for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
-            int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
-            ASSERT_INT_EQ("inventory can_equip mirrors equip head mask",
-                row_can_equip, env.action_masks[head_offset + slot_idx + 1]);
+        int row_can_click = row[31] > 0.5f ? 1 : 0;
+        for (int head = 0; head < PVP_INVENTORY_CLICKS_PER_TICK; head++) {
+            int head_offset = action_head_offset(HEAD_INVENTORY_0 + head);
+            ASSERT_INT_EQ("inventory can_click mirrors inventory head mask",
+                row_can_click, env.action_masks[head_offset + slot_idx + 1]);
         }
     }
 
@@ -977,8 +989,8 @@ static void test_two_handed_full_inventory_affordance_matches_masks(void) {
     float* row = env.observations + PVP_INVENTORY_OBS_OFFSET;
     ASSERT_FLOAT_NEAR("full inventory two-handed row can_equip",
         row[31], 0.0f, 1e-6f);
-    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
-        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+    for (int head = 0; head < PVP_INVENTORY_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_INVENTORY_0 + head);
         ASSERT_INT_EQ("full inventory two-handed equip mask",
             env.action_masks[head_offset + 1], 0);
     }
@@ -989,8 +1001,8 @@ static void test_two_handed_full_inventory_affordance_matches_masks(void) {
 
     ASSERT_FLOAT_NEAR("free slot two-handed row can_equip",
         row[31], 1.0f, 1e-6f);
-    for (int head = 0; head < PVP_EQUIP_CLICKS_PER_TICK; head++) {
-        int head_offset = action_head_offset(HEAD_EQUIP_0 + head);
+    for (int head = 0; head < PVP_INVENTORY_CLICKS_PER_TICK; head++) {
+        int head_offset = action_head_offset(HEAD_INVENTORY_0 + head);
         ASSERT_INT_EQ("free slot two-handed equip mask",
             env.action_masks[head_offset + 1], 1);
     }
@@ -2088,13 +2100,17 @@ static void test_pvp_drained_magic_obs_and_restore_mask(void) {
     generate_slot_observations(&env, 0);
     compute_action_masks(&env, 0);
 
-    int potion_offset = action_head_offset(HEAD_POTION);
+    OsrsInventoryView view;
+    osrs_inventory_view_build(agent, &view);
+    int restore_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_RESTORE);
+    ASSERT_TRUE("restore slot projected", restore_slot >= 0);
+    int inventory_offset = action_head_offset(HEAD_INVENTORY_0);
     ASSERT_TRUE("drained magic obs below full",
         env.observations[38] < 1.0f);
     ASSERT_FLOAT_NEAR("best ice spell tier is burst",
         env.observations[58], 0.50f, 1e-6f);
     ASSERT_INT_EQ("restore valid when magic drained",
-        env.action_masks[potion_offset + POTION_RESTORE], 1);
+        env.action_masks[inventory_offset + restore_slot + 1], 1);
 
     collision_map_free(cmap);
 }
@@ -2546,11 +2562,15 @@ static void test_pvp_obs_norm_sparse_indices_cover_non_identity_divisors(void) {
 
     ensure_obs_norm_initialized();
 
-    ASSERT_INT_EQ("slot obs size", SLOT_NUM_OBSERVATIONS, 2251);
+    ASSERT_INT_EQ("slot obs size", SLOT_NUM_OBSERVATIONS,
+        PVP_BASE_OBSERVATIONS +
+        OSRS_INVENTORY_SIZE * OSRS_ITEM_FEATURE_DIM +
+        NUM_GEAR_SLOTS * PVP_EQUIPPED_SELF_FEATURE_DIM +
+        NUM_GEAR_SLOTS * PVP_EQUIPPED_TARGET_FEATURE_DIM);
     ASSERT_INT_EQ("action mask size", ACTION_MASK_SIZE,
-        PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM +
-        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM +
-        KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM);
+        PVP_INVENTORY_CLICKS_PER_TICK * INVENTORY_CLICK_DIM +
+        ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + VENG_DIM +
+        OFFENSIVE_DIM + MOVE_DIM);
     ASSERT_INT_EQ("ocean obs size", OCEAN_OBS_SIZE,
         SLOT_NUM_OBSERVATIONS + ACTION_MASK_SIZE);
 

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "ocean/osrs/osrs_env.h"
 #include "ocean/osrs/encounters/encounter_nh_pvp.h"
@@ -58,6 +59,22 @@ static int tests_failed = 0;
         printf("  FAIL: %s got %.6f expected %.6f\n", (label), _actual, _expected); \
     } \
 } while (0)
+
+static void assert_feature_vector_unit_bounded(
+    const char* label,
+    const float* values,
+    int count
+) {
+    for (int i = 0; i < count; i++) {
+        tests_run++;
+        if (isfinite(values[i]) && values[i] >= -1.0f && values[i] <= 1.0f) {
+            tests_passed++;
+        } else {
+            tests_failed++;
+            printf("  FAIL: %s[%d] got %.6f\n", label, i, values[i]);
+        }
+    }
+}
 
 static CollisionMap* test_wilderness_collision_map(void) {
     static CollisionMap* cmap = NULL;
@@ -473,6 +490,51 @@ static void test_inventory_projection_matches_player(void) {
         gui_inventory_equipment_count(&gui, next_weapon), 0);
 }
 
+static void test_pvp_item_affordance_features_are_unit_bounded(void) {
+    printf("--- PvP item affordance features are unit bounded ---\n");
+
+    pvp_init_item_obs_templates();
+
+    float huge_deltas[6] = {9.0f, -9.0f, 4.0f, -4.0f, 2.0f, -2.0f};
+    for (int i = 0; i < NUM_ITEMS; i++) {
+        uint8_t item_idx = (uint8_t)i;
+        float item_features[OSRS_ITEM_FEATURE_DIM];
+        pvp_write_item_policy_features_cached(
+            item_idx, OSRS_INVENTORY_SIZE - 1, 1, huge_deltas, item_features);
+        assert_feature_vector_unit_bounded(
+            "pvp item affordance", item_features, OSRS_ITEM_FEATURE_DIM);
+
+        float self_features[PVP_EQUIPPED_SELF_FEATURE_DIM];
+        pvp_write_equipped_self_item_features_cached(item_idx, self_features);
+        assert_feature_vector_unit_bounded(
+            "pvp equipped self", self_features, PVP_EQUIPPED_SELF_FEATURE_DIM);
+
+        float target_features[PVP_EQUIPPED_TARGET_FEATURE_DIM];
+        pvp_write_target_item_stats_cached(item_idx, target_features);
+        assert_feature_vector_unit_bounded(
+            "pvp equipped target", target_features, PVP_EQUIPPED_TARGET_FEATURE_DIM);
+    }
+
+    GearBonuses current = {
+        .stab_attack = 1200,
+        .slash_attack = 1200,
+        .crush_attack = 1200,
+        .ranged_attack = 1200,
+        .magic_attack = 1200,
+        .stab_defence = 1200,
+        .slash_defence = 1200,
+        .crush_defence = 1200,
+        .ranged_defence = 1200,
+        .magic_defence = 1200,
+    };
+    GearBonuses post = {0};
+    float deltas[6];
+    pvp_write_post_equip_bonus_deltas(&current, &post, deltas);
+    assert_feature_vector_unit_bounded("pvp negative post-equip delta", deltas, 6);
+    pvp_write_post_equip_bonus_deltas(&post, &current, deltas);
+    assert_feature_vector_unit_bounded("pvp positive post-equip delta", deltas, 6);
+}
+
 static void test_inventory_cycle_marks_rebuild(void) {
     printf("--- PvP inventory entity cycle marks rebuild ---\n");
 
@@ -688,7 +750,7 @@ static void test_pvp_slotclick_command_frame_equips_and_attacks(void) {
 
     int actions[NUM_ACTION_HEADS];
     memset(actions, 0, sizeof(actions));
-    actions[HEAD_EQUIP_0] = slot + 1;
+    actions[HEAD_INVENTORY_0] = slot + 1;
     actions[HEAD_ATTACK] = ATTACK_ATK;
 
     nh_pvp_step((EncounterState*)&state, NULL, actions);
@@ -697,6 +759,33 @@ static void test_pvp_slotclick_command_frame_equips_and_attacks(void) {
         player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
     ASSERT_INT_EQ("slot-click attack used ranged",
         player->attack_style_this_tick, ATTACK_STYLE_RANGED);
+}
+
+static void test_pvp_slotclick_duplicate_item_slots_are_noop_safe(void) {
+    printf("--- PvP slot-click duplicate item slots are noop safe ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+
+    osrs_player_inventory_clear(player);
+    osrs_player_set_equipment_slot(player, GEAR_SLOT_WEAPON, ITEM_AHRIM_STAFF);
+    int slot_a = osrs_player_inventory_add(player, ITEM_RUNE_CROSSBOW);
+    int slot_b = osrs_player_inventory_add(player, ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("first duplicate weapon slot exists", slot_a >= 0, 1);
+    ASSERT_INT_EQ("second duplicate weapon slot exists", slot_b >= 0, 1);
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_INVENTORY_0] = slot_a + 1;
+    actions[HEAD_INVENTORY_0 + 1] = slot_b + 1;
+
+    nh_pvp_step((EncounterState*)&state, NULL, actions);
+
+    ASSERT_INT_EQ("duplicate item click equips once",
+        player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
+    ASSERT_INT_EQ("duplicate item click records one success",
+        player->equip_click_successes, 1);
 }
 
 static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
@@ -720,7 +809,7 @@ static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
 
     int actions[NUM_ACTION_HEADS];
     memset(actions, 0, sizeof(actions));
-    actions[HEAD_EQUIP_0] = slot + 1;
+    actions[HEAD_INVENTORY_0] = slot + 1;
     actions[HEAD_SPECIAL] = SPECIAL_ARM;
     actions[HEAD_ATTACK] = ATTACK_ATK;
 
@@ -776,6 +865,20 @@ static void test_pvp_human_command_frame_maps_actions(void) {
 
     NhPvpState state;
     setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    osrs_player_inventory_clear(player);
+    player->food_count = 1;
+    player->karambwan_count = 1;
+    player->restore_doses = 1;
+
+    OsrsInventoryView view;
+    osrs_inventory_view_build(player, &view);
+    int food_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_FOOD);
+    int karambwan_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_KARAMBWAN);
+    int restore_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_RESTORE);
+    ASSERT_INT_EQ("human food slot projected", food_slot >= 0, 1);
+    ASSERT_INT_EQ("human karambwan slot projected", karambwan_slot >= 0, 1);
+    ASSERT_INT_EQ("human restore slot projected", restore_slot >= 0, 1);
     int actions[NUM_ACTION_HEADS];
 
     HumanInput hi;
@@ -783,9 +886,9 @@ static void test_pvp_human_command_frame_maps_actions(void) {
     hi.enabled = 1;
     human_input_queue_overhead_prayer(&hi, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
     human_input_queue_offensive_prayer(&hi, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
-    human_input_queue_eat(&hi, 0);
-    human_input_queue_eat(&hi, 1);
-    human_input_queue_drink(&hi, POTION_RESTORE, 7);
+    human_input_queue_eat_slot(&hi, 0, food_slot);
+    human_input_queue_eat_slot(&hi, 1, karambwan_slot);
+    human_input_queue_drink(&hi, POTION_RESTORE, restore_slot);
     human_input_queue_spec_toggle(&hi);
     human_input_queue_spell_target(&hi, ATTACK_ICE, 1);
     hi.pending_veng = 1;
@@ -797,9 +900,9 @@ static void test_pvp_human_command_frame_maps_actions(void) {
         actions[HEAD_OVERHEAD], ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
     ASSERT_INT_EQ("human offensive maps",
         actions[HEAD_OFFENSIVE], ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
-    ASSERT_INT_EQ("human food maps", actions[HEAD_FOOD], FOOD_EAT);
-    ASSERT_INT_EQ("human karambwan maps", actions[HEAD_KARAMBWAN], KARAM_EAT);
-    ASSERT_INT_EQ("human potion maps", actions[HEAD_POTION], POTION_RESTORE);
+    ASSERT_INT_EQ("human food maps", actions[HEAD_INVENTORY_0], food_slot + 1);
+    ASSERT_INT_EQ("human karambwan maps", actions[HEAD_INVENTORY_0 + 1], karambwan_slot + 1);
+    ASSERT_INT_EQ("human potion maps", actions[HEAD_INVENTORY_0 + 2], restore_slot + 1);
     ASSERT_INT_EQ("human vengeance maps", actions[HEAD_VENG], VENG_CAST);
     ASSERT_INT_EQ("human spec maps", actions[HEAD_SPECIAL], SPECIAL_ARM);
 
@@ -1889,6 +1992,7 @@ int main(void) {
     test_explicit_move_clears_render_target();
     test_opponent_target_is_independent();
     test_inventory_projection_matches_player();
+    test_pvp_item_affordance_features_are_unit_bounded();
     test_inventory_cycle_marks_rebuild();
     test_flat_inventory_equipment_swaps_clicked_slot();
     test_flat_inventory_two_handed_weapon_moves_shield();
@@ -1899,6 +2003,7 @@ int main(void) {
     test_pvp_loot_replacement_preserves_owned_set();
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_slotclick_command_frame_equips_and_attacks();
+    test_pvp_slotclick_duplicate_item_slots_are_noop_safe();
     test_pvp_slotclick_command_frame_equips_specs_and_attacks();
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();

@@ -3280,12 +3280,31 @@ static void zul_translate_human_commands(HumanInput* hi, int* actions, ZulrahSta
         actions[ZUL_HEAD_FOOD] = 1;
     if (frame.karambwan)
         actions[ZUL_HEAD_FOOD] = 2;
-    if (frame.potion == POTION_BREW)
-        actions[ZUL_HEAD_FOOD] = 1;
-    else if (frame.potion == POTION_RESTORE || frame.potion == POTION_PRAYER_POT)
+    if (frame.potion == POTION_RESTORE || frame.potion == POTION_PRAYER_POT)
         actions[ZUL_HEAD_POTION] = 1;
     else if (frame.potion == POTION_ANTIVENOM)
         actions[ZUL_HEAD_POTION] = 2;
+    for (int i = 0; i < hi->commands.count; i++) {
+        OsrsInventorySlotKind kind =
+            osrs_human_inventory_command_slot_kind(&s->player, &hi->commands.items[i]);
+        switch (kind) {
+            case OSRS_INVENTORY_SLOT_FOOD:
+                actions[ZUL_HEAD_FOOD] = 1;
+                break;
+            case OSRS_INVENTORY_SLOT_KARAMBWAN:
+                actions[ZUL_HEAD_FOOD] = 2;
+                break;
+            case OSRS_INVENTORY_SLOT_RESTORE:
+            case OSRS_INVENTORY_SLOT_PRAYER_POTION:
+                actions[ZUL_HEAD_POTION] = 1;
+                break;
+            case OSRS_INVENTORY_SLOT_ANTIVENOM:
+                actions[ZUL_HEAD_POTION] = 2;
+                break;
+            default:
+                break;
+        }
+    }
     if (frame.spec_toggle)
         actions[ZUL_HEAD_SPEC] = 1;
 }

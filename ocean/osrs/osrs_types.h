@@ -64,16 +64,13 @@
 // Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
 #define NUM_GEAR_SLOTS 11
 #define OSRS_INVENTORY_SIZE 28
-#define PVP_ACTION_SCHEMA_LOADOUT_V8 8
-#define PVP_ACTION_SCHEMA_SLOTCLICK_V9 9
-#define PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11 11
-#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_SLOTCLICK_EXPLICIT_ANCIENTS_V11
-#define PVP_OBS_SCHEMA_SLOTCLICK_ITEM_AFFORDANCE_V10 10
-#define PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11 11
-#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_EXPLICIT_ANCIENTS_V11
+#define PVP_ACTION_SCHEMA_INVENTORY_CLICK_V12 12
+#define PVP_ACTION_SCHEMA PVP_ACTION_SCHEMA_INVENTORY_CLICK_V12
+#define PVP_OBS_SCHEMA_INVENTORY_CLICK_V12 12
+#define PVP_OBS_SCHEMA PVP_OBS_SCHEMA_INVENTORY_CLICK_V12
 
-#define PVP_EQUIP_CLICKS_PER_TICK 4
-#define EQUIP_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
+#define PVP_INVENTORY_CLICKS_PER_TICK OSRS_INVENTORY_SIZE
+#define INVENTORY_CLICK_DIM (OSRS_INVENTORY_SIZE + 1)
 #define ATTACK_DIM 19
 #define SPECIAL_DIM 3
 #define LEGACY_LOADOUT_DIM 9
@@ -81,53 +78,69 @@
 #define LOADOUT_DIM LEGACY_LOADOUT_DIM
 #define COMBAT_DIM LEGACY_COMBAT_DIM
 
-#define NUM_ACTION_HEADS 13
+#define NUM_ACTION_HEADS (PVP_INVENTORY_CLICKS_PER_TICK + 6)
 
-#define HEAD_EQUIP_0    0
-#define HEAD_EQUIP_1    1
-#define HEAD_EQUIP_2    2
-#define HEAD_EQUIP_3    3
-#define HEAD_ATTACK     4
-#define HEAD_SPECIAL    5
-#define HEAD_OVERHEAD   6
-#define HEAD_FOOD       7
-#define HEAD_POTION     8
-#define HEAD_KARAMBWAN  9
-#define HEAD_VENG       10
-#define HEAD_OFFENSIVE  11
-#define HEAD_MOVE       12
+#define HEAD_INVENTORY_0 0
+#define HEAD_ATTACK     PVP_INVENTORY_CLICKS_PER_TICK
+#define HEAD_SPECIAL    (PVP_INVENTORY_CLICKS_PER_TICK + 1)
+#define HEAD_OVERHEAD   (PVP_INVENTORY_CLICKS_PER_TICK + 2)
+#define HEAD_VENG       (PVP_INVENTORY_CLICKS_PER_TICK + 3)
+#define HEAD_OFFENSIVE  (PVP_INVENTORY_CLICKS_PER_TICK + 4)
+#define HEAD_MOVE       (PVP_INVENTORY_CLICKS_PER_TICK + 5)
 
-#define HEAD_LOADOUT HEAD_EQUIP_0
+#define HEAD_LOADOUT HEAD_INVENTORY_0
 #define HEAD_COMBAT HEAD_ATTACK
 
 #define OVERHEAD_DIM    7
-#define FOOD_DIM        2
-#define POTION_DIM      5
-#define KARAMBWAN_DIM   2
 #define VENG_DIM        2
 #define OFFENSIVE_DIM   5
 #define MOVE_DIM       25
 
 #define ACTION_MASK_SIZE ( \
-    PVP_EQUIP_CLICKS_PER_TICK * EQUIP_CLICK_DIM + \
-    ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + FOOD_DIM + POTION_DIM + \
-    KARAMBWAN_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
+    PVP_INVENTORY_CLICKS_PER_TICK * INVENTORY_CLICK_DIM + \
+    ATTACK_DIM + SPECIAL_DIM + OVERHEAD_DIM + VENG_DIM + OFFENSIVE_DIM + MOVE_DIM)
 
-static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
-    EQUIP_CLICK_DIM,
-    EQUIP_CLICK_DIM,
-    EQUIP_CLICK_DIM,
-    EQUIP_CLICK_DIM,
-    ATTACK_DIM,
-    SPECIAL_DIM,
-    OVERHEAD_DIM,
-    FOOD_DIM,
-    POTION_DIM,
-    KARAMBWAN_DIM,
-    VENG_DIM,
-    OFFENSIVE_DIM,
-    MOVE_DIM,
-};
+#define PVP_INVENTORY_ACTION_DIMS_28 \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM, \
+    INVENTORY_CLICK_DIM
+
+#define PVP_ACTION_DIMS_LITERAL { \
+    PVP_INVENTORY_ACTION_DIMS_28, \
+    ATTACK_DIM, \
+    SPECIAL_DIM, \
+    OVERHEAD_DIM, \
+    VENG_DIM, \
+    OFFENSIVE_DIM, \
+    MOVE_DIM \
+}
+
+static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = PVP_ACTION_DIMS_LITERAL;
 
 // Number of item stats per item (for observations)
 #define NUM_ITEM_STATS 18
@@ -135,7 +148,7 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
 #define PVP_BASE_OBSERVATIONS 221
-#define OSRS_ITEM_FEATURE_DIM 56
+#define OSRS_ITEM_FEATURE_DIM 64
 #define PVP_EQUIPPED_SELF_FEATURE_DIM 24
 #define PVP_EQUIPPED_TARGET_FEATURE_DIM 18
 #define PVP_INVENTORY_OBS_OFFSET PVP_BASE_OBSERVATIONS
@@ -385,33 +398,18 @@ typedef enum {
     OVERHEAD_REDEMPTION,
 } OverheadAction;
 
-/** Food action head options. */
-typedef enum {
-    FOOD_NONE = 0,
-    FOOD_EAT,
-} FoodAction;
-
-/** Potion intent values.
-    The PvP potion action head still only exposes POTION_DIM = 5.
-    Extra values below are human-mode/debug intents for encounters that use
-    different consumable layouts. */
+/** Potion intent values for human-mode and scripted consumable commands. */
 typedef enum {
     POTION_NONE = 0,
     POTION_BREW,
     POTION_RESTORE,
     POTION_COMBAT,
     POTION_RANGED,
-    POTION_ANTIVENOM,   /* zulrah only — outside PvP action space (POTION_DIM=5) */
-    POTION_BASTION,     /* inferno human mode only */
-    POTION_STAMINA,     /* inferno human mode only */
-    POTION_PRAYER_POT,  /* distinct from super restore; not auto-aliased */
+    POTION_ANTIVENOM,
+    POTION_BASTION,
+    POTION_STAMINA,
+    POTION_PRAYER_POT,
 } PotionAction;
-
-/** Karambwan action head options. */
-typedef enum {
-    KARAM_NONE = 0,
-    KARAM_EAT,
-} KaramAction;
 
 /** Vengeance action head options. */
 typedef enum {
@@ -1338,7 +1336,7 @@ typedef struct {
     int fake_switch_failed;          /* 0/1 (unpredictable_onetick only) */
     int pending_prayer_value;        /* OVERHEAD_* value, 0 = none */
     int pending_prayer_delay;        /* ticks remaining before applying */
-    int last_target_gear_style;      /* OPP_STYLE_* or -1, tracks previous tick */
+    int last_target_prayer_signal;
 
     float eat_triple_threshold;       /* base 0.30, range [0.25, 0.35] */
     float eat_double_threshold;       /* base 0.50, range [0.45, 0.55] */
@@ -1374,6 +1372,11 @@ typedef struct {
     float style_bias[3];
 } OpponentState;
 
+typedef enum {
+    PVP_SCRIPTED_PRAYER_REACTION_LEGACY,
+    PVP_SCRIPTED_PRAYER_REACTION_HUMANIZED,
+} PvpScriptedPrayerReactionMode;
+
 typedef struct {
     int is_pvp_arena;
     int use_c_opponent;  /* 1 = generate opponent actions in C */
@@ -1386,6 +1389,7 @@ typedef struct {
     PvpTerminalPresentation terminal_presentation;
     float gear_tier_weights[4];  /* 4 tiers, sum to 1.0 */
     PvpStartMode start_mode;
+    PvpScriptedPrayerReactionMode scripted_prayer_reaction_mode;
     /* BFS walk destinations per agent (-1 = no pending walk). consumed by
        osrs_encounter_player_step via OSRS_PLAYER_MOVE_DESTINATION; cleared when
        the agent arrives. survives across ticks for human click-to-walk. */

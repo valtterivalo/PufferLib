@@ -207,11 +207,16 @@ static inline void human_input_queue_offensive_prayer(HumanInput* hi, int offens
     });
 }
 
-static inline void human_input_queue_eat(HumanInput* hi, int food) {
+static inline void human_input_queue_eat_slot(HumanInput* hi, int food, int inventory_slot) {
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_EAT,
         .food = food,
+        .inventory_slot = inventory_slot,
     });
+}
+
+static inline void human_input_queue_eat(HumanInput* hi, int food) {
+    human_input_queue_eat_slot(hi, food, -1);
 }
 
 static inline void human_input_queue_drink(HumanInput* hi, int potion, int inventory_slot) {

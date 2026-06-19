@@ -662,6 +662,26 @@ static void inf_translate_human_commands_ctx(
         actions[INF_HEAD_POTION] = 2;
     else if (frame.potion == POTION_STAMINA)
         actions[INF_HEAD_POTION] = 3;
+    for (int i = 0; i < hi->commands.count; i++) {
+        OsrsInventorySlotKind kind =
+            osrs_human_inventory_command_slot_kind(&s->player, &hi->commands.items[i]);
+        switch (kind) {
+            case OSRS_INVENTORY_SLOT_BREW:
+                actions[INF_HEAD_EAT] = 1;
+                break;
+            case OSRS_INVENTORY_SLOT_RESTORE:
+                actions[INF_HEAD_POTION] = 1;
+                break;
+            case OSRS_INVENTORY_SLOT_BASTION_POTION:
+                actions[INF_HEAD_POTION] = 2;
+                break;
+            case OSRS_INVENTORY_SLOT_STAMINA_POTION:
+                actions[INF_HEAD_POTION] = 3;
+                break;
+            default:
+                break;
+        }
+    }
     if (frame.spec_toggle)
         actions[INF_HEAD_SPEC] = 1;
 }

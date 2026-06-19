@@ -14,6 +14,7 @@
 #include "osrs_player_consumables.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
+#include "osrs_inventory_clicks.h"
 #include "osrs_encounter.h"  // for ENCOUNTER_OVERHEAD_* / ENCOUNTER_OFFENSIVE_* encoding
 #include "osrs_pvp_movement.h"
 
@@ -43,7 +44,7 @@ static inline float get_relative_level_magic(int current, int base) {
  * @param p Player to check
  * @return 1 if defence not capped or HP not full
  */
-static inline int can_use_brew_boost(Player* p) {
+static inline int can_use_brew_boost(const Player* p) {
     int def_boost = (int)floorf(2.0f + (0.20f * p->base_defence));
     int def_cap = p->is_lms ? p->base_defence : p->base_defence + def_boost;
     if (p->current_defence < def_cap - 1) {
@@ -55,7 +56,7 @@ static inline int can_use_brew_boost(Player* p) {
 /** Check if restore potion would be beneficial.
  * Stats must be drained OR prayer below 90% of base.
  */
-static inline int can_restore_stats(Player* p) {
+static inline int can_restore_stats(const Player* p) {
     int stats_drained = p->current_attack < p->base_attack ||
                         p->current_defence < p->base_defence ||
                         p->current_strength < p->base_strength ||
@@ -66,7 +67,7 @@ static inline int can_restore_stats(Player* p) {
 }
 
 /** Check if combat potion boost would be beneficial. */
-static inline int can_boost_combat_skills(Player* p) {
+static inline int can_boost_combat_skills(const Player* p) {
     int max_att = (int)floorf(p->base_attack * 0.15f) + 5 + p->base_attack;
     int max_str = (int)floorf(p->base_strength * 0.15f) + 5 + p->base_strength;
     int def_boost = (int)floorf(p->base_defence * 0.15f) + 5;
@@ -77,13 +78,13 @@ static inline int can_boost_combat_skills(Player* p) {
 }
 
 /** Check if ranged potion boost would be beneficial. */
-static inline int can_boost_ranged(Player* p) {
+static inline int can_boost_ranged(const Player* p) {
     int max_ranged = (int)floorf(p->base_ranged * 0.10f) + 4 + p->base_ranged;
     return max_ranged > p->current_ranged + 1;
 }
 
 /** Check if potion type is available (timer + doses). */
-static inline int can_use_potion(Player* p, int potion_type) {
+static inline int can_use_potion(const Player* p, int potion_type) {
     if (remaining_ticks(p->potion_timer) > 0) {
         return 0;
     }
@@ -97,12 +98,12 @@ static inline int can_use_potion(Player* p, int potion_type) {
 }
 
 /** Check if food is available and player not at full HP. */
-static inline int can_eat_food(Player* p) {
+static inline int can_eat_food(const Player* p) {
     return osrs_player_can_eat_food_type(p, FOOD_SHARK);
 }
 
 /** Check if karambwan is available and player not at full HP. */
-static inline int can_eat_karambwan(Player* p) {
+static inline int can_eat_karambwan(const Player* p) {
     return osrs_player_can_eat_food_type(p, FOOD_KARAMBWAN);
 }
 
@@ -382,22 +383,22 @@ static inline int pvp_item_spec_has_drain(uint8_t item_idx) {
 
 static inline float pvp_item_melee_off_score(const Item* item) {
     int best = max_int(item->attack_stab, max_int(item->attack_slash, item->attack_crush));
-    return (float)best / STAT_NORM_ATTACK;
+    return osrs_clamp_unit((float)best / STAT_NORM_ATTACK);
 }
 
 static inline float pvp_item_melee_def_score(const Item* item) {
     int best = max_int(item->defence_stab, max_int(item->defence_slash, item->defence_crush));
-    return (float)best / STAT_NORM_DEFENCE;
+    return osrs_clamp_unit((float)best / STAT_NORM_DEFENCE);
 }
 
 static inline float pvp_gear_melee_attack_score(const GearBonuses* gear) {
     int best = max_int(gear->stab_attack, max_int(gear->slash_attack, gear->crush_attack));
-    return (float)best / STAT_NORM_ATTACK;
+    return osrs_clamp_unit((float)best / STAT_NORM_ATTACK);
 }
 
 static inline float pvp_gear_melee_def_score(const GearBonuses* gear) {
     int best = max_int(gear->stab_defence, max_int(gear->slash_defence, gear->crush_defence));
-    return (float)best / STAT_NORM_DEFENCE;
+    return osrs_clamp_unit((float)best / STAT_NORM_DEFENCE);
 }
 
 static void pvp_write_item_policy_features(
@@ -424,9 +425,9 @@ static void pvp_write_item_policy_features(
     out[5] = style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
     out[6] = style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
     out[7] = style == ATTACK_STYLE_MAGIC ? 1.0f : 0.0f;
-    out[8] = (float)item->attack_speed / STAT_NORM_SPEED;
-    out[9] = (float)item->attack_range / STAT_NORM_RANGE;
-    out[10] = (float)spec_cost / 100.0f;
+    out[8] = osrs_clamp_unit((float)item->attack_speed / STAT_NORM_SPEED);
+    out[9] = osrs_clamp_unit((float)item->attack_range / STAT_NORM_RANGE);
+    out[10] = osrs_clamp_unit((float)spec_cost / 100.0f);
     out[11] = spec_cost > 0 ? 1.0f : 0.0f;
     out[12] = item_idx == ITEM_GRANITE_MAUL ? 1.0f : 0.0f;
     out[13] = pvp_item_spec_is_multihit(item_idx) ? 1.0f : 0.0f;
@@ -435,15 +436,15 @@ static void pvp_write_item_policy_features(
     out[16] = item_idx == ITEM_ZGS ? 1.0f : 0.0f;
     out[17] = pvp_item_spec_has_drain(item_idx) ? 1.0f : 0.0f;
     out[18] = pvp_item_melee_off_score(item);
-    out[19] = (float)item->attack_ranged / STAT_NORM_ATTACK;
-    out[20] = (float)item->attack_magic / STAT_NORM_ATTACK;
+    out[19] = osrs_clamp_unit((float)item->attack_ranged / STAT_NORM_ATTACK);
+    out[20] = osrs_clamp_unit((float)item->attack_magic / STAT_NORM_ATTACK);
     out[21] = pvp_item_melee_def_score(item);
-    out[22] = (float)item->defence_ranged / STAT_NORM_DEFENCE;
-    out[23] = (float)item->defence_magic / STAT_NORM_DEFENCE;
-    out[24] = (float)item->melee_strength / STAT_NORM_STRENGTH;
-    out[25] = (float)item->ranged_strength / STAT_NORM_STRENGTH;
-    out[26] = (float)item->magic_damage / STAT_NORM_MAGIC_DMG;
-    out[27] = (float)item->prayer / STAT_NORM_PRAYER;
+    out[22] = osrs_clamp_unit((float)item->defence_ranged / STAT_NORM_DEFENCE);
+    out[23] = osrs_clamp_unit((float)item->defence_magic / STAT_NORM_DEFENCE);
+    out[24] = osrs_clamp_unit((float)item->melee_strength / STAT_NORM_STRENGTH);
+    out[25] = osrs_clamp_unit((float)item->ranged_strength / STAT_NORM_STRENGTH);
+    out[26] = osrs_clamp_unit((float)item->magic_damage / STAT_NORM_MAGIC_DMG);
+    out[27] = osrs_clamp_unit((float)item->prayer / STAT_NORM_PRAYER);
     out[28] = (effects & (OSRS_ITEM_EFFECT_LIGHTBEARER | OSRS_ITEM_EFFECT_RECOIL_RING)) ? 1.0f : 0.0f;
     out[29] = (effects & OSRS_ITEM_EFFECT_VIRTUS_PIECE) ? 1.0f : 0.0f;
     out[30] = (effects & (OSRS_ITEM_EFFECT_DHAROK_PIECE | OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR)) ? 1.0f : 0.0f;
@@ -456,26 +457,26 @@ static void pvp_write_item_policy_features(
     if (gear_slot >= 0 && gear_slot < NUM_GEAR_SLOTS)
         out[33 + gear_slot] = 1.0f;
 
-    out[44] = (float)item->attack_stab / STAT_NORM_ATTACK;
-    out[45] = (float)item->attack_slash / STAT_NORM_ATTACK;
-    out[46] = (float)item->attack_crush / STAT_NORM_ATTACK;
-    out[47] = (float)item->defence_stab / STAT_NORM_DEFENCE;
-    out[48] = (float)item->defence_slash / STAT_NORM_DEFENCE;
-    out[49] = (float)item->defence_crush / STAT_NORM_DEFENCE;
+    out[44] = osrs_clamp_unit((float)item->attack_stab / STAT_NORM_ATTACK);
+    out[45] = osrs_clamp_unit((float)item->attack_slash / STAT_NORM_ATTACK);
+    out[46] = osrs_clamp_unit((float)item->attack_crush / STAT_NORM_ATTACK);
+    out[47] = osrs_clamp_unit((float)item->defence_stab / STAT_NORM_DEFENCE);
+    out[48] = osrs_clamp_unit((float)item->defence_slash / STAT_NORM_DEFENCE);
+    out[49] = osrs_clamp_unit((float)item->defence_crush / STAT_NORM_DEFENCE);
 
     if (current != NULL && post_equip != NULL) {
-        out[50] = pvp_gear_melee_attack_score(post_equip)
-            - pvp_gear_melee_attack_score(current);
-        out[51] = (float)(post_equip->ranged_attack - current->ranged_attack) /
-            STAT_NORM_ATTACK;
-        out[52] = (float)(post_equip->magic_attack - current->magic_attack) /
-            STAT_NORM_ATTACK;
-        out[53] = pvp_gear_melee_def_score(post_equip)
-            - pvp_gear_melee_def_score(current);
-        out[54] = (float)(post_equip->ranged_defence - current->ranged_defence) /
-            STAT_NORM_DEFENCE;
-        out[55] = (float)(post_equip->magic_defence - current->magic_defence) /
-            STAT_NORM_DEFENCE;
+        out[50] = osrs_clamp_unit(pvp_gear_melee_attack_score(post_equip)
+            - pvp_gear_melee_attack_score(current));
+        out[51] = osrs_clamp_unit((float)(post_equip->ranged_attack - current->ranged_attack) /
+            STAT_NORM_ATTACK);
+        out[52] = osrs_clamp_unit((float)(post_equip->magic_attack - current->magic_attack) /
+            STAT_NORM_ATTACK);
+        out[53] = osrs_clamp_unit(pvp_gear_melee_def_score(post_equip)
+            - pvp_gear_melee_def_score(current));
+        out[54] = osrs_clamp_unit((float)(post_equip->ranged_defence - current->ranged_defence) /
+            STAT_NORM_DEFENCE);
+        out[55] = osrs_clamp_unit((float)(post_equip->magic_defence - current->magic_defence) /
+            STAT_NORM_DEFENCE);
     }
 }
 
@@ -507,6 +508,8 @@ static void pvp_init_item_obs_templates(void) {
 
                 float target_stats[NUM_ITEM_STATS];
                 get_item_stats_normalized(item_idx, target_stats);
+                for (int stat_idx = 0; stat_idx < NUM_ITEM_STATS; stat_idx++)
+                    target_stats[stat_idx] = osrs_clamp_unit(target_stats[stat_idx]);
                 memcpy(
                     PVP_TARGET_ITEM_STAT_TEMPLATES[i],
                     target_stats,
@@ -521,7 +524,7 @@ static void pvp_init_item_obs_templates(void) {
 static void pvp_write_item_policy_features_cached(
     uint8_t item_idx,
     int physical_inventory_slot,
-    int can_equip,
+    int can_click,
     const float* post_equip_deltas,
     float* out
 ) {
@@ -531,13 +534,57 @@ static void pvp_write_item_policy_features_cached(
         OSRS_ITEM_FEATURE_DIM * sizeof(float));
     if (item_idx >= NUM_ITEMS) return;
 
-    out[31] = can_equip ? 1.0f : 0.0f;
+    out[31] = can_click ? 1.0f : 0.0f;
     out[32] = physical_inventory_slot >= 0
         ? (float)(physical_inventory_slot + 1) / (float)OSRS_INVENTORY_SIZE
         : 0.0f;
 
     if (post_equip_deltas != NULL) {
-        memcpy(out + 50, post_equip_deltas, 6 * sizeof(float));
+        for (int i = 0; i < 6; i++)
+            out[50 + i] = osrs_clamp_unit(post_equip_deltas[i]);
+    }
+}
+
+static void pvp_write_supply_policy_features(
+    OsrsInventorySlotView cell,
+    int physical_inventory_slot,
+    int can_click,
+    float* out
+) {
+    for (int i = 0; i < OSRS_ITEM_FEATURE_DIM; i++) out[i] = 0.0f;
+    if (cell.kind == OSRS_INVENTORY_SLOT_EMPTY) return;
+
+    out[0] = 1.0f;
+    out[31] = can_click ? 1.0f : 0.0f;
+    out[32] = physical_inventory_slot >= 0
+        ? (float)(physical_inventory_slot + 1) / (float)OSRS_INVENTORY_SIZE
+        : 0.0f;
+    out[56] = 1.0f;
+    out[63] = osrs_clamp_unit((float)cell.doses / 4.0f);
+
+    switch (cell.kind) {
+        case OSRS_INVENTORY_SLOT_FOOD:
+            out[57] = 1.0f;
+            out[63] = osrs_clamp_unit(20.0f / 99.0f);
+            return;
+        case OSRS_INVENTORY_SLOT_KARAMBWAN:
+            out[58] = 1.0f;
+            out[63] = osrs_clamp_unit(18.0f / 99.0f);
+            return;
+        case OSRS_INVENTORY_SLOT_BREW:
+            out[59] = 1.0f;
+            return;
+        case OSRS_INVENTORY_SLOT_RESTORE:
+            out[60] = 1.0f;
+            return;
+        case OSRS_INVENTORY_SLOT_COMBAT_POTION:
+            out[61] = 1.0f;
+            return;
+        case OSRS_INVENTORY_SLOT_RANGED_POTION:
+            out[62] = 1.0f;
+            return;
+        default:
+            return;
     }
 }
 
@@ -593,8 +640,10 @@ static void pvp_init_item_affordance_meta(void) {
 }
 
 typedef struct {
+    OsrsInventoryView view;
+    int can_click[OSRS_INVENTORY_SIZE];
     int can_equip[OSRS_INVENTORY_SIZE];
-    unsigned char equip_click_mask[EQUIP_CLICK_DIM];
+    unsigned char inventory_click_mask[INVENTORY_CLICK_DIM];
     int gear_slot[OSRS_INVENTORY_SIZE];
     int is_weapon[OSRS_INVENTORY_SIZE];
     int has_equippable_affordable_spec_weapon;
@@ -681,18 +730,18 @@ static void pvp_write_post_equip_bonus_deltas(
     const GearBonuses* post_equip,
     float out[6]
 ) {
-    out[0] = pvp_gear_melee_attack_score(post_equip)
-        - pvp_gear_melee_attack_score(current);
-    out[1] = (float)(post_equip->ranged_attack - current->ranged_attack) /
-        STAT_NORM_ATTACK;
-    out[2] = (float)(post_equip->magic_attack - current->magic_attack) /
-        STAT_NORM_ATTACK;
-    out[3] = pvp_gear_melee_def_score(post_equip)
-        - pvp_gear_melee_def_score(current);
-    out[4] = (float)(post_equip->ranged_defence - current->ranged_defence) /
-        STAT_NORM_DEFENCE;
-    out[5] = (float)(post_equip->magic_defence - current->magic_defence) /
-        STAT_NORM_DEFENCE;
+    out[0] = osrs_clamp_unit(pvp_gear_melee_attack_score(post_equip)
+        - pvp_gear_melee_attack_score(current));
+    out[1] = osrs_clamp_unit((float)(post_equip->ranged_attack - current->ranged_attack) /
+        STAT_NORM_ATTACK);
+    out[2] = osrs_clamp_unit((float)(post_equip->magic_attack - current->magic_attack) /
+        STAT_NORM_ATTACK);
+    out[3] = osrs_clamp_unit(pvp_gear_melee_def_score(post_equip)
+        - pvp_gear_melee_def_score(current));
+    out[4] = osrs_clamp_unit((float)(post_equip->ranged_defence - current->ranged_defence) /
+        STAT_NORM_DEFENCE);
+    out[5] = osrs_clamp_unit((float)(post_equip->magic_defence - current->magic_defence) /
+        STAT_NORM_DEFENCE);
 }
 
 static inline int pvp_can_equip_inventory_slot_cached(
@@ -725,21 +774,58 @@ static void pvp_collect_inventory_affordances(
     PvpInventoryAffordances* out
 ) {
     pvp_init_item_affordance_meta();
+    osrs_inventory_view_build(attacker, &out->view);
     out->has_equippable_affordable_spec_weapon = 0;
-    out->equip_click_mask[0] = 1;
+    out->inventory_click_mask[0] = 1;
     EquipmentBonuses current_bonuses;
     osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
     GearBonuses current_gear = osrs_gear_bonuses_from_equipment_bonuses(&current_bonuses);
     int free_slots = osrs_player_inventory_free_slots(attacker);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint8_t item_idx = attacker->inventory[slot];
+        OsrsInventorySlotView cell = out->view.slots[slot];
+        uint8_t item_idx = cell.item_idx;
         const PvpItemAffordanceMeta* meta =
             &PVP_ITEM_AFFORDANCE_META[pvp_item_affordance_meta_index(item_idx)];
         out->gear_slot[slot] = meta->gear_slot;
         out->is_weapon[slot] = meta->is_weapon;
-        out->can_equip[slot] = pvp_can_equip_inventory_slot_cached(
-            attacker, item_idx, out->gear_slot[slot], meta->is_two_handed, free_slots);
-        out->equip_click_mask[slot + 1] = out->can_equip[slot] ? 1 : 0;
+        out->can_equip[slot] = cell.kind == OSRS_INVENTORY_SLOT_EQUIPMENT &&
+            pvp_can_equip_inventory_slot_cached(
+                attacker, item_idx, out->gear_slot[slot], meta->is_two_handed, free_slots);
+        switch (cell.kind) {
+            case OSRS_INVENTORY_SLOT_EQUIPMENT:
+                out->can_click[slot] = out->can_equip[slot];
+                break;
+            case OSRS_INVENTORY_SLOT_FOOD:
+                out->can_click[slot] = can_eat_food(attacker);
+                break;
+            case OSRS_INVENTORY_SLOT_KARAMBWAN:
+                out->can_click[slot] = can_eat_karambwan(attacker);
+                break;
+            case OSRS_INVENTORY_SLOT_BREW:
+                out->can_click[slot] =
+                    can_use_potion(attacker, POTION_BREW) &&
+                    can_use_brew_boost(attacker);
+                break;
+            case OSRS_INVENTORY_SLOT_RESTORE:
+                out->can_click[slot] =
+                    can_use_potion(attacker, POTION_RESTORE) &&
+                    can_restore_stats(attacker);
+                break;
+            case OSRS_INVENTORY_SLOT_COMBAT_POTION:
+                out->can_click[slot] =
+                    can_use_potion(attacker, POTION_COMBAT) &&
+                    can_boost_combat_skills(attacker);
+                break;
+            case OSRS_INVENTORY_SLOT_RANGED_POTION:
+                out->can_click[slot] =
+                    can_use_potion(attacker, POTION_RANGED) &&
+                    can_boost_ranged(attacker);
+                break;
+            default:
+                out->can_click[slot] = 0;
+                break;
+        }
+        out->inventory_click_mask[slot + 1] = out->can_click[slot] ? 1 : 0;
         out->has_post_equip_deltas[slot] = 0;
         if (!out->can_equip[slot]) {
             continue;
@@ -763,18 +849,28 @@ static void pvp_write_inventory_policy_observations(
     const PvpInventoryAffordances* affordances,
     float* obs
 ) {
+    (void)p;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         float* row = obs + PVP_INVENTORY_OBS_OFFSET + slot * OSRS_ITEM_FEATURE_DIM;
+        OsrsInventorySlotView cell = affordances->view.slots[slot];
         const float* post_equip_deltas = NULL;
         if (affordances->has_post_equip_deltas[slot]) {
             post_equip_deltas = affordances->post_equip_deltas[slot];
         }
-        pvp_write_item_policy_features_cached(
-            p->inventory[slot],
-            slot,
-            affordances->can_equip[slot],
-            post_equip_deltas,
-            row);
+        if (cell.kind == OSRS_INVENTORY_SLOT_EQUIPMENT) {
+            pvp_write_item_policy_features_cached(
+                cell.item_idx,
+                slot,
+                affordances->can_click[slot],
+                post_equip_deltas,
+                row);
+        } else {
+            pvp_write_supply_policy_features(
+                cell,
+                slot,
+                affordances->can_click[slot],
+                row);
+        }
     }
 }
 
@@ -867,7 +963,9 @@ static int pvp_attack_head_reachable_after_equip(
     if (!affordances->can_equip[inventory_slot]) return 0;
     if (!affordances->is_weapon[inventory_slot]) return 0;
     return pvp_attack_head_reachable_for_weapon_item(
-        cmap, attacker, target, attacker->inventory[inventory_slot], can_move_now);
+        cmap, attacker, target,
+        affordances->view.slots[inventory_slot].item_idx,
+        can_move_now);
 }
 
 static int pvp_attack_head_reachable_after_any_weapon_equip(
@@ -1285,9 +1383,9 @@ static void compute_action_masks_with_inventory_affordances(
     memset(mask, 0, ACTION_MASK_SIZE);
     int offset = 0;
 
-    for (int h = 0; h < PVP_EQUIP_CLICKS_PER_TICK; h++) {
-        memcpy(mask + offset, affordances->equip_click_mask, EQUIP_CLICK_DIM);
-        offset += EQUIP_CLICK_DIM;
+    for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
+        memcpy(mask + offset, affordances->inventory_click_mask, INVENTORY_CLICK_DIM);
+        offset += INVENTORY_CLICK_DIM;
     }
 
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
@@ -1349,21 +1447,6 @@ static void compute_action_masks_with_inventory_affordances(
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE]      = has_prayer && !env->is_lms;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] = has_prayer && !env->is_lms;
     offset += OVERHEAD_DIM;
-
-    mask[offset + FOOD_NONE] = 1;
-    mask[offset + FOOD_EAT] = can_eat_food(p);
-    offset += FOOD_DIM;
-
-    mask[offset + POTION_NONE] = 1;
-    mask[offset + POTION_BREW] = can_use_potion(p, 1) && can_use_brew_boost(p);
-    mask[offset + POTION_RESTORE] = can_use_potion(p, 2) && can_restore_stats(p);
-    mask[offset + POTION_COMBAT] = can_use_potion(p, 3) && can_boost_combat_skills(p);
-    mask[offset + POTION_RANGED] = can_use_potion(p, 4) && can_boost_ranged(p);
-    offset += POTION_DIM;
-
-    mask[offset + KARAM_NONE] = 1;
-    mask[offset + KARAM_EAT] = can_eat_karambwan(p);
-    offset += KARAMBWAN_DIM;
 
     mask[offset + VENG_NONE] = 1;
     mask[offset + VENG_CAST] = !env->is_lms && p->is_lunar_spellbook && !p->veng_active &&

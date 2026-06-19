@@ -12,6 +12,7 @@
 #include "osrs_human_input_types.h"
 #include "osrs_types.h"
 #include "osrs_items.h"
+#include "osrs_inventory_clicks.h"
 
 typedef struct {
     int has_walk;
@@ -163,6 +164,81 @@ static inline OsrsHumanCommandFrame osrs_human_command_frame_from_input(
 
     osrs_human_command_frame_apply_legacy_pending(&frame, hi);
     return frame;
+}
+
+static inline void osrs_human_queue_inventory_command_clicks(
+    const HumanInput* hi,
+    const Player* agent,
+    int* click_heads,
+    int click_head_count
+) {
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* cmd = &hi->commands.items[i];
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                osrs_inventory_click_queue_slot(click_heads, click_head_count,
+                    cmd->inventory_slot);
+                break;
+            case HUMAN_COMMAND_EAT:
+                if (cmd->inventory_slot >= 0) {
+                    osrs_inventory_click_queue_slot(click_heads, click_head_count,
+                        cmd->inventory_slot);
+                } else {
+                    OsrsInventorySlotKind kind = cmd->food == 1
+                        ? OSRS_INVENTORY_SLOT_KARAMBWAN
+                        : OSRS_INVENTORY_SLOT_FOOD;
+                    osrs_inventory_click_queue_kind(agent, click_heads, click_head_count, kind);
+                }
+                break;
+            case HUMAN_COMMAND_DRINK:
+                if (cmd->inventory_slot >= 0) {
+                    osrs_inventory_click_queue_slot(click_heads, click_head_count,
+                        cmd->inventory_slot);
+                } else {
+                    osrs_inventory_click_queue_kind(
+                        agent,
+                        click_heads,
+                        click_head_count,
+                        osrs_inventory_slot_kind_for_potion_action(cmd->potion));
+                }
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+static inline OsrsInventorySlotKind osrs_human_inventory_command_slot_kind(
+    const Player* agent,
+    const HumanCommand* cmd
+) {
+    if (cmd->inventory_slot >= 0) {
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+            case HUMAN_COMMAND_EAT:
+            case HUMAN_COMMAND_DRINK:
+                break;
+            default:
+                return OSRS_INVENTORY_SLOT_EMPTY;
+        }
+
+        OsrsInventoryView view;
+        osrs_inventory_view_build(agent, &view);
+        int slot = cmd->inventory_slot;
+        if (slot < 0 || slot >= OSRS_INVENTORY_SIZE) return OSRS_INVENTORY_SLOT_EMPTY;
+        return view.slots[slot].kind;
+    }
+
+    switch (cmd->kind) {
+        case HUMAN_COMMAND_EAT:
+            return cmd->food == 1
+                ? OSRS_INVENTORY_SLOT_KARAMBWAN
+                : OSRS_INVENTORY_SLOT_FOOD;
+        case HUMAN_COMMAND_DRINK:
+            return osrs_inventory_slot_kind_for_potion_action(cmd->potion);
+        default:
+            return OSRS_INVENTORY_SLOT_EMPTY;
+    }
 }
 
 #endif

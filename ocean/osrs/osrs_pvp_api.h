@@ -547,6 +547,8 @@ void pvp_init(OsrsEnv* env) {
     pvp_terminal_presentation_clear(env);
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
     env->pvp_runtime.start_mode = PVP_START_RANDOMIZED;
+    env->pvp_runtime.scripted_prayer_reaction_mode =
+        PVP_SCRIPTED_PRAYER_REACTION_HUMANIZED;
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
         env->pvp_runtime.walk_dest_y[i] = -1;
