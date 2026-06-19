@@ -503,15 +503,6 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     move_ctx.sol_clamp_active = sol_clamp_active;
 
     col_forecast_local_stamp_npc(npc_flags, npc, 0);
-    uint32_t rng = s->rng_state;
-    int stepped_under = encounter_npc_step_out_from_under(
-        &npc->x, &npc->y, npc->size, action->land_x, action->land_y,
-        col_forecast_local_npc_blocked_ignore_player, &move_ctx, NULL, &rng);
-    if (stepped_under == ENCOUNTER_NPC_UNDER_PLAYER_MOVED) {
-        col_forecast_local_stamp_npc(npc_flags, npc, 1);
-        return result;
-    }
-
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
@@ -531,26 +522,36 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             return result;
         }
     }
+    if (npc->attack_timer > npc->attack_speed) {
+        col_forecast_local_stamp_npc(npc_flags, npc, 1);
+        return result;
+    }
 
     int tx = action->land_x;
     int ty = action->land_y;
-    int stop_at_melee = npc->attack_range == 1 ? 1 : 0;
+    EncounterNpcStepPolicy step_policy = npc->attack_range > 1
+        ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET
+        : ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+    encounter_npc_blocked_fn blocked = col_forecast_local_npc_blocked_ignore_player;
     int steps = 1;
+    uint32_t rng = s->rng_state;
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
         tx = action->land_x + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][0];
         ty = action->land_y + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][1];
-        stop_at_melee = 0;
+        step_policy = ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
+        blocked = col_forecast_local_npc_blocked;
         steps = COLO_WARBAND_TILES_PER_TICK;
     }
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_SOL) {
-        stop_at_melee = 1;
+        step_policy = ENCOUNTER_NPC_STEP_STOP_AT_MELEE;
+        blocked = col_forecast_local_npc_blocked;
         steps = 1;
     }
 
     for (int step = 0; step < steps; step++) {
-        if (!encounter_npc_step_toward(
+        if (!encounter_npc_step_toward_policy(
                 &npc->x, &npc->y, tx, ty, npc->size, 1,
-                stop_at_melee, col_forecast_local_npc_blocked, &move_ctx)) {
+                step_policy, blocked, &move_ctx, NULL, &rng)) {
             break;
         }
     }

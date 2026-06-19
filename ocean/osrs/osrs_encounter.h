@@ -28,7 +28,7 @@
  *
  *   NPC pathfinding:
  *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
- *     encounter_npc_step_toward()      OSRS size-aware chase step
+ *     encounter_npc_step_toward_policy() OSRS size-aware chase step
  *
  *   damage:
  *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
@@ -59,6 +59,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <assert.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -1588,9 +1589,26 @@ static inline int encounter_chase_attack_target(
 typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 typedef int (*encounter_npc_overlap_hold_fn)(void* ctx);
 
+typedef enum {
+    ENCOUNTER_NPC_STEP_TRAVEL_TARGET = 0,
+    ENCOUNTER_NPC_STEP_STOP_AT_MELEE = 1,
+    ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET = 2,
+    ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE = 3,
+} EncounterNpcStepPolicy;
+
 #define ENCOUNTER_NPC_UNDER_PLAYER_NONE  0
 #define ENCOUNTER_NPC_UNDER_PLAYER_MOVED 1
 #define ENCOUNTER_NPC_UNDER_PLAYER_HELD  2
+
+static inline int encounter_npc_footprint_overlaps_target(
+    int npc_x, int npc_y, int npc_size,
+    int target_x, int target_y, int target_size
+) {
+    return !(npc_x >= target_x + target_size ||
+             npc_x + npc_size <= target_x ||
+             npc_y >= target_y + target_size ||
+             npc_y + npc_size <= target_y);
+}
 
 /* when an NPC overlaps the player (AABB overlap), it shuffles one tile in a
    random cardinal direction. matches osrs-sdk Mob.ts:109-153 behavior:
@@ -1604,10 +1622,9 @@ static inline int encounter_npc_step_out_from_under(
     encounter_npc_overlap_hold_fn hold_overlap,
     uint32_t* rng
 ) {
-    /* AABB overlap check (handles multi-tile NPCs) */
-    int overlap = !(*npc_x >= player_x + 1 || *npc_x + npc_size <= player_x ||
-                    *npc_y >= player_y + 1 || *npc_y + npc_size <= player_y);
-    if (!overlap) return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
+    if (!encounter_npc_footprint_overlaps_target(
+            *npc_x, *npc_y, npc_size, player_x, player_y, 1))
+        return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
     if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
 
     /* 4 cardinal directions: +x, -x, +y, -y */
@@ -1693,15 +1710,6 @@ static inline int encounter_npc_try_step(
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
     if (dx == 0 && dy == 0) return 0;
-    if (size <= 1) {
-        if (!is_blocked(ctx, *x + dx, *y + dy, 1)) {
-            *x += dx;
-            *y += dy;
-            return 1;
-        }
-        return 0;
-    }
-
     int x_clear = encounter_npc_x_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
     int y_clear = encounter_npc_y_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
     if (x_clear && y_clear) {
@@ -1713,7 +1721,7 @@ static inline int encounter_npc_try_step(
 }
 
 /** OSRS-shaped NPC step toward target. tries diagonal first, then x-only,
-    then y-only when RuneLite's travel rule allows the y fallback.
+    then y-only when x-only fails.
 
     for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
     through, not just the destination footprint. for diagonal moves, both the
@@ -1721,17 +1729,36 @@ static inline int encounter_npc_try_step(
     ref: RuneLite WorldArea.calculateNextTravellingPoint and osrs-sdk
     Mob.ts:160-270 movementStep + getX/YMovementTiles.
 
-    stop_at_melee_distance matches RuneLite WorldArea.calculateNextTravellingPoint:
+    ENCOUNTER_NPC_STEP_STOP_AT_MELEE matches RuneLite WorldArea.calculateNextTravellingPoint:
     overlap returns no normal step, cardinal melee contact returns no step,
     and diagonal contact tries x-only.
 
     returns 1 if moved, 0 if blocked or already at target. */
-static inline int encounter_npc_step_toward(
+static inline int encounter_npc_step_toward_policy(
     int* x, int* y, int tx, int ty, int npc_size,
-    int target_size, int stop_at_melee_distance,
-    encounter_npc_blocked_fn is_blocked, void* ctx
+    int target_size, EncounterNpcStepPolicy policy,
+    encounter_npc_blocked_fn is_blocked, void* ctx,
+    encounter_npc_overlap_hold_fn hold_overlap,
+    uint32_t* rng
 ) {
     int size = npc_size;
+    int is_aggro_policy =
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET ||
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+    int stops_at_melee =
+        policy == ENCOUNTER_NPC_STEP_STOP_AT_MELEE ||
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+
+    if (is_aggro_policy &&
+            encounter_npc_footprint_overlaps_target(
+                *x, *y, size, tx, ty, target_size)) {
+        assert(target_size == 1);
+        assert(rng);
+        int stepped = encounter_npc_step_out_from_under(
+            x, y, size, tx, ty, is_blocked, ctx, hold_overlap, rng);
+        return stepped == ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
+    }
+
     int x_gap = encounter_npc_axis_gap(*x, size, tx, target_size);
     int y_gap = encounter_npc_axis_gap(*y, size, ty, target_size);
     int raw_dx = tx - *x;
@@ -1740,11 +1767,18 @@ static inline int encounter_npc_step_toward(
     int dy = (raw_dy > 0) - (raw_dy < 0);
 
     if (x_gap == 0 && y_gap == 0) return 0;
-    if (stop_at_melee_distance && x_gap + y_gap == 1) return 0;
+    if (stops_at_melee && x_gap + y_gap == 1) return 0;
     if (dx == 0 && dy == 0) return 0;
 
-    if (stop_at_melee_distance && x_gap == 1 && y_gap == 1) {
+    if (stops_at_melee && x_gap == 1 && y_gap == 1) {
         return encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx);
+    }
+
+    if (is_aggro_policy &&
+            dx != 0 && dy != 0 &&
+            encounter_npc_footprint_overlaps_target(
+                *x + dx, *y + dy, size, tx, ty, target_size)) {
+        dy = 0;
     }
 
     if (dx != 0 && dy != 0 &&
@@ -1752,9 +1786,7 @@ static inline int encounter_npc_step_toward(
         return 1;
     if (dx != 0 && encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx))
         return 1;
-    int max_abs_delta = abs(raw_dx) > abs(raw_dy) ? abs(raw_dx) : abs(raw_dy);
-    if (dy != 0 && max_abs_delta > 1 &&
-        encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
+    if (dy != 0 && encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
         return 1;
     return 0;
 }

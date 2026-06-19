@@ -86,6 +86,23 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
 
 typedef struct {
     ColosseumState* s;
+    int self_idx;
+} ColoNpcMoveCtx;
+
+static int col_npc_move_blocked_ignore_player(void* ctx, int x, int y, int size) {
+    ColoNpcMoveCtx* move_ctx = (ColoNpcMoveCtx*)ctx;
+    return col_npc_blocked_ignore_player(move_ctx->s, x, y, size);
+}
+
+static int col_npc_move_overlap_hold(void* ctx) {
+    ColoNpcMoveCtx* move_ctx = (ColoNpcMoveCtx*)ctx;
+    ColosseumState* s = move_ctx->s;
+    return s->player_last_interaction_age == 0 &&
+           s->player_last_interaction_target_slot == move_ctx->self_idx;
+}
+
+typedef struct {
+    ColosseumState* s;
     int size;
     uint16_t gen;
 } ColoNpcPathCtx;
@@ -272,14 +289,7 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     npc->target_y = ty;
 
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
-    int stepped_under = encounter_npc_step_out_from_under(
-        &npc->x, &npc->y, size, tx, ty,
-        col_npc_blocked_ignore_player, s, NULL, &s->rng_state);
-    if (stepped_under == ENCOUNTER_NPC_UNDER_PLAYER_MOVED) {
-        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
-        npc->moved_this_tick = 1;
-        return;
-    }
+    ColoNpcMoveCtx move_ctx = { s, idx };
 
     int is_ranged = st->attack_range > 1;
     if (is_ranged) {
@@ -290,6 +300,11 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
             return;  /* in range with LoS: hold position */
         }
     }
+    if (npc->attack_timer > st->attack_speed) {
+        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
+        npc->moved_this_tick = 0;
+        return;
+    }
 
     int moved;
     if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG)) {
@@ -299,8 +314,13 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
         if (encounter_dist_to_npc(tx, ty, npc->x, npc->y, size) > 1)
             moved = col_npc_path_step(s, &npc->x, &npc->y, size, tx - 1, ty - 1);
     } else {
-        moved = encounter_npc_step_toward(
-            &npc->x, &npc->y, tx, ty, size, 1, is_ranged ? 0 : 1, col_npc_blocked, s);
+        EncounterNpcStepPolicy step_policy = is_ranged
+            ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET
+            : ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+        moved = encounter_npc_step_toward_policy(
+            &npc->x, &npc->y, tx, ty, size, 1, step_policy,
+            col_npc_move_blocked_ignore_player, &move_ctx,
+            col_npc_move_overlap_hold, &s->rng_state);
     }
     col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
     npc->moved_this_tick = moved ? 1 : 0;

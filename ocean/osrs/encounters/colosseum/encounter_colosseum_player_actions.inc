@@ -1157,6 +1157,9 @@ static void col_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
+    if (s->player_last_interaction_age == 0)
+        s->player_last_interaction_age = 1;
+
     /* spec energy regen runs every tick, gaps included (OSRS regen never pauses) */
     encounter_tick_spec_regen(&s->player);
 
@@ -1274,6 +1277,10 @@ static void col_tick_player_ctx(
         },
     };
     OsrsPlayerStepResult step_result = osrs_encounter_player_step(&step_input);
+    if (has_new_target && step_result.target_slot == new_target_slot) {
+        s->player_last_interaction_target_slot = new_target_slot;
+        s->player_last_interaction_age = 0;
+    }
     if (ctx->config.action_debug_log) {
         fprintf(stderr,
             "colo_action tick=%d movement move_kind=%d move_action=%d "

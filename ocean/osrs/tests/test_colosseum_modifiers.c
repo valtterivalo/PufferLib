@@ -5070,6 +5070,17 @@ static void test_colosseum_npc_movement_player_tile_guards(void) {
     s.player.x = 16;
     s.player.y = 16;
     col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 16, 16);
+    s.player_last_interaction_target_slot = 0;
+    s.player_last_interaction_age = 0;
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("overlapped just-clicked ranged NPC holds current tile",
+        test_npc_covers_player(&s, &s.npcs[0]) && s.npcs[0].moved_this_tick == 0);
+
+    geo_clear_npcs(&s);
+    s.player.x = 16;
+    s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
     col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 7, 16);
     int shaman_x = s.npcs[0].x;
     int shaman_y = s.npcs[0].y;
@@ -5080,6 +5091,54 @@ static void test_colosseum_npc_movement_player_tile_guards(void) {
             s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) <=
                 COLO_NPC_STATS[COLO_SERPENT_SHAMAN].attack_range &&
         col_npc_has_los_to_player(&s, &s.npcs[0]));
+
+    geo_clear_npcs(&s);
+    s.player.x = 6;
+    s.player.y = 11;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 11);
+    shaman_x = s.npcs[0].x;
+    shaman_y = s.npcs[0].y;
+    CHECK("named regression start is range plus LoS",
+        encounter_dist_to_npc(s.player.x, s.player.y,
+            s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) <=
+                COLO_NPC_STATS[COLO_SERPENT_SHAMAN].attack_range &&
+        col_npc_has_los_to_player(&s, &s.npcs[0]));
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("ranged shaman range+LoS player one-step around pillar holds OSRS tile",
+        s.npcs[0].x == shaman_x && s.npcs[0].y == shaman_y &&
+        s.npcs[0].moved_this_tick == 0);
+    CHECK("ranged shaman never takes the over-closed player-adjacent tile",
+        encounter_dist_to_npc(s.player.x, s.player.y,
+            s.npcs[0].x, s.npcs[0].y, col_npc_effective_size(&s.npcs[0])) > 1);
+
+    geo_clear_npcs(&s);
+    s.player.x = 5;
+    s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 9);
+    col_npc_move_ctx(&s, &ctx, 0);
+    CHECK("LoS-broken shaman takes one SDK legal greedy step",
+        s.npcs[0].x == 12 && s.npcs[0].y == 9 &&
+        s.npcs[0].moved_this_tick == 1 &&
+        !test_npc_covers_player(&s, &s.npcs[0]));
+
+    const ColoNpcType large_types[3] = {
+        COLO_JAVELIN_COLOSSUS,
+        COLO_SHOCKWAVE_COLOSSUS,
+        COLO_MANTICORE,
+    };
+    for (int i = 0; i < 3; i++) {
+        geo_clear_npcs(&s);
+        s.player.x = 12;
+        s.player.y = 12;
+        col_rebuild_player_collision_flags(&s);
+        col_init_npc(&s, 0, large_types[i], 5, 5);
+        col_npc_move_ctx(&s, &ctx, 0);
+        CHECK("size-3 ranged NPC uses leading-edge clearance around pillar",
+            s.npcs[0].x == 6 && s.npcs[0].y == 5 &&
+            s.npcs[0].moved_this_tick == 1);
+    }
 
     geo_clear_npcs(&s);
     s.player.x = 18;

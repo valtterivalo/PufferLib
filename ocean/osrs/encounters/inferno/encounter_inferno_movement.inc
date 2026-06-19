@@ -248,12 +248,30 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
             return;
         }
     }
+    if (npc->attack_timer > stats->attack_speed) {
+        if (uses_collision_flag)
+            inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
+        return;
+    }
 
     int ox = npc->x, oy = npc->y;
     InfMoveCtx mc = { s, ctx, idx };
-    encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
-                              target_size, stats->attack_range == 1,
-                              inf_npc_blocked, &mc);
+    EncounterNpcStepPolicy step_policy;
+    encounter_npc_blocked_fn blocked;
+    if (target.is_player) {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET;
+        blocked = inf_npc_blocked_ignore_player;
+    } else {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
+        blocked = inf_npc_blocked;
+    }
+    encounter_npc_step_toward_policy(
+        &npc->x, &npc->y, tx, ty, npc->size, target_size,
+        step_policy, blocked, &mc, inf_npc_overlap_hold, &s->rng_state);
     if (npc->x != ox || npc->y != oy) {
         npc->moved_this_tick = 1;
         inf_invalidate_npc_los_cache(s, idx);

@@ -652,6 +652,19 @@ static int inf_forecast_local_npc_blocked(void* ctx, int x, int y, int size) {
     return inf_forecast_local_npc_flags_blocked(mc->npc_flags, x, y, size);
 }
 
+static int inf_forecast_local_npc_blocked_ignore_player(
+    void* ctx,
+    int x,
+    int y,
+    int size
+) {
+    InfForecastMoveCtx* mc = (InfForecastMoveCtx*)ctx;
+    if (inf_npc_environment_blocked_ctx(
+            (InfernoState*)mc->state, mc->ctx, x, y, size))
+        return 1;
+    return inf_forecast_local_npc_flags_blocked(mc->npc_flags, x, y, size);
+}
+
 static void inf_forecast_local_copy_npcs(
     const InfernoState* s,
     InfForecastNpcLocal npcs[INF_MAX_NPCS]
@@ -892,6 +905,11 @@ static void inf_forecast_local_move_npc(
             inf_forecast_local_stamp_npc(npc_flags, npc->x, npc->y, npc->size);
         return;
     }
+    if (npc->attack_timer > stats->attack_speed) {
+        if (uses_collision_flag)
+            inf_forecast_local_stamp_npc(npc_flags, npc->x, npc->y, npc->size);
+        return;
+    }
 
     InfForecastMoveCtx move_ctx = {
         .state = s,
@@ -900,10 +918,23 @@ static void inf_forecast_local_move_npc(
         .player_x = action->land_x,
         .player_y = action->land_y,
     };
-    encounter_npc_step_toward(
+    EncounterNpcStepPolicy step_policy;
+    encounter_npc_blocked_fn blocked;
+    if (target.is_player) {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET;
+        blocked = inf_forecast_local_npc_blocked_ignore_player;
+    } else {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
+        blocked = inf_forecast_local_npc_blocked;
+    }
+    uint32_t rng = s->rng_state;
+    encounter_npc_step_toward_policy(
         &npc->x, &npc->y, target.x, target.y, npc->size,
-        target.size, stats->attack_range == 1,
-        inf_forecast_local_npc_blocked, &move_ctx);
+        target.size, step_policy, blocked, &move_ctx, NULL, &rng);
     npc->los_to_player_cache = -1;
 
     if (uses_collision_flag)

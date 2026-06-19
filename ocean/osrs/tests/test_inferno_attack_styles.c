@@ -4252,6 +4252,54 @@ static void test_inferno_npc_travel_uses_sw_origin_around_all_pillars(void) {
         17, 23);
 }
 
+static void assert_inferno_jal_npc_uses_edge_clearance(
+    const char* label,
+    InfNPCType type,
+    int player_x,
+    int player_y,
+    int npc_x,
+    int npc_y,
+    int expected_x,
+    int expected_y
+) {
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, player_x, player_y);
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state.pillars[p].active = p == 0;
+        state.pillars[p].hp = p == 0 ? INF_PILLAR_HP : 0;
+    }
+    inf_rebuild_los(&state);
+    add_step_out_forecast_npc(&state, 0, type, npc_x, npc_y, 0);
+    inf_rebuild_entity_collision_flags(&state);
+    ASSERT_INT_EQ("starting Jal NPC has no LOS",
+        inf_npc_has_los(&state, 0), 0);
+
+    inf_npc_move(&state, 0);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s x", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].x, expected_x);
+    snprintf(msg, sizeof(msg), "%s y", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].y, expected_y);
+}
+
+static void test_inferno_jal_npcs_use_edge_clearance_at_pillars(void) {
+    printf("--- inferno Jal NPCs use edge clearance at pillars ---\n");
+
+    assert_inferno_jal_npc_uses_edge_clearance(
+        "JalXil south pillar corner",
+        INF_NPC_RANGER,
+        21, 16,
+        20, 20,
+        20, 19);
+    assert_inferno_jal_npc_uses_edge_clearance(
+        "JalZek south pillar corner",
+        INF_NPC_MAGER,
+        21, 20,
+        17, 16,
+        18, 16);
+}
+
 static void test_step_out_forecast_north_pillar_ranger_mager_order(void) {
     printf("--- step-out forecast north pillar ranger/mager order ---\n");
 
@@ -9728,6 +9776,7 @@ int main(void) {
     test_jad_melee_stays_instant_and_untelegraphed();
     test_step_out_forecast_matches_movement_head_destinations();
     test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
+    test_inferno_jal_npcs_use_edge_clearance_at_pillars();
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
     test_step_out_forecast_obs_can_be_disabled();

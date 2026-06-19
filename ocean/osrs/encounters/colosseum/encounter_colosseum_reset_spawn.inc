@@ -554,6 +554,8 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.prayer = PRAYER_NONE;
     s->player.offensive_prayer = OFFENSIVE_PRAYER_NONE;
     osrs_interaction_init(&s->interaction);
+    s->player_last_interaction_target_slot = -1;
+    s->player_last_interaction_age = 1;
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
     s->player.run_energy = 10000;

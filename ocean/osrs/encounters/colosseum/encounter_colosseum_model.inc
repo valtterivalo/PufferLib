@@ -1746,6 +1746,8 @@ typedef struct {
 
     /* player combat state */
     OsrsInteraction interaction;
+    int player_last_interaction_target_slot;
+    int player_last_interaction_age;
     ColoWeaponSet weapon_set;
     EncounterLoadoutStats loadout_stats_live;
     OsrsEquipmentEffectProfile effects_live;
