@@ -11,73 +11,74 @@
 \setlength{\parskip}{0.35em}
 \setlength{\parindent}{0pt}
 
-\title{\vspace{-1.2em}Training Through the Inferno: An Inspectable OSRS Boss-Fight Benchmark for RL\vspace{-0.4em}}
-\author{Anonymous Authors}
-\date{}
+\title{\vspace{-1.2em}Training Through the Inferno: An Inspectable OSRS Challenge Environment for RL\vspace{-0.4em}}
+\author{Valtteri Valo}
+\date{27th May 2025}
 
 \begin{document}
 \maketitle
 \vspace{-1.8em}
 
 \begin{abstract}
-Modern game RL benchmarks need fast training, inspectable failures, and enough simulator fidelity that policy mistakes mean something. We present an Old School RuneScape Inferno benchmark built in PufferLib 4. The Inferno is a 69-wave solo boss encounter with prayer switching, line-of-sight positioning, supplies, target priority, and a moving-shield final phase. These mechanics create long episodes, partial observability, sparse success, and failure modes that skilled players can read.
-
-The contribution is a benchmark design pattern: player-readable state, structured actions, strict masks, replayable failures, behavior-level logs, and high-throughput recurrent training. The current environment exposes 744 symbolic observation features and a 9-head action space with 89 total discrete choices. The rollout row appends one mask entry per choice, for 833 floats total. We use PufferLib 4's native recurrent RL stack to make large-agent, long-episode iteration practical. A compact recurrent checkpoint from the preceding compact Redemption action surface trained for 171.7M environment steps and reached 0.49 logged development win rate and 0.736 internal training score in the stored run summary. This run is development telemetry from an earlier compact action mapping, not a frozen-schema evaluation of the current 744-feature, 9-head, 89-choice surface. We use it only to show that this benchmark line can produce logged full clears and late-fight diagnostics.
+The Old School RuneScape Inferno is an hour-scale solo game task built for expert human players with years of game experience. A run spans 69 waves. The first 66 waves have fixed enemy compositions but randomized placements, so each run asks the player to solve a fresh spatial puzzle of where to stand, what to block with pillars, which target to kill first, and when to switch prayers or spend supplies while several threats act at once. The final waves turn into a boss sequence whose mechanics differ from the hour of content before it, ending in TzKal-Zuk, a last-wave encounter with its own movement, shield, healer, and target-priority rules. We present a C simulator and PufferLib 4 training environment for this task. The environment exposes 744 raw simulator-state features, a 9-head action space with 89 total discrete choices, strict action masks, replayable failures, behavior logs, and a renderer tied to the same state used for training. A recurrent PufferNet policy trained for 160.5M environment steps on a single 4090 GPU reaches a 39.8\% logged completion rate on full Inferno runs in under 13 minutes of training. In boss-focused training, it reaches win rates of over 95\% in less than two minutes of training. The result shows that high-throughput recurrent RL can iterate on a long-horizon, expert-level game task and keep failures readable to domain experts.
 \end{abstract}
 
 \section{Introduction and Contribution}
 
-The Old School RuneScape Inferno is a solo player-versus-monster challenge released in 2017. The player must survive 69 waves and defeat TzKal-Zuk to earn the infernal cape. The OSRS Wiki describes the activity as an encounter without restocking, with three pillars that block projectiles during the waves and a mandatory shield mechanic in the final fight \cite{osrs-inferno}. That readability makes the Inferno a useful game-RL benchmark. If the agent dies to a Jal-Zek, it may have missed a magic prayer. If a pillar falls, it likely ignored nibblers. If Zuk shield health drops, it failed movement, target priority, or healer timing.
 
-This paper is about benchmark construction. We do not wrap a game binary and report a leaderboard number. We build a simulator whose state, actions, masks, renderer, replay path, and logs form one contract. The same game facts used for training must be available when explaining watched behavior. If a policy looks wrong in replay, the logs and simulator should explain why.
 
-The benchmark fits RLVG along three axes. First, it is a game-derived task with long-horizon resource management and timing. Second, it supports behavioral evaluation: the benchmark exposes whether policy behavior matches player-readable task structure when scalar reward rises. Third, it depends on systems work. The environment became testable only when it could train, render, and replay fast enough to make debugging empirical.
+The Old School RuneScape Inferno is a solo PvM challenge released in 2017, at the time the most challenging content in the game by far and still intimidating today. For a reader outside OSRS, the Inferno is a long sequence of tactical puzzles under mechanical pressure. Each wave has a fixed enemy composition, but enemy placements vary between runs. A small spawn change can turn the same wave from a simple prayer-switching problem into a positioning puzzle around pillars, line of sight, target priority, and supply risk. The challenge gets harsher as it goes, and later waves combine more threats and punish earlier resource mistakes. After wave 66, the task changes shape into a boss sequence, ending with TzKal-Zuk, whose shield movement, healer control, target priority, and multi-tasking pressure play nothing like the waves before it.
 
-\section{Benchmark Surface}
+This paper is about environment construction. We do not wrap a game binary and report a leaderboard number. We build a simulator whose state, actions, masks, renderer, replay path, and logs form one contract. The same game facts used for training must be available when explaining watched behavior. If a policy looks wrong in replay, the logs and simulator should explain why, as plain domain expertise does not catch everything.
 
-The Inferno environment uses symbolic observations instead of pixels. The current surface has 744 base observation features and a 9-head action space with 89 total discrete choices. The rollout row appends one mask entry per choice, for 833 floats total. One environment step is one OSRS game tick, or 0.6 seconds. Episodes can run for thousands of ticks. The native environment writes fixed-size observations and masks into PufferLib rollout buffers for thousands of parallel agents.
+The practical question is whether a difficult player-readable game task can train fast enough for iteration while leaving policy failures visible to a human reviewer. The Inferno environment treats systems work, simulator fidelity, logs, and rendered replay as one because behavior bugs move across all four.
 
-The observation vector contains player health, prayer, supplies, wave phase, gear state, combat stats, target state, weapon range, NPC slots, pillar health, pending hits, pending Zuk healer area attacks, and short movement forecasts. Positions are normalized and mostly egocentric or arena-relative. Categories use one-hot structure or slot membership. The design rule is simple: expose player-relevant state, then log whether the policy acts on it.
+This places the environment near other game-derived RL tasks that use fast simulation to expose hard generalization or long-horizon behavior. Procgen uses procedurally generated games to measure sample efficiency and generalization, while NetHack combines fast simulation with sparse reward, stochasticity, exploration, and long-term planning \cite{procgen, nethack}.
 
-The action space is a structured interface over OSRS intent: movement, overhead prayer, target selection, gear switching, food, potion, spell, special attack, and offensive prayer. Targets use observation slots, not raw entity ids. The mask writer validates every action head and records zero-valid-head failures. Invalid actions are interface noise. The model should decide whether to run west, pray magic, tag a healer, cast barrage, or drink a restore. It should spend capacity on game decisions, not on learning that an absent NPC cannot be attacked.
+\begin{figure}[t]
+\centering
+\fbox{\includegraphics[width=0.93\linewidth]{figures/inferno_replay_wave69.jpg}}
+\caption{An Inferno wave 69 replay frame exposes the training contract visually, from tick timing and target labels through arena state and a player-familiar client UI.}
+\label{fig:replay}
+\end{figure}
+
+\section{Environment Surface}
+
+The Inferno environment uses simulator-state observations instead of pixels. The current surface has 744 raw state features and a 9-head action space with 89 total discrete choices. The rollout row appends one mask entry per choice, for 833 floats total. One environment step is one OSRS game tick, or 0.6 seconds, simulated as instantaneous. Episodes can run for thousands of ticks. The native environment writes fixed-size observations and masks into PufferLib rollout buffers for thousands of parallel agents.
+
+The observation vector contains player health, prayer, supplies, wave phase, gear state, combat stats, target state, weapon range, NPC slots, pillar health, pending hits, pending Zuk healer area attacks, and short movement forecasts. Positions are normalized and mostly egocentric or arena-relative. Categories use one-hot structure or slot membership. The design rule is to expose player-relevant state, then log whether the policy acts on it.
+
+The action space is a structured interface over OSRS intent, with movement, overhead prayer, target selection, gear switching, food, potion, spell, special attack, and offensive prayer. Targets point to observation slots, which keeps the action interface stable when internal entity ids change. The mask writer validates every action head and records zero-valid-head failures. The model should decide whether to run west, pray magic, tag a healer, cast barrage, or drink a restore. Invalid actions should disappear before they reach the policy, so model capacity goes into the challenge itself.
 
 \begin{table}[H]
 \centering
 \small
 \begin{tabular}{lll}
 \toprule
-Component & Design choice & Why it matters \\
+Component & Design choice & Reason \\
 \midrule
-Observation & 744 symbolic features & Exposes player-relevant state \\
+Observation & 744 raw state features & Exposes game state \\
 Action & 9 structured heads & Matches game intent \\
 Masks & One entry per choice & Removes invalid client actions \\
 Debug & Renderer, replay, logs & Makes failures inspectable \\
 Training & 4096 parallel agents & Keeps long episodes cheap \\
-Evaluation & Normal-start summary & Separates full-run progress \\
 \bottomrule
 \end{tabular}
-\caption{The benchmark surface is designed so training, replay, masks, and logs refer to the same game facts.}
+\caption{The environment keeps training and debug facts in one contract.}
 \label{tab:surface}
 \end{table}
 
-Reward and score are separate. Reward can be shaped, swept, and replaced. Score is intended to survive those edits. In this environment, reward paid for credit assignment through damage, healer tags, shield preservation, late-wave pressure, and final-phase priorities. The logged score in Table \ref{tab:result} is also separate from the archive \texttt{progress\_score} used for Zuk-state selection. For full-start runs, it is win rate plus half-weighted wave progress on losses: $\mathrm{winrate} + (1-\mathrm{winrate}) \cdot \mathrm{mean\_wave}/69 \cdot 0.5$. This explains why a 0.489635 win rate and 66.720871 mean wave produce a 0.736389 score.
-
-\begin{figure}[H]
-\centering
-\fbox{\includegraphics[width=0.93\linewidth]{figures/inferno_replay_wave69.jpg}}
-\caption{An Inferno wave 69 replay frame. The same contract elements used for training and debugging are visible: tick, target label, arena state, player and Zuk positions, HP and prayer counters, minimap, inventory, and action tabs.}
-\label{fig:replay}
-\end{figure}
+Reward and score are separate. Reward can change during development. Score is intended to survive those edits. In this environment, reward is assigned through damage, healer tags, shield preservation, late-wave pressure, and final-phase priorities. Penalties, or negative rewards are not assigned. The training objective score in Table \ref{tab:result} is also separate from the archive \texttt{progress\_score} used for Zuk-state selection. For full-start runs, it is win rate plus half-weighted wave progress on losses: $\mathrm{winrate} + (1-\mathrm{winrate}) \cdot \mathrm{mean\_wave}/69 \cdot 0.5$. This explains why a 0.398293 win rate and 66.343330 mean wave produce a 0.687563 score.
 
 \section{Training and Iteration Loop}
 
-PufferLib was introduced as a way to make RL libraries and environments interoperate \cite{pufferlib-paper}. PufferLib 4 made this loop practical because the bottleneck is the full edit-train-watch cycle. The public Puffer docs describe a native backend with CUDA C kernels, static memory, CUDA graphs, async environment workers, fused operations, action masks, PufferNet policies, and Protein sweeps \cite{puffer-docs}. Joseph Suarez's Puffer 4 engineering notes frame the same systems problem: small-model RL can spend too much time in framework overhead unless memory layout, kernel launch overhead, and fused computation are designed together \cite{puffer4-systems}.
+PufferLib was introduced as a way to make RL libraries and environments interoperate \cite{pufferlib-paper}. PufferLib 4 makes this loop practical because the bottleneck is the full edit-train-watch cycle. Puffer includes a native backend with CUDA C kernels, static memory, CUDA graphs, async environment workers, fused operations, action masks, PufferNet policies, and Protein hyperparameter sweeps \cite{puffer-docs}. The systems pressure is familiar in high-throughput RL. Sample Factory targets single-machine asynchronous RL, and EnvPool treats parallel environment execution as a first-class bottleneck \cite{sample-factory, envpool}.
 
-The recurrent model is PufferNet, which combines MinGRU with highway-style output mixing. MinGRU supports parallel-scan training across sequences and cheap recurrent inference during rollouts \cite{puffernet, mingru}. This fits game tasks where the policy needs memory during rollout, but training must still use long enough sequences to learn delayed consequences.
+The recurrent model is PufferNet, which combines MinGRU with highway-style output mixing \cite{mingru, highway}. MinGRU supports parallel-scan training across sequences and cheap recurrent inference during rollouts. This fits game tasks where the policy needs memory during rollout, but training must still use long enough sequences to learn delayed consequences.
 
-The Inferno config uses 4096 parallel agents, two rollout buffers, 16 worker threads, a two-layer 512 hidden PufferNet, a 16 tick horizon, priority replay, and a replay ratio of 4. The horizon covers 9.6 seconds of game time. Protein sweeps search over learning rate, horizon, discounting, advantage settings, replay, vector size, model width, curriculum fractions, and reward weights. Protein models both score and wall-clock cost, which matters because a high score from a slow or unstable setting may be a poor development tool \cite{constellation}.
+The current Inferno config uses 4096 parallel agents, two rollout buffers, 16 worker threads, a two-layer 512 hidden PufferNet, a 16 tick horizon, priority replay, and a replay ratio of 4. The horizon covers 9.6 seconds of game time. Protein sweeps search over learning rate, horizon, discounting, advantage settings, replay, vector size, model width, curriculum fractions, and reward weights. Protein models both score and wall-clock cost, which matters because a high score from a slow or unstable setting may be a poor tradeoff and development tool.
 
-The hardest engineering lesson was that the simulator and learner could not be debugged separately. Training exposed missing observations, stale masks, and reward traps. Renderer checks exposed bugs in projectile anchoring, Zuk pathing, healer tags, and action timing. Human controls exposed when the action interface was not playable. Some fixes crossed every surface: prayer flick semantics touched environment logic, GUI, human input, rendering, tests, and trainer bindings, while Zuk healer work produced diagnostics before reward changes. The useful loop became: train, watch, find a player-readable failure, trace the simulator, add a contract test, and sweep again.
+The central engineering lesson is that the simulator and learner cannot be debugged separately. Training ruthlessly exposes flawed observations and reward traps. Renderer checks expose bugs for instance in projectile anchoring, pathing, monster prioritization, and general decision making. Human controllability exposes when the action interface is not playable or something "feels off" to a domain expert. Some fixes cross every surface. Prayer flick semantics \cite{osrs-prayer} touch environment logic, GUI paths, human input paths, render paths, trainer bindings, and tests. The useful loop is often to train, watch, find a player-readable failure, trace the simulator, add a contract test, and sweep again. Although tongue-in-cheek, a hyperparameter sweep is considered one unit of compute in the Puffer paradigm.
 
 \begin{table}[H]
 \centering
@@ -93,13 +94,13 @@ Broken Zuk movement & Replay and human click pathing & Shield-path checks \\
 Wrong projectile source & Rendered flight path & Anchored projectile endpoints \\
 \bottomrule
 \end{tabular}
-\caption{Examples where policy watching, metrics, and simulator contracts found different classes of defect.}
+\caption{Watching policies explains behavior bugs and odd decisions. Metrics are necessary to catch more aggregate failures.}
 \label{tab:failures}
 \end{table}
 
-\section{Checkpoint Evidence}
+\section{Current Best Run}
 
-The checkpoint result is historical development telemetry from the active branch, not a frozen-schema benchmark evaluation. It used a compact Redemption action mapping, state curriculum, priority replay, 4096 parallel agents, a two-layer 512 hidden PufferNet, and 171.7M environment steps. The checkpoint README records a 5-action PvE overhead head in which the compact mapping represented Redemption without the current explicit Redemption logit. Its action mapping differs from the current benchmark surface summarized in Table \ref{tab:surface}. The stored run summary reports the development telemetry in Table \ref{tab:result}. The summary marks the final metrics as normal-start evaluation, but this artifact is downsampled, so we avoid treating its \texttt{env/n} field as a precise evaluation denominator here.
+The current best run in Table \ref{tab:result} comes from the latest current-compatible sweep artifact. The trial used exact step-out forecast observations, priority replay, 4096 parallel agents, a two-layer 512 hidden PufferNet, and 160.5M environment steps.
 
 \begin{table}[H]
 \centering
@@ -108,51 +109,53 @@ The checkpoint result is historical development telemetry from the active branch
 \toprule
 Metric & Value \\
 \midrule
-Environment steps & 171.7M \\
-Logged win rate & 0.489635 \\
-Internal training score & 0.736389 \\
-Average final wave & 66.720871 \\
-Average minimum Zuk HP, wins as 0 & 240.535599 \\
-Prayer correctness & 0.853395 \\
-Fraction reaching Zuk healers & 0.847019 \\
-Fraction killing all Zuk healers & 0.718624 \\
-Final logged throughput & about 256k steps/s \\
+Training steps & 160.5M \\
+Logged win rate & 0.398293 \\
+Training objective score & 0.687563 \\
+Average wave reached, out of 69 & 66.343330 \\
+Average lowest Zuk HP, lower is better & 323.682892 \\
+Correct prayer rate & 0.871236 \\
+Runs clearing all Zuk healers & 0.438476 \\
+Final training throughput & about 208k steps/s \\
 \bottomrule
 \end{tabular}
-\caption{Stored development telemetry for the compact recurrent Inferno checkpoint.}
+\caption{Stored development telemetry for the current-compatible \texttt{xbeeukiz} Inferno checkpoint.}
 \label{tab:result}
 \end{table}
 
-Read these numbers as development evidence. The environment, action surface, and visual contract were still changing during development. The result shows logged full clears and frequent late-Zuk states in this benchmark line. It does not prove that the task is solved, that the checkpoint is robust across future environment versions, or that the policy has no simulator-specific habits.
+Read these numbers as a training snapshot. The environment, action surface, and visual contract keep changing during development. The result shows logged full clears and frequent late-Zuk states in the current environment. These numbers do not prove the task is solved, because the task definition is still moving. Future simulator versions need fresh evaluation, and replays still need domain expertise checks for simulator-specific behavior. The longest standing stable metric is the eval score, for good reasons.
 
-This distinction is central to the benchmark. In an inspectable game task, success cannot be only a scalar. A policy that clears while wasting supplies, mistiming healers, or leaning on a simulator bug has not solved the benchmark in the player-facing sense. The benchmark must keep these failures visible.
+In an inspectable game task, success cannot be only a scalar. A policy that completes the objective by leaning on a simulator bug has not solved the task in the player-facing sense. The environment must keep these failures visible.
 
-A stricter public benchmark release should freeze the observation and action schema, pin the checkpoint metadata, run normal-start no-render evaluation with an explicit episode count, replay sampled wins and losses, and report behavioral counters alongside score. A policy should be judged on full clears, late-phase progress, and whether watched failures remain explainable from logged state.
+A stricter public evaluation release should freeze the observation and action spaces, pin the checkpoint metadata, replay sampled wins and losses, and report behavioral counters alongside score. A policy should be judged on full clears and stability in achieving them.
 
 \section{Lessons and Limitations}
 
-First, game benchmarks need a player-facing contract. If policy behavior looks wrong in replay, the logs and simulator should explain why. This is not a cosmetic requirement. In the Inferno, rendering and replay caught bugs that scalar training curves would have hidden.
+First, game environments need a player-facing contract. If policy behavior looks wrong in replay, the logs and simulator should explain why. This requirement is functional. In the Inferno, rendering is used to catch bugs not visible in scalar training graphs.
 
-Second, strict action masks are part of the task definition. OSRS has many impossible actions: attacking missing targets, drinking empty potions, casting unavailable spells, switching to already equipped gear, or stepping into blocked tiles. Masking these actions does not make the game easy. It removes interface noise so the model can spend capacity on game decisions.
+Second, strict action masks are part of the task definition. OSRS has many impossible or detrimental actions like casting unavailable spells, switching to already equipped gear, or stepping into blocked tiles. Masking these actions removes interface noise that human players would never engage in so the model can spend capacity on game decisions.
 
-Third, reward is not score. Reward is an engineering tool for credit assignment. Score is the stable development yardstick. Keeping them separate made the project less brittle while reward weights and curricula changed.
+Third, reward is not score. Reward is an engineering tool for credit assignment. Score is the stable development measure. Keeping them separate makes the project less brittle while reward weights and curricula change.
 
-Fourth, higher throughput made the development loop more empirical. PufferLib 4's static memory, fused kernels, CUDA graphs, MinGRU, and sweep tooling were not aesthetic choices. They made it cheap enough to find out whether a simulator fix or observation change actually helped \cite{puffer4-systems, puffernet, constellation}.
+Fourth, higher throughput makes the development loop more empirical. PufferLib 4's systems choices are practical. The same lesson appears across Sample Factory and EnvPool: throughput changes what researchers can afford to measure, debug, and repeat \cite{sample-factory, envpool}. Puffer makes it cheap enough to find out whether a simulator fix or observation change helps.
 
-The main limitation is fidelity. This is not a full OSRS client. It is a simulator for the encounter mechanics that matter for training, plus cache-derived assets for visual inspection. Expert knowledge makes failures interpretable, but it can also hide assumptions in the simulator. The safest path is to keep tests, render checks, replay checks, and human play close to the training surface.
+Fidelity is the main limitation. The environment simulates the encounter mechanics used for training and uses cache-derived assets for visual inspection. Recreating private game logic remains slow work, even for domain experts. Expert knowledge makes failures interpretable, but it can also bias training. The safest path is to keep tests, render checks, replay checks, and human play close to the training surface. Relying on the smallest possible set of scaffolding is central.
 
-The OSRS Inferno environment suggests a benchmark pattern for long-horizon game RL: player-readable state, structured actions, strict masks, replayable failures, and high-throughput recurrent training. A benchmark should report whether an agent wins and make the agent's mistakes legible.
+The OSRS Inferno environment suggests an evaluation pattern for long-horizon game RL: player-readable state, structured actions, strict masks, replayable failures, and high-throughput recurrent training over long episodes.
 
 \small
 \raggedright
 \begin{thebibliography}{9}
 \bibitem{osrs-inferno} OSRS Wiki. Inferno. \url{https://oldschool.runescape.wiki/w/Inferno}
+\bibitem{osrs-prayer} OSRS Wiki. Prayer flicking. \url{https://oldschool.runescape.wiki/w/Prayer#Prayer_flicking}
 \bibitem{pufferlib-paper} Joseph Suarez. PufferLib: Making Reinforcement Learning Libraries and Environments Play Nice. arXiv:2406.12905, 2024. \url{https://arxiv.org/abs/2406.12905}
 \bibitem{puffer-docs} PufferAI. PufferLib docs. \url{https://puffer.ai/docs.html}
-\bibitem{puffer4-systems} Joseph Suarez. The Engineering behind PufferLib 4.0's 20,000,000 step/second RL Training. \url{https://x.com/jsuarez/article/2041501879222284776}
-\bibitem{puffernet} Joseph Suarez. A High Throughput Recurrent Network for PufferLib 4.0. \url{https://x.com/jsuarez/article/2042273938592407674}
+\bibitem{procgen} Karl Cobbe, Christopher Hesse, Jacob Hilton, and John Schulman. Leveraging Procedural Generation to Benchmark Reinforcement Learning. arXiv:1912.01588, 2019. \url{https://arxiv.org/abs/1912.01588}
+\bibitem{nethack} Heinrich Kuttler, Nantas Nardelli, Alexander H. Miller, Roberta Raileanu, Marco Selvatici, Edward Grefenstette, and Tim Rocktaschel. The NetHack Learning Environment. arXiv:2006.13760, 2020. \url{https://arxiv.org/abs/2006.13760}
+\bibitem{sample-factory} Aleksei Petrenko, Zhehui Huang, Tushar Kumar, Gaurav Sukhatme, and Vladlen Koltun. Sample Factory: Egocentric 3D Control from Pixels at 100000 FPS with Asynchronous Reinforcement Learning. arXiv:2006.11751, 2020. \url{https://arxiv.org/abs/2006.11751}
+\bibitem{envpool} Jiayi Weng, Min Lin, Shengyi Huang, Bo Liu, Denys Makoviichuk, Viktor Makoviychuk, Zichen Liu, Yufan Song, Ting Luo, Yukun Jiang, Zhongwen Xu, and Shuicheng Yan. EnvPool: A Highly Parallel Reinforcement Learning Environment Execution Engine. arXiv:2206.10558, 2022. \url{https://arxiv.org/abs/2206.10558}
 \bibitem{mingru} Leo Feng, Frederick Tung, Mohamed Osama Ahmed, Yoshua Bengio, and Hossein Hajimirsadeghi. Were RNNs All We Needed? arXiv:2410.01201, 2024. \url{https://arxiv.org/abs/2410.01201}
-\bibitem{constellation} Joseph Suarez. Visualizing 20k RL Experiments with Constellation. \url{https://x.com/jsuarez/article/2041896392587722885}
+\bibitem{highway} Rupesh Kumar Srivastava, Klaus Greff, and Jurgen Schmidhuber. Highway Networks. arXiv:1505.00387, 2015. \url{https://arxiv.org/abs/1505.00387}
 \end{thebibliography}
 
 \end{document}
