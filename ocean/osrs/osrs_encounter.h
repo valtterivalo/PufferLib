@@ -1599,6 +1599,7 @@ typedef enum {
 #define ENCOUNTER_NPC_UNDER_PLAYER_NONE  0
 #define ENCOUNTER_NPC_UNDER_PLAYER_MOVED 1
 #define ENCOUNTER_NPC_UNDER_PLAYER_HELD  2
+#define ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED 3
 
 static inline int encounter_npc_footprint_overlaps_target(
     int npc_x, int npc_y, int npc_size,
@@ -1609,53 +1610,6 @@ static inline int encounter_npc_footprint_overlaps_target(
              npc_y >= target_y + target_size ||
              npc_y + npc_size <= target_y);
 }
-
-/* when an NPC overlaps the player (AABB overlap), it shuffles one tile in a
-   random cardinal direction. matches osrs-sdk Mob.ts:109-153 behavior:
-   50% pick X-axis vs Y-axis, then 50% +1 or -1 on that axis.
-   hold_overlap lets the caller preserve the one-tick "player just clicked this
-   mob, so it cannot move off" rule. returns MOVED, HELD, or NONE. */
-static inline int encounter_npc_step_out_from_under(
-    int* npc_x, int* npc_y, int npc_size,
-    int player_x, int player_y,
-    encounter_npc_blocked_fn is_blocked, void* ctx,
-    encounter_npc_overlap_hold_fn hold_overlap,
-    uint32_t* rng
-) {
-    if (!encounter_npc_footprint_overlaps_target(
-            *npc_x, *npc_y, npc_size, player_x, player_y, 1))
-        return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
-    if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
-
-    /* 4 cardinal directions: +x, -x, +y, -y */
-    int dirs[4][2] = {{1,0}, {-1,0}, {0,1}, {0,-1}};
-
-    /* random start: 50% X-axis first (dirs 0,1) vs Y-axis first (dirs 2,3),
-       then 50% positive vs negative on that axis */
-    int axis = encounter_rand_int(rng, 2);       /* 0=X, 1=Y */
-    int sign = encounter_rand_int(rng, 2);        /* 0=positive, 1=negative */
-    int order[4];
-    order[0] = axis * 2 + sign;         /* primary: chosen axis+sign */
-    order[1] = axis * 2 + (1 - sign);   /* secondary: chosen axis, other sign */
-    order[2] = (1 - axis) * 2 + sign;   /* tertiary: other axis, same sign */
-    order[3] = (1 - axis) * 2 + (1 - sign); /* last: other axis, other sign */
-
-    for (int i = 0; i < 4; i++) {
-        int nx = *npc_x + dirs[order[i]][0];
-        int ny = *npc_y + dirs[order[i]][1];
-        /* InfernoTrainer Mob.ts:128-142: 1-tile shuffle per tick, validated
-           via normal edge-tile movement system. for size>1 NPCs, full escape
-           takes multiple ticks. anchor walkability matches InfernoTrainer's
-           canTileBePathedTo check on the leading edge. */
-        if (!is_blocked(ctx, nx, ny, npc_size)) {
-            *npc_x = nx;
-            *npc_y = ny;
-            return ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
-        }
-    }
-    return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
-}
-
 
 /** check if the leading edge tiles are clear for an NPC moving in direction (dx, dy).
     for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
@@ -1718,6 +1672,33 @@ static inline int encounter_npc_try_step(
         return 1;
     }
     return 0;
+}
+
+/** OSRS overlap shuffle. When an NPC overlaps the player, osrs-sdk Mob.ts
+    samples one cardinal direction by choosing X/Y with 50% probability, then
+    positive/negative with 50% probability. The sampled move uses normal
+    movement edge clearance. A blocked sample holds the NPC under the player
+    for this tick instead of scanning for another cardinal. */
+static inline int encounter_npc_step_out_from_under(
+    int* npc_x, int* npc_y, int npc_size,
+    int player_x, int player_y,
+    encounter_npc_blocked_fn is_blocked, void* ctx,
+    encounter_npc_overlap_hold_fn hold_overlap,
+    uint32_t* rng
+) {
+    if (!encounter_npc_footprint_overlaps_target(
+            *npc_x, *npc_y, npc_size, player_x, player_y, 1))
+        return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
+    if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
+
+    int axis = encounter_rand_int(rng, 2);
+    int sign = encounter_rand_int(rng, 2) == 0 ? 1 : -1;
+    int dx = axis == 0 ? sign : 0;
+    int dy = axis == 1 ? sign : 0;
+
+    if (encounter_npc_try_step(npc_x, npc_y, npc_size, dx, dy, is_blocked, ctx))
+        return ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
+    return ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED;
 }
 
 /** OSRS-shaped NPC step toward target. tries diagonal first, then x-only,

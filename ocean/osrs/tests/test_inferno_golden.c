@@ -150,13 +150,16 @@ static const GoldenConfig CONFIGS[] = {
    safespotting, no attack overlap). Obs-only change on those waves; sim and
    reward stay byte-identical (verified: state-hash + reward unchanged on every
    record, obs differs only by danger features going to zero with valid
-   preserved). The 9 pillar-ful configs are unchanged. */
+   preserved). The 9 pillar-ful configs are unchanged.
+   2026-06-19: wave1 and meleer digests were re-seeded after matching osrs-sdk
+   under-player shuffle semantics: sample one cardinal direction and stay put
+   when that sampled move is blocked. No fallback scan. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x8b5b754c26c82822ULL,  /* wave1_a */
-    0xcee535f8947e69c7ULL,  /* wave1_b */
-    0x2f037285fba496e0ULL,  /* wave1_c */
-    0x470e44514c01ef1cULL,  /* meleer_a */
-    0x89030381ef0d8a45ULL,  /* meleer_b */
+    0x96d92405846c6d78ULL,  /* wave1_a */
+    0xfcea8feb4fc1167dULL,  /* wave1_b */
+    0x8aec3a9a87289d41ULL,  /* wave1_c */
+    0xfd40fbfcc0ff8ef8ULL,  /* meleer_a */
+    0x5b72dea5cac6f30bULL,  /* meleer_b */
     0x75ad082f11f8febaULL,  /* ranger_a */
     0x70999457798cf9f2ULL,  /* ranger_b */
     0x362a09d876d6070dULL,  /* mager_a */

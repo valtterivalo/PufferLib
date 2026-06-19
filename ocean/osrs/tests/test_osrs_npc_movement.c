@@ -140,6 +140,17 @@ static void test_shared_current_overlap(void) {
         moved == 1 && dist == 1);
 
     memset(&grid, 0, sizeof(grid));
+    grid.blocked[4][5] = 1;
+    rng = 12345u;
+    x = 5;
+    y = 5;
+    moved = encounter_npc_step_toward_policy(
+        &x, &y, 5, 5, 1, 1, ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET,
+        test_npc_move_blocked, &grid, NULL, &rng);
+    CHECK("blocked sampled overlap shuffle stays under target",
+        moved == 0 && x == 5 && y == 5);
+
+    memset(&grid, 0, sizeof(grid));
     grid.hold_overlap = 1;
     rng = 0x12345678u;
     x = 5;

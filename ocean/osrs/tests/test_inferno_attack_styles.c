@@ -2344,23 +2344,44 @@ static void test_overlap_shuffle_hold_after_recent_target_click(void) {
 static void test_overlap_shuffle_respects_npc_collision_flags(void) {
     printf("--- overlap shuffle respects npc collision flags ---\n");
 
-    InfernoState state = make_test_state(20, 20);
-    state.rng_state = 12345;
+    const uint32_t west_shuffle_seed = 12345;
 
-    state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
-    state.npcs[0].active = 1;
-    state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
-    state.npcs[1].active = 1;
-    state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 19, 20, 1);
-    state.npcs[2].active = 1;
-    state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
-    state.npcs[3].active = 1;
+    InfernoState clear_state = make_test_state(20, 20);
+    clear_state.rng_state = west_shuffle_seed;
+    clear_state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
+    clear_state.npcs[0].active = 1;
+    clear_state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
+    clear_state.npcs[1].active = 1;
+    clear_state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
+    clear_state.npcs[2].active = 1;
+    clear_state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 19, 1);
+    clear_state.npcs[3].active = 1;
 
-    inf_rebuild_entity_collision_flags(&state);
-    inf_npc_move(&state, 0);
+    inf_rebuild_entity_collision_flags(&clear_state);
+    inf_npc_move(&clear_state, 0);
 
-    ASSERT_INT_EQ("overlap shuffle picks the only free tile x", state.npcs[0].x, 20);
-    ASSERT_INT_EQ("overlap shuffle picks the only free tile y", state.npcs[0].y, 19);
+    ASSERT_INT_EQ("clear sampled overlap shuffle moves west x", clear_state.npcs[0].x, 19);
+    ASSERT_INT_EQ("clear sampled overlap shuffle moves west y", clear_state.npcs[0].y, 20);
+    ASSERT_INT_EQ("clear sampled overlap shuffle marks moved", clear_state.npcs[0].moved_this_tick, 1);
+
+    InfernoState blocked_state = make_test_state(20, 20);
+    blocked_state.rng_state = west_shuffle_seed;
+    blocked_state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
+    blocked_state.npcs[0].active = 1;
+    blocked_state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
+    blocked_state.npcs[1].active = 1;
+    blocked_state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 19, 20, 1);
+    blocked_state.npcs[2].active = 1;
+    blocked_state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
+    blocked_state.npcs[3].active = 1;
+
+    inf_rebuild_entity_collision_flags(&blocked_state);
+    inf_npc_move(&blocked_state, 0);
+
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not fallback x", blocked_state.npcs[0].x, 20);
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not fallback y", blocked_state.npcs[0].y, 20);
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not mark moved",
+                  blocked_state.npcs[0].moved_this_tick, 0);
 }
 
 static void test_large_npc_overlap_shuffle_can_partially_unclip(void) {

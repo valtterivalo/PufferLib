@@ -218,7 +218,8 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
         }
-        if (stepped == ENCOUNTER_NPC_UNDER_PLAYER_HELD) {
+        if (stepped == ENCOUNTER_NPC_UNDER_PLAYER_HELD ||
+                stepped == ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED) {
             if (uses_collision_flag)
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
