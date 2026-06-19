@@ -1470,7 +1470,7 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = 0, .attack_ranged = 90,
         .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
         .defence_magic = 0, .defence_ranged = 0,
-        .melee_strength = 0, .ranged_strength = 25, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
+        .melee_strength = 0, .ranged_strength = 25, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_VENATOR_BOUNCE
     },
     [ITEM_ABYSSAL_TENTACLE] = { /* Abyssal tentacle */
         .item_id = 12006, .name = "Abyssal tentacle", .slot = SLOT_WEAPON,

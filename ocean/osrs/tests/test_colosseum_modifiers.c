@@ -4176,6 +4176,26 @@ static void scythe_spawn_enemy(ColosseumState* s, int slot, int x, int y, int si
     npc->death_ticks = 0;
 }
 
+/** Spawn a live colosseum enemy with explicit type and footprint. */
+static void venator_spawn_enemy(
+    ColosseumState* s,
+    int slot,
+    ColoNpcType type,
+    int x,
+    int y,
+    int size
+) {
+    ColoNPC* npc = &s->npcs[slot];
+    memset(npc, 0, sizeof(*npc));
+    npc->active = 1;
+    npc->type = type;
+    npc->x = x;
+    npc->y = y;
+    npc->size = size;
+    npc->hp = 200;
+    npc->death_ticks = 0;
+}
+
 /* the two distinct scythe mechanics: size-based multihit on one large monster
    (100/50/25 by hit order) vs a full 100% hit on each separate 1x1 in the arc. */
 static void test_scythe_multihit_per_size(void) {
@@ -4227,6 +4247,152 @@ static void test_scythe_multihit_per_size(void) {
     CHECK("scythe never exceeds the resolved-hit buffer",
         n3 <= COLO_SCYTHE_MAX_HITS && n2 <= COLO_SCYTHE_MAX_HITS &&
         narc <= COLO_SCYTHE_MAX_HITS);
+}
+
+static void test_venator_bow_bounce_colosseum_integration(void) {
+    printf("test_venator_bow_bounce_colosseum_integration\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int expected_damage[OSRS_VENATOR_MAX_CHAIN_HITS] = {0};
+    int expected_total = 0;
+    int original_max = 0;
+    int bounce_max = 0;
+    int base_ticks = 0;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 8207);
+    int venator_cell = test_find_inventory_cell_with_item(&s, ITEM_VENATOR_BOW);
+    if (venator_cell < 0) {
+        CHECK("speedrun inventory carries venator bow", 0);
+        return;
+    }
+    col_equip_from_cell(&s, venator_cell);
+    s.player.current_ranged = 40;
+    col_mark_live_loadout_dirty(&s);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.player.x = 12;
+    s.player.y = 16;
+    venator_spawn_enemy(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 16, 1);
+    venator_spawn_enemy(&s, 1, COLO_FREMENNIK_ARCHER, 18, 16, 1);
+    venator_spawn_enemy(&s, 2, COLO_FREMENNIK_BERSERKER, 18, 17, 1);
+
+    OsrsVenatorChain chain = col_resolve_venator_chain(&s, 0);
+    if (chain.length != OSRS_VENATOR_CHAIN_LENGTH_THREE ||
+            chain.hits[0].slot != 0 ||
+            chain.hits[1].slot != 1 ||
+            chain.hits[2].slot != 2) {
+        CHECK("venator resolves a three-hop clustered chain", 0);
+        return;
+    }
+
+    uint8_t weapon_item = s.player.equipped[GEAR_SLOT_WEAPON];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(&s);
+    const OsrsEquipmentEffectProfile* effects = col_live_effects(&s);
+    const ColoNPC* primary = &s.npcs[0];
+    const ColoNpcStats* primary_stats = &COLO_NPC_STATS[primary->type];
+    int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
+    MeleeStyle weapon_melee_style = col_item_melee_style(weapon_item);
+    OsrsPreparedAttackEffects prepared =
+        osrs_prepare_attack_effects_for_melee_style(
+            effects,
+            &s.player.item_effect_state,
+            weapon_item,
+            ls->style,
+            weapon_melee_style,
+            OSRS_MAGIC_ATTACK_NONE,
+            osrs_target_ref_none(),
+            1,
+            base_att_roll,
+            ls->max_hit,
+            osrs_target_effect_context_magic(
+                primary_stats->magic_level,
+                primary_stats->magic_att_bonus),
+            s.player.current_hitpoints,
+            s.player.base_hitpoints);
+    original_max = prepared.max_hit;
+    bounce_max = osrs_venator_bounce_max_hit(original_max);
+    base_ticks = ls->attack_range > 1 ? 3 : 1;
+
+    uint32_t rng = s.rng_state;
+    uint32_t shared_def_rng = s.rng_state;
+    int shared_def_damage[OSRS_VENATOR_MAX_CHAIN_HITS] = {0};
+    int primary_def_roll = col_npc_target_def_roll(
+        &s.npcs[0], &COLO_NPC_STATS[s.npcs[0].type],
+        ls->style, weapon_melee_style);
+    expected_total = 0;
+    for (int hop = 0; hop < (int)chain.length; hop++) {
+        int slot = chain.hits[hop].slot;
+        int splat_max = hop == 0 ? original_max : bounce_max;
+        int target_def_roll = col_npc_target_def_roll(
+            &s.npcs[slot], &COLO_NPC_STATS[s.npcs[slot].type],
+            ls->style, weapon_melee_style);
+        expected_damage[hop] = osrs_roll_prepared_attack_damage(
+            &prepared, target_def_roll, splat_max, &rng);
+        shared_def_damage[hop] = osrs_roll_prepared_attack_damage(
+            &prepared, primary_def_roll, splat_max, &shared_def_rng);
+        expected_total += expected_damage[hop];
+    }
+
+    CHECK("venator fixture is sensitive to per-target defence",
+        expected_damage[1] != shared_def_damage[1] ||
+        expected_damage[2] != shared_def_damage[2]);
+    CHECK("speedrun inventory carries venator bow", 1);
+    CHECK("venator resolves a three-hop clustered chain", 1);
+    CHECK("venator bow is equipped for the integration attack",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_VENATOR_BOW);
+    CHECK("venator bounce max is floor two thirds of the original",
+        bounce_max == original_max * 2 / 3 && bounce_max < original_max);
+
+    col_player_attack_target_ctx(&s, &ctx, 0);
+
+    CHECK("venator records render chain slots",
+        ctx.player_venator_chain_count == 3 &&
+        ctx.player_venator_chain_slots[0] == 0 &&
+        ctx.player_venator_chain_slots[1] == 1 &&
+        ctx.player_venator_chain_slots[2] == 2);
+    CHECK("venator queues one pending hit on each chain target",
+        s.npcs[0].pending_hits.count == 1 &&
+        s.npcs[1].pending_hits.count == 1 &&
+        s.npcs[2].pending_hits.count == 1);
+    CHECK("venator queues staggered bounce delays",
+        s.npcs[0].pending_hits.hits[0].ticks_remaining == base_ticks &&
+        s.npcs[1].pending_hits.hits[0].ticks_remaining == base_ticks + 1 &&
+        s.npcs[2].pending_hits.hits[0].ticks_remaining == base_ticks + 2);
+    CHECK("venator primary damage matches the independent roll",
+        s.npcs[0].pending_hits.hits[0].damage == expected_damage[0]);
+    CHECK("venator bounce damage matches capped independent rolls",
+        s.npcs[1].pending_hits.hits[0].damage == expected_damage[1] &&
+        s.npcs[2].pending_hits.hits[0].damage == expected_damage[2] &&
+        expected_damage[1] <= bounce_max &&
+        expected_damage[2] <= bounce_max);
+    CHECK("venator attack damage sums every queued splat",
+        s.player_attack_dmg == expected_total);
+
+    EncounterOverlay ov = {0};
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("venator emits primary plus two bounce projectiles",
+        ov.projectile_count == 3);
+    CHECK("venator primary projectile targets the attacked NPC",
+        ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_PLAYER &&
+        ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[0].target_npc_slot == 0);
+    CHECK("venator bounce projectiles chain through NPC slots",
+        ov.projectiles[1].source_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[1].source_npc_slot == 0 &&
+        ov.projectiles[1].target_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[1].target_npc_slot == 1 &&
+        ov.projectiles[2].source_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[2].source_npc_slot == 1 &&
+        ov.projectiles[2].target_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
+        ov.projectiles[2].target_npc_slot == 2);
+    CHECK("venator projectile hops use the arrow model",
+        ov.projectiles[0].model_id == OSRS_PROJECTILE_MODEL_ARROW &&
+        ov.projectiles[1].model_id == OSRS_PROJECTILE_MODEL_ARROW &&
+        ov.projectiles[2].model_id == OSRS_PROJECTILE_MODEL_ARROW);
+    CHECK("venator bounce projectile delays increase by hop",
+        ov.projectiles[1].start_delay > ov.projectiles[0].start_delay &&
+        ov.projectiles[2].start_delay > ov.projectiles[1].start_delay);
 }
 
 /* bee contact damage now rolls the 15-20 band every overlapping tick (no zero
@@ -5894,6 +6060,7 @@ int main(void) {
     test_loadout_offensive_prayers();
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();
+    test_venator_bow_bounce_colosseum_integration();
     test_bee_contact_damage_band();
     test_divine_state_obs_presence();
     test_magic_set_max_hit_math();

@@ -770,6 +770,11 @@ static MeleeStyle col_item_melee_style(uint8_t weapon_item) {
     return style;
 }
 
+static int col_weapon_has_item_effect(uint8_t weapon_item, uint32_t effect_mask) {
+    const Item* weapon = get_item(weapon_item);
+    return weapon && (weapon->effect_mask & effect_mask) != 0;
+}
+
 /** effective NPC defence level after player spec drains (elder maul). */
 static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* ns) {
     int def = ns->def_level - npc->def_drained;
@@ -992,6 +997,37 @@ static int col_resolve_scythe_hits(
     return count;
 }
 
+static OsrsVenatorMonster col_venator_monster_from_npc(
+    const ColoNPC* npc,
+    int slot
+) {
+    if (!npc || !col_npc_is_live_enemy(npc)) abort();
+    return osrs_venator_monster(
+        slot,
+        npc->x,
+        npc->y,
+        col_npc_effective_size(npc),
+        OSRS_VENATOR_MONSTER_ALIVE);
+}
+
+static OsrsVenatorChain col_resolve_venator_chain(
+    const ColosseumState* s,
+    int primary_slot
+) {
+    if (!s || primary_slot < 0 || primary_slot >= COLO_MAX_NPCS) abort();
+    const ColoNPC* primary_npc = &s->npcs[primary_slot];
+    OsrsVenatorMonster primary =
+        col_venator_monster_from_npc(primary_npc, primary_slot);
+    OsrsVenatorMonster candidates[COLO_MAX_NPCS];
+    int candidate_count = 0;
+    for (int slot = 0; slot < COLO_MAX_NPCS; slot++) {
+        const ColoNPC* npc = &s->npcs[slot];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        candidates[candidate_count++] = col_venator_monster_from_npc(npc, slot);
+    }
+    return osrs_venator_resolve_chain(primary, candidates, candidate_count);
+}
+
 static int col_npc_target_def_roll(
     const ColoNPC* npc,
     const ColoNpcStats* ns,
@@ -1009,7 +1045,11 @@ static int col_npc_target_def_roll(
     return (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
 }
 
-static void col_player_attack_target(ColosseumState* s, int npc_slot) {
+static void col_player_attack_target_ctx(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    int npc_slot
+) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
@@ -1039,26 +1079,42 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
         s->player.current_hitpoints, s->player.base_hitpoints);
 
     ColScytheResolvedHit resolved_hits[COLO_SCYTHE_MAX_HITS];
+    OsrsVenatorChain venator_chain = {0};
     int resolved_count = 1;
     resolved_hits[0] = (ColScytheResolvedHit){ .npc_slot = npc_slot, .splat_rank = 0 };
-    if (weapon_item == ITEM_SCYTHE_OF_VITUR && !col_type_is_hazard_entity(npc->type))
+    int venator_attack =
+        !col_type_is_hazard_entity(npc->type) &&
+        col_weapon_has_item_effect(weapon_item, OSRS_ITEM_EFFECT_VENATOR_BOUNCE);
+    if (venator_attack) {
+        venator_chain = col_resolve_venator_chain(s, npc_slot);
+        resolved_count = (int)venator_chain.length;
+        col_context_record_venator_chain(ctx, &venator_chain);
+    } else if (weapon_item == ITEM_SCYTHE_OF_VITUR &&
+            !col_type_is_hazard_entity(npc->type)) {
         resolved_count = col_resolve_scythe_hits(s, npc_slot, resolved_hits);
+    }
     if (resolved_count <= 0) {
-        fprintf(stderr, "scythe attack resolved no targets\n");
+        fprintf(stderr, "player attack resolved no targets\n");
         abort();
     }
 
     int ticks = ls->attack_range > 1 ? 3 : 1;
     int damage = 0;
     for (int splat = 0; splat < resolved_count; splat++) {
-        ColScytheResolvedHit hit = resolved_hits[splat];
-        ColoNPC* hit_npc = &s->npcs[hit.npc_slot];
+        int hit_slot = venator_attack
+            ? venator_chain.hits[splat].slot
+            : resolved_hits[splat].npc_slot;
+        ColoNPC* hit_npc = &s->npcs[hit_slot];
         const ColoNpcStats* hit_ns = &COLO_NPC_STATS[hit_npc->type];
         int rps_max_hit = hit_ns->player_style_that_max_hits != ATTACK_STYLE_NONE &&
                           hit_ns->player_style_that_max_hits == ls->style;
         int target_def_roll = col_npc_target_def_roll(
             hit_npc, hit_ns, ls->style, weapon_melee_style);
-        int splat_max = prepared.max_hit >> hit.splat_rank;
+        int splat_max = venator_attack
+            ? (splat == 0
+                ? prepared.max_hit
+                : osrs_venator_bounce_max_hit(prepared.max_hit))
+            : (prepared.max_hit >> resolved_hits[splat].splat_rank);
         int splat_damage;
         if (col_type_is_hazard_entity(hit_npc->type)) {
             splat_damage = hit_npc->hp;
@@ -1072,8 +1128,9 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
             splat_damage = osrs_roll_prepared_attack_damage(
                 &prepared, target_def_roll, splat_max, &s->rng_state);
         }
-        col_queue_npc_pending_hit(s, hit.npc_slot, splat_damage, ticks, ls->style,
-                                  ENCOUNTER_SPELL_NONE);
+        int hit_ticks = venator_attack ? ticks + splat : ticks;
+        col_queue_npc_pending_hit(s, hit_slot, splat_damage, hit_ticks,
+                                  ls->style, ENCOUNTER_SPELL_NONE);
         damage += splat_damage;
     }
 
@@ -1096,6 +1153,10 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     s->player.attack_style_this_tick = ls->style;
     s->tick_scratch.player_attacked = 1;
     s->tick_scratch.attacks_fired++;
+}
+
+static void col_player_attack_target(ColosseumState* s, int npc_slot) {
+    col_player_attack_target_ctx(s, col_legacy_context(), npc_slot);
 }
 
 
@@ -1272,7 +1333,7 @@ static void col_tick_player_ctx(
                 int armed_kind = (!col_type_is_hazard_entity(npc->type) &&
                                   s->player.spec_armed)
                     ? s->player.equipped[GEAR_SLOT_WEAPON] : 0;
-                col_player_attack_target(s, slot);
+                col_player_attack_target_ctx(s, ctx, slot);
                 if (ctx && armed_kind > 0 && s->player.used_special_this_tick)
                     ctx->player_spec_fired_kind = armed_kind;
             }

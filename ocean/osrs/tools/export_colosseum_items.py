@@ -91,20 +91,12 @@ DRAGON_BOLT_MODEL_ID = 0xD0001
 SPOTANIM_MODELS = {3080, 3135, 6375, 6381, 14215}
 COLOSSEUM_WATER_SURGE_MODELS = {3116, 34617, 34618}
 
-# Render-only inventory-sprite ids the viewer's 1:1 kit panel displays but the sim
-# has no gear/dose concept of (so they are not in the loadout symbol block). The
-# divine potions also have distinct vial sprites vs the base super-combat/ranging
-# potions, so their real ids must be exported to render correctly. These get an
-# inventory sprite only (no worn model, no header row).
-COLOSSEUM_DISPLAY_ONLY_ITEM_IDS = [
-    27610,  # Venator bow
-    12006,  # Abyssal tentacle
-    27281,  # Divine rune pouch
-    23685,  # Divine super combat potion(4)
-    23733,  # Divine ranging potion(4)
-    10925,  # Sanfew serum(4)
-    4417,   # Guthix rest(4)
-    30875,  # Surge potion(4)
+COLOSSEUM_NON_CONSUMABLE_DISPLAY_ITEM_IDS = [
+    12006,
+    27281,
+]
+COLOSSEUM_RUNTIME_EQUIPPABLE_ITEM_IDS = [
+    27610,
 ]
 ENCOUNTER_MODELS = {
     14407,
@@ -254,6 +246,16 @@ class ExportReport:
     visible_worn_item_ids: list[int] = field(default_factory=list)
     sprite_item_ids: list[int] = field(default_factory=list)
     no_worn_model_item_ids: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ConsumableClickRow:
+    """One row from OSRS_CONSUMABLE_CLICK_REGISTRY."""
+
+    raw_osrs_id: int
+    click_action: str
+    consumable_kind: str
+    dose_count: int
 
 
 def be_u16(data: bytes, pos: int) -> tuple[int, int]:
@@ -526,6 +528,120 @@ def parse_colosseum_symbols(path: Path) -> list[str]:
             continue
         seen.add(symbol)
         out.append(symbol)
+    return out
+
+
+def strip_c_comments(src: str) -> str:
+    """Remove C comments before parsing initializer values."""
+
+    return re.sub(r"/\*.*?\*/|//[^\n]*", "", src, flags=re.S)
+
+
+def extract_c_initializer_body(src: str, symbol: str) -> str:
+    """Return the balanced initializer body following a C symbol."""
+
+    start = src.find(symbol)
+    if start < 0:
+        raise SystemExit(f"export_colosseum_items: {symbol} not found")
+    brace_start = src.find("{", start)
+    if brace_start < 0:
+        raise SystemExit(f"export_colosseum_items: {symbol} initializer not found")
+
+    depth = 0
+    for idx in range(brace_start, len(src)):
+        char = src[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return src[brace_start + 1:idx]
+    raise SystemExit(f"export_colosseum_items: {symbol} initializer is unterminated")
+
+
+def parse_colosseum_gameplay_inventory_loadout_ids(path: Path) -> list[int]:
+    """Parse raw OSRS item ids from COLO_GAMEPLAY_INVENTORY_LOADOUT."""
+
+    src = strip_c_comments(path.read_text())
+    body = extract_c_initializer_body(src, "COLO_GAMEPLAY_INVENTORY_LOADOUT")
+    return [int(value) for value in re.findall(r"\b\d+\b", body) if int(value) > 0]
+
+
+def parse_consumable_click_registry(path: Path) -> list[ConsumableClickRow]:
+    """Parse OSRS_CONSUMABLE_CLICK_REGISTRY rows from the shared C header."""
+
+    src = strip_c_comments(path.read_text())
+    body = extract_c_initializer_body(src, "OSRS_CONSUMABLE_CLICK_REGISTRY")
+    rows: list[ConsumableClickRow] = []
+    pattern = re.compile(
+        r"\{\s*(\d+)\s*,\s*(OSRS_CLICK_[A-Z_]+)\s*,\s*"
+        r"(OSRS_CONSUMABLE_[A-Z0-9_]+)\s*,\s*(\d+)\s*\}"
+    )
+    for raw_osrs_id, click_action, consumable_kind, dose_count in pattern.findall(body):
+        rows.append(
+            ConsumableClickRow(
+                raw_osrs_id=int(raw_osrs_id),
+                click_action=click_action,
+                consumable_kind=consumable_kind,
+                dose_count=int(dose_count),
+            )
+        )
+    if not rows:
+        raise SystemExit("export_colosseum_items: consumable click registry parsed empty")
+    return rows
+
+
+def consumable_row_after_drink(
+    current: ConsumableClickRow,
+    rows: list[ConsumableClickRow],
+) -> ConsumableClickRow | None:
+    """Resolve the next dose row from a current drink row."""
+
+    next_dose_count = current.dose_count - 1
+    if next_dose_count <= 0:
+        return None
+    matches = [
+        row for row in rows
+        if row.click_action == "OSRS_CLICK_DRINK"
+        and row.consumable_kind == current.consumable_kind
+        and row.dose_count == next_dose_count
+    ]
+    if len(matches) != 1:
+        raise SystemExit(
+            "export_colosseum_items: expected one next dose for "
+            f"{current.raw_osrs_id}, got {len(matches)}"
+        )
+    return matches[0]
+
+
+def colosseum_consumable_dose_variant_ids(
+    gameplay_item_ids: list[int],
+    rows: list[ConsumableClickRow],
+) -> list[int]:
+    """Derive reachable colosseum consumable dose ids from loadouts and registry."""
+
+    by_id = {row.raw_osrs_id: row for row in rows}
+    seen: set[int] = set()
+    out: list[int] = []
+
+    for item_id in gameplay_item_ids:
+        root = by_id.get(item_id)
+        if root is None or root.click_action != "OSRS_CLICK_DRINK" or root.dose_count <= 0:
+            continue
+
+        current: ConsumableClickRow | None = root
+        for _ in range(len(rows)):
+            if current is None:
+                break
+            if current.raw_osrs_id not in seen:
+                seen.add(current.raw_osrs_id)
+                out.append(current.raw_osrs_id)
+            current = consumable_row_after_drink(current, rows)
+        if current is not None:
+            raise SystemExit(
+                "export_colosseum_items: consumable dose chain cycles at "
+                f"{current.raw_osrs_id}"
+            )
     return out
 
 
@@ -1073,6 +1189,7 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
     output_dir = args.output_dir
     generated_items_path = repo_root / "ocean" / "osrs" / "osrs_items_generated.h"
     colosseum_model_path = repo_root / "ocean" / "osrs" / "encounters" / "colosseum" / "encounter_colosseum_model.inc"
+    inventory_clicks_path = repo_root / "ocean" / "osrs" / "osrs_inventory_clicks.h"
     item_header_path = output_dir / "item_models.h"
     player_header_path = output_dir / "player_models.h"
     model_path = output_dir / "equipment.models"
@@ -1089,14 +1206,26 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
             + ", ".join(missing_symbols)
         )
     colosseum_ids = [generated_items[symbol].item_id for symbol in colosseum_symbols]
+    model_item_ids = list(dict.fromkeys(
+        colosseum_ids + COLOSSEUM_RUNTIME_EQUIPPABLE_ITEM_IDS
+    ))
+    gameplay_item_ids = parse_colosseum_gameplay_inventory_loadout_ids(colosseum_model_path)
+    consumable_rows = parse_consumable_click_registry(inventory_clicks_path)
+    consumable_dose_ids = colosseum_consumable_dose_variant_ids(
+        gameplay_item_ids,
+        consumable_rows,
+    )
     display_only_ids = [
-        item_id for item_id in COLOSSEUM_DISPLAY_ONLY_ITEM_IDS
-        if item_id not in colosseum_ids
+        item_id for item_id in (
+            COLOSSEUM_NON_CONSUMABLE_DISPLAY_ITEM_IDS +
+            consumable_dose_ids
+        )
+        if item_id not in model_item_ids
     ]
 
     existing_rows = parse_existing_header(item_header_path)
     existing_by_id = {row.item_id: row for row in existing_rows}
-    ordered_ids = ordered_target_ids(existing_rows, colosseum_ids)
+    ordered_ids = ordered_target_ids(existing_rows, model_item_ids)
 
     reader = ModernCacheReader(args.modern_cache)
     cache_items = load_cache_items(reader, ordered_ids)
@@ -1124,7 +1253,9 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
         texture_tsv = tmp_path / "textures.tsv"
         write_item_sprite_tsv(item_tsv, cache_items)
         write_texture_tsv(texture_tsv, reader)
-        sprite_export_ids = sorted(set(colosseum_ids) | set(display_only_ids))
+        sprite_export_ids = sorted(
+            set(model_item_ids) | set(display_only_ids)
+        )
         run_sprite_exporter(
             args.modern_cache,
             sprite_dir,
@@ -1139,7 +1270,10 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
     modifier_sprite_paths = export_modifier_sprites(args.modern_cache, output_dir)
 
     rows_by_id = {row.item_id: row for row in rows}
-    missing_model_rows = [item_id for item_id in colosseum_ids if item_id not in rows_by_id]
+    missing_model_rows = [
+        item_id for item_id in model_item_ids
+        if item_id not in rows_by_id
+    ]
     if missing_model_rows:
         raise SystemExit(
             "export_colosseum_items: header rows missing after export: "
@@ -1148,7 +1282,7 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
 
     no_worn_model_item_ids: list[int] = []
     visible_worn_item_ids: list[int] = []
-    for item_id in colosseum_ids:
+    for item_id in model_item_ids:
         cache_item = cache_items[item_id]
         row = rows_by_id[item_id]
         if row.inv_model == MISSING_U32:
@@ -1170,7 +1304,7 @@ def export_assets(args: argparse.Namespace) -> ExportReport:
     return ExportReport(
         loadout_item_ids=sorted(set(colosseum_ids)),
         visible_worn_item_ids=sorted(set(visible_worn_item_ids)),
-        sprite_item_ids=sorted(set(colosseum_ids)),
+        sprite_item_ids=sorted(set(sprite_export_ids)),
         no_worn_model_item_ids=sorted(set(no_worn_model_item_ids)),
     )
 

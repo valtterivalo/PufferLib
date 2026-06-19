@@ -722,4 +722,6 @@ static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLO
     }
 }
 
+#include "osrs_venator.h"
+
 #endif /* OSRS_COMBAT_H */

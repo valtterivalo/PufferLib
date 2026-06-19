@@ -32,6 +32,10 @@
 #ifdef OSRS_VISUAL
 #include "osrs_render.h"
 #include "puffernet.h"
+
+static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
+    gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
+}
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -1268,6 +1272,9 @@ static void run_visual(
     } else if (strcmp(encounter_name, "colosseum") == 0) {
         osrs_asset_require_group(OSRS_ASSET_GROUP_COLOSSEUM);
         osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+        col_for_each_display_inventory_sprite_raw_osrs_id(
+            visual_require_gui_item_sprite,
+            &rc->gui);
     }
 
     /* share collision map pointer with renderer for overlays */

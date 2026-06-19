@@ -251,14 +251,14 @@ static inline int osrs_consumable_offensive_boost_amount(OsrsConsumableKind k, i
  * Decodes an item effect mask into a 4-way effect-class one-hot.
  *
  * out[0] lifesteal, out[1] damage_amp, out[2] defensive, out[3] util. Every
- * effect bit (1<<0 .. 1<<14) is covered exactly once across the four classes.
+ * effect bit (1<<0 .. 1<<15) is covered exactly once across the four classes.
  * Read-only descriptors already in {0, 1}; no clamp required.
  */
 static inline void osrs_item_effect_class4(uint32_t effect_mask, float out[4]) {
     uint32_t lifesteal = OSRS_ITEM_EFFECT_BLOOD_FURY | OSRS_ITEM_EFFECT_SANG_HEAL;
     uint32_t damage_amp = OSRS_ITEM_EFFECT_TWISTED_BOW | OSRS_ITEM_EFFECT_FANG |
         OSRS_ITEM_EFFECT_TUMEKENS_SHADOW | OSRS_ITEM_EFFECT_DHAROK_PIECE |
-        OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND;
+        OSRS_ITEM_EFFECT_DRAGON_HUNTER_WAND | OSRS_ITEM_EFFECT_VENATOR_BOUNCE;
     uint32_t defensive = OSRS_ITEM_EFFECT_ELYSIAN | OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR |
         OSRS_ITEM_EFFECT_RECOIL_RING | OSRS_ITEM_EFFECT_VENOM_IMMUNE |
         OSRS_ITEM_EFFECT_ECHO_BOOTS | OSRS_ITEM_EFFECT_CONFLICTION |

@@ -441,8 +441,73 @@ static void col_emit_npc_attack_projectile(
     }
 }
 
+/** Emit Venator bounce hops after the primary player-to-NPC projectile. */
+static void col_emit_player_venator_bounce_projectiles(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    EncounterOverlay* ov,
+    const OsrsCombatProjectileProfile* profile,
+    int start_delay,
+    int duration
+) {
+    if (!ctx || ctx->player_venator_chain_count <= 1) return;
+    if (ctx->player_venator_chain_count > OSRS_VENATOR_MAX_CHAIN_HITS) abort();
+    if (!profile || profile->projectile_model_id <= 0) {
+        fprintf(stderr, "colosseum: missing Venator bounce projectile model\n");
+        abort();
+    }
+
+    int bounce_count = ctx->player_venator_chain_count - 1;
+    encounter_require_projectile_slots(ov, bounce_count);
+    for (int hop = 1; hop < ctx->player_venator_chain_count; hop++) {
+        int source_slot = ctx->player_venator_chain_slots[hop - 1];
+        int target_slot = ctx->player_venator_chain_slots[hop];
+        if (source_slot < 0 || source_slot >= COLO_MAX_NPCS ||
+                target_slot < 0 || target_slot >= COLO_MAX_NPCS) {
+            fprintf(stderr, "colosseum: invalid Venator chain slot\n");
+            abort();
+        }
+        ColoNPC* source = &s->npcs[source_slot];
+        ColoNPC* target = &s->npcs[target_slot];
+        if (!source->active || !target->active) {
+            fprintf(stderr, "colosseum: Venator chain target inactive\n");
+            abort();
+        }
+        int source_size = col_npc_effective_size(source);
+        int target_size = col_npc_effective_size(target);
+        int source_h = (int)(source_size * 0.5f * 128);
+        int target_h = (int)(target_size * 0.5f * 128);
+        OsrsProjectileEventSpec spec = {
+            .src_x = source->x,
+            .src_y = source->y,
+            .dst_x = target->x,
+            .dst_y = target->y,
+            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+            .damage = 0,
+            .duration_ticks = duration,
+            .start_h = source_h,
+            .end_h = target_h,
+            .curve = osrs_combat_projectile_value_or(profile->projectile_angle, 16),
+            .arc_height = osrs_combat_projectile_profile_arc_height(
+                profile, ATTACK_STYLE_RANGED),
+            .src_size = source_size,
+            .dst_size = target_size,
+            .model_id = (uint32_t)profile->projectile_model_id,
+            .anim_id = profile->projectile_anim_id,
+            .travel_gfx_id = 0,
+            .launch_gfx_id = 0,
+            .impact_gfx_id = osrs_combat_projectile_value_or(
+                profile->impact_spotanim_id, 0),
+            .start_delay = start_delay + (hop - 1) * duration,
+        };
+        (void)osrs_emit_projectile_npc_to_npc(
+            ov, &spec, source_slot, target_slot);
+    }
+}
+
 static void col_emit_player_attack_projectiles(
     ColosseumState* s,
+    ColosseumContext* ctx,
     EncounterOverlay* ov
 ) {
     if (!s->tick_scratch.player_attacked ||
@@ -542,6 +607,8 @@ static void col_emit_player_attack_projectiles(
             profile,
             &emit_spec);
     }
+    col_emit_player_venator_bounce_projectiles(
+        s, ctx, ov, base_profile, p_start_delay + p_duration, 30);
 }
 
 /** Render-only: the allied thrall's magic bolt, lobbed from its render tile to
@@ -650,7 +717,7 @@ static void col_render_post_tick_ctx(
         col_emit_javelin_skyfall_landing_projectile(
             ov, &ctx->javelin_skyfall_landing[i]);
     }
-    col_emit_player_attack_projectiles(s, ov);
+    col_emit_player_attack_projectiles(s, ctx, ov);
     if (ctx->thrall_attacked_this_tick)
         col_emit_thrall_projectile(s, ov);
 }

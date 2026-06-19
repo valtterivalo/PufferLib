@@ -283,6 +283,9 @@ static int test_effect_class4_decoder(void) {
     osrs_item_effect_class4(OSRS_ITEM_EFFECT_TWISTED_BOW, eff4);
     CHECK("twisted bow is damage amp only",
           eff4[0] == 0.0f && eff4[1] == 1.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
+    osrs_item_effect_class4(OSRS_ITEM_EFFECT_VENATOR_BOUNCE, eff4);
+    CHECK("venator bounce is damage amp only",
+          eff4[0] == 0.0f && eff4[1] == 1.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
     osrs_item_effect_class4(OSRS_ITEM_EFFECT_LIGHTBEARER, eff4);
     CHECK("lightbearer is util only",
           eff4[0] == 0.0f && eff4[1] == 0.0f && eff4[2] == 0.0f && eff4[3] == 1.0f);

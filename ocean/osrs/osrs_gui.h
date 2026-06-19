@@ -737,6 +737,42 @@ static int gui_spell_off_sprite_id(GuiSpellIdx idx) {
     return GUI_SPELL_OFF_SPRITE_IDS[idx];
 }
 
+static int gui_find_sprite_index_by_osrs_id(const GuiState* gs, int osrs_id) {
+    if (osrs_id <= 0) return -1;
+    for (int i = 0; i < gs->item_sprite_count; i++) {
+        if (gs->item_sprite_ids[i] == osrs_id) return i;
+    }
+    return -1;
+}
+
+static Texture2D gui_load_sprite_by_osrs_id_if_present(GuiState* gs, int osrs_id) {
+    Texture2D empty = {0};
+    int existing_idx = gui_find_sprite_index_by_osrs_id(gs, osrs_id);
+    if (existing_idx >= 0) return gs->item_sprite_tex[existing_idx];
+    if (osrs_id <= 0 || gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) return empty;
+
+    const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id);
+    if (!osrs_asset_exists(path)) return empty;
+
+    Texture2D tex = osrs_asset_load_texture(path);
+    if (tex.id == 0) return empty;
+
+    int idx = gs->item_sprite_count++;
+    gs->item_sprite_ids[idx] = osrs_id;
+    gs->item_sprite_tex[idx] = tex;
+    return tex;
+}
+
+static void gui_require_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
+    Texture2D tex = gui_load_sprite_by_osrs_id_if_present(gs, osrs_id);
+    if (tex.id != 0) return;
+
+    fprintf(stderr, "GUI: missing required item sprite raw id %d at %s\n",
+        osrs_id,
+        TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id));
+    abort();
+}
+
 /** Load all GUI sprites from data/sprites/gui/. */
 static void gui_load_sprites(GuiState* gs) {
     gs->sprites_loaded = 1;
@@ -976,13 +1012,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < NUM_ITEMS && gs->item_sprite_count < GUI_MAX_ITEM_SPRITES; i++) {
         int item_id = ITEM_DATABASE[i].item_id;
         if (item_id <= 0) continue;
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), item_id);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = item_id;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
+        gui_load_sprite_by_osrs_id_if_present(gs, item_id);
     }
 
     /* consumable sprites: not in ITEM_DATABASE, load by OSRS item ID directly */
@@ -1001,34 +1031,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = cid;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
-    }
-
-    /* colosseum render-only display-inventory ids that are NOT in ITEM_DATABASE
-       nor the consumable list above (Venator bow, Abyssal tentacle, divine pots,
-       sanfew, Guthix rest, surge, Divine rune pouch). The export pipeline writes
-       their PNGs; load any that exist so the 1:1 kit panel can resolve them. */
-    static const int colosseum_display_ids[] = {
-        27610, 12006, 27281,             /* Venator bow, Abyssal tentacle, Divine rune pouch */
-        23685, 23733,                    /* Divine super combat(4), Divine ranging(4) */
-        10925, 4417, 30875,              /* Sanfew serum(4), Guthix rest(4), Surge potion(4) */
-    };
-    for (int i = 0; i < (int)(sizeof(colosseum_display_ids)/sizeof(colosseum_display_ids[0])); i++) {
-        if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
-        int cid = colosseum_display_ids[i];
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = cid;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
+        gui_load_sprite_by_osrs_id_if_present(gs, cid);
     }
     TraceLog(LOG_INFO, "GUI: loaded %d item sprites (incl consumables)", gs->item_sprite_count);
 }
@@ -1047,21 +1050,7 @@ static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
 static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     Texture2D empty = { 0 };
     if (osrs_id <= 0) return empty;
-    for (int i = 0; i < gs->item_sprite_count; i++) {
-        if (gs->item_sprite_ids[i] == osrs_id) return gs->item_sprite_tex[i];
-    }
-    if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) return empty;
-    const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id);
-    if (!osrs_asset_exists(path)) return empty;
-    int idx = gs->item_sprite_count++;
-    gs->item_sprite_ids[idx] = osrs_id;
-    gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-    if (gs->item_sprite_tex[idx].id == 0) {
-        gs->item_sprite_count--;
-        gs->item_sprite_ids[idx] = 0;
-        return empty;
-    }
-    return gs->item_sprite_tex[idx];
+    return gui_load_sprite_by_osrs_id_if_present(gs, osrs_id);
 }
 
 static int gui_coin_stack_display_id(int quantity) {

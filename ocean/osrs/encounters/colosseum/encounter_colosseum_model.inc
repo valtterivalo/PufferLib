@@ -1486,6 +1486,136 @@ static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO
     },
 };
 
+typedef void (*ColRawOsrsIdVisitor)(int raw_osrs_id, void* ctx);
+
+static const int COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[] = {
+    27610,
+    12006,
+    27281,
+};
+
+static int col_raw_osrs_id_seen(const int* seen, int seen_count, int raw_osrs_id) {
+    for (int i = 0; i < seen_count; i++) {
+        if (seen[i] == raw_osrs_id) return 1;
+    }
+    return 0;
+}
+
+static void col_visit_raw_osrs_id_once(
+    int raw_osrs_id,
+    int* seen,
+    int* seen_count,
+    int seen_capacity,
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (raw_osrs_id <= 0 || col_raw_osrs_id_seen(seen, *seen_count, raw_osrs_id)) {
+        return;
+    }
+    if (*seen_count >= seen_capacity) {
+        fprintf(stderr, "colosseum sprite id visitor capacity exceeded\n");
+        abort();
+    }
+    seen[(*seen_count)++] = raw_osrs_id;
+    visit(raw_osrs_id, ctx);
+}
+
+/**
+ * Visits every dose-specific raw id reachable from colosseum gameplay loadouts.
+ */
+static void col_for_each_reachable_consumable_dose_raw_osrs_id(
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (!visit) {
+        fprintf(stderr, "colosseum consumable dose visitor is null\n");
+        abort();
+    }
+
+    enum {
+        REGISTRY_COUNT = (int)(
+            sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY) /
+            sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY[0])
+        )
+    };
+    int seen[REGISTRY_COUNT];
+    int seen_count = 0;
+
+    for (int p = 0; p < COLO_NUM_LOADOUT_PROFILES; p++) {
+        for (int slot = 0; slot < COLO_INVENTORY_DISPLAY_SLOTS; slot++) {
+            uint16_t raw_osrs_id =
+                (uint16_t)COLO_GAMEPLAY_INVENTORY_LOADOUT[p][slot];
+            OsrsConsumableClick root =
+                osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
+            if (root.click_action != OSRS_CLICK_DRINK || root.dose_count == 0) {
+                continue;
+            }
+
+            uint16_t current_raw_osrs_id = raw_osrs_id;
+            for (int step = 0; current_raw_osrs_id != 0; step++) {
+                if (step >= REGISTRY_COUNT) {
+                    fprintf(stderr, "colosseum consumable dose chain cycles at raw id %u\n",
+                        current_raw_osrs_id);
+                    abort();
+                }
+                OsrsConsumableClick current =
+                    osrs_consumable_click_lookup_raw_osrs_id(current_raw_osrs_id);
+                if (current.click_action != OSRS_CLICK_DRINK ||
+                        current.dose_count == 0 ||
+                        current.consumable_kind != root.consumable_kind) {
+                    fprintf(stderr, "colosseum consumable dose chain broke at raw id %u\n",
+                        current_raw_osrs_id);
+                    abort();
+                }
+                col_visit_raw_osrs_id_once(
+                    current_raw_osrs_id,
+                    seen,
+                    &seen_count,
+                    REGISTRY_COUNT,
+                    visit,
+                    ctx);
+                current_raw_osrs_id =
+                    osrs_consumable_raw_osrs_id_after_drink(current_raw_osrs_id);
+            }
+        }
+    }
+}
+
+/**
+ * Visits every raw item id that the colosseum display inventory must sprite-load.
+ */
+static void col_for_each_display_inventory_sprite_raw_osrs_id(
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (!visit) {
+        fprintf(stderr, "colosseum display sprite visitor is null\n");
+        abort();
+    }
+
+    enum {
+        DISPLAY_CAPACITY =
+            (int)(sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS) /
+                  sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[0])) +
+            (int)(sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY) /
+                  sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY[0]))
+    };
+    int seen[DISPLAY_CAPACITY];
+    int seen_count = 0;
+
+    for (int i = 0; i < (int)(sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS) /
+            sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[0])); i++) {
+        col_visit_raw_osrs_id_once(
+            COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[i],
+            seen,
+            &seen_count,
+            DISPLAY_CAPACITY,
+            visit,
+            ctx);
+    }
+    col_for_each_reachable_consumable_dose_raw_osrs_id(visit, ctx);
+}
+
 /** Arceuus thrall (one allied auto-attacker, full fidelity): greater-thrall max
     hit 3 both kits, uniform 0..3 (accuracy ignored), 4-tick cadence, 17-tick
     recast gate. Damage routes through col_queue_npc_pending_hit (source -1) so
@@ -1607,6 +1737,8 @@ typedef struct {
     int thrall_attacked_this_tick;
     /* render-only: the equipped spec weapon item index fired this tick. */
     int player_spec_fired_kind;
+    int player_venator_chain_count;
+    int player_venator_chain_slots[OSRS_VENATOR_MAX_CHAIN_HITS];
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
@@ -1620,6 +1752,24 @@ static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
     ctx->thrall_attacked_this_tick = 0;
     ctx->player_spec_fired_kind = 0;
+    ctx->player_venator_chain_count = 0;
+    for (int i = 0; i < OSRS_VENATOR_MAX_CHAIN_HITS; i++)
+        ctx->player_venator_chain_slots[i] = -1;
+}
+
+/** Record the Venator chain for same-tick projectile emission only. */
+static inline void col_context_record_venator_chain(
+    ColosseumContext* ctx,
+    const OsrsVenatorChain* chain
+) {
+    if (!ctx) abort();
+    if (!chain) abort();
+    osrs_venator_validate_chain_length(chain->length);
+    ctx->player_venator_chain_count = (int)chain->length;
+    for (int i = 0; i < OSRS_VENATOR_MAX_CHAIN_HITS; i++)
+        ctx->player_venator_chain_slots[i] = -1;
+    for (int i = 0; i < (int)chain->length; i++)
+        ctx->player_venator_chain_slots[i] = chain->hits[i].slot;
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single
