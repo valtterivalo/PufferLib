@@ -47,11 +47,13 @@ typedef struct StaticVec {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     unsigned char* action_mask;
     StaticObsTensor gpu_observations;
     float* gpu_actions;
     float* gpu_rewards;
     float* gpu_terminals;
+    float* gpu_truncations;
     unsigned char* gpu_action_mask;
     cudaStream_t* streams;
     StaticThreading* threading;
@@ -128,10 +130,12 @@ static void py_puff_advantage_cpu(
         long long dones_ptr, long long importance_ptr,
         long long advantages_ptr,
         int num_steps, int horizon,
-        float gamma, float lambda, float rho_clip, float c_clip) {
+        float gamma, float lambda, float rho_clip, float c_clip,
+        long long truncations_ptr) {
     const float* values = (const float*)values_ptr;
     const float* rewards = (const float*)rewards_ptr;
     const float* dones = (const float*)dones_ptr;
+    const float* truncations = (const float*)truncations_ptr;
     const float* importance = (const float*)importance_ptr;
     float* advantages = (float*)advantages_ptr;
     for (int row = 0; row < num_steps; row++) {
@@ -140,6 +144,8 @@ static void py_puff_advantage_cpu(
         for (int t = horizon - 2; t >= 0; t--) {
             int t_next = t + 1;
             float nextnonterminal = 1.0f - dones[off + t_next];
+            float next_truncated = truncations == nullptr ? 0.0f : truncations[off + t_next];
+            float nextboundary = next_truncated != 0.0f ? 0.0f : nextnonterminal;
             float imp = importance[off + t];
             float rho_t = imp < rho_clip ? imp : rho_clip;
             float c_t = imp < c_clip ? imp : c_clip;
@@ -147,7 +153,7 @@ static void py_puff_advantage_cpu(
             float v = values[off + t];
             float v_nxt = values[off + t_next];
             float delta = rho_t * r_nxt + gamma * v_nxt * nextnonterminal - v;
-            lastpufferlam = delta + gamma * lambda * c_t * lastpufferlam * nextnonterminal;
+            lastpufferlam = delta + gamma * lambda * c_t * lastpufferlam * nextboundary;
             advantages[off + t] = lastpufferlam;
         }
     }
@@ -253,7 +259,12 @@ PYBIND11_MODULE(_C, m) {
     m.attr("env_name") = PUFFER_STRINGIFY(ENV_NAME);
     m.attr("gpu") = 0;
 
-    m.def("puff_advantage_cpu", &py_puff_advantage_cpu);
+    m.def("puff_advantage_cpu", &py_puff_advantage_cpu,
+        py::arg("values_ptr"), py::arg("rewards_ptr"), py::arg("dones_ptr"),
+        py::arg("importance_ptr"), py::arg("advantages_ptr"),
+        py::arg("num_steps"), py::arg("horizon"),
+        py::arg("gamma"), py::arg("lambda"), py::arg("rho_clip"), py::arg("c_clip"),
+        py::arg("truncations_ptr") = 0);
     m.def("create_vec", &create_vec, py::arg("args"), py::arg("gpu") = 0);
 
     py::class_<VecEnv, std::unique_ptr<VecEnv>>(m, "VecEnv")
@@ -267,6 +278,7 @@ PYBIND11_MODULE(_C, m) {
         .def_property_readonly("obs_ptr", [](VecEnv& ve) { return (long long)ve.vec->observations.data; })
         .def_property_readonly("rewards_ptr", [](VecEnv& ve) { return (long long)ve.vec->rewards; })
         .def_property_readonly("terminals_ptr", [](VecEnv& ve) { return (long long)ve.vec->terminals; })
+        .def_property_readonly("truncations_ptr", [](VecEnv& ve) { return (long long)ve.vec->truncations; })
         .def("reset", &vec_reset)
         .def("cpu_step", &cpu_vec_step_py)
         .def("render", [](VecEnv& ve, int env_id) { static_vec_render(ve.vec, env_id); })

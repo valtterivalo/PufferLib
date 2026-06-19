@@ -25,6 +25,7 @@
 #include "../osrs_encounter_player.h"
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_player_consumables.h"
+#include "../osrs_inventory_clicks.h"
 #include "../osrs_interaction.h"
 #include "../data/npc_models.h"
 #include <assert.h>

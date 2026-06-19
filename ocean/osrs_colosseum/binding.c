@@ -53,6 +53,7 @@ typedef struct ColosseumEnv {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     int num_agents;
     int rng;
     Log log;
@@ -79,6 +80,7 @@ typedef struct ColosseumEnv {
 #define ACT_SIZES COLO_ACTION_DIMS_INIT
 #define OBS_TENSOR_T FloatTensor
 #define Env ColosseumEnv
+#define MY_TRUNCATIONS 1
 
 #define MAX_CURRICULUM_TIERS 8
 
@@ -120,8 +122,10 @@ void c_step(Env* env) {
 
     env->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_term = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
+    int is_trunc = is_term && env->state.time_limit_truncated;
     env->term_staging = (unsigned char)is_term;
-    env->terminals[0] = (float)is_term;
+    env->terminals[0] = (float)(is_term && !is_trunc);
+    env->truncations[0] = (float)is_trunc;
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
 
     if (is_term) {
@@ -137,13 +141,20 @@ void c_step(Env* env) {
             env->log.damage_dealt += clog->total_damage_dealt;
             env->log.damage_received += clog->total_damage_received;
             env->log.npc_kills += (float)clog->total_npc_kills;
+            env->log.colo_outcome_score += clog->outcome_score;
+            env->log.colo_min_sol_hp += (float)s->min_sol_hp_seen;
             env->log.prayer_correct += (float)clog->total_prayer_correct;
             env->log.prayer_total += (float)clog->total_npc_attacks;
             for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
                 env->log.colo_pray_faced_by_type[t] += clog->pray_faced_by_type[t];
                 env->log.colo_pray_correct_by_type[t] += clog->pray_correct_by_type[t];
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
+                env->log.colo_death_by_type[t] += clog->death_by_type[t];
             }
+            env->log.colo_death_fatal_damage += clog->death_fatal_damage;
+            env->log.colo_offpray_damage_conflict += clog->offpray_damage_conflict;
+            env->log.colo_offpray_damage_solo += clog->offpray_damage_solo;
+            env->log.colo_death_on_conflict_tick += clog->death_on_conflict_tick;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -199,6 +210,12 @@ void c_render(Env* env) {
             .world_origin_y = 3090,
         };
         re->collision_map = encounter_load_scene_assets(rc, &scene);
+        ENCOUNTER_COLOSSEUM.put_ptr(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "collision_map", re->collision_map);
+        ENCOUNTER_COLOSSEUM.put_int(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "world_offset_x", 1808);
+        ENCOUNTER_COLOSSEUM.put_int(
+            COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), "world_offset_y", 3090);
         render_populate_entities(rc, re);
         rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
         rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
@@ -272,7 +289,10 @@ void my_init(Env* env, Dict* kwargs) {
         "boss_phase_bonus",
         "win_bonus",
         "prayer_correct_reward",
+        "offpray_damage_penalty_coeff",
+        "avoided_damage_coeff",
         "death_penalty_coeff",
+        "timeout_penalty",
         "beginner_loadout_fraction",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
@@ -284,9 +304,12 @@ void my_init(Env* env, Dict* kwargs) {
     }
 
     static const char* const optional_int_keys[] = {
-        "terminal_penalty_enabled",
         "loadout_profile_mode",
         "step_out_forecast_obs_enabled",
+        "forecast_horizon",
+        "forecast_run_tile_mode",
+        "mask_inventory_heads",
+        "action_debug_log",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);
@@ -304,6 +327,24 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int agents_per_buffer = total_agents / num_buffers;
     DictItem* base_start_wave_item = dict_get_unsafe(env_kwargs, "start_wave");
     int base_start_wave = base_start_wave_item ? (int)base_start_wave_item->value : 0;
+    DictItem* classic_curriculum_mode_item =
+        dict_get_unsafe(env_kwargs, "classic_curriculum_mode");
+    int classic_curriculum_mode = classic_curriculum_mode_item
+        ? (int)classic_curriculum_mode_item->value : 1;
+    if (classic_curriculum_mode < 0 || classic_curriculum_mode > 1) {
+        fprintf(stderr, "classic_curriculum_mode must be 0 or 1, got %d\n",
+            classic_curriculum_mode);
+        abort();
+    }
+    DictItem* curriculum_num_tiers_item =
+        dict_get_unsafe(env_kwargs, "curriculum_num_tiers");
+    int curriculum_num_tiers = curriculum_num_tiers_item
+        ? (int)curriculum_num_tiers_item->value : MAX_CURRICULUM_TIERS;
+    if (curriculum_num_tiers < 0 || curriculum_num_tiers > MAX_CURRICULUM_TIERS) {
+        fprintf(stderr, "curriculum_num_tiers must be between 0 and %d, got %d\n",
+            MAX_CURRICULUM_TIERS, curriculum_num_tiers);
+        abort();
+    }
 
     static const char* wave_keys[] = {
         "curriculum_wave_1", "curriculum_wave_2", "curriculum_wave_3", "curriculum_wave_4",
@@ -316,13 +357,15 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     int curriculum_waves[MAX_CURRICULUM_TIERS];
     float curriculum_fracs[MAX_CURRICULUM_TIERS];
     int num_tiers = 0;
-    for (int i = 0; i < MAX_CURRICULUM_TIERS; i++) {
-        DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
-        DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
-        if (w && f && f->value > 0.0) {
-            curriculum_waves[num_tiers] = (int)w->value;
-            curriculum_fracs[num_tiers] = (float)f->value;
-            num_tiers++;
+    if (classic_curriculum_mode == 1) {
+        for (int i = 0; i < curriculum_num_tiers; i++) {
+            DictItem* w = dict_get_unsafe(env_kwargs, wave_keys[i]);
+            DictItem* f = dict_get_unsafe(env_kwargs, frac_keys[i]);
+            if (w && f && f->value > 0.0) {
+                curriculum_waves[num_tiers] = (int)w->value;
+                curriculum_fracs[num_tiers] = (float)f->value;
+                num_tiers++;
+            }
         }
     }
 
@@ -404,11 +447,8 @@ void my_log(Log* log, Dict* out) {
         ? log->prayer_correct / log->prayer_total : 0.0f;
     dict_set(out, "prayer_correct_rate", prayer_rate);
 
-    /* score: win-rate plus partial credit for wave progress on losses. */
-    float wr = log->wins;
-    float wave_frac = log->wave / (float)COLO_NUM_WAVES;
-    float score = wr + (1.0f - wr) * wave_frac * 0.5f;
-    dict_set(out, "score", score);
+    dict_set(out, "score", log->colo_outcome_score);
+    dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
 
     /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
        overhead per prayer-checkable hit faced) + mean off-prayer damage taken
@@ -432,4 +472,18 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, OFFPRAY_RATE_KEYS[t], off_rate);
         dict_set(out, OFFPRAY_DMG_KEYS[t], log->colo_offpray_damage_by_type[t]);
     }
+
+    /* death attribution (diagnostic): kill-share per NPC type (which landed the
+       killing blow) + mean fatal-tick damage. Same literal-key rule as above. */
+    static const char* DEATH_BY_KEYS[COLO_NUM_NPC_TYPES] = {
+        "death_by_berserker", "death_by_archer", "death_by_seer",
+        "death_by_serpent", "death_by_jaguar", "death_by_javelin",
+        "death_by_shockwave", "death_by_minotaur", "death_by_manticore",
+        "death_by_sol", "death_by_totem", "death_by_bee"};
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+        dict_set(out, DEATH_BY_KEYS[t], log->colo_death_by_type[t]);
+    dict_set(out, "death_fatal_damage", log->colo_death_fatal_damage);
+    dict_set(out, "offpray_dmg_conflict", log->colo_offpray_damage_conflict);
+    dict_set(out, "offpray_dmg_solo", log->colo_offpray_damage_solo);
+    dict_set(out, "death_on_conflict_tick", log->colo_death_on_conflict_tick);
 }

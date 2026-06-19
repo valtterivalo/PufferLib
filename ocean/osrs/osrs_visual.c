@@ -177,6 +177,65 @@ static void osrs_print_colosseum_profile_results(void) {
 }
 #endif
 
+#ifdef INF_PROFILE_ENABLED
+static int osrs_inferno_profile_slot_is_counter(int slot) {
+    return slot == INF_PROF_FORECAST_CALLS ||
+        slot == INF_PROF_FORECAST_VALID_ACTIONS ||
+        slot == INF_PROF_FORECAST_DISTINCT_LANDINGS;
+}
+
+static void osrs_print_inferno_profile_results(int total_steps) {
+    int count = inferno_env_profile_count();
+    if (count <= 0) return;
+    double values[INF_PROF_COUNT];
+    int order[INF_PROF_COUNT];
+    int order_count = 0;
+    for (int i = 0; i < count; i++) {
+        values[i] = inferno_env_profile_read_reset_ms(i);
+        if (!osrs_inferno_profile_slot_is_counter(i))
+            order[order_count++] = i;
+    }
+    for (int i = 0; i < order_count; i++) {
+        int best = i;
+        for (int j = i + 1; j < order_count; j++) {
+            if (values[order[j]] > values[order[best]]) best = j;
+        }
+        int tmp = order[i];
+        order[i] = order[best];
+        order[best] = tmp;
+    }
+    double total = values[INF_PROF_C_STEP_TOTAL];
+    printf("Inferno profile buckets:\n");
+    for (int r = 0; r < order_count; r++) {
+        int slot = order[r];
+        double pct = total > 0.0 ? 100.0 * values[slot] / total : 0.0;
+        printf("  %-28s %.3f ms  %.2f%%\n",
+            inferno_env_profile_name(slot), values[slot], pct);
+    }
+
+    double calls = values[INF_PROF_FORECAST_CALLS];
+    double valid_actions = values[INF_PROF_FORECAST_VALID_ACTIONS];
+    double distinct_landings = values[INF_PROF_FORECAST_DISTINCT_LANDINGS];
+    double steps = total_steps > 0 ? (double)total_steps : 1.0;
+    double call_divisor = calls > 0.0 ? calls : 1.0;
+    printf("Inferno forecast counters:\n");
+    printf("  %-28s %.0f total  %.3f per step\n",
+        inferno_env_profile_name(INF_PROF_FORECAST_CALLS),
+        calls,
+        calls / steps);
+    printf("  %-28s %.0f total  %.3f per step  %.3f per forecast\n",
+        inferno_env_profile_name(INF_PROF_FORECAST_VALID_ACTIONS),
+        valid_actions,
+        valid_actions / steps,
+        valid_actions / call_divisor);
+    printf("  %-28s %.0f total  %.3f per step  %.3f per forecast\n",
+        inferno_env_profile_name(INF_PROF_FORECAST_DISTINCT_LANDINGS),
+        distinct_landings,
+        distinct_landings / steps,
+        distinct_landings / call_divisor);
+}
+#endif
+
 static void run_profile(
     OsrsEnv* env,
     const char* encounter_name,
@@ -273,12 +332,19 @@ static void run_profile(
                 (void)colosseum_env_profile_read_reset_ms(i);
         }
 #endif
+#ifdef INF_PROFILE_ENABLED
+        if (strcmp(profile_edef->name, "inferno") == 0) {
+            int count = inferno_env_profile_count();
+            for (int i = 0; i < count; i++)
+                (void)inferno_env_profile_read_reset_ms(i);
+        }
+#endif
     }
 
     double start = osrs_profile_now_seconds();
     double elapsed = 0;
     int total_steps = 0;
-    int enc_actions[16] = {0};
+    int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
 
     while ((profile_steps > 0 && total_steps < profile_steps) ||
            (profile_steps <= 0 && elapsed < 10.0)) {
@@ -290,15 +356,27 @@ static void run_profile(
             double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
             double col_prof_t0 = col_prof_total_t0;
 #endif
+#ifdef INF_PROFILE_ENABLED
+            int inf_profile_this_step = strcmp(edef->name, "inferno") == 0;
+            int inf_prof_enabled = inf_profile_this_step ? INF_PROFILE_ENABLED() : 0;
+            double inf_prof_total_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
+            double inf_prof_t0 = inf_prof_total_t0;
+#endif
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
 #endif
+#ifdef INF_PROFILE_ENABLED
+            INF_PROFILE_MARK(INF_PROF_C_ACTIONS);
+#endif
             edef->step(env->encounter_state, env->encounter_context, enc_actions);
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_ENCOUNTER_STEP);
+#endif
+#ifdef INF_PROFILE_ENABLED
+            INF_PROFILE_MARK(INF_PROF_C_ENCOUNTER_STEP);
 #endif
             edef->write_obs(
                 env->encounter_state,
@@ -307,12 +385,18 @@ static void run_profile(
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_WRITE_OBS);
 #endif
+#ifdef INF_PROFILE_ENABLED
+            INF_PROFILE_MARK(INF_PROF_C_WRITE_OBS);
+#endif
             edef->write_mask(
                 env->encounter_state,
                 (EncounterContext*)env->encounter_context,
                 encounter_obs + edef->obs_size);
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_WRITE_MASK);
+#endif
+#ifdef INF_PROFILE_ENABLED
+            INF_PROFILE_MARK(INF_PROF_C_WRITE_MASK);
 #endif
             (void)edef->get_reward(
                 env->encounter_state,
@@ -321,6 +405,10 @@ static void run_profile(
 #ifdef COLO_PROFILE_ENABLED
                 COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
                 COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
+#endif
+#ifdef INF_PROFILE_ENABLED
+                INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
+                INF_PROFILE_MARK(INF_PROF_C_TERMINAL_LOG);
 #endif
                 edef->reset(
                     env->encounter_state, env->encounter_context, (uint32_t)rand());
@@ -335,9 +423,15 @@ static void run_profile(
 #ifdef COLO_PROFILE_ENABLED
                 COLO_PROFILE_MARK(COLO_PROF_C_RESET);
 #endif
+#ifdef INF_PROFILE_ENABLED
+                INF_PROFILE_MARK(INF_PROF_C_RESET);
+#endif
             } else {
 #ifdef COLO_PROFILE_ENABLED
                 COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
+#endif
+#ifdef INF_PROFILE_ENABLED
+                INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
 #endif
             }
 #ifdef COLO_PROFILE_ENABLED
@@ -345,6 +439,12 @@ static void run_profile(
                 COLO_PROFILE_ADD(
                     COLO_PROF_C_STEP_TOTAL,
                     COLO_PROFILE_NOW_MS() - col_prof_total_t0);
+#endif
+#ifdef INF_PROFILE_ENABLED
+            if (inf_prof_enabled)
+                INF_PROFILE_ADD(
+                    INF_PROF_C_STEP_TOTAL,
+                    INF_PROFILE_NOW_MS() - inf_prof_total_t0);
 #endif
         } else {
             for (int agent = 0; agent < NUM_AGENTS; agent++) {
@@ -373,6 +473,10 @@ static void run_profile(
 #ifdef COLO_PROFILE_ENABLED
     if (encounter_name && strcmp(encounter_name, "colosseum") == 0)
         osrs_print_colosseum_profile_results();
+#endif
+#ifdef INF_PROFILE_ENABLED
+    if (encounter_name && strcmp(encounter_name, "inferno") == 0)
+        osrs_print_inferno_profile_results(total_steps);
 #endif
 
     if (env->encounter_def && env->encounter_state) {
@@ -471,7 +575,7 @@ static void __attribute__((unused)) replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf->initial_snapshot); free(rf); }
 }
 
-#define VISUAL_POLICY_MAX_ACTION_HEADS 16
+#define VISUAL_POLICY_MAX_ACTION_HEADS 64
 
 typedef enum {
     VISUAL_POLICY_NONE = 0,
@@ -661,12 +765,16 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
     return (float)((visual_policy_next_u32(policy) >> 8) * (1.0 / 16777216.0));
 }
 
+static int g_cli_hidden_size = -1;
+static int g_cli_num_layers = -1;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
     const char* model_path,
     VisualPolicyMode mode,
-    uint32_t seed
+    uint32_t seed,
+    int cli_hidden_size,
+    int cli_num_layers
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
@@ -701,6 +809,8 @@ static void visual_policy_init(
     int hidden_size = (strcmp(edef->name, "inferno") == 0 ||
                        strcmp(edef->name, "colosseum") == 0) ? 512 : 128;
     int num_layers = 2;
+    if (cli_hidden_size > 0) hidden_size = cli_hidden_size;
+    if (cli_num_layers > 0) num_layers = cli_num_layers;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
         policy, edef, hidden_size, num_layers);
     policy->net = visual_policy_make_puffernet(
@@ -904,7 +1014,7 @@ static void visual_frame(void* arg) {
     if (env->encounter_def && env->encounter_state) {
         /* encounter mode */
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
-        int enc_actions[16] = {0};
+        int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
         int used_human_step = 0;
 
         if (rc->human_input.enabled && edef->step_human_commands) {
@@ -1335,7 +1445,9 @@ static void run_visual(
         (const EncounterDef*)env->encounter_def,
         model_path,
         policy_mode,
-        policy_seed);
+        policy_seed,
+        g_cli_hidden_size,
+        g_cli_num_layers);
 
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
@@ -1411,6 +1523,10 @@ int main(int argc, char** argv) {
             policy_mode_name = argv[++i];
         else if (strcmp(argv[i], "--policy-seed") == 0 && i + 1 < argc)
             policy_seed = visual_policy_parse_seed(argv[++i]);
+        else if (strcmp(argv[i], "--hidden-size") == 0 && i + 1 < argc)
+            g_cli_hidden_size = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--num-layers") == 0 && i + 1 < argc)
+            g_cli_num_layers = atoi(argv[++i]);
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)

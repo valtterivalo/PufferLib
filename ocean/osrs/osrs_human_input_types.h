@@ -36,6 +36,7 @@ typedef enum {
     HUMAN_COMMAND_ITEM_ON_ITEM,
     HUMAN_COMMAND_ITEM_ON_WIDGET,
     HUMAN_COMMAND_SPELL_ON_WIDGET,
+    HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
 } HumanCommandKind;
 
 typedef struct {
@@ -211,10 +212,11 @@ static inline void human_input_queue_offensive_prayer(HumanInput* hi, int offens
     });
 }
 
-static inline void human_input_queue_eat(HumanInput* hi, int food) {
+static inline void human_input_queue_eat(HumanInput* hi, int food, int inventory_slot) {
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_EAT,
         .food = food,
+        .inventory_slot = inventory_slot,
     });
 }
 
@@ -298,6 +300,16 @@ static inline void human_input_queue_equip_inventory_item(
         .inventory_slot = inventory_slot,
         .item_db_idx = item_db_idx,
         .gear_slot = gear_slot,
+    });
+}
+
+static inline void human_input_queue_inventory_primary_click(
+    HumanInput* hi,
+    int inventory_slot
+) {
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
+        .inventory_slot = inventory_slot,
     });
 }
 

@@ -27,15 +27,34 @@ static void col_put_int_ctx(
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
         ctx->human_command_mode = encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "terminal_penalty_enabled") == 0)
-        ctx->config.terminal_penalty_enabled =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
         ctx->config.step_out_forecast_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "mask_inventory_heads") == 0)
+        ctx->config.mask_inventory_heads =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "action_debug_log") == 0)
+        ctx->config.action_debug_log =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "forecast_horizon") == 0) {
+        if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
+            fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
+                COLO_STEP_OUT_FORECAST_HORIZON, value);
+            abort();
+        }
+        ctx->config.forecast_horizon = value;
+    }
+    else if (strcmp(key, "forecast_run_tile_mode") == 0) {
+        if (value < 0 || value > COLO_FORECAST_RUN_TILE_STATIC_THREAT) {
+            fprintf(stderr, "colosseum: forecast_run_tile_mode must be 0..%d, got %d\n",
+                COLO_FORECAST_RUN_TILE_STATIC_THREAT, value);
+            abort();
+        }
+        ctx->config.forecast_run_tile_mode = value;
+    }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
             fprintf(stderr, "colosseum: loadout_profile_mode must be 0..2, got %d\n", value);
@@ -62,7 +81,12 @@ static void col_put_float_ctx(
     else if (strcmp(key, "win_bonus") == 0) ctx->config.win_bonus = value;
     else if (strcmp(key, "prayer_correct_reward") == 0)
         ctx->config.prayer_correct_reward = value;
+    else if (strcmp(key, "offpray_damage_penalty_coeff") == 0)
+        ctx->config.offpray_damage_penalty_coeff = value;
+    else if (strcmp(key, "avoided_damage_coeff") == 0)
+        ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
+    else if (strcmp(key, "timeout_penalty") == 0) ctx->config.timeout_penalty = value;
     else if (strcmp(key, "beginner_loadout_fraction") == 0) {
         if (!(value >= 0.0f && value <= 1.0f)) {
             fprintf(stderr, "colosseum: beginner_loadout_fraction must be in [0,1], got %.6f\n",
@@ -140,7 +164,7 @@ static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
 enum {
     COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID = 2674,
     COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID = 2675,
-    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2677,
+    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2676,
     COLO_JAVELIN_SKYFALL_SKY_HEIGHT = 1536,
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
@@ -270,7 +294,7 @@ static void col_emit_manticore_orb_telegraphs(
             npc->y,
             col_manticore_orb_model_id(style),
             col_manticore_orb_anim_id(style),
-            2.35f + (float)stack_index * 0.42f,
+            2.35f + (float)stack_index * 0.62f,
             0.0f,
             0.72f + 0.05f * (float)(npc_size - 1));
     }
@@ -378,6 +402,14 @@ static void col_emit_npc_attack_projectile(
         projectile->impact_spotanim_id, 0);
     int curve = osrs_combat_projectile_value_or(projectile->projectile_angle, 16);
     float arc = osrs_combat_projectile_profile_arc_height(projectile, actual_style);
+    /* Colosseum-only: magic casters (serpent shaman Water Surge, seer, shockwave)
+       must lob UP. The shared arc-height helper returns 0 for ATTACK_STYLE_MAGIC,
+       which drops them into the quadratic path where the positive projectile_angle
+       (curve=16) gives a negative height_vel and the arc dips into the ground.
+       A positive arc_height routes them into the always-upward sinusoidal path,
+       matching inferno's Jad/Zuk magic projectiles. */
+    if (actual_style == ATTACK_STYLE_MAGIC && arc <= 0.0f)
+        arc = 1.0f;
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec spec = {
         .src_x = npc->x,
@@ -425,8 +457,7 @@ static void col_emit_player_attack_projectiles(
     if (!target->active)
         return;
 
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    uint8_t weapon = loadouts[s->weapon_set][GEAR_SLOT_WEAPON];
+    uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     int target_size = col_npc_effective_size(target);
     int p_start_h = 64;
     int p_end_h = (int)(target_size * 0.5f * 128);
@@ -513,6 +544,54 @@ static void col_emit_player_attack_projectiles(
     }
 }
 
+/** Render-only: the allied thrall's magic bolt, lobbed from its render tile to
+    the NPC it hit this tick. Mirrors the NPC magic projectile path (thrall magic
+    spotanims THRALL_MAGIC_TRAVEL 1907 / THRALL_MAGIC_IMPACT 1908, arc_height
+    forced positive so magic lobs up) but keeps the source fixed at the thrall
+    tile and tracks the target so it lands. The damage is cosmetic; the sim
+    already queued it. */
+static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) {
+    int slot = s->thrall_target_slot;
+    if (!col_npc_is_thrall_target(s, slot))
+        return;
+    ColoNPC* target = &s->npcs[slot];
+    int target_size = col_npc_effective_size(target);
+
+    int src_x, src_y;
+    col_thrall_render_tile(s, &src_x, &src_y);
+
+    int dist = encounter_projectile_distance(
+        src_x, src_y, 1, target->x, target->y, target_size,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    EncounterProjectileTiming timing =
+        col_player_projectile_timing(ATTACK_STYLE_MAGIC, 0, dist);
+
+    encounter_require_projectile_slots(ov, 1);
+    OsrsProjectileEventSpec spec = {
+        .src_x = src_x,
+        .src_y = src_y,
+        .dst_x = target->x + target_size / 2,
+        .dst_y = target->y + target_size / 2,
+        .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
+        .damage = 0,
+        .duration_ticks = timing.visual_duration_ticks * 30,
+        .start_h = 64,
+        .end_h = (int)(target_size * 0.5f * 128),
+        .curve = 16,
+        .arc_height = 1.0f,
+        .src_size = 1,
+        .dst_size = target_size,
+        .model_id = 0,
+        .anim_id = -1,
+        .travel_gfx_id = 1907,
+        .launch_gfx_id = 0,
+        .impact_gfx_id = 1908,
+        .start_delay = timing.visual_start_delay_ticks * 30,
+    };
+    int idx = osrs_emit_projectile_with_spec(ov, &spec, 1);
+    encounter_set_projectile_target_npc_slot(ov, idx, slot);
+}
+
 static void col_render_post_tick_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -572,6 +651,8 @@ static void col_render_post_tick_ctx(
             ov, &ctx->javelin_skyfall_landing[i]);
     }
     col_emit_player_attack_projectiles(s, ov);
+    if (ctx->thrall_attacked_this_tick)
+        col_emit_thrall_projectile(s, ov);
 }
 
 /* ----- human mode --------------------------------------------------------- */
@@ -606,6 +687,26 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
+static int col_queue_inventory_click_action(int* actions, int inventory_slot) {
+    if (inventory_slot < 0 || inventory_slot >= COLO_INVENTORY_DISPLAY_SLOTS) return -1;
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        int action_head = COLO_HEAD_INV_CLICK_0 + head;
+        if (actions[action_head] == 0) {
+            actions[action_head] = inventory_slot + 1;
+            return action_head;
+        }
+    }
+    return -1;
+}
+
+static void col_rearrange_inventory_cells(
+    ColosseumState* s,
+    int source_slot,
+    int target_slot
+) {
+    osrs_inventory_swap_cells(s->inventory_cells, source_slot, target_slot);
+}
+
 static void col_translate_human_input_ctx(
     HumanInput* hi,
     int* actions,
@@ -631,20 +732,6 @@ static void col_translate_human_input_ctx(
         actions[COLO_HEAD_TARGET] = 0;
     }
 
-    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
-    /* the colosseum EAT head IS the brew (L14); potion intents map onto the
-       researched 5-dim potion head; the spec key arms/disarms spec weapon A
-       (B is agent/lab-reachable; no second human key yet). */
-    if (hi->pending_food || hi->pending_potion == POTION_BREW)
-        actions[COLO_HEAD_EAT] = 1;
-    if (hi->pending_potion == POTION_RESTORE)
-        actions[COLO_HEAD_POTION] = COLO_POTION_RESTORE;
-    else if (hi->pending_potion == POTION_COMBAT)
-        actions[COLO_HEAD_POTION] = COLO_POTION_COMBAT;
-    else if (hi->pending_potion == POTION_RANGED)
-        actions[COLO_HEAD_POTION] = COLO_POTION_RANGING;
-    else if (hi->pending_potion == POTION_SURGE)
-        actions[COLO_HEAD_POTION] = COLO_POTION_SURGE;
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
     encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
@@ -686,20 +773,38 @@ static void col_translate_human_commands_ctx(
                 actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
                 break;
             case HUMAN_COMMAND_EAT:
-                actions[COLO_HEAD_EAT] = 1;
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_DRINK:
-                actions[COLO_HEAD_POTION] = 1;
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
                 actions[COLO_HEAD_SPEC] = 1;
                 break;
-            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
-            case HUMAN_COMMAND_SPELL_TARGET:
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                break;
+            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: {
+                int action_head =
+                    col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                if (ctx->config.action_debug_log) {
+                    fprintf(stderr,
+                        "colo_action tick=%d human_inventory_click slot=%d head=%d action=%d\n",
+                        s->tick, cmd->inventory_slot, action_head,
+                        action_head >= 0 ? actions[action_head] : 0);
+                }
+                break;
+            }
+            case HUMAN_COMMAND_ITEM_ON_ITEM:
+                col_rearrange_inventory_cells(
+                    s, cmd->inventory_slot, cmd->target_inventory_slot);
+                break;
+            case HUMAN_COMMAND_OFFENSIVE_PRAYER:
+                actions[COLO_HEAD_OFFENSIVE] = cmd->offensive_prayer;
+                break;
+            case HUMAN_COMMAND_SPELL_TARGET:
             case HUMAN_COMMAND_FIGHT_STYLE:
             case HUMAN_COMMAND_SET_AUTOCAST:
-            case HUMAN_COMMAND_ITEM_ON_ITEM:
             case HUMAN_COMMAND_ITEM_ON_WIDGET:
             case HUMAN_COMMAND_SPELL_ON_WIDGET:
             case HUMAN_COMMAND_NONE:
@@ -709,7 +814,6 @@ static void col_translate_human_commands_ctx(
 
     /* gear/draft/grapple intents are staged on pending_* (not the command queue),
        so fold them in here exactly as the per-tick translate path does. */
-    if (hi->pending_gear > 0) actions[COLO_HEAD_GEAR] = hi->pending_gear;
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
         actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
@@ -743,8 +847,14 @@ static void col_step_human_commands_ctx(
    totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields.
    v5: E8 bee-contact poison state fields.
    v6: E13 stat drift and divine potion timers.
-   v7: manticore fixed orb cycle split from active telegraph state. */
-#define COLO_SNAPSHOT_VERSION 7u
+   v7: manticore fixed orb cycle split from active telegraph state.
+   v8: combat-fidelity pass — magic weapon set (COLO_GEAR_MAGIC), Arceuus thrall
+       fields, and Death Charge window/cooldown added to ColosseumState.
+   v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
+       special attack contract.
+   v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
+       + player offensive/spec/profile scalars. */
+#define COLO_SNAPSHOT_VERSION 10u
 
 typedef struct {
     uint32_t magic;
@@ -756,26 +866,8 @@ typedef struct {
 
 static void col_refresh_after_state_load(ColosseumState* s, ColosseumContext* ctx) {
     col_build_npc_stats();
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
-        s->player.offensive_prayer, s->player.current_strength,
-        FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
-        s->player.offensive_prayer, s->player.current_ranged,
-        FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
-    encounter_recompute_loadout_max_hits(s->loadout_stats, COLO_NUM_WEAPON_SETS, &s->player);
-    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_loadout[NUM_GEAR_SLOTS];
-        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
-        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
-        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
-            s->player.offensive_prayer, s->player.current_strength,
-            FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
-        osrs_derive_equipment_effect_profile(spec_loadout, &s->spec_effects[k]);
-    }
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        osrs_derive_equipment_effect_profile(loadouts[set], &s->set_effects[set]);
+    col_mark_live_loadout_dirty(s);
+    col_ensure_live_loadout_stats(s);
     col_rebuild_player_collision_flags(s);
     col_refresh_current_obs_slots_ctx(s, ctx);
 }

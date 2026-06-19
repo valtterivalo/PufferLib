@@ -1010,6 +1010,22 @@ typedef struct {
     float colo_pray_faced_by_type[12];
     float colo_pray_correct_by_type[12];
     float colo_offpray_damage_by_type[12];
+    /* Colosseum death attribution (diagnostic): colo_death_by_type[t] is the
+       kill-share for NPC type t (1.0 for the type that landed the killing blow,
+       per dead episode -> per-episode mean = fraction of deaths it caused);
+       colo_death_fatal_damage is the mean total damage on the fatal tick (a
+       single big off-prayer hit vs a same-tick multi-style combo). */
+    float colo_death_by_type[12];
+    float colo_death_fatal_damage;
+    /* Colosseum bleed avoidability (diagnostic): off-prayer HP taken on same-tick
+       >=2-style conflict ticks (unavoidable) vs single-style ticks (avoidable
+       mis-flick); colo_death_on_conflict_tick = fraction of deaths whose fatal
+       tick was a multi-style conflict. */
+    float colo_offpray_damage_conflict;
+    float colo_offpray_damage_solo;
+    float colo_death_on_conflict_tick;
+    float colo_outcome_score;
+    float colo_min_sol_hp;
 } Log;
 
 typedef struct {

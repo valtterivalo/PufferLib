@@ -20,8 +20,10 @@ the inferno golden test wants `-O2` (2000-tick trajectories x 15 configs).
 |---|---|
 | `test_osrs_combat_rolls.c` | shared hit-chance fractions and roll-ratio RNG consumption (assert-based, silent on pass) |
 | `test_osrs_pending_hit_queue.c` | shared pending-hit queue contract |
+| `test_osrs_npc_movement.c` | shared SDK-shaped NPC movement primitive: 1x1 diagonal edge checks, aggro-target overlap rewrites, melee contact, and under-player hold |
 | `test_osrs_pvp_pending_hits.c` | PvP pending-hit semantics on the shared queue |
 | `test_osrs_special_attacks.c` | shared spec resolver (costs, SGS minimums, claws cascade bounds, def drains), item-effect laws (identity, tbow monotonicity, crystal scaling, blood fury proc rate, scythe splat rule), consumable formula home + Player-application laws (restore convergence, boost caps) |
+| `test_osrs_item_effect_masks.c` | data guard pinning the exact item -> effect_mask mapping in `osrs_items_generated.h`; the column is hand-maintained (no generator on this branch) so this catches a dropped or wrong mask |
 | `test_inferno_attack_styles.c` | inferno NPC attack-style fidelity battery |
 | `test_inferno_lab.c` | inferno lab command grammar + snapshot/restore (also the cross-encounter shared-plumbing regression guard) |
 | `test_inferno_golden.c` | inferno characterization digests: refactor => bit-identical trajectory. BASELINE is branch-local (re-seeded 2026-06-10 on valtteri/osrs-colosseum); re-seed with `--print` after any INTENDED behavior change |

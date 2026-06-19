@@ -211,8 +211,7 @@ static int col_mod_doom_lethal(const ColosseumState* s) {
 static void col_mod_manticore_apply_venom(ColosseumState* s, int hit_success) {
     /* serpentine helm blocks NEW venom while worn (active set only); it does
        not cure an existing stack (wiki). beginner camps it on the melee set. */
-    if (osrs_effect_profile_has(&s->set_effects[s->weapon_set],
-                                OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+    if (osrs_effect_profile_has(col_live_effects(s), OSRS_ITEM_EFFECT_VENOM_IMMUNE))
         return;
     if (col_mod_tier(s, COLO_MOD_MANTIMAYHEM) < 2) return;
     if (!hit_success) return;
@@ -250,8 +249,7 @@ static void col_mod_tick_venom(ColosseumState* s) {
     share a single status slot in OSRS, so venom application also clears
     poison and a venomed player cannot be poisoned. */
 static void col_mod_apply_bee_poison(ColosseumState* s) {
-    if (osrs_effect_profile_has(&s->set_effects[s->weapon_set],
-                                OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+    if (osrs_effect_profile_has(col_live_effects(s), OSRS_ITEM_EFFECT_VENOM_IMMUNE))
         return;
     if (s->player_venom > 0) return;
     if (s->player_poison <= 0) s->player_poison_timer = COLO_POISON_INTERVAL;
@@ -554,6 +552,18 @@ static int col_bee_swarm_contacts_player(const ColosseumState* s, const ColoNPC*
     return encounter_entity_footprints_overlap(npc->x, npc->y, size, s->player.x, s->player.y, 1);
 }
 
+/** unblockable bee-contact damage roll (15-20). The serpentine helm immunizes
+    poison and venom, which on the dedicated Bee_Swarm wiki page extends to the
+    swarm's contact damage (full immunity). The colosseum carries no standalone
+    antipoison potion, so the wiki "halved with antipoison active" reduction has
+    no live signal here beyond that full-immunity helm bit. */
+static int col_bee_swarm_contact_damage(ColosseumState* s) {
+    if (osrs_effect_profile_has(col_live_effects(s), OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+        return 0;
+    int span = COLO_BEE_MAX_DAMAGE - COLO_BEE_MIN_DAMAGE + 1;
+    return COLO_BEE_MIN_DAMAGE + encounter_rand_int(&s->rng_state, span);
+}
+
 /** move the 2x2 bee footprint one tile toward the player's tile when the player
     is outside the current x or y span. */
 static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
@@ -571,7 +581,7 @@ static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
 
 /** tick bee swarms: a live E8 2x2 swarm steps one tile toward the player every
     12 ticks, ignoring walls and the wave-12 boss-box clamp, and contact with
-    any footprint tile deals up to 10 unblockable damage plus standard poison.
+    any footprint tile deals 15-20 unblockable damage plus standard poison.
     A killed swarm respawns 50 ticks later on a fresh anchor. */
 static void col_mod_tick_bees(ColosseumState* s) {
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
@@ -598,7 +608,7 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
         if (col_bee_swarm_contacts_player(s, npc)) {
             col_mod_apply_bee_poison(s);
-            int dmg = encounter_rand_int(&s->rng_state, COLO_BEE_MAX_POISON + 1);
+            int dmg = col_bee_swarm_contact_damage(s);
             encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
             if (dmg > 0) {
                 s->last_hit_by_type = COLO_BEE_SWARM;

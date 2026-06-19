@@ -153,6 +153,8 @@ static int col_lab_in_arena(int x, int y) {
 static void col_lab_clear_transient(ColosseumState* s) {
     col_context_clear_render_events(col_legacy_context());
     osrs_interaction_init(&s->interaction);
+    s->player_last_interaction_target_slot = -1;
+    s->player_last_interaction_age = 1;
     s->player_dest_x = -1;
     s->player_dest_y = -1;
     encounter_pending_hit_queue_clear(&s->player_pending_hits);

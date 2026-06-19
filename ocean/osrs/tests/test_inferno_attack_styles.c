@@ -2344,23 +2344,44 @@ static void test_overlap_shuffle_hold_after_recent_target_click(void) {
 static void test_overlap_shuffle_respects_npc_collision_flags(void) {
     printf("--- overlap shuffle respects npc collision flags ---\n");
 
-    InfernoState state = make_test_state(20, 20);
-    state.rng_state = 12345;
+    const uint32_t west_shuffle_seed = 12345;
 
-    state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
-    state.npcs[0].active = 1;
-    state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
-    state.npcs[1].active = 1;
-    state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 19, 20, 1);
-    state.npcs[2].active = 1;
-    state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
-    state.npcs[3].active = 1;
+    InfernoState clear_state = make_test_state(20, 20);
+    clear_state.rng_state = west_shuffle_seed;
+    clear_state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
+    clear_state.npcs[0].active = 1;
+    clear_state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
+    clear_state.npcs[1].active = 1;
+    clear_state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
+    clear_state.npcs[2].active = 1;
+    clear_state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 19, 1);
+    clear_state.npcs[3].active = 1;
 
-    inf_rebuild_entity_collision_flags(&state);
-    inf_npc_move(&state, 0);
+    inf_rebuild_entity_collision_flags(&clear_state);
+    inf_npc_move(&clear_state, 0);
 
-    ASSERT_INT_EQ("overlap shuffle picks the only free tile x", state.npcs[0].x, 20);
-    ASSERT_INT_EQ("overlap shuffle picks the only free tile y", state.npcs[0].y, 19);
+    ASSERT_INT_EQ("clear sampled overlap shuffle moves west x", clear_state.npcs[0].x, 19);
+    ASSERT_INT_EQ("clear sampled overlap shuffle moves west y", clear_state.npcs[0].y, 20);
+    ASSERT_INT_EQ("clear sampled overlap shuffle marks moved", clear_state.npcs[0].moved_this_tick, 1);
+
+    InfernoState blocked_state = make_test_state(20, 20);
+    blocked_state.rng_state = west_shuffle_seed;
+    blocked_state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
+    blocked_state.npcs[0].active = 1;
+    blocked_state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 21, 20, 1);
+    blocked_state.npcs[1].active = 1;
+    blocked_state.npcs[2] = make_test_npc(INF_NPC_HEALER_JAD, 19, 20, 1);
+    blocked_state.npcs[2].active = 1;
+    blocked_state.npcs[3] = make_test_npc(INF_NPC_HEALER_JAD, 20, 21, 1);
+    blocked_state.npcs[3].active = 1;
+
+    inf_rebuild_entity_collision_flags(&blocked_state);
+    inf_npc_move(&blocked_state, 0);
+
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not fallback x", blocked_state.npcs[0].x, 20);
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not fallback y", blocked_state.npcs[0].y, 20);
+    ASSERT_INT_EQ("blocked sampled overlap shuffle does not mark moved",
+                  blocked_state.npcs[0].moved_this_tick, 0);
 }
 
 static void test_large_npc_overlap_shuffle_can_partially_unclip(void) {
@@ -4250,6 +4271,54 @@ static void test_inferno_npc_travel_uses_sw_origin_around_all_pillars(void) {
         18, 40,
         16, 22,
         17, 23);
+}
+
+static void assert_inferno_jal_npc_uses_edge_clearance(
+    const char* label,
+    InfNPCType type,
+    int player_x,
+    int player_y,
+    int npc_x,
+    int npc_y,
+    int expected_x,
+    int expected_y
+) {
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, player_x, player_y);
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state.pillars[p].active = p == 0;
+        state.pillars[p].hp = p == 0 ? INF_PILLAR_HP : 0;
+    }
+    inf_rebuild_los(&state);
+    add_step_out_forecast_npc(&state, 0, type, npc_x, npc_y, 0);
+    inf_rebuild_entity_collision_flags(&state);
+    ASSERT_INT_EQ("starting Jal NPC has no LOS",
+        inf_npc_has_los(&state, 0), 0);
+
+    inf_npc_move(&state, 0);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s x", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].x, expected_x);
+    snprintf(msg, sizeof(msg), "%s y", label);
+    ASSERT_INT_EQ(msg, state.npcs[0].y, expected_y);
+}
+
+static void test_inferno_jal_npcs_use_edge_clearance_at_pillars(void) {
+    printf("--- inferno Jal NPCs use edge clearance at pillars ---\n");
+
+    assert_inferno_jal_npc_uses_edge_clearance(
+        "JalXil south pillar corner",
+        INF_NPC_RANGER,
+        21, 16,
+        20, 20,
+        20, 19);
+    assert_inferno_jal_npc_uses_edge_clearance(
+        "JalZek south pillar corner",
+        INF_NPC_MAGER,
+        21, 20,
+        17, 16,
+        18, 16);
 }
 
 static void test_step_out_forecast_north_pillar_ranger_mager_order(void) {
@@ -9728,6 +9797,7 @@ int main(void) {
     test_jad_melee_stays_instant_and_untelegraphed();
     test_step_out_forecast_matches_movement_head_destinations();
     test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
+    test_inferno_jal_npcs_use_edge_clearance_at_pillars();
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_step_out_forecast_obs_exposes_compact_action_affordance();
     test_step_out_forecast_obs_can_be_disabled();

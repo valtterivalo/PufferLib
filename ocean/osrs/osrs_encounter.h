@@ -28,7 +28,7 @@
  *
  *   NPC pathfinding:
  *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
- *     encounter_npc_step_toward()      OSRS size-aware chase step
+ *     encounter_npc_step_toward_policy() OSRS size-aware chase step
  *
  *   damage:
  *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
@@ -59,6 +59,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <assert.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -1588,57 +1589,27 @@ static inline int encounter_chase_attack_target(
 typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 typedef int (*encounter_npc_overlap_hold_fn)(void* ctx);
 
+typedef enum {
+    ENCOUNTER_NPC_STEP_TRAVEL_TARGET = 0,
+    ENCOUNTER_NPC_STEP_STOP_AT_MELEE = 1,
+    ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET = 2,
+    ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE = 3,
+} EncounterNpcStepPolicy;
+
 #define ENCOUNTER_NPC_UNDER_PLAYER_NONE  0
 #define ENCOUNTER_NPC_UNDER_PLAYER_MOVED 1
 #define ENCOUNTER_NPC_UNDER_PLAYER_HELD  2
+#define ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED 3
 
-/* when an NPC overlaps the player (AABB overlap), it shuffles one tile in a
-   random cardinal direction. matches osrs-sdk Mob.ts:109-153 behavior:
-   50% pick X-axis vs Y-axis, then 50% +1 or -1 on that axis.
-   hold_overlap lets the caller preserve the one-tick "player just clicked this
-   mob, so it cannot move off" rule. returns MOVED, HELD, or NONE. */
-static inline int encounter_npc_step_out_from_under(
-    int* npc_x, int* npc_y, int npc_size,
-    int player_x, int player_y,
-    encounter_npc_blocked_fn is_blocked, void* ctx,
-    encounter_npc_overlap_hold_fn hold_overlap,
-    uint32_t* rng
+static inline int encounter_npc_footprint_overlaps_target(
+    int npc_x, int npc_y, int npc_size,
+    int target_x, int target_y, int target_size
 ) {
-    /* AABB overlap check (handles multi-tile NPCs) */
-    int overlap = !(*npc_x >= player_x + 1 || *npc_x + npc_size <= player_x ||
-                    *npc_y >= player_y + 1 || *npc_y + npc_size <= player_y);
-    if (!overlap) return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
-    if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
-
-    /* 4 cardinal directions: +x, -x, +y, -y */
-    int dirs[4][2] = {{1,0}, {-1,0}, {0,1}, {0,-1}};
-
-    /* random start: 50% X-axis first (dirs 0,1) vs Y-axis first (dirs 2,3),
-       then 50% positive vs negative on that axis */
-    int axis = encounter_rand_int(rng, 2);       /* 0=X, 1=Y */
-    int sign = encounter_rand_int(rng, 2);        /* 0=positive, 1=negative */
-    int order[4];
-    order[0] = axis * 2 + sign;         /* primary: chosen axis+sign */
-    order[1] = axis * 2 + (1 - sign);   /* secondary: chosen axis, other sign */
-    order[2] = (1 - axis) * 2 + sign;   /* tertiary: other axis, same sign */
-    order[3] = (1 - axis) * 2 + (1 - sign); /* last: other axis, other sign */
-
-    for (int i = 0; i < 4; i++) {
-        int nx = *npc_x + dirs[order[i]][0];
-        int ny = *npc_y + dirs[order[i]][1];
-        /* InfernoTrainer Mob.ts:128-142: 1-tile shuffle per tick, validated
-           via normal edge-tile movement system. for size>1 NPCs, full escape
-           takes multiple ticks. anchor walkability matches InfernoTrainer's
-           canTileBePathedTo check on the leading edge. */
-        if (!is_blocked(ctx, nx, ny, npc_size)) {
-            *npc_x = nx;
-            *npc_y = ny;
-            return ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
-        }
-    }
-    return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
+    return !(npc_x >= target_x + target_size ||
+             npc_x + npc_size <= target_x ||
+             npc_y >= target_y + target_size ||
+             npc_y + npc_size <= target_y);
 }
-
 
 /** check if the leading edge tiles are clear for an NPC moving in direction (dx, dy).
     for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
@@ -1693,15 +1664,6 @@ static inline int encounter_npc_try_step(
     encounter_npc_blocked_fn is_blocked, void* ctx
 ) {
     if (dx == 0 && dy == 0) return 0;
-    if (size <= 1) {
-        if (!is_blocked(ctx, *x + dx, *y + dy, 1)) {
-            *x += dx;
-            *y += dy;
-            return 1;
-        }
-        return 0;
-    }
-
     int x_clear = encounter_npc_x_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
     int y_clear = encounter_npc_y_edge_clear(*x, *y, size, dx, dy, is_blocked, ctx);
     if (x_clear && y_clear) {
@@ -1712,8 +1674,35 @@ static inline int encounter_npc_try_step(
     return 0;
 }
 
+/** OSRS overlap shuffle. When an NPC overlaps the player, osrs-sdk Mob.ts
+    samples one cardinal direction by choosing X/Y with 50% probability, then
+    positive/negative with 50% probability. The sampled move uses normal
+    movement edge clearance. A blocked sample holds the NPC under the player
+    for this tick instead of scanning for another cardinal. */
+static inline int encounter_npc_step_out_from_under(
+    int* npc_x, int* npc_y, int npc_size,
+    int player_x, int player_y,
+    encounter_npc_blocked_fn is_blocked, void* ctx,
+    encounter_npc_overlap_hold_fn hold_overlap,
+    uint32_t* rng
+) {
+    if (!encounter_npc_footprint_overlaps_target(
+            *npc_x, *npc_y, npc_size, player_x, player_y, 1))
+        return ENCOUNTER_NPC_UNDER_PLAYER_NONE;
+    if (hold_overlap && hold_overlap(ctx)) return ENCOUNTER_NPC_UNDER_PLAYER_HELD;
+
+    int axis = encounter_rand_int(rng, 2);
+    int sign = encounter_rand_int(rng, 2) == 0 ? 1 : -1;
+    int dx = axis == 0 ? sign : 0;
+    int dy = axis == 1 ? sign : 0;
+
+    if (encounter_npc_try_step(npc_x, npc_y, npc_size, dx, dy, is_blocked, ctx))
+        return ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
+    return ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED;
+}
+
 /** OSRS-shaped NPC step toward target. tries diagonal first, then x-only,
-    then y-only when RuneLite's travel rule allows the y fallback.
+    then y-only when x-only fails.
 
     for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
     through, not just the destination footprint. for diagonal moves, both the
@@ -1721,17 +1710,36 @@ static inline int encounter_npc_try_step(
     ref: RuneLite WorldArea.calculateNextTravellingPoint and osrs-sdk
     Mob.ts:160-270 movementStep + getX/YMovementTiles.
 
-    stop_at_melee_distance matches RuneLite WorldArea.calculateNextTravellingPoint:
+    ENCOUNTER_NPC_STEP_STOP_AT_MELEE matches RuneLite WorldArea.calculateNextTravellingPoint:
     overlap returns no normal step, cardinal melee contact returns no step,
     and diagonal contact tries x-only.
 
     returns 1 if moved, 0 if blocked or already at target. */
-static inline int encounter_npc_step_toward(
+static inline int encounter_npc_step_toward_policy(
     int* x, int* y, int tx, int ty, int npc_size,
-    int target_size, int stop_at_melee_distance,
-    encounter_npc_blocked_fn is_blocked, void* ctx
+    int target_size, EncounterNpcStepPolicy policy,
+    encounter_npc_blocked_fn is_blocked, void* ctx,
+    encounter_npc_overlap_hold_fn hold_overlap,
+    uint32_t* rng
 ) {
     int size = npc_size;
+    int is_aggro_policy =
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET ||
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+    int stops_at_melee =
+        policy == ENCOUNTER_NPC_STEP_STOP_AT_MELEE ||
+        policy == ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
+
+    if (is_aggro_policy &&
+            encounter_npc_footprint_overlaps_target(
+                *x, *y, size, tx, ty, target_size)) {
+        assert(target_size == 1);
+        assert(rng);
+        int stepped = encounter_npc_step_out_from_under(
+            x, y, size, tx, ty, is_blocked, ctx, hold_overlap, rng);
+        return stepped == ENCOUNTER_NPC_UNDER_PLAYER_MOVED;
+    }
+
     int x_gap = encounter_npc_axis_gap(*x, size, tx, target_size);
     int y_gap = encounter_npc_axis_gap(*y, size, ty, target_size);
     int raw_dx = tx - *x;
@@ -1740,11 +1748,18 @@ static inline int encounter_npc_step_toward(
     int dy = (raw_dy > 0) - (raw_dy < 0);
 
     if (x_gap == 0 && y_gap == 0) return 0;
-    if (stop_at_melee_distance && x_gap + y_gap == 1) return 0;
+    if (stops_at_melee && x_gap + y_gap == 1) return 0;
     if (dx == 0 && dy == 0) return 0;
 
-    if (stop_at_melee_distance && x_gap == 1 && y_gap == 1) {
+    if (stops_at_melee && x_gap == 1 && y_gap == 1) {
         return encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx);
+    }
+
+    if (is_aggro_policy &&
+            dx != 0 && dy != 0 &&
+            encounter_npc_footprint_overlaps_target(
+                *x + dx, *y + dy, size, tx, ty, target_size)) {
+        dy = 0;
     }
 
     if (dx != 0 && dy != 0 &&
@@ -1752,9 +1767,7 @@ static inline int encounter_npc_step_toward(
         return 1;
     if (dx != 0 && encounter_npc_try_step(x, y, size, dx, 0, is_blocked, ctx))
         return 1;
-    int max_abs_delta = abs(raw_dx) > abs(raw_dy) ? abs(raw_dx) : abs(raw_dy);
-    if (dy != 0 && max_abs_delta > 1 &&
-        encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
+    if (dy != 0 && encounter_npc_try_step(x, y, size, 0, dy, is_blocked, ctx))
         return 1;
     return 0;
 }
@@ -2149,6 +2162,17 @@ static inline void encounter_compute_loadout_stats(
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(effective_loadout, &eb);
 
+    /* Tumeken's shadow triples the wearer's gear magic-damage% (the staff itself
+       contributes 0%, so no self-inclusion), capped at +100%. This is the only
+       multiplier — it does not touch spell_base_damage (the Tbow effect-mask
+       pattern, applied here so the recompute path inherits it via strength_bonus). */
+    const Item* weapon_item = get_item(loadout[GEAR_SLOT_WEAPON]);
+    if (style == ATTACK_STYLE_MAGIC && weapon_item &&
+            (weapon_item->effect_mask & OSRS_ITEM_EFFECT_TUMEKENS_SHADOW)) {
+        eb.magic_damage *= 3;
+        if (eb.magic_damage > 100) eb.magic_damage = 100;
+    }
+
     out->def_stab = eb.defence_stab;
     out->def_slash = eb.defence_slash;
     out->def_crush = eb.defence_crush;
@@ -2498,14 +2522,19 @@ typedef enum {
     ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
 } EncounterConsumableStatEffect;
 
-/** Apply the shared brew HP, dose, timer, and food-event state. */
-static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
+/** Apply one brew heal and food-event state without consuming a dose. */
+static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
     p->current_hitpoints += brew_heal;
     if (p->current_hitpoints > p->base_hitpoints + brew_heal)
         p->current_hitpoints = p->base_hitpoints + brew_heal;
+    p->ate_food_this_tick = 1;
+}
+
+/** Apply the aggregate-model brew HP, dose, timer, and food-event state. */
+static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
+    encounter_apply_brew_heal(p, brew_heal);
     p->brew_doses--;
     p->potion_timer = 3;
-    p->ate_food_this_tick = 1;
 }
 
 /** Add a prayer restore amount before the caller applies any local hooks. */

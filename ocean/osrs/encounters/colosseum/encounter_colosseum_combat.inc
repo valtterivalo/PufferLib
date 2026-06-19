@@ -21,6 +21,26 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     if (npc->death_ticks > 0) return;
     assert(npc->active && npc->hp <= 0);
     s->log.total_npc_kills++;
+    if (s->wave != COLO_WAVE_BOSS && s->current_wave_total_killable > 0) {
+        if (s->current_wave_kills < s->current_wave_total_killable) {
+            s->current_wave_kills++;
+            float progress = (float)s->current_wave_kills /
+                (float)s->current_wave_total_killable;
+            if (progress > s->current_wave_kill_progress)
+                s->current_wave_kill_progress = progress;
+        }
+    }
+    /* Death Charge: the first player-credited killing blow inside the armed
+       window grants +15% spec energy and starts the 100-tick cooldown. All kills
+       reaching this path are player-credited (NPC->NPC damage never routes here),
+       and thrall kills proc it too (the thrall queues through the same path).
+       Multiple kills in one tick consume the charge once (the window is zeroed). */
+    if (s->death_charge_window_left > 0) {
+        s->player.special_energy += COLO_DEATH_CHARGE_SPEC_GAIN;
+        if (s->player.special_energy > 100) s->player.special_energy = 100;
+        s->death_charge_window_left = 0;
+        s->death_charge_cd = COLO_DEATH_CHARGE_CD;
+    }
     /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
        at tier III). Read its position/size before the slot is recycled. */
     col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));
@@ -122,6 +142,9 @@ static void col_pending_hit_prayer_observer(
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
+    s->tick_scratch.styles_faced_mask |= (1 << hit->attack_style);
+    s->tick_scratch.avoidable_threat_by_style[hit->attack_style] += (float)hit->damage;
+    if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, hit->source_npc_type, prayed, dmg);
 }
 
@@ -165,8 +188,8 @@ static int col_npc_dist_to_player(const ColosseumState* s, const ColoNPC* npc) {
 /** player defence roll against an incoming NPC attack of the given style.
     A23: Relentless bypasses 33/66/100% of the Defence LEVEL before the roll —
     the gear defence bonus enters the formula fully intact. */
-static int col_player_def_roll(const ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+static int col_player_def_roll(ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
     return encounter_player_def_roll_from_loadout(
         def_level, s->player.current_magic,
@@ -229,14 +252,53 @@ static void col_npc_queue_projectile(
     s->tick_scratch.attacks_fired++;
 }
 
-/** queue a melee NPC attack on the player (1-tick deferral, prayer checked at land). */
-static void col_npc_queue_melee(
-    ColosseumState* s, int idx, const ColoNpcStats* stats, int max_hit
+/** Apply one NPC melee hit on the player INSTANTLY on the throw tick. OSRS melee
+    rolls AND lands on the same tick the animation plays, prayer-checked against the
+    overhead already up that tick — it is NOT reactable (you cannot flick Protect-
+    from-Melee after seeing the animation). The old path queued melee with a 1-tick
+    deferral + deferred prayer check, giving the agent a free reaction tick. This
+    mirrors inferno's hit_delay==0 path and the manticore instant orb, replicating
+    the FULL bookkeeping the resolver+observer did for melee (render hitsplat, per-
+    NPC off-prayer attribution, conflict-bleed classifier inputs, prayer-correct,
+    damage, Blasphemy drain, Doom stacks) plus correct melee kill attribution. */
+static void col_apply_instant_melee_hit(
+    ColosseumState* s, ColosseumContext* ctx, int npc_type, int dmg, int hit_success
+) {
+    (void)hit_success;
+    int rolled_dmg = dmg;
+    int prayed = encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE);
+    if (prayed) {
+        dmg = 0;
+        s->tick_scratch.prayer_correct++;
+    }
+    col_render_hit_events_add(
+        &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
+    s->tick_scratch.styles_faced_mask |= (1 << ATTACK_STYLE_MELEE);
+    s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] += (float)rolled_dmg;
+    if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
+    col_log_prayer_event(s, npc_type, prayed, dmg);
+    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    if (dmg > 0) {  /* dmg>0 implies an off-prayer damaging hit (prayed -> dmg 0) */
+        int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
+        if (blas > 0 && s->player.current_prayer > 0) {
+            int drain = (dmg * COLO_BLASPHEMY_DRAIN_PCT[blas]) / 100;
+            s->player.current_prayer -= drain;
+            if (s->player.current_prayer < 0) s->player.current_prayer = 0;
+        }
+        if (col_mod_active(s, COLO_MOD_DOOM)) s->doom_stacks += 1;
+        s->last_hit_by_type = npc_type;
+    }
+}
+
+/** an NPC melee attack on the player: rolls + resolves INSTANTLY on the throw tick
+    (not reactable). Replaces the old deferred-queue col_npc_queue_melee. */
+static void col_npc_melee_attack(
+    ColosseumState* s, ColosseumContext* ctx, int idx, const ColoNpcStats* stats, int max_hit
 ) {
     ColoNPC* npc = &s->npcs[idx];
     int hit_success = 0;
     int dmg = col_npc_roll_vs_player(s, stats, ATTACK_STYLE_MELEE, max_hit, &hit_success);
-    col_queue_player_pending_hit(s, idx, npc->type, dmg, 1, ATTACK_STYLE_MELEE, 1, hit_success);
+    col_apply_instant_melee_hit(s, ctx, npc->type, dmg, hit_success);
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = ATTACK_STYLE_MELEE;
     s->tick_scratch.attacks_fired++;
@@ -245,9 +307,11 @@ static void col_npc_queue_melee(
 
 /** Jaguar warrior: 3 independent melee hits per attack, each up to max_hit (47),
     each its own accuracy + damage roll, each checked against Protect-from-Melee. */
-static void col_npc_attack_jaguar(ColosseumState* s, int idx, const ColoNpcStats* stats) {
+static void col_npc_attack_jaguar(
+    ColosseumState* s, ColosseumContext* ctx, int idx, const ColoNpcStats* stats
+) {
     for (int h = 0; h < 3; h++)
-        col_npc_queue_melee(s, idx, stats, stats->max_hit);
+        col_npc_melee_attack(s, ctx, idx, stats, stats->max_hit);
 }
 
 /** A13: minotaur heal — pick ONE eligible ally per heal action and restore it
@@ -393,12 +457,16 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     for (int shot = 0; shot < shots; shot++) {
         int hit_success = 0;
         int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
+        int rolled_dmg = dmg;
         if (prayed) {
             dmg = 0;
             s->tick_scratch.prayer_correct++;
         }
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
         col_log_prayer_event(s, npc->type, prayed, dmg);
+        s->tick_scratch.styles_faced_mask |= (1 << style);
+        s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
+        if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
         if (dmg > 0) {
             s->last_hit_by_type = npc->type;
             col_mod_on_player_damaged(s, dmg);
@@ -538,10 +606,10 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
 
     /* A13+D9: the minotaur runs its 5-tick action timer whether or not it can
        reach the player. In melee distance (incl. diagonal) it crushes — melee
-       has priority over healing — with the confirmed 1-tick-delayed,
-       tick-eatable damage; otherwise it heals ONE eligible ally to full. */
+       has priority over healing — with instant same-tick (non-reactable) damage;
+       otherwise it heals ONE eligible ally to full. */
     if (npc->type == COLO_MINOTAUR) {
-        if (dist == 1) col_npc_queue_melee(s, idx, stats, stats->max_hit);
+        if (dist == 1) col_npc_melee_attack(s, ctx, idx, stats, stats->max_hit);
         else col_npc_minotaur_heal_ally(s, idx);
         npc->attack_timer = stats->attack_speed;
         return;
@@ -557,7 +625,7 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
 
     switch (npc->type) {
         case COLO_JAGUAR_WARRIOR:
-            col_npc_attack_jaguar(s, idx, stats);
+            col_npc_attack_jaguar(s, ctx, idx, stats);
             break;
         case COLO_JAVELIN_COLOSSUS:
             col_npc_attack_javelin(s, ctx, idx, stats);
@@ -592,7 +660,7 @@ static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* np
  * attack_timer no longer gates these attacks; it is rewritten every live tick
  * as ticks-until-window so the obs slot stays meaningful.
  */
-static void col_warband_attack_phase(ColosseumState* s) {
+static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
@@ -618,7 +686,7 @@ static void col_warband_attack_phase(ColosseumState* s) {
         if (!col_warband_melee_adjacent(s, npc)) continue;
         const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
         if (npc->type == COLO_FREMENNIK_BERSERKER)
-            col_npc_queue_melee(s, i, stats, stats->max_hit);
+            col_npc_melee_attack(s, ctx, i, stats, stats->max_hit);
         else
             col_npc_queue_projectile(s, i, stats, stats->default_style, stats->max_hit);
     }

@@ -9,7 +9,20 @@ static int inf_footprint_in_arena(int x, int y, int size) {
            y >= INF_ARENA_MIN_Y && y + size - 1 <= INF_ARENA_MAX_Y;
 }
 
+static int inf_blocked_by_pillar_size1(InfernoState* s, int x, int y) {
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        if (!s->pillars[p].active) continue;
+        int px = s->pillars[p].x;
+        int py = s->pillars[p].y;
+        if (x >= px && x < px + INF_PILLAR_SIZE &&
+                y >= py && y < py + INF_PILLAR_SIZE)
+            return 1;
+    }
+    return 0;
+}
+
 static int inf_blocked_by_pillar(InfernoState* s, int x, int y, int size) {
+    if (size == 1) return inf_blocked_by_pillar_size1(s, x, y);
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         if (!s->pillars[p].active) continue;
         if (los_aabb_overlap(x, y, size,
@@ -36,6 +49,11 @@ static int inf_pathfind_blocked(void* data, int abs_x, int abs_y) {
 }
 
 static int inf_npc_collision_flag_blocked(InfernoState* s, int x, int y, int size) {
+    if (size == 1) {
+        int gx, gy;
+        return inf_grid_index(x, y, &gx, &gy) &&
+            s->npc_collision_flags[gx][gy];
+    }
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int gx, gy;
@@ -48,6 +66,11 @@ static int inf_npc_collision_flag_blocked(InfernoState* s, int x, int y, int siz
 }
 
 static int inf_player_collision_flag_blocked(InfernoState* s, int x, int y, int size) {
+    if (size == 1) {
+        int gx, gy;
+        return inf_grid_index(x, y, &gx, &gy) &&
+            s->player_collision_flags[gx][gy];
+    }
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int gx, gy;
@@ -73,6 +96,17 @@ static int inf_npc_environment_blocked_ctx(
     int y,
     int size
 ) {
+    if (size == 1) {
+        if (!inf_in_arena(x, y)) return 1;
+        if (inf_blocked_by_pillar_size1(s, x, y)) return 1;
+        if (ctx->collision_map &&
+                !collision_tile_walkable(
+                    ctx->collision_map, 0,
+                    x + ctx->world_offset_x,
+                    y + ctx->world_offset_y))
+            return 1;
+        return 0;
+    }
     if (!inf_footprint_in_arena(x, y, size)) return 1;
     if (inf_blocked_by_pillar(s, x, y, size)) return 1;
     if (ctx->collision_map) {
@@ -127,6 +161,15 @@ static int inf_npc_terrain_blocked_ctx(
     int y,
     int size
 ) {
+    if (size == 1) {
+        if (!inf_in_arena(x, y)) return 1;
+        if (inf_blocked_by_pillar_size1(s, x, y)) return 1;
+        if (!ctx->collision_map) return 0;
+        return !collision_tile_walkable(
+            ctx->collision_map, 0,
+            x + ctx->world_offset_x,
+            y + ctx->world_offset_y);
+    }
     if (!inf_footprint_in_arena(x, y, size)) return 1;
     if (inf_blocked_by_pillar(s, x, y, size)) return 1;
     if (!ctx->collision_map) return 0;
@@ -175,7 +218,8 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
         }
-        if (stepped == ENCOUNTER_NPC_UNDER_PLAYER_HELD) {
+        if (stepped == ENCOUNTER_NPC_UNDER_PLAYER_HELD ||
+                stepped == ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED) {
             if (uses_collision_flag)
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
@@ -194,20 +238,41 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
        reference: InfernoTrainer Unit.ts:383 canMove = !hasLOS (where
        hasLOS is relative to the NPC's current aggro target). */
     if (npc->type != INF_NPC_NIBBLER) {
-        int has_los = inf_npc_has_los_direct(s, idx);
-        s->npc_los_cache[idx] = (int8_t)has_los;
+        int has_los = target.is_player ?
+            inf_npc_has_los(s, idx) :
+            inf_npc_has_los_direct(s, idx);
+        if (!target.is_player)
+            s->npc_los_cache[idx] = (int8_t)has_los;
         if (has_los) {
             if (uses_collision_flag)
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
             return;
         }
     }
+    if (npc->attack_timer > stats->attack_speed) {
+        if (uses_collision_flag)
+            inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
+        return;
+    }
 
     int ox = npc->x, oy = npc->y;
     InfMoveCtx mc = { s, ctx, idx };
-    encounter_npc_step_toward(&npc->x, &npc->y, tx, ty, npc->size,
-                              target_size, stats->attack_range == 1,
-                              inf_npc_blocked, &mc);
+    EncounterNpcStepPolicy step_policy;
+    encounter_npc_blocked_fn blocked;
+    if (target.is_player) {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET;
+        blocked = inf_npc_blocked_ignore_player;
+    } else {
+        step_policy = stats->attack_range == 1
+            ? ENCOUNTER_NPC_STEP_STOP_AT_MELEE
+            : ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
+        blocked = inf_npc_blocked;
+    }
+    encounter_npc_step_toward_policy(
+        &npc->x, &npc->y, tx, ty, npc->size, target_size,
+        step_policy, blocked, &mc, inf_npc_overlap_hold, &s->rng_state);
     if (npc->x != ox || npc->y != oy) {
         npc->moved_this_tick = 1;
         inf_invalidate_npc_los_cache(s, idx);

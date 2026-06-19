@@ -25,15 +25,21 @@
 #define COLO_PLAYER_START_Y 18
 
 #define COLO_MAX_TICKS      9000   /* 90 minutes at 0.6s/tick */
+#define COLO_SPEEDRUN_MAX_TICKS 4000
+#define COLO_BEGINNER_MAX_TICKS 6000
 #define COLO_NUM_WAVES      12
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 10
+#define COLO_NUM_ACTION_HEADS 36
 
-/* max active NPCs at once + obs slot count (one obs slot per active NPC) */
+/* max active NPCs at once + obs slot count (one obs slot per active NPC).
+   COLO_OBS_NPCS == COLO_MAX_NPCS so no live NPC is ever dropped from the obs
+   window or the TARGET action head at busy waves. */
 #define COLO_MAX_NPCS 24
-#define COLO_OBS_NPCS 12
+#define COLO_OBS_NPCS COLO_MAX_NPCS
+/* compile-time MAX rollout depth (ticks[] array size). The live depth is the
+   runtime ColConfig.forecast_horizon, clamped to [1, this]; default == this. */
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
 #define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 8
 #define COLO_STEP_OUT_FORECAST_OBS_SIZE \
@@ -60,13 +66,25 @@ typedef struct {
     ColoStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
 } ColoStepOutForecast;
 
+typedef enum {
+    COLO_FORECAST_BEHAVIOR_STANDARD = 0,
+    COLO_FORECAST_BEHAVIOR_WARBAND,
+    COLO_FORECAST_BEHAVIOR_MANTICORE,
+    COLO_FORECAST_BEHAVIOR_SOL,
+} ColoForecastBehaviorKind;
+
 typedef struct {
     int active;
     ColoNpcType type;
+    ColoForecastBehaviorKind forecast_behavior;
     int x;
     int y;
     int size;
     int hp;
+    int attack_range;
+    int attack_speed;
+    int can_move;
+    AttackStyle default_style;
     int attack_timer;
     int stun_timer;
     int frozen_ticks;
@@ -136,6 +154,33 @@ static const int COLO_PILLARS[COLO_NUM_PILLARS][2] = {
     col_build_static_arena (called from col_build_npc_stats at every entry point). */
 static uint8_t COLO_STATIC_BLOCKED[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
 
+/**
+ * Process-local static geometry caches.
+ *
+ * osrs_colosseum my_vec_init calls my_init sequentially before worker threads
+ * are created. The first col_build_static_arena call builds these tables once
+ * on that setup path.
+ */
+#define COLO_ARENA_TILE_COUNT (COLO_ARENA_WIDTH * COLO_ARENA_HEIGHT)
+#define COLO_STATIC_LOS_TABLE_BITS (COLO_ARENA_TILE_COUNT * COLO_ARENA_TILE_COUNT)
+#define COLO_STATIC_LOS_TABLE_WORDS ((COLO_STATIC_LOS_TABLE_BITS + 63) / 64)
+#define COLO_STATIC_FOOTPRINT_MAX_SIZE 5
+#define COLO_STATIC_FOOTPRINT_PAD (COLO_STATIC_FOOTPRINT_MAX_SIZE - 1)
+#define COLO_STATIC_FOOTPRINT_MIN_X (COLO_ARENA_MIN_X - COLO_STATIC_FOOTPRINT_PAD)
+#define COLO_STATIC_FOOTPRINT_MIN_Y (COLO_ARENA_MIN_Y - COLO_STATIC_FOOTPRINT_PAD)
+#define COLO_STATIC_FOOTPRINT_MAX_X (COLO_ARENA_MAX_X + 1)
+#define COLO_STATIC_FOOTPRINT_MAX_Y (COLO_ARENA_MAX_Y + 1)
+#define COLO_STATIC_FOOTPRINT_WIDTH \
+    (COLO_STATIC_FOOTPRINT_MAX_X - COLO_STATIC_FOOTPRINT_MIN_X + 1)
+#define COLO_STATIC_FOOTPRINT_HEIGHT \
+    (COLO_STATIC_FOOTPRINT_MAX_Y - COLO_STATIC_FOOTPRINT_MIN_Y + 1)
+static uint64_t COLO_STATIC_LOS_BITS[COLO_STATIC_LOS_TABLE_WORDS];
+static uint8_t COLO_STATIC_FOOTPRINT_BLOCKED[COLO_STATIC_FOOTPRINT_MAX_SIZE]
+    [COLO_STATIC_FOOTPRINT_WIDTH][COLO_STATIC_FOOTPRINT_HEIGHT];
+static int COLO_STATIC_LOOKUP_TABLES_BUILT = 0;
+
+static void col_build_static_lookup_tables_once(void);
+
 static void col_build_static_arena(void) {
     memset(COLO_STATIC_BLOCKED, 0, sizeof(COLO_STATIC_BLOCKED));
     for (int y = 0; y < COLO_ARENA_HEIGHT; y++) {
@@ -148,6 +193,7 @@ static void col_build_static_arena(void) {
         for (int dx = 0; dx < COLO_PILLAR_SIZE; dx++)
             for (int dy = 0; dy < COLO_PILLAR_SIZE; dy++)
                 COLO_STATIC_BLOCKED[COLO_PILLARS[p][0] + dx][COLO_PILLARS[p][1] + dy] = 1;
+    col_build_static_lookup_tables_once();
 }
 
 /** wall/pillar lookup; out-of-bounds counts as blocked. */
@@ -155,6 +201,134 @@ static inline int col_static_blocked(int x, int y) {
     if (x < COLO_ARENA_MIN_X || x > COLO_ARENA_MAX_X ||
         y < COLO_ARENA_MIN_Y || y > COLO_ARENA_MAX_Y) return 1;
     return COLO_STATIC_BLOCKED[x][y];
+}
+
+static inline int col_static_los_endpoint_in_bounds(int x, int y) {
+    return x >= COLO_ARENA_MIN_X && x <= COLO_ARENA_MAX_X &&
+           y >= COLO_ARENA_MIN_Y && y <= COLO_ARENA_MAX_Y;
+}
+
+static inline uint32_t col_static_los_index(int x0, int y0, int x1, int y1) {
+    uint32_t a = (uint32_t)((x0 - COLO_ARENA_MIN_X) * COLO_ARENA_HEIGHT +
+        (y0 - COLO_ARENA_MIN_Y));
+    uint32_t b = (uint32_t)((x1 - COLO_ARENA_MIN_X) * COLO_ARENA_HEIGHT +
+        (y1 - COLO_ARENA_MIN_Y));
+    return a * COLO_ARENA_TILE_COUNT + b;
+}
+
+static inline void col_static_los_set(uint32_t idx) {
+    COLO_STATIC_LOS_BITS[idx >> 6] |= 1ULL << (idx & 63);
+}
+
+static inline int col_static_los_get(int x0, int y0, int x1, int y1) {
+    uint32_t idx = col_static_los_index(x0, y0, x1, y1);
+    return (int)((COLO_STATIC_LOS_BITS[idx >> 6] >> (idx & 63)) & 1ULL);
+}
+
+static inline int col_static_footprint_anchor_in_table(int x, int y) {
+    return x >= COLO_STATIC_FOOTPRINT_MIN_X && x <= COLO_STATIC_FOOTPRINT_MAX_X &&
+           y >= COLO_STATIC_FOOTPRINT_MIN_Y && y <= COLO_STATIC_FOOTPRINT_MAX_Y;
+}
+
+static int col_static_footprint_blocked_reference_slowpath(int x, int y, int size) {
+    for (int dx = 0; dx < size; dx++) {
+        for (int dy = 0; dy < size; dy++) {
+            if (col_static_blocked(x + dx, y + dy)) return 1;
+        }
+    }
+    return 0;
+}
+
+static inline int col_static_footprint_blocked_lookup(int x, int y, int size) {
+    if (size < 1 || size > COLO_STATIC_FOOTPRINT_MAX_SIZE)
+        return col_static_footprint_blocked_reference_slowpath(x, y, size);
+    if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
+    if (!col_static_footprint_anchor_in_table(x, y)) return 1;
+    return COLO_STATIC_FOOTPRINT_BLOCKED[size - 1]
+        [x - COLO_STATIC_FOOTPRINT_MIN_X]
+        [y - COLO_STATIC_FOOTPRINT_MIN_Y];
+}
+
+static int col_los_tile_blocked_reference(void* ctx, int x, int y) {
+    (void)ctx;
+    return col_static_blocked(x, y);
+}
+
+static int col_tiles_have_los_reference_slowpath(int x0, int y0, int x1, int y1) {
+    OsrsLosQuery query = osrs_los_tile(col_los_tile_blocked_reference, NULL);
+    return osrs_los_tile_ray_clear(&query, x0, y0, x1, y1);
+}
+
+static void col_build_static_lookup_tables_once(void) {
+    if (COLO_STATIC_LOOKUP_TABLES_BUILT) return;
+    for (int x0 = COLO_ARENA_MIN_X; x0 <= COLO_ARENA_MAX_X; x0++) {
+        for (int y0 = COLO_ARENA_MIN_Y; y0 <= COLO_ARENA_MAX_Y; y0++) {
+            for (int x1 = COLO_ARENA_MIN_X; x1 <= COLO_ARENA_MAX_X; x1++) {
+                for (int y1 = COLO_ARENA_MIN_Y; y1 <= COLO_ARENA_MAX_Y; y1++) {
+                    if (col_tiles_have_los_reference_slowpath(x0, y0, x1, y1))
+                        col_static_los_set(col_static_los_index(x0, y0, x1, y1));
+                }
+            }
+        }
+    }
+    for (int size = 1; size <= COLO_STATIC_FOOTPRINT_MAX_SIZE; size++) {
+        for (int x = COLO_STATIC_FOOTPRINT_MIN_X; x <= COLO_STATIC_FOOTPRINT_MAX_X; x++) {
+            for (int y = COLO_STATIC_FOOTPRINT_MIN_Y; y <= COLO_STATIC_FOOTPRINT_MAX_Y; y++) {
+                COLO_STATIC_FOOTPRINT_BLOCKED[size - 1]
+                    [x - COLO_STATIC_FOOTPRINT_MIN_X]
+                    [y - COLO_STATIC_FOOTPRINT_MIN_Y] =
+                    (uint8_t)col_static_footprint_blocked_reference_slowpath(x, y, size);
+            }
+        }
+    }
+    COLO_STATIC_LOOKUP_TABLES_BUILT = 1;
+}
+
+static void col_static_los_table_selftest(void) {
+    col_build_static_arena();
+    for (int x0 = COLO_ARENA_MIN_X; x0 <= COLO_ARENA_MAX_X; x0++) {
+        for (int y0 = COLO_ARENA_MIN_Y; y0 <= COLO_ARENA_MAX_Y; y0++) {
+            for (int x1 = COLO_ARENA_MIN_X; x1 <= COLO_ARENA_MAX_X; x1++) {
+                for (int y1 = COLO_ARENA_MIN_Y; y1 <= COLO_ARENA_MAX_Y; y1++) {
+                    int table = col_static_los_get(x0, y0, x1, y1);
+                    int slow = col_tiles_have_los_reference_slowpath(x0, y0, x1, y1);
+                    if (table != slow) {
+                        fprintf(stderr,
+                            "colosseum LoS table mismatch (%d,%d)->(%d,%d): table=%d slow=%d\n",
+                            x0, y0, x1, y1, table, slow);
+                        abort();
+                    }
+                }
+            }
+        }
+    }
+    printf("colosseum LoS table selftest PASS: %u pairs\n",
+        (unsigned)COLO_STATIC_LOS_TABLE_BITS);
+}
+
+static void col_static_footprint_table_selftest(void) {
+    col_build_static_arena();
+    int checks = 0;
+    int min_x = COLO_STATIC_FOOTPRINT_MIN_X - COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int min_y = COLO_STATIC_FOOTPRINT_MIN_Y - COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int max_x = COLO_STATIC_FOOTPRINT_MAX_X + COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int max_y = COLO_STATIC_FOOTPRINT_MAX_Y + COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    for (int size = 1; size <= COLO_STATIC_FOOTPRINT_MAX_SIZE; size++) {
+        for (int x = min_x; x <= max_x; x++) {
+            for (int y = min_y; y <= max_y; y++) {
+                int table = col_static_footprint_blocked_lookup(x, y, size);
+                int slow = col_static_footprint_blocked_reference_slowpath(x, y, size);
+                if (table != slow) {
+                    fprintf(stderr,
+                        "colosseum footprint table mismatch (%d,%d) size=%d: table=%d slow=%d\n",
+                        x, y, size, table, slow);
+                    abort();
+                }
+                checks++;
+            }
+        }
+    }
+    printf("colosseum footprint table selftest PASS: %d checks\n", checks);
 }
 
 /* A4: the 12 canonical primary-spawn anchors, SW tile of each 3x3 zone; the NPC's
@@ -263,6 +437,26 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
     and anims as 12812). The sim type stays COLO_MINOTAUR — only the def id
     reported to the renderer switches while COLO_MOD_RED_FLAG is active. */
 #define COLO_NPC_DEF_ID_MINOTAUR_ROUTEFIND 12813
+
+/** Arceuus greater ghost thrall (cache npc 10880). Render-only: the thrall is a
+    sim allied auto-attacker with no ColoNPC slot, so it borrows this def id for
+    its model + attack/death anims when surfaced as a render entity. */
+#define COLO_NPC_DEF_ID_THRALL 10880
+
+/** Render-only thrall identity: npc_slot one past the real slots (never collides
+    with a ColoNPC index) and a fixed nonzero instance id, so the renderer matches
+    the thrall entity frame-to-frame for animation + movement continuity. */
+#define COLO_NPC_SLOT_THRALL    COLO_MAX_NPCS
+#define COLO_THRALL_RENDER_INSTANCE_ID 0xC01055EEu
+
+/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render-only: the
+    sim models the orb as a slotless ColoSolarflareOrb hazard, so the viewer
+    surfaces it as a render entity on a synthetic slot one past the thrall (never
+    collides with a ColoNPC index or the thrall slot). */
+#define COLO_NPC_DEF_ID_SOLARFLARE 12826
+#define COLO_SOLARFLARE_IDLE_ANIM_ID 10817
+#define COLO_NPC_SLOT_SOLARFLARE    (COLO_MAX_NPCS + 1)
+#define COLO_SOLARFLARE_RENDER_INSTANCE_ID 0xC0105F1Au
 
 /** A21+B9: hazard entities — attackable 1-HP modifier spawns. Excluded from
     wave-clear/reinforcement predicates, collision stamps, and the death hooks
@@ -604,17 +798,17 @@ typedef enum {
 } ColoHazardPhase;
 
 /** Bees! hazard (B9): each swarm is an attackable 1-HP NPC (COLO_BEE_SWARM)
-    converging on the player every COLO_BEE_MOVE_INTERVAL ticks and dealing up
-    to COLO_BEE_MAX_POISON unblockable damage beneath the player; killed swarms
-    respawn COLO_BEE_RESPAWN_TICKS later (UPD-0410 values). Tier I/II/III field
-    1/2/3 swarms. D34: random-anchor spawn, diagonal steps, clamp immunity kept. */
+    converging on the player every COLO_BEE_MOVE_INTERVAL ticks and dealing
+    COLO_BEE_MIN_DAMAGE..COLO_BEE_MAX_DAMAGE unblockable damage beneath the
+    player; killed swarms respawn COLO_BEE_RESPAWN_TICKS later (UPD-0410 values).
+    Tier I/II/III field 1/2/3 swarms. D34: random-anchor spawn, diagonal steps,
+    clamp immunity kept. */
 #define COLO_MAX_BEE_SWARMS 3
 #define COLO_BEE_MOVE_INTERVAL 12   /* swarm steps one tile every 12 ticks */
-#define COLO_BEE_MAX_POISON 10      /* up to 10 unblockable contact damage/tick.
-                                       TODO: wiki self-conflicts — Bee_Swarm page says
-                                       15-20/tick, Fortis_Colosseum/Modifiers says <=10.
-                                       Following the Modifiers page until video evidence
-                                       settles it (audit E3, 2026-06-12). */
+/* unblockable contact damage band, dedicated Bee_Swarm wiki page (15-20/tick).
+   Halved with an active antipoison; serpentine helm grants full immunity. */
+#define COLO_BEE_MIN_DAMAGE 15
+#define COLO_BEE_MAX_DAMAGE 20
 #define COLO_BEE_RESPAWN_TICKS 50   /* 30s respawn after a swarm is killed */
 
 typedef struct {
@@ -1064,6 +1258,7 @@ static void colo_npc_init_type_state(ColoNPC* npc) {
 typedef enum {
     COLO_GEAR_MELEE = 0,
     COLO_GEAR_RANGED,
+    COLO_GEAR_MAGIC,
     COLO_NUM_WEAPON_SETS
 } ColoWeaponSet;
 
@@ -1090,8 +1285,6 @@ typedef enum {
     COLO_RESTORE_SANFEW,        /* L5: sanfew serum — weaker formula, cures venom */
 } ColoRestoreKind;
 
-#define COLO_NUM_SPEC_WEAPONS 2
-
 static const uint8_t COLO_BEGINNER_MELEE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
     [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
@@ -1114,6 +1307,25 @@ static const uint8_t COLO_BEGINNER_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_WEAPON] = ITEM_BOW_OF_FAERDHINEN,
     [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bowfa is 2h */
     [GEAR_SLOT_BODY]   = ITEM_CRYSTAL_BODY,
+    [GEAR_SLOT_LEGS]   = ITEM_CRYSTAL_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_BARROWS_GLOVES,
+    [GEAR_SLOT_FEET]   = ITEM_ECHO_BOOTS,
+    [GEAR_SLOT_RING]   = ITEM_BERSERKER_RING_I,
+};
+
+/** budget magic set = the budget general/melee armor with the weapon swapped to
+    the Trident of the swamp (1h, so the Dragon defender shield is kept). The
+    budget kit carries NO Occult, so this set's gear magic_damage% is 0 and the
+    Trident two-shots the melee frem off its 31 base. Faithful to the kit (the
+    wiki budget magic example is literally Trident-on-the-melee-base). */
+static const uint8_t COLO_BEGINNER_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_SERPENTINE_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_AMULET_OF_BLOOD_FURY,
+    [GEAR_SLOT_AMMO]   = ITEM_GOD_BLESSING,
+    [GEAR_SLOT_WEAPON] = ITEM_TRIDENT_OF_SWAMP,
+    [GEAR_SLOT_SHIELD] = ITEM_DRAGON_DEFENDER,  /* Trident is 1h */
+    [GEAR_SLOT_BODY]   = ITEM_FIGHTER_TORSO,
     [GEAR_SLOT_LEGS]   = ITEM_CRYSTAL_LEGS,
     [GEAR_SLOT_HANDS]  = ITEM_BARROWS_GLOVES,
     [GEAR_SLOT_FEET]   = ITEM_ECHO_BOOTS,
@@ -1148,28 +1360,49 @@ static const uint8_t COLO_SPEEDRUN_RANGED_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
 };
 
+/** high-efficiency magic set = the speedrun general/melee armor with the weapon
+    swapped to Tumeken's shadow (2h, so no shield), the Occult necklace, and the
+    Confliction gauntlets the kit carries as its mage hand switch. Shadow triples
+    this set's gear magic_damage% (Occult 5 + Confliction 7 + Avernic treads 2 =
+    14 -> 42). */
+static const uint8_t COLO_SPEEDRUN_MAGIC_LOADOUT[NUM_GEAR_SLOTS] = {
+    [GEAR_SLOT_HEAD]   = ITEM_TORVA_FULL_HELM,
+    [GEAR_SLOT_CAPE]   = ITEM_INFERNAL_CAPE,
+    [GEAR_SLOT_NECK]   = ITEM_OCCULT_NECKLACE,
+    [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
+    [GEAR_SLOT_WEAPON] = ITEM_TUMEKENS_SHADOW,
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* shadow is 2h */
+    [GEAR_SLOT_BODY]   = ITEM_OATHPLATE_CHEST,
+    [GEAR_SLOT_LEGS]   = ITEM_OATHPLATE_LEGS,
+    [GEAR_SLOT_HANDS]  = ITEM_CONFLICTION_GAUNTLETS,
+    [GEAR_SLOT_FEET]   = ITEM_AVERNIC_TREADS,
+    [GEAR_SLOT_RING]   = ITEM_ULTOR_RING,
+};
+
 static const uint8_t* const COLO_SPEEDRUN_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_SPEEDRUN_MELEE_LOADOUT,
     COLO_SPEEDRUN_RANGED_LOADOUT,
+    COLO_SPEEDRUN_MAGIC_LOADOUT,
 };
 
 static const uint8_t* const COLO_BEGINNER_LOADOUTS[COLO_NUM_WEAPON_SETS] = {
     COLO_BEGINNER_MELEE_LOADOUT,
     COLO_BEGINNER_RANGED_LOADOUT,
+    COLO_BEGINNER_MAGIC_LOADOUT,
+};
+
+/** powered-staff base max hit fed as spell_base_damage at the magic compute site
+    (the magic max-hit formula is base*(1+magic_damage%), magic LEVEL only feeds
+    accuracy). Trident of the swamp = floor(99/3)-2 = 31; Tumeken's shadow =
+    floor(99/3)+1 = 34, both at the env's hardcoded base_level 99. */
+static const int COLO_MAGIC_SPELL_BASE_DAMAGE[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = 34,
+    [COLO_LOADOUT_PROFILE_BEGINNER] = 31,
 };
 
 static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFILES] = {
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = COLO_SPEEDRUN_LOADOUTS,
     [COLO_LOADOUT_PROFILE_BEGINNER] = COLO_BEGINNER_LOADOUTS,
-};
-
-/** spec weapons per profile, fired off the melee gear base (L2). Speedrun:
-    "Burning claws / Dragon claws + Elder maul / Dragon warhammer" — the
-    resolver-implemented members are claws + elder maul (L16). Beginner: SGS +
-    dragon claws (tier-1 in every first-quiver tab). */
-static const uint8_t COLO_SPEC_WEAPONS[COLO_NUM_LOADOUT_PROFILES][COLO_NUM_SPEC_WEAPONS] = {
-    [COLO_LOADOUT_PROFILE_SPEEDRUN] = { ITEM_DRAGON_CLAWS, ITEM_ELDER_MAUL },
-    [COLO_LOADOUT_PROFILE_BEGINNER] = { ITEM_SGS, ITEM_DRAGON_CLAWS },
 };
 
 /** full starting supplies per profile, in DOSES (4 per potion). Beginner = the
@@ -1219,6 +1452,61 @@ static const uint8_t* const* col_loadouts_for_profile(int profile) {
     return COLO_LOADOUT_PROFILES[profile];
 }
 
+#define COLO_INVENTORY_DISPLAY_SLOTS 28
+#if COLO_INVENTORY_DISPLAY_SLOTS != OSRS_INVENTORY_SIZE
+#error "Colosseum inventory size must match shared OSRS inventory size"
+#endif
+
+typedef OsrsInventoryCell ColoInvCell;
+
+/** Canonical gameplay inventory per kit, as raw OSRS item ids.
+    This 28-slot bag seeds the shared slot model at reset and the renderer reads
+    live cells back from that model. Doses use the GUI's dose-specific ids. */
+static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO_INVENTORY_DISPLAY_SLOTS] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
+        20997, 27238, 27235, 28947,   /* Twisted bow, Masori body(f), mask(f), Dizana's quiver */
+        26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
+        27275, 31106, 27610, 24780,   /* Tumeken's shadow, Confliction gauntlets, Venator bow,
+                                         Amulet of blood fury */
+        30875, 12002, 0,     21003,   /* Surge potion(4), Occult necklace, empty worn-scythe slot, Elder maul */
+        23685, 23733, 6685, 4417,     /* Divine super combat(4), Divine ranging(4), Sara brew(4),
+                                         Guthix rest(4) */
+        10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */
+        10925, 10925, 10925, 27281,   /* ...continued, Divine rune pouch */
+    },
+    [COLO_LOADOUT_PROFILE_BEGINNER] = {
+        27610, 26219, 25865, 19547,   /* Venator bow, Fang, Bowfa, Anguish */
+        11806, 13652, 23975, 23971,   /* SGS, Dragon claws, Crystal body, Crystal helm */
+        6685, 6685, 3024, 3024,       /* Sara brew(4) x2, Super restore(4) x2 */
+        6685, 6685, 3024, 3024,
+        6685, 6685, 3024, 3024,
+        12695, 2444, 3024, 3024,      /* Super combat(4), Ranging(4), Super restore(4) x2 */
+        23685, 23733, 12006, 27281,   /* Divine super combat(4), Divine ranging(4),
+                                         Abyssal tentacle, Divine rune pouch */
+    },
+};
+
+/** Arceuus thrall (one allied auto-attacker, full fidelity): greater-thrall max
+    hit 3 both kits, uniform 0..3 (accuracy ignored), 4-tick cadence, 17-tick
+    recast gate. Damage routes through col_queue_npc_pending_hit (source -1) so
+    kills + damage credit the player. Per-kit lifetime: high-eff carries the
+    Master combat-achievement x2 (198 ticks); budget runs the base 99. Sol
+    Heredit is immune (never summon-target, never damaged). */
+#define COLO_THRALL_MAX_HIT  3
+#define COLO_THRALL_TICK     4
+#define COLO_THRALL_RECAST_CD 17
+static const int COLO_THRALL_LIFETIME_TICKS[COLO_NUM_LOADOUT_PROFILES] = {
+    [COLO_LOADOUT_PROFILE_SPEEDRUN] = 198,
+    [COLO_LOADOUT_PROFILE_BEGINNER] = 99,
+};
+
+/** Death Charge (Arceuus): cast arms a 100-tick window; the first player-credited
+    killing blow inside it grants +15% spec energy and starts the 100-tick
+    cooldown. An unused window closes silently WITHOUT starting the cooldown. */
+#define COLO_DEATH_CHARGE_WINDOW   100
+#define COLO_DEATH_CHARGE_CD       100
+#define COLO_DEATH_CHARGE_SPEC_GAIN 15
+
 /** sample the episode's loadout profile from the config mode (L9). */
 static ColoLoadoutProfile col_sample_loadout_profile(
     int mode, float beginner_fraction, uint32_t* rng_state
@@ -1255,17 +1543,34 @@ typedef struct {
     int start_wave;        /* internal wave index (0-based) */
     float damage_reward_coeff;       /* per-point reward for damage dealt to NPCs */
     float boss_damage_reward_coeff;  /* per-point reward for damage dealt to Sol */
-    float wave_clear_bonus;          /* added on top of the +1 each wave cleared */
+    float wave_clear_bonus;          /* per-wave clear reward */
     float boss_phase_bonus;          /* per Sol HP-threshold phase crossed */
     float win_bonus;                 /* on Sol death (wave 12 cleared) */
     float prayer_correct_reward;     /* per correctly-prayed incoming hit */
-    float death_penalty_coeff;       /* magnitude of the death reward when enabled */
-    int terminal_penalty_enabled;
+    float offpray_damage_penalty_coeff; /* per-HP penalty for off-prayer damage taken
+                                           this tick: immediate credit for praying/
+                                           positioning to avoid hits (default 0). */
+    float avoided_damage_coeff;
+    float death_penalty_coeff;       /* magnitude of the terminal death reward */
+    float timeout_penalty;
     int curriculum_agent;
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
     int step_out_forecast_obs_enabled;
+    int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
+    int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
+    int mask_inventory_heads;
+    int action_debug_log;
 } ColConfig;
+
+/** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
+    FULL runs the same multi-tick rollout as walk tiles. STATIC_THREAT skips NPC
+    movement and records a single static range/LoS attack gate at the true run
+    landing, trading horizon fidelity for the cost of the run-tile rollouts. */
+typedef enum {
+    COLO_FORECAST_RUN_TILE_FULL = 0,
+    COLO_FORECAST_RUN_TILE_STATIC_THREAT = 1,
+} ColoForecastRunTileMode;
 
 typedef enum {
     COLO_NPC_RENDER_ATTACK_NORMAL = 0,
@@ -1296,6 +1601,12 @@ typedef struct {
     int player_render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int npc_render_hit_count[COLO_MAX_NPCS];
     int npc_render_hit_damage[COLO_MAX_NPCS][ENCOUNTER_RENDER_HITS_MAX];
+    /* render-only: set on the tick the allied thrall queues its magic hit, so the
+       render-entity emitter plays its attack anim and the projectile emitter fires
+       a tracking magic bolt. Not serialized; the sim never reads it. */
+    int thrall_attacked_this_tick;
+    /* render-only: the equipped spec weapon item index fired this tick. */
+    int player_spec_fired_kind;
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
@@ -1307,6 +1618,8 @@ static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     memset(ctx->player_render_hit_damage, 0, sizeof(ctx->player_render_hit_damage));
     memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));
     memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
+    ctx->thrall_attacked_this_tick = 0;
+    ctx->player_spec_fired_kind = 0;
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single
@@ -1320,6 +1633,13 @@ typedef struct {
     int wave_completed;
     int player_moved;
     int player_attacked;
+    /* diagnostic: which prayer-checkable styles landed on the player THIS tick
+       (bitmask over ATTACK_STYLE_*) and the off-prayer HP taken this tick. >=2
+       distinct styles = a same-tick conflict a single overhead cannot fully
+       block (unavoidable bleed); 1 style = an avoidable mis-flick. */
+    int styles_faced_mask;
+    float offpray_damage_this_tick;
+    float avoidable_threat_by_style[4];
 } ColoTickScratch;
 
 /** Colosseum telemetry surfaced through the get_log hook (NOT the shared Log). */
@@ -1347,6 +1667,21 @@ typedef struct {
     float pray_faced_by_type[COLO_NUM_NPC_TYPES];
     float pray_correct_by_type[COLO_NUM_NPC_TYPES];
     float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
+
+    /* death attribution (diagnostic): death_by_type[killer] = 1 on the episode's
+       fatal tick (which NPC type dealt the killing blow), death_fatal_damage =
+       that tick's total damage_received (single big hit vs same-tick combo). */
+    float death_by_type[COLO_NUM_NPC_TYPES];
+    float death_fatal_damage;
+
+    /* bleed avoidability (diagnostic): off-prayer HP taken on ticks with >=2
+       distinct prayer-checkable styles landing (conflict = unavoidable, single
+       overhead cannot block both) vs ticks with 1 style (solo = an avoidable
+       mis-flick). death_on_conflict_tick = 1 if the fatal tick was a conflict. */
+    float offpray_damage_conflict;
+    float offpray_damage_solo;
+    float death_on_conflict_tick;
+    float outcome_score;
 } ColosseumLog;
 
 
@@ -1365,9 +1700,14 @@ typedef struct {
     int tick;
     int wave_spawn_delay;
     int wave_ready_delay;
+    int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
+    int current_wave_kills;
+    int current_wave_total_killable;
+    float current_wave_kill_progress;
     int episode_over;
+    int time_limit_truncated;
     ColoOutcome winner;       /* valid only when episode_over is set */
 
     ColoModifierState modifiers;
@@ -1395,11 +1735,17 @@ typedef struct {
     float episode_return;
     int last_hit_by_type;     /* NPC type that last damaged the player (-1 = none) */
     int rewarded_boss_phase;  /* highest Sol phase already paid a boss_phase_bonus */
+    float avoided_damage_already_rewarded;
+    int min_sol_hp_seen;
 
     /* player combat state */
     OsrsInteraction interaction;
+    int player_last_interaction_target_slot;
+    int player_last_interaction_age;
     ColoWeaponSet weapon_set;
-    EncounterLoadoutStats loadout_stats[COLO_NUM_WEAPON_SETS];
+    EncounterLoadoutStats loadout_stats_live;
+    OsrsEquipmentEffectProfile effects_live;
+    int loadout_stats_dirty;
 
     /* loadout profile + inventory state (researched setups, L1-L16) */
     ColoLoadoutProfile active_loadout_profile;
@@ -1411,10 +1757,18 @@ typedef struct {
     int divine_ranged_timer;
     int surge_doses;
     int surge_cooldown;                /* ticks until the next surge dose (L13) */
-    int spec_armed_kind;               /* 0 = none, 1 = spec A, 2 = spec B */
-    EncounterLoadoutStats spec_stats[COLO_NUM_SPEC_WEAPONS];
-    OsrsEquipmentEffectProfile set_effects[COLO_NUM_WEAPON_SETS];
-    OsrsEquipmentEffectProfile spec_effects[COLO_NUM_SPEC_WEAPONS];
+    OsrsInventoryCell inventory_cells[OSRS_INVENTORY_SIZE];
+
+    /* Arceuus thrall (one allied auto-attacker; not a ColoNPC slot). */
+    int thrall_active;          /* 0/1 */
+    int thrall_target_slot;     /* NPC array index it auto-attacks, -1 = none */
+    int thrall_lifetime_left;   /* ticks until despawn (set per profile on summon) */
+    int thrall_attack_timer;    /* ticks until the next thrall hit (4-tick cadence) */
+    int thrall_recast_cd;       /* ticks until re-summon allowed (17) */
+
+    /* Death Charge armed window + cooldown. */
+    int death_charge_window_left; /* ticks left in the armed window, 0 = not armed */
+    int death_charge_cd;          /* ticks until Death Charge can re-arm, 0 = ready */
 
     /* per-tick player attack event for the renderer */
     int player_attack_npc_idx;
@@ -1438,3 +1792,11 @@ typedef struct {
     int start_wave;
     uint32_t rng_state;
 } ColosseumState;
+
+static void col_build_live_inventory_display(
+    const ColosseumState* s,
+    int out[COLO_INVENTORY_DISPLAY_SLOTS]
+) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
+        out[i] = s->inventory_cells[i].raw_osrs_id;
+}

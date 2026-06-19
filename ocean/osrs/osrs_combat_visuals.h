@@ -60,6 +60,7 @@ typedef enum {
     OSRS_ITEM_ID_VOIDWAKER = 27690,
     OSRS_ITEM_ID_DRAGON_HUNTER_WAND = 30070,
     OSRS_ITEM_ID_EYE_OF_AYAK = 31113,
+    OSRS_ITEM_ID_TUMEKENS_SHADOW = 27275,
 } OsrsCombatVisualItemId;
 
 typedef enum {
@@ -207,7 +208,10 @@ static const OsrsCombatVisualRow OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[] = {
     OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
         12817, ATTACK_STYLE_RANGED, 10892,
         OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
-            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2673, 2674,
+            /* impact = 2676 NPC_COLOSSI_JAVELIN_01_ARTILLERY_FIRE (the landing
+               burst). 2677 is SPEARHEAD_FIRE_SLOW, the descending shaft, which
+               wrongly re-showed the lob as the impact. */
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2673, 2676,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
@@ -262,7 +266,8 @@ static const OsrsCombatVisualRow OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[] = {
         OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2679,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
-            51210, 10903,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
+            OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
@@ -307,6 +312,18 @@ static const OsrsCombatProjectileProfile OSRS_POWERED_STAFF_PROJECTILE_PROFILE =
     OSRS_COMBAT_PROJECTILE_MISSING, 1
 };
 
+/** Tumeken's shadow purple bolt: the canonical shadow spotanims ride on the
+    trident carrier model (the emit path aborts on a model-less profile, and 2126
+    is a spotanim not a projectile model, so it reuses model 20825 exactly as the
+    Eye of Ayak fallback does today). */
+static const OsrsCombatProjectileProfile OSRS_TUMEKENS_SHADOW_PROJECTILE_PROFILE = {
+    GFX_TUMEKENS_SHADOW_CAST, GFX_TUMEKENS_SHADOW_PROJ, GFX_TUMEKENS_SHADOW_IMPACT,
+    OSRS_PROJECTILE_MODEL_TRIDENT, OSRS_PROJECTILE_ANIM_TRIDENT,
+    3, 3, 160, 120, OSRS_COMBAT_PROJECTILE_MISSING, 16,
+    OSRS_COMBAT_PROJECTILE_MISSING, OSRS_COMBAT_PROJECTILE_MISSING,
+    OSRS_COMBAT_PROJECTILE_MISSING, 1
+};
+
 static const OsrsCombatSpecialFallback OSRS_COMBAT_SPECIAL_FALLBACKS[] = {
     {OSRS_ITEM_ID_GRANITE_MAUL, 1667},
     {OSRS_ITEM_ID_DRAGON_DAGGER, 1062},
@@ -336,6 +353,7 @@ static const uint16_t OSRS_POWERED_STAFF_ITEMS[] = {
     OSRS_ITEM_ID_TRIDENT_OF_THE_SWAMP,
     OSRS_ITEM_ID_SANGUINESTI_STAFF,
     OSRS_ITEM_ID_EYE_OF_AYAK,
+    OSRS_ITEM_ID_TUMEKENS_SHADOW,
 };
 
 static inline int osrs_combat_projectile_value_or(int value, int fallback) {
@@ -877,6 +895,8 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_visual_magic_projec
     const OsrsCombatVisualRow* item_projectile =
         osrs_combat_visual_find_item_projectile_id(item_id, ATTACK_STYLE_MAGIC);
     if (item_projectile) return &item_projectile->projectile;
+    if (item_id == OSRS_ITEM_ID_TUMEKENS_SHADOW)
+        return &OSRS_TUMEKENS_SHADOW_PROJECTILE_PROFILE;
     return osrs_combat_projectile_profile(
         osrs_combat_visual_magic_projectile(item_db_idx));
 }

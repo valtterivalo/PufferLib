@@ -26,20 +26,9 @@ static void col_stamp_npc_collision_footprint(ColosseumState* s, int x, int y, i
 
 static void col_rebuild_player_collision_flags(ColosseumState* s) {
     memset(s->player_collision_flags, 0, sizeof(s->player_collision_flags));
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        ColoNPC* npc = &s->npcs[i];
-        if (!npc->active) continue;
-        /* hazard entities never block the player (bees damage from BENEATH). */
-        if (col_type_is_hazard_entity(npc->type)) continue;
-        int size = col_npc_effective_size(npc);
-        for (int dx = 0; dx < size; dx++) {
-            for (int dy = 0; dy < size; dy++) {
-                int gx, gy;
-                if (col_grid_index(npc->x + dx, npc->y + dy, &gx, &gy))
-                    s->player_collision_flags[gx][gy] = 1;
-            }
-        }
-    }
+    int gx, gy;
+    if (col_grid_index(s->player.x, s->player.y, &gx, &gy))
+        s->player_collision_flags[gx][gy] = 1;
 }
 
 /** find a free NPC slot, return index or -1. */
@@ -48,6 +37,18 @@ static int col_find_free_npc(ColosseumState* s) {
         if (!s->npcs[i].active) return i;
     }
     return -1;
+}
+
+static void col_reset_current_wave_score_progress(ColosseumState* s) {
+    s->current_wave_kills = 0;
+    s->current_wave_total_killable = 0;
+    s->current_wave_kill_progress = 0.0f;
+}
+
+static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
+    if (s->wave == COLO_WAVE_BOSS) return;
+    if (col_type_is_hazard_entity(type)) return;
+    s->current_wave_total_killable++;
 }
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
@@ -122,6 +123,7 @@ static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
     int slot = col_find_free_npc(s);
     assert(slot >= 0 && "colosseum NPC slots exhausted");
     col_init_npc(s, slot, type, x, y);
+    col_record_score_spawn(s, type);
     return slot;
 }
 
@@ -277,6 +279,8 @@ static const ColoNpcType COLO_WARBAND_TYPES[3] = {
  * tile (A6+D19).
  */
 static void col_spawn_wave(ColosseumState* s) {
+    col_reset_current_wave_score_progress(s);
+
     /* clear the old roster. Bee swarms survive wave transitions (they respawn
        forever, D34); totems despawn with the wave — their owners are gone —
        and all totem bookkeeping resets. */
@@ -397,6 +401,81 @@ static void col_spawn_reinforcements(ColosseumState* s) {
     s->reinforcement_timer = COLO_REINFORCE_FIRED;
 }
 
+static void col_init_empty_inventory_cells(ColosseumState* s) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        s->inventory_cells[i] = osrs_inventory_cell_empty();
+    }
+}
+
+static void col_seed_inventory_cells_from_gameplay_loadout(ColosseumState* s) {
+    col_init_empty_inventory_cells(s);
+    const int* kit = COLO_GAMEPLAY_INVENTORY_LOADOUT[s->active_loadout_profile];
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        uint16_t raw_id = (uint16_t)kit[i];
+        if (raw_id == 0) continue;
+
+        s->inventory_cells[i] = osrs_inventory_cell_from_raw_osrs_id(raw_id);
+        if (s->inventory_cells[i].item_idx == ITEM_NONE &&
+                s->inventory_cells[i].dose == 0 &&
+                raw_id != 27281) {
+            fprintf(stderr, "colosseum: gameplay inventory raw id %u has no cell mapping\n",
+                raw_id);
+            abort();
+        }
+    }
+}
+
+static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
+    int brew_doses = 0;
+    int restore_doses = 0;
+    int combat_doses = 0;
+    int ranged_doses = 0;
+    int surge_doses = 0;
+    int antivenom_doses = 0;
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        const ColoInvCell* cell = &s->inventory_cells[i];
+        if (cell->dose == 0) continue;
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
+        if (resolution.click_action != OSRS_CLICK_DRINK) continue;
+        switch (resolution.consumable_kind) {
+            case OSRS_CONSUMABLE_BREW:
+                brew_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SUPER_RESTORE:
+            case OSRS_CONSUMABLE_SANFEW:
+                restore_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SUPER_COMBAT:
+            case OSRS_CONSUMABLE_DIVINE_COMBAT:
+                combat_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_RANGING:
+            case OSRS_CONSUMABLE_DIVINE_RANGING:
+                ranged_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_SURGE:
+                surge_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+                antivenom_doses += cell->dose;
+                break;
+            case OSRS_CONSUMABLE_GUTHIX_REST:
+            case OSRS_CONSUMABLE_SATURATED_HEART:
+            case OSRS_CONSUMABLE_NONE:
+            case OSRS_CONSUMABLE_SHARK_FOOD:
+            case OSRS_CONSUMABLE_KARAMBWAN:
+                break;
+        }
+    }
+    s->player.brew_doses = brew_doses;
+    s->player.restore_doses = restore_doses;
+    s->player.combat_potion_doses = combat_doses;
+    s->player.ranged_potion_doses = ranged_doses;
+    s->player.antivenom_doses = antivenom_doses;
+    s->surge_doses = surge_doses;
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
@@ -412,9 +491,10 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_x = -1;
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
+    s->min_sol_hp_seen = COLO_SOL_HP_MAX;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
-    /* player: maxed combat stats + a melee/ranged loadout via shared helpers */
+    /* player: maxed combat stats + live equipped melee loadout */
     s->player.entity_type = ENTITY_PLAYER;
     encounter_init_maxed_player_combat_stats(&s->player, 99);
     osrs_item_effect_state_init(&s->player.item_effect_state);
@@ -424,58 +504,43 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
         ctx->config.loadout_profile_mode,
         ctx->config.beginner_loadout_fraction,
         &s->rng_state);
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    const uint8_t* spec_weapons = COLO_SPEC_WEAPONS[s->active_loadout_profile];
-    encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
-    encounter_populate_inventory(&s->player, loadouts, COLO_NUM_WEAPON_SETS, NULL);
-    {
-        /* spec weapons are weapon-slot inventory citizens (GUI switches, L2) */
-        int n = s->player.num_items_in_slot[GEAR_SLOT_WEAPON];
-        for (int k = 0; k < COLO_NUM_SPEC_WEAPONS && n < MAX_ITEMS_PER_SLOT; k++) {
-            int dup = 0;
-            for (int j = 0; j < n; j++)
-                if (s->player.inventory[GEAR_SLOT_WEAPON][j] == spec_weapons[k]) dup = 1;
-            if (!dup) s->player.inventory[GEAR_SLOT_WEAPON][n++] = spec_weapons[k];
-        }
-        s->player.num_items_in_slot[GEAR_SLOT_WEAPON] = n;
-        encounter_clear_ammo_inventory_slot(&s->player);
+    switch (s->active_loadout_profile) {
+        case COLO_LOADOUT_PROFILE_SPEEDRUN:
+            s->episode_max_ticks = COLO_SPEEDRUN_MAX_TICKS;
+            break;
+        case COLO_LOADOUT_PROFILE_BEGINNER:
+            s->episode_max_ticks = COLO_BEGINNER_MAX_TICKS;
+            break;
+        default:
+            fprintf(stderr, "colosseum: invalid active_loadout_profile %d\n",
+                (int)s->active_loadout_profile);
+            abort();
     }
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
+    memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));
+    memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
+    col_seed_inventory_cells_from_gameplay_loadout(s);
 
-    /* researched supplies (doses); currents live on Player, denominators here */
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
     s->full_supplies = *supplies;
-    s->player.brew_doses = supplies->brew_doses;
-    s->player.restore_doses = supplies->restore_doses;
-    s->player.combat_potion_doses = supplies->combat_doses;
-    s->player.ranged_potion_doses = supplies->ranged_doses;
-    s->surge_doses = supplies->surge_doses;
+    col_sync_consumable_counters_from_inventory(s);
     s->surge_cooldown = 0;
-    s->spec_armed_kind = 0;
 
     s->player.prayer = PRAYER_NONE;
     s->player.offensive_prayer = OFFENSIVE_PRAYER_NONE;
     osrs_interaction_init(&s->interaction);
+    s->player_last_interaction_target_slot = -1;
+    s->player_last_interaction_age = 1;
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
     s->player.run_energy = 10000;
 
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_MELEE], ATTACK_STYLE_MELEE,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->loadout_stats[COLO_GEAR_MELEE]);
-    encounter_compute_loadout_stats(loadouts[COLO_GEAR_RANGED], ATTACK_STYLE_RANGED,
-        OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[COLO_GEAR_RANGED]);
+    col_mark_live_loadout_dirty(s);
+    col_ensure_live_loadout_stats(s);
 
-    /* spec loadout stats + per-set effect profiles: spec weapons fire off the
-       melee gear base with only the weapon slot swapped (L2). */
-    for (int k = 0; k < COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_loadout[NUM_GEAR_SLOTS];
-        memcpy(spec_loadout, loadouts[COLO_GEAR_MELEE], NUM_GEAR_SLOTS);
-        spec_loadout[GEAR_SLOT_WEAPON] = spec_weapons[k];
-        encounter_compute_loadout_stats(spec_loadout, ATTACK_STYLE_MELEE,
-            OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AGGRESSIVE, 0, &s->spec_stats[k]);
-        encounter_derive_loadout_effect_profile(spec_loadout, &s->spec_effects[k]);
-    }
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        encounter_derive_loadout_effect_profile(loadouts[set], &s->set_effects[set]);
+    /* the thrall has no target until summoned (slot 0 is a real NPC index). */
+    s->thrall_target_slot = -1;
 
     s->player.x = COLO_PLAYER_START_X;
     s->player.y = COLO_PLAYER_START_Y;

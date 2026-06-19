@@ -25,8 +25,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER (5): no_change always valid; set melee/ranged/magic valid iff
-       prayer points remain; off valid iff a prayer is active. */
+    /* HEAD_PRAYER (5): no_change always valid; off valid iff one is active;
+       set melee/ranged/magic valid iff prayer points remain. */
     mask[offset++] = 1.0f;
     mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
@@ -39,61 +39,25 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
-    /* HEAD_GEAR (3): no_switch always valid; set-X valid iff not already set X. */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_MELEE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != COLO_GEAR_RANGED) ? 1.0f : 0.0f;
-
-    /* HEAD_EAT (2): none always valid; brew valid iff doses + off-timer + hurt. */
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.brew_doses > 0 && s->player.potion_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints) ? 1.0f : 0.0f;
-
-    /* HEAD_POTION (5): none, restore, super combat, ranging, surge (L15).
-       restore unmasks when a stat is drained, prayer is meaningfully low, or
-       (sanfew) venom is ticking. Boost pots mirror inferno's bastion window
-       [base, base+5] so a drained player restores first. E13 divine boost
-       pots also require more than 10 Hitpoints. Surge needs a dose, no
-       cooldown, and missing spec energy. */
-    mask[offset++] = 1.0f;
-    {
-        int pray_missing = s->player.base_prayer - s->player.current_prayer;
-        int restore_amount = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW)
-            ? osrs_sanfew_restore_amount(s->player.base_prayer)
-            : osrs_super_restore_amount(s->player.base_prayer);
-        int stats_drained =
-            s->player.current_attack < s->player.base_attack ||
-            s->player.current_strength < s->player.base_strength ||
-            s->player.current_defence < s->player.base_defence ||
-            s->player.current_ranged < s->player.base_ranged ||
-            s->player.current_magic < s->player.base_magic;
-        int pray_worth = pray_missing >= (restore_amount + 1) / 2;
-        int venom_cure = (s->full_supplies.restore_kind == COLO_RESTORE_SANFEW &&
-                          s->player_venom > 0);
-        mask[offset++] = (s->player.restore_doses > 0 &&
-                          s->player.potion_timer == 0 &&
-                          (stats_drained || pray_worth || venom_cure)) ? 1.0f : 0.0f;
+    int inventory_cell_actionable[COLO_INVENTORY_DISPLAY_SLOTS];
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        inventory_cell_actionable[cell] = col_inventory_cell_actionable(s, cell);
+    int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
+    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
+        mask[offset++] = 1.0f;
+        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+            mask[offset++] = (inventory_heads_enabled &&
+                inventory_cell_actionable[cell]) ? 1.0f : 0.0f;
+        }
     }
-    mask[offset++] = (s->player.combat_potion_doses > 0 && s->player.potion_timer == 0 &&
-                      (!col_combat_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
-                      s->player.current_attack >= s->player.base_attack &&
-                      s->player.current_attack <= s->player.base_attack + 5) ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.ranged_potion_doses > 0 && s->player.potion_timer == 0 &&
-                      (!col_ranged_potion_is_divine(s) || s->player.current_hitpoints > 10) &&
-                      s->player.current_ranged >= s->player.base_ranged &&
-                      s->player.current_ranged <= s->player.base_ranged + 5) ? 1.0f : 0.0f;
-    mask[offset++] = (s->surge_doses > 0 && s->player.potion_timer == 0 &&
-                      s->surge_cooldown == 0 &&
-                      s->player.special_energy < 100) ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (3): none always valid; arm spec k valid iff energy covers that
-       weapon's cost, or it is already armed (so the press disarms). */
+    /* HEAD_SPEC (3): none, arm equipped spec weapon, disarm. */
     mask[offset++] = 1.0f;
-    for (int k = 1; k <= COLO_NUM_SPEC_WEAPONS; k++) {
-        uint8_t spec_item = COLO_SPEC_WEAPONS[s->active_loadout_profile][k - 1];
-        int can_arm = s->player.special_energy >= osrs_spec_cost(spec_item);
-        mask[offset++] = (can_arm || s->spec_armed_kind == k) ? 1.0f : 0.0f;
-    }
+    int spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
+    mask[offset++] = (spec_cost > 0 &&
+                      (s->player.special_energy >= spec_cost || s->player.spec_armed))
+        ? 1.0f : 0.0f;
+    mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
     /* HEAD_MODIFIER_SELECT (4): none always valid; pick option k valid ONLY while a
        draft is pending and that option slot holds a real modifier id. */
@@ -109,15 +73,30 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
     /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
-       piety/rigour valid with prayer points; augury stays masked — the kits
-       carry no magic weapon set (L1). */
+       piety/rigour valid with prayer points; augury valid only in the magic set
+       (it boosts magic accuracy + damage). */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = 0.0f;
+    mask[offset++] = (col_equipped_weapon_attack_style(&s->player) == ATTACK_STYLE_MAGIC &&
+                      s->player.current_prayer > 0 &&
+                      s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
+
+    /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,
+       the recast gate is up, and the current target is a thrall-eligible (live,
+       non-Sol) NPC (a summon replaces a live thrall); death-charge valid iff not
+       frozen, ready (cd==0), and not already armed. */
+    mask[offset++] = 1.0f;
+    {
+        int target = col_player_target_slot(s);
+        mask[offset++] = (!frozen && s->thrall_recast_cd == 0 &&
+                          col_npc_is_thrall_target(s, target)) ? 1.0f : 0.0f;
+    }
+    mask[offset++] = (!frozen && s->death_charge_cd == 0 &&
+                      s->death_charge_window_left == 0) ? 1.0f : 0.0f;
 
     if (offset != COLO_ACTION_MASK_SIZE) {
         fprintf(stderr, "colosseum mask index mismatch: wrote %d, expected %d\n",
@@ -152,13 +131,18 @@ static void* col_get_entity_ctx(EncounterState* state, EncounterContext* context
     return NULL;
 }
 
-static void col_prepare_render_player(const ColosseumState* s, Player* out) {
+static void col_prepare_render_player(const ColosseumState* s, int spec_fired_kind, Player* out) {
     *out = s->player;
-    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
-    encounter_effective_loadout_for_equipment(loadouts[s->weapon_set], out->equipped);
-    GearSet gear = s->weapon_set == COLO_GEAR_RANGED ? GEAR_RANGED : GEAR_MELEE;
+    GearSet gear = col_gear_set_for_attack_style(col_equipped_weapon_attack_style(&s->player));
     out->current_gear = gear;
     out->visible_gear = gear;
+    if (spec_fired_kind > 0 && spec_fired_kind < NUM_ITEMS) {
+        out->equipped[GEAR_SLOT_WEAPON] = (uint8_t)spec_fired_kind;
+        out->equipped[GEAR_SLOT_SHIELD] = osrs_suppress_shield_for_two_handed_weapon(
+            out->equipped[GEAR_SLOT_WEAPON], out->equipped[GEAR_SLOT_SHIELD]);
+        out->current_gear = GEAR_MELEE;
+        out->visible_gear = GEAR_MELEE;
+    }
 }
 
 static int col_npc_render_attack_anim_id(
@@ -180,6 +164,64 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
+/** Render-only: a deterministic free tile adjacent to the thrall's current sim
+    target NPC (s->thrall_target_slot), so the viewer shows it standing to attack
+    the enemy it auto-attacks rather than glued to the player. The sim never
+    positions the thrall (its damage is not range-gated), so the viewer scans the
+    ring around the target footprint and picks the walkable tile nearest the
+    player (the near side a melee/ranged actor would stand on). Falls back to the
+    target's own tile, then to the player-adjacent scan, then the player tile when
+    the thrall has no live target. Both the render-entity and projectile emitters
+    call this so the model and its bolt share one source tile. */
+static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
+    static const int ADJ[8][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
+    int slot = s->thrall_target_slot;
+    if (col_npc_is_thrall_target(s, slot)) {
+        const ColoNPC* target = &s->npcs[slot];
+        int size = col_npc_effective_size(target);
+        int best_x = -1, best_y = -1, best_dist = 0;
+        for (int dx = -1; dx <= size; dx++) {
+            for (int dy = -1; dy <= size; dy++) {
+                int on_footprint = dx >= 0 && dx < size && dy >= 0 && dy < size;
+                if (on_footprint) continue;
+                int x = target->x + dx;
+                int y = target->y + dy;
+                if (!col_player_walkable((void*)s, x, y)) continue;
+                int ddx = x - s->player.x;
+                int ddy = y - s->player.y;
+                int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
+                    ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
+                if (best_x < 0 || dist < best_dist) {
+                    best_x = x;
+                    best_y = y;
+                    best_dist = dist;
+                }
+            }
+        }
+        if (best_x >= 0) {
+            *out_x = best_x;
+            *out_y = best_y;
+            return;
+        }
+        *out_x = target->x;
+        *out_y = target->y;
+        return;
+    }
+    for (int a = 0; a < 8; a++) {
+        int x = s->player.x + ADJ[a][0];
+        int y = s->player.y + ADJ[a][1];
+        if (col_player_walkable((void*)s, x, y)) {
+            *out_x = x;
+            *out_y = y;
+            return;
+        }
+    }
+    *out_x = s->player.x;
+    *out_y = s->player.y;
+}
+
 /** populate render entities (player + active NPCs). */
 static void col_fill_render_entities_ctx(
     EncounterState* state,
@@ -190,7 +232,7 @@ static void col_fill_render_entities_ctx(
 ) {
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     ColosseumState* s = (ColosseumState*)state;
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     s->player.gui_max_hit = ls->max_hit;
     s->player.gui_attack_speed = ls->attack_speed;
     s->player.gui_attack_range = ls->attack_range;
@@ -199,7 +241,7 @@ static void col_fill_render_entities_ctx(
     int n = 0;
     if (n < max_entities) {
         Player render_player;
-        col_prepare_render_player(s, &render_player);
+        col_prepare_render_player(s, ctx->player_spec_fired_kind, &render_player);
         RenderEntity* re = &out[n++];
         osrs_render_entity_from_player_entity(&render_player, re);
         if (ctx->player_render_hit_count < 0 ||
@@ -268,6 +310,65 @@ static void col_fill_render_entities_ctx(
             for (int orb = 0; orb < 3; orb++)
                 re->debug_manticore_orb_style[orb] = mc->orb_style[orb];
         }
+    }
+
+    if (s->thrall_active && n < max_entities) {
+        int tx, ty;
+        col_thrall_render_tile(s, &tx, &ty);
+        /* hide the thrall when the player stands on its render tile: the tile
+           picker falls back to the player's own tile when no walkable neighbour
+           exists, and drawing the thrall under the player looks wrong. */
+        if (tx != s->player.x || ty != s->player.y) {
+            RenderEntity* re = &out[n++];
+            OsrsNpcRenderEntitySpec thrall_spec = {
+                .npc_def_id = COLO_NPC_DEF_ID_THRALL,
+                .npc_slot = COLO_NPC_SLOT_THRALL,
+                .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
+                .npc_visible = 1,
+                .npc_size = 1,
+                .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
+                .x = tx,
+                .y = ty,
+                .dest_x = tx,
+                .dest_y = ty,
+                .current_hitpoints = 1,
+                .base_hitpoints = 1,
+                .attack_style_this_tick = ATTACK_STYLE_NONE,
+                .hit_landed_this_tick = 0,
+                .hit_damage = 0,
+                .hit_was_successful = 0,
+                .hit_spell_type = ENCOUNTER_SPELL_NONE,
+                .attack_target_entity_idx = 0,
+            };
+            osrs_render_entity_from_npc_spec(&thrall_spec, re);
+            re->debug_npc_type_name = "Arceuus Thrall";
+        }
+    }
+
+    if (s->solarflare.active && n < max_entities) {
+        RenderEntity* re = &out[n++];
+        OsrsNpcRenderEntitySpec orb_spec = {
+            .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
+            .npc_slot = COLO_NPC_SLOT_SOLARFLARE,
+            .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID,
+            .npc_visible = 1,
+            .npc_size = 1,
+            .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
+            .x = s->solarflare.x,
+            .y = s->solarflare.y,
+            .dest_x = s->solarflare.x,
+            .dest_y = s->solarflare.y,
+            .current_hitpoints = 1,
+            .base_hitpoints = 1,
+            .attack_style_this_tick = ATTACK_STYLE_NONE,
+            .hit_landed_this_tick = 0,
+            .hit_damage = 0,
+            .hit_was_successful = 0,
+            .hit_spell_type = ENCOUNTER_SPELL_NONE,
+            .attack_target_entity_idx = 0,
+        };
+        osrs_render_entity_from_npc_spec(&orb_spec, re);
+        re->debug_npc_type_name = "Solar flare";
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

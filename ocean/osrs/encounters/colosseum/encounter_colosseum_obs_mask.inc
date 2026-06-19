@@ -4,13 +4,18 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(37) + npc slots(12 * 30) + modifiers(49) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8) = 813.
- * P5 grew the per-NPC type one-hot 10 -> 12 (healing totem + bee swarm became
- * NPC-slot citizens, A21+B9), taking the obs from 509 to 533. The researched
- * loadout pass grew the player block 29 -> 37 (+4 supply fractions, +2 surge,
- * +2 spec-armed one-hot), 533 -> 541; the loadout profile itself is implicit
- * in the gear-derived stats + supply normalization (inferno precedent).
+ *   player(36) + inventory cells(28 * 35) + equipped self(11 * 18)
+ *   + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2359.
+ * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
+ * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
+ * + spec-armed one-hots to the player block; the loadout profile is implicit in
+ * the gear-derived stats + supply normalization (inferno precedent).
+ * The eval-fix pass raised COLO_OBS_NPCS 12 -> 24 (== COLO_MAX_NPCS, so a busy
+ * wave never drops a live NPC from obs or the TARGET head) and grew the player
+ * block 38 -> 45 (+5 current-vs-base offensive level deltas + 2 divine boost
+ * timer fractions), so the policy can see its own boost-hold state.
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
  * contract that keeps the obs honest as the layout grows.
@@ -22,9 +27,13 @@
 
 /* ----- obs section sizes ---------------------------------------------------- */
 
-#define COLO_PLAYER_OBS_SIZE      37
+#define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
+#define COLO_INVENTORY_OBS_SIZE \
+    (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
+#define COLO_EQUIPPED_SELF_OBS_SIZE \
+    (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
 #define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 360 */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 720 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
     venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
@@ -40,20 +49,39 @@
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
 #define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)  /* 112 */
+/** current threat composition: count of live NPCs that can hit the player THIS
+    tick (in attack range + line of sight), split into the 3 attack styles
+    [magic, ranged, melee]. The direct de-confliction signal — the agent must
+    position so at most one style is "live" (a same-tick multi-style stack is
+    exactly what a single overhead prayer cannot block). */
+#define COLO_THREAT_LOS_OBS_SIZE  3
+/** Arceuus thrall + Death-Charge state (combat-fidelity pass), appended after
+    THREAT_LOS: thrall_active, thrall_lifetime_norm, thrall_recast_norm, dc_armed,
+    dc_window_norm, dc_cd_norm. The +15% spec from a Death-Charge proc surfaces
+    downstream via the existing spec_energy obs. */
+#define COLO_THRALL_DC_OBS_SIZE   6
 
-#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
+#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_INVENTORY_OBS_SIZE + \
+    COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
     COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
-    COLO_STEP_OUT_FORECAST_OBS_SIZE)
+    COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
-#define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_PLAYER + COLO_NPC_OBS_SIZE)
+#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PLAYER + COLO_INVENTORY_OBS_SIZE)
+#define COLO_OBS_AFTER_EQUIPPED_SELF \
+    (COLO_OBS_AFTER_INVENTORY + COLO_EQUIPPED_SELF_OBS_SIZE)
+#define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_OBS_SIZE)
 #define COLO_OBS_AFTER_MODS     (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_OBS_SIZE)
 #define COLO_OBS_AFTER_WAVE     (COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE)
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
 #define COLO_OBS_AFTER_PENDING_HITS (COLO_OBS_AFTER_BOSS + COLO_PENDING_HIT_OBS_SIZE)
 #define COLO_OBS_AFTER_STEP_OUT_FORECAST \
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
+#define COLO_OBS_AFTER_THREAT_LOS \
+    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
+#define COLO_OBS_AFTER_THRALL_DC \
+    (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -508,6 +536,158 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 
 /* ----- top-level obs writer ------------------------------------------------- */
 
+/** COLO_THREAT_LOS_OBS_SIZE floats: count of live NPCs that can currently hit the
+    player (within attack range, and with line of sight for the ranged/magic ones),
+    split by the style they threaten with [magic, ranged, melee], each normalized by
+    a small cap. This is the direct de-confliction signal — when two of the three are
+    nonzero, a single overhead prayer cannot cover the stack and the agent must
+    reposition (LoS-block or offtick) to drive all-but-one style to zero. The
+    manticore is counted as its next orb's style. */
+static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int magic = 0, ranged = 0, melee = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+        if (ns->attack_range < 1) continue;   /* non-attackers (e.g. healing totem) */
+        int dist = col_npc_dist_to_player(s, npc);
+        if (dist < 1 || dist > ns->attack_range) continue;
+        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
+        AttackStyle style = ns->default_style;
+        if (npc->type == COLO_MANTICORE) {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
+            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
+        }
+        if (style == ATTACK_STYLE_MAGIC) magic++;
+        else if (style == ATTACK_STYLE_RANGED) ranged++;
+        else if (style == ATTACK_STYLE_MELEE) melee++;
+    }
+    obs[i++] = col_clamp01((float)magic / 4.0f);
+    obs[i++] = col_clamp01((float)ranged / 4.0f);
+    obs[i++] = col_clamp01((float)melee / 4.0f);
+    *idx = i;
+}
+
+/** COLO_THRALL_DC_OBS_SIZE floats: the Arceuus thrall + Death-Charge state the
+    policy needs to time summons/recasts and the kill-window. */
+static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int lifetime_full = COLO_THRALL_LIFETIME_TICKS[s->active_loadout_profile];
+    obs[i++] = s->thrall_active ? 1.0f : 0.0f;
+    obs[i++] = (s->thrall_active && lifetime_full > 0)
+        ? col_clamp01((float)s->thrall_lifetime_left / (float)lifetime_full) : 0.0f;
+    obs[i++] = col_clamp01((float)s->thrall_recast_cd / (float)COLO_THRALL_RECAST_CD);
+    obs[i++] = s->death_charge_window_left > 0 ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)s->death_charge_window_left / (float)COLO_DEATH_CHARGE_WINDOW);
+    obs[i++] = col_clamp01((float)s->death_charge_cd / (float)COLO_DEATH_CHARGE_CD);
+    *idx = i;
+}
+
+static void col_equipment_bonus_projection(
+    const uint8_t equipment[NUM_GEAR_SLOTS],
+    float out[6]
+) {
+    int slash = 0;
+    int melee_str = 0;
+    int ranged_att = 0;
+    int ranged_str = 0;
+    int magic = 0;
+    int defence = 0;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t item_idx = equipment[slot];
+        if (item_idx == ITEM_NONE) continue;
+        if (item_idx >= NUM_ITEMS) {
+            fprintf(stderr, "colosseum obs: invalid equipped item %u\n", item_idx);
+            abort();
+        }
+        const Item* item = &ITEM_DATABASE[item_idx];
+        slash += item->attack_slash;
+        melee_str += item->melee_strength;
+        ranged_att += item->attack_ranged;
+        ranged_str += item->ranged_strength;
+        magic += item->attack_magic + item->magic_damage;
+        defence += item->defence_stab + item->defence_slash + item->defence_crush +
+            item->defence_magic + item->defence_ranged;
+    }
+    out[0] = (float)slash / STAT_NORM_ATTACK;
+    out[1] = (float)melee_str / STAT_NORM_STRENGTH;
+    out[2] = (float)ranged_att / STAT_NORM_ATTACK;
+    out[3] = (float)ranged_str / STAT_NORM_STRENGTH;
+    out[4] = (float)magic / (STAT_NORM_ATTACK + STAT_NORM_MAGIC_DMG);
+    out[5] = (float)defence / (5.0f * STAT_NORM_DEFENCE);
+}
+
+static void col_hypothetical_equipment_after_cell(
+    const ColosseumState* s,
+    int cell_idx,
+    uint8_t out[NUM_GEAR_SLOTS]
+) {
+    memcpy(out, s->player.equipped, NUM_GEAR_SLOTS);
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (cell->item_idx == ITEM_NONE) return;
+    int gear_slot = osrs_item_gear_slot(cell->item_idx);
+    if (gear_slot < 0) return;
+    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(cell->item_idx))
+        out[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    if (gear_slot == GEAR_SLOT_SHIELD && item_is_two_handed(out[GEAR_SLOT_WEAPON]))
+        out[GEAR_SLOT_WEAPON] = ITEM_NONE;
+    out[gear_slot] = cell->item_idx;
+}
+
+static void col_inventory_cell_post_use_deltas(
+    const ColosseumState* s,
+    int cell_idx,
+    const float before[6],
+    float out[6]
+) {
+    for (int i = 0; i < 6; i++) out[i] = 0.0f;
+    if (s->inventory_cells[cell_idx].item_idx == ITEM_NONE) return;
+
+    float after[6];
+    uint8_t hypothetical[NUM_GEAR_SLOTS];
+    col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
+    col_equipment_bonus_projection(hypothetical, after);
+    for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
+}
+
+static void col_write_inventory_and_equipped_obs(
+    const ColosseumState* s,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    float current_equipment_projection[6];
+    col_equipment_bonus_projection(s->player.equipped, current_equipment_projection);
+    for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
+        float deltas[6];
+        const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+        col_inventory_cell_post_use_deltas(
+            s, cell_idx, current_equipment_projection, deltas);
+        osrs_write_inventory_cell_affordance_features(
+            &obs[i],
+            cell->item_idx,
+            cell->raw_osrs_id,
+            cell->dose,
+            col_inventory_cell_actionable(s, cell_idx),
+            col_inventory_cell_holds_equipped_item(s, cell_idx),
+            deltas,
+            s->player.base_hitpoints,
+            s->player.base_prayer,
+            s->player.base_attack);
+        i += OSRS_INVENTORY_CELL_OBS_FEATURES;
+    }
+    assert(i == COLO_OBS_AFTER_INVENTORY);
+
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        osrs_write_equipped_self_features(&obs[i], s->player.equipped[slot]);
+        i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
+    }
+    assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
+    *idx = i;
+}
+
 static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
@@ -522,9 +702,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     memset(obs, 0, COLO_NUM_OBS * sizeof(float));
     int i = 0;
     int px = s->player.x, py = s->player.y;
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
-    /* player block (29) */
+    /* player block (36) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
     obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
     obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
@@ -539,8 +719,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)s->player.current_prayer / 99.0f);
     obs[i++] = col_clamp01((float)s->player.run_energy / 10000.0f);
     obs[i++] = col_clamp01((float)s->player.special_energy / 100.0f);
-    obs[i++] = (s->weapon_set == COLO_GEAR_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (s->weapon_set == COLO_GEAR_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = s->player.spec_armed ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player.attack_timer / 8.0f);
     obs[i++] = col_clamp01((float)s->player.food_timer / 3.0f);
     obs[i++] = col_clamp01((float)s->player.potion_timer / 3.0f);
@@ -554,26 +733,24 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
-    /* researched-inventory block: supply fractions normalized by the profile's
-       full doses (a profile without a supply reads 0), surge state, and the
-       armed spec weapon one-hot. */
-    obs[i++] = s->full_supplies.brew_doses > 0
-        ? col_clamp01((float)s->player.brew_doses / (float)s->full_supplies.brew_doses) : 0.0f;
-    obs[i++] = s->full_supplies.restore_doses > 0
-        ? col_clamp01((float)s->player.restore_doses / (float)s->full_supplies.restore_doses) : 0.0f;
-    obs[i++] = s->full_supplies.combat_doses > 0
-        ? col_clamp01((float)s->player.combat_potion_doses / (float)s->full_supplies.combat_doses) : 0.0f;
-    obs[i++] = s->full_supplies.ranged_doses > 0
-        ? col_clamp01((float)s->player.ranged_potion_doses / (float)s->full_supplies.ranged_doses) : 0.0f;
-    obs[i++] = s->full_supplies.surge_doses > 0
-        ? col_clamp01((float)s->surge_doses / (float)s->full_supplies.surge_doses) : 0.0f;
-    obs[i++] = col_clamp01((float)s->surge_cooldown / (float)COLO_SURGE_COOLDOWN_TICKS);
-    obs[i++] = (s->spec_armed_kind == 1) ? 1.0f : 0.0f;
-    obs[i++] = (s->spec_armed_kind == 2) ? 1.0f : 0.0f;
+    /* REC6 live offensive scalars; divisors sized for boosted+prayer BIS so top loadouts don't flatten to 1.0 (eff_level peaks ~158 melee+Piety, attack_bonus ~180 BIS mage magic-attack, strength_bonus ~150 BIS melee); col_clamp01 is the backstop */
+    obs[i++] = col_clamp01((float)ls->eff_level / 165.0f);
+    obs[i++] = col_clamp01((float)ls->attack_bonus / 200.0f);
+    obs[i++] = col_clamp01((float)ls->strength_bonus / 160.0f);
+    /* REC7 spec detail */
+    int colo_spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
+    obs[i++] = col_clamp01((float)colo_spec_cost / 100.0f);
+    obs[i++] = colo_spec_cost > 0 ? 1.0f : 0.0f;
+    /* REC8 profile + spell base */
+    obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN ? 1.0f : 0.0f;
+    obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)ls->spell_base_damage / 40.0f);
     assert(i == COLO_OBS_AFTER_PLAYER);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);
 #endif
+
+    col_write_inventory_and_equipped_obs(s, obs, &i);
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {
@@ -648,35 +825,15 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #endif
 
     if (ctx->config.step_out_forecast_obs_enabled) {
+        int horizon = ctx->config.forecast_horizon;
+        if (horizon < 1) horizon = 1;
+        if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
+            horizon = COLO_STEP_OUT_FORECAST_HORIZON;
         ColoStepOutForecast forecast;
-        col_build_step_out_forecast_ctx(s, &forecast);
-        for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-            const ColoStepOutForecastAction* action = &forecast.actions[action_idx];
-            int first_attack_tick = 0;
-            int first_style_mask = 0;
-            int max_hit = 0;
-            int ranged_magic_same_tick = 0;
-            for (int tick_idx = 0; tick_idx < COLO_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
-                const ColoStepOutForecastTick* tick = &action->ticks[tick_idx];
-                int style_mask = col_step_out_forecast_tick_style_mask(tick);
-                if (first_attack_tick == 0 &&
-                        col_step_out_forecast_tick_has_event(tick)) {
-                    first_attack_tick = tick_idx + 1;
-                    first_style_mask = style_mask;
-                }
-                if (tick->max_hit > max_hit) max_hit = tick->max_hit;
-                if (tick->ranged_count > 0 && tick->magic_count > 0)
-                    ranged_magic_same_tick = 1;
-            }
-            obs[i++] = action->valid ? 1.0f : 0.0f;
-            obs[i++] = (float)first_attack_tick / (float)COLO_STEP_OUT_FORECAST_HORIZON;
-            obs[i++] = (float)first_style_mask / 7.0f;
-            obs[i++] = (float)max_hit / 150.0f;
-            obs[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-            obs[i++] = ranged_magic_same_tick ? 1.0f : 0.0f;
-            obs[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
-            obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
-        }
+        ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
+        col_build_step_out_forecast_horizon_mode_summary(
+            s, &forecast, summaries, horizon, ctx->config.forecast_run_tile_mode);
+        i = col_write_step_out_forecast_obs_summary(&forecast, summaries, horizon, obs, i);
     } else {
         i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
     }
@@ -684,6 +841,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
 #endif
+
+    col_write_threat_los_counts(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_THREAT_LOS);
+
+    col_write_thrall_dc(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_THRALL_DC);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);

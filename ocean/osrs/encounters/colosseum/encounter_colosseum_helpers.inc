@@ -21,7 +21,6 @@ static void col_resolve_player_pending_hits_ctx(ColosseumState* s, ColosseumCont
 static void col_resolve_player_pending_hits(ColosseumState* s);
 static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
-static float col_terminal_loss_reward(const ColosseumState* s, const ColosseumContext* ctx);
 
 /* Sol Heredit boss machine (encounter_colosseum_boss.inc, included after combat). */
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx);
@@ -34,6 +33,144 @@ static int col_in_boss_arena(const ColosseumState* s, int x, int y);
 static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
+
+static void col_abort_invalid_weapon_set(ColoWeaponSet set) {
+    fprintf(stderr, "invalid Colosseum weapon set %d\n", (int)set);
+    abort();
+}
+
+static AttackStyle col_weapon_set_attack_style(ColoWeaponSet set) {
+    switch (set) {
+        case COLO_GEAR_MELEE:
+            return ATTACK_STYLE_MELEE;
+        case COLO_GEAR_RANGED:
+            return ATTACK_STYLE_RANGED;
+        case COLO_GEAR_MAGIC:
+            return ATTACK_STYLE_MAGIC;
+        case COLO_NUM_WEAPON_SETS:
+            break;
+    }
+    col_abort_invalid_weapon_set(set);
+    return ATTACK_STYLE_MELEE;
+}
+
+static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
+    switch (set) {
+        case COLO_GEAR_MELEE:
+            return FIGHT_STYLE_AGGRESSIVE;
+        case COLO_GEAR_RANGED:
+            return FIGHT_STYLE_RAPID;
+        case COLO_GEAR_MAGIC:
+            return FIGHT_STYLE_ACCURATE;
+        case COLO_NUM_WEAPON_SETS:
+            break;
+    }
+    col_abort_invalid_weapon_set(set);
+    return FIGHT_STYLE_AGGRESSIVE;
+}
+
+static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
+    if (set != COLO_GEAR_MAGIC) return 0;
+    if (s->active_loadout_profile < 0 ||
+            s->active_loadout_profile >= COLO_NUM_LOADOUT_PROFILES) {
+        fprintf(stderr, "invalid Colosseum loadout profile %d\n",
+            (int)s->active_loadout_profile);
+        abort();
+    }
+    return COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile];
+}
+
+static AttackStyle col_equipped_weapon_attack_style(const Player* p) {
+    int style = get_item_attack_style(p->equipped[GEAR_SLOT_WEAPON]);
+    if (style == 1) return ATTACK_STYLE_MELEE;
+    if (style == 2) return ATTACK_STYLE_RANGED;
+    if (style == 3) return ATTACK_STYLE_MAGIC;
+    return ATTACK_STYLE_MELEE;
+}
+
+static FightStyle col_equipped_weapon_fight_style(const Player* p) {
+    AttackStyle style = col_equipped_weapon_attack_style(p);
+    if (style == ATTACK_STYLE_RANGED)
+        return FIGHT_STYLE_RAPID;
+    if (style == ATTACK_STYLE_MAGIC)
+        return FIGHT_STYLE_ACCURATE;
+    return FIGHT_STYLE_AGGRESSIVE;
+}
+
+static GearSet col_gear_set_for_attack_style(AttackStyle style) {
+    if (style == ATTACK_STYLE_RANGED) return GEAR_RANGED;
+    if (style == ATTACK_STYLE_MAGIC) return GEAR_MAGE;
+    return GEAR_MELEE;
+}
+
+static int col_equipped_spell_base_damage(const ColosseumState* s) {
+    if (col_equipped_weapon_attack_style(&s->player) != ATTACK_STYLE_MAGIC) return 0;
+    return COLO_MAGIC_SPELL_BASE_DAMAGE[s->active_loadout_profile];
+}
+
+static void col_current_style_levels(
+    const Player* p,
+    AttackStyle style,
+    int* current_att_level,
+    int* current_str_level
+) {
+    if (style == ATTACK_STYLE_RANGED) {
+        *current_att_level = p->current_ranged;
+        *current_str_level = p->current_ranged;
+        return;
+    }
+    if (style == ATTACK_STYLE_MAGIC) {
+        *current_att_level = p->current_magic;
+        *current_str_level = p->current_magic;
+        return;
+    }
+    *current_att_level = p->current_attack;
+    *current_str_level = p->current_strength;
+}
+
+static void col_mark_live_loadout_dirty(ColosseumState* s) {
+    s->loadout_stats_dirty = 1;
+}
+
+static void col_recompute_live_loadout_stats(ColosseumState* s) {
+    AttackStyle style = col_equipped_weapon_attack_style(&s->player);
+    FightStyle fight_style = col_equipped_weapon_fight_style(&s->player);
+    int current_att_level;
+    int current_str_level;
+    col_current_style_levels(&s->player, style, &current_att_level, &current_str_level);
+    s->player.current_gear = col_gear_set_for_attack_style(style);
+    s->player.visible_gear = s->player.current_gear;
+    encounter_compute_loadout_stats(
+        s->player.equipped,
+        style,
+        s->player.offensive_prayer,
+        current_att_level,
+        fight_style,
+        col_equipped_spell_base_damage(s),
+        &s->loadout_stats_live);
+    encounter_update_loadout_level(
+        &s->loadout_stats_live,
+        s->player.offensive_prayer,
+        current_att_level,
+        current_str_level);
+    encounter_derive_loadout_effect_profile(s->player.equipped, &s->effects_live);
+    s->loadout_stats_dirty = 0;
+}
+
+static void col_ensure_live_loadout_stats(ColosseumState* s) {
+    if (s->loadout_stats_dirty)
+        col_recompute_live_loadout_stats(s);
+}
+
+static const EncounterLoadoutStats* col_live_loadout_stats(ColosseumState* s) {
+    col_ensure_live_loadout_stats(s);
+    return &s->loadout_stats_live;
+}
+
+static const OsrsEquipmentEffectProfile* col_live_effects(ColosseumState* s) {
+    col_ensure_live_loadout_stats(s);
+    return &s->effects_live;
+}
 
 static inline EncounterProjectileDelayKind col_projectile_delay_kind_for_style(
     AttackStyle style
@@ -81,11 +218,17 @@ typedef struct {
 } ColoNpcDeathVisual;
 
 /**
- * Cache-derived Colosseum death sequence metadata.
+ * Colosseum death-sequence and corpse-linger metadata.
  *
- * client_ticks is the summed modern sequence frame delay. linger_ticks is the
- * same duration converted to simulator ticks with ceil(client_ticks / 30).
- * Hazard entities keep instant despawn and never consult this table.
+ * anim_id is render-only (played by the viewer, ignored by the simulator).
+ * linger_ticks is the simulator corpse despawn budget consumed by
+ * osrs_npc_death_linger_start, normally ceil(client_ticks / 30) where
+ * client_ticks is the death sequence's summed frame delay. The four
+ * Animaya-rigged colossi (Javelin, Shockwave, Manticore, Sol) render their
+ * cache Maya death sequence, which plays once then holds its final pose. Their
+ * client_ticks and linger_ticks stay at the pre-Maya despawn budget so corpse
+ * timing, and thus training, is unchanged by the render fix. Hazard entities
+ * despawn instantly and never consult this table.
  */
 static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
@@ -93,11 +236,11 @@ static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_SEER]      = { .anim_id = 10854, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_SERPENT_SHAMAN]      = { .anim_id = 10860, .client_ticks = 47,  .linger_ticks = 2 },
     [COLO_JAGUAR_WARRIOR]      = { .anim_id = 10848, .client_ticks = 63,  .linger_ticks = 3 },
-    [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10897, .client_ticks = 60,  .linger_ticks = 2 },
-    [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10904, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_JAVELIN_COLOSSUS]    = { .anim_id = 10894, .client_ticks = 60,  .linger_ticks = 2 },
+    [COLO_SHOCKWAVE_COLOSSUS]  = { .anim_id = 10895, .client_ticks = 60,  .linger_ticks = 2 },
     [COLO_MINOTAUR]            = { .anim_id = 10845, .client_ticks = 150, .linger_ticks = 5 },
-    [COLO_MANTICORE]           = { .anim_id = 10872, .client_ticks = 80,  .linger_ticks = 3 },
-    [COLO_SOL_HEREDIT]         = { .anim_id = 10873, .client_ticks = 230, .linger_ticks = 8 },
+    [COLO_MANTICORE]           = { .anim_id = 10866, .client_ticks = 80,  .linger_ticks = 3 },
+    [COLO_SOL_HEREDIT]         = { .anim_id = 10888, .client_ticks = 230, .linger_ticks = 8 },
     [COLO_HEALING_TOTEM]       = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
     [COLO_BEE_SWARM]           = { .anim_id = -1,    .client_ticks = 0,   .linger_ticks = 0 },
 };
@@ -183,19 +326,34 @@ static void col_queue_player_pending_hit(
 }
 
 
+static int col_default_action_debug_log(void) {
+    const char* value = getenv("OSRS_COLOSSEUM_ACTION_LOG");
+    if (!value || value[0] == '\0') return 0;
+    if (strcmp(value, "1") == 0) return 1;
+    if (strcmp(value, "0") == 0) return 0;
+    fprintf(stderr, "OSRS_COLOSSEUM_ACTION_LOG must be 0 or 1, got %s\n", value);
+    abort();
+}
+
 static ColConfig col_default_config(void) {
     return (ColConfig){
         .start_wave = 0,
         .damage_reward_coeff = 0.0f,
         .boss_damage_reward_coeff = 0.0f,
-        .wave_clear_bonus = 0.0f,
+        .wave_clear_bonus = 1.0f,
         .boss_phase_bonus = 0.0f,
         .win_bonus = 0.0f,
         .prayer_correct_reward = 0.0f,
+        .offpray_damage_penalty_coeff = 0.0f,
+        .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
-        .terminal_penalty_enabled = 0,
+        .timeout_penalty = 0.0f,
         .curriculum_agent = 0,
         .step_out_forecast_obs_enabled = 1,
+        .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
+        .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
+        .mask_inventory_heads = 0,
+        .action_debug_log = col_default_action_debug_log(),
     };
 }
 
@@ -229,6 +387,8 @@ static void col_init_state_typed(ColosseumState* s, ColosseumContext* ctx) {
     memset(s, 0, sizeof(*s));
     s->rng_state = 12345;
     s->start_wave = ctx ? ctx->config.start_wave : 0;
+    s->episode_max_ticks = COLO_MAX_TICKS;
+    s->min_sol_hp_seen = COLO_SOL_HP_MAX;
 }
 
 static void col_init_state(EncounterState* state, EncounterContext* context) {

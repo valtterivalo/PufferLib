@@ -41,6 +41,7 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 #include "osrs_pvp_gear.h"
+#include "osrs_inventory_clicks.h"
 #include "osrs_ui_interfaces.h"
 
 
@@ -447,6 +448,14 @@ typedef struct {
        positions are user-rearrangeable via drag-and-drop. */
     InvSlot inv_grid[INV_GRID_SLOTS];
     int inv_grid_dirty;   /* 1 = needs full rebuild from player state */
+
+    /* render-only inventory override: when display_inventory_count > 0, the panel
+       renders this fixed list of OSRS item ids instead of the derived grid. The
+       colosseum render bridge sets it to the wiki kit's exact 28-slot inventory so
+       the panel matches the reference 1:1; 0 = use the derived grid. Never read by
+       the sim. */
+    int display_inventory_osrs_ids[INV_GRID_SLOTS];
+    int display_inventory_count;
 
     /* previous player state for incremental inventory updates.
        compared each tick to detect gear switches and consumable use. */
@@ -992,6 +1001,27 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
+        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
+        if (osrs_asset_exists(path)) {
+            int idx = gs->item_sprite_count;
+            gs->item_sprite_ids[idx] = cid;
+            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
+            gs->item_sprite_count++;
+        }
+    }
+
+    /* colosseum render-only display-inventory ids that are NOT in ITEM_DATABASE
+       nor the consumable list above (Venator bow, Abyssal tentacle, divine pots,
+       sanfew, Guthix rest, surge, Divine rune pouch). The export pipeline writes
+       their PNGs; load any that exist so the 1:1 kit panel can resolve them. */
+    static const int colosseum_display_ids[] = {
+        27610, 12006, 27281,             /* Venator bow, Abyssal tentacle, Divine rune pouch */
+        23685, 23733,                    /* Divine super combat(4), Divine ranging(4) */
+        10925, 4417, 30875,              /* Sanfew serum(4), Guthix rest(4), Surge potion(4) */
+    };
+    for (int i = 0; i < (int)(sizeof(colosseum_display_ids)/sizeof(colosseum_display_ids[0])); i++) {
+        if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
+        int cid = colosseum_display_ids[i];
         const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
         if (osrs_asset_exists(path)) {
             int idx = gs->item_sprite_count;
@@ -2364,8 +2394,34 @@ static int gui_inv_slot_at(GuiState* gs, int mx, int my) {
 }
 
 static const char* gui_inv_primary_action_label(const InvSlot* inv) {
+    uint16_t raw_osrs_id =
+        inv->osrs_id > 0 && inv->osrs_id <= UINT16_MAX ? (uint16_t)inv->osrs_id : 0;
+    uint8_t item_idx = inv->type == INV_SLOT_EQUIPMENT
+        ? inv->item_db_idx
+        : ITEM_NONE;
+    OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+        item_idx, raw_osrs_id, OSRS_CLICK_TICK_FIRST);
+    switch (resolution.click_action) {
+        case OSRS_CLICK_EQUIP: {
+            int gear_slot = item_idx != ITEM_NONE ? item_to_gear_slot(item_idx) : -1;
+            return gear_slot == GEAR_SLOT_WEAPON || gear_slot == GEAR_SLOT_AMMO
+                ? "Wield"
+                : "Wear";
+        }
+        case OSRS_CLICK_EAT:
+            return "Eat";
+        case OSRS_CLICK_DRINK:
+            return "Drink";
+        case OSRS_CLICK_NONE:
+            break;
+        default:
+            fprintf(stderr, "gui inventory: bad click action %d\n",
+                (int)resolution.click_action);
+            abort();
+    }
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT: {
+            if (inv->item_db_idx == ITEM_NONE) return NULL;
             int gear_slot = item_to_gear_slot(inv->item_db_idx);
             return gear_slot == GEAR_SLOT_WEAPON || gear_slot == GEAR_SLOT_AMMO
                 ? "Wield"
@@ -2391,10 +2447,34 @@ static const char* gui_inv_primary_action_label(const InvSlot* inv) {
     }
 }
 
+static const char* gui_inv_raw_osrs_id_display_name(int osrs_id) {
+    switch (osrs_id) {
+        case 27610:
+            return "Venator bow";
+        case 12006:
+            return "Abyssal tentacle";
+        case 27281:
+            return "Divine rune pouch";
+        case 23685:
+            return "Divine super combat";
+        case 23733:
+            return "Divine ranging potion";
+        case 10925:
+            return "Sanfew serum";
+        case 4417:
+            return "Guthix rest";
+        case 30875:
+            return "Surge potion";
+        default:
+            return "";
+    }
+}
+
 static const char* gui_inv_slot_display_name(const InvSlot* inv) {
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT:
-            return gui_item_short_name(inv->item_db_idx);
+            if (inv->item_db_idx != ITEM_NONE) return gui_item_short_name(inv->item_db_idx);
+            return gui_inv_raw_osrs_id_display_name(inv->osrs_id);
         case INV_SLOT_FOOD:
             return "Shark";
         case INV_SLOT_KARAMBWAN:
@@ -2473,6 +2553,11 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
 
     switch (inv->type) {
         case INV_SLOT_EQUIPMENT: {
+            if (human_active && gs->display_inventory_count > 0) {
+                human_input_queue_inventory_primary_click(hi, slot);
+                gs->human_clicked_inv_slot = slot;
+                return INV_ACTION_EQUIP;
+            }
             int gear_slot = item_to_gear_slot(inv->item_db_idx);
             if (gear_slot >= 0) {
                 if (human_active) {
@@ -2487,7 +2572,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_FOOD:
             if (human_active) {
                 hi->pending_food = 1;
-                human_input_queue_eat(hi, 0);
+                human_input_queue_eat(hi, 0, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 0); }
@@ -2495,7 +2580,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
         case INV_SLOT_KARAMBWAN:
             if (human_active) {
                 hi->pending_karambwan = 1;
-                human_input_queue_eat(hi, 1);
+                human_input_queue_eat(hi, 1, slot);
                 gs->human_clicked_inv_slot = slot;
             }
             else { eat_food(p, 1); }
@@ -2579,6 +2664,17 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
             /* drop: swap src and target slots */
             int target = gui_inv_slot_at(gs, mx, my);
             if (target >= 0 && target != gs->inv_drag_src_slot) {
+                InvSlot source = gs->inv_grid[gs->inv_drag_src_slot];
+                if (hi && hi->enabled) {
+                    human_input_queue_item_on_item(
+                        hi,
+                        gs->inv_drag_src_slot,
+                        target,
+                        source.type == INV_SLOT_EQUIPMENT
+                            ? source.item_db_idx
+                            : ITEM_NONE,
+                        source.osrs_id);
+                }
                 InvSlot tmp = gs->inv_grid[target];
                 gs->inv_grid[target] = gs->inv_grid[gs->inv_drag_src_slot];
                 gs->inv_grid[gs->inv_drag_src_slot] = tmp;
@@ -2762,7 +2858,37 @@ static void gui_draw_inventory_manual(GuiState* gs) {
     gui_draw_inventory_drag(gs);
 }
 
+/** Render-only: load the panel from a fixed per-kit OSRS-id list (the colosseum
+    wiki inventory) instead of deriving it from sets + dose counts. Every entry is
+    drawn as an equipment-style display slot keyed by osrs_id; no sim state reads
+    this. */
+static void gui_load_display_inventory(GuiState* gs) {
+    memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
+    int count = gs->display_inventory_count;
+    if (count > INV_GRID_SLOTS) count = INV_GRID_SLOTS;
+    for (int i = 0; i < count; i++) {
+        int osrs_id = gs->display_inventory_osrs_ids[i];
+        if (osrs_id <= 0) continue;
+        uint8_t item_idx = osrs_id <= UINT16_MAX
+            ? osrs_item_index_for_raw_osrs_id((uint16_t)osrs_id)
+            : ITEM_NONE;
+        gs->inv_grid[i].type = INV_SLOT_EQUIPMENT;
+        gs->inv_grid[i].item_db_idx = item_idx;
+        gs->inv_grid[i].osrs_id = osrs_id;
+    }
+}
+
 static void gui_draw_inventory(GuiState* gs, Player* p) {
+    if (gs->display_inventory_count > 0) {
+        gui_load_display_inventory(gs);
+        gs->inv_grid_dirty = 0;
+        if (gui_draw_inventory_decoded(gs)) {
+            gui_draw_inventory_drag(gs);
+            return;
+        }
+        gui_draw_inventory_manual(gs);
+        return;
+    }
     if (gs->inv_grid_dirty) {
         gui_populate_inventory(gs, p);
         gs->inv_grid_dirty = 0;

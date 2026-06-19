@@ -582,9 +582,13 @@ static void col_sol_tick_triple_parry(ColosseumState* s) {
 
         int early = col_sol_overhead_on_in_window(s, COLO_SOL_PARRY_LOOKBACK[h]);
         int blocked = !early && s->player.prayer == PRAYER_PROTECT_MELEE;
+        s->tick_scratch.styles_faced_mask |= (1 << ATTACK_STYLE_MELEE);
+        s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] +=
+            (float)sol->parry_damage[h];
         if (blocked) {
             s->tick_scratch.prayer_correct++;
         } else {
+            s->tick_scratch.offpray_damage_this_tick += (float)sol->parry_damage[h];
             encounter_damage_player(&s->player, sol->parry_damage[h],
                 &s->tick_scratch.damage_received);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
