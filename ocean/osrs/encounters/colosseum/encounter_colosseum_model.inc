@@ -1172,6 +1172,8 @@ typedef struct {
     AttackStyle attack_style_this_tick;
     int attack_visual_target;
     int moved_this_tick;
+    int moved_last_tick;   /* prior tick's moved_this_tick; warband members attack
+                              only after two consecutive stationary ticks (B2) */
     int hit_landed_this_tick;
     int hit_damage;
     int hit_was_successful_this_tick;

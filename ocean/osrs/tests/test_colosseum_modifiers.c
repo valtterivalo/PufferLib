@@ -2046,6 +2046,47 @@ static void test_warband_melee_distance_gate(void) {
         s.npcs[0].attacked_this_tick == 0);
 }
 
+/* 4c-bis. B2: the two-tick stationary gate — a member adjacent on its window that
+   moved last tick (just stepped in) holds its attack; only a second consecutive
+   stationary tick fires it. This is the grace that lets the player attack then
+   step before the member can land a hit. */
+static void test_warband_two_tick_stationary_gate(void) {
+    printf("test_warband_two_tick_stationary_gate\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 57);
+    geo_clear_npcs(&s);
+    s.player.x = 7; s.player.y = 18;
+    s.tick = 100;
+
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 8, 18);   /* cardinally adjacent */
+    s.warband_cycle_anchor = s.tick - col_warband_window_offset(COLO_FREMENNIK_BERSERKER);
+
+    /* on its window but having moved last tick (just arrived): grace, no attack. */
+    s.npcs[0].moved_this_tick = 0;
+    s.npcs[0].moved_last_tick = 1;
+    col_warband_attack_phase(&s, &ctx);
+    CHECK("a member with only one stationary tick holds its attack",
+        s.npcs[0].attacked_this_tick == 0);
+
+    /* a second consecutive stationary tick on the window: it fires. */
+    s.npcs[0].moved_this_tick = 0;
+    s.npcs[0].moved_last_tick = 0;
+    col_warband_attack_phase(&s, &ctx);
+    CHECK("a member stationary two ticks attacks on its window",
+        s.npcs[0].attacked_this_tick == 1);
+
+    /* moving this tick (forced to chase) resets the grace entirely. */
+    s.npcs[0].attacked_this_tick = 0;
+    s.npcs[0].moved_this_tick = 1;
+    s.npcs[0].moved_last_tick = 0;
+    col_warband_attack_phase(&s, &ctx);
+    CHECK("a member that moved this tick cannot attack",
+        s.npcs[0].attacked_this_tick == 0);
+}
+
 /* 4d. B2(c): formation convergence — the trio ends N/E/W of a stationary player,
    and a Quartet run completes the diamond with the extra member SOUTH. */
 static void test_warband_formation_convergence(void) {
@@ -6026,6 +6067,7 @@ int main(void) {
     test_warband_cycle_offsets();
     test_warband_move_skip();
     test_warband_melee_distance_gate();
+    test_warband_two_tick_stationary_gate();
     test_warband_formation_convergence();
     test_warband_two_tile_speed();
     test_warband_pillar_routefind_vs_shaman_safespot();

@@ -169,6 +169,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
         s->npcs[i].attack_visual_target = -1;
+        s->npcs[i].moved_last_tick = s->npcs[i].moved_this_tick;
         s->npcs[i].moved_this_tick = 0;
         s->npcs[i].hit_landed_this_tick = 0;
         s->npcs[i].hit_damage = 0;
@@ -243,8 +244,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
 
-    /* B2(b): warband windows resolve after the player's move phase of the same
-       tick, so "the player is moving" is exact on the window tick itself. */
+    /* B2: warband windows resolve after the player's move phase, so a member's
+       two-tick stationary state already reflects a player who fled this tick. */
     if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s, ctx);
 
     s->reward = col_compute_reward_ctx(s, ctx);

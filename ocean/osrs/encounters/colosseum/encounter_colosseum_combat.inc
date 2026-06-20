@@ -665,11 +665,12 @@ static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* np
  * B2: the warband's shared 6-tick attack cycle, anchored to the wave's first
  * actionable tick N (warband_cycle_anchor): berserker window N+1, seer N+2,
  * archer N+3, then 3 silent ticks. A member attacks on its window only when it
- * is cardinally adjacent (A5), did not move this tick, and the player did not
- * move this tick (B2(b) — movement is the dodge mechanic); otherwise it misses
- * the whole cycle. Quartet extras share the window of their species. Runs AFTER
- * the player's move phase of the same tick (NPCs otherwise act first), so
- * "moving" means the player changed tile on the window tick itself.
+ * is cardinally adjacent (A5) and has held its tile for two consecutive ticks
+ * (it moved on neither this tick nor last): the first stationary tick is the
+ * researched grace that lets the player attack then step before the second.
+ * Movement is the dodge — a member forced to chase moves and resets the count.
+ * Quartet extras share the window of their species. Runs AFTER the player's
+ * move phase of the same tick.
  *
  * attack_timer no longer gates these attacks; it is rewritten every live tick
  * as ticks-until-window so the obs slot stays meaningful.
@@ -695,8 +696,7 @@ static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
         npc->attack_timer = wait;
         if (wait != 0) continue;
         if (npc->stun_timer > 0 || npc->frozen_ticks > 0) continue;
-        if (npc->moved_this_tick) continue;
-        if (s->tick_scratch.player_moved) continue;
+        if (npc->moved_this_tick || npc->moved_last_tick) continue;
         if (!col_warband_melee_adjacent(s, npc)) continue;
         const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
         if (npc->type == COLO_FREMENNIK_BERSERKER)
