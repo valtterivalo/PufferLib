@@ -2589,6 +2589,8 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
 }
 
 
+static Rectangle render_colosseum_draft_card_rect(int option);
+
 static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
     if (IsKeyPressed(KEY_SPACE))  rc->is_paused = !rc->is_paused;
@@ -2747,19 +2749,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         fprintf(stderr, "human control: %s\n", rc->human_input.enabled ? "ON" : "OFF");
     }
 
-    /* Colosseum-only human controls (no inferno analog): keys 6/7/8 pick a
-       between-wave modifier draft option, and B parries the currently-called Sol
-       grapple body slot. Both stage a pending_* intent consumed at the tick
-       boundary, mirroring the existing prayer/spec keybind pattern. */
+    /* Colosseum-only human control (no inferno analog): B parries the currently-
+       called Sol grapple body slot, staging a pending_* intent consumed at the
+       tick boundary. The between-wave modifier draft is picked by clicking the
+       modal (render_draw_colosseum_modifier_draft + its hit-test below). */
     if (rc->human_input.enabled) {
         ColosseumState* cs = render_colosseum_state_from_env(env);
-        if (cs) {
-            if (IsKeyPressed(KEY_SIX))   rc->human_input.pending_modifier_select = 1;
-            if (IsKeyPressed(KEY_SEVEN)) rc->human_input.pending_modifier_select = 2;
-            if (IsKeyPressed(KEY_EIGHT)) rc->human_input.pending_modifier_select = 3;
-            if (IsKeyPressed(KEY_B) && cs->sol.grapple_active)
-                rc->human_input.pending_grapple_slot = cs->sol.grapple_body_slot + 1;
-        }
+        if (cs && IsKeyPressed(KEY_B) && cs->sol.grapple_active)
+            rc->human_input.pending_grapple_slot = cs->sol.grapple_body_slot + 1;
     }
 
     /* ESC: dismiss context menu first, then cancel spell targeting */
@@ -2777,6 +2774,25 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         int mx = GetMouseX();
         int my = GetMouseY();
         int handled = 0;
+
+        /* 0a. colosseum modifier draft: the mandatory between-wave pick freezes
+           the world, so intercept the click first. A click on a card commits the
+           pick (option o -> pending_modifier_select = o+1); clicks anywhere else
+           are swallowed so nothing queues underneath the modal. */
+        if (!handled && rc->human_input.enabled) {
+            ColosseumState* cs = render_colosseum_state_from_env(env);
+            if (cs && cs->modifiers.draft_pending) {
+                for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+                    if (cs->modifiers.draft_options[o] < 0) continue;
+                    Rectangle card = render_colosseum_draft_card_rect(o);
+                    if (CheckCollisionPointRec(CLITERAL(Vector2){(float)mx, (float)my}, card)) {
+                        rc->human_input.pending_modifier_select = o + 1;
+                        break;
+                    }
+                }
+                handled = 1;
+            }
+        }
 
         /* 0. context menu: if visible, intercept click for item selection or dismissal */
         if (rc->context_menu.visible) {
@@ -6200,6 +6216,113 @@ static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
     }
 }
 
+/* greedy word-wrap a short fixed string to `max_w`, one shadowed line per run. */
+static void render_colosseum_draft_wrap_text(
+    const GuiState* gs, const char* text, int x, int y, int max_w, int fs, int line_h, Color color
+) {
+    char line[160];
+    int line_len = 0;
+    int cur_y = y;
+    int i = 0;
+    while (text[i] != '\0') {
+        int ws = i;
+        while (text[i] != '\0' && text[i] != ' ') i++;
+        int word_len = i - ws;
+        if (word_len > (int)sizeof(line) - 1) word_len = (int)sizeof(line) - 1;
+        char candidate[160];
+        int cand_len = line_len;
+        memcpy(candidate, line, (size_t)line_len);
+        if (line_len > 0) candidate[cand_len++] = ' ';
+        memcpy(candidate + cand_len, text + ws, (size_t)word_len);
+        cand_len += word_len;
+        candidate[cand_len] = '\0';
+        if (line_len > 0 && MeasureText(candidate, fs) > max_w) {
+            line[line_len] = '\0';
+            context_menu_draw_text_shadow(gs, line, x, cur_y, fs, color);
+            cur_y += line_h;
+            memcpy(line, text + ws, (size_t)word_len);
+            line_len = word_len;
+        } else {
+            memcpy(line, candidate, (size_t)cand_len);
+            line_len = cand_len;
+        }
+        while (text[i] == ' ') i++;
+    }
+    if (line_len > 0) {
+        line[line_len] = '\0';
+        context_menu_draw_text_shadow(gs, line, x, cur_y, fs, color);
+    }
+}
+
+/* the three draft cards are laid out in a centered row across the game-grid
+   area (left of the side panel). Shared by the draw pass and the click hit-test
+   so the geometry lives in exactly one place. */
+static Rectangle render_colosseum_draft_card_rect(int option) {
+    const int card_w = 176;
+    const int card_h = 170;
+    const int gap = 14;
+    int total_w = COLO_MODIFIER_DRAFT_OPTIONS * card_w + (COLO_MODIFIER_DRAFT_OPTIONS - 1) * gap;
+    int x0 = (RENDER_GRID_W - total_w) / 2;
+    int y0 = RENDER_WINDOW_H / 2 - card_h / 2;
+    return CLITERAL(Rectangle){
+        (float)(x0 + option * (card_w + gap)), (float)y0, (float)card_w, (float)card_h };
+}
+
+/* Colosseum-only: the mandatory between-wave modifier-draft modal. While the env
+   holds a pending draft (modifiers.draft_pending) the world is frozen and the
+   only valid action is the pick; this renders the offered modifiers as clickable
+   cards over the dimmed arena. Viewer-only: it reads draft state and the click
+   handler stages pending_modifier_select, which the existing human-command path
+   maps to COLO_HEAD_MODIFIER_SELECT (no training/obs surface touched). */
+static void render_draw_colosseum_modifier_draft(RenderClient* rc, OsrsEnv* env) {
+    ColosseumState* cs = render_colosseum_state_from_env(env);
+    if (!cs || !cs->modifiers.draft_pending) return;
+
+    DrawRectangle(0, 0, RENDER_GRID_W, RENDER_WINDOW_H, CLITERAL(Color){0, 0, 0, 150});
+
+    Rectangle first = render_colosseum_draft_card_rect(0);
+    const char* banner = "Choose a modifier to start the next wave";
+    int banner_fs = 16;
+    int banner_w = MeasureText(banner, banner_fs);
+    context_menu_draw_text_shadow(&rc->gui, banner,
+        (RENDER_GRID_W - banner_w) / 2, (int)first.y - 34, banner_fs,
+        CLITERAL(Color){255, 255, 0, 255});
+
+    static const char* roman[4] = {"", "I", "II", "III"};
+    Vector2 mouse = GetMousePosition();
+    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+        int mod = cs->modifiers.draft_options[o];
+        if (mod < 0) continue;   /* fewer than 3 eligible: empty slots are mask-invalid */
+        Rectangle card = render_colosseum_draft_card_rect(o);
+        int hover = CheckCollisionPointRec(mouse, card);
+        DrawRectangleRec(card, hover ? CLITERAL(Color){74, 60, 38, 245}
+                                     : CLITERAL(Color){53, 44, 31, 244});
+        DrawRectangleLinesEx(card, hover ? 2.0f : 1.0f, CLITERAL(Color){170, 137, 72, 255});
+
+        const char* name = NULL;
+        const char* desc = NULL;
+        render_colosseum_modifier_tooltip_text(mod, &name, &desc);
+
+        int next_tier = cs->modifiers.tier[mod] + 1;
+        if (next_tier > COLO_MODIFIER_MAX_TIER[mod]) next_tier = COLO_MODIFIER_MAX_TIER[mod];
+        char title[64];
+        if (COLO_MODIFIER_MAX_TIER[mod] > 1 && next_tier >= 1 && next_tier <= 3)
+            snprintf(title, sizeof(title), "%s %s", name, roman[next_tier]);
+        else
+            snprintf(title, sizeof(title), "%s", name);
+
+        const int pad = 9;
+        context_menu_draw_text_shadow(&rc->gui, title,
+            (int)card.x + pad, (int)card.y + pad, 15, CLITERAL(Color){255, 255, 0, 255});
+        render_colosseum_draft_wrap_text(&rc->gui, desc,
+            (int)card.x + pad, (int)card.y + pad + 28, (int)card.width - pad * 2, 11, 14,
+            CLITERAL(Color){255, 152, 31, 255});
+        context_menu_draw_text_shadow(&rc->gui, hover ? "> click to pick <" : "click to pick",
+            (int)card.x + pad, (int)card.y + (int)card.height - 22, 11,
+            hover ? CLITERAL(Color){255, 255, 255, 255} : CLITERAL(Color){170, 170, 170, 255});
+    }
+}
+
 static void render_draw_top_hud(RenderClient* rc, OsrsEnv* env) {
     int display_tick = render_display_tick(env);
     if (render_scene_is_inferno(env)) {
@@ -6433,6 +6556,10 @@ void pvp_render(OsrsEnv* env) {
 
     render_draw_encounter_status_text(rc);
     render_lab_draw_hud(rc);
+
+    /* colosseum mandatory modifier draft: modal over the frozen arena, under the
+       right-click menu. No-op for other encounters / when no draft is pending. */
+    render_draw_colosseum_modifier_draft(rc, env);
 
     /* right-click context menu: drawn last so it renders on top of everything */
     context_menu_draw(rc);
