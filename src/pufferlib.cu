@@ -1875,6 +1875,9 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
 
     // Sanity check action space
     int num_action_heads = pufferl->env.actions.shape[1];
+    assert(num_action_heads <= MAX_ATN_HEADS &&
+        "action heads exceed MAX_ATN_HEADS; raise it in src/kernels.cu "
+        "(the PPO loss kernel's per-head stack arrays are sized by it)");
     int* raw_act_sizes = get_act_sizes();  // CPU int32 pointer from env
     int act_n = 0;
     int num_continuous = 0;
