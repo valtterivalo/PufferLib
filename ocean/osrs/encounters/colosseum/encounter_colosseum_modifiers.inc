@@ -3,10 +3,10 @@
  * @file encounter_colosseum_modifiers.inc
  * @brief The mandatory pre-wave handicap draft + all 14 modifier effects.
  *
- * A16+B6+D26: a draft gates EVERY wave start (12 picks per full run). The
- * wave-1 offer is the fixed {Relentless, Blasphemy, Frailty}; later offers
- * draw weighted-without-replacement from the eligible pool with owned tier-1/2
- * modifiers upgrade-biased (COLO_DRAFT_UPGRADE_WEIGHT). Selection is mandatory:
+ * A draft gates every wave start from wave 2 through wave 12 (11 picks per full
+ * run; wave 1 carries no modifier). Each offer draws weighted-without-
+ * replacement from the eligible pool with owned tier-1/2 modifiers
+ * upgrade-biased (COLO_DRAFT_UPGRADE_WEIGHT). Selection is mandatory:
  * no skip exists, the player is frozen and the world paused until the pick,
  * which arms the gated wave spawn. col_modifier_apply_selection activates the
  * chosen option (sets the active_mask bit, bumps the tier) and persists it for
@@ -64,45 +64,38 @@ static int col_modifier_draft_weight(const ColosseumState* s, ColoModifier mod) 
  * Open the mandatory draft gating `next_wave` (0-based): populate
  * draft_options[3] and freeze play until a pick.
  *
- * The wave-1 draft (next_wave 0) is the FIXED {Relentless, Blasphemy, Frailty}
- * offer. Every later draft draws 3 distinct options weighted-without-
- * replacement from the eligible pool (upgrade bias per
- * col_modifier_draft_weight); offering an active tiered modifier means its
- * next tier. If fewer than 3 are eligible, trailing slots stay -1 (the mask
- * gates them); an empty pool leaves the draft closed and the caller spawns
- * the wave ungated (unreachable in real runs — 12 picks cannot exhaust the
- * 14-modifier pool).
+ * Draws 3 distinct options weighted-without-replacement from the eligible pool
+ * (upgrade bias per col_modifier_draft_weight); offering an active tiered
+ * modifier means its next tier. If fewer than 3 are eligible, trailing slots
+ * stay -1 (the mask gates them); an empty pool leaves the draft closed and the
+ * caller spawns the wave ungated (unreachable in real runs — 11 picks cannot
+ * exhaust the 14-modifier pool).
  */
 static void col_modifier_open_draft(ColosseumState* s, int next_wave) {
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
 
+    int pool[COLO_NUM_REAL_MODIFIERS];
+    int weight[COLO_NUM_REAL_MODIFIERS];
+    int pool_n = 0;
+    int total_weight = 0;
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++) {
+        if (!col_modifier_eligible(s, (ColoModifier)m, next_wave)) continue;
+        pool[pool_n] = m;
+        weight[pool_n] = col_modifier_draft_weight(s, (ColoModifier)m);
+        total_weight += weight[pool_n];
+        pool_n++;
+    }
+
     int offered = 0;
-    if (next_wave == 0) {
-        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
-            s->modifiers.draft_options[o] = COLO_WAVE1_DRAFT_OFFER[o];
-        offered = COLO_MODIFIER_DRAFT_OPTIONS;
-    } else {
-        int pool[COLO_NUM_REAL_MODIFIERS];
-        int weight[COLO_NUM_REAL_MODIFIERS];
-        int pool_n = 0;
-        int total_weight = 0;
-        for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++) {
-            if (!col_modifier_eligible(s, (ColoModifier)m, next_wave)) continue;
-            pool[pool_n] = m;
-            weight[pool_n] = col_modifier_draft_weight(s, (ColoModifier)m);
-            total_weight += weight[pool_n];
-            pool_n++;
-        }
-        while (offered < COLO_MODIFIER_DRAFT_OPTIONS && pool_n > 0) {
-            int roll = encounter_rand_int(&s->rng_state, total_weight);
-            int pick = 0;
-            while (roll >= weight[pick]) roll -= weight[pick++];
-            s->modifiers.draft_options[offered++] = pool[pick];
-            total_weight -= weight[pick];
-            pool[pick] = pool[pool_n - 1];      /* swap-remove keeps options distinct */
-            weight[pick] = weight[pool_n - 1];
-            pool_n--;
-        }
+    while (offered < COLO_MODIFIER_DRAFT_OPTIONS && pool_n > 0) {
+        int roll = encounter_rand_int(&s->rng_state, total_weight);
+        int pick = 0;
+        while (roll >= weight[pick]) roll -= weight[pick++];
+        s->modifiers.draft_options[offered++] = pool[pick];
+        total_weight -= weight[pick];
+        pool[pick] = pool[pool_n - 1];      /* swap-remove keeps options distinct */
+        weight[pick] = weight[pool_n - 1];
+        pool_n--;
     }
 
     if (offered == 0) return;   /* nothing left to draft: leave the draft closed */

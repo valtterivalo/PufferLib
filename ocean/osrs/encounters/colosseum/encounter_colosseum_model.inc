@@ -726,17 +726,11 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
 };
 
 
-/** active-modifier set. A16+B6: a MANDATORY draft of 3 modifiers gates EVERY
-    wave start including wave 1 and wave 12 — 12 picks per full run; each chosen
-    modifier persists and carries a tier. */
+/** active-modifier set. A MANDATORY draft of 3 modifiers gates every wave start
+    from wave 2 through wave 12 — 11 picks per full run (wave 1 carries no
+    modifier); each chosen modifier persists and carries a tier. */
 #define COLO_NUM_MODIFIERS 16
 #define COLO_MODIFIER_DRAFT_OPTIONS 3
-
-/** A16: the wave-1 draft is ALWAYS this fixed offer (money-making guide +
-    W-STRAT, multi-source). */
-static const ColoModifier COLO_WAVE1_DRAFT_OFFER[COLO_MODIFIER_DRAFT_OPTIONS] = {
-    COLO_MOD_RELENTLESS, COLO_MOD_BLASPHEMY, COLO_MOD_FRAILTY,
-};
 
 /** A16: Red Flag and Dynamic Duo enter the pool only for drafts that occur
     before wave 7 starts — eligible iff the gated wave index (0-based) is at

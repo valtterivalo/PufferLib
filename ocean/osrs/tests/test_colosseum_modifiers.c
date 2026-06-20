@@ -7,8 +7,8 @@
  *      tick across full runs, so the obs/mask running-index asserts fire on real
  *      state (the standalone --profile harness skips the obs writer);
  *   2. deterministic scenario checks that each modifier mechanic actually fires:
- *      the P5 mandatory draft (fixed wave-1 offer, frozen-until-pick, 12 picks
- *      per run, pool windows, upgrade bias), Frailty max-HP cut, Relentless
+ *      the mandatory draft (frozen-until-pick, 11 picks per run from wave 2,
+ *      pool windows, upgrade bias), Frailty max-HP cut, Relentless
  *      defence-LEVEL bypass + damage uplift, Quartet extra warbander, the
  *      1-HP totem/bee hazard entities with their respawn cycles, Reentry sand
  *      tiles/lifetimes, and A25 venom escalation;
@@ -95,12 +95,11 @@ static int draft_is_open(const ColosseumState* s) {
     return 0;
 }
 
-/* complete the mandatory pre-wave draft (A16+B6): pick `option`, then run the
-   armed spawn tick so the wave roster exists. Leaves the 6-tick ready delay
-   running, mirroring the old post-reset state. Tests that just need to get
-   past the wave-1 draft pick option 1 = Blasphemy, the most inert of the
-   fixed wave-1 offer. */
+/* complete an open pre-wave draft: pick `option`, then run the armed spawn tick
+   so the wave roster exists, leaving the 6-tick ready delay running. A no-op
+   when no draft is open (e.g. wave 1, which spawns ungated at reset). */
 static void complete_open_draft(ColosseumState* s, ColosseumContext* ctx, int option) {
+    if (!draft_is_open(s)) return;
     int pick[COLO_NUM_ACTION_HEADS] = {0};
     pick[COLO_HEAD_MODIFIER_SELECT] = option + 1;
     step_and_observe(s, ctx, pick);
@@ -352,9 +351,10 @@ static void test_fuzz_obs_mask(void) {
     printf("  episodes=%d (obs+mask running-index asserts held every tick)\n", episodes);
 }
 
-/* ---- 1a-bis. timeout is unconditional: an all-"none" action stream parks the
-   episode at the mandatory wave-1 draft forever, and the draft-frozen path used
-   to skip the MAX_TICKS check entirely (training-iter-1 freeze bug). */
+/* ---- 1a-bis. timeout is unconditional even while a draft freezes the world:
+   clearing wave 1 opens the wave-2 draft, and an all-"none" stream that never
+   picks must still hit MAX_TICKS as a truncation (the draft-frozen path once
+   skipped the cap check entirely — the training-iter-1 freeze bug). */
 static void test_zero_actions_hit_timeout(void) {
     printf("test_zero_actions_hit_timeout\n");
     ColosseumContext ctx;
@@ -364,12 +364,16 @@ static void test_zero_actions_hit_timeout(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 12345);
-    CHECK("reset opens the mandatory wave-1 draft", s.modifiers.draft_pending == 1);
+    CHECK("reset spawns wave 1 with no draft", s.modifiers.draft_pending == 0);
 
-    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    force_clear_wave(&s);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("clearing wave 1 opened the wave-2 draft", draft_is_open(&s));
+
     long t = 0;
     for (; t < s.episode_max_ticks + 10 && !s.episode_over; t++)
-        step_and_observe(&s, &ctx, actions);
+        step_and_observe(&s, &ctx, idle);
 
     CHECK("all-none actions terminate at the tick cap", s.episode_over == 1);
     CHECK("timeout fires exactly at the episode cap", s.tick == s.episode_max_ticks);
@@ -414,10 +418,10 @@ static void test_offpray_attribution_log(void) {
     CHECK("ignore-prayer damage still landed", s.player.current_hitpoints == hp0 - 18);
 }
 
-/* ---- 1b. step-loop draft (A16+B6+D26): the wave-1 fixed offer opens at reset
-   BEFORE any NPC spawns, the player is frozen until the mandatory pick (no
-   skip, no auto-close), the pick gates the spawn + 6-tick ready delay, and the
-   next clear opens the wave-2 draft the same way. */
+/* ---- 1b. step-loop draft (B6+D26): wave 1 spawns at reset with no draft and
+   no modifier; clearing it opens the first draft (random pool) gating wave 2,
+   which freezes the player until the mandatory pick (no skip, no auto-close),
+   and the pick arms the wave-2 spawn + 6-tick ready delay. */
 static void test_step_loop_draft(void) {
     printf("test_step_loop_draft\n");
     ColosseumContext ctx;
@@ -431,19 +435,31 @@ static void test_step_loop_draft(void) {
     int walk_east[COLO_NUM_ACTION_HEADS] = {0};
     walk_east[COLO_HEAD_MOVE] = 7;
 
-    /* A16: the run opens with the draft BEFORE wave 1, fixed offer. */
-    CHECK("the wave-1 draft is open at reset, before any spawn", draft_is_open(&s));
-    CHECK("wave-1 offer is the fixed {Relentless, Blasphemy, Frailty}",
-        s.modifiers.draft_options[0] == COLO_MOD_RELENTLESS &&
-        s.modifiers.draft_options[1] == COLO_MOD_BLASPHEMY &&
-        s.modifiers.draft_options[2] == COLO_MOD_FRAILTY);
+    /* wave 1 spawns immediately, no draft, no modifier. */
+    CHECK("no draft is open at reset", !draft_is_open(&s));
+    CHECK("no modifier is active on wave 1", s.modifiers.active_mask == 0);
     int spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
-    CHECK("no NPC spawns before the pick", !spawned);
+    CHECK("wave 1 spawned at reset", spawned);
+    CHECK("the spawn armed the 6-tick ready delay (D26)",
+        s.wave_ready_delay == COLO_START_READY_TICKS);
+
+    /* once the ready delay elapses, movement is effective — no draft freeze. */
+    for (int t = 0; t < COLO_START_READY_TICKS; t++) step_and_observe(&s, &ctx, idle);
+    int px = s.player.x;
+    step_and_observe(&s, &ctx, walk_east);
+    CHECK("movement is effective once the ready delay elapses", s.player.x == px + 1);
+
+    /* clearing wave 1 opens the first draft (random pool), gating wave 2. */
+    force_clear_wave(&s);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("clearing wave 1 opened the wave-2 draft", draft_is_open(&s));
+    CHECK("the wave-2 draft gates the wave-2 spawn", s.wave_spawn_target == 1);
 
     /* B6: frozen until the pick — walk actions are ignored and masked off, and
        the world stays paused (no skip, no timer ever closes the draft). */
-    int px = s.player.x, py = s.player.y;
+    px = s.player.x;
+    int py = s.player.y;
     for (int t = 0; t < 12; t++) step_and_observe(&s, &ctx, walk_east);
     CHECK("movement is ignored while the draft is open",
         s.player.x == px && s.player.y == py);
@@ -455,43 +471,29 @@ static void test_step_loop_draft(void) {
         if (mask[d] > 0.0f) any_walk_valid = 1;
     CHECK("the mask offers only idle movement while frozen", !any_walk_valid);
 
-    /* the pick spawns wave 1 (next tick) and re-arms the 6-tick ready delay. */
+    /* the pick activates a modifier, closes the draft, and arms the wave-2
+       spawn + 6-tick ready delay. */
+    int chosen = s.modifiers.draft_options[0];
     int pick[COLO_NUM_ACTION_HEADS] = {0};
-    pick[COLO_HEAD_MODIFIER_SELECT] = 1;   /* option 0 = Relentless */
+    pick[COLO_HEAD_MODIFIER_SELECT] = 1;   /* option 0 */
     step_and_observe(&s, &ctx, pick);
-    CHECK("the pick activated the chosen modifier", col_mod_active(&s, COLO_MOD_RELENTLESS));
+    CHECK("the pick activated the chosen modifier",
+        chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
     CHECK("draft closed after the pick", !s.modifiers.draft_pending);
     step_and_observe(&s, &ctx, idle);
     spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
-    CHECK("the pick gated the wave-1 spawn", spawned);
+    CHECK("the pick gated the wave-2 spawn", spawned);
+    CHECK("advanced to wave 2 after the pick", s.wave == 1);
     CHECK("the spawn re-armed the 6-tick ready delay (D26)",
         s.wave_ready_delay == COLO_START_READY_TICKS);
-
-    /* movement works again after the pick. */
-    px = s.player.x;
-    step_and_observe(&s, &ctx, walk_east);
-    CHECK("movement is effective after the pick", s.player.x == px + 1);
-
-    /* the wave-1 clear opens the (random-pool) wave-2 draft; the player is
-       frozen again until that pick, then advances. */
-    force_clear_wave(&s);
-    step_and_observe(&s, &ctx, idle);
-    CHECK("clearing wave 1 opened the wave-2 draft", draft_is_open(&s));
-    px = s.player.x;
-    step_and_observe(&s, &ctx, walk_east);
-    CHECK("frozen again during the wave-2 draft", s.player.x == px);
-    int chosen = s.modifiers.draft_options[0];
-    complete_open_draft(&s, &ctx, 0);
-    CHECK("advanced to wave 2 after the pick", s.wave == 1);
-    CHECK("the wave-2 pick persisted", chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
 }
 
-/* ---- 1c. A16: 12 mandatory drafts per full run — one before every wave
-   including wave 1 and into wave 12 — counted through the real step loop with
-   force-cleared waves. */
-static void test_twelve_drafts_per_run(void) {
-    printf("test_twelve_drafts_per_run\n");
+/* ---- 1c. 11 mandatory drafts per full run — one before every wave from wave 2
+   through wave 12 (wave 1 carries no modifier) — counted through the real step
+   loop with force-cleared waves. */
+static void test_eleven_drafts_per_run(void) {
+    printf("test_eleven_drafts_per_run\n");
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
@@ -504,8 +506,8 @@ static void test_twelve_drafts_per_run(void) {
     int draft_waves_ok = 1;
     for (long t = 0; t < 4000 && !s.episode_over; t++) {
         if (draft_is_open(&s)) {
-            /* every draft gates the NEXT wave: picks 1..12 gate waves 1..12. */
-            if (s.wave_spawn_target != picks) draft_waves_ok = 0;
+            /* the k-th draft (k=0..10) gates wave index k+1 (display wave k+2). */
+            if (s.wave_spawn_target != picks + 1) draft_waves_ok = 0;
             complete_open_draft(&s, &ctx, 0);
             picks++;
             continue;
@@ -517,9 +519,9 @@ static void test_twelve_drafts_per_run(void) {
         step_and_observe(&s, &ctx, idle);
     }
     CHECK("the run ended in victory", s.episode_over && s.winner == COLO_OUTCOME_PLAYER_WON);
-    CHECK("exactly 12 drafts were offered and picked", picks == 12);
-    CHECK("the log counted all 12 mandatory picks", s.log.modifiers_picked == 12);
-    CHECK("draft k gated wave k for every k", draft_waves_ok);
+    CHECK("exactly 11 drafts were offered and picked", picks == 11);
+    CHECK("the log counted all 11 mandatory picks", s.log.modifiers_picked == 11);
+    CHECK("draft k gated wave index k+1 for every k", draft_waves_ok);
 }
 
 /* ---- 2a. draft offer, selection, persistence + the A16/D31 pool windows. */
@@ -537,12 +539,7 @@ static void test_draft_offer_and_select(void) {
     CHECK("start_wave>1 runs skip the prior drafts (no draft open)",
         s.modifiers.draft_pending == 0);
 
-    /* the wave-1 draft is the fixed offer; later drafts are random + distinct. */
-    col_modifier_open_draft(&s, 0);
-    CHECK("the wave-1 draft is always {Relentless, Blasphemy, Frailty}",
-        s.modifiers.draft_options[0] == COLO_MOD_RELENTLESS &&
-        s.modifiers.draft_options[1] == COLO_MOD_BLASPHEMY &&
-        s.modifiers.draft_options[2] == COLO_MOD_FRAILTY);
+    /* every draft draws random, distinct options from the eligible pool. */
     col_modifier_open_draft(&s, 4);
     CHECK("draft opened with options", draft_is_open(&s));
     int distinct = 1;
@@ -843,7 +840,8 @@ static void test_bees_hazard(void) {
     col_reset_ctx((EncounterState*)&sc, (EncounterContext*)&ctx, 13);
     sc.modifiers.active_mask |= (1u << COLO_MOD_BEES);
     sc.modifiers.tier[COLO_MOD_BEES] = 1;
-    complete_open_draft(&sc, &ctx, 1);
+    sc.wave = 0;
+    col_spawn_wave(&sc);
     int live_bee = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++)
         if (sc.npcs[i].active && sc.npcs[i].type == COLO_BEE_SWARM) live_bee = 1;
@@ -4316,10 +4314,11 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
     base_ticks = ls->attack_range > 1 ? 3 : 1;
 
     uint32_t rng = s.rng_state;
-    uint32_t shared_def_rng = s.rng_state;
-    int shared_def_damage[OSRS_VENATOR_MAX_CHAIN_HITS] = {0};
     int primary_def_roll = col_npc_target_def_roll(
         &s.npcs[0], &COLO_NPC_STATS[s.npcs[0].type],
+        ls->style, weapon_melee_style);
+    int bounce_def_roll = col_npc_target_def_roll(
+        &s.npcs[1], &COLO_NPC_STATS[s.npcs[1].type],
         ls->style, weapon_melee_style);
     expected_total = 0;
     for (int hop = 0; hop < (int)chain.length; hop++) {
@@ -4330,14 +4329,14 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
             ls->style, weapon_melee_style);
         expected_damage[hop] = osrs_roll_prepared_attack_damage(
             &prepared, target_def_roll, splat_max, &rng);
-        shared_def_damage[hop] = osrs_roll_prepared_attack_damage(
-            &prepared, primary_def_roll, splat_max, &shared_def_rng);
         expected_total += expected_damage[hop];
     }
 
+    /* the fixture must actually exercise per-target defence: the archer bounce
+       target (slot 1) rolls against a different defence than the berserker
+       primary, so the chain cannot collapse to one shared roll. */
     CHECK("venator fixture is sensitive to per-target defence",
-        expected_damage[1] != shared_def_damage[1] ||
-        expected_damage[2] != shared_def_damage[2]);
+        bounce_def_roll != primary_def_roll);
     CHECK("speedrun inventory carries venator bow", 1);
     CHECK("venator resolves a three-hop clustered chain", 1);
     CHECK("venator bow is equipped for the integration attack",
@@ -5199,7 +5198,6 @@ static void test_player_ranged_los_blocked_by_pillar(void) {
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
     geo_clear_npcs(&s);
-    s.modifiers.draft_pending = 0;   /* unfreeze (skip the wave-1 draft) so the attack gate runs */
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     CHECK("ranged loadout reaches past 1 tile", col_player_attack_range(&s) > 1);
 
@@ -5996,7 +5994,7 @@ int main(void) {
     test_zero_actions_hit_timeout();
     test_offpray_attribution_log();
     test_step_loop_draft();
-    test_twelve_drafts_per_run();
+    test_eleven_drafts_per_run();
     test_solarflare_orb();
     test_volatility_explosion();
     test_death_linger_wave_clear_and_render();

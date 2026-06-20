@@ -554,19 +554,14 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave_spawn_delay = 0;
     s->log.wave_reached = effective_start;
 
-    /* A16+B6: a wave-1 run opens with the mandatory fixed draft (Relentless /
-       Blasphemy / Frailty); the wave spawns only after the pick, then runs the
-       6-tick ready delay. start_wave>1 runs (curriculum/lab) DETERMINISTICALLY
-       SKIP every prior draft — they start modifier-free and meet their first
-       draft after clearing the start wave (auto-rolling 1..11 random modifiers
-       would make curriculum difficulty wildly seed-dependent). */
-    if (effective_start == 0) {
-        col_modifier_open_draft(s, 0);
-        assert(s->modifiers.draft_pending && "wave-1 fixed draft failed to open");
-    } else {
-        s->wave_ready_delay = COLO_START_READY_TICKS;
-        col_spawn_wave(s);
-    }
+    /* Wave 1 carries no modifier: the first draft is taken after clearing it,
+       gating entry into wave 2 (col_modifier_open_draft on the wave-clear path).
+       start_wave>1 runs (curriculum/lab) likewise begin modifier-free and meet
+       their first draft after clearing the start wave (auto-rolling prior
+       modifiers would make curriculum difficulty wildly seed-dependent). The
+       start wave spawns immediately, then runs the 6-tick ready delay. */
+    s->wave_ready_delay = COLO_START_READY_TICKS;
+    col_spawn_wave(s);
 }
 
 static void col_reset(EncounterState* state, uint32_t seed) {
