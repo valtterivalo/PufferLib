@@ -133,8 +133,11 @@ static void scripted_policy(ColosseumState* s, int* actions) {
     }
     actions[COLO_HEAD_PRAYER] = scripted_overhead(s);
     actions[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
-    actions[COLO_HEAD_TARGET] = scripted_target(s);
-    actions[COLO_HEAD_MOVE] = scripted_move(s);
+    int move = scripted_move(s);
+    actions[COLO_HEAD_MOVE] = move;
+    /* a ground-click move cancels the attack interaction in OSRS, so to reposition
+       we drop the target this tick and re-click to attack on a stand tick. */
+    actions[COLO_HEAD_TARGET] = (move > 0) ? 0 : scripted_target(s);
     if (s->player.current_hitpoints < 55) {
         int heal_cell = scripted_heal_cell(s);
         if (heal_cell >= 0) actions[COLO_HEAD_INV_CLICK_0] = heal_cell + 1;

@@ -1268,7 +1268,6 @@ static void col_tick_player_ctx(
         .has_new_target = has_new_target,
         .new_target_slot = new_target_slot,
         .move_kind = move_kind,
-        .target_move_policy = OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
         .move_action = move_act,
         .dest_x = &s->player_dest_x,
         .dest_y = &s->player_dest_y,
