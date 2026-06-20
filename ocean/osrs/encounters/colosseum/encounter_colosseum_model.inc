@@ -1462,7 +1462,7 @@ static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO
         26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
         27275, 31106, 27610, 24780,   /* Tumeken's shadow, Confliction gauntlets, Venator bow,
                                          Amulet of blood fury */
-        30875, 12002, 0,     21003,   /* Surge potion(4), Occult necklace, empty worn-scythe slot, Elder maul */
+        30875, 12002, 12006, 21003,   /* Surge potion(4), Occult necklace, Abyssal tentacle, Elder maul */
         23685, 23733, 6685, 4417,     /* Divine super combat(4), Divine ranging(4), Sara brew(4),
                                          Guthix rest(4) */
         10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */

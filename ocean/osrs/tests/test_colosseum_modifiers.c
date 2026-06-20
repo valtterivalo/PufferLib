@@ -5493,8 +5493,8 @@ static void test_colosseum_live_inventory_display(void) {
 
     int kit[COLO_INVENTORY_DISPLAY_SLOTS];
     col_build_live_inventory_display(&s, kit);
-    CHECK("worn scythe is not duplicated in the starting bag", kit[14] == 0);
-    CHECK("speedrun loadout has exactly one scythe",
+    CHECK("abyssal tentacle is the melee switch carried in the bag", kit[14] == 12006);
+    CHECK("worn scythe is not duplicated in the starting bag (worn only)",
         test_count_item_in_equipment_and_inventory(&s, ITEM_SCYTHE_OF_VITUR) == 1);
     CHECK("tbow switch stays in grid", kit[0] == 20997);
     CHECK("brew vial full at start", kit[18] == 6685);
