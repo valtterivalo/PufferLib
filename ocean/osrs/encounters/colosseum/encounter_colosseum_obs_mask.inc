@@ -4,10 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(36) + inventory cells(28 * 35) + equipped self(11 * 18)
- *   + npc slots(24 * 30) + modifiers(49) + wave(4) + boss(51)
+ *   player(36) + pillars(4 * 3) + inventory cells(28 * 35)
+ *   + equipped self(11 * 18) + npc slots(24 * 47) + modifiers(49) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2359.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2779.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -28,12 +28,13 @@
 /* ----- obs section sizes ---------------------------------------------------- */
 
 #define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
+#define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
-#define COLO_FEATURES_PER_NPC     30   /* 12-type one-hot + 8 scalars + 10 tells */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 720 */
+#define COLO_FEATURES_PER_NPC     47   /* 12-type one-hot + 25 core features + 10 tells */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 1128 */
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
     venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
@@ -61,14 +62,16 @@
     downstream via the existing spec_energy obs. */
 #define COLO_THRALL_DC_OBS_SIZE   6
 
-#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_INVENTORY_OBS_SIZE + \
-    COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + COLO_MODIFIER_OBS_SIZE + \
-    COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
-    COLO_STEP_OUT_FORECAST_OBS_SIZE + COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
+#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
+    COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
+    COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
+    COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
+    COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
-#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PLAYER + COLO_INVENTORY_OBS_SIZE)
+#define COLO_OBS_AFTER_PILLARS  (COLO_OBS_AFTER_PLAYER + COLO_PILLAR_OBS_SIZE)
+#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PILLARS + COLO_INVENTORY_OBS_SIZE)
 #define COLO_OBS_AFTER_EQUIPPED_SELF \
     (COLO_OBS_AFTER_INVENTORY + COLO_EQUIPPED_SELF_OBS_SIZE)
 #define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_OBS_SIZE)
@@ -223,6 +226,174 @@ static void col_tell_style_onehot(AttackStyle style, float* out3) {
     out3[2] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
 }
 
+typedef struct {
+    int active;
+    AttackStyle style;
+    int ticks;
+} ColoNpcNextPrayerObs;
+
+static inline int col_prayer_attack_style(AttackStyle style) {
+    return style == ATTACK_STYLE_MELEE ||
+           style == ATTACK_STYLE_RANGED ||
+           style == ATTACK_STYLE_MAGIC;
+}
+
+static inline ColoNpcNextPrayerObs col_npc_next_prayer_none(void) {
+    return (ColoNpcNextPrayerObs){
+        .active = 0,
+        .style = ATTACK_STYLE_NONE,
+        .ticks = 0,
+    };
+}
+
+static void col_write_style_onehot_melee_ranged_magic(AttackStyle style, float* obs, int* idx) {
+    int i = *idx;
+    obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    *idx = i;
+}
+
+static void col_write_weakness_onehot(AttackStyle style, float* obs, int* idx) {
+    int i = *idx;
+    obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+    obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+    obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    obs[i++] = (style == ATTACK_STYLE_NONE) ? 1.0f : 0.0f;
+    *idx = i;
+}
+
+static void col_write_npc_attack_style_mask(
+    const ColoNPC* npc,
+    const ColoNpcStats* ns,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    if (npc->type == COLO_MANTICORE) {
+        obs[i++] = 1.0f;
+        obs[i++] = 1.0f;
+        obs[i++] = 1.0f;
+    } else {
+        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
+        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
+        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    }
+    *idx = i;
+}
+
+static int col_pending_hit_prayer_ticks(const EncounterPendingHit* hit) {
+    return hit->prayer_check_delay > 0 ? hit->prayer_check_delay : hit->ticks_remaining;
+}
+
+static ColoNpcNextPrayerObs col_source_matched_pending_prayer(
+    const ColosseumState* s,
+    int npc_slot
+) {
+    ColoNpcNextPrayerObs best = col_npc_next_prayer_none();
+    for (int h = 0; h < s->player_pending_hits.count && h < ENCOUNTER_MAX_PENDING_HITS; h++) {
+        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
+        if (!hit->active) continue;
+        if (!hit->check_prayer) continue;
+        if (hit->source_npc_slot != npc_slot) continue;
+        if (!col_prayer_attack_style((AttackStyle)hit->attack_style)) continue;
+        int ticks = col_pending_hit_prayer_ticks(hit);
+        if (!best.active || ticks < best.ticks) {
+            best.active = 1;
+            best.style = (AttackStyle)hit->attack_style;
+            best.ticks = ticks;
+        }
+    }
+    return best;
+}
+
+static int col_manticore_next_orb_ticks(const ColoNPC* npc) {
+    const ColoManticoreState* mc = &npc->type_state.manticore;
+    if (mc->cycle_step > 0) return 1;
+    return npc->attack_timer == 0 ? 1 : npc->attack_timer;
+}
+
+static ColoNpcNextPrayerObs col_visible_manticore_next_prayer(const ColoNPC* npc) {
+    if (npc->type != COLO_MANTICORE) return col_npc_next_prayer_none();
+    if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return col_npc_next_prayer_none();
+    const ColoManticoreState* mc = &npc->type_state.manticore;
+    int armed = mc->cycle_step >= 0 || mc->orb_style[0] != ATTACK_STYLE_NONE;
+    if (!armed) return col_npc_next_prayer_none();
+    int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
+    if (orb < 0 || orb >= 3) return col_npc_next_prayer_none();
+    AttackStyle style = mc->orb_style[orb];
+    if (!col_prayer_attack_style(style)) return col_npc_next_prayer_none();
+    return (ColoNpcNextPrayerObs){
+        .active = 1,
+        .style = style,
+        .ticks = col_manticore_next_orb_ticks(npc),
+    };
+}
+
+static int col_npc_current_attack_geometry(
+    const ColosseumState* s,
+    const ColoNPC* npc,
+    const ColoNpcStats* ns
+) {
+    if (ns->attack_range < 1) return 0;
+    if (npc->type == COLO_SOL_HEREDIT) return 0;
+    if (col_type_is_warbander(npc->type)) return col_warband_melee_adjacent(s, npc);
+    if (npc->type == COLO_MINOTAUR) return col_npc_dist_to_player(s, npc) == 1;
+    if (ns->attack_range > 1) {
+        int dist = col_npc_dist_to_player(s, npc);
+        if (dist < 1 || dist > ns->attack_range) return 0;
+        return col_npc_has_los_to_player(s, npc);
+    }
+    return col_npc_melee_adjacent_to_player(s, npc);
+}
+
+static int col_warband_next_window_wait(const ColosseumState* s, const ColoNPC* npc) {
+    int target = col_warband_window_offset(npc->type);
+    for (int ticks = 1; ticks <= COLO_WARBAND_CYCLE_TICKS; ticks++) {
+        int phase = (s->tick + ticks - s->warband_cycle_anchor) % COLO_WARBAND_CYCLE_TICKS;
+        if (phase < 0) phase += COLO_WARBAND_CYCLE_TICKS;
+        if (phase == target) return ticks;
+    }
+    assert(0 && "warband window must recur within one cycle");
+    return 0;
+}
+
+static ColoNpcNextPrayerObs col_deterministic_npc_next_prayer(
+    const ColosseumState* s,
+    const ColoNPC* npc,
+    const ColoNpcStats* ns
+) {
+    if (!col_prayer_attack_style(ns->default_style)) return col_npc_next_prayer_none();
+    if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return col_npc_next_prayer_none();
+    if (npc->type == COLO_MANTICORE) return col_npc_next_prayer_none();
+    if (npc->type == COLO_JAVELIN_COLOSSUS &&
+            (npc->type_state.javelin.attack_count + 1) % 5 == 0)
+        return col_npc_next_prayer_none();
+    if (!col_npc_current_attack_geometry(s, npc, ns)) return col_npc_next_prayer_none();
+    int ticks = npc->attack_timer == 0 ? 1 : npc->attack_timer;
+    if (col_type_is_warbander(npc->type)) {
+        if (s->warband_cycle_anchor < 0) return col_npc_next_prayer_none();
+        ticks = col_warband_next_window_wait(s, npc);
+    }
+    return (ColoNpcNextPrayerObs){
+        .active = 1,
+        .style = ns->default_style,
+        .ticks = ticks,
+    };
+}
+
+static ColoNpcNextPrayerObs col_npc_next_prayer_obs(
+    const ColosseumState* s,
+    const ColoNPC* npc,
+    int npc_slot
+) {
+    ColoNpcNextPrayerObs pending = col_source_matched_pending_prayer(s, npc_slot);
+    if (pending.active) return pending;
+    ColoNpcNextPrayerObs manticore = col_visible_manticore_next_prayer(npc);
+    if (manticore.active) return manticore;
+    return col_deterministic_npc_next_prayer(s, npc, &COLO_NPC_STATS[npc->type]);
+}
+
 /** write the 10-wide per-type tell block for an NPC slot (always 10 floats).
 
     manticore (the prayer puzzle — full upcoming barrage, like the orbs a player
@@ -282,7 +453,13 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
 }
 
 /** write one NPC slot (COLO_FEATURES_PER_NPC floats). Caller has cleared obs to 0. */
-static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
+static void col_write_npc_slot(
+    const ColosseumState* s,
+    const ColoNPC* npc,
+    int npc_slot,
+    float* obs,
+    int* idx
+) {
     int i = *idx;
     int px = s->player.x, py = s->player.y;
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
@@ -293,13 +470,30 @@ static void col_write_npc_slot(const ColosseumState* s, const ColoNPC* npc, floa
     obs[i++] = col_obs_rel_x(npc->x, px);
     obs[i++] = col_obs_rel_y(npc->y, py);
     obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
-    obs[i++] = (npc->attack_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (npc->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (npc->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    *idx = i;
+    col_write_style_onehot_melee_ranged_magic(npc->attack_style, obs, idx);
+    i = *idx;
     obs[i++] = col_clamp01((float)npc->attack_timer / 8.0f);
     int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
     int range = ns->attack_range > 0 ? ns->attack_range : 1;
     obs[i++] = (dist >= 1 && dist <= range) ? 1.0f : 0.0f;
+
+    obs[i++] = col_clamp01((float)ns->max_hit / 75.0f);
+    obs[i++] = col_clamp01((float)ns->attack_speed / 10.0f);
+    obs[i++] = col_clamp01((float)ns->def_level / 300.0f);
+    *idx = i;
+    col_write_weakness_onehot(ns->player_style_that_max_hits, obs, idx);
+    col_write_npc_attack_style_mask(npc, ns, obs, idx);
+    i = *idx;
+    ColoNpcNextPrayerObs next_prayer = col_npc_next_prayer_obs(s, npc, npc_slot);
+    obs[i++] = next_prayer.active ? 1.0f : 0.0f;
+    *idx = i;
+    col_write_style_onehot_melee_ranged_magic(
+        next_prayer.active ? next_prayer.style : ATTACK_STYLE_NONE, obs, idx);
+    i = *idx;
+    obs[i++] = next_prayer.active ? col_clamp01((float)next_prayer.ticks / 10.0f) : 0.0f;
+    obs[i++] = col_npc_has_los_to_player(s, npc) ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)ns->attack_range / 15.0f);
     *idx = i;
     col_write_npc_tells(s, npc, obs, idx);
 }
@@ -585,6 +779,16 @@ static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
     *idx = i;
 }
 
+static void col_write_pillar_obs(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        obs[i++] = col_obs_rel_x(COLO_PILLARS[p][0], s->player.x);
+        obs[i++] = col_obs_rel_y(COLO_PILLARS[p][1], s->player.y);
+        obs[i++] = col_clamp01((float)COLO_PILLAR_SIZE / 7.0f);
+    }
+    *idx = i;
+}
+
 static void col_equipment_bonus_projection(
     const uint8_t equipment[NUM_GEAR_SLOTS],
     float out[6]
@@ -750,6 +954,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);
 #endif
 
+    col_write_pillar_obs(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_PILLARS);
+
     col_write_inventory_and_equipped_obs(s, obs, &i);
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
@@ -759,7 +966,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
             i += COLO_FEATURES_PER_NPC;
             continue;
         }
-        col_write_npc_slot(s, &s->npcs[npc_idx], obs, &i);
+        col_write_npc_slot(s, &s->npcs[npc_idx], npc_idx, obs, &i);
     }
     assert(i == COLO_OBS_AFTER_NPCS);
 #ifdef COLO_PROFILE_ENABLED

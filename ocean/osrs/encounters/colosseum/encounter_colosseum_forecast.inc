@@ -454,6 +454,16 @@ static int col_forecast_local_dist_to_player(
     return encounter_dist_to_npc(player_x, player_y, npc->x, npc->y, npc->size);
 }
 
+/** Forecast mirror of col_npc_melee_adjacent_to_player (footprint cardinal). */
+static int col_forecast_local_melee_adjacent(
+    const ColoForecastNpcLocal* npc,
+    int player_x,
+    int player_y
+) {
+    return entity_has_line_of_sight(
+        NULL, 0, npc->x, npc->y, npc->size, player_x, player_y, 1, 1);
+}
+
 /** Conservative distance proof that a forecast NPC cannot threaten a landing. */
 static int col_forecast_npc_threat_distance_impossible(
     const ColoForecastNpcLocal* npc,
@@ -780,7 +790,7 @@ static void col_forecast_local_attack_standard(
         return;
     }
     if (npc->type == COLO_JAGUAR_WARRIOR) {
-        if (dist == 1) {
+        if (col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
             col_step_out_forecast_record_style(
                 action, summary, tick_idx, npc->type, ATTACK_STYLE_MELEE);
             npc->attack_timer = npc->attack_speed;
@@ -794,7 +804,7 @@ static void col_forecast_local_attack_standard(
             col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
         if (!los)
             return;
-    } else if (dist != 1) {
+    } else if (!col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
         return;
     }
 

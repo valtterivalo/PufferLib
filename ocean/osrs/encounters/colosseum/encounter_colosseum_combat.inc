@@ -185,6 +185,16 @@ static int col_npc_dist_to_player(const ColosseumState* s, const ColoNPC* npc) {
         s->player.x, s->player.y, npc->x, npc->y, col_npc_effective_size(npc));
 }
 
+/** OSRS footprint-edge cardinal melee adjacency (WorldArea.isInMeleeDistance:
+    axisX+axisY==1, no diagonal), size-aware. Reuses the range==1 branch of the
+    shared collision primitive so the diagonal corner is NOT melee-reachable —
+    the diagonal safespot the player relies on actually exists. */
+static int col_npc_melee_adjacent_to_player(const ColosseumState* s, const ColoNPC* npc) {
+    return entity_has_line_of_sight(
+        NULL, 0, npc->x, npc->y, col_npc_effective_size(npc),
+        s->player.x, s->player.y, 1, 1);
+}
+
 /** player defence roll against an incoming NPC attack of the given style.
     A23: Relentless bypasses 33/66/100% of the Defence LEVEL before the roll —
     the gear defence bonus enters the formula fully intact. */
@@ -620,7 +630,11 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
         if (dist < 1 || dist > stats->attack_range) return;
         if (!col_npc_has_los_to_player(s, npc)) return;
     } else {
-        if (dist != 1) return;  /* melee: cardinal contact only */
+        /* melee: OSRS cardinal contact only (no diagonal). The minotaur (above)
+           keeps Chebyshev per the documented research decision (divergences #33);
+           the jaguar (size 2, the wave 1-2 reinforcement) uses the faithful
+           footprint-cardinal gate so the diagonal safespot exists. */
+        if (!col_npc_melee_adjacent_to_player(s, npc)) return;
     }
 
     switch (npc->type) {

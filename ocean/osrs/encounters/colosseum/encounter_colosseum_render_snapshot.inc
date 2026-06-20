@@ -920,8 +920,10 @@ static void col_step_human_commands_ctx(
    v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
        special attack contract.
    v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
-       + player offensive/spec/profile scalars. */
-#define COLO_SNAPSHOT_VERSION 10u
+       + player offensive/spec/profile scalars.
+   v11: colosseum obs adds static pillar geometry and enriched per-NPC combat
+       and source-aware prayer timing features. */
+#define COLO_SNAPSHOT_VERSION 11u
 
 typedef struct {
     uint32_t magic;
