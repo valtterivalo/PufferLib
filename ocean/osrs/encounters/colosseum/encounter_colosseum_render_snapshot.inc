@@ -923,8 +923,9 @@ static void col_step_human_commands_ctx(
        + player offensive/spec/profile scalars.
    v11: colosseum obs adds static pillar geometry and enriched per-NPC combat
        and source-aware prayer timing features.
-   v12: colosseum log adds per-NPC total damage attribution. */
-#define COLO_SNAPSHOT_VERSION 12u
+   v12: colosseum log adds per-NPC total damage attribution.
+   v13: Solarflare stores shared per-pillar ring cadence. */
+#define COLO_SNAPSHOT_VERSION 13u
 
 typedef struct {
     uint32_t magic;

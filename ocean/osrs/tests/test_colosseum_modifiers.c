@@ -1301,27 +1301,51 @@ static void test_mantimayhem_stress(void) {
     CHECK("Mantimayhem T2 inflicted venom on the player", venom_seen);
 }
 
-/* collect the gaps (in ticks) between successive orb moves over `ticks`. */
+/** collect the gaps in ticks between successive Solarflare step advances. */
 static int sf_collect_move_gaps(ColosseumState* s, int ticks, int* gaps, int max_gaps) {
     int n = 0;
     int last_move_t = -1;
-    int ox = s->solarflare.x, oy = s->solarflare.y;
+    int previous_step = s->solarflare.step;
     for (int t = 1; t <= ticks; t++) {
         col_mod_tick_solarflare(s);
-        if (s->solarflare.x != ox || s->solarflare.y != oy) {
+        if (s->solarflare.step != previous_step) {
             if (last_move_t >= 0 && n < max_gaps) gaps[n++] = t - last_move_t;
             last_move_t = t;
-            ox = s->solarflare.x;
-            oy = s->solarflare.y;
+            previous_step = s->solarflare.step;
         }
     }
     return n;
 }
 
-/* ---- 2g. A27: Solarflare cadence per tier — T1 moves every 2 ticks pausing 7
-   at corners (move gaps alternate 2/9), T2 every 2 ticks continuous (all gaps
-   2), T3 every tick pausing 2 at corners (gaps alternate 1/3) — plus contact
-   damage and the T3 prayer disable. */
+/** return whether one Solarflare tile is on the distance-1 pillar perimeter. */
+static int sf_tile_on_pillar_perimeter(int pillar_index, int x, int y) {
+    int px = COLO_PILLARS[pillar_index][0];
+    int py = COLO_PILLARS[pillar_index][1];
+    int in_ring_box = x >= px - 1 && x <= px + COLO_PILLAR_SIZE &&
+        y >= py - 1 && y <= py + COLO_PILLAR_SIZE;
+    int in_pillar = x >= px && x < px + COLO_PILLAR_SIZE &&
+        y >= py && y < py + COLO_PILLAR_SIZE;
+    return in_ring_box && !in_pillar;
+}
+
+/** advance Solarflare until the shared step reaches target_step. */
+static int sf_advance_to_step(ColosseumState* s, int target_step, int max_ticks) {
+    for (int t = 0; t < max_ticks; t++) {
+        col_mod_tick_solarflare(s);
+        if (s->solarflare.step == target_step) return 1;
+    }
+    return 0;
+}
+
+/** reset Solarflare to one active tier with a safe player tile. */
+static void sf_reset_tier(ColosseumState* s, int tier) {
+    s->modifiers.tier[COLO_MOD_SOLARFLARE] = tier;
+    col_mod_sync_solarflare(s);
+    s->player.x = 16;
+    s->player.y = 16;
+}
+
+/* ---- 2g. A27: Solarflare per-pillar geometry and cadence per tier. */
 static void test_solarflare_orb(void) {
     printf("test_solarflare_orb\n");
     ColosseumContext ctx;
@@ -1330,23 +1354,87 @@ static void test_solarflare_orb(void) {
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 23);
     s.modifiers.active_mask |= (1u << COLO_MOD_SOLARFLARE);
-    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;   /* T2 continuous */
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;
     s.wave = 0;
     col_spawn_wave(&s);
     CHECK("Solarflare orb is active", s.solarflare.active);
-    /* park the player away from the ring so cadence runs damage-free. */
-    s.player.x = 16; s.player.y = 16;
+
+    int geometry_ok = 1;
+    int corner_tiles_ok = 1;
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        int px = COLO_PILLARS[p][0];
+        int py = COLO_PILLARS[p][1];
+        const int corners[4][3] = {
+            {0, px - 1, py - 1},
+            {4, px + COLO_PILLAR_SIZE, py - 1},
+            {8, px + COLO_PILLAR_SIZE, py + COLO_PILLAR_SIZE},
+            {12, px - 1, py + COLO_PILLAR_SIZE},
+        };
+        for (int step = 0; step < COLO_SOLARFLARE_RING_STEPS; step++) {
+            int x, y;
+            col_solarflare_tile(p, step, &x, &y);
+            if (!sf_tile_on_pillar_perimeter(p, x, y)) geometry_ok = 0;
+            if (col_static_blocked(x, y)) geometry_ok = 0;
+        }
+        for (int c = 0; c < 4; c++) {
+            int x, y;
+            col_solarflare_tile(p, corners[c][0], &x, &y);
+            if (x != corners[c][1] || y != corners[c][2]) corner_tiles_ok = 0;
+        }
+    }
+    CHECK("Solarflare has one distance-1 perimeter orb per pillar", geometry_ok);
+    CHECK("Solarflare visits the four specified pillar-ring corners", corner_tiles_ok);
+
+    RenderEntity entities[COLO_MAX_NPCS + COLO_NUM_PILLARS + 2];
+    int entity_count = 0;
+    col_fill_render_entities_ctx(
+        (EncounterState*)&s, (EncounterContext*)&ctx,
+        entities, COLO_MAX_NPCS + COLO_NUM_PILLARS + 2, &entity_count);
+    int render_orbs = 0;
+    int render_slots_ok = 1;
+    for (int e = 0; e < entity_count; e++) {
+        if (entities[e].npc_def_id != COLO_NPC_DEF_ID_SOLARFLARE) continue;
+        int p = entities[e].npc_slot - COLO_NPC_SLOT_SOLARFLARE;
+        if (p < 0 || p >= COLO_NUM_PILLARS) {
+            render_slots_ok = 0;
+        } else {
+            int x, y;
+            col_solarflare_tile(p, s.solarflare.step, &x, &y);
+            if (entities[e].npc_instance_id != COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p)
+                render_slots_ok = 0;
+            if (entities[e].x != x || entities[e].y != y) render_slots_ok = 0;
+        }
+        render_orbs++;
+    }
+    CHECK("Solarflare renders four per-pillar orb entities",
+        render_orbs == COLO_NUM_PILLARS && render_slots_ok);
+
+    int obs_pillar = 2;
+    int obs_x, obs_y;
+    col_solarflare_tile(obs_pillar, s.solarflare.step, &obs_x, &obs_y);
+    s.player.x = obs_x;
+    s.player.y = obs_y;
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int solarflare_obs_idx = COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE + 7;
+    CHECK("Solarflare modifier obs writes nearest of four orbs",
+        obs[solarflare_obs_idx] == 0.0f &&
+        obs[solarflare_obs_idx + 1] == 0.0f &&
+        obs[solarflare_obs_idx + 2] == 1.0f);
 
     int gaps[32];
+    s.player.x = 16;
+    s.player.y = 16;
     int n = sf_collect_move_gaps(&s, 40, gaps, 32);
     int t2_ok = n >= 8;
     for (int g = 0; g < n; g++) if (gaps[g] != 2) t2_ok = 0;
     CHECK("T2 moves every 2 ticks with no corner pause", t2_ok);
+    sf_reset_tier(&s, 2);
+    int t2_corner_reached = sf_advance_to_step(&s, 4, 16);
+    CHECK("T2 does not pause at Solarflare corners",
+        t2_corner_reached && s.solarflare.pause_timer == 0);
 
-    /* T1: 2-tick steps, 7-tick corner pause -> gaps alternate 2 and 9. */
-    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 1;
-    s.solarflare.active = 0;
-    col_mod_sync_solarflare(&s);
+    sf_reset_tier(&s, 1);
     n = sf_collect_move_gaps(&s, 60, gaps, 32);
     int t1_ok = n >= 6;
     for (int g = 0; g < n; g++)
@@ -1355,11 +1443,12 @@ static void test_solarflare_orb(void) {
     for (int g = 0; g < n; g++)
         if (gaps[g] == 2 + COLO_SOLARFLARE_CORNER_PAUSE) t1_paused = 1;
     CHECK("T1 moves every 2 ticks and pauses 7 at each corner", t1_ok && t1_paused);
+    sf_reset_tier(&s, 1);
+    int t1_corner_reached = sf_advance_to_step(&s, 4, 16);
+    CHECK("T1 sets a 7 tick Solarflare corner pause",
+        t1_corner_reached && s.solarflare.pause_timer == COLO_SOLARFLARE_CORNER_PAUSE);
 
-    /* A27 T3: every-tick steps, 2-tick corner pause -> gaps alternate 1 and 3. */
-    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 3;
-    s.solarflare.active = 0;
-    col_mod_sync_solarflare(&s);
+    sf_reset_tier(&s, 3);
     n = sf_collect_move_gaps(&s, 40, gaps, 32);
     int t3_ok = n >= 8, t3_paused = 0, t3_fast = 0;
     for (int g = 0; g < n; g++) {
@@ -1369,15 +1458,27 @@ static void test_solarflare_orb(void) {
     }
     CHECK("T3 moves every tick AND stops 2 ticks at each corner (A27)",
         t3_ok && t3_paused && t3_fast);
+    sf_reset_tier(&s, 3);
+    int t3_corner_reached = sf_advance_to_step(&s, 4, 16);
+    CHECK("T3 sets a 2 tick Solarflare corner pause",
+        t3_corner_reached && s.solarflare.pause_timer == COLO_SOLARFLARE_CORNER_PAUSE_T3);
 
-    /* parking the player on the orb tile takes contact damage (T3 also drops prayer). */
+    CHECK("Solarflare max-hit constants remain tiered",
+        col_mod_solarflare_max_hit(1) == COLO_SOLARFLARE_MAX_HIT_T1 &&
+        col_mod_solarflare_max_hit(2) == COLO_SOLARFLARE_MAX_HIT_T2 &&
+        col_mod_solarflare_max_hit(3) == COLO_SOLARFLARE_MAX_HIT_T3);
+
+    sf_reset_tier(&s, 3);
+    int hit_x, hit_y;
+    col_solarflare_tile(0, s.solarflare.step, &hit_x, &hit_y);
+    s.player.x = hit_x;
+    s.player.y = hit_y;
     s.player.prayer = PRAYER_PROTECT_MAGIC;
-    s.player.current_hitpoints = 99;
+    s.player.current_hitpoints = 9999;
     int damaged = 0;
     for (int t = 0; t < 80 && !damaged; t++) {
-        s.player.x = s.solarflare.x;
-        s.player.y = s.solarflare.y;
         int hp = s.player.current_hitpoints;
+        s.solarflare.pause_timer = 1;
         col_mod_tick_solarflare(&s);
         if (s.player.current_hitpoints < hp) damaged = 1;
     }
@@ -3736,8 +3837,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v12 for the colosseum log contract",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 12u);
+    CHECK("snapshot version is v13 for Solarflare shared cadence",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 13u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4366,7 +4467,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
     CHECK("obs width is 2875", COLO_NUM_OBS == 2875);
     CHECK("NPC slots have 51 features", COLO_FEATURES_PER_NPC == 51);
-    CHECK("snapshot version is v12", COLO_SNAPSHOT_VERSION == 12u);
+    CHECK("snapshot version is v13", COLO_SNAPSHOT_VERSION == 13u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
@@ -4994,7 +5095,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v12", snap.version == 12u);
+    CHECK("snapshot frame is v13", snap.version == 13u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));

@@ -449,10 +449,9 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
 #define COLO_NPC_SLOT_THRALL    COLO_MAX_NPCS
 #define COLO_THRALL_RENDER_INSTANCE_ID 0xC01055EEu
 
-/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render-only: the
-    sim models the orb as a slotless ColoSolarflareOrb hazard, so the viewer
-    surfaces it as a render entity on a synthetic slot one past the thrall (never
-    collides with a ColoNPC index or the thrall slot). */
+/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render only.
+    The sim models four slotless per-pillar orb hazards, so the viewer surfaces
+    them on synthetic slots after the thrall slot. */
 #define COLO_NPC_DEF_ID_SOLARFLARE 12826
 #define COLO_SOLARFLARE_IDLE_ANIM_ID 10817
 #define COLO_NPC_SLOT_SOLARFLARE    (COLO_MAX_NPCS + 1)
@@ -832,25 +831,26 @@ typedef struct {
     int heal_timer;     /* ticks until the next heal pulse */
 } ColoTotem;
 
-/** Solarflare hazard: a damaging orb circling the four arena pillars (which
-    exist on every wave, B1). A27 cadence: T1 moves every 2 ticks pausing 7 at
+/** Solarflare hazard: one damaging orb circles the distance-1 ring around each
+    pillar. The four orbs share cadence state and exist on every wave, B1.
+    A27 cadence: T1 moves every 2 ticks pausing 7 at
     corners, T2 every 2 ticks continuous, T3 every tick pausing 2 at corners.
-    T3 also disables prayer on hit. D21: no damage numbers exist in any source;
+    T3 also disables prayer on hit. D21: no damage numbers exist in any source,
     12/18/24 are the modeled tier values. */
-#define COLO_SOLARFLARE_MOVE_INTERVAL    2   /* T1/T2 step cadence */
-#define COLO_SOLARFLARE_MOVE_INTERVAL_T3 1   /* A27: T3 moves every tick */
-#define COLO_SOLARFLARE_CORNER_PAUSE     7   /* T1 corner pause */
-#define COLO_SOLARFLARE_CORNER_PAUSE_T3  2   /* A27: T3 corner pause */
-#define COLO_SOLARFLARE_MAX_HIT_T1 12    /* contact damage, tier I (D21 modeled) */
-#define COLO_SOLARFLARE_MAX_HIT_T2 18    /* tier II "more damage" (D21 modeled) */
-#define COLO_SOLARFLARE_MAX_HIT_T3 24    /* tier III (D21 modeled) */
+#define COLO_SOLARFLARE_RING_STEPS       16
+#define COLO_SOLARFLARE_MOVE_INTERVAL    2
+#define COLO_SOLARFLARE_MOVE_INTERVAL_T3 1
+#define COLO_SOLARFLARE_CORNER_PAUSE     7
+#define COLO_SOLARFLARE_CORNER_PAUSE_T3  2
+#define COLO_SOLARFLARE_MAX_HIT_T1 12
+#define COLO_SOLARFLARE_MAX_HIT_T2 18
+#define COLO_SOLARFLARE_MAX_HIT_T3 24
 
 typedef struct {
     int active;
-    int x, y;
-    int step;          /* position index around the orb ring perimeter */
-    int move_timer;    /* ticks until the next step (cadence is tier-driven) */
-    int pause_timer;   /* corner pause countdown (T1/T3) */
+    int step;
+    int move_timer;
+    int pause_timer;
 } ColoSolarflareOrb;
 
 /** Doom: stacks gained per damage instance; reaching the tier cap (15/10/5) kills

@@ -39,9 +39,9 @@
 #define COLO_EXPECTED_DPT_NORM    10.0f
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
-    venom, nearest bee swarm, the Solarflare orb tile, and the nearest non-boss
-    molten pool. The tail gives the policy the modifier-driven state it must react
-    to but cannot read from the static active/tier flags. */
+    venom, nearest bee swarm, nearest Solarflare orb, and nearest non-boss molten
+    pool. The tail gives the policy the modifier-driven state it must react to
+    but cannot read from the static active/tier flags. */
 #define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 13
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 49 */
@@ -851,9 +851,27 @@ static void col_write_nearest_modifier_molten(const ColosseumState* s, float* ob
     col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
 }
 
+/** nearest Solarflare orb to the player: writes dx, dy, present. */
+static void col_write_nearest_modifier_solarflare(
+    const ColosseumState* s,
+    float* obs,
+    int* idx
+) {
+    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
+    if (s->solarflare.active) {
+        for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+            int x, y;
+            col_solarflare_tile(p, s->solarflare.step, &x, &y);
+            col_nearest_hazard_tile_consider(
+                &nearest, p, x, y, s->player.x, s->player.y);
+        }
+    }
+    col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
+}
+
 /** write the modifier-hazard obs tail (COLO_MODIFIER_HAZARD_OBS_SIZE floats):
     Doom (active, stacks frac), player venom (active, frac), nearest bee swarm
-    (dx, dy, present), Solarflare orb (dx, dy, active), nearest molten pool. */
+    (dx, dy, present), nearest Solarflare orb (dx, dy, active), nearest molten pool. */
 static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
@@ -876,10 +894,8 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
     col_write_nearest_hazard_xy_value(s, &nearest_bee, 1.0f, obs, idx);
     i = *idx;
 
-    col_write_hazard_xy_value_if(
-        s, s->solarflare.active, s->solarflare.x, s->solarflare.y, 1.0f, obs, &i);
     *idx = i;
-
+    col_write_nearest_modifier_solarflare(s, obs, idx);
     col_write_nearest_modifier_molten(s, obs, idx);
 }
 

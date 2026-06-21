@@ -345,30 +345,34 @@ static void col_fill_render_entities_ctx(
         }
     }
 
-    if (s->solarflare.active && n < max_entities) {
-        RenderEntity* re = &out[n++];
-        OsrsNpcRenderEntitySpec orb_spec = {
-            .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
-            .npc_slot = COLO_NPC_SLOT_SOLARFLARE,
-            .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID,
-            .npc_visible = 1,
-            .npc_size = 1,
-            .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
-            .x = s->solarflare.x,
-            .y = s->solarflare.y,
-            .dest_x = s->solarflare.x,
-            .dest_y = s->solarflare.y,
-            .current_hitpoints = 1,
-            .base_hitpoints = 1,
-            .attack_style_this_tick = ATTACK_STYLE_NONE,
-            .hit_landed_this_tick = 0,
-            .hit_damage = 0,
-            .hit_was_successful = 0,
-            .hit_spell_type = ENCOUNTER_SPELL_NONE,
-            .attack_target_entity_idx = 0,
-        };
-        osrs_render_entity_from_npc_spec(&orb_spec, re);
-        re->debug_npc_type_name = "Solar flare";
+    if (s->solarflare.active) {
+        for (int p = 0; p < COLO_NUM_PILLARS && n < max_entities; p++) {
+            int x, y;
+            col_solarflare_tile(p, s->solarflare.step, &x, &y);
+            RenderEntity* re = &out[n++];
+            OsrsNpcRenderEntitySpec orb_spec = {
+                .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
+                .npc_slot = COLO_NPC_SLOT_SOLARFLARE + p,
+                .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p,
+                .npc_visible = 1,
+                .npc_size = 1,
+                .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
+                .x = x,
+                .y = y,
+                .dest_x = x,
+                .dest_y = y,
+                .current_hitpoints = 1,
+                .base_hitpoints = 1,
+                .attack_style_this_tick = ATTACK_STYLE_NONE,
+                .hit_landed_this_tick = 0,
+                .hit_damage = 0,
+                .hit_was_successful = 0,
+                .hit_spell_type = ENCOUNTER_SPELL_NONE,
+                .attack_target_entity_idx = 0,
+            };
+            osrs_render_entity_from_npc_spec(&orb_spec, re);
+            re->debug_npc_type_name = "Solar flare";
+        }
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

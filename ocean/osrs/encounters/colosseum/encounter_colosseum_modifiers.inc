@@ -611,28 +611,59 @@ static void col_mod_tick_bees(ColosseumState* s) {
     }
 }
 
-/* ----- Solarflare (orb circling the pillars) -------------------------------- */
+/* ----- Solarflare (per-pillar orbs) ---------------------------------------- */
 
-/** the orb path circles the four arena pillars (A27 ring geometry; the pillars
-    exist on every wave, B1), ring-ordered SW -> SE -> NE -> NW. Writes the
-    `corner`-th ring node (0..3) into (*cx,*cy). */
-static void col_mod_solarflare_corner(const ColosseumState* s, int corner, int* cx, int* cy) {
-    (void)s;
-    static const int RING[4] = { 0, 1, 3, 2 };   /* COLO_PILLARS indices in ring order */
-    const int* p = COLO_PILLARS[RING[corner & 3]];
-    *cx = p[0];
-    *cy = p[1];
+/** write the Solarflare tile for one pillar and one shared ring step. */
+static void col_solarflare_tile(int pillar_index, int step, int* x, int* y) {
+    if (pillar_index < 0 || pillar_index >= COLO_NUM_PILLARS ||
+            step < 0 || step >= COLO_SOLARFLARE_RING_STEPS || !x || !y) {
+        fprintf(stderr, "invalid solarflare tile request\n");
+        abort();
+    }
+
+    int px = COLO_PILLARS[pillar_index][0];
+    int py = COLO_PILLARS[pillar_index][1];
+    if (step < 4) {
+        *x = px - 1 + step;
+        *y = py - 1;
+    } else if (step < 8) {
+        *x = px + COLO_PILLAR_SIZE;
+        *y = py - 1 + (step - 4);
+    } else if (step < 12) {
+        *x = px + COLO_PILLAR_SIZE - (step - 8);
+        *y = py + COLO_PILLAR_SIZE;
+    } else {
+        *x = px - 1;
+        *y = py + COLO_PILLAR_SIZE - (step - 12);
+    }
 }
 
-/** start/refresh the Solarflare orb at the first ring corner when active. */
+/** return whether a Solarflare ring step is a pillar-ring corner. */
+static int col_solarflare_step_is_corner(int step) {
+    if (step < 0 || step >= COLO_SOLARFLARE_RING_STEPS) {
+        fprintf(stderr, "invalid solarflare step\n");
+        abort();
+    }
+    return (step & 3) == 0;
+}
+
+/** start or refresh all Solarflare orbs at ring index 0 when active. */
 static void col_mod_sync_solarflare(ColosseumState* s) {
-    if (!col_mod_active(s, COLO_MOD_SOLARFLARE)) { s->solarflare.active = 0; return; }
-    if (s->solarflare.active) return;
-    s->solarflare.active = 1;
-    s->solarflare.step = 0;
-    s->solarflare.move_timer = 0;
-    s->solarflare.pause_timer = 0;
-    col_mod_solarflare_corner(s, 0, &s->solarflare.x, &s->solarflare.y);
+    if (!col_mod_active(s, COLO_MOD_SOLARFLARE)) {
+        s->solarflare = (ColoSolarflareOrb){
+            .active = 0,
+            .step = 0,
+            .move_timer = 0,
+            .pause_timer = 0,
+        };
+        return;
+    }
+    s->solarflare = (ColoSolarflareOrb){
+        .active = 1,
+        .step = 0,
+        .move_timer = 0,
+        .pause_timer = 0,
+    };
 }
 
 /** orb damage by tier (D21 modeled values). */
@@ -642,16 +673,32 @@ static int col_mod_solarflare_max_hit(int tier) {
     return COLO_SOLARFLARE_MAX_HIT_T1;
 }
 
-/**
- * Tick the Solarflare orb on the A27 cadence — T1 moves every 2 ticks pausing
- * 7 at corners, T2 every 2 ticks continuous, T3 every tick pausing 2 at
- * corners — and on contact deal tier damage. T3 also disables the player's
- * overhead prayer.
- */
+/** apply contact damage for every Solarflare orb on the player tile. */
+static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        int x, y;
+        col_solarflare_tile(p, s->solarflare.step, &x, &y);
+        if (x != s->player.x || y != s->player.y) continue;
+        int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
+        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        if (dmg > 0) col_mod_on_player_damaged(s, dmg);
+        if (tier >= 3) s->player.prayer = PRAYER_NONE;
+    }
+}
+
+/** tick the shared Solarflare cadence and apply per-pillar orb contact damage. */
 static void col_mod_tick_solarflare(ColosseumState* s) {
     if (!s->solarflare.active) return;
     int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
-    if (tier == 0) { s->solarflare.active = 0; return; }
+    if (tier == 0) {
+        s->solarflare = (ColoSolarflareOrb){
+            .active = 0,
+            .step = 0,
+            .move_timer = 0,
+            .pause_timer = 0,
+        };
+        return;
+    }
 
     ColoSolarflareOrb* orb = &s->solarflare;
     if (orb->pause_timer > 0) {
@@ -659,33 +706,19 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
     } else {
         if (orb->move_timer > 0) orb->move_timer--;
         if (orb->move_timer == 0) {
-            /* ring steps alternate corner (even) and midpoint (odd): step 2k
-               is corner k, step 2k+1 the midpoint between corners k and k+1. */
             int next_step = orb->step + 1;
-            int node_a = (next_step >> 1) & 3;
-            int node_b = ((next_step + 1) >> 1) & 3;
-            int ax, ay, bx, by;
-            col_mod_solarflare_corner(s, node_a, &ax, &ay);
-            col_mod_solarflare_corner(s, node_b, &bx, &by);
-            int frac = next_step & 1;                  /* 1 = midpoint, 0 = corner */
-            orb->x = frac ? (ax + bx) / 2 : ax;
-            orb->y = frac ? (ay + by) / 2 : ay;
-            orb->step = next_step & 7;
+            if (next_step == COLO_SOLARFLARE_RING_STEPS) next_step = 0;
+            orb->step = next_step;
             orb->move_timer = (tier >= 3)
                 ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
-            if ((orb->step & 1) == 0) {                /* arrived at a corner node */
+            if (col_solarflare_step_is_corner(orb->step)) {
                 if (tier == 1) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE;
                 if (tier >= 3) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE_T3;
             }
         }
     }
 
-    if (orb->x == s->player.x && orb->y == s->player.y) {
-        int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
-        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
-        if (dmg > 0) col_mod_on_player_damaged(s, dmg);
-        if (tier >= 3) s->player.prayer = PRAYER_NONE;   /* T3 disables prayer on hit */
-    }
+    col_mod_apply_solarflare_contact(s, tier);
 }
 
 /* ----- per-tick modifier driver --------------------------------------------- */
