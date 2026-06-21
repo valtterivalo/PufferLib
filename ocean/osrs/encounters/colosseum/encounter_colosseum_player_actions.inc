@@ -1077,21 +1077,31 @@ static OsrsVenatorChain col_resolve_venator_chain(
     return osrs_venator_resolve_chain(primary, candidates, candidate_count);
 }
 
+/** target defence roll for a player attack of `style`.
+    Gotcha: a monster's MAGIC defence rolls off its Magic level, not its Defence
+    level (matches osrs_barrage_resolve and osrs-dps-calc monster.skills.magic).
+    Melee/ranged roll off the (drain-adjusted) Defence level. Using def_level for
+    magic made high-magic NPCs (shaman 220, manticore 350) far too easy to mage,
+    inverting their real weakness. Defence-lowering specials do not touch Magic
+    level, so the magic branch ignores def_drained. */
 static int col_npc_target_def_roll(
     const ColoNPC* npc,
     const ColoNpcStats* ns,
     AttackStyle style,
     MeleeStyle weapon_melee_style
 ) {
-    int def_bonus;
+    int def_bonus, def_level;
     if (style == ATTACK_STYLE_MAGIC) {
         def_bonus = ns->magic_def_bonus;
+        def_level = ns->magic_level;
     } else if (style == ATTACK_STYLE_RANGED) {
         def_bonus = ns->ranged_def_bonus;
+        def_level = col_npc_effective_def_level(npc, ns);
     } else {
         def_bonus = col_melee_def_bonus(ns, weapon_melee_style);
+        def_level = col_npc_effective_def_level(npc, ns);
     }
-    return (col_npc_effective_def_level(npc, ns) + 9) * (def_bonus + 64);
+    return (def_level + 9) * (def_bonus + 64);
 }
 
 static void col_player_attack_target_ctx(

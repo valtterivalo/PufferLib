@@ -4226,6 +4226,41 @@ static void test_loadout_offensive_prayers(void) {
 
 /* ----- combat-fidelity pass: magic set + thralls + Death Charge ------------- */
 
+/** A monster's MAGIC defence rolls off its Magic level, not its Defence level.
+    Pre-fix the magic branch used def_level, making high-magic NPCs the easiest
+    style to mage, the inverse of their real weakness. Asserts the corrected
+    formula and the resulting per-style ordering (magic hardest on high-magic
+    NPCs, melee easiest on manticore). The ordering checks alone fail on the old
+    code, where magic was the lowest def roll. */
+static void test_npc_magic_defence_rolls_off_magic_level(void) {
+    printf("test_npc_magic_defence_rolls_off_magic_level\n");
+    col_build_npc_stats();
+
+    ColoNPC shaman;
+    memset(&shaman, 0, sizeof(shaman));
+    shaman.type = COLO_SERPENT_SHAMAN;
+    const ColoNpcStats* shaman_ns = &COLO_NPC_STATS[COLO_SERPENT_SHAMAN];
+    int sh_magic = col_npc_target_def_roll(&shaman, shaman_ns, ATTACK_STYLE_MAGIC, MELEE_STYLE_SLASH);
+    int sh_ranged = col_npc_target_def_roll(&shaman, shaman_ns, ATTACK_STYLE_RANGED, MELEE_STYLE_SLASH);
+    int sh_melee = col_npc_target_def_roll(&shaman, shaman_ns, ATTACK_STYLE_MELEE, MELEE_STYLE_SLASH);
+    CHECK("shaman magic def rolls off Magic level not Defence",
+        sh_magic == (shaman_ns->magic_level + 9) * (shaman_ns->magic_def_bonus + 64));
+    CHECK("shaman is most magic-resistant (magic > ranged > melee)",
+        sh_magic > sh_ranged && sh_ranged > sh_melee);
+
+    ColoNPC manticore;
+    memset(&manticore, 0, sizeof(manticore));
+    manticore.type = COLO_MANTICORE;
+    const ColoNpcStats* mant_ns = &COLO_NPC_STATS[COLO_MANTICORE];
+    int mt_magic = col_npc_target_def_roll(&manticore, mant_ns, ATTACK_STYLE_MAGIC, MELEE_STYLE_SLASH);
+    int mt_ranged = col_npc_target_def_roll(&manticore, mant_ns, ATTACK_STYLE_RANGED, MELEE_STYLE_SLASH);
+    int mt_melee = col_npc_target_def_roll(&manticore, mant_ns, ATTACK_STYLE_MELEE, MELEE_STYLE_SLASH);
+    CHECK("manticore magic def rolls off Magic level not Defence",
+        mt_magic == (mant_ns->magic_level + 9) * (mant_ns->magic_def_bonus + 64));
+    CHECK("manticore is easiest to melee (scythe): melee is the lowest def roll",
+        mt_melee < mt_ranged && mt_melee < mt_magic);
+}
+
 static void test_combat_fidelity_contract_sizes(void) {
     printf("test_combat_fidelity_contract_sizes\n");
     CHECK("three weapon sets (melee/ranged/magic)", COLO_NUM_WEAPON_SETS == 3);
@@ -6154,6 +6189,7 @@ int main(void) {
     test_colosseum_live_inventory_display();
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
+    test_npc_magic_defence_rolls_off_magic_level();
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();
     test_venator_bow_bounce_colosseum_integration();
