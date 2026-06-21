@@ -3798,6 +3798,60 @@ static void test_loadout_sanfew_and_serp_helm(void) {
         s.player_poison_timer == 0);
 }
 
+/* the consumable overdrink mask: col_inventory_cell_actionable hides a drink whose
+   effect would be wasted (brew at full HP, a stat already >= 105, a restore with
+   nothing to restore), and keeps sanfew valid while venomed (it cures). */
+static void test_consumable_overdrink_mask(void) {
+    printf("test_consumable_overdrink_mask\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 11);
+    s.player.potion_timer = 0;
+
+    int brew = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_BREW);
+    int combat = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    int sanfew = test_find_inventory_cell_with_consumable(&s, OSRS_CONSUMABLE_SANFEW);
+    CHECK("speedrun kit exposes brew/combat/sanfew cells",
+        brew >= 0 && combat >= 0 && sanfew >= 0);
+
+    /* brew: masked at full HP, valid once damaged. */
+    s.player.current_hitpoints = s.player.base_hitpoints;
+    CHECK("brew masked at full HP", !col_inventory_cell_actionable(&s, brew));
+    s.player.current_hitpoints = s.player.base_hitpoints - 10;
+    CHECK("brew valid below max HP", col_inventory_cell_actionable(&s, brew));
+
+    /* combat: valid unboosted (<105), masked once all of att/str/def >= 105. */
+    s.player.current_attack = s.player.base_attack;
+    s.player.current_strength = s.player.base_strength;
+    s.player.current_defence = s.player.base_defence;
+    CHECK("combat valid at unboosted stats", col_inventory_cell_actionable(&s, combat));
+    s.player.current_attack = 105;
+    s.player.current_strength = 112;
+    s.player.current_defence = 118;
+    CHECK("combat masked once all combat stats >= 105",
+        !col_inventory_cell_actionable(&s, combat));
+    s.player.current_strength = 104;
+    CHECK("combat valid again when one stat dips below 105",
+        col_inventory_cell_actionable(&s, combat));
+
+    /* sanfew: masked with nothing to restore, valid while venomed or prayer-down. */
+    s.player.current_attack = s.player.base_attack;
+    s.player.current_strength = s.player.base_strength;
+    s.player.current_defence = s.player.base_defence;
+    s.player.current_ranged = s.player.base_ranged;
+    s.player.current_magic = s.player.base_magic;
+    s.player.current_prayer = s.player.base_prayer;
+    s.player_venom = 0;
+    s.player_poison = 0;
+    CHECK("sanfew masked with full stats/prayer and no venom",
+        !col_inventory_cell_actionable(&s, sanfew));
+    s.player_venom = 4;
+    CHECK("sanfew valid while venomed (it cures)", col_inventory_cell_actionable(&s, sanfew));
+    s.player_venom = 0;
+    s.player.current_prayer = s.player.base_prayer - 60;
+    CHECK("sanfew valid when prayer is well down", col_inventory_cell_actionable(&s, sanfew));
+}
+
 static void test_loadout_surge_potion(void) {
     printf("test_loadout_surge_potion\n");
     ColosseumContext ctx;
@@ -6094,6 +6148,7 @@ int main(void) {
     test_loadout_consumables();
     test_loadout_divine_potions_and_stat_drift();
     test_loadout_sanfew_and_serp_helm();
+    test_consumable_overdrink_mask();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();
     test_colosseum_live_inventory_display();

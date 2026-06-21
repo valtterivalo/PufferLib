@@ -321,13 +321,62 @@ static int col_can_eat_consumable_kind(
     abort();
 }
 
+#define COLO_BOOST_REDRINK_LEVEL 105   /* re-drink a stat boost only below this level */
+
+/* mirror inferno's restore mask: a super-restore / sanfew is worth a dose iff a
+   combat/ranged/magic stat sits below its base or prayer is down by at least half
+   a restore (so the dose is not wasted). */
+static int col_restore_worth_drinking(const ColosseumState* s) {
+    const Player* p = &s->player;
+    int stats_drained = p->current_attack   < p->base_attack   ||
+                        p->current_strength < p->base_strength ||
+                        p->current_defence  < p->base_defence  ||
+                        p->current_ranged   < p->base_ranged   ||
+                        p->current_magic    < p->base_magic;
+    int restore_amount = osrs_super_restore_amount(p->base_prayer);
+    int pray_worth = (p->base_prayer - p->current_prayer) >= (restore_amount + 1) / 2;
+    return stats_drained || pray_worth;
+}
+
+/* whether drinking one dose of `kind` would do anything useful right now, so the
+   action mask (and the matching obs actionable flag) hides pointless overdrinks:
+   brew at full HP, re-boosting an already-boosted stat (>= 105), or restoring
+   nothing. Sanfew stays valid while venomed/poisoned (it cures). Surge, guthix
+   rest, and antivenom keep their existing dose/timer gate (surge's clicked dose
+   intentionally burns even at full energy). */
+static int col_drink_has_effect(const ColosseumState* s, OsrsConsumableKind kind) {
+    const Player* p = &s->player;
+    int afflicted = s->player_venom > 0 || s->player_poison > 0;
+    switch (kind) {
+        case OSRS_CONSUMABLE_BREW:
+            return p->current_hitpoints < p->base_hitpoints;
+        case OSRS_CONSUMABLE_SUPER_COMBAT:
+        case OSRS_CONSUMABLE_DIVINE_COMBAT:
+            return p->current_attack   < COLO_BOOST_REDRINK_LEVEL ||
+                   p->current_strength < COLO_BOOST_REDRINK_LEVEL ||
+                   p->current_defence  < COLO_BOOST_REDRINK_LEVEL;
+        case OSRS_CONSUMABLE_RANGING:
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+            return p->current_ranged < COLO_BOOST_REDRINK_LEVEL;
+        case OSRS_CONSUMABLE_SATURATED_HEART:
+            return p->current_magic < COLO_BOOST_REDRINK_LEVEL;
+        case OSRS_CONSUMABLE_SUPER_RESTORE:
+            return col_restore_worth_drinking(s);
+        case OSRS_CONSUMABLE_SANFEW:
+            return afflicted || col_restore_worth_drinking(s);
+        default:
+            return 1;   /* surge/guthix/antivenom/food: the dose/timer gate decides */
+    }
+}
+
 static int col_inventory_cell_actionable(const ColosseumState* s, int cell_idx) {
     const ColoInvCell* cell = &s->inventory_cells[cell_idx];
     OsrsInventoryClickResolution r =
         osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
     if (r.click_action == OSRS_CLICK_EQUIP) return col_can_equip_from_cell(s, cell_idx);
     if (r.click_action == OSRS_CLICK_DRINK)
-        return cell->dose > 0 && s->player.potion_timer == 0;
+        return cell->dose > 0 && s->player.potion_timer == 0 &&
+               col_drink_has_effect(s, r.consumable_kind);
     if (r.click_action == OSRS_CLICK_EAT)
         return col_can_eat_consumable_kind(s, r.consumable_kind);
     return 0;
