@@ -3736,8 +3736,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v11 for the enriched colosseum obs contract",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 11u);
+    CHECK("snapshot version is v12 for the colosseum log contract",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 12u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4234,6 +4234,28 @@ static void test_loadout_offensive_prayers(void) {
 
 /* ----- combat-fidelity pass: magic set + thralls + Death Charge ------------- */
 
+/** Total damage catches typeless NPC damage that off-prayer attribution skips. */
+static void test_total_damage_by_type_captures_typeless(void) {
+    printf("test_total_damage_by_type_captures_typeless\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 2323);
+    int hp0 = s.player.current_hitpoints;
+    float total_before = s.log.total_damage_by_type[COLO_JAVELIN_COLOSSUS];
+    float offpray_before = s.log.offpray_damage_by_type[COLO_JAVELIN_COLOSSUS];
+
+    col_damage_player_from(&s, 17, COLO_JAVELIN_COLOSSUS);
+
+    CHECK("typeless NPC damage lands on the player", s.player.current_hitpoints == hp0 - 17);
+    CHECK("typeless NPC damage is attributed to total damage",
+        s.log.total_damage_by_type[COLO_JAVELIN_COLOSSUS] == total_before + 17.0f);
+    CHECK("typeless NPC damage stays out of off-prayer damage",
+        s.log.offpray_damage_by_type[COLO_JAVELIN_COLOSSUS] == offpray_before);
+}
+
 /** A monster's MAGIC defence rolls off its Magic level, not its Defence level.
     Pre-fix the magic branch used def_level, making high-magic NPCs the easiest
     style to mage, the inverse of their real weakness. Asserts the corrected
@@ -4344,7 +4366,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
     CHECK("obs width is 2875", COLO_NUM_OBS == 2875);
     CHECK("NPC slots have 51 features", COLO_FEATURES_PER_NPC == 51);
-    CHECK("snapshot version is v11", COLO_SNAPSHOT_VERSION == 11u);
+    CHECK("snapshot version is v12", COLO_SNAPSHOT_VERSION == 12u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
@@ -4972,7 +4994,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v11", snap.version == 11u);
+    CHECK("snapshot frame is v12", snap.version == 12u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -6264,6 +6286,7 @@ int main(void) {
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
     test_npc_magic_defence_rolls_off_magic_level();
+    test_total_damage_by_type_captures_typeless();
     test_matchup_dpt_obs_ranking();
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();

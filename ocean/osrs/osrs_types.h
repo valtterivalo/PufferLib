@@ -1004,12 +1004,12 @@ typedef struct {
     float hist_score_bank[8];
     float hist_n_bank[8];
 
-    /* Colosseum per-NPC-type prayer outcomes, indexed by ColoNpcType (12 types).
-       faced = prayer-checkable hits landed, correct = overhead matched,
-       offpray_damage = HP lost to mismatched-overhead hits. */
+    /* Colosseum per-NPC-type prayer outcomes and total damage, indexed by
+       ColoNpcType (12 types). total_damage is all NPC-sourced HP lost. */
     float colo_pray_faced_by_type[12];
     float colo_pray_correct_by_type[12];
     float colo_offpray_damage_by_type[12];
+    float colo_total_damage_by_type[12];
     /* Colosseum death attribution (diagnostic): colo_death_by_type[t] is the
        kill-share for NPC type t (1.0 for the type that landed the killing blow,
        per dead episode -> per-episode mean = fraction of deaths it caused);

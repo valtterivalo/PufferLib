@@ -922,8 +922,9 @@ static void col_step_human_commands_ctx(
    v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
        + player offensive/spec/profile scalars.
    v11: colosseum obs adds static pillar geometry and enriched per-NPC combat
-       and source-aware prayer timing features. */
-#define COLO_SNAPSHOT_VERSION 11u
+       and source-aware prayer timing features.
+   v12: colosseum log adds per-NPC total damage attribution. */
+#define COLO_SNAPSHOT_VERSION 12u
 
 typedef struct {
     uint32_t magic;

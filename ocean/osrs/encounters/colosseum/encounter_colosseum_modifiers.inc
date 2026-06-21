@@ -20,7 +20,7 @@
  *
  * Tier values come from COLO_MODIFIER_* tables in the model; every modeled
  * assumption is a named constant there. Damage routes through the shared
- * encounter_damage_player so HP/splat/tracker bookkeeping holds.
+ * player damage helpers so HP/splat/tracker bookkeeping holds.
  */
 
 /* forward declarations for hooks referenced before their definition. */
@@ -228,7 +228,7 @@ static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom_timer > 0) s->player_venom_timer--;
     if (s->player_venom_timer > 0) return;
     int dmg = s->player_venom;
-    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    col_damage_player_from(s, dmg, COLO_MANTICORE);
     s->last_hit_by_type = COLO_MANTICORE;
     col_mod_on_player_damaged(s, dmg);
     s->player_venom += COLO_VENOM_STEP;
@@ -257,7 +257,7 @@ static void col_mod_tick_poison(ColosseumState* s) {
     if (s->player_poison_timer > 0) s->player_poison_timer--;
     if (s->player_poison_timer > 0) return;
     int dmg = (s->player_poison + 4) / 5;
-    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    col_damage_player_from(s, dmg, COLO_BEE_SWARM);
     if (dmg > 0) {
         s->last_hit_by_type = COLO_BEE_SWARM;
         col_mod_on_player_damaged(s, dmg);
@@ -452,7 +452,7 @@ static void col_mod_tick_molten_pools(ColosseumState* s) {
         if (s->player.x != s->molten_x[i] || s->player.y != s->molten_y[i]) continue;
         int dmg = COLO_MOLTEN_SAND_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
-        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS);
         s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
         col_mod_on_player_damaged(s, dmg);
         break;
@@ -602,7 +602,7 @@ static void col_mod_tick_bees(ColosseumState* s) {
         if (col_bee_swarm_contacts_player(s, npc)) {
             col_mod_apply_bee_poison(s);
             int dmg = col_bee_swarm_contact_damage(s);
-            encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+            col_damage_player_from(s, dmg, COLO_BEE_SWARM);
             if (dmg > 0) {
                 s->last_hit_by_type = COLO_BEE_SWARM;
                 col_mod_on_player_damaged(s, dmg);

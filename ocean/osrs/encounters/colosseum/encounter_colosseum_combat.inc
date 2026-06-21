@@ -129,6 +129,13 @@ static void col_log_prayer_event(ColosseumState* s, int npc_type, int prayed, in
     else s->log.offpray_damage_by_type[npc_type] += (float)dmg;
 }
 
+/** Damage the player and attribute positive damage to one NPC type for episode totals. */
+static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type) {
+    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    if (dmg > 0 && npc_type >= 0 && npc_type < COLO_NUM_NPC_TYPES)
+        s->log.total_damage_by_type[npc_type] += (float)dmg;
+}
+
 typedef struct {
     ColosseumState* state;
     ColosseumContext* context;
@@ -141,6 +148,8 @@ static void col_pending_hit_prayer_observer(
     ColosseumContext* ctx = observer_ctx->context;
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
+    if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES)
+        s->log.total_damage_by_type[hit->source_npc_type] += (float)dmg;
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
     s->tick_scratch.styles_faced_mask |= (1 << hit->attack_style);
     s->tick_scratch.avoidable_threat_by_style[hit->attack_style] += (float)hit->damage;
@@ -287,7 +296,7 @@ static void col_apply_instant_melee_hit(
     s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] += (float)rolled_dmg;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, npc_type, prayed, dmg);
-    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    col_damage_player_from(s, dmg, npc_type);
     if (dmg > 0) {  /* dmg>0 implies an off-prayer damaging hit (prayed -> dmg 0) */
         int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
         if (blas > 0 && s->player.current_prayer > 0) {
@@ -414,7 +423,7 @@ static void col_npc_resolve_javelin_skyfall(
             .damage = dmg,
         };
     }
-    encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    col_damage_player_from(s, dmg, npc->type);
     if (dmg > 0) {
         s->last_hit_by_type = npc->type;
         col_mod_on_player_damaged(s, dmg);
@@ -472,7 +481,7 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
             dmg = 0;
             s->tick_scratch.prayer_correct++;
         }
-        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        col_damage_player_from(s, dmg, npc->type);
         col_log_prayer_event(s, npc->type, prayed, dmg);
         s->tick_scratch.styles_faced_mask |= (1 << style);
         s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;

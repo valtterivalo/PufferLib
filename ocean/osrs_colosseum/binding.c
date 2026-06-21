@@ -149,6 +149,7 @@ void c_step(Env* env) {
                 env->log.colo_pray_faced_by_type[t] += clog->pray_faced_by_type[t];
                 env->log.colo_pray_correct_by_type[t] += clog->pray_correct_by_type[t];
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
+                env->log.colo_total_damage_by_type[t] += clog->total_damage_by_type[t];
                 env->log.colo_death_by_type[t] += clog->death_by_type[t];
             }
             env->log.colo_death_fatal_damage += clog->death_fatal_damage;
@@ -450,11 +451,10 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "score", log->colo_outcome_score);
     dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
 
-    /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
-       overhead per prayer-checkable hit faced) + mean off-prayer damage taken
-       per episode. Indexed by ColoNpcType. Keys are string literals because
-       dict_set stores the key POINTER (no copy) — formatted stack buffers
-       alias every entry onto one item. */
+    /* per-NPC-type prayer outcomes: off-prayer exposure rate, mean off-prayer
+       damage, and mean total damage taken per episode. Indexed by ColoNpcType.
+       Keys are string literals because dict_set stores the key POINTER, not a
+       copy, so formatted stack buffers alias every entry onto one item. */
     static const char* OFFPRAY_RATE_KEYS[COLO_NUM_NPC_TYPES] = {
         "offpray_rate_berserker", "offpray_rate_archer", "offpray_rate_seer",
         "offpray_rate_serpent", "offpray_rate_jaguar", "offpray_rate_javelin",
@@ -465,12 +465,18 @@ void my_log(Log* log, Dict* out) {
         "offpray_dmg_serpent", "offpray_dmg_jaguar", "offpray_dmg_javelin",
         "offpray_dmg_shockwave", "offpray_dmg_minotaur", "offpray_dmg_manticore",
         "offpray_dmg_sol", "offpray_dmg_totem", "offpray_dmg_bee"};
+    static const char* TOTAL_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
+        "total_dmg_berserker", "total_dmg_archer", "total_dmg_seer",
+        "total_dmg_serpent", "total_dmg_jaguar", "total_dmg_javelin",
+        "total_dmg_shockwave", "total_dmg_minotaur", "total_dmg_manticore",
+        "total_dmg_sol", "total_dmg_totem", "total_dmg_bee"};
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
         float faced = log->colo_pray_faced_by_type[t];
         float off_rate = faced > 0.0f
             ? (faced - log->colo_pray_correct_by_type[t]) / faced : 0.0f;
         dict_set(out, OFFPRAY_RATE_KEYS[t], off_rate);
         dict_set(out, OFFPRAY_DMG_KEYS[t], log->colo_offpray_damage_by_type[t]);
+        dict_set(out, TOTAL_DMG_KEYS[t], log->colo_total_damage_by_type[t]);
     }
 
     /* death attribution (diagnostic): kill-share per NPC type (which landed the
