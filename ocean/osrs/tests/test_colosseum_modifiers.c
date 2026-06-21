@@ -58,6 +58,14 @@ static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+#define TEST_NPC_TELLS_OFFSET 37
+#define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
+#define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
+#define TEST_MOD_OBS_VENOM_TIMER (TEST_MOD_HAZARD_BASE + 6)
+#define TEST_MOD_OBS_SOLARFLARE (TEST_MOD_HAZARD_BASE + 10)
+#define TEST_MOD_OBS_MOLTEN (TEST_MOD_HAZARD_BASE + 18)
+#define TEST_MOD_OBS_VOLATILITY (TEST_MOD_HAZARD_BASE + 30)
+
 #define CHECK(label, cond) do { \
     tests_run++; \
     if (cond) { tests_passed++; } \
@@ -1416,7 +1424,7 @@ static void test_solarflare_orb(void) {
     s.player.y = obs_y;
     static float obs[COLO_NUM_OBS];
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int solarflare_obs_idx = COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE + 7;
+    int solarflare_obs_idx = TEST_MOD_OBS_SOLARFLARE;
     CHECK("Solarflare modifier obs writes nearest of four orbs",
         obs[solarflare_obs_idx] == 0.0f &&
         obs[solarflare_obs_idx + 1] == 0.0f &&
@@ -1506,6 +1514,123 @@ static void test_volatility_explosion(void) {
     s.npcs[idx].hp = 0;
     col_apply_npc_death(&s, idx);
     CHECK("Volatility explosion hits an adjacent player", s.player.current_hitpoints < hp_before);
+}
+
+static void test_modifier_hazard_obs_fixes(void) {
+    printf("test_modifier_hazard_obs_fixes\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    static float obs[COLO_NUM_OBS];
+
+    init_forecast_test_state(&s, &ctx, 301, 17, 16);
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_tile_x = 19;
+    jv->skyfall_tile_y = 14;
+    jv->skyfall_timer = 2;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int tells = COLO_OBS_AFTER_EQUIPPED_SELF + TEST_NPC_TELLS_OFFSET;
+    CHECK("javelin skyfall tells expose landing dx while pending",
+        fabsf(obs[tells + 2] - col_obs_rel_x(19, s.player.x)) < 0.000001f);
+    CHECK("javelin skyfall tells expose landing dy while pending",
+        fabsf(obs[tells + 3] - col_obs_rel_y(14, s.player.y)) < 0.000001f);
+    jv->skyfall_pending = 0;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("javelin skyfall landing tells clear when not pending",
+        obs[tells + 2] == 0.0f && obs[tells + 3] == 0.0f);
+
+    init_forecast_test_state(&s, &ctx, 302, 12, 10);
+    col_init_npc(&s, 0, COLO_BEE_SWARM, 10, 10);
+    s.bees[0] = (ColoBeeSwarm){
+        .phase = COLO_HAZARD_ALIVE,
+        .npc_slot = 0,
+        .respawn_timer = 0,
+        .move_timer = 1,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    tells = COLO_OBS_AFTER_EQUIPPED_SELF + TEST_NPC_TELLS_OFFSET;
+    CHECK("bee tells expose a nonzero move timer",
+        obs[tells] > 0.0f && obs[tells] <= 1.0f);
+    CHECK("bee tells expose next-step contact",
+        obs[tells + 1] == 0.0f &&
+        fabsf(obs[tells + 2] - col_obs_rel_x(11, s.player.x)) < 0.000001f &&
+        fabsf(obs[tells + 3] - col_obs_rel_y(10, s.player.y)) < 0.000001f &&
+        obs[tells + 4] == 1.0f);
+
+    init_forecast_test_state(&s, &ctx, 303, 10, 10);
+    s.molten_count = 6;
+    s.molten_x[0] = 20; s.molten_y[0] = 20;
+    s.molten_x[1] = 12; s.molten_y[1] = 10;
+    s.molten_x[2] = 9; s.molten_y[2] = 10;
+    s.molten_x[3] = 10; s.molten_y[3] = 13;
+    s.molten_x[4] = 8; s.molten_y[4] = 8;
+    s.molten_x[5] = 10; s.molten_y[5] = 14;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int molten = TEST_MOD_OBS_MOLTEN;
+    CHECK("modifier molten obs lists the nearest pool first",
+        fabsf(obs[molten] - col_obs_rel_x(9, s.player.x)) < 0.000001f &&
+        fabsf(obs[molten + 1] - col_obs_rel_y(10, s.player.y)) < 0.000001f &&
+        obs[molten + 2] == 1.0f);
+    CHECK("modifier molten obs keeps the four nearest pools ordered",
+        fabsf(obs[molten + 3] - col_obs_rel_x(12, s.player.x)) < 0.000001f &&
+        fabsf(obs[molten + 6] - col_obs_rel_x(8, s.player.x)) < 0.000001f &&
+        fabsf(obs[molten + 9] - col_obs_rel_x(10, s.player.x)) < 0.000001f &&
+        obs[molten + 5] == 1.0f &&
+        obs[molten + 8] == 1.0f &&
+        obs[molten + 11] == 1.0f);
+
+    init_forecast_test_state(&s, &ctx, 304, 0, 0);
+    s.modifiers.active_mask |= (1u << COLO_MOD_SOLARFLARE);
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;
+    s.solarflare = (ColoSolarflareOrb){
+        .active = 1,
+        .step = 3,
+        .move_timer = 1,
+        .pause_timer = 0,
+    };
+    int current_x, current_y, next_x, next_y;
+    col_solarflare_tile(0, s.solarflare.step, &current_x, &current_y);
+    col_solarflare_tile(0, s.solarflare.step + 1, &next_x, &next_y);
+    s.player.x = current_x;
+    s.player.y = current_y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int solarflare = TEST_MOD_OBS_SOLARFLARE;
+    CHECK("Solarflare obs exposes the nearest orb next tile",
+        fabsf(obs[solarflare + 6] - col_obs_rel_x(next_x, s.player.x)) < 0.000001f &&
+        fabsf(obs[solarflare + 7] - col_obs_rel_y(next_y, s.player.y)) < 0.000001f);
+
+    init_forecast_test_state(&s, &ctx, 305, 17, 16);
+    s.modifiers.active_mask |= (1u << COLO_MOD_DOOM);
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    s.doom_stacks = COLO_DOOM_CAP[3] - 2;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("Doom lethality obs is clear before cap minus one",
+        obs[TEST_MOD_OBS_DOOM_LETHAL] == 0.0f);
+    s.doom_stacks = COLO_DOOM_CAP[3] - 1;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("Doom lethality obs flips at cap minus one",
+        obs[TEST_MOD_OBS_DOOM_LETHAL] == 1.0f);
+
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = COLO_VENOM_INTERVAL / 2;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("venom obs exposes the next tick timer",
+        fabsf(obs[TEST_MOD_OBS_VENOM_TIMER] - 0.5f) < 0.000001f);
+
+    init_forecast_test_state(&s, &ctx, 306, 17, 17);
+    s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
+    s.modifiers.tier[COLO_MOD_VOLATILITY] = 1;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 18, 17);
+    osrs_interaction_set(&s.interaction, 0);
+    s.npcs[0].hp = 5;
+    col_queue_npc_pending_hit(&s, 0, 5, 1, ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int volatility = TEST_MOD_OBS_VOLATILITY;
+    CHECK("Volatility current-target blast marks player in footprint",
+        obs[volatility + 3] == 1.0f);
+    CHECK("Volatility queued-kill blast marks player in footprint",
+        obs[volatility + 7] == 1.0f);
 }
 
 static void test_death_linger_wave_clear_and_render(void) {
@@ -4465,7 +4590,9 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2875", COLO_NUM_OBS == 2875);
+    CHECK("obs width is 2900", COLO_NUM_OBS == 2900);
+    CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
+    CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 51 features", COLO_FEATURES_PER_NPC == 51);
     CHECK("snapshot version is v13", COLO_SNAPSHOT_VERSION == 13u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
@@ -6295,7 +6422,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2875);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2900);
     CHECK("T6 mask running-index assert reached 888", COLO_ACTION_MASK_SIZE == 888);
 }
 
@@ -6324,6 +6451,7 @@ int main(void) {
     test_eleven_drafts_per_run();
     test_solarflare_orb();
     test_volatility_explosion();
+    test_modifier_hazard_obs_fixes();
     test_death_linger_wave_clear_and_render();
     test_draft_offer_and_select();
     test_draft_upgrade_bias();

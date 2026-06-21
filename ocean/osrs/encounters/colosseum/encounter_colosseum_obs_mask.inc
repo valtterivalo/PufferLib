@@ -5,9 +5,9 @@
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
  *   player(36) + pillars(4 * 3) + inventory cells(28 * 35)
- *   + equipped self(11 * 18) + npc slots(24 * 51) + modifiers(49) + wave(4) + boss(51)
+ *   + equipped self(11 * 18) + npc slots(24 * 51) + modifiers(74) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2875.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2900.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -38,13 +38,12 @@
 /** Expected weapon-set DPT is divided by this before per-NPC obs clamp. */
 #define COLO_EXPECTED_DPT_NORM    10.0f
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
-    draft option ids (36), then a derived-hazard tail (13): Doom stacks, player
-    venom, nearest bee swarm, nearest Solarflare orb, and nearest non-boss molten
-    pool. The tail gives the policy the modifier-driven state it must react to
-    but cannot read from the static active/tier flags. */
+    draft option ids (36), then a derived-hazard tail (38): Doom lethality,
+    venom cadence, nearest bee swarm, Solarflare current and next tile, top-4
+    molten pools, and Volatility blast previews. */
 #define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
-#define COLO_MODIFIER_HAZARD_OBS_SIZE 13
-#define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 49 */
+#define COLO_MODIFIER_HAZARD_OBS_SIZE 38
+#define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 74 */
 #define COLO_WAVE_OBS_SIZE        4
 #define COLO_BOSS_OBS_SIZE        51
 /** obs surfaces the soonest-landing pending hits only (the 32-deep queue rarely
@@ -542,6 +541,19 @@ static ColoNpcNextPrayerObs col_npc_next_prayer_obs(
     return col_deterministic_npc_next_prayer(s, npc, &COLO_NPC_STATS[npc->type]);
 }
 
+/** return the managed bee state for an NPC slot, or NULL for lab-only bees. */
+static const ColoBeeSwarm* col_obs_bee_state_for_npc_slot(
+    const ColosseumState* s,
+    int npc_slot
+) {
+    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return NULL;
+    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
+        const ColoBeeSwarm* bee = &s->bees[b];
+        if (bee->phase == COLO_HAZARD_ALIVE && bee->npc_slot == npc_slot) return bee;
+    }
+    return NULL;
+}
+
 /** write the 10-wide per-type tell block for an NPC slot (always 10 floats).
 
     manticore (the prayer puzzle — full upcoming barrage, like the orbs a player
@@ -550,13 +562,15 @@ static ColoNpcNextPrayerObs col_npc_next_prayer_obs(
     charge-up the locked pattern shows all three orbs before any land; mid-barrage
     the fired orbs drop off so slot 0 is always the orb to pray next. All zero
     when idle (no pattern locked).
-    javelin    -> [skyfall incoming, skyfall ticks frac, 0...]
+    javelin    -> [skyfall incoming, skyfall ticks frac, landing dx, landing dy, 0...]
+    bee        -> [move timer frac, current contact, next dx, next dy, next contact, 0...]
     minotaur   -> [in heal-cast range (player not in its melee), 0...]
     jaguar     -> [multi-hit marker, 0...]
     everything else -> zeros. */
 static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
     int i = *idx;
     float tells[10] = {0};
+    int npc_slot = (int)(npc - s->npcs);
     switch (npc->type) {
         case COLO_MANTICORE: {
             const ColoManticoreState* mc = &npc->type_state.manticore;
@@ -582,6 +596,27 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
             tells[1] = jv->skyfall_pending
                 ? col_clamp01((float)jv->skyfall_timer / (float)COLO_JAVELIN_SKYFALL_DELAY)
                 : 0.0f;
+            tells[2] = jv->skyfall_pending
+                ? col_obs_rel_x(jv->skyfall_tile_x, s->player.x)
+                : 0.0f;
+            tells[3] = jv->skyfall_pending
+                ? col_obs_rel_y(jv->skyfall_tile_y, s->player.y)
+                : 0.0f;
+            break;
+        }
+        case COLO_BEE_SWARM: {
+            const ColoBeeSwarm* bee = col_obs_bee_state_for_npc_slot(s, npc_slot);
+            int next_x, next_y;
+            int size = col_npc_effective_size(npc);
+            col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
+            tells[0] = bee
+                ? col_clamp01((float)bee->move_timer / (float)COLO_BEE_MOVE_INTERVAL)
+                : 0.0f;
+            tells[1] = col_bee_swarm_contacts_player(s, npc) ? 1.0f : 0.0f;
+            tells[2] = col_obs_rel_x(next_x, s->player.x);
+            tells[3] = col_obs_rel_y(next_y, s->player.y);
+            tells[4] = encounter_entity_footprints_overlap(
+                next_x, next_y, size, s->player.x, s->player.y, 1) ? 1.0f : 0.0f;
             break;
         }
         case COLO_MINOTAUR: {
@@ -839,19 +874,74 @@ static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
     return n < COLO_OBS_PENDING_HITS ? n : COLO_OBS_PENDING_HITS;
 }
 
+#define COLO_MODIFIER_MOLTEN_OBS_COUNT 4
 
-/** nearest non-boss molten pool (Reentry / Volatility) to the player: writes
-    dx, dy, present (3 floats). */
-static void col_write_nearest_modifier_molten(const ColosseumState* s, float* obs, int* idx) {
-    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
-    for (int k = 0; k < s->molten_count; k++) {
-        col_nearest_hazard_tile_consider(
-            &nearest, k, s->molten_x[k], s->molten_y[k], s->player.x, s->player.y);
-    }
-    col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
+typedef struct {
+    int found;
+    int npc_slot;
+    int x;
+    int y;
+    int size;
+    int ticks;
+    int distance;
+} ColoVolatilityBlastPreview;
+
+static inline ColoVolatilityBlastPreview col_volatility_blast_preview_none(void) {
+    return (ColoVolatilityBlastPreview){
+        .found = 0,
+        .npc_slot = -1,
+        .x = 0,
+        .y = 0,
+        .size = 0,
+        .ticks = 0,
+        .distance = 1 << 30,
+    };
 }
 
-/** nearest Solarflare orb to the player: writes dx, dy, present. */
+/** true when a pending hit will damage the player before the next action. */
+static int col_pending_hit_will_damage_pre_move(
+    const EncounterPendingHit* hit,
+    OverheadPrayer prayer
+) {
+    if (!hit->active) return 0;
+    if (hit->ticks_remaining > 1) return 0;
+    if (hit->damage <= 0) return 0;
+    if (hit->attack_style == ATTACK_STYLE_NONE) return 0;
+    if (hit->check_prayer &&
+            encounter_prayer_correct_for_style(prayer, hit->attack_style))
+        return 0;
+    return 1;
+}
+
+/** write the four nearest modifier molten pools, each dx, dy, present. */
+static void col_write_top_modifier_molten(const ColosseumState* s, float* obs, int* idx) {
+    ColoNearestHazardTile nearest[COLO_MODIFIER_MOLTEN_OBS_COUNT];
+    for (int i = 0; i < COLO_MODIFIER_MOLTEN_OBS_COUNT; i++)
+        nearest[i] = col_nearest_hazard_tile_none();
+    for (int k = 0; k < s->molten_count; k++) {
+        int dx = abs(s->molten_x[k] - s->player.x);
+        int dy = abs(s->molten_y[k] - s->player.y);
+        int distance = dx > dy ? dx : dy;
+        for (int slot = 0; slot < COLO_MODIFIER_MOLTEN_OBS_COUNT; slot++) {
+            if (distance >= nearest[slot].distance) continue;
+            for (int move = COLO_MODIFIER_MOLTEN_OBS_COUNT - 1; move > slot; move--)
+                nearest[move] = nearest[move - 1];
+            nearest[slot] = (ColoNearestHazardTile){
+                .found = 1,
+                .index = k,
+                .x = s->molten_x[k],
+                .y = s->molten_y[k],
+                .distance = distance,
+            };
+            break;
+        }
+    }
+    for (int k = 0; k < COLO_MODIFIER_MOLTEN_OBS_COUNT; k++) {
+        col_write_nearest_hazard_xy_value(s, &nearest[k], 1.0f, obs, idx);
+    }
+}
+
+/** nearest Solarflare orb to the player with cadence and next tile preview. */
 static void col_write_nearest_modifier_solarflare(
     const ColosseumState* s,
     float* obs,
@@ -867,20 +957,196 @@ static void col_write_nearest_modifier_solarflare(
         }
     }
     col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
+    int i = *idx;
+    if (nearest.found) {
+        int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
+        int next_step = s->solarflare.step + 1;
+        if (next_step == COLO_SOLARFLARE_RING_STEPS) next_step = 0;
+        int next_x, next_y;
+        col_solarflare_tile(nearest.index, next_step, &next_x, &next_y);
+        int move_interval = tier >= 3
+            ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
+        int pause_interval = tier >= 3 ? COLO_SOLARFLARE_CORNER_PAUSE_T3 : 1;
+        if (tier == 1) pause_interval = COLO_SOLARFLARE_CORNER_PAUSE;
+        obs[i++] = col_clamp01(
+            (float)s->solarflare.step / (float)COLO_SOLARFLARE_RING_STEPS);
+        obs[i++] = col_clamp01((float)s->solarflare.move_timer / (float)move_interval);
+        obs[i++] = col_clamp01((float)s->solarflare.pause_timer / (float)pause_interval);
+        obs[i++] = col_obs_rel_x(next_x, s->player.x);
+        obs[i++] = col_obs_rel_y(next_y, s->player.y);
+    } else {
+        for (int k = 0; k < 5; k++) obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** soonest Volatility blast caused by already queued outgoing player hits. */
+static ColoVolatilityBlastPreview col_soonest_queued_volatility_blast(
+    const ColosseumState* s
+) {
+    ColoVolatilityBlastPreview best = col_volatility_blast_preview_none();
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        for (int h = 0; h < npc->pending_hits.count; h++) {
+            const EncounterPendingHit* hit = &npc->pending_hits.hits[h];
+            if (!hit->active) continue;
+            int ticks = hit->ticks_remaining < 0 ? 0 : hit->ticks_remaining;
+            int damage = 0;
+            for (int j = 0; j < npc->pending_hits.count; j++) {
+                const EncounterPendingHit* other = &npc->pending_hits.hits[j];
+                if (!other->active) continue;
+                int other_ticks = other->ticks_remaining < 0 ? 0 : other->ticks_remaining;
+                if (other_ticks <= ticks) damage += other->damage;
+            }
+            if (damage < npc->hp) continue;
+            int size = col_npc_effective_size(npc);
+            int center_x = npc->x + size / 2;
+            int center_y = npc->y + size / 2;
+            int dx = abs(center_x - s->player.x);
+            int dy = abs(center_y - s->player.y);
+            int distance = dx > dy ? dx : dy;
+            if (best.found &&
+                    (ticks > best.ticks ||
+                     (ticks == best.ticks && distance >= best.distance)))
+                continue;
+            best = (ColoVolatilityBlastPreview){
+                .found = 1,
+                .npc_slot = n,
+                .x = npc->x,
+                .y = npc->y,
+                .size = size,
+                .ticks = ticks,
+                .distance = distance,
+            };
+        }
+    }
+    return best;
+}
+
+/** write current-target and queued-kill Volatility blast previews. */
+static void col_write_volatility_blast_previews(
+    const ColosseumState* s,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    int tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
+    int reach = col_volatility_reach_for_tier(tier);
+    int target = col_player_target_slot(s);
+    if (tier > 0 && target >= 0 && target < COLO_MAX_NPCS &&
+            col_npc_is_live_enemy(&s->npcs[target])) {
+        const ColoNPC* npc = &s->npcs[target];
+        int size = col_npc_effective_size(npc);
+        int center_x = npc->x + size / 2;
+        int center_y = npc->y + size / 2;
+        obs[i++] = col_obs_rel_x(center_x, s->player.x);
+        obs[i++] = col_obs_rel_y(center_y, s->player.y);
+        obs[i++] = col_clamp01((float)reach / 2.0f);
+        obs[i++] = col_volatility_player_in_blast(s, npc->x, npc->y, size, tier)
+            ? 1.0f : 0.0f;
+    } else {
+        for (int k = 0; k < 4; k++) obs[i++] = 0.0f;
+    }
+
+    ColoVolatilityBlastPreview queued = col_soonest_queued_volatility_blast(s);
+    if (tier > 0 && queued.found) {
+        int center_x = queued.x + queued.size / 2;
+        int center_y = queued.y + queued.size / 2;
+        obs[i++] = col_obs_rel_x(center_x, s->player.x);
+        obs[i++] = col_obs_rel_y(center_y, s->player.y);
+        obs[i++] = col_clamp01((float)queued.ticks / 10.0f);
+        obs[i++] = col_volatility_player_in_blast(
+            s, queued.x, queued.y, queued.size, tier) ? 1.0f : 0.0f;
+    } else {
+        for (int k = 0; k < 4; k++) obs[i++] = 0.0f;
+    }
+    *idx = i;
+}
+
+/** count damage instances that can add Doom before the next action. */
+static int col_count_pre_move_doom_instances(const ColosseumState* s) {
+    int count = 0;
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
+        if (col_pending_hit_will_damage_pre_move(hit, s->player.prayer)) count++;
+    }
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_target(npc) || npc->type != COLO_JAVELIN_COLOSSUS)
+            continue;
+        const ColoJavelinState* jv = &npc->type_state.javelin;
+        if (jv->skyfall_pending && jv->skyfall_timer <= 1 &&
+                jv->skyfall_damage > 0 &&
+                s->player.x == jv->skyfall_tile_x &&
+                s->player.y == jv->skyfall_tile_y)
+            count++;
+    }
+    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
+        const ColoBeeSwarm* bee = &s->bees[b];
+        if (bee->phase != COLO_HAZARD_ALIVE || bee->npc_slot < 0) continue;
+        const ColoNPC* npc = &s->npcs[bee->npc_slot];
+        if (!npc->active || npc->type != COLO_BEE_SWARM) continue;
+        int contact = 0;
+        if (bee->move_timer <= 1) {
+            int next_x, next_y;
+            col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
+            int size = col_npc_effective_size(npc);
+            contact = encounter_entity_footprints_overlap(
+                next_x, next_y, size, s->player.x, s->player.y, 1);
+        } else {
+            contact = col_bee_swarm_contacts_player(s, npc);
+        }
+        if (contact) count++;
+    }
+    if (s->solarflare.active && col_mod_tier(s, COLO_MOD_SOLARFLARE) > 0) {
+        int solarflare_contact_step = s->solarflare.step;
+        if (s->solarflare.pause_timer <= 0 && s->solarflare.move_timer <= 1) {
+            solarflare_contact_step++;
+            if (solarflare_contact_step == COLO_SOLARFLARE_RING_STEPS)
+                solarflare_contact_step = 0;
+        }
+        for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+            int x, y;
+            col_solarflare_tile(p, solarflare_contact_step, &x, &y);
+            if (x == s->player.x && y == s->player.y) count++;
+        }
+    }
+    for (int m = 0; m < s->molten_count; m++) {
+        if (s->molten_x[m] == s->player.x && s->molten_y[m] == s->player.y) {
+            count++;
+            break;
+        }
+    }
+    if (s->player_venom > 0 && s->player_venom_timer <= 1) count++;
+    int volatility_tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
+    if (volatility_tier > 0) {
+        ColoVolatilityBlastPreview queued = col_soonest_queued_volatility_blast(s);
+        if (queued.found && queued.ticks <= 1 &&
+                col_volatility_player_in_blast(
+                    s, queued.x, queued.y, queued.size, volatility_tier))
+            count++;
+    }
+    return count;
 }
 
 /** write the modifier-hazard obs tail (COLO_MODIFIER_HAZARD_OBS_SIZE floats):
-    Doom (active, stacks frac), player venom (active, frac), nearest bee swarm
-    (dx, dy, present), nearest Solarflare orb (dx, dy, active), nearest molten pool. */
+    Doom, venom, nearest bee swarm, Solarflare, top-4 molten pools, Volatility. */
 static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
     int doom_cap = doom_tier > 0 ? COLO_DOOM_CAP[doom_tier] : 0;
+    int doom_pending = doom_cap > 0 ? col_count_pre_move_doom_instances(s) : 0;
     obs[i++] = doom_tier > 0 ? 1.0f : 0.0f;
     obs[i++] = doom_cap > 0 ? col_clamp01((float)s->doom_stacks / (float)doom_cap) : 0.0f;
+    obs[i++] = doom_cap > 0 && s->doom_stacks + 1 >= doom_cap ? 1.0f : 0.0f;
+    obs[i++] = doom_cap > 0 ? col_clamp01((float)doom_pending / (float)doom_cap) : 0.0f;
 
     obs[i++] = s->player_venom > 0 ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_CAP);
+    obs[i++] = s->player_venom > 0
+        ? col_clamp01((float)s->player_venom_timer / (float)COLO_VENOM_INTERVAL)
+        : 0.0f;
 
     ColoNearestHazardTile nearest_bee = col_nearest_hazard_tile_none();
     for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
@@ -896,7 +1162,8 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 
     *idx = i;
     col_write_nearest_modifier_solarflare(s, obs, idx);
-    col_write_nearest_modifier_molten(s, obs, idx);
+    col_write_top_modifier_molten(s, obs, idx);
+    col_write_volatility_blast_previews(s, obs, idx);
 }
 
 

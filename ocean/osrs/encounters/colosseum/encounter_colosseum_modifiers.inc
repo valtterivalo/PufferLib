@@ -472,17 +472,32 @@ static void col_mod_reentry_on_skyfall(ColosseumState* s, int tile_x, int tile_y
 
 /* ----- Volatility (death explosion) ----------------------------------------- */
 
-/** Volatility hook on NPC death: an explosion `tier` tiles beyond the NPC
-    footprint hits the player if caught in it (flat 25 on the death tick, D20);
-    T3 also leaves an until-wave-end molten pool at the death centre. Call
-    before the slot is reused (uses the NPC's last position). */
+/** Volatility blast reach by active tier. */
+static int col_volatility_reach_for_tier(int tier) {
+    if (tier <= 0) return 0;
+    return tier >= 2 ? 2 : 1;
+}
+
+/** true when the player is inside the Volatility blast footprint. */
+static int col_volatility_player_in_blast(
+    const ColosseumState* s,
+    int x,
+    int y,
+    int size,
+    int tier
+) {
+    int reach = col_volatility_reach_for_tier(tier);
+    if (reach <= 0) return 0;
+    int span = size + 2 * reach;
+    return encounter_entity_footprints_overlap(
+        x - reach, y - reach, span, s->player.x, s->player.y, 1);
+}
+
+/** Volatility hook on NPC death. */
 static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int size) {
     int tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
     if (tier == 0) return;
-    int reach = (tier >= 2) ? 2 : 1;
-    int span = size + 2 * reach;
-    int ox = x - reach, oy = y - reach;
-    if (encounter_entity_footprints_overlap(ox, oy, span, s->player.x, s->player.y, 1)) {
+    if (col_volatility_player_in_blast(s, x, y, size, tier)) {
         encounter_damage_player(&s->player, COLO_VOLATILITY_MAX_HIT, &s->tick_scratch.damage_received);
         col_mod_on_player_damaged(s, COLO_VOLATILITY_MAX_HIT);
     }
@@ -545,6 +560,33 @@ static int col_bee_swarm_contacts_player(const ColosseumState* s, const ColoNPC*
     return encounter_entity_footprints_overlap(npc->x, npc->y, size, s->player.x, s->player.y, 1);
 }
 
+/** compute the bee swarm's next anchor tile without mutating state. */
+static void col_bee_swarm_next_tile_toward_player(
+    const ColosseumState* s,
+    const ColoNPC* npc,
+    int* out_x,
+    int* out_y
+) {
+    if (!s || !npc || !out_x || !out_y) abort();
+    int size = col_npc_effective_size(npc);
+    int x = npc->x;
+    int y = npc->y;
+    int hi_x = x + size - 1;
+    int hi_y = y + size - 1;
+    if (s->player.x < x) x--;
+    else if (s->player.x > hi_x) x++;
+    if (s->player.y < y) y--;
+    else if (s->player.y > hi_y) y++;
+    int max_x = COLO_ARENA_MAX_X - size + 1;
+    int max_y = COLO_ARENA_MAX_Y - size + 1;
+    if (x < COLO_ARENA_MIN_X) x = COLO_ARENA_MIN_X;
+    if (y < COLO_ARENA_MIN_Y) y = COLO_ARENA_MIN_Y;
+    if (x > max_x) x = max_x;
+    if (y > max_y) y = max_y;
+    *out_x = x;
+    *out_y = y;
+}
+
 /** unblockable bee-contact damage roll (15-20). The serpentine helm immunizes
     poison and venom, which on the dedicated Bee_Swarm wiki page extends to the
     swarm's contact damage (full immunity). The colosseum carries no standalone
@@ -560,14 +602,10 @@ static int col_bee_swarm_contact_damage(ColosseumState* s) {
 /** move the 2x2 bee footprint one tile toward the player's tile when the player
     is outside the current x or y span. */
 static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
-    int size = col_npc_effective_size(npc);
-    int hi_x = npc->x + size - 1;
-    int hi_y = npc->y + size - 1;
-    if (s->player.x < npc->x) npc->x--;
-    else if (s->player.x > hi_x) npc->x++;
-    if (s->player.y < npc->y) npc->y--;
-    else if (s->player.y > hi_y) npc->y++;
-    col_clamp_bee_swarm_to_arena(npc);
+    int next_x, next_y;
+    col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
+    npc->x = next_x;
+    npc->y = next_y;
     npc->target_x = s->player.x;
     npc->target_y = s->player.y;
 }
