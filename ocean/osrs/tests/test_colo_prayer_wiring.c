@@ -51,7 +51,7 @@ static int nearest_target(const ColosseumState* s) {
         int d = col_npc_dist_to_player(s, npc);
         if (d < best_dist) { best_dist = d; best_slot = slot; }
     }
-    return best_slot < 0 ? 0 : best_slot + 1;
+    return best_slot < 0 ? 0 : col_primary_attack_action_for_obs_slot(best_slot);
 }
 
 static void run_test(const char* label, PrayerPolicy policy, int start_wave, int n_eps) {
@@ -87,7 +87,7 @@ static void run_test(const char* label, PrayerPolicy policy, int start_wave, int
             actions[COLO_HEAD_PRAYER] = (policy == POLICY_HOLD_MELEE)
                 ? COLO_OVERHEAD_MELEE : telegraph_overhead(&s);
             actions[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
-            actions[COLO_HEAD_TARGET] = nearest_target(&s);  /* stand, attack nearest */
+            actions[COLO_HEAD_PRIMARY] = nearest_target(&s);
 
             /* telegraph accuracy: record each live NPC's predicted style for hits
                the telegraph says land THIS tick (ticks <= 1). */

@@ -1,9 +1,7 @@
 /**
  * @file trace_colo_move.c
- * @brief Minimal movement trace: force TARGET>0 + MOVE>0 every tick and dump the
- *        env's action_debug_log line. Shows whether an explicit move is applied
- *        while the attack interaction stays active (the "moonwalk": running while
- *        locked onto and facing the NPC, which is not legal OSRS).
+ * @brief Minimal movement trace: alternate PRIMARY attack and PRIMARY move while
+ *        dumping the env's action_debug_log line.
  *
  * BUILD: cc -std=c11 -O2 -I. -o /tmp/trace_colo_move ocean/osrs/tests/trace_colo_move.c -lm
  */
@@ -22,7 +20,7 @@ static int nearest_live_obs_target(const ColosseumState* s) {
         int d = col_npc_dist_to_player(s, npc);
         if (d < best_dist) { best_dist = d; best_slot = slot; }
     }
-    return best_slot < 0 ? 0 : best_slot + 1;
+    return best_slot < 0 ? 0 : col_primary_attack_action_for_obs_slot(best_slot);
 }
 
 /* first walkable move action that actually displaces the player. */
@@ -59,8 +57,9 @@ int main(void) {
                 if (s.modifiers.draft_options[o] >= 0) { opt = o; break; }
             actions[COLO_HEAD_MODIFIER_SELECT] = opt + 1;
         } else {
-            actions[COLO_HEAD_TARGET] = nearest_live_obs_target(&s);  /* re-click target */
-            actions[COLO_HEAD_MOVE] = first_walkable_move(&s);        /* AND move */
+            actions[COLO_HEAD_PRIMARY] = (tick & 1)
+                ? first_walkable_move(&s)
+                : nearest_live_obs_target(&s);
         }
         col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
     }

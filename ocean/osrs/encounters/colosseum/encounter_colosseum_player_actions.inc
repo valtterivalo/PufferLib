@@ -3,50 +3,52 @@
  * @file encounter_colosseum_player_actions.inc
  * @brief Action head layout + player tick, mirroring inferno player_actions.
  *
- * Action heads (36): MOVE, PRAYER, TARGET, 28 inventory-click heads, SPEC,
- * MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL. Inventory heads share the
- * same 29-way domain: 0=noop, k=click inventory cell k-1.
+ * Action heads (35): PRIMARY, PRAYER, 28 inventory-click heads, SPEC,
+ * MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL. PRIMARY is 0=noop,
+ * 1..24=move, 25..48=attack obs slot 0..23. Inventory heads share the same
+ * 29-way domain: 0=noop, k=click inventory cell k-1.
  */
 
-#define COLO_HEAD_MOVE            0  /* 25: idle + 8 walk + 16 run */
+#define COLO_HEAD_PRIMARY         0  /* noop + 24 moves + 24 attack slots */
 #define COLO_HEAD_PRAYER          1  /* no_change, off, set_refresh_melee/ranged/magic */
-#define COLO_HEAD_TARGET          2  /* COLO_OBS_NPCS+1: none or obs slot */
-#define COLO_HEAD_INV_CLICK_0     3
-#define COLO_HEAD_INV_CLICK_1     4
-#define COLO_HEAD_INV_CLICK_2     5
-#define COLO_HEAD_INV_CLICK_3     6
-#define COLO_HEAD_INV_CLICK_4     7
-#define COLO_HEAD_INV_CLICK_5     8
-#define COLO_HEAD_INV_CLICK_6     9
-#define COLO_HEAD_INV_CLICK_7    10
-#define COLO_HEAD_INV_CLICK_8    11
-#define COLO_HEAD_INV_CLICK_9    12
-#define COLO_HEAD_INV_CLICK_10   13
-#define COLO_HEAD_INV_CLICK_11   14
-#define COLO_HEAD_INV_CLICK_12   15
-#define COLO_HEAD_INV_CLICK_13   16
-#define COLO_HEAD_INV_CLICK_14   17
-#define COLO_HEAD_INV_CLICK_15   18
-#define COLO_HEAD_INV_CLICK_16   19
-#define COLO_HEAD_INV_CLICK_17   20
-#define COLO_HEAD_INV_CLICK_18   21
-#define COLO_HEAD_INV_CLICK_19   22
-#define COLO_HEAD_INV_CLICK_20   23
-#define COLO_HEAD_INV_CLICK_21   24
-#define COLO_HEAD_INV_CLICK_22   25
-#define COLO_HEAD_INV_CLICK_23   26
-#define COLO_HEAD_INV_CLICK_24   27
-#define COLO_HEAD_INV_CLICK_25   28
-#define COLO_HEAD_INV_CLICK_26   29
-#define COLO_HEAD_INV_CLICK_27   30
-#define COLO_HEAD_SPEC           31  /* none, arm equipped spec, disarm */
-#define COLO_HEAD_MODIFIER_SELECT 32  /* none + pick draft option 0/1/2 */
-#define COLO_HEAD_GRAPPLE_PARRY  33  /* none + the 5 grapple callout slots (A12) */
-#define COLO_HEAD_OFFENSIVE      34  /* no_change, off, piety, rigour, augury */
-#define COLO_HEAD_SPELL          35  /* none, summon-thrall, death-charge (Arceuus) */
+#define COLO_HEAD_INV_CLICK_0     2
+#define COLO_HEAD_INV_CLICK_1     3
+#define COLO_HEAD_INV_CLICK_2     4
+#define COLO_HEAD_INV_CLICK_3     5
+#define COLO_HEAD_INV_CLICK_4     6
+#define COLO_HEAD_INV_CLICK_5     7
+#define COLO_HEAD_INV_CLICK_6     8
+#define COLO_HEAD_INV_CLICK_7     9
+#define COLO_HEAD_INV_CLICK_8    10
+#define COLO_HEAD_INV_CLICK_9    11
+#define COLO_HEAD_INV_CLICK_10   12
+#define COLO_HEAD_INV_CLICK_11   13
+#define COLO_HEAD_INV_CLICK_12   14
+#define COLO_HEAD_INV_CLICK_13   15
+#define COLO_HEAD_INV_CLICK_14   16
+#define COLO_HEAD_INV_CLICK_15   17
+#define COLO_HEAD_INV_CLICK_16   18
+#define COLO_HEAD_INV_CLICK_17   19
+#define COLO_HEAD_INV_CLICK_18   20
+#define COLO_HEAD_INV_CLICK_19   21
+#define COLO_HEAD_INV_CLICK_20   22
+#define COLO_HEAD_INV_CLICK_21   23
+#define COLO_HEAD_INV_CLICK_22   24
+#define COLO_HEAD_INV_CLICK_23   25
+#define COLO_HEAD_INV_CLICK_24   26
+#define COLO_HEAD_INV_CLICK_25   27
+#define COLO_HEAD_INV_CLICK_26   28
+#define COLO_HEAD_INV_CLICK_27   29
+#define COLO_HEAD_SPEC           30  /* none, arm equipped spec, disarm */
+#define COLO_HEAD_MODIFIER_SELECT 31  /* none + pick draft option 0/1/2 */
+#define COLO_HEAD_GRAPPLE_PARRY  32  /* none + the 5 grapple callout slots (A12) */
+#define COLO_HEAD_OFFENSIVE      33  /* no_change, off, piety, rigour, augury */
+#define COLO_HEAD_SPELL          34  /* none, summon-thrall, death-charge (Arceuus) */
 
 #define COLO_INV_CLICK_HEADS 28
 #define COLO_INV_CLICK_DIM 29
+#define COLO_PRIMARY_ATTACK_BASE ENCOUNTER_MOVE_ACTIONS
+#define COLO_PRIMARY_DIM (ENCOUNTER_MOVE_ACTIONS + COLO_OBS_NPCS)
 #define COLO_OVERHEAD_DIM ENCOUNTER_OVERHEAD_DIM_PVE
 #define COLO_SPEC_DIM 3
 #define COLO_SPELL_DIM 3   /* none, summon-thrall, death-charge */
@@ -68,9 +70,8 @@
 #define COLO_GRAPPLE_PARRY_DIM (1 + COLO_NUM_GRAPPLE_SLOTS)  /* 6 */
 
 #define COLO_ACTION_DIMS_INIT { \
-    ENCOUNTER_MOVE_ACTIONS, \
+    COLO_PRIMARY_DIM, \
     COLO_OVERHEAD_DIM, \
-    COLO_OBS_NPCS + 1, \
     COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
     COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
     COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
@@ -86,7 +87,7 @@
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
 #define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + COLO_OVERHEAD_DIM + \
-    COLO_OBS_NPCS + 1 + COLO_INV_CLICK_HEADS * COLO_INV_CLICK_DIM + COLO_SPEC_DIM + \
+    COLO_OBS_NPCS + COLO_INV_CLICK_HEADS * COLO_INV_CLICK_DIM + COLO_SPEC_DIM + \
     COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM + ENCOUNTER_OFFENSIVE_DIM + \
     COLO_SPELL_DIM)
 
@@ -95,6 +96,24 @@ static int col_action_head_mask_offset(int head) {
     for (int h = 0; h < head; h++)
         offset += COLO_ACTION_DIMS[h];
     return offset;
+}
+
+static int col_primary_attack_action_for_obs_slot(int obs_slot) {
+    if (obs_slot < 0 || obs_slot >= COLO_OBS_NPCS) {
+        fprintf(stderr, "colosseum primary attack obs slot out of range: %d\n", obs_slot);
+        abort();
+    }
+    return COLO_PRIMARY_ATTACK_BASE + obs_slot;
+}
+
+static int col_primary_obs_slot_from_action(int primary_action) {
+    if (primary_action < COLO_PRIMARY_ATTACK_BASE ||
+            primary_action >= COLO_PRIMARY_DIM) {
+        fprintf(stderr, "colosseum primary attack action out of range: %d\n",
+            primary_action);
+        abort();
+    }
+    return primary_action - COLO_PRIMARY_ATTACK_BASE;
 }
 
 
@@ -183,10 +202,10 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
         col_mark_live_loadout_dirty(s);
     if (ctx && ctx->config.action_debug_log) {
         fprintf(stderr,
-            "colo_action tick=%d pretick move=%d prayer_action=%d target=%d "
+            "colo_action tick=%d pretick primary=%d prayer_action=%d "
             "offensive_action=%d spell=%d prayer=%d->%d offensive=%d->%d pp=%d->%d\n",
-            s->tick, actions[COLO_HEAD_MOVE], actions[COLO_HEAD_PRAYER],
-            actions[COLO_HEAD_TARGET], actions[COLO_HEAD_OFFENSIVE],
+            s->tick, actions[COLO_HEAD_PRIMARY], actions[COLO_HEAD_PRAYER],
+            actions[COLO_HEAD_OFFENSIVE],
             actions[COLO_HEAD_SPELL], prev_prayer, s->player.prayer,
             prev_offensive, s->player.offensive_prayer, prayer_before,
             s->player.current_prayer);
@@ -1354,21 +1373,28 @@ static void col_tick_player_ctx(
     if (grapple_act > 0 && grapple_act <= COLO_NUM_GRAPPLE_SLOTS)
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
-    /* target acquisition: translate the obs-slot target action into an NPC slot */
-    int target_act = actions[COLO_HEAD_TARGET];
+    int primary_act = actions[COLO_HEAD_PRIMARY];
+    if (primary_act < 0 || primary_act >= COLO_PRIMARY_DIM) {
+        fprintf(stderr, "colosseum primary action out of range: %d\n", primary_act);
+        abort();
+    }
+
     int has_new_target = 0;
     int new_target_slot = -1;
-    if (target_act > 0) {
-        int npc_slot = col_obs_slot_to_npc(s, target_act - 1);
+    int move_act = 0;
+    if (primary_act > 0 && primary_act < ENCOUNTER_MOVE_ACTIONS) {
+        move_act = primary_act;
+    } else if (primary_act >= COLO_PRIMARY_ATTACK_BASE) {
+        int obs_slot = col_primary_obs_slot_from_action(primary_act);
+        int npc_slot = col_obs_slot_to_npc(s, obs_slot);
         if (npc_slot >= 0 && s->npcs[npc_slot].active) {
             has_new_target = 1;
             new_target_slot = npc_slot;
         }
     }
 
-    int has_explicit_move = (actions[COLO_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
+    int has_explicit_move = (move_act > 0 || s->player_dest_x >= 0);
     OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
-    int move_act = actions[COLO_HEAD_MOVE];
     if (has_explicit_move) {
         if (s->player_dest_x >= 0) move_kind = OSRS_PLAYER_MOVE_DESTINATION;
         else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)

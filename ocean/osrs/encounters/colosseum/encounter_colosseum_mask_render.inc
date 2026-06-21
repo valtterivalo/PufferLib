@@ -14,9 +14,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     col_refresh_current_obs_slots_ctx(s, ctx);
     int offset = 0;
 
-    /* HEAD_MOVE (25): idle always valid; each walk/run valid iff the target tile
-       is walkable (in-arena, boss-arena bound on wave 12, not pillar/NPC-blocked).
-       B6: the player is frozen while a draft is open — only idle is valid. */
+    /* HEAD_PRIMARY (49): noop always valid, move actions follow old movement
+       legality, attack actions require a live targetable obs slot. */
     int frozen = s->modifiers.draft_pending;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
@@ -24,6 +23,10 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
+    /* Inventory clicks run before primary and can clear the lock, so the held
+       target stays valid for gear switch plus re-attack ticks. */
+    for (int n = 0; n < COLO_OBS_NPCS; n++)
+        mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
     /* HEAD_PRAYER (5): no_change always valid; off valid iff one is active;
        set melee/ranged/magic valid iff prayer points remain. */
@@ -32,12 +35,6 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
-
-    /* HEAD_TARGET (COLO_OBS_NPCS+1): none always valid; slot valid iff it holds a
-       live attackable NPC and the player is not draft-frozen (B6). */
-    mask[offset++] = 1.0f;
-    for (int n = 0; n < COLO_OBS_NPCS; n++)
-        mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
     int inventory_cell_actionable[COLO_INVENTORY_DISPLAY_SLOTS];
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)

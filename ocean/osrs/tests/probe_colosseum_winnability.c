@@ -101,7 +101,7 @@ static int scripted_target(const ColosseumState* s) {
         int d = col_npc_dist_to_player(s, npc);
         if (d < best_dist) { best_dist = d; best_slot = slot; }
     }
-    return best_slot < 0 ? 0 : best_slot + 1;
+    return best_slot < 0 ? 0 : col_primary_attack_action_for_obs_slot(best_slot);
 }
 
 static int scripted_least_bad_modifier(const ColosseumState* s) {
@@ -134,10 +134,7 @@ static void scripted_policy(ColosseumState* s, int* actions) {
     actions[COLO_HEAD_PRAYER] = scripted_overhead(s);
     actions[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
     int move = scripted_move(s);
-    actions[COLO_HEAD_MOVE] = move;
-    /* a ground-click move cancels the attack interaction in OSRS, so to reposition
-       we drop the target this tick and re-click to attack on a stand tick. */
-    actions[COLO_HEAD_TARGET] = (move > 0) ? 0 : scripted_target(s);
+    actions[COLO_HEAD_PRIMARY] = move > 0 ? move : scripted_target(s);
     if (s->player.current_hitpoints < 55) {
         int heal_cell = scripted_heal_cell(s);
         if (heal_cell >= 0) actions[COLO_HEAD_INV_CLICK_0] = heal_cell + 1;

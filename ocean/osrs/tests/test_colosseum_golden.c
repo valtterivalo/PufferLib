@@ -69,8 +69,7 @@ static void fill_actions(
             (int)(splitmix64(action_rng) % (uint64_t)COLO_ACTION_DIMS[head]);
     }
     if (s->modifiers.draft_pending) {
-        actions[COLO_HEAD_MOVE] = 0;
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
         actions[COLO_HEAD_MODIFIER_SELECT] =
             1 + (int)(splitmix64(action_rng) % COLO_MODIFIER_DRAFT_OPTIONS);
     }
@@ -202,18 +201,18 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 4000
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xdfc968a70de4be13ULL,
-    0x0a57fc266a9aded7ULL,
-    0x0a02488e758d1391ULL,
-    0x8b8542647e382b4fULL,
-    0xb4371f16e0ca130eULL,
-    0x100bcd62d625d970ULL,
-    0x24c6afde0b51fde5ULL,
-    0x6c82559789e411f9ULL,
-    0xe6afa2d587fd3830ULL,
-    0xb25a109a84b46729ULL,
-    0x277bffde4ea4fc58ULL,
-    0x62159eb93f78c46aULL,
+    0x8c6fd550768a17b6ULL,
+    0x39201c8b0840a6e2ULL,
+    0xe07f29cf0e35c416ULL,
+    0xadbe7f0526cae192ULL,
+    0xf1e39db7a8abffa4ULL,
+    0x9bf9f963db3fb6e1ULL,
+    0x5ed1d501e0607f21ULL,
+    0x409f32bd1da63cf5ULL,
+    0x9df63e58078f2bdeULL,
+    0x463aa1189ed2d8b7ULL,
+    0x9083e8eb5fcd2d61ULL,
+    0xa50fea0a8abde6a0ULL,
 };
 
 int main(int argc, char** argv) {

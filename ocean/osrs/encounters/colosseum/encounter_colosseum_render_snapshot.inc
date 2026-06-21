@@ -782,7 +782,7 @@ static void col_translate_human_input_ctx(
 ) {
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
 
-    encounter_translate_movement(hi, actions, COLO_HEAD_MOVE, col_get_player_for_input, state);
+    encounter_translate_movement(hi, actions, COLO_HEAD_PRIMARY, col_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
 
     ColosseumState* s = (ColosseumState*)state;
@@ -792,11 +792,11 @@ static void col_translate_human_input_ctx(
     /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
         int found_slot = col_find_target_obs_slot(s, hi->pending_target_idx);
-        actions[COLO_HEAD_TARGET] =
+        actions[COLO_HEAD_PRIMARY] =
             (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
-                ? found_slot + 1 : 0;
+                ? col_primary_attack_action_for_obs_slot(found_slot) : 0;
     } else {
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
     }
 
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
@@ -825,13 +825,13 @@ static void col_translate_human_commands_ctx(
             case HUMAN_COMMAND_WALK:
                 s->player_dest_x = cmd->world_x;
                 s->player_dest_y = cmd->world_y;
-                actions[COLO_HEAD_TARGET] = 0;
+                actions[COLO_HEAD_PRIMARY] = 0;
                 break;
             case HUMAN_COMMAND_ATTACK_NPC: {
                 int found_slot = col_find_target_obs_slot(s, cmd->npc_slot);
-                actions[COLO_HEAD_TARGET] =
+                actions[COLO_HEAD_PRIMARY] =
                     (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
-                        ? found_slot + 1 : 0;
+                        ? col_primary_attack_action_for_obs_slot(found_slot) : 0;
                 s->player_dest_x = -1;
                 s->player_dest_y = -1;
                 break;
@@ -1043,9 +1043,9 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .translate_human_input = col_translate_human_input_ctx,
     .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,
     .apply_lab_command = col_apply_lab_command_ctx,
-    .head_move = COLO_HEAD_MOVE,
+    .head_move = COLO_HEAD_PRIMARY,
     .head_prayer = COLO_HEAD_PRAYER,
-    .head_target = COLO_HEAD_TARGET,
+    .head_target = COLO_HEAD_PRIMARY,
 
     .render_post_tick = col_render_post_tick_ctx,
     .get_log = col_get_log_ctx,

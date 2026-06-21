@@ -449,7 +449,7 @@ static void test_step_loop_draft(void) {
 
     int idle[COLO_NUM_ACTION_HEADS] = {0};
     int walk_east[COLO_NUM_ACTION_HEADS] = {0};
-    walk_east[COLO_HEAD_MOVE] = 7;
+    walk_east[COLO_HEAD_PRIMARY] = 7;
 
     /* wave 1 spawns immediately, no draft, no modifier. */
     CHECK("no draft is open at reset", !draft_is_open(&s));
@@ -2111,7 +2111,7 @@ static void test_player_walks_through_npc_footprint(void) {
     CHECK("player pathfinding extra block ignores NPC footprint",
         col_pathfind_blocked(&wc, 17 + ctx.world_offset_x, 16 + ctx.world_offset_y) == 0);
     int actions[COLO_NUM_ACTION_HEADS] = {0};
-    actions[COLO_HEAD_MOVE] = forecast_move_action_for_delta(1, 0);
+    actions[COLO_HEAD_PRIMARY] = forecast_move_action_for_delta(1, 0);
     step_and_observe(&s, &ctx, actions);
     CHECK("explicit movement can step onto Sol footprint",
         s.player.x == 17 && s.player.y == 16);
@@ -2219,7 +2219,7 @@ static void test_warband_move_skip(void) {
 
     int idle[COLO_NUM_ACTION_HEADS] = {0};
     int walk_south[COLO_NUM_ACTION_HEADS] = {0};
-    walk_south[COLO_HEAD_MOVE] = 4;   /* walk (0,-1) */
+    walk_south[COLO_HEAD_PRIMARY] = 4;
 
     /* idle through the ready gap; the anchor arms on the first live tick (a
        windowless phase-0 tick, safe to stand on). */
@@ -3045,7 +3045,7 @@ static void test_sol_adjacency_gate_and_kiting(void) {
     /* kiting: walking away (east along the open row) during the cooldown
        pushes the third attack well past another per-attack delay. */
     int walk_east[COLO_NUM_ACTION_HEADS] = {0};
-    walk_east[COLO_HEAD_MOVE] = 7;
+    walk_east[COLO_HEAD_PRIMARY] = 7;
     int third_attack_tick = -1;
     for (int t = 0; t < 40 && third_attack_tick < 0; t++) {
         s.player.current_hitpoints = 99;
@@ -4582,10 +4582,59 @@ static void test_matchup_dpt_obs_ranking(void) {
     CHECK("clustered Venator preview sees extra bounces", clustered_extra >= 1);
 }
 
+static void test_primary_head_resolution(void) {
+    printf("test_primary_head_resolution\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 881, 16, 16);
+    s.wave_ready_delay = 0;
+    s.wave_spawn_delay = 0;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 18, 16);
+    s.npcs[0].hp = 200;
+    s.npcs[0].max_hp = 200;
+    col_rebuild_player_collision_flags(&s);
+    col_refresh_current_obs_slots_ctx(&s, &ctx);
+    int obs_slot = col_find_target_obs_slot(&s, 0);
+    int attack_action = col_primary_attack_action_for_obs_slot(obs_slot);
+
+    int attack[COLO_NUM_ACTION_HEADS] = {0};
+    attack[COLO_HEAD_PRIMARY] = attack_action;
+    col_tick_player_ctx(&s, &ctx, attack, 1);
+    CHECK("PRIMARY attack action sets the mapped NPC interaction",
+        osrs_interaction_active(&s.interaction) && s.interaction.target_slot == 0);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    col_tick_player_ctx(&s, &ctx, idle, 1);
+    CHECK("PRIMARY noop holds the existing interaction",
+        osrs_interaction_active(&s.interaction) && s.interaction.target_slot == 0);
+
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int primary_offset = col_action_head_mask_offset(COLO_HEAD_PRIMARY);
+    CHECK("held PRIMARY target stays valid for inventory cancel and re-attack",
+        mask[primary_offset + attack_action] == 1.0f);
+
+    int move_action = forecast_move_action_for_delta(1, 0);
+    int move[COLO_NUM_ACTION_HEADS] = {0};
+    move[COLO_HEAD_PRIMARY] = move_action;
+    int x_before = s.player.x;
+    col_tick_player_ctx(&s, &ctx, move, 1);
+    CHECK("PRIMARY move cancels the held interaction",
+        !osrs_interaction_active(&s.interaction));
+    CHECK("PRIMARY move walks using the old movement action mapping",
+        s.player.x == x_before + 1 && s.player.y == 16);
+
+    col_tick_player_ctx(&s, &ctx, attack, 1);
+    CHECK("PRIMARY attack reacquires the mapped NPC after movement",
+        osrs_interaction_active(&s.interaction) && s.interaction.target_slot == 0);
+}
+
 static void test_combat_fidelity_contract_sizes(void) {
     printf("test_combat_fidelity_contract_sizes\n");
     CHECK("three weapon sets (melee/ranged/magic)", COLO_NUM_WEAPON_SETS == 3);
-    CHECK("thirty-six action heads (28 inventory click heads)", COLO_NUM_ACTION_HEADS == 36);
+    CHECK("thirty-five action heads (28 inventory click heads)", COLO_NUM_ACTION_HEADS == 35);
+    CHECK("first inventory click head follows PRIMARY and PRAYER",
+        COLO_HEAD_INV_CLICK_0 == 2);
     CHECK("inventory click head dim is 29", COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
@@ -4597,14 +4646,16 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("snapshot version is v13", COLO_SNAPSHOT_VERSION == 13u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
-    CHECK("TARGET head covers all NPC slots + none", COLO_ACTION_DIMS[COLO_HEAD_TARGET] == 25);
+    CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
+        COLO_ACTION_DIMS[COLO_HEAD_PRIMARY] == COLO_PRIMARY_DIM &&
+        COLO_ACTION_DIMS[COLO_HEAD_PRIMARY] == 49);
     CHECK("player block remains 36", COLO_PLAYER_OBS_SIZE == 36);
 
     /* recompute the mask size independently from the head dims and compare. */
     int mask_sum = 0;
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) mask_sum += COLO_ACTION_DIMS[h];
     CHECK("mask size equals the summed action-head dims",
-        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 888);
+        COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 887);
 
     /* recompute the obs width independently from the section constants. */
     int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE +
@@ -6091,7 +6142,7 @@ static void test_stage3_t1_human_rearrange_swaps_inventory_slots(void) {
     CHECK("human rearrange moves claws to source slot",
         s.inventory_cells[bow_cell].item_idx == ITEM_DRAGON_CLAWS);
     CHECK("human rearrange leaves action space heads unchanged",
-        COLO_NUM_ACTION_HEADS == 36 && COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
+        COLO_NUM_ACTION_HEADS == 35 && COLO_ACTION_DIMS[COLO_HEAD_INV_CLICK_0] == 29);
     human_input_destroy(&hi);
 }
 
@@ -6369,7 +6420,7 @@ static void test_stage3_t4_mask_inventory_heads_flag(void) {
     CHECK("mask_inventory_heads pins every inventory head to noop only",
         all_inventory_heads_pinned_to_noop);
     CHECK("mask_inventory_heads leaves the action-mask size unchanged",
-        COLO_ACTION_MASK_SIZE == 888);
+        COLO_ACTION_MASK_SIZE == 887);
 
     geo_clear_npcs(&s);
     s.modifiers.draft_pending = 0;
@@ -6423,7 +6474,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         step_and_observe(&s, &ctx, actions);
     }
     CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2900);
-    CHECK("T6 mask running-index assert reached 888", COLO_ACTION_MASK_SIZE == 888);
+    CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 
 int main(void) {
@@ -6517,6 +6568,7 @@ int main(void) {
     test_npc_magic_defence_rolls_off_magic_level();
     test_total_damage_by_type_captures_typeless();
     test_matchup_dpt_obs_ranking();
+    test_primary_head_resolution();
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();
     test_venator_bow_bounce_colosseum_integration();

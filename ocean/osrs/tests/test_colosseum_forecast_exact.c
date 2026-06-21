@@ -237,8 +237,7 @@ static void exact_trace_actions(
         actions[head] = (int)(exact_splitmix64(rng) % (uint64_t)COLO_ACTION_DIMS[head]);
     }
     if (s->modifiers.draft_pending) {
-        actions[COLO_HEAD_MOVE] = 0;
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
         actions[COLO_HEAD_MODIFIER_SELECT] = 1 +
             (int)(exact_splitmix64(rng) % COLO_MODIFIER_DRAFT_OPTIONS);
     }

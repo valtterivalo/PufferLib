@@ -144,8 +144,7 @@ static void run_wave(FlipStats* stats, int wave_label, int start_wave,
             actions[head] = (int)((rng >> 33) % (uint64_t)COLO_ACTION_DIMS[head]);
         }
         if (s.modifiers.draft_pending) {
-            actions[COLO_HEAD_MOVE] = 0;
-            actions[COLO_HEAD_TARGET] = 0;
+            actions[COLO_HEAD_PRIMARY] = 0;
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
             actions[COLO_HEAD_MODIFIER_SELECT] =
                 1 + (int)((rng >> 33) % COLO_MODIFIER_DRAFT_OPTIONS);
