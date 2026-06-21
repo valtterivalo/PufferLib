@@ -76,6 +76,14 @@ static EncounterLoadoutStats test_col_spec_stats_for_kind(
     const ColosseumState* s,
     int kind
 );
+static void venator_spawn_enemy(
+    ColosseumState* s,
+    int slot,
+    ColoNpcType type,
+    int x,
+    int y,
+    int size
+);
 
 /* drive one step with a fixed action vector, then exercise the obs + mask writers
    (their internal running-index asserts validate the layout each tick). */
@@ -4261,6 +4269,71 @@ static void test_npc_magic_defence_rolls_off_magic_level(void) {
         mt_melee < mt_ranged && mt_melee < mt_magic);
 }
 
+/** Compute expected DPT for one canonical live NPC type and weapon set. */
+static float test_expected_dpt_for_type(
+    const ColoWeaponMatchupStats matchup[COLO_NUM_WEAPON_SETS],
+    ColoWeaponSet set,
+    ColoNpcType type
+) {
+    ColoNPC npc = col_matchup_representative_npc(type);
+    const ColoNpcStats* ns = &COLO_NPC_STATS[type];
+    return col_expected_dpt_vs_npc(
+        matchup[set].stats,
+        matchup[set].effects,
+        matchup[set].weapon_item,
+        matchup[set].style,
+        matchup[set].melee_style,
+        &npc,
+        ns);
+}
+
+/** Assert matchup obs ranks hard-counter styles and Venator preview geometry. */
+static void test_matchup_dpt_obs_ranking(void) {
+    printf("test_matchup_dpt_obs_ranking\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 771);
+    col_build_npc_stats();
+    s.player.current_attack = 118;
+    s.player.current_strength = 118;
+    col_mark_live_loadout_dirty(&s);
+
+    ColoWeaponMatchupStats matchup[COLO_NUM_WEAPON_SETS];
+    col_build_weapon_matchup_stats(&s, matchup);
+    float shaman_melee =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_MELEE, COLO_SERPENT_SHAMAN);
+    float shaman_ranged =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_RANGED, COLO_SERPENT_SHAMAN);
+    float shaman_magic =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_MAGIC, COLO_SERPENT_SHAMAN);
+    float manticore_melee =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_MELEE, COLO_MANTICORE);
+    float manticore_ranged =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_RANGED, COLO_MANTICORE);
+    float manticore_magic =
+        test_expected_dpt_for_type(matchup, COLO_GEAR_MAGIC, COLO_MANTICORE);
+
+    CHECK("serpent shaman resists the magic set matchup DPT",
+        shaman_magic < shaman_melee && shaman_magic < shaman_ranged);
+    CHECK("manticore scythe matchup DPT is highest",
+        manticore_melee > manticore_ranged && manticore_melee > manticore_magic);
+
+    geo_clear_npcs(&s);
+    s.player.x = 12;
+    s.player.y = 16;
+    venator_spawn_enemy(&s, 0, COLO_FREMENNIK_BERSERKER, 16, 16, 1);
+    ColoVenatorPreviewTargets targets;
+    col_collect_venator_preview_targets(&s, &targets);
+    int isolated_extra = col_venator_extra_bounce_if_shot(&s, &targets, 0);
+    CHECK("isolated Venator preview has no extra bounces", isolated_extra == 0);
+
+    venator_spawn_enemy(&s, 1, COLO_FREMENNIK_ARCHER, 18, 16, 1);
+    venator_spawn_enemy(&s, 2, COLO_FREMENNIK_BERSERKER, 18, 17, 1);
+    col_collect_venator_preview_targets(&s, &targets);
+    int clustered_extra = col_venator_extra_bounce_if_shot(&s, &targets, 0);
+    CHECK("clustered Venator preview sees extra bounces", clustered_extra >= 1);
+}
+
 static void test_combat_fidelity_contract_sizes(void) {
     printf("test_combat_fidelity_contract_sizes\n");
     CHECK("three weapon sets (melee/ranged/magic)", COLO_NUM_WEAPON_SETS == 3);
@@ -4269,7 +4342,8 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2779", COLO_NUM_OBS == 2779);
+    CHECK("obs width is 2875", COLO_NUM_OBS == 2875);
+    CHECK("NPC slots have 51 features", COLO_FEATURES_PER_NPC == 51);
     CHECK("snapshot version is v11", COLO_SNAPSHOT_VERSION == 11u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -6098,7 +6172,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2779);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2875);
     CHECK("T6 mask running-index assert reached 888", COLO_ACTION_MASK_SIZE == 888);
 }
 
@@ -6190,6 +6264,7 @@ int main(void) {
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
     test_npc_magic_defence_rolls_off_magic_level();
+    test_matchup_dpt_obs_ranking();
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();
     test_venator_bow_bounce_colosseum_integration();

@@ -1104,6 +1104,69 @@ static int col_npc_target_def_roll(
     return (def_level + 9) * (def_bonus + 64);
 }
 
+/** Expected player weapon DPT against one Colosseum NPC using live combat math. */
+static float col_expected_dpt_vs_npc(
+    const EncounterLoadoutStats* ls,
+    const OsrsEquipmentEffectProfile* effects,
+    uint8_t weapon_item,
+    AttackStyle style,
+    MeleeStyle melee_style,
+    const ColoNPC* npc,
+    const ColoNpcStats* ns
+) {
+    if (!ls || !effects || !npc || !ns) abort();
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return 0.0f;
+    if (ls->attack_speed < 0 || ls->max_hit < 0) {
+        fprintf(stderr, "invalid Colosseum expected-DPT loadout\n");
+        abort();
+    }
+    if (style == ATTACK_STYLE_NONE || ls->attack_speed == 0 || ls->max_hit == 0)
+        return 0.0f;
+
+    OsrsItemEffectState tmp_effect_state = {0};
+    int base_att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
+    OsrsPreparedAttackEffects prepared =
+        osrs_prepare_attack_effects_for_melee_style(
+            effects,
+            &tmp_effect_state,
+            weapon_item,
+            style,
+            melee_style,
+            OSRS_MAGIC_ATTACK_NONE,
+            osrs_target_ref_none(),
+            1,
+            base_att_roll,
+            ls->max_hit,
+            osrs_target_effect_context_magic(ns->magic_level, ns->magic_att_bonus),
+            MAXED_BASE_HITPOINTS,
+            MAXED_BASE_HITPOINTS);
+
+    int target_def_roll = col_npc_target_def_roll(npc, ns, style, melee_style);
+    float hit_prob = (prepared.use_fang_accuracy || prepared.use_double_accuracy)
+        ? osrs_hit_chance_double(prepared.attack_roll, target_def_roll)
+        : osrs_hit_chance(prepared.attack_roll, target_def_roll);
+
+    int splat_count = 1;
+    if (weapon_item == ITEM_SCYTHE_OF_VITUR)
+        splat_count = osrs_scythe_splats_for_target_size(col_npc_effective_size(npc));
+
+    float expected_damage = 0.0f;
+    int forced_max_hit = ns->player_style_that_max_hits != ATTACK_STYLE_NONE &&
+                         ns->player_style_that_max_hits == style;
+    for (int splat = 0; splat < splat_count; splat++) {
+        int splat_max = prepared.max_hit >> splat;
+        if (forced_max_hit) {
+            expected_damage += (float)splat_max;
+        } else {
+            expected_damage +=
+                hit_prob * ((float)prepared.min_hit + (float)splat_max) * 0.5f;
+        }
+    }
+
+    return expected_damage / (float)ls->attack_speed;
+}
+
 static void col_player_attack_target_ctx(
     ColosseumState* s,
     ColosseumContext* ctx,
