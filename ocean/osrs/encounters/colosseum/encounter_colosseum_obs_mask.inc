@@ -4,10 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(36) + pillars(4 * 3) + inventory cells(28 * 35)
+ *   player(36) + pillars(4 * 3) + inventory cells(28 * 28)
  *   + equipped self(11 * 18) + npc slots(24 * 40) + modifiers(74) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2636.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2440.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -1277,7 +1277,6 @@ static void col_write_inventory_and_equipped_obs(
             cell->item_idx,
             cell->raw_osrs_id,
             cell->dose,
-            col_inventory_cell_actionable(s, cell_idx),
             col_inventory_cell_holds_equipped_item(s, cell_idx),
             deltas,
             s->player.base_hitpoints,
