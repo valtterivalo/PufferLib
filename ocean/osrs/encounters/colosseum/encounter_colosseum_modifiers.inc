@@ -428,46 +428,138 @@ static void col_mod_tick_totems(ColosseumState* s) {
 
 /* ----- molten pools (Reentry / Volatility T3 on waves 1-11) ----------------- */
 
+#define COLO_REENTRY_MOLTEN_MAX_HIT 15
+#define COLO_REENTRY_MOLTEN_BURN_INTERVAL 2
+
+typedef struct {
+    int x;
+    int y;
+} ColoMoltenPoolTile;
+
+static int col_mod_molten_pool_covered(const ColosseumState* s, int x, int y) {
+    for (int i = 0; i < s->molten_count; i++)
+        if (s->molten_x[i] == x && s->molten_y[i] == y) return 1;
+    return 0;
+}
+
+static int col_mod_molten_pool_available(const ColosseumState* s, int x, int y) {
+    return !col_static_blocked(x, y) && !col_mod_molten_pool_covered(s, x, y);
+}
+
+static ColoMoltenPoolTile col_mod_molten_pool_random_fallback(ColosseumState* s) {
+    ColoMoltenPoolTile candidates[COLO_ARENA_TILE_COUNT];
+    int count = 0;
+    for (int x = COLO_ARENA_MIN_X; x <= COLO_ARENA_MAX_X; x++) {
+        for (int y = COLO_ARENA_MIN_Y; y <= COLO_ARENA_MAX_Y; y++) {
+            if (!col_mod_molten_pool_available(s, x, y)) continue;
+            candidates[count++] = (ColoMoltenPoolTile){ .x = x, .y = y };
+        }
+    }
+    assert(count > 0);
+    return candidates[encounter_rand_int(&s->rng_state, count)];
+}
+
+static ColoMoltenPoolTile col_mod_molten_pool_tile_or_fallback(
+    ColosseumState* s,
+    int x,
+    int y
+) {
+    if (col_mod_molten_pool_available(s, x, y))
+        return (ColoMoltenPoolTile){ .x = x, .y = y };
+    return col_mod_molten_pool_random_fallback(s);
+}
+
 /** add a molten pool at (x,y) of the given ColoMoltenPoolKind. Overflow
     recycles a random slot so the list never asserts. */
-static void col_mod_add_molten_pool(ColosseumState* s, int x, int y, ColoMoltenPoolKind kind) {
+static void col_mod_add_molten_pool(
+    ColosseumState* s,
+    int x,
+    int y,
+    ColoMoltenPoolKind kind,
+    ColoMoltenPoolLifetime lifetime
+) {
     if (col_static_blocked(x, y)) return;
+    for (int i = 0; i < s->molten_count; i++) {
+        if (s->molten_x[i] != x || s->molten_y[i] != y) continue;
+        s->molten_kind[i] = kind;
+        if (lifetime == COLO_POOL_PERMANENT) s->molten_lifetime[i] = lifetime;
+        s->molten_burn_timer[i] = 0;
+        return;
+    }
     int slot;
     if (s->molten_count < COLO_SOL_HAZARD_TILES_MAX) slot = s->molten_count++;
     else slot = encounter_rand_int(&s->rng_state, COLO_SOL_HAZARD_TILES_MAX);
     s->molten_x[slot] = x;
     s->molten_y[slot] = y;
     s->molten_kind[slot] = kind;
+    s->molten_lifetime[slot] = lifetime;
+    s->molten_burn_timer[slot] = 0;
 }
 
-/** E10: every Reentry and Volatility pool is until-wave-end. */
+/** Clear only temporary pools at wave end; permanent Reentry pools survive. */
 static void col_mod_clear_wave_end_pools(ColosseumState* s) {
-    s->molten_count = 0;
+    int out = 0;
+    for (int i = 0; i < s->molten_count; i++) {
+        if (s->molten_lifetime[i] != COLO_POOL_PERMANENT) continue;
+        if (out != i) {
+            s->molten_x[out] = s->molten_x[i];
+            s->molten_y[out] = s->molten_y[i];
+            s->molten_kind[out] = s->molten_kind[i];
+            s->molten_lifetime[out] = s->molten_lifetime[i];
+            s->molten_burn_timer[out] = s->molten_burn_timer[i];
+        }
+        out++;
+    }
+    s->molten_count = out;
 }
 
-/** burn the player standing on any pool for the shared 5-9 molten-sand roll —
-    one burn per tick across overlapping pools (D35). */
+static int col_mod_molten_pool_damage(ColosseumState* s, ColoMoltenPoolKind kind) {
+    if (kind == COLO_POOL_REENTRY)
+        return 1 + encounter_rand_int(&s->rng_state, COLO_REENTRY_MOLTEN_MAX_HIT);
+    return COLO_MOLTEN_SAND_MIN_HIT
+        + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
+}
+
+/** burn the player standing on any pool. Reentry burns every other tick for
+    1-15 typeless; Volatility uses the weaker per-tick molten sand band. */
 static void col_mod_tick_molten_pools(ColosseumState* s) {
+    int burned = 0;
     for (int i = 0; i < s->molten_count; i++) {
-        if (s->player.x != s->molten_x[i] || s->player.y != s->molten_y[i]) continue;
-        int dmg = COLO_MOLTEN_SAND_MIN_HIT
-            + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
-        col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS);
-        s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
-        col_mod_on_player_damaged(s, dmg);
-        break;
+        int reentry = s->molten_kind[i] == COLO_POOL_REENTRY;
+        int player_on_pool = s->player.x == s->molten_x[i] && s->player.y == s->molten_y[i];
+        if (!burned && player_on_pool && (!reentry || s->molten_burn_timer[i] == 0)) {
+            int dmg = col_mod_molten_pool_damage(s, (ColoMoltenPoolKind)s->molten_kind[i]);
+            if (reentry) s->molten_burn_timer[i] = COLO_REENTRY_MOLTEN_BURN_INTERVAL - 1;
+            col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS);
+            s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
+            col_mod_on_player_damaged(s, dmg);
+            burned = 1;
+            continue;
+        }
+        if (reentry && s->molten_burn_timer[i] > 0)
+            s->molten_burn_timer[i]--;
     }
 }
 
-/** E10 Reentry hook: when a javelin skyfall lands, leave molten sand until wave
-    end. T2 adds the SOUTH-WEST tile; T3 additionally adds the WEST tile. */
+/** Reentry hook: when a javelin skyfall lands, leave stronger molten. T1 drops
+    a temporary targeted pool. T2 adds southwest and makes both permanent. T3
+    adds west and makes all permanent. Blocked or covered side tiles fall back to
+    a random in-arena tile. */
 static void col_mod_reentry_on_skyfall(ColosseumState* s, int tile_x, int tile_y) {
     int tier = col_mod_tier(s, COLO_MOD_REENTRY);
     if (tier == 0) return;
-    ColoMoltenPoolKind kind = COLO_POOL_UNTIL_WAVE_END;
-    col_mod_add_molten_pool(s, tile_x, tile_y, kind);
-    if (tier >= 2) col_mod_add_molten_pool(s, tile_x - 1, tile_y - 1, kind);
-    if (tier >= 3) col_mod_add_molten_pool(s, tile_x - 1, tile_y, kind);
+    ColoMoltenPoolLifetime lifetime = tier >= 2 ? COLO_POOL_PERMANENT : COLO_POOL_TEMPORARY;
+    col_mod_add_molten_pool(s, tile_x, tile_y, COLO_POOL_REENTRY, lifetime);
+    if (tier >= 2) {
+        ColoMoltenPoolTile sw = col_mod_molten_pool_tile_or_fallback(
+            s, tile_x - 1, tile_y - 1);
+        col_mod_add_molten_pool(s, sw.x, sw.y, COLO_POOL_REENTRY, COLO_POOL_PERMANENT);
+    }
+    if (tier >= 3) {
+        ColoMoltenPoolTile west = col_mod_molten_pool_tile_or_fallback(
+            s, tile_x - 1, tile_y);
+        col_mod_add_molten_pool(s, west.x, west.y, COLO_POOL_REENTRY, COLO_POOL_PERMANENT);
+    }
 }
 
 /* ----- Volatility (death explosion) ----------------------------------------- */
@@ -502,7 +594,8 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
         col_mod_on_player_damaged(s, COLO_VOLATILITY_MAX_HIT);
     }
     if (tier >= 3)
-        col_mod_add_molten_pool(s, x + size / 2, y + size / 2, COLO_POOL_UNTIL_WAVE_END);
+        col_mod_add_molten_pool(
+            s, x + size / 2, y + size / 2, COLO_POOL_VOLATILITY, COLO_POOL_TEMPORARY);
 }
 
 /* ----- Bees! (roaming 1-HP poison swarms, B9) -------------------------------- */

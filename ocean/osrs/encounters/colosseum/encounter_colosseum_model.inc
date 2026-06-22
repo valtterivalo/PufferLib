@@ -549,7 +549,7 @@ static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
         .melee_att_bonus=0,.melee_str_bonus=25,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
         .stab_def=30,.slash_def=30,.crush_def=30,.magic_def=15,.ranged_def=45 },
     [COLO_JAVELIN_COLOSSUS] = { .npc_id=12817, .name="Javelin Colossus",
-        .hp=220, .att_level=200,.str_level=300,.def_level=190,.magic_level=225,.range_level=360,
+        .hp=225, .att_level=200,.str_level=300,.def_level=190,.magic_level=225,.range_level=360,
         .attack_speed=5,.size=3,.max_hit=48,
         .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=25,.ranged_str_bonus=20,
         .stab_def=15,.slash_def=15,.crush_def=15,.magic_def=20,.ranged_def=30 },
@@ -863,11 +863,19 @@ static const int COLO_DOOM_CAP[4] = { 0, 15, 10, 5 };  /* indexed by tier (1..3)
     the death tick is the modeled value. */
 #define COLO_VOLATILITY_MAX_HIT 25       /* explosion contact damage (D20 modeled) */
 
-/** E10: general-arena molten pools from Reentry and Volatility T3 persist
-    until wave end. The old Reentry permanent lifetime is intentionally gone. */
+/** general-arena molten pool mechanics are kinded because Reentry's pool is the
+    stronger 1-15 every-other-tick variant, while Volatility keeps Sol's weaker
+    per-tick molten sand damage. Lifetime is stored per pool so upgraded Reentry
+    pools can persist across waves. */
 typedef enum {
-    COLO_POOL_UNTIL_WAVE_END = 0,
+    COLO_POOL_VOLATILITY = 0,
+    COLO_POOL_REENTRY,
 } ColoMoltenPoolKind;
+
+typedef enum {
+    COLO_POOL_TEMPORARY = 0,
+    COLO_POOL_PERMANENT,
+} ColoMoltenPoolLifetime;
 
 /** Relentless: defence-bypass fraction (percent) and flat max-hit bonus by tier. */
 static const int COLO_RELENTLESS_DEF_BYPASS_PCT[4] = { 0, 33, 66, 100 };
@@ -1095,10 +1103,10 @@ typedef struct {
 #define COLO_SOL_ENRAGE_POOL_SPREAD 4
 #define COLO_SOL_MOLTEN_INTERVAL    3
 
-/* A22 damage band, SHARED: ALL molten sand — boss-fight pools and the wave
-   1-11 modifier pools alike — burns 5 + rand(0..4) = 5-9 per tick stood on. */
-#define COLO_MOLTEN_SAND_MIN_HIT 5
-#define COLO_MOLTEN_SAND_RAND    5
+/* A22 Sol molten sand burns 6 + rand(0..2) = 6-8 per tick stood on. Reentry
+   molten is stronger and lives in the modifier pool constants below. */
+#define COLO_MOLTEN_SAND_MIN_HIT 6
+#define COLO_MOLTEN_SAND_RAND    3
 
 
 static int col_type_is_warbander(ColoNpcType type) {
@@ -1126,11 +1134,12 @@ typedef struct {
     int pattern_copied;
 } ColoManticoreState;
 
-/** javelin skyfall cadence. valid iff type is COLO_JAVELIN_COLOSSUS; reach it
-    through colo_npc_javelin(). skyfall fires on every 5th throw; the marked tile
-    lands COLO_JAVELIN_SKYFALL_DELAY ticks later, ignoring Protect-from-Missiles. */
+/** javelin skyfall cadence. Valid iff type is COLO_JAVELIN_COLOSSUS. Reach it
+    through colo_npc_javelin(). Every 5th attack is a skyfall instead of a
+    normal throw. The marked tile lands COLO_JAVELIN_SKYFALL_DELAY ticks later,
+    ignoring Protect-from-Missiles. */
 typedef struct {
-    int attack_count;          /* throws since spawn; every 5th is a skyfall */
+    int attack_count;          /* attacks since spawn, every 5th is skyfall */
     int skyfall_pending;       /* 1 while a marked tile is in flight */
     int skyfall_tile_x, skyfall_tile_y;
     int skyfall_timer;         /* ticks until the marked tile lands */
@@ -1207,9 +1216,9 @@ static inline int col_warband_window_offset(ColoNpcType type) {
     }
 }
 
-/** ticks the marked skyfall tile lands after the javelin throws it (D6: wiki
-    says only "a few ticks"; 3 is the modeled value). */
-#define COLO_JAVELIN_SKYFALL_DELAY 3
+/** javelin skyfall lands 6 ticks after the 5th attack replaces the normal throw. */
+#define COLO_JAVELIN_SKYFALL_DELAY 6
+#define COLO_JAVELIN_SKYFALL_MAX_HIT 40
 #define COLO_JAVELIN_SKYFALL_ANIM_ID 10893
 /** a ready manticore delays its barrage start while another is mid-barrage. */
 #define COLO_MANTICORE_STAGGER_TICKS 5
@@ -1871,11 +1880,12 @@ typedef struct {
     int player_poison;                     /* E8: standard poison severity (0 = none) */
     int player_poison_timer;               /* ticks until the next poison instance */
     /* general-arena molten pools (Reentry / Volatility T3) for waves 1-11. Boss
-       wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog.
-       E10: kind is retained for snapshot shape and all values clear at wave end. */
+       wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog. */
     int molten_x[COLO_SOL_HAZARD_TILES_MAX];
     int molten_y[COLO_SOL_HAZARD_TILES_MAX];
     int molten_kind[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_lifetime[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_burn_timer[COLO_SOL_HAZARD_TILES_MAX];
     int molten_count;
 
     /* reward bookkeeping */

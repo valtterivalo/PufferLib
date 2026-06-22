@@ -150,6 +150,10 @@ static void col_pending_hit_prayer_observer(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES)
         s->log.total_damage_by_type[hit->source_npc_type] += (float)dmg;
+    if (!checked && hit->source_npc_type == COLO_MANTICORE) {
+        if (dmg > 0) s->last_hit_by_type = COLO_MANTICORE;
+        if (hit->hit_success) col_mod_manticore_apply_venom(s, hit->hit_success);
+    }
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */
     s->tick_scratch.styles_faced_mask |= (1 << hit->attack_style);
     s->tick_scratch.avoidable_threat_by_style[hit->attack_style] += (float)hit->damage;
@@ -363,12 +367,10 @@ static void col_npc_minotaur_heal_ally(ColosseumState* s, int idx) {
     if (best >= 0) s->npcs[best].hp = s->npcs[best].max_hp;
 }
 
-/** Javelin Colossus: normal throw is Protect-from-Missiles blockable; every 5th
-    throw is a skyfall that marks the player's current tile and lands
-    COLO_JAVELIN_SKYFALL_DELAY ticks later (D6), ignoring Protect-from-Missiles.
-    D7: the skyfall has NO accuracy/defence gate — a player on the marked tile at
-    land eats the raw 0..max roll (Relentless still raises the max); stepping off
-    the tile dodges it fully. */
+/** Javelin Colossus normal throw is Protect-from-Missiles blockable. Every 5th
+    attack is a skyfall that replaces the normal throw, marks the player's
+    current tile, and lands COLO_JAVELIN_SKYFALL_DELAY ticks later. Skyfall has
+    no accuracy, defence, prayer, or Relentless modifier gate. */
 static void col_npc_attack_javelin(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -381,13 +383,12 @@ static void col_npc_attack_javelin(
     ColoJavelinState* jv = colo_npc_javelin(npc);
     jv->attack_count++;
     if (jv->attack_count % 5 == 0) {
-        int max_hit = stats->max_hit
-            + COLO_RELENTLESS_MAX_HIT_BONUS[col_mod_tier(s, COLO_MOD_RELENTLESS)];
         jv->skyfall_pending = 1;
         jv->skyfall_tile_x = s->player.x;
         jv->skyfall_tile_y = s->player.y;
         jv->skyfall_timer = COLO_JAVELIN_SKYFALL_DELAY;
-        jv->skyfall_damage = encounter_rand_int(&s->rng_state, max_hit + 1);
+        jv->skyfall_damage = encounter_rand_int(
+            &s->rng_state, COLO_JAVELIN_SKYFALL_MAX_HIT + 1);
         npc->attacked_this_tick = 1;
         npc->attack_style_this_tick = ATTACK_STYLE_RANGED;
         ctx->npc_render_attack_anim[idx] = COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL;
@@ -432,12 +433,13 @@ static void col_npc_resolve_javelin_skyfall(
     col_mod_reentry_on_skyfall(s, jv->skyfall_tile_x, jv->skyfall_tile_y);
 }
 
-/** Manticore: 10-tick barrage-to-barrage cycle (A19) — 3 orbs on consecutive
-    ticks, then a 7-tick recharge. orbs 0&1 are {ranged, magic} in random order,
-    orb 2 is always melee. orbs land with travel time 0 (D12), each prayed
-    individually on its fire tick. A ready manticore staggers 5 ticks if another
-    is mid-barrage. Spawns uncharged: the first barrage waits a full cycle.
-    D11: movement stays unrestricted while charging. */
+/** Manticore uses a 10-tick barrage-to-barrage cycle: 3 orbs on consecutive
+    ticks, then a 7-tick recharge. Orbs 0 and 1 are ranged and magic in random
+    order. Orb 2 is always melee. Each orb checks prayer on its launch tick and
+    lands one tick later in fire order, independent of distance. A ready
+    manticore staggers 5 ticks if another is mid-barrage. Spawns uncharged, so
+    the first barrage waits a full cycle. D11: movement stays unrestricted while
+    charging. */
 static int col_any_other_manticore_mid_barrage(const ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
@@ -454,12 +456,10 @@ static int col_manticore_orb_max_hit(AttackStyle style) {
     return COLO_MANTICORE_MAX_HIT_MELEE;
 }
 
-/** fire one manticore orb. D12: orbs have travel time 0 — damage and the
-    per-orb prayer check resolve ON the launch tick. The tick's prayer is final
-    by NPC time (prayer actions apply in col_player_pretick), so praying the
-    orb's style on its fire tick blocks it; the flick cadence is per-orb.
-    Mantimayhem T1 fires a second projectile of the same orb; T2 inflicts venom
-    on an unprotected successful hit. */
+/** launch one manticore orb. Prayer is checked immediately and the resulting
+    damage is queued to land one tick later. Mantimayhem T1 fires a second
+    projectile of the same orb; T2 venom applies when that unprotected successful
+    projectile lands. */
 static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpcStats* stats) {
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();
@@ -481,17 +481,12 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
             dmg = 0;
             s->tick_scratch.prayer_correct++;
         }
-        col_damage_player_from(s, dmg, npc->type);
         col_log_prayer_event(s, npc->type, prayed, dmg);
         s->tick_scratch.styles_faced_mask |= (1 << style);
         s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
         if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
-        if (dmg > 0) {
-            s->last_hit_by_type = npc->type;
-            col_mod_on_player_damaged(s, dmg);
-        }
-        /* T2 venom: a successful hit the current prayer does not block. */
-        if (hit_success && !prayed) col_mod_manticore_apply_venom(s, hit_success);
+        col_queue_player_pending_hit(
+            s, idx, npc->type, dmg, 1, style, 0, hit_success && !prayed);
     }
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;

@@ -1153,46 +1153,50 @@ static void test_reentry_sand_tiles(void) {
     col_mod_reentry_on_skyfall(&s, 20, 12);
     CHECK("T1 leaves one pool on the targeted tile",
         s.molten_count == 1 && s.molten_x[0] == 20 && s.molten_y[0] == 12);
-    CHECK("the T1 pool lasts until wave end (not tick-counted)",
-        s.molten_kind[0] == COLO_POOL_UNTIL_WAVE_END);
+    CHECK("the T1 pool is the stronger Reentry kind",
+        s.molten_kind[0] == COLO_POOL_REENTRY);
 
-    /* A22: pools burn the shared 5-9 molten-sand roll every tick stood on. */
+    /* Reentry molten burns 1-15 typeless every OTHER tick stood on, never 0. */
     s.player.x = 20; s.player.y = 12;
-    int burn_ok = 1;
+    int burns = 0, burn_ok = 1, off_cadence_seen = 0;
     for (int t = 0; t < 24; t++) {
         s.player.current_hitpoints = 99;
         col_mod_tick_molten_pools(&s);
         int dmg = 99 - s.player.current_hitpoints;
-        if (dmg < COLO_MOLTEN_SAND_MIN_HIT ||
-            dmg > COLO_MOLTEN_SAND_MIN_HIT + COLO_MOLTEN_SAND_RAND - 1) burn_ok = 0;
+        if (dmg > 0) {
+            burns++;
+            if (dmg < 1 || dmg > COLO_REENTRY_MOLTEN_MAX_HIT) burn_ok = 0;
+        } else {
+            off_cadence_seen = 1;
+        }
     }
-    CHECK("standing on Reentry sand burns the shared 5-9 roll", burn_ok);
+    CHECK("Reentry burn is 1-15 and always positive when it fires", burn_ok);
+    CHECK("Reentry fires every other tick (~half of 24)", burns >= 11 && burns <= 13);
+    CHECK("Reentry has off-cadence no-damage ticks", off_cadence_seen);
 
-    /* the T1 pool persists through arbitrary mid-wave time but clears at the
-       next wave spawn. */
+    /* the T1 pool is TEMPORARY: persists mid-wave, clears at the next wave spawn. */
     for (int t = 0; t < 500; t++) col_mod_tick_molten_pools(&s);
-    CHECK("the T1 pool persists all wave (old 8-tick lifetime deleted)",
-        s.molten_count == 1);
+    CHECK("the T1 pool persists all wave", s.molten_count == 1);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("wave end clears the temporary pool", s.molten_count == 0);
+    CHECK("T1 (temporary) clears at wave end", s.molten_count == 0);
 
-    /* T2: until-wave-end + the SW tile. */
+    /* T2: targeted tile + the SW tile, BOTH PERMANENT. */
     s.modifiers.tier[COLO_MOD_REENTRY] = 2;
     col_mod_reentry_on_skyfall(&s, 20, 12);
-    int has_target = 0, has_sw = 0, has_w = 0, all_until_wave_end = 1;
+    int has_target = 0, has_sw = 0, has_w = 0, all_reentry = 1;
     for (int i = 0; i < s.molten_count; i++) {
         if (s.molten_x[i] == 20 && s.molten_y[i] == 12) has_target = 1;
         if (s.molten_x[i] == 19 && s.molten_y[i] == 11) has_sw = 1;
         if (s.molten_x[i] == 19 && s.molten_y[i] == 12) has_w = 1;
-        if (s.molten_kind[i] != COLO_POOL_UNTIL_WAVE_END) all_until_wave_end = 0;
+        if (s.molten_kind[i] != COLO_POOL_REENTRY) all_reentry = 0;
     }
     CHECK("T2 covers the targeted tile + the tile SOUTH-WEST of it",
         s.molten_count == 2 && has_target && has_sw && !has_w);
-    CHECK("T2 pools last until wave end", all_until_wave_end);
+    CHECK("T2 pools are Reentry kind", all_reentry);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("Reentry T2 pools clear at wave end", s.molten_count == 0);
+    CHECK("Reentry T2 pools are PERMANENT (survive wave end)", s.molten_count == 2);
 
-    /* T3: adds the WEST tile. */
+    /* T3: adds the WEST tile, all PERMANENT. */
     s.molten_count = 0;
     s.modifiers.tier[COLO_MOD_REENTRY] = 3;
     col_mod_reentry_on_skyfall(&s, 20, 12);
@@ -1205,18 +1209,18 @@ static void test_reentry_sand_tiles(void) {
     CHECK("T3 additionally covers the WEST tile", s.molten_count == 3 &&
         has_target && has_sw && has_w);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("Reentry T3 pools clear at wave end", s.molten_count == 0);
+    CHECK("Reentry T3 pools are PERMANENT (survive wave end)", s.molten_count == 3);
 
-    /* D20: Volatility T3 leaves an until-wave-end pool at the death centre. */
+    /* D20: Volatility T3 leaves a weaker, TEMPORARY pool at the death centre. */
     s.molten_count = 0;
     s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
     s.modifiers.tier[COLO_MOD_VOLATILITY] = 3;
     s.player.x = 5; s.player.y = 18;
     col_mod_volatility_on_death(&s, 20, 16, 1);
-    CHECK("Volatility T3 leaves an until-wave-end pool at the centre",
-        s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_UNTIL_WAVE_END);
+    CHECK("Volatility T3 leaves a temporary Volatility pool at the centre",
+        s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_VOLATILITY);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("the Volatility pool clears at wave end", s.molten_count == 0);
+    CHECK("the Volatility (temporary) pool clears at wave end", s.molten_count == 0);
 }
 
 /* ---- 2e5. A25: venom escalation — first proc 6, +2 per damage tick toward
@@ -2812,10 +2816,11 @@ static void test_manticore_telegraph_during_windup(void) {
         mc->fixed_orb_style[0] != ATTACK_STYLE_NONE);
 }
 
-/* 5c. D12: orbs land ON their launch tick — nothing enters the pending queue,
-   damage applies on the fire tick, and the prayer set that tick (pretick runs
-   before NPC actions) blocks the orb. Step-loop layer: flicking the telegraphed
-   next-orb style each tick blocks orbs 1 and 2 of every barrage. */
+/* 5c: manticore orbs travel one tick. Each orb checks prayer on its FIRE tick
+   (the prayer set that tick, via col_player_pretick, decides the block) and
+   queues a 1-tick landing (ticks_remaining == 1) carrying the resolved damage,
+   so nothing lands on the fire tick. Step-loop layer: flicking the telegraphed
+   next-orb style on the fire tick still blocks orbs 1 and 2 of every barrage. */
 static void test_manticore_orb_same_tick_flick(void) {
     printf("test_manticore_orb_same_tick_flick\n");
     ColosseumContext ctx;
@@ -2829,38 +2834,50 @@ static void test_manticore_orb_same_tick_flick(void) {
     col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
     ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
 
-    /* prayed orb: zero damage, zero queue entries, prayer_correct counted. */
-    int blocked_ok = 1, queued = 0, prayer_counted = 0;
+    /* prayed orb: fire tick checks prayer (counted) and queues a 1-tick landing
+       for 0 damage; nothing lands on the fire tick itself. */
+    int no_fire_damage = 1, prayed_one_tick = 1, prayer_counted = 0, any_queued = 0;
     for (int rep = 0; rep < 16; rep++) {
+        s.player_pending_hits.count = 0;
         mc->cycle_step = 1;                       /* mid-barrage: next orb = 1 */
         mc->orb_style[1] = ATTACK_STYLE_MAGIC;
         s.player.prayer = PRAYER_PROTECT_MAGIC;   /* flicked on the fire tick */
         s.player.current_hitpoints = 99;
         int pc_before = s.tick_scratch.prayer_correct;
         col_npc_attack_ctx(&s, &ctx, 0);
-        if (s.player.current_hitpoints != 99) blocked_ok = 0;
+        if (s.player.current_hitpoints != 99) no_fire_damage = 0;
         if (s.tick_scratch.prayer_correct > pc_before) prayer_counted = 1;
-        queued += s.player_pending_hits.count;
+        for (int h = 0; h < s.player_pending_hits.count; h++) {
+            const EncounterPendingHit* ph = &s.player_pending_hits.hits[h];
+            if (!ph->active) continue;
+            any_queued = 1;
+            if (ph->ticks_remaining != 1 || ph->damage != 0) prayed_one_tick = 0;
+        }
     }
-    CHECK("praying the orb's style on its fire tick blocks it", blocked_ok);
-    CHECK("orbs never enter the pending queue (travel time 0)", queued == 0);
-    CHECK("a blocked orb still counts prayer_correct", prayer_counted);
+    CHECK("a prayed orb queues a 1-tick landing for 0 damage", any_queued && prayed_one_tick);
+    CHECK("no orb damage lands on the fire tick", no_fire_damage);
+    CHECK("the orb's prayer is checked on its fire tick", prayer_counted);
 
-    /* unprayed orb: damage lands on the very same call (Relentless III forces
-       the accuracy roll so only the 1/32 zero-roll can blank a given orb). */
+    /* unprayed orb: queues a 1-tick landing carrying damage (Relentless III
+       forces the accuracy roll so only the 1/32 zero-roll can blank an orb). */
     s.modifiers.active_mask |= (1u << COLO_MOD_RELENTLESS);
     s.modifiers.tier[COLO_MOD_RELENTLESS] = 3;
-    int same_tick_damage = 0;
-    for (int rep = 0; rep < 32 && !same_tick_damage; rep++) {
+    int queued_damage = 0, no_fire_damage2 = 1;
+    for (int rep = 0; rep < 32 && !queued_damage; rep++) {
+        s.player_pending_hits.count = 0;
         mc->cycle_step = 1;
         mc->orb_style[1] = ATTACK_STYLE_MAGIC;
         s.player.prayer = PRAYER_PROTECT_RANGED;   /* wrong prayer */
         s.player.current_hitpoints = 99;
         col_npc_attack_ctx(&s, &ctx, 0);
-        if (s.player.current_hitpoints < 99) same_tick_damage = 1;
+        if (s.player.current_hitpoints != 99) no_fire_damage2 = 0;
+        for (int h = 0; h < s.player_pending_hits.count; h++) {
+            const EncounterPendingHit* ph = &s.player_pending_hits.hits[h];
+            if (ph->active && ph->ticks_remaining == 1 && ph->damage > 0) queued_damage = 1;
+        }
     }
-    CHECK("an unprayed orb damages the player on the fire tick", same_tick_damage);
-    CHECK("nothing was queued for a later landing", s.player_pending_hits.count == 0);
+    CHECK("an unprayed orb queues damage for a 1-tick-later landing", queued_damage);
+    CHECK("an unprayed orb lands nothing on the fire tick", no_fire_damage2);
 
     /* step loop: pray the telegraphed next-orb style each tick. cycle_step from
        the prior tick names the orb that fires next, so orbs 1 and 2 are always
@@ -2998,10 +3015,10 @@ static void test_manticore_pattern_copy(void) {
     CHECK("a peer beyond 15 tiles does not copy", bmc->pattern_copied == 0);
 }
 
-/* 5e. D7: the javelin skyfall has no accuracy/defence gate — marks carry the raw
-   uniform 0..48 roll (the removed roll zeroed ~half vs this maxed player), land
-   on the marked tile through Protect-from-Missiles, and miss entirely off-tile.
-   Cadence: every 5th attack, D6 3-tick delay. */
+/* 5e. the javelin skyfall has no accuracy/defence/prayer gate — marks carry the
+   raw uniform 0..40 TYPELESS roll, land on the marked tile through
+   Protect-from-Missiles, and miss entirely off-tile. Cadence: every 5th attack
+   replaces the normal throw, 6-tick delay. */
 static void test_javelin_skyfall_no_defence_gate(void) {
     printf("test_javelin_skyfall_no_defence_gate\n");
     ColosseumContext ctx;
@@ -3022,7 +3039,7 @@ static void test_javelin_skyfall_no_defence_gate(void) {
     CHECK("attacks 1-4 are normal queued throws",
         s.player_pending_hits.count == queue_before + 4 && jv->skyfall_pending == 0);
     col_npc_attack_javelin(&s, &ctx, 0, stats);
-    CHECK("the 5th attack marks the player's tile with the D6 3-tick delay",
+    CHECK("the 5th attack marks the player's tile with the 6-tick delay",
         jv->skyfall_pending == 1 && jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DELAY &&
         jv->skyfall_tile_x == s.player.x && jv->skyfall_tile_y == s.player.y);
 
@@ -3033,11 +3050,11 @@ static void test_javelin_skyfall_no_defence_gate(void) {
         jv->skyfall_pending = 0;
         col_npc_attack_javelin(&s, &ctx, 0, stats);
         if (jv->skyfall_damage > 0) nonzero++;
-        if (jv->skyfall_damage < 0 || jv->skyfall_damage > stats->max_hit) in_range_ok = 0;
-        if (jv->skyfall_damage >= 45) high_roll = 1;
+        if (jv->skyfall_damage < 0 || jv->skyfall_damage > COLO_JAVELIN_SKYFALL_MAX_HIT) in_range_ok = 0;
+        if (jv->skyfall_damage >= 37) high_roll = 1;
     }
     CHECK("skyfall damage ignores defence (>=80% of 300 marks nonzero)", nonzero >= 240);
-    CHECK("rolls span the raw 0..48 band up to the top", in_range_ok && high_roll);
+    CHECK("rolls span the raw 0..40 typeless band up to the top", in_range_ok && high_roll);
 
     /* PfM ignored on-tile; stepping off dodges fully. */
     s.player.prayer = PRAYER_PROTECT_RANGED;
@@ -4100,7 +4117,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
     CHECK("snapshot version is v13 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 13u);
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 14u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4782,7 +4799,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 40 features", COLO_FEATURES_PER_NPC == 40);
-    CHECK("snapshot version is v13", COLO_SNAPSHOT_VERSION == 13u);
+    CHECK("snapshot version is v14", COLO_SNAPSHOT_VERSION == 14u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5412,7 +5429,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v13", snap.version == 13u);
+    CHECK("snapshot frame is v14", snap.version == 14u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
