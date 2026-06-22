@@ -4,10 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(36) + pillars(4 * 3) + inventory cells(28 * 35)
- *   + equipped self(11 * 18) + npc slots(24 * 40) + modifiers(74) + wave(4) + boss(51)
+ *   player(36) + pillars(4 * 3) + inventory cells(28 * 28)
+ *   + npc slots(24 * 40) + modifiers(74) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2636.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2242.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -31,8 +31,7 @@
 #define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
-#define COLO_EQUIPPED_SELF_OBS_SIZE \
-    (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+#define COLO_EQUIPPED_SELF_OBS_SIZE 0
 #define COLO_FEATURES_PER_NPC     40   /* 12-type one-hot + 14 core features + 10 tells + 4 matchup */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 960 */
 /** Expected weapon-set DPT is divided by this before per-NPC obs clamp. */
@@ -1259,7 +1258,7 @@ static void col_inventory_cell_post_use_deltas(
     for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
 }
 
-static void col_write_inventory_and_equipped_obs(
+static void col_write_inventory_obs(
     const ColosseumState* s,
     float* obs,
     int* idx
@@ -1277,7 +1276,6 @@ static void col_write_inventory_and_equipped_obs(
             cell->item_idx,
             cell->raw_osrs_id,
             cell->dose,
-            col_inventory_cell_actionable(s, cell_idx),
             col_inventory_cell_holds_equipped_item(s, cell_idx),
             deltas,
             s->player.base_hitpoints,
@@ -1286,11 +1284,6 @@ static void col_write_inventory_and_equipped_obs(
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
-
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        osrs_write_equipped_self_features(&obs[i], s->player.equipped[slot]);
-        i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
-    }
     assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
     *idx = i;
 }
@@ -1360,7 +1353,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     col_write_pillar_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_PILLARS);
 
-    col_write_inventory_and_equipped_obs(s, obs, &i);
+    col_write_inventory_obs(s, obs, &i);
 
     float matchup_dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     ColoVenatorPreviewTargets venator_targets;

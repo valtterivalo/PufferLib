@@ -81,7 +81,7 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
     OsrsConsumableKind kind
 );
 
-#define OSRS_INVENTORY_CELL_OBS_FEATURES 35   /* was 16; +19 = REC1(4)+REC2(6)+REC3(3)+REC4(4)+REC5(2) */
+#define OSRS_INVENTORY_CELL_OBS_FEATURES 28
 #define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* was 12; +6  = REC4(4)+REC5(2) */
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
@@ -283,51 +283,43 @@ static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
 }
 
 /**
- * Writes the shared 35-float inventory-cell affordance layout.
+ * Writes the shared 28-float inventory-cell affordance layout.
  *
  * Layout:
  * [0] present
- * [1] is gear
- * [2] is consumable
- * [3] can use
- * [4] is equipped
- * [5] dose fraction
- * [6] weapon melee style
- * [7] weapon ranged style
- * [8] weapon magic style
- * [9] slash attack delta
- * [10] melee strength delta
- * [11] ranged attack delta
- * [12] ranged strength delta
- * [13] magic attack plus damage delta
- * [14] aggregate defence delta
- * [15] has item effect
- * [16] REC1 is food
- * [17] REC1 is potion family
- * [18] REC1 is armor
- * [19] REC1 is weapon
- * [20] REC2 kind = brew
- * [21] REC2 kind = restore
- * [22] REC2 kind = combat boost
- * [23] REC2 kind = ranged boost
- * [24] REC2 kind = special
- * [25] REC2 kind = food
- * [26] REC3 hp heal normalized
- * [27] REC3 prayer restore normalized
- * [28] REC3 offensive boost normalized
- * [29] REC4 effect class = lifesteal
- * [30] REC4 effect class = damage amp
- * [31] REC4 effect class = defensive
- * [32] REC4 effect class = util
- * [33] REC5 weapon attack speed normalized
- * [34] REC5 weapon attack range normalized
+ * [1] is equipped
+ * [2] dose fraction
+ * [3] weapon melee style
+ * [4] weapon ranged style
+ * [5] weapon magic style
+ * [6] slash attack delta
+ * [7] melee strength delta
+ * [8] ranged attack delta
+ * [9] ranged strength delta
+ * [10] magic attack plus damage delta
+ * [11] aggregate defence delta
+ * [12] REC1 is armor
+ * [13] REC1 is weapon
+ * [14] REC2 kind = brew
+ * [15] REC2 kind = restore
+ * [16] REC2 kind = combat boost
+ * [17] REC2 kind = ranged boost
+ * [18] REC2 kind = special
+ * [19] REC3 hp heal normalized
+ * [20] REC3 prayer restore normalized
+ * [21] REC3 offensive boost normalized
+ * [22] REC4 effect class = lifesteal
+ * [23] REC4 effect class = damage amp
+ * [24] REC4 effect class = defensive
+ * [25] REC4 effect class = util
+ * [26] REC5 weapon attack speed normalized
+ * [27] REC5 weapon attack range normalized
  */
 static inline void osrs_write_inventory_cell_affordance_features(
     float* out,
     uint8_t item_idx,
     uint16_t raw_osrs_id,
     uint8_t dose,
-    int can_use,
     int is_equipped,
     const float post_use_deltas[6],
     int base_hitpoints,
@@ -338,55 +330,47 @@ static inline void osrs_write_inventory_cell_affordance_features(
         osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
     int present = raw_osrs_id != 0 || item_idx != ITEM_NONE;
     int is_gear = item_idx != ITEM_NONE;
-    int is_consumable = consumable.click_action != OSRS_CLICK_NONE;
     int style = is_gear ? get_item_attack_style(item_idx) : 0;
     uint32_t effect_mask = is_gear ? ITEM_DATABASE[item_idx].effect_mask : OSRS_ITEM_EFFECT_NONE;
 
     out[0] = present ? 1.0f : 0.0f;
-    out[1] = is_gear ? 1.0f : 0.0f;
-    out[2] = is_consumable ? 1.0f : 0.0f;
-    out[3] = can_use ? 1.0f : 0.0f;
-    out[4] = is_equipped ? 1.0f : 0.0f;
-    out[5] = dose > 0 ? osrs_clamp_unit((float)dose / 4.0f) : 0.0f;
-    out[6] = style == 1 ? 1.0f : 0.0f;
-    out[7] = style == 2 ? 1.0f : 0.0f;
-    out[8] = style == 3 ? 1.0f : 0.0f;
-    for (int i = 0; i < 6; i++) out[9 + i] = osrs_clamp_unit(post_use_deltas[i]);
-    out[15] = effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
+    out[1] = is_equipped ? 1.0f : 0.0f;
+    out[2] = dose > 0 ? osrs_clamp_unit((float)dose / 4.0f) : 0.0f;
+    out[3] = style == 1 ? 1.0f : 0.0f;
+    out[4] = style == 2 ? 1.0f : 0.0f;
+    out[5] = style == 3 ? 1.0f : 0.0f;
+    for (int i = 0; i < 6; i++) out[6 + i] = osrs_clamp_unit(post_use_deltas[i]);
 
     /* REC1 role one-hot */
     int is_weapon = is_gear && ITEM_DATABASE[item_idx].slot == SLOT_WEAPON;
-    out[16] = consumable.click_action == OSRS_CLICK_EAT ? 1.0f : 0.0f;
-    out[17] = consumable.click_action == OSRS_CLICK_DRINK ? 1.0f : 0.0f;
-    out[18] = (is_gear && !is_weapon) ? 1.0f : 0.0f;
-    out[19] = is_weapon ? 1.0f : 0.0f;
-    /* REC2 consumable kind6 */
+    out[12] = (is_gear && !is_weapon) ? 1.0f : 0.0f;
+    out[13] = is_weapon ? 1.0f : 0.0f;
+    /* REC2 consumable kind */
     OsrsConsumableKind6 k6 = col_consumable_kind6(consumable.consumable_kind);
-    out[20] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
-    out[21] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
-    out[22] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
-    out[23] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
-    out[24] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
-    out[25] = k6 == COL_CKIND6_FOOD ? 1.0f : 0.0f;
+    out[14] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
+    out[15] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
+    out[16] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
+    out[17] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
+    out[18] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
     /* REC3 consumable magnitudes */
     OsrsConsumableKind ck = consumable.consumable_kind;
     int hp_heal = osrs_consumable_hp_heal_amount(ck, base_hitpoints);
     int pray_restore = osrs_consumable_prayer_restore_amount(ck, base_prayer);
     int off_boost = osrs_consumable_offensive_boost_amount(ck, base_level);
-    out[26] = base_hitpoints > 0 ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
-    out[27] = base_prayer > 0 ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
-    out[28] = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
+    out[19] = base_hitpoints > 0 ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
+    out[20] = base_prayer > 0 ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
+    out[21] = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
     /* REC4 effect class */
     float eff4[4];
     osrs_item_effect_class4(effect_mask, eff4);
-    out[29] = eff4[0];
-    out[30] = eff4[1];
-    out[31] = eff4[2];
-    out[32] = eff4[3];
+    out[22] = eff4[0];
+    out[23] = eff4[1];
+    out[24] = eff4[2];
+    out[25] = eff4[3];
     /* REC5 weapon speed + range */
-    out[33] = is_weapon
+    out[26] = is_weapon
         ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED) : 0.0f;
-    out[34] = is_weapon
+    out[27] = is_weapon
         ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_range / STAT_NORM_RANGE) : 0.0f;
 }
 

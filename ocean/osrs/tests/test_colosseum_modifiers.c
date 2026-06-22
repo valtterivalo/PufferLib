@@ -300,6 +300,143 @@ static void test_prepare_for_drink_kind(
     }
 }
 
+typedef enum {
+    TEST_INV_OBS_ROLE_ARMOR = 12,
+    TEST_INV_OBS_ROLE_WEAPON = 13,
+    TEST_INV_OBS_KIND_BREW = 14,
+    TEST_INV_OBS_KIND_RESTORE = 15,
+    TEST_INV_OBS_KIND_COMBAT_BOOST = 16,
+    TEST_INV_OBS_KIND_RANGED_BOOST = 17,
+    TEST_INV_OBS_KIND_SPECIAL = 18,
+    TEST_INV_OBS_EFFECT_LIFESTEAL = 22,
+    TEST_INV_OBS_EFFECT_DAMAGE_AMP = 23,
+    TEST_INV_OBS_EFFECT_DEFENSIVE = 24,
+    TEST_INV_OBS_EFFECT_UTIL = 25,
+} TestInventoryObsFeature;
+
+typedef struct {
+    float is_gear;
+    float is_consumable;
+    float can_use;
+    float has_effect;
+    float role_food;
+    float role_potion_family;
+    float kind_food;
+} TestDroppedInventoryFields;
+
+static float test_binary_float(int value) {
+    return value ? 1.0f : 0.0f;
+}
+
+static float test_any_inventory_kind_bit(const float* cell_obs) {
+    return test_binary_float(
+        cell_obs[TEST_INV_OBS_KIND_BREW] != 0.0f ||
+        cell_obs[TEST_INV_OBS_KIND_RESTORE] != 0.0f ||
+        cell_obs[TEST_INV_OBS_KIND_COMBAT_BOOST] != 0.0f ||
+        cell_obs[TEST_INV_OBS_KIND_RANGED_BOOST] != 0.0f ||
+        cell_obs[TEST_INV_OBS_KIND_SPECIAL] != 0.0f);
+}
+
+static TestDroppedInventoryFields test_expected_dropped_inventory_fields(
+    const ColosseumState* s,
+    int cell_idx
+) {
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    OsrsConsumableClick consumable =
+        osrs_consumable_click_lookup_raw_osrs_id(cell->raw_osrs_id);
+    uint32_t effect_mask = OSRS_ITEM_EFFECT_NONE;
+    if (cell->item_idx != ITEM_NONE) {
+        if (cell->item_idx >= NUM_ITEMS) abort();
+        effect_mask = ITEM_DATABASE[cell->item_idx].effect_mask;
+    }
+    OsrsConsumableKind6 k6 = col_consumable_kind6(consumable.consumable_kind);
+
+    return (TestDroppedInventoryFields){
+        .is_gear = test_binary_float(cell->item_idx != ITEM_NONE),
+        .is_consumable = test_binary_float(consumable.click_action != OSRS_CLICK_NONE),
+        .can_use = test_binary_float(col_inventory_cell_actionable(s, cell_idx)),
+        .has_effect = test_binary_float(effect_mask != OSRS_ITEM_EFFECT_NONE),
+        .role_food = test_binary_float(consumable.click_action == OSRS_CLICK_EAT),
+        .role_potion_family = test_binary_float(consumable.click_action == OSRS_CLICK_DRINK),
+        .kind_food = test_binary_float(k6 == COL_CKIND6_FOOD),
+    };
+}
+
+static TestDroppedInventoryFields test_reconstructed_dropped_inventory_fields(
+    const float obs[COLO_NUM_OBS],
+    const float mask[COLO_ACTION_MASK_SIZE],
+    int cell_idx
+) {
+    int base = COLO_OBS_AFTER_PILLARS +
+        cell_idx * OSRS_INVENTORY_CELL_OBS_FEATURES;
+    const float* cell_obs = &obs[base];
+    float kind = test_any_inventory_kind_bit(cell_obs);
+    float effect = test_binary_float(
+        cell_obs[TEST_INV_OBS_EFFECT_LIFESTEAL] != 0.0f ||
+        cell_obs[TEST_INV_OBS_EFFECT_DAMAGE_AMP] != 0.0f ||
+        cell_obs[TEST_INV_OBS_EFFECT_DEFENSIVE] != 0.0f ||
+        cell_obs[TEST_INV_OBS_EFFECT_UTIL] != 0.0f);
+
+    return (TestDroppedInventoryFields){
+        .is_gear = test_binary_float(
+            cell_obs[TEST_INV_OBS_ROLE_ARMOR] != 0.0f ||
+            cell_obs[TEST_INV_OBS_ROLE_WEAPON] != 0.0f),
+        .is_consumable = kind,
+        .can_use = test_click_mask_for_cell(mask, cell_idx),
+        .has_effect = effect,
+        .role_food = 0.0f,
+        .role_potion_family = kind,
+        .kind_food = 0.0f,
+    };
+}
+
+static void test_check_inventory_dropped_field(
+    const char* scenario,
+    int cell_idx,
+    const char* field,
+    float expected,
+    float reconstructed
+) {
+    char label[240];
+    snprintf(label, sizeof(label), "%s cell %d reconstructs %s", scenario, cell_idx, field);
+    CHECK(label, reconstructed == expected);
+}
+
+static void test_check_inventory_cut_equivalence_state(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    const char* scenario
+) {
+    ctx->config.mask_inventory_heads = 0;
+    static float obs[COLO_NUM_OBS];
+    static float mask[COLO_ACTION_MASK_SIZE];
+    col_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
+    col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, mask);
+
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        TestDroppedInventoryFields expected =
+            test_expected_dropped_inventory_fields(s, cell);
+        TestDroppedInventoryFields reconstructed =
+            test_reconstructed_dropped_inventory_fields(obs, mask, cell);
+        test_check_inventory_dropped_field(
+            scenario, cell, "is_gear", expected.is_gear, reconstructed.is_gear);
+        test_check_inventory_dropped_field(
+            scenario, cell, "is_consumable",
+            expected.is_consumable, reconstructed.is_consumable);
+        test_check_inventory_dropped_field(
+            scenario, cell, "can_use", expected.can_use, reconstructed.can_use);
+        test_check_inventory_dropped_field(
+            scenario, cell, "has_effect", expected.has_effect, reconstructed.has_effect);
+        test_check_inventory_dropped_field(
+            scenario, cell, "role_food", expected.role_food, reconstructed.role_food);
+        test_check_inventory_dropped_field(
+            scenario, cell, "role_potion_family",
+            expected.role_potion_family, reconstructed.role_potion_family);
+        test_check_inventory_dropped_field(
+            scenario, cell, "kind_food", expected.kind_food, reconstructed.kind_food);
+    }
+}
+
 static int test_count_item_in_equipment_and_inventory(
     const ColosseumState* s,
     uint8_t item_idx
@@ -4639,7 +4776,9 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2636", COLO_NUM_OBS == 2636);
+    CHECK("obs width is 2242", COLO_NUM_OBS == 2242);
+    CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
+    CHECK("equipped-self block is cut", COLO_EQUIPPED_SELF_OBS_SIZE == 0);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 40 features", COLO_FEATURES_PER_NPC == 40);
@@ -6301,24 +6440,25 @@ typedef struct {
     uint16_t raw1;
 } TestDrinkKindDoseChain;
 
+static const TestDrinkKindDoseChain TEST_DRINK_KIND_DOSE_CHAINS[] = {
+    {"brew", OSRS_CONSUMABLE_BREW, 6685, 6687, 6689, 6691},
+    {"super restore", OSRS_CONSUMABLE_SUPER_RESTORE, 3024, 3026, 3028, 3030},
+    {"sanfew", OSRS_CONSUMABLE_SANFEW, 10925, 10927, 10929, 10931},
+    {"super combat", OSRS_CONSUMABLE_SUPER_COMBAT, 12695, 12697, 12699, 12701},
+    {"divine combat", OSRS_CONSUMABLE_DIVINE_COMBAT, 23685, 23688, 23691, 23694},
+    {"ranging", OSRS_CONSUMABLE_RANGING, 2444, 169, 171, 173},
+    {"divine ranging", OSRS_CONSUMABLE_DIVINE_RANGING, 23733, 23736, 23739, 23742},
+    {"surge", OSRS_CONSUMABLE_SURGE, 30875, 30878, 30881, 30884},
+    {"guthix rest", OSRS_CONSUMABLE_GUTHIX_REST, 4417, 4419, 4421, 4423},
+    {"anti-venom+", OSRS_CONSUMABLE_ANTIVENOM_PLUS, 12913, 12915, 12917, 12919},
+    {"saturated heart", OSRS_CONSUMABLE_SATURATED_HEART, 0, 0, 0, 27641},
+};
+
 static void test_colosseum_all_drink_kinds_shared_one_dose_path(void) {
     printf("test_colosseum_all_drink_kinds_shared_one_dose_path\n");
-    const TestDrinkKindDoseChain cases[] = {
-        {"brew", OSRS_CONSUMABLE_BREW, 6685, 6687, 6689, 6691},
-        {"super restore", OSRS_CONSUMABLE_SUPER_RESTORE, 3024, 3026, 3028, 3030},
-        {"sanfew", OSRS_CONSUMABLE_SANFEW, 10925, 10927, 10929, 10931},
-        {"super combat", OSRS_CONSUMABLE_SUPER_COMBAT, 12695, 12697, 12699, 12701},
-        {"divine combat", OSRS_CONSUMABLE_DIVINE_COMBAT, 23685, 23688, 23691, 23694},
-        {"ranging", OSRS_CONSUMABLE_RANGING, 2444, 169, 171, 173},
-        {"divine ranging", OSRS_CONSUMABLE_DIVINE_RANGING, 23733, 23736, 23739, 23742},
-        {"surge", OSRS_CONSUMABLE_SURGE, 30875, 30878, 30881, 30884},
-        {"guthix rest", OSRS_CONSUMABLE_GUTHIX_REST, 4417, 4419, 4421, 4423},
-        {"anti-venom+", OSRS_CONSUMABLE_ANTIVENOM_PLUS, 12913, 12915, 12917, 12919},
-        {"saturated heart", OSRS_CONSUMABLE_SATURATED_HEART, 0, 0, 0, 27641},
-    };
-
-    for (int i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
-        const TestDrinkKindDoseChain* c = &cases[i];
+    for (int i = 0; i < (int)(sizeof(TEST_DRINK_KIND_DOSE_CHAINS) /
+            sizeof(TEST_DRINK_KIND_DOSE_CHAINS[0])); i++) {
+        const TestDrinkKindDoseChain* c = &TEST_DRINK_KIND_DOSE_CHAINS[i];
         ColosseumContext ctx;
         ColosseumState s;
         loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f,
@@ -6376,6 +6516,76 @@ static void test_colosseum_all_drink_kinds_shared_one_dose_path(void) {
             CHECK(label, s.inventory_cells[cell].dose == expected_dose);
         }
     }
+}
+
+static void test_inventory_pure_cut_reconstruction(void) {
+    printf("test_inventory_pure_cut_reconstruction\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 900);
+    test_check_inventory_cut_equivalence_state(&s, &ctx, "speedrun loadout");
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 901);
+    test_check_inventory_cut_equivalence_state(&s, &ctx, "beginner loadout");
+
+    for (int i = 0; i < (int)(sizeof(TEST_DRINK_KIND_DOSE_CHAINS) /
+            sizeof(TEST_DRINK_KIND_DOSE_CHAINS[0])); i++) {
+        const TestDrinkKindDoseChain* c = &TEST_DRINK_KIND_DOSE_CHAINS[i];
+        const uint16_t chain[] = {c->raw4, c->raw3, c->raw2, c->raw1};
+        for (int dose = 0; dose < 4; dose++) {
+            if (chain[dose] == 0) continue;
+            loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f,
+                (uint32_t)(920 + i * 4 + dose));
+            col_init_empty_inventory_cells(&s);
+            s.inventory_cells[0] = osrs_inventory_cell_from_raw_osrs_id(chain[dose]);
+            col_sync_consumable_counters_from_inventory(&s);
+            test_prepare_for_drink_kind(&s, c->kind);
+            char label[160];
+            snprintf(label, sizeof(label), "%s dose chain raw %u",
+                c->label, (unsigned)chain[dose]);
+            test_check_inventory_cut_equivalence_state(&s, &ctx, label);
+        }
+    }
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 902);
+    int bow_cell = test_find_inventory_cell_with_item(&s, ITEM_TWISTED_BOW);
+    assert(bow_cell >= 0);
+    int bow_actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(bow_actions, bow_cell);
+    step_and_observe(&s, &ctx, bow_actions);
+    CHECK("inventory pure-cut gear swap equipped tbow",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_TWISTED_BOW);
+    test_check_inventory_cut_equivalence_state(&s, &ctx, "gear swap after tbow click");
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 903);
+    int bowfa_cell = test_find_inventory_cell_with_item(&s, ITEM_BOW_OF_FAERDHINEN);
+    assert(bowfa_cell >= 0);
+    CHECK("full inventory two-handed equip is denied",
+        s.player.equipped[GEAR_SLOT_WEAPON] != ITEM_NONE &&
+        s.player.equipped[GEAR_SLOT_SHIELD] != ITEM_NONE &&
+        !col_inventory_cell_actionable(&s, bowfa_cell));
+    test_check_inventory_cut_equivalence_state(
+        &s, &ctx, "full inventory two-handed equip denial");
+
+    s.inventory_cells[27] = osrs_inventory_cell_empty();
+    int bowfa_actions[COLO_NUM_ACTION_HEADS] = {0};
+    test_click_inventory_cell_action(bowfa_actions, bowfa_cell);
+    step_and_observe(&s, &ctx, bowfa_actions);
+    CHECK("two-handed bowfa suppresses shield when a spare cell exists",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_BOW_OF_FAERDHINEN &&
+        s.player.equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
+    test_check_inventory_cut_equivalence_state(
+        &s, &ctx, "two-handed shield suppression after bowfa click");
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 904);
+    col_init_empty_inventory_cells(&s);
+    s.inventory_cells[0] = osrs_inventory_cell_from_raw_osrs_id(6685);
+    s.inventory_cells[1] = osrs_inventory_cell_from_raw_osrs_id(6685);
+    col_sync_consumable_counters_from_inventory(&s);
+    s.player.current_hitpoints = 50;
+    s.player.potion_timer = 0;
+    test_check_inventory_cut_equivalence_state(&s, &ctx, "duplicate brew stacks");
 }
 
 static void test_stage3_t4_click_mask_bits(void) {
@@ -6473,7 +6683,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2636);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2242);
     CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 
@@ -6487,6 +6697,7 @@ int main(void) {
     test_colosseum_potion_click_source_of_truth();
     test_colosseum_potion_timer_and_same_tick_gate();
     test_colosseum_all_drink_kinds_shared_one_dose_path();
+    test_inventory_pure_cut_reconstruction();
     test_stage3_t4_click_mask_bits();
     test_stage3_t4_mask_inventory_heads_flag();
     test_stage3_t5_claws_click_spec_fires();
