@@ -58,7 +58,7 @@ static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
-#define TEST_NPC_TELLS_OFFSET 37
+#define TEST_NPC_TELLS_OFFSET 26
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
 #define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
 #define TEST_MOD_OBS_VENOM_TIMER (TEST_MOD_HAZARD_BASE + 6)
@@ -4639,10 +4639,10 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2900", COLO_NUM_OBS == 2900);
+    CHECK("obs width is 2636", COLO_NUM_OBS == 2636);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
-    CHECK("NPC slots have 51 features", COLO_FEATURES_PER_NPC == 51);
+    CHECK("NPC slots have 40 features", COLO_FEATURES_PER_NPC == 40);
     CHECK("snapshot version is v13", COLO_SNAPSHOT_VERSION == 13u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -6473,7 +6473,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2900);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2636);
     CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 

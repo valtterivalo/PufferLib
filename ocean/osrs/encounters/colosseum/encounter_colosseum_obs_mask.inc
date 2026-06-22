@@ -5,9 +5,9 @@
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
  *   player(36) + pillars(4 * 3) + inventory cells(28 * 35)
- *   + equipped self(11 * 18) + npc slots(24 * 51) + modifiers(74) + wave(4) + boss(51)
+ *   + equipped self(11 * 18) + npc slots(24 * 40) + modifiers(74) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2900.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2636.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -33,8 +33,8 @@
     (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
-#define COLO_FEATURES_PER_NPC     51   /* 12-type one-hot + 25 core features + 10 tells + 4 matchup */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 1224 */
+#define COLO_FEATURES_PER_NPC     40   /* 12-type one-hot + 14 core features + 10 tells + 4 matchup */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 960 */
 /** Expected weapon-set DPT is divided by this before per-NPC obs clamp. */
 #define COLO_EXPECTED_DPT_NORM    10.0f
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
@@ -401,34 +401,6 @@ static void col_write_style_onehot_melee_ranged_magic(AttackStyle style, float* 
     *idx = i;
 }
 
-static void col_write_weakness_onehot(AttackStyle style, float* obs, int* idx) {
-    int i = *idx;
-    obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-    obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-    obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-    obs[i++] = (style == ATTACK_STYLE_NONE) ? 1.0f : 0.0f;
-    *idx = i;
-}
-
-static void col_write_npc_attack_style_mask(
-    const ColoNPC* npc,
-    const ColoNpcStats* ns,
-    float* obs,
-    int* idx
-) {
-    int i = *idx;
-    if (npc->type == COLO_MANTICORE) {
-        obs[i++] = 1.0f;
-        obs[i++] = 1.0f;
-        obs[i++] = 1.0f;
-    } else {
-        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
-        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
-        obs[i++] = (ns->attack_range > 0 && ns->default_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
-    }
-    *idx = i;
-}
-
 static int col_pending_hit_prayer_ticks(const EncounterPendingHit* hit) {
     return hit->prayer_check_delay > 0 ? hit->prayer_check_delay : hit->ticks_remaining;
 }
@@ -663,13 +635,6 @@ static void col_write_npc_slot(
     int range = ns->attack_range > 0 ? ns->attack_range : 1;
     obs[i++] = (dist >= 1 && dist <= range) ? 1.0f : 0.0f;
 
-    obs[i++] = col_clamp01((float)ns->max_hit / 75.0f);
-    obs[i++] = col_clamp01((float)ns->attack_speed / 10.0f);
-    obs[i++] = col_clamp01((float)ns->def_level / 300.0f);
-    *idx = i;
-    col_write_weakness_onehot(ns->player_style_that_max_hits, obs, idx);
-    col_write_npc_attack_style_mask(npc, ns, obs, idx);
-    i = *idx;
     ColoNpcNextPrayerObs next_prayer = col_npc_next_prayer_obs(s, npc, npc_slot);
     obs[i++] = next_prayer.active ? 1.0f : 0.0f;
     *idx = i;
@@ -678,7 +643,6 @@ static void col_write_npc_slot(
     i = *idx;
     obs[i++] = next_prayer.active ? col_clamp01((float)next_prayer.ticks / 10.0f) : 0.0f;
     obs[i++] = col_npc_has_los_to_player(s, npc) ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)ns->attack_range / 15.0f);
     *idx = i;
     col_write_npc_tells(s, npc, obs, idx);
     i = *idx;
