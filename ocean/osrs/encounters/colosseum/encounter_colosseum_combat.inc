@@ -244,9 +244,8 @@ static int col_npc_roll_vs_player(
     int max_hit_bonus = col_mod_relentless_max_hit_bonus(s, &force_hit);
     int effective_max = max_hit + max_hit_bonus;
 
-    int dmg = encounter_rand_int(&s->rng_state, effective_max + 1);
-    *hit_success = force_hit ? 1 : encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll);
-    return *hit_success ? dmg : 0;
+    return encounter_npc_roll_attack_ex(
+        att_roll, def_roll, effective_max, force_hit, &s->rng_state, hit_success);
 }
 
 /** projectile damage delay (ticks) for an NPC ranged/magic attack at a distance. */

@@ -624,15 +624,13 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
                 s->player.x, s->player.y, 1,
                 1)) {
             int max_hit = osrs_npc_melee_max_hit(stats->str_level, stats->melee_str_bonus);
-            int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
-            /* accuracy roll */
             int att_roll = osrs_npc_attack_roll(stats->att_level, stats->melee_att_bonus);
             const EncounterLoadoutStats* ls = inf_current_loadout_stats(s, ctx);
             int def_roll = encounter_player_def_roll_from_loadout(
                 s->player.current_defence, s->player.current_magic,
                 ls->def_stab, ls->def_slash, ls->def_crush, ls->def_magic, ls->def_ranged,
                 ATTACK_STYLE_MELEE, MELEE_STYLE_CRUSH);
-            if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll)) dmg = 0;
+            int dmg = encounter_npc_roll_attack(att_roll, def_roll, max_hit, &s->rng_state);
             int prayer_matches = (s->player.prayer == PRAYER_PROTECT_MELEE);
               if (prayer_matches) { dmg = 0; s->tick_scratch.prayer_correct = 1; }
               else if (dmg > 0) { s->tick_scratch.off_prayer_hits++; }

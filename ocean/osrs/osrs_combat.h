@@ -19,6 +19,7 @@
  *   encounter_rand_int(state, max)            random int in [0, max)
  *   encounter_rand_float(state)               random float in [0, 1)
  *   encounter_npc_roll_attack(att,def,mh,rng) NPC accuracy+damage in one call
+ *   encounter_npc_roll_attack_ex(...)         NPC roll + force-hit + hit_success out
  *   encounter_prayer_correct_for_style(p, s)  prayer blocks attack style check
  *   encounter_magic_hit_delay(dist, is_p)     magic projectile flight delay (ticks)
  *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
@@ -363,15 +364,31 @@ static inline int osrs_npc_max_hit(
     return 0;
 }
 
+/** NPC attack roll against the player: damage roll FIRST (0..max_hit), THEN the
+    accuracy roll (a miss zeroes the damage). This RNG draw order is canonical for
+    every encounter and MUST NOT be reordered -- goldens depend on it.
+
+    force_hit (e.g. a Colosseum-Relentless guaranteed hit) bypasses accuracy
+    entirely: the accuracy RNG draw is SKIPPED, not just ignored, so the rng_state
+    sequence stays identical to a hand-rolled "roll damage, then maybe roll
+    accuracy" loop. *hit_success (optional) receives the accuracy outcome so a
+    0-damage splash still renders. Prayer/attribution stay at the call site. */
+static inline int encounter_npc_roll_attack_ex(
+    int att_roll, int def_roll, int max_hit, int force_hit,
+    uint32_t* rng_state, int* hit_success
+) {
+    int dmg = encounter_rand_int(rng_state, max_hit + 1);
+    int hit = force_hit ? 1 : encounter_roll_hit_chance(rng_state, att_roll, def_roll);
+    if (hit_success) *hit_success = hit;
+    return hit ? dmg : 0;
+}
+
 /* NPC attack roll: accuracy check + damage roll in one call.
    returns damage (0 on miss). caller handles prayer separately. */
 static inline int encounter_npc_roll_attack(
     int att_roll, int def_roll, int max_hit, uint32_t* rng_state
 ) {
-    int dmg = encounter_rand_int(rng_state, max_hit + 1);
-    if (!encounter_roll_hit_chance(rng_state, att_roll, def_roll))
-        dmg = 0;
-    return dmg;
+    return encounter_npc_roll_attack_ex(att_roll, def_roll, max_hit, 0, rng_state, NULL);
 }
 
 /* check if overhead prayer blocks the given attack style.
