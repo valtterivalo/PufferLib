@@ -84,6 +84,24 @@ typedef struct ColosseumEnv {
 
 #define MAX_CURRICULUM_TIERS 8
 
+typedef enum {
+    COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT = 0,
+    COLO_LOG_ATTACKED_ARGMAX_SET_SLOT = 1,
+} ColoLogDptSlot;
+
+static void col_log_dpt_rate_sample(Log* log, ColoLogDptSlot slot, int sample) {
+    if (slot < 0 || slot >= 8) abort();
+    if (sample < 0) return;
+    log->hist_score_bank[slot] += sample ? 1.0f : 0.0f;
+    log->hist_n_bank[slot] += 1.0f;
+}
+
+static float col_log_dpt_rate(const Log* log, ColoLogDptSlot slot) {
+    if (slot < 0 || slot >= 8) abort();
+    float n = log->hist_n_bank[slot];
+    return n > 0.0f ? log->hist_score_bank[slot] / n : 0.0f;
+}
+
 
 void c_reset(Env* env) {
     ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -127,6 +145,17 @@ void c_step(Env* env) {
     env->terminals[0] = (float)(is_term && !is_trunc);
     env->truncations[0] = (float)is_trunc;
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
+
+    if (env->state.start_wave == env->config_start_wave) {
+        col_log_dpt_rate_sample(
+            &env->log,
+            COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT,
+            col_current_set_is_argmax_dpt_for_target(&env->state));
+        col_log_dpt_rate_sample(
+            &env->log,
+            COLO_LOG_ATTACKED_ARGMAX_SET_SLOT,
+            col_attacked_with_argmax_set(&env->state));
+    }
 
     if (is_term) {
         ColosseumState* s = &env->state;
@@ -450,6 +479,10 @@ void my_log(Log* log, Dict* out) {
 
     dict_set(out, "score", log->colo_outcome_score);
     dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
+    dict_set(out, "current_set_is_argmax_dpt_for_target",
+        col_log_dpt_rate(log, COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT));
+    dict_set(out, "attacked_with_argmax_set",
+        col_log_dpt_rate(log, COLO_LOG_ATTACKED_ARGMAX_SET_SLOT));
 
     /* per-NPC-type prayer outcomes: off-prayer exposure rate, mean off-prayer
        damage, and mean total damage taken per episode. Indexed by ColoNpcType.

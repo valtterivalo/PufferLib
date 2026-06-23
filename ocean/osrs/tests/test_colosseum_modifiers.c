@@ -368,7 +368,7 @@ static TestDroppedInventoryFields test_reconstructed_dropped_inventory_fields(
     int cell_idx
 ) {
     int base = COLO_OBS_AFTER_PILLARS +
-        cell_idx * OSRS_INVENTORY_CELL_OBS_FEATURES;
+        cell_idx * COLO_INVENTORY_CELL_OBS_FEATURES;
     const float* cell_obs = &obs[base];
     float kind = test_any_inventory_kind_bit(cell_obs);
     float effect = test_binary_float(
@@ -4116,8 +4116,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v13 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 14u);
+    CHECK("snapshot version is v15 for Solarflare shared cadence",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 15u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4793,13 +4793,13 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2440", COLO_NUM_OBS == 2440);
-    CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
+    CHECK("obs width is 2492", COLO_NUM_OBS == 2492);
+    CHECK("inventory block has 812 features", COLO_INVENTORY_OBS_SIZE == 812);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
-    CHECK("NPC slots have 40 features", COLO_FEATURES_PER_NPC == 40);
-    CHECK("snapshot version is v14", COLO_SNAPSHOT_VERSION == 14u);
+    CHECK("NPC slots have 41 features", COLO_FEATURES_PER_NPC == 41);
+    CHECK("snapshot version is v15", COLO_SNAPSHOT_VERSION == 15u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5446,7 +5446,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v14", snap.version == 14u);
+    CHECK("snapshot frame is v15", snap.version == 15u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -6717,7 +6717,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2440);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2492);
     CHECK("T6 mask running-index assert reached 887", COLO_ACTION_MASK_SIZE == 887);
 }
 

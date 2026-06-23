@@ -4,10 +4,10 @@
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
  * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(36) + pillars(4 * 3) + inventory cells(28 * 28)
- *   + equipped self(11 * 18) + npc slots(24 * 40) + modifiers(74) + wave(4) + boss(51)
+ *   player(36) + pillars(4 * 3) + inventory cells(28 * 29)
+ *   + equipped self(11 * 18) + npc slots(24 * 41) + modifiers(74) + wave(4) + boss(51)
  *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2440.
+ *   + threat-LoS(3) + thrall/Death-Charge(6) = 2492.
  * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
  * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
  * + spec-armed one-hots to the player block; the loadout profile is implicit in
@@ -29,12 +29,15 @@
 
 #define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
 #define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
+#define COLO_INVENTORY_TARGET_DPT_OBS_FEATURES 1
+#define COLO_INVENTORY_CELL_OBS_FEATURES \
+    (OSRS_INVENTORY_CELL_OBS_FEATURES + COLO_INVENTORY_TARGET_DPT_OBS_FEATURES)
 #define COLO_INVENTORY_OBS_SIZE \
-    (COLO_INVENTORY_DISPLAY_SLOTS * OSRS_INVENTORY_CELL_OBS_FEATURES)
+    (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
-#define COLO_FEATURES_PER_NPC     40   /* 12-type one-hot + 14 core features + 10 tells + 4 matchup */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 960 */
+#define COLO_FEATURES_PER_NPC     41   /* 12-type one-hot + 14 core features + 10 tells + 5 matchup */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 984 */
 /** Expected weapon-set DPT is divided by this before per-NPC obs clamp. */
 #define COLO_EXPECTED_DPT_NORM    10.0f
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
@@ -648,6 +651,7 @@ static void col_write_npc_slot(
     i = *idx;
     for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
         obs[i++] = col_matchup_dpt_obs_value(npc, dpt[set][npc->type]);
+    obs[i++] = col_matchup_dpt_obs_value(npc, dpt[s->weapon_set][npc->type]);
     int extra_bounces = col_venator_extra_bounce_if_shot(s, venator_targets, npc_slot);
     obs[i++] = (float)extra_bounces / (float)(OSRS_VENATOR_MAX_CHAIN_HITS - 1);
     *idx = i;
@@ -1243,6 +1247,136 @@ static void col_hypothetical_equipment_after_cell(
     out[gear_slot] = cell->item_idx;
 }
 
+static int col_canonical_weapon_set_for_item(
+    const ColosseumState* s,
+    uint8_t item_idx
+) {
+    const uint8_t* const* loadouts =
+        col_loadouts_for_profile(s->active_loadout_profile);
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
+        if (loadouts[set][GEAR_SLOT_WEAPON] == item_idx) return set;
+    return -1;
+}
+
+static float col_expected_dpt_for_equipment_vs_npc(
+    ColosseumState* s,
+    const uint8_t equipment[NUM_GEAR_SLOTS],
+    const ColoNPC* npc
+) {
+    if (!s || !equipment || !npc) abort();
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return 0.0f;
+
+    uint8_t weapon_item = equipment[GEAR_SLOT_WEAPON];
+    AttackStyle style = ATTACK_STYLE_MELEE;
+    int item_style = get_item_attack_style(weapon_item);
+    if (item_style == 2) style = ATTACK_STYLE_RANGED;
+    else if (item_style == 3) style = ATTACK_STYLE_MAGIC;
+    else if (item_style != 1) return 0.0f;
+
+    FightStyle fight_style = style == ATTACK_STYLE_RANGED ? FIGHT_STYLE_RAPID
+        : style == ATTACK_STYLE_MAGIC ? FIGHT_STYLE_ACCURATE
+        : FIGHT_STYLE_AGGRESSIVE;
+    int current_att_level;
+    int current_str_level;
+    col_current_style_levels(
+        &s->player, style, &current_att_level, &current_str_level);
+
+    EncounterLoadoutStats stats;
+    encounter_compute_loadout_stats(
+        equipment,
+        style,
+        s->player.offensive_prayer,
+        current_att_level,
+        fight_style,
+        style == ATTACK_STYLE_MAGIC
+            ? col_weapon_set_spell_base_damage(s, COLO_GEAR_MAGIC) : 0,
+        &stats);
+    encounter_update_loadout_level(
+        &stats,
+        s->player.offensive_prayer,
+        current_att_level,
+        current_str_level);
+
+    OsrsEquipmentEffectProfile effects;
+    encounter_derive_loadout_effect_profile(equipment, &effects);
+    const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+    return col_expected_dpt_vs_npc(
+        &stats,
+        &effects,
+        weapon_item,
+        style,
+        col_item_melee_style(weapon_item),
+        npc,
+        ns);
+}
+
+static float col_inventory_cell_raw_dpt_for_npc(
+    ColosseumState* s,
+    int cell_idx,
+    const ColoNPC* npc,
+    const float dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES]
+) {
+    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
+    if (cell->item_idx == ITEM_NONE || !item_is_weapon(cell->item_idx))
+        return 0.0f;
+
+    int canonical_set = col_canonical_weapon_set_for_item(s, cell->item_idx);
+    if (canonical_set >= 0) return dpt[canonical_set][npc->type];
+
+    uint8_t hypothetical[NUM_GEAR_SLOTS];
+    col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
+    return col_expected_dpt_for_equipment_vs_npc(s, hypothetical, npc);
+}
+
+static float col_inventory_cell_target_dpt_obs_value(
+    ColosseumState* s,
+    int cell_idx,
+    const float dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES]
+) {
+    int target = col_player_target_slot(s);
+    if (target < 0 || target >= COLO_MAX_NPCS) return 0.0f;
+    const ColoNPC* npc = &s->npcs[target];
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return 0.0f;
+    return col_matchup_dpt_obs_value(
+        npc, col_inventory_cell_raw_dpt_for_npc(s, cell_idx, npc, dpt));
+}
+
+static int col_weapon_set_is_argmax_dpt_for_npc(
+    ColosseumState* s,
+    int npc_slot,
+    ColoWeaponSet set
+) {
+    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return -1;
+    const ColoNPC* npc = &s->npcs[npc_slot];
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return -1;
+    if (set < 0 || set >= COLO_NUM_WEAPON_SETS)
+        col_abort_invalid_weapon_set(set);
+
+    float dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
+    col_build_expected_dpt_table(s, dpt);
+    float selected = dpt[set][npc->type];
+    for (int candidate = 0; candidate < COLO_NUM_WEAPON_SETS; candidate++)
+        if (dpt[candidate][npc->type] > selected) return 0;
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        if (col_inventory_cell_raw_dpt_for_npc(s, cell, npc, dpt) > selected)
+            return 0;
+    return 1;
+}
+
+static int col_current_set_is_argmax_dpt_for_target(ColosseumState* s) {
+    int target = col_player_target_slot(s);
+    return col_weapon_set_is_argmax_dpt_for_npc(s, target, s->weapon_set);
+}
+
+static int col_attacked_with_argmax_set(ColosseumState* s) {
+    if (!s->tick_scratch.player_attacked) return -1;
+    return col_weapon_set_is_argmax_dpt_for_npc(
+        s, s->player_attack_npc_idx, s->weapon_set);
+}
+
 static void col_inventory_cell_post_use_deltas(
     const ColosseumState* s,
     int cell_idx,
@@ -1260,7 +1394,8 @@ static void col_inventory_cell_post_use_deltas(
 }
 
 static void col_write_inventory_and_equipped_obs(
-    const ColosseumState* s,
+    ColosseumState* s,
+    const float matchup_dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     float* obs,
     int* idx
 ) {
@@ -1283,6 +1418,8 @@ static void col_write_inventory_and_equipped_obs(
             s->player.base_prayer,
             s->player.base_attack);
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
+        obs[i++] = col_inventory_cell_target_dpt_obs_value(
+            s, cell_idx, matchup_dpt);
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
@@ -1359,11 +1496,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     col_write_pillar_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_PILLARS);
 
-    col_write_inventory_and_equipped_obs(s, obs, &i);
-
     float matchup_dpt[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    ColoVenatorPreviewTargets venator_targets;
     col_build_expected_dpt_table(s, matchup_dpt);
+
+    col_write_inventory_and_equipped_obs(s, matchup_dpt, obs, &i);
+
+    ColoVenatorPreviewTargets venator_targets;
     col_collect_venator_preview_targets(s, &venator_targets);
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
