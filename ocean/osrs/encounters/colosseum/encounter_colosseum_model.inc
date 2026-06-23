@@ -1696,6 +1696,10 @@ typedef struct {
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
     int mask_inventory_heads;
     int action_debug_log;
+    int prayer_oracle_mode;            /* scaffold: 1 = override the agent's overhead
+                                          each tick with the perfect protect-prayer vs
+                                          this tick's throwers (magic>melee>range).
+                                          Default 0. Solve-by-cheating ablation knob. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
