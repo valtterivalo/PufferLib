@@ -155,21 +155,21 @@ static const GoldenConfig CONFIGS[] = {
    under-player shuffle semantics: sample one cardinal direction and stay put
    when that sampled move is blocked. No fallback scan. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x96d92405846c6d78ULL,  /* wave1_a */
-    0xfcea8feb4fc1167dULL,  /* wave1_b */
-    0x8aec3a9a87289d41ULL,  /* wave1_c */
-    0xfd40fbfcc0ff8ef8ULL,  /* meleer_a */
-    0x5b72dea5cac6f30bULL,  /* meleer_b */
-    0x75ad082f11f8febaULL,  /* ranger_a */
-    0x70999457798cf9f2ULL,  /* ranger_b */
-    0x362a09d876d6070dULL,  /* mager_a */
-    0x437655bfabd32761ULL,  /* mager_b */
-    0xb6206c4a2192fd4eULL,  /* jad_a */
-    0x42b9b1d5bc586ab5ULL,  /* jad_b */
-    0xeeb78eb3f418246fULL,  /* jad_c */
-    0xe34ad53c7c7d1d8aULL,  /* zuk_a */
-    0x28aeb435e56e6527ULL,  /* zuk_b */
-    0x7d34388640e2036fULL,  /* zuk_c */
+    0xbcd8dd977a212fcaULL,  /* wave1_a */
+    0x8780cf741d5a1a0fULL,  /* wave1_b */
+    0x3cdfcdfbe41a7f61ULL,  /* wave1_c */
+    0x3f803bedbcbb783aULL,  /* meleer_a */
+    0x11263e6bd4bfa210ULL,  /* meleer_b */
+    0xa676a083fd46b395ULL,  /* ranger_a */
+    0x2ddb91b645db1e75ULL,  /* ranger_b */
+    0x287d8b394f31c954ULL,  /* mager_a */
+    0x84a2ab3540f37ac8ULL,  /* mager_b */
+    0xb98928c437e48005ULL,  /* jad_a */
+    0x3e5a885e173d4674ULL,  /* jad_b */
+    0xd6577872951242fdULL,  /* jad_c */
+    0xc5af52a73611f3f6ULL,  /* zuk_a */
+    0x7a84c874f2b7c5ceULL,  /* zuk_b */
+    0x28c4ccc92a588192ULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {

@@ -2101,21 +2101,39 @@ static inline void encounter_derive_loadout_effect_profile(
 }
 
 /** offensive prayer multipliers for effective level computation.
-    single source of truth: the multipliers used in encounter_compute_loadout_stats()
-    and encounter_update_loadout_level(). also used by PvP combat math (via
-    osrs_pvp_combat.h) so all combat paths agree on prayer effects.
+    used by encounter_compute_loadout_stats() and encounter_update_loadout_level().
+    off-style offensive prayers return identity multipliers.
     ref: osrs wiki prayer table. */
 static inline void encounter_offensive_prayer_mults(
-    OffensivePrayer op, float* att_out, float* str_out
+    OffensivePrayer op, AttackStyle style, float* att_out, float* str_out
 ) {
     float att = 1.0f, str = 1.0f;
-    switch (op) {
-        case OFFENSIVE_PRAYER_PIETY:       att = 1.20f; str = 1.23f; break;
-        case OFFENSIVE_PRAYER_RIGOUR:      att = 1.20f; str = 1.23f; break;
-        case OFFENSIVE_PRAYER_AUGURY:      att = 1.25f; str = 1.00f; break;
-        case OFFENSIVE_PRAYER_MELEE_LOW:   att = 1.15f; str = 1.15f; break;
-        case OFFENSIVE_PRAYER_RANGED_LOW:  att = 1.15f; str = 1.15f; break;
-        case OFFENSIVE_PRAYER_MAGIC_LOW:   att = 1.15f; str = 1.00f; break;
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            if (op == OFFENSIVE_PRAYER_PIETY) {
+                att = 1.20f;
+                str = 1.23f;
+            } else if (op == OFFENSIVE_PRAYER_MELEE_LOW) {
+                att = 1.15f;
+                str = 1.15f;
+            }
+            break;
+        case ATTACK_STYLE_RANGED:
+            if (op == OFFENSIVE_PRAYER_RIGOUR) {
+                att = 1.20f;
+                str = 1.23f;
+            } else if (op == OFFENSIVE_PRAYER_RANGED_LOW) {
+                att = 1.15f;
+                str = 1.15f;
+            }
+            break;
+        case ATTACK_STYLE_MAGIC:
+            if (op == OFFENSIVE_PRAYER_AUGURY) {
+                att = 1.25f;
+            } else if (op == OFFENSIVE_PRAYER_MAGIC_LOW) {
+                att = 1.15f;
+            }
+            break;
         default: break;
     }
     *att_out = att;
@@ -2198,7 +2216,8 @@ static inline void encounter_compute_loadout_stats(
 
     /* prayer multipliers — single source of truth in encounter_offensive_prayer_mults(). */
     float att_prayer_mult, str_prayer_mult;
-    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
+    encounter_offensive_prayer_mults(
+        offensive_prayer, style, &att_prayer_mult, &str_prayer_mult);
 
     /* store for dynamic recomputation after brew drain / potion boost / prayer toggle */
     out->att_prayer_mult = att_prayer_mult;
@@ -2254,7 +2273,8 @@ static inline void encounter_update_loadout_level(
     int current_att_level, int current_str_level
 ) {
     float att_prayer_mult, str_prayer_mult;
-    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
+    encounter_offensive_prayer_mults(
+        offensive_prayer, ls->style, &att_prayer_mult, &str_prayer_mult);
     ls->att_prayer_mult = att_prayer_mult;
     ls->str_prayer_mult = str_prayer_mult;
 

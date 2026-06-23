@@ -4820,6 +4820,23 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
+
+    /* offensive prayer is style-gated: the matching prayer boosts its style, an
+       off-style offensive prayer gives no bonus (this is the learnability
+       gradient that lets the policy learn to match prayer to weapon). */
+    float opa, ops;
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_PIETY, ATTACK_STYLE_MELEE, &opa, &ops);
+    CHECK("Piety boosts melee att+str", opa > 1.0f && ops > 1.0f);
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_PIETY, ATTACK_STYLE_RANGED, &opa, &ops);
+    CHECK("Piety is inert off-style (ranged)", opa == 1.0f && ops == 1.0f);
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_RIGOUR, ATTACK_STYLE_RANGED, &opa, &ops);
+    CHECK("Rigour boosts ranged att+str", opa > 1.0f && ops > 1.0f);
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_RIGOUR, ATTACK_STYLE_MELEE, &opa, &ops);
+    CHECK("Rigour is inert off-style (melee)", opa == 1.0f && ops == 1.0f);
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_AUGURY, ATTACK_STYLE_MAGIC, &opa, &ops);
+    CHECK("Augury boosts magic att", opa > 1.0f);
+    encounter_offensive_prayer_mults(OFFENSIVE_PRAYER_AUGURY, ATTACK_STYLE_MELEE, &opa, &ops);
+    CHECK("Augury is inert off-style (melee)", opa == 1.0f && ops == 1.0f);
 }
 
 /* spawn a non-hazard enemy at (x,y) with an explicit footprint size into a
