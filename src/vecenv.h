@@ -29,6 +29,13 @@ typedef struct {
     int capacity;
 } Dict;
 
+/* Capacity of the aggregated my_log() output Dict. Raised 32 -> 64 for chess's
+   16 per-bank hist_score_bank/hist_n_bank keys, then 64 -> 96 for the Fortis
+   Colosseum log, which emits 64 keys (per-NPC prayer/damage/death attribution
+   across 12 types) and had zero headroom for new metrics. Envs that emit fewer
+   keys are unaffected: spare slots are never written and reads use dict->size. */
+#define LOG_DICT_CAPACITY 96
+
 static inline Dict* create_dict(int capacity) {
     Dict* dict = (Dict*)calloc(1, sizeof(Dict));
     dict->capacity = capacity;

@@ -388,9 +388,8 @@ typedef struct {
 #undef PUFFER_CURRICULUM_IMPL
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    // Capacity raised from 32 to 64 to accommodate chess's per-bank
-    // hist_score_bank_<b> / hist_n_bank_<b> entries (16 keys for 8 banks).
-    Dict* out = create_dict(64);
+    // Sized for the largest env log (see LOG_DICT_CAPACITY in vecenv.h).
+    Dict* out = create_dict(LOG_DICT_CAPACITY);
     static_vec_log(pufferl.vec, out);
     return out;
 }

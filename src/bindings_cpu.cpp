@@ -94,6 +94,10 @@ cudaError_t cudaStreamQuery(cudaStream_t) { return 0; }
 const char* cudaGetErrorString(cudaError_t) { return "stub"; }
 }
 
+/* Mirror of LOG_DICT_CAPACITY in vecenv.h (this file is self-contained and does
+   not include it). Keep the two in sync. */
+#define LOG_DICT_CAPACITY 96
+
 static Dict* create_dict(int capacity) {
     Dict* dict = (Dict*)calloc(1, sizeof(Dict));
     dict->capacity = capacity;
@@ -235,7 +239,7 @@ static void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 }
 
 static py::dict vec_log(VecEnv& ve) {
-    Dict* out = create_dict(32);
+    Dict* out = create_dict(LOG_DICT_CAPACITY);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++)
