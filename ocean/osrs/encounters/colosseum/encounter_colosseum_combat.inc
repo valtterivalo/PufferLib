@@ -727,33 +727,39 @@ static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
  */
 static void col_apply_prayer_oracle(ColosseumState* s) {
     int magic = 0, melee = 0, ranged = 0;
+    /* Ranged/magic are ALWAYS queued projectiles (shaman, javelin, and the
+       warband seer/archer all go through col_npc_queue_projectile), so the only
+       prayer-checkable ranged/magic damage THIS tick is in the pending queue and
+       lands when ticks_remaining<=1. Keying off the queue (not positional range)
+       is what makes the choice correct: a shaman merely in range but not firing
+       this tick must NOT pull the overhead onto magic and eat the melee that is. */
     for (int h = 0; h < s->player_pending_hits.count; h++) {
         const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
-        if (ph->ticks_remaining > 1) continue; /* not landing this tick */
+        if (!ph->check_prayer) continue; /* damage already locked in by an earlier check */
+        /* prayer is checked this tick when the deferred timer reaches 0 (jad-style,
+           prayer_check_delay==1 pre-decrement) or, for the normal colosseum case
+           (prayer_check_delay==0), at the land tick (ticks_remaining==1 pre-decrement). */
+        int checks_this_tick = (ph->prayer_check_delay == 1) ||
+            (ph->prayer_check_delay <= 0 && ph->ticks_remaining <= 1);
+        if (!checks_this_tick) continue;
         if (ph->attack_style == ATTACK_STYLE_MAGIC) magic = 1;
         else if (ph->attack_style == ATTACK_STYLE_RANGED) ranged = 1;
         else if (ph->attack_style == ATTACK_STYLE_MELEE) melee = 1;
     }
+    /* Melee (berserker, jaguar) hits instantly and is NOT queued, so flag it from
+       cardinal adjacency of a melee NPC. This over-triggers on ticks the adjacent
+       melee is off-window, but that only ever deprioritizes a same-tick RANGED
+       hit (the lowest-priority style by spec), never a magic one. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         const ColoNPC* npc = &s->npcs[i];
         if (!col_npc_is_live_enemy(npc)) continue;
-        const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
-        AttackStyle style = st->default_style;
-        if (st->attack_range > 1) {
-            int dist = col_npc_dist_to_player(s, npc);
-            if (dist < 1 || dist > st->attack_range) continue;
-            if (!col_npc_has_los_to_player(s, npc)) continue;
-            if (style == ATTACK_STYLE_MAGIC) magic = 1;
-            else if (style == ATTACK_STYLE_RANGED) ranged = 1;
-            else melee = 1;
-        } else if (col_npc_melee_adjacent_to_player(s, npc)) {
-            melee = 1;
-        }
+        if (COLO_NPC_STATS[npc->type].attack_range > 1) continue; /* handled above */
+        if (col_npc_melee_adjacent_to_player(s, npc)) { melee = 1; break; }
     }
     if (magic) s->player.prayer = PRAYER_PROTECT_MAGIC;
     else if (melee) s->player.prayer = PRAYER_PROTECT_MELEE;
     else if (ranged) s->player.prayer = PRAYER_PROTECT_RANGED;
-    /* no threat this tick: leave whatever the agent set. */
+    /* no incoming this tick: leave whatever the agent set. */
 }
 
 /**
