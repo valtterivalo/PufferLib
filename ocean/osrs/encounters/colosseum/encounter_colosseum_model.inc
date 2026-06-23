@@ -1700,6 +1700,9 @@ typedef struct {
                                           each tick with the perfect protect-prayer vs
                                           this tick's throwers (magic>melee>range).
                                           Default 0. Solve-by-cheating ablation knob. */
+    int bis_gear_oracle_mode;          /* scaffold: 1 = force-equip the max-DPT
+                                          weapon set vs the current target each tick.
+                                          Default 0. Solve-by-cheating ablation knob. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).

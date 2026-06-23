@@ -1311,6 +1311,44 @@ static float col_expected_dpt_for_equipment_vs_npc(
         ns);
 }
 
+/**
+ * BIS-gear oracle (scaffold, gated by ColConfig.bis_gear_oracle_mode; default off).
+ * Each tick force-equips the weapon set with the highest expected DPT vs the
+ * player's current target (or, with no target, the nearest live enemy), removing
+ * the weapon-switch decision the winnability probe flagged as the wall: the agent
+ * never learned to swap to the unused tbow/shadow for the long-range tanks it
+ * cannot safely melee. Reuses col_expected_dpt_for_equipment_vs_npc so the choice
+ * tracks the live matchup math. Runs after col_player_pretick (target set) and
+ * before col_tick_npcs, so the attack this tick fires with the chosen set.
+ */
+static void col_apply_bis_gear_oracle(ColosseumState* s) {
+    int target = col_player_target_slot(s);
+    if (target < 0 || target >= COLO_MAX_NPCS ||
+            !col_npc_is_live_target(&s->npcs[target]) ||
+            col_type_is_hazard_entity(s->npcs[target].type)) {
+        target = -1;
+        int best_dist = 1 << 20;
+        for (int i = 0; i < COLO_MAX_NPCS; i++) {
+            const ColoNPC* npc = &s->npcs[i];
+            if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+                continue;
+            int d = col_npc_dist_to_player(s, npc);
+            if (d < best_dist) { best_dist = d; target = i; }
+        }
+    }
+    if (target < 0) return;
+
+    const ColoNPC* npc = &s->npcs[target];
+    const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
+    float best_dpt = -1.0f;
+    ColoWeaponSet best_set = s->weapon_set;
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
+        float dpt = col_expected_dpt_for_equipment_vs_npc(s, loadouts[set], npc);
+        if (dpt > best_dpt) { best_dpt = dpt; best_set = (ColoWeaponSet)set; }
+    }
+    col_apply_weapon_set(s, best_set);
+}
+
 static float col_inventory_cell_raw_dpt_for_npc(
     ColosseumState* s,
     int cell_idx,
