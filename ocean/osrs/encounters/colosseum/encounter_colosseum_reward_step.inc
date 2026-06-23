@@ -10,10 +10,6 @@
  * ordering so gameplay can be filled in without re-plumbing.
  */
 
-/* defined in encounter_colosseum_obs_mask.inc (reuses the matchup-DPT helpers
-   there); forward-declared so the step loop can invoke the scaffold here. */
-static void col_apply_bis_gear_oracle(ColosseumState* s);
-
 static float col_terminal_death_reward(const ColosseumState* s, const ColosseumContext* ctx) {
     (void)s;
     return -ctx->config.death_penalty_coeff;
@@ -195,7 +191,6 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     col_player_pretick(s, ctx, actions);
     if (ctx && ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
-    if (ctx && ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
 
     int spawn_wave_now = 0;
     if (s->wave_spawn_delay > 0) {

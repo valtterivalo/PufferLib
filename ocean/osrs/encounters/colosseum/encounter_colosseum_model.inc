@@ -1959,6 +1959,7 @@ typedef struct {
 } ColosseumState;
 
 static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type);
+static void col_apply_bis_gear_oracle(ColosseumState* s); /* scaffold; defined in obs_mask.inc */
 
 static void col_build_live_inventory_display(
     const ColosseumState* s,

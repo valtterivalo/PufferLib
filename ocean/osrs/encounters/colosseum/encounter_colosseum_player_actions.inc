@@ -1459,6 +1459,10 @@ static void col_tick_player_ctx(
     }
     col_rebuild_player_collision_flags(s);
 
+    /* scaffold: gear for THIS tick's chosen target right before the attack so the
+       forced set is the one that actually fires (the step above set the target). */
+    if (ctx && ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
+
     /* attack */
     if (can_attack && s->player.attack_timer > 0) s->player.attack_timer--;
     if (can_attack && osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
