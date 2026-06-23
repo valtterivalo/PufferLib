@@ -14,6 +14,8 @@
  *   osrs_npc_magic_max_hit(base, pct)         NPC magic max hit from stats
  *   osrs_npc_max_hit(style, ...)              dispatches to style-specific formula
  *   osrs_npc_attack_roll(att, bonus)          NPC attack roll
+ *   osrs_npc_def_roll(def_level, def_bonus)   NPC defence roll the player attacks into
+ *   encounter_npc_target_def_roll(...)        style-dispatched NPC defence roll
  *   osrs_player_def_roll_vs_npc(def,mag,b,s)  player defence roll vs NPC
  *   encounter_xorshift(state)                 xorshift32 RNG step
  *   encounter_rand_int(state, max)            random int in [0, max)
@@ -290,6 +292,50 @@ static inline int osrs_npc_magic_max_hit(int base_spell_dmg, int magic_dmg_pct) 
    NPCs don't have prayer or void bonuses — just level + invisible +9. */
 static inline int osrs_npc_attack_roll(int att_level, int att_bonus) {
     return (att_level + 9) * (att_bonus + 64);
+}
+
+/* NPC defence roll the PLAYER attacks into: (def_level + 9) * (def_bonus + 64).
+   NPCs carry the same hidden +9 as their attack roll. The caller passes the
+   level the relevant style rolls against — Defence level (drain-adjusted) for
+   melee/ranged, Magic level for magic — and the matching defensive bonus. */
+static inline int osrs_npc_def_roll(int def_level, int def_bonus) {
+    return (def_level + 9) * (def_bonus + 64);
+}
+
+/* pick the NPC melee defence bonus for an incoming player melee attack.
+   melee_style: 0=stab, 1=slash, 2=crush. */
+static inline int encounter_npc_melee_def_bonus(
+    int stab_def, int slash_def, int crush_def, int melee_style
+) {
+    if (melee_style == 1) return slash_def;  /* MELEE_STYLE_SLASH */
+    if (melee_style == 2) return crush_def;  /* MELEE_STYLE_CRUSH */
+    return stab_def;                         /* MELEE_STYLE_STAB */
+}
+
+/** Style-dispatched NPC defence roll the player attacks into.
+    A monster's MAGIC defence rolls off its Magic level (not Defence level), so
+    the caller passes both: melee_ranged_def_level (the encounter's drain-adjusted
+    Defence level) used by melee/ranged, and magic_level used by magic. The melee
+    branch selects stab/slash/crush by the attacking weapon's melee_style.
+    attack_style: 1=melee, 2=ranged, 3=magic. */
+static inline int encounter_npc_target_def_roll(
+    int melee_ranged_def_level,
+    int magic_level,
+    int stab_def,
+    int slash_def,
+    int crush_def,
+    int magic_def_bonus,
+    int ranged_def_bonus,
+    int attack_style,
+    int melee_style
+) {
+    if (attack_style == 3) /* ATTACK_STYLE_MAGIC */
+        return osrs_npc_def_roll(magic_level, magic_def_bonus);
+    if (attack_style == 2) /* ATTACK_STYLE_RANGED */
+        return osrs_npc_def_roll(melee_ranged_def_level, ranged_def_bonus);
+    return osrs_npc_def_roll(
+        melee_ranged_def_level,
+        encounter_npc_melee_def_bonus(stab_def, slash_def, crush_def, melee_style));
 }
 
 /* player defence roll against NPC attack.

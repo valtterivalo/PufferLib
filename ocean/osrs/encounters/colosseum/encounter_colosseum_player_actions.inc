@@ -849,13 +849,6 @@ static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* n
     return def < 0 ? 0 : def;
 }
 
-/** melee defence bonus on `ns` against a given attacking melee style. */
-static int col_melee_def_bonus(const ColoNpcStats* ns, MeleeStyle ms) {
-    return ms == MELEE_STYLE_SLASH ? ns->slash_def
-         : ms == MELEE_STYLE_CRUSH ? ns->crush_def
-         : ns->stab_def;
-}
-
 /**
  * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
  * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness
@@ -883,8 +876,9 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     if (!encounter_use_spec(&s->player, osrs_spec_cost(item))) return;
 
     int eff_def = col_npc_effective_def_level(npc, ns);
-    int def_bonus = col_melee_def_bonus(ns, col_item_melee_style(item));
-    int def_roll = (eff_def + 9) * (def_bonus + 64);
+    int def_bonus = encounter_npc_melee_def_bonus(
+        ns->stab_def, ns->slash_def, ns->crush_def, col_item_melee_style(item));
+    int def_roll = osrs_npc_def_roll(eff_def, def_bonus);
     int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
 
     SpecResult r = osrs_resolve_spec(item, att_roll, ls->max_hit, def_roll,
@@ -1109,18 +1103,11 @@ static int col_npc_target_def_roll(
     AttackStyle style,
     MeleeStyle weapon_melee_style
 ) {
-    int def_bonus, def_level;
-    if (style == ATTACK_STYLE_MAGIC) {
-        def_bonus = ns->magic_def_bonus;
-        def_level = ns->magic_level;
-    } else if (style == ATTACK_STYLE_RANGED) {
-        def_bonus = ns->ranged_def_bonus;
-        def_level = col_npc_effective_def_level(npc, ns);
-    } else {
-        def_bonus = col_melee_def_bonus(ns, weapon_melee_style);
-        def_level = col_npc_effective_def_level(npc, ns);
-    }
-    return (def_level + 9) * (def_bonus + 64);
+    return encounter_npc_target_def_roll(
+        col_npc_effective_def_level(npc, ns), ns->magic_level,
+        ns->stab_def, ns->slash_def, ns->crush_def,
+        ns->magic_def_bonus, ns->ranged_def_bonus,
+        style, weapon_melee_style);
 }
 
 /** Expected player weapon DPT against one Colosseum NPC using live combat math. */
