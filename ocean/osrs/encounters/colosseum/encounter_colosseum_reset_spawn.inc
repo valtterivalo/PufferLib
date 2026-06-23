@@ -476,6 +476,22 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     s->surge_doses = surge_doses;
 }
 
+/** scaffold (remove_brews): strip every Saradomin-brew dose from the seeded
+    inventory by emptying those cells. Brews are the only HP-healing consumable, so
+    this isolates whether the agent leans on them as a crutch through wave ~3
+    instead of learning to avoid damage. Run before the consumable-counter sync so
+    brew_doses recomputes to 0. */
+static void col_strip_brews_from_inventory(ColosseumState* s) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        ColoInvCell* cell = &s->inventory_cells[i];
+        if (cell->dose == 0) continue;
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
+        if (resolution.consumable_kind == OSRS_CONSUMABLE_BREW)
+            *cell = osrs_inventory_cell_empty();
+    }
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
@@ -523,6 +539,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));
     memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
     col_seed_inventory_cells_from_gameplay_loadout(s);
+    if (ctx->config.remove_brews) col_strip_brews_from_inventory(s);
 
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
     s->full_supplies = *supplies;

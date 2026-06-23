@@ -344,6 +344,7 @@ void my_init(Env* env, Dict* kwargs) {
         "bis_gear_oracle_mode",
         "invuln_mode",
         "episode_max_ticks_override",
+        "remove_brews",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

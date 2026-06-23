@@ -1713,6 +1713,11 @@ typedef struct {
                                           overriding the speedrun/beginner defaults.
                                           0 = keep the loadout default (bit-identical).
                                           Probes whether the timeout is the wall. */
+    int remove_brews;                  /* scaffold: 1 = strip all Saradomin-brew
+                                          doses from the seeded inventory (brews are
+                                          the only HP-healing consumable). 0 =
+                                          bit-identical. Probes the healing-crutch
+                                          plateau hypothesis. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).

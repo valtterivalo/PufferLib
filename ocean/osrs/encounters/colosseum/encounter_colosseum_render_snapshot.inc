@@ -56,6 +56,9 @@ static void col_put_int_ctx(
         }
         ctx->config.episode_max_ticks_override = value;
     }
+    else if (strcmp(key, "remove_brews") == 0)
+        ctx->config.remove_brews =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
