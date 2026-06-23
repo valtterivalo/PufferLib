@@ -890,20 +890,30 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             if (s->player.current_ranged > 0) s->player.current_ranged--;
             if (s->player.current_magic > 0) s->player.current_magic--;
         }
-        inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
-            .damage = dmg,
-            /* mob->player projectile lands at remainingDelay-1 (it is onTicked on
-               its creation tick). jad is the exception: its DelayedAction defers the
-               whole resolution, so the SDK keeps jad's full delay. */
-            .ticks_remaining = is_jad ? hit_delay : hit_delay - 1,
-            .attack_style = actual_style,
-            .check_prayer = is_jad ? 1 : 0,
-            .prayer_check_delay = is_jad ? INF_JAD_PROJECTILE_DELAY + 1 : 0,
-            .spell_type = 0,
-            .source_npc_type = npc->type,
-            .hit_success = accuracy_hit,
-            .elysian_reduced = 0,
-        });
+        /* mob->player projectile lands at remainingDelay-1 (it is onTicked on its
+           creation tick). Non-jad locks the protect-prayer + damage at the throw
+           tick via the shared SDK constructor (same as colosseum). Jad is the
+           exception: its DelayedAction defers the whole resolution to
+           T+prayer_check_delay, so it keeps full delay + the deferred check. */
+        EncounterPendingHit hit;
+        if (is_jad) {
+            hit = (EncounterPendingHit){
+                .damage = dmg,
+                .ticks_remaining = hit_delay,
+                .attack_style = actual_style,
+                .check_prayer = 1,
+                .prayer_check_delay = INF_JAD_PROJECTILE_DELAY + 1,
+                .spell_type = ENCOUNTER_SPELL_NONE,
+                .source_npc_type = npc->type,
+                .hit_success = accuracy_hit,
+                .elysian_reduced = 0,
+            };
+        } else {
+            hit = encounter_pending_hit_resolved_at_throw(
+                dmg, hit_delay - 1, actual_style, s->player.prayer,
+                npc->type, 0 /* source_slot: unused for inferno */, accuracy_hit, NULL);
+        }
+        inf_queue_player_pending_hit(s, idx, npc->type, hit);
     }
 
     npc->attacked_this_tick = 1;
