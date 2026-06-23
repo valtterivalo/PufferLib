@@ -228,7 +228,9 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     /* early death check before player actions: a lethal hit can't be brewed back.
        Doom reaching its tier stack cap is also lethal. */
-    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
+    if (ctx && ctx->config.invuln_mode) {
+        s->player.current_hitpoints = s->player.base_hitpoints;  /* scaffold: unkillable */
+    } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);
         col_record_death_attribution(s);
         s->episode_over = 1;
@@ -254,7 +256,9 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int wave_cleared = 0;
 
     /* post-action death check (HP or a lethal Doom stack). */
-    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
+    if (ctx && ctx->config.invuln_mode) {
+        s->player.current_hitpoints = s->player.base_hitpoints;  /* scaffold: unkillable */
+    } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;

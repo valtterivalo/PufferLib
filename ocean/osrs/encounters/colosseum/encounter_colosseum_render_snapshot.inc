@@ -45,6 +45,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "bis_gear_oracle_mode") == 0)
         ctx->config.bis_gear_oracle_mode =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "invuln_mode") == 0)
+        ctx->config.invuln_mode =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
