@@ -200,18 +200,23 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
+/* 2026-06-23: re-seeded after the throw-tick prayer fix. Normal NPC ranged/magic
+   now resolve the protect-prayer + freeze damage on the THROW tick (col_npc_
+   queue_projectile), not at land, matching melee + manticore + OSRS. The 11
+   projectile-bearing configs shift; w12_sol is unchanged (its specials are a
+   separate typeless path). Verified throw-determined + flick-resistant by probe. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x1694fd01387f0618ULL,
-    0x1ff420849793badeULL,
-    0x1c0d96c973c06e3aULL,
-    0x72e4932c010dc836ULL,
-    0x8c0fb543c7bf44fbULL,
-    0x28493e25fd0e11e4ULL,
-    0xc6511f9a8ac56a50ULL,
-    0x7aca4ee89b4ea7c3ULL,
-    0x5fde0eef77635842ULL,
-    0x2331e790bf0f7ea7ULL,
-    0x125cae68a23556adULL,
+    0x56dc083f590c6bdfULL,
+    0xc7355af55d923762ULL,
+    0x16bf2dd2486a7fa4ULL,
+    0x70939d3f3a721aa4ULL,
+    0xa3eec9a71acf73b9ULL,
+    0x11d632436c8fbd49ULL,
+    0x61005de22d329a97ULL,
+    0xccc38a079ee4133eULL,
+    0x2d6a83683a94295aULL,
+    0xe1908358107dbe98ULL,
+    0x7f12f4986a9c27feULL,
     0x8e3a4aecf0dc4dfdULL,
 };
 

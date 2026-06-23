@@ -259,8 +259,13 @@ static int col_npc_projectile_delay(AttackStyle style, int distance) {
     return timing.damage_delay_ticks;
 }
 
-/** queue a normal NPC ranged/magic attack on the player with deferred prayer check
-    so flicking at land time matters. */
+/** queue a normal NPC ranged/magic attack on the player. OSRS locks the protect-
+    prayer outcome AND the damage on the THROW tick (the overhead up now), then the
+    frozen damage flies and lands `delay` ticks later: you cannot react-flick once
+    the projectile is in the air. Prayer + attribution therefore happen here at
+    throw, mirroring the manticore-orb and instant-melee paths; the queued hit
+    carries the already-resolved (frozen) damage with check_prayer=0 so the shared
+    resolver just lands it. */
 static void col_npc_queue_projectile(
     ColosseumState* s, int idx, const ColoNpcStats* stats, AttackStyle style, int max_hit
 ) {
@@ -268,8 +273,19 @@ static void col_npc_queue_projectile(
     int dist = col_npc_dist_to_player(s, npc);
     int hit_success = 0;
     int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
+    int rolled_dmg = dmg;
+    int prayed = encounter_prayer_correct_for_style(s->player.prayer, style);
+    if (prayed) {
+        dmg = 0;
+        s->tick_scratch.prayer_correct++;
+    }
+    col_log_prayer_event(s, npc->type, prayed, dmg);
+    s->tick_scratch.styles_faced_mask |= (1 << style);
+    s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
+    if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     int delay = col_npc_projectile_delay(style, dist);
-    col_queue_player_pending_hit(s, idx, npc->type, dmg, delay, style, 1, hit_success);
+    col_queue_player_pending_hit(
+        s, idx, npc->type, dmg, delay, style, 0, hit_success && !prayed);
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;
     s->tick_scratch.attacks_fired++;

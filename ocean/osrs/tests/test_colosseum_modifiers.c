@@ -3015,6 +3015,69 @@ static void test_manticore_pattern_copy(void) {
     CHECK("a peer beyond 15 tiles does not copy", bmc->pattern_copied == 0);
 }
 
+/* OSRS locks a ranged/magic attack's protect-prayer outcome + damage on the THROW
+   tick (the overhead up then), not when the projectile lands. col_npc_queue_
+   projectile must freeze the damage at throw (check_prayer=0) so flicking the
+   overhead off mid-flight cannot save you and flicking it on cannot block a hit
+   already thrown — the same model the manticore orb + instant melee already use. */
+static void test_projectile_prayer_locks_at_throw(void) {
+    printf("test_projectile_prayer_locks_at_throw\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    geo_clear_npcs(&s);
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    /* serpent shaman in range (dist 7) with clear LoS along row 16 (no pillar). */
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 10, 16);
+
+    int any_queued = 0, all_frozen = 1, no_throw_damage = 1, prayer_counted = 0, flick_safe = 1;
+    for (int rep = 0; rep < 24; rep++) {
+        s.player_pending_hits.count = 0;
+        s.npcs[0].attack_timer = 0;
+        s.player.prayer = PRAYER_PROTECT_MAGIC;     /* correct, up on the throw tick */
+        s.player.current_hitpoints = 99;
+        int pc_before = s.tick_scratch.prayer_correct;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (s.player.current_hitpoints != 99) no_throw_damage = 0;
+        if (s.tick_scratch.prayer_correct > pc_before) prayer_counted = 1;
+        s.player.prayer = PRAYER_NONE;              /* flick OFF after the throw */
+        for (int h = 0; h < s.player_pending_hits.count; h++) {
+            const EncounterPendingHit* ph = &s.player_pending_hits.hits[h];
+            if (!ph->active || ph->attack_style != ATTACK_STYLE_MAGIC) continue;
+            any_queued = 1;
+            if (ph->damage != 0) all_frozen = 0;
+            if (ph->check_prayer != 0) flick_safe = 0; /* 0 => resolver never re-checks at land */
+        }
+    }
+    CHECK("a prayed projectile freezes to 0 damage at throw", any_queued && all_frozen);
+    CHECK("the projectile flies (nothing lands on the throw tick)", no_throw_damage);
+    CHECK("the projectile's prayer is counted on its throw tick", prayer_counted);
+    CHECK("the frozen hit is flick-resistant (check_prayer=0)", flick_safe);
+
+    /* wrong overhead at throw: damage is kept (Relentless III forces accuracy so
+       only the 1/32 zero roll can blank it); flicking the right prayer on after the
+       throw cannot retroactively block it. */
+    s.modifiers.active_mask |= (1u << COLO_MOD_RELENTLESS);
+    s.modifiers.tier[COLO_MOD_RELENTLESS] = 3;
+    int kept_damage = 0;
+    for (int rep = 0; rep < 32 && !kept_damage; rep++) {
+        s.player_pending_hits.count = 0;
+        s.npcs[0].attack_timer = 0;
+        s.player.prayer = PRAYER_PROTECT_MELEE;     /* wrong on the throw tick */
+        s.player.current_hitpoints = 99;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        s.player.prayer = PRAYER_PROTECT_MAGIC;     /* flick ON after the throw (too late) */
+        for (int h = 0; h < s.player_pending_hits.count; h++) {
+            const EncounterPendingHit* ph = &s.player_pending_hits.hits[h];
+            if (ph->active && ph->attack_style == ATTACK_STYLE_MAGIC && ph->damage > 0) kept_damage = 1;
+        }
+    }
+    CHECK("a wrong-prayer projectile keeps its damage (locked at throw)", kept_damage);
+}
+
 /* 5e. the javelin skyfall has no accuracy/defence/prayer gate — marks carry the
    raw uniform 0..40 TYPELESS roll, land on the marked tile through
    Protect-from-Missiles, and miss entirely off-tile. Cadence: every 5th attack
@@ -6786,6 +6849,7 @@ int main(void) {
     test_manticore_barrage_period();
     test_manticore_telegraph_during_windup();
     test_manticore_orb_same_tick_flick();
+    test_projectile_prayer_locks_at_throw();
     test_npc_melee_instant_unprayable();
     test_manticore_pattern_copy();
     test_javelin_skyfall_no_defence_gate();
