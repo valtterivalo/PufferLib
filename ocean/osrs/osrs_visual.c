@@ -320,7 +320,7 @@ static void __attribute__((unused)) replay_free(ReplayFile* rf) {
     if (rf) { free(rf->actions); free(rf->initial_snapshot); free(rf); }
 }
 
-#define VISUAL_POLICY_MAX_ACTION_HEADS 16
+#define VISUAL_POLICY_MAX_ACTION_HEADS 64
 
 typedef enum {
     VISUAL_POLICY_NONE = 0,

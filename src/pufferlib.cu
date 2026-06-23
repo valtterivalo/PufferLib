@@ -1250,6 +1250,12 @@ void ppo_loss_fwd_bwd(
     int N = dec_out.shape[0], T = dec_out.shape[1], fused_cols = dec_out.shape[2];
     int A_total = fused_cols - 1;  // last column is value
     int total = N * T;
+    int num_atns = (int)numel(act_sizes.shape);
+    if (num_atns > MAX_ATN_HEADS) {
+        fprintf(stderr, "ppo_loss_fwd_bwd: action heads %d exceed MAX_ATN_HEADS %d\n",
+            num_atns, MAX_ATN_HEADS);
+        abort();
+    }
 
     // Pointers into fused decoder output
     const precision_t* logits_ptr = dec_out.data;
@@ -1297,7 +1303,7 @@ void ppo_loss_fwd_bwd(
         .action_mask = has_mask ? graph.mb_action_mask.data : nullptr,
         .mask_stride_n = has_mask ? T * A_total : 0,
         .mask_stride_t = has_mask ? A_total : 0,
-        .num_atns = (int)numel(act_sizes.shape),
+        .num_atns = num_atns,
         .clip_coef = clip_coef, .vf_clip_coef = vf_clip_coef,
         .vf_coef = vf_coef, .ent_coef = ent_coef,
         .reward_scale_max = reward_scale_max,

@@ -4,6 +4,10 @@
 #include <math.h>
 #include <assert.h>
 
+#ifndef PUFFERNET_MAX_ACTION_HEADS
+#define PUFFERNET_MAX_ACTION_HEADS 64
+#endif
+
 typedef struct {
     void* data;
     size_t capacity;
@@ -773,11 +777,16 @@ void cat_dim1(CatDim1* layer, float* x, float* y) {
 typedef struct Multidiscrete Multidiscrete;
 struct Multidiscrete {
     int batch_size;
-    int logit_sizes[32];
+    int logit_sizes[PUFFERNET_MAX_ACTION_HEADS];
     int num_actions;
 };
 
 Multidiscrete* make_multidiscrete(int batch_size, int logit_sizes[], int num_actions) {
+    if (num_actions > PUFFERNET_MAX_ACTION_HEADS) {
+        fprintf(stderr, "make_multidiscrete: action heads %d exceed PUFFERNET_MAX_ACTION_HEADS %d\n",
+            num_actions, PUFFERNET_MAX_ACTION_HEADS);
+        abort();
+    }
     Multidiscrete* layer = (Multidiscrete*)calloc(1, sizeof(Multidiscrete));
     layer->batch_size = batch_size;
     layer->num_actions = num_actions;
