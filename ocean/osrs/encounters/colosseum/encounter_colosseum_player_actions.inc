@@ -892,7 +892,8 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     int total = 0;
     int num_hits = r.num_hits > 0 ? r.num_hits : 1;
     for (int i = 0; i < num_hits; i++) {
-        col_queue_npc_pending_hit(s, npc_slot, r.damage[i], 1,
+        /* Q6: melee spec damage lands the same tick it is calculated (delay 0). */
+        col_queue_npc_pending_hit(s, npc_slot, r.damage[i], 0,
                                   ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
         total += r.damage[i];
     }
@@ -927,7 +928,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     s->player_attack_dmg = total;
     s->player_attack_style_id = ATTACK_STYLE_MELEE;
     s->player_attack_timing = (EncounterProjectileTiming){
-        .damage_delay_ticks = 1,
+        .damage_delay_ticks = 0,
         .visual_start_delay_ticks = 0,
         .visual_duration_ticks = 1,
     };
@@ -1226,7 +1227,12 @@ static void col_player_attack_target_ctx(
         abort();
     }
 
-    int ticks = ls->attack_range > 1 ? 3 : 1;
+    /* Q6: player melee lands the same tick it is calculated (shared OSRS melee
+       delay 0, ENCOUNTER_PROJECTILE_DELAY_MELEE via col_player_projectile_timing).
+       Ranged/magic keep their distance-abstracted flight delay. */
+    int ticks = ls->style == ATTACK_STYLE_MELEE
+        ? hit_timing.damage_delay_ticks
+        : (ls->attack_range > 1 ? 3 : 1);
     int damage = 0;
     for (int splat = 0; splat < resolved_count; splat++) {
         int hit_slot = venator_attack

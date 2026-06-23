@@ -6220,6 +6220,113 @@ static void test_npc_melee_instant_unprayable(void) {
         s.log.offpray_damage_by_type[COLO_JAGUAR_WARRIOR] > offpray_before);
 }
 
+/* ---- Q6: a player melee hit queues at the shared OSRS melee delay 0, not the
+   old delay 1. The pending hit carries ticks_remaining == 0 and lands on the very
+   next NPC-projectile resolver call (the throw-tick land convention inferno uses);
+   a ranged attack from the same kit still carries its distance flight delay. */
+static void test_player_melee_lands_at_delay_zero(void) {
+    printf("test_player_melee_lands_at_delay_zero\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    /* beginner-only so the melee set is the fang (a real melee weapon). */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 1.0f, 91);
+    geo_clear_npcs(&s);
+    s.player.x = 18; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 16, 16);
+
+    s.player.attack_timer = 0;
+    col_player_attack_target(&s, 0);
+    CHECK("a melee swing queues at least one pending hit on the target",
+        s.npcs[0].pending_hits.count >= 1);
+    int all_delay_zero = s.npcs[0].pending_hits.count >= 1;
+    for (int h = 0; h < s.npcs[0].pending_hits.count; h++)
+        if (s.npcs[0].pending_hits.hits[h].ticks_remaining != 0) all_delay_zero = 0;
+    CHECK("Q6: melee pending hits land at delay 0 (shared OSRS melee delay)",
+        all_delay_zero);
+
+    int hp_before = s.npcs[0].hp;
+    col_resolve_player_projectiles_on_npcs(&s);
+    CHECK("a delay-0 melee hit lands on the first resolver pass",
+        s.npcs[0].hp < hp_before && s.npcs[0].pending_hits.count == 0);
+
+    /* ranged from the same kit keeps a non-zero flight delay (Q6 is melee-only). */
+    ColosseumState r;
+    ColosseumContext rctx;
+    loadout_reset(&r, &rctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 1.0f, 91);
+    geo_clear_npcs(&r);
+    col_apply_weapon_set(&r, COLO_GEAR_RANGED);
+    r.player.x = 10; r.player.y = 16;
+    col_rebuild_player_collision_flags(&r);
+    col_init_npc(&r, 0, COLO_JAGUAR_WARRIOR, 16, 16);
+    r.player.attack_timer = 0;
+    col_player_attack_target(&r, 0);
+    int ranged_delay_positive = r.npcs[0].pending_hits.count >= 1;
+    for (int h = 0; h < r.npcs[0].pending_hits.count; h++)
+        if (r.npcs[0].pending_hits.hits[h].ticks_remaining <= 0) ranged_delay_positive = 0;
+    CHECK("a ranged swing keeps its flight delay (>0), so Q6 stays melee-scoped",
+        ranged_delay_positive);
+}
+
+/* ---- Q10: with echo boots equipped (beginner kit) a connecting NPC hit reflects
+   one recoil point to that attacker, consuming one charge. Sol Heredit and hazard
+   entities are never recoil targets. Mirrors inferno's echo-boots recoil path. */
+static void test_echo_boots_recoil_reflects_to_attacker(void) {
+    printf("test_echo_boots_recoil_reflects_to_attacker\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 1.0f, 91);
+    geo_clear_npcs(&s);
+    CHECK("beginner kit equips echo boots",
+        s.player.equipped[GEAR_SLOT_FEET] == ITEM_ECHO_BOOTS &&
+        osrs_effect_profile_has(col_live_effects(&s), OSRS_ITEM_EFFECT_ECHO_BOOTS));
+    CHECK("echo boots start charged",
+        s.player.item_effect_state.echo_boot_charges == OSRS_ECHO_BOOTS_MAX_CHARGES);
+
+    s.player.x = 18; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 16, 16);
+
+    /* wrong overhead so the jaguar's melee connects; loop until a hit deals damage
+       so the test is robust to per-hit accuracy misses. */
+    int recoiled = 0;
+    long charges_before = s.player.item_effect_state.echo_boot_charges;
+    for (int rep = 0; rep < 64 && !recoiled; rep++) {
+        ctx.player_render_hit_count = 0;
+        s.npcs[0].attack_timer = 0;
+        s.npcs[0].hit_damage = 0;
+        s.player.prayer = PRAYER_PROTECT_MAGIC;   /* wrong overhead, melee lands */
+        s.player.current_hitpoints = 99;
+        int hp_before = s.npcs[0].hp;
+        long ch_before = s.player.item_effect_state.echo_boot_charges;
+        col_npc_attack_ctx(&s, &ctx, 0);
+        if (s.player.current_hitpoints < 99) {
+            /* the player took at least one connecting hit this call */
+            CHECK("a connecting melee reflects exactly one recoil point per hit",
+                hp_before - s.npcs[0].hp >= 1);
+            CHECK("recoil consumes one echo-boots charge per reflected hit",
+                ch_before - s.player.item_effect_state.echo_boot_charges ==
+                    (long)(hp_before - s.npcs[0].hp));
+            recoiled = 1;
+        }
+    }
+    CHECK("an unprayed jaguar eventually lands and recoils", recoiled);
+    CHECK("recoil drew down the echo-boots charge pool",
+        s.player.item_effect_state.echo_boot_charges < charges_before);
+
+    /* Sol Heredit is never a recoil target. */
+    ColosseumState sol;
+    ColosseumContext solctx;
+    loadout_reset(&sol, &solctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 1.0f, 91);
+    geo_clear_npcs(&sol);
+    col_init_npc(&sol, 0, COLO_SOL_HEREDIT, 16, 16);
+    int sol_hp_before = sol.npcs[0].hp;
+    col_apply_echo_boots_recoil(&sol, &solctx, 0, 30);
+    CHECK("echo-boots recoil never reflects onto Sol Heredit",
+        sol.npcs[0].hp == sol_hp_before &&
+        sol.player.item_effect_state.echo_boot_charges == OSRS_ECHO_BOOTS_MAX_CHARGES);
+}
+
 /* ---- the viewer inventory panel must track live sim state, not freeze on the
    wiki start kit. Guards the regression where the display_inventory override
    bypassed the live path: drinking a dose must change the vial sprite / empty the
@@ -6849,6 +6956,8 @@ int main(void) {
     test_manticore_orb_same_tick_flick();
     test_projectile_prayer_locks_at_throw();
     test_npc_melee_instant_unprayable();
+    test_player_melee_lands_at_delay_zero();
+    test_echo_boots_recoil_reflects_to_attacker();
     test_manticore_pattern_copy();
     test_javelin_skyfall_no_defence_gate();
     test_sol_adjacency_gate_and_kiting();

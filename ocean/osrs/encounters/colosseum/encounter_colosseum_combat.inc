@@ -66,6 +66,46 @@ static void col_render_hit_events_add(
     *count += 1;
 }
 
+/** Q10: reflect echo-boots recoil onto the NPC that just damaged the player.
+    Mirrors inferno's inf_apply_echo_boots_recoil: the shared
+    osrs_echo_boots_recoil_damage gates on the charge + effect, the reflected hit
+    targets the single attacker (any range), consumes one charge, and routes the
+    damage through the same kill bookkeeping a player projectile would (damage_dealt,
+    render splat, totem trigger, player-credited death). Sol Heredit and the
+    hazard entities (totem/bee) are never recoil targets. */
+static void col_apply_echo_boots_recoil(
+    ColosseumState* s, ColosseumContext* ctx, int attacker_slot, int final_damage
+) {
+    int recoil_damage = osrs_echo_boots_recoil_damage(
+        col_live_effects(s), &s->player.item_effect_state, final_damage);
+    if (recoil_damage <= 0) return;
+    if (attacker_slot < 0 || attacker_slot >= COLO_MAX_NPCS) return;
+
+    ColoNPC* npc = &s->npcs[attacker_slot];
+    if (!col_npc_is_live_enemy(npc)) return;
+    if (npc->type == COLO_SOL_HEREDIT) return;
+
+    osrs_consume_echo_boots_charge(&s->player);
+    int landed = 0, hit_damage = 0;
+    int applied = encounter_damage_npc(
+        &npc->hp, &landed, &hit_damage, recoil_damage);
+    if (applied <= 0) return;
+
+    npc->hit_landed_this_tick = landed;
+    npc->hit_damage += hit_damage;
+    npc->hit_was_successful_this_tick = 1;
+    col_render_hit_events_add(
+        &ctx->npc_render_hit_count[attacker_slot],
+        ctx->npc_render_hit_damage[attacker_slot],
+        hit_damage);
+    s->tick_scratch.damage_dealt += (float)applied;
+    if (npc->hp <= 0) {
+        col_apply_npc_death(s, attacker_slot);
+    } else {
+        col_mod_on_npc_hp_changed(s, attacker_slot);
+    }
+}
+
 /** resolve player attack projectiles landing on NPCs. A hit that lands this tick
     is removed from the queue (the shared resolver only flags it inactive), so a
     long fight like Sol does not pile up resolved hits until the queue overflows. */
@@ -150,6 +190,10 @@ static void col_pending_hit_prayer_observer(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES)
         s->log.total_damage_by_type[hit->source_npc_type] += (float)dmg;
+    /* Q10: echo-boots recoil on a connecting ranged/magic projectile reflects to
+       its source NPC at land time (post-prayer dmg), mirroring inferno's
+       projectile-land recoil. */
+    col_apply_echo_boots_recoil(s, ctx, hit->source_npc_slot, dmg);
     if (!checked && hit->source_npc_type == COLO_MANTICORE) {
         if (dmg > 0) s->last_hit_by_type = COLO_MANTICORE;
         if (hit->hit_success) col_mod_manticore_apply_venom(s, hit->hit_success);
@@ -248,13 +292,16 @@ static int col_npc_roll_vs_player(
         att_roll, def_roll, effective_max, force_hit, &s->rng_state, hit_success);
 }
 
-/** projectile damage delay (ticks) for an NPC ranged/magic attack at a distance. */
+/** projectile damage delay (ticks) for an NPC ranged/magic attack at a distance.
+    Q5: routes through the shared distance-based timing with is_player=0, the same
+    inferno onTicked convention (an NPC projectile lands one tick earlier than a
+    player's at the same range — the +1 is_player term is omitted). Colosseum NPCs
+    carry no per-NPC timing tweaks, so the default options mirror inferno's standard
+    non-mager/ranger/jad path exactly. */
 static int col_npc_projectile_delay(AttackStyle style, int distance) {
-    EncounterProjectileDelayKind kind = (style == ATTACK_STYLE_MAGIC)
-        ? ENCOUNTER_PROJECTILE_DELAY_MAGIC
-        : ENCOUNTER_PROJECTILE_DELAY_RANGED;
     EncounterProjectileDelayOptions opts = {0};
-    EncounterProjectileTiming timing = encounter_projectile_timing(distance, 0, kind, opts);
+    EncounterProjectileTiming timing = encounter_projectile_timing(
+        distance, 0, col_projectile_delay_kind_for_style(style), opts);
     return timing.damage_delay_ticks;
 }
 
@@ -299,7 +346,8 @@ static void col_npc_queue_projectile(
     NPC off-prayer attribution, conflict-bleed classifier inputs, prayer-correct,
     damage, Blasphemy drain, Doom stacks) plus correct melee kill attribution. */
 static void col_apply_instant_melee_hit(
-    ColosseumState* s, ColosseumContext* ctx, int npc_type, int dmg, int hit_success
+    ColosseumState* s, ColosseumContext* ctx, int attacker_slot, int npc_type,
+    int dmg, int hit_success
 ) {
     (void)hit_success;
     int rolled_dmg = dmg;
@@ -313,6 +361,10 @@ static void col_apply_instant_melee_hit(
     s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] += (float)rolled_dmg;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, npc_type, prayed, dmg);
+    /* Q10: echo-boots recoil fires on the damage actually dealt (post-prayer),
+       reflected to the melee attacker, before the player damage applies (mirrors
+       inferno's instant-melee recoil ordering). */
+    col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
     col_damage_player_from(s, dmg, npc_type);
     if (dmg > 0) {  /* dmg>0 implies an off-prayer damaging hit (prayed -> dmg 0) */
         int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
@@ -334,7 +386,7 @@ static void col_npc_melee_attack(
     ColoNPC* npc = &s->npcs[idx];
     int hit_success = 0;
     int dmg = col_npc_roll_vs_player(s, stats, ATTACK_STYLE_MELEE, max_hit, &hit_success);
-    col_apply_instant_melee_hit(s, ctx, npc->type, dmg, hit_success);
+    col_apply_instant_melee_hit(s, ctx, idx, npc->type, dmg, hit_success);
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = ATTACK_STYLE_MELEE;
     s->tick_scratch.attacks_fired++;
