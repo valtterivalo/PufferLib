@@ -311,7 +311,6 @@ static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
 static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* actions) {
     /* apply prayer actions. each helper returns 1 when the final active prayer
        was activated this tick, so that slot skips drain. */
-    OffensivePrayer prev_offensive = s->player.offensive_prayer;
     int prayer_act = inf_canonical_overhead_action(actions[INF_HEAD_PRAYER]);
     int offensive_act = actions[INF_HEAD_OFFENSIVE];
     if (ctx->config.oracle_mode > 0) {
@@ -327,23 +326,20 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
             }
         }
     }
-    if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
-        s->player.prayer_just_activated = 1;
-    }
+    OsrsPrayerActions prayer_actions =
+        osrs_prayer_actions(prayer_act, offensive_act);
+    OsrsPrayerTickResult prayer_result = osrs_prayer_tick_actions_then_drain(
+        &s->player,
+        osrs_prayer_rules(0, 1),
+        prayer_actions,
+        encounter_player_prayer_bonus(&s->player));
     if (prayer_act == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)
         s->redemption_action_count++;
-    if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
-        s->player.offensive_prayer_just_activated = 1;
-    }
-    /* drain can also clear offensive_prayer (pp<=0 auto-clear), so recompute
-       AFTER drain to catch both the apply-side change and the drain-side clear. */
-    encounter_drain_all_prayers(
-        &s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.prayer == PRAYER_REDEMPTION)
         s->redemption_active_ticks++;
     /* offensive prayer is baked into eff_level/max_hit via the loadout cache.
        recompute all loadouts on any change so combat math reflects current state. */
-    if (s->player.offensive_prayer != prev_offensive) {
+    if (prayer_result.offensive_changed) {
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
             inf_refresh_human_loadout_stats(s);

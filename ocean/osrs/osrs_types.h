@@ -672,11 +672,8 @@ typedef struct {
     int autocast_defensive;
     int autocast_spell;
     int prayer_drain_counter;  // Accumulates drain, triggers at drain_resistance
-    /* activation-tick bookkeeping: OSRS does not drain a prayer on the tick it
-       was activated (wiki: "the game does not drain prayer for prayers on the
-       tick they are activated"). these flags are set to 1 on OFF→ON transitions
-       in encounter_apply_{overhead,offensive}_action() and cleared by
-       encounter_drain_all_prayers(). required for 1-tick prayer flicking. */
+    /* Owned by the shared prayer SDK. Set-refresh actions latch activation
+       for drain skipping, including same-prayer one-tick flick refreshes. */
     uint8_t prayer_just_activated;
     uint8_t offensive_prayer_just_activated;
 
@@ -836,6 +833,10 @@ typedef struct {
 
     int equip_click_attempts;
     int equip_click_successes;
+    int overhead_prayer_action_attempts;
+    int overhead_prayer_action_successes;
+    int offensive_prayer_action_attempts;
+    int offensive_prayer_action_successes;
     int special_arm_attempts;
     int special_arm_successes;
     int target_click_attempts;
@@ -970,6 +971,10 @@ typedef struct {
     float off_prayer_hits;
     float equip_click_attempts;
     float equip_click_noop_rate;
+    float overhead_prayer_action_attempts;
+    float overhead_prayer_action_change_rate;
+    float offensive_prayer_action_attempts;
+    float offensive_prayer_action_change_rate;
     float special_arm_attempts;
     float special_arm_noop_rate;
     float target_click_attempts;

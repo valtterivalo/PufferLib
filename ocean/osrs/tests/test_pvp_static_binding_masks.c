@@ -690,6 +690,232 @@ static void test_food_brew_karambwan_can_resolve_same_tick(void) {
     collision_map_free(cmap);
 }
 
+static void test_policy_prayer_heads_execute_through_prayer_tick(void) {
+    printf("--- PvP policy prayer heads execute through prayer tick ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    Player* p = &env.players[0];
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->current_prayer = 99;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    actions[HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
+
+    execute_prayer_tick(&env, 0, actions);
+
+    ASSERT_INT_EQ("overhead head sets magic prayer",
+        p->prayer, PRAYER_PROTECT_MAGIC);
+    ASSERT_INT_EQ("offensive head sets augury",
+        p->offensive_prayer, OFFENSIVE_PRAYER_AUGURY);
+    ASSERT_INT_EQ("overhead attempt counted",
+        p->overhead_prayer_action_attempts, 1);
+    ASSERT_INT_EQ("overhead change counted",
+        p->overhead_prayer_action_successes, 1);
+    ASSERT_INT_EQ("offensive attempt counted",
+        p->offensive_prayer_action_attempts, 1);
+    ASSERT_INT_EQ("offensive change counted",
+        p->offensive_prayer_action_successes, 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_policy_prayer_heads_execute_through_c_step(void) {
+    printf("--- PvP policy prayer heads execute through c_step ---\n");
+
+    StaticVec* vec = pvp_test_vec(2, 1);
+    Env* env = &vec->envs[0];
+    Player* p = &env->pvp.players[0];
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->current_prayer = 99;
+
+    float* actions = env->action_ptr[0];
+    memset(actions, 0, NUM_ACTION_HEADS * sizeof(float));
+    actions[HEAD_OVERHEAD] = (float)ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
+    actions[HEAD_OFFENSIVE] = (float)ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+
+    c_step(env);
+
+    ASSERT_INT_EQ("c_step overhead action decoded",
+        env->pvp.last_executed_actions[HEAD_OVERHEAD],
+        ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
+    ASSERT_INT_EQ("c_step offensive action decoded",
+        env->pvp.last_executed_actions[HEAD_OFFENSIVE],
+        ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
+    ASSERT_INT_EQ("c_step sets ranged prayer",
+        p->prayer, PRAYER_PROTECT_RANGED);
+    ASSERT_INT_EQ("c_step sets rigour",
+        p->offensive_prayer, OFFENSIVE_PRAYER_RIGOUR);
+
+    static_vec_close(vec);
+}
+
+static void test_repeated_prayer_refresh_models_one_tick_flicking(void) {
+    printf("--- PvP repeated prayer refresh models one-tick flicking ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    Player* p = &env.players[0];
+    p->is_lms = 0;
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->current_prayer = 10;
+    p->base_prayer = 99;
+    p->prayer_drain_counter = 0;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    actions[HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+    osrs_prayer_apply_tick_actions(
+        p,
+        osrs_prayer_rules(0, 1),
+        osrs_prayer_actions(actions[HEAD_OVERHEAD], actions[HEAD_OFFENSIVE]));
+
+    for (int i = 0; i < 3; i++) {
+        update_timers(p);
+        execute_prayer_tick(&env, 0, actions);
+    }
+
+    ASSERT_INT_EQ("repeated refresh skips drain", p->current_prayer, 10);
+    ASSERT_INT_EQ("flicking leaves drain counter untouched", p->prayer_drain_counter, 0);
+
+    int noop_actions[NUM_ACTION_HEADS] = {0};
+    for (int i = 0; i < 4; i++) {
+        update_timers(p);
+        execute_prayer_tick(&env, 0, noop_actions);
+    }
+
+    ASSERT_INT_EQ("ordinary active prayer drains after refresh stops", p->current_prayer, 9);
+
+    collision_map_free(cmap);
+}
+
+static void test_prayer_refresh_after_zero_drain_cannot_reactivate(void) {
+    printf("--- PvP prayer refresh after zero drain cannot reactivate ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    Player* p = &env.players[0];
+    p->is_lms = 0;
+    p->prayer = PRAYER_PROTECT_MAGIC;
+    p->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    p->current_prayer = 1;
+    p->base_prayer = 99;
+    p->prayer_drain_counter = 72;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    actions[HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+
+    execute_prayer_tick(&env, 0, actions);
+
+    ASSERT_INT_EQ("zero prayer stays zero", p->current_prayer, 0);
+    ASSERT_INT_EQ("overhead prayer stays off", p->prayer, PRAYER_NONE);
+    ASSERT_INT_EQ("offensive prayer stays off", p->offensive_prayer, OFFENSIVE_PRAYER_NONE);
+    ASSERT_INT_EQ("drain-off is not overhead action success",
+        p->overhead_prayer_action_successes, 0);
+    ASSERT_INT_EQ("drain-off is not offensive action success",
+        p->offensive_prayer_action_successes, 0);
+
+    collision_map_free(cmap);
+}
+
+static void test_pvp_redemption_action_available_in_lms(void) {
+    printf("--- PvP redemption action available in LMS ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    env.is_lms = 1;
+    pvp_reset(&env);
+
+    Player* p = &env.players[0];
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->current_prayer = 99;
+
+    int actions[NUM_ACTION_HEADS] = {0};
+    actions[HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION;
+
+    execute_prayer_tick(&env, 0, actions);
+
+    ASSERT_INT_EQ("redemption action sets overhead",
+        p->prayer, PRAYER_REDEMPTION);
+    ASSERT_INT_EQ("redemption attempt counted",
+        p->overhead_prayer_action_attempts, 1);
+    ASSERT_INT_EQ("redemption change counted",
+        p->overhead_prayer_action_successes, 1);
+
+    collision_map_free(cmap);
+}
+
+static void test_pvp_redemption_procs_on_damage(void) {
+    printf("--- PvP redemption procs on damage ---\n");
+
+    CollisionMap* cmap = collision_map_create();
+    OsrsEnv env;
+    pvp_setup_seeded_reset_env(&env, cmap, 73);
+    pvp_reset(&env);
+
+    Player* defender = &env.players[1];
+    defender->base_hitpoints = 99;
+    defender->current_hitpoints = 10;
+    defender->base_prayer = 99;
+    defender->current_prayer = 12;
+    defender->prayer = PRAYER_REDEMPTION;
+    defender->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+
+    PendingHit hit = {0};
+    hit.damage = 3;
+    hit.attack_type = ATTACK_STYLE_MELEE;
+    hit.hit_success = 1;
+    hit.defender_prayer_at_attack = PRAYER_REDEMPTION;
+
+    apply_damage(&env, 0, 1, &hit);
+
+    ASSERT_INT_EQ("redemption heals after entering low hp band",
+        defender->current_hitpoints, 31);
+    ASSERT_INT_EQ("redemption drains prayer",
+        defender->current_prayer, 0);
+    ASSERT_INT_EQ("redemption clears overhead",
+        defender->prayer, PRAYER_NONE);
+    ASSERT_INT_EQ("redemption clears offensive",
+        defender->offensive_prayer, OFFENSIVE_PRAYER_NONE);
+
+    defender->current_hitpoints = 7;
+    defender->current_prayer = 12;
+    defender->prayer = PRAYER_REDEMPTION;
+    defender->offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
+    memset(&hit, 0, sizeof(hit));
+    hit.damage = 8;
+    hit.attack_type = ATTACK_STYLE_MELEE;
+    hit.hit_success = 1;
+    hit.defender_prayer_at_attack = PRAYER_REDEMPTION;
+
+    apply_damage(&env, 0, 1, &hit);
+
+    ASSERT_INT_EQ("lethal hit still kills through redemption",
+        defender->current_hitpoints, 0);
+    ASSERT_INT_EQ("lethal hit does not drain redemption",
+        defender->current_prayer, 12);
+    ASSERT_INT_EQ("lethal hit leaves redemption unprocced",
+        defender->prayer, PRAYER_REDEMPTION);
+
+    collision_map_free(cmap);
+}
+
 static void test_static_vec_train_mask_round_trip(void) {
     printf("--- Static vec train mask round trip ---\n");
 
@@ -943,11 +1169,21 @@ static void test_slotclick_schema_and_inventory_mask(void) {
 
     int equip_offset = action_head_offset(HEAD_INVENTORY_0);
     int special_offset = action_head_offset(HEAD_SPECIAL);
+    int overhead_offset = action_head_offset(HEAD_OVERHEAD);
+    int offensive_offset = action_head_offset(HEAD_OFFENSIVE);
     ASSERT_INT_EQ("equip noop valid", env.action_masks[equip_offset], 1);
     ASSERT_INT_EQ("crossbow slot-click valid",
         env.action_masks[equip_offset + slot + 1], 1);
     ASSERT_INT_EQ("special noop valid",
         env.action_masks[special_offset + SPECIAL_NOOP], 1);
+    ASSERT_INT_EQ("overhead magic valid",
+        env.action_masks[overhead_offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC], 1);
+    ASSERT_INT_EQ("smite remains invalid in LMS",
+        env.action_masks[overhead_offset + ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE], 0);
+    ASSERT_INT_EQ("redemption valid in LMS",
+        env.action_masks[overhead_offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION], 1);
+    ASSERT_INT_EQ("offensive augury valid",
+        env.action_masks[offensive_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY], 1);
 
     for (int slot_idx = 0; slot_idx < OSRS_INVENTORY_SIZE; slot_idx++) {
         float* row = env.observations + PVP_INVENTORY_OBS_OFFSET +
@@ -1534,6 +1770,8 @@ static void test_item_observation_templates_match_direct_writers(void) {
         float direct_target[NUM_ITEM_STATS];
         float cached_target[PVP_EQUIPPED_TARGET_FEATURE_DIM];
         get_item_stats_normalized(item_idx, direct_target);
+        for (int stat_idx = 0; stat_idx < NUM_ITEM_STATS; stat_idx++)
+            direct_target[stat_idx] = osrs_clamp_unit(direct_target[stat_idx]);
         pvp_write_target_item_stats_cached(item_idx, cached_target);
         assert_float_rows_near(
             "target item stats template",
@@ -2472,7 +2710,7 @@ static void test_static_binding_exposes_separate_action_mask(void) {
     Dict* kwargs = pvp_kwargs();
     my_init(&env, kwargs);
     my_setup_perm(&vec, &env, 0);
-    c_reset(&env);
+    c_reset(&env, NULL);
 
     ASSERT_INT_EQ("obs size keeps embedded mask tail", OBS_SIZE, OCEAN_OBS_SIZE);
     ASSERT_INT_EQ("separate mask size", MY_ACTION_MASK, ACTION_MASK_SIZE);
@@ -2537,7 +2775,7 @@ static void test_static_binding_one_agent_skips_unexported_p1_generation(void) {
     my_init(&env, kwargs);
     my_setup_perm(&vec, &env, 0);
     memset(env.pvp._masks_buf + ACTION_MASK_SIZE, 0xA5, ACTION_MASK_SIZE);
-    c_reset(&env);
+    c_reset(&env, NULL);
 
     ASSERT_TRUE("slot 0 obs pointer exported", env.obs_ptr[0] == observations);
     ASSERT_TRUE("slot 1 obs pointer absent", env.obs_ptr[1] == NULL);
@@ -2890,6 +3128,12 @@ int main(void) {
     test_scripted_legacy_movement_maps_to_head_move();
     test_duplicate_equip_clicks_apply_once();
     test_food_brew_karambwan_can_resolve_same_tick();
+    test_policy_prayer_heads_execute_through_prayer_tick();
+    test_policy_prayer_heads_execute_through_c_step();
+    test_repeated_prayer_refresh_models_one_tick_flicking();
+    test_prayer_refresh_after_zero_drain_cannot_reactivate();
+    test_pvp_redemption_action_available_in_lms();
+    test_pvp_redemption_procs_on_damage();
     test_static_vec_train_mask_round_trip();
     test_pvp_state_snapshot_restores_logical_state();
     test_native_init_loads_collision_map_and_walkable_spawns();

@@ -120,32 +120,6 @@ static inline int is_protected_prayer_action_available(Player* p, Player* target
     return p->current_prayer > 0;
 }
 
-/** Check if smite prayer is available (not in LMS). */
-static inline int is_smite_available(OsrsEnv* env, Player* p) {
-    if (!ALLOW_SMITE || env->is_lms) {
-        return 0;
-    }
-    if (remaining_ticks(p->attack_timer) > 0) {
-        return 0;
-    }
-    return p->current_prayer > 0;
-}
-
-/** Check if redemption prayer is available (no supplies left). */
-static inline int is_redemption_available(OsrsEnv* env, Player* p, Player* target) {
-    if (!ALLOW_REDEMPTION || env->is_lms) {
-        return 0;
-    }
-    if (p->food_count > 0 || p->karambwan_count > 0 || p->brew_doses > 0) {
-        return 0;
-    }
-    int ticks_until_hit = get_ticks_until_next_hit(target);
-    if (ticks_until_hit < 0 && remaining_ticks(target->attack_timer) > 0) {
-        return 0;
-    }
-    return p->current_prayer > 0;
-}
-
 /** Check if melee range is possible (can move or already in range). */
 static inline int is_melee_range_possible(Player* p, Player* target) {
     return can_move(p) || can_move(target) || is_in_melee_range(p, target);
@@ -1445,7 +1419,7 @@ static void compute_action_masks_with_inventory_affordances(
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED]     = has_prayer;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC]      = has_prayer;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE]      = has_prayer && !env->is_lms;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] = has_prayer && !env->is_lms;
+    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] = has_prayer && ALLOW_REDEMPTION;
     offset += OVERHEAD_DIM;
 
     mask[offset + VENG_NONE] = 1;

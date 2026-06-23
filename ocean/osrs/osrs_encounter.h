@@ -15,9 +15,11 @@
  *   prayer (set/refresh semantic for RL tick commands):
  *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (5/6/7 dim)
  *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (5 dim)
- *     encounter_apply_overhead_action()   apply overhead action, returns 1 on activation
- *     encounter_apply_offensive_action()  apply offensive action, returns 1 on activation
- *     encounter_drain_all_prayers()       drain both slots per tick (activation-tick skip)
+ *     OsrsPrayerActions                   typed overhead + offensive prayer command
+ *     OsrsPrayerRules                     typed Smite + Redemption exposure
+ *     osrs_prayer_apply_tick_actions()    apply commands and activation latches
+ *     osrs_prayer_drain_active_tick()     drain active prayers once
+ *     osrs_prayer_tick_*()                explicit action/drain ordering helpers
  *
  *   movement:
  *     ENCOUNTER_MOVE_TARGET_DX/DY[25]  direction tables (idle + 8 walk + 16 run)
@@ -556,19 +558,12 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
 
 /* canonical prayer action encoding for simulator tick commands              */
 /*                                                                           */
-/* the RL action space uses explicit no_change, off, and set_refresh actions.*/
-/* human UI clicks translate OSRS click-toggle behavior into those commands. */
-/*                                                                           */
-/* each encounter chooses its action-head dim based on which prayers it      */
-/* exposes. PvE uses 5, PvE with Redemption uses 6, PvP uses 7. new          */
-/* encounters                                                               */
-/* wire up by:                                                               */
-/*   1. declaring two action heads with encounter_overhead_dim /             */
-/*      ENCOUNTER_OFFENSIVE_DIM                                              */
-/*   2. calling encounter_apply_overhead_action()  on pretick                */
-/*   3. calling encounter_apply_offensive_action() on pretick                */
-/*   4. calling encounter_drain_all_prayers() on pretick (handles both slots */
-/*      + activation-tick skip + pp=0 auto-clear)                            */
+/* the action space uses no_change, off, and set_refresh actions. set_refresh */
+/* is not a no-op when the same prayer is already active: it represents       */
+/* toggling the prayer off and back on inside the tick, which is the action   */
+/* surface needed to model OSRS one-tick flicking. each encounter must pass   */
+/* explicit OsrsPrayerRules so Smite and Redemption exposure is visible at    */
+/* the call site, not hidden behind player flags.                             */
 /* overhead action encoding. dim depends on encounter:
    - PvE: 5 dim, actions 0-4 only
    - PvE with Redemption: 6 dim, action 5 maps to Redemption locally
@@ -592,10 +587,136 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
 #define ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY          4
 #define ENCOUNTER_OFFENSIVE_DIM                         5
 
-/** apply an overhead prayer action with set/refresh semantics.
-    set/refresh leaves target active and marks the slot newly activated.
-    off clears the slot. no_change preserves state and drains normally. */
-static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int action) {
+typedef struct {
+    int overhead_action;
+    int offensive_action;
+} OsrsPrayerActions;
+
+typedef struct {
+    int allow_smite;
+    int allow_redemption;
+} OsrsPrayerRules;
+
+typedef struct {
+    OverheadPrayer overhead_before;
+    OverheadPrayer overhead_after;
+    OffensivePrayer offensive_before;
+    OffensivePrayer offensive_after;
+    int overhead_commanded;
+    int offensive_commanded;
+    int overhead_activated;
+    int offensive_activated;
+    int overhead_action_changed;
+    int offensive_action_changed;
+    int overhead_changed;
+    int offensive_changed;
+} OsrsPrayerTickResult;
+
+typedef struct {
+    int procced;
+    int threshold;
+    int before_hitpoints;
+    int after_hitpoints;
+    int heal_done;
+    int zero_hit;
+    OffensivePrayer offensive_before;
+} OsrsRedemptionResult;
+
+static inline void osrs_prayer_require_overhead_action(int action) {
+    if (action < ENCOUNTER_OVERHEAD_NO_CHANGE ||
+            action > ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION) {
+        fprintf(stderr, "invalid overhead prayer action %d\n", action);
+        abort();
+    }
+}
+
+static inline void osrs_prayer_require_offensive_action(int action) {
+    if (action < ENCOUNTER_OFFENSIVE_NO_CHANGE ||
+            action > ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY) {
+        fprintf(stderr, "invalid offensive prayer action %d\n", action);
+        abort();
+    }
+}
+
+static inline OsrsPrayerActions osrs_prayer_actions(
+    int overhead_action,
+    int offensive_action
+) {
+    osrs_prayer_require_overhead_action(overhead_action);
+    osrs_prayer_require_offensive_action(offensive_action);
+    return (OsrsPrayerActions){
+        .overhead_action = overhead_action,
+        .offensive_action = offensive_action,
+    };
+}
+
+static inline OsrsPrayerRules osrs_prayer_rules(
+    int allow_smite,
+    int allow_redemption
+) {
+    return (OsrsPrayerRules){
+        .allow_smite = allow_smite ? 1 : 0,
+        .allow_redemption = allow_redemption ? 1 : 0,
+    };
+}
+
+static inline OsrsPrayerActions osrs_prayer_actions_available_to_player(
+    const Player* p,
+    OsrsPrayerRules rules,
+    OsrsPrayerActions actions
+) {
+    if (!rules.allow_smite &&
+            actions.overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE) {
+        actions.overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    }
+    if (!rules.allow_redemption &&
+            actions.overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION) {
+        actions.overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+    }
+    if (p->current_prayer <= 0) {
+        if (actions.overhead_action >= ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE)
+            actions.overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
+        if (actions.offensive_action >= ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY)
+            actions.offensive_action = ENCOUNTER_OFFENSIVE_NO_CHANGE;
+    }
+    return actions;
+}
+
+static inline OsrsPrayerTickResult osrs_prayer_tick_result_before(
+    const Player* p,
+    OsrsPrayerActions actions
+) {
+    osrs_prayer_require_overhead_action(actions.overhead_action);
+    osrs_prayer_require_offensive_action(actions.offensive_action);
+    return (OsrsPrayerTickResult){
+        .overhead_before = p->prayer,
+        .overhead_after = p->prayer,
+        .offensive_before = p->offensive_prayer,
+        .offensive_after = p->offensive_prayer,
+        .overhead_commanded =
+            actions.overhead_action != ENCOUNTER_OVERHEAD_NO_CHANGE,
+        .offensive_commanded =
+            actions.offensive_action != ENCOUNTER_OFFENSIVE_NO_CHANGE,
+    };
+}
+
+static inline void osrs_prayer_tick_result_finish(
+    OsrsPrayerTickResult* result,
+    const Player* p
+) {
+    result->overhead_after = p->prayer;
+    result->offensive_after = p->offensive_prayer;
+    result->overhead_changed =
+        result->overhead_before != result->overhead_after;
+    result->offensive_changed =
+        result->offensive_before != result->offensive_after;
+}
+
+/** Applies one overhead command with OSRS set/refresh semantics. */
+static inline int osrs_prayer_apply_overhead_action_internal(
+    OverheadPrayer* overhead,
+    int action
+) {
     OverheadPrayer target;
     switch (action) {
         case ENCOUNTER_OVERHEAD_NO_CHANGE:
@@ -614,8 +735,11 @@ static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int 
     return 1;
 }
 
-/** apply an offensive prayer action with set/refresh semantics. */
-static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, int action) {
+/** Applies one offensive command with OSRS set/refresh semantics. */
+static inline int osrs_prayer_apply_offensive_action_internal(
+    OffensivePrayer* offensive,
+    int action
+) {
     OffensivePrayer target;
     switch (action) {
         case ENCOUNTER_OFFENSIVE_NO_CHANGE:
@@ -630,6 +754,84 @@ static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, i
     }
     *offensive = target;
     return 1;
+}
+
+/** Applies prayer commands and updates activation latches for drain logic. */
+static inline OsrsPrayerTickResult osrs_prayer_apply_tick_actions(
+    Player* p,
+    OsrsPrayerRules rules,
+    OsrsPrayerActions actions
+) {
+    OsrsPrayerTickResult result = osrs_prayer_tick_result_before(p, actions);
+    actions = osrs_prayer_actions_available_to_player(p, rules, actions);
+
+    result.overhead_activated = osrs_prayer_apply_overhead_action_internal(
+        &p->prayer, actions.overhead_action);
+    if (result.overhead_activated) {
+        p->prayer_just_activated = 1;
+    }
+
+    result.offensive_activated = osrs_prayer_apply_offensive_action_internal(
+        &p->offensive_prayer, actions.offensive_action);
+    if (result.offensive_activated) {
+        p->offensive_prayer_just_activated = 1;
+    }
+
+    osrs_prayer_tick_result_finish(&result, p);
+    result.overhead_action_changed = result.overhead_changed;
+    result.offensive_action_changed = result.offensive_changed;
+    return result;
+}
+
+static inline void osrs_prayer_clear_activation_latches(Player* p) {
+    p->prayer_just_activated = 0;
+    p->offensive_prayer_just_activated = 0;
+}
+
+static inline int osrs_redemption_threshold(const Player* p) {
+    return (p->base_hitpoints - 1) / 10;
+}
+
+/** Applies Redemption after a non-lethal damage landing enters the low-HP band. */
+static inline OsrsRedemptionResult osrs_player_apply_redemption_if_due(
+    Player* p,
+    int before_hp,
+    int damage
+) {
+    OsrsRedemptionResult result = {
+        .threshold = osrs_redemption_threshold(p),
+        .before_hitpoints = before_hp,
+        .after_hitpoints = p->current_hitpoints,
+        .zero_hit = damage <= 0,
+        .offensive_before = p->offensive_prayer,
+    };
+    if (p->prayer != PRAYER_REDEMPTION || p->current_prayer <= 0)
+        return result;
+    if (p->current_hitpoints <= 0)
+        return result;
+
+    int before_band = before_hp > 0 && before_hp <= result.threshold;
+    int after_band =
+        p->current_hitpoints > 0 &&
+        p->current_hitpoints <= result.threshold;
+    if (!before_band && !after_band)
+        return result;
+
+    int hp_before_heal = p->current_hitpoints;
+    int heal = p->base_prayer / 4;
+    p->current_hitpoints += heal;
+    if (p->current_hitpoints > p->base_hitpoints)
+        p->current_hitpoints = p->base_hitpoints;
+    p->current_prayer = 0;
+    p->prayer = PRAYER_NONE;
+    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
+    p->prayer_drain_counter = 0;
+    osrs_prayer_clear_activation_latches(p);
+
+    result.procced = 1;
+    result.heal_done = p->current_hitpoints - hp_before_heal;
+    result.after_hitpoints = p->current_hitpoints;
+    return result;
 }
 
 
@@ -1535,18 +1737,6 @@ static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t expli
     return rng;
 }
 /* shared prayer drain                                                       */
-/*                                                                           */
-/* ENCOUNTERS: call encounter_drain_all_prayers() each tick to drain prayer  */
-/* points at the correct OSRS rate. all encounters with overhead prayers     */
-/* MUST use this — do not hand-roll prayer drain logic.                      */
-/*                                                                           */
-/* OSRS drain formula: each prayer has a "drain effect" value.               */
-/* drain rate = 1 point per floor((18 + floor(bonus/4)) / drain_effect)      */
-/* seconds. the drain counter increments each tick; when it reaches the      */
-/* threshold, 1 prayer point is drained and the counter resets.              */
-/*                                                                           */
-/* protection prayers (melee/ranged/magic): drain_effect = 12               */
-/* rigour: drain_effect = 24, augury: drain_effect = 24                     */
 /** drain effect values for overhead prayers.
     from the OSRS prayer table — higher values drain faster.
     used by both PvE encounters and PvP. */
@@ -1580,12 +1770,12 @@ static inline int encounter_player_prayer_bonus(const Player* p) {
     return bonuses.prayer;
 }
 
-/** drain both overhead and offensive prayer for one tick.
-    handles activation-tick skip (prayers activated this tick do not drain),
-    the shared drain counter, and pp=0 auto-clear (all prayers off when empty).
-    prayer_bonus: player's total prayer equipment bonus (typically 0-30).
-    ref: osrs-sdk PrayerController.ts:44-59, wiki "Prayer flicking" section. */
-static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
+/** Drains active overhead and offensive prayers once.
+
+    Set-refresh commands mark a prayer as just activated. OSRS does not drain
+    a prayer on the tick it is activated, which is the basis of prayer
+    flicking. This function consumes those activation latches. */
+static inline void osrs_prayer_drain_active_tick(Player* p, int prayer_bonus) {
     /* active-but-not-just-activated prayers contribute to drain this tick.
        ref: wiki: "the game does not drain prayer for prayers on the tick
        they are activated". this is what makes 1-tick flicking free. */
@@ -1627,6 +1817,49 @@ static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
             break;
         }
     }
+}
+
+/** Applies actions first, then drains. Use this for same-phase pretick APIs. */
+static inline OsrsPrayerTickResult osrs_prayer_tick_actions_then_drain(
+    Player* p,
+    OsrsPrayerRules rules,
+    OsrsPrayerActions actions,
+    int prayer_bonus
+) {
+    OsrsPrayerTickResult result =
+        osrs_prayer_apply_tick_actions(p, rules, actions);
+    int overhead_action_changed = result.overhead_action_changed;
+    int offensive_action_changed = result.offensive_action_changed;
+    osrs_prayer_drain_active_tick(p, prayer_bonus);
+    osrs_prayer_tick_result_finish(&result, p);
+    result.overhead_action_changed = overhead_action_changed;
+    result.offensive_action_changed = offensive_action_changed;
+    return result;
+}
+
+/** Drains first, then applies actions. Use this for PvP previous-tick inputs. */
+static inline OsrsPrayerTickResult osrs_prayer_tick_drain_then_actions(
+    Player* p,
+    OsrsPrayerRules rules,
+    OsrsPrayerActions actions,
+    int prayer_bonus
+) {
+    OsrsPrayerTickResult result = osrs_prayer_tick_result_before(p, actions);
+    osrs_prayer_drain_active_tick(p, prayer_bonus);
+    osrs_prayer_tick_result_finish(&result, p);
+    OsrsPrayerTickResult apply =
+        osrs_prayer_apply_tick_actions(p, rules, actions);
+    result.overhead_after = apply.overhead_after;
+    result.offensive_after = apply.offensive_after;
+    result.overhead_activated = apply.overhead_activated;
+    result.offensive_activated = apply.offensive_activated;
+    result.overhead_action_changed = apply.overhead_action_changed;
+    result.offensive_action_changed = apply.offensive_action_changed;
+    result.overhead_changed =
+        result.overhead_before != result.overhead_after;
+    result.offensive_changed =
+        result.offensive_before != result.offensive_after;
+    return result;
 }
 /* shared loadout stat computation                                           */
 /*                                                                           */

@@ -1499,8 +1499,11 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
 
     /* apply vengeance reflection */
     if (dr.veng_damage > 0) {
+        int attacker_hp_before = attacker->current_hitpoints;
         attacker->current_hitpoints -= dr.veng_damage;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
+        osrs_player_apply_redemption_if_due(
+            attacker, attacker_hp_before, dr.veng_damage);
         float reflect_scale = (float)dr.veng_damage / (float)attacker->base_hitpoints;
         attacker->total_damage_received += reflect_scale;
         defender->total_damage_dealt += reflect_scale;
@@ -1516,8 +1519,10 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             recoil > defender->item_effect_state.recoil_charges) {
             recoil = defender->item_effect_state.recoil_charges;
         }
+        int attacker_hp_before = attacker->current_hitpoints;
         attacker->current_hitpoints -= recoil;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
+        osrs_player_apply_redemption_if_due(attacker, attacker_hp_before, recoil);
         float recoil_scale = (float)recoil / (float)attacker->base_hitpoints;
         attacker->total_damage_received += recoil_scale;
         defender->total_damage_dealt += recoil_scale;
@@ -1527,6 +1532,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
     /* apply damage to defender */
+    int defender_hp_before = defender->current_hitpoints;
     defender->current_hitpoints -= damage;
     if (defender->current_hitpoints < 0) defender->current_hitpoints = 0;
     float damage_scale = (float)damage / (float)defender->base_hitpoints;
@@ -1536,6 +1542,13 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     attacker->damage_dealt_scale += damage_scale;
     attacker->last_target_health_percent =
         (float)defender->current_hitpoints / (float)defender->base_hitpoints;
+    OsrsRedemptionResult defender_redemption =
+        osrs_player_apply_redemption_if_due(
+            defender, defender_hp_before, damage);
+    if (defender_redemption.procced) {
+        attacker->last_target_health_percent =
+            (float)defender->current_hitpoints / (float)defender->base_hitpoints;
+    }
 
     /* PvP-specific hit effects: drain, freeze, heal, morr bleed */
     if (hit->hit_success) {

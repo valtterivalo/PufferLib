@@ -238,6 +238,10 @@ static void init_player(Player* p) {
     p->weapon_equipped_this_tick = 0;
     p->equip_click_attempts = 0;
     p->equip_click_successes = 0;
+    p->overhead_prayer_action_attempts = 0;
+    p->overhead_prayer_action_successes = 0;
+    p->offensive_prayer_action_attempts = 0;
+    p->offensive_prayer_action_successes = 0;
     p->special_arm_attempts = 0;
     p->special_arm_successes = 0;
     p->target_click_attempts = 0;
@@ -791,6 +795,9 @@ void pvp_step(OsrsEnv* env) {
         pre_move_y[i] = env->players[i].y;
     }
 
+    execute_prayer_tick(env, first, agent_actions[first]);
+    execute_prayer_tick(env, second, agent_actions[second]);
+
     execute_switches(env, first, agent_actions[first]);
     execute_switches(env, second, agent_actions[second]);
     OSRS_PVP_PROFILE_MARK(PVP_PROF_API_SWITCHES);
@@ -841,10 +848,12 @@ void pvp_step(OsrsEnv* env) {
             p->morr_dot_tick_counter--;
             if (p->morr_dot_tick_counter <= 0) {
                 int dot_dmg = (p->morr_dot_remaining >= 5) ? 5 : p->morr_dot_remaining;
+                int hp_before_dot = p->current_hitpoints;
                 p->current_hitpoints -= dot_dmg;
                 p->morr_dot_remaining -= dot_dmg;
                 p->damage_applied_this_tick += dot_dmg;
                 if (p->current_hitpoints < 0) p->current_hitpoints = 0;
+                osrs_player_apply_redemption_if_due(p, hp_before_dot, dot_dmg);
                 p->morr_dot_tick_counter = 3;
             }
         }
@@ -970,6 +979,20 @@ void pvp_step(OsrsEnv* env) {
             ? 1.0f - (float)p0->equip_click_successes /
                 (float)p0->equip_click_attempts
             : 0.0f;
+        env->log.overhead_prayer_action_attempts =
+            (float)p0->overhead_prayer_action_attempts;
+        env->log.overhead_prayer_action_change_rate =
+            p0->overhead_prayer_action_attempts > 0
+                ? (float)p0->overhead_prayer_action_successes /
+                    (float)p0->overhead_prayer_action_attempts
+                : 0.0f;
+        env->log.offensive_prayer_action_attempts =
+            (float)p0->offensive_prayer_action_attempts;
+        env->log.offensive_prayer_action_change_rate =
+            p0->offensive_prayer_action_attempts > 0
+                ? (float)p0->offensive_prayer_action_successes /
+                    (float)p0->offensive_prayer_action_attempts
+                : 0.0f;
         env->log.special_arm_attempts = (float)p0->special_arm_attempts;
         env->log.special_arm_noop_rate = p0->special_arm_attempts > 0
             ? 1.0f - (float)p0->special_arm_successes /

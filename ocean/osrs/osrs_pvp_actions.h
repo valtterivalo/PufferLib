@@ -20,9 +20,7 @@
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"  // For can_eat_food, can_use_potion, etc.
-#include "osrs_encounter.h"         // For ENCOUNTER_OVERHEAD_*, encounter_apply_*_action, encounter_drain_all_prayers
-// prayer drain: encounter_drain_all_prayers() in osrs_encounter.h drives both
-// overhead and offensive drain in a single call with activation-tick skip.
+#include "osrs_encounter.h"
 
 // NH gear prayer bonus: fury amulet +3, neitiznot helm +3 = 6 total.
 // hardcoded because these are always equipped regardless of gear set.
@@ -244,17 +242,6 @@ static void update_timers(Player* p) {
     if (p->freeze_immunity_ticks > 0) p->freeze_immunity_ticks--;
     if (p->veng_cooldown > 0) p->veng_cooldown--;
 
-    /* prayer drain — shared encounter_drain_all_prayers handles both overhead
-       and offensive, activation-tick skip, and pp=0 auto-clear of both slots.
-       LMS has no prayer drain (prayer points are unlimited) — still clear
-       just-activated flags so they don't leak to next tick. */
-    if (!p->is_lms) {
-        encounter_drain_all_prayers(p, PRAYER_BONUS);
-    } else {
-        p->prayer_just_activated = 0;
-        p->offensive_prayer_just_activated = 0;
-    }
-
     if (p->run_energy < OSRS_RUN_ENERGY_FULL && (!p->is_moving || !p->is_running)) {
         p->run_recovery_ticks += 1;
         if (p->run_recovery_ticks >= RUN_ENERGY_RECOVER_TICKS) {
@@ -313,6 +300,47 @@ static void reset_tick_flags(Player* p) {
     p->cast_veng_this_tick = 0;
     p->clicks_this_tick = 0;
     p->weapon_equipped_this_tick = 0;
+}
+
+static OsrsPrayerTickResult execute_prayer_tick(
+    OsrsEnv* env,
+    int agent_idx,
+    const int* actions
+) {
+    Player* p = &env->players[agent_idx];
+
+    int overhead_action = actions[HEAD_OVERHEAD];
+    int offensive_action = actions[HEAD_OFFENSIVE];
+
+    OsrsPrayerActions prayer_actions =
+        osrs_prayer_actions(overhead_action, offensive_action);
+    OsrsPrayerRules prayer_rules = osrs_prayer_rules(
+        ALLOW_SMITE && !env->is_lms,
+        ALLOW_REDEMPTION);
+    OsrsPrayerTickResult result = p->is_lms
+        ? osrs_prayer_apply_tick_actions(p, prayer_rules, prayer_actions)
+        : osrs_prayer_tick_drain_then_actions(
+            p, prayer_rules, prayer_actions, PRAYER_BONUS);
+    if (p->is_lms) {
+        osrs_prayer_clear_activation_latches(p);
+    }
+
+    if (result.overhead_commanded) {
+        p->overhead_prayer_action_attempts++;
+    }
+    if (result.offensive_commanded) {
+        p->offensive_prayer_action_attempts++;
+    }
+    if (result.overhead_commanded || result.offensive_commanded) {
+        p->clicks_this_tick++;
+    }
+    if (result.overhead_commanded && result.overhead_action_changed) {
+        p->overhead_prayer_action_successes++;
+    }
+    if (result.offensive_commanded && result.offensive_action_changed) {
+        p->offensive_prayer_action_successes++;
+    }
+    return result;
 }
 
 static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions);
@@ -439,35 +467,6 @@ static void execute_switches(OsrsEnv* env, int agent_idx, const int* actions) {
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
     p->consumable_used_this_tick = 0;
-
-    int overhead_action = actions[HEAD_OVERHEAD];
-    int offensive_action = actions[HEAD_OFFENSIVE];
-
-    if (env->is_lms &&
-        (overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE ||
-         overhead_action == ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION)) {
-        overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
-    }
-    if (p->current_prayer <= 0) {
-        if (overhead_action >= ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE)
-            overhead_action = ENCOUNTER_OVERHEAD_NO_CHANGE;
-        if (offensive_action >= ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY)
-            offensive_action = ENCOUNTER_OFFENSIVE_NO_CHANGE;
-    }
-
-    OverheadPrayer prev_prayer = p->prayer;
-    OffensivePrayer prev_offensive = p->offensive_prayer;
-    int prayer_commanded =
-        overhead_action != ENCOUNTER_OVERHEAD_NO_CHANGE ||
-        offensive_action != ENCOUNTER_OFFENSIVE_NO_CHANGE;
-    if (encounter_apply_overhead_action(&p->prayer, overhead_action)) {
-        p->prayer_just_activated = 1;
-    }
-    if (encounter_apply_offensive_action(&p->offensive_prayer, offensive_action)) {
-        p->offensive_prayer_just_activated = 1;
-    }
-    if (prayer_commanded || p->prayer != prev_prayer || p->offensive_prayer != prev_offensive)
-        p->clicks_this_tick++;
     execute_inventory_clicks(env, agent_idx, actions);
     execute_special_action(p, actions[HEAD_SPECIAL]);
     int combat_action = actions[HEAD_ATTACK];

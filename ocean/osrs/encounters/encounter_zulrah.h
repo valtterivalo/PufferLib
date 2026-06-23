@@ -1949,16 +1949,13 @@ static void zul_phase_tick(ZulrahState* s) {
 
 
 static void zul_process_prayer(ZulrahState* s, int overhead_action, int offensive_action) {
-    if (encounter_apply_overhead_action(&s->player.prayer, overhead_action)) {
-        s->player.prayer_just_activated = 1;
-    }
-    OffensivePrayer prev_offensive = s->player.offensive_prayer;
-    if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_action)) {
-        s->player.offensive_prayer_just_activated = 1;
-    }
+    OsrsPrayerTickResult prayer_result = osrs_prayer_apply_tick_actions(
+        &s->player,
+        osrs_prayer_rules(0, 0),
+        osrs_prayer_actions(overhead_action, offensive_action));
     /* zulrah caches eff_level + max_hit in mage_stats / range_stats — recompute
        whenever offensive prayer changes so subsequent attack rolls use current state. */
-    if (s->player.offensive_prayer != prev_offensive)
+    if (prayer_result.offensive_changed)
         zul_refresh_cached_loadout_stats(s);
 }
 
@@ -2686,7 +2683,7 @@ static void zul_step(EncounterState* state, const int* actions) {
        drain can clear offensive_prayer at pp<=0; refresh mage/range caches
        afterwards so subsequent attacks don't use stale prayer-boosted stats. */
     OffensivePrayer prev_off_drain = s->player.offensive_prayer;
-    encounter_drain_all_prayers(
+    osrs_prayer_drain_active_tick(
         &s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.offensive_prayer != prev_off_drain)
         zul_refresh_cached_loadout_stats(s);

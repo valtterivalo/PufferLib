@@ -1184,39 +1184,21 @@ static void inf_record_redemption_pressure(
 }
 
 static int inf_redemption_threshold(const InfernoState* s) {
-    return (s->player.base_hitpoints - 1) / 10;
+    return osrs_redemption_threshold(&s->player);
 }
 
 static void inf_apply_redemption_if_due(InfernoState* s, int before_hp, int damage) {
     Player* p = &s->player;
-    if (p->prayer != PRAYER_REDEMPTION || p->current_prayer <= 0)
-        return;
-    if (p->current_hitpoints <= 0)
-        return;
-
-    int threshold = inf_redemption_threshold(s);
-    int before_band = before_hp > 0 && before_hp <= threshold;
-    int after_band = p->current_hitpoints > 0 && p->current_hitpoints <= threshold;
-    if (!before_band && !after_band)
+    OsrsRedemptionResult result =
+        osrs_player_apply_redemption_if_due(p, before_hp, damage);
+    if (!result.procced)
         return;
 
-    int old_offensive = p->offensive_prayer;
-    int hp_before_heal = p->current_hitpoints;
-    int heal = p->base_prayer / 4;
-    p->current_hitpoints += heal;
-    if (p->current_hitpoints > p->base_hitpoints)
-        p->current_hitpoints = p->base_hitpoints;
     s->redemption_proc_count++;
-    if (damage <= 0)
+    if (result.zero_hit)
         s->redemption_zero_hit_proc_count++;
-    s->redemption_heal_done += (float)(p->current_hitpoints - hp_before_heal);
-    p->current_prayer = 0;
-    p->prayer = PRAYER_NONE;
-    p->offensive_prayer = OFFENSIVE_PRAYER_NONE;
-    p->prayer_drain_counter = 0;
-    p->prayer_just_activated = 0;
-    p->offensive_prayer_just_activated = 0;
-    if (old_offensive != OFFENSIVE_PRAYER_NONE)
+    s->redemption_heal_done += (float)result.heal_done;
+    if (result.offensive_before != OFFENSIVE_PRAYER_NONE)
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, p);
 }
 

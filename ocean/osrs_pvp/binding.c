@@ -330,6 +330,14 @@ static void pvp_env_accumulate_terminal_log(Env* env) {
     env->log.off_prayer_hits += env->pvp.log.off_prayer_hits;
     env->log.equip_click_attempts += env->pvp.log.equip_click_attempts;
     env->log.equip_click_noop_rate += env->pvp.log.equip_click_noop_rate;
+    env->log.overhead_prayer_action_attempts +=
+        env->pvp.log.overhead_prayer_action_attempts;
+    env->log.overhead_prayer_action_change_rate +=
+        env->pvp.log.overhead_prayer_action_change_rate;
+    env->log.offensive_prayer_action_attempts +=
+        env->pvp.log.offensive_prayer_action_attempts;
+    env->log.offensive_prayer_action_change_rate +=
+        env->pvp.log.offensive_prayer_action_change_rate;
     env->log.special_arm_attempts += env->pvp.log.special_arm_attempts;
     env->log.special_arm_noop_rate += env->pvp.log.special_arm_noop_rate;
     env->log.target_click_attempts += env->pvp.log.target_click_attempts;
@@ -774,6 +782,14 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "off_prayer_hits", log->off_prayer_hits);
     dict_set(out, "equip_click_attempts", log->equip_click_attempts);
     dict_set(out, "equip_click_noop_rate", log->equip_click_noop_rate);
+    dict_set(out, "overhead_prayer_action_attempts",
+        log->overhead_prayer_action_attempts);
+    dict_set(out, "overhead_prayer_action_change_rate",
+        log->overhead_prayer_action_change_rate);
+    dict_set(out, "offensive_prayer_action_attempts",
+        log->offensive_prayer_action_attempts);
+    dict_set(out, "offensive_prayer_action_change_rate",
+        log->offensive_prayer_action_change_rate);
     dict_set(out, "special_arm_attempts", log->special_arm_attempts);
     dict_set(out, "special_arm_noop_rate", log->special_arm_noop_rate);
     dict_set(out, "target_click_attempts", log->target_click_attempts);
