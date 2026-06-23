@@ -19,8 +19,10 @@ static int reset_brew_doses(int remove_brews, uint32_t seed) {
     ctx.config.start_wave = 0;
     ctx.config.loadout_profile_mode = 2;
     ctx.config.beginner_loadout_fraction = 0.5f;
-    ctx.config.remove_brews = remove_brews;
     memset(&s, 0, sizeof(s));
+    /* exercise the real CLI/binding string path, not a direct config write */
+    ENCOUNTER_COLOSSEUM.put_int((EncounterState*)&s, (EncounterContext*)&ctx,
+        "remove_brews", remove_brews);
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);
     return s.player.brew_doses;
 }
