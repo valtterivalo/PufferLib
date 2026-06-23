@@ -274,11 +274,10 @@ static void col_npc_queue_projectile(
     int hit_success = 0;
     int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
     int rolled_dmg = dmg;
-    int prayed = encounter_prayer_correct_for_style(s->player.prayer, style);
-    if (prayed) {
-        dmg = 0;
-        s->tick_scratch.prayer_correct++;
-    }
+    EncounterProtectResolve pr = encounter_resolve_protect_at_throw(dmg, s->player.prayer, style);
+    int prayed = pr.prayed;
+    dmg = pr.frozen_damage;
+    if (prayed) s->tick_scratch.prayer_correct++;
     col_log_prayer_event(s, npc->type, prayed, dmg);
     s->tick_scratch.styles_faced_mask |= (1 << style);
     s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
@@ -305,11 +304,10 @@ static void col_apply_instant_melee_hit(
 ) {
     (void)hit_success;
     int rolled_dmg = dmg;
-    int prayed = encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE);
-    if (prayed) {
-        dmg = 0;
-        s->tick_scratch.prayer_correct++;
-    }
+    EncounterProtectResolve pr = encounter_resolve_protect_at_throw(dmg, s->player.prayer, ATTACK_STYLE_MELEE);
+    int prayed = pr.prayed;
+    dmg = pr.frozen_damage;
+    if (prayed) s->tick_scratch.prayer_correct++;
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     s->tick_scratch.styles_faced_mask |= (1 << ATTACK_STYLE_MELEE);
@@ -487,16 +485,14 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
     int max_hit = col_manticore_orb_max_hit(style);
     int mayhem = col_mod_tier(s, COLO_MOD_MANTIMAYHEM);
     int shots = (mayhem >= 1) ? 2 : 1;   /* T1+: an extra projectile per orb */
-    int prayed = encounter_prayer_correct_for_style(s->player.prayer, style);
-
     for (int shot = 0; shot < shots; shot++) {
         int hit_success = 0;
         int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
         int rolled_dmg = dmg;
-        if (prayed) {
-            dmg = 0;
-            s->tick_scratch.prayer_correct++;
-        }
+        EncounterProtectResolve pr = encounter_resolve_protect_at_throw(dmg, s->player.prayer, style);
+        int prayed = pr.prayed;
+        dmg = pr.frozen_damage;
+        if (prayed) s->tick_scratch.prayer_correct++;
         col_log_prayer_event(s, npc->type, prayed, dmg);
         s->tick_scratch.styles_faced_mask |= (1 << style);
         s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;

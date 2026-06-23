@@ -863,9 +863,13 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         /* ranged/magic: queue pending hit on player */
         int is_jad = (npc->type == INF_NPC_JAD);
         if (!is_jad) {
-            int prayer_matches = encounter_prayer_correct_for_style(s->player.prayer, actual_style);
-            if (prayer_matches) {
-                dmg = 0;
+            /* non-jad ranged/magic locks the protect-prayer + damage at the throw
+               tick (shared with colosseum via encounter_resolve_protect_at_throw);
+               jad is the deferred-check exception below. */
+            EncounterProtectResolve pr =
+                encounter_resolve_protect_at_throw(dmg, s->player.prayer, actual_style);
+            dmg = pr.frozen_damage;
+            if (pr.prayed) {
                 s->tick_scratch.prayer_correct++;
                 s->prayer_correct_by_type[npc->type]++;
             } else if (dmg > 0) {

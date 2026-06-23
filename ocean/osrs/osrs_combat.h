@@ -385,6 +385,25 @@ static inline int encounter_prayer_correct_for_style(int prayer, int attack_styl
            (attack_style == 3 /* ATTACK_STYLE_MAGIC */  && prayer == 1 /* PRAYER_PROTECT_MAGIC */);
 }
 
+/* The protect-prayer outcome is locked on the THROW tick (OSRS standard): the
+   overhead up when the attack animates decides whether it is blocked, and the
+   damage is frozen there. For ranged/magic the frozen damage then flies and lands
+   later; flicking the overhead after the throw cannot change it. This is the ONE
+   place an encounter resolves protect-at-throw -- callers do their own metric
+   attribution from `.prayed`. Jad-style deferred checks are the documented
+   exception and do not use this (they defer the check via prayer_check_delay). */
+typedef struct {
+    int frozen_damage; /* 0 if the matching protect prayer was up at throw, else raw */
+    int prayed;        /* 1 if the overhead blocked this style */
+} EncounterProtectResolve;
+
+static inline EncounterProtectResolve encounter_resolve_protect_at_throw(
+    int raw_damage, int overhead_prayer, int attack_style
+) {
+    int prayed = encounter_prayer_correct_for_style(overhead_prayer, attack_style);
+    return (EncounterProtectResolve){ .frozen_damage = prayed ? 0 : raw_damage, .prayed = prayed };
+}
+
 
 /* magic hit delay: floor((1 + distance) / 3) + 1, +1 if attacker is player */
 static inline int encounter_magic_hit_delay(int distance, int is_player) {
