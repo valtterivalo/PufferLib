@@ -274,17 +274,17 @@ static void col_npc_queue_projectile(
     int hit_success = 0;
     int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
     int rolled_dmg = dmg;
-    EncounterProtectResolve pr = encounter_resolve_protect_at_throw(dmg, s->player.prayer, style);
-    int prayed = pr.prayed;
-    dmg = pr.frozen_damage;
+    int delay = col_npc_projectile_delay(style, dist);
+    int prayed = 0;
+    EncounterPendingHit hit = encounter_pending_hit_resolved_at_throw(
+        dmg, delay, style, s->player.prayer, npc->type, idx, hit_success, &prayed);
+    dmg = hit.damage;
     if (prayed) s->tick_scratch.prayer_correct++;
     col_log_prayer_event(s, npc->type, prayed, dmg);
     s->tick_scratch.styles_faced_mask |= (1 << style);
     s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
-    int delay = col_npc_projectile_delay(style, dist);
-    col_queue_player_pending_hit(
-        s, idx, npc->type, dmg, delay, style, 0, hit_success && !prayed);
+    col_push_player_pending_hit(s, hit);
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;
     s->tick_scratch.attacks_fired++;
@@ -489,16 +489,16 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
         int hit_success = 0;
         int dmg = col_npc_roll_vs_player(s, stats, style, max_hit, &hit_success);
         int rolled_dmg = dmg;
-        EncounterProtectResolve pr = encounter_resolve_protect_at_throw(dmg, s->player.prayer, style);
-        int prayed = pr.prayed;
-        dmg = pr.frozen_damage;
+        int prayed = 0;
+        EncounterPendingHit hit = encounter_pending_hit_resolved_at_throw(
+            dmg, 1, style, s->player.prayer, npc->type, idx, hit_success, &prayed);
+        dmg = hit.damage;
         if (prayed) s->tick_scratch.prayer_correct++;
         col_log_prayer_event(s, npc->type, prayed, dmg);
         s->tick_scratch.styles_faced_mask |= (1 << style);
         s->tick_scratch.avoidable_threat_by_style[style] += (float)rolled_dmg;
         if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
-        col_queue_player_pending_hit(
-            s, idx, npc->type, dmg, 1, style, 0, hit_success && !prayed);
+        col_push_player_pending_hit(s, hit);
     }
     npc->attacked_this_tick = 1;
     npc->attack_style_this_tick = style;

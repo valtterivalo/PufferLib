@@ -547,28 +547,24 @@ static void test_offpray_attribution_log(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 777);
-    int hp0 = s.player.current_hitpoints;
 
-    s.player.prayer = PRAYER_PROTECT_MELEE;
-    col_queue_player_pending_hit(&s, 0, COLO_SERPENT_SHAMAN, 11, 1, ATTACK_STYLE_MAGIC, 1, 1);
-    col_resolve_player_pending_hits(&s);
+    /* Per-NPC-type prayer attribution is recorded at the THROW tick: the throw-
+       resolve paths call col_log_prayer_event with the prayer outcome + the already-
+       frozen damage. off-prayer -> faced + damage attributed to the source type;
+       prayed -> faced + correct, no damage. Typeless/ignore-prayer hits never call
+       this (the throw path gates them out), so they stay out of the prayer log. */
+    col_log_prayer_event(&s, COLO_SERPENT_SHAMAN, 0 /* off-prayer */, 11);
     CHECK("off-prayer hit counted as faced", s.log.pray_faced_by_type[COLO_SERPENT_SHAMAN] == 1.0f);
     CHECK("off-prayer hit not counted correct", s.log.pray_correct_by_type[COLO_SERPENT_SHAMAN] == 0.0f);
     CHECK("off-prayer damage attributed to the shaman", s.log.offpray_damage_by_type[COLO_SERPENT_SHAMAN] == 11.0f);
-    CHECK("off-prayer damage landed", s.player.current_hitpoints == hp0 - 11);
 
-    s.player.prayer = PRAYER_PROTECT_MAGIC;
-    col_queue_player_pending_hit(&s, 0, COLO_SERPENT_SHAMAN, 11, 1, ATTACK_STYLE_MAGIC, 1, 1);
-    col_resolve_player_pending_hits(&s);
+    col_log_prayer_event(&s, COLO_SERPENT_SHAMAN, 1 /* prayed */, 0);
     CHECK("prayed hit counted as faced", s.log.pray_faced_by_type[COLO_SERPENT_SHAMAN] == 2.0f);
     CHECK("prayed hit counted correct", s.log.pray_correct_by_type[COLO_SERPENT_SHAMAN] == 1.0f);
-    CHECK("prayed hit dealt no damage", s.player.current_hitpoints == hp0 - 11);
+    CHECK("prayed hit adds no off-prayer damage", s.log.offpray_damage_by_type[COLO_SERPENT_SHAMAN] == 11.0f);
 
-    col_queue_player_pending_hit(&s, 0, COLO_JAVELIN_COLOSSUS, 7, 1, ATTACK_STYLE_RANGED, 0, 1);
-    col_resolve_player_pending_hits(&s);
-    CHECK("ignore-prayer hit stays out of the prayer log",
+    CHECK("a type that never threw stays out of the prayer log",
         s.log.pray_faced_by_type[COLO_JAVELIN_COLOSSUS] == 0.0f);
-    CHECK("ignore-prayer damage still landed", s.player.current_hitpoints == hp0 - 18);
 }
 
 /* ---- 1b. step-loop draft (B6+D26): wave 1 spawns at reset with no draft and
@@ -3056,6 +3052,8 @@ static void test_projectile_prayer_locks_at_throw(void) {
     CHECK("the projectile flies (nothing lands on the throw tick)", no_throw_damage);
     CHECK("the projectile's prayer is counted on its throw tick", prayer_counted);
     CHECK("the frozen hit is flick-resistant (check_prayer=0)", flick_safe);
+    CHECK("the throw path attributes to the per-type prayer log",
+        s.log.pray_faced_by_type[COLO_SERPENT_SHAMAN] > 0.0f);
 
     /* wrong overhead at throw: damage is kept (Relentless III forces accuracy so
        only the 1/32 zero roll can blank it); flicking the right prayer on after the

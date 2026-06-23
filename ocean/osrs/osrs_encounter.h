@@ -147,6 +147,38 @@ typedef struct {
     int count;
 } EncounterPendingHitQueue;
 
+/* Build an NPC->player pending hit whose protect-prayer outcome AND damage are
+   LOCKED on the THROW tick (OSRS standard): the overhead up now decides the block
+   and the damage is frozen, then the projectile flies and lands `ticks_remaining`
+   ticks later. The resolver never re-checks (check_prayer=0); flicking the overhead
+   after the throw cannot change the outcome. hit_success records a LANDED
+   UNPROTECTED hit (accuracy succeeded AND not prayed) so on-land effects (venom,
+   recoil) fire only on a connecting hit. `*out_prayed` reports the block for the
+   caller's metric attribution. This is the ONE constructor for throw-resolved
+   player-bound hits -- encounters call it instead of hand-building the struct.
+   Jad-style deferred checks are the documented exception and do NOT use this. */
+static inline EncounterPendingHit encounter_pending_hit_resolved_at_throw(
+    int raw_damage, int ticks_remaining, int attack_style, int overhead_prayer,
+    int source_npc_type, int source_npc_slot, int accuracy_hit, int* out_prayed
+) {
+    EncounterProtectResolve pr =
+        encounter_resolve_protect_at_throw(raw_damage, overhead_prayer, attack_style);
+    if (out_prayed) *out_prayed = pr.prayed;
+    return (EncounterPendingHit){
+        .active = 1,
+        .damage = pr.frozen_damage,
+        .ticks_remaining = ticks_remaining,
+        .attack_style = attack_style,
+        .check_prayer = 0,
+        .prayer_check_delay = 0,
+        .spell_type = ENCOUNTER_SPELL_NONE,
+        .source_npc_type = source_npc_type,
+        .source_npc_slot = source_npc_slot,
+        .hit_success = accuracy_hit && !pr.prayed,
+        .elysian_reduced = 0,
+    };
+}
+
 static inline void encounter_pending_hit_queue_clear(EncounterPendingHitQueue* q) {
     memset(q, 0, sizeof(*q));
 }
