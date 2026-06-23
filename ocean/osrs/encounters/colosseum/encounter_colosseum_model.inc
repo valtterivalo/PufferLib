@@ -1708,6 +1708,11 @@ typedef struct {
                                           before each death check; timeout still
                                           applies). Default 0. Isolates whether the
                                           wall is survival vs damage/progression. */
+    int episode_max_ticks_override;    /* scaffold: >0 forces the per-episode tick
+                                          budget to this value for ALL loadouts,
+                                          overriding the speedrun/beginner defaults.
+                                          0 = keep the loadout default (bit-identical).
+                                          Probes whether the timeout is the wall. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).

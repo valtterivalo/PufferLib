@@ -48,6 +48,14 @@ static void col_put_int_ctx(
     else if (strcmp(key, "invuln_mode") == 0)
         ctx->config.invuln_mode =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "episode_max_ticks_override") == 0) {
+        if (value < 0) {
+            fprintf(stderr, "colosseum: episode_max_ticks_override must be >= 0, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.episode_max_ticks_override = value;
+    }
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
