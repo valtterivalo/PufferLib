@@ -190,6 +190,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         return;
     }
     col_player_pretick(s, ctx, actions);
+    if (ctx && ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
 
     int spawn_wave_now = 0;
     if (s->wave_spawn_delay > 0) {

@@ -714,6 +714,49 @@ static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
 }
 
 /**
+ * Prayer oracle (scaffold, gated by ColConfig.prayer_oracle_mode; default off).
+ * Overrides the player's overhead each tick with the perfect single protect-prayer
+ * against this tick's incoming, priority MAGIC > MELEE > RANGED (caller's spec).
+ * "Incoming" = committed projectiles landing this tick (exact style) UNION NPCs
+ * positioned to attack now (ranged/magic in range + LoS, melee cardinally adjacent).
+ * It is one overhead per tick, so multi-style conflict ticks still bleed the
+ * non-priority styles and all typeless/AoE damage is unaffected -- removing only
+ * the prayer-SELECTION burden, which is exactly what isolates it in an A/B.
+ * Runs after col_player_pretick (overhead applied) and before hit resolution, so
+ * the single chosen overhead serves both the pending-hit resolve and melee phases.
+ */
+static void col_apply_prayer_oracle(ColosseumState* s) {
+    int magic = 0, melee = 0, ranged = 0;
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
+        if (ph->ticks_remaining > 1) continue; /* not landing this tick */
+        if (ph->attack_style == ATTACK_STYLE_MAGIC) magic = 1;
+        else if (ph->attack_style == ATTACK_STYLE_RANGED) ranged = 1;
+        else if (ph->attack_style == ATTACK_STYLE_MELEE) melee = 1;
+    }
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        const ColoNPC* npc = &s->npcs[i];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
+        AttackStyle style = st->default_style;
+        if (st->attack_range > 1) {
+            int dist = col_npc_dist_to_player(s, npc);
+            if (dist < 1 || dist > st->attack_range) continue;
+            if (!col_npc_has_los_to_player(s, npc)) continue;
+            if (style == ATTACK_STYLE_MAGIC) magic = 1;
+            else if (style == ATTACK_STYLE_RANGED) ranged = 1;
+            else melee = 1;
+        } else if (col_npc_melee_adjacent_to_player(s, npc)) {
+            melee = 1;
+        }
+    }
+    if (magic) s->player.prayer = PRAYER_PROTECT_MAGIC;
+    else if (melee) s->player.prayer = PRAYER_PROTECT_MELEE;
+    else if (ranged) s->player.prayer = PRAYER_PROTECT_RANGED;
+    /* no threat this tick: leave whatever the agent set. */
+}
+
+/**
  * Sol Heredit boss tick. Drives the wave-12 boss: phase transitions, the AoE
  * spear/shield rotation, the triple-parry combo, the grapple, and the rotating
  * crystal + enrage hazards. The machine lives in encounter_colosseum_boss.inc
