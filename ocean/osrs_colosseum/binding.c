@@ -295,6 +295,17 @@ static inline void puffer_state_refresh(Env* env) {
 #include "vecenv.h"
 
 
+/** lowbias32 integer hash (Chris Wellons): decorrelates consecutive env indices into
+    well-mixed 32-bit seeds so each env's RNG stream is independent. */
+static inline uint32_t col_lowbias32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
     /* render at the real OSRS tick rate (600ms/tick) by default, like inferno;
@@ -303,6 +314,21 @@ void my_init(Env* env, Dict* kwargs) {
     env->last_step_time = 0.0;
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
+    /* Per-env RNG decorrelation. init_state seeds every env's rng_state to the same
+       constant (12345), so without this ALL envs run the SAME scenario stream:
+       identical wave-1 spawn + modifier drafts, and a fully choreographed fight under
+       a deterministic eval policy. Seed each env from its index hashed with lowbias32,
+       shifted by PUFFER_ENV_SEED_OFFSET so a held-out run can draw unseen scenarios.
+       Per-episode variation already comes from the rng chain advancing across resets
+       (c_reset passes explicit_seed=0, which preserves the advancing saved_rng). The
+       golden test drives col_reset_ctx with explicit seeds, bypassing this, so it
+       stays bit-identical. */
+    uint32_t col_seed_offset = 0;
+    const char* col_seed_off_str = getenv("PUFFER_ENV_SEED_OFFSET");
+    if (col_seed_off_str) col_seed_offset = (uint32_t)strtoul(col_seed_off_str, NULL, 10);
+    uint32_t col_env_seed = col_lowbias32((uint32_t)env->rng + col_seed_offset);
+    if (col_env_seed == 0) col_env_seed = 1;
+    env->state.rng_state = col_env_seed;
     memset(&env->log, 0, sizeof(Log));
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
