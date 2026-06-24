@@ -590,8 +590,9 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
     int tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
     if (tier == 0) return;
     if (col_volatility_player_in_blast(s, x, y, size, tier)) {
-        encounter_damage_player(&s->player, COLO_VOLATILITY_MAX_HIT, &s->tick_scratch.damage_received);
-        col_mod_on_player_damaged(s, COLO_VOLATILITY_MAX_HIT);
+        int vol_dmg = col_scale_incoming_damage(s, COLO_VOLATILITY_MAX_HIT);
+        encounter_damage_player(&s->player, vol_dmg, &s->tick_scratch.damage_received);
+        col_mod_on_player_damaged(s, vol_dmg);
     }
     if (tier >= 3)
         col_mod_add_molten_pool(
@@ -811,6 +812,7 @@ static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
         col_solarflare_tile(p, s->solarflare.step, &x, &y);
         if (x != s->player.x || y != s->player.y) continue;
         int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
+        dmg = col_scale_incoming_damage(s, dmg);
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
         if (dmg > 0) col_mod_on_player_damaged(s, dmg);
         if (tier >= 3) s->player.prayer = PRAYER_NONE;

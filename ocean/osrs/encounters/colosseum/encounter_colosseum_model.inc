@@ -1733,6 +1733,21 @@ typedef struct {
                                           agent off per-tick flicking toward
                                           positioning/off-ticking. In [0,1]; 0.0 draws
                                           no RNG and is bit-identical. */
+    float player_damage_received_scale;  /* scaffold: multiplies ALL incoming
+                                          player damage at HP-apply time (direct +
+                                          queued projectile + volatility + solarflare;
+                                          NOT self-inflicted potion cost). 1.0 =
+                                          bit-identical no-op, 0.5 = half, 0.0 = full
+                                          invuln. The binding overwrites this each
+                                          c_step when the anneal is armed; left at
+                                          1.0 it is the static lever. */
+    float damage_scale_anneal_start;     /* scaffold: anneal START scale (the value at
+                                          lifetime tick 0). 1.0 = anneal disabled
+                                          (no-op). Read by the BINDING only. */
+    int damage_scale_anneal_ticks;       /* scaffold: anneal duration in PER-ENV
+                                          c_step ticks (global_agent_steps / num_envs).
+                                          0 = anneal disabled. Read by the BINDING
+                                          only; the sim never sees these two fields. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
@@ -2001,6 +2016,14 @@ typedef struct {
     /* config copy / RNG */
     int start_wave;
     uint32_t rng_state;
+
+    /* scaffold: per-step mirror of ctx->config.player_damage_received_scale,
+       refreshed at the top of col_step_ctx (the only place that holds both the
+       state and the context). The HP-apply sinks (col_damage_player_from,
+       col_push_player_pending_hit, volatility/solarflare) take ColosseumState*
+       only and read this scalar; mirroring avoids threading the context through
+       the ~15-deep state-only modifier-tick chain. 1.0 = bit-identical no-op. */
+    float active_player_damage_received_scale;
 } ColosseumState;
 
 static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type);

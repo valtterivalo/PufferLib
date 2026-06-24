@@ -76,6 +76,13 @@ typedef struct ColosseumEnv {
        log-window zeroing; snapshotted into env->log.colo_max_depth_reached each
        terminal episode. Captures the furthest any single episode in this env reached. */
     float max_episode_depth_seen;
+
+    /* scaffold: lifetime c_step counter for the damage-received-scale anneal.
+       calloc-zeroed once at vecenv allocation, incremented once per c_step, never
+       reset across episodes (ColosseumState is memset on reset, this Env is not).
+       Drives scale = start + (1-start)*clamp01(count/anneal_ticks). Units are
+       PER-ENV steps (global_agent_steps / num_envs). */
+    uint64_t damage_scale_anneal_step;
 } ColosseumEnv;
 
 #define COLO_ENV_STATE(env) ((EncounterState*)&((env)->state))
@@ -133,6 +140,24 @@ void c_step(Env* env) {
     }
 
     COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
+
+    /* scaffold: damage-received-scale anneal. Only overwrite the live config scale
+       when the anneal is armed (ticks > 0 AND start < 1.0); otherwise leave the
+       config value untouched so a static swept player_damage_received_scale still
+       works and the default (1.0) stays a bit-identical no-op. The counter is a
+       lifetime per-env tick count that survives episode resets. */
+    {
+        int anneal_ticks = env->context.config.damage_scale_anneal_ticks;
+        float anneal_start = env->context.config.damage_scale_anneal_start;
+        env->damage_scale_anneal_step++;
+        if (anneal_ticks > 0 && anneal_start < 1.0f) {
+            float frac = (float)env->damage_scale_anneal_step / (float)anneal_ticks;
+            if (frac > 1.0f) frac = 1.0f;
+            if (frac < 0.0f) frac = 0.0f;
+            env->context.config.player_damage_received_scale =
+                anneal_start + (1.0f - anneal_start) * frac;
+        }
+    }
 
     if (!used_human_commands)
         ENCOUNTER_COLOSSEUM.step(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), env->acts_staging);
@@ -361,6 +386,8 @@ void my_init(Env* env, Dict* kwargs) {
         "timeout_penalty",
         "beginner_loadout_fraction",
         "prayer_switch_fail_prob",
+        "player_damage_received_scale",
+        "damage_scale_anneal_start",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
@@ -382,6 +409,7 @@ void my_init(Env* env, Dict* kwargs) {
         "invuln_mode",
         "episode_max_ticks_override",
         "remove_brews",
+        "damage_scale_anneal_ticks",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

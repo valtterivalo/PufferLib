@@ -4233,8 +4233,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v16 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 16u);
+    CHECK("snapshot version is v17 for Solarflare shared cadence",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 17u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4916,7 +4916,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 41 features", COLO_FEATURES_PER_NPC == 41);
-    CHECK("snapshot version is v16", COLO_SNAPSHOT_VERSION == 16u);
+    CHECK("snapshot version is v17", COLO_SNAPSHOT_VERSION == 17u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5563,7 +5563,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v16", snap.version == 16u);
+    CHECK("snapshot frame is v17", snap.version == 17u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));

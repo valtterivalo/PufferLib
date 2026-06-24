@@ -212,6 +212,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     /* clear per-tick state. one assignment resets every accumulator/flag. */
     s->reward = 0.0f;
     s->tick_scratch = (ColoTickScratch){0};
+    /* scaffold: mirror the (possibly binding-annealed) damage scale onto state so
+       the state-only HP-apply sinks can read it without threading the context
+       through the modifier-tick chain. 1.0 default => bit-identical. */
+    s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;
     col_context_clear_render_events(ctx);
     s->player_attack_timing = (EncounterProjectileTiming){0};
     encounter_clear_tick_flags(&s->player);

@@ -510,6 +510,11 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
     s->min_sol_hp_seen = COLO_SOL_HP_MAX;
+    /* scaffold: seed the damage-scale mirror from config so a freshly-reset state
+       is immediately safe (memset would leave it 0.0 = accidental full invuln).
+       col_step_ctx re-mirrors this each tick; a static config scale also works
+       without ever stepping. Default config value is 1.0 = bit-identical no-op. */
+    s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
     /* player: maxed combat stats + live equipped melee loadout */

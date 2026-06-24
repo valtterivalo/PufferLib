@@ -179,6 +179,7 @@ static void col_log_prayer_event(ColosseumState* s, int npc_type, int prayed, in
 
 /** Damage the player and attribute positive damage to one NPC type for episode totals. */
 static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type) {
+    dmg = col_scale_incoming_damage(s, dmg);
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
     if (dmg > 0 && npc_type >= 0 && npc_type < COLO_NUM_NPC_TYPES)
         s->log.total_damage_by_type[npc_type] += (float)dmg;
@@ -374,10 +375,16 @@ static void col_apply_instant_melee_hit(
        inferno's instant-melee recoil ordering). */
     col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
     col_damage_player_from(s, dmg, npc_type);
-    if (dmg > 0) {  /* dmg>0 implies an off-prayer damaging hit (prayed -> dmg 0) */
+    /* Doom + Blasphemy follow the ACTUALLY-APPLIED (scaled) damage, matching the
+       queued + volatility/solarflare paths, so player_damage_received_scale=0 is
+       truly Doom-immune like invuln_mode (off-prayer 0-damage hits add no Doom
+       stack). At scale 1.0 col_scale_incoming_damage returns dmg unchanged so this
+       is bit-identical to gating on dmg. */
+    int applied = col_scale_incoming_damage(s, dmg);
+    if (applied > 0) {  /* an off-prayer hit that dealt damage (prayed -> dmg 0) */
         int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
         if (blas > 0 && s->player.current_prayer > 0) {
-            int drain = (dmg * COLO_BLASPHEMY_DRAIN_PCT[blas]) / 100;
+            int drain = (applied * COLO_BLASPHEMY_DRAIN_PCT[blas]) / 100;
             s->player.current_prayer -= drain;
             if (s->player.current_prayer < 0) s->player.current_prayer = 0;
         }

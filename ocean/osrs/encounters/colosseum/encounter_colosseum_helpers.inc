@@ -310,7 +310,21 @@ static void col_queue_npc_pending_hit(
 /** push a pre-built NPC->player pending hit onto the player's queue. Build the hit
     with the shared encounter_pending_hit_resolved_at_throw ctor (osrs_encounter.h)
     so the throw-tick prayer/damage freeze lives in the SDK, not here. */
+/** scaffold: scale one incoming-damage value by s->active_player_damage_received_scale.
+    Provably bit-identical at scale >= 1.0f (early return of the original int, no
+    float round-trip), so the golden no-op path is exact. Below 1.0 it rounds
+    half-up and clamps at 0 so scale=0.0 yields full invuln. Negative damage is
+    impossible here (rolls are >= 0), so no negative-clamp is needed. */
+static inline int col_scale_incoming_damage(const ColosseumState* s, int dmg) {
+    float scale = s->active_player_damage_received_scale;
+    if (scale >= 1.0f) return dmg;
+    if (scale <= 0.0f) return 0;
+    int scaled = (int)((float)dmg * scale + 0.5f);
+    return scaled < 0 ? 0 : scaled;
+}
+
 static void col_push_player_pending_hit(ColosseumState* s, EncounterPendingHit hit) {
+    hit.damage = col_scale_incoming_damage(s, hit.damage);
     encounter_pending_hit_queue_push(
         &s->player_pending_hits, hit, "colosseum-player", s->tick,
         hit.source_npc_slot, hit.source_npc_type);
@@ -347,6 +361,9 @@ static ColConfig col_default_config(void) {
         .mask_inventory_heads = 0,
         .action_debug_log = col_default_action_debug_log(),
         .prayer_switch_fail_prob = 0.0f,
+        .player_damage_received_scale = 1.0f,
+        .damage_scale_anneal_start = 1.0f,
+        .damage_scale_anneal_ticks = 0,
     };
 }
 

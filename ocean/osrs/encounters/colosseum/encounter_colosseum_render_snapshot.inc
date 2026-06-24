@@ -59,6 +59,14 @@ static void col_put_int_ctx(
     else if (strcmp(key, "remove_brews") == 0)
         ctx->config.remove_brews =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "damage_scale_anneal_ticks") == 0) {
+        if (value < 0) {
+            fprintf(stderr, "colosseum: damage_scale_anneal_ticks must be >= 0, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.damage_scale_anneal_ticks = value;
+    }
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
@@ -124,6 +132,24 @@ static void col_put_float_ctx(
             abort();
         }
         ctx->config.prayer_switch_fail_prob = value;
+    }
+    else if (strcmp(key, "player_damage_received_scale") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr,
+                "colosseum: player_damage_received_scale must be in [0,1], got %.6f\n",
+                value);
+            abort();
+        }
+        ctx->config.player_damage_received_scale = value;
+    }
+    else if (strcmp(key, "damage_scale_anneal_start") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr,
+                "colosseum: damage_scale_anneal_start must be in [0,1], got %.6f\n",
+                value);
+            abort();
+        }
+        ctx->config.damage_scale_anneal_start = value;
     }
     else encounter_abort_unknown_config("colosseum", "float", key);
 }
@@ -958,8 +984,12 @@ static void col_step_human_commands_ctx(
    v14: sim-fidelity pass adds kinded molten pools (molten_lifetime,
        molten_burn_timer) for the stronger permanent Reentry sand.
    v15: weapon-selection obs enrichment — per-inventory-cell expected DPT vs the
-       current target and per-NPC expected DPT of the equipped weapon set. */
-#define COLO_SNAPSHOT_VERSION 16u
+       current target and per-NPC expected DPT of the equipped weapon set.
+   v17: scaffold adds active_player_damage_received_scale to ColosseumState (the
+       per-step mirror of the damage-received-scale knob). Grows sizeof(ColosseumState)
+       so the whole-struct snapshot needs the bump; the ColConfig anneal knobs live
+       in ColosseumContext and are NOT snapshotted. */
+#define COLO_SNAPSHOT_VERSION 17u
 
 typedef struct {
     uint32_t magic;
