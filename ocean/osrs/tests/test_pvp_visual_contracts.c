@@ -750,7 +750,7 @@ static void test_pvp_slotclick_command_frame_equips_and_attacks(void) {
 
     int actions[NUM_ACTION_HEADS];
     memset(actions, 0, sizeof(actions));
-    actions[HEAD_INVENTORY_0] = slot + 1;
+    actions[HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = slot + 1;
     actions[HEAD_ATTACK] = ATTACK_ATK;
 
     nh_pvp_step((EncounterState*)&state, NULL, actions);
@@ -777,8 +777,8 @@ static void test_pvp_slotclick_duplicate_item_slots_are_noop_safe(void) {
 
     int actions[NUM_ACTION_HEADS];
     memset(actions, 0, sizeof(actions));
-    actions[HEAD_INVENTORY_0] = slot_a + 1;
-    actions[HEAD_INVENTORY_0 + 1] = slot_b + 1;
+    actions[HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = slot_a + 1;
+    actions[HEAD_FOOD] = slot_b + 1;
 
     nh_pvp_step((EncounterState*)&state, NULL, actions);
 
@@ -786,6 +786,34 @@ static void test_pvp_slotclick_duplicate_item_slots_are_noop_safe(void) {
         player->equipped[GEAR_SLOT_WEAPON], ITEM_RUNE_CROSSBOW);
     ASSERT_INT_EQ("duplicate item click records one success",
         player->equip_click_successes, 1);
+}
+
+static void test_pvp_invalid_category_click_does_not_block_valid_click(void) {
+    printf("--- PvP invalid category click does not block valid click ---\n");
+
+    NhPvpState state;
+    setup_pvp_state(&state);
+    Player* player = &state.env.players[0];
+    player->current_hitpoints = 50;
+    player->base_hitpoints = 99;
+    player->food_count = 1;
+    player->food_timer = 0;
+
+    OsrsInventoryView view;
+    osrs_inventory_view_build(player, &view);
+    int food_slot = osrs_inventory_view_find_kind(&view, OSRS_INVENTORY_SLOT_FOOD);
+    ASSERT_INT_EQ("food slot exists", food_slot >= 0, 1);
+
+    int actions[NUM_ACTION_HEADS];
+    memset(actions, 0, sizeof(actions));
+    actions[HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = food_slot + 1;
+    actions[HEAD_FOOD] = food_slot + 1;
+
+    int clicks = execute_inventory_clicks(&state.env, 0, actions);
+
+    ASSERT_INT_EQ("valid food click still executes", clicks, 1);
+    ASSERT_INT_EQ("food consumed", player->food_count, 0);
+    ASSERT_INT_EQ("food flag set", player->ate_food_this_tick, 1);
 }
 
 static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
@@ -809,7 +837,7 @@ static void test_pvp_slotclick_command_frame_equips_specs_and_attacks(void) {
 
     int actions[NUM_ACTION_HEADS];
     memset(actions, 0, sizeof(actions));
-    actions[HEAD_INVENTORY_0] = slot + 1;
+    actions[HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = slot + 1;
     actions[HEAD_SPECIAL] = SPECIAL_ARM;
     actions[HEAD_ATTACK] = ATTACK_ATK;
 
@@ -900,9 +928,9 @@ static void test_pvp_human_command_frame_maps_actions(void) {
         actions[HEAD_OVERHEAD], ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
     ASSERT_INT_EQ("human offensive maps",
         actions[HEAD_OFFENSIVE], ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
-    ASSERT_INT_EQ("human food maps", actions[HEAD_INVENTORY_0], food_slot + 1);
-    ASSERT_INT_EQ("human karambwan maps", actions[HEAD_INVENTORY_0 + 1], karambwan_slot + 1);
-    ASSERT_INT_EQ("human potion maps", actions[HEAD_INVENTORY_0 + 2], restore_slot + 1);
+    ASSERT_INT_EQ("human food maps", actions[HEAD_FOOD], food_slot + 1);
+    ASSERT_INT_EQ("human karambwan maps", actions[HEAD_KARAMBWAN], karambwan_slot + 1);
+    ASSERT_INT_EQ("human potion maps", actions[HEAD_DRINK], restore_slot + 1);
     ASSERT_INT_EQ("human vengeance maps", actions[HEAD_VENG], VENG_CAST);
     ASSERT_INT_EQ("human spec maps", actions[HEAD_SPECIAL], SPECIAL_ARM);
 
@@ -2004,6 +2032,7 @@ int main(void) {
     test_pvp_human_item_click_equips_and_attacks_with_weapon();
     test_pvp_slotclick_command_frame_equips_and_attacks();
     test_pvp_slotclick_duplicate_item_slots_are_noop_safe();
+    test_pvp_invalid_category_click_does_not_block_valid_click();
     test_pvp_slotclick_command_frame_equips_specs_and_attacks();
     test_pvp_human_armor_click_updates_equipment();
     test_pvp_human_command_frame_maps_actions();

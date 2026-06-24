@@ -597,24 +597,12 @@ static inline void opp_resolve_normal_attack(
 
 /* (opp_apply_tank_gear is defined above as inline loadout assignment) */
 
-/* Boost/restore potion logic (before attack, used by onetick+ opponents) */
-static inline int pvp_scripted_queue_inventory_slot_click(int* actions, int inventory_slot) {
-    return osrs_inventory_click_queue_slot(
-        actions + HEAD_INVENTORY_0 + 1,
-        PVP_INVENTORY_CLICKS_PER_TICK - 1,
-        inventory_slot);
-}
-
 static inline int pvp_scripted_queue_inventory_kind_click(
     Player* self,
     int* actions,
     OsrsInventorySlotKind kind
 ) {
-    return osrs_inventory_click_queue_kind(
-        self,
-        actions + HEAD_INVENTORY_0 + 1,
-        PVP_INVENTORY_CLICKS_PER_TICK - 1,
-        kind);
+    return pvp_inventory_queue_kind_click(self, actions, kind);
 }
 
 static void opp_apply_boost_potion(OsrsEnv* env, OpponentState* opp, int* actions,
@@ -648,8 +636,9 @@ static void opp_apply_boost_potion(OsrsEnv* env, OpponentState* opp, int* action
 static inline int opp_check_eating_queued(Player* self, int* actions) {
     OsrsInventoryView view;
     osrs_inventory_view_build(self, &view);
-    for (int h = 1; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-        int action = actions[HEAD_INVENTORY_0 + h];
+    int heads[] = {HEAD_FOOD, HEAD_KARAMBWAN};
+    for (int h = 0; h < 2; h++) {
+        int action = actions[heads[h]];
         if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
         OsrsInventorySlotKind kind = view.slots[action - 1].kind;
         if (kind == OSRS_INVENTORY_SLOT_FOOD || kind == OSRS_INVENTORY_SLOT_KARAMBWAN)
@@ -2385,20 +2374,22 @@ static uint8_t pvp_predict_action_weapon_after_equip_clicks(Player* p, const int
     OsrsInventoryView view;
     osrs_inventory_view_build(p, &view);
 
-    for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-        int action = actions[HEAD_INVENTORY_0 + h];
+    for (int gear_slot = 0; gear_slot < NUM_GEAR_SLOTS; gear_slot++) {
+        int head = HEAD_EQUIP_SLOT(gear_slot);
+        int action = actions[head];
         if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
 
         int inventory_slot = action - 1;
         OsrsInventorySlotView cell = view.slots[inventory_slot];
+        if (pvp_inventory_head_for_cell(cell) != head) continue;
         if (cell.kind != OSRS_INVENTORY_SLOT_EQUIPMENT) continue;
         uint8_t item = cell.item_idx;
         if (item == ITEM_NONE || item >= NUM_ITEMS) continue;
 
-        int gear_slot = osrs_item_gear_slot(item);
-        if (gear_slot == GEAR_SLOT_WEAPON) {
+        int item_gear_slot = osrs_item_gear_slot(item);
+        if (item_gear_slot == GEAR_SLOT_WEAPON) {
             weapon = item;
-        } else if (gear_slot == GEAR_SLOT_SHIELD &&
+        } else if (item_gear_slot == GEAR_SLOT_SHIELD &&
                 weapon < NUM_ITEMS && item_is_two_handed(weapon)) {
             weapon = ITEM_NONE;
         }
@@ -3598,8 +3589,7 @@ static void pvp_legacy_loadout_to_slotclicks(Player* p, int legacy_loadout, int*
     uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
     resolve_loadout(p, legacy_loadout, resolved);
 
-    int click_head = 0;
-    for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS && click_head < PVP_INVENTORY_CLICKS_PER_TICK; i++) {
+    for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
         uint8_t item = resolved[i];
         if (item == ITEM_NONE) continue;
 
@@ -3609,8 +3599,7 @@ static void pvp_legacy_loadout_to_slotclicks(Player* p, int legacy_loadout, int*
         int inventory_slot = osrs_player_inventory_find(p, item);
         if (inventory_slot < 0) continue;
 
-        actions[HEAD_INVENTORY_0 + click_head] = inventory_slot + 1;
-        click_head++;
+        pvp_inventory_queue_cell_click(p, actions, inventory_slot);
     }
 
     if (legacy_loadout == LOADOUT_SPEC_MELEE ||
@@ -3628,13 +3617,12 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
 ) {
     int legacy_loadout = actions[HEAD_LOADOUT];
     int legacy_combat = actions[HEAD_COMBAT];
-    int queued_inventory[PVP_INVENTORY_CLICKS_PER_TICK - 1];
-    int queued_count = 0;
+    int queued_inventory[PVP_INVENTORY_CATEGORY_HEADS] = {0};
 
     for (int h = 1; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
         int action = actions[HEAD_INVENTORY_0 + h];
         if (action > 0 && action <= OSRS_INVENTORY_SIZE)
-            queued_inventory[queued_count++] = action;
+            queued_inventory[h] = action;
     }
 
     for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
@@ -3644,23 +3632,9 @@ static void pvp_translate_legacy_loadout_action_to_slotclicks(
     actions[HEAD_ATTACK] = ATTACK_NONE;
 
     pvp_legacy_loadout_to_slotclicks(&env->players[agent_idx], legacy_loadout, actions);
-    for (int i = 0; i < queued_count; i++) {
-        int action = queued_inventory[i];
-        int duplicate = 0;
-        for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-            if (actions[HEAD_INVENTORY_0 + h] == action) {
-                duplicate = 1;
-                break;
-            }
-        }
-        if (duplicate) continue;
-        for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-            if (actions[HEAD_INVENTORY_0 + h] == 0) {
-                actions[HEAD_INVENTORY_0 + h] = action;
-                break;
-            }
-        }
-    }
+    for (int h = 1; h < PVP_INVENTORY_CLICKS_PER_TICK; h++)
+        if (queued_inventory[h] > 0 && actions[HEAD_INVENTORY_0 + h] == 0)
+            actions[HEAD_INVENTORY_0 + h] = queued_inventory[h];
     if (is_attack_action(legacy_combat)) {
         actions[HEAD_ATTACK] = legacy_combat;
         return;

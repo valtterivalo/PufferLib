@@ -19,6 +19,7 @@
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
+#include "osrs_pvp_inventory_actions.h"
 #include "osrs_pvp_observations.h"  // For can_eat_food, can_use_potion, etc.
 #include "osrs_encounter.h"
 
@@ -379,27 +380,38 @@ static int execute_inventory_clicks(OsrsEnv* env, int agent_idx, const int* acti
     Player* p = &env->players[agent_idx];
     int clicks = 0;
     OsrsInventoryView view;
-    OsrsInventoryClickEvent events[OSRS_INVENTORY_SIZE];
+    uint8_t clicked_slots[OSRS_INVENTORY_SIZE] = {0};
     osrs_inventory_view_build(p, &view);
-    int event_count = osrs_inventory_click_collect_events(
-        &view,
-        actions + HEAD_INVENTORY_0,
-        PVP_INVENTORY_CLICKS_PER_TICK,
-        events,
-        OSRS_INVENTORY_SIZE);
 
-    for (int i = 0; i < event_count; i++) {
-        OsrsInventoryClickEvent event = events[i];
-        switch (event.resolution.click_action) {
+    int inventory_heads[PVP_INVENTORY_CATEGORY_HEADS];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        inventory_heads[slot] = HEAD_EQUIP_SLOT(slot);
+    inventory_heads[NUM_GEAR_SLOTS] = HEAD_FOOD;
+    inventory_heads[NUM_GEAR_SLOTS + 1] = HEAD_DRINK;
+    inventory_heads[NUM_GEAR_SLOTS + 2] = HEAD_KARAMBWAN;
+
+    for (int i = 0; i < PVP_INVENTORY_CATEGORY_HEADS; i++) {
+        int head = inventory_heads[i];
+        int inventory_slot = osrs_inventory_click_action_to_slot(actions[head]);
+        if (inventory_slot < 0) continue;
+
+        OsrsInventorySlotView cell = view.slots[inventory_slot];
+        if (pvp_inventory_head_for_cell(cell) != head) continue;
+        if (clicked_slots[inventory_slot]) continue;
+        clicked_slots[inventory_slot] = 1;
+
+        OsrsInventoryClickResolution resolution = osrs_inventory_click_interpret(
+            cell.item_idx, cell.raw_osrs_id, OSRS_CLICK_TICK_FIRST);
+        switch (resolution.click_action) {
             case OSRS_CLICK_EQUIP: {
                 p->equip_click_attempts++;
-                if (!osrs_player_can_equip_from_inventory_slot(p, event.inventory_slot) &&
-                        !osrs_player_inventory_has_item(p, event.cell.item_idx)) {
+                if (!osrs_player_can_equip_from_inventory_slot(p, inventory_slot) &&
+                        !osrs_player_inventory_has_item(p, cell.item_idx)) {
                     continue;
                 }
                 uint8_t old_weapon = p->equipped[GEAR_SLOT_WEAPON];
                 if (!osrs_player_equip_command_item(
-                        p, event.inventory_slot, event.cell.item_idx)) {
+                        p, inventory_slot, cell.item_idx)) {
                     continue;
                 }
                 p->equip_click_successes++;
@@ -413,22 +425,22 @@ static int execute_inventory_clicks(OsrsEnv* env, int agent_idx, const int* acti
             case OSRS_CLICK_EAT:
             case OSRS_CLICK_DRINK:
                 if (!pvp_can_use_inventory_consumable(
-                        p, event.resolution.consumable_kind)) {
+                        p, resolution.consumable_kind)) {
                     break;
                 }
-                pvp_apply_inventory_consumable(p, event.resolution.consumable_kind);
+                pvp_apply_inventory_consumable(p, resolution.consumable_kind);
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
                 osrs_interaction_check_interrupt(
                     &p->interaction,
-                    pvp_inventory_interaction_action(event.resolution.click_action));
+                    pvp_inventory_interaction_action(resolution.click_action));
                 clicks++;
                 break;
             case OSRS_CLICK_NONE:
                 break;
             default:
                 fprintf(stderr, "execute_inventory_clicks: invalid action %d\n",
-                    (int)event.resolution.click_action);
+                    (int)resolution.click_action);
                 abort();
         }
     }

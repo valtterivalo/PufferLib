@@ -256,16 +256,14 @@ static int opponent_potion(const OsrsEnv* env) {
     OsrsInventoryView view;
     osrs_inventory_view_build(&env->players[1], &view);
     const int* actions = env->pending_actions + NUM_ACTION_HEADS;
-    for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-        int action = actions[HEAD_INVENTORY_0 + h];
-        if (action <= 0 || action > OSRS_INVENTORY_SIZE) continue;
-        switch (view.slots[action - 1].kind) {
-            case OSRS_INVENTORY_SLOT_BREW: return POTION_BREW;
-            case OSRS_INVENTORY_SLOT_RESTORE: return POTION_RESTORE;
-            case OSRS_INVENTORY_SLOT_COMBAT_POTION: return POTION_COMBAT;
-            case OSRS_INVENTORY_SLOT_RANGED_POTION: return POTION_RANGED;
-            default: break;
-        }
+    int action = actions[HEAD_DRINK];
+    if (action <= 0 || action > OSRS_INVENTORY_SIZE) return POTION_NONE;
+    switch (view.slots[action - 1].kind) {
+        case OSRS_INVENTORY_SLOT_BREW: return POTION_BREW;
+        case OSRS_INVENTORY_SLOT_RESTORE: return POTION_RESTORE;
+        case OSRS_INVENTORY_SLOT_COMBAT_POTION: return POTION_COMBAT;
+        case OSRS_INVENTORY_SLOT_RANGED_POTION: return POTION_RANGED;
+        default: break;
     }
     return POTION_NONE;
 }

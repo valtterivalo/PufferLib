@@ -19,6 +19,7 @@
 #include "osrs_human_commands.h"
 #include "osrs_encounter.h"
 #include "osrs_inventory_clicks.h"
+#include "osrs_pvp_inventory_actions.h"
 
 /* forward declare — full struct lives in osrs_pvp_render.h */
 struct RenderClient;
@@ -375,21 +376,41 @@ static void human_pvp_queue_inventory_kind(
     int* actions,
     OsrsInventorySlotKind kind
 ) {
-    osrs_inventory_click_queue_kind(
-        agent,
-        actions + HEAD_INVENTORY_0,
-        PVP_INVENTORY_CLICKS_PER_TICK,
-        kind);
+    pvp_inventory_queue_kind_click(agent, actions, kind);
 }
 
 static void human_to_pvp_actions(HumanInput* hi, int* actions,
                                   Player* agent, Player* target) {
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
-    osrs_human_queue_inventory_command_clicks(
-        hi,
-        agent,
-        actions + HEAD_INVENTORY_0,
-        PVP_INVENTORY_CLICKS_PER_TICK);
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* cmd = &hi->commands.items[i];
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                break;
+            case HUMAN_COMMAND_EAT:
+                if (cmd->inventory_slot >= 0) {
+                    pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                } else {
+                    pvp_inventory_queue_kind_click(agent, actions, cmd->food == 1
+                        ? OSRS_INVENTORY_SLOT_KARAMBWAN
+                        : OSRS_INVENTORY_SLOT_FOOD);
+                }
+                break;
+            case HUMAN_COMMAND_DRINK:
+                if (cmd->inventory_slot >= 0) {
+                    pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                } else {
+                    pvp_inventory_queue_kind_click(
+                        agent,
+                        actions,
+                        osrs_inventory_slot_kind_for_potion_action(cmd->potion));
+                }
+                break;
+            default:
+                break;
+        }
+    }
 
     if (hi->pending_attack) {
         actions[HEAD_ATTACK] = is_spell_attack_action(hi->pending_spell)

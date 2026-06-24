@@ -617,7 +617,9 @@ typedef struct {
     OsrsInventoryView view;
     int can_click[OSRS_INVENTORY_SIZE];
     int can_equip[OSRS_INVENTORY_SIZE];
-    unsigned char inventory_click_mask[INVENTORY_CLICK_DIM];
+    int can_eat_food[OSRS_INVENTORY_SIZE];
+    int can_eat_karambwan[OSRS_INVENTORY_SIZE];
+    int can_drink[OSRS_INVENTORY_SIZE];
     int gear_slot[OSRS_INVENTORY_SIZE];
     int is_weapon[OSRS_INVENTORY_SIZE];
     int has_equippable_affordable_spec_weapon;
@@ -750,7 +752,6 @@ static void pvp_collect_inventory_affordances(
     pvp_init_item_affordance_meta();
     osrs_inventory_view_build(attacker, &out->view);
     out->has_equippable_affordable_spec_weapon = 0;
-    out->inventory_click_mask[0] = 1;
     EquipmentBonuses current_bonuses;
     osrs_sum_equipment_bonuses(attacker->equipped, &current_bonuses);
     GearBonuses current_gear = osrs_gear_bonuses_from_equipment_bonuses(&current_bonuses);
@@ -762,6 +763,9 @@ static void pvp_collect_inventory_affordances(
             &PVP_ITEM_AFFORDANCE_META[pvp_item_affordance_meta_index(item_idx)];
         out->gear_slot[slot] = meta->gear_slot;
         out->is_weapon[slot] = meta->is_weapon;
+        out->can_eat_food[slot] = 0;
+        out->can_eat_karambwan[slot] = 0;
+        out->can_drink[slot] = 0;
         out->can_equip[slot] = cell.kind == OSRS_INVENTORY_SLOT_EQUIPMENT &&
             pvp_can_equip_inventory_slot_cached(
                 attacker, item_idx, out->gear_slot[slot], meta->is_two_handed, free_slots);
@@ -771,35 +775,40 @@ static void pvp_collect_inventory_affordances(
                 break;
             case OSRS_INVENTORY_SLOT_FOOD:
                 out->can_click[slot] = can_eat_food(attacker);
+                out->can_eat_food[slot] = out->can_click[slot];
                 break;
             case OSRS_INVENTORY_SLOT_KARAMBWAN:
                 out->can_click[slot] = can_eat_karambwan(attacker);
+                out->can_eat_karambwan[slot] = out->can_click[slot];
                 break;
             case OSRS_INVENTORY_SLOT_BREW:
                 out->can_click[slot] =
                     can_use_potion(attacker, POTION_BREW) &&
                     can_use_brew_boost(attacker);
+                out->can_drink[slot] = out->can_click[slot];
                 break;
             case OSRS_INVENTORY_SLOT_RESTORE:
                 out->can_click[slot] =
                     can_use_potion(attacker, POTION_RESTORE) &&
                     can_restore_stats(attacker);
+                out->can_drink[slot] = out->can_click[slot];
                 break;
             case OSRS_INVENTORY_SLOT_COMBAT_POTION:
                 out->can_click[slot] =
                     can_use_potion(attacker, POTION_COMBAT) &&
                     can_boost_combat_skills(attacker);
+                out->can_drink[slot] = out->can_click[slot];
                 break;
             case OSRS_INVENTORY_SLOT_RANGED_POTION:
                 out->can_click[slot] =
                     can_use_potion(attacker, POTION_RANGED) &&
                     can_boost_ranged(attacker);
+                out->can_drink[slot] = out->can_click[slot];
                 break;
             default:
                 out->can_click[slot] = 0;
                 break;
         }
-        out->inventory_click_mask[slot + 1] = out->can_click[slot] ? 1 : 0;
         out->has_post_equip_deltas[slot] = 0;
         if (!out->can_equip[slot]) {
             continue;
@@ -1357,10 +1366,22 @@ static void compute_action_masks_with_inventory_affordances(
     memset(mask, 0, ACTION_MASK_SIZE);
     int offset = 0;
 
-    for (int h = 0; h < PVP_INVENTORY_CLICKS_PER_TICK; h++) {
-        memcpy(mask + offset, affordances->inventory_click_mask, INVENTORY_CLICK_DIM);
-        offset += INVENTORY_CLICK_DIM;
+    for (int gear_slot = 0; gear_slot < NUM_GEAR_SLOTS; gear_slot++) {
+        mask[offset++] = 1;
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            mask[offset++] = affordances->can_equip[slot] &&
+                affordances->gear_slot[slot] == gear_slot;
+        }
     }
+    mask[offset++] = 1;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        mask[offset++] = affordances->can_eat_food[slot];
+    mask[offset++] = 1;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        mask[offset++] = affordances->can_eat_karambwan[slot];
+    mask[offset++] = 1;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        mask[offset++] = affordances->can_drink[slot];
 
     int attack_ready = remaining_ticks(p->attack_timer) == 0;
     int can_move_now = can_move(p);

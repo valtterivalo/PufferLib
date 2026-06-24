@@ -19,6 +19,7 @@
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 #include "../osrs_inventory_clicks.h"
+#include "../osrs_pvp_inventory_actions.h"
 
 /* obs/action dimensions from osrs_types.h. order must match HEAD_* indices. */
 static const int NH_PVP_ACTION_DIMS[] = PVP_ACTION_DIMS_LITERAL;
@@ -91,11 +92,7 @@ static void nh_pvp_queue_inventory_kind_click(
     int* actions,
     OsrsInventorySlotKind kind
 ) {
-    osrs_inventory_click_queue_kind(
-        agent,
-        actions + HEAD_INVENTORY_0,
-        PVP_INVENTORY_CLICKS_PER_TICK,
-        kind);
+    pvp_inventory_queue_kind_click(agent, actions, kind);
 }
 
 static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEnv* env) {
@@ -104,11 +101,35 @@ static void nh_pvp_translate_human_commands(HumanInput* hi, int* actions, OsrsEn
     OsrsHumanCommandFrame frame =
         osrs_human_command_frame_from_input(hi, agent->equipped[GEAR_SLOT_WEAPON]);
 
-    osrs_human_queue_inventory_command_clicks(
-        hi,
-        agent,
-        actions + HEAD_INVENTORY_0,
-        PVP_INVENTORY_CLICKS_PER_TICK);
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* cmd = &hi->commands.items[i];
+        switch (cmd->kind) {
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                break;
+            case HUMAN_COMMAND_EAT:
+                if (cmd->inventory_slot >= 0) {
+                    pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                } else {
+                    pvp_inventory_queue_kind_click(agent, actions, cmd->food == 1
+                        ? OSRS_INVENTORY_SLOT_KARAMBWAN
+                        : OSRS_INVENTORY_SLOT_FOOD);
+                }
+                break;
+            case HUMAN_COMMAND_DRINK:
+                if (cmd->inventory_slot >= 0) {
+                    pvp_inventory_queue_cell_click(agent, actions, cmd->inventory_slot);
+                } else {
+                    pvp_inventory_queue_kind_click(
+                        agent,
+                        actions,
+                        osrs_inventory_slot_kind_for_potion_action(cmd->potion));
+                }
+                break;
+            default:
+                break;
+        }
+    }
 
     if (frame.has_walk) {
         env->pvp_runtime.walk_dest_x[0] = frame.walk_x;
