@@ -21,15 +21,6 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     if (npc->death_ticks > 0) return;
     assert(npc->active && npc->hp <= 0);
     s->log.total_npc_kills++;
-    if (s->wave != COLO_WAVE_BOSS && s->current_wave_total_killable > 0) {
-        if (s->current_wave_kills < s->current_wave_total_killable) {
-            s->current_wave_kills++;
-            float progress = (float)s->current_wave_kills /
-                (float)s->current_wave_total_killable;
-            if (progress > s->current_wave_kill_progress)
-                s->current_wave_kill_progress = progress;
-        }
-    }
     /* Death Charge: the first player-credited killing blow inside the armed
        window grants +15% spec energy and starts the 100-tick cooldown. All kills
        reaching this path are player-credited (NPC->NPC damage never routes here),
@@ -87,6 +78,7 @@ static void col_apply_echo_boots_recoil(
 
     osrs_consume_echo_boots_charge(&s->player);
     int landed = 0, hit_damage = 0;
+    int prev_min_hp = npc->min_hp_seen;
     int applied = encounter_damage_npc(
         &npc->hp, &landed, &hit_damage, recoil_damage);
     if (applied <= 0) return;
@@ -99,6 +91,12 @@ static void col_apply_echo_boots_recoil(
         ctx->npc_render_hit_damage[attacker_slot],
         hit_damage);
     s->tick_scratch.damage_dealt += (float)applied;
+    float fresh = (float)(prev_min_hp - npc->hp);
+    if (fresh > 0.0f) {
+        npc->min_hp_seen = npc->hp;
+        s->tick_scratch.fresh_damage_dealt += fresh;
+        s->current_wave_fresh_damage += fresh;  /* echo recoil never hits Sol (excluded above) */
+    }
     if (npc->hp <= 0) {
         col_apply_npc_death(s, attacker_slot);
     } else {
@@ -121,6 +119,7 @@ static void col_resolve_player_projectiles_on_npcs_ctx(
             int landed = 0, hit_damage = 0;
             float dmg_acc = 0.0f;
             int frozen = npc->frozen_ticks;
+            int prev_min_hp = npc->min_hp_seen;
             if (encounter_resolve_npc_pending_hit(
                     ph, &npc->hp, &landed, &hit_damage, &frozen, NULL, &dmg_acc)) {
                 npc->hit_landed_this_tick = landed;
@@ -133,6 +132,15 @@ static void col_resolve_player_projectiles_on_npcs_ctx(
                 s->tick_scratch.damage_dealt += dmg_acc;
                 if (npc->type == COLO_SOL_HEREDIT)
                     s->tick_scratch.damage_boss += dmg_acc;
+                float fresh = (float)(prev_min_hp - npc->hp);
+                if (fresh > 0.0f) {
+                    npc->min_hp_seen = npc->hp;
+                    s->tick_scratch.fresh_damage_dealt += fresh;
+                    if (npc->type == COLO_SOL_HEREDIT)
+                        s->tick_scratch.fresh_damage_boss += fresh;
+                    else
+                        s->current_wave_fresh_damage += fresh;
+                }
                 if (npc->hp <= 0) {
                     col_apply_npc_death(s, i);
                     break;

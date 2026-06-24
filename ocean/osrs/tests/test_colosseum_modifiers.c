@@ -2037,8 +2037,8 @@ static void test_reinforcement_gates(void) {
     }
 }
 
-static void test_outcome_score_uses_current_wave_kills(void) {
-    printf("test_outcome_score_uses_current_wave_kills\n");
+static void test_outcome_score_uses_fresh_damage(void) {
+    printf("test_outcome_score_uses_fresh_damage\n");
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ColosseumState s;
@@ -2046,31 +2046,30 @@ static void test_outcome_score_uses_current_wave_kills(void) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 101);
     complete_open_draft(&s, &ctx, 1);
 
-    CHECK("wave 1 starts with four score enemies", s.current_wave_total_killable == 4);
+    CHECK("wave 1 spawned a positive HP pool", s.current_wave_hp_pool > 0);
+    int pool = s.current_wave_hp_pool;
 
-    int slot = first_live_score_enemy(&s);
-    CHECK("wave has a score enemy to damage", slot >= 0);
-    int hp = s.npcs[slot].hp;
-    s.npcs[slot].hp = hp / 2;
-    float before_kill = col_episode_outcome_score(&s);
-    s.npcs[slot].hp = hp;
-    CHECK("damage and healing do not change score",
-        fabsf(col_episode_outcome_score(&s) - before_kill) < 0.000001f);
+    s.current_wave_fresh_damage = 0.0f;
+    CHECK("zero fresh damage gives zero within-wave progress",
+        col_current_wave_score_progress(&s) == 0.0f);
 
-    kill_first_live_score_enemy(&s);
-    float one_kill = col_episode_outcome_score(&s);
-    CHECK("one kill gives one quarter wave progress",
-        fabsf(one_kill - score_for_depth(0.25f)) < 0.000001f);
+    s.current_wave_fresh_damage = 0.25f * (float)pool;
+    CHECK("a quarter of the HP pool is quarter-wave depth",
+        fabsf(col_episode_outcome_score(&s) - score_for_depth(0.25f)) < 0.0001f);
 
-    kill_first_live_score_enemy(&s);
-    float two_kills = col_episode_outcome_score(&s);
-    CHECK("second kill increases the score", two_kills > one_kill);
-    CHECK("two kills give half wave progress",
-        fabsf(two_kills - score_for_depth(0.5f)) < 0.000001f);
+    s.current_wave_fresh_damage = 0.5f * (float)pool;
+    CHECK("half the HP pool is half-wave depth and climbs",
+        fabsf(col_episode_outcome_score(&s) - score_for_depth(0.5f)) < 0.0001f);
+
+    /* a full pool's worth of fresh damage is credited by waves_cleared, not the
+       partial term, so the within-wave fraction caps at 0 (no double count). */
+    s.current_wave_fresh_damage = (float)pool;
+    CHECK("a full pool caps within-wave progress at zero",
+        col_current_wave_score_progress(&s) == 0.0f);
 }
 
-static void test_outcome_score_reinforcement_progress_is_monotonic(void) {
-    printf("test_outcome_score_reinforcement_progress_is_monotonic\n");
+static void test_outcome_score_reinforcement_grows_denominator(void) {
+    printf("test_outcome_score_reinforcement_grows_denominator\n");
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 10;
@@ -2079,20 +2078,77 @@ static void test_outcome_score_reinforcement_progress_is_monotonic(void) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 202);
 
     CHECK("wave 11 starts with seven score enemies", s.current_wave_total_killable == 7);
-    for (int i = 0; i < 6; i++) kill_first_live_score_enemy(&s);
-    float before_reinforcement = col_episode_outcome_score(&s);
+    int pool_before = s.current_wave_hp_pool;
+    CHECK("the HP pool is positive", pool_before > 0);
+
+    s.current_wave_fresh_damage = 0.3f * (float)pool_before;
+    float score_before = col_episode_outcome_score(&s);
 
     col_spawn_reinforcements(&s);
     CHECK("reinforcements enter the score denominator", s.current_wave_total_killable == 9);
-    CHECK("reinforcements do not reduce score",
-        fabsf(col_episode_outcome_score(&s) - before_reinforcement) < 0.000001f);
+    CHECK("reinforcements grow the HP pool", s.current_wave_hp_pool > pool_before);
 
-    kill_first_live_score_enemy(&s);
-    CHECK("first post-reinforcement kill preserves the watermark",
-        fabsf(col_episode_outcome_score(&s) - before_reinforcement) < 0.000001f);
-    kill_first_live_score_enemy(&s);
-    CHECK("second post-reinforcement kill climbs again",
-        col_episode_outcome_score(&s) > before_reinforcement);
+    /* same fresh damage spread over a larger pool == smaller fraction == lower score. */
+    CHECK("a larger pool lowers the fresh fraction for fixed fresh damage",
+        col_episode_outcome_score(&s) < score_before);
+
+    /* dealing fresh damage up to the new, larger pool climbs the score back. */
+    s.current_wave_fresh_damage = 0.6f * (float)s.current_wave_hp_pool;
+    CHECK("more fresh damage over the larger pool climbs the score again",
+        col_episode_outcome_score(&s) > score_before);
+}
+
+/* the core anti-farm invariant: damage dealt through the real combat path credits
+   only NEW low-water HP. HP a heal restores and the player re-deals counts as gross
+   damage but ZERO fresh damage, so minotaur/totem healing cannot be farmed for
+   reward or score. Walks the user's example: 100 -> 30 (heal to 60) -> 30 -> 10. */
+static void test_fresh_damage_not_farmable_via_healing(void) {
+    printf("test_fresh_damage_not_farmable_via_healing\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 711);
+    geo_clear_npcs(&s);
+    col_reset_current_wave_score_progress(&s);
+
+    /* one NPC at a round 100 HP (override the spawn HP for the example's numbers). */
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 16);
+    s.npcs[0].hp = 100;
+    s.npcs[0].max_hp = 100;
+    s.npcs[0].min_hp_seen = 100;
+    s.player.x = 13; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+
+    /* hit 1: 70 damage -> hp 30, fresh += 70. */
+    col_queue_npc_pending_hit(&s, 0, 70, 1, ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
+    land_pending_player_hits(&s);
+    CHECK("first hit lands for 70", s.npcs[0].hp == 30);
+    CHECK("fresh damage tracks the first hit",
+        fabsf(s.current_wave_fresh_damage - 70.0f) < 0.001f);
+    CHECK("min_hp_seen follows the new low", s.npcs[0].min_hp_seen == 30);
+
+    /* a heal restores HP (totem/minotaur write hp directly): min_hp_seen is untouched. */
+    s.npcs[0].hp = 60;
+    CHECK("healing does not touch min_hp_seen", s.npcs[0].min_hp_seen == 30);
+
+    /* hit 2: re-damage the restored HP back down to 30 -> 0 fresh. */
+    col_queue_npc_pending_hit(&s, 0, 30, 1, ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
+    land_pending_player_hits(&s);
+    CHECK("re-damaging restored HP credits no fresh damage",
+        fabsf(s.current_wave_fresh_damage - 70.0f) < 0.001f);
+
+    /* hit 3: push below the prior low 30 -> 10 -> fresh += 20 (only the new low). */
+    col_queue_npc_pending_hit(&s, 0, 20, 1, ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
+    land_pending_player_hits(&s);
+    CHECK("a new low credits only the fresh portion (20)",
+        fabsf(s.current_wave_fresh_damage - 90.0f) < 0.001f);
+    CHECK("min_hp_seen follows the deeper low", s.npcs[0].min_hp_seen == 10);
+
+    /* gross damage counted all three hits (70+30+20=120); fresh counted 90. */
+    CHECK("gross damage double-counts the healed HP, fresh does not",
+        fabsf(s.tick_scratch.damage_dealt - 120.0f) < 0.001f);
 }
 
 static void test_outcome_score_wave_clear_has_no_double_count(void) {
@@ -4177,8 +4233,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v15 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 15u);
+    CHECK("snapshot version is v16 for Solarflare shared cadence",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 16u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4860,7 +4916,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 41 features", COLO_FEATURES_PER_NPC == 41);
-    CHECK("snapshot version is v15", COLO_SNAPSHOT_VERSION == 15u);
+    CHECK("snapshot version is v16", COLO_SNAPSHOT_VERSION == 16u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5507,7 +5563,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v15", snap.version == 15u);
+    CHECK("snapshot frame is v16", snap.version == 16u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -6935,8 +6991,9 @@ int main(void) {
     test_static_los_and_attack_gate();
     test_spawn_anchor_exclusion();
     test_reinforcement_gates();
-    test_outcome_score_uses_current_wave_kills();
-    test_outcome_score_reinforcement_progress_is_monotonic();
+    test_outcome_score_uses_fresh_damage();
+    test_outcome_score_reinforcement_grows_denominator();
+    test_fresh_damage_not_farmable_via_healing();
     test_outcome_score_wave_clear_has_no_double_count();
     test_outcome_score_sol_uses_boss_progress_only();
     test_roster_cap_nine();

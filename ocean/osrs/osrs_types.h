@@ -1026,6 +1026,14 @@ typedef struct {
     float colo_death_on_conflict_tick;
     float colo_outcome_score;
     float colo_min_sol_hp;
+    /* Colosseum max-wave diagnostic. Each env keeps a binding-owned running max
+       (survives the train log-window zeroing) of every episode's raw furthest
+       depth (waves_fully_cleared + current-wave fresh-fraction + Sol sub-progress,
+       in [0, COLO_NUM_WAVES]) and adds it here once per terminating episode. After
+       the mean-aggregation this reads as the mean over terminating episodes of the
+       running-max-so-far: a smooth, monotone-tightening lower bound on the true
+       single-episode furthest, never the exact global max. */
+    float colo_max_depth_reached;
 } Log;
 
 typedef struct {

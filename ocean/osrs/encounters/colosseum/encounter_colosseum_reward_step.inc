@@ -60,10 +60,11 @@ static float col_sol_score_progress(const ColosseumState* s) {
 
 static float col_current_wave_score_progress(const ColosseumState* s) {
     if (s->wave == COLO_WAVE_BOSS || s->sol.started) return 0.0f;
-    if (s->current_wave_total_killable <= 0) return 0.0f;
-    if (s->current_wave_kills >= s->current_wave_total_killable) return 0.0f;
-    float progress = s->current_wave_kill_progress;
+    if (s->current_wave_hp_pool <= 0) return 0.0f;
+    float progress = s->current_wave_fresh_damage / (float)s->current_wave_hp_pool;
     if (progress < 0.0f) return 0.0f;
+    /* a full clear is credited by the waves_cleared term, not here, so cap the
+       partial fraction strictly below 1.0 (fresh==pool resolves to a +1 wave). */
     if (progress >= 1.0f) return 0.0f;
     return progress;
 }
@@ -81,6 +82,20 @@ static float col_episode_outcome_score(const ColosseumState* s) {
 
 static void col_record_terminal_outcome_score(ColosseumState* s) {
     s->log.outcome_score = col_episode_outcome_score(s);
+}
+
+/** Furthest depth reached this episode, reported RAW (not squared like the
+    outcome_score): waves_fully_cleared + current-wave fresh-fraction + Sol
+    sub-progress, in [0, COLO_NUM_WAVES]. A full win pins to COLO_NUM_WAVES. The
+    binding keeps the per-env running max of this across episodes. */
+static float col_episode_max_wave_depth(const ColosseumState* s) {
+    if (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_WON)
+        return (float)COLO_NUM_WAVES;
+    int waves_cleared = s->log.waves_cleared;
+    if (waves_cleared > COLO_WAVE_BOSS) waves_cleared = COLO_WAVE_BOSS;
+    return (float)waves_cleared +
+        col_current_wave_score_progress(s) +
+        col_sol_score_progress(s);
 }
 
 /** Count how many of the three prayer-checkable styles {magic, ranged, melee} have
@@ -143,8 +158,8 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
 
     float reward = 0.0f;
-    reward += cfg->damage_reward_coeff * t->damage_dealt;
-    reward += cfg->boss_damage_reward_coeff * t->damage_boss;
+    reward += cfg->damage_reward_coeff * t->fresh_damage_dealt;
+    reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
     reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
     reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;
     if (cfg->multistyle_exposure_penalty_coeff != 0.0f) {
@@ -221,6 +236,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_timeout_reward(s, ctx);
         col_record_terminal_outcome_score(s);
+        s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
         return;
     }
@@ -272,6 +288,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_death_reward(s, ctx);
         col_record_terminal_outcome_score(s);
+        s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
         return;
     }
@@ -351,7 +368,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
 
 finish_step:
-    if (s->episode_over) col_record_terminal_outcome_score(s);
+    if (s->episode_over) {
+        col_record_terminal_outcome_score(s);
+        s->log.max_wave_depth = col_episode_max_wave_depth(s);
+    }
     s->episode_return += s->reward;
 }
 

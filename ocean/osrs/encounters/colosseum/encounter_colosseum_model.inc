@@ -1163,6 +1163,10 @@ typedef struct {
     int stun_timer;
     int frozen_ticks;
     int def_drained;       /* defence levels drained by player specs (elder maul) */
+    int min_hp_seen;       /* lowest hp ever reached; decrease-only at the two
+                              player-damage sites. fresh damage = max_hp - min_hp_seen,
+                              so HP a minotaur/totem heals back and the player re-deals
+                              counts 0 (healing writes hp directly, never min_hp_seen). */
 
     /* type-specific state keyed on `type`; reach only via colo_npc_*(). */
     union {
@@ -1821,6 +1825,11 @@ typedef struct {
     int wave_completed;
     int player_moved;
     int player_attacked;
+    /* FRESH damage this tick (max_hp - min_hp_seen growth only), the reward base.
+       Distinct from gross damage_dealt/damage_boss above, which keep feeding the
+       diagnostic log totals. */
+    float fresh_damage_dealt;
+    float fresh_damage_boss;
     /* diagnostic: which prayer-checkable styles landed on the player THIS tick
        (bitmask over ATTACK_STYLE_*) and the off-prayer HP taken this tick. >=2
        distinct styles = a same-tick conflict a single overhead cannot fully
@@ -1872,6 +1881,11 @@ typedef struct {
     float offpray_damage_solo;
     float death_on_conflict_tick;
     float outcome_score;
+    /* furthest depth this episode reached, reported RAW (not squared like
+       outcome_score): waves_fully_cleared + current-wave fresh-fraction, in
+       [0, COLO_NUM_WAVES]. The binding keeps a per-env running max across
+       episodes (Log is zeroed each train report window) and snapshots it here. */
+    float max_wave_depth;
 } ColosseumLog;
 
 
@@ -1893,9 +1907,14 @@ typedef struct {
     int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
-    int current_wave_kills;
     int current_wave_total_killable;
-    float current_wave_kill_progress;
+    /* fresh-damage wave progress: current_wave_hp_pool = sum of base/max HP of
+       every non-hazard enemy spawned this wave (initial + reinforcements), fixed
+       regardless of healing; current_wave_fresh_damage = sum over the wave's NPCs
+       of (max_hp - min_hp_seen). fresh/pool -> 1.0 exactly on a full clear and is
+       not farmable via minotaur/totem healing. */
+    int current_wave_hp_pool;
+    float current_wave_fresh_damage;
     int episode_over;
     int time_limit_truncated;
     ColoOutcome winner;       /* valid only when episode_over is set */

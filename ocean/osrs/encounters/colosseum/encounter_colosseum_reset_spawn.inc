@@ -40,15 +40,16 @@ static int col_find_free_npc(ColosseumState* s) {
 }
 
 static void col_reset_current_wave_score_progress(ColosseumState* s) {
-    s->current_wave_kills = 0;
     s->current_wave_total_killable = 0;
-    s->current_wave_kill_progress = 0.0f;
+    s->current_wave_hp_pool = 0;
+    s->current_wave_fresh_damage = 0.0f;
 }
 
 static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
     if (s->wave == COLO_WAVE_BOSS) return;
     if (col_type_is_hazard_entity(type)) return;
     s->current_wave_total_killable++;
+    s->current_wave_hp_pool += COLO_NPC_STATS[type].hp;
 }
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
@@ -103,6 +104,7 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->y = y;
     npc->hp = st->hp;
     npc->max_hp = st->hp;
+    npc->min_hp_seen = st->hp;
     npc->size = st->size;
     npc->render_id = ++s->next_npc_render_id;
     npc->attack_timer = st->attack_speed;

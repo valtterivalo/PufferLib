@@ -70,6 +70,12 @@ typedef struct ColosseumEnv {
 
     int pending_render_reset;
     OsrsEnv render_env;
+
+    /* per-env running max of each episode's raw furthest depth (waves_fully_cleared
+       + current-wave fresh-fraction). Lives outside Log so it survives the train
+       log-window zeroing; snapshotted into env->log.colo_max_depth_reached each
+       terminal episode. Captures the furthest any single episode in this env reached. */
+    float max_episode_depth_seen;
 } ColosseumEnv;
 
 #define COLO_ENV_STATE(env) ((EncounterState*)&((env)->state))
@@ -162,6 +168,9 @@ void c_step(Env* env) {
         ColosseumLog* clog = (ColosseumLog*)ENCOUNTER_COLOSSEUM.get_log(
             COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
         if (s->start_wave == env->config_start_wave) {
+            if (clog->max_wave_depth > env->max_episode_depth_seen)
+                env->max_episode_depth_seen = clog->max_wave_depth;
+            env->log.colo_max_depth_reached += env->max_episode_depth_seen;
             env->log.n += 1.0f;
             env->log.episode_return += clog->episode_return;
             env->log.episode_length += (float)clog->episode_length;
@@ -512,6 +521,7 @@ void my_log(Log* log, Dict* out) {
 
     dict_set(out, "score", log->colo_outcome_score);
     dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
+    dict_set(out, "max_depth_reached", log->colo_max_depth_reached);
     dict_set(out, "current_set_is_argmax_dpt_for_target",
         col_log_dpt_rate(log, COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT));
     dict_set(out, "attacked_with_argmax_set",

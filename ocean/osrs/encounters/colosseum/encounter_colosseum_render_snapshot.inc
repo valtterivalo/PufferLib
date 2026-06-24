@@ -959,7 +959,7 @@ static void col_step_human_commands_ctx(
        molten_burn_timer) for the stronger permanent Reentry sand.
    v15: weapon-selection obs enrichment — per-inventory-cell expected DPT vs the
        current target and per-NPC expected DPT of the equipped weapon set. */
-#define COLO_SNAPSHOT_VERSION 15u
+#define COLO_SNAPSHOT_VERSION 16u
 
 typedef struct {
     uint32_t magic;
