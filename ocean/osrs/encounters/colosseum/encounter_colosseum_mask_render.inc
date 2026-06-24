@@ -36,17 +36,46 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
-    int inventory_cell_actionable[COLO_INVENTORY_DISPLAY_SLOTS];
-    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
-        inventory_cell_actionable[cell] = col_inventory_cell_actionable(s, cell);
+    /* Per-category inventory heads. Classify each cell once by its click-action
+       (EQUIP -> gear slot, EAT, DRINK). The equip heads (one per gear slot) then
+       only unmask the cells whose item belongs to that slot, so head g can equip
+       at most one item into slot g; eat/drink are one head each. This makes a
+       one-tick full switch possible (all slot heads fire in parallel) while
+       "5 helmets" is structurally impossible. Validity uses the same gates as
+       col_inventory_cell_actionable so the mask never unmasks a useless action. */
     int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-        mask[offset++] = 1.0f;
-        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-            mask[offset++] = (inventory_heads_enabled &&
-                inventory_cell_actionable[cell]) ? 1.0f : 0.0f;
+    int cell_equip_slot[COLO_INVENTORY_DISPLAY_SLOTS];  /* gear slot if equippable, else -1 */
+    int cell_can_eat[COLO_INVENTORY_DISPLAY_SLOTS];
+    int cell_can_drink[COLO_INVENTORY_DISPLAY_SLOTS];
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        cell_equip_slot[cell] = -1;
+        cell_can_eat[cell] = 0;
+        cell_can_drink[cell] = 0;
+        OsrsInventoryClickResolution r =
+            osrs_inventory_cell_click_interpret(&s->inventory_cells[cell], OSRS_CLICK_TICK_FIRST);
+        if (r.click_action == OSRS_CLICK_EQUIP) {
+            if (col_can_equip_from_cell(s, cell))
+                cell_equip_slot[cell] = osrs_item_gear_slot(s->inventory_cells[cell].item_idx);
+        } else if (r.click_action == OSRS_CLICK_EAT) {
+            cell_can_eat[cell] = col_can_eat_consumable_kind(s, r.consumable_kind);
+        } else if (r.click_action == OSRS_CLICK_DRINK) {
+            cell_can_drink[cell] = s->inventory_cells[cell].dose > 0 &&
+                s->player.potion_timer == 0 &&
+                col_drink_has_effect(s, r.consumable_kind);
         }
     }
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        mask[offset++] = 1.0f;  /* noop */
+        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+            mask[offset++] = (inventory_heads_enabled && cell_equip_slot[cell] == slot)
+                ? 1.0f : 0.0f;
+    }
+    mask[offset++] = 1.0f;  /* EAT noop */
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        mask[offset++] = (inventory_heads_enabled && cell_can_eat[cell]) ? 1.0f : 0.0f;
+    mask[offset++] = 1.0f;  /* DRINK noop */
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        mask[offset++] = (inventory_heads_enabled && cell_can_drink[cell]) ? 1.0f : 0.0f;
 
     /* HEAD_SPEC (3): none, arm equipped spec weapon, disarm. */
     mask[offset++] = 1.0f;

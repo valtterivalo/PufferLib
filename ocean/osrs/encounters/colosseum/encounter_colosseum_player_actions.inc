@@ -3,49 +3,35 @@
  * @file encounter_colosseum_player_actions.inc
  * @brief Action head layout + player tick, mirroring inferno player_actions.
  *
- * Action heads (35): PRIMARY, PRAYER, 28 inventory-click heads, SPEC,
- * MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL. PRIMARY is 0=noop,
- * 1..24=move, 25..48=attack obs slot 0..23. Inventory heads share the same
- * 29-way domain: 0=noop, k=click inventory cell k-1.
+ * Action heads (20): PRIMARY, PRAYER, one EQUIP head per gear slot
+ * (NUM_GEAR_SLOTS), EAT, DRINK, SPEC, MODIFIER_SELECT, GRAPPLE_PARRY,
+ * OFFENSIVE, SPELL. PRIMARY is 0=noop, 1..24=move, 25..48=attack obs slot
+ * 0..23. Each inventory head (equip-per-slot, eat, drink) shares the same
+ * 29-way per-cell domain: 0=noop, k=click inventory cell k-1. The equip heads
+ * are masked per gear slot so each slot equips at most one item per tick (all
+ * slots fire in parallel for a one-tick full switch), and eat/drink are one
+ * head each, matching OSRS last-click-per-result-category semantics.
  */
 
 #define COLO_HEAD_PRIMARY         0  /* noop + 24 moves + 24 attack slots */
 #define COLO_HEAD_PRAYER          1  /* no_change, off, set_refresh_melee/ranged/magic */
-#define COLO_HEAD_INV_CLICK_0     2
-#define COLO_HEAD_INV_CLICK_1     3
-#define COLO_HEAD_INV_CLICK_2     4
-#define COLO_HEAD_INV_CLICK_3     5
-#define COLO_HEAD_INV_CLICK_4     6
-#define COLO_HEAD_INV_CLICK_5     7
-#define COLO_HEAD_INV_CLICK_6     8
-#define COLO_HEAD_INV_CLICK_7     9
-#define COLO_HEAD_INV_CLICK_8    10
-#define COLO_HEAD_INV_CLICK_9    11
-#define COLO_HEAD_INV_CLICK_10   12
-#define COLO_HEAD_INV_CLICK_11   13
-#define COLO_HEAD_INV_CLICK_12   14
-#define COLO_HEAD_INV_CLICK_13   15
-#define COLO_HEAD_INV_CLICK_14   16
-#define COLO_HEAD_INV_CLICK_15   17
-#define COLO_HEAD_INV_CLICK_16   18
-#define COLO_HEAD_INV_CLICK_17   19
-#define COLO_HEAD_INV_CLICK_18   20
-#define COLO_HEAD_INV_CLICK_19   21
-#define COLO_HEAD_INV_CLICK_20   22
-#define COLO_HEAD_INV_CLICK_21   23
-#define COLO_HEAD_INV_CLICK_22   24
-#define COLO_HEAD_INV_CLICK_23   25
-#define COLO_HEAD_INV_CLICK_24   26
-#define COLO_HEAD_INV_CLICK_25   27
-#define COLO_HEAD_INV_CLICK_26   28
-#define COLO_HEAD_INV_CLICK_27   29
-#define COLO_HEAD_SPEC           30  /* none, arm equipped spec, disarm */
-#define COLO_HEAD_MODIFIER_SELECT 31  /* none + pick draft option 0/1/2 */
-#define COLO_HEAD_GRAPPLE_PARRY  32  /* none + the 5 grapple callout slots (A12) */
-#define COLO_HEAD_OFFENSIVE      33  /* no_change, off, piety, rigour, augury */
-#define COLO_HEAD_SPELL          34  /* none, summon-thrall, death-charge (Arceuus) */
+/* One equip head per gear slot, indexed COLO_HEAD_EQUIP_BASE + GEAR_SLOT_*.
+   Each is 29-way (0=noop, k=equip inventory cell k-1 into THIS gear slot),
+   masked per tick to {noop} u {cells holding an equippable item for this slot}.
+   Per-slot decomposition makes a one-tick full switch possible (all slot heads
+   fire in parallel) while making "5 helmets" structurally impossible. */
+#define COLO_HEAD_EQUIP_BASE      2
+#define COLO_HEAD_EQUIP_SLOT(slot) (COLO_HEAD_EQUIP_BASE + (slot))
+#define COLO_HEAD_EAT            (COLO_HEAD_EQUIP_BASE + NUM_GEAR_SLOTS)       /* 13 */
+#define COLO_HEAD_DRINK          (COLO_HEAD_EAT + 1)                          /* 14 */
+#define COLO_HEAD_SPEC           (COLO_HEAD_DRINK + 1)                        /* 15: none, arm equipped spec, disarm */
+#define COLO_HEAD_MODIFIER_SELECT (COLO_HEAD_SPEC + 1)                        /* 16: none + pick draft option 0/1/2 */
+#define COLO_HEAD_GRAPPLE_PARRY  (COLO_HEAD_MODIFIER_SELECT + 1)              /* 17: none + the 5 grapple callout slots (A12) */
+#define COLO_HEAD_OFFENSIVE      (COLO_HEAD_GRAPPLE_PARRY + 1)                /* 18: no_change, off, piety, rigour, augury */
+#define COLO_HEAD_SPELL          (COLO_HEAD_OFFENSIVE + 1)                    /* 19: none, summon-thrall, death-charge (Arceuus) */
 
-#define COLO_INV_CLICK_HEADS 28
+/* number of 29-way per-cell inventory heads: one equip per gear slot + eat + drink */
+#define COLO_INV_CLICK_HEADS (NUM_GEAR_SLOTS + 2)
 #define COLO_INV_CLICK_DIM 29
 #define COLO_PRIMARY_ATTACK_BASE ENCOUNTER_MOVE_ACTIONS
 #define COLO_PRIMARY_DIM (ENCOUNTER_MOVE_ACTIONS + COLO_OBS_NPCS)
@@ -69,16 +55,15 @@
     SolHereditState.grapple_body_slot. */
 #define COLO_GRAPPLE_PARRY_DIM (1 + COLO_NUM_GRAPPLE_SLOTS)  /* 6 */
 
+/* Inventory heads: 11 equip (one per gear slot, in GEAR_SLOT_* order) + eat + drink. */
 #define COLO_ACTION_DIMS_INIT { \
     COLO_PRIMARY_DIM, \
     COLO_OVERHEAD_DIM, \
     COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
     COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
-    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
-    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
-    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
-    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
-    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, \
+    COLO_INV_CLICK_DIM, \
     COLO_SPEC_DIM, \
     COLO_MODIFIER_SELECT_DIM, \
     COLO_GRAPPLE_PARRY_DIM, \
@@ -86,6 +71,10 @@
     COLO_SPELL_DIM \
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
+_Static_assert(COLO_NUM_ACTION_HEADS == 2 + NUM_GEAR_SLOTS + 2 + 5,
+    "colosseum action head count must match the per-category layout");
+_Static_assert(COLO_HEAD_SPELL == COLO_NUM_ACTION_HEADS - 1,
+    "SPELL must be the last colosseum action head");
 #define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + COLO_OVERHEAD_DIM + \
     COLO_OBS_NPCS + COLO_INV_CLICK_HEADS * COLO_INV_CLICK_DIM + COLO_SPEC_DIM + \
     COLO_MODIFIER_SELECT_DIM + COLO_GRAPPLE_PARRY_DIM + ENCOUNTER_OFFENSIVE_DIM + \
@@ -556,10 +545,6 @@ static int col_apply_drink_cell(
 }
 
 typedef struct {
-    int clicked_cells[COLO_INV_CLICK_HEADS];
-    int clicked_count;
-    int duplicate_cells[COLO_INV_CLICK_HEADS];
-    int duplicate_count;
     int equip_cell_by_slot[NUM_GEAR_SLOTS];
     int equip_order_by_slot[NUM_GEAR_SLOTS];
     int eat_cell;
@@ -584,69 +569,63 @@ static ColoInventoryTickIntent col_inventory_tick_intent_empty(void) {
     return intent;
 }
 
-static void col_record_inventory_click_debug_cell(int* cells, int* count, int cell_idx) {
-    if (*count >= COLO_INV_CLICK_HEADS) {
-        fprintf(stderr, "colosseum inventory debug cell overflow\n");
-        abort();
-    }
-    cells[*count] = cell_idx;
-    *count += 1;
-}
-
+/* Read the per-category heads directly. Each equip head g chooses at most one
+   cell for gear slot g; eat and drink choose at most one cell each. The mask
+   guarantees the chosen cell is valid for its category, but we re-check here so
+   an unmasked / human-driven action still cannot apply an illegal effect.
+   Equip order = the gear-slot index, giving a deterministic total order so the
+   2H-weapon-clears-shield shuffle in col_equip_from_cell resolves the same way
+   every tick (WEAPON=4 applies before SHIELD=5). Eat/drink apply after equips. */
 static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
     const ColosseumState* s,
     const int* actions
 ) {
     ColoInventoryTickIntent intent = col_inventory_tick_intent_empty();
-    OsrsInventorySlotSnapshot slot_snapshot =
-        osrs_inventory_slot_snapshot(s->inventory_cells);
-    int clicked[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-        int action = actions[COLO_HEAD_INV_CLICK_0 + head];
+
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        int action = actions[COLO_HEAD_EQUIP_SLOT(slot)];
         if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
         int cell_idx = action - 1;
-        if (clicked[cell_idx]) {
-            (void)osrs_inventory_snapshot_click_interpret(
-                &slot_snapshot,
-                cell_idx,
-                OSRS_CLICK_TICK_DUPLICATE);
-            col_record_inventory_click_debug_cell(
-                intent.duplicate_cells, &intent.duplicate_count, cell_idx);
-            continue;
+        if (!col_can_equip_from_cell(s, cell_idx)) continue;
+        int gear_slot = osrs_item_gear_slot(s->inventory_cells[cell_idx].item_idx);
+        if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) {
+            fprintf(stderr, "colosseum equip intent: invalid gear slot %d\n", gear_slot);
+            abort();
         }
-        clicked[cell_idx] = 1;
-        col_record_inventory_click_debug_cell(
-            intent.clicked_cells, &intent.clicked_count, cell_idx);
+        if (gear_slot != slot) continue;  /* head g only equips items for slot g */
+        intent.equip_cell_by_slot[slot] = cell_idx;
+        intent.equip_order_by_slot[slot] = slot;
+    }
 
-        const ColoInvCell* cell = &slot_snapshot.cells[cell_idx];
+    int eat_action = actions[COLO_HEAD_EAT];
+    if (eat_action > 0 && eat_action <= COLO_INVENTORY_DISPLAY_SLOTS) {
+        int cell_idx = eat_action - 1;
         OsrsInventoryClickResolution resolution =
-            osrs_inventory_snapshot_click_interpret(
-                &slot_snapshot, cell_idx, OSRS_CLICK_TICK_FIRST);
-        if (resolution.click_action == OSRS_CLICK_EQUIP) {
-            if (!col_can_equip_from_cell(s, cell_idx)) continue;
-            int gear_slot = osrs_item_gear_slot(cell->item_idx);
-            if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) {
-                fprintf(stderr, "colosseum equip intent: invalid gear slot %d\n", gear_slot);
-                abort();
-            }
-            intent.equip_cell_by_slot[gear_slot] = cell_idx;
-            intent.equip_order_by_slot[gear_slot] = head;
-        } else if (resolution.click_action == OSRS_CLICK_DRINK) {
-            if (intent.drink_cell >= 0) continue;
-            if (cell->dose > 0 && s->player.potion_timer == 0) {
-                intent.drink_cell = cell_idx;
-                intent.drink_order = head;
-                intent.drink_resolution = resolution;
-            }
-        } else if (resolution.click_action == OSRS_CLICK_EAT) {
-            if (intent.eat_cell >= 0) continue;
-            if (col_can_eat_consumable_kind(s, resolution.consumable_kind)) {
-                intent.eat_cell = cell_idx;
-                intent.eat_order = head;
-                intent.eat_resolution = resolution;
-            }
+            osrs_inventory_cell_click_interpret(
+                &s->inventory_cells[cell_idx], OSRS_CLICK_TICK_FIRST);
+        if (resolution.click_action == OSRS_CLICK_EAT &&
+                col_can_eat_consumable_kind(s, resolution.consumable_kind)) {
+            intent.eat_cell = cell_idx;
+            intent.eat_order = NUM_GEAR_SLOTS;
+            intent.eat_resolution = resolution;
         }
     }
+
+    int drink_action = actions[COLO_HEAD_DRINK];
+    if (drink_action > 0 && drink_action <= COLO_INVENTORY_DISPLAY_SLOTS) {
+        int cell_idx = drink_action - 1;
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_cell_click_interpret(
+                &s->inventory_cells[cell_idx], OSRS_CLICK_TICK_FIRST);
+        if (resolution.click_action == OSRS_CLICK_DRINK &&
+                s->inventory_cells[cell_idx].dose > 0 &&
+                s->player.potion_timer == 0) {
+            intent.drink_cell = cell_idx;
+            intent.drink_order = NUM_GEAR_SLOTS + 1;
+            intent.drink_resolution = resolution;
+        }
+    }
+
     return intent;
 }
 
@@ -658,14 +637,15 @@ static int col_inventory_tick_intent_has_effect(const ColoInventoryTickIntent* i
 }
 
 static int col_next_inventory_apply_order(const ColoInventoryTickIntent* intent) {
-    int best = COLO_INV_CLICK_HEADS + 1;
+    int sentinel = NUM_GEAR_SLOTS + 2;  /* above drink_order (NUM_GEAR_SLOTS+1) */
+    int best = sentinel;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         int order = intent->equip_order_by_slot[slot];
         if (order >= 0 && order < best) best = order;
     }
     if (intent->eat_order >= 0 && intent->eat_order < best) best = intent->eat_order;
     if (intent->drink_order >= 0 && intent->drink_order < best) best = intent->drink_order;
-    return best == COLO_INV_CLICK_HEADS + 1 ? -1 : best;
+    return best == sentinel ? -1 : best;
 }
 
 static void col_apply_inventory_tick_intent(
@@ -704,17 +684,12 @@ static void col_log_inventory_tick_intent(
     const int* actions,
     int interrupted
 ) {
-    fprintf(stderr, "colo_action tick=%d inventory raw=", s->tick);
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++)
-        fprintf(stderr, "%s%d", head == 0 ? "" : ",",
-            actions[COLO_HEAD_INV_CLICK_0 + head]);
-    fprintf(stderr, " clicked=");
-    for (int i = 0; i < intent->clicked_count; i++)
-        fprintf(stderr, "%s%d", i == 0 ? "" : ",", intent->clicked_cells[i]);
-    fprintf(stderr, " duplicates=");
-    for (int i = 0; i < intent->duplicate_count; i++)
-        fprintf(stderr, "%s%d", i == 0 ? "" : ",", intent->duplicate_cells[i]);
-    fprintf(stderr, " equips=");
+    fprintf(stderr, "colo_action tick=%d equip_heads=", s->tick);
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        fprintf(stderr, "%s%d", slot == 0 ? "" : ",",
+            actions[COLO_HEAD_EQUIP_SLOT(slot)]);
+    fprintf(stderr, " eat_head=%d drink_head=%d equips=",
+        actions[COLO_HEAD_EAT], actions[COLO_HEAD_DRINK]);
     int wrote = 0;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         if (intent->equip_cell_by_slot[slot] < 0) continue;

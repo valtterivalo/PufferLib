@@ -31,7 +31,7 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 35
+#define COLO_NUM_ACTION_HEADS 20  /* PRIMARY, PRAYER, NUM_GEAR_SLOTS equip, EAT, DRINK, SPEC, MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL */
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC).
    COLO_OBS_NPCS == COLO_MAX_NPCS so no live NPC is ever dropped from the obs

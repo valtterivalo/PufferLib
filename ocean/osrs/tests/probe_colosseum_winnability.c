@@ -137,7 +137,12 @@ static void scripted_policy(ColosseumState* s, int* actions) {
     actions[COLO_HEAD_PRIMARY] = move > 0 ? move : scripted_target(s);
     if (s->player.current_hitpoints < 55) {
         int heal_cell = scripted_heal_cell(s);
-        if (heal_cell >= 0) actions[COLO_HEAD_INV_CLICK_0] = heal_cell + 1;
+        if (heal_cell >= 0) {
+            OsrsInventoryClickResolution r = osrs_inventory_cell_click_interpret(
+                &s->inventory_cells[heal_cell], OSRS_CLICK_TICK_FIRST);
+            int head = r.click_action == OSRS_CLICK_DRINK ? COLO_HEAD_DRINK : COLO_HEAD_EAT;
+            actions[head] = heal_cell + 1;
+        }
     }
 }
 

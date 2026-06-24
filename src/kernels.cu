@@ -77,7 +77,7 @@ inline const char* puf_repr(const FloatTensor* t) {
 #define SELECT_COPY_THREADS 256
 /* upper bound on discrete action heads: sizes the per-head stack arrays in the
    PPO loss/backward kernel. Must be >= the largest num_atns of any env (OSRS
-   colosseum is 36, PvP 34); the loss kernel indexes head arrays by num_atns
+   colosseum is 20, PvP 34); the loss kernel indexes head arrays by num_atns
    with no clamp, so a smaller cap silently corrupts gradients for the overflow
    heads. A boot-time assert in create_pufferl enforces this. */
 #define MAX_ATN_HEADS 64

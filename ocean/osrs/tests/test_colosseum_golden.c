@@ -200,24 +200,25 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* 2026-06-23: re-seeded after the throw-tick prayer fix. Normal NPC ranged/magic
-   now resolve the protect-prayer + freeze damage on the THROW tick (col_npc_
-   queue_projectile), not at land, matching melee + manticore + OSRS. The 11
-   projectile-bearing configs shift; w12_sol is unchanged (its specials are a
-   separate typeless path). Verified throw-determined + flick-resistant by probe. */
+/* 2026-06-24: re-seeded after the per-category action-head refactor. The 28
+   redundant INV_CLICK heads collapsed into per-gear-slot equip heads + one EAT +
+   one DRINK (35 heads -> 20), so fill_actions draws a different RNG stream and a
+   different per-tick action vector. Every config's trajectory shifts; the obs
+   vector layout is unchanged (digests differ only because the simulated actions
+   differ). Action-space rebaseline, verified after test_colosseum_modifiers.c. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x56dc083f590c6bdfULL,
-    0xc7355af55d923762ULL,
-    0x16bf2dd2486a7fa4ULL,
-    0x70939d3f3a721aa4ULL,
-    0xa3eec9a71acf73b9ULL,
-    0x11d632436c8fbd49ULL,
-    0x61005de22d329a97ULL,
-    0xccc38a079ee4133eULL,
-    0x2d6a83683a94295aULL,
-    0xe1908358107dbe98ULL,
-    0x7f12f4986a9c27feULL,
-    0x8e3a4aecf0dc4dfdULL,
+    0x081153afc50105c0ULL,
+    0x6a9799e2acfe1282ULL,
+    0xf5901a62d8c57418ULL,
+    0xae9cf9965503167fULL,
+    0xd4ef9a6b902c0512ULL,
+    0x67cba4cc313eabf1ULL,
+    0x14b262be6689f7fcULL,
+    0x5b1b21dea38a5f1eULL,
+    0x7d837d9423152fb1ULL,
+    0x79a41895dec3913dULL,
+    0xe54cb4ad8e4372a8ULL,
+    0xe1de9586e074af4aULL,
 };
 
 int main(int argc, char** argv) {
