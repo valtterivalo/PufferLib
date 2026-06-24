@@ -71,9 +71,9 @@
     COLO_SPELL_DIM \
 }
 static const int COLO_ACTION_DIMS[COLO_NUM_ACTION_HEADS] = COLO_ACTION_DIMS_INIT;
-_Static_assert(COLO_NUM_ACTION_HEADS == 2 + NUM_GEAR_SLOTS + 2 + 5,
+static_assert(COLO_NUM_ACTION_HEADS == 2 + NUM_GEAR_SLOTS + 2 + 5,
     "colosseum action head count must match the per-category layout");
-_Static_assert(COLO_HEAD_SPELL == COLO_NUM_ACTION_HEADS - 1,
+static_assert(COLO_HEAD_SPELL == COLO_NUM_ACTION_HEADS - 1,
     "SPELL must be the last colosseum action head");
 #define COLO_ACTION_MASK_SIZE (ENCOUNTER_MOVE_ACTIONS + COLO_OVERHEAD_DIM + \
     COLO_OBS_NPCS + COLO_INV_CLICK_HEADS * COLO_INV_CLICK_DIM + COLO_SPEC_DIM + \
