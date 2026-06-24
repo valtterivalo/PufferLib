@@ -1685,6 +1685,11 @@ typedef struct {
     float offpray_damage_penalty_coeff; /* per-HP penalty for off-prayer damage taken
                                            this tick: immediate credit for praying/
                                            positioning to avoid hits (default 0). */
+    float multistyle_exposure_penalty_coeff; /* per-tick penalty per EXCESS prayer-
+                                           checkable style live on the player this tick:
+                                           coeff * max(0, distinct_live_threat_styles - 1).
+                                           Pays positioning to keep <=1 style live
+                                           (de-confliction / off-ticking; default 0). */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;
@@ -1718,6 +1723,12 @@ typedef struct {
                                           the only HP-healing consumable). 0 =
                                           bit-identical. Probes the healing-crutch
                                           plateau hypothesis. */
+    float prayer_switch_fail_prob;     /* scaffold: P(an overhead-protection SWITCH
+                                          slips and reverts to the previous overhead)
+                                          via a platform-stable u16 roll, pushing the
+                                          agent off per-tick flicking toward
+                                          positioning/off-ticking. In [0,1]; 0.0 draws
+                                          no RNG and is bit-identical. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).

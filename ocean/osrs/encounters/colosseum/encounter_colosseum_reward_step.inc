@@ -83,6 +83,36 @@ static void col_record_terminal_outcome_score(ColosseumState* s) {
     s->log.outcome_score = col_episode_outcome_score(s);
 }
 
+/** Count how many of the three prayer-checkable styles {magic, ranged, melee} have
+    at least one live enemy that can hit the player THIS tick: in attack range, and
+    with line of sight for the ranged/magic ones. This is the exact gating
+    col_write_threat_los_counts uses for the de-confliction obs (manticore counted as
+    its next orb's style), reduced to a distinct-style count (0..3). max(0, count-1)
+    is the multi-style exposure the agent must position away to clear with one
+    overhead prayer. */
+static int col_distinct_live_threat_styles(const ColosseumState* s) {
+    int magic = 0, ranged = 0, melee = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+        if (ns->attack_range < 1) continue;
+        int dist = col_npc_dist_to_player(s, npc);
+        if (dist < 1 || dist > ns->attack_range) continue;
+        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
+        AttackStyle style = ns->default_style;
+        if (npc->type == COLO_MANTICORE) {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
+            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
+        }
+        if (style == ATTACK_STYLE_MAGIC) magic = 1;
+        else if (style == ATTACK_STYLE_RANGED) ranged = 1;
+        else if (style == ATTACK_STYLE_MELEE) melee = 1;
+    }
+    return magic + ranged + melee;
+}
+
 static float col_rewardable_avoided_damage(ColosseumState* s) {
     ColoTickScratch* t = &s->tick_scratch;
     if (__builtin_popcount((unsigned)t->styles_faced_mask) != 1) return 0.0f;
@@ -117,6 +147,11 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     reward += cfg->boss_damage_reward_coeff * t->damage_boss;
     reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
     reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;
+    if (cfg->multistyle_exposure_penalty_coeff != 0.0f) {
+        int excess_styles = col_distinct_live_threat_styles(s) - 1;
+        if (excess_styles > 0)
+            reward -= cfg->multistyle_exposure_penalty_coeff * (float)excess_styles;
+    }
     float rewardable_avoided = col_rewardable_avoided_damage(s);
     reward += cfg->avoided_damage_coeff * rewardable_avoided;
     s->avoided_damage_already_rewarded += rewardable_avoided;

@@ -69,6 +69,23 @@ static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
     return FIGHT_STYLE_AGGRESSIVE;
 }
 
+/** style-matched offensive prayer (Piety/Rigour/Augury). The colosseum mirror of
+    the inferno helper: the prayer that actually buffs `style` in
+    encounter_offensive_prayer_mults (an off-style prayer returns identity). */
+static OffensivePrayer col_offensive_prayer_for_attack_style(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return OFFENSIVE_PRAYER_PIETY;
+        case ATTACK_STYLE_RANGED:
+            return OFFENSIVE_PRAYER_RIGOUR;
+        case ATTACK_STYLE_MAGIC:
+            return OFFENSIVE_PRAYER_AUGURY;
+        case ATTACK_STYLE_NONE:
+            return OFFENSIVE_PRAYER_NONE;
+    }
+    abort();
+}
+
 static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
     if (set != COLO_GEAR_MAGIC) return 0;
     if (s->active_loadout_profile < 0 ||
@@ -319,6 +336,7 @@ static ColConfig col_default_config(void) {
         .win_bonus = 0.0f,
         .prayer_correct_reward = 0.0f,
         .offpray_damage_penalty_coeff = 0.0f,
+        .multistyle_exposure_penalty_coeff = 0.0f,
         .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,
@@ -328,6 +346,7 @@ static ColConfig col_default_config(void) {
         .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
         .mask_inventory_heads = 0,
         .action_debug_log = col_default_action_debug_log(),
+        .prayer_switch_fail_prob = 0.0f,
     };
 }
 

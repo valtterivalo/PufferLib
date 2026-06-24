@@ -186,13 +186,30 @@ static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
     s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 
+/** scaffold (prayer_switch_fail_prob): drop an attempted overhead-protection
+    switch with probability fail_prob so perfect per-tick center-flicking is
+    unreliable and positioning/off-ticking gains value. integer-quantized against
+    the 16-bit roll so the draw stays bit-identical across CUDA and Metal. */
+static int col_overhead_switch_slips(uint32_t* rng_state, float fail_prob) {
+    uint64_t numerator = (uint64_t)(fail_prob * 65536.0f);
+    return encounter_roll_ratio_u16(rng_state, numerator, 65536);
+}
+
 /** apply prayer actions + drain, before movement and attack. an offensive
     prayer change recomputes every loadout's prayer multipliers (L12). */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
     OverheadPrayer prev_prayer = s->player.prayer;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     int prayer_before = s->player.current_prayer;
-    if (encounter_apply_overhead_action(&s->player.prayer, actions[COLO_HEAD_PRAYER]))
+    int overhead_activated = encounter_apply_overhead_action(&s->player.prayer,
+        actions[COLO_HEAD_PRAYER]);
+    if (ctx && s->player.prayer != prev_prayer &&
+            ctx->config.prayer_switch_fail_prob > 0.0f &&
+            col_overhead_switch_slips(&s->rng_state, ctx->config.prayer_switch_fail_prob)) {
+        s->player.prayer = prev_prayer;
+        overhead_activated = 0;
+    }
+    if (overhead_activated)
         s->player.prayer_just_activated = 1;
     if (encounter_apply_offensive_action(&s->player.offensive_prayer,
             actions[COLO_HEAD_OFFENSIVE]))

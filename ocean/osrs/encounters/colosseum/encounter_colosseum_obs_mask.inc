@@ -1261,7 +1261,8 @@ static int col_canonical_weapon_set_for_item(
 static float col_expected_dpt_for_equipment_vs_npc(
     ColosseumState* s,
     const uint8_t equipment[NUM_GEAR_SLOTS],
-    const ColoNPC* npc
+    const ColoNPC* npc,
+    int use_style_matched_prayer
 ) {
     if (!s || !equipment || !npc) abort();
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
@@ -1282,11 +1283,18 @@ static float col_expected_dpt_for_equipment_vs_npc(
     col_current_style_levels(
         &s->player, style, &current_att_level, &current_str_level);
 
+    /* The BIS oracle scores each candidate with the offensive prayer that buffs ITS
+       style (use_style_matched_prayer=1) since it also COMMITS that prayer; the
+       obs/inventory-DPT path passes 0 to keep the player's live prayer so the
+       observation is unchanged and golden stays bit-identical. */
+    OffensivePrayer dpt_prayer = use_style_matched_prayer
+        ? col_offensive_prayer_for_attack_style(style)
+        : s->player.offensive_prayer;
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         equipment,
         style,
-        s->player.offensive_prayer,
+        dpt_prayer,
         current_att_level,
         fight_style,
         style == ATTACK_STYLE_MAGIC
@@ -1294,7 +1302,7 @@ static float col_expected_dpt_for_equipment_vs_npc(
         &stats);
     encounter_update_loadout_level(
         &stats,
-        s->player.offensive_prayer,
+        dpt_prayer,
         current_att_level,
         current_str_level);
 
@@ -1335,8 +1343,17 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
     ColoWeaponSet best_set = s->weapon_set;
     for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
         if (set == COLO_GEAR_MELEE && !melee_ok) continue;
-        float dpt = col_expected_dpt_for_equipment_vs_npc(s, loadouts[set], npc);
+        float dpt = col_expected_dpt_for_equipment_vs_npc(s, loadouts[set], npc, 1);
         if (dpt > best_dpt) { best_dpt = dpt; best_set = (ColoWeaponSet)set; }
+    }
+    /* Move the offensive prayer to the chosen set's style so the fired attack is
+       actually buffed. col_apply_weapon_set early-returns (skipping its dirty mark)
+       when best_set is already equipped, so set the prayer + mark dirty here. */
+    OffensivePrayer best_prayer =
+        col_offensive_prayer_for_attack_style(col_weapon_set_attack_style(best_set));
+    if (s->player.offensive_prayer != best_prayer) {
+        s->player.offensive_prayer = best_prayer;
+        col_mark_live_loadout_dirty(s);
     }
     col_apply_weapon_set(s, best_set);
 }
@@ -1356,7 +1373,7 @@ static float col_inventory_cell_raw_dpt_for_npc(
 
     uint8_t hypothetical[NUM_GEAR_SLOTS];
     col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
-    return col_expected_dpt_for_equipment_vs_npc(s, hypothetical, npc);
+    return col_expected_dpt_for_equipment_vs_npc(s, hypothetical, npc, 0);
 }
 
 static float col_inventory_cell_target_dpt_obs_value(

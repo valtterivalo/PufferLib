@@ -103,6 +103,8 @@ static void col_put_float_ctx(
         ctx->config.prayer_correct_reward = value;
     else if (strcmp(key, "offpray_damage_penalty_coeff") == 0)
         ctx->config.offpray_damage_penalty_coeff = value;
+    else if (strcmp(key, "multistyle_exposure_penalty_coeff") == 0)
+        ctx->config.multistyle_exposure_penalty_coeff = value;
     else if (strcmp(key, "avoided_damage_coeff") == 0)
         ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
@@ -114,6 +116,14 @@ static void col_put_float_ctx(
             abort();
         }
         ctx->config.beginner_loadout_fraction = value;
+    }
+    else if (strcmp(key, "prayer_switch_fail_prob") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr, "colosseum: prayer_switch_fail_prob must be in [0,1], got %.6f\n",
+                    value);
+            abort();
+        }
+        ctx->config.prayer_switch_fail_prob = value;
     }
     else encounter_abort_unknown_config("colosseum", "float", key);
 }

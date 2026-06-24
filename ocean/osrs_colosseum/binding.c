@@ -320,10 +320,12 @@ void my_init(Env* env, Dict* kwargs) {
         "win_bonus",
         "prayer_correct_reward",
         "offpray_damage_penalty_coeff",
+        "multistyle_exposure_penalty_coeff",
         "avoided_damage_coeff",
         "death_penalty_coeff",
         "timeout_penalty",
         "beginner_loadout_fraction",
+        "prayer_switch_fail_prob",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
