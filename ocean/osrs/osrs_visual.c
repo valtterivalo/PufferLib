@@ -1170,6 +1170,14 @@ static void run_metrics(
         edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", 3090);
         env->collision_map = cmap;
     }
+    /* Match the trained config (golden-eon .ini) so the metrics reflect the real
+       eval distribution. col_default_config alone leaves loadout_profile_mode at 0
+       (SPEEDRUN_ONLY), which hides the entire beginner kit (fang/bowfa/trident/SGS)
+       and reports speedrun-only weapon usage. The trained policy ran mixed kits
+       with fresh wave-1 starts. */
+    edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", 2);
+    edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
+    edef->put_int(env->encounter_state, env->encounter_context, "start_wave", 1);
     edef->reset(env->encounter_state, env->encounter_context, policy_seed);
 
     VisualPolicy policy;
