@@ -144,7 +144,12 @@ else
 fi
 
 case "$ENV" in
-    osrs_*) bash ocean/osrs/scripts/setup-data.sh ;;
+    osrs_*)
+        python3 ocean/osrs/scripts/osrs_asset_manifest.py generate-c-header \
+            ocean/osrs/asset_manifest.json \
+            --output ocean/osrs/osrs_assets_generated.h
+        bash ocean/osrs/scripts/setup-data.sh
+        ;;
 esac
 
 CPU_STUB_INCLUDE=()
