@@ -552,6 +552,7 @@ typedef struct RenderClient {
     /* pre-built static models for overlay rendering (clouds, projectiles, snakelings).
        built once at init from model cache, drawn at overlay positions each frame. */
     Model cloud_model;       int cloud_model_ready;
+    Model molten_model;      int molten_model_ready; int molten_model_attempted;
     Model snakeling_model;   int snakeling_model_ready;
     Model ranged_proj_model; int ranged_proj_model_ready;
     Model magic_proj_model;  int magic_proj_model_ready;
@@ -2534,6 +2535,7 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     /* free overlay models */
     if (rc->cloud_model_ready) UnloadModel(rc->cloud_model);
+    if (rc->molten_model_ready) UnloadModel(rc->molten_model);
     if (rc->snakeling_model_ready) UnloadModel(rc->snakeling_model);
     if (rc->ranged_proj_model_ready) UnloadModel(rc->ranged_proj_model);
     if (rc->magic_proj_model_ready) UnloadModel(rc->magic_proj_model);
@@ -5028,18 +5030,51 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (edef_molten && rc->gui.encounter_state &&
                     strcmp(edef_molten->name, "colosseum") == 0) {
                 ColosseumState* cs_molten = (ColosseumState*)rc->gui.encounter_state;
-                int molten_n = cs_molten->molten_count;
-                if (molten_n > COLO_SOL_HAZARD_TILES_MAX)
-                    molten_n = COLO_SOL_HAZARD_TILES_MAX;
-                for (int mi = 0; mi < molten_n; mi++) {
-                    int tx = cs_molten->molten_x[mi];
-                    int ty = cs_molten->molten_y[mi];
-                    float ground = OV_GROUND(tx, ty);
-                    float fx = (float)tx + 0.5f;
-                    float fz = -(float)(ty + 1) + 0.5f;
-                    DrawCube((Vector3){ fx, ground + 0.05f, fz },
-                             0.95f, 0.04f, 0.95f,
-                             CLITERAL(Color){ 220, 90, 30, 150 });
+                /* one-time lazy load of the molten-sand pool mesh (OSRS spotanim
+                   GFX 3080 -> synthetic projectile model id 0xA2000000 + 3080).
+                   render_build_static_model is non-aborting: if the mesh is not
+                   in the loaded caches (e.g. run from a checkout that never
+                   exported it) molten_model_ready stays 0 and we fall back to the
+                   flat orange tile, so the viewer degrades gracefully. */
+                if (!rc->molten_model_attempted) {
+                    rc->molten_model_attempted = 1;
+                    render_load_projectile_assets(rc);
+                    rc->molten_model_ready = render_build_static_model(
+                        rc->projectile_model_cache,
+                        0xA2000000u + 3080u,
+                        &rc->molten_model);
+                }
+                /* render both hazard sources with one mesh: the wave 1-11
+                   Reentry/Volatility pools (molten_*) AND the Sol-fight molten
+                   tiles (sol.hazard_*), which were previously not drawn at all. */
+                const int* molten_xs[2] = { cs_molten->molten_x, cs_molten->sol.hazard_tile_x };
+                const int* molten_ys[2] = { cs_molten->molten_y, cs_molten->sol.hazard_tile_y };
+                int molten_counts[2] = { cs_molten->molten_count, cs_molten->sol.hazard_tile_count };
+                for (int src = 0; src < 2; src++) {
+                    int molten_n = molten_counts[src];
+                    if (molten_n > COLO_SOL_HAZARD_TILES_MAX)
+                        molten_n = COLO_SOL_HAZARD_TILES_MAX;
+                    for (int mi = 0; mi < molten_n; mi++) {
+                        int tx = molten_xs[src][mi];
+                        int ty = molten_ys[src][mi];
+                        float ground = OV_GROUND(tx, ty);
+                        float fx = (float)tx + 0.5f;
+                        float fz = -(float)(ty + 1) + 0.5f;
+                        if (rc->molten_model_ready) {
+                            /* scale maps OSRS model units (128/tile) to tiles; the
+                               exact pool footprint may want tuning after a look. */
+                            rlDisableBackfaceCulling();
+                            rc->molten_model.transform = MatrixMultiply(
+                                MatrixScale(-1.0f / 128.0f, 1.0f / 128.0f, 1.0f / 128.0f),
+                                MatrixTranslate(fx, ground + 0.02f, fz));
+                            DrawModel(rc->molten_model, (Vector3){0,0,0}, 1.0f, WHITE);
+                            rlEnableBackfaceCulling();
+                        } else {
+                            DrawCube((Vector3){ fx, ground + 0.05f, fz },
+                                     0.95f, 0.04f, 0.95f,
+                                     CLITERAL(Color){ 220, 90, 30, 150 });
+                        }
+                    }
                 }
             }
         }
