@@ -1152,7 +1152,8 @@ static void run_metrics(
     const char* model_path,
     VisualPolicyMode policy_mode,
     uint32_t policy_seed,
-    int num_episodes
+    int num_episodes,
+    int loadout_mode
 ) {
     if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
@@ -1170,12 +1171,10 @@ static void run_metrics(
         edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", 3090);
         env->collision_map = cmap;
     }
-    /* Match the trained config (golden-eon .ini) so the metrics reflect the real
-       eval distribution. col_default_config alone leaves loadout_profile_mode at 0
-       (SPEEDRUN_ONLY), which hides the entire beginner kit (fang/bowfa/trident/SGS)
-       and reports speedrun-only weapon usage. The trained policy ran mixed kits
-       with fresh wave-1 starts. */
-    edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", 2);
+    /* loadout_mode picks the kit distribution: 0=speedrun-only, 1=beginner-only,
+       2=mixed (matches the trained golden-eon .ini). col_default_config alone leaves
+       this at 0, so without it the metrics would be speedrun-only regardless. */
+    edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave", 1);
     edef->reset(env->encounter_state, env->encounter_context, policy_seed);
@@ -1630,6 +1629,7 @@ int main(int argc, char** argv) {
     int start_wave = -1; /* -1 = default (wave 0) */
     int profile_steps = 0;
     int metrics_episodes = 0;
+    int loadout_mode = 2;  /* metrics kit: 0=speedrun, 1=beginner, 2=mixed (trained default) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
@@ -1665,6 +1665,8 @@ int main(int argc, char** argv) {
             metrics_episodes = atoi(argv[++i]);
             use_visual = 0;
         }
+        else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc)
+            loadout_mode = atoi(argv[++i]);
     }
 
 #ifdef __EMSCRIPTEN__
@@ -1687,7 +1689,7 @@ int main(int argc, char** argv) {
 
     if (metrics_episodes > 0) {
         run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
-            metrics_episodes);
+            metrics_episodes, loadout_mode);
         return 0;
     }
 
