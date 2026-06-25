@@ -1141,6 +1141,115 @@ static void visual_frame(void* arg) {
     }
 }
 
+/* Headless behavioral-metrics mode: run N colosseum episodes with the loaded
+   policy and tally how often each weapon attacks each NPC type. Eval-only --
+   reads ColosseumState after each step, touches no obs/reward/training surface.
+   Weapon equipped at the attack tick is a close proxy for the weapon that fired
+   (the equip phase runs before the attack phase within a tick). */
+static void run_metrics(
+    OsrsEnv* env,
+    const char* encounter_name,
+    const char* model_path,
+    VisualPolicyMode policy_mode,
+    uint32_t policy_seed,
+    int num_episodes
+) {
+    if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
+        fprintf(stderr, "metrics mode requires --encounter colosseum\n");
+        return;
+    }
+    const EncounterDef* edef = encounter_find(encounter_name);
+    if (!edef) { fprintf(stderr, "unknown encounter: %s\n", encounter_name); return; }
+    env->encounter_def = (void*)edef;
+    env->encounter_state = edef->create();
+    env->encounter_context = visual_create_encounter_context(edef);
+    CollisionMap* cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
+    if (cmap) {
+        edef->put_ptr(env->encounter_state, env->encounter_context, "collision_map", cmap);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_x", 1808);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", 3090);
+        env->collision_map = cmap;
+    }
+    edef->reset(env->encounter_state, env->encounter_context, policy_seed);
+
+    VisualPolicy policy;
+    visual_policy_init(&policy, edef, model_path, policy_mode, policy_seed,
+                       g_cli_hidden_size, g_cli_num_layers);
+    if (!policy.enabled) {
+        fprintf(stderr, "metrics mode: failed to load model (pass --model <path>)\n");
+        return;
+    }
+
+    static const char* npc_names[COLO_NUM_NPC_TYPES] = {
+        "berserker", "archer", "seer", "serpent", "jaguar", "javelin",
+        "shockwave", "minotaur", "manticore", "sol", "totem", "bees"
+    };
+    static uint64_t wpn_npc[256][COLO_NUM_NPC_TYPES];
+    static uint64_t wpn_total[256];
+    memset(wpn_npc, 0, sizeof(wpn_npc));
+    memset(wpn_total, 0, sizeof(wpn_total));
+    uint64_t total_attacks = 0;
+    long total_ticks = 0;
+    int episodes = 0;
+    int enc_actions[64] = {0};
+
+    while (episodes < num_episodes) {
+        visual_policy_actions(&policy, edef, env->encounter_state,
+            (EncounterContext*)env->encounter_context, enc_actions);
+        edef->step(env->encounter_state,
+            (EncounterContext*)env->encounter_context, enc_actions);
+        total_ticks++;
+        ColosseumState* cs = (ColosseumState*)env->encounter_state;
+        if (cs->tick_scratch.player_attacked) {
+            int slot = cs->player_attack_npc_idx;
+            uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
+            if (slot >= 0 && slot < COLO_MAX_NPCS) {
+                int t = (int)cs->npcs[slot].type;
+                if (t >= 0 && t < COLO_NUM_NPC_TYPES) {
+                    wpn_npc[w][t]++;
+                    wpn_total[w]++;
+                    total_attacks++;
+                }
+            }
+        }
+        if (edef->is_terminal(env->encounter_state,
+                (EncounterContext*)env->encounter_context)) {
+            episodes++;
+            edef->reset(env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                policy_seed + (uint32_t)episodes);
+            visual_policy_reset_recurrent(&policy);
+        }
+    }
+
+    printf("# colosseum weapon behavioral metrics\n");
+    printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s\n",
+        num_episodes, total_ticks, (unsigned long long)total_attacks,
+        policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample");
+    printf("weapon,total_attacks,per_episode,pct\n");
+    for (int w = 0; w < 256; w++) {
+        if (wpn_total[w] == 0) continue;
+        const Item* it = get_item((uint8_t)w);
+        const char* wn = (it && it->name[0]) ? it->name : "unknown";
+        printf("%s,%llu,%.1f,%.1f%%\n", wn, (unsigned long long)wpn_total[w],
+            (double)wpn_total[w] / (double)num_episodes,
+            total_attacks ? 100.0 * (double)wpn_total[w] / (double)total_attacks : 0.0);
+    }
+    printf("\nweapon\\npc");
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) printf(",%s", npc_names[t]);
+    printf("\n");
+    for (int w = 0; w < 256; w++) {
+        if (wpn_total[w] == 0) continue;
+        const Item* it = get_item((uint8_t)w);
+        const char* wn = (it && it->name[0]) ? it->name : "unknown";
+        printf("%s", wn);
+        for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+            printf(",%llu", (unsigned long long)wpn_npc[w][t]);
+        printf("\n");
+    }
+    visual_policy_destroy(&policy);
+}
+
 static void run_visual(
     OsrsEnv* env,
     const char* encounter_name,
@@ -1512,6 +1621,7 @@ int main(int argc, char** argv) {
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     int start_wave = -1; /* -1 = default (wave 0) */
     int profile_steps = 0;
+    int metrics_episodes = 0;
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
@@ -1543,6 +1653,10 @@ int main(int argc, char** argv) {
             start_wave = atoi(argv[++i]);
         else if (strcmp(argv[i], "--profile-steps") == 0 && i + 1 < argc)
             profile_steps = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--metrics") == 0 && i + 1 < argc) {
+            metrics_episodes = atoi(argv[++i]);
+            use_visual = 0;
+        }
     }
 
 #ifdef __EMSCRIPTEN__
@@ -1562,6 +1676,12 @@ int main(int argc, char** argv) {
     OsrsEnv env;
 #endif
     memset(&env, 0, sizeof(OsrsEnv));
+
+    if (metrics_episodes > 0) {
+        run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
+            metrics_episodes);
+        return 0;
+    }
 
     if (use_profile) {
         env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
