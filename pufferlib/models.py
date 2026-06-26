@@ -57,6 +57,64 @@ class MinimalEntityEncoder(nn.Module):
         cat = torch.cat([self_obs, point_obs], dim=-1)
         return self.encoder(cat).max(dim=1)[0]
 
+class ColosseumEntityEncoder(nn.Module):
+    """Flat baseline + NPC entity-pool augmentation for the OSRS Colosseum obs.
+
+    Joseph Suarez's entity-encoder recipe adapted to the colosseum's per-NPC block.
+    The global path is exactly DefaultEncoder (Linear over the full flat obs), so
+    this module is a clean A/B: output = global(flat) + entity_pool(NPCs), isolating
+    the entity-pool contribution. Downstream mixing happens in the MinGRU net, so the
+    sum keeps hidden_size and leaves the recurrent input dim unchanged.
+
+    Obs layout verified from ocean/osrs/encounters/colosseum/encounter_colosseum_obs_mask.inc
+    and encounter_colosseum_model.inc. The NPC block is COLO_OBS_NPCS=24 contiguous
+    records of COLO_FEATURES_PER_NPC=43 floats, written by col_write_npc_slot in the
+    col_write_obs_ctx loop. NPC_START = COLO_OBS_AFTER_EQUIPPED_SELF:
+        player(36) + pillars(4*3=12) + inventory(28*29=812) + equipped(11*18=198) = 1058
+    and NPC_START + 24*43 = 2090 = COLO_OBS_AFTER_NPCS. Each record begins with a
+    COLO_NUM_NPC_TYPES=12-wide type one-hot (col_write_npc_slot line ~613), so an active
+    slot has type_onehot.sum() > 0 while an inactive slot is fully zero-filled (the writer
+    does `i += COLO_FEATURES_PER_NPC` for inactive slots after a full memset).
+    """
+
+    NPC_START = 1058
+    NUM_NPCS = 24
+    FEATURES_PER_NPC = 43
+    TYPE_ONEHOT_START = 0
+    TYPE_ONEHOT_LEN = 12
+
+    def __init__(self, obs_size, hidden_size=128):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.npc_block_size = self.NUM_NPCS * self.FEATURES_PER_NPC
+        npc_end = self.NPC_START + self.npc_block_size
+        assert obs_size >= npc_end, (
+            f'obs_size {obs_size} too small for colosseum NPC block ending at {npc_end}'
+        )
+
+        self.global_encoder = nn.Linear(obs_size, hidden_size)
+        self.entity_encoder = nn.Sequential(
+            nn.Linear(self.FEATURES_PER_NPC, 16),
+            nn.GELU(),
+            nn.Linear(16, hidden_size),
+        )
+
+    def forward(self, observations):
+        x = observations.view(observations.shape[0], -1).float()
+        global_h = self.global_encoder(x)
+
+        npc_block = x[:, self.NPC_START:self.NPC_START + self.npc_block_size]
+        npcs = npc_block.reshape(x.shape[0], self.NUM_NPCS, self.FEATURES_PER_NPC)
+        entity_h = self.entity_encoder(npcs)
+
+        type_onehot = npcs[:, :, self.TYPE_ONEHOT_START:self.TYPE_ONEHOT_START + self.TYPE_ONEHOT_LEN]
+        active = type_onehot.sum(dim=-1) > 0
+        masked = entity_h.masked_fill(~active.unsqueeze(-1), float('-inf'))
+        pooled = masked.max(dim=1)[0]
+        pooled = torch.where(active.any(dim=1, keepdim=True), pooled, torch.zeros_like(pooled))
+
+        return global_h + pooled
+
 class DefaultDecoder(nn.Module):
     def __init__(self, nvec, hidden_size=128):
         super().__init__()
