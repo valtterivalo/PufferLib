@@ -99,16 +99,22 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
     /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
-       piety/rigour valid with prayer points; augury valid only in the magic set
-       (it boosts magic accuracy + damage). */
+       piety/rigour/augury all points-only (no weapon-style gate). Augury was
+       formerly gated on the currently-equipped weapon being magic, which the
+       harness builds against END-of-tick state, so the agent could never select
+       Augury on the same tick it equipped a magic weapon (it had to wait one tick,
+       costing the first magic attack its accuracy + damage). The lazy loadout
+       recompute already reads post-equip equipped[] + offensive_prayer, so a
+       same-tick equip+Augury lands shadow x3 + Augury +4% on that tick's attack;
+       Augury on a non-magic weapon is a harmless accuracy no-op exactly as
+       Piety/Rigour already are off-style. Matches the zulrah precedent. */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = (col_equipped_weapon_attack_style(&s->player) == ATTACK_STYLE_MAGIC &&
-                      s->player.current_prayer > 0 &&
+    mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 
     /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,

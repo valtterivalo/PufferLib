@@ -4732,8 +4732,8 @@ static void test_loadout_offensive_prayers(void) {
     float mask[COLO_ACTION_MASK_SIZE];
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
     int off_offset = col_action_head_mask_offset(COLO_HEAD_OFFENSIVE);
-    CHECK("augury stays masked (no magic set, L1)",
-        mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] == 0.0f);
+    CHECK("augury is offered points-only even on a non-magic weapon (equip+pray fix)",
+        mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] == 1.0f);
     CHECK("piety and rigour are offered",
         mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY] == 1.0f &&
         mask[off_offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] == 1.0f);
@@ -4950,12 +4950,12 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2492", COLO_NUM_OBS == 2492);
+    CHECK("obs width is 2540", COLO_NUM_OBS == 2540);
     CHECK("inventory block has 812 features", COLO_INVENTORY_OBS_SIZE == 812);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
-    CHECK("NPC slots have 41 features", COLO_FEATURES_PER_NPC == 41);
+    CHECK("NPC slots have 43 features (best-gear DPT obs)", COLO_FEATURES_PER_NPC == 43);
     CHECK("snapshot version is v17", COLO_SNAPSHOT_VERSION == 17u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -6992,7 +6992,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2492);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2540);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

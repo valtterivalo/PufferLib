@@ -200,25 +200,31 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* 2026-06-24: re-seeded after the per-category action-head refactor. The 28
-   redundant INV_CLICK heads collapsed into per-gear-slot equip heads + one EAT +
-   one DRINK (35 heads -> 20), so fill_actions draws a different RNG stream and a
-   different per-tick action vector. Every config's trajectory shifts; the obs
-   vector layout is unchanged (digests differ only because the simulated actions
-   differ). Action-space rebaseline, verified after test_colosseum_modifiers.c. */
+/* 2026-06-26: re-seeded after the best-gear DPT obs redesign + equip-and-pray fix.
+   The per-NPC matchup block grew 5 -> 7 floats (3 best-per-style DPT + 3 argmax-style
+   one-hot + venator, COLO_FEATURES_PER_NPC 41 -> 43), the per-inventory-cell DPT float
+   became the marginal-in-best-setup bit, COLO_EXPECTED_DPT_NORM 10 -> 15, and the
+   Augury action mask lost its weapon-style gate (so the simulated action stream also
+   shifts). Confliction's charged double-accuracy + dharok-at-full-HP now feed the obs
+   DPT leaf. The best-gear cross-product now enumerates the empty option per slot when
+   no candidate dominates it for the style (off-style armour with a negative magic/ranged
+   attack bonus), so magic/ranged best-gear DPT obs floats rose for the affected types.
+   Both the obs vector and the action stream change, so every config's digest moves.
+   Verified deterministic (two --print runs identical) + after probe_colo_best_gear_dpt.c
+   (33/33, incl. T8 local-optimality) and test_colosseum_modifiers.c. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x081153afc50105c0ULL,
-    0x6a9799e2acfe1282ULL,
-    0xf5901a62d8c57418ULL,
-    0xae9cf9965503167fULL,
-    0xd4ef9a6b902c0512ULL,
-    0x67cba4cc313eabf1ULL,
-    0x14b262be6689f7fcULL,
-    0x5b1b21dea38a5f1eULL,
-    0x7d837d9423152fb1ULL,
-    0x79a41895dec3913dULL,
-    0xe54cb4ad8e4372a8ULL,
-    0xe1de9586e074af4aULL,
+    0x9c51037062526545ULL,
+    0xe42a824ab7aa1e89ULL,
+    0xbb81ff9e76087ef4ULL,
+    0xb73082336bc9c259ULL,
+    0x14d661b4af8c7a20ULL,
+    0x8b4b3b7f91c15a4cULL,
+    0x226d7ad90fb1cda3ULL,
+    0x60a7870ad8bf41e4ULL,
+    0x8b36f7f42fc9b649ULL,
+    0x59556694205deef6ULL,
+    0x3dc9049d1d3c1fcaULL,
+    0x01d3a8f1d83d85e0ULL,
 };
 
 int main(int argc, char** argv) {

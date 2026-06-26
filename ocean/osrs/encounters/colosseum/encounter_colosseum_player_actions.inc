@@ -1142,9 +1142,28 @@ static float col_expected_dpt_vs_npc(
             MAXED_BASE_HITPOINTS);
 
     int target_def_roll = col_npc_target_def_roll(npc, ns, style, melee_style);
-    float hit_prob = (prepared.use_fang_accuracy || prepared.use_double_accuracy)
-        ? osrs_hit_chance_double(prepared.attack_roll, target_def_roll)
-        : osrs_hit_chance(prepared.attack_roll, target_def_roll);
+    float hit_prob;
+    if (osrs_confliction_can_apply(effects, style, weapon_item, 1)) {
+        /* Confliction gauntlets steady-state magic accuracy, modeled truthfully
+           against .refs/osrs-dps-calc BaseCalc.getConflictionGauntletsAccuracyRoll:
+           the gauntlets prime on a miss and the next attack rolls double accuracy,
+           so the long-run hit chance is double / (1 + double - single). single is
+           the standard roll (osrs_hit_chance == getNormalAccuracyRoll), double is the
+           fang/double roll (osrs_hit_chance_double == getFangAccuracyRoll).
+           osrs_confliction_can_apply already encodes the owner-confirmed 2h-disable
+           (the effect never fires with a two-handed weapon, so it is dead under
+           Tumeken's shadow). The live sim charges the prime via the effect state; the
+           obs surfaces the achievable steady state so the policy sees the real value
+           of the confliction switch instead of the uncharged floor. */
+        float single = osrs_hit_chance(prepared.attack_roll, target_def_roll);
+        float dbl = osrs_hit_chance_double(prepared.attack_roll, target_def_roll);
+        float denom = 1.0f + dbl - single;
+        hit_prob = denom > 0.0f ? dbl / denom : dbl;
+    } else if (prepared.use_fang_accuracy || prepared.use_double_accuracy) {
+        hit_prob = osrs_hit_chance_double(prepared.attack_roll, target_def_roll);
+    } else {
+        hit_prob = osrs_hit_chance(prepared.attack_roll, target_def_roll);
+    }
 
     int splat_count = 1;
     if (weapon_item == ITEM_SCYTHE_OF_VITUR)
