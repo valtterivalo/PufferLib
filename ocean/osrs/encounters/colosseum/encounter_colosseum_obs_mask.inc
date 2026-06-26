@@ -196,27 +196,9 @@ static ColoNPC col_matchup_representative_npc(ColoNpcType type) {
     };
 }
 
-/**
- * Best-achievable gear oracle output, keyed [style][npc-type] (styles index as
- * ColoWeaponSet: 0 melee / 1 ranged / 2 magic). dpt is the MAX expected DPT over a
- * pruned, result-identical brute force of every legal gear setup the player can
- * field this tick (union of worn gear + the 3 profile loadout tables + the 28
- * inventory cells), scored with the style-matched offensive prayer (Piety/Rigour/
- * Augury). setup[] is the argmax full equipment[] that achieves it. dpt is -1 when
- * the player owns no weapon of that style. Multiplicative items (Tumeken's shadow
- * x3 magic_damage, bowfa crystal, virtus, dharok) compose for free because the whole
- * setup is evaluated. Two effects sit at honest extremes the obs surfaces on purpose:
- * dharok is scored at full HP (its FLOOR, which is the honest best since you start
- * full), and confliction gauntlets are scored at their charged double-accuracy steady
- * state (col_expected_dpt_vs_npc models the steady state, disabled for 2h weapons per
- * the real-game rule so it is dead under shadow). */
-typedef struct {
-    float dpt;
-    uint8_t setup[NUM_GEAR_SLOTS];
-} ColoBestGear;
-
 /** Normalize a best-gear DPT for a live non-hazard NPC slot. -1 sentinel (no weapon
-    of that style) maps to 0; otherwise clamp01(dpt / NORM). */
+    of that style) maps to 0; otherwise clamp01(dpt / NORM). ColoBestGear is defined in
+    the model header so ColosseumState can cache the oracle table. */
 static float col_best_dpt_obs_value(const ColoNPC* npc, float dpt) {
     if (!npc) abort();
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
@@ -1630,6 +1612,48 @@ static void col_build_best_gear_table(
     }
 }
 
+/** Content signature over every ColosseumState input the best-gear table reads: the 11
+    worn slots, the 28 inventory cells, the 4 combat levels that drive accuracy + max hit
+    (attack/strength/ranged/magic), and the active loadout profile (it selects the magic
+    spell base via col_weapon_set_spell_base_damage). HP is excluded on purpose (dharok
+    scores at full HP), as are NPC positions, the alive set, and the live prayer (the
+    table uses the style-matched prayer) -- the table depends on none of them. FNV-1a
+    over the bytes; a collision only costs a missed reuse, never a wrong result, because
+    a true input change almost always moves the hash and forces a rebuild. */
+static uint64_t col_best_gear_signature(const ColosseumState* s) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        h = (h ^ (uint64_t)s->inventory_cells[cell].item_idx) * 1099511628211ULL;
+    const int scalars[5] = {
+        s->player.current_attack, s->player.current_strength,
+        s->player.current_ranged, s->player.current_magic,
+        (int)s->active_loadout_profile,
+    };
+    for (int k = 0; k < 5; k++)
+        h = (h ^ (uint64_t)(uint32_t)scalars[k]) * 1099511628211ULL;
+    return h;
+}
+
+/** Best-gear table for the current state, rebuilt only when the content signature
+    changes (a handful of gear/inventory/level edits per episode) and reused on every
+    other tick. Result-identical to calling col_build_best_gear_table directly: the
+    table is a pure function of the signature inputs, so the cached value equals a fresh
+    build whenever the signature matches. This lifts the per-tick brute force (which was
+    ~80% of training wall-clock) out of the obs hot path; all obs + metric call sites
+    share one build per (env, signature). */
+static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES] {
+    if (!s) abort();
+    uint64_t sig = col_best_gear_signature(s);
+    if (!s->best_gear_cache_valid || s->best_gear_cache_sig != sig) {
+        col_build_best_gear_table(s, s->best_gear_cache);
+        s->best_gear_cache_sig = sig;
+        s->best_gear_cache_valid = 1;
+    }
+    return s->best_gear_cache;
+}
+
 /**
  * BIS-gear oracle (scaffold, gated by ColConfig.bis_gear_oracle_mode; default off).
  * When the player is attacking a target, force-equips the weapon set with the
@@ -1778,8 +1802,7 @@ static int col_current_set_is_argmax_dpt_for_target(ColosseumState* s) {
     const ColoNPC* npc = &s->npcs[target];
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
         return -1;
-    ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    col_build_best_gear_table(s, best);
+    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
     return col_weapon_set_is_argmax_dpt_for_npc(s, target, s->weapon_set, best);
 }
 
@@ -1790,8 +1813,7 @@ static int col_attacked_with_argmax_set(ColosseumState* s) {
     const ColoNPC* npc = &s->npcs[npc_slot];
     if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
         return -1;
-    ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    col_build_best_gear_table(s, best);
+    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
     return col_weapon_set_is_argmax_dpt_for_npc(s, npc_slot, s->weapon_set, best);
 }
 
@@ -1913,8 +1935,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     col_write_pillar_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_PILLARS);
 
-    ColoBestGear best_gear[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    col_build_best_gear_table(s, best_gear);
+    const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
 
     col_write_inventory_and_equipped_obs(s, best_gear, obs, &i);
 

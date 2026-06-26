@@ -1271,6 +1271,24 @@ typedef enum {
     COLO_NUM_WEAPON_SETS
 } ColoWeaponSet;
 
+/* Best-achievable gear oracle output, keyed [style][npc-type] (styles index as
+   ColoWeaponSet: 0 melee / 1 ranged / 2 magic). dpt is the MAX expected DPT over a
+   pruned, result-identical brute force of every legal gear setup the player can field
+   this tick (union of worn gear + the 28 inventory cells), scored with the
+   style-matched offensive prayer (Piety/Rigour/Augury). setup[] is the argmax full
+   equipment[] that achieves it. dpt is -1 when the player owns no weapon of that style.
+   Multiplicative items (Tumeken's shadow x3 magic_damage, bowfa crystal, virtus,
+   dharok) compose for free because the whole setup is evaluated. Two effects sit at
+   honest extremes the obs surfaces on purpose: dharok is scored at full HP (its FLOOR,
+   which is the honest best since you start full), and confliction gauntlets are scored
+   at their charged double-accuracy steady state (col_expected_dpt_vs_npc models the
+   steady state, disabled for 2h weapons per the real-game rule so it is dead under
+   shadow). Defined here (not in the obs writer) so ColosseumState can cache it. */
+typedef struct {
+    float dpt;
+    uint8_t setup[NUM_GEAR_SLOTS];
+} ColoBestGear;
+
 /** researched loadout profiles (.colosseum-notes/research/loadout-*.md):
     BEGINNER = wiki Budget tab tier-1 + budget example inventory (first-quiver
     floor), SPEEDRUN = wiki High efficiency tab (sub-20 kit). Spec weapons swap
@@ -2024,6 +2042,17 @@ typedef struct {
        only and read this scalar; mirroring avoids threading the context through
        the ~15-deep state-only modifier-tick chain. 1.0 = bit-identical no-op. */
     float active_player_damage_received_scale;
+
+    /* Best-gear oracle cache. The table (col_build_best_gear_table) is a pure function
+       of worn gear + inventory items + the 4 combat levels, none of which change on
+       most ticks, so it is rebuilt only when a content signature over those inputs
+       changes (col_get_best_gear_table) and reused otherwise. Self-correcting: every
+       access recomputes the signature from current state and rebuilds on mismatch, so
+       the cache stays valid across episode resets and forecast projections with no
+       explicit invalidation. Lifts the per-tick brute force out of the obs hot path. */
+    ColoBestGear best_gear_cache[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
+    uint64_t best_gear_cache_sig;
+    int best_gear_cache_valid;
 } ColosseumState;
 
 static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type);
