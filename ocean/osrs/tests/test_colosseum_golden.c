@@ -200,31 +200,28 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* 2026-06-26: re-seeded after the best-gear DPT obs redesign + equip-and-pray fix.
-   The per-NPC matchup block grew 5 -> 7 floats (3 best-per-style DPT + 3 argmax-style
-   one-hot + venator, COLO_FEATURES_PER_NPC 41 -> 43), the per-inventory-cell DPT float
-   became the marginal-in-best-setup bit, COLO_EXPECTED_DPT_NORM 10 -> 15, and the
-   Augury action mask lost its weapon-style gate (so the simulated action stream also
-   shifts). Confliction's charged double-accuracy + dharok-at-full-HP now feed the obs
-   DPT leaf. The best-gear cross-product now enumerates the empty option per slot when
-   no candidate dominates it for the style (off-style armour with a negative magic/ranged
-   attack bonus), so magic/ranged best-gear DPT obs floats rose for the affected types.
-   Both the obs vector and the action stream change, so every config's digest moves.
-   Verified deterministic (two --print runs identical) + after probe_colo_best_gear_dpt.c
-   (33/33, incl. T8 local-optimality) and test_colosseum_modifiers.c. */
+/* 2026-06-26: re-seeded after adding the step-out forecast Solarflare contact obs.
+   The forecast obs block grew one float per move action (COLO_STEP_OUT_FORECAST_ACTION_FEATURES
+   8 -> 9, +ENCOUNTER_MOVE_ACTIONS floats, COLO_NUM_OBS 2540 -> 2565): each candidate landing now
+   carries a soonest-Solarflare-orb-contact urgency, projecting the single nearest pillar's orb
+   forward with the shared live cadence advance. The obs vector widens for every config (the
+   action stream is unchanged), so every digest moves. Verified deterministic (two --print runs
+   identical) + after probe_colo_best_gear_dpt.c (33/33) and test_colosseum_modifiers.c
+   (10192/10192), plus an adversarial cadence-match probe (forecast projection == live
+   col_mod_tick_solarflare step-for-step across tiers 1/2/3). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x9c51037062526545ULL,
-    0xe42a824ab7aa1e89ULL,
-    0xbb81ff9e76087ef4ULL,
-    0xb73082336bc9c259ULL,
-    0x14d661b4af8c7a20ULL,
-    0x8b4b3b7f91c15a4cULL,
-    0x226d7ad90fb1cda3ULL,
-    0x60a7870ad8bf41e4ULL,
-    0x8b36f7f42fc9b649ULL,
-    0x59556694205deef6ULL,
-    0x3dc9049d1d3c1fcaULL,
-    0x01d3a8f1d83d85e0ULL,
+    0x1904593a191c3f65ULL,
+    0x257f2fa86a8ce369ULL,
+    0x6c5be67034607d84ULL,
+    0x4e549f6e82c1b4b9ULL,
+    0x3479e6be59ca8cf0ULL,
+    0x61fe90a1aa69da0cULL,
+    0x16abdb26a3a9c353ULL,
+    0x12bf8cb20cdf7b84ULL,
+    0xd8c7e28e29a98a29ULL,
+    0x16284a711511ad16ULL,
+    0x6d604adc86ae3b0aULL,
+    0xcf8e1b0bd6d43ab0ULL,
 };
 
 int main(int argc, char** argv) {

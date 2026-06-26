@@ -4950,7 +4950,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2540", COLO_NUM_OBS == 2540);
+    CHECK("obs width is 2565", COLO_NUM_OBS == 2565);
     CHECK("inventory block has 812 features", COLO_INVENTORY_OBS_SIZE == 812);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
@@ -6992,7 +6992,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2540);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2565);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

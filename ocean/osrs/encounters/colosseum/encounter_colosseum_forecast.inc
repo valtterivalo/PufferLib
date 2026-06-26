@@ -980,6 +980,62 @@ static void col_forecast_static_threat_action(
     }
 }
 
+/** Landing-independent Solarflare projection inputs, computed once per rollout.
+    pillar is the single nearest orb to the CURRENT player tile (Chebyshev,
+    first-wins ties), matching col_write_nearest_modifier_solarflare; the orbs
+    hug their own pillars so the player threatens at most one. pillar == -1 when
+    Solarflare is inactive, which short-circuits every per-action projection. */
+typedef struct {
+    int pillar;
+    int tier;
+    ColoSolarflareOrb orb;
+} ColoForecastSolarflare;
+
+static ColoForecastSolarflare col_forecast_solarflare_precompute(const ColosseumState* s) {
+    ColoForecastSolarflare pre = { .pillar = -1, .tier = 0, .orb = {0} };
+    if (!s->solarflare.active) return pre;
+    int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
+    if (tier == 0) return pre;
+    int best_pillar = -1;
+    int best_distance = 1 << 30;
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        int x, y;
+        col_solarflare_tile(p, s->solarflare.step, &x, &y);
+        int dx = abs(x - s->player.x);
+        int dy = abs(y - s->player.y);
+        int distance = dx > dy ? dx : dy;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_pillar = p;
+        }
+    }
+    pre.pillar = best_pillar;
+    pre.tier = tier;
+    pre.orb = s->solarflare;
+    return pre;
+}
+
+/** Soonest forecast tick in [0, horizon) at which the nearest pillar's orb shares
+    the landing tile, projecting the cadence forward with the shared live advance
+    (col_solarflare_advance_orb) so the step sequence matches the sim tick-for-tick.
+    Returns -1 when the orb never reaches the landing within the horizon. */
+static int col_forecast_solarflare_contact_tick(
+    const ColoForecastSolarflare* pre,
+    int land_x,
+    int land_y,
+    int horizon
+) {
+    if (pre->pillar < 0) return -1;
+    ColoSolarflareOrb orb = pre->orb;
+    for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
+        col_solarflare_advance_orb(&orb, pre->tier);
+        int x, y;
+        col_solarflare_tile(pre->pillar, orb.step, &x, &y);
+        if (x == land_x && y == land_y) return tick_idx;
+    }
+    return -1;
+}
+
 static void col_build_step_out_forecast_horizon_mode_summary(
     const ColosseumState* s,
     ColoStepOutForecast* out,
@@ -1038,6 +1094,15 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         col_step_out_forecast_finalize_action(action, horizon);
     }
+
+    ColoForecastSolarflare solarflare = col_forecast_solarflare_precompute(s);
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        ColoStepOutForecastAction* action = &out->actions[action_idx];
+        action->solarflare_contact_tick = action->valid
+            ? col_forecast_solarflare_contact_tick(
+                &solarflare, action->land_x, action->land_y, horizon)
+            : -1;
+    }
 }
 
 static void col_build_step_out_forecast_horizon_mode(
@@ -1068,6 +1133,9 @@ static int col_write_step_out_forecast_obs_summary(
         obs[i++] = summary->ranged_magic_same_tick ? 1.0f : 0.0f;
         obs[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
         obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+        obs[i++] = action->solarflare_contact_tick >= 0
+            ? (float)(horizon - action->solarflare_contact_tick) / (float)horizon
+            : 0.0f;
     }
     return i;
 }

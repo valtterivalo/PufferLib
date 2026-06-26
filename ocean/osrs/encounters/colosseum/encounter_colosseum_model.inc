@@ -41,7 +41,7 @@
 /* compile-time MAX rollout depth (ticks[] array size). The live depth is the
    runtime ColConfig.forecast_horizon, clamped to [1, this]; default == this. */
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
-#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 8
+#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 9
 #define COLO_STEP_OUT_FORECAST_OBS_SIZE \
     (ENCOUNTER_MOVE_ACTIONS * COLO_STEP_OUT_FORECAST_ACTION_FEATURES)
 
@@ -60,6 +60,7 @@ typedef struct {
     int same_tick_mixed_style_conflict;
     int ranged_magic_offtick_opportunity;
     int melee_fallback_exposure;
+    int solarflare_contact_tick;
 } ColoStepOutForecastAction;
 
 typedef struct {

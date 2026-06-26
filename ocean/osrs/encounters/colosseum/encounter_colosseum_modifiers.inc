@@ -819,6 +819,28 @@ static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
     }
 }
 
+/** Advance the shared Solarflare cadence by exactly one tick for the given tier.
+    Pure in the orb state: the sole source of truth for ring-step progression,
+    shared by the live tick and the step-out forecast projection so their
+    cadence can never drift. Tier 2 runs continuous (no corner pause). */
+static void col_solarflare_advance_orb(ColoSolarflareOrb* orb, int tier) {
+    if (orb->pause_timer > 0) {
+        orb->pause_timer--;
+        return;
+    }
+    if (orb->move_timer > 0) orb->move_timer--;
+    if (orb->move_timer != 0) return;
+    int next_step = orb->step + 1;
+    if (next_step == COLO_SOLARFLARE_RING_STEPS) next_step = 0;
+    orb->step = next_step;
+    orb->move_timer = (tier >= 3)
+        ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
+    if (col_solarflare_step_is_corner(orb->step)) {
+        if (tier == 1) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE;
+        if (tier >= 3) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE_T3;
+    }
+}
+
 /** tick the shared Solarflare cadence and apply per-pillar orb contact damage. */
 static void col_mod_tick_solarflare(ColosseumState* s) {
     if (!s->solarflare.active) return;
@@ -833,24 +855,7 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
         return;
     }
 
-    ColoSolarflareOrb* orb = &s->solarflare;
-    if (orb->pause_timer > 0) {
-        orb->pause_timer--;
-    } else {
-        if (orb->move_timer > 0) orb->move_timer--;
-        if (orb->move_timer == 0) {
-            int next_step = orb->step + 1;
-            if (next_step == COLO_SOLARFLARE_RING_STEPS) next_step = 0;
-            orb->step = next_step;
-            orb->move_timer = (tier >= 3)
-                ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
-            if (col_solarflare_step_is_corner(orb->step)) {
-                if (tier == 1) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE;
-                if (tier >= 3) orb->pause_timer = COLO_SOLARFLARE_CORNER_PAUSE_T3;
-            }
-        }
-    }
-
+    col_solarflare_advance_orb(&s->solarflare, tier);
     col_mod_apply_solarflare_contact(s, tier);
 }
 
