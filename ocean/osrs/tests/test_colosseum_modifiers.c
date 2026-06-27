@@ -6992,24 +6992,46 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
-/* B: reach-1 melee requires CARDINAL footprint adjacency. A 1x1 player diagonally off
-   a 3x3 NPC corner (both axis gaps == 1) must NOT be in melee range; the 12 cardinal-edge
-   tiles must be. Guards encounter_entity_footprint_cardinal_adjacent (osrs_encounter.h). */
-static void test_reach1_cardinal_adjacency_vs_3x3(void) {
-    printf("test_reach1_cardinal_adjacency_vs_3x3\n");
-    const int tx = 10, ty = 10, tsize = 3;  /* occupies (10,10)..(12,12) */
-    const int corners[4][2] = {{9, 9}, {13, 9}, {9, 13}, {13, 13}};
-    for (int i = 0; i < 4; i++)
-        CHECK("reach-1 melee cannot hit a 3x3 from a diagonal corner",
-              encounter_entity_footprint_cardinal_adjacent(
-                  corners[i][0], corners[i][1], 1, tx, ty, tsize) == 0);
-    const int cards[12][2] = {
-        {9, 10}, {9, 11}, {9, 12}, {13, 10}, {13, 11}, {13, 12},
-        {10, 9}, {11, 9}, {12, 9}, {10, 13}, {11, 13}, {12, 13}};
-    for (int i = 0; i < 12; i++)
-        CHECK("reach-1 melee can hit a 3x3 from a cardinal-edge tile",
-              encounter_entity_footprint_cardinal_adjacent(
-                  cards[i][0], cards[i][1], 1, tx, ty, tsize) == 1);
+/* B: melee reach. Every non-halberd melee weapon has attack_range 1 and can hit ONLY
+   from a CARDINAL footprint-adjacent tile, never from a diagonal corner that merely
+   touches the footprint ("0.5-tile reach"). A halberd has attack_range 2 and CAN hit
+   diagonally (and from 2 tiles cardinally). Verifies both the pure helper and the
+   encounter_player_can_attack gate for 1x1/2x2/3x3 targets. This is the exact case
+   every prior melee test missed -- they only ever exercised ranged (range>1) LoS, so
+   the diagonal-corner reach-1 hit slipped through. */
+static void test_melee_reach_cardinal_vs_diagonal(void) {
+    printf("test_melee_reach_cardinal_vs_diagonal\n");
+    const OsrsLosQuery* open = osrs_los_open_query();
+    const int tx = 10, ty = 10;
+    for (int tsize = 1; tsize <= 3; tsize++) {
+        /* the four diagonal corners just off the footprint: both axis gaps == 1. */
+        const int corners[4][2] = {
+            {tx - 1, ty - 1}, {tx + tsize, ty - 1},
+            {tx - 1, ty + tsize}, {tx + tsize, ty + tsize}};
+        for (int i = 0; i < 4; i++) {
+            int cx = corners[i][0], cy = corners[i][1];
+            CHECK("reach-1 helper rejects a diagonal corner",
+                  encounter_entity_footprint_cardinal_adjacent(cx, cy, 1, tx, ty, tsize) == 0);
+            CHECK("range-1 gate rejects a diagonal corner",
+                  encounter_player_can_attack(cx, cy, tx, ty, tsize, 1, open) == 0);
+            CHECK("range-2 (halberd) gate allows a diagonal corner",
+                  encounter_player_can_attack(cx, cy, tx, ty, tsize, 2, open) == 1);
+        }
+        /* every cardinal-edge tile is hittable at range 1. */
+        for (int k = 0; k < tsize; k++) {
+            CHECK("range-1 gate allows a west cardinal-edge tile",
+                  encounter_player_can_attack(tx - 1, ty + k, tx, ty, tsize, 1, open) == 1);
+            CHECK("range-1 gate allows an east cardinal-edge tile",
+                  encounter_player_can_attack(tx + tsize, ty + k, tx, ty, tsize, 1, open) == 1);
+            CHECK("range-1 gate allows a south cardinal-edge tile",
+                  encounter_player_can_attack(tx + k, ty - 1, tx, ty, tsize, 1, open) == 1);
+            CHECK("range-1 gate allows a north cardinal-edge tile",
+                  encounter_player_can_attack(tx + k, ty + tsize, tx, ty, tsize, 1, open) == 1);
+        }
+        /* overlapping the footprint is never meleeable. */
+        CHECK("overlap is never meleeable",
+              encounter_player_can_attack(tx, ty, tx, ty, tsize, 1, open) == 0);
+    }
 }
 
 /* D: while a modifier draft is pending the MODIFIER_SELECT no-op (index 0) must be
@@ -7202,7 +7224,7 @@ int main(void) {
     test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();
     test_render_bridge_npc_debug_and_warband_motion();
-    test_reach1_cardinal_adjacency_vs_3x3();
+    test_melee_reach_cardinal_vs_diagonal();
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
 
