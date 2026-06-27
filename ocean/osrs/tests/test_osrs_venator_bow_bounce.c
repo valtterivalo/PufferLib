@@ -134,6 +134,31 @@ static void test_warband_cluster_and_bounce_back(void) {
 }
 
 /**
+ * Regression: the 2nd bounce is range-gated on the ORIGINAL target's centre, not
+ * the 1st-bounce target. A 3rd target 3 tiles from the original (reachable only by
+ * chaining the range anchor forward) must never be hit; the bounce returns to the
+ * in-range primary instead. Guards osrs_venator.h hit3 range_sender == primary.
+ */
+static void test_no_overreach_past_original_centre(void) {
+    OsrsVenatorMonster primary = live_monster(100, 0, 0, 1);
+    OsrsVenatorMonster candidates[] = {
+        live_monster(50, 2, 0, 1),
+        live_monster(10, 3, 0, 1),
+    };
+    OsrsVenatorChain chain = osrs_venator_resolve_chain(primary, candidates, 2);
+    check_chain_slots(
+        "2nd bounce never reaches a target >2 tiles from the original centre",
+        chain,
+        OSRS_VENATOR_CHAIN_LENGTH_THREE,
+        100,
+        50,
+        100);
+    for (int i = 0; i < (int)chain.length; i++)
+        CHECK("over-reach target (3,0) is never in the chain",
+              chain.hits[i].slot != 10);
+}
+
+/**
  * Pins the even-centre interpretation and the size-5 CENTRE_SW assumption in
  * osrs_venator.h. The cases separate accept and send failures so the two wiki
  * rules cannot collapse into one looser radius check.
@@ -286,6 +311,7 @@ int main(void) {
     test_bounce_max_hit_law();
     test_chain_laws_and_determinism();
     test_warband_cluster_and_bounce_back();
+    test_no_overreach_past_original_centre();
     test_rule_matrix_representatives();
     test_boundaries();
     test_damage_rolls_all_chain_nodes();

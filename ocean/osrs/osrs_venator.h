@@ -421,15 +421,18 @@ static inline int osrs_venator_is_better_candidate(
 
 static inline void osrs_venator_consider_candidate(
     OsrsVenatorCandidateSearch* search,
-    OsrsVenatorFootprint sender,
+    OsrsVenatorFootprint range_sender,
+    OsrsVenatorFootprint selection_sender,
     OsrsVenatorMonster candidate,
     int forbidden_slot
 ) {
     if (candidate.life != OSRS_VENATOR_MONSTER_ALIVE) return;
     if (candidate.slot == forbidden_slot) return;
-    if (!osrs_venator_can_bounce(sender, candidate.footprint)) return;
+    /* eligibility is measured from the ORIGINAL target (within 2 tiles of its
+       centre); selection (nearest) is measured from the target being bounced from. */
+    if (!osrs_venator_can_bounce(range_sender, candidate.footprint)) return;
 
-    int distance = osrs_venator_selection_distance(sender, candidate.footprint);
+    int distance = osrs_venator_selection_distance(selection_sender, candidate.footprint);
     if (search->kind == OSRS_VENATOR_CANDIDATE_MISSING ||
             osrs_venator_is_better_candidate(
                 distance,
@@ -461,7 +464,8 @@ static inline int osrs_venator_live_non_primary_count(
 }
 
 static inline OsrsVenatorCandidateSearch osrs_venator_find_next_candidate(
-    OsrsVenatorFootprint sender,
+    OsrsVenatorFootprint range_sender,
+    OsrsVenatorFootprint selection_sender,
     OsrsVenatorMonster primary,
     const OsrsVenatorMonster* candidates,
     int candidate_count,
@@ -475,13 +479,13 @@ static inline OsrsVenatorCandidateSearch osrs_venator_find_next_candidate(
     if (primary_candidate_mode == OSRS_VENATOR_PRIMARY_CANDIDATE_INCLUDED &&
             primary.life == OSRS_VENATOR_MONSTER_ALIVE) {
         osrs_venator_consider_candidate(
-            &search, sender, primary, forbidden_slot);
+            &search, range_sender, selection_sender, primary, forbidden_slot);
     }
 
     for (int i = 0; i < candidate_count; i++) {
         if (candidates[i].slot == primary.slot) continue;
         osrs_venator_consider_candidate(
-            &search, sender, candidates[i], forbidden_slot);
+            &search, range_sender, selection_sender, candidates[i], forbidden_slot);
     }
 
     return search;
@@ -508,6 +512,7 @@ static inline OsrsVenatorChain osrs_venator_resolve_chain(
 
     OsrsVenatorCandidateSearch hit2 = osrs_venator_find_next_candidate(
         primary.footprint,
+        primary.footprint,
         primary,
         candidates,
         candidate_count,
@@ -529,7 +534,12 @@ static inline OsrsVenatorChain osrs_venator_resolve_chain(
         return chain;
     }
 
+    /* the 2nd bounce's ELIGIBILITY is anchored on the ORIGINAL target's centre
+       (within 2 tiles) -- chaining the range anchor forward would let the 3rd hit
+       reach ~4 tiles from the original. SELECTION (nearest) is from the 1st-bounce
+       target the projectile travels from. ref: OSRS venator wiki bounce rules. */
     OsrsVenatorCandidateSearch hit3 = osrs_venator_find_next_candidate(
+        primary.footprint,
         hit2.monster.footprint,
         primary,
         candidates,
