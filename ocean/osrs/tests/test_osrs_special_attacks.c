@@ -691,20 +691,18 @@ static void test_item_effect_laws(void) {
     uint32_t rng = 31337;
     int procs = 0, bad_heal = 0;
     for (int i = 0; i < 2000; i++) {
-        OsrsPostAttackEffects post = osrs_finalize_attack_effects(
-            &fury, &state, ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE,
-            OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1, 0, 1, 30, &rng);
-        if (post.heal_amount > 0) {
+        int heal = osrs_blood_fury_heal_amount(
+            &fury, ATTACK_STYLE_MELEE, 30, &rng);
+        if (heal > 0) {
             procs++;
-            if (post.heal_amount != 9) bad_heal = 1;
+            if (heal != 9) bad_heal = 1;
         }
     }
     CHECK("blood fury heals exactly 30% on every proc", !bad_heal);
     CHECK("blood fury procs near the 20% rate", procs > 280 && procs < 520);
-    OsrsPostAttackEffects ranged_post = osrs_finalize_attack_effects(
-        &fury, &state, ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED,
-        OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1, 0, 1, 30, &rng);
-    CHECK("blood fury never procs on ranged damage", ranged_post.heal_amount == 0);
+    int ranged_heal = osrs_blood_fury_heal_amount(
+        &fury, ATTACK_STYLE_RANGED, 30, &rng);
+    CHECK("blood fury never procs on ranged damage", ranged_heal == 0);
 }
 
 int main(void) {

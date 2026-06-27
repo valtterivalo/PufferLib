@@ -213,7 +213,11 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x1904593a191c3f65ULL,
     0x257f2fa86a8ce369ULL,
     0x6c5be67034607d84ULL,
-    0x4e549f6e82c1b4b9ULL,
+    /* w04_manticore re-baselined after the reach-1 melee cardinal-adjacency fix
+       (osrs_encounter.h): the scripted player can no longer hit the 3x3 manticore
+       from a diagonal corner, so its trajectory diverges. Only this 3x3 config
+       moved; the other 11 are byte-identical. */
+    0x7a4006245ae68139ULL,
     0x3479e6be59ca8cf0ULL,
     0x61fe90a1aa69da0cULL,
     0x16abdb26a3a9c353ULL,

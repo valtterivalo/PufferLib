@@ -987,6 +987,30 @@ static inline int encounter_entity_footprint_distance(
     return dx > dy ? dx : dy;
 }
 
+/* reach-1 melee adjacency: footprints abut on exactly one axis and overlap on the
+   other (Manhattan footprint gap == 1). A purely diagonal corner has both axis gaps
+   == 1 (Manhattan 2) and is NOT meleeable, matching OSRS WorldArea.isInMeleeDistance
+   and the NPC->player side (entity_has_line_of_sight range 1). */
+static inline int encounter_entity_footprint_cardinal_adjacent(
+    int ax, int ay, int a_size,
+    int bx, int by, int b_size
+) {
+    int ax1 = ax + a_size - 1;
+    int ay1 = ay + a_size - 1;
+    int bx1 = bx + b_size - 1;
+    int by1 = by + b_size - 1;
+
+    int dx = 0;
+    if (ax1 < bx) dx = bx - ax1;
+    else if (bx1 < ax) dx = ax - bx1;
+
+    int dy = 0;
+    if (ay1 < by) dy = by - ay1;
+    else if (by1 < ay) dy = ay - by1;
+
+    return (dx + dy) == 1;
+}
+
 static inline int encounter_entity_footprints_overlap(
     int ax, int ay, int a_size,
     int bx, int by, int b_size
@@ -1198,7 +1222,9 @@ static inline int encounter_player_can_attack(
     int dist = encounter_entity_footprint_distance(player_x, player_y, 1,
                                                    target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
-    if (attack_range == 1) return 1;
+    if (attack_range == 1)
+        return encounter_entity_footprint_cardinal_adjacent(
+            player_x, player_y, 1, target_x, target_y, target_size);
     return osrs_los_clear(los_query,
         player_x, player_y, 1,
         target_x, target_y, target_size,

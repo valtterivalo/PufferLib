@@ -85,9 +85,13 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         ? 1.0f : 0.0f;
     mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
-    /* HEAD_MODIFIER_SELECT (4): none always valid; pick option k valid ONLY while a
-       draft is pending and that option slot holds a real modifier id. */
-    mask[offset++] = 1.0f;
+    /* HEAD_MODIFIER_SELECT (4): no-op valid EXCEPT while a draft is pending, when a
+       pick is forced -- otherwise an argmax policy that prefers the no-op latches on
+       it every (frozen, static-obs) tick and soft-locks the draft until timeout.
+       col_modifier_open_draft only sets draft_pending with >=1 real option, so this
+       never produces an all-masked head. pick option k valid ONLY while a draft is
+       pending and that option slot holds a real modifier id. */
+    mask[offset++] = s->modifiers.draft_pending ? 0.0f : 1.0f;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
         mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
             ? 1.0f : 0.0f;

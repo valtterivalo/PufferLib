@@ -882,12 +882,15 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     }
 
     int total = 0;
+    int bf_heal = 0;
     int num_hits = r.num_hits > 0 ? r.num_hits : 1;
     for (int i = 0; i < num_hits; i++) {
         /* Q6: melee spec damage lands the same tick it is calculated (delay 0). */
         col_queue_npc_pending_hit(s, npc_slot, r.damage[i], 0,
                                   ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
         total += r.damage[i];
+        bf_heal += osrs_blood_fury_heal_amount(effects, ATTACK_STYLE_MELEE,
+                                               r.damage[i], &s->rng_state);
     }
 
     if (r.def_drain > 0) {
@@ -909,8 +912,9 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
         effects, &s->player.item_effect_state, item,
         ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1,
         0, total > 0, total, &s->rng_state);
-    if (post.heal_amount > 0) {
-        s->player.current_hitpoints += post.heal_amount;
+    int spec_heal = post.heal_amount + bf_heal;
+    if (spec_heal > 0) {
+        s->player.current_hitpoints += spec_heal;
         if (s->player.current_hitpoints > s->player.base_hitpoints)
             s->player.current_hitpoints = s->player.base_hitpoints;
     }
@@ -1245,6 +1249,7 @@ static void col_player_attack_target_ctx(
         ? hit_timing.damage_delay_ticks
         : (ls->attack_range > 1 ? 3 : 1);
     int damage = 0;
+    int bf_heal = 0;
     for (int splat = 0; splat < resolved_count; splat++) {
         int hit_slot = venator_attack
             ? venator_chain.hits[splat].slot
@@ -1277,15 +1282,18 @@ static void col_player_attack_target_ctx(
         col_queue_npc_pending_hit(s, hit_slot, splat_damage, hit_ticks,
                                   ls->style, ENCOUNTER_SPELL_NONE);
         damage += splat_damage;
+        bf_heal += osrs_blood_fury_heal_amount(effects, ls->style, splat_damage,
+                                               &s->rng_state);
     }
 
-    /* blood fury heal (beginner melee neck) via the shared post-attack effects */
+    /* swing-level confliction/sang; blood fury was healed per-hitsplat in the loop */
     OsrsPostAttackEffects post = osrs_finalize_attack_effects(
         effects, &s->player.item_effect_state, weapon_item, ls->style,
         OSRS_MAGIC_ATTACK_NONE, osrs_target_ref_none(), 1, 0,
         damage > 0, damage, &s->rng_state);
-    if (post.heal_amount > 0) {
-        s->player.current_hitpoints += post.heal_amount;
+    int swing_heal = post.heal_amount + bf_heal;
+    if (swing_heal > 0) {
+        s->player.current_hitpoints += swing_heal;
         if (s->player.current_hitpoints > s->player.base_hitpoints)
             s->player.current_hitpoints = s->player.base_hitpoints;
     }

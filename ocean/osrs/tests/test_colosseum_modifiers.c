@@ -4682,14 +4682,12 @@ static void test_loadout_item_effects(void) {
     col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     const OsrsEquipmentEffectProfile* melee_effects = col_live_effects(&s);
     for (int i = 0; i < 400; i++) {
-        OsrsPostAttackEffects post = osrs_finalize_attack_effects(
-            melee_effects, &s.player.item_effect_state,
-            ITEM_OSMUMTENS_FANG, ATTACK_STYLE_MELEE, OSRS_MAGIC_ATTACK_NONE,
-            osrs_target_ref_none(), 1, 0, 1, 30, &rng);
-        if (post.heal_amount > 0) {
+        int heal = osrs_blood_fury_heal_amount(
+            melee_effects, ATTACK_STYLE_MELEE, 30, &rng);
+        if (heal > 0) {
             procs++;
-            CHECK("blood fury heals 30% of the damage", post.heal_amount == 9);
-            if (post.heal_amount != 9) break;
+            CHECK("blood fury heals 30% of the damage", heal == 9);
+            if (heal != 9) break;
         }
     }
     CHECK("blood fury procs at a plausible 20% rate", procs > 40 && procs < 130);
@@ -4697,11 +4695,9 @@ static void test_loadout_item_effects(void) {
     /* no blood fury on the ranged set */
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     ranged_effects = col_live_effects(&s);
-    OsrsPostAttackEffects ranged_post = osrs_finalize_attack_effects(
-        ranged_effects, &s.player.item_effect_state,
-        ITEM_BOW_OF_FAERDHINEN, ATTACK_STYLE_RANGED, OSRS_MAGIC_ATTACK_NONE,
-        osrs_target_ref_none(), 1, 0, 1, 30, &rng);
-    CHECK("no blood fury heal on the ranged set", ranged_post.heal_amount == 0);
+    int ranged_heal = osrs_blood_fury_heal_amount(
+        ranged_effects, ATTACK_STYLE_RANGED, 30, &rng);
+    CHECK("no blood fury heal on the ranged set", ranged_heal == 0);
 }
 
 static void test_loadout_offensive_prayers(void) {
@@ -6996,6 +6992,52 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
+/* B: reach-1 melee requires CARDINAL footprint adjacency. A 1x1 player diagonally off
+   a 3x3 NPC corner (both axis gaps == 1) must NOT be in melee range; the 12 cardinal-edge
+   tiles must be. Guards encounter_entity_footprint_cardinal_adjacent (osrs_encounter.h). */
+static void test_reach1_cardinal_adjacency_vs_3x3(void) {
+    printf("test_reach1_cardinal_adjacency_vs_3x3\n");
+    const int tx = 10, ty = 10, tsize = 3;  /* occupies (10,10)..(12,12) */
+    const int corners[4][2] = {{9, 9}, {13, 9}, {9, 13}, {13, 13}};
+    for (int i = 0; i < 4; i++)
+        CHECK("reach-1 melee cannot hit a 3x3 from a diagonal corner",
+              encounter_entity_footprint_cardinal_adjacent(
+                  corners[i][0], corners[i][1], 1, tx, ty, tsize) == 0);
+    const int cards[12][2] = {
+        {9, 10}, {9, 11}, {9, 12}, {13, 10}, {13, 11}, {13, 12},
+        {10, 9}, {11, 9}, {12, 9}, {10, 13}, {11, 13}, {12, 13}};
+    for (int i = 0; i < 12; i++)
+        CHECK("reach-1 melee can hit a 3x3 from a cardinal-edge tile",
+              encounter_entity_footprint_cardinal_adjacent(
+                  cards[i][0], cards[i][1], 1, tx, ty, tsize) == 1);
+}
+
+/* D: while a modifier draft is pending the MODIFIER_SELECT no-op (index 0) must be
+   masked off so a pick is forced (argmax cannot latch on the no-op and soft-lock the
+   frozen draft). Guards encounter_colosseum_mask_render.inc. */
+static void test_modifier_draft_forces_pick(void) {
+    printf("test_modifier_draft_forces_pick\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+    col_modifier_open_draft(&s, 2);
+    CHECK("a draft is open after col_modifier_open_draft", draft_is_open(&s));
+
+    static float mask[COLO_ACTION_MASK_SIZE];
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    int base = col_action_head_mask_offset(COLO_HEAD_MODIFIER_SELECT);
+    CHECK("no-op masked off while a draft is pending", mask[base] == 0.0f);
+    int selectable = 0;
+    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+        if (mask[base + 1 + o] == 1.0f) selectable = 1;
+    CHECK("at least one draft option is selectable (forced pick is possible)", selectable);
+
+    complete_open_draft(&s, &ctx, 0);
+    CHECK("draft closed after the pick", !s.modifiers.draft_pending);
+    col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
+    CHECK("no-op valid again once no draft is pending", mask[base] == 1.0f);
+}
+
 int main(void) {
     test_stage3_t1_inventory_ranged_weapon_swap();
     test_stage3_t1_inventory_weapon_slot_last_click_wins();
@@ -7109,6 +7151,8 @@ int main(void) {
     test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();
     test_render_bridge_npc_debug_and_warband_motion();
+    test_reach1_cardinal_adjacency_vs_3x3();
+    test_modifier_draft_forces_pick();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);
