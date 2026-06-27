@@ -2,7 +2,7 @@
 and the flag-on policy adds exactly the entity-encoder weights."""
 
 import sys
-sys.argv = ["puffer", "train", "osrs_colosseum"]
+sys.argv = ["puffer"]
 
 import pufferlib.pufferl as pufferl
 from pufferlib import _C
