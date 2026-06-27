@@ -570,8 +570,305 @@ static void* nmmo3_encoder_create_weights(void* self) {
 static void nmmo3_encoder_free_weights(void* weights) { free(weights); }
 static void nmmo3_encoder_free_activations(void* activations) { free(activations); }
 
+// ---- Colosseum entity encoder ----
+//
+// Mirrors pufferlib/models.py ColosseumEntityEncoder: output = global(flat obs) +
+// masked-maxpool over a shared 2-layer MLP applied to the COLO_ENT_NUM_NPCS NPC
+// records. Every Linear is bias-free (the native backend convention) and GELU uses
+// the tanh approximation so the CUDA, puffernet, and torch paths stay bit-comparable.
+//
+// Obs layout (verified against encounter_colosseum_obs_mask.inc): the NPC block is
+// COLO_ENT_NUM_NPCS contiguous records of COLO_ENT_FEATS floats starting at
+// COLO_ENT_NPC_START. Each record begins with a COLO_ENT_TYPE_ONEHOT-wide NPC-type
+// one-hot, so an active record has type one-hot sum > 0 and an inactive record is
+// fully zero (col_write_obs_ctx memsets the obs before writing).
+static constexpr int COLO_ENT_NPC_START   = 1058;
+static constexpr int COLO_ENT_NUM_NPCS    = 24;
+static constexpr int COLO_ENT_FEATS       = 43;
+static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
+static constexpr int COLO_ENT_BOTTLENECK  = 16;
+static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;
+
+struct ColosseumEntityEncoderWeights {
+    PrecisionTensor global_w;    // [hidden, obs]
+    PrecisionTensor entity_l1_w; // [16, 43]
+    PrecisionTensor entity_l2_w; // [hidden, 16]
+    int obs_size, hidden;
+};
+
+struct ColosseumEntityEncoderActivations {
+    PrecisionTensor out;          // [B, hidden] = global + pooled
+    PrecisionTensor saved_obs;    // [B, obs] (for global wgrad)
+    PrecisionTensor npc_flat;     // [B*24, 43] contiguous NPC records (for l1 wgrad)
+    PrecisionTensor entity_z1;    // [B*24, 16] pre-GELU (for GELU' in backward)
+    PrecisionTensor entity_h1;    // [B*24, 16] post-GELU (for l2 wgrad)
+    PrecisionTensor entity_e;     // [B*24, hidden] per-NPC embeddings
+    PrecisionTensor grad_e;       // [B*24, hidden] maxpool backward scratch
+    PrecisionTensor grad_z1;      // [B*24, 16] backward scratch
+    IntTensor pool_argmax;        // [B, hidden] winning NPC index per channel (-1 if none)
+    PrecisionTensor global_wgrad;    // [hidden, obs]
+    PrecisionTensor entity_l1_wgrad; // [16, 43]
+    PrecisionTensor entity_l2_wgrad; // [hidden, 16]
+};
+
+// Gather the strided NPC block out of the flat obs into a tight [B*24, 43] buffer.
+__global__ void colo_ent_gather_npcs(
+    precision_t* __restrict__ npc_flat, const precision_t* __restrict__ obs,
+    int B, int obs_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * COLO_ENT_NPC_BLOCK;
+    if (idx >= total) return;
+    int b = idx / COLO_ENT_NPC_BLOCK;
+    int off = idx % COLO_ENT_NPC_BLOCK;
+    npc_flat[idx] = obs[(int64_t)b * obs_size + COLO_ENT_NPC_START + off];
+}
+
+// out[i] = 0.5*x*(1 + tanh(0.7978845608*(x + 0.044715*x^3)))  (tanh GELU)
+__device__ __forceinline__ float colo_ent_gelu_fwd(float x) {
+    float inner = 0.7978845608028654f * (x + 0.044715f * x * x * x);
+    return 0.5f * x * (1.0f + tanhf(inner));
+}
+
+// d/dx of the tanh GELU above. Matches the forward exactly so finite-difference holds.
+__device__ __forceinline__ float colo_ent_gelu_grad(float x) {
+    float x3 = x * x * x;
+    float inner = 0.7978845608028654f * (x + 0.044715f * x3);
+    float t = tanhf(inner);
+    float dinner = 0.7978845608028654f * (1.0f + 3.0f * 0.044715f * x * x);
+    return 0.5f * (1.0f + t) + 0.5f * x * (1.0f - t * t) * dinner;
+}
+
+__global__ void colo_ent_gelu_fwd_kernel(
+    precision_t* __restrict__ h1, const precision_t* __restrict__ z1, int total) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+    h1[idx] = from_float(colo_ent_gelu_fwd(to_float(z1[idx])));
+}
+
+// grad_z1 = grad_h1 * GELU'(z1), in place over grad_z1 (which holds grad_h1 on entry).
+__global__ void colo_ent_gelu_bwd_kernel(
+    precision_t* __restrict__ grad_z1, const precision_t* __restrict__ z1, int total) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+    grad_z1[idx] = from_float(to_float(grad_z1[idx]) * colo_ent_gelu_grad(to_float(z1[idx])));
+}
+
+// Masked maxpool over the 24 NPC records, per (batch, channel). Inactive records
+// (type one-hot sum == 0) are skipped. An all-inactive row writes 0 and argmax -1.
+// Ties resolve to the lowest NPC index to match torch.max's argmax tie-break.
+__global__ void colo_ent_masked_maxpool(
+    precision_t* __restrict__ pooled, int* __restrict__ argmax,
+    const precision_t* __restrict__ entity_e, const precision_t* __restrict__ npc_flat,
+    int B, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * hidden) return;
+    int b = idx / hidden;
+    int c = idx % hidden;
+
+    float best = -CUDART_INF_F;
+    int best_n = -1;
+    for (int n = 0; n < COLO_ENT_NUM_NPCS; n++) {
+        const precision_t* rec = npc_flat + ((int64_t)b * COLO_ENT_NUM_NPCS + n) * COLO_ENT_FEATS;
+        float type_sum = 0.0f;
+        for (int t = 0; t < COLO_ENT_TYPE_ONEHOT; t++) type_sum += to_float(rec[t]);
+        if (type_sum <= 0.0f) continue;
+        float v = to_float(entity_e[((int64_t)b * COLO_ENT_NUM_NPCS + n) * hidden + c]);
+        if (v > best) { best = v; best_n = n; }
+    }
+    pooled[idx] = from_float(best_n < 0 ? 0.0f : best);
+    argmax[idx] = best_n;
+}
+
+__global__ void colo_ent_add_kernel(
+    precision_t* __restrict__ out, const precision_t* __restrict__ pooled, int total) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+    out[idx] = from_float(to_float(out[idx]) + to_float(pooled[idx]));
+}
+
+// Route the upstream grad to the winning NPC per (batch, channel); zero elsewhere.
+__global__ void colo_ent_maxpool_backward(
+    precision_t* __restrict__ grad_e, const precision_t* __restrict__ grad,
+    const int* __restrict__ argmax, int B, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * hidden) return;
+    int b = idx / hidden;
+    int c = idx % hidden;
+    int n = argmax[idx];
+    if (n < 0) return;
+    grad_e[((int64_t)b * COLO_ENT_NUM_NPCS + n) * hidden + c] = grad[idx];
+}
+
+static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, PrecisionTensor input, cudaStream_t stream) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    ColosseumEntityEncoderActivations* a = (ColosseumEntityEncoderActivations*)activations;
+    int B = input.shape[0];
+    int H = ew->hidden;
+    int NB = B * COLO_ENT_NUM_NPCS;
+
+    if (a->saved_obs.data) puf_copy(&a->saved_obs, &input, stream);
+
+    puf_mm(&input, &ew->global_w, &a->out, stream);
+
+    colo_ent_gather_npcs<<<grid_size(B * COLO_ENT_NPC_BLOCK), BLOCK_SIZE, 0, stream>>>(
+        a->npc_flat.data, input.data, B, ew->obs_size);
+
+    PrecisionTensor npc2d = {.data = a->npc_flat.data, .shape = {NB, COLO_ENT_FEATS}};
+    puf_mm(&npc2d, &ew->entity_l1_w, &a->entity_z1, stream);
+    colo_ent_gelu_fwd_kernel<<<grid_size(NB * COLO_ENT_BOTTLENECK), BLOCK_SIZE, 0, stream>>>(
+        a->entity_h1.data, a->entity_z1.data, NB * COLO_ENT_BOTTLENECK);
+    puf_mm(&a->entity_h1, &ew->entity_l2_w, &a->entity_e, stream);
+
+    PrecisionTensor pooled = {.data = a->grad_e.data, .shape = {B, H}};
+    colo_ent_masked_maxpool<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+        pooled.data, a->pool_argmax.data, a->entity_e.data, a->npc_flat.data, B, H);
+    colo_ent_add_kernel<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+        a->out.data, pooled.data, B * H);
+    return a->out;
+}
+
+static void colo_entity_encoder_backward(void* w, void* activations, PrecisionTensor grad, cudaStream_t stream) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    ColosseumEntityEncoderActivations* a = (ColosseumEntityEncoderActivations*)activations;
+    int B = grad.shape[0];
+    int H = ew->hidden;
+    int NB = B * COLO_ENT_NUM_NPCS;
+
+    puf_mm_tn(&grad, &a->saved_obs, &a->global_wgrad, stream);
+
+    cudaMemsetAsync(a->grad_e.data, 0, (int64_t)NB * H * sizeof(precision_t), stream);
+    colo_ent_maxpool_backward<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+        a->grad_e.data, grad.data, a->pool_argmax.data, B, H);
+
+    puf_mm_tn(&a->grad_e, &a->entity_h1, &a->entity_l2_wgrad, stream);
+    puf_mm_nn(&a->grad_e, &ew->entity_l2_w, &a->grad_z1, stream);
+    colo_ent_gelu_bwd_kernel<<<grid_size(NB * COLO_ENT_BOTTLENECK), BLOCK_SIZE, 0, stream>>>(
+        a->grad_z1.data, a->entity_z1.data, NB * COLO_ENT_BOTTLENECK);
+
+    PrecisionTensor npc2d = {.data = a->npc_flat.data, .shape = {NB, COLO_ENT_FEATS}};
+    puf_mm_tn(&a->grad_z1, &npc2d, &a->entity_l1_wgrad, stream);
+}
+
+static void colo_entity_encoder_init_weights(void* w, uint64_t* seed, cudaStream_t stream) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    auto init2d = [&](PrecisionTensor& t, int rows, int cols) {
+        PrecisionTensor wt = {.data = t.data, .shape = {rows, cols}};
+        puf_kaiming_init(&wt, std::sqrt(2.0f), (*seed)++, stream);
+    };
+    init2d(ew->global_w, ew->hidden, ew->obs_size);
+    init2d(ew->entity_l1_w, COLO_ENT_BOTTLENECK, COLO_ENT_FEATS);
+    init2d(ew->entity_l2_w, ew->hidden, COLO_ENT_BOTTLENECK);
+}
+
+// Boot-time guard: muon and the .bin layout pack params with no padding, but
+// alloc_create rounds each tensor up to 16 bytes. They agree only if every param
+// tensor's byte size is a multiple of 16, i.e. (bf16) numel % 8 == 0.
+static void colo_entity_assert_aligned(int64_t numel, const char* name) {
+    if (numel % 8 != 0) {
+        fprintf(stderr, "colosseum entity encoder: %s numel %lld not a multiple of 8; "
+            "bf16 packing would corrupt weights\n", name, (long long)numel);
+        abort();
+    }
+}
+
+static void colo_entity_encoder_reg_params(void* w, Allocator* alloc) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    ew->global_w    = {.shape = {ew->hidden, ew->obs_size}};
+    ew->entity_l1_w = {.shape = {COLO_ENT_BOTTLENECK, COLO_ENT_FEATS}};
+    ew->entity_l2_w = {.shape = {ew->hidden, COLO_ENT_BOTTLENECK}};
+    colo_entity_assert_aligned(numel(ew->global_w.shape), "global_w");
+    colo_entity_assert_aligned(numel(ew->entity_l1_w.shape), "entity_l1_w");
+    colo_entity_assert_aligned(numel(ew->entity_l2_w.shape), "entity_l2_w");
+    alloc_register(alloc, &ew->global_w);
+    alloc_register(alloc, &ew->entity_l1_w);
+    alloc_register(alloc, &ew->entity_l2_w);
+}
+
+static void colo_entity_encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    ColosseumEntityEncoderActivations* a = (ColosseumEntityEncoderActivations*)activations;
+    int H = ew->hidden;
+    int NB = B_TT * COLO_ENT_NUM_NPCS;
+    *a = {};
+    a->out        = {.shape = {B_TT, H}};
+    a->saved_obs  = {.shape = {B_TT, ew->obs_size}};
+    a->npc_flat   = {.shape = {NB, COLO_ENT_FEATS}};
+    a->entity_z1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->entity_h1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->entity_e   = {.shape = {NB, H}};
+    a->grad_e     = {.shape = {NB, H}};
+    a->grad_z1    = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->pool_argmax = {.shape = {B_TT, H}};
+    alloc_register(acts, &a->out);
+    alloc_register(acts, &a->saved_obs);
+    alloc_register(acts, &a->npc_flat);
+    alloc_register(acts, &a->entity_z1);
+    alloc_register(acts, &a->entity_h1);
+    alloc_register(acts, &a->entity_e);
+    alloc_register(acts, &a->grad_e);
+    alloc_register(acts, &a->grad_z1);
+    alloc_register(acts, &a->pool_argmax);
+    // Grad scratch order MUST match reg_params (global, l1, l2) so muon's shared
+    // offset walk pairs each grad with its weight.
+    a->global_wgrad    = {.shape = {H, ew->obs_size}};
+    a->entity_l1_wgrad = {.shape = {COLO_ENT_BOTTLENECK, COLO_ENT_FEATS}};
+    a->entity_l2_wgrad = {.shape = {H, COLO_ENT_BOTTLENECK}};
+    alloc_register(grads, &a->global_wgrad);
+    alloc_register(grads, &a->entity_l1_wgrad);
+    alloc_register(grads, &a->entity_l2_wgrad);
+}
+
+static void colo_entity_encoder_reg_rollout(void* w, void* activations, Allocator* alloc, int B) {
+    ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
+    ColosseumEntityEncoderActivations* a = (ColosseumEntityEncoderActivations*)activations;
+    int H = ew->hidden;
+    int NB = B * COLO_ENT_NUM_NPCS;
+    a->out        = {.shape = {B, H}};
+    a->npc_flat   = {.shape = {NB, COLO_ENT_FEATS}};
+    a->entity_z1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->entity_h1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->entity_e   = {.shape = {NB, H}};
+    a->grad_e     = {.shape = {NB, H}};
+    a->pool_argmax = {.shape = {B, H}};
+    alloc_register(alloc, &a->out);
+    alloc_register(alloc, &a->npc_flat);
+    alloc_register(alloc, &a->entity_z1);
+    alloc_register(alloc, &a->entity_h1);
+    alloc_register(alloc, &a->entity_e);
+    alloc_register(alloc, &a->grad_e);
+    alloc_register(alloc, &a->pool_argmax);
+}
+
+static void* colo_entity_encoder_create_weights(void* self) {
+    Encoder* e = (Encoder*)self;
+    ColosseumEntityEncoderWeights* ew =
+        (ColosseumEntityEncoderWeights*)calloc(1, sizeof(ColosseumEntityEncoderWeights));
+    ew->obs_size = e->in_dim;
+    ew->hidden = e->out_dim;
+    return ew;
+}
+static void colo_entity_encoder_free_weights(void* weights) { free(weights); }
+static void colo_entity_encoder_free_activations(void* activations) { free(activations); }
+
 // Override encoder vtable for known ocean environments. No-op for unknown envs.
-static void create_custom_encoder(const std::string& env_name, Encoder* enc) {
+// entity_encoder selects the colosseum NPC-pool encoder over the default Linear.
+static void create_custom_encoder(const std::string& env_name, Encoder* enc, bool entity_encoder) {
+    if (env_name == "osrs_colosseum" && entity_encoder) {
+        *enc = Encoder{
+            .forward = colo_entity_encoder_forward,
+            .backward = colo_entity_encoder_backward,
+            .init_weights = colo_entity_encoder_init_weights,
+            .reg_params = colo_entity_encoder_reg_params,
+            .reg_train = colo_entity_encoder_reg_train,
+            .reg_rollout = colo_entity_encoder_reg_rollout,
+            .create_weights = colo_entity_encoder_create_weights,
+            .free_weights = colo_entity_encoder_free_weights,
+            .free_activations = colo_entity_encoder_free_activations,
+            .in_dim = enc->in_dim, .out_dim = enc->out_dim,
+            .activation_size = sizeof(ColosseumEntityEncoderActivations),
+        };
+        return;
+    }
     if (env_name == "nmmo3") {
         *enc = Encoder{
             .forward = nmmo3_encoder_forward,

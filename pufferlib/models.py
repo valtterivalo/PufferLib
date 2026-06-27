@@ -61,10 +61,13 @@ class ColosseumEntityEncoder(nn.Module):
     """Flat baseline + NPC entity-pool augmentation for the OSRS Colosseum obs.
 
     Joseph Suarez's entity-encoder recipe adapted to the colosseum's per-NPC block.
-    The global path is exactly DefaultEncoder (Linear over the full flat obs), so
-    this module is a clean A/B: output = global(flat) + entity_pool(NPCs), isolating
-    the entity-pool contribution. Downstream mixing happens in the MinGRU net, so the
-    sum keeps hidden_size and leaves the recurrent input dim unchanged.
+    The global path is a bias-free Linear over the full flat obs (matching the native
+    backend's bias-free Linear encoder), so this module is a clean A/B:
+    output = global(flat) + entity_pool(NPCs), isolating the entity-pool contribution.
+    All Linears are bias=False and GELU uses the tanh approximation to stay
+    bit-comparable with the native CUDA + puffernet inference paths. Downstream mixing
+    happens in the MinGRU net, so the sum keeps hidden_size and leaves the recurrent
+    input dim unchanged.
 
     Obs layout verified from ocean/osrs/encounters/colosseum/encounter_colosseum_obs_mask.inc
     and encounter_colosseum_model.inc. The NPC block is COLO_OBS_NPCS=24 contiguous
@@ -92,11 +95,11 @@ class ColosseumEntityEncoder(nn.Module):
             f'obs_size {obs_size} too small for colosseum NPC block ending at {npc_end}'
         )
 
-        self.global_encoder = nn.Linear(obs_size, hidden_size)
+        self.global_encoder = nn.Linear(obs_size, hidden_size, bias=False)
         self.entity_encoder = nn.Sequential(
-            nn.Linear(self.FEATURES_PER_NPC, 16),
-            nn.GELU(),
-            nn.Linear(16, hidden_size),
+            nn.Linear(self.FEATURES_PER_NPC, 16, bias=False),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(16, hidden_size, bias=False),
         )
 
     def forward(self, observations):

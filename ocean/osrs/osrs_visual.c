@@ -590,6 +590,7 @@ typedef enum {
 typedef struct {
     int input_size;
     int decoder_value_heads;
+    int entity_encoder;
 } VisualPolicyModelShape;
 
 typedef struct {
@@ -633,13 +634,19 @@ static int visual_policy_is_continuous(
     return 1;
 }
 
+/* entity-encoder shared-MLP weights added on top of the global Linear (which the
+   encoder term already accounts for): entity_l1 (16x43) + entity_l2 (hidden x 16). */
+#define VISUAL_POLICY_ENTITY_FEATS      43
+#define VISUAL_POLICY_ENTITY_BOTTLENECK 16
+
 static int64_t visual_policy_expected_weight_count(
     int input_size,
     int hidden_size,
     int num_layers,
     const int* action_dims,
     int num_action_heads,
-    int decoder_value_heads
+    int decoder_value_heads,
+    int entity_encoder
 ) {
     int action_sum = 0;
     for (int h = 0; h < num_action_heads; h++) {
@@ -648,6 +655,10 @@ static int64_t visual_policy_expected_weight_count(
 
     int64_t total = 0;
     total += (int64_t)hidden_size * input_size;
+    if (entity_encoder) {
+        total += (int64_t)VISUAL_POLICY_ENTITY_BOTTLENECK * VISUAL_POLICY_ENTITY_FEATS;
+        total += (int64_t)hidden_size * VISUAL_POLICY_ENTITY_BOTTLENECK;
+    }
     total += (int64_t)(action_sum + decoder_value_heads) * hidden_size;
     if (visual_policy_is_continuous(action_dims, num_action_heads)) {
         total += num_action_heads;
@@ -664,48 +675,50 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     const VisualPolicy* policy,
     const EncounterDef* edef,
     int hidden_size,
-    int num_layers
+    int num_layers,
+    int entity_encoder
 ) {
     int obs_input_size = policy->obs_size;
     int full_input_size = policy->obs_size + policy->mask_size;
     int64_t obs_value_expected = visual_policy_expected_weight_count(
         obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1);
+        policy->num_action_heads, 1, entity_encoder);
     int64_t full_value_expected = visual_policy_expected_weight_count(
         full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1);
+        policy->num_action_heads, 1, entity_encoder);
     int64_t obs_policy_expected = visual_policy_expected_weight_count(
         obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0);
+        policy->num_action_heads, 0, entity_encoder);
     int64_t full_policy_expected = visual_policy_expected_weight_count(
         full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0);
+        policy->num_action_heads, 0, entity_encoder);
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
 
     VisualPolicyModelShape match = {0};
     int matches = 0;
     if (obs_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 1};
+        match = (VisualPolicyModelShape){obs_input_size, 1, entity_encoder};
         matches++;
     }
     if (full_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 1};
+        match = (VisualPolicyModelShape){full_input_size, 1, entity_encoder};
         matches++;
     }
     if (obs_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 0};
+        match = (VisualPolicyModelShape){obs_input_size, 0, entity_encoder};
         matches++;
     }
     if (full_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 0};
+        match = (VisualPolicyModelShape){full_input_size, 0, entity_encoder};
         matches++;
     }
 
     if (matches != 1) {
         fprintf(stderr,
-            "policy: %s model shape mismatch file=%lld floats obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
+            "policy: %s model shape mismatch file=%lld floats entity=%d obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
             edef->name,
             (long long)file_weights,
+            entity_encoder,
             (long long)obs_value_expected,
             (long long)full_value_expected,
             (long long)obs_policy_expected,
@@ -722,7 +735,8 @@ static PufferNet* visual_policy_make_puffernet(
     int num_layers,
     int action_dims[],
     int num_action_heads,
-    int decoder_value_heads
+    int decoder_value_heads,
+    int entity_encoder
 ) {
     PufferNet* net = (PufferNet*)calloc(1, sizeof(PufferNet));
     if (!net) {
@@ -748,7 +762,11 @@ static PufferNet* visual_policy_make_puffernet(
 
     net->is_continuous = is_continuous;
     net->num_actions = num_action_heads;
-    net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
+    if (entity_encoder) {
+        net->entity_encoder = make_colosseum_entity_encoder(weights, 1, input_dim, hidden_dim);
+    } else {
+        net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
+    }
     net->decoder = make_linear(weights, 1, hidden_dim, action_sum + decoder_value_heads);
     if (net->is_continuous) {
         net->log_std = get_weights(weights, num_action_heads);
@@ -771,6 +789,7 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
 
 static int g_cli_hidden_size = -1;
 static int g_cli_num_layers = -1;
+static int g_cli_entity_encoder = 0;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
@@ -778,7 +797,8 @@ static void visual_policy_init(
     VisualPolicyMode mode,
     uint32_t seed,
     int cli_hidden_size,
-    int cli_num_layers
+    int cli_num_layers,
+    int cli_entity_encoder
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
@@ -816,7 +836,7 @@ static void visual_policy_init(
     if (cli_hidden_size > 0) hidden_size = cli_hidden_size;
     if (cli_num_layers > 0) num_layers = cli_num_layers;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
-        policy, edef, hidden_size, num_layers);
+        policy, edef, hidden_size, num_layers, cli_entity_encoder);
     policy->net = visual_policy_make_puffernet(
         policy->weights,
         model_shape.input_size,
@@ -824,7 +844,8 @@ static void visual_policy_init(
         num_layers,
         policy->action_dims,
         policy->num_action_heads,
-        model_shape.decoder_value_heads);
+        model_shape.decoder_value_heads,
+        model_shape.entity_encoder);
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
     if (policy->weights->idx != file_weights) {
         fprintf(stderr,
@@ -911,8 +932,15 @@ static void visual_policy_actions(
     if (!policy || !policy->enabled) return;
     edef->write_obs(state, context, policy->obs);
     edef->write_mask(state, context, policy->obs + policy->obs_size);
-    linear(policy->net->encoder, policy->obs);
-    mingru(policy->net->mingru, policy->net->encoder->output);
+    float* encoded;
+    if (policy->net->entity_encoder) {
+        colosseum_entity_encoder(policy->net->entity_encoder, policy->obs);
+        encoded = policy->net->entity_encoder->output;
+    } else {
+        linear(policy->net->encoder, policy->obs);
+        encoded = policy->net->encoder->output;
+    }
+    mingru(policy->net->mingru, encoded);
     linear(policy->net->decoder, policy->net->mingru->output);
 
     const float* logits = policy->net->decoder->output;
@@ -1181,7 +1209,7 @@ static void run_metrics(
 
     VisualPolicy policy;
     visual_policy_init(&policy, edef, model_path, policy_mode, policy_seed,
-                       g_cli_hidden_size, g_cli_num_layers);
+                       g_cli_hidden_size, g_cli_num_layers, g_cli_entity_encoder);
     if (!policy.enabled) {
         fprintf(stderr, "metrics mode: failed to load model (pass --model <path>)\n");
         return;
@@ -1570,7 +1598,8 @@ static void run_visual(
         policy_mode,
         policy_seed,
         g_cli_hidden_size,
-        g_cli_num_layers);
+        g_cli_num_layers,
+        g_cli_entity_encoder);
 
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
@@ -1652,6 +1681,8 @@ int main(int argc, char** argv) {
             g_cli_hidden_size = atoi(argv[++i]);
         else if (strcmp(argv[i], "--num-layers") == 0 && i + 1 < argc)
             g_cli_num_layers = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--entity-encoder") == 0)
+            g_cli_entity_encoder = 1;
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)

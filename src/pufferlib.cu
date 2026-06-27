@@ -255,6 +255,7 @@ typedef struct {
     int num_atns;
     int hidden_size;
     int num_layers;
+    int entity_encoder;
     // Learning rate
     float lr;
     float min_lr_ratio;
@@ -1602,7 +1603,7 @@ void train_impl(PuffeRL& pufferl) {
 // has no heap state so this returns by value; callers store it wherever.
 static Policy build_policy(const char* env_name, int input_size, int hidden_size,
                            int num_layers, int decoder_output_size, int act_n,
-                           bool is_continuous, int horizon) {
+                           bool is_continuous, int horizon, bool entity_encoder) {
     Encoder encoder = {
         .forward = encoder_forward,
         .backward = encoder_backward,
@@ -1616,7 +1617,7 @@ static Policy build_policy(const char* env_name, int input_size, int hidden_size
         .in_dim = input_size, .out_dim = hidden_size,
         .activation_size = sizeof(EncoderActivations),
     };
-    create_custom_encoder(env_name, &encoder);
+    create_custom_encoder(env_name, &encoder, entity_encoder);
     Decoder decoder = {
         .forward = decoder_forward,
         .backward = decoder_backward,
@@ -1664,7 +1665,8 @@ static void weight_bank_create_for_pufferl(WeightBank* bank, PuffeRL* pufferl,
     for (int i = 0; i < num_action_heads; i++) act_n += raw_act_sizes[i];
     int decoder_output_size = pufferl->is_continuous ? num_action_heads : act_n;
     bank->policy = build_policy(pufferl->env_name.c_str(), input_size, hidden_size,
-        num_layers, decoder_output_size, act_n, pufferl->is_continuous, pufferl->hypers.horizon);
+        num_layers, decoder_output_size, act_n, pufferl->is_continuous,
+        pufferl->hypers.horizon, pufferl->hypers.entity_encoder);
     bank->hidden_size = hidden_size;
     bank->num_layers = num_layers;
 
@@ -1925,7 +1927,8 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         : 0;
 
     pufferl->policy = build_policy(env_name.c_str(), input_size, hidden_size,
-        num_layers, decoder_output_size, act_n, is_continuous, hypers.horizon);
+        num_layers, decoder_output_size, act_n, is_continuous, hypers.horizon,
+        hypers.entity_encoder);
 
     // Create and allocate params
     Allocator* params = &pufferl->params_alloc;

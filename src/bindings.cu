@@ -298,6 +298,14 @@ double get_config(py::dict& kwargs, const char* key) {
     }
 }
 
+// Tolerant variant for optional keys: returns default_value when the key is absent.
+// Keeps configs that predate an opt-in flag working (and byte-identical when the
+// default matches the old behavior). A present-but-unparseable value still throws.
+double get_config_or(py::dict& kwargs, const char* key, double default_value) {
+    if (!kwargs.contains(key)) return default_value;
+    return get_config(kwargs, key);
+}
+
 Dict* py_dict_to_c_dict(py::dict py_dict) {
     Dict* c_dict = create_dict(py_dict.size());
     for (auto item : py_dict) {
@@ -413,6 +421,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // Model architecture (num_atns computed from env in C++)
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
+    hypers.entity_encoder = (int)get_config_or(policy_kwargs, "entity_encoder", 0.0);
     // Learning rate
     hypers.lr = get_config(train_kwargs, "learning_rate");
     hypers.min_lr_ratio = get_config(train_kwargs, "min_lr_ratio");
