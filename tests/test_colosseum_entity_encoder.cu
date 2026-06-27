@@ -5,6 +5,7 @@
 //   -I src -lcublas -lcudnn -lcurand -Xcompiler -fPIC -O2
 
 #define PRECISION_FLOAT
+#include <string>
 #include "../src/models.cu"
 #include "../src/ocean.cu"
 
