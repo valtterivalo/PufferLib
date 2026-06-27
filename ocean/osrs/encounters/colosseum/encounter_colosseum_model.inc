@@ -1713,6 +1713,15 @@ typedef struct {
                                            coeff * max(0, distinct_live_threat_styles - 1).
                                            Pays positioning to keep <=1 style live
                                            (de-confliction / off-ticking; default 0). */
+    float argmax_gear_reward_coeff;    /* per attack: coeff * (actual-equipped DPT /
+                                           best-gear DPT for the argmax style vs the
+                                           target), clamped [0,1]. Rewards wearing the
+                                           optimal full kit for the target, not just the
+                                           right weapon style (default 0, sweepable). */
+    float offensive_boost_reward_coeff; /* per attack: coeff if the attacking style's
+                                           offensive stat is boosted above base (a combat/
+                                           ranging/magic potion is active); rewards keeping
+                                           the boost up (default 0, sweepable). */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;

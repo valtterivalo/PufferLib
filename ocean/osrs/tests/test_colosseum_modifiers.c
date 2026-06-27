@@ -7038,6 +7038,57 @@ static void test_modifier_draft_forces_pick(void) {
     CHECK("no-op valid again once no draft is pending", mask[base] == 1.0f);
 }
 
+/* A + F1 reward-lever signals are live (not dead): gear-quality responds to the
+   equipped armour and the boost signal fires only when the attacking style's stat is
+   above base. The coeffs default to 0 so these add nothing unless a sweep turns them
+   on. Guards encounter_colosseum_reward_step.inc. */
+static void test_gear_and_boost_reward_signals(void) {
+    printf("test_gear_and_boost_reward_signals\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+    int slot = -1;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (col_npc_is_live_target(&s.npcs[i]) && !col_type_is_hazard_entity(s.npcs[i].type)) {
+            slot = i;
+            break;
+        }
+    CHECK("a live target exists at reset", slot >= 0);
+
+    s.tick_scratch.player_attacked = 1;
+    s.player_attack_npc_idx = slot;
+
+    /* gear-quality fires and is normalised to [0,1] when attacking a live target. */
+    float q_attack = col_attacked_gear_quality_ratio(&s);
+    CHECK("gear-quality signal fires in [0,1] when attacking", q_attack >= 0.0f && q_attack <= 1.0f);
+
+    /* equipping the oracle's argmax-best kit for the target drives the ratio to ~1. */
+    const ColoNPC* tnpc = &s.npcs[slot];
+    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(&s);
+    int argmax_set = 0;
+    float argmax_dpt = -1.0f;
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
+        if (best[set][tnpc->type].dpt > argmax_dpt) {
+            argmax_dpt = best[set][tnpc->type].dpt;
+            argmax_set = set;
+        }
+    memcpy(s.player.equipped, best[argmax_set][tnpc->type].setup, sizeof(s.player.equipped));
+    CHECK("oracle's argmax-best kit yields ~max gear quality",
+          col_attacked_gear_quality_ratio(&s) > 0.99f);
+
+    s.player_attack_style_id = ATTACK_STYLE_RANGED;
+    s.player.current_ranged = s.player.base_ranged;
+    CHECK("no boost reward when ranged is at base",
+          col_attacked_with_offensive_boost(&s) == 0);
+    s.player.current_ranged = s.player.base_ranged + 5;
+    CHECK("boost reward when ranged is above base",
+          col_attacked_with_offensive_boost(&s) == 1);
+
+    s.tick_scratch.player_attacked = 0;
+    CHECK("gear-quality is the no-attack sentinel", col_attacked_gear_quality_ratio(&s) < 0.0f);
+    CHECK("boost signal is the no-attack sentinel", col_attacked_with_offensive_boost(&s) < 0);
+}
+
 int main(void) {
     test_stage3_t1_inventory_ranged_weapon_swap();
     test_stage3_t1_inventory_weapon_slot_last_click_wins();
@@ -7153,6 +7204,7 @@ int main(void) {
     test_render_bridge_npc_debug_and_warband_motion();
     test_reach1_cardinal_adjacency_vs_3x3();
     test_modifier_draft_forces_pick();
+    test_gear_and_boost_reward_signals();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

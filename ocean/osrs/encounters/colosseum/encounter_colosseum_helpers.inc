@@ -351,6 +351,8 @@ static ColConfig col_default_config(void) {
         .prayer_correct_reward = 0.0f,
         .offpray_damage_penalty_coeff = 0.0f,
         .multistyle_exposure_penalty_coeff = 0.0f,
+        .argmax_gear_reward_coeff = 0.0f,
+        .offensive_boost_reward_coeff = 0.0f,
         .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,

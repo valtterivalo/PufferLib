@@ -381,6 +381,8 @@ void my_init(Env* env, Dict* kwargs) {
         "prayer_correct_reward",
         "offpray_damage_penalty_coeff",
         "multistyle_exposure_penalty_coeff",
+        "argmax_gear_reward_coeff",
+        "offensive_boost_reward_coeff",
         "avoided_damage_coeff",
         "death_penalty_coeff",
         "timeout_penalty",

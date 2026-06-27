@@ -10,6 +10,14 @@
  * ordering so gameplay can be filled in without re-plumbing.
  */
 
+/* best-gear oracle, defined later in encounter_colosseum_obs_mask.inc (it lives with
+   the obs DPT machinery, included after this file); the gear-quality reward lever
+   needs it, so forward-declare here. */
+static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES];
+static float col_expected_dpt_for_equipment_vs_npc(
+    ColosseumState* s, const uint8_t equipment[NUM_GEAR_SLOTS],
+    const ColoNPC* npc, int use_style_matched_prayer);
+
 static float col_terminal_death_reward(const ColosseumState* s, const ColosseumContext* ctx) {
     (void)s;
     return -ctx->config.death_penalty_coeff;
@@ -139,6 +147,61 @@ static float col_rewardable_avoided_damage(ColosseumState* s) {
     return raw_avoided < progress_budget ? raw_avoided : progress_budget;
 }
 
+/* A: gear-quality signal for the argmax-gear reward lever. The player's ACTUAL
+   equipped DPT vs the attacked target, as a fraction [0,1] of the best-gear DPT for
+   the argmax style. 1.0 = wearing the optimal full kit; lower when off-style armour
+   is left equipped (the watched policy stripped its own melee gear). Only computed
+   when the lever is on. Returns -1 if no live attack target this tick. */
+static float col_attacked_gear_quality_ratio(ColosseumState* s) {
+    if (!s->tick_scratch.player_attacked) return -1.0f;
+    int npc_slot = s->player_attack_npc_idx;
+    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return -1.0f;
+    const ColoNPC* npc = &s->npcs[npc_slot];
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return -1.0f;
+    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
+    float best_dpt = 0.0f;
+    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
+        float d = best[set][npc->type].dpt;
+        if (d > best_dpt) best_dpt = d;
+    }
+    if (best_dpt <= 0.0f) return -1.0f;
+    /* match the oracle's style-matched-prayer assumption (the best-gear table uses it)
+       so the ratio isolates GEAR quality and is not diluted by the live offensive
+       prayer. use_style_matched_prayer only selects which prayer the stat math assumes;
+       it does not mutate player state. */
+    float actual = col_expected_dpt_for_equipment_vs_npc(s, s->player.equipped, npc, 1);
+    float ratio = actual / best_dpt;
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+    return ratio;
+}
+
+/* F1: 1 if the style the player just attacked with has its offensive stat boosted
+   above base (a combat / ranging / magic potion is active), else 0; -1 if no live
+   attack target. For the offensive-boost-usage reward lever. */
+static int col_attacked_with_offensive_boost(ColosseumState* s) {
+    if (!s->tick_scratch.player_attacked) return -1;
+    int npc_slot = s->player_attack_npc_idx;
+    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return -1;
+    const ColoNPC* npc = &s->npcs[npc_slot];
+    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
+        return -1;
+    AttackStyle style = (AttackStyle)s->player_attack_style_id;
+    int cur_att = 0, cur_str = 0;
+    col_current_style_levels(&s->player, style, &cur_att, &cur_str);
+    int base_att, base_str;
+    if (style == ATTACK_STYLE_RANGED) {
+        base_att = base_str = s->player.base_ranged;
+    } else if (style == ATTACK_STYLE_MAGIC) {
+        base_att = base_str = s->player.base_magic;
+    } else {
+        base_att = s->player.base_attack;
+        base_str = s->player.base_strength;
+    }
+    return (cur_att > base_att || cur_str > base_str) ? 1 : 0;
+}
+
 /**
  * Bank this tick's accumulators into episode totals and return the shaped per-tick
  * reward: small dense damage + prayer-correct terms, plus a boss_phase_bonus for
@@ -166,6 +229,15 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
         int excess_styles = col_distinct_live_threat_styles(s) - 1;
         if (excess_styles > 0)
             reward -= cfg->multistyle_exposure_penalty_coeff * (float)excess_styles;
+    }
+    if (cfg->argmax_gear_reward_coeff != 0.0f) {
+        float gear_quality = col_attacked_gear_quality_ratio(s);
+        if (gear_quality >= 0.0f)
+            reward += cfg->argmax_gear_reward_coeff * gear_quality;
+    }
+    if (cfg->offensive_boost_reward_coeff != 0.0f) {
+        if (col_attacked_with_offensive_boost(s) > 0)
+            reward += cfg->offensive_boost_reward_coeff;
     }
     float rewardable_avoided = col_rewardable_avoided_damage(s);
     reward += cfg->avoided_damage_coeff * rewardable_avoided;
