@@ -34,7 +34,7 @@ BOTTLENECK = 16
 def build():
     cmd = [
         "nvcc", "-shared", "-o", SO, SRC,
-        "-I", os.path.join(os.path.dirname(__file__), "..", "pufferlib", "src"),
+        "-I", os.path.join(os.path.dirname(__file__), "..", "src"),
         "-lcublas", "-lcudnn", "-lcurand",
         "--compiler-options", "-fPIC", "-Xcompiler", "-O2",
     ]

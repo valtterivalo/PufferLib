@@ -2,11 +2,11 @@
 // real implementation. Built --float (-DPRECISION_FLOAT) so the forward/backward
 // numerics compare apples-to-apples against the torch float reference.
 // Build: nvcc -shared -o colo_entity_test.so tests/test_colosseum_entity_encoder.cu \
-//   -I pufferlib/src -lcublas -lcudnn -lcurand -Xcompiler -fPIC -O2
+//   -I src -lcublas -lcudnn -lcurand -Xcompiler -fPIC -O2
 
 #define PRECISION_FLOAT
-#include "../pufferlib/src/models.cu"
-#include "../pufferlib/src/ocean.cu"
+#include "../src/models.cu"
+#include "../src/ocean.cu"
 
 extern "C" {
 
