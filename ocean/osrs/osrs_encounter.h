@@ -876,9 +876,14 @@ static inline int encounter_move_to_target(
         if (tx > p->x) dx = 1; else if (tx < p->x) dx = -1;
         if (ty > p->y) dy = 1; else if (ty < p->y) dy = -1;
 
-        /* try diagonal, x-only, y-only */
+        /* try diagonal, x-only, y-only. OSRS forbids cutting a blocked corner: a
+           diagonal step is legal only when BOTH shared-corner tiles are walkable, so a
+           blocked pillar corner degrades to the open cardinal step. */
         int moved = 0;
-        if (dx != 0 && dy != 0 && is_walkable(ctx, p->x + dx, p->y + dy)) {
+        if (dx != 0 && dy != 0 &&
+            is_walkable(ctx, p->x + dx, p->y + dy) &&
+            is_walkable(ctx, p->x + dx, p->y) &&
+            is_walkable(ctx, p->x, p->y + dy)) {
             p->x += dx; p->y += dy; moved = 1;
         } else if (dx != 0 && is_walkable(ctx, p->x + dx, p->y)) {
             p->x += dx; moved = 1;

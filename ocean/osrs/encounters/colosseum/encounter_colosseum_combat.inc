@@ -197,14 +197,19 @@ static void col_pending_hit_prayer_observer(
     ColosseumContext* ctx = observer_ctx->context;
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
-    if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES)
+    if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES) {
         s->log.total_damage_by_type[hit->source_npc_type] += (float)dmg;
+        /* death attribution credits the actual killing-blow source. write this for
+           EVERY damaging landing (mirrors inferno): the manticore used to be the only
+           writer, so serpent/shockwave/javelin-normal kills inherited a stale manticore
+           credit and inflated death_by_manticore. */
+        s->last_hit_by_type = hit->source_npc_type;
+    }
     /* Q10: echo-boots recoil on a connecting ranged/magic projectile reflects to
        its source NPC at land time (post-prayer dmg), mirroring inferno's
        projectile-land recoil. */
     col_apply_echo_boots_recoil(s, ctx, hit->source_npc_slot, dmg);
     if (!checked && hit->source_npc_type == COLO_MANTICORE) {
-        if (dmg > 0) s->last_hit_by_type = COLO_MANTICORE;
         if (hit->hit_success) col_mod_manticore_apply_venom(s, hit->hit_success);
     }
     if (!checked) return;   /* ignore-prayer hits are mechanics, not prayer mistakes */

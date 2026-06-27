@@ -5600,7 +5600,10 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
             float hp_frac = (float)p->current_hitpoints / (float)p->base_hitpoints;
             if (hp_frac < 0.0f) hp_frac = 0.0f;
             if (hp_frac > 1.0f) hp_frac = 1.0f;
-            int green_w = (int)(hp_frac * bar_w);
+            /* a live entity always shows >=1px of green; only a dead one is fully red
+               (ceil instead of truncating to 0 for a high-max-HP entity near death). */
+            int green_w = p->current_hitpoints > 0 ? (int)ceilf(hp_frac * bar_w) : 0;
+            if (green_w > bar_w) green_w = bar_w;
 
             int bar_x = (int)screen_overhead.x - bar_w / 2;
             int bar_y = (int)cursor_y - bar_h / 2;

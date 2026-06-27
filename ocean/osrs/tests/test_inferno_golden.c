@@ -155,14 +155,18 @@ static const GoldenConfig CONFIGS[] = {
    under-player shuffle semantics: sample one cardinal direction and stay put
    when that sampled move is blocked. No fallback scan. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xbcd8dd977a212fcaULL,  /* wave1_a */
-    0x8780cf741d5a1a0fULL,  /* wave1_b */
-    0x3cdfcdfbe41a7f61ULL,  /* wave1_c */
-    0x3f803bedbcbb783aULL,  /* meleer_a */
-    0x11263e6bd4bfa210ULL,  /* meleer_b */
-    0xa676a083fd46b395ULL,  /* ranger_a */
+    /* 7 configs (wave1_a/b/c, meleer_a/b, ranger_a, mager_a) re-baselined after the
+       shared no-corner-cut movement fix (osrs_encounter.h encounter_move_to_target):
+       the player no longer cuts a blocked diagonal pillar corner, so early-wave pillar
+       navigation diverges. ranger_b/mager_b and all jad/zuk configs are byte-identical. */
+    0x9d8970300cea947aULL,  /* wave1_a */
+    0xefeefc062898de1bULL,  /* wave1_b */
+    0x300b40b9b6c32f47ULL,  /* wave1_c */
+    0xf600c7a9f79479faULL,  /* meleer_a */
+    0x267ab0fac9ad5b27ULL,  /* meleer_b */
+    0x999a41e1a0916ab9ULL,  /* ranger_a */
     0x2ddb91b645db1e75ULL,  /* ranger_b */
-    0x287d8b394f31c954ULL,  /* mager_a */
+    0xd2a1416c4b53157fULL,  /* mager_a */
     0x84a2ab3540f37ac8ULL,  /* mager_b */
     0xb98928c437e48005ULL,  /* jad_a */
     0x3e5a885e173d4674ULL,  /* jad_b */

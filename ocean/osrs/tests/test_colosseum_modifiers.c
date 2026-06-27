@@ -6992,6 +6992,64 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
+/* death attribution must credit the ACTUAL killing-blow source. A manticore landing
+   used to be the only writer of last_hit_by_type, so serpent/shockwave/javelin-normal
+   kills inherited a stale manticore credit. */
+static void test_death_attribution_credits_actual_source(void) {
+    printf("test_death_attribution_credits_actual_source\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 7);
+    ColPendingHitObserverContext obs = { &s, &ctx };
+
+    EncounterPendingHit manticore = {0};
+    manticore.source_npc_type = COLO_MANTICORE;
+    manticore.source_npc_slot = -1;
+    manticore.attack_style = ATTACK_STYLE_MAGIC;
+    col_pending_hit_prayer_observer(&obs, &manticore, 10, 0, 0);
+    CHECK("manticore landing credits the manticore", s.last_hit_by_type == COLO_MANTICORE);
+
+    EncounterPendingHit shockwave = {0};
+    shockwave.source_npc_type = COLO_SHOCKWAVE_COLOSSUS;
+    shockwave.source_npc_slot = -1;
+    shockwave.attack_style = ATTACK_STYLE_RANGED;
+    col_pending_hit_prayer_observer(&obs, &shockwave, 12, 0, 0);
+    CHECK("a non-manticore landing re-credits the actual source",
+          s.last_hit_by_type == COLO_SHOCKWAVE_COLOSSUS);
+
+    col_pending_hit_prayer_observer(&obs, &manticore, 0, 1, 0);
+    CHECK("a 0-damage splash does not change attribution",
+          s.last_hit_by_type == COLO_SHOCKWAVE_COLOSSUS);
+}
+
+static int test_walkable_block_corner(void* ctx, int x, int y) {
+    (void)ctx;
+    return !(x == 1 && y == 1);  /* a pillar occupies the shared corner tile */
+}
+
+static int test_walkable_open(void* ctx, int x, int y) {
+    (void)ctx; (void)x; (void)y;
+    return 1;
+}
+
+/* reach-1 corner rule: a diagonal move whose shared corner tile is blocked must NOT be
+   cut; it degrades to the open cardinal step (matches the BFS chase/click paths). */
+static void test_move_action_no_corner_cut(void) {
+    printf("test_move_action_no_corner_cut\n");
+    Player p;
+    memset(&p, 0, sizeof(p));
+    p.x = 1; p.y = 0;  /* stepping toward (0,1); shared corner (1,1) is a pillar */
+    encounter_move_to_target(&p, -1, 1, test_walkable_block_corner, NULL);
+    CHECK("a blocked corner is never cut", !(p.x == 0 && p.y == 1));
+    CHECK("a blocked-corner diagonal degrades to the open cardinal", p.x == 0 && p.y == 0);
+
+    Player q;
+    memset(&q, 0, sizeof(q));
+    q.x = 1; q.y = 0;
+    encounter_move_to_target(&q, -1, 1, test_walkable_open, NULL);
+    CHECK("an unobstructed diagonal still moves diagonally", q.x == 0 && q.y == 1);
+}
+
 /* B: melee reach. Every non-halberd melee weapon has attack_range 1 and can hit ONLY
    from a CARDINAL footprint-adjacent tile, never from a diagonal corner that merely
    touches the footprint ("0.5-tile reach"). A halberd has attack_range 2 and CAN hit
@@ -7225,6 +7283,8 @@ int main(void) {
     test_render_bridge_combat_visuals_and_loadout();
     test_render_bridge_npc_debug_and_warband_motion();
     test_melee_reach_cardinal_vs_diagonal();
+    test_death_attribution_credits_actual_source();
+    test_move_action_no_corner_cut();
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
 
