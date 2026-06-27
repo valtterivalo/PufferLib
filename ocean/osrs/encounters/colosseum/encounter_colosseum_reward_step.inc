@@ -380,6 +380,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s, ctx);
 
     s->reward = col_compute_reward_ctx(s, ctx);
+    /* anti-stall: a per-live-combat-tick cost so a fast wave clear strictly dominates
+       letting a wave overrun to farm reinforcement damage (default 0, sweepable). */
+    if (can_player_attack && ctx->config.stall_penalty_coeff != 0.0f)
+        s->reward -= ctx->config.stall_penalty_coeff;
     int all_dead = 1;
     int wave_cleared = 0;
 

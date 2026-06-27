@@ -117,6 +117,10 @@ static void col_put_float_ctx(
         ctx->config.argmax_gear_reward_coeff = value;
     else if (strcmp(key, "offensive_boost_reward_coeff") == 0)
         ctx->config.offensive_boost_reward_coeff = value;
+    else if (strcmp(key, "stall_penalty_coeff") == 0)
+        ctx->config.stall_penalty_coeff = value;
+    else if (strcmp(key, "dpt_obs_wielded_style") == 0)
+        ctx->config.dpt_obs_wielded_style = value;
     else if (strcmp(key, "avoided_damage_coeff") == 0)
         ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;

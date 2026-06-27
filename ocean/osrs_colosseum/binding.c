@@ -383,6 +383,8 @@ void my_init(Env* env, Dict* kwargs) {
         "multistyle_exposure_penalty_coeff",
         "argmax_gear_reward_coeff",
         "offensive_boost_reward_coeff",
+        "stall_penalty_coeff",
+        "dpt_obs_wielded_style",
         "avoided_damage_coeff",
         "death_penalty_coeff",
         "timeout_penalty",

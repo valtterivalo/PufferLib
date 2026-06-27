@@ -1723,7 +1723,8 @@ static int col_best_gear_argmax_style(
 static float col_inventory_cell_target_dpt_obs_value(
     ColosseumState* s,
     int cell_idx,
-    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES]
+    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
+    int use_wielded_style
 ) {
     int target = col_player_target_slot(s);
     if (target < 0 || target >= COLO_MAX_NPCS) return 0.0f;
@@ -1736,11 +1737,14 @@ static float col_inventory_cell_target_dpt_obs_value(
     int gear_slot = osrs_item_gear_slot(item);
     if (gear_slot < 0) return 0.0f;
 
-    int style = col_best_gear_argmax_style(best, npc->type);
-    if (style < 0) return 0.0f;
+    /* basis style: global-argmax (default) or the player's currently-wielded style, so
+       gear that raises DPT for the kit you are actually holding lights up. */
+    int style = use_wielded_style ? s->weapon_set
+                                  : col_best_gear_argmax_style(best, npc->type);
+    if (style < 0 || style >= COLO_NUM_WEAPON_SETS) return 0.0f;
     const ColoBestGear* bs = &best[style][npc->type];
     if (bs->dpt < 0.0f) return 0.0f;
-    if (bs->setup[gear_slot] != item) return 0.0f;  /* not in the argmax setup */
+    if (bs->setup[gear_slot] != item) return 0.0f;  /* not in the chosen style's setup */
 
     /* marginal = best.dpt - max DPT over the same setup with this slot replaced by any
        OTHER candidate (or ITEM_NONE). The candidate union is rebuilt locally; this runs
@@ -1837,7 +1841,8 @@ static void col_write_inventory_and_equipped_obs(
     ColosseumState* s,
     const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     float* obs,
-    int* idx
+    int* idx,
+    int use_wielded_style
 ) {
     int i = *idx;
     float current_equipment_projection[6];
@@ -1858,7 +1863,7 @@ static void col_write_inventory_and_equipped_obs(
             s->player.base_prayer,
             s->player.base_attack);
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
-        obs[i++] = col_inventory_cell_target_dpt_obs_value(s, cell_idx, best);
+        obs[i++] = col_inventory_cell_target_dpt_obs_value(s, cell_idx, best, use_wielded_style);
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
@@ -1937,7 +1942,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
 
-    col_write_inventory_and_equipped_obs(s, best_gear, obs, &i);
+    col_write_inventory_and_equipped_obs(s, best_gear, obs, &i, ctx->config.dpt_obs_wielded_style);
 
     ColoVenatorPreviewTargets venator_targets;
     col_collect_venator_preview_targets(s, &venator_targets);

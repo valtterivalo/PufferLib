@@ -1722,6 +1722,13 @@ typedef struct {
                                            offensive stat is boosted above base (a combat/
                                            ranging/magic potion is active); rewards keeping
                                            the boost up (default 0, sweepable). */
+    float stall_penalty_coeff;          /* per live-combat tick: subtract this so a fast
+                                           wave clear strictly dominates stalling to farm
+                                           reinforcement damage reward (default 0, sweepable). */
+    int dpt_obs_wielded_style;          /* per-cell target-DPT obs basis: 0 = global-argmax
+                                           style (default, byte-identical), 1 = the player's
+                                           currently-wielded style, so gear that raises DPT
+                                           for the kit you are holding lights up (sweepable). */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;
