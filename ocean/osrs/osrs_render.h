@@ -5090,6 +5090,18 @@ static void render_draw_3d_world(RenderClient* rc) {
                animation reads as a live projectile, so the fabricated spin below
                is dropped to avoid fighting the baked motion. A gentle bob is kept
                for vertical variety only. */
+            /* a stacked telegraph orb is rigidly attached to the manticore, so it
+               inherits the live body facing and turns with it (the game shows
+               waiting orbs facing the NPC front until they launch). In the live
+               anim path the yaw is the only rotation; in the fallback it is
+               composed OUTERMOST (after the per-style spin) so it aims the whole
+               spinning orb at the NPC front without tilting the spin axis. */
+            float npc_yaw = 0.0f;
+            if (floating->anchor_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT) {
+                int npc_idx = render_find_npc_entity_idx(rc, floating->npc_slot);
+                if (npc_idx >= 0) npc_yaw = rc->yaw[npc_idx];
+            }
+            Matrix face_rot = MatrixRotateY(npc_yaw);
             OsrsModel* animated = render_animate_effect_model(
                 rc, floating->model_id, floating->anim_id,
                 rc->effect_client_tick_counter);
@@ -5101,7 +5113,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                 }
                 rlDisableBackfaceCulling();
                 animated->model.transform = MatrixMultiply(
-                    MatrixScale(-model_scale, model_scale, model_scale),
+                    MatrixMultiply(
+                        MatrixScale(-model_scale, model_scale, model_scale),
+                        face_rot),
                     MatrixTranslate(pos.x, pos.y, pos.z));
                 DrawModel(animated->model, (Vector3){0,0,0}, 1.0f, WHITE);
                 rlEnableBackfaceCulling();
@@ -5124,8 +5138,8 @@ static void render_draw_3d_world(RenderClient* rc) {
                the magic orb (51215) yaws like a spinning top (Y), the ranged orb
                (51221) rolls (Z). The three stacked orbs share one phase (no
                per-index offset) so a waiting cluster reads as one charging set.
-               No body-yaw is mixed in -- composing it onto a non-Y roll tilts the
-               spin axis and reads as a wobble. */
+               face_rot (manticore yaw) is composed AFTER the spin so it aims the
+               whole spinning orb at the NPC front without tilting the spin axis. */
             Matrix spin_rot;
             switch (floating->model_id) {
                 case 51213u: spin_rot = MatrixRotateX(spin); break;
@@ -5135,8 +5149,10 @@ static void render_draw_3d_world(RenderClient* rc) {
             rlDisableBackfaceCulling();
             model->transform = MatrixMultiply(
                 MatrixMultiply(
-                    MatrixScale(-model_scale, model_scale, model_scale),
-                    spin_rot),
+                    MatrixMultiply(
+                        MatrixScale(-model_scale, model_scale, model_scale),
+                        spin_rot),
+                    face_rot),
                 MatrixTranslate(pos.x, pos.y, pos.z));
             DrawModel(*model, (Vector3){0,0,0}, 1.0f, WHITE);
             rlEnableBackfaceCulling();
