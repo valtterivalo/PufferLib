@@ -1704,6 +1704,14 @@ int main(int argc, char** argv) {
     if (!encounter_name) encounter_name = "inferno";
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #else
+    /* Each standalone viewer binary picks its own encounter at compile time via
+       OSRS_VISUAL_DEFAULT_ENCOUNTER, so ./osrs_colosseum needs no --encounter
+       flag (which still overrides). The pvp binary leaves it undefined on
+       purpose: a NULL encounter routes the native pvp_init path, not the
+       generic encounter_find path. */
+#ifdef OSRS_VISUAL_DEFAULT_ENCOUNTER
+    if (!encounter_name) encounter_name = OSRS_VISUAL_DEFAULT_ENCOUNTER;
+#endif
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #endif
     VisualPolicyMode policy_mode __attribute__((unused)) =
