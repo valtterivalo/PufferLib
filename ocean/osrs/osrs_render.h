@@ -717,6 +717,58 @@ static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id)
     return seq;
 }
 
+/** A degenerate placeholder sequence: a single empty legacy frame with no
+    framebase. The exporter emits this for a sequence id it cannot represent in
+    a given file (e.g. a Maya-only clip written into the legacy-v2 equipment
+    anims). It animates nothing, so model-aware lookup skips it to reach a real
+    bake in another cache. */
+static int anim_sequence_is_empty_stub(const AnimSequence* seq) {
+    if (!seq || seq->frame_count != 1) return 0;
+    const AnimSequenceFrame* f = &seq->frames[0];
+    return f->frame.kind == ANIM_FRAME_LEGACY && f->frame.framebase_id == 0xFFFF;
+}
+
+/** Vertex count a Maya-baked sequence applies to (0 if not Maya-baked). Maya
+    frames are explicit per-vertex snapshots, so a bake only applies to a model
+    with the same vertex count. */
+static int anim_sequence_maya_vert_count(const AnimSequence* seq) {
+    if (!seq || seq->frame_count == 0) return 0;
+    if (seq->frames[0].frame.kind != ANIM_FRAME_MAYA_BAKED) return 0;
+    return seq->frames[0].frame.maya_vertex_count;
+}
+
+/** Resolve an animation sequence for a SPECIFIC model. The same sequence id can
+    exist in several caches and be Maya-baked at different vertex counts (e.g.
+    the Shockwave clap 10903 is baked at 1357 verts for the colossus body in
+    colosseum_npcs.anims, while equipment.anims carries only an empty stub). The
+    plain first-hit lookup returns the empty stub and the real bake never wins,
+    so this skips empty stubs and prefers the Maya bake whose vertex count
+    matches the model. Legacy sequences apply to any model. Returns the closest
+    real sequence (a vertex-mismatched Maya bake is returned only as a last
+    resort so the caller can detect it), falling back to the plain lookup so
+    non-Maya callers are unchanged. */
+static AnimSequence* render_get_anim_sequence_for_model(
+    RenderClient* rc, uint16_t seq_id, int model_vert_count
+) {
+    AnimCache* caches[3] = {
+        rc->anim_cache, rc->npc_anim_cache, rc->projectile_anim_cache
+    };
+    AnimSequence* mismatched_maya = NULL;
+    for (int i = 0; i < 3; i++) {
+        if (!caches[i]) continue;
+        AnimSequence* seq = anim_get_sequence(caches[i], seq_id);
+        if (!seq || anim_sequence_is_empty_stub(seq)) continue;
+        int maya_vc = anim_sequence_maya_vert_count(seq);
+        if (maya_vc > 0 && maya_vc != model_vert_count) {
+            if (!mismatched_maya) mismatched_maya = seq;
+            continue;
+        }
+        return seq;
+    }
+    if (mismatched_maya) return mismatched_maya;
+    return render_get_anim_sequence(rc, seq_id);
+}
+
 static int render_sequence_stalls_movement(const AnimSequence* seq) {
     if (!seq) return 0;
     if (seq->walk_flag >= 0) return seq->walk_flag == 0;
@@ -4799,16 +4851,16 @@ static void render_player_composite(
 
     /* secondary frame */
     if (rc->anim[player_idx].secondary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence(
-            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence_for_model(
+            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id, comp->base_vert_count);
         sec_track = render_resolve_anim_track_frame(
             rc, seq, rc->anim[player_idx].secondary_frame_idx);
     }
 
     /* primary frame */
     if (rc->anim[player_idx].primary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence(
-            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
+        AnimSequence* seq = render_get_anim_sequence_for_model(
+            rc, (uint16_t)rc->anim[player_idx].primary_seq_id, comp->base_vert_count);
         pri_track = render_resolve_anim_track_frame(
             rc, seq, rc->anim[player_idx].primary_frame_idx);
     }
@@ -4817,8 +4869,8 @@ static void render_player_composite(
     const uint8_t* interleave = NULL;
     int interleave_count = 0;
     if (pri_track.sequence_frame) {
-        AnimSequence* prim_seq = render_get_anim_sequence(
-            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
+        AnimSequence* prim_seq = render_get_anim_sequence_for_model(
+            rc, (uint16_t)rc->anim[player_idx].primary_seq_id, comp->base_vert_count);
         if (prim_seq && prim_seq->interleave_order) {
             interleave = prim_seq->interleave_order;
             interleave_count = prim_seq->interleave_count;
