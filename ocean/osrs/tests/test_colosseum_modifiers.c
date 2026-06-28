@@ -5217,10 +5217,10 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
         ov.projectiles[2].source_npc_slot == 1 &&
         ov.projectiles[2].target_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
         ov.projectiles[2].target_npc_slot == 2);
-    CHECK("venator projectile hops use the arrow model",
-        ov.projectiles[0].model_id == OSRS_PROJECTILE_MODEL_ARROW &&
-        ov.projectiles[1].model_id == OSRS_PROJECTILE_MODEL_ARROW &&
-        ov.projectiles[2].model_id == OSRS_PROJECTILE_MODEL_ARROW);
+    CHECK("venator projectile hops use the venator bolt model",
+        ov.projectiles[0].model_id == OSRS_PROJECTILE_MODEL_VENATOR_BOLT &&
+        ov.projectiles[1].model_id == OSRS_PROJECTILE_MODEL_VENATOR_BOLT &&
+        ov.projectiles[2].model_id == OSRS_PROJECTILE_MODEL_VENATOR_BOLT);
     CHECK("venator bounce projectile delays increase by hop",
         ov.projectiles[1].start_delay > ov.projectiles[0].start_delay &&
         ov.projectiles[2].start_delay > ov.projectiles[1].start_delay);
