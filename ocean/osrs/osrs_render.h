@@ -5032,18 +5032,20 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (edef_molten && rc->gui.encounter_state &&
                     strcmp(edef_molten->name, "colosseum") == 0) {
                 ColosseumState* cs_molten = (ColosseumState*)rc->gui.encounter_state;
-                /* one-time lazy load of the molten-sand pool mesh (OSRS spotanim
-                   GFX 3080 -> synthetic projectile model id 0xA2000000 + 3080).
-                   render_build_static_model is non-aborting: if the mesh is not
-                   in the loaded caches (e.g. run from a checkout that never
-                   exported it) molten_model_ready stays 0 and we fall back to the
-                   flat orange tile, so the viewer degrades gracefully. */
+                /* one-time lazy load of the colosseum hot-sand pool mesh (OSRS
+                   spotanim VFX_COLOSSEUM_HOT_SAND_02_PROJECTILE_01 = GFX 2709 ->
+                   synthetic projectile model id 0xA2000000 + 2709). The old GFX
+                   3080 was LEAGUE_5_SHIELDSLAM_DUST, a directional dust streak, not
+                   a colosseum effect. render_build_static_model is non-aborting: if
+                   the mesh is not in the loaded caches (e.g. run from a checkout
+                   that never exported it) molten_model_ready stays 0 and we fall
+                   back to the flat orange tile, so the viewer degrades gracefully. */
                 if (!rc->molten_model_attempted) {
                     rc->molten_model_attempted = 1;
                     render_load_projectile_assets(rc);
                     rc->molten_model_ready = render_build_static_model(
                         rc->projectile_model_cache,
-                        0xA2000000u + 3080u,
+                        0xA2000000u + 2709u,
                         &rc->molten_model);
                 }
                 /* render both hazard sources with one mesh: the wave 1-11
