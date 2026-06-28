@@ -940,8 +940,9 @@ def write_models_mdl4(
             for idx in range(model.face_count):
                 alpha = model.face_alphas[idx] if idx < len(model.face_alphas) else 0
                 out.write(struct.pack("B", max(0, min(255, alpha))))
-            for _ in range(model.face_count):
-                out.write(struct.pack("B", 255))
+            for idx in range(model.face_count):
+                label = model.face_alpha_labels[idx] if idx < len(model.face_alpha_labels) else 255
+                out.write(struct.pack("B", max(0, min(255, label))))
         out.seek(offsets_pos)
         for offset in offsets:
             out.write(struct.pack("<I", offset))

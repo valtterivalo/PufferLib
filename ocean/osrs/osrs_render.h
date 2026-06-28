@@ -179,6 +179,14 @@ typedef struct {
     int       base_vert_count;
     int       face_count;
 
+    /* per-face animated-alpha data, merged like vertex_skins but offset by face.
+       Enables type-5 alpha transforms (Scythe swing trail, Shockwave shimmer)
+       on the composed model. has_face_alpha is 1 when any merged model carries
+       a real alpha label group, so the no-alpha path stays zero-cost. */
+    uint8_t   base_face_alphas[COMPOSITE_MAX_FACES];
+    uint8_t   face_alpha_labels[COMPOSITE_MAX_FACES];
+    int       has_face_alpha;
+
     /* raylib mesh (pre-allocated at max capacity, updated per frame) */
     Mesh  mesh;
     Model model;
@@ -4366,6 +4374,26 @@ static OsrsModelAppendResult composite_try_add_model(PlayerComposite* comp, Osrs
     memcpy(comp->vertex_skins + bv_off,
            om->vertex_skins, om->base_vert_count);
 
+    /* append per-face animated-alpha data, offset by the running face count.
+       Models without alpha buffers default to opaque (0) / no-group (255). */
+    int model_faces = om->mesh.triangleCount;
+    if (om->base_face_alphas) {
+        memcpy(comp->base_face_alphas + fc_off, om->base_face_alphas, model_faces);
+    } else {
+        memset(comp->base_face_alphas + fc_off, 0, model_faces);
+    }
+    if (om->face_alpha_labels) {
+        memcpy(comp->face_alpha_labels + fc_off, om->face_alpha_labels, model_faces);
+        for (int f = 0; f < model_faces; f++) {
+            if (om->face_alpha_labels[f] != 255) {
+                comp->has_face_alpha = 1;
+                break;
+            }
+        }
+    } else {
+        memset(comp->face_alpha_labels + fc_off, 255, model_faces);
+    }
+
     /* append face indices (offset by base vertex count) */
     int nfi = om->mesh.triangleCount * 3;
     for (int f = 0; f < nfi; f++) {
@@ -4442,6 +4470,7 @@ static void composite_rebuild(
 ) {
     comp->base_vert_count = 0;
     comp->face_count = 0;
+    comp->has_face_alpha = 0;
 
     OsrsPlayerAppearance appearance = osrs_resolve_player_appearance(p->equipped);
 
@@ -4466,8 +4495,15 @@ static void composite_rebuild(
         comp->anim_state = NULL;
     }
     if (comp->base_vert_count > 0) {
-        comp->anim_state = anim_model_state_create(
-            comp->vertex_skins, comp->base_vert_count);
+        if (comp->has_face_alpha) {
+            comp->anim_state = anim_model_state_create_with_face_alpha(
+                comp->vertex_skins, comp->base_vert_count,
+                comp->face_alpha_labels, comp->base_face_alphas,
+                comp->face_count);
+        } else {
+            comp->anim_state = anim_model_state_create(
+                comp->vertex_skins, comp->base_vert_count);
+        }
     }
 
     /* save equipment state for change detection */
@@ -4484,6 +4520,7 @@ static void composite_rebuild_npc(
 ) {
     comp->base_vert_count = 0;
     comp->face_count = 0;
+    comp->has_face_alpha = 0;
 
     /* zero mesh buffers to prevent stale GPU data from showing as garbled geometry
        if the model fails to load or exceeds composite limits */
@@ -4520,8 +4557,15 @@ static void composite_rebuild_npc(
         comp->anim_state = NULL;
     }
     if (comp->base_vert_count > 0) {
-        comp->anim_state = anim_model_state_create(
-            comp->vertex_skins, comp->base_vert_count);
+        if (comp->has_face_alpha) {
+            comp->anim_state = anim_model_state_create_with_face_alpha(
+                comp->vertex_skins, comp->base_vert_count,
+                comp->face_alpha_labels, comp->base_face_alphas,
+                comp->face_count);
+        } else {
+            comp->anim_state = anim_model_state_create(
+                comp->vertex_skins, comp->base_vert_count);
+        }
     }
 
     comp->last_npc_def_id = npc_def_id;
@@ -4607,6 +4651,13 @@ static void composite_animate_and_draw(
     /* re-expand animated base verts into mesh vertex buffer */
     anim_update_mesh(comp->mesh.vertices, comp->anim_state,
                      comp->face_indices, comp->face_count);
+
+    /* fold animated per-face alpha (type-5 transforms) into the mesh color
+       buffer before upload. No-op when the composite carries no alpha groups.
+       Mirrors the single-model path in
+       render_apply_anim_sequence_frame_to_model_state. */
+    anim_update_mesh_alpha(comp->mesh.colors, comp->anim_state,
+                           comp->face_count);
 
     /* sanity clamp: catch degenerate animation frames that produce extreme
        vertex positions (int16_t overflow in animation math). without this,
