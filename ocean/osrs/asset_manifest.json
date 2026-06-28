@@ -17,6 +17,7 @@
         "equipment.tanim",
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "fonts/runescape.ttf",
         "fonts/runescape_small.ttf",
@@ -139,6 +140,7 @@
       "files": [
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "equipment.anims",
         "inferno.anims",
@@ -163,6 +165,7 @@
         "equipment.tanim",
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "ui/interfaces.bin",
         "ui/interface_manifest.json",

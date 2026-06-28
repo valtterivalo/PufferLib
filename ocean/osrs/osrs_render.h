@@ -440,6 +440,7 @@ typedef struct RenderClient {
     ModelCache* model_cache;
     AnimCache* anim_cache;
     ModelCache* projectile_model_cache;
+    AnimCache* projectile_anim_cache;  /* spotanim frame sequences for projectile/effect models */
     OsrsSpotAnimSet* spotanims;
     ModelCache* npc_model_cache;  /* secondary cache for encounter-specific NPC models */
     AnimCache* npc_anim_cache;    /* secondary cache for encounter-specific NPC anims */
@@ -568,6 +569,19 @@ typedef struct RenderClient {
     struct { uint32_t id; Model model; int ready; } proj_models[MAX_PROJ_MODELS];
     int proj_model_count;
 
+    /* per-(model,anim) animation working state for looping effect spotanims
+       (colosseum molten pools, floating manticore orbs). Each entry owns an
+       AnimModelState reused across frames; the frame index is derived purely
+       from the 50Hz effect tick counter, so playback is deterministic and
+       needs no per-draw bookkeeping. */
+#define MAX_EFFECT_ANIM_STATES 8
+    struct {
+        uint32_t model_id;
+        int anim_id;
+        AnimModelState* state;
+    } effect_anim_states[MAX_EFFECT_ANIM_STATES];
+    int effect_anim_state_count;
+
     /* collision map: pointer to env's CollisionMap (shared, not owned).
        world offset translates arena coords to collision map world coords. */
     const CollisionMap* collision_map;
@@ -690,6 +704,8 @@ static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id)
     AnimSequence* seq = NULL;
     if (rc->anim_cache) seq = anim_get_sequence(rc->anim_cache, seq_id);
     if (!seq && rc->npc_anim_cache) seq = anim_get_sequence(rc->npc_anim_cache, seq_id);
+    if (!seq && rc->projectile_anim_cache)
+        seq = anim_get_sequence(rc->projectile_anim_cache, seq_id);
     return seq;
 }
 
@@ -704,6 +720,8 @@ static AnimFrameBase* render_get_framebase(RenderClient* rc, uint16_t base_id) {
     AnimFrameBase* fb = NULL;
     if (rc->anim_cache) fb = anim_get_framebase(rc->anim_cache, base_id);
     if (!fb && rc->npc_anim_cache) fb = anim_get_framebase(rc->npc_anim_cache, base_id);
+    if (!fb && rc->projectile_anim_cache)
+        fb = anim_get_framebase(rc->projectile_anim_cache, base_id);
     return fb;
 }
 
@@ -1977,6 +1995,9 @@ static void render_load_projectile_assets(RenderClient* rc) {
     if (!rc->projectile_model_cache) {
         rc->projectile_model_cache = model_cache_load(OSRS_ASSET("projectiles.models"));
     }
+    if (!rc->projectile_anim_cache) {
+        rc->projectile_anim_cache = anim_cache_load(OSRS_ASSET("projectiles.anims"));
+    }
 }
 
 /** Lazily load and cache an explicit projectile model by GFX model ID.
@@ -2090,6 +2111,83 @@ static AnimModelState* render_create_projectile_anim_state_from_model(
     return anim_model_state_create_with_face_alpha(
         om->vertex_skins, om->base_vert_count,
         om->face_alpha_labels, om->base_face_alphas, om->mesh.triangleCount);
+}
+
+/** Pure frame index for a looping effect spotanim at a given monotonic 50Hz
+    tick. Walks the per-frame client-tick delays and wraps at the cycle length,
+    matching flight_advance_animation's delay accounting. Frames with zero or
+    sentinel (>=0x8000) delay are treated as 1 tick so a malformed loop still
+    advances instead of dividing by zero. */
+static int render_effect_anim_frame_for_tick(const AnimSequence* seq, int tick) {
+    if (!seq || seq->frame_count <= 0) return 0;
+    if (seq->frame_count == 1) return 0;
+    int cycle = 0;
+    for (int f = 0; f < seq->frame_count; f++) {
+        int d = seq->frames[f].delay;
+        if (d <= 0 || d >= 0x8000) d = 1;
+        cycle += d;
+    }
+    if (cycle <= 0) return 0;
+    int phase = ((tick % cycle) + cycle) % cycle;
+    int acc = 0;
+    for (int f = 0; f < seq->frame_count; f++) {
+        int d = seq->frames[f].delay;
+        if (d <= 0 || d >= 0x8000) d = 1;
+        acc += d;
+        if (phase < acc) return f;
+    }
+    return seq->frame_count - 1;
+}
+
+/** Find or lazily create the reusable AnimModelState for an effect spotanim
+    model. States are keyed by (model_id, anim_id) and reused across frames so
+    the per-vertex group tables are built once. Returns NULL when the cache is
+    full (caller falls back to a static draw). */
+static AnimModelState* render_get_effect_anim_state(
+    RenderClient* rc, OsrsModel* om, uint32_t model_id, int anim_id
+) {
+    for (int i = 0; i < rc->effect_anim_state_count; i++) {
+        if (rc->effect_anim_states[i].model_id == model_id &&
+                rc->effect_anim_states[i].anim_id == anim_id) {
+            return rc->effect_anim_states[i].state;
+        }
+    }
+    if (rc->effect_anim_state_count >= MAX_EFFECT_ANIM_STATES) {
+        return NULL;
+    }
+    AnimModelState* state =
+        render_create_projectile_anim_state_from_model(om, model_id, anim_id);
+    if (!state) return NULL;
+    int idx = rc->effect_anim_state_count++;
+    rc->effect_anim_states[idx].model_id = model_id;
+    rc->effect_anim_states[idx].anim_id = anim_id;
+    rc->effect_anim_states[idx].state = state;
+    return state;
+}
+
+/** Advance and apply a looping effect spotanim's current frame to its shared
+    OsrsModel mesh, returning the model ready to draw. The frame is derived from
+    the effect tick counter so playback loops on the 50Hz visual clock. Returns
+    NULL (so callers keep the old static path) when the model is missing, has no
+    skinned geometry, or the animation/cache is unavailable. The returned mesh
+    is shared, matching the existing EFFECT_SPOTANIM and flight draw paths that
+    mutate it sequentially per draw. */
+static OsrsModel* render_animate_effect_model(
+    RenderClient* rc, uint32_t model_id, int anim_id, int tick
+) {
+    if (anim_id < 0 || model_id == 0) return NULL;
+    OsrsModel* om = render_get_projectile_osrs_model(rc, model_id);
+    if (!om || !om->face_indices || !om->vertex_skins || om->base_vert_count == 0) {
+        return NULL;
+    }
+    AnimSequence* seq = render_get_anim_sequence(rc, (uint16_t)anim_id);
+    if (!seq || seq->frame_count <= 0) return NULL;
+    AnimModelState* state = render_get_effect_anim_state(rc, om, model_id, anim_id);
+    if (!state) return NULL;
+    int frame = render_effect_anim_frame_for_tick(seq, tick);
+    render_apply_anim_sequence_frame_to_model_state(
+        rc, state, om, seq, frame, "effect-spotanim");
+    return om;
 }
 
 /**
@@ -2547,6 +2645,10 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     for (int i = 0; i < rc->proj_model_count; i++) {
         if (rc->proj_models[i].ready) UnloadModel(rc->proj_models[i].model);
     }
+    /* free effect spotanim animation working states */
+    for (int i = 0; i < rc->effect_anim_state_count; i++) {
+        anim_model_state_free(rc->effect_anim_states[i].state);
+    }
     /* free per-entity composite models */
     for (int p = 0; p < MAX_RENDER_ENTITIES; p++) {
         composite_free(&rc->composites[p]);
@@ -2566,6 +2668,10 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     if (rc->anim_cache) {
         anim_cache_free(rc->anim_cache);
         rc->anim_cache = NULL;
+    }
+    if (rc->projectile_anim_cache) {
+        anim_cache_free(rc->projectile_anim_cache);
+        rc->projectile_anim_cache = NULL;
     }
     if (rc->terrain) {
         terrain_free(rc->terrain);
@@ -4919,7 +5025,6 @@ static void render_draw_3d_world(RenderClient* rc) {
                     &anchor_x, &anchor_y)) {
                 continue;
             }
-            Model* model = render_get_proj_model(rc, floating->model_id);
             float ground = OV_GROUND((int)anchor_x, (int)anchor_y);
             Vector3 pos = {
                 anchor_x + 0.5f + floating->lateral_offset,
@@ -4927,6 +5032,35 @@ static void render_draw_3d_world(RenderClient* rc) {
                 -(anchor_y + 1.0f) + 0.5f
             };
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
+
+            /* preferred path: play the orb's own spotanim sequence so the model
+               genuinely deforms (the manticore orbs carry anim 10327/10328/10329
+               baked into colosseum_npcs.anims). When frames play, the real
+               animation reads as a live projectile, so the fabricated spin below
+               is dropped to avoid fighting the baked motion. A gentle bob is kept
+               for vertical variety only. */
+            OsrsModel* animated = render_animate_effect_model(
+                rc, floating->model_id, floating->anim_id,
+                rc->effect_client_tick_counter);
+            if (animated) {
+                if (floating_bob_spin) {
+                    float bob_phase = floating_anim_t * (2.0f * PI / 100.0f)
+                        + (float)i * 1.7f;
+                    pos.y += 0.08f * sinf(bob_phase);
+                }
+                rlDisableBackfaceCulling();
+                animated->model.transform = MatrixMultiply(
+                    MatrixScale(-model_scale, model_scale, model_scale),
+                    MatrixTranslate(pos.x, pos.y, pos.z));
+                DrawModel(animated->model, (Vector3){0,0,0}, 1.0f, WHITE);
+                rlEnableBackfaceCulling();
+                continue;
+            }
+
+            /* fallback: static mesh with a fabricated bob + per-style spin so the
+               telegraph still reads as a live hovering projectile when the
+               animation or anim cache is unavailable. */
+            Model* model = render_get_proj_model(rc, floating->model_id);
             float spin = 0.0f;
             if (floating_bob_spin) {
                 float bob_phase = floating_anim_t * (2.0f * PI / 100.0f)
@@ -5048,6 +5182,23 @@ static void render_draw_3d_world(RenderClient* rc) {
                         0xA2000000u + 2709u,
                         &rc->molten_model);
                 }
+                /* prefer the hot-sand spotanim's own frame sequence (GFX 2709
+                   -> anim 10815) so the pool boils instead of sitting frozen.
+                   The frame is advanced once on the shared mesh, then the same
+                   animated model is drawn at every molten tile (all pools share
+                   one animation phase). anim_id comes from the spotanim def so
+                   the data stays the source of truth; -1 (or a missing anim
+                   cache) leaves animated NULL and the static molten_model path
+                   below still runs. */
+                OsrsModel* molten_animated = NULL;
+                {
+                    const OsrsSpotAnimDef* molten_def =
+                        osrs_spotanim_find(rc->spotanims, 2709);
+                    int molten_anim_id = molten_def ? molten_def->animation_id : -1;
+                    molten_animated = render_animate_effect_model(
+                        rc, 0xA2000000u + 2709u, molten_anim_id,
+                        rc->effect_client_tick_counter);
+                }
                 /* render both hazard sources with one mesh: the wave 1-11
                    Reentry/Volatility pools (molten_*) AND the Sol-fight molten
                    tiles (sol.hazard_*), which were previously not drawn at all. */
@@ -5064,9 +5215,17 @@ static void render_draw_3d_world(RenderClient* rc) {
                         float ground = OV_GROUND(tx, ty);
                         float fx = (float)tx + 0.5f;
                         float fz = -(float)(ty + 1) + 0.5f;
-                        if (rc->molten_model_ready) {
+                        if (molten_animated) {
                             /* scale maps OSRS model units (128/tile) to tiles; the
                                exact pool footprint may want tuning after a look. */
+                            rlDisableBackfaceCulling();
+                            molten_animated->model.transform = MatrixMultiply(
+                                MatrixScale(-1.0f / 128.0f, 1.0f / 128.0f, 1.0f / 128.0f),
+                                MatrixTranslate(fx, ground + 0.02f, fz));
+                            DrawModel(molten_animated->model, (Vector3){0,0,0}, 1.0f, WHITE);
+                            rlEnableBackfaceCulling();
+                        } else if (rc->molten_model_ready) {
+                            /* static mesh fallback when the anim cache is absent. */
                             rlDisableBackfaceCulling();
                             rc->molten_model.transform = MatrixMultiply(
                                 MatrixScale(-1.0f / 128.0f, 1.0f / 128.0f, 1.0f / 128.0f),
