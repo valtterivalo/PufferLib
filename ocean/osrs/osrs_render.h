@@ -154,6 +154,10 @@ typedef struct {
     int anim_id;                /* spotanim animation sequence (-1 = static model) */
     int travel_gfx_id;
     int travel_gfx_drives_model;
+    int grow;                   /* 1 = scale the static mesh up over the flight; set when the
+                                   spotanim's Maya clip cannot deform this mesh (no matching
+                                   per-vertex rig) but the in-game effect expands as it travels
+                                   (Shockwave Colossus clap projectile) */
     int anim_frame;
     int anim_tick_counter;
     AnimModelState* anim_state;
@@ -2434,6 +2438,7 @@ static void flight_spawn(RenderClient* rc,
     fp->anim_id = anim_id;
     fp->travel_gfx_id = travel_gfx_id;
     fp->travel_gfx_drives_model = (model_id == 0 && travel_gfx_id > 0);
+    fp->grow = 0;
     if (travel_gfx_id > 0) {
         const OsrsSpotAnimDef* meta = render_require_travel_spotanim(rc, travel_gfx_id);
         if (fp->travel_gfx_drives_model) {
@@ -2441,8 +2446,25 @@ static void flight_spawn(RenderClient* rc,
             if (fp->anim_id < 0)
                 fp->anim_id = meta->animation_id;
         }
-        if (!render_projectile_anim_has_dynamic_frames(rc, fp->anim_id))
-            fp->anim_id = -1;
+        if (fp->anim_id >= 0) {
+            OsrsModel* anim_model = render_get_flight_osrs_model(rc, fp);
+            int mvc = anim_model ? (int)anim_model->base_vert_count : 0;
+            AnimSequence* seq =
+                render_get_anim_sequence_for_model(rc, (uint16_t)fp->anim_id, mvc);
+            int maya_vc = anim_sequence_maya_vert_count(seq);
+            if (maya_vc > 0 && maya_vc != mvc) {
+                /* the spotanim's Maya clip is rigged for a different mesh (the
+                   Shockwave clap 10903 is baked at the colossus body's vertex
+                   count, not this 341-vertex projectile disc). The OSRS client
+                   cannot skin this mesh and renders it static, but the in-game
+                   projectile visibly expands as it travels, so grow the static
+                   disc over the flight rather than freezing it. */
+                fp->grow = 1;
+                fp->anim_id = -1;
+            } else if (!render_projectile_anim_has_dynamic_frames(rc, fp->anim_id)) {
+                fp->anim_id = -1;
+            }
+        }
     }
     fp->anim_frame = 0;
     fp->anim_tick_counter = 0;
@@ -5439,6 +5461,14 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (proj_model) {
                 rlDisableBackfaceCulling();
                 float pms = 1.0f / 128.0f;
+                if (fp->grow) {
+                    /* expanding-shockwave projectile: ramp the disc from a small
+                       fraction to full over the flight, accelerating (ease-in)
+                       so it reads as picking up speed like the in-game clap. */
+                    float t = fp->progress;
+                    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+                    pms *= 0.15f + 0.85f * (t * t);
+                }
                 proj_model->transform = render_projectile_transform_offset(
                     pms, pms, pms, fp->yaw, fp->pitch, pos,
                     fp->offset_x, fp->offset_y, fp->offset_z);
