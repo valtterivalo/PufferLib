@@ -5852,12 +5852,11 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].impact_gfx_id == 0 &&
         ov.projectiles[0].start_h < ov.projectiles[0].end_h &&
         ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_LAUNCH_CURVE &&
-        ov.projectiles[0].start_delay ==
-            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30 &&
+        ov.projectiles[0].start_delay == 0 &&
         ov.projectiles[0].duration_ticks ==
             (COLO_JAVELIN_SKYFALL_DELAY -
              COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS -
-             COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30);
+             COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS) * 30);
     CHECK("javelin skyfall launch emits growing target shadow",
         ov.tile_shadow_count == 1 &&
         ov.tile_shadows[0].active == 1 &&

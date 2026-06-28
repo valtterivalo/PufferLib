@@ -233,10 +233,11 @@ enum {
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
     COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
-    /* the javelin lobs up over the first half of the telegraph, hangs at apex,
-       then falls straight down over the second half so it lands on the damage
-       tick. In game ticks; the emit converts to client ticks (*30). */
+    /* The javelin lobs straight up for 2 ticks, hangs at apex for 1 tick, then
+       falls straight down for 3 ticks (the drop window) so it lands on the
+       damage tick. In game ticks; the emit converts to client ticks (*30). */
     COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS = COLO_JAVELIN_SKYFALL_DELAY / 2,
+    COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS = 1,
     COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
 };
 
@@ -324,7 +325,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
         .damage = 0,
         .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
             COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS -
-            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
+            COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS) * 30,
         .start_h = (int)(npc_size * 0.75f * 128),
         .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
         .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
@@ -335,7 +336,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
         .anim_id = -1,
         .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
         .impact_gfx_id = 0,
-        .start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30,
+        .start_delay = 0,
     };
     int projectile_idx = osrs_emit_projectile_with_spec(
         ov,
@@ -460,6 +461,16 @@ static void col_emit_npc_attack_projectile(
         col_npc_projectile_timing(npc->type, actual_style, dist);
     int duration = timing.visual_duration_ticks * 30;
     int start_delay = timing.visual_start_delay_ticks * 30;
+
+    /* Manticore orbs land exactly one tick after launch regardless of distance
+       (the sim builds the hit with ticks_remaining=1 in col_npc_manticore_fire_orb).
+       The distance-scaled render duration made the magic orb arc up and hang
+       after its damage had landed; pin all three orbs to a fixed 1-tick flight
+       so the visual matches the already-correct sim. */
+    if (npc->type == COLO_MANTICORE) {
+        duration = 1 * 30;
+        start_delay = 0;
+    }
 
     const OsrsCombatVisualRow* npc_visual =
         col_require_npc_combat_visual_projectile_row(npc->type, actual_style);
