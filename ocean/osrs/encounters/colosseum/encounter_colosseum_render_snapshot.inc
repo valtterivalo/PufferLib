@@ -310,11 +310,16 @@ static void col_emit_javelin_skyfall_launch_projectile(
 
     int npc_size = col_npc_effective_size(npc);
     encounter_require_projectile_slots(ov, 1);
+    /* The lob fires straight UP out of the colossus's hand (src == dst == the
+       NPC's own tile, so there is no horizontal travel), reaches the sky off the
+       top of the screen, and the separate drop rains straight down on the marked
+       tile -- the colossus->tile displacement happens off-screen at apex. Curve
+       shapes the vertical easing only (it is the OSRS slope, not a lateral bow). */
     OsrsProjectileEventSpec projectile_spec = {
         .src_x = npc->x,
         .src_y = npc->y,
-        .dst_x = jv->skyfall_tile_x,
-        .dst_y = jv->skyfall_tile_y,
+        .dst_x = npc->x,
+        .dst_y = npc->y,
         .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
         .damage = 0,
         .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
@@ -325,7 +330,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
         .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
         .arc_height = 0.0f,
         .src_size = npc_size,
-        .dst_size = 1,
+        .dst_size = npc_size,
         .model_id = 0u,
         .anim_id = -1,
         .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,

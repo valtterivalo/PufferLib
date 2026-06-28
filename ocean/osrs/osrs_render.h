@@ -4926,14 +4926,6 @@ static void render_draw_3d_world(RenderClient* rc) {
                 ground + floating->height_offset,
                 -(anchor_y + 1.0f) + 0.5f
             };
-            /* a stacked telegraph orb is attached to the manticore, so it inherits
-               the live body facing and turns rigidly with it (matches the game,
-               where waiting orbs face the NPC front until launched). */
-            float npc_yaw = 0.0f;
-            if (floating->anchor_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT) {
-                int npc_idx = render_find_npc_entity_idx(rc, floating->npc_slot);
-                if (npc_idx >= 0) npc_yaw = rc->yaw[npc_idx];
-            }
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
             float spin = 0.0f;
             if (floating_bob_spin) {
@@ -4942,10 +4934,13 @@ static void render_draw_3d_world(RenderClient* rc) {
                 pos.y += 0.08f * sinf(bob_phase);
                 spin = floating_anim_t * (2.0f * PI / 150.0f);
             }
-            /* manticore orbs spin on the axis the real game uses per style: the
-               melee orb (model 51213) pitches toward its front (X), the magic orb
-               (51215) yaws like a spinning top (Y), the ranged orb (51221) rolls
-               (Z). Any other floating model keeps the default yaw. */
+            /* manticore orbs spin cleanly on the SINGLE axis the real game uses
+               per style: the melee orb (model 51213) pitches toward its front (X),
+               the magic orb (51215) yaws like a spinning top (Y), the ranged orb
+               (51221) rolls (Z). The three stacked orbs share one phase (no
+               per-index offset) so a waiting cluster reads as one charging set.
+               No body-yaw is mixed in -- composing it onto a non-Y roll tilts the
+               spin axis and reads as a wobble. */
             Matrix spin_rot;
             switch (floating->model_id) {
                 case 51213u: spin_rot = MatrixRotateX(spin); break;
@@ -4955,9 +4950,7 @@ static void render_draw_3d_world(RenderClient* rc) {
             rlDisableBackfaceCulling();
             model->transform = MatrixMultiply(
                 MatrixMultiply(
-                    MatrixMultiply(
-                        MatrixScale(-model_scale, model_scale, model_scale),
-                        MatrixRotateY(npc_yaw)),
+                    MatrixScale(-model_scale, model_scale, model_scale),
                     spin_rot),
                 MatrixTranslate(pos.x, pos.y, pos.z));
             DrawModel(*model, (Vector3){0,0,0}, 1.0f, WHITE);

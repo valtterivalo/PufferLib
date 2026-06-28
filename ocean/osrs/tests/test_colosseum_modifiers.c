@@ -5838,13 +5838,15 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         s.npcs[0].attacked_this_tick == 1);
     memset(&ov, 0, sizeof(ov));
     col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
-    CHECK("javelin skyfall launch emits the slow artillery lob",
+    CHECK("javelin skyfall launch lobs straight up out of the colossus",
         ov.projectile_count == 1 &&
         ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT &&
         ov.projectiles[0].source_npc_slot == 0 &&
         ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
-        ov.projectiles[0].dst_x == jv->skyfall_tile_x &&
-        ov.projectiles[0].dst_y == jv->skyfall_tile_y &&
+        ov.projectiles[0].src_x == s.npcs[0].x &&
+        ov.projectiles[0].src_y == s.npcs[0].y &&
+        ov.projectiles[0].dst_x == ov.projectiles[0].src_x &&
+        ov.projectiles[0].dst_y == ov.projectiles[0].src_y &&
         ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID &&
         ov.projectiles[0].travel_gfx_id != 2673 &&
         ov.projectiles[0].impact_gfx_id == 0 &&
