@@ -1,0 +1,228 @@
+[
+  {
+    "index": "MON_JAL_NIB",
+    "npc_id": 7691,
+    "comment": "Nibbler",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALNIB_ATTACK"],
+      "extra_anims": ["JALNIB_DEATH", "JALNIB_DEFEND"],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_JAL_MEJRAH",
+    "npc_id": 7692,
+    "comment": "Bat",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALMEJRAH_ATTACK"],
+      "extra_anims": ["JALMEJRAH_DEATH", "JALMEJRAH_DEFEND"],
+      "spotanims": ["SLAYER_MAGICDART_ENCHANTED_IMPACT"]
+    }
+  },
+  {
+    "index": "MON_JAL_AK",
+    "npc_id": 7693,
+    "comment": "Blob",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALAK_ATTACK_MAGIC", "JALAK_ATTACK_MELEE", "JALAK_ATTACK_RANGED"],
+      "extra_anims": ["JALAK_DEATH", "JALAK_DEFEND"],
+      "spotanims": ["INFERNO_HARPIE_PROJ", "DOUBLE_AMETHYST_ARROW_LAUNCH", "AMETHYST_ARROW_TRAVEL"]
+    }
+  },
+  {
+    "index": "MON_JAL_AKREK_MEJ",
+    "npc_id": 7694,
+    "comment": "Blob mage split",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": ["INFERNO_BABYSPLITTER_MAGE"]
+    }
+  },
+  {
+    "index": "MON_JAL_AKREK_XIL",
+    "npc_id": 7695,
+    "comment": "Blob range split",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": ["INFERNO_BABYSPLITTER_RANGE"]
+    }
+  },
+  {
+    "index": "MON_JAL_AKREK_KET",
+    "npc_id": 7696,
+    "comment": "Blob melee split",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_JAL_IMKOT",
+    "npc_id": 7697,
+    "comment": "Meleer",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALIMKOT_ATTACK"],
+      "extra_anims": ["JALIMKOT_DEATH", "JALIMKOT_DEFEND", "JALIMKOT_DIGDOWN", "JALIMKOT_DIGUP"],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_JAL_XIL",
+    "npc_id": 7698,
+    "comment": "Ranger",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALXIL_ATTACK_RANGED", "JALXIL_ATTACK_MELEE"],
+      "extra_anims": ["JALXIL_DEATH", "JALXIL_DEFEND"],
+      "spotanims": ["INFERNO_XIL_PROJECTILE", "INFERNO_SPLITTER_RANGE"]
+    }
+  },
+  {
+    "index": "MON_JAL_ZEK",
+    "npc_id": 7699,
+    "comment": "Mager",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALAKXIL_ATTACK_MAGIC", "JALAKXIL_ATTACK_MELEE"],
+      "extra_anims": ["JALAKXIL_DEATH", "JALAKXIL_RESURRECT"],
+      "spotanims": ["INFERNO_ZEK_PROJECTILE", "INFERNO_SPLITTER_MAGE"]
+    }
+  },
+  {
+    "index": "MON_JALTOK_JAD",
+    "npc_id": 7700,
+    "comment": "Jad",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["JALTOKJAD_ATTACK_RANGED", "JALTOKJAD_ATTACK_MAGIC", "JALTOKJAD_ATTACK_MELEE"],
+      "extra_anims": ["JALTOKJAD_DEATH", "JALTOKJAD_DEFEND"],
+      "spotanims": ["TZHAAR_FIRE_SPIT_LAUNCH", "TZHAAR_FIRE_SPIT_TRAVEL", "TZHAAR_ROCK_SMASH", "FIREWAVE_IMPACT"]
+    }
+  },
+  {
+    "index": "MON_YT_HURKOT",
+    "npc_id": 7701,
+    "comment": "Jad healer",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_TZKAL_ZUK",
+    "npc_id": 7706,
+    "comment": "Zuk",
+    "version": "Normal",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": ["ZUK_ATTACK"],
+      "extra_anims": ["ZUK_DEATH", "ZUK_DEFEND", "ZUK_SPAWN"],
+      "spotanims": ["INFERNO_ZUK_PROJECTILE"]
+    }
+  },
+  {
+    "index": "MON_ZUK_SHIELD",
+    "npc_id": 7707,
+    "comment": "Ancestral Glyph",
+    "manual_stats": {
+      "name": "Ancestral Glyph",
+      "hp": 600,
+      "size": 5,
+      "attack_speed": 0,
+      "max_hit": 0
+    },
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": ["MOVING_SAFE_SPOT_DEATH", "MOVING_SAFE_SPOT_HIT"],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_JAL_MEJJAK",
+    "npc_id": 7708,
+    "comment": "Zuk healer",
+    "visual": {
+      "group": "inferno",
+      "attack_anims": [],
+      "extra_anims": [],
+      "spotanims": ["AMETHYST_ARROW_LAUNCH"]
+    }
+  },
+  {
+    "index": "MON_ZULRAH_GREEN",
+    "npc_id": 2042,
+    "version": "Serpentine",
+    "comment": "Zulrah green/ranged form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_ACIDX3", "SNAKEBOSS_ATTACK_ACIDX1"],
+      "extra_anims": ["SNAKEBOSS_SPAWN", "SNAKEBOSS_SINKFAST", "SNAKEBOSS_EMERGEFAST", "SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": ["SNAKEBOSS_ORB", "SNAKEBOSS_DOUBLE_ORB", "SNAKEBOSS_FIREBALL", "SNAKEBOSS_EGG", "SNAKEBOSS_MINION_SPELL"]
+    }
+  },
+  {
+    "index": "MON_ZULRAH_RED",
+    "npc_id": 2043,
+    "version": "Magma",
+    "comment": "Zulrah red/melee form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_TAIL_LEFT", "SNAKEBOSS_ATTACK_TAIL_RIGHT"],
+      "extra_anims": ["SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_ZULRAH_BLUE",
+    "npc_id": 2044,
+    "version": "Tanzanite",
+    "comment": "Zulrah blue/magic form",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": ["SNAKEBOSS_ATTACK_ACIDX3"],
+      "extra_anims": ["SNAKEBOSS_DEATH", "SNAKEBOSS_DEFEND"],
+      "spotanims": ["SNAKEBOSS_ORB", "SNAKEBOSS_FIREBALL"]
+    }
+  },
+  {
+    "index": "MON_ZULRAH_SNAKELING_MELEE",
+    "npc_id": 2045,
+    "version": "Melee",
+    "comment": "Snakeling melee variant",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": [],
+      "attack_anim_ids": [140],
+      "extra_anims": [],
+      "extra_anim_ids": [138],
+      "spotanims": []
+    }
+  },
+  {
+    "index": "MON_ZULRAH_SNAKELING_MAGIC",
+    "npc_id": 2046,
+    "version": "Magic",
+    "comment": "Snakeling magic variant",
+    "visual": {
+      "group": "zulrah",
+      "attack_anims": [],
+      "attack_anim_ids": [185],
+      "extra_anims": [],
+      "extra_anim_ids": [138],
+      "spotanims": ["SNAKEBOSS_MINION_SPELL"]
+    }
+  }
+]

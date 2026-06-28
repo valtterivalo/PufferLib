@@ -118,7 +118,7 @@ fields feed directly into the section-1 NPC combat functions.
 
 ### Render/model mapping — data/npc_models.h (main worktree)
 - `NpcModelMapping` struct {npc_id, model_id, idle_anim, attack_anim, walk_anim} — npc_models.h:13.
-- `npc_model_lookup(npc_id)` — npc_models.h:121. Generic linear lookup over per-encounter tables. Colosseum regenerates this with its own NPC model/anim IDs (generator: `scripts/export_inferno_npcs.py`, despite the name).
+- `npc_model_lookup(npc_id)` — npc_models.h:121. Generic linear lookup over per-encounter tables. Colosseum regenerates this with its own NPC model/anim IDs (generator: `ocean/osrs/tools/export_colosseum_npcs.py`, which patches in the colosseum lookup arm).
 
 ### Generic NPC AI / stepping helpers — osrs_encounter.h
 There is **no shared "NPC brain"** (attack-selection / phase logic is per-encounter

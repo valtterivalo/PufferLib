@@ -29,16 +29,13 @@ from pathlib import Path
 
 
 def _find_cache_pipeline() -> Path:
-    """Locate the RuneC cache pipeline, which is gitignored and may live only in
-    the primary checkout rather than the current worktree."""
+    """Locate the vendored cache pipeline inside the tracked tree."""
     env_override = os.environ.get("OSRS_CACHE_PIPELINE")
     candidates = []
     if env_override:
         candidates.append(Path(env_override))
     repo_root = Path(__file__).resolve().parents[3]
-    candidates.append(repo_root / "refs" / "RuneC" / "tools" / "cache_pipeline")
-    common = Path.home() / "Projects" / "pufferlib-metal"
-    candidates.append(common / "refs" / "RuneC" / "tools" / "cache_pipeline")
+    candidates.append(repo_root / "ocean" / "osrs" / "tools" / "cache_pipeline")
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
