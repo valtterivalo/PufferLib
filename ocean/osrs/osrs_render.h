@@ -711,21 +711,11 @@ static Player* render_get_player_ptr(OsrsEnv* env, int index) {
     return NULL;
 }
 
-/** Look up an animation sequence, checking secondary NPC cache as fallback. */
-static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id) {
-    AnimSequence* seq = NULL;
-    if (rc->anim_cache) seq = anim_get_sequence(rc->anim_cache, seq_id);
-    if (!seq && rc->npc_anim_cache) seq = anim_get_sequence(rc->npc_anim_cache, seq_id);
-    if (!seq && rc->projectile_anim_cache)
-        seq = anim_get_sequence(rc->projectile_anim_cache, seq_id);
-    return seq;
-}
-
 /** A degenerate placeholder sequence: a single empty legacy frame with no
     framebase. The exporter emits this for a sequence id it cannot represent in
     a given file (e.g. a Maya-only clip written into the legacy-v2 equipment
-    anims). It animates nothing, so model-aware lookup skips it to reach a real
-    bake in another cache. */
+    anims). It animates nothing, so lookups skip it to reach a real bake in
+    another cache. */
 static int anim_sequence_is_empty_stub(const AnimSequence* seq) {
     if (!seq || seq->frame_count != 1) return 0;
     const AnimSequenceFrame* f = &seq->frames[0];
@@ -739,6 +729,32 @@ static int anim_sequence_maya_vert_count(const AnimSequence* seq) {
     if (!seq || seq->frame_count == 0) return 0;
     if (seq->frames[0].frame.kind != ANIM_FRAME_MAYA_BAKED) return 0;
     return seq->frames[0].frame.maya_vertex_count;
+}
+
+/** Look up an animation sequence, preferring a real (non-placeholder) bake over
+    an empty stub. The exporter writes a single-empty-frame stub into the legacy
+    v2 files for a Maya-only sequence id (e.g. the Shockwave clap 10903 lands in
+    equipment.anims as a stub while its real 90-frame Maya bake lives in
+    colosseum_npcs.anims). A plain first-hit returns the stub, whose frame_count
+    of 1 pins the frame index at 0 and trips the one-loop expiry every tick, so
+    the animation never visibly plays. Skipping the stub lets the frame-timing
+    and resolution paths see the real multi-frame bake. */
+static AnimSequence* render_get_anim_sequence(RenderClient* rc, uint16_t seq_id) {
+    AnimCache* caches[3] = {
+        rc->anim_cache, rc->npc_anim_cache, rc->projectile_anim_cache
+    };
+    AnimSequence* stub = NULL;
+    for (int i = 0; i < 3; i++) {
+        if (!caches[i]) continue;
+        AnimSequence* seq = anim_get_sequence(caches[i], seq_id);
+        if (!seq) continue;
+        if (anim_sequence_is_empty_stub(seq)) {
+            if (!stub) stub = seq;
+            continue;
+        }
+        return seq;
+    }
+    return stub;
 }
 
 /** Resolve an animation sequence for a SPECIFIC model. The same sequence id can
