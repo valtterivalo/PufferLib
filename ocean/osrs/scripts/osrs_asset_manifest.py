@@ -11,13 +11,13 @@ import sys
 
 
 EXPECTED_FORMAT = "puffer-osrs-asset-manifest-v1"
-EXPECTED_ASSET_VERSION = "osrs-assets-v18"
-EXPECTED_ARCHIVE_NAME = "osrs-assets-v18.tar.gz"
+EXPECTED_ASSET_VERSION = "osrs-assets-v19"
+EXPECTED_ARCHIVE_NAME = "osrs-assets-v19.tar.gz"
 EXPECTED_ARCHIVE_URL = (
     "https://github.com/valtterivalo/PufferLib/releases/download/"
-    "osrs-assets-v18/osrs-assets-v18.tar.gz"
+    "osrs-assets-v19/osrs-assets-v19.tar.gz"
 )
-EXPECTED_ARCHIVE_SHA256 = "02b89833adb6bf1b35ae074dcaf2877e4435f28bd344bc367b88ed590e594501"
+EXPECTED_ARCHIVE_SHA256 = "0fef1d51f46557b73410390c3fcf1996e77bcfa396cd56772a1b0fea782cfec1"
 
 
 @dataclass(frozen=True)
