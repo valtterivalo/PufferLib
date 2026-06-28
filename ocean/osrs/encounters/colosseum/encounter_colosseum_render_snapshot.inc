@@ -233,7 +233,10 @@ enum {
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
     COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
-    COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS = 18,
+    /* the javelin lobs up over the first half of the telegraph, hangs at apex,
+       then falls straight down over the second half so it lands on the damage
+       tick. In game ticks; the emit converts to client ticks (*30). */
+    COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS = COLO_JAVELIN_SKYFALL_DELAY / 2,
     COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
 };
 
@@ -315,6 +318,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
         .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
         .damage = 0,
         .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
+            COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS -
             COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
         .start_h = (int)(npc_size * 0.75f * 128),
         .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
@@ -364,21 +368,24 @@ static void col_emit_manticore_orb_telegraphs(
     }
 }
 
-static void col_emit_javelin_skyfall_landing_projectile(
+/** Emit the javelin's straight-down descent onto the marked tile. Driven from
+    the live telegraph (not a post-resolution event), so it falls as the shadow
+    grows and its impact burst fires on the damage tick. Called once per skyfall,
+    on the tick the telegraph crosses its midpoint, so it becomes a single
+    descent flight rather than one per tick. */
+static void col_emit_javelin_skyfall_drop_projectile(
     EncounterOverlay* ov,
-    const ColoJavelinSkyfallLandingRenderEvent* event
+    const ColoJavelinState* jv
 ) {
-    if (!event || !event->active)
-        return;
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec projectile_spec = {
-        .src_x = event->tile_x,
-        .src_y = event->tile_y,
-        .dst_x = event->tile_x,
-        .dst_y = event->tile_y,
+        .src_x = jv->skyfall_tile_x,
+        .src_y = jv->skyfall_tile_y,
+        .dst_x = jv->skyfall_tile_x,
+        .dst_y = jv->skyfall_tile_y,
         .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
-        .damage = event->damage,
-        .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS,
+        .damage = 0,
+        .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS * 30,
         .start_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
         .end_h = COLO_JAVELIN_SKYFALL_GROUND_HEIGHT,
         .curve = COLO_JAVELIN_SKYFALL_DROP_CURVE,
@@ -760,8 +767,11 @@ static void col_render_post_tick_ctx(
         if (!npc->active || npc->type != COLO_JAVELIN_COLOSSUS)
             continue;
         ColoJavelinState* jv = colo_npc_javelin(npc);
-        if (jv->skyfall_pending)
-            col_emit_javelin_skyfall_shadow(ov, jv);
+        if (!jv->skyfall_pending)
+            continue;
+        col_emit_javelin_skyfall_shadow(ov, jv);
+        if (jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS)
+            col_emit_javelin_skyfall_drop_projectile(ov, jv);
     }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
@@ -776,10 +786,6 @@ static void col_render_post_tick_ctx(
         if (!npc->active || !npc->attacked_this_tick)
             continue;
         col_emit_npc_attack_projectile(s, ctx, ov, i);
-    }
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        col_emit_javelin_skyfall_landing_projectile(
-            ov, &ctx->javelin_skyfall_landing[i]);
     }
     col_emit_player_attack_projectiles(s, ctx, ov);
     if (ctx->thrall_attacked_this_tick)

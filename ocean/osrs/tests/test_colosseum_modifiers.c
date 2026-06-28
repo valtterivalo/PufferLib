@@ -5854,6 +5854,7 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
             COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30 &&
         ov.projectiles[0].duration_ticks ==
             (COLO_JAVELIN_SKYFALL_DELAY -
+             COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS -
              COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30);
     CHECK("javelin skyfall launch emits growing target shadow",
         ov.tile_shadow_count == 1 &&
@@ -5898,19 +5899,27 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
     CHECK("javelin normal attack after skyfall uses throw body animation",
         npc_anim_count >= 2 && npc_anim_entities[1].npc_anim_id == 10892);
 
+    /* the descent rains straight down DURING the telegraph (driven by the live
+       pending timer, not a post-resolution event), emitted once on the tick the
+       timer crosses the midpoint so it lands as the shadow hits max = damage. */
     init_forecast_test_state(&s, &ctx, 504, 17, 16);
     col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
     jv = colo_npc_javelin(&s.npcs[0]);
     jv->skyfall_pending = 1;
-    jv->skyfall_timer = 1;
-    jv->skyfall_tile_x = s.player.x;
-    jv->skyfall_tile_y = s.player.y;
+    jv->skyfall_tile_x = 21;
+    jv->skyfall_tile_y = 15;
     jv->skyfall_damage = 37;
-    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
+    /* above the drop point: shadow grows, but the javelin is still arcing up. */
+    jv->skyfall_timer = COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS + 1;
     memset(&ov, 0, sizeof(ov));
     col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
-    CHECK("javelin skyfall landing clears target shadow", ov.tile_shadow_count == 0);
-    CHECK("javelin skyfall landing emits fast drop and fiery impact",
+    CHECK("javelin skyfall descent holds until the telegraph midpoint",
+        ov.tile_shadow_count == 1 && ov.projectile_count == 0);
+    /* at the drop point: the straight-down descent + fiery impact spawns once. */
+    jv->skyfall_timer = COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS;
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall descent falls straight down with fiery impact at the midpoint",
         ov.projectile_count == 1 &&
         ov.projectiles[0].source_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
         ov.projectiles[0].target_kind == ENCOUNTER_PROJECTILE_TARGET_FIXED &&
@@ -5921,10 +5930,24 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID &&
         ov.projectiles[0].travel_gfx_id != 2673 &&
         ov.projectiles[0].impact_gfx_id == COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID &&
-        ov.projectiles[0].damage == 37 &&
         ov.projectiles[0].start_h > ov.projectiles[0].end_h &&
         ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_DROP_CURVE &&
-        ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS);
+        ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS * 30);
+    /* below the drop point: the descent flight already spawned; not re-emitted. */
+    jv->skyfall_timer = COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS - 1;
+    CHECK("javelin skyfall drop point leaves room below it", jv->skyfall_timer >= 1);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall descent is not re-emitted after the midpoint",
+        ov.projectile_count == 0);
+    /* resolution applies the hit and clears the telegraph; no late descent. */
+    jv->skyfall_timer = 1;
+    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
+    memset(&ov, 0, sizeof(ov));
+    col_render_post_tick_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &ov);
+    CHECK("javelin skyfall landing clears the shadow and emits no late descent",
+        ov.tile_shadow_count == 0 && ov.projectile_count == 0 &&
+        jv->skyfall_pending == 0);
 
     init_forecast_test_state(&s, &ctx, 503, 17, 16);
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);

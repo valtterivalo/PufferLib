@@ -200,62 +200,34 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
-/** Render-only: a deterministic free tile adjacent to the thrall's current sim
-    target NPC (s->thrall_target_slot), so the viewer shows it standing to attack
-    the enemy it auto-attacks rather than glued to the player. The sim never
-    positions the thrall (its damage is not range-gated), so the viewer scans the
-    ring around the target footprint and picks the walkable tile nearest the
-    player (the near side a melee/ranged actor would stand on). Falls back to the
-    target's own tile, then to the player-adjacent scan, then the player tile when
-    the thrall has no live target. Both the render-entity and projectile emitters
-    call this so the model and its bolt share one source tile. */
+/** Render-only: a free, visible tile next to the PLAYER for the allied thrall to
+    stand on. In OSRS the thrall loosely follows its caster and lobs its bolt at
+    whatever the caster fights, so it lives beside the player rather than glued to
+    (or inside) an enemy. Scans the player-adjacent ring first, then widens one
+    tile out, rejecting static blocks, NPC footprints, and the player's own tile
+    (col_npc_blocked over a 1x1 footprint covers all three), so the thrall is
+    always drawn on a clear tile instead of hidden under the player or behind a
+    colossus. Both the render-entity and projectile emitters call this so the
+    model and its bolt share one source tile. */
 static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
-    static const int ADJ[8][2] = {
-        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
-        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
-    int slot = s->thrall_target_slot;
-    if (col_npc_is_thrall_target(s, slot)) {
-        const ColoNPC* target = &s->npcs[slot];
-        int size = col_npc_effective_size(target);
-        int best_x = -1, best_y = -1, best_dist = 0;
-        for (int dx = -1; dx <= size; dx++) {
-            for (int dy = -1; dy <= size; dy++) {
-                int on_footprint = dx >= 0 && dx < size && dy >= 0 && dy < size;
-                if (on_footprint) continue;
-                int x = target->x + dx;
-                int y = target->y + dy;
-                if (!col_player_walkable((void*)s, x, y)) continue;
-                int ddx = x - s->player.x;
-                int ddy = y - s->player.y;
-                int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
-                    ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
-                if (best_x < 0 || dist < best_dist) {
-                    best_x = x;
-                    best_y = y;
-                    best_dist = dist;
-                }
-            }
-        }
-        if (best_x >= 0) {
-            *out_x = best_x;
-            *out_y = best_y;
-            return;
-        }
-        *out_x = target->x;
-        *out_y = target->y;
-        return;
-    }
-    for (int a = 0; a < 8; a++) {
-        int x = s->player.x + ADJ[a][0];
-        int y = s->player.y + ADJ[a][1];
-        if (col_player_walkable((void*)s, x, y)) {
+    static const int RING[16][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},          /* adjacent cardinals */
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1},        /* adjacent diagonals */
+        {0, 2}, {2, 0}, {-2, 0}, {0, -2},          /* one tile further out */
+        {1, 2}, {2, 1}, {-1, 2}, {-2, 1} };
+    for (int a = 0; a < 16; a++) {
+        int x = s->player.x + RING[a][0];
+        int y = s->player.y + RING[a][1];
+        if (!col_npc_blocked((void*)s, x, y, 1)) {
             *out_x = x;
             *out_y = y;
             return;
         }
     }
+    /* a tight pile-in left no clear neighbour: still draw the thrall off the
+       player tile rather than dropping it. */
     *out_x = s->player.x;
-    *out_y = s->player.y;
+    *out_y = s->player.y + 1;
 }
 
 /** populate render entities (player + active NPCs). */
@@ -351,34 +323,29 @@ static void col_fill_render_entities_ctx(
     if (s->thrall_active && n < max_entities) {
         int tx, ty;
         col_thrall_render_tile(s, &tx, &ty);
-        /* hide the thrall when the player stands on its render tile: the tile
-           picker falls back to the player's own tile when no walkable neighbour
-           exists, and drawing the thrall under the player looks wrong. */
-        if (tx != s->player.x || ty != s->player.y) {
-            RenderEntity* re = &out[n++];
-            OsrsNpcRenderEntitySpec thrall_spec = {
-                .npc_def_id = COLO_NPC_DEF_ID_THRALL,
-                .npc_slot = COLO_NPC_SLOT_THRALL,
-                .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
-                .npc_visible = 1,
-                .npc_size = 1,
-                .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
-                .x = tx,
-                .y = ty,
-                .dest_x = tx,
-                .dest_y = ty,
-                .current_hitpoints = 1,
-                .base_hitpoints = 1,
-                .attack_style_this_tick = ATTACK_STYLE_NONE,
-                .hit_landed_this_tick = 0,
-                .hit_damage = 0,
-                .hit_was_successful = 0,
-                .hit_spell_type = ENCOUNTER_SPELL_NONE,
-                .attack_target_entity_idx = 0,
-            };
-            osrs_render_entity_from_npc_spec(&thrall_spec, re);
-            re->debug_npc_type_name = "Arceuus Thrall";
-        }
+        RenderEntity* re = &out[n++];
+        OsrsNpcRenderEntitySpec thrall_spec = {
+            .npc_def_id = COLO_NPC_DEF_ID_THRALL,
+            .npc_slot = COLO_NPC_SLOT_THRALL,
+            .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
+            .npc_visible = 1,
+            .npc_size = 1,
+            .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
+            .x = tx,
+            .y = ty,
+            .dest_x = tx,
+            .dest_y = ty,
+            .current_hitpoints = 1,
+            .base_hitpoints = 1,
+            .attack_style_this_tick = ATTACK_STYLE_NONE,
+            .hit_landed_this_tick = 0,
+            .hit_damage = 0,
+            .hit_was_successful = 0,
+            .hit_spell_type = ENCOUNTER_SPELL_NONE,
+            .attack_target_entity_idx = 0,
+        };
+        osrs_render_entity_from_npc_spec(&thrall_spec, re);
+        re->debug_npc_type_name = "Arceuus Thrall";
     }
 
     if (s->solarflare.active) {

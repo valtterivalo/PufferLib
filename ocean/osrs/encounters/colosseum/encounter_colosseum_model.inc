@@ -1800,14 +1800,6 @@ typedef enum {
 } ColoNpcRenderAttackAnim;
 
 typedef struct {
-    int active;
-    int npc_slot;
-    int tile_x;
-    int tile_y;
-    int damage;
-} ColoJavelinSkyfallLandingRenderEvent;
-
-typedef struct {
     ColConfig config;
     const CollisionMap* collision_map;
     int world_offset_x;
@@ -1818,7 +1810,6 @@ typedef struct {
     int human_command_mode;
     ColoNpcRenderAttackAnim npc_render_attack_anim[COLO_MAX_NPCS];
     int manticore_charge_started[COLO_MAX_NPCS];
-    ColoJavelinSkyfallLandingRenderEvent javelin_skyfall_landing[COLO_MAX_NPCS];
     int player_render_hit_count;
     int player_render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int npc_render_hit_count[COLO_MAX_NPCS];
@@ -1837,7 +1828,6 @@ static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     if (!ctx) return;
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
     memset(ctx->manticore_charge_started, 0, sizeof(ctx->manticore_charge_started));
-    memset(ctx->javelin_skyfall_landing, 0, sizeof(ctx->javelin_skyfall_landing));
     ctx->player_render_hit_count = 0;
     memset(ctx->player_render_hit_damage, 0, sizeof(ctx->player_render_hit_damage));
     memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));

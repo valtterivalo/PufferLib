@@ -500,15 +500,6 @@ static void col_npc_resolve_javelin_skyfall(
     jv->skyfall_pending = 0;
     int on_tile = (s->player.x == jv->skyfall_tile_x && s->player.y == jv->skyfall_tile_y);
     int dmg = on_tile ? jv->skyfall_damage : 0;
-    if (ctx) {
-        ctx->javelin_skyfall_landing[idx] = (ColoJavelinSkyfallLandingRenderEvent){
-            .active = 1,
-            .npc_slot = idx,
-            .tile_x = jv->skyfall_tile_x,
-            .tile_y = jv->skyfall_tile_y,
-            .damage = dmg,
-        };
-    }
     col_damage_player_from(s, dmg, npc->type);
     if (dmg > 0) {
         s->last_hit_by_type = npc->type;
