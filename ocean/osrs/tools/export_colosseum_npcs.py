@@ -51,6 +51,12 @@ sys.path.insert(0, str(CACHE_PIPELINE))
 
 from modern_cache_reader import ModernCacheReader
 from rc_cache.definitions import decode_npc_definition
+from rc_cache import (
+    RcCacheStore,
+    load_texture_average_colors,
+    load_texture_sprites,
+)
+from export_textures import build_atlas
 from export_models import (
     ModelData,
     _merge_models,
@@ -1469,7 +1475,15 @@ def main() -> None:
 
     models, mapping, sequence_models = build_npc_models(reader, npc_files)
     models_path = args.output_dir / "colosseum_npcs.models"
-    write_models_binary(models_path, models)
+    # MDL4 (textured) output: passing an atlas makes write_models_binary emit the
+    # per-face alpha block (face_alphas + face_alpha_labels) the MDL2 path drops.
+    # Colosseum NPC component models carry real animation-alpha labels (e.g. the
+    # Shockwave Colossus body), so this is what lets their type-5 alpha shimmer
+    # round-trip into colosseum_npcs.models for the composite render path.
+    store = RcCacheStore(args.modern_cache)
+    tex_colors = load_texture_average_colors(store)
+    atlas = build_atlas(load_texture_sprites(store))
+    write_models_binary(models_path, models, tex_colors=tex_colors, atlas=atlas)
     print(f"wrote {len(models)} models ({models_path.stat().st_size:,} bytes) to {models_path}")
 
     anim_ids = collect_anim_ids(mapping)
