@@ -158,8 +158,7 @@ typedef struct {
                                    spotanim's Maya clip cannot deform this mesh (no matching
                                    per-vertex rig) but the in-game effect expands as it travels
                                    (Shockwave Colossus clap projectile) */
-    int anim_frame;
-    int anim_tick_counter;
+    AnimPlayback anim_playback; /* resolved-once sequence + frame cursor (advance == draw) */
     AnimModelState* anim_state;
     int launch_gfx_id;          /* muzzle spotanim to spawn at the source on release */
     int launch_spawned;         /* 1 once the launch spotanim has fired (one-shot) */
@@ -845,6 +844,29 @@ static RenderAnimTrackFrame render_resolve_anim_track_frame(
         abort();
     }
     return out;
+}
+
+/** Resolve (or re-resolve) an AnimPlayback's sequence for the given model vertex
+    count. This is the ONE place a sequence lookup happens for a playback, so the
+    advance (anim_playback_advance) and the per-frame read (below) can never pick
+    a different sequence than each other. Idempotent: re-resolves only when the
+    sequence id or the model's vertex count changes. */
+static inline void render_anim_playback_resolve(
+    RenderClient* rc, AnimPlayback* pb, int model_vert_count
+) {
+    if (pb->seq_id < 0) { pb->sequence = NULL; return; }
+    if (pb->sequence && pb->model_vert_count == model_vert_count) return;
+    pb->sequence = render_get_anim_sequence_for_model(
+        rc, (uint16_t)pb->seq_id, model_vert_count);
+    pb->model_vert_count = model_vert_count;
+}
+
+/** Read the current frame of a resolved playback (the sequence pointer the
+    cursor already holds, never a fresh lookup). */
+static inline RenderAnimTrackFrame render_anim_playback_frame(
+    RenderClient* rc, const AnimPlayback* pb
+) {
+    return render_resolve_anim_track_frame(rc, pb->sequence, pb->frame_idx);
 }
 
 /** Apply one legacy or baked Maya sequence frame to a standalone OSRS model. */
@@ -2499,8 +2521,16 @@ static void flight_spawn(RenderClient* rc,
             }
         }
     }
-    fp->anim_frame = 0;
-    fp->anim_tick_counter = 0;
+    /* Resolve the playback ONCE, model-aware, so advance + draw read the same
+       sequence (the spawn-time _for_model check above already picked the right
+       bake; without this the advance/draw re-lookups could pick another). */
+    anim_playback_reset(&fp->anim_playback);
+    if (fp->anim_id >= 0) {
+        OsrsModel* pm = render_get_flight_osrs_model(rc, fp);
+        anim_playback_set_seq(&fp->anim_playback, fp->anim_id, ANIM_PLAY_LOOP);
+        render_anim_playback_resolve(
+            rc, &fp->anim_playback, pm ? (int)pm->base_vert_count : 0);
+    }
     fp->anim_state = render_create_projectile_anim_state_from_model(
         render_get_flight_osrs_model(rc, fp), fp->model_id, fp->anim_id);
     fp->launch_gfx_id = launch_gfx_id;
@@ -2542,20 +2572,13 @@ static void flight_spawn(RenderClient* rc,
 }
 
 static void flight_advance_animation(RenderClient* rc, FlightProjectile* fp) {
+    (void)rc;
     if (fp->anim_id < 0) return;
-    AnimSequence* seq = render_get_anim_sequence(rc, (uint16_t)fp->anim_id);
-    if (!seq || seq->frame_count <= 0) {
+    if (!fp->anim_playback.sequence || fp->anim_playback.sequence->frame_count <= 0) {
         fprintf(stderr, "render: projectile animation %d is missing\n", fp->anim_id);
         abort();
     }
-    fp->anim_tick_counter++;
-    while (fp->anim_tick_counter >= seq->frames[fp->anim_frame].delay) {
-        fp->anim_tick_counter -= seq->frames[fp->anim_frame].delay;
-        fp->anim_frame++;
-        if (fp->anim_frame >= seq->frame_count) {
-            fp->anim_frame = 0;
-        }
-    }
+    anim_playback_advance(&fp->anim_playback);
 }
 
 static inline Matrix render_projectile_transform(
@@ -5520,15 +5543,15 @@ static void render_draw_3d_world(RenderClient* rc) {
             Model* proj_model = NULL;
             if (fp->anim_id >= 0 && (fp->model_id > 0 || fp->travel_gfx_drives_model)) {
                 OsrsModel* om = render_get_flight_osrs_model(rc, fp);
-                AnimSequence* seq = render_get_anim_sequence(rc, (uint16_t)fp->anim_id);
+                AnimSequence* seq = fp->anim_playback.sequence;
                 if (!fp->anim_state || !seq || seq->frame_count <= 0 || !om->face_indices) {
                     fprintf(stderr, "render: projectile model %u cannot render animation %d\n",
                             fp->model_id, fp->anim_id);
                     abort();
                 }
-                if (fp->anim_frame >= seq->frame_count) fp->anim_frame = 0;
+                int frame_idx = fp->anim_playback.frame_idx % seq->frame_count;
                 render_apply_anim_sequence_frame_to_model_state(
-                    rc, fp->anim_state, om, seq, fp->anim_frame,
+                    rc, fp->anim_state, om, seq, frame_idx,
                     "projectile");
                 proj_model = &om->model;
             } else if (fp->travel_gfx_drives_model) {

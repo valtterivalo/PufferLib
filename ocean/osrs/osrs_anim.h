@@ -95,6 +95,70 @@ typedef struct {
     AnimSequenceFrame* frames;
 } AnimSequence;
 
+typedef enum {
+    ANIM_PLAY_LOOP = 0,
+    ANIM_PLAY_ONCE = 1,
+} AnimPlaybackMode;
+
+/** One animation playback cursor that owns BOTH the resolved sequence and the
+    frame position. The sequence is resolved ONCE (model-aware, in the render
+    layer via render_anim_playback_resolve) and stored here; advance and the
+    per-frame read then both go through ->sequence, never a fresh lookup. This
+    makes the frame-advance vs frame-resolution split (which froze the Shockwave
+    clap) structurally impossible: there is one source of truth for both the
+    sequence and the cursor. The cursor ops below are pure (sequence-only); the
+    cache-aware resolve + frame read live in osrs_render.h. */
+typedef struct {
+    int           seq_id;          /* -1 = inactive */
+    AnimSequence* sequence;        /* resolved view; NULL until first resolve */
+    int           model_vert_count;/* vertex count the sequence was resolved against */
+    int           frame_idx;
+    int           ticks_in_frame;
+    int           completed_loops;
+    AnimPlaybackMode mode;
+} AnimPlayback;
+
+static inline void anim_playback_reset(AnimPlayback* pb) {
+    pb->seq_id = -1;
+    pb->sequence = NULL;
+    pb->model_vert_count = -1;
+    pb->frame_idx = 0;
+    pb->ticks_in_frame = 0;
+    pb->completed_loops = 0;
+    pb->mode = ANIM_PLAY_LOOP;
+}
+
+/** Point the cursor at a (possibly new) sequence id, resetting the frame
+    position and forcing a re-resolve. No lookup happens here (no cache access);
+    a same-id, same-mode call is a no-op so an in-progress animation is kept. */
+static inline void anim_playback_set_seq(
+    AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
+) {
+    if (pb->seq_id == seq_id && pb->mode == mode) return;
+    pb->seq_id = seq_id;
+    pb->mode = mode;
+    pb->sequence = NULL;
+    pb->frame_idx = 0;
+    pb->ticks_in_frame = 0;
+    pb->completed_loops = 0;
+}
+
+/** Advance the cursor by one client tick using the resolved sequence. No-op
+    until the sequence has been resolved (render_anim_playback_resolve). */
+static inline void anim_playback_advance(AnimPlayback* pb) {
+    AnimSequence* seq = pb->sequence;
+    if (!seq || seq->frame_count <= 0) return;
+    int fidx = pb->frame_idx % seq->frame_count;
+    int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
+    pb->ticks_in_frame++;
+    if (pb->ticks_in_frame >= delay) {
+        pb->ticks_in_frame = 0;
+        int next = (fidx + 1) % seq->frame_count;
+        pb->frame_idx = next;
+        if (next == 0) pb->completed_loops++;
+    }
+}
+
 typedef struct {
     AnimFrameBase* bases;
     int            base_count;
