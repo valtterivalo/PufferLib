@@ -63,31 +63,43 @@ static void col_deactivate_npc(ColosseumState* s, int idx) {
     npc->active = 0;
 }
 
-/** Roll the persistent manticore cycle once at spawn. */
-static void col_roll_manticore_fixed_orb_cycle(ColosseumState* s, ColoManticoreState* mc) {
+/** Roll one manticore orb cycle into `out`. Mantimayhem III shuffles all three
+    styles; otherwise melee is always last and only the magic/ranged lead varies. */
+static void col_roll_manticore_orb_cycle(ColosseumState* s, AttackStyle out[3]) {
     int mantimayhem = s->modifiers.tier[COLO_MOD_MANTIMAYHEM];
     if ((s->modifiers.active_mask & (1u << COLO_MOD_MANTIMAYHEM)) == 0) {
         mantimayhem = 0;
     }
     if (mantimayhem >= 3) {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_RANGED;
+        out[1] = ATTACK_STYLE_MAGIC;
+        out[2] = ATTACK_STYLE_MELEE;
         for (int o = 2; o > 0; o--) {
             int j = encounter_rand_int(&s->rng_state, o + 1);
-            AttackStyle tmp = mc->fixed_orb_style[o];
-            mc->fixed_orb_style[o] = mc->fixed_orb_style[j];
-            mc->fixed_orb_style[j] = tmp;
+            AttackStyle tmp = out[o];
+            out[o] = out[j];
+            out[j] = tmp;
         }
     } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_RANGED;
+        out[1] = ATTACK_STYLE_MAGIC;
+        out[2] = ATTACK_STYLE_MELEE;
     } else {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_MAGIC;
+        out[1] = ATTACK_STYLE_RANGED;
+        out[2] = ATTACK_STYLE_MELEE;
     }
+}
+
+/** The wave-shared manticore orb cycle, rolled once at the wave's first manticore
+    spawn. OSRS pairs always fire the same pattern, so the second (and any later)
+    manticore copies this instead of rolling its own. */
+static const AttackStyle* col_wave_manticore_orb_cycle(ColosseumState* s) {
+    if (!s->wave_manticore_pattern_rolled) {
+        col_roll_manticore_orb_cycle(s, s->wave_manticore_orb_style);
+        s->wave_manticore_pattern_rolled = 1;
+    }
+    return s->wave_manticore_orb_style;
 }
 
 /** initialize a fresh NPC of `type` at (x, y) from the placeholder stat table. */
@@ -97,7 +109,9 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->type = type;
     colo_npc_init_type_state(npc);
     if (type == COLO_MANTICORE) {
-        col_roll_manticore_fixed_orb_cycle(s, colo_npc_manticore(npc));
+        const AttackStyle* cycle = col_wave_manticore_orb_cycle(s);
+        ColoManticoreState* mc = colo_npc_manticore(npc);
+        for (int o = 0; o < 3; o++) mc->fixed_orb_style[o] = cycle[o];
     }
     const ColoNpcStats* st = &COLO_NPC_STATS[type];
     npc->x = x;
@@ -298,6 +312,8 @@ static void col_spawn_wave(ColosseumState* s) {
     /* B2(a): re-arm the shared warband cycle; the step loop anchors it to the
        wave's first actionable tick N. */
     s->warband_cycle_anchor = -1;
+    /* re-arm the wave-shared manticore orb cycle; rolled at the first manticore. */
+    s->wave_manticore_pattern_rolled = 0;
 
     if (s->wave < 0 || s->wave >= COLO_NUM_WAVES) return;
     const ColoWaveDef* def = &COLO_WAVES[s->wave];

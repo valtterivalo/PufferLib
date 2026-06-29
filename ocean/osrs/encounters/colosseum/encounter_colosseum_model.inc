@@ -1125,14 +1125,14 @@ typedef struct {
 
 /** manticore 3-orb barrage cycle. valid iff type is COLO_MANTICORE; reach it
     through colo_npc_manticore(). fixed_orb_style is the persistent spawn-time
-    cycle. orb_style is the visible active telegraph and firing queue only.
-    cycle_step counts ticks within a barrage: -1 = idle, 0/1/2 = next orb.
+    cycle, copied from the wave-shared roll so every manticore in a wave fires
+    the same pattern. orb_style is the visible active telegraph and firing queue
+    only. cycle_step counts ticks within a barrage: -1 = idle, 0/1/2 = next orb.
     D11: movement is NOT restricted while charging. */
 typedef struct {
     int cycle_step;
     AttackStyle orb_style[3];
     AttackStyle fixed_orb_style[3];
-    int pattern_copied;
 } ColoManticoreState;
 
 /** javelin skyfall cadence. Valid iff type is COLO_JAVELIN_COLOSSUS. Reach it
@@ -1227,11 +1227,6 @@ static inline int col_warband_window_offset(ColoNpcType type) {
 #define COLO_JAVELIN_SKYFALL_ANIM_ID 10893
 /** a ready manticore delays its barrage start while another is mid-barrage. */
 #define COLO_MANTICORE_STAGGER_TICKS 5
-/** B10: from this wave (0-based; wave 9), a manticore's freshly-drawn orb
-    pattern is copied by peers within COLO_MANTICORE_COPY_RANGE tiles
-    (centre-to-centre) with line of sight. */
-#define COLO_MANTICORE_COPY_MIN_WAVE 8
-#define COLO_MANTICORE_COPY_RANGE 15
 /** A13: minotaur heal reach, centre-to-centre tiles (the wiki's 6-from-edge
     phrasing reconciles to 7-from-centre for the 3x3 minotaur). */
 #define COLO_MINOTAUR_HEAL_RANGE 7
@@ -1947,6 +1942,11 @@ typedef struct {
     int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
+    /* every manticore in a wave shares one orb cycle (OSRS pairs are always on
+       the same pattern). Rolled once at the wave's first manticore spawn; the
+       flag re-arms each wave in col_spawn_wave. */
+    AttackStyle wave_manticore_orb_style[3];
+    int wave_manticore_pattern_rolled;
     int current_wave_total_killable;
     /* fresh-damage wave progress: current_wave_hp_pool = sum of base/max HP of
        every non-hazard enemy spawned this wave (initial + reinforcements), fixed

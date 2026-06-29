@@ -590,39 +590,15 @@ static void col_npc_manticore_advance_barrage(ColosseumState* s, int idx, const 
     col_npc_manticore_fire_orb(s, idx, stats);
 }
 
-/** B10: from wave 9, a manticore's fixed cycle is copied onto idle peers within
-    range and line of sight. The peer still exposes it only after arming. */
-static void col_manticore_copy_pattern_to_peers(ColosseumState* s, int idx) {
-    if (s->wave < COLO_MANTICORE_COPY_MIN_WAVE) return;
-    ColoNPC* src = &s->npcs[idx];
-    ColoManticoreState* smc = colo_npc_manticore(src);
-    int scx = src->x + 1, scy = src->y + 1;
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        if (i == idx) continue;
-        ColoNPC* other = &s->npcs[i];
-        if (!col_npc_is_live_target(other)) continue;
-        if (other->type != COLO_MANTICORE) continue;
-        ColoManticoreState* omc = colo_npc_manticore(other);
-        if (omc->cycle_step >= 0) continue;
-        if (omc->orb_style[0] != ATTACK_STYLE_NONE) continue;
-        int ocx = other->x + 1, ocy = other->y + 1;
-        int dx = ocx > scx ? ocx - scx : scx - ocx;
-        int dy = ocy > scy ? ocy - scy : scy - ocy;
-        if ((dx > dy ? dx : dy) > COLO_MANTICORE_COPY_RANGE) continue;
-        if (!col_tiles_have_los(s, scx, scy, ocx, ocy)) continue;
-        for (int o = 0; o < 3; o++) omc->fixed_orb_style[o] = smc->fixed_orb_style[o];
-        omc->pattern_copied = 1;
-    }
-}
-
-/** Arm the next barrage by copying the fixed cycle into the visible queue. */
+/** Arm the next barrage by copying the wave-shared fixed cycle into the visible
+    queue. Every manticore in the wave already holds the same fixed_orb_style
+    (set at spawn), so the pair fires identical patterns. */
 static void col_npc_manticore_arm(ColosseumState* s, int idx) {
     ColoManticoreState* mc = colo_npc_manticore(&s->npcs[idx]);
     if (mc->cycle_step >= 0) return;
     if (mc->orb_style[0] != ATTACK_STYLE_NONE) return;
     for (int o = 0; o < 3; o++) mc->orb_style[o] = mc->fixed_orb_style[o];
     mc->cycle_step = 0;
-    col_manticore_copy_pattern_to_peers(s, idx);
 }
 
 /** start a manticore barrage once its charge completes: a ready manticore
@@ -636,7 +612,6 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
         npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
         return;
     }
-    mc->pattern_copied = 0;
     mc->cycle_step = 0;
     col_npc_manticore_fire_orb(s, idx, stats);
 }

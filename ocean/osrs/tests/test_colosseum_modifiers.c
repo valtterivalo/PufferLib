@@ -1378,6 +1378,7 @@ static void test_mantimayhem_t3_shuffle(void) {
     int melee_slot_seen[3] = { 0, 0, 0 };
     for (int rep = 0; rep < 300; rep++) {
         geo_clear_npcs(&s);
+        s.wave_manticore_pattern_rolled = 0;   /* each rep models a fresh wave roll */
         col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
         ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
         if (mc->orb_style[0] != ATTACK_STYLE_NONE ||
@@ -3009,99 +3010,83 @@ static void test_manticore_orb_same_tick_flick(void) {
         !flicked_damage);
 }
 
-/* 5d. B10: from wave 9 a manticore's fixed cycle is copied into idle peers when
-   within 15 tiles with LoS. The peer reveals it only after arming. */
-static void test_manticore_pattern_copy(void) {
-    printf("test_manticore_pattern_copy\n");
+/* 5d. Every manticore in a wave shares one orb cycle (OSRS pairs are always on
+   the same pattern). The wave-shared spawn-time roll replaces the old
+   within-15-tiles copy-on-arm: both manticores hold identical fixed_orb_style
+   from spawn, and the 5-tick multi-manticore stagger still desyncs their timing. */
+static void test_manticore_shared_wave_cycle(void) {
+    printf("test_manticore_shared_wave_cycle\n");
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
+
+    int all_shared = 1;
+    int all_valid = 1;
+    int saw_double = 0;
+    /* waves 9/10/11 (0-based 8/9/10) spawn two manticores. */
+    for (int wave = 8; wave <= 10; wave++) {
+        for (uint32_t seed = 1; seed <= 40; seed++) {
+            ColosseumState s;
+            memset(&s, 0, sizeof(s));
+            ctx.config.start_wave = wave;
+            col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);
+
+            const AttackStyle* first = NULL;
+            int n_mc = 0;
+            for (int i = 0; i < COLO_MAX_NPCS; i++) {
+                if (!s.npcs[i].active || s.npcs[i].type != COLO_MANTICORE) continue;
+                ColoManticoreState* mc = colo_npc_manticore(&s.npcs[i]);
+                n_mc++;
+                /* a valid default (non-MM3) cycle is one of each style, melee last. */
+                int counts[3] = { 0, 0, 0 };
+                for (int o = 0; o < 3; o++) {
+                    if (mc->fixed_orb_style[o] == ATTACK_STYLE_RANGED) counts[0]++;
+                    else if (mc->fixed_orb_style[o] == ATTACK_STYLE_MAGIC) counts[1]++;
+                    else if (mc->fixed_orb_style[o] == ATTACK_STYLE_MELEE) counts[2]++;
+                }
+                if (counts[0] != 1 || counts[1] != 1 || counts[2] != 1 ||
+                        mc->fixed_orb_style[2] != ATTACK_STYLE_MELEE) all_valid = 0;
+                if (first == NULL) first = mc->fixed_orb_style;
+                else if (first[0] != mc->fixed_orb_style[0] ||
+                         first[1] != mc->fixed_orb_style[1] ||
+                         first[2] != mc->fixed_orb_style[2]) all_shared = 0;
+            }
+            if (n_mc >= 2) saw_double = 1;
+        }
+    }
+    CHECK("double-manticore waves actually spawn two manticores", saw_double);
+    CHECK("every manticore in a wave shares one fixed orb cycle", all_shared);
+    CHECK("the wave cycle is valid (one of each style, melee last)", all_valid);
+
+    /* the 5-tick multi-manticore stagger is unchanged: a ready peer delays 5
+       ticks while another is mid-barrage, and fires the same shared pattern. */
     ColosseumState s;
     memset(&s, 0, sizeof(s));
+    ctx.config.start_wave = 1;
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
-
-    /* wave 9, in range + LoS: the idle peer copies A's fixed cycle. */
     geo_clear_npcs(&s);
-    s.wave = 8;   /* wave 9, 0-based */
+    s.wave = 8;
+    s.wave_manticore_pattern_rolled = 0;
     s.player.x = 13; s.player.y = 12;
     col_rebuild_player_collision_flags(&s);
     col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);   /* A: centre (13,17) */
     col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);   /* B: centre (19,17), dist 6 */
     ColoManticoreState* amc = colo_npc_manticore(&s.npcs[0]);
     ColoManticoreState* bmc = colo_npc_manticore(&s.npcs[1]);
+    CHECK("manually-spawned peers also share the wave pattern",
+        amc->fixed_orb_style[0] == bmc->fixed_orb_style[0] &&
+        amc->fixed_orb_style[1] == bmc->fixed_orb_style[1] &&
+        amc->fixed_orb_style[2] == bmc->fixed_orb_style[2]);
+
     s.npcs[0].attack_timer = 0;
-    s.npcs[1].attack_timer = 30;
+    s.npcs[1].attack_timer = 0;
     s.player.current_hitpoints = 99;
     col_npc_attack_ctx(&s, &ctx, 0);
     CHECK("A committed and fired orb 0", amc->cycle_step == 1);
-    CHECK("the in-LoS peer copied A's fixed pattern without revealing it",
-        bmc->pattern_copied == 1 &&
-        bmc->orb_style[0] == ATTACK_STYLE_NONE &&
-        bmc->fixed_orb_style[0] == amc->fixed_orb_style[0] &&
-        bmc->fixed_orb_style[1] == amc->fixed_orb_style[1] &&
-        bmc->fixed_orb_style[2] == amc->fixed_orb_style[2]);
-
-    /* stagger unchanged: a ready B mid-A-barrage delays 5 ticks, copy intact. */
-    s.npcs[1].attack_timer = 0;
     col_npc_attack_ctx(&s, &ctx, 1);
-    CHECK("a ready peer arms the copied pattern and staggers 5 ticks during A's barrage",
+    CHECK("a ready peer staggers 5 ticks during A's barrage, holding the shared pattern",
         s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS &&
-        bmc->cycle_step == 0 && bmc->pattern_copied == 1 &&
+        bmc->cycle_step == 0 &&
         bmc->orb_style[0] == bmc->fixed_orb_style[0]);
-
-    AttackStyle a0 = amc->fixed_orb_style[0];
-    AttackStyle a1 = amc->fixed_orb_style[1];
-    AttackStyle a2 = amc->fixed_orb_style[2];
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 0);   /* A orb 1 */
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 0);   /* A orb 2 -> idle */
-    s.npcs[1].attack_timer = 0;
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 1);   /* B starts on the copied pattern */
-    CHECK("B fired the copied fixed pattern",
-        bmc->cycle_step == 1 && bmc->pattern_copied == 0 &&
-        bmc->orb_style[0] == a0 && bmc->orb_style[1] == a1 && bmc->orb_style[2] == a2);
-
-    /* wave gate: identical rig on wave 8 (index 7) never copies. */
-    geo_clear_npcs(&s);
-    s.wave = 7;
-    col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);
-    col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);
-    bmc = colo_npc_manticore(&s.npcs[1]);
-    s.npcs[0].attack_timer = 0;
-    s.npcs[1].attack_timer = 30;
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("before wave 9 the fixed cycle is never copied", bmc->pattern_copied == 0);
-
-    /* pillar LoS: a peer behind the SW pillar does not copy. */
-    geo_clear_npcs(&s);
-    s.wave = 8;
-    s.player.x = 5; s.player.y = 14;
-    col_rebuild_player_collision_flags(&s);
-    col_init_npc(&s, 0, COLO_MANTICORE, 4, 8);     /* A: centre (5,9), W of pillar */
-    col_init_npc(&s, 1, COLO_MANTICORE, 11, 8);    /* B: centre (12,9), E of pillar */
-    bmc = colo_npc_manticore(&s.npcs[1]);
-    s.npcs[0].attack_timer = 0;
-    s.npcs[1].attack_timer = 30;
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("a peer with the pillar in the centre ray does not copy",
-        bmc->pattern_copied == 0);
-
-    /* range: clear LoS but >15 tiles apart does not copy. */
-    geo_clear_npcs(&s);
-    s.wave = 8;
-    s.player.x = 5; s.player.y = 12;
-    col_rebuild_player_collision_flags(&s);
-    col_init_npc(&s, 0, COLO_MANTICORE, 4, 15);    /* A: centre (5,16) */
-    col_init_npc(&s, 1, COLO_MANTICORE, 26, 15);   /* B: centre (27,16), dist 22 */
-    bmc = colo_npc_manticore(&s.npcs[1]);
-    s.npcs[0].attack_timer = 0;
-    s.npcs[1].attack_timer = 30;
-    s.player.current_hitpoints = 99;
-    col_npc_attack_ctx(&s, &ctx, 0);
-    CHECK("a peer beyond 15 tiles does not copy", bmc->pattern_copied == 0);
 }
 
 /* OSRS locks a ranged/magic attack's protect-prayer outcome + damage on the THROW
@@ -7265,7 +7250,7 @@ int main(void) {
     test_npc_melee_instant_unprayable();
     test_player_melee_lands_at_delay_zero();
     test_echo_boots_recoil_reflects_to_attacker();
-    test_manticore_pattern_copy();
+    test_manticore_shared_wave_cycle();
     test_javelin_skyfall_no_defence_gate();
     test_sol_adjacency_gate_and_kiting();
     test_sol_attack_selection_invariants();

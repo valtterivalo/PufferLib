@@ -223,9 +223,15 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x61fe90a1aa69da0cULL,
     0x16abdb26a3a9c353ULL,
     0x12bf8cb20cdf7b84ULL,
-    0xbc1091b13db56c8cULL,
-    0x16284a711511ad16ULL,
-    0x6d604adc86ae3b0aULL,
+    /* w09/w10/w11 (indices 8,9,10) re-baselined after the manticore shared-cycle
+       fix: every manticore in a wave now copies one wave-shared orb pattern
+       (rolled at the first manticore's spawn) instead of rolling its own, so the
+       second manticore no longer consumes its own RNG draw and these
+       double-manticore waves' trajectories diverge. The other 9 configs are
+       byte-identical (the second roll only existed when 2+ manticores spawn). */
+    0x7364d85769e8307eULL,
+    0xc78b211f587c2598ULL,
+    0x6ad6aafdfb4770ffULL,
     /* w12_sol (index 11) re-baselined after tightening the Sol walkable arena one
        tile on every side (col_in_boss_arena now returns the interior of the
        shield-wall ring), so the player/NPC trajectories during wave 12 diverge.
