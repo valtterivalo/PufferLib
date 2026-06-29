@@ -5488,7 +5488,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                             float gx = (float)tx + 0.5f;
                             float gz = -(float)(ty + 1) + 0.5f;
                             float gground = OV_GROUND(tx, ty);
-                            float gyaw = atan2f(ccx - gx, ccz - gz);
+                            /* +PI: the gladiators face inward toward the arena
+                               centre (the model's 0-yaw points the opposite way). */
+                            float gyaw = atan2f(ccx - gx, ccz - gz) + 3.14159265f;
                             rlDisableBackfaceCulling();
                             gom->model.transform = MatrixMultiply(
                                 MatrixMultiply(

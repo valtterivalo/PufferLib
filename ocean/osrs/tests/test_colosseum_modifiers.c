@@ -3873,8 +3873,10 @@ static void test_sol_phase_transition_sand_guarantees(void) {
     int idx = sol_setup(&s, &ctx, 231);
     (void)idx;
     s.sol.attack_delay = 1000;
+    /* the boss_arena bounds are the shield-wall ring; the walkable interior starts
+       one tile in, so the corner-edge walkable tile is MIN+1, not MIN. */
     int corner_x = COLO_BOSS_ARENA_MIN_X + 2;
-    int corner_y = COLO_BOSS_ARENA_MIN_Y;
+    int corner_y = COLO_BOSS_ARENA_MIN_Y + 1;
     sol_move_player(&s, corner_x, corner_y);
     CHECK("rig sanity: corner-edge player tile is walkable",
         col_in_boss_arena(&s, s.player.x, s.player.y) &&

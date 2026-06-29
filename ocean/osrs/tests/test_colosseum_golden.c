@@ -226,7 +226,11 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0xbc1091b13db56c8cULL,
     0x16284a711511ad16ULL,
     0x6d604adc86ae3b0aULL,
-    0xcf8e1b0bd6d43ab0ULL,
+    /* w12_sol (index 11) re-baselined after tightening the Sol walkable arena one
+       tile on every side (col_in_boss_arena now returns the interior of the
+       shield-wall ring), so the player/NPC trajectories during wave 12 diverge.
+       The other 11 configs are byte-identical (the clamp is wave-12 only). */
+    0xe7704516ace5774aULL,
 };
 
 int main(int argc, char** argv) {

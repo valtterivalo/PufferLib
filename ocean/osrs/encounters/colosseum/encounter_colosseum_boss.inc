@@ -23,9 +23,13 @@ static int col_sol_clamp_active(const ColosseumState* s) {
     return s->wave == COLO_WAVE_BOSS && s->sol.started;
 }
 
+/* The boss_arena bounds are the shield-wall RING: the gladiators stand on it and
+   the crystals roam it. The player fights one tile INSIDE that ring, so the
+   walkable interior -- which confines player + NPC movement + hazard placement --
+   is the bounds shrunk by one tile on every side. */
 static int col_in_boss_arena(const ColosseumState* s, int x, int y) {
-    return x >= s->sol.boss_arena_min_x && x <= s->sol.boss_arena_max_x &&
-           y >= s->sol.boss_arena_min_y && y <= s->sol.boss_arena_max_y;
+    return x > s->sol.boss_arena_min_x && x < s->sol.boss_arena_max_x &&
+           y > s->sol.boss_arena_min_y && y < s->sol.boss_arena_max_y;
 }
 
 /** HP-fraction phase: 0 (>90%), 1 (<90%), 2 (<75%), 3 (<50%), 4 (<25%), 5 (<10%). */
