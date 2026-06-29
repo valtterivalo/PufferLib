@@ -5419,6 +5419,58 @@ static void render_draw_3d_world(RenderClient* rc) {
                         }
                     }
                 }
+
+                /* Sol Heredit telegraphs (A9-A11): the incoming light spheres, the
+                   phase-transition beams, and the rotating edge crystals all carry sim
+                   countdowns and are fed to the agent's observations, but were never
+                   drawn -- a human saw nothing until the sphere had already hit or the
+                   beam had hardened into molten. Render each during its warning window
+                   from the same direct ColosseumState read as the molten pools. */
+                const SolHereditState* sol = &cs_molten->sol;
+
+                /* incoming light spheres: warn on the marked tile, intensifying as it
+                   nears impact (move off the tile -- 60-75 typeless, unprayable). */
+                for (int si = 0; si < COLO_SOL_SPHERE_QUEUE_MAX; si++) {
+                    const ColoSolSphere* sph = &sol->spheres[si];
+                    if (!sph->active) continue;
+                    float ground = OV_GROUND(sph->tile_x, sph->tile_y);
+                    float fx = (float)sph->tile_x + 0.5f;
+                    float fz = -(float)(sph->tile_y + 1) + 0.5f;
+                    int t = sph->ticks_remaining;
+                    if (t < 1) t = 1;
+                    if (t > COLO_SOL_SPHERE_DELAY) t = COLO_SOL_SPHERE_DELAY;
+                    float imminence = 1.0f - (float)(t - 1) / (float)COLO_SOL_SPHERE_DELAY;
+                    unsigned char a = (unsigned char)(90.0f + 150.0f * imminence);
+                    DrawCube((Vector3){ fx, ground + 0.05f, fz }, 0.95f, 0.04f, 0.95f,
+                             CLITERAL(Color){ 255, 230, 120, a });
+                }
+
+                /* phase-transition beams: warn on the tile during the 2-tick window
+                   before it hardens into a permanent molten pool. */
+                for (int bi = 0; bi < COLO_SOL_BEAM_MAX; bi++) {
+                    const ColoSolBeam* beam = &sol->beams[bi];
+                    if (!beam->active) continue;
+                    float ground = OV_GROUND(beam->x, beam->y);
+                    float fx = (float)beam->x + 0.5f;
+                    float fz = -(float)(beam->y + 1) + 0.5f;
+                    DrawCube((Vector3){ fx, ground + 0.06f, fz }, 0.95f, 0.06f, 0.95f,
+                             CLITERAL(Color){ 255, 255, 210, 170 });
+                }
+
+                /* rotating edge crystals: mark the crystal tile, bright while stopped
+                   to charge + fire a sphere (telegraph_ticks > 0). */
+                for (int ci = 0; ci < COLO_SOL_MAX_CRYSTALS; ci++) {
+                    const ColoSolCrystal* crys = &sol->crystals[ci];
+                    if (!crys->active) continue;
+                    int cx = 0, cy = 0;
+                    col_sol_crystal_pos(cs_molten, crys->perim_step, &cx, &cy);
+                    float ground = OV_GROUND(cx, cy);
+                    float fx = (float)cx + 0.5f;
+                    float fz = -(float)(cy + 1) + 0.5f;
+                    unsigned char a = crys->telegraph_ticks > 0 ? 230 : 120;
+                    DrawCube((Vector3){ fx, ground + 0.12f, fz }, 0.4f, 0.4f, 0.4f,
+                             CLITERAL(Color){ 180, 230, 255, a });
+                }
             }
         }
 
