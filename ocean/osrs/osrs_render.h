@@ -544,6 +544,7 @@ typedef struct RenderClient {
     /* visual effects: spell impacts, projectiles */
     ActiveEffect effects[MAX_ACTIVE_EFFECTS];
     int effect_client_tick_counter;  /* monotonic 50 Hz counter for effect timing */
+    int prev_sol_aoe_age;  /* latch: Sol AoE dust fires once on the age->damage edge */
 
     /* client-tick accumulator: OSRS runs both movement AND animation at 50 Hz
        (20ms per client tick). we accumulate real time and process the correct
@@ -1968,6 +1969,7 @@ static RenderClient* render_make_client(void) {
     rc->prev_entity_count = 0;
     rc->hover_tile_x = -1;
     rc->hover_tile_y = -1;
+    rc->prev_sol_aoe_age = -1;
     for (int i = 0; i < MAX_RENDER_ENTITIES; i++) {
         anim_playback_reset(&rc->anim[i].primary);
         anim_playback_set_seq(&rc->anim[i].secondary, ANIM_SEQ_IDLE, ANIM_PLAY_LOOP);
@@ -6839,6 +6841,43 @@ void pvp_render(OsrsEnv* env) {
                     render_anim_playback_resolve(rc, &e->anim_playback,
                         eom ? (int)eom->base_vert_count : 0);
                     anim_playback_advance(&e->anim_playback);
+                }
+                /* Sol Heredit AoE impact dust: on the tick an AoE bites, puff a
+                   one-shot stab-dust spotanim (gfx 2699-2706, scattered by tile)
+                   on every tile col_sol_aoe_tile_is_hazard marks for damage, so the
+                   struck tiles kick up dust like the real fight. Latched on the
+                   age->damage edge so it fires exactly once per AoE cast. */
+                {
+                    const EncounterDef* edef_dust =
+                        (const EncounterDef*)rc->gui.encounter_def;
+                    if (edef_dust && rc->gui.encounter_state &&
+                            strcmp(edef_dust->name, "colosseum") == 0) {
+                        const SolHereditState* sol =
+                            &((ColosseumState*)rc->gui.encounter_state)->sol;
+                        int age = sol->aoe_attack != COLO_SOL_AOE_NONE
+                            ? sol->aoe_age : -1;
+                        if (age == COLO_SOL_AOE_DAMAGE_AGE &&
+                                rc->prev_sol_aoe_age != COLO_SOL_AOE_DAMAGE_AGE) {
+                            for (int ty = sol->boss_arena_min_y;
+                                    ty <= sol->boss_arena_max_y; ty++) {
+                                for (int tx = sol->boss_arena_min_x;
+                                        tx <= sol->boss_arena_max_x; tx++) {
+                                    if (!col_sol_aoe_tile_is_hazard(sol, tx, ty))
+                                        continue;
+                                    int dust_gfx = 2699 +
+                                        (((tx * 7 + ty * 13) & 0x7fffffff) % 8);
+                                    effect_spawn_spotanim_subtile(
+                                        rc->effects, dust_gfx,
+                                        tx * 128.0f + 64.0f, ty * 128.0f + 64.0f,
+                                        rc->effect_client_tick_counter + 1,
+                                        rc->spotanims, rc->anim_cache,
+                                        rc->model_cache, rc->npc_model_cache,
+                                        rc->projectile_model_cache);
+                                }
+                            }
+                        }
+                        rc->prev_sol_aoe_age = age;
+                    }
                 }
 	                gui_tick(&rc->gui);
                 human_tick_visuals(&rc->human_input);

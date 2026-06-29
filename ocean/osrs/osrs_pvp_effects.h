@@ -19,7 +19,10 @@
 #include "osrs_gfx_ids.h"
 #include <math.h>
 
-#define MAX_ACTIVE_EFFECTS 16
+/* Sized to hold a full Sol Heredit AoE's worth of one-shot impact dust: a shield
+   slam marks ~160 hazard tiles in the boss arena, each spawning a dust puff on the
+   impact tick. PvP/inferno only ever use a handful at once. */
+#define MAX_ACTIVE_EFFECTS 384
 
 static const OsrsSpotAnimDef* spotanim_lookup(
     const OsrsSpotAnimSet* spotanims,
