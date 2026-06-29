@@ -1939,6 +1939,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_pillar_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_PILLARS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_PILLARS);
+#endif
 
     const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
 
@@ -1946,6 +1949,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     ColoVenatorPreviewTargets venator_targets;
     col_collect_venator_preview_targets(s, &venator_targets);
+#ifdef COLO_PROFILE_ENABLED
+    /* the best-gear oracle rebuild (col_get_best_gear_table) lives in this bucket and
+       dominates the obs write whenever its signature changes; splitting pillars +
+       inventory off the per-NPC-slot mark keeps that cost visible. */
+    COLO_PROFILE_MARK(COLO_PROF_OBS_INVENTORY);
+#endif
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {
