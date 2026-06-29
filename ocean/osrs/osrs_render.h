@@ -161,7 +161,8 @@ typedef struct {
     int anim_frame;
     int anim_tick_counter;
     AnimModelState* anim_state;
-    int launch_gfx_id;
+    int launch_gfx_id;          /* muzzle spotanim to spawn at the source on release */
+    int launch_spawned;         /* 1 once the launch spotanim has fired (one-shot) */
     int impact_gfx_id;          /* landing spotanim to spawn on arrival */
 } FlightProjectile;
 
@@ -2342,6 +2343,22 @@ static void flight_finish(RenderClient* rc, FlightProjectile* fp) {
     flight_deactivate(fp);
 }
 
+/* Spawn the launch (muzzle) spotanim at the projectile source the moment the
+   projectile becomes visible. Symmetric to the impact spawn in flight_finish:
+   without this the launch gfx (e.g. serpent shaman's 1458) is stored on the
+   flight and never rendered. One-shot via launch_spawned. */
+static void flight_spawn_launch_gfx(RenderClient* rc, FlightProjectile* fp) {
+    if (fp->launch_gfx_id <= 0 || fp->launch_spawned) return;
+    fp->launch_spawned = 1;
+    effect_spawn_spotanim_subtile(
+        rc->effects, fp->launch_gfx_id,
+        osrs_projectile_subtile_from_anchor_coord(fp->src_x),
+        osrs_projectile_subtile_from_anchor_coord(fp->src_y),
+        rc->effect_client_tick_counter + 1,
+        rc->spotanims, rc->anim_cache, rc->model_cache,
+        rc->npc_model_cache, rc->projectile_model_cache);
+}
+
 static int render_find_npc_entity_idx(const RenderClient* rc, int npc_slot) {
     for (int i = 0; i < rc->entity_count; i++) {
         const RenderEntity* entity = &rc->entities[i];
@@ -2518,6 +2535,10 @@ static void flight_spawn(RenderClient* rc,
         dx * fp->speed, dy * fp->speed, h1 - h0);
     fp->yaw = orientation.yaw;
     fp->pitch = orientation.pitch;
+
+    /* No start delay = visible immediately, so the launch gfx fires now;
+       delayed projectiles fire it when start_delay reaches 0 (flight_client_tick). */
+    if (fp->start_delay == 0) flight_spawn_launch_gfx(rc, fp);
 }
 
 static void flight_advance_animation(RenderClient* rc, FlightProjectile* fp) {
@@ -2623,9 +2644,11 @@ static void flight_client_tick(RenderClient* rc) {
         /* start delay: count down before projectile becomes visible/moves */
         if (fp->start_delay > 0) {
             fp->start_delay--;
-            if (fp->start_delay == 0 &&
-                fp->motion_mode == ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED) {
-                flight_update_target_anchored_position(rc, fp);
+            if (fp->start_delay == 0) {
+                if (fp->motion_mode == ENCOUNTER_PROJECTILE_MOTION_TARGET_ANCHORED) {
+                    flight_update_target_anchored_position(rc, fp);
+                }
+                flight_spawn_launch_gfx(rc, fp);
             }
             continue;
         }
