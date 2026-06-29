@@ -92,9 +92,10 @@ typedef struct {
     int stop_tick;
     int started;               /* has calculateIncrements been called? */
 
-    /* animation state */
-    int anim_frame;
-    int anim_tick_counter;
+    /* animation state: one cursor owning the resolved sequence + frame position.
+       Resolved model-aware in the render layer (render_anim_playback_resolve);
+       advance and draw both read it, so they cannot pick different lookups. */
+    AnimPlayback anim_playback;
     AnimModelState* anim_state;  /* per-effect vertex transform state (heap) */
 
     /* orientation */
@@ -170,6 +171,9 @@ static int effect_spawn_spotanim_subtile(
     e->type = EFFECT_SPOTANIM;
     e->gfx_id = gfx_id;
     e->meta = meta;
+    anim_playback_reset(&e->anim_playback);
+    if (meta->animation_id >= 0)
+        anim_playback_set_seq(&e->anim_playback, meta->animation_id, ANIM_PLAY_LOOP);
 
     e->cur_x = subtile_x;
     e->cur_y = subtile_y;
@@ -241,6 +245,9 @@ static int effect_spawn_projectile(
     e->type = EFFECT_PROJECTILE;
     e->gfx_id = gfx_id;
     e->meta = meta;
+    anim_playback_reset(&e->anim_playback);
+    if (meta->animation_id >= 0)
+        anim_playback_set_seq(&e->anim_playback, meta->animation_id, ANIM_PLAY_LOOP);
 
     e->src_x = src_world_x * 128.0 + 64.0;
     e->src_y = src_world_y * 128.0 + 64.0;
@@ -267,8 +274,7 @@ static int effect_spawn_projectile(
  */
 static void effect_client_tick(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
-    int current_client_tick,
-    AnimCache* anim_cache
+    int current_client_tick
 ) {
     for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
         ActiveEffect* e = &effects[i];
@@ -323,20 +329,10 @@ static void effect_client_tick(
             e->tilt_angle &= 0x7FF;
         }
 
-        /* advance animation */
-        if (e->meta && e->meta->animation_id >= 0 && anim_cache) {
-            AnimSequence* seq = anim_get_sequence(anim_cache, e->meta->animation_id);
-            if (seq && seq->frame_count > 0) {
-                e->anim_tick_counter++;
-                while (e->anim_tick_counter >= seq->frames[e->anim_frame].delay) {
-                    e->anim_tick_counter -= seq->frames[e->anim_frame].delay;
-                    e->anim_frame++;
-                    if (e->anim_frame >= seq->frame_count) {
-                        e->anim_frame = 0;
-                    }
-                }
-            }
-        }
+        /* animation frame advance lives in the render layer now
+           (render_anim_playback_resolve + anim_playback_advance), which resolves
+           the sequence model-aware across all caches and skips empty stubs. This
+           function owns only position + lifetime. */
     }
 }
 

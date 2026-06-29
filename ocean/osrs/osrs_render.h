@@ -5787,12 +5787,14 @@ static void render_draw_3d_world(RenderClient* rc) {
                then write transformed vertices into the shared mesh.
                note: this temporarily modifies the shared OsrsModel mesh,
                which is fine since effects render sequentially. */
-            if (e->anim_state && e->meta->animation_id >= 0 && rc->anim_cache
-                && om->face_indices) {
-                AnimSequence* seq = render_get_anim_sequence(rc, e->meta->animation_id);
-                if (seq && e->anim_frame < seq->frame_count) {
+            if (e->anim_state && e->anim_playback.seq_id >= 0 && om->face_indices) {
+                render_anim_playback_resolve(
+                    rc, &e->anim_playback, (int)om->base_vert_count);
+                AnimSequence* seq = e->anim_playback.sequence;
+                if (seq && seq->frame_count > 0) {
+                    int frame_idx = e->anim_playback.frame_idx % seq->frame_count;
                     render_apply_anim_sequence_frame_to_model_state(
-                        rc, e->anim_state, om, seq, e->anim_frame,
+                        rc, e->anim_state, om, seq, frame_idx,
                         "spotanim");
                 }
             }
@@ -6861,8 +6863,22 @@ void pvp_render(OsrsEnv* env) {
                 render_update_splats_client_tick(rc);
                 flight_client_tick(rc);
                 rc->effect_client_tick_counter++;
-                effect_client_tick(rc->effects, rc->effect_client_tick_counter,
-                    rc->anim_cache);
+                effect_client_tick(rc->effects, rc->effect_client_tick_counter);
+                /* advance effect spotanim frames here, in the render layer, where
+                   the model-aware multi-cache resolver lives. effect_client_tick
+                   owns only position + lifetime now; resolving once and advancing
+                   the shared cursor keeps advance and draw on one sequence. */
+                for (int ei = 0; ei < MAX_ACTIVE_EFFECTS; ei++) {
+                    ActiveEffect* e = &rc->effects[ei];
+                    if (e->type == EFFECT_NONE || !e->meta ||
+                            e->anim_playback.seq_id < 0) continue;
+                    if (rc->effect_client_tick_counter < e->start_tick) continue;
+                    OsrsModel* eom = effect_find_model(e->meta, rc->model_cache,
+                        rc->npc_model_cache, rc->projectile_model_cache);
+                    render_anim_playback_resolve(rc, &e->anim_playback,
+                        eom ? (int)eom->base_vert_count : 0);
+                    anim_playback_advance(&e->anim_playback);
+                }
 	                gui_tick(&rc->gui);
                 human_tick_visuals(&rc->human_input);
             }
