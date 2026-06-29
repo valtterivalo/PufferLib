@@ -239,6 +239,9 @@ enum {
     COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS = COLO_JAVELIN_SKYFALL_DELAY / 2,
     COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS = 1,
     COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
+    /* magic casters (serpent shaman, shockwave colossus) release the projectile
+       one tick after the cast animation begins (the wind-up), not at attack-start. */
+    COLO_MAGIC_CAST_RELEASE_DELAY_TICKS = 1,
 };
 
 static float col_javelin_skyfall_shadow_scale(const ColoJavelinState* jv) {
@@ -261,16 +264,82 @@ static void col_emit_javelin_skyfall_shadow(EncounterOverlay* ov, const ColoJave
         col_javelin_skyfall_shadow_scale(jv));
 }
 
+/* Per-(type, style) projectile release profile: when the projectile leaves the
+   caster relative to the attack-animation start. This is the ONE place colosseum
+   tunes NPC projectile release, folding what used to be three scattered render
+   branches (the javelin release delay, the shaman/shockwave cast-then-release
+   patch, and the manticore fixed-tick override) into a single table. */
+typedef struct {
+    int release_delay_ticks;  /* game ticks after attack-start before the projectile is visible */
+    int set_delay;            /* >0 pins the damage delay to a fixed, distance-independent tick count */
+} ColoProjectileReleaseProfile;
+
+static ColoProjectileReleaseProfile col_npc_projectile_release_profile(
+    ColoNpcType type, AttackStyle style
+) {
+    switch (type) {
+        case COLO_JAVELIN_COLOSSUS:
+            if (style == ATTACK_STYLE_RANGED)
+                return (ColoProjectileReleaseProfile){
+                    .release_delay_ticks = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS };
+            break;
+        case COLO_SERPENT_SHAMAN:
+        case COLO_SHOCKWAVE_COLOSSUS:
+            if (style == ATTACK_STYLE_MAGIC)
+                return (ColoProjectileReleaseProfile){
+                    .release_delay_ticks = COLO_MAGIC_CAST_RELEASE_DELAY_TICKS };
+            break;
+        case COLO_MANTICORE:
+            /* orbs fly a fixed one tick regardless of distance: the sim builds the
+               hit with ticks_remaining=1 in col_npc_manticore_fire_orb. */
+            return (ColoProjectileReleaseProfile){ .set_delay = 1 };
+        default:
+            break;
+    }
+    return (ColoProjectileReleaseProfile){ 0 };
+}
+
+/* Resolve the render timeline for an NPC attack projectile: the projectile leaves
+   release_delay_ticks after attack-start and flies the rest of the way so it lands
+   exactly on the sim damage tick. At point-blank range there may be no wind-up room,
+   so the release is reduced (never the landing tick) to keep at least a one-tick
+   flight. The landing invariant (release + flight == damage tick) is enforced, so a
+   release can never be tuned in a way that silently shifts the impact off the sim
+   hit tick. The sim owns the damage tick (col_npc_projectile_delay); this owns the
+   purely-visual release/flight split, and the two meet at the asserted invariant. */
 static EncounterProjectileTiming col_npc_projectile_timing(
     ColoNpcType type,
     AttackStyle style,
     int distance
 ) {
+    EncounterProjectileDelayKind kind = col_projectile_delay_kind_for_style(style);
+    ColoProjectileReleaseProfile profile = col_npc_projectile_release_profile(type, style);
+
     EncounterProjectileDelayOptions options = {0};
-    if (type == COLO_JAVELIN_COLOSSUS && style == ATTACK_STYLE_RANGED)
-        options.start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS;
-    return encounter_projectile_timing(
-        distance, 0, col_projectile_delay_kind_for_style(style), options);
+    options.set_delay = profile.set_delay;
+    int damage_delay = encounter_projectile_hit_delay(distance, 0, kind, options);
+
+    int release = profile.release_delay_ticks;
+    int max_release = damage_delay - 1;   /* leave room for a >= 1-tick flight */
+    if (release > max_release) release = max_release;
+    if (release < 0) release = 0;
+    options.start_delay = release;
+
+    EncounterProjectileTiming timing =
+        encounter_projectile_timing(distance, 0, kind, options);
+
+    if (timing.visual_duration_ticks < 1 ||
+            timing.visual_start_delay_ticks + timing.visual_duration_ticks !=
+                timing.damage_delay_ticks) {
+        fprintf(stderr,
+            "colosseum: projectile timing invariant violated (type %d style %d dist %d: "
+            "release %d + flight %d != landing %d)\n",
+            (int)type, (int)style, distance,
+            timing.visual_start_delay_ticks, timing.visual_duration_ticks,
+            timing.damage_delay_ticks);
+        abort();
+    }
+    return timing;
 }
 
 static uint32_t col_manticore_orb_model_id(AttackStyle style) {
@@ -461,28 +530,6 @@ static void col_emit_npc_attack_projectile(
         col_npc_projectile_timing(npc->type, actual_style, dist);
     int duration = timing.visual_duration_ticks * 30;
     int start_delay = timing.visual_start_delay_ticks * 30;
-
-    /* Manticore orbs land exactly one tick after launch regardless of distance
-       (the sim builds the hit with ticks_remaining=1 in col_npc_manticore_fire_orb).
-       The distance-scaled render duration made the magic orb arc up and hang
-       after its damage had landed; pin all three orbs to a fixed 1-tick flight
-       so the visual matches the already-correct sim. */
-    if (npc->type == COLO_MANTICORE) {
-        duration = 1 * 30;
-        start_delay = 0;
-    }
-
-    /* Shockwave Colossus + Serpent Shaman cast-then-release: the projectile
-       leaves one tick AFTER the attack animation begins (the cast wind-up),
-       then flies one tick faster so it still lands on the sim damage tick.
-       Without this it spawns at attack-start, which reads a tick early.
-       start_delay + duration (the landing tick) is preserved; guarded so a
-       short flight is left alone rather than collapsed to a zero-tick hop. */
-    if ((npc->type == COLO_SHOCKWAVE_COLOSSUS ||
-            npc->type == COLO_SERPENT_SHAMAN) && duration > 30) {
-        start_delay += 30;
-        duration -= 30;
-    }
 
     const OsrsCombatVisualRow* npc_visual =
         col_require_npc_combat_visual_projectile_row(npc->type, actual_style);
