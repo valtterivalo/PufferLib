@@ -128,19 +128,28 @@ static inline void anim_playback_reset(AnimPlayback* pb) {
     pb->mode = ANIM_PLAY_LOOP;
 }
 
-/** Point the cursor at a (possibly new) sequence id, resetting the frame
-    position and forcing a re-resolve. No lookup happens here (no cache access);
-    a same-id, same-mode call is a no-op so an in-progress animation is kept. */
-static inline void anim_playback_set_seq(
+/** Force the cursor to (re)start a sequence from frame 0, even if it is already
+    on this id -- used to re-trigger an attack that played once. Clears the
+    resolved sequence so the next resolve runs. No cache lookup happens here. */
+static inline void anim_playback_restart(
     AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
 ) {
-    if (pb->seq_id == seq_id && pb->mode == mode) return;
     pb->seq_id = seq_id;
     pb->mode = mode;
     pb->sequence = NULL;
     pb->frame_idx = 0;
     pb->ticks_in_frame = 0;
     pb->completed_loops = 0;
+}
+
+/** Point the cursor at a (possibly new) sequence id. A same-id, same-mode call
+    is a no-op so an in-progress animation keeps playing (looping idle/walk); a
+    different id restarts from frame 0. No cache lookup happens here. */
+static inline void anim_playback_set_seq(
+    AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
+) {
+    if (pb->seq_id == seq_id && pb->mode == mode) return;
+    anim_playback_restart(pb, seq_id, mode);
 }
 
 /** Advance the cursor by one client tick using the resolved sequence. No-op

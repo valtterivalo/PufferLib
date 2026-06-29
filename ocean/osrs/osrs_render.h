@@ -309,13 +309,8 @@ typedef struct {
 } HitSplat;
 
 typedef struct {
-    int primary_seq_id;
-    int primary_frame_idx;
-    int primary_ticks;
-    int primary_loops;
-    int secondary_seq_id;
-    int secondary_frame_idx;
-    int secondary_ticks;
+    AnimPlayback primary;    /* attacks/death (play-once); seq_id < 0 = inactive */
+    AnimPlayback secondary;  /* idle/walk/run pose (looping) */
 } RenderAnimationState;
 
 typedef struct {
@@ -1974,8 +1969,8 @@ static RenderClient* render_make_client(void) {
     rc->hover_tile_x = -1;
     rc->hover_tile_y = -1;
     for (int i = 0; i < MAX_RENDER_ENTITIES; i++) {
-        rc->anim[i].primary_seq_id = -1;
-        rc->anim[i].secondary_seq_id = ANIM_SEQ_IDLE;
+        anim_playback_reset(&rc->anim[i].primary);
+        anim_playback_set_seq(&rc->anim[i].secondary, ANIM_SEQ_IDLE, ANIM_PLAY_LOOP);
         rc->primary_event_tick[i] = -1;
         rc->last_primary_event_tick[i] = -2;
         rc->prev_npc_slot[i] = -1;
@@ -3356,13 +3351,8 @@ static int render_entity_is_visible(const RenderEntity* entity) {
 }
 
 static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
-    rc->anim[i].primary_seq_id = -1;
-    rc->anim[i].primary_frame_idx = 0;
-    rc->anim[i].primary_ticks = 0;
-    rc->anim[i].primary_loops = 0;
-    rc->anim[i].secondary_seq_id = -1;
-    rc->anim[i].secondary_frame_idx = 0;
-    rc->anim[i].secondary_ticks = 0;
+    anim_playback_reset(&rc->anim[i].primary);
+    anim_playback_reset(&rc->anim[i].secondary);
     rc->primary_event_tick[i] = -1;
     rc->last_primary_event_tick[i] = -2;
     rc->composites[i].needs_rebuild = 1;
@@ -3447,7 +3437,8 @@ static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
     rc->visual_backlog[i] = 0;
     rc->visual_effective_speed[i] = 0.0f;
     rc->visual_running[i] = 0;
-    rc->anim[i].secondary_seq_id = render_default_secondary_for_entity(&rc->entities[i]);
+    anim_playback_set_seq(&rc->anim[i].secondary,
+        render_default_secondary_for_entity(&rc->entities[i]), ANIM_PLAY_LOOP);
     rc->prev_npc_slot[i] = rc->entities[i].npc_slot;
 }
 
@@ -3880,11 +3871,12 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             rc->dest_x[player_idx],
             rc->dest_y[player_idx]);
         int stall = 0;
-        if (rc->anim[player_idx].primary_seq_id >= 0 &&
-            rc->anim[player_idx].primary_loops == 0) {
-            AnimSequence* seq = render_get_anim_sequence(
-                rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
-            stall = render_sequence_stalls_movement(seq);
+        if (rc->anim[player_idx].primary.seq_id >= 0 &&
+            rc->anim[player_idx].primary.completed_loops == 0) {
+            render_anim_playback_resolve(rc, &rc->anim[player_idx].primary,
+                rc->composites[player_idx].base_vert_count);
+            stall = render_sequence_stalls_movement(
+                rc->anim[player_idx].primary.sequence);
         }
 
         if (stall) {
@@ -3995,46 +3987,20 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
     } else {
         new_secondary = render_select_secondary(rc, player_idx);
     }
-    if (rc->anim[player_idx].secondary_seq_id != new_secondary) {
-        rc->anim[player_idx].secondary_seq_id = new_secondary;
-        rc->anim[player_idx].secondary_frame_idx = 0;
-        rc->anim[player_idx].secondary_ticks = 0;
-    }
+    anim_playback_set_seq(
+        &rc->anim[player_idx].secondary, new_secondary, ANIM_PLAY_LOOP);
 
-    /* advance secondary frame timing */
-    if (rc->anim[player_idx].secondary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence(
-            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id);
-        if (seq && seq->frame_count > 0) {
-            int fidx = rc->anim[player_idx].secondary_frame_idx % seq->frame_count;
-            int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
-            rc->anim[player_idx].secondary_ticks++;
-            if (rc->anim[player_idx].secondary_ticks >= delay) {
-                rc->anim[player_idx].secondary_ticks = 0;
-                rc->anim[player_idx].secondary_frame_idx =
-                    (fidx + 1) % seq->frame_count;
-            }
-        }
+    /* Advance both tracks off the playback's own resolved sequence. The sequence
+       is resolved model-aware here (same lookup the draw uses), so frame advance
+       and frame resolution can never pick different bakes of the same id. */
+    int comp_vc = rc->composites[player_idx].base_vert_count;
+    if (rc->anim[player_idx].secondary.seq_id >= 0) {
+        render_anim_playback_resolve(rc, &rc->anim[player_idx].secondary, comp_vc);
+        anim_playback_advance(&rc->anim[player_idx].secondary);
     }
-
-    /* advance primary frame timing (if active) */
-    if (rc->anim[player_idx].primary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence(
-            rc, (uint16_t)rc->anim[player_idx].primary_seq_id);
-        if (seq && seq->frame_count > 0) {
-            int fidx = rc->anim[player_idx].primary_frame_idx % seq->frame_count;
-            int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
-            rc->anim[player_idx].primary_ticks++;
-            if (rc->anim[player_idx].primary_ticks >= delay) {
-                rc->anim[player_idx].primary_ticks = 0;
-                int next = (fidx + 1) % seq->frame_count;
-                rc->anim[player_idx].primary_frame_idx = next;
-                /* detect loop completion (wrapped back to 0) */
-                if (next == 0) {
-                    rc->anim[player_idx].primary_loops++;
-                }
-            }
-        }
+    if (rc->anim[player_idx].primary.seq_id >= 0) {
+        render_anim_playback_resolve(rc, &rc->anim[player_idx].primary, comp_vc);
+        anim_playback_advance(&rc->anim[player_idx].primary);
     }
 }
 
@@ -4909,52 +4875,47 @@ static void render_player_composite(
         int event_changed =
             rc->primary_event_tick[player_idx] !=
             rc->last_primary_event_tick[player_idx];
-        int need_restart = (rc->anim[player_idx].primary_seq_id != new_primary) ||
-                           (rc->anim[player_idx].primary_loops > 0) ||
+        int need_restart = (rc->anim[player_idx].primary.seq_id != new_primary) ||
+                           (rc->anim[player_idx].primary.completed_loops > 0) ||
                            (event_changed && new_primary != ANIM_SEQ_DEATH);
         if (need_restart) {
-            rc->anim[player_idx].primary_seq_id = new_primary;
-            rc->anim[player_idx].primary_frame_idx = 0;
-            rc->anim[player_idx].primary_ticks = 0;
-            rc->anim[player_idx].primary_loops = 0;
+            anim_playback_restart(
+                &rc->anim[player_idx].primary, new_primary, ANIM_PLAY_ONCE);
             rc->last_primary_event_tick[player_idx] =
                 rc->primary_event_tick[player_idx];
         }
     }
 
     /* expire primary after one loop (death never expires) */
-    if (rc->anim[player_idx].primary_seq_id >= 0 &&
-        rc->anim[player_idx].primary_loops > 0 &&
-        rc->anim[player_idx].primary_seq_id != ANIM_SEQ_DEATH) {
-        rc->anim[player_idx].primary_seq_id = -1;
+    if (rc->anim[player_idx].primary.seq_id >= 0 &&
+        rc->anim[player_idx].primary.completed_loops > 0 &&
+        rc->anim[player_idx].primary.seq_id != ANIM_SEQ_DEATH) {
+        rc->anim[player_idx].primary.seq_id = -1;
     }
 
-    /* --- read current frame data (set by render_client_tick at 50 Hz) --- */
+    /* --- read current frame data (advanced by render_client_tick at 50 Hz) ---
+       Resolve off the SAME playbacks the tick advanced, so the frame index and
+       the sequence it indexes into always agree. */
     RenderAnimTrackFrame sec_track = {0};
     RenderAnimTrackFrame pri_track = {0};
 
-    /* secondary frame */
-    if (rc->anim[player_idx].secondary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence_for_model(
-            rc, (uint16_t)rc->anim[player_idx].secondary_seq_id, comp->base_vert_count);
-        sec_track = render_resolve_anim_track_frame(
-            rc, seq, rc->anim[player_idx].secondary_frame_idx);
+    if (rc->anim[player_idx].secondary.seq_id >= 0) {
+        render_anim_playback_resolve(
+            rc, &rc->anim[player_idx].secondary, comp->base_vert_count);
+        sec_track = render_anim_playback_frame(rc, &rc->anim[player_idx].secondary);
     }
 
-    /* primary frame */
-    if (rc->anim[player_idx].primary_seq_id >= 0) {
-        AnimSequence* seq = render_get_anim_sequence_for_model(
-            rc, (uint16_t)rc->anim[player_idx].primary_seq_id, comp->base_vert_count);
-        pri_track = render_resolve_anim_track_frame(
-            rc, seq, rc->anim[player_idx].primary_frame_idx);
+    if (rc->anim[player_idx].primary.seq_id >= 0) {
+        render_anim_playback_resolve(
+            rc, &rc->anim[player_idx].primary, comp->base_vert_count);
+        pri_track = render_anim_playback_frame(rc, &rc->anim[player_idx].primary);
     }
 
-    /* --- resolve interleave_order from the primary sequence --- */
+    /* --- interleave_order from the (already-resolved) primary sequence --- */
     const uint8_t* interleave = NULL;
     int interleave_count = 0;
     if (pri_track.sequence_frame) {
-        AnimSequence* prim_seq = render_get_anim_sequence_for_model(
-            rc, (uint16_t)rc->anim[player_idx].primary_seq_id, comp->base_vert_count);
+        AnimSequence* prim_seq = rc->anim[player_idx].primary.sequence;
         if (prim_seq && prim_seq->interleave_order) {
             interleave = prim_seq->interleave_order;
             interleave_count = prim_seq->interleave_count;
