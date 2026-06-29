@@ -136,7 +136,7 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12817: 10892,
     12818: 10869,
     12819: 10903,
-    12821: 10876,
+    12821: 10883,
     12823: 10823,
     12825: 10828,
     12826: 0xFFFF,
@@ -146,6 +146,12 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
 COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
     12817: (10893,),
     12818: (10868,),
+    # Sol Heredit per-attack animations, picked by last_attack_kind in the
+    # renderer: 10882 melee strike, 10884 grapple, 10885 shield slam, 10886/10887
+    # triple (long/short). 10883 (spear telegraph) is the attack_anim default. The
+    # generated single attack_anim used to be 10876 (his arena-entry jump), which
+    # is why every attack looked like the leap-in.
+    12821: (10882, 10884, 10885, 10886, 10887),
     12826: (10817,),
 }
 

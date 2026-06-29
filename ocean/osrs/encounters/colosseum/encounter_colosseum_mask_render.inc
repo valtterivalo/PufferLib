@@ -181,13 +181,35 @@ static void col_prepare_render_player(const ColosseumState* s, int spec_fired_ki
     }
 }
 
+/* Sol Heredit plays a distinct animation per attack. The sim sets
+   sol.last_attack_kind on the tick the attack fires (col_sol_pick_variant), so the
+   renderer keys off it. The deob _TELEGRAPH-named sequences ARE the wind-up-and-
+   execute attack anims (every Sol attack telegraphs its AoE); the plain
+   MELEE_ATTACK 10882 is the instant jab, unused here. The triple lengthens (the
+   delayed final hit) at phase >= 3 (50% HP and below), matching the sim's own
+   col_sol_start_triple_parry gate. The generated single attack_anim used to be
+   10876, his arena-entry JUMP, which is why every attack looked like the leap-in. */
+static int col_sol_render_attack_anim_id(const SolHereditState* sol) {
+    switch (sol->last_attack_kind) {
+        case COLO_SOL_ATTACK_SPEAR:   return 10883;  /* MELEE_ATTACK_TELEGRAPH */
+        case COLO_SOL_ATTACK_SHIELD:  return 10885;  /* SHIELDSLAM_TELEGRAPH */
+        case COLO_SOL_ATTACK_GRAPPLE: return 10884;  /* GRAPPLE_ATTACK_TELEGRAPH */
+        case COLO_SOL_ATTACK_TRIPLE:  return sol->phase >= 3 ? 10886 : 10887;
+        default: break;
+    }
+    return 10883;  /* default to the spear attack, never the entry jump */
+}
+
 static int col_npc_render_attack_anim_id(
+    const ColosseumState* s,
     const ColosseumContext* ctx,
     int npc_slot,
     const ColoNPC* npc,
     int def_id
 ) {
     assert(ctx);
+    if (npc->type == COLO_SOL_HEREDIT)
+        return col_sol_render_attack_anim_id(&s->sol);
     if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[npc_slot])
         return 10868;
     switch (ctx->npc_render_attack_anim[npc_slot]) {
@@ -272,9 +294,9 @@ static void col_fill_render_entities_ctx(
         if (npc->death_ticks > 0)
             npc_anim_id = col_npc_death_anim_id(npc->type);
         else if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[i])
-            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
+            npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
         else if (npc->attacked_this_tick)
-            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
+            npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];
         OsrsNpcRenderEntitySpec npc_spec = {
             .npc_def_id = def_id,
