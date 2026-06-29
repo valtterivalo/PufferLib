@@ -472,6 +472,18 @@ static void col_emit_npc_attack_projectile(
         start_delay = 0;
     }
 
+    /* Shockwave Colossus + Serpent Shaman cast-then-release: the projectile
+       leaves one tick AFTER the attack animation begins (the cast wind-up),
+       then flies one tick faster so it still lands on the sim damage tick.
+       Without this it spawns at attack-start, which reads a tick early.
+       start_delay + duration (the landing tick) is preserved; guarded so a
+       short flight is left alone rather than collapsed to a zero-tick hop. */
+    if ((npc->type == COLO_SHOCKWAVE_COLOSSUS ||
+            npc->type == COLO_SERPENT_SHAMAN) && duration > 30) {
+        start_delay += 30;
+        duration -= 30;
+    }
+
     const OsrsCombatVisualRow* npc_visual =
         col_require_npc_combat_visual_projectile_row(npc->type, actual_style);
     const OsrsCombatProjectileProfile* projectile = &npc_visual->projectile;
