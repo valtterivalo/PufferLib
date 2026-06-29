@@ -5457,6 +5457,49 @@ static void render_draw_3d_world(RenderClient* rc) {
                     DrawCube((Vector3){ fx, ground + 0.12f, fz }, 0.4f, 0.4f, 0.4f,
                              CLITERAL(Color){ 180, 230, 255, a });
                 }
+
+                /* Sol shield-wall: atmospheric gladiators (COLOSSEEUM_GLADIATOR_1/2/3
+                   = NPC 12834-12836, synthetic model 0xC0000+def) barricade the arena
+                   perimeter, making the smaller Sol arena visible. Drawn on the
+                   pillar-centre lines between the four corner pillars, facing the
+                   centre, breathing via HUMAN_SHIELD_COMBATANT_IDLE (10872). Render
+                   only -- the sim already confines the player to the boss arena. */
+                if (col_sol_clamp_active(cs_molten)) {
+                    static const uint32_t GLAD_MODEL[3] = {
+                        0xC0000u + 12834u, 0xC0000u + 12835u, 0xC0000u + 12836u };
+                    int amin_x = sol->boss_arena_min_x, amax_x = sol->boss_arena_max_x;
+                    int amin_y = sol->boss_arena_min_y, amax_y = sol->boss_arena_max_y;
+                    float ccx = (float)(amin_x + amax_x) * 0.5f + 0.5f;
+                    float ccz = -((float)(amin_y + amax_y) * 0.5f + 1.0f) + 0.5f;
+                    int gclk = rc->effect_client_tick_counter;
+                    for (int side = 0; side < 4; side++) {
+                        for (int t = amin_x + 2; t <= amax_x - 2; t++) {
+                            int tx, ty;
+                            switch (side) {
+                                case 0:  tx = t;      ty = amin_y; break;
+                                case 1:  tx = t;      ty = amax_y; break;
+                                case 2:  tx = amin_x; ty = t;      break;
+                                default: tx = amax_x; ty = t;      break;
+                            }
+                            int variant = (int)(((unsigned)(tx * 3 + ty * 5)) % 3u);
+                            OsrsModel* gom = render_animate_effect_model(
+                                rc, GLAD_MODEL[variant], 10872, gclk + variant * 7);
+                            if (!gom) continue;
+                            float gx = (float)tx + 0.5f;
+                            float gz = -(float)(ty + 1) + 0.5f;
+                            float gground = OV_GROUND(tx, ty);
+                            float gyaw = atan2f(ccx - gx, ccz - gz);
+                            rlDisableBackfaceCulling();
+                            gom->model.transform = MatrixMultiply(
+                                MatrixMultiply(
+                                    MatrixScale(-1.0f/128.0f, 1.0f/128.0f, 1.0f/128.0f),
+                                    MatrixRotateY(gyaw)),
+                                MatrixTranslate(gx, gground, gz));
+                            DrawModel(gom->model, (Vector3){0,0,0}, 1.0f, WHITE);
+                            rlEnableBackfaceCulling();
+                        }
+                    }
+                }
             }
         }
 

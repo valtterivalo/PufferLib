@@ -123,6 +123,9 @@ COLOSSEUM_NPC_IDS = {
     12825: "Healing totem",
     12826: "Solar flare",
     10880: "Arceuus greater ghost thrall",
+    12834: "Sol shield-wall gladiator 1",
+    12835: "Sol shield-wall gladiator 2",
+    12836: "Sol shield-wall gladiator 3",
 }
 
 COLOSSEUM_ATTACK_ANIM_IDS = {
@@ -141,11 +144,20 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12825: 10828,
     12826: 0xFFFF,
     10880: 11101,
+    12834: 0xFFFF,
+    12835: 0xFFFF,
+    12836: 0xFFFF,
 }
 
 COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
     12817: (10893,),
     12818: (10868,),
+    # Sol shield-wall gladiators: atmospheric NPCs, render-only, breathing idle
+    # HUMAN_SHIELD_COMBATANT_IDLE (10872) drives the wall (their def stand_anim is
+    # the generic 808; the renderer drives 10872 explicitly).
+    12834: (10872,),
+    12835: (10872,),
+    12836: (10872,),
     # Sol Heredit per-attack animations, picked by last_attack_kind in the
     # renderer: 10882 melee strike, 10884 grapple, 10885 shield slam, 10886/10887
     # triple (long/short). 10883 (spear telegraph) is the attack_anim default. The
@@ -171,6 +183,9 @@ COLOSSEUM_DEATH_ANIM_IDS = {
     12825: 0xFFFF,
     12826: 0xFFFF,
     10880: 11595,
+    12834: 0xFFFF,
+    12835: 0xFFFF,
+    12836: 0xFFFF,
 }
 
 COLOSSEUM_PROJECTILE_ANIM_IDS = {

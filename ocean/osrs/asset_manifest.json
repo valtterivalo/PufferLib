@@ -1,10 +1,10 @@
 {
   "format": "puffer-osrs-asset-manifest-v1",
-  "asset_version": "osrs-assets-v20",
+  "asset_version": "osrs-assets-v21",
   "archive": {
-    "name": "osrs-assets-v20.tar.gz",
-    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v20/osrs-assets-v20.tar.gz",
-    "sha256": "baab4473ab2fdfbde6679f19845fde03047fdb3e83b6d178ad49326bb961c806",
+    "name": "osrs-assets-v21.tar.gz",
+    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v21/osrs-assets-v21.tar.gz",
+    "sha256": "2f770543618a113fee806be6ec1217432904b0ed9f9d8b16872cd05274f81874",
     "strip_components": 1
   },
   "required_groups": [
