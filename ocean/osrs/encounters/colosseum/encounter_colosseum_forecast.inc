@@ -1049,6 +1049,10 @@ static void col_build_step_out_forecast_horizon_mode_summary(
     memset(out, 0, sizeof(*out));
     if (summaries)
         memset(summaries, 0, sizeof(ColoForecastObsSummary) * ENCOUNTER_MOVE_ACTIONS);
+#ifdef COLO_PROFILE_ENABLED
+    int col_fc_prof = COLO_PROFILE_ENABLED();
+    double col_fc_t = col_fc_prof ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     int forecast_slots[COLO_MAX_NPCS];
     int forecast_slot_count = col_collect_step_out_forecast_slots(s, forecast_slots);
 
@@ -1063,6 +1067,9 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         pre = col_forecast_precompute(
             s, base_npcs, forecast_slots, forecast_slot_count);
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) { double n = COLO_PROFILE_NOW_MS(); COLO_PROFILE_ADD(COLO_PROF_FC_SETUP, n - col_fc_t); col_fc_t = n; }
+#endif
 
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         if (!col_step_out_forecast_prepare_unique_action_ctx(
@@ -1094,6 +1101,9 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         col_step_out_forecast_finalize_action(action, horizon);
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) { double n = COLO_PROFILE_NOW_MS(); COLO_PROFILE_ADD(COLO_PROF_FC_ROLLOUT, n - col_fc_t); col_fc_t = n; }
+#endif
 
     ColoForecastSolarflare solarflare = col_forecast_solarflare_precompute(s);
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
@@ -1103,6 +1113,9 @@ static void col_build_step_out_forecast_horizon_mode_summary(
                 &solarflare, action->land_x, action->land_y, horizon)
             : -1;
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) COLO_PROFILE_ADD(COLO_PROF_FC_SOLARFLARE, COLO_PROFILE_NOW_MS() - col_fc_t);
+#endif
 }
 
 static void col_build_step_out_forecast_horizon_mode(

@@ -1642,16 +1642,26 @@ static uint64_t col_best_gear_signature(const ColosseumState* s) {
     table is a pure function of the signature inputs, so the cached value equals a fresh
     build whenever the signature matches. This lifts the per-tick brute force (which was
     ~80% of training wall-clock) out of the obs hot path; all obs + metric call sites
-    share one build per (env, signature). */
+    share one build per (env, signature).
+
+    Set-associative (FIFO): a policy cycles through a few gear setups (style kits + spec
+    swaps), so a single cache entry rebuilds on every weapon switch. Keeping the last
+    COLO_BEST_GEAR_CACHE_WAYS distinct signatures resident lets those switches hit. A hit
+    returns the byte-identical table a fresh build would produce, so the obs is unchanged
+    -- only the rebuild FREQUENCY drops. */
 static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES] {
     if (!s) abort();
     uint64_t sig = col_best_gear_signature(s);
-    if (!s->best_gear_cache_valid || s->best_gear_cache_sig != sig) {
-        col_build_best_gear_table(s, s->best_gear_cache);
-        s->best_gear_cache_sig = sig;
-        s->best_gear_cache_valid = 1;
+    for (int w = 0; w < COLO_BEST_GEAR_CACHE_WAYS; w++) {
+        if (s->best_gear_cache_valid[w] && s->best_gear_cache_sig[w] == sig)
+            return s->best_gear_cache[w];
     }
-    return s->best_gear_cache;
+    int slot = s->best_gear_cache_next;
+    col_build_best_gear_table(s, s->best_gear_cache[slot]);
+    s->best_gear_cache_sig[slot] = sig;
+    s->best_gear_cache_valid[slot] = 1;
+    s->best_gear_cache_next = (slot + 1) % COLO_BEST_GEAR_CACHE_WAYS;
+    return s->best_gear_cache[slot];
 }
 
 /**

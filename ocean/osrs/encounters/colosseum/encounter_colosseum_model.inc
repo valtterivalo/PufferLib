@@ -1285,6 +1285,11 @@ typedef struct {
     uint8_t setup[NUM_GEAR_SLOTS];
 } ColoBestGear;
 
+/** Set-associativity of the best-gear oracle cache (col_get_best_gear_table). Sized to
+    hold the small working set of gear setups a policy cycles through (3 style kits +
+    spec/shield swaps) so weapon switches hit instead of triggering a full rebuild. */
+#define COLO_BEST_GEAR_CACHE_WAYS 12
+
 /** researched loadout profiles (.colosseum-notes/research/loadout-*.md):
     BEGINNER = wiki Budget tab tier-1 + budget example inventory (first-quiver
     floor), SPEEDRUN = wiki High efficiency tab (sub-20 kit). Spec weapons swap
@@ -2056,10 +2061,16 @@ typedef struct {
        changes (col_get_best_gear_table) and reused otherwise. Self-correcting: every
        access recomputes the signature from current state and rebuilds on mismatch, so
        the cache stays valid across episode resets and forecast projections with no
-       explicit invalidation. Lifts the per-tick brute force out of the obs hot path. */
-    ColoBestGear best_gear_cache[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    uint64_t best_gear_cache_sig;
-    int best_gear_cache_valid;
+       explicit invalidation. Lifts the per-tick brute force out of the obs hot path.
+       Set-associative (COLO_BEST_GEAR_CACHE_WAYS, FIFO-evicted): the policy cycles
+       through a handful of gear setups (melee/ranged/magic kits + spec swaps), so a
+       single entry thrashes on every weapon switch while a few ways keep all the live
+       setups resident -- bit-identical (a hit returns the table a fresh build would
+       produce for that signature), it only changes WHEN the brute force runs. */
+    ColoBestGear best_gear_cache[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
+    uint64_t best_gear_cache_sig[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_cache_valid[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_cache_next;   /* FIFO insertion slot */
 } ColosseumState;
 
 static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type);
