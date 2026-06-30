@@ -1015,9 +1015,9 @@ void free_mingru(MinGRU* layer) {
 // + masked maxpool over a shared bias-free 2-layer MLP (Linear->tanh GELU->Linear)
 // applied to the COLO_ENT_INF_NUM_NPCS NPC records. Weight read order matches the
 // native reg_params sequence (global, entity_l1, entity_l2), bias-free throughout.
-#define COLO_ENT_INF_NPC_START   1058
+#define COLO_ENT_INF_NPC_START   1030
 #define COLO_ENT_INF_NUM_NPCS    24
-#define COLO_ENT_INF_FEATS       43
+#define COLO_ENT_INF_FEATS       37
 #define COLO_ENT_INF_TYPE_ONEHOT 12
 #define COLO_ENT_INF_BOTTLENECK  16
 

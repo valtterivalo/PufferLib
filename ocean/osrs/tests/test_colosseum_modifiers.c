@@ -4933,12 +4933,12 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2565", COLO_NUM_OBS == 2565);
-    CHECK("inventory block has 812 features", COLO_INVENTORY_OBS_SIZE == 812);
+    CHECK("obs width is 2393", COLO_NUM_OBS == 2393);
+    CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
-    CHECK("NPC slots have 43 features (best-gear DPT obs)", COLO_FEATURES_PER_NPC == 43);
+    CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
     CHECK("snapshot version is v17", COLO_SNAPSHOT_VERSION == 17u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -6999,7 +6999,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2565);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2393);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

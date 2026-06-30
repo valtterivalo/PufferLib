@@ -200,43 +200,28 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* 2026-06-26: re-seeded after adding the step-out forecast Solarflare contact obs.
-   The forecast obs block grew one float per move action (COLO_STEP_OUT_FORECAST_ACTION_FEATURES
-   8 -> 9, +ENCOUNTER_MOVE_ACTIONS floats, COLO_NUM_OBS 2540 -> 2565): each candidate landing now
-   carries a soonest-Solarflare-orb-contact urgency, projecting the single nearest pillar's orb
-   forward with the shared live cadence advance. The obs vector widens for every config (the
-   action stream is unchanged), so every digest moves. Verified deterministic (two --print runs
-   identical) + after probe_colo_best_gear_dpt.c (33/33) and test_colosseum_modifiers.c
-   (10192/10192), plus an adversarial cadence-match probe (forecast projection == live
-   col_mod_tick_solarflare step-for-step across tiers 1/2/3). */
+/* 2026-06-30: re-seeded after the DPT-obs deletion (the B0 ablation showed the best-gear
+   DPT obs score-neutral, gear is not the wall). The per-NPC best-DPT + argmax-style floats
+   (6/NPC) and the per-inventory-cell target-DPT float (1/cell) were removed:
+   COLO_FEATURES_PER_NPC 43 -> 37, inventory cell 29 -> 28, COLO_NUM_OBS 2565 -> 2393. The obs
+   vector narrows for every config (the action stream + sim are unchanged), so all 12 digests
+   move together. Sim outcomes are byte-identical: the deletion only removed obs writes + the
+   obs-time oracle build (a pure cache, no sim side-effects) + dead config flags, proven by
+   test_colosseum_modifiers.c 10275/10275 (sim-mechanics asserts) and probe_colo_best_gear_dpt.c
+   33/33. Verified deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x1904593a191c3f65ULL,
-    0x257f2fa86a8ce369ULL,
-    0x6c5be67034607d84ULL,
-    /* w04_manticore + w09_double_manticore (indices 3, 8) re-baselined after the
-       no-corner-cut movement fix (osrs_encounter.h encounter_move_to_target): the
-       scripted player no longer cuts a blocked diagonal corner around the 3x3 manticore,
-       so those trajectories diverge. The other 10 configs are byte-identical. (w04 also
-       carries the earlier reach-1 cardinal-adjacency fix.) */
-    0x3cd3f457be81365dULL,
-    0x3479e6be59ca8cf0ULL,
-    0x61fe90a1aa69da0cULL,
-    0x16abdb26a3a9c353ULL,
-    0x12bf8cb20cdf7b84ULL,
-    /* w09/w10/w11 (indices 8,9,10) re-baselined after the manticore shared-cycle
-       fix: every manticore in a wave now copies one wave-shared orb pattern
-       (rolled at the first manticore's spawn) instead of rolling its own, so the
-       second manticore no longer consumes its own RNG draw and these
-       double-manticore waves' trajectories diverge. The other 9 configs are
-       byte-identical (the second roll only existed when 2+ manticores spawn). */
-    0x7364d85769e8307eULL,
-    0xc78b211f587c2598ULL,
-    0x6ad6aafdfb4770ffULL,
-    /* w12_sol (index 11) re-baselined after tightening the Sol walkable arena one
-       tile on every side (col_in_boss_arena now returns the interior of the
-       shield-wall ring), so the player/NPC trajectories during wave 12 diverge.
-       The other 11 configs are byte-identical (the clamp is wave-12 only). */
-    0xe7704516ace5774aULL,
+    0xb78b468e1f81cafeULL,
+    0x59aa90a2066f88bbULL,
+    0x93a0b5b2f23eada4ULL,
+    0xe05ce883e19745e6ULL,
+    0xbdbd04a4f927fe5dULL,
+    0xa9bb3a85ee24763dULL,
+    0x9e22d009ff6721feULL,
+    0x3ad36c2b71a608b4ULL,
+    0x204e6ff8fefad0adULL,
+    0xfe86bf416a4458feULL,
+    0x918fc978c6b725fcULL,
+    0x52403bdc79cd2672ULL,
 };
 
 int main(int argc, char** argv) {

@@ -582,9 +582,9 @@ static void nmmo3_encoder_free_activations(void* activations) { free(activations
 // COLO_ENT_NPC_START. Each record begins with a COLO_ENT_TYPE_ONEHOT-wide NPC-type
 // one-hot, so an active record has type one-hot sum > 0 and an inactive record is
 // fully zero (col_write_obs_ctx memsets the obs before writing).
-static constexpr int COLO_ENT_NPC_START   = 1058;
+static constexpr int COLO_ENT_NPC_START   = 1030;
 static constexpr int COLO_ENT_NUM_NPCS    = 24;
-static constexpr int COLO_ENT_FEATS       = 43;
+static constexpr int COLO_ENT_FEATS       = 37;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
 static constexpr int COLO_ENT_BOTTLENECK  = 16;
 static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;

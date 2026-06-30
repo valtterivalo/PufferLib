@@ -22,11 +22,11 @@ import torch.nn as nn
 SRC = os.path.join(os.path.dirname(__file__), "test_colosseum_entity_encoder.cu")
 SO = os.path.join(os.path.dirname(__file__), "colo_entity_test.so")
 
-OBS_SIZE = 2540
+OBS_SIZE = 2393
 HIDDEN = 64
-NPC_START = 1058
+NPC_START = 1030
 NUM_NPCS = 24
-FEATS = 43
+FEATS = 37
 TYPE_ONEHOT = 12
 BOTTLENECK = 16
 

@@ -29,16 +29,16 @@
 
 #define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
 #define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
-#define COLO_INVENTORY_TARGET_DPT_OBS_FEATURES 1
-#define COLO_INVENTORY_CELL_OBS_FEATURES \
-    (OSRS_INVENTORY_CELL_OBS_FEATURES + COLO_INVENTORY_TARGET_DPT_OBS_FEATURES)
+#define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
-#define COLO_FEATURES_PER_NPC     43   /* 12-type one-hot + 14 core features + 10 tells + 7 matchup
-                                          (3 best-per-style DPT + 3 argmax-style one-hot + 1 venator) */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 1032 */
+#define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator.
+                                          The best-gear DPT obs (3 best-per-style DPT + 3 argmax-style
+                                          one-hot per NPC, + 1 per inventory cell) was removed: the B0
+                                          ablation showed it score-neutral, gear is not the wall. */
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 888 */
 /** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated from the
     oracle's empirical max best-gear DPT across every (profile, weapon, real NPC type)
     via probe_colo_best_gear_dpt.c --calibrate: the global max is 13.25 (speedrun scythe
@@ -600,9 +600,7 @@ static void col_write_npc_slot(
     const ColosseumState* s,
     const ColoNPC* npc,
     int npc_slot,
-    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     const ColoVenatorPreviewTargets* venator_targets,
-    int dpt_obs_enabled,
     float* obs,
     int* idx
 ) {
@@ -635,26 +633,6 @@ static void col_write_npc_slot(
     *idx = i;
     col_write_npc_tells(s, npc, obs, idx);
     i = *idx;
-    /* best-achievable DPT per style (melee/ranged/magic) vs this live NPC, from the
-       whole-setup gear oracle scored with the style-matched offensive prayer. */
-    float best_dpt[COLO_NUM_WEAPON_SETS];
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
-        best_dpt[set] = dpt_obs_enabled
-            ? col_best_dpt_obs_value(npc, best[set][npc->type].dpt) : 0.0f;
-        obs[i++] = best_dpt[set];
-    }
-    /* argmax-style one-hot over the 3 best DPTs. Earns its 3 floats because under the
-       /NORM clamp two styles can both pin near 1.0 and lose ordering; the explicit
-       one-hot removes the softmax the policy would otherwise learn over saturating
-       scalars. Ties resolve to the lowest style index; an all-zero NPC slot (dead /
-       hazard / no usable weapon) emits no one-hot. */
-    int argmax_style = -1;
-    float argmax_val = 0.0f;
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
-        if (best_dpt[set] > argmax_val) { argmax_val = best_dpt[set]; argmax_style = set; }
-    }
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        obs[i++] = (set == argmax_style) ? 1.0f : 0.0f;
     int extra_bounces = col_venator_extra_bounce_if_shot(s, venator_targets, npc_slot);
     obs[i++] = (float)extra_bounces / (float)(OSRS_VENATOR_MAX_CHAIN_HITS - 1);
     *idx = i;
@@ -1851,11 +1829,8 @@ static void col_inventory_cell_post_use_deltas(
 
 static void col_write_inventory_and_equipped_obs(
     ColosseumState* s,
-    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     float* obs,
-    int* idx,
-    int use_wielded_style,
-    int dpt_obs_enabled
+    int* idx
 ) {
     int i = *idx;
     float current_equipment_projection[6];
@@ -1876,9 +1851,6 @@ static void col_write_inventory_and_equipped_obs(
             s->player.base_prayer,
             s->player.base_attack);
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
-        obs[i++] = dpt_obs_enabled
-            ? col_inventory_cell_target_dpt_obs_value(s, cell_idx, best, use_wielded_style)
-            : 0.0f;
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
@@ -1958,17 +1930,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_PILLARS);
 #endif
 
-    const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
-#ifdef COLO_PROFILE_ENABLED
-    /* the best-gear oracle rebuild dominates the obs write whenever its signature
-       changes (gear/inventory/level edit); split it from the cheap per-cell DPT obs +
-       venator preview so the real cost (the brute-force build, ~185us/rebuild) is
-       attributed correctly instead of hiding in a combined inventory bucket. */
-    COLO_PROFILE_MARK(COLO_PROF_OBS_BESTGEAR);
-#endif
-
-    col_write_inventory_and_equipped_obs(
-        s, best_gear, obs, &i, ctx->config.dpt_obs_wielded_style, ctx->config.dpt_obs_enabled);
+    col_write_inventory_and_equipped_obs(s, obs, &i);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_INVENTORY);
 #endif
@@ -1987,8 +1949,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
             continue;
         }
         col_write_npc_slot(
-            s, &s->npcs[npc_idx], npc_idx, best_gear, &venator_targets,
-            ctx->config.dpt_obs_enabled, obs, &i);
+            s, &s->npcs[npc_idx], npc_idx, &venator_targets, obs, &i);
     }
     assert(i == COLO_OBS_AFTER_NPCS);
 #ifdef COLO_PROFILE_ENABLED

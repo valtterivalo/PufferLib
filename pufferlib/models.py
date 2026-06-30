@@ -71,18 +71,18 @@ class ColosseumEntityEncoder(nn.Module):
 
     Obs layout verified from ocean/osrs/encounters/colosseum/encounter_colosseum_obs_mask.inc
     and encounter_colosseum_model.inc. The NPC block is COLO_OBS_NPCS=24 contiguous
-    records of COLO_FEATURES_PER_NPC=43 floats, written by col_write_npc_slot in the
+    records of COLO_FEATURES_PER_NPC=37 floats, written by col_write_npc_slot in the
     col_write_obs_ctx loop. NPC_START = COLO_OBS_AFTER_EQUIPPED_SELF:
-        player(36) + pillars(4*3=12) + inventory(28*29=812) + equipped(11*18=198) = 1058
-    and NPC_START + 24*43 = 2090 = COLO_OBS_AFTER_NPCS. Each record begins with a
-    COLO_NUM_NPC_TYPES=12-wide type one-hot (col_write_npc_slot line ~613), so an active
+        player(36) + pillars(4*3=12) + inventory(28*28=784) + equipped(11*18=198) = 1030
+    and NPC_START + 24*37 = 1918 = COLO_OBS_AFTER_NPCS. Each record begins with a
+    COLO_NUM_NPC_TYPES=12-wide type one-hot (col_write_npc_slot), so an active
     slot has type_onehot.sum() > 0 while an inactive slot is fully zero-filled (the writer
     does `i += COLO_FEATURES_PER_NPC` for inactive slots after a full memset).
     """
 
-    NPC_START = 1058
+    NPC_START = 1030
     NUM_NPCS = 24
-    FEATURES_PER_NPC = 43
+    FEATURES_PER_NPC = 37
     TYPE_ONEHOT_START = 0
     TYPE_ONEHOT_LEN = 12
 
