@@ -121,6 +121,8 @@ static void col_put_float_ctx(
         ctx->config.stall_penalty_coeff = value;
     else if (strcmp(key, "dpt_obs_wielded_style") == 0)
         ctx->config.dpt_obs_wielded_style = value;
+    else if (strcmp(key, "dpt_obs_enabled") == 0)
+        ctx->config.dpt_obs_enabled = value;
     else if (strcmp(key, "avoided_damage_coeff") == 0)
         ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;

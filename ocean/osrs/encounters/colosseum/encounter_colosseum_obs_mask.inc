@@ -602,6 +602,7 @@ static void col_write_npc_slot(
     int npc_slot,
     const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     const ColoVenatorPreviewTargets* venator_targets,
+    int dpt_obs_enabled,
     float* obs,
     int* idx
 ) {
@@ -638,7 +639,8 @@ static void col_write_npc_slot(
        whole-setup gear oracle scored with the style-matched offensive prayer. */
     float best_dpt[COLO_NUM_WEAPON_SETS];
     for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
-        best_dpt[set] = col_best_dpt_obs_value(npc, best[set][npc->type].dpt);
+        best_dpt[set] = dpt_obs_enabled
+            ? col_best_dpt_obs_value(npc, best[set][npc->type].dpt) : 0.0f;
         obs[i++] = best_dpt[set];
     }
     /* argmax-style one-hot over the 3 best DPTs. Earns its 3 floats because under the
@@ -1852,7 +1854,8 @@ static void col_write_inventory_and_equipped_obs(
     const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
     float* obs,
     int* idx,
-    int use_wielded_style
+    int use_wielded_style,
+    int dpt_obs_enabled
 ) {
     int i = *idx;
     float current_equipment_projection[6];
@@ -1873,7 +1876,9 @@ static void col_write_inventory_and_equipped_obs(
             s->player.base_prayer,
             s->player.base_attack);
         i += OSRS_INVENTORY_CELL_OBS_FEATURES;
-        obs[i++] = col_inventory_cell_target_dpt_obs_value(s, cell_idx, best, use_wielded_style);
+        obs[i++] = dpt_obs_enabled
+            ? col_inventory_cell_target_dpt_obs_value(s, cell_idx, best, use_wielded_style)
+            : 0.0f;
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
@@ -1962,7 +1967,8 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_BESTGEAR);
 #endif
 
-    col_write_inventory_and_equipped_obs(s, best_gear, obs, &i, ctx->config.dpt_obs_wielded_style);
+    col_write_inventory_and_equipped_obs(
+        s, best_gear, obs, &i, ctx->config.dpt_obs_wielded_style, ctx->config.dpt_obs_enabled);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_INVENTORY);
 #endif
@@ -1981,7 +1987,8 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
             continue;
         }
         col_write_npc_slot(
-            s, &s->npcs[npc_idx], npc_idx, best_gear, &venator_targets, obs, &i);
+            s, &s->npcs[npc_idx], npc_idx, best_gear, &venator_targets,
+            ctx->config.dpt_obs_enabled, obs, &i);
     }
     assert(i == COLO_OBS_AFTER_NPCS);
 #ifdef COLO_PROFILE_ENABLED

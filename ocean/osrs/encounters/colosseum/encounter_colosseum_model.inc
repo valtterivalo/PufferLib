@@ -1729,6 +1729,10 @@ typedef struct {
                                            style (default, byte-identical), 1 = the player's
                                            currently-wielded style, so gear that raises DPT
                                            for the kit you are holding lights up (sweepable). */
+    int dpt_obs_enabled;                /* 1 (default) = emit the gear-oracle DPT obs (per-cell
+                                           marginal + per-NPC best-DPT/argmax-style); 0 = zero
+                                           those fields (B0 ablation: does the DPT meta earn its
+                                           keep? if not, the obs shrinks + the build is deletable). */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;

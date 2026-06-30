@@ -355,6 +355,7 @@ static ColConfig col_default_config(void) {
         .offensive_boost_reward_coeff = 0.0f,
         .stall_penalty_coeff = 0.0f,
         .dpt_obs_wielded_style = 0,
+        .dpt_obs_enabled = 1,
         .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,
