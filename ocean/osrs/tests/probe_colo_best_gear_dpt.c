@@ -331,11 +331,11 @@ static void test_per_cell_marginal_bit(void) {
         shadow_cell >= 0 && consumable_cell >= 0 && offstyle_weapon_cell >= 0);
     if (shadow_cell < 0 || consumable_cell < 0 || offstyle_weapon_cell < 0) return;
 
-    float shadow_marg = col_inventory_cell_target_dpt_obs_value(&s, shadow_cell, best);
+    float shadow_marg = col_inventory_cell_target_dpt_obs_value(&s, shadow_cell, best, 0);
     float consumable_marg =
-        col_inventory_cell_target_dpt_obs_value(&s, consumable_cell, best);
+        col_inventory_cell_target_dpt_obs_value(&s, consumable_cell, best, 0);
     float offstyle_marg =
-        col_inventory_cell_target_dpt_obs_value(&s, offstyle_weapon_cell, best);
+        col_inventory_cell_target_dpt_obs_value(&s, offstyle_weapon_cell, best, 0);
     CHECK("T5 shadow cell marginal bit is positive (in the argmax setup)",
         shadow_marg > 0.0f);
     CHECK("T5 consumable cell marginal bit is 0 (not equippable)",
