@@ -1944,16 +1944,23 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #endif
 
     const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
+#ifdef COLO_PROFILE_ENABLED
+    /* the best-gear oracle rebuild dominates the obs write whenever its signature
+       changes (gear/inventory/level edit); split it from the cheap per-cell DPT obs +
+       venator preview so the real cost (the brute-force build, ~185us/rebuild) is
+       attributed correctly instead of hiding in a combined inventory bucket. */
+    COLO_PROFILE_MARK(COLO_PROF_OBS_BESTGEAR);
+#endif
 
     col_write_inventory_and_equipped_obs(s, best_gear, obs, &i, ctx->config.dpt_obs_wielded_style);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_INVENTORY);
+#endif
 
     ColoVenatorPreviewTargets venator_targets;
     col_collect_venator_preview_targets(s, &venator_targets);
 #ifdef COLO_PROFILE_ENABLED
-    /* the best-gear oracle rebuild (col_get_best_gear_table) lives in this bucket and
-       dominates the obs write whenever its signature changes; splitting pillars +
-       inventory off the per-NPC-slot mark keeps that cost visible. */
-    COLO_PROFILE_MARK(COLO_PROF_OBS_INVENTORY);
+    COLO_PROFILE_MARK(COLO_PROF_OBS_VENATOR);
 #endif
 
     /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
