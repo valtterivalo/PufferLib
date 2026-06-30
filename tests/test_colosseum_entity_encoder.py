@@ -1,7 +1,8 @@
 """Test the colosseum entity encoder CUDA forward and backward.
 
 Builds a shared library from test_colosseum_entity_encoder.cu (thin wrapper around
-ocean.cu's ColosseumEntityEncoder, --float build), then:
+ocean.cu's ColosseumEntityEncoder, --float build), then for BOTH encoder modes
+(1 = global + NPC pool, 2 = global + NPC pool + inventory-cell pool):
   1. forward-matches the torch ColosseumEntityEncoder on identical bias-free weights,
   2. checks every weight-group gradient against torch autograd,
   3. runs an independent central finite-difference check per weight group, confirming
@@ -9,7 +10,7 @@ ocean.cu's ColosseumEntityEncoder, --float build), then:
 
 The obs generator deliberately exercises active records, all-inactive (zero) records,
 a fully-inactive batch row, and a per-channel tie so the masked-maxpool tie-break and
-all-inactive semantics are covered.
+all-inactive semantics are covered -- for BOTH the NPC block and the inventory block.
 """
 
 import subprocess
@@ -30,6 +31,13 @@ FEATS = 37
 TYPE_ONEHOT = 12
 BOTTLENECK = 16
 
+# mode 2 inventory-cell pool (must match ocean.cu COLO_ENT_INV_* / models.py)
+INV_START = 48
+NUM_INV_CELLS = 28
+FEATS_PER_CELL = 28
+INV_PRESENT = 0
+INV_BOTTLENECK = 16
+
 
 def build():
     cmd = [
@@ -42,13 +50,25 @@ def build():
     subprocess.check_call(cmd)
 
 
-class ColosseumEntityEncoderRef(nn.Module):
-    """Bias-free, tanh-GELU torch reference matching the native + puffernet paths."""
+def _masked_maxpool(embeddings, active):
+    masked = embeddings.masked_fill(~active.unsqueeze(-1), float("-inf"))
+    pooled = masked.max(dim=1)[0]
+    return torch.where(active.any(dim=1, keepdim=True), pooled, torch.zeros_like(pooled))
 
-    def __init__(self, obs_size, hidden_size):
+
+class ColosseumEntityEncoderRef(nn.Module):
+    """Bias-free, tanh-GELU torch reference matching the native + puffernet paths.
+
+    mode 1 = global + NPC pool; mode 2 also adds the inventory-cell pool. Submodule
+    definition order (global, entity, inv) yields the parameter order the native
+    reg_params / .bin checkpoint expects: global_w, npc_l1, npc_l2, inv_l1, inv_l2.
+    """
+
+    def __init__(self, obs_size, hidden_size, mode=1):
         super().__init__()
         self.obs_size = obs_size
         self.hidden_size = hidden_size
+        self.mode = mode
         self.npc_block_size = NUM_NPCS * FEATS
         self.global_encoder = nn.Linear(obs_size, hidden_size, bias=False)
         self.entity_encoder = nn.Sequential(
@@ -56,29 +76,40 @@ class ColosseumEntityEncoderRef(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(BOTTLENECK, hidden_size, bias=False),
         )
+        if mode >= 2:
+            self.inv_encoder = nn.Sequential(
+                nn.Linear(FEATS_PER_CELL, INV_BOTTLENECK, bias=False),
+                nn.GELU(approximate="tanh"),
+                nn.Linear(INV_BOTTLENECK, hidden_size, bias=False),
+            )
 
     def forward(self, observations):
         x = observations.view(observations.shape[0], -1).float()
-        global_h = self.global_encoder(x)
-        npc_block = x[:, NPC_START:NPC_START + self.npc_block_size]
-        npcs = npc_block.reshape(x.shape[0], NUM_NPCS, FEATS)
-        entity_h = self.entity_encoder(npcs)
-        type_onehot = npcs[:, :, 0:TYPE_ONEHOT]
-        active = type_onehot.sum(dim=-1) > 0
-        masked = entity_h.masked_fill(~active.unsqueeze(-1), float("-inf"))
-        pooled = masked.max(dim=1)[0]
-        pooled = torch.where(active.any(dim=1, keepdim=True), pooled, torch.zeros_like(pooled))
-        return global_h + pooled
+        out = self.global_encoder(x)
+
+        npcs = x[:, NPC_START:NPC_START + self.npc_block_size].reshape(
+            x.shape[0], NUM_NPCS, FEATS)
+        npc_active = npcs[:, :, 0:TYPE_ONEHOT].sum(dim=-1) > 0
+        out = out + _masked_maxpool(self.entity_encoder(npcs), npc_active)
+
+        if self.mode >= 2:
+            cells = x[:, INV_START:INV_START + NUM_INV_CELLS * FEATS_PER_CELL].reshape(
+                x.shape[0], NUM_INV_CELLS, FEATS_PER_CELL)
+            cell_active = cells[:, :, INV_PRESENT] > 0
+            out = out + _masked_maxpool(self.inv_encoder(cells), cell_active)
+
+        return out
 
 
 def load_lib():
     lib = ctypes.CDLL(SO)
     VP = ctypes.c_void_p
-    lib.colo_entity_test_init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    lib.colo_entity_test_init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
     lib.colo_entity_test_set_weights.argtypes = [VP, VP, VP]
+    lib.colo_entity_test_set_inv_weights.argtypes = [VP, VP]
     lib.colo_entity_test_forward.argtypes = [VP, VP, ctypes.c_int]
     lib.colo_entity_test_backward.argtypes = [VP, ctypes.c_int]
-    for name in ["global_wgrad", "l1_wgrad", "l2_wgrad"]:
+    for name in ["global_wgrad", "l1_wgrad", "l2_wgrad", "inv_l1_wgrad", "inv_l2_wgrad"]:
         getattr(lib, f"colo_entity_test_get_{name}").argtypes = [VP]
     lib.colo_entity_test_get_argmax.argtypes = [VP, ctypes.c_int]
     return lib
@@ -89,42 +120,71 @@ def ptr(t):
 
 
 def extract_weights(model):
-    return [
+    """global, npc_l1, npc_l2, then (mode 2) inv_l1, inv_l2 -- the .bin order."""
+    ws = [
         model.global_encoder.weight.data.contiguous(),
         model.entity_encoder[0].weight.data.contiguous(),
         model.entity_encoder[2].weight.data.contiguous(),
     ]
+    if model.mode >= 2:
+        ws.append(model.inv_encoder[0].weight.data.contiguous())
+        ws.append(model.inv_encoder[2].weight.data.contiguous())
+    return ws
+
+
+def set_cuda_weights(lib, model):
+    ws = extract_weights(model)
+    lib.colo_entity_test_set_weights(*[ptr(w) for w in ws[:3]])
+    if model.mode >= 2:
+        lib.colo_entity_test_set_inv_weights(ptr(ws[3]), ptr(ws[4]))
+
+
+def _fill_entity_block(obs, b, start, num_entities, feats, onehot_len, gen, present_is_onehot):
+    """Fill `num_active` entity records with an active marker + random feats; leave the
+    rest zero. present_is_onehot=True -> set a random type one-hot bit (NPC); False ->
+    set the present flag at local offset 0 (inventory cell)."""
+    num_active = int(torch.randint(1, num_entities + 1, (1,), generator=gen).item())
+    for n in range(num_active):
+        base = start + n * feats
+        if present_is_onehot:
+            t = int(torch.randint(0, onehot_len, (1,), generator=gen).item())
+            obs[b, base + t] = 1.0
+            obs[b, base + onehot_len:base + feats] = torch.randn(feats - onehot_len, generator=gen) * 0.7
+        else:
+            obs[b, base + INV_PRESENT] = 1.0
+            obs[b, base + 1:base + feats] = torch.randn(feats - 1, generator=gen) * 0.7
 
 
 def generate_obs(B, device, seed):
-    """Active records get a random one-hot type + random feats; inactive records
-    stay all-zero. Row 0 forces a per-channel tie across two active records; the
-    last row is fully inactive to exercise the all-inactive -> 0 path."""
+    """Active records get an active marker + random feats; inactive records stay zero.
+    Row 0 forces a per-channel tie across two active records (both NPC and inventory);
+    the last row is fully inactive for both blocks to exercise all-inactive -> 0."""
     g = torch.Generator(device="cpu").manual_seed(seed)
     obs = torch.zeros(B, OBS_SIZE, dtype=torch.float32)
-    # Most of the obs outside the NPC block is also nonzero (global Linear sees it).
     obs.copy_(torch.randn(B, OBS_SIZE, generator=g) * 0.5)
-    # Reset the NPC block; we fill it explicitly below.
     obs[:, NPC_START:NPC_START + NUM_NPCS * FEATS] = 0.0
+    obs[:, INV_START:INV_START + NUM_INV_CELLS * FEATS_PER_CELL] = 0.0
 
     for b in range(B):
         if b == B - 1:
-            continue  # last row fully inactive (no active NPC records)
-        num_active = int(torch.randint(1, NUM_NPCS + 1, (1,), generator=g).item())
-        for n in range(num_active):
-            base = NPC_START + n * FEATS
-            t = int(torch.randint(0, TYPE_ONEHOT, (1,), generator=g).item())
-            obs[b, base + t] = 1.0
-            obs[b, base + TYPE_ONEHOT:base + FEATS] = (
-                torch.randn(FEATS - TYPE_ONEHOT, generator=g) * 0.7
-            )
-    # Force a tie on row 0 between records 0 and 1 (both active, identical feats).
+            continue  # last row fully inactive (no active NPC or inventory records)
+        _fill_entity_block(obs, b, NPC_START, NUM_NPCS, FEATS, TYPE_ONEHOT, g, present_is_onehot=True)
+        _fill_entity_block(obs, b, INV_START, NUM_INV_CELLS, FEATS_PER_CELL, 0, g, present_is_onehot=False)
+
+    # NPC tie on row 0 between records 0 and 1 (identical active feats).
     obs[0, NPC_START:NPC_START + FEATS] = 0.0
     obs[0, NPC_START + 0] = 1.0
     obs[0, NPC_START + TYPE_ONEHOT:NPC_START + FEATS] = 0.3
     obs[0, NPC_START + FEATS:NPC_START + 2 * FEATS] = 0.0
     obs[0, NPC_START + FEATS + 0] = 1.0
     obs[0, NPC_START + FEATS + TYPE_ONEHOT:NPC_START + 2 * FEATS] = 0.3
+    # Inventory tie on row 0 between cells 0 and 1 (identical present + feats).
+    obs[0, INV_START:INV_START + FEATS_PER_CELL] = 0.0
+    obs[0, INV_START + INV_PRESENT] = 1.0
+    obs[0, INV_START + 1:INV_START + FEATS_PER_CELL] = 0.3
+    obs[0, INV_START + FEATS_PER_CELL:INV_START + 2 * FEATS_PER_CELL] = 0.0
+    obs[0, INV_START + FEATS_PER_CELL + INV_PRESENT] = 1.0
+    obs[0, INV_START + FEATS_PER_CELL + 1:INV_START + 2 * FEATS_PER_CELL] = 0.3
     return obs.to(device)
 
 
@@ -140,15 +200,15 @@ def check_match(name, got, ref, atol=1e-4, rtol=1e-4):
     assert ok, f"{name} FAILED"
 
 
-def test_forward(lib, B):
-    print(f"\n--- Forward B={B} ---")
+def test_forward(lib, B, mode):
+    print(f"\n--- Forward B={B} mode={mode} ---")
     device = torch.device("cuda")
     torch.manual_seed(7)
-    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN).to(device).float().eval()
+    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN, mode).to(device).float().eval()
     obs = generate_obs(B, device, seed=11)
 
-    lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN)
-    lib.colo_entity_test_set_weights(*[ptr(w) for w in extract_weights(model)])
+    lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN, mode)
+    set_cuda_weights(lib, model)
 
     cuda_out = torch.zeros(B, HIDDEN, device=device)
     lib.colo_entity_test_forward(ptr(cuda_out), ptr(obs), B)
@@ -159,15 +219,15 @@ def test_forward(lib, B):
     print("  PASSED")
 
 
-def test_backward_autograd(lib, B):
-    print(f"\n--- Backward vs autograd B={B} ---")
+def test_backward_autograd(lib, B, mode):
+    print(f"\n--- Backward vs autograd B={B} mode={mode} ---")
     device = torch.device("cuda")
     torch.manual_seed(7)
-    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN).to(device).float()
+    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN, mode).to(device).float()
     obs = generate_obs(B, device, seed=11)
 
-    lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN)
-    lib.colo_entity_test_set_weights(*[ptr(w) for w in extract_weights(model)])
+    lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN, mode)
+    set_cuda_weights(lib, model)
 
     cuda_out = torch.zeros(B, HIDDEN, device=device)
     lib.colo_entity_test_forward(ptr(cuda_out), ptr(obs), B)
@@ -195,47 +255,57 @@ def test_backward_autograd(lib, B):
     lib.colo_entity_test_get_l2_wgrad(ptr(g))
     check_match("entity_l2_wgrad", g, model.entity_encoder[2].weight.grad, **tol)
 
-    # obs is an env leaf: the encoder must compute weight grads only. The torch ref
-    # routes a grad into obs (via the global Linear), but the native backward never
-    # touches obs. Confirm the native path produced NO obs grad by construction:
-    # the only obs-consuming op is puf_mm_tn(grad, saved_obs) writing global_wgrad.
+    if mode >= 2:
+        g = torch.zeros(INV_BOTTLENECK, FEATS_PER_CELL, device=device)
+        lib.colo_entity_test_get_inv_l1_wgrad(ptr(g))
+        check_match("inv_l1_wgrad", g, model.inv_encoder[0].weight.grad, **tol)
+        g = torch.zeros(HIDDEN, INV_BOTTLENECK, device=device)
+        lib.colo_entity_test_get_inv_l2_wgrad(ptr(g))
+        check_match("inv_l2_wgrad", g, model.inv_encoder[2].weight.grad, **tol)
+
     print("  obs-grad: native backward writes weight grads only (no obs buffer touched)")
     print("  PASSED")
 
 
-def test_finite_difference(lib, B):
-    """Independent central finite-difference per weight group. Recomputes the CUDA
-    forward, perturbs each sampled weight element +-eps, and compares (f+ - f-)/2eps
-    against the analytical grad from the CUDA backward."""
-    print(f"\n--- Central finite-difference B={B} ---")
+def test_finite_difference(lib, B, mode):
+    """Independent central finite-difference per weight group."""
+    print(f"\n--- Central finite-difference B={B} mode={mode} ---")
     device = torch.device("cuda")
     torch.manual_seed(3)
-    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN).to(device).float()
+    model = ColosseumEntityEncoderRef(OBS_SIZE, HIDDEN, mode).to(device).float()
     obs = generate_obs(B, device, seed=5)
     grad_output = torch.randn(B, HIDDEN, device=device)
 
-    weights = extract_weights(model)  # global, l1, l2
+    weights = extract_weights(model)
+    gnames = ["global", "l1", "l2"] + (["inv_l1", "inv_l2"] if mode >= 2 else [])
+    getters = {
+        "global": (lib.colo_entity_test_get_global_wgrad, (HIDDEN, OBS_SIZE)),
+        "l1": (lib.colo_entity_test_get_l1_wgrad, (BOTTLENECK, FEATS)),
+        "l2": (lib.colo_entity_test_get_l2_wgrad, (HIDDEN, BOTTLENECK)),
+        "inv_l1": (lib.colo_entity_test_get_inv_l1_wgrad, (INV_BOTTLENECK, FEATS_PER_CELL)),
+        "inv_l2": (lib.colo_entity_test_get_inv_l2_wgrad, (HIDDEN, INV_BOTTLENECK)),
+    }
 
     def cuda_forward(ws):
-        lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN)
-        lib.colo_entity_test_set_weights(*[ptr(w.contiguous()) for w in ws])
+        lib.colo_entity_test_init(B, OBS_SIZE, HIDDEN, mode)
+        lib.colo_entity_test_set_weights(*[ptr(w.contiguous()) for w in ws[:3]])
+        if mode >= 2:
+            lib.colo_entity_test_set_inv_weights(ptr(ws[3].contiguous()), ptr(ws[4].contiguous()))
         out = torch.zeros(B, HIDDEN, device=device)
         lib.colo_entity_test_forward(ptr(out), ptr(obs), B)
         torch.cuda.synchronize()
         return out
 
-    # Analytical grads from the CUDA backward.
     cuda_forward(weights)
     grad_cuda = grad_output.clone()
     lib.colo_entity_test_backward(ptr(grad_cuda), B)
     torch.cuda.synchronize()
     ana = {}
-    g = torch.zeros(HIDDEN, OBS_SIZE, device=device)
-    lib.colo_entity_test_get_global_wgrad(ptr(g)); ana["global"] = g.clone()
-    g = torch.zeros(BOTTLENECK, FEATS, device=device)
-    lib.colo_entity_test_get_l1_wgrad(ptr(g)); ana["l1"] = g.clone()
-    g = torch.zeros(HIDDEN, BOTTLENECK, device=device)
-    lib.colo_entity_test_get_l2_wgrad(ptr(g)); ana["l2"] = g.clone()
+    for gname in gnames:
+        getter, shape = getters[gname]
+        g = torch.zeros(*shape, device=device)
+        getter(ptr(g))
+        ana[gname] = g.clone()
 
     eps = 1e-3
     rng = np.random.default_rng(0)
@@ -243,7 +313,7 @@ def test_finite_difference(lib, B):
     def fd_loss(out):
         return (out * grad_output).sum().item()
 
-    for gi, gname in enumerate(["global", "l1", "l2"]):
+    for gi, gname in enumerate(gnames):
         w = weights[gi]
         flat = w.view(-1)
         n = flat.numel()
@@ -270,10 +340,11 @@ def test_finite_difference(lib, B):
 def main():
     build()
     lib = load_lib()
-    for B in (4, 8):
-        test_forward(lib, B)
-        test_backward_autograd(lib, B)
-    test_finite_difference(lib, 4)
+    for mode in (1, 2):
+        for B in (4, 8):
+            test_forward(lib, B, mode)
+            test_backward_autograd(lib, B, mode)
+        test_finite_difference(lib, 4, mode)
     print("\nALL PASSED")
 
 

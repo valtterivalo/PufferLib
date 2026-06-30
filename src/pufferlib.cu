@@ -1603,7 +1603,7 @@ void train_impl(PuffeRL& pufferl) {
 // has no heap state so this returns by value; callers store it wherever.
 static Policy build_policy(const char* env_name, int input_size, int hidden_size,
                            int num_layers, int decoder_output_size, int act_n,
-                           bool is_continuous, int horizon, bool entity_encoder) {
+                           bool is_continuous, int horizon, int entity_encoder) {
     Encoder encoder = {
         .forward = encoder_forward,
         .backward = encoder_backward,

@@ -635,9 +635,13 @@ static int visual_policy_is_continuous(
 }
 
 /* entity-encoder shared-MLP weights added on top of the global Linear (which the
-   encoder term already accounts for): entity_l1 (16x43) + entity_l2 (hidden x 16). */
-#define VISUAL_POLICY_ENTITY_FEATS      43
+   encoder term already accounts for): entity_l1 (16x37) + entity_l2 (hidden x 16), plus
+   (mode 2) inv_l1 (16x28) + inv_l2 (hidden x 16). Must match ocean.cu COLO_ENT_* /
+   COLO_ENT_INV_* + puffernet.h COLO_ENT_INF_*. */
+#define VISUAL_POLICY_ENTITY_FEATS      37
 #define VISUAL_POLICY_ENTITY_BOTTLENECK 16
+#define VISUAL_POLICY_INV_FEATS         28
+#define VISUAL_POLICY_INV_BOTTLENECK    16
 
 static int64_t visual_policy_expected_weight_count(
     int input_size,
@@ -655,9 +659,13 @@ static int64_t visual_policy_expected_weight_count(
 
     int64_t total = 0;
     total += (int64_t)hidden_size * input_size;
-    if (entity_encoder) {
+    if (entity_encoder >= 1) {
         total += (int64_t)VISUAL_POLICY_ENTITY_BOTTLENECK * VISUAL_POLICY_ENTITY_FEATS;
         total += (int64_t)hidden_size * VISUAL_POLICY_ENTITY_BOTTLENECK;
+    }
+    if (entity_encoder >= 2) {
+        total += (int64_t)VISUAL_POLICY_INV_BOTTLENECK * VISUAL_POLICY_INV_FEATS;
+        total += (int64_t)hidden_size * VISUAL_POLICY_INV_BOTTLENECK;
     }
     total += (int64_t)(action_sum + decoder_value_heads) * hidden_size;
     if (visual_policy_is_continuous(action_dims, num_action_heads)) {
@@ -763,7 +771,7 @@ static PufferNet* visual_policy_make_puffernet(
     net->is_continuous = is_continuous;
     net->num_actions = num_action_heads;
     if (entity_encoder) {
-        net->entity_encoder = make_colosseum_entity_encoder(weights, 1, input_dim, hidden_dim);
+        net->entity_encoder = make_colosseum_entity_encoder(weights, 1, input_dim, hidden_dim, entity_encoder);
     } else {
         net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
     }
@@ -1682,7 +1690,7 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--num-layers") == 0 && i + 1 < argc)
             g_cli_num_layers = atoi(argv[++i]);
         else if (strcmp(argv[i], "--entity-encoder") == 0)
-            g_cli_entity_encoder = 1;
+            g_cli_entity_encoder = (i + 1 < argc && argv[i + 1][0] != '-') ? atoi(argv[++i]) : 1;
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)

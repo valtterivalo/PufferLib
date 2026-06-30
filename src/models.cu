@@ -44,6 +44,7 @@ struct Encoder {
     free_activations_fn free_activations;
     int in_dim, out_dim;
     size_t activation_size;  // sizeof(EncoderActivations) or custom override
+    int encoder_mode;        // 0 = default Linear; colosseum: 1 = NPC pool, 2 = NPC + inventory pool
 };
 
 struct Decoder {

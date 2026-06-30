@@ -17,7 +17,7 @@ static ColosseumEntityEncoderActivations* g_a = nullptr;
 static Allocator g_param_alloc = {}, g_act_alloc = {}, g_grad_alloc = {};
 static int g_obs = 0, g_hidden = 0;
 
-void colo_entity_test_init(int B, int obs_size, int hidden) {
+void colo_entity_test_init(int B, int obs_size, int hidden, int mode) {
     if (g_w) {
         alloc_free(&g_param_alloc);
         alloc_free(&g_act_alloc);
@@ -30,7 +30,7 @@ void colo_entity_test_init(int B, int obs_size, int hidden) {
     g_enc = {};
     g_enc.in_dim = obs_size;
     g_enc.out_dim = hidden;
-    create_custom_encoder("osrs_colosseum", &g_enc, true);
+    create_custom_encoder("osrs_colosseum", &g_enc, mode);
 
     g_w = (ColosseumEntityEncoderWeights*)g_enc.create_weights(&g_enc);
     g_param_alloc = {};
@@ -78,6 +78,18 @@ void colo_entity_test_get_l2_wgrad(void* dst) {
 // argmax buffer [B, hidden] of winning NPC index (-1 if all-inactive).
 void colo_entity_test_get_argmax(void* dst, int B) {
     cudaMemcpy(dst, g_a->pool_argmax.data, (int64_t)B * g_hidden * sizeof(int), cudaMemcpyDeviceToDevice);
+}
+
+// mode 2 inventory pool: inv_l1_w [16, 28], inv_l2_w [hidden, 16]; device float ptrs.
+void colo_entity_test_set_inv_weights(void* inv_l1_w, void* inv_l2_w) {
+    cudaMemcpy(g_w->inv_l1_w.data, inv_l1_w, numel(g_w->inv_l1_w.shape) * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(g_w->inv_l2_w.data, inv_l2_w, numel(g_w->inv_l2_w.shape) * sizeof(float), cudaMemcpyDeviceToDevice);
+}
+void colo_entity_test_get_inv_l1_wgrad(void* dst) {
+    cudaMemcpy(dst, g_a->inv_l1_wgrad.data, numel(g_a->inv_l1_wgrad.shape) * sizeof(float), cudaMemcpyDeviceToDevice);
+}
+void colo_entity_test_get_inv_l2_wgrad(void* dst) {
+    cudaMemcpy(dst, g_a->inv_l2_wgrad.data, numel(g_a->inv_l2_wgrad.shape) * sizeof(float), cudaMemcpyDeviceToDevice);
 }
 
 }  // extern "C"

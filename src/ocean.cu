@@ -588,27 +588,49 @@ static constexpr int COLO_ENT_FEATS       = 37;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
 static constexpr int COLO_ENT_BOTTLENECK  = 16;
 static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;
+// mode 2: inventory-cell pool. The inventory block is COLO_ENT_INV_NUM_CELLS cells of
+// COLO_ENT_INV_FEATS floats at obs offset COLO_ENT_INV_START; a cell is active iff its
+// present flag (cell-local offset COLO_ENT_INV_PRESENT) > 0. Mirrors models.py
+// ColosseumEntityEncoder mode 2 + src/puffernet.h.
+static constexpr int COLO_ENT_INV_START      = 48;
+static constexpr int COLO_ENT_INV_NUM_CELLS  = 28;
+static constexpr int COLO_ENT_INV_FEATS      = 28;
+static constexpr int COLO_ENT_INV_PRESENT    = 0;
+static constexpr int COLO_ENT_INV_BOTTLENECK = 16;
+static constexpr int COLO_ENT_INV_BLOCK      = COLO_ENT_INV_NUM_CELLS * COLO_ENT_INV_FEATS;
 
 struct ColosseumEntityEncoderWeights {
     PrecisionTensor global_w;    // [hidden, obs]
-    PrecisionTensor entity_l1_w; // [16, 43]
+    PrecisionTensor entity_l1_w; // [16, 37]
     PrecisionTensor entity_l2_w; // [hidden, 16]
-    int obs_size, hidden;
+    PrecisionTensor inv_l1_w;    // [16, 28]    (mode 2 only)
+    PrecisionTensor inv_l2_w;    // [hidden, 16] (mode 2 only)
+    int obs_size, hidden, mode;
 };
 
 struct ColosseumEntityEncoderActivations {
-    PrecisionTensor out;          // [B, hidden] = global + pooled
+    PrecisionTensor out;          // [B, hidden] = global + npc pool (+ inv pool, mode 2)
     PrecisionTensor saved_obs;    // [B, obs] (for global wgrad)
-    PrecisionTensor npc_flat;     // [B*24, 43] contiguous NPC records (for l1 wgrad)
+    PrecisionTensor npc_flat;     // [B*24, 37] contiguous NPC records (for l1 wgrad)
     PrecisionTensor entity_z1;    // [B*24, 16] pre-GELU (for GELU' in backward)
     PrecisionTensor entity_h1;    // [B*24, 16] post-GELU (for l2 wgrad)
     PrecisionTensor entity_e;     // [B*24, hidden] per-NPC embeddings
-    PrecisionTensor grad_e;       // [B*24, hidden] maxpool backward scratch
+    PrecisionTensor grad_e;       // [B*24, hidden] maxpool backward scratch (+ fwd pooled scratch)
     PrecisionTensor grad_z1;      // [B*24, 16] backward scratch
     IntTensor pool_argmax;        // [B, hidden] winning NPC index per channel (-1 if none)
     PrecisionTensor global_wgrad;    // [hidden, obs]
-    PrecisionTensor entity_l1_wgrad; // [16, 43]
+    PrecisionTensor entity_l1_wgrad; // [16, 37]
     PrecisionTensor entity_l2_wgrad; // [hidden, 16]
+    // mode 2 inventory pool (mirrors the NPC fields above for the 28 inventory cells)
+    PrecisionTensor inv_flat;     // [B*28, 28] contiguous inventory cells
+    PrecisionTensor inv_z1;       // [B*28, 16] pre-GELU
+    PrecisionTensor inv_h1;       // [B*28, 16] post-GELU
+    PrecisionTensor inv_e;        // [B*28, hidden] per-cell embeddings
+    PrecisionTensor inv_grad_e;   // [B*28, hidden] maxpool backward scratch (+ fwd pooled scratch)
+    PrecisionTensor inv_grad_z1;  // [B*28, 16] backward scratch
+    IntTensor inv_pool_argmax;    // [B, hidden] winning cell index per channel (-1 if none)
+    PrecisionTensor inv_l1_wgrad; // [16, 28]
+    PrecisionTensor inv_l2_wgrad; // [hidden, 16]
 };
 
 // Gather the strided NPC block out of the flat obs into a tight [B*24, 43] buffer.
@@ -699,6 +721,55 @@ __global__ void colo_ent_maxpool_backward(
     grad_e[((int64_t)b * COLO_ENT_NUM_NPCS + n) * hidden + c] = grad[idx];
 }
 
+// ---- mode 2 inventory-cell pool kernels (mirror the NPC kernels above) ----
+// Gather the strided inventory block into a tight [B*28, 28] buffer.
+__global__ void colo_ent_gather_inv(
+    precision_t* __restrict__ inv_flat, const precision_t* __restrict__ obs,
+    int B, int obs_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * COLO_ENT_INV_BLOCK;
+    if (idx >= total) return;
+    int b = idx / COLO_ENT_INV_BLOCK;
+    int off = idx % COLO_ENT_INV_BLOCK;
+    inv_flat[idx] = obs[(int64_t)b * obs_size + COLO_ENT_INV_START + off];
+}
+
+// Masked maxpool over the 28 inventory cells. A cell is active iff its present flag
+// (cell-local offset COLO_ENT_INV_PRESENT) > 0. All-empty row writes 0 and argmax -1.
+// Ties resolve to the lowest cell index to match torch.max.
+__global__ void colo_ent_inv_masked_maxpool(
+    precision_t* __restrict__ pooled, int* __restrict__ argmax,
+    const precision_t* __restrict__ inv_e, const precision_t* __restrict__ inv_flat,
+    int B, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * hidden) return;
+    int b = idx / hidden;
+    int c = idx % hidden;
+    float best = -CUDART_INF_F;
+    int best_n = -1;
+    for (int n = 0; n < COLO_ENT_INV_NUM_CELLS; n++) {
+        const precision_t* rec = inv_flat + ((int64_t)b * COLO_ENT_INV_NUM_CELLS + n) * COLO_ENT_INV_FEATS;
+        if (to_float(rec[COLO_ENT_INV_PRESENT]) <= 0.0f) continue;
+        float v = to_float(inv_e[((int64_t)b * COLO_ENT_INV_NUM_CELLS + n) * hidden + c]);
+        if (v > best) { best = v; best_n = n; }
+    }
+    pooled[idx] = from_float(best_n < 0 ? 0.0f : best);
+    argmax[idx] = best_n;
+}
+
+// Route the upstream grad to the winning cell per (batch, channel); zero elsewhere.
+__global__ void colo_ent_inv_maxpool_backward(
+    precision_t* __restrict__ inv_grad_e, const precision_t* __restrict__ grad,
+    const int* __restrict__ argmax, int B, int hidden) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= B * hidden) return;
+    int b = idx / hidden;
+    int c = idx % hidden;
+    int n = argmax[idx];
+    if (n < 0) return;
+    inv_grad_e[((int64_t)b * COLO_ENT_INV_NUM_CELLS + n) * hidden + c] = grad[idx];
+}
+
 static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, PrecisionTensor input, cudaStream_t stream) {
     ColosseumEntityEncoderWeights* ew = (ColosseumEntityEncoderWeights*)w;
     ColosseumEntityEncoderActivations* a = (ColosseumEntityEncoderActivations*)activations;
@@ -724,6 +795,22 @@ static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, P
         pooled.data, a->pool_argmax.data, a->entity_e.data, a->npc_flat.data, B, H);
     colo_ent_add_kernel<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
         a->out.data, pooled.data, B * H);
+
+    if (ew->mode >= 2) {
+        int IB = B * COLO_ENT_INV_NUM_CELLS;
+        colo_ent_gather_inv<<<grid_size(B * COLO_ENT_INV_BLOCK), BLOCK_SIZE, 0, stream>>>(
+            a->inv_flat.data, input.data, B, ew->obs_size);
+        PrecisionTensor inv2d = {.data = a->inv_flat.data, .shape = {IB, COLO_ENT_INV_FEATS}};
+        puf_mm(&inv2d, &ew->inv_l1_w, &a->inv_z1, stream);
+        colo_ent_gelu_fwd_kernel<<<grid_size(IB * COLO_ENT_INV_BOTTLENECK), BLOCK_SIZE, 0, stream>>>(
+            a->inv_h1.data, a->inv_z1.data, IB * COLO_ENT_INV_BOTTLENECK);
+        puf_mm(&a->inv_h1, &ew->inv_l2_w, &a->inv_e, stream);
+        PrecisionTensor inv_pooled = {.data = a->inv_grad_e.data, .shape = {B, H}};
+        colo_ent_inv_masked_maxpool<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+            inv_pooled.data, a->inv_pool_argmax.data, a->inv_e.data, a->inv_flat.data, B, H);
+        colo_ent_add_kernel<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+            a->out.data, inv_pooled.data, B * H);
+    }
     return a->out;
 }
 
@@ -747,6 +834,19 @@ static void colo_entity_encoder_backward(void* w, void* activations, PrecisionTe
 
     PrecisionTensor npc2d = {.data = a->npc_flat.data, .shape = {NB, COLO_ENT_FEATS}};
     puf_mm_tn(&a->grad_z1, &npc2d, &a->entity_l1_wgrad, stream);
+
+    if (ew->mode >= 2) {
+        int IB = B * COLO_ENT_INV_NUM_CELLS;
+        cudaMemsetAsync(a->inv_grad_e.data, 0, (int64_t)IB * H * sizeof(precision_t), stream);
+        colo_ent_inv_maxpool_backward<<<grid_size(B * H), BLOCK_SIZE, 0, stream>>>(
+            a->inv_grad_e.data, grad.data, a->inv_pool_argmax.data, B, H);
+        puf_mm_tn(&a->inv_grad_e, &a->inv_h1, &a->inv_l2_wgrad, stream);
+        puf_mm_nn(&a->inv_grad_e, &ew->inv_l2_w, &a->inv_grad_z1, stream);
+        colo_ent_gelu_bwd_kernel<<<grid_size(IB * COLO_ENT_INV_BOTTLENECK), BLOCK_SIZE, 0, stream>>>(
+            a->inv_grad_z1.data, a->inv_z1.data, IB * COLO_ENT_INV_BOTTLENECK);
+        PrecisionTensor inv2d = {.data = a->inv_flat.data, .shape = {IB, COLO_ENT_INV_FEATS}};
+        puf_mm_tn(&a->inv_grad_z1, &inv2d, &a->inv_l1_wgrad, stream);
+    }
 }
 
 static void colo_entity_encoder_init_weights(void* w, uint64_t* seed, cudaStream_t stream) {
@@ -758,6 +858,10 @@ static void colo_entity_encoder_init_weights(void* w, uint64_t* seed, cudaStream
     init2d(ew->global_w, ew->hidden, ew->obs_size);
     init2d(ew->entity_l1_w, COLO_ENT_BOTTLENECK, COLO_ENT_FEATS);
     init2d(ew->entity_l2_w, ew->hidden, COLO_ENT_BOTTLENECK);
+    if (ew->mode >= 2) {
+        init2d(ew->inv_l1_w, COLO_ENT_INV_BOTTLENECK, COLO_ENT_INV_FEATS);
+        init2d(ew->inv_l2_w, ew->hidden, COLO_ENT_INV_BOTTLENECK);
+    }
 }
 
 // Boot-time guard: muon and the .bin layout pack params with no padding, but
@@ -782,6 +886,14 @@ static void colo_entity_encoder_reg_params(void* w, Allocator* alloc) {
     alloc_register(alloc, &ew->global_w);
     alloc_register(alloc, &ew->entity_l1_w);
     alloc_register(alloc, &ew->entity_l2_w);
+    if (ew->mode >= 2) {
+        ew->inv_l1_w = {.shape = {COLO_ENT_INV_BOTTLENECK, COLO_ENT_INV_FEATS}};
+        ew->inv_l2_w = {.shape = {ew->hidden, COLO_ENT_INV_BOTTLENECK}};
+        colo_entity_assert_aligned(numel(ew->inv_l1_w.shape), "inv_l1_w");
+        colo_entity_assert_aligned(numel(ew->inv_l2_w.shape), "inv_l2_w");
+        alloc_register(alloc, &ew->inv_l1_w);
+        alloc_register(alloc, &ew->inv_l2_w);
+    }
 }
 
 static void colo_entity_encoder_reg_train(void* w, void* activations, Allocator* acts, Allocator* grads, int B_TT) {
@@ -808,14 +920,37 @@ static void colo_entity_encoder_reg_train(void* w, void* activations, Allocator*
     alloc_register(acts, &a->grad_e);
     alloc_register(acts, &a->grad_z1);
     alloc_register(acts, &a->pool_argmax);
-    // Grad scratch order MUST match reg_params (global, l1, l2) so muon's shared
-    // offset walk pairs each grad with its weight.
+    if (ew->mode >= 2) {
+        int IB = B_TT * COLO_ENT_INV_NUM_CELLS;
+        a->inv_flat        = {.shape = {IB, COLO_ENT_INV_FEATS}};
+        a->inv_z1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_h1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_e           = {.shape = {IB, H}};
+        a->inv_grad_e      = {.shape = {IB, H}};
+        a->inv_grad_z1     = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_pool_argmax = {.shape = {B_TT, H}};
+        alloc_register(acts, &a->inv_flat);
+        alloc_register(acts, &a->inv_z1);
+        alloc_register(acts, &a->inv_h1);
+        alloc_register(acts, &a->inv_e);
+        alloc_register(acts, &a->inv_grad_e);
+        alloc_register(acts, &a->inv_grad_z1);
+        alloc_register(acts, &a->inv_pool_argmax);
+    }
+    // Grad scratch order MUST match reg_params (global, l1, l2, [inv_l1, inv_l2]) so
+    // muon's shared offset walk pairs each grad with its weight.
     a->global_wgrad    = {.shape = {H, ew->obs_size}};
     a->entity_l1_wgrad = {.shape = {COLO_ENT_BOTTLENECK, COLO_ENT_FEATS}};
     a->entity_l2_wgrad = {.shape = {H, COLO_ENT_BOTTLENECK}};
     alloc_register(grads, &a->global_wgrad);
     alloc_register(grads, &a->entity_l1_wgrad);
     alloc_register(grads, &a->entity_l2_wgrad);
+    if (ew->mode >= 2) {
+        a->inv_l1_wgrad = {.shape = {COLO_ENT_INV_BOTTLENECK, COLO_ENT_INV_FEATS}};
+        a->inv_l2_wgrad = {.shape = {H, COLO_ENT_INV_BOTTLENECK}};
+        alloc_register(grads, &a->inv_l1_wgrad);
+        alloc_register(grads, &a->inv_l2_wgrad);
+    }
 }
 
 static void colo_entity_encoder_reg_rollout(void* w, void* activations, Allocator* alloc, int B) {
@@ -837,6 +972,21 @@ static void colo_entity_encoder_reg_rollout(void* w, void* activations, Allocato
     alloc_register(alloc, &a->entity_e);
     alloc_register(alloc, &a->grad_e);
     alloc_register(alloc, &a->pool_argmax);
+    if (ew->mode >= 2) {
+        int IB = B * COLO_ENT_INV_NUM_CELLS;
+        a->inv_flat        = {.shape = {IB, COLO_ENT_INV_FEATS}};
+        a->inv_z1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_h1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_e           = {.shape = {IB, H}};
+        a->inv_grad_e      = {.shape = {IB, H}};
+        a->inv_pool_argmax = {.shape = {B, H}};
+        alloc_register(alloc, &a->inv_flat);
+        alloc_register(alloc, &a->inv_z1);
+        alloc_register(alloc, &a->inv_h1);
+        alloc_register(alloc, &a->inv_e);
+        alloc_register(alloc, &a->inv_grad_e);
+        alloc_register(alloc, &a->inv_pool_argmax);
+    }
 }
 
 static void* colo_entity_encoder_create_weights(void* self) {
@@ -845,15 +995,17 @@ static void* colo_entity_encoder_create_weights(void* self) {
         (ColosseumEntityEncoderWeights*)calloc(1, sizeof(ColosseumEntityEncoderWeights));
     ew->obs_size = e->in_dim;
     ew->hidden = e->out_dim;
+    ew->mode = e->encoder_mode;
     return ew;
 }
 static void colo_entity_encoder_free_weights(void* weights) { free(weights); }
 static void colo_entity_encoder_free_activations(void* activations) { free(activations); }
 
 // Override encoder vtable for known ocean environments. No-op for unknown envs.
-// entity_encoder selects the colosseum NPC-pool encoder over the default Linear.
-static void create_custom_encoder(const std::string& env_name, Encoder* enc, bool entity_encoder) {
-    if (env_name == "osrs_colosseum" && entity_encoder) {
+// entity_encoder_mode selects the colosseum encoder over the default Linear:
+// >=1 = global + NPC pool, >=2 = global + NPC pool + inventory-cell pool.
+static void create_custom_encoder(const std::string& env_name, Encoder* enc, int entity_encoder_mode) {
+    if (env_name == "osrs_colosseum" && entity_encoder_mode >= 1) {
         *enc = Encoder{
             .forward = colo_entity_encoder_forward,
             .backward = colo_entity_encoder_backward,
@@ -866,6 +1018,7 @@ static void create_custom_encoder(const std::string& env_name, Encoder* enc, boo
             .free_activations = colo_entity_encoder_free_activations,
             .in_dim = enc->in_dim, .out_dim = enc->out_dim,
             .activation_size = sizeof(ColosseumEntityEncoderActivations),
+            .encoder_mode = entity_encoder_mode,
         };
         return;
     }
