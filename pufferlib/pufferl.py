@@ -503,7 +503,7 @@ def sweep(env_name, args=None, pareto=False):
         # TODO: only 1 per sweep etc
         gpu_id = next(i for i in range(sweep_gpus) if i not in active)
         timestep_total = all_timesteps[gpu_id] if pareto else None
-        if idx > 1: # First experiment uses defaults
+        if idx > 0: # only trial 0 uses the anchor defaults (was idx>1 = wasted 2nd anchor)
             sweep_obj.suggest(args, fixed_total_timesteps=timestep_total)
 
         try:
