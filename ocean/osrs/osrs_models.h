@@ -453,6 +453,19 @@ static ModelCache* model_cache_load(const char* path) {
         osrs_read_exact(f, cache->models[i].face_alpha_labels, 1,
             face_count, path, "face alpha labels");
 
+        /* hidden-face repair: the exporter hides OSRS hidden-render-type faces by
+           baking vertex color alpha 0, but leaves face_alphas at 0 (opaque) for
+           them, so the two alpha channels disagree only on hidden faces (e.g. the
+           infernal cape rig triangle). The animated-alpha pipeline trusts
+           face_alphas and would resurrect them opaque every frame; fold the color
+           bake back in so hidden faces stay hidden under animation (type-5 deltas
+           still apply from the repaired 255 base, matching OSRS). */
+        for (uint16_t fp = 0; fp < face_count; fp++) {
+            if (cache->models[i].base_face_alphas[fp] == 0 &&
+                    mesh.colors[(fp * 3) * 4 + 3] == 0)
+                cache->models[i].base_face_alphas[fp] = 255;
+        }
+
         /* compute min priority for this model */
         uint8_t min_pri = 255;
         for (uint16_t fp = 0; fp < face_count; fp++) {
