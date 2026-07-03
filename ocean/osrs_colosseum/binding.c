@@ -214,11 +214,17 @@ void c_step(Env* env) {
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
                 env->log.colo_total_damage_by_type[t] += clog->total_damage_by_type[t];
                 env->log.colo_death_by_type[t] += clog->death_by_type[t];
+                env->log.colo_typeless_damage_by_type[t] += clog->typeless_damage_by_type[t];
             }
             env->log.colo_death_fatal_damage += clog->death_fatal_damage;
             env->log.colo_offpray_damage_conflict += clog->offpray_damage_conflict;
             env->log.colo_offpray_damage_solo += clog->offpray_damage_solo;
             env->log.colo_death_on_conflict_tick += clog->death_on_conflict_tick;
+            env->log.colo_death_dmg_unprayable += clog->death_dmg_unprayable;
+            env->log.colo_death_dmg_offpray += clog->death_dmg_offpray;
+            env->log.colo_death_dmg_prayed += clog->death_dmg_prayed;
+            env->log.colo_death_dmg_self += clog->death_dmg_self;
+            env->log.colo_death_heal_remaining += clog->death_heal_remaining;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -599,4 +605,21 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "offpray_dmg_conflict", log->colo_offpray_damage_conflict);
     dict_set(out, "offpray_dmg_solo", log->colo_offpray_damage_solo);
     dict_set(out, "death_on_conflict_tick", log->colo_death_on_conflict_tick);
+
+    /* death forensics (land-time): mean fatal-tick damage split by prayer
+       channel + mean heal capacity left at death, and per-type episode totals
+       of unprayable (typeless / ignore-prayer) damage. death_by_type says WHO
+       killed us; these say HOW. Same literal-key rule as above. */
+    static const char* TYPELESS_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
+        "typeless_dmg_berserker", "typeless_dmg_archer", "typeless_dmg_seer",
+        "typeless_dmg_serpent", "typeless_dmg_jaguar", "typeless_dmg_javelin",
+        "typeless_dmg_shockwave", "typeless_dmg_minotaur", "typeless_dmg_manticore",
+        "typeless_dmg_sol", "typeless_dmg_totem", "typeless_dmg_bee"};
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+        dict_set(out, TYPELESS_DMG_KEYS[t], log->colo_typeless_damage_by_type[t]);
+    dict_set(out, "death_dmg_unprayable", log->colo_death_dmg_unprayable);
+    dict_set(out, "death_dmg_offpray", log->colo_death_dmg_offpray);
+    dict_set(out, "death_dmg_prayed", log->colo_death_dmg_prayed);
+    dict_set(out, "death_dmg_self", log->colo_death_dmg_self);
+    dict_set(out, "death_heal_remaining", log->colo_death_heal_remaining);
 }

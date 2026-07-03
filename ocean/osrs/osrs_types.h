@@ -1024,6 +1024,19 @@ typedef struct {
     float colo_offpray_damage_conflict;
     float colo_offpray_damage_solo;
     float colo_death_on_conflict_tick;
+    /* Colosseum death forensics (land-time): the fatal tick's received damage
+       split by channel (unprayable = typeless/ignore-prayer dodge failure,
+       offpray = wrong overhead, prayed = through a correct overhead, expected
+       ~0) + HP-heal capacity left in the inventory at death (burst vs
+       attrition). colo_typeless_damage_by_type = per-type episode totals of
+       unprayable damage (splits javelin skyfall+molten from its prayable
+       throws in colo_offpray_damage_by_type). */
+    float colo_death_dmg_unprayable;
+    float colo_death_dmg_offpray;
+    float colo_death_dmg_prayed;
+    float colo_death_dmg_self;
+    float colo_death_heal_remaining;
+    float colo_typeless_damage_by_type[12];
     float colo_outcome_score;
     float colo_min_sol_hp;
     /* Colosseum max-wave diagnostic. Each env keeps a binding-owned running max

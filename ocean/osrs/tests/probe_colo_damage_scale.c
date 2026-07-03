@@ -45,7 +45,7 @@ static int direct_hp_loss(uint32_t seed, int dmg, float scale) {
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);
     s.active_player_damage_received_scale = scale;
     int hp0 = s.player.current_hitpoints;
-    col_damage_player_from(&s, dmg, COLO_MANTICORE);
+    col_damage_player_from(&s, dmg, COLO_MANTICORE, COLO_DMG_UNPRAYABLE);
     return hp0 - s.player.current_hitpoints;
 }
 

@@ -4764,13 +4764,19 @@ static void test_total_damage_by_type_captures_typeless(void) {
     float total_before = s.log.total_damage_by_type[COLO_JAVELIN_COLOSSUS];
     float offpray_before = s.log.offpray_damage_by_type[COLO_JAVELIN_COLOSSUS];
 
-    col_damage_player_from(&s, 17, COLO_JAVELIN_COLOSSUS);
+    float typeless_before = s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS];
+    float unprayable_before = s.tick_scratch.landed_unprayable_damage;
+    col_damage_player_from(&s, 17, COLO_JAVELIN_COLOSSUS, COLO_DMG_UNPRAYABLE);
 
     CHECK("typeless NPC damage lands on the player", s.player.current_hitpoints == hp0 - 17);
     CHECK("typeless NPC damage is attributed to total damage",
         s.log.total_damage_by_type[COLO_JAVELIN_COLOSSUS] == total_before + 17.0f);
     CHECK("typeless NPC damage stays out of off-prayer damage",
         s.log.offpray_damage_by_type[COLO_JAVELIN_COLOSSUS] == offpray_before);
+    CHECK("typeless NPC damage books the unprayable forensics channel",
+        s.tick_scratch.landed_unprayable_damage == unprayable_before + 17.0f);
+    CHECK("typeless NPC damage books the per-type typeless total",
+        s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS] == typeless_before + 17.0f);
 }
 
 /** A monster's MAGIC defence rolls off its Magic level, not its Defence level.

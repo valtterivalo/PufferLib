@@ -228,7 +228,7 @@ static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom_timer > 0) s->player_venom_timer--;
     if (s->player_venom_timer > 0) return;
     int dmg = s->player_venom;
-    col_damage_player_from(s, dmg, COLO_MANTICORE);
+    col_damage_player_from(s, dmg, COLO_MANTICORE, COLO_DMG_UNPRAYABLE);
     s->last_hit_by_type = COLO_MANTICORE;
     col_mod_on_player_damaged(s, dmg);
     s->player_venom += COLO_VENOM_STEP;
@@ -257,7 +257,7 @@ static void col_mod_tick_poison(ColosseumState* s) {
     if (s->player_poison_timer > 0) s->player_poison_timer--;
     if (s->player_poison_timer > 0) return;
     int dmg = (s->player_poison + 4) / 5;
-    col_damage_player_from(s, dmg, COLO_BEE_SWARM);
+    col_damage_player_from(s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
     if (dmg > 0) {
         s->last_hit_by_type = COLO_BEE_SWARM;
         col_mod_on_player_damaged(s, dmg);
@@ -530,7 +530,7 @@ static void col_mod_tick_molten_pools(ColosseumState* s) {
         if (!burned && player_on_pool && (!reentry || s->molten_burn_timer[i] == 0)) {
             int dmg = col_mod_molten_pool_damage(s, (ColoMoltenPoolKind)s->molten_kind[i]);
             if (reentry) s->molten_burn_timer[i] = COLO_REENTRY_MOLTEN_BURN_INTERVAL - 1;
-            col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS);
+            col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS, COLO_DMG_UNPRAYABLE);
             s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
             col_mod_on_player_damaged(s, dmg);
             burned = 1;
@@ -592,6 +592,9 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
     if (col_volatility_player_in_blast(s, x, y, size, tier)) {
         int vol_dmg = col_scale_incoming_damage(s, COLO_VOLATILITY_MAX_HIT);
         encounter_damage_player(&s->player, vol_dmg, &s->tick_scratch.damage_received);
+        /* environmental typeless damage (no NPC attribution): classify for the
+           land-time forensics channel split by hand since it bypasses the sink. */
+        s->tick_scratch.landed_unprayable_damage += (float)vol_dmg;
         col_mod_on_player_damaged(s, vol_dmg);
     }
     if (tier >= 3)
@@ -734,7 +737,7 @@ static void col_mod_tick_bees(ColosseumState* s) {
         if (col_bee_swarm_contacts_player(s, npc)) {
             col_mod_apply_bee_poison(s);
             int dmg = col_bee_swarm_contact_damage(s);
-            col_damage_player_from(s, dmg, COLO_BEE_SWARM);
+            col_damage_player_from(s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
             if (dmg > 0) {
                 s->last_hit_by_type = COLO_BEE_SWARM;
                 col_mod_on_player_damaged(s, dmg);
@@ -814,6 +817,9 @@ static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
         int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
         dmg = col_scale_incoming_damage(s, dmg);
         encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+        /* environmental typeless damage (no NPC attribution): classify for the
+           land-time forensics channel split by hand since it bypasses the sink. */
+        s->tick_scratch.landed_unprayable_damage += (float)dmg;
         if (dmg > 0) col_mod_on_player_damaged(s, dmg);
         if (tier >= 3) s->player.prayer = PRAYER_NONE;
     }

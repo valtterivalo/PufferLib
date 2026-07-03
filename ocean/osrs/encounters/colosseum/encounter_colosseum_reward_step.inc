@@ -212,6 +212,14 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     const ColConfig* cfg = &ctx->config;
     ColoTickScratch* t = &s->tick_scratch;
 
+    /* land-time forensics invariant: every unit of received damage is classified
+       into exactly one channel. Guarded to scale == 1 because the pending
+       pipeline books unscaled damage while the direct sink books scaled. */
+    assert(cfg->player_damage_received_scale != 1.0f ||
+        fabsf(t->landed_offpray_damage + t->landed_prayed_damage +
+              t->landed_unprayable_damage + t->landed_self_damage
+              - t->damage_received) < 0.5f);
+
     s->log.total_damage_dealt += t->damage_dealt;
     s->log.total_boss_damage += t->damage_boss;
     s->log.total_damage_received += t->damage_received;
@@ -250,9 +258,31 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     return reward;
 }
 
+/** HP-heal capacity remaining in the inventory: per-dose heal x remaining doses,
+    summed over every heal-capable cell. Death forensics: high = a burst death with
+    unused supplies (a positioning/decision failure), ~0 = attrition (supplies
+    exhausted before the fatal tick). */
+static float col_inventory_heal_remaining(const ColosseumState* s) {
+    float total = 0.0f;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        const OsrsInventoryCell* cell = &s->inventory_cells[i];
+        if (cell->raw_osrs_id == 0) continue;
+        OsrsInventoryClickResolution r =
+            osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
+        int per_dose = osrs_consumable_hp_heal_amount(
+            r.consumable_kind, s->player.base_hitpoints);
+        if (per_dose <= 0) continue;
+        int doses = r.dose_count > 0 ? (int)r.dose_count : 1;
+        total += (float)(per_dose * doses);
+    }
+    return total;
+}
+
 /** Diagnostic death attribution: record which NPC type landed the killing blow
-    (s->last_hit_by_type) and the fatal tick's total damage_received (a single big
-    off-prayer hit vs a same-tick multi-style combo). Called only on a real HP/Doom
+    (s->last_hit_by_type), the fatal tick's total damage_received (a single big
+    off-prayer hit vs a same-tick multi-style combo), the fatal tick's land-time
+    channel split (what KIND of damage actually killed us), and the heal capacity
+    left in the inventory (burst vs attrition). Called only on a real HP/Doom
     death, never on the tick-timeout path (where last_hit_by_type would be stale). */
 static void col_record_death_attribution(ColosseumState* s) {
     int kt = s->last_hit_by_type;
@@ -260,6 +290,11 @@ static void col_record_death_attribution(ColosseumState* s) {
     s->log.death_fatal_damage += s->tick_scratch.damage_received;
     if (__builtin_popcount(s->tick_scratch.styles_faced_mask) >= 2)
         s->log.death_on_conflict_tick += 1.0f;
+    s->log.death_dmg_unprayable += s->tick_scratch.landed_unprayable_damage;
+    s->log.death_dmg_offpray += s->tick_scratch.landed_offpray_damage;
+    s->log.death_dmg_prayed += s->tick_scratch.landed_prayed_damage;
+    s->log.death_dmg_self += s->tick_scratch.landed_self_damage;
+    s->log.death_heal_remaining += col_inventory_heal_remaining(s);
 }
 
 /** Diagnostic bleed split: route this tick's off-prayer HP into the conflict

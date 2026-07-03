@@ -177,10 +177,27 @@ static void col_log_prayer_event(ColosseumState* s, int npc_type, int prayed, in
     else s->log.offpray_damage_by_type[npc_type] += (float)dmg;
 }
 
-/** Damage the player and attribute positive damage to one NPC type for episode totals. */
-static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type) {
+/** Damage the player, attribute positive damage to one NPC type for episode
+    totals, and record the land-time forensics channel. The applied amount is
+    measured as the damage_received delta so the channel split stays exact under
+    whatever encounter_damage_player actually books. */
+static inline void col_damage_player_from(
+    ColosseumState* s, int dmg, int npc_type, ColoDamageChannel channel
+) {
     dmg = col_scale_incoming_damage(s, dmg);
+    float before = s->tick_scratch.damage_received;
     encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
+    float applied = s->tick_scratch.damage_received - before;
+    switch (channel) {
+        case COLO_DMG_OFFPRAY:
+            s->tick_scratch.landed_offpray_damage += applied;
+            break;
+        case COLO_DMG_UNPRAYABLE:
+            s->tick_scratch.landed_unprayable_damage += applied;
+            if (applied > 0.0f && npc_type >= 0 && npc_type < COLO_NUM_NPC_TYPES)
+                s->log.typeless_damage_by_type[npc_type] += applied;
+            break;
+    }
     if (dmg > 0 && npc_type >= 0 && npc_type < COLO_NUM_NPC_TYPES)
         s->log.total_damage_by_type[npc_type] += (float)dmg;
 }
@@ -209,6 +226,14 @@ static void col_pending_hit_prayer_observer(
        its source NPC at land time (post-prayer dmg), mirroring inferno's
        projectile-land recoil. */
     col_apply_echo_boots_recoil(s, ctx, hit->source_npc_slot, dmg);
+    /* land-time forensics: every colosseum pending hit is prayer-checkable (both
+       push sites prayer-check, at throw or at land), and a correctly prayed hit
+       is frozen to 0 at its check -- so any DAMAGING landing was off-prayer. The
+       prayed bucket only catches the checked+prayed+damaging surprise. */
+    if (dmg > 0) {
+        if (checked && prayed) s->tick_scratch.landed_prayed_damage += (float)dmg;
+        else s->tick_scratch.landed_offpray_damage += (float)dmg;
+    }
     if (!checked && hit->source_npc_type == COLO_MANTICORE) {
         if (hit->hit_success) col_mod_manticore_apply_venom(s, hit->hit_success);
     }
@@ -379,7 +404,7 @@ static void col_apply_instant_melee_hit(
        reflected to the melee attacker, before the player damage applies (mirrors
        inferno's instant-melee recoil ordering). */
     col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
-    col_damage_player_from(s, dmg, npc_type);
+    col_damage_player_from(s, dmg, npc_type, COLO_DMG_OFFPRAY);
     /* Doom + Blasphemy follow the ACTUALLY-APPLIED (scaled) damage, matching the
        queued + volatility/solarflare paths, so player_damage_received_scale=0 is
        truly Doom-immune like invuln_mode (off-prayer 0-damage hits add no Doom
@@ -500,7 +525,7 @@ static void col_npc_resolve_javelin_skyfall(
     jv->skyfall_pending = 0;
     int on_tile = (s->player.x == jv->skyfall_tile_x && s->player.y == jv->skyfall_tile_y);
     int dmg = on_tile ? jv->skyfall_damage : 0;
-    col_damage_player_from(s, dmg, npc->type);
+    col_damage_player_from(s, dmg, npc->type, COLO_DMG_UNPRAYABLE);
     if (dmg > 0) {
         s->last_hit_by_type = npc->type;
         col_mod_on_player_damaged(s, dmg);

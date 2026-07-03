@@ -314,7 +314,7 @@ static void col_sol_tick_aoe(ColosseumState* s) {
         col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y)) {
         int dmg = COLO_SOL_SLAM_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_SOL_SLAM_RAND);
-        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT);
+        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
         col_mod_on_player_damaged(s, dmg);
     }
@@ -415,7 +415,7 @@ static void col_sol_tick_crystals(ColosseumState* s) {
         sp->ticks_remaining--;
         if (sp->ticks_remaining > 0) continue;
         if (s->player.x == sp->tile_x && s->player.y == sp->tile_y) {
-            col_damage_player_from(s, sp->damage, COLO_SOL_HEREDIT);
+            col_damage_player_from(s, sp->damage, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
             col_mod_on_player_damaged(s, sp->damage);
         }
@@ -527,7 +527,7 @@ static void col_sol_tick_molten(ColosseumState* s) {
             continue;
         int dmg = COLO_MOLTEN_SAND_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
-        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT);
+        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
         col_mod_on_player_damaged(s, dmg);
         break;
@@ -593,7 +593,7 @@ static void col_sol_tick_triple_parry(ColosseumState* s) {
             s->tick_scratch.prayer_correct++;
         } else {
             s->tick_scratch.offpray_damage_this_tick += (float)sol->parry_damage[h];
-            col_damage_player_from(s, sol->parry_damage[h], COLO_SOL_HEREDIT);
+            col_damage_player_from(s, sol->parry_damage[h], COLO_SOL_HEREDIT, COLO_DMG_OFFPRAY);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
             col_mod_on_player_damaged(s, sol->parry_damage[h]);
         }
@@ -646,7 +646,7 @@ static void col_sol_tick_grapple(ColosseumState* s) {
     if (sol->grapple_timer == 0 && !sol->grapple_resolved) {
         int dmg = COLO_SOL_SLAM_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_SOL_SLAM_RAND);
-        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT);
+        col_damage_player_from(s, dmg, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
         col_mod_on_player_damaged(s, dmg);
         sol->grapple_active = 0;

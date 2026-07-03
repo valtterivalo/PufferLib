@@ -1873,6 +1873,16 @@ typedef struct {
     int styles_faced_mask;
     float offpray_damage_this_tick;
     float avoidable_threat_by_style[4];
+    /* land-time damage forensics: this tick's RECEIVED damage split by prayer
+       channel, on the same time base as damage_received (offpray_damage_this_tick
+       above accrues on the THROW tick for throw-resolved projectiles, so it cannot
+       decompose a landing tick). Invariant, asserted once per tick at
+       player_damage_received_scale == 1: landed_offpray + landed_prayed +
+       landed_unprayable == damage_received. */
+    float landed_offpray_damage;     /* prayer-checkable, overhead wrong at its check */
+    float landed_prayed_damage;      /* prayer-checkable, damaged through a correct overhead (~0) */
+    float landed_unprayable_damage;  /* typeless / ignore-prayer: no overhead could block */
+    float landed_self_damage;        /* intentional self-damage (divine potion sips) */
 } ColoTickScratch;
 
 /** Colosseum telemetry surfaced through the get_log hook (NOT the shared Log). */
@@ -1916,6 +1926,23 @@ typedef struct {
     float offpray_damage_conflict;
     float offpray_damage_solo;
     float death_on_conflict_tick;
+
+    /* death forensics (land-time): the fatal tick's received damage split by
+       channel. unprayable = typeless / ignore-prayer (a dodge or positioning
+       failure), offpray = prayer-checkable landing with the wrong overhead (a
+       flick/conflict failure), prayed = damage through a correct overhead
+       (expected ~0; nonzero = sim surprise). death_heal_remaining = HP-heal
+       capacity left in the inventory at death (high = burst death with unused
+       supplies, ~0 = attrition death). */
+    float death_dmg_unprayable;
+    float death_dmg_offpray;
+    float death_dmg_prayed;
+    float death_dmg_self;
+    float death_heal_remaining;
+    /* episode totals of unprayable damage per NPC type: splits e.g. javelin
+       skyfall+molten (typeless) from its prayer-checkable throws, which stay in
+       offpray_damage_by_type. */
+    float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float outcome_score;
     /* furthest depth this episode reached, reported RAW (not squared like
        outcome_score): waves_fully_cleared + current-wave fresh-fraction, in
@@ -2069,7 +2096,18 @@ typedef struct {
     int best_gear_cache_next;   /* FIFO insertion slot */
 } ColosseumState;
 
-static inline void col_damage_player_from(ColosseumState* s, int dmg, int npc_type);
+/** Prayer channel of a direct player-damage application, for land-time forensics.
+    OFFPRAY = a prayer-checkable hit that connected with the wrong overhead (a
+    correctly prayed hit is frozen to 0 at its check, so it contributes nothing).
+    UNPRAYABLE = typeless / ignore-prayer: no overhead could block it (skyfall,
+    Sol AoE, molten sand, bees, venom). */
+typedef enum {
+    COLO_DMG_OFFPRAY = 0,
+    COLO_DMG_UNPRAYABLE = 1,
+} ColoDamageChannel;
+
+static inline void col_damage_player_from(
+    ColosseumState* s, int dmg, int npc_type, ColoDamageChannel channel);
 static void col_apply_bis_gear_oracle(ColosseumState* s); /* scaffold; defined in obs_mask.inc */
 
 static void col_build_live_inventory_display(
