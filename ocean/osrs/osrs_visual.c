@@ -798,6 +798,18 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
 static int g_cli_hidden_size = -1;
 static int g_cli_num_layers = -1;
 static int g_cli_entity_encoder = 0;
+/** headless-ish debug capture: render normally, dump a PNG of the framebuffer
+    at the given frame count, then exit. 0 = disabled. NOTE raylib TakeScreenshot
+    strips directories, so the PNG lands in the CWD under the path's basename. */
+static const char* g_cli_screenshot_path = NULL;
+static int g_cli_screenshot_frame = 0;
+/** debug camera overrides applied at startup (screenshot workflows need a
+    deterministic viewpoint). Negative/NAN = keep the interactive default. */
+static float g_cli_camera_dist = -1.0f;
+static float g_cli_camera_yaw = -1000.0f;
+static float g_cli_camera_pitch = -1000.0f;
+/** colosseum viewer loadout override (0=speedrun, 1=beginner, 2=mixed); -1 = default. */
+static int g_cli_visual_loadout_mode = -1;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
@@ -1327,6 +1339,13 @@ static void run_visual(
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
         }
+        /* colosseum: honor --loadout-mode in the interactive viewer too (0=speedrun,
+           1=beginner, 2=mixed), matching the metrics-mode wiring. -1 = env default. */
+        if (strcmp(encounter_name, "colosseum") == 0 && edef->put_int &&
+                g_cli_visual_loadout_mode >= 0) {
+            edef->put_int(env->encounter_state, env->encounter_context,
+                "loadout_profile_mode", g_cli_visual_loadout_mode);
+        }
         /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
         /* load encounter-specific collision map.
@@ -1637,8 +1656,30 @@ static void run_visual(
         .seen_lab_restore_generation = rc->lab_restore_generation,
     };
 
+    if (g_cli_camera_dist > 0.0f) rc->cam_dist = g_cli_camera_dist;
+    if (g_cli_camera_yaw > -999.0f) rc->cam_yaw = g_cli_camera_yaw;
+    if (g_cli_camera_pitch > -999.0f) rc->cam_pitch = g_cli_camera_pitch;
+
+    int frame_counter = 0;
     while (!WindowShouldClose()) {
+        /* screenshot capture: hard-pin the camera to the followed entity so the
+           captured frame always contains it (the interactive camera only follows
+           in human mode). */
+        if (g_cli_screenshot_path && rc->entity_count > 0) {
+            int eidx = rc->gui.gui_entity_idx;
+            if (eidx >= 0 && eidx < rc->entity_count) {
+                rc->cam_target_x = (float)rc->sub_x[eidx] / 128.0f;
+                rc->cam_target_z = -(float)rc->sub_y[eidx] / 128.0f;
+            }
+        }
         visual_frame(&vs);
+        frame_counter++;
+        if (g_cli_screenshot_path && frame_counter >= g_cli_screenshot_frame) {
+            TakeScreenshot(g_cli_screenshot_path);
+            fprintf(stderr, "screenshot: wrote %s at frame %d\n",
+                g_cli_screenshot_path, frame_counter);
+            break;
+        }
     }
 
     replay_free(replay);
@@ -1691,6 +1732,16 @@ int main(int argc, char** argv) {
             g_cli_num_layers = atoi(argv[++i]);
         else if (strcmp(argv[i], "--entity-encoder") == 0)
             g_cli_entity_encoder = (i + 1 < argc && argv[i + 1][0] != '-') ? atoi(argv[++i]) : 1;
+        else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
+            g_cli_screenshot_path = argv[++i];
+        else if (strcmp(argv[i], "--screenshot-frame") == 0 && i + 1 < argc)
+            g_cli_screenshot_frame = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--camera-dist") == 0 && i + 1 < argc)
+            g_cli_camera_dist = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--camera-yaw") == 0 && i + 1 < argc)
+            g_cli_camera_yaw = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--camera-pitch") == 0 && i + 1 < argc)
+            g_cli_camera_pitch = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
@@ -1704,8 +1755,10 @@ int main(int argc, char** argv) {
             metrics_episodes = atoi(argv[++i]);
             use_visual = 0;
         }
-        else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc)
+        else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc) {
             loadout_mode = atoi(argv[++i]);
+            g_cli_visual_loadout_mode = loadout_mode;
+        }
     }
 
 #ifdef __EMSCRIPTEN__
