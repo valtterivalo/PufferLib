@@ -5573,20 +5573,24 @@ static void test_render_motion_waypoint_pop_snap_and_overflow(void) {
         sub_x, 192.0f, 1e-6f);
     ASSERT_INT_EQ("first waypoint popped, second still queued", q.length, 1);
 
-    /* per-axis snap: a gap beyond two tiles teleports to the waypoint */
+    /* whole-position snap: a gap beyond two tiles on EITHER axis teleports
+       both axes to the waypoint and pops it in the same cycle (deob
+       Canvas.java:199-208 else-branch) */
     osrs_render_waypoint_queue_clear(&q);
     sub_x = 0.0f;
     sub_y = 0.0f;
-    osrs_render_waypoint_push(&q, 300.0f, 0.0f, 0);
+    osrs_render_waypoint_push(&q, 300.0f, 40.0f, 0);
     {
         int speed;
         float ddx, ddy;
         osrs_render_waypoint_advance_one_client_tick(
             &q, &sub_x, &sub_y, &stall_debt, &speed, &ddx, &ddy);
     }
-    ASSERT_FLOAT_NEAR("beyond-2-tile axis gap snaps to the waypoint",
+    ASSERT_FLOAT_NEAR("beyond-2-tile gap snaps x to the waypoint",
         sub_x, 300.0f, 1e-6f);
-    ASSERT_INT_EQ("snapped waypoint pops", q.length, 0);
+    ASSERT_FLOAT_NEAR("beyond-2-tile gap snaps y to the waypoint too",
+        sub_y, 40.0f, 1e-6f);
+    ASSERT_INT_EQ("snapped waypoint pops the same cycle", q.length, 0);
 
     /* overflow: an 11th push drops the oldest waypoint */
     osrs_render_waypoint_queue_clear(&q);

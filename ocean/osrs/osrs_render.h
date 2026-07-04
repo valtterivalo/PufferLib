@@ -2886,6 +2886,10 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         if (lab_def) {
             int enable_lab = !rc->lab_enabled;
             if (enable_lab) {
+                /* lab edits mutate sim state directly; quiesce the async
+                   obs reader before entering */
+                if (rc->pre_sim_mutation_hook)
+                    rc->pre_sim_mutation_hook(rc->pre_sim_mutation_hook_ctx);
                 rc->lab_prev_paused = rc->is_paused;
                 rc->lab_prev_human_enabled = rc->human_input.enabled;
                 render_lab_capture_entry_snapshot(rc, env);
@@ -6834,10 +6838,17 @@ void pvp_render(OsrsEnv* env) {
     model_cache_update_texture_anims(rc->projectile_model_cache, (float)visual_dt);
 
     /* inventory mouse interaction (clicks, drags) — runs every frame.
-       gui functions need the full Player* (inventory, stats, etc.) */
+       gui functions need the full Player* (inventory, stats, etc.).
+       in non-human mode a released click can mutate the live sim player
+       directly (equip/eat), so quiesce the async obs reader first. */
     if (rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count) {
         Player* gui_p = render_get_player_ptr(env, rc->gui.gui_entity_idx);
-        if (gui_p) gui_inv_handle_mouse(&rc->gui, gui_p, &rc->human_input);
+        if (gui_p) {
+            if (!rc->human_input.enabled && rc->pre_sim_mutation_hook &&
+                    IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+                rc->pre_sim_mutation_hook(rc->pre_sim_mutation_hook_ctx);
+            gui_inv_handle_mouse(&rc->gui, gui_p, &rc->human_input);
+        }
     }
 
     /* run client ticks at 50 Hz scaled by replay speed. this keeps movement,

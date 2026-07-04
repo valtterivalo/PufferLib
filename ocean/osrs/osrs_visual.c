@@ -1793,6 +1793,9 @@ static void run_visual(
         }
     }
 
+    /* the worker reads the net and encounter state freed below */
+    async_policy_join(&vs.async_policy);
+
     replay_free(replay);
     visual_policy_destroy(&vs.policy);
 

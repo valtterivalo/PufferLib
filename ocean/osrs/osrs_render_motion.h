@@ -86,15 +86,12 @@ static inline int osrs_render_should_seed_visual_position(
 
 /**
  * Advance one sub-tile axis toward dest by at most speed, clamped so sub
- * never overshoots. Gaps beyond 2 tiles snap to dest (Canvas.java:80,199-208).
+ * never overshoots.
  */
 static inline float osrs_render_advance_axis_toward(
     float sub, float dest, float speed
 ) {
     float dx = dest - sub;
-    if (dx > OSRS_RENDER_AXIS_SNAP_SUB_UNITS ||
-        dx < -OSRS_RENDER_AXIS_SNAP_SUB_UNITS)
-        return dest;
     if (dx == 0.0f) return sub;
     if (dx > 0.0f) return sub + (dx > speed ? speed : dx);
     return sub + (dx < -speed ? -speed : dx);
@@ -127,9 +124,10 @@ static inline void osrs_render_waypoint_push(
 /**
  * Consume one client tick of movement toward the oldest waypoint, popping
  * it on arrival. Movement clamps at the waypoint (one waypoint per tick at
- * most, residual speed is discarded, matching the deob). Returns 1 when the
- * entity is moving this tick; dir_dx/dir_dy carry the pre-advance delta for
- * yaw selection.
+ * most, residual speed is discarded, matching the deob); a gap beyond 2
+ * tiles on either axis snaps the whole position and pops in one cycle
+ * (Canvas.java:80,199-208). Returns 1 when the entity is moving this tick;
+ * dir_dx/dir_dy carry the pre-advance delta for yaw selection.
  */
 static inline int osrs_render_waypoint_advance_one_client_tick(
     OsrsRenderWaypointQueue* q,
@@ -149,10 +147,20 @@ static inline int osrs_render_waypoint_advance_one_client_tick(
     int wi = q->length - 1;
     float wx = q->x[wi];
     float wy = q->y[wi];
-    int speed = osrs_render_speed_one_client_tick(
-        q->length, q->running[wi], stall_debt);
     *dir_dx = wx - *sub_x;
     *dir_dy = wy - *sub_y;
+    if (*dir_dx > OSRS_RENDER_AXIS_SNAP_SUB_UNITS ||
+        *dir_dx < -OSRS_RENDER_AXIS_SNAP_SUB_UNITS ||
+        *dir_dy > OSRS_RENDER_AXIS_SNAP_SUB_UNITS ||
+        *dir_dy < -OSRS_RENDER_AXIS_SNAP_SUB_UNITS) {
+        *sub_x = wx;
+        *sub_y = wy;
+        q->length--;
+        *speed_out = 0;
+        return 1;
+    }
+    int speed = osrs_render_speed_one_client_tick(
+        q->length, q->running[wi], stall_debt);
     *sub_x = osrs_render_advance_axis_toward(*sub_x, wx, (float)speed);
     *sub_y = osrs_render_advance_axis_toward(*sub_y, wy, (float)speed);
     if (*sub_x == wx && *sub_y == wy) q->length--;
