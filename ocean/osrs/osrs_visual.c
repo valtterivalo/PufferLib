@@ -40,6 +40,8 @@ static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#else
+#include <pthread.h>
 #endif
 
 static int encounter_name_is_pvp(const char* encounter_name) {
@@ -983,17 +985,92 @@ static void visual_policy_actions(
     }
 }
 
+/**
+ * Precomputes the next tick's policy actions on a worker thread during the
+ * ~600ms between game ticks, so the obs build + network forward (~50ms for
+ * the colosseum entity-encoder net) never lands on a rendered frame. The
+ * worker reads live sim state; the drive loop joins it before anything
+ * mutates that state (step, reset, restore).
+ */
+typedef struct {
+    VisualPolicy* policy;
+    const EncounterDef* edef;
+    EncounterState* state;
+    EncounterContext* context;
+    int actions[64];
+#ifndef __EMSCRIPTEN__
+    pthread_t thread;
+#endif
+    int in_flight;
+    int has_actions;
+} AsyncPolicy;
+
+#ifndef __EMSCRIPTEN__
+static void* async_policy_worker(void* arg) {
+    AsyncPolicy* ap = (AsyncPolicy*)arg;
+    visual_policy_actions(ap->policy, ap->edef, ap->state, ap->context, ap->actions);
+    return NULL;
+}
+#endif
+
+static void async_policy_join(AsyncPolicy* ap) {
+#ifndef __EMSCRIPTEN__
+    if (!ap->in_flight) return;
+    if (pthread_join(ap->thread, NULL) != 0) {
+        fprintf(stderr, "async policy: pthread_join failed\n");
+        abort();
+    }
+    ap->in_flight = 0;
+    ap->has_actions = 1;
+#else
+    (void)ap;
+#endif
+}
+
+static void async_policy_spawn(
+    AsyncPolicy* ap,
+    VisualPolicy* policy,
+    const EncounterDef* edef,
+    OsrsEnv* env
+) {
+#ifndef __EMSCRIPTEN__
+    if (ap->in_flight) {
+        fprintf(stderr, "async policy: spawn while in flight\n");
+        abort();
+    }
+    ap->policy = policy;
+    ap->edef = edef;
+    ap->state = env->encounter_state;
+    ap->context = (EncounterContext*)env->encounter_context;
+    ap->has_actions = 0;
+    if (pthread_create(&ap->thread, NULL, async_policy_worker, ap) != 0) {
+        fprintf(stderr, "async policy: pthread_create failed\n");
+        abort();
+    }
+    ap->in_flight = 1;
+#else
+    (void)ap; (void)policy; (void)edef; (void)env;
+#endif
+}
+
 typedef struct {
     OsrsEnv* env;
     const char* encounter_name;
     ReplayFile* replay;
     VisualPolicy policy;
+    AsyncPolicy async_policy;
     int start_wave;
     /* per-frame state */
     double episode_end_time;  /* >0 when holding final frame */
     int episode_ended;
     int seen_lab_restore_generation;
 } VisualState;
+
+static void visual_async_policy_guard(void* ctx) {
+    VisualState* vs = (VisualState*)ctx;
+    async_policy_join(&vs->async_policy);
+    vs->async_policy.has_actions = 0;
+}
 
 static void visual_frame(void* arg) {
     VisualState* vs = (VisualState*)arg;
@@ -1002,12 +1079,16 @@ static void visual_frame(void* arg) {
     if (rc->lab_restore_generation != vs->seen_lab_restore_generation) {
         vs->seen_lab_restore_generation = rc->lab_restore_generation;
         vs->episode_ended = 0;
+        async_policy_join(&vs->async_policy);
+        vs->async_policy.has_actions = 0;
         visual_policy_reset_recurrent(&vs->policy);
     }
 
     /* rewind: restore historical state and re-render */
     if (rc->step_back) {
         rc->step_back = 0;
+        async_policy_join(&vs->async_policy);
+        vs->async_policy.has_actions = 0;
         render_restore_snapshot(rc, env);
         /* if we restored the latest snapshot, exit rewind mode */
         if (rc->history_cursor >= rc->history_count - 1) {
@@ -1028,6 +1109,8 @@ static void visual_frame(void* arg) {
         pvp_render(env);
         if (GetTime() - vs->episode_end_time >= 2.0) {
             vs->episode_ended = 0;
+            async_policy_join(&vs->async_policy);
+            vs->async_policy.has_actions = 0;
             if (env->encounter_def) {
                 ((const EncounterDef*)env->encounter_def)->reset(
                     env->encounter_state,
@@ -1050,15 +1133,24 @@ static void visual_frame(void* arg) {
     }
     rc->step_once = 0;
 
-    /* tick pacing: keep rendering while waiting */
+    /* tick pacing: keep rendering while waiting. phase-preserving: the epoch
+       advances by exactly one interval per tick so frame-boundary overshoot
+       never accumulates (mean period == interval); resync only when more
+       than a full interval behind (pause, hitch, first frame). */
     if (rc->ticks_per_second > 0.0f) {
-        double interval = 1.0 / rc->ticks_per_second;
-        if (GetTime() - rc->last_tick_time < interval) {
+        double interval = 1.0 / (double)rc->ticks_per_second;
+        double now = GetTime();
+        if (now - rc->last_tick_time < interval) {
             pvp_render(env);
             return;
         }
+        rc->last_tick_time += interval;
+        if (now - rc->last_tick_time >= interval)
+            rc->last_tick_time = now;
     }
-    rc->last_tick_time = GetTime();
+
+    /* the sim mutates from here on: the async obs reader must be done */
+    async_policy_join(&vs->async_policy);
 
     /* step the simulation */
     render_pre_tick(rc, env);
@@ -1109,12 +1201,17 @@ static void visual_frame(void* arg) {
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
             /* replay mode: actions come from pre-recorded file */
         } else if (vs->policy.enabled) {
-            visual_policy_actions(
-                &vs->policy,
-                edef,
-                env->encounter_state,
-                (EncounterContext*)env->encounter_context,
-                enc_actions);
+            if (vs->async_policy.has_actions) {
+                memcpy(enc_actions, vs->async_policy.actions,
+                    sizeof(enc_actions));
+            } else {
+                visual_policy_actions(
+                    &vs->policy,
+                    edef,
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    enc_actions);
+            }
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {
@@ -1122,6 +1219,9 @@ static void visual_frame(void* arg) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
         }
+        /* consumed by the policy branch or stale after any other branch */
+        vs->async_policy.has_actions = 0;
+
         if (!used_human_step) {
             edef->step(
                 env->encounter_state,
@@ -1186,6 +1286,13 @@ static void visual_frame(void* arg) {
     if (is_over) {
         vs->episode_ended = 1;
         vs->episode_end_time = GetTime();
+    } else if (env->encounter_def && vs->policy.enabled &&
+               !rc->human_input.enabled && !vs->replay) {
+        async_policy_spawn(
+            &vs->async_policy,
+            &vs->policy,
+            (const EncounterDef*)env->encounter_def,
+            env);
     }
 }
 
@@ -1643,6 +1750,8 @@ static void run_visual(
         .episode_ended = 0,
         .seen_lab_restore_generation = rc->lab_restore_generation,
     };
+    rc->pre_sim_mutation_hook = visual_async_policy_guard;
+    rc->pre_sim_mutation_hook_ctx = &web_visual_state;
     emscripten_set_main_loop_arg(visual_frame, &web_visual_state, 0, 1);
 #else
     VisualState vs = {
@@ -1655,6 +1764,8 @@ static void run_visual(
         .episode_ended = 0,
         .seen_lab_restore_generation = rc->lab_restore_generation,
     };
+    rc->pre_sim_mutation_hook = visual_async_policy_guard;
+    rc->pre_sim_mutation_hook_ctx = &vs;
 
     if (g_cli_camera_dist > 0.0f) rc->cam_dist = g_cli_camera_dist;
     if (g_cli_camera_yaw > -999.0f) rc->cam_yaw = g_cli_camera_yaw;

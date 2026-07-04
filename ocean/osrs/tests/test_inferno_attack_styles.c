@@ -5448,102 +5448,161 @@ static void test_render_identity_single_player_unchanged(void) {
     ASSERT_INT_EQ("single-player encounter still matches previous[0]", idx, 0);
 }
 
-static void test_sub_x_walk_arrives_at_dest_in_one_game_tick(void) {
-    printf("--- sub_x walk arrives at dest in one game tick ---\n");
+static void test_render_motion_speed_ladder_matches_deob(void) {
+    printf("--- render motion speed ladder matches deob ---\n");
 
-    float sub = 0.0f;
-    float dest = OSRS_RENDER_SUB_UNITS_PER_TILE;
-    int ticks = (int)OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK;
-    int step_tracker = 0;
-    for (int t = 0; t < ticks; t++) {
-        sub = osrs_render_advance_axis_one_client_tick(sub, dest, 0, &step_tracker);
-    }
-    int reached = (fabsf(sub - dest) < 0.5f) ? 1 : 0;
-    ASSERT_INT_EQ("walking entity reaches its destination tile within one game tick",
-        reached, 1);
-}
-
-static void test_sub_x_run_arrives_at_two_tiles_in_one_game_tick(void) {
-    printf("--- sub_x run arrives at two-tile dest in one game tick ---\n");
-
-    float sub = 0.0f;
-    float dest = 2.0f * OSRS_RENDER_SUB_UNITS_PER_TILE;
-    int ticks = (int)OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK;
-    int step_tracker = 0;
-    for (int t = 0; t < ticks; t++) {
-        sub = osrs_render_advance_axis_one_client_tick(sub, dest, 1, &step_tracker);
-    }
-    int reached = (fabsf(sub - dest) < 0.5f) ? 1 : 0;
-    ASSERT_INT_EQ("running entity reaches its two-tile destination within one game tick",
-        reached, 1);
-}
-
-static void test_render_motion_catchup_speed_scales_with_backlog(void) {
-    printf("--- render motion catch-up speed scales with backlog ---\n");
-
-    float base = osrs_render_base_walk_speed_one_client_tick();
     int stall_debt = 0;
+    ASSERT_INT_EQ("depth one walks at 4",
+        osrs_render_speed_one_client_tick(1, 0, &stall_debt), 4);
+    ASSERT_INT_EQ("depth two walks at 4",
+        osrs_render_speed_one_client_tick(2, 0, &stall_debt), 4);
+    ASSERT_INT_EQ("depth three catches up at 6",
+        osrs_render_speed_one_client_tick(3, 0, &stall_debt), 6);
+    ASSERT_INT_EQ("depth four catches up at 8",
+        osrs_render_speed_one_client_tick(4, 0, &stall_debt), 8);
 
-    ASSERT_FLOAT_NEAR("backlog two stays walk speed",
-        osrs_render_effective_speed_one_client_tick(0, 2, &stall_debt),
-        base,
-        1e-6f);
-    ASSERT_FLOAT_NEAR("backlog three uses one and a half walk speed",
-        osrs_render_effective_speed_one_client_tick(0, 3, &stall_debt),
-        base * 1.5f,
-        1e-6f);
-    ASSERT_FLOAT_NEAR("backlog four uses double walk speed",
-        osrs_render_effective_speed_one_client_tick(0, 4, &stall_debt),
-        base * 2.0f,
-        1e-6f);
-
-    stall_debt = 3;
-    ASSERT_FLOAT_NEAR("stall debt with backlog drains at double speed",
-        osrs_render_effective_speed_one_client_tick(0, 2, &stall_debt),
-        base * 2.0f,
-        1e-6f);
-    ASSERT_INT_EQ("stall debt drains one client tick", stall_debt, 2);
+    ASSERT_INT_EQ("run doubles base to 8",
+        osrs_render_speed_one_client_tick(1, 1, &stall_debt), 8);
+    ASSERT_INT_EQ("run doubles depth-three catch-up to 12",
+        osrs_render_speed_one_client_tick(3, 1, &stall_debt), 12);
+    ASSERT_INT_EQ("run doubles depth-four catch-up to 16",
+        osrs_render_speed_one_client_tick(4, 1, &stall_debt), 16);
 
     stall_debt = 3;
-    ASSERT_FLOAT_NEAR("single-waypoint backlog does not spend stall debt",
-        osrs_render_effective_speed_one_client_tick(0, 1, &stall_debt),
-        base,
-        1e-6f);
-    ASSERT_INT_EQ("single-waypoint backlog keeps stall debt", stall_debt, 3);
+    ASSERT_INT_EQ("stall debt with queue depth repays at 8",
+        osrs_render_speed_one_client_tick(2, 0, &stall_debt), 8);
+    ASSERT_INT_EQ("stall debt repays one tick", stall_debt, 2);
 
-    ASSERT_FLOAT_NEAR("explicit run doubles final catch-up speed",
-        osrs_render_effective_speed_one_client_tick(1, 3, NULL),
-        base * 3.0f,
-        1e-6f);
+    stall_debt = 3;
+    ASSERT_INT_EQ("depth one does not spend stall debt",
+        osrs_render_speed_one_client_tick(1, 0, &stall_debt), 4);
+    ASSERT_INT_EQ("depth one keeps stall debt", stall_debt, 3);
+
+    ASSERT_INT_EQ("speed 8 selects run pose",
+        osrs_render_speed_uses_run_pose(8.0f), 1);
+    ASSERT_INT_EQ("speed 6 stays on walk pose",
+        osrs_render_speed_uses_run_pose(6.0f), 0);
+    ASSERT_INT_EQ("speed 4 stays on walk pose",
+        osrs_render_speed_uses_run_pose(4.0f), 0);
 }
 
-static void test_render_motion_stalled_three_tile_gap_uses_run_threshold(void) {
-    printf("--- render motion stalled three-tile gap uses run threshold ---\n");
+static void test_render_motion_lone_step_takes_32_client_ticks(void) {
+    printf("--- render motion lone step takes 32 client ticks ---\n");
 
-    float base = osrs_render_base_walk_speed_one_client_tick();
-    float dest = 3.0f * OSRS_RENDER_SUB_UNITS_PER_TILE;
-    int backlog = osrs_render_visual_backlog(0.0f, 0.0f, dest, 0.0f);
-    int stall_debt = 5;
-    float speed = osrs_render_effective_speed_one_client_tick(
-        0, backlog, &stall_debt);
+    OsrsRenderWaypointQueue q;
+    osrs_render_waypoint_queue_clear(&q);
+    float sub_x = 64.0f, sub_y = 64.0f;
+    osrs_render_waypoint_push(&q, 64.0f + 128.0f, 64.0f, 0);
 
-    ASSERT_INT_EQ("three-tile visual gap has backlog three", backlog, 3);
-    ASSERT_FLOAT_NEAR("stalled three-tile gap uses double walk catch-up",
-        speed, base * 2.0f, 1e-6f);
-    ASSERT_INT_EQ("stalled three-tile gap drains stall debt", stall_debt, 4);
-    ASSERT_INT_EQ("double walk catch-up selects run threshold",
-        osrs_render_speed_uses_run_pose(speed), 1);
-    ASSERT_INT_EQ("one and a half walk catch-up stays below run threshold",
-        osrs_render_speed_uses_run_pose(base * 1.5f), 0);
+    int stall_debt = 0;
+    int ticks = 0;
+    while (q.length > 0 && ticks < 100) {
+        int speed;
+        float ddx, ddy;
+        osrs_render_waypoint_advance_one_client_tick(
+            &q, &sub_x, &sub_y, &stall_debt, &speed, &ddx, &ddy);
+        ticks++;
+    }
+    ASSERT_INT_EQ("isolated 1-tile step takes 32 client ticks (640ms > 600ms tick)",
+        ticks, 32);
+    ASSERT_FLOAT_NEAR("arrived at the waypoint", sub_x, 192.0f, 1e-6f);
+}
+
+static void render_motion_continuity_case(
+    const char* label, float tiles_per_tick, int running
+) {
+    OsrsRenderWaypointQueue q;
+    osrs_render_waypoint_queue_clear(&q);
+    float sub_x = 64.0f, sub_y = 64.0f;
+    float true_x = 64.0f;
+    int stall_debt = 0;
+    int started = 0, pauses = 0, max_depth = 0;
+
+    for (int tick = 0; tick < 40; tick++) {
+        true_x += tiles_per_tick * OSRS_RENDER_SUB_UNITS_PER_TILE;
+        osrs_render_waypoint_push(&q, true_x, 64.0f, running);
+        for (int ct = 0; ct < (int)OSRS_RENDER_CLIENT_TICKS_PER_GAME_TICK; ct++) {
+            int speed;
+            float ddx, ddy;
+            int moving = osrs_render_waypoint_advance_one_client_tick(
+                &q, &sub_x, &sub_y, &stall_debt, &speed, &ddx, &ddy);
+            if (started && !moving) pauses++;
+            if (moving) started = 1;
+            if (q.length > max_depth) max_depth = q.length;
+        }
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s never pauses mid-walk", label);
+    ASSERT_INT_EQ(msg, pauses, 0);
+    snprintf(msg, sizeof(msg), "%s queue depth stays bounded", label);
+    ASSERT_INT_EQ(msg, max_depth <= 3, 1);
+    snprintf(msg, sizeof(msg), "%s visual trails within three tiles", label);
+    ASSERT_INT_EQ(msg,
+        (true_x - sub_x) <= 3.0f * OSRS_RENDER_SUB_UNITS_PER_TILE, 1);
+}
+
+static void test_render_motion_continuous_movement_never_pauses(void) {
+    printf("--- render motion continuous movement never pauses ---\n");
+
+    /* THE regression trap for the per-tick pause bug: because base speed 4
+       (640ms/tile) trails 600ms waypoint production, a continuously moving
+       entity always has queue depth and its walk pose never drops to idle. */
+    render_motion_continuity_case("continuous walk", 1.0f, 0);
+    render_motion_continuity_case("continuous run", 2.0f, 1);
+}
+
+static void test_render_motion_waypoint_pop_snap_and_overflow(void) {
+    printf("--- render motion waypoint pop, axis snap, queue overflow ---\n");
+
+    /* no-carry pop: with two waypoints queued, the arrival tick stops AT the
+       first waypoint instead of continuing toward the second */
+    OsrsRenderWaypointQueue q;
+    osrs_render_waypoint_queue_clear(&q);
+    float sub_x = 64.0f, sub_y = 64.0f;
+    osrs_render_waypoint_push(&q, 192.0f, 64.0f, 0);
+    osrs_render_waypoint_push(&q, 320.0f, 64.0f, 0);
+    int stall_debt = 0;
+    for (int ct = 0; ct < 32; ct++) {
+        int speed;
+        float ddx, ddy;
+        osrs_render_waypoint_advance_one_client_tick(
+            &q, &sub_x, &sub_y, &stall_debt, &speed, &ddx, &ddy);
+    }
+    ASSERT_FLOAT_NEAR("arrival tick clamps at the popped waypoint",
+        sub_x, 192.0f, 1e-6f);
+    ASSERT_INT_EQ("first waypoint popped, second still queued", q.length, 1);
+
+    /* per-axis snap: a gap beyond two tiles teleports to the waypoint */
+    osrs_render_waypoint_queue_clear(&q);
+    sub_x = 0.0f;
+    sub_y = 0.0f;
+    osrs_render_waypoint_push(&q, 300.0f, 0.0f, 0);
+    {
+        int speed;
+        float ddx, ddy;
+        osrs_render_waypoint_advance_one_client_tick(
+            &q, &sub_x, &sub_y, &stall_debt, &speed, &ddx, &ddy);
+    }
+    ASSERT_FLOAT_NEAR("beyond-2-tile axis gap snaps to the waypoint",
+        sub_x, 300.0f, 1e-6f);
+    ASSERT_INT_EQ("snapped waypoint pops", q.length, 0);
+
+    /* overflow: an 11th push drops the oldest waypoint */
+    osrs_render_waypoint_queue_clear(&q);
+    for (int i = 1; i <= 11; i++)
+        osrs_render_waypoint_push(&q, (float)(i * 128), 0.0f, 0);
+    ASSERT_INT_EQ("queue caps at 10 waypoints",
+        q.length, OSRS_RENDER_WAYPOINT_QUEUE_DEPTH);
+    ASSERT_FLOAT_NEAR("overflow drops the oldest waypoint",
+        q.x[q.length - 1], 256.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("newest waypoint at the queue head",
+        q.x[0], 11.0f * 128.0f, 1e-6f);
 }
 
 static void test_render_motion_seed_classification_uses_explicit_teleport(void) {
     printf("--- render motion seed classification uses explicit teleport ---\n");
 
-    int backlog = osrs_render_visual_backlog(
-        0.0f, 0.0f, 3.0f * OSRS_RENDER_SUB_UNITS_PER_TILE, 0.0f);
-
-    ASSERT_INT_EQ("test gap is more than two visual waypoints", backlog, 3);
     ASSERT_INT_EQ("persistent normal entity does not seed from distance",
         osrs_render_should_seed_visual_position(
             1, 0, 0, RENDER_MOVEMENT_NORMAL),
@@ -9865,10 +9924,10 @@ int main(void) {
     test_render_identity_matches_two_players_across_tick();
     test_render_identity_two_players_claim_unique_slots();
     test_render_identity_single_player_unchanged();
-    test_sub_x_walk_arrives_at_dest_in_one_game_tick();
-    test_sub_x_run_arrives_at_two_tiles_in_one_game_tick();
-    test_render_motion_catchup_speed_scales_with_backlog();
-    test_render_motion_stalled_three_tile_gap_uses_run_threshold();
+    test_render_motion_speed_ladder_matches_deob();
+    test_render_motion_lone_step_takes_32_client_ticks();
+    test_render_motion_continuous_movement_never_pauses();
+    test_render_motion_waypoint_pop_snap_and_overflow();
     test_render_motion_seed_classification_uses_explicit_teleport();
     test_render_post_tick_removed_distance_snap_branch();
     test_render_bridge_marks_genuine_teleports();

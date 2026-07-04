@@ -117,8 +117,7 @@
    value so visuals never silently disappear. */
 #define MAX_FLIGHT_PROJECTILES 64
 #define RENDER_CLIENT_TICK_SECONDS 0.020
-#define RENDER_CLIENT_TICKS_PER_GAME_TICK 30.0f
-#define RENDER_DEFAULT_GAME_TICKS_PER_SECOND 1.667f
+#define RENDER_DEFAULT_GAME_TICKS_PER_SECOND (1.0f / 0.6f)
 #define RENDER_MAX_VISUAL_GAME_TICKS_PER_SECOND 50.0f
 #define PROJ_OSRS_SLOPE_TO_RAD 0.02454369f  /* pi/128, converts OSRS slope units to radians */
 
@@ -321,10 +320,9 @@ typedef struct {
     float sub_y;
     float dest_x;
     float dest_y;
+    OsrsRenderWaypointQueue waypoints;
     int visual_moving;
     int visual_running;
-    int visual_explicit_running;
-    int visual_backlog;
     float visual_effective_speed;
     int step_tracker;
     float yaw;
@@ -434,6 +432,10 @@ typedef struct RenderClient {
     int lab_selected_npc_slot;
     int lab_prev_paused;
     int lab_prev_human_enabled;
+    /* called before any render-layer sim mutation (lab F6 restore) so the
+       driver can quiesce concurrent sim readers (the async policy worker) */
+    void (*pre_sim_mutation_hook)(void* ctx);
+    void* pre_sim_mutation_hook_ctx;
     void* lab_entry_snapshot;
     size_t lab_entry_snapshot_size;
     int lab_restore_requested;
@@ -523,13 +525,14 @@ typedef struct RenderClient {
     /* per-entity hit splats (4 slots each, OSRS style) */
     HitSplat splats[MAX_RENDER_ENTITIES][RENDER_SPLATS_PER_PLAYER];
 
-    /* per-entity sub-tile position and facing (OSRS: 128 units per tile) */
+    /* per-entity sub-tile position and facing (OSRS: 128 units per tile).
+       dest_x/dest_y = the entity's true tile center (latest sim position);
+       movement consumes the per-tick waypoint queue, not dest directly. */
     float sub_x[MAX_RENDER_ENTITIES], sub_y[MAX_RENDER_ENTITIES];
     float dest_x[MAX_RENDER_ENTITIES], dest_y[MAX_RENDER_ENTITIES];
+    OsrsRenderWaypointQueue waypoints[MAX_RENDER_ENTITIES];
     int visual_moving[MAX_RENDER_ENTITIES];
     int visual_running[MAX_RENDER_ENTITIES];
-    int visual_explicit_running[MAX_RENDER_ENTITIES];
-    int visual_backlog[MAX_RENDER_ENTITIES];
     float visual_effective_speed[MAX_RENDER_ENTITIES];
     int step_tracker[MAX_RENDER_ENTITIES];
     float yaw[MAX_RENDER_ENTITIES];
@@ -975,7 +978,6 @@ static void render_lab_snap_entity_visual(RenderClient* rc, int entity_idx) {
     render_seed_entity_visual_slot(rc, entity_idx);
     rc->visual_moving[entity_idx] = 0;
     rc->visual_running[entity_idx] = 0;
-    rc->visual_backlog[entity_idx] = 0;
     rc->visual_effective_speed[entity_idx] = 0.0f;
     rc->step_tracker[entity_idx] = 0;
 }
@@ -1121,6 +1123,8 @@ static int render_lab_restore_entry_snapshot(RenderClient* rc, OsrsEnv* env) {
     if (!rc || !rc->lab_entry_snapshot) return 0;
     const EncounterDef* def = render_lab_def(env);
     if (!def) return 0;
+    if (rc->pre_sim_mutation_hook)
+        rc->pre_sim_mutation_hook(rc->pre_sim_mutation_hook_ctx);
     def->restore(
         (EncounterState*)env->encounter_state,
         (EncounterContext*)env->encounter_context,
@@ -3363,11 +3367,10 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     rc->sub_y[i] = 0;
     rc->dest_x[i] = 0;
     rc->dest_y[i] = 0;
+    osrs_render_waypoint_queue_clear(&rc->waypoints[i]);
     rc->step_tracker[i] = 0;
     rc->visual_moving[i] = 0;
     rc->visual_running[i] = 0;
-    rc->visual_explicit_running[i] = 0;
-    rc->visual_backlog[i] = 0;
     rc->visual_effective_speed[i] = 0.0f;
     rc->facing_opponent[i] = 0;
     rc->yaw[i] = 0.0f;
@@ -3392,10 +3395,9 @@ static RenderVisualSlotSnapshot render_snapshot_entity_visual_slot(
     out.sub_y = rc->sub_y[i];
     out.dest_x = rc->dest_x[i];
     out.dest_y = rc->dest_y[i];
+    out.waypoints = rc->waypoints[i];
     out.visual_moving = rc->visual_moving[i];
     out.visual_running = rc->visual_running[i];
-    out.visual_explicit_running = rc->visual_explicit_running[i];
-    out.visual_backlog = rc->visual_backlog[i];
     out.visual_effective_speed = rc->visual_effective_speed[i];
     out.step_tracker = rc->step_tracker[i];
     out.yaw = rc->yaw[i];
@@ -3416,10 +3418,9 @@ static void render_restore_entity_visual_slot(
     rc->sub_y[i] = snapshot->sub_y;
     rc->dest_x[i] = snapshot->dest_x;
     rc->dest_y[i] = snapshot->dest_y;
+    rc->waypoints[i] = snapshot->waypoints;
     rc->visual_moving[i] = snapshot->visual_moving;
     rc->visual_running[i] = snapshot->visual_running;
-    rc->visual_explicit_running[i] = snapshot->visual_explicit_running;
-    rc->visual_backlog[i] = snapshot->visual_backlog;
     rc->visual_effective_speed[i] = snapshot->visual_effective_speed;
     rc->step_tracker[i] = snapshot->step_tracker;
     rc->yaw[i] = snapshot->yaw;
@@ -3435,8 +3436,7 @@ static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
     rc->sub_y[i] = rc->entities[i].y * 128 + size * 64;
     rc->dest_x[i] = rc->sub_x[i];
     rc->dest_y[i] = rc->sub_y[i];
-    rc->visual_explicit_running[i] = rc->entities[i].is_running;
-    rc->visual_backlog[i] = 0;
+    osrs_render_waypoint_queue_clear(&rc->waypoints[i]);
     rc->visual_effective_speed[i] = 0.0f;
     rc->visual_running[i] = 0;
     anim_playback_set_seq(&rc->anim[i].secondary,
@@ -3547,19 +3547,18 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         /* detect if player moved this tick (destination changed) */
         int moved = (new_dest_x != rc->dest_x[i] || new_dest_y != rc->dest_y[i]);
 
-        /* update destination — NO snap-to-previous-dest. the real OSRS client
-           (Canvas.java:165-188) simply advances actor.x toward dest by speed
-           each client tick with no snap. sub smoothly interpolates from wherever
-           it currently is toward the new dest. the dynamic walk speed in
-           render_client_tick ensures arrival within one game tick. */
+        /* push this tick's position as a waypoint (deob Actor.java:509-522:
+           one waypoint per server tick, run flag attached per waypoint).
+           consumption in render_client_tick trails deliberately (base speed
+           4 = 640ms/tile > 600ms tick) so a continuously walking entity
+           always has queue depth and never pauses at tile boundaries. */
+        if (moved) {
+            osrs_render_waypoint_push(
+                &rc->waypoints[i],
+                (float)new_dest_x, (float)new_dest_y, p->is_running);
+        }
         rc->dest_x[i] = new_dest_x;
         rc->dest_y[i] = new_dest_y;
-
-        /* latch explicit run state from the game. effective speed drives pose
-           selection in the client-tick loop. */
-        rc->visual_explicit_running[i] = p->is_running;
-        rc->visual_backlog[i] = osrs_render_visual_backlog(
-            rc->sub_x[i], rc->sub_y[i], (float)new_dest_x, (float)new_dest_y);
 
         RenderEntityFacingMode facing_mode = render_entity_select_facing_mode(p, moved);
         if (facing_mode == RENDER_ENTITY_FACE_ATTACK_TARGET) {
@@ -3851,27 +3850,17 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
  * Animation: faithful to updateAnimation() (Client.java:13272)
  */
 static void render_client_tick(RenderClient* rc, int player_idx) {
-    /* --- nextStep: advance sub-tile position toward destination ---
-       faithful to Entity.nextStep() (Client.java:13074-13213).
-
-       when a non-melee animation is playing (walkFlag==0), sub-tile
-       movement stalls. stepTracker accumulates stalled frames, then raises
-       speed when the visible position has backlog to drain. */
-    float dx = rc->dest_x[player_idx] - rc->sub_x[player_idx];
-    float dy = rc->dest_y[player_idx] - rc->sub_y[player_idx];
-
-    if (dx == 0.0f && dy == 0.0f) {
+    /* --- nextStep: consume the waypoint queue ---
+       faithful to the deob per-cycle actor movement (Canvas.java:32-210):
+       advance toward the OLDEST waypoint at the integer speed ladder, pop
+       on arrival. when a movement-blocking animation is playing, movement
+       stalls and stepTracker accumulates debt repaid at catch-up speed. */
+    if (rc->waypoints[player_idx].length == 0) {
         rc->visual_moving[player_idx] = 0;
         rc->visual_running[player_idx] = 0;
-        rc->visual_backlog[player_idx] = 0;
         rc->visual_effective_speed[player_idx] = 0.0f;
         rc->step_tracker[player_idx] = 0;
     } else {
-        rc->visual_backlog[player_idx] = osrs_render_visual_backlog(
-            rc->sub_x[player_idx],
-            rc->sub_y[player_idx],
-            rc->dest_x[player_idx],
-            rc->dest_y[player_idx]);
         int stall = 0;
         if (rc->anim[player_idx].primary.seq_id >= 0 &&
             rc->anim[player_idx].primary.completed_loops == 0) {
@@ -3887,31 +3876,27 @@ static void render_client_tick(RenderClient* rc, int player_idx) {
             rc->visual_running[player_idx] = 0;
             rc->visual_effective_speed[player_idx] = 0.0f;
         } else {
-            rc->visual_moving[player_idx] = 1;
-
-            float speed = osrs_render_effective_speed_one_client_tick(
-                rc->visual_explicit_running[player_idx],
-                rc->visual_backlog[player_idx],
-                &rc->step_tracker[player_idx]);
-            rc->visual_effective_speed[player_idx] = speed;
+            int speed = 0;
+            float dir_dx = 0.0f, dir_dy = 0.0f;
+            rc->visual_moving[player_idx] =
+                osrs_render_waypoint_advance_one_client_tick(
+                    &rc->waypoints[player_idx],
+                    &rc->sub_x[player_idx],
+                    &rc->sub_y[player_idx],
+                    &rc->step_tracker[player_idx],
+                    &speed,
+                    &dir_dx,
+                    &dir_dy);
+            rc->visual_effective_speed[player_idx] = (float)speed;
             rc->visual_running[player_idx] =
-                osrs_render_speed_uses_run_pose(speed);
-            rc->sub_x[player_idx] = osrs_render_advance_axis_toward(
-                rc->sub_x[player_idx], rc->dest_x[player_idx], speed);
-            rc->sub_y[player_idx] = osrs_render_advance_axis_toward(
-                rc->sub_y[player_idx], rc->dest_y[player_idx], speed);
-            rc->visual_backlog[player_idx] = osrs_render_visual_backlog(
-                rc->sub_x[player_idx],
-                rc->sub_y[player_idx],
-                rc->dest_x[player_idx],
-                rc->dest_y[player_idx]);
+                osrs_render_speed_uses_run_pose((float)speed);
 
             /* when walking (not facing opponent), update target_yaw to movement
                direction each client tick, matching nextStep's turnDirection
                assignment from step delta. */
             if (!rc->facing_opponent[player_idx] && rc->entities[player_idx].npc_def_id != 7707) {
-                if (dx != 0.0f || dy != 0.0f) {
-                    rc->target_yaw[player_idx] = atan2f(-dx, dy);
+                if (dir_dx != 0.0f || dir_dy != 0.0f) {
+                    rc->target_yaw[player_idx] = atan2f(-dir_dx, dir_dy);
                 }
             }
         }
