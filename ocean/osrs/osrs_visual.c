@@ -1372,6 +1372,16 @@ static void run_metrics(
     int prev_wave = 0, prev_reinf_timer = 0, wave_seen = 0;
     int enc_actions[64] = {0};
 
+    /* Claw-scratch obs audit: at every claws BASIC attack, record what the
+       weapon-choice obs tail told the policy (wielded-vs-best ratio, the claws
+       cell's own DPT float, the best other weapon cell's DPT float). Splits
+       "obs lied" from "obs honest, policy dwells anyway". Stints track how
+       claws get equipped and whether the stint ever fires the spec. */
+    double claw_ratio_sum = 0.0, claw_cell_dpt_sum = 0.0, claw_best_other_sum = 0.0;
+    uint64_t claw_obs_n = 0, claw_better_visible = 0;
+    uint64_t claw_stints = 0, claw_stints_with_spec = 0, claw_stint_tick_sum = 0;
+    int claw_stint_live = 0, claw_stint_spec = 0, claw_stint_ticks = 0;
+
     while (episodes < num_episodes) {
         visual_policy_actions(&policy, edef, env->encounter_state,
             (EncounterContext*)env->encounter_context, enc_actions);
@@ -1392,6 +1402,22 @@ static void run_metrics(
         prev_wave = w_now;
         prev_reinf_timer = cs->reinforcement_timer;
 
+        uint8_t cur_weapon = cs->player.equipped[GEAR_SLOT_WEAPON];
+        if (cur_weapon == ITEM_DRAGON_CLAWS) {
+            if (!claw_stint_live) {
+                claw_stint_live = 1;
+                claw_stint_spec = 0;
+                claw_stint_ticks = 0;
+            }
+            claw_stint_ticks++;
+            if (cs->player.used_special_this_tick) claw_stint_spec = 1;
+        } else if (claw_stint_live) {
+            claw_stints++;
+            claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
+            if (claw_stint_spec) claw_stints_with_spec++;
+            claw_stint_live = 0;
+        }
+
         if (cs->tick_scratch.player_attacked) {
             int slot = cs->player_attack_npc_idx;
             uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
@@ -1402,6 +1428,28 @@ static void run_metrics(
                     wpn_total[w]++;
                     total_attacks++;
                     if (cs->player.used_special_this_tick) wpn_spec[w]++;
+
+                    if (w == ITEM_DRAGON_CLAWS &&
+                            !cs->player.used_special_this_tick) {
+                        const float* tail =
+                            policy.obs + COLO_OBS_AFTER_THRALL_DC;
+                        float claw_cell = 0.0f, best_other = 0.0f;
+                        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+                            uint8_t cell_item =
+                                cs->inventory_cells[c].item_idx;
+                            if (cell_item == ITEM_DRAGON_CLAWS) {
+                                if (tail[c] > claw_cell) claw_cell = tail[c];
+                            } else if (tail[c] > best_other) {
+                                best_other = tail[c];
+                            }
+                        }
+                        claw_ratio_sum +=
+                            (double)tail[2 * OSRS_INVENTORY_SIZE + 1];
+                        claw_cell_dpt_sum += (double)claw_cell;
+                        claw_best_other_sum += (double)best_other;
+                        if (best_other > claw_cell) claw_better_visible++;
+                        claw_obs_n++;
+                    }
                     if (cs->reinforcement_timer == COLO_REINFORCE_FIRED)
                         wave_attacks_post_reinforce[w_now]++;
 
@@ -1435,6 +1483,12 @@ static void run_metrics(
         if (edef->is_terminal(env->encounter_state,
                 (EncounterContext*)env->encounter_context)) {
             episodes++;
+            if (claw_stint_live) {
+                claw_stints++;
+                claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
+                if (claw_stint_spec) claw_stints_with_spec++;
+                claw_stint_live = 0;
+            }
             edef->reset(env->encounter_state,
                 (EncounterContext*)env->encounter_context,
                 policy_seed + (uint32_t)episodes);
@@ -1452,6 +1506,19 @@ static void run_metrics(
         (unsigned long long)argmax_set_attacks,
         (unsigned long long)argmax_evals,
         argmax_evals ? 100.0 * (double)argmax_set_attacks / (double)argmax_evals : 0.0);
+    if (claw_obs_n > 0) {
+        printf("# claw audit: %llu basic attacks | obs saw wielded/best ratio %.2f,"
+               " claws cell %.2f, best other cell %.2f, better cell visible %.1f%%\n",
+            (unsigned long long)claw_obs_n,
+            claw_ratio_sum / (double)claw_obs_n,
+            claw_cell_dpt_sum / (double)claw_obs_n,
+            claw_best_other_sum / (double)claw_obs_n,
+            100.0 * (double)claw_better_visible / (double)claw_obs_n);
+        printf("# claw stints: %llu, mean dwell %.1f ticks, %.1f%% fired spec\n",
+            (unsigned long long)claw_stints,
+            claw_stints ? (double)claw_stint_tick_sum / (double)claw_stints : 0.0,
+            claw_stints ? 100.0 * (double)claw_stints_with_spec / (double)claw_stints : 0.0);
+    }
     printf("weapon,total_attacks,per_episode,pct,spec_pct,mean_dpt_eff\n");
     for (int w = 0; w < 256; w++) {
         if (wpn_total[w] == 0) continue;
