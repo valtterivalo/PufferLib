@@ -1308,7 +1308,8 @@ static void run_metrics(
     VisualPolicyMode policy_mode,
     uint32_t policy_seed,
     int num_episodes,
-    int loadout_mode
+    int loadout_mode,
+    int bis_oracle
 ) {
     if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
@@ -1332,6 +1333,9 @@ static void run_metrics(
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave", 1);
+    if (bis_oracle)
+        edef->put_int(env->encounter_state, env->encounter_context,
+                      "bis_gear_oracle_mode", 1);
     edef->reset(env->encounter_state, env->encounter_context, policy_seed);
 
     VisualPolicy policy;
@@ -1381,6 +1385,14 @@ static void run_metrics(
     uint64_t claw_obs_n = 0, claw_better_visible = 0;
     uint64_t claw_stints = 0, claw_stints_with_spec = 0, claw_stint_tick_sum = 0;
     int claw_stint_live = 0, claw_stint_spec = 0, claw_stint_ticks = 0;
+
+    enum { METRICS_MAX_EPISODES = 512 };
+    if (num_episodes > METRICS_MAX_EPISODES) {
+        fprintf(stderr, "metrics mode caps at %d episodes\n", METRICS_MAX_EPISODES);
+        return;
+    }
+    static float ep_scores[METRICS_MAX_EPISODES];
+    static int ep_winners[METRICS_MAX_EPISODES];
 
     while (episodes < num_episodes) {
         visual_policy_actions(&policy, edef, env->encounter_state,
@@ -1482,6 +1494,8 @@ static void run_metrics(
         }
         if (edef->is_terminal(env->encounter_state,
                 (EncounterContext*)env->encounter_context)) {
+            ep_scores[episodes] = cs->log.outcome_score;
+            ep_winners[episodes] = cs->winner;
             episodes++;
             if (claw_stint_live) {
                 claw_stints++;
@@ -1499,9 +1513,21 @@ static void run_metrics(
     }
 
     printf("# colosseum weapon behavioral metrics\n");
-    printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s\n",
+    printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s bis_oracle=%d\n",
         num_episodes, total_ticks, (unsigned long long)total_attacks,
-        policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample");
+        policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", bis_oracle);
+    {
+        double score_sum = 0.0;
+        int wins = 0;
+        for (int e = 0; e < episodes; e++) {
+            score_sum += (double)ep_scores[e];
+            if (ep_winners[e] == COLO_OUTCOME_PLAYER_WON) wins++;
+        }
+        printf("# outcome scores: mean %.4f, wins %d/%d, per-episode:",
+            episodes ? score_sum / (double)episodes : 0.0, wins, episodes);
+        for (int e = 0; e < episodes; e++) printf(" %.3f", ep_scores[e]);
+        printf("\n");
+    }
     printf("# argmax-style attacks: %llu/%llu (%.1f%%)\n",
         (unsigned long long)argmax_set_attacks,
         (unsigned long long)argmax_evals,
@@ -1971,6 +1997,7 @@ int main(int argc, char** argv) {
     int start_wave = -1; /* -1 = default (wave 0) */
     int profile_steps = 0;
     int metrics_episodes = 0;
+    int metrics_bis_oracle = 0;
     int loadout_mode = 2;  /* metrics kit: 0=speedrun, 1=beginner, 2=mixed (trained default) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
@@ -2019,6 +2046,8 @@ int main(int argc, char** argv) {
             metrics_episodes = atoi(argv[++i]);
             use_visual = 0;
         }
+        else if (strcmp(argv[i], "--bis-oracle") == 0)
+            metrics_bis_oracle = 1;
         else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc) {
             loadout_mode = atoi(argv[++i]);
             g_cli_visual_loadout_mode = loadout_mode;
@@ -2053,7 +2082,7 @@ int main(int argc, char** argv) {
 
     if (metrics_episodes > 0) {
         run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
-            metrics_episodes, loadout_mode);
+            metrics_episodes, loadout_mode, metrics_bis_oracle);
         return 0;
     }
 
