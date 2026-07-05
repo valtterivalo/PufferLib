@@ -1348,11 +1348,28 @@ static void run_metrics(
     };
     static uint64_t wpn_npc[256][COLO_NUM_NPC_TYPES];
     static uint64_t wpn_total[256];
+    static uint64_t wpn_spec[256];
+    static double wpn_eff_sum[256];
+    static uint64_t wpn_eff_n[256];
+    static double npc_eff_sum[COLO_NUM_NPC_TYPES];
+    static uint64_t npc_eff_n[COLO_NUM_NPC_TYPES];
+    static uint64_t wave_ticks[12], wave_visits[12], wave_reinforced[12];
+    static uint64_t wave_attacks_post_reinforce[12];
     memset(wpn_npc, 0, sizeof(wpn_npc));
     memset(wpn_total, 0, sizeof(wpn_total));
-    uint64_t total_attacks = 0;
+    memset(wpn_spec, 0, sizeof(wpn_spec));
+    memset(wpn_eff_sum, 0, sizeof(wpn_eff_sum));
+    memset(wpn_eff_n, 0, sizeof(wpn_eff_n));
+    memset(npc_eff_sum, 0, sizeof(npc_eff_sum));
+    memset(npc_eff_n, 0, sizeof(npc_eff_n));
+    memset(wave_ticks, 0, sizeof(wave_ticks));
+    memset(wave_visits, 0, sizeof(wave_visits));
+    memset(wave_reinforced, 0, sizeof(wave_reinforced));
+    memset(wave_attacks_post_reinforce, 0, sizeof(wave_attacks_post_reinforce));
+    uint64_t total_attacks = 0, argmax_set_attacks = 0, argmax_evals = 0;
     long total_ticks = 0;
     int episodes = 0;
+    int prev_wave = 0, prev_reinf_timer = 0, wave_seen = 0;
     int enc_actions[64] = {0};
 
     while (episodes < num_episodes) {
@@ -1362,6 +1379,19 @@ static void run_metrics(
             (EncounterContext*)env->encounter_context, enc_actions);
         total_ticks++;
         ColosseumState* cs = (ColosseumState*)env->encounter_state;
+
+        int w_now = cs->wave >= 0 && cs->wave < 12 ? cs->wave : 11;
+        if (!wave_seen || w_now != prev_wave) {
+            wave_visits[w_now]++;
+            wave_seen = 1;
+        }
+        wave_ticks[w_now]++;
+        if (prev_reinf_timer > 0 &&
+                cs->reinforcement_timer == COLO_REINFORCE_FIRED)
+            wave_reinforced[w_now]++;
+        prev_wave = w_now;
+        prev_reinf_timer = cs->reinforcement_timer;
+
         if (cs->tick_scratch.player_attacked) {
             int slot = cs->player_attack_npc_idx;
             uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
@@ -1371,6 +1401,34 @@ static void run_metrics(
                     wpn_npc[w][t]++;
                     wpn_total[w]++;
                     total_attacks++;
+                    if (cs->player.used_special_this_tick) wpn_spec[w]++;
+                    if (cs->reinforcement_timer == COLO_REINFORCE_FIRED)
+                        wave_attacks_post_reinforce[w_now]++;
+
+                    int am = col_attacked_with_argmax_set(cs);
+                    if (am >= 0) {
+                        argmax_evals++;
+                        argmax_set_attacks += (uint64_t)am;
+                    }
+                    const ColoNPC* npc = &cs->npcs[slot];
+                    if (col_npc_is_live_target(npc) &&
+                            !col_type_is_hazard_entity(npc->type)) {
+                        const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] =
+                            col_get_best_gear_table(cs);
+                        float best_dpt = 0.0f;
+                        for (int st = 0; st < COLO_NUM_WEAPON_SETS; st++)
+                            if (best[st][t].dpt > best_dpt)
+                                best_dpt = best[st][t].dpt;
+                        float cur_dpt = col_expected_dpt_for_equipment_vs_npc(
+                            cs, cs->player.equipped, npc, 1);
+                        if (best_dpt > 0.0f) {
+                            double eff = (double)(cur_dpt / best_dpt);
+                            wpn_eff_sum[w] += eff;
+                            wpn_eff_n[w]++;
+                            npc_eff_sum[t] += eff;
+                            npc_eff_n[t]++;
+                        }
+                    }
                 }
             }
         }
@@ -1381,6 +1439,8 @@ static void run_metrics(
                 (EncounterContext*)env->encounter_context,
                 policy_seed + (uint32_t)episodes);
             visual_policy_reset_recurrent(&policy);
+            wave_seen = 0;
+            prev_reinf_timer = 0;
         }
     }
 
@@ -1388,14 +1448,37 @@ static void run_metrics(
     printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s\n",
         num_episodes, total_ticks, (unsigned long long)total_attacks,
         policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample");
-    printf("weapon,total_attacks,per_episode,pct\n");
+    printf("# argmax-style attacks: %llu/%llu (%.1f%%)\n",
+        (unsigned long long)argmax_set_attacks,
+        (unsigned long long)argmax_evals,
+        argmax_evals ? 100.0 * (double)argmax_set_attacks / (double)argmax_evals : 0.0);
+    printf("weapon,total_attacks,per_episode,pct,spec_pct,mean_dpt_eff\n");
     for (int w = 0; w < 256; w++) {
         if (wpn_total[w] == 0) continue;
         const Item* it = get_item((uint8_t)w);
         const char* wn = (it && it->name[0]) ? it->name : "unknown";
-        printf("%s,%llu,%.1f,%.1f%%\n", wn, (unsigned long long)wpn_total[w],
+        printf("%s,%llu,%.1f,%.1f%%,%.1f%%,%.2f\n", wn,
+            (unsigned long long)wpn_total[w],
             (double)wpn_total[w] / (double)num_episodes,
-            total_attacks ? 100.0 * (double)wpn_total[w] / (double)total_attacks : 0.0);
+            total_attacks ? 100.0 * (double)wpn_total[w] / (double)total_attacks : 0.0,
+            100.0 * (double)wpn_spec[w] / (double)wpn_total[w],
+            wpn_eff_n[w] ? wpn_eff_sum[w] / (double)wpn_eff_n[w] : 0.0);
+    }
+    printf("\nnpc,attacks,mean_dpt_eff\n");
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+        if (npc_eff_n[t] == 0) continue;
+        printf("%s,%llu,%.2f\n", npc_names[t],
+            (unsigned long long)npc_eff_n[t],
+            npc_eff_sum[t] / (double)npc_eff_n[t]);
+    }
+    printf("\nwave,visits,mean_ticks,reinforced_pct,attacks_post_reinforce\n");
+    for (int wv = 0; wv < 12; wv++) {
+        if (wave_visits[wv] == 0) continue;
+        printf("%d,%llu,%.0f,%.0f%%,%llu\n", wv + 1,
+            (unsigned long long)wave_visits[wv],
+            (double)wave_ticks[wv] / (double)wave_visits[wv],
+            100.0 * (double)wave_reinforced[wv] / (double)wave_visits[wv],
+            (unsigned long long)wave_attacks_post_reinforce[wv]);
     }
     printf("\nweapon\\npc");
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) printf(",%s", npc_names[t]);
