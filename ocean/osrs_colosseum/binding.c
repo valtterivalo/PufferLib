@@ -225,6 +225,7 @@ void c_step(Env* env) {
             env->log.colo_death_dmg_prayed += clog->death_dmg_prayed;
             env->log.colo_death_dmg_self += clog->death_dmg_self;
             env->log.colo_death_heal_remaining += clog->death_heal_remaining;
+            env->log.colo_farm_damage += clog->farm_damage;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -412,6 +413,7 @@ void my_init(Env* env, Dict* kwargs) {
         "forecast_horizon",
         "forecast_run_tile_mode",
         "mask_inventory_heads",
+        "farm_safe_damage_cap",
         "action_debug_log",
         "prayer_oracle_mode",
         "bis_gear_oracle_mode",
@@ -622,4 +624,5 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "death_dmg_prayed", log->colo_death_dmg_prayed);
     dict_set(out, "death_dmg_self", log->colo_death_dmg_self);
     dict_set(out, "death_heal_remaining", log->colo_death_heal_remaining);
+    dict_set(out, "farm_damage", log->colo_farm_damage);
 }
