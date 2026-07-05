@@ -36,6 +36,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "mask_inventory_heads") == 0)
         ctx->config.mask_inventory_heads =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "farm_safe_damage_cap") == 0)
+        ctx->config.farm_safe_damage_cap =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "action_debug_log") == 0)
         ctx->config.action_debug_log =
             encounter_require_binary_config("colosseum", key, value);
@@ -1092,7 +1095,7 @@ static void col_step_human_commands_ctx(
        per-step mirror of the damage-received-scale knob). Grows sizeof(ColosseumState)
        so the whole-struct snapshot needs the bump; the ColConfig anneal knobs live
        in ColosseumContext and are NOT snapshotted. */
-#define COLO_SNAPSHOT_VERSION 17u
+#define COLO_SNAPSHOT_VERSION 18u
 
 typedef struct {
     uint32_t magic;

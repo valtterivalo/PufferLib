@@ -95,6 +95,8 @@ static void col_apply_echo_boots_recoil(
     if (fresh > 0.0f) {
         npc->min_hp_seen = npc->hp;
         s->tick_scratch.fresh_damage_dealt += fresh;
+        if (npc->spawned_as_reinforcement)
+            s->tick_scratch.fresh_damage_reinforcement += fresh;
         s->current_wave_fresh_damage += fresh;  /* echo recoil never hits Sol (excluded above) */
     }
     if (npc->hp <= 0) {
@@ -136,6 +138,8 @@ static void col_resolve_player_projectiles_on_npcs_ctx(
                 if (fresh > 0.0f) {
                     npc->min_hp_seen = npc->hp;
                     s->tick_scratch.fresh_damage_dealt += fresh;
+                    if (npc->spawned_as_reinforcement)
+                        s->tick_scratch.fresh_damage_reinforcement += fresh;
                     if (npc->type == COLO_SOL_HEREDIT)
                         s->tick_scratch.fresh_damage_boss += fresh;
                     else

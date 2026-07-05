@@ -31,6 +31,10 @@
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
 #define COLO_START_READY_TICKS 6
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
+/** waves 1-4 (internal 0-3) are the only waves where clearing inside the
+    reinforcement timer is realistically achievable (wave 3 the hardest);
+    the farm-safe damage cap applies only inside this window. */
+#define COLO_FARM_CAP_WAVES 4
 #define COLO_NUM_ACTION_HEADS 20  /* PRIMARY, PRAYER, NUM_GEAR_SLOTS equip, EAT, DRINK, SPEC, MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL */
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC).
@@ -1180,6 +1184,9 @@ typedef struct {
 
     int death_ticks;       /* death-animation linger, >0 = dying */
     int aggro_target;      /* -1 = player, >= 0 = NPC index */
+    int spawned_as_reinforcement; /* overrun-spawned: farm-safe damage cap
+                                     routes this NPC's fresh damage to the
+                                     unrewarded channel on waves 1-4 */
 
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;
@@ -1725,6 +1732,11 @@ typedef struct {
     float stall_penalty_coeff;          /* per live-combat tick: subtract this so a fast
                                            wave clear strictly dominates stalling to farm
                                            reinforcement damage reward (default 0, sweepable). */
+    int farm_safe_damage_cap;           /* 1 = reinforcement fresh damage pays NO damage
+                                           reward on waves 1-4 (the skippable window; from
+                                           wave 5 reinforcements are unavoidable and stay
+                                           full-value). Kills the stall-to-farm incentive
+                                           without any time pressure (default 0). */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;
@@ -1866,6 +1878,10 @@ typedef struct {
        diagnostic log totals. */
     float fresh_damage_dealt;
     float fresh_damage_boss;
+    /* the slice of fresh_damage_dealt landed on overrun reinforcements; the
+       farm-safe cap subtracts it from the damage reward on waves 1-4 (the
+       only waves where skipping reinforcements is realistically possible). */
+    float fresh_damage_reinforcement;
     /* diagnostic: which prayer-checkable styles landed on the player THIS tick
        (bitmask over ATTACK_STYLE_*) and the off-prayer HP taken this tick. >=2
        distinct styles = a same-tick conflict a single overhead cannot fully
@@ -1939,6 +1955,10 @@ typedef struct {
     float death_dmg_prayed;
     float death_dmg_self;
     float death_heal_remaining;
+    /* fresh damage landed on overrun reinforcements during waves 1-4 (the
+       skippable window): the stall-to-farm exploit's payout, tracked
+       regardless of whether farm_safe_damage_cap withholds its reward. */
+    float farm_damage;
     /* episode totals of unprayable damage per NPC type: splits e.g. javelin
        skyfall+molten (typeless) from its prayer-checkable throws, which stay in
        offpray_damage_by_type. */

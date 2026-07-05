@@ -202,26 +202,27 @@ static const GoldenConfig CONFIGS[] = {
 
 /* 2026-06-30: re-seeded after the DPT-obs deletion (the B0 ablation showed the best-gear
    DPT obs score-neutral, gear is not the wall). The per-NPC best-DPT + argmax-style floats
-   (6/NPC) and the per-inventory-cell target-DPT float (1/cell) were removed:
-   COLO_FEATURES_PER_NPC 43 -> 37, inventory cell 29 -> 28, COLO_NUM_OBS 2565 -> 2393. The obs
-   vector narrows for every config (the action stream + sim are unchanged), so all 12 digests
-   move together. Sim outcomes are byte-identical: the deletion only removed obs writes + the
-   obs-time oracle build (a pure cache, no sim side-effects) + dead config flags, proven by
-   test_colosseum_modifiers.c 10275/10275 (sim-mechanics asserts) and probe_colo_best_gear_dpt.c
-   33/33. Verified deterministic (two --print runs identical). */
+   Re-seeded 2026-07-05 for the weapon-choice obs tail (B0 reversal): +58 floats appended
+   (28 per-cell target DPT + 28 per-cell spec bit + 2 wielded), COLO_NUM_OBS 2393 -> 2451.
+   The obs vector widens for every config (the action stream + sim are unchanged), so all
+   12 digests move together. Sim outcomes are byte-identical: the addition only writes new
+   obs floats from the memoized best-gear oracle (a pure cache, no sim side-effects); the
+   farm_safe_damage_cap knob added in the same commit defaults 0 so golden rewards are
+   untouched. Proven by test_colosseum_modifiers.c 10293/10293 (sim-mechanics asserts).
+   Verified deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xb78b468e1f81cafeULL,
-    0x59aa90a2066f88bbULL,
-    0x93a0b5b2f23eada4ULL,
-    0xe05ce883e19745e6ULL,
-    0xbdbd04a4f927fe5dULL,
-    0xa9bb3a85ee24763dULL,
-    0x9e22d009ff6721feULL,
-    0x3ad36c2b71a608b4ULL,
-    0x204e6ff8fefad0adULL,
-    0xfe86bf416a4458feULL,
-    0x918fc978c6b725fcULL,
-    0x52403bdc79cd2672ULL,
+    0x44291ea93da86ed1ULL,
+    0xee046313c0784ff7ULL,
+    0xdaf5ab0f8a39e052ULL,
+    0x4c4072d681e74093ULL,
+    0x6e5cb9bee0e3aa2bULL,
+    0x1da5cf1b5231d624ULL,
+    0xade84cc101a3c46dULL,
+    0xf3c14c1faa607acaULL,
+    0xa819a592afc6d363ULL,
+    0xf1d540f41037b7dcULL,
+    0x1035ab1b722f3d6dULL,
+    0xbc7e10a70e4c7e66ULL,
 };
 
 int main(int argc, char** argv) {

@@ -412,7 +412,8 @@ static void col_spawn_reinforcements(ColosseumState* s) {
         for (int try_x = base_x; try_x + size - 1 <= COLO_GATE_MAX_X; try_x++) {
             if (col_spawn_footprint_free(s, try_x, y, size)) { x = try_x; break; }
         }
-        col_spawn_npc_at(s, type, x, y);
+        int slot = col_spawn_npc_at(s, type, x, y);
+        s->npcs[slot].spawned_as_reinforcement = 1;
         base_x = x + size;
     }
 

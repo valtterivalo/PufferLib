@@ -35,9 +35,13 @@
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
 #define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator.
-                                          The best-gear DPT obs (3 best-per-style DPT + 3 argmax-style
-                                          one-hot per NPC, + 1 per inventory cell) was removed: the B0
-                                          ablation showed it score-neutral, gear is not the wall. */
+                                          The per-NPC best-gear DPT obs (3 best-per-style DPT +
+                                          3 argmax-style one-hot) stay removed since B0; the
+                                          target-conditioned weapon signal returned 2026-07-05 as
+                                          the tail-appended COLO_WEAPON_CHOICE block (the B0
+                                          "score-neutral" verdict was measured on the pre-movement-fix
+                                          env, and the raw cell stats actively misrank scythe vs
+                                          tentacle against 3x3s). */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 888 */
 /** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated from the
     oracle's empirical max best-gear DPT across every (profile, weapon, real NPC type)
@@ -71,12 +75,30 @@
     dc_window_norm, dc_cd_norm. The +15% spec from a Death-Charge proc surfaces
     downstream via the existing spec_energy obs. */
 #define COLO_THRALL_DC_OBS_SIZE   6
+/** Weapon-choice obs (B0 reversal, 2026-07-05 audit): B0 deleted every
+    target-conditioned weapon-quality obs and the surviving per-cell raw stats
+    actively misrank scythe vs tentacle against 3x3s (the splat edge is
+    invisible) and carry no spec identity. Tail-appended so the entity
+    encoder's NPC/inventory pool offsets stay fixed.
+    - per inventory cell: the cell weapon's expected DPT vs the CURRENT target
+      (its style's best setup with this weapon swapped in), clamp01(/NORM);
+      0 for non-weapons, empty cells, or no live target.
+    - per inventory cell: 1 if the item has a special attack (the signal that
+      claws are FOR the spec, not for basic attacks).
+    - wielded pair: clamp01(current equipment DPT vs target / NORM) and the
+      ratio vs the best achievable setup (the "is my weapon right" signal). */
+#define COLO_CELL_WEAPON_DPT_OBS_SIZE OSRS_INVENTORY_SIZE
+#define COLO_CELL_SPEC_OBS_SIZE       OSRS_INVENTORY_SIZE
+#define COLO_WIELDED_DPT_OBS_SIZE     2
+#define COLO_WEAPON_CHOICE_OBS_SIZE (COLO_CELL_WEAPON_DPT_OBS_SIZE + \
+    COLO_CELL_SPEC_OBS_SIZE + COLO_WIELDED_DPT_OBS_SIZE)
 
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
-    COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE)
+    COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
+    COLO_WEAPON_CHOICE_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -95,6 +117,8 @@
     (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
+#define COLO_OBS_AFTER_WEAPON_CHOICE \
+    (COLO_OBS_AFTER_THRALL_DC + COLO_WEAPON_CHOICE_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -1771,6 +1795,70 @@ static float col_inventory_cell_target_dpt_obs_value(
 /** Is the equipped weapon set's STYLE the best-achievable style vs this NPC? Uses the
     whole-setup best-gear table: 1 if the set's style is the argmax over the 3 styles,
     0 if a different style achieves higher best-gear DPT, -1 if no live target. */
+static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
+    int item_style = get_item_attack_style(item);
+    if (item_style == 2) return COLO_GEAR_RANGED;
+    if (item_style == 3) return COLO_GEAR_MAGIC;
+    return COLO_GEAR_MELEE;
+}
+
+/**
+ * Weapon-choice obs tail: per-cell target DPT, per-cell spec bit, wielded
+ * DPT + wielded-vs-best ratio. All target-conditioned floats are 0 without a
+ * live non-hazard target.
+ */
+static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) {
+    int i = *io;
+    const ColoNPC* npc = NULL;
+    int target = col_player_target_slot(s);
+    if (target >= 0 && target < COLO_MAX_NPCS) {
+        const ColoNPC* cand = &s->npcs[target];
+        if (col_npc_is_live_target(cand) && !col_type_is_hazard_entity(cand->type))
+            npc = cand;
+    }
+    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = NULL;
+    float best_dpt = 0.0f;
+    if (npc) {
+        best = col_get_best_gear_table(s);
+        for (int st = 0; st < COLO_NUM_WEAPON_SETS; st++)
+            if (best[st][npc->type].dpt > best_dpt)
+                best_dpt = best[st][npc->type].dpt;
+    }
+
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        float v = 0.0f;
+        uint8_t item = s->inventory_cells[c].item_idx;
+        if (npc && item != ITEM_NONE &&
+                osrs_item_gear_slot(item) == GEAR_SLOT_WEAPON) {
+            ColoWeaponSet set = col_weapon_set_for_item(item);
+            const ColoBestGear* bs = &best[set][npc->type];
+            if (bs->dpt >= 0.0f) {
+                uint8_t setup[NUM_GEAR_SLOTS];
+                memcpy(setup, bs->setup, NUM_GEAR_SLOTS);
+                setup[GEAR_SLOT_WEAPON] = item;
+                if (item_is_two_handed(item))
+                    setup[GEAR_SLOT_SHIELD] = ITEM_NONE;
+                float dpt = col_expected_dpt_for_equipment_vs_npc(
+                    s, setup, npc, 1);
+                v = col_clamp01(dpt / COLO_EXPECTED_DPT_NORM);
+            }
+        }
+        obs[i++] = v;
+    }
+
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        uint8_t item = s->inventory_cells[c].item_idx;
+        obs[i++] = (item != ITEM_NONE && osrs_spec_cost(item) > 0) ? 1.0f : 0.0f;
+    }
+
+    float cur = npc
+        ? col_expected_dpt_for_equipment_vs_npc(s, s->player.equipped, npc, 1)
+        : 0.0f;
+    obs[i++] = col_clamp01(cur / COLO_EXPECTED_DPT_NORM);
+    obs[i++] = (npc && best_dpt > 0.0f) ? col_clamp01(cur / best_dpt) : 0.0f;
+    *io = i;
+}
+
 static int col_weapon_set_is_argmax_dpt_for_npc(
     ColosseumState* s,
     int npc_slot,
@@ -2037,6 +2125,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_thrall_dc(s, obs, &i);
     assert(i == COLO_OBS_AFTER_THRALL_DC);
+
+    col_write_weapon_choice_obs(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_WEAPON_CHOICE);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);

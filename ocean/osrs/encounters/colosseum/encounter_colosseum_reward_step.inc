@@ -229,7 +229,13 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
 
     float reward = 0.0f;
-    reward += cfg->damage_reward_coeff * t->fresh_damage_dealt;
+    float rewarded_fresh = t->fresh_damage_dealt;
+    if (s->wave < COLO_FARM_CAP_WAVES) {
+        s->log.farm_damage += t->fresh_damage_reinforcement;
+        if (cfg->farm_safe_damage_cap)
+            rewarded_fresh -= t->fresh_damage_reinforcement;
+    }
+    reward += cfg->damage_reward_coeff * rewarded_fresh;
     reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
     reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
     reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;

@@ -4257,8 +4257,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v17 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 17u);
+    CHECK("snapshot version is v18 for Solarflare shared cadence",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 18u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4939,13 +4939,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2393", COLO_NUM_OBS == 2393);
+    CHECK("obs width is 2451", COLO_NUM_OBS == 2451);
+    CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
+        COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
-    CHECK("snapshot version is v17", COLO_SNAPSHOT_VERSION == 17u);
+    CHECK("snapshot version is v18", COLO_SNAPSHOT_VERSION == 18u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -4964,7 +4966,8 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE +
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
-        COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE;
+        COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
+        COLO_WEAPON_CHOICE_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
 
     /* offensive prayer is style-gated: the matching prayer boosts its style, an
@@ -5592,7 +5595,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v17", snap.version == 17u);
+    CHECK("snapshot frame is v18", snap.version == 18u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -7005,7 +7008,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2393);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2451);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -7186,6 +7189,102 @@ static void test_gear_and_boost_reward_signals(void) {
     CHECK("boost signal is the no-attack sentinel", col_attacked_with_offensive_boost(&s) < 0);
 }
 
+static int colo_test_cell_of_named_item(const ColosseumState* s, const char* name) {
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        uint8_t item = s->inventory_cells[c].item_idx;
+        if (item == ITEM_NONE) continue;
+        const Item* meta = get_item(item);
+        if (meta && strcmp(meta->name, name) == 0) return c;
+    }
+    return -1;
+}
+
+static void test_weapon_choice_obs_rank_and_farm_cap(void) {
+    printf("test_weapon_choice_obs_rank_and_farm_cap\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+
+    static float obs[COLO_NUM_OBS];
+    const int dpt_base = COLO_OBS_AFTER_THRALL_DC;
+    const int spec_base = dpt_base + COLO_CELL_WEAPON_DPT_OBS_SIZE;
+    const int wielded_base = spec_base + COLO_CELL_SPEC_OBS_SIZE;
+
+    int cell_tentacle = colo_test_cell_of_named_item(&s, "Abyssal tentacle");
+    int cell_claws = colo_test_cell_of_named_item(&s, "Dragon claws");
+    int cell_tbow = colo_test_cell_of_named_item(&s, "Twisted bow");
+    CHECK("speedrun kit carries tentacle+claws+tbow in cells",
+        cell_tentacle >= 0 && cell_claws >= 0 && cell_tbow >= 0);
+
+    /* vs a 3x3 manticore the wielded scythe (3 splats) must outrank every
+       melee cell alternative, and claws must rank below tentacle — the exact
+       ordering the pre-reversal obs inverted. */
+    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 10, 10);
+    osrs_interaction_set(&s.interaction, manti);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("3x3: wielded scythe DPT outranks the tentacle cell",
+        obs[wielded_base] > obs[dpt_base + cell_tentacle]);
+    CHECK("3x3: claws cell ranks below tentacle cell",
+        obs[dpt_base + cell_claws] < obs[dpt_base + cell_tentacle]);
+    CHECK("3x3: wielded scythe is ~the best achievable (ratio ~1)",
+        obs[wielded_base + 1] > 0.95f);
+    CHECK("claws cell carries the spec bit", obs[spec_base + cell_claws] == 1.0f);
+    CHECK("tentacle cell carries no spec bit", obs[spec_base + cell_tentacle] == 0.0f);
+
+    /* vs a 1x1 serpent shaman (1 splat) the tbow cell must outrank the wielded
+       scythe and the wielded-vs-best ratio must expose the gap. */
+    int serpent = col_spawn_npc_at(&s, COLO_SERPENT_SHAMAN, 20, 10);
+    osrs_interaction_set(&s.interaction, serpent);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("1x1: tbow cell outranks the wielded scythe",
+        obs[dpt_base + cell_tbow] > obs[wielded_base]);
+    CHECK("1x1: wielded-vs-best ratio exposes the scythe gap",
+        obs[wielded_base + 1] < 0.85f);
+
+    /* no live target -> the whole tail is zeros. */
+    osrs_interaction_clear(&s.interaction);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("no target: cell DPT + wielded floats are zero",
+        obs[dpt_base + cell_tentacle] == 0.0f && obs[wielded_base] == 0.0f &&
+        obs[wielded_base + 1] == 0.0f);
+    CHECK("no target: spec bits stay up (target-independent)",
+        obs[spec_base + cell_claws] == 1.0f);
+
+    /* farm-safe damage cap: reinforcement fresh damage pays no damage reward
+       on waves 1-4 with the knob on, full otherwise. */
+    col_spawn_reinforcements(&s);
+    int jaguar = -1;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s.npcs[i].active && s.npcs[i].spawned_as_reinforcement) { jaguar = i; break; }
+    CHECK("reinforcement spawns are tagged", jaguar >= 0);
+
+    ctx.config.damage_reward_coeff = 1.0f;
+    ctx.config.wave_clear_bonus = 0.0f;
+    ctx.config.farm_safe_damage_cap = 1;
+    s.wave = 0;
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.fresh_damage_dealt = 100.0f;
+    s.tick_scratch.fresh_damage_reinforcement = 30.0f;
+    float r_capped = col_compute_reward_ctx(&s, &ctx);
+    CHECK("cap on, wave 1: reinforcement damage pays nothing",
+        fabsf(r_capped - 70.0f) < 1e-3f);
+    CHECK("farm damage is logged", fabsf(s.log.farm_damage - 30.0f) < 1e-3f);
+
+    ctx.config.farm_safe_damage_cap = 0;
+    s.tick_scratch.fresh_damage_dealt = 100.0f;
+    s.tick_scratch.fresh_damage_reinforcement = 30.0f;
+    float r_uncapped = col_compute_reward_ctx(&s, &ctx);
+    CHECK("cap off: full damage pays", fabsf(r_uncapped - 100.0f) < 1e-3f);
+
+    ctx.config.farm_safe_damage_cap = 1;
+    s.wave = COLO_FARM_CAP_WAVES;
+    s.tick_scratch.fresh_damage_dealt = 100.0f;
+    s.tick_scratch.fresh_damage_reinforcement = 30.0f;
+    float r_late = col_compute_reward_ctx(&s, &ctx);
+    CHECK("cap on, wave 5+: reinforcements stay full-value (unskippable)",
+        fabsf(r_late - 100.0f) < 1e-3f);
+}
+
 int main(void) {
     test_stage3_t1_inventory_ranged_weapon_swap();
     test_stage3_t1_inventory_weapon_slot_last_click_wins();
@@ -7304,6 +7403,7 @@ int main(void) {
     test_move_action_no_corner_cut();
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
+    test_weapon_choice_obs_rank_and_farm_cap();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

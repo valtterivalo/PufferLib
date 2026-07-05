@@ -1036,6 +1036,7 @@ typedef struct {
     float colo_death_dmg_prayed;
     float colo_death_dmg_self;
     float colo_death_heal_remaining;
+    float colo_farm_damage;
     float colo_typeless_damage_by_type[12];
     float colo_outcome_score;
     float colo_min_sol_hp;
