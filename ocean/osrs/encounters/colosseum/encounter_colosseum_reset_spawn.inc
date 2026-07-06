@@ -642,15 +642,21 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave_attack_delay = 0;
     s->log.wave_reached = effective_start;
 
-    /* Wave 1 carries no modifier: the first draft is taken after clearing it,
-       gating entry into wave 2 (col_modifier_open_draft on the wave-clear path).
-       start_wave>1 runs (curriculum/lab) likewise begin modifier-free and meet
-       their first draft after clearing the start wave (auto-rolling prior
-       modifiers would make curriculum difficulty wildly seed-dependent). Entry
-       mirrors the researched pick sequence: 5 empty ticks, spawn resolved at
-       t5 against the live player tile, visible t6, moving t7, attacking t9
-       (col_spawn_wave arms the ready + attack gates). */
-    s->wave_spawn_delay = COLO_WAVE_SPAWN_DELAY_TICKS;
+    /* Wave 1 IS drafted (user correction 2026-07-07): a modifier is picked at
+       challenge start, 12 picks per full run. The start draft uniquely allows
+       free movement — the player roams to choose the wave-1 start tile, then
+       the pick starts the researched sequence (5 empty ticks, spawn resolved
+       at t5 against the live tile, visible t6, moving t7, attacking t9).
+       start_wave>0 runs (curriculum/lab) stay modifier-free and meet their
+       first draft after clearing the start wave (auto-rolling prior modifiers
+       would make curriculum difficulty wildly seed-dependent). */
+    if (effective_start == 0) {
+        col_modifier_open_draft(s, 0);
+        if (s->modifiers.draft_pending) s->modifiers.draft_free_movement = 1;
+        else s->wave_spawn_delay = col_wave_entry_delay_ticks(0);
+    } else {
+        s->wave_spawn_delay = col_wave_entry_delay_ticks(effective_start);
+    }
 }
 
 static void col_reset(EncounterState* state, uint32_t seed) {

@@ -1378,7 +1378,7 @@ static void col_tick_player_ctx(
     /* B6: the player is FROZEN while a draft is open — movement, targeting,
        and attacks are ignored until the pick (which closes draft_pending the
        same tick, so post-pick actions take effect from the next tick). */
-    if (s->modifiers.draft_pending) return;
+    if (s->modifiers.draft_pending && !s->modifiers.draft_free_movement) return;
 
     /* grapple parry: during an active Sol grapple, action index k clicks
        grapple slot (k-1) of the 5-slot A12 domain. A correct slot parries;

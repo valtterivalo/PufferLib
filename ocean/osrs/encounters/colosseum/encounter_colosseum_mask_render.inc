@@ -16,7 +16,7 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
 
     /* HEAD_PRIMARY (49): noop always valid, move actions follow old movement
        legality, attack actions require a live targetable obs slot. */
-    int frozen = s->modifiers.draft_pending;
+    int frozen = s->modifiers.draft_pending && !s->modifiers.draft_free_movement;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
         int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];

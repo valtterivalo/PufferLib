@@ -1095,7 +1095,7 @@ static void col_step_human_commands_ctx(
        per-step mirror of the damage-received-scale knob). Grows sizeof(ColosseumState)
        so the whole-struct snapshot needs the bump; the ColConfig anneal knobs live
        in ColosseumContext and are NOT snapshotted. */
-#define COLO_SNAPSHOT_VERSION 19u
+#define COLO_SNAPSHOT_VERSION 20u
 
 typedef struct {
     uint32_t magic;

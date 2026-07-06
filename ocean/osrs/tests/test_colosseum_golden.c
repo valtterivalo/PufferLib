@@ -209,20 +209,22 @@ static const GoldenConfig CONFIGS[] = {
    later with different rosters/positions, so all 12 digests move. Sim laws
    proven by test_colosseum_modifiers.c 10304/10304 (incl. the new timeline
    regression in test_step_loop_draft). Verified deterministic (two --print
-   runs identical). Snapshot v19. */
+   runs identical). Snapshot v20: round 2 adds the Sol t12/t15 entry, the
+   challenge-start draft (12 picks per run, free movement while it pends), and
+   the +15 spawn-phase/anchor-blocked obs floats (2451 -> 2466). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xc49267523713b32bULL,
-    0x91ac2700e7bfb416ULL,
-    0x0e23d8c30af95139ULL,
-    0x43684cff1ab0bb55ULL,
-    0x6a045d004db8909fULL,
-    0x844ba3e5580ab0ceULL,
-    0x8de8815de148cb47ULL,
-    0x416d530d350da665ULL,
-    0x063e9686fcd1d1a1ULL,
-    0x2155b3118d8efca5ULL,
-    0x2969cdfedb7a64a8ULL,
-    0x895c5beac66c93e5ULL,
+    0xad552994faaf252eULL,
+    0xa17246ec4eb2d72eULL,
+    0x08def8b612036565ULL,
+    0xa2f0834eddac2978ULL,
+    0xc0578a702ad117cfULL,
+    0xf429423135c0927eULL,
+    0x5e0ab48747fa1de7ULL,
+    0x78ab56c045a98814ULL,
+    0x0de5c9aaba35a978ULL,
+    0x99d145ddf52e36edULL,
+    0xc2239f8b8f84ca7dULL,
+    0x7eb49470a01c5046ULL,
 };
 
 int main(int argc, char** argv) {

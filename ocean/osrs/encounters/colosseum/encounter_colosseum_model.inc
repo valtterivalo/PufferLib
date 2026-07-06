@@ -34,6 +34,14 @@
    PRE-move t5 tile (speedrunners queue a move on t5 -- it lands t6 for free);
    NPCs appear t6; NPCs move from t7; no NPC attacks before t9. */
 #define COLO_WAVE_SPAWN_DELAY_TICKS 5   /* pick -> spawn resolution */
+/* Sol runs the same visible+3 grace on a longer entry: visible t12, first
+   attack t15 (frame-by-frame), so the boss wave resolves at t11. */
+#define COLO_BOSS_SPAWN_DELAY_TICKS 11
+
+static inline int col_wave_entry_delay_ticks(int target_wave) {
+    return target_wave == COLO_WAVE_BOSS
+        ? COLO_BOSS_SPAWN_DELAY_TICKS : COLO_WAVE_SPAWN_DELAY_TICKS;
+}
 #define COLO_WAVE_READY_TICKS 2         /* spawn -> movement opens (t7) */
 #define COLO_WAVE_ATTACK_GATE_TICKS 4   /* spawn -> attacks open (t9) */
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
@@ -794,6 +802,9 @@ typedef struct {
     int draft_options[COLO_MODIFIER_DRAFT_OPTIONS];  /* modifier ids offered, -1 = none */
     int draft_pending;                     /* 1 while a mandatory draft awaits the pick */
     int draft_gates_spawn;                 /* 1 = the pick triggers the queued wave spawn */
+    int draft_free_movement;               /* challenge-start draft only: the player may
+                                              roam to choose the wave-1 start tile; every
+                                              later draft freezes you where you stood */
 } ColoModifierState;
 
 

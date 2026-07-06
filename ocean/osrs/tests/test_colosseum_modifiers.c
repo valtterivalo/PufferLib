@@ -107,7 +107,17 @@ static void step_and_observe(ColosseumState* s, ColosseumContext* ctx, const int
     t5, visible t6). Tests that need the wave on the board step through it. */
 static void advance_to_wave_spawn(ColosseumState* s, ColosseumContext* ctx) {
     int idle[COLO_NUM_ACTION_HEADS] = {0};
-    for (int t = 0; t < COLO_WAVE_SPAWN_DELAY_TICKS; t++)
+    /* fixtures stay modifier-free: dismiss the challenge-start draft instead
+       of picking (a random pick would contaminate modifier-sensitive tests). */
+    if (s->modifiers.draft_pending) {
+        s->modifiers.draft_pending = 0;
+        s->modifiers.draft_gates_spawn = 0;
+        s->modifiers.draft_free_movement = 0;
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+            s->modifiers.draft_options[o] = -1;
+        s->wave_spawn_delay = col_wave_entry_delay_ticks(s->wave_spawn_target);
+    }
+    while (s->wave_spawn_delay > 0)
         step_and_observe(s, ctx, idle);
 }
 
@@ -562,7 +572,7 @@ static void test_zero_actions_hit_timeout(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 12345);
-    CHECK("reset arms wave 1 with no draft", s.modifiers.draft_pending == 0);
+    CHECK("the challenge-start draft is open at reset", s.modifiers.draft_pending == 1);
     advance_to_wave_spawn(&s, &ctx);
 
     int idle[COLO_NUM_ACTION_HEADS] = {0};
@@ -630,20 +640,30 @@ static void test_step_loop_draft(void) {
     int walk_east[COLO_NUM_ACTION_HEADS] = {0};
     walk_east[COLO_HEAD_PRIMARY] = 7;
 
-    /* reset = t0: no draft, no modifier, and NO NPCs yet — the wave resolves
-       at t5, not at reset. */
-    CHECK("no draft is open at reset", !draft_is_open(&s));
-    CHECK("no modifier is active on wave 1", s.modifiers.active_mask == 0);
+    /* the challenge-start draft is open at reset and uniquely allows free
+       movement (the player roams to choose the wave-1 start tile). */
+    CHECK("the challenge-start draft is open at reset", draft_is_open(&s));
+    CHECK("the start draft allows movement", s.modifiers.draft_free_movement == 1);
     int spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
-    CHECK("no NPCs exist at reset (spawn resolves at t5)", !spawned);
-    CHECK("reset armed the 5-tick spawn delay",
+    CHECK("no NPCs exist while the start draft pends", !spawned);
+    int x0 = s.player.x;
+    step_and_observe(&s, &ctx, walk_east);
+    CHECK("the player roams during the start draft", s.player.x == x0 + 1);
+
+    /* the pick is t0: it arms the 5-tick spawn sequence. */
+    int pick0[COLO_NUM_ACTION_HEADS] = {0};
+    pick0[COLO_HEAD_MODIFIER_SELECT] = 1;
+    step_and_observe(&s, &ctx, pick0);
+    CHECK("the start pick activated a modifier", s.modifiers.active_mask != 0);
+    CHECK("the start pick armed the 5-tick spawn delay",
         s.wave_spawn_delay == COLO_WAVE_SPAWN_DELAY_TICKS);
 
     /* t1-t4: the player moves freely, the arena stays empty. */
+    int x1 = s.player.x;
     for (int t = 0; t < 4; t++) step_and_observe(&s, &ctx, walk_east);
     CHECK("player movement is free before the spawn resolves",
-        s.player.x == COLO_PLAYER_START_X + 4);
+        s.player.x == x1 + 4);
     spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
     CHECK("arena still empty through t4", !spawned);
@@ -768,8 +788,9 @@ static void test_eleven_drafts_per_run(void) {
     int draft_waves_ok = 1;
     for (long t = 0; t < 4000 && !s.episode_over; t++) {
         if (draft_is_open(&s)) {
-            /* the k-th draft (k=0..10) gates wave index k+1 (display wave k+2). */
-            if (s.wave_spawn_target != picks + 1) draft_waves_ok = 0;
+            /* the k-th draft (k=0..11) gates wave index k: the challenge-start
+               draft gates wave 1 (index 0), then one per wave through 12. */
+            if (s.wave_spawn_target != picks) draft_waves_ok = 0;
             complete_open_draft(&s, &ctx, 0);
             picks++;
             continue;
@@ -781,9 +802,9 @@ static void test_eleven_drafts_per_run(void) {
         step_and_observe(&s, &ctx, idle);
     }
     CHECK("the run ended in victory", s.episode_over && s.winner == COLO_OUTCOME_PLAYER_WON);
-    CHECK("exactly 11 drafts were offered and picked", picks == 11);
-    CHECK("the log counted all 11 mandatory picks", s.log.modifiers_picked == 11);
-    CHECK("draft k gated wave index k+1 for every k", draft_waves_ok);
+    CHECK("exactly 12 drafts were offered and picked", picks == 12);
+    CHECK("the log counted all 12 mandatory picks", s.log.modifiers_picked == 12);
+    CHECK("draft k gated wave index k for every k", draft_waves_ok);
 }
 
 /* ---- 2a. draft offer, selection, persistence + the A16/D31 pool windows. */
@@ -1101,6 +1122,9 @@ static void test_bees_hazard(void) {
     memset(&sc, 0, sizeof(sc));
     ctx.config.start_wave = 0;
     col_reset_ctx((EncounterState*)&sc, (EncounterContext*)&ctx, 13);
+    sc.modifiers.draft_pending = 0;   /* dismiss the challenge-start draft */
+    sc.modifiers.draft_gates_spawn = 0;
+    sc.modifiers.draft_free_movement = 0;
     sc.modifiers.active_mask |= (1u << COLO_MOD_BEES);
     sc.modifiers.tier[COLO_MOD_BEES] = 1;
     sc.wave = 0;
@@ -4030,6 +4054,12 @@ static void loadout_reset(ColosseumState* s, ColosseumContext* ctx, int mode,
     ctx->config.beginner_loadout_fraction = frac;
     memset(s, 0, sizeof(*s));
     col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    /* modifier-free fixture: dismiss the challenge-start draft and arm the
+       normal entry delay in its place. */
+    s->modifiers.draft_pending = 0;
+    s->modifiers.draft_gates_spawn = 0;
+    s->modifiers.draft_free_movement = 0;
+    s->wave_spawn_delay = col_wave_entry_delay_ticks(s->wave_spawn_target);
 }
 
 static int col_loadout_stats_equal(
@@ -4360,7 +4390,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
     CHECK("snapshot version is v18 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 19u);
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 20u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -5043,7 +5073,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2451", COLO_NUM_OBS == 2451);
+    CHECK("obs width is 2466", COLO_NUM_OBS == 2466);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -5051,7 +5081,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
-    CHECK("snapshot version is v19", COLO_SNAPSHOT_VERSION == 19u);
+    CHECK("snapshot version is v20", COLO_SNAPSHOT_VERSION == 20u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5071,7 +5101,7 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
-        COLO_WEAPON_CHOICE_OBS_SIZE;
+        COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
 
     /* offensive prayer is style-gated: the matching prayer boosts its style, an
@@ -5699,7 +5729,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v19", snap.version == 19u);
+    CHECK("snapshot frame is v20", snap.version == 20u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -6461,10 +6491,22 @@ static void test_player_melee_lands_at_delay_zero(void) {
     CHECK("Q6: melee pending hits land at delay 0 (shared OSRS melee delay)",
         all_delay_zero);
 
+    /* the law is delay-0 landing, not any single accuracy roll: every swing's
+       queued hits resolve on the SAME pass, and damage lands within a few
+       swings at fang accuracy vs a jaguar. */
     int hp_before = s.npcs[0].hp;
+    int resolved_same_pass = 1;
+    for (int swing = 0; swing < 32 && s.npcs[0].hp == hp_before; swing++) {
+        col_resolve_player_projectiles_on_npcs(&s);
+        if (s.npcs[0].pending_hits.count != 0) resolved_same_pass = 0;
+        if (s.npcs[0].hp < hp_before) break;
+        s.player.attack_timer = 0;
+        col_player_attack_target(&s, 0);
+    }
     col_resolve_player_projectiles_on_npcs(&s);
     CHECK("a delay-0 melee hit lands on the first resolver pass",
-        s.npcs[0].hp < hp_before && s.npcs[0].pending_hits.count == 0);
+        s.npcs[0].hp < hp_before && resolved_same_pass &&
+        s.npcs[0].pending_hits.count == 0);
 
     /* ranged from the same kit keeps a non-zero flight delay (Q6 is melee-only). */
     ColosseumState r;
@@ -7112,7 +7154,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2451);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2466);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

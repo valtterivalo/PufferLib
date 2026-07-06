@@ -93,12 +93,21 @@
 #define COLO_WEAPON_CHOICE_OBS_SIZE (COLO_CELL_WEAPON_DPT_OBS_SIZE + \
     COLO_CELL_SPEC_OBS_SIZE + COLO_WIELDED_DPT_OBS_SIZE)
 
+/* spawn-phase + spawn-shaping obs (researched wave-start timeline):
+    - ticks-until-spawn /12 and ticks-until-attacks-open /16 (the policy times
+      the t5 reposition and budgets the 3-tick pillar sprint from these)
+    - 13 anchor-blocked bits: would the player's CURRENT tile exclude this
+      primary anchor (zone Chebyshev <= 4) if the spawn resolved now. */
+#define COLO_SPAWN_PHASE_OBS_SIZE 2
+#define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
+#define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
+
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
-    COLO_WEAPON_CHOICE_OBS_SIZE)
+    COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -119,6 +128,8 @@
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_WEAPON_CHOICE \
     (COLO_OBS_AFTER_THRALL_DC + COLO_WEAPON_CHOICE_OBS_SIZE)
+#define COLO_OBS_AFTER_SPAWN \
+    (COLO_OBS_AFTER_WEAPON_CHOICE + COLO_SPAWN_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -1859,6 +1870,22 @@ static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) 
     *io = i;
 }
 
+/** COLO_SPAWN_OBS_SIZE floats: spawn-phase countdowns + anchor-blocked bits. */
+static void col_write_spawn_obs(ColosseumState* s, float* obs, int* io) {
+    int i = *io;
+    float until_spawn = (float)s->wave_spawn_delay;
+    float until_attack = s->wave_spawn_delay > 0
+        ? (float)s->wave_spawn_delay + (float)COLO_WAVE_ATTACK_GATE_TICKS
+        : (float)s->wave_attack_delay;
+    obs[i++] = col_clamp01(until_spawn / 12.0f);
+    obs[i++] = col_clamp01(until_attack / 16.0f);
+    for (int a = 0; a < COLO_NUM_SPAWN_ANCHORS; a++)
+        obs[i++] = col_spawn_excluded_near_player(s,
+            COLO_SPAWN_ANCHORS[a][0], COLO_SPAWN_ANCHORS[a][1],
+            COLO_SPAWN_ZONE_SIZE) ? 1.0f : 0.0f;
+    *io = i;
+}
+
 static int col_weapon_set_is_argmax_dpt_for_npc(
     ColosseumState* s,
     int npc_slot,
@@ -2128,6 +2155,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_weapon_choice_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_WEAPON_CHOICE);
+
+    col_write_spawn_obs(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_SPAWN);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);

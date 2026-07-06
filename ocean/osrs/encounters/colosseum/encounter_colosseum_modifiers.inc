@@ -121,11 +121,12 @@ static void col_modifier_apply_selection(ColosseumState* s, int option) {
     s->log.modifiers_picked++;
 
     s->modifiers.draft_pending = 0;
+    s->modifiers.draft_free_movement = 0;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
     if (s->modifiers.draft_gates_spawn) {
         s->modifiers.draft_gates_spawn = 0;
         /* the pick is t0: spawn resolves on t5 against the pre-move t5 tile. */
-        s->wave_spawn_delay = COLO_WAVE_SPAWN_DELAY_TICKS;
+        s->wave_spawn_delay = col_wave_entry_delay_ticks(s->wave_spawn_target);
     }
 
     if ((ColoModifier)mod == COLO_MOD_FRAILTY) col_mod_apply_frailty_hp(s);

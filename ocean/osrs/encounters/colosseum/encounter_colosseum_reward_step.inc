@@ -496,7 +496,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
             s->wave_spawn_target = s->wave + 1;
             col_modifier_open_draft(s, s->wave + 1);
             if (!s->modifiers.draft_pending)
-                s->wave_spawn_delay = COLO_WAVE_SPAWN_DELAY_TICKS;
+                s->wave_spawn_delay = col_wave_entry_delay_ticks(s->wave_spawn_target);
             s->log.wave_reached = s->wave + 1;
         }
     }
