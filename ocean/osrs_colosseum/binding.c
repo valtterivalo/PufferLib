@@ -116,8 +116,18 @@ static float col_log_dpt_rate(const Log* log, ColoLogDptSlot slot) {
 }
 
 
-void c_reset(Env* env) {
-    ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
+/** Reset-with-state (PUFFER_RESET_WITH_STATE): state == NULL is the normal
+    fresh reset; non-NULL restores the best-trajectory curriculum snapshot
+    (value copy + derived-cache rebuild, same path as the binary snapshot
+    restore). Both paths regenerate obs + mask so the restored env is
+    immediately playable. */
+void c_reset(Env* env, const ColosseumState* state) {
+    if (state == NULL) {
+        ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
+    } else {
+        env->state = *state;
+        col_refresh_after_state_load(&env->state, &env->context);
+    }
     float* obs = (float*)env->observations;
     ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
     ENCOUNTER_COLOSSEUM.write_mask(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs + COLO_NUM_OBS);
@@ -328,9 +338,9 @@ void c_render(Env* env) {
 
 typedef ColosseumState State;
 
-static inline void puffer_state_refresh(Env* env) {
-    col_refresh_after_state_load(&env->state, &env->context);
-}
+/* Opt in to the 2-arg c_reset(Env*, const State*) contract used by the
+   best-trajectory curriculum (vecenv.h's puffer_env_reset shim). */
+#define PUFFER_RESET_WITH_STATE
 
 #define MY_VEC_INIT
 #include "vecenv.h"
