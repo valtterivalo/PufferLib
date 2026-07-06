@@ -54,9 +54,9 @@ static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
-    /* hazard entities never stamped collision; unstamping would erase a real
-       NPC's overlapping footprint. */
-    if (!col_type_is_hazard_entity(npc->type)) {
+    /* hazard entities and warbanders never stamped collision; unstamping would
+       erase a real NPC's overlapping footprint (warbanders overlap freely). */
+    if (!col_type_is_hazard_entity(npc->type) && !col_type_is_warbander(npc->type)) {
         int size = col_npc_effective_size(npc);
         col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
     }
@@ -129,7 +129,10 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->stun_timer = st->stun_on_spawn;
     npc->aggro_target = -1;
     npc->attack_visual_target = -1;
-    if (!col_type_is_hazard_entity(type) && col_npc_effective_size(npc) > 0)
+    /* warbanders are exempt from NPC collision both ways (observed: they spawn
+       on top of primaries and walk through every NPC), so they never stamp. */
+    if (!col_type_is_hazard_entity(type) && !col_type_is_warbander(type) &&
+            col_npc_effective_size(npc) > 0)
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }
 
@@ -180,36 +183,59 @@ static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
     return n;
 }
 
-/** uniform free tile inside the warband centre box (B2(d)): rejection-sample,
-    then fall back to a deterministic scan; asserts the box is not full. */
+/** warbander spawn tile: static-free, in-grid, inside the boss clamp when
+    active, and not the player's tile. NPC OVERLAP IS ALLOWED — warbanders are
+    collision-exempt (observed spawning on top of primaries). */
+static int col_warband_spawn_tile_ok(const ColosseumState* s, int x, int y) {
+    if (col_static_blocked(x, y)) return 0;
+    int gx, gy;
+    if (!col_grid_index(x, y, &gx, &gy)) return 0;
+    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
+    return !(x == s->player.x && y == s->player.y);
+}
+
+/** uniform ok tile inside the warband centre box (B2(d), the ranger's yellow
+    box): rejection-sample, then fall back to a deterministic scan; asserts the
+    box is not full. */
 static void col_draw_warband_box_tile(ColosseumState* s, int* ox, int* oy) {
     int span_x = COLO_WARBAND_BOX_MAX_X - COLO_WARBAND_BOX_MIN_X + 1;
     int span_y = COLO_WARBAND_BOX_MAX_Y - COLO_WARBAND_BOX_MIN_Y + 1;
     for (int t = 0; t < 32; t++) {
         int x = COLO_WARBAND_BOX_MIN_X + encounter_rand_int(&s->rng_state, span_x);
         int y = COLO_WARBAND_BOX_MIN_Y + encounter_rand_int(&s->rng_state, span_y);
-        if (col_spawn_footprint_free(s, x, y, 1)) { *ox = x; *oy = y; return; }
+        if (col_warband_spawn_tile_ok(s, x, y)) { *ox = x; *oy = y; return; }
     }
     for (int y = COLO_WARBAND_BOX_MIN_Y; y <= COLO_WARBAND_BOX_MAX_Y; y++)
         for (int x = COLO_WARBAND_BOX_MIN_X; x <= COLO_WARBAND_BOX_MAX_X; x++)
-            if (col_spawn_footprint_free(s, x, y, 1)) { *ox = x; *oy = y; return; }
+            if (col_warband_spawn_tile_ok(s, x, y)) { *ox = x; *oy = y; return; }
     assert(0 && "warband centre box full");
 }
 
-/** place a 1x1 warbander on the first free tile adjacent to (ax, ay)
-    (deterministic offsets per the B2(d) note); falls back to a box tile. */
-static void col_spawn_warbander_adjacent(ColosseumState* s, ColoNpcType type, int ax, int ay) {
-    static const int OFF[8][2] = {
-        {-1, 0}, {1, 0}, {0, 1}, {0, -1}, {-1, 1}, {1, 1}, {-1, -1}, {1, -1} };
-    for (int o = 0; o < 8; o++) {
-        int x = ax + OFF[o][0], y = ay + OFF[o][1];
-        if (!col_spawn_footprint_free(s, x, y, 1)) continue;
-        col_spawn_npc_at(s, type, x, y);
-        return;
+/** B2(d) fixed spawn formation around the archer: seer = archer+2E, berserker
+    = archer+1E+1N, quartet member = archer+1E+1S (diamond, empty middle at
+    archer+1E). If the formation tile is statically blocked, take the nearest
+    ok tile by outward shell scan (box tile as a last resort). Also assigns the
+    member's surround preference (formation_dir). */
+static void col_spawn_warbander_formation(
+    ColosseumState* s, ColoNpcType type, int ax, int ay,
+    int dx, int dy, int dir) {
+    int x = ax + dx, y = ay + dy;
+    if (!col_warband_spawn_tile_ok(s, x, y)) {
+        int found = 0;
+        for (int r = 1; r <= 3 && !found; r++) {
+            for (int oy = -r; oy <= r && !found; oy++) {
+                for (int ox = -r; ox <= r && !found; ox++) {
+                    if (ox > -r && ox < r && oy > -r && oy < r) continue;
+                    if (col_warband_spawn_tile_ok(s, x + ox, y + oy)) {
+                        x += ox; y += oy; found = 1;
+                    }
+                }
+            }
+        }
+        if (!found) col_draw_warband_box_tile(s, &x, &y);
     }
-    int x, y;
-    col_draw_warband_box_tile(s, &x, &y);
-    col_spawn_npc_at(s, type, x, y);
+    int slot = col_spawn_npc_at(s, type, x, y);
+    colo_npc_warband(&s->npcs[slot])->formation_dir = dir;
 }
 
 /** A26: the Dynamic Duo pair spawns NEAR its primary, off-anchor allowed ("The
@@ -333,13 +359,19 @@ static void col_spawn_wave(ColosseumState* s) {
         for (int i = 0; i < def->count; i++) {
             if ((ColoNpcType)def->types[i] != COLO_FREMENNIK_ARCHER) continue;
             col_draw_warband_box_tile(s, &archer_x, &archer_y);
-            col_spawn_npc_at(s, COLO_FREMENNIK_ARCHER, archer_x, archer_y);
+            int slot = col_spawn_npc_at(s, COLO_FREMENNIK_ARCHER, archer_x, archer_y);
+            colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_WEST;
         }
         for (int i = 0; i < def->count; i++) {
             ColoNpcType type = (ColoNpcType)def->types[i];
             if (!col_type_is_warbander(type) || type == COLO_FREMENNIK_ARCHER) continue;
             assert(archer_x >= 0 && "warband def lists berserker/seer without an archer");
-            col_spawn_warbander_adjacent(s, type, archer_x, archer_y);
+            if (type == COLO_FREMENNIK_SEER)
+                col_spawn_warbander_formation(s, type, archer_x, archer_y,
+                    2, 0, COLO_WARBAND_FORM_EAST);
+            else
+                col_spawn_warbander_formation(s, type, archer_x, archer_y,
+                    1, 1, COLO_WARBAND_FORM_NORTH);
         }
 
         int candidates[COLO_NUM_SPAWN_ANCHORS];
@@ -365,18 +397,29 @@ static void col_spawn_wave(ColosseumState* s) {
                 col_spawn_pair_adjacent(s, type, ax, ay);
         }
 
-        /* Quartet: one extra random warbander every wave, also centre-box; it
-           holds the SOUTH diamond slot (B2(c)). */
+        /* Quartet: one extra random warbander every wave at archer+1E+1S,
+           completing the diamond; it holds the SOUTH slot (B2(c)). */
         if (col_mod_active(s, COLO_MOD_QUARTET)) {
             ColoNpcType extra = COLO_WARBAND_TYPES[encounter_rand_int(&s->rng_state, 3)];
-            int qx, qy;
-            col_draw_warband_box_tile(s, &qx, &qy);
-            int slot = col_spawn_npc_at(s, extra, qx, qy);
-            colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_SOUTH;
+            assert(archer_x >= 0 && "quartet without an archer spawn");
+            col_spawn_warbander_formation(s, extra, archer_x, archer_y,
+                1, -1, COLO_WARBAND_FORM_SOUTH);
         }
     }
 
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
+    /* researched wave-start gates: NPCs appear this tick (obs t6), move from
+       t7, and no NPC attacks before t9; wave NPCs open with ready attack
+       timers so the first attack can land exactly when the gate lifts. Sol
+       keeps his own opening cadence; bees are hazard DoT and keep theirs. */
+    s->wave_ready_delay = COLO_WAVE_READY_TICKS;
+    s->wave_attack_delay = COLO_WAVE_ATTACK_GATE_TICKS;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        if (npc->type == COLO_BEE_SWARM || npc->type == COLO_SOL_HEREDIT) continue;
+        npc->attack_timer = 0;
+    }
     col_modifiers_on_wave_spawn(s);
 }
 
@@ -595,16 +638,19 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave = effective_start;
     s->wave_spawn_target = effective_start;
     s->wave_spawn_delay = 0;
+    s->wave_ready_delay = 0;
+    s->wave_attack_delay = 0;
     s->log.wave_reached = effective_start;
 
     /* Wave 1 carries no modifier: the first draft is taken after clearing it,
        gating entry into wave 2 (col_modifier_open_draft on the wave-clear path).
        start_wave>1 runs (curriculum/lab) likewise begin modifier-free and meet
        their first draft after clearing the start wave (auto-rolling prior
-       modifiers would make curriculum difficulty wildly seed-dependent). The
-       start wave spawns immediately, then runs the 6-tick ready delay. */
-    s->wave_ready_delay = COLO_START_READY_TICKS;
-    col_spawn_wave(s);
+       modifiers would make curriculum difficulty wildly seed-dependent). Entry
+       mirrors the researched pick sequence: 5 empty ticks, spawn resolved at
+       t5 against the live player tile, visible t6, moving t7, attacking t9
+       (col_spawn_wave arms the ready + attack gates). */
+    s->wave_spawn_delay = COLO_WAVE_SPAWN_DELAY_TICKS;
 }
 
 static void col_reset(EncounterState* state, uint32_t seed) {

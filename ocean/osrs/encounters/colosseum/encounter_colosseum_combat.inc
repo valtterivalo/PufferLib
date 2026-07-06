@@ -660,6 +660,10 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     /* B2(a): warbanders attack on the shared wave-anchored cycle, resolved in
        col_warband_attack_phase after the player's move phase — never here. */
     if (col_type_is_warbander(npc->type)) return;
+    /* researched wave-start gate: NPCs move from t7 but no NPC attacks (or
+       charges/telegraphs) before t9; timers hold so the first attack can land
+       the moment the gate lifts. */
+    if (s->wave_attack_delay > 0) return;
 
     /* an in-flight manticore barrage fires its remaining orbs 1 tick apart,
        independent of the main attack cadence. */

@@ -360,16 +360,29 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     col_player_pretick(s, ctx, actions);
     if (ctx && ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
 
+    /* gate decrements run BEFORE any spawn this tick, so gates armed by a
+       fresh spawn survive the spawn tick intact (movement opens spawn+2 = t7,
+       attacks spawn+4 = t9). */
+    if (s->wave_ready_delay > 0) s->wave_ready_delay--;
+    if (s->wave_attack_delay > 0) s->wave_attack_delay--;
+
     int spawn_wave_now = 0;
     if (s->wave_spawn_delay > 0) {
         s->wave_spawn_delay--;
         if (s->wave_spawn_delay == 0) spawn_wave_now = 1;
     }
+    /* Researched t5 spawn resolution: the wave spawns BEFORE this tick's player
+       move phase, so anchor exclusion reads the player's PRE-move t5 tile (the
+       speedrunner trick: a move queued on t5 lands t6 and costs nothing). NPCs
+       created here first appear in the obs written at this tick's end = t6. */
+    if (spawn_wave_now) {
+        s->wave = s->wave_spawn_target;
+        col_spawn_wave(s);
+    }
     /* B6+D26: an open draft IS the inter-wave gap — the world pauses and the
        player is frozen until the mandatory pick arms the next spawn. */
     int in_wave_gap = (s->wave_spawn_delay > 0 || spawn_wave_now ||
                        s->modifiers.draft_pending);
-    if (s->wave_ready_delay > 0) s->wave_ready_delay--;
     int in_ready_gap = s->wave_ready_delay > 0;
 
     /* resolve in-flight projectiles (always, even during gaps) */
@@ -378,9 +391,11 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     col_tick_npc_death_lingers(s);
 
     if (!in_wave_gap && !in_ready_gap) {
-        /* B2(a): anchor the shared warband cycle to the wave's first actionable
-           tick N (the ready delay models the researched click+6). */
-        if (s->warband_cycle_anchor < 0) s->warband_cycle_anchor = s->tick;
+        /* B2(a): anchor the shared warband cycle so the berserker window lands
+           on the first attack-legal tick (t9): anchor N = t8, windows N+1/N+2/
+           N+3 = berserker t9, seer t10, archer t11. */
+        if (s->wave_attack_delay == 0 && s->warband_cycle_anchor < 0)
+            s->warband_cycle_anchor = s->tick - 1;
         col_tick_live_stat_drift_and_divines(s);
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
@@ -410,15 +425,18 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         return;
     }
 
-    /* player actions (gated out during wave/ready gaps) */
-    int can_player_attack = !in_wave_gap && !in_ready_gap;
+    /* player actions: attacks open the tick NPCs appear (t6); NPCs can neither
+       move (until t7) nor hit back (until t9) yet. */
+    int can_player_attack = !in_wave_gap;
     int px = s->player.x, py = s->player.y;
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
 
     /* B2: warband windows resolve after the player's move phase, so a member's
-       two-tick stationary state already reflects a player who fled this tick. */
-    if (!in_wave_gap && !in_ready_gap) col_warband_attack_phase(s, ctx);
+       two-tick stationary state already reflects a player who fled this tick;
+       the wave-start attack gate (no NPC attacks before t9) holds them shut. */
+    if (!in_wave_gap && !in_ready_gap && s->wave_attack_delay == 0)
+        col_warband_attack_phase(s, ctx);
 
     s->reward = col_compute_reward_ctx(s, ctx);
     /* anti-stall: a per-live-combat-tick cost so a fast wave clear strictly dominates
@@ -439,15 +457,9 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         goto finish_step;
     }
 
-    if (spawn_wave_now) {
-        s->wave = s->wave_spawn_target;
-        col_spawn_wave(s);
-        /* D26: every draft-gated wave start runs the 6-tick ready delay (the
-           researched click+6; the pick is the click). */
-        s->wave_ready_delay = COLO_START_READY_TICKS;
+    /* a tick that spawned or still awaits a wave never re-evaluates wave-clear */
+    if (spawn_wave_now || s->wave_spawn_delay > 0 || s->modifiers.draft_pending)
         goto finish_step;
-    }
-    if (s->wave_spawn_delay > 0 || s->modifiers.draft_pending) goto finish_step;
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (col_npc_is_live_enemy(&s->npcs[i])) {
@@ -483,7 +495,8 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
                pool fallback spawns ungated (unreachable in real runs). */
             s->wave_spawn_target = s->wave + 1;
             col_modifier_open_draft(s, s->wave + 1);
-            if (!s->modifiers.draft_pending) s->wave_spawn_delay = 1;
+            if (!s->modifiers.draft_pending)
+                s->wave_spawn_delay = COLO_WAVE_SPAWN_DELAY_TICKS;
             s->log.wave_reached = s->wave + 1;
         }
     }

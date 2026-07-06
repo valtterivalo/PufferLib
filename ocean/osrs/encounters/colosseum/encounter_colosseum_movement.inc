@@ -105,6 +105,9 @@ typedef struct {
     ColosseumState* s;
     int size;
     uint16_t gen;
+    /* warbanders ignore NPC bodies entirely (walk through, stand on top);
+       static mask, boss clamp and the player's tile still block. */
+    int ignore_npcs;
 } ColoNpcPathCtx;
 
 /** Thread-local routefinding collision cache. A cell is "seen" this query group
@@ -139,6 +142,18 @@ static int col_npc_path_blocked_uncached(ColoNpcPathCtx* pc, int x, int y) {
     ColosseumState* s = pc->s;
     if (s->player.x >= x && s->player.x < x + pc->size &&
         s->player.y >= y && s->player.y < y + pc->size) return 1;
+    if (pc->ignore_npcs) {
+        for (int dx = 0; dx < pc->size; dx++) {
+            for (int dy = 0; dy < pc->size; dy++) {
+                int tx = x + dx, ty = y + dy;
+                if (col_static_blocked(tx, ty)) return 1;
+                if (col_sol_clamp_active(s) && !col_in_boss_arena(s, tx, ty)) return 1;
+                int gx, gy;
+                if (!col_grid_index(tx, ty, &gx, &gy)) return 1;
+            }
+        }
+        return 0;
+    }
     return col_npc_blocked_ignore_player(s, x, y, pc->size);
 }
 
@@ -246,11 +261,12 @@ static void col_warband_move(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
     npc->target_x = s->player.x;
     npc->target_y = s->player.y;
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, 1, 0);
-    /* one generation for the whole move: the mover's footprint is lifted above
-       and the player is static, so the collision field is constant across
-       pick_target and every dart (A1 sharing). */
+    /* one generation for the whole move: the player is static, so the collision
+       field is constant across pick_target and every dart (A1 sharing).
+       Warbanders never stamp collision and route straight through NPC bodies
+       (observed: they overlap primaries freely). */
     ColoNpcPathCtx pc = col_npc_path_ctx_begin(s, 1);
+    pc.ignore_npcs = 1;
     int tx, ty;
     col_warband_pick_target(s, &pc, npc, &tx, &ty);
     int steps = 0;
@@ -259,7 +275,6 @@ static void col_warband_move(ColosseumState* s, int idx) {
         if (!col_npc_path_step_with_ctx(&pc, &npc->x, &npc->y, tx, ty)) break;
         steps++;
     }
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, 1, 1);
     npc->moved_this_tick = steps > 0 ? 1 : 0;
 }
 

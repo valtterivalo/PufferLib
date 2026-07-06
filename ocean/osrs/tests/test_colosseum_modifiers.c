@@ -103,6 +103,14 @@ static void step_and_observe(ColosseumState* s, ColosseumContext* ctx, const int
     col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, mask);
 }
 
+/** researched wave-start: reset/pick arms a 5-tick spawn delay (resolution at
+    t5, visible t6). Tests that need the wave on the board step through it. */
+static void advance_to_wave_spawn(ColosseumState* s, ColosseumContext* ctx) {
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    for (int t = 0; t < COLO_WAVE_SPAWN_DELAY_TICKS; t++)
+        step_and_observe(s, ctx, idle);
+}
+
 /* a draft is open iff draft_pending is set with at least one real option. */
 static int draft_is_open(const ColosseumState* s) {
     if (!s->modifiers.draft_pending) return 0;
@@ -554,7 +562,8 @@ static void test_zero_actions_hit_timeout(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 12345);
-    CHECK("reset spawns wave 1 with no draft", s.modifiers.draft_pending == 0);
+    CHECK("reset arms wave 1 with no draft", s.modifiers.draft_pending == 0);
+    advance_to_wave_spawn(&s, &ctx);
 
     int idle[COLO_NUM_ACTION_HEADS] = {0};
     force_clear_wave(&s);
@@ -604,10 +613,10 @@ static void test_offpray_attribution_log(void) {
         s.log.pray_faced_by_type[COLO_JAVELIN_COLOSSUS] == 0.0f);
 }
 
-/* ---- 1b. step-loop draft (B6+D26): wave 1 spawns at reset with no draft and
-   no modifier; clearing it opens the first draft (random pool) gating wave 2,
-   which freezes the player until the mandatory pick (no skip, no auto-close),
-   and the pick arms the wave-2 spawn + 6-tick ready delay. */
+/* ---- 1b. step-loop draft + the researched wave-start timeline (frame-by-frame,
+   2026-07-07): pick/reset = t0; the player is free t1-t5; the spawn resolves at
+   t5 against the player's pre-move t5 tile; NPCs appear t6 (= visible in the
+   obs written at t5's end); NPCs move from t7; NO NPC attacks before t9. */
 static void test_step_loop_draft(void) {
     printf("test_step_loop_draft\n");
     ColosseumContext ctx;
@@ -621,20 +630,81 @@ static void test_step_loop_draft(void) {
     int walk_east[COLO_NUM_ACTION_HEADS] = {0};
     walk_east[COLO_HEAD_PRIMARY] = 7;
 
-    /* wave 1 spawns immediately, no draft, no modifier. */
+    /* reset = t0: no draft, no modifier, and NO NPCs yet — the wave resolves
+       at t5, not at reset. */
     CHECK("no draft is open at reset", !draft_is_open(&s));
     CHECK("no modifier is active on wave 1", s.modifiers.active_mask == 0);
     int spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
-    CHECK("wave 1 spawned at reset", spawned);
-    CHECK("the spawn armed the 6-tick ready delay (D26)",
-        s.wave_ready_delay == COLO_START_READY_TICKS);
+    CHECK("no NPCs exist at reset (spawn resolves at t5)", !spawned);
+    CHECK("reset armed the 5-tick spawn delay",
+        s.wave_spawn_delay == COLO_WAVE_SPAWN_DELAY_TICKS);
 
-    /* once the ready delay elapses, movement is effective — no draft freeze. */
-    for (int t = 0; t < COLO_START_READY_TICKS; t++) step_and_observe(&s, &ctx, idle);
-    int px = s.player.x;
+    /* t1-t4: the player moves freely, the arena stays empty. */
+    for (int t = 0; t < 4; t++) step_and_observe(&s, &ctx, walk_east);
+    CHECK("player movement is free before the spawn resolves",
+        s.player.x == COLO_PLAYER_START_X + 4);
+    spawned = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
+    CHECK("arena still empty through t4", !spawned);
+
+    /* t5: the spawn resolves BEFORE the player's move phase (the pre-move t5
+       tile decides anchor exclusion) and the queued move still lands. */
+    int t5_x = s.player.x, t5_y = s.player.y;
     step_and_observe(&s, &ctx, walk_east);
-    CHECK("movement is effective once the ready delay elapses", s.player.x == px + 1);
+    spawned = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
+    CHECK("the wave resolved at t5 (visible from t6)", spawned);
+    CHECK("the t5 queued move still landed", s.player.x == t5_x + 1);
+    CHECK("the spawn armed the movement gate", s.wave_ready_delay == COLO_WAVE_READY_TICKS);
+    CHECK("the spawn armed the attack gate",
+        s.wave_attack_delay == COLO_WAVE_ATTACK_GATE_TICKS);
+
+    /* primary anchor exclusion honors the pre-move t5 tile (Chebyshev 4). */
+    int exclusion_ok = 1;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        const ColoNPC* npc = &s.npcs[i];
+        if (!npc->active || col_type_is_warbander(npc->type)) continue;
+        if (col_type_is_hazard_entity(npc->type)) continue;
+        if (encounter_entity_footprint_distance(t5_x, t5_y, 1,
+                npc->x, npc->y, col_npc_effective_size(npc)) <= COLO_SPAWN_EXCLUSION_CHEB)
+            exclusion_ok = 0;
+    }
+    CHECK("no primary spawned within Chebyshev 4 of the pre-move t5 tile", exclusion_ok);
+
+    /* warband spawn formation: seer = archer+2E, berserker = archer+1E+1N. */
+    int ax = -1, ay = -1, sx = -1, sy = -1, bx = -1, by = -1;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        const ColoNPC* npc = &s.npcs[i];
+        if (!npc->active) continue;
+        if (npc->type == COLO_FREMENNIK_ARCHER)    { ax = npc->x; ay = npc->y; }
+        if (npc->type == COLO_FREMENNIK_SEER)      { sx = npc->x; sy = npc->y; }
+        if (npc->type == COLO_FREMENNIK_BERSERKER) { bx = npc->x; by = npc->y; }
+    }
+    CHECK("warband trio spawned", ax >= 0 && sx >= 0 && bx >= 0);
+    CHECK("seer spawned 2E of the archer", sx == ax + 2 && sy == ay);
+    CHECK("berserker spawned 1E+1N of the archer", bx == ax + 1 && by == ay + 1);
+
+    /* t6: NPCs are visible but frozen; t7: movement opens; t8: still no NPC
+       attack has landed or launched (attacks open t9). */
+    int pos_sum_spawn = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s.npcs[i].active) pos_sum_spawn += s.npcs[i].x * 64 + s.npcs[i].y;
+    step_and_observe(&s, &ctx, idle);   /* t6 */
+    int pos_sum_t6 = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s.npcs[i].active) pos_sum_t6 += s.npcs[i].x * 64 + s.npcs[i].y;
+    CHECK("NPCs frozen at t6", pos_sum_t6 == pos_sum_spawn);
+    step_and_observe(&s, &ctx, idle);   /* t7: movement opens */
+    int pos_sum_t7 = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s.npcs[i].active) pos_sum_t7 += s.npcs[i].x * 64 + s.npcs[i].y;
+    CHECK("NPCs started moving at t7 (warband darts to the player)",
+        pos_sum_t7 != pos_sum_t6);
+    step_and_observe(&s, &ctx, idle);   /* t8 */
+    CHECK("no damage taken through t8 (attacks open t9)",
+        s.player.current_hitpoints == s.player.base_hitpoints);
+    CHECK("attack gate open from t9", s.wave_attack_delay == 1);
 
     /* clearing wave 1 opens the first draft (random pool), gating wave 2. */
     force_clear_wave(&s);
@@ -644,7 +714,7 @@ static void test_step_loop_draft(void) {
 
     /* B6: frozen until the pick — walk actions are ignored and masked off, and
        the world stays paused (no skip, no timer ever closes the draft). */
-    px = s.player.x;
+    int px = s.player.x;
     int py = s.player.y;
     for (int t = 0; t < 12; t++) step_and_observe(&s, &ctx, walk_east);
     CHECK("movement is ignored while the draft is open",
@@ -657,8 +727,7 @@ static void test_step_loop_draft(void) {
         if (mask[d] > 0.0f) any_walk_valid = 1;
     CHECK("the mask offers only idle movement while frozen", !any_walk_valid);
 
-    /* the pick activates a modifier, closes the draft, and arms the wave-2
-       spawn + 6-tick ready delay. */
+    /* the pick is t0 for the next wave: 5 free ticks, then the t5 resolution. */
     int chosen = s.modifiers.draft_options[0];
     int pick[COLO_NUM_ACTION_HEADS] = {0};
     pick[COLO_HEAD_MODIFIER_SELECT] = 1;   /* option 0 */
@@ -666,13 +735,20 @@ static void test_step_loop_draft(void) {
     CHECK("the pick activated the chosen modifier",
         chosen >= 0 && col_mod_active(&s, (ColoModifier)chosen));
     CHECK("draft closed after the pick", !s.modifiers.draft_pending);
-    step_and_observe(&s, &ctx, idle);
+    CHECK("the pick armed the 5-tick spawn delay",
+        s.wave_spawn_delay == COLO_WAVE_SPAWN_DELAY_TICKS);
+    for (int t = 0; t < 4; t++) step_and_observe(&s, &ctx, idle);
     spawned = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
-    CHECK("the pick gated the wave-2 spawn", spawned);
+    CHECK("no wave-2 NPCs through the 4 post-pick ticks", !spawned);
+    step_and_observe(&s, &ctx, idle);   /* t5: resolution */
+    spawned = 0;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) if (s.npcs[i].active) spawned = 1;
+    CHECK("wave 2 resolved on the 5th post-pick tick", spawned);
     CHECK("advanced to wave 2 after the pick", s.wave == 1);
-    CHECK("the spawn re-armed the 6-tick ready delay (D26)",
-        s.wave_ready_delay == COLO_START_READY_TICKS);
+    CHECK("the spawn re-armed the movement + attack gates",
+        s.wave_ready_delay == COLO_WAVE_READY_TICKS &&
+        s.wave_attack_delay == COLO_WAVE_ATTACK_GATE_TICKS);
 }
 
 /* ---- 1c. 11 mandatory drafts per full run — one before every wave from wave 2
@@ -933,6 +1009,7 @@ static void test_bees_hazard(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 11);
+    advance_to_wave_spawn(&s, &ctx);
     s.modifiers.active_mask |= (1u << COLO_MOD_BEES);
     s.modifiers.tier[COLO_MOD_BEES] = 2;   /* two swarms */
     s.wave = 0;
@@ -1028,6 +1105,7 @@ static void test_bees_hazard(void) {
     sc.modifiers.tier[COLO_MOD_BEES] = 1;
     sc.wave = 0;
     col_spawn_wave(&sc);
+    sc.wave_spawn_delay = 0;   /* manual spawn: disarm the reset-armed t5 delay */
     int live_bee = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++)
         if (sc.npcs[i].active && sc.npcs[i].type == COLO_BEE_SWARM) live_bee = 1;
@@ -1134,6 +1212,7 @@ static void test_totemic_sol_wave12(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 223);
+    advance_to_wave_spawn(&s, &ctx);
     s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
     s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
     int sol = col_sol_find_idx(&s);
@@ -1973,14 +2052,15 @@ static void test_spawn_anchor_exclusion(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 37);
+    advance_to_wave_spawn(&s, &ctx);
 
     /* the b5 spawn-fix tile, world (1813,3108): suppresses exactly anchors
-       (3,14), (9,16), (3,19) -> 9 candidates ("4 out of 9" guide arithmetic). */
+       (3,14), (9,16), (3,19) -> 10 of the 13 verified anchors remain. */
     geo_clear_npcs(&s);
     s.player.x = 5; s.player.y = 18;
     int cand[COLO_NUM_SPAWN_ANCHORS];
     int n = col_spawn_anchor_candidates(&s, cand);
-    CHECK("b5 spawn-fix tile leaves exactly 9 candidate anchors", n == 9);
+    CHECK("b5 spawn-fix tile leaves exactly 10 candidate anchors", n == 10);
     int suppressed_ok = 1;
     for (int i = 0; i < n; i++)
         if (cand[i] == 0 || cand[i] == 1 || cand[i] == 2) suppressed_ok = 0;
@@ -2011,9 +2091,12 @@ static void test_spawn_anchor_exclusion(void) {
                     if (npc->x < COLO_WARBAND_BOX_MIN_X || npc->x > COLO_WARBAND_BOX_MAX_X ||
                         npc->y < COLO_WARBAND_BOX_MIN_Y || npc->y > COLO_WARBAND_BOX_MAX_Y)
                         warband_ok = 0;
+                } else if (npc->type == COLO_FREMENNIK_SEER) {
+                    /* fixed formation: seer = archer+2E. */
+                    if (npc->x != archer_x + 2 || npc->y != archer_y) warband_ok = 0;
                 } else {
-                    int ddx = abs(npc->x - archer_x), ddy = abs(npc->y - archer_y);
-                    if ((ddx > ddy ? ddx : ddy) > 1) warband_ok = 0;
+                    /* fixed formation: berserker = archer+1E+1N. */
+                    if (npc->x != archer_x + 1 || npc->y != archer_y + 1) warband_ok = 0;
                 }
                 continue;
             }
@@ -2032,7 +2115,7 @@ static void test_spawn_anchor_exclusion(void) {
     CHECK("no primary ever lands within Chebyshev 4 of the player", excluded_ok);
     CHECK("anchors draw without replacement (no double-booking)", distinct_ok);
     CHECK("no spawned footprint touches a blocked tile", unblocked_ok);
-    CHECK("warband trio spawns centre-box, berserker+seer adjacent to the ranger", warband_ok);
+    CHECK("warband trio spawns centre-box in the fixed diamond formation", warband_ok);
 }
 
 /* 3d. reinforcements: side-by-side inside the gate gap (x 15-18) on the
@@ -2082,6 +2165,7 @@ static void test_outcome_score_uses_fresh_damage(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 101);
+    advance_to_wave_spawn(&s, &ctx);
     complete_open_draft(&s, &ctx, 1);
 
     CHECK("wave 1 spawned a positive HP pool", s.current_wave_hp_pool > 0);
@@ -2114,6 +2198,7 @@ static void test_outcome_score_reinforcement_grows_denominator(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 202);
+    advance_to_wave_spawn(&s, &ctx);
 
     CHECK("wave 11 starts with seven score enemies", s.current_wave_total_killable == 7);
     int pool_before = s.current_wave_hp_pool;
@@ -2253,6 +2338,7 @@ static void test_wave12_quartet_and_win(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 43);
+    advance_to_wave_spawn(&s, &ctx);
 
     CHECK("boss-wave player start (16,10)",
         s.player.x == COLO_BOSS_PLAYER_START_X && s.player.y == COLO_BOSS_PLAYER_START_Y);
@@ -2271,6 +2357,7 @@ static void test_wave12_quartet_and_win(void) {
         s.modifiers.tier[COLO_MOD_QUARTET] = 1;
         s.wave = COLO_WAVE_BOSS;
         col_spawn_wave(&s);
+        s.wave_spawn_delay = 0;   /* manual spawn: disarm the reset-armed t5 delay */
 
         int wb = -1;
         for (int i = 0; i < COLO_MAX_NPCS; i++)
@@ -2392,6 +2479,7 @@ static void test_warband_cycle_offsets(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 51);
+    advance_to_wave_spawn(&s, &ctx);
     complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy, inert here) */
     wb_isolate_warband(&s);
 
@@ -2442,6 +2530,7 @@ static void test_warband_move_skip(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 53);
+    advance_to_wave_spawn(&s, &ctx);
     complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy, inert here) */
     wb_isolate_warband(&s);
     wb_move_npc(&s, wb_find_npc(&s, COLO_FREMENNIK_BERSERKER), s.player.x, s.player.y + 1);
@@ -2452,9 +2541,11 @@ static void test_warband_move_skip(void) {
     int walk_south[COLO_NUM_ACTION_HEADS] = {0};
     walk_south[COLO_HEAD_PRIMARY] = 4;
 
-    /* idle through the ready gap; the anchor arms on the first live tick (a
-       windowless phase-0 tick, safe to stand on). */
-    while (s.warband_cycle_anchor < 0 && !s.episode_over)
+    /* idle up to t8: the anchor arms on the first attack-legal tick (t9) and
+       the berserker window lands THAT tick, so the stutter-step must already
+       be running when it opens. */
+    (void)idle;
+    while ((s.wave_ready_delay > 0 || s.wave_attack_delay > 1) && !s.episode_over)
         step_and_observe(&s, &ctx, idle);
 
     int attacks = 0;
@@ -2631,6 +2722,7 @@ static void test_warband_pillar_routefind_vs_shaman_safespot(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    advance_to_wave_spawn(&s, &ctx);
     complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy) */
     geo_clear_npcs(&s);
     s.player.x = 7; s.player.y = 9;
@@ -2654,6 +2746,7 @@ static void test_warband_pillar_routefind_vs_shaman_safespot(void) {
        attacks — the shaman is MEANT to be pillar-safespottable. */
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 67);
+    s.wave_spawn_delay = 0;   /* manual fixture: disarm the reset-armed t5 spawn */
     complete_open_draft(&s, &ctx, 1);
     geo_clear_npcs(&s);
     s.player.x = 7; s.player.y = 9;
@@ -2918,7 +3011,10 @@ static void test_manticore_orb_same_tick_flick(void) {
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    advance_to_wave_spawn(&s, &ctx);
     geo_clear_npcs(&s);
+    s.wave_ready_delay = 0;
+    s.wave_attack_delay = 0;   /* direct col_npc_attack_ctx calls need open gates */
     s.player.x = 17; s.player.y = 16;
     col_rebuild_player_collision_flags(&s);
     col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
@@ -2974,6 +3070,7 @@ static void test_manticore_orb_same_tick_flick(void) {
        blockable; only orb 0's 50/50 lead can connect. */
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 83);
+    s.wave_spawn_delay = 0;   /* manual fixture: disarm the reset-armed t5 spawn */
     complete_open_draft(&s, &ctx, 1);   /* mandatory wave-1 draft (Blasphemy) */
     geo_clear_npcs(&s);
     s.player.x = 17; s.player.y = 16;
@@ -3029,6 +3126,7 @@ static void test_manticore_shared_wave_cycle(void) {
             memset(&s, 0, sizeof(s));
             ctx.config.start_wave = wave;
             col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);
+    advance_to_wave_spawn(&s, &ctx);
 
             const AttackStyle* first = NULL;
             int n_mc = 0;
@@ -3228,7 +3326,9 @@ static int sol_setup(ColosseumState* s, ColosseumContext* ctx, uint32_t seed) {
     memset(s, 0, sizeof(*s));
     col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
     int idle[COLO_NUM_ACTION_HEADS] = {0};
-    while (s->wave_ready_delay > 0) step_and_observe(s, ctx, idle);
+    while (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0 ||
+            s->wave_attack_delay > 0)
+        step_and_observe(s, ctx, idle);
     return col_sol_find_idx(s);
 }
 
@@ -3240,7 +3340,9 @@ static int sol_setup_speedrun(ColosseumState* s, ColosseumContext* ctx, uint32_t
     memset(s, 0, sizeof(*s));
     col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
     int idle[COLO_NUM_ACTION_HEADS] = {0};
-    while (s->wave_ready_delay > 0) step_and_observe(s, ctx, idle);
+    while (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0 ||
+            s->wave_attack_delay > 0)
+        step_and_observe(s, ctx, idle);
     return col_sol_find_idx(s);
 }
 
@@ -4258,7 +4360,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
     CHECK("snapshot version is v18 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 18u);
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 19u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -4401,7 +4503,9 @@ static void test_loadout_surge_potion(void) {
     CHECK("surge cooldown frozen during the draft gap",
         s.surge_cooldown == COLO_SURGE_COOLDOWN_TICKS);
     complete_open_draft(&s, &ctx, 1);
-    while (s.wave_ready_delay > 0) step_and_observe(&s, &ctx, idle);
+    while (s.wave_spawn_delay > 0 || s.wave_ready_delay > 0 ||
+            s.wave_attack_delay > 0)
+        step_and_observe(&s, &ctx, idle);
     int cd_before = s.surge_cooldown;
     step_and_observe(&s, &ctx, idle);
     CHECK("surge cooldown ticks during live gameplay", s.surge_cooldown == cd_before - 1);
@@ -4947,7 +5051,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
     CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
     CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
-    CHECK("snapshot version is v18", COLO_SNAPSHOT_VERSION == 18u);
+    CHECK("snapshot version is v19", COLO_SNAPSHOT_VERSION == 19u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -5595,7 +5699,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v18", snap.version == 18u);
+    CHECK("snapshot frame is v19", snap.version == 19u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -7147,6 +7251,7 @@ static void test_gear_and_boost_reward_signals(void) {
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+    advance_to_wave_spawn(&s, &ctx);
     int slot = -1;
     for (int i = 0; i < COLO_MAX_NPCS; i++)
         if (col_npc_is_live_target(&s.npcs[i]) && !col_type_is_hazard_entity(s.npcs[i].type)) {

@@ -29,7 +29,13 @@
 #define COLO_BEGINNER_MAX_TICKS 6000
 #define COLO_NUM_WAVES      12
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
-#define COLO_START_READY_TICKS 6
+/* Researched wave-start timeline (frame-by-frame, 2026-07-07), pick = t0:
+   player free t1-t5; spawn positions resolved at t5 against the player's
+   PRE-move t5 tile (speedrunners queue a move on t5 -- it lands t6 for free);
+   NPCs appear t6; NPCs move from t7; no NPC attacks before t9. */
+#define COLO_WAVE_SPAWN_DELAY_TICKS 5   /* pick -> spawn resolution */
+#define COLO_WAVE_READY_TICKS 2         /* spawn -> movement opens (t7) */
+#define COLO_WAVE_ATTACK_GATE_TICKS 4   /* spawn -> attacks open (t9) */
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
 /** waves 1-4 (internal 0-3) are the only waves where clearing inside the
     reinforcement timer is realistically achievable (wave 3 the hardest);
@@ -340,10 +346,13 @@ static void col_static_footprint_table_selftest(void) {
    SW tile is placed ON the anchor. Three-way cross-verified (los `ao` array + b5
    pastebin + wiki "12 default spawns", WSN#GAP1). D5: the b5 13th tile
    (1824,3110) and cyan tile (1824,3106) are excluded — semantics unstated. */
-#define COLO_NUM_SPAWN_ANCHORS 12
+/* 13 primary anchors verified tile-by-tile against the in-game spawn map
+   (2026-07-07, world = local + (1808,3090)); (16,20) was missing from the
+   research notes' "12 default spawns". */
+#define COLO_NUM_SPAWN_ANCHORS 13
 #define COLO_SPAWN_ZONE_SIZE   3
 static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
-    {3, 14}, {9, 16}, {3, 19}, {13, 19}, {19, 19}, {17, 24},
+    {3, 14}, {9, 16}, {3, 19}, {13, 19}, {16, 20}, {19, 19}, {17, 24},
     {13, 13}, {19, 13}, {16, 9}, {24, 17}, {28, 19}, {28, 14},
 };
 
@@ -360,7 +369,7 @@ static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
 #define COLO_WARBAND_BOX_MAX_Y 21
 
 /* B2(a): the trio attacks on ONE shared 6-tick cycle anchored to the wave's
-   first actionable tick N (the COLO_START_READY_TICKS ready delay = the
+   first actionable tick N (the wave-start ready + attack gates model the
    researched click+6): berserker window N+1, seer N+2, archer N+3, then 3
    silent ticks. D30: assume the wave-anchored phase survived the April 2024
    rebalance. */
@@ -1987,6 +1996,10 @@ typedef struct {
     int tick;
     int wave_spawn_delay;
     int wave_ready_delay;
+    /* researched wave-start attack gate: NPCs move from spawn+1 but no NPC
+       attacks before spawn+3 ("3 ticks of movement after spawn"); counts down
+       from COLO_WAVE_ATTACK_GATE_TICKS at wave spawn. */
+    int wave_attack_delay;
     int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */

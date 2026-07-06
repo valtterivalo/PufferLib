@@ -340,7 +340,8 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             s->wave = wave - 1;
             s->wave_spawn_target = s->wave;
             s->wave_spawn_delay = 0;
-            s->wave_ready_delay = COLO_START_READY_TICKS;
+            /* lab jumps spawn instantly; col_spawn_wave arms the researched
+               ready (move t+2) + attack (t+4) gates itself. */
             col_spawn_wave(s);
             col_lab_clear_transient(s);
             col_lab_refresh_geometry(s);

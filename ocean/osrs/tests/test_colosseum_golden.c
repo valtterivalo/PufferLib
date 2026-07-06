@@ -200,29 +200,29 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* 2026-06-30: re-seeded after the DPT-obs deletion (the B0 ablation showed the best-gear
-   DPT obs score-neutral, gear is not the wall). The per-NPC best-DPT + argmax-style floats
-   Re-seeded 2026-07-05 for the weapon-choice obs tail (B0 reversal): +58 floats appended
-   (28 per-cell target DPT + 28 per-cell spec bit + 2 wielded), COLO_NUM_OBS 2393 -> 2451.
-   The obs vector widens for every config (the action stream + sim are unchanged), so all
-   12 digests move together. Sim outcomes are byte-identical: the addition only writes new
-   obs floats from the memoized best-gear oracle (a pure cache, no sim side-effects); the
-   farm_safe_damage_cap knob added in the same commit defaults 0 so golden rewards are
-   untouched. Proven by test_colosseum_modifiers.c 10293/10293 (sim-mechanics asserts).
-   Verified deterministic (two --print runs identical). */
+/* Re-seeded 2026-07-07 for the wave-spawn fidelity batch: the researched
+   timeline (pick t0 -> spawn resolved t5 vs the pre-move t5 tile -> visible t6
+   -> moving t7 -> no NPC attacks before t9), the 13th primary anchor (16,20),
+   the fixed warband spawn formation (seer +2E, berserker +1E+1N, quartet
+   +1E+1S) with per-member surround dirs, warband NPC-collision immunity, and
+   wave NPCs opening with ready attack timers. Every wave now starts 5 ticks
+   later with different rosters/positions, so all 12 digests move. Sim laws
+   proven by test_colosseum_modifiers.c 10304/10304 (incl. the new timeline
+   regression in test_step_loop_draft). Verified deterministic (two --print
+   runs identical). Snapshot v19. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x44291ea93da86ed1ULL,
-    0xee046313c0784ff7ULL,
-    0xdaf5ab0f8a39e052ULL,
-    0x4c4072d681e74093ULL,
-    0x6e5cb9bee0e3aa2bULL,
-    0x1da5cf1b5231d624ULL,
-    0xade84cc101a3c46dULL,
-    0xf3c14c1faa607acaULL,
-    0xa819a592afc6d363ULL,
-    0xf1d540f41037b7dcULL,
-    0x1035ab1b722f3d6dULL,
-    0xbc7e10a70e4c7e66ULL,
+    0xc49267523713b32bULL,
+    0x91ac2700e7bfb416ULL,
+    0x0e23d8c30af95139ULL,
+    0x43684cff1ab0bb55ULL,
+    0x6a045d004db8909fULL,
+    0x844ba3e5580ab0ceULL,
+    0x8de8815de148cb47ULL,
+    0x416d530d350da665ULL,
+    0x063e9686fcd1d1a1ULL,
+    0x2155b3118d8efca5ULL,
+    0x2969cdfedb7a64a8ULL,
+    0x895c5beac66c93e5ULL,
 };
 
 int main(int argc, char** argv) {
