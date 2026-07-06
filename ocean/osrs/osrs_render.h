@@ -4304,7 +4304,8 @@ static void render_draw_centered_debug_line(
 
 /** Draw render-entity debug metadata populated by an encounter fill hook. */
 static void render_draw_entity_debug_metadata(
-    const RenderEntity* entity, Vector2 screen_head
+    const RenderEntity* entity, Vector2 screen_head,
+    int world_offset_x, int world_offset_y
 ) {
     int y = (int)screen_head.y + 10;
     int x = (int)screen_head.x;
@@ -4314,6 +4315,12 @@ static void render_draw_entity_debug_metadata(
         render_draw_centered_debug_line(
             entity->debug_npc_type_name, x, &y, font_size, COLOR_TEXT);
     }
+
+    render_draw_centered_debug_line(
+        TextFormat("tile (%d,%d) w(%d,%d)",
+            entity->x, entity->y,
+            entity->x + world_offset_x, entity->y + world_offset_y),
+        x, &y, font_size, (Color){ 0, 255, 128, 255 });
 
     render_draw_centered_debug_line(
         TextFormat("HP:%d/%d", entity->current_hitpoints, entity->base_hitpoints),
@@ -6053,7 +6060,8 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         /* debug: per-NPC combat state below the entity (only for NPCs) */
         if (rc->show_debug && p->entity_type == ENTITY_NPC &&
                 p->debug_npc_type_name) {
-            render_draw_entity_debug_metadata(p, screen_head);
+            render_draw_entity_debug_metadata(p, screen_head,
+                rc->collision_world_offset_x, rc->collision_world_offset_y);
         } else if (rc->show_debug && p->entity_type == ENTITY_NPC && debug_state) {
             InfernoState* is = debug_state;
             int slot = p->npc_slot;
@@ -7023,8 +7031,10 @@ void pvp_render(OsrsEnv* env) {
     /* debug: show raycast tile selection info */
     if (rc->show_debug) {
         char dbg[256];
-        snprintf(dbg, sizeof(dbg), "box: (%d,%d) plane: (%d,%d) hit3d: (%.1f,%.1f,%.1f)",
+        snprintf(dbg, sizeof(dbg), "box: (%d,%d) world (%d,%d) plane: (%d,%d) hit3d: (%.1f,%.1f,%.1f)",
                  rc->debug_hit_wx, rc->debug_hit_wy,
+                 rc->debug_hit_wx >= 0 ? rc->debug_hit_wx + rc->collision_world_offset_x : -1,
+                 rc->debug_hit_wy >= 0 ? rc->debug_hit_wy + rc->collision_world_offset_y : -1,
                  rc->debug_plane_wx, rc->debug_plane_wy,
                  rc->debug_ray_hit_x, rc->debug_ray_hit_y, rc->debug_ray_hit_z);
         DrawText(dbg, 10, 30, 16, MAGENTA);
@@ -7032,6 +7042,16 @@ void pvp_render(OsrsEnv* env) {
                  rc->debug_ray_origin.x, rc->debug_ray_origin.y, rc->debug_ray_origin.z,
                  rc->debug_ray_dir.x, rc->debug_ray_dir.y, rc->debug_ray_dir.z);
         DrawText(dbg, 10, 48, 16, MAGENTA);
+        for (int ei = 0; ei < rc->entity_count; ei++) {
+            RenderEntity* ent = &rc->entities[ei];
+            if (ent->entity_type != ENTITY_PLAYER) continue;
+            snprintf(dbg, sizeof(dbg), "player tile: local (%d,%d) world (%d,%d)",
+                     ent->x, ent->y,
+                     ent->x + rc->collision_world_offset_x,
+                     ent->y + rc->collision_world_offset_y);
+            DrawText(dbg, 10, 66, 16, (Color){ 0, 255, 128, 255 });
+            break;
+        }
     }
 
     if (rc->entity_count > 0) {
