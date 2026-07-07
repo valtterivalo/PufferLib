@@ -200,27 +200,30 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* Re-seeded 2026-07-07 (third pass) for the egocentric threat field obs:
-   +578 floats (2466 -> 3044), two 17x17 planar channels tail-appended --
-   per-tile live-shooter LoS+range count (/4) and per-tile standability.
-   Obs-only (dynamics unchanged from the manticore-stagger pass, whose digests
-   this replaces because the digest folds the full obs vector). Sim laws in
-   test_colosseum_modifiers.c 10333/10333 (pillar-shadow zero, exposed-tile
-   count, standability, point-sample agreement, toggle blanking). Verified
-   deterministic (two --print runs identical). */
+/* Re-seeded 2026-07-08 for the forecast landing corner-cut fix: the landing
+   helper (col_step_out_forecast_action_landing_ctx) now mirrors
+   encounter_move_to_target's OSRS no-corner-cut rule (a diagonal step requires
+   both shared-corner tiles walkable), which it had missed since the rule was
+   added to the real mover in ef903951e (2026-06-27). Obs-only: forecast
+   candidates whose path cuts a blocked corner now roll out from the tile the
+   player would actually reach, so pillar-adjacent danger obs stop lying.
+   Dynamics unchanged (battery 10333/10333); w02/w05/w06/w09 digests are
+   bit-identical because those episodes never had a candidate cut a corner.
+   Landing selftest in test_colosseum_forecast_exact.c passes all 3 states.
+   Verified deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xcb80d16f2b24d8ccULL,
+    0x6b648dbd26450b82ULL,
     0x90a76c1780dfbccfULL,
-    0xad2951f532835705ULL,
-    0x532e74badc966878ULL,
+    0x95a54d92b127f178ULL,
+    0x6cc62557a00dd1f0ULL,
     0x6f66b8d6b14abd26ULL,
     0x566a2636023b2fa9ULL,
-    0xed08fc1caef8bd28ULL,
-    0xde01eefde43bbe07ULL,
+    0xea7b7dc17a4a5288ULL,
+    0x5d37ace794d11e74ULL,
     0x93f06729b600b2d3ULL,
-    0xa5afa0afa759bf61ULL,
-    0xc77ead256f3f091dULL,
-    0xa961819e22b0106eULL,
+    0x4b1760ed95b96a99ULL,
+    0x80f01e2bd3c18c0cULL,
+    0xb627563aa13459eaULL,
 };
 
 int main(int argc, char** argv) {

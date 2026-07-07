@@ -175,9 +175,13 @@ static ColoForecastLanding col_step_out_forecast_action_landing_ctx(
         if (ty > landing.land_y) dy = 1;
         else if (ty < landing.land_y) dy = -1;
 
+        /* mirror of encounter_move_to_target: a diagonal step is legal only when
+           BOTH shared-corner tiles are walkable (OSRS no-corner-cut rule) */
         int moved = 0;
         if (dx != 0 && dy != 0 &&
-                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy)) {
+                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy) &&
+                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y) &&
+                col_player_walkable((void*)s, landing.land_x, landing.land_y + dy)) {
             landing.land_x += dx;
             landing.land_y += dy;
             moved = 1;
