@@ -2223,15 +2223,27 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_threat_los_counts(s, obs, &i);
     assert(i == COLO_OBS_AFTER_THREAT_LOS);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_THREAT_LOS);
+#endif
 
     col_write_thrall_dc(s, obs, &i);
     assert(i == COLO_OBS_AFTER_THRALL_DC);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_THRALL_DC);
+#endif
 
     col_write_weapon_choice_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_WEAPON_CHOICE);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_WEAPON_CHOICE);
+#endif
 
     col_write_spawn_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_SPAWN);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_SPAWN);
+#endif
 
     if (ctx->config.threat_field_obs_enabled) {
         col_write_threat_field_obs(s, obs, &i);
@@ -2239,6 +2251,9 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         i += COLO_THREAT_FIELD_OBS_SIZE;
     }
     assert(i == COLO_OBS_AFTER_THREAT_FIELD);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_OBS_THREAT_FIELD);
+#endif
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);

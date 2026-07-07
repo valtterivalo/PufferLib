@@ -371,6 +371,14 @@ static void run_profile(
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
+            /* gear-stable profile stream: pin the inventory-click heads
+               (equip/eat/drink, heads 2..14 on colosseum) to noop so
+               signature-keyed caches behave as they do under a settled
+               policy instead of random-action thrash */
+            if (getenv("OSRS_PROFILE_PIN_INV")) {
+                for (int h = 2; h < 15 && h < edef->num_action_heads; h++)
+                    enc_actions[h] = 0;
+            }
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
 #endif
