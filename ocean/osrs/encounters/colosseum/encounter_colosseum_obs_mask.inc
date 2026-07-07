@@ -1213,7 +1213,16 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     a range-15 LoS shooter model for him would be approximation, not fact). */
 static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
-    int shooter_slots[COLO_MAX_NPCS];
+    if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
+
+    /* Per-shooter footprint bounds + range, hoisted out of the 289-tile loop so
+       the inner body is a Chebyshev distance from the clamped nearest footprint
+       tile plus a single precomputed static-LoS bit read. Both endpoints handed
+       to col_static_los_get are always in bounds (a live enemy's footprint tile
+       and an in-bounds window tile), so we call it directly -- the exact fast
+       path col_tiles_have_los would dispatch to for these arguments. */
+    int shooter_x0[COLO_MAX_NPCS], shooter_y0[COLO_MAX_NPCS];
+    int shooter_x1[COLO_MAX_NPCS], shooter_y1[COLO_MAX_NPCS];
     int shooter_ranges[COLO_MAX_NPCS];
     int n_shooters = 0;
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
@@ -1221,7 +1230,11 @@ static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int*
         if (!col_npc_is_live_enemy(npc)) continue;
         int range = COLO_NPC_STATS[npc->type].attack_range;
         if (range <= 1) continue;
-        shooter_slots[n_shooters] = n;
+        int size = col_npc_effective_size(npc);
+        shooter_x0[n_shooters] = npc->x;
+        shooter_y0[n_shooters] = npc->y;
+        shooter_x1[n_shooters] = npc->x + size - 1;
+        shooter_y1[n_shooters] = npc->y + size - 1;
         shooter_ranges[n_shooters] = range;
         n_shooters++;
     }
@@ -1232,16 +1245,15 @@ static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int*
             int count = 0;
             if (col_grid_index(tx, ty, &gx, &gy)) {
                 for (int k = 0; k < n_shooters; k++) {
-                    const ColoNPC* npc = &s->npcs[shooter_slots[k]];
-                    int size = col_npc_effective_size(npc);
-                    int dist = encounter_dist_to_npc(tx, ty, npc->x, npc->y, size);
+                    int sx = tx < shooter_x0[k] ? shooter_x0[k]
+                        : (tx > shooter_x1[k] ? shooter_x1[k] : tx);
+                    int sy = ty < shooter_y0[k] ? shooter_y0[k]
+                        : (ty > shooter_y1[k] ? shooter_y1[k] : ty);
+                    int adx = tx - sx; if (adx < 0) adx = -adx;
+                    int ady = ty - sy; if (ady < 0) ady = -ady;
+                    int dist = adx > ady ? adx : ady;
                     if (dist < 1 || dist > shooter_ranges[k]) continue;
-                    int sx = tx, sy = ty;
-                    if (sx < npc->x) sx = npc->x;
-                    if (sx > npc->x + size - 1) sx = npc->x + size - 1;
-                    if (sy < npc->y) sy = npc->y;
-                    if (sy > npc->y + size - 1) sy = npc->y + size - 1;
-                    if (!col_tiles_have_los(s, sx, sy, tx, ty)) continue;
+                    if (!col_static_los_get(sx, sy, tx, ty)) continue;
                     count++;
                 }
             }
