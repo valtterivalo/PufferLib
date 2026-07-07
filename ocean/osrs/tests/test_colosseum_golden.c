@@ -200,29 +200,27 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* Re-seeded 2026-07-07 (second pass) for the attacker-side manticore stagger:
-   the 5-tick delay now hits only peers that are ready to attack (charge
-   complete, range + LoS) at the instant a barrage starts, and a peer that
-   becomes ready or gains LoS mid-barrage overlaps freely (the wiki overlap
-   clause). Only the two double-manticore configs moved (w09, w10); the other
-   10 digests are bit-identical, proving the change is surgical. Sim laws in
-   test_colosseum_modifiers.c 10323/10323 (synced-pair alternation, mid-barrage
-   overlap, LoS-gain overlap, forecast pair mirror). Verified deterministic
-   (two --print runs identical). Prior re-seed context (v20 wave-spawn
-   timeline, Sol t12/t15 entry, challenge-start draft, 2466 obs) unchanged. */
+/* Re-seeded 2026-07-07 (third pass) for the egocentric threat field obs:
+   +578 floats (2466 -> 3044), two 17x17 planar channels tail-appended --
+   per-tile live-shooter LoS+range count (/4) and per-tile standability.
+   Obs-only (dynamics unchanged from the manticore-stagger pass, whose digests
+   this replaces because the digest folds the full obs vector). Sim laws in
+   test_colosseum_modifiers.c 10333/10333 (pillar-shadow zero, exposed-tile
+   count, standability, point-sample agreement, toggle blanking). Verified
+   deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xad552994faaf252eULL,
-    0xa17246ec4eb2d72eULL,
-    0x08def8b612036565ULL,
-    0xa2f0834eddac2978ULL,
-    0xc0578a702ad117cfULL,
-    0xf429423135c0927eULL,
-    0x5e0ab48747fa1de7ULL,
-    0x78ab56c045a98814ULL,
-    0x3138fc3703fcc29dULL,
-    0x8d2a8b411ea984a4ULL,
-    0xc2239f8b8f84ca7dULL,
-    0x7eb49470a01c5046ULL,
+    0xcb80d16f2b24d8ccULL,
+    0x90a76c1780dfbccfULL,
+    0xad2951f532835705ULL,
+    0x532e74badc966878ULL,
+    0x6f66b8d6b14abd26ULL,
+    0x566a2636023b2fa9ULL,
+    0xed08fc1caef8bd28ULL,
+    0xde01eefde43bbe07ULL,
+    0x93f06729b600b2d3ULL,
+    0xa5afa0afa759bf61ULL,
+    0xc77ead256f3f091dULL,
+    0xa961819e22b0106eULL,
 };
 
 int main(int argc, char** argv) {

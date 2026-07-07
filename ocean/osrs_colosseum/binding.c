@@ -420,6 +420,7 @@ void my_init(Env* env, Dict* kwargs) {
     static const char* const optional_int_keys[] = {
         "loadout_profile_mode",
         "step_out_forecast_obs_enabled",
+        "threat_field_obs_enabled",
         "forecast_horizon",
         "forecast_run_tile_mode",
         "mask_inventory_heads",

@@ -5181,7 +5181,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2466", COLO_NUM_OBS == 2466);
+    CHECK("obs width is 3044", COLO_NUM_OBS == 3044);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -5209,7 +5209,8 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
-        COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE;
+        COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE +
+        COLO_THREAT_FIELD_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
 
     /* offensive prayer is style-gated: the matching prayer boosts its style, an
@@ -7302,7 +7303,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2466);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3044);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -7492,6 +7493,58 @@ static int colo_test_cell_of_named_item(const ColosseumState* s, const char* nam
         if (meta && strcmp(meta->name, name) == 0) return c;
     }
     return -1;
+}
+
+/* egocentric threat field obs: channel 0 is pure shooter LoS+range geometry
+   (the pillar shadow reads zero, exposed tiles read the shooter count, the
+   center cell agrees with the point-sample), channel 1 is standability
+   (statics + NPC bodies + out of bounds), and the config toggle blanks the
+   whole block. */
+static void test_threat_field_obs(void) {
+    printf("test_threat_field_obs\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+
+    s.player.x = 5; s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 11, 8);
+    CHECK("fixture: shooter spawned", manti >= 0);
+    CHECK("fixture: the pillar blocks LoS to the player's tile",
+        !col_npc_has_los_to_player(&s, &s.npcs[manti]));
+
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+
+    const int f0 = COLO_OBS_AFTER_SPAWN;
+    const int f1 = f0 + COLO_THREAT_FIELD_TILES;
+#define FIELD_CELL(dx, dy) \
+    (((dy) + COLO_THREAT_FIELD_RADIUS) * COLO_THREAT_FIELD_DIM + \
+     ((dx) + COLO_THREAT_FIELD_RADIUS))
+
+    CHECK("pillar shadow: the player's tile reads zero shooters",
+        obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
+    CHECK("exposed tile east of the pillar reads the shooter",
+        obs[f0 + FIELD_CELL(7, 3)] > 0.0f);
+    CHECK("pillar tile is unstandable", obs[f1 + FIELD_CELL(3, -1)] == 1.0f);
+    CHECK("NPC body tile is unstandable", obs[f1 + FIELD_CELL(6, -1)] == 1.0f);
+    CHECK("the player's own tile is standable", obs[f1 + FIELD_CELL(0, 0)] == 0.0f);
+    CHECK("out-of-arena tile is unstandable", obs[f1 + FIELD_CELL(-8, 0)] == 1.0f);
+
+    /* stepping into LoS flips the center cell to exactly one shooter. */
+    s.player.x = 12; s.player.y = 12;
+    col_rebuild_player_collision_flags(&s);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("center cell reads one shooter after stepping into LoS",
+        obs[f0 + FIELD_CELL(0, 0)] == 0.25f);
+
+    ctx.config.threat_field_obs_enabled = 0;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int all_zero = 1;
+    for (int k = 0; k < COLO_THREAT_FIELD_OBS_SIZE; k++)
+        if (obs[f0 + k] != 0.0f) all_zero = 0;
+    CHECK("disabled threat field leaves the block zeroed", all_zero);
+#undef FIELD_CELL
 }
 
 static void test_weapon_choice_obs_rank_and_farm_cap(void) {
@@ -7701,6 +7754,7 @@ int main(void) {
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
     test_weapon_choice_obs_rank_and_farm_cap();
+    test_threat_field_obs();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);

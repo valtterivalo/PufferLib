@@ -102,12 +102,24 @@
 #define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
 #define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
 
+/* egocentric threat field: the spatial extension of the threat-LoS point
+   sample (col_write_threat_los_counts samples the player's tile; this samples
+   every tile of a 17x17 window). Channel 0 = per-tile live shooter count,
+   channel 1 = per-tile standability. Pure current-tick visibility geometry,
+   no movement prediction and no advice -- shelter is visible as a zero pocket
+   and the policy weighs it against uptime itself. */
+#define COLO_THREAT_FIELD_RADIUS 8
+#define COLO_THREAT_FIELD_DIM (2 * COLO_THREAT_FIELD_RADIUS + 1)
+#define COLO_THREAT_FIELD_TILES (COLO_THREAT_FIELD_DIM * COLO_THREAT_FIELD_DIM)
+#define COLO_THREAT_FIELD_OBS_SIZE (2 * COLO_THREAT_FIELD_TILES)
+
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
-    COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE)
+    COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
+    COLO_THREAT_FIELD_OBS_SIZE)
 
 /* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -130,6 +142,8 @@
     (COLO_OBS_AFTER_THRALL_DC + COLO_WEAPON_CHOICE_OBS_SIZE)
 #define COLO_OBS_AFTER_SPAWN \
     (COLO_OBS_AFTER_WEAPON_CHOICE + COLO_SPAWN_OBS_SIZE)
+#define COLO_OBS_AFTER_THREAT_FIELD \
+    (COLO_OBS_AFTER_SPAWN + COLO_THREAT_FIELD_OBS_SIZE)
 
 
 /* ----- normalization helpers ------------------------------------------------ */
@@ -1187,6 +1201,66 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     *idx = i;
 }
 
+/** COLO_THREAT_FIELD_OBS_SIZE floats: egocentric 17x17 threat field, row-major
+    from (-R,-R) to (+R,+R) around the player, two planar channels.
+    Channel 0: for each tile, the count of live shooters (attack_range > 1)
+    that would have range and static LoS to a player standing there (closest-
+    footprint-tile rule, same as col_npc_has_los_to_player), /4 clamped.
+    Channel 1: 1.0 where the player cannot stand (out of bounds, static mask,
+    NPC body). Melee NPCs stay out of channel 0 (their threat is distance,
+    legible from the NPC slots); Sol stays out too (his spear/shield lines are
+    hazard frames with an adjacency gate, already encoded in the boss block --
+    a range-15 LoS shooter model for him would be approximation, not fact). */
+static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int* idx) {
+    int i = *idx;
+    int shooter_slots[COLO_MAX_NPCS];
+    int shooter_ranges[COLO_MAX_NPCS];
+    int n_shooters = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        int range = COLO_NPC_STATS[npc->type].attack_range;
+        if (range <= 1) continue;
+        shooter_slots[n_shooters] = n;
+        shooter_ranges[n_shooters] = range;
+        n_shooters++;
+    }
+    for (int dy = -COLO_THREAT_FIELD_RADIUS; dy <= COLO_THREAT_FIELD_RADIUS; dy++) {
+        for (int dx = -COLO_THREAT_FIELD_RADIUS; dx <= COLO_THREAT_FIELD_RADIUS; dx++) {
+            int tx = s->player.x + dx, ty = s->player.y + dy;
+            int gx, gy;
+            int count = 0;
+            if (col_grid_index(tx, ty, &gx, &gy)) {
+                for (int k = 0; k < n_shooters; k++) {
+                    const ColoNPC* npc = &s->npcs[shooter_slots[k]];
+                    int size = col_npc_effective_size(npc);
+                    int dist = encounter_dist_to_npc(tx, ty, npc->x, npc->y, size);
+                    if (dist < 1 || dist > shooter_ranges[k]) continue;
+                    int sx = tx, sy = ty;
+                    if (sx < npc->x) sx = npc->x;
+                    if (sx > npc->x + size - 1) sx = npc->x + size - 1;
+                    if (sy < npc->y) sy = npc->y;
+                    if (sy > npc->y + size - 1) sy = npc->y + size - 1;
+                    if (!col_tiles_have_los(s, sx, sy, tx, ty)) continue;
+                    count++;
+                }
+            }
+            obs[i++] = col_clamp01((float)count / 4.0f);
+        }
+    }
+    for (int dy = -COLO_THREAT_FIELD_RADIUS; dy <= COLO_THREAT_FIELD_RADIUS; dy++) {
+        for (int dx = -COLO_THREAT_FIELD_RADIUS; dx <= COLO_THREAT_FIELD_RADIUS; dx++) {
+            int tx = s->player.x + dx, ty = s->player.y + dy;
+            int gx, gy;
+            int blocked = 1;
+            if (col_grid_index(tx, ty, &gx, &gy))
+                blocked = col_static_blocked(tx, ty) || s->npc_collision_flags[gx][gy];
+            obs[i++] = blocked ? 1.0f : 0.0f;
+        }
+    }
+    *idx = i;
+}
+
 /** COLO_THRALL_DC_OBS_SIZE floats: the Arceuus thrall + Death-Charge state the
     policy needs to time summons/recasts and the kill-window. */
 static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
@@ -2158,6 +2232,13 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_spawn_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_SPAWN);
+
+    if (ctx->config.threat_field_obs_enabled) {
+        col_write_threat_field_obs(s, obs, &i);
+    } else {
+        i += COLO_THREAT_FIELD_OBS_SIZE;
+    }
+    assert(i == COLO_OBS_AFTER_THREAT_FIELD);
 
     if (i != COLO_NUM_OBS) {
         fprintf(stderr, "colosseum obs index mismatch: wrote %d, expected %d\n", i, COLO_NUM_OBS);

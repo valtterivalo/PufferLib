@@ -1764,6 +1764,7 @@ typedef struct {
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
     int step_out_forecast_obs_enabled;
+    int threat_field_obs_enabled;      /* 17x17 egocentric shooter-LoS + standability field */
     int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
     int mask_inventory_heads;
