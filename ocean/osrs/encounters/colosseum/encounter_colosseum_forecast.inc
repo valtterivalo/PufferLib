@@ -543,14 +543,10 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             npc->sol_immobile_ticks > 0)
         return result;
 
-    ColoForecastMoveCtx move_ctx;
-    move_ctx.state = s;
-    move_ctx.npc_flags = npc_flags;
-    move_ctx.player_x = action->land_x;
-    move_ctx.player_y = action->land_y;
-    move_ctx.sol_clamp_active = sol_clamp_active;
-
-    col_forecast_local_stamp_npc(npc_flags, npc, 0);
+    /* Hold-in-place cases are decided before lifting the footprint: neither the
+       ranged-hold test (static-LoS table + geometry) nor the attack-timer test
+       reads npc_flags, so a held NPC keeps its base footprint stamp untouched
+       and skips the unstamp/restamp round trip the moving path needs. */
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
@@ -566,15 +562,19 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             result.npc_y = npc->y;
             result.land_x = action->land_x;
             result.land_y = action->land_y;
-            col_forecast_local_stamp_npc(npc_flags, npc, 1);
             return result;
         }
     }
-    if (npc->attack_timer > npc->attack_speed) {
-        col_forecast_local_stamp_npc(npc_flags, npc, 1);
-        return result;
-    }
+    if (npc->attack_timer > npc->attack_speed) return result;
 
+    ColoForecastMoveCtx move_ctx;
+    move_ctx.state = s;
+    move_ctx.npc_flags = npc_flags;
+    move_ctx.player_x = action->land_x;
+    move_ctx.player_y = action->land_y;
+    move_ctx.sol_clamp_active = sol_clamp_active;
+
+    col_forecast_local_stamp_npc(npc_flags, npc, 0);
     int tx = action->land_x;
     int ty = action->land_y;
     EncounterNpcStepPolicy step_policy = npc->attack_range > 1
