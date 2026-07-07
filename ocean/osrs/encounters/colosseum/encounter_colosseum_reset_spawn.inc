@@ -562,7 +562,13 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     int saved_start = ctx->config.start_wave;
     uint32_t saved_rng = s->rng_state;
     col_context_clear_render_events(ctx);
+    /* The signature-keyed obs memos survive the reset (see ColoObsMemoCaches): every
+       entry self-corrects against a content signature recomputed from live state, so
+       restoring them is bit-identical and lets the respawn's identical starting loadout
+       skip the first-obs best-gear rebuild that dominated obs time under fast deaths. */
+    ColoObsMemoCaches saved_obs_memos = s->obs_memos;
     memset(s, 0, sizeof(ColosseumState));
+    s->obs_memos = saved_obs_memos;
     s->start_wave = saved_start;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
 

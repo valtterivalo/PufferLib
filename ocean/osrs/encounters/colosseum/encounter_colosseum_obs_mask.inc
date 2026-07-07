@@ -92,6 +92,8 @@
 #define COLO_WIELDED_DPT_OBS_SIZE     2
 #define COLO_WEAPON_CHOICE_OBS_SIZE (COLO_CELL_WEAPON_DPT_OBS_SIZE + \
     COLO_CELL_SPEC_OBS_SIZE + COLO_WIELDED_DPT_OBS_SIZE)
+static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS,
+    "weapon-choice obs cache float count must match the block size");
 
 /* spawn-phase + spawn-shaping obs (researched wave-start timeline):
     - ticks-until-spawn /12 and ticks-until-attacks-open /16 (the policy times
@@ -1718,9 +1720,12 @@ static void col_build_best_gear_table(
     (attack/strength/ranged/magic), and the active loadout profile (it selects the magic
     spell base via col_weapon_set_spell_base_damage). HP is excluded on purpose (dharok
     scores at full HP), as are NPC positions, the alive set, and the live prayer (the
-    table uses the style-matched prayer) -- the table depends on none of them. FNV-1a
-    over the bytes; a collision only costs a missed reuse, never a wrong result, because
-    a true input change almost always moves the hash and forces a rebuild. */
+    table uses the style-matched prayer) -- the table depends on none of them. Consumable
+    cells hash as ITEM_NONE for free (their item_idx IS ITEM_NONE; doses live in
+    raw_osrs_id/dose which the table provably never reads), so potion sips and eating
+    never invalidate. FNV-1a over the bytes; a collision only costs a missed reuse, never
+    a wrong result, because a true input change almost always moves the hash and forces a
+    rebuild. */
 static uint64_t col_best_gear_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
@@ -1749,20 +1754,22 @@ static uint64_t col_best_gear_signature(const ColosseumState* s) {
     swaps), so a single cache entry rebuilds on every weapon switch. Keeping the last
     COLO_BEST_GEAR_CACHE_WAYS distinct signatures resident lets those switches hit. A hit
     returns the byte-identical table a fresh build would produce, so the obs is unchanged
-    -- only the rebuild FREQUENCY drops. */
+    -- only the rebuild FREQUENCY drops. The memo survives episode resets (see
+    ColoObsMemoCaches), so the respawn's identical starting loadout also hits. */
 static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES] {
     if (!s) abort();
+    ColoObsMemoCaches* memos = &s->obs_memos;
     uint64_t sig = col_best_gear_signature(s);
     for (int w = 0; w < COLO_BEST_GEAR_CACHE_WAYS; w++) {
-        if (s->best_gear_cache_valid[w] && s->best_gear_cache_sig[w] == sig)
-            return s->best_gear_cache[w];
+        if (memos->best_gear_valid[w] && memos->best_gear_sig[w] == sig)
+            return memos->best_gear[w];
     }
-    int slot = s->best_gear_cache_next;
-    col_build_best_gear_table(s, s->best_gear_cache[slot]);
-    s->best_gear_cache_sig[slot] = sig;
-    s->best_gear_cache_valid[slot] = 1;
-    s->best_gear_cache_next = (slot + 1) % COLO_BEST_GEAR_CACHE_WAYS;
-    return s->best_gear_cache[slot];
+    int slot = memos->best_gear_next;
+    col_build_best_gear_table(s, memos->best_gear[slot]);
+    memos->best_gear_sig[slot] = sig;
+    memos->best_gear_valid[slot] = 1;
+    memos->best_gear_next = (slot + 1) % COLO_BEST_GEAR_CACHE_WAYS;
+    return memos->best_gear[slot];
 }
 
 /**
@@ -1899,13 +1906,59 @@ static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
     return COLO_GEAR_MELEE;
 }
 
+/** Content signature over every ColosseumState input the weapon-choice obs block reads.
+    Folds the best-gear signature (worn gear + inventory + the 4 combat levels + loadout
+    profile -- covers the per-cell items, every candidate setup, the spec bits and the
+    wielded DPT) with the live target descriptor: whether a live non-hazard target
+    exists, its NPC type (selects the static stat row), its drained defence level (spec
+    weapons lower it and it feeds the melee/ranged def roll) and its footprint size (the
+    scythe splat count). HP is excluded on purpose -- the block scores at MAXED_BASE_HITPOINTS
+    (dharok floor), never live HP. Two targets with identical (type, def_drained, size)
+    yield an identical block, so keying on the descriptor rather than the slot index is
+    both complete and maximally reusable. FNV-1a; a collision only costs a missed reuse. */
+static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
+    uint64_t h = col_best_gear_signature(s);
+    int has_target = 0, type = 0, def_drained = 0, size = 0;
+    int target = col_player_target_slot(s);
+    if (target >= 0 && target < COLO_MAX_NPCS) {
+        const ColoNPC* npc = &s->npcs[target];
+        if (col_npc_is_live_target(npc) && !col_type_is_hazard_entity(npc->type)) {
+            has_target = 1;
+            type = (int)npc->type;
+            def_drained = npc->def_drained;
+            size = npc->size;
+        }
+    }
+    const int target_fields[4] = { has_target, type, def_drained, size };
+    for (int k = 0; k < 4; k++)
+        h = (h ^ (uint64_t)(uint32_t)target_fields[k]) * 1099511628211ULL;
+    return h;
+}
+
 /**
  * Weapon-choice obs tail: per-cell target DPT, per-cell spec bit, wielded
  * DPT + wielded-vs-best ratio. All target-conditioned floats are 0 without a
  * live non-hazard target.
+ *
+ * Signature-cached (col_weapon_choice_obs_signature): the block is a pure function of
+ * the best-gear inputs + the live target descriptor, so on a hit the resident block is
+ * byte-identical to a fresh write and only the per-item DPT recompute frequency drops.
  */
 static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) {
     int i = *io;
+
+    ColoObsMemoCaches* memos = &s->obs_memos;
+    uint64_t sig = col_weapon_choice_obs_signature(s);
+    for (int w = 0; w < COLO_WEAPON_CHOICE_OBS_CACHE_WAYS; w++) {
+        if (memos->weapon_choice_valid[w] && memos->weapon_choice_sig[w] == sig) {
+            memcpy(&obs[i], memos->weapon_choice[w],
+                   sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
+            *io = i + COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS;
+            return;
+        }
+    }
+    int block_start = i;
+
     const ColoNPC* npc = NULL;
     int target = col_player_target_slot(s);
     if (target >= 0 && target < COLO_MAX_NPCS) {
@@ -1953,6 +2006,14 @@ static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) 
         : 0.0f;
     obs[i++] = col_clamp01(cur / COLO_EXPECTED_DPT_NORM);
     obs[i++] = (npc && best_dpt > 0.0f) ? col_clamp01(cur / best_dpt) : 0.0f;
+
+    int slot = memos->weapon_choice_next;
+    memcpy(memos->weapon_choice[slot], &obs[block_start],
+           sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
+    memos->weapon_choice_sig[slot] = sig;
+    memos->weapon_choice_valid[slot] = 1;
+    memos->weapon_choice_next = (slot + 1) % COLO_WEAPON_CHOICE_OBS_CACHE_WAYS;
+
     *io = i;
 }
 

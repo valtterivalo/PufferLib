@@ -1317,6 +1317,44 @@ typedef struct {
     spec/shield swaps) so weapon switches hit instead of triggering a full rebuild. */
 #define COLO_BEST_GEAR_CACHE_WAYS 12
 
+/** Weapon-choice obs cache (col_write_weapon_choice_obs). The 58-float block (per-cell
+    DPT + per-cell spec bit + wielded DPT/ratio) is a pure function of the best-gear
+    signature and the current target's (type, drained defence, footprint size), so a
+    handful of ways cover target switches and the rare spec-drain tick while lifting the
+    per-item DPT recompute (35-38% of step) out of the hot path. Float count is fixed
+    from OSRS_INVENTORY_SIZE and asserted equal to COLO_WEAPON_CHOICE_OBS_SIZE where that
+    block-size constant is defined (obs_mask.inc). */
+#define COLO_WEAPON_CHOICE_OBS_CACHE_WAYS 8
+#define COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS (2 * OSRS_INVENTORY_SIZE + 2)
+
+/** Signature-keyed obs memos, PRESERVED across episode resets (col_reset_ctx saves this
+    block around its full-state memset and restores it). Safe because every memo is a
+    pure function of a content signature recomputed from live state on each access and
+    rebuilt on mismatch -- stale entries can never be served, so surviving the reset is
+    bit-identical and only lets the common respawn (identical starting loadout at
+    identical combat levels) skip the first-obs best-gear brute-force rebuild. Under a
+    fast-dying policy that reset-forced rebuild was ~90% of the obs_weapon_choice bucket.
+
+    best_gear: the best-achievable-gear DPT table (col_get_best_gear_table), keyed by
+    worn gear + inventory items + 4 combat levels + loadout profile
+    (col_best_gear_signature). Set-associative FIFO so the style-kit/spec-swap working
+    set stays resident.
+
+    weapon_choice: the weapon-choice obs block (col_write_weapon_choice_obs), keyed by
+    the best-gear signature + the live target descriptor (type/def_drained/size)
+    (col_weapon_choice_obs_signature). Set-associative FIFO so target switches stay
+    resident. */
+typedef struct {
+    ColoBestGear best_gear[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
+    uint64_t best_gear_sig[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_valid[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_next;   /* FIFO insertion slot */
+    float weapon_choice[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS][COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
+    uint64_t weapon_choice_sig[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
+    int weapon_choice_valid[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
+    int weapon_choice_next;   /* FIFO insertion slot */
+} ColoObsMemoCaches;
+
 /** researched loadout profiles (.colosseum-notes/research/loadout-*.md):
     BEGINNER = wiki Budget tab tier-1 + budget example inventory (first-quiver
     floor), SPEEDRUN = wiki High efficiency tab (sub-20 kit). Spec weapons swap
@@ -2123,22 +2161,9 @@ typedef struct {
        the ~15-deep state-only modifier-tick chain. 1.0 = bit-identical no-op. */
     float active_player_damage_received_scale;
 
-    /* Best-gear oracle cache. The table (col_build_best_gear_table) is a pure function
-       of worn gear + inventory items + the 4 combat levels, none of which change on
-       most ticks, so it is rebuilt only when a content signature over those inputs
-       changes (col_get_best_gear_table) and reused otherwise. Self-correcting: every
-       access recomputes the signature from current state and rebuilds on mismatch, so
-       the cache stays valid across episode resets and forecast projections with no
-       explicit invalidation. Lifts the per-tick brute force out of the obs hot path.
-       Set-associative (COLO_BEST_GEAR_CACHE_WAYS, FIFO-evicted): the policy cycles
-       through a handful of gear setups (melee/ranged/magic kits + spec swaps), so a
-       single entry thrashes on every weapon switch while a few ways keep all the live
-       setups resident -- bit-identical (a hit returns the table a fresh build would
-       produce for that signature), it only changes WHEN the brute force runs. */
-    ColoBestGear best_gear_cache[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
-    uint64_t best_gear_cache_sig[COLO_BEST_GEAR_CACHE_WAYS];
-    int best_gear_cache_valid[COLO_BEST_GEAR_CACHE_WAYS];
-    int best_gear_cache_next;   /* FIFO insertion slot */
+    /* Signature-keyed obs memos (best-gear table + weapon-choice block), preserved
+       across episode resets. See ColoObsMemoCaches for the full contract. */
+    ColoObsMemoCaches obs_memos;
 } ColosseumState;
 
 /** Prayer channel of a direct player-damage application, for land-time forensics.

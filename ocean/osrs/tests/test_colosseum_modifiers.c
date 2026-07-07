@@ -7598,6 +7598,50 @@ static void test_weapon_choice_obs_rank_and_farm_cap(void) {
     CHECK("no target: spec bits stay up (target-independent)",
         obs[spec_base + cell_claws] == 1.0f);
 
+    /* stale-cache regression: the block is signature-cached, and live NPC defence drain
+       (elder maul spec) is a key input the gear signature alone does not carry. Write vs
+       the manticore, drain its defence to zero, rewrite -- the melee/ranged cell DPTs and
+       the wielded DPT MUST rise (easier to hit), proving def_drained is in the cache key
+       rather than serving a stale pre-drain block. */
+    osrs_interaction_set(&s.interaction, manti);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    float pre_drain_tentacle = obs[dpt_base + cell_tentacle];
+    float pre_drain_tbow = obs[dpt_base + cell_tbow];
+    float pre_drain_wielded = obs[wielded_base];
+    s.npcs[manti].def_drained = COLO_NPC_STATS[COLO_MANTICORE].def_level;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("def drain raises the melee tentacle cell DPT (not a stale block)",
+        obs[dpt_base + cell_tentacle] > pre_drain_tentacle);
+    CHECK("def drain raises the ranged tbow cell DPT (not a stale block)",
+        obs[dpt_base + cell_tbow] > pre_drain_tbow);
+    CHECK("def drain raises the wielded DPT (not a stale block)",
+        obs[wielded_base] > pre_drain_wielded);
+
+    /* consumable-mutation bit-identity: a potion sip mutates raw_osrs_id/dose but not
+       item_idx, so the weapon-choice signature is unchanged and the memo serves the
+       resident block. That served block must equal a from-scratch recompute (memos
+       wiped) byte for byte. Catches any future obs input that reads consumable state
+       without widening the signature. */
+    int cell_brew = -1;
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
+        if (s.inventory_cells[c].item_idx == ITEM_NONE) { cell_brew = c; break; }
+    CHECK("a gear-free cell exists to hold the brew", cell_brew >= 0);
+    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6685);
+    CHECK("4-dose brew seeded", s.inventory_cells[cell_brew].dose == 4);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6687);
+    CHECK("sip took a dose", s.inventory_cells[cell_brew].dose == 3);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    float served_block[COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
+    memcpy(served_block, &obs[dpt_base],
+           sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
+    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("memo-served weapon-choice block == fresh recompute after the sip",
+        memcmp(served_block, &obs[dpt_base],
+               sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS) == 0);
+    s.inventory_cells[cell_brew] = osrs_inventory_cell_empty();
+
     /* farm-safe damage cap: reinforcement fresh damage pays no damage reward
        on waves 1-4 with the knob on, full otherwise. */
     col_spawn_reinforcements(&s);
