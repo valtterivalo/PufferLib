@@ -200,18 +200,16 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* Re-seeded 2026-07-07 for the wave-spawn fidelity batch: the researched
-   timeline (pick t0 -> spawn resolved t5 vs the pre-move t5 tile -> visible t6
-   -> moving t7 -> no NPC attacks before t9), the 13th primary anchor (16,20),
-   the fixed warband spawn formation (seer +2E, berserker +1E+1N, quartet
-   +1E+1S) with per-member surround dirs, warband NPC-collision immunity, and
-   wave NPCs opening with ready attack timers. Every wave now starts 5 ticks
-   later with different rosters/positions, so all 12 digests move. Sim laws
-   proven by test_colosseum_modifiers.c 10304/10304 (incl. the new timeline
-   regression in test_step_loop_draft). Verified deterministic (two --print
-   runs identical). Snapshot v20: round 2 adds the Sol t12/t15 entry, the
-   challenge-start draft (12 picks per run, free movement while it pends), and
-   the +15 spawn-phase/anchor-blocked obs floats (2451 -> 2466). */
+/* Re-seeded 2026-07-07 (second pass) for the attacker-side manticore stagger:
+   the 5-tick delay now hits only peers that are ready to attack (charge
+   complete, range + LoS) at the instant a barrage starts, and a peer that
+   becomes ready or gains LoS mid-barrage overlaps freely (the wiki overlap
+   clause). Only the two double-manticore configs moved (w09, w10); the other
+   10 digests are bit-identical, proving the change is surgical. Sim laws in
+   test_colosseum_modifiers.c 10323/10323 (synced-pair alternation, mid-barrage
+   overlap, LoS-gain overlap, forecast pair mirror). Verified deterministic
+   (two --print runs identical). Prior re-seed context (v20 wave-spawn
+   timeline, Sol t12/t15 entry, challenge-start draft, 2466 obs) unchanged. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0xad552994faaf252eULL,
     0xa17246ec4eb2d72eULL,
@@ -221,8 +219,8 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0xf429423135c0927eULL,
     0x5e0ab48747fa1de7ULL,
     0x78ab56c045a98814ULL,
-    0x0de5c9aaba35a978ULL,
-    0x99d145ddf52e36edULL,
+    0x3138fc3703fcc29dULL,
+    0x8d2a8b411ea984a4ULL,
     0xc2239f8b8f84ca7dULL,
     0x7eb49470a01c5046ULL,
 };

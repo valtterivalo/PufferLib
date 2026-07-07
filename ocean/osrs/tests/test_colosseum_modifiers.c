@@ -3179,8 +3179,9 @@ static void test_manticore_shared_wave_cycle(void) {
     CHECK("every manticore in a wave shares one fixed orb cycle", all_shared);
     CHECK("the wave cycle is valid (one of each style, melee last)", all_valid);
 
-    /* the 5-tick multi-manticore stagger is unchanged: a ready peer delays 5
-       ticks while another is mid-barrage, and fires the same shared pattern. */
+    /* attacker-side wiki stagger: the instant A starts a barrage, a peer that
+       is ready+able AT THAT MOMENT is delayed exactly 5 ticks and holds the
+       shared pattern. */
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     ctx.config.start_wave = 1;
@@ -3205,10 +3206,117 @@ static void test_manticore_shared_wave_cycle(void) {
     col_npc_attack_ctx(&s, &ctx, 0);
     CHECK("A committed and fired orb 0", amc->cycle_step == 1);
     col_npc_attack_ctx(&s, &ctx, 1);
-    CHECK("a ready peer staggers 5 ticks during A's barrage, holding the shared pattern",
+    CHECK("a peer ready at A's barrage start is delayed, holding the shared pattern",
         s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS &&
         bmc->cycle_step == 0 &&
         bmc->orb_style[0] == bmc->fixed_orb_style[0]);
+    for (int t = 0; t < 4; t++) col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("the delayed peer is still holding 4 ticks after A fired",
+        bmc->cycle_step == 0 && s.npcs[1].attack_timer == 1);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("the delayed peer fires exactly 5 ticks after A's barrage started",
+        bmc->cycle_step == 1);
+}
+
+/* A19 round 2 (wiki overlap clause): the 5-tick delay hits ONLY manticores
+   that are ready to attack (charge complete, range + LoS) at the instant a
+   peer starts its barrage. A manticore whose charge completes mid-barrage, or
+   that only gains LoS mid-barrage (the "entered a second manticore's line of
+   sight while the first is still firing" punish), fires immediately and
+   overlaps. The old defender-side check wrongly staggered both cases. */
+static void test_manticore_stagger_overlap_fidelity(void) {
+    printf("test_manticore_stagger_overlap_fidelity\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+
+    /* case 1: B's charge completes one tick into A's barrage -> overlap. */
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    ctx.config.start_wave = 1;
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
+    geo_clear_npcs(&s);
+    s.wave = 8;
+    s.wave_manticore_pattern_rolled = 0;
+    s.player.x = 13; s.player.y = 12;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);
+    col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);
+    ColoManticoreState* amc = colo_npc_manticore(&s.npcs[0]);
+    ColoManticoreState* bmc = colo_npc_manticore(&s.npcs[1]);
+    s.player.current_hitpoints = 99;
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 2;
+    col_npc_attack_ctx(&s, &ctx, 0);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("a peer still charging at A's barrage start is not delayed",
+        s.npcs[1].attack_timer == 1 && bmc->cycle_step == 0);
+    col_npc_attack_ctx(&s, &ctx, 0);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("a peer whose charge completes mid-barrage overlaps immediately",
+        amc->cycle_step == 2 && bmc->cycle_step == 1);
+
+    /* case 2: B is ready but pillar-blocked at A's barrage start; the player
+       stepping into B's LoS mid-barrage eats the overlap. */
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
+    geo_clear_npcs(&s);
+    s.wave = 8;
+    s.wave_manticore_pattern_rolled = 0;
+    s.player.x = 5; s.player.y = 9;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 5, 14);    /* clear LoS to (5,9) */
+    col_init_npc(&s, 1, COLO_MANTICORE, 11, 8);    /* behind the (8,8) pillar */
+    amc = colo_npc_manticore(&s.npcs[0]);
+    bmc = colo_npc_manticore(&s.npcs[1]);
+    s.player.current_hitpoints = 99;
+    s.npcs[0].attack_timer = 0;
+    s.npcs[1].attack_timer = 0;
+    CHECK("fixture: A sees the player", col_npc_has_los_to_player(&s, &s.npcs[0]));
+    CHECK("fixture: the pillar blocks B's LoS", !col_npc_has_los_to_player(&s, &s.npcs[1]));
+    col_npc_attack_ctx(&s, &ctx, 0);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("a ready but LoS-blocked peer is not delayed at A's barrage start",
+        amc->cycle_step == 1 && s.npcs[1].attack_timer == 0 && bmc->cycle_step < 0);
+    s.player.x = 12; s.player.y = 12;              /* step into B's LoS */
+    col_rebuild_player_collision_flags(&s);
+    CHECK("fixture: B sees the player after the step",
+        col_npc_has_los_to_player(&s, &s.npcs[1]));
+    col_npc_attack_ctx(&s, &ctx, 0);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("entering a second manticore's LoS mid-barrage eats the overlap",
+        amc->cycle_step == 2 && bmc->cycle_step == 1);
+
+    /* case 3: an ORGANICALLY synced pair (both timers hit 0 on the same tick,
+       the normal wave 9-11 spawn) must alternate, not double-fire: the later
+       peer sits at pre-decrement timer 1 when the first fires, and the sweep
+       must still count that as "ready this tick". */
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 89);
+    geo_clear_npcs(&s);
+    s.wave = 8;
+    s.wave_manticore_pattern_rolled = 0;
+    s.player.x = 13; s.player.y = 12;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 12, 16);
+    col_init_npc(&s, 1, COLO_MANTICORE, 18, 16);
+    amc = colo_npc_manticore(&s.npcs[0]);
+    bmc = colo_npc_manticore(&s.npcs[1]);
+    s.player.current_hitpoints = 99;
+    s.npcs[0].attack_timer = 3;
+    s.npcs[1].attack_timer = 3;
+    for (int t = 0; t < 3; t++) {
+        col_npc_attack_ctx(&s, &ctx, 0);
+        col_npc_attack_ctx(&s, &ctx, 1);
+    }
+    CHECK("a synced pair alternates: first fires, second is delayed 5",
+        amc->cycle_step == 1 &&
+        s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS &&
+        bmc->cycle_step == 0);
+    col_npc_attack_ctx(&s, &ctx, 0);
+    col_npc_attack_ctx(&s, &ctx, 1);
+    CHECK("the delayed half of the pair keeps holding through A's barrage",
+        amc->cycle_step == 2 && bmc->cycle_step == 0 &&
+        s.npcs[1].attack_timer == COLO_MANTICORE_STAGGER_TICKS - 1);
 }
 
 /* OSRS locks a ranged/magic attack's protect-prayer outcome + damage on the THROW
@@ -5771,6 +5879,46 @@ static void test_step_out_forecast_manticore_armed_pattern(void) {
         idle->ticks[2].melee_count == 1 && idle->melee_fallback_exposure == 1);
 }
 
+/* forecast mirror of the attacker-side manticore stagger: a synced pair is
+   predicted to alternate (the delayed peer's orbs fall outside the horizon),
+   while a peer still charging when the first fires is predicted to overlap. */
+static void test_step_out_forecast_manticore_pair_stagger(void) {
+    printf("test_step_out_forecast_manticore_pair_stagger\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 406, 17, 16);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
+    col_init_npc(&s, 1, COLO_MANTICORE, 12, 12);
+    s.npcs[0].attack_timer = 1;
+    s.npcs[1].attack_timer = 1;
+    ColoManticoreState* amc = colo_npc_manticore(&s.npcs[0]);
+    ColoManticoreState* bmc = colo_npc_manticore(&s.npcs[1]);
+    amc->cycle_step = 0;
+    amc->orb_style[0] = ATTACK_STYLE_MAGIC;
+    amc->orb_style[1] = ATTACK_STYLE_RANGED;
+    amc->orb_style[2] = ATTACK_STYLE_MELEE;
+    bmc->cycle_step = 0;
+    bmc->orb_style[0] = ATTACK_STYLE_MAGIC;
+    bmc->orb_style[1] = ATTACK_STYLE_RANGED;
+    bmc->orb_style[2] = ATTACK_STYLE_MELEE;
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    const ColoStepOutForecastAction* idle = &forecast.actions[0];
+    CHECK("synced-pair forecast predicts ONE orb per tick, not two",
+        idle->ticks[0].magic_count == 1 &&
+        idle->ticks[1].ranged_count == 1 &&
+        idle->ticks[2].melee_count == 1);
+
+    /* still-charging peer (timer 3 at the first barrage) overlaps on tick 3. */
+    s.npcs[1].attack_timer = 3;
+    bmc->orb_style[0] = ATTACK_STYLE_RANGED;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    idle = &forecast.actions[0];
+    CHECK("still-charging peer forecast overlaps mid-barrage",
+        idle->ticks[2].melee_count == 1 && idle->ticks[2].ranged_count == 1);
+}
+
 static void test_step_out_forecast_warband_window_and_break(void) {
     printf("test_step_out_forecast_warband_window_and_break\n");
     ColosseumContext ctx;
@@ -7503,6 +7651,7 @@ int main(void) {
     test_player_melee_lands_at_delay_zero();
     test_echo_boots_recoil_reflects_to_attacker();
     test_manticore_shared_wave_cycle();
+    test_manticore_stagger_overlap_fidelity();
     test_javelin_skyfall_no_defence_gate();
     test_sol_adjacency_gate_and_kiting();
     test_sol_attack_selection_invariants();
@@ -7539,6 +7688,7 @@ int main(void) {
     test_death_charge_regression();
     test_combat_fidelity_snapshot_roundtrip();
     test_step_out_forecast_manticore_armed_pattern();
+    test_step_out_forecast_manticore_pair_stagger();
     test_step_out_forecast_warband_window_and_break();
     test_step_out_forecast_ranged_los_candidate_tiles();
     test_step_out_forecast_valid_flags();

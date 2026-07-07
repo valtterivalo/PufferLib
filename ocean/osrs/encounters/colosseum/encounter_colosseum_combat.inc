@@ -541,18 +541,34 @@ static void col_npc_resolve_javelin_skyfall(
 /** Manticore uses a 10-tick barrage-to-barrage cycle: 3 orbs on consecutive
     ticks, then a 7-tick recharge. Orbs 0 and 1 are ranged and magic in random
     order. Orb 2 is always melee. Each orb checks prayer on its launch tick and
-    lands one tick later in fire order, independent of distance. A ready
-    manticore staggers 5 ticks if another is mid-barrage. Spawns uncharged, so
-    the first barrage waits a full cycle. D11: movement stays unrestricted while
-    charging. */
-static int col_any_other_manticore_mid_barrage(const ColosseumState* s, int idx) {
+    lands one tick later in fire order, independent of distance. Spawns
+    uncharged, so the first barrage waits a full cycle. D11: movement stays
+    unrestricted while charging. */
+
+/** A19 wiki stagger, attacker-side: the instant a manticore starts a barrage,
+    every OTHER manticore that is ready to attack at that moment (charge
+    complete, unstunned, range + LoS) has its attack delayed 5 ticks. A peer
+    that becomes ready or gains LoS mid-barrage is NOT delayed and overlaps
+    freely (the wiki overlap clause -- entering a second manticore's LoS while
+    the first is firing is punished, as in the live game). A swept peer always
+    sits later in this tick's interleaved NPC loop (an earlier ready+able peer
+    would already have fired and be mid-barrage), so its own attack_timer
+    decrement still runs this tick: pre-decrement timer <= 1 means "would fire
+    this same tick" (the organic synced-pair case sits at 1 here, not 0), and
+    +1 makes the net delay exactly 5. */
+static void col_manticore_delay_ready_peers(ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
-        const ColoNPC* other = &s->npcs[i];
+        ColoNPC* other = &s->npcs[i];
         if (!col_npc_is_live_target(other) || other->type != COLO_MANTICORE) continue;
-        if (other->type_state.manticore.cycle_step > 0) return 1;
+        if (other->attack_timer > 1) continue;
+        if (other->type_state.manticore.cycle_step > 0) continue;
+        if (other->stun_timer > 0 || other->frozen_ticks > 0) continue;
+        int dist = col_npc_dist_to_player(s, other);
+        if (dist < 1 || dist > COLO_NPC_STATS[COLO_MANTICORE].attack_range) continue;
+        if (!col_npc_has_los_to_player(s, other)) continue;
+        other->attack_timer = COLO_MANTICORE_STAGGER_TICKS + 1;
     }
-    return 0;
 }
 
 static int col_manticore_orb_max_hit(AttackStyle style) {
@@ -630,19 +646,15 @@ static void col_npc_manticore_arm(ColosseumState* s, int idx) {
     mc->cycle_step = 0;
 }
 
-/** start a manticore barrage once its charge completes: a ready manticore
-    staggers 5 ticks if a peer is mid-barrage; otherwise it fires orb 0 of the
-    already-armed pattern this tick. */
+/** start a manticore barrage once its charge completes: fire orb 0 of the
+    already-armed pattern this tick, then delay every currently-ready peer 5
+    ticks (attacker-side wiki stagger). */
 static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcStats* stats) {
     ColoNPC* npc = &s->npcs[idx];
     ColoManticoreState* mc = colo_npc_manticore(npc);
-
-    if (col_any_other_manticore_mid_barrage(s, idx)) {
-        npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
-        return;
-    }
     mc->cycle_step = 0;
     col_npc_manticore_fire_orb(s, idx, stats);
+    col_manticore_delay_ready_peers(s, idx);
 }
 
 
@@ -691,7 +703,7 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
             ctx->manticore_charge_started[idx] = 1;
         }
         if (npc->attack_timer > 0) return;          /* still charging */
-        col_npc_attack_manticore(s, idx, stats);    /* fire orb 0 (or stagger) */
+        col_npc_attack_manticore(s, idx, stats);    /* fire orb 0 + sweep peers */
         return;
     }
 

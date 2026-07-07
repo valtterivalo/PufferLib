@@ -647,11 +647,18 @@ static ColoForecastPrecomp col_forecast_precompute(
     return pre;
 }
 
-static int col_forecast_any_other_manticore_mid_barrage(
+/** forecast mirror of col_manticore_delay_ready_peers: when a local manticore
+    starts a barrage, delay every OTHER ready+able local manticore 5 ticks.
+    Same pre-decrement timer <= 1 eligibility and same +1 as the sim (swept
+    peers sit later in the slot loop, so their own attack_timer decrement
+    still runs this forecast tick). */
+static void col_forecast_manticore_delay_ready_peers(
+    const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
     const int slots[COLO_MAX_NPCS],
     int slot_count,
-    int idx
+    int idx,
+    const ColoStepOutForecastAction* action
 ) {
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
@@ -659,9 +666,16 @@ static int col_forecast_any_other_manticore_mid_barrage(
         ColoForecastNpcLocal* other = &npcs[i];
         if (other->forecast_behavior != COLO_FORECAST_BEHAVIOR_MANTICORE)
             continue;
-        if (other->cycle_step > 0) return 1;
+        if (other->attack_timer > 1) continue;
+        if (other->cycle_step > 0) continue;
+        if (other->stun_timer > 0 || other->frozen_ticks > 0) continue;
+        int dist = col_forecast_local_dist_to_player(
+            other, action->land_x, action->land_y);
+        if (dist < 1 || dist > other->attack_range) continue;
+        if (!col_forecast_local_has_los_to_player(
+                s, other, action->land_x, action->land_y)) continue;
+        other->attack_timer = COLO_MANTICORE_STAGGER_TICKS + 1;
     }
-    return 0;
 }
 
 static void col_forecast_local_fire_manticore_orb(
@@ -717,13 +731,10 @@ static void col_forecast_local_attack_manticore(
         npc->cycle_step = 0;
     }
     if (npc->attack_timer > 0) return;
-    if (multi_manticore_possible &&
-            col_forecast_any_other_manticore_mid_barrage(npcs, slots, slot_count, idx)) {
-        npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
-        return;
-    }
-
     col_forecast_local_fire_manticore_orb(npc, action, summary, tick_idx);
+    if (multi_manticore_possible)
+        col_forecast_manticore_delay_ready_peers(
+            s, npcs, slots, slot_count, idx, action);
 }
 
 static void col_forecast_local_attack_warband(
