@@ -2588,6 +2588,68 @@ static void test_warband_move_skip(void) {
         s.log.total_damage_received == 0.0f);
 }
 
+/* run one wave-1 warband episode from a seed and fold the per-tick player +
+   warbander positions into a trajectory hash. The BFS memo table is NOT touched
+   here: the caller decides whether the run sees a cold, warm, or polluted memo. */
+static uint64_t wb_trajectory_hash(ColosseumState* s, ColosseumContext* ctx,
+                                   int seed, const int* actions, int ticks) {
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    advance_to_wave_spawn(s, ctx);
+    complete_open_draft(s, ctx, 1);
+    wb_isolate_warband(s);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    while ((s->wave_ready_delay > 0 || s->wave_attack_delay > 1) && !s->episode_over)
+        step_and_observe(s, ctx, idle);
+    uint64_t h = 1469598103934665603ULL;
+    for (int t = 0; t < ticks && !s->episode_over; t++) {
+        s->player.current_hitpoints = 9999;
+        step_and_observe(s, ctx, actions);
+        h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
+        h = (h ^ (uint64_t)(uint32_t)s->player.y) * 1099511628211ULL;
+        for (int n = 0; n < COLO_MAX_NPCS; n++) {
+            if (!s->npcs[n].active || !col_type_is_warbander(s->npcs[n].type))
+                continue;
+            uint64_t p = (uint64_t)(uint32_t)s->npcs[n].x
+                | ((uint64_t)(uint32_t)s->npcs[n].y << 8)
+                | ((uint64_t)n << 16);
+            h = (h ^ p) * 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+/* 4b2. warband BFS memo: replaying the same episode against a warm memo must
+   reproduce the warbander trajectory bit for bit (hit-path replay == fresh BFS,
+   covering the found/dx/dy result packing), and a DIFFERENT episode -- a walking
+   player varies the player-tile key dimension -- run against the table the first
+   episode polluted must equal its own fresh-memo reference. If any input of the
+   warband blocked predicate (src, dest, player tile, boss clamp) ever leaves the
+   exact key, the polluted run serves a stale step and diverges. */
+static void test_warband_bfs_memo_bit_identity(void) {
+    printf("test_warband_bfs_memo_bit_identity\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+    ColosseumState s;
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    int walk_south[COLO_NUM_ACTION_HEADS] = {0};
+    walk_south[COLO_HEAD_PRIMARY] = 4;
+
+    memset(col_warband_bfs_memo_key, 0, sizeof(col_warband_bfs_memo_key));
+    uint64_t idle_cold = wb_trajectory_hash(&s, &ctx, 51, idle, 40);
+    uint64_t idle_warm = wb_trajectory_hash(&s, &ctx, 51, idle, 40);
+    CHECK("memo-served warband trajectory == fresh BFS (idle player)",
+        idle_warm == idle_cold);
+
+    uint64_t walk_polluted = wb_trajectory_hash(&s, &ctx, 53, walk_south, 40);
+    memset(col_warband_bfs_memo_key, 0, sizeof(col_warband_bfs_memo_key));
+    uint64_t walk_cold = wb_trajectory_hash(&s, &ctx, 53, walk_south, 40);
+    CHECK("polluted-table episode == its fresh-memo reference (walking player)",
+        walk_polluted == walk_cold);
+}
+
 /* 4c. A5+D33: the melee-distance gate — an archer at range never attacks on its
    window even with clear LoS; cardinal contact attacks; diagonal contact does
    not (1x1 OSRS melee is cardinal-only). */
@@ -7810,6 +7872,7 @@ int main(void) {
     test_player_walks_through_npc_footprint();
     test_warband_cycle_offsets();
     test_warband_move_skip();
+    test_warband_bfs_memo_bit_identity();
     test_warband_melee_distance_gate();
     test_warband_two_tick_stationary_gate();
     test_warband_formation_convergence();

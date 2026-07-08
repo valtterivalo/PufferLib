@@ -175,6 +175,65 @@ static int col_npc_path_blocked(void* ctx, int x, int y) {
     return col_npc_path_cache.blocked_value[gx][gy];
 }
 
+/** Exact-input BFS memo for warband routefinding. A warbander's blocked
+    predicate (ignore_npcs, size 1) reads only the process-constant static
+    mask, the player's tile, and the wave-12 boss clamp rectangle, so
+    (src, dest, player, clamp) determines the whole BFS result: a hit replays
+    it bit-identically. Direct-mapped and thread-local; entries never go stale
+    because every input that can change is part of the key, so the table
+    persists across ticks and episodes. Key packing is prefix-free via a
+    leading 1 bit (clamp-active keys are longer than clamp-free keys). */
+#define COL_WARBAND_BFS_MEMO_BITS 16
+#define COL_WARBAND_BFS_MEMO_SIZE (1 << COL_WARBAND_BFS_MEMO_BITS)
+static _Thread_local uint64_t col_warband_bfs_memo_key[COL_WARBAND_BFS_MEMO_SIZE];
+static _Thread_local uint8_t col_warband_bfs_memo_result[COL_WARBAND_BFS_MEMO_SIZE];
+
+#ifdef COLO_BFS_INSTR
+static long col_warband_bfs_memo_instr_hits;
+static long col_warband_bfs_memo_instr_misses;
+static int col_warband_bfs_memo_instr_registered;
+static void col_warband_bfs_memo_instr_report(void) {
+    long total = col_warband_bfs_memo_instr_hits + col_warband_bfs_memo_instr_misses;
+    fprintf(stderr, "COLO_BFS_INSTR: memo hits=%ld misses=%ld (%.1f%% hit)\n",
+        col_warband_bfs_memo_instr_hits, col_warband_bfs_memo_instr_misses,
+        total ? 100.0 * col_warband_bfs_memo_instr_hits / total : 0.0);
+}
+#endif
+
+/** pack every input of the warband blocked predicate; all coords are arena
+    tiles in [0, 33] so 6-bit fields are exact. */
+static uint64_t col_warband_bfs_memo_pack(
+    const ColosseumState* s, int x, int y, int tx, int ty) {
+    uint64_t key = 1;
+    key = key << 6 | (uint64_t)x;
+    key = key << 6 | (uint64_t)y;
+    key = key << 6 | (uint64_t)tx;
+    key = key << 6 | (uint64_t)ty;
+    key = key << 6 | (uint64_t)s->player.x;
+    key = key << 6 | (uint64_t)s->player.y;
+    if (col_sol_clamp_active(s)) {
+        key = key << 1 | 1;
+        key = key << 6 | (uint64_t)s->sol.boss_arena_min_x;
+        key = key << 6 | (uint64_t)s->sol.boss_arena_max_x;
+        key = key << 6 | (uint64_t)s->sol.boss_arena_min_y;
+        key = key << 6 | (uint64_t)s->sol.boss_arena_max_y;
+    } else {
+        key <<= 1;
+    }
+    return key;
+}
+
+static uint32_t col_warband_bfs_memo_slot(uint64_t key) {
+    return (uint32_t)((key * 0x9E3779B97F4A7C15ULL) >> (64 - COL_WARBAND_BFS_MEMO_BITS));
+}
+
+/** result byte: bit 0 found, bits 1-2 next_dx+1, bits 3-4 next_dy+1. */
+static uint8_t col_warband_bfs_memo_encode(PathResult pr) {
+    return (uint8_t)((pr.found ? 1 : 0) |
+        (uint32_t)(pr.next_dx + 1) << 1 |
+        (uint32_t)(pr.next_dy + 1) << 3);
+}
+
 /** one routefinding step (D3) of a size x size NPC toward SW-anchor dest over the
     shared arena BFS, reusing the caller's cache generation (pc->gen). An
     unreachable dest degrades to the nearest reachable tile (shared pathfinder
@@ -198,6 +257,39 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
         *y = ty;
         return 1;
     }
+    int memoable = pc->ignore_npcs && pc->size == 1 &&
+        *x >= COLO_ARENA_MIN_X && *x <= COLO_ARENA_MAX_X &&
+        *y >= COLO_ARENA_MIN_Y && *y <= COLO_ARENA_MAX_Y &&
+        pc->s->player.x >= COLO_ARENA_MIN_X && pc->s->player.x <= COLO_ARENA_MAX_X &&
+        pc->s->player.y >= COLO_ARENA_MIN_Y && pc->s->player.y <= COLO_ARENA_MAX_Y;
+    uint64_t memo_key = 0;
+    uint32_t memo_slot = 0;
+    if (memoable) {
+#ifdef COLO_BFS_INSTR
+        if (!col_warband_bfs_memo_instr_registered) {
+            col_warband_bfs_memo_instr_registered = 1;
+            atexit(col_warband_bfs_memo_instr_report);
+        }
+#endif
+        memo_key = col_warband_bfs_memo_pack(pc->s, *x, *y, tx, ty);
+        memo_slot = col_warband_bfs_memo_slot(memo_key);
+        if (col_warband_bfs_memo_key[memo_slot] == memo_key) {
+#ifdef COLO_BFS_INSTR
+            col_warband_bfs_memo_instr_hits++;
+#endif
+            uint8_t r = col_warband_bfs_memo_result[memo_slot];
+            int found = r & 1;
+            int next_dx = (int)((r >> 1) & 3) - 1;
+            int next_dy = (int)((r >> 3) & 3) - 1;
+            if (!found || (next_dx == 0 && next_dy == 0)) return 0;
+            *x += next_dx;
+            *y += next_dy;
+            return 1;
+        }
+#ifdef COLO_BFS_INSTR
+        col_warband_bfs_memo_instr_misses++;
+#endif
+    }
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
@@ -208,6 +300,10 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_STEP_NPC_PATHFINDING);
 #endif
+    if (memoable) {
+        col_warband_bfs_memo_key[memo_slot] = memo_key;
+        col_warband_bfs_memo_result[memo_slot] = col_warband_bfs_memo_encode(pr);
+    }
     if (!pr.found || (pr.next_dx == 0 && pr.next_dy == 0)) return 0;
     *x += pr.next_dx;
     *y += pr.next_dy;
