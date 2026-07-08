@@ -1327,6 +1327,30 @@ typedef struct {
 #define COLO_WEAPON_CHOICE_OBS_CACHE_WAYS 8
 #define COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS (2 * OSRS_INVENTORY_SIZE + 2)
 
+/** Inventory+equipped obs cache (col_write_inventory_and_equipped_obs). The 982-float
+    block (28 cell affordance rows + 11 equipped-self rows) is a pure function of the
+    worn gear, the full inventory cell contents (item_idx + raw_osrs_id + dose -- doses
+    render as cell features, unlike the best-gear table) and the 3 base stats the
+    consumable magnitudes normalize against (col_inventory_obs_signature). The block
+    only changes on eat/drink/equip/pickup, so a few ways cover the gear-swap working
+    set between consumable uses. Float count asserted against COLO_INVENTORY_OBS_SIZE +
+    COLO_EQUIPPED_SELF_OBS_SIZE where those are defined (obs_mask.inc). */
+#define COLO_INVENTORY_OBS_CACHE_WAYS 8
+#define COLO_INVENTORY_OBS_CACHE_FLOATS \
+    (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES + \
+     NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+
+/** Threat-field obs cache (col_write_threat_field_obs). The 578-float block (two 17x17
+    planar channels) is a pure function of the player tile, the live-shooter descriptor
+    set (footprint + range), the npc_collision_flags grid (channel 1 standability reads
+    ALL stamped NPC bodies, melee included) and the process-constant static tables
+    (col_threat_field_obs_signature). Hits are the ticks where the player and every
+    stamped NPC hold position -- common mid-fight because attack animations stall NPCs.
+    Float count asserted against COLO_THREAT_FIELD_OBS_SIZE where it is defined
+    (obs_mask.inc). */
+#define COLO_THREAT_FIELD_OBS_CACHE_WAYS 4
+#define COLO_THREAT_FIELD_OBS_CACHE_FLOATS (2 * 17 * 17)
+
 /** Signature-keyed obs memos, PRESERVED across episode resets (col_reset_ctx saves this
     block around its full-state memset and restores it). Safe because every memo is a
     pure function of a content signature recomputed from live state on each access and
@@ -1343,7 +1367,16 @@ typedef struct {
     weapon_choice: the weapon-choice obs block (col_write_weapon_choice_obs), keyed by
     the best-gear signature + the live target descriptor (type/def_drained/size)
     (col_weapon_choice_obs_signature). Set-associative FIFO so target switches stay
-    resident. */
+    resident.
+
+    inventory: the inventory+equipped obs block (col_write_inventory_and_equipped_obs),
+    keyed by worn gear + full cell contents (incl. doses) + the 3 base stats
+    (col_inventory_obs_signature). Set-associative FIFO so gear swaps between
+    consumable uses stay resident.
+
+    threat_field: the egocentric threat-field obs block (col_write_threat_field_obs),
+    keyed by player tile + live-shooter descriptors + the npc_collision_flags grid
+    (col_threat_field_obs_signature). Hits on stationary ticks. */
 typedef struct {
     ColoBestGear best_gear[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     uint64_t best_gear_sig[COLO_BEST_GEAR_CACHE_WAYS];
@@ -1353,6 +1386,14 @@ typedef struct {
     uint64_t weapon_choice_sig[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
     int weapon_choice_valid[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
     int weapon_choice_next;   /* FIFO insertion slot */
+    float inventory[COLO_INVENTORY_OBS_CACHE_WAYS][COLO_INVENTORY_OBS_CACHE_FLOATS];
+    uint64_t inventory_sig[COLO_INVENTORY_OBS_CACHE_WAYS];
+    int inventory_valid[COLO_INVENTORY_OBS_CACHE_WAYS];
+    int inventory_next;   /* FIFO insertion slot */
+    float threat_field[COLO_THREAT_FIELD_OBS_CACHE_WAYS][COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
+    uint64_t threat_field_sig[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
+    int threat_field_valid[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
+    int threat_field_next;   /* FIFO insertion slot */
 } ColoObsMemoCaches;
 
 /** researched loadout profiles (.colosseum-notes/research/loadout-*.md):

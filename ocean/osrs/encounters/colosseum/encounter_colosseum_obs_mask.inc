@@ -34,6 +34,9 @@
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
     (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
+    COLO_INVENTORY_OBS_CACHE_FLOATS,
+    "inventory obs cache float count must match the inventory+equipped block size");
 #define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator.
                                           The per-NPC best-gear DPT obs (3 best-per-style DPT +
                                           3 argmax-style one-hot) stay removed since B0; the
@@ -114,6 +117,8 @@ static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS
 #define COLO_THREAT_FIELD_DIM (2 * COLO_THREAT_FIELD_RADIUS + 1)
 #define COLO_THREAT_FIELD_TILES (COLO_THREAT_FIELD_DIM * COLO_THREAT_FIELD_DIM)
 #define COLO_THREAT_FIELD_OBS_SIZE (2 * COLO_THREAT_FIELD_TILES)
+static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
+    "threat-field obs cache float count must match the block size");
 
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
@@ -1203,6 +1208,43 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     *idx = i;
 }
 
+/** Content signature over every ColosseumState input the threat-field obs block reads.
+    Folds the player tile (window origin), each live shooter's footprint bounds + range
+    (channel 0's whole descriptor set -- x/y/effective size/attack_range, liveness by
+    inclusion), and the raw npc_collision_flags grid bytes (channel 1 reads the grid
+    directly, which also covers melee bodies and any stamping asymmetry -- warbanders
+    and hazards never stamp). Static tables are process-constant and excluded. FNV-1a,
+    grid folded 8 bytes per step; a collision only costs a missed reuse, never a wrong
+    result, because a true input change almost always moves the hash and forces a
+    recompute. */
+static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
+    uint64_t h = 1469598103934665603ULL;
+    h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
+    h = (h ^ (uint64_t)(uint32_t)s->player.y) * 1099511628211ULL;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        int range = COLO_NPC_STATS[npc->type].attack_range;
+        if (range <= 1) continue;
+        uint64_t shooter = (uint64_t)(uint32_t)npc->x
+            | ((uint64_t)(uint32_t)npc->y << 8)
+            | ((uint64_t)(uint32_t)col_npc_effective_size(npc) << 16)
+            | ((uint64_t)(uint32_t)range << 24);
+        h = (h ^ shooter) * 1099511628211ULL;
+    }
+    const uint8_t* grid = &s->npc_collision_flags[0][0];
+    const size_t grid_bytes = sizeof(s->npc_collision_flags);
+    size_t b = 0;
+    for (; b + 8 <= grid_bytes; b += 8) {
+        uint64_t word;
+        memcpy(&word, grid + b, 8);
+        h = (h ^ word) * 1099511628211ULL;
+    }
+    for (; b < grid_bytes; b++)
+        h = (h ^ (uint64_t)grid[b]) * 1099511628211ULL;
+    return h;
+}
+
 /** COLO_THREAT_FIELD_OBS_SIZE floats: egocentric 17x17 threat field, row-major
     from (-R,-R) to (+R,+R) around the player, two planar channels.
     Channel 0: for each tile, the count of live shooters (attack_range > 1)
@@ -1212,10 +1254,27 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     NPC body). Melee NPCs stay out of channel 0 (their threat is distance,
     legible from the NPC slots); Sol stays out too (his spear/shield lines are
     hazard frames with an adjacency gate, already encoded in the boss block --
-    a range-15 LoS shooter model for him would be approximation, not fact). */
-static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int* idx) {
+    a range-15 LoS shooter model for him would be approximation, not fact).
+
+    Signature-cached (col_threat_field_obs_signature): the block is a pure function of
+    the player tile + shooter descriptors + the collision grid, so on a hit the resident
+    block is byte-identical to a fresh write. Hits are stationary ticks (player and all
+    stamped NPCs holding position), which attack-animation stalls make common. */
+static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
+
+    ColoObsMemoCaches* memos = &s->obs_memos;
+    uint64_t sig = col_threat_field_obs_signature(s);
+    for (int w = 0; w < COLO_THREAT_FIELD_OBS_CACHE_WAYS; w++) {
+        if (memos->threat_field_valid[w] && memos->threat_field_sig[w] == sig) {
+            memcpy(&obs[i], memos->threat_field[w],
+                   sizeof(float) * COLO_THREAT_FIELD_OBS_CACHE_FLOATS);
+            *idx = i + COLO_THREAT_FIELD_OBS_CACHE_FLOATS;
+            return;
+        }
+    }
+    int block_start = i;
 
     /* Per-shooter footprint bounds + range, hoisted out of the 289-tile loop so
        the inner body is a Chebyshev distance from the clamped nearest footprint
@@ -1272,6 +1331,14 @@ static void col_write_threat_field_obs(const ColosseumState* s, float* obs, int*
             obs[i++] = blocked ? 1.0f : 0.0f;
         }
     }
+
+    int slot = memos->threat_field_next;
+    memcpy(memos->threat_field[slot], &obs[block_start],
+           sizeof(float) * COLO_THREAT_FIELD_OBS_CACHE_FLOATS);
+    memos->threat_field_sig[slot] = sig;
+    memos->threat_field_valid[slot] = 1;
+    memos->threat_field_next = (slot + 1) % COLO_THREAT_FIELD_OBS_CACHE_WAYS;
+
     *idx = i;
 }
 
@@ -2089,12 +2156,59 @@ static void col_inventory_cell_post_use_deltas(
     for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
 }
 
+/** Content signature over every ColosseumState input the inventory+equipped obs block
+    reads. Folds the worn gear (equipped-self rows, the is-equipped bit, and the
+    equipment projection that every post-use delta subtracts from), each cell's full
+    contents packed as one word -- item_idx (affordance identity), raw_osrs_id
+    (consumable lookup + present bit) AND dose (the dose feature the best-gear signature
+    deliberately omits) -- and the 3 base stats the consumable magnitudes normalize
+    against. Everything else the leaf writers touch is the process-constant
+    ITEM_DATABASE / consumable tables. FNV-1a; a collision only costs a missed reuse,
+    never a wrong result. */
+static uint64_t col_inventory_obs_signature(const ColosseumState* s) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        const ColoInvCell* c = &s->inventory_cells[cell];
+        uint64_t packed = (uint64_t)c->item_idx
+            | ((uint64_t)c->raw_osrs_id << 8)
+            | ((uint64_t)c->dose << 24);
+        h = (h ^ packed) * 1099511628211ULL;
+    }
+    const int scalars[3] = {
+        s->player.base_hitpoints, s->player.base_prayer, s->player.base_attack,
+    };
+    for (int k = 0; k < 3; k++)
+        h = (h ^ (uint64_t)(uint32_t)scalars[k]) * 1099511628211ULL;
+    return h;
+}
+
+/** Inventory cell affordance rows + equipped-self rows.
+
+    Signature-cached (col_inventory_obs_signature): the block is a pure function of worn
+    gear + cell contents + base stats, so on a hit the resident block is byte-identical
+    to a fresh write. The block only changes on eat/drink/equip/pickup, so nearly every
+    tick hits. */
 static void col_write_inventory_and_equipped_obs(
     ColosseumState* s,
     float* obs,
     int* idx
 ) {
     int i = *idx;
+
+    ColoObsMemoCaches* memos = &s->obs_memos;
+    uint64_t sig = col_inventory_obs_signature(s);
+    for (int w = 0; w < COLO_INVENTORY_OBS_CACHE_WAYS; w++) {
+        if (memos->inventory_valid[w] && memos->inventory_sig[w] == sig) {
+            memcpy(&obs[i], memos->inventory[w],
+                   sizeof(float) * COLO_INVENTORY_OBS_CACHE_FLOATS);
+            *idx = i + COLO_INVENTORY_OBS_CACHE_FLOATS;
+            return;
+        }
+    }
+    int block_start = i;
+
     float current_equipment_projection[6];
     col_equipment_bonus_projection(s->player.equipped, current_equipment_projection);
     for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
@@ -2121,6 +2235,14 @@ static void col_write_inventory_and_equipped_obs(
         i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
     }
     assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
+
+    int slot = memos->inventory_next;
+    memcpy(memos->inventory[slot], &obs[block_start],
+           sizeof(float) * COLO_INVENTORY_OBS_CACHE_FLOATS);
+    memos->inventory_sig[slot] = sig;
+    memos->inventory_valid[slot] = 1;
+    memos->inventory_next = (slot + 1) % COLO_INVENTORY_OBS_CACHE_WAYS;
+
     *idx = i;
 }
 

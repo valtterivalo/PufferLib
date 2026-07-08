@@ -7538,6 +7538,43 @@ static void test_threat_field_obs(void) {
     CHECK("center cell reads one shooter after stepping into LoS",
         obs[f0 + FIELD_CELL(0, 0)] == 0.25f);
 
+    /* memo staleness, collision-grid key: a MELEE body moving while the player and
+       every shooter hold still is invisible to the shooter descriptors -- only the
+       npc_collision_flags grid in the signature forces the recompute that updates
+       channel 1. */
+    int jag = col_spawn_npc_at(&s, COLO_JAGUAR_WARRIOR, 16, 12);
+    CHECK("fixture: melee NPC spawned", jag >= 0);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("jaguar body tile is unstandable", obs[f1 + FIELD_CELL(4, 0)] == 1.0f);
+    int jag_size = col_npc_effective_size(&s.npcs[jag]);
+    col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 0);
+    s.npcs[jag].x += 1;
+    col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 1);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("vacated tile frees after the melee body moves (not a stale memo)",
+        obs[f1 + FIELD_CELL(4, 0)] == 0.0f);
+    CHECK("the melee body's new tile is unstandable",
+        obs[f1 + FIELD_CELL(6, 0)] == 1.0f);
+
+    /* memo staleness, shooter death: the dead manticore must leave channel 0 and
+       free its body tiles in channel 1. */
+    col_deactivate_npc(&s, manti);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("center cell reads zero shooters after the manticore dies",
+        obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
+    CHECK("dead manticore's body tile frees in channel 1",
+        obs[f1 + FIELD_CELL(-1, -4)] == 0.0f);
+
+    /* memo-served block == fresh recompute, byte for byte: the rewrite below hits
+       the resident entry, the memo wipe then forces a from-scratch compute. */
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    float served_field[COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
+    memcpy(served_field, &obs[f0], sizeof(served_field));
+    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("memo-served threat field == fresh recompute",
+        memcmp(served_field, &obs[f0], sizeof(served_field)) == 0);
+
     ctx.config.threat_field_obs_enabled = 0;
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     int all_zero = 1;
@@ -7545,6 +7582,46 @@ static void test_threat_field_obs(void) {
         if (obs[f0 + k] != 0.0f) all_zero = 0;
     CHECK("disabled threat field leaves the block zeroed", all_zero);
 #undef FIELD_CELL
+}
+
+/* inventory+equipped obs memo: a potion sip mutates only raw_osrs_id/dose, the exact
+   inputs the best-gear signature deliberately omits -- the cell's dose feature must
+   move (dose IS in the inventory memo key), and a memo-served block must equal a
+   from-scratch recompute byte for byte. */
+static void test_inventory_obs_memo(void) {
+    printf("test_inventory_obs_memo\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+
+    static float obs[COLO_NUM_OBS];
+    int cell_brew = -1;
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
+        if (s.inventory_cells[c].item_idx == ITEM_NONE) { cell_brew = c; break; }
+    CHECK("a gear-free cell exists to hold the brew", cell_brew >= 0);
+    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6685);
+    CHECK("4-dose brew seeded", s.inventory_cells[cell_brew].dose == 4);
+
+    const int cell_base = COLO_OBS_AFTER_PILLARS +
+        cell_brew * COLO_INVENTORY_CELL_OBS_FEATURES;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("4-dose brew renders the full dose feature", obs[cell_base + 2] == 1.0f);
+
+    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6687);
+    CHECK("sip took a dose", s.inventory_cells[cell_brew].dose == 3);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("sip moves the dose feature (dose is in the memo key, not a stale block)",
+        obs[cell_base + 2] == 0.75f);
+
+    /* the rewrite below hits the entry the sip write stored; the memo wipe then
+       forces a from-scratch compute the served block must match byte for byte. */
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    float served_block[COLO_INVENTORY_OBS_CACHE_FLOATS];
+    memcpy(served_block, &obs[COLO_OBS_AFTER_PILLARS], sizeof(served_block));
+    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("memo-served inventory block == fresh recompute after the sip",
+        memcmp(served_block, &obs[COLO_OBS_AFTER_PILLARS], sizeof(served_block)) == 0);
 }
 
 static void test_weapon_choice_obs_rank_and_farm_cap(void) {
@@ -7799,6 +7876,7 @@ int main(void) {
     test_gear_and_boost_reward_signals();
     test_weapon_choice_obs_rank_and_farm_cap();
     test_threat_field_obs();
+    test_inventory_obs_memo();
 
     printf("\n%d/%d passed", tests_passed, tests_run);
     if (tests_failed) printf(", %d FAILED", tests_failed);
