@@ -425,6 +425,7 @@ void my_init(Env* env, Dict* kwargs) {
         "forecast_run_tile_mode",
         "mask_inventory_heads",
         "farm_safe_damage_cap",
+        "farm_cap_waves",
         "action_debug_log",
         "prayer_oracle_mode",
         "bis_gear_oracle_mode",

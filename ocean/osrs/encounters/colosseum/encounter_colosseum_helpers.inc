@@ -355,6 +355,7 @@ static ColConfig col_default_config(void) {
         .offensive_boost_reward_coeff = 0.0f,
         .stall_penalty_coeff = 0.0f,
         .farm_safe_damage_cap = 0,
+        .farm_cap_waves = COLO_FARM_CAP_WAVES,
         .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,

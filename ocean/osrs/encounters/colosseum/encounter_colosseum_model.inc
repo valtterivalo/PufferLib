@@ -1832,10 +1832,18 @@ typedef struct {
                                            wave clear strictly dominates stalling to farm
                                            reinforcement damage reward (default 0, sweepable). */
     int farm_safe_damage_cap;           /* 1 = reinforcement fresh damage pays NO damage
-                                           reward on waves 1-4 (the skippable window; from
-                                           wave 5 reinforcements are unavoidable and stay
-                                           full-value). Kills the stall-to-farm incentive
-                                           without any time pressure (default 0). */
+                                           reward on waves below farm_cap_waves. Kills the
+                                           stall-to-farm incentive without any time
+                                           pressure (default 0). */
+    int farm_cap_waves;                 /* the cap window: waves with internal index below
+                                           this pay no reinforcement damage reward when
+                                           farm_safe_damage_cap is on. Default
+                                           COLO_FARM_CAP_WAVES (4, the skippable window);
+                                           12 caps every wave. Sweepable: the 2026-07-07
+                                           turtle finding (f9im4yp4) showed wave-5+ stall
+                                           farming over-pays at +3.3..+9.3 reward per
+                                           overrun wave, so the window itself is priced
+                                           by Protein rather than trusted. */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;

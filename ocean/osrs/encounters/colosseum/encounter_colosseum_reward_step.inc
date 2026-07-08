@@ -230,7 +230,7 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
 
     float reward = 0.0f;
     float rewarded_fresh = t->fresh_damage_dealt;
-    if (s->wave < COLO_FARM_CAP_WAVES) {
+    if (s->wave < cfg->farm_cap_waves) {
         s->log.farm_damage += t->fresh_damage_reinforcement;
         if (cfg->farm_safe_damage_cap)
             rewarded_fresh -= t->fresh_damage_reinforcement;

@@ -7812,8 +7812,18 @@ static void test_weapon_choice_obs_rank_and_farm_cap(void) {
     s.tick_scratch.fresh_damage_dealt = 100.0f;
     s.tick_scratch.fresh_damage_reinforcement = 30.0f;
     float r_late = col_compute_reward_ctx(&s, &ctx);
-    CHECK("cap on, wave 5+: reinforcements stay full-value (unskippable)",
+    CHECK("cap on, wave 5+: reinforcements stay full-value at the default window",
         fabsf(r_late - 100.0f) < 1e-3f);
+
+    /* the sweepable window: widening farm_cap_waves extends the cap past wave 4,
+       so the same wave-5 reinforcement damage now pays nothing. */
+    ctx.config.farm_cap_waves = COLO_FARM_CAP_WAVES + 1;
+    s.tick_scratch.fresh_damage_dealt = 100.0f;
+    s.tick_scratch.fresh_damage_reinforcement = 30.0f;
+    float r_widened = col_compute_reward_ctx(&s, &ctx);
+    CHECK("widened farm_cap_waves caps the same wave-5 reinforcement damage",
+        fabsf(r_widened - 70.0f) < 1e-3f);
+    ctx.config.farm_cap_waves = COLO_FARM_CAP_WAVES;
 }
 
 int main(void) {

@@ -42,6 +42,14 @@ static void col_put_int_ctx(
     else if (strcmp(key, "farm_safe_damage_cap") == 0)
         ctx->config.farm_safe_damage_cap =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "farm_cap_waves") == 0) {
+        if (value < 0 || value > COLO_NUM_WAVES) {
+            fprintf(stderr, "colosseum: farm_cap_waves must be 0..%d, got %d\n",
+                COLO_NUM_WAVES, value);
+            abort();
+        }
+        ctx->config.farm_cap_waves = value;
+    }
     else if (strcmp(key, "action_debug_log") == 0)
         ctx->config.action_debug_log =
             encounter_require_binary_config("colosseum", key, value);
