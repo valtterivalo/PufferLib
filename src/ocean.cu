@@ -612,7 +612,8 @@ struct ColosseumEntityEncoderActivations {
     PrecisionTensor out;          // [B, hidden] = global + npc pool (+ inv pool, mode 2)
     PrecisionTensor saved_obs;    // [B, obs] (for global wgrad)
     PrecisionTensor npc_flat;     // [B*24, 37] contiguous NPC records (for l1 wgrad + mask)
-    PrecisionTensor entity_z1;    // [B*24, 16] pre-GELU (GELU recomputed from it in backward)
+    PrecisionTensor entity_z1;    // [B*24, 16] pre-GELU (for GELU' in backward)
+    PrecisionTensor entity_h1;    // [B*24, 16] post-GELU, spilled by the fused fwd (for l2 wgrad)
     PrecisionTensor grad_z1;      // [B*24, 16] backward scratch
     IntTensor pool_argmax;        // [B, hidden] winning NPC index per channel (-1 if none)
     PrecisionTensor global_wgrad;    // [hidden, obs]
@@ -621,6 +622,7 @@ struct ColosseumEntityEncoderActivations {
     // mode 2 inventory pool (mirrors the NPC fields above for the 28 inventory cells)
     PrecisionTensor inv_flat;     // [B*28, 28] contiguous inventory cells
     PrecisionTensor inv_z1;       // [B*28, 16] pre-GELU
+    PrecisionTensor inv_h1;       // [B*28, 16] post-GELU, spilled by the fused fwd
     PrecisionTensor inv_grad_z1;  // [B*28, 16] backward scratch
     IntTensor inv_pool_argmax;    // [B, hidden] winning cell index per channel (-1 if none)
     PrecisionTensor inv_l1_wgrad; // [16, 28]
@@ -681,8 +683,11 @@ static constexpr int COLO_ENT_HIDDEN_TILE = 32;
 static constexpr int COLO_ENT_FC_THREADS  = COLO_ENT_BATCH_TILE * COLO_ENT_HIDDEN_TILE;
 
 // out[b,c] += maskedmax_n dot(l2_w[c,:], gelu(z1[b,n,:])); argmax[b,c] = winning n.
+// When h1 is non-null (training), the blockIdx.y == 0 blocks spill their post-GELU
+// shared tile to it so the l2 wgrad kernel reads h1 instead of re-tanh'ing B*H*16x.
 __global__ void colo_ent_fused_pool_fwd(
     precision_t* __restrict__ out, int* __restrict__ argmax,
+    precision_t* __restrict__ h1,
     const precision_t* __restrict__ z1, const precision_t* __restrict__ rec_flat,
     const precision_t* __restrict__ l2_w,
     int B, int H, int num_rec, int rec_feats, int active_width) {
@@ -702,9 +707,12 @@ __global__ void colo_ent_fused_pool_fwd(
         int bt = idx / (num_rec * COLO_ENT_BOTTLENECK);
         int rem = idx - bt * num_rec * COLO_ENT_BOTTLENECK;
         int gb = batch_base + bt;
-        h1_tile[idx] = gb < B
+        float v = gb < B
             ? colo_ent_gelu_fwd(to_float(z1[(int64_t)gb * num_rec * COLO_ENT_BOTTLENECK + rem]))
             : 0.0f;
+        h1_tile[idx] = v;
+        if (h1 && blockIdx.y == 0 && gb < B)
+            h1[(int64_t)gb * num_rec * COLO_ENT_BOTTLENECK + rem] = from_float(v);
     }
     int mask_values = COLO_ENT_BATCH_TILE * num_rec;
     for (int idx = tid; idx < mask_values; idx += COLO_ENT_FC_THREADS) {
@@ -748,10 +756,10 @@ __global__ void colo_ent_fused_pool_fwd(
     argmax[o] = best_n;
 }
 
-// wgrad[c,k] = sum_b grad[b,c] * gelu(z1[b, argmax[b,c], k]), winners only.
+// wgrad[c,k] = sum_b grad[b,c] * h1[b, argmax[b,c], k], winners only.
 __global__ void colo_ent_fused_l2_wgrad(
     precision_t* __restrict__ wgrad, const precision_t* __restrict__ grad,
-    const precision_t* __restrict__ z1, const int* __restrict__ argmax,
+    const precision_t* __restrict__ h1, const int* __restrict__ argmax,
     int B, int H, int num_rec) {
     int h = blockIdx.x;
     if (h >= H) return;
@@ -764,10 +772,10 @@ __global__ void colo_ent_fused_l2_wgrad(
         int n = argmax[(int64_t)b * H + h];
         if (n < 0) continue;
         float g = to_float(grad[(int64_t)b * H + h]);
-        const precision_t* zp = z1 + ((int64_t)b * num_rec + n) * COLO_ENT_BOTTLENECK;
+        const precision_t* hp = h1 + ((int64_t)b * num_rec + n) * COLO_ENT_BOTTLENECK;
 #pragma unroll
         for (int k = 0; k < COLO_ENT_BOTTLENECK; k++)
-            sum[k] += g * colo_ent_gelu_fwd(to_float(zp[k]));
+            sum[k] += g * to_float(hp[k]);
     }
 
     __shared__ float warp_sums[COLO_ENT_BOTTLENECK * 32];
@@ -840,7 +848,8 @@ __global__ void colo_ent_fused_grad_z1(
 }
 
 static void colo_ent_launch_fused_fwd(
-    precision_t* out, int* argmax, const precision_t* z1, const precision_t* rec_flat,
+    precision_t* out, int* argmax, precision_t* h1,
+    const precision_t* z1, const precision_t* rec_flat,
     const precision_t* l2_w, int B, int H, int num_rec, int rec_feats, int active_width,
     cudaStream_t stream) {
     dim3 block(COLO_ENT_HIDDEN_TILE, COLO_ENT_BATCH_TILE);
@@ -851,15 +860,15 @@ static void colo_ent_launch_fused_fwd(
         (size_t)COLO_ENT_BATCH_TILE * num_rec +
         (size_t)COLO_ENT_HIDDEN_TILE * COLO_ENT_BOTTLENECK) * sizeof(float);
     colo_ent_fused_pool_fwd<<<grid, block, shared_bytes, stream>>>(
-        out, argmax, z1, rec_flat, l2_w, B, H, num_rec, rec_feats, active_width);
+        out, argmax, h1, z1, rec_flat, l2_w, B, H, num_rec, rec_feats, active_width);
 }
 
 static void colo_ent_launch_fused_bwd(
     precision_t* l2_wgrad, precision_t* grad_z1, const precision_t* grad,
-    const precision_t* l2_w, const precision_t* z1, const int* argmax,
-    int B, int H, int num_rec, cudaStream_t stream) {
+    const precision_t* l2_w, const precision_t* z1, const precision_t* h1,
+    const int* argmax, int B, int H, int num_rec, cudaStream_t stream) {
     colo_ent_fused_l2_wgrad<<<H, 256, 0, stream>>>(
-        l2_wgrad, grad, z1, argmax, B, H, num_rec);
+        l2_wgrad, grad, h1, argmax, B, H, num_rec);
     size_t shared_bytes =
         ((size_t)num_rec * COLO_ENT_BOTTLENECK + 2 * BLOCK_SIZE) * sizeof(float);
     colo_ent_fused_grad_z1<<<B, BLOCK_SIZE, shared_bytes, stream>>>(
@@ -883,7 +892,8 @@ static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, P
     PrecisionTensor npc2d = {.data = a->npc_flat.data, .shape = {NB, COLO_ENT_FEATS}};
     puf_mm(&npc2d, &ew->entity_l1_w, &a->entity_z1, stream);
     colo_ent_launch_fused_fwd(
-        a->out.data, a->pool_argmax.data, a->entity_z1.data, a->npc_flat.data,
+        a->out.data, a->pool_argmax.data, a->entity_h1.data,
+        a->entity_z1.data, a->npc_flat.data,
         ew->entity_l2_w.data, B, H, COLO_ENT_NUM_NPCS, COLO_ENT_FEATS,
         COLO_ENT_TYPE_ONEHOT, stream);
 
@@ -897,7 +907,8 @@ static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, P
         static_assert(COLO_ENT_INV_PRESENT == 0,
             "fused pool mask reads a prefix; present flag must be cell-local offset 0");
         colo_ent_launch_fused_fwd(
-            a->out.data, a->inv_pool_argmax.data, a->inv_z1.data, a->inv_flat.data,
+            a->out.data, a->inv_pool_argmax.data, a->inv_h1.data,
+            a->inv_z1.data, a->inv_flat.data,
             ew->inv_l2_w.data, B, H, COLO_ENT_INV_NUM_CELLS, COLO_ENT_INV_FEATS,
             1, stream);
     }
@@ -915,8 +926,8 @@ static void colo_entity_encoder_backward(void* w, void* activations, PrecisionTe
 
     colo_ent_launch_fused_bwd(
         a->entity_l2_wgrad.data, a->grad_z1.data, grad.data,
-        ew->entity_l2_w.data, a->entity_z1.data, a->pool_argmax.data,
-        B, H, COLO_ENT_NUM_NPCS, stream);
+        ew->entity_l2_w.data, a->entity_z1.data, a->entity_h1.data,
+        a->pool_argmax.data, B, H, COLO_ENT_NUM_NPCS, stream);
     PrecisionTensor npc2d = {.data = a->npc_flat.data, .shape = {NB, COLO_ENT_FEATS}};
     puf_mm_tn(&a->grad_z1, &npc2d, &a->entity_l1_wgrad, stream);
 
@@ -924,8 +935,8 @@ static void colo_entity_encoder_backward(void* w, void* activations, PrecisionTe
         int IB = B * COLO_ENT_INV_NUM_CELLS;
         colo_ent_launch_fused_bwd(
             a->inv_l2_wgrad.data, a->inv_grad_z1.data, grad.data,
-            ew->inv_l2_w.data, a->inv_z1.data, a->inv_pool_argmax.data,
-            B, H, COLO_ENT_INV_NUM_CELLS, stream);
+            ew->inv_l2_w.data, a->inv_z1.data, a->inv_h1.data,
+            a->inv_pool_argmax.data, B, H, COLO_ENT_INV_NUM_CELLS, stream);
         PrecisionTensor inv2d = {.data = a->inv_flat.data, .shape = {IB, COLO_ENT_INV_FEATS}};
         puf_mm_tn(&a->inv_grad_z1, &inv2d, &a->inv_l1_wgrad, stream);
     }
@@ -988,22 +999,26 @@ static void colo_entity_encoder_reg_train(void* w, void* activations, Allocator*
     a->saved_obs  = {.shape = {B_TT, ew->obs_size}};
     a->npc_flat   = {.shape = {NB, COLO_ENT_FEATS}};
     a->entity_z1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
+    a->entity_h1  = {.shape = {NB, COLO_ENT_BOTTLENECK}};
     a->grad_z1    = {.shape = {NB, COLO_ENT_BOTTLENECK}};
     a->pool_argmax = {.shape = {B_TT, H}};
     alloc_register(acts, &a->out);
     alloc_register(acts, &a->saved_obs);
     alloc_register(acts, &a->npc_flat);
     alloc_register(acts, &a->entity_z1);
+    alloc_register(acts, &a->entity_h1);
     alloc_register(acts, &a->grad_z1);
     alloc_register(acts, &a->pool_argmax);
     if (ew->mode >= 2) {
         int IB = B_TT * COLO_ENT_INV_NUM_CELLS;
         a->inv_flat        = {.shape = {IB, COLO_ENT_INV_FEATS}};
         a->inv_z1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
+        a->inv_h1          = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
         a->inv_grad_z1     = {.shape = {IB, COLO_ENT_INV_BOTTLENECK}};
         a->inv_pool_argmax = {.shape = {B_TT, H}};
         alloc_register(acts, &a->inv_flat);
         alloc_register(acts, &a->inv_z1);
+        alloc_register(acts, &a->inv_h1);
         alloc_register(acts, &a->inv_grad_z1);
         alloc_register(acts, &a->inv_pool_argmax);
     }
