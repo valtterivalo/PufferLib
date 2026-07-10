@@ -408,6 +408,7 @@ void my_init(Env* env, Dict* kwargs) {
         "prayer_switch_fail_prob",
         "player_damage_received_scale",
         "damage_scale_anneal_start",
+        "late_start_supply_fraction_per_wave",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
@@ -433,6 +434,7 @@ void my_init(Env* env, Dict* kwargs) {
         "episode_max_ticks_override",
         "remove_brews",
         "damage_scale_anneal_ticks",
+        "late_start_state_mode",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);

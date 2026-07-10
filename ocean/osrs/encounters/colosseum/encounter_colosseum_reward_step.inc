@@ -494,6 +494,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
                wave 12 — the pick (no skip exists) arms the spawn. The empty-
                pool fallback spawns ungated (unreachable in real runs). */
             s->wave_spawn_target = s->wave + 1;
+            col_record_wave_entry(s, s->wave + 1);
             col_modifier_open_draft(s, s->wave + 1);
             if (!s->modifiers.draft_pending)
                 s->wave_spawn_delay = col_wave_entry_delay_ticks(s->wave_spawn_target);

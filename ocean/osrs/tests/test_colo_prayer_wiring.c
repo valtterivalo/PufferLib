@@ -20,6 +20,14 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
+/* Pin BARE late-wave starts for these fixed-scenario tests (honest entry
+   synthesis is covered in test_colosseum_modifiers.c). Function-like macro:
+   the name inside its own body is not re-expanded (standard C). */
+#define col_init_context_typed(ctx_ptr) do { \
+    col_init_context_typed(ctx_ptr); \
+    (ctx_ptr)->config.late_start_state_mode = 0; \
+} while (0)
+
 typedef enum { POLICY_HOLD_MELEE, POLICY_OBS_TELEGRAPH } PrayerPolicy;
 
 static int telegraph_overhead(const ColosseumState* s) {

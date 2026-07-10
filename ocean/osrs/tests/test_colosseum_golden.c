@@ -210,20 +210,27 @@ static const GoldenConfig CONFIGS[] = {
    Dynamics unchanged (battery 10333/10333); w02/w05/w06/w09 digests are
    bit-identical because those episodes never had a candidate cut a corner.
    Landing selftest in test_colosseum_forecast_exact.c passes all 3 states.
-   Verified deterministic (two --print runs identical). */
+   Verified deterministic (two --print runs identical).
+
+   Re-seeded 2026-07-10 for late-start entry-state fidelity
+   (late_start_state_mode, default 2): start_wave>0 resets now synthesize the
+   pre-start modifier draft history, drain supplies to the depletion prior, and
+   open the start wave's own draft LIVE. INTENDED change; w01 (organic start)
+   stayed bit-identical, w02-w12 all moved. Verified deterministic (two
+   --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x6b648dbd26450b82ULL,
-    0x90a76c1780dfbccfULL,
-    0x95a54d92b127f178ULL,
-    0x6cc62557a00dd1f0ULL,
-    0x6f66b8d6b14abd26ULL,
-    0x566a2636023b2fa9ULL,
-    0xea7b7dc17a4a5288ULL,
-    0x5d37ace794d11e74ULL,
-    0x93f06729b600b2d3ULL,
-    0x4b1760ed95b96a99ULL,
-    0x80f01e2bd3c18c0cULL,
-    0xb627563aa13459eaULL,
+    0xd25dd5f73aea2df6ULL,
+    0x137d8011443b61f8ULL,
+    0xeb82de91da34947dULL,
+    0xf10a60721a18d0ecULL,
+    0xef3182c4eebbaeb5ULL,
+    0x63f92c48e77deeecULL,
+    0x4e15c78ede861b01ULL,
+    0x4b420b3e18d846ebULL,
+    0x054f146530962087ULL,
+    0x4b5835b98fc7d4b0ULL,
+    0x31ad397bfa572b3bULL,
 };
 
 int main(int argc, char** argv) {

@@ -653,13 +653,21 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
        free movement — the player roams to choose the wave-1 start tile, then
        the pick starts the researched sequence (5 empty ticks, spawn resolved
        at t5 against the live tile, visible t6, moving t7, attacking t9).
-       start_wave>0 runs (curriculum/lab) stay modifier-free and meet their
-       first draft after clearing the start wave (auto-rolling prior modifiers
-       would make curriculum difficulty wildly seed-dependent). */
+       start_wave>0 (user correction 2026-07-10, superseding 07-07's bare
+       starts): an organic run entering wave N carries N modifier picks and
+       spent supplies, so late starts synthesize that history (or replay a
+       recorded organic wave entry) and then meet their own pre-wave draft
+       LIVE, movement-frozen like every mid-run draft. The old bare start
+       survives as late_start_state_mode 0. */
     if (effective_start == 0) {
         col_modifier_open_draft(s, 0);
         if (s->modifiers.draft_pending) s->modifiers.draft_free_movement = 1;
         else s->wave_spawn_delay = col_wave_entry_delay_ticks(0);
+    } else if (ctx->config.late_start_state_mode > 0) {
+        col_apply_late_start_entry_state(s, ctx, effective_start);
+        col_modifier_open_draft(s, effective_start);
+        if (!s->modifiers.draft_pending)
+            s->wave_spawn_delay = col_wave_entry_delay_ticks(effective_start);
     } else {
         s->wave_spawn_delay = col_wave_entry_delay_ticks(effective_start);
     }

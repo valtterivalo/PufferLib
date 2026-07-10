@@ -54,6 +54,16 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
+/** These unit tests pin mechanics against BARE late-wave starts (no synthesized
+    modifier history / supply depletion); honest entry synthesis has dedicated
+    tests that opt back in via ctx.config.late_start_state_mode. The
+    function-like macro rewrites every call below without recursing into the
+    real function (standard C non-reexpansion of the macro's own name). */
+#define col_init_context_typed(ctx_ptr) do { \
+    col_init_context_typed(ctx_ptr); \
+    (ctx_ptr)->config.late_start_state_mode = 0; \
+} while (0)
+
 static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -3152,6 +3162,96 @@ static void test_prayer_oracle_manticore_orbs(void) {
         faced >= 9.0f);
     CHECK("solo-manticore barrages under the oracle: every orb prayed",
         correct == faced);
+}
+
+/* Late-start entry-state fidelity (late_start_state_mode): a wave-N start must
+   carry N-1 synthesized modifier picks, a depleted supply bag, and its own LIVE
+   pre-wave draft; mode 2 replays recorded organic wave entries instead once any
+   exist. The file-top macro pins mode 0 for every other test. */
+static int late_start_total_doses(const ColosseumState* s) {
+    int total = 0;
+    for (int c = 0; c < COLO_INVENTORY_DISPLAY_SLOTS; c++)
+        total += s->inventory_cells[c].dose;
+    return total;
+}
+
+static int late_start_total_picks(const ColosseumState* s) {
+    int picks = 0;
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++)
+        picks += s->modifiers.tier[m];
+    return picks;
+}
+
+static void test_late_start_entry_state(void) {
+    printf("test_late_start_entry_state\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 7;                 /* external wave 8 */
+    ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY;
+    ColosseumState s;
+
+    /* mode 0 = legacy bare start (regression for the unit-test escape hatch) */
+    ctx.config.late_start_state_mode = 0;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    int bare_doses = late_start_total_doses(&s);
+    CHECK("mode 0 keeps the bare start: no picks", late_start_total_picks(&s) == 0);
+    CHECK("mode 0 keeps the bare start: no live draft, spawn armed",
+        !s.modifiers.draft_pending && s.wave_spawn_delay > 0);
+
+    /* mode 1 = synthetic prior */
+    ctx.config.late_start_state_mode = 1;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    CHECK("wave-8 start carries exactly 7 synthesized picks",
+        late_start_total_picks(&s) == 7);
+    CHECK("the start wave's own draft opens LIVE", s.modifiers.draft_pending == 1);
+    CHECK("the live draft freezes movement like every mid-run draft",
+        s.modifiers.draft_free_movement == 0);
+    CHECK("the live pick gates the spawn",
+        s.modifiers.draft_gates_spawn == 1 && s.wave_spawn_delay == 0);
+    int caps_ok = 1;
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++)
+        if (s.modifiers.tier[m] > COLO_MODIFIER_MAX_TIER[m]) caps_ok = 0;
+    CHECK("synthesized tiers respect per-modifier caps", caps_ok);
+    int prior_doses = late_start_total_doses(&s);
+    float kept = (float)prior_doses / (float)bare_doses;
+    CHECK("supplies drained to the wave-8 prior (~51% +- noise/rounding)",
+        kept > 0.40f && kept < 0.62f);
+
+    uint32_t mask_a = s.modifiers.active_mask;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    CHECK("synthesis is deterministic per env seed",
+        s.modifiers.active_mask == mask_a &&
+        late_start_total_doses(&s) == prior_doses);
+
+    /* mode 2 = empirical replay: record a crafted organic wave-8 entry whose
+       stack (Bees III) the greedy prior would never produce, then expect a
+       mode-2 reset to replay it verbatim. */
+    ColosseumContext organic_ctx;
+    col_init_context_typed(&organic_ctx);
+    organic_ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY;
+    ColosseumState org;
+    memset(&org, 0, sizeof(org));
+    col_reset_ctx((EncounterState*)&org, (EncounterContext*)&organic_ctx, 99);
+    org.modifiers.active_mask = (1u << COLO_MOD_BEES);
+    org.modifiers.tier[COLO_MOD_BEES] = 3;
+    org.inventory_cells[27] = org.inventory_cells[26];  /* arbitrary bag tweak */
+    org.player.current_hitpoints = 50;
+    col_record_wave_entry(&org, 7);
+    int org_doses = late_start_total_doses(&org);
+
+    ctx.config.late_start_state_mode = 2;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    CHECK("mode 2 replays the recorded organic modifier stack",
+        s.modifiers.active_mask == (1u << COLO_MOD_BEES) &&
+        s.modifiers.tier[COLO_MOD_BEES] == 3);
+    CHECK("mode 2 replays the recorded bag and vitals",
+        late_start_total_doses(&s) == org_doses &&
+        s.player.current_hitpoints == 50);
+    CHECK("mode 2 still opens the live pre-wave draft", s.modifiers.draft_pending == 1);
 }
 
 /* 5c: manticore orbs travel one tick. Each orb checks prayer on its FIRE tick
@@ -7962,6 +8062,7 @@ int main(void) {
     test_manticore_barrage_period();
     test_manticore_telegraph_during_windup();
     test_prayer_oracle_manticore_orbs();
+    test_late_start_entry_state();
     test_manticore_orb_same_tick_flick();
     test_projectile_prayer_locks_at_throw();
     test_npc_melee_instant_unprayable();

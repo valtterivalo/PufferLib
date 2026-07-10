@@ -1856,6 +1856,20 @@ typedef struct {
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
     int mask_inventory_heads;
     int action_debug_log;
+    int late_start_state_mode;         /* start_wave>0 entry-state fidelity: 0 =
+                                          legacy bare start (full supplies, no
+                                          modifiers; unit-test escape hatch), 1 =
+                                          prior only (synthesized draft history +
+                                          supply-depletion curve), 2 = prior +
+                                          empirical matching against recorded
+                                          organic wave entries (default; falls
+                                          back to the prior until organic
+                                          episodes populate the wave's
+                                          reservoir). */
+    float late_start_supply_fraction_per_wave; /* prior curve: fraction of total
+                                          consumable doses spent per wave already
+                                          cleared (default 0.07: a wave-8 start
+                                          keeps ~51% of doses, +-5% noise). */
     int prayer_oracle_mode;            /* scaffold: 1 = override the agent's overhead
                                           each tick with the perfect protect-prayer vs
                                           this tick's throwers (magic>melee>range).

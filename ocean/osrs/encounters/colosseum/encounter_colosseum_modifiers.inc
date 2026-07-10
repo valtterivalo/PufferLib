@@ -132,6 +132,233 @@ static void col_modifier_apply_selection(ColosseumState* s, int option) {
     if ((ColoModifier)mod == COLO_MOD_FRAILTY) col_mod_apply_frailty_hp(s);
 }
 
+/* ----- late-start entry state (modifier history + supplies) ----------------- */
+
+/**
+ * Desirability of receiving the NEXT tier of `mod` before `next_wave` (0-based),
+ * encoding the wiki modifier table's recommendation column plus its
+ * wave-conditional notes (Volatility/Totemic flip at Sol, Reentry II is a
+ * wave-10+ pick, Dynamic Duo / Red Flag beat Bees at wave 11). Higher = pick.
+ * Distinct values double as the deterministic tie-break.
+ */
+static int col_modifier_pick_score(const ColosseumState* s, ColoModifier mod, int next_wave) {
+    int t = s->modifiers.tier[mod] + 1;         /* tier this pick would grant */
+    int ext = next_wave + 1;                    /* external wave number 1..12 */
+    switch (mod) {
+        case COLO_MOD_BLASPHEMY:   return t == 1 ? 90 : t == 2 ? 85 : 80;
+        case COLO_MOD_FRAILTY:     return t == 1 ? 88 : t == 2 ? 75 : 10;
+        case COLO_MOD_RELENTLESS:  return t == 1 ? 82 : t == 2 ? 55 : 45;
+        case COLO_MOD_DOOM:        return t == 1 ? 80 : t == 2 ? 50 : 8;
+        case COLO_MOD_MYOPIA:      return t == 1 ? 78 : t == 2 ? 70 : 44;
+        case COLO_MOD_MANTIMAYHEM: return t == 1 ? 56 : t == 2 ? 72 : 12;
+        case COLO_MOD_SOLARFLARE:  return t == 1 ? 52 : t == 2 ? 48 : 40;
+        case COLO_MOD_REENTRY:     return t == 1 ? 50 : t == 2 ? (ext >= 10 ? 42 : 14) : 68;
+        case COLO_MOD_VOLATILITY:
+            return (t == 1 ? 51 : t == 2 ? 46 : 65) + (ext == 12 ? 30 : 0);
+        case COLO_MOD_DYNAMIC_DUO: return ext >= 11 ? 35 : 20;
+        case COLO_MOD_QUARTET:     return 18;
+        case COLO_MOD_TOTEMIC:     return ext == 12 ? 55 : 16;
+        case COLO_MOD_RED_FLAG:    return ext >= 11 ? 19 : 11;
+        case COLO_MOD_BEES:        return t == 1 ? 5 : t == 2 ? 4 : 3;
+        default:                   return 0;
+    }
+}
+
+/**
+ * Late-start prior 1/2: replay the pre-start draft history through the real
+ * offer machinery. One draft per wave 0..start_wave-1, picked by
+ * col_modifier_pick_score over the 3 rolled offers, so synthesized stacks carry
+ * the live distribution's correlations (upgrade-weighted offers, eligibility
+ * windows, tier caps) under a competent-player pick policy. The caller opens
+ * the start wave's own draft LIVE afterwards, mirroring the organic flow.
+ */
+static void col_synthesize_draft_history(ColosseumState* s, int start_wave) {
+    for (int w = 0; w < start_wave; w++) {
+        col_modifier_open_draft(s, w);
+        if (!s->modifiers.draft_pending) continue;
+        int best_opt = -1;
+        int best_score = -1;
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int mod = s->modifiers.draft_options[o];
+            if (mod < 0) continue;
+            int score = col_modifier_pick_score(s, (ColoModifier)mod, w);
+            if (score > best_score) { best_score = score; best_opt = o; }
+        }
+        s->modifiers.draft_gates_spawn = 0;   /* synthesis must not arm spawns */
+        if (best_opt >= 0) col_modifier_apply_selection(s, best_opt);
+        else s->modifiers.draft_pending = 0;
+    }
+}
+
+static void col_late_start_drink_noop(void* ctx, OsrsConsumableKind kind) {
+    (void)ctx;
+    (void)kind;
+}
+
+/**
+ * Late-start prior 2/2: drain consumable doses to the per-wave depletion curve.
+ * Each item category keeps round(total * fraction) doses, drained from its LAST
+ * cells backward through the real one-dose consume path (dose-id remap + cell
+ * emptying), mirroring how players finish potions sequentially. Effects are
+ * suppressed (the noop callback): this models doses already spent in earlier
+ * waves, not drinking them now.
+ */
+static void col_late_start_drain_supplies(
+    ColosseumState* s, const ColosseumContext* ctx, int start_wave
+) {
+    float per_wave = ctx->config.late_start_supply_fraction_per_wave;
+    if (per_wave <= 0.0f) return;
+    float f = 1.0f - per_wave * (float)start_wave
+            + 0.01f * (float)(encounter_rand_int(&s->rng_state, 11) - 5);
+    if (f < 0.10f) f = 0.10f;
+    if (f > 1.0f) f = 1.0f;
+
+    int done[COLO_INVENTORY_DISPLAY_SLOTS] = {0};
+    for (int c = 0; c < COLO_INVENTORY_DISPLAY_SLOTS; c++) {
+        if (done[c] || s->inventory_cells[c].dose == 0) continue;
+        int item = s->inventory_cells[c].item_idx;
+        int total = 0;
+        for (int k = c; k < COLO_INVENTORY_DISPLAY_SLOTS; k++) {
+            if (s->inventory_cells[k].item_idx == item &&
+                    s->inventory_cells[k].dose > 0) {
+                done[k] = 1;
+                total += s->inventory_cells[k].dose;
+            }
+        }
+        int drain = total - (int)((float)total * f + 0.5f);
+        for (int k = COLO_INVENTORY_DISPLAY_SLOTS - 1; k >= c && drain > 0; k--) {
+            if (s->inventory_cells[k].item_idx != item) continue;
+            while (s->inventory_cells[k].dose > 0 && drain > 0) {
+                OsrsInventoryClickResolution res = osrs_inventory_cell_click_interpret(
+                    &s->inventory_cells[k], OSRS_CLICK_TICK_FIRST);
+                if (res.click_action != OSRS_CLICK_DRINK) break;
+                int scratch_timer = 0;
+                OsrsInventoryDrinkConsumeResult consumed =
+                    osrs_inventory_cell_consume_drink_one_dose(
+                        &s->inventory_cells[k], res, &scratch_timer,
+                        col_late_start_drink_noop, s);
+                if (!consumed.consumed) break;
+                drain--;
+            }
+        }
+    }
+    col_sync_consumable_counters_from_inventory(s);
+}
+
+/* Empirical wave-entry matching: organic (start_wave 0) episodes record their
+   state each time a between-wave draft opens; late-start resets sample a
+   recorded entry for their wave instead of the synthetic prior once any exist.
+   Process-global on purpose -- the reservoir aggregates across all envs in the
+   vecenv so curriculum starts track what real runs actually look like as they
+   learn to reach deeper waves. Guarded by a spinlock (OMP env threads); reads
+   and writes are rare (wave clears and late-start resets only). */
+#define COLO_WAVE_ENTRY_RESERVOIR_CAP 64
+
+typedef struct {
+    OsrsInventoryCell cells[COLO_INVENTORY_DISPLAY_SLOTS];
+    uint32_t active_mask;
+    uint8_t tier[COLO_NUM_REAL_MODIFIERS];
+    int16_t hitpoints;
+    int16_t prayer_points;
+    uint8_t special_energy;
+} ColoWaveEntrySample;
+
+typedef struct {
+    int seen;
+    int stored;
+    ColoWaveEntrySample samples[COLO_WAVE_ENTRY_RESERVOIR_CAP];
+} ColoWaveEntryReservoir;
+
+static ColoWaveEntryReservoir g_colo_wave_entry_res[COLO_NUM_WAVES];
+static char g_colo_wave_entry_lock;
+static uint32_t g_colo_wave_entry_rng = 0x9e3779b9u;
+
+static void col_wave_entry_lock(void) {
+    while (__atomic_test_and_set(&g_colo_wave_entry_lock, __ATOMIC_ACQUIRE)) {}
+}
+
+static void col_wave_entry_unlock(void) {
+    __atomic_clear(&g_colo_wave_entry_lock, __ATOMIC_RELEASE);
+}
+
+/** record an organic episode's state at the moment the draft gating
+    `entered_wave` opens (reservoir sampling keeps a uniform subsample). */
+static void col_record_wave_entry(const ColosseumState* s, int entered_wave) {
+    if (s->start_wave != 0) return;
+    if (entered_wave <= 0 || entered_wave >= COLO_NUM_WAVES) return;
+    col_wave_entry_lock();
+    ColoWaveEntryReservoir* res = &g_colo_wave_entry_res[entered_wave];
+    res->seen++;
+    int slot = -1;
+    if (res->stored < COLO_WAVE_ENTRY_RESERVOIR_CAP) {
+        slot = res->stored++;
+    } else {
+        int j = (int)(encounter_xorshift(&g_colo_wave_entry_rng) % (uint32_t)res->seen);
+        if (j < COLO_WAVE_ENTRY_RESERVOIR_CAP) slot = j;
+    }
+    if (slot >= 0) {
+        ColoWaveEntrySample* out = &res->samples[slot];
+        memcpy(out->cells, s->inventory_cells, sizeof(out->cells));
+        out->active_mask = s->modifiers.active_mask;
+        for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++)
+            out->tier[m] = (uint8_t)s->modifiers.tier[m];
+        out->hitpoints = (int16_t)s->player.current_hitpoints;
+        out->prayer_points = (int16_t)s->player.current_prayer;
+        out->special_energy = (uint8_t)s->player.special_energy;
+    }
+    col_wave_entry_unlock();
+}
+
+/** restore a recorded organic wave entry into a freshly-reset state; 0 = the
+    reservoir for this wave is still empty (caller falls back to the prior). */
+static int col_apply_wave_entry_sample(ColosseumState* s, int start_wave) {
+    if (start_wave <= 0 || start_wave >= COLO_NUM_WAVES) return 0;
+    ColoWaveEntrySample sample;
+    int have = 0;
+    col_wave_entry_lock();
+    ColoWaveEntryReservoir* res = &g_colo_wave_entry_res[start_wave];
+    if (res->stored > 0) {
+        uint32_t r = encounter_xorshift(&g_colo_wave_entry_rng);
+        sample = res->samples[r % (uint32_t)res->stored];
+        have = 1;
+    }
+    col_wave_entry_unlock();
+    if (!have) return 0;
+
+    memcpy(s->inventory_cells, sample.cells, sizeof(sample.cells));
+    col_sync_consumable_counters_from_inventory(s);
+    s->modifiers.active_mask = sample.active_mask;
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++)
+        s->modifiers.tier[m] = sample.tier[m];
+    if (col_mod_active(s, COLO_MOD_FRAILTY)) col_mod_apply_frailty_hp(s);
+    if (sample.hitpoints > 0 && sample.hitpoints < s->player.current_hitpoints)
+        s->player.current_hitpoints = sample.hitpoints;
+    if (sample.prayer_points >= 0 && sample.prayer_points < s->player.current_prayer)
+        s->player.current_prayer = sample.prayer_points;
+    s->player.special_energy = sample.special_energy;
+    return 1;
+}
+
+/**
+ * Entry-state fidelity for start_wave > 0 (config.late_start_state_mode):
+ * an organic run entering wave N carries N modifier picks and spent supplies,
+ * so a bare late start trains and evals on states that never occur in real
+ * play. Mode 2 (default) replays a recorded organic wave entry when one
+ * exists and falls back to the synthetic prior (draft-history replay +
+ * supply-depletion curve) until then; mode 1 is prior-only; mode 0 keeps the
+ * legacy bare start for unit tests. Called from col_reset_ctx before the
+ * start wave's own LIVE draft opens.
+ */
+static void col_apply_late_start_entry_state(
+    ColosseumState* s, const ColosseumContext* ctx, int start_wave
+) {
+    int mode = ctx->config.late_start_state_mode;
+    if (mode <= 0 || start_wave <= 0) return;
+    if (mode >= 2 && col_apply_wave_entry_sample(s, start_wave)) return;
+    col_synthesize_draft_history(s, start_wave);
+    col_late_start_drain_supplies(s, ctx, start_wave);
+}
+
 /* ----- Frailty (player max HP) ---------------------------------------------- */
 
 /** apply Frailty's max-HP cut to the player. base is the maxed 99; the cut scales

@@ -56,6 +56,14 @@ static void col_put_int_ctx(
     else if (strcmp(key, "prayer_oracle_mode") == 0)
         ctx->config.prayer_oracle_mode =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "late_start_state_mode") == 0) {
+        if (value < 0 || value > 2) {
+            fprintf(stderr, "colosseum: late_start_state_mode must be 0..2, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.late_start_state_mode = value;
+    }
     else if (strcmp(key, "bis_gear_oracle_mode") == 0)
         ctx->config.bis_gear_oracle_mode =
             encounter_require_binary_config("colosseum", key, value);
@@ -116,6 +124,15 @@ static void col_put_float_ctx(
     (void)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->config.damage_reward_coeff = value;
+    else if (strcmp(key, "late_start_supply_fraction_per_wave") == 0) {
+        if (value < 0.0f || value > 0.125f) {
+            fprintf(stderr,
+                "colosseum: late_start_supply_fraction_per_wave must be 0..0.125, got %f\n",
+                (double)value);
+            abort();
+        }
+        ctx->config.late_start_supply_fraction_per_wave = value;
+    }
     else if (strcmp(key, "boss_damage_reward_coeff") == 0)
         ctx->config.boss_damage_reward_coeff = value;
     else if (strcmp(key, "wave_clear_bonus") == 0) ctx->config.wave_clear_bonus = value;
