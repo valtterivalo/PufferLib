@@ -2843,6 +2843,7 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
 
 
 static Rectangle render_colosseum_draft_card_rect(int option);
+static Rectangle render_minimap_spec_orb_rect(void);
 
 static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
@@ -3098,6 +3099,14 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                         break;  /* inventory handled separately by gui_inv_handle_mouse */
                 }
             }
+        }
+
+        /* 2b. special-attack orb beside the minimap toggles spec, as in game */
+        if (!handled && rc->human_input.enabled &&
+            CheckCollisionPointRec(CLITERAL(Vector2){(float)mx, (float)my},
+                                   render_minimap_spec_orb_rect())) {
+            human_apply_spec_toggle(&rc->human_input);
+            handled = 1;
         }
 
         /* 3. ground/entity click (game grid area, left of panel) */
@@ -6310,6 +6319,14 @@ static void render_draw_minimap_compass(RenderClient* rc, GuiState* gs, Rectangl
     }
 }
 
+/** screen rect of the special-attack orb beside the minimap; the drawer and the
+    click router share it so the clickable area always matches the pixels. */
+static Rectangle render_minimap_spec_orb_rect(void) {
+    int orbs_x = GetScreenWidth() - GUI_MAP_CONTAINER_W + GUI_ORBS_X;
+    int orbs_y = GUI_ORBS_Y;
+    return (Rectangle){(float)(orbs_x + GUI_SPEC_X), (float)(orbs_y + GUI_SPEC_Y), 57, 34};
+}
+
 /* Draw the minimap area at the top of the right-hand panel: dark backdrop, the
    circular minimap with arena tiles (terrain base color + walls + entity dots),
    the rotating compass at top-left, and four stat orbs (HP, prayer, run, spec).
@@ -6432,7 +6449,7 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     Rectangle hp_orb = {(float)(orbs_x + GUI_HP_X), (float)(orbs_y + GUI_HP_Y), 57, 34};
     Rectangle prayer_orb = {(float)(orbs_x + GUI_PRAYER_X), (float)(orbs_y + GUI_PRAYER_Y), 57, 34};
     Rectangle run_orb = {(float)(orbs_x + GUI_RUN_X), (float)(orbs_y + GUI_RUN_Y), 57, 34};
-    Rectangle spec_orb = {(float)(orbs_x + GUI_SPEC_X), (float)(orbs_y + GUI_SPEC_Y), 57, 34};
+    Rectangle spec_orb = render_minimap_spec_orb_rect();
     Rectangle worldmap_button = {(float)(orbs_x + GUI_WORLDMAP_X), (float)(orbs_y + GUI_WORLDMAP_Y), 30, 30};
     Rectangle wiki_button = {(float)(map_x + 166), (float)(map_y + 173), 40, 34};
 
@@ -6450,7 +6467,8 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
         render_draw_minimap_orb(gs, run_orb, "orb_filler_5", "orb_icon_2",
             osrs_run_energy_percent(p->run_energy), 100, (Color){60, 210, 80, 255});
         render_draw_minimap_orb(gs, spec_orb, "orb_filler_9", "orb_icon_6",
-            p->special_energy, 100, (Color){225, 205, 55, 255});
+            p->special_energy, 100,
+            p->spec_armed ? (Color){80, 220, 90, 255} : (Color){225, 205, 55, 255});
     }
 
     gui_draw_named_asset(gs, "ring_30", worldmap_button, WHITE);

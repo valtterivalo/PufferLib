@@ -267,6 +267,9 @@ typedef struct {
 /* click/drag interaction state */
 #define INV_DIM_TICKS 15       /* client ticks (50 Hz) to show dim after click */
 #define INV_DRAG_DEAD_ZONE 5   /* pixels before drag activates */
+#define INV_DRAG_HOLD_SECONDS 0.030  /* anti-drag: button must be held this long
+                                        before a drag can start; a faster
+                                        press-move-release stays a click */
 
 typedef enum {
     INV_ACTION_NONE = 0,
@@ -488,6 +491,7 @@ typedef struct {
     int inv_drag_start_y;
     int inv_drag_mouse_x;     /* current mouse position during drag */
     int inv_drag_mouse_y;
+    double inv_drag_press_time; /* GetTime() at mouse-down on the src slot */
 
     /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
        -1 when not targeting. render code sets this before calling gui_draw. */
@@ -2050,6 +2054,7 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
     gs->inv_drag_start_y = 0;
     gs->inv_drag_mouse_x = 0;
     gs->inv_drag_mouse_y = 0;
+    gs->inv_drag_press_time = 0.0;
     for (int i = 0; i < GUI_TAB_COUNT; i++) {
         gs->tab_press_timer[i] = 0;
     }
@@ -2681,11 +2686,14 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
             gs->inv_drag_start_x = mx;
             gs->inv_drag_start_y = my;
             gs->inv_drag_src_slot = slot;
+            gs->inv_drag_press_time = GetTime();
         }
     }
 
-    /* check if held mouse has moved past dead zone → start drag */
-    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active) {
+    /* held past the anti-drag threshold AND moved past the dead zone → start
+       drag; a quicker press-move-release still resolves as a click below. */
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active &&
+        GetTime() - gs->inv_drag_press_time >= INV_DRAG_HOLD_SECONDS) {
         int dx = mx - gs->inv_drag_start_x;
         int dy = my - gs->inv_drag_start_y;
         if (dx > INV_DRAG_DEAD_ZONE || dx < -INV_DRAG_DEAD_ZONE ||
