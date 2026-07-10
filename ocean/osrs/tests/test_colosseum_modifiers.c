@@ -3085,6 +3085,75 @@ static void test_manticore_telegraph_during_windup(void) {
         mc->fixed_orb_style[0] != ATTACK_STYLE_NONE);
 }
 
+/* 5b-ter. Prayer-oracle regression: the oracle must pray each barrage orb's OWN
+   style (the wave cycle: ranged/magic pair leading, melee last), never the
+   manticore's default_style (ranged for all three), which misprayed two orbs
+   per barrage from the oracle's birth commit through 2026-07-10. */
+static void test_prayer_oracle_manticore_orbs(void) {
+    printf("test_prayer_oracle_manticore_orbs\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 79);
+    advance_to_wave_spawn(&s, &ctx);
+    geo_clear_npcs(&s);
+    s.wave_ready_delay = 0;
+    s.wave_attack_delay = 0;
+    s.player.x = 17; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);   /* dist 2, clear LoS */
+    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
+
+    /* charge completes this tick: the oracle prays the first QUEUED orb. */
+    s.npcs[0].attack_timer = 1;
+    mc->cycle_step = -1;
+    mc->fixed_orb_style[0] = ATTACK_STYLE_MAGIC;
+    mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
+    mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+    s.player.prayer = PRAYER_NONE;
+    col_apply_prayer_oracle(&s);
+    CHECK("oracle prays orb 0's style on the charge-complete tick (magic, not default ranged)",
+        s.player.prayer == PRAYER_PROTECT_MAGIC);
+
+    /* in-flight barrage: the oracle tracks the queued orb tick by tick. */
+    for (int o = 0; o < 3; o++) mc->orb_style[o] = mc->fixed_orb_style[o];
+    mc->cycle_step = 1;
+    s.player.prayer = PRAYER_NONE;
+    col_apply_prayer_oracle(&s);
+    CHECK("oracle prays the in-flight orb 1 style (ranged)",
+        s.player.prayer == PRAYER_PROTECT_RANGED);
+    mc->cycle_step = 2;
+    s.player.prayer = PRAYER_NONE;
+    col_apply_prayer_oracle(&s);
+    CHECK("oracle prays the in-flight orb 2 style (melee, not default ranged)",
+        s.player.prayer == PRAYER_PROTECT_MELEE);
+
+    /* idle manticore: the oracle leaves the player's prayer alone. */
+    mc->cycle_step = -1;
+    for (int o = 0; o < 3; o++) mc->orb_style[o] = ATTACK_STYLE_NONE;
+    s.npcs[0].attack_timer = 5;
+    s.player.prayer = PRAYER_PROTECT_MELEE;
+    col_apply_prayer_oracle(&s);
+    CHECK("oracle leaves prayer untouched with no thrower this tick",
+        s.player.prayer == PRAYER_PROTECT_MELEE);
+
+    /* episode property: oracle applied before each attack tick (the real step
+       order) blocks EVERY orb of a solo manticore across whole barrages. */
+    s.npcs[0].attack_timer = 2;
+    for (int t = 0; t < 36; t++) {
+        s.player.current_hitpoints = 99;
+        col_apply_prayer_oracle(&s);
+        col_npc_attack_ctx(&s, &ctx, 0);
+    }
+    float faced = s.log.pray_faced_by_type[COLO_MANTICORE];
+    float correct = s.log.pray_correct_by_type[COLO_MANTICORE];
+    CHECK("solo-manticore barrages under the oracle: every orb faced",
+        faced >= 9.0f);
+    CHECK("solo-manticore barrages under the oracle: every orb prayed",
+        correct == faced);
+}
+
 /* 5c: manticore orbs travel one tick. Each orb checks prayer on its FIRE tick
    (the prayer set that tick, via col_player_pretick, decides the block) and
    queues a 1-tick landing (ticks_remaining == 1) carrying the resolved damage,
@@ -7892,6 +7961,7 @@ int main(void) {
     test_minotaur_heal_semantics();
     test_manticore_barrage_period();
     test_manticore_telegraph_during_windup();
+    test_prayer_oracle_manticore_orbs();
     test_manticore_orb_same_tick_flick();
     test_projectile_prayer_locks_at_throw();
     test_npc_melee_instant_unprayable();

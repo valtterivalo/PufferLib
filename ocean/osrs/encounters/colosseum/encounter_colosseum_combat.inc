@@ -836,14 +836,19 @@ static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const Colo
     }
 
     /* manticore: an in-flight orb barrage fires one orb per tick; otherwise it
-       fires when its charge completes (attack_timer reaches 0) with range + LoS. */
+       fires when its charge completes (attack_timer reaches 0) with range + LoS.
+       Each orb carries its own style (the wave-shared ranged/magic/melee cycle),
+       so key on the queued orb — default_style is ranged for all three and
+       mispray's two orbs per barrage (the forecast obs already reads the queue;
+       the oracle must match it). */
     if (npc->type == COLO_MANTICORE) {
-        if (npc->type_state.manticore.cycle_step > 0) return st->default_style;
+        const ColoManticoreState* mc = &npc->type_state.manticore;
+        if (mc->cycle_step > 0) return mc->orb_style[mc->cycle_step];
         if (npc->attack_timer > 1) return ATTACK_STYLE_NONE;
         int d = col_npc_dist_to_player(s, npc);
         if (d < 1 || d > st->attack_range) return ATTACK_STYLE_NONE;
         if (!col_npc_has_los_to_player(s, npc)) return ATTACK_STYLE_NONE;
-        return st->default_style;
+        return mc->fixed_orb_style[0];
     }
 
     /* minotaur: melee crush only when Chebyshev-adjacent (else it heals = no threat). */
