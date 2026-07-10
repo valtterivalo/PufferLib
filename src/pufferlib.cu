@@ -255,6 +255,7 @@ typedef struct {
     int num_atns;
     int hidden_size;
     int num_layers;
+    int entity_encoder;
     // Learning rate
     float lr;
     float min_lr_ratio;
@@ -286,15 +287,12 @@ typedef struct {
     float prio_alpha;
     float prio_beta0;
     bool anneal_prio_beta;
-    // Curriculum state buffer
-    int state_buffer_size;
+    // Best-trajectory curriculum (reward-only, host-side)
+    int num_start_states;
     float cl_frac;
-    bool anneal_cl;
-    int warmup_states;
+    float fresh_frac;
+    int state_trajectory_max_len;
     int state_checkpoint_interval;
-    float explore_alpha;
-    float explore_beta;
-    float explore_decay;
     // Flags
     bool reset_state;
     int cudagraphs;
@@ -388,9 +386,8 @@ typedef struct {
 #undef PUFFER_CURRICULUM_IMPL
 
 Dict* log_environments_impl(PuffeRL& pufferl) {
-    // Capacity raised from 32 to 64 to accommodate chess's per-bank
-    // hist_score_bank_<b> / hist_n_bank_<b> entries (16 keys for 8 banks).
-    Dict* out = create_dict(64);
+    // Sized for the largest env log (see LOG_DICT_CAPACITY in vecenv.h).
+    Dict* out = create_dict(LOG_DICT_CAPACITY);
     static_vec_log(pufferl.vec, out);
     return out;
 }
@@ -571,14 +568,29 @@ __global__ void sample_logits(
     rng_states[idx] = state;
 }
 
+// Best-trajectory curriculum bookkeeping, run inside the vecenv OMP step loop
+// right after each env's c_step (same OMP worker thread; the curriculum's
+// rand_r slots key on omp_get_thread_num()). Checks curriculum_enabled per
+// call so cudagraph warmup rollouts (which force it to 0) stay curriculum-free.
+extern "C" void post_step_callback_wrapper(void* ctx, int buf, int env_idx) {
+    PuffeRL* pufferl = (PuffeRL*)ctx;
+    if (!pufferl->curriculum_enabled) {
+        return;
+    }
+    StateBuffer* sb = &pufferl->state_buf;
+    if (env_idx < sb->num_vanilla_envs) {
+        return;
+    }
+    int row = env_idx - sb->num_vanilla_envs;
+    int is_cl = row >= sb->num_fresh_envs;
+    curriculum_post_active_step(pufferl, buf, env_idx, row, is_cl);
+}
+
 // Single step rollout forward pass. Called by each environment worker in their
 // own buffer thread. This operation is cudagraphed.
 extern "C" void net_callback_wrapper(void* ctx, int buf, int t) {
     PuffeRL* pufferl = (PuffeRL*)ctx;
     HypersT& hypers = pufferl->hypers;
-    if (pufferl->curriculum_enabled) {
-        capture_curriculum_checkpoint(pufferl, buf, t);
-    }
     int graph = t * hypers.num_buffers + buf;
     profile_begin("fused_rollout", hypers.profile);
 
@@ -1316,8 +1328,7 @@ __device__ __forceinline__ void copy_values_adv_returns(
 
 __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         const int* __restrict__ idx, const precision_t* __restrict__ advantages,
-        const precision_t* __restrict__ mb_prio,
-        const precision_t* __restrict__ row_importance) {
+        const precision_t* __restrict__ mb_prio) {
     int mb = blockIdx.x;
     int ch = blockIdx.y;
     int src_row = idx[mb];
@@ -1345,11 +1356,7 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         break;
     case 4:
         if (threadIdx.x == 0) {
-            float prio = to_float(mb_prio[mb]);
-            if (row_importance != nullptr) {
-                prio *= to_float(row_importance[src_row]);
-            }
-            graph.mb_prio.data[mb] = from_float(prio);
+            graph.mb_prio.data[mb] = mb_prio[mb];
         }
         break;
     case 5:
@@ -1478,7 +1485,7 @@ void train_impl(PuffeRL& pufferl) {
             prio_alpha, 1e-6f, prio_rows, prio_stride);
         sample_prio_indices(&pufferl.prio_bufs, prio_rows, minibatch_segments,
             pufferl.seed, train_rng_offset, pufferl.prio_bufs.mb_prio.data,
-            NULL, 0, 1, anneal_beta, train_stream);
+            anneal_beta, train_stream);
         profile_end(hypers.profile);
 
         profile_begin("train_select_and_copy", hypers.profile);
@@ -1488,12 +1495,9 @@ void train_impl(PuffeRL& pufferl) {
             sel_src.values = rollouts.values;
             int mb_segs = pufferl.prio_bufs.idx.shape[0];
             int channels = (graph.mb_action_mask.data != nullptr) ? 6 : 5;
-            const precision_t* row_importance = pufferl.curriculum_enabled
-                ? pufferl.state_buf.importance.data : nullptr;
             select_copy<<<dim3(mb_segs, channels), SELECT_COPY_THREADS, 0, train_stream>>>(
                 sel_src, graph, pufferl.prio_bufs.idx.data,
-                advantages_puf.data, pufferl.prio_bufs.mb_prio.data,
-                row_importance);
+                advantages_puf.data, pufferl.prio_bufs.mb_prio.data);
         }
         profile_end(hypers.profile);
 
@@ -1567,18 +1571,6 @@ void train_impl(PuffeRL& pufferl) {
         }
         cudaEventRecord(pufferl.profile.events[4]);  // end forward
     }
-    if (pufferl.curriculum_enabled) {
-        puf_zero(&advantages_puf, train_stream);
-        puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.truncations, rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
-        if (pufferl.num_frozen_banks > 0 && pufferl.bank_layout != NULL) {
-            int apb = hypers.total_agents / hypers.num_buffers;
-            zero_frozen_advantages_cuda(advantages_puf, apb,
-                pufferl.bank_layout[1], train_stream);
-        }
-        curriculum_update_advantages(&pufferl, &advantages_puf, train_stream);
-    }
     pufferl.epoch += 1;
 
     cudaStreamSynchronize(pufferl.default_stream);
@@ -1603,7 +1595,7 @@ void train_impl(PuffeRL& pufferl) {
 // has no heap state so this returns by value; callers store it wherever.
 static Policy build_policy(const char* env_name, int input_size, int hidden_size,
                            int num_layers, int decoder_output_size, int act_n,
-                           bool is_continuous, int horizon) {
+                           bool is_continuous, int horizon, int entity_encoder) {
     Encoder encoder = {
         .forward = encoder_forward,
         .backward = encoder_backward,
@@ -1617,7 +1609,7 @@ static Policy build_policy(const char* env_name, int input_size, int hidden_size
         .in_dim = input_size, .out_dim = hidden_size,
         .activation_size = sizeof(EncoderActivations),
     };
-    create_custom_encoder(env_name, &encoder);
+    create_custom_encoder(env_name, &encoder, entity_encoder);
     Decoder decoder = {
         .forward = decoder_forward,
         .backward = decoder_backward,
@@ -1665,7 +1657,8 @@ static void weight_bank_create_for_pufferl(WeightBank* bank, PuffeRL* pufferl,
     for (int i = 0; i < num_action_heads; i++) act_n += raw_act_sizes[i];
     int decoder_output_size = pufferl->is_continuous ? num_action_heads : act_n;
     bank->policy = build_policy(pufferl->env_name.c_str(), input_size, hidden_size,
-        num_layers, decoder_output_size, act_n, pufferl->is_continuous, pufferl->hypers.horizon);
+        num_layers, decoder_output_size, act_n, pufferl->is_continuous,
+        pufferl->hypers.horizon, pufferl->hypers.entity_encoder);
     bank->hidden_size = hidden_size;
     bank->num_layers = num_layers;
 
@@ -1856,25 +1849,31 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     StaticVec* vec = create_environments(hypers.num_buffers, hypers.total_agents,
         env_name, vec_kwargs, env_kwargs, pufferl->env);
     pufferl->vec = vec;
-    assert(hypers.cl_frac >= 0.0f && "cl_frac must be nonnegative");
-    assert(hypers.cl_frac <= 0.9f && "cl_frac must be <= 0.9");
+    assert(hypers.cl_frac >= 0.0f && hypers.cl_frac <= 1.0f
+        && "cl_frac must be in [0, 1]");
+    assert(hypers.fresh_frac >= 0.0f && hypers.fresh_frac <= 1.0f
+        && "fresh_frac must be in [0, 1]");
+    assert(hypers.cl_frac + hypers.fresh_frac <= 1.0f
+        && "cl_frac + fresh_frac must be <= 1");
     int initial_num_cl_envs = clamp_int(
         (int)(hypers.cl_frac * (float)vec->size), 0, vec->size);
-    pufferl->curriculum_enabled = hypers.state_buffer_size > 0 && initial_num_cl_envs > 0;
-    int agents_per_env = 0;
+    int initial_num_fresh_envs = clamp_int(
+        (int)(hypers.fresh_frac * (float)vec->size), 0, vec->size);
+    pufferl->curriculum_enabled = hypers.num_start_states > 0
+        && (initial_num_cl_envs + initial_num_fresh_envs) > 0;
     if (pufferl->curriculum_enabled) {
-        agents_per_env = fixed_agents_per_env(vec);
-        assert(hypers.warmup_states >= 0 && "warmup_states must be nonnegative");
-        assert(hypers.warmup_states <= hypers.state_buffer_size
-            && "warmup_states must be <= state_buffer_size");
+        fixed_agents_per_env(vec);
+        assert(hypers.state_trajectory_max_len > 0
+            && "state_trajectory_max_len must be positive");
         assert(hypers.state_checkpoint_interval > 0
             && "state_checkpoint_interval must be positive");
-        assert(hypers.explore_decay >= 0.0f && hypers.explore_decay <= 1.0f
-            && "explore_decay must be in [0, 1]");
     }
 
     // Sanity check action space
     int num_action_heads = pufferl->env.actions.shape[1];
+    assert(num_action_heads <= MAX_ATN_HEADS &&
+        "action heads exceed MAX_ATN_HEADS; raise it in src/kernels.cu "
+        "(the PPO loss kernel's per-head stack arrays are sized by it)");
     int* raw_act_sizes = get_act_sizes();  // CPU int32 pointer from env
     int act_n = 0;
     int num_continuous = 0;
@@ -1918,12 +1917,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     int total_agents = vec->total_agents;
     int batch = total_agents / hypers.num_buffers;
     int num_buffers = hypers.num_buffers;
-    int num_cl_envs = pufferl->curriculum_enabled
+    int curriculum_max_active_envs = pufferl->curriculum_enabled
         ? clamp_int((int)(hypers.cl_frac * (float)vec->size), 0, vec->size)
+            + clamp_int((int)(hypers.fresh_frac * (float)vec->size), 0, vec->size)
         : 0;
 
     pufferl->policy = build_policy(env_name.c_str(), input_size, hidden_size,
-        num_layers, decoder_output_size, act_n, is_continuous, hypers.horizon);
+        num_layers, decoder_output_size, act_n, is_continuous, hypers.horizon,
+        hypers.entity_encoder);
 
     // Create and allocate params
     Allocator* params = &pufferl->params_alloc;
@@ -1957,12 +1958,14 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
         acts, hypers.total_agents, minibatch_segments);
     if (pufferl->curriculum_enabled) {
         register_state_buffer(&pufferl->state_buf,
-            acts, hypers.state_buffer_size, total_agents, vec->size,
-            agents_per_env, num_cl_envs, horizon, hypers.state_checkpoint_interval);
+            vec->size, curriculum_max_active_envs,
+            hypers.num_start_states, hypers.state_trajectory_max_len,
+            hypers.state_checkpoint_interval, horizon,
+            num_buffers, hypers.num_threads, (unsigned int)hypers.seed);
     }
 
     // Extra cuda buffers just reuse activ allocator
-    pufferl->rng_offset_puf = {.shape = {num_buffers + 1 + (int)pufferl->curriculum_enabled}};
+    pufferl->rng_offset_puf = {.shape = {num_buffers + 1}};
     alloc_register(acts, &pufferl->rng_offset_puf);
 
     pufferl->act_sizes_puf  = {.shape = {num_action_heads}};
@@ -1992,12 +1995,7 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     pufferl->grad_puf = {.data = (precision_t*)grads->mem, .shape = {grads->total_elems}};
     pufferl->param_puf = {.data = (precision_t*)params->mem, .shape = {params->total_elems}};
     if (pufferl->curriculum_enabled) {
-        if (!init_state_buffer(&pufferl->state_buf, hypers.total_agents)) {
-            alloc_free(params);
-            alloc_free(grads);
-            alloc_free(acts);
-            return nullptr;
-        }
+        init_state_buffer(&pufferl->state_buf);
     }
 
     ulong init_seed = hypers.seed;
@@ -2154,8 +2152,11 @@ std::unique_ptr<PuffeRL> create_pufferl_impl(HypersT& hypers,
     }
 
     create_static_threads(vec, hypers.num_threads, horizon, pufferl.get(),
-        net_callback_wrapper, thread_init_wrapper);
-    static_vec_reset(vec);
+        net_callback_wrapper, thread_init_wrapper, post_step_callback_wrapper);
+    static_vec_reset(vec, 0, -1, NULL);
+    if (pufferl->curriculum_enabled) {
+        curriculum_init_active_envs(pufferl.get());
+    }
 
     if (hypers.profile) {
         cudaDeviceSynchronize();

@@ -33,6 +33,8 @@ static int col_in_boss_arena(const ColosseumState* s, int x, int y);
 static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
+static void col_apply_late_start_entry_state(
+    ColosseumState* s, const ColosseumContext* ctx, int start_wave);
 
 static void col_abort_invalid_weapon_set(ColoWeaponSet set) {
     fprintf(stderr, "invalid Colosseum weapon set %d\n", (int)set);
@@ -67,6 +69,23 @@ static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
     }
     col_abort_invalid_weapon_set(set);
     return FIGHT_STYLE_AGGRESSIVE;
+}
+
+/** style-matched offensive prayer (Piety/Rigour/Augury). The colosseum mirror of
+    the inferno helper: the prayer that actually buffs `style` in
+    encounter_offensive_prayer_mults (an off-style prayer returns identity). */
+static OffensivePrayer col_offensive_prayer_for_attack_style(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return OFFENSIVE_PRAYER_PIETY;
+        case ATTACK_STYLE_RANGED:
+            return OFFENSIVE_PRAYER_RIGOUR;
+        case ATTACK_STYLE_MAGIC:
+            return OFFENSIVE_PRAYER_AUGURY;
+        case ATTACK_STYLE_NONE:
+            return OFFENSIVE_PRAYER_NONE;
+    }
+    abort();
 }
 
 static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
@@ -290,39 +309,27 @@ static void col_queue_npc_pending_hit(
         &npc->pending_hits, hit, "colosseum-npc", s->tick, npc_slot, npc->type);
 }
 
-/** queue an NPC-attack hit on the player's pending-hit queue.
+/** push a pre-built NPC->player pending hit onto the player's queue. Build the hit
+    with the shared encounter_pending_hit_resolved_at_throw ctor (osrs_encounter.h)
+    so the throw-tick prayer/damage freeze lives in the SDK, not here. */
+/** scaffold: scale one incoming-damage value by s->active_player_damage_received_scale.
+    Provably bit-identical at scale >= 1.0f (early return of the original int, no
+    float round-trip), so the golden no-op path is exact. Below 1.0 it rounds
+    half-up and clamps at 0 so scale=0.0 yields full invuln. Negative damage is
+    impossible here (rolls are >= 0), so no negative-clamp is needed. */
+static inline int col_scale_incoming_damage(const ColosseumState* s, int dmg) {
+    float scale = s->active_player_damage_received_scale;
+    if (scale >= 1.0f) return dmg;
+    if (scale <= 0.0f) return 0;
+    int scaled = (int)((float)dmg * scale + 0.5f);
+    return scaled < 0 ? 0 : scaled;
+}
 
-    check_prayer=1 + prayer_check_delay defers the Protect-from-X test to land time
-    (the shared resolver re-checks at T+prayer_check_delay, or at landing when the
-    delay is 0), so prayer flicking matters for projectile attacks. Set
-    ignore_prayer for hits that bypass Protect (e.g. javelin skyfall) by passing
-    check_prayer=0 with a non-prayer style. */
-static void col_queue_player_pending_hit(
-    ColosseumState* s,
-    int source_npc_slot,
-    int source_npc_type,
-    int damage,
-    int ticks,
-    AttackStyle style,
-    int check_prayer,
-    int hit_success
-) {
-    EncounterPendingHit hit = {
-        .active = 1,
-        .damage = damage,
-        .ticks_remaining = ticks,
-        .attack_style = style,
-        .check_prayer = check_prayer,
-        .prayer_check_delay = 0,
-        .spell_type = ENCOUNTER_SPELL_NONE,
-        .source_npc_type = source_npc_type,
-        .source_npc_slot = source_npc_slot,
-        .hit_success = hit_success,
-        .elysian_reduced = 0,
-    };
+static void col_push_player_pending_hit(ColosseumState* s, EncounterPendingHit hit) {
+    hit.damage = col_scale_incoming_damage(s, hit.damage);
     encounter_pending_hit_queue_push(
-        &s->player_pending_hits, hit, "colosseum-player", s->tick, source_npc_slot,
-        source_npc_type);
+        &s->player_pending_hits, hit, "colosseum-player", s->tick,
+        hit.source_npc_slot, hit.source_npc_type);
 }
 
 
@@ -345,15 +352,28 @@ static ColConfig col_default_config(void) {
         .win_bonus = 0.0f,
         .prayer_correct_reward = 0.0f,
         .offpray_damage_penalty_coeff = 0.0f,
+        .multistyle_exposure_penalty_coeff = 0.0f,
+        .argmax_gear_reward_coeff = 0.0f,
+        .offensive_boost_reward_coeff = 0.0f,
+        .stall_penalty_coeff = 0.0f,
+        .farm_safe_damage_cap = 0,
+        .farm_cap_waves = COLO_FARM_CAP_WAVES,
         .avoided_damage_coeff = 0.0f,
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,
         .curriculum_agent = 0,
+        .late_start_state_mode = 2,
+        .late_start_supply_fraction_per_wave = 0.07f,
         .step_out_forecast_obs_enabled = 1,
+        .threat_field_obs_enabled = 1,
         .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
         .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
         .mask_inventory_heads = 0,
         .action_debug_log = col_default_action_debug_log(),
+        .prayer_switch_fail_prob = 0.0f,
+        .player_damage_received_scale = 1.0f,
+        .damage_scale_anneal_start = 1.0f,
+        .damage_scale_anneal_ticks = 0,
     };
 }
 

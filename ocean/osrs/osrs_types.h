@@ -1004,12 +1004,12 @@ typedef struct {
     float hist_score_bank[8];
     float hist_n_bank[8];
 
-    /* Colosseum per-NPC-type prayer outcomes, indexed by ColoNpcType (12 types).
-       faced = prayer-checkable hits landed, correct = overhead matched,
-       offpray_damage = HP lost to mismatched-overhead hits. */
+    /* Colosseum per-NPC-type prayer outcomes and total damage, indexed by
+       ColoNpcType (12 types). total_damage is all NPC-sourced HP lost. */
     float colo_pray_faced_by_type[12];
     float colo_pray_correct_by_type[12];
     float colo_offpray_damage_by_type[12];
+    float colo_total_damage_by_type[12];
     /* Colosseum death attribution (diagnostic): colo_death_by_type[t] is the
        kill-share for NPC type t (1.0 for the type that landed the killing blow,
        per dead episode -> per-episode mean = fraction of deaths it caused);
@@ -1024,8 +1024,30 @@ typedef struct {
     float colo_offpray_damage_conflict;
     float colo_offpray_damage_solo;
     float colo_death_on_conflict_tick;
+    /* Colosseum death forensics (land-time): the fatal tick's received damage
+       split by channel (unprayable = typeless/ignore-prayer dodge failure,
+       offpray = wrong overhead, prayed = through a correct overhead, expected
+       ~0) + HP-heal capacity left in the inventory at death (burst vs
+       attrition). colo_typeless_damage_by_type = per-type episode totals of
+       unprayable damage (splits javelin skyfall+molten from its prayable
+       throws in colo_offpray_damage_by_type). */
+    float colo_death_dmg_unprayable;
+    float colo_death_dmg_offpray;
+    float colo_death_dmg_prayed;
+    float colo_death_dmg_self;
+    float colo_death_heal_remaining;
+    float colo_farm_damage;
+    float colo_typeless_damage_by_type[12];
     float colo_outcome_score;
     float colo_min_sol_hp;
+    /* Colosseum max-wave diagnostic. Each env keeps a binding-owned running max
+       (survives the train log-window zeroing) of every episode's raw furthest
+       depth (waves_fully_cleared + current-wave fresh-fraction + Sol sub-progress,
+       in [0, COLO_NUM_WAVES]) and adds it here once per terminating episode. After
+       the mean-aggregation this reads as the mean over terminating episodes of the
+       running-max-so-far: a smooth, monotone-tightening lower bound on the true
+       single-episode furthest, never the exact global max. */
+    float colo_max_depth_reached;
 } Log;
 
 typedef struct {

@@ -112,9 +112,8 @@ pybind11::dict puf_eval_log(pybind11::object pufferl_obj) {
     pufferl.last_log_step = pufferl.global_step;
  
     pybind11::dict env_dict;
-    // Capacity 64 to fit chess's per-bank hist_score_bank/hist_n_bank entries
-    // (16 keys across 8 banks) on top of base env-log fields.
-    Dict* env_out = create_dict(64);
+    // Sized for the largest env log (see LOG_DICT_CAPACITY in vecenv.h).
+    Dict* env_out = create_dict(LOG_DICT_CAPACITY);
     static_vec_eval_log(pufferl.vec, env_out);
     for (int i = 0; i < env_out->size; i++) {
         env_dict[env_out->items[i].key] = env_out->items[i].value;
@@ -156,13 +155,14 @@ void rollouts(pybind11::object pufferl_obj) {
         }
     }
 
-    if (pufferl.curriculum_enabled) {
-        curriculum_rollout_begin(&pufferl);
-    } else {
+    if (!pufferl.curriculum_enabled) {
         pufferl.vec->log_env_limit = 0;
     }
 
     static_vec_omp_step(pufferl.vec);
+    if (pufferl.curriculum_enabled) {
+        curriculum_rollout_end(&pufferl);
+    }
     float sec = (float)(wall_clock() - t0);
     pufferl.profile.accum[PROF_ROLLOUT] += sec * 1000.0f;  // store as ms
 
@@ -299,6 +299,14 @@ double get_config(py::dict& kwargs, const char* key) {
     }
 }
 
+// Tolerant variant for optional keys: returns default_value when the key is absent.
+// Keeps configs that predate an opt-in flag working (and byte-identical when the
+// default matches the old behavior). A present-but-unparseable value still throws.
+double get_config_or(py::dict& kwargs, const char* key, double default_value) {
+    if (!kwargs.contains(key)) return default_value;
+    return get_config(kwargs, key);
+}
+
 Dict* py_dict_to_c_dict(py::dict py_dict) {
     Dict* c_dict = create_dict(py_dict.size());
     for (auto item : py_dict) {
@@ -360,7 +368,7 @@ std::unique_ptr<VecEnv> create_vec(py::dict args, int gpu) {
 
 void vec_reset(VecEnv& ve) {
     py::gil_scoped_release no_gil;
-    static_vec_reset(ve.vec);
+    static_vec_reset(ve.vec, 0, -1, NULL);
 }
 
 void gpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
@@ -383,7 +391,7 @@ void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 }
 
 py::dict vec_log(VecEnv& ve) {
-    Dict* out = create_dict(32);
+    Dict* out = create_dict(LOG_DICT_CAPACITY);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++) {
@@ -414,6 +422,7 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     // Model architecture (num_atns computed from env in C++)
     hypers.hidden_size = get_config(policy_kwargs, "hidden_size");
     hypers.num_layers = get_config(policy_kwargs, "num_layers");
+    hypers.entity_encoder = (int)get_config_or(policy_kwargs, "entity_encoder", 0.0);
     // Learning rate
     hypers.lr = get_config(train_kwargs, "learning_rate");
     hypers.min_lr_ratio = get_config(train_kwargs, "min_lr_ratio");
@@ -442,15 +451,12 @@ std::unique_ptr<PuffeRL> create_pufferl(py::dict args) {
     hypers.prio_alpha = get_config(train_kwargs, "prio_alpha");
     hypers.prio_beta0 = get_config(train_kwargs, "prio_beta0");
     hypers.anneal_prio_beta = get_config(train_kwargs, "anneal_prio_beta");
-    // Curriculum state buffer
-    hypers.state_buffer_size = get_config(train_kwargs, "state_buffer_size");
+    // Best-trajectory curriculum
+    hypers.num_start_states = get_config(train_kwargs, "num_start_states");
     hypers.cl_frac = get_config(train_kwargs, "cl_frac");
-    hypers.anneal_cl = get_config(train_kwargs, "anneal_cl");
-    hypers.warmup_states = get_config(train_kwargs, "warmup_states");
+    hypers.fresh_frac = get_config(train_kwargs, "fresh_frac");
+    hypers.state_trajectory_max_len = get_config(train_kwargs, "state_trajectory_max_len");
     hypers.state_checkpoint_interval = get_config(train_kwargs, "state_checkpoint_interval");
-    hypers.explore_alpha = get_config(train_kwargs, "explore_alpha");
-    hypers.explore_beta = get_config(train_kwargs, "explore_beta");
-    hypers.explore_decay = get_config(train_kwargs, "explore_decay");
     hypers.reset_state = get_config(args, "reset_state");
     // Base-level config ([base] section becomes top-level in args)
     hypers.cudagraphs = get_config(args, "cudagraphs");
@@ -581,14 +587,11 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("prio_alpha", &HypersT::prio_alpha)
         .def_readwrite("prio_beta0", &HypersT::prio_beta0)
         .def_readwrite("anneal_prio_beta", &HypersT::anneal_prio_beta)
-        .def_readwrite("state_buffer_size", &HypersT::state_buffer_size)
+        .def_readwrite("num_start_states", &HypersT::num_start_states)
         .def_readwrite("cl_frac", &HypersT::cl_frac)
-        .def_readwrite("anneal_cl", &HypersT::anneal_cl)
-        .def_readwrite("warmup_states", &HypersT::warmup_states)
+        .def_readwrite("fresh_frac", &HypersT::fresh_frac)
+        .def_readwrite("state_trajectory_max_len", &HypersT::state_trajectory_max_len)
         .def_readwrite("state_checkpoint_interval", &HypersT::state_checkpoint_interval)
-        .def_readwrite("explore_alpha", &HypersT::explore_alpha)
-        .def_readwrite("explore_beta", &HypersT::explore_beta)
-        .def_readwrite("explore_decay", &HypersT::explore_decay)
         .def_readwrite("cudagraphs", &HypersT::cudagraphs)
         .def_readwrite("profile", &HypersT::profile)
         .def_readwrite("rank", &HypersT::rank)

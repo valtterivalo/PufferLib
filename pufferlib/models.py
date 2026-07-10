@@ -57,6 +57,108 @@ class MinimalEntityEncoder(nn.Module):
         cat = torch.cat([self_obs, point_obs], dim=-1)
         return self.encoder(cat).max(dim=1)[0]
 
+class ColosseumEntityEncoder(nn.Module):
+    """Flat baseline + NPC entity-pool augmentation for the OSRS Colosseum obs.
+
+    Joseph Suarez's entity-encoder recipe adapted to the colosseum's per-NPC block.
+    The global path is a bias-free Linear over the full flat obs (matching the native
+    backend's bias-free Linear encoder), so this module is a clean A/B:
+    output = global(flat) + entity_pool(NPCs), isolating the entity-pool contribution.
+    All Linears are bias=False and GELU uses the tanh approximation to stay
+    bit-comparable with the native CUDA + puffernet inference paths. Downstream mixing
+    happens in the MinGRU net, so the sum keeps hidden_size and leaves the recurrent
+    input dim unchanged.
+
+    Obs layout verified from ocean/osrs/encounters/colosseum/encounter_colosseum_obs_mask.inc
+    and encounter_colosseum_model.inc. The NPC block is COLO_OBS_NPCS=24 contiguous
+    records of COLO_FEATURES_PER_NPC=37 floats, written by col_write_npc_slot in the
+    col_write_obs_ctx loop. NPC_START = COLO_OBS_AFTER_EQUIPPED_SELF:
+        player(36) + pillars(4*3=12) + inventory(28*28=784) + equipped(11*18=198) = 1030
+    and NPC_START + 24*37 = 1918 = COLO_OBS_AFTER_NPCS. Each record begins with a
+    COLO_NUM_NPC_TYPES=12-wide type one-hot (col_write_npc_slot), so an active
+    slot has type_onehot.sum() > 0 while an inactive slot is fully zero-filled (the writer
+    does `i += COLO_FEATURES_PER_NPC` for inactive slots after a full memset).
+
+    mode selects the encoder:
+        1 = global(flat) + NPC pool                       (the SOTA encoder, byte-identical to before)
+        2 = global(flat) + NPC pool + INVENTORY-CELL pool  (B3)
+    The inventory pool is a second shared per-entity MLP masked-maxpooled over the 28
+    inventory cells (offsets COLO_OBS_AFTER_PILLARS=48 .. COLO_OBS_AFTER_INVENTORY=832,
+    28 floats/cell), with a cell counted active iff its present flag (cell-local offset 0,
+    osrs_write_inventory_cell_affordance_features out[0]) > 0. The biggest flat obs section
+    (784 floats) is collision-heavy under a raw matmul; a shared per-cell MLP + pool is the
+    parameter-efficient inductive bias that lets a smaller hidden recover the score (the env
+    is rollout-bound at hs<=1024, so this extra encoder capacity is ~free on throughput).
+    Parameter order (.bin checkpoint contract): global_w, npc_l1, npc_l2, inv_l1, inv_l2 --
+    submodule definition order below MUST yield exactly that for the native mirrors to load.
+    """
+
+    NPC_START = 1030
+    NUM_NPCS = 24
+    FEATURES_PER_NPC = 37
+    TYPE_ONEHOT_START = 0
+    TYPE_ONEHOT_LEN = 12
+    BOTTLENECK = 16
+
+    INV_START = 48
+    NUM_INV_CELLS = 28
+    FEATURES_PER_CELL = 28
+    INV_PRESENT_OFFSET = 0
+    INV_BOTTLENECK = 16
+
+    def __init__(self, obs_size, hidden_size=128, mode=1):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.mode = int(mode)
+        self.npc_block_size = self.NUM_NPCS * self.FEATURES_PER_NPC
+        npc_end = self.NPC_START + self.npc_block_size
+        assert obs_size >= npc_end, (
+            f'obs_size {obs_size} too small for colosseum NPC block ending at {npc_end}'
+        )
+
+        self.global_encoder = nn.Linear(obs_size, hidden_size, bias=False)
+        self.entity_encoder = nn.Sequential(
+            nn.Linear(self.FEATURES_PER_NPC, self.BOTTLENECK, bias=False),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(self.BOTTLENECK, hidden_size, bias=False),
+        )
+        self.inv_block_size = self.NUM_INV_CELLS * self.FEATURES_PER_CELL
+        if self.mode >= 2:
+            inv_end = self.INV_START + self.inv_block_size
+            assert obs_size >= inv_end, (
+                f'obs_size {obs_size} too small for colosseum inventory block ending at {inv_end}'
+            )
+            self.inv_encoder = nn.Sequential(
+                nn.Linear(self.FEATURES_PER_CELL, self.INV_BOTTLENECK, bias=False),
+                nn.GELU(approximate="tanh"),
+                nn.Linear(self.INV_BOTTLENECK, hidden_size, bias=False),
+            )
+
+    @staticmethod
+    def _masked_maxpool(embeddings, active):
+        """Maxpool embeddings [B, N, H] over active entities; an all-inactive row -> 0."""
+        masked = embeddings.masked_fill(~active.unsqueeze(-1), float('-inf'))
+        pooled = masked.max(dim=1)[0]
+        return torch.where(active.any(dim=1, keepdim=True), pooled, torch.zeros_like(pooled))
+
+    def forward(self, observations):
+        x = observations.view(observations.shape[0], -1).float()
+        out = self.global_encoder(x)
+
+        npcs = x[:, self.NPC_START:self.NPC_START + self.npc_block_size].reshape(
+            x.shape[0], self.NUM_NPCS, self.FEATURES_PER_NPC)
+        npc_type = npcs[:, :, self.TYPE_ONEHOT_START:self.TYPE_ONEHOT_START + self.TYPE_ONEHOT_LEN]
+        npc_active = npc_type.sum(dim=-1) > 0
+        out = out + self._masked_maxpool(self.entity_encoder(npcs), npc_active)
+
+        if self.mode >= 2:
+            cells = x[:, self.INV_START:self.INV_START + self.inv_block_size].reshape(
+                x.shape[0], self.NUM_INV_CELLS, self.FEATURES_PER_CELL)
+            cell_active = cells[:, :, self.INV_PRESENT_OFFSET] > 0
+            out = out + self._masked_maxpool(self.inv_encoder(cells), cell_active)
+
+        return out
+
 class DefaultDecoder(nn.Module):
     def __init__(self, nvec, hidden_size=128):
         super().__init__()

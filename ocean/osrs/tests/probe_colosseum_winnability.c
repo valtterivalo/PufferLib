@@ -101,7 +101,7 @@ static int scripted_target(const ColosseumState* s) {
         int d = col_npc_dist_to_player(s, npc);
         if (d < best_dist) { best_dist = d; best_slot = slot; }
     }
-    return best_slot < 0 ? 0 : best_slot + 1;
+    return best_slot < 0 ? 0 : col_primary_attack_action_for_obs_slot(best_slot);
 }
 
 static int scripted_least_bad_modifier(const ColosseumState* s) {
@@ -133,11 +133,16 @@ static void scripted_policy(ColosseumState* s, int* actions) {
     }
     actions[COLO_HEAD_PRAYER] = scripted_overhead(s);
     actions[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
-    actions[COLO_HEAD_TARGET] = scripted_target(s);
-    actions[COLO_HEAD_MOVE] = scripted_move(s);
+    int move = scripted_move(s);
+    actions[COLO_HEAD_PRIMARY] = move > 0 ? move : scripted_target(s);
     if (s->player.current_hitpoints < 55) {
         int heal_cell = scripted_heal_cell(s);
-        if (heal_cell >= 0) actions[COLO_HEAD_INV_CLICK_0] = heal_cell + 1;
+        if (heal_cell >= 0) {
+            OsrsInventoryClickResolution r = osrs_inventory_cell_click_interpret(
+                &s->inventory_cells[heal_cell], OSRS_CLICK_TICK_FIRST);
+            int head = r.click_action == OSRS_CLICK_DRINK ? COLO_HEAD_DRINK : COLO_HEAD_EAT;
+            actions[head] = heal_cell + 1;
+        }
     }
 }
 

@@ -29,16 +29,13 @@ from pathlib import Path
 
 
 def _find_cache_pipeline() -> Path:
-    """Locate the RuneC cache pipeline, which is gitignored and may live only in
-    the primary checkout rather than the current worktree."""
+    """Locate the vendored cache pipeline inside the tracked tree."""
     env_override = os.environ.get("OSRS_CACHE_PIPELINE")
     candidates = []
     if env_override:
         candidates.append(Path(env_override))
     repo_root = Path(__file__).resolve().parents[3]
-    candidates.append(repo_root / "refs" / "RuneC" / "tools" / "cache_pipeline")
-    common = Path.home() / "Projects" / "pufferlib-metal"
-    candidates.append(common / "refs" / "RuneC" / "tools" / "cache_pipeline")
+    candidates.append(repo_root / "ocean" / "osrs" / "tools" / "cache_pipeline")
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
@@ -51,6 +48,12 @@ sys.path.insert(0, str(CACHE_PIPELINE))
 
 from modern_cache_reader import ModernCacheReader
 from rc_cache.definitions import decode_npc_definition
+from rc_cache import (
+    RcCacheStore,
+    load_texture_average_colors,
+    load_texture_sprites,
+)
+from export_textures import build_atlas
 from export_models import (
     ModelData,
     _merge_models,
@@ -120,6 +123,9 @@ COLOSSEUM_NPC_IDS = {
     12825: "Healing totem",
     12826: "Solar flare",
     10880: "Arceuus greater ghost thrall",
+    12834: "Sol shield-wall gladiator 1",
+    12835: "Sol shield-wall gladiator 2",
+    12836: "Sol shield-wall gladiator 3",
 }
 
 COLOSSEUM_ATTACK_ANIM_IDS = {
@@ -133,16 +139,31 @@ COLOSSEUM_ATTACK_ANIM_IDS = {
     12817: 10892,
     12818: 10869,
     12819: 10903,
-    12821: 10876,
+    12821: 10883,
     12823: 10823,
     12825: 10828,
     12826: 0xFFFF,
     10880: 11101,
+    12834: 0xFFFF,
+    12835: 0xFFFF,
+    12836: 0xFFFF,
 }
 
 COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
     12817: (10893,),
     12818: (10868,),
+    # Sol shield-wall gladiators: atmospheric NPCs, render-only, breathing idle
+    # HUMAN_SHIELD_COMBATANT_IDLE (10872) drives the wall (their def stand_anim is
+    # the generic 808; the renderer drives 10872 explicitly).
+    12834: (10872,),
+    12835: (10872,),
+    12836: (10872,),
+    # Sol Heredit per-attack animations, picked by last_attack_kind in the
+    # renderer: 10882 melee strike, 10884 grapple, 10885 shield slam, 10886/10887
+    # triple (long/short). 10883 (spear telegraph) is the attack_anim default. The
+    # generated single attack_anim used to be 10876 (his arena-entry jump), which
+    # is why every attack looked like the leap-in.
+    12821: (10882, 10884, 10885, 10886, 10887),
     12826: (10817,),
 }
 
@@ -162,6 +183,9 @@ COLOSSEUM_DEATH_ANIM_IDS = {
     12825: 0xFFFF,
     12826: 0xFFFF,
     10880: 11595,
+    12834: 0xFFFF,
+    12835: 0xFFFF,
+    12836: 0xFFFF,
 }
 
 COLOSSEUM_PROJECTILE_ANIM_IDS = {
@@ -1469,7 +1493,15 @@ def main() -> None:
 
     models, mapping, sequence_models = build_npc_models(reader, npc_files)
     models_path = args.output_dir / "colosseum_npcs.models"
-    write_models_binary(models_path, models)
+    # MDL4 (textured) output: passing an atlas makes write_models_binary emit the
+    # per-face alpha block (face_alphas + face_alpha_labels) the MDL2 path drops.
+    # Colosseum NPC component models carry real animation-alpha labels (e.g. the
+    # Shockwave Colossus body), so this is what lets their type-5 alpha shimmer
+    # round-trip into colosseum_npcs.models for the composite render path.
+    store = RcCacheStore(args.modern_cache)
+    tex_colors = load_texture_average_colors(store)
+    atlas = build_atlas(load_texture_sprites(store))
+    write_models_binary(models_path, models, tex_colors=tex_colors, atlas=atlas)
     print(f"wrote {len(models)} models ({models_path.stat().st_size:,} bytes) to {models_path}")
 
     anim_ids = collect_anim_ids(mapping)

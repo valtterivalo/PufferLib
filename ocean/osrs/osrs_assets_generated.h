@@ -31,6 +31,7 @@ static const char* const OSRS_ASSET_CORE_PATHS[] = {
     "equipment.tanim",
     "projectiles.models",
     "projectiles.atlas",
+    "projectiles.anims",
     "spotanims.bin",
     "fonts/runescape.ttf",
     "fonts/runescape_small.ttf",
@@ -48,6 +49,7 @@ static const char* const OSRS_ASSET_INFERNO_PATHS[] = {
     "inferno.cmap",
     "inferno_npcs.models",
     "inferno_npcs.anims",
+    "inferno_npcs.atlas",
 };
 
 static const char* const OSRS_ASSET_ZULRAH_PATHS[] = {
@@ -66,6 +68,7 @@ static const char* const OSRS_ASSET_COLOSSEUM_PATHS[] = {
     "colosseum.cmap",
     "colosseum_npcs.models",
     "colosseum_npcs.anims",
+    "colosseum_npcs.atlas",
     "sprites/colosseum/modifiers/5534.png",
     "sprites/colosseum/modifiers/5535.png",
     "sprites/colosseum/modifiers/5536.png",
@@ -139,6 +142,7 @@ static const char* const OSRS_ASSET_HEADERS_PATHS[] = {
 static const char* const OSRS_ASSET_COMBAT_VISUALS_PATHS[] = {
     "projectiles.models",
     "projectiles.atlas",
+    "projectiles.anims",
     "spotanims.bin",
     "equipment.anims",
     "inferno.anims",
@@ -159,6 +163,7 @@ static const char* const OSRS_ASSET_PVP_PATHS[] = {
     "equipment.tanim",
     "projectiles.models",
     "projectiles.atlas",
+    "projectiles.anims",
     "spotanims.bin",
     "ui/interfaces.bin",
     "ui/interface_manifest.json",

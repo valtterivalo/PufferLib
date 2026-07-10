@@ -33,12 +33,62 @@ static void col_put_int_ctx(
     else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
         ctx->config.step_out_forecast_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "threat_field_obs_enabled") == 0)
+        ctx->config.threat_field_obs_enabled =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "mask_inventory_heads") == 0)
         ctx->config.mask_inventory_heads =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "farm_safe_damage_cap") == 0)
+        ctx->config.farm_safe_damage_cap =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "farm_cap_waves") == 0) {
+        if (value < 0 || value > COLO_NUM_WAVES) {
+            fprintf(stderr, "colosseum: farm_cap_waves must be 0..%d, got %d\n",
+                COLO_NUM_WAVES, value);
+            abort();
+        }
+        ctx->config.farm_cap_waves = value;
+    }
     else if (strcmp(key, "action_debug_log") == 0)
         ctx->config.action_debug_log =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "prayer_oracle_mode") == 0)
+        ctx->config.prayer_oracle_mode =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "late_start_state_mode") == 0) {
+        if (value < 0 || value > 2) {
+            fprintf(stderr, "colosseum: late_start_state_mode must be 0..2, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.late_start_state_mode = value;
+    }
+    else if (strcmp(key, "bis_gear_oracle_mode") == 0)
+        ctx->config.bis_gear_oracle_mode =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "invuln_mode") == 0)
+        ctx->config.invuln_mode =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "episode_max_ticks_override") == 0) {
+        if (value < 0) {
+            fprintf(stderr, "colosseum: episode_max_ticks_override must be >= 0, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.episode_max_ticks_override = value;
+    }
+    else if (strcmp(key, "remove_brews") == 0)
+        ctx->config.remove_brews =
+            encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "damage_scale_anneal_ticks") == 0) {
+        if (value < 0) {
+            fprintf(stderr, "colosseum: damage_scale_anneal_ticks must be >= 0, got %d\n",
+                value);
+            abort();
+        }
+        ctx->config.damage_scale_anneal_ticks = value;
+    }
     else if (strcmp(key, "forecast_horizon") == 0) {
         if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
             fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
@@ -74,6 +124,15 @@ static void col_put_float_ctx(
     (void)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->config.damage_reward_coeff = value;
+    else if (strcmp(key, "late_start_supply_fraction_per_wave") == 0) {
+        if (value < 0.0f || value > 0.125f) {
+            fprintf(stderr,
+                "colosseum: late_start_supply_fraction_per_wave must be 0..0.125, got %f\n",
+                (double)value);
+            abort();
+        }
+        ctx->config.late_start_supply_fraction_per_wave = value;
+    }
     else if (strcmp(key, "boss_damage_reward_coeff") == 0)
         ctx->config.boss_damage_reward_coeff = value;
     else if (strcmp(key, "wave_clear_bonus") == 0) ctx->config.wave_clear_bonus = value;
@@ -83,6 +142,14 @@ static void col_put_float_ctx(
         ctx->config.prayer_correct_reward = value;
     else if (strcmp(key, "offpray_damage_penalty_coeff") == 0)
         ctx->config.offpray_damage_penalty_coeff = value;
+    else if (strcmp(key, "multistyle_exposure_penalty_coeff") == 0)
+        ctx->config.multistyle_exposure_penalty_coeff = value;
+    else if (strcmp(key, "argmax_gear_reward_coeff") == 0)
+        ctx->config.argmax_gear_reward_coeff = value;
+    else if (strcmp(key, "offensive_boost_reward_coeff") == 0)
+        ctx->config.offensive_boost_reward_coeff = value;
+    else if (strcmp(key, "stall_penalty_coeff") == 0)
+        ctx->config.stall_penalty_coeff = value;
     else if (strcmp(key, "avoided_damage_coeff") == 0)
         ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
@@ -94,6 +161,32 @@ static void col_put_float_ctx(
             abort();
         }
         ctx->config.beginner_loadout_fraction = value;
+    }
+    else if (strcmp(key, "prayer_switch_fail_prob") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr, "colosseum: prayer_switch_fail_prob must be in [0,1], got %.6f\n",
+                    value);
+            abort();
+        }
+        ctx->config.prayer_switch_fail_prob = value;
+    }
+    else if (strcmp(key, "player_damage_received_scale") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr,
+                "colosseum: player_damage_received_scale must be in [0,1], got %.6f\n",
+                value);
+            abort();
+        }
+        ctx->config.player_damage_received_scale = value;
+    }
+    else if (strcmp(key, "damage_scale_anneal_start") == 0) {
+        if (!(value >= 0.0f && value <= 1.0f)) {
+            fprintf(stderr,
+                "colosseum: damage_scale_anneal_start must be in [0,1], got %.6f\n",
+                value);
+            abort();
+        }
+        ctx->config.damage_scale_anneal_start = value;
     }
     else encounter_abort_unknown_config("colosseum", "float", key);
 }
@@ -169,8 +262,15 @@ enum {
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
     COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
-    COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS = 18,
+    /* The javelin lobs straight up for 2 ticks, hangs at apex for 1 tick, then
+       falls straight down for 3 ticks (the drop window) so it lands on the
+       damage tick. In game ticks; the emit converts to client ticks (*30). */
+    COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS = COLO_JAVELIN_SKYFALL_DELAY / 2,
+    COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS = 1,
     COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
+    /* magic casters (serpent shaman, shockwave colossus) release the projectile
+       one tick after the cast animation begins (the wind-up), not at attack-start. */
+    COLO_MAGIC_CAST_RELEASE_DELAY_TICKS = 1,
 };
 
 static float col_javelin_skyfall_shadow_scale(const ColoJavelinState* jv) {
@@ -193,16 +293,82 @@ static void col_emit_javelin_skyfall_shadow(EncounterOverlay* ov, const ColoJave
         col_javelin_skyfall_shadow_scale(jv));
 }
 
+/* Per-(type, style) projectile release profile: when the projectile leaves the
+   caster relative to the attack-animation start. This is the ONE place colosseum
+   tunes NPC projectile release, folding what used to be three scattered render
+   branches (the javelin release delay, the shaman/shockwave cast-then-release
+   patch, and the manticore fixed-tick override) into a single table. */
+typedef struct {
+    int release_delay_ticks;  /* game ticks after attack-start before the projectile is visible */
+    int set_delay;            /* >0 pins the damage delay to a fixed, distance-independent tick count */
+} ColoProjectileReleaseProfile;
+
+static ColoProjectileReleaseProfile col_npc_projectile_release_profile(
+    ColoNpcType type, AttackStyle style
+) {
+    switch (type) {
+        case COLO_JAVELIN_COLOSSUS:
+            if (style == ATTACK_STYLE_RANGED)
+                return (ColoProjectileReleaseProfile){
+                    .release_delay_ticks = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS };
+            break;
+        case COLO_SERPENT_SHAMAN:
+        case COLO_SHOCKWAVE_COLOSSUS:
+            if (style == ATTACK_STYLE_MAGIC)
+                return (ColoProjectileReleaseProfile){
+                    .release_delay_ticks = COLO_MAGIC_CAST_RELEASE_DELAY_TICKS };
+            break;
+        case COLO_MANTICORE:
+            /* orbs fly a fixed one tick regardless of distance: the sim builds the
+               hit with ticks_remaining=1 in col_npc_manticore_fire_orb. */
+            return (ColoProjectileReleaseProfile){ .set_delay = 1 };
+        default:
+            break;
+    }
+    return (ColoProjectileReleaseProfile){ 0 };
+}
+
+/* Resolve the render timeline for an NPC attack projectile: the projectile leaves
+   release_delay_ticks after attack-start and flies the rest of the way so it lands
+   exactly on the sim damage tick. At point-blank range there may be no wind-up room,
+   so the release is reduced (never the landing tick) to keep at least a one-tick
+   flight. The landing invariant (release + flight == damage tick) is enforced, so a
+   release can never be tuned in a way that silently shifts the impact off the sim
+   hit tick. The sim owns the damage tick (col_npc_projectile_delay); this owns the
+   purely-visual release/flight split, and the two meet at the asserted invariant. */
 static EncounterProjectileTiming col_npc_projectile_timing(
     ColoNpcType type,
     AttackStyle style,
     int distance
 ) {
+    EncounterProjectileDelayKind kind = col_projectile_delay_kind_for_style(style);
+    ColoProjectileReleaseProfile profile = col_npc_projectile_release_profile(type, style);
+
     EncounterProjectileDelayOptions options = {0};
-    if (type == COLO_JAVELIN_COLOSSUS && style == ATTACK_STYLE_RANGED)
-        options.start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS;
-    return encounter_projectile_timing(
-        distance, 0, col_projectile_delay_kind_for_style(style), options);
+    options.set_delay = profile.set_delay;
+    int damage_delay = encounter_projectile_hit_delay(distance, 0, kind, options);
+
+    int release = profile.release_delay_ticks;
+    int max_release = damage_delay - 1;   /* leave room for a >= 1-tick flight */
+    if (release > max_release) release = max_release;
+    if (release < 0) release = 0;
+    options.start_delay = release;
+
+    EncounterProjectileTiming timing =
+        encounter_projectile_timing(distance, 0, kind, options);
+
+    if (timing.visual_duration_ticks < 1 ||
+            timing.visual_start_delay_ticks + timing.visual_duration_ticks !=
+                timing.damage_delay_ticks) {
+        fprintf(stderr,
+            "colosseum: projectile timing invariant violated (type %d style %d dist %d: "
+            "release %d + flight %d != landing %d)\n",
+            (int)type, (int)style, distance,
+            timing.visual_start_delay_ticks, timing.visual_duration_ticks,
+            timing.damage_delay_ticks);
+        abort();
+    }
+    return timing;
 }
 
 static uint32_t col_manticore_orb_model_id(AttackStyle style) {
@@ -243,26 +409,32 @@ static void col_emit_javelin_skyfall_launch_projectile(
 
     int npc_size = col_npc_effective_size(npc);
     encounter_require_projectile_slots(ov, 1);
+    /* The lob fires straight UP out of the colossus's hand (src == dst == the
+       NPC's own tile, so there is no horizontal travel), reaches the sky off the
+       top of the screen, and the separate drop rains straight down on the marked
+       tile -- the colossus->tile displacement happens off-screen at apex. Curve
+       shapes the vertical easing only (it is the OSRS slope, not a lateral bow). */
     OsrsProjectileEventSpec projectile_spec = {
         .src_x = npc->x,
         .src_y = npc->y,
-        .dst_x = jv->skyfall_tile_x,
-        .dst_y = jv->skyfall_tile_y,
+        .dst_x = npc->x,
+        .dst_y = npc->y,
         .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
         .damage = 0,
         .duration_ticks = (COLO_JAVELIN_SKYFALL_DELAY -
-            COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS) * 30,
+            COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS -
+            COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS) * 30,
         .start_h = (int)(npc_size * 0.75f * 128),
         .end_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
         .curve = COLO_JAVELIN_SKYFALL_LAUNCH_CURVE,
         .arc_height = 0.0f,
         .src_size = npc_size,
-        .dst_size = 1,
+        .dst_size = npc_size,
         .model_id = 0u,
         .anim_id = -1,
         .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
         .impact_gfx_id = 0,
-        .start_delay = COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS * 30,
+        .start_delay = 0,
     };
     int projectile_idx = osrs_emit_projectile_with_spec(
         ov,
@@ -300,21 +472,24 @@ static void col_emit_manticore_orb_telegraphs(
     }
 }
 
-static void col_emit_javelin_skyfall_landing_projectile(
+/** Emit the javelin's straight-down descent onto the marked tile. Driven from
+    the live telegraph (not a post-resolution event), so it falls as the shadow
+    grows and its impact burst fires on the damage tick. Called once per skyfall,
+    on the tick the telegraph crosses its midpoint, so it becomes a single
+    descent flight rather than one per tick. */
+static void col_emit_javelin_skyfall_drop_projectile(
     EncounterOverlay* ov,
-    const ColoJavelinSkyfallLandingRenderEvent* event
+    const ColoJavelinState* jv
 ) {
-    if (!event || !event->active)
-        return;
     encounter_require_projectile_slots(ov, 1);
     OsrsProjectileEventSpec projectile_spec = {
-        .src_x = event->tile_x,
-        .src_y = event->tile_y,
-        .dst_x = event->tile_x,
-        .dst_y = event->tile_y,
+        .src_x = jv->skyfall_tile_x,
+        .src_y = jv->skyfall_tile_y,
+        .dst_x = jv->skyfall_tile_x,
+        .dst_y = jv->skyfall_tile_y,
         .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
-        .damage = event->damage,
-        .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_DURATION_TICKS,
+        .damage = 0,
+        .duration_ticks = COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS * 30,
         .start_h = COLO_JAVELIN_SKYFALL_SKY_HEIGHT,
         .end_h = COLO_JAVELIN_SKYFALL_GROUND_HEIGHT,
         .curve = COLO_JAVELIN_SKYFALL_DROP_CURVE,
@@ -441,8 +616,73 @@ static void col_emit_npc_attack_projectile(
     }
 }
 
+/** Emit Venator bounce hops after the primary player-to-NPC projectile. */
+static void col_emit_player_venator_bounce_projectiles(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    EncounterOverlay* ov,
+    const OsrsCombatProjectileProfile* profile,
+    int start_delay,
+    int duration
+) {
+    if (!ctx || ctx->player_venator_chain_count <= 1) return;
+    if (ctx->player_venator_chain_count > OSRS_VENATOR_MAX_CHAIN_HITS) abort();
+    if (!profile || profile->projectile_model_id <= 0) {
+        fprintf(stderr, "colosseum: missing Venator bounce projectile model\n");
+        abort();
+    }
+
+    int bounce_count = ctx->player_venator_chain_count - 1;
+    encounter_require_projectile_slots(ov, bounce_count);
+    for (int hop = 1; hop < ctx->player_venator_chain_count; hop++) {
+        int source_slot = ctx->player_venator_chain_slots[hop - 1];
+        int target_slot = ctx->player_venator_chain_slots[hop];
+        if (source_slot < 0 || source_slot >= COLO_MAX_NPCS ||
+                target_slot < 0 || target_slot >= COLO_MAX_NPCS) {
+            fprintf(stderr, "colosseum: invalid Venator chain slot\n");
+            abort();
+        }
+        ColoNPC* source = &s->npcs[source_slot];
+        ColoNPC* target = &s->npcs[target_slot];
+        if (!source->active || !target->active) {
+            fprintf(stderr, "colosseum: Venator chain target inactive\n");
+            abort();
+        }
+        int source_size = col_npc_effective_size(source);
+        int target_size = col_npc_effective_size(target);
+        int source_h = (int)(source_size * 0.5f * 128);
+        int target_h = (int)(target_size * 0.5f * 128);
+        OsrsProjectileEventSpec spec = {
+            .src_x = source->x,
+            .src_y = source->y,
+            .dst_x = target->x,
+            .dst_y = target->y,
+            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_RANGED),
+            .damage = 0,
+            .duration_ticks = duration,
+            .start_h = source_h,
+            .end_h = target_h,
+            .curve = osrs_combat_projectile_value_or(profile->projectile_angle, 16),
+            .arc_height = osrs_combat_projectile_profile_arc_height(
+                profile, ATTACK_STYLE_RANGED),
+            .src_size = source_size,
+            .dst_size = target_size,
+            .model_id = (uint32_t)profile->projectile_model_id,
+            .anim_id = profile->projectile_anim_id,
+            .travel_gfx_id = 0,
+            .launch_gfx_id = 0,
+            .impact_gfx_id = osrs_combat_projectile_value_or(
+                profile->impact_spotanim_id, 0),
+            .start_delay = start_delay + (hop - 1) * duration,
+        };
+        (void)osrs_emit_projectile_npc_to_npc(
+            ov, &spec, source_slot, target_slot);
+    }
+}
+
 static void col_emit_player_attack_projectiles(
     ColosseumState* s,
+    ColosseumContext* ctx,
     EncounterOverlay* ov
 ) {
     if (!s->tick_scratch.player_attacked ||
@@ -542,6 +782,8 @@ static void col_emit_player_attack_projectiles(
             profile,
             &emit_spec);
     }
+    col_emit_player_venator_bounce_projectiles(
+        s, ctx, ov, base_profile, p_start_delay + p_duration, 30);
 }
 
 /** Render-only: the allied thrall's magic bolt, lobbed from its render tile to
@@ -629,8 +871,11 @@ static void col_render_post_tick_ctx(
         if (!npc->active || npc->type != COLO_JAVELIN_COLOSSUS)
             continue;
         ColoJavelinState* jv = colo_npc_javelin(npc);
-        if (jv->skyfall_pending)
-            col_emit_javelin_skyfall_shadow(ov, jv);
+        if (!jv->skyfall_pending)
+            continue;
+        col_emit_javelin_skyfall_shadow(ov, jv);
+        if (jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS)
+            col_emit_javelin_skyfall_drop_projectile(ov, jv);
     }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
@@ -646,11 +891,7 @@ static void col_render_post_tick_ctx(
             continue;
         col_emit_npc_attack_projectile(s, ctx, ov, i);
     }
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        col_emit_javelin_skyfall_landing_projectile(
-            ov, &ctx->javelin_skyfall_landing[i]);
-    }
-    col_emit_player_attack_projectiles(s, ov);
+    col_emit_player_attack_projectiles(s, ctx, ov);
     if (ctx->thrall_attacked_this_tick)
         col_emit_thrall_projectile(s, ov);
 }
@@ -687,16 +928,32 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
-static int col_queue_inventory_click_action(int* actions, int inventory_slot) {
+/* Route a human inventory click to its per-category head: equip -> the gear-slot
+   head for the item, eat -> EAT head, drink -> DRINK head. Two clicks of the same
+   category in one tick now collapse to last-wins (matching OSRS), distinct
+   categories still all fire. Returns the head index the click landed in, or -1. */
+static int col_queue_inventory_click_action(
+    const ColosseumState* s,
+    int* actions,
+    int inventory_slot
+) {
     if (inventory_slot < 0 || inventory_slot >= COLO_INVENTORY_DISPLAY_SLOTS) return -1;
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-        int action_head = COLO_HEAD_INV_CLICK_0 + head;
-        if (actions[action_head] == 0) {
-            actions[action_head] = inventory_slot + 1;
-            return action_head;
-        }
+    OsrsInventoryClickResolution r =
+        osrs_inventory_cell_click_interpret(&s->inventory_cells[inventory_slot], OSRS_CLICK_TICK_FIRST);
+    int action_head;
+    if (r.click_action == OSRS_CLICK_EQUIP) {
+        int gear_slot = osrs_item_gear_slot(s->inventory_cells[inventory_slot].item_idx);
+        if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return -1;
+        action_head = COLO_HEAD_EQUIP_SLOT(gear_slot);
+    } else if (r.click_action == OSRS_CLICK_EAT) {
+        action_head = COLO_HEAD_EAT;
+    } else if (r.click_action == OSRS_CLICK_DRINK) {
+        action_head = COLO_HEAD_DRINK;
+    } else {
+        return -1;
     }
-    return -1;
+    actions[action_head] = inventory_slot + 1;
+    return action_head;
 }
 
 static void col_rearrange_inventory_cells(
@@ -715,7 +972,7 @@ static void col_translate_human_input_ctx(
 ) {
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
 
-    encounter_translate_movement(hi, actions, COLO_HEAD_MOVE, col_get_player_for_input, state);
+    encounter_translate_movement(hi, actions, COLO_HEAD_PRIMARY, col_get_player_for_input, state);
     encounter_translate_prayer(hi, actions, COLO_HEAD_PRAYER);
 
     ColosseumState* s = (ColosseumState*)state;
@@ -725,11 +982,11 @@ static void col_translate_human_input_ctx(
     /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
         int found_slot = col_find_target_obs_slot(s, hi->pending_target_idx);
-        actions[COLO_HEAD_TARGET] =
+        actions[COLO_HEAD_PRIMARY] =
             (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
-                ? found_slot + 1 : 0;
+                ? col_primary_attack_action_for_obs_slot(found_slot) : 0;
     } else {
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
     }
 
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
@@ -758,13 +1015,13 @@ static void col_translate_human_commands_ctx(
             case HUMAN_COMMAND_WALK:
                 s->player_dest_x = cmd->world_x;
                 s->player_dest_y = cmd->world_y;
-                actions[COLO_HEAD_TARGET] = 0;
+                actions[COLO_HEAD_PRIMARY] = 0;
                 break;
             case HUMAN_COMMAND_ATTACK_NPC: {
                 int found_slot = col_find_target_obs_slot(s, cmd->npc_slot);
-                actions[COLO_HEAD_TARGET] =
+                actions[COLO_HEAD_PRIMARY] =
                     (found_slot >= 0 && col_obs_slot_is_targetable(s, found_slot))
-                        ? found_slot + 1 : 0;
+                        ? col_primary_attack_action_for_obs_slot(found_slot) : 0;
                 s->player_dest_x = -1;
                 s->player_dest_y = -1;
                 break;
@@ -773,20 +1030,20 @@ static void col_translate_human_commands_ctx(
                 actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
                 break;
             case HUMAN_COMMAND_EAT:
-                col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_DRINK:
-                col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
                 actions[COLO_HEAD_SPEC] = 1;
                 break;
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-                col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: {
                 int action_head =
-                    col_queue_inventory_click_action(actions, cmd->inventory_slot);
+                    col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 if (ctx->config.action_debug_log) {
                     fprintf(stderr,
                         "colo_action tick=%d human_inventory_click slot=%d head=%d action=%d\n",
@@ -853,8 +1110,20 @@ static void col_step_human_commands_ctx(
    v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
        special attack contract.
    v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
-       + player offensive/spec/profile scalars. */
-#define COLO_SNAPSHOT_VERSION 10u
+       + player offensive/spec/profile scalars.
+   v11: colosseum obs adds static pillar geometry and enriched per-NPC combat
+       and source-aware prayer timing features.
+   v12: colosseum log adds per-NPC total damage attribution.
+   v13: Solarflare stores shared per-pillar ring cadence.
+   v14: sim-fidelity pass adds kinded molten pools (molten_lifetime,
+       molten_burn_timer) for the stronger permanent Reentry sand.
+   v15: weapon-selection obs enrichment — per-inventory-cell expected DPT vs the
+       current target and per-NPC expected DPT of the equipped weapon set.
+   v17: scaffold adds active_player_damage_received_scale to ColosseumState (the
+       per-step mirror of the damage-received-scale knob). Grows sizeof(ColosseumState)
+       so the whole-struct snapshot needs the bump; the ColConfig anneal knobs live
+       in ColosseumContext and are NOT snapshotted. */
+#define COLO_SNAPSHOT_VERSION 20u
 
 typedef struct {
     uint32_t magic;
@@ -972,9 +1241,9 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .translate_human_input = col_translate_human_input_ctx,
     .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,
     .apply_lab_command = col_apply_lab_command_ctx,
-    .head_move = COLO_HEAD_MOVE,
+    .head_move = COLO_HEAD_PRIMARY,
     .head_prayer = COLO_HEAD_PRAYER,
-    .head_target = COLO_HEAD_TARGET,
+    .head_target = COLO_HEAD_PRIMARY,
 
     .render_post_tick = col_render_post_tick_ctx,
     .get_log = col_get_log_ctx,

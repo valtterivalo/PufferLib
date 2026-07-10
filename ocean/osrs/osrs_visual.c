@@ -32,10 +32,16 @@
 #ifdef OSRS_VISUAL
 #include "osrs_render.h"
 #include "puffernet.h"
+
+static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
+    gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
+}
 #endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#else
+#include <pthread.h>
 #endif
 
 static int encounter_name_is_pvp(const char* encounter_name) {
@@ -365,6 +371,14 @@ static void run_profile(
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
+            /* gear-stable profile stream: pin the inventory-click heads
+               (equip/eat/drink, heads 2..14 on colosseum) to noop so
+               signature-keyed caches behave as they do under a settled
+               policy instead of random-action thrash */
+            if (getenv("OSRS_PROFILE_PIN_INV")) {
+                for (int h = 2; h < 15 && h < edef->num_action_heads; h++)
+                    enc_actions[h] = 0;
+            }
 #ifdef COLO_PROFILE_ENABLED
             COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
 #endif
@@ -586,6 +600,7 @@ typedef enum {
 typedef struct {
     int input_size;
     int decoder_value_heads;
+    int entity_encoder;
 } VisualPolicyModelShape;
 
 typedef struct {
@@ -629,13 +644,23 @@ static int visual_policy_is_continuous(
     return 1;
 }
 
+/* entity-encoder shared-MLP weights added on top of the global Linear (which the
+   encoder term already accounts for): entity_l1 (16x37) + entity_l2 (hidden x 16), plus
+   (mode 2) inv_l1 (16x28) + inv_l2 (hidden x 16). Must match ocean.cu COLO_ENT_* /
+   COLO_ENT_INV_* + puffernet.h COLO_ENT_INF_*. */
+#define VISUAL_POLICY_ENTITY_FEATS      37
+#define VISUAL_POLICY_ENTITY_BOTTLENECK 16
+#define VISUAL_POLICY_INV_FEATS         28
+#define VISUAL_POLICY_INV_BOTTLENECK    16
+
 static int64_t visual_policy_expected_weight_count(
     int input_size,
     int hidden_size,
     int num_layers,
     const int* action_dims,
     int num_action_heads,
-    int decoder_value_heads
+    int decoder_value_heads,
+    int entity_encoder
 ) {
     int action_sum = 0;
     for (int h = 0; h < num_action_heads; h++) {
@@ -644,6 +669,14 @@ static int64_t visual_policy_expected_weight_count(
 
     int64_t total = 0;
     total += (int64_t)hidden_size * input_size;
+    if (entity_encoder >= 1) {
+        total += (int64_t)VISUAL_POLICY_ENTITY_BOTTLENECK * VISUAL_POLICY_ENTITY_FEATS;
+        total += (int64_t)hidden_size * VISUAL_POLICY_ENTITY_BOTTLENECK;
+    }
+    if (entity_encoder >= 2) {
+        total += (int64_t)VISUAL_POLICY_INV_BOTTLENECK * VISUAL_POLICY_INV_FEATS;
+        total += (int64_t)hidden_size * VISUAL_POLICY_INV_BOTTLENECK;
+    }
     total += (int64_t)(action_sum + decoder_value_heads) * hidden_size;
     if (visual_policy_is_continuous(action_dims, num_action_heads)) {
         total += num_action_heads;
@@ -660,48 +693,50 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     const VisualPolicy* policy,
     const EncounterDef* edef,
     int hidden_size,
-    int num_layers
+    int num_layers,
+    int entity_encoder
 ) {
     int obs_input_size = policy->obs_size;
     int full_input_size = policy->obs_size + policy->mask_size;
     int64_t obs_value_expected = visual_policy_expected_weight_count(
         obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1);
+        policy->num_action_heads, 1, entity_encoder);
     int64_t full_value_expected = visual_policy_expected_weight_count(
         full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1);
+        policy->num_action_heads, 1, entity_encoder);
     int64_t obs_policy_expected = visual_policy_expected_weight_count(
         obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0);
+        policy->num_action_heads, 0, entity_encoder);
     int64_t full_policy_expected = visual_policy_expected_weight_count(
         full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0);
+        policy->num_action_heads, 0, entity_encoder);
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
 
     VisualPolicyModelShape match = {0};
     int matches = 0;
     if (obs_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 1};
+        match = (VisualPolicyModelShape){obs_input_size, 1, entity_encoder};
         matches++;
     }
     if (full_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 1};
+        match = (VisualPolicyModelShape){full_input_size, 1, entity_encoder};
         matches++;
     }
     if (obs_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 0};
+        match = (VisualPolicyModelShape){obs_input_size, 0, entity_encoder};
         matches++;
     }
     if (full_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 0};
+        match = (VisualPolicyModelShape){full_input_size, 0, entity_encoder};
         matches++;
     }
 
     if (matches != 1) {
         fprintf(stderr,
-            "policy: %s model shape mismatch file=%lld floats obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
+            "policy: %s model shape mismatch file=%lld floats entity=%d obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
             edef->name,
             (long long)file_weights,
+            entity_encoder,
             (long long)obs_value_expected,
             (long long)full_value_expected,
             (long long)obs_policy_expected,
@@ -718,7 +753,8 @@ static PufferNet* visual_policy_make_puffernet(
     int num_layers,
     int action_dims[],
     int num_action_heads,
-    int decoder_value_heads
+    int decoder_value_heads,
+    int entity_encoder
 ) {
     PufferNet* net = (PufferNet*)calloc(1, sizeof(PufferNet));
     if (!net) {
@@ -744,7 +780,11 @@ static PufferNet* visual_policy_make_puffernet(
 
     net->is_continuous = is_continuous;
     net->num_actions = num_action_heads;
-    net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
+    if (entity_encoder) {
+        net->entity_encoder = make_colosseum_entity_encoder(weights, 1, input_dim, hidden_dim, entity_encoder);
+    } else {
+        net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
+    }
     net->decoder = make_linear(weights, 1, hidden_dim, action_sum + decoder_value_heads);
     if (net->is_continuous) {
         net->log_std = get_weights(weights, num_action_heads);
@@ -767,6 +807,21 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
 
 static int g_cli_hidden_size = -1;
 static int g_cli_num_layers = -1;
+static int g_cli_entity_encoder = 0;
+/** headless-ish debug capture: render normally, dump a PNG of the framebuffer
+    at the given frame count, then exit. 0 = disabled. NOTE raylib TakeScreenshot
+    strips directories, so the PNG lands in the CWD under the path's basename. */
+static const char* g_cli_screenshot_path = NULL;
+static int g_cli_screenshot_frame = 0;
+/** debug camera overrides applied at startup (screenshot workflows need a
+    deterministic viewpoint). Negative/NAN = keep the interactive default. */
+static float g_cli_camera_dist = -1.0f;
+static float g_cli_camera_yaw = -1000.0f;
+static float g_cli_camera_pitch = -1000.0f;
+/** colosseum viewer loadout override (0=speedrun, 1=beginner, 2=mixed); -1 = default. */
+static int g_cli_visual_loadout_mode = -1;
+/** colosseum viewer prayer oracle (--prayer-oracle): perfect overhead each tick. */
+static int g_cli_prayer_oracle = 0;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
@@ -774,7 +829,8 @@ static void visual_policy_init(
     VisualPolicyMode mode,
     uint32_t seed,
     int cli_hidden_size,
-    int cli_num_layers
+    int cli_num_layers,
+    int cli_entity_encoder
 ) {
     memset(policy, 0, sizeof(*policy));
     if (!model_path || !model_path[0]) return;
@@ -812,7 +868,7 @@ static void visual_policy_init(
     if (cli_hidden_size > 0) hidden_size = cli_hidden_size;
     if (cli_num_layers > 0) num_layers = cli_num_layers;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
-        policy, edef, hidden_size, num_layers);
+        policy, edef, hidden_size, num_layers, cli_entity_encoder);
     policy->net = visual_policy_make_puffernet(
         policy->weights,
         model_shape.input_size,
@@ -820,7 +876,8 @@ static void visual_policy_init(
         num_layers,
         policy->action_dims,
         policy->num_action_heads,
-        model_shape.decoder_value_heads);
+        model_shape.decoder_value_heads,
+        model_shape.entity_encoder);
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
     if (policy->weights->idx != file_weights) {
         fprintf(stderr,
@@ -907,8 +964,15 @@ static void visual_policy_actions(
     if (!policy || !policy->enabled) return;
     edef->write_obs(state, context, policy->obs);
     edef->write_mask(state, context, policy->obs + policy->obs_size);
-    linear(policy->net->encoder, policy->obs);
-    mingru(policy->net->mingru, policy->net->encoder->output);
+    float* encoded;
+    if (policy->net->entity_encoder) {
+        colosseum_entity_encoder(policy->net->entity_encoder, policy->obs);
+        encoded = policy->net->entity_encoder->output;
+    } else {
+        linear(policy->net->encoder, policy->obs);
+        encoded = policy->net->encoder->output;
+    }
+    mingru(policy->net->mingru, encoded);
     linear(policy->net->decoder, policy->net->mingru->output);
 
     const float* logits = policy->net->decoder->output;
@@ -931,17 +995,92 @@ static void visual_policy_actions(
     }
 }
 
+/**
+ * Precomputes the next tick's policy actions on a worker thread during the
+ * ~600ms between game ticks, so the obs build + network forward (~50ms for
+ * the colosseum entity-encoder net) never lands on a rendered frame. The
+ * worker reads live sim state; the drive loop joins it before anything
+ * mutates that state (step, reset, restore).
+ */
+typedef struct {
+    VisualPolicy* policy;
+    const EncounterDef* edef;
+    EncounterState* state;
+    EncounterContext* context;
+    int actions[64];
+#ifndef __EMSCRIPTEN__
+    pthread_t thread;
+#endif
+    int in_flight;
+    int has_actions;
+} AsyncPolicy;
+
+#ifndef __EMSCRIPTEN__
+static void* async_policy_worker(void* arg) {
+    AsyncPolicy* ap = (AsyncPolicy*)arg;
+    visual_policy_actions(ap->policy, ap->edef, ap->state, ap->context, ap->actions);
+    return NULL;
+}
+#endif
+
+static void async_policy_join(AsyncPolicy* ap) {
+#ifndef __EMSCRIPTEN__
+    if (!ap->in_flight) return;
+    if (pthread_join(ap->thread, NULL) != 0) {
+        fprintf(stderr, "async policy: pthread_join failed\n");
+        abort();
+    }
+    ap->in_flight = 0;
+    ap->has_actions = 1;
+#else
+    (void)ap;
+#endif
+}
+
+static void async_policy_spawn(
+    AsyncPolicy* ap,
+    VisualPolicy* policy,
+    const EncounterDef* edef,
+    OsrsEnv* env
+) {
+#ifndef __EMSCRIPTEN__
+    if (ap->in_flight) {
+        fprintf(stderr, "async policy: spawn while in flight\n");
+        abort();
+    }
+    ap->policy = policy;
+    ap->edef = edef;
+    ap->state = env->encounter_state;
+    ap->context = (EncounterContext*)env->encounter_context;
+    ap->has_actions = 0;
+    if (pthread_create(&ap->thread, NULL, async_policy_worker, ap) != 0) {
+        fprintf(stderr, "async policy: pthread_create failed\n");
+        abort();
+    }
+    ap->in_flight = 1;
+#else
+    (void)ap; (void)policy; (void)edef; (void)env;
+#endif
+}
+
 typedef struct {
     OsrsEnv* env;
     const char* encounter_name;
     ReplayFile* replay;
     VisualPolicy policy;
+    AsyncPolicy async_policy;
     int start_wave;
     /* per-frame state */
     double episode_end_time;  /* >0 when holding final frame */
     int episode_ended;
     int seen_lab_restore_generation;
 } VisualState;
+
+static void visual_async_policy_guard(void* ctx) {
+    VisualState* vs = (VisualState*)ctx;
+    async_policy_join(&vs->async_policy);
+    vs->async_policy.has_actions = 0;
+}
 
 static void visual_frame(void* arg) {
     VisualState* vs = (VisualState*)arg;
@@ -950,12 +1089,16 @@ static void visual_frame(void* arg) {
     if (rc->lab_restore_generation != vs->seen_lab_restore_generation) {
         vs->seen_lab_restore_generation = rc->lab_restore_generation;
         vs->episode_ended = 0;
+        async_policy_join(&vs->async_policy);
+        vs->async_policy.has_actions = 0;
         visual_policy_reset_recurrent(&vs->policy);
     }
 
     /* rewind: restore historical state and re-render */
     if (rc->step_back) {
         rc->step_back = 0;
+        async_policy_join(&vs->async_policy);
+        vs->async_policy.has_actions = 0;
         render_restore_snapshot(rc, env);
         /* if we restored the latest snapshot, exit rewind mode */
         if (rc->history_cursor >= rc->history_count - 1) {
@@ -976,6 +1119,8 @@ static void visual_frame(void* arg) {
         pvp_render(env);
         if (GetTime() - vs->episode_end_time >= 2.0) {
             vs->episode_ended = 0;
+            async_policy_join(&vs->async_policy);
+            vs->async_policy.has_actions = 0;
             if (env->encounter_def) {
                 ((const EncounterDef*)env->encounter_def)->reset(
                     env->encounter_state,
@@ -998,15 +1143,24 @@ static void visual_frame(void* arg) {
     }
     rc->step_once = 0;
 
-    /* tick pacing: keep rendering while waiting */
+    /* tick pacing: keep rendering while waiting. phase-preserving: the epoch
+       advances by exactly one interval per tick so frame-boundary overshoot
+       never accumulates (mean period == interval); resync only when more
+       than a full interval behind (pause, hitch, first frame). */
     if (rc->ticks_per_second > 0.0f) {
-        double interval = 1.0 / rc->ticks_per_second;
-        if (GetTime() - rc->last_tick_time < interval) {
+        double interval = 1.0 / (double)rc->ticks_per_second;
+        double now = GetTime();
+        if (now - rc->last_tick_time < interval) {
             pvp_render(env);
             return;
         }
+        rc->last_tick_time += interval;
+        if (now - rc->last_tick_time >= interval)
+            rc->last_tick_time = now;
     }
-    rc->last_tick_time = GetTime();
+
+    /* the sim mutates from here on: the async obs reader must be done */
+    async_policy_join(&vs->async_policy);
 
     /* step the simulation */
     render_pre_tick(rc, env);
@@ -1057,12 +1211,17 @@ static void visual_frame(void* arg) {
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
             /* replay mode: actions come from pre-recorded file */
         } else if (vs->policy.enabled) {
-            visual_policy_actions(
-                &vs->policy,
-                edef,
-                env->encounter_state,
-                (EncounterContext*)env->encounter_context,
-                enc_actions);
+            if (vs->async_policy.has_actions) {
+                memcpy(enc_actions, vs->async_policy.actions,
+                    sizeof(enc_actions));
+            } else {
+                visual_policy_actions(
+                    &vs->policy,
+                    edef,
+                    env->encounter_state,
+                    (EncounterContext*)env->encounter_context,
+                    enc_actions);
+            }
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {
@@ -1070,6 +1229,9 @@ static void visual_frame(void* arg) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
         }
+        /* consumed by the policy branch or stale after any other branch */
+        vs->async_policy.has_actions = 0;
+
         if (!used_human_step) {
             edef->step(
                 env->encounter_state,
@@ -1134,7 +1296,306 @@ static void visual_frame(void* arg) {
     if (is_over) {
         vs->episode_ended = 1;
         vs->episode_end_time = GetTime();
+    } else if (env->encounter_def && vs->policy.enabled &&
+               !rc->human_input.enabled && !vs->replay) {
+        async_policy_spawn(
+            &vs->async_policy,
+            &vs->policy,
+            (const EncounterDef*)env->encounter_def,
+            env);
     }
+}
+
+/* Headless behavioral-metrics mode: run N colosseum episodes with the loaded
+   policy and tally how often each weapon attacks each NPC type. Eval-only --
+   reads ColosseumState after each step, touches no obs/reward/training surface.
+   Weapon equipped at the attack tick is a close proxy for the weapon that fired
+   (the equip phase runs before the attack phase within a tick). */
+static void run_metrics(
+    OsrsEnv* env,
+    const char* encounter_name,
+    const char* model_path,
+    VisualPolicyMode policy_mode,
+    uint32_t policy_seed,
+    int num_episodes,
+    int loadout_mode,
+    int bis_oracle
+) {
+    if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
+        fprintf(stderr, "metrics mode requires --encounter colosseum\n");
+        return;
+    }
+    const EncounterDef* edef = encounter_find(encounter_name);
+    if (!edef) { fprintf(stderr, "unknown encounter: %s\n", encounter_name); return; }
+    env->encounter_def = (void*)edef;
+    env->encounter_state = edef->create();
+    env->encounter_context = visual_create_encounter_context(edef);
+    CollisionMap* cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
+    if (cmap) {
+        edef->put_ptr(env->encounter_state, env->encounter_context, "collision_map", cmap);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_x", 1808);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", 3090);
+        env->collision_map = cmap;
+    }
+    /* loadout_mode picks the kit distribution: 0=speedrun-only, 1=beginner-only,
+       2=mixed (matches the trained golden-eon .ini). col_default_config alone leaves
+       this at 0, so without it the metrics would be speedrun-only regardless. */
+    edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
+    edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
+    edef->put_int(env->encounter_state, env->encounter_context, "start_wave", 1);
+    if (bis_oracle)
+        edef->put_int(env->encounter_state, env->encounter_context,
+                      "bis_gear_oracle_mode", 1);
+    edef->reset(env->encounter_state, env->encounter_context, policy_seed);
+
+    VisualPolicy policy;
+    visual_policy_init(&policy, edef, model_path, policy_mode, policy_seed,
+                       g_cli_hidden_size, g_cli_num_layers, g_cli_entity_encoder);
+    if (!policy.enabled) {
+        fprintf(stderr, "metrics mode: failed to load model (pass --model <path>)\n");
+        return;
+    }
+
+    static const char* npc_names[COLO_NUM_NPC_TYPES] = {
+        "berserker", "archer", "seer", "serpent", "jaguar", "javelin",
+        "shockwave", "minotaur", "manticore", "sol", "totem", "bees"
+    };
+    static uint64_t wpn_npc[256][COLO_NUM_NPC_TYPES];
+    static uint64_t wpn_total[256];
+    static uint64_t wpn_spec[256];
+    static double wpn_eff_sum[256];
+    static uint64_t wpn_eff_n[256];
+    static double npc_eff_sum[COLO_NUM_NPC_TYPES];
+    static uint64_t npc_eff_n[COLO_NUM_NPC_TYPES];
+    static uint64_t wave_ticks[12], wave_visits[12], wave_reinforced[12];
+    static uint64_t wave_attacks_post_reinforce[12];
+    memset(wpn_npc, 0, sizeof(wpn_npc));
+    memset(wpn_total, 0, sizeof(wpn_total));
+    memset(wpn_spec, 0, sizeof(wpn_spec));
+    memset(wpn_eff_sum, 0, sizeof(wpn_eff_sum));
+    memset(wpn_eff_n, 0, sizeof(wpn_eff_n));
+    memset(npc_eff_sum, 0, sizeof(npc_eff_sum));
+    memset(npc_eff_n, 0, sizeof(npc_eff_n));
+    memset(wave_ticks, 0, sizeof(wave_ticks));
+    memset(wave_visits, 0, sizeof(wave_visits));
+    memset(wave_reinforced, 0, sizeof(wave_reinforced));
+    memset(wave_attacks_post_reinforce, 0, sizeof(wave_attacks_post_reinforce));
+    uint64_t total_attacks = 0, argmax_set_attacks = 0, argmax_evals = 0;
+    long total_ticks = 0;
+    int episodes = 0;
+    int prev_wave = 0, prev_reinf_timer = 0, wave_seen = 0;
+    int enc_actions[64] = {0};
+
+    /* Claw-scratch obs audit: at every claws BASIC attack, record what the
+       weapon-choice obs tail told the policy (wielded-vs-best ratio, the claws
+       cell's own DPT float, the best other weapon cell's DPT float). Splits
+       "obs lied" from "obs honest, policy dwells anyway". Stints track how
+       claws get equipped and whether the stint ever fires the spec. */
+    double claw_ratio_sum = 0.0, claw_cell_dpt_sum = 0.0, claw_best_other_sum = 0.0;
+    uint64_t claw_obs_n = 0, claw_better_visible = 0;
+    uint64_t claw_stints = 0, claw_stints_with_spec = 0, claw_stint_tick_sum = 0;
+    int claw_stint_live = 0, claw_stint_spec = 0, claw_stint_ticks = 0;
+
+    enum { METRICS_MAX_EPISODES = 512 };
+    if (num_episodes > METRICS_MAX_EPISODES) {
+        fprintf(stderr, "metrics mode caps at %d episodes\n", METRICS_MAX_EPISODES);
+        return;
+    }
+    static float ep_scores[METRICS_MAX_EPISODES];
+    static int ep_winners[METRICS_MAX_EPISODES];
+
+    while (episodes < num_episodes) {
+        visual_policy_actions(&policy, edef, env->encounter_state,
+            (EncounterContext*)env->encounter_context, enc_actions);
+        edef->step(env->encounter_state,
+            (EncounterContext*)env->encounter_context, enc_actions);
+        total_ticks++;
+        ColosseumState* cs = (ColosseumState*)env->encounter_state;
+
+        int w_now = cs->wave >= 0 && cs->wave < 12 ? cs->wave : 11;
+        if (!wave_seen || w_now != prev_wave) {
+            wave_visits[w_now]++;
+            wave_seen = 1;
+        }
+        wave_ticks[w_now]++;
+        if (prev_reinf_timer > 0 &&
+                cs->reinforcement_timer == COLO_REINFORCE_FIRED)
+            wave_reinforced[w_now]++;
+        prev_wave = w_now;
+        prev_reinf_timer = cs->reinforcement_timer;
+
+        uint8_t cur_weapon = cs->player.equipped[GEAR_SLOT_WEAPON];
+        if (cur_weapon == ITEM_DRAGON_CLAWS) {
+            if (!claw_stint_live) {
+                claw_stint_live = 1;
+                claw_stint_spec = 0;
+                claw_stint_ticks = 0;
+            }
+            claw_stint_ticks++;
+            if (cs->player.used_special_this_tick) claw_stint_spec = 1;
+        } else if (claw_stint_live) {
+            claw_stints++;
+            claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
+            if (claw_stint_spec) claw_stints_with_spec++;
+            claw_stint_live = 0;
+        }
+
+        if (cs->tick_scratch.player_attacked) {
+            int slot = cs->player_attack_npc_idx;
+            uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
+            if (slot >= 0 && slot < COLO_MAX_NPCS) {
+                int t = (int)cs->npcs[slot].type;
+                if (t >= 0 && t < COLO_NUM_NPC_TYPES) {
+                    wpn_npc[w][t]++;
+                    wpn_total[w]++;
+                    total_attacks++;
+                    if (cs->player.used_special_this_tick) wpn_spec[w]++;
+
+                    if (w == ITEM_DRAGON_CLAWS &&
+                            !cs->player.used_special_this_tick) {
+                        const float* tail =
+                            policy.obs + COLO_OBS_AFTER_THRALL_DC;
+                        float claw_cell = 0.0f, best_other = 0.0f;
+                        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+                            uint8_t cell_item =
+                                cs->inventory_cells[c].item_idx;
+                            if (cell_item == ITEM_DRAGON_CLAWS) {
+                                if (tail[c] > claw_cell) claw_cell = tail[c];
+                            } else if (tail[c] > best_other) {
+                                best_other = tail[c];
+                            }
+                        }
+                        claw_ratio_sum +=
+                            (double)tail[2 * OSRS_INVENTORY_SIZE + 1];
+                        claw_cell_dpt_sum += (double)claw_cell;
+                        claw_best_other_sum += (double)best_other;
+                        if (best_other > claw_cell) claw_better_visible++;
+                        claw_obs_n++;
+                    }
+                    if (cs->reinforcement_timer == COLO_REINFORCE_FIRED)
+                        wave_attacks_post_reinforce[w_now]++;
+
+                    int am = col_attacked_with_argmax_set(cs);
+                    if (am >= 0) {
+                        argmax_evals++;
+                        argmax_set_attacks += (uint64_t)am;
+                    }
+                    const ColoNPC* npc = &cs->npcs[slot];
+                    if (col_npc_is_live_target(npc) &&
+                            !col_type_is_hazard_entity(npc->type)) {
+                        const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] =
+                            col_get_best_gear_table(cs);
+                        float best_dpt = 0.0f;
+                        for (int st = 0; st < COLO_NUM_WEAPON_SETS; st++)
+                            if (best[st][t].dpt > best_dpt)
+                                best_dpt = best[st][t].dpt;
+                        float cur_dpt = col_expected_dpt_for_equipment_vs_npc(
+                            cs, cs->player.equipped, npc, 1);
+                        if (best_dpt > 0.0f) {
+                            double eff = (double)(cur_dpt / best_dpt);
+                            wpn_eff_sum[w] += eff;
+                            wpn_eff_n[w]++;
+                            npc_eff_sum[t] += eff;
+                            npc_eff_n[t]++;
+                        }
+                    }
+                }
+            }
+        }
+        if (edef->is_terminal(env->encounter_state,
+                (EncounterContext*)env->encounter_context)) {
+            ep_scores[episodes] = cs->log.outcome_score;
+            ep_winners[episodes] = cs->winner;
+            episodes++;
+            if (claw_stint_live) {
+                claw_stints++;
+                claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
+                if (claw_stint_spec) claw_stints_with_spec++;
+                claw_stint_live = 0;
+            }
+            edef->reset(env->encounter_state,
+                (EncounterContext*)env->encounter_context,
+                policy_seed + (uint32_t)episodes);
+            visual_policy_reset_recurrent(&policy);
+            wave_seen = 0;
+            prev_reinf_timer = 0;
+        }
+    }
+
+    printf("# colosseum weapon behavioral metrics\n");
+    printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s bis_oracle=%d\n",
+        num_episodes, total_ticks, (unsigned long long)total_attacks,
+        policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", bis_oracle);
+    {
+        double score_sum = 0.0;
+        int wins = 0;
+        for (int e = 0; e < episodes; e++) {
+            score_sum += (double)ep_scores[e];
+            if (ep_winners[e] == COLO_OUTCOME_PLAYER_WON) wins++;
+        }
+        printf("# outcome scores: mean %.4f, wins %d/%d, per-episode:",
+            episodes ? score_sum / (double)episodes : 0.0, wins, episodes);
+        for (int e = 0; e < episodes; e++) printf(" %.3f", ep_scores[e]);
+        printf("\n");
+    }
+    printf("# argmax-style attacks: %llu/%llu (%.1f%%)\n",
+        (unsigned long long)argmax_set_attacks,
+        (unsigned long long)argmax_evals,
+        argmax_evals ? 100.0 * (double)argmax_set_attacks / (double)argmax_evals : 0.0);
+    if (claw_obs_n > 0) {
+        printf("# claw audit: %llu basic attacks | obs saw wielded/best ratio %.2f,"
+               " claws cell %.2f, best other cell %.2f, better cell visible %.1f%%\n",
+            (unsigned long long)claw_obs_n,
+            claw_ratio_sum / (double)claw_obs_n,
+            claw_cell_dpt_sum / (double)claw_obs_n,
+            claw_best_other_sum / (double)claw_obs_n,
+            100.0 * (double)claw_better_visible / (double)claw_obs_n);
+        printf("# claw stints: %llu, mean dwell %.1f ticks, %.1f%% fired spec\n",
+            (unsigned long long)claw_stints,
+            claw_stints ? (double)claw_stint_tick_sum / (double)claw_stints : 0.0,
+            claw_stints ? 100.0 * (double)claw_stints_with_spec / (double)claw_stints : 0.0);
+    }
+    printf("weapon,total_attacks,per_episode,pct,spec_pct,mean_dpt_eff\n");
+    for (int w = 0; w < 256; w++) {
+        if (wpn_total[w] == 0) continue;
+        const Item* it = get_item((uint8_t)w);
+        const char* wn = (it && it->name[0]) ? it->name : "unknown";
+        printf("%s,%llu,%.1f,%.1f%%,%.1f%%,%.2f\n", wn,
+            (unsigned long long)wpn_total[w],
+            (double)wpn_total[w] / (double)num_episodes,
+            total_attacks ? 100.0 * (double)wpn_total[w] / (double)total_attacks : 0.0,
+            100.0 * (double)wpn_spec[w] / (double)wpn_total[w],
+            wpn_eff_n[w] ? wpn_eff_sum[w] / (double)wpn_eff_n[w] : 0.0);
+    }
+    printf("\nnpc,attacks,mean_dpt_eff\n");
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+        if (npc_eff_n[t] == 0) continue;
+        printf("%s,%llu,%.2f\n", npc_names[t],
+            (unsigned long long)npc_eff_n[t],
+            npc_eff_sum[t] / (double)npc_eff_n[t]);
+    }
+    printf("\nwave,visits,mean_ticks,reinforced_pct,attacks_post_reinforce\n");
+    for (int wv = 0; wv < 12; wv++) {
+        if (wave_visits[wv] == 0) continue;
+        printf("%d,%llu,%.0f,%.0f%%,%llu\n", wv + 1,
+            (unsigned long long)wave_visits[wv],
+            (double)wave_ticks[wv] / (double)wave_visits[wv],
+            100.0 * (double)wave_reinforced[wv] / (double)wave_visits[wv],
+            (unsigned long long)wave_attacks_post_reinforce[wv]);
+    }
+    printf("\nweapon\\npc");
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) printf(",%s", npc_names[t]);
+    printf("\n");
+    for (int w = 0; w < 256; w++) {
+        if (wpn_total[w] == 0) continue;
+        const Item* it = get_item((uint8_t)w);
+        const char* wn = (it && it->name[0]) ? it->name : "unknown";
+        printf("%s", wn);
+        for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+            printf(",%llu", (unsigned long long)wpn_npc[w][t]);
+        printf("\n");
+    }
+    visual_policy_destroy(&policy);
 }
 
 static void run_visual(
@@ -1170,6 +1631,18 @@ static void run_visual(
 #endif
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
+        }
+        /* colosseum: honor --loadout-mode in the interactive viewer too (0=speedrun,
+           1=beginner, 2=mixed), matching the metrics-mode wiring. -1 = env default. */
+        if (strcmp(encounter_name, "colosseum") == 0 && edef->put_int &&
+                g_cli_visual_loadout_mode >= 0) {
+            edef->put_int(env->encounter_state, env->encounter_context,
+                "loadout_profile_mode", g_cli_visual_loadout_mode);
+        }
+        if (strcmp(encounter_name, "colosseum") == 0 && edef->put_int &&
+                g_cli_prayer_oracle) {
+            edef->put_int(env->encounter_state, env->encounter_context,
+                "prayer_oracle_mode", 1);
         }
         /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
@@ -1268,6 +1741,9 @@ static void run_visual(
     } else if (strcmp(encounter_name, "colosseum") == 0) {
         osrs_asset_require_group(OSRS_ASSET_GROUP_COLOSSEUM);
         osrs_asset_require_group(OSRS_ASSET_GROUP_COMBAT_VISUALS);
+        col_for_each_display_inventory_sprite_raw_osrs_id(
+            visual_require_gui_item_sprite,
+            &rc->gui);
     }
 
     /* share collision map pointer with renderer for overlays */
@@ -1447,7 +1923,8 @@ static void run_visual(
         policy_mode,
         policy_seed,
         g_cli_hidden_size,
-        g_cli_num_layers);
+        g_cli_num_layers,
+        g_cli_entity_encoder);
 
     /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
@@ -1464,6 +1941,8 @@ static void run_visual(
         .episode_ended = 0,
         .seen_lab_restore_generation = rc->lab_restore_generation,
     };
+    rc->pre_sim_mutation_hook = visual_async_policy_guard;
+    rc->pre_sim_mutation_hook_ctx = &web_visual_state;
     emscripten_set_main_loop_arg(visual_frame, &web_visual_state, 0, 1);
 #else
     VisualState vs = {
@@ -1476,10 +1955,37 @@ static void run_visual(
         .episode_ended = 0,
         .seen_lab_restore_generation = rc->lab_restore_generation,
     };
+    rc->pre_sim_mutation_hook = visual_async_policy_guard;
+    rc->pre_sim_mutation_hook_ctx = &vs;
 
+    if (g_cli_camera_dist > 0.0f) rc->cam_dist = g_cli_camera_dist;
+    if (g_cli_camera_yaw > -999.0f) rc->cam_yaw = g_cli_camera_yaw;
+    if (g_cli_camera_pitch > -999.0f) rc->cam_pitch = g_cli_camera_pitch;
+
+    int frame_counter = 0;
     while (!WindowShouldClose()) {
+        /* screenshot capture: hard-pin the camera to the followed entity so the
+           captured frame always contains it (the interactive camera only follows
+           in human mode). */
+        if (g_cli_screenshot_path && rc->entity_count > 0) {
+            int eidx = rc->gui.gui_entity_idx;
+            if (eidx >= 0 && eidx < rc->entity_count) {
+                rc->cam_target_x = (float)rc->sub_x[eidx] / 128.0f;
+                rc->cam_target_z = -(float)rc->sub_y[eidx] / 128.0f;
+            }
+        }
         visual_frame(&vs);
+        frame_counter++;
+        if (g_cli_screenshot_path && frame_counter >= g_cli_screenshot_frame) {
+            TakeScreenshot(g_cli_screenshot_path);
+            fprintf(stderr, "screenshot: wrote %s at frame %d\n",
+                g_cli_screenshot_path, frame_counter);
+            break;
+        }
     }
+
+    /* the worker reads the net and encounter state freed below */
+    async_policy_join(&vs.async_policy);
 
     replay_free(replay);
     visual_policy_destroy(&vs.policy);
@@ -1505,6 +2011,9 @@ int main(int argc, char** argv) {
     int gear_tier = -1;  /* -1 = random (default LMS distribution) */
     int start_wave = -1; /* -1 = default (wave 0) */
     int profile_steps = 0;
+    int metrics_episodes = 0;
+    int metrics_bis_oracle = 0;
+    int loadout_mode = 2;  /* metrics kit: 0=speedrun, 1=beginner, 2=mixed (trained default) */
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
@@ -1527,6 +2036,18 @@ int main(int argc, char** argv) {
             g_cli_hidden_size = atoi(argv[++i]);
         else if (strcmp(argv[i], "--num-layers") == 0 && i + 1 < argc)
             g_cli_num_layers = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--entity-encoder") == 0)
+            g_cli_entity_encoder = (i + 1 < argc && argv[i + 1][0] != '-') ? atoi(argv[++i]) : 1;
+        else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
+            g_cli_screenshot_path = argv[++i];
+        else if (strcmp(argv[i], "--screenshot-frame") == 0 && i + 1 < argc)
+            g_cli_screenshot_frame = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--camera-dist") == 0 && i + 1 < argc)
+            g_cli_camera_dist = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--camera-yaw") == 0 && i + 1 < argc)
+            g_cli_camera_yaw = (float)atof(argv[++i]);
+        else if (strcmp(argv[i], "--camera-pitch") == 0 && i + 1 < argc)
+            g_cli_camera_pitch = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc)
             gear_tier = atoi(argv[++i]);
         else if (strcmp(argv[i], "--wave") == 0 && i + 1 < argc)
@@ -1536,12 +2057,32 @@ int main(int argc, char** argv) {
             start_wave = atoi(argv[++i]);
         else if (strcmp(argv[i], "--profile-steps") == 0 && i + 1 < argc)
             profile_steps = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--metrics") == 0 && i + 1 < argc) {
+            metrics_episodes = atoi(argv[++i]);
+            use_visual = 0;
+        }
+        else if (strcmp(argv[i], "--bis-oracle") == 0)
+            metrics_bis_oracle = 1;
+        else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc) {
+            loadout_mode = atoi(argv[++i]);
+            g_cli_visual_loadout_mode = loadout_mode;
+        }
+        else if (strcmp(argv[i], "--prayer-oracle") == 0)
+            g_cli_prayer_oracle = 1;
     }
 
 #ifdef __EMSCRIPTEN__
     if (!encounter_name) encounter_name = "inferno";
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #else
+    /* Each standalone viewer binary picks its own encounter at compile time via
+       OSRS_VISUAL_DEFAULT_ENCOUNTER, so ./osrs_colosseum needs no --encounter
+       flag (which still overrides). The pvp binary leaves it undefined on
+       purpose: a NULL encounter routes the native pvp_init path, not the
+       generic encounter_find path. */
+#ifdef OSRS_VISUAL_DEFAULT_ENCOUNTER
+    if (!encounter_name) encounter_name = OSRS_VISUAL_DEFAULT_ENCOUNTER;
+#endif
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #endif
     VisualPolicyMode policy_mode __attribute__((unused)) =
@@ -1555,6 +2096,12 @@ int main(int argc, char** argv) {
     OsrsEnv env;
 #endif
     memset(&env, 0, sizeof(OsrsEnv));
+
+    if (metrics_episodes > 0) {
+        run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
+            metrics_episodes, loadout_mode, metrics_bis_oracle);
+        return 0;
+    }
 
     if (use_profile) {
         env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));

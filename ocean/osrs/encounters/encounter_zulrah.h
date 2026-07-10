@@ -1236,12 +1236,18 @@ static void zul_refresh_human_loadout_stats(ZulrahState* s) {
 }
 
 static void zul_refresh_cached_loadout_stats(ZulrahState* s) {
+    /* offensive prayer is now style-gated (shared osrs_encounter.h): map the
+       active prayer to the style-correct one per cached stat so the mage loadout
+       uses Augury and the ranged loadout uses Rigour. */
+    int prayer_active = s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE;
     if (s->mage_stats.style == ATTACK_STYLE_MAGIC) {
-        encounter_update_loadout_level(&s->mage_stats, s->player.offensive_prayer,
+        encounter_update_loadout_level(&s->mage_stats,
+            prayer_active ? OFFENSIVE_PRAYER_AUGURY : OFFENSIVE_PRAYER_NONE,
             s->player.current_magic, s->player.current_magic);
     }
     if (s->range_stats.style == ATTACK_STYLE_RANGED) {
-        encounter_update_loadout_level(&s->range_stats, s->player.offensive_prayer,
+        encounter_update_loadout_level(&s->range_stats,
+            prayer_active ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_NONE,
             s->player.current_ranged, s->player.current_ranged);
     }
     if (s->human_command_mode)
@@ -2467,13 +2473,15 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     zul_populate_player_inventory(&s->player, s->gear_tier);
     /* derive combat stats from ITEM_DATABASE */
     OffensivePrayer mage_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_AUGURY : OFFENSIVE_PRAYER_NONE;
+    /* ranged loadout uses Rigour, not Augury: offensive prayer is style-gated now. */
+    OffensivePrayer range_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_NONE;
     s->player.offensive_prayer = mage_prayer;
     /* mage loadout is trident / Eye of Ayak — powered staves, accurate stance gets +3 magic eff.
        ranged runs in rapid stance for blowpipe/tbow (-1 attack_speed). */
     encounter_compute_loadout_stats(ZUL_MAGE_LOADOUT[s->gear_tier], ATTACK_STYLE_MAGIC,
-        s->player.offensive_prayer, s->player.current_magic, FIGHT_STYLE_ACCURATE, 30, &s->mage_stats);
+        mage_prayer, s->player.current_magic, FIGHT_STYLE_ACCURATE, 30, &s->mage_stats);
     encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
-        s->player.offensive_prayer, s->player.current_ranged, FIGHT_STYLE_RAPID, 0, &s->range_stats);
+        range_prayer, s->player.current_ranged, FIGHT_STYLE_RAPID, 0, &s->range_stats);
     zul_start_active_kill(s);
 }
 

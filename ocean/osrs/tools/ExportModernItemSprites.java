@@ -196,7 +196,13 @@ public final class ExportModernItemSprites {
         private final Store store;
         private final Index index;
         private final ModelLoader loader = new ModelLoader();
-        private final Map<Integer, ModelDefinition> cache = new HashMap<>();
+        /* cache the immutable decompressed archive bytes, NOT the decoded
+           ModelDefinition: ItemSpriteFactory recolors the model IN PLACE, so a
+           shared cached instance lets one item's recolor consume the base colour
+           (colorFind) that later items sharing the same base model still need.
+           That made every recolored potion (sanfew, divine, surge, ...) fall back
+           to the first/base colour rendered for that model (e.g. ranging-blue). */
+        private final Map<Integer, byte[]> dataCache = new HashMap<>();
 
         CacheModelProvider(Store store) {
             this.store = store;
@@ -208,21 +214,22 @@ public final class ExportModernItemSprites {
 
         @Override
         public ModelDefinition provide(int modelId) throws IOException {
-            ModelDefinition cached = cache.get(modelId);
-            if (cached != null) {
-                return cached;
+            byte[] data = dataCache.get(modelId);
+            if (data == null) {
+                Archive archive = index.getArchive(modelId);
+                if (archive == null) {
+                    throw new IOException("model " + modelId + " missing from cache");
+                }
+                byte[] raw = store.getStorage().loadArchive(archive);
+                data = archive.decompress(raw);
+                dataCache.put(modelId, data);
             }
-            Archive archive = index.getArchive(modelId);
-            if (archive == null) {
-                throw new IOException("model " + modelId + " missing from cache");
-            }
-            byte[] raw = store.getStorage().loadArchive(archive);
-            byte[] data = archive.decompress(raw);
+            /* decode a FRESH definition every call so each item recolors a clean
+               base model and never inherits a prior item's in-place recolor. */
             ModelDefinition model = loader.load(modelId, data);
             if (model == null) {
                 throw new IOException("model " + modelId + " failed to decode");
             }
-            cache.put(modelId, model);
             return model;
         }
     }

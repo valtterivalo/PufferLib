@@ -14,6 +14,14 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
+/* Pin BARE late-wave starts for these fixed-scenario tests (honest entry
+   synthesis is covered in test_colosseum_modifiers.c). Function-like macro:
+   the name inside its own body is not re-expanded (standard C). */
+#define col_init_context_typed(ctx_ptr) do { \
+    col_init_context_typed(ctx_ptr); \
+    (ctx_ptr)->config.late_start_state_mode = 0; \
+} while (0)
+
 #define EXACT_MAGIC "COLOEXACTv1"
 #define EXACT_VERSION 2u
 #define EXACT_CHUNK_BYTES 65536
@@ -237,8 +245,7 @@ static void exact_trace_actions(
         actions[head] = (int)(exact_splitmix64(rng) % (uint64_t)COLO_ACTION_DIMS[head]);
     }
     if (s->modifiers.draft_pending) {
-        actions[COLO_HEAD_MOVE] = 0;
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
         actions[COLO_HEAD_MODIFIER_SELECT] = 1 +
             (int)(exact_splitmix64(rng) % COLO_MODIFIER_DRAFT_OPTIONS);
     }

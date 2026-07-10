@@ -267,6 +267,9 @@ typedef struct {
 /* click/drag interaction state */
 #define INV_DIM_TICKS 15       /* client ticks (50 Hz) to show dim after click */
 #define INV_DRAG_DEAD_ZONE 5   /* pixels before drag activates */
+#define INV_DRAG_HOLD_SECONDS 0.030  /* anti-drag: button must be held this long
+                                        before a drag can start; a faster
+                                        press-move-release stays a click */
 
 typedef enum {
     INV_ACTION_NONE = 0,
@@ -488,6 +491,7 @@ typedef struct {
     int inv_drag_start_y;
     int inv_drag_mouse_x;     /* current mouse position during drag */
     int inv_drag_mouse_y;
+    double inv_drag_press_time; /* GetTime() at mouse-down on the src slot */
 
     /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
        -1 when not targeting. render code sets this before calling gui_draw. */
@@ -737,6 +741,42 @@ static int gui_spell_off_sprite_id(GuiSpellIdx idx) {
     return GUI_SPELL_OFF_SPRITE_IDS[idx];
 }
 
+static int gui_find_sprite_index_by_osrs_id(const GuiState* gs, int osrs_id) {
+    if (osrs_id <= 0) return -1;
+    for (int i = 0; i < gs->item_sprite_count; i++) {
+        if (gs->item_sprite_ids[i] == osrs_id) return i;
+    }
+    return -1;
+}
+
+static Texture2D gui_load_sprite_by_osrs_id_if_present(GuiState* gs, int osrs_id) {
+    Texture2D empty = {0};
+    int existing_idx = gui_find_sprite_index_by_osrs_id(gs, osrs_id);
+    if (existing_idx >= 0) return gs->item_sprite_tex[existing_idx];
+    if (osrs_id <= 0 || gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) return empty;
+
+    const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id);
+    if (!osrs_asset_exists(path)) return empty;
+
+    Texture2D tex = osrs_asset_load_texture(path);
+    if (tex.id == 0) return empty;
+
+    int idx = gs->item_sprite_count++;
+    gs->item_sprite_ids[idx] = osrs_id;
+    gs->item_sprite_tex[idx] = tex;
+    return tex;
+}
+
+static void gui_require_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
+    Texture2D tex = gui_load_sprite_by_osrs_id_if_present(gs, osrs_id);
+    if (tex.id != 0) return;
+
+    fprintf(stderr, "GUI: missing required item sprite raw id %d at %s\n",
+        osrs_id,
+        TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id));
+    abort();
+}
+
 /** Load all GUI sprites from data/sprites/gui/. */
 static void gui_load_sprites(GuiState* gs) {
     gs->sprites_loaded = 1;
@@ -976,13 +1016,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < NUM_ITEMS && gs->item_sprite_count < GUI_MAX_ITEM_SPRITES; i++) {
         int item_id = ITEM_DATABASE[i].item_id;
         if (item_id <= 0) continue;
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), item_id);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = item_id;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
+        gui_load_sprite_by_osrs_id_if_present(gs, item_id);
     }
 
     /* consumable sprites: not in ITEM_DATABASE, load by OSRS item ID directly */
@@ -1001,34 +1035,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < (int)(sizeof(consumable_ids)/sizeof(consumable_ids[0])); i++) {
         if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
         int cid = consumable_ids[i];
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = cid;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
-    }
-
-    /* colosseum render-only display-inventory ids that are NOT in ITEM_DATABASE
-       nor the consumable list above (Venator bow, Abyssal tentacle, divine pots,
-       sanfew, Guthix rest, surge, Divine rune pouch). The export pipeline writes
-       their PNGs; load any that exist so the 1:1 kit panel can resolve them. */
-    static const int colosseum_display_ids[] = {
-        27610, 12006, 27281,             /* Venator bow, Abyssal tentacle, Divine rune pouch */
-        23685, 23733,                    /* Divine super combat(4), Divine ranging(4) */
-        10925, 4417, 30875,              /* Sanfew serum(4), Guthix rest(4), Surge potion(4) */
-    };
-    for (int i = 0; i < (int)(sizeof(colosseum_display_ids)/sizeof(colosseum_display_ids[0])); i++) {
-        if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) break;
-        int cid = colosseum_display_ids[i];
-        const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), cid);
-        if (osrs_asset_exists(path)) {
-            int idx = gs->item_sprite_count;
-            gs->item_sprite_ids[idx] = cid;
-            gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-            gs->item_sprite_count++;
-        }
+        gui_load_sprite_by_osrs_id_if_present(gs, cid);
     }
     TraceLog(LOG_INFO, "GUI: loaded %d item sprites (incl consumables)", gs->item_sprite_count);
 }
@@ -1047,21 +1054,7 @@ static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
 static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     Texture2D empty = { 0 };
     if (osrs_id <= 0) return empty;
-    for (int i = 0; i < gs->item_sprite_count; i++) {
-        if (gs->item_sprite_ids[i] == osrs_id) return gs->item_sprite_tex[i];
-    }
-    if (gs->item_sprite_count >= GUI_MAX_ITEM_SPRITES) return empty;
-    const char* path = TextFormat(OSRS_ASSET("sprites/items/%d.png"), osrs_id);
-    if (!osrs_asset_exists(path)) return empty;
-    int idx = gs->item_sprite_count++;
-    gs->item_sprite_ids[idx] = osrs_id;
-    gs->item_sprite_tex[idx] = osrs_asset_load_texture(path);
-    if (gs->item_sprite_tex[idx].id == 0) {
-        gs->item_sprite_count--;
-        gs->item_sprite_ids[idx] = 0;
-        return empty;
-    }
-    return gs->item_sprite_tex[idx];
+    return gui_load_sprite_by_osrs_id_if_present(gs, osrs_id);
 }
 
 static int gui_coin_stack_display_id(int quantity) {
@@ -2061,6 +2054,7 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
     gs->inv_drag_start_y = 0;
     gs->inv_drag_mouse_x = 0;
     gs->inv_drag_mouse_y = 0;
+    gs->inv_drag_press_time = 0.0;
     for (int i = 0; i < GUI_TAB_COUNT; i++) {
         gs->tab_press_timer[i] = 0;
     }
@@ -2692,11 +2686,14 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
             gs->inv_drag_start_x = mx;
             gs->inv_drag_start_y = my;
             gs->inv_drag_src_slot = slot;
+            gs->inv_drag_press_time = GetTime();
         }
     }
 
-    /* check if held mouse has moved past dead zone → start drag */
-    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active) {
+    /* held past the anti-drag threshold AND moved past the dead zone → start
+       drag; a quicker press-move-release still resolves as a click below. */
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active &&
+        GetTime() - gs->inv_drag_press_time >= INV_DRAG_HOLD_SECONDS) {
         int dx = mx - gs->inv_drag_start_x;
         int dy = my - gs->inv_drag_start_y;
         if (dx > INV_DRAG_DEAD_ZONE || dx < -INV_DRAG_DEAD_ZONE ||

@@ -16,6 +16,14 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
+/* Pin BARE late-wave starts for these fixed-scenario tests (honest entry
+   synthesis is covered in test_colosseum_modifiers.c). Function-like macro:
+   the name inside its own body is not re-expanded (standard C). */
+#define col_init_context_typed(ctx_ptr) do { \
+    col_init_context_typed(ctx_ptr); \
+    (ctx_ptr)->config.late_start_state_mode = 0; \
+} while (0)
+
 #define FLIP_FEATURES COLO_STEP_OUT_FORECAST_ACTION_FEATURES
 
 static const char* const FEATURE_NAMES[FLIP_FEATURES] = {
@@ -144,8 +152,7 @@ static void run_wave(FlipStats* stats, int wave_label, int start_wave,
             actions[head] = (int)((rng >> 33) % (uint64_t)COLO_ACTION_DIMS[head]);
         }
         if (s.modifiers.draft_pending) {
-            actions[COLO_HEAD_MOVE] = 0;
-            actions[COLO_HEAD_TARGET] = 0;
+            actions[COLO_HEAD_PRIMARY] = 0;
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
             actions[COLO_HEAD_MODIFIER_SELECT] =
                 1 + (int)((rng >> 33) % COLO_MODIFIER_DRAFT_OPTIONS);

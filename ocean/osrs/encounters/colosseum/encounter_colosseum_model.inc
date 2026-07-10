@@ -29,9 +29,27 @@
 #define COLO_BEGINNER_MAX_TICKS 6000
 #define COLO_NUM_WAVES      12
 #define COLO_WAVE_BOSS      (COLO_NUM_WAVES - 1)  /* wave index 11 = Sol Heredit */
-#define COLO_START_READY_TICKS 6
+/* Researched wave-start timeline (frame-by-frame, 2026-07-07), pick = t0:
+   player free t1-t5; spawn positions resolved at t5 against the player's
+   PRE-move t5 tile (speedrunners queue a move on t5 -- it lands t6 for free);
+   NPCs appear t6; NPCs move from t7; no NPC attacks before t9. */
+#define COLO_WAVE_SPAWN_DELAY_TICKS 5   /* pick -> spawn resolution */
+/* Sol runs the same visible+3 grace on a longer entry: visible t12, first
+   attack t15 (frame-by-frame), so the boss wave resolves at t11. */
+#define COLO_BOSS_SPAWN_DELAY_TICKS 11
+
+static inline int col_wave_entry_delay_ticks(int target_wave) {
+    return target_wave == COLO_WAVE_BOSS
+        ? COLO_BOSS_SPAWN_DELAY_TICKS : COLO_WAVE_SPAWN_DELAY_TICKS;
+}
+#define COLO_WAVE_READY_TICKS 2         /* spawn -> movement opens (t7) */
+#define COLO_WAVE_ATTACK_GATE_TICKS 4   /* spawn -> attacks open (t9) */
 #define COLO_REINFORCEMENT_TICKS 66   /* 40s reinforcement cadence */
-#define COLO_NUM_ACTION_HEADS 36
+/** waves 1-4 (internal 0-3) are the only waves where clearing inside the
+    reinforcement timer is realistically achievable (wave 3 the hardest);
+    the farm-safe damage cap applies only inside this window. */
+#define COLO_FARM_CAP_WAVES 4
+#define COLO_NUM_ACTION_HEADS 20  /* PRIMARY, PRAYER, NUM_GEAR_SLOTS equip, EAT, DRINK, SPEC, MODIFIER_SELECT, GRAPPLE_PARRY, OFFENSIVE, SPELL */
 
 /* max active NPCs at once + obs slot count (one obs slot per active NPC).
    COLO_OBS_NPCS == COLO_MAX_NPCS so no live NPC is ever dropped from the obs
@@ -41,7 +59,7 @@
 /* compile-time MAX rollout depth (ticks[] array size). The live depth is the
    runtime ColConfig.forecast_horizon, clamped to [1, this]; default == this. */
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
-#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 8
+#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 9
 #define COLO_STEP_OUT_FORECAST_OBS_SIZE \
     (ENCOUNTER_MOVE_ACTIONS * COLO_STEP_OUT_FORECAST_ACTION_FEATURES)
 
@@ -60,6 +78,7 @@ typedef struct {
     int same_tick_mixed_style_conflict;
     int ranged_magic_offtick_opportunity;
     int melee_fallback_exposure;
+    int solarflare_contact_tick;
 } ColoStepOutForecastAction;
 
 typedef struct {
@@ -335,10 +354,13 @@ static void col_static_footprint_table_selftest(void) {
    SW tile is placed ON the anchor. Three-way cross-verified (los `ao` array + b5
    pastebin + wiki "12 default spawns", WSN#GAP1). D5: the b5 13th tile
    (1824,3110) and cyan tile (1824,3106) are excluded — semantics unstated. */
-#define COLO_NUM_SPAWN_ANCHORS 12
+/* 13 primary anchors verified tile-by-tile against the in-game spawn map
+   (2026-07-07, world = local + (1808,3090)); (16,20) was missing from the
+   research notes' "12 default spawns". */
+#define COLO_NUM_SPAWN_ANCHORS 13
 #define COLO_SPAWN_ZONE_SIZE   3
 static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
-    {3, 14}, {9, 16}, {3, 19}, {13, 19}, {19, 19}, {17, 24},
+    {3, 14}, {9, 16}, {3, 19}, {13, 19}, {16, 20}, {19, 19}, {17, 24},
     {13, 13}, {19, 13}, {16, 9}, {24, 17}, {28, 19}, {28, 14},
 };
 
@@ -355,7 +377,7 @@ static const int COLO_SPAWN_ANCHORS[COLO_NUM_SPAWN_ANCHORS][2] = {
 #define COLO_WARBAND_BOX_MAX_Y 21
 
 /* B2(a): the trio attacks on ONE shared 6-tick cycle anchored to the wave's
-   first actionable tick N (the COLO_START_READY_TICKS ready delay = the
+   first actionable tick N (the wave-start ready + attack gates model the
    researched click+6): berserker window N+1, seer N+2, archer N+3, then 3
    silent ticks. D30: assume the wave-anchored phase survived the April 2024
    rebalance. */
@@ -449,10 +471,9 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
 #define COLO_NPC_SLOT_THRALL    COLO_MAX_NPCS
 #define COLO_THRALL_RENDER_INSTANCE_ID 0xC01055EEu
 
-/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render-only: the
-    sim models the orb as a slotless ColoSolarflareOrb hazard, so the viewer
-    surfaces it as a render entity on a synthetic slot one past the thrall (never
-    collides with a ColoNPC index or the thrall slot). */
+/** Solarflare orbiting sun (cache npc 12826, idle anim 10817). Render only.
+    The sim models four slotless per-pillar orb hazards, so the viewer surfaces
+    them on synthetic slots after the thrall slot. */
 #define COLO_NPC_DEF_ID_SOLARFLARE 12826
 #define COLO_SOLARFLARE_IDLE_ANIM_ID 10817
 #define COLO_NPC_SLOT_SOLARFLARE    (COLO_MAX_NPCS + 1)
@@ -550,7 +571,7 @@ static const MonsterStats COLO_NPC_BASE[COLO_NUM_NPC_TYPES] = {
         .melee_att_bonus=0,.melee_str_bonus=25,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=0,.ranged_str_bonus=0,
         .stab_def=30,.slash_def=30,.crush_def=30,.magic_def=15,.ranged_def=45 },
     [COLO_JAVELIN_COLOSSUS] = { .npc_id=12817, .name="Javelin Colossus",
-        .hp=220, .att_level=200,.str_level=300,.def_level=190,.magic_level=225,.range_level=360,
+        .hp=225, .att_level=200,.str_level=300,.def_level=190,.magic_level=225,.range_level=360,
         .attack_speed=5,.size=3,.max_hit=48,
         .melee_att_bonus=0,.melee_str_bonus=0,.magic_att_bonus=0,.magic_str_bonus=0,.range_att_bonus=25,.ranged_str_bonus=20,
         .stab_def=15,.slash_def=15,.crush_def=15,.magic_def=20,.ranged_def=30 },
@@ -726,17 +747,11 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
 };
 
 
-/** active-modifier set. A16+B6: a MANDATORY draft of 3 modifiers gates EVERY
-    wave start including wave 1 and wave 12 — 12 picks per full run; each chosen
-    modifier persists and carries a tier. */
+/** active-modifier set. A MANDATORY draft of 3 modifiers gates every wave start
+    from wave 2 through wave 12 — 11 picks per full run (wave 1 carries no
+    modifier); each chosen modifier persists and carries a tier. */
 #define COLO_NUM_MODIFIERS 16
 #define COLO_MODIFIER_DRAFT_OPTIONS 3
-
-/** A16: the wave-1 draft is ALWAYS this fixed offer (money-making guide +
-    W-STRAT, multi-source). */
-static const ColoModifier COLO_WAVE1_DRAFT_OFFER[COLO_MODIFIER_DRAFT_OPTIONS] = {
-    COLO_MOD_RELENTLESS, COLO_MOD_BLASPHEMY, COLO_MOD_FRAILTY,
-};
 
 /** A16: Red Flag and Dynamic Duo enter the pool only for drafts that occur
     before wave 7 starts — eligible iff the gated wave index (0-based) is at
@@ -787,6 +802,9 @@ typedef struct {
     int draft_options[COLO_MODIFIER_DRAFT_OPTIONS];  /* modifier ids offered, -1 = none */
     int draft_pending;                     /* 1 while a mandatory draft awaits the pick */
     int draft_gates_spawn;                 /* 1 = the pick triggers the queued wave spawn */
+    int draft_free_movement;               /* challenge-start draft only: the player may
+                                              roam to choose the wave-1 start tile; every
+                                              later draft freezes you where you stood */
 } ColoModifierState;
 
 
@@ -838,25 +856,26 @@ typedef struct {
     int heal_timer;     /* ticks until the next heal pulse */
 } ColoTotem;
 
-/** Solarflare hazard: a damaging orb circling the four arena pillars (which
-    exist on every wave, B1). A27 cadence: T1 moves every 2 ticks pausing 7 at
+/** Solarflare hazard: one damaging orb circles the distance-1 ring around each
+    pillar. The four orbs share cadence state and exist on every wave, B1.
+    A27 cadence: T1 moves every 2 ticks pausing 7 at
     corners, T2 every 2 ticks continuous, T3 every tick pausing 2 at corners.
-    T3 also disables prayer on hit. D21: no damage numbers exist in any source;
+    T3 also disables prayer on hit. D21: no damage numbers exist in any source,
     12/18/24 are the modeled tier values. */
-#define COLO_SOLARFLARE_MOVE_INTERVAL    2   /* T1/T2 step cadence */
-#define COLO_SOLARFLARE_MOVE_INTERVAL_T3 1   /* A27: T3 moves every tick */
-#define COLO_SOLARFLARE_CORNER_PAUSE     7   /* T1 corner pause */
-#define COLO_SOLARFLARE_CORNER_PAUSE_T3  2   /* A27: T3 corner pause */
-#define COLO_SOLARFLARE_MAX_HIT_T1 12    /* contact damage, tier I (D21 modeled) */
-#define COLO_SOLARFLARE_MAX_HIT_T2 18    /* tier II "more damage" (D21 modeled) */
-#define COLO_SOLARFLARE_MAX_HIT_T3 24    /* tier III (D21 modeled) */
+#define COLO_SOLARFLARE_RING_STEPS       16
+#define COLO_SOLARFLARE_MOVE_INTERVAL    2
+#define COLO_SOLARFLARE_MOVE_INTERVAL_T3 1
+#define COLO_SOLARFLARE_CORNER_PAUSE     7
+#define COLO_SOLARFLARE_CORNER_PAUSE_T3  2
+#define COLO_SOLARFLARE_MAX_HIT_T1 12
+#define COLO_SOLARFLARE_MAX_HIT_T2 18
+#define COLO_SOLARFLARE_MAX_HIT_T3 24
 
 typedef struct {
     int active;
-    int x, y;
-    int step;          /* position index around the orb ring perimeter */
-    int move_timer;    /* ticks until the next step (cadence is tier-driven) */
-    int pause_timer;   /* corner pause countdown (T1/T3) */
+    int step;
+    int move_timer;
+    int pause_timer;
 } ColoSolarflareOrb;
 
 /** Doom: stacks gained per damage instance; reaching the tier cap (15/10/5) kills
@@ -869,11 +888,19 @@ static const int COLO_DOOM_CAP[4] = { 0, 15, 10, 5 };  /* indexed by tier (1..3)
     the death tick is the modeled value. */
 #define COLO_VOLATILITY_MAX_HIT 25       /* explosion contact damage (D20 modeled) */
 
-/** E10: general-arena molten pools from Reentry and Volatility T3 persist
-    until wave end. The old Reentry permanent lifetime is intentionally gone. */
+/** general-arena molten pool mechanics are kinded because Reentry's pool is the
+    stronger 1-15 every-other-tick variant, while Volatility keeps Sol's weaker
+    per-tick molten sand damage. Lifetime is stored per pool so upgraded Reentry
+    pools can persist across waves. */
 typedef enum {
-    COLO_POOL_UNTIL_WAVE_END = 0,
+    COLO_POOL_VOLATILITY = 0,
+    COLO_POOL_REENTRY,
 } ColoMoltenPoolKind;
+
+typedef enum {
+    COLO_POOL_TEMPORARY = 0,
+    COLO_POOL_PERMANENT,
+} ColoMoltenPoolLifetime;
 
 /** Relentless: defence-bypass fraction (percent) and flat max-hit bonus by tier. */
 static const int COLO_RELENTLESS_DEF_BYPASS_PCT[4] = { 0, 33, 66, 100 };
@@ -1101,10 +1128,10 @@ typedef struct {
 #define COLO_SOL_ENRAGE_POOL_SPREAD 4
 #define COLO_SOL_MOLTEN_INTERVAL    3
 
-/* A22 damage band, SHARED: ALL molten sand — boss-fight pools and the wave
-   1-11 modifier pools alike — burns 5 + rand(0..4) = 5-9 per tick stood on. */
-#define COLO_MOLTEN_SAND_MIN_HIT 5
-#define COLO_MOLTEN_SAND_RAND    5
+/* A22 Sol molten sand burns 6 + rand(0..2) = 6-8 per tick stood on. Reentry
+   molten is stronger and lives in the modifier pool constants below. */
+#define COLO_MOLTEN_SAND_MIN_HIT 6
+#define COLO_MOLTEN_SAND_RAND    3
 
 
 static int col_type_is_warbander(ColoNpcType type) {
@@ -1122,21 +1149,22 @@ typedef struct {
 
 /** manticore 3-orb barrage cycle. valid iff type is COLO_MANTICORE; reach it
     through colo_npc_manticore(). fixed_orb_style is the persistent spawn-time
-    cycle. orb_style is the visible active telegraph and firing queue only.
-    cycle_step counts ticks within a barrage: -1 = idle, 0/1/2 = next orb.
+    cycle, copied from the wave-shared roll so every manticore in a wave fires
+    the same pattern. orb_style is the visible active telegraph and firing queue
+    only. cycle_step counts ticks within a barrage: -1 = idle, 0/1/2 = next orb.
     D11: movement is NOT restricted while charging. */
 typedef struct {
     int cycle_step;
     AttackStyle orb_style[3];
     AttackStyle fixed_orb_style[3];
-    int pattern_copied;
 } ColoManticoreState;
 
-/** javelin skyfall cadence. valid iff type is COLO_JAVELIN_COLOSSUS; reach it
-    through colo_npc_javelin(). skyfall fires on every 5th throw; the marked tile
-    lands COLO_JAVELIN_SKYFALL_DELAY ticks later, ignoring Protect-from-Missiles. */
+/** javelin skyfall cadence. Valid iff type is COLO_JAVELIN_COLOSSUS. Reach it
+    through colo_npc_javelin(). Every 5th attack is a skyfall instead of a
+    normal throw. The marked tile lands COLO_JAVELIN_SKYFALL_DELAY ticks later,
+    ignoring Protect-from-Missiles. */
 typedef struct {
-    int attack_count;          /* throws since spawn; every 5th is a skyfall */
+    int attack_count;          /* attacks since spawn, every 5th is skyfall */
     int skyfall_pending;       /* 1 while a marked tile is in flight */
     int skyfall_tile_x, skyfall_tile_y;
     int skyfall_timer;         /* ticks until the marked tile lands */
@@ -1160,6 +1188,10 @@ typedef struct {
     int stun_timer;
     int frozen_ticks;
     int def_drained;       /* defence levels drained by player specs (elder maul) */
+    int min_hp_seen;       /* lowest hp ever reached; decrease-only at the two
+                              player-damage sites. fresh damage = max_hp - min_hp_seen,
+                              so HP a minotaur/totem heals back and the player re-deals
+                              counts 0 (healing writes hp directly, never min_hp_seen). */
 
     /* type-specific state keyed on `type`; reach only via colo_npc_*(). */
     union {
@@ -1172,12 +1204,17 @@ typedef struct {
 
     int death_ticks;       /* death-animation linger, >0 = dying */
     int aggro_target;      /* -1 = player, >= 0 = NPC index */
+    int spawned_as_reinforcement; /* overrun-spawned: farm-safe damage cap
+                                     routes this NPC's fresh damage to the
+                                     unrewarded channel on waves 1-4 */
 
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;
     AttackStyle attack_style_this_tick;
     int attack_visual_target;
     int moved_this_tick;
+    int moved_last_tick;   /* prior tick's moved_this_tick; warband members attack
+                              only after two consecutive stationary ticks (B2) */
     int hit_landed_this_tick;
     int hit_damage;
     int hit_was_successful_this_tick;
@@ -1211,17 +1248,12 @@ static inline int col_warband_window_offset(ColoNpcType type) {
     }
 }
 
-/** ticks the marked skyfall tile lands after the javelin throws it (D6: wiki
-    says only "a few ticks"; 3 is the modeled value). */
-#define COLO_JAVELIN_SKYFALL_DELAY 3
+/** javelin skyfall lands 6 ticks after the 5th attack replaces the normal throw. */
+#define COLO_JAVELIN_SKYFALL_DELAY 6
+#define COLO_JAVELIN_SKYFALL_MAX_HIT 40
 #define COLO_JAVELIN_SKYFALL_ANIM_ID 10893
 /** a ready manticore delays its barrage start while another is mid-barrage. */
 #define COLO_MANTICORE_STAGGER_TICKS 5
-/** B10: from this wave (0-based; wave 9), a manticore's freshly-drawn orb
-    pattern is copied by peers within COLO_MANTICORE_COPY_RANGE tiles
-    (centre-to-centre) with line of sight. */
-#define COLO_MANTICORE_COPY_MIN_WAVE 8
-#define COLO_MANTICORE_COPY_RANGE 15
 /** A13: minotaur heal reach, centre-to-centre tiles (the wiki's 6-from-edge
     phrasing reconciles to 7-from-centre for the 3x3 minotaur). */
 #define COLO_MINOTAUR_HEAL_RANGE 7
@@ -1261,6 +1293,108 @@ typedef enum {
     COLO_GEAR_MAGIC,
     COLO_NUM_WEAPON_SETS
 } ColoWeaponSet;
+
+/* Best-achievable gear oracle output, keyed [style][npc-type] (styles index as
+   ColoWeaponSet: 0 melee / 1 ranged / 2 magic). dpt is the MAX expected DPT over a
+   pruned, result-identical brute force of every legal gear setup the player can field
+   this tick (union of worn gear + the 28 inventory cells), scored with the
+   style-matched offensive prayer (Piety/Rigour/Augury). setup[] is the argmax full
+   equipment[] that achieves it. dpt is -1 when the player owns no weapon of that style.
+   Multiplicative items (Tumeken's shadow x3 magic_damage, bowfa crystal, virtus,
+   dharok) compose for free because the whole setup is evaluated. Two effects sit at
+   honest extremes the obs surfaces on purpose: dharok is scored at full HP (its FLOOR,
+   which is the honest best since you start full), and confliction gauntlets are scored
+   at their charged double-accuracy steady state (col_expected_dpt_vs_npc models the
+   steady state, disabled for 2h weapons per the real-game rule so it is dead under
+   shadow). Defined here (not in the obs writer) so ColosseumState can cache it. */
+typedef struct {
+    float dpt;
+    uint8_t setup[NUM_GEAR_SLOTS];
+} ColoBestGear;
+
+/** Set-associativity of the best-gear oracle cache (col_get_best_gear_table). Sized to
+    hold the small working set of gear setups a policy cycles through (3 style kits +
+    spec/shield swaps) so weapon switches hit instead of triggering a full rebuild. */
+#define COLO_BEST_GEAR_CACHE_WAYS 12
+
+/** Weapon-choice obs cache (col_write_weapon_choice_obs). The 58-float block (per-cell
+    DPT + per-cell spec bit + wielded DPT/ratio) is a pure function of the best-gear
+    signature and the current target's (type, drained defence, footprint size), so a
+    handful of ways cover target switches and the rare spec-drain tick while lifting the
+    per-item DPT recompute (35-38% of step) out of the hot path. Float count is fixed
+    from OSRS_INVENTORY_SIZE and asserted equal to COLO_WEAPON_CHOICE_OBS_SIZE where that
+    block-size constant is defined (obs_mask.inc). */
+#define COLO_WEAPON_CHOICE_OBS_CACHE_WAYS 8
+#define COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS (2 * OSRS_INVENTORY_SIZE + 2)
+
+/** Inventory+equipped obs cache (col_write_inventory_and_equipped_obs). The 982-float
+    block (28 cell affordance rows + 11 equipped-self rows) is a pure function of the
+    worn gear, the full inventory cell contents (item_idx + raw_osrs_id + dose -- doses
+    render as cell features, unlike the best-gear table) and the 3 base stats the
+    consumable magnitudes normalize against (col_inventory_obs_signature). The block
+    only changes on eat/drink/equip/pickup, so a few ways cover the gear-swap working
+    set between consumable uses. Float count asserted against COLO_INVENTORY_OBS_SIZE +
+    COLO_EQUIPPED_SELF_OBS_SIZE where those are defined (obs_mask.inc). */
+#define COLO_INVENTORY_OBS_CACHE_WAYS 8
+#define COLO_INVENTORY_OBS_CACHE_FLOATS \
+    (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES + \
+     NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+
+/** Threat-field obs cache (col_write_threat_field_obs). The 578-float block (two 17x17
+    planar channels) is a pure function of the player tile, the live-shooter descriptor
+    set (footprint + range), the npc_collision_flags grid (channel 1 standability reads
+    ALL stamped NPC bodies, melee included) and the process-constant static tables
+    (col_threat_field_obs_signature). Hits are the ticks where the player and every
+    stamped NPC hold position -- common mid-fight because attack animations stall NPCs.
+    Float count asserted against COLO_THREAT_FIELD_OBS_SIZE where it is defined
+    (obs_mask.inc). */
+#define COLO_THREAT_FIELD_OBS_CACHE_WAYS 4
+#define COLO_THREAT_FIELD_OBS_CACHE_FLOATS (2 * 17 * 17)
+
+/** Signature-keyed obs memos, PRESERVED across episode resets (col_reset_ctx saves this
+    block around its full-state memset and restores it). Safe because every memo is a
+    pure function of a content signature recomputed from live state on each access and
+    rebuilt on mismatch -- stale entries can never be served, so surviving the reset is
+    bit-identical and only lets the common respawn (identical starting loadout at
+    identical combat levels) skip the first-obs best-gear brute-force rebuild. Under a
+    fast-dying policy that reset-forced rebuild was ~90% of the obs_weapon_choice bucket.
+
+    best_gear: the best-achievable-gear DPT table (col_get_best_gear_table), keyed by
+    worn gear + inventory items + 4 combat levels + loadout profile
+    (col_best_gear_signature). Set-associative FIFO so the style-kit/spec-swap working
+    set stays resident.
+
+    weapon_choice: the weapon-choice obs block (col_write_weapon_choice_obs), keyed by
+    the best-gear signature + the live target descriptor (type/def_drained/size)
+    (col_weapon_choice_obs_signature). Set-associative FIFO so target switches stay
+    resident.
+
+    inventory: the inventory+equipped obs block (col_write_inventory_and_equipped_obs),
+    keyed by worn gear + full cell contents (incl. doses) + the 3 base stats
+    (col_inventory_obs_signature). Set-associative FIFO so gear swaps between
+    consumable uses stay resident.
+
+    threat_field: the egocentric threat-field obs block (col_write_threat_field_obs),
+    keyed by player tile + live-shooter descriptors + the npc_collision_flags grid
+    (col_threat_field_obs_signature). Hits on stationary ticks. */
+typedef struct {
+    ColoBestGear best_gear[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
+    uint64_t best_gear_sig[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_valid[COLO_BEST_GEAR_CACHE_WAYS];
+    int best_gear_next;   /* FIFO insertion slot */
+    float weapon_choice[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS][COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
+    uint64_t weapon_choice_sig[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
+    int weapon_choice_valid[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
+    int weapon_choice_next;   /* FIFO insertion slot */
+    float inventory[COLO_INVENTORY_OBS_CACHE_WAYS][COLO_INVENTORY_OBS_CACHE_FLOATS];
+    uint64_t inventory_sig[COLO_INVENTORY_OBS_CACHE_WAYS];
+    int inventory_valid[COLO_INVENTORY_OBS_CACHE_WAYS];
+    int inventory_next;   /* FIFO insertion slot */
+    float threat_field[COLO_THREAT_FIELD_OBS_CACHE_WAYS][COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
+    uint64_t threat_field_sig[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
+    int threat_field_valid[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
+    int threat_field_next;   /* FIFO insertion slot */
+} ColoObsMemoCaches;
 
 /** researched loadout profiles (.colosseum-notes/research/loadout-*.md):
     BEGINNER = wiki Budget tab tier-1 + budget example inventory (first-quiver
@@ -1468,7 +1602,7 @@ static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO
         26235, 27241, 19547, 13652,   /* Zaryte vambraces, Masori chaps(f), Anguish, Dragon claws */
         27275, 31106, 27610, 24780,   /* Tumeken's shadow, Confliction gauntlets, Venator bow,
                                          Amulet of blood fury */
-        30875, 12002, 0,     21003,   /* Surge potion(4), Occult necklace, empty worn-scythe slot, Elder maul */
+        30875, 12002, 12006, 21003,   /* Surge potion(4), Occult necklace, Abyssal tentacle, Elder maul */
         23685, 23733, 6685, 4417,     /* Divine super combat(4), Divine ranging(4), Sara brew(4),
                                          Guthix rest(4) */
         10925, 10925, 10925, 10925,   /* Sanfew serum(4) x7 */
@@ -1485,6 +1619,136 @@ static const int COLO_GAMEPLAY_INVENTORY_LOADOUT[COLO_NUM_LOADOUT_PROFILES][COLO
                                          Abyssal tentacle, Divine rune pouch */
     },
 };
+
+typedef void (*ColRawOsrsIdVisitor)(int raw_osrs_id, void* ctx);
+
+static const int COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[] = {
+    27610,
+    12006,
+    27281,
+};
+
+static int col_raw_osrs_id_seen(const int* seen, int seen_count, int raw_osrs_id) {
+    for (int i = 0; i < seen_count; i++) {
+        if (seen[i] == raw_osrs_id) return 1;
+    }
+    return 0;
+}
+
+static void col_visit_raw_osrs_id_once(
+    int raw_osrs_id,
+    int* seen,
+    int* seen_count,
+    int seen_capacity,
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (raw_osrs_id <= 0 || col_raw_osrs_id_seen(seen, *seen_count, raw_osrs_id)) {
+        return;
+    }
+    if (*seen_count >= seen_capacity) {
+        fprintf(stderr, "colosseum sprite id visitor capacity exceeded\n");
+        abort();
+    }
+    seen[(*seen_count)++] = raw_osrs_id;
+    visit(raw_osrs_id, ctx);
+}
+
+/**
+ * Visits every dose-specific raw id reachable from colosseum gameplay loadouts.
+ */
+static void col_for_each_reachable_consumable_dose_raw_osrs_id(
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (!visit) {
+        fprintf(stderr, "colosseum consumable dose visitor is null\n");
+        abort();
+    }
+
+    enum {
+        REGISTRY_COUNT = (int)(
+            sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY) /
+            sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY[0])
+        )
+    };
+    int seen[REGISTRY_COUNT];
+    int seen_count = 0;
+
+    for (int p = 0; p < COLO_NUM_LOADOUT_PROFILES; p++) {
+        for (int slot = 0; slot < COLO_INVENTORY_DISPLAY_SLOTS; slot++) {
+            uint16_t raw_osrs_id =
+                (uint16_t)COLO_GAMEPLAY_INVENTORY_LOADOUT[p][slot];
+            OsrsConsumableClick root =
+                osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
+            if (root.click_action != OSRS_CLICK_DRINK || root.dose_count == 0) {
+                continue;
+            }
+
+            uint16_t current_raw_osrs_id = raw_osrs_id;
+            for (int step = 0; current_raw_osrs_id != 0; step++) {
+                if (step >= REGISTRY_COUNT) {
+                    fprintf(stderr, "colosseum consumable dose chain cycles at raw id %u\n",
+                        current_raw_osrs_id);
+                    abort();
+                }
+                OsrsConsumableClick current =
+                    osrs_consumable_click_lookup_raw_osrs_id(current_raw_osrs_id);
+                if (current.click_action != OSRS_CLICK_DRINK ||
+                        current.dose_count == 0 ||
+                        current.consumable_kind != root.consumable_kind) {
+                    fprintf(stderr, "colosseum consumable dose chain broke at raw id %u\n",
+                        current_raw_osrs_id);
+                    abort();
+                }
+                col_visit_raw_osrs_id_once(
+                    current_raw_osrs_id,
+                    seen,
+                    &seen_count,
+                    REGISTRY_COUNT,
+                    visit,
+                    ctx);
+                current_raw_osrs_id =
+                    osrs_consumable_raw_osrs_id_after_drink(current_raw_osrs_id);
+            }
+        }
+    }
+}
+
+/**
+ * Visits every raw item id that the colosseum display inventory must sprite-load.
+ */
+static void col_for_each_display_inventory_sprite_raw_osrs_id(
+    ColRawOsrsIdVisitor visit,
+    void* ctx
+) {
+    if (!visit) {
+        fprintf(stderr, "colosseum display sprite visitor is null\n");
+        abort();
+    }
+
+    enum {
+        DISPLAY_CAPACITY =
+            (int)(sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS) /
+                  sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[0])) +
+            (int)(sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY) /
+                  sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY[0]))
+    };
+    int seen[DISPLAY_CAPACITY];
+    int seen_count = 0;
+
+    for (int i = 0; i < (int)(sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS) /
+            sizeof(COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[0])); i++) {
+        col_visit_raw_osrs_id_once(
+            COLO_NON_CONSUMABLE_DISPLAY_RAW_OSRS_IDS[i],
+            seen,
+            &seen_count,
+            DISPLAY_CAPACITY,
+            visit,
+            ctx);
+    }
+    col_for_each_reachable_consumable_dose_raw_osrs_id(visit, ctx);
+}
 
 /** Arceuus thrall (one allied auto-attacker, full fidelity): greater-thrall max
     hit 3 both kits, uniform 0..3 (accuracy ignored), 4-tick cadence, 17-tick
@@ -1550,6 +1814,36 @@ typedef struct {
     float offpray_damage_penalty_coeff; /* per-HP penalty for off-prayer damage taken
                                            this tick: immediate credit for praying/
                                            positioning to avoid hits (default 0). */
+    float multistyle_exposure_penalty_coeff; /* per-tick penalty per EXCESS prayer-
+                                           checkable style live on the player this tick:
+                                           coeff * max(0, distinct_live_threat_styles - 1).
+                                           Pays positioning to keep <=1 style live
+                                           (de-confliction / off-ticking; default 0). */
+    float argmax_gear_reward_coeff;    /* per attack: coeff * (actual-equipped DPT /
+                                           best-gear DPT for the argmax style vs the
+                                           target), clamped [0,1]. Rewards wearing the
+                                           optimal full kit for the target, not just the
+                                           right weapon style (default 0, sweepable). */
+    float offensive_boost_reward_coeff; /* per attack: coeff if the attacking style's
+                                           offensive stat is boosted above base (a combat/
+                                           ranging/magic potion is active); rewards keeping
+                                           the boost up (default 0, sweepable). */
+    float stall_penalty_coeff;          /* per live-combat tick: subtract this so a fast
+                                           wave clear strictly dominates stalling to farm
+                                           reinforcement damage reward (default 0, sweepable). */
+    int farm_safe_damage_cap;           /* 1 = reinforcement fresh damage pays NO damage
+                                           reward on waves below farm_cap_waves. Kills the
+                                           stall-to-farm incentive without any time
+                                           pressure (default 0). */
+    int farm_cap_waves;                 /* the cap window: waves with internal index below
+                                           this pay no reinforcement damage reward when
+                                           farm_safe_damage_cap is on. Default
+                                           COLO_FARM_CAP_WAVES (4, the skippable window);
+                                           12 caps every wave. Sweepable: the 2026-07-07
+                                           turtle finding (f9im4yp4) showed wave-5+ stall
+                                           farming over-pays at +3.3..+9.3 reward per
+                                           overrun wave, so the window itself is priced
+                                           by Protein rather than trusted. */
     float avoided_damage_coeff;
     float death_penalty_coeff;       /* magnitude of the terminal death reward */
     float timeout_penalty;
@@ -1557,10 +1851,68 @@ typedef struct {
     int loadout_profile_mode;          /* ColoLoadoutProfileMode (L9) */
     float beginner_loadout_fraction;   /* P(beginner) in MIXED mode */
     int step_out_forecast_obs_enabled;
+    int threat_field_obs_enabled;      /* 17x17 egocentric shooter-LoS + standability field */
     int forecast_horizon;              /* B1: step-out rollout depth, 1..MAX (default MAX) */
     int forecast_run_tile_mode;        /* ColoForecastRunTileMode (B3, default FULL) */
     int mask_inventory_heads;
     int action_debug_log;
+    int late_start_state_mode;         /* start_wave>0 entry-state fidelity: 0 =
+                                          legacy bare start (full supplies, no
+                                          modifiers; unit-test escape hatch), 1 =
+                                          prior only (synthesized draft history +
+                                          supply-depletion curve), 2 = prior +
+                                          empirical matching against recorded
+                                          organic wave entries (default; falls
+                                          back to the prior until organic
+                                          episodes populate the wave's
+                                          reservoir). */
+    float late_start_supply_fraction_per_wave; /* prior curve: fraction of total
+                                          consumable doses spent per wave already
+                                          cleared (default 0.07: a wave-8 start
+                                          keeps ~51% of doses, +-5% noise). */
+    int prayer_oracle_mode;            /* scaffold: 1 = override the agent's overhead
+                                          each tick with the perfect protect-prayer vs
+                                          this tick's throwers (magic>melee>range).
+                                          Default 0. Solve-by-cheating ablation knob. */
+    int bis_gear_oracle_mode;          /* scaffold: 1 = force-equip the max-DPT
+                                          weapon set vs the current target each tick.
+                                          Default 0. Solve-by-cheating ablation knob. */
+    int invuln_mode;                   /* scaffold: 1 = the player cannot die (HP
+                                          restored to full + doom-lethal suppressed
+                                          before each death check; timeout still
+                                          applies). Default 0. Isolates whether the
+                                          wall is survival vs damage/progression. */
+    int episode_max_ticks_override;    /* scaffold: >0 forces the per-episode tick
+                                          budget to this value for ALL loadouts,
+                                          overriding the speedrun/beginner defaults.
+                                          0 = keep the loadout default (bit-identical).
+                                          Probes whether the timeout is the wall. */
+    int remove_brews;                  /* scaffold: 1 = strip all Saradomin-brew
+                                          doses from the seeded inventory (brews are
+                                          the only HP-healing consumable). 0 =
+                                          bit-identical. Probes the healing-crutch
+                                          plateau hypothesis. */
+    float prayer_switch_fail_prob;     /* scaffold: P(an overhead-protection SWITCH
+                                          slips and reverts to the previous overhead)
+                                          via a platform-stable u16 roll, pushing the
+                                          agent off per-tick flicking toward
+                                          positioning/off-ticking. In [0,1]; 0.0 draws
+                                          no RNG and is bit-identical. */
+    float player_damage_received_scale;  /* scaffold: multiplies ALL incoming
+                                          player damage at HP-apply time (direct +
+                                          queued projectile + volatility + solarflare;
+                                          NOT self-inflicted potion cost). 1.0 =
+                                          bit-identical no-op, 0.5 = half, 0.0 = full
+                                          invuln. The binding overwrites this each
+                                          c_step when the anneal is armed; left at
+                                          1.0 it is the static lever. */
+    float damage_scale_anneal_start;     /* scaffold: anneal START scale (the value at
+                                          lifetime tick 0). 1.0 = anneal disabled
+                                          (no-op). Read by the BINDING only. */
+    int damage_scale_anneal_ticks;       /* scaffold: anneal duration in PER-ENV
+                                          c_step ticks (global_agent_steps / num_envs).
+                                          0 = anneal disabled. Read by the BINDING
+                                          only; the sim never sees these two fields. */
 } ColConfig;
 
 /** B3: how the step-out forecast evaluates the 16 run-tile actions (9-24).
@@ -1578,14 +1930,6 @@ typedef enum {
 } ColoNpcRenderAttackAnim;
 
 typedef struct {
-    int active;
-    int npc_slot;
-    int tile_x;
-    int tile_y;
-    int damage;
-} ColoJavelinSkyfallLandingRenderEvent;
-
-typedef struct {
     ColConfig config;
     const CollisionMap* collision_map;
     int world_offset_x;
@@ -1596,7 +1940,6 @@ typedef struct {
     int human_command_mode;
     ColoNpcRenderAttackAnim npc_render_attack_anim[COLO_MAX_NPCS];
     int manticore_charge_started[COLO_MAX_NPCS];
-    ColoJavelinSkyfallLandingRenderEvent javelin_skyfall_landing[COLO_MAX_NPCS];
     int player_render_hit_count;
     int player_render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int npc_render_hit_count[COLO_MAX_NPCS];
@@ -1607,19 +1950,38 @@ typedef struct {
     int thrall_attacked_this_tick;
     /* render-only: the equipped spec weapon item index fired this tick. */
     int player_spec_fired_kind;
+    int player_venator_chain_count;
+    int player_venator_chain_slots[OSRS_VENATOR_MAX_CHAIN_HITS];
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     if (!ctx) return;
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
     memset(ctx->manticore_charge_started, 0, sizeof(ctx->manticore_charge_started));
-    memset(ctx->javelin_skyfall_landing, 0, sizeof(ctx->javelin_skyfall_landing));
     ctx->player_render_hit_count = 0;
     memset(ctx->player_render_hit_damage, 0, sizeof(ctx->player_render_hit_damage));
     memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));
     memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
     ctx->thrall_attacked_this_tick = 0;
     ctx->player_spec_fired_kind = 0;
+    ctx->player_venator_chain_count = 0;
+    for (int i = 0; i < OSRS_VENATOR_MAX_CHAIN_HITS; i++)
+        ctx->player_venator_chain_slots[i] = -1;
+}
+
+/** Record the Venator chain for same-tick projectile emission only. */
+static inline void col_context_record_venator_chain(
+    ColosseumContext* ctx,
+    const OsrsVenatorChain* chain
+) {
+    if (!ctx) abort();
+    if (!chain) abort();
+    osrs_venator_validate_chain_length(chain->length);
+    ctx->player_venator_chain_count = (int)chain->length;
+    for (int i = 0; i < OSRS_VENATOR_MAX_CHAIN_HITS; i++)
+        ctx->player_venator_chain_slots[i] = -1;
+    for (int i = 0; i < (int)chain->length; i++)
+        ctx->player_venator_chain_slots[i] = chain->hits[i].slot;
 }
 
 /** per-tick scratch: reward/event accumulators, fully reset each step by a single
@@ -1633,6 +1995,15 @@ typedef struct {
     int wave_completed;
     int player_moved;
     int player_attacked;
+    /* FRESH damage this tick (max_hp - min_hp_seen growth only), the reward base.
+       Distinct from gross damage_dealt/damage_boss above, which keep feeding the
+       diagnostic log totals. */
+    float fresh_damage_dealt;
+    float fresh_damage_boss;
+    /* the slice of fresh_damage_dealt landed on overrun reinforcements; the
+       farm-safe cap subtracts it from the damage reward on waves 1-4 (the
+       only waves where skipping reinforcements is realistically possible). */
+    float fresh_damage_reinforcement;
     /* diagnostic: which prayer-checkable styles landed on the player THIS tick
        (bitmask over ATTACK_STYLE_*) and the off-prayer HP taken this tick. >=2
        distinct styles = a same-tick conflict a single overhead cannot fully
@@ -1640,6 +2011,16 @@ typedef struct {
     int styles_faced_mask;
     float offpray_damage_this_tick;
     float avoidable_threat_by_style[4];
+    /* land-time damage forensics: this tick's RECEIVED damage split by prayer
+       channel, on the same time base as damage_received (offpray_damage_this_tick
+       above accrues on the THROW tick for throw-resolved projectiles, so it cannot
+       decompose a landing tick). Invariant, asserted once per tick at
+       player_damage_received_scale == 1: landed_offpray + landed_prayed +
+       landed_unprayable == damage_received. */
+    float landed_offpray_damage;     /* prayer-checkable, overhead wrong at its check */
+    float landed_prayed_damage;      /* prayer-checkable, damaged through a correct overhead (~0) */
+    float landed_unprayable_damage;  /* typeless / ignore-prayer: no overhead could block */
+    float landed_self_damage;        /* intentional self-damage (divine potion sips) */
 } ColoTickScratch;
 
 /** Colosseum telemetry surfaced through the get_log hook (NOT the shared Log). */
@@ -1667,6 +2048,8 @@ typedef struct {
     float pray_faced_by_type[COLO_NUM_NPC_TYPES];
     float pray_correct_by_type[COLO_NUM_NPC_TYPES];
     float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
+    /** Total damage taken from each NPC type this episode for all hits: prayed, off-prayer, and ignore-prayer or typeless, unlike offpray_damage_by_type. */
+    float total_damage_by_type[COLO_NUM_NPC_TYPES];
 
     /* death attribution (diagnostic): death_by_type[killer] = 1 on the episode's
        fatal tick (which NPC type dealt the killing blow), death_fatal_damage =
@@ -1681,7 +2064,33 @@ typedef struct {
     float offpray_damage_conflict;
     float offpray_damage_solo;
     float death_on_conflict_tick;
+
+    /* death forensics (land-time): the fatal tick's received damage split by
+       channel. unprayable = typeless / ignore-prayer (a dodge or positioning
+       failure), offpray = prayer-checkable landing with the wrong overhead (a
+       flick/conflict failure), prayed = damage through a correct overhead
+       (expected ~0; nonzero = sim surprise). death_heal_remaining = HP-heal
+       capacity left in the inventory at death (high = burst death with unused
+       supplies, ~0 = attrition death). */
+    float death_dmg_unprayable;
+    float death_dmg_offpray;
+    float death_dmg_prayed;
+    float death_dmg_self;
+    float death_heal_remaining;
+    /* fresh damage landed on overrun reinforcements during waves 1-4 (the
+       skippable window): the stall-to-farm exploit's payout, tracked
+       regardless of whether farm_safe_damage_cap withholds its reward. */
+    float farm_damage;
+    /* episode totals of unprayable damage per NPC type: splits e.g. javelin
+       skyfall+molten (typeless) from its prayer-checkable throws, which stay in
+       offpray_damage_by_type. */
+    float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float outcome_score;
+    /* furthest depth this episode reached, reported RAW (not squared like
+       outcome_score): waves_fully_cleared + current-wave fresh-fraction, in
+       [0, COLO_NUM_WAVES]. The binding keeps a per-env running max across
+       episodes (Log is zeroed each train report window) and snapshots it here. */
+    float max_wave_depth;
 } ColosseumLog;
 
 
@@ -1700,12 +2109,26 @@ typedef struct {
     int tick;
     int wave_spawn_delay;
     int wave_ready_delay;
+    /* researched wave-start attack gate: NPCs move from spawn+1 but no NPC
+       attacks before spawn+3 ("3 ticks of movement after spawn"); counts down
+       from COLO_WAVE_ATTACK_GATE_TICKS at wave spawn. */
+    int wave_attack_delay;
     int episode_max_ticks;
     int reinforcement_timer;  /* 40s (66-tick) reinforcement countdown */
     int warband_cycle_anchor; /* B2(a): the wave's first actionable tick N (-1 until live) */
-    int current_wave_kills;
+    /* every manticore in a wave shares one orb cycle (OSRS pairs are always on
+       the same pattern). Rolled once at the wave's first manticore spawn; the
+       flag re-arms each wave in col_spawn_wave. */
+    AttackStyle wave_manticore_orb_style[3];
+    int wave_manticore_pattern_rolled;
     int current_wave_total_killable;
-    float current_wave_kill_progress;
+    /* fresh-damage wave progress: current_wave_hp_pool = sum of base/max HP of
+       every non-hazard enemy spawned this wave (initial + reinforcements), fixed
+       regardless of healing; current_wave_fresh_damage = sum over the wave's NPCs
+       of (max_hp - min_hp_seen). fresh/pool -> 1.0 exactly on a full clear and is
+       not farmable via minotaur/totem healing. */
+    int current_wave_hp_pool;
+    float current_wave_fresh_damage;
     int episode_over;
     int time_limit_truncated;
     ColoOutcome winner;       /* valid only when episode_over is set */
@@ -1723,11 +2146,12 @@ typedef struct {
     int player_poison;                     /* E8: standard poison severity (0 = none) */
     int player_poison_timer;               /* ticks until the next poison instance */
     /* general-arena molten pools (Reentry / Volatility T3) for waves 1-11. Boss
-       wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog.
-       E10: kind is retained for snapshot shape and all values clear at wave end. */
+       wave reuses SolHereditState.hazard_tile_*; this list is the non-boss analog. */
     int molten_x[COLO_SOL_HAZARD_TILES_MAX];
     int molten_y[COLO_SOL_HAZARD_TILES_MAX];
     int molten_kind[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_lifetime[COLO_SOL_HAZARD_TILES_MAX];
+    int molten_burn_timer[COLO_SOL_HAZARD_TILES_MAX];
     int molten_count;
 
     /* reward bookkeeping */
@@ -1791,7 +2215,33 @@ typedef struct {
     /* config copy / RNG */
     int start_wave;
     uint32_t rng_state;
+
+    /* scaffold: per-step mirror of ctx->config.player_damage_received_scale,
+       refreshed at the top of col_step_ctx (the only place that holds both the
+       state and the context). The HP-apply sinks (col_damage_player_from,
+       col_push_player_pending_hit, volatility/solarflare) take ColosseumState*
+       only and read this scalar; mirroring avoids threading the context through
+       the ~15-deep state-only modifier-tick chain. 1.0 = bit-identical no-op. */
+    float active_player_damage_received_scale;
+
+    /* Signature-keyed obs memos (best-gear table + weapon-choice block), preserved
+       across episode resets. See ColoObsMemoCaches for the full contract. */
+    ColoObsMemoCaches obs_memos;
 } ColosseumState;
+
+/** Prayer channel of a direct player-damage application, for land-time forensics.
+    OFFPRAY = a prayer-checkable hit that connected with the wrong overhead (a
+    correctly prayed hit is frozen to 0 at its check, so it contributes nothing).
+    UNPRAYABLE = typeless / ignore-prayer: no overhead could block it (skyfall,
+    Sol AoE, molten sand, bees, venom). */
+typedef enum {
+    COLO_DMG_OFFPRAY = 0,
+    COLO_DMG_UNPRAYABLE = 1,
+} ColoDamageChannel;
+
+static inline void col_damage_player_from(
+    ColosseumState* s, int dmg, int npc_type, ColoDamageChannel channel);
+static void col_apply_bis_gear_oracle(ColosseumState* s); /* scaffold; defined in obs_mask.inc */
 
 static void col_build_live_inventory_display(
     const ColosseumState* s,

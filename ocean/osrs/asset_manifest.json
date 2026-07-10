@@ -1,10 +1,10 @@
 {
   "format": "puffer-osrs-asset-manifest-v1",
-  "asset_version": "osrs-assets-v18",
+  "asset_version": "osrs-assets-v21",
   "archive": {
-    "name": "osrs-assets-v18.tar.gz",
-    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v18/osrs-assets-v18.tar.gz",
-    "sha256": "02b89833adb6bf1b35ae074dcaf2877e4435f28bd344bc367b88ed590e594501",
+    "name": "osrs-assets-v21.tar.gz",
+    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v21/osrs-assets-v21.tar.gz",
+    "sha256": "2f770543618a113fee806be6ec1217432904b0ed9f9d8b16872cd05274f81874",
     "strip_components": 1
   },
   "required_groups": [
@@ -17,6 +17,7 @@
         "equipment.tanim",
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "fonts/runescape.ttf",
         "fonts/runescape_small.ttf",
@@ -35,7 +36,8 @@
         "inferno_zuk.objects",
         "inferno.cmap",
         "inferno_npcs.models",
-        "inferno_npcs.anims"
+        "inferno_npcs.anims",
+        "inferno_npcs.atlas"
       ]
     },
     {
@@ -58,6 +60,7 @@
         "colosseum.cmap",
         "colosseum_npcs.models",
         "colosseum_npcs.anims",
+        "colosseum_npcs.atlas",
         "sprites/colosseum/modifiers/5534.png",
         "sprites/colosseum/modifiers/5535.png",
         "sprites/colosseum/modifiers/5536.png",
@@ -139,6 +142,7 @@
       "files": [
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "equipment.anims",
         "inferno.anims",
@@ -163,6 +167,7 @@
         "equipment.tanim",
         "projectiles.models",
         "projectiles.atlas",
+        "projectiles.anims",
         "spotanims.bin",
         "ui/interfaces.bin",
         "ui/interface_manifest.json",

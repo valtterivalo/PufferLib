@@ -120,8 +120,7 @@ static void bench_trace_actions(
         actions[head] = (int)(bench_splitmix64(rng) % (uint64_t)COLO_ACTION_DIMS[head]);
     }
     if (s->modifiers.draft_pending) {
-        actions[COLO_HEAD_MOVE] = 0;
-        actions[COLO_HEAD_TARGET] = 0;
+        actions[COLO_HEAD_PRIMARY] = 0;
         actions[COLO_HEAD_MODIFIER_SELECT] = 1 +
             (int)(bench_splitmix64(rng) % COLO_MODIFIER_DRAFT_OPTIONS);
     }

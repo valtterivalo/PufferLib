@@ -95,6 +95,79 @@ typedef struct {
     AnimSequenceFrame* frames;
 } AnimSequence;
 
+typedef enum {
+    ANIM_PLAY_LOOP = 0,
+    ANIM_PLAY_ONCE = 1,
+} AnimPlaybackMode;
+
+/** One animation playback cursor that owns BOTH the resolved sequence and the
+    frame position. The sequence is resolved ONCE (model-aware, in the render
+    layer via render_anim_playback_resolve) and stored here; advance and the
+    per-frame read then both go through ->sequence, never a fresh lookup. This
+    makes the frame-advance vs frame-resolution split (which froze the Shockwave
+    clap) structurally impossible: there is one source of truth for both the
+    sequence and the cursor. The cursor ops below are pure (sequence-only); the
+    cache-aware resolve + frame read live in osrs_render.h. */
+typedef struct {
+    int           seq_id;          /* -1 = inactive */
+    AnimSequence* sequence;        /* resolved view; NULL until first resolve */
+    int           model_vert_count;/* vertex count the sequence was resolved against */
+    int           frame_idx;
+    int           ticks_in_frame;
+    int           completed_loops;
+    AnimPlaybackMode mode;
+} AnimPlayback;
+
+static inline void anim_playback_reset(AnimPlayback* pb) {
+    pb->seq_id = -1;
+    pb->sequence = NULL;
+    pb->model_vert_count = -1;
+    pb->frame_idx = 0;
+    pb->ticks_in_frame = 0;
+    pb->completed_loops = 0;
+    pb->mode = ANIM_PLAY_LOOP;
+}
+
+/** Force the cursor to (re)start a sequence from frame 0, even if it is already
+    on this id -- used to re-trigger an attack that played once. Clears the
+    resolved sequence so the next resolve runs. No cache lookup happens here. */
+static inline void anim_playback_restart(
+    AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
+) {
+    pb->seq_id = seq_id;
+    pb->mode = mode;
+    pb->sequence = NULL;
+    pb->frame_idx = 0;
+    pb->ticks_in_frame = 0;
+    pb->completed_loops = 0;
+}
+
+/** Point the cursor at a (possibly new) sequence id. A same-id, same-mode call
+    is a no-op so an in-progress animation keeps playing (looping idle/walk); a
+    different id restarts from frame 0. No cache lookup happens here. */
+static inline void anim_playback_set_seq(
+    AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
+) {
+    if (pb->seq_id == seq_id && pb->mode == mode) return;
+    anim_playback_restart(pb, seq_id, mode);
+}
+
+/** Advance the cursor by one client tick using the resolved sequence. No-op
+    until the sequence has been resolved (render_anim_playback_resolve). */
+static inline void anim_playback_advance(AnimPlayback* pb) {
+    AnimSequence* seq = pb->sequence;
+    if (!seq || seq->frame_count <= 0) return;
+    int fidx = pb->frame_idx % seq->frame_count;
+    int delay = seq->frames[fidx].delay > 0 ? seq->frames[fidx].delay : 1;
+    pb->ticks_in_frame++;
+    if (pb->ticks_in_frame >= delay) {
+        pb->ticks_in_frame = 0;
+        int next = (fidx + 1) % seq->frame_count;
+        pb->frame_idx = next;
+        if (next == 0) pb->completed_loops++;
+    }
+}
+
 typedef struct {
     AnimFrameBase* bases;
     int            base_count;
@@ -661,10 +734,13 @@ static void anim_apply_maya_baked_frame(
         abort();
     }
     if ((int)frame->maya_vertex_count != state->vert_count) {
-        fprintf(stderr,
-            "anim_apply_maya_baked_frame: vertex count mismatch frame=%u model=%d\n",
-            frame->maya_vertex_count, state->vert_count);
-        abort();
+        /* A Maya bake only applies to the exact mesh it was baked for. A
+           mismatch means this sequence id is baked for a different model (e.g.
+           the Shockwave clap 10903 baked at 1357 verts for the colossus body vs
+           the 341-vertex projectile disc that shares the id). The OSRS client
+           leaves such a model in its bind pose rather than deforming it, so skip
+           instead of aborting. */
+        return;
     }
     memcpy(state->verts, frame->maya_vertices,
         (size_t)state->vert_count * 3 * sizeof(int16_t));

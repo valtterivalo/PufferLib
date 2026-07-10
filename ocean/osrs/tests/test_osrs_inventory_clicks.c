@@ -231,7 +231,7 @@ static int cell_in_unit_range(const float* out) {
 }
 
 static int test_enriched_feature_counts(void) {
-    CHECK("cell obs features is 35", OSRS_INVENTORY_CELL_OBS_FEATURES == 35);
+    CHECK("cell obs features is 28", OSRS_INVENTORY_CELL_OBS_FEATURES == 28);
     CHECK("equipped obs features is 18", OSRS_EQUIPPED_SELF_OBS_FEATURES == 18);
     return 0;
 }
@@ -241,17 +241,15 @@ static int test_brew_cell_semantics(void) {
     float zero_deltas[6] = {0};
     /* 4-dose Saradomin brew (raw id 6685), no gear, base levels 99. */
     osrs_write_inventory_cell_affordance_features(
-        out, ITEM_NONE, 6685, 4, 1, 0, zero_deltas, 99, 99, 99);
-    CHECK("brew is potion family (drink)", out[17] == 1.0f);
-    CHECK("brew is not food", out[16] == 0.0f);
-    CHECK("brew is not armor", out[18] == 0.0f);
-    CHECK("brew is not weapon", out[19] == 0.0f);
-    CHECK("brew kind6 is brew", out[20] == 1.0f);
+        out, ITEM_NONE, 6685, 4, 0, zero_deltas, 99, 99, 99);
+    CHECK("brew is not armor", out[12] == 0.0f);
+    CHECK("brew is not weapon", out[13] == 0.0f);
+    CHECK("brew kind is brew", out[14] == 1.0f);
     /* osrs_brew_heal_amount(99) == 99*15/100 + 2 == 16; norm == 16/99. */
     CHECK("brew hp-heal norm ~= 16/99",
-          fabsf(out[26] - (16.0f / 99.0f)) < 1e-4f);
-    CHECK("brew has no prayer restore", out[27] == 0.0f);
-    CHECK("brew weapon speed/range are zero", out[33] == 0.0f && out[34] == 0.0f);
+          fabsf(out[19] - (16.0f / 99.0f)) < 1e-4f);
+    CHECK("brew has no prayer restore", out[20] == 0.0f);
+    CHECK("brew weapon speed/range are zero", out[26] == 0.0f && out[27] == 0.0f);
     CHECK("brew cell within [-1,1]", cell_in_unit_range(out));
     return 0;
 }
@@ -262,15 +260,16 @@ static int test_weapon_cell_semantics(void) {
     /* Osmumten's fang: weapon, attack_speed 5, attack_range 1, effect FANG. */
     uint16_t fang_raw = ITEM_DATABASE[ITEM_OSMUMTENS_FANG].item_id;
     osrs_write_inventory_cell_affordance_features(
-        out, ITEM_OSMUMTENS_FANG, fang_raw, 0, 1, 0, zero_deltas, 99, 99, 99);
-    CHECK("fang is weapon", out[19] == 1.0f);
-    CHECK("fang is not armor", out[18] == 0.0f);
-    CHECK("fang is not consumable", out[16] == 0.0f && out[17] == 0.0f);
-    CHECK("fang weapon speed norm > 0", out[33] > 0.0f);
-    CHECK("fang weapon range norm > 0", out[34] > 0.0f);
-    CHECK("fang effect class is damage amp", out[30] == 1.0f);
+        out, ITEM_OSMUMTENS_FANG, fang_raw, 0, 0, zero_deltas, 99, 99, 99);
+    CHECK("fang is weapon", out[13] == 1.0f);
+    CHECK("fang is not armor", out[12] == 0.0f);
+    CHECK("fang is not consumable", out[14] == 0.0f && out[15] == 0.0f &&
+          out[16] == 0.0f && out[17] == 0.0f && out[18] == 0.0f);
+    CHECK("fang weapon speed norm > 0", out[26] > 0.0f);
+    CHECK("fang weapon range norm > 0", out[27] > 0.0f);
+    CHECK("fang effect class is damage amp", out[23] == 1.0f);
     CHECK("fang is not lifesteal/defensive/util",
-          out[29] == 0.0f && out[31] == 0.0f && out[32] == 0.0f);
+          out[22] == 0.0f && out[24] == 0.0f && out[25] == 0.0f);
     CHECK("fang cell within [-1,1]", cell_in_unit_range(out));
     return 0;
 }
@@ -282,6 +281,9 @@ static int test_effect_class4_decoder(void) {
           eff4[0] == 1.0f && eff4[1] == 0.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
     osrs_item_effect_class4(OSRS_ITEM_EFFECT_TWISTED_BOW, eff4);
     CHECK("twisted bow is damage amp only",
+          eff4[0] == 0.0f && eff4[1] == 1.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
+    osrs_item_effect_class4(OSRS_ITEM_EFFECT_VENATOR_BOUNCE, eff4);
+    CHECK("venator bounce is damage amp only",
           eff4[0] == 0.0f && eff4[1] == 1.0f && eff4[2] == 0.0f && eff4[3] == 0.0f);
     osrs_item_effect_class4(OSRS_ITEM_EFFECT_LIGHTBEARER, eff4);
     CHECK("lightbearer is util only",
@@ -330,7 +332,7 @@ static int test_empty_cell_clamp(void) {
     float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
     float zero_deltas[6] = {0};
     osrs_write_inventory_cell_affordance_features(
-        out, ITEM_NONE, 0, 0, 0, 0, zero_deltas, 99, 99, 99);
+        out, ITEM_NONE, 0, 0, 0, zero_deltas, 99, 99, 99);
     CHECK("empty cell not present", out[0] == 0.0f);
     CHECK("empty cell within [-1,1]", cell_in_unit_range(out));
     return 0;

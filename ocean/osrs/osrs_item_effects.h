@@ -384,6 +384,25 @@ static inline int osrs_roll_prepared_attack_damage(
     return hit ? damage : 0;
 }
 
+/* amulet of blood fury: 20% chance on a melee hitsplat to heal 30% of that splat's
+   damage. ref: OSRS wiki Amulet of blood fury. Rolled PER HITSPLAT -- multi-hit
+   weapons (scythe, dragon-claws spec) roll independently for each splat, so the
+   caller invokes this once per splat, not once per swing on summed damage. */
+static inline int osrs_blood_fury_heal_amount(
+    const OsrsEquipmentEffectProfile* profile,
+    AttackStyle style,
+    int damage_dealt,
+    uint32_t* rng_state
+) {
+    if (damage_dealt > 0 &&
+        style == ATTACK_STYLE_MELEE &&
+        osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_BLOOD_FURY) &&
+        encounter_rand_int(rng_state, 5) == 0) {
+        return damage_dealt * 30 / 100;
+    }
+    return 0;
+}
+
 static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
     const OsrsEquipmentEffectProfile* profile,
     OsrsItemEffectState* state,
@@ -420,15 +439,9 @@ static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
         result.heal_amount = damage_dealt / 2;
     }
 
-    /* amulet of blood fury: 20% chance on any melee damage to heal 30% of the
-       damage dealt. ref: OSRS wiki Amulet of blood fury. */
-    if (damage_dealt > 0 &&
-        style == ATTACK_STYLE_MELEE &&
-        osrs_effect_profile_has(profile, OSRS_ITEM_EFFECT_BLOOD_FURY) &&
-        encounter_rand_int(rng_state, 5) == 0) {
-        result.heal_amount += damage_dealt * 30 / 100;
-    }
-
+    /* blood fury is per-hitsplat, handled by the caller via
+       osrs_blood_fury_heal_amount; this finalizer only does the swing-level
+       confliction state and sanguinesti heal. */
     return result;
 }
 

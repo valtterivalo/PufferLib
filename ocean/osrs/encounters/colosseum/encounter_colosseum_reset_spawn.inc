@@ -40,53 +40,66 @@ static int col_find_free_npc(ColosseumState* s) {
 }
 
 static void col_reset_current_wave_score_progress(ColosseumState* s) {
-    s->current_wave_kills = 0;
     s->current_wave_total_killable = 0;
-    s->current_wave_kill_progress = 0.0f;
+    s->current_wave_hp_pool = 0;
+    s->current_wave_fresh_damage = 0.0f;
 }
 
 static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
     if (s->wave == COLO_WAVE_BOSS) return;
     if (col_type_is_hazard_entity(type)) return;
     s->current_wave_total_killable++;
+    s->current_wave_hp_pool += COLO_NPC_STATS[type].hp;
 }
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
-    /* hazard entities never stamped collision; unstamping would erase a real
-       NPC's overlapping footprint. */
-    if (!col_type_is_hazard_entity(npc->type)) {
+    /* hazard entities and warbanders never stamped collision; unstamping would
+       erase a real NPC's overlapping footprint (warbanders overlap freely). */
+    if (!col_type_is_hazard_entity(npc->type) && !col_type_is_warbander(npc->type)) {
         int size = col_npc_effective_size(npc);
         col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
     }
     npc->active = 0;
 }
 
-/** Roll the persistent manticore cycle once at spawn. */
-static void col_roll_manticore_fixed_orb_cycle(ColosseumState* s, ColoManticoreState* mc) {
+/** Roll one manticore orb cycle into `out`. Mantimayhem III shuffles all three
+    styles; otherwise melee is always last and only the magic/ranged lead varies. */
+static void col_roll_manticore_orb_cycle(ColosseumState* s, AttackStyle out[3]) {
     int mantimayhem = s->modifiers.tier[COLO_MOD_MANTIMAYHEM];
     if ((s->modifiers.active_mask & (1u << COLO_MOD_MANTIMAYHEM)) == 0) {
         mantimayhem = 0;
     }
     if (mantimayhem >= 3) {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_RANGED;
+        out[1] = ATTACK_STYLE_MAGIC;
+        out[2] = ATTACK_STYLE_MELEE;
         for (int o = 2; o > 0; o--) {
             int j = encounter_rand_int(&s->rng_state, o + 1);
-            AttackStyle tmp = mc->fixed_orb_style[o];
-            mc->fixed_orb_style[o] = mc->fixed_orb_style[j];
-            mc->fixed_orb_style[j] = tmp;
+            AttackStyle tmp = out[o];
+            out[o] = out[j];
+            out[j] = tmp;
         }
     } else if (encounter_rand_int(&s->rng_state, 2) == 0) {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_RANGED;
+        out[1] = ATTACK_STYLE_MAGIC;
+        out[2] = ATTACK_STYLE_MELEE;
     } else {
-        mc->fixed_orb_style[0] = ATTACK_STYLE_MAGIC;
-        mc->fixed_orb_style[1] = ATTACK_STYLE_RANGED;
-        mc->fixed_orb_style[2] = ATTACK_STYLE_MELEE;
+        out[0] = ATTACK_STYLE_MAGIC;
+        out[1] = ATTACK_STYLE_RANGED;
+        out[2] = ATTACK_STYLE_MELEE;
     }
+}
+
+/** The wave-shared manticore orb cycle, rolled once at the wave's first manticore
+    spawn. OSRS pairs always fire the same pattern, so the second (and any later)
+    manticore copies this instead of rolling its own. */
+static const AttackStyle* col_wave_manticore_orb_cycle(ColosseumState* s) {
+    if (!s->wave_manticore_pattern_rolled) {
+        col_roll_manticore_orb_cycle(s, s->wave_manticore_orb_style);
+        s->wave_manticore_pattern_rolled = 1;
+    }
+    return s->wave_manticore_orb_style;
 }
 
 /** initialize a fresh NPC of `type` at (x, y) from the placeholder stat table. */
@@ -96,13 +109,16 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->type = type;
     colo_npc_init_type_state(npc);
     if (type == COLO_MANTICORE) {
-        col_roll_manticore_fixed_orb_cycle(s, colo_npc_manticore(npc));
+        const AttackStyle* cycle = col_wave_manticore_orb_cycle(s);
+        ColoManticoreState* mc = colo_npc_manticore(npc);
+        for (int o = 0; o < 3; o++) mc->fixed_orb_style[o] = cycle[o];
     }
     const ColoNpcStats* st = &COLO_NPC_STATS[type];
     npc->x = x;
     npc->y = y;
     npc->hp = st->hp;
     npc->max_hp = st->hp;
+    npc->min_hp_seen = st->hp;
     npc->size = st->size;
     npc->render_id = ++s->next_npc_render_id;
     npc->attack_timer = st->attack_speed;
@@ -113,7 +129,10 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->stun_timer = st->stun_on_spawn;
     npc->aggro_target = -1;
     npc->attack_visual_target = -1;
-    if (!col_type_is_hazard_entity(type) && col_npc_effective_size(npc) > 0)
+    /* warbanders are exempt from NPC collision both ways (observed: they spawn
+       on top of primaries and walk through every NPC), so they never stamp. */
+    if (!col_type_is_hazard_entity(type) && !col_type_is_warbander(type) &&
+            col_npc_effective_size(npc) > 0)
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }
 
@@ -164,36 +183,59 @@ static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
     return n;
 }
 
-/** uniform free tile inside the warband centre box (B2(d)): rejection-sample,
-    then fall back to a deterministic scan; asserts the box is not full. */
+/** warbander spawn tile: static-free, in-grid, inside the boss clamp when
+    active, and not the player's tile. NPC OVERLAP IS ALLOWED — warbanders are
+    collision-exempt (observed spawning on top of primaries). */
+static int col_warband_spawn_tile_ok(const ColosseumState* s, int x, int y) {
+    if (col_static_blocked(x, y)) return 0;
+    int gx, gy;
+    if (!col_grid_index(x, y, &gx, &gy)) return 0;
+    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
+    return !(x == s->player.x && y == s->player.y);
+}
+
+/** uniform ok tile inside the warband centre box (B2(d), the ranger's yellow
+    box): rejection-sample, then fall back to a deterministic scan; asserts the
+    box is not full. */
 static void col_draw_warband_box_tile(ColosseumState* s, int* ox, int* oy) {
     int span_x = COLO_WARBAND_BOX_MAX_X - COLO_WARBAND_BOX_MIN_X + 1;
     int span_y = COLO_WARBAND_BOX_MAX_Y - COLO_WARBAND_BOX_MIN_Y + 1;
     for (int t = 0; t < 32; t++) {
         int x = COLO_WARBAND_BOX_MIN_X + encounter_rand_int(&s->rng_state, span_x);
         int y = COLO_WARBAND_BOX_MIN_Y + encounter_rand_int(&s->rng_state, span_y);
-        if (col_spawn_footprint_free(s, x, y, 1)) { *ox = x; *oy = y; return; }
+        if (col_warband_spawn_tile_ok(s, x, y)) { *ox = x; *oy = y; return; }
     }
     for (int y = COLO_WARBAND_BOX_MIN_Y; y <= COLO_WARBAND_BOX_MAX_Y; y++)
         for (int x = COLO_WARBAND_BOX_MIN_X; x <= COLO_WARBAND_BOX_MAX_X; x++)
-            if (col_spawn_footprint_free(s, x, y, 1)) { *ox = x; *oy = y; return; }
+            if (col_warband_spawn_tile_ok(s, x, y)) { *ox = x; *oy = y; return; }
     assert(0 && "warband centre box full");
 }
 
-/** place a 1x1 warbander on the first free tile adjacent to (ax, ay)
-    (deterministic offsets per the B2(d) note); falls back to a box tile. */
-static void col_spawn_warbander_adjacent(ColosseumState* s, ColoNpcType type, int ax, int ay) {
-    static const int OFF[8][2] = {
-        {-1, 0}, {1, 0}, {0, 1}, {0, -1}, {-1, 1}, {1, 1}, {-1, -1}, {1, -1} };
-    for (int o = 0; o < 8; o++) {
-        int x = ax + OFF[o][0], y = ay + OFF[o][1];
-        if (!col_spawn_footprint_free(s, x, y, 1)) continue;
-        col_spawn_npc_at(s, type, x, y);
-        return;
+/** B2(d) fixed spawn formation around the archer: seer = archer+2E, berserker
+    = archer+1E+1N, quartet member = archer+1E+1S (diamond, empty middle at
+    archer+1E). If the formation tile is statically blocked, take the nearest
+    ok tile by outward shell scan (box tile as a last resort). Also assigns the
+    member's surround preference (formation_dir). */
+static void col_spawn_warbander_formation(
+    ColosseumState* s, ColoNpcType type, int ax, int ay,
+    int dx, int dy, int dir) {
+    int x = ax + dx, y = ay + dy;
+    if (!col_warband_spawn_tile_ok(s, x, y)) {
+        int found = 0;
+        for (int r = 1; r <= 3 && !found; r++) {
+            for (int oy = -r; oy <= r && !found; oy++) {
+                for (int ox = -r; ox <= r && !found; ox++) {
+                    if (ox > -r && ox < r && oy > -r && oy < r) continue;
+                    if (col_warband_spawn_tile_ok(s, x + ox, y + oy)) {
+                        x += ox; y += oy; found = 1;
+                    }
+                }
+            }
+        }
+        if (!found) col_draw_warband_box_tile(s, &x, &y);
     }
-    int x, y;
-    col_draw_warband_box_tile(s, &x, &y);
-    col_spawn_npc_at(s, type, x, y);
+    int slot = col_spawn_npc_at(s, type, x, y);
+    colo_npc_warband(&s->npcs[slot])->formation_dir = dir;
 }
 
 /** A26: the Dynamic Duo pair spawns NEAR its primary, off-anchor allowed ("The
@@ -296,6 +338,8 @@ static void col_spawn_wave(ColosseumState* s) {
     /* B2(a): re-arm the shared warband cycle; the step loop anchors it to the
        wave's first actionable tick N. */
     s->warband_cycle_anchor = -1;
+    /* re-arm the wave-shared manticore orb cycle; rolled at the first manticore. */
+    s->wave_manticore_pattern_rolled = 0;
 
     if (s->wave < 0 || s->wave >= COLO_NUM_WAVES) return;
     const ColoWaveDef* def = &COLO_WAVES[s->wave];
@@ -315,13 +359,19 @@ static void col_spawn_wave(ColosseumState* s) {
         for (int i = 0; i < def->count; i++) {
             if ((ColoNpcType)def->types[i] != COLO_FREMENNIK_ARCHER) continue;
             col_draw_warband_box_tile(s, &archer_x, &archer_y);
-            col_spawn_npc_at(s, COLO_FREMENNIK_ARCHER, archer_x, archer_y);
+            int slot = col_spawn_npc_at(s, COLO_FREMENNIK_ARCHER, archer_x, archer_y);
+            colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_WEST;
         }
         for (int i = 0; i < def->count; i++) {
             ColoNpcType type = (ColoNpcType)def->types[i];
             if (!col_type_is_warbander(type) || type == COLO_FREMENNIK_ARCHER) continue;
             assert(archer_x >= 0 && "warband def lists berserker/seer without an archer");
-            col_spawn_warbander_adjacent(s, type, archer_x, archer_y);
+            if (type == COLO_FREMENNIK_SEER)
+                col_spawn_warbander_formation(s, type, archer_x, archer_y,
+                    2, 0, COLO_WARBAND_FORM_EAST);
+            else
+                col_spawn_warbander_formation(s, type, archer_x, archer_y,
+                    1, 1, COLO_WARBAND_FORM_NORTH);
         }
 
         int candidates[COLO_NUM_SPAWN_ANCHORS];
@@ -347,18 +397,29 @@ static void col_spawn_wave(ColosseumState* s) {
                 col_spawn_pair_adjacent(s, type, ax, ay);
         }
 
-        /* Quartet: one extra random warbander every wave, also centre-box; it
-           holds the SOUTH diamond slot (B2(c)). */
+        /* Quartet: one extra random warbander every wave at archer+1E+1S,
+           completing the diamond; it holds the SOUTH slot (B2(c)). */
         if (col_mod_active(s, COLO_MOD_QUARTET)) {
             ColoNpcType extra = COLO_WARBAND_TYPES[encounter_rand_int(&s->rng_state, 3)];
-            int qx, qy;
-            col_draw_warband_box_tile(s, &qx, &qy);
-            int slot = col_spawn_npc_at(s, extra, qx, qy);
-            colo_npc_warband(&s->npcs[slot])->formation_dir = COLO_WARBAND_FORM_SOUTH;
+            assert(archer_x >= 0 && "quartet without an archer spawn");
+            col_spawn_warbander_formation(s, extra, archer_x, archer_y,
+                1, -1, COLO_WARBAND_FORM_SOUTH);
         }
     }
 
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
+    /* researched wave-start gates: NPCs appear this tick (obs t6), move from
+       t7, and no NPC attacks before t9; wave NPCs open with ready attack
+       timers so the first attack can land exactly when the gate lifts. Sol
+       keeps his own opening cadence; bees are hazard DoT and keep theirs. */
+    s->wave_ready_delay = COLO_WAVE_READY_TICKS;
+    s->wave_attack_delay = COLO_WAVE_ATTACK_GATE_TICKS;
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        if (npc->type == COLO_BEE_SWARM || npc->type == COLO_SOL_HEREDIT) continue;
+        npc->attack_timer = 0;
+    }
     col_modifiers_on_wave_spawn(s);
 }
 
@@ -394,7 +455,8 @@ static void col_spawn_reinforcements(ColosseumState* s) {
         for (int try_x = base_x; try_x + size - 1 <= COLO_GATE_MAX_X; try_x++) {
             if (col_spawn_footprint_free(s, try_x, y, size)) { x = try_x; break; }
         }
-        col_spawn_npc_at(s, type, x, y);
+        int slot = col_spawn_npc_at(s, type, x, y);
+        s->npcs[slot].spawned_as_reinforcement = 1;
         base_x = x + size;
     }
 
@@ -476,6 +538,22 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     s->surge_doses = surge_doses;
 }
 
+/** scaffold (remove_brews): strip every Saradomin-brew dose from the seeded
+    inventory by emptying those cells. Brews are the only HP-healing consumable, so
+    this isolates whether the agent leans on them as a crutch through wave ~3
+    instead of learning to avoid damage. Run before the consumable-counter sync so
+    brew_doses recomputes to 0. */
+static void col_strip_brews_from_inventory(ColosseumState* s) {
+    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
+        ColoInvCell* cell = &s->inventory_cells[i];
+        if (cell->dose == 0) continue;
+        OsrsInventoryClickResolution resolution =
+            osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
+        if (resolution.consumable_kind == OSRS_CONSUMABLE_BREW)
+            *cell = osrs_inventory_cell_empty();
+    }
+}
+
 
 static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
     col_build_npc_stats();
@@ -484,7 +562,13 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     int saved_start = ctx->config.start_wave;
     uint32_t saved_rng = s->rng_state;
     col_context_clear_render_events(ctx);
+    /* The signature-keyed obs memos survive the reset (see ColoObsMemoCaches): every
+       entry self-corrects against a content signature recomputed from live state, so
+       restoring them is bit-identical and lets the respawn's identical starting loadout
+       skip the first-obs best-gear rebuild that dominated obs time under fast deaths. */
+    ColoObsMemoCaches saved_obs_memos = s->obs_memos;
     memset(s, 0, sizeof(ColosseumState));
+    s->obs_memos = saved_obs_memos;
     s->start_wave = saved_start;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
@@ -492,6 +576,11 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
     s->min_sol_hp_seen = COLO_SOL_HP_MAX;
+    /* scaffold: seed the damage-scale mirror from config so a freshly-reset state
+       is immediately safe (memset would leave it 0.0 = accidental full invuln).
+       col_step_ctx re-mirrors this each tick; a static config scale also works
+       without ever stepping. Default config value is 1.0 = bit-identical no-op. */
+    s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
     /* player: maxed combat stats + live equipped melee loadout */
@@ -516,11 +605,14 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
                 (int)s->active_loadout_profile);
             abort();
     }
+    if (ctx->config.episode_max_ticks_override > 0)
+        s->episode_max_ticks = ctx->config.episode_max_ticks_override;
     const uint8_t* const* loadouts = col_loadouts_for_profile(s->active_loadout_profile);
     encounter_apply_loadout(&s->player, loadouts[COLO_GEAR_MELEE], GEAR_MELEE);
     memset(s->player.inventory, ITEM_NONE, sizeof(s->player.inventory));
     memset(s->player.num_items_in_slot, 0, sizeof(s->player.num_items_in_slot));
     col_seed_inventory_cells_from_gameplay_loadout(s);
+    if (ctx->config.remove_brews) col_strip_brews_from_inventory(s);
 
     const ColoSupplyLoadout* supplies = &COLO_SUPPLY_LOADOUTS[s->active_loadout_profile];
     s->full_supplies = *supplies;
@@ -552,20 +644,32 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave = effective_start;
     s->wave_spawn_target = effective_start;
     s->wave_spawn_delay = 0;
+    s->wave_ready_delay = 0;
+    s->wave_attack_delay = 0;
     s->log.wave_reached = effective_start;
 
-    /* A16+B6: a wave-1 run opens with the mandatory fixed draft (Relentless /
-       Blasphemy / Frailty); the wave spawns only after the pick, then runs the
-       6-tick ready delay. start_wave>1 runs (curriculum/lab) DETERMINISTICALLY
-       SKIP every prior draft — they start modifier-free and meet their first
-       draft after clearing the start wave (auto-rolling 1..11 random modifiers
-       would make curriculum difficulty wildly seed-dependent). */
+    /* Wave 1 IS drafted (user correction 2026-07-07): a modifier is picked at
+       challenge start, 12 picks per full run. The start draft uniquely allows
+       free movement — the player roams to choose the wave-1 start tile, then
+       the pick starts the researched sequence (5 empty ticks, spawn resolved
+       at t5 against the live tile, visible t6, moving t7, attacking t9).
+       start_wave>0 (user correction 2026-07-10, superseding 07-07's bare
+       starts): an organic run entering wave N carries N modifier picks and
+       spent supplies, so late starts synthesize that history (or replay a
+       recorded organic wave entry) and then meet their own pre-wave draft
+       LIVE, movement-frozen like every mid-run draft. The old bare start
+       survives as late_start_state_mode 0. */
     if (effective_start == 0) {
         col_modifier_open_draft(s, 0);
-        assert(s->modifiers.draft_pending && "wave-1 fixed draft failed to open");
+        if (s->modifiers.draft_pending) s->modifiers.draft_free_movement = 1;
+        else s->wave_spawn_delay = col_wave_entry_delay_ticks(0);
+    } else if (ctx->config.late_start_state_mode > 0) {
+        col_apply_late_start_entry_state(s, ctx, effective_start);
+        col_modifier_open_draft(s, effective_start);
+        if (!s->modifiers.draft_pending)
+            s->wave_spawn_delay = col_wave_entry_delay_ticks(effective_start);
     } else {
-        s->wave_ready_delay = COLO_START_READY_TICKS;
-        col_spawn_wave(s);
+        s->wave_spawn_delay = col_wave_entry_delay_ticks(effective_start);
     }
 }
 

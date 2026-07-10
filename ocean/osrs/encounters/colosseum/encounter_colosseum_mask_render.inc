@@ -14,16 +14,19 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     col_refresh_current_obs_slots_ctx(s, ctx);
     int offset = 0;
 
-    /* HEAD_MOVE (25): idle always valid; each walk/run valid iff the target tile
-       is walkable (in-arena, boss-arena bound on wave 12, not pillar/NPC-blocked).
-       B6: the player is frozen while a draft is open — only idle is valid. */
-    int frozen = s->modifiers.draft_pending;
+    /* HEAD_PRIMARY (49): noop always valid, move actions follow old movement
+       legality, attack actions require a live targetable obs slot. */
+    int frozen = s->modifiers.draft_pending && !s->modifiers.draft_free_movement;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
         int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
+    /* Inventory clicks run before primary and can clear the lock, so the held
+       target stays valid for gear switch plus re-attack ticks. */
+    for (int n = 0; n < COLO_OBS_NPCS; n++)
+        mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
     /* HEAD_PRAYER (5): no_change always valid; off valid iff one is active;
        set melee/ranged/magic valid iff prayer points remain. */
@@ -33,23 +36,46 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
-    /* HEAD_TARGET (COLO_OBS_NPCS+1): none always valid; slot valid iff it holds a
-       live attackable NPC and the player is not draft-frozen (B6). */
-    mask[offset++] = 1.0f;
-    for (int n = 0; n < COLO_OBS_NPCS; n++)
-        mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
-
-    int inventory_cell_actionable[COLO_INVENTORY_DISPLAY_SLOTS];
-    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
-        inventory_cell_actionable[cell] = col_inventory_cell_actionable(s, cell);
+    /* Per-category inventory heads. Classify each cell once by its click-action
+       (EQUIP -> gear slot, EAT, DRINK). The equip heads (one per gear slot) then
+       only unmask the cells whose item belongs to that slot, so head g can equip
+       at most one item into slot g; eat/drink are one head each. This makes a
+       one-tick full switch possible (all slot heads fire in parallel) while
+       "5 helmets" is structurally impossible. Validity uses the same gates as
+       col_inventory_cell_actionable so the mask never unmasks a useless action. */
     int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
-    for (int head = 0; head < COLO_INV_CLICK_HEADS; head++) {
-        mask[offset++] = 1.0f;
-        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-            mask[offset++] = (inventory_heads_enabled &&
-                inventory_cell_actionable[cell]) ? 1.0f : 0.0f;
+    int cell_equip_slot[COLO_INVENTORY_DISPLAY_SLOTS];  /* gear slot if equippable, else -1 */
+    int cell_can_eat[COLO_INVENTORY_DISPLAY_SLOTS];
+    int cell_can_drink[COLO_INVENTORY_DISPLAY_SLOTS];
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        cell_equip_slot[cell] = -1;
+        cell_can_eat[cell] = 0;
+        cell_can_drink[cell] = 0;
+        OsrsInventoryClickResolution r =
+            osrs_inventory_cell_click_interpret(&s->inventory_cells[cell], OSRS_CLICK_TICK_FIRST);
+        if (r.click_action == OSRS_CLICK_EQUIP) {
+            if (col_can_equip_from_cell(s, cell))
+                cell_equip_slot[cell] = osrs_item_gear_slot(s->inventory_cells[cell].item_idx);
+        } else if (r.click_action == OSRS_CLICK_EAT) {
+            cell_can_eat[cell] = col_can_eat_consumable_kind(s, r.consumable_kind);
+        } else if (r.click_action == OSRS_CLICK_DRINK) {
+            cell_can_drink[cell] = s->inventory_cells[cell].dose > 0 &&
+                s->player.potion_timer == 0 &&
+                col_drink_has_effect(s, r.consumable_kind);
         }
     }
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        mask[offset++] = 1.0f;  /* noop */
+        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+            mask[offset++] = (inventory_heads_enabled && cell_equip_slot[cell] == slot)
+                ? 1.0f : 0.0f;
+    }
+    mask[offset++] = 1.0f;  /* EAT noop */
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        mask[offset++] = (inventory_heads_enabled && cell_can_eat[cell]) ? 1.0f : 0.0f;
+    mask[offset++] = 1.0f;  /* DRINK noop */
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
+        mask[offset++] = (inventory_heads_enabled && cell_can_drink[cell]) ? 1.0f : 0.0f;
 
     /* HEAD_SPEC (3): none, arm equipped spec weapon, disarm. */
     mask[offset++] = 1.0f;
@@ -59,9 +85,13 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         ? 1.0f : 0.0f;
     mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
-    /* HEAD_MODIFIER_SELECT (4): none always valid; pick option k valid ONLY while a
-       draft is pending and that option slot holds a real modifier id. */
-    mask[offset++] = 1.0f;
+    /* HEAD_MODIFIER_SELECT (4): no-op valid EXCEPT while a draft is pending, when a
+       pick is forced -- otherwise an argmax policy that prefers the no-op latches on
+       it every (frozen, static-obs) tick and soft-locks the draft until timeout.
+       col_modifier_open_draft only sets draft_pending with >=1 real option, so this
+       never produces an all-masked head. pick option k valid ONLY while a draft is
+       pending and that option slot holds a real modifier id. */
+    mask[offset++] = s->modifiers.draft_pending ? 0.0f : 1.0f;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
         mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
             ? 1.0f : 0.0f;
@@ -73,16 +103,22 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
     /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
-       piety/rigour valid with prayer points; augury valid only in the magic set
-       (it boosts magic accuracy + damage). */
+       piety/rigour/augury all points-only (no weapon-style gate). Augury was
+       formerly gated on the currently-equipped weapon being magic, which the
+       harness builds against END-of-tick state, so the agent could never select
+       Augury on the same tick it equipped a magic weapon (it had to wait one tick,
+       costing the first magic attack its accuracy + damage). The lazy loadout
+       recompute already reads post-equip equipped[] + offensive_prayer, so a
+       same-tick equip+Augury lands shadow x3 + Augury +4% on that tick's attack;
+       Augury on a non-magic weapon is a harmless accuracy no-op exactly as
+       Piety/Rigour already are off-style. Matches the zulrah precedent. */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
-    mask[offset++] = (col_equipped_weapon_attack_style(&s->player) == ATTACK_STYLE_MAGIC &&
-                      s->player.current_prayer > 0 &&
+    mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 
     /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,
@@ -145,13 +181,35 @@ static void col_prepare_render_player(const ColosseumState* s, int spec_fired_ki
     }
 }
 
+/* Sol Heredit plays a distinct animation per attack. The sim sets
+   sol.last_attack_kind on the tick the attack fires (col_sol_pick_variant), so the
+   renderer keys off it. The deob _TELEGRAPH-named sequences ARE the wind-up-and-
+   execute attack anims (every Sol attack telegraphs its AoE); the plain
+   MELEE_ATTACK 10882 is the instant jab, unused here. The triple lengthens (the
+   delayed final hit) at phase >= 3 (50% HP and below), matching the sim's own
+   col_sol_start_triple_parry gate. The generated single attack_anim used to be
+   10876, his arena-entry JUMP, which is why every attack looked like the leap-in. */
+static int col_sol_render_attack_anim_id(const SolHereditState* sol) {
+    switch (sol->last_attack_kind) {
+        case COLO_SOL_ATTACK_SPEAR:   return 10883;  /* MELEE_ATTACK_TELEGRAPH */
+        case COLO_SOL_ATTACK_SHIELD:  return 10885;  /* SHIELDSLAM_TELEGRAPH */
+        case COLO_SOL_ATTACK_GRAPPLE: return 10884;  /* GRAPPLE_ATTACK_TELEGRAPH */
+        case COLO_SOL_ATTACK_TRIPLE:  return sol->phase >= 3 ? 10886 : 10887;
+        default: break;
+    }
+    return 10883;  /* default to the spear attack, never the entry jump */
+}
+
 static int col_npc_render_attack_anim_id(
+    const ColosseumState* s,
     const ColosseumContext* ctx,
     int npc_slot,
     const ColoNPC* npc,
     int def_id
 ) {
     assert(ctx);
+    if (npc->type == COLO_SOL_HEREDIT)
+        return col_sol_render_attack_anim_id(&s->sol);
     if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[npc_slot])
         return 10868;
     switch (ctx->npc_render_attack_anim[npc_slot]) {
@@ -164,62 +222,34 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
-/** Render-only: a deterministic free tile adjacent to the thrall's current sim
-    target NPC (s->thrall_target_slot), so the viewer shows it standing to attack
-    the enemy it auto-attacks rather than glued to the player. The sim never
-    positions the thrall (its damage is not range-gated), so the viewer scans the
-    ring around the target footprint and picks the walkable tile nearest the
-    player (the near side a melee/ranged actor would stand on). Falls back to the
-    target's own tile, then to the player-adjacent scan, then the player tile when
-    the thrall has no live target. Both the render-entity and projectile emitters
-    call this so the model and its bolt share one source tile. */
+/** Render-only: a free, visible tile next to the PLAYER for the allied thrall to
+    stand on. In OSRS the thrall loosely follows its caster and lobs its bolt at
+    whatever the caster fights, so it lives beside the player rather than glued to
+    (or inside) an enemy. Scans the player-adjacent ring first, then widens one
+    tile out, rejecting static blocks, NPC footprints, and the player's own tile
+    (col_npc_blocked over a 1x1 footprint covers all three), so the thrall is
+    always drawn on a clear tile instead of hidden under the player or behind a
+    colossus. Both the render-entity and projectile emitters call this so the
+    model and its bolt share one source tile. */
 static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
-    static const int ADJ[8][2] = {
-        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
-        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
-    int slot = s->thrall_target_slot;
-    if (col_npc_is_thrall_target(s, slot)) {
-        const ColoNPC* target = &s->npcs[slot];
-        int size = col_npc_effective_size(target);
-        int best_x = -1, best_y = -1, best_dist = 0;
-        for (int dx = -1; dx <= size; dx++) {
-            for (int dy = -1; dy <= size; dy++) {
-                int on_footprint = dx >= 0 && dx < size && dy >= 0 && dy < size;
-                if (on_footprint) continue;
-                int x = target->x + dx;
-                int y = target->y + dy;
-                if (!col_player_walkable((void*)s, x, y)) continue;
-                int ddx = x - s->player.x;
-                int ddy = y - s->player.y;
-                int dist = (ddx < 0 ? -ddx : ddx) > (ddy < 0 ? -ddy : ddy)
-                    ? (ddx < 0 ? -ddx : ddx) : (ddy < 0 ? -ddy : ddy);
-                if (best_x < 0 || dist < best_dist) {
-                    best_x = x;
-                    best_y = y;
-                    best_dist = dist;
-                }
-            }
-        }
-        if (best_x >= 0) {
-            *out_x = best_x;
-            *out_y = best_y;
-            return;
-        }
-        *out_x = target->x;
-        *out_y = target->y;
-        return;
-    }
-    for (int a = 0; a < 8; a++) {
-        int x = s->player.x + ADJ[a][0];
-        int y = s->player.y + ADJ[a][1];
-        if (col_player_walkable((void*)s, x, y)) {
+    static const int RING[16][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},          /* adjacent cardinals */
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1},        /* adjacent diagonals */
+        {0, 2}, {2, 0}, {-2, 0}, {0, -2},          /* one tile further out */
+        {1, 2}, {2, 1}, {-1, 2}, {-2, 1} };
+    for (int a = 0; a < 16; a++) {
+        int x = s->player.x + RING[a][0];
+        int y = s->player.y + RING[a][1];
+        if (!col_npc_blocked((void*)s, x, y, 1)) {
             *out_x = x;
             *out_y = y;
             return;
         }
     }
+    /* a tight pile-in left no clear neighbour: still draw the thrall off the
+       player tile rather than dropping it. */
     *out_x = s->player.x;
-    *out_y = s->player.y;
+    *out_y = s->player.y + 1;
 }
 
 /** populate render entities (player + active NPCs). */
@@ -264,9 +294,9 @@ static void col_fill_render_entities_ctx(
         if (npc->death_ticks > 0)
             npc_anim_id = col_npc_death_anim_id(npc->type);
         else if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[i])
-            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
+            npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
         else if (npc->attacked_this_tick)
-            npc_anim_id = col_npc_render_attack_anim_id(ctx, i, npc, def_id);
+            npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];
         OsrsNpcRenderEntitySpec npc_spec = {
             .npc_def_id = def_id,
@@ -315,49 +345,18 @@ static void col_fill_render_entities_ctx(
     if (s->thrall_active && n < max_entities) {
         int tx, ty;
         col_thrall_render_tile(s, &tx, &ty);
-        /* hide the thrall when the player stands on its render tile: the tile
-           picker falls back to the player's own tile when no walkable neighbour
-           exists, and drawing the thrall under the player looks wrong. */
-        if (tx != s->player.x || ty != s->player.y) {
-            RenderEntity* re = &out[n++];
-            OsrsNpcRenderEntitySpec thrall_spec = {
-                .npc_def_id = COLO_NPC_DEF_ID_THRALL,
-                .npc_slot = COLO_NPC_SLOT_THRALL,
-                .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
-                .npc_visible = 1,
-                .npc_size = 1,
-                .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
-                .x = tx,
-                .y = ty,
-                .dest_x = tx,
-                .dest_y = ty,
-                .current_hitpoints = 1,
-                .base_hitpoints = 1,
-                .attack_style_this_tick = ATTACK_STYLE_NONE,
-                .hit_landed_this_tick = 0,
-                .hit_damage = 0,
-                .hit_was_successful = 0,
-                .hit_spell_type = ENCOUNTER_SPELL_NONE,
-                .attack_target_entity_idx = 0,
-            };
-            osrs_render_entity_from_npc_spec(&thrall_spec, re);
-            re->debug_npc_type_name = "Arceuus Thrall";
-        }
-    }
-
-    if (s->solarflare.active && n < max_entities) {
         RenderEntity* re = &out[n++];
-        OsrsNpcRenderEntitySpec orb_spec = {
-            .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
-            .npc_slot = COLO_NPC_SLOT_SOLARFLARE,
-            .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID,
+        OsrsNpcRenderEntitySpec thrall_spec = {
+            .npc_def_id = COLO_NPC_DEF_ID_THRALL,
+            .npc_slot = COLO_NPC_SLOT_THRALL,
+            .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
             .npc_visible = 1,
             .npc_size = 1,
-            .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
-            .x = s->solarflare.x,
-            .y = s->solarflare.y,
-            .dest_x = s->solarflare.x,
-            .dest_y = s->solarflare.y,
+            .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
+            .x = tx,
+            .y = ty,
+            .dest_x = tx,
+            .dest_y = ty,
             .current_hitpoints = 1,
             .base_hitpoints = 1,
             .attack_style_this_tick = ATTACK_STYLE_NONE,
@@ -367,8 +366,38 @@ static void col_fill_render_entities_ctx(
             .hit_spell_type = ENCOUNTER_SPELL_NONE,
             .attack_target_entity_idx = 0,
         };
-        osrs_render_entity_from_npc_spec(&orb_spec, re);
-        re->debug_npc_type_name = "Solar flare";
+        osrs_render_entity_from_npc_spec(&thrall_spec, re);
+        re->debug_npc_type_name = "Arceuus Thrall";
+    }
+
+    if (s->solarflare.active) {
+        for (int p = 0; p < COLO_NUM_PILLARS && n < max_entities; p++) {
+            int x, y;
+            col_solarflare_tile(p, s->solarflare.step, &x, &y);
+            RenderEntity* re = &out[n++];
+            OsrsNpcRenderEntitySpec orb_spec = {
+                .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
+                .npc_slot = COLO_NPC_SLOT_SOLARFLARE + p,
+                .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p,
+                .npc_visible = 1,
+                .npc_size = 1,
+                .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
+                .x = x,
+                .y = y,
+                .dest_x = x,
+                .dest_y = y,
+                .current_hitpoints = 1,
+                .base_hitpoints = 1,
+                .attack_style_this_tick = ATTACK_STYLE_NONE,
+                .hit_landed_this_tick = 0,
+                .hit_damage = 0,
+                .hit_was_successful = 0,
+                .hit_spell_type = ENCOUNTER_SPELL_NONE,
+                .attack_target_entity_idx = 0,
+            };
+            osrs_render_entity_from_npc_spec(&orb_spec, re);
+            re->debug_npc_type_name = "Solar flare";
+        }
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);

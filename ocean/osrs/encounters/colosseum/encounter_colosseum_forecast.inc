@@ -175,9 +175,13 @@ static ColoForecastLanding col_step_out_forecast_action_landing_ctx(
         if (ty > landing.land_y) dy = 1;
         else if (ty < landing.land_y) dy = -1;
 
+        /* mirror of encounter_move_to_target: a diagonal step is legal only when
+           BOTH shared-corner tiles are walkable (OSRS no-corner-cut rule) */
         int moved = 0;
         if (dx != 0 && dy != 0 &&
-                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy)) {
+                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy) &&
+                col_player_walkable((void*)s, landing.land_x + dx, landing.land_y) &&
+                col_player_walkable((void*)s, landing.land_x, landing.land_y + dy)) {
             landing.land_x += dx;
             landing.land_y += dy;
             moved = 1;
@@ -454,6 +458,54 @@ static int col_forecast_local_dist_to_player(
     return encounter_dist_to_npc(player_x, player_y, npc->x, npc->y, npc->size);
 }
 
+/** Forecast mirror of col_npc_melee_adjacent_to_player (footprint cardinal). */
+static int col_forecast_local_melee_adjacent(
+    const ColoForecastNpcLocal* npc,
+    int player_x,
+    int player_y
+) {
+    return entity_has_line_of_sight(
+        NULL, 0, npc->x, npc->y, npc->size, player_x, player_y, 1, 1);
+}
+
+/** Conservative distance proof that a forecast NPC cannot threaten a landing. */
+static int col_forecast_npc_threat_distance_impossible(
+    const ColoForecastNpcLocal* npc,
+    int player_x,
+    int player_y,
+    int horizon
+) {
+    int attack_reach = npc->attack_range;
+    int steps_per_tick = npc->can_move ? 1 : 0;
+    if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
+        attack_reach = 1;
+        steps_per_tick = COLO_WARBAND_TILES_PER_TICK;
+    } else if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_SOL) {
+        attack_reach = 15;
+        steps_per_tick = npc->can_move ? 1 : 0;
+    }
+    int dist = col_forecast_local_dist_to_player(npc, player_x, player_y);
+    return dist > attack_reach + steps_per_tick * horizon;
+}
+
+/** Return true when all live forecast NPCs are too far away to write threats. */
+static int col_forecast_action_rollout_writes_no_threats(
+    const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
+    const int slots[COLO_MAX_NPCS],
+    int slot_count,
+    const ColoStepOutForecastAction* action,
+    int horizon
+) {
+    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
+        int i = slots[slot_idx];
+        if (!col_forecast_npc_threat_distance_impossible(
+                &base_npcs[i], action->land_x, action->land_y, horizon)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int col_forecast_warband_adjacent(
     const ColoForecastNpcLocal* npc,
     int player_x,
@@ -495,14 +547,10 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             npc->sol_immobile_ticks > 0)
         return result;
 
-    ColoForecastMoveCtx move_ctx;
-    move_ctx.state = s;
-    move_ctx.npc_flags = npc_flags;
-    move_ctx.player_x = action->land_x;
-    move_ctx.player_y = action->land_y;
-    move_ctx.sol_clamp_active = sol_clamp_active;
-
-    col_forecast_local_stamp_npc(npc_flags, npc, 0);
+    /* Hold-in-place cases are decided before lifting the footprint: neither the
+       ranged-hold test (static-LoS table + geometry) nor the attack-timer test
+       reads npc_flags, so a held NPC keeps its base footprint stamp untouched
+       and skips the unstamp/restamp round trip the moving path needs. */
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
@@ -518,15 +566,19 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             result.npc_y = npc->y;
             result.land_x = action->land_x;
             result.land_y = action->land_y;
-            col_forecast_local_stamp_npc(npc_flags, npc, 1);
             return result;
         }
     }
-    if (npc->attack_timer > npc->attack_speed) {
-        col_forecast_local_stamp_npc(npc_flags, npc, 1);
-        return result;
-    }
+    if (npc->attack_timer > npc->attack_speed) return result;
 
+    ColoForecastMoveCtx move_ctx;
+    move_ctx.state = s;
+    move_ctx.npc_flags = npc_flags;
+    move_ctx.player_x = action->land_x;
+    move_ctx.player_y = action->land_y;
+    move_ctx.sol_clamp_active = sol_clamp_active;
+
+    col_forecast_local_stamp_npc(npc_flags, npc, 0);
     int tx = action->land_x;
     int ty = action->land_y;
     EncounterNpcStepPolicy step_policy = npc->attack_range > 1
@@ -599,11 +651,18 @@ static ColoForecastPrecomp col_forecast_precompute(
     return pre;
 }
 
-static int col_forecast_any_other_manticore_mid_barrage(
+/** forecast mirror of col_manticore_delay_ready_peers: when a local manticore
+    starts a barrage, delay every OTHER ready+able local manticore 5 ticks.
+    Same pre-decrement timer <= 1 eligibility and same +1 as the sim (swept
+    peers sit later in the slot loop, so their own attack_timer decrement
+    still runs this forecast tick). */
+static void col_forecast_manticore_delay_ready_peers(
+    const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
     const int slots[COLO_MAX_NPCS],
     int slot_count,
-    int idx
+    int idx,
+    const ColoStepOutForecastAction* action
 ) {
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
@@ -611,9 +670,16 @@ static int col_forecast_any_other_manticore_mid_barrage(
         ColoForecastNpcLocal* other = &npcs[i];
         if (other->forecast_behavior != COLO_FORECAST_BEHAVIOR_MANTICORE)
             continue;
-        if (other->cycle_step > 0) return 1;
+        if (other->attack_timer > 1) continue;
+        if (other->cycle_step > 0) continue;
+        if (other->stun_timer > 0 || other->frozen_ticks > 0) continue;
+        int dist = col_forecast_local_dist_to_player(
+            other, action->land_x, action->land_y);
+        if (dist < 1 || dist > other->attack_range) continue;
+        if (!col_forecast_local_has_los_to_player(
+                s, other, action->land_x, action->land_y)) continue;
+        other->attack_timer = COLO_MANTICORE_STAGGER_TICKS + 1;
     }
-    return 0;
 }
 
 static void col_forecast_local_fire_manticore_orb(
@@ -669,13 +735,10 @@ static void col_forecast_local_attack_manticore(
         npc->cycle_step = 0;
     }
     if (npc->attack_timer > 0) return;
-    if (multi_manticore_possible &&
-            col_forecast_any_other_manticore_mid_barrage(npcs, slots, slot_count, idx)) {
-        npc->attack_timer = COLO_MANTICORE_STAGGER_TICKS;
-        return;
-    }
-
     col_forecast_local_fire_manticore_orb(npc, action, summary, tick_idx);
+    if (multi_manticore_possible)
+        col_forecast_manticore_delay_ready_peers(
+            s, npcs, slots, slot_count, idx, action);
 }
 
 static void col_forecast_local_attack_warband(
@@ -742,7 +805,7 @@ static void col_forecast_local_attack_standard(
         return;
     }
     if (npc->type == COLO_JAGUAR_WARRIOR) {
-        if (dist == 1) {
+        if (col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
             col_step_out_forecast_record_style(
                 action, summary, tick_idx, npc->type, ATTACK_STYLE_MELEE);
             npc->attack_timer = npc->attack_speed;
@@ -756,7 +819,7 @@ static void col_forecast_local_attack_standard(
             col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
         if (!los)
             return;
-    } else if (dist != 1) {
+    } else if (!col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
         return;
     }
 
@@ -932,6 +995,62 @@ static void col_forecast_static_threat_action(
     }
 }
 
+/** Landing-independent Solarflare projection inputs, computed once per rollout.
+    pillar is the single nearest orb to the CURRENT player tile (Chebyshev,
+    first-wins ties), matching col_write_nearest_modifier_solarflare; the orbs
+    hug their own pillars so the player threatens at most one. pillar == -1 when
+    Solarflare is inactive, which short-circuits every per-action projection. */
+typedef struct {
+    int pillar;
+    int tier;
+    ColoSolarflareOrb orb;
+} ColoForecastSolarflare;
+
+static ColoForecastSolarflare col_forecast_solarflare_precompute(const ColosseumState* s) {
+    ColoForecastSolarflare pre = { .pillar = -1, .tier = 0, .orb = {0} };
+    if (!s->solarflare.active) return pre;
+    int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
+    if (tier == 0) return pre;
+    int best_pillar = -1;
+    int best_distance = 1 << 30;
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        int x, y;
+        col_solarflare_tile(p, s->solarflare.step, &x, &y);
+        int dx = abs(x - s->player.x);
+        int dy = abs(y - s->player.y);
+        int distance = dx > dy ? dx : dy;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_pillar = p;
+        }
+    }
+    pre.pillar = best_pillar;
+    pre.tier = tier;
+    pre.orb = s->solarflare;
+    return pre;
+}
+
+/** Soonest forecast tick in [0, horizon) at which the nearest pillar's orb shares
+    the landing tile, projecting the cadence forward with the shared live advance
+    (col_solarflare_advance_orb) so the step sequence matches the sim tick-for-tick.
+    Returns -1 when the orb never reaches the landing within the horizon. */
+static int col_forecast_solarflare_contact_tick(
+    const ColoForecastSolarflare* pre,
+    int land_x,
+    int land_y,
+    int horizon
+) {
+    if (pre->pillar < 0) return -1;
+    ColoSolarflareOrb orb = pre->orb;
+    for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
+        col_solarflare_advance_orb(&orb, pre->tier);
+        int x, y;
+        col_solarflare_tile(pre->pillar, orb.step, &x, &y);
+        if (x == land_x && y == land_y) return tick_idx;
+    }
+    return -1;
+}
+
 static void col_build_step_out_forecast_horizon_mode_summary(
     const ColosseumState* s,
     ColoStepOutForecast* out,
@@ -945,6 +1064,10 @@ static void col_build_step_out_forecast_horizon_mode_summary(
     memset(out, 0, sizeof(*out));
     if (summaries)
         memset(summaries, 0, sizeof(ColoForecastObsSummary) * ENCOUNTER_MOVE_ACTIONS);
+#ifdef COLO_PROFILE_ENABLED
+    int col_fc_prof = COLO_PROFILE_ENABLED();
+    double col_fc_t = col_fc_prof ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     int forecast_slots[COLO_MAX_NPCS];
     int forecast_slot_count = col_collect_step_out_forecast_slots(s, forecast_slots);
 
@@ -959,6 +1082,9 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         pre = col_forecast_precompute(
             s, base_npcs, forecast_slots, forecast_slot_count);
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) { double n = COLO_PROFILE_NOW_MS(); COLO_PROFILE_ADD(COLO_PROF_FC_SETUP, n - col_fc_t); col_fc_t = n; }
+#endif
 
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         if (!col_step_out_forecast_prepare_unique_action_ctx(
@@ -967,6 +1093,10 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
+        if (col_forecast_action_rollout_writes_no_threats(
+                base_npcs, forecast_slots, forecast_slot_count, action, horizon)) {
+            continue;
+        }
         if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
                 col_forecast_action_is_run_tile(action_idx)) {
             col_forecast_static_threat_action(
@@ -986,6 +1116,21 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         col_step_out_forecast_finalize_action(action, horizon);
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) { double n = COLO_PROFILE_NOW_MS(); COLO_PROFILE_ADD(COLO_PROF_FC_ROLLOUT, n - col_fc_t); col_fc_t = n; }
+#endif
+
+    ColoForecastSolarflare solarflare = col_forecast_solarflare_precompute(s);
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        ColoStepOutForecastAction* action = &out->actions[action_idx];
+        action->solarflare_contact_tick = action->valid
+            ? col_forecast_solarflare_contact_tick(
+                &solarflare, action->land_x, action->land_y, horizon)
+            : -1;
+    }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_fc_prof) COLO_PROFILE_ADD(COLO_PROF_FC_SOLARFLARE, COLO_PROFILE_NOW_MS() - col_fc_t);
+#endif
 }
 
 static void col_build_step_out_forecast_horizon_mode(
@@ -1016,6 +1161,9 @@ static int col_write_step_out_forecast_obs_summary(
         obs[i++] = summary->ranged_magic_same_tick ? 1.0f : 0.0f;
         obs[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
         obs[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
+        obs[i++] = action->solarflare_contact_tick >= 0
+            ? (float)(horizon - action->solarflare_contact_tick) / (float)horizon
+            : 0.0f;
     }
     return i;
 }

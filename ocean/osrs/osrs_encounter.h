@@ -147,6 +147,38 @@ typedef struct {
     int count;
 } EncounterPendingHitQueue;
 
+/* Build an NPC->player pending hit whose protect-prayer outcome AND damage are
+   LOCKED on the THROW tick (OSRS standard): the overhead up now decides the block
+   and the damage is frozen, then the projectile flies and lands `ticks_remaining`
+   ticks later. The resolver never re-checks (check_prayer=0); flicking the overhead
+   after the throw cannot change the outcome. hit_success records a LANDED
+   UNPROTECTED hit (accuracy succeeded AND not prayed) so on-land effects (venom,
+   recoil) fire only on a connecting hit. `*out_prayed` reports the block for the
+   caller's metric attribution. This is the ONE constructor for throw-resolved
+   player-bound hits -- encounters call it instead of hand-building the struct.
+   Jad-style deferred checks are the documented exception and do NOT use this. */
+static inline EncounterPendingHit encounter_pending_hit_resolved_at_throw(
+    int raw_damage, int ticks_remaining, int attack_style, int overhead_prayer,
+    int source_npc_type, int source_npc_slot, int accuracy_hit, int* out_prayed
+) {
+    EncounterProtectResolve pr =
+        encounter_resolve_protect_at_throw(raw_damage, overhead_prayer, attack_style);
+    if (out_prayed) *out_prayed = pr.prayed;
+    return (EncounterPendingHit){
+        .active = 1,
+        .damage = pr.frozen_damage,
+        .ticks_remaining = ticks_remaining,
+        .attack_style = attack_style,
+        .check_prayer = 0,
+        .prayer_check_delay = 0,
+        .spell_type = ENCOUNTER_SPELL_NONE,
+        .source_npc_type = source_npc_type,
+        .source_npc_slot = source_npc_slot,
+        .hit_success = accuracy_hit && !pr.prayed,
+        .elysian_reduced = 0,
+    };
+}
+
 static inline void encounter_pending_hit_queue_clear(EncounterPendingHitQueue* q) {
     memset(q, 0, sizeof(*q));
 }
@@ -844,9 +876,14 @@ static inline int encounter_move_to_target(
         if (tx > p->x) dx = 1; else if (tx < p->x) dx = -1;
         if (ty > p->y) dy = 1; else if (ty < p->y) dy = -1;
 
-        /* try diagonal, x-only, y-only */
+        /* try diagonal, x-only, y-only. OSRS forbids cutting a blocked corner: a
+           diagonal step is legal only when BOTH shared-corner tiles are walkable, so a
+           blocked pillar corner degrades to the open cardinal step. */
         int moved = 0;
-        if (dx != 0 && dy != 0 && is_walkable(ctx, p->x + dx, p->y + dy)) {
+        if (dx != 0 && dy != 0 &&
+            is_walkable(ctx, p->x + dx, p->y + dy) &&
+            is_walkable(ctx, p->x + dx, p->y) &&
+            is_walkable(ctx, p->x, p->y + dy)) {
             p->x += dx; p->y += dy; moved = 1;
         } else if (dx != 0 && is_walkable(ctx, p->x + dx, p->y)) {
             p->x += dx; moved = 1;
@@ -953,6 +990,30 @@ static inline int encounter_entity_footprint_distance(
     else if (by1 < ay) dy = ay - by1;
 
     return dx > dy ? dx : dy;
+}
+
+/* reach-1 melee adjacency: footprints abut on exactly one axis and overlap on the
+   other (Manhattan footprint gap == 1). A purely diagonal corner has both axis gaps
+   == 1 (Manhattan 2) and is NOT meleeable, matching OSRS WorldArea.isInMeleeDistance
+   and the NPC->player side (entity_has_line_of_sight range 1). */
+static inline int encounter_entity_footprint_cardinal_adjacent(
+    int ax, int ay, int a_size,
+    int bx, int by, int b_size
+) {
+    int ax1 = ax + a_size - 1;
+    int ay1 = ay + a_size - 1;
+    int bx1 = bx + b_size - 1;
+    int by1 = by + b_size - 1;
+
+    int dx = 0;
+    if (ax1 < bx) dx = bx - ax1;
+    else if (bx1 < ax) dx = ax - bx1;
+
+    int dy = 0;
+    if (ay1 < by) dy = by - ay1;
+    else if (by1 < ay) dy = ay - by1;
+
+    return (dx + dy) == 1;
 }
 
 static inline int encounter_entity_footprints_overlap(
@@ -1166,7 +1227,9 @@ static inline int encounter_player_can_attack(
     int dist = encounter_entity_footprint_distance(player_x, player_y, 1,
                                                    target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
-    if (attack_range == 1) return 1;
+    if (attack_range == 1)
+        return encounter_entity_footprint_cardinal_adjacent(
+            player_x, player_y, 1, target_x, target_y, target_size);
     return osrs_los_clear(los_query,
         player_x, player_y, 1,
         target_x, target_y, target_size,
@@ -2101,21 +2164,39 @@ static inline void encounter_derive_loadout_effect_profile(
 }
 
 /** offensive prayer multipliers for effective level computation.
-    single source of truth: the multipliers used in encounter_compute_loadout_stats()
-    and encounter_update_loadout_level(). also used by PvP combat math (via
-    osrs_pvp_combat.h) so all combat paths agree on prayer effects.
+    used by encounter_compute_loadout_stats() and encounter_update_loadout_level().
+    off-style offensive prayers return identity multipliers.
     ref: osrs wiki prayer table. */
 static inline void encounter_offensive_prayer_mults(
-    OffensivePrayer op, float* att_out, float* str_out
+    OffensivePrayer op, AttackStyle style, float* att_out, float* str_out
 ) {
     float att = 1.0f, str = 1.0f;
-    switch (op) {
-        case OFFENSIVE_PRAYER_PIETY:       att = 1.20f; str = 1.23f; break;
-        case OFFENSIVE_PRAYER_RIGOUR:      att = 1.20f; str = 1.23f; break;
-        case OFFENSIVE_PRAYER_AUGURY:      att = 1.25f; str = 1.00f; break;
-        case OFFENSIVE_PRAYER_MELEE_LOW:   att = 1.15f; str = 1.15f; break;
-        case OFFENSIVE_PRAYER_RANGED_LOW:  att = 1.15f; str = 1.15f; break;
-        case OFFENSIVE_PRAYER_MAGIC_LOW:   att = 1.15f; str = 1.00f; break;
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            if (op == OFFENSIVE_PRAYER_PIETY) {
+                att = 1.20f;
+                str = 1.23f;
+            } else if (op == OFFENSIVE_PRAYER_MELEE_LOW) {
+                att = 1.15f;
+                str = 1.15f;
+            }
+            break;
+        case ATTACK_STYLE_RANGED:
+            if (op == OFFENSIVE_PRAYER_RIGOUR) {
+                att = 1.20f;
+                str = 1.23f;
+            } else if (op == OFFENSIVE_PRAYER_RANGED_LOW) {
+                att = 1.15f;
+                str = 1.15f;
+            }
+            break;
+        case ATTACK_STYLE_MAGIC:
+            if (op == OFFENSIVE_PRAYER_AUGURY) {
+                att = 1.25f;
+            } else if (op == OFFENSIVE_PRAYER_MAGIC_LOW) {
+                att = 1.15f;
+            }
+            break;
         default: break;
     }
     *att_out = att;
@@ -2198,7 +2279,8 @@ static inline void encounter_compute_loadout_stats(
 
     /* prayer multipliers — single source of truth in encounter_offensive_prayer_mults(). */
     float att_prayer_mult, str_prayer_mult;
-    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
+    encounter_offensive_prayer_mults(
+        offensive_prayer, style, &att_prayer_mult, &str_prayer_mult);
 
     /* store for dynamic recomputation after brew drain / potion boost / prayer toggle */
     out->att_prayer_mult = att_prayer_mult;
@@ -2254,7 +2336,8 @@ static inline void encounter_update_loadout_level(
     int current_att_level, int current_str_level
 ) {
     float att_prayer_mult, str_prayer_mult;
-    encounter_offensive_prayer_mults(offensive_prayer, &att_prayer_mult, &str_prayer_mult);
+    encounter_offensive_prayer_mults(
+        offensive_prayer, ls->style, &att_prayer_mult, &str_prayer_mult);
     ls->att_prayer_mult = att_prayer_mult;
     ls->str_prayer_mult = str_prayer_mult;
 

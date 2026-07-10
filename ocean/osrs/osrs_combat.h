@@ -14,11 +14,14 @@
  *   osrs_npc_magic_max_hit(base, pct)         NPC magic max hit from stats
  *   osrs_npc_max_hit(style, ...)              dispatches to style-specific formula
  *   osrs_npc_attack_roll(att, bonus)          NPC attack roll
+ *   osrs_npc_def_roll(def_level, def_bonus)   NPC defence roll the player attacks into
+ *   encounter_npc_target_def_roll(...)        style-dispatched NPC defence roll
  *   osrs_player_def_roll_vs_npc(def,mag,b,s)  player defence roll vs NPC
  *   encounter_xorshift(state)                 xorshift32 RNG step
  *   encounter_rand_int(state, max)            random int in [0, max)
  *   encounter_rand_float(state)               random float in [0, 1)
  *   encounter_npc_roll_attack(att,def,mh,rng) NPC accuracy+damage in one call
+ *   encounter_npc_roll_attack_ex(...)         NPC roll + force-hit + hit_success out
  *   encounter_prayer_correct_for_style(p, s)  prayer blocks attack style check
  *   encounter_magic_hit_delay(dist, is_p)     magic projectile flight delay (ticks)
  *   encounter_ranged_hit_delay(dist, is_p)    ranged projectile flight delay (ticks)
@@ -291,6 +294,50 @@ static inline int osrs_npc_attack_roll(int att_level, int att_bonus) {
     return (att_level + 9) * (att_bonus + 64);
 }
 
+/* NPC defence roll the PLAYER attacks into: (def_level + 9) * (def_bonus + 64).
+   NPCs carry the same hidden +9 as their attack roll. The caller passes the
+   level the relevant style rolls against — Defence level (drain-adjusted) for
+   melee/ranged, Magic level for magic — and the matching defensive bonus. */
+static inline int osrs_npc_def_roll(int def_level, int def_bonus) {
+    return (def_level + 9) * (def_bonus + 64);
+}
+
+/* pick the NPC melee defence bonus for an incoming player melee attack.
+   melee_style: 0=stab, 1=slash, 2=crush. */
+static inline int encounter_npc_melee_def_bonus(
+    int stab_def, int slash_def, int crush_def, int melee_style
+) {
+    if (melee_style == 1) return slash_def;  /* MELEE_STYLE_SLASH */
+    if (melee_style == 2) return crush_def;  /* MELEE_STYLE_CRUSH */
+    return stab_def;                         /* MELEE_STYLE_STAB */
+}
+
+/** Style-dispatched NPC defence roll the player attacks into.
+    A monster's MAGIC defence rolls off its Magic level (not Defence level), so
+    the caller passes both: melee_ranged_def_level (the encounter's drain-adjusted
+    Defence level) used by melee/ranged, and magic_level used by magic. The melee
+    branch selects stab/slash/crush by the attacking weapon's melee_style.
+    attack_style: 1=melee, 2=ranged, 3=magic. */
+static inline int encounter_npc_target_def_roll(
+    int melee_ranged_def_level,
+    int magic_level,
+    int stab_def,
+    int slash_def,
+    int crush_def,
+    int magic_def_bonus,
+    int ranged_def_bonus,
+    int attack_style,
+    int melee_style
+) {
+    if (attack_style == 3) /* ATTACK_STYLE_MAGIC */
+        return osrs_npc_def_roll(magic_level, magic_def_bonus);
+    if (attack_style == 2) /* ATTACK_STYLE_RANGED */
+        return osrs_npc_def_roll(melee_ranged_def_level, ranged_def_bonus);
+    return osrs_npc_def_roll(
+        melee_ranged_def_level,
+        encounter_npc_melee_def_bonus(stab_def, slash_def, crush_def, melee_style));
+}
+
 /* player defence roll against NPC attack.
    OSRS formula: eff_def = level + stance_bonus + 8. players don't have the
    hidden +1 that NPCs get (that's why NPC attack roll uses +9).
@@ -363,15 +410,31 @@ static inline int osrs_npc_max_hit(
     return 0;
 }
 
+/** NPC attack roll against the player: damage roll FIRST (0..max_hit), THEN the
+    accuracy roll (a miss zeroes the damage). This RNG draw order is canonical for
+    every encounter and MUST NOT be reordered -- goldens depend on it.
+
+    force_hit (e.g. a Colosseum-Relentless guaranteed hit) bypasses accuracy
+    entirely: the accuracy RNG draw is SKIPPED, not just ignored, so the rng_state
+    sequence stays identical to a hand-rolled "roll damage, then maybe roll
+    accuracy" loop. *hit_success (optional) receives the accuracy outcome so a
+    0-damage splash still renders. Prayer/attribution stay at the call site. */
+static inline int encounter_npc_roll_attack_ex(
+    int att_roll, int def_roll, int max_hit, int force_hit,
+    uint32_t* rng_state, int* hit_success
+) {
+    int dmg = encounter_rand_int(rng_state, max_hit + 1);
+    int hit = force_hit ? 1 : encounter_roll_hit_chance(rng_state, att_roll, def_roll);
+    if (hit_success) *hit_success = hit;
+    return hit ? dmg : 0;
+}
+
 /* NPC attack roll: accuracy check + damage roll in one call.
    returns damage (0 on miss). caller handles prayer separately. */
 static inline int encounter_npc_roll_attack(
     int att_roll, int def_roll, int max_hit, uint32_t* rng_state
 ) {
-    int dmg = encounter_rand_int(rng_state, max_hit + 1);
-    if (!encounter_roll_hit_chance(rng_state, att_roll, def_roll))
-        dmg = 0;
-    return dmg;
+    return encounter_npc_roll_attack_ex(att_roll, def_roll, max_hit, 0, rng_state, NULL);
 }
 
 /* check if overhead prayer blocks the given attack style.
@@ -383,6 +446,25 @@ static inline int encounter_prayer_correct_for_style(int prayer, int attack_styl
     return (attack_style == 1 /* ATTACK_STYLE_MELEE */  && prayer == 3 /* PRAYER_PROTECT_MELEE */)  ||
            (attack_style == 2 /* ATTACK_STYLE_RANGED */ && prayer == 2 /* PRAYER_PROTECT_RANGED */) ||
            (attack_style == 3 /* ATTACK_STYLE_MAGIC */  && prayer == 1 /* PRAYER_PROTECT_MAGIC */);
+}
+
+/* The protect-prayer outcome is locked on the THROW tick (OSRS standard): the
+   overhead up when the attack animates decides whether it is blocked, and the
+   damage is frozen there. For ranged/magic the frozen damage then flies and lands
+   later; flicking the overhead after the throw cannot change it. This is the ONE
+   place an encounter resolves protect-at-throw -- callers do their own metric
+   attribution from `.prayed`. Jad-style deferred checks are the documented
+   exception and do not use this (they defer the check via prayer_check_delay). */
+typedef struct {
+    int frozen_damage; /* 0 if the matching protect prayer was up at throw, else raw */
+    int prayed;        /* 1 if the overhead blocked this style */
+} EncounterProtectResolve;
+
+static inline EncounterProtectResolve encounter_resolve_protect_at_throw(
+    int raw_damage, int overhead_prayer, int attack_style
+) {
+    int prayed = encounter_prayer_correct_for_style(overhead_prayer, attack_style);
+    return (EncounterProtectResolve){ .frozen_damage = prayed ? 0 : raw_damage, .prayed = prayed };
 }
 
 
@@ -721,5 +803,7 @@ static inline void osrs_sum_equipment_bonuses(const uint8_t loadout[NUM_GEAR_SLO
         out->attack_range = ITEM_DATABASE[weapon].attack_range;
     }
 }
+
+#include "osrs_venator.h"
 
 #endif /* OSRS_COMBAT_H */

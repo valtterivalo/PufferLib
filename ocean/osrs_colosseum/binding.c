@@ -70,6 +70,19 @@ typedef struct ColosseumEnv {
 
     int pending_render_reset;
     OsrsEnv render_env;
+
+    /* per-env running max of each episode's raw furthest depth (waves_fully_cleared
+       + current-wave fresh-fraction). Lives outside Log so it survives the train
+       log-window zeroing; snapshotted into env->log.colo_max_depth_reached each
+       terminal episode. Captures the furthest any single episode in this env reached. */
+    float max_episode_depth_seen;
+
+    /* scaffold: lifetime c_step counter for the damage-received-scale anneal.
+       calloc-zeroed once at vecenv allocation, incremented once per c_step, never
+       reset across episodes (ColosseumState is memset on reset, this Env is not).
+       Drives scale = start + (1-start)*clamp01(count/anneal_ticks). Units are
+       PER-ENV steps (global_agent_steps / num_envs). */
+    uint64_t damage_scale_anneal_step;
 } ColosseumEnv;
 
 #define COLO_ENV_STATE(env) ((EncounterState*)&((env)->state))
@@ -84,9 +97,37 @@ typedef struct ColosseumEnv {
 
 #define MAX_CURRICULUM_TIERS 8
 
+typedef enum {
+    COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT = 0,
+    COLO_LOG_ATTACKED_ARGMAX_SET_SLOT = 1,
+} ColoLogDptSlot;
 
-void c_reset(Env* env) {
-    ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
+static void col_log_dpt_rate_sample(Log* log, ColoLogDptSlot slot, int sample) {
+    if (slot < 0 || slot >= 8) abort();
+    if (sample < 0) return;
+    log->hist_score_bank[slot] += sample ? 1.0f : 0.0f;
+    log->hist_n_bank[slot] += 1.0f;
+}
+
+static float col_log_dpt_rate(const Log* log, ColoLogDptSlot slot) {
+    if (slot < 0 || slot >= 8) abort();
+    float n = log->hist_n_bank[slot];
+    return n > 0.0f ? log->hist_score_bank[slot] / n : 0.0f;
+}
+
+
+/** Reset-with-state (PUFFER_RESET_WITH_STATE): state == NULL is the normal
+    fresh reset; non-NULL restores the best-trajectory curriculum snapshot
+    (value copy + derived-cache rebuild, same path as the binary snapshot
+    restore). Both paths regenerate obs + mask so the restored env is
+    immediately playable. */
+void c_reset(Env* env, const ColosseumState* state) {
+    if (state == NULL) {
+        ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
+    } else {
+        env->state = *state;
+        col_refresh_after_state_load(&env->state, &env->context);
+    }
     float* obs = (float*)env->observations;
     ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
     ENCOUNTER_COLOSSEUM.write_mask(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs + COLO_NUM_OBS);
@@ -110,6 +151,24 @@ void c_step(Env* env) {
 
     COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
 
+    /* scaffold: damage-received-scale anneal. Only overwrite the live config scale
+       when the anneal is armed (ticks > 0 AND start < 1.0); otherwise leave the
+       config value untouched so a static swept player_damage_received_scale still
+       works and the default (1.0) stays a bit-identical no-op. The counter is a
+       lifetime per-env tick count that survives episode resets. */
+    {
+        int anneal_ticks = env->context.config.damage_scale_anneal_ticks;
+        float anneal_start = env->context.config.damage_scale_anneal_start;
+        env->damage_scale_anneal_step++;
+        if (anneal_ticks > 0 && anneal_start < 1.0f) {
+            float frac = (float)env->damage_scale_anneal_step / (float)anneal_ticks;
+            if (frac > 1.0f) frac = 1.0f;
+            if (frac < 0.0f) frac = 0.0f;
+            env->context.config.player_damage_received_scale =
+                anneal_start + (1.0f - anneal_start) * frac;
+        }
+    }
+
     if (!used_human_commands)
         ENCOUNTER_COLOSSEUM.step(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), env->acts_staging);
     COLO_PROFILE_MARK(COLO_PROF_C_ENCOUNTER_STEP);
@@ -128,11 +187,25 @@ void c_step(Env* env) {
     env->truncations[0] = (float)is_trunc;
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
 
+    if (env->state.start_wave == env->config_start_wave) {
+        col_log_dpt_rate_sample(
+            &env->log,
+            COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT,
+            col_current_set_is_argmax_dpt_for_target(&env->state));
+        col_log_dpt_rate_sample(
+            &env->log,
+            COLO_LOG_ATTACKED_ARGMAX_SET_SLOT,
+            col_attacked_with_argmax_set(&env->state));
+    }
+
     if (is_term) {
         ColosseumState* s = &env->state;
         ColosseumLog* clog = (ColosseumLog*)ENCOUNTER_COLOSSEUM.get_log(
             COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
         if (s->start_wave == env->config_start_wave) {
+            if (clog->max_wave_depth > env->max_episode_depth_seen)
+                env->max_episode_depth_seen = clog->max_wave_depth;
+            env->log.colo_max_depth_reached += env->max_episode_depth_seen;
             env->log.n += 1.0f;
             env->log.episode_return += clog->episode_return;
             env->log.episode_length += (float)clog->episode_length;
@@ -149,12 +222,20 @@ void c_step(Env* env) {
                 env->log.colo_pray_faced_by_type[t] += clog->pray_faced_by_type[t];
                 env->log.colo_pray_correct_by_type[t] += clog->pray_correct_by_type[t];
                 env->log.colo_offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
+                env->log.colo_total_damage_by_type[t] += clog->total_damage_by_type[t];
                 env->log.colo_death_by_type[t] += clog->death_by_type[t];
+                env->log.colo_typeless_damage_by_type[t] += clog->typeless_damage_by_type[t];
             }
             env->log.colo_death_fatal_damage += clog->death_fatal_damage;
             env->log.colo_offpray_damage_conflict += clog->offpray_damage_conflict;
             env->log.colo_offpray_damage_solo += clog->offpray_damage_solo;
             env->log.colo_death_on_conflict_tick += clog->death_on_conflict_tick;
+            env->log.colo_death_dmg_unprayable += clog->death_dmg_unprayable;
+            env->log.colo_death_dmg_offpray += clog->death_dmg_offpray;
+            env->log.colo_death_dmg_prayed += clog->death_dmg_prayed;
+            env->log.colo_death_dmg_self += clog->death_dmg_self;
+            env->log.colo_death_heal_remaining += clog->death_heal_remaining;
+            env->log.colo_farm_damage += clog->farm_damage;
         }
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -257,13 +338,24 @@ void c_render(Env* env) {
 
 typedef ColosseumState State;
 
-static inline void puffer_state_refresh(Env* env) {
-    col_refresh_after_state_load(&env->state, &env->context);
-}
+/* Opt in to the 2-arg c_reset(Env*, const State*) contract used by the
+   best-trajectory curriculum (vecenv.h's puffer_env_reset shim). */
+#define PUFFER_RESET_WITH_STATE
 
 #define MY_VEC_INIT
 #include "vecenv.h"
 
+
+/** lowbias32 integer hash (Chris Wellons): decorrelates consecutive env indices into
+    well-mixed 32-bit seeds so each env's RNG stream is independent. */
+static inline uint32_t col_lowbias32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
@@ -273,6 +365,21 @@ void my_init(Env* env, Dict* kwargs) {
     env->last_step_time = 0.0;
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
+    /* Per-env RNG decorrelation. init_state seeds every env's rng_state to the same
+       constant (12345), so without this ALL envs run the SAME scenario stream:
+       identical wave-1 spawn + modifier drafts, and a fully choreographed fight under
+       a deterministic eval policy. Seed each env from its index hashed with lowbias32,
+       shifted by PUFFER_ENV_SEED_OFFSET so a held-out run can draw unseen scenarios.
+       Per-episode variation already comes from the rng chain advancing across resets
+       (c_reset passes explicit_seed=0, which preserves the advancing saved_rng). The
+       golden test drives col_reset_ctx with explicit seeds, bypassing this, so it
+       stays bit-identical. */
+    uint32_t col_seed_offset = 0;
+    const char* col_seed_off_str = getenv("PUFFER_ENV_SEED_OFFSET");
+    if (col_seed_off_str) col_seed_offset = (uint32_t)strtoul(col_seed_off_str, NULL, 10);
+    uint32_t col_env_seed = col_lowbias32((uint32_t)env->rng + col_seed_offset);
+    if (col_env_seed == 0) col_env_seed = 1;
+    env->state.rng_state = col_env_seed;
     memset(&env->log, 0, sizeof(Log));
 
     DictItem* start_wave = dict_get_unsafe(kwargs, "start_wave");
@@ -290,10 +397,18 @@ void my_init(Env* env, Dict* kwargs) {
         "win_bonus",
         "prayer_correct_reward",
         "offpray_damage_penalty_coeff",
+        "multistyle_exposure_penalty_coeff",
+        "argmax_gear_reward_coeff",
+        "offensive_boost_reward_coeff",
+        "stall_penalty_coeff",
         "avoided_damage_coeff",
         "death_penalty_coeff",
         "timeout_penalty",
         "beginner_loadout_fraction",
+        "prayer_switch_fail_prob",
+        "player_damage_received_scale",
+        "damage_scale_anneal_start",
+        "late_start_supply_fraction_per_wave",
     };
     for (size_t k = 0; k < sizeof(optional_float_keys) / sizeof(*optional_float_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_float_keys[k]);
@@ -306,10 +421,20 @@ void my_init(Env* env, Dict* kwargs) {
     static const char* const optional_int_keys[] = {
         "loadout_profile_mode",
         "step_out_forecast_obs_enabled",
+        "threat_field_obs_enabled",
         "forecast_horizon",
         "forecast_run_tile_mode",
         "mask_inventory_heads",
+        "farm_safe_damage_cap",
+        "farm_cap_waves",
         "action_debug_log",
+        "prayer_oracle_mode",
+        "bis_gear_oracle_mode",
+        "invuln_mode",
+        "episode_max_ticks_override",
+        "remove_brews",
+        "damage_scale_anneal_ticks",
+        "late_start_state_mode",
     };
     for (size_t k = 0; k < sizeof(optional_int_keys) / sizeof(*optional_int_keys); k++) {
         DictItem* item = dict_get_unsafe(kwargs, optional_int_keys[k]);
@@ -449,12 +574,16 @@ void my_log(Log* log, Dict* out) {
 
     dict_set(out, "score", log->colo_outcome_score);
     dict_set(out, "sol_min_hp", log->colo_min_sol_hp);
+    dict_set(out, "max_depth_reached", log->colo_max_depth_reached);
+    dict_set(out, "current_set_is_argmax_dpt_for_target",
+        col_log_dpt_rate(log, COLO_LOG_CURRENT_SET_ARGMAX_DPT_SLOT));
+    dict_set(out, "attacked_with_argmax_set",
+        col_log_dpt_rate(log, COLO_LOG_ATTACKED_ARGMAX_SET_SLOT));
 
-    /* per-NPC-type prayer outcomes: off-prayer exposure rate (mismatched
-       overhead per prayer-checkable hit faced) + mean off-prayer damage taken
-       per episode. Indexed by ColoNpcType. Keys are string literals because
-       dict_set stores the key POINTER (no copy) — formatted stack buffers
-       alias every entry onto one item. */
+    /* per-NPC-type prayer outcomes: off-prayer exposure rate, mean off-prayer
+       damage, and mean total damage taken per episode. Indexed by ColoNpcType.
+       Keys are string literals because dict_set stores the key POINTER, not a
+       copy, so formatted stack buffers alias every entry onto one item. */
     static const char* OFFPRAY_RATE_KEYS[COLO_NUM_NPC_TYPES] = {
         "offpray_rate_berserker", "offpray_rate_archer", "offpray_rate_seer",
         "offpray_rate_serpent", "offpray_rate_jaguar", "offpray_rate_javelin",
@@ -465,12 +594,18 @@ void my_log(Log* log, Dict* out) {
         "offpray_dmg_serpent", "offpray_dmg_jaguar", "offpray_dmg_javelin",
         "offpray_dmg_shockwave", "offpray_dmg_minotaur", "offpray_dmg_manticore",
         "offpray_dmg_sol", "offpray_dmg_totem", "offpray_dmg_bee"};
+    static const char* TOTAL_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
+        "total_dmg_berserker", "total_dmg_archer", "total_dmg_seer",
+        "total_dmg_serpent", "total_dmg_jaguar", "total_dmg_javelin",
+        "total_dmg_shockwave", "total_dmg_minotaur", "total_dmg_manticore",
+        "total_dmg_sol", "total_dmg_totem", "total_dmg_bee"};
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
         float faced = log->colo_pray_faced_by_type[t];
         float off_rate = faced > 0.0f
             ? (faced - log->colo_pray_correct_by_type[t]) / faced : 0.0f;
         dict_set(out, OFFPRAY_RATE_KEYS[t], off_rate);
         dict_set(out, OFFPRAY_DMG_KEYS[t], log->colo_offpray_damage_by_type[t]);
+        dict_set(out, TOTAL_DMG_KEYS[t], log->colo_total_damage_by_type[t]);
     }
 
     /* death attribution (diagnostic): kill-share per NPC type (which landed the
@@ -486,4 +621,22 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "offpray_dmg_conflict", log->colo_offpray_damage_conflict);
     dict_set(out, "offpray_dmg_solo", log->colo_offpray_damage_solo);
     dict_set(out, "death_on_conflict_tick", log->colo_death_on_conflict_tick);
+
+    /* death forensics (land-time): mean fatal-tick damage split by prayer
+       channel + mean heal capacity left at death, and per-type episode totals
+       of unprayable (typeless / ignore-prayer) damage. death_by_type says WHO
+       killed us; these say HOW. Same literal-key rule as above. */
+    static const char* TYPELESS_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
+        "typeless_dmg_berserker", "typeless_dmg_archer", "typeless_dmg_seer",
+        "typeless_dmg_serpent", "typeless_dmg_jaguar", "typeless_dmg_javelin",
+        "typeless_dmg_shockwave", "typeless_dmg_minotaur", "typeless_dmg_manticore",
+        "typeless_dmg_sol", "typeless_dmg_totem", "typeless_dmg_bee"};
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
+        dict_set(out, TYPELESS_DMG_KEYS[t], log->colo_typeless_damage_by_type[t]);
+    dict_set(out, "death_dmg_unprayable", log->colo_death_dmg_unprayable);
+    dict_set(out, "death_dmg_offpray", log->colo_death_dmg_offpray);
+    dict_set(out, "death_dmg_prayed", log->colo_death_dmg_prayed);
+    dict_set(out, "death_dmg_self", log->colo_death_dmg_self);
+    dict_set(out, "death_heal_remaining", log->colo_death_heal_remaining);
+    dict_set(out, "farm_damage", log->colo_farm_damage);
 }
