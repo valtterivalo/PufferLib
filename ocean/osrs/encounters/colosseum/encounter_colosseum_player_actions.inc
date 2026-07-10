@@ -232,6 +232,7 @@ static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
     encounter_apply_loadout(&s->player,
         col_loadouts_for_profile(s->active_loadout_profile)[set], gear);
     s->weapon_set = set;
+    s->player.spec_armed = 0;
     col_mark_live_loadout_dirty(s);
 }
 
@@ -310,6 +311,9 @@ static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
             item_is_two_handed(s->player.equipped[GEAR_SLOT_WEAPON])) {
         displaced = s->player.equipped[GEAR_SLOT_WEAPON];
         s->player.equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
+        /* losing the weapon disarms the spec like any weapon switch; without
+           this the armed spec fires with ITEM_NONE and force_max aborts. */
+        s->player.spec_armed = 0;
     }
 
     s->player.equipped[gear_slot] = item_idx;
@@ -863,6 +867,8 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     uint8_t item = s->player.equipped[GEAR_SLOT_WEAPON];
+    assert(osrs_spec_cost(item) > 0 &&
+           "spec attack dispatched with a non-special weapon equipped");
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     const OsrsEquipmentEffectProfile* effects = col_live_effects(s);
 

@@ -5088,6 +5088,25 @@ static void test_loadout_spec_weapons(void) {
     arm[COLO_HEAD_SPEC] = 2;
     col_tick_player_ctx(&s, &ctx, arm, 0);
     CHECK("disarm action clears the armed spec", s.player.spec_armed == 0);
+
+    /* regression (sol sweep crash 2026-07-10): equipping a shield displaces a
+       2H spec weapon to ITEM_NONE; the armed spec must disarm with it, else
+       the next attack fires a phantom spec and Sol's parry force_max aborts. */
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 54);
+    s.modifiers.draft_pending = 0;
+    s.wave_ready_delay = 0;
+    s.inventory_cells[26] = osrs_inventory_cell_empty();
+    s.inventory_cells[27] = osrs_inventory_cell_empty();
+    col_equip_from_cell(&s, test_find_inventory_cell_with_item(&s, ITEM_SGS));
+    s.player.special_energy = 100;
+    s.player.spec_armed = 1;
+    col_equip_from_cell(&s,
+        test_find_inventory_cell_with_item(&s, ITEM_DRAGON_DEFENDER));
+    CHECK("shield equip displaces the 2H spec weapon",
+        s.player.equipped[GEAR_SLOT_WEAPON] == ITEM_NONE &&
+        s.player.equipped[GEAR_SLOT_SHIELD] == ITEM_DRAGON_DEFENDER);
+    CHECK("shield equip displacing the weapon disarms the spec",
+        s.player.spec_armed == 0);
 }
 
 static void test_loadout_item_effects(void) {
