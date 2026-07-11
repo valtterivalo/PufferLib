@@ -1319,7 +1319,8 @@ static void run_metrics(
     uint32_t policy_seed,
     int num_episodes,
     int loadout_mode,
-    int bis_oracle
+    int bis_oracle,
+    int start_wave
 ) {
     if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
@@ -1342,7 +1343,8 @@ static void run_metrics(
        this at 0, so without it the metrics would be speedrun-only regardless. */
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
-    edef->put_int(env->encounter_state, env->encounter_context, "start_wave", 1);
+    edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
+                  start_wave >= 0 ? start_wave : 1);
     if (bis_oracle)
         edef->put_int(env->encounter_state, env->encounter_context,
                       "bis_gear_oracle_mode", 1);
@@ -2099,7 +2101,7 @@ int main(int argc, char** argv) {
 
     if (metrics_episodes > 0) {
         run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
-            metrics_episodes, loadout_mode, metrics_bis_oracle);
+            metrics_episodes, loadout_mode, metrics_bis_oracle, start_wave);
         return 0;
     }
 
