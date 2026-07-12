@@ -400,6 +400,39 @@ static void col_fill_render_entities_ctx(
         }
     }
 
+    if (s->wave == COLO_WAVE_BOSS && s->sol.started) {
+        for (int c = 0; c < s->sol.crystal_count && n < max_entities; c++) {
+            const ColoSolCrystal* cr = &s->sol.crystals[c];
+            if (!cr->active) continue;
+            int cx, cy;
+            col_sol_crystal_pos(s, cr->perim_step, &cx, &cy);
+            RenderEntity* re = &out[n++];
+            OsrsNpcRenderEntitySpec crystal_spec = {
+                .npc_def_id = COLO_NPC_DEF_ID_BEAM_CRYSTAL,
+                .npc_slot = COLO_NPC_SLOT_BEAM_CRYSTAL + c,
+                .npc_instance_id =
+                    COLO_BEAM_CRYSTAL_RENDER_INSTANCE_ID + (uint32_t)c,
+                .npc_visible = 1,
+                .npc_size = 1,
+                .npc_anim_id = COLO_BEAM_CRYSTAL_IDLE_ANIM_ID,
+                .x = cx,
+                .y = cy,
+                .dest_x = cx,
+                .dest_y = cy,
+                .current_hitpoints = 1,
+                .base_hitpoints = 1,
+                .attack_style_this_tick = ATTACK_STYLE_NONE,
+                .hit_landed_this_tick = 0,
+                .hit_damage = 0,
+                .hit_was_successful = 0,
+                .hit_spell_type = ENCOUNTER_SPELL_NONE,
+                .attack_target_entity_idx = 0,
+            };
+            osrs_render_entity_from_npc_spec(&crystal_spec, re);
+            re->debug_npc_type_name = "Beam crystal";
+        }
+    }
+
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);
     *count = n;
 }

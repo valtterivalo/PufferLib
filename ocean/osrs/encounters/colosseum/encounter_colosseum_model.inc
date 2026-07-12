@@ -478,6 +478,13 @@ static const int COLO_NPC_DEF_IDS[COLO_NUM_NPC_TYPES] = {
 #define COLO_SOLARFLARE_IDLE_ANIM_ID 10817
 #define COLO_NPC_SLOT_SOLARFLARE    (COLO_MAX_NPCS + 1)
 #define COLO_SOLARFLARE_RENDER_INSTANCE_ID 0xC0105F1Au
+/* Sol light-beam crystal (gameval COLOSSEUM_BEAM_CRYSTAL): render-only NPC
+   entity walking the boss-arena edge ring; VFX spotanims 2689-2698 carry the
+   charge beams, the launched sphere, and the sand pillar strike. */
+#define COLO_NPC_DEF_ID_BEAM_CRYSTAL 12824
+#define COLO_BEAM_CRYSTAL_IDLE_ANIM_ID 10799
+#define COLO_NPC_SLOT_BEAM_CRYSTAL  (COLO_MAX_NPCS + 1 + COLO_NUM_PILLARS)
+#define COLO_BEAM_CRYSTAL_RENDER_INSTANCE_ID 0xC0105EC5u
 
 /** A21+B9: hazard entities — attackable 1-HP modifier spawns. Excluded from
     wave-clear/reinforcement predicates, collision stamps, and the death hooks

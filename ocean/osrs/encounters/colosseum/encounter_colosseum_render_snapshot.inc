@@ -834,6 +834,87 @@ static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) 
     encounter_set_projectile_target_npc_slot(ov, idx, slot);
 }
 
+/** Sol hazard VFX (all ids from gameval SpotanimID): the crystal's charge
+    beam while it telegraphs, the launched light sphere (travel + impact), and
+    the sand pillar strike playing over every in-flight beam telegraph. The
+    sphere's source is the nearest active crystal to its locked tile (the sim
+    does not record the shooter; crystals rarely co-fire). */
+enum {
+    COLO_SOL_CRYSTAL_CHARGE_MODEL_ID = 51245,
+    COLO_SOL_CRYSTAL_CHARGE_ANIM_ID  = 10803,
+    COLO_SOL_SPHERE_TRAVEL_GFX_ID    = 2693,
+    COLO_SOL_SPHERE_IMPACT_GFX_ID    = 2697,
+    COLO_SOL_SAND_PILLAR_MODEL_ID    = 51243,
+    COLO_SOL_SAND_PILLAR_ANIM_ID     = 10812,
+};
+
+static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
+    if (s->wave != COLO_WAVE_BOSS || !s->sol.started) return;
+    const SolHereditState* sol = &s->sol;
+
+    for (int c = 0; c < sol->crystal_count; c++) {
+        const ColoSolCrystal* cr = &sol->crystals[c];
+        if (!cr->active || cr->telegraph_ticks <= 0) continue;
+        int cx, cy;
+        col_sol_crystal_pos(s, cr->perim_step, &cx, &cy);
+        encounter_emit_floating_model(
+            ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
+            COLO_NPC_SLOT_BEAM_CRYSTAL + c, cx, cy,
+            COLO_SOL_CRYSTAL_CHARGE_MODEL_ID, COLO_SOL_CRYSTAL_CHARGE_ANIM_ID,
+            1.1f, 0.0f, 1.0f);
+    }
+
+    int sphere_fresh_delay = (sol->phase >= 5 ? COLO_SOL_SPHERE_DELAY_ENRAGE
+                                              : COLO_SOL_SPHERE_DELAY) - 1;
+    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++) {
+        const ColoSolSphere* sp = &sol->spheres[i];
+        if (!sp->active || sp->ticks_remaining != sphere_fresh_delay) continue;
+        int best = -1, best_d = 1 << 30;
+        for (int c = 0; c < sol->crystal_count; c++) {
+            if (!sol->crystals[c].active) continue;
+            int cx, cy;
+            col_sol_crystal_pos(s, sol->crystals[c].perim_step, &cx, &cy);
+            int d = abs(cx - sp->tile_x) + abs(cy - sp->tile_y);
+            if (d < best_d) { best_d = d; best = c; }
+        }
+        if (best < 0) continue;
+        int cx, cy;
+        col_sol_crystal_pos(s, sol->crystals[best].perim_step, &cx, &cy);
+        encounter_require_projectile_slots(ov, 1);
+        OsrsProjectileEventSpec sphere_spec = {
+            .src_x = cx,
+            .src_y = cy,
+            .dst_x = sp->tile_x,
+            .dst_y = sp->tile_y,
+            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
+            .damage = 0,
+            .duration_ticks = sphere_fresh_delay * 30,
+            .start_h = 43,
+            .end_h = 5,
+            .curve = 0,
+            .arc_height = 0.0f,
+            .src_size = 1,
+            .dst_size = 1,
+            .model_id = 0u,
+            .anim_id = -1,
+            .travel_gfx_id = COLO_SOL_SPHERE_TRAVEL_GFX_ID,
+            .impact_gfx_id = COLO_SOL_SPHERE_IMPACT_GFX_ID,
+            .start_delay = 0,
+        };
+        (void)osrs_emit_projectile_with_spec(ov, &sphere_spec, 0);
+    }
+
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
+        if (!sol->beams[b].active) continue;
+        encounter_emit_floating_model(
+            ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
+            COLO_NPC_SLOT_BEAM_CRYSTAL + COLO_SOL_MAX_CRYSTALS + b,
+            sol->beams[b].x, sol->beams[b].y,
+            COLO_SOL_SAND_PILLAR_MODEL_ID, COLO_SOL_SAND_PILLAR_ANIM_ID,
+            0.05f, 0.0f, 1.0f);
+    }
+}
+
 static void col_render_post_tick_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -891,6 +972,7 @@ static void col_render_post_tick_ctx(
             continue;
         col_emit_npc_attack_projectile(s, ctx, ov, i);
     }
+    col_emit_sol_hazard_vfx(s, ov);
     col_emit_player_attack_projectiles(s, ctx, ov);
     if (ctx->thrall_attacked_this_tick)
         col_emit_thrall_projectile(s, ov);
