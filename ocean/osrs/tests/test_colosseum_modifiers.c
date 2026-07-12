@@ -1668,13 +1668,13 @@ static void test_solarflare_orb(void) {
         };
         for (int step = 0; step < COLO_SOLARFLARE_RING_STEPS; step++) {
             int x, y;
-            col_solarflare_tile(p, step, &x, &y);
+            col_solarflare_tile(&s, p, step, &x, &y);
             if (!sf_tile_on_pillar_perimeter(p, x, y)) geometry_ok = 0;
             if (col_static_blocked(x, y)) geometry_ok = 0;
         }
         for (int c = 0; c < 4; c++) {
             int x, y;
-            col_solarflare_tile(p, corners[c][0], &x, &y);
+            col_solarflare_tile(&s, p, corners[c][0], &x, &y);
             if (x != corners[c][1] || y != corners[c][2]) corner_tiles_ok = 0;
         }
     }
@@ -1695,7 +1695,7 @@ static void test_solarflare_orb(void) {
             render_slots_ok = 0;
         } else {
             int x, y;
-            col_solarflare_tile(p, s.solarflare.step, &x, &y);
+            col_solarflare_tile(&s, p, s.solarflare.step, &x, &y);
             if (entities[e].npc_instance_id != COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p)
                 render_slots_ok = 0;
             if (entities[e].x != x || entities[e].y != y) render_slots_ok = 0;
@@ -1707,7 +1707,7 @@ static void test_solarflare_orb(void) {
 
     int obs_pillar = 2;
     int obs_x, obs_y;
-    col_solarflare_tile(obs_pillar, s.solarflare.step, &obs_x, &obs_y);
+    col_solarflare_tile(&s, obs_pillar, s.solarflare.step, &obs_x, &obs_y);
     s.player.x = obs_x;
     s.player.y = obs_y;
     static float obs[COLO_NUM_OBS];
@@ -1766,7 +1766,7 @@ static void test_solarflare_orb(void) {
 
     sf_reset_tier(&s, 3);
     int hit_x, hit_y;
-    col_solarflare_tile(0, s.solarflare.step, &hit_x, &hit_y);
+    col_solarflare_tile(&s, 0, s.solarflare.step, &hit_x, &hit_y);
     s.player.x = hit_x;
     s.player.y = hit_y;
     s.player.prayer = PRAYER_PROTECT_MAGIC;
@@ -1878,8 +1878,8 @@ static void test_modifier_hazard_obs_fixes(void) {
         .pause_timer = 0,
     };
     int current_x, current_y, next_x, next_y;
-    col_solarflare_tile(0, s.solarflare.step, &current_x, &current_y);
-    col_solarflare_tile(0, s.solarflare.step + 1, &next_x, &next_y);
+    col_solarflare_tile(&s, 0, s.solarflare.step, &current_x, &current_y);
+    col_solarflare_tile(&s, 0, s.solarflare.step + 1, &next_x, &next_y);
     s.player.x = current_x;
     s.player.y = current_y;
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
@@ -4563,6 +4563,105 @@ static void test_sol_beam_strike_reaction_window(void) {
     step_and_observe(&s, &ctx, idle);
     CHECK("moving off the marked tile on the telegraph tick dodges the strike",
         s.player.current_hitpoints == 99);
+}
+
+/** A11+D25 (2026-07-11): enrage changes only sand FREQUENCY — the 5 opening
+    sands and the 3-tick spam each telegraph 2 ticks like transition sand,
+    and re-covering a pooled tile has no additional effect. */
+static void test_sol_enrage_sand_telegraphs(void) {
+    printf("test_sol_enrage_sand_telegraphs\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 163);
+    s.sol.attack_delay = 30000;
+    sol_move_player(&s, 16, 16);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    /* phase 1 first so the enrage entry crosses 4 transitions (24 telegraphs)
+       plus 5 enrage opening sands = 29 <= BEAM_MAX 32. */
+    s.npcs[idx].hp = COLO_SOL_HP_MAX * 89 / 100;
+    for (int t = 0; t < 3; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    int pools_before = s.sol.hazard_tile_count;
+    CHECK("the phase-1 sands have pooled before the enrage rig",
+        pools_before >= 1 && sol_count_active_beams(&s) == 0);
+
+    int before = s.sol.hazard_tile_count;
+    col_sol_add_pool(&s, s.sol.hazard_tile_x[0], s.sol.hazard_tile_y[0]);
+    CHECK("re-covering a pooled tile has no additional effect",
+        s.sol.hazard_tile_count == before);
+
+    s.npcs[idx].hp = COLO_SOL_HP_MAX * 9 / 100;
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("enrage entry creates NO instant pools (every sand telegraphs)",
+        s.sol.hazard_tile_count == pools_before &&
+        sol_count_active_beams(&s) >= COLO_SOL_ENRAGE_OPEN_POOLS);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("no enrage sand strikes 1 tick after the telegraphs",
+        s.sol.hazard_tile_count == pools_before);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    int pools_at_strike = s.sol.hazard_tile_count;
+    CHECK("the enrage sands strike 2 ticks after their telegraphs",
+        pools_at_strike > pools_before);
+    CHECK("the enrage spam keeps telegraphing (no instant spam pools)",
+        sol_count_active_beams(&s) >= 1);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("spam sand does not strike 1 tick after its telegraph",
+        s.sol.hazard_tile_count == pools_at_strike);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("spam sand strikes 2 ticks after its telegraph",
+        s.sol.hazard_tile_count == pools_at_strike + 1);
+}
+
+/** A27 at Sol (W-STRAT): Solarflare orbs leave the pillar rings and rotate
+    5x5 boxes tucked into the improvised arena's corners; the four boxes are
+    distinct and fully inside the boss-arena bounds. */
+static void test_solarflare_sol_orbit_boxes(void) {
+    printf("test_solarflare_sol_orbit_boxes\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 167);
+    (void)idx;
+    s.modifiers.active_mask |= (1u << COLO_MOD_SOLARFLARE);
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;
+    col_mod_sync_solarflare(&s);
+    CHECK("Solarflare orb is active on the Sol wave", s.solarflare.active);
+
+    int inside = 1;
+    int anchors_distinct = 1;
+    int ax[COLO_NUM_PILLARS], ay[COLO_NUM_PILLARS];
+    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
+        col_solarflare_tile(&s, p, 0, &ax[p], &ay[p]);
+        for (int q = 0; q < p; q++)
+            if (ax[p] == ax[q] && ay[p] == ay[q]) anchors_distinct = 0;
+        for (int step = 0; step < COLO_SOLARFLARE_RING_STEPS; step++) {
+            int x, y;
+            col_solarflare_tile(&s, p, step, &x, &y);
+            if (x <= s.sol.boss_arena_min_x || x >= s.sol.boss_arena_max_x ||
+                    y <= s.sol.boss_arena_min_y || y >= s.sol.boss_arena_max_y)
+                inside = 0;
+        }
+    }
+    CHECK("all four Sol orbit boxes sit inside the improvised arena", inside);
+    CHECK("the four Sol orbit boxes are distinct corners", anchors_distinct);
+
+    /* off the Sol wave the rings stay on the pillars. */
+    ColosseumContext ctx1;
+    ColosseumState s1;
+    col_init_context_typed(&ctx1);
+    memset(&s1, 0, sizeof(s1));
+    col_reset_ctx((EncounterState*)&s1, (EncounterContext*)&ctx1, 29);
+    int x0, y0;
+    col_solarflare_tile(&s1, 0, 0, &x0, &y0);
+    CHECK("waves 1-11 keep the pillar orbit geometry",
+        x0 == COLO_PILLARS[0][0] - 1 && y0 == COLO_PILLARS[0][1] - 1);
 }
 
 
@@ -8287,6 +8386,8 @@ int main(void) {
     test_sol_phase_transition_sand_guarantees();
     test_sol_beams_become_pools();
     test_sol_beam_strike_reaction_window();
+    test_sol_enrage_sand_telegraphs();
+    test_solarflare_sol_orbit_boxes();
     test_loadout_profiles_and_supplies();
     test_loadout_consumables();
     test_loadout_divine_potions_and_stat_drift();

@@ -1015,7 +1015,7 @@ static ColoForecastSolarflare col_forecast_solarflare_precompute(const Colosseum
     int best_distance = 1 << 30;
     for (int p = 0; p < COLO_NUM_PILLARS; p++) {
         int x, y;
-        col_solarflare_tile(p, s->solarflare.step, &x, &y);
+        col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
         int dx = abs(x - s->player.x);
         int dy = abs(y - s->player.y);
         int distance = dx > dy ? dx : dy;
@@ -1035,6 +1035,7 @@ static ColoForecastSolarflare col_forecast_solarflare_precompute(const Colosseum
     (col_solarflare_advance_orb) so the step sequence matches the sim tick-for-tick.
     Returns -1 when the orb never reaches the landing within the horizon. */
 static int col_forecast_solarflare_contact_tick(
+    const ColosseumState* s,
     const ColoForecastSolarflare* pre,
     int land_x,
     int land_y,
@@ -1045,7 +1046,7 @@ static int col_forecast_solarflare_contact_tick(
     for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
         col_solarflare_advance_orb(&orb, pre->tier);
         int x, y;
-        col_solarflare_tile(pre->pillar, orb.step, &x, &y);
+        col_solarflare_tile(s, pre->pillar, orb.step, &x, &y);
         if (x == land_x && y == land_y) return tick_idx;
     }
     return -1;
@@ -1125,7 +1126,7 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         action->solarflare_contact_tick = action->valid
             ? col_forecast_solarflare_contact_tick(
-                &solarflare, action->land_x, action->land_y, horizon)
+                s, &solarflare, action->land_x, action->land_y, horizon)
             : -1;
     }
 #ifdef COLO_PROFILE_ENABLED

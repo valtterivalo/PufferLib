@@ -429,11 +429,14 @@ static void col_sol_tick_crystals(ColosseumState* s) {
 
 /* ----- beams + molten sand (A11+D25) ------------------------------------------ */
 
-/** drop a permanent molten pool; the 32-slot cap recycles a random slot on
-    overflow (D35). */
+/** drop a permanent molten pool; re-covering an existing pool has no
+    additional effect (W-STRAT), and the 32-slot cap recycles a random slot
+    on overflow (D35). */
 static void col_sol_add_pool(ColosseumState* s, int x, int y) {
     if (col_static_blocked(x, y)) return;
     SolHereditState* sol = &s->sol;
+    for (int i = 0; i < sol->hazard_tile_count; i++)
+        if (sol->hazard_tile_x[i] == x && sol->hazard_tile_y[i] == y) return;
     int slot = sol->hazard_tile_count < COLO_SOL_HAZARD_TILES_MAX
         ? sol->hazard_tile_count++
         : encounter_rand_int(&s->rng_state, COLO_SOL_HAZARD_TILES_MAX);
@@ -484,47 +487,56 @@ static int col_sol_sample_molten_candidates(
     return out_count;
 }
 
+/** telegraph one sand pillar: the white spot appears now, the pillar strikes
+    2 ticks later (the counter decrements on the drop tick). Silently skips
+    when all slots are in flight (BEAM_MAX covers every legit burst). */
+static void col_sol_drop_beam_at(ColosseumState* s, int x, int y) {
+    SolHereditState* sol = &s->sol;
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
+        if (sol->beams[b].active) continue;
+        sol->beams[b] = (ColoSolBeam){
+            .active = 1, .x = x, .y = y,
+            .ticks_to_pool = COLO_SOL_BEAM_TO_POOL_TICKS };
+        return;
+    }
+}
+
 /** A11+E6: 6 light beams in the 9x9 around the player, with the first on the
     player's current tile; each pillar strikes 2 ticks after its telegraph
     appears, leaving a permanent molten pool. */
 static void col_sol_drop_beams(ColosseumState* s) {
-    SolHereditState* sol = &s->sol;
     ColSolMoltenCandidate tiles[COLO_SOL_BEAM_COUNT];
     int ntiles = col_sol_sample_molten_candidates(
         s, COLO_SOL_BEAM_SPREAD, COLO_SOL_BEAM_COUNT, 1, tiles);
-    for (int n = 0; n < ntiles; n++) {
-        for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
-            if (sol->beams[b].active) continue;
-            sol->beams[b] = (ColoSolBeam){
-                .active = 1, .x = tiles[n].x, .y = tiles[n].y,
-                .ticks_to_pool = COLO_SOL_BEAM_TO_POOL_TICKS };
-            break;
-        }
-    }
+    for (int n = 0; n < ntiles; n++)
+        col_sol_drop_beam_at(s, tiles[n].x, tiles[n].y);
 }
 
-/** tick beams into pools, run the enrage spam (1 pool per 3 ticks within +-4
-    of the player, D25), and burn the player standing on any pool for 5-9
-    typeless — one burn per tick across overlapping pools (D35). */
+/** tick beams into pools, run the enrage spam (1 sand per 3 ticks within +-4
+    of the player, D25 — enrage changes only the FREQUENCY, every sand still
+    telegraphs 2 ticks like transition sand), and burn the player standing on
+    any pool for 5-9 typeless — one burn per tick across overlapping pools
+    (D35). The spam telegraphs before the aging loop so its pillar strikes on
+    the same same-tick-decrement schedule as transition beams. */
 static void col_sol_tick_molten(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
-    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
-        if (!sol->beams[b].active) continue;
-        sol->beams[b].ticks_to_pool--;
-        if (sol->beams[b].ticks_to_pool > 0) continue;
-        col_sol_add_pool(s, sol->beams[b].x, sol->beams[b].y);
-        sol->beams[b].active = 0;
-    }
-
     if (sol->phase >= 5) {
         if (sol->enrage_pool_timer > 0) sol->enrage_pool_timer--;
         if (sol->enrage_pool_timer == 0) {
             ColSolMoltenCandidate tile[1];
             int ntiles = col_sol_sample_molten_candidates(
                 s, COLO_SOL_ENRAGE_POOL_SPREAD, 1, 0, tile);
-            if (ntiles > 0) col_sol_add_pool(s, tile[0].x, tile[0].y);
+            if (ntiles > 0) col_sol_drop_beam_at(s, tile[0].x, tile[0].y);
             sol->enrage_pool_timer = COLO_SOL_MOLTEN_INTERVAL;
         }
+    }
+
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
+        if (!sol->beams[b].active) continue;
+        sol->beams[b].ticks_to_pool--;
+        if (sol->beams[b].ticks_to_pool > 0) continue;
+        col_sol_add_pool(s, sol->beams[b].x, sol->beams[b].y);
+        sol->beams[b].active = 0;
     }
 
     for (int i = 0; i < sol->hazard_tile_count; i++) {
@@ -671,11 +683,13 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     col_sol_drop_beams(s);
     if (new_phase >= 1 && new_phase <= 4) col_sol_spawn_crystal(s);
     if (new_phase >= 5) {
+        /* the 5 enrage opening sands telegraph like every other sand — only
+           the spawn frequency is special at enrage. */
         ColSolMoltenCandidate tiles[COLO_SOL_ENRAGE_OPEN_POOLS];
         int ntiles = col_sol_sample_molten_candidates(
             s, COLO_SOL_ENRAGE_POOL_SPREAD, COLO_SOL_ENRAGE_OPEN_POOLS, 0, tiles);
         for (int p = 0; p < ntiles; p++)
-            col_sol_add_pool(s, tiles[p].x, tiles[p].y);
+            col_sol_drop_beam_at(s, tiles[p].x, tiles[p].y);
         sol->enrage_pool_timer = COLO_SOL_MOLTEN_INTERVAL;
     }
     if (new_phase > s->log.boss_phase_reached) s->log.boss_phase_reached = new_phase;

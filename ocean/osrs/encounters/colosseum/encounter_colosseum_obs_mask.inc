@@ -956,7 +956,7 @@ static void col_write_nearest_modifier_solarflare(
     if (s->solarflare.active) {
         for (int p = 0; p < COLO_NUM_PILLARS; p++) {
             int x, y;
-            col_solarflare_tile(p, s->solarflare.step, &x, &y);
+            col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
             col_nearest_hazard_tile_consider(
                 &nearest, p, x, y, s->player.x, s->player.y);
         }
@@ -968,7 +968,7 @@ static void col_write_nearest_modifier_solarflare(
         int next_step = s->solarflare.step + 1;
         if (next_step == COLO_SOLARFLARE_RING_STEPS) next_step = 0;
         int next_x, next_y;
-        col_solarflare_tile(nearest.index, next_step, &next_x, &next_y);
+        col_solarflare_tile(s, nearest.index, next_step, &next_x, &next_y);
         int move_interval = tier >= 3
             ? COLO_SOLARFLARE_MOVE_INTERVAL_T3 : COLO_SOLARFLARE_MOVE_INTERVAL;
         int pause_interval = tier >= 3 ? COLO_SOLARFLARE_CORNER_PAUSE_T3 : 1;
@@ -1113,7 +1113,7 @@ static int col_count_pre_move_doom_instances(const ColosseumState* s) {
         }
         for (int p = 0; p < COLO_NUM_PILLARS; p++) {
             int x, y;
-            col_solarflare_tile(p, solarflare_contact_step, &x, &y);
+            col_solarflare_tile(s, p, solarflare_contact_step, &x, &y);
             if (x == s->player.x && y == s->player.y) count++;
         }
     }

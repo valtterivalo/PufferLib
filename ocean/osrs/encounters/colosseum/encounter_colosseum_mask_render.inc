@@ -373,7 +373,7 @@ static void col_fill_render_entities_ctx(
     if (s->solarflare.active) {
         for (int p = 0; p < COLO_NUM_PILLARS && n < max_entities; p++) {
             int x, y;
-            col_solarflare_tile(p, s->solarflare.step, &x, &y);
+            col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
             RenderEntity* re = &out[n++];
             OsrsNpcRenderEntitySpec orb_spec = {
                 .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,

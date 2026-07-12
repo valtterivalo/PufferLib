@@ -222,7 +222,14 @@ static const GoldenConfig CONFIGS[] = {
    w12 re-seeded 2026-07-11 for the Sol reaction-window corrections (A15 AoE
    damage age 1 -> 2 per real-gameplay frame analysis, sphere enrage delay):
    INTENDED change; w01-w11 bit-identical (Sol-only mechanics). Verified
-   deterministic (two --print runs identical). */
+   deterministic (two --print runs identical).
+
+   w12 re-seeded again 2026-07-11 for the Solarflare Sol orbit boxes (orbs
+   move off the pillar rings to 5x5 boxes in the improvised arena's corners;
+   the synthesized wave-12 draft history can carry Solarflare, so the obs
+   trajectory moves). Enrage sand telegraphs + pool dedup ship in the same
+   commit but are unreachable in this trajectory. INTENDED; w01-w11
+   bit-identical. Verified deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x6b648dbd26450b82ULL,
     0xd25dd5f73aea2df6ULL,
@@ -235,7 +242,7 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x4b420b3e18d846ebULL,
     0x054f146530962087ULL,
     0x4b5835b98fc7d4b0ULL,
-    0xd43e2f427cedd58fULL,
+    0x09af1dc513971058ULL,
 };
 
 int main(int argc, char** argv) {

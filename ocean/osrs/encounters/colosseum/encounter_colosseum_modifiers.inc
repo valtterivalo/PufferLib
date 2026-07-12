@@ -977,16 +977,31 @@ static void col_mod_tick_bees(ColosseumState* s) {
 
 /* ----- Solarflare (per-pillar orbs) ---------------------------------------- */
 
-/** write the Solarflare tile for one pillar and one shared ring step. */
-static void col_solarflare_tile(int pillar_index, int step, int* x, int* y) {
+/** write the Solarflare tile for one orbit box and one shared ring step.
+    Waves 1-11 orbit the four pillars; on the live Sol wave the orbs move to
+    5x5 boxes tucked into the improvised arena's corners (W-STRAT: "rotate in
+    a 5x5 pattern by the corners of the improvised arena"; exact tiles are
+    modeled — flush with the interior corners, floating over the one clipped
+    pillar tile). */
+static void col_solarflare_tile(
+    const ColosseumState* s, int pillar_index, int step, int* x, int* y
+) {
     if (pillar_index < 0 || pillar_index >= COLO_NUM_PILLARS ||
             step < 0 || step >= COLO_SOLARFLARE_RING_STEPS || !x || !y) {
         fprintf(stderr, "invalid solarflare tile request\n");
         abort();
     }
 
-    int px = COLO_PILLARS[pillar_index][0];
-    int py = COLO_PILLARS[pillar_index][1];
+    int px, py;
+    if (s->wave == COLO_WAVE_BOSS && s->sol.started) {
+        px = (pillar_index & 1) ? s->sol.boss_arena_max_x - 4
+                                : s->sol.boss_arena_min_x + 2;
+        py = (pillar_index & 2) ? s->sol.boss_arena_max_y - 4
+                                : s->sol.boss_arena_min_y + 2;
+    } else {
+        px = COLO_PILLARS[pillar_index][0];
+        py = COLO_PILLARS[pillar_index][1];
+    }
     if (step < 4) {
         *x = px - 1 + step;
         *y = py - 1;
@@ -1041,7 +1056,7 @@ static int col_mod_solarflare_max_hit(int tier) {
 static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
     for (int p = 0; p < COLO_NUM_PILLARS; p++) {
         int x, y;
-        col_solarflare_tile(p, s->solarflare.step, &x, &y);
+        col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
         if (x != s->player.x || y != s->player.y) continue;
         int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
         dmg = col_scale_incoming_damage(s, dmg);
