@@ -229,6 +229,21 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified (two independent sources reconciled).
 - Impact: 4. This is the boss fight's core skill check.
 
+### A11b. Molten-sand pillar strike timing — CORRECTED 2026-07-11
+- Sim: transition beams pooled (and burned the forced player-tile camper) 1 tick after
+  the telegraph appeared, checked before player movement = zero informed reaction ticks;
+  the guaranteed player-tile beam always connected at least one burn.
+- Correct: frame analysis of real gameplay (user, 2026-07-11): white telegraph spots
+  appear tick 1, the light pillars strike tick 3, leaving the sand. 2 ticks from
+  telegraph to strike = one informed move steps off.
+- Fix: COLO_SOL_BEAM_TO_POOL_TICKS 2 -> 3 (counter decrements on the drop tick).
+- Source: real-gameplay frame analysis.
+- Confidence: verified.
+- Impact: 3. Every phase transition guaranteed an unavoidable burn on entry.
+- OPEN: enrage spam sand (5 opening + 1 per 3 ticks) is created INSTANTLY in the sim
+  with no beam telegraph at all. Whether real enrage sand shows the same pillar
+  telegraph is unverified -- check the video before trusting enrage-phase fairness.
+
 ### A15b. Light-beam sphere react window at enrage — CORRECTED 2026-07-11
 - Sim: sphere impact a flat 3 ticks after the beam locks the tile (delay counter 4,
   decremented on the fire tick).
