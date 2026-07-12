@@ -1085,9 +1085,12 @@ typedef struct {
    roll is the A28 grapple-fail hit. */
 #define COLO_SOL_SLAM_MIN_HIT 20
 #define COLO_SOL_SLAM_RAND    25
-/* A15: hazard tiles bite exactly 1 tick after they appear and linger ~3 ticks
-   as residue (colosim SolGroundSlam age==1, dying at 2). */
-#define COLO_SOL_AOE_DAMAGE_AGE 1
+/* A15 (corrected 2026-07-11): damage lands 2 ticks after the cast. colosim's
+   SolGroundSlam bites at tile age==1, but that tile spawns 1 tick INTO the
+   attack animation; frame-analysis of real gameplay pins the total at
+   animation tick 1 -> step-away click tick 2 -> damage tick 3. One informed
+   reactive move dodges every pattern -- the fight's core skill check. */
+#define COLO_SOL_AOE_DAMAGE_AGE 2
 #define COLO_SOL_AOE_LIFETIME   3
 /* A3+D14: spear lines are 1 wide x 4 long, flush with the boss edge. */
 #define COLO_SOL_SPEAR_LINE_LEN 4
@@ -1113,8 +1116,12 @@ typedef struct {
 #define COLO_SOL_CRYSTAL_COOLDOWN_MIN    25
 #define COLO_SOL_CRYSTAL_COOLDOWN_RAND   11
 #define COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE 12
-/* sphere (A10+D15): flight 4 ticks, damage 60 + rand(0..15) = 60-75. */
-#define COLO_SOL_SPHERE_DELAY    4
+/* sphere (A10+D15, enrage speedup added 2026-07-11): the counter decrements
+   on the fire tick, so delay N = impact N-1 ticks after the beam locks the
+   tile. 4 -> 3 ticks to react (W-STRAT), 3 -> "only 2 ticks" at enrage.
+   Damage 60 + rand(0..15) = 60-75. */
+#define COLO_SOL_SPHERE_DELAY        4
+#define COLO_SOL_SPHERE_DELAY_ENRAGE 3
 #define COLO_SOL_SPHERE_MIN_HIT  60
 #define COLO_SOL_SPHERE_RAND     16
 

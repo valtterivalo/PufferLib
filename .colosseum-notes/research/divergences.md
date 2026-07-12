@@ -215,14 +215,28 @@ Format: ledger | sim value (file:line) | correct value | source | confidence | i
 - Confidence: verified.
 - Impact: 4. Boss TTK and enrage exposure are inflated ~stab/slash accuracy ratio otherwise.
 
-### A15. AoE telegraph window (ledger 6.10) — IMPLEMENTED P4
-- Sim: 2 ticks between telegraph and resolution (model:546).
-- Correct: hazard tiles deal damage 1 tick after they appear (colosim SolGroundSlam age==1;
-  tile lives ~3 ticks). The effective dodge window comes from the attack animation lead-in,
-  not a 2-tick tile grace. Wiki gives no number.
-- Source: WSM#GAP2f.
-- Confidence: single-source (colosim).
+### A15. AoE telegraph window (ledger 6.10) — IMPLEMENTED P4, RE-CORRECTED 2026-07-11
+- P4 read colosim SolGroundSlam age==1 as "damage 1 tick after the cast" and shipped
+  COLO_SOL_AOE_DAMAGE_AGE 1. That collapsed the attack animation lead-in: colosim's tile
+  spawns 1 tick INTO the animation, so age==1 for the tile = 2 ticks from animation start.
+- Correct: frame analysis of real gameplay (user, 2026-07-11): animation starts tick 1,
+  step-away click tick 2, damage + return click tick 3. Total = 2 ticks from animation
+  start to damage; exactly one informed reactive move dodges. At damage age 1 with the
+  boss phase running before player movement, the sim gave ZERO informed reaction ticks
+  (human-verified unreactable in the viewer).
+- Fix: COLO_SOL_AOE_DAMAGE_AGE 1 -> 2 (2026-07-11); lifetime 3 unchanged.
+- Source: WSM#GAP2f (colosim tile semantics) + real-gameplay frame analysis.
+- Confidence: verified (two independent sources reconciled).
 - Impact: 4. This is the boss fight's core skill check.
+
+### A15b. Light-beam sphere react window at enrage — CORRECTED 2026-07-11
+- Sim: sphere impact a flat 3 ticks after the beam locks the tile (delay counter 4,
+  decremented on the fire tick).
+- Correct: 3 ticks to react normally, "only 2 ticks" at enrage (W-STRAT enrage section).
+- Fix: COLO_SOL_SPHERE_DELAY_ENRAGE 3 (impact 2 ticks after lock) gated on phase >= 5.
+- Source: W-STRAT.
+- Confidence: verified (explicit wiki numbers).
+- Impact: 3. Enrage beam pressure is the endgame anti-passivity mechanic.
 
 ### A16. Modifier draft schedule + pool rules (ledger 5.3, 5.4) — IMPLEMENTED P5
 - Sim: draft offered only in gaps after clearing waves 1-11 (11 picks), uniform pool over

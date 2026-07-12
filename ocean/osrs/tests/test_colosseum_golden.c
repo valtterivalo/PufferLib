@@ -217,7 +217,12 @@ static const GoldenConfig CONFIGS[] = {
    pre-start modifier draft history, drain supplies to the depletion prior, and
    open the start wave's own draft LIVE. INTENDED change; w01 (organic start)
    stayed bit-identical, w02-w12 all moved. Verified deterministic (two
-   --print runs identical). */
+   --print runs identical).
+
+   w12 re-seeded 2026-07-11 for the Sol reaction-window corrections (A15 AoE
+   damage age 1 -> 2 per real-gameplay frame analysis, sphere enrage delay):
+   INTENDED change; w01-w11 bit-identical (Sol-only mechanics). Verified
+   deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x6b648dbd26450b82ULL,
     0xd25dd5f73aea2df6ULL,
@@ -230,7 +235,7 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x4b420b3e18d846ebULL,
     0x054f146530962087ULL,
     0x4b5835b98fc7d4b0ULL,
-    0x31ad397bfa572b3bULL,
+    0xd43e2f427cedd58fULL,
 };
 
 int main(int argc, char** argv) {

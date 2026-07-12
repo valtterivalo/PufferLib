@@ -10,7 +10,8 @@
  * sand), and the player-response layers (A20+B4 triple parry, A12+B7 grapple).
  *
  * All Sol damage is typeless except the triple-parry melee hits: the player
- * survives by dodging hazard tiles (a 1-tick window, A15), flicking Protect
+ * survives by dodging hazard tiles (damage 2 ticks after the cast = one
+ * informed reactive move, A15), flicking Protect
  * from Melee per parry hit (early prayer is punished, B4), and clicking the
  * called slot on the grapple. Damage routes through col_damage_player_from +
  * col_mod_on_player_damaged so the shared HP/splat/Doom bookkeeping holds.
@@ -304,8 +305,10 @@ static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant) 
     col_sol_aoe_direction(s, boss, &sol->aoe_dir_x, &sol->aoe_dir_y);
 }
 
-/** age the live AoE: at age 1 (A15) a player standing on a hazard tile eats
-    the per-tile 20-44 roll (D13); the residue fades after 3 ticks. */
+/** age the live AoE: at age 2 (A15: cast tick + telegraph tick + damage tick,
+    so the post-telegraph move phase runs before the check) a player standing
+    on a hazard tile eats the per-tile 20-44 roll (D13); residue fades after
+    3 ticks. */
 static void col_sol_tick_aoe(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->aoe_attack == COLO_SOL_AOE_NONE) return;
@@ -369,7 +372,8 @@ static void col_sol_fire_sphere(ColosseumState* s, int cx, int cy) {
         sol->spheres[i].tile_y = s->player.y;
         sol->spheres[i].damage = COLO_SOL_SPHERE_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_SOL_SPHERE_RAND);
-        sol->spheres[i].ticks_remaining = COLO_SOL_SPHERE_DELAY;
+        sol->spheres[i].ticks_remaining = sol->phase >= 5
+            ? COLO_SOL_SPHERE_DELAY_ENRAGE : COLO_SOL_SPHERE_DELAY;
         return;
     }
     assert(0 && "sphere queue full (4 crystals cannot keep 8 in flight)");
@@ -680,8 +684,9 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
  * Sol Heredit boss tick. No-op until wave 12 is live and the boss machine has
  * been started by col_sol_begin_boss_arena. Per-tick order: record the prayer
  * history (B4), run phase transitions, age hazards + resolve player-response
- * layers, THEN the attack engine and movement — a fresh cast keeps its full
- * 1-tick telegraph because the player's move phase runs after this, same tick.
+ * layers, THEN the attack engine and movement. A cast on tick T telegraphs in
+ * the obs at end of T, the player's informed move runs during T+1, and the
+ * age-2 damage check at the top of T+2 sees that moved position (A15).
  */
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
     (void)ctx;

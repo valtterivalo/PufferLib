@@ -4131,7 +4131,8 @@ static void test_sol_shield_safe_rings(void) {
             sol_move_player(&s, cx, cy - off);
             col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SHIELD, variant);
             s.player.current_hitpoints = 99;
-            step_and_observe(&s, &ctx, idle);
+            for (int t = 0; t < COLO_SOL_AOE_DAMAGE_AGE; t++)
+                step_and_observe(&s, &ctx, idle);
             int dmg = 99 - s.player.current_hitpoints;
             if (spot == 0)
                 CHECK(variant == 1 ? "shield1 bite: the ring tile is safe"
@@ -4146,9 +4147,9 @@ static void test_sol_shield_safe_rings(void) {
 }
 
 /* 6g. A3+A15+D14: spear hazard frames point at the player — front coverage,
-   lines at the documented columns, length 4 — and the tiles bite exactly 1
-   tick after appearing, so stepping to a documented dodge tile during the cast
-   tick avoids everything. */
+   lines at the documented columns, length 4 — and the tiles bite exactly 2
+   ticks after the cast, so stepping to a documented dodge tile on the
+   telegraph tick avoids everything. */
 static void test_sol_spear_lines(void) {
     printf("test_sol_spear_lines\n");
     ColosseumContext ctx;
@@ -4196,25 +4197,27 @@ static void test_sol_spear_lines(void) {
         col_sol_aoe_tile_is_hazard(&s.sol, 22, 22) &&
         !col_sol_aoe_tile_is_hazard(&s.sol, 22, 21));
 
-    /* A15: standing still eats the per-tile 20-44 one tick after the cast;
-       the documented 1-back centre dodge taken during the cast tick is clean. */
+    /* A15: standing still eats the per-tile 20-44 two ticks after the cast;
+       the documented 1-back centre dodge taken on the telegraph tick is clean. */
     s.sol.aoe_attack = COLO_SOL_AOE_NONE;
     s.sol.attack_delay = 1000;
     int idle[COLO_NUM_ACTION_HEADS] = {0};
     sol_move_player(&s, 18, 18);
     col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
     s.player.current_hitpoints = 99;
-    step_and_observe(&s, &ctx, idle);
+    for (int t = 0; t < COLO_SOL_AOE_DAMAGE_AGE; t++)
+        step_and_observe(&s, &ctx, idle);
     int dmg = 99 - s.player.current_hitpoints;
     CHECK("standing on a spear tile at the bite tick lands 20-44",
         dmg >= 20 && dmg <= 44);
     s.sol.aoe_attack = COLO_SOL_AOE_NONE;
     sol_move_player(&s, 18, 18);
     col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
-    sol_move_player(&s, 18, 17);   /* the centre-column 1-back dodge */
+    step_and_observe(&s, &ctx, idle);   /* the telegraph tick passes... */
+    sol_move_player(&s, 18, 17);   /* ...then the centre-column 1-back dodge */
     s.player.current_hitpoints = 99;
     step_and_observe(&s, &ctx, idle);
-    CHECK("the 1-tick dodge to the centre column avoids spear1 fully",
+    CHECK("the telegraph-tick dodge to the centre column avoids spear1 fully",
         s.player.current_hitpoints == 99);
 }
 
@@ -4294,6 +4297,116 @@ static void test_sol_crystal_lifecycle(void) {
     }
     CHECK("at enrage the post-fire cooldown is 12",
         s.sol.crystals[0].fire_cooldown == COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE);
+}
+
+/** A15 (corrected 2026-07-11 from real-gameplay frame analysis): AoE damage
+    lands exactly 2 ticks after the cast, so one informed reactive move on the
+    telegraph tick dodges. Real timeline: animation tick 1, step-away click
+    tick 2, damage tick 3. */
+static void test_sol_aoe_reaction_window(void) {
+    printf("test_sol_aoe_reaction_window\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 149);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    int cast_seen = 0;
+    for (int t = 0; t < 30 && !cast_seen; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].attacked_this_tick) cast_seen = 1;
+    }
+    CHECK("the opener spear casts with the player on a hazard tile",
+        cast_seen && s.sol.aoe_attack == COLO_SOL_AOE_SPEAR1 &&
+        col_sol_aoe_tile_is_hazard(&s.sol, s.player.x, s.player.y));
+
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("no AoE damage on the telegraph tick (cast + 1)",
+        s.player.current_hitpoints == 99);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("a stationary player is hit exactly 2 ticks after the cast",
+        s.player.current_hitpoints < 99);
+
+    /* second cast, rigged mid-arena so the dodge ring is reachable (the idle
+       opener pins the player to the south edge, where Shield 1's safe ring
+       legitimately sits out of one-move reach). */
+    sol_move_player(&s, 16, 16);
+    cast_seen = 0;
+    for (int t = 0; t < 20 && !cast_seen; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+        if (s.npcs[idx].attacked_this_tick) cast_seen = 1;
+    }
+    CHECK("a second AoE cast follows on the spear/shield rotation",
+        cast_seen && s.sol.aoe_attack != COLO_SOL_AOE_NONE &&
+        col_sol_aoe_tile_is_hazard(&s.sol, s.player.x, s.player.y));
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);   /* the telegraph tick passes... */
+    int safe_x = -1, safe_y = -1;
+    for (int x = s.player.x - 3; x <= s.player.x + 3 && safe_x < 0; x++)
+        for (int y = s.player.y - 3; y <= s.player.y + 3 && safe_x < 0; y++)
+            if (col_in_boss_arena(&s, x, y) && !col_static_blocked(x, y) &&
+                    !col_sol_aoe_tile_is_hazard(&s.sol, x, y)) {
+                safe_x = x; safe_y = y;
+            }
+    CHECK("a safe tile exists within reach of the dodge", safe_x >= 0);
+    sol_move_player(&s, safe_x, safe_y);   /* ...and the informed move lands */
+    step_and_observe(&s, &ctx, idle);
+    CHECK("moving off on the telegraph tick dodges the slam",
+        s.player.current_hitpoints == 99);
+}
+
+/** A10: sphere impact 3 ticks after the beam locks the tile, 2 at enrage
+    (the in-flight counter decrements on the fire tick). */
+static void test_sol_sphere_react_window(void) {
+    printf("test_sol_sphere_react_window\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 151);
+    (void)idx;
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 16, 14);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    col_sol_spawn_crystal(&s);
+    s.sol.crystals[0].perim_step = 7;
+    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
+    s.sol.crystals[0].fire_cooldown = 1;
+    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    int sphere = -1;
+    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
+        if (s.sol.spheres[i].active) sphere = i;
+    CHECK("the fired sphere has 3 ticks left after its fire tick",
+        sphere >= 0 &&
+        s.sol.spheres[sphere].ticks_remaining == COLO_SOL_SPHERE_DELAY - 1);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("no sphere damage through 2 ticks after the lock",
+        s.player.current_hitpoints == 99);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the sphere lands 3 ticks after the lock",
+        s.player.current_hitpoints < 99);
+
+    /* enrage: the same fire pipeline arms the shorter 2-tick impact. */
+    s.sol.phase = 5;
+    s.sol.crystals[0].perim_step = 7;
+    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
+    s.sol.crystals[0].fire_cooldown = 1;
+    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
+        s.player.current_hitpoints = 99;
+        step_and_observe(&s, &ctx, idle);
+    }
+    sphere = -1;
+    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
+        if (s.sol.spheres[i].active) sphere = i;
+    CHECK("at enrage the fired sphere has 2 ticks left after its fire tick",
+        sphere >= 0 &&
+        s.sol.spheres[sphere].ticks_remaining == COLO_SOL_SPHERE_DELAY_ENRAGE - 1);
 }
 
 /** E6: phase-transition molten sand always includes the player's tile and
@@ -8099,6 +8212,8 @@ int main(void) {
     test_sol_shield_safe_rings();
     test_sol_spear_lines();
     test_sol_crystal_lifecycle();
+    test_sol_aoe_reaction_window();
+    test_sol_sphere_react_window();
     test_sol_phase_transition_sand_guarantees();
     test_sol_beams_become_pools();
     test_loadout_profiles_and_supplies();
