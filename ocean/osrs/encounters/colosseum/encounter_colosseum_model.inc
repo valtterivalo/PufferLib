@@ -1125,11 +1125,15 @@ typedef struct {
 #define COLO_SOL_SPHERE_MIN_HIT  60
 #define COLO_SOL_SPHERE_RAND     16
 
-/* beams + molten sand (A11+D25): 6 beams per transition uniformly in the 9x9
-   around the player, each a permanent pool after 2 ticks; enrage opens with 5
-   pools then 1 per 3 ticks within +-4 of the player. */
+/* beams + molten sand (A11+D25, corrected 2026-07-11): 6 beams per transition
+   uniformly in the 9x9 around the player; the pillar strikes 2 ticks after
+   the telegraph appears (frame analysis: white spots tick 1, pillars strike
+   tick 3, sand persists). The counter decrements on the drop tick, so 3 =
+   strike 2 ticks after telegraph = one informed move steps off the forced
+   player-tile beam. Enrage opens with 5 pools then 1 per 3 ticks within +-4
+   of the player. */
 #define COLO_SOL_BEAM_COUNT         6
-#define COLO_SOL_BEAM_TO_POOL_TICKS 2
+#define COLO_SOL_BEAM_TO_POOL_TICKS 3
 #define COLO_SOL_BEAM_SPREAD        4
 #define COLO_SOL_ENRAGE_OPEN_POOLS  5
 #define COLO_SOL_ENRAGE_POOL_SPREAD 4

@@ -4479,7 +4479,7 @@ static void test_sol_beams_become_pools(void) {
         s.player.current_hitpoints = 99;
         step_and_observe(&s, &ctx, idle);
     }
-    CHECK("every beam becomes a molten pool after 2 ticks",
+    CHECK("every beam becomes a molten pool when its strike lands",
         s.sol.hazard_tile_count == 6 && sol_count_active_beams(&s) == 0);
 
     sol_move_player(&s, s.sol.hazard_tile_x[0], s.sol.hazard_tile_y[0]);
@@ -4493,6 +4493,76 @@ static void test_sol_beams_become_pools(void) {
     }
     CHECK("standing on a pool burns 5-9 every tick", burns_ok);
     CHECK("pools persist for the rest of the fight", s.sol.hazard_tile_count == 6);
+}
+
+/** A11 (corrected 2026-07-11 from real-gameplay frame analysis): transition
+    beams telegraph on the transition tick and the pillars strike 2 ticks
+    later (white spots tick 1, pillars tick 3), so one informed move steps
+    off the forced player-tile beam before it pools. */
+static void test_sol_beam_strike_reaction_window(void) {
+    printf("test_sol_beam_strike_reaction_window\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int idx = sol_setup(&s, &ctx, 157);
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 16, 16);
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    /* force the 90% transition: the boss tick drops the telegraphs. */
+    s.npcs[idx].hp = COLO_SOL_HP_MAX * 89 / 100;
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    int player_beam = 0;
+    for (int b = 0; b < COLO_SOL_BEAM_MAX; b++)
+        if (s.sol.beams[b].active && s.sol.beams[b].x == s.player.x &&
+                s.sol.beams[b].y == s.player.y) player_beam = 1;
+    CHECK("the transition telegraphs a beam on the player's tile",
+        player_beam && s.sol.hazard_tile_count == 0);
+    CHECK("no strike damage on the telegraph tick",
+        s.player.current_hitpoints == 99);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("no strike damage 1 tick after the telegraph",
+        s.player.current_hitpoints == 99 && s.sol.hazard_tile_count == 0);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the pillars strike 2 ticks after the telegraph and burn the camper",
+        s.sol.hazard_tile_count == 6 && s.player.current_hitpoints < 99);
+
+    /* 75% transition: one informed move off the marked tile dodges the burn.
+       Start from a pool-free tile so only the fresh beams are in play. */
+    int start_x = -1, start_y = -1;
+    for (int x = 12; x <= 21 && start_x < 0; x++)
+        for (int y = 12; y <= 21 && start_x < 0; y++) {
+            if (!col_in_boss_arena(&s, x, y) || col_static_blocked(x, y)) continue;
+            int pooled = 0;
+            for (int p = 0; p < s.sol.hazard_tile_count; p++)
+                if (s.sol.hazard_tile_x[p] == x && s.sol.hazard_tile_y[p] == y)
+                    pooled = 1;
+            if (!pooled) { start_x = x; start_y = y; }
+        }
+    CHECK("a pool-free start tile exists for the dodge rig", start_x >= 0);
+    sol_move_player(&s, start_x, start_y);
+    s.npcs[idx].hp = COLO_SOL_HP_MAX * 74 / 100;
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);   /* the telegraph tick passes... */
+    int safe_x = -1, safe_y = -1;
+    for (int x = s.player.x - 2; x <= s.player.x + 2 && safe_x < 0; x++)
+        for (int y = s.player.y - 2; y <= s.player.y + 2 && safe_x < 0; y++) {
+            if (!col_in_boss_arena(&s, x, y) || col_static_blocked(x, y)) continue;
+            int marked = 0;
+            for (int b = 0; b < COLO_SOL_BEAM_MAX; b++)
+                if (s.sol.beams[b].active && s.sol.beams[b].x == x &&
+                        s.sol.beams[b].y == y) marked = 1;
+            for (int p = 0; p < s.sol.hazard_tile_count; p++)
+                if (s.sol.hazard_tile_x[p] == x && s.sol.hazard_tile_y[p] == y)
+                    marked = 1;
+            if (!marked) { safe_x = x; safe_y = y; }
+        }
+    CHECK("an unmarked tile exists within reach of the beam dodge", safe_x >= 0);
+    sol_move_player(&s, safe_x, safe_y);   /* ...and the informed move lands */
+    step_and_observe(&s, &ctx, idle);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("moving off the marked tile on the telegraph tick dodges the strike",
+        s.player.current_hitpoints == 99);
 }
 
 
@@ -8216,6 +8286,7 @@ int main(void) {
     test_sol_sphere_react_window();
     test_sol_phase_transition_sand_guarantees();
     test_sol_beams_become_pools();
+    test_sol_beam_strike_reaction_window();
     test_loadout_profiles_and_supplies();
     test_loadout_consumables();
     test_loadout_divine_potions_and_stat_drift();

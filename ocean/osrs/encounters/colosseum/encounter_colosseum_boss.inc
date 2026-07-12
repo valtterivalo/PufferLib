@@ -485,7 +485,8 @@ static int col_sol_sample_molten_candidates(
 }
 
 /** A11+E6: 6 light beams in the 9x9 around the player, with the first on the
-    player's current tile; each becomes a permanent molten pool 2 ticks later. */
+    player's current tile; each pillar strikes 2 ticks after its telegraph
+    appears, leaving a permanent molten pool. */
 static void col_sol_drop_beams(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     ColSolMoltenCandidate tiles[COLO_SOL_BEAM_COUNT];
