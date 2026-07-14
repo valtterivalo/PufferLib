@@ -1,10 +1,10 @@
 {
   "format": "puffer-osrs-asset-manifest-v1",
-  "asset_version": "osrs-assets-v21",
+  "asset_version": "osrs-assets-v22",
   "archive": {
-    "name": "osrs-assets-v21.tar.gz",
-    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v21/osrs-assets-v21.tar.gz",
-    "sha256": "2f770543618a113fee806be6ec1217432904b0ed9f9d8b16872cd05274f81874",
+    "name": "osrs-assets-v22.tar.gz",
+    "url": "https://github.com/valtterivalo/PufferLib/releases/download/osrs-assets-v22/osrs-assets-v22.tar.gz",
+    "sha256": "48c6c0c0ebbb6454b00732977f987267797ad70cf1ad7ee8e0f0781014bb6c12",
     "strip_components": 1
   },
   "required_groups": [
@@ -114,7 +114,8 @@
         "sprites/gui/prayeron_24.png",
         "sprites/gui/magicon_47.png",
         "sprites/gui/standard_spell_on_79.png",
-        "sprites/gui/minimap_alpha_mask.png"
+        "sprites/gui/minimap_alpha_mask.png",
+        "sprites/gui/prayerglow_0.png"
       ]
     },
     {
