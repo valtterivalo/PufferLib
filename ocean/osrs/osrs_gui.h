@@ -579,17 +579,27 @@ static Rectangle gui_rect_intersect(Rectangle a, Rectangle b) {
     return (Rectangle){x1, y1, x2 - x1, y2 - y1};
 }
 
-static void gui_apply_scissor(Rectangle rect) {
-    int x = (int)(rect.x + 0.5f);
-    int y = (int)(rect.y + 0.5f);
-    int w = (int)(rect.width + 0.5f);
-    int h = (int)(rect.height + 0.5f);
+/** Scissor a native panel-space rect. BeginScissorMode operates in raw screen
+    coordinates, but the panel chrome draws under the ui_scale fixed-point zoom
+    about the panel rect's bottom-right corner (= the window corner), so the
+    rect must map through the same transform the camera applies or the clip
+    lands offset and eats rows of content. Clip state stays native-space; only
+    this boundary converts. */
+static void gui_apply_scissor(const GuiState* gs, Rectangle rect) {
+    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
+    float fx = (float)(gs->panel_x + gs->panel_w);
+    float fy = (float)(gs->panel_y + gs->panel_h);
+    int x = (int)floorf(fx + (rect.x - fx) * k);
+    int y = (int)floorf(fy + (rect.y - fy) * k);
+    int w = (int)ceilf(rect.width * k);
+    int h = (int)ceilf(rect.height * k);
     if (w < 0) w = 0;
     if (h < 0) h = 0;
     BeginScissorMode(x, y, w, h);
 }
 
 static void gui_push_clip(
+    const GuiState* gs,
     GuiUiClipState* clip,
     Rectangle next,
     Rectangle* prev,
@@ -600,16 +610,18 @@ static void gui_push_clip(
     if (clip->active) next = gui_rect_intersect(next, clip->current);
     if (!gui_rect_has_area(next)) next = (Rectangle){0};
     if (clip->active) EndScissorMode();
-    gui_apply_scissor(next);
+    gui_apply_scissor(gs, next);
     clip->current = next;
     clip->active = 1;
 }
 
-static void gui_pop_clip(GuiUiClipState* clip, Rectangle prev, int prev_active) {
+static void gui_pop_clip(
+    const GuiState* gs, GuiUiClipState* clip, Rectangle prev, int prev_active
+) {
     if (clip->active) EndScissorMode();
     clip->current = prev;
     clip->active = prev_active;
-    if (clip->active) gui_apply_scissor(clip->current);
+    if (clip->active) gui_apply_scissor(gs, clip->current);
 }
 
 static Font gui_font_for_size(const GuiState* gs, int size) {
@@ -1804,9 +1816,9 @@ static void gui_draw_ui_component(
         if (component->type == 0 && gui_rect_has_area(rect)) {
             Rectangle prev = {0};
             int prev_active = 0;
-            gui_push_clip(clip, rect, &prev, &prev_active);
+            gui_push_clip(gs, clip, rect, &prev, &prev_active);
             gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
-            gui_pop_clip(clip, prev, prev_active);
+            gui_pop_clip(gs, clip, prev, prev_active);
         } else {
             gui_draw_ui_component(gs, group, child, child_rect, clip, overrides);
         }
@@ -1831,7 +1843,7 @@ static int gui_draw_ui_group(
     GuiUiClipState clip = {0};
     Rectangle prev = {0};
     int prev_active = 0;
-    gui_push_clip(&clip, mount, &prev, &prev_active);
+    gui_push_clip(gs, &clip, mount, &prev, &prev_active);
     for (int i = 0; i < group->component_count; i++) {
         const OsrsUiComponent* component = &group->components[i];
         if (component->parent_id != -1) continue;
@@ -1839,7 +1851,7 @@ static int gui_draw_ui_group(
             component, mount, osrs_ui_component_uses_mount_rect(component));
         gui_draw_ui_component(gs, group, component, rect, &clip, overrides);
     }
-    gui_pop_clip(&clip, prev, prev_active);
+    gui_pop_clip(gs, &clip, prev, prev_active);
     return 1;
 }
 
