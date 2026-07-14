@@ -39,11 +39,17 @@
 
 
 #define RENDER_TILE_SIZE       20
-/* window dimensions. OSRS resizable mode UI is STATIC pixel size — the panel
-   column is always 241 wide regardless of window dimensions, with the game
-   viewport filling the remaining width. */
-#define RENDER_WINDOW_W        1148
-#define RENDER_WINDOW_H        755
+/* window dimensions. Sized to the reference client canvas: a 3024x1680 retina
+   screenshot minus the 546px RuneLite sidebar = 2478x1680 px = 1239x840
+   logical points. */
+#define RENDER_WINDOW_W        1240
+#define RENDER_WINDOW_H        840
+/* OSRS chrome draws from native-size sprites (side panel 241 wide), but the
+   reference client renders that panel at 277 points (554x748 retina px / 2).
+   Chrome blocks therefore scale by RENDER_UI_SCALE at draw time, each about
+   the window corner it hugs (panel: bottom-right, minimap: top-right), so all
+   native-space coordinates keep their meaning for layout and hit-testing. */
+#define RENDER_UI_SCALE        1.15f
 #define RENDER_PANEL_WIDTH     GUI_SIDE_MENU_W
 #define RENDER_HEADER_HEIGHT   0     /* OSRS client has no top header strip */
 #define RENDER_SPLATS_PER_PLAYER 4   /* OSRS max: 4 simultaneous splats per entity */
@@ -61,8 +67,23 @@
 #define ANIM_SEQ_BLOCK_SHIELD   1156
 #define ANIM_SEQ_BLOCK_MELEE    424
 
-#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_WIDTH)  /* = 575, OSRS ≈ 512 */
-#define RENDER_GRID_H (RENDER_WINDOW_H - RENDER_HEADER_HEIGHT)  /* = 503, OSRS ≈ 334 */
+/* screen-space width of the scaled panel and of the game viewport left of it.
+   Native-space panel anchors use RENDER_WINDOW_W - RENDER_PANEL_WIDTH. */
+#define RENDER_PANEL_SCREEN_W  ((int)(RENDER_PANEL_WIDTH * RENDER_UI_SCALE + 0.5f))
+#define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_SCREEN_W)  /* = 963 */
+#define RENDER_GRID_H (RENDER_WINDOW_H - RENDER_HEADER_HEIGHT)   /* = 840 */
+
+/** Fixed-point zoom for a chrome block: scales native-space drawing by
+    RENDER_UI_SCALE about (fixed_x, fixed_y). Each block passes the window
+    corner it hugs, so its native anchor math stays valid under the zoom. */
+static inline Camera2D render_chrome_camera(float fixed_x, float fixed_y) {
+    return (Camera2D){
+        .offset = (Vector2){ fixed_x, fixed_y },
+        .target = (Vector2){ fixed_x, fixed_y },
+        .rotation = 0.0f,
+        .zoom = RENDER_UI_SCALE,
+    };
+}
 
 /* minimap + orbs occupy the top of the right-hand panel column. OSRS resizable
    mode uses STATIC native sprite sizes — no scaling — so the chrome takes up
@@ -1451,7 +1472,12 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
     context_menu_finish_layout(cm, mx, my);
 }
 
-static void context_menu_build_gui(RenderClient* rc, Player* p, int mx, int my) {
+/** Build the side-panel context menu. (mx, my) are panel-space coordinates for
+    slot/prayer/spell hit-testing; (layout_mx, layout_my) are the raw screen
+    coordinates of the click, where the menu itself is drawn. */
+static void context_menu_build_gui(
+    RenderClient* rc, Player* p, int mx, int my, int layout_mx, int layout_my
+) {
     ContextMenu* cm = &rc->context_menu;
     cm->item_count = 0;
     cm->hover_idx = -1;
@@ -1578,7 +1604,7 @@ static void context_menu_build_gui(RenderClient* rc, Player* p, int mx, int my) 
     }
 
     context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
-    context_menu_finish_layout(cm, mx, my);
+    context_menu_finish_layout(cm, layout_mx, layout_my);
 }
 
 /** Execute a context menu item action on the HumanInput staging buffer. */
@@ -2045,11 +2071,12 @@ static RenderClient* render_make_client(void) {
        inventory/tabs panel anchored to bottom-right corner. they share the
        same column (panel_x..panel_x+panel_w) but are separate blocks; the
        game viewport extends through the right column between them. */
-    rc->gui.panel_x = RENDER_GRID_W;
+    rc->gui.panel_x = RENDER_WINDOW_W - RENDER_PANEL_WIDTH;
     rc->gui.panel_w = RENDER_PANEL_WIDTH;
     /* tabs+content panel anchored to bottom of window */
     rc->gui.panel_h = RENDER_TAB_ROW_H + RENDER_PANEL_CONTENT_H + RENDER_TAB_ROW_H;
     rc->gui.panel_y = RENDER_WINDOW_H - rc->gui.panel_h;
+    rc->gui.ui_scale = RENDER_UI_SCALE;
     rc->gui.tab_h = RENDER_TAB_ROW_H;
     rc->gui.status_bar_h = 0;  /* minimap is a separate block at top-right */
     rc->gui.gui_entity_idx = 0;
@@ -3031,6 +3058,8 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         int mx = GetMouseX();
         int my = GetMouseY();
+        int pmx, pmy;
+        gui_mouse_to_panel_space(&rc->gui, mx, my, &pmx, &pmy);
         int handled = 0;
 
         /* 0a. colosseum modifier draft: the mandatory between-wave pick freezes
@@ -3071,12 +3100,12 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
 
         /* 1. tab bar click */
         if (!handled)
-            handled = gui_handle_tab_click(&rc->gui, mx, my);
+            handled = gui_handle_tab_click(&rc->gui, pmx, pmy);
 
         /* 2. panel content area (when human control is on) */
         if (!handled && rc->human_input.enabled &&
-            mx >= rc->gui.panel_x && mx < rc->gui.panel_x + rc->gui.panel_w &&
-            my >= rc->gui.panel_y && my < rc->gui.panel_y + rc->gui.panel_h) {
+            pmx >= rc->gui.panel_x && pmx < rc->gui.panel_x + rc->gui.panel_w &&
+            pmy >= rc->gui.panel_y && pmy < rc->gui.panel_y + rc->gui.panel_h) {
 
             Player* viewed = (rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count)
                 ? render_get_player_ptr(env, rc->gui.gui_entity_idx) : NULL;
@@ -3084,15 +3113,15 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
             if (viewed) {
                 switch (rc->gui.active_tab) {
                     case GUI_TAB_PRAYER:
-                        human_handle_prayer_click(&rc->human_input, &rc->gui, viewed, mx, my);
+                        human_handle_prayer_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
                         handled = 1;
                         break;
                     case GUI_TAB_SPELLBOOK:
-                        human_handle_spell_click(&rc->human_input, &rc->gui, mx, my);
+                        human_handle_spell_click(&rc->human_input, &rc->gui, pmx, pmy);
                         handled = 1;
                         break;
                     case GUI_TAB_COMBAT:
-                        human_handle_combat_click(&rc->human_input, &rc->gui, viewed, mx, my);
+                        human_handle_combat_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
                         handled = 1;
                         break;
                     default:
@@ -3102,15 +3131,18 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         }
 
         /* 2b. special-attack orb beside the minimap toggles spec, as in game */
-        if (!handled && rc->human_input.enabled &&
-            CheckCollisionPointRec(CLITERAL(Vector2){(float)mx, (float)my},
-                                   render_minimap_spec_orb_rect())) {
-            human_apply_spec_toggle(&rc->human_input);
-            handled = 1;
+        if (!handled && rc->human_input.enabled) {
+            int mmx, mmy;
+            gui_mouse_to_minimap_space(&rc->gui, mx, my, &mmx, &mmy);
+            if (CheckCollisionPointRec(CLITERAL(Vector2){(float)mmx, (float)mmy},
+                                       render_minimap_spec_orb_rect())) {
+                human_apply_spec_toggle(&rc->human_input);
+                handled = 1;
+            }
         }
 
-        /* 3. ground/entity click (game grid area, left of panel) */
-        if (!handled && rc->human_input.enabled && mx < rc->gui.panel_x) {
+        /* 3. ground/entity click (game grid area, left of the scaled panel) */
+        if (!handled && rc->human_input.enabled && pmx < rc->gui.panel_x) {
             int entity_hit = 0;
             for (int ei = 0; ei < rc->entity_count; ei++) {
                 RenderEntity* ent = &rc->entities[ei];
@@ -3198,19 +3230,21 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
         if (rc->human_input.enabled) {
             int rmx = GetMouseX();
             int rmy = GetMouseY();
-            if (rmx < rc->gui.panel_x) {
+            int prmx, prmy;
+            gui_mouse_to_panel_space(&rc->gui, rmx, rmy, &prmx, &prmy);
+            if (prmx < rc->gui.panel_x) {
                 /* cancel spell targeting on right-click (OSRS behavior) */
                 if (rc->human_input.cursor_mode != CURSOR_NORMAL)
                     human_input_clear_selected_ui_target(&rc->human_input);
                 context_menu_build(rc, env, rmx, rmy);
-            } else if (rmx < rc->gui.panel_x + rc->gui.panel_w &&
-                    rmy >= rc->gui.panel_y &&
-                    rmy < rc->gui.panel_y + rc->gui.panel_h) {
+            } else if (prmx < rc->gui.panel_x + rc->gui.panel_w &&
+                    prmy >= rc->gui.panel_y &&
+                    prmy < rc->gui.panel_y + rc->gui.panel_h) {
                 Player* gui_p = rc->entity_count > 0 && rc->gui.gui_entity_idx < rc->entity_count
                     ? render_get_player_ptr(env, rc->gui.gui_entity_idx)
                     : NULL;
                 if (gui_p)
-                    context_menu_build_gui(rc, gui_p, rmx, rmy);
+                    context_menu_build_gui(rc, gui_p, prmx, prmy, rmx, rmy);
                 else
                     context_menu_dismiss(&rc->context_menu);
             } else {
@@ -3225,7 +3259,9 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     rc->hover_tile_y = -1;
     int hmx = GetMouseX();
     int hmy = GetMouseY();
-    if (hmx >= 0 && hmx < rc->gui.panel_x &&
+    int hpx, hpy;
+    gui_mouse_to_panel_space(&rc->gui, hmx, hmy, &hpx, &hpy);
+    if (hmx >= 0 && hpx < rc->gui.panel_x &&
         hmy >= 0 && hmy < RENDER_WINDOW_H) {
         Camera3D hcam = render_build_3d_camera(rc);
         Ray hray = GetScreenToWorldRay((Vector2){ (float)hmx, (float)hmy }, hcam);
@@ -6413,6 +6449,11 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
         }
     }
     EndTextureMode();
+
+    /* everything below draws to screen in native chrome coordinates, scaled
+       about the top-right corner the block hugs. The RenderTexture pass above
+       must finish before the camera opens: BeginTextureMode resets rlgl state. */
+    BeginMode2D(render_chrome_camera((float)RENDER_WINDOW_W, 0.0f));
     Rectangle surface_src = { 0, 0, (float)mask_w, -(float)mask_h };
     Rectangle surface_dst = { (float)mask_x, (float)mask_y,
                               (float)mask_w, (float)mask_h };
@@ -6474,6 +6515,7 @@ static void render_draw_minimap_area(RenderClient* rc, OsrsEnv* env, Player* p) 
     gui_draw_named_asset(gs, "ring_30", worldmap_button, WHITE);
     gui_draw_named_asset_centered(gs, "worldmap_icon_0", worldmap_button, 22, 22, WHITE);
     gui_draw_named_asset(gs, "wiki_icon_0", wiki_button, WHITE);
+    EndMode2D();
 
     (void)env;
 }
@@ -7099,7 +7141,12 @@ void pvp_render(OsrsEnv* env) {
                 rc->gui.display_inventory_count = COLO_INVENTORY_DISPLAY_SLOTS;
             }
         }
-        if (gui_player) gui_draw(&rc->gui, gui_player);
+        if (gui_player) {
+            BeginMode2D(render_chrome_camera(
+                (float)RENDER_WINDOW_W, (float)RENDER_WINDOW_H));
+            gui_draw(&rc->gui, gui_player);
+            EndMode2D();
+        }
 
         /* draw minimap + orbs on top of the panel area (post gui_draw so the
            side-panel background stops at the minimap area's bottom edge) */

@@ -24,6 +24,7 @@
 #define OSRS_GUI_H
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -350,6 +351,11 @@ typedef struct {
     int tab_h;
     int status_bar_h;    /* compact HP/prayer/spec bar height */
 
+    /* chrome draw-time zoom set by the render client (0 = treat as 1.0).
+       panel/minimap coordinates stay native; drawing and hit-testing map
+       through the fixed-point transforms in gui_mouse_to_*_space. */
+    float ui_scale;
+
     /* multi-entity cycling (G key) */
     int gui_entity_idx;
     int gui_entity_count;
@@ -498,6 +504,31 @@ typedef struct {
     int pending_spell_highlight;
     int autocast_selector_open;
 } GuiState;
+
+/** Map a raw screen coordinate into the side panel's native coordinate space.
+    The panel draws at native sprite size under a ui_scale zoom about the
+    window's bottom-right corner, which coincides with the panel rect's own
+    bottom-right, so the inverse is a fixed-point scale about that corner. */
+static inline void gui_mouse_to_panel_space(
+    const GuiState* gs, int mx, int my, int* out_x, int* out_y
+) {
+    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
+    float fx = (float)(gs->panel_x + gs->panel_w);
+    float fy = (float)(gs->panel_y + gs->panel_h);
+    *out_x = (int)lroundf(fx + ((float)mx - fx) / k);
+    *out_y = (int)lroundf(fy + ((float)my - fy) / k);
+}
+
+/** Same mapping for the minimap block, which zooms about the window's
+    top-right corner (= the panel column's right edge at y 0). */
+static inline void gui_mouse_to_minimap_space(
+    const GuiState* gs, int mx, int my, int* out_x, int* out_y
+) {
+    float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
+    float fx = (float)(gs->panel_x + gs->panel_w);
+    *out_x = (int)lroundf(fx + ((float)mx - fx) / k);
+    *out_y = (int)lroundf((float)my / k);
+}
 
 
 /** Try loading a texture, returns 1 on success. */
@@ -2646,8 +2677,8 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
 static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
     if (gs->active_tab != GUI_TAB_INVENTORY) return;
 
-    int mx = GetMouseX();
-    int my = GetMouseY();
+    int mx, my;
+    gui_mouse_to_panel_space(gs, GetMouseX(), GetMouseY(), &mx, &my);
 
     /* drag in progress */
     if (gs->inv_drag_active) {
