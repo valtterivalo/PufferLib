@@ -76,6 +76,8 @@ def build_sprite_map() -> dict[int, list[str]]:
     sprites: dict[int, list[str]] = {}
 
     _add(sprites, 897, "tradebacking_dark")
+    _add(sprites, 4892, "prayerglow_0")
+    _add(sprites, 4893, "prayerglow_1")
     _add(sprites, 1017, "chatbox_bg")
     _add(sprites, 1018, "main_stones_bottom")
     _add(sprites, 1031, "side_background")

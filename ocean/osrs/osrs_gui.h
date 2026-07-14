@@ -386,7 +386,6 @@ typedef struct {
 
     /* prayer icons: enabled and disabled variants */
     Texture2D prayer_on[GUI_NUM_PRAYERS];
-    Texture2D prayer_off[GUI_NUM_PRAYERS];
 
     /* spell icons: enabled and disabled variants */
     Texture2D spell_on[GUI_NUM_SPELLS];
@@ -723,15 +722,6 @@ static const int GUI_PRAYER_ON_SPRITE_IDS[GUI_NUM_PRAYERS] = {
     945, 946, 1420, 1421,
 };
 
-static const int GUI_PRAYER_OFF_SPRITE_IDS[GUI_NUM_PRAYERS] = {
-    135, 136, 137, 153, 154,
-    138, 139, 140, 141, 142,
-    143, 506, 507, 144, 145,
-    146, 147, 148, 149, 508,
-    509, 151, 150, 152, 951,
-    949, 950, 1424, 1425,
-};
-
 static const int GUI_SPELL_ON_SPRITE_IDS[GUI_NUM_SPELLS] = {
     329, 337, 333, 325,
     330, 338, 334, 326,
@@ -755,11 +745,6 @@ static const int GUI_SPELL_OFF_SPRITE_IDS[GUI_NUM_SPELLS] = {
 static int gui_prayer_on_sprite_id(GuiPrayerIdx idx) {
     assert(idx >= 0 && idx < GUI_NUM_PRAYERS);
     return GUI_PRAYER_ON_SPRITE_IDS[idx];
-}
-
-static int gui_prayer_off_sprite_id(GuiPrayerIdx idx) {
-    assert(idx >= 0 && idx < GUI_NUM_PRAYERS);
-    return GUI_PRAYER_OFF_SPRITE_IDS[idx];
 }
 
 static int gui_spell_on_sprite_id(GuiSpellIdx idx) {
@@ -871,10 +856,7 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
         const char* on_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
             gui_prayer_on_sprite_id((GuiPrayerIdx)i));
-        const char* off_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
-            gui_prayer_off_sprite_id((GuiPrayerIdx)i));
         gui_try_load(&gs->prayer_on[i], on_path);
-        gui_try_load(&gs->prayer_off[i], off_path);
     }
 
     for (int i = 0; i < GUI_NUM_SPELLS; i++) {
@@ -994,6 +976,8 @@ static void gui_load_sprites(GuiState* gs) {
         "options_icons_18",
         "options_icons_28",
         "whistle",
+        "prayerglow_0",
+        "prayerglow_1",
     };
     int ui_asset_count = (int)(sizeof(ui_asset_names) / sizeof(ui_asset_names[0]));
     for (int i = 0; i < ui_asset_count; i++) {
@@ -1175,7 +1159,6 @@ static void gui_unload_sprites(GuiState* gs) {
     for (int i = 0; i < GUI_TAB_COUNT; i++) UnloadTexture(gs->tab_icons[i]);
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
         UnloadTexture(gs->prayer_on[i]);
-        UnloadTexture(gs->prayer_off[i]);
     }
     for (int i = 0; i < GUI_NUM_SPELLS; i++) {
         UnloadTexture(gs->spell_on[i]);
@@ -1606,7 +1589,6 @@ static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Recta
             gui_draw_named_asset_centered(gs, slot->empty_asset, rect, rect.width, rect.height, WHITE);
         }
     } else {
-        DrawRectangleRec(rect, (Color){0, 0, 0, 30});
         if (!slot->enabled) return;
 
         Texture2D tex = {0};
@@ -1934,15 +1916,18 @@ static int gui_content_y(GuiState* gs) {
 }
 
 
-/* inventory grid: OSRS native static-pixel layout */
+/* inventory grid: OSRS native static-pixel layout per [proc,inventory_build]:
+   slots are 36x32 icons drawn 1:1 at x0 = (42-36)*3-2 = 16, y0 = (36-32)*2 = 8
+   on a 42x36 pitch, with NO backing box behind them. Hit areas are the icon
+   bounds, exactly like the real client's inventory components. */
 #define INV_COLS 4
 #define INV_ROWS 7
 #define INV_PANEL_CONTENT_X GUI_SIDE_CONTENT_X
-#define INV_SLOT_X 14
+#define INV_SLOT_X 16
 #define INV_SLOT_Y 8
 #define INV_CELL_W 42
 #define INV_CELL_H 36
-#define INV_SPRITE_W 32
+#define INV_SPRITE_W 36
 #define INV_SPRITE_H 32
 
 /** Get the OSRS item ID for a consumable based on remaining doses/count. */
@@ -2406,12 +2391,14 @@ static void gui_inv_slot_pos(GuiState* gs, int slot, int* out_x, int* out_y) {
     *out_y = grid_y + row * INV_CELL_H;
 }
 
-/** Hit test: return inventory slot index at screen position, or -1. */
+/** Hit test: return inventory slot index at screen position, or -1.
+    Matches the real client: the hit area is the 36x32 icon component, so the
+    pitch gaps between icons are dead space. */
 static int gui_inv_slot_at(GuiState* gs, int mx, int my) {
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
         int sx, sy;
         gui_inv_slot_pos(gs, i, &sx, &sy);
-        if (mx >= sx && mx < sx + INV_CELL_W && my >= sy && my < sy + INV_CELL_H) {
+        if (mx >= sx && mx < sx + INV_SPRITE_W && my >= sy && my < sy + INV_SPRITE_H) {
             return i;
         }
     }
@@ -2799,13 +2786,6 @@ static void gui_draw_inventory_drag(GuiState* gs) {
         DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f,
             CLITERAL(Color){255, 255, 255, 200});
     }
-
-    int target = gui_inv_slot_at(gs, gs->inv_drag_mouse_x, gs->inv_drag_mouse_y);
-    if (target >= 0 && target != gs->inv_drag_src_slot) {
-        int tx, ty;
-        gui_inv_slot_pos(gs, target, &tx, &ty);
-        DrawRectangle(tx, ty, INV_CELL_W, INV_CELL_H, CLITERAL(Color){255, 255, 255, 40});
-    }
 }
 
 static int gui_draw_inventory_decoded(GuiState* gs) {
@@ -2813,8 +2793,8 @@ static int gui_draw_inventory_decoded(GuiState* gs) {
         .component_id = OSRS_UI_COMPONENT_ID(OSRS_UI_GROUP_INVENTORY, 0),
         .slot_count = INV_GRID_SLOTS,
         .columns = 4,
-        .x0 = 14,
-        .y0 = 8,
+        .x0 = INV_SLOT_X,
+        .y0 = INV_SLOT_Y,
         .step_x = 42,
         .step_y = 36,
         .slot_w = INV_SPRITE_W,
@@ -2834,14 +2814,6 @@ static void gui_draw_inventory_manual(GuiState* gs) {
     for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
         int cx, cy;
         gui_inv_slot_pos(gs, slot, &cx, &cy);
-        int sx = cx + (INV_CELL_W - INV_SPRITE_W) / 2;
-        int sy = cy + (INV_CELL_H - INV_SPRITE_H) / 2;
-        DrawRectangle(sx, sy, INV_SPRITE_W, INV_SPRITE_H, CLITERAL(Color){0, 0, 0, 30});
-    }
-
-    for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
-        int cx, cy;
-        gui_inv_slot_pos(gs, slot, &cx, &cy);
         InvSlot* inv = &gs->inv_grid[slot];
 
         if (inv->type == INV_SLOT_EMPTY) continue;
@@ -2858,8 +2830,8 @@ static void gui_draw_inventory_manual(GuiState* gs) {
         int is_dimmed = (gs->inv_dim_slot == slot && gs->inv_dim_timer > 0);
         Color tint = is_dimmed ? CLITERAL(Color){ 255, 255, 255, 128 } : WHITE;
 
-        int dx = cx + (INV_CELL_W - INV_SPRITE_W) / 2;
-        int dy = cy + (INV_CELL_H - INV_SPRITE_H) / 2;
+        int dx = cx;
+        int dy = cy;
 
         /* skip drawing at grid position if being dragged (drawn at cursor instead) */
         if (gs->inv_drag_active && slot == gs->inv_drag_src_slot) {
@@ -3061,30 +3033,37 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
 
 #define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
 
+/* prayerbook layout per [proc,prayer_redraw] + the group 541 interface defs:
+   34x34 buttons on a (182-5*34)/4+34 = 37 pitch inside the 182-wide container,
+   which is centered in the 190 content (x0 4) with its top edge at y 9.
+   Active prayers show the 34x34 prayerglow sprite behind a 30x30 icon. */
 #define GUI_PRAYER_GRID_COLS 5
 #define GUI_PRAYER_CELL_PX 34
-#define GUI_SPELL_GRID_COLS 4
-#define GUI_SPELL_CELL_PX 34
+#define GUI_PRAYER_ICON_PX 30
+#define GUI_PRAYER_GRID_X0 4
+#define GUI_PRAYER_GRID_Y0 9
+#define GUI_PRAYER_PITCH 37
 
-static int gui_fit_cell_size(int panel_w, int cols, int gap, int native_px) {
-    int fitted = (panel_w - 16 - gap * (cols - 1)) / cols;
-    return fitted < native_px ? fitted : native_px;
-}
+/* ancient spellbook layout per [proc,magic_spellbook_redraw] + script6419
+   case 1: 24x24 icons, 4 columns, x pitch 24+20, y pitch 24+4, the block
+   positioned centre+2 horizontally at y 8. */
+#define GUI_SPELL_GRID_COLS 4
+#define GUI_SPELL_ICON_PX 24
+#define GUI_SPELL_PITCH_X (24 + 20)
+#define GUI_SPELL_PITCH_Y (24 + 4)
+#define GUI_SPELL_GRID_X0 ((GUI_SIDE_CONTENT_W - (4 * GUI_SPELL_PITCH_X - 20)) / 2 + 2)
+#define GUI_SPELL_GRID_Y0 8
 
 static void gui_prayer_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
-    *gap = 2;
+    *gap = GUI_PRAYER_PITCH - GUI_PRAYER_CELL_PX;
     *cell = GUI_PRAYER_CELL_PX;
-    *gx = gs->panel_x + GUI_SIDE_CONTENT_X + 8;
-    *gy = gui_content_y(gs) + 8;
+    *gx = gs->panel_x + GUI_SIDE_CONTENT_X + GUI_PRAYER_GRID_X0;
+    *gy = gui_content_y(gs) + GUI_PRAYER_GRID_Y0;
 }
 
-static void gui_spell_grid_metrics(GuiState* gs, int* gx, int* gy, int* cell, int* gap) {
-    *gap = 5;
-    *cell = gui_fit_cell_size(gs->panel_w, GUI_SPELL_GRID_COLS, *gap, GUI_SPELL_CELL_PX);
-    int grid_w = GUI_SPELL_GRID_COLS * *cell + (GUI_SPELL_GRID_COLS - 1) * *gap;
-    Rectangle content = gui_side_content_rect(gs);
-    *gx = (int)(content.x + (content.width - grid_w) / 2);
-    *gy = gui_content_y(gs) + 8;
+static void gui_spell_grid_origin(GuiState* gs, int* gx, int* gy) {
+    *gx = gs->panel_x + GUI_SIDE_CONTENT_X + GUI_SPELL_GRID_X0;
+    *gy = gui_content_y(gs) + GUI_SPELL_GRID_Y0;
 }
 
 typedef struct {
@@ -3367,21 +3346,23 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
     for (int i = 0; i < GUI_PRAYER_GRID_COUNT; i++) {
         int col = i % cols;
         int row = i / cols;
-        int ix = gx + col * (icon_sz + gap);
-        int iy = gy + row * (icon_sz + gap);
+        int ix = gx + col * GUI_PRAYER_PITCH;
+        int iy = gy + row * GUI_PRAYER_PITCH;
 
         GuiPrayerIdx pidx = (GuiPrayerIdx)i;
         int active = gui_prayer_is_active(pidx, p);
         Rectangle cell_rect = {(float)ix, (float)iy, (float)icon_sz, (float)icon_sz};
 
-        DrawRectangleRec(cell_rect, (Color){16, 13, 10, 95});
         if (active) {
-            DrawRectangleRec(cell_rect, (Color){255, 224, 64, 34});
+            gui_draw_named_asset(gs, "prayerglow_0", cell_rect, WHITE);
         }
 
+        /* every prayer is usable in the sim, so all icons draw in the
+           available (full-color) variant per [proc,prayer_updatebutton];
+           the greyed variant only exists for level-locked prayers. */
         if (gs->sprites_loaded) {
-            Texture2D tex = active ? gs->prayer_on[pidx] : gs->prayer_off[pidx];
-            gui_draw_texture_centered(tex, cell_rect, 30, 30, WHITE);
+            gui_draw_texture_centered(gs->prayer_on[pidx], cell_rect,
+                GUI_PRAYER_ICON_PX, GUI_PRAYER_ICON_PX, WHITE);
         }
     }
 }
@@ -3507,30 +3488,32 @@ typedef struct {
     GuiSpellIdx idx;
 } GuiSpellEntry;
 
+/* display order = the real ancient book's level-sorted order (teleports
+   interleaved with combat spells), minus the home teleport we do not model. */
 static const GuiSpellEntry GUI_SPELL_GRID[] = {
     { "Smoke Rush",    GUI_SPELL_SMOKE_RUSH },
     { "Shadow Rush",   GUI_SPELL_SHADOW_RUSH },
+    { "Paddewwa Teleport",     GUI_SPELL_PADDEWWA_TELEPORT },
     { "Blood Rush",    GUI_SPELL_BLOOD_RUSH },
     { "Ice Rush",      GUI_SPELL_ICE_RUSH },
+    { "Senntisten Teleport",   GUI_SPELL_SENNTISTEN_TELEPORT },
     { "Smoke Burst",   GUI_SPELL_SMOKE_BURST },
     { "Shadow Burst",  GUI_SPELL_SHADOW_BURST },
+    { "Kharyrll Teleport",     GUI_SPELL_KHARYRLL_TELEPORT },
     { "Blood Burst",   GUI_SPELL_BLOOD_BURST },
     { "Ice Burst",     GUI_SPELL_ICE_BURST },
+    { "Lassar Teleport",       GUI_SPELL_LASSAR_TELEPORT },
     { "Smoke Blitz",   GUI_SPELL_SMOKE_BLITZ },
     { "Shadow Blitz",  GUI_SPELL_SHADOW_BLITZ },
+    { "Dareeyak Teleport",     GUI_SPELL_DAREEYAK_TELEPORT },
     { "Blood Blitz",   GUI_SPELL_BLOOD_BLITZ },
     { "Ice Blitz",     GUI_SPELL_ICE_BLITZ },
+    { "Carrallanger Teleport", GUI_SPELL_CARRALLANGER_TELEPORT },
     { "Smoke Barrage", GUI_SPELL_SMOKE_BARRAGE },
     { "Shadow Barrage",GUI_SPELL_SHADOW_BARRAGE },
+    { "Annakarl Teleport",     GUI_SPELL_ANNAKARL_TELEPORT },
     { "Blood Barrage", GUI_SPELL_BLOOD_BARRAGE },
     { "Ice Barrage",   GUI_SPELL_ICE_BARRAGE },
-    { "Paddewwa Teleport",     GUI_SPELL_PADDEWWA_TELEPORT },
-    { "Senntisten Teleport",   GUI_SPELL_SENNTISTEN_TELEPORT },
-    { "Kharyrll Teleport",     GUI_SPELL_KHARYRLL_TELEPORT },
-    { "Lassar Teleport",       GUI_SPELL_LASSAR_TELEPORT },
-    { "Dareeyak Teleport",     GUI_SPELL_DAREEYAK_TELEPORT },
-    { "Carrallanger Teleport", GUI_SPELL_CARRALLANGER_TELEPORT },
-    { "Annakarl Teleport",     GUI_SPELL_ANNAKARL_TELEPORT },
     { "Ghorrock Teleport",     GUI_SPELL_GHORROCK_TELEPORT },
 };
 #define GUI_SPELL_GRID_COUNT ((int)(sizeof(GUI_SPELL_GRID) / sizeof(GUI_SPELL_GRID[0])))
@@ -3555,34 +3538,27 @@ static inline int gui_spell_castable(GuiSpellIdx s) {
 
 static void gui_draw_spellbook(GuiState* gs, Player* p) {
     (void)p;
-    int cols = GUI_SPELL_GRID_COLS;
-    int gap, icon_sz, gx, gy;
-    gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    int gx, gy;
+    gui_spell_grid_origin(gs, &gx, &gy);
 
     for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
-        int col = i % cols;
-        int row = i / cols;
-        int ix = gx + col * (icon_sz + gap);
-        int iy = gy + row * (icon_sz + gap);
-
-        GuiSpellIdx sidx_here = GUI_SPELL_GRID[i].idx;
-        int targeting = (gs->pending_spell_highlight >= 0 &&
-                         (int)sidx_here == gs->pending_spell_highlight);
-        Rectangle cell_rect = {(float)ix, (float)iy, (float)icon_sz, (float)icon_sz};
-
-        DrawRectangleRec(cell_rect, (Color){12, 12, 28, 105});
+        int col = i % GUI_SPELL_GRID_COLS;
+        int row = i / GUI_SPELL_GRID_COLS;
+        int ix = gx + col * GUI_SPELL_PITCH_X;
+        int iy = gy + row * GUI_SPELL_PITCH_Y;
 
         GuiSpellIdx sidx = GUI_SPELL_GRID[i].idx;
+        int targeting = (gs->pending_spell_highlight >= 0 &&
+                         (int)sidx == gs->pending_spell_highlight);
+        Rectangle cell_rect = {(float)ix, (float)iy,
+            (float)GUI_SPELL_ICON_PX, (float)GUI_SPELL_ICON_PX};
+
         if (gs->sprites_loaded) {
             int castable = gui_spell_castable(sidx);
             Texture2D tex = castable ? gs->spell_on[sidx] : gs->spell_off[sidx];
             if (tex.id != 0) {
-                gui_draw_texture_centered(
-                    tex,
-                    cell_rect,
-                    24,
-                    24,
-                    castable ? WHITE : (Color){170, 170, 170, 220});
+                Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
+                DrawTexturePro(tex, src, cell_rect, (Vector2){0, 0}, 0.0f, WHITE);
             }
         }
         if (targeting) {

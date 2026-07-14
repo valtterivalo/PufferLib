@@ -813,6 +813,7 @@ static int g_cli_entity_encoder = 0;
     strips directories, so the PNG lands in the CWD under the path's basename. */
 static const char* g_cli_screenshot_path = NULL;
 static int g_cli_screenshot_frame = 0;
+static int g_cli_gui_tab = -1;
 /** debug camera overrides applied at startup (screenshot workflows need a
     deterministic viewpoint). Negative/NAN = keep the interactive default. */
 static float g_cli_camera_dist = -1.0f;
@@ -1963,6 +1964,8 @@ static void run_visual(
     if (g_cli_camera_dist > 0.0f) rc->cam_dist = g_cli_camera_dist;
     if (g_cli_camera_yaw > -999.0f) rc->cam_yaw = g_cli_camera_yaw;
     if (g_cli_camera_pitch > -999.0f) rc->cam_pitch = g_cli_camera_pitch;
+    if (g_cli_gui_tab >= 0 && g_cli_gui_tab < GUI_TAB_COUNT)
+        rc->gui.active_tab = (GuiTab)g_cli_gui_tab;
 
     int frame_counter = 0;
     while (!WindowShouldClose()) {
@@ -2044,6 +2047,8 @@ int main(int argc, char** argv) {
             g_cli_screenshot_path = argv[++i];
         else if (strcmp(argv[i], "--screenshot-frame") == 0 && i + 1 < argc)
             g_cli_screenshot_frame = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--tab") == 0 && i + 1 < argc)
+            g_cli_gui_tab = atoi(argv[++i]);
         else if (strcmp(argv[i], "--camera-dist") == 0 && i + 1 < argc)
             g_cli_camera_dist = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--camera-yaw") == 0 && i + 1 < argc)

@@ -127,20 +127,21 @@ static int human_apply_prayer_idx(HumanInput* hi, Player* p, GuiPrayerIdx pidx) 
 
 static int human_gui_spell_idx_at(GuiState* gs, int mouse_x, int mouse_y) {
     int cols = GUI_SPELL_GRID_COLS;
-    int gap, icon_sz, gx, gy;
-    gui_spell_grid_metrics(gs, &gx, &gy, &icon_sz, &gap);
+    int gx, gy;
+    gui_spell_grid_origin(gs, &gx, &gy);
 
     if (mouse_x < gx || mouse_y < gy) return -1;
-    int col = (mouse_x - gx) / (icon_sz + gap);
-    int row = (mouse_y - gy) / (icon_sz + gap);
+    int col = (mouse_x - gx) / GUI_SPELL_PITCH_X;
+    int row = (mouse_y - gy) / GUI_SPELL_PITCH_Y;
     if (col < 0 || col >= cols) return -1;
 
     int idx = row * cols + col;
     if (idx < 0 || idx >= GUI_SPELL_GRID_COUNT) return -1;
 
-    int cell_x = gx + col * (icon_sz + gap);
-    int cell_y = gy + row * (icon_sz + gap);
-    if (mouse_x >= cell_x + icon_sz || mouse_y >= cell_y + icon_sz) return -1;
+    int cell_x = gx + col * GUI_SPELL_PITCH_X;
+    int cell_y = gy + row * GUI_SPELL_PITCH_Y;
+    if (mouse_x >= cell_x + GUI_SPELL_ICON_PX || mouse_y >= cell_y + GUI_SPELL_ICON_PX)
+        return -1;
 
     return GUI_SPELL_GRID[idx].idx;
 }
