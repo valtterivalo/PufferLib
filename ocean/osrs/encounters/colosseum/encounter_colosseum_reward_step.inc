@@ -359,6 +359,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     col_player_pretick(s, ctx, actions);
     if (ctx && ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
+    s->player.prayer_display = s->player.prayer;
 
     /* gate decrements run BEFORE any spawn this tick, so gates armed by a
        fresh spawn survive the spawn tick intact (movement opens spawn+2 = t7,

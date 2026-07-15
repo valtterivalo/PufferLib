@@ -555,6 +555,13 @@ typedef struct {
 
     // Prayer and style
     OverheadPrayer prayer;
+    /* render-facing snapshot of `prayer` as of this tick's action resolution
+       (post-pretick). Mid-tick wipes (Sol's triple deactivates overheads on
+       every hit) zero `prayer` before the frame draws, making 1-tick flicks
+       invisible in the viewer; the display field keeps the icon honest for
+       the tick the prayer was actually in force. PRAYER_NONE = unset: renderers
+       fall back to `prayer`, so encounters that never write it are unchanged. */
+    OverheadPrayer prayer_display;
     OffensivePrayer offensive_prayer;
     FightStyle fight_style;
     int autocast_enabled;

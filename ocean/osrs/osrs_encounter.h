@@ -706,7 +706,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->current_hitpoints = p->current_hitpoints;
     out->base_hitpoints = p->base_hitpoints;
     out->special_energy = p->special_energy;
-    out->prayer = p->prayer;
+    out->prayer = p->prayer_display != PRAYER_NONE ? p->prayer_display : p->prayer;
     out->visible_gear = p->visible_gear;
     out->frozen_ticks = p->frozen_ticks;
     out->veng_active = p->veng_active;

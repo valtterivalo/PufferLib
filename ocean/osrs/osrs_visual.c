@@ -1413,6 +1413,18 @@ static void run_metrics(
     uint64_t claw_stints = 0, claw_stints_with_spec = 0, claw_stint_tick_sum = 0;
     int claw_stint_live = 0, claw_stint_spec = 0, claw_stint_ticks = 0;
 
+    /* Sol triple-parry probe: does the policy dodge the charged triple by
+       praying exactly at land (1-tick flicks the eye misses in the viewer) or
+       is damage genuinely not landing? Classified per resolved hit from state
+       deltas: overhead_history holds the land tick's pre-resolution overhead
+       state (the sim wipes the prayer after each hit), HP delta attributes
+       the outcome. */
+    uint64_t tp_starts = 0, tp_hits = 0, tp_overhead_at_land = 0;
+    uint64_t tp_early_violation = 0, tp_hits_with_hp_loss = 0;
+    int64_t tp_hp_lost = 0;
+    int tp_prev_hits_left = 0, tp_prev_hp = 0;
+    int tp_prev_land_in[COLO_SOL_PARRY_HITS] = {0};
+
     enum { METRICS_MAX_EPISODES = 512 };
     if (num_episodes > METRICS_MAX_EPISODES) {
         fprintf(stderr, "metrics mode caps at %d episodes\n", METRICS_MAX_EPISODES);
@@ -1422,12 +1434,43 @@ static void run_metrics(
     static int ep_winners[METRICS_MAX_EPISODES];
 
     while (episodes < num_episodes) {
+        {
+            const ColosseumState* pre = (const ColosseumState*)env->encounter_state;
+            tp_prev_hits_left = pre->sol.parry_hits_left;
+            for (int h = 0; h < COLO_SOL_PARRY_HITS; h++)
+                tp_prev_land_in[h] = pre->sol.parry_land_in[h];
+            tp_prev_hp = pre->player.current_hitpoints;
+        }
         visual_policy_actions(&policy, edef, env->encounter_state,
             (EncounterContext*)env->encounter_context, enc_actions);
         edef->step(env->encounter_state,
             (EncounterContext*)env->encounter_context, enc_actions);
         total_ticks++;
         ColosseumState* cs = (ColosseumState*)env->encounter_state;
+
+        if (cs->sol.parry_hits_left == COLO_SOL_PARRY_HITS &&
+                tp_prev_hits_left != COLO_SOL_PARRY_HITS)
+            tp_starts++;
+        for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
+            if (tp_prev_land_in[h] != 1 || cs->sol.parry_land_in[h] != 0) continue;
+            tp_hits++;
+            int land_tick = cs->tick;
+            if (cs->sol.overhead_history[land_tick % COLO_SOL_PRAYER_HISTORY])
+                tp_overhead_at_land++;
+            for (int k = 1; k <= COLO_SOL_PARRY_LOOKBACK[h]; k++) {
+                int t = land_tick - k;
+                if (t >= 0 &&
+                        cs->sol.overhead_history[t % COLO_SOL_PRAYER_HISTORY]) {
+                    tp_early_violation++;
+                    break;
+                }
+            }
+            int hp_drop = tp_prev_hp - cs->player.current_hitpoints;
+            if (hp_drop > 0) {
+                tp_hits_with_hp_loss++;
+                tp_hp_lost += hp_drop;
+            }
+        }
 
         int w_now = cs->wave >= 0 && cs->wave < 12 ? cs->wave : 11;
         if (!wave_seen || w_now != prev_wave) {
@@ -1559,6 +1602,14 @@ static void run_metrics(
         (unsigned long long)argmax_set_attacks,
         (unsigned long long)argmax_evals,
         argmax_evals ? 100.0 * (double)argmax_set_attacks / (double)argmax_evals : 0.0);
+    printf("# sol triple parry: starts=%llu hits=%llu overhead_at_land=%llu"
+           " early_violation=%llu hits_with_hp_loss=%llu hp_lost=%lld\n",
+        (unsigned long long)tp_starts,
+        (unsigned long long)tp_hits,
+        (unsigned long long)tp_overhead_at_land,
+        (unsigned long long)tp_early_violation,
+        (unsigned long long)tp_hits_with_hp_loss,
+        (long long)tp_hp_lost);
     if (claw_obs_n > 0) {
         printf("# claw audit: %llu basic attacks | obs saw wielded/best ratio %.2f,"
                " claws cell %.2f, best other cell %.2f, better cell visible %.1f%%\n",
