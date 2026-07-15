@@ -404,8 +404,7 @@ static void col_fill_render_entities_ctx(
         for (int c = 0; c < s->sol.crystal_count && n < max_entities; c++) {
             const ColoSolCrystal* cr = &s->sol.crystals[c];
             if (!cr->active) continue;
-            int cx, cy;
-            col_sol_crystal_pos(s, cr->perim_step, &cx, &cy);
+            int cx = cr->x, cy = cr->y;
             RenderEntity* re = &out[n++];
             OsrsNpcRenderEntitySpec crystal_spec = {
                 .npc_def_id = COLO_NPC_DEF_ID_BEAM_CRYSTAL,

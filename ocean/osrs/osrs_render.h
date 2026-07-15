@@ -5455,21 +5455,56 @@ static void render_draw_3d_world(RenderClient* rc) {
                    from the same direct ColosseumState read as the molten pools. */
                 const SolHereditState* sol = &cs_molten->sol;
 
-                /* incoming light spheres: warn on the marked tile, intensifying as it
-                   nears impact (move off the tile -- 60-75 typeless, unprayable). */
-                for (int si = 0; si < COLO_SOL_SPHERE_QUEUE_MAX; si++) {
-                    const ColoSolSphere* sph = &sol->spheres[si];
-                    if (!sph->active) continue;
-                    float ground = OV_GROUND(sph->tile_x, sph->tile_y);
-                    float fx = (float)sph->tile_x + 0.5f;
-                    float fz = -(float)(sph->tile_y + 1) + 0.5f;
-                    int t = sph->ticks_remaining;
-                    if (t < 1) t = 1;
-                    if (t > COLO_SOL_SPHERE_DELAY) t = COLO_SOL_SPHERE_DELAY;
-                    float imminence = 1.0f - (float)(t - 1) / (float)COLO_SOL_SPHERE_DELAY;
-                    unsigned char a = (unsigned char)(90.0f + 150.0f * imminence);
-                    DrawCube((Vector3){ fx, ground + 0.05f, fz }, 0.95f, 0.04f, 0.95f,
-                             CLITERAL(Color){ 255, 230, 120, a });
+                /* laser beam telegraphs: while a crystal fires (freeze 6..2) the
+                   yellow beam grows across the arena along its row/column
+                   (colosim beamPercent); intensity rises toward the damage
+                   check at freeze 3. Move off the line -- 60-75 typeless. */
+                for (int ci = 0; ci < COLO_SOL_MAX_CRYSTALS; ci++) {
+                    const ColoSolCrystal* crys = &sol->crystals[ci];
+                    if (!crys->active ||
+                        crys->firing_freeze > COLO_SOL_LASER_BEAM_SHOW_MAX ||
+                        crys->firing_freeze < COLO_SOL_LASER_BEAM_SHOW_MIN) continue;
+                    int step_x = 0, step_y = 0, span = 0;
+                    switch (crys->edge) {
+                        case COLO_SOL_EDGE_NORTH:
+                            step_y = -1;
+                            span = crys->y - (sol->boss_arena_min_y + 1);
+                            break;
+                        case COLO_SOL_EDGE_SOUTH:
+                            step_y = 1;
+                            span = (sol->boss_arena_max_y - 1) - crys->y;
+                            break;
+                        case COLO_SOL_EDGE_EAST:
+                            step_x = -1;
+                            span = crys->x - (sol->boss_arena_min_x + 1);
+                            break;
+                        case COLO_SOL_EDGE_WEST:
+                            step_x = 1;
+                            span = (sol->boss_arena_max_x - 1) - crys->x;
+                            break;
+                        default: break;
+                    }
+                    float grow = (float)(COLO_SOL_LASER_BEAM_SHOW_MAX + 1
+                                         - crys->firing_freeze)
+                        / (float)(COLO_SOL_LASER_BEAM_SHOW_MAX
+                                  - COLO_SOL_LASER_BEAM_SHOW_MIN + 1);
+                    if (grow > 1.0f) grow = 1.0f;
+                    int lit = (int)((float)span * grow + 0.5f);
+                    float imminence = 1.0f
+                        - (float)(crys->firing_freeze - COLO_SOL_LASER_BEAM_SHOW_MIN)
+                        / (float)(COLO_SOL_LASER_BEAM_SHOW_MAX - COLO_SOL_LASER_BEAM_SHOW_MIN);
+                    unsigned char a = (unsigned char)(100.0f + 130.0f * imminence);
+                    for (int k = 1; k <= lit; k++) {
+                        int tx = crys->x + step_x * k;
+                        int ty = crys->y + step_y * k;
+                        float ground = OV_GROUND(tx, ty);
+                        float fx = (float)tx + 0.5f;
+                        float fz = -(float)(ty + 1) + 0.5f;
+                        DrawCube((Vector3){ fx, ground + 0.25f, fz },
+                                 step_x != 0 ? 1.0f : 0.3f, 0.3f,
+                                 step_y != 0 ? 1.0f : 0.3f,
+                                 CLITERAL(Color){ 255, 240, 90, a });
+                    }
                 }
 
                 /* phase-transition beams: warn on the tile during the 2-tick window
@@ -5484,17 +5519,15 @@ static void render_draw_3d_world(RenderClient* rc) {
                              CLITERAL(Color){ 255, 255, 210, 170 });
                 }
 
-                /* rotating edge crystals: mark the crystal tile, bright while stopped
-                   to charge + fire a sphere (telegraph_ticks > 0). */
+                /* patrolling edge crystals: mark the crystal tile, bright while
+                   frozen to fire (firing_freeze > 0). */
                 for (int ci = 0; ci < COLO_SOL_MAX_CRYSTALS; ci++) {
                     const ColoSolCrystal* crys = &sol->crystals[ci];
                     if (!crys->active) continue;
-                    int cx = 0, cy = 0;
-                    col_sol_crystal_pos(cs_molten, crys->perim_step, &cx, &cy);
-                    float ground = OV_GROUND(cx, cy);
-                    float fx = (float)cx + 0.5f;
-                    float fz = -(float)(cy + 1) + 0.5f;
-                    unsigned char a = crys->telegraph_ticks > 0 ? 230 : 120;
+                    float ground = OV_GROUND(crys->x, crys->y);
+                    float fx = (float)crys->x + 0.5f;
+                    float fz = -(float)(crys->y + 1) + 0.5f;
+                    unsigned char a = crys->firing_freeze > 0 ? 230 : 120;
                     DrawCube((Vector3){ fx, ground + 0.12f, fz }, 0.4f, 0.4f, 0.4f,
                              CLITERAL(Color){ 180, 230, 255, a });
                 }

@@ -697,19 +697,24 @@ static void col_write_npc_slot(
 
 /* ----- boss obs ------------------------------------------------------------- */
 
-/** nearest in-flight crystal sphere to the player: writes dx, dy, ticks frac,
-    present flag (4 floats). dx/dy are egocentric tile-to-player offsets. */
+/** nearest crystal whose firing line the player is standing on, damage not
+    yet resolved: writes dx, dy (to the crystal), ticks-to-damage frac,
+    present flag (4 floats). Replaces the old in-flight-sphere channels
+    (2026-07-15 laser rework): the threat is now "you are on an armed line",
+    and it disappears the moment the player steps off the row/column. */
 static void col_write_nearest_sphere(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
-    for (int k = 0; k < COLO_SOL_SPHERE_QUEUE_MAX; k++) {
-        const ColoSolSphere* sp = &s->sol.spheres[k];
-        if (!sp->active) continue;
+    for (int k = 0; k < s->sol.crystal_count; k++) {
+        const ColoSolCrystal* c = &s->sol.crystals[k];
+        if (!c->active || c->firing_freeze < COLO_SOL_LASER_DAMAGE_FREEZE) continue;
+        if (!col_sol_crystal_in_line(s, c)) continue;
         col_nearest_hazard_tile_consider(
-            &nearest, k, sp->tile_x, sp->tile_y, s->player.x, s->player.y);
+            &nearest, k, c->x, c->y, s->player.x, s->player.y);
     }
     float ticks_frac = nearest.found
-        ? col_clamp01((float)s->sol.spheres[nearest.index].ticks_remaining /
-              (float)COLO_SOL_SPHERE_DELAY)
+        ? col_clamp01((float)(s->sol.crystals[nearest.index].firing_freeze
+                              - COLO_SOL_LASER_DAMAGE_FREEZE) /
+              (float)(COLO_SOL_LASER_FREEZE - COLO_SOL_LASER_DAMAGE_FREEZE))
         : 0.0f;
     col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
@@ -732,23 +737,22 @@ static int col_player_in_aoe_danger(const ColosseumState* s) {
     return col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y);
 }
 
-/** nearest active crystal to the player: dx, dy, telegraphing flag, telegraph
-    ticks frac (4 floats; zeros when no crystal is up). */
+/** nearest active crystal to the player: dx, dy, firing flag, firing ticks
+    frac (4 floats; zeros when no crystal is up). */
 static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.crystal_count; k++) {
-        if (!s->sol.crystals[k].active) continue;
-        int cx, cy;
-        col_sol_crystal_pos(s, s->sol.crystals[k].perim_step, &cx, &cy);
+        const ColoSolCrystal* ck = &s->sol.crystals[k];
+        if (!ck->active) continue;
         col_nearest_hazard_tile_consider(
-            &nearest, k, cx, cy, s->player.x, s->player.y);
+            &nearest, k, ck->x, ck->y, s->player.x, s->player.y);
     }
     const ColoSolCrystal* c = nearest.found ? &s->sol.crystals[nearest.index] : NULL;
     col_write_nearest_hazard_xy_values(
         s,
         &nearest,
-        c && c->telegraph_ticks > 0 ? 1.0f : 0.0f,
-        c ? col_clamp01((float)c->telegraph_ticks / (float)COLO_SOL_CRYSTAL_TELEGRAPH) : 0.0f,
+        c && c->firing_freeze > 0 ? 1.0f : 0.0f,
+        c ? col_clamp01((float)c->firing_freeze / (float)COLO_SOL_LASER_FREEZE) : 0.0f,
         obs,
         idx);
 }

@@ -4146,8 +4146,9 @@ static void test_sol_shield_safe_rings(void) {
     }
 }
 
-/* 6g. A3+A15+D14: spear hazard frames point at the player — front coverage,
-   lines at the documented columns, length 4 — and the tiles bite exactly 2
+/* 6g. A3+A15+D14 (colosim-exact since 2026-07-15): spear hazard frames point
+   at the player — front coverage, lines at the documented columns covering
+   8 tiles (forward 4..11), spear2's slam 7x7 — and the tiles bite exactly 2
    ticks after the cast, so stepping to a documented dodge tile on the
    telegraph tick avoids everything. */
 static void test_sol_spear_lines(void) {
@@ -4173,18 +4174,22 @@ static void test_sol_spear_lines(void) {
         !col_sol_aoe_tile_is_hazard(&s.sol, 16, 17) &&
         !col_sol_aoe_tile_is_hazard(&s.sol, 18, 17) &&
         !col_sol_aoe_tile_is_hazard(&s.sol, 20, 17));
-    CHECK("spear lines reach exactly 4 tiles from the boss edge",
-        col_sol_aoe_tile_is_hazard(&s.sol, 17, 15) &&
-        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 14));
+    CHECK("spear lines cover 8 tiles from forward 4 (colosim LINE_LENGTH 7)",
+        col_sol_aoe_tile_is_hazard(&s.sol, 17, 10) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 9));
 
     col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 2);
-    CHECK("spear2 runs THREE lines at the corner + centre columns",
-        col_sol_aoe_tile_is_hazard(&s.sol, 16, 18) &&
-        col_sol_aoe_tile_is_hazard(&s.sol, 18, 18) &&
-        col_sol_aoe_tile_is_hazard(&s.sol, 20, 18));
-    CHECK("spear2 off-centre flush tiles are safe (the diagonal dodge)",
-        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 18) &&
-        !col_sol_aoe_tile_is_hazard(&s.sol, 19, 18));
+    CHECK("spear2's 7x7 slam covers the full flush ring row",
+        col_sol_aoe_tile_is_hazard(&s.sol, 15, 18) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 17, 18) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 21, 18));
+    CHECK("spear2 runs THREE lines at the corner + centre columns past the slam",
+        col_sol_aoe_tile_is_hazard(&s.sol, 16, 17) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 18, 17) &&
+        col_sol_aoe_tile_is_hazard(&s.sol, 20, 17));
+    CHECK("spear2 off-centre columns are safe past the slam (the dodge)",
+        !col_sol_aoe_tile_is_hazard(&s.sol, 17, 17) &&
+        !col_sol_aoe_tile_is_hazard(&s.sol, 19, 17));
 
     /* the direction tracks the player: cast again with the player east. */
     sol_move_player(&s, 21, 21);
@@ -4221,10 +4226,11 @@ static void test_sol_spear_lines(void) {
         s.player.current_hitpoints == 99);
 }
 
-/* 6h. A9+A10+D15+D16: one crystal accumulates per transition (none at enrage),
-   cooldowns roll 25-35 (12 at enrage), the crystal walks the edge ring every 4
-   ticks, and firing telegraphs 4 ticks then launches a 60-75 sphere at the
-   player's tile that lands 4 ticks later. */
+/* 6h (reworked 2026-07-15 to colosim LaserOrb): one crystal accumulates per
+   transition on its own edge in N/E/S/W order, patrols one tile inside its
+   boundary between inset-2 endpoints (one step per 3 ticks, frozen while
+   firing), and the shared-cooldown volley damages 60-75 typeless only when
+   the player shares the crystal's row/column at firing_freeze == 3. */
 static void test_sol_crystal_lifecycle(void) {
     printf("test_sol_crystal_lifecycle\n");
     ColosseumContext ctx;
@@ -4234,69 +4240,89 @@ static void test_sol_crystal_lifecycle(void) {
     s.sol.attack_delay = 1000;
     sol_move_player(&s, 16, 14);
 
-    int accumulates = 1;
+    int accumulates = 1, edges_ok = 1;
     for (int p = 1; p <= 4; p++) {
         col_sol_enter_phase(&s, p);
         if (s.sol.crystal_count != p) accumulates = 0;
+        if (s.sol.crystals[p - 1].edge != p - 1) edges_ok = 0;
     }
     CHECK("one crystal spawns at each transition (4 by 25%)", accumulates);
+    CHECK("crystals take their own edges in N/E/S/W order", edges_ok);
     col_sol_enter_phase(&s, 5);
     CHECK("the enrage transition adds no fifth crystal", s.sol.crystal_count == 4);
-    s.sol.phase = 4;   /* hold pre-enrage for the cooldown checks below */
-    int cooldowns_ok = 1;
-    for (int c = 0; c < 4; c++)
-        if (s.sol.crystals[c].fire_cooldown < 25 || s.sol.crystals[c].fire_cooldown > 35)
-            cooldowns_ok = 0;
-    CHECK("fresh crystal cooldowns roll uniform 25-35", cooldowns_ok);
+    s.sol.phase = 4;   /* hold pre-enrage for the volley checks below */
     sol_clear_beams_and_sand(&s);
 
-    /* ring motion: a crystal advances one ring step every 4 ticks. */
+    int on_segments = 1;
+    const ColoSolCrystal* cn = &s.sol.crystals[0];
+    const ColoSolCrystal* ce = &s.sol.crystals[1];
+    const ColoSolCrystal* cs2 = &s.sol.crystals[2];
+    const ColoSolCrystal* cw = &s.sol.crystals[3];
+    if (cn->y != 23 || cn->x < 11 || cn->x > 22) on_segments = 0;
+    if (ce->x != 23 || ce->y < 11 || ce->y > 22) on_segments = 0;
+    if (cs2->y != 10 || cs2->x < 11 || cs2->x > 22) on_segments = 0;
+    if (cw->x != 10 || cw->y < 11 || cw->y > 22) on_segments = 0;
+    CHECK("each crystal patrols one tile inside its boundary, endpoints inset 2"
+          " (clear of the corner pillars)", on_segments);
+
+    /* patrol cadence: spawn move_timer 4 -> first step on tick 5, then every
+       3rd tick; direction bounces at the segment endpoints. */
     int idle[COLO_NUM_ACTION_HEADS] = {0};
-    for (int c = 0; c < 4; c++) s.sol.crystals[c].fire_cooldown = 1000;
-    int step_before = s.sol.crystals[0].perim_step;
-    for (int t = 0; t < 4; t++) {
+    int x0 = s.sol.crystals[0].x;
+    for (int t = 0; t < 5; t++) {
         s.player.current_hitpoints = 99;
         step_and_observe(&s, &ctx, idle);
     }
-    CHECK("the crystal advances exactly one ring step per 4 ticks",
-        s.sol.crystals[0].perim_step == step_before + 1);
-
-    /* firing: cooldown -> 4-tick telegraph -> sphere on the player's tile. */
-    s.sol.crystals[0].perim_step = 7;   /* (16,9): clear column to the player */
-    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
-    s.sol.crystals[0].fire_cooldown = 1;
-    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
+    CHECK("the crystal takes its first patrol step on the 5th tick",
+        abs(s.sol.crystals[0].x - x0) == 1);
+    int x1 = s.sol.crystals[0].x;
+    for (int t = 0; t < 3; t++) {
         s.player.current_hitpoints = 99;
         step_and_observe(&s, &ctx, idle);
     }
-    int sphere = -1;
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
-        if (s.sol.spheres[i].active) sphere = i;
-    CHECK("the telegraph launches a sphere marking the player's tile",
-        sphere >= 0 &&
-        s.sol.spheres[sphere].tile_x == s.player.x &&
-        s.sol.spheres[sphere].tile_y == s.player.y);
-    CHECK("sphere damage rolls 60-75",
-        sphere >= 0 && s.sol.spheres[sphere].damage >= 60 &&
-        s.sol.spheres[sphere].damage <= 75);
-    CHECK("the post-fire cooldown rerolls 25-35 before enrage",
-        s.sol.crystals[0].fire_cooldown >= 25 && s.sol.crystals[0].fire_cooldown <= 35);
+    CHECK("then one patrol step every 3 ticks",
+        abs(s.sol.crystals[0].x - x1) == 1);
+    int positions_hold = 1;
 
-    int expected = sphere >= 0 ? s.sol.spheres[sphere].damage : 0;
+    /* volley: align the player with the north crystal's column, fire, and
+       count down: damage checks at firing_freeze == 3, the 7th tick. */
+    sol_move_player(&s, s.sol.crystals[0].x, 14);
+    col_sol_fire_lasers(&s);
+    CHECK("the volley arms every crystal at once",
+        s.sol.crystals[0].firing_freeze == COLO_SOL_LASER_FREEZE &&
+        s.sol.crystals[3].firing_freeze == COLO_SOL_LASER_FREEZE);
+    CHECK("the volley rerolls the shared cooldown 25-34 before enrage",
+        s.sol.laser_cooldown >= 25 && s.sol.laser_cooldown <= 34);
+    int cx_before = s.sol.crystals[0].x;
     s.player.current_hitpoints = 99;
-    for (int t = 0; t < COLO_SOL_SPHERE_DELAY; t++) step_and_observe(&s, &ctx, idle);
-    CHECK("the sphere lands on the marked tile 4 ticks after launch",
-        99 - s.player.current_hitpoints == expected);
-
-    /* enrage: the post-fire cooldown drops to 12. */
-    s.sol.phase = 5;
-    s.sol.crystals[0].fire_cooldown = 1;
-    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
-        s.player.current_hitpoints = 99;
+    for (int t = 0; t < 6; t++) {
         step_and_observe(&s, &ctx, idle);
+        if (s.sol.crystals[0].x != cx_before) positions_hold = 0;
     }
-    CHECK("at enrage the post-fire cooldown is 12",
-        s.sol.crystals[0].fire_cooldown == COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE);
+    CHECK("crystals hold position while firing", positions_hold);
+    CHECK("no laser damage before the freeze-3 tick",
+        s.player.current_hitpoints == 99);
+    step_and_observe(&s, &ctx, idle);
+    int laser_dmg = 99 - s.player.current_hitpoints;
+    CHECK("an aligned player eats 60-75 at firing_freeze == 3",
+        laser_dmg >= 60 && laser_dmg <= 75);
+
+    /* dodge: the same volley misses a player off the line at the damage tick. */
+    for (int t = 0; t < 8; t++) step_and_observe(&s, &ctx, idle);
+    sol_move_player(&s, s.sol.crystals[0].x, 14);
+    col_sol_fire_lasers(&s);
+    for (int t = 0; t < 5; t++) step_and_observe(&s, &ctx, idle);
+    sol_move_player(&s, s.sol.crystals[0].x + 1, 14);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("stepping off the line before the damage tick dodges the laser",
+        s.player.current_hitpoints == 99);
+
+    /* enrage: the volley reroll drops to a flat 12. */
+    s.sol.phase = 5;
+    col_sol_fire_lasers(&s);
+    CHECK("at enrage the volley cooldown is 12",
+        s.sol.laser_cooldown == COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE);
 }
 
 /** A15 (corrected 2026-07-11 from real-gameplay frame analysis): AoE damage
@@ -4357,56 +4383,32 @@ static void test_sol_aoe_reaction_window(void) {
         s.player.current_hitpoints == 99);
 }
 
-/** A10: sphere impact 3 ticks after the beam locks the tile, 2 at enrage
-    (the in-flight counter decrements on the fire tick). */
-static void test_sol_sphere_react_window(void) {
-    printf("test_sol_sphere_react_window\n");
+/** A10 (colosim LaserOrb timing): the beam telegraph becomes visible when
+    firing_freeze reaches 6 (3 ticks after the volley) and damage checks at
+    freeze == 3, so an aligned player gets exactly 3 informed reaction ticks
+    (W-STRAT "you have 3 ticks to react"). */
+static void test_sol_laser_react_window(void) {
+    printf("test_sol_laser_react_window\n");
     ColosseumContext ctx;
     ColosseumState s;
     int idx = sol_setup(&s, &ctx, 151);
     (void)idx;
     s.sol.attack_delay = 1000;
-    sol_move_player(&s, 16, 14);
     int idle[COLO_NUM_ACTION_HEADS] = {0};
 
     col_sol_spawn_crystal(&s);
-    s.sol.crystals[0].perim_step = 7;
-    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
-    s.sol.crystals[0].fire_cooldown = 1;
-    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
-        s.player.current_hitpoints = 99;
-        step_and_observe(&s, &ctx, idle);
-    }
-    int sphere = -1;
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
-        if (s.sol.spheres[i].active) sphere = i;
-    CHECK("the fired sphere has 3 ticks left after its fire tick",
-        sphere >= 0 &&
-        s.sol.spheres[sphere].ticks_remaining == COLO_SOL_SPHERE_DELAY - 1);
+    sol_move_player(&s, s.sol.crystals[0].x, 14);
+    col_sol_fire_lasers(&s);
     s.player.current_hitpoints = 99;
-    step_and_observe(&s, &ctx, idle);
-    step_and_observe(&s, &ctx, idle);
-    CHECK("no sphere damage through 2 ticks after the lock",
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    CHECK("the beam telegraph opens 3 ticks after the volley (freeze 6)",
+        s.sol.crystals[0].firing_freeze == COLO_SOL_LASER_BEAM_SHOW_MAX);
+    for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
+    CHECK("the 3 reaction ticks pass without damage",
         s.player.current_hitpoints == 99);
     step_and_observe(&s, &ctx, idle);
-    CHECK("the sphere lands 3 ticks after the lock",
+    CHECK("the aligned hit lands on the tick after the reaction window",
         s.player.current_hitpoints < 99);
-
-    /* enrage: the same fire pipeline arms the shorter 2-tick impact. */
-    s.sol.phase = 5;
-    s.sol.crystals[0].perim_step = 7;
-    s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
-    s.sol.crystals[0].fire_cooldown = 1;
-    for (int t = 0; t < 1 + COLO_SOL_CRYSTAL_TELEGRAPH; t++) {
-        s.player.current_hitpoints = 99;
-        step_and_observe(&s, &ctx, idle);
-    }
-    sphere = -1;
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++)
-        if (s.sol.spheres[i].active) sphere = i;
-    CHECK("at enrage the fired sphere has 2 ticks left after its fire tick",
-        sphere >= 0 &&
-        s.sol.spheres[sphere].ticks_remaining == COLO_SOL_SPHERE_DELAY_ENRAGE - 1);
 }
 
 /** E6: phase-transition molten sand always includes the player's tile and
@@ -8382,7 +8384,7 @@ int main(void) {
     test_sol_spear_lines();
     test_sol_crystal_lifecycle();
     test_sol_aoe_reaction_window();
-    test_sol_sphere_react_window();
+    test_sol_laser_react_window();
     test_sol_phase_transition_sand_guarantees();
     test_sol_beams_become_pools();
     test_sol_beam_strike_reaction_window();

@@ -974,7 +974,6 @@ typedef enum {
 } ColoGrappleSlot;
 
 #define COLO_SOL_HAZARD_TILES_MAX 32
-#define COLO_SOL_SPHERE_QUEUE_MAX 8
 #define COLO_SOL_MAX_CRYSTALS 4    /* D16: one per transition, phases 1-4 */
 #define COLO_SOL_BEAM_MAX 32       /* >= 5 transitions x 6 beams */
 #define COLO_SOL_PARRY_HITS 3
@@ -982,26 +981,30 @@ typedef enum {
 #define COLO_SOL_NUM_PHASES 6      /* >90 / <90 / <75 / <50 / <25 / <10 (enrage) */
 #define COLO_SOL_HP_MAX 1500
 
-/** one in-flight light sphere: marks the player's tile at launch and lands
-    COLO_SOL_SPHERE_DELAY ticks later for 60-75 typeless, unprayable (A10+D15). */
-typedef struct {
-    int active;
-    int tile_x, tile_y;
-    int damage;
-    int ticks_remaining;
-} ColoSolSphere;
+/** which boss-arena side a laser crystal patrols (colosim LaserOrb Edge;
+    NORTH = our max_y side). Spawn order at phase transitions: N, E, S, W. */
+typedef enum {
+    COLO_SOL_EDGE_NORTH,
+    COLO_SOL_EDGE_EAST,
+    COLO_SOL_EDGE_SOUTH,
+    COLO_SOL_EDGE_WEST,
+} ColoSolCrystalEdge;
 
-/** A9: one rotating crystal. Walks the boss-arena edge ring every
-    COLO_SOL_CRYSTAL_MOVE_TICKS; when its cooldown expires it stops, telegraphs
-    a beam for COLO_SOL_CRYSTAL_TELEGRAPH ticks, launches a sphere at the
-    player's tile (pillar LoS gates the shot), then rolls a fresh 25-35t
-    cooldown (12t at enrage). */
+/** A9+A10 (colosim LaserOrb, ported 2026-07-15): one laser crystal. Owns one
+    side of the boss arena and bounces between the segment endpoints one tile
+    inside the boundary (the colosim insets clear the pillar footprints), one
+    step every 3rd tick, frozen while firing. All crystals fire TOGETHER when
+    Sol commits any non-transition attack with the shared laser cooldown
+    expired: firing_freeze counts 9..0, the beam telegraph shows at 6..2, and
+    the damage check runs at exactly 3 — 60-75 typeless, unprayable, only if
+    the player shares the crystal's row (E/W) or column (N/S) on that tick. */
 typedef struct {
     int active;
-    int perim_step;       /* position index around the boss-arena edge ring */
-    int move_timer;       /* ticks until the next ring step */
-    int fire_cooldown;    /* ticks until the next telegraph starts */
-    int telegraph_ticks;  /* >0 = stopped + telegraphing; fires at 0 */
+    int edge;             /* ColoSolCrystalEdge */
+    int x, y;
+    int dir;              /* +1/-1 along the patrol axis (x for N/S, y for E/W) */
+    int move_timer;       /* colosim moveTick: steps when <= 0, reset to 2 */
+    int firing_freeze;    /* colosim firingFreeze: 9..0, 0 = patrolling */
 } ColoSolCrystal;
 
 /** A11: a phase-transition light beam; becomes a permanent molten pool after
@@ -1051,10 +1054,10 @@ typedef struct {
     int next_attack_guaranteed_max; /* perfect parry: next player attack maxes (B7) */
     int guaranteed_max_ticks;  /* ticks left on the guaranteed-max window (<=5) */
 
-    /* crystals + spheres (A9+A10) */
+    /* laser crystals (A9+A10, colosim LaserOrb) */
     ColoSolCrystal crystals[COLO_SOL_MAX_CRYSTALS];
     int crystal_count;         /* crystals spawned so far (1 per transition, D16) */
-    ColoSolSphere spheres[COLO_SOL_SPHERE_QUEUE_MAX];
+    int laser_cooldown;        /* shared: all crystals fire together when < 0 */
 
     /* beams + molten pools (A11+D25); pools are permanent for the fight */
     ColoSolBeam beams[COLO_SOL_BEAM_MAX];
@@ -1119,21 +1122,26 @@ typedef struct {
 #define COLO_SOL_TP_HIT_GAP        3
 #define COLO_SOL_TP_HIT3_GAP_LOW   4
 
-/* crystals (A9+D16): move every 4 ticks, stop + telegraph 4 ticks before the
-   sphere launches; per-crystal cooldown uniform 25-35t, 12t at enrage. */
-#define COLO_SOL_CRYSTAL_MOVE_TICKS      4
-#define COLO_SOL_CRYSTAL_TELEGRAPH       4
-#define COLO_SOL_CRYSTAL_COOLDOWN_MIN    25
-#define COLO_SOL_CRYSTAL_COOLDOWN_RAND   11
-#define COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE 12
-/* sphere (A10+D15, enrage speedup added 2026-07-11): the counter decrements
-   on the fire tick, so delay N = impact N-1 ticks after the beam locks the
-   tile. 4 -> 3 ticks to react (W-STRAT), 3 -> "only 2 ticks" at enrage.
-   Damage 60 + rand(0..15) = 60-75. */
-#define COLO_SOL_SPHERE_DELAY        4
-#define COLO_SOL_SPHERE_DELAY_ENRAGE 3
-#define COLO_SOL_SPHERE_MIN_HIT  60
-#define COLO_SOL_SPHERE_RAND     16
+/* laser crystals (A9+A10+D15+D16, reworked 2026-07-15 to colosim LaserOrb):
+   spawn move_timer 4, reset 2 (a step every 3rd tick). The shared cooldown
+   starts at 25, decrements every Sol boss tick, and any non-transition attack
+   commit with cooldown < 0 fires ALL crystals; the reset rolls 25 + rand(0..9)
+   (colosim MIN + rand*(MAX-MIN)), flat 12 at enrage, and entering enrage
+   forces the cooldown to 12 immediately. firing_freeze 9..0: beam telegraph
+   visible 6..2, damage checked at exactly 3 (player on the crystal's
+   row/column), giving the wiki's 3 reaction ticks. Damage 60 + rand(0..15) =
+   60-75 (colosim 60-79 capped by W-MAIN <= 75, divergence #15). */
+#define COLO_SOL_CRYSTAL_MOVE_TICKS_SPAWN 4
+#define COLO_SOL_CRYSTAL_MOVE_TICKS       2
+#define COLO_SOL_CRYSTAL_COOLDOWN_MIN     25
+#define COLO_SOL_CRYSTAL_COOLDOWN_RAND    10
+#define COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE  12
+#define COLO_SOL_LASER_FREEZE             9
+#define COLO_SOL_LASER_BEAM_SHOW_MAX      6
+#define COLO_SOL_LASER_BEAM_SHOW_MIN      2
+#define COLO_SOL_LASER_DAMAGE_FREEZE      3
+#define COLO_SOL_LASER_MIN_HIT            60
+#define COLO_SOL_LASER_RAND               16
 
 /* beams + molten sand (A11+D25, corrected 2026-07-11): 6 beams per transition
    uniformly in the 9x9 around the player; the pillar strikes 2 ticks after

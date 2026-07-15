@@ -854,54 +854,52 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
 
     for (int c = 0; c < sol->crystal_count; c++) {
         const ColoSolCrystal* cr = &sol->crystals[c];
-        if (!cr->active || cr->telegraph_ticks <= 0) continue;
-        int cx, cy;
-        col_sol_crystal_pos(s, cr->perim_step, &cx, &cy);
-        encounter_emit_floating_model(
-            ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
-            COLO_NPC_SLOT_BEAM_CRYSTAL + c, cx, cy,
-            COLO_SOL_CRYSTAL_CHARGE_MODEL_ID, COLO_SOL_CRYSTAL_CHARGE_ANIM_ID,
-            1.1f, 0.0f, 1.0f);
-    }
+        if (!cr->active) continue;
 
-    int sphere_fresh_delay = (sol->phase >= 5 ? COLO_SOL_SPHERE_DELAY_ENRAGE
-                                              : COLO_SOL_SPHERE_DELAY) - 1;
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++) {
-        const ColoSolSphere* sp = &sol->spheres[i];
-        if (!sp->active || sp->ticks_remaining != sphere_fresh_delay) continue;
-        int best = -1, best_d = 1 << 30;
-        for (int c = 0; c < sol->crystal_count; c++) {
-            if (!sol->crystals[c].active) continue;
-            int cx, cy;
-            col_sol_crystal_pos(s, sol->crystals[c].perim_step, &cx, &cy);
-            int d = abs(cx - sp->tile_x) + abs(cy - sp->tile_y);
-            if (d < best_d) { best_d = d; best = c; }
+        /* charge shimmer from fire until the beam window opens */
+        if (cr->firing_freeze > COLO_SOL_LASER_BEAM_SHOW_MAX) {
+            encounter_emit_floating_model(
+                ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
+                COLO_NPC_SLOT_BEAM_CRYSTAL + c, cr->x, cr->y,
+                COLO_SOL_CRYSTAL_CHARGE_MODEL_ID, COLO_SOL_CRYSTAL_CHARGE_ANIM_ID,
+                1.1f, 0.0f, 1.0f);
         }
-        if (best < 0) continue;
-        int cx, cy;
-        col_sol_crystal_pos(s, sol->crystals[best].perim_step, &cx, &cy);
-        encounter_require_projectile_slots(ov, 1);
-        OsrsProjectileEventSpec sphere_spec = {
-            .src_x = cx,
-            .src_y = cy,
-            .dst_x = sp->tile_x,
-            .dst_y = sp->tile_y,
-            .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
-            .damage = 0,
-            .duration_ticks = sphere_fresh_delay * 30,
-            .start_h = 43,
-            .end_h = 5,
-            .curve = 0,
-            .arc_height = 0.0f,
-            .src_size = 1,
-            .dst_size = 1,
-            .model_id = 0u,
-            .anim_id = -1,
-            .travel_gfx_id = COLO_SOL_SPHERE_TRAVEL_GFX_ID,
-            .impact_gfx_id = COLO_SOL_SPHERE_IMPACT_GFX_ID,
-            .start_delay = 0,
-        };
-        (void)osrs_emit_projectile_with_spec(ov, &sphere_spec, 0);
+
+        /* the damaging star travels the beam path once the telegraph closes
+           (colosim projectilePercent, firing_freeze <= 2), crystal to the far
+           end of its row/column one tile inside the opposite boundary. */
+        if (cr->firing_freeze == COLO_SOL_LASER_BEAM_SHOW_MIN) {
+            int dst_x = cr->x, dst_y = cr->y;
+            switch (cr->edge) {
+                case COLO_SOL_EDGE_NORTH: dst_y = sol->boss_arena_min_y + 1; break;
+                case COLO_SOL_EDGE_SOUTH: dst_y = sol->boss_arena_max_y - 1; break;
+                case COLO_SOL_EDGE_EAST:  dst_x = sol->boss_arena_min_x + 1; break;
+                case COLO_SOL_EDGE_WEST:  dst_x = sol->boss_arena_max_x - 1; break;
+                default: break;
+            }
+            encounter_require_projectile_slots(ov, 1);
+            OsrsProjectileEventSpec sphere_spec = {
+                .src_x = cr->x,
+                .src_y = cr->y,
+                .dst_x = dst_x,
+                .dst_y = dst_y,
+                .style = encounter_attack_style_to_proj_style(ATTACK_STYLE_MAGIC),
+                .damage = 0,
+                .duration_ticks = COLO_SOL_LASER_BEAM_SHOW_MIN * 30,
+                .start_h = 20,
+                .end_h = 20,
+                .curve = 0,
+                .arc_height = 0.0f,
+                .src_size = 1,
+                .dst_size = 1,
+                .model_id = 0u,
+                .anim_id = -1,
+                .travel_gfx_id = COLO_SOL_SPHERE_TRAVEL_GFX_ID,
+                .impact_gfx_id = COLO_SOL_SPHERE_IMPACT_GFX_ID,
+                .start_delay = 0,
+            };
+            (void)osrs_emit_projectile_with_spec(ov, &sphere_spec, 0);
+        }
     }
 
     for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {

@@ -73,6 +73,7 @@ static void col_sol_begin_boss_arena(ColosseumState* s) {
     s->sol.started = 1;
     s->sol.boss_idx = -1;
     s->sol.force_spear = 1;
+    s->sol.laser_cooldown = COLO_SOL_CRYSTAL_COOLDOWN_MIN;
     s->sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
     s->sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
     s->sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
@@ -92,6 +93,7 @@ static void col_sol_begin_boss_arena(ColosseumState* s) {
 static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant);
 static void col_sol_start_triple_parry(ColosseumState* s, int idx);
 static void col_sol_start_grapple(ColosseumState* s);
+static void col_sol_fire_lasers(ColosseumState* s);
 
 /** D28: next-attack delay for the attack just initiated. Spear/shield speed up
     1t below 75% (phase >= 2); the triple is 11t only in the 50-75% band. */
@@ -213,6 +215,13 @@ static void col_sol_tick_attack_engine(ColosseumState* s, int idx) {
     sol->attack_delay = col_sol_attack_delay(kind, sol->phase);
     s->npcs[idx].attacked_this_tick = 1;
     s->npcs[idx].attack_style_this_tick = ATTACK_STYLE_MELEE;
+
+    /* colosim: every non-transition attack commit triggers the lasers once
+       the shared cooldown has run out (transitions instead force a spear via
+       force_spear, which commits here too — colosim fires on those as well
+       since only Attacks.PHASE_TRANSITION itself is excluded). */
+    if (sol->crystal_count > 0 && sol->laser_cooldown < 0)
+        col_sol_fire_lasers(s);
 }
 
 /* ----- movement (A2+D17) ----------------------------------------------------- */
@@ -360,106 +369,121 @@ static void col_sol_tick_aoe(ColosseumState* s) {
     if (sol->aoe_age >= COLO_SOL_AOE_LIFETIME) sol->aoe_attack = COLO_SOL_AOE_NONE;
 }
 
-/* ----- crystals + spheres (A9+A10+D15+D16) ------------------------------------ */
+/* ----- laser crystals (A9+A10+D15+D16, colosim LaserOrb) ----------------------- */
 
-/** ring tile for a perimeter step index, clockwise around the boss-arena edge. */
-static void col_sol_crystal_pos(const ColosseumState* s, int step, int* cx, int* cy) {
-    int min_x = s->sol.boss_arena_min_x, max_x = s->sol.boss_arena_max_x;
-    int min_y = s->sol.boss_arena_min_y, max_y = s->sol.boss_arena_max_y;
-    int w = max_x - min_x, h = max_y - min_y;
-    int perim = 2 * (w + h);
-    int p = perim > 0 ? step % perim : 0;
-    if (p < w)            { *cx = min_x + p;     *cy = min_y; return; }
-    p -= w;
-    if (p < h)            { *cx = max_x;         *cy = min_y + p; return; }
-    p -= h;
-    if (p < w)            { *cx = max_x - p;     *cy = max_y; return; }
-    p -= w;
-    *cx = min_x;          *cy = max_y - p;
+/** patrol segment for an edge: the line one tile inside the boundary, with
+    endpoints inset 2 from the corners on the perpendicular axis (colosim
+    EDGE_BOUNDARIES; the insets clear the corner pillar footprints). N/S
+    crystals patrol along x at a fixed y, E/W along y at a fixed x. */
+static void col_sol_crystal_patrol(
+    const SolHereditState* sol, int edge, int* fixed, int* lo, int* hi
+) {
+    switch (edge) {
+        case COLO_SOL_EDGE_NORTH:
+            *fixed = sol->boss_arena_max_y - 1;
+            *lo = sol->boss_arena_min_x + 2;
+            *hi = sol->boss_arena_max_x - 2;
+            return;
+        case COLO_SOL_EDGE_SOUTH:
+            *fixed = sol->boss_arena_min_y + 1;
+            *lo = sol->boss_arena_min_x + 2;
+            *hi = sol->boss_arena_max_x - 2;
+            return;
+        case COLO_SOL_EDGE_EAST:
+            *fixed = sol->boss_arena_max_x - 1;
+            *lo = sol->boss_arena_min_y + 2;
+            *hi = sol->boss_arena_max_y - 2;
+            return;
+        case COLO_SOL_EDGE_WEST:
+            *fixed = sol->boss_arena_min_x + 1;
+            *lo = sol->boss_arena_min_y + 2;
+            *hi = sol->boss_arena_max_y - 2;
+            return;
+        default:
+            fprintf(stderr, "invalid crystal edge %d\n", edge);
+            abort();
+    }
 }
 
-/** D16: spawn the next crystal (one per transition, phases 1-4). Spawn ring
-    offsets spread the crystals evenly (modeled; no source pins spawn tiles). */
+/** is the player on the crystal's firing line (colosim isInLineWithPlayer)?
+    N/S crystals shoot down their column, E/W down their row. */
+static int col_sol_crystal_in_line(const ColosseumState* s, const ColoSolCrystal* c) {
+    if (c->edge == COLO_SOL_EDGE_NORTH || c->edge == COLO_SOL_EDGE_SOUTH)
+        return s->player.x == c->x;
+    return s->player.y == c->y;
+}
+
+/** D16: spawn the next crystal (one per transition, phases 1-4) on its own
+    edge in colosim's order N/E/S/W, at a uniform point on the patrol segment,
+    heading toward a random endpoint. */
 static void col_sol_spawn_crystal(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->crystal_count >= COLO_SOL_MAX_CRYSTALS) return;
-    int w = sol->boss_arena_max_x - sol->boss_arena_min_x;
-    int h = sol->boss_arena_max_y - sol->boss_arena_min_y;
     ColoSolCrystal* c = &sol->crystals[sol->crystal_count];
     c->active = 1;
-    c->perim_step = (sol->crystal_count * 2 * (w + h)) / COLO_SOL_MAX_CRYSTALS;
-    c->move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
-    c->fire_cooldown = COLO_SOL_CRYSTAL_COOLDOWN_MIN
-        + encounter_rand_int(&s->rng_state, COLO_SOL_CRYSTAL_COOLDOWN_RAND);
-    c->telegraph_ticks = 0;
+    c->edge = sol->crystal_count;
+    int fixed, lo, hi;
+    col_sol_crystal_patrol(sol, c->edge, &fixed, &lo, &hi);
+    int along = lo + encounter_rand_int(&s->rng_state, hi - lo);
+    if (c->edge == COLO_SOL_EDGE_NORTH || c->edge == COLO_SOL_EDGE_SOUTH) {
+        c->x = along;
+        c->y = fixed;
+    } else {
+        c->x = fixed;
+        c->y = along;
+    }
+    c->dir = encounter_rand_int(&s->rng_state, 2) ? 1 : -1;
+    if (along == lo) c->dir = 1;
+    if (along == hi) c->dir = -1;
+    c->move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS_SPAWN;
+    c->firing_freeze = 0;
     sol->crystal_count++;
 }
 
-/** queue a sphere at the player's tile unless a pillar blocks LoS (C 6.25;
-    col_tiles_have_los exempts the source tile, so a crystal parked on a
-    blocked ring corner still fires). */
-static void col_sol_fire_sphere(ColosseumState* s, int cx, int cy) {
-    if (!col_tiles_have_los(s, cx, cy, s->player.x, s->player.y)) return;
+/** fire every crystal simultaneously (colosim fireOrbs), called by the attack
+    engine on a non-transition attack commit once the shared cooldown ran out. */
+static void col_sol_fire_lasers(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++) {
-        if (sol->spheres[i].active) continue;
-        sol->spheres[i].active = 1;
-        sol->spheres[i].tile_x = s->player.x;
-        sol->spheres[i].tile_y = s->player.y;
-        sol->spheres[i].damage = COLO_SOL_SPHERE_MIN_HIT
-            + encounter_rand_int(&s->rng_state, COLO_SOL_SPHERE_RAND);
-        sol->spheres[i].ticks_remaining = sol->phase >= 5
-            ? COLO_SOL_SPHERE_DELAY_ENRAGE : COLO_SOL_SPHERE_DELAY;
-        return;
-    }
-    assert(0 && "sphere queue full (4 crystals cannot keep 8 in flight)");
+    for (int i = 0; i < sol->crystal_count; i++)
+        if (sol->crystals[i].active)
+            sol->crystals[i].firing_freeze = COLO_SOL_LASER_FREEZE;
+    sol->laser_cooldown = sol->phase >= 5
+        ? COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE
+        : COLO_SOL_CRYSTAL_COOLDOWN_MIN
+            + encounter_rand_int(&s->rng_state, COLO_SOL_CRYSTAL_COOLDOWN_RAND);
 }
 
-/** A9: per-crystal state machine — walk the edge ring every 4 ticks; when the
-    cooldown expires, stop + telegraph 4 ticks, launch the sphere, and roll the
-    next cooldown (25-35t, 12t at enrage). Then land due spheres: 60-75
-    typeless, unprayable, on the marked tile only (dodge by moving off). */
+/** per-crystal tick, mirroring colosim LaserOrb.tick order exactly: patrol
+    step (skipped while firing), then the damage check at firing_freeze == 3,
+    then the timer decrements. The beam crosses the whole arena — pillars do
+    not block it (colosim LineOfSightMask.NONE). */
 static void col_sol_tick_crystals(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     for (int i = 0; i < sol->crystal_count; i++) {
         ColoSolCrystal* c = &sol->crystals[i];
         if (!c->active) continue;
-        if (c->telegraph_ticks > 0) {
-            c->telegraph_ticks--;
-            if (c->telegraph_ticks == 0) {
-                int cx, cy;
-                col_sol_crystal_pos(s, c->perim_step, &cx, &cy);
-                col_sol_fire_sphere(s, cx, cy);
-                c->fire_cooldown = sol->phase >= 5
-                    ? COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE
-                    : COLO_SOL_CRYSTAL_COOLDOWN_MIN
-                        + encounter_rand_int(&s->rng_state, COLO_SOL_CRYSTAL_COOLDOWN_RAND);
-            }
-            continue;
-        }
-        if (c->fire_cooldown > 0) c->fire_cooldown--;
-        if (c->fire_cooldown == 0) {
-            c->telegraph_ticks = COLO_SOL_CRYSTAL_TELEGRAPH;
-            continue;
-        }
-        if (c->move_timer > 0) c->move_timer--;
-        if (c->move_timer == 0) {
-            c->perim_step++;
+
+        if (c->firing_freeze <= 0 && c->move_timer <= 0) {
+            int fixed, lo, hi;
+            col_sol_crystal_patrol(sol, c->edge, &fixed, &lo, &hi);
+            int* along = (c->edge == COLO_SOL_EDGE_NORTH ||
+                          c->edge == COLO_SOL_EDGE_SOUTH) ? &c->x : &c->y;
+            *along += c->dir;
+            if (*along <= lo || *along >= hi) c->dir = -c->dir;
             c->move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
         }
-    }
 
-    for (int i = 0; i < COLO_SOL_SPHERE_QUEUE_MAX; i++) {
-        ColoSolSphere* sp = &sol->spheres[i];
-        if (!sp->active) continue;
-        sp->ticks_remaining--;
-        if (sp->ticks_remaining > 0) continue;
-        if (s->player.x == sp->tile_x && s->player.y == sp->tile_y) {
-            col_damage_player_from(s, sp->damage, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
+        if (c->firing_freeze == COLO_SOL_LASER_DAMAGE_FREEZE &&
+                col_sol_crystal_in_line(s, c)) {
+            int dmg = COLO_SOL_LASER_MIN_HIT
+                + encounter_rand_int(&s->rng_state, COLO_SOL_LASER_RAND);
+            col_damage_player_from(s, dmg, COLO_SOL_HEREDIT, COLO_DMG_UNPRAYABLE);
             s->last_hit_by_type = COLO_SOL_HEREDIT;
-            col_mod_on_player_damaged(s, sp->damage);
+            col_mod_on_player_damaged(s, dmg);
         }
-        sp->active = 0;
+
+        c->move_timer--;
+        c->firing_freeze--;
     }
 }
 
@@ -718,6 +742,7 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     sol->phase = new_phase;
     col_sol_drop_beams(s);
     if (new_phase >= 1 && new_phase <= 4) col_sol_spawn_crystal(s);
+    if (new_phase >= 5) sol->laser_cooldown = COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE;
     if (new_phase >= 5) {
         /* the 5 enrage opening sands telegraph like every other sand — only
            the spawn frequency is special at enrage. */
@@ -765,6 +790,7 @@ static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
         sol->guaranteed_max_ticks--;
         if (sol->guaranteed_max_ticks == 0) sol->next_attack_guaranteed_max = 0;
     }
+    sol->laser_cooldown--;
 
     col_sol_tick_aoe(s);
     col_sol_tick_crystals(s);
