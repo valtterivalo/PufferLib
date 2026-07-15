@@ -980,9 +980,10 @@ static void col_mod_tick_bees(ColosseumState* s) {
 /** write the Solarflare tile for one orbit box and one shared ring step.
     Waves 1-11 orbit the four pillars; on the live Sol wave the orbs move to
     5x5 boxes tucked into the improvised arena's corners (W-STRAT: "rotate in
-    a 5x5 pattern by the corners of the improvised arena"; exact tiles are
-    modeled — flush with the interior corners, floating over the one clipped
-    pillar tile). */
+    a 5x5 pattern by the corners of the improvised arena"; user-verified
+    2026-07-15 from real play: the box tile nearest each pillar is the next
+    DIAGONAL tile from the pillar's corner toward the arena middle — the ring
+    never touches pillar tiles). */
 static void col_solarflare_tile(
     const ColosseumState* s, int pillar_index, int step, int* x, int* y
 ) {
@@ -994,10 +995,10 @@ static void col_solarflare_tile(
 
     int px, py;
     if (s->wave == COLO_WAVE_BOSS && s->sol.started) {
-        px = (pillar_index & 1) ? s->sol.boss_arena_max_x - 4
-                                : s->sol.boss_arena_min_x + 2;
-        py = (pillar_index & 2) ? s->sol.boss_arena_max_y - 4
-                                : s->sol.boss_arena_min_y + 2;
+        px = (pillar_index & 1) ? s->sol.boss_arena_max_x - 5
+                                : s->sol.boss_arena_min_x + 3;
+        py = (pillar_index & 2) ? s->sol.boss_arena_max_y - 5
+                                : s->sol.boss_arena_min_y + 3;
     } else {
         px = COLO_PILLARS[pillar_index][0];
         py = COLO_PILLARS[pillar_index][1];
