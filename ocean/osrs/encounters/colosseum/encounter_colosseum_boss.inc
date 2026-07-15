@@ -707,6 +707,9 @@ static int col_sol_grapple_parry_attempt(ColosseumState* s, int slot) {
     sol->grapple_resolved = 1;
     sol->grapple_active = 0;
     sol->grapple_timer = 0;
+    sol->grapple_outcome = perfect
+        ? COLO_GRAPPLE_OUTCOME_PERFECT : COLO_GRAPPLE_OUTCOME_DEFENDED;
+    sol->grapple_outcome_tick = s->tick;
     if (perfect) {
         sol->next_attack_guaranteed_max = 1;
         sol->guaranteed_max_ticks = COLO_SOL_PERFECT_MAX_TICKS;
@@ -728,6 +731,8 @@ static void col_sol_tick_grapple(ColosseumState* s) {
         col_mod_on_player_damaged(s, dmg);
         sol->grapple_active = 0;
         sol->grapple_resolved = 1;
+        sol->grapple_outcome = COLO_GRAPPLE_OUTCOME_FAILED;
+        sol->grapple_outcome_tick = s->tick;
     }
 }
 

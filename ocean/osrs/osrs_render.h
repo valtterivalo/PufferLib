@@ -1934,6 +1934,58 @@ static void render_lab_draw_hud(RenderClient* rc) {
     }
 }
 
+/** Sol grapple banners (viewer-only): the slot callout centre-screen for the
+    whole 4-tick response window (Sol announces it over his model + chat in
+    the real client), then the wiki-verbatim outcome chat line for a few
+    ticks — perfect parry vs defend vs the unanswered slam. */
+static void render_draw_colosseum_grapple_banner(RenderClient* rc, OsrsEnv* env) {
+    (void)rc;
+    ColosseumState* cs = render_colosseum_state_from_env(env);
+    if (!cs || !cs->sol.started) return;
+    const SolHereditState* sol = &cs->sol;
+
+    static const char* CALLOUTS[COLO_NUM_GRAPPLE_SLOTS] = {
+        "I'LL CRUSH YOUR BODY!",
+        "I'LL BREAK YOUR BACK!",
+        "I'LL TWIST YOUR HANDS OFF!",
+        "I'LL BREAK YOUR LEGS!",
+        "I'LL CUT YOUR FEET OFF!",
+    };
+
+    const char* text = NULL;
+    Color color = (Color){ 255, 60, 40, 255 };
+    if (sol->grapple_active &&
+            sol->grapple_body_slot >= 0 &&
+            sol->grapple_body_slot < COLO_NUM_GRAPPLE_SLOTS) {
+        text = CALLOUTS[sol->grapple_body_slot];
+    } else if (sol->grapple_outcome != COLO_GRAPPLE_OUTCOME_NONE &&
+               cs->tick - sol->grapple_outcome_tick < 4) {
+        switch (sol->grapple_outcome) {
+            case COLO_GRAPPLE_OUTCOME_PERFECT:
+                text = "You perfectly parry Sol Heredit's grapple!";
+                color = (Color){ 90, 240, 120, 255 };
+                break;
+            case COLO_GRAPPLE_OUTCOME_DEFENDED:
+                text = "You successfully defend from Sol Heredit's grapple!";
+                color = (Color){ 160, 220, 255, 255 };
+                break;
+            case COLO_GRAPPLE_OUTCOME_FAILED:
+                text = "You fail to defend the grapple!";
+                break;
+            default:
+                break;
+        }
+    }
+    if (!text) return;
+
+    int font_size = 24;
+    int text_w = MeasureText(text, font_size);
+    int x = (RENDER_GRID_W - text_w) / 2;
+    int y = RENDER_WINDOW_H / 3;
+    DrawText(text, x + 2, y + 2, font_size, (Color){ 0, 0, 0, 200 });
+    DrawText(text, x, y, font_size, color);
+}
+
 static void render_draw_encounter_status_text(RenderClient* rc) {
     EncounterOverlay* ov = &rc->encounter_overlay;
     if (!ov->status_text_active || ov->status_text[0] == '\0') return;
@@ -7200,6 +7252,7 @@ void pvp_render(OsrsEnv* env) {
     }
 
     render_draw_encounter_status_text(rc);
+    render_draw_colosseum_grapple_banner(rc, env);
     render_lab_draw_hud(rc);
 
     /* colosseum mandatory modifier draft: modal over the frozen arena, under the

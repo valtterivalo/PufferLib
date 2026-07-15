@@ -973,6 +973,15 @@ typedef enum {
     COLO_NUM_GRAPPLE_SLOTS
 } ColoGrappleSlot;
 
+/** how the last grapple resolved (render banners + telemetry; wiki chat
+    messages: defend within 3 ticks vs perfect parry on the last tick). */
+typedef enum {
+    COLO_GRAPPLE_OUTCOME_NONE = 0,
+    COLO_GRAPPLE_OUTCOME_DEFENDED,
+    COLO_GRAPPLE_OUTCOME_PERFECT,
+    COLO_GRAPPLE_OUTCOME_FAILED,
+} ColoGrappleOutcome;
+
 #define COLO_SOL_HAZARD_TILES_MAX 32
 #define COLO_SOL_MAX_CRYSTALS 4    /* D16: one per transition, phases 1-4 */
 #define COLO_SOL_BEAM_MAX 32       /* >= 5 transitions x 6 beams */
@@ -1051,6 +1060,8 @@ typedef struct {
     int grapple_body_slot;     /* ColoGrappleSlot the player must click to parry */
     int grapple_timer;         /* 4-tick response window (4..1, 0 = lands) */
     int grapple_resolved;      /* 1 once parried/failed this grapple (latches result) */
+    int grapple_outcome;       /* COLO_GRAPPLE_OUTCOME_* of the last grapple */
+    int grapple_outcome_tick;  /* tick the last grapple resolved (render banner) */
     int next_attack_guaranteed_max; /* perfect parry: next player attack maxes (B7) */
     int guaranteed_max_ticks;  /* ticks left on the guaranteed-max window (<=5) */
 
