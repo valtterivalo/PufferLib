@@ -5463,7 +5463,7 @@ static void render_draw_3d_world(RenderClient* rc) {
                     const ColoSolCrystal* crys = &sol->crystals[ci];
                     if (!crys->active ||
                         crys->firing_freeze > COLO_SOL_LASER_BEAM_SHOW_MAX ||
-                        crys->firing_freeze < COLO_SOL_LASER_BEAM_SHOW_MIN) continue;
+                        crys->firing_freeze < 1) continue;
                     int step_x = 0, step_y = 0, span = 0;
                     switch (crys->edge) {
                         case COLO_SOL_EDGE_NORTH:
@@ -5490,11 +5490,17 @@ static void render_draw_3d_world(RenderClient* rc) {
                                   - COLO_SOL_LASER_BEAM_SHOW_MIN + 1);
                     if (grow > 1.0f) grow = 1.0f;
                     int lit = (int)((float)span * grow + 0.5f);
+                    /* projectile phase (freeze < SHOW_MIN): the traveling star
+                       erases the beam behind it, so draw only the far half. */
+                    int erase_from = 1;
+                    if (crys->firing_freeze < COLO_SOL_LASER_BEAM_SHOW_MIN)
+                        erase_from = span / 2 + 1;
                     float imminence = 1.0f
                         - (float)(crys->firing_freeze - COLO_SOL_LASER_BEAM_SHOW_MIN)
                         / (float)(COLO_SOL_LASER_BEAM_SHOW_MAX - COLO_SOL_LASER_BEAM_SHOW_MIN);
+                    if (imminence > 1.0f) imminence = 1.0f;
                     unsigned char a = (unsigned char)(100.0f + 130.0f * imminence);
-                    for (int k = 1; k <= lit; k++) {
+                    for (int k = erase_from; k <= lit; k++) {
                         int tx = crys->x + step_x * k;
                         int ty = crys->y + step_y * k;
                         float ground = OV_GROUND(tx, ty);
