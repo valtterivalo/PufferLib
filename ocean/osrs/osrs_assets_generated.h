@@ -121,6 +121,7 @@ static const char* const OSRS_ASSET_GUI_PATHS[] = {
     "sprites/gui/magicon_47.png",
     "sprites/gui/standard_spell_on_79.png",
     "sprites/gui/minimap_alpha_mask.png",
+    "sprites/gui/prayerglow_0.png",
 };
 
 static const char* const OSRS_ASSET_ITEMS_PATHS[] = {
