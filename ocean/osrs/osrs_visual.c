@@ -601,6 +601,8 @@ typedef struct {
     int input_size;
     int decoder_value_heads;
     int entity_encoder;
+    int hidden_size;
+    int num_layers;
 } VisualPolicyModelShape;
 
 typedef struct {
@@ -689,58 +691,70 @@ static int64_t visual_policy_file_weight_count(const Weights* weights) {
     return weights->size - 7;
 }
 
+/** Resolve the model architecture from the checkpoint's float count. The .bin
+    carries no shape header, so every (hidden_size, num_layers, entity_encoder,
+    input variant, value head) candidate is priced by expected weight count and
+    matched against the file. CLI flags constrain their dimension when given
+    (cli_hidden_size/cli_num_layers > 0, cli_entity_encoder > 0); unconstrained
+    dimensions are scanned. Exactly one match proceeds; zero or several abort
+    loudly with the candidates so the caller pins flags instead of guessing. */
 static VisualPolicyModelShape visual_policy_select_model_shape(
     const VisualPolicy* policy,
     const EncounterDef* edef,
-    int hidden_size,
-    int num_layers,
-    int entity_encoder
+    int cli_hidden_size,
+    int cli_num_layers,
+    int cli_entity_encoder
 ) {
+    static const int HS_GRID[] = {128, 256, 512, 1024, 2048, 4096};
     int obs_input_size = policy->obs_size;
     int full_input_size = policy->obs_size + policy->mask_size;
-    int64_t obs_value_expected = visual_policy_expected_weight_count(
-        obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1, entity_encoder);
-    int64_t full_value_expected = visual_policy_expected_weight_count(
-        full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 1, entity_encoder);
-    int64_t obs_policy_expected = visual_policy_expected_weight_count(
-        obs_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0, entity_encoder);
-    int64_t full_policy_expected = visual_policy_expected_weight_count(
-        full_input_size, hidden_size, num_layers, policy->action_dims,
-        policy->num_action_heads, 0, entity_encoder);
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
 
     VisualPolicyModelShape match = {0};
     int matches = 0;
-    if (obs_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 1, entity_encoder};
-        matches++;
-    }
-    if (full_value_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 1, entity_encoder};
-        matches++;
-    }
-    if (obs_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){obs_input_size, 0, entity_encoder};
-        matches++;
-    }
-    if (full_policy_expected == file_weights) {
-        match = (VisualPolicyModelShape){full_input_size, 0, entity_encoder};
-        matches++;
+    for (int hi = 0; hi < (int)(sizeof(HS_GRID) / sizeof(HS_GRID[0])); hi++) {
+        int hs = HS_GRID[hi];
+        if (cli_hidden_size > 0 && hs != cli_hidden_size) continue;
+        for (int layers = 1; layers <= 8; layers++) {
+            if (cli_num_layers > 0 && layers != cli_num_layers) continue;
+            for (int enc = 0; enc <= 2; enc++) {
+                if (cli_entity_encoder > 0 && enc != cli_entity_encoder) continue;
+                for (int value_heads = 0; value_heads <= 1; value_heads++) {
+                    for (int variant = 0; variant <= 1; variant++) {
+                        int input_size = variant ? full_input_size : obs_input_size;
+                        int64_t expected = visual_policy_expected_weight_count(
+                            input_size, hs, layers, policy->action_dims,
+                            policy->num_action_heads, value_heads, enc);
+                        if (expected != file_weights) continue;
+                        match = (VisualPolicyModelShape){
+                            input_size, value_heads, enc, hs, layers};
+                        matches++;
+                        if (matches <= 8) {
+                            fprintf(stderr,
+                                "policy: %s arch candidate hs=%d layers=%d entity=%d input=%s value_heads=%d\n",
+                                edef->name, hs, layers, enc,
+                                variant ? "obs+mask" : "obs", value_heads);
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    if (matches != 1) {
+    if (matches == 0) {
         fprintf(stderr,
-            "policy: %s model shape mismatch file=%lld floats entity=%d obs_value=%lld full_value=%lld obs_policy=%lld full_policy=%lld\n",
-            edef->name,
-            (long long)file_weights,
-            entity_encoder,
-            (long long)obs_value_expected,
-            (long long)full_value_expected,
-            (long long)obs_policy_expected,
-            (long long)full_policy_expected);
+            "policy: %s model shape mismatch: file=%lld floats matches no architecture"
+            " (obs=%d mask=%d, scanned hs 128..4096, layers 1..8, entity 0..2%s)\n",
+            edef->name, (long long)file_weights, policy->obs_size, policy->mask_size,
+            (cli_hidden_size > 0 || cli_num_layers > 0 || cli_entity_encoder > 0)
+                ? " within the given CLI constraints" : "");
+        abort();
+    }
+    if (matches > 1) {
+        fprintf(stderr,
+            "policy: %s model shape ambiguous: %d architectures match %lld floats"
+            " (candidates above) -- pin --hidden-size/--num-layers/--entity-encoder\n",
+            edef->name, matches, (long long)file_weights);
         abort();
     }
     return match;
@@ -863,18 +877,18 @@ static void visual_policy_init(
         fprintf(stderr, "policy: failed to load model: %s\n", model_path);
         abort();
     }
-    int hidden_size = (strcmp(edef->name, "inferno") == 0 ||
-                       strcmp(edef->name, "colosseum") == 0) ? 512 : 128;
-    int num_layers = 2;
-    if (cli_hidden_size > 0) hidden_size = cli_hidden_size;
-    if (cli_num_layers > 0) num_layers = cli_num_layers;
     VisualPolicyModelShape model_shape = visual_policy_select_model_shape(
-        policy, edef, hidden_size, num_layers, cli_entity_encoder);
+        policy, edef, cli_hidden_size, cli_num_layers, cli_entity_encoder);
+    fprintf(stderr,
+        "policy: %s arch resolved hs=%d layers=%d entity=%d input=%d value_heads=%d\n",
+        edef->name, model_shape.hidden_size, model_shape.num_layers,
+        model_shape.entity_encoder, model_shape.input_size,
+        model_shape.decoder_value_heads);
     policy->net = visual_policy_make_puffernet(
         policy->weights,
         model_shape.input_size,
-        hidden_size,
-        num_layers,
+        model_shape.hidden_size,
+        model_shape.num_layers,
         policy->action_dims,
         policy->num_action_heads,
         model_shape.decoder_value_heads,
