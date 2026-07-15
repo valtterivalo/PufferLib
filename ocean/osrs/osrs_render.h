@@ -585,7 +585,6 @@ typedef struct RenderClient {
     /* pre-built static models for overlay rendering (clouds, projectiles, snakelings).
        built once at init from model cache, drawn at overlay positions each frame. */
     Model cloud_model;       int cloud_model_ready;
-    Model molten_model;      int molten_model_ready; int molten_model_attempted;
     Model snakeling_model;   int snakeling_model_ready;
     Model ranged_proj_model; int ranged_proj_model_ready;
     Model magic_proj_model;  int magic_proj_model_ready;
@@ -2857,7 +2856,6 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     /* free overlay models */
     if (rc->cloud_model_ready) UnloadModel(rc->cloud_model);
-    if (rc->molten_model_ready) UnloadModel(rc->molten_model);
     if (rc->snakeling_model_ready) UnloadModel(rc->snakeling_model);
     if (rc->ranged_proj_model_ready) UnloadModel(rc->ranged_proj_model);
     if (rc->magic_proj_model_ready) UnloadModel(rc->magic_proj_model);
@@ -5425,42 +5423,16 @@ static void render_draw_3d_world(RenderClient* rc) {
             if (edef_molten && rc->gui.encounter_state &&
                     strcmp(edef_molten->name, "colosseum") == 0) {
                 ColosseumState* cs_molten = (ColosseumState*)rc->gui.encounter_state;
-                /* one-time lazy load of the colosseum hot-sand pool mesh (OSRS
-                   spotanim VFX_COLOSSEUM_HOT_SAND_02_PROJECTILE_01 = GFX 2709 ->
-                   synthetic projectile model id 0xA2000000 + 2709). The old GFX
-                   3080 was LEAGUE_5_SHIELDSLAM_DUST, a directional dust streak, not
-                   a colosseum effect. render_build_static_model is non-aborting: if
-                   the mesh is not in the loaded caches (e.g. run from a checkout
-                   that never exported it) molten_model_ready stays 0 and we fall
-                   back to the flat orange tile, so the viewer degrades gracefully. */
-                if (!rc->molten_model_attempted) {
-                    rc->molten_model_attempted = 1;
-                    render_load_projectile_assets(rc);
-                    rc->molten_model_ready = render_build_static_model(
-                        rc->projectile_model_cache,
-                        0xA2000000u + 2709u,
-                        &rc->molten_model);
-                }
-                /* prefer the hot-sand spotanim's own frame sequence (GFX 2709
-                   -> anim 10815) so the pool boils instead of sitting frozen.
-                   The frame is advanced once on the shared mesh, then the same
-                   animated model is drawn at every molten tile (all pools share
-                   one animation phase). anim_id comes from the spotanim def so
-                   the data stays the source of truth; -1 (or a missing anim
-                   cache) leaves animated NULL and the static molten_model path
-                   below still runs. */
-                OsrsModel* molten_animated = NULL;
-                {
-                    const OsrsSpotAnimDef* molten_def =
-                        osrs_spotanim_find(rc->spotanims, 2709);
-                    int molten_anim_id = molten_def ? molten_def->animation_id : -1;
-                    molten_animated = render_animate_effect_model(
-                        rc, 0xA2000000u + 2709u, molten_anim_id,
-                        rc->effect_client_tick_counter);
-                }
-                /* render both hazard sources with one mesh: the wave 1-11
-                   Reentry/Volatility pools (molten_*) AND the Sol-fight molten
-                   tiles (sol.hazard_*), which were previously not drawn at all. */
+                /* molten pools draw as flat yellow simmering discs (user-verified
+                   2026-07-15 vs real play). The previously used mesh -- spotanim
+                   2709 VFX_COLOSSEUM_HOT_SAND_02_PROJECTILE_01 -- is the THROWN
+                   glob, wrong for ground sand in any animation, and the true
+                   ground effect (HOT_SAND_01, anims 10813/10814) is a server-
+                   spawned graphics object whose model id appears in no spotanim
+                   def, clientscript, or local dump, so it cannot be exported.
+                   Both hazard sources render the same way: wave 1-11
+                   Reentry/Volatility pools (molten_*) and Sol-fight sand
+                   (sol.hazard_*). The two-phase alpha pulse is the simmer. */
                 const int* molten_xs[2] = { cs_molten->molten_x, cs_molten->sol.hazard_tile_x };
                 const int* molten_ys[2] = { cs_molten->molten_y, cs_molten->sol.hazard_tile_y };
                 int molten_counts[2] = { cs_molten->molten_count, cs_molten->sol.hazard_tile_count };
@@ -5474,28 +5446,14 @@ static void render_draw_3d_world(RenderClient* rc) {
                         float ground = OV_GROUND(tx, ty);
                         float fx = (float)tx + 0.5f;
                         float fz = -(float)(ty + 1) + 0.5f;
-                        if (molten_animated) {
-                            /* scale maps OSRS model units (128/tile) to tiles; the
-                               exact pool footprint may want tuning after a look. */
-                            rlDisableBackfaceCulling();
-                            molten_animated->model.transform = MatrixMultiply(
-                                MatrixScale(-1.0f / 128.0f, 1.0f / 128.0f, 1.0f / 128.0f),
-                                MatrixTranslate(fx, ground + 0.02f, fz));
-                            DrawModel(molten_animated->model, (Vector3){0,0,0}, 1.0f, WHITE);
-                            rlEnableBackfaceCulling();
-                        } else if (rc->molten_model_ready) {
-                            /* static mesh fallback when the anim cache is absent. */
-                            rlDisableBackfaceCulling();
-                            rc->molten_model.transform = MatrixMultiply(
-                                MatrixScale(-1.0f / 128.0f, 1.0f / 128.0f, 1.0f / 128.0f),
-                                MatrixTranslate(fx, ground + 0.02f, fz));
-                            DrawModel(rc->molten_model, (Vector3){0,0,0}, 1.0f, WHITE);
-                            rlEnableBackfaceCulling();
-                        } else {
-                            DrawCube((Vector3){ fx, ground + 0.05f, fz },
-                                     0.95f, 0.04f, 0.95f,
-                                     CLITERAL(Color){ 220, 90, 30, 150 });
-                        }
+                        int simmer = (rc->effect_client_tick_counter + tx * 3 + ty * 7) % 24;
+                        unsigned char glow = (unsigned char)(150 + (simmer < 12 ? simmer : 24 - simmer) * 6);
+                        DrawCylinder((Vector3){ fx, ground + 0.02f, fz },
+                                     0.42f, 0.46f, 0.05f, 12,
+                                     CLITERAL(Color){ 244, 200, 70, glow });
+                        DrawCylinder((Vector3){ fx, ground + 0.05f, fz },
+                                     0.26f, 0.30f, 0.05f, 10,
+                                     CLITERAL(Color){ 255, 236, 130, glow });
                     }
                 }
 

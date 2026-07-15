@@ -828,6 +828,9 @@ static int g_cli_entity_encoder = 0;
 static const char* g_cli_screenshot_path = NULL;
 static int g_cli_screenshot_frame = 0;
 static int g_cli_gui_tab = -1;
+/** replay speed override in game ticks/second (--tps; screenshot harness runs
+    that need sim progress without realtime waits). <= 0 = default cadence. */
+static float g_cli_tps = 0.0f;
 /** debug camera overrides applied at startup (screenshot workflows need a
     deterministic viewpoint). Negative/NAN = keep the interactive default. */
 static float g_cli_camera_dist = -1.0f;
@@ -2031,6 +2034,8 @@ static void run_visual(
     if (g_cli_camera_pitch > -999.0f) rc->cam_pitch = g_cli_camera_pitch;
     if (g_cli_gui_tab >= 0 && g_cli_gui_tab < GUI_TAB_COUNT)
         rc->gui.active_tab = (GuiTab)g_cli_gui_tab;
+    if (g_cli_tps > 0.0f)
+        rc->ticks_per_second = g_cli_tps;
 
     int frame_counter = 0;
     while (!WindowShouldClose()) {
@@ -2114,6 +2119,8 @@ int main(int argc, char** argv) {
             g_cli_screenshot_frame = atoi(argv[++i]);
         else if (strcmp(argv[i], "--tab") == 0 && i + 1 < argc)
             g_cli_gui_tab = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--tps") == 0 && i + 1 < argc)
+            g_cli_tps = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--camera-dist") == 0 && i + 1 < argc)
             g_cli_camera_dist = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--camera-yaw") == 0 && i + 1 < argc)
