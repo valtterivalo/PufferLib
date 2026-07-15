@@ -242,7 +242,7 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x4b420b3e18d846ebULL,
     0x054f146530962087ULL,
     0x4b5835b98fc7d4b0ULL,
-    0x39c2cc18a2c0cf0eULL,
+    0xae22f0ac054585aaULL,
 };
 
 int main(int argc, char** argv) {

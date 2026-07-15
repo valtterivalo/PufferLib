@@ -4158,11 +4158,14 @@ static void test_sol_spear_lines(void) {
     int idx = sol_setup(&s, &ctx, 137);
     sol_pin(&s, idx, COLO_SOL_SPAWN_X, COLO_SOL_SPAWN_Y);
 
-    /* player due south of the (16..20, 19..23) footprint: direction (0,-1). */
+    /* player due south of the (16..20, 19..23) footprint. The cast does NOT
+       lock a direction (colosim samples inside the DelayedAction(2) stamp);
+       telegraph-phase hazard queries induce the direction per queried tile,
+       so tiles south of the footprint resolve under the south frame. */
     sol_move_player(&s, 18, 18);
     col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
-    CHECK("spear lines aim at the player (south)",
-        s.sol.aoe_dir_x == 0 && s.sol.aoe_dir_y == -1);
+    CHECK("the cast leaves the spear direction unresolved",
+        s.sol.aoe_dir_x == 0 && s.sol.aoe_dir_y == 0);
     int front_ok = 1;
     for (int x = 16; x <= 20; x++)
         if (!col_sol_aoe_tile_is_hazard(&s.sol, x, 18)) front_ok = 0;
@@ -4191,11 +4194,9 @@ static void test_sol_spear_lines(void) {
         !col_sol_aoe_tile_is_hazard(&s.sol, 17, 17) &&
         !col_sol_aoe_tile_is_hazard(&s.sol, 19, 17));
 
-    /* the direction tracks the player: cast again with the player east. */
+    /* per-tile induction: tiles east of the footprint resolve east. */
     sol_move_player(&s, 21, 21);
     col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
-    CHECK("spear lines aim at the player (east)",
-        s.sol.aoe_dir_x == 1 && s.sol.aoe_dir_y == 0);
     CHECK("east cast: the front column burns and lines run east",
         col_sol_aoe_tile_is_hazard(&s.sol, 21, 21) &&
         col_sol_aoe_tile_is_hazard(&s.sol, 22, 20) &&
@@ -4224,6 +4225,27 @@ static void test_sol_spear_lines(void) {
     step_and_observe(&s, &ctx, idle);
     CHECK("the telegraph-tick dodge to the centre column avoids spear1 fully",
         s.player.current_hitpoints == 99);
+
+    /* REGRESSION (user report from play, 2nd round): the direction locks on
+       the BITE tick from the player's post-move tile, not at cast. Bait the
+       cast due south, then flee past the SE corner during the telegraph to
+       (22, 16) — safe under a cast-locked south frame (forward 5, lateral 4),
+       but the bite resolves DIAGONAL SE and its flank line covers it. */
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    sol_move_player(&s, 18, 18);
+    col_sol_cast_aoe(&s, idx, COLO_SOL_ATTACK_SPEAR, 1);
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the direction is still unresolved on the telegraph tick",
+        s.sol.aoe_dir_x == 0 && s.sol.aoe_dir_y == 0);
+    sol_move_player(&s, 22, 16);
+    s.player.current_hitpoints = 99;
+    step_and_observe(&s, &ctx, idle);
+    CHECK("the bite locks the diagonal from the fleeing player's tile",
+        s.sol.aoe_dir_x == 1 && s.sol.aoe_dir_y == -1);
+    CHECK("running away laterally past the corner is NOT a free dodge",
+        s.player.current_hitpoints < 99 &&
+        99 - s.player.current_hitpoints >= 20 &&
+        99 - s.player.current_hitpoints <= 44);
 }
 
 /* 6h (reworked 2026-07-15 to colosim LaserOrb): one crystal accumulates per

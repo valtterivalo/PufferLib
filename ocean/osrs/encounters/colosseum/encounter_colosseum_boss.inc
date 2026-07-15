@@ -247,24 +247,39 @@ static void col_sol_move(ColosseumState* s, int idx) {
 
 /* ----- AoE hazard tiles (A3+A15+D13+D14) -------------------------------------- */
 
-/** 8-way attack direction toward the player at cast time (colosim
-    getAttackDirection): clamp the player into the footprint box, take the
-    sign of the remaining offset per axis. A player standing past a corner
-    gets the DIAGONAL cast — escaping a spear by blindly stepping diagonally
-    is not free. Under the boss (offset 0,0) colosim falls through to SW. */
-static void col_sol_aoe_direction(const ColosseumState* s, const ColoNPC* boss,
+/** 8-way attack direction from a position vs the recorded 5x5 hazard anchor
+    (colosim getAttackDirection): clamp the position into the footprint box,
+    take the sign of the remaining offset per axis. A position past a corner
+    resolves DIAGONAL. Under the boss (offset 0,0) colosim falls through to
+    SW. Colosim calls this inside the DelayedAction(2) stamp — the bite tick,
+    NOT the cast — so running away laterally after the cast cannot force a
+    cardinal miss (user-verified vs real play). */
+static void col_sol_aoe_direction(int px, int py, int anchor_x, int anchor_y,
                                   int* dx, int* dy) {
-    int size = col_npc_effective_size(boss);
-    int closest_x = s->player.x, closest_y = s->player.y;
-    if (closest_x < boss->x) closest_x = boss->x;
-    if (closest_x > boss->x + size - 1) closest_x = boss->x + size - 1;
-    if (closest_y < boss->y) closest_y = boss->y;
-    if (closest_y > boss->y + size - 1) closest_y = boss->y + size - 1;
-    int ox = s->player.x - closest_x;
-    int oy = s->player.y - closest_y;
+    int closest_x = px, closest_y = py;
+    if (closest_x < anchor_x) closest_x = anchor_x;
+    if (closest_x > anchor_x + 4) closest_x = anchor_x + 4;
+    if (closest_y < anchor_y) closest_y = anchor_y;
+    if (closest_y > anchor_y + 4) closest_y = anchor_y + 4;
+    int ox = px - closest_x;
+    int oy = py - closest_y;
     *dx = ox > 0 ? 1 : ox < 0 ? -1 : 0;
     *dy = oy > 0 ? 1 : oy < 0 ? -1 : 0;
     if (*dx == 0 && *dy == 0) { *dx = -1; *dy = -1; }
+}
+
+/** direction a live spear resolves under for a query at (x, y): the locked
+    bite-tick direction once stamped, else the direction (x, y) itself would
+    induce. Per-tile induction makes telegraph-phase hazard queries the exact
+    rule-based threat field: "if it lands while you stand here, you are hit". */
+static void col_sol_aoe_effective_dir(const SolHereditState* sol, int x, int y,
+                                      int* dx, int* dy) {
+    if (sol->aoe_dir_x != 0 || sol->aoe_dir_y != 0) {
+        *dx = sol->aoe_dir_x;
+        *dy = sol->aoe_dir_y;
+        return;
+    }
+    col_sol_aoe_direction(x, y, sol->aoe_x, sol->aoe_y, dx, dy);
 }
 
 /**
@@ -302,7 +317,8 @@ static int col_sol_aoe_tile_is_hazard(const SolHereditState* sol, int x, int y) 
     if (sol->aoe_attack != COLO_SOL_AOE_SPEAR1 &&
         sol->aoe_attack != COLO_SOL_AOE_SPEAR2) return 0;
 
-    int dx = sol->aoe_dir_x, dy = sol->aoe_dir_y;
+    int dx, dy;
+    col_sol_aoe_effective_dir(sol, x, y, &dx, &dy);
     if (dx != 0 && dy != 0) {
         int u = (x - (cx + 2 * dx)) * dx;
         int v = (y - (cy + 2 * dy)) * dy;
@@ -335,8 +351,10 @@ static int col_sol_aoe_tile_is_hazard(const SolHereditState* sol, int x, int y) 
     return 0;
 }
 
-/** launch a spear/shield cast: record the hazard frame (boss SW + direction +
-    variant) at age 0 = telegraph. */
+/** launch a spear/shield cast: record the hazard anchor (boss SW + variant)
+    at age 0 = telegraph. The spear direction stays UNRESOLVED (0,0) until the
+    bite tick — colosim samples it inside the DelayedAction(2) stamp, so the
+    telegraph is Sol's animation, not a committed direction. */
 static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant) {
     SolHereditState* sol = &s->sol;
     const ColoNPC* boss = &s->npcs[idx];
@@ -347,17 +365,26 @@ static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant) 
     sol->aoe_age = 0;
     sol->aoe_x = boss->x;
     sol->aoe_y = boss->y;
-    col_sol_aoe_direction(s, boss, &sol->aoe_dir_x, &sol->aoe_dir_y);
+    sol->aoe_dir_x = 0;
+    sol->aoe_dir_y = 0;
 }
 
 /** age the live AoE: at age 2 (A15: cast tick + telegraph tick + damage tick,
-    so the post-telegraph move phase runs before the check) a player standing
-    on a hazard tile eats the per-tile 20-44 roll (D13); residue fades after
-    3 ticks. */
+    so the post-telegraph move phase runs before the check) a spear locks its
+    direction from the player's post-move position — the game decides cardinal
+    vs diagonal on the bite tick, so the safe tiles are a rule the player must
+    know relative to their OWN landing tile, not a telegraph to outrun — then
+    a player standing on a hazard tile eats the per-tile 20-44 roll (D13);
+    residue fades after 3 ticks. */
 static void col_sol_tick_aoe(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->aoe_attack == COLO_SOL_AOE_NONE) return;
     sol->aoe_age++;
+    if (sol->aoe_age == COLO_SOL_AOE_DAMAGE_AGE &&
+        (sol->aoe_attack == COLO_SOL_AOE_SPEAR1 ||
+         sol->aoe_attack == COLO_SOL_AOE_SPEAR2))
+        col_sol_aoe_direction(s->player.x, s->player.y, sol->aoe_x, sol->aoe_y,
+                              &sol->aoe_dir_x, &sol->aoe_dir_y);
     if (sol->aoe_age == COLO_SOL_AOE_DAMAGE_AGE &&
         col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y)) {
         int dmg = COLO_SOL_SLAM_MIN_HIT

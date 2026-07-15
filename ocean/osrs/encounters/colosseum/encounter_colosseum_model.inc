@@ -1043,9 +1043,13 @@ typedef struct {
 
     /* AoE hazard frame (A3+A15): analytic tile set anchored at cast time */
     int aoe_attack;            /* ColoSolAoeAttack live (or NONE) */
-    int aoe_age;               /* ticks since the tiles appeared; bites at age 1 */
+    int aoe_age;               /* ticks since the cast; bites at COLO_SOL_AOE_DAMAGE_AGE */
     int aoe_x, aoe_y;          /* boss SW tile at cast (he is frozen anyway) */
-    int aoe_dir_x, aoe_dir_y;  /* spear 8-way direction toward the player at cast */
+    int aoe_dir_x, aoe_dir_y;  /* spear 8-way direction, locked from the player's
+                                  post-move position on the BITE tick (colosim samples
+                                  inside the DelayedAction(2) stamp); (0,0) = still
+                                  unresolved — a real direction is never (0,0) since
+                                  under-boss falls to SW */
 
     /* triple parry (A20+B4+D18): resolved here, NOT via the shared pending
        queue — the early-prayer punish needs the per-tick overhead history and

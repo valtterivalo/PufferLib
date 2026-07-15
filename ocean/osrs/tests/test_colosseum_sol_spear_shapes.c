@@ -188,14 +188,6 @@ static int compare_shape(int variant, ColosimDir dir) {
 }
 
 static void test_direction_rule(void) {
-    ColosseumState* s = (ColosseumState*)calloc(1, sizeof(ColosseumState));
-    ColoNPC boss;
-    memset(&boss, 0, sizeof(boss));
-    boss.type = COLO_SOL_HEREDIT;
-    boss.size = SIZE;
-    boss.x = BX;
-    boss.y = BY;
-
     struct { int px, py, dx, dy; } cases[] = {
         { BX - 3, BY + 2, -1, 0 },   /* west of footprint, inside y-band */
         { BX + 7, BY,      1, 0 },   /* east */
@@ -208,10 +200,8 @@ static void test_direction_rule(void) {
         { BX + 2, BY + 2, -1, -1 },  /* under the boss: colosim SW fallback */
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        s->player.x = cases[i].px;
-        s->player.y = cases[i].py;
         int dx = 0, dy = 0;
-        col_sol_aoe_direction(s, &boss, &dx, &dy);
+        col_sol_aoe_direction(cases[i].px, cases[i].py, BX, BY, &dx, &dy);
         if (dx != cases[i].dx || dy != cases[i].dy) {
             fprintf(stderr,
                 "direction case %zu: player (%d, %d) -> got (%d, %d) want (%d, %d)\n",
@@ -219,7 +209,6 @@ static void test_direction_rule(void) {
             assert(0);
         }
     }
-    free(s);
 }
 
 int main(void) {

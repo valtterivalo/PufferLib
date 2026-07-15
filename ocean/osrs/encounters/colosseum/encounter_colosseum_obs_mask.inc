@@ -803,8 +803,18 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
     }
-    obs[i++] = (float)sol->aoe_dir_x;
-    obs[i++] = (float)sol->aoe_dir_y;
+    /* spear direction is only locked on the bite tick; during the telegraph
+       these carry the direction the player's CURRENT tile would induce — the
+       cue the net needs to pick a rule-based safe tile. Zeros when idle. */
+    if (sol->aoe_attack == COLO_SOL_AOE_NONE) {
+        obs[i++] = 0.0f;
+        obs[i++] = 0.0f;
+    } else {
+        int adx, ady;
+        col_sol_aoe_effective_dir(sol, px, py, &adx, &ady);
+        obs[i++] = (float)adx;
+        obs[i++] = (float)ady;
+    }
 
     /* attack engine tells (A1+A2): the kiting clock. */
     obs[i++] = col_clamp01((float)sol->attack_delay / 12.0f);

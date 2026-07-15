@@ -697,6 +697,13 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
     per-axis sign, under-boss -> SW) and the diagonal spear shapes (user report:
     diagonal escape was free in the sim), plus spear2's 7x7 slam (was 5x5). Tile-exact
     parity vs colosim pinned by test_colosseum_sol_spear_shapes.c (16/16 dir x variant).
+    ROUND 2 2026-07-15 (user watched the retrained checkpoint: diagonals never fired):
+    the direction was sampled at CAST; colosim samples it inside the DelayedAction(2)
+    stamp — the bite tick — from the player's post-move tile, so fleeing laterally
+    past a corner during the telegraph resolves DIAGONAL and still hits. Direction now
+    locks at COLO_SOL_AOE_DAMAGE_AGE; telegraph-phase hazard/obs queries induce the
+    direction per queried tile (the rule-based safe-spot field). Regression pinned in
+    test_colosseum_modifiers.c (bait south, flee to (22,16), bite locks SE).
 15. Sphere/laser damage range (A10): sim 0..75 | colosim 60-79 vs W-MAIN ≤75 vs W-STRAT 70+ |
     60 + rand(0..15) = 60-75 (colosim min ∩ wiki cap). IMPLEMENTED P4.
 16. Crystal count by enrage (6.22): sim 1 | W-MAIN implies 5 (each phase), W-STRAT describes
