@@ -690,6 +690,13 @@ Format: sim's current value | evidence state | recommendation (all MODELED DECIS
 14. Spear line length (A3): n/a in sim yet | W-STRAT "4x1 lines" vs colosim LINE_LENGTH 7 |
     use 4 (maintained wiki text, post-hotfix); revisit if the boss feels under-lethal.
     IMPLEMENTED P4.
+    REVERSED 2026-07-15: adopted colosim LINE_LENGTH 7 (fillLine covers length+1 = 8
+    tiles, forward 4..11). The wiki "4 long" reads as pre-hotfix prose (B12: 2024-03-20
+    "Extended the range of Sol Heredit's Spear Strike and Shield Bash"); colosim models
+    the live fight. Same pass ported the 8-way direction rule (clamp-to-footprint +
+    per-axis sign, under-boss -> SW) and the diagonal spear shapes (user report:
+    diagonal escape was free in the sim), plus spear2's 7x7 slam (was 5x5). Tile-exact
+    parity vs colosim pinned by test_colosseum_sol_spear_shapes.c (16/16 dir x variant).
 15. Sphere/laser damage range (A10): sim 0..75 | colosim 60-79 vs W-MAIN ≤75 vs W-STRAT 70+ |
     60 + rand(0..15) = 60-75 (colosim min ∩ wiki cap). IMPLEMENTED P4.
 16. Crystal count by enrage (6.22): sim 1 | W-MAIN implies 5 (each phase), W-STRAT describes

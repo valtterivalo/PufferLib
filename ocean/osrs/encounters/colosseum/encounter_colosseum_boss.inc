@@ -238,27 +238,43 @@ static void col_sol_move(ColosseumState* s, int idx) {
 
 /* ----- AoE hazard tiles (A3+A15+D13+D14) -------------------------------------- */
 
-/** dominant cardinal from Sol's centre toward the player at cast time; the
-    spear front face + lines aim along it (ties resolve to the x axis). */
+/** 8-way attack direction toward the player at cast time (colosim
+    getAttackDirection): clamp the player into the footprint box, take the
+    sign of the remaining offset per axis. A player standing past a corner
+    gets the DIAGONAL cast — escaping a spear by blindly stepping diagonally
+    is not free. Under the boss (offset 0,0) colosim falls through to SW. */
 static void col_sol_aoe_direction(const ColosseumState* s, const ColoNPC* boss,
                                   int* dx, int* dy) {
     int size = col_npc_effective_size(boss);
-    int ox = s->player.x - (boss->x + size / 2);
-    int oy = s->player.y - (boss->y + size / 2);
-    if (abs(ox) >= abs(oy)) { *dx = ox >= 0 ? 1 : -1; *dy = 0; }
-    else                    { *dx = 0; *dy = oy >= 0 ? 1 : -1; }
+    int closest_x = s->player.x, closest_y = s->player.y;
+    if (closest_x < boss->x) closest_x = boss->x;
+    if (closest_x > boss->x + size - 1) closest_x = boss->x + size - 1;
+    if (closest_y < boss->y) closest_y = boss->y;
+    if (closest_y > boss->y + size - 1) closest_y = boss->y + size - 1;
+    int ox = s->player.x - closest_x;
+    int oy = s->player.y - closest_y;
+    *dx = ox > 0 ? 1 : ox < 0 ? -1 : 0;
+    *dy = oy > 0 ? 1 : oy < 0 ? -1 : 0;
+    if (*dx == 0 && *dy == 0) { *dx = -1; *dy = -1; }
 }
 
 /**
- * A3: is (x, y) a hazard tile of the recorded cast? Shapes (W-STRAT verbatim),
- * in (forward, lateral) coordinates along the cast direction with the boss
- * centre at forward 0 (footprint spans forward/lateral -2..+2; the flush
- * melee row is forward 3):
- *   Spear1: 5x6 block (footprint + the front row) + TWO length-4 lines flush
- *           with the edge at lateral +-1 — dodge = 1 back at the centre or
- *           corner columns.
- *   Spear2: 5x5 block (footprint only) + THREE lines at lateral -2/0/+2 —
- *           dodge = 1 back diagonally off the centre column.
+ * A3: is (x, y) a hazard tile of the recorded cast? Shapes ported tile-exact
+ * from colosim doFirstSpear/doSecondSpear/doShields (frame map: ours =
+ * (x_colosim, -y_colosim), validated per cardinal against the previous
+ * known-good shapes). Cardinals in (forward, lateral) coordinates along the
+ * cast direction, boss centre at forward 0, footprint -2..+2, flush melee
+ * row forward 3; lines run forward 4..4+LINE_LEN (colosim fillLine covers
+ * length+1 tiles):
+ *   Spear1: footprint + full-width front row + TWO lines at lateral +-1.
+ *   Spear2: 7x7 slam (footprint + 1 ring) + THREE lines at lateral -2/0/+2.
+ * Diagonals in (u, v) = per-axis distance out from the footprint corner K
+ * facing the player (K = centre + 2*(dx, dy)), both axes oriented along the
+ * cast so u, v grow outward:
+ *   Spear1: footprint + two lines flanking the corner diagonal, anchors
+ *           K+(0,dy) and K+(dx,0) — the exact corner diagonal stays safe.
+ *   Spear2: 7x7 slam + centre line ON the diagonal from K+2*(dx,dy) + two
+ *           flanks from K+(-dx,2dy) and K+(2dx,-dy).
  *   Shield1: hazard everywhere EXCEPT the safe ring at Chebyshev 4 from the
  *           boss centre (the 9x9 perimeter); the rest of the arena burns.
  *   Shield2: inner block to Chebyshev 4 (9x9), safe ring at 5, hazard outside.
@@ -277,17 +293,37 @@ static int col_sol_aoe_tile_is_hazard(const SolHereditState* sol, int x, int y) 
     if (sol->aoe_attack != COLO_SOL_AOE_SPEAR1 &&
         sol->aoe_attack != COLO_SOL_AOE_SPEAR2) return 0;
 
-    int forward = sol->aoe_dir_x != 0 ? (x - cx) * sol->aoe_dir_x
-                                      : (y - cy) * sol->aoe_dir_y;
-    int lateral = sol->aoe_dir_x != 0 ? (y - cy) : (x - cx);
-    if (lateral < -2 || lateral > 2 || forward < -2) return 0;
+    int dx = sol->aoe_dir_x, dy = sol->aoe_dir_y;
+    if (dx != 0 && dy != 0) {
+        int u = (x - (cx + 2 * dx)) * dx;
+        int v = (y - (cy + 2 * dy)) * dy;
+        if (sol->aoe_attack == COLO_SOL_AOE_SPEAR1) {
+            if (abs(x - cx) <= 2 && abs(y - cy) <= 2) return 1;
+            if (u == v - 1 && v >= 1 && v <= 1 + COLO_SOL_SPEAR_LINE_LEN) return 1;
+            if (v == u - 1 && u >= 1 && u <= 1 + COLO_SOL_SPEAR_LINE_LEN) return 1;
+            return 0;
+        }
+        if (abs(x - cx) <= 3 && abs(y - cy) <= 3) return 1;
+        if (u == v && u >= 2 && u <= 2 + COLO_SOL_SPEAR_LINE_LEN) return 1;
+        if (v == u + 3 && u >= -1 && u <= -1 + COLO_SOL_SPEAR_LINE_LEN) return 1;
+        if (u == v + 3 && v >= -1 && v <= -1 + COLO_SOL_SPEAR_LINE_LEN) return 1;
+        return 0;
+    }
 
-    int block_depth = sol->aoe_attack == COLO_SOL_AOE_SPEAR1 ? 3 : 2;
-    if (forward <= block_depth) return 1;
-    if (forward > 2 + COLO_SOL_SPEAR_LINE_LEN) return 0;
-    if (sol->aoe_attack == COLO_SOL_AOE_SPEAR1)
-        return lateral == -1 || lateral == 1;
-    return lateral == -2 || lateral == 0 || lateral == 2;
+    int forward = dx != 0 ? (x - cx) * dx : (y - cy) * dy;
+    int lateral = dx != 0 ? (y - cy) : (x - cx);
+    if (sol->aoe_attack == COLO_SOL_AOE_SPEAR1) {
+        if (lateral >= -2 && lateral <= 2 &&
+            forward >= -2 && forward <= 3) return 1;
+        if (forward >= 4 && forward <= 4 + COLO_SOL_SPEAR_LINE_LEN)
+            return lateral == -1 || lateral == 1;
+        return 0;
+    }
+    if (lateral >= -3 && lateral <= 3 &&
+        forward >= -3 && forward <= 3) return 1;
+    if (forward >= 4 && forward <= 4 + COLO_SOL_SPEAR_LINE_LEN)
+        return lateral == -2 || lateral == 0 || lateral == 2;
+    return 0;
 }
 
 /** launch a spear/shield cast: record the hazard frame (boss SW + direction +

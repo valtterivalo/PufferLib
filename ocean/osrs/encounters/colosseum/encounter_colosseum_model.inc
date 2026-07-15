@@ -1033,7 +1033,7 @@ typedef struct {
     int aoe_attack;            /* ColoSolAoeAttack live (or NONE) */
     int aoe_age;               /* ticks since the tiles appeared; bites at age 1 */
     int aoe_x, aoe_y;          /* boss SW tile at cast (he is frozen anyway) */
-    int aoe_dir_x, aoe_dir_y;  /* spear-line cardinal, toward the player at cast */
+    int aoe_dir_x, aoe_dir_y;  /* spear 8-way direction toward the player at cast */
 
     /* triple parry (A20+B4+D18): resolved here, NOT via the shared pending
        queue — the early-prayer punish needs the per-tick overhead history and
@@ -1099,8 +1099,11 @@ typedef struct {
    reactive move dodges every pattern -- the fight's core skill check. */
 #define COLO_SOL_AOE_DAMAGE_AGE 2
 #define COLO_SOL_AOE_LIFETIME   3
-/* A3+D14: spear lines are 1 wide x 4 long, flush with the boss edge. */
-#define COLO_SOL_SPEAR_LINE_LEN 4
+/* A3+D14 resolved 2026-07-15 in colosim's favor: LINE_LENGTH 7 (lines cover
+   length+1 = 8 tiles). The wiki's "4 long" predates the 2024-03-20 hotfix
+   that "Extended the range of Sol Heredit's Spear Strike and Shield Bash"
+   (divergences.md B12); colosim models the live post-hotfix fight. */
+#define COLO_SOL_SPEAR_LINE_LEN 7
 /* A3: shield safe-ring Chebyshev radii from the boss centre. */
 #define COLO_SOL_SHIELD1_RING 4
 #define COLO_SOL_SHIELD2_RING 5
