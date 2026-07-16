@@ -437,40 +437,30 @@ static ColoLabCommandKind col_lab_command_kind_for(const char* command) {
 static ColoLabLineResult col_lab_apply_script_line_impl(
     ColosseumState* s, const char* line, char** out_json
 ) {
-    if (!line) col_lab_abort("null script line");
-    size_t len = strlen(line);
-    char* copy = (char*)malloc(len + 1);
-    if (!copy) col_lab_abort("out of memory");
-    memcpy(copy, line, len + 1);
+    EncounterLabLine lex = encounter_lab_line_begin("colosseum lab", line);
+    if (!lex.command) { free(lex.buffer); return COLO_LAB_LINE_NONE; }
 
-    char* text = encounter_lab_trim(copy);
-    if (*text == '\0' || *text == '#') { free(copy); return COLO_LAB_LINE_NONE; }
-
-    char* cursor = text;
-    char* command = encounter_lab_next_token("colosseum lab", &cursor);
-    if (!command) { free(copy); return COLO_LAB_LINE_NONE; }
-
-    if (strcmp(command, "dump") == 0 || strcmp(command, "dump_json") == 0) {
+    if (strcmp(lex.command, "dump") == 0 || strcmp(lex.command, "dump_json") == 0) {
         if (out_json) *out_json = col_lab_alloc_json(s);
-        free(copy);
+        free(lex.buffer);
         return COLO_LAB_LINE_DUMP;
     }
 
-    ColoLabCommandKind kind = col_lab_command_kind_for(command);
+    ColoLabCommandKind kind = col_lab_command_kind_for(lex.command);
     ColoLabParsedArgs args = col_lab_parsed_args_default();
 
-    for (char* token = encounter_lab_next_token("colosseum lab", &cursor);
+    for (char* token = encounter_lab_next_token("colosseum lab", &lex.cursor);
             token != NULL;
-            token = encounter_lab_next_token("colosseum lab", &cursor)) {
+            token = encounter_lab_next_token("colosseum lab", &lex.cursor)) {
         const char* key = NULL;
         const char* value = NULL;
         encounter_lab_parse_key_value("colosseum lab", token, &key, &value);
-        col_lab_apply_script_arg(&args, kind, command, key, value);
+        col_lab_apply_script_arg(&args, kind, lex.command, key, value);
     }
 
-    ColosseumLabCommand cmd = col_lab_build_script_command(kind, &args, command);
+    ColosseumLabCommand cmd = col_lab_build_script_command(kind, &args, lex.command);
     col_lab_apply_command(s, &cmd);
-    free(copy);
+    free(lex.buffer);
     return COLO_LAB_LINE_NONE;
 }
 
