@@ -115,7 +115,7 @@ typedef struct {
     uint16_t counter;
 } ColoNpcPathCache;
 
-static _Thread_local ColoNpcPathCache col_npc_path_cache;
+static OSRS_THREAD_LOCAL ColoNpcPathCache col_npc_path_cache;
 
 /** Bump the collision-cache generation and return a fresh context. One generation may
     be shared only across a query group where the collision field is constant (a whole
@@ -173,8 +173,8 @@ static int col_npc_path_blocked(void* ctx, int x, int y) {
     persist across ticks and episodes. Key packing is prefix-free via a leading 1 bit. */
 #define COL_WARBAND_BFS_MEMO_BITS 16
 #define COL_WARBAND_BFS_MEMO_SIZE (1 << COL_WARBAND_BFS_MEMO_BITS)
-static _Thread_local uint64_t col_warband_bfs_memo_key[COL_WARBAND_BFS_MEMO_SIZE];
-static _Thread_local uint8_t col_warband_bfs_memo_result[COL_WARBAND_BFS_MEMO_SIZE];
+static OSRS_THREAD_LOCAL uint64_t col_warband_bfs_memo_key[COL_WARBAND_BFS_MEMO_SIZE];
+static OSRS_THREAD_LOCAL uint8_t col_warband_bfs_memo_result[COL_WARBAND_BFS_MEMO_SIZE];
 
 #ifdef COLO_BFS_INSTR
 static long col_warband_bfs_memo_instr_hits;

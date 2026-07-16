@@ -1331,10 +1331,10 @@ static inline PathResult encounter_pathfind_arena_attack_approach(
             seek_tiles, &seek_count, target_x + target_size, y,
             world_offset_x, world_offset_y, extra_blocked, blocked_ctx);
     }
-    static _Thread_local uint16_t approach_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local int8_t approach_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local int16_t approach_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local uint16_t approach_gen_counter = 0;
+    static OSRS_THREAD_LOCAL uint16_t approach_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL int8_t approach_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL int16_t approach_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL uint16_t approach_gen_counter = 0;
     approach_gen_counter++;
     if (approach_gen_counter == 0) {
         memset(approach_gen, 0, sizeof(approach_gen));

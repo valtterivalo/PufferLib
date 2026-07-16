@@ -18,6 +18,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __cplusplus
+#define OSRS_THREAD_LOCAL thread_local
+#else
+#define OSRS_THREAD_LOCAL _Thread_local
+#endif
+
 #include "osrs_collision.h"
 
 #define PATHFIND_GRID_SIZE 104
@@ -380,10 +386,10 @@ static inline PathResult pathfind_step_arena(
        a cell is "visited" when gen[x][y] == current_gen. via/cost are only
        valid when gen matches. this eliminates the ~18KB memset that was the
        dominant cost (651K calls × 18KB = ~11GB of zeroing per training run). */
-    static _Thread_local uint16_t bfs_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local int8_t   bfs_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local int16_t  bfs_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
-    static _Thread_local uint16_t bfs_gen_counter = 0;
+    static OSRS_THREAD_LOCAL uint16_t bfs_gen[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL int8_t   bfs_via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL int16_t  bfs_cost[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    static OSRS_THREAD_LOCAL uint16_t bfs_gen_counter = 0;
     bfs_gen_counter++;
     if (bfs_gen_counter == 0) {
         /* wraparound: rare (every 65536 calls), just clear the gen array */
