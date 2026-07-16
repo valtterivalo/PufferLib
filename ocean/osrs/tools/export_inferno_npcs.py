@@ -57,18 +57,14 @@ from export_models import (
     ModelData,
     _merge_models,
     decode_model,
-    expand_model,
     load_model_modern,
     write_models_binary,
 )
 from export_animations import (
-    ANIM_MAGIC,
-    FrameBaseDef,
     FrameDef,
     SequenceDef,
     _parse_normal_frame,
     load_modern_framebases,
-    parse_modern_framebase,
     write_animations_binary,
 )
 from modern_cache_reader import parse_sequence as parse_modern_sequence
@@ -499,7 +495,6 @@ def main() -> None:
         # inferno spotanim/GFX defines
         f.write("/* inferno spotanim (projectile/effect) model + animation IDs */\n")
         for gfx_id, model_id, seq_id, label in spotanim_entries:
-            safe_label = label.replace(" ", "_").replace("(", "").replace(")", "").replace("?", "").upper()
             f.write(f"#define INF_GFX_{gfx_id}_MODEL  {model_id}  /* {label} */\n")
             if seq_id >= 0:
                 f.write(f"#define INF_GFX_{gfx_id}_ANIM   {seq_id}\n")

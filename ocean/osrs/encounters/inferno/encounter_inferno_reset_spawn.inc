@@ -473,16 +473,6 @@ static void inf_rebuild_entity_collision_flags(InfernoState* s) {
     }
 }
 
-static void inf_update_npc_collision_flags(
-    InfernoState* s, int idx, int ox, int oy, int nx, int ny, int sz
-) {
-    if (idx >= 0 && idx < INF_MAX_NPCS &&
-        !inf_npc_sets_collision_flag(s->npcs[idx].type))
-        return;
-    inf_unstamp_npc_collision_footprint(s, ox, oy, sz);
-    inf_stamp_npc_collision_footprint(s, nx, ny, sz);
-}
-
 static void inf_deactivate_npc(InfernoState* s, int idx) {
     if (idx < 0 || idx >= INF_MAX_NPCS) return;
     InfNPC* npc = &s->npcs[idx];

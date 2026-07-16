@@ -774,17 +774,9 @@ static float inf_get_reward_ctx(EncounterState* state, EncounterContext* context
     return ((InfernoState*)state)->reward;
 }
 
-static float inf_get_reward(EncounterState* state) {
-    return inf_get_reward_ctx(state, (EncounterContext*)inf_legacy_context());
-}
-
 static int inf_is_terminal_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     return ((InfernoState*)state)->episode_over;
-}
-
-static int inf_is_terminal(EncounterState* state) {
-    return inf_is_terminal_ctx(state, (EncounterContext*)inf_legacy_context());
 }
 
 static int inf_get_entity_count_ctx(EncounterState* state, EncounterContext* context) {
@@ -796,10 +788,6 @@ static int inf_get_entity_count_ctx(EncounterState* state, EncounterContext* con
     return count;
 }
 
-static int inf_get_entity_count(EncounterState* state) {
-    return inf_get_entity_count_ctx(state, (EncounterContext*)inf_legacy_context());
-}
-
 static void* inf_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
     (void)context;
     InfernoState* s = (InfernoState*)state;
@@ -808,10 +796,6 @@ static void* inf_get_entity_ctx(EncounterState* state, EncounterContext* context
      * GUI/human input code must NULL-check. */
     if (index == 0) return &s->player;
     return NULL;
-}
-
-static void* inf_get_entity(EncounterState* state, int index) {
-    return inf_get_entity_ctx(state, (EncounterContext*)inf_legacy_context(), index);
 }
 
 /* render entity population */

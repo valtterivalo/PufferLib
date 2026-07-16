@@ -1,4 +1,9 @@
 #line 2424 "encounter_inferno.h"
+/* Jad post-attack timer: 9 ticks on wave 67, else 8 (waves 66 and zuk). */
+static inline int inf_jad_attack_timer(int wave) {
+    return wave == 67 ? 9 : 8;
+}
+
 static AttackStyle inf_player_equipped_attack_style(const InfernoState* s) {
     uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
@@ -668,9 +673,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             npc->attack_timer = stats->attack_speed;
             if (npc->type == INF_NPC_JAD) {
                 inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
-                if (s->wave == 66)      npc->attack_timer = 8;
-                else if (s->wave == 67) npc->attack_timer = 9;
-                else                    npc->attack_timer = 8;
+                npc->attack_timer = inf_jad_attack_timer(s->wave);
             }
             return;
         }
@@ -920,12 +923,8 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
 
-    /* jad attack speed varies by wave */
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;  /* wave 67 */
-        else if (s->wave == 67) npc->attack_timer = 9;  /* wave 68 */
-        else                    npc->attack_timer = 8;  /* zuk wave */
-    }
+    if (npc->type == INF_NPC_JAD)
+        npc->attack_timer = inf_jad_attack_timer(s->wave);
 }
 
 static void inf_npc_attack(InfernoState* s, int idx) {
