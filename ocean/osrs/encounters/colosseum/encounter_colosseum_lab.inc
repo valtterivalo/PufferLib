@@ -1,19 +1,9 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_lab.inc
- * @brief Scenario harness for the standalone viewer, mirroring the inferno lab.
- *
- * A line-based command language to hand-edit a Colosseum scenario: spawn / move /
- * kill NPCs by ColoNpcType, set NPC hp/timer, jump to a wave, force a Sol boss
- * phase, start a grapple, toggle a modifier + tier, open a draft, move the player,
- * clear NPCs, step ticks, and dump the scenario as JSON. The viewer captures a
- * snapshot on entry and restores it on exit through the existing snapshot/restore
- * vtable hooks (render side). Colosseum has no step-out forecast, so the forecast
- * overlay/dump parts of the inferno lab are intentionally absent.
- *
- * The line parser (col_lab_apply_script_line_alloc_json) is the encounter-neutral
- * seam the EncounterDef.apply_lab_command hook wraps, so the viewer drives both
- * encounters through one path.
+ * @brief Scenario harness for the standalone viewer: a line-based command language to
+ *        hand-edit a Colosseum scenario (spawn NPCs, jump waves, force boss phases,
+ *        toggle modifiers, step ticks) and dump it as JSON.
  */
 
 typedef enum {
@@ -338,8 +328,8 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             s->wave = wave - 1;
             s->wave_spawn_target = s->wave;
             s->wave_spawn_delay = 0;
-            /* lab jumps spawn instantly; col_spawn_wave arms the researched
-               ready (move t+2) + attack (t+4) gates itself. */
+            /* lab jumps spawn instantly, and col_spawn_wave arms the move (t+2) and
+               attack (t+4) gates itself. */
             col_spawn_wave(s);
             col_lab_clear_transient(s);
             col_lab_refresh_geometry(s);
@@ -368,7 +358,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             if (!s->sol.started) col_sol_begin_boss_arena(s);
             s->sol.boss_idx = idx;
             /* entering upward mirrors a real transition: per-phase hazards via
-               col_sol_enter_phase, then the D28 freeze + forced spear (A1). */
+               col_sol_enter_phase, then the transition freeze + forced spear. */
             if (s->sol.phase < phase) {
                 while (s->sol.phase < phase) col_sol_enter_phase(s, s->sol.phase + 1);
                 s->sol.immobile_ticks = COLO_SOL_TRANSITION_FREEZE;
@@ -419,8 +409,8 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                 if (draft->option[o] >= 0) offered++;
             }
             if (offered == 0) col_lab_abort("draft needs at least one option");
-            /* a lab-opened draft freezes play like the real one (B6) but does
-               NOT gate a wave spawn — the pick just resumes the scenario. */
+            /* a lab-opened draft freezes play like the real one but does not gate a
+               wave spawn, the pick just resumes the scenario. */
             s->modifiers.draft_pending = 1;
             s->modifiers.draft_gates_spawn = 0;
             return;

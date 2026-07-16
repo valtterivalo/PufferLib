@@ -293,11 +293,9 @@ static void col_emit_javelin_skyfall_shadow(EncounterOverlay* ov, const ColoJave
         col_javelin_skyfall_shadow_scale(jv));
 }
 
-/* Per-(type, style) projectile release profile: when the projectile leaves the
-   caster relative to the attack-animation start. This is the ONE place colosseum
-   tunes NPC projectile release, folding what used to be three scattered render
-   branches (the javelin release delay, the shaman/shockwave cast-then-release
-   patch, and the manticore fixed-tick override) into a single table. */
+/* Per-(type, style) projectile release profile: when the projectile leaves the caster
+   relative to the attack-animation start. The one place colosseum tunes NPC projectile
+   release. */
 typedef struct {
     int release_delay_ticks;  /* game ticks after attack-start before the projectile is visible */
     int set_delay;            /* >0 pins the damage delay to a fixed, distance-independent tick count */
@@ -963,12 +961,10 @@ static void col_render_post_tick_ctx(
         col_emit_thrall_projectile(s, ov);
 }
 
-/* ----- human mode --------------------------------------------------------- */
-/* Maps semantic HumanInput intents onto the 9 Colosseum action heads. Mirrors
-   inferno's translate/step pair: MOVE (25-dir walk) + TARGET (obs slot of the
-   clicked NPC) drive attacking, plus prayer/gear/eat/potion/spec. The two
-   Colosseum-only heads have no inferno analog: MODIFIER_SELECT picks a draft
-   option and GRAPPLE_PARRY clicks a Sol grapple body slot. */
+/* Maps semantic HumanInput intents onto the 9 Colosseum action heads: MOVE (25-dir walk)
+   + TARGET (obs slot of the clicked NPC) drive attacking, plus prayer/gear/eat/potion/spec.
+   The two Colosseum-only heads: MODIFIER_SELECT picks a draft option and GRAPPLE_PARRY
+   clicks a Sol grapple body slot. */
 
 static void* col_get_player_for_input(void* state, int idx) {
     ColosseumState* s = (ColosseumState*)state;
@@ -995,10 +991,10 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
-/* Route a human inventory click to its per-category head: equip -> the gear-slot
-   head for the item, eat -> EAT head, drink -> DRINK head. Two clicks of the same
-   category in one tick now collapse to last-wins (matching OSRS), distinct
-   categories still all fire. Returns the head index the click landed in, or -1. */
+/* Route a human inventory click to its per-category head: equip -> the gear-slot head for
+   the item, eat -> EAT head, drink -> DRINK head. Two clicks of the same category in one
+   tick collapse to last-wins (matching OSRS), distinct categories all fire. Returns the
+   head index the click landed in, or -1. */
 static int col_queue_inventory_click_action(
     const ColosseumState* s,
     int* actions,
@@ -1168,30 +1164,6 @@ static void col_step_human_commands_ctx(
 /* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
-/* v2: P4 SolHereditState rewrite (A1-A15, B4, B7).
-   v3: P5 draft rework (draft_gates_spawn replaces draft_timer), hazard-entity
-   totems/bees (ColoTotem/ColoBeeSwarm relaid), molten_kind, venom fields.
-   v5: E8 bee-contact poison state fields.
-   v6: E13 stat drift and divine potion timers.
-   v7: manticore fixed orb cycle split from active telegraph state.
-   v8: combat-fidelity pass — magic weapon set (COLO_GEAR_MAGIC), Arceuus thrall
-       fields, and Death Charge window/cooldown added to ColosseumState.
-   v9: real 28-cell inventory, inventory-click action heads, and equipped-weapon
-       special attack contract.
-   v10: enriched inventory/equipped item-semantic obs (role/kind/magnitude/effect-class/weapon-speed)
-       + player offensive/spec/profile scalars.
-   v11: colosseum obs adds static pillar geometry and enriched per-NPC combat
-       and source-aware prayer timing features.
-   v12: colosseum log adds per-NPC total damage attribution.
-   v13: Solarflare stores shared per-pillar ring cadence.
-   v14: sim-fidelity pass adds kinded molten pools (molten_lifetime,
-       molten_burn_timer) for the stronger permanent Reentry sand.
-   v15: weapon-selection obs enrichment — per-inventory-cell expected DPT vs the
-       current target and per-NPC expected DPT of the equipped weapon set.
-   v17: scaffold adds active_player_damage_received_scale to ColosseumState (the
-       per-step mirror of the damage-received-scale knob). Grows sizeof(ColosseumState)
-       so the whole-struct snapshot needs the bump; the ColConfig anneal knobs live
-       in ColosseumContext and are NOT snapshotted. */
 #define COLO_SNAPSHOT_VERSION 20u
 
 typedef struct {

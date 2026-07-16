@@ -3,9 +3,7 @@
  * @file encounter_colosseum_mask_render.inc
  * @brief Action mask + reward/terminal getters + render-entity fill.
  *
- * Split out of encounter_colosseum_obs_mask.inc to keep each .inc under ~500
- * lines. The mask is per-head validity (1 = valid); col_write_mask_ctx
- * hard-asserts the running offset against COLO_ACTION_MASK_SIZE, like inferno.
+ * The mask is per-head validity (1 = valid).
  */
 
 static void col_write_mask_ctx(EncounterState* state, EncounterContext* context, float* mask) {
@@ -14,8 +12,8 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     col_refresh_current_obs_slots_ctx(s, ctx);
     int offset = 0;
 
-    /* HEAD_PRIMARY (49): noop always valid, move actions follow old movement
-       legality, attack actions require a live targetable obs slot. */
+    /* HEAD_PRIMARY (49): noop always valid, moves follow walkability, attacks require
+       a live targetable obs slot. */
     int frozen = s->modifiers.draft_pending && !s->modifiers.draft_free_movement;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
@@ -23,25 +21,23 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
-    /* Inventory clicks run before primary and can clear the lock, so the held
-       target stays valid for gear switch plus re-attack ticks. */
+    /* Inventory clicks run before primary and can clear the lock, so the held target
+       stays valid across a gear switch plus re-attack. */
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
-    /* HEAD_PRAYER (5): no_change always valid; off valid iff one is active;
-       set melee/ranged/magic valid iff prayer points remain. */
+    /* HEAD_PRAYER (5): no_change always valid, off valid iff one is active, set
+       melee/ranged/magic valid iff prayer points remain. */
     mask[offset++] = 1.0f;
     mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
-    /* Per-category inventory heads. Classify each cell once by its click-action
-       (EQUIP -> gear slot, EAT, DRINK). The equip heads (one per gear slot) then
-       only unmask the cells whose item belongs to that slot, so head g can equip
-       at most one item into slot g; eat/drink are one head each. This makes a
-       one-tick full switch possible (all slot heads fire in parallel) while
-       "5 helmets" is structurally impossible. Validity uses the same gates as
+    /* Per-category inventory heads. Each cell is classified once by click-action
+       (EQUIP -> gear slot, EAT, DRINK). One equip head per gear slot unmasks only
+       cells whose item belongs to that slot, so a one-tick full switch is possible
+       while "5 helmets" is structurally impossible. Validity mirrors
        col_inventory_cell_actionable so the mask never unmasks a useless action. */
     int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
     int cell_equip_slot[COLO_INVENTORY_DISPLAY_SLOTS];  /* gear slot if equippable, else -1 */
@@ -85,33 +81,24 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         ? 1.0f : 0.0f;
     mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
-    /* HEAD_MODIFIER_SELECT (4): no-op valid EXCEPT while a draft is pending, when a
-       pick is forced -- otherwise an argmax policy that prefers the no-op latches on
-       it every (frozen, static-obs) tick and soft-locks the draft until timeout.
-       col_modifier_open_draft only sets draft_pending with >=1 real option, so this
-       never produces an all-masked head. pick option k valid ONLY while a draft is
-       pending and that option slot holds a real modifier id. */
+    /* HEAD_MODIFIER_SELECT (4): no-op valid except while a draft is pending, when a
+       pick is forced (else an argmax policy that prefers no-op soft-locks the draft
+       until timeout). col_modifier_open_draft always sets >=1 real option, so this
+       head is never all-masked. pick option k valid only while a draft is pending and
+       that option slot holds a real modifier id. */
     mask[offset++] = s->modifiers.draft_pending ? 0.0f : 1.0f;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
         mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
             ? 1.0f : 0.0f;
 
-    /* HEAD_GRAPPLE_PARRY (COLO_NUM_GRAPPLE_SLOTS+1): none always valid;
-       clicking a callout slot valid ONLY while a Sol grapple is active (A12). */
+    /* HEAD_GRAPPLE_PARRY (COLO_NUM_GRAPPLE_SLOTS+1): none always valid, clicking a
+       callout slot valid only while a Sol grapple is active. */
     mask[offset++] = 1.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
-    /* HEAD_OFFENSIVE (5): no_change always valid; off valid iff one is active;
-       piety/rigour/augury all points-only (no weapon-style gate). Augury was
-       formerly gated on the currently-equipped weapon being magic, which the
-       harness builds against END-of-tick state, so the agent could never select
-       Augury on the same tick it equipped a magic weapon (it had to wait one tick,
-       costing the first magic attack its accuracy + damage). The lazy loadout
-       recompute already reads post-equip equipped[] + offensive_prayer, so a
-       same-tick equip+Augury lands shadow x3 + Augury +4% on that tick's attack;
-       Augury on a non-magic weapon is a harmless accuracy no-op exactly as
-       Piety/Rigour already are off-style. Matches the zulrah precedent. */
+    /* HEAD_OFFENSIVE (5): no_change always valid, off valid iff one is active,
+       piety/rigour/augury points-only (no weapon-style gate). */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
@@ -121,10 +108,9 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 
-    /* HEAD_SPELL (3): none always valid; summon-thrall valid iff not draft-frozen,
-       the recast gate is up, and the current target is a thrall-eligible (live,
-       non-Sol) NPC (a summon replaces a live thrall); death-charge valid iff not
-       frozen, ready (cd==0), and not already armed. */
+    /* HEAD_SPELL (3): none always valid, summon-thrall valid iff not draft-frozen, the
+       recast gate is up, and the current target is a thrall-eligible (live, non-Sol)
+       NPC, death-charge valid iff not frozen, ready (cd==0), and not already armed. */
     mask[offset++] = 1.0f;
     {
         int target = col_player_target_slot(s);
@@ -181,14 +167,8 @@ static void col_prepare_render_player(const ColosseumState* s, int spec_fired_ki
     }
 }
 
-/* Sol Heredit plays a distinct animation per attack. The sim sets
-   sol.last_attack_kind on the tick the attack fires (col_sol_pick_variant), so the
-   renderer keys off it. The deob _TELEGRAPH-named sequences ARE the wind-up-and-
-   execute attack anims (every Sol attack telegraphs its AoE); the plain
-   MELEE_ATTACK 10882 is the instant jab, unused here. The triple lengthens (the
-   delayed final hit) at phase >= 3 (50% HP and below), matching the sim's own
-   col_sol_start_triple_parry gate. The generated single attack_anim used to be
-   10876, his arena-entry JUMP, which is why every attack looked like the leap-in. */
+/* Renders a distinct animation per Sol attack, keyed off sol.last_attack_kind (set on
+   the firing tick). The triple's delayed-final-hit variant plays at phase >= 3. */
 static int col_sol_render_attack_anim_id(const SolHereditState* sol) {
     switch (sol->last_attack_kind) {
         case COLO_SOL_ATTACK_SPEAR:   return 10883;  /* MELEE_ATTACK_TELEGRAPH */
@@ -197,7 +177,7 @@ static int col_sol_render_attack_anim_id(const SolHereditState* sol) {
         case COLO_SOL_ATTACK_TRIPLE:  return sol->phase >= 3 ? 10886 : 10887;
         default: break;
     }
-    return 10883;  /* default to the spear attack, never the entry jump */
+    return 10883;  /* default to the spear attack */
 }
 
 static int col_npc_render_attack_anim_id(
@@ -222,15 +202,11 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
-/** Render-only: a free, visible tile next to the PLAYER for the allied thrall to
-    stand on. In OSRS the thrall loosely follows its caster and lobs its bolt at
-    whatever the caster fights, so it lives beside the player rather than glued to
-    (or inside) an enemy. Scans the player-adjacent ring first, then widens one
-    tile out, rejecting static blocks, NPC footprints, and the player's own tile
-    (col_npc_blocked over a 1x1 footprint covers all three), so the thrall is
-    always drawn on a clear tile instead of hidden under the player or behind a
-    colossus. Both the render-entity and projectile emitters call this so the
-    model and its bolt share one source tile. */
+/** Render-only: a free tile next to the player for the allied thrall. Scans the
+    player-adjacent ring, then one tile further, rejecting static blocks, NPC
+    footprints, and the player's own tile (col_npc_blocked over a 1x1 footprint).
+    Both the render-entity and projectile emitters call this so the model and its bolt
+    share one source tile. */
 static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
     static const int RING[16][2] = {
         {0, 1}, {1, 0}, {-1, 0}, {0, -1},          /* adjacent cardinals */
@@ -246,8 +222,7 @@ static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out
             return;
         }
     }
-    /* a tight pile-in left no clear neighbour: still draw the thrall off the
-       player tile rather than dropping it. */
+    /* no clear neighbour: still draw the thrall off the player tile rather than drop it. */
     *out_x = s->player.x;
     *out_y = s->player.y + 1;
 }

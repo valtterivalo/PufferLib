@@ -1,7 +1,7 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_combat.inc
- * @brief Combat resolution + per-NPC AI, mirroring inferno combat.
+ * @brief Combat resolution + per-NPC AI.
  *
  * Accuracy comes from levels + bonuses via the shared NPC roll; damage from the
  * handset max_hit. Ranged/magic attacks queue projectile-delayed pending hits with
@@ -35,7 +35,7 @@ static void col_apply_npc_death(ColosseumState* s, int idx) {
     /* Volatility: an explosion beyond the dying NPC's footprint (and a molten pool
        at tier III). Read its position/size before the slot is recycled. */
     col_mod_volatility_on_death(s, npc->x, npc->y, col_npc_effective_size(npc));
-    /* A21: the owner's death despawns its totem and cancels a pending respawn. */
+    /* the owner's death despawns its totem and cancels a pending respawn. */
     col_mod_on_owner_death(s, idx);
     if (!osrs_npc_death_linger_start(
             npc->hp, npc->active, &npc->death_ticks,
@@ -57,13 +57,10 @@ static void col_render_hit_events_add(
     *count += 1;
 }
 
-/** Q10: reflect echo-boots recoil onto the NPC that just damaged the player.
-    Mirrors inferno's inf_apply_echo_boots_recoil: the shared
-    osrs_echo_boots_recoil_damage gates on the charge + effect, the reflected hit
-    targets the single attacker (any range), consumes one charge, and routes the
-    damage through the same kill bookkeeping a player projectile would (damage_dealt,
-    render splat, totem trigger, player-credited death). Sol Heredit and the
-    hazard entities (totem/bee) are never recoil targets. */
+/** Reflect echo-boots recoil onto the NPC that just damaged the player: gates on the
+    charge + effect, targets the single attacker (any range), consumes one charge, and
+    routes the damage through the same kill bookkeeping a player projectile would. Sol
+    Heredit and the hazard entities are never recoil targets. */
 static void col_apply_echo_boots_recoil(
     ColosseumState* s, ColosseumContext* ctx, int attacker_slot, int final_damage
 ) {
@@ -220,15 +217,13 @@ static void col_pending_hit_prayer_observer(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (dmg > 0 && hit->source_npc_type >= 0 && hit->source_npc_type < COLO_NUM_NPC_TYPES) {
         s->log.total_damage_by_type[hit->source_npc_type] += (float)dmg;
-        /* death attribution credits the actual killing-blow source. write this for
-           EVERY damaging landing (mirrors inferno): the manticore used to be the only
-           writer, so serpent/shockwave/javelin-normal kills inherited a stale manticore
-           credit and inflated death_by_manticore. */
+        /* death attribution credits the actual killing-blow source. Write this for every
+           damaging landing, not just the manticore, or non-manticore kills inherit a
+           stale credit. */
         s->last_hit_by_type = hit->source_npc_type;
     }
-    /* Q10: echo-boots recoil on a connecting ranged/magic projectile reflects to
-       its source NPC at land time (post-prayer dmg), mirroring inferno's
-       projectile-land recoil. */
+    /* echo-boots recoil on a connecting ranged/magic projectile reflects to its source
+       NPC at land time (post-prayer dmg). */
     col_apply_echo_boots_recoil(s, ctx, hit->source_npc_slot, dmg);
     /* land-time forensics: every colosseum pending hit is prayer-checkable (both
        push sites prayer-check, at throw or at land), and a correctly prayed hit
@@ -295,9 +290,9 @@ static int col_npc_melee_adjacent_to_player(const ColosseumState* s, const ColoN
         s->player.x, s->player.y, 1, 1);
 }
 
-/** player defence roll against an incoming NPC attack of the given style.
-    A23: Relentless bypasses 33/66/100% of the Defence LEVEL before the roll —
-    the gear defence bonus enters the formula fully intact. */
+/** player defence roll against an incoming NPC attack of the given style. Relentless
+    bypasses 33/66/100% of the Defence level before the roll; the gear defence bonus
+    enters the formula fully intact. */
 static int col_player_def_roll(ColosseumState* s, AttackStyle style, MeleeStyle melee_style) {
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
     int def_level = col_mod_relentless_def_level(s, s->player.current_defence);
@@ -325,8 +320,8 @@ static int col_npc_roll_vs_player(
     int att_roll = osrs_npc_attack_roll(att_level, att_bonus);
     int def_roll = col_player_def_roll(s, style, stats->melee_style);
 
-    /* Relentless: +1/+3/+6 max hit, and (T3) ignore accuracy entirely; the
-       defence-level bypass is already inside col_player_def_roll (A23). */
+    /* Relentless: +1/+3/+6 max hit, and (T3) ignore accuracy entirely. The defence-level
+       bypass is already inside col_player_def_roll. */
     int force_hit = 0;
     int max_hit_bonus = col_mod_relentless_max_hit_bonus(s, &force_hit);
     int effective_max = max_hit + max_hit_bonus;
@@ -335,12 +330,9 @@ static int col_npc_roll_vs_player(
         att_roll, def_roll, effective_max, force_hit, &s->rng_state, hit_success);
 }
 
-/** projectile damage delay (ticks) for an NPC ranged/magic attack at a distance.
-    Q5: routes through the shared distance-based timing with is_player=0, the same
-    inferno onTicked convention (an NPC projectile lands one tick earlier than a
-    player's at the same range — the +1 is_player term is omitted). Colosseum NPCs
-    carry no per-NPC timing tweaks, so the default options mirror inferno's standard
-    non-mager/ranger/jad path exactly. */
+/** projectile damage delay (ticks) for an NPC ranged/magic attack at a distance. Routes
+    through the shared distance-based timing with is_player=0 (an NPC projectile lands one
+    tick earlier than a player's at the same range). */
 static int col_npc_projectile_delay(AttackStyle style, int distance) {
     EncounterProjectileDelayOptions opts = {0};
     EncounterProjectileTiming timing = encounter_projectile_timing(
@@ -348,13 +340,12 @@ static int col_npc_projectile_delay(AttackStyle style, int distance) {
     return timing.damage_delay_ticks;
 }
 
-/** queue a normal NPC ranged/magic attack on the player. OSRS locks the protect-
-    prayer outcome AND the damage on the THROW tick (the overhead up now), then the
-    frozen damage flies and lands `delay` ticks later: you cannot react-flick once
-    the projectile is in the air. Prayer + attribution therefore happen here at
-    throw, mirroring the manticore-orb and instant-melee paths; the queued hit
-    carries the already-resolved (frozen) damage with check_prayer=0 so the shared
-    resolver just lands it. */
+/** queue a normal NPC ranged/magic attack on the player. OSRS locks the protect-prayer
+    outcome and the damage on the throw tick (the overhead up now), then the frozen damage
+    flies and lands `delay` ticks later: you cannot react-flick once the projectile is in
+    the air. Prayer + attribution therefore happen here at throw; the queued hit carries
+    the already-resolved (frozen) damage with check_prayer=0 so the shared resolver just
+    lands it. */
 static void col_npc_queue_projectile(
     ColosseumState* s, int idx, const ColoNpcStats* stats, AttackStyle style, int max_hit
 ) {
@@ -379,14 +370,10 @@ static void col_npc_queue_projectile(
     s->tick_scratch.attacks_fired++;
 }
 
-/** Apply one NPC melee hit on the player INSTANTLY on the throw tick. OSRS melee
-    rolls AND lands on the same tick the animation plays, prayer-checked against the
-    overhead already up that tick — it is NOT reactable (you cannot flick Protect-
-    from-Melee after seeing the animation). The old path queued melee with a 1-tick
-    deferral + deferred prayer check, giving the agent a free reaction tick. This
-    mirrors inferno's hit_delay==0 path and the manticore instant orb, replicating
-    the FULL bookkeeping the resolver+observer did for melee (render hitsplat, per-
-    NPC off-prayer attribution, conflict-bleed classifier inputs, prayer-correct,
+/** Apply one NPC melee hit on the player instantly on the throw tick. OSRS melee rolls
+    and lands on the same tick the animation plays, prayer-checked against the overhead
+    already up that tick: it is not reactable. Replicates the full bookkeeping for melee
+    (render hitsplat, per-NPC off-prayer attribution, conflict-bleed inputs, prayer-correct,
     damage, Blasphemy drain, Doom stacks) plus correct melee kill attribution. */
 static void col_apply_instant_melee_hit(
     ColosseumState* s, ColosseumContext* ctx, int attacker_slot, int npc_type,
@@ -404,9 +391,8 @@ static void col_apply_instant_melee_hit(
     s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] += (float)rolled_dmg;
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, npc_type, prayed, dmg);
-    /* Q10: echo-boots recoil fires on the damage actually dealt (post-prayer),
-       reflected to the melee attacker, before the player damage applies (mirrors
-       inferno's instant-melee recoil ordering). */
+    /* echo-boots recoil fires on the damage actually dealt (post-prayer), reflected to
+       the melee attacker, before the player damage applies. */
     col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
     col_damage_player_from(s, dmg, npc_type, COLO_DMG_OFFPRAY);
     /* Doom + Blasphemy follow the ACTUALLY-APPLIED (scaled) damage, matching the
@@ -427,8 +413,8 @@ static void col_apply_instant_melee_hit(
     }
 }
 
-/** an NPC melee attack on the player: rolls + resolves INSTANTLY on the throw tick
-    (not reactable). Replaces the old deferred-queue col_npc_queue_melee. */
+/** an NPC melee attack on the player: rolls + resolves instantly on the throw tick (not
+    reactable). */
 static void col_npc_melee_attack(
     ColosseumState* s, ColosseumContext* ctx, int idx, const ColoNpcStats* stats, int max_hit
 ) {
@@ -451,13 +437,11 @@ static void col_npc_attack_jaguar(
         col_npc_melee_attack(s, ctx, idx, stats, stats->max_hit);
 }
 
-/** A13: minotaur heal — pick ONE eligible ally per heal action and restore it
-    TO FULL. Eligibility: not a minotaur, below 75% of max HP, centre within
-    COLO_MINOTAUR_HEAL_RANGE tiles of the minotaur's centre (Chebyshev), and
-    centre-to-centre line of sight (pillars block heals). Modeled tiebreak: the
-    lowest-HP-fraction candidate (no source ranks multiple eligibles).
-    D10: NO passive self-regen — the ~5hp/20t talk-page report is a single
-    unresolved anonymous claim and is deliberately not modeled. */
+/** minotaur heal: pick one eligible ally per heal action and restore it to full.
+    Eligibility: not a minotaur, below 75% max HP, centre within COLO_MINOTAUR_HEAL_RANGE
+    tiles (Chebyshev), and centre-to-centre line of sight (pillars block heals). Tiebreak:
+    the lowest-HP-fraction candidate. No passive self-regen is modeled (the talk-page
+    report is a single unresolved claim). */
 static void col_npc_minotaur_heal_ally(ColosseumState* s, int idx) {
     ColoNPC* mino = &s->npcs[idx];
     int mcx = mino->x + 1, mcy = mino->y + 1;   /* centre of the 3x3 */
@@ -513,9 +497,9 @@ static void col_npc_attack_javelin(
 }
 
 /** resolve a javelin's in-flight skyfall: land on the marked tile, ignoring
-    Protect-from-Missiles (D7: no defence gate either — on-tile means hit). The
-    player dodges by standing off the tile at land time; resolution runs before
-    NPC and player movement of the land tick (D8). */
+    Protect-from-Missiles (no defence gate either, on-tile means hit). The player dodges by
+    standing off the tile at land time; resolution runs before NPC and player movement of
+    the land tick. */
 static void col_npc_resolve_javelin_skyfall(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -538,24 +522,19 @@ static void col_npc_resolve_javelin_skyfall(
     col_mod_reentry_on_skyfall(s, jv->skyfall_tile_x, jv->skyfall_tile_y);
 }
 
-/** Manticore uses a 10-tick barrage-to-barrage cycle: 3 orbs on consecutive
-    ticks, then a 7-tick recharge. Orbs 0 and 1 are ranged and magic in random
-    order. Orb 2 is always melee. Each orb checks prayer on its launch tick and
-    lands one tick later in fire order, independent of distance. Spawns
-    uncharged, so the first barrage waits a full cycle. D11: movement stays
-    unrestricted while charging. */
+/** Manticore uses a 10-tick barrage-to-barrage cycle: 3 orbs on consecutive ticks, then a
+    7-tick recharge. Orbs 0 and 1 are ranged and magic in random order, orb 2 is always
+    melee. Each orb checks prayer on its launch tick and lands one tick later in fire order,
+    independent of distance. Spawns uncharged, so the first barrage waits a full cycle.
+    Movement stays unrestricted while charging. */
 
-/** A19 wiki stagger, attacker-side: the instant a manticore starts a barrage,
-    every OTHER manticore that is ready to attack at that moment (charge
-    complete, unstunned, range + LoS) has its attack delayed 5 ticks. A peer
-    that becomes ready or gains LoS mid-barrage is NOT delayed and overlaps
-    freely (the wiki overlap clause -- entering a second manticore's LoS while
-    the first is firing is punished, as in the live game). A swept peer always
-    sits later in this tick's interleaved NPC loop (an earlier ready+able peer
-    would already have fired and be mid-barrage), so its own attack_timer
-    decrement still runs this tick: pre-decrement timer <= 1 means "would fire
-    this same tick" (the organic synced-pair case sits at 1 here, not 0), and
-    +1 makes the net delay exactly 5. */
+/** Wiki stagger, attacker-side: the instant a manticore starts a barrage, every other
+    manticore ready to attack at that moment (charge complete, unstunned, range + LoS) has
+    its attack delayed 5 ticks. A peer that becomes ready or gains LoS mid-barrage is not
+    delayed and overlaps freely. A swept peer always sits later in this tick's interleaved
+    NPC loop, so its own attack_timer decrement still runs this tick: pre-decrement timer
+    <= 1 means "would fire this same tick" (the synced-pair case sits at 1, not 0), and +1
+    makes the net delay exactly 5. */
 static void col_manticore_delay_ready_peers(ColosseumState* s, int idx) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (i == idx) continue;
@@ -616,10 +595,9 @@ static void col_npc_manticore_fire_orb(ColosseumState* s, int idx, const ColoNpc
         mc->orb_style[0] = ATTACK_STYLE_NONE;
         mc->orb_style[1] = ATTACK_STYLE_NONE;
         mc->orb_style[2] = ATTACK_STYLE_NONE;
-        /* A19: 10-tick barrage-to-barrage. The timer is set on the LAST orb's
-           tick, two ticks after the barrage started, so attack_speed - 2 makes
-           the next orb 0 land exactly attack_speed (10) ticks after this one's
-           — the 7-tick recharge + 3 orb ticks of the researched cycle. */
+        /* 10-tick barrage-to-barrage. The timer is set on the last orb's tick, two ticks
+           after the barrage started, so attack_speed - 2 makes the next orb 0 land exactly
+           attack_speed (10) ticks after this one (7-tick recharge + 3 orb ticks). */
         npc->attack_timer = stats->attack_speed - 2;
     }
 #ifdef COLO_PROFILE_ENABLED
@@ -660,8 +638,7 @@ static void col_npc_attack_manticore(ColosseumState* s, int idx, const ColoNpcSt
 
 /**
  * Per-NPC attack routine: style selection, accuracy + damage rolls, prayer-aware
- * pending-hit queueing. Mirrors inferno's deferred prayer-check pattern. Sol
- * Heredit is driven by col_sol_tick, not here.
+ * pending-hit queueing. Sol Heredit is driven by col_sol_tick, not here.
  */
 static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) {
     assert(ctx);
@@ -669,12 +646,11 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     const ColoNpcStats* stats = &COLO_NPC_STATS[npc->type];
 
     if (npc->type == COLO_SOL_HEREDIT) return;  /* boss handled in col_sol_tick */
-    /* B2(a): warbanders attack on the shared wave-anchored cycle, resolved in
-       col_warband_attack_phase after the player's move phase — never here. */
+    /* warbanders attack on the shared wave-anchored cycle, resolved in
+       col_warband_attack_phase after the player's move phase, never here. */
     if (col_type_is_warbander(npc->type)) return;
-    /* researched wave-start gate: NPCs move from t7 but no NPC attacks (or
-       charges/telegraphs) before t9; timers hold so the first attack can land
-       the moment the gate lifts. */
+    /* wave-start gate: NPCs move from t7 but no NPC attacks (or charges/telegraphs)
+       before t9; timers hold so the first attack can land the moment the gate lifts. */
     if (s->wave_attack_delay > 0) return;
 
     /* an in-flight manticore barrage fires its remaining orbs 1 tick apart,
@@ -687,10 +663,9 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
 
-    /* manticore: lock + telegraph the next barrage during the charge-up, then
-       fire when the charge completes. Arming leaves attack_timer alone, so the
-       cadence matches the legacy fire-time roll exactly; only the reveal moves
-       earlier. Requires range + LoS to "spot" the player (A19). */
+    /* manticore: lock + telegraph the next barrage during the charge-up, then fire when
+       the charge completes. Arming leaves attack_timer alone, so the cadence is unchanged;
+       only the reveal moves earlier. Requires range + LoS to "spot" the player. */
     if (npc->type == COLO_MANTICORE) {
         int mdist = col_npc_dist_to_player(s, npc);
         if (mdist < 1 || mdist > stats->attack_range) return;
@@ -712,10 +687,9 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     AttackStyle style = stats->default_style;
     int dist = col_npc_dist_to_player(s, npc);
 
-    /* A13+D9: the minotaur runs its 5-tick action timer whether or not it can
-       reach the player. In melee distance (incl. diagonal) it crushes — melee
-       has priority over healing — with instant same-tick (non-reactable) damage;
-       otherwise it heals ONE eligible ally to full. */
+    /* the minotaur runs its 5-tick action timer whether or not it can reach the player.
+       In melee distance (incl. diagonal) it crushes (melee has priority over healing) with
+       instant same-tick damage, otherwise it heals one eligible ally to full. */
     if (npc->type == COLO_MINOTAUR) {
         if (dist == 1) col_npc_melee_attack(s, ctx, idx, stats, stats->max_hit);
         else col_npc_minotaur_heal_ally(s, idx);
@@ -728,10 +702,9 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
         if (dist < 1 || dist > stats->attack_range) return;
         if (!col_npc_has_los_to_player(s, npc)) return;
     } else {
-        /* melee: OSRS cardinal contact only (no diagonal). The minotaur (above)
-           keeps Chebyshev per the documented research decision (divergences #33);
-           the jaguar (size 2, the wave 1-2 reinforcement) uses the faithful
-           footprint-cardinal gate so the diagonal safespot exists. */
+        /* melee: OSRS cardinal contact only (no diagonal). The minotaur (above) keeps
+           Chebyshev by design; the jaguar (size 2) uses the footprint-cardinal gate so the
+           diagonal safespot exists. */
         if (!col_npc_melee_adjacent_to_player(s, npc)) return;
     }
 
@@ -752,7 +725,7 @@ static void col_npc_attack_ctx(ColosseumState* s, ColosseumContext* ctx, int idx
     npc->attack_timer = stats->attack_speed;
 }
 
-/** A5+D33: warbander melee gate — cardinal-only adjacency (1x1 OSRS melee). */
+/** warbander melee gate: cardinal-only adjacency (1x1 OSRS melee). */
 static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* npc) {
     int dx = npc->x > s->player.x ? npc->x - s->player.x : s->player.x - npc->x;
     int dy = npc->y > s->player.y ? npc->y - s->player.y : s->player.y - npc->y;
@@ -760,18 +733,16 @@ static int col_warband_melee_adjacent(const ColosseumState* s, const ColoNPC* np
 }
 
 /**
- * B2: the warband's shared 6-tick attack cycle, anchored to the wave's first
- * actionable tick N (warband_cycle_anchor): berserker window N+1, seer N+2,
- * archer N+3, then 3 silent ticks. A member attacks on its window only when it
- * is cardinally adjacent (A5) and has held its tile for two consecutive ticks
- * (it moved on neither this tick nor last): the first stationary tick is the
- * researched grace that lets the player attack then step before the second.
- * Movement is the dodge — a member forced to chase moves and resets the count.
- * Quartet extras share the window of their species. Runs AFTER the player's
- * move phase of the same tick.
+ * The warband's shared 6-tick attack cycle, anchored to the wave's first actionable tick N
+ * (warband_cycle_anchor): berserker window N+1, seer N+2, archer N+3, then 3 silent ticks.
+ * A member attacks on its window only when it is cardinally adjacent and has held its tile
+ * for two consecutive ticks (moved on neither this tick nor last): the first stationary
+ * tick is the grace that lets the player attack then step before the second. Movement is
+ * the dodge, a member forced to chase moves and resets the count. Quartet extras share
+ * their species' window. Runs after the player's move phase of the same tick.
  *
- * attack_timer no longer gates these attacks; it is rewritten every live tick
- * as ticks-until-window so the obs slot stays meaningful.
+ * attack_timer no longer gates these attacks; it is rewritten every live tick as
+ * ticks-until-window so the obs slot stays meaningful.
  */
 static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
 #ifdef COLO_PROFILE_ENABLED
@@ -808,24 +779,21 @@ static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
 }
 
 /**
- * Prayer-oracle scaffold helper: the style an NPC will THROW this tick, or
- * ATTACK_STYLE_NONE. On this branch ranged/magic prayer locks at the throw tick
- * (col_npc_queue_projectile freezes damage vs the live overhead, check_prayer=0),
- * so the oracle must set the overhead BEFORE the throw, keyed on who fires now —
- * not on the already-frozen landing queue. Mirrors the firing gate of
- * col_npc_attack_ctx (attack_timer<=1 pre-decrement + range/LoS or cardinal
- * adjacency) and col_warband_attack_phase (wave-cycle window + adjacency). It may
- * OVER-report a not-quite-firing NPC (e.g. a warband member that will be forced to
- * move this tick, whose stationary gate is unknowable here); by the priority order
- * below that only ever deprioritizes a lower style, never mis-blocks a higher one.
+ * Prayer-oracle helper: the style an NPC will throw this tick, or ATTACK_STYLE_NONE.
+ * Ranged/magic prayer locks at the throw tick (col_npc_queue_projectile freezes damage vs
+ * the live overhead), so the oracle must set the overhead before the throw, keyed on who
+ * fires now, not on the already-frozen landing queue. Mirrors the firing gate of
+ * col_npc_attack_ctx and col_warband_attack_phase. It may over-report a not-quite-firing
+ * NPC, but by the priority order below that only deprioritizes a lower style, never
+ * mis-blocks a higher one.
  */
 static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const ColoNPC* npc) {
     if (!col_npc_is_live_enemy(npc)) return ATTACK_STYLE_NONE;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return ATTACK_STYLE_NONE;
     const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
 
-    /* warband: fires on its wave-anchored window when cardinally adjacent (A5);
-       attack_timer is a display countdown here, so gate on the cycle phase. */
+    /* warband: fires on its wave-anchored window when cardinally adjacent; attack_timer is
+       a display countdown here, so gate on the cycle phase. */
     if (col_type_is_warbander(npc->type)) {
         if (s->warband_cycle_anchor < 0) return ATTACK_STYLE_NONE;
         int phase = (s->tick - s->warband_cycle_anchor + COLO_WARBAND_CYCLE_TICKS)
@@ -869,13 +837,11 @@ static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const Colo
 }
 
 /**
- * Prayer oracle (scaffold, gated by ColConfig.prayer_oracle_mode; default off).
- * Overrides the player's overhead each tick with the perfect single protect-prayer
- * against this tick's throwers, priority MAGIC > MELEE > RANGED (caller's spec).
- * One overhead per tick, so multi-style-conflict ticks and all typeless/AoE still
- * bleed by design — this removes only the prayer-SELECTION burden, isolating it in
- * the solve-by-cheating ablation. Runs after col_player_pretick and before
- * col_tick_npcs so the chosen overhead is live when each NPC's throw checks it.
+ * Prayer oracle (gated by ColConfig.prayer_oracle_mode, default off). Overrides the
+ * player's overhead each tick with the perfect single protect-prayer against this tick's
+ * throwers, priority MAGIC > MELEE > RANGED. One overhead per tick, so multi-style-conflict
+ * ticks and all typeless/AoE still bleed by design. Runs after col_player_pretick and
+ * before col_tick_npcs so the chosen overhead is live when each NPC's throw checks it.
  */
 static void col_apply_prayer_oracle(ColosseumState* s) {
     int magic = 0, melee = 0, ranged = 0;
@@ -892,16 +858,15 @@ static void col_apply_prayer_oracle(ColosseumState* s) {
 }
 
 /**
- * Sol Heredit boss tick. Drives the wave-12 boss: phase transitions, the AoE
- * spear/shield rotation, the triple-parry combo, the grapple, and the rotating
- * crystal + enrage hazards. The machine lives in encounter_colosseum_boss.inc
- * (included after this file) to keep combat.inc under ~500 lines.
+ * Sol Heredit boss tick. Drives the wave-12 boss: phase transitions, the AoE spear/shield
+ * rotation, the triple-parry combo, the grapple, and the rotating crystal + enrage hazards.
+ * The machine lives in encounter_colosseum_boss.inc.
  */
 static void col_sol_tick(ColosseumState* s, ColosseumContext* ctx) {
     col_sol_boss_tick(s, ctx);
 }
 
-/** the NPC update loop, mirroring inferno's tick_npcs. */
+/** the NPC update loop. */
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();

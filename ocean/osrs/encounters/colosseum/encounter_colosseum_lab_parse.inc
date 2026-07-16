@@ -1,15 +1,10 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_lab_parse.inc
- * @brief Line parser + JSON dump for the Colosseum lab (split from the apply core
- *        to keep each .inc under ~500 lines). Mirrors the inferno lab parser:
- *        trim -> tokenize -> key=value -> build a ColosseumLabCommand -> apply it.
- *
- * col_lab_apply_script_line_alloc_json is the encounter-neutral entry the viewer
- * + the EncounterDef.apply_lab_command hook call.
+ * @brief Line parser for the Colosseum lab: trim -> tokenize -> key=value -> build a
+ *        ColosseumLabCommand -> apply it. col_lab_apply_script_line_alloc_json is the
+ *        entry the viewer and EncounterDef.apply_lab_command call.
  */
-
-/* ----- name <-> id tables (also the viewer's spawn/modifier palettes) ------- */
 
 static const char* col_lab_npc_type_name(int type) {
     switch (type) {
@@ -115,8 +110,6 @@ static ColoLabOptionalInt col_lab_parse_optional_hp_value(const char* value) {
     return encounter_lab_parse_optional_full_int("colosseum lab", value);
 }
 
-
-/* ----- parsed-arg accumulator ----------------------------------------------- */
 
 typedef struct {
     int slot;
@@ -409,12 +402,8 @@ static ColosseumLabCommand col_lab_build_script_command(
 }
 
 
-/* the JSON scenario dump lives in encounter_colosseum_lab_json.inc (included
-   right after this file) to keep each .inc under ~500 lines. */
 static char* col_lab_alloc_json(ColosseumState* s);
 
-
-/* ----- top-level line parser ------------------------------------------------ */
 
 static ColoLabCommandKind col_lab_command_kind_for(const char* command) {
     static const EncounterLabCommandAlias aliases[] = {

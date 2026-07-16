@@ -175,8 +175,8 @@ static ColoForecastLanding col_step_out_forecast_action_landing_ctx(
         if (ty > landing.land_y) dy = 1;
         else if (ty < landing.land_y) dy = -1;
 
-        /* mirror of encounter_move_to_target: a diagonal step is legal only when
-           BOTH shared-corner tiles are walkable (OSRS no-corner-cut rule) */
+        /* a diagonal step is legal only when both shared-corner tiles are walkable
+           (OSRS no-corner-cut rule) */
         int moved = 0;
         if (dx != 0 && dy != 0 &&
                 col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy) &&
@@ -466,8 +466,8 @@ static int col_forecast_move_result_matches(
 }
 
 /**
- * Forecast movement uses the same local collision-grid shape as Inferno mode 3.
- * Warband and Sol use greedy local stepping instead of the live BFS routefinder.
+ * Forecast movement uses a local collision-grid. Warband and Sol use greedy local
+ * stepping instead of the live BFS routefinder.
  */
 static ColoForecastMoveResult col_forecast_local_move_npc(
     const ColosseumState* s,
@@ -852,17 +852,16 @@ static void col_forecast_local_copy_slot_set(
     }
 }
 
-/** B3 action layout: idle(0), walk(1-8, Chebyshev-1), run(9-24, Chebyshev-2).
-    The 16 run-tile actions are exactly indices 9..24. */
+/** Action layout: idle(0), walk(1-8, Chebyshev-1), run(9-24, Chebyshev-2). The 16
+    run-tile actions are exactly indices 9..24. */
 static int col_forecast_action_is_run_tile(int action_idx) {
     return action_idx >= 9 && action_idx < ENCOUNTER_MOVE_ACTIONS;
 }
 
-/** B3 STATIC_THREAT: the style a single NPC would throw at the true landing from
-    its CURRENT tile, gated by range + LoS only, no movement and no per-tick cycle
-    bookkeeping. Records into tick 0. The offtick-opportunity flag (a cross-tick
-    pattern) and any threat that only materializes after the NPC closes distance
-    are intentionally not modeled here; that is the approximation. */
+/** STATIC_THREAT: the style a single NPC would throw at the true landing from its current
+    tile, gated by range + LoS only, no movement and no per-tick cycle bookkeeping. Records
+    into tick 0. The offtick-opportunity flag and any threat that only materializes after
+    the NPC closes distance are intentionally not modeled here. */
 static void col_forecast_static_threat_npc(
     const ColosseumState* s,
     const ColoForecastNpcLocal* npc,
@@ -918,7 +917,7 @@ static void col_forecast_static_threat_npc(
             action, summary, 0, npc->type, npc->default_style);
 }
 
-/** B3 STATIC_THREAT pass over all forecast NPCs for one run-tile action. */
+/** STATIC_THREAT pass over all forecast NPCs for one run-tile action. */
 static void col_forecast_static_threat_action(
     const ColosseumState* s,
     const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],

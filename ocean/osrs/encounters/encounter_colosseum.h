@@ -2,12 +2,7 @@
  * @file encounter_colosseum.h
  * @brief Fortis Colosseum — 12-wave PvM gauntlet ending in the Sol Heredit boss.
  *
- * waves 1-12 spawn Fremennik warband + colossi + beasts with a 40s reinforcement
- * cadence and a between-wave modifier draft. wave 12 is Sol Heredit (spear/shield
- * AoE combos, triple-parry, grapple, molten-sand hazards).
- *
- * mirrors the Inferno encounter's two-layer split: engine-agnostic encounter
- * logic here, PufferLib glue in ocean/osrs_colosseum/binding.c.
+ * Engine-agnostic encounter logic here. PufferLib glue in ocean/osrs_colosseum/binding.c.
  */
 
 #ifndef ENCOUNTER_COLOSSEUM_H
@@ -37,11 +32,9 @@
 #include <ctype.h>
 #include <errno.h>
 
-/** Colosseum NPC roster. `type` is the discriminant for the ColoNPC union.
-    waves 1-11 draw from the warband + colossi + beasts; wave 12 is Sol Heredit.
-    The last two are 1-HP HAZARD ENTITIES (A21+B9): attackable through the
-    normal target/attack path but never counted toward wave completion, never
-    collision-stamped, and driven by the modifier bookkeeping, not the NPC AI. */
+/** Colosseum NPC roster. `type` discriminates the ColoNPC union. The last two are
+    1-HP hazard entities: attackable but never counted toward wave completion, never
+    collision-stamped, driven by modifier bookkeeping not NPC AI. */
 typedef enum {
     COLO_FREMENNIK_BERSERKER = 0,  /* Fremennik Warband — melee */
     COLO_FREMENNIK_ARCHER,         /* Fremennik Warband — ranged */
@@ -64,12 +57,10 @@ typedef enum {
     COLO_OUTCOME_PLAYER_DIED = 1,  /* died or hit the tick cap */
 } ColoOutcome;
 
-/** the 14 real Fortis Colosseum modifiers (the between-wave handicap draft).
-    Order is the modifier-id space: it indexes ColoModifierState.tier[] and the
-    obs/draft slots, so it must stay stable. COLO_NUM_MODIFIERS (16) leaves two
-    unused ids of headroom; only these 14 are ever drafted. Tier counts and exact
-    per-tier effects live in COLO_MODIFIER_MAX_TIER + encounter_colosseum_modifiers.inc,
-    keyed to .colosseum-notes/mechanics-to-code.md ("Modifiers (14)"). */
+/** The 14 real Fortis Colosseum modifiers (between-wave handicap draft). Order is the
+    modifier-id space indexing ColoModifierState.tier[] and the obs/draft slots, so it
+    must stay stable. COLO_NUM_MODIFIERS (16) leaves two unused ids. Only these 14 are
+    ever drafted. */
 typedef enum {
     COLO_MOD_BEES = 0,      /* I/II/III: 1/2/3 roaming poison swarms */
     COLO_MOD_BLASPHEMY,     /* I/II/III: drain prayer = 20/40/60% of damage taken */

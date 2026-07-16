@@ -1,23 +1,19 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_obs_mask.inc
- * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
+ * @brief Obs section sizes + obs writer.
  *
  * The obs is a flat float vector, every feature egocentric + normalized. The
- * COLO_*_OBS_SIZE section defines below are the single source of truth for the
- * layout; they are summed into COLO_NUM_OBS in section order.
- * col_write_obs_ctx hard-asserts the running index against the section constants
- * after each block and aborts on mismatch, exactly like inferno: this is the
- * contract that keeps the obs honest as the layout grows.
+ * COLO_*_OBS_SIZE section defines below are the single source of truth for the layout;
+ * they are summed into COLO_NUM_OBS in section order. col_write_obs_ctx hard-asserts the
+ * running index against the section constants after each block and aborts on mismatch:
+ * this is the contract that keeps the obs honest as the layout grows.
  *
  * The action mask, reward/terminal getters, and render-entity fill live in
- * encounter_colosseum_mask_render.inc (included right after this file) to keep
- * each .inc under ~500 lines.
+ * encounter_colosseum_mask_render.inc.
  */
 
-/* ----- obs section sizes ---------------------------------------------------- */
-
-#define COLO_PLAYER_OBS_SIZE      36          /* was 28; +8 = REC6(3)+REC7(2)+REC8(3) */
+#define COLO_PLAYER_OBS_SIZE      36
 #define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
 #define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES
 #define COLO_INVENTORY_OBS_SIZE \
@@ -27,16 +23,12 @@
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
-#define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator.
-                                          Raw per-cell stats actively misrank scythe vs tentacle
-                                          against 3x3s. */
+#define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 888 */
-/** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated from the
-    oracle's empirical max best-gear DPT across every (profile, weapon, real NPC type)
-    via probe_colo_best_gear_dpt.c --calibrate: the global max is 13.25 (speedrun scythe
-    melee vs the forced-max-melee Fremennik Archer). NORM 15.0 lands the top setup at
-    ~0.88 instead of pinning at 1.0 and losing the ranking gradient (the old 10.0
-    saturated every decisive matchup). Recalibrate if loadouts or NPC stats change. */
+/** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated (via
+    probe_colo_best_gear_dpt.c --calibrate) so the empirical max best-gear DPT (13.25,
+    speedrun scythe melee vs the Fremennik Archer) lands at ~0.88 instead of pinning at 1.0
+    and losing the ranking gradient. Recalibrate if loadouts or NPC stats change. */
 #define COLO_EXPECTED_DPT_NORM    15.0f
 /** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
     draft option ids (36), then a derived-hazard tail (38): Doom lethality,
@@ -58,23 +50,19 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     position so at most one style is "live" (a same-tick multi-style stack is
     exactly what a single overhead prayer cannot block). */
 #define COLO_THREAT_LOS_OBS_SIZE  3
-/** Arceuus thrall + Death-Charge state (combat-fidelity pass), appended after
-    THREAT_LOS: thrall_active, thrall_lifetime_norm, thrall_recast_norm, dc_armed,
-    dc_window_norm, dc_cd_norm. The +15% spec from a Death-Charge proc surfaces
-    downstream via the existing spec_energy obs. */
+/** Arceuus thrall + Death-Charge state, appended after THREAT_LOS: thrall_active,
+    thrall_lifetime_norm, thrall_recast_norm, dc_armed, dc_window_norm, dc_cd_norm. The
+    +15% spec from a Death-Charge proc surfaces downstream via the existing spec_energy
+    obs. */
 #define COLO_THRALL_DC_OBS_SIZE   6
-/** Weapon-choice obs (B0 reversal, 2026-07-05 audit): B0 deleted every
-    target-conditioned weapon-quality obs and the surviving per-cell raw stats
-    actively misrank scythe vs tentacle against 3x3s (the splat edge is
-    invisible) and carry no spec identity. Tail-appended so the entity
-    encoder's NPC/inventory pool offsets stay fixed.
-    - per inventory cell: the cell weapon's expected DPT vs the CURRENT target
-      (its style's best setup with this weapon swapped in), clamp01(/NORM);
-      0 for non-weapons, empty cells, or no live target.
-    - per inventory cell: 1 if the item has a special attack (the signal that
-      claws are FOR the spec, not for basic attacks).
-    - wielded pair: clamp01(current equipment DPT vs target / NORM) and the
-      ratio vs the best achievable setup (the "is my weapon right" signal). */
+/** Weapon-choice obs, tail-appended so the entity encoder's NPC/inventory pool offsets
+    stay fixed.
+    - per inventory cell: the cell weapon's expected DPT vs the current target (its style's
+      best setup with this weapon swapped in), clamp01(/NORM); 0 for non-weapons, empty
+      cells, or no live target.
+    - per inventory cell: 1 if the item has a special attack.
+    - wielded pair: clamp01(current equipment DPT vs target / NORM) and the ratio vs the
+      best achievable setup. */
 #define COLO_CELL_WEAPON_DPT_OBS_SIZE OSRS_INVENTORY_SIZE
 #define COLO_CELL_SPEC_OBS_SIZE       OSRS_INVENTORY_SIZE
 #define COLO_WIELDED_DPT_OBS_SIZE     2
@@ -83,11 +71,11 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS,
     "weapon-choice obs cache float count must match the block size");
 
-/* spawn-phase + spawn-shaping obs (researched wave-start timeline):
-    - ticks-until-spawn /12 and ticks-until-attacks-open /16 (the policy times
-      the t5 reposition and budgets the 3-tick pillar sprint from these)
-    - 13 anchor-blocked bits: would the player's CURRENT tile exclude this
-      primary anchor (zone Chebyshev <= 4) if the spawn resolved now. */
+/* spawn-phase + spawn-shaping obs:
+    - ticks-until-spawn /12 and ticks-until-attacks-open /16 (the policy times the t5
+      reposition and budgets the 3-tick pillar sprint from these)
+    - 13 anchor-blocked bits: would the player's current tile exclude this primary anchor
+      (zone Chebyshev <= 4) if the spawn resolved now. */
 #define COLO_SPAWN_PHASE_OBS_SIZE 2
 #define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
 #define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
@@ -137,8 +125,6 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_OBS_AFTER_THREAT_FIELD \
     (COLO_OBS_AFTER_SPAWN + COLO_THREAT_FIELD_OBS_SIZE)
 
-
-/* ----- normalization helpers ------------------------------------------------ */
 
 static inline float col_clamp01(float v) {
     if (v < 0.0f) return 0.0f;
@@ -318,8 +304,6 @@ static int col_obs_slot_is_targetable(const ColosseumState* s, int obs_slot) {
     return col_npc_is_live_target(npc);
 }
 
-
-/* ----- per-NPC obs ---------------------------------------------------------- */
 
 /** one-hot an attack style into a 3-wide [ranged, magic, melee] slice. */
 static void col_tell_style_onehot(AttackStyle style, float* out3) {
@@ -606,8 +590,6 @@ static void col_write_npc_slot(
 }
 
 
-/* ----- boss obs ------------------------------------------------------------- */
-
 /** nearest crystal whose firing line the player is standing on, damage not
     yet resolved: writes dx, dy (to the crystal), ticks-to-damage frac,
     present flag (4 floats). The threat is "you are on an armed line", and it
@@ -726,7 +708,7 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
         obs[i++] = (float)ady;
     }
 
-    /* attack engine tells (A1+A2): the kiting clock. */
+    /* attack engine tells: the kiting clock. */
     obs[i++] = col_clamp01((float)sol->attack_delay / 12.0f);
     obs[i++] = col_clamp01((float)sol->immobile_ticks / 10.0f);
     obs[i++] = sol->special_cooldown <= 0 ? 1.0f : 0.0f;
@@ -748,7 +730,7 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     obs[i++] = col_clamp01((float)sol->parry_hits_left / (float)COLO_SOL_PARRY_HITS);
     obs[i++] = sol->phase >= 3 ? 1.0f : 0.0f;
 
-    /* grapple: active, called-slot one-hot (the 5-slot A12 domain), timer,
+    /* grapple: active, called-slot one-hot (the 5-slot domain), timer,
        guaranteed-max-armed flag. */
     obs[i++] = sol->grapple_active ? 1.0f : 0.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
@@ -770,8 +752,6 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     col_write_nearest_beam(s, obs, idx);
 }
 
-
-/* ----- pending-hit forecast ------------------------------------------------- */
 
 /** a pending hit ignores Protect prayer iff it is not flagged for a prayer check
     yet carries a non-zero typeless-style hit (javelin skyfall / Sol AoE land via
@@ -1096,8 +1076,6 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 }
 
 
-/* ----- top-level obs writer ------------------------------------------------- */
-
 /** COLO_THREAT_LOS_OBS_SIZE floats: count of live NPCs that can currently hit the
     player (within attack range, and with line of sight for the ranged/magic ones),
     split by the style they threaten with [magic, ranged, melee], each normalized by
@@ -1402,8 +1380,6 @@ static float col_expected_dpt_for_equipment_vs_npc(
         npc,
         ns);
 }
-
-/* ----- best-gear oracle ----------------------------------------------------- */
 
 #define COLO_BEST_GEAR_MAX_CAND 16
 
@@ -1764,16 +1740,13 @@ static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM
 }
 
 /**
- * BIS-gear oracle (scaffold, gated by ColConfig.bis_gear_oracle_mode; default off).
- * When the player is attacking a target, force-equips the weapon set with the
- * highest expected DPT among the sets USABLE from the player's current tile —
- * melee is only a candidate when the target is melee-adjacent, so the cheat never
- * forces a melee weapon the agent cannot reach with (which wasted attack ticks and
- * pulled it into range). This removes the weapon-switch skill the winnability probe
- * flagged (swapping to the unused tbow/shadow for the long-range tanks) while
- * leaving positioning to the agent. No target = no switch (the gear only matters on
- * an attack). Runs in col_tick_player_ctx right before the attack so the chosen set
- * is the one that fires.
+ * BIS-gear oracle (gated by ColConfig.bis_gear_oracle_mode, default off). When the player
+ * is attacking a target, force-equips the weapon set with the highest expected DPT among
+ * the sets usable from the player's current tile (melee is only a candidate when the target
+ * is melee-adjacent, so the cheat never forces a melee weapon the agent cannot reach with).
+ * This removes the weapon-switch skill while leaving positioning to the agent. No target =
+ * no switch. Runs in col_tick_player_ctx right before the attack so the chosen set is the
+ * one that fires.
  */
 static void col_apply_bis_gear_oracle(ColosseumState* s) {
     int target = col_player_target_slot(s);
@@ -2130,15 +2103,15 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
-    /* REC6 live offensive scalars; divisors sized for boosted+prayer BIS so top loadouts don't flatten to 1.0 (eff_level peaks ~158 melee+Piety, attack_bonus ~180 BIS mage magic-attack, strength_bonus ~150 BIS melee); col_clamp01 is the backstop */
+    /* live offensive scalars; divisors sized for boosted+prayer BIS so top loadouts don't flatten to 1.0 (eff_level peaks ~158 melee+Piety, attack_bonus ~180 BIS mage magic-attack, strength_bonus ~150 BIS melee); col_clamp01 is the backstop */
     obs[i++] = col_clamp01((float)ls->eff_level / 165.0f);
     obs[i++] = col_clamp01((float)ls->attack_bonus / 200.0f);
     obs[i++] = col_clamp01((float)ls->strength_bonus / 160.0f);
-    /* REC7 spec detail */
+    /* spec detail */
     int colo_spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
     obs[i++] = col_clamp01((float)colo_spec_cost / 100.0f);
     obs[i++] = colo_spec_cost > 0 ? 1.0f : 0.0f;
-    /* REC8 profile + spell base */
+    /* profile + spell base */
     obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN ? 1.0f : 0.0f;
     obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)ls->spell_base_damage / 40.0f);

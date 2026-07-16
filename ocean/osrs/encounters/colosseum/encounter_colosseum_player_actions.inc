@@ -1,7 +1,7 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_player_actions.inc
- * @brief Action head layout + player tick, mirroring inferno player_actions.
+ * @brief Action head layout + player tick.
  *
  * Action heads (20): PRIMARY, PRAYER, one EQUIP head per gear slot
  * (NUM_GEAR_SLOTS), EAT, DRINK, SPEC, MODIFIER_SELECT, GRAPPLE_PARRY,
@@ -26,7 +26,7 @@
 #define COLO_HEAD_DRINK          (COLO_HEAD_EAT + 1)                          /* 14 */
 #define COLO_HEAD_SPEC           (COLO_HEAD_DRINK + 1)                        /* 15: none, arm equipped spec, disarm */
 #define COLO_HEAD_MODIFIER_SELECT (COLO_HEAD_SPEC + 1)                        /* 16: none + pick draft option 0/1/2 */
-#define COLO_HEAD_GRAPPLE_PARRY  (COLO_HEAD_MODIFIER_SELECT + 1)              /* 17: none + the 5 grapple callout slots (A12) */
+#define COLO_HEAD_GRAPPLE_PARRY  (COLO_HEAD_MODIFIER_SELECT + 1)              /* 17: none + the 5 grapple callout slots */
 #define COLO_HEAD_OFFENSIVE      (COLO_HEAD_GRAPPLE_PARRY + 1)                /* 18: no_change, off, piety, rigour, augury */
 #define COLO_HEAD_SPELL          (COLO_HEAD_OFFENSIVE + 1)                    /* 19: none, summon-thrall, death-charge (Arceuus) */
 
@@ -50,8 +50,8 @@
 #define COLO_SPELL_DEATH_CHARGE  2
 
 #define COLO_MODIFIER_SELECT_DIM (1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 4 */
-/** grapple-parry head: index 0 = no click, index k = click grapple slot (k-1).
-    A12: the domain is the 5-slot ColoGrappleSlot callout set, matching
+/** grapple-parry head: index 0 = no click, index k = click grapple slot (k-1). The
+    domain is the 5-slot ColoGrappleSlot callout set, matching
     SolHereditState.grapple_body_slot. */
 #define COLO_GRAPPLE_PARRY_DIM (1 + COLO_NUM_GRAPPLE_SLOTS)  /* 6 */
 
@@ -106,7 +106,7 @@ static int col_primary_obs_slot_from_action(int primary_action) {
 }
 
 
-/** E13: derive active divine stat floors from Colosseum's live timers. */
+/** derive active divine stat floors from Colosseum's live timers. */
 static EncounterStatDriftPins col_divine_stat_drift_pins(const ColosseumState* s) {
     EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
     if (s->divine_combat_timer > 0) {
@@ -120,8 +120,8 @@ static EncounterStatDriftPins col_divine_stat_drift_pins(const ColosseumState* s
     return pins;
 }
 
-/** E13: active divine boosts prevent their potion stats from draining below
-    the boosted floor. Returns 1 when loadout max hits need recomputing. */
+/** active divine boosts prevent their potion stats from draining below the boosted
+    floor. Returns 1 when loadout max hits need recomputing. */
 static int col_enforce_divine_stat_floors(ColosseumState* s) {
     return encounter_enforce_stat_drift_pins(&s->player, col_divine_stat_drift_pins(s));
 }
@@ -132,7 +132,7 @@ static void col_finish_stat_moving_consumable(ColosseumState* s) {
     col_mark_live_loadout_dirty(s);
 }
 
-/** E13: expire a divine combat timer and drop its potion stats to base. */
+/** expire a divine combat timer and drop its potion stats to base. */
 static int col_tick_divine_combat_timer(ColosseumState* s) {
     if (s->divine_combat_timer <= 0) return 0;
     s->divine_combat_timer--;
@@ -143,7 +143,7 @@ static int col_tick_divine_combat_timer(ColosseumState* s) {
     return 1;
 }
 
-/** E13: expire a divine ranging timer and drop Ranged to base. */
+/** expire a divine ranging timer and drop Ranged to base. */
 static int col_tick_divine_ranged_timer(ColosseumState* s) {
     if (s->divine_ranged_timer <= 0) return 0;
     s->divine_ranged_timer--;
@@ -152,8 +152,8 @@ static int col_tick_divine_ranged_timer(ColosseumState* s) {
     return 1;
 }
 
-/** E13: live-gameplay stat drift and divine timers freeze during draft and
-    ready gaps, matching the existing surge and venom gap precedent. */
+/** live-gameplay stat drift and divine timers freeze during draft and ready gaps,
+    matching the surge and venom gap precedent. */
 static void col_tick_live_stat_drift_and_divines(ColosseumState* s) {
     int changed = 0;
     changed |= col_tick_divine_combat_timer(s);
@@ -177,17 +177,17 @@ static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
     s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 
-/** scaffold (prayer_switch_fail_prob): drop an attempted overhead-protection
-    switch with probability fail_prob so perfect per-tick center-flicking is
-    unreliable and positioning/off-ticking gains value. integer-quantized against
-    the 16-bit roll so the draw stays bit-identical across CUDA and Metal. */
+/** Drop an attempted overhead-protection switch with probability fail_prob (config
+    prayer_switch_fail_prob) so perfect per-tick center-flicking is unreliable.
+    Integer-quantized against the 16-bit roll so the draw stays bit-identical across CUDA
+    and Metal. */
 static int col_overhead_switch_slips(uint32_t* rng_state, float fail_prob) {
     uint64_t numerator = (uint64_t)(fail_prob * 65536.0f);
     return encounter_roll_ratio_u16(rng_state, numerator, 65536);
 }
 
-/** apply prayer actions + drain, before movement and attack. an offensive
-    prayer change recomputes every loadout's prayer multipliers (L12). */
+/** apply prayer actions + drain, before movement and attack. an offensive prayer change
+    recomputes every loadout's prayer multipliers. */
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
     OverheadPrayer prev_prayer = s->player.prayer;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
@@ -354,9 +354,8 @@ static int col_can_eat_consumable_kind(
 
 #define COLO_BOOST_REDRINK_LEVEL 105   /* re-drink a stat boost only below this level */
 
-/* mirror inferno's restore mask: a super-restore / sanfew is worth a dose iff a
-   combat/ranged/magic stat sits below its base or prayer is down by at least half
-   a restore (so the dose is not wasted). */
+/* a super-restore / sanfew is worth a dose iff a combat/ranged/magic stat sits below its
+   base or prayer is down by at least half a restore (so the dose is not wasted). */
 static int col_restore_worth_drinking(const ColosseumState* s) {
     const Player* p = &s->player;
     int stats_drained = p->current_attack   < p->base_attack   ||
@@ -826,9 +825,9 @@ static int col_obs_slot_to_npc(const ColosseumState* s, int obs_slot) {
 }
 
 
-/** A14: a weapon's melee style = the argmax of its stab/slash/crush attack
-    bonuses (the scythe/fang are slash, elder maul is crush, so Sol's slash-5
-    weakness and the right defence lookups are live). */
+/** A weapon's melee style = the argmax of its stab/slash/crush attack bonuses (scythe/fang
+    are slash, elder maul is crush, so Sol's slash weakness and the right defence lookups
+    are live). */
 static MeleeStyle col_item_melee_style(uint8_t weapon_item) {
     const Item* weapon = get_item(weapon_item);
     if (!weapon) return MELEE_STYLE_STAB;
@@ -850,12 +849,11 @@ static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* n
     return def < 0 ? 0 : def;
 }
 
-/** L2/L3: fire the armed special attack with the spec weapon's loadout stats
-    (melee gear base, weapon slot swapped). Queues one pending hit per splat
-    (claws cascade = 4), spends energy via the shared resolver cost, applies
-    the resolver's SGS heal/prayer restore and the elder maul 35%% defence
-    drain, consumes Sol perfect-parry guaranteed max for specs too (E2), and
-    runs the post-attack item effects (blood fury heal). */
+/** Fire the armed special attack with the spec weapon's loadout stats (melee gear base,
+    weapon slot swapped). Queues one pending hit per splat (claws cascade = 4), spends
+    energy via the shared resolver cost, applies the resolver's SGS heal/prayer restore and
+    the elder maul 35% defence drain, consumes Sol perfect-parry guaranteed max for specs
+    too, and runs the post-attack item effects (blood fury heal). */
 static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     ColoNPC* npc = &s->npcs[npc_slot];
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
@@ -886,7 +884,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
     int bf_heal = 0;
     int num_hits = r.num_hits > 0 ? r.num_hits : 1;
     for (int i = 0; i < num_hits; i++) {
-        /* Q6: melee spec damage lands the same tick it is calculated (delay 0). */
+        /* melee spec damage lands the same tick it is calculated (delay 0). */
         col_queue_npc_pending_hit(s, npc_slot, r.damage[i], 0,
                                   ATTACK_STYLE_MELEE, ENCOUNTER_SPELL_NONE);
         total += r.damage[i];
@@ -1085,12 +1083,9 @@ static OsrsVenatorChain col_resolve_venator_chain(
 }
 
 /** target defence roll for a player attack of `style`.
-    Gotcha: a monster's MAGIC defence rolls off its Magic level, not its Defence
-    level (matches osrs_barrage_resolve and osrs-dps-calc monster.skills.magic).
-    Melee/ranged roll off the (drain-adjusted) Defence level. Using def_level for
-    magic made high-magic NPCs (shaman 220, manticore 350) far too easy to mage,
-    inverting their real weakness. Defence-lowering specials do not touch Magic
-    level, so the magic branch ignores def_drained. */
+    Gotcha: a monster's MAGIC defence rolls off its Magic level, not its Defence level.
+    Melee/ranged roll off the (drain-adjusted) Defence level. Defence-lowering specials do
+    not touch Magic level, so the magic branch ignores def_drained. */
 static int col_npc_target_def_roll(
     const ColoNPC* npc,
     const ColoNpcStats* ns,
@@ -1145,17 +1140,12 @@ static float col_expected_dpt_vs_npc(
     int target_def_roll = col_npc_target_def_roll(npc, ns, style, melee_style);
     float hit_prob;
     if (osrs_confliction_can_apply(effects, style, weapon_item, 1)) {
-        /* Confliction gauntlets steady-state magic accuracy, modeled truthfully
-           against .refs/osrs-dps-calc BaseCalc.getConflictionGauntletsAccuracyRoll:
-           the gauntlets prime on a miss and the next attack rolls double accuracy,
-           so the long-run hit chance is double / (1 + double - single). single is
-           the standard roll (osrs_hit_chance == getNormalAccuracyRoll), double is the
-           fang/double roll (osrs_hit_chance_double == getFangAccuracyRoll).
-           osrs_confliction_can_apply already encodes the owner-confirmed 2h-disable
-           (the effect never fires with a two-handed weapon, so it is dead under
-           Tumeken's shadow). The live sim charges the prime via the effect state; the
-           obs surfaces the achievable steady state so the policy sees the real value
-           of the confliction switch instead of the uncharged floor. */
+        /* Confliction gauntlets steady-state magic accuracy: the gauntlets prime on a
+           miss and the next attack rolls double accuracy, so the long-run hit chance is
+           double / (1 + double - single). single is the standard roll, double is the
+           fang/double roll. The effect never fires with a two-handed weapon (dead under
+           Tumeken's shadow). The obs surfaces the achievable steady state, not the
+           uncharged floor. */
         float single = osrs_hit_chance(prepared.attack_roll, target_def_roll);
         float dbl = osrs_hit_chance_double(prepared.attack_roll, target_def_roll);
         float denom = 1.0f + dbl - single;
@@ -1187,14 +1177,13 @@ static float col_expected_dpt_vs_npc(
 }
 
 /**
- * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
- * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness
- * (style match = forced max), the B7 perfect-parry guaranteed max (armed by a
- * last-tick grapple parry, consumed by the very next attack), and the A14
- * melee-style defence lookup (the weapon's style picks stab/slash/crush def).
- * A21+B9: 1-HP hazard entities (totem/bee) die to ANY attack of any style —
- * the hit is guaranteed for their full HP, no rolls, and it does not consume
- * an armed perfect-parry max; the attack still spends the weapon cycle.
+ * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the shared
+ * combat math and queues a pending hit. Honors the Fremennik RPS weakness (style match =
+ * forced max), the perfect-parry guaranteed max (armed by a last-tick grapple parry,
+ * consumed by the very next attack), and the melee-style defence lookup (the weapon's
+ * style picks stab/slash/crush def). 1-HP hazard entities die to any attack of any style:
+ * the hit is guaranteed for their full HP, no rolls, and does not consume an armed
+ * perfect-parry max; the attack still spends the weapon cycle.
  */
 static void col_player_attack_target_ctx(
     ColosseumState* s,
@@ -1210,8 +1199,8 @@ static void col_player_attack_target_ctx(
         return;
     }
 
-    /* L11: per-set item effects (tbow target-magic scaling, bowfa + crystal
-       armour) scale the base roll and max hit before any branch uses them. */
+    /* per-set item effects (tbow target-magic scaling, bowfa + crystal armour) scale the
+       base roll and max hit before any branch uses them. */
     const OsrsEquipmentEffectProfile* effects = col_live_effects(s);
     uint8_t weapon_item = s->player.equipped[GEAR_SLOT_WEAPON];
     int projectile_dist = encounter_projectile_distance(
@@ -1249,9 +1238,8 @@ static void col_player_attack_target_ctx(
         abort();
     }
 
-    /* Q6: player melee lands the same tick it is calculated (shared OSRS melee
-       delay 0, ENCOUNTER_PROJECTILE_DELAY_MELEE via col_player_projectile_timing).
-       Ranged/magic keep their distance-abstracted flight delay. */
+    /* player melee lands the same tick it is calculated (delay 0). Ranged/magic keep their
+       distance-abstracted flight delay. */
     int ticks = ls->style == ATTACK_STYLE_MELEE
         ? hit_timing.damage_delay_ticks
         : (ls->attack_range > 1 ? 3 : 1);
@@ -1354,14 +1342,11 @@ static void col_tick_player_ctx(
         s->player.spec_armed = 0;
     }
 
-    /* Arceuus spells (L: thralls + Death Charge). summon-thrall is gated on
-       recast_cd==0 && a thrall-eligible (live, non-Sol) current target; a summon
-       while a thrall is already up REPLACES it (only one thrall at a time, OSRS),
-       still paying the 17-tick recast. death-charge arms the 100-tick window when
-       ready (cd==0 && not already armed). Frozen while a draft is open (B6), like
-       move/target; the thrall tick + timers are separately can_attack-gated so
-       nothing acts during any gap. The mask enforces these gates; the handler
-       re-checks defensively. */
+    /* Arceuus spells (thralls + Death Charge). summon-thrall is gated on recast_cd==0 && a
+       thrall-eligible (live, non-Sol) current target; a summon while a thrall is up replaces
+       it (only one at a time), still paying the 17-tick recast. death-charge arms the
+       100-tick window when ready (cd==0 && not already armed). Frozen while a draft is open,
+       like move/target. The mask enforces these gates; the handler re-checks defensively. */
     int spell_act = s->modifiers.draft_pending ? 0 : actions[COLO_HEAD_SPELL];
     if (spell_act == COLO_SPELL_SUMMON_THRALL && s->thrall_recast_cd == 0) {
         int target = col_player_target_slot(s);
@@ -1371,21 +1356,20 @@ static void col_tick_player_ctx(
         s->death_charge_window_left = COLO_DEATH_CHARGE_WINDOW;
     }
 
-    /* modifier draft: index 0 = STILL DECIDING (no skip exists, B6); index k
-       activates draft option (k-1). Only acts while a draft is pending (the
-       mask gates the rest). */
+    /* modifier draft: index 0 = still deciding (no skip exists), index k activates draft
+       option (k-1). Only acts while a draft is pending (the mask gates the rest). */
     int modifier_act = actions[COLO_HEAD_MODIFIER_SELECT];
     if (modifier_act > 0 && s->modifiers.draft_pending)
         col_modifier_apply_selection(s, modifier_act - 1);
 
-    /* B6: the player is FROZEN while a draft is open — movement, targeting,
-       and attacks are ignored until the pick (which closes draft_pending the
-       same tick, so post-pick actions take effect from the next tick). */
+    /* the player is frozen while a draft is open: movement, targeting, and attacks are
+       ignored until the pick (which closes draft_pending the same tick, so post-pick
+       actions take effect from the next tick). */
     if (s->modifiers.draft_pending && !s->modifiers.draft_free_movement) return;
 
-    /* grapple parry: during an active Sol grapple, action index k clicks
-       grapple slot (k-1) of the 5-slot A12 domain. A correct slot parries;
-       clicking on the last tick is a perfect parry. */
+    /* grapple parry: during an active Sol grapple, action index k clicks grapple slot
+       (k-1) of the 5-slot domain. A correct slot parries; clicking on the last tick is a
+       perfect parry. */
     int grapple_act = actions[COLO_HEAD_GRAPPLE_PARRY];
     if (grapple_act > 0 && grapple_act <= COLO_NUM_GRAPPLE_SLOTS)
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
@@ -1483,8 +1467,8 @@ static void col_tick_player_ctx(
     }
     col_rebuild_player_collision_flags(s);
 
-    /* scaffold: gear for THIS tick's chosen target right before the attack so the
-       forced set is the one that actually fires (the step above set the target). */
+    /* gear for this tick's chosen target right before the attack so the forced set is the
+       one that actually fires (the step above set the target). */
     if (ctx && ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
 
     /* attack */

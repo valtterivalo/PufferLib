@@ -1,14 +1,10 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_helpers.inc
- * @brief Context lifecycle + shared primitives, mirroring inferno helpers.
- *
- * Every function is static. `_ctx`-suffixed variants take an explicit
- * ColosseumContext*; the bare variant forwards to col_legacy_context(). The
- * binding always calls the `_ctx` forms.
+ * @brief Context lifecycle + shared primitives. `_ctx` variants take an explicit
+ *        ColosseumContext*, the bare variant forwards to col_legacy_context().
  */
 
-/* forward declarations of cross-inc functions */
 static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx);
 static void col_spawn_wave(ColosseumState* s);
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx);
@@ -22,14 +18,11 @@ static void col_resolve_player_pending_hits(ColosseumState* s);
 static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
 
-/* Sol Heredit boss machine (encounter_colosseum_boss.inc, included after combat). */
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx);
 static void col_sol_begin_boss_arena(ColosseumState* s);
 static int col_sol_clamp_active(const ColosseumState* s);
 static int col_in_boss_arena(const ColosseumState* s, int x, int y);
 
-/* modifier hooks (encounter_colosseum_modifiers.inc) referenced by reset_spawn,
-   which is included before it. */
 static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
@@ -71,9 +64,7 @@ static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
     return FIGHT_STYLE_AGGRESSIVE;
 }
 
-/** style-matched offensive prayer (Piety/Rigour/Augury). The colosseum mirror of
-    the inferno helper: the prayer that actually buffs `style` in
-    encounter_offensive_prayer_mults (an off-style prayer returns identity). */
+/** Style-matched offensive prayer (Piety/Rigour/Augury). */
 static OffensivePrayer col_offensive_prayer_for_attack_style(AttackStyle style) {
     switch (style) {
         case ATTACK_STYLE_MELEE:
@@ -237,17 +228,9 @@ typedef struct {
 } ColoNpcDeathVisual;
 
 /**
- * Colosseum death-sequence and corpse-linger metadata.
- *
- * anim_id is render-only (played by the viewer, ignored by the simulator).
- * linger_ticks is the simulator corpse despawn budget consumed by
- * osrs_npc_death_linger_start, normally ceil(client_ticks / 30) where
- * client_ticks is the death sequence's summed frame delay. The four
- * Animaya-rigged colossi (Javelin, Shockwave, Manticore, Sol) render their
- * cache Maya death sequence, which plays once then holds its final pose. Their
- * client_ticks and linger_ticks stay at the pre-Maya despawn budget so corpse
- * timing, and thus training, is unchanged by the render fix. Hazard entities
- * despawn instantly and never consult this table.
+ * Death-sequence + corpse-linger metadata. anim_id is render-only (viewer plays it,
+ * simulator ignores it). linger_ticks is the sim corpse-despawn budget, normally
+ * ceil(client_ticks / 30). Hazard entities despawn instantly and never consult this.
  */
 static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
@@ -309,14 +292,9 @@ static void col_queue_npc_pending_hit(
         &npc->pending_hits, hit, "colosseum-npc", s->tick, npc_slot, npc->type);
 }
 
-/** push a pre-built NPC->player pending hit onto the player's queue. Build the hit
-    with the shared encounter_pending_hit_resolved_at_throw ctor (osrs_encounter.h)
-    so the throw-tick prayer/damage freeze lives in the SDK, not here. */
-/** scaffold: scale one incoming-damage value by s->active_player_damage_received_scale.
-    Provably bit-identical at scale >= 1.0f (early return of the original int, no
-    float round-trip), so the golden no-op path is exact. Below 1.0 it rounds
-    half-up and clamps at 0 so scale=0.0 yields full invuln. Negative damage is
-    impossible here (rolls are >= 0), so no negative-clamp is needed. */
+/** Scale incoming damage by active_player_damage_received_scale. scale >= 1.0 returns
+    the original int unchanged (no float round-trip, so the golden no-op path is
+    bit-exact). Below 1.0 rounds half-up and clamps at 0, so scale 0 = full invuln. */
 static inline int col_scale_incoming_damage(const ColosseumState* s, int dmg) {
     float scale = s->active_player_damage_received_scale;
     if (scale >= 1.0f) return dmg;

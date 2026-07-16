@@ -1,7 +1,7 @@
 #line 76 "encounter_colosseum.h"
 /**
  * @file encounter_colosseum_reset_spawn.inc
- * @brief Episode setup + wave spawning, mirroring inferno reset_spawn.
+ * @brief Episode setup + wave spawning.
  */
 
 static int col_grid_index(int x, int y, int* gx, int* gy) {
@@ -54,8 +54,8 @@ static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
 
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
-    /* hazard entities and warbanders never stamped collision; unstamping would
-       erase a real NPC's overlapping footprint (warbanders overlap freely). */
+    /* hazard entities and warbanders never stamped collision, and unstamping would
+       erase a real NPC's overlapping footprint. */
     if (!col_type_is_hazard_entity(npc->type) && !col_type_is_warbander(npc->type)) {
         int size = col_npc_effective_size(npc);
         col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
@@ -127,15 +127,15 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->target_x = x;
     npc->target_y = y;
     npc->stun_timer = 0;
-    /* warbanders are exempt from NPC collision both ways (observed: they spawn
-       on top of primaries and walk through every NPC), so they never stamp. */
+    /* warbanders are exempt from NPC collision both ways (spawn on top of primaries,
+       walk through every NPC), so they never stamp. */
     if (!col_type_is_hazard_entity(type) && !col_type_is_warbander(type) &&
             col_npc_effective_size(npc) > 0)
         col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
 }
 
-/** spawn an NPC of `type` with its SW tile at (x, y); asserts a free slot
-    instead of silently dropping (A29). Returns the slot. */
+/** Spawn an NPC of `type` with its SW tile at (x, y). Asserts a free slot instead of
+    silently dropping. Returns the slot. */
 static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
     int slot = col_find_free_npc(s);
     assert(slot >= 0 && "colosseum NPC slots exhausted");
@@ -144,8 +144,8 @@ static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
     return slot;
 }
 
-/** B3: true if any tile of a size x size footprint at SW (x, y) lies within
-    Chebyshev COLO_SPAWN_EXCLUSION_CHEB of the player's tile. */
+/** True if any tile of a size x size footprint at SW (x, y) lies within Chebyshev
+    COLO_SPAWN_EXCLUSION_CHEB of the player's tile. */
 static int col_spawn_excluded_near_player(const ColosseumState* s, int x, int y, int size) {
     return encounter_entity_footprint_distance(
         s->player.x, s->player.y, 1, x, y, size) <= COLO_SPAWN_EXCLUSION_CHEB;
@@ -168,8 +168,8 @@ static int col_spawn_footprint_free(const ColosseumState* s, int x, int y, int s
     return 1;
 }
 
-/** D4: candidate anchors = zones fully spawnable AND outside the B3
-    player-proximity exclusion; the caller draws uniformly without replacement. */
+/** Candidate anchors = zones fully spawnable and outside the player-proximity
+    exclusion. The caller draws uniformly without replacement. */
 static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
     int n = 0;
     for (int a = 0; a < COLO_NUM_SPAWN_ANCHORS; a++) {
@@ -181,9 +181,8 @@ static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
     return n;
 }
 
-/** warbander spawn tile: static-free, in-grid, inside the boss clamp when
-    active, and not the player's tile. NPC OVERLAP IS ALLOWED — warbanders are
-    collision-exempt (observed spawning on top of primaries). */
+/** warbander spawn tile: static-free, in-grid, inside the boss clamp when active, and
+    not the player's tile. NPC overlap is allowed (warbanders are collision-exempt). */
 static int col_warband_spawn_tile_ok(const ColosseumState* s, int x, int y) {
     if (col_static_blocked(x, y)) return 0;
     int gx, gy;
@@ -192,9 +191,8 @@ static int col_warband_spawn_tile_ok(const ColosseumState* s, int x, int y) {
     return !(x == s->player.x && y == s->player.y);
 }
 
-/** uniform ok tile inside the warband centre box (B2(d), the ranger's yellow
-    box): rejection-sample, then fall back to a deterministic scan; asserts the
-    box is not full. */
+/** Uniform ok tile inside the warband centre box: rejection-sample, then fall back to
+    a deterministic scan. Asserts the box is not full. */
 static void col_draw_warband_box_tile(ColosseumState* s, int* ox, int* oy) {
     int span_x = COLO_WARBAND_BOX_MAX_X - COLO_WARBAND_BOX_MIN_X + 1;
     int span_y = COLO_WARBAND_BOX_MAX_Y - COLO_WARBAND_BOX_MIN_Y + 1;
@@ -209,11 +207,10 @@ static void col_draw_warband_box_tile(ColosseumState* s, int* ox, int* oy) {
     assert(0 && "warband centre box full");
 }
 
-/** B2(d) fixed spawn formation around the archer: seer = archer+2E, berserker
-    = archer+1E+1N, quartet member = archer+1E+1S (diamond, empty middle at
-    archer+1E). If the formation tile is statically blocked, take the nearest
-    ok tile by outward shell scan (box tile as a last resort). Also assigns the
-    member's surround preference (formation_dir). */
+/** Fixed spawn formation around the archer: seer = archer+2E, berserker = archer+1E+1N,
+    quartet member = archer+1E+1S (diamond, empty middle at archer+1E). A blocked
+    formation tile takes the nearest ok tile by outward shell scan (box tile as last
+    resort). Also assigns the member's formation_dir. */
 static void col_spawn_warbander_formation(
     ColosseumState* s, ColoNpcType type, int ax, int ay,
     int dx, int dy, int dir) {
@@ -236,11 +233,9 @@ static void col_spawn_warbander_formation(
     colo_npc_warband(&s->npcs[slot])->formation_dir = dir;
 }
 
-/** A26: the Dynamic Duo pair spawns NEAR its primary, off-anchor allowed ("The
-    paired Colossus spawns near the main Colossus, but not necessarily on one of
-    the 12 default spawns"). Every fallback stays near the partner: the 8
-    footprints flush with the primary's first, then outward SW-anchor rings of
-    growing Chebyshev radius, and as a last resort the free anchor NEAREST the
+/** The Dynamic Duo pair spawns near its primary, off-anchor allowed. Fallbacks stay
+    near the partner: the 8 footprints flush with the primary first, then outward
+    SW-anchor rings of growing Chebyshev radius, and last the free anchor nearest the
     primary (never the table-order-first one). */
 static void col_spawn_pair_adjacent(ColosseumState* s, ColoNpcType type, int px, int py) {
     int size = COLO_NPC_STATS[type].size;
@@ -278,9 +273,8 @@ static void col_spawn_pair_adjacent(ColosseumState* s, ColoNpcType type, int px,
     col_spawn_npc_at(s, type, COLO_SPAWN_ANCHORS[best][0], COLO_SPAWN_ANCHORS[best][1]);
 }
 
-/** A6+D19: the Quartet warbander on wave 12 spawns on a random walkable
-    interior tile outside the B3-mirrored player exclusion. B2(c): the Quartet
-    extra holds the SOUTH diamond slot. */
+/** The Quartet warbander on wave 12 spawns on a random walkable interior tile outside
+    the player exclusion, holding the SOUTH diamond slot. */
 static void col_spawn_quartet_boss_wave(ColosseumState* s, ColoNpcType type) {
     int span = COLO_BOSS_ARENA_SIZE;
     int qx = -1, qy = -1;
@@ -309,21 +303,18 @@ static const ColoNpcType COLO_WARBAND_TYPES[3] = {
 /**
  * Spawn the current wave's roster.
  *
- * Waves 1-11: the warband trio spawns at the arena centre — ranger uniformly in
- * the B2(d) box, berserker + seer adjacent. Primaries (non-warband) draw spawn
- * anchors uniformly without replacement (A4+D4) under the B3 player-proximity
- * exclusion, SW tile ON the anchor; Dynamic Duo pairs place adjacent to their
- * primary (A26); the Quartet extra warbander takes its own centre-box tile.
- * Wave 12: the boss arena starts first (clamp + player teleport), Sol spawns at
- * his researched SW tile, and a Quartet warbander spawns on a random interior
- * tile (A6+D19).
+ * Waves 1-11: the warband trio spawns at the arena centre (ranger uniformly in the box,
+ * berserker + seer adjacent). Primaries draw spawn anchors uniformly without replacement
+ * under the player-proximity exclusion, SW tile on the anchor. Dynamic Duo pairs place
+ * adjacent to their primary, and the Quartet extra takes its own centre-box tile.
+ * Wave 12: the boss arena starts first (clamp + player teleport), Sol spawns at his SW
+ * tile, and a Quartet warbander spawns on a random interior tile.
  */
 static void col_spawn_wave(ColosseumState* s) {
     col_reset_current_wave_score_progress(s);
 
-    /* clear the old roster. Bee swarms survive wave transitions (they respawn
-       forever, D34); totems despawn with the wave — their owners are gone —
-       and all totem bookkeeping resets. */
+    /* clear the old roster. Bee swarms survive wave transitions (they respawn forever),
+       totems despawn with the wave and all totem bookkeeping resets. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (!s->npcs[i].active) continue;
         if (s->npcs[i].type == COLO_BEE_SWARM) continue;
@@ -333,8 +324,8 @@ static void col_spawn_wave(ColosseumState* s) {
     /* heal any stale footprint stamps (e.g. NPCs force-killed without cleanup). */
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
 
-    /* B2(a): re-arm the shared warband cycle; the step loop anchors it to the
-       wave's first actionable tick N. */
+    /* re-arm the shared warband cycle. The step loop anchors it to the wave's first
+       actionable tick N. */
     s->warband_cycle_anchor = -1;
     /* re-arm the wave-shared manticore orb cycle; rolled at the first manticore. */
     s->wave_manticore_pattern_rolled = 0;
@@ -395,8 +386,8 @@ static void col_spawn_wave(ColosseumState* s) {
                 col_spawn_pair_adjacent(s, type, ax, ay);
         }
 
-        /* Quartet: one extra random warbander every wave at archer+1E+1S,
-           completing the diamond; it holds the SOUTH slot (B2(c)). */
+        /* Quartet: one extra random warbander every wave at archer+1E+1S, completing
+           the diamond and holding the SOUTH slot. */
         if (col_mod_active(s, COLO_MOD_QUARTET)) {
             ColoNpcType extra = COLO_WARBAND_TYPES[encounter_rand_int(&s->rng_state, 3)];
             assert(archer_x >= 0 && "quartet without an archer spawn");
@@ -406,10 +397,9 @@ static void col_spawn_wave(ColosseumState* s) {
     }
 
     s->reinforcement_timer = COLO_REINFORCEMENT_TICKS;
-    /* researched wave-start gates: NPCs appear this tick (obs t6), move from
-       t7, and no NPC attacks before t9; wave NPCs open with ready attack
-       timers so the first attack can land exactly when the gate lifts. Sol
-       keeps his own opening cadence; bees are hazard DoT and keep theirs. */
+    /* wave-start gates: NPCs appear this tick (obs t6), move from t7, and no NPC
+       attacks before t9. Wave NPCs open with ready attack timers so the first attack
+       lands exactly when the gate lifts. Sol keeps his own cadence, bees keep theirs. */
     s->wave_ready_delay = COLO_WAVE_READY_TICKS;
     s->wave_attack_delay = COLO_WAVE_ATTACK_GATE_TICKS;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
@@ -425,15 +415,13 @@ static void col_spawn_wave(ColosseumState* s) {
 #define COLO_REINFORCE_FIRED (-1)
 
 /**
- * Spawn the wave's reinforcement species inside the chosen gate gap (A17+B8+D2).
+ * Spawn the wave's reinforcement species inside the chosen gate gap.
  *
- * Side: the b5 yellow line — player y >= COLO_GATE_LINE_NORTH_MIN_Y takes the
- * north gate, else the south (fixed threshold, not nearest-distance). Species
- * pack side-by-side from the gap's west edge (sim x 15-18) on the innermost
- * walkable row of the chosen wall, multi-tile footprints extending inward; an
- * occupied base spot slides east within the gap, and a fully occupied gap spawns
- * overlapping (reinforcements stream in regardless). Sets reinforcement_timer to
- * COLO_REINFORCE_FIRED so an overrun reinforces exactly once per wave (D1).
+ * Player y >= COLO_GATE_LINE_NORTH_MIN_Y takes the north gate, else the south (fixed
+ * threshold, not nearest-distance). Species pack side-by-side from the gap's west edge
+ * on the innermost walkable row, multi-tile footprints extending inward. An occupied
+ * base spot slides east, and a full gap spawns overlapping. Sets reinforcement_timer to
+ * COLO_REINFORCE_FIRED so an overrun reinforces exactly once per wave.
  */
 static void col_spawn_reinforcements(ColosseumState* s) {
     if (s->wave < 0 || s->wave >= COLO_NUM_WAVES) return;
@@ -536,11 +524,8 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
     s->surge_doses = surge_doses;
 }
 
-/** scaffold (remove_brews): strip every Saradomin-brew dose from the seeded
-    inventory by emptying those cells. Brews are the only HP-healing consumable, so
-    this isolates whether the agent leans on them as a crutch through wave ~3
-    instead of learning to avoid damage. Run before the consumable-counter sync so
-    brew_doses recomputes to 0. */
+/** Strip every Saradomin-brew dose from the seeded inventory (config remove_brews).
+    Run before the consumable-counter sync so brew_doses recomputes to 0. */
 static void col_strip_brews_from_inventory(ColosseumState* s) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
         ColoInvCell* cell = &s->inventory_cells[i];
@@ -562,8 +547,8 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     col_context_clear_render_events(ctx);
     /* The signature-keyed obs memos survive the reset (see ColoObsMemoCaches): every
        entry self-corrects against a content signature recomputed from live state, so
-       restoring them is bit-identical and lets the respawn's identical starting loadout
-       skip the first-obs best-gear rebuild that dominated obs time under fast deaths. */
+       restoring them is bit-identical and skips the respawn's first-obs best-gear
+       rebuild. */
     ColoObsMemoCaches saved_obs_memos = s->obs_memos;
     memset(s, 0, sizeof(ColosseumState));
     s->obs_memos = saved_obs_memos;
@@ -574,10 +559,9 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
     s->min_sol_hp_seen = COLO_SOL_HP_MAX;
-    /* scaffold: seed the damage-scale mirror from config so a freshly-reset state
-       is immediately safe (memset would leave it 0.0 = accidental full invuln).
-       col_step_ctx re-mirrors this each tick; a static config scale also works
-       without ever stepping. Default config value is 1.0 = bit-identical no-op. */
+    /* seed the damage-scale mirror from config so a freshly-reset state is immediately
+       safe (memset would leave it 0.0 = accidental full invuln). col_step_ctx re-mirrors
+       it each tick. Default config value 1.0 is a bit-identical no-op. */
     s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
@@ -646,17 +630,13 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->wave_attack_delay = 0;
     s->log.wave_reached = effective_start;
 
-    /* Wave 1 IS drafted (user correction 2026-07-07): a modifier is picked at
-       challenge start, 12 picks per full run. The start draft uniquely allows
-       free movement — the player roams to choose the wave-1 start tile, then
-       the pick starts the researched sequence (5 empty ticks, spawn resolved
-       at t5 against the live tile, visible t6, moving t7, attacking t9).
-       start_wave>0 (user correction 2026-07-10, superseding 07-07's bare
-       starts): an organic run entering wave N carries N modifier picks and
-       spent supplies, so late starts synthesize that history (or replay a
-       recorded organic wave entry) and then meet their own pre-wave draft
-       LIVE, movement-frozen like every mid-run draft. The old bare start
-       survives as late_start_state_mode 0. */
+    /* Wave 1 is drafted: a modifier is picked at challenge start (12 picks per run). The
+       start draft uniquely allows free movement so the player roams to choose the wave-1
+       start tile, then the pick starts the spawn sequence (visible t6, moving t7,
+       attacking t9). For start_wave>0 an organic run entering wave N carries N picks and
+       spent supplies, so late starts synthesize that history (or replay a recorded wave
+       entry) and then meet their own pre-wave draft live, movement-frozen. The old bare
+       start survives as late_start_state_mode 0. */
     if (effective_start == 0) {
         col_modifier_open_draft(s, 0);
         if (s->modifiers.draft_pending) s->modifiers.draft_free_movement = 1;
