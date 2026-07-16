@@ -1315,7 +1315,7 @@ def main() -> None:
     parser.add_argument(
         "--modern-cache",
         type=Path,
-        default=Path("/Users/valtterivalo/Projects/pufferlib-metal/.refs/osrs-cache-modern"),
+        default=Path(".refs/osrs-cache-modern"),
         help="modern Jagex dat2 cache directory",
     )
     parser.add_argument(
