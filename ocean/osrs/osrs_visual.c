@@ -242,6 +242,41 @@ static void osrs_print_inferno_profile_results(int total_steps) {
 }
 #endif
 
+typedef struct {
+    CollisionMap* cmap;
+    int offset_x;
+    int offset_y;
+} VisualCollisionLoad;
+
+/* Load the encounter collision map and publish it plus its world offset into the
+   encounter state. The per-encounter offset table lives here as the single source.
+   Returns the loaded map and offset so callers can log a diagnostic. */
+static VisualCollisionLoad visual_load_encounter_collision_map(
+    const EncounterDef* edef, OsrsEnv* env, const char* encounter_name
+) {
+    CollisionMap* cmap = NULL;
+    int offset_x = 0, offset_y = 0;
+    if (strcmp(encounter_name, "zulrah") == 0) {
+        cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
+        offset_x = 2256; offset_y = 3061;
+    } else if (strcmp(encounter_name, "inferno") == 0) {
+        cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
+        offset_x = 2246; offset_y = 5315;
+    } else if (strcmp(encounter_name, "colosseum") == 0) {
+        cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
+        offset_x = 1808; offset_y = 3090;
+    }
+    VisualCollisionLoad result = { NULL, offset_x, offset_y };
+    if (cmap) {
+        edef->put_ptr(env->encounter_state, env->encounter_context, "collision_map", cmap);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_x", offset_x);
+        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", offset_y);
+        env->collision_map = cmap;
+        result.cmap = cmap;
+    }
+    return result;
+}
+
 static void run_profile(
     OsrsEnv* env,
     const char* encounter_name,
@@ -266,40 +301,7 @@ static void run_profile(
         env->encounter_state = edef->create();
         env->encounter_context = visual_create_encounter_context(edef);
 
-        if (strcmp(encounter_name, "zulrah") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 2256);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 3061);
-                env->collision_map = cmap;
-            }
-        } else if (strcmp(encounter_name, "inferno") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
-                env->collision_map = cmap;
-            }
-        } else if (strcmp(encounter_name, "colosseum") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 1808);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 3090);
-                env->collision_map = cmap;
-            }
-        }
+        visual_load_encounter_collision_map(edef, env, encounter_name);
         if (start_wave >= 0 && edef->put_int) {
             edef->put_int(
                 env->encounter_state,
@@ -1349,13 +1351,7 @@ static void run_metrics(
     env->encounter_def = (void*)edef;
     env->encounter_state = edef->create();
     env->encounter_context = visual_create_encounter_context(edef);
-    CollisionMap* cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
-    if (cmap) {
-        edef->put_ptr(env->encounter_state, env->encounter_context, "collision_map", cmap);
-        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_x", 1808);
-        edef->put_int(env->encounter_state, env->encounter_context, "world_offset_y", 3090);
-        env->collision_map = cmap;
-    }
+    visual_load_encounter_collision_map(edef, env, encounter_name);
     /* loadout_mode picks the kit distribution: 0=speedrun-only, 1=beginner-only,
        2=mixed (matches the trained golden-eon .ini). col_default_config alone leaves
        this at 0, so without it the metrics would be speedrun-only regardless. */
@@ -1406,28 +1402,6 @@ static void run_metrics(
     int prev_wave = 0, prev_reinf_timer = 0, wave_seen = 0;
     int enc_actions[64] = {0};
 
-    /* Claw-scratch obs audit: at every claws BASIC attack, record what the
-       weapon-choice obs tail told the policy (wielded-vs-best ratio, the claws
-       cell's own DPT float, the best other weapon cell's DPT float). Splits
-       "obs lied" from "obs honest, policy dwells anyway". Stints track how
-       claws get equipped and whether the stint ever fires the spec. */
-    double claw_ratio_sum = 0.0, claw_cell_dpt_sum = 0.0, claw_best_other_sum = 0.0;
-    uint64_t claw_obs_n = 0, claw_better_visible = 0;
-    uint64_t claw_stints = 0, claw_stints_with_spec = 0, claw_stint_tick_sum = 0;
-    int claw_stint_live = 0, claw_stint_spec = 0, claw_stint_ticks = 0;
-
-    /* Sol triple-parry probe: does the policy dodge the charged triple by
-       praying exactly at land (1-tick flicks the eye misses in the viewer) or
-       is damage genuinely not landing? Classified per resolved hit from state
-       deltas: overhead_history holds the land tick's pre-resolution overhead
-       state (the sim wipes the prayer after each hit), HP delta attributes
-       the outcome. */
-    uint64_t tp_starts = 0, tp_hits = 0, tp_overhead_at_land = 0;
-    uint64_t tp_early_violation = 0, tp_hits_with_hp_loss = 0;
-    int64_t tp_hp_lost = 0;
-    int tp_prev_hits_left = 0, tp_prev_hp = 0;
-    int tp_prev_land_in[COLO_SOL_PARRY_HITS] = {0};
-
     enum { METRICS_MAX_EPISODES = 512 };
     if (num_episodes > METRICS_MAX_EPISODES) {
         fprintf(stderr, "metrics mode caps at %d episodes\n", METRICS_MAX_EPISODES);
@@ -1437,43 +1411,12 @@ static void run_metrics(
     static int ep_winners[METRICS_MAX_EPISODES];
 
     while (episodes < num_episodes) {
-        {
-            const ColosseumState* pre = (const ColosseumState*)env->encounter_state;
-            tp_prev_hits_left = pre->sol.parry_hits_left;
-            for (int h = 0; h < COLO_SOL_PARRY_HITS; h++)
-                tp_prev_land_in[h] = pre->sol.parry_land_in[h];
-            tp_prev_hp = pre->player.current_hitpoints;
-        }
         visual_policy_actions(&policy, edef, env->encounter_state,
             (EncounterContext*)env->encounter_context, enc_actions);
         edef->step(env->encounter_state,
             (EncounterContext*)env->encounter_context, enc_actions);
         total_ticks++;
         ColosseumState* cs = (ColosseumState*)env->encounter_state;
-
-        if (cs->sol.parry_hits_left == COLO_SOL_PARRY_HITS &&
-                tp_prev_hits_left != COLO_SOL_PARRY_HITS)
-            tp_starts++;
-        for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
-            if (tp_prev_land_in[h] != 1 || cs->sol.parry_land_in[h] != 0) continue;
-            tp_hits++;
-            int land_tick = cs->tick;
-            if (cs->sol.overhead_history[land_tick % COLO_SOL_PRAYER_HISTORY])
-                tp_overhead_at_land++;
-            for (int k = 1; k <= COLO_SOL_PARRY_LOOKBACK[h]; k++) {
-                int t = land_tick - k;
-                if (t >= 0 &&
-                        cs->sol.overhead_history[t % COLO_SOL_PRAYER_HISTORY]) {
-                    tp_early_violation++;
-                    break;
-                }
-            }
-            int hp_drop = tp_prev_hp - cs->player.current_hitpoints;
-            if (hp_drop > 0) {
-                tp_hits_with_hp_loss++;
-                tp_hp_lost += hp_drop;
-            }
-        }
 
         int w_now = cs->wave >= 0 && cs->wave < 12 ? cs->wave : 11;
         if (!wave_seen || w_now != prev_wave) {
@@ -1487,22 +1430,6 @@ static void run_metrics(
         prev_wave = w_now;
         prev_reinf_timer = cs->reinforcement_timer;
 
-        uint8_t cur_weapon = cs->player.equipped[GEAR_SLOT_WEAPON];
-        if (cur_weapon == ITEM_DRAGON_CLAWS) {
-            if (!claw_stint_live) {
-                claw_stint_live = 1;
-                claw_stint_spec = 0;
-                claw_stint_ticks = 0;
-            }
-            claw_stint_ticks++;
-            if (cs->player.used_special_this_tick) claw_stint_spec = 1;
-        } else if (claw_stint_live) {
-            claw_stints++;
-            claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
-            if (claw_stint_spec) claw_stints_with_spec++;
-            claw_stint_live = 0;
-        }
-
         if (cs->tick_scratch.player_attacked) {
             int slot = cs->player_attack_npc_idx;
             uint8_t w = cs->player.equipped[GEAR_SLOT_WEAPON];
@@ -1514,27 +1441,6 @@ static void run_metrics(
                     total_attacks++;
                     if (cs->player.used_special_this_tick) wpn_spec[w]++;
 
-                    if (w == ITEM_DRAGON_CLAWS &&
-                            !cs->player.used_special_this_tick) {
-                        const float* tail =
-                            policy.obs + COLO_OBS_AFTER_THRALL_DC;
-                        float claw_cell = 0.0f, best_other = 0.0f;
-                        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
-                            uint8_t cell_item =
-                                cs->inventory_cells[c].item_idx;
-                            if (cell_item == ITEM_DRAGON_CLAWS) {
-                                if (tail[c] > claw_cell) claw_cell = tail[c];
-                            } else if (tail[c] > best_other) {
-                                best_other = tail[c];
-                            }
-                        }
-                        claw_ratio_sum +=
-                            (double)tail[2 * OSRS_INVENTORY_SIZE + 1];
-                        claw_cell_dpt_sum += (double)claw_cell;
-                        claw_best_other_sum += (double)best_other;
-                        if (best_other > claw_cell) claw_better_visible++;
-                        claw_obs_n++;
-                    }
                     if (cs->reinforcement_timer == COLO_REINFORCE_FIRED)
                         wave_attacks_post_reinforce[w_now]++;
 
@@ -1570,12 +1476,6 @@ static void run_metrics(
             ep_scores[episodes] = cs->log.outcome_score;
             ep_winners[episodes] = cs->winner;
             episodes++;
-            if (claw_stint_live) {
-                claw_stints++;
-                claw_stint_tick_sum += (uint64_t)claw_stint_ticks;
-                if (claw_stint_spec) claw_stints_with_spec++;
-                claw_stint_live = 0;
-            }
             edef->reset(env->encounter_state,
                 (EncounterContext*)env->encounter_context,
                 policy_seed + (uint32_t)episodes);
@@ -1605,27 +1505,6 @@ static void run_metrics(
         (unsigned long long)argmax_set_attacks,
         (unsigned long long)argmax_evals,
         argmax_evals ? 100.0 * (double)argmax_set_attacks / (double)argmax_evals : 0.0);
-    printf("# sol triple parry: starts=%llu hits=%llu overhead_at_land=%llu"
-           " early_violation=%llu hits_with_hp_loss=%llu hp_lost=%lld\n",
-        (unsigned long long)tp_starts,
-        (unsigned long long)tp_hits,
-        (unsigned long long)tp_overhead_at_land,
-        (unsigned long long)tp_early_violation,
-        (unsigned long long)tp_hits_with_hp_loss,
-        (long long)tp_hp_lost);
-    if (claw_obs_n > 0) {
-        printf("# claw audit: %llu basic attacks | obs saw wielded/best ratio %.2f,"
-               " claws cell %.2f, best other cell %.2f, better cell visible %.1f%%\n",
-            (unsigned long long)claw_obs_n,
-            claw_ratio_sum / (double)claw_obs_n,
-            claw_cell_dpt_sum / (double)claw_obs_n,
-            claw_best_other_sum / (double)claw_obs_n,
-            100.0 * (double)claw_better_visible / (double)claw_obs_n);
-        printf("# claw stints: %llu, mean dwell %.1f ticks, %.1f%% fired spec\n",
-            (unsigned long long)claw_stints,
-            claw_stints ? (double)claw_stint_tick_sum / (double)claw_stints : 0.0,
-            claw_stints ? 100.0 * (double)claw_stints_with_spec / (double)claw_stints : 0.0);
-    }
     printf("weapon,total_attacks,per_episode,pct,spec_pct,mean_dpt_eff\n");
     for (int w = 0; w < 256; w++) {
         if (wpn_total[w] == 0) continue;
@@ -1721,45 +1600,10 @@ static void run_visual(
            world offset translates encounter-local (0,0) → world coords for cmap lookup.
            the Zulrah island collision data has ~69 walkable tiles forming the
            irregular island shape (narrow south, wide north, pillar alcoves). */
-        if (strcmp(encounter_name, "zulrah") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("zulrah.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 2256);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 3061);
-                env->collision_map = cmap;
-                fprintf(stderr, "zulrah collision map: %d regions, offset (2256, 3061)\n",
-                        cmap->count);
-            }
-        } else if (strcmp(encounter_name, "inferno") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("inferno.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 2246);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 5315);
-                env->collision_map = cmap;
-                fprintf(stderr, "inferno collision map: %d regions, offset (2246, 5315)\n",
-                        cmap->count);
-            }
-        } else if (strcmp(encounter_name, "colosseum") == 0) {
-            CollisionMap* cmap = collision_map_load(OSRS_ASSET("colosseum.cmap"));
-            if (cmap) {
-                edef->put_ptr(
-                    env->encounter_state, env->encounter_context, "collision_map", cmap);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_x", 1808);
-                edef->put_int(
-                    env->encounter_state, env->encounter_context, "world_offset_y", 3090);
-                env->collision_map = cmap;
-                fprintf(stderr, "colosseum collision map: %d regions, offset (1808, 3090)\n",
-                        cmap->count);
-            }
+        VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env, encounter_name);
+        if (cload.cmap) {
+            fprintf(stderr, "%s collision map: %d regions, offset (%d, %d)\n",
+                    encounter_name, cload.cmap->count, cload.offset_x, cload.offset_y);
         }
 
         if (start_wave >= 0 && edef->put_int) {

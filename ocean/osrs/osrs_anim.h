@@ -590,6 +590,12 @@ static void anim_apply_alpha_transform(
 }
 
 
+static void anim_apply_single_transform(
+    AnimModelState* state,
+    int type, const uint8_t* labels, uint8_t map_len,
+    int dx, int dy, int dz,
+    int* pivot_x, int* pivot_y, int* pivot_z);
+
 static void anim_apply_frame(
     AnimModelState* state,
     const int16_t* base_verts_src,
@@ -610,118 +616,13 @@ static void anim_apply_frame(
         uint8_t slot_idx = frame->transforms[t].slot_index;
         if (slot_idx >= fb->slot_count) continue;
 
-        int type = fb->types[slot_idx];
-        int dx = frame->transforms[t].dx;
-        int dy = frame->transforms[t].dy;
-        int dz = frame->transforms[t].dz;
-
-        uint8_t map_len = fb->map_lengths[slot_idx];
-        const uint8_t* labels = fb->frame_maps[slot_idx];
-
-        if (type == 0) {
-            /* origin: compute centroid of referenced vertex groups */
-            int count = 0;
-            int sum_x = 0, sum_y = 0, sum_z = 0;
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    sum_x += state->verts[v * 3];
-                    sum_y += state->verts[v * 3 + 1];
-                    sum_z += state->verts[v * 3 + 2];
-                    count++;
-                }
-            }
-            if (count > 0) {
-                pivot_x = sum_x / count + dx;
-                pivot_y = sum_y / count + dy;
-                pivot_z = sum_z / count + dz;
-            } else {
-                pivot_x = dx;
-                pivot_y = dy;
-                pivot_z = dz;
-            }
-        } else if (type == 1) {
-            /* translate: add dx/dy/dz to all vertices in referenced groups */
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    state->verts[v * 3]     += (int16_t)dx;
-                    state->verts[v * 3 + 1] += (int16_t)dy;
-                    state->verts[v * 3 + 2] += (int16_t)dz;
-                }
-            }
-        } else if (type == 2) {
-            /* rotate: euler Z-X-Y around pivot.
-             * raw value * 8 → index into 2048-entry sine table.
-             * rotation order: Z first, then X, then Y. */
-            int ax = (dx & 0xFF) * 8;
-            int ay = (dy & 0xFF) * 8;
-            int az = (dz & 0xFF) * 8;
-
-            int sin_x = anim_sine[ax & 2047];
-            int cos_x = anim_cosine[ax & 2047];
-            int sin_y = anim_sine[ay & 2047];
-            int cos_y = anim_cosine[ay & 2047];
-            int sin_z = anim_sine[az & 2047];
-            int cos_z = anim_cosine[az & 2047];
-
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    int vx = state->verts[v * 3]     - pivot_x;
-                    int vy = state->verts[v * 3 + 1] - pivot_y;
-                    int vz = state->verts[v * 3 + 2] - pivot_z;
-
-                    /* Z rotation */
-                    int rx = (vx * cos_z + vy * sin_z) >> 16;
-                    int ry = (vy * cos_z - vx * sin_z) >> 16;
-                    vx = rx; vy = ry;
-
-                    /* X rotation */
-                    ry = (vy * cos_x - vz * sin_x) >> 16;
-                    int rz = (vy * sin_x + vz * cos_x) >> 16;
-                    vy = ry; vz = rz;
-
-                    /* Y rotation — matches Model.java:1074-1080
-                     * new_x = cos_y*x + sin_y*z; new_z = cos_y*z - sin_y*x */
-                    rx = (vx * cos_y + vz * sin_y) >> 16;
-                    rz = (vz * cos_y - vx * sin_y) >> 16;
-                    vx = rx; vz = rz;
-
-                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
-                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
-                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
-                }
-            }
-        } else if (type == 3) {
-            /* scale: relative to pivot, 128 = 1.0x identity */
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    int vx = state->verts[v * 3]     - pivot_x;
-                    int vy = state->verts[v * 3 + 1] - pivot_y;
-                    int vz = state->verts[v * 3 + 2] - pivot_z;
-
-                    vx = (vx * dx) / 128;
-                    vy = (vy * dy) / 128;
-                    vz = (vz * dz) / 128;
-
-                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
-                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
-                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
-                }
-            }
-        } else if (type == 5) {
-            anim_apply_alpha_transform(state, labels, map_len, dx);
-        }
+        anim_apply_single_transform(
+            state, fb->types[slot_idx],
+            fb->frame_maps[slot_idx], fb->map_lengths[slot_idx],
+            frame->transforms[t].dx,
+            frame->transforms[t].dy,
+            frame->transforms[t].dz,
+            &pivot_x, &pivot_y, &pivot_z);
     }
 }
 
