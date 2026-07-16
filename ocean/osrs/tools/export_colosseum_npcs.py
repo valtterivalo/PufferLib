@@ -160,11 +160,9 @@ COLOSSEUM_RENDER_ONLY_ANIM_IDS_BY_NPC = {
     12834: (10872,),
     12835: (10872,),
     12836: (10872,),
-    # Sol Heredit per-attack animations, picked by last_attack_kind in the
-    # renderer: 10882 melee strike, 10884 grapple, 10885 shield slam, 10886/10887
-    # triple (long/short). 10883 (spear telegraph) is the attack_anim default. The
-    # generated single attack_anim used to be 10876 (his arena-entry jump), which
-    # is why every attack looked like the leap-in.
+    # Sol Heredit per-attack anims, picked by last_attack_kind in the renderer:
+    # 10882 melee, 10884 grapple, 10885 shield slam, 10886/10887 triple (long/short);
+    # 10883 (spear telegraph) is the attack_anim default.
     12821: (10882, 10884, 10885, 10886, 10887),
     12826: (10817,),
 }
@@ -1515,10 +1513,8 @@ def main() -> None:
     models, mapping, sequence_models = build_npc_models(reader, npc_files)
     models_path = args.output_dir / "colosseum_npcs.models"
     # MDL4 (textured) output: passing an atlas makes write_models_binary emit the
-    # per-face alpha block (face_alphas + face_alpha_labels) the MDL2 path drops.
-    # Colosseum NPC component models carry real animation-alpha labels (e.g. the
-    # Shockwave Colossus body), so this is what lets their type-5 alpha shimmer
-    # round-trip into colosseum_npcs.models for the composite render path.
+    # per-face alpha block (face_alphas + face_alpha_labels) the MDL2 path drops,
+    # which round-trips type-5 animation-alpha shimmer into colosseum_npcs.models.
     store = RcCacheStore(args.modern_cache)
     tex_colors = load_texture_average_colors(store)
     atlas = build_atlas(load_texture_sprites(store))
