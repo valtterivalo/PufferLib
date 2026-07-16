@@ -6,7 +6,7 @@
  * Reads top to bottom as the fight is built: the A1 attack engine (per-attack
  * next delays, {Spear x2, Shield x2} pool + gated specials, forced spears),
  * A2 chase movement behind the start-of-tick adjacency gate, the A3+A15 AoE
- * hazard tiles, the A9-A11 arena hazards (crystals, spheres, beams, molten
+ * hazard tiles, the A9-A11 arena hazards (crystals, beams, molten
  * sand), and the player-response layers (A20+B4 triple parry, A12+B7 grapple).
  *
  * All Sol damage is typeless except the triple-parry melee hits: the player

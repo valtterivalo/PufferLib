@@ -126,9 +126,7 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
     npc->active = 1;
     npc->target_x = x;
     npc->target_y = y;
-    npc->stun_timer = st->stun_on_spawn;
-    npc->aggro_target = -1;
-    npc->attack_visual_target = -1;
+    npc->stun_timer = 0;
     /* warbanders are exempt from NPC collision both ways (observed: they spawn
        on top of primaries and walk through every NPC), so they never stamp. */
     if (!col_type_is_hazard_entity(type) && !col_type_is_warbander(type) &&

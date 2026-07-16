@@ -11,9 +11,9 @@
  * vtable hooks (render side). Colosseum has no step-out forecast, so the forecast
  * overlay/dump parts of the inferno lab are intentionally absent.
  *
- * The line parser (col_lab_apply_script_line) is the encounter-neutral seam the
- * EncounterDef.apply_lab_command hook wraps, so the viewer drives both encounters
- * through one path.
+ * The line parser (col_lab_apply_script_line_alloc_json) is the encounter-neutral
+ * seam the EncounterDef.apply_lab_command hook wraps, so the viewer drives both
+ * encounters through one path.
  */
 
 typedef enum {
@@ -166,12 +166,10 @@ static void col_lab_clear_transient(ColosseumState* s) {
         ColoNPC* npc = &s->npcs[i];
         npc->attacked_this_tick = 0;
         npc->attack_style_this_tick = ATTACK_STYLE_NONE;
-        npc->attack_visual_target = -1;
         npc->moved_this_tick = 0;
         npc->hit_landed_this_tick = 0;
         npc->hit_damage = 0;
         npc->hit_was_successful_this_tick = 0;
-        npc->hit_spell_type = ENCOUNTER_SPELL_NONE;
         encounter_pending_hit_queue_clear(&npc->pending_hits);
     }
 }

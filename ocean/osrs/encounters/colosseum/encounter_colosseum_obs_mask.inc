@@ -3,19 +3,9 @@
  * @file encounter_colosseum_obs_mask.inc
  * @brief Obs section sizes + obs writer, mirroring inferno obs_mask.
  *
- * Obs layout (flat float vector, every feature egocentric + normalized):
- *   player(36) + pillars(4 * 3) + inventory cells(28 * 29)
- *   + equipped self(11 * 18) + npc slots(24 * 41) + modifiers(74) + wave(4) + boss(51)
- *   + pending-hit forecast(16 * 7) + step-out forecast(25 * 8)
- *   + threat-LoS(3) + thrall/Death-Charge(6) = 2492.
- * P5 made the healing totem + bee swarm NPC-slot citizens (per-NPC type one-hot
- * 10 -> 12, A21+B9); the researched loadout pass added supply fractions + surge
- * + spec-armed one-hots to the player block; the loadout profile is implicit in
- * the gear-derived stats + supply normalization (inferno precedent).
- * The eval-fix pass raised COLO_OBS_NPCS 12 -> 24 (== COLO_MAX_NPCS, so a busy
- * wave never drops a live NPC from obs or the TARGET head) and grew the player
- * block 38 -> 45 (+5 current-vs-base offensive level deltas + 2 divine boost
- * timer fractions), so the policy can see its own boost-hold state.
+ * The obs is a flat float vector, every feature egocentric + normalized. The
+ * COLO_*_OBS_SIZE section defines below are the single source of truth for the
+ * layout; they are summed into COLO_NUM_OBS in section order.
  * col_write_obs_ctx hard-asserts the running index against the section constants
  * after each block and aborts on mismatch, exactly like inferno: this is the
  * contract that keeps the obs honest as the layout grows.
@@ -38,13 +28,8 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
 #define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator.
-                                          The per-NPC best-gear DPT obs (3 best-per-style DPT +
-                                          3 argmax-style one-hot) stay removed since B0; the
-                                          target-conditioned weapon signal returned 2026-07-05 as
-                                          the tail-appended COLO_WEAPON_CHOICE block (the B0
-                                          "score-neutral" verdict was measured on the pre-movement-fix
-                                          env, and the raw cell stats actively misrank scythe vs
-                                          tentacle against 3x3s). */
+                                          Raw per-cell stats actively misrank scythe vs tentacle
+                                          against 3x3s. */
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 888 */
 /** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated from the
     oracle's empirical max best-gear DPT across every (profile, weapon, real NPC type)
@@ -171,72 +156,9 @@ static inline float col_obs_rel_y(int ny, int py) {
 }
 
 typedef struct {
-    EncounterLoadoutStats stats_storage;
-    OsrsEquipmentEffectProfile effects_storage;
-    const EncounterLoadoutStats* stats;
-    const OsrsEquipmentEffectProfile* effects;
-    uint8_t weapon_item;
-    AttackStyle style;
-    MeleeStyle melee_style;
-} ColoWeaponMatchupStats;
-
-typedef struct {
     OsrsVenatorMonster monsters[COLO_MAX_NPCS];
     int count;
 } ColoVenatorPreviewTargets;
-
-/** Build per-weapon-set combat stats for read-only matchup observation. */
-static void col_build_weapon_matchup_stats(
-    ColosseumState* s,
-    ColoWeaponMatchupStats out[COLO_NUM_WEAPON_SETS]
-) {
-    if (!s || !out) abort();
-    if (s->weapon_set < 0 || s->weapon_set >= COLO_NUM_WEAPON_SETS)
-        col_abort_invalid_weapon_set(s->weapon_set);
-
-    memset(out, 0, sizeof(ColoWeaponMatchupStats) * COLO_NUM_WEAPON_SETS);
-    const uint8_t* const* loadouts =
-        col_loadouts_for_profile(s->active_loadout_profile);
-    for (int set_idx = 0; set_idx < COLO_NUM_WEAPON_SETS; set_idx++) {
-        ColoWeaponSet set = (ColoWeaponSet)set_idx;
-        const uint8_t* loadout = loadouts[set_idx];
-        ColoWeaponMatchupStats* dst = &out[set_idx];
-        if (set == s->weapon_set) {
-            dst->stats = col_live_loadout_stats(s);
-            dst->effects = col_live_effects(s);
-            dst->weapon_item = s->player.equipped[GEAR_SLOT_WEAPON];
-            dst->style = dst->stats->style;
-            dst->melee_style = col_item_melee_style(dst->weapon_item);
-            continue;
-        }
-
-        AttackStyle style = col_weapon_set_attack_style(set);
-        FightStyle fight_style = col_weapon_set_fight_style(set);
-        int current_att_level;
-        int current_str_level;
-        col_current_style_levels(
-            &s->player, style, &current_att_level, &current_str_level);
-        encounter_compute_loadout_stats(
-            loadout,
-            style,
-            s->player.offensive_prayer,
-            current_att_level,
-            fight_style,
-            col_weapon_set_spell_base_damage(s, set),
-            &dst->stats_storage);
-        encounter_update_loadout_level(
-            &dst->stats_storage,
-            s->player.offensive_prayer,
-            current_att_level,
-            current_str_level);
-        encounter_derive_loadout_effect_profile(loadout, &dst->effects_storage);
-        dst->stats = &dst->stats_storage;
-        dst->effects = &dst->effects_storage;
-        dst->weapon_item = loadout[GEAR_SLOT_WEAPON];
-        dst->style = style;
-        dst->melee_style = col_item_melee_style(dst->weapon_item);
-    }
-}
 
 /** Create a live representative NPC for type-level matchup DPT. */
 static ColoNPC col_matchup_representative_npc(ColoNpcType type) {
@@ -250,17 +172,6 @@ static ColoNPC col_matchup_representative_npc(ColoNpcType type) {
         .active = 1,
         .death_ticks = 0,
     };
-}
-
-/** Normalize a best-gear DPT for a live non-hazard NPC slot. -1 sentinel (no weapon
-    of that style) maps to 0; otherwise clamp01(dpt / NORM). ColoBestGear is defined in
-    the model header so ColosseumState can cache the oracle table. */
-static float col_best_dpt_obs_value(const ColoNPC* npc, float dpt) {
-    if (!npc) abort();
-    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
-        return 0.0f;
-    if (dpt < 0.0f) return 0.0f;
-    return col_clamp01(dpt / COLO_EXPECTED_DPT_NORM);
 }
 
 /** Collect live non-hazard enemies once for Venator chain preview. */
@@ -699,10 +610,9 @@ static void col_write_npc_slot(
 
 /** nearest crystal whose firing line the player is standing on, damage not
     yet resolved: writes dx, dy (to the crystal), ticks-to-damage frac,
-    present flag (4 floats). Replaces the old in-flight-sphere channels
-    (2026-07-15 laser rework): the threat is now "you are on an armed line",
-    and it disappears the moment the player steps off the row/column. */
-static void col_write_nearest_sphere(const ColosseumState* s, float* obs, int* idx) {
+    present flag (4 floats). The threat is "you are on an armed line", and it
+    disappears the moment the player steps off the row/column. */
+static void col_write_nearest_armed_line(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.crystal_count; k++) {
         const ColoSolCrystal* c = &s->sol.crystals[k];
@@ -847,11 +757,11 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     obs[i++] = sol->next_attack_guaranteed_max ? 1.0f : 0.0f;
 
     /* crystals: count + nearest (dx, dy, telegraphing, telegraph frac), then
-       the nearest in-flight sphere (dx, dy, ticks, present). */
+       the nearest armed firing-line the player is on (dx, dy, ticks, present). */
     obs[i++] = col_clamp01((float)sol->crystal_count / (float)COLO_SOL_MAX_CRYSTALS);
     *idx = i;
     col_write_nearest_crystal(s, obs, idx);
-    col_write_nearest_sphere(s, obs, idx);
+    col_write_nearest_armed_line(s, obs, idx);
 
     /* nearest molten-sand pool (dx, dy, present) */
     col_write_nearest_molten(s, obs, idx);
@@ -1890,91 +1800,6 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
         col_mark_live_loadout_dirty(s);
     }
     col_apply_weapon_set(s, best_set);
-}
-
-/** argmax style (ColoWeaponSet index) over the 3 best-gear DPTs for one NPC type,
-    -1 if no style has a usable weapon. Ties resolve to the lowest style index. */
-static int col_best_gear_argmax_style(
-    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
-    ColoNpcType type
-) {
-    int argmax = -1;
-    float argmax_dpt = -1.0f;
-    for (int style = 0; style < COLO_NUM_WEAPON_SETS; style++)
-        if (best[style][type].dpt > argmax_dpt) {
-            argmax_dpt = best[style][type].dpt;
-            argmax = style;
-        }
-    return argmax;
-}
-
-/**
- * Per-inventory-cell marginal-DPT bit for the CURRENT target. Answers "which item
- * should I grab to assemble the best setup for what I am fighting" at the granularity
- * of the 11 equip action heads. Zero unless there is a live non-hazard target, the
- * cell holds an equippable item, and that item is a member of the target's argmax-style
- * best setup at its own gear slot. When it is, the value is the GRADED marginal DPT the
- * item contributes = best.dpt minus the DPT of the same setup with that one slot swapped
- * to its best alternative candidate (or ITEM_NONE if no alternative), normalized by
- * COLO_EXPECTED_DPT_NORM. So the weapon/shadow/occult/confliction pieces that drive the
- * argmax setup light up with their true contribution and everything else is 0.
- */
-static float col_inventory_cell_target_dpt_obs_value(
-    ColosseumState* s,
-    int cell_idx,
-    const ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES],
-    int use_wielded_style
-) {
-    int target = col_player_target_slot(s);
-    if (target < 0 || target >= COLO_MAX_NPCS) return 0.0f;
-    const ColoNPC* npc = &s->npcs[target];
-    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
-        return 0.0f;
-
-    uint8_t item = s->inventory_cells[cell_idx].item_idx;
-    if (item == ITEM_NONE) return 0.0f;
-    int gear_slot = osrs_item_gear_slot(item);
-    if (gear_slot < 0) return 0.0f;
-
-    /* basis style: global-argmax (default) or the player's currently-wielded style, so
-       gear that raises DPT for the kit you are actually holding lights up. */
-    int style = use_wielded_style ? s->weapon_set
-                                  : col_best_gear_argmax_style(best, npc->type);
-    if (style < 0 || style >= COLO_NUM_WEAPON_SETS) return 0.0f;
-    const ColoBestGear* bs = &best[style][npc->type];
-    if (bs->dpt < 0.0f) return 0.0f;
-    if (bs->setup[gear_slot] != item) return 0.0f;  /* not in the chosen style's setup */
-
-    /* marginal = best.dpt - max DPT over the same setup with this slot replaced by any
-       OTHER candidate (or ITEM_NONE). The candidate union is rebuilt locally; this runs
-       only for the in-setup cells of one target, so it stays cheap. */
-    ColoGearCandidates cand;
-    col_build_gear_candidates(s, &cand);
-    float best_alt = -1.0f;
-    uint8_t alt_setup[NUM_GEAR_SLOTS];
-    memcpy(alt_setup, bs->setup, NUM_GEAR_SLOTS);
-    /* the weapon slot fixes the style, so a weapon swap would change the matched prayer;
-       evaluate weapon-slot marginals against the SAME weapon's alternatives only, and
-       non-weapon slots against ITEM_NONE + the slot's other candidates. */
-    int n_alts = cand.count[gear_slot];
-    for (int a = -1; a < n_alts; a++) {
-        uint8_t alt = (a < 0) ? ITEM_NONE : cand.items[gear_slot][a];
-        if (alt == item) continue;
-        if (gear_slot == GEAR_SLOT_WEAPON && alt == ITEM_NONE) continue;
-        if (gear_slot == GEAR_SLOT_WEAPON &&
-                get_item_attack_style(alt) != get_item_attack_style(item))
-            continue;  /* keep the style fixed; cross-style is a different best[] entry */
-        alt_setup[gear_slot] = alt;
-        if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(alt))
-            alt_setup[GEAR_SLOT_SHIELD] = ITEM_NONE;
-        else if (gear_slot == GEAR_SLOT_WEAPON)
-            alt_setup[GEAR_SLOT_SHIELD] = bs->setup[GEAR_SLOT_SHIELD];
-        float dpt = col_expected_dpt_for_equipment_vs_npc(s, alt_setup, npc, 1);
-        if (dpt > best_alt) best_alt = dpt;
-    }
-    float marginal = (best_alt < 0.0f) ? bs->dpt : (bs->dpt - best_alt);
-    if (marginal < 0.0f) marginal = 0.0f;
-    return col_clamp01(marginal / COLO_EXPECTED_DPT_NORM);
 }
 
 /** Is the equipped weapon set's STYLE the best-achievable style vs this NPC? Uses the

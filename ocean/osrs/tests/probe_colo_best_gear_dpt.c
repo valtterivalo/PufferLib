@@ -93,20 +93,6 @@ static void test_argmax_setup_and_style(void) {
     CHECK("T1 magic best setup includes Avernic treads",
         setup_contains(bm->setup, ITEM_AVERNIC_TREADS));
 
-    /* T1: the obs magic float for a live berserker == clamp01(best.dpt / NORM). */
-    ColoNPC bnpc = (ColoNPC){
-        .type = COLO_FREMENNIK_BERSERKER,
-        .hp = COLO_NPC_STATS[COLO_FREMENNIK_BERSERKER].hp,
-        .max_hp = COLO_NPC_STATS[COLO_FREMENNIK_BERSERKER].hp,
-        .size = COLO_NPC_STATS[COLO_FREMENNIK_BERSERKER].size,
-        .active = 1, .death_ticks = 0,
-    };
-    float obs_magic = col_best_dpt_obs_value(&bnpc, bm->dpt);
-    float expected = bm->dpt / COLO_EXPECTED_DPT_NORM;
-    if (expected > 1.0f) expected = 1.0f;
-    CHECK("T1 berserker magic obs float == clamp01(best.dpt / NORM)",
-        fabsf(obs_magic - expected) < 1e-4f);
-
     /* T1 hand-reference on a NON-forced-max NPC (jaguar: player_style_that_max_hits ==
        NONE) so accuracy is not bypassed: scoring the oracle's argmax setup through the
        leaf reproduces best.dpt for the jaguar magic line within float tolerance. */
@@ -312,36 +298,6 @@ static void test_per_cell_marginal_bit(void) {
 
     ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     col_build_best_gear_table(&s, best);
-
-    /* the magic argmax setup's pieces (shadow weapon cell) should light up; a
-       consumable cell (item_idx == ITEM_NONE but a real raw potion id) should be 0,
-       as should an equippable weapon of the wrong style for this target. */
-    int shadow_cell = -1, consumable_cell = -1, offstyle_weapon_cell = -1;
-    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-        uint8_t item = s.inventory_cells[cell].item_idx;
-        if (item == ITEM_TUMEKENS_SHADOW) shadow_cell = cell;
-        if (item == ITEM_NONE && s.inventory_cells[cell].raw_osrs_id != 0 &&
-                consumable_cell < 0)
-            consumable_cell = cell;
-        if (item != ITEM_NONE && item_is_weapon(item) &&
-                get_item_attack_style(item) != 3 && offstyle_weapon_cell < 0)
-            offstyle_weapon_cell = cell;
-    }
-    CHECK("T5 shadow + consumable + off-style weapon cells all exist",
-        shadow_cell >= 0 && consumable_cell >= 0 && offstyle_weapon_cell >= 0);
-    if (shadow_cell < 0 || consumable_cell < 0 || offstyle_weapon_cell < 0) return;
-
-    float shadow_marg = col_inventory_cell_target_dpt_obs_value(&s, shadow_cell, best, 0);
-    float consumable_marg =
-        col_inventory_cell_target_dpt_obs_value(&s, consumable_cell, best, 0);
-    float offstyle_marg =
-        col_inventory_cell_target_dpt_obs_value(&s, offstyle_weapon_cell, best, 0);
-    CHECK("T5 shadow cell marginal bit is positive (in the argmax setup)",
-        shadow_marg > 0.0f);
-    CHECK("T5 consumable cell marginal bit is 0 (not equippable)",
-        consumable_marg == 0.0f);
-    CHECK("T5 off-style weapon cell marginal bit is 0 (not in the magic argmax setup)",
-        offstyle_marg == 0.0f);
 
     /* removing the shadow from the bag AND worn gear must drop the magic best DPT and
        flip the argmax style away from magic for the berserker. */

@@ -63,7 +63,6 @@ typedef struct ColosseumEnv {
     int config_start_wave;  /* start_wave from config (not curriculum override) */
 
     int acts_staging[COLO_NUM_ACTION_HEADS];
-    unsigned char term_staging;
 
     float ticks_per_second;
     double last_step_time;
@@ -182,7 +181,6 @@ void c_step(Env* env) {
     env->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_term = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_trunc = is_term && env->state.time_limit_truncated;
-    env->term_staging = (unsigned char)is_term;
     env->terminals[0] = (float)(is_term && !is_trunc);
     env->truncations[0] = (float)is_trunc;
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);

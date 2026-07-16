@@ -316,7 +316,7 @@ static void col_fill_render_entities_ctx(
             .hit_landed_this_tick = npc->hit_landed_this_tick,
             .hit_damage = npc->hit_damage,
             .hit_was_successful = npc->hit_was_successful_this_tick,
-            .hit_spell_type = npc->hit_spell_type,
+            .hit_spell_type = ENCOUNTER_SPELL_NONE,
             .attack_target_entity_idx = 0,
         };
         osrs_render_entity_from_npc_spec(&npc_spec, re);

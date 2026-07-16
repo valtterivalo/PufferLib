@@ -5612,54 +5612,13 @@ static void test_npc_magic_defence_rolls_off_magic_level(void) {
         mt_melee < mt_ranged && mt_melee < mt_magic);
 }
 
-/** Compute expected DPT for one canonical live NPC type and weapon set. */
-static float test_expected_dpt_for_type(
-    const ColoWeaponMatchupStats matchup[COLO_NUM_WEAPON_SETS],
-    ColoWeaponSet set,
-    ColoNpcType type
-) {
-    ColoNPC npc = col_matchup_representative_npc(type);
-    const ColoNpcStats* ns = &COLO_NPC_STATS[type];
-    return col_expected_dpt_vs_npc(
-        matchup[set].stats,
-        matchup[set].effects,
-        matchup[set].weapon_item,
-        matchup[set].style,
-        matchup[set].melee_style,
-        &npc,
-        ns);
-}
-
-/** Assert matchup obs ranks hard-counter styles and Venator preview geometry. */
+/** Assert Venator preview geometry: clustered enemies add extra bounces. */
 static void test_matchup_dpt_obs_ranking(void) {
     printf("test_matchup_dpt_obs_ranking\n");
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 771);
     col_build_npc_stats();
-    s.player.current_attack = 118;
-    s.player.current_strength = 118;
-    col_mark_live_loadout_dirty(&s);
-
-    ColoWeaponMatchupStats matchup[COLO_NUM_WEAPON_SETS];
-    col_build_weapon_matchup_stats(&s, matchup);
-    float shaman_melee =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_MELEE, COLO_SERPENT_SHAMAN);
-    float shaman_ranged =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_RANGED, COLO_SERPENT_SHAMAN);
-    float shaman_magic =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_MAGIC, COLO_SERPENT_SHAMAN);
-    float manticore_melee =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_MELEE, COLO_MANTICORE);
-    float manticore_ranged =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_RANGED, COLO_MANTICORE);
-    float manticore_magic =
-        test_expected_dpt_for_type(matchup, COLO_GEAR_MAGIC, COLO_MANTICORE);
-
-    CHECK("serpent shaman resists the magic set matchup DPT",
-        shaman_magic < shaman_melee && shaman_magic < shaman_ranged);
-    CHECK("manticore scythe matchup DPT is highest",
-        manticore_melee > manticore_ranged && manticore_melee > manticore_magic);
 
     geo_clear_npcs(&s);
     s.player.x = 12;

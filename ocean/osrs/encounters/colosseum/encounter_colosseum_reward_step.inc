@@ -18,13 +18,11 @@ static float col_expected_dpt_for_equipment_vs_npc(
     ColosseumState* s, const uint8_t equipment[NUM_GEAR_SLOTS],
     const ColoNPC* npc, int use_style_matched_prayer);
 
-static float col_terminal_death_reward(const ColosseumState* s, const ColosseumContext* ctx) {
-    (void)s;
+static float col_terminal_death_reward(const ColosseumContext* ctx) {
     return -ctx->config.death_penalty_coeff;
 }
 
-static float col_terminal_timeout_reward(const ColosseumState* s, const ColosseumContext* ctx) {
-    (void)s;
+static float col_terminal_timeout_reward(const ColosseumContext* ctx) {
     return -ctx->config.timeout_penalty;
 }
 
@@ -335,13 +333,11 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
-        s->npcs[i].attack_visual_target = -1;
         s->npcs[i].moved_last_tick = s->npcs[i].moved_this_tick;
         s->npcs[i].moved_this_tick = 0;
         s->npcs[i].hit_landed_this_tick = 0;
         s->npcs[i].hit_damage = 0;
         s->npcs[i].hit_was_successful_this_tick = 0;
-        s->npcs[i].hit_spell_type = 0;
     }
     s->tick++;
     /* unconditional timeout: checked before the gap/draft gotos so a frozen
@@ -351,7 +347,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->episode_over = 1;
         s->time_limit_truncated = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_timeout_reward(s, ctx);
+        s->reward = col_terminal_timeout_reward(ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
@@ -419,7 +415,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_death_reward(s, ctx);
+        s->reward = col_terminal_death_reward(ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
@@ -454,7 +450,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_death_reward(s, ctx);
+        s->reward = col_terminal_death_reward(ctx);
         goto finish_step;
     }
 
