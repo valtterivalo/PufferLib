@@ -100,14 +100,12 @@ typedef enum {
     ANIM_PLAY_ONCE = 1,
 } AnimPlaybackMode;
 
-/** One animation playback cursor that owns BOTH the resolved sequence and the
-    frame position. The sequence is resolved ONCE (model-aware, in the render
-    layer via render_anim_playback_resolve) and stored here; advance and the
-    per-frame read then both go through ->sequence, never a fresh lookup. This
-    makes the frame-advance vs frame-resolution split (which froze the Shockwave
-    clap) structurally impossible: there is one source of truth for both the
-    sequence and the cursor. The cursor ops below are pure (sequence-only); the
-    cache-aware resolve + frame read live in osrs_render.h. */
+/** One animation playback cursor owning BOTH the resolved sequence and the frame
+    position. The sequence is resolved once (model-aware, via
+    render_anim_playback_resolve in osrs_render.h) and stored here; advance and the
+    per-frame read both go through ->sequence, never a fresh lookup, so frame-advance
+    and frame-resolution cannot diverge. The cursor ops below are pure (sequence-only);
+    the cache-aware resolve + frame read live in osrs_render.h. */
 typedef struct {
     int           seq_id;          /* -1 = inactive */
     AnimSequence* sequence;        /* resolved view; NULL until first resolve */
@@ -635,12 +633,9 @@ static void anim_apply_maya_baked_frame(
         abort();
     }
     if ((int)frame->maya_vertex_count != state->vert_count) {
-        /* A Maya bake only applies to the exact mesh it was baked for. A
-           mismatch means this sequence id is baked for a different model (e.g.
-           the Shockwave clap 10903 baked at 1357 verts for the colossus body vs
-           the 341-vertex projectile disc that shares the id). The OSRS client
-           leaves such a model in its bind pose rather than deforming it, so skip
-           instead of aborting. */
+        /* A Maya bake applies only to the exact mesh it was baked for. A vertex-count
+           mismatch means this sequence id is baked for a different model that shares
+           the id; like the OSRS client, leave it in bind pose (skip) not deform/abort. */
         return;
     }
     memcpy(state->verts, frame->maya_vertices,

@@ -1,5 +1,5 @@
 /**
- * @file osrs_pvp_human_input.h
+ * @file osrs_human_input.h
  * @brief Interactive human control for the visual debug viewer.
  *
  * Collects mouse/keyboard input as semantic intents between render frames,

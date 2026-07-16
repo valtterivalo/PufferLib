@@ -629,10 +629,8 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     obs[188] = (current_weapon_style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
     obs[189] = p->ate_brew_this_tick ? 1.0f : 0.0f;
 
-    /* spatial obs added 2026-05 alongside HEAD_MOVE migration. Suarez-aligned:
-       egocentric (relative to player), normalized to [0,1] or [-1,1].
-       agent sees its own wilderness location and the opponent's relative
-       direction — enough to reason about positioning and pathing. */
+    /* egocentric spatial obs (190-195): own wilderness position + opponent
+       relative direction, normalized to [0,1] / [-1,1]. */
     float wild_w = (float)(WILD_MAX_X - WILD_MIN_X);
     float wild_h = (float)(WILD_MAX_Y - WILD_MIN_Y);
     obs[190] = (float)(p->x - WILD_MIN_X) / wild_w;       /* dist from west wall */
@@ -644,9 +642,7 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     if (scale < 1.0f) scale = 1.0f;
     obs[194] = clampf((float)(t->x - p->x) / scale, -1.0f, 1.0f);
     obs[195] = clampf((float)(t->y - p->y) / scale, -1.0f, 1.0f);
-    /* per-HEAD_MOVE walkability (25 floats). matches the mask but exposed to
-       the value head so the policy can reason about its movement options
-       even before the mask gates them out. */
+    /* per-HEAD_MOVE walkability (196-220): mirrors the MOVE mask, exposed to the value head. */
     const CollisionMap* cmap_obs = (const CollisionMap*)env->collision_map;
     for (int m = 0; m < MOVE_DIM; m++) {
         if (m == 0) {

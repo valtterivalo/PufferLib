@@ -1,13 +1,6 @@
 /**
  * @file osrs_pvp_api.h
- * @brief Public API for OSRS PvP simulation
- *
- * Provides the public interface for:
- * - Player initialization
- * - Environment reset (pvp_reset)
- * - Environment step (pvp_step)
- * - Seeding for deterministic runs (pvp_seed)
- * - Cleanup (pvp_close)
+ * @brief Public OSRS PvP API: pvp_init, pvp_reset, pvp_step, pvp_seed, pvp_close.
  */
 
 #ifndef OSRS_PVP_API_H
@@ -21,17 +14,8 @@
 #include "osrs_pvp_actions.h"
 
 /**
- * Initialize a player with default pure build stats and gear.
- *
- * Sets up:
- * - Base stats (75 attack, 99 strength, etc.)
- * - Current stats equal to base
- * - Starting gear (mage setup)
- * - Consumables (food, brews, restores)
- * - All timers reset to 0
- * - Sequential mode equipment state
- *
- * @param p Player to initialize
+ * Initialize a player to the default maxed pure build: base = current stats, mage
+ * gear, full consumables, all timers/counters/combat history cleared.
  */
 static void init_player(Player* p) {
     p->base_attack = MAXED_BASE_ATTACK;
@@ -120,7 +104,6 @@ static void init_player(Player* p) {
     p->damage_applied_this_tick = 0;
     p->did_attack_auto_move = 0;
 
-    // Hit event tracking
     p->hit_landed_this_tick = 0;
     p->hit_was_successful = 0;
     p->hit_damage = 0;
@@ -202,16 +185,12 @@ static void init_player(Player* p) {
     p->bolt_proc_damage = 0.2f;
     p->bolt_ignores_defense = 0;
 
-    p->prev_hp_percent = 1.0f;  // Full HP at start
+    p->prev_hp_percent = 1.0f;
 }
 
 /**
- * Set initial fight positions for both players.
- *
- * In seeded mode: deterministic positions.
- * Otherwise: random positions within fight area, nearby each other.
- *
- * @param env Environment
+ * Place both players in the fight area: deterministic when seeded, else random
+ * and nearby each other.
  */
 static void set_fight_positions(OsrsEnv* env) {
     if (env->has_rng_seed) {
@@ -264,13 +243,9 @@ static void set_fight_positions(OsrsEnv* env) {
 }
 
 /**
- * Initialize internal buffer pointers for ocean pattern.
- *
- * Points observations/actions/rewards/terminals/action_masks at the internal
- * _*_buf arrays so game logic writes to local storage. PufferLib shared
- * buffers are accessed via ocean_* pointers set by the binding.
- *
- * @param env Environment to initialize
+ * Point observations/actions/rewards/terminals/action_masks at the internal
+ * _*_buf arrays (game logic writes local storage; PufferLib shared buffers are
+ * reached via ocean_* pointers set by the binding) and zero all runtime state.
  */
 void pvp_init(OsrsEnv* env) {
     env->observations = env->_obs_buf;
@@ -278,7 +253,7 @@ void pvp_init(OsrsEnv* env) {
     env->rewards = env->_rews_buf;
     env->terminals = env->_terms_buf;
     env->action_masks = env->_masks_buf;
-    env->action_masks_agents = 0x3;  // Both agents get masks
+    env->action_masks_agents = 0x3;  /* both agents get masks */
 
     memset(env->_obs_buf, 0, sizeof(env->_obs_buf));
     memset(env->_acts_buf, 0, sizeof(env->_acts_buf));
@@ -309,17 +284,12 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->log, 0, sizeof(env->log));
 }
 
-/* pvp_render: forward declaration only.
-   binding.c provides the stub, or osrs_render.h provides the real impl. */
+/* Forward decl only: binding.c provides the stub, osrs_render.h the real impl. */
 void pvp_render(OsrsEnv* env);
 
 /**
- * Reset the environment to initial state.
- *
- * Initializes both players, sets fight positions, resets tick counter,
- * and generates initial observations.
- *
- * @param env Environment to reset
+ * Reset to initial state: init both players, seed RNG, apply LMS overrides, roll
+ * gear tiers, place fight positions, and generate the first observations + masks.
  */
 void pvp_reset(OsrsEnv* env) {
     if (env->has_rng_seed) {
@@ -336,7 +306,7 @@ void pvp_reset(OsrsEnv* env) {
     init_player(&env->players[0]);
     init_player(&env->players[1]);
 
-    // LMS overrides: defence capped at 75, prayer is 99 (no drain in LMS)
+    /* LMS: defence capped at LMS_BASE_DEFENCE, prayer 99 (no drain) */
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->players[i].is_lms = env->is_lms;
         if (env->is_lms) {
@@ -349,8 +319,7 @@ void pvp_reset(OsrsEnv* env) {
 
     set_fight_positions(env);
 
-    // Initialize last_obs_target to actual opponent positions
-    // (needed for first-tick movement commands like farcast)
+    /* seed last_obs_target so first-tick moves (e.g. farcast) have a target */
     env->players[0].last_obs_target_x = env->players[1].x;
     env->players[0].last_obs_target_y = env->players[1].y;
     env->players[1].last_obs_target_x = env->players[0].x;
@@ -380,8 +349,7 @@ void pvp_reset(OsrsEnv* env) {
     memset(env->pending_actions, 0, sizeof(env->pending_actions));
     memset(env->last_executed_actions, 0, sizeof(env->last_executed_actions));
 
-    // Initialize slot mode equipment with correlated per-episode gear randomization
-    // LMS tier distribution: 80% same, 15% ±1 tier, 5% ±2 tiers
+    /* per-episode gear tiers: p1 = base tier 80%, base ±1 15%, base ±2 5% */
     int base_tier = sample_gear_tier(env->pvp_runtime.gear_tier_weights, &env->rng_state);
     int p1_tier = base_tier;
 
@@ -403,8 +371,7 @@ void pvp_reset(OsrsEnv* env) {
         osrs_refresh_player_equipment(&env->players[i]);
     }
 
-    // Reset C-side opponent state for new episode
-    // Always reset when PFSP is configured (selfplay toggle happens inside opponent_reset)
+    /* reset C opponent; always reset for PFSP (selfplay toggle lives in opponent_reset) */
     if (env->pvp_runtime.use_c_opponent || env->pvp_runtime.opponent.type == OPP_PFSP) {
         opponent_reset(env, &env->pvp_runtime.opponent);
     }
@@ -421,29 +388,16 @@ void pvp_reset(OsrsEnv* env) {
 }
 
 /**
- * Execute one game tick with OSRS-accurate 1-tick delay timing.
- *
- * Actions submitted on tick N are applied IMMEDIATELY in the same step,
- * producing tick N+1 state. This gives proper 1-tick delay:
- * action at tick N → effects visible at tick N+1.
- *
- * Flow:
- *   1. Copy model/external actions to env->actions
- *   2. Generate C opponent actions into env->actions
- *   3. Apply actions immediately (execute switches, then attacks)
- *   4. Increment tick
- *   5. Check win conditions
- *   6. Calculate rewards
- *   7. Generate observations
- *
- * @param env Environment
+ * Execute one game tick. Actions submitted this step apply immediately to produce
+ * the next state (OSRS 1-tick delay: action at tick N shows at N+1). Order: gather
+ * model/external/C-opponent actions, clamp cross-head combos, run switches then
+ * movement then attacks, resolve hits, then win check, reward, observations.
  */
 void pvp_step(OsrsEnv* env) {
     memset(env->rewards, 0, NUM_AGENTS * sizeof(float));
     memset(env->terminals, 0, NUM_AGENTS);
 
-    // Reset per-tick flags at START (clears flags from PREVIOUS tick)
-    // This allows get_state() to read flags after pvp_step() returns
+    /* reset per-tick flags at start so get_state() can read them after the step returns */
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
@@ -457,14 +411,14 @@ void pvp_step(OsrsEnv* env) {
     reset_tick_flags(&env->players[0]);
     reset_tick_flags(&env->players[1]);
 
-    // Copy model's actions (player 0) or clear if C opponent controls p0
+    /* p0 actions: model, or cleared when a C opponent drives p0 */
     if (env->pvp_runtime.use_c_opponent_p0) {
         memset(env->actions, 0, NUM_ACTION_HEADS * sizeof(int));
     } else {
         memcpy(env->actions, env->ocean_io.agent_actions, NUM_ACTION_HEADS * sizeof(int));
     }
 
-    // Copy external opponent actions (player 1) or clear for C opponent
+    /* p1 actions: external opponent, or cleared for a C opponent */
     if (env->pvp_runtime.use_external_opponent_actions) {
         memcpy(
             env->actions + NUM_ACTION_HEADS,
@@ -475,10 +429,9 @@ void pvp_step(OsrsEnv* env) {
         memset(env->actions + NUM_ACTION_HEADS, 0, NUM_ACTION_HEADS * sizeof(int));
     }
 
-    // Generate C opponent actions (writes to pending_actions, then copy to actions)
+    /* C opponent writes pending_actions; copy its slice into env->actions */
     if (env->pvp_runtime.use_c_opponent && !env->pvp_runtime.use_external_opponent_actions) {
         generate_opponent_action(env, &env->pvp_runtime.opponent);
-        // Copy C opponent's action from pending to actions buffer
         memcpy(
             env->actions + NUM_ACTION_HEADS,
             env->pending_actions + NUM_ACTION_HEADS,
@@ -487,7 +440,6 @@ void pvp_step(OsrsEnv* env) {
     }
     if (env->pvp_runtime.use_c_opponent_p0) {
         generate_opponent_action_for_player0(env, &env->pvp_runtime.opponent_p0);
-        // Copy C opponent's action from pending to actions buffer
         memcpy(
             env->actions,
             env->pending_actions,
@@ -498,15 +450,12 @@ void pvp_step(OsrsEnv* env) {
     int first = env->pid_holder;
     int second = 1 - env->pid_holder;
 
-    // Copy actions to local arrays for each agent
     int actions_p0[NUM_ACTION_HEADS];
     int actions_p1[NUM_ACTION_HEADS];
     memcpy(actions_p0, env->actions, NUM_ACTION_HEADS * sizeof(int));
     memcpy(actions_p1, env->actions + NUM_ACTION_HEADS, NUM_ACTION_HEADS * sizeof(int));
 
-    // Clamp impossible cross-head combos:
-    // - MELEE/RANGE/SPEC_MELEE/SPEC_RANGE/GMAUL cannot cast spells
-    // - MAGE/TANK cannot use ATK (except SPEC_MAGIC which forces ATK internally)
+    /* clamp impossible cross-head combo: MAGE/TANK/SPEC_MAGIC loadouts drop ATTACK_ATK */
     for (int i = 0; i < NUM_AGENTS; i++) {
         int* a = (i == 0) ? actions_p0 : actions_p1;
         int lo = a[HEAD_LOADOUT];
@@ -518,11 +467,9 @@ void pvp_step(OsrsEnv* env) {
         }
     }
 
-    // Write clamped actions back for recording and read functions
     memcpy(env->actions, actions_p0, NUM_ACTION_HEADS * sizeof(int));
     memcpy(env->actions + NUM_ACTION_HEADS, actions_p1, NUM_ACTION_HEADS * sizeof(int));
 
-    // Save executed actions for recording
     memcpy(
         env->last_executed_actions,
         env->actions,
@@ -557,10 +504,9 @@ void pvp_step(OsrsEnv* env) {
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
     }
 
-    /* canonical movement via the shared encounter SDK. only fires when
-       walk_dest is set (HEAD_MOVE > 0, legacy HEAD_COMBAT MOVE_*, or a
-       persistent human click). attack-driven auto-chase still flows through
-       execute_attack_movement below until that path is migrated. */
+    /* canonical movement via the shared SDK; fires only when walk_dest is set
+       (HEAD_MOVE > 0, legacy HEAD_COMBAT MOVE_*, or a persistent human click).
+       Attack-driven auto-chase still runs through execute_attack_movement below. */
     pvp_step_player_movement(env, first);
     pvp_step_player_movement(env, second);
 
@@ -595,7 +541,7 @@ void pvp_step(OsrsEnv* env) {
     process_pending_hits(env, 0, 1);
     process_pending_hits(env, 1, 0);
 
-    // Morrigan's javelin DoT: 5 HP every 3 ticks from calc tick
+    /* Morrigan's javelin DoT: 5 HP every 3 ticks */
     for (int i = 0; i < NUM_AGENTS; i++) {
         Player* p = &env->players[i];
         if (p->morr_dot_remaining > 0) {
@@ -636,7 +582,7 @@ void pvp_step(OsrsEnv* env) {
         }
     }
 
-    // Tick limit: treat timeout as agent 0 loss
+    /* timeout counts as an agent 0 loss */
     if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS) {
         env->episode_over = 1;
         env->winner = 1;
@@ -649,7 +595,6 @@ void pvp_step(OsrsEnv* env) {
         }
     }
 
-    // Accumulate agent 0's episode return (written to log at episode end)
     env->_episode_return += env->rewards[0];
     for (int i = 0; i < NUM_AGENTS; i++) {
         generate_slot_observations(env, i);
@@ -658,7 +603,6 @@ void pvp_step(OsrsEnv* env) {
         }
     }
 
-    // Write observations to PufferLib shared buffer
     ocean_write_obs(env);
     if (env->ocean_io.agent_obs_p1 != NULL) {
         ocean_write_obs_p1(env);
@@ -668,8 +612,7 @@ void pvp_step(OsrsEnv* env) {
     if (env->episode_over) {
         env->ocean_io.agent_terminals[0] = 1;
 
-        // PFSP win tracking (all in C, zero Python overhead).
-        // Skip if pool_idx is -1 (sentinel for pre-pool-config first episode).
+        /* PFSP win tracking; pool_idx -1 = pre-pool-config first episode, skip */
         if (env->pvp_runtime.opponent.type == OPP_PFSP && env->pvp_runtime.pfsp.active_pool_idx >= 0) {
             int idx = env->pvp_runtime.pfsp.active_pool_idx;
             env->pvp_runtime.pfsp.episodes[idx] += 1.0f;
@@ -695,7 +638,6 @@ void pvp_step(OsrsEnv* env) {
         env->log.off_prayer_hits = (float)p0->target_hit_off_prayer_count;
         env->log.n = 1.0f;
 
-        // Auto-reset for next episode
         if (env->auto_reset) {
             pvp_reset(env);
         }
@@ -704,25 +646,14 @@ void pvp_step(OsrsEnv* env) {
     }
 }
 
-/**
- * Set RNG seed for deterministic runs.
- *
- * @param env  Environment
- * @param seed Seed value (must be non-zero)
- */
+/** Set the RNG seed for deterministic runs (seed must be non-zero). */
 void pvp_seed(OsrsEnv* env, uint32_t seed) {
     env->rng_seed = seed;
     env->rng_reset_count = 0;
     env->has_rng_seed = 1;
 }
 
-/**
- * Cleanup environment resources.
- *
- * Currently a no-op since all memory is statically allocated.
- *
- * @param env Environment
- */
+/** No-op: all environment memory is statically allocated. */
 void pvp_close(OsrsEnv* env) {
     (void)env;
 }

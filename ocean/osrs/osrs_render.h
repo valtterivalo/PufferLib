@@ -1933,10 +1933,8 @@ static void render_lab_draw_hud(RenderClient* rc) {
     }
 }
 
-/** Sol grapple banners (viewer-only): the slot callout centre-screen for the
-    whole 4-tick response window (Sol announces it over his model + chat in
-    the real client), then the wiki-verbatim outcome chat line for a few
-    ticks — perfect parry vs defend vs the unanswered slam. */
+/** Sol grapple banners (viewer-only): the slot callout centre-screen for the 4-tick
+    response window, then the outcome chat line (perfect parry / defend / slam). */
 static void render_draw_colosseum_grapple_banner(RenderClient* rc, OsrsEnv* env) {
     (void)rc;
     ColosseumState* cs = render_colosseum_state_from_env(env);
@@ -2587,12 +2585,10 @@ static void flight_spawn(RenderClient* rc,
                 render_get_anim_sequence_for_model(rc, (uint16_t)fp->anim_id, mvc);
             int maya_vc = anim_sequence_maya_vert_count(seq);
             if (maya_vc > 0 && maya_vc != mvc) {
-                /* the spotanim's Maya clip is rigged for a different mesh (the
-                   Shockwave clap 10903 is baked at the colossus body's vertex
-                   count, not this 341-vertex projectile disc). The OSRS client
-                   cannot skin this mesh and renders it static, but the in-game
-                   projectile visibly expands as it travels, so grow the static
-                   disc over the flight rather than freezing it. */
+                /* the spotanim's Maya clip is rigged for a different mesh (baked at a
+                   different vertex count than this projectile disc), so it can't skin
+                   here and the OSRS client renders it static. The in-game projectile
+                   visibly expands, so grow the static disc over its flight. */
                 fp->grow = 1;
                 fp->anim_id = -1;
             } else if (!render_projectile_anim_has_dynamic_frames(rc, fp->anim_id)) {
@@ -4944,13 +4940,11 @@ static void render_player_composite(
         return;
     }
 
-    /* --- primary track: trigger new actions and expire finished ones ---
-       primary is triggered per game tick (render_post_tick sets flags),
-       but frame advancement happens in render_client_tick at 50 Hz.
-
-       bug fix: when the same anim fires again after expiry (e.g. two
-       consecutive whip attacks), we must restart it. check both seq_id
-       change AND whether the current one has already finished (loops > 0). */
+    /* primary track: trigger new actions and expire finished ones. Primary is
+       triggered per game tick (render_post_tick sets flags); frame advancement
+       happens in render_client_tick at 50 Hz. Restart when the same anim fires
+       again after expiry (e.g. two consecutive whip attacks): check both seq_id
+       change and whether the current one has finished (loops > 0). */
     int new_primary;
     if (p->entity_type == ENTITY_NPC) {
         /* NPCs set their animation via npc_anim_id from the encounter.
@@ -5272,18 +5266,13 @@ static void render_draw_3d_world(RenderClient* rc) {
             };
             float model_scale = (floating->scale > 0.0f ? floating->scale : 1.0f) / 128.0f;
 
-            /* preferred path: play the orb's own spotanim sequence so the model
-               genuinely deforms (the manticore orbs carry anim 10327/10328/10329
-               baked into colosseum_npcs.anims). When frames play, the real
-               animation reads as a live projectile, so the fabricated spin below
-               is dropped to avoid fighting the baked motion. A gentle bob is kept
-               for vertical variety only. */
-            /* a stacked telegraph orb is rigidly attached to the manticore, so it
-               inherits the live body facing and turns with it (the game shows
-               waiting orbs facing the NPC front until they launch). In the live
-               anim path the yaw is the only rotation; in the fallback it is
-               composed OUTERMOST (after the per-style spin) so it aims the whole
-               spinning orb at the NPC front without tilting the spin axis. */
+            /* preferred path: play the orb's own spotanim (manticore orbs carry anim
+               10327/10328/10329 in colosseum_npcs.anims) so the model deforms; when
+               frames play, drop the fabricated spin below and keep only a gentle bob. */
+            /* the orb is rigidly attached to the manticore, inheriting its live yaw
+               (waiting orbs face the NPC front until launch). In the fallback the yaw is
+               composed after the per-style spin so it aims the orb without tilting the
+               spin axis. */
             float npc_yaw = 0.0f;
             if (floating->anchor_kind == ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT) {
                 int npc_idx = render_find_npc_entity_idx(rc, floating->npc_slot);
@@ -5321,13 +5310,11 @@ static void render_draw_3d_world(RenderClient* rc) {
                 pos.y += 0.08f * sinf(bob_phase);
                 spin = floating_anim_t * (2.0f * PI / 150.0f);
             }
-            /* manticore orbs spin cleanly on the SINGLE axis the real game uses
-               per style: the melee orb (model 51213) pitches toward its front (X),
-               the magic orb (51215) yaws like a spinning top (Y), the ranged orb
-               (51221) rolls (Z). The three stacked orbs share one phase (no
-               per-index offset) so a waiting cluster reads as one charging set.
-               face_rot (manticore yaw) is composed AFTER the spin so it aims the
-               whole spinning orb at the NPC front without tilting the spin axis. */
+            /* per-style spin on the single axis the game uses: melee orb (51213)
+               pitches (X), magic orb (51215) yaws (Y), ranged orb (51221) rolls (Z).
+               The three stacked orbs share one phase so a waiting cluster reads as one
+               set. face_rot (manticore yaw) is composed after the spin so it aims the
+               orb without tilting the spin axis. */
             Matrix spin_rot;
             switch (floating->model_id) {
                 case 51213u: spin_rot = MatrixRotateX(spin); break;
@@ -5409,28 +5396,19 @@ static void render_draw_3d_world(RenderClient* rc) {
             DrawLine3D((Vector3){x0, border_y, z1}, (Vector3){x0, border_y, z0}, border_col);
         }
 
-        /* colosseum molten pools (Reentry / Volatility T3): orange-red ground
-           decals on each damaging sand tile. Gated colosseum-only by encounter
-           name; reads ColosseumState directly like the zulrah safe-spot block
-           below. Does NOT touch any shared overlay channel, so inferno/zulrah/
-           pvp rendering is unchanged. Tile->world mapping matches the boss
-           hitbox decal block above. */
+        /* colosseum molten pools (Reentry / Volatility T3): ground decals on each
+           damaging sand tile, gated colosseum-only by encounter name. */
         {
             const EncounterDef* edef_molten =
                 (const EncounterDef*)rc->gui.encounter_def;
             if (edef_molten && rc->gui.encounter_state &&
                     strcmp(edef_molten->name, "colosseum") == 0) {
                 ColosseumState* cs_molten = (ColosseumState*)rc->gui.encounter_state;
-                /* molten pools draw as flat yellow simmering discs (user-verified
-                   2026-07-15 vs real play). The previously used mesh -- spotanim
-                   2709 VFX_COLOSSEUM_HOT_SAND_02_PROJECTILE_01 -- is the THROWN
-                   glob, wrong for ground sand in any animation, and the true
-                   ground effect (HOT_SAND_01, anims 10813/10814) is a server-
-                   spawned graphics object whose model id appears in no spotanim
-                   def, clientscript, or local dump, so it cannot be exported.
-                   Both hazard sources render the same way: wave 1-11
-                   Reentry/Volatility pools (molten_*) and Sol-fight sand
-                   (sol.hazard_*). The two-phase alpha pulse is the simmer. */
+                /* molten pools render as flat yellow simmering discs (two-phase alpha
+                   pulse). The true ground effect (HOT_SAND_01, anims 10813/10814) is a
+                   server-spawned graphics object with no exportable model id, so a disc
+                   stands in. Both sources render the same: wave 1-11 Reentry/Volatility
+                   pools (molten_*) and Sol-fight sand (sol.hazard_*). */
                 const int* molten_xs[2] = { cs_molten->molten_x, cs_molten->sol.hazard_tile_x };
                 const int* molten_ys[2] = { cs_molten->molten_y, cs_molten->sol.hazard_tile_y };
                 int molten_counts[2] = { cs_molten->molten_count, cs_molten->sol.hazard_tile_count };
@@ -5455,12 +5433,9 @@ static void render_draw_3d_world(RenderClient* rc) {
                     }
                 }
 
-                /* Sol Heredit telegraphs (A9-A11): the incoming light spheres, the
-                   phase-transition beams, and the rotating edge crystals all carry sim
-                   countdowns and are fed to the agent's observations, but were never
-                   drawn -- a human saw nothing until the sphere had already hit or the
-                   beam had hardened into molten. Render each during its warning window
-                   from the same direct ColosseumState read as the molten pools. */
+                /* Sol Heredit telegraphs (A9-A11): incoming light spheres, phase-transition
+                   beams, and rotating edge crystals, each drawn during its warning window
+                   from a direct ColosseumState read (like the molten pools). */
                 const SolHereditState* sol = &cs_molten->sol;
 
                 /* laser beam telegraphs: while a crystal fires (freeze 6..2) the

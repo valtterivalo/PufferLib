@@ -2089,7 +2089,7 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     Exception: equipping a 2H weapon while a shield is equipped — the shield
     goes to the first empty inventory slot since it wasn't directly clicked. */
 static void gui_update_inventory(GuiState* gs, Player* p) {
-    /* --- gear switches: direct slot swaps --- */
+    /* gear switches: direct slot swaps */
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
         uint8_t prev = gs->inv_prev_equipped[s];
         uint8_t curr = p->equipped[s];
@@ -2143,7 +2143,7 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* --- consumable changes: remove clicked slot or fall back to last --- */
+    /* consumable changes: remove clicked slot or fall back to last */
 
     /* if a human clicked a specific consumable slot, remove that exact slot first */
     int clicked = gs->human_clicked_inv_slot;

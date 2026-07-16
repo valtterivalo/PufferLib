@@ -1,5 +1,5 @@
 /**
- * @file osrs_pvp_human_input_types.h
+ * @file osrs_human_input_types.h
  * @brief HumanInput struct and CursorMode enum — separated from human_input.h
  *        to break circular include dependency (gui.h needs HumanInput, but
  *        human_input.h needs gui.h for prayer/spell grid constants).

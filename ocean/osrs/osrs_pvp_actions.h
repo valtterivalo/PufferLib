@@ -1,12 +1,7 @@
 /**
  * @file osrs_pvp_actions.h
- * @brief Action processing for loadout-based action space
- *
- * Handles player actions including:
- * - Food and potion consumption
- * - Timer updates
- * - Loadout-based action processing (9 heads)
- * - Reward calculation
+ * @brief Action processing for the loadout-based action space: consumables, timer
+ * updates, the phased switch/movement/attack execution, and reward calculation.
  */
 
 #ifndef OSRS_PVP_ACTIONS_H
@@ -20,33 +15,19 @@
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"  // For can_eat_food, can_use_potion, etc.
-#include "osrs_encounter.h"         // For ENCOUNTER_OVERHEAD_*, encounter_apply_*_action, encounter_drain_all_prayers
-// prayer drain: encounter_drain_all_prayers() in osrs_encounter.h drives both
-// overhead and offensive drain in a single call with activation-tick skip.
+#include "osrs_encounter.h"         // encounter_apply_*_action, encounter_drain_all_prayers
 
-// NH gear prayer bonus: fury amulet +3, neitiznot helm +3 = 6 total.
-// hardcoded because these are always equipped regardless of gear set.
+/* NH prayer bonus: fury +3 + neitiznot +3, always equipped regardless of gear set */
 #define PRAYER_BONUS 6
 
-/**
- * @param p            Player eating
- * @param is_karambwan 1 for karambwan, 0 for regular food
- */
+/** Eat shark (is_karambwan=0) or karambwan (is_karambwan=1). */
 static void eat_food(Player* p, int is_karambwan) {
     osrs_player_eat_food_type(p, is_karambwan ? FOOD_KARAMBWAN : FOOD_SHARK);
 }
 
 /**
- * Drink potion.
- *
- * Types:
- *   1 = Saradomin brew (heals HP, boosts defence, drains attack/str/magic/ranged)
- *   2 = Super restore (restores all stats + prayer)
- *   3 = Super combat (boosts attack/strength/defence 15%+5)
- *   4 = Ranged potion (boosts ranged 10%+4)
- *
- * @param p           Player drinking
- * @param potion_type Potion type (1-4)
+ * Drink potion by type: 1 = Saradomin brew, 2 = super restore, 3 = super combat,
+ * 4 = ranged potion. No-op while the potion timer is active.
  */
 static void drink_potion(Player* p, int potion_type) {
     if (p->potion_timer > 0) return;
@@ -73,7 +54,7 @@ static void drink_potion(Player* p, int potion_type) {
             p->current_magic = clamp(p->current_magic - br.magic_drain, 0, 255);
             p->current_ranged = clamp(p->current_ranged - br.range_drain, 0, 255);
             p->last_potion_type = potion_type;
-            p->ate_brew_this_tick = 1;  // Track for reward shaping
+            p->ate_brew_this_tick = 1;
             break;
         }
 
@@ -173,16 +154,14 @@ static void update_timers(Player* p) {
             p->attack_timer -= 1;
         }
     }
-    // food/potion/karambwan timers are decremented AFTER execute_switches in c_step
-    // so that observations show the correct countdown (2, 1, Ready instead of 3, 2, 1)
+    /* food/potion/karambwan timers decrement after execute_switches (in pvp_step)
+       so observations show the right countdown (2, 1, Ready not 3, 2, 1) */
     if (p->frozen_ticks > 0) p->frozen_ticks--;
     if (p->freeze_immunity_ticks > 0) p->freeze_immunity_ticks--;
     if (p->veng_cooldown > 0) p->veng_cooldown--;
 
-    /* prayer drain — shared encounter_drain_all_prayers handles both overhead
-       and offensive, activation-tick skip, and pp=0 auto-clear of both slots.
-       LMS has no prayer drain (prayer points are unlimited) — still clear
-       just-activated flags so they don't leak to next tick. */
+    /* shared encounter_drain_all_prayers drains overhead + offensive (activation-tick
+       skip, pp=0 clears both slots). LMS has no drain; still clear just-activated flags. */
     if (!p->is_lms) {
         encounter_drain_all_prayers(p, PRAYER_BONUS);
     } else {
@@ -231,7 +210,6 @@ static void reset_tick_flags(Player* p) {
     p->last_potion_was_waste = 0;
     p->attack_click_canceled = 0;
     p->attack_click_ready = 0;
-    // Reset reward shaping action flags
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->magic_type_this_tick = 0;
     p->used_special_this_tick = 0;
@@ -242,18 +220,12 @@ static void reset_tick_flags(Player* p) {
     p->clicks_this_tick = 0;
 }
 
-// Forward declarations for phased execution
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
 
 /**
- * Execute switch-phase actions for an agent (Phase 1).
- *
- * Execution order: overhead prayer → loadout → auto-offensive prayer →
- * consumables → movement → vengeance.
- *
- * CRITICAL: Prayer switches MUST be processed for BOTH players BEFORE
- * any attacks are processed. This ensures attacks check the correct
- * prayer state (the state after this tick's switches, not before).
+ * Execute switch-phase actions (Phase 1): overhead prayer, loadout, offensive
+ * prayer, consumables, movement command, vengeance. Prayer switches for BOTH
+ * players must run before any attacks so attacks see this tick's prayer state.
  */
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     Player* p = &env->players[agent_idx];
@@ -361,11 +333,9 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
                            loadout_action == LOADOUT_SPEC_MAGIC ||
                            loadout_action == LOADOUT_GMAUL);
 
-    /* set walk_dest from this tick's movement command. canonical click-anywhere
-       path: HEAD_MOVE is a 25-action delta grid (idle + 8 walk + 16 run).
-       legacy HEAD_COMBAT MOVE_* still works for unmigrated opponents — values
-       there resolve through select_*_tile helpers into the same walk_dest.
-       actual stepping happens later in pvp_step via pvp_step_player_movement. */
+    /* set walk_dest from this tick's move command: HEAD_MOVE (25-action delta grid)
+       or legacy HEAD_COMBAT MOVE_* via select_*_tile. Stepping happens later in
+       pvp_step_player_movement. */
     int command_issued = 0;
     if (!is_spec_loadout && head_move > 0 && head_move < MOVE_DIM) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, head_move);
@@ -409,10 +379,8 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
         env->pvp_runtime.walk_dest_y[agent_idx] = dest_y;
         command_issued = (dest_x >= 0);
     }
-    /* no else: when no movement command is issued this tick, walk_dest
-       persists from a prior tick. matches OSRS click semantics — a click
-       walks the player until arrival or a new command overrides it. the
-       shared SDK clears walk_dest = -1 when the player arrives. */
+    /* no else: with no move command, walk_dest persists (OSRS click semantics —
+       walk until arrival or override; the SDK clears walk_dest to -1 on arrival). */
     if (command_issued) {
         p->clicks_this_tick++;
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_MOVE);
@@ -723,9 +691,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
             if (t->food_count > 0 || t->karambwan_count > 0 || t->brew_doses > 0) {
                 reward += cfg->ko_bonus;
             }
-            // Proportional KO supplies bonus: linear in fraction of starting
-            // supplies the opponent still had at death. Sweep this coef in
-            // [0, ~0.5] to find if "fast KOs" matter as a training signal.
+            // Proportional KO-supplies bonus: fraction of the opponent's starting supplies left at death
             float opp_total = (float)(t->food_count + t->karambwan_count
                                        + t->brew_doses + t->restore_doses
                                        + t->combat_potion_doses

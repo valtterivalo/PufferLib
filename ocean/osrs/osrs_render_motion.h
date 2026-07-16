@@ -1,16 +1,13 @@
 /**
- * @fileoverview Sub-tile movement primitives for the OSRS renderer, ported
- * from the deobfuscated client (refs/osrs-client-deob Canvas.java:32-210 +
- * Actor.java:509-522).
+ * @fileoverview Sub-tile movement primitives for the OSRS renderer, ported from
+ * the deobfuscated client (refs/osrs-client-deob Canvas.java, Actor.java). Pure
+ * float math so render code and tests share it without linking raylib.
  *
- * The real client feeds each actor a queue of up to 10 waypoints (one per
- * 600ms server tick, newest at index 0) and consumes the OLDEST at an integer
- * speed per 20ms client tick: base 4 sub-units (640ms/tile, deliberately
- * slower than the tick so a continuously walking actor always trails with
- * backlog and never arrives early), 6 at queue depth >2, 8 at depth >3 or
- * when repaying stall debt, all doubled while the waypoint is a run step.
- * Per-axis gaps beyond 2 tiles snap. Pure float math so render code and
- * tests share it without dragging raylib into the test binary.
+ * Each actor holds a queue of up to 10 waypoints (one per 600ms server tick,
+ * newest at index 0) and consumes the oldest at an integer sub-unit speed per
+ * 20ms client tick: 4 per tile, 6 at queue depth >2, 8 at depth >3 or when
+ * repaying stall debt, doubled while the waypoint is a run step. Per-axis gaps
+ * beyond 2 tiles snap.
  */
 
 #ifndef OSRS_RENDER_MOTION_H
@@ -34,8 +31,8 @@ typedef enum {
 } RenderMovementKind;
 
 /**
- * Server-tick waypoint queue for one entity. Newest at index 0 (deob
- * shift-push, Actor.java method2557); consumption reads index length-1.
+ * Server-tick waypoint queue for one entity: newest at index 0, oldest (index
+ * length-1) consumed first.
  */
 typedef struct {
     float x[OSRS_RENDER_WAYPOINT_QUEUE_DEPTH];
@@ -49,9 +46,9 @@ static inline float osrs_render_entity_model_ground(float ground) {
 }
 
 /**
- * Integer speed ladder from the deob (Canvas.java:99-141). stall_debt
- * repays one debt tick at speed 8 when the queue is >1 deep; the run
- * doubling applies after the depth bumps (real speeds 8/12/16).
+ * Integer speed ladder (deob Canvas.java). stall_debt repays one tick at speed
+ * 8 while the queue is >1 deep; run doubling applies after the depth bumps (run
+ * speeds 8/12/16).
  */
 static inline int osrs_render_speed_one_client_tick(
     int path_length,
@@ -122,12 +119,10 @@ static inline void osrs_render_waypoint_push(
 }
 
 /**
- * Consume one client tick of movement toward the oldest waypoint, popping
- * it on arrival. Movement clamps at the waypoint (one waypoint per tick at
- * most, residual speed is discarded, matching the deob); a gap beyond 2
- * tiles on either axis snaps the whole position and pops in one cycle
- * (Canvas.java:80,199-208). Returns 1 when the entity is moving this tick;
- * dir_dx/dir_dy carry the pre-advance delta for yaw selection.
+ * Consume one client tick toward the oldest waypoint, popping it on arrival. At
+ * most one waypoint per tick (residual speed discarded); a gap beyond 2 tiles on
+ * either axis snaps the whole position and pops in one cycle. Returns 1 when
+ * moving this tick; dir_dx/dir_dy carry the pre-advance delta for yaw.
  */
 static inline int osrs_render_waypoint_advance_one_client_tick(
     OsrsRenderWaypointQueue* q,

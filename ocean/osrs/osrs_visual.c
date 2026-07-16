@@ -1751,10 +1751,8 @@ static void run_visual(
     } else if (encounter_name && strcmp(encounter_name, "colosseum") == 0) {
         /* Fortis Colosseum overworld stadium: map region (28, 48) starts at world
            (1792, 3072). The encounter uses arena-local coords (0..33); the 34x34
-           playable square (= the los grid) sits at world SW corner (1808, 3090),
-           so offset terrain/objects/collision so local 0 maps to world 1808/3090.
-           The old (1807,3089) anchor was the deadzone-outline bbox corner, one
-           tile SW of the playable square. */
+           playable square (= the los grid) sits at world SW corner (1808, 3090), so
+           offset terrain/objects/collision so local 0 maps to world 1808/3090. */
         rc->terrain = terrain_load(OSRS_ASSET("colosseum.terrain"));
         rc->objects = objects_load(OSRS_ASSET("colosseum.objects"));
         if (rc->terrain)

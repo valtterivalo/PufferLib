@@ -2064,58 +2064,38 @@ typedef struct {
     int total_npc_kills;
     int total_prayer_correct;
     int total_npc_attacks;
-    int modifiers_picked;      /* mandatory draft selections made this run */
-    int active_tier_sum;       /* sum of active modifier tiers (run difficulty proxy) */
+    int modifiers_picked;      /* mandatory draft selections this run */
+    int active_tier_sum;       /* sum of active modifier tiers (difficulty proxy) */
 
-    /* per-NPC-type prayer outcomes ("who is hitting us off-prayer"): faced =
-       prayer-checkable hits that landed, correct = overhead matched at land
-       time, offpray_damage = HP lost to mismatched-overhead hits. Floats so
-       the binding can aggregate per-episode means directly. */
+    /* per-NPC-type prayer outcomes: faced = prayer-checkable hits landed, correct =
+       overhead matched at land, offpray_damage = HP from mismatched-overhead hits */
     float pray_faced_by_type[COLO_NUM_NPC_TYPES];
     float pray_correct_by_type[COLO_NUM_NPC_TYPES];
     float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
-    /** Total damage taken from each NPC type this episode for all hits: prayed, off-prayer, and ignore-prayer or typeless, unlike offpray_damage_by_type. */
+    /* total damage from each NPC type, all hits (prayed + off-prayer + typeless), unlike offpray_damage_by_type */
     float total_damage_by_type[COLO_NUM_NPC_TYPES];
 
-    /* death attribution (diagnostic): death_by_type[killer] = 1 on the episode's
-       fatal tick (which NPC type dealt the killing blow), death_fatal_damage =
-       that tick's total damage_received (single big hit vs same-tick combo). */
+    /* death attribution: death_by_type[killer] = 1 on the fatal tick; death_fatal_damage = that tick's total received */
     float death_by_type[COLO_NUM_NPC_TYPES];
     float death_fatal_damage;
 
-    /* bleed avoidability (diagnostic): off-prayer HP taken on ticks with >=2
-       distinct prayer-checkable styles landing (conflict = unavoidable, single
-       overhead cannot block both) vs ticks with 1 style (solo = an avoidable
-       mis-flick). death_on_conflict_tick = 1 if the fatal tick was a conflict. */
+    /* off-prayer HP on ticks with >=2 prayer-checkable styles (conflict = unavoidable) vs 1 (solo = avoidable mis-flick); death_on_conflict_tick = 1 if the fatal tick was a conflict */
     float offpray_damage_conflict;
     float offpray_damage_solo;
     float death_on_conflict_tick;
 
-    /* death forensics (land-time): the fatal tick's received damage split by
-       channel. unprayable = typeless / ignore-prayer (a dodge or positioning
-       failure), offpray = prayer-checkable landing with the wrong overhead (a
-       flick/conflict failure), prayed = damage through a correct overhead
-       (expected ~0; nonzero = sim surprise). death_heal_remaining = HP-heal
-       capacity left in the inventory at death (high = burst death with unused
-       supplies, ~0 = attrition death). */
+    /* fatal tick's received damage by channel: unprayable = typeless/ignore-prayer, offpray = wrong overhead, prayed = through a correct overhead (expect ~0), self = self-damage; death_heal_remaining = HP-heal capacity left at death */
     float death_dmg_unprayable;
     float death_dmg_offpray;
     float death_dmg_prayed;
     float death_dmg_self;
     float death_heal_remaining;
-    /* fresh damage landed on overrun reinforcements during waves 1-4 (the
-       skippable window): the stall-to-farm exploit's payout, tracked
-       regardless of whether farm_safe_damage_cap withholds its reward. */
+    /* fresh damage on overrun reinforcements during skippable waves 1-4 (stall-to-farm payout), tracked even when farm_safe_damage_cap withholds the reward */
     float farm_damage;
-    /* episode totals of unprayable damage per NPC type: splits e.g. javelin
-       skyfall+molten (typeless) from its prayer-checkable throws, which stay in
-       offpray_damage_by_type. */
+    /* per-NPC-type typeless/unprayable damage totals, split from prayer-checkable throws in offpray_damage_by_type */
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float outcome_score;
-    /* furthest depth this episode reached, reported RAW (not squared like
-       outcome_score): waves_fully_cleared + current-wave fresh-fraction, in
-       [0, COLO_NUM_WAVES]. The binding keeps a per-env running max across
-       episodes (Log is zeroed each train report window) and snapshots it here. */
+    /* furthest depth reached, reported RAW (not squared like outcome_score): waves_cleared + current-wave fresh-fraction in [0, COLO_NUM_WAVES]; binding keeps a per-env running max */
     float max_wave_depth;
 } ColosseumLog;
 
