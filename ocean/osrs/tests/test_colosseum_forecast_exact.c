@@ -163,40 +163,7 @@ static void exact_mkdir_if_needed(const char* dir) {
     abort();
 }
 
-static void exact_encode_step_out_forecast_obs(
-    const ColoStepOutForecast* forecast,
-    float out[COLO_STEP_OUT_FORECAST_OBS_SIZE]
-) {
-    int i = 0;
-    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-        const ColoStepOutForecastAction* action = &forecast->actions[action_idx];
-        int first_attack_tick = 0;
-        int first_style_mask = 0;
-        int max_hit = 0;
-        int ranged_magic_same_tick = 0;
-        for (int tick_idx = 0; tick_idx < COLO_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
-            const ColoStepOutForecastTick* tick = &action->ticks[tick_idx];
-            int style_mask = col_step_out_forecast_tick_style_mask(tick);
-            if (first_attack_tick == 0 &&
-                    col_step_out_forecast_tick_has_event(tick)) {
-                first_attack_tick = tick_idx + 1;
-                first_style_mask = style_mask;
-            }
-            if (tick->max_hit > max_hit) max_hit = tick->max_hit;
-            if (tick->ranged_count > 0 && tick->magic_count > 0)
-                ranged_magic_same_tick = 1;
-        }
-        out[i++] = action->valid ? 1.0f : 0.0f;
-        out[i++] = (float)first_attack_tick / (float)COLO_STEP_OUT_FORECAST_HORIZON;
-        out[i++] = (float)first_style_mask / 7.0f;
-        out[i++] = (float)max_hit / 150.0f;
-        out[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-        out[i++] = ranged_magic_same_tick ? 1.0f : 0.0f;
-        out[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
-        out[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
-    }
-    assert(i == COLO_STEP_OUT_FORECAST_OBS_SIZE);
-}
+
 
 static void exact_writer_open(ColoExactWriter* writer, const char* path) {
     memset(writer, 0, sizeof(*writer));
@@ -253,8 +220,13 @@ static void exact_capture(
     float obs[COLO_NUM_OBS];
     float action_mask[COLO_ACTION_MASK_SIZE];
 
-    col_build_step_out_forecast_ctx(s, &forecast);
-    exact_encode_step_out_forecast_obs(&forecast, forecast_obs);
+    ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
+    col_build_step_out_forecast_horizon_mode_summary(
+        s, &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON,
+        ctx->config.forecast_run_tile_mode);
+    int fi = col_write_step_out_forecast_obs_summary(
+        &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON, forecast_obs, 0);
+    assert(fi == COLO_STEP_OUT_FORECAST_OBS_SIZE);
     col_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
     col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, action_mask);
 
@@ -489,12 +461,12 @@ static void exact_scenario_stunned_npc(ColoExactWriter* writer) {
     exact_run_idle_steps(writer, 106u, &s, &ctx, 6);
 }
 
-static void exact_scenario_oob_and_perimeter_los(ColoExactWriter* writer) {
+static void exact_scenario_perimeter_los(ColoExactWriter* writer) {
     ColosseumState s;
     ColosseumContext ctx;
     exact_prepare_custom(&s, &ctx, 0x1108u, 0, 15);
-    int oob = col_spawn_npc_at(&s, COLO_SERPENT_SHAMAN, -1, 15);
-    s.npcs[oob].attack_timer = 0;
+    int edge = col_spawn_npc_at(&s, COLO_SERPENT_SHAMAN, COLO_ARENA_MIN_X, 15);
+    s.npcs[edge].attack_timer = 0;
     int sol = col_spawn_npc_at(&s, COLO_SOL_HEREDIT, COLO_SOL_SPAWN_X, COLO_SOL_SPAWN_Y);
     s.wave = COLO_WAVE_BOSS;
     s.sol.started = 1;
@@ -506,10 +478,13 @@ static void exact_scenario_oob_and_perimeter_los(ColoExactWriter* writer) {
     s.sol.phase = 1;
     s.sol.crystal_count = 1;
     s.sol.crystals[0].active = 1;
-    s.sol.crystals[0].perim_step = 0;
+    s.sol.crystals[0].edge = COLO_SOL_EDGE_NORTH;
+    s.sol.crystals[0].x = 16;
+    s.sol.crystals[0].y = s.sol.boss_arena_max_y - 1;
+    s.sol.crystals[0].dir = 1;
     s.sol.crystals[0].move_timer = COLO_SOL_CRYSTAL_MOVE_TICKS;
-    s.sol.crystals[0].fire_cooldown = 0;
-    s.sol.crystals[0].telegraph_ticks = 1;
+    s.sol.crystals[0].firing_freeze = COLO_SOL_LASER_FREEZE;
+    s.sol.laser_cooldown = COLO_SOL_CRYSTAL_COOLDOWN_MIN;
     s.player.x = 16;
     s.player.y = 14;
     exact_refresh_geometry(&s, &ctx);
@@ -531,7 +506,7 @@ static void exact_generate_fixture(const char* path) {
     exact_scenario_red_flag_minotaur(&writer);
     exact_scenario_frozen_npc(&writer);
     exact_scenario_stunned_npc(&writer);
-    exact_scenario_oob_and_perimeter_los(&writer);
+    exact_scenario_perimeter_los(&writer);
 
     exact_writer_close(&writer);
 }
