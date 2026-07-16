@@ -1,21 +1,12 @@
 /**
- * @fileoverview Scripted opponent policies implemented in C.
+ * @fileoverview Scripted opponent policies in C (ports of opponents/*.py), run
+ * inside pvp_step to avoid the Python round-trip. Each policy reads Player structs
+ * directly and writes int actions[NUM_ACTION_HEADS]; gear switches use loadout
+ * presets (LOADOUT_MELEE, ...), not per-slot equips.
  *
- * Ports the Python opponent policies (opponents/ *.py) to C for use within
- * c_step(). Eliminates the Python round-trip for opponent action
- * generation during training with scripted opponents.
- *
- * Opponent reads game state directly from Player structs instead of parsing
- * observation arrays, which is both faster and avoids float normalization.
- *
- * Actions are direct head-value assignments: int actions[NUM_ACTION_HEADS].
- * Gear switches use loadout presets (LOADOUT_MELEE, LOADOUT_RANGE, etc.)
- * instead of per-slot equip actions.
- *
- * Phase 1 policies: TrueRandom, Panicking, WeakRandom, SemiRandom,
- * StickyPrayer, Beginner, BetterRandom, Improved.
- * Phase 2 policies: Onetick, UnpredictableImproved, UnpredictableOnetick.
- * Mixed wrappers: MixedEasy, MixedMedium, MixedHard, MixedHardBalanced.
+ * Phase 1: TrueRandom, Panicking, WeakRandom, SemiRandom, StickyPrayer, Beginner,
+ * BetterRandom, Improved. Phase 2: Onetick, UnpredictableImproved,
+ * UnpredictableOnetick. Mixed: MixedEasy, MixedMedium, MixedHard, MixedHardBalanced.
  */
 
 #ifndef OSRS_PVP_OPPONENTS_H
@@ -515,14 +506,14 @@ static void opp_handle_delayed_prayer(OsrsEnv* env, OpponentState* opp, int* act
     opp_process_pending_prayer(opp, actions, self);
 }
 
-/* --- TrueRandom: random value per action head --- */
+/* TrueRandom: random value per action head */
 static void opp_true_random(OsrsEnv* env, int* actions) {
     for (int i = 0; i < NUM_ACTION_HEADS; i++) {
         actions[i] = rand_int(env, ACTION_HEAD_DIMS[i]);
     }
 }
 
-/* --- Panicking: fixed prayer, fixed style, 30% attack chance, panic eat --- */
+/* Panicking: fixed prayer, fixed style, 30% attack chance, panic eat */
 static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -565,7 +556,7 @@ static void opp_panicking(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-/* --- WeakRandom: random style, unreliable eating (50% skip) --- */
+/* WeakRandom: random style, unreliable eating (50% skip) */
 static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -607,7 +598,7 @@ static void opp_weak_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-/* --- SemiRandom: reliable eating at 30%, random everything else --- */
+/* SemiRandom: reliable eating at 30%, random everything else */
 static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -649,7 +640,7 @@ static void opp_semi_random(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-/* --- StickyPrayer: sticky prayer (~12 tick avg), simple eating --- */
+/* StickyPrayer: sticky prayer (~12 tick avg), simple eating */
 static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
@@ -697,7 +688,7 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-/* --- Beginner: sticky prayer, multi-threshold eating, random spec --- */
+/* Beginner: sticky prayer, multi-threshold eating, random spec */
 static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
@@ -782,7 +773,7 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     (void)target;
 }
 
-/* --- BetterRandom: multi-threshold eating, random prayers, random spec --- */
+/* BetterRandom: multi-threshold eating, random prayers, random spec */
 static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
@@ -853,8 +844,8 @@ static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-/* --- Improved: full NH (correct prayer, off-prayer attacks, combo eating,
-       spec timing, offensive prayer, movement) --- */
+/* Improved: full NH (correct prayer, off-prayer attacks, combo eating,
+   spec timing, offensive prayer, movement) */
 static void opp_improved(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];

@@ -33,7 +33,6 @@ static const MeleeBonusType MELEE_SPEC_BONUS_TYPES[] = {
     [MELEE_SPEC_DRAGON_MACE] = MELEE_BONUS_CRUSH,
     [MELEE_SPEC_ABYSSAL_BLUDGEON] = MELEE_BONUS_CRUSH,
 };
-// WEAPON PRIORITY TABLES (best to worst within each style)
 
 static const uint8_t MELEE_WEAPON_PRIORITY[] = {
     ITEM_VESTAS, ITEM_GHRAZI_RAPIER, ITEM_INQUISITORS_MACE, ITEM_ELDER_MAUL,
@@ -64,14 +63,11 @@ static const uint8_t RANGE_SPEC_PRIORITY[] = {
 };
 #define RANGE_SPEC_PRIORITY_LEN (sizeof(RANGE_SPEC_PRIORITY) / sizeof(RANGE_SPEC_PRIORITY[0]))
 
-// Magic spec: only volatile nightmare staff
 static const uint8_t MAGIC_SPEC_PRIORITY[] = {
     ITEM_VOLATILE_STAFF
 };
 #define MAGIC_SPEC_PRIORITY_LEN (sizeof(MAGIC_SPEC_PRIORITY) / sizeof(MAGIC_SPEC_PRIORITY[0]))
-// ARMOR PRIORITY TABLES (per style)
 
-// Body armor
 static const uint8_t TANK_BODY_PRIORITY[] = {
     ITEM_KARILS_TOP, ITEM_BLACK_DHIDE_BODY
 };
@@ -82,7 +78,6 @@ static const uint8_t MAGE_BODY_PRIORITY[] = {
 };
 #define MAGE_BODY_PRIORITY_LEN (sizeof(MAGE_BODY_PRIORITY) / sizeof(MAGE_BODY_PRIORITY[0]))
 
-// Legs armor
 static const uint8_t TANK_LEGS_PRIORITY[] = {
     ITEM_BANDOS_TASSETS, ITEM_TORAGS_PLATELEGS, ITEM_DHAROKS_PLATELEGS,
     ITEM_VERACS_PLATESKIRT, ITEM_RUNE_PLATELEGS
@@ -94,7 +89,6 @@ static const uint8_t MAGE_LEGS_PRIORITY[] = {
 };
 #define MAGE_LEGS_PRIORITY_LEN (sizeof(MAGE_LEGS_PRIORITY) / sizeof(MAGE_LEGS_PRIORITY[0]))
 
-// Shield
 static const uint8_t MELEE_SHIELD_PRIORITY[] = {
     ITEM_DRAGON_DEFENDER
 };
@@ -110,7 +104,6 @@ static const uint8_t MAGE_SHIELD_PRIORITY[] = {
 };
 #define MAGE_SHIELD_PRIORITY_LEN (sizeof(MAGE_SHIELD_PRIORITY) / sizeof(MAGE_SHIELD_PRIORITY[0]))
 
-// Head
 static const uint8_t TANK_HEAD_PRIORITY[] = {
     ITEM_TORAGS_HELM, ITEM_GUTHANS_HELM, ITEM_VERACS_HELM,
     ITEM_DHAROKS_HELM, ITEM_HELM_NEITIZNOT
@@ -120,27 +113,23 @@ static const uint8_t TANK_HEAD_PRIORITY[] = {
 static const uint8_t MAGE_HEAD_PRIORITY[] = {ITEM_ANCESTRAL_HAT, ITEM_HELM_NEITIZNOT};
 #define MAGE_HEAD_PRIORITY_LEN (sizeof(MAGE_HEAD_PRIORITY) / sizeof(MAGE_HEAD_PRIORITY[0]))
 
-// Cape
 static const uint8_t MELEE_CAPE_PRIORITY[] = {ITEM_INFERNAL_CAPE, ITEM_GOD_CAPE};
 #define MELEE_CAPE_PRIORITY_LEN (sizeof(MELEE_CAPE_PRIORITY) / sizeof(MELEE_CAPE_PRIORITY[0]))
 
 static const uint8_t MAGE_CAPE_PRIORITY[] = {ITEM_GOD_CAPE};
 #define MAGE_CAPE_PRIORITY_LEN (sizeof(MAGE_CAPE_PRIORITY) / sizeof(MAGE_CAPE_PRIORITY[0]))
 
-// Neck
 static const uint8_t MELEE_NECK_PRIORITY[] = {ITEM_FURY, ITEM_GLORY};
 #define MELEE_NECK_PRIORITY_LEN (sizeof(MELEE_NECK_PRIORITY) / sizeof(MELEE_NECK_PRIORITY[0]))
 
 static const uint8_t MAGE_NECK_PRIORITY[] = {ITEM_OCCULT_NECKLACE, ITEM_GLORY};
 #define MAGE_NECK_PRIORITY_LEN (sizeof(MAGE_NECK_PRIORITY) / sizeof(MAGE_NECK_PRIORITY[0]))
 
-// Ring
 static const uint8_t MELEE_RING_PRIORITY[] = {ITEM_BERSERKER_RING};
 #define MELEE_RING_PRIORITY_LEN (sizeof(MELEE_RING_PRIORITY) / sizeof(MELEE_RING_PRIORITY[0]))
 
 static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I, ITEM_BERSERKER_RING};
 #define MAGE_RING_PRIORITY_LEN (sizeof(MAGE_RING_PRIORITY) / sizeof(MAGE_RING_PRIORITY[0]))
-// SLOT-BASED GEAR COMPUTATION FROM EQUIPPED[] ARRAY
 
 /**
  * Compute total gear bonuses from equipped[] array.
@@ -183,7 +172,7 @@ static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item
         case ITEM_STATIUS_WARHAMMER:
             p->melee_spec_weapon = MELEE_SPEC_DWH; break;
         case ITEM_ELDER_MAUL:
-            break; // Elder maul has no spec
+            break; /* no spec */
         case ITEM_DARK_BOW:
             p->ranged_spec_weapon = RANGED_SPEC_DARK_BOW; break;
         case ITEM_HEAVY_BALLISTA:
@@ -203,7 +192,6 @@ static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item
 
 /** Check if a weapon is a spec weapon (any spec enum becomes non-NONE). */
 static inline int item_is_spec_weapon(uint8_t weapon_item) {
-    // Quick check without modifying player state
     switch (weapon_item) {
         case ITEM_DRAGON_DAGGER:
         case ITEM_DRAGON_CLAWS:
@@ -226,12 +214,9 @@ static inline int item_is_spec_weapon(uint8_t weapon_item) {
 }
 
 /**
- * Equip item in slot-based mode.
- * Returns 1 if equipment changed, 0 if already equipped.
- *
- * NOT using osrs_equip_from_inventory(): PvP uses per-slot arrays (each gear
- * slot has its own item pool for the LMS upgrade system), not the flat 28-slot
- * bag model that osrs_inventory.h provides.
+ * Equip an item into a gear slot. Returns 1 if changed, 0 if already equipped.
+ * PvP uses per-slot inventory arrays (the LMS upgrade pool), not the flat 28-slot
+ * bag in osrs_inventory.h, so it can't use osrs_equip_from_inventory().
  */
 static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
     if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
@@ -240,12 +225,11 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
     p->equipped[gear_slot] = item_idx;
     p->slot_gear_dirty = 1;
 
-    // Update gear state based on weapon
     if (gear_slot == GEAR_SLOT_WEAPON && item_idx < NUM_ITEMS) {
         update_spec_weapons_for_weapon(p, item_idx);
         int style = get_item_attack_style(item_idx);
 
-        // current_gear: internal, used for gear_bonuses[] index (GEAR_SPEC for spec weapons)
+        /* current_gear = internal gear_bonuses[] index (GEAR_SPEC for spec weapons) */
         if (item_is_spec_weapon(item_idx)) {
             p->current_gear = GEAR_SPEC;
         } else if (style == ATTACK_STYLE_MELEE) {
@@ -256,8 +240,7 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
             p->current_gear = GEAR_MAGE;
         }
 
-        // visible_gear: external, actual damage type (no GEAR_SPEC)
-        // voidwaker deals magic damage despite being a melee weapon
+        /* visible_gear = external damage type; voidwaker is magic despite being melee */
         if (item_idx == ITEM_VOIDWAKER) {
             p->visible_gear = GEAR_MAGE;
         } else if (style == ATTACK_STYLE_MELEE) {
@@ -323,24 +306,17 @@ static inline int player_has_gmaul(Player* p) {
 }
 
 /**
- * Resolve loadout for a given style from available inventory.
- *
- * Writes item indices to out[8] (one per dynamic gear slot).
- * Any slot without a matching item keeps its current equipment.
- *
- * @param p       Player (for inventory lookup)
- * @param loadout Style to resolve (MELEE/RANGE/MAGE/TANK/SPEC_*)
- * @param out     Output array of 8 item indices (NUM_DYNAMIC_GEAR_SLOTS)
+ * Resolve the best-available items for `loadout` (MELEE, RANGE, MAGE, TANK, the
+ * SPEC_* variants, GMAUL) from the player's per-slot inventory into
+ * out[NUM_DYNAMIC_GEAR_SLOTS]. A slot with no matching item keeps its equipment.
  */
 static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAMIC_GEAR_SLOTS]) {
-    // Initialize all outputs to current equipment
     for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
         out[i] = p->equipped[DYNAMIC_GEAR_SLOTS[i]];
     }
 
-    // Slot order in DYNAMIC_GEAR_SLOTS: weapon(0), shield(1), body(2), legs(3),
-    //                                    head(4), cape(5), neck(6), ring(7)
-
+    /* out index -> DYNAMIC_GEAR_SLOTS: weapon 0, shield 1, body 2, legs 3,
+       head 4, cape 5, neck 6, ring 7 */
     switch (loadout) {
         case LOADOUT_MELEE: {
             uint8_t weapon = find_best_available(p, GEAR_SLOT_WEAPON, MELEE_WEAPON_PRIORITY, MELEE_WEAPON_PRIORITY_LEN);
@@ -551,11 +527,9 @@ static inline AttackStyle get_slot_weapon_attack_style(Player* p) {
  * Sets equipped[] and inventory[] arrays for the basic loadout.
  */
 static inline void init_slot_equipment_lms(Player* p) {
-    // Clear all inventory
     memset(p->inventory, ITEM_NONE, sizeof(p->inventory));
     memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
 
-    // Default to melee style starting gear
     p->equipped[GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT;
     p->equipped[GEAR_SLOT_CAPE] = ITEM_GOD_CAPE;
     p->equipped[GEAR_SLOT_NECK] = ITEM_GLORY;
@@ -569,53 +543,42 @@ static inline void init_slot_equipment_lms(Player* p) {
     p->equipped[GEAR_SLOT_RING] = ITEM_BERSERKER_RING;
     update_spec_weapons_for_weapon(p, p->equipped[GEAR_SLOT_WEAPON]);
 
-    // HEAD
     p->inventory[GEAR_SLOT_HEAD][0] = ITEM_HELM_NEITIZNOT;
     p->num_items_in_slot[GEAR_SLOT_HEAD] = 1;
 
-    // CAPE
     p->inventory[GEAR_SLOT_CAPE][0] = ITEM_GOD_CAPE;
     p->num_items_in_slot[GEAR_SLOT_CAPE] = 1;
 
-    // NECK
     p->inventory[GEAR_SLOT_NECK][0] = ITEM_GLORY;
     p->num_items_in_slot[GEAR_SLOT_NECK] = 1;
 
-    // AMMO
     p->inventory[GEAR_SLOT_AMMO][0] = ITEM_DIAMOND_BOLTS_E;
     p->num_items_in_slot[GEAR_SLOT_AMMO] = 1;
 
-    // WEAPON: whip, rcb, staff, dds
     p->inventory[GEAR_SLOT_WEAPON][0] = ITEM_WHIP;
     p->inventory[GEAR_SLOT_WEAPON][1] = ITEM_RUNE_CROSSBOW;
     p->inventory[GEAR_SLOT_WEAPON][2] = ITEM_AHRIM_STAFF;
     p->inventory[GEAR_SLOT_WEAPON][3] = ITEM_DRAGON_DAGGER;
     p->num_items_in_slot[GEAR_SLOT_WEAPON] = 4;
 
-    // SHIELD: defender, spirit
     p->inventory[GEAR_SLOT_SHIELD][0] = ITEM_DRAGON_DEFENDER;
     p->inventory[GEAR_SLOT_SHIELD][1] = ITEM_SPIRIT_SHIELD;
     p->num_items_in_slot[GEAR_SLOT_SHIELD] = 2;
 
-    // BODY: dhide, mystic
     p->inventory[GEAR_SLOT_BODY][0] = ITEM_BLACK_DHIDE_BODY;
     p->inventory[GEAR_SLOT_BODY][1] = ITEM_MYSTIC_TOP;
     p->num_items_in_slot[GEAR_SLOT_BODY] = 2;
 
-    // LEGS: rune, mystic
     p->inventory[GEAR_SLOT_LEGS][0] = ITEM_RUNE_PLATELEGS;
     p->inventory[GEAR_SLOT_LEGS][1] = ITEM_MYSTIC_BOTTOM;
     p->num_items_in_slot[GEAR_SLOT_LEGS] = 2;
 
-    // HANDS
     p->inventory[GEAR_SLOT_HANDS][0] = ITEM_BARROWS_GLOVES;
     p->num_items_in_slot[GEAR_SLOT_HANDS] = 1;
 
-    // FEET
     p->inventory[GEAR_SLOT_FEET][0] = ITEM_CLIMBING_BOOTS;
     p->num_items_in_slot[GEAR_SLOT_FEET] = 1;
 
-    // RING
     p->inventory[GEAR_SLOT_RING][0] = ITEM_BERSERKER_RING;
     p->num_items_in_slot[GEAR_SLOT_RING] = 1;
 
@@ -631,7 +594,6 @@ static inline int add_item_to_inventory(Player* p, int gear_slot, uint8_t item_i
     if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
     if (p->num_items_in_slot[gear_slot] >= MAX_ITEMS_PER_SLOT) return 0;
 
-    // Check duplicate
     for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
         if (p->inventory[gear_slot][i] == item_idx) return 0;
     }
@@ -641,7 +603,7 @@ static inline int add_item_to_inventory(Player* p, int gear_slot, uint8_t item_i
     return 1;
 }
 
-// Maps each loot item to the basic item it replaces (ITEM_NONE = doesn't replace)
+/* Loot item -> the basic item it obsoletes (ITEM_NONE = obsoletes nothing). */
 static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_HELM_NEITIZNOT]       = ITEM_NONE,
     [ITEM_GOD_CAPE]             = ITEM_NONE,
@@ -660,7 +622,6 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_CLIMBING_BOOTS]       = ITEM_NONE,
     [ITEM_BERSERKER_RING]       = ITEM_NONE,
     [ITEM_DIAMOND_BOLTS_E]      = ITEM_NONE,
-    // Weapons
     [ITEM_GHRAZI_RAPIER]        = ITEM_WHIP,
     [ITEM_INQUISITORS_MACE]     = ITEM_WHIP,
     [ITEM_STAFF_OF_DEAD]        = ITEM_AHRIM_STAFF,
@@ -680,7 +641,6 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_VOIDWAKER]            = ITEM_DRAGON_DAGGER,
     [ITEM_STATIUS_WARHAMMER]    = ITEM_DRAGON_DAGGER,
     [ITEM_MORRIGANS_JAVELIN]    = ITEM_RUNE_CROSSBOW,
-    // Armor and accessories
     [ITEM_ANCESTRAL_HAT]        = ITEM_NONE,
     [ITEM_ANCESTRAL_TOP]        = ITEM_MYSTIC_TOP,
     [ITEM_ANCESTRAL_BOTTOM]     = ITEM_MYSTIC_BOTTOM,
@@ -697,7 +657,6 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_LIGHTBEARER]          = ITEM_NONE,
     [ITEM_MAGES_BOOK]           = ITEM_NONE,
     [ITEM_DRAGON_ARROWS]        = ITEM_NONE,
-    // Barrows armor
     [ITEM_TORAGS_PLATELEGS]     = ITEM_RUNE_PLATELEGS,
     [ITEM_DHAROKS_PLATELEGS]    = ITEM_RUNE_PLATELEGS,
     [ITEM_VERACS_PLATESKIRT]    = ITEM_RUNE_PLATELEGS,
@@ -705,7 +664,7 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_DHAROKS_HELM]         = ITEM_HELM_NEITIZNOT,
     [ITEM_VERACS_HELM]          = ITEM_HELM_NEITIZNOT,
     [ITEM_GUTHANS_HELM]         = ITEM_HELM_NEITIZNOT,
-    [ITEM_OPAL_DRAGON_BOLTS]    = ITEM_NONE,  // conditional, handled in add_loot_item
+    [ITEM_OPAL_DRAGON_BOLTS]    = ITEM_NONE,  /* conditional; see add_loot_item */
 };
 
 /**
@@ -730,62 +689,43 @@ static inline int remove_item_from_inventory(Player* p, int gear_slot, uint8_t i
 static inline int item_to_gear_slot(uint8_t item_idx) {
     return osrs_item_gear_slot(item_idx);
 }
-// LOOT UPGRADE + 28-SLOT INVENTORY MODEL
-
-// Chain upgrades: loot items that also obsolete other loot items.
-// UPGRADE_REPLACES handles basic→loot, these handle loot→loot chains.
-// {new_item, obsolete_item} — when new_item is added, obsolete_item is dropped.
+/* Loot->loot obsolescence chains (UPGRADE_REPLACES covers basic->loot). Adding
+ * new_item drops obsolete_item: { new_item, obsolete_item }. */
 static const uint8_t CHAIN_REPLACES[][2] = {
-    // VLS is a better primary melee weapon than whip
     { ITEM_VESTAS, ITEM_WHIP },
-    // Zuriel's is strictly better than SotD and volatile
     { ITEM_ZURIELS_STAFF, ITEM_STAFF_OF_DEAD },
     { ITEM_ZURIELS_STAFF, ITEM_VOLATILE_STAFF },
-    // Kodai is the best mage weapon — replaces all lesser mage weapons
     { ITEM_KODAI_WAND, ITEM_STAFF_OF_DEAD },
     { ITEM_KODAI_WAND, ITEM_VOLATILE_STAFF },
     { ITEM_KODAI_WAND, ITEM_ZURIELS_STAFF },
-    // Volatile replaces SotD (both are magic weapons, volatile has spec)
     { ITEM_VOLATILE_STAFF, ITEM_STAFF_OF_DEAD },
-    // ZCB is strictly better than ACB
     { ITEM_ZARYTE_CROSSBOW, ITEM_ARMADYL_CROSSBOW },
-    // Morr javelin is the best ranged weapon — replaces all lesser ranged weapons
     { ITEM_MORRIGANS_JAVELIN, ITEM_ZARYTE_CROSSBOW },
     { ITEM_MORRIGANS_JAVELIN, ITEM_ARMADYL_CROSSBOW },
     { ITEM_MORRIGANS_JAVELIN, ITEM_HEAVY_BALLISTA },
     { ITEM_MORRIGANS_JAVELIN, ITEM_DARK_BOW },
-    // ZCB replaces ballista and dark bow
     { ITEM_ZARYTE_CROSSBOW, ITEM_HEAVY_BALLISTA },
     { ITEM_ZARYTE_CROSSBOW, ITEM_DARK_BOW },
-    // ACB replaces ballista and dark bow
     { ITEM_ARMADYL_CROSSBOW, ITEM_HEAVY_BALLISTA },
     { ITEM_ARMADYL_CROSSBOW, ITEM_DARK_BOW },
-    // Ancestral is strictly better than Ahrim's
     { ITEM_ANCESTRAL_TOP, ITEM_AHRIMS_ROBETOP },
     { ITEM_ANCESTRAL_BOTTOM, ITEM_AHRIMS_ROBESKIRT },
-    // Bandos tassets replaces all barrows legs
     { ITEM_BANDOS_TASSETS, ITEM_TORAGS_PLATELEGS },
     { ITEM_BANDOS_TASSETS, ITEM_DHAROKS_PLATELEGS },
     { ITEM_BANDOS_TASSETS, ITEM_VERACS_PLATESKIRT },
-    // Rapier and inq mace are equivalent; rapier preferred, replaces inq mace
     { ITEM_GHRAZI_RAPIER, ITEM_INQUISITORS_MACE },
-    // Rapier/inq mace/elder maul all replace whip as primary
     { ITEM_GHRAZI_RAPIER, ITEM_WHIP },
     { ITEM_INQUISITORS_MACE, ITEM_WHIP },
     { ITEM_ELDER_MAUL, ITEM_WHIP },
-    // Rapier/inq mace replace elder maul (4-tick > 6-tick for primary DPS)
     { ITEM_GHRAZI_RAPIER, ITEM_ELDER_MAUL },
     { ITEM_INQUISITORS_MACE, ITEM_ELDER_MAUL },
-    // VLS replaces all lesser melee primaries
     { ITEM_VESTAS, ITEM_ELDER_MAUL },
     { ITEM_VESTAS, ITEM_GHRAZI_RAPIER },
     { ITEM_VESTAS, ITEM_INQUISITORS_MACE },
-    // Voidwaker replaces all lesser melee weapons (best spec + solid primary)
     { ITEM_VOIDWAKER, ITEM_WHIP },
     { ITEM_VOIDWAKER, ITEM_GHRAZI_RAPIER },
     { ITEM_VOIDWAKER, ITEM_INQUISITORS_MACE },
     { ITEM_VOIDWAKER, ITEM_ELDER_MAUL },
-    // SWH replaces everything below it: primary + spec in one weapon
     { ITEM_STATIUS_WARHAMMER, ITEM_WHIP },
     { ITEM_STATIUS_WARHAMMER, ITEM_GHRAZI_RAPIER },
     { ITEM_STATIUS_WARHAMMER, ITEM_INQUISITORS_MACE },
@@ -793,16 +733,12 @@ static const uint8_t CHAIN_REPLACES[][2] = {
     { ITEM_STATIUS_WARHAMMER, ITEM_AGS },
     { ITEM_STATIUS_WARHAMMER, ITEM_ANCIENT_GS },
     { ITEM_STATIUS_WARHAMMER, ITEM_DRAGON_CLAWS },
-    // Godswords/claws replace whip (strong enough as primary despite 6-tick)
     { ITEM_AGS, ITEM_WHIP },
     { ITEM_ANCIENT_GS, ITEM_WHIP },
-    // Ancient GS > AGS > claws for mid-tier melee spec
     { ITEM_ANCIENT_GS, ITEM_AGS },
     { ITEM_ANCIENT_GS, ITEM_DRAGON_CLAWS },
     { ITEM_AGS, ITEM_DRAGON_CLAWS },
-    // Lightbearer replaces seers ring (spec regen universally useful)
     { ITEM_LIGHTBEARER, ITEM_SEERS_RING_I },
-    // Barrows helms: only keep the best one (torag > guthan > verac > dharok)
     { ITEM_TORAGS_HELM, ITEM_GUTHANS_HELM },
     { ITEM_TORAGS_HELM, ITEM_VERACS_HELM },
     { ITEM_TORAGS_HELM, ITEM_DHAROKS_HELM },
@@ -823,18 +759,17 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
     int gear_slot = item_to_gear_slot(item_idx);
     if (gear_slot < 0) return;
 
-    // Reverse chain check: if a strictly better item already exists, skip this one
+    /* skip if a strictly better item is already owned (reverse chain lookup) */
     for (int i = 0; i < (int)CHAIN_REPLACES_LEN; i++) {
         if (CHAIN_REPLACES[i][1] == item_idx) {
             uint8_t better = CHAIN_REPLACES[i][0];
             int better_slot = item_to_gear_slot(better);
             if (better_slot >= 0 && player_has_item_in_slot(p, better_slot, better)) {
-                return;  // better item already owned, skip adding inferior one
+                return;
             }
         }
     }
 
-    // Primary replacement: new loot replaces a basic item
     uint8_t replaces = UPGRADE_REPLACES[item_idx];
     if (replaces != ITEM_NONE) {
         int replace_slot = item_to_gear_slot(replaces);
@@ -843,7 +778,6 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
         }
     }
 
-    // Chain replacement: new loot also obsoletes lesser loot items
     for (int i = 0; i < (int)CHAIN_REPLACES_LEN; i++) {
         if (CHAIN_REPLACES[i][0] == item_idx) {
             uint8_t obsolete = CHAIN_REPLACES[i][1];
@@ -856,7 +790,6 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
 
     add_item_to_inventory(p, gear_slot, item_idx);
 
-    // Crossbow bolt trigger: ACB/ZCB + opal bolts in inventory → swap bolts
     if ((item_idx == ITEM_ARMADYL_CROSSBOW || item_idx == ITEM_ZARYTE_CROSSBOW)
         && player_has_item_in_slot(p, GEAR_SLOT_AMMO, ITEM_OPAL_DRAGON_BOLTS)) {
         remove_item_from_inventory(p, GEAR_SLOT_AMMO, ITEM_DIAMOND_BOLTS_E);
@@ -864,9 +797,9 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
     }
 
 }
-// DYNAMIC FOOD COUNT (28-slot inventory model)
 
-#define FIXED_INVENTORY_SLOTS 11  // 4 brews + 2 restores + 1 combat + 1 ranged + 2 karambwan + 1 rune pouch
+/* 28-slot inventory: 11 fixed = 4 brews + 2 restores + 1 combat + 1 ranged + 2 karambwan + 1 rune pouch */
+#define FIXED_INVENTORY_SLOTS 11
 
 /** Count switch items: items beyond the first in each gear slot. */
 static inline int count_switch_items(Player* p) {
@@ -910,40 +843,26 @@ static const uint8_t BLOODIER_LOOT[] = {
 #define BLOODIER_LOOT_LEN (sizeof(BLOODIER_LOOT) / sizeof(BLOODIER_LOOT[0]))
 
 /**
- * Initialize player gear for a given tier (randomized loot).
- *
- * Each chest = 2 rolls from a single combined loot pool.
- * Tier 0: basic LMS (17 items), no chests
- * Tier 1: basic + 1 own chest (2 rolls)
- * Tier 2: basic + 2 own chests + 1 killed player's chest (6 rolls)
- * Tier 3: basic + 2 own chests + 2 killed players' chests (8 rolls) + 1 bloodier key item
- *
- * Duplicates are handled by add_loot_item() (dedup + chain replacement).
- *
- * @param p    Player to initialize
- * @param tier Gear tier (0-3)
- * @param rng  RNG state pointer
+ * Initialize a player's gear for tier 0-3 by rolling loot (each chest = 2 rolls,
+ * add_loot_item dedups + chain-replaces). Roll counts pin the RNG call order:
+ *   tier 0: none   tier 1: 2   tier 2: 6   tier 3: 8 + 1 bloodier key item.
  */
 static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rng) {
-    // Start with basic LMS loadout
     init_slot_equipment_lms(p);
 
     if (tier <= 0) return;
 
-    // Helper: add a random item from a loot table with upgrade logic
     #define ADD_RANDOM_LOOT(table, len) do { \
         uint32_t _r = xorshift32(rng); \
         uint8_t _item = (table)[_r % (len)]; \
         add_loot_item(p, _item); \
     } while(0)
 
-    // Tier 1: 1 own chest = 2 rolls
     if (tier >= 1) {
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
     }
 
-    // Tier 2: 1 more own chest (2 rolls) + 1 killed player's chest (2 rolls)
     if (tier >= 2) {
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
@@ -951,7 +870,6 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
     }
 
-    // Tier 3: 1 more killed player's chest (2 rolls) + 1 bloodier key item
     if (tier >= 3) {
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
         ADD_RANDOM_LOOT(CHEST_LOOT, CHEST_LOOT_LEN);
@@ -960,8 +878,7 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
 
     #undef ADD_RANDOM_LOOT
 
-    // Tier 3 only: drop defender if no 1-handed melee weapon exists.
-    // At lower tiers future loot might add a 1H melee (VLS, SWH, voidwaker).
+    /* tier 3 only: drop the defender if no 1H melee weapon rolled */
     if (tier >= 3 && player_has_item_in_slot(p, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER)) {
         int has_1h_melee = 0;
         for (int i = 0; i < p->num_items_in_slot[GEAR_SLOT_WEAPON]; i++) {
@@ -976,7 +893,6 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
         }
     }
 
-    // Re-resolve starting equipment in melee loadout
     uint8_t resolved[NUM_DYNAMIC_GEAR_SLOTS];
     resolve_loadout(p, LOADOUT_MELEE, resolved);
     for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {

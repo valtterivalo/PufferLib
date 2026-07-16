@@ -19,9 +19,8 @@
 #include "osrs_gfx_ids.h"
 #include <math.h>
 
-/* Sized to hold a full Sol Heredit AoE's worth of one-shot impact dust: a shield
-   slam marks ~160 hazard tiles in the boss arena, each spawning a dust puff on the
-   impact tick. PvP/inferno only ever use a handful at once. */
+/* Sized for a full Sol Heredit AoE of one-shot impact dust (~160 hazard tiles per
+   shield slam, one puff each); PvP/inferno use only a handful. */
 #define MAX_ACTIVE_EFFECTS 384
 
 static const OsrsSpotAnimDef* spotanim_lookup(
@@ -95,9 +94,8 @@ typedef struct {
     int stop_tick;
     int started;               /* has calculateIncrements been called? */
 
-    /* animation state: one cursor owning the resolved sequence + frame position.
-       Resolved model-aware in the render layer (render_anim_playback_resolve);
-       advance and draw both read it, so they cannot pick different lookups. */
+    /* one cursor owning the resolved sequence + frame position; advance and draw
+       both read it (resolved model-aware in the render layer) so they can't diverge. */
     AnimPlayback anim_playback;
     AnimModelState* anim_state;  /* per-effect vertex transform state (heap) */
 
@@ -332,10 +330,9 @@ static void effect_client_tick(
             e->tilt_angle &= 0x7FF;
         }
 
-        /* animation frame advance lives in the render layer now
-           (render_anim_playback_resolve + anim_playback_advance), which resolves
-           the sequence model-aware across all caches and skips empty stubs. This
-           function owns only position + lifetime. */
+        /* animation frame advance lives in the render layer
+           (render_anim_playback_resolve + anim_playback_advance); this function
+           owns only position + lifetime. */
     }
 }
 

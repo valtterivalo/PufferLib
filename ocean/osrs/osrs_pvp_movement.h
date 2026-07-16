@@ -1,12 +1,7 @@
 /**
  * @file osrs_pvp_movement.h
- * @brief Movement and tile selection for OSRS PvP simulation
- *
- * Handles player movement including:
- * - Tile selection (adjacent, diagonal, farcast positions)
- * - Pathfinding via step_toward_destination
- * - Freeze mechanics integration
- * - Wilderness boundary checking
+ * @brief Tile selection, collision-aware stepping, and freeze-aware movement for
+ * OSRS PvP, routed through the shared encounter SDK.
  */
 
 #ifndef OSRS_PVP_MOVEMENT_H
@@ -18,20 +13,9 @@
 #include "osrs_encounter_player.h"
 #include "osrs_pvp_gear.h"
 
-// is_in_wilderness and tile_hash are defined in osrs_types.h
-
 /**
- * Select closest tile adjacent (cardinal) to target.
- *
- * Finds the north/east/south/west tile closest to the player.
- * Tie-breaking: distance to agent > distance to target > tile hash.
- *
- * @param p       Player seeking adjacent position
- * @param target_x Target's x coordinate
- * @param target_y Target's y coordinate
- * @param out_x   Output: selected tile x
- * @param out_y   Output: selected tile y
- * @return 1 if valid tile found, 0 if all candidates out of bounds
+ * Closest cardinal-adjacent tile to target. Tie-break: distance to agent, then
+ * distance to target, then tile hash. Returns 0 if all candidates out of bounds.
  */
 static int select_closest_adjacent_tile(Player* p, int target_x, int target_y, int* out_x, int* out_y, const CollisionMap* cmap) {
     int candidates[4][2] = {
@@ -83,17 +67,9 @@ static int select_closest_adjacent_tile(Player* p, int target_x, int target_y, i
 }
 
 /**
- * Select closest tile diagonal to target.
- *
- * Finds the NE/SE/SW/NW tile closest to the player.
- * Useful for avoiding melee while maintaining attack range.
- *
- * @param p       Player seeking diagonal position
- * @param target_x Target's x coordinate
- * @param target_y Target's y coordinate
- * @param out_x   Output: selected tile x
- * @param out_y   Output: selected tile y
- * @return 1 if valid tile found, 0 if all candidates out of bounds
+ * Closest diagonal (NE/SE/SW/NW) tile to target, for holding attack range out of
+ * melee. Tie-break: distance to agent, then distance to target, then tile hash.
+ * Returns 0 if all candidates out of bounds.
  */
 static int select_closest_diagonal_tile(Player* p, int target_x, int target_y, int* out_x, int* out_y, const CollisionMap* cmap) {
     int candidates[4][2] = {
@@ -145,35 +121,22 @@ static int select_closest_diagonal_tile(Player* p, int target_x, int target_y, i
 }
 
 /**
- * Select closest tile at specified distance for farcasting.
- *
- * Searches ring of tiles at exact chebyshev distance from target.
- * Used for ranged/magic attacks from safe distance.
- *
- * @param p        Player seeking farcast position
- * @param target_x Target's x coordinate
- * @param target_y Target's y coordinate
- * @param distance Desired chebyshev distance from target
- * @param out_x    Output: selected tile x
- * @param out_y    Output: selected tile y
- * @return 1 if valid tile found, 0 otherwise
+ * Closest walkable tile at exact chebyshev `distance` from target (ranged/magic
+ * farcast). O(1): clamp the player->target delta to the chebyshev ball, then
+ * project onto the ring. Returns 0 if no valid tile on the ring.
  */
 static int select_farcast_tile(Player* p, int target_x, int target_y, int distance, int* out_x, int* out_y, const CollisionMap* cmap) {
-    /* O(1) closest point on chebyshev ring of radius `distance` centered at target.
-     * Clamp player->target delta to [-d, d], then push one axis to ±d if needed. */
     int raw_dx = p->x - target_x;
     int raw_dy = p->y - target_y;
     int d = distance;
 
-    /* clamp to chebyshev ball */
     int dx = raw_dx < -d ? -d : (raw_dx > d ? d : raw_dx);
     int dy = raw_dy < -d ? -d : (raw_dy > d ? d : raw_dy);
 
-    /* ensure we're on the ring (max(|dx|,|dy|) == d) */
     int adx = abs_int(dx);
     int ady = abs_int(dy);
     if (adx < d && ady < d) {
-        /* push the axis with larger magnitude to ±d; if tied, push x */
+        /* project onto the ring: push the larger axis to ±d (x on tie) */
         if (adx >= ady) {
             dx = (raw_dx >= 0) ? d : -d;
         } else {
@@ -190,7 +153,7 @@ static int select_farcast_tile(Player* p, int target_x, int target_y, int distan
         return 1;
     }
 
-    /* wilderness boundary edge case: clamp to bounds and retry on ring */
+    /* boundary: clamp into wilderness and retry on the ring */
     cx = cx < WILD_MIN_X ? WILD_MIN_X : (cx > WILD_MAX_X ? WILD_MAX_X : cx);
     cy = cy < WILD_MIN_Y ? WILD_MIN_Y : (cy > WILD_MAX_Y ? WILD_MAX_Y : cy);
     if (chebyshev_distance(cx, cy, target_x, target_y) == distance
@@ -200,22 +163,13 @@ static int select_farcast_tile(Player* p, int target_x, int target_y, int distan
         return 1;
     }
 
-    /* very rare edge: target near corner of wilderness, no valid tile on ring */
     return 0;
 }
 
 /**
- * Move player one tile toward their destination (collision-aware).
- *
- * Tries diagonal first when both dx and dy are non-zero. If the diagonal
- * step is blocked by collision, falls back to cardinal x then cardinal y.
- * If all directions are blocked, the player doesn't move.
- *
- * When cmap is NULL, all tiles are traversable (flat arena behavior).
- *
- * @param p    Player to move
- * @param cmap Collision map (may be NULL)
- * @return 1 if moved, 0 if already at destination or blocked
+ * Step one tile toward dest, collision-aware: diagonal first, then cardinal x,
+ * then cardinal y; no move if all blocked. NULL cmap = all tiles walkable.
+ * Returns 1 if moved.
  */
 static int step_toward_destination(Player* p, const CollisionMap* cmap) {
     int dx = p->dest_x - p->x;
@@ -227,48 +181,35 @@ static int step_toward_destination(Player* p, const CollisionMap* cmap) {
     int step_x = (dx > 0) ? 1 : (dx < 0 ? -1 : 0);
     int step_y = (dy > 0) ? 1 : (dy < 0 ? -1 : 0);
 
-    /* diagonal movement: try diagonal first, then cardinal fallbacks */
     if (step_x != 0 && step_y != 0) {
         if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, step_y)) {
             p->x += step_x;
             p->y += step_y;
             return 1;
         }
-        /* diagonal blocked — try cardinal x */
         if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, 0)) {
             p->x += step_x;
             return 1;
         }
-        /* try cardinal y */
         if (collision_traversable_step(cmap, 0, p->x, p->y, 0, step_y)) {
             p->y += step_y;
             return 1;
         }
-        /* all blocked */
         return 0;
     }
 
-    /* cardinal movement */
     if (collision_traversable_step(cmap, 0, p->x, p->y, step_x, step_y)) {
         p->x += step_x;
         p->y += step_y;
         return 1;
     }
 
-    /* blocked */
     return 0;
 }
 
 /**
- * Set player destination and initiate movement.
- *
- * Running moves 2 tiles per tick (OSRS default for PvP).
- * Takes first step, then second step if not at destination.
- *
- * @param p      Player
- * @param dest_x Destination x coordinate
- * @param dest_y Destination y coordinate
- * @param cmap   Collision map (may be NULL)
+ * Set destination and take up to two steps this tick (run = 2 tiles/tick in PvP).
+ * is_moving reflects whether the player is still short of dest.
  */
 static void set_destination(Player* p, int dest_x, int dest_y, const CollisionMap* cmap) {
     p->dest_x = dest_x;
@@ -277,16 +218,13 @@ static void set_destination(Player* p, int dest_x, int dest_y, const CollisionMa
         p->is_moving = 0;
         return;
     }
-    // First step (walk)
     if (!step_toward_destination(p, cmap)) {
         p->is_moving = 0;
         return;
     }
-    // Second step (run) - only if not at destination yet
     if (p->x != dest_x || p->y != dest_y) {
         step_toward_destination(p, cmap);
     }
-    // Still moving if not at destination
     p->is_moving = (p->x != dest_x || p->y != dest_y) ? 1 : 0;
 }
 
@@ -296,12 +234,7 @@ static int pvp_tile_walkable(void* ctx, int x, int y) {
 }
 
 /**
- * Simple chase movement - move toward target's position.
- *
- * Blocked by freeze. Used for basic follow behavior.
- *
- * @param p      Player to move
- * @param target Target to chase
+ * Chase toward target's tile (basic follow). No-op while frozen.
  */
 static void move_toward_target(
     Player* p,
@@ -334,77 +267,51 @@ static void move_toward_target(
 }
 
 /**
- * Step out from same tile as target to an adjacent tile.
- *
- * When on the same tile as target (distance=0), you cannot attack.
- * This function steps to an adjacent tile so you can attack next tick.
- * Tries directions in order: West, East, South, North (matches Java clippedStep).
- *
- * Blocked by freeze - if frozen on same tile, you're stuck.
- *
- * @param p      Player to move
- * @param target Target (used for position reference)
+ * Step off the target's tile (distance 0 can't attack) to an adjacent tile,
+ * trying West, East, South, North (Java clippedStep order). No-op while frozen.
  */
 static void step_out_from_same_tile(Player* p, Player* target, const CollisionMap* cmap) {
     if (p->frozen_ticks > 0) {
         return;
     }
 
-    // Try West (x-1, y)
     int dest_x = target->x - 1;
     int dest_y = target->y;
     if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
         set_destination(p, dest_x, dest_y, cmap);
         return;
     }
-    // Try East (x+1, y)
     dest_x = target->x + 1;
     if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
         set_destination(p, dest_x, dest_y, cmap);
         return;
     }
-    // Try South (x, y-1)
     dest_x = target->x;
     dest_y = target->y - 1;
     if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
         set_destination(p, dest_x, dest_y, cmap);
         return;
     }
-    // Try North (x, y+1)
     dest_y = target->y + 1;
     if (is_in_wilderness(dest_x, dest_y) && collision_tile_walkable(cmap, 0, dest_x, dest_y)) {
         set_destination(p, dest_x, dest_y, cmap);
         return;
     }
-    // All directions blocked
 }
 
 /**
- * Resolve same-tile stacking after movement.
- *
- * OSRS prevents two unfrozen players from occupying the same tile.
- * When both end up on the same tile, the second mover gets bumped
- * to the nearest valid tile using OSRS BFS priority:
- * W, E, S, N, SW, SE, NW, NE.
- *
- * Exception: walking under a frozen opponent is intentional OSRS
- * strategy (frozen player can't attack you on their tile). Only
- * resolve stacking when the blocker is NOT frozen.
- *
- * @param mover     Player to move off the shared tile
- * @param blocker   The other player (checked for freeze status)
+ * Bump `mover` off a tile shared with `blocker` using OSRS BFS priority
+ * W,E,S,N,SW,SE,NW,NE. Skipped when either is frozen: walking under a frozen
+ * opponent (who can't attack from their tile) is intentional.
  */
 static void resolve_same_tile(Player* mover, Player* blocker, const CollisionMap* cmap) {
-    // Walking under a frozen opponent is valid OSRS behavior — skip resolution
     if (blocker->frozen_ticks > 0) {
         return;
     }
-    // Frozen mover can't be bumped
     if (mover->frozen_ticks > 0) {
         return;
     }
 
-    // OSRS BFS priority: W, E, S, N, SW, SE, NW, NE
     static const int OFFSETS[8][2] = {
         {-1, 0}, {1, 0}, {0, -1}, {0, 1},
         {-1, -1}, {1, -1}, {-1, 1}, {1, 1}
@@ -426,28 +333,17 @@ static void resolve_same_tile(Player* mover, Player* blocker, const CollisionMap
     }
 }
 
-/* ---------------------------------------------------------------------------
- * Shared encounter SDK glue: lookup callback, arena builder, and the per-tick
- * player step that routes PvP movement through osrs_encounter_player_step.
- *
- * This is the canonical click-anywhere path: HEAD_MOVE picks a 25-action
- * delta target (or a far human-clicked tile sits in walk_dest_x/y), the BFS
- * pathfinder walks one or two steps per tick toward that target, and the
- * shared SDK handles auto-chase when an attack interaction is active.
- * ------------------------------------------------------------------------- */
+/*
+ * Shared encounter SDK glue. Canonical click-anywhere path: HEAD_MOVE picks a
+ * 25-action delta target (or a far human click sits in walk_dest_x/y), the BFS
+ * pathfinder walks one or two steps per tick toward it, and the SDK auto-chases
+ * when an attack interaction is active.
+ */
 
 /**
- * Lookup callback for osrs_encounter_player_step.
- *
- * Resolves the opposing-player slot index to its tile, footprint, and weapon
- * attack range. Both PvP players are 1x1 footprints. Attack range comes from
- * the equipped weapon via get_attack_range — melee returns 1, ranged/magic
- * return weapon-specific values, and the rare halberd case bumps to 2.
- *
- * @param ctx          OsrsEnv* — passes opponent players directly.
- * @param target_slot  0 or 1 (the opposing player index).
- * @param out          Populated on success.
- * @return 1 if target found, 0 if slot invalid.
+ * Target lookup for osrs_encounter_player_step: resolves the opposing slot to its
+ * tile, 1x1 footprint, and weapon attack range (melee/none = 1, else the equipped
+ * weapon's range). ctx is OsrsEnv*; target_slot is 0 or 1. Returns 0 if invalid.
  */
 static int pvp_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget* out) {
     if (target_slot < 0 || target_slot >= NUM_AGENTS) return 0;
@@ -492,20 +388,17 @@ static inline OsrsEncounterArena pvp_build_arena(OsrsEnv* env) {
 }
 
 /**
- * Apply one tick of player movement via the shared encounter SDK.
- *
- * Reads walk_dest_x/y from the PvP runtime; if -1 the player is idle and
- * the SDK may still auto-chase an active attack interaction (chase ranges
- * to the lookup target). EXPLICIT_FIRST policy means an in-progress walk
- * always wins over a chase. Returns the SDK result for the caller to log.
+ * One tick of player movement via the shared SDK. walk_dest_x/y = -1 means idle
+ * (the SDK may still auto-chase an active attack interaction). EXPLICIT_FIRST: an
+ * in-progress walk wins over a chase. Returns the SDK result for logging.
  */
 static inline OsrsPlayerStepResult pvp_step_player_movement(OsrsEnv* env, int agent_idx) {
     OsrsPlayerStepResult result = {.target_slot = -1};
     int* dest_x = &env->pvp_runtime.walk_dest_x[agent_idx];
     int* dest_y = &env->pvp_runtime.walk_dest_y[agent_idx];
 
-    /* skip when no explicit walk destination — execute_attack_movement still
-       handles attack-driven auto-chase via the legacy chase code path. */
+    /* no explicit walk dest: attack-driven auto-chase is handled by the legacy
+       execute_attack_movement path. */
     if (*dest_x < 0 || *dest_y < 0) return result;
 
     Player* p = &env->players[agent_idx];
@@ -531,9 +424,9 @@ static inline OsrsPlayerStepResult pvp_step_player_movement(OsrsEnv* env, int ag
 }
 
 /**
- * Convert a HEAD_MOVE action index (1..MOVE_DIM-1) into a wilderness-walkable
- * destination tile and store it in walk_dest. Action 0 (idle) clears walk_dest
- * unless the existing walk_dest is still valid (multi-tick BFS in flight).
+ * Convert a HEAD_MOVE action (1..MOVE_DIM-1) into a walkable destination tile in
+ * walk_dest. Action 0 (idle) or out-of-range leaves walk_dest untouched, so a
+ * multi-tick BFS already in flight continues.
  */
 static inline void pvp_set_walk_dest_from_head_move(OsrsEnv* env, int agent_idx, int move_action) {
     Player* p = &env->players[agent_idx];
