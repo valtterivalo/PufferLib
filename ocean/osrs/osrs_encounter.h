@@ -976,20 +976,7 @@ static inline int encounter_entity_footprint_distance(
     int ax, int ay, int a_size,
     int bx, int by, int b_size
 ) {
-    int ax1 = ax + a_size - 1;
-    int ay1 = ay + a_size - 1;
-    int bx1 = bx + b_size - 1;
-    int by1 = by + b_size - 1;
-
-    int dx = 0;
-    if (ax1 < bx) dx = bx - ax1;
-    else if (bx1 < ax) dx = ax - bx1;
-
-    int dy = 0;
-    if (ay1 < by) dy = by - ay1;
-    else if (by1 < ay) dy = ay - by1;
-
-    return dx > dy ? dx : dy;
+    return encounter_rect_distance(ax, ay, a_size, bx, by, b_size);
 }
 
 /* reach-1 melee adjacency: footprints abut on exactly one axis and overlap on the
@@ -2880,13 +2867,6 @@ static inline void encounter_translate_offensive_prayer(
 ) {
     if (hi->pending_offensive_prayer < 0 || head_offensive < 0) return;
     actions[head_offensive] = hi->pending_offensive_prayer;
-}
-
-/** translate NPC target: 0=none, 1+=NPC index.
-    writes to actions[head_target]. head_target < 0 = skip. */
-static inline void encounter_translate_target(HumanInput* hi, int* actions, int head_target) {
-    if (hi->pending_target_idx < 0 || head_target < 0) return;
-    actions[head_target] = hi->pending_target_idx + 1;
 }
 
 /**

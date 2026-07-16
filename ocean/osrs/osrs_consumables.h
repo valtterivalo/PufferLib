@@ -26,7 +26,6 @@ typedef enum {
     FOOD_KARAMBWAN,
     FOOD_MANTA_RAY,
     FOOD_ANGLERFISH,
-    FOOD_SARADOMIN_BREW,
     NUM_FOOD_TYPES
 } FoodType;
 
@@ -37,7 +36,6 @@ typedef enum {
     POTION_ANTIVENOM_PLUS,
     POTION_RANGING,
     POTION_SUPER_COMBAT,
-    POTION_IMBUED_HEART,
     POTION_SATURATED_HEART,
     POTION_SANFEW,
     NUM_POTION_TYPES
@@ -77,14 +75,6 @@ static inline int osrs_food_heal_amount(FoodType type) {
         case FOOD_ANGLERFISH:  return 22;
         default: return 0;
     }
-}
-
-/* timer checks */
-static inline int osrs_can_eat(int food_timer) { return food_timer <= 0; }
-static inline int osrs_can_drink(int potion_timer) { return potion_timer <= 0; }
-
-static inline int osrs_imbued_heart_magic_boost(int base_magic) {
-    return 1 + base_magic / 10;
 }
 
 static inline int osrs_saturated_heart_magic_boost(int base_magic) {
@@ -183,10 +173,6 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
         case POTION_SUPER_COMBAT:
             r.consumed = 1;
             r.level_boost = osrs_super_combat_boost_amount(prayer_level);
-            break;
-        case POTION_IMBUED_HEART:
-            r.consumed = 1;
-            r.level_boost = osrs_imbued_heart_magic_boost(prayer_level);
             break;
         case POTION_SATURATED_HEART:
             r.consumed = 1;

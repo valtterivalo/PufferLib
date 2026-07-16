@@ -59,8 +59,6 @@
 #define BLOOD_BLITZ_MAX_HIT 25
 #define BLOOD_BARRAGE_MAX_HIT 29
 
-#define ATTACK_TIMER_INACTIVE -1000000
-
 // Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
 #define NUM_GEAR_SLOTS 11
 /* 9 action heads. HEAD_MOVE expresses the OSRS click-anywhere movement as
@@ -146,8 +144,6 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 #define MAXED_COMBAT_POTION_DOSES 4
 #define MAXED_RANGED_POTION_DOSES 4
 
-#define MAXED_MELEE_ATTACK_SPEED_OBS 4
-#define MAXED_RANGED_ATTACK_SPEED_OBS 5
 #define RUN_ENERGY_RECOVER_TICKS 3
 #define OSRS_RUN_ENERGY_UNITS_PER_PERCENT 100
 #define OSRS_RUN_ENERGY_FULL 10000
@@ -700,7 +696,7 @@ typedef struct {
     int bolt_ignores_defense;
 
     // Slot-based mode equipment (per-slot item indices, 255 = empty)
-    // equipped[GEAR_SLOT_*] = item index from ITEMS_BY_SLOT table, or 255 if empty
+    // equipped[GEAR_SLOT_*] = item database index, or 255 if empty
     uint8_t equipped[NUM_GEAR_SLOTS];
 
     // Available items per slot (for action masking and observations)
@@ -798,9 +794,6 @@ typedef struct {
     float brews_remaining_normal_died;
     float restores_remaining_normal_died;
     float prayer_at_death_normal_died;
-    float brews_remaining_snapshot_died;
-    float restores_remaining_snapshot_died;
-    float prayer_at_death_snapshot_died;
     /* Zuk diagnostics */
     float behind_shield_pct;   /* fraction of Zuk ticks behind shield */
     float zuk_hp_remaining;    /* Zuk HP at episode end (0 if killed) */
@@ -808,20 +801,15 @@ typedef struct {
     float hp_restored;         /* HP restored to enemies (healers + mager) this episode */
     float zuk_healer_damage;   /* total damage dealt to Zuk healers this episode */
     float episode_return_normal;
-    float episode_return_snapshot;
     float wins_normal;
-    float wins_snapshot;
     float min_zuk_hp_normal;
-    float min_zuk_hp_snapshot;
     float n_normal;
-    float n_snapshot;
     /* normal-only diagnostic accumulators for reward-independent screening.
        phase_reached_normal_sum: per-episode max phase bucket (0..4). Buckets
        at min Zuk HP <= {900, 600, 300, 0=win} thresholds. The mean across
        normal episodes is reported as phase_reached_normal in my_log. */
     float episode_length_normal_died;
     float n_normal_died;
-    float n_snapshot_died;
     float phase_reached_normal_sum;
     /* D-audit tail counters: count of normal-start episodes that crossed
        given Zuk HP thresholds, and the running minimum across all normal
@@ -892,59 +880,12 @@ typedef struct {
     float count_died_after_all_healers_dead_behind_shield_normal;
     float brews_remaining_after_all_healers_dead_death_normal_sum;
     float restores_remaining_after_all_healers_dead_death_normal_sum;
-    float count_min_hp_le_300_snapshot;
-    float count_min_hp_le_240_snapshot;
-    float count_min_hp_le_150_snapshot;
-    float ticks_after_300_snapshot_sum;
-    float ticks_after_240_snapshot_sum;
-    float ticks_after_150_snapshot_sum;
-    float damage_after_300_snapshot_sum;
-    float damage_after_240_snapshot_sum;
-    float damage_after_150_snapshot_sum;
-    float count_healer_spawned_snapshot;
-    float shield_tags_snapshot_sum;
-    float count_shield_tags_ge_1_snapshot;
-    float count_zuk_healers_tagged_ge_1_snapshot;
-    float count_zuk_healers_tagged_ge_2_snapshot;
-    float count_zuk_healers_tagged_ge_4_snapshot;
-    float count_zuk_healers_killed_ge_1_snapshot;
-    float count_zuk_healers_killed_ge_2_snapshot;
-    float count_zuk_healers_killed_ge_4_snapshot;
-    float count_all_zuk_healers_dead_snapshot;
-    float count_healer_resolved_20_snapshot;
-    float post_healer_survival_ticks_snapshot_sum;
-    float damage_after_all_zuk_healers_dead_snapshot_sum;
-    float count_reengaged_zuk_after_healers_snapshot;
-    float ticks_all_healers_dead_to_first_zuk_hit_snapshot_sum;
-    float zuk_hp_at_all_zuk_healers_dead_snapshot_sum;
-    float offshield_ticks_after_240_snapshot_sum;
-    float offshield_ticks_after_all_zuk_healers_dead_snapshot_sum;
-    float ticks_240_to_first_healer_tag_snapshot_sum;
-    float ticks_240_to_all_healers_tagged_snapshot_sum;
-    float ticks_240_to_all_healers_dead_snapshot_sum;
-    float hp_restored_after_240_snapshot_sum;
-    float zuk_hp_max_after_healer_spawn_snapshot_sum;
-    float spark_damage_after_240_snapshot_sum;
-    float count_died_with_zuk_healer_alive_snapshot;
-    float count_died_after_240_never_tagged_healer_snapshot;
-    float count_died_after_240_some_healers_tagged_snapshot;
-    float count_died_after_240_some_healers_killed_snapshot;
-    float count_died_after_240_all_healers_dead_snapshot;
-    float count_died_with_shield_active_snapshot;
-    float count_died_behind_shield_snapshot;
-    float count_died_after_240_snapshot;
-    float brews_remaining_after_240_death_snapshot_sum;
-    float restores_remaining_after_240_death_snapshot_sum;
-    float prayer_at_death_after_240_snapshot_sum;
-    float count_died_after_240_shield_active_snapshot;
-    float count_died_after_240_behind_shield_snapshot;
     /* per-NPC-type stats (14 types each, for wandb only — not shown on dashboard) */
     float prayer_correct_by_type[14];
     float attacks_by_type[14];
     float dmg_from_type[14];
     float killed_by_type[14];
     float killed_by_type_normal[14];
-    float killed_by_type_snapshot[14];
     float start_wave;   /* config start_wave (for score formula branching) */
     float n;
     float count_zuk_healers_targeted_ge_1_normal;
@@ -978,30 +919,6 @@ typedef struct {
     float target_head_valid_healer_count_normal_sum;
     float target_head_valid_zuk_count_normal_sum;
     float target_head_valid_set_count_normal_sum;
-    float count_zuk_healers_targeted_ge_1_snapshot;
-    float count_zuk_healers_attacked_ge_1_snapshot;
-    float count_zuk_healers_attackable_ge_1_snapshot;
-    float ticks_240_to_first_healer_target_snapshot_sum;
-    float ticks_240_to_first_healer_attack_snapshot_sum;
-    float zuk_healer_target_cannot_attack_ticks_snapshot_sum;
-    float zuk_healer_target_cooldown_ticks_snapshot_sum;
-    float zuk_healer_target_out_of_range_ticks_snapshot_sum;
-    float zuk_healer_target_attackable_ticks_snapshot_sum;
-    float phase2_first_action_checks_snapshot;
-    float phase2_first_action_exact_matches_snapshot;
-    float phase2_first_action_head_matches_snapshot;
-    float phase2_first_forward_checks_snapshot;
-    float phase2_first_forward_logit_l2_snapshot_sum;
-    float phase2_first_forward_logit_max_abs_snapshot_sum;
-    float phase2_first_forward_value_abs_snapshot_sum;
-    float phase2_first_forward_obs_l2_snapshot_sum;
-    float phase2_first_forward_obs_max_abs_snapshot_sum;
-    float phase2_first_forward_allclose_snapshot;
-    float phase2_first_forward_obs_allclose_snapshot;
-    float phase2_hidden_restore_checks_snapshot;
-    float phase2_hidden_restore_l2_snapshot_sum;
-    float phase2_hidden_restore_max_abs_snapshot_sum;
-    float phase2_hidden_restore_allclose_snapshot;
     /* Multi-bank PFSP self-play accumulators. When env->tag > 0, the env is
        playing against frozen bank (tag - 1); on episode terminal we increment
        hist_n_bank[tag-1] by 1 and hist_score_bank[tag-1] by 1.0 (win) or 0.0
@@ -1389,11 +1306,6 @@ static inline float confidence_scale(int count) {
         return 1.0f;
     }
     return (float)count / 10.0f;
-}
-
-/** Check if lightbearer spec regeneration is active from equipped gear. */
-static inline int is_lightbearer_equipped(Player* p) {
-    return p->equipment_effect_profile.spec_regen_mode == OSRS_SPEC_REGEN_MODE_LIGHTBEARER;
 }
 
 #define RECOIL_MAX_CHARGES 40

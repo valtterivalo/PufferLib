@@ -55,17 +55,6 @@ static inline OsrsTargetEffectContext osrs_target_effect_context_magic(
     };
 }
 
-static inline OsrsTargetEffectContext osrs_target_effect_context_dragon(
-    int magic_level,
-    int magic_attack_bonus
-) {
-    return (OsrsTargetEffectContext){
-        .magic_level = magic_level,
-        .magic_attack_bonus = magic_attack_bonus,
-        .target_class = OSRS_TARGET_CLASS_DRAGON,
-    };
-}
-
 static inline int osrs_target_effect_context_is_dragon(
     OsrsTargetEffectContext target_context
 ) {
