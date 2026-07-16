@@ -131,10 +131,9 @@ typedef struct {
     int ticks_remaining;   /* countdown to landing */
     int attack_style;      /* ATTACK_STYLE_* for prayer check at land time */
     int check_prayer;      /* 1 = prayer has NOT been checked yet (deferred) */
-    int prayer_check_delay;/* ticks until prayer is checked (0 = check immediately on next resolve).
-                              jad uses 3 to model its T+3 DelayedAction — prayer at T+3 decides
-                              whether the hit is blocked, independent of projectile flight time.
-                              ref: InfernoTrainer JalTokJad.ts:49-57. */
+    int prayer_check_delay;/* ticks until prayer is checked (0 = check on next resolve).
+                              jad uses 3: prayer at T+3 decides the block, independent of
+                              projectile flight time. */
     int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
     int source_npc_type;   /* encounter-local NPC type for custom delayed rolls */
     int source_npc_slot;   /* source NPC slot, for attacker-targeted effects (recoil); -1 if none */
@@ -147,16 +146,14 @@ typedef struct {
     int count;
 } EncounterPendingHitQueue;
 
-/* Build an NPC->player pending hit whose protect-prayer outcome AND damage are
-   LOCKED on the THROW tick (OSRS standard): the overhead up now decides the block
-   and the damage is frozen, then the projectile flies and lands `ticks_remaining`
-   ticks later. The resolver never re-checks (check_prayer=0); flicking the overhead
-   after the throw cannot change the outcome. hit_success records a LANDED
-   UNPROTECTED hit (accuracy succeeded AND not prayed) so on-land effects (venom,
-   recoil) fire only on a connecting hit. `*out_prayed` reports the block for the
-   caller's metric attribution. This is the ONE constructor for throw-resolved
-   player-bound hits -- encounters call it instead of hand-building the struct.
-   Jad-style deferred checks are the documented exception and do NOT use this. */
+/* Build an NPC->player pending hit whose protect-prayer outcome AND damage LOCK on
+   the THROW tick (OSRS standard): the overhead up now decides the block and freezes
+   the damage; the projectile then lands `ticks_remaining` ticks later. The resolver
+   never re-checks (check_prayer=0). hit_success records a LANDED UNPROTECTED hit
+   (accuracy passed AND not prayed) so on-land effects (venom, recoil) fire only on a
+   connecting hit. `*out_prayed` reports the block for metric attribution. The ONE
+   constructor for throw-resolved player-bound hits; Jad-style deferred checks (see
+   prayer_check_delay) are the exception. */
 static inline EncounterPendingHit encounter_pending_hit_resolved_at_throw(
     int raw_damage, int ticks_remaining, int attack_style, int overhead_prayer,
     int source_npc_type, int source_npc_slot, int accuracy_hit, int* out_prayed
@@ -264,9 +261,8 @@ static inline int encounter_pending_hit_queue_damage_sum(
 #define ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS 16
 #define ENCOUNTER_MAX_ACTIVE_MODIFIERS 16
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
-/* inferno can legitimately exceed single-digit projectile counts in one tick,
-   especially during Zuk healer spark volleys. size this from real encounter
-   volume so the renderer never silently drops visual events. */
+/* sized for real per-tick volume (Zuk healer spark volleys) so the renderer never
+   silently drops visual events. */
 #define ENCOUNTER_MAX_OVERLAY_PROJECTILES 48
 
 typedef enum {
@@ -749,25 +745,15 @@ static inline void encounter_resolve_attack_target(
         }
     }
 }
-/* canonical prayer action encoding for simulator tick commands              */
-/*                                                                           */
-/* the RL action space uses explicit no_change, off, and set_refresh actions.*/
-/* human UI clicks translate OSRS click-toggle behavior into those commands. */
-/*                                                                           */
-/* each encounter chooses its action-head dim based on which prayers it      */
-/* exposes. PvE uses 5, PvE with Redemption uses 6, PvP uses 7. new          */
-/* encounters                                                               */
-/* wire up by:                                                               */
-/*   1. declaring two action heads with encounter_overhead_dim /             */
-/*      ENCOUNTER_OFFENSIVE_DIM                                              */
-/*   2. calling encounter_apply_overhead_action()  on pretick                */
-/*   3. calling encounter_apply_offensive_action() on pretick                */
-/*   4. calling encounter_drain_all_prayers() on pretick (handles both slots */
-/*      + activation-tick skip + pp=0 auto-clear)                            */
-/* overhead action encoding. dim depends on encounter:
-   - PvE: 5 dim, actions 0-4 only
-   - PvE with Redemption: 6 dim, action 5 maps to Redemption locally
-   - PvP: 7 dim, full range */
+/* Canonical prayer action encoding for tick commands. The RL action space uses
+   explicit no_change / off / set_refresh; human UI clicks translate OSRS toggle
+   behavior into those. Overhead dim per encounter: PvE 5, PvE+Redemption 6, PvP 7.
+   To wire up a new encounter:
+     1. declare overhead + offensive heads (encounter_overhead_dim / ENCOUNTER_OFFENSIVE_DIM)
+     2. call encounter_apply_overhead_action() on pretick
+     3. call encounter_apply_offensive_action() on pretick
+     4. call encounter_drain_all_prayers() on pretick (both slots + activation-tick
+        skip + pp=0 auto-clear) */
 #define ENCOUNTER_OVERHEAD_NO_CHANGE                    0
 #define ENCOUNTER_OVERHEAD_OFF                          1
 #define ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE            2
@@ -1665,7 +1651,6 @@ static inline int encounter_npc_footprint_overlaps_target(
     for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
     sweeps through — not the full destination footprint. for diagonal moves, each
     edge strip extends by 1 tile to cover the corner.
-    ref: InfernoTrainer Mob.ts:229-270 getXMovementTiles/getYMovementTiles.
     is_blocked is called with size=1 for each individual edge tile. */
 static inline int encounter_npc_x_edge_clear(
     int x, int y, int size, int dx, int dy,
@@ -1724,11 +1709,10 @@ static inline int encounter_npc_try_step(
     return 0;
 }
 
-/** OSRS overlap shuffle. When an NPC overlaps the player, osrs-sdk Mob.ts
-    samples one cardinal direction by choosing X/Y with 50% probability, then
-    positive/negative with 50% probability. The sampled move uses normal
-    movement edge clearance. A blocked sample holds the NPC under the player
-    for this tick instead of scanning for another cardinal. */
+/** OSRS overlap shuffle. When an NPC overlaps the player, sample one cardinal
+    direction: X/Y at 50%, then +/- at 50% (RNG draw order is load-bearing). The
+    sampled move uses normal edge clearance; a blocked sample holds the NPC under
+    the player for this tick instead of scanning for another cardinal. */
 static inline int encounter_npc_step_out_from_under(
     int* npc_x, int* npc_y, int npc_size,
     int player_x, int player_y,
@@ -1751,18 +1735,14 @@ static inline int encounter_npc_step_out_from_under(
     return ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED;
 }
 
-/** OSRS-shaped NPC step toward target. tries diagonal first, then x-only,
-    then y-only when x-only fails.
-
-    for size>1 NPCs, validates movement by checking EDGE TILES the NPC sweeps
-    through, not just the destination footprint. for diagonal moves, both the
-    x-edge and y-edge must be clear (each extended by 1 tile for the corner).
-    ref: RuneLite WorldArea.calculateNextTravellingPoint and osrs-sdk
-    Mob.ts:160-270 movementStep + getX/YMovementTiles.
+/** OSRS-shaped NPC step toward target: diagonal first, then x-only, then y-only.
+    For size>1 NPCs, validates by the EDGE TILES the NPC sweeps through (not the
+    full destination footprint); diagonal moves need both x-edge and y-edge clear
+    (each extended 1 tile for the corner).
 
     ENCOUNTER_NPC_STEP_STOP_AT_MELEE matches RuneLite WorldArea.calculateNextTravellingPoint:
-    overlap returns no normal step, cardinal melee contact returns no step,
-    and diagonal contact tries x-only.
+    overlap returns no step, cardinal melee contact returns no step, diagonal
+    contact tries x-only.
 
     returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward_policy(
@@ -1821,10 +1801,8 @@ static inline int encounter_npc_step_toward_policy(
         return 1;
     return 0;
 }
-/* shared damage application helpers                                         */
-/*                                                                           */
-/* ENCOUNTERS: use these instead of manually subtracting HP, clamping,       */
-/* and setting hit splat flags. prevents bugs from forgetting a step.        */
+/* Shared damage-application helpers: use instead of manually subtracting HP,
+   clamping, and setting hit-splat flags. */
 /** apply damage to a player. updates HP (clamped to 0), sets hit splat flags,
     and accumulates damage into a per-tick tracker (for reward calculation).
     damage_tracker can be NULL if not needed.
@@ -1994,22 +1972,11 @@ static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t expli
     if (explicit_seed != 0) rng = explicit_seed;
     return rng;
 }
-/* shared prayer drain                                                       */
-/*                                                                           */
-/* ENCOUNTERS: call encounter_drain_all_prayers() each tick to drain prayer  */
-/* points at the correct OSRS rate. all encounters with overhead prayers     */
-/* MUST use this — do not hand-roll prayer drain logic.                      */
-/*                                                                           */
-/* OSRS drain formula: each prayer has a "drain effect" value.               */
-/* drain rate = 1 point per floor((18 + floor(bonus/4)) / drain_effect)      */
-/* seconds. the drain counter increments each tick; when it reaches the      */
-/* threshold, 1 prayer point is drained and the counter resets.              */
-/*                                                                           */
-/* protection prayers (melee/ranged/magic): drain_effect = 12               */
-/* rigour: drain_effect = 24, augury: drain_effect = 24                     */
-/** drain effect values for overhead prayers.
-    from the OSRS prayer table — higher values drain faster.
-    used by both PvE encounters and PvP. */
+/* Shared prayer drain: call encounter_drain_all_prayers() each tick; encounters
+   with overhead prayers MUST use it rather than hand-rolling drain. OSRS drains
+   1 point per floor((18 + floor(bonus/4)) / drain_effect) seconds; the counter
+   accumulates per tick and resets at the threshold. */
+/** drain effect values for overhead prayers (higher drains faster). */
 static inline int encounter_overhead_drain_effect(OverheadPrayer prayer) {
     switch (prayer) {
         case PRAYER_PROTECT_MELEE:  return 12;
@@ -2021,7 +1988,7 @@ static inline int encounter_overhead_drain_effect(OverheadPrayer prayer) {
     }
 }
 
-/** drain effect values for offensive prayers. ref: osrs wiki prayer table. */
+/** drain effect values for offensive prayers. */
 static inline int encounter_offensive_drain_effect(OffensivePrayer prayer) {
     switch (prayer) {
         case OFFENSIVE_PRAYER_PIETY:       return 24;
@@ -2043,12 +2010,9 @@ static inline int encounter_player_prayer_bonus(const Player* p) {
 /** drain both overhead and offensive prayer for one tick.
     handles activation-tick skip (prayers activated this tick do not drain),
     the shared drain counter, and pp=0 auto-clear (all prayers off when empty).
-    prayer_bonus: player's total prayer equipment bonus (typically 0-30).
-    ref: osrs-sdk PrayerController.ts:44-59, wiki "Prayer flicking" section. */
+    prayer_bonus: player's total prayer equipment bonus (typically 0-30). */
 static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
-    /* active-but-not-just-activated prayers contribute to drain this tick.
-       ref: wiki: "the game does not drain prayer for prayers on the tick
-       they are activated". this is what makes 1-tick flicking free. */
+    /* prayers activated this tick don't drain (makes 1-tick flicking free). */
     int overhead_effect  = p->prayer_just_activated
         ? 0 : encounter_overhead_drain_effect(p->prayer);
     int offensive_effect = p->offensive_prayer_just_activated
@@ -2060,11 +2024,9 @@ static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
     p->prayer_just_activated = 0;
     p->offensive_prayer_just_activated = 0;
 
-    /* pp already at/below 0 entering this tick — force prayers off and skip
-       drain math. covers: external drain (smite), or activation attempted
-       at pp=0 (the pretick apply_*_action helpers don't gate on pp, so the
-       enum may have been set this tick before we arrived). without this,
-       the prayer enum can stay active indefinitely at pp=0. */
+    /* pp <= 0 entering this tick: force prayers off and skip drain. Covers external
+       drain (smite) and activation attempted at pp=0 (apply_*_action doesn't gate on
+       pp). Without this the enum could stay active at pp=0. */
     if (p->current_prayer <= 0) {
         p->current_prayer = 0;
         p->prayer_drain_counter = 0;
@@ -2088,16 +2050,9 @@ static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
         }
     }
 }
-/* shared loadout stat computation                                           */
-/*                                                                           */
-/* ENCOUNTERS: do NOT manually compute attack bonuses, max hits, or          */
-/* effective levels. call encounter_compute_loadout_stats() with a loadout   */
-/* array and it derives everything from ITEM_DATABASE automatically.         */
-/*                                                                           */
-/* available structs/functions:                                               */
-/*   EncounterLoadoutStats — computed combat stats for one gear loadout      */
-/*   OffensivePrayer       — prayer enum (NONE, PIETY, RIGOUR, AUGURY, low-tiers) */
-/*   encounter_compute_loadout_stats() — derive stats from loadout + prayer  */
+/* Shared loadout stat computation: call encounter_compute_loadout_stats() with a
+   loadout array to derive attack bonuses, max hits, and effective levels from
+   ITEM_DATABASE. */
 /** combat stats derived from a gear loadout + prayer + style.
     computed once at reset, read during combat.
     prayer multipliers and style_bonus are stored for dynamic recomputation
@@ -2119,18 +2074,16 @@ typedef struct {
     int spell_base_damage;
 } EncounterLoadoutStats;
 
-/** E12 magic accuracy effective level from dps-calc:
-    floor(magic * prayer) + 2 for Accurate powered staff stance, then +9.
-    Longrange is selectable for powered staffs but contributes no attack level. */
+/** Magic accuracy effective level: floor(magic * prayer) + 2 for Accurate powered
+    staff, then +9. Longrange is selectable but contributes no attack level. */
 static inline int encounter_magic_effective_attack_level(
     int magic_level, float prayer_mult, FightStyle fight_style
 ) {
     return osrs_magic_effective_attack_level(magic_level, prayer_mult, fight_style);
 }
 
-/** Copy a loadout and suppress the shield slot when the weapon is two-handed.
-    E3 requires the shared equipment interpretation to ignore both shield stats
-    and shield effect bits for two-handed weapons. */
+/** Copy a loadout, suppressing the shield slot (stats and effect bits) when the
+    weapon is two-handed. */
 static inline void encounter_effective_loadout_for_equipment(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     uint8_t out[NUM_GEAR_SLOTS]
@@ -2230,10 +2183,9 @@ static inline void encounter_compute_loadout_stats(
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(effective_loadout, &eb);
 
-    /* Tumeken's shadow triples the wearer's gear magic-damage% (the staff itself
-       contributes 0%, so no self-inclusion), capped at +100%. This is the only
-       multiplier — it does not touch spell_base_damage (the Tbow effect-mask
-       pattern, applied here so the recompute path inherits it via strength_bonus). */
+    /* Tumeken's shadow triples gear magic-damage% (the staff itself is 0%), capped
+       at +100%. Applied to strength_bonus (not spell_base_damage) so the recompute
+       path inherits it. */
     const Item* weapon_item = get_item(loadout[GEAR_SLOT_WEAPON]);
     if (style == ATTACK_STYLE_MAGIC && weapon_item &&
             (weapon_item->effect_mask & OSRS_ITEM_EFFECT_TUMEKENS_SHADOW)) {
@@ -2303,12 +2255,9 @@ static inline void encounter_compute_loadout_stats(
         out->max_hit = (int)(0.5 + eff_str_level * (eb.melee_strength + 64) / 640.0);
     }
 }
-/* dynamic max hit recomputation (after brew drain / potion boost)            */
-/*                                                                           */
-/* ENCOUNTERS: call encounter_update_loadout_level() whenever the player's   */
-/* current combat level changes (brew drain, restore, bastion boost).        */
-/* this recomputes eff_level and max_hit using the stored prayer multiplier  */
-/* and strength bonus from the initial encounter_compute_loadout_stats().    */
+/* Dynamic max-hit recomputation: call encounter_update_loadout_level() whenever the
+   player's current combat level changes (brew drain, restore, bastion boost). Reuses
+   the prayer multiplier + strength bonus stored by encounter_compute_loadout_stats(). */
 /** recompute eff_level and max_hit for a loadout using a (possibly drained/boosted)
     current combat level AND current offensive prayer. call whenever either changes:
       - offensive prayer toggle (pretick action)
@@ -2368,15 +2317,10 @@ static inline void encounter_compute_player_equipped_stats(
         out);
     encounter_update_loadout_level(out, p->offensive_prayer, current_att, current_str);
 }
-/* shared potion stat effects (brew drain, restore, bastion boost)           */
-/*                                                                           */
-/* ENCOUNTERS: call these when the player drinks a potion. they modify the   */
-/* player's current combat levels and recompute max hit for affected loadouts.*/
-/* these implement the real OSRS formulas for stat modification.             */
-/*                                                                           */
-/* sara brew:     heals HP, boosts def, drains att/str/ranged/magic          */
-/* super restore: restores all drained stats toward base (caps at base)      */
-/* bastion:       boosts ranged above base, boosts def                       */
+/* Shared potion stat effects: call on drink to modify current combat levels and
+   recompute affected max hits. sara brew heals HP + boosts def + drains
+   att/str/ranged/magic; super restore restores stats toward base; bastion boosts
+   ranged + def. */
 static inline void encounter_init_maxed_player_combat_stats(
     Player* p,
     int prayer_level
@@ -2552,11 +2496,9 @@ static inline int encounter_drift_stat_toward_base_with_floor(
     return 0;
 }
 
-/** E13: tick the OSRS 100-tick natural stat drift cycle once.
-    Every completed cycle moves Attack, Strength, Defence, Ranged, Magic, and
-    Hitpoints one level toward base from either direction. Active divine pins
-    hold their potion stats at the boosted floor until the caller expires the
-    potion timer. */
+/** Tick the OSRS 100-tick natural stat-drift cycle once: each completed cycle moves
+    Attack/Strength/Defence/Ranged/Magic/Hitpoints one level toward base. Active
+    divine pins hold their stats at the boosted floor until the caller expires them. */
 static inline int encounter_tick_stat_drift(
     Player* p,
     int* stat_drift_timer,
@@ -2627,8 +2569,7 @@ static inline void encounter_finish_potion_dose(Player* p, int* doses) {
 /** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
     applies osrs_brew_effect: drains att/str/ranged/magic by floor(current/10)+2
     (CURRENT levels, diminishing on repeat sips), boosts defence by
-    floor(base/5)+2 (BASE level), capped at base + boost. floors drained stats
-    at 0. ref: OSRS wiki Saradomin brew. */
+    floor(base/5)+2 (BASE level), capped at base + boost. floors drained stats at 0. */
 static inline void encounter_brew_drain_stats(Player* p) {
     BrewResult brew = osrs_brew_effect(p->base_hitpoints, p->base_defence,
                                        p->current_attack, p->current_strength,
@@ -2668,15 +2609,14 @@ static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
     if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
 }
 
-/** super restore stat recovery: floor(base * 0.25) + 8 per stat, capped at base.
-    ref: OSRS wiki Super restore. */
+/** super restore stat recovery: floor(base * 0.25) + 8 per stat, capped at base. */
 static inline void encounter_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_super_restore_amount);
 }
 
 /** sanfew serum stat recovery: floor(base * 0.30) + 4 per stat, capped at base
     (out-restores super restore above level 80). the drink also cures venom —
-    the caller owns venom state. ref: OSRS wiki Sanfew serum. */
+    the caller owns venom state. */
 static inline void encounter_sanfew_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_sanfew_restore_amount);
 }
@@ -2703,8 +2643,7 @@ static inline void encounter_apply_consumable_stat_effect(
 }
 
 /** bastion potion boost. boosts ranged by floor(base * 0.10) + 4. can exceed base.
-    also boosts defence by floor(base * 0.15) + 5. can exceed base.
-    ref: OSRS wiki Bastion potion. */
+    also boosts defence by floor(base * 0.15) + 5. can exceed base. */
 static inline void encounter_bastion_boost(Player* p) {
     int rng_boost = osrs_ranging_boost_amount(p->base_ranged);
     int def_boost = osrs_super_combat_boost_amount(p->base_defence);
@@ -2717,7 +2656,7 @@ static inline void encounter_bastion_boost(Player* p) {
 }
 
 /** super combat boost: att/str/def each +floor(base * 0.15) + 5, capped at
-    base + boost. ref: OSRS wiki Super combat potion. */
+    base + boost. */
 static inline void encounter_super_combat_boost(Player* p) {
     int boost = osrs_super_combat_boost_amount(p->base_attack);
     p->current_attack += boost;
@@ -2730,8 +2669,7 @@ static inline void encounter_super_combat_boost(Player* p) {
     if (p->current_defence > p->base_defence + boost) p->current_defence = p->base_defence + boost;
 }
 
-/** ranging potion boost: ranged +floor(base * 0.10) + 4, capped at base + boost.
-    ref: OSRS wiki Ranging potion. */
+/** ranging potion boost: ranged +floor(base * 0.10) + 4, capped at base + boost. */
 static inline void encounter_ranging_boost(Player* p) {
     int boost = osrs_ranging_boost_amount(p->base_ranged);
     p->current_ranged += boost;
@@ -2757,12 +2695,9 @@ static inline void encounter_recompute_loadout_max_hits(
         }
     }
 }
-/* shared special attack energy                                              */
-/*                                                                           */
-/* ENCOUNTERS: call encounter_tick_spec_regen() every game tick. call         */
-/* encounter_use_spec() when the player activates a special attack.          */
-/* OSRS: energy 0-100, starts at 100, regens +10 every 50 ticks (30s).      */
-/* lightbearer halves regen interval to 25 ticks.                            */
+/* Shared special attack energy: tick encounter_tick_spec_regen() each tick, call
+   encounter_use_spec() on activation. Energy 0-100, starts at 100, +10 every 50
+   ticks; lightbearer halves the interval to 25. */
 /** tick special attack energy regeneration from current equipped gear. */
 static inline void encounter_tick_spec_regen(Player* p) {
     osrs_tick_special_regen(p);

@@ -72,8 +72,6 @@ static inline float osrs_hit_chance_double(int att_roll, int def_roll);
    formula from RuneLite TwistedBow._accuracyMultiplier. */
 static inline float osrs_tbow_acc_mult(int target_magic) {
     int m = target_magic < 250 ? target_magic : 250;
-    /* ref: osrs-sdk TwistedBow.ts _accuracyMultiplier
-       linear term uses 3*magic, quadratic uses 3*magic/10 */
     float lin = (float)(3 * m);
     float quad = lin / 10.0f;
     float mult = (140.0f + (lin - 10.0f) / 100.0f - (quad - 100.0f) * (quad - 100.0f) / 100.0f) / 100.0f;
@@ -82,9 +80,7 @@ static inline float osrs_tbow_acc_mult(int target_magic) {
     return mult;
 }
 
-/* twisted bow damage multiplier.
-   same input as accuracy multiplier.
-   ref: osrs-sdk TwistedBow.ts _damageMultiplier */
+/* twisted bow damage multiplier. same input as the accuracy multiplier. */
 static inline float osrs_tbow_dmg_mult(int target_magic) {
     int m = target_magic < 250 ? target_magic : 250;
     float lin = (float)(3 * m);
@@ -96,8 +92,7 @@ static inline float osrs_tbow_dmg_mult(int target_magic) {
 }
 
 
-/* all encounters should use these instead of reimplementing.
-   state must be non-zero. */
+/* xorshift32 RNG step. state must be non-zero. */
 static inline uint32_t encounter_xorshift(uint32_t* state) {
     *state ^= *state << 13;
     *state ^= *state >> 17;
@@ -215,8 +210,8 @@ typedef struct {
 
    the function sets hit/damage on each target. if spell_type is ICE and
    a target's frozen_ticks pointer is set, freeze is applied immediately
-   at cast time (ref: osrs-sdk IceBarrageSpell.ts). caller is responsible
-   for queueing damage as pending hits with appropriate delay.
+   at cast time. caller is responsible for queueing damage as pending hits
+   with appropriate delay.
 
    returns aggregate result for reward/heal calculations. */
 static inline BarrageResult osrs_barrage_resolve(
@@ -343,8 +338,7 @@ static inline int encounter_npc_target_def_roll(
    hidden +1 that NPCs get (that's why NPC attack roll uses +9).
    our sim doesn't model stance bonuses, so stance_bonus = 0.
    vs melee/ranged: (def_level + 8) * (def_bonus + 64).
-   vs magic: (floor(magic_level * 0.7 + def_level * 0.3) + 8) * (def_bonus + 64).
-   ref: osrs-sdk MeleeWeapon.ts:164, OSRS wiki combat formulas. */
+   vs magic: (floor(magic_level * 0.7 + def_level * 0.3) + 8) * (def_bonus + 64). */
 static inline int osrs_player_def_roll_vs_npc(
     int def_level, int magic_level, int def_bonus, int attack_style
 ) {
@@ -437,24 +431,20 @@ static inline int encounter_npc_roll_attack(
     return encounter_npc_roll_attack_ex(att_roll, def_roll, max_hit, 0, rng_state, NULL);
 }
 
-/* check if overhead prayer blocks the given attack style.
-   uses int values directly: ATTACK_STYLE_MELEE(1) matches PRAYER_PROTECT_MELEE(3), etc.
-   prayer enum: NONE=0, MAGIC=1, RANGED=2, MELEE=3.
-   attack style enum: NONE=0, MELEE=1, RANGED=2, MAGIC=3.
-   mapping: melee attack(1)->protect melee(3), ranged(2)->protect ranged(2), magic(3)->protect magic(1). */
+/* does the overhead prayer block this attack style? works on raw int values.
+   prayer enum NONE=0/MAGIC=1/RANGED=2/MELEE=3; style enum NONE=0/MELEE=1/RANGED=2/MAGIC=3.
+   mapping: melee->protect-melee, ranged->protect-ranged, magic->protect-magic. */
 static inline int encounter_prayer_correct_for_style(int prayer, int attack_style) {
     return (attack_style == 1 /* ATTACK_STYLE_MELEE */  && prayer == 3 /* PRAYER_PROTECT_MELEE */)  ||
            (attack_style == 2 /* ATTACK_STYLE_RANGED */ && prayer == 2 /* PRAYER_PROTECT_RANGED */) ||
            (attack_style == 3 /* ATTACK_STYLE_MAGIC */  && prayer == 1 /* PRAYER_PROTECT_MAGIC */);
 }
 
-/* The protect-prayer outcome is locked on the THROW tick (OSRS standard): the
-   overhead up when the attack animates decides whether it is blocked, and the
-   damage is frozen there. For ranged/magic the frozen damage then flies and lands
-   later; flicking the overhead after the throw cannot change it. This is the ONE
-   place an encounter resolves protect-at-throw -- callers do their own metric
-   attribution from `.prayed`. Jad-style deferred checks are the documented
-   exception and do not use this (they defer the check via prayer_check_delay). */
+/* Protect-prayer outcome AND damage lock on the THROW tick (OSRS standard): the
+   overhead up as the attack animates decides the block, and the damage freezes
+   there -- flicking after the throw cannot change a hit already in flight. The ONE
+   place protect-at-throw resolves; callers attribute metrics from `.prayed`.
+   Jad-style deferred checks are the exception (they use prayer_check_delay). */
 typedef struct {
     int frozen_damage; /* 0 if the matching protect prayer was up at throw, else raw */
     int prayed;        /* 1 if the overhead blocked this style */
@@ -625,32 +615,24 @@ static inline int encounter_dist_to_npc(int px, int py, int nx, int ny, int npc_
     return encounter_rect_distance(px, py, 1, nx, ny, npc_size);
 }
 
-/* fisher-yates shuffle for int arrays. used for spawn position randomization,
-   snakeling placement, etc. encounters should use this instead of inlining. */
+/* fisher-yates shuffle for int arrays (spawn positions, snakeling placement, etc.). */
 static inline void encounter_shuffle(int* arr, int n, uint32_t* rng) {
     for (int i = n - 1; i > 0; i--) {
         int j = encounter_rand_int(rng, i + 1);
         int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
     }
 }
-/* player-side combat primitives                                             */
-/*                                                                           */
-/* pure math for player effective levels, attack rolls, and max hits.        */
-/* ref: .refs/osrs-dps-calc/src/lib/PlayerVsNPCCalc.ts                      */
-/*      .refs/osrs-dps-calc/src/lib/BaseCalc.ts:105-110                     */
-/** Generic standard effective-level formula:
-    floor(base * prayer_mult) + style_bonus + 8.
-    E12 magic accuracy is the exception: powered staff Accurate contributes
-    +2, Longrange contributes no attack level, and magic callers account for
-    the folded +9 constant from PlayerVsNPCCalc.ts. */
+/* player-side combat primitives: effective levels, attack rolls, max hits.
+   formulas ref .refs/osrs-dps-calc. */
+/** Standard effective-level formula: floor(base * prayer_mult) + style_bonus + 8.
+    Magic accuracy is the exception (see osrs_magic_effective_attack_level): powered
+    staff Accurate contributes +2, Longrange no attack level, and magic folds in +9. */
 static inline int osrs_player_eff_level(int base_level, float prayer_mult, int style_bonus) {
     return (int)(base_level * prayer_mult) + style_bonus + 8;
 }
 
-/** Return the stance contribution to effective attack level.
-    E12 keeps magic powered staff stances aligned with dps-calc:
-    Accurate contributes +2 before the folded +9 magic constant, while
-    Longrange contributes defence and range only. */
+/** Stance contribution to effective attack level. Magic powered-staff Accurate
+    contributes +2 (before the folded +9); Longrange gives defence/range only. */
 static inline int osrs_stance_att_bonus(FightStyle fs, AttackStyle atk) {
     switch (fs) {
         case FIGHT_STYLE_ACCURATE:   return atk == ATTACK_STYLE_MAGIC ? 2 : 3;
@@ -660,7 +642,7 @@ static inline int osrs_stance_att_bonus(FightStyle fs, AttackStyle atk) {
     }
 }
 
-/** Magic accuracy effective level from dps-calc:
+/** Magic accuracy effective level:
     floor(magic * prayer) + powered-staff attack stance contribution + 9. */
 static inline int osrs_magic_effective_attack_level(
     int magic_level, float prayer_mult, FightStyle fight_style
@@ -693,9 +675,8 @@ static inline int osrs_stance_def_bonus(FightStyle fs) {
     }
 }
 
-/* attack speed modifier (ticks to add to weapon base speed).
-   rapid is the only stance that changes speed (-1 tick) per dps-calc
-   Equipment.ts:248-249. everything else uses the weapon's base speed. */
+/* attack speed modifier (ticks added to weapon base speed).
+   rapid is the only stance that changes speed (-1 tick). */
 static inline int osrs_stance_speed_mod(FightStyle fs) {
     return fs == FIGHT_STYLE_RAPID ? -1 : 0;
 }
@@ -706,28 +687,24 @@ static inline int osrs_stance_range_mod(FightStyle fs) {
     return fs == FIGHT_STYLE_LONGRANGE ? 2 : 0;
 }
 
-/* player attack roll: eff_level * (equipment_bonus + 64).
-   ref: PlayerVsNPCCalc.ts line 212 */
+/* player attack roll: eff_level * (equipment_bonus + 64). */
 static inline int osrs_player_att_roll(int eff_level, int equipment_bonus) {
     return eff_level * (equipment_bonus + 64);
 }
 
-/* player melee max hit: floor((eff_str * (str_bonus + 64) + 320) / 640).
-   ref: BaseCalc.ts:107 trackMaxHitFromEffective */
+/* player melee max hit: floor((eff_str * (str_bonus + 64) + 320) / 640). */
 static inline int osrs_player_melee_max_hit(int eff_str_level, int str_bonus) {
     return (eff_str_level * (str_bonus + 64) + 320) / 640;
 }
 
-/* player ranged max hit: same formula as melee, different input stats.
-   ref: BaseCalc.ts:107 (same formula, ranged strength bonus instead of melee) */
+/* player ranged max hit: same formula as melee, ranged strength bonus. */
 static inline int osrs_player_ranged_max_hit(int eff_range_level, int ranged_str_bonus) {
     return (eff_range_level * (ranged_str_bonus + 64) + 320) / 640;
 }
 
 /* player magic max hit: floor(spell_base_dmg * (100 + magic_dmg_pct) / 100).
    magic_dmg_pct is the total % bonus from gear (e.g. 30 = +30%).
-   spell_base_dmg: 30 for ice/blood barrage, floor(magic/3)-6 for trident, etc.
-   ref: PlayerVsNPCCalc.ts lines 622-667 */
+   spell_base_dmg: 30 for ice/blood barrage, floor(magic/3)-6 for trident, etc. */
 static inline int osrs_player_magic_max_hit(int spell_base_dmg, int magic_dmg_pct) {
     return spell_base_dmg * (100 + magic_dmg_pct) / 100;
 }
@@ -735,8 +712,7 @@ static inline int osrs_player_magic_max_hit(int spell_base_dmg, int magic_dmg_pc
 /* prayer damage reduction.
    PvE (is_pvp=0): correct overhead prayer blocks 100% of damage → returns 0.
    PvP (is_pvp=1): correct overhead prayer reduces by 40% → returns floor(dmg * 0.6).
-   wrong prayer or no prayer: returns damage unchanged.
-   ref: osrs wiki "protection prayers", osrs-dps-calc */
+   wrong prayer or no prayer: returns damage unchanged. */
 static inline int osrs_prayer_reduce_damage(int damage, int prayer, int attack_style, int is_pvp) {
     if (damage <= 0) return 0;
     if (!encounter_prayer_correct_for_style(prayer, attack_style)) return damage;
@@ -747,10 +723,9 @@ static inline int osrs_prayer_reduce_damage(int damage, int prayer, int attack_s
 /* double accuracy roll (osmumten's fang, confliction gauntlets).
    rolls accuracy twice — hit if EITHER roll succeeds.
    effective chance: 1 - (1-p)^2 where p = single roll hit chance.
-   closed-form from wiki:
+   closed-form:
      if att >= def: 1 - (def+2)(2*def+3) / (6*(att+1)^2)
-     if att < def:  att*(4*att+5) / (6*(att+1)*(def+1))
-   ref: osrs wiki "osmumten's fang", encounter_zulrah.h:782-789 */
+     if att < def:  att*(4*att+5) / (6*(att+1)*(def+1)) */
 static inline float osrs_hit_chance_double(int att_roll, int def_roll) {
     float fa = (float)att_roll, fd = (float)def_roll;
     if (att_roll >= def_roll) {
@@ -762,11 +737,9 @@ static inline float osrs_hit_chance_double(int att_roll, int def_roll) {
 }
 
 /* sum equipment bonuses from a gear loadout using ITEM_DATABASE.
-   iterates all slots, sums all offensive + defensive bonuses.
-   attack_speed and attack_range come from the weapon slot only.
-   ITEM_NONE (255) slots are skipped.
-   same data as GearBonuses (osrs_types.h) but with different field naming
-   convention (attack_stab vs stab_attack). see osrs_pvp_gear.h adapter. */
+   sums all offensive + defensive bonuses; attack_speed/range come from the weapon
+   slot only; ITEM_NONE (255) slots are skipped. same data as GearBonuses
+   (osrs_types.h), different field naming (attack_stab vs stab_attack). */
 typedef struct {
     int attack_stab, attack_slash, attack_crush, attack_magic, attack_ranged;
     int defence_stab, defence_slash, defence_crush, defence_magic, defence_ranged;
