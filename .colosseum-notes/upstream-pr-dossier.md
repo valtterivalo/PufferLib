@@ -103,3 +103,21 @@ items DEFERRED to a post-PR pass:
 Regression gates for every applied batch: colosseum battery + goldens +
 spear parity, inferno battery + goldens, shared osrs test suite, pvp tests,
 --cpu and --local builds on trunk after merge.
+
+## 2026-07-16 PR-readiness verdicts (user review + fable verification)
+
+STRIP FROM PR (keep local): .colosseum-notes/, tests README, root tests/*.py + probe,
+tools/osrs-link-data.sh, sweep-resume + anchor-fix (pufferl.py) + sweep.py -> separate PRs.
+REVERT ON TRUNK (inert, verified): trainer best-trajectory curriculum cluster
+(curriculum.cu rewrite, vecenv reset-with-state + post_step_callback, pufferl.cu hooks,
+binding PUFFER_RESET_WITH_STATE shims) - cl_frac/num_start_states/fresh_frac = 0 in every
+shipped config; late_start_state_mode is env-side and independent. LOG_DICT_CAPACITY 96
+bump (colosseum 23 keys, inferno 33 - both fit 64).
+SEPARATE MINI-PRS (load-bearing, general): truncation channel + truncation-aware GAE +
+torch mirror (landmark timeout-collapse fix); ppo_clamp_logratio + MAX_ATN_HEADS raise
++ assert (20-head NaN guard).
+OSRS PR PROPER: env payload + build.sh asset fetch (fork-hosted per Suarez agreement,
+must just-work on fresh clone) + encoder TBD.
+ENCODER: upstream 5c has MinimalEntityEncoder (ME_*) - generalization conversation with
+Suarez, not a colosseum-named core struct. Fable clone drafting proposal options.
+RETRAIN GATE BEFORE PR: inferno/zulrah/pvp configs must demonstrably learn on box.
