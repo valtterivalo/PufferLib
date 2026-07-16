@@ -1,16 +1,14 @@
 """Regenerate inferno.models and zulrah.models as MDL4 (atlas-textured).
 
-Reproduces the model-building logic of the original encounter NPC exporter
-(last canonical revision at commit 1e0be358c) exactly, so the regenerated model
-set is byte-for-byte the same membership, then writes MDL4 by passing tex_colors
-+ atlas to write_models_binary (which also writes the sibling .atlas). The
-.anims and npc_models_{group}.h outputs are intentionally NOT regenerated: they
-already exist and stay valid because synthetic model IDs (0xC0000+npc_id,
-0xD0000|gfx_id) and model membership are unchanged.
+Rebuilds the same model-set membership as the original encounter NPC exporter,
+byte-for-byte, then writes MDL4 by passing tex_colors + atlas to
+write_models_binary (which also writes the sibling .atlas). The .anims and
+npc_models_{group}.h outputs are NOT regenerated: synthetic model IDs
+(0xC0000+npc_id, 0xD0000|gfx_id) and model membership are unchanged, so the
+existing files stay valid.
 
-Imports the vendored cache pipeline at ocean/osrs/tools/cache_pipeline. The
-gameval definitions and the modern cache are reference inputs that live under
-refs/ or .refs/.
+Imports the vendored cache pipeline at ocean/osrs/tools/cache_pipeline. Gameval
+definitions and the modern cache are reference inputs under refs/ or .refs/.
 
 Usage:
     uv run python ocean/osrs/tools/export_encounter_npcs.py \

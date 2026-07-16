@@ -94,8 +94,7 @@ INFERNO_NPC_IDS = {
     7708: "Jal-MejJak (zuk healer)",
 }
 
-# known inferno projectile/effect GFX IDs to check
-# from OSRS wiki inferno page and runelite inferno plugin
+# inferno projectile/effect GFX ids (wiki + runelite inferno plugin)
 INFERNO_SPOTANIM_IDS = {
     # jad attacks
     447: "Jad ranged projectile (fireball)",
@@ -163,9 +162,6 @@ def main() -> None:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ================================================================
-    # step 1: read NPC definitions from config index 2, group 9
-    # ================================================================
     print("reading NPC definitions from modern cache (index 2, group 9)...")
     npc_files = reader.read_group(2, MODERN_NPC_CONFIG_GROUP)
     print(f"  {len(npc_files)} total NPC entries in group 9")
@@ -209,9 +205,6 @@ def main() -> None:
             if anim_id >= 0:
                 all_anim_ids.add(anim_id)
 
-    # ================================================================
-    # step 2: read SpotAnim/GFX definitions
-    # ================================================================
     print("\n\nreading SpotAnim/GFX definitions (index 2, group 13)...")
     spotanim_files = reader.read_group(2, MODERN_SPOTANIM_CONFIG_GROUP)
     print(f"  {len(spotanim_files)} total spotanim entries")
@@ -243,13 +236,9 @@ def main() -> None:
     print(f"total unique animation IDs to export: {len(all_anim_ids)}")
     print(f"  {sorted(all_anim_ids)}")
 
-    # ================================================================
-    # step 3: export NPC models
-    # ================================================================
     print("\n\nexporting NPC + GFX models...")
     all_models: list[ModelData] = []
 
-    # for each NPC, merge sub-models, apply recolors/scale
     for npc_id, npc in sorted(npc_defs.items()):
         sub_models: list[ModelData] = []
         for mid in npc.models:
@@ -272,11 +261,9 @@ def main() -> None:
         else:
             merged = _merge_models(sub_models)
 
-        # apply recolors
         if npc.recolor_from:
             apply_recolors(merged, npc.recolor_from, npc.recolor_to)
 
-        # apply scale
         apply_scale(merged, npc.width_scale, npc.height_scale)
 
         # use NPC ID as model ID for lookup (synthetic: 0xC0000 + npc_id)
@@ -302,7 +289,6 @@ def main() -> None:
         all_models.append(md)
         print(f"  GFX model {mid}: {md.vertex_count} verts, {md.face_count} faces")
 
-    # write models binary
     # MDL4 (textured) output: passing an atlas makes write_models_binary emit the
     # per-face alpha block (face_alphas + face_alpha_labels) the MDL2 path drops,
     # and enables atlas-sampled textures on faces that were vertex-color-only.
@@ -314,9 +300,6 @@ def main() -> None:
     file_size = models_path.stat().st_size
     print(f"\nwrote {len(all_models)} models ({file_size:,} bytes) to {models_path}")
 
-    # ================================================================
-    # step 4: export animations
-    # ================================================================
     print("\n\nexporting animations...")
     seq_files = reader.read_group(2, MODERN_SEQ_CONFIG_GROUP)
 
@@ -341,7 +324,6 @@ def main() -> None:
         sequences[seq_id] = seq
         print(f"  seq {seq_id}: {seq.frame_count} frames, delays={seq.frame_delays[:5]}{'...' if len(seq.frame_delays) > 5 else ''}")
 
-    # collect needed frame groups
     needed_groups: set[int] = set()
     for seq_id in all_anim_ids & set(sequences.keys()):
         seq = sequences[seq_id]
@@ -386,18 +368,13 @@ def main() -> None:
     total_frames = sum(len(v) for v in all_frames.values())
     print(f"  {len(all_frames)} frame archives, {total_frames} total frames")
 
-    # write animations binary
     anims_path = output_dir / "inferno_npcs.anims"
     available_seqs = all_anim_ids & set(sequences.keys())
     write_animations_binary(anims_path, framebases, all_frames, sequences, available_seqs)
 
-    # ================================================================
-    # step 5: update npc_models.h
-    # ================================================================
     print("\n\nupdating npc_models.h...")
     header_path = output_dir / "npc_models.h"
 
-    # build NPC model mapping entries
     npc_entries = []
     for npc_id, npc in sorted(npc_defs.items()):
         # use the synthetic model ID we assigned (0xC0000 + npc_id)
@@ -408,14 +385,12 @@ def main() -> None:
         label = INFERNO_NPC_IDS.get(npc_id, npc.name)
         npc_entries.append((npc_id, synth_model, idle, attack, label))
 
-    # build spotanim entries for C header
     spotanim_entries = []
     for gfx_id, sa in sorted(spotanim_defs.items()):
         if sa.model_id >= 0:
             label = INFERNO_SPOTANIM_IDS.get(gfx_id, "unknown")
             spotanim_entries.append((gfx_id, sa.model_id, sa.animation_id, label))
 
-    # write C header
     with open(header_path, "w") as f:
         f.write("/**\n")
         f.write(" * @fileoverview NPC model/animation mappings for encounter rendering.\n")
@@ -515,9 +490,6 @@ def main() -> None:
 
     print(f"wrote {header_path}")
 
-    # ================================================================
-    # step 6: print encounter_inferno.h mapping table
-    # ================================================================
     print("\n\n========================================")
     print("INF_NPC_DEF_IDS mapping table for encounter_inferno.h:")
     print("========================================")
