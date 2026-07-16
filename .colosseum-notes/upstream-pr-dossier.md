@@ -207,3 +207,20 @@ osrs_visual.c to src/puffercpu.h with 5c .bin re-parse (encoder tensors first)
 /puffertank/PufferLib-5cport (separate worktree, validations undisturbed).
 PENDING: box smoke train after validation chain frees GPU; final commit
 curation (squash import+merges into clean PR commits); PR description.
+
+## 2026-07-17 box gates GREEN (e74ef1d51)
+
+Both envs BUILD (nvcc, NO -fpermissive) and SMOKE-TRAIN 2M steps end-to-end on
+the box: env + native mask channel + encoder + truncation channel + new Log
+aggregation all live; checkpoints written (flat-arena .bin). First-contact
+fixes, all upstream-facing: (1) portable OSRS_THREAD_LOCAL (sim now compiles as
+C++ in the 5c single TU - clang++ masks _Thread_local, g++ does not); (2) 8
+&(compound-literal) fn args hoisted to named locals (C lvalue vs C++ rvalue;
+the two identical-spec ternary pairs deduped for free); (3) UPSTREAM BUG: 5c
+tip cannot build ANY env natively - "Clean up first ~600 lines" introduced
+PUFFER_ENV_NAME but build.sh still passes -DENV_NAME; fixed build-side
+(-DPUFFER_ENV_NAME string define next to the vestigial -DENV_NAME). Offer this
+to Suarez as an immediate one-liner PR or flag in the big PR. -fpermissive
+proved unnecessary and the whole NVCC_ENV_HOST_FLAGS hunk was removed. LOCAL
+GATE DISCOVERED: brew g++-16 -fsyntax-only -std=c++17 strict = exact box-g++
+semantics on Mac (clang++ is extension-lenient and lies).
