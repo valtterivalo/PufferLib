@@ -284,7 +284,7 @@ void pvp_init(OsrsEnv* env) {
     memset(&env->log, 0, sizeof(env->log));
 }
 
-/* Forward decl only: binding.c provides the stub, osrs_render.h the real impl. */
+/* Forward decl only: osrs_render.h provides the real impl; non-visual builds stub it. */
 void pvp_render(OsrsEnv* env);
 
 /**

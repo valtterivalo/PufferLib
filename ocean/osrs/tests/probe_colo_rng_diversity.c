@@ -9,7 +9,7 @@
  *       resetting again (explicit_seed=0, preserving saved_rng) yields a DIFFERENT
  *       spawn than the first episode -> episodes are not identical.
  *
- * The lowbias32 here MUST match col_lowbias32 in ocean/osrs_colosseum/binding.c.
+ * The lowbias32 here MUST match col_lowbias32 in ocean/osrs_colosseum/osrs_colosseum.h.
  *
  * BUILD: cc -std=c11 -O2 -I. -o /tmp/probe_rng ocean/osrs/tests/probe_colo_rng_diversity.c -lm
  */

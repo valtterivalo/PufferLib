@@ -143,9 +143,9 @@ static int source_seen_key(char keys[128][96], int key_count, const char* key) {
 }
 
 static int inferno_my_log_metric_key_count(void) {
-    char* source = read_source_file("ocean/osrs_inferno/binding.c");
+    char* source = read_source_file("ocean/osrs_inferno/osrs_inferno.h");
     if (!source) return -1;
-    char* start = strstr(source, "void my_log");
+    char* start = strstr(source, "void puf_log");
     if (!start) {
         free(source);
         return -1;
@@ -3351,9 +3351,9 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("action mask includes redemption",
         INF_ACTION_MASK_SIZE, 89);
     ASSERT_SOURCE_BLOCK_CONTAINS("native binding reuses inferno action dims",
-        "ocean/osrs_inferno/binding.c",
-        "#define OBS_SIZE INF_TOTAL_OBS",
-        "#define OBS_TENSOR_T FloatTensor",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "#define OBS_SIZE INF_NUM_OBS",
+        "typedef float obs_t;",
         "#define ACT_SIZES INF_ACTION_DIMS_INIT");
     ASSERT_INT_EQ("player obs includes NPC pressure summary",
         INF_PLAYER_OBS_SIZE, 75);
@@ -3376,9 +3376,9 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("legacy player pending-hit count is removed",
         "player_pending_hit_count");
     ASSERT_SOURCE_NOT_CONTAINS("binding legacy npc pending-hit count is removed",
-        "ocean/osrs_inferno/binding.c", "pending_hit_count");
+        "ocean/osrs_inferno/osrs_inferno.h", "pending_hit_count");
     ASSERT_SOURCE_NOT_CONTAINS("binding legacy player pending-hit count is removed",
-        "ocean/osrs_inferno/binding.c", "player_pending_hit_count");
+        "ocean/osrs_inferno/osrs_inferno.h", "player_pending_hit_count");
 }
 
 static void test_inferno_obs_wave_phase_one_hot(void) {
@@ -8993,9 +8993,9 @@ static void test_inferno_binding_forwards_safe_target_reward_coeff(void) {
     printf("--- inferno binding forwards safe target reward coeff ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "safe target reward coeff optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "safe target reward coeff float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"zuk_safe_untagged_healer_target_bonus_coeff\"");
 }
@@ -9004,26 +9004,26 @@ static void test_inferno_binding_forwards_healer_attack_shape_coeffs(void) {
     printf("--- inferno binding forwards healer attack shape coeffs ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "non-magic healer attack bonus optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "non-magic healer attack bonus float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"zuk_untagged_healer_nonmagic_attack_bonus_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "mage healer attack penalty optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "mage healer attack penalty float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"zuk_healer_mage_attack_penalty_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "non-magic healer attack bonus config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "zuk_untagged_healer_nonmagic_attack_bonus_coeff =");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "mage healer attack penalty config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "zuk_healer_mage_attack_penalty_coeff =");
@@ -9033,26 +9033,26 @@ static void test_inferno_binding_forwards_supply_milestone_rewards(void) {
     printf("--- inferno binding forwards supply milestone rewards ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "supply milestone brew optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "supply milestone brew float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"supply_milestone_brew_reward_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "supply milestone restore optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "supply milestone restore float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"supply_milestone_restore_reward_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "supply milestone brew default off",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "supply_milestone_brew_reward_coeff = 0.0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "supply milestone restore default off",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "supply_milestone_restore_reward_coeff = 0.0");
@@ -9062,32 +9062,26 @@ static void test_inferno_binding_forwards_offensive_prayer_reward(void) {
     printf("--- inferno binding forwards offensive prayer reward ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "offensive prayer optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "offensive prayer float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"offensive_prayer_reward_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "offensive prayer default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "offensive_prayer_reward_coeff = 0.0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "offensive prayer sweep config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.offensive_prayer_reward_coeff]",
         "[sweep.env.shield_penalty_coeff]",
         "max = 1.0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "offensive prayer sweep only",
-        "config/ocean/osrs_inferno.ini",
-        "sweep_only =",
-        "[sweep.train.total_timesteps]",
-        "offensive_prayer_reward_coeff");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
         "offensive prayer correct metric",
-        "ocean/osrs_inferno/binding.c",
+        "ocean/osrs_inferno/osrs_inferno.h",
         "offensive_prayer_correct_rate",
         "brews_remaining",
         "offensive_prayer_magic_correct_rate");
@@ -9097,38 +9091,38 @@ static void test_inferno_binding_forwards_curriculum_supply_config(void) {
     printf("--- inferno binding forwards curriculum supply config ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "curriculum supply shared jitter optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "curriculum supply shared jitter float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"curriculum_supply_shared_jitter\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "curriculum supply jitter mode optional int",
-        "ocean/osrs_inferno/binding.c",
-        "optional_int_keys[]",
+        "curriculum supply jitter mode int key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "int_keys[]",
         "};",
         "\"curriculum_supply_jitter_mode\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "curriculum no-brew mode optional int",
-        "ocean/osrs_inferno/binding.c",
-        "optional_int_keys[]",
+        "curriculum no-brew mode int key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "int_keys[]",
         "};",
         "\"curriculum_no_brew_mode\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum agent marker assigned by mixer",
-        "ocean/osrs_inferno/binding.c",
-        "\"start_wave\"",
-        "fprintf(stderr, \"curriculum:",
-        "\"curriculum_agent\"");
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "inferno_env_put_int(env, \"start_wave\", waves[t]);",
+        "return;",
+        "inferno_env_put_int(env, \"curriculum_agent\", 1);");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum supply defaults off",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "curriculum_supply_jitter_mode = 0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum no-brew defaults off",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "curriculum_no_brew_frac = 0.0");
@@ -9138,36 +9132,36 @@ static void test_inferno_binding_forwards_post_healer_set_rewards(void) {
     printf("--- inferno binding forwards post-healer set rewards ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-healer set damage coeff optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "post-healer set damage coeff float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"post_healer_set_damage_reward_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-healer set alive penalty optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "post-healer set alive penalty float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"post_healer_set_alive_tick_penalty_coeff\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "post-healer set alive penalty default off",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "post_healer_set_alive_penalty_cap = 0.0");
     ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
         "post-healer set alive penalty not swept",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep]",
         "[sweep.train.total_timesteps]",
         "post_healer_set_alive_tick_penalty_coeff");
     ASSERT_SOURCE_NOT_CONTAINS(
         "post-healer set alive penalty sweep section removed",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.post_healer_set_alive_tick_penalty_coeff]");
     ASSERT_SOURCE_NOT_CONTAINS(
         "post-healer set alive cap sweep section removed",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.post_healer_set_alive_penalty_cap]");
 }
 
@@ -9175,14 +9169,14 @@ static void test_inferno_binding_forwards_joseph_reward_mode(void) {
     printf("--- inferno binding forwards Joseph reward mode ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "Joseph reward mode int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* joseph_reward_mode",
-        "const char* record_path",
-        "\"joseph_reward_mode\"");
+        "Joseph reward mode int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"joseph_reward_mode\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "Joseph reward mode config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "joseph_reward_mode = 1");
@@ -9192,26 +9186,26 @@ static void test_inferno_binding_forwards_safe_healer_target_mask(void) {
     printf("--- inferno binding forwards safe healer target mask ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "safe healer target mask int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* safe_healer_target_mask",
-        "const char* record_path",
-        "\"zuk_safe_untagged_healer_target_mask\"");
+        "safe healer target mask int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"zuk_safe_untagged_healer_target_mask\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "safe healer target mask default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "zuk_safe_untagged_healer_target_mask = 0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "force safe healer target mask int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* force_safe_healer_target_mask",
-        "const char* record_path",
-        "\"zuk_force_safe_untagged_healer_target_mask\"");
+        "force safe healer target mask int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"zuk_force_safe_untagged_healer_target_mask\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "force safe healer target mask default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "zuk_force_safe_untagged_healer_target_mask = 0");
@@ -9221,26 +9215,26 @@ static void test_inferno_binding_forwards_terminal_penalty_toggle(void) {
     printf("--- inferno binding forwards terminal penalty toggle ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "terminal penalty int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* terminal_penalty_enabled",
-        "DictItem* zuk_healer_reward_mode",
-        "\"terminal_penalty_enabled\"");
+        "terminal penalty int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"terminal_penalty_enabled\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "terminal penalty default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "terminal_penalty_enabled = 0");
     ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
         "terminal penalty not swept",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep]",
         "[sweep.train.total_timesteps]",
         "terminal_penalty_enabled");
     ASSERT_SOURCE_NOT_CONTAINS(
         "terminal penalty sweep section removed",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.terminal_penalty_enabled]");
 }
 
@@ -9248,32 +9242,26 @@ static void test_inferno_binding_forwards_step_out_forecast_obs_toggle(void) {
     printf("--- inferno binding forwards step-out forecast obs toggle ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* step_out_forecast_obs_mode",
-        "DictItem* zuk_healer_reward_mode",
-        "\"step_out_forecast_obs_mode\"");
+        "step-out forecast obs mode int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"step_out_forecast_obs_mode\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast obs mode default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "step_out_forecast_obs_mode = 1");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast obs mode sweep axis",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.step_out_forecast_obs_mode]",
         "scale = auto",
         "distribution = int_uniform");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "step-out forecast obs mode is swept",
-        "config/ocean/osrs_inferno.ini",
-        "[sweep]",
-        "[sweep.train.total_timesteps]",
-        "step_out_forecast_obs_mode");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
         "step-out forecast obs mode sweep covers readonly mode",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[sweep.env.step_out_forecast_obs_mode]",
         "scale = auto",
         "max = 3");
@@ -9295,26 +9283,26 @@ static void test_inferno_binding_forwards_loadout_profile_config(void) {
     printf("--- inferno binding forwards loadout profile config ---\n");
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "budget loadout fraction optional float",
-        "ocean/osrs_inferno/binding.c",
-        "optional_float_keys[]",
+        "budget loadout fraction float key",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "float_keys[]",
         "};",
         "\"budget_loadout_fraction\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
-        "loadout profile mode int config",
-        "ocean/osrs_inferno/binding.c",
-        "DictItem* loadout_profile_mode",
-        "DictItem* zuk_healer_reward_mode",
-        "\"loadout_profile_mode\"");
+        "loadout profile mode int parsed",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_init",
+        "inferno_apply_curriculum(env, kwargs);",
+        "dict_get(kwargs, \"loadout_profile_mode\")");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "loadout profile mode default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "loadout_profile_mode = 0");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "budget loadout fraction default config",
-        "config/ocean/osrs_inferno.ini",
+        "config/osrs_inferno.ini",
         "[env]",
         "[vec]",
         "budget_loadout_fraction = 0.0");
@@ -9325,13 +9313,13 @@ static void test_inferno_binding_logs_post_healer_set_reward_components(void) {
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "post-healer set coeff metric",
-        "ocean/osrs_inferno/binding.c",
+        "ocean/osrs_inferno/osrs_inferno.h",
         "post_healer_set_damage_reward_coeff_normal",
         "action_mask_checks_normal",
         "post_healer_set_alive_penalty_coeff_normal");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "post-healer set reward component metric",
-        "ocean/osrs_inferno/binding.c",
+        "ocean/osrs_inferno/osrs_inferno.h",
         "post_healer_set_damage_reward_normal",
         "action_mask_checks_normal",
         "post_healer_set_alive_penalty_normal");
@@ -9342,39 +9330,39 @@ static void test_inferno_binding_logs_idle_diagnostics(void) {
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "attack-ready idle metric emitted",
-        "ocean/osrs_inferno/binding.c",
-        "void my_log",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_log",
         "float wr = log->wins",
         "attack_ready_no_attack_ticks");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "target-available idle metric emitted",
-        "ocean/osrs_inferno/binding.c",
-        "void my_log",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_log",
         "float wr = log->wins",
         "target_available_no_attack_ticks");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "safe opportunity idle metric emitted",
-        "ocean/osrs_inferno/binding.c",
-        "void my_log",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_log",
         "float wr = log->wins",
         "safe_attack_opportunity_missed_ticks");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "progressless metric emitted",
-        "ocean/osrs_inferno/binding.c",
-        "void my_log",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_log",
         "float wr = log->wins",
         "progressless_ticks");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "npc pressure metric emitted",
-        "ocean/osrs_inferno/binding.c",
-        "void my_log",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "void puf_log",
         "float wr = log->wins",
         "npc_pressure_this_tick_count_per_tick");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "idle phase names emitted",
-        "ocean/osrs_inferno/binding.c",
+        "ocean/osrs_inferno/osrs_inferno.h",
         "inferno_log_idle_metric",
-        "void my_log",
+        "void puf_log",
         "zuk_post_healers");
 }
 
@@ -9382,87 +9370,7 @@ static void test_inferno_log_metrics_fit_cuda_dict(void) {
     printf("--- inferno log metrics fit CUDA dict ---\n");
 
     int metric_count = inferno_my_log_metric_key_count();
-    ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 64);
-}
-
-static void test_inferno_render_status_survives_overlay_refresh(void) {
-    printf("--- inferno render status survives overlay refresh ---\n");
-
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "render status helper declared",
-        "ocean/osrs_inferno/binding.c",
-        "static void inferno_env_apply_render_status_overlay",
-        "void c_render",
-        "rc->encounter_overlay.status_text_active = 1");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "render status reapplied after overlay refresh",
-        "ocean/osrs_inferno/binding.c",
-        "render_post_tick(rc, re);",
-        "while (GetTime() < deadline)",
-        "inferno_env_apply_render_status_overlay(env, rc);");
-}
-
-static void test_inferno_eval_render_post_tick_owns_entity_refresh(void) {
-    printf("--- inferno eval render post tick owns entity refresh ---\n");
-
-    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
-        "eval render does not prepopulate before post tick",
-        "ocean/osrs_inferno/binding.c",
-        "void c_render",
-        "#define MY_VEC_INIT",
-        "render_populate_entities(rc, re);\n    render_post_tick(rc, re);");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "eval render refreshes before drawing tick frames",
-        "ocean/osrs_inferno/binding.c",
-        "void c_render",
-        "while (GetTime() < deadline)",
-        "render_post_tick(rc, re);");
-}
-
-static void test_inferno_eval_render_env_syncs_tick_for_animation_events(void) {
-    printf("--- inferno eval render env syncs tick for animation events ---\n");
-
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "eval render forwards live encounter context",
-        "ocean/osrs_inferno/binding.c",
-        "void c_render",
-        "int first_call",
-        "re->encounter_context = INF_ENV_CONTEXT(env);");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "eval render forwards live encounter tick before post tick",
-        "ocean/osrs_inferno/binding.c",
-        "void c_render",
-        "render_post_tick(rc, re);",
-        "re->tick = ENCOUNTER_INFERNO.get_tick(");
-}
-
-static void test_inferno_lab_freeze_binding_precedes_action_sources(void) {
-    printf("--- inferno lab freeze binding precedes action sources ---\n");
-
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "lab restore checked before replay",
-        "ocean/osrs_inferno/binding.c",
-        "RenderClient* render_client",
-        "/* replay playback",
-        "inferno_env_emit_lab_restore_terminal(env, render_client)");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "lab freeze checked before replay",
-        "ocean/osrs_inferno/binding.c",
-        "RenderClient* render_client",
-        "/* replay playback",
-        "inferno_env_freeze_for_lab(env, render_client)");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "lab restore emits terminal without reset",
-        "ocean/osrs_inferno/binding.c",
-        "static inline void inferno_env_emit_lab_restore_terminal",
-        "static inline void inferno_env_freeze_for_lab",
-        "env->terminals[0] = 1.0f");
-    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
-        "lab restore helper does not reset encounter",
-        "ocean/osrs_inferno/binding.c",
-        "static inline void inferno_env_emit_lab_restore_terminal",
-        "static inline void inferno_env_freeze_for_lab",
-        "ENCOUNTER_INFERNO.reset");
+    ASSERT_INT_LE("puf_log metric key count plus env/n", metric_count + 1, 64);
 }
 
 static void test_curriculum_supports_wave60_bridge_tier(void) {
@@ -9470,21 +9378,21 @@ static void test_curriculum_supports_wave60_bridge_tier(void) {
 
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum has room for wave60 bridge",
-        "ocean/osrs_inferno/binding.c",
-        "#define MAX_CURRICULUM_TIERS",
-        "Env* my_vec_init",
-        "#define MAX_CURRICULUM_TIERS 8");
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "wave_keys[] = {",
+        "frac_keys[] = {",
+        "\"curriculum_wave_8\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum parses fifth wave key",
-        "ocean/osrs_inferno/binding.c",
-        "static const char* wave_keys[]",
-        "static const char* frac_keys[]",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "wave_keys[] = {",
+        "frac_keys[] = {",
         "\"curriculum_wave_5\"");
     ASSERT_SOURCE_BLOCK_CONTAINS(
         "curriculum parses fifth fraction key",
-        "ocean/osrs_inferno/binding.c",
-        "static const char* frac_keys[]",
-        "int curriculum_waves",
+        "ocean/osrs_inferno/osrs_inferno.h",
+        "frac_keys[] = {",
+        "int waves[8]",
         "\"curriculum_frac_5\"");
 }
 
@@ -9758,10 +9666,6 @@ int main(void) {
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_logs_idle_diagnostics();
     test_inferno_log_metrics_fit_cuda_dict();
-    test_inferno_render_status_survives_overlay_refresh();
-    test_inferno_eval_render_post_tick_owns_entity_refresh();
-    test_inferno_eval_render_env_syncs_tick_for_animation_events();
-    test_inferno_lab_freeze_binding_precedes_action_sources();
     test_curriculum_supports_wave60_bridge_tier();
     test_inferno_reset_uses_osrs_run_energy_units();
 

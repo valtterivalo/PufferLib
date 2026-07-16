@@ -2,7 +2,7 @@
  * @file encounter_colosseum.h
  * @brief Fortis Colosseum — 12-wave PvM gauntlet ending in the Sol Heredit boss.
  *
- * Engine-agnostic encounter logic here. PufferLib glue in ocean/osrs_colosseum/binding.c.
+ * Engine-agnostic encounter logic here. PufferLib glue in ocean/osrs_colosseum/osrs_colosseum.h.
  */
 
 #ifndef ENCOUNTER_COLOSSEUM_H
