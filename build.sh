@@ -155,11 +155,6 @@ case "$ENV" in
         ;;
 esac
 
-NVCC_ENV_HOST_FLAGS=()
-case "$ENV" in
-    osrs_*) NVCC_ENV_HOST_FLAGS=(-Xcompiler=-fpermissive) ;;
-esac
-
 OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
 SRC_FILE=${SRC_FILE:-$SRC_DIR/$ENV.c}
 
@@ -289,7 +284,6 @@ if [ "$MODE" = "native" ]; then
 	    -DPUFFERLIB_BUILD_MAIN \
 	    -Xcompiler=-DPLATFORM_DESKTOP \
 	    -Xcompiler=-fopenmp \
-	    "${NVCC_ENV_HOST_FLAGS[@]}" \
 	    $PRECISION \
 	    src/pufferl.cu \
         "$RAYLIB_A" \
