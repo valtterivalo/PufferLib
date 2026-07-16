@@ -352,8 +352,7 @@ static void col_static_footprint_table_selftest(void) {
 
 /* A4: the 12 canonical primary-spawn anchors, SW tile of each 3x3 zone; the NPC's
    SW tile is placed ON the anchor. Three-way cross-verified (los `ao` array + b5
-   pastebin + wiki "12 default spawns", WSN#GAP1). D5: the b5 13th tile
-   (1824,3110) and cyan tile (1824,3106) are excluded — semantics unstated. */
+   pastebin + wiki "12 default spawns", WSN#GAP1). */
 /* 13 primary anchors verified tile-by-tile against the in-game spawn map
    (2026-07-07, world = local + (1808,3090)); (16,20) was missing from the
    research notes' "12 default spawns". */
@@ -530,7 +529,6 @@ typedef struct {
 
     int max_hit;         /* Jagex handset max hit for the default attack */
     AttackStyle player_style_that_max_hits;  /* RPS weakness, ATTACK_STYLE_NONE = none */
-    int stun_on_spawn;
     int can_move;
 } ColoNpcStats;
 
@@ -541,7 +539,6 @@ typedef struct {
     MeleeStyle melee_style;
     int can_melee;
     AttackStyle player_style_that_max_hits;
-    int stun_on_spawn;
     int can_move;
 } ColoNpcOverlay;
 
@@ -680,7 +677,6 @@ static void col_build_npc_stats(void) {
         s->melee_style     = o->melee_style;
         s->can_melee       = o->can_melee;
         s->player_style_that_max_hits = o->player_style_that_max_hits;
-        s->stun_on_spawn   = o->stun_on_spawn;
         s->can_move        = o->can_move;
     }
 }
@@ -1247,7 +1243,6 @@ typedef struct {
     EncounterPendingHitQueue pending_hits;
 
     int death_ticks;       /* death-animation linger, >0 = dying */
-    int aggro_target;      /* -1 = player, >= 0 = NPC index */
     int spawned_as_reinforcement; /* overrun-spawned: farm-safe damage cap
                                      routes this NPC's fresh damage to the
                                      unrewarded channel on waves 1-4 */
@@ -1255,14 +1250,12 @@ typedef struct {
     /* per-tick render flags (cleared at start of each tick) */
     int attacked_this_tick;
     AttackStyle attack_style_this_tick;
-    int attack_visual_target;
     int moved_this_tick;
     int moved_last_tick;   /* prior tick's moved_this_tick; warband members attack
                               only after two consecutive stationary ticks (B2) */
     int hit_landed_this_tick;
     int hit_damage;
     int hit_was_successful_this_tick;
-    int hit_spell_type;
 } ColoNPC;
 
 static inline ColoManticoreState* colo_npc_manticore(ColoNPC* npc) {
@@ -1589,19 +1582,12 @@ static const uint8_t* const* const COLO_LOADOUT_PROFILES[COLO_NUM_LOADOUT_PROFIL
     combat, 1 divine ranging, 1 surge potion). E13 supersedes the old L4
     base-boost shortcut for the speedrun kit's divine doses.
     No solid food and no staminas exist in ANY wiki colosseum inventory (L8/L14). */
-typedef enum {
-    COLO_BOOST_POTION_REGULAR = 0,
-    COLO_BOOST_POTION_DIVINE,
-} ColoBoostPotionKind;
-
 typedef struct {
     int brew_doses;
     int restore_doses;
     int combat_doses;
     int ranged_doses;
     int surge_doses;
-    ColoBoostPotionKind combat_boost_kind;
-    ColoBoostPotionKind ranged_boost_kind;
     ColoRestoreKind restore_kind;
 } ColoSupplyLoadout;
 
@@ -1609,15 +1595,11 @@ static const ColoSupplyLoadout COLO_SUPPLY_LOADOUTS[COLO_NUM_LOADOUT_PROFILES] =
     [COLO_LOADOUT_PROFILE_SPEEDRUN] = {
         .brew_doses = 4, .restore_doses = 28, .combat_doses = 4,
         .ranged_doses = 4, .surge_doses = 4,
-        .combat_boost_kind = COLO_BOOST_POTION_DIVINE,
-        .ranged_boost_kind = COLO_BOOST_POTION_DIVINE,
         .restore_kind = COLO_RESTORE_SANFEW,
     },
     [COLO_LOADOUT_PROFILE_BEGINNER] = {
         .brew_doses = 24, .restore_doses = 32, .combat_doses = 8,
         .ranged_doses = 8, .surge_doses = 0,
-        .combat_boost_kind = COLO_BOOST_POTION_REGULAR,
-        .ranged_boost_kind = COLO_BOOST_POTION_REGULAR,
         .restore_kind = COLO_RESTORE_SUPER_RESTORE,
     },
 };
@@ -2217,7 +2199,7 @@ typedef struct {
 
     /* loadout profile + inventory state (researched setups, L1-L16) */
     ColoLoadoutProfile active_loadout_profile;
-    ColoSupplyLoadout full_supplies;   /* obs normalization denominators */
+    ColoSupplyLoadout full_supplies;
     /** E13: Colosseum-owned live-gameplay timers for 100-tick stat drift and
         divine boost holds. The obs vector intentionally stays unchanged. */
     int stat_drift_timer;

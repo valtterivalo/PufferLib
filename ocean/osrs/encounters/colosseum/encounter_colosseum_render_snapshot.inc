@@ -539,19 +539,6 @@ static void col_emit_npc_attack_projectile(
     int target_size = 1;
     int target_npc_slot = -1;
 
-    if (npc->attack_visual_target >= 0 && npc->attack_visual_target < COLO_MAX_NPCS) {
-        ColoNPC* target = &s->npcs[npc->attack_visual_target];
-        if (col_npc_is_live_target(target)) {
-            target_tile_x = target->x;
-            target_tile_y = target->y;
-            target_size = col_npc_effective_size(target);
-            target_x = target->x + target_size / 2;
-            target_y = target->y + target_size / 2;
-            end_h = (int)(target_size * 0.5f * 128);
-            target_npc_slot = npc->attack_visual_target;
-        }
-    }
-
     int dist = encounter_projectile_distance(
         npc->x, npc->y, npc_size, target_tile_x, target_tile_y, target_size,
         ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
@@ -1044,6 +1031,16 @@ static void col_rearrange_inventory_cells(
     osrs_inventory_swap_cells(s->inventory_cells, source_slot, target_slot);
 }
 
+/** Fold the Colosseum-only staged intents (draft pick, grapple body slot) into the
+    per-tick action heads. Shared by both human-input translate paths. */
+static void col_apply_pending_draft_grapple_heads(HumanInput* hi, int* actions) {
+    if (hi->pending_modifier_select > 0 &&
+            hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
+        actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
+    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
+        actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
+}
+
 static void col_translate_human_input_ctx(
     HumanInput* hi,
     int* actions,
@@ -1073,11 +1070,7 @@ static void col_translate_human_input_ctx(
     encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
     /* Colosseum-only heads: draft pick (0=none, 1..3) + grapple body slot. */
-    if (hi->pending_modifier_select > 0 &&
-            hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
-        actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
-    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
-        actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
+    col_apply_pending_draft_grapple_heads(hi, actions);
 }
 
 static void col_translate_human_commands_ctx(
@@ -1151,11 +1144,7 @@ static void col_translate_human_commands_ctx(
 
     /* gear/draft/grapple intents are staged on pending_* (not the command queue),
        so fold them in here exactly as the per-tick translate path does. */
-    if (hi->pending_modifier_select > 0 &&
-            hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
-        actions[COLO_HEAD_MODIFIER_SELECT] = hi->pending_modifier_select;
-    if (hi->pending_grapple_slot > 0 && hi->pending_grapple_slot <= COLO_NUM_GRAPPLE_SLOTS)
-        actions[COLO_HEAD_GRAPPLE_PARRY] = hi->pending_grapple_slot;
+    col_apply_pending_draft_grapple_heads(hi, actions);
 }
 
 static void col_step_human_commands_ctx(

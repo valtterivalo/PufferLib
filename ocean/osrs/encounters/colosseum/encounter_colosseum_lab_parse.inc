@@ -5,8 +5,8 @@
  *        to keep each .inc under ~500 lines). Mirrors the inferno lab parser:
  *        trim -> tokenize -> key=value -> build a ColosseumLabCommand -> apply it.
  *
- * col_lab_apply_script_line is the encounter-neutral entry the viewer + the
- * EncounterDef.apply_lab_command hook call.
+ * col_lab_apply_script_line_alloc_json is the encounter-neutral entry the viewer
+ * + the EncounterDef.apply_lab_command hook call.
  */
 
 /* ----- name <-> id tables (also the viewer's spawn/modifier palettes) ------- */
@@ -483,10 +483,6 @@ static ColoLabLineResult col_lab_apply_script_line_impl(
     col_lab_apply_command(s, &cmd);
     free(copy);
     return COLO_LAB_LINE_NONE;
-}
-
-static ColoLabLineResult col_lab_apply_script_line(ColosseumState* s, const char* line) {
-    return col_lab_apply_script_line_impl(s, line, NULL);
 }
 
 static ColoLabLineResult col_lab_apply_script_line_alloc_json(

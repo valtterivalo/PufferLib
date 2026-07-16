@@ -417,6 +417,13 @@ static void col_empty_inventory_cell(ColosseumState* s, int cell_idx) {
     s->inventory_cells[cell_idx] = osrs_inventory_cell_empty();
 }
 
+/** Heal the player by `amount` HP, capped at base_hitpoints (overheal impossible). */
+static void col_heal_player_capped(ColosseumState* s, int amount) {
+    s->player.current_hitpoints += amount;
+    if (s->player.current_hitpoints > s->player.base_hitpoints)
+        s->player.current_hitpoints = s->player.base_hitpoints;
+}
+
 static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
     FoodType type;
     if (kind == OSRS_CONSUMABLE_SHARK_FOOD) type = FOOD_SHARK;
@@ -440,9 +447,7 @@ static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
         s->player.ate_food_this_tick = 1;
         s->player.last_food_heal = r.hp_healed;
     }
-    s->player.current_hitpoints += r.hp_healed;
-    if (s->player.current_hitpoints > s->player.base_hitpoints)
-        s->player.current_hitpoints = s->player.base_hitpoints;
+    col_heal_player_capped(s, r.hp_healed);
 }
 
 static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) {
@@ -503,9 +508,7 @@ static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) 
             s->surge_cooldown = COLO_SURGE_COOLDOWN_TICKS;
             return;
         case OSRS_CONSUMABLE_GUTHIX_REST:
-            s->player.current_hitpoints += 5;
-            if (s->player.current_hitpoints > s->player.base_hitpoints)
-                s->player.current_hitpoints = s->player.base_hitpoints;
+            col_heal_player_capped(s, 5);
             s->player_venom = 0;
             s->player_venom_timer = 0;
             s->player_poison = 0;
@@ -847,16 +850,6 @@ static int col_npc_effective_def_level(const ColoNPC* npc, const ColoNpcStats* n
     return def < 0 ? 0 : def;
 }
 
-/**
- * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
- * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness
- * (style match = forced max), the B7 perfect-parry guaranteed max (armed by a
- * last-tick grapple parry, consumed by the very next attack), and the A14
- * melee-style defence lookup (the weapon's style picks stab/slash/crush def).
- * A21+B9: 1-HP hazard entities (totem/bee) die to ANY attack of any style —
- * the hit is guaranteed for their full HP, no rolls, and it does not consume
- * an armed perfect-parry max; the attack still spends the weapon cycle.
- */
 /** L2/L3: fire the armed special attack with the spec weapon's loadout stats
     (melee gear base, weapon slot swapped). Queues one pending hit per splat
     (claws cascade = 4), spends energy via the shared resolver cost, applies
@@ -906,9 +899,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
         if (npc->def_drained > ns->def_level) npc->def_drained = ns->def_level;
     }
     if (r.heal > 0) {
-        s->player.current_hitpoints += r.heal;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
+        col_heal_player_capped(s, r.heal);
     }
     if (r.prayer_restore > 0) {
         s->player.current_prayer += r.prayer_restore;
@@ -922,9 +913,7 @@ static void col_player_spec_attack(ColosseumState* s, int npc_slot) {
         0, total > 0, total, &s->rng_state);
     int spec_heal = post.heal_amount + bf_heal;
     if (spec_heal > 0) {
-        s->player.current_hitpoints += spec_heal;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
+        col_heal_player_capped(s, spec_heal);
     }
 
     s->player.attack_timer = ls->attack_speed > 0 ? ls->attack_speed : 4;
@@ -1197,6 +1186,16 @@ static float col_expected_dpt_vs_npc(
     return expected_damage / (float)ls->attack_speed;
 }
 
+/**
+ * Resolve a player attack on the targeted NPC. Rolls accuracy + damage via the
+ * shared combat math and queues a pending hit. Honors the Fremennik RPS weakness
+ * (style match = forced max), the B7 perfect-parry guaranteed max (armed by a
+ * last-tick grapple parry, consumed by the very next attack), and the A14
+ * melee-style defence lookup (the weapon's style picks stab/slash/crush def).
+ * A21+B9: 1-HP hazard entities (totem/bee) die to ANY attack of any style —
+ * the hit is guaranteed for their full HP, no rolls, and it does not consume
+ * an armed perfect-parry max; the attack still spends the weapon cycle.
+ */
 static void col_player_attack_target_ctx(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -1301,9 +1300,7 @@ static void col_player_attack_target_ctx(
         damage > 0, damage, &s->rng_state);
     int swing_heal = post.heal_amount + bf_heal;
     if (swing_heal > 0) {
-        s->player.current_hitpoints += swing_heal;
-        if (s->player.current_hitpoints > s->player.base_hitpoints)
-            s->player.current_hitpoints = s->player.base_hitpoints;
+        col_heal_player_capped(s, swing_heal);
     }
 
     s->player.attack_timer = ls->attack_speed > 0 ? ls->attack_speed : 4;
@@ -1515,8 +1512,4 @@ static void col_tick_player_ctx(
     /* the thrall auto-attacks + Death-Charge timers advance only during live
        gameplay (paused across wave/ready gaps, like the surge cooldown). */
     if (can_attack) col_tick_thrall_and_death_charge(s, ctx);
-}
-
-static void col_tick_player(ColosseumState* s, const int* actions, int can_attack) {
-    col_tick_player_ctx(s, col_legacy_context(), actions, can_attack);
 }

@@ -213,67 +213,6 @@ static ColoForecastLanding col_step_out_forecast_set_action_landing_ctx(
     return landing;
 }
 
-static void col_step_out_forecast_landing_selftest_one_state(ColosseumState* s) {
-    for (int x = COLO_ARENA_MIN_X - 2; x <= COLO_ARENA_MAX_X + 2; x++) {
-        for (int y = COLO_ARENA_MIN_Y - 2; y <= COLO_ARENA_MAX_Y + 2; y++) {
-            s->player.x = x;
-            s->player.y = y;
-            for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-                int valid = col_step_out_forecast_action_valid(s, action_idx);
-                Player moved = s->player;
-                if (action_idx != 0) {
-                    encounter_move_to_target(
-                        &moved,
-                        ENCOUNTER_MOVE_TARGET_DX[action_idx],
-                        ENCOUNTER_MOVE_TARGET_DY[action_idx],
-                        col_player_walkable,
-                        (void*)s);
-                }
-                ColoForecastLanding landing =
-                    col_step_out_forecast_action_landing_ctx(s, action_idx);
-                if (landing.valid != valid ||
-                        landing.land_x != moved.x ||
-                        landing.land_y != moved.y) {
-                    fprintf(stderr,
-                        "colosseum landing mismatch player=(%d,%d) action=%d: helper=(%d,%d,%d) full=(%d,%d,%d)\n",
-                        x, y, action_idx,
-                        landing.valid, landing.land_x, landing.land_y,
-                        valid, moved.x, moved.y);
-                    abort();
-                }
-            }
-        }
-    }
-}
-
-static void col_step_out_forecast_landing_selftest(void) {
-    ColosseumContext ctx;
-    ColosseumState s;
-    col_init_context_typed(&ctx);
-    memset(&s, 0, sizeof(s));
-    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 0x51A7u);
-    memset(s.npcs, 0, sizeof(s.npcs));
-    memset(s.npc_collision_flags, 0, sizeof(s.npc_collision_flags));
-    col_rebuild_player_collision_flags(&s);
-    col_step_out_forecast_landing_selftest_one_state(&s);
-
-    col_spawn_npc_at(&s, COLO_SERPENT_SHAMAN, 12, 9);
-    col_spawn_npc_at(&s, COLO_JAVELIN_COLOSSUS, 18, 18);
-    col_rebuild_player_collision_flags(&s);
-    col_step_out_forecast_landing_selftest_one_state(&s);
-
-    s.wave = COLO_WAVE_BOSS;
-    s.sol.started = 1;
-    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
-    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
-    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
-    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
-    col_step_out_forecast_landing_selftest_one_state(&s);
-
-    printf("colosseum landing helper selftest PASS: %d actions across 3 states\n",
-        ENCOUNTER_MOVE_ACTIONS);
-}
-
 static int col_step_out_forecast_duplicate_landing(
     const ColoStepOutForecast* forecast,
     int action_idx
@@ -538,7 +477,6 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     ColoStepOutForecastAction* action,
     int sol_clamp_active
 ) {
-    (void)npcs;
     ColoForecastMoveResult result = {0};
     ColoForecastNpcLocal* npc = &npcs[idx];
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return result;
