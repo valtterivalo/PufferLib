@@ -1,13 +1,10 @@
 /**
  * @file binding.c
- * @brief Static-native binding for the OSRS Fortis Colosseum encounter.
+ * @brief Static-native binding for the OSRS Fortis Colosseum encounter:
+ *        bridges vecenv.h (float actions/terminals) to the encounter vtable.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the
- * Colosseum encounter's vtable. Lean version: no trace/replay machinery.
- *
- * Ordering matters: vecenv.h calls c_reset/c_step/c_close/c_render directly, so
- * those are defined before the include. my_init/my_vec_init/my_log use Dict
- * (declared by vecenv.h), so they are defined after the include.
+ * Ordering constraint: vecenv.h calls c_reset/c_step/c_close/c_render, so they
+ * precede its include; my_init/my_vec_init/my_log use its Dict and follow it.
  */
 
 #include <stdlib.h>
@@ -27,8 +24,7 @@
 
 #include "colosseum_profile.h"
 
-/* encounter headers + render.h have many static helpers only used by the
-   standalone viewer (not c_render) — suppress unused-function noise. */
+/* encounter + render headers carry viewer-only static helpers; silence unused-function. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "../osrs/encounters/encounter_colosseum.h"
@@ -70,17 +66,12 @@ typedef struct ColosseumEnv {
     int pending_render_reset;
     OsrsEnv render_env;
 
-    /* per-env running max of each episode's raw furthest depth (waves_fully_cleared
-       + current-wave fresh-fraction). Lives outside Log so it survives the train
-       log-window zeroing; snapshotted into env->log.colo_max_depth_reached each
-       terminal episode. Captures the furthest any single episode in this env reached. */
+    /* per-env furthest depth; lives outside Log so the train log-window zeroing
+       can't reset it, snapshotted into log.colo_max_depth_reached each terminal. */
     float max_episode_depth_seen;
 
-    /* scaffold: lifetime c_step counter for the damage-received-scale anneal.
-       calloc-zeroed once at vecenv allocation, incremented once per c_step, never
-       reset across episodes (ColosseumState is memset on reset, this Env is not).
-       Drives scale = start + (1-start)*clamp01(count/anneal_ticks). Units are
-       PER-ENV steps (global_agent_steps / num_envs). */
+    /* lifetime per-env c_step counter for the damage anneal; never reset across
+       episodes (ColosseumState is memset on reset, this Env is not). */
     uint64_t damage_scale_anneal_step;
 } ColosseumEnv;
 
@@ -115,11 +106,8 @@ static float col_log_dpt_rate(const Log* log, ColoLogDptSlot slot) {
 }
 
 
-/** Reset-with-state (PUFFER_RESET_WITH_STATE): state == NULL is the normal
-    fresh reset; non-NULL restores the best-trajectory curriculum snapshot
-    (value copy + derived-cache rebuild, same path as the binary snapshot
-    restore). Both paths regenerate obs + mask so the restored env is
-    immediately playable. */
+/** state==NULL: fresh reset. non-NULL: restore a best-trajectory snapshot
+    (value copy + derived-cache rebuild). Both regenerate obs+mask. */
 void c_reset(Env* env, const ColosseumState* state) {
     if (state == NULL) {
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
@@ -150,11 +138,8 @@ void c_step(Env* env) {
 
     COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
 
-    /* scaffold: damage-received-scale anneal. Only overwrite the live config scale
-       when the anneal is armed (ticks > 0 AND start < 1.0); otherwise leave the
-       config value untouched so a static swept player_damage_received_scale still
-       works and the default (1.0) stays a bit-identical no-op. The counter is a
-       lifetime per-env tick count that survives episode resets. */
+    /* damage anneal: only overwrite the live scale when armed (ticks>0 && start<1),
+       so a static swept player_damage_received_scale and the 1.0 default stay no-ops. */
     {
         int anneal_ticks = env->context.config.damage_scale_anneal_ticks;
         float anneal_start = env->context.config.damage_scale_anneal_start;
@@ -267,11 +252,7 @@ void c_render(Env* env) {
         re->client = render_make_client();
         RenderClient* rc = (RenderClient*)re->client;
         rc->ticks_per_second = env->ticks_per_second;
-        /* Fortis Colosseum stadium scene, mirroring the standalone osrs_visual
-           setup: colosseum terrain/objects/NPC models at the world SW anchor
-           (1808, 3090). The old inferno scene here was a scaffold copy that
-           never rendered colosseum-only NPCs (e.g. the Fremennik warband), so
-           the eval-render path aborted on the first missing model. */
+        /* colosseum stadium scene at world SW anchor (1808, 3090), mirroring osrs_visual. */
         EncounterSceneConfig scene = {
             .required_groups = {
                 OSRS_ASSET_GROUP_COLOSSEUM,
@@ -336,16 +317,14 @@ void c_render(Env* env) {
 
 typedef ColosseumState State;
 
-/* Opt in to the 2-arg c_reset(Env*, const State*) contract used by the
-   best-trajectory curriculum (vecenv.h's puffer_env_reset shim). */
+/* opt into vecenv.h's 2-arg c_reset(Env*, const State*) contract. */
 #define PUFFER_RESET_WITH_STATE
 
 #define MY_VEC_INIT
 #include "vecenv.h"
 
 
-/** lowbias32 integer hash (Chris Wellons): decorrelates consecutive env indices into
-    well-mixed 32-bit seeds so each env's RNG stream is independent. */
+/** lowbias32 hash: decorrelate consecutive env indices into independent RNG seeds. */
 static inline uint32_t col_lowbias32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;
@@ -363,15 +342,9 @@ void my_init(Env* env, Dict* kwargs) {
     env->last_step_time = 0.0;
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
-    /* Per-env RNG decorrelation. init_state seeds every env's rng_state to the same
-       constant (12345), so without this ALL envs run the SAME scenario stream:
-       identical wave-1 spawn + modifier drafts, and a fully choreographed fight under
-       a deterministic eval policy. Seed each env from its index hashed with lowbias32,
-       shifted by PUFFER_ENV_SEED_OFFSET so a held-out run can draw unseen scenarios.
-       Per-episode variation already comes from the rng chain advancing across resets
-       (c_reset passes explicit_seed=0, which preserves the advancing saved_rng). The
-       golden test drives col_reset_ctx with explicit seeds, bypassing this, so it
-       stays bit-identical. */
+    /* per-env RNG decorrelation: init_state seeds every env to 12345, so without this
+       all envs run the same scenario. Hash the index (+PUFFER_ENV_SEED_OFFSET for
+       held-out runs). The golden test drives explicit seeds, bypassing this. */
     uint32_t col_seed_offset = 0;
     const char* col_seed_off_str = getenv("PUFFER_ENV_SEED_OFFSET");
     if (col_seed_off_str) col_seed_offset = (uint32_t)strtoul(col_seed_off_str, NULL, 10);
@@ -578,10 +551,9 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "attacked_with_argmax_set",
         col_log_dpt_rate(log, COLO_LOG_ATTACKED_ARGMAX_SET_SLOT));
 
-    /* per-NPC-type prayer outcomes: off-prayer exposure rate, mean off-prayer
-       damage, and mean total damage taken per episode. Indexed by ColoNpcType.
-       Keys are string literals because dict_set stores the key POINTER, not a
-       copy, so formatted stack buffers alias every entry onto one item. */
+    /* per-NPC-type prayer/damage, indexed by ColoNpcType. Keys are literals:
+       dict_set keeps the key POINTER, so a formatted stack buffer would alias
+       every entry onto one item. */
     static const char* OFFPRAY_RATE_KEYS[COLO_NUM_NPC_TYPES] = {
         "offpray_rate_berserker", "offpray_rate_archer", "offpray_rate_seer",
         "offpray_rate_serpent", "offpray_rate_jaguar", "offpray_rate_javelin",
@@ -606,8 +578,8 @@ void my_log(Log* log, Dict* out) {
         dict_set(out, TOTAL_DMG_KEYS[t], log->colo_total_damage_by_type[t]);
     }
 
-    /* death attribution (diagnostic): kill-share per NPC type (which landed the
-       killing blow) + mean fatal-tick damage. Same literal-key rule as above. */
+    /* death attribution: killing-blow share per type + mean fatal-tick damage.
+       Literal keys (see above). */
     static const char* DEATH_BY_KEYS[COLO_NUM_NPC_TYPES] = {
         "death_by_berserker", "death_by_archer", "death_by_seer",
         "death_by_serpent", "death_by_jaguar", "death_by_javelin",
@@ -620,10 +592,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "offpray_dmg_solo", log->colo_offpray_damage_solo);
     dict_set(out, "death_on_conflict_tick", log->colo_death_on_conflict_tick);
 
-    /* death forensics (land-time): mean fatal-tick damage split by prayer
-       channel + mean heal capacity left at death, and per-type episode totals
-       of unprayable (typeless / ignore-prayer) damage. death_by_type says WHO
-       killed us; these say HOW. Same literal-key rule as above. */
+    /* death forensics: fatal-tick damage by prayer channel, heal left at death,
+       and per-type unprayable-damage totals. Literal keys (see above). */
     static const char* TYPELESS_DMG_KEYS[COLO_NUM_NPC_TYPES] = {
         "typeless_dmg_berserker", "typeless_dmg_archer", "typeless_dmg_seer",
         "typeless_dmg_serpent", "typeless_dmg_jaguar", "typeless_dmg_javelin",

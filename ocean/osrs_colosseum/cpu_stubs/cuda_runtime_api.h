@@ -1,3 +1,4 @@
+/* CPU-build shim: CUDA runtime API declarations for the shared binding paths. */
 #ifndef OSRS_COLOSSEUM_CPU_STUBS_CUDA_RUNTIME_API_H
 #define OSRS_COLOSSEUM_CPU_STUBS_CUDA_RUNTIME_API_H
 
