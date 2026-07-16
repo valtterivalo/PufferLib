@@ -7,13 +7,6 @@
  * - Pathfinding via step_toward_destination
  * - Freeze mechanics integration
  * - Wilderness boundary checking
- *
- * Movement actions:
- *   0 = maintain current movement state
- *   1 = move to adjacent tile (melee range)
- *   2 = move to target's exact tile
- *   3 = move to farcast tile (ranged/magic)
- *   4 = move to diagonal tile
  */
 
 #ifndef OSRS_PVP_MOVEMENT_H
@@ -302,12 +295,6 @@ static int pvp_tile_walkable(void* ctx, int x, int y) {
     return is_in_wilderness(x, y) && collision_tile_walkable(cmap, 0, x, y);
 }
 
-/* process_movement: deleted. movement now flows through walk_dest +
-   osrs_encounter_player_step (see pvp_step_player_movement above). the
-   five legacy modes (adjacent / under / diagonal / farcast / none) are
-   translated to walk_dest tiles in execute_switches, keeping the same
-   semantics while using the shared SDK's BFS pathfinder. */
-
 /**
  * Simple chase movement - move toward target's position.
  *
@@ -553,39 +540,6 @@ static inline void pvp_set_walk_dest_from_head_move(OsrsEnv* env, int agent_idx,
     if (move_action <= 0 || move_action >= MOVE_DIM) return;
     env->pvp_runtime.walk_dest_x[agent_idx] = p->x + ENCOUNTER_MOVE_TARGET_DX[move_action];
     env->pvp_runtime.walk_dest_y[agent_idx] = p->y + ENCOUNTER_MOVE_TARGET_DY[move_action];
-}
-
-/**
- * Continue movement for a player who is already moving.
- *
- * Used in sequential mode where movement clicks set destination but
- * don't immediately step. Each tick, players with is_moving=1 should
- * continue moving toward their destination.
- *
- * Running moves 2 tiles per tick (OSRS default for PvP).
- *
- * @param p Player to continue moving
- */
-__attribute__((unused))
-static void continue_movement(Player* p, const CollisionMap* cmap) {
-    if (!p->is_moving) {
-        return;
-    }
-    if (p->frozen_ticks > 0) {
-        p->is_moving = 0;
-        return;
-    }
-    // First step (walk)
-    if (!step_toward_destination(p, cmap)) {
-        p->is_moving = 0;
-        return;
-    }
-    // Second step (run) - only if not at destination yet
-    if (p->x != p->dest_x || p->y != p->dest_y) {
-        step_toward_destination(p, cmap);
-    }
-    // Still moving if not at destination
-    p->is_moving = (p->x != p->dest_x || p->y != p->dest_y) ? 1 : 0;
 }
 
 #endif // OSRS_PVP_MOVEMENT_H

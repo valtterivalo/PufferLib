@@ -2,7 +2,7 @@
  * @file osrs_pvp_observations.h
  * @brief Observation generation and action mask computation
  *
- * Generates the observation vector for RL agents (334 features)
+ * Generates the observation vector for RL agents (221 features)
  * and computes action masks to prevent invalid actions.
  */
 
@@ -278,7 +278,7 @@ static void ensure_obs_norm_initialized(void) {
 /**
  * Write normalized agent 0 observations + action mask to ocean buffer.
  *
- * Output layout: [normalized_obs(334), action_mask_as_float(39)] = 373 floats.
+ * Output layout: [normalized_obs(221), action_mask_as_float(70)] = 291 floats.
  */
 static void ocean_write_obs(OsrsEnv* env) {
     ensure_obs_norm_initialized();
@@ -321,7 +321,7 @@ static void ocean_write_obs_p1(OsrsEnv* env) {
 /**
  * Generate slot-mode observations with per-slot item stats.
  *
- * Observation layout (190 features):
+ * Observation layout (221 features):
  *   [0-118]   Core observations (gear/prayer/hp/consumables/timers/combat history/stats)
  *   [119-132] Gear bonuses (player + target visible defences)
  *   [133-149] Game mode flags, ability checks, attack_timer_ready
@@ -614,9 +614,6 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         obs[171 + slot] = (float)t->equipped[slot] / 63.0f;
     }
-
-    // Per-slot item stats removed: 144 features (8 slots x 18 stats) were redundant
-    // with gear bonuses (obs 119-132) and per-slot equipped indices (obs 160-181)
 
     // Voidwaker magic damage flag (182)
     uint8_t best_mspec = find_best_melee_spec(p);

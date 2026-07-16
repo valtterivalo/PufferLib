@@ -173,14 +173,6 @@ static float get_ranged_spec_acc_mult(RangedSpecWeapon weapon) {
     }
 }
 
-__attribute__((unused))
-static float get_magic_spec_acc_mult(MagicSpecWeapon weapon) {
-    switch (weapon) {
-        case MAGIC_SPEC_VOLATILE_STAFF: return 1.5f;
-        default:                        return 1.0f;
-    }
-}
-
 static inline float get_defence_prayer_mult(Player* p) {
     switch (p->offensive_prayer) {
         case OFFENSIVE_PRAYER_MELEE_LOW:
@@ -904,20 +896,9 @@ static inline int get_ticks_until_next_hit(Player* p) {
     return min_ticks;
 }
 
-typedef enum {
-    WEAPON_TYPE_STANDARD = 0,
-    WEAPON_TYPE_HALBERD
-} WeaponType;
-
-static inline int is_halberd_weapon(MeleeSpecWeapon weapon) {
-    (void)weapon;
-    return 0;
-}
-
 static inline int get_attack_range(Player* p, AttackStyle style) {
     switch (style) {
         case ATTACK_STYLE_MELEE:
-            if (is_halberd_weapon(p->melee_spec_weapon)) return 2;
             return 1;
         case ATTACK_STYLE_RANGED:
         case ATTACK_STYLE_MAGIC:

@@ -5,7 +5,7 @@
  * Handles player actions including:
  * - Food and potion consumption
  * - Timer updates
- * - Loadout-based action processing (8 heads)
+ * - Loadout-based action processing (9 heads)
  * - Reward calculation
  */
 
@@ -244,20 +244,6 @@ static void reset_tick_flags(Player* p) {
 
 // Forward declarations for phased execution
 static void execute_switches(OsrsEnv* env, int agent_idx, int* actions);
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions);
-
-/** Resolve attack style from attack action value. */
-static inline AttackStyle resolve_attack_style_for_action(Player* p, int attack_action) {
-    switch (attack_action) {
-        case ATTACK_ATK:
-            return get_slot_weapon_attack_style(p);
-        case ATTACK_ICE:
-        case ATTACK_BLOOD:
-            return ATTACK_STYLE_MAGIC;
-        default:
-            return ATTACK_STYLE_NONE;
-    }
-}
 
 /**
  * Execute switch-phase actions for an agent (Phase 1).
@@ -442,12 +428,6 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
 }
 
-/**
- * Execute attack-phase actions for an agent (Phase 2).
- *
- * Processes attacks AFTER all switches have been applied for BOTH players.
- * SPEC loadout overrides the ATTACK head (atomic spec = equip + enable + attack).
- */
 /**
  * Attack movement phase: auto-walk to melee range + step out from same tile.
  * Called for ALL players before any attack combat checks, so positions are
@@ -692,28 +672,6 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             }
         }
     }
-}
-
-/**
- * Legacy wrapper: runs both attack phases sequentially for a single player.
- * Used by execute_actions (scripted opponent convenience function).
- * For correct PID-independent behavior in pvp_step, call execute_attack_movement
- * for ALL players first, then execute_attack_combat for ALL players.
- */
-static void execute_attacks(OsrsEnv* env, int agent_idx, int* actions) {
-    execute_attack_movement(env, agent_idx, actions);
-    execute_attack_combat(env, agent_idx, actions);
-}
-
-/**
- * Execute all actions for an agent (convenience for opponents).
- * For correct prayer timing, c_step calls execute_switches for both
- * players FIRST, then execute_attacks for both players.
- */
-__attribute__((unused))
-static void execute_actions(OsrsEnv* env, int agent_idx, int* actions) {
-    execute_switches(env, agent_idx, actions);
-    execute_attacks(env, agent_idx, actions);
 }
 
 static float calculate_reward(OsrsEnv* env, int agent_idx) {
