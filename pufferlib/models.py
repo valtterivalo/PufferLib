@@ -62,9 +62,9 @@ class ColosseumEntityEncoder(nn.Module):
 
     Torch REFERENCE implementation: no policy instantiates this (the torch eval
     path uses the default Linear encoder); it exists as the finite-diff oracle
-    for the native CUDA encoder in tests/test_colosseum_entity_encoder.py.
+    for the native CUDA encoder.
 
-    Joseph Suarez's entity-encoder recipe adapted to the colosseum's per-NPC block.
+    Torch reference for the native CUDA colosseum entity encoder (finite-diff checked).
     The global path is a bias-free Linear over the full flat obs (matching the native
     backend's bias-free Linear encoder), so this module is a clean A/B:
     output = global(flat) + entity_pool(NPCs), isolating the entity-pool contribution.

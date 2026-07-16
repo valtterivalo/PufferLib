@@ -629,7 +629,7 @@ struct ColosseumEntityEncoderActivations {
     PrecisionTensor inv_l2_wgrad; // [hidden, 16]
 };
 
-// Gather the strided NPC block out of the flat obs into a tight [B*24, 43] buffer.
+// Gather the strided NPC block out of the flat obs into a tight [B*24, 37] buffer.
 __global__ void colo_ent_gather_npcs(
     precision_t* __restrict__ npc_flat, const precision_t* __restrict__ obs,
     int B, int obs_size) {
