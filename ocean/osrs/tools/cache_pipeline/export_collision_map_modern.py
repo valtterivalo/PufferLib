@@ -42,7 +42,6 @@ from export_collision_map import (
     CollisionFlags,
     mark_occupant,
     mark_wall,
-    new_collision_flags,
     parse_terrain,
     write_cmap,
 )

@@ -40,6 +40,7 @@ from export_collision_map import (
     hash_archive_name,
 )
 from modern_cache_reader import ModernCacheReader, decompress_container
+from export_textures import TextureAtlas, write_atlas_binary
 
 # --- constants ---
 
@@ -1873,7 +1874,7 @@ def _repeat_uv_component_with_margin(value: float, margin: float) -> float:
 
 
 def _atlas_face_uv(
-    atlas: "TextureAtlas",
+    atlas: TextureAtlas,
     tex_id: int,
     u: float,
     v: float,
@@ -1896,7 +1897,7 @@ def _atlas_face_uv(
 
 
 def _atlas_face_uv_params(
-    atlas: "TextureAtlas",
+    atlas: TextureAtlas,
     tex_id: int,
 ) -> tuple[float, float, float, float, float]:
     u_off, v_off, u_size, v_size = atlas.uv_map[tex_id]
@@ -2110,7 +2111,7 @@ def _unlit_face_vertex_colors(
 def expand_model(
     model: ModelData,
     tex_colors: dict[int, int] | None = None,
-    atlas: "TextureAtlas | None" = None,
+    atlas: TextureAtlas | None = None,
     bake_priority_offsets: bool = True,
     skip_fully_transparent: bool = False,
     ambient: int = 64,
@@ -2245,21 +2246,11 @@ def expand_model(
     return verts, colors, uvs
 
 
-def _write_atlas_binary(path: Path, atlas: "TextureAtlas") -> None:
-    """Write an ATLS atlas companion for textured MDL3 model sets."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        f.write(struct.pack("<I", 0x41544C53))
-        f.write(struct.pack("<I", atlas.width))
-        f.write(struct.pack("<I", atlas.height))
-        f.write(atlas.pixels)
-
-
 def write_models_binary(
     output_path: Path,
     models: list[ModelData],
     tex_colors: dict[int, int] | None = None,
-    atlas: "TextureAtlas | None" = None,
+    atlas: TextureAtlas | None = None,
     atlas_path: Path | None = None,
     bake_priority_offsets: bool = True,
     model_lighting: str = "client",
@@ -2294,7 +2285,7 @@ def write_models_binary(
     has_textures = True
     magic = MDL4_MAGIC
 
-    _write_atlas_binary(atlas_path or output_path.with_suffix(".atlas"), atlas)
+    write_atlas_binary(atlas_path or output_path.with_suffix(".atlas"), atlas)
 
     with open(output_path, "wb") as f:
         # header

@@ -90,41 +90,6 @@ static void exact_mkdir_if_needed(const char* dir) {
     abort();
 }
 
-static void exact_encode_step_out_forecast_obs(
-    const InfStepOutForecast* forecast,
-    float out[INF_STEP_OUT_FORECAST_OBS_SIZE]
-) {
-    int i = 0;
-    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-        const InfStepOutForecastAction* action = &forecast->actions[action_idx];
-        int first_attack_tick = 0;
-        int first_style_mask = 0;
-        int max_hit = 0;
-        int ranger_mager_same_tick = 0;
-        for (int tick_idx = 0; tick_idx < INF_STEP_OUT_FORECAST_HORIZON; tick_idx++) {
-            const InfStepOutForecastTick* tick = &action->ticks[tick_idx];
-            int style_mask = inf_step_out_forecast_tick_style_mask(tick);
-            if (first_attack_tick == 0 &&
-                    inf_step_out_forecast_tick_has_event(tick)) {
-                first_attack_tick = tick_idx + 1;
-                first_style_mask = style_mask;
-            }
-            if (tick->max_hit > max_hit) max_hit = tick->max_hit;
-            if (tick->ranger_count > 0 && tick->mager_count > 0)
-                ranger_mager_same_tick = 1;
-        }
-        out[i++] = action->valid ? 1.0f : 0.0f;
-        out[i++] = (float)first_attack_tick / (float)INF_STEP_OUT_FORECAST_HORIZON;
-        out[i++] = (float)first_style_mask / 7.0f;
-        out[i++] = (float)max_hit / 150.0f;
-        out[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-        out[i++] = ranger_mager_same_tick ? 1.0f : 0.0f;
-        out[i++] = action->ranger_mager_offtick_opportunity ? 1.0f : 0.0f;
-        out[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
-    }
-    assert(i == INF_STEP_OUT_FORECAST_OBS_SIZE);
-}
-
 static void exact_writer_open(InfExactWriter* writer, const char* path) {
     memset(writer, 0, sizeof(*writer));
     writer->file = fopen(path, "wb");
@@ -179,8 +144,10 @@ static void exact_capture(
     float obs[INF_NUM_OBS];
 
     inf_build_step_out_forecast_ctx(s, ctx, &forecast);
-    exact_encode_step_out_forecast_obs(&forecast, forecast_obs);
     inf_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
+    int forecast_obs_offset =
+        INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE + INF_TOTAL_NPC_OBS_SIZE;
+    memcpy(forecast_obs, &obs[forecast_obs_offset], sizeof(forecast_obs));
 
     InfExactRecordHeader record = {0};
     record.scenario_id = scenario_id;

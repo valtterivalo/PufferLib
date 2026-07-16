@@ -28,9 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from export_collision_map import (
     CONFIG_INDEX,
     MAP_INDEX,
-    MANIFEST_ARCHIVE,
     CacheReader,
-    _read_string,
     decode_archive,
     hash_archive_name,
     load_map_index,

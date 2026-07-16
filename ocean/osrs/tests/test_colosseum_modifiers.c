@@ -2578,7 +2578,6 @@ static void test_warband_move_skip(void) {
     /* idle up to t8: the anchor arms on the first attack-legal tick (t9) and
        the berserker window lands THAT tick, so the stutter-step must already
        be running when it opens. */
-    (void)idle;
     while ((s.wave_ready_delay > 0 || s.wave_attack_delay > 1) && !s.episode_over)
         step_and_observe(&s, &ctx, idle);
 
@@ -5034,7 +5033,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v18 for Solarflare shared cadence",
+    CHECK("snapshot version is v20 for Solarflare shared cadence",
         snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 20u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));

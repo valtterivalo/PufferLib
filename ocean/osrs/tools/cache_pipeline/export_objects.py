@@ -20,7 +20,6 @@ Usage:
 import argparse
 import gzip
 import io
-import math
 import struct
 import sys
 from collections.abc import Callable
@@ -59,7 +58,6 @@ from rc_cache import (
     RcCacheStore,
     decode_model,
     find_map_region_files,
-    hsl15_to_rgb,
     iter_location_placements,
     load_texture_average_colors as load_modern_texture_average_colors,
     load_texture_definitions,

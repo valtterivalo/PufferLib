@@ -24,13 +24,25 @@ the inferno golden test wants `-O2` (2000-tick trajectories x 15 configs).
 | `test_osrs_pvp_pending_hits.c` | PvP pending-hit semantics on the shared queue |
 | `test_osrs_special_attacks.c` | shared spec resolver (costs, SGS minimums, claws cascade bounds, def drains), item-effect laws (identity, tbow monotonicity, crystal scaling, blood fury proc rate, scythe splat rule), consumable formula home + Player-application laws (restore convergence, boost caps) |
 | `test_osrs_item_effect_masks.c` | data guard pinning the exact item -> effect_mask mapping in `osrs_items_generated.h`; the column is hand-maintained (no generator on this branch) so this catches a dropped or wrong mask |
+| `test_osrs_inventory_clicks.c` | shared inventory-click SDK: item-index classification and click-action resolution |
+| `test_osrs_venator_bow_bounce.c` | pure Venator bow bounce geometry, chain selection, and damage laws |
 | `test_inferno_attack_styles.c` | inferno NPC attack-style fidelity battery |
 | `test_inferno_lab.c` | inferno lab command grammar + snapshot/restore (also the cross-encounter shared-plumbing regression guard) |
 | `test_inferno_golden.c` | inferno characterization digests: refactor => bit-identical trajectory. BASELINE is branch-local (re-seeded 2026-06-10 on valtteri/osrs-colosseum); re-seed with `--print` after any INTENDED behavior change |
 | `test_inferno_replay_best.c` | inferno replay regression on a recorded best episode |
+| `test_inferno_forecast_exact.c` | inferno step-out forecast binary-exactness golden; `--write-golden DIR` seeds, `--compare DIR` re-checks |
 | `test_colosseum_modifiers.c` | colosseum battery: obs/mask fuzz, modifiers/drafts, arena geometry, warband, NPC mechanics, Sol Heredit, researched loadout profiles + consumables + specs |
+| `test_colosseum_forecast_exact.c` | binary-exactness gate for the colosseum step-out forecast hot path, plus the LoS/footprint lookup-table selftests |
+| `test_colosseum_golden.c` | byte-identity golden-master for the Fortis Colosseum env; re-seed with `--print` after any intended behavior change |
+| `test_colosseum_sol_spear_shapes.c` | tile-exact parity of Sol spear hazard shapes vs colosim, all 8 directions on both spear variants |
+| `test_colosseum_consumable_sprite_assets.c` | colosseum consumable dose-chain inventory sprite regression (needs `OSRS_ASSET_ROOT`) |
 | `bench_inferno_forecast.c` | inferno step-out forecast benchmark (not a test) |
+| `bench_colosseum_forecast_profile.c` | colosseum step-out forecast bucket profiler (not a test) |
 | `inferno_lab_cli.c` | interactive lab harness (not a test) |
+
+one-off diagnostics live alongside the suite but are not part of it: the `probe_*` and
+`trace_*` files, plus the report-only `test_colo_prayer_wiring.c`. they print findings
+rather than asserting pass/fail, and are run by hand during investigations.
 
 ## layering rule
 
