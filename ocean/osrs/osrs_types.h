@@ -719,7 +719,7 @@ typedef struct {
     int gui_strength_bonus;
 } Player;
 
-typedef struct {
+typedef struct Log {
     float episode_return;
     float episode_length;
     float wins;
