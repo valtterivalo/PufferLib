@@ -607,7 +607,7 @@ static int zul_attack_anim_ticks_for_style(int style) {
 static inline EncounterProjectileTiming zul_player_projectile_timing(
     int style, uint8_t weapon, int is_special, int distance
 ) {
-    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style((AttackStyle)style);
     EncounterProjectileDelayOptions options = {0};
     if (style == ATTACK_STYLE_MAGIC && weapon == ITEM_EYE_OF_AYAK) {
         kind = ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK;

@@ -28,6 +28,7 @@
 #define INFERNO_ENV_EXPORT __attribute__((visibility("default")))
 
 #include "inferno_profile.h"
+#define MY_TRUNCATIONS 1
 
 /* encounter + render headers carry viewer-only static helpers; silence unused-function. */
 #pragma GCC diagnostic push
@@ -53,6 +54,7 @@ typedef struct InfernoEnv {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     int num_agents;
     int rng;
     Log log;
@@ -169,6 +171,7 @@ static inline void inferno_env_write_post_restore_state(Env* env) {
     inferno_env_write_obs_mask(env);
     env->rewards[0] = 0.0f;
     env->terminals[0] = 0.0f;
+    env->truncations[0] = 0.0f;
 }
 
 static inline void inferno_env_refresh_after_state_load(Env* env) {
@@ -305,7 +308,9 @@ void c_step(Env* env) {
     env->rewards[0] = ENCOUNTER_INFERNO.get_reward(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
     int is_term = ENCOUNTER_INFERNO.is_terminal(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
-    env->terminals[0] = (float)is_term;
+    int is_trunc = is_term && env->state.tick >= INF_MAX_TICKS && env->state.player.current_hitpoints > 0;
+    env->terminals[0] = (float)(is_term && !is_trunc);
+    env->truncations[0] = (float)is_trunc;
     INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
 
     INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);

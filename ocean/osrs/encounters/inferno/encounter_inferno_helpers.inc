@@ -564,14 +564,14 @@ static inline EncounterProjectileTiming inf_npc_projectile_timing(
     InfNPCType type, int style, int distance
 ) {
     return encounter_projectile_timing(
-        distance, 0, encounter_projectile_delay_kind_for_style(style),
+        distance, 0, encounter_projectile_delay_kind_for_style((AttackStyle)style),
         inf_npc_projectile_options(type, style));
 }
 
 static inline EncounterProjectileTiming inf_player_projectile_timing(
     int style, uint8_t weapon, int is_special, int distance
 ) {
-    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style((AttackStyle)style);
     EncounterProjectileDelayOptions options = {0};
     if (style == ATTACK_STYLE_RANGED) {
         if (weapon == ITEM_TOXIC_BLOWPIPE) {
