@@ -339,7 +339,7 @@ static EncounterProjectileTiming col_npc_projectile_timing(
     AttackStyle style,
     int distance
 ) {
-    EncounterProjectileDelayKind kind = col_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
     ColoProjectileReleaseProfile profile = col_npc_projectile_release_profile(type, style);
 
     EncounterProjectileDelayOptions options = {0};

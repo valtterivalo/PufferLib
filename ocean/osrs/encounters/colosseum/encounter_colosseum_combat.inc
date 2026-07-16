@@ -336,7 +336,7 @@ static int col_npc_roll_vs_player(
 static int col_npc_projectile_delay(AttackStyle style, int distance) {
     EncounterProjectileDelayOptions opts = {0};
     EncounterProjectileTiming timing = encounter_projectile_timing(
-        distance, 0, col_projectile_delay_kind_for_style(style), opts);
+        distance, 0, encounter_projectile_delay_kind_for_style(style), opts);
     return timing.damage_delay_ticks;
 }
 

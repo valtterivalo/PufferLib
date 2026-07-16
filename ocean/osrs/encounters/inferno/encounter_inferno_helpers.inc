@@ -540,12 +540,6 @@ static inline int inf_pending_hit_obs_timer(const EncounterPendingHit* ph) {
 #define INF_ANIM_JALTOK_JAD_RANGED_ATTACK INF_GEN_ANIM_JALTOK_JAD_ATTACK_RANGED
 #define INF_ANIM_JALTOK_JAD_MELEE_ATTACK INF_GEN_ANIM_JALTOK_JAD_ATTACK_MELEE
 
-static inline EncounterProjectileDelayKind inf_projectile_delay_kind_for_style(int style) {
-    if (style == ATTACK_STYLE_MAGIC) return ENCOUNTER_PROJECTILE_DELAY_MAGIC;
-    if (style == ATTACK_STYLE_RANGED) return ENCOUNTER_PROJECTILE_DELAY_RANGED;
-    return ENCOUNTER_PROJECTILE_DELAY_MELEE;
-}
-
 static inline EncounterProjectileDelayOptions inf_npc_projectile_options(
     InfNPCType type, int style
 ) {
@@ -570,14 +564,14 @@ static inline EncounterProjectileTiming inf_npc_projectile_timing(
     InfNPCType type, int style, int distance
 ) {
     return encounter_projectile_timing(
-        distance, 0, inf_projectile_delay_kind_for_style(style),
+        distance, 0, encounter_projectile_delay_kind_for_style(style),
         inf_npc_projectile_options(type, style));
 }
 
 static inline EncounterProjectileTiming inf_player_projectile_timing(
     int style, uint8_t weapon, int is_special, int distance
 ) {
-    EncounterProjectileDelayKind kind = inf_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
     EncounterProjectileDelayOptions options = {0};
     if (style == ATTACK_STYLE_RANGED) {
         if (weapon == ITEM_TOXIC_BLOWPIPE) {

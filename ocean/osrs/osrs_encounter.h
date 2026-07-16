@@ -376,6 +376,36 @@ static inline int encounter_attack_style_to_proj_style(int attack_style) {
     }
 }
 
+static inline EncounterProjectileDelayKind encounter_projectile_delay_kind_for_style(
+    AttackStyle style
+) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
+        case ATTACK_STYLE_MAGIC:
+            return ENCOUNTER_PROJECTILE_DELAY_MAGIC;
+        case ATTACK_STYLE_RANGED:
+            return ENCOUNTER_PROJECTILE_DELAY_RANGED;
+        case ATTACK_STYLE_NONE:
+            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
+    }
+    abort();
+}
+
+static inline OffensivePrayer encounter_offensive_prayer_for_style(AttackStyle style) {
+    switch (style) {
+        case ATTACK_STYLE_MELEE:
+            return OFFENSIVE_PRAYER_PIETY;
+        case ATTACK_STYLE_RANGED:
+            return OFFENSIVE_PRAYER_RIGOUR;
+        case ATTACK_STYLE_MAGIC:
+            return OFFENSIVE_PRAYER_AUGURY;
+        case ATTACK_STYLE_NONE:
+            return OFFENSIVE_PRAYER_NONE;
+    }
+    abort();
+}
+
 /* populate an overlay projectile slot with flight parameters.
    encounters should call this instead of filling fields manually. */
 static inline int encounter_emit_projectile(

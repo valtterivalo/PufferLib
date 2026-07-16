@@ -45,17 +45,7 @@ static int inf_local_overhead_action(int action) {
 }
 
 static OffensivePrayer inf_required_offensive_prayer_for_style(AttackStyle style) {
-    switch (style) {
-        case ATTACK_STYLE_MELEE:
-            return OFFENSIVE_PRAYER_PIETY;
-        case ATTACK_STYLE_RANGED:
-            return OFFENSIVE_PRAYER_RIGOUR;
-        case ATTACK_STYLE_MAGIC:
-            return OFFENSIVE_PRAYER_AUGURY;
-        case ATTACK_STYLE_NONE:
-            return OFFENSIVE_PRAYER_NONE;
-    }
-    abort();
+    return encounter_offensive_prayer_for_style(style);
 }
 
 static void inf_record_offensive_prayer_attack(

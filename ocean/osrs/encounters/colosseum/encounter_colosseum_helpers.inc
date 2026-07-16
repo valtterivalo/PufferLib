@@ -64,19 +64,8 @@ static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
     return FIGHT_STYLE_AGGRESSIVE;
 }
 
-/** Style-matched offensive prayer (Piety/Rigour/Augury). */
 static OffensivePrayer col_offensive_prayer_for_attack_style(AttackStyle style) {
-    switch (style) {
-        case ATTACK_STYLE_MELEE:
-            return OFFENSIVE_PRAYER_PIETY;
-        case ATTACK_STYLE_RANGED:
-            return OFFENSIVE_PRAYER_RIGOUR;
-        case ATTACK_STYLE_MAGIC:
-            return OFFENSIVE_PRAYER_AUGURY;
-        case ATTACK_STYLE_NONE:
-            return OFFENSIVE_PRAYER_NONE;
-    }
-    abort();
+    return encounter_offensive_prayer_for_style(style);
 }
 
 static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
@@ -182,28 +171,12 @@ static const OsrsEquipmentEffectProfile* col_live_effects(ColosseumState* s) {
     return &s->effects_live;
 }
 
-static inline EncounterProjectileDelayKind col_projectile_delay_kind_for_style(
-    AttackStyle style
-) {
-    switch (style) {
-        case ATTACK_STYLE_MELEE:
-            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
-        case ATTACK_STYLE_MAGIC:
-            return ENCOUNTER_PROJECTILE_DELAY_MAGIC;
-        case ATTACK_STYLE_RANGED:
-            return ENCOUNTER_PROJECTILE_DELAY_RANGED;
-        case ATTACK_STYLE_NONE:
-            return ENCOUNTER_PROJECTILE_DELAY_MELEE;
-    }
-    abort();
-}
-
 static inline EncounterProjectileTiming col_player_projectile_timing(
     AttackStyle style,
     uint8_t weapon,
     int distance
 ) {
-    EncounterProjectileDelayKind kind = col_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
     EncounterProjectileDelayOptions options = {0};
     if (style == ATTACK_STYLE_RANGED && weapon == ITEM_TWISTED_BOW)
         options.visual_delay_ticks = 1;

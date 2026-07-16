@@ -604,16 +604,10 @@ static int zul_attack_anim_ticks_for_style(int style) {
     return ZUL_RANGED_ANIM_TICKS;
 }
 
-static inline EncounterProjectileDelayKind zul_projectile_delay_kind_for_style(int style) {
-    if (style == ATTACK_STYLE_MAGIC) return ENCOUNTER_PROJECTILE_DELAY_MAGIC;
-    if (style == ATTACK_STYLE_RANGED) return ENCOUNTER_PROJECTILE_DELAY_RANGED;
-    return ENCOUNTER_PROJECTILE_DELAY_MELEE;
-}
-
 static inline EncounterProjectileTiming zul_player_projectile_timing(
     int style, uint8_t weapon, int is_special, int distance
 ) {
-    EncounterProjectileDelayKind kind = zul_projectile_delay_kind_for_style(style);
+    EncounterProjectileDelayKind kind = encounter_projectile_delay_kind_for_style(style);
     EncounterProjectileDelayOptions options = {0};
     if (style == ATTACK_STYLE_MAGIC && weapon == ITEM_EYE_OF_AYAK) {
         kind = ENCOUNTER_PROJECTILE_DELAY_EYE_OF_AYAK;
