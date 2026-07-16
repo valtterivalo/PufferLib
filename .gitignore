@@ -180,3 +180,7 @@ resources/drive/binaries/*
 *.dSYM/
 .omegacode/
 ocean/osrs/data
+
+# local eval checkpoints (never track model binaries)
+/*.bin
+colosseum_postfix_repro_checkpoints/
