@@ -73,7 +73,6 @@ typedef struct {
     uint8_t*  base_face_alphas; /* [face_count] OSRS alpha: 0 opaque, 255 transparent */
     uint8_t*  face_alpha_labels;/* [face_count] label group per face for type-5 anims */
     uint16_t  base_vert_count;
-    uint8_t   min_priority;     /* minimum face priority in this model */
 
 } OsrsModel;
 
@@ -465,14 +464,6 @@ static ModelCache* model_cache_load(const char* path) {
                     mesh.colors[(fp * 3) * 4 + 3] == 0)
                 cache->models[i].base_face_alphas[fp] = 255;
         }
-
-        /* compute min priority for this model */
-        uint8_t min_pri = 255;
-        for (uint16_t fp = 0; fp < face_count; fp++) {
-            if (cache->models[i].face_priorities[fp] < min_pri)
-                min_pri = cache->models[i].face_priorities[fp];
-        }
-        cache->models[i].min_priority = min_pri;
 
         /* upload to GPU */
         UploadMesh(&mesh, false);

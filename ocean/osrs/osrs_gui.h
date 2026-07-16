@@ -47,24 +47,14 @@
 
 
 #define GUI_BG_DARK     CLITERAL(Color){ 62, 53, 41, 255 }
-#define GUI_BG_MEDIUM   CLITERAL(Color){ 75, 67, 54, 255 }
 #define GUI_BG_SLOT     CLITERAL(Color){ 56, 48, 38, 255 }
-#define GUI_BG_SLOT_HL  CLITERAL(Color){ 90, 80, 60, 255 }
 #define GUI_BORDER      CLITERAL(Color){ 42, 36, 28, 255 }
 #define GUI_BORDER_LT   CLITERAL(Color){ 100, 90, 70, 255 }
 #define GUI_TEXT_YELLOW  CLITERAL(Color){ 255, 255, 0, 255 }
 #define GUI_TEXT_ORANGE  CLITERAL(Color){ 255, 152, 31, 255 }
 #define GUI_TEXT_WHITE   CLITERAL(Color){ 255, 255, 255, 255 }
 #define GUI_TEXT_GREEN   CLITERAL(Color){ 0, 255, 0, 255 }
-#define GUI_TEXT_RED     CLITERAL(Color){ 255, 0, 0, 255 }
-#define GUI_TEXT_CYAN    CLITERAL(Color){ 0, 255, 255, 255 }
-#define GUI_TAB_ACTIVE   CLITERAL(Color){ 100, 90, 70, 255 }
-#define GUI_TAB_INACTIVE CLITERAL(Color){ 50, 44, 35, 255 }
-#define GUI_PRAYER_ON   CLITERAL(Color){ 200, 200, 100, 80 }
 #define GUI_SPEC_GREEN  CLITERAL(Color){ 0, 180, 0, 255 }
-#define GUI_SPEC_DARK   CLITERAL(Color){ 30, 30, 20, 255 }
-#define GUI_HP_GREEN    CLITERAL(Color){ 0, 146, 0, 255 }
-#define GUI_HP_RED      CLITERAL(Color){ 160, 0, 0, 255 }
 
 /* OSRS text shadow: draw black at (+1,+1) then color on top */
 #define GUI_TEXT_SHADOW CLITERAL(Color){ 0, 0, 0, 255 }
@@ -88,8 +78,6 @@
 
 #define GUI_ORBS_X 0
 #define GUI_ORBS_Y 10
-#define GUI_ORBS_W 207
-#define GUI_ORBS_H 197
 #define GUI_XP_X 0
 #define GUI_XP_Y 17
 #define GUI_HP_X 0
@@ -104,7 +92,6 @@
 #define GUI_WORLDMAP_Y 137
 
 #define GUI_SIDE_MENU_W 241
-#define GUI_SIDE_MENU_H 335
 #define GUI_SIDE_CONTENT_X 25
 #define GUI_SIDE_CONTENT_Y 37
 #define GUI_SIDE_CONTENT_W 190
@@ -196,7 +183,6 @@ typedef enum {
     GUI_SPELL_CARRALLANGER_TELEPORT, /* sprite 346 / 396 */
     GUI_SPELL_ANNAKARL_TELEPORT,   /* sprite 347 / 397 */
     GUI_SPELL_GHORROCK_TELEPORT,   /* sprite 348 / 398 */
-    GUI_SPELL_VENGEANCE,          /* sprite 564 */
     GUI_NUM_SPELLS
 } GuiSpellIdx;
 
@@ -378,10 +364,7 @@ typedef struct {
 
     /* equipment slot background sprites (indexed by GEAR_SLOT_*) */
     Texture2D slot_sprites[GUI_NUM_SLOT_SPRITES];
-    Texture2D slot_tile_bg;   /* sprite 170: tile/background */
 
-    /* tab icons: 7 tabs (combat, stats, quests, inventory, equipment, prayer, spellbook) */
-    Texture2D tab_icons[GUI_TAB_COUNT];
     int tab_press_timer[GUI_TAB_COUNT];
 
     /* prayer icons: enabled and disabled variants */
@@ -391,21 +374,8 @@ typedef struct {
     Texture2D spell_on[GUI_NUM_SPELLS];
     Texture2D spell_off[GUI_NUM_SPELLS];
 
-    /* special attack bar sprite */
-    Texture2D spec_bar;
-    int spec_bar_loaded;
-
     /* interface chrome sprites */
-    Texture2D side_panel_bg;       /* 1031: stone background tile */
-    Texture2D tabs_row_bottom;     /* 1032: bottom tab row strip */
-    Texture2D tabs_row_top;        /* 1036: top tab row strip */
-    Texture2D tab_stone_sel[5];    /* 1026-1030: selected tab corners + middle */
-    Texture2D slanted_tab;         /* 952: inactive tab button */
-    Texture2D slanted_tab_hover;   /* 953: hovered tab button */
     Texture2D slot_tile;           /* 170: equipment slot background */
-    Texture2D slot_selected;       /* 179: equipment slot selected */
-    Texture2D orb_frame;           /* 1071: minimap orb frame */
-    int chrome_loaded;
 
     /* minimap chrome sprites (canonical OSRS sprite IDs from RuneLite SpriteID).
        loaded once at init, then composited each frame in render_draw_minimap_area.
@@ -418,32 +388,10 @@ typedef struct {
     Texture2D rm_minimap_alpha_mask; /* 1178: resizable-mode circular cutout */
     Texture2D rm_minimap_frame;      /* 1177: resizable-mode frame chrome */
     Texture2D rm_compass_alpha_mask; /* 1179: resizable-mode compass mask */
-    Texture2D rm_side_panel_bg;        /* 897: tiled side panel background */
-    Texture2D rm_side_panel_edge_left; /* 1175: 26x261 left vertical strip */
-    Texture2D rm_side_panel_edge_right;/* 1176: 26x261 right vertical strip */
     Texture2D rm_tabs_top_row;         /* 1173: 241x37 top tab strip */
-    Texture2D rm_tabs_bottom_row;      /* 1174: 241x37 bottom tab strip */
-    Texture2D rm_tab_stone;            /* 1180: 33x36 inactive tab stone */
-    Texture2D rm_tab_stone_selected;   /* 1181: 33x36 active tab stone */
-    Texture2D orb_empty;             /* 1059: greyed orb disc (base chrome) */
-    Texture2D orb_hp;                /* 1060: green-fill HP orb */
-    Texture2D orb_prayer;            /* 1063: prayer orb chrome */
-    Texture2D orb_run;               /* 1064: run-energy orb chrome */
-    Texture2D orb_run_active;        /* 1065: run-energy orb when running */
-    Texture2D orb_icon_hp;           /* 1067: heart icon inside HP orb */
-    Texture2D orb_icon_prayer;       /* 1068: prayer icon */
-    Texture2D orb_icon_walk;         /* 1069: walking-foot icon */
-    Texture2D orb_icon_run;          /* 1070: running-foot icon */
     Texture2D minimap_dot_player;    /* 512: white square for player */
     Texture2D minimap_dot_npc;       /* 511: yellow square for NPCs */
-    Texture2D minimap_dot_friend;    /* 513: green square for friendlies */
-    Texture2D minimap_dot_item;      /* 510: red square for ground items */
     int minimap_chrome_loaded;
-
-    /* skill icons for stats tab (25x25 from RuneLite skill_icons) */
-    #define GUI_NUM_SKILL_ICONS 7
-    Texture2D skill_icons[7];  /* attack, strength, defence, ranged, prayer, magic, hitpoints */
-    int skill_icons_loaded;
 
     /* item sprites: keyed by OSRS item ID (from data/sprites/items/{id}.png) */
     #define GUI_MAX_ITEM_SPRITES 256
@@ -741,7 +689,6 @@ static const int GUI_SPELL_ON_SPRITE_IDS[GUI_NUM_SPELLS] = {
     332, 340, 336, 328,
     341, 342, 343, 344,
     345, 346, 347, 348,
-    564,
 };
 
 static const int GUI_SPELL_OFF_SPRITE_IDS[GUI_NUM_SPELLS] = {
@@ -751,7 +698,6 @@ static const int GUI_SPELL_OFF_SPRITE_IDS[GUI_NUM_SPELLS] = {
     382, 390, 386, 378,
     391, 392, 393, 394,
     395, 396, 397, 398,
-    614,
 };
 
 static int gui_prayer_on_sprite_id(GuiPrayerIdx idx) {
@@ -834,36 +780,6 @@ static void gui_load_sprites(GuiState* gs) {
     for (int i = 0; i < GUI_NUM_SLOT_SPRITES; i++) {
         ok &= gui_try_load(&gs->slot_sprites[i], slot_files[i]);
     }
-    gui_try_load(&gs->slot_tile_bg, OSRS_ASSET("sprites/gui/slot_tile.png"));
-
-    /* tab icons: mapped to GuiTab enum order (7 tabs) */
-    const char* tab_files[] = {
-        OSRS_ASSET("sprites/gui/tab_combat.png"),    /* GUI_TAB_COMBAT */
-        OSRS_ASSET("sprites/gui/tab_stats.png"),     /* GUI_TAB_STATS */
-        OSRS_ASSET("sprites/gui/tab_quests.png"),    /* GUI_TAB_QUESTS */
-        OSRS_ASSET("sprites/gui/tab_inventory.png"), /* GUI_TAB_INVENTORY */
-        OSRS_ASSET("sprites/gui/tab_equipment.png"), /* GUI_TAB_EQUIPMENT */
-        OSRS_ASSET("sprites/gui/tab_prayer.png"),    /* GUI_TAB_PRAYER */
-        OSRS_ASSET("sprites/gui/tab_magic.png"),     /* GUI_TAB_SPELLBOOK */
-    };
-    for (int i = 0; i < GUI_TAB_COUNT; i++) {
-        ok &= gui_try_load(&gs->tab_icons[i], tab_files[i]);
-    }
-
-    /* skill icons for stats tab (OSRS skill_icons from RuneLite resources) */
-    const char* skill_icon_files[] = {
-        OSRS_ASSET("sprites/gui/skill_attack.png"),
-        OSRS_ASSET("sprites/gui/skill_strength.png"),
-        OSRS_ASSET("sprites/gui/skill_defence.png"),
-        OSRS_ASSET("sprites/gui/skill_ranged.png"),
-        OSRS_ASSET("sprites/gui/skill_prayer.png"),
-        OSRS_ASSET("sprites/gui/skill_magic.png"),
-        OSRS_ASSET("sprites/gui/skill_hitpoints.png"),
-    };
-    gs->skill_icons_loaded = 1;
-    for (int i = 0; i < 7; i++) {
-        gs->skill_icons_loaded &= gui_try_load(&gs->skill_icons[i], skill_icon_files[i]);
-    }
 
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
         const char* on_path = TextFormat(OSRS_ASSET("sprites/gui/%d.png"),
@@ -880,19 +796,8 @@ static void gui_load_sprites(GuiState* gs) {
         gui_try_load(&gs->spell_off[i], off_path);
     }
 
-    /* special attack bar */
-    gs->spec_bar_loaded = gui_try_load(&gs->spec_bar, OSRS_ASSET("sprites/gui/special_attack.png"));
-
     /* interface chrome */
-    gs->chrome_loaded = 1;
-    gs->chrome_loaded &= gui_try_load(&gs->side_panel_bg, OSRS_ASSET("sprites/gui/side_panel_bg.png"));
-    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_bottom, OSRS_ASSET("sprites/gui/tabs_row_bottom.png"));
-    gs->chrome_loaded &= gui_try_load(&gs->tabs_row_top, OSRS_ASSET("sprites/gui/tabs_row_top.png"));
-    gui_try_load(&gs->slanted_tab, OSRS_ASSET("sprites/gui/slanted_tab.png"));
-    gui_try_load(&gs->slanted_tab_hover, OSRS_ASSET("sprites/gui/slanted_tab_hover.png"));
     gui_try_load(&gs->slot_tile, OSRS_ASSET("sprites/gui/slot_tile.png"));
-    gui_try_load(&gs->slot_selected, OSRS_ASSET("sprites/gui/slot_selected.png"));
-    gui_try_load(&gs->orb_frame, OSRS_ASSET("sprites/gui/orb_frame.png"));
 
     /* canonical OSRS minimap chrome (loaded best-effort; gracefully omitted if
        the asset bundle predates the export pipeline update). */
@@ -911,55 +816,12 @@ static void gui_load_sprites(GuiState* gs) {
         OSRS_ASSET("sprites/gui/rm_minimap_and_compass_frame.png"));
     gui_try_load(&gs->rm_compass_alpha_mask,
         OSRS_ASSET("sprites/gui/rm_compass_alpha_mask.png"));
-    gui_try_load(&gs->rm_side_panel_bg,
-        OSRS_ASSET("sprites/gui/rm_side_panel_bg.png"));
-    gui_try_load(&gs->rm_side_panel_edge_left,
-        OSRS_ASSET("sprites/gui/rm_side_panel_edge_left.png"));
-    gui_try_load(&gs->rm_side_panel_edge_right,
-        OSRS_ASSET("sprites/gui/rm_side_panel_edge_right.png"));
     gui_try_load(&gs->rm_tabs_top_row,
         OSRS_ASSET("sprites/gui/rm_tabs_top_row.png"));
-    gui_try_load(&gs->rm_tabs_bottom_row,
-        OSRS_ASSET("sprites/gui/rm_tabs_bottom_row.png"));
-    gui_try_load(&gs->rm_tab_stone,
-        OSRS_ASSET("sprites/gui/rm_tab_stone_middle.png"));
-    gui_try_load(&gs->rm_tab_stone_selected,
-        OSRS_ASSET("sprites/gui/rm_tab_stone_middle_selected.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_empty,
-        OSRS_ASSET("sprites/gui/orb_empty.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_hp,
-        OSRS_ASSET("sprites/gui/orb_hp.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_prayer,
-        OSRS_ASSET("sprites/gui/orb_prayer.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_run,
-        OSRS_ASSET("sprites/gui/orb_run.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_run_active,
-        OSRS_ASSET("sprites/gui/orb_run_active.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_hp,
-        OSRS_ASSET("sprites/gui/orb_icon_hp.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_prayer,
-        OSRS_ASSET("sprites/gui/orb_icon_prayer.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_walk,
-        OSRS_ASSET("sprites/gui/orb_icon_walk.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->orb_icon_run,
-        OSRS_ASSET("sprites/gui/orb_icon_run.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_player,
         OSRS_ASSET("sprites/gui/minimap_dot_player.png"));
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_npc,
         OSRS_ASSET("sprites/gui/minimap_dot_npc.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_friend,
-        OSRS_ASSET("sprites/gui/minimap_dot_friend.png"));
-    gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_dot_item,
-        OSRS_ASSET("sprites/gui/minimap_dot_item.png"));
-
-    const char* tab_sel_files[] = {
-        OSRS_ASSET("sprites/gui/tab_stone_tl_sel.png"),
-        OSRS_ASSET("sprites/gui/tab_stone_tr_sel.png"),
-        OSRS_ASSET("sprites/gui/tab_stone_bl_sel.png"),
-        OSRS_ASSET("sprites/gui/tab_stone_br_sel.png"),
-        OSRS_ASSET("sprites/gui/tab_stone_mid_sel.png"),
-    };
-    for (int i = 0; i < 5; i++) gui_try_load(&gs->tab_stone_sel[i], tab_sel_files[i]);
 
     static const char* ui_asset_names[] = {
         "tradebacking_dark",
@@ -1167,8 +1029,6 @@ static void gui_unload_sprites(GuiState* gs) {
     }
     gs->named_asset_count = 0;
     for (int i = 0; i < GUI_NUM_SLOT_SPRITES; i++) UnloadTexture(gs->slot_sprites[i]);
-    UnloadTexture(gs->slot_tile_bg);
-    for (int i = 0; i < GUI_TAB_COUNT; i++) UnloadTexture(gs->tab_icons[i]);
     for (int i = 0; i < GUI_NUM_PRAYERS; i++) {
         UnloadTexture(gs->prayer_on[i]);
     }
@@ -1176,18 +1036,7 @@ static void gui_unload_sprites(GuiState* gs) {
         UnloadTexture(gs->spell_on[i]);
         UnloadTexture(gs->spell_off[i]);
     }
-    if (gs->spec_bar_loaded) UnloadTexture(gs->spec_bar);
-    if (gs->chrome_loaded) {
-        UnloadTexture(gs->side_panel_bg);
-        UnloadTexture(gs->tabs_row_bottom);
-        UnloadTexture(gs->tabs_row_top);
-        for (int i = 0; i < 5; i++) UnloadTexture(gs->tab_stone_sel[i]);
-    }
-    if (gs->slanted_tab.id) UnloadTexture(gs->slanted_tab);
-    if (gs->slanted_tab_hover.id) UnloadTexture(gs->slanted_tab_hover);
     if (gs->slot_tile.id) UnloadTexture(gs->slot_tile);
-    if (gs->slot_selected.id) UnloadTexture(gs->slot_selected);
-    if (gs->orb_frame.id) UnloadTexture(gs->orb_frame);
     if (gs->minimap_compass.id) UnloadTexture(gs->minimap_compass);
     if (gs->minimap_compass_masked.id) UnloadTexture(gs->minimap_compass_masked);
     if (gs->minimap_alpha_mask.id) UnloadTexture(gs->minimap_alpha_mask);
@@ -1195,26 +1044,9 @@ static void gui_unload_sprites(GuiState* gs) {
     if (gs->rm_minimap_alpha_mask.id) UnloadTexture(gs->rm_minimap_alpha_mask);
     if (gs->rm_minimap_frame.id) UnloadTexture(gs->rm_minimap_frame);
     if (gs->rm_compass_alpha_mask.id) UnloadTexture(gs->rm_compass_alpha_mask);
-    if (gs->rm_side_panel_bg.id) UnloadTexture(gs->rm_side_panel_bg);
-    if (gs->rm_side_panel_edge_left.id) UnloadTexture(gs->rm_side_panel_edge_left);
-    if (gs->rm_side_panel_edge_right.id) UnloadTexture(gs->rm_side_panel_edge_right);
     if (gs->rm_tabs_top_row.id) UnloadTexture(gs->rm_tabs_top_row);
-    if (gs->rm_tabs_bottom_row.id) UnloadTexture(gs->rm_tabs_bottom_row);
-    if (gs->rm_tab_stone.id) UnloadTexture(gs->rm_tab_stone);
-    if (gs->rm_tab_stone_selected.id) UnloadTexture(gs->rm_tab_stone_selected);
-    if (gs->orb_empty.id) UnloadTexture(gs->orb_empty);
-    if (gs->orb_hp.id) UnloadTexture(gs->orb_hp);
-    if (gs->orb_prayer.id) UnloadTexture(gs->orb_prayer);
-    if (gs->orb_run.id) UnloadTexture(gs->orb_run);
-    if (gs->orb_run_active.id) UnloadTexture(gs->orb_run_active);
-    if (gs->orb_icon_hp.id) UnloadTexture(gs->orb_icon_hp);
-    if (gs->orb_icon_prayer.id) UnloadTexture(gs->orb_icon_prayer);
-    if (gs->orb_icon_walk.id) UnloadTexture(gs->orb_icon_walk);
-    if (gs->orb_icon_run.id) UnloadTexture(gs->orb_icon_run);
     if (gs->minimap_dot_player.id) UnloadTexture(gs->minimap_dot_player);
     if (gs->minimap_dot_npc.id) UnloadTexture(gs->minimap_dot_npc);
-    if (gs->minimap_dot_friend.id) UnloadTexture(gs->minimap_dot_friend);
-    if (gs->minimap_dot_item.id) UnloadTexture(gs->minimap_dot_item);
     for (int i = 0; i < gs->item_sprite_count; i++) UnloadTexture(gs->item_sprite_tex[i]);
     if (gs->font_loaded) UnloadFont(gs->font);
     if (gs->small_font_loaded) UnloadFont(gs->small_font);
@@ -1933,7 +1765,6 @@ static int gui_content_y(GuiState* gs) {
    on a 42x36 pitch, with NO backing box behind them. Hit areas are the icon
    bounds, exactly like the real client's inventory components. */
 #define INV_COLS 4
-#define INV_ROWS 7
 #define INV_PANEL_CONTENT_X GUI_SIDE_CONTENT_X
 #define INV_SLOT_X 16
 #define INV_SLOT_Y 8

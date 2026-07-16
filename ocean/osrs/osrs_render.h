@@ -4343,8 +4343,6 @@ static void render_draw_panel_npc(int x, int y, RenderEntity* p, OsrsEnv* env) {
     (void)y;
 }
 
-/* render_draw_panel removed — replaced by gui_draw() in osrs_pvp_gui.h */
-
 
 static Camera3D render_build_3d_camera(RenderClient* rc) {
     Camera3D cam = { 0 };
