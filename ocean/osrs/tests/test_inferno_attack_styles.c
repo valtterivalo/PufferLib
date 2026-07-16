@@ -428,12 +428,8 @@ static void fire_player_action_at_slot_zero(
 }
 
 static int inferno_pending_hit_obs_start(void);
-static int inferno_spark_obs_start(void);
 static int inferno_pillar_obs_start(int pillar_idx);
 static int inferno_obs_slot_dig_index(int slot_idx);
-static int inferno_obs_slot_player_has_los_index(int slot_idx);
-static int inferno_obs_slot_phantom_index(int slot_idx);
-static int inferno_obs_slot_target_category_start(int slot_idx);
 static void init_zuk_timing_state(InfernoState* state);
 
 enum {

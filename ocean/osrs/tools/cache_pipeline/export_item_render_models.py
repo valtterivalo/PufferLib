@@ -16,7 +16,6 @@ definitions for appearance details, and writes:
 from __future__ import annotations
 
 import argparse
-import io
 import struct
 import tomllib
 from dataclasses import dataclass

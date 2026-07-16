@@ -97,10 +97,7 @@ def _parse_gameval_file(path: Path) -> dict[str, int]:
 
 
 def load_gameval(gameval_dir: Path):
-    anim_ids = _parse_gameval_file(gameval_dir / "AnimationID.java")
-    npc_ids = _parse_gameval_file(gameval_dir / "NpcID.java")
-    spotanim_ids = _parse_gameval_file(gameval_dir / "SpotanimID.java")
-    return anim_ids, npc_ids, spotanim_ids
+    return _parse_gameval_file(gameval_dir / "SpotanimID.java")
 
 
 def resolve_names(names, lookup, context=""):
@@ -385,7 +382,7 @@ def apply_scale(md: ModelData, width_scale: int, height_scale: int) -> None:
         md.vertices_z[i] = int(md.vertices_z[i] * ws)
 
 
-def build_group_models(reader, group, manifest, anim_ids, spotanim_ids):
+def build_group_models(reader, group, manifest, spotanim_ids):
     """Replicate export_encounter_npcs.py model build for a group. Returns model list."""
     entries = [e for e in manifest if e.get("visual", {}).get("group") == group]
     if not entries:
@@ -495,11 +492,11 @@ def main():
     args = ap.parse_args()
 
     gameval_dir = _find_gameval_dir()
-    anim_ids, npc_ids, spotanim_ids = load_gameval(gameval_dir)
+    spotanim_ids = load_gameval(gameval_dir)
     manifest = json.load(open(args.manifest))
 
     reader = ModernCacheReader(args.modern_cache)
-    models = build_group_models(reader, args.group, manifest, anim_ids, spotanim_ids)
+    models = build_group_models(reader, args.group, manifest, spotanim_ids)
 
     drop_ids = {int(x, 16) for x in args.drop.split(",") if x.strip()}
     if drop_ids:
