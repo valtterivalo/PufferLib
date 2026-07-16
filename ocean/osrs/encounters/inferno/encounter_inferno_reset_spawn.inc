@@ -283,7 +283,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->start_wave = saved_start;
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
 
-    /* human click-to-move: no destination after reset */
     s->player_dest_x = -1;
     s->player_dest_y = -1;
     s->player_last_interaction_target_slot = -1;
@@ -314,11 +313,9 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->target_head_valid_zuk_count = 0;
     s->target_head_valid_set_count = 0;
 
-    /* player */
     s->player.entity_type = ENTITY_PLAYER;
     encounter_init_maxed_player_combat_stats(&s->player, 99);
     osrs_item_effect_state_init(&s->player.item_effect_state);
-    /* start in mage gear */
     s->weapon_set = INF_GEAR_MAGE;
     s->active_loadout_profile = inf_sample_loadout_profile(
         ctx->config.loadout_profile_mode,
@@ -351,12 +348,7 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
     s->last_hit_by_type = -1;
 
-    /* compute loadout stats from item database (replaces old hardcoded INF_WEAPON_STATS).
-       mage is kodai + barrage — pure autocast, no invisible bonus.
-       ranged loadouts run in rapid stance: -1 to attack_speed. */
-    /* offensive prayer is now agent-controlled runtime state (Player.offensive_prayer),
-       not baked into the loadout. pass NONE at reset; inf_player_pretick() calls
-       encounter_update_loadout_level() whenever the agent toggles a prayer. */
+    /* offensive prayer is agent-controlled runtime state; pass NONE at reset, updated when the agent toggles a prayer */
     encounter_compute_loadout_stats(loadouts[INF_GEAR_MAGE], ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     encounter_compute_loadout_stats(loadouts[INF_GEAR_LONG_RANGE], ATTACK_STYLE_RANGED,
@@ -364,7 +356,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     encounter_compute_loadout_stats(loadouts[INF_GEAR_BP], ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0, &s->loadout_stats[INF_GEAR_BP]);
 
-    /* spawn position depends on wave */
     int effective_start = inf_runtime_wave_from_start_wave(s->start_wave);
     int is_zuk_wave = (effective_start >= INF_WAVE_ZUK);
     s->player.x = is_zuk_wave ? INF_ZUK_PLAYER_START_X : INF_PLAYER_START_X;
@@ -385,7 +376,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     }
     inf_rebuild_los(s);
 
-    /* dead mob store */
     s->dead_mob_count = 0;
 
     s->wave = effective_start;
@@ -401,7 +391,6 @@ static void inf_reset(EncounterState* state, uint32_t seed) {
 }
 
 
-/* find a free NPC slot, return index or -1 */
 static int inf_find_free_npc(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         if (!s->npcs[i].active) return i;
@@ -482,7 +471,6 @@ static void inf_deactivate_npc(InfernoState* s, int idx) {
     npc->active = 0;
 }
 
-/* initialize an NPC at a given slot */
 static void inf_init_npc(InfernoState* s, int idx, InfNPCType type, int x, int y) {
     InfNPC* npc = &s->npcs[idx];
     const InfNPCStats* stats = &INF_NPC_STATS[type];
@@ -582,16 +570,13 @@ static void inf_spawn_wave(InfernoState* s) {
 
     const InfWaveDef* w = &INF_WAVES[s->wave];
 
-    /* clear all NPCs and pending hits */
     for (int i = 0; i < INF_MAX_NPCS; i++) s->npcs[i].active = 0;
     encounter_pending_hit_queue_clear(&s->player_pending_hits);
     memset(s->npc_collision_flags, 0, sizeof(s->npc_collision_flags));
     inf_rebuild_player_collision_flags(s);
 
-    /* clear dead mob store each wave */
     s->dead_mob_count = 0;
 
-    /* shuffle spawn positions */
     inf_shuffle_spawns(s);
 
     /* pick random active pillar for nibblers this wave */
@@ -605,9 +590,7 @@ static void inf_spawn_wave(InfernoState* s) {
             ? active_pillars[encounter_rand_int(&s->rng_state, num_active)] : -1;
     }
 
-    /* waves 67-69 have no pillars — ref InfernoRegion.ts:359
-       (`this.wave < 67 || this.wave >= 70` means pillars exist outside this range).
-       clear on spawn so mid-episode transitions also collapse any survivors. */
+    /* waves 67-69 have no pillars (InfernoRegion.ts:359); clear on spawn for mid-episode transitions */
     if (s->wave >= 66) {
         int pillars_changed = 0;
         for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -620,9 +603,7 @@ static void inf_spawn_wave(InfernoState* s) {
         if (pillars_changed) inf_rebuild_los(s);
     }
 
-    /* wave 67 (index 66): single jad at fixed position. ref InfernoRegion.ts:441-451.
-       our coord system is Y-flipped vs reference (pillars confirm ours_y = 57 - ref_y).
-       ref: player (18, 25), jad (23, 27), stun=1, attackSpeed=8, healers=5. */
+    /* wave 67: single jad at fixed pos (InfernoRegion.ts:441-451). coords Y-flipped: ours_y = 57 - ref_y */
     if (s->wave == 66) {
         s->player.x = 18;
         s->player.y = 32;  /* 57 - 25 */
@@ -636,11 +617,8 @@ static void inf_spawn_wave(InfernoState* s) {
         return;
     }
 
-    /* wave 68 (index 67): three jads at fixed positions with staggered first attacks.
-       ref InfernoRegion.ts:452-479. stunTimers [1,4,7] shuffled across the 3 jads.
-       This sim decrements attack_timer during stun, so the initial attack timer
-       includes the stun offset to preserve the reference first-attack cadence.
-       ref: player (25, 27), jads (18, 24), (28, 24), (23, 35). attackSpeed=9, healers=3. */
+    /* wave 68: three jads, staggered first attacks (InfernoRegion.ts:452-479). stun [1,4,7] shuffled;
+       attack_timer decrements during stun, so initial timer folds in the stun offset (cadence parity) */
     if (s->wave == 67) {
         s->player.x = 25;
         s->player.y = 30;  /* 57 - 27 */
@@ -667,20 +645,16 @@ static void inf_spawn_wave(InfernoState* s) {
         return;
     }
 
-    /* zuk wave (wave 69, index 68) is special */
     if (s->wave == 68) {
-        /* spawn Zuk — fixed position, cannot move */
         int zuk_idx = inf_find_free_npc(s);
         if (zuk_idx >= 0) {
             inf_init_npc(s, zuk_idx, INF_NPC_ZUK, INF_ZUK_X, INF_ZUK_Y);
             s->min_zuk_hp_seen = (float)s->npcs[zuk_idx].hp;
-            /* InfernoTrainer: stunned=8, attackDelay=14. stun counts down first,
-               then attackDelay ticks down to 0 before first attack fires. */
+            /* InfernoTrainer: stun=8 counts down first, then attackDelay=14 to first attack */
             s->npcs[zuk_idx].stun_timer = 8;
             s->npcs[zuk_idx].attack_timer = 14;
         }
 
-        /* spawn shield */
         int shield_idx = inf_find_free_npc(s);
         if (shield_idx >= 0) {
             inf_init_npc(s, shield_idx, INF_NPC_ZUK_SHIELD, INF_ZUK_SHIELD_X, INF_ZUK_SHIELD_Y);
@@ -689,7 +663,6 @@ static void inf_spawn_wave(InfernoState* s) {
             s->zuk.shield_freeze = 1;  /* 1-tick freeze on spawn */
         }
 
-        /* zuk state */
         s->zuk.set_timer = 72;
         s->zuk.set_interval = 350;
         s->zuk.enraged = 0;
@@ -698,7 +671,6 @@ static void inf_spawn_wave(InfernoState* s) {
         s->zuk.timer_paused = 0;
         s->zuk.has_paused = 0;
 
-        /* player starts at zuk position */
         s->player.x = INF_ZUK_PLAYER_START_X;
         s->player.y = INF_ZUK_PLAYER_START_Y;
         inf_rebuild_player_collision_flags(s);

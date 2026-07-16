@@ -1,7 +1,4 @@
 #line 862 "encounter_inferno.h"
-/* prayer check and RNG: use shared encounter_prayer_correct_for_style(),
-   encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
-
 static EncounterPendingHit* inf_queue_npc_pending_hit(
     InfernoState* s,
     int npc_idx,
@@ -70,7 +67,6 @@ static void inf_rebuild_los(InfernoState* s) {
     }
 }
 
-/** Shared player LoS source for Inferno pillar blockers. */
 static OsrsLosQuery inf_player_los_query(const InfernoState* s) {
     return osrs_los_blockers(s->los_blockers, s->los_blocker_count);
 }
@@ -152,8 +148,7 @@ static int inf_npc_has_los_direct(const InfernoState* s, int i) {
     return inf_npc_has_los_to_area(s, npc, target.x, target.y, target.size);
 }
 
-/* cached LOS check — lazy: computes on first access per tick, caches for reuse.
-   cache entries: -1 = not yet computed, 0 = no LOS, 1 = has LOS. */
+/* cached per-tick LOS check (lazy: computes on first access) */
 static int inf_npc_has_los(InfernoState* s, int i) {
     if (s->npc_los_cache[i] >= 0)
         return s->npc_los_cache[i];
@@ -339,8 +334,7 @@ static inline int inf_attack_style_telegraph_mask(
     const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
-    /* Jad only telegraphs its ranged/magic branch. Melee is an immediate
-       fallback choice at fire time, not a prayer-switch cue. */
+    /* Jad telegraphs only its ranged/magic branch; melee is a fire-time fallback, not a prayer cue */
     if (npc->type == INF_NPC_JAD)
         return inf_attack_style_mask_bit(planned_style);
     return inf_attack_style_options_mask(s, npc, stats, planned_style, dist);
@@ -688,8 +682,7 @@ static inline int inf_dead_mob_is_resurrectable(InfNPCType type) {
 
 static void inf_store_dead_mob(InfernoState* s, InfNPC* npc) {
     if (s->dead_mob_count >= INF_MAX_DEAD_MOBS) return;
-    /* only store the exact types that register with InfernoMobDeathStore in
-       the reference: bat, blob parent, meleer, ranger, and mager. */
+    /* only resurrectable types register with the reference MobDeathStore */
     if (!inf_dead_mob_is_resurrectable(npc->type)) return;
     if (npc->resurrection_count != 0) return;
 
