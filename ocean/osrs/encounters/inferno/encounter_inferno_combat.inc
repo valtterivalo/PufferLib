@@ -542,8 +542,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             int ddx = npc->x - s->pillars[p].x;
             int ddy = npc->y - s->pillars[p].y;
             if (ddx >= -1 && ddx <= INF_PILLAR_SIZE && ddy >= -1 && ddy <= INF_PILLAR_SIZE) {
-                /* nibblers deal 0-4 damage per hit (ref: InfernoTrainer JalNib.ts).
-                   bypasses combat formula — custom weapon directly rolls rand(0..4). */
+                /* nibblers deal 0-4 per hit, bypassing the combat formula (JalNib.ts) */
                 int dmg = encounter_rand_int(&s->rng_state, 5);
                 s->pillars[p].hp -= dmg;
                 if (s->pillars[p].hp <= 0) {
@@ -579,8 +578,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         return;
     }
 
-    /* zuk healer: heal Zuk while it is untapped, switch to player-facing
-       sparks after tag. */
+    /* zuk healer: heals Zuk until tagged, then fires player-facing sparks */
     if (npc->type == INF_NPC_HEALER_ZUK) {
         InfHealerState* h = inf_npc_healer(npc);
         if (npc->aggro_target >= 0) {
@@ -604,8 +602,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         return;
     }
 
-    /* jad healer: heals its Jad while aggro_target points at the boss, then
-       switches to crush melee after a player tag. */
+    /* jad healer: heals its Jad while aggro'd to it, else crush-melees a tagging player */
     if (npc->type == INF_NPC_HEALER_JAD) {
         InfHealerState* h = inf_npc_healer(npc);
         int jad_idx = h->owner_idx;
@@ -621,8 +618,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             npc->attack_timer = stats->attack_speed;
             return;
         }
-        /* if player has tagged this healer, it only attacks on cardinal melee
-           contact. diagonal corners do not count. */
+        /* tagged healer attacks only on cardinal melee contact, not diagonal corners */
         if (entity_has_line_of_sight(
                 s->los_blockers, s->los_blocker_count,
                 npc->x, npc->y, 1,
@@ -680,13 +676,11 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         npc->aggro_target = -1;
     }
 
-    /* ranged/magic NPCs need LOS, except blobs once they have already stored
-       a prayer scan. ref: InfernoTrainer JalAk.ts attackIfPossible(). */
+    /* ranged/magic NPCs need LOS, except a blob that has already stored a scan (JalAk.ts) */
     if (stats->attack_range > 1 &&
         !(npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) &&
         !has_los_now) return;
 
-    /* compute distance to player */
     int dist = encounter_dist_to_npc(s->player.x, s->player.y,
                                       npc->x, npc->y, npc->size);
     if (dist == 0 || dist > stats->attack_range) return;
@@ -696,11 +690,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
                 npc->x, npc->y, npc->size, dist))
         return;
 
-    /* blob prayer reading: 2-phase attack with attack_speed = 3.
-       scan tick: read player prayer, set timer, return (shows scan animation).
-       fire tick: determine style from scanned prayer, fall through to common attack.
-       total cycle = 6 ticks (3 scan + 3 cooldown).
-       ref: InfernoTrainer JalAk.ts attackIfPossible() */
+    /* blob: 2-phase attack (speed 3). scan tick reads prayer + returns, fire tick uses it. 6-tick cycle (JalAk.ts) */
     if (npc->type == INF_NPC_BLOB) {
         if (npc->blob_scanned_prayer < 0) {
             /* no pending scan → start scan phase: read prayer, commit to opposite style */
@@ -712,26 +702,20 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             npc->attack_timer = stats->attack_speed;  /* 3 */
             return;
         }
-        /* has pending scan → determine style and fall through to fire */
+        /* has pending scan: determine style and fall through to fire */
         npc->blob_scanned_prayer = -1;
-        /* fall through to common attack code */
     }
 
-    /* determine actual attack style */
     AttackStyle actual_style = npc->attack_style;
 
-    /* jad: use the committed preview style if present. if the preview was not
-       seeded, fall back to the 50/50 primary-style roll. */
+    /* jad: use the committed preview style, else fall back to the 50/50 primary roll */
     if (npc->type == INF_NPC_JAD) {
         actual_style = inf_npc_jad(npc)->attack_style;
         if (actual_style == ATTACK_STYLE_NONE)
             actual_style = inf_jad_roll_primary_style(&s->rng_state);
     }
 
-    /* zuk: typeless attack (not blockable by prayer).
-       InfernoTrainer TzKalZuk.ts: Zuk always fires at the shield if the player is
-       behind it (shield absorbs, 0 damage). otherwise fires at the player.
-       ZukWeapon setDelay=4 in the SDK; the hit lands at T+3 (remainingDelay-1). */
+    /* zuk: typeless attack (prayer can't block). fires at shield if player is behind it (0 dmg), else player. hit lands T+3 (TzKalZuk.ts) */
     if (npc->type == INF_NPC_ZUK) {
         int si = s->zuk.shield_idx;
         int player_behind_shield = 0;
@@ -743,14 +727,12 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         }
 
         if (player_behind_shield) {
-            /* shield absorbs — Zuk fires at shield, 0 damage */
+            /* shield absorbs: Zuk fires at shield, 0 damage */
             npc->attacked_this_tick = 1;
             npc->attack_style_this_tick = ATTACK_STYLE_MAGIC;
             npc->attack_visual_target = si;
         } else {
-            /* typeless hit on player — not blockable by prayer, no accuracy roll.
-               rolled 0..max_hit, lands at T+3 (mob->player projectile is onTicked
-               on its creation tick, so remainingDelay-1). */
+            /* typeless hit: no prayer block, no accuracy roll. rolled 0..max_hit, lands T+3 */
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
             inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
@@ -789,7 +771,6 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         return;
     }
 
-    /* max hit from stats + bonuses via OSRS combat formulas */
     int max_hit = osrs_npc_max_hit(actual_style,
         stats->str_level, stats->range_level,
         stats->melee_str_bonus, stats->ranged_str_bonus,
@@ -836,8 +817,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     s->tick_scratch.attacks_fired++;
     s->attacks_by_type[npc->type]++;
 
-    /* bat (JalMejRah): drain 3 run energy (300 internal) on every attack.
-       ref: OSRS wiki Jal-MejRah, InfernoTrainer JalMejRah.ts */
+    /* bat: drains 3 run energy (300 internal) per attack (wiki Jal-MejRah) */
     if (npc->type == INF_NPC_BAT) {
         s->player.run_energy -= 300;
         if (s->player.run_energy < 0) s->player.run_energy = 0;
@@ -864,9 +844,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         /* ranged/magic: queue pending hit on player */
         int is_jad = (npc->type == INF_NPC_JAD);
         if (!is_jad) {
-            /* non-jad ranged/magic locks the protect-prayer + damage at the throw
-               tick (shared with colosseum via encounter_resolve_protect_at_throw);
-               jad is the deferred-check exception below. */
+            /* non-jad locks protect-prayer + damage at the throw tick (jad defers, see below) */
             EncounterProtectResolve pr =
                 encounter_resolve_protect_at_throw(dmg, s->player.prayer, actual_style);
             dmg = pr.frozen_damage;
@@ -881,8 +859,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             s->dmg_from_type[npc->type] += (float)dmg;
             if (dmg > 0) s->last_hit_by_type = npc->type;
         }
-        /* bat stat drain: 50% chance on successful hit when not praying protect
-           from missiles, drain all combat stats by 1. ref: OSRS wiki Jal-MejRah */
+        /* bat: 50% chance on a hit to drain all combat stats by 1 (wiki Jal-MejRah) */
         if (npc->type == INF_NPC_BAT && dmg > 0 &&
             encounter_rand_int(&s->rng_state, 2) == 0) {
             if (s->player.current_attack > 0) s->player.current_attack--;
@@ -891,11 +868,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             if (s->player.current_ranged > 0) s->player.current_ranged--;
             if (s->player.current_magic > 0) s->player.current_magic--;
         }
-        /* mob->player projectile lands at remainingDelay-1 (it is onTicked on its
-           creation tick). Non-jad locks the protect-prayer + damage at the throw
-           tick via the shared SDK constructor (same as colosseum). Jad is the
-           exception: its DelayedAction defers the whole resolution to
-           T+prayer_check_delay, so it keeps full delay + the deferred check. */
+        /* jad defers resolution to T+prayer_check_delay (full delay + deferred check); non-jad locked at throw above */
         EncounterPendingHit hit;
         if (is_jad) {
             hit = (EncounterPendingHit){
@@ -953,8 +926,7 @@ static int inf_find_mager_respawn_tile(
     return !inf_npc_blocked(&mc, *out_x, *out_y, size);
 }
 
-/* mager resurrection is only evaluated on a real magic attack opportunity,
-   not every NPC tick. */
+/* mager resurrection is evaluated only on a real magic attack opportunity, not every tick */
 static int inf_mager_resurrect_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->type != INF_NPC_MAGER || !npc->active) return 0;
@@ -965,7 +937,6 @@ static int inf_mager_resurrect_ctx(InfernoState* s, InfernoContext* ctx, int idx
     /* 10% chance when the mager converts a ready magic attack into a respawn. */
     if (encounter_rand_int(&s->rng_state, 10) != 0) return 0;
 
-    /* pick a random dead mob */
     int di = encounter_rand_int(&s->rng_state, s->dead_mob_count);
     InfDeadMob* dm = &s->dead_mobs[di];
 
@@ -987,7 +958,6 @@ static int inf_mager_resurrect_ctx(InfernoState* s, InfernoContext* ctx, int idx
     s->dead_mobs[di] = s->dead_mobs[s->dead_mob_count - 1];
     s->dead_mob_count--;
 
-    /* 8-tick cooldown */
     npc->resurrect_cooldown = 8;
     npc->resurrecting_this_tick = 1;
     npc->resurrection_visual_target = slot;
@@ -1089,7 +1059,6 @@ static void inf_jad_check_healers(InfernoState* s, int idx) {
 static void inf_zuk_tick(InfernoState* s) {
     if (!inf_is_final_wave(s)) return;
 
-    /* find zuk NPC */
     int zuk_idx = inf_find_live_zuk_idx(s);
     if (zuk_idx < 0) return;
     InfNPC* zuk = &s->npcs[zuk_idx];
@@ -1106,8 +1075,7 @@ static void inf_zuk_tick(InfernoState* s) {
             if (inf_npc_sets_collision_flag(shield->type))
                 inf_unstamp_npc_collision_footprint(s, ox, oy, shield->size);
             shield->x += s->zuk.shield_dir;
-            /* boundary: reverse with a 4-tick pause; the shield rests on the
-               edge tile (x=10 / x=36), no clamp-back. ref: ZukShield.ts:142-156 */
+            /* boundary: reverse with a 4-tick pause, resting on the edge tile, no clamp-back (ZukShield.ts:142-156) */
             if (shield->x < 11) {
                 s->zuk.shield_freeze = 4;
                 s->zuk.shield_dir = 1;
@@ -1276,12 +1244,7 @@ static void inf_queue_zuk_healer_sparks(InfernoState* s, const InfNPC* npc) {
     if (clamped_x < npc->x - 5) clamped_x = npc->x - 5;
     if (clamped_x > npc->x + 4) clamped_x = npc->x + 4;
 
-    /* InfernoTrainer JalMejJak AoeWeapon: 2 random sparks target y=14+rand(0..3)
-       in reference coords. our coord system is Y-flipped (ours_y = 57 - ref_y),
-       so ref y=14..17 maps to ours y=40..43 (near player/zuk band). */
-    /* spark damage lands at T+3: the AoE DelayedAction spawns the spark entities,
-       which deal damage on their first tick (ref: JalMejJak.ts + InfernoHealerSpark.ts).
-       the setDelay=4 in the reference is the visual projectile, not the damage. */
+    /* JalMejJak AoE: 2 random sparks at ref y=14..17, Y-flipped to ours y=40..43. damage lands T+3 (JalMejJak.ts) */
     int direct_damage = 5 + encounter_rand_int(&s->rng_state, 6);
     inf_queue_pending_spark(s, npc->x, npc->y, clamped_x, s->player.y,
                             direct_damage, 3);
@@ -1319,8 +1282,7 @@ static void inf_resolve_pending_sparks(InfernoState* s) {
 
 
 static void inf_tick_npcs_ctx(InfernoState* s, InfernoContext* ctx) {
-    /* NPC per-tick flags are cleared in inf_step BEFORE inf_tick_player,
-       so player hit flags survive through both tick functions into render_post_tick. */
+    /* NPC per-tick flags are cleared in inf_step before inf_tick_player, so player hit flags survive into render_post_tick */
 
     inf_resolve_npc_target_hits(s);
     inf_zuk_tick(s);
@@ -1362,14 +1324,12 @@ static void inf_tick_npcs_ctx(InfernoState* s, InfernoContext* ctx) {
         if (s->npcs[i].type == INF_NPC_MAGER && s->npcs[i].resurrect_cooldown > 0)
             s->npcs[i].resurrect_cooldown--;
 
-        /* meleer dig check */
         if (s->npcs[i].type == INF_NPC_MELEER)
             inf_meleer_dig_check_ctx(s, ctx, i);
 
         inf_npc_move_ctx(s, ctx, i);
         inf_npc_attack_ctx(s, ctx, i);
 
-        /* jad healer spawning */
         if (s->npcs[i].type == INF_NPC_JAD)
             inf_jad_check_healers_ctx(s, ctx, i);
     }

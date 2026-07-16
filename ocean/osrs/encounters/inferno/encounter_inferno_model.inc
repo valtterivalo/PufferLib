@@ -45,20 +45,20 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 
 
 typedef enum {
-    INF_NPC_NIBBLER = 0,      /* Jal-Nib: melee, eats pillars */
-    INF_NPC_BAT,              /* Jal-MejRah: short-range ranged, drains run */
-    INF_NPC_BLOB,             /* Jal-Ak: prayer reader, splits into 3 on death */
-    INF_NPC_BLOB_MELEE,       /* Jal-Ak-Rek-Ket: melee split from blob */
-    INF_NPC_BLOB_RANGE,       /* Jal-Ak-Rek-Xil: range split from blob */
-    INF_NPC_BLOB_MAGE,        /* Jal-Ak-Rek-Mej: mage split from blob */
-    INF_NPC_MELEER,           /* Jal-ImKot: melee, can dig */
-    INF_NPC_RANGER,           /* Jal-Xil: ranged, can melee if close */
-    INF_NPC_MAGER,            /* Jal-Zek: magic, resurrects dead mobs, can melee if close */
-    INF_NPC_JAD,              /* JalTok-Jad: random 50/50 range/mage */
-    INF_NPC_ZUK,              /* TzKal-Zuk: final boss */
-    INF_NPC_HEALER_JAD,       /* Yt-HurKot: jad healer */
-    INF_NPC_HEALER_ZUK,       /* Jal-MejJak: zuk healer */
-    INF_NPC_ZUK_SHIELD,       /* shield NPC during Zuk */
+    INF_NPC_NIBBLER = 0,
+    INF_NPC_BAT,
+    INF_NPC_BLOB,
+    INF_NPC_BLOB_MELEE,
+    INF_NPC_BLOB_RANGE,
+    INF_NPC_BLOB_MAGE,
+    INF_NPC_MELEER,
+    INF_NPC_RANGER,
+    INF_NPC_MAGER,
+    INF_NPC_JAD,
+    INF_NPC_ZUK,
+    INF_NPC_HEALER_JAD,
+    INF_NPC_HEALER_ZUK,
+    INF_NPC_ZUK_SHIELD,
     INF_NUM_NPC_TYPES
 } InfNPCType;
 
@@ -68,23 +68,22 @@ typedef enum {
     INF_OUTCOME_PLAYER_DIED = 1,  /* died or hit the tick cap */
 } InfOutcome;
 
-/* OSRS NPC definition IDs — maps InfNPCType enum to actual cache NPC IDs
- * used by the renderer to look up models/animations in npc_models.h */
+/* OSRS cache NPC def IDs per type, for renderer model/anim lookup in npc_models.h */
 static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
-    [INF_NPC_NIBBLER]    = 7691,  /* Jal-Nib */
-    [INF_NPC_BAT]        = 7692,  /* Jal-MejRah */
-    [INF_NPC_BLOB]       = 7693,  /* Jal-Ak */
-    [INF_NPC_BLOB_MELEE] = 7696,  /* Jal-AkRek-Ket (melee split) */
-    [INF_NPC_BLOB_RANGE] = 7695,  /* Jal-AkRek-Xil (range split) */
-    [INF_NPC_BLOB_MAGE]  = 7694,  /* Jal-AkRek-Mej (mage split) */
-    [INF_NPC_MELEER]     = 7697,  /* Jal-ImKot */
-    [INF_NPC_RANGER]     = 7698,  /* Jal-Xil */
-    [INF_NPC_MAGER]      = 7699,  /* Jal-Zek */
-    [INF_NPC_JAD]        = 7700,  /* JalTok-Jad */
-    [INF_NPC_ZUK]        = 7706,  /* TzKal-Zuk */
-    [INF_NPC_HEALER_JAD] = 7701,  /* Yt-HurKot */
-    [INF_NPC_HEALER_ZUK] = 7708,  /* Jal-MejJak */
-    [INF_NPC_ZUK_SHIELD] = 7707,  /* Ancestral Glyph */
+    [INF_NPC_NIBBLER]    = 7691,
+    [INF_NPC_BAT]        = 7692,
+    [INF_NPC_BLOB]       = 7693,
+    [INF_NPC_BLOB_MELEE] = 7696,
+    [INF_NPC_BLOB_RANGE] = 7695,
+    [INF_NPC_BLOB_MAGE]  = 7694,
+    [INF_NPC_MELEER]     = 7697,
+    [INF_NPC_RANGER]     = 7698,
+    [INF_NPC_MAGER]      = 7699,
+    [INF_NPC_JAD]        = 7700,
+    [INF_NPC_ZUK]        = 7706,
+    [INF_NPC_HEALER_JAD] = 7701,
+    [INF_NPC_HEALER_ZUK] = 7708,
+    [INF_NPC_ZUK_SHIELD] = 7707,
 };
 
 static const char* inf_npc_type_name(int type) {
@@ -125,17 +124,16 @@ typedef struct {
     int magic_att_bonus;
 
     /* strength bonuses (for max hit formulas) */
-    int melee_str_bonus;   /* bonuses.other.meleeStrength */
-    int ranged_str_bonus;  /* bonuses.other.rangedStrength */
-    int magic_base_dmg;    /* base spell damage (magicMaxHit() in InfernoTrainer) */
+    int melee_str_bonus;
+    int ranged_str_bonus;
+    int magic_base_dmg;    /* base spell damage */
     int magic_dmg_pct;     /* magic damage multiplier as % (100 = 1.0x) */
 
     /* defence bonuses (for player hit chance against this NPC) */
     int magic_def_bonus;
     int ranged_def_bonus;
 
-    /* wiki max hit cap: 0 = no cap (use formula), >0 = clamp to this value.
-       needed for Jad/Zuk where InfernoTrainer multipliers overshoot wiki values. */
+    /* max hit cap: 0 = no cap (use formula), >0 = clamp result (Jad/Zuk vs wiki) */
     int max_hit_cap;
 
     int stun_on_spawn;   /* ticks of stun when first spawned */
@@ -148,7 +146,7 @@ typedef struct {
     AttackStyle default_style;
     MeleeStyle melee_style;  /* selects incoming-hit defence bonus */
     int can_melee;       /* 1 if can switch to melee when close */
-    int magic_base_dmg;  /* base spell damage (magicMaxHit() in InfernoTrainer) */
+    int magic_base_dmg;  /* base spell damage */
     int magic_dmg_pct;   /* magic damage multiplier as % (100 = 1.0x) */
     int max_hit_cap;     /* 0 = no cap, >0 = clamp formula result to this */
     int stun_on_spawn;   /* ticks of stun when first spawned */
@@ -201,12 +199,9 @@ static void inf_build_npc_stats(void) {
         const InfNPCOverlay* o = &INF_NPC_OVERLAY[i];
         InfNPCStats* s = &INF_NPC_STATS[i];
 
-        /* from generated monster DB */
         s->hp              = m->hp;
         s->attack_speed    = m->attack_speed;
-        /* blob fires on a 2-phase scan/fire cycle; per-phase speed 3 gives a
-           6-tick damage cadence. the DB's 6 is the full cadence, wrong for this
-           2-phase model. ref: InfernoTrainer JalAk.ts attackSpeed=3. */
+        /* blob: 2-phase scan/fire, per-phase speed 3 = 6-tick cadence (JalAk.ts attackSpeed=3) */
         if (i == INF_NPC_BLOB) s->attack_speed = 3;
         s->size            = m->size;
         s->att_level       = m->att_level;
@@ -219,10 +214,9 @@ static void inf_build_npc_stats(void) {
         s->magic_att_bonus = m->magic_att_bonus;
         s->melee_str_bonus = m->melee_str_bonus;
         s->ranged_str_bonus = m->ranged_str_bonus;
-        s->magic_def_bonus = m->magic_def;    /* name mapping */
-        s->ranged_def_bonus = m->ranged_def;  /* name mapping */
+        s->magic_def_bonus = m->magic_def;
+        s->ranged_def_bonus = m->ranged_def;
 
-        /* from encounter overlay */
         s->attack_range    = o->attack_range;
         s->default_style   = o->default_style;
         s->melee_style     = o->melee_style;
@@ -359,8 +353,7 @@ typedef struct {
     int hp, max_hp;
 } InfDeadMob;
 
-/* 4 zuk healers × 3 sparks per volley × 2 overlapping volleys = 24.
-   cap is 32 for headroom so volleys don't silently drop sparks. */
+/* 4 healers x 3 sparks x 2 overlapping volleys = 24; cap 32 for headroom */
 #define INF_MAX_PENDING_SPARKS 32
 
 typedef struct {
@@ -381,15 +374,13 @@ typedef struct {
     int ticks_remaining;
 } InfNpcTargetHit;
 
-/* jad-only state. valid iff type is INF_NPC_JAD. reach it through inf_npc_jad();
-   never touch InfNPC.type_state.jad directly. */
+/* jad-only state; valid iff type is INF_NPC_JAD, reach via inf_npc_jad() */
 typedef struct {
     AttackStyle attack_style;  /* committed next ranged/magic style preview, NONE if unknown */
     int healer_spawned;  /* 1 once this jad has spawned its healers */
 } InfJadState;
 
-/* healer-only state. valid iff type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK.
-   reach it through inf_npc_healer(); never touch InfNPC.type_state.healer directly. */
+/* healer-only state; valid iff type is a healer, reach via inf_npc_healer() */
 typedef struct {
     int owner_idx;  /* which jad/zuk this healer heals (-1 = none) */
     int target;     /* NPC index of the unit currently being healed (-1 = none) */
@@ -415,8 +406,7 @@ typedef struct {
 
     /* blob prayer-reading state */
     int blob_scanned_prayer; /* blob: prayer read during scan (OverheadPrayer value) */
-    /* per-NPC LOS latch, written every attack tick for every NPC; only the blob
-       scan logic reads it (to fire an immediate scan on LOS gain). */
+    /* per-NPC LOS latch; written every attack tick, only blob scan reads it */
     int had_los_last_tick;
 
     /* resurrection state */
@@ -426,23 +416,19 @@ typedef struct {
     /* freeze state (ice barrage) */
     int frozen_ticks;       /* ticks remaining in ice barrage freeze */
 
-    /* type-specific state, keyed on `type`. only the owning type's arm is
-       valid; reach it through the asserting inf_npc_*() accessors, never
-       through type_state directly. */
+    /* type-specific state keyed on `type`; reach via the asserting inf_npc_*() accessors */
     union {
         InfJadState jad;        /* type is INF_NPC_JAD */
-        InfHealerState healer;  /* type is INF_NPC_HEALER_JAD or INF_NPC_HEALER_ZUK */
+        InfHealerState healer;  /* type is a healer */
     } type_state;
 
     /* pending hits from player attacks (projectiles in flight) */
     EncounterPendingHitQueue pending_hits;
 
-    /* death linger: NPC stays visible for death animation + final hitsplat.
-       >0 means dying (decremented each tick), 0 = alive or fully removed. */
+    /* death linger: >0 = dying (decremented per tick), 0 = alive or removed */
     int death_ticks;
 
-    /* aggro target: -1 = player (default), >= 0 = NPC index.
-       used for set→shield targeting and healer→zuk healing. */
+    /* aggro target: -1 = player (default), >= 0 = NPC index */
     int aggro_target;
 
     /* per-tick render flags (cleared at start of each tick) */
@@ -463,10 +449,7 @@ static inline int inf_npc_is_healer(InfNPCType type) {
     return type == INF_NPC_HEALER_JAD || type == INF_NPC_HEALER_ZUK;
 }
 
-/* asserting accessor for the healer arm of InfNPC.type_state. asserts the NPC is
-   a healer so a wrong-arm access crashes loud in debug/test builds (where the
-   1435-assertion scenario test exercises the healer paths) instead of silently
-   reading another arm. asserts compile out under -DNDEBUG in the training build. */
+/* asserting accessor for the healer arm; wrong-arm access crashes in debug, compiled out under NDEBUG */
 static inline InfHealerState* inf_npc_healer(InfNPC* npc) {
     assert(inf_npc_is_healer(npc->type));
     return &npc->type_state.healer;
@@ -483,10 +466,7 @@ static inline const InfJadState* inf_npc_jad_const(const InfNPC* npc) {
     return &npc->type_state.jad;
 }
 
-/* write the spawn-time defaults for npc->type's type_state arm. caller must have
-   zeroed the NPC (memset) and set npc->type first. types whose arm has no
-   non-zero defaults, and types with no arm, are left zeroed. keeps arm
-   initialization in one place so a new arm cannot be forgotten at a spawn site. */
+/* write spawn-time defaults for npc->type's type_state arm; caller must memset the NPC and set npc->type first */
 static void inf_npc_init_type_state(InfNPC* npc) {
     switch (npc->type) {
         case INF_NPC_JAD:
@@ -776,11 +756,8 @@ typedef struct {
     int human_command_mode;
 } InfernoContext;
 
-/* per-tick scratch: reward/diagnostic accumulators and event flags, fully
-   reset at the start of every step by a single assignment. add new per-tick
-   counters here so they cannot be left out of the reset. distinct from the
-   InfNPC per-tick flags (reset per-NPC) and the player-attack render fields
-   (valid only when an attack fired, not pure scratch). */
+/* per-tick scratch: reward/diagnostic accumulators, fully reset each step by one
+   assignment. add new per-tick counters here so the reset cannot miss them. */
 typedef struct {
     /* player damage dealt this tick, partitioned by target class */
     float damage_dealt;
@@ -935,8 +912,6 @@ typedef struct {
     int offshield_ticks_after_240;
     int offshield_ticks_after_all_zuk_healers_dead;
 
-    /* per-tick reward event flags (cleared each tick) */
-
     /* player combat state */
     OsrsInteraction interaction;  /* shared interaction state */
     int player_last_interaction_target_slot;
@@ -969,9 +944,8 @@ typedef struct {
     /* human click-to-move destination (-1 = no dest) */
     int player_dest_x, player_dest_y;
 
-    /* per-tick LOS cache: lazy — computed on first access, reused for rest of tick.
-       -1 = not yet computed, 0 = no LOS, 1 = has LOS. invalidated at tick start
-       and on pillar collapse. */
+    /* per-tick LOS cache (lazy): -1 = uncomputed, 0 = no LOS, 1 = has LOS;
+       invalidated at tick start and on pillar collapse */
     int8_t npc_los_cache[INF_MAX_NPCS];
 
     /* OSRS entity collision flags. pathfinding ignores these, movement application checks them. */
@@ -988,14 +962,12 @@ typedef struct {
     uint8_t phase_300_fired;
     float shield_penalty_episode_total;
 
-    /* per-episode kill bonus accumulators - emitted gradually to avoid PPO
-       reward clamp [-1, 1] truncating large kill bonuses. */
+    /* per-episode kill bonus accumulators, emitted gradually so the PPO reward clamp [-1,1] doesn't truncate them */
     float pending_jad_kill_bonus;
     float pending_zuk_healer_kill_bonus;
     float pending_set_kill_bonus;
     uint32_t rewarded_zuk_healer_target_mask;
-    /* set once any Jad transitions from alive to dead (or all jads dead after
-       jad_spawned). enables post_jad_zuk_multiplier. */
+    /* set once any Jad dies (enables post_jad_zuk_multiplier) */
     uint8_t jad_killed_this_episode;
 
     int tick_at_first_zuk_healer_target;

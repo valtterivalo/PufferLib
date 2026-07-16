@@ -296,15 +296,12 @@ static void inf_write_obs_ctx(
             int si = s->zuk.shield_idx;
             int shield_active = (si >= 0 && s->npcs[si].active);
 
-            /* shield direction/freeze are only meaningful while the shield exists.
-               once the shield dies, zero these instead of leaking stale state. */
+            /* shield dir/freeze are meaningful only while the shield exists; zero them after it dies to avoid stale state */
             obs[i++] = shield_active
                 ? ((s->zuk.shield_freeze > 0) ? 0.0f : (float)s->zuk.shield_dir)
                 : 0.0f;
             obs[i++] = shield_active ? (float)s->zuk.shield_freeze / 5.0f : 0.0f;
-            /* am I behind the shield right now? + signed distance to shield center.
-               the binary tells the agent if it's safe. the signed distance gives a
-               gradient: negative = move east, positive = move west, 0 = centered. */
+            /* behind-shield flag + signed distance to shield center (negative = move east, positive = west, 0 = centered) */
             int behind = 0;
             float shield_offset = 0.0f;
             if (shield_active) {
@@ -466,8 +463,7 @@ static void inf_write_obs_ctx(
     INF_PROFILE_MARK(INF_PROF_OBS_NPC_SLOTS);
 #endif
 
-    /* assert NPC section wrote exactly the right number of features.
-       if this fires, INF_FEATURES_PER_NPC doesn't match the actual feature count. */
+    /* assert the NPC section wrote exactly the expected feature count */
     {
         int expected_npc_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
             INF_TOTAL_NPC_OBS_SIZE;
@@ -693,8 +689,7 @@ static void inf_write_mask_ctx(
 
     /* HEAD_POTION (4): none, restore, bastion, stamina */
     mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: unmask if any stat is drained or prayer is low enough to not waste.
-       "stats drained" = any combat stat below base 99. */
+    /* restore: unmask if any combat stat is below 99 or prayer is low enough to not waste the dose */
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
         int stats_drained = s->player.current_attack < 99 || s->player.current_strength < 99 ||
@@ -791,14 +786,11 @@ static int inf_get_entity_count_ctx(EncounterState* state, EncounterContext* con
 static void* inf_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
     (void)context;
     InfernoState* s = (InfernoState*)state;
-    /* only index 0 (player) returns a valid Player*.
-     * NPC indices can't return Player* since InfNPC is a different struct.
-     * GUI/human input code must NULL-check. */
+    /* only index 0 (player) returns a Player*; NPC slots return NULL (InfNPC is a different struct), callers must NULL-check */
     if (index == 0) return &s->player;
     return NULL;
 }
 
-/* render entity population */
 static void inf_fill_render_entities_ctx(
     EncounterState* state,
     EncounterContext* context,

@@ -357,7 +357,7 @@ static void inf_render_post_tick_ctx(
         sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
 
-    /* NPC attack projectiles — per-NPC-type flight parameters */
+    /* NPC attack projectiles: per-NPC-type flight parameters */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active || !npc->attacked_this_tick) continue;
@@ -366,14 +366,13 @@ static void inf_render_post_tick_ctx(
         if (npc->type == INF_NPC_NIBBLER) continue;
         if (npc->resurrecting_this_tick) continue;
 
-        /* blob scan animation (no projectile) — only emit on the actual fire tick.
-           blob_scanned_prayer >= 0 means scan just happened, -1 means fire. */
+        /* blob scan has no projectile; emit only on the fire tick (blob_scanned_prayer >= 0 = scan, -1 = fire) */
         if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) continue;
 
         const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
         AttackStyle actual_style = npc->attack_style_this_tick;
 
-        /* Zuk is typeless — show as magic for visual purposes. */
+        /* Zuk is typeless; show as magic for visuals */
         if (actual_style == ATTACK_STYLE_NONE && npc->type == INF_NPC_ZUK)
             actual_style = ATTACK_STYLE_MAGIC;
 
@@ -383,7 +382,7 @@ static void inf_render_post_tick_ctx(
 
         if (actual_style == ATTACK_STYLE_NONE) continue;
 
-        /* melee attacks are instant — no in-flight projectile */
+        /* melee attacks are instant, no in-flight projectile */
         if (actual_style == ATTACK_STYLE_MELEE) continue;
 
         int proj_style = encounter_attack_style_to_proj_style(actual_style);
@@ -596,7 +595,7 @@ static void inf_render_post_tick_ctx(
         spark->visual_emitted = 1;
     }
 
-    /* player attack projectile (ranged/magic only — melee has no projectile) */
+    /* player attack projectile (ranged/magic only, melee has none) */
     if (s->tick_scratch.player_attacked &&
         s->player_attack_style_id != ATTACK_STYLE_MELEE) {
         int target_idx = s->player_attack_npc_idx;
@@ -813,10 +812,7 @@ static void inf_step_human_commands(EncounterState* state, HumanInput* hi) {
 }
 
 
-/* archive cell key for Go-Explore-style exploration. fixed 16-byte struct
-   that discretizes the env state. byte-equal keys = same cell. lossy on
-   continuous fields (player position quantized to 2-tile bins, HP/prayer to
-   10-unit bins, Zuk and Jad HP to 50-HP bins). */
+/* archive cell key (Go-Explore): 16-byte struct discretizing env state; byte-equal keys = same cell */
 
 typedef struct {
     uint8_t wave;                       /* 0..68 */

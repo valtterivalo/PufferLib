@@ -1,32 +1,6 @@
 /**
  * @file encounter_zulrah.h
- * @brief Zulrah boss encounter — real OSRS mechanics with 4 fixed rotations.
- *
- * Implements the actual OSRS Zulrah fight from the wiki:
- *   - 4 predetermined rotations (11-13 phases each)
- *   - 4 positions: middle, south, east, west
- *   - 3 forms: green/serpentine (ranged), red/magma (melee), blue/tanzanite (magic+ranged)
- *   - Jad phase: serpentine alternating ranged/magic or magic/ranged
- *   - Fixed action sequences per phase (exact # attacks, clouds, snakelings)
- *   - Dive transitions between phases (~5 ticks)
- *
- * Form mechanics (from OSRS wiki):
- *   Green (2042): ranged attacks with accuracy roll, max hit 41. def_magic -45, def_ranged +50.
- *   Red (2043): melee — stares at player tile, whips tail after 3-tick delay.
- *               accuracy roll + max hit 41 + stun if hit. def_magic 0, def_ranged +300.
- *   Blue (2044): random magic+ranged attacks (75% magic, 25% ranged).
- *               Magic always accurate. def_magic +300, def_ranged 0.
- *
- * Damage cap: hits over 50 → random 45-50 (Mod Ash confirmed).
- * Clouds: 3x3 area, 1-5 damage per tick.
- * Venom: 25% chance per ranged/magic attack (even through prayer).
- * Snakelings: 1 HP, melee max 15 / magic max 13, random type at spawn.
- * NPC size: 5x5. Attack speed: 3 ticks. Melee interval: 6 ticks total.
- * Gear tiers: 3 tiers (budget/mid/BIS) with precomputed stats.
- * Blowpipe spec: 50% energy, heals 50% of damage dealt.
- * Antivenom: extended anti-venom+ grants 300 ticks immunity.
- *
- * Entity layout: player (0), zulrah (1), up to 4 snakelings (2-5).
+ * @brief Zulrah boss encounter: real OSRS mechanics with 4 fixed rotations.
  */
 
 #ifndef ENCOUNTER_ZULRAH_H
@@ -55,13 +29,11 @@
 #define ZUL_ARENA_SIZE    28
 #define ZUL_NPC_SIZE      5
 
-/* player platform bounds (walkable tiles) — centered on the shrine area */
+/* player platform bounds (walkable tiles), centered on the shrine area */
 #define ZUL_PLATFORM_MIN  5
 #define ZUL_PLATFORM_MAX  22
 
-/* 4 zulrah positions (relative coords on 28x28 grid).
-   mapped from OSRS world coords via RuneLite plugin ZulrahLocation.java,
-   anchored to NORTH=(2266,3073). base offset: (2254, 3060). */
+/* 4 zulrah positions (relative coords on 28x28 grid), from RuneLite ZulrahLocation.java (base offset 2254,3060) */
 #define ZUL_POS_NORTH   0   /* RuneLite: NORTH / "middle" */
 #define ZUL_POS_SOUTH   1
 #define ZUL_POS_EAST    2
@@ -75,18 +47,13 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
     {  0, 10 },  /* WEST:  left edge */
 };
 
-/* player starting position — shrine entry (2267,3068) per RuneLite StandLocation */
+/* player starting position: shrine entry per RuneLite StandLocation */
 #define ZUL_PLAYER_START_X  11
 #define ZUL_PLAYER_START_Y  7
 
-/* zulrah combat stats sourced from MONSTER_DATABASE (osrs_monsters_generated.h).
-   all three forms share: hp=500, def_level=300, attack_speed=3.
-   per-form defence: green magic_def=-45 ranged_def=50, red 0/300, blue 300/0. */
+/* zulrah combat stats from MONSTER_DATABASE; forms differ in defence (green magic/ranged -45/+50, red 0/+300, blue +300/0) */
 
-/* melee form: stares then whips. accuracy roll + max hit 41. stun if hit.
-   wiki: melee attack speed 6. RuneLite plugin sets attackTicks=8 on melee anims
-   (5806/5807) but that counter likely includes animation delay + display offset.
-   stare 3 ticks, then whip (interval 3+3=6). */
+/* melee form: stare then whip, max hit 41, stun on hit. interval 6 (wiki); RuneLite attackTicks=8 includes anim delay */
 #define ZUL_MELEE_STARE_TICKS 3   /* ticks before tail whip */
 #define ZUL_MELEE_INTERVAL    6   /* total ticks between melee attack starts (wiki: attack speed 6) */
 #define ZUL_MELEE_STUN_TICKS  5   /* stun duration */
@@ -95,10 +62,7 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_DAMAGE_CAP  50
 #define ZUL_DAMAGE_CAP_MIN 45
 
-/* phase transition timing (from video analysis):
-   surface anim plays at start of phase, dive anim plays at end.
-   phaseTicks covers the entire duration including both animations.
-   no gap between phases — dive ends, next phase surfaces immediately. */
+/* phase timing: surface anim at start, dive at end; phaseTicks covers the whole duration, no gap between phases */
 #define ZUL_SURFACE_TICKS_INITIAL 3  /* first phase: initial rise (anim 5071) */
 #define ZUL_SURFACE_TICKS         2  /* subsequent phases: rise (anim 5073) */
 #define ZUL_DIVE_PHASE_TICKS      3  /* dig phase at end of phase */
@@ -126,8 +90,6 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_VENOM_START     6
 #define ZUL_VENOM_MAX       20
 
-/* NPC attack rolls: computed from MONSTER_DATABASE via osrs_npc_attack_roll() */
-
 /* spawn timing for clouds/snakelings during phase actions */
 #define ZUL_SPAWN_INTERVAL  3  /* ticks between each cloud/snakeling spit (same as attack speed) */
 #define ZUL_CLOUD_FLIGHT_1  3  /* ticks for first cloud projectile to land */
@@ -147,11 +109,7 @@ static const int ZUL_POSITIONS[ZUL_NUM_POSITIONS][2] = {
 #define ZUL_ANTIVENOM_DURATION   300    /* extended anti-venom+: 3 minutes = 300 ticks */
 #define ZUL_ANTIVENOM_DOSES      4
 
-/* blowpipe spec — cost looked up via osrs_spec_cost(weapon) at runtime */
-
-/* thrall: greater ghost (arceuus spellbook, always hits, ignores armour).
- * max hit 3, attack speed 4 ticks. duration = 0.6 * magic_level seconds
- * = magic_level ticks (at 99 magic = 99 ticks ≈ 59.4s, then resummon). */
+/* thrall: arceuus greater ghost, always hits 0-3, ignores armour; duration = magic_level ticks */
 #define ZUL_THRALL_MAX_HIT       3
 #define ZUL_THRALL_SPEED         4      /* attacks every 4 ticks */
 #define ZUL_THRALL_DURATION      99     /* ticks (0.6 * 99 magic = 59.4s) */
@@ -214,7 +172,7 @@ typedef enum {
 
 
 typedef enum {
-    ZA_END = 0,           /* sentinel — end of action list */
+    ZA_END = 0,           /* sentinel: end of action list */
     ZA_RANGED,            /* green form ranged attacks */
     ZA_MAGIC_RANGED,      /* blue form random magic/ranged (magic more frequent) */
     ZA_MELEE,             /* red form melee (stare + tail whip) */
@@ -236,8 +194,8 @@ typedef struct {
 typedef struct {
     uint8_t position;  /* ZUL_POS_NORTH etc. */
     uint8_t form;      /* ZUL_FORM_GREEN etc. */
-    uint8_t stand;     /* ZUL_STAND_* — safe tile for this phase */
-    uint8_t stall;     /* ZUL_STAND_* — stall tile (or ZUL_STAND_NONE) */
+    uint8_t stand;     /* ZUL_STAND_*: safe tile for this phase */
+    uint8_t stall;     /* ZUL_STAND_*: stall tile (or ZUL_STAND_NONE) */
     uint8_t phase_ticks;  /* total ticks at this position (from RuneLite plugin phaseTicks) */
     ZulAction actions[ZUL_MAX_PHASE_ACTIONS];
 } ZulRotationPhase;
@@ -245,11 +203,7 @@ typedef struct {
 #define ZUL_MAX_ROT_PHASES 13
 #define ZUL_NUM_ROTATIONS  4
 
-/* stand locations converted from RuneLite plugin StandLocation.java.
-   plugin uses OSRS local coords (128 units/tile). conversion:
-   grid_x = local_x/128 - 38, grid_y = local_y/128 - 44
-   (derived from NORTH zulrah center (6720,7616) → grid (12,13)) */
-/* safe tile positions adapted from zulrah helper plugin — approximate. */
+/* stand locations from RuneLite StandLocation.java; grid = local/128 - (38,44) (NORTH center 6720,7616 -> grid 12,13) */
 #define ZUL_STAND_SOUTHWEST       0
 #define ZUL_STAND_WEST            1
 #define ZUL_STAND_CENTER          2
@@ -290,8 +244,7 @@ static const int ZUL_STAND_COORDS[ZUL_NUM_STAND_LOCATIONS][2] = {
 #define ZE { 0, 0 }  /* ZA_END sentinel */
 #define _N ZUL_STAND_NONE  /* no stall location shorthand */
 
-/* rotation 1: "Magma A" — 11 phases
-   stand/stall/phaseTicks from RuneLite plugin RotationType.java ROT_A */
+/* rotation 1 "Magma A" (11 phases), from RuneLite RotationType.java ROT_A */
 static const ZulRotationPhase ZUL_ROT1[11] = {
     /* 1  */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_CLOUDS,4), ZE } },
     /* 2  */ { ZUL_POS_NORTH, ZUL_FORM_RED,   ZUL_STAND_NORTHEAST_TOP, _N, 21, { ZA(ZA_MELEE,2), ZE } },
@@ -306,8 +259,7 @@ static const ZulRotationPhase ZUL_ROT1[11] = {
     /* 11 */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_RANGED,5), ZA(ZA_CLOUDS,4), ZE } },
 };
 
-/* rotation 2: "Magma B" — 11 phases
-   stand/stall/phaseTicks from RuneLite plugin RotationType.java ROT_B */
+/* rotation 2 "Magma B" (11 phases), from RuneLite RotationType.java ROT_B */
 static const ZulRotationPhase ZUL_ROT2[11] = {
     /* 1  */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_CLOUDS,4), ZE } },
     /* 2  */ { ZUL_POS_NORTH, ZUL_FORM_RED,   ZUL_STAND_NORTHEAST_TOP, _N, 21, { ZA(ZA_MELEE,2), ZE } },
@@ -322,8 +274,7 @@ static const ZulRotationPhase ZUL_ROT2[11] = {
     /* 11 */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_RANGED,5), ZA(ZA_CLOUDS,4), ZE } },
 };
 
-/* rotation 3: "Serp" — 12 phases
-   stand/stall/phaseTicks from RuneLite plugin RotationType.java ROT_C */
+/* rotation 3 "Serp" (12 phases), from RuneLite RotationType.java ROT_C */
 static const ZulRotationPhase ZUL_ROT3[12] = {
     /* 1  */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_CLOUDS,4), ZE } },
     /* 2  */ { ZUL_POS_EAST,   ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 30, { ZA(ZA_RANGED,5), ZA(ZA_SNAKELINGS,3), ZE } },
@@ -339,8 +290,7 @@ static const ZulRotationPhase ZUL_ROT3[12] = {
     /* 12 */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_RANGED,5), ZA(ZA_CLOUDS,4), ZE } },
 };
 
-/* rotation 4: "Tanz" — 13 phases
-   stand/stall/phaseTicks from RuneLite plugin RotationType.java ROT_D */
+/* rotation 4 "Tanz" (13 phases), from RuneLite RotationType.java ROT_D */
 static const ZulRotationPhase ZUL_ROT4[13] = {
     /* 1  */ { ZUL_POS_NORTH, ZUL_FORM_GREEN, ZUL_STAND_NORTHEAST_TOP, _N, 28, { ZA(ZA_CLOUDS,4), ZE } },
     /* 2  */ { ZUL_POS_EAST,   ZUL_FORM_BLUE,  ZUL_STAND_NORTHEAST_TOP, _N, 36, { ZA(ZA_SNAKELINGS,4), ZA(ZA_MAGIC_RANGED,6), ZE } },
@@ -374,17 +324,12 @@ static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
     ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM, ZUL_OFFENSIVE_DIM,
 };
 
-/* movement uses shared encounter_move_to_target + ENCOUNTER_MOVE_TARGET_DX/DY from osrs_encounter.h */
-
-/* number of gear tiers for validation (used in put_int) */
 #define ZUL_NUM_GEAR_TIERS 3
 #define ZUL_GEAR_TIER_FIXED 0
 #define ZUL_GEAR_TIER_UNIFORM 1
 #define ZUL_GEAR_TIER_WEIGHTED 2
 
-/* per-tier equipped item loadouts: [tier][slot] = ItemIndex.
-   mage_loadout is worn while casting mage. range_loadout while ranging.
-   slots: HEAD CAPE NECK AMMO WEAPON SHIELD BODY LEGS HANDS FEET RING */
+/* per-tier equipped loadouts: [tier][slot] = ItemIndex; slots HEAD CAPE NECK AMMO WEAPON SHIELD BODY LEGS HANDS FEET RING */
 static const uint8_t ZUL_MAGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
     /* tier 0: mystic + trident + book of darkness */
     { ITEM_MYSTIC_HAT, ITEM_GOD_CAPE, ITEM_GLORY, ITEM_AMETHYST_ARROW,
@@ -415,8 +360,6 @@ static const uint8_t ZUL_RANGE_LOADOUT[ZUL_NUM_GEAR_TIERS][NUM_GEAR_SLOTS] = {
       ITEM_ZARYTE_VAMBRACES, ITEM_AVERNIC_TREADS, ITEM_RING_OF_SUFFERING_RI },
 };
 
-/* gear switching uses shared helpers from osrs_encounter.h:
-   encounter_apply_loadout() and encounter_populate_inventory(). */
 static void zul_populate_player_inventory(Player* p, int gear_tier) {
     const uint8_t* loadouts[] = {
         ZUL_MAGE_LOADOUT[gear_tier],
@@ -425,7 +368,7 @@ static void zul_populate_player_inventory(Player* p, int gear_tier) {
     encounter_populate_inventory(p, loadouts, 2, NULL);
 }
 
-/* snakeling spawn positions (shifted +6x for new base offset 2254,3060) */
+/* snakeling spawn positions (base offset 2254,3060) */
 #define ZUL_NUM_SNAKELING_POSITIONS 5
 static const int ZUL_SNAKELING_POSITIONS[ZUL_NUM_SNAKELING_POSITIONS][2] = {
     { 7, 14 }, { 7, 10 }, { 12, 8 }, { 17, 10 }, { 17, 16 },
@@ -457,7 +400,7 @@ typedef struct {
     int ticks_remaining;
 } ZulrahCloud;
 
-/* cloud projectile in flight — becomes a ZulrahCloud when delay reaches 0 */
+/* cloud projectile in flight; becomes a ZulrahCloud when delay reaches 0 */
 #define ZUL_MAX_PENDING_CLOUDS 16
 typedef struct {
     int x, y;
@@ -520,8 +463,7 @@ typedef struct {
     int melee_pending;
     int melee_stare_timer;
 
-    /* phase timing: phaseTicks covers surface + actions + dive.
-       phase_timer counts down each tick. surface_timer delays actions at start. */
+    /* phase timing: phase_timer counts down phaseTicks (surface + actions + dive); surface_timer delays actions at start */
     int phase_timer;
     int surface_timer;    /* ticks of surface animation before actions start */
     int is_diving;        /* set when phase_timer <= ZUL_DIVE_PHASE_TICKS */
@@ -566,12 +508,10 @@ typedef struct {
     const HumanCommand* human_commands;
     int human_command_count;
 
-    /* eye of ayak soul rend: cumulative magic defence drain on zulrah.
-     * carries over between forms (magic defence is a stat, not a level). */
+    /* eye of ayak soul rend: cumulative magic-defence drain, carries over between forms */
     int magic_def_drain;
 
-    /* thrall (arceuus greater ghost): auto-attacks zulrah every 4 ticks,
-     * always hits 0-3, ignores armour. auto-resummons after expiry + cooldown. */
+    /* thrall (greater ghost): auto-attacks every 4 ticks, always hits 0-3, auto-resummons after cooldown */
     int thrall_active;
     int thrall_attack_timer;
     int thrall_duration_remaining;
@@ -726,7 +666,6 @@ static void zul_update_npc_anim_lifetime(ZulrahState* s) {
         s->zulrah_anim_event_tick = -1;
 }
 
-/* RNG: use shared encounter_rand_int(), encounter_rand_float() from osrs_combat.h */
 static const EncounterLoadoutStats* zul_current_loadout_stats(ZulrahState* s, int is_mage);
 
 static int zul_lookup_player_attack_target(
@@ -795,7 +734,6 @@ static inline int zul_on_platform(ZulrahState* s, int x, int y) {
     return collision_tile_walkable((const CollisionMap*)s->collision_map, 0, wx, wy);
 }
 
-/* BFS pathfinding uses shared encounter_pathfind from osrs_encounter.h */
 #define zul_pathfind(s, sx, sy, dx, dy) \
     encounter_pathfind((const CollisionMap*)(s)->collision_map, \
         (s)->world_offset_x, (s)->world_offset_y, (sx), (sy), (dx), (dy), NULL, NULL)
@@ -997,9 +935,7 @@ static inline int zul_cap_damage(ZulrahState* s, int damage) {
 }
 
 
-/** Apply damage to the player. If attacker is non-NULL and player has a recoil
-    ring equipped, reflects floor(damage * 0.1) + 1 back to the attacker.
-    Pass NULL for environmental damage (clouds, venom) where recoil doesn't apply. */
+/* apply damage to the player; pass attacker for recoil-ring reflection, NULL for environmental damage (clouds, venom) */
 static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle style,
                                     Player* attacker) {
     if (damage <= 0) return;
@@ -1032,8 +968,7 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
     }
 }
 
-/* venom from ranged/magic attacks — 25% chance per hit (wiki/deob confirmed).
-   applied even through prayer (unless miss). starts venom counter if not already venomed. */
+/* venom from ranged/magic: 25% per hit, applies through prayer (unless miss); starts the counter if not already venomed */
 static void zul_try_envenom(ZulrahState* s) {
     if (s->venom_counter > 0) return;                /* already venomed */
     if (s->antivenom_timer > 0) return;               /* anti-venom active */
@@ -1043,12 +978,7 @@ static void zul_try_envenom(ZulrahState* s) {
 }
 
 
-/* OSRS accuracy formula: if att > def: 1 - (def+2)/(2*(att+1)), else att/(2*(def+1)) */
-/* hit chance: use shared OSRS accuracy formula from osrs_combat.h */
-
-/* compute player's defence roll against a specific NPC attack style.
-   uses current gear loadout stats (derived from ITEM_DATABASE).
-   magic defence uses 70% magic level + 30% defence level per OSRS formula. */
+/* player defence roll vs an NPC attack style, from the current loadout stats (magic def = 70% magic + 30% defence) */
 static int zul_player_def_roll(ZulrahState* s, int attack_style) {
     const EncounterLoadoutStats* ls = zul_current_loadout_stats(
         s, s->player_gear == ZUL_GEAR_MAGE);
@@ -1079,11 +1009,8 @@ static void zul_record_attack(ZulrahState* s, int src_x, int src_y,
     s->attack_events[i].damage = damage;
 }
 
-/* ranged attack (green form, or blue form ranged variant).
-   unlike magic, ranged CAN miss (accuracy roll required).
-   wiki: "ranged and magic attacks will envenom the player unless they miss,
-   even if blocked by a protection prayer." so venom only on hit. */
-/* known sim gap: ranged/magic attacks ignore LOS (no pillar blocking for projectiles). */
+/* ranged attack (green, or blue ranged variant): CAN miss (accuracy roll); venom applies on hit even through prayer.
+   known sim gap: ranged/magic ignore LOS (no pillar blocking for projectiles). */
 static void zul_attack_ranged(ZulrahState* s) {
     const MonsterStats* m = &MONSTER_DATABASE[MON_ZULRAH_GREEN];
     int npc_att_roll = osrs_npc_attack_roll(m->range_level, m->range_att_bonus);
@@ -1106,9 +1033,7 @@ static void zul_attack_ranged(ZulrahState* s) {
                       s->player.x, s->player.y, 0, dmg);
 }
 
-/* magic attack (blue form, always accurate per wiki).
-   wiki: "ranged and magic attacks will envenom the player unless they miss,
-   even if blocked by a protection prayer." magic never misses → always envenoms. */
+/* magic attack (blue form): always accurate, so always envenoms (even through prayer) */
 static void zul_attack_magic(ZulrahState* s) {
     int dmg = 0;
     if (!encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MAGIC)) {
@@ -1130,11 +1055,7 @@ static void zul_attack_magic_ranged(ZulrahState* s) {
     }
 }
 
-/* pillar safespot: the east and west pillars block Zulrah's melee tail whip.
-   pillars at (15,10) east and (9,10) west.
-   safe tile is 2 tiles east/west + 1 tile north of each pillar:
-     east safespot: (17, 11)
-     west safespot: ( 7, 11)  */
+/* pillar safespot: east/west pillars block Zulrah's tail whip; safe tiles (17,11) and (7,11) */
 static int zul_on_pillar_safespot(int px, int py) {
     if (py != 11) return 0;
     return (px == 17 || px == 7);
@@ -1148,10 +1069,7 @@ static void zul_melee_start(ZulrahState* s) {
     s->melee_stare_timer = ZUL_MELEE_STARE_TICKS;
 }
 
-/* melee hit lands after stare completes.
-   wiki: "If the player does not move away from the targeted area in time,
-   they will be dealt 20-30 damage and be stunned for several seconds."
-   no accuracy roll — guaranteed hit if player is on the targeted tile. */
+/* melee hit after the stare: 20-30 damage + stun if the player stays on the targeted tile (no accuracy roll) */
 static void zul_melee_hit(ZulrahState* s) {
     s->melee_pending = 0;
     int dmg = 0;
@@ -1205,9 +1123,7 @@ static void zul_refresh_human_loadout_stats(ZulrahState* s) {
 }
 
 static void zul_refresh_cached_loadout_stats(ZulrahState* s) {
-    /* offensive prayer is now style-gated (shared osrs_encounter.h): map the
-       active prayer to the style-correct one per cached stat so the mage loadout
-       uses Augury and the ranged loadout uses Rigour. */
+    /* offensive prayer is style-gated: map the active prayer per cached stat (mage -> Augury, ranged -> Rigour) */
     int prayer_active = s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE;
     if (s->mage_stats.style == ATTACK_STYLE_MAGIC) {
         encounter_update_loadout_level(&s->mage_stats,
@@ -1336,9 +1252,7 @@ static void zul_player_attack(ZulrahState* s, int is_mage) {
     s->zulrah.hit_was_successful = (dmg > 0);
 }
 
-/* special attack: dispatched via osrs_resolve_spec based on equipped weapon.
-   tier 0: MSB(i) from ranged gear. tier 1: bowfa has no spec (osrs_spec_cost=0).
-   tier 2: eye of ayak from mage gear. */
+/* special attack (osrs_resolve_spec by weapon): tier 0 MSB(i), tier 1 bowfa (no spec), tier 2 eye of ayak */
 static void zul_player_spec(ZulrahState* s) {
     if (!s->zulrah_visible || s->is_diving) return;
     if (s->player.attack_timer > 0) return;
@@ -1358,7 +1272,6 @@ static void zul_player_spec(ZulrahState* s) {
     if (cost == 0) return;  /* weapon has no spec (e.g. bowfa) */
     if (s->player.special_energy < cost) return;
 
-    /* compute defence roll for current form */
     const MonsterStats* m = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]];
     int def_bonus = is_mage ? (m->magic_def - s->magic_def_drain) : m->ranged_def;
     if (is_mage && def_bonus < -64) def_bonus = -64;
@@ -1468,8 +1381,7 @@ static void zul_snakeling_tick(ZulrahState* s) {
         sn->lifespan--;
         if (sn->lifespan <= 0) { sn->active = 0; continue; }
 
-        /* move toward player — stop when within attack range (Chebyshev ≤ 1).
-           NPCs use greedy single-step movement, not full BFS. */
+        /* move toward player, stop within attack range (Chebyshev <= 1) */
         int adx = abs_int(sn->entity.x - s->player.x);
         int ady = abs_int(sn->entity.y - s->player.y);
         int in_range = (adx <= 1 && ady <= 1);
@@ -1485,7 +1397,7 @@ static void zul_snakeling_tick(ZulrahState* s) {
             }
         }
 
-        /* attack — recheck range after movement */
+        /* attack: recheck range after movement */
         if (sn->attack_timer > 0) { sn->attack_timer--; continue; }
         adx = abs_int(sn->entity.x - s->player.x);
         ady = abs_int(sn->entity.y - s->player.y);
@@ -1503,7 +1415,7 @@ static void zul_snakeling_tick(ZulrahState* s) {
         AttackStyle st = sn->is_magic ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_MELEE;
         zul_apply_player_damage(s, dmg, st, &sn->entity);
 
-        /* recoil may have killed the snakeling — check and deactivate */
+        /* recoil may have killed the snakeling; check and deactivate */
         if (sn->entity.current_hitpoints <= 0) {
             sn->entity.current_hitpoints = 0;
             sn->active = 0;
@@ -1512,13 +1424,11 @@ static void zul_snakeling_tick(ZulrahState* s) {
 }
 
 
-/* forward: needed by zul_spawn_cloud to get current phase's safe tiles */
 static const ZulRotationPhase* zul_current_phase(ZulrahState* s) {
     return &ZUL_ROTATIONS[s->rotation_index][s->phase_index];
 }
 
-/* check if a 3x3 cloud area starting at (x,y) is fully within walkable arena.
-   all 9 tiles must be walkable so the cloud doesn't extend outside the platform. */
+/* 3x3 cloud at (x,y) fits fully on walkable tiles */
 static int zul_cloud_fits(ZulrahState* s, int x, int y) {
     for (int dx = 0; dx < ZUL_CLOUD_SIZE; dx++) {
         for (int dy = 0; dy < ZUL_CLOUD_SIZE; dy++) {
@@ -1539,8 +1449,7 @@ static int zul_pick_cloud_pos(ZulrahState* s, int stand, int stall, int* ox, int
         if (!zul_cloud_fits(s, x, y)) continue;
         if (zul_cloud_overlaps_safe_area(x, y, stand, stall)) continue;
 
-        /* check 3x3 bounding box overlap with active and pending clouds.
-           two 3x3 clouds overlap if their anchor tiles are within 2 in each axis. */
+        /* two 3x3 clouds overlap if their anchor tiles are within 2 on each axis */
         int overlap = 0;
         for (int j = 0; j < ZUL_MAX_CLOUDS && !overlap; j++) {
             if (s->clouds[j].active &&
@@ -1585,7 +1494,7 @@ static void zul_activate_cloud(ZulrahState* s, int x, int y) {
             return;
         }
     }
-    /* all slots full — cloud doesn't spawn (observed 7-cloud cap) */
+    /* all slots full: cloud doesn't spawn (observed 7-cloud cap) */
 }
 
 /* emit a cloud projectile event for the renderer */
@@ -1661,7 +1570,6 @@ static void zul_cloud_tick(ZulrahState* s) {
 
 
 static void zul_venom_tick(ZulrahState* s) {
-    /* antivenom timer ticks down */
     if (s->antivenom_timer > 0) s->antivenom_timer--;
 
     if (s->venom_counter == 0) return;
@@ -1794,7 +1702,6 @@ static void zul_enter_phase(ZulrahState* s) {
     s->action_progress = 0;
     s->action_timer = initial_delay;
 
-    /* jad init */
     ZulActionType first_type = (ZulActionType)phase->actions[0].type;
     if (first_type == ZA_JAD_RM) s->jad_is_magic_next = 0;
     else if (first_type == ZA_JAD_MR) s->jad_is_magic_next = 1;
@@ -1803,8 +1710,7 @@ static void zul_enter_phase(ZulrahState* s) {
     s->zulrah_attacking = 0;
 }
 
-/* enter dive visual state — called when phase_timer reaches ZUL_DIVE_PHASE_TICKS.
-   Zulrah stays visible playing dig anim for these last ticks of the phase. */
+/* enter dive visual state (last ticks of the phase): Zulrah stays visible playing the dig anim */
 static void zul_enter_dive(ZulrahState* s) {
     s->is_diving = 1;
     s->zulrah_attacking = 0;
@@ -1817,26 +1723,22 @@ static void zul_next_phase(ZulrahState* s) {
     s->phase_index++;
 
     if (s->phase_index >= rot_len) {
-        /* rotation complete — pick new random rotation, start from phase 1.
-           the last phase already did ranged+clouds which counts as phase 1
-           of the next rotation, so we skip to phase 1 (index 1). */
+        /* rotation complete: pick a new rotation, skip to phase 1 (the last phase already did phase-1's ranged+clouds) */
         s->rotation_index = encounter_rand_int(&s->rng_state, ZUL_NUM_ROTATIONS);
-        s->phase_index = 1; /* skip cloud-only phase 1 since last phase covered it */
+        s->phase_index = 1;
     }
 
     zul_enter_phase(s);
 }
 
-/* tick the phase machine.
-   phase_timer is the single source of truth — covers surface + actions + dive.
-   timeline: [surface_timer ticks] [actions] [idle] [ZUL_DIVE_PHASE_TICKS dive] → next phase */
+/* tick the phase machine. phase_timer is the single source of truth (surface + actions + dive).
+   timeline: [surface] [actions] [idle] [dive] -> next phase */
 static void zul_phase_tick(ZulrahState* s) {
     if (!s->zulrah_visible) return;
 
-    /* decrement phase timer every tick */
     if (s->phase_timer > 0) s->phase_timer--;
 
-    /* phase complete — immediately enter next phase */
+    /* phase complete: immediately enter next phase */
     if (s->phase_timer <= 0) {
         s->zulrah_visible = 0;
         s->zulrah.npc_visible = 0;
@@ -1850,8 +1752,7 @@ static void zul_phase_tick(ZulrahState* s) {
     }
     if (s->is_diving) return;
 
-    /* surface animation: first N ticks of the phase, no actions fire.
-       player CAN attack during this window (free hits). */
+    /* surface animation: first N ticks, no actions fire; the player CAN attack here (free hits) */
     if (s->surface_timer > 0) {
         s->surface_timer--;
         return;
@@ -1861,7 +1762,7 @@ static void zul_phase_tick(ZulrahState* s) {
     const ZulRotationPhase* phase = zul_current_phase(s);
     const ZulAction* act = &phase->actions[s->action_index];
 
-    /* end sentinel — all actions done, idle until dive kicks in */
+    /* end sentinel: all actions done, idle until dive */
     if (act->type == ZA_END) {
         s->zulrah_attacking = 0;
         return;
@@ -1871,26 +1772,21 @@ static void zul_phase_tick(ZulrahState* s) {
     s->action_timer--;
     if (s->action_timer > 0) return;
 
-    /* fire the action */
     zul_fire_action(s, (ZulActionType)act->type);
     s->action_progress++;
 
-    /* check if this action segment is complete */
     if (s->action_progress >= act->count) {
         s->action_index++;
         s->action_progress = 0;
 
-        /* check if next action exists */
         const ZulAction* next = &phase->actions[s->action_index];
         if (next->type == ZA_END) {
             s->zulrah_attacking = 0;
             return;
         }
 
-        /* set attacking flag */
         s->zulrah_attacking = zul_action_is_attack((ZulActionType)next->type);
 
-        /* jad init for new action */
         if (next->type == ZA_JAD_RM) s->jad_is_magic_next = 0;
         else if (next->type == ZA_JAD_MR) s->jad_is_magic_next = 1;
 
@@ -1909,8 +1805,7 @@ static void zul_process_prayer(ZulrahState* s, int overhead_action, int offensiv
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_action)) {
         s->player.offensive_prayer_just_activated = 1;
     }
-    /* zulrah caches eff_level + max_hit in mage_stats / range_stats — recompute
-       whenever offensive prayer changes so subsequent attack rolls use current state. */
+    /* mage_stats/range_stats cache eff_level + max_hit; recompute when offensive prayer changes */
     if (s->player.offensive_prayer != prev_offensive)
         zul_refresh_cached_loadout_stats(s);
 }
@@ -2083,7 +1978,7 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     obs[i++] = s->damage_received_this_tick / 50.0f;
     obs[i++] = s->total_damage_dealt / MONSTER_DATABASE[MON_ZULRAH_GREEN].hp;
 
-    /* new features (64-67) */
+    /* spec + antivenom + gear tier (64-67) */
     obs[i++] = (float)s->player.special_energy / 100.0f;
     obs[i++] = (s->antivenom_timer > 0) ? 1.0f : 0.0f;
     obs[i++] = (float)s->antivenom_timer / ZUL_ANTIVENOM_DURATION;
@@ -2156,7 +2051,7 @@ static void zul_write_mask(EncounterState* state, float* mask) {
         }
         off++;
     }
-    /* attack — can't attack while Zulrah is hidden or diving */
+    /* attack: can't attack while Zulrah is hidden or diving */
     for (int a = 0; a < ZUL_ATTACK_DIM; a++) {
         const EncounterLoadoutStats* attack_stats =
             a == ZUL_ATK_MAGE ? &s->mage_stats :
@@ -2404,7 +2299,6 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->rng_state = encounter_resolve_seed(saved_rng, seed);
     s->gear_tier = zul_sample_gear_tier(s);
 
-    /* player */
     s->player.entity_type = ENTITY_PLAYER;
     memset(s->player.equipped, ITEM_NONE, NUM_GEAR_SLOTS);
     encounter_init_maxed_player_combat_stats(&s->player, ZUL_PLAYER_PRAYER);
@@ -2431,13 +2325,11 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     s->player_gear = ZUL_GEAR_MAGE;
     encounter_apply_loadout(&s->player, ZUL_MAGE_LOADOUT[s->gear_tier], GEAR_MAGE);
     zul_populate_player_inventory(&s->player, s->gear_tier);
-    /* derive combat stats from ITEM_DATABASE */
     OffensivePrayer mage_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_AUGURY : OFFENSIVE_PRAYER_NONE;
-    /* ranged loadout uses Rigour, not Augury: offensive prayer is style-gated now. */
+    /* ranged loadout uses Rigour, not Augury (offensive prayer is style-gated) */
     OffensivePrayer range_prayer = (s->gear_tier >= 1) ? OFFENSIVE_PRAYER_RIGOUR : OFFENSIVE_PRAYER_NONE;
     s->player.offensive_prayer = mage_prayer;
-    /* mage loadout is trident / Eye of Ayak — powered staves, accurate stance gets +3 magic eff.
-       ranged runs in rapid stance for blowpipe/tbow (-1 attack_speed). */
+    /* mage: powered staff in accurate stance (+3 magic eff); ranged: rapid stance for blowpipe/tbow (-1 attack_speed) */
     encounter_compute_loadout_stats(ZUL_MAGE_LOADOUT[s->gear_tier], ATTACK_STYLE_MAGIC,
         mage_prayer, s->player.current_magic, FIGHT_STYLE_ACCURATE, 30, &s->mage_stats);
     encounter_compute_loadout_stats(ZUL_RANGE_LOADOUT[s->gear_tier], ATTACK_STYLE_RANGED,
@@ -2523,7 +2415,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     zul_process_food(s, actions[ZUL_HEAD_FOOD]);
     zul_process_potion(s, actions[ZUL_HEAD_POTION]);
 
-    /* gear switch from attack action — interrupts if actually switching */
+    /* gear switch from the attack action; interrupts only if actually switching */
     int atk_action = actions[ZUL_HEAD_ATTACK];
     if (!s->human_command_mode) {
         if ((atk_action == ZUL_ATK_MAGE && s->player_gear != ZUL_GEAR_MAGE) ||
@@ -2628,9 +2520,7 @@ static void zul_step(EncounterState* state, const int* actions) {
     /* venom */
     zul_venom_tick(s);
 
-    /* prayer drain — both overhead and offensive, with activation-tick skip.
-       drain can clear offensive_prayer at pp<=0; refresh mage/range caches
-       afterwards so subsequent attacks don't use stale prayer-boosted stats. */
+    /* prayer drain (overhead + offensive, activation-tick skip); drain can clear offensive_prayer at pp<=0, so refresh the caches */
     OffensivePrayer prev_off_drain = s->player.offensive_prayer;
     encounter_drain_all_prayers(
         &s->player, encounter_player_prayer_bonus(&s->player));
@@ -2651,13 +2541,11 @@ static void zul_step(EncounterState* state, const int* actions) {
 
 
 static void zul_heuristic_actions(ZulrahState* s, int* actions) {
-    /* zero all heads */
     for (int i = 0; i < ZUL_NUM_ACTION_HEADS; i++) actions[i] = 0;
 
     int hp = s->player.current_hitpoints;
 
-    /* prayer: match form. GREEN=ranged, BLUE=magic, RED=melee.
-       heuristic picks target-prayer and only emits when the slot must change. */
+    /* prayer: match form (GREEN=ranged, BLUE=magic, RED=melee); emit only when the slot must change */
     if (s->zulrah_visible && !s->is_diving) {
         switch (s->current_form) {
             case ZUL_FORM_GREEN:
@@ -2673,8 +2561,7 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
                     actions[ZUL_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
                 break;
         }
-        /* offensive prayer: match attack style. green/blue use mage/ranged → piety is wrong.
-           zulrah heuristic normally alternates mage/ranged so use augury when mage, rigour when ranged. */
+        /* offensive prayer: match the player's attack style for this form (augury maging, rigour ranging, piety melee) */
         OffensivePrayer target_off = OFFENSIVE_PRAYER_NONE;
         if (s->current_form == ZUL_FORM_BLUE) target_off = OFFENSIVE_PRAYER_AUGURY;
         else if (s->current_form == ZUL_FORM_GREEN) target_off = OFFENSIVE_PRAYER_RIGOUR;
@@ -2773,7 +2660,6 @@ static void* zul_get_entity(EncounterState* state, int index) {
     return &s->player;
 }
 
-/* render entity population */
 static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
     ZulrahState* s = (ZulrahState*)state;
     int n = 0;
@@ -3057,9 +2943,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
         ov->hazard_count++;
     }
 
-    /* boss state: zulrah.x/y is the SW anchor tile of the NxN footprint.
-       the 3D model renders centered on the footprint (x + size/2).
-       hitbox spans [x, x+size) in both axes. */
+    /* boss state: zulrah.x/y is the SW anchor of the NxN footprint (model centered at x+size/2, hitbox [x, x+size)) */
     ov->boss_x = s->zulrah.x;
     ov->boss_y = s->zulrah.y;
     ov->boss_visible = s->zulrah_visible;
@@ -3073,8 +2957,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     ov->melee_target_x = s->melee_target_x;
     ov->melee_target_y = s->melee_target_y;
 
-    /* projectile events this tick (attacks + cloud spits).
-       zulrah is size 5: start_h = 5*0.75*128 = 480, end_h = 64 (player size 1) */
+    /* projectile events this tick (attacks + cloud spits); zulrah size 5: start_h 480, end_h 64 (player size 1) */
     ov->projectile_count = 0;
     for (int i = 0; i < s->attack_event_count; i++) {
         if (s->attack_events[i].style == 4) {

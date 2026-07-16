@@ -37,8 +37,7 @@ typedef struct {
     const InfernoContext* ctx;
 } InfWalkCtx;
 
-/* BFS dynamic obstacle callback — pillars block pathfinding.
-   receives absolute world coords, converts to local for pillar check. */
+/* BFS dynamic-obstacle callback: abs world coords -> local pillar check. */
 static int inf_pathfind_blocked(void* data, int abs_x, int abs_y) {
     InfWalkCtx* wc = (InfWalkCtx*)data;
     InfernoState* s = wc->s;
@@ -147,7 +146,6 @@ static int inf_npc_overlap_hold(void* ctx) {
            s->player_last_interaction_target_slot == mc->self_idx;
 }
 
-/* forward declaration — defined after potions/food section */
 static int inf_tile_walkable(void* ctx, int x, int y);
 
 static int inf_npc_environment_blocked(InfernoState* s, int x, int y, int size) {
@@ -203,8 +201,7 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
     if (uses_collision_flag)
         inf_unstamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
 
-    /* OSRS: NPC shuffles off player tile when overlapping (Mob.ts:109-153).
-       if the NPC steps out, skip further movement this tick. */
+    /* OSRS: NPC shuffles off player tile when overlapping (Mob.ts:109-153) */
     if (npc->type != INF_NPC_NIBBLER) {
         InfMoveCtx mc = { s, ctx, idx };
         int stepped = encounter_npc_step_out_from_under(
@@ -234,9 +231,7 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
     npc->target_x = tx;
     npc->target_y = ty;
 
-    /* NPCs stop moving once they can attack their current target.
-       reference: InfernoTrainer Unit.ts:383 canMove = !hasLOS (where
-       hasLOS is relative to the NPC's current aggro target). */
+    /* NPCs stop moving once they have LOS to target (Unit.ts:383: canMove = !hasLOS) */
     if (npc->type != INF_NPC_NIBBLER) {
         int has_los = target.is_player ?
             inf_npc_has_los(s, idx) :
@@ -293,9 +288,7 @@ static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx,
     if (npc->dig_freeze_timer > 0) {
         npc->dig_freeze_timer--;
         if (npc->dig_freeze_timer == 0 && npc->dig_attack_delay == 0) {
-            /* emerge: use the reference ordered landing candidates around the
-               player, then fall back to the default NW corner if all preferred
-               tiles are blocked by arena terrain/entities. */
+            /* emerge: try reference-ordered landing tiles around player, else NW-corner default */
             int ox = npc->x, oy = npc->y;
             if (inf_npc_sets_collision_flag(npc->type))
                 inf_unstamp_npc_collision_footprint(s, ox, oy, npc->size);
@@ -320,8 +313,8 @@ static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx,
             npc->y = landing_y;
             if (inf_npc_sets_collision_flag(npc->type))
                 inf_stamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
-            npc->stun_timer = 2;  /* 2-tick freeze after emerging */
-            npc->dig_attack_delay = 6;  /* 6-tick delay before attacking */
+            npc->stun_timer = 2;
+            npc->dig_attack_delay = 6;
             npc->no_los_ticks = 0;
         }
         return;
@@ -331,7 +324,6 @@ static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx,
         return;
     }
 
-    /* track LOS absence */
     if (!inf_npc_has_los(s, idx)) {
         npc->no_los_ticks++;
     } else {
@@ -339,12 +331,9 @@ static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx,
         return;
     }
 
-    /* check dig trigger */
     if (npc->no_los_ticks >= 50) {
-        /* forced dig */
         npc->dig_freeze_timer = 6;
     } else if (npc->no_los_ticks >= 38) {
-        /* 10% chance per tick */
         if (encounter_rand_int(&s->rng_state, 10) == 0) {
             npc->dig_freeze_timer = 6;
         }

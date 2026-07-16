@@ -1,16 +1,6 @@
 /**
  * @file encounter_inferno.h
- * @brief The Inferno — 69-wave PvM challenge with prayer switching and pillar safespotting.
- *
- * core mechanic: 3 destructible pillars block NPC projectiles. the player must
- * position behind pillars to limit incoming attacks to one prayer style at a time.
- * nibblers eat pillars, meleer can dig through them. losing all pillars = death spiral.
- *
- * monster types: nibbler (pillar eater), bat (short-range ranger), blob (prayer reader,
- * splits into 3 on death), meleer (burrows to player), ranger, mager (resurrects dead mobs),
- * jad (random 50/50 range/mage), zuk (final boss with shield mechanic).
- *
- * reference: InfernoTrainer TypeScript, runelite inferno plugin
+ * @brief The Inferno: 69-wave PvM challenge, prayer switching behind destructible pillars.
  */
 
 #ifndef ENCOUNTER_INFERNO_H
