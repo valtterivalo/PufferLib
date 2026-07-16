@@ -106,15 +106,8 @@ static float col_log_dpt_rate(const Log* log, ColoLogDptSlot slot) {
 }
 
 
-/** state==NULL: fresh reset. non-NULL: restore a best-trajectory snapshot
-    (value copy + derived-cache rebuild). Both regenerate obs+mask. */
-void c_reset(Env* env, const ColosseumState* state) {
-    if (state == NULL) {
-        ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
-    } else {
-        env->state = *state;
-        col_refresh_after_state_load(&env->state, &env->context);
-    }
+void c_reset(Env* env) {
+    ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
     float* obs = (float*)env->observations;
     ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
     ENCOUNTER_COLOSSEUM.write_mask(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs + COLO_NUM_OBS);
@@ -317,8 +310,9 @@ void c_render(Env* env) {
 
 typedef ColosseumState State;
 
-/* opt into vecenv.h's 2-arg c_reset(Env*, const State*) contract. */
-#define PUFFER_RESET_WITH_STATE
+static inline void puffer_state_refresh(Env* env) {
+    col_refresh_after_state_load(&env->state, &env->context);
+}
 
 #define MY_VEC_INIT
 #include "vecenv.h"

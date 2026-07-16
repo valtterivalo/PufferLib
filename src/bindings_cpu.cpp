@@ -66,8 +66,7 @@ typedef struct StaticVec {
 } StaticVec;
 
 StaticVec* create_static_vec(int total_agents, int num_buffers, int gpu, Dict* vec_kwargs, Dict* env_kwargs);
-void static_vec_reset(StaticVec* vec, int env_start, int env_count,
-        const void* state_ptrs);
+void static_vec_reset(StaticVec* vec);
 void static_vec_close(StaticVec* vec);
 void static_vec_log(StaticVec* vec, Dict* out);
 void static_vec_render(StaticVec* vec, int env_id);
@@ -94,10 +93,6 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t*, unsigned int) { return 0; }
 cudaError_t cudaStreamQuery(cudaStream_t) { return 0; }
 const char* cudaGetErrorString(cudaError_t) { return "stub"; }
 }
-
-/* Mirror of LOG_DICT_CAPACITY in vecenv.h (this file is self-contained and does
-   not include it). Keep the two in sync. */
-#define LOG_DICT_CAPACITY 96
 
 static Dict* create_dict(int capacity) {
     Dict* dict = (Dict*)calloc(1, sizeof(Dict));
@@ -227,7 +222,7 @@ static std::unique_ptr<VecEnv> create_vec(py::dict args, int gpu = 0) {
 
 static void vec_reset(VecEnv& ve) {
     py::gil_scoped_release no_gil;
-    static_vec_reset(ve.vec, 0, -1, NULL);
+    static_vec_reset(ve.vec);
 }
 
 static void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
@@ -240,7 +235,9 @@ static void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 }
 
 static py::dict vec_log(VecEnv& ve) {
-    Dict* out = create_dict(LOG_DICT_CAPACITY);
+    // 64 (not upstream's 32): the inferno env log emits 33 keys and dict_set
+    // asserts on overflow. Same bound as the trainer-side log dicts.
+    Dict* out = create_dict(64);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++)
