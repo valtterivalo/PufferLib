@@ -141,3 +141,69 @@ nmmo3, per proposal option B). Truncation channel: not discussed — include in
 the PR branch as separate commits (the OSRS envs are its consumer story), flag
 in the PR description. Port surface: 5c has no pybind layer; envs bind via the
 new pufferenv.h seam — the PR branch is a real port, scout the seam first.
+
+## 2026-07-17 port execution (branch osrs-5c-port, pushed to origin)
+
+GEOMETRY: osrs-5c-port = upstream/5c tip 92b02cae5 (post-"reorg" of pufferl.cu;
+line-number citations from the port plan are stale, symbols hold) + WP0 payload
+import 71d4a20cd + six merged wave-1 packages + T2 = 8b2f4c52b.
+
+WP0 SCOPE CALLS: ocean/osrs/tools/ EXCLUDED from PR (exporters import
+cache_pipeline = unresolved Jagex-decoder copyright; nothing at build/runtime
+needs tools/ - build only calls scripts/osrs_asset_manifest.py + setup-data.sh;
+assets ship pre-baked from fork releases per Suarez agreement). tests/README.md
+excluded. pvp/zulrah shared headers + tests RIDE (osrs_env.h hard-includes the
+pvp stack; carving = shared-tree surgery) but get no build targets/configs =
+WIP scope, say so in PR description. Configs land flat at config/osrs_*.ini.
+
+WAVE 1 (6 worktree agents, all gates green, zero merge conflicts):
+- MASK DECISION EXECUTED: native 5c channel. Colosseum OBS_SIZE 3496->3044 pure
+  + 452-byte mask (20 heads {49,5,29x13,3,4,6,5,3}); inferno 1659->1570 pure +
+  89-byte mask (9 heads {25,6,38,4,2,4,3,2,5}). vec.action_mask_size set in both
+  inis. Old .bin checkpoints DO NOT carry over (retrain forced anyway).
+- Entry headers: puf_* contract, crashing dict_get on exactly the shipped [env]
+  key sets (37 colo / 66 inf). Optional-key parity verified: old binding only
+  applied optional keys when present; none were in the ini; sim defaults ruled
+  then and rule now (the experimental-knob CLI surface is gone, per config
+  verdict). Curriculum wave-mixing folded into puf_init keyed on env->rng:
+  per-env hash-threshold draw (binomial ~frac*N) replaces contiguous-block
+  exact-floor assignment - puf_init cannot see num_envs in the 5c model.
+  Inferno regains per-env sim seeding (lowbias32(env index)); old inferno
+  binding's per-env diversity path verified restored, colosseum pattern.
+- Log approaches DIVERGE by design: colosseum = fresh 99-float Log (n trailing)
+  behind a scoped #define Log OsrsSharedLog around the encounter include;
+  inferno = reuses the shared 390-float osrs Log (tag named struct Log in
+  osrs_types.h, one char, layout-neutral). Composes because each env is its own
+  binary; both syntax gates re-run green on the merged tree.
+- Encoder: ColosseumEntityEncoder in src/ocean.cu, house pattern (kernels +
+  9-fn vtable + strcmp branch), mode-2 HARDCODED (encoder_mode knob deleted).
+  reg_params order = .bin layout: global_w[hidden,3044], entity_l1_w[16,37],
+  entity_l2_w[hidden,16], inv_l1_w[16,28], inv_l2_w[hidden,16]. Entity offsets
+  (NPC 1030, inv 48) live inside pure obs; mask tail drop shifts nothing.
+  global_w numel%8: 3044%8=4 -> alignment guard now requires even hidden.
+- Truncations: T1 core (4abfeb028) = Agent.truncations always-present,
+  twin-mirrors terminals through every buffer stage; GAE truncation zeroes
+  recursion boundary, keeps gamma*V bootstrap; state reset ORs the channels
+  (zero_state_on_terminal + select_copy case 5 fmaxf into mb_terminals - union
+  documented, scan reset is sole consumer); gpu_env path deliberately
+  truncation-free. 10/10 standalone scalar checks incl. bitwise regression vs
+  old 5c at truncations=0. T2 (8b2f4c52b) = two-line env splits, disjoint
+  channels (colo: is_term && time_limit_truncated; inf: is_term && tick>=MAX &&
+  hp>0), reset zeroing.
+- Config: dropped-as-unread [base] policy_name/rnn_name/score_metric/log_dir,
+  train.eps, sweep.method/sweep_only. KNOWN DELTA: 5c sweep space = default.ini
+  [sweep.train.*] UNION env blocks; old sweep_only restriction has no 5c home,
+  so ported sweeps also range default's 12 extra train hypers. Accepted (house
+  behavior); narrow default.ini only if a real sweep run needs it.
+- Build: 3 hunks (osrs_* codegen+setup-data case, NVCC_ENV_HOST_FLAGS
+  -fpermissive carry, SIMD flags arch-conditional so arm64 --local works).
+  -fpermissive = box-gate removal candidate.
+
+IN FLIGHT: meta-test agent repointing 65 stale source-coupling assertions in
+test_inferno_attack_styles.c (23 pre-existing config-path + 33 binding.c
+needles + 9 render/lab deletes) + stale binding.c refs; viewer agent porting
+osrs_visual.c to src/puffercpu.h with 5c .bin re-parse (encoder tensors first)
++ native-mask logit application. Box CUDA build gate of 8b2f4c52b running in
+/puffertank/PufferLib-5cport (separate worktree, validations undisturbed).
+PENDING: box smoke train after validation chain frees GPU; final commit
+curation (squash import+merges into clean PR commits); PR description.
