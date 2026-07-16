@@ -1,9 +1,10 @@
 /**
  * @file binding.c
- * @brief Static-native binding for OSRS Inferno encounter.
+ * @brief Static-native binding for the OSRS Inferno encounter:
+ *        bridges vecenv.h (float actions/terminals) to the encounter vtable.
  *
- * Bridges vecenv.h's contract (float actions, float terminals) with the
- * Inferno encounter's vtable interface.
+ * Ordering constraint: vecenv.h calls c_reset/c_step/c_close/c_render, so they
+ * precede its include; my_init/my_vec_init/my_log use its Dict and follow it.
  */
 
 #include <stdlib.h>
@@ -28,8 +29,7 @@
 
 #include "inferno_profile.h"
 
-/* encounter headers + render.h have many static helpers only used by the
-   standalone viewer (not c_render) — suppress unused-function noise. */
+/* encounter + render headers carry viewer-only static helpers; silence unused-function. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "../osrs/encounters/encounter_inferno.h"
@@ -59,13 +59,12 @@ typedef struct InfernoEnv {
 
     InfernoState state;
     InfernoContext context;
-    int config_start_wave;  /* the start_wave from config (not curriculum override) */
+    int config_start_wave;  /* start_wave from config (not curriculum override) */
 
     int acts_staging[INF_NUM_ACTION_HEADS];
 
-    /* best-episode replay recording: all envs buffer their current episode's actions.
-       on terminal, if the episode reached a new global best wave, flush to disk.
-       binary format: [int32 num_ticks] [uint32 rng_state] [num_heads int32 per tick] */
+    /* best-episode replay buffer; flushed to disk on a new global best.
+       format: [int32 num_ticks][uint32 rng_state][num_heads int32 per tick] */
     int* episode_actions;    /* buffer: episode_len * NUM_ATNS ints */
     int episode_action_cap;  /* max ticks we can buffer */
     int episode_action_len;  /* ticks buffered so far this episode */
@@ -73,8 +72,7 @@ typedef struct InfernoEnv {
     InfSnapshot episode_initial_snapshot;
     int episode_initial_snapshot_valid;
 
-    /* replay playback: when PLAY_REPLAY=path is set, override the policy's
-       actions with the recorded ones. first env only (env 0). */
+    /* replay playback (PLAY_REPLAY=path): env 0 overrides policy actions with recorded ones. */
     int* replay_actions;     /* full action buffer: num_ticks * NUM_ATNS */
     int replay_num_ticks;
     int replay_cursor;       /* ticks consumed so far */
@@ -85,8 +83,7 @@ typedef struct InfernoEnv {
     float ticks_per_second;
     double last_step_time;
 
-    /* set by c_step on terminal-reset; consumed by c_render on its next call
-       to mirror the standalone viewer's post-reset cleanup (osrs_visual.c:186). */
+    /* raised by c_step on terminal-reset; consumed by c_render for post-reset cleanup. */
     int pending_render_reset;
     int render_status_frames;
     char render_status_text[ENCOUNTER_OVERLAY_STATUS_TEXT_LEN];
@@ -106,7 +103,6 @@ typedef struct InfernoEnv {
 #define Env InfernoEnv
 #define INF_RENDER_STATUS_FRAMES 180
 
-/* global best episode tracking */
 static pthread_mutex_t g_best_replay_mutex = PTHREAD_MUTEX_INITIALIZER;
 static InfernoReplayBest g_best_replay = {
     .wave = 0,
@@ -314,10 +310,8 @@ void c_step(Env* env) {
 
     INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);
 
-    /* terminal-only logging: accumulate completed episode stats into env->log.
-       vecenv polls with static_vec_log() which sums across agents, divides by
-       total n, then clears. this gives proper per-completed-episode averages
-       instead of noisy mid-episode snapshots. */
+    /* terminal-only: accumulate completed-episode stats; vecenv's static_vec_log
+       sums across agents and divides by n for per-episode averages. */
     if (is_term) {
         InfernoState* s = INF_ENV_INFERNO(env);
         encounter_write_terminal_status_text(
@@ -336,8 +330,7 @@ void c_step(Env* env) {
         int terminal_shield_active = inferno_terminal_shield_active(s);
         int terminal_behind_shield = inferno_terminal_behind_shield(s);
 
-        /* only count episodes that match the configured start_wave.
-           curriculum agents (overridden wave) are excluded from metrics. */
+        /* only count episodes at the configured start_wave; curriculum agents excluded. */
         if (s->start_wave != env->config_start_wave) goto skip_log;
 
         env->log.episode_return += s->episode_return;
@@ -411,11 +404,9 @@ void c_step(Env* env) {
             env->log.killed_by_type[t] += (float)s->killed_by_type[t];
         }
 
-        /* Zuk shield tracking */
         env->log.behind_shield_pct += (s->total_zuk_ticks > 0)
             ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
 
-        /* Zuk HP remaining at episode end */
         {
             float zhp = 1200.0f;
             for (int n = 0; n < INF_MAX_NPCS; n++) {
@@ -606,7 +597,6 @@ void c_step(Env* env) {
                         (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
                 }
             }
-            /* Terminal death pressure by phase. */
             if (!won) {
                 int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
                 for (int n = 0; n < INF_MAX_NPCS; n++) {
@@ -668,10 +658,7 @@ void c_step(Env* env) {
     }
 
     if (is_term) {
-        /* check if this episode is a new global best — if so, flush replay to disk.
-           for full runs (start_wave 0): best = highest wave reached, then fewest ticks.
-           for zuk-only (start_wave 68+): best = most damage to zuk (lowest zuk HP), then fewest ticks.
-           curriculum starts from mid-waves also record. */
+        /* flush replay if this episode is a new global best (ordering: replay_best.h). */
         if (env->episode_actions && env->episode_action_len > 0) {
             InfernoState* st = INF_ENV_INFERNO(env);
             int wave = st->wave;
@@ -799,10 +786,7 @@ void c_render(Env* env) {
         };
         encounter_load_scene_assets(rc, &scene);
 
-        /* inferno renders in encounter-local tiles, but render_make_client()
-           initializes the camera to wilderness PvP world coords. mirror the
-           standalone viewer's post-load bootstrap so the first live frame uses
-           inferno arena bounds and entity positions. */
+        /* render_make_client() starts at PvP world coords; rebind camera to inferno arena bounds. */
         render_populate_entities(rc, re);
         rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
         rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
@@ -818,27 +802,20 @@ void c_render(Env* env) {
     RenderClient* rc = (RenderClient*)re->client;
     if (!rc) return;
 
-    /* post-reset cleanup: c_step raised the flag after resetting the encounter.
-       mirror osrs_visual.c:186-201 so damage splats, in-flight effects, stale
-       inventory state, and last-frame sub-tile coordinates (from dead-player
-       body) don't leak into the next episode. */
+    /* post-reset cleanup so splats, effects, and stale sub-tile coords don't leak forward. */
     if (env->pending_render_reset) {
         render_reset_episode_visual_state(rc, re);
         env->pending_render_reset = 0;
     }
 
     if (!rc->lab_enabled) {
-        /* update NPC visual positions once per tick (not per frame).
-           render_post_tick snapshots the existing rc->entities before repopulating
-           so it can detect new NPC identities and clear stale splats/HP bars. */
+        /* per-tick NPC visual update; render_post_tick detects new identities, clears stale splats. */
         render_post_tick(rc, re);
         inferno_env_apply_render_status_overlay(env, rc);
         if (env->render_status_frames > 0) env->render_status_frames--;
     }
 
-    /* Match the standalone viewer's visual_frame pattern: render until the
-       next sim tick is due. pvp_render scales the client-tick clock by replay
-       speed, so high-speed evals still drain projectile flights and effects. */
+    /* render until the next sim tick is due; pvp_render scales the tick clock by replay speed. */
     if (rc->ticks_per_second <= 0.0f) {
         pvp_render(re);
         env->last_step_time = GetTime();
@@ -1121,8 +1098,7 @@ void my_init(Env* env, Dict* kwargs) {
     env->episode_action_len = 0;
     env->episode_initial_snapshot_valid = 0;
 
-    /* playback: first env (env 0) loads the replay if PLAY_REPLAY is set.
-       we use g_play_replay_loaded to ensure only one env loads it. */
+    /* env 0 loads the PLAY_REPLAY file once (g_play_replay_loaded guards it). */
     env->replay_actions = NULL;
     env->replay_num_ticks = 0;
     env->replay_cursor = 0;
@@ -1217,8 +1193,8 @@ void my_init(Env* env, Dict* kwargs) {
     }
 }
 
-/* curriculum wave mixing: start some agents at later waves for late-game gradient signal.
-   base-start agents are scored normally; curriculum agents train but don't affect sweep metric. */
+/* curriculum wave mixing: some agents start at later waves for late-game signal;
+   they train but are excluded from scored metrics. */
 #define MAX_CURRICULUM_TIERS 8
 
 Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_counts,
@@ -1238,7 +1214,6 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         abort();
     }
 
-    /* parse curriculum tiers from env config */
     static const char* wave_keys[] = {
         "curriculum_wave_1","curriculum_wave_2","curriculum_wave_3","curriculum_wave_4",
         "curriculum_wave_5","curriculum_wave_6","curriculum_wave_7","curriculum_wave_8",
@@ -1262,7 +1237,6 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         }
     }
 
-    /* allocate and init all envs (same as default my_vec_init) */
     Env* envs = (Env*)calloc(total_agents, sizeof(Env));
     int num_envs = 0;
     int agents_created = 0;
@@ -1275,7 +1249,6 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
     }
     envs = (Env*)realloc(envs, num_envs * sizeof(Env));
 
-    /* assign curriculum start_waves to agents at the end of the array */
     if (num_tiers > 0) {
         int tier_counts[MAX_CURRICULUM_TIERS];
         int curriculum_total = 0;
@@ -1314,7 +1287,6 @@ Env* my_vec_init(int* num_envs_out, int* buffer_env_starts, int* buffer_env_coun
         fprintf(stderr, " (%d total)\n", num_envs);
     }
 
-    /* fill buffer info (same as default) */
     int buf = 0;
     int buf_agents = 0;
     buffer_env_starts[0] = 0;
@@ -1348,10 +1320,8 @@ static void inferno_log_idle_metric(
         "zuk_healers",
         "zuk_post_healers",
     };
-    /* dict_set stores the key POINTER (vecenv.h dict_set, see the chess binding
-       warning) — a per-iteration stack buffer aliases every phase key onto one
-       dict entry. Keys live in a static pool instead: slots are unique within
-       one my_log flush (one Dict lifetime) and deterministic across flushes. */
+    /* dict_set keeps the key POINTER, so phase keys use a static pool (not a stack
+       buffer) to stay unique within one my_log flush. */
     static char key_pool[64][96];
     static int key_pool_next = 0;
     dict_set(out, name, total);
