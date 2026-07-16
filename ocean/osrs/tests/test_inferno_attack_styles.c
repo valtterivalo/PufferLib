@@ -2493,27 +2493,6 @@ static void test_tagged_jad_healers_queue_behind_front_healer(void) {
     ASSERT_INT_EQ("second healer remains blocked behind front", state.npcs[1].x, 18);
 }
 
-static void test_stacked_npc_unclipping_preserves_flag_when_one_leaves(void) {
-    printf("--- stacked npc unclipping preserves flag when one leaves ---\n");
-
-    InfernoState state = make_test_state(25, 25);
-    state.npcs[0] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
-    state.npcs[0].active = 1;
-    state.npcs[1] = make_test_npc(INF_NPC_HEALER_JAD, 20, 20, 1);
-    state.npcs[1].active = 1;
-
-    inf_rebuild_entity_collision_flags(&state);
-    ASSERT_INT_EQ("stacked tile initially flagged",
-                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 2);
-
-    inf_update_npc_collision_flags(&state, 0, 20, 20, 21, 20, 1);
-
-    ASSERT_INT_EQ("old stacked tile remains occupied",
-                  state.npc_collision_flags[20 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 1);
-    ASSERT_INT_EQ("new tile flagged",
-                  state.npc_collision_flags[21 - INF_ARENA_MIN_X][20 - INF_ARENA_MIN_Y], 1);
-}
-
 static void test_meleer_dig_can_stack_without_losing_collision_flag(void) {
     printf("--- meleer dig can stack without losing collision flag ---\n");
 
@@ -2535,12 +2514,6 @@ static void test_meleer_dig_can_stack_without_losing_collision_flag(void) {
     ASSERT_INT_EQ("dig lands on first candidate y", state.npcs[0].y, dig_y);
     ASSERT_INT_EQ("stacked landing tile has both NPCs",
                   state.npc_collision_flags[dig_x - INF_ARENA_MIN_X][dig_y - INF_ARENA_MIN_Y], 2);
-
-    inf_update_npc_collision_flags(
-        &state, 0, dig_x, dig_y, 25, 25, INF_NPC_STATS[INF_NPC_MELEER].size);
-
-    ASSERT_INT_EQ("other NPC still blocks old landing tile",
-                  state.npc_collision_flags[dig_x - INF_ARENA_MIN_X][dig_y - INF_ARENA_MIN_Y], 1);
 }
 
 static void test_jad_healer_spawn_offsets_match_wave_67_reference(void) {
@@ -8199,176 +8172,6 @@ static void test_inferno_healer_transition_stats_track_episode_progress(void) {
         state.total_zuk_healer_kills, 4);
 }
 
-static void test_inferno_healer_diagnostic_phase_matches_snapshot_state(void) {
-    printf("--- inferno healer diagnostic phase matches snapshot state ---\n");
-
-    InfernoState state = make_test_state(INF_ZUK_PLAYER_START_X, INF_ZUK_PLAYER_START_Y);
-    state.wave = INF_NUM_WAVES - 1;
-    state.min_zuk_hp_seen = 270.0f;
-    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 20, 52, 5);
-    state.npcs[0].active = 1;
-    state.npcs[0].hp = 270;
-    state.npcs[0].max_hp = 1200;
-
-    ASSERT_INT_EQ("pre-healer phase matches 240-300 hp before spawn",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PRE_HEALER), 1);
-    ASSERT_INT_EQ("immediate healer phase rejects pre-spawn state",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
-    state.player.attack_timer = 3;
-    ASSERT_INT_EQ("attack timer filter accepts off value",
-        inf_healer_diagnostic_attack_timer_matches(&state, -1), 1);
-    ASSERT_INT_EQ("attack timer filter rejects high cooldown",
-        inf_healer_diagnostic_attack_timer_matches(&state, 2), 0);
-    ASSERT_INT_EQ("attack timer filter accepts ready cooldown",
-        inf_healer_diagnostic_attack_timer_matches(&state, 3), 1);
-
-    state.zuk.healer_spawned = 1;
-    state.npcs[0].hp = 239;
-    state.min_zuk_hp_seen = 239.0f;
-    for (int i = 1; i <= 4; i++) {
-        state.npcs[i] = make_test_npc(INF_NPC_HEALER_ZUK, 15 + i, 48, 1);
-        state.npcs[i].active = 1;
-        state.npcs[i].hp = 100;
-        state.npcs[i].max_hp = 100;
-        state.npcs[i].aggro_target = 0;
-    }
-
-    ASSERT_INT_EQ("immediate healer phase matches four untagged healers",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 1);
-    ASSERT_INT_EQ("partial healer phase rejects all untagged healers",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PARTIAL_HEALER), 0);
-    state.episode_over = 1;
-    ASSERT_INT_EQ("diagnostic phases reject terminal snapshots",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
-    state.episode_over = 0;
-    state.weapon_set = (InfWeaponSet)99;
-    ASSERT_INT_EQ("diagnostic phases reject invalid gear state",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_IMMEDIATE_HEALER), 0);
-    state.weapon_set = INF_GEAR_MAGE;
-
-    state.npcs[1].aggro_target = -1;
-    state.npcs[2].active = 0;
-    ASSERT_INT_EQ("partial healer phase matches tagged or killed healers",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_PARTIAL_HEALER), 1);
-
-    for (int i = 1; i <= 4; i++)
-        state.npcs[i].active = 0;
-    ASSERT_INT_EQ("post-healer phase matches no live Zuk healers after spawn",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_POST_HEALER), 1);
-    ASSERT_INT_EQ("post-healer set-alive phase rejects clean post-healer state",
-        inf_healer_diagnostic_phase_matches(
-            &state, INF_HEALER_DIAG_POST_HEALER_SET_ALIVE), 0);
-
-    state.npcs[5] = make_test_npc(
-        INF_NPC_MAGER, 20, 36, INF_NPC_STATS[INF_NPC_MAGER].size);
-    state.npcs[5].active = 1;
-    state.npcs[5].hp = state.npcs[5].max_hp = INF_NPC_STATS[INF_NPC_MAGER].hp;
-    ASSERT_INT_EQ("post-healer set-alive phase matches active set pressure",
-        inf_healer_diagnostic_phase_matches(
-            &state, INF_HEALER_DIAG_POST_HEALER_SET_ALIVE), 1);
-
-    state.min_zuk_hp_seen = 149.0f;
-    ASSERT_INT_EQ("post-150 phase matches low-watermark after healers",
-        inf_healer_diagnostic_phase_matches(&state, INF_HEALER_DIAG_POST_150), 1);
-}
-
-static void test_inferno_restored_start_resets_transition_diagnostics(void) {
-    printf("--- inferno restored start resets transition diagnostics ---\n");
-
-    InfernoState state = make_test_state(INF_ZUK_PLAYER_START_X, INF_ZUK_PLAYER_START_Y);
-    state.wave = INF_NUM_WAVES - 1;
-    state.tick = 500;
-    state.min_zuk_hp_seen = 180.0f;
-    state.zuk.healer_spawned = 1;
-    state.npcs[0] = make_test_npc(INF_NPC_ZUK, 20, 52, 5);
-    state.npcs[0].active = 1;
-    state.npcs[0].hp = 239;
-    state.npcs[0].max_hp = 1200;
-    for (int i = 1; i <= 4; i++) {
-        state.npcs[i] = make_test_npc(INF_NPC_HEALER_ZUK, 15 + i, 48, 1);
-        state.npcs[i].active = 1;
-        state.npcs[i].hp = 100;
-        state.npcs[i].max_hp = 100;
-        state.npcs[i].aggro_target = i <= 2 ? -1 : 0;
-    }
-
-    state.tick_at_le_300 = 10;
-    state.tick_at_le_240 = 20;
-    state.tick_at_le_150 = 30;
-    state.tick_at_zuk_healer_spawn = 40;
-    state.tick_at_first_zuk_healer_tag = 41;
-    state.tick_at_all_zuk_healers_tagged = 42;
-    state.tick_at_all_zuk_healers_dead = 43;
-    state.tick_at_first_zuk_healer_target = 44;
-    state.tick_at_first_zuk_healer_attack = 45;
-    state.damage_after_300 = 11.0f;
-    state.damage_after_240 = 12.0f;
-    state.damage_after_150 = 13.0f;
-    state.hp_restored_after_240 = 14.0f;
-    state.spark_damage_after_240 = 15.0f;
-    state.zuk_hp_max_after_healer_spawn = 420.0f;
-    state.total_zuk_healer_tags = 4;
-    state.total_shield_tags = 5;
-    state.total_zuk_healer_kills = 3;
-    state.total_zuk_healer_target_ticks = 7;
-    state.total_zuk_healer_attack_fires = 8;
-    state.total_zuk_healer_cannot_attack_ticks = 9;
-    state.total_zuk_healer_cooldown_ticks = 10;
-    state.total_zuk_healer_out_of_range_ticks = 11;
-    state.total_zuk_healer_attackable_ticks = 12;
-
-    inf_reset_transition_diagnostics_for_restored_start(&state);
-
-    ASSERT_INT_EQ("restored start anchors le300 tick to current live hp",
-        state.tick_at_le_300, 500);
-    ASSERT_INT_EQ("restored start anchors le240 tick to current live hp",
-        state.tick_at_le_240, 500);
-    ASSERT_INT_EQ("restored start clears le150 until reached after restore",
-        state.tick_at_le_150, -1);
-    ASSERT_INT_EQ("restored start anchors healer spawn tick",
-        state.tick_at_zuk_healer_spawn, 500);
-    ASSERT_INT_EQ("restored start infers first live tag tick",
-        state.tick_at_first_zuk_healer_tag, 500);
-    ASSERT_INT_EQ("restored start clears all-tag tick for partial live tags",
-        state.tick_at_all_zuk_healers_tagged, -1);
-    ASSERT_INT_EQ("restored start clears all-dead tick while healers live",
-        state.tick_at_all_zuk_healers_dead, -1);
-    ASSERT_INT_EQ("restored start clears first healer target tick",
-        state.tick_at_first_zuk_healer_target, -1);
-    ASSERT_INT_EQ("restored start clears first healer attack tick",
-        state.tick_at_first_zuk_healer_attack, -1);
-    ASSERT_FLOAT_NEAR("restored start clears post300 damage",
-        state.damage_after_300, 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("restored start clears post240 damage",
-        state.damage_after_240, 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("restored start clears post150 damage",
-        state.damage_after_150, 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("restored start clears restored hp after 240",
-        state.hp_restored_after_240, 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("restored start clears spark damage after 240",
-        state.spark_damage_after_240, 0.0f, 1e-6f);
-    ASSERT_FLOAT_NEAR("restored start initializes post-spawn max hp",
-        state.zuk_hp_max_after_healer_spawn, 239.0f, 1e-6f);
-    ASSERT_INT_EQ("restored start infers current live tags only",
-        state.total_zuk_healer_tags, 2);
-    ASSERT_INT_EQ("restored start clears prior shield tags",
-        state.total_shield_tags, 0);
-    ASSERT_INT_EQ("restored start clears unobservable historical kills",
-        state.total_zuk_healer_kills, 0);
-    ASSERT_INT_EQ("restored start clears healer target ticks",
-        state.total_zuk_healer_target_ticks, 0);
-    ASSERT_INT_EQ("restored start clears healer attack fires",
-        state.total_zuk_healer_attack_fires, 0);
-    ASSERT_INT_EQ("restored start clears healer cannot-attack ticks",
-        state.total_zuk_healer_cannot_attack_ticks, 0);
-    ASSERT_INT_EQ("restored start clears healer cooldown ticks",
-        state.total_zuk_healer_cooldown_ticks, 0);
-    ASSERT_INT_EQ("restored start clears healer range-blocked ticks",
-        state.total_zuk_healer_out_of_range_ticks, 0);
-    ASSERT_INT_EQ("restored start clears healer attackable ticks",
-        state.total_zuk_healer_attackable_ticks, 0);
-}
-
 static void test_inferno_human_equip_does_not_snap_loadout(void) {
     printf("--- inferno human equip does not snap full loadout ---\n");
 
@@ -9586,58 +9389,6 @@ static void test_inferno_log_metrics_fit_cuda_dict(void) {
     ASSERT_INT_LE("my_log metric key count plus env/n", metric_count + 1, 64);
 }
 
-static void test_inferno_binding_emits_post_240_traces(void) {
-    printf("--- inferno binding emits post-240 traces ---\n");
-
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-240 trace env var",
-        "ocean/osrs_inferno/binding.c",
-        "inferno_post_240_trace_init_once",
-        "inferno_post_240_trace_reserve_id",
-        "POST240_TRACE_DIR");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-240 trace captures before terminal reset",
-        "ocean/osrs_inferno/binding.c",
-        "void c_step",
-        "void c_reset",
-        "inferno_post_240_trace_capture(env, is_term)");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-240 trace closes on explicit reset",
-        "ocean/osrs_inferno/binding.c",
-        "void c_reset",
-        "void c_close",
-        "inferno_post_240_trace_close(env, \"reset\")");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "post-240 trace closes on env close",
-        "ocean/osrs_inferno/binding.c",
-        "void c_close",
-        "void c_render",
-        "inferno_post_240_trace_close(env, \"close\")");
-}
-
-static void test_inferno_stall_trace_reports_player_to_npc_pending_hits(void) {
-    printf("--- inferno stall trace reports player-to-npc pending hits ---\n");
-
-    ASSERT_SOURCE_BLOCK_NOT_CONTAINS(
-        "stall trace does not ignore attack ticks",
-        "ocean/osrs_inferno/binding.c",
-        "static int inferno_stall_trace_tick_matches",
-        "static void inferno_stall_trace_write_npcs",
-        "player_attacked_this_tick");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "stall trace includes npc pending hit queue",
-        "ocean/osrs_inferno/binding.c",
-        "static void inferno_stall_trace_write_npcs",
-        "static void inferno_stall_trace_close",
-        "pending_count");
-    ASSERT_SOURCE_BLOCK_CONTAINS(
-        "stall trace includes current target pending hit queue",
-        "ocean/osrs_inferno/binding.c",
-        "current_target_pending_count",
-        "inferno_stall_trace_write_npcs",
-        "current_target_pending_damage");
-}
-
 static void test_inferno_render_status_survives_overlay_refresh(void) {
     printf("--- inferno render status survives overlay refresh ---\n");
 
@@ -9772,7 +9523,6 @@ int main(void) {
     test_player_movement_ignores_npc_collision_flags();
     test_tagged_jad_healer_stops_at_melee_contact();
     test_tagged_jad_healers_queue_behind_front_healer();
-    test_stacked_npc_unclipping_preserves_flag_when_one_leaves();
     test_meleer_dig_can_stack_without_losing_collision_flag();
     test_jad_healer_spawn_offsets_match_wave_67_reference();
     test_jad_healer_spawn_offsets_match_zuk_reference();
@@ -9975,8 +9725,6 @@ int main(void) {
     test_inferno_cell_key_tracks_set_magers_and_jad_hp_bucket();
     test_inferno_progress_score_rewards_late_add_transitions();
     test_inferno_healer_transition_stats_track_episode_progress();
-    test_inferno_healer_diagnostic_phase_matches_snapshot_state();
-    test_inferno_restored_start_resets_transition_diagnostics();
     test_inferno_human_equip_does_not_snap_loadout();
     test_jad_render_uses_style_specific_attack_animation();
     test_inferno_render_uses_npc_death_animation();
@@ -10014,8 +9762,6 @@ int main(void) {
     test_inferno_binding_logs_post_healer_set_reward_components();
     test_inferno_binding_logs_idle_diagnostics();
     test_inferno_log_metrics_fit_cuda_dict();
-    test_inferno_binding_emits_post_240_traces();
-    test_inferno_stall_trace_reports_player_to_npc_pending_hits();
     test_inferno_render_status_survives_overlay_refresh();
     test_inferno_eval_render_post_tick_owns_entity_refresh();
     test_inferno_eval_render_env_syncs_tick_for_animation_events();

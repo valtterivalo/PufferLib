@@ -5,7 +5,6 @@
 #define INF_BASE_NPC_OBS_SIZE 896
 #define INF_TOTAL_NPC_OBS_SIZE INF_BASE_NPC_OBS_SIZE
 #define INF_STEP_OUT_FORECAST_HORIZON 4
-#define INF_STEP_OUT_FORECAST_TICK_FEATURES 7
 #define INF_STEP_OUT_FORECAST_ACTION_FEATURES 8
 #define INF_STEP_OUT_FORECAST_OBS_SIZE (ENCOUNTER_MOVE_ACTIONS * INF_STEP_OUT_FORECAST_ACTION_FEATURES)
 #define INF_FEATURES_PER_HIT 5
@@ -79,24 +78,6 @@ typedef struct {
     int player_x;
     int player_y;
 } InfForecastMoveCtx;
-
-/* max hit per NPC type, normalized by mager max (70). for prayer priority obs. */
-static const float INF_NPC_MAX_HIT_NORM[INF_NUM_NPC_TYPES] = {
-    [INF_NPC_NIBBLER]    = 0.0f,
-    [INF_NPC_BAT]        = 19.0f / 70.0f,
-    [INF_NPC_BLOB]       = 29.0f / 70.0f,
-    [INF_NPC_BLOB_MELEE] = 18.0f / 70.0f,
-    [INF_NPC_BLOB_RANGE] = 18.0f / 70.0f,
-    [INF_NPC_BLOB_MAGE]  = 25.0f / 70.0f,
-    [INF_NPC_MELEER]     = 49.0f / 70.0f,
-    [INF_NPC_RANGER]     = 46.0f / 70.0f,
-    [INF_NPC_MAGER]      = 70.0f / 70.0f,
-    [INF_NPC_JAD]        = 113.0f / 70.0f,
-    [INF_NPC_ZUK]        = 148.0f / 70.0f,
-    [INF_NPC_HEALER_JAD] = 13.0f / 70.0f,
-    [INF_NPC_HEALER_ZUK] = 24.0f / 70.0f,
-    [INF_NPC_ZUK_SHIELD] = 0.0f,
-};
 
 static float inf_zuk_attack_timer_obs(const InfernoState* s) {
     if (!inf_is_final_wave(s)) return 0.0f;

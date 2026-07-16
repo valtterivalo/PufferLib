@@ -689,7 +689,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     if (all_dead) {
         s->tick_scratch.wave_completed = 1;
-        s->total_waves_cleared++;
         int next_public_wave = s->wave + 2;
         float wave_clear_reward = 1.0f +
             inf_supply_milestone_surplus_reward(s, ctx, next_public_wave);

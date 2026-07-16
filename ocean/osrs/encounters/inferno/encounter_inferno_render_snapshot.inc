@@ -215,26 +215,14 @@ static void inf_put_ptr_ctx(
     else encounter_abort_unknown_config("inferno", "ptr", key);
 }
 
-static void inf_put_ptr(EncounterState* state, const char* key, void* value) {
-    inf_put_ptr_ctx(state, (EncounterContext*)inf_legacy_context(), key, value);
-}
-
 static int inf_get_tick_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     return ((InfernoState*)state)->tick;
 }
 
-static int inf_get_tick(EncounterState* state) {
-    return inf_get_tick_ctx(state, (EncounterContext*)inf_legacy_context());
-}
-
 static int inf_get_winner_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     return ((InfernoState*)state)->winner;
-}
-
-static int inf_get_winner(EncounterState* state) {
-    return inf_get_winner_ctx(state, (EncounterContext*)inf_legacy_context());
 }
 
 static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
@@ -304,10 +292,6 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
     }
     return ctx->log;
-}
-
-static void* inf_get_log(EncounterState* state) {
-    return inf_get_log_ctx(state, (EncounterContext*)inf_legacy_context());
 }
 
 static const OsrsCombatVisualRow* inf_npc_combat_visual_row(

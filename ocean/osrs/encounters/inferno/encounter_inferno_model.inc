@@ -40,7 +40,6 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 #define INF_NUM_WAVES     69
 #define INF_WAVE_ZUK      (INF_NUM_WAVES - 1)
 #define INF_START_WAVE_ZUK_JAD      (INF_WAVE_ZUK + 1)
-#define INF_START_WAVE_ZUK_HEALERS  (INF_WAVE_ZUK + 2)
 #define INF_MAX_PUBLIC_START_WAVE   (INF_NUM_WAVES + 2)
 #define INF_NUM_ACTION_HEADS 9
 
@@ -132,7 +131,6 @@ typedef struct {
     int magic_dmg_pct;     /* magic damage multiplier as % (100 = 1.0x) */
 
     /* defence bonuses (for player hit chance against this NPC) */
-    int stab_def, slash_def, crush_def;
     int magic_def_bonus;
     int ranged_def_bonus;
 
@@ -221,9 +219,6 @@ static void inf_build_npc_stats(void) {
         s->magic_att_bonus = m->magic_att_bonus;
         s->melee_str_bonus = m->melee_str_bonus;
         s->ranged_str_bonus = m->ranged_str_bonus;
-        s->stab_def        = m->stab_def;
-        s->slash_def       = m->slash_def;
-        s->crush_def       = m->crush_def;
         s->magic_def_bonus = m->magic_def;    /* name mapping */
         s->ranged_def_bonus = m->ranged_def;  /* name mapping */
 
@@ -898,7 +893,6 @@ typedef struct {
     int total_zuk_unsafe_untagged_healer_targets;
     int total_zuk_untagged_healer_target_rewards;
     int total_zuk_safe_untagged_healer_target_rewards;
-    int total_waves_cleared;
     int ticks_without_action;  /* consecutive ticks with no attack or movement */
     int total_prayer_correct;  /* times prayer blocked an NPC attack */
     int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
@@ -1019,7 +1013,6 @@ typedef struct {
     int target_head_valid_zuk_count;
     int target_head_valid_set_count;
     int total_shield_tags;
-    float shield_tag_reward_coeff;
     float total_hp_restored_jad;
     float total_hp_restored_zuk;
 } InfernoState;
