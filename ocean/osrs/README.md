@@ -1,33 +1,39 @@
-# OSRS Inferno
+# OSRS encounters
 
-Build the CUDA backend with the normal Puffer flow:
+Shared OSRS combat/sim layers plus two PufferLib envs: `osrs_colosseum` (Fortis
+Colosseum) and `osrs_inferno` (The Inferno). Each env is one header compiled into
+the native trainer via `-DENV_HEADER`.
+
+## Build
 
 ```bash
+./build.sh osrs_colosseum
 ./build.sh osrs_inferno
 ```
 
-The active Python entrypoint is `puffer`, backed by `pufferlib/pufferl.py`.
+`build.sh` auto-runs `ocean/osrs/scripts/setup-data.sh`, which fetches and verifies
+the render/model assets into `ocean/osrs/data` from `ocean/osrs/asset_manifest.json`.
+
+## Train and eval
+
+The native binary is `./puffer`. Configs live at `config/osrs_colosseum.ini` and
+`config/osrs_inferno.ini`.
 
 ```bash
-puffer train osrs_inferno
-puffer sweep osrs_inferno
-puffer eval osrs_inferno
-puffer eval osrs_inferno --load-model-path /path/to/checkpoint.bin
+./puffer train osrs_colosseum
+./puffer eval osrs_colosseum
+./puffer eval osrs_colosseum --load-model-path=checkpoints/osrs_colosseum/model.bin
+./puffer sweep osrs_inferno
 ```
 
-Env configs live in `config/ocean/osrs_inferno.ini`.
+Any `[base]` / `[train]` / `[env]` key can be overridden on the CLI, e.g.
+`--train.total-timesteps=50_000_000` or `--env.start-wave=1`.
 
-Inferno best replay recording is opt-in:
+## Tests
 
-```bash
-puffer train osrs_inferno --env.record-best-replay-path checkpoints/osrs_inferno/best.replay
-puffer eval osrs_inferno --env.play-replay-path checkpoints/osrs_inferno/best.replay
-```
-
-The standalone visual binary is useful for local render and sim checks:
+Each file in `ocean/osrs/tests` is a self-contained C binary with its own `main()`;
+exit code 0 means pass. Run one from the repo root:
 
 ```bash
-./build.sh osrs_inferno --local
-./osrs_inferno --encounter inferno
-./osrs_inferno --encounter inferno --replay /path/to/best.replay
+cc -std=c11 -O2 -I. -o /tmp/t ocean/osrs/tests/test_colosseum_golden.c -lm && /tmp/t
 ```
