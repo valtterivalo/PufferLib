@@ -60,6 +60,10 @@ class MinimalEntityEncoder(nn.Module):
 class ColosseumEntityEncoder(nn.Module):
     """Flat baseline + NPC entity-pool augmentation for the OSRS Colosseum obs.
 
+    Torch REFERENCE implementation: no policy instantiates this (the torch eval
+    path uses the default Linear encoder); it exists as the finite-diff oracle
+    for the native CUDA encoder in tests/test_colosseum_entity_encoder.py.
+
     Joseph Suarez's entity-encoder recipe adapted to the colosseum's per-NPC block.
     The global path is a bias-free Linear over the full flat obs (matching the native
     backend's bias-free Linear encoder), so this module is a clean A/B:
