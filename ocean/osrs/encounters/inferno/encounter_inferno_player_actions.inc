@@ -703,7 +703,7 @@ static void inf_tick_player_ctx(
         .manual_spell = manual_spell,
     };
     OsrsLosQuery los_query = inf_player_los_query(s);
-    (void)osrs_encounter_player_step(&(OsrsPlayerStepInput){
+    OsrsPlayerStepInput player_step_input = {
         .player = &s->player,
         .interaction = &s->interaction,
         .target_lookup = inf_lookup_player_attack_target,
@@ -726,7 +726,8 @@ static void inf_tick_player_ctx(
             .arena_w = INF_ARENA_WIDTH,
             .arena_h = INF_ARENA_HEIGHT,
         },
-    });
+    };
+    (void)osrs_encounter_player_step(&player_step_input);
     inf_rebuild_player_collision_flags(s);
 
     if (can_attack && s->player.attack_timer > 0) s->player.attack_timer--;

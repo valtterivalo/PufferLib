@@ -461,43 +461,27 @@ static void inf_render_post_tick_ctx(
             };
             float offsets[3] = {1.0f, 0.5f, 0.0f};
             for (int j = 0; j < 3; j++) {
+                OsrsProjectileEventSpec triple_spec = {
+                    .src_x = npc->x,
+                    .src_y = npc->y,
+                    .dst_x = target_x,
+                    .dst_y = target_y,
+                    .style = proj_style,
+                    .damage = (int)s->tick_scratch.damage_received,
+                    .duration_ticks = duration,
+                    .start_h = start_h,
+                    .end_h = end_h,
+                    .curve = curve,
+                    .arc_height = arc,
+                    .src_size = npc_size,
+                    .dst_size = target_size,
+                    .model_id = model_ids[j],
+                    .anim_id = anim_ids[j],
+                    .start_delay = start_delay,
+                };
                 int pi = target_npc_slot >= 0
-                    ? osrs_emit_projectile_npc_to_npc(ov, &(OsrsProjectileEventSpec){
-                        .src_x = npc->x,
-                        .src_y = npc->y,
-                        .dst_x = target_x,
-                        .dst_y = target_y,
-                        .style = proj_style,
-                        .damage = (int)s->tick_scratch.damage_received,
-                        .duration_ticks = duration,
-                        .start_h = start_h,
-                        .end_h = end_h,
-                        .curve = curve,
-                        .arc_height = arc,
-                        .src_size = npc_size,
-                        .dst_size = target_size,
-                        .model_id = model_ids[j],
-                        .anim_id = anim_ids[j],
-                        .start_delay = start_delay,
-                    }, i, target_npc_slot)
-                    : osrs_emit_projectile_npc_to_player(ov, &(OsrsProjectileEventSpec){
-                        .src_x = npc->x,
-                        .src_y = npc->y,
-                        .dst_x = target_x,
-                        .dst_y = target_y,
-                        .style = proj_style,
-                        .damage = (int)s->tick_scratch.damage_received,
-                        .duration_ticks = duration,
-                        .start_h = start_h,
-                        .end_h = end_h,
-                        .curve = curve,
-                        .arc_height = arc,
-                        .src_size = npc_size,
-                        .dst_size = target_size,
-                        .model_id = model_ids[j],
-                        .anim_id = anim_ids[j],
-                        .start_delay = start_delay,
-                    }, i);
+                    ? osrs_emit_projectile_npc_to_npc(ov, &triple_spec, i, target_npc_slot)
+                    : osrs_emit_projectile_npc_to_player(ov, &triple_spec, i);
                 if (target_npc_slot >= 0)
                     encounter_set_projectile_target_npc_slot(ov, pi, target_npc_slot);
                 encounter_set_projectile_offset(ov, pi, 0.0f, offsets[j], 0.0f);
@@ -510,45 +494,28 @@ static void inf_render_post_tick_ctx(
 
         if (npc->type == INF_NPC_HEALER_ZUK && impact_gfx_id <= 0)
             impact_gfx_id = INF_GFX_659_ID;
+        OsrsProjectileEventSpec attack_spec = {
+            .src_x = npc->x,
+            .src_y = npc->y,
+            .dst_x = target_x,
+            .dst_y = target_y,
+            .style = proj_style,
+            .damage = (int)s->tick_scratch.damage_received,
+            .duration_ticks = duration,
+            .start_h = start_h,
+            .end_h = end_h,
+            .curve = curve,
+            .arc_height = arc,
+            .src_size = npc_size,
+            .dst_size = target_size,
+            .model_id = proj_model_id,
+            .anim_id = proj_anim_id,
+            .impact_gfx_id = impact_gfx_id,
+            .start_delay = start_delay,
+        };
         int pi = target_npc_slot >= 0
-            ? osrs_emit_projectile_npc_to_npc(ov, &(OsrsProjectileEventSpec){
-                .src_x = npc->x,
-                .src_y = npc->y,
-                .dst_x = target_x,
-                .dst_y = target_y,
-                .style = proj_style,
-                .damage = (int)s->tick_scratch.damage_received,
-                .duration_ticks = duration,
-                .start_h = start_h,
-                .end_h = end_h,
-                .curve = curve,
-                .arc_height = arc,
-                .src_size = npc_size,
-                .dst_size = target_size,
-                .model_id = proj_model_id,
-                .anim_id = proj_anim_id,
-                .impact_gfx_id = impact_gfx_id,
-                .start_delay = start_delay,
-            }, i, target_npc_slot)
-            : osrs_emit_projectile_npc_to_player(ov, &(OsrsProjectileEventSpec){
-                .src_x = npc->x,
-                .src_y = npc->y,
-                .dst_x = target_x,
-                .dst_y = target_y,
-                .style = proj_style,
-                .damage = (int)s->tick_scratch.damage_received,
-                .duration_ticks = duration,
-                .start_h = start_h,
-                .end_h = end_h,
-                .curve = curve,
-                .arc_height = arc,
-                .src_size = npc_size,
-                .dst_size = target_size,
-                .model_id = proj_model_id,
-                .anim_id = proj_anim_id,
-                .impact_gfx_id = impact_gfx_id,
-                .start_delay = start_delay,
-            }, i);
+            ? osrs_emit_projectile_npc_to_npc(ov, &attack_spec, i, target_npc_slot)
+            : osrs_emit_projectile_npc_to_player(ov, &attack_spec, i);
 
         if (npc->type == INF_NPC_JAD && actual_style == ATTACK_STYLE_RANGED)
             encounter_set_projectile_motion_mode(
@@ -574,7 +541,7 @@ static void inf_render_post_tick_ctx(
                 spark_impact_gfx_id = spark_visual->projectile.impact_spotanim_id;
         }
 
-        (void)osrs_emit_projectile_with_spec(ov, &(OsrsProjectileEventSpec){
+        OsrsProjectileEventSpec spark_spec = {
             .src_x = spark->src_x,
             .src_y = spark->src_y,
             .dst_x = spark->x,
@@ -591,7 +558,8 @@ static void inf_render_post_tick_ctx(
             .model_id = spark_model_id,
             .anim_id = spark_anim_id,
             .impact_gfx_id = spark_impact_gfx_id,
-        }, 0);
+        };
+        (void)osrs_emit_projectile_with_spec(ov, &spark_spec, 0);
         spark->visual_emitted = 1;
     }
 
@@ -629,25 +597,24 @@ static void inf_render_post_tick_ctx(
                     int visual_damage = part_i == part_count - 1
                         ? s->player_attack_dmg
                         : 0;
+                    OsrsCombatProjectileEmitSpec emit_spec = {
+                        .src_x = s->player.x,
+                        .src_y = s->player.y,
+                        .dst_x = target->x,
+                        .dst_y = target->y,
+                        .src_size = 1,
+                        .dst_size = target_size,
+                        .target_npc_slot = target_idx,
+                        .attack_style = s->player_attack_style_id,
+                        .damage = visual_damage,
+                        .duration_ticks = p_duration,
+                        .start_delay = p_start_delay,
+                        .fallback_start_h = p_start_h,
+                        .fallback_end_h = p_end_h,
+                        .curve = 16,
+                    };
                     (void)osrs_emit_combat_projectile_profile_player_to_npc(
-                        ov,
-                        profile,
-                        &(OsrsCombatProjectileEmitSpec){
-                            .src_x = s->player.x,
-                            .src_y = s->player.y,
-                            .dst_x = target->x,
-                            .dst_y = target->y,
-                            .src_size = 1,
-                            .dst_size = target_size,
-                            .target_npc_slot = target_idx,
-                            .attack_style = s->player_attack_style_id,
-                            .damage = visual_damage,
-                            .duration_ticks = p_duration,
-                            .start_delay = p_start_delay,
-                            .fallback_start_h = p_start_h,
-                            .fallback_end_h = p_end_h,
-                            .curve = 16,
-                        });
+                        ov, profile, &emit_spec);
                 }
             }
         }

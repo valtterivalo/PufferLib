@@ -871,7 +871,7 @@ static void inf_fill_render_entities_ctx(
         }
 
         RenderEntity* re = &out[n++];
-        osrs_render_entity_from_npc_spec(&(OsrsNpcRenderEntitySpec){
+        OsrsNpcRenderEntitySpec npc_spec = {
             .npc_def_id = INF_NPC_DEF_IDS[npc->type],
             .npc_slot = i,
             .npc_instance_id = npc->render_id,
@@ -893,7 +893,8 @@ static void inf_fill_render_entities_ctx(
             .hit_was_successful = npc->hit_was_successful_this_tick,
             .hit_spell_type = npc->hit_spell_type,
             .attack_target_entity_idx = attack_target_entity_idx,
-        }, re);
+        };
+        osrs_render_entity_from_npc_spec(&npc_spec, re);
     }
 
     encounter_resolve_attack_target(out, n, s->interaction.target_slot);
