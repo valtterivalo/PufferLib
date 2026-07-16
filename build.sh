@@ -146,13 +146,31 @@ else
     echo "Error: environment '$ENV' not found" && exit 1
 fi
 
+case "$ENV" in
+    osrs_*)
+        python3 ocean/osrs/scripts/osrs_asset_manifest.py generate-c-header \
+            ocean/osrs/asset_manifest.json \
+            --output ocean/osrs/osrs_assets_generated.h
+        bash ocean/osrs/scripts/setup-data.sh
+        ;;
+esac
+
+NVCC_ENV_HOST_FLAGS=()
+case "$ENV" in
+    osrs_*) NVCC_ENV_HOST_FLAGS=(-Xcompiler=-fpermissive) ;;
+esac
+
 OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
 SRC_FILE=${SRC_FILE:-$SRC_DIR/$ENV.c}
 
 # Standalone environment build
 # -mavx2 enables AVX2 intrinsics (__m256, _mm256_*) which drive.h and
-# src/pufferenv.h use directly. x86_64 only — strip if porting to ARM/Apple Silicon.
-SIMD_FLAGS=(-mavx2 -mfma)
+# src/pufferenv.h use directly. x86_64 only — omitted on ARM/Apple Silicon.
+if [ "$(uname -m)" = "x86_64" ]; then
+    SIMD_FLAGS=(-mavx2 -mfma)
+else
+    SIMD_FLAGS=()
+fi
 if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then
     CLANG_OPT=(-g -O0 "${CLANG_WARN[@]}" "${SANITIZE_FLAGS[@]}" "${SIMD_FLAGS[@]}")
     NVCC_OPT="-O0 -g"
@@ -270,6 +288,7 @@ if [ "$MODE" = "native" ]; then
 	    -DPUFFERLIB_BUILD_MAIN \
 	    -Xcompiler=-DPLATFORM_DESKTOP \
 	    -Xcompiler=-fopenmp \
+	    "${NVCC_ENV_HOST_FLAGS[@]}" \
 	    $PRECISION \
 	    src/pufferl.cu \
         "$RAYLIB_A" \
