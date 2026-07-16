@@ -391,6 +391,7 @@ struct RolloutBuf {
     PrecisionTensor logprobs;      // ...
     PrecisionTensor rewards;
     PrecisionTensor terminals;
+    PrecisionTensor truncations;
     PrecisionTensor ratio;
     PrecisionTensor importance;
     PrecisionTensor action_mask;   // (horizon, agents, mask_size); .data=nullptr when env opts out
@@ -407,11 +408,12 @@ void register_rollout_buffers(RolloutBuf& bufs, Allocator* alloc, int T, int B, 
     bufs.logprobs = {.shape = {T, B}};
     bufs.rewards = {.shape = {T, B}};
     bufs.terminals = {.shape = {T, B}};
+    bufs.truncations = {.shape = {T, B}};
     bufs.ratio = {.shape = {T, B}};
     bufs.importance = {.shape = {T, B}};
     PrecisionTensor* fields[] = {
         &bufs.observations, &bufs.actions, &bufs.values, &bufs.logprobs,
-        &bufs.rewards, &bufs.terminals, &bufs.ratio, &bufs.importance,
+        &bufs.rewards, &bufs.terminals, &bufs.truncations, &bufs.ratio, &bufs.importance,
     };
     for (int i = 0; i < (int)(sizeof(fields) / sizeof(fields[0])); i++) {
         alloc_register(alloc, fields[i]);
@@ -446,6 +448,7 @@ RolloutBuf rollout_time_view(RolloutBuf* base, int start_t, int T) {
     view.logprobs     = puf_time_view(base->logprobs,     start_t, T);
     view.rewards      = puf_time_view(base->rewards,      start_t, T);
     view.terminals    = puf_time_view(base->terminals,    start_t, T);
+    view.truncations  = puf_time_view(base->truncations,  start_t, T);
     view.ratio        = puf_time_view(base->ratio,        start_t, T);
     view.importance   = puf_time_view(base->importance,   start_t, T);
     view.action_mask  = puf_time_view(base->action_mask,  start_t, T);
@@ -476,11 +479,13 @@ struct VecEnv {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     unsigned char* action_mask;
     obs_t* gpu_observations;
     float* gpu_actions;
     float* gpu_rewards;
     float* gpu_terminals;
+    float* gpu_truncations;
     unsigned char* gpu_action_mask;
     // Cross-thread flags: only accessed via __atomic_* at the few sites below.
     int* buffer_states;
@@ -499,6 +504,7 @@ struct EnvBuf {
     FloatTensor actions;   // (total_agents, num_atns)
     FloatTensor rewards;   // (total_agents,)
     FloatTensor terminals; // (total_agents,)
+    FloatTensor truncations; // (total_agents,)
     ByteTensor action_mask; // (total_agents, mask_size); .data=nullptr when env opts out
 };
 
@@ -785,7 +791,7 @@ __global__ void snapshot_initial_state(PrecisionTensor dst, PrecisionTensor src,
 }
 
 __global__ void zero_state_on_terminal(PrecisionTensor state, FloatTensor terminals,
-        int state_start, int terminal_start, int count) {
+        FloatTensor truncations, int state_start, int terminal_start, int count) {
     int L = state.shape[0];
     int H = state.shape[2];
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -796,7 +802,8 @@ __global__ void zero_state_on_terminal(PrecisionTensor state, FloatTensor termin
 
     int h = idx % H;
     int rel = (idx / H) % count;
-    if (terminals.data[terminal_start + rel] == 0.0f) {
+    if (terminals.data[terminal_start + rel] == 0.0f
+            && truncations.data[terminal_start + rel] == 0.0f) {
         return;
     }
 
@@ -847,7 +854,7 @@ void pufferl_forward(PuffeRL* pufferl, int buf, int t, cudaStream_t stream) {
     int start = buf * block_size;
     int* layout = vec->bank_layout;
 
-    // Copy observations, rewards, terminals from GPU env buffers to rollout buffer
+    // Copy observations, rewards, terminals, truncations from GPU env buffers to rollout buffer
     ObsTensor& obs_env = env.obs;
     int n = block_size * obs_env.shape[1];
     PrecisionTensor obs_dst = puf_slice(rollouts.observations, t, start, block_size);
@@ -863,6 +870,10 @@ void pufferl_forward(PuffeRL* pufferl, int buf, int t, cudaStream_t stream) {
     PrecisionTensor term_dst = puf_slice(rollouts.terminals, t, start, block_size);
     cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
         term_dst.data, env.terminals.data + start, n);
+
+    PrecisionTensor trunc_dst = puf_slice(rollouts.truncations, t, start, block_size);
+    cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+        trunc_dst.data, env.truncations.data + start, n);
 
     // Copy action mask from env into rollout buffer (if env opted in)
     PrecisionTensor mask_slice = {};
@@ -919,7 +930,7 @@ void pufferl_forward(PuffeRL* pufferl, int buf, int t, cudaStream_t stream) {
         int state_start = (b == 0) ? bank_off : 0;
         int state_n = s_bank->shape[0] * bank_size * s_bank->shape[2];
         zero_state_on_terminal<<<grid_size(state_n), BLOCK_SIZE, 0, stream>>>(
-            *s_bank, env.terminals, state_start, sub_start, bank_size);
+            *s_bank, env.terminals, env.truncations, state_start, sub_start, bank_size);
 
         if (b == 0 && t == 0 && rollouts.initial_states.data != nullptr) {
             snapshot_initial_state<<<grid_size(state_n), BLOCK_SIZE, 0, stream>>>(
@@ -1036,6 +1047,7 @@ void* vec_thread_main(void* arg) {
 
             memset(&vec->rewards[agent_start], 0, agents_per_buffer * sizeof(float));
             memset(&vec->terminals[agent_start], 0, agents_per_buffer * sizeof(float));
+            memset(&vec->truncations[agent_start], 0, agents_per_buffer * sizeof(float));
             clock_gettime(CLOCK_MONOTONIC, &t0);
             #pragma omp parallel for schedule(static) num_threads(vec->num_workers)
             for (int i = env_start; i < env_start + env_count; i++) {
@@ -1058,6 +1070,11 @@ void* vec_thread_main(void* arg) {
             cudaMemcpyAsync(
                 &vec->gpu_terminals[agent_start],
                 &vec->terminals[agent_start],
+                agents_per_buffer * sizeof(float),
+                cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(
+                &vec->gpu_truncations[agent_start],
+                &vec->truncations[agent_start],
                 agents_per_buffer * sizeof(float),
                 cudaMemcpyHostToDevice, stream);
             if (vec->action_mask_size > 0) {
@@ -1187,6 +1204,7 @@ VecEnv* vec_create(Dict* vec_kwargs, Dict* env_kwargs) {
         cudaHostAlloc((void**)&vec->actions, total_agents * NUM_ATNS * sizeof(float), cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->rewards, total_agents * sizeof(float), cudaHostAllocPortable);
         cudaHostAlloc((void**)&vec->terminals, total_agents * sizeof(float), cudaHostAllocPortable);
+        cudaHostAlloc((void**)&vec->truncations, total_agents * sizeof(float), cudaHostAllocPortable);
     }
 
     cudaMalloc((void**)&gpu_observations,
@@ -1194,6 +1212,7 @@ VecEnv* vec_create(Dict* vec_kwargs, Dict* env_kwargs) {
     cudaMalloc((void**)&vec->gpu_actions, total_agents * NUM_ATNS * sizeof(float));
     cudaMalloc((void**)&vec->gpu_rewards, total_agents * sizeof(float));
     cudaMalloc((void**)&vec->gpu_terminals, total_agents * sizeof(float));
+    cudaMalloc((void**)&vec->gpu_truncations, total_agents * sizeof(float));
 
     vec->observations = observations;
     vec->gpu_observations = gpu_observations;
@@ -1203,6 +1222,7 @@ VecEnv* vec_create(Dict* vec_kwargs, Dict* env_kwargs) {
     cudaMemset(vec->gpu_actions, 0, total_agents * NUM_ATNS * sizeof(float));
     cudaMemset(vec->gpu_rewards, 0, total_agents * sizeof(float));
     cudaMemset(vec->gpu_terminals, 0, total_agents * sizeof(float));
+    cudaMemset(vec->gpu_truncations, 0, total_agents * sizeof(float));
 
     vec->action_mask_size = action_mask_size;
     if (vec->gpu_env) {
@@ -1286,6 +1306,7 @@ VecEnv* vec_create(Dict* vec_kwargs, Dict* env_kwargs) {
                 env->agents[s].actions = vec->actions + (size_t)phys * NUM_ATNS;
                 env->agents[s].rewards = vec->rewards + phys;
                 env->agents[s].terminals = vec->terminals + phys;
+                env->agents[s].truncations = vec->truncations + phys;
                 if (vec->action_mask_size > 0) {
                     env->agents[s].action_mask =
                         vec->action_mask + (size_t)phys * vec->action_mask_size;
@@ -1311,6 +1332,7 @@ VecEnv* create_environments(Dict* vec_kwargs, Dict* env_kwargs, EnvBuf& env) {
     env.actions = { .data = (float*)vec->gpu_actions, .shape = {total_agents, NUM_ATNS} };
     env.rewards = { .data = (float*)vec->gpu_rewards, .shape = {total_agents} };
     env.terminals = { .data = (float*)vec->gpu_terminals, .shape = {total_agents} };
+    env.truncations = { .data = (float*)vec->gpu_truncations, .shape = {total_agents} };
     if (vec->action_mask_size > 0) {
         env.action_mask = { .data = vec->gpu_action_mask,
                             .shape = {total_agents, vec->action_mask_size} };
@@ -1340,6 +1362,7 @@ void vec_reset(VecEnv* vec) {
         cudaMemcpyHostToDevice);
     cudaMemset(vec->gpu_rewards,   0, vec->total_agents * sizeof(float));
     cudaMemset(vec->gpu_terminals, 0, vec->total_agents * sizeof(float));
+    cudaMemset(vec->gpu_truncations, 0, vec->total_agents * sizeof(float));
     if (vec->action_mask_size > 0) {
         cudaMemcpy(vec->gpu_action_mask, vec->action_mask,
             (size_t)vec->total_agents * vec->action_mask_size * sizeof(unsigned char),
@@ -1395,6 +1418,7 @@ void vec_close(VecEnv* vec) {
     cudaFree(vec->gpu_actions);
     cudaFree(vec->gpu_rewards);
     cudaFree(vec->gpu_terminals);
+    cudaFree(vec->gpu_truncations);
     if (vec->gpu_env) {
         cudaFree(vec->gpu_log);
     } else {
@@ -1402,6 +1426,7 @@ void vec_close(VecEnv* vec) {
         cudaFreeHost(vec->actions);
         cudaFreeHost(vec->rewards);
         cudaFreeHost(vec->terminals);
+        cudaFreeHost(vec->truncations);
     }
     if (vec->action_mask_size > 0) {
         cudaFree(vec->gpu_action_mask);
@@ -1487,6 +1512,23 @@ __device__ void copy_values_adv_returns(
     }
 }
 
+// A terminal and a truncation are both episode boundaries for the recurrent
+// state, so mb_terminals gathers the union of the two channels
+__device__ void copy_state_resets(
+        precision_t* src_terminals, precision_t* src_truncations,
+        precision_t* dst_terminals,
+        int src_row, int dst_row, int horizon) {
+    int srh = (int64_t)src_row * horizon;
+    int drh = (int64_t)dst_row * horizon;
+    precision_t* s_terminals = src_terminals + srh;
+    precision_t* s_truncations = src_truncations + srh;
+    precision_t* d_terminals = dst_terminals + drh;
+    for (int i = threadIdx.x; i < horizon; i += blockDim.x) {
+        d_terminals[i] = from_float(fmaxf(
+            to_float(s_terminals[i]), to_float(s_truncations[i])));
+    }
+}
+
 __device__ void copy_initial_state(
         PrecisionTensor states, PrecisionTensor mb_state, int src_row, int dst_row) {
     int L = states.shape[0];
@@ -1525,8 +1567,6 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         / rollouts.actions.shape[0]) * sizeof(precision_t);
     int lp_row_bytes = (numel(rollouts.logprobs.shape)
         / rollouts.logprobs.shape[0]) * sizeof(precision_t);
-    int term_row_bytes = (numel(rollouts.terminals.shape)
-        / rollouts.terminals.shape[0]) * sizeof(precision_t);
     int horizon = rollouts.values.shape[1];
 
     switch (ch) {
@@ -1553,8 +1593,8 @@ __global__ void select_copy(RolloutBuf rollouts, TrainGraph graph,
         }
         break;
     case 5:
-        copy_bytes((const char*)rollouts.terminals.data,
-            (char*)graph.mb_terminals.data, src_row, mb, term_row_bytes);
+        copy_state_resets(rollouts.terminals.data, rollouts.truncations.data,
+            graph.mb_terminals.data, src_row, mb, horizon);
         break;
     case 6:
         if (graph.mb_action_mask.data != nullptr) {
@@ -1661,6 +1701,7 @@ void train_impl(PuffeRL& pufferl, RolloutBuf* src_arg) {
     puf_transpose_field(&rollouts.logprobs, &src.logprobs, T, B, 1, train_stream);
     puf_transpose_field(&rollouts.rewards, &src.rewards, T, B, 1, train_stream);
     puf_transpose_field(&rollouts.terminals, &src.terminals, T, B, 1, train_stream);
+    puf_transpose_field(&rollouts.truncations, &src.truncations, T, B, 1, train_stream);
     puf_transpose_field(&rollouts.ratio, &src.ratio, T, B, 1, train_stream);
     puf_transpose_field(&rollouts.values, &src.values, T, B, 1, train_stream);
     if (src.action_mask.data != nullptr) {
@@ -1716,8 +1757,8 @@ void train_impl(PuffeRL& pufferl, RolloutBuf* src_arg) {
 
         profile_begin("compute_advantage", hypers.profile);
         puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages_puf, hypers.gamma, hypers.gae_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
+            rollouts.truncations, rollouts.ratio, advantages_puf, hypers.gamma,
+            hypers.gae_lambda, hypers.vtrace_rho_clip, hypers.vtrace_c_clip, train_stream);
         if (pufferl.num_frozen_banks > 0) {
             int apb = hypers.total_agents / hypers.num_buffers;
             int rows = advantages_puf.shape[0];

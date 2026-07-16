@@ -17,6 +17,7 @@ typedef struct Agent {
     float* actions;
     float* rewards;
     float* terminals;
+    float* truncations;
     unsigned char* action_mask;
     int policy;
 } Agent;
