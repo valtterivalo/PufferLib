@@ -1,27 +1,20 @@
 /**
  * @fileoverview osrs_venator.h - pure Venator bow bounce targeting and damage.
  *
- * The geometry model uses the shared OSRS south-west footprint anchor:
- * an N x N monster at (sw_x, sw_y) occupies
- * [sw_x, sw_x + N - 1] x [sw_y, sw_y + N - 1].
+ * Footprint anchor: an N x N monster at (sw_x, sw_y) occupies
+ * [sw_x, sw_x+N-1] x [sw_y, sw_y+N-1]. Even sizes have no true centre, so a
+ * wiki "centre" reference maps to the NE tile of the middle 2x2, and a size-5
+ * CENTRE_SW reference maps to one tile SW of the true centre. These keep the
+ * size-pair cases separable from the send rule and size-1 warbands correct.
  *
- * OSRS Wiki wording names a centre tile for even target sizes. The shared
- * footprint model has no true even centre, so this core interprets that
- * Venator-specific reference as the north-east tile of the middle 2x2. For
- * size-5 CENTRE_SW references, this core uses the tile one south-west of the
- * true centre. These assumptions make the documented size-pair cases separable
- * from the send rule and keep clustered size-1 colosseum warbands correct.
+ * Selection is deterministic (reproducible rollouts): among valid candidates,
+ * pick the smallest Chebyshev distance between the sender and candidate
+ * selection anchors, ties broken by lower slot index. Odd footprints anchor on
+ * their centre, even footprints on their SW tile.
  *
- * Target selection is deterministic for reproducible RL rollouts. Among valid
- * bounce candidates, the selected target has the smallest Chebyshev distance
- * from the sender selection anchor to the candidate selection anchor, with
- * ties broken by lower slot index. Odd footprints use their centre as the
- * selection anchor, while even footprints use their south-west anchor.
- *
- * The chain resolver resolves geometry before damage and only attempts hit3
- * when at least two non-primary live monsters exist at attack time. This pins
- * the one-candidate boundary at two hits while still allowing wiki bounce-back
- * in three-monster clusters.
+ * The resolver settles geometry before damage and only attempts hit3 when at
+ * least two non-primary live monsters exist, pinning the one-candidate boundary
+ * at two hits while allowing bounce-back in three-monster clusters.
  */
 
 #ifndef OSRS_VENATOR_H
@@ -534,10 +527,9 @@ static inline OsrsVenatorChain osrs_venator_resolve_chain(
         return chain;
     }
 
-    /* the 2nd bounce's ELIGIBILITY is anchored on the ORIGINAL target's centre
-       (within 2 tiles) -- chaining the range anchor forward would let the 3rd hit
-       reach ~4 tiles from the original. SELECTION (nearest) is from the 1st-bounce
-       target the projectile travels from. ref: OSRS venator wiki bounce rules. */
+    /* 2nd bounce ELIGIBILITY stays anchored on the ORIGINAL target's centre
+       (within 2 tiles) -- chaining the range anchor forward would let hit3 reach
+       ~4 tiles out. SELECTION (nearest) is from the 1st-bounce target. */
     OsrsVenatorCandidateSearch hit3 = osrs_venator_find_next_candidate(
         primary.footprint,
         hit2.monster.footprint,

@@ -83,8 +83,7 @@ static inline OsrsInventorySlotSnapshot osrs_inventory_slot_snapshot(
 }
 
 
-/** map item index to its gear slot. returns GearSlotIndex or -1 if unmapped.
-    replaces item_to_gear_slot() in osrs_pvp_gear.h:820. */
+/** map item index to its gear slot. returns GearSlotIndex or -1 if unmapped. */
 static inline int osrs_item_gear_slot(uint8_t item_idx) {
     if (item_idx >= NUM_ITEMS) return -1;
     switch (ITEM_DATABASE[item_idx].slot) {

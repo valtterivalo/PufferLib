@@ -121,9 +121,7 @@ static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp,
     /* anglerfish can overheal — always consumable */
     if (type == FOOD_ANGLERFISH) {
         r.consumed = 1;
-        /* overheal cap: max_hp + floor(base_hp * 0.1) + 2, but for simplicity
-           in our sim we just allow the full heal amount to overheal.
-           the encounter clamps to its own overheal cap if desired. */
+        /* full heal allowed to overheal; encounters clamp to their own cap. */
         r.hp_healed = heal;
         return r;
     }

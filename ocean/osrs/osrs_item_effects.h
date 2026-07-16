@@ -90,8 +90,7 @@ static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint8_t ring_item
 }
 
 /** scythe of vitur splat count by target size: 3 vs 3x3+, 2 vs 2x2, 1 vs 1x1;
-    splat k caps at max_hit >> k, each rolled independently (the caller rolls).
-    ref: OSRS wiki Scythe of vitur. */
+    splat k caps at max_hit >> k, each rolled independently by the caller. */
 static inline int osrs_scythe_splats_for_target_size(int target_size) {
     return target_size >= 3 ? 3 : target_size == 2 ? 2 : 1;
 }
@@ -250,8 +249,7 @@ static inline int osrs_confliction_is_match(
            osrs_target_ref_equal(state->confliction_target, target_ref);
 }
 
-/** Returns the fang max-hit shrink used for min-hit and max-hit bounds.
-    Audit E1 keeps the outside-ToA formula from osrs-dps-calc: trunc(max * 3 / 20). */
+/** Fang max-hit shrink for the min/max damage bounds: trunc(max * 3 / 20) (outside ToA). */
 static inline int osrs_fang_hit_bound_shrink(int max_hit) {
     return max_hit * 3 / 20;
 }
@@ -355,9 +353,8 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
         target_context, attacker_current_hitpoints, attacker_base_hitpoints);
 }
 
-/** Rolls a prepared attack's accuracy and bounded damage.
-    Audit E1 makes fang min/max bounds and fang's stab-only double accuracy a
-    prepared-attack contract, so encounters consume this helper without item branches. */
+/** Roll a prepared attack's accuracy and bounded damage. Fang min/max bounds and
+    its stab-only double-roll are already folded into `prepared`. */
 static inline int osrs_roll_prepared_attack_damage(
     const OsrsPreparedAttackEffects* prepared,
     int def_roll,
@@ -373,10 +370,8 @@ static inline int osrs_roll_prepared_attack_damage(
     return hit ? damage : 0;
 }
 
-/* amulet of blood fury: 20% chance on a melee hitsplat to heal 30% of that splat's
-   damage. ref: OSRS wiki Amulet of blood fury. Rolled PER HITSPLAT -- multi-hit
-   weapons (scythe, dragon-claws spec) roll independently for each splat, so the
-   caller invokes this once per splat, not once per swing on summed damage. */
+/* Blood-fury melee heal: 20% chance to return 30% of a hitsplat's damage.
+   Per hitsplat -- the caller invokes this once per splat, not once per summed swing. */
 static inline int osrs_blood_fury_heal_amount(
     const OsrsEquipmentEffectProfile* profile,
     AttackStyle style,
@@ -428,9 +423,8 @@ static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
         result.heal_amount = damage_dealt / 2;
     }
 
-    /* blood fury is per-hitsplat, handled by the caller via
-       osrs_blood_fury_heal_amount; this finalizer only does the swing-level
-       confliction state and sanguinesti heal. */
+    /* blood fury is per-hitsplat (osrs_blood_fury_heal_amount, caller-invoked);
+       this finalizer covers only swing-level confliction + sanguinesti. */
     return result;
 }
 

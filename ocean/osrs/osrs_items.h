@@ -144,8 +144,7 @@ static inline int get_item_attack_style(uint8_t item_index) {
     }
 }
 
-/** Check if weapon is two-handed.
-    E3 keeps two-handed state in item data so shield suppression is shared. */
+/** Check if a weapon is two-handed (drives shared shield suppression). */
 static inline int item_is_two_handed(uint8_t item_index) {
     if (item_index >= NUM_ITEMS) return 0;
     return ITEM_DATABASE[item_index].slot == SLOT_WEAPON &&

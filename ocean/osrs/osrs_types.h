@@ -59,19 +59,17 @@
 #define BLOOD_BLITZ_MAX_HIT 25
 #define BLOOD_BARRAGE_MAX_HIT 29
 
-// Number of equipment slots (HEAD, CAPE, NECK, AMMO, WEAPON, SHIELD, BODY, LEGS, HANDS, FEET, RING)
+// Number of equipment slots (see GearSlotIndex)
 #define NUM_GEAR_SLOTS 11
-/* 9 action heads. HEAD_MOVE expresses the OSRS click-anywhere movement as
-   a 25-action delta grid (idle + 8 walk + 16 run), identical to the
-   shared ENCOUNTER_MOVE_ACTIONS used by inferno/zulrah. HEAD_COMBAT keeps
-   its existing 13 values for backward compatibility during the migration;
-   when HEAD_MOVE > 0 the COMBAT-head MOVE_* values are ignored. */
+/* 9 action heads. HEAD_MOVE is a 25-action delta grid (idle + 8 walk + 16 run),
+   matching ENCOUNTER_MOVE_ACTIONS. HEAD_COMBAT keeps 13 values; its MOVE_*
+   fallbacks are ignored when HEAD_MOVE > 0. */
 
 #define NUM_ACTION_HEADS 9
 
 // Action head indices
 #define HEAD_LOADOUT    0
-#define HEAD_COMBAT     1   // attack type + legacy MOVE_* fallback for unmigrated opponents
+#define HEAD_COMBAT     1   // attack type (+ MOVE_* fallback)
 #define HEAD_OVERHEAD   2
 #define HEAD_FOOD       3
 #define HEAD_POTION     4
@@ -114,8 +112,7 @@ static const int ACTION_HEAD_DIMS[NUM_ACTION_HEADS] = {
 // Maximum items per slot for observation padding
 #define MAX_ITEMS_PER_SLOT 10
 
-// Dynamic gear slots that change during combat
-// 8 slots: weapon, shield, body, legs, head, cape, neck, ring
+// Dynamic gear slots that change during combat (see DYNAMIC_GEAR_SLOTS)
 #define NUM_DYNAMIC_GEAR_SLOTS 8
 
 /* Observation size:
@@ -188,12 +185,9 @@ typedef enum {
     OFFENSIVE_PRAYER_AUGURY
 } OffensivePrayer;
 
-/* combat stance — the axis the player picks per-weapon in the OSRS combat tab.
-   orthogonal to AttackStyle (damage category). the stance drives:
-     - invisible level bonuses (att / str / def) per osrs wiki "Combat Options"
-     - attack speed modifier (rapid = base - 1)
-     - attack range modifier (longrange = base + 2)
-   the 4 melee stances keep the existing enum order where 0 means accurate. */
+/* combat stance (OSRS combat-tab axis), orthogonal to AttackStyle. Drives
+   invisible att/str/def level bonuses, attack speed (rapid = base-1), and
+   attack range (longrange = base+2). Enum order fixed: 0 = accurate. */
 typedef enum {
     FIGHT_STYLE_ACCURATE = 0,             /* melee: +3 att. ranged: +3 att. powered staff: +3 magic. */
     FIGHT_STYLE_AGGRESSIVE,                /* melee: +3 str. */
@@ -348,10 +342,8 @@ typedef enum {
     VENG_CAST,
 } VengAction;
 
-/* Slot-based gear bonus struct used by the current ocean envs. same data as
-   EquipmentBonuses (osrs_combat.h) but with a different naming convention
-   (stab_attack vs attack_stab). the adapter compute_slot_gear_bonuses()
-   in osrs_pvp_gear.h bridges them. */
+/* Slot-based gear bonus struct. same data as EquipmentBonuses (osrs_combat.h),
+   different naming (stab_attack vs attack_stab); osrs_pvp_gear.h adapts between them. */
 #define OSRS_INFERNO_IDLE_PHASE_COUNT 6
 
 typedef struct {
@@ -394,7 +386,7 @@ typedef struct {
     int heal_percent;
     int drain_type;
     int drain_percent;
-    int flat_heal;  // fixed HP heal for attacker (e.g. ancient GS blood sacrifice)
+    int flat_heal;  // fixed HP heal for attacker
     int is_morr_bleed;  // when this hit lands, set morr_dot_remaining to damage dealt
     OverheadPrayer defender_prayer_at_attack;
 } PendingHit;
@@ -551,12 +543,9 @@ typedef struct {
 
     // Prayer and style
     OverheadPrayer prayer;
-    /* render-facing snapshot of `prayer` as of this tick's action resolution
-       (post-pretick). Mid-tick wipes (Sol's triple deactivates overheads on
-       every hit) zero `prayer` before the frame draws, making 1-tick flicks
-       invisible in the viewer; the display field keeps the icon honest for
-       the tick the prayer was actually in force. PRAYER_NONE = unset: renderers
-       fall back to `prayer`, so encounters that never write it are unchanged. */
+    /* render snapshot of `prayer` at action-resolution time, so mid-tick wipes
+       don't hide 1-tick flicks in the viewer. PRAYER_NONE = unset: renderers
+       fall back to `prayer`. */
     OverheadPrayer prayer_display;
     OffensivePrayer offensive_prayer;
     FightStyle fight_style;
@@ -564,11 +553,9 @@ typedef struct {
     int autocast_defensive;
     int autocast_spell;
     int prayer_drain_counter;  // Accumulates drain, triggers at drain_resistance
-    /* activation-tick bookkeeping: OSRS does not drain a prayer on the tick it
-       was activated (wiki: "the game does not drain prayer for prayers on the
-       tick they are activated"). these flags are set to 1 on OFF→ON transitions
-       in encounter_apply_{overhead,offensive}_action() and cleared by
-       encounter_drain_all_prayers(). required for 1-tick prayer flicking. */
+    /* activation-tick skip: OSRS does not drain a prayer on the tick it was
+       activated. Set on OFF→ON in encounter_apply_*_action(), cleared by
+       encounter_drain_all_prayers(). Required for 1-tick prayer flicking. */
     uint8_t prayer_just_activated;
     uint8_t offensive_prayer_just_activated;
 
@@ -610,7 +597,7 @@ typedef struct {
     int freeze_applied_this_tick;
     int elysian_proc_this_tick;
 
-    // Morrigan's javelin DoT (Phantom Strike): 5 HP every 3 ticks from calc tick
+    // Morrigan's javelin bleed: 5 HP every 3 ticks from the calc tick
     int morr_dot_remaining;      // remaining bleed damage to deliver
     int morr_dot_tick_counter;   // ticks until next bleed (counts down from 3)
 
@@ -804,24 +791,19 @@ typedef struct {
     float wins_normal;
     float min_zuk_hp_normal;
     float n_normal;
-    /* normal-only diagnostic accumulators for reward-independent screening.
-       phase_reached_normal_sum: per-episode max phase bucket (0..4). Buckets
-       at min Zuk HP <= {900, 600, 300, 0=win} thresholds. The mean across
-       normal episodes is reported as phase_reached_normal in my_log. */
+    /* phase_reached_normal_sum: per-episode max phase bucket (0..4) at min Zuk HP
+       <= {900,600,300,0=win}; mean over normal episodes = phase_reached_normal. */
     float episode_length_normal_died;
     float n_normal_died;
     float phase_reached_normal_sum;
-    /* D-audit tail counters: count of normal-start episodes that crossed
-       given Zuk HP thresholds, and the running minimum across all normal
-       episodes. mean min_zuk_hp_normal hides the distribution; these expose
-       the tail for demo selection / phase-2 readiness. */
+    /* count of normal-start episodes crossing given Zuk HP thresholds, plus the
+       running min across normal episodes (exposes the tail mean min_zuk_hp hides). */
     float count_min_hp_le_300_normal;
     float count_min_hp_le_240_normal;
     float count_min_hp_le_150_normal;
     float best_min_zuk_hp_normal;
-    /* D-deep: per-threshold ticks-survived-after and damage-after sums.
-       Means computed in my_log as sum / count_min_hp_le_X to give average
-       behavior conditional on crossing the boundary. */
+    /* per-threshold ticks-survived-after and damage-after sums; my_log divides by
+       count_min_hp_le_X for average behavior after crossing the boundary. */
     float ticks_after_300_normal_sum;
     float ticks_after_240_normal_sum;
     float ticks_after_150_normal_sum;
@@ -852,9 +834,8 @@ typedef struct {
     float hp_restored_after_240_normal_sum;
     float zuk_hp_max_after_healer_spawn_normal_sum;
     float spark_damage_after_240_normal_sum;
-    /* D-deep: count of normal-start deaths with given mob alive at terminal.
-       Discriminates death cause (e.g. healer-active deaths suggest healer
-       priority issue, jad-active suggests poor add handling). */
+    /* count of normal-start deaths with a given mob alive at terminal (death-cause
+       attribution). */
     float count_died_with_jad_alive_normal;
     float count_died_with_set_alive_normal;
     float count_died_with_healer_alive_normal;
@@ -919,12 +900,10 @@ typedef struct {
     float target_head_valid_healer_count_normal_sum;
     float target_head_valid_zuk_count_normal_sum;
     float target_head_valid_set_count_normal_sum;
-    /* Multi-bank PFSP self-play accumulators. When env->tag > 0, the env is
-       playing against frozen bank (tag - 1); on episode terminal we increment
-       hist_n_bank[tag-1] by 1 and hist_score_bank[tag-1] by 1.0 (win) or 0.0
-       (loss) from the learner's (slot 0) perspective. selfplay.py reads these
-       via my_log -> dict_set("hist_score_bank_<b>", ...) keys to drive Elo
-       update + opponent swap logic. Up to 8 banks (matches chess + CHESS_MAX_BANKS). */
+    /* Multi-bank PFSP self-play (up to 8 banks). When env->tag > 0 the env plays
+       frozen bank tag-1; on terminal, hist_n_bank[tag-1] += 1 and
+       hist_score_bank[tag-1] += win?1:0 from slot 0's view. selfplay.py reads these
+       (my_log hist_score_bank_<b>) to drive Elo + opponent swap. */
     float hist_score_bank[8];
     float hist_n_bank[8];
 
@@ -934,27 +913,20 @@ typedef struct {
     float colo_pray_correct_by_type[12];
     float colo_offpray_damage_by_type[12];
     float colo_total_damage_by_type[12];
-    /* Colosseum death attribution (diagnostic): colo_death_by_type[t] is the
-       kill-share for NPC type t (1.0 for the type that landed the killing blow,
-       per dead episode -> per-episode mean = fraction of deaths it caused);
-       colo_death_fatal_damage is the mean total damage on the fatal tick (a
-       single big off-prayer hit vs a same-tick multi-style combo). */
+    /* death attribution: colo_death_by_type[t] = kill-share for type t (1.0 to the
+       killing-blow type per dead episode); colo_death_fatal_damage = mean damage on
+       the fatal tick. */
     float colo_death_by_type[12];
     float colo_death_fatal_damage;
-    /* Colosseum bleed avoidability (diagnostic): off-prayer HP taken on same-tick
-       >=2-style conflict ticks (unavoidable) vs single-style ticks (avoidable
-       mis-flick); colo_death_on_conflict_tick = fraction of deaths whose fatal
-       tick was a multi-style conflict. */
+    /* bleed avoidability: off-prayer HP on same-tick >=2-style conflict ticks
+       (unavoidable) vs single-style (avoidable mis-flick); colo_death_on_conflict_tick
+       = fraction of deaths whose fatal tick was a multi-style conflict. */
     float colo_offpray_damage_conflict;
     float colo_offpray_damage_solo;
     float colo_death_on_conflict_tick;
-    /* Colosseum death forensics (land-time): the fatal tick's received damage
-       split by channel (unprayable = typeless/ignore-prayer dodge failure,
-       offpray = wrong overhead, prayed = through a correct overhead, expected
-       ~0) + HP-heal capacity left in the inventory at death (burst vs
-       attrition). colo_typeless_damage_by_type = per-type episode totals of
-       unprayable damage (splits javelin skyfall+molten from its prayable
-       throws in colo_offpray_damage_by_type). */
+    /* death forensics (land-time): fatal-tick damage by channel (unprayable /
+       offpray / prayed) + HP-heal left in inventory at death (burst vs attrition).
+       colo_typeless_damage_by_type = per-type unprayable-damage totals. */
     float colo_death_dmg_unprayable;
     float colo_death_dmg_offpray;
     float colo_death_dmg_prayed;
@@ -964,13 +936,10 @@ typedef struct {
     float colo_typeless_damage_by_type[12];
     float colo_outcome_score;
     float colo_min_sol_hp;
-    /* Colosseum max-wave diagnostic. Each env keeps a binding-owned running max
-       (survives the train log-window zeroing) of every episode's raw furthest
-       depth (waves_fully_cleared + current-wave fresh-fraction + Sol sub-progress,
-       in [0, COLO_NUM_WAVES]) and adds it here once per terminating episode. After
-       the mean-aggregation this reads as the mean over terminating episodes of the
-       running-max-so-far: a smooth, monotone-tightening lower bound on the true
-       single-episode furthest, never the exact global max. */
+    /* max-wave diagnostic: per-env running-max furthest depth (waves cleared +
+       current-wave fraction + Sol sub-progress, [0, COLO_NUM_WAVES]), added once per
+       terminating episode. Reads as the mean running-max: a monotone lower bound on
+       the true furthest, not the exact global max. */
     float colo_max_depth_reached;
 } Log;
 

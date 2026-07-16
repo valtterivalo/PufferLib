@@ -11,10 +11,7 @@
  *   osrs_spec_result_force_max(...)       rewrite a resolved spec to its max
  *   osrs_blowpipe_spec_resolve(...)       blowpipe spec helper
  *
- * ref: .refs/osrs-dps-calc/src/lib/ for multipliers,
- *      .refs/osrs-sdk/src/weapons/ for behavior,
- *      osrs_pvp_combat.h for existing claws/VLS implementations,
- *      encounter_zulrah.h for eye of ayak/MSB/blowpipe specs.
+ * multipliers ref .refs/osrs-dps-calc, behavior ref .refs/osrs-sdk.
  */
 
 #ifndef OSRS_SPECIAL_ATTACKS_H
@@ -99,8 +96,7 @@ static inline SpecResult osrs_resolve_spec(
 
     switch (weapon_item_idx) {
 
-    /* AGS: 2x accuracy, 1.375x max hit (godsword 1.1 * 1.25).
-       ref: osrs-dps-calc [2,1] acc, [11,10]*[5,4] str */
+    /* AGS: 2x accuracy, 1.375x max hit (godsword 1.1 * 1.25). */
     case ITEM_AGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 8;
@@ -112,15 +108,9 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dragon claws: 4-hit cascade at BASE accuracy (no multiplier).
-       each successive roll uses a lower total damage range, split into 4 hitsplats.
-       ref: osrs-dps-calc src/lib/dists/claws.ts dClawDist()
-       generateTotals: low = floor(max * (4-accRoll) / 4), high = max + low - 1
-       roll 0: total in [max, 2*max-1], split [total/2, total/4, total/8, total/8+1]
-       roll 1: total in [3*max/4, 7*max/4-1], split [total/2, total/4, total/4+1, 0]
-       roll 2: total in [max/2, 3*max/2-1], split [total/2, total/2+1, 0, 0]
-       roll 3: total in [max/4, 5*max/4-1], split [total+1, 0, 0, 0]
-       all miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
+    /* dragon claws: 4-hit cascade at BASE accuracy. The first accuracy roll to
+       land sets the total damage range; earlier misses shrink it. Split into 4
+       hitsplats per the branches below. All four miss: 2/3 [1,1,0,0], 1/3 [0,0,0,0]. */
     case ITEM_DRAGON_CLAWS: {
         r.spec_cost = 50;
         r.num_hits = 4;
@@ -173,8 +163,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* statius warhammer (LMS): 1.25x accuracy, 1.25x str, 30% def drain on hit.
-       ref: osrs-dps-calc PlayerVsNPCCalc.ts [5,4] acc, [5,4] str */
+    /* statius warhammer (LMS): 1.25x accuracy, 1.25x str, 30% def drain on hit. */
     case ITEM_STATIUS_WARHAMMER: {
         int spec_att = att_roll * 5 / 4;   /* 1.25x */
         int spec_max = max_hit * 5 / 4;   /* 1.25x */
@@ -189,8 +178,7 @@ static inline SpecResult osrs_resolve_spec(
     }
 
     /* BGS: 2.0x accuracy, 1.21x str (godsword 1.1 * 1.1), drain def by damage.
-       cascade drain order: def > str > atk > magic > ranged (encounter applies).
-       ref: osrs-dps-calc [2,1] acc, [11,10]^2 str */
+       cascade drain order: def > str > atk > magic > ranged (encounter applies). */
     case ITEM_BGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 121 / 100;
@@ -204,8 +192,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* ZGS: 2x accuracy, 1.1x str (godsword), 32-tick freeze on hit.
-       ref: osrs-dps-calc [2,1] acc, [11,10] str */
+    /* ZGS: 2x accuracy, 1.1x str (godsword), 32-tick freeze on hit. */
     case ITEM_ZGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -219,11 +206,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* SGS: 2.0x accuracy, 1.1x str (godsword), heals floor(dmg/2) HP,
-       restores floor(dmg/4) prayer.
-       ref: osrs-dps-calc [2,1] acc, [11,10] str */
-    /* SGS: 2x accuracy, 1.1x str; a LANDED hit heals 50% of damage (min 10)
-       and restores 25% as prayer (min 5). ref: OSRS wiki Saradomin godsword. */
+    /* SGS: 2x accuracy, 1.1x str (godsword); a landed hit heals 50% of damage
+       (min 10) and restores 25% as prayer (min 5). */
     case ITEM_SGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -241,10 +225,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* ancient godsword: 2x accuracy, 1.1x str (godsword).
-       blood prison effect: on hit, after 8 ticks deals 25 + heals 25.
-       not implemented (dps-calc also marks PARTIALLY_IMPLEMENTED).
-       ref: osrs-dps-calc [2,1] acc, [11,10] str */
+    /* ancient godsword: 2x accuracy, 1.1x str (godsword). Blood-prison
+       delayed-damage effect not implemented. */
     case ITEM_ANCIENT_GS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -256,8 +238,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* VLS "Feint": 20-120% of (1.2x base max), accuracy vs 25% def roll.
-       ref: osrs_pvp_combat.h:928-962 */
+    /* VLS "Feint": 20-120% of (1.2x base max), accuracy vs 25% def roll. */
     case ITEM_VESTAS: {
         int vls_max = max_hit * 6 / 5;  /* 1.2x */
         int vls_min = max_hit / 5;      /* 0.2x */
@@ -270,8 +251,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* voidwaker: guaranteed magic damage at 50-150% of base max hit, vs 25% def.
-       ref: osrs_pvp_combat.h:913-925, osrs wiki "voidwaker" */
+    /* voidwaker: guaranteed magic damage at 50-150% of base max hit, vs 25% def. */
     case ITEM_VOIDWAKER: {
         int vw_min = max_hit / 2;       /* 50% */
         int vw_max = max_hit * 3 / 2;   /* 150% */
@@ -284,8 +264,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* granite maul: 1.0x accuracy, 1.0x str, instant (resets attack timer).
-       ref: osrs wiki "granite maul" */
+    /* granite maul: 1.0x accuracy, 1.0x str, instant (resets attack timer). */
     case ITEM_GRANITE_MAUL: {
         r.spec_cost = 50;
         r.num_hits = 1;
@@ -296,10 +275,9 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dragon dagger: [23,20] = 1.15x accuracy and 1.15x str, 2 independent hits.
-       ref: osrs-dps-calc PlayerVsNPCCalc.ts:300 */
+    /* dragon dagger: 1.15x accuracy and 1.15x str, 2 independent hits. */
     case ITEM_DRAGON_DAGGER: {
-        int spec_att = att_roll * 23 / 20;  /* 1.15x per dps-calc */
+        int spec_att = att_roll * 23 / 20;  /* 1.15x */
         int spec_max = max_hit * 23 / 20;   /* 1.15x */
         r.spec_cost = 25;
         r.num_hits = 2;
@@ -311,8 +289,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* elder maul: 1.25x accuracy, 1.0x str, 35% def drain on hit.
-       ref: osrs wiki "elder maul" */
+    /* elder maul: 1.25x accuracy, 1.0x str, 35% def drain on hit. */
     case ITEM_ELDER_MAUL: {
         int spec_att = att_roll * 5 / 4;
         r.spec_cost = 50;
@@ -325,8 +302,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* blowpipe: 2x accuracy, 1.5x max hit, heal 50% of damage.
-       ref: osrs-sdk Blowpipe.ts, osrs_combat.h (moved here) */
+    /* blowpipe: 2x accuracy, 1.5x max hit, heal 50% of damage. */
     case ITEM_TOXIC_BLOWPIPE: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 3 / 2;
@@ -339,8 +315,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* MSB(i) Snapshot: 10/7 accuracy boost (~1.43x), 2 arrows.
-       ref: encounter_zulrah.h:1052-1075 */
+    /* MSB(i) Snapshot: 10/7 accuracy boost (~1.43x), 2 arrows. */
     case ITEM_MAGIC_SHORTBOW_I: {
         int spec_att = att_roll * 10 / 7;
         r.spec_cost = 50;
@@ -353,8 +328,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dark bow: 1.0x accuracy, 1.5x str, 2 arrows, min 8 each (dragon arrows).
-       ref: osrs_pvp_combat.h:989-1015 */
+    /* dark bow: 1.0x accuracy, 1.5x str, 2 arrows, min 8 each (dragon arrows). */
     case ITEM_DARK_BOW: {
         int spec_max = max_hit * 3 / 2;
         if (spec_max > 48) spec_max = 48;
@@ -372,8 +346,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* heavy ballista: 1.25x accuracy, 1.25x str.
-       ref: osrs-dps-calc [5,4] acc, [5,4] str */
+    /* heavy ballista: 1.25x accuracy, 1.25x str. */
     case ITEM_HEAVY_BALLISTA: {
         int spec_att = att_roll * 5 / 4;
         int spec_max = max_hit * 5 / 4;
@@ -385,10 +358,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* zaryte crossbow: 2.0x accuracy, guaranteed enhanced bolt proc.
-       the bolt proc system (osrs_bolt_procs.h) handles the actual damage enhancement.
-       encounters pass is_zcb_spec=1 to osrs_resolve_bolt_proc() after this spec.
-       ref: osrs-dps-calc PlayerVsNPCCalc.ts:580, bolts.ts */
+    /* zaryte crossbow: 2.0x accuracy, guaranteed enhanced bolt proc. Encounters
+       pass is_zcb_spec=1 to osrs_resolve_bolt_proc() (osrs_bolt_procs.h) after this. */
     case ITEM_ZARYTE_CROSSBOW: {
         int spec_att = att_roll * 2;
         r.spec_cost = 75;
@@ -399,10 +370,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* morrigan's javelin: APPROXIMATE — real mechanic is initial hit + bleed
-       (5x initial over 5 ticks). dps-calc doesn't implement this weapon.
-       using VLS-like pattern for LMS sim: 20-120% max, vs 25% def roll.
-       different LMS variant (item 22636) vs wilderness variant exists. */
+    /* morrigan's javelin: APPROXIMATE. Modeled VLS-like (20-120% max, vs 25% def).
+       Real mechanic is an initial hit plus a 5-tick bleed, not implemented here. */
     case ITEM_MORRIGANS_JAVELIN: {
         int morr_max = max_hit * 6 / 5;
         int morr_min = max_hit / 5;
@@ -415,8 +384,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* ACB: 2x accuracy, normal damage, no special effect.
-       ref: osrs wiki "armadyl crossbow", PvP-only spec (dps-calc marks UNIMPLEMENTED for PvNPC) */
+    /* ACB: 2x accuracy, normal damage, no special effect. */
     case ITEM_ARMADYL_CROSSBOW: {
         int spec_att = att_roll * 2;
         r.spec_cost = 50;
@@ -427,14 +395,11 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* volatile nightmare staff: 1.5x accuracy, max hit = min(58, 58*floor(magic_lvl/99)+1).
-       at 99 magic (our sim): max 58. below 99: max 1 (hard level gate).
-       ref: osrs-dps-calc PlayerVsNPCCalc.ts:924-925 */
+    /* volatile nightmare staff: 1.5x accuracy, max hit min(58, 58*floor(magic/99)+1).
+       our sim assumes 99 magic, so max 58. */
     case ITEM_VOLATILE_STAFF: {
         int spec_att = att_roll * 3 / 2;
-        /* max hit = min(58, 58 * floor(magic_level/99) + 1).
-           at 99 magic: min(58, 59) = 58. we assume 99 magic. */
-        int vol_max = 58;
+        int vol_max = 58;  /* 99 magic */
         r.spec_cost = 55;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
@@ -443,8 +408,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* eye of ayak Soul Rend: 2x accuracy, 1.3x max hit, drains target magic def.
-       ref: encounter_zulrah.h:1098-1122 */
+    /* eye of ayak Soul Rend: 2x accuracy, 1.3x max hit, drains target magic def. */
     case ITEM_EYE_OF_AYAK: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 13 / 10;
@@ -467,7 +431,7 @@ static inline SpecResult osrs_resolve_spec(
 }
 
 /** Rewrite an already-resolved special attack to the weapon's deterministic
-    best outcome for Sol perfect-parry guaranteed max (E2). */
+    best outcome (guaranteed-max path). */
 static inline void osrs_spec_result_force_max(
     SpecResult* r, int weapon_item_idx, int max_hit, int target_def_level
 ) {

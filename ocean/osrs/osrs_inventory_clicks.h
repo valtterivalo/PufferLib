@@ -82,7 +82,7 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
 );
 
 #define OSRS_INVENTORY_CELL_OBS_FEATURES 28
-#define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* was 12; +6  = REC4(4)+REC5(2) */
+#define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* 12 + REC4(4) + REC5(2) */
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {6685, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BREW, 4},
