@@ -133,3 +133,11 @@ measurements; a bare bump contradicts him. Scrubs applied 92c082a1a incl. the
 REAL latent sweep bug (result_queue reported hardcoded env/score, not
 metrics[target_key] -- memory overstated the old fix). LOW open: boot assert ->
 fprintf+abort at PR time; truncation PR needs an upstream in-tree consumer story.
+
+## 2026-07-17 Suarez decisions (Discord)
+PR TARGET: 5c. ENCODER: ships in the PR ("no we need the encoder") — follow the
+5c house pattern (env-named block + strcmp selection like MinimalEntityEncoder/
+nmmo3, per proposal option B). Truncation channel: not discussed — include in
+the PR branch as separate commits (the OSRS envs are its consumer story), flag
+in the PR description. Port surface: 5c has no pybind layer; envs bind via the
+new pufferenv.h seam — the PR branch is a real port, scout the seam first.
