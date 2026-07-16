@@ -121,3 +121,15 @@ must just-work on fresh clone) + encoder TBD.
 ENCODER: upstream 5c has MinimalEntityEncoder (ME_*) - generalization conversation with
 Suarez, not a colosseum-named core struct. Fable clone drafting proposal options.
 RETRAIN GATE BEFORE PR: inferno/zulrah/pvp configs must demonstrably learn on box.
+
+## 2026-07-17 adversarial review verdict (full report: scratchpad internals_adversarial_review.md, copied below-worthy items)
+BLOCKERS before mini-PR carving: (1) 5c deleted kernels.cu/bindings*.cu(cpp)/
+vecenv.h/models.cu AND the entire pybind layer -- both mini-PRs are PORTS to the
+new algo.cu/pufferl.cu/pufferenv.h/puffercpu.h seam, not cherry-picks; hold until
+the Suarez conversation fixes a target. (2) vec_log 32->64 re-bucketed DROP-FROM-PR
+(5c Dict auto-grows, bug does not exist there). (3) MAX_ATN_HEADS: 5c carries
+Suarez's own TODO "use env atn dim directly" -- implement that TODO or arrive with
+measurements; a bare bump contradicts him. Scrubs applied 92c082a1a incl. the
+REAL latent sweep bug (result_queue reported hardcoded env/score, not
+metrics[target_key] -- memory overstated the old fix). LOW open: boot assert ->
+fprintf+abort at PR time; truncation PR needs an upstream in-tree consumer story.
