@@ -1678,6 +1678,14 @@ __device__ __forceinline__ void ppo_continuous_head(
     *out_entropy = HALF_1_PLUS_LOG_2PI + log_std;
 }
 
+__device__ __forceinline__ float ppo_clamp_logratio(float logratio) {
+    // comparisons, not fmaxf/fminf: a pre-existing NaN must propagate loudly.
+    // identity for |logratio| <= 10; __expf overflows summed many-head logratios.
+    if (logratio > 10.0f) return 10.0f;
+    if (logratio < -10.0f) return -10.0f;
+    return logratio;
+}
+
 __global__ void ppo_loss_compute(
         float* __restrict__ ppo_partials,
         PPOKernelArgs a, PPOGraphArgs g) {
@@ -1784,7 +1792,7 @@ __global__ void ppo_loss_compute(
     }
 
     // Shared pg loss computation
-    logratio = total_log_prob - old_logp;
+    logratio = ppo_clamp_logratio(total_log_prob - old_logp);
     ratio = __expf(logratio);
     g.out_ratio[nt] = from_float(ratio);
     float ratio_clipped = fmaxf(1.0f - a.clip_coef, fminf(1.0f + a.clip_coef, ratio));
