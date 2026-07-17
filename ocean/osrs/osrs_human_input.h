@@ -1,15 +1,3 @@
-/**
- * @file osrs_human_input.h
- * @brief Interactive human control for the visual debug viewer.
- *
- * Collects mouse/keyboard input as semantic intents between render frames,
- * then translates them to encounter-specific action arrays at tick boundary.
- * Toggle human control with H key. Works across PvP and encounter modes.
- *
- * Architecture: clicks at 60Hz → HumanInput staging buffer → per-encounter
- * translator at tick rate → int[] action array fed to step().
- */
-
 #ifndef OSRS_HUMAN_INPUT_H
 #define OSRS_HUMAN_INPUT_H
 
@@ -18,11 +6,8 @@
 #include "osrs_human_input_types.h"
 #include "osrs_encounter.h"
 
-/* forward declare — full struct lives in osrs_pvp_render.h */
 struct RenderClient;
 
-
-/** Set click cross at screen position (2D overlay, like real OSRS client). */
 static void human_set_click_cross(HumanInput* hi, int screen_x, int screen_y, int is_attack) {
     hi->click_screen_x = screen_x;
     hi->click_screen_y = screen_y;
@@ -275,8 +260,6 @@ static void human_apply_spec_toggle(HumanInput* hi) {
     human_input_queue_spec_toggle(hi);
 }
 
-/** Handle prayer icon click. Hit-tests the 5-col prayer grid.
-    Reuses the same layout math as gui_draw_prayer(). */
 static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
     int idx = human_gui_prayer_idx_at(gs, mouse_x, mouse_y);
@@ -290,7 +273,6 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     }
 }
 
-/** Handle spell icon click. Hit-tests the 4-col Ancient spell grid. */
 static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
                                       int mouse_x, int mouse_y) {
     int idx = human_gui_spell_idx_at(gs, mouse_x, mouse_y);
@@ -304,9 +286,6 @@ static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
     }
 }
 
-/** Handle combat panel click (fight style buttons + spec bar).
-    Fight style is set directly on Player (not in the action space).
-    Spec bar click sets pending_spec. */
 static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
                                        int mouse_x, int mouse_y) {
     GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
@@ -360,18 +339,12 @@ static void human_handle_combat_click(HumanInput* hi, GuiState* gs, Player* p,
     }
 }
 
-
-/** Translate human input to PvP 7-head action array for agent 0.
-    Movement is target-relative (ADJACENT/UNDER/DIAGONAL/FARCAST_N). */
 static void human_to_pvp_actions(HumanInput* hi, int* actions,
                                   Player* agent, Player* target) {
-    /* zero all heads */
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
 
-    /* HEAD_LOADOUT: keep current gear (human equips items via inventory clicks) */
     actions[HEAD_LOADOUT] = LOADOUT_KEEP;
 
-    /* HEAD_COMBAT: attack or movement */
     if (hi->pending_attack) {
         if (hi->pending_spell == ATTACK_ICE) {
             actions[HEAD_COMBAT] = ATTACK_ICE;
@@ -381,22 +354,19 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
             actions[HEAD_COMBAT] = ATTACK_ATK;
         }
     } else if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
-        /* convert absolute tile to target-relative movement */
         int dx = hi->pending_move_x - target->x;
         int dy = hi->pending_move_y - target->y;
-        int dist = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);  /* chebyshev */
+        int dist = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);
 
         if (dist == 0) {
             actions[HEAD_COMBAT] = MOVE_UNDER;
         } else if (dist == 1) {
-            /* check if cardinal (adjacent) or diagonal */
             if (dx == 0 || dy == 0) {
                 actions[HEAD_COMBAT] = MOVE_ADJACENT;
             } else {
                 actions[HEAD_COMBAT] = MOVE_DIAGONAL;
             }
         } else {
-            /* farcast: clamp to 2-7 */
             int fc = dist;
             if (fc < 2) fc = 2;
             if (fc > 7) fc = 7;
@@ -404,32 +374,26 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
         }
     }
 
-    /* HEAD_OVERHEAD: prayer */
     if (hi->pending_prayer >= 0) {
         actions[HEAD_OVERHEAD] = hi->pending_prayer;
     }
 
-    /* HEAD_FOOD */
     if (hi->pending_food) {
         actions[HEAD_FOOD] = FOOD_EAT;
     }
 
-    /* HEAD_POTION */
     if (hi->pending_potion > 0) {
         actions[HEAD_POTION] = hi->pending_potion;
     }
 
-    /* HEAD_KARAMBWAN */
     if (hi->pending_karambwan) {
         actions[HEAD_KARAMBWAN] = KARAM_EAT;
     }
 
-    /* HEAD_VENG */
     if (hi->pending_veng) {
         actions[HEAD_VENG] = VENG_CAST;
     }
 
-    /* spec: use LOADOUT_SPEC_MELEE/RANGE/MAGIC based on current weapon style */
     if (hi->pending_spec) {
         AttackStyle style = (AttackStyle)get_item_attack_style(agent->equipped[GEAR_SLOT_WEAPON]);
         switch (style) {
@@ -443,18 +407,9 @@ static void human_to_pvp_actions(HumanInput* hi, int* actions,
     (void)agent;
 }
 
-/* shared translate helpers (encounter_translate_movement/prayer/target)
-   live in osrs_encounter.h so encounter headers can use them directly. */
-
-
-/* click cross sprite textures: 4 yellow (move) + 4 red (attack) animation frames.
-   loaded from data/sprites/gui/cross_*.png, indexed [0..3] yellow, [4..7] red. */
 #define CLICK_CROSS_NUM_FRAMES 4
-#define CLICK_CROSS_ANIM_TICKS 20  /* total animation duration in client ticks (50Hz) */
+#define CLICK_CROSS_ANIM_TICKS 20
 
-/** Draw click cross at screen-space position using sprite animation.
-    cross_sprites must point to 8 loaded Texture2D (4 yellow + 4 red).
-    Falls back to line drawing if sprites aren't loaded. */
 static void human_draw_click_cross(HumanInput* hi, Texture2D* cross_sprites, int sprites_loaded) {
     if (!hi->click_cross_active) return;
     if (hi->click_cross_timer >= CLICK_CROSS_ANIM_TICKS) {
@@ -471,7 +426,6 @@ static void human_draw_click_cross(HumanInput* hi, Texture2D* cross_sprites, int
 
     if (sprites_loaded && cross_sprites[sprite_idx].id > 0) {
         Texture2D tex = cross_sprites[sprite_idx];
-        /* center sprite on click position (OSRS draws at mouseX-8, mouseY-8 for 16px) */
         DrawTexture(tex, cx - tex.width / 2, cy - tex.height / 2, WHITE);
     } else {
         float progress = 1.0f - (float)hi->click_cross_timer / CLICK_CROSS_ANIM_TICKS;
@@ -484,7 +438,6 @@ static void human_draw_click_cross(HumanInput* hi, Texture2D* cross_sprites, int
     }
 }
 
-/** Tick the click cross animation timer. Call at 50Hz (client tick rate). */
 static void human_tick_visuals(HumanInput* hi) {
     if (hi->click_cross_active) {
         hi->click_cross_timer++;
@@ -494,4 +447,4 @@ static void human_tick_visuals(HumanInput* hi) {
     }
 }
 
-#endif /* OSRS_HUMAN_INPUT_H */
+#endif

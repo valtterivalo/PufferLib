@@ -1,22 +1,3 @@
-/**
- * @fileoverview OSRS animation runtime — loads .anims binary, applies vertex-group
- * transforms to model base geometry, re-expands into raylib mesh for rendering.
- *
- * OSRS animations use vertex-group-based transforms (not bones). Each vertex has a
- * skin label (group index). FrameBase defines transform slots with types + label arrays.
- * Each frame provides per-slot {dx,dy,dz} values. Transform types:
- *   0 = origin (compute centroid of referenced vertex groups → set pivot)
- *   1 = translate (add dx/dy/dz to all vertices in referenced groups)
- *   2 = rotate (euler Z-X-Y around pivot, raw*8 → 2048-entry sine table)
- *   3 = scale (relative to pivot, 128 = 1.0x identity)
- *   5 = alpha (face transparency)
- *
- * Binary format (.anims) produced by tools/cache_pipeline/export_animations.py:
- *   v2 header: char[4] "ANM2", uint16 version, uint16 header_size,
- *              uint32 framebase_count, uint32 sequence_count,
- *              uint32 sequence_frame_count, uint32 flags.
- */
-
 #ifndef OSRS_ANIM_H
 #define OSRS_ANIM_H
 
@@ -38,7 +19,6 @@
 #define ANIM_MAX_BASES 65535
 #define ANIM_MAX_SEQUENCES 65535
 
-
 static int anim_sine[ANIM_SINE_COUNT];
 static int anim_cosine[ANIM_SINE_COUNT];
 static int anim_trig_initialized = 0;
@@ -53,13 +33,12 @@ static void anim_init_trig(void) {
     anim_trig_initialized = 1;
 }
 
-
 typedef struct {
     uint16_t base_id;
     uint8_t  slot_count;
-    uint8_t* types;             /* [slot_count] transform type per slot */
-    uint8_t* map_lengths;       /* [slot_count] label count per slot */
-    uint8_t** frame_maps;       /* [slot_count][map_lengths[i]] label indices */
+    uint8_t* types;
+    uint8_t* map_lengths;
+    uint8_t** frame_maps;
 } AnimFrameBase;
 
 typedef struct {
@@ -82,7 +61,7 @@ typedef struct {
 } AnimFrameData;
 
 typedef struct {
-    uint16_t delay;             /* game ticks (600ms each) */
+    uint16_t delay;
     AnimFrameData frame;
 } AnimSequenceFrame;
 
@@ -91,7 +70,7 @@ typedef struct {
     uint16_t           frame_count;
     uint8_t            interleave_count;
     uint8_t*           interleave_order;
-    int8_t             walk_flag;  /* -1=legacy default, 0=stall movement, >0=movement allowed */
+    int8_t             walk_flag;
     AnimSequenceFrame* frames;
 } AnimSequence;
 
@@ -100,16 +79,10 @@ typedef enum {
     ANIM_PLAY_ONCE = 1,
 } AnimPlaybackMode;
 
-/** One animation playback cursor owning BOTH the resolved sequence and the frame
-    position. The sequence is resolved once (model-aware, via
-    render_anim_playback_resolve in osrs_render.h) and stored here; advance and the
-    per-frame read both go through ->sequence, never a fresh lookup, so frame-advance
-    and frame-resolution cannot diverge. The cursor ops below are pure (sequence-only);
-    the cache-aware resolve + frame read live in osrs_render.h. */
 typedef struct {
-    int           seq_id;          /* -1 = inactive */
-    AnimSequence* sequence;        /* resolved view; NULL until first resolve */
-    int           model_vert_count;/* vertex count the sequence was resolved against */
+    int           seq_id;
+    AnimSequence* sequence;
+    int           model_vert_count;
     int           frame_idx;
     int           ticks_in_frame;
     int           completed_loops;
@@ -126,9 +99,6 @@ static inline void anim_playback_reset(AnimPlayback* pb) {
     pb->mode = ANIM_PLAY_LOOP;
 }
 
-/** Force the cursor to (re)start a sequence from frame 0, even if it is already
-    on this id -- used to re-trigger an attack that played once. Clears the
-    resolved sequence so the next resolve runs. No cache lookup happens here. */
 static inline void anim_playback_restart(
     AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
 ) {
@@ -140,9 +110,6 @@ static inline void anim_playback_restart(
     pb->completed_loops = 0;
 }
 
-/** Point the cursor at a (possibly new) sequence id. A same-id, same-mode call
-    is a no-op so an in-progress animation keeps playing (looping idle/walk); a
-    different id restarts from frame 0. No cache lookup happens here. */
 static inline void anim_playback_set_seq(
     AnimPlayback* pb, int seq_id, AnimPlaybackMode mode
 ) {
@@ -150,8 +117,6 @@ static inline void anim_playback_set_seq(
     anim_playback_restart(pb, seq_id, mode);
 }
 
-/** Advance the cursor by one client tick using the resolved sequence. No-op
-    until the sequence has been resolved (render_anim_playback_resolve). */
 static inline void anim_playback_advance(AnimPlayback* pb) {
     AnimSequence* seq = pb->sequence;
     if (!seq || seq->frame_count <= 0) return;
@@ -169,29 +134,25 @@ static inline void anim_playback_advance(AnimPlayback* pb) {
 typedef struct {
     AnimFrameBase* bases;
     int            base_count;
-    uint16_t*      base_ids;    /* for lookup by id */
+    uint16_t*      base_ids;
 
     AnimSequence*  sequences;
     int            seq_count;
 } AnimCache;
 
-/* per-model animation working state */
 typedef struct {
-    /* transformed vertex positions (working copy of base_vertices) */
-    int16_t* verts;             /* [base_vert_count * 3] */
+    int16_t* verts;
     int      vert_count;
 
-    /* vertex group lookup: groups[label] = { vertex indices } */
-    int**    groups;            /* [ANIM_MAX_LABELS] arrays of vertex indices */
-    int*     group_counts;      /* [ANIM_MAX_LABELS] count per group */
+    int**    groups;
+    int*     group_counts;
 
-    uint8_t* base_face_alphas;  /* [face_count], OSRS alpha: 0 opaque, 255 transparent */
-    uint8_t* face_alphas;       /* [face_count] mutable working copy */
+    uint8_t* base_face_alphas;
+    uint8_t* face_alphas;
     int      face_count;
-    int**    face_alpha_groups; /* [ANIM_MAX_LABELS] arrays of face indices */
+    int**    face_alpha_groups;
     int*     face_alpha_group_counts;
 } AnimModelState;
-
 
 typedef struct {
     const uint8_t* p;
@@ -298,7 +259,6 @@ static AnimCache* anim_cache_load(const char* path) {
     cache->base_count = (int)base_count;
     cache->seq_count = (int)seq_count;
 
-    /* load framebases */
     cache->bases = (AnimFrameBase*)osrs_calloc_or_abort(
         cache->base_count, sizeof(AnimFrameBase), "animation framebases");
     cache->base_ids = (uint16_t*)osrs_malloc_or_abort(
@@ -331,7 +291,6 @@ static AnimCache* anim_cache_load(const char* path) {
         }
     }
 
-    /* load sequences */
     cache->sequences = (AnimSequence*)osrs_calloc_or_abort(
         cache->seq_count, sizeof(AnimSequence), "animation sequences");
     for (int i = 0; i < cache->seq_count; i++) {
@@ -418,7 +377,6 @@ static AnimCache* anim_cache_load(const char* path) {
     return cache;
 }
 
-
 static AnimSequence* anim_get_sequence(AnimCache* cache, uint16_t seq_id) {
     if (!cache) return NULL;
     for (int i = 0; i < cache->seq_count; i++) {
@@ -439,7 +397,6 @@ static AnimFrameBase* anim_get_framebase(AnimCache* cache, uint16_t base_id) {
     return NULL;
 }
 
-
 static AnimModelState* anim_model_state_create_with_face_alpha(
     const uint8_t* vertex_skins,
     int base_vert_count,
@@ -453,20 +410,17 @@ static AnimModelState* anim_model_state_create_with_face_alpha(
     state->verts = (int16_t*)osrs_calloc_or_abort(
         base_vert_count * 3, sizeof(int16_t), "animation model vertices");
 
-    /* build vertex group lookup from skin labels */
     state->groups = (int**)osrs_calloc_or_abort(
         ANIM_MAX_LABELS, sizeof(int*), "animation model groups");
     state->group_counts = (int*)osrs_calloc_or_abort(
         ANIM_MAX_LABELS, sizeof(int), "animation model group counts");
 
-    /* first pass: count vertices per label */
     int label_counts[ANIM_MAX_LABELS] = {0};
     for (int v = 0; v < base_vert_count; v++) {
         uint8_t label = vertex_skins[v];
         label_counts[label]++;
     }
 
-    /* allocate per-label arrays */
     for (int l = 0; l < ANIM_MAX_LABELS; l++) {
         if (label_counts[l] > 0) {
             state->groups[l] = (int*)osrs_malloc_or_abort(
@@ -475,7 +429,6 @@ static AnimModelState* anim_model_state_create_with_face_alpha(
         }
     }
 
-    /* second pass: fill vertex indices */
     for (int v = 0; v < base_vert_count; v++) {
         uint8_t label = vertex_skins[v];
         state->groups[label][state->group_counts[label]++] = v;
@@ -548,7 +501,6 @@ static void anim_model_state_free(AnimModelState* state) {
     free(state);
 }
 
-
 static void anim_apply_rest_pose(
     AnimModelState* state,
     const int16_t* base_verts_src
@@ -587,7 +539,6 @@ static void anim_apply_alpha_transform(
     }
 }
 
-
 static void anim_apply_single_transform(
     AnimModelState* state,
     int type, const uint8_t* labels, uint8_t map_len,
@@ -604,10 +555,8 @@ static void anim_apply_frame(
         fprintf(stderr, "anim_apply_frame: non-legacy frame passed to legacy path\n");
         abort();
     }
-    /* reset to base pose */
     anim_apply_rest_pose(state, base_verts_src);
 
-    /* pivot point for rotate/scale */
     int pivot_x = 0, pivot_y = 0, pivot_z = 0;
 
     for (int t = 0; t < frame->transform_count; t++) {
@@ -633,9 +582,7 @@ static void anim_apply_maya_baked_frame(
         abort();
     }
     if ((int)frame->maya_vertex_count != state->vert_count) {
-        /* A Maya bake applies only to the exact mesh it was baked for. A vertex-count
-           mismatch means this sequence id is baked for a different model that shares
-           the id; like the OSRS client, leave it in bind pose (skip) not deform/abort. */
+
         return;
     }
     memcpy(state->verts, frame->maya_vertices,
@@ -645,14 +592,6 @@ static void anim_apply_maya_baked_frame(
     }
 }
 
-
-/**
- * Apply a single transform slot to the vertex state (extracted from anim_apply_frame
- * to allow per-slot interleave filtering).
- *
- * pivot_x/y/z are read/written through pointers — they persist across slots
- * within a pass, exactly like the reference's transformTempX/Y/Z.
- */
 static void anim_apply_single_transform(
     AnimModelState* state,
     int type, const uint8_t* labels, uint8_t map_len,
@@ -660,7 +599,6 @@ static void anim_apply_single_transform(
     int* pivot_x, int* pivot_y, int* pivot_z
 ) {
     if (type == 0) {
-        /* origin: compute centroid of referenced vertex groups */
         int count = 0, sx = 0, sy = 0, sz = 0;
         for (int m = 0; m < map_len; m++) {
             uint8_t label = labels[m];
@@ -734,22 +672,6 @@ static void anim_apply_single_transform(
     }
 }
 
-/**
- * Apply two animation frames with body-part interleaving.
- *
- * Mirrors OSRS Model.applyAnimationFrames():
- *   - interleave_order lists framebase SLOT INDICES owned by SECONDARY (walk)
- *   - Pass 1: apply primary transforms for slots NOT in interleave_order
- *   - Pass 2: apply secondary transforms for slots IN interleave_order
- *   - Type-0 (pivot) transforms always execute in both passes
- *
- * CRITICAL: interleave_order contains framebase SLOT INDICES, not vertex labels!
- * The reference code (Model.java:1322-1343) walks both the frame's slot list and
- * the interleave_order simultaneously, comparing slot indices directly.
- *
- * Both passes operate on the same vertex state with independent pivot tracking,
- * exactly as the reference does with transformTempX/Y/Z reset between passes.
- */
 static void anim_apply_frame_interleaved(
     AnimModelState* state,
     const int16_t* base_verts_src,
@@ -762,20 +684,14 @@ static void anim_apply_frame_interleaved(
         fprintf(stderr, "anim_apply_frame_interleaved: Maya frames cannot be interleaved\n");
         abort();
     }
-    /* reset to base pose */
     anim_apply_rest_pose(state, base_verts_src);
 
-    /* build boolean mask: interleave_order lists SLOT INDICES the SECONDARY owns.
-       index by slot index (0-244 for our 245-slot framebase), NOT vertex labels. */
     uint8_t secondary_slot[256];
     memset(secondary_slot, 0, sizeof(secondary_slot));
     for (int i = 0; i < interleave_count; i++) {
         secondary_slot[interleave_order[i]] = 1;
     }
 
-    /* pass 1: primary frame — apply transforms for slots NOT in interleave_order.
-     * type-0 (pivot) always executes regardless of ownership.
-     * matches reference: if (k1 != i1 || class18.types[k1] == 0) */
     int pivot_x = 0, pivot_y = 0, pivot_z = 0;
     for (int t = 0; t < primary_frame->transform_count; t++) {
         uint8_t slot_idx = primary_frame->transforms[t].slot_index;
@@ -796,9 +712,6 @@ static void anim_apply_frame_interleaved(
         }
     }
 
-    /* pass 2: secondary frame — apply transforms for slots IN interleave_order.
-     * type-0 (pivot) always executes.
-     * matches reference: if (i2 == i1 || class18.types[i2] == 0) */
     pivot_x = 0; pivot_y = 0; pivot_z = 0;
     for (int t = 0; t < secondary_frame->transform_count; t++) {
         uint8_t slot_idx = secondary_frame->transforms[t].slot_index;
@@ -820,18 +733,6 @@ static void anim_apply_frame_interleaved(
     }
 }
 
-
-/**
- * Re-expand animated base vertices into the raylib mesh's expanded vertex buffer.
- * This mirrors expand_model from the Python exporter but in-place, using
- * face_indices to map from base to expanded vertices.
- *
- * The mesh has face_count*3 expanded vertices. Each triplet (i*3, i*3+1, i*3+2)
- * corresponds to face_indices[i*3], face_indices[i*3+1], face_indices[i*3+2]
- * pointing into base_vertices.
- *
- * OSRS Y is negated for rendering (negative-up → positive-up).
- */
 static void anim_update_mesh(
     float* mesh_vertices,
     const AnimModelState* state,
@@ -843,9 +744,9 @@ static void anim_update_mesh(
         int b = face_indices[fi * 3 + 1];
         int c = face_indices[fi * 3 + 2];
 
-        int vi = fi * 9; /* 3 verts * 3 coords */
+        int vi = fi * 9;
         mesh_vertices[vi]     = (float)state->verts[a * 3];
-        mesh_vertices[vi + 1] = (float)(-state->verts[a * 3 + 1]); /* negate Y */
+        mesh_vertices[vi + 1] = (float)(-state->verts[a * 3 + 1]);
         mesh_vertices[vi + 2] = (float)state->verts[a * 3 + 2];
 
         mesh_vertices[vi + 3] = (float)state->verts[b * 3];
@@ -872,7 +773,6 @@ static void anim_update_mesh_alpha(
         }
     }
 }
-
 
 static void anim_cache_free(AnimCache* cache) {
     if (!cache) return;
@@ -902,4 +802,4 @@ static void anim_cache_free(AnimCache* cache) {
     free(cache);
 }
 
-#endif /* OSRS_ANIM_H */
+#endif

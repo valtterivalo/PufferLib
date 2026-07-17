@@ -1,24 +1,3 @@
-/**
- * @file osrs_env_profile.h
- * @brief Template header (no include guard) for the OSRS env per-bucket profiler.
- *
- * The includer defines the parameter macros below and an OSRS_ENV_PROFILE_SLOTS(X)
- * x-macro of X(enum_slot, "label") entries, then includes this file once. It emits the
- * slot enum (terminated by the COUNT enumerator), the parallel names table, the
- * enabled/now_ms/add/mark helpers, and the env_profile_{count,name,read_reset_ms} exports.
- * Parameter macros are consumed and #undef'd below. The thin *_PROFILE_* convenience
- * macros stay per-env: their names cannot be token-pasted in a #define, and MARK binds the
- * caller's local timer/enabled variables.
- *
- * Required parameter macros:
- *   OSRS_ENV_PROFILE_PREFIX     lowercase symbol prefix (e.g. colosseum)
- *   OSRS_ENV_PROFILE_COUNT      count enumerator token (e.g. COLO_PROF_COUNT)
- *   OSRS_ENV_PROFILE_SLOT_TYPE  enum type name (e.g. ColosseumProfileSlot)
- *   OSRS_ENV_PROFILE_ENV_VAR    gate env var string (e.g. "PUFFER_COLOSSEUM_PROFILE")
- *   OSRS_ENV_PROFILE_EXPORT     export attribute macro (e.g. COLOSSEUM_ENV_EXPORT)
- *   OSRS_ENV_PROFILE_SLOTS(X)   x-macro list of X(enum_slot, "label")
- */
-
 #include <stdlib.h>
 #include <time.h>
 

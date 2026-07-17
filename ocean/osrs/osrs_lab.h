@@ -1,22 +1,3 @@
-/**
- * @fileoverview osrs_lab.h — shared scenario-lab and snapshot-harness scaffolding.
- *
- * The Colosseum and Inferno standalone viewers each expose a line-based scenario
- * language (spawn NPCs, jump waves, toggle state, step ticks, dump JSON) plus an
- * archive snapshot/restore path. The encounter-specific command sets live in the
- * encounters; this header holds the structurally shared core they both build on:
- *
- *   optional int      EncounterLabOptionalInt   "full"-or-N command arguments
- *   json scaffolding  EncounterLabString        growable buffer + printf-append
- *   command grammar   encounter_lab_trim/next_token/parse_key_value/line_begin,
- *                     EncounterLabCommandAlias + lookup
- *   snapshot plumbing EncounterSnapshotFrame     magic/version/size framing + copy
- *   viewer harness    terminal status text, dump-line wrapper
- *
- * All helpers are libc-only and carry an owner_label for diagnostics, so the
- * header is self-contained and depends on no encounter types.
- */
-
 #ifndef OSRS_LAB_H
 #define OSRS_LAB_H
 
@@ -30,9 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/**
- * Scenario lab optional integer.
- */
 typedef enum {
     ENCOUNTER_LAB_OPTIONAL_INT_UNSET = 0,
     ENCOUNTER_LAB_OPTIONAL_INT_SET,
@@ -54,9 +32,6 @@ static inline EncounterLabOptionalInt encounter_lab_optional_int_set(int value) 
     };
 }
 
-/**
- * Growable scenario lab string buffer for JSON dump assembly.
- */
 typedef struct {
     char* data;
     size_t len;
@@ -192,22 +167,12 @@ static inline char* encounter_lab_next_token(const char* owner_label, char** cur
     return start;
 }
 
-/**
- * Lexer state for one scenario-lab script line: the owned line copy, the parse
- * cursor positioned past the command token, and the command token itself
- * (NULL for a blank or '#' comment line).
- */
 typedef struct {
     char* buffer;
     char* cursor;
     const char* command;
 } EncounterLabLine;
 
-/**
- * Copy, trim, and lex the leading command token of a scenario-lab script line.
- * The caller owns and frees buffer. Aborts via owner_label on NULL input or
- * allocation failure; a blank or comment line yields command == NULL.
- */
 static inline EncounterLabLine encounter_lab_line_begin(
     const char* owner_label, const char* line
 ) {
@@ -223,9 +188,6 @@ static inline EncounterLabLine encounter_lab_line_begin(
     return out;
 }
 
-/**
- * Command alias row for scenario lab command tables.
- */
 typedef struct {
     const char* name;
     int kind;
@@ -343,4 +305,4 @@ static inline int encounter_apply_lab_command_dump_wrapper(
     return result == dump_result ? 1 : 0;
 }
 
-#endif  /* OSRS_LAB_H */
+#endif

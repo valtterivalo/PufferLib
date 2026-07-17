@@ -1,7 +1,3 @@
-/**
- * @fileoverview Pure projectile height and tangent orientation helpers.
- */
-
 #ifndef OSRS_PROJECTILE_ORIENTATION_H
 #define OSRS_PROJECTILE_ORIENTATION_H
 

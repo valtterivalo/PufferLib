@@ -1,7 +1,3 @@
-/**
- * @fileoverview Loader for cache-exported OSRS spot animation metadata.
- */
-
 #ifndef OSRS_SPOTANIMS_H
 #define OSRS_SPOTANIMS_H
 

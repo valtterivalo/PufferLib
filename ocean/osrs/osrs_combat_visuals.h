@@ -1,8 +1,3 @@
-/**
- * @file osrs_combat_visuals.h
- * @brief RuneC-backed combat visual lookups shared by OSRS renderers.
- */
-
 #ifndef OSRS_COMBAT_VISUALS_H
 #define OSRS_COMBAT_VISUALS_H
 
@@ -206,9 +201,7 @@ static const OsrsCombatVisualRow OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[] = {
     OSRS_COMBAT_VISUAL_COLOSSEUM_NPC(
         12817, ATTACK_STYLE_RANGED, 10892,
         OSRS_COMBAT_VISUAL_COLOSSEUM_PROJECTILE(
-            /* impact = 2676 NPC_COLOSSI_JAVELIN_01_ARTILLERY_FIRE (the landing
-               burst). 2677 is SPEARHEAD_FIRE_SLOW, the descending shaft, which
-               wrongly re-showed the lob as the impact. */
+
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING, 2673, 2676,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
             OSRS_COMBAT_VISUAL_COLOSSEUM_MISSING,
@@ -310,10 +303,6 @@ static const OsrsCombatProjectileProfile OSRS_POWERED_STAFF_PROJECTILE_PROFILE =
     OSRS_COMBAT_PROJECTILE_MISSING, 1
 };
 
-/** Tumeken's shadow purple bolt: the canonical shadow spotanims ride on the
-    trident carrier model (the emit path aborts on a model-less profile, and 2126
-    is a spotanim not a projectile model, so it reuses model 20825 exactly as the
-    Eye of Ayak fallback does today). */
 static const OsrsCombatProjectileProfile OSRS_TUMEKENS_SHADOW_PROJECTILE_PROFILE = {
     GFX_TUMEKENS_SHADOW_CAST, GFX_TUMEKENS_SHADOW_PROJ, GFX_TUMEKENS_SHADOW_IMPACT,
     OSRS_PROJECTILE_MODEL_TRIDENT, OSRS_PROJECTILE_ANIM_TRIDENT,

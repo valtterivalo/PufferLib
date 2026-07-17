@@ -1,11 +1,3 @@
-/**
- * @file osrs_combat_visuals_generated.h
- * @brief Combat visuals originally generated from RuneC plus local overlays.
- *
- * The generator (generate_combat_visuals.py) no longer exists on this branch;
- * this table is hand-maintained and guarded by the render/visual tests.
- */
-
 #ifndef OSRS_COMBAT_VISUALS_GENERATED_H
 #define OSRS_COMBAT_VISUALS_GENERATED_H
 

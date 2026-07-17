@@ -1,30 +1,3 @@
-/**
- * @fileoverview Loads OSRS 3D models from .models MDL4 binary and converts to raylib meshes.
- *
- * Binary format produced by scripts/export_models.py (MDL4, atlas-textured):
- *   header: uint32 magic ("MDL4"), uint32 count, uint32 offsets[count]
- *   per model:
- *     uint32 model_id
- *     uint16 expanded_vert_count    (face_count * 3)
- *     uint16 face_count
- *     uint16 base_vert_count        (original indexed vertex count)
- *     float  expanded_verts[expanded_vert_count * 3]
- *     uint8  colors[expanded_vert_count * 4]
- *     float  texcoords[expanded_vert_count * 2]
- *     int16  base_verts[base_vert_count * 3]   (original OSRS coords, y NOT negated)
- *     uint8  vertex_skins[base_vert_count]     (label group per vertex for animation)
- *     uint16 face_indices[face_count * 3]      (a,b,c per face into base verts)
- *     uint8  face_priorities[face_count]
- *     uint8  face_alphas[face_count]           (OSRS per-face alpha)
- *     uint8  face_alpha_labels[face_count]     (255 = none)
- *
- * A sibling .atlas (ATLS) file holds the texture atlas and is always required.
- *
- * Expanded vertices + colors are used directly by raylib Mesh for rendering.
- * Base vertices, skins, and face indices are used by the animation system to
- * transform the original geometry and re-expand for GPU upload.
- */
-
 #ifndef OSRS_MODELS_H
 #define OSRS_MODELS_H
 
@@ -46,9 +19,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MDL4_MAGIC 0x4D444C34  /* "MDL4" */
-#define ATLS_MAGIC 0x41544C53  /* "ATLS" */
-#define TANM_MAGIC 0x4D4E4154  /* "TANM" */
+#define MDL4_MAGIC 0x4D444C34
+#define ATLS_MAGIC 0x41544C53
+#define TANM_MAGIC 0x4D4E4154
 #define TANM_VERSION 1
 #define MODEL_CACHE_DENSE_INDEX_LIMIT 0x100000u
 
@@ -65,13 +38,12 @@ typedef struct {
     Mesh mesh;
     Model model;
 
-    /* animation data (from base indexed geometry) */
-    int16_t*  base_vertices;    /* [base_vert_count * 3] original OSRS coords */
-    uint8_t*  vertex_skins;     /* [base_vert_count] label group per vertex */
-    uint16_t* face_indices;     /* [face_count * 3] triangle index buffer */
-    uint8_t*  face_priorities;  /* [face_count] render priority per face (0-11) */
-    uint8_t*  base_face_alphas; /* [face_count] OSRS alpha: 0 opaque, 255 transparent */
-    uint8_t*  face_alpha_labels;/* [face_count] label group per face for type-5 anims */
+    int16_t*  base_vertices;
+    uint8_t*  vertex_skins;
+    uint16_t* face_indices;
+    uint8_t*  face_priorities;
+    uint8_t*  base_face_alphas;
+    uint8_t*  face_alpha_labels;
     uint16_t  base_vert_count;
 
 } OsrsModel;
@@ -353,7 +325,6 @@ static ModelCache* model_cache_load(const char* path) {
         return NULL;
     }
 
-    /* read header */
     uint32_t magic, count;
     osrs_read_exact(f, &magic, 4, 1, path, "magic");
     osrs_read_exact(f, &count, 4, 1, path, "model count");
@@ -364,7 +335,6 @@ static ModelCache* model_cache_load(const char* path) {
         abort();
     }
 
-    /* read offset table */
     uint32_t* offsets = (uint32_t*)osrs_malloc_or_abort(
         count * sizeof(uint32_t), "model offsets");
     osrs_read_exact(f, offsets, 4, count, path, "model offsets");
@@ -404,7 +374,6 @@ static ModelCache* model_cache_load(const char* path) {
         cache->models[i].base_vert_count = base_vert_count;
         model_cache_set_index(cache, model_id, (int)i);
 
-        /* allocate raylib mesh for expanded rendering geometry */
         Mesh mesh = { 0 };
         mesh.vertexCount = vert_count;
         mesh.triangleCount = face_count;
@@ -422,7 +391,6 @@ static ModelCache* model_cache_load(const char* path) {
         osrs_read_exact(f, mesh.colors, 1, vert_count * 4, path, "vertex colors");
         osrs_read_exact(f, mesh.texcoords, sizeof(float), vert_count * 2, path, "texcoords");
 
-        /* read animation data */
         cache->models[i].base_vertices = (int16_t*)osrs_malloc_or_abort(
             base_vert_count * 3 * sizeof(int16_t), "model base vertices");
         osrs_read_exact(f, cache->models[i].base_vertices, sizeof(int16_t),
@@ -452,20 +420,12 @@ static ModelCache* model_cache_load(const char* path) {
         osrs_read_exact(f, cache->models[i].face_alpha_labels, 1,
             face_count, path, "face alpha labels");
 
-        /* hidden-face repair: the exporter hides OSRS hidden-render-type faces by
-           baking vertex color alpha 0, but leaves face_alphas at 0 (opaque) for
-           them, so the two alpha channels disagree only on hidden faces (e.g. the
-           infernal cape rig triangle). The animated-alpha pipeline trusts
-           face_alphas and would resurrect them opaque every frame; fold the color
-           bake back in so hidden faces stay hidden under animation (type-5 deltas
-           still apply from the repaired 255 base, matching OSRS). */
         for (uint16_t fp = 0; fp < face_count; fp++) {
             if (cache->models[i].base_face_alphas[fp] == 0 &&
                     mesh.colors[(fp * 3) * 4 + 3] == 0)
                 cache->models[i].base_face_alphas[fp] = 255;
         }
 
-        /* upload to GPU */
         UploadMesh(&mesh, false);
         cache->models[i].mesh = mesh;
         cache->models[i].model = LoadModelFromMesh(mesh);
@@ -481,7 +441,6 @@ static ModelCache* model_cache_load(const char* path) {
     fprintf(stderr, "model_cache_load: loaded %d models from %s\n", cache->count, path);
     return cache;
 }
-
 
 static OsrsModel* model_cache_get(ModelCache* cache, uint32_t model_id) {
     if (!cache) return NULL;
@@ -629,7 +588,6 @@ static void model_cache_free(ModelCache* cache) {
     if (!cache) return;
     for (int i = 0; i < cache->count; i++) {
         UnloadModel(cache->models[i].model);
-        /* UnloadModel already frees the mesh */
         free(cache->models[i].base_vertices);
         free(cache->models[i].vertex_skins);
         free(cache->models[i].face_indices);
@@ -646,4 +604,4 @@ static void model_cache_free(ModelCache* cache) {
     free(cache);
 }
 
-#endif /* OSRS_MODELS_H */
+#endif

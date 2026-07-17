@@ -1,16 +1,3 @@
-/**
- * @fileoverview Loads placed map objects from .objects binary into a single raylib Model.
- *
- * Supports two binary formats:
- *   v1 (OBJS): vertices + colors only (flat vertex coloring)
- *   v2 (OBJ2): vertices + colors + texcoords (texture atlas support)
- *
- * When v2 format is detected, also loads the companion .atlas file (raw RGBA)
- * and assigns it as the model's diffuse texture. Vertex colors are multiplied
- * by the texture sample: textured faces use white vertex color + real texture,
- * non-textured faces use HSL vertex color + white atlas pixel.
- */
-
 #ifndef OSRS_OBJECTS_H
 #define OSRS_OBJECTS_H
 
@@ -23,13 +10,13 @@
 #include <string.h>
 #include <math.h>
 
-#define OBJS_MAGIC 0x4F424A53  /* "OBJS" v1 */
-#define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" v2 with texcoords */
-#define ATLS_MAGIC 0x41544C53  /* "ATLS" texture atlas */
+#define OBJS_MAGIC 0x4F424A53
+#define OBJ2_MAGIC 0x4F424A32
+#define ATLS_MAGIC 0x41544C53
 
 typedef struct {
     Model model;
-    Texture2D atlas_texture;  /* loaded from .atlas file (0 if none) */
+    Texture2D atlas_texture;
     int placement_count;
     int total_vertex_count;
     int min_world_x;
@@ -38,10 +25,6 @@ typedef struct {
     int loaded;
 } ObjectMesh;
 
-/**
- * Load texture atlas from .atlas binary file.
- * Format: uint32 magic, uint32 width, uint32 height, uint8 pixels[w*h*4] (RGBA).
- */
 static Texture2D objects_load_atlas(const char* atlas_path) {
     Texture2D tex = { 0 };
     FILE* f = osrs_asset_fopen(atlas_path, "rb");
@@ -65,7 +48,6 @@ static Texture2D objects_load_atlas(const char* atlas_path) {
     osrs_read_exact(f, pixels, 4, pixel_count, atlas_path, "pixels");
     fclose(f);
 
-    /* create raylib Image from raw RGBA, then upload as texture */
     Image img = {
         .data = pixels,
         .width = (int)width,
@@ -108,17 +90,14 @@ static ObjectMesh* objects_load(const char* path) {
     fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
             placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
 
-    /* read vertices */
     float* raw_verts = (float*)osrs_malloc_or_abort(
         total_verts * 3 * sizeof(float), "object vertices");
     osrs_read_exact(f, raw_verts, sizeof(float), total_verts * 3, path, "vertices");
 
-    /* read colors */
     unsigned char* raw_colors = (unsigned char*)osrs_malloc_or_abort(
         total_verts * 4, "object colors");
     osrs_read_exact(f, raw_colors, 1, total_verts * 4, path, "colors");
 
-    /* read texture coordinates (v2 only) */
     float* raw_texcoords = NULL;
     if (has_textures) {
         raw_texcoords = (float*)osrs_malloc_or_abort(
@@ -128,7 +107,6 @@ static ObjectMesh* objects_load(const char* path) {
     }
     fclose(f);
 
-    /* build raylib mesh */
     Mesh mesh = { 0 };
     mesh.vertexCount = (int)total_verts;
     mesh.triangleCount = (int)(total_verts / 3);
@@ -136,7 +114,6 @@ static ObjectMesh* objects_load(const char* path) {
     mesh.colors = raw_colors;
     mesh.texcoords = raw_texcoords;
 
-    /* compute normals */
     mesh.normals = (float*)osrs_calloc_or_abort(
         total_verts * 3, sizeof(float), "object normals");
     for (int i = 0; i < mesh.triangleCount; i++) {
@@ -172,9 +149,7 @@ static ObjectMesh* objects_load(const char* path) {
     om->has_textures = has_textures;
     om->loaded = 1;
 
-    /* load atlas texture if v2 format */
     if (has_textures) {
-        /* derive atlas path from objects path: replace .objects with .atlas */
         char atlas_path[1024];
         strncpy(atlas_path, path, sizeof(atlas_path) - 1);
         atlas_path[sizeof(atlas_path) - 1] = '\0';
@@ -187,7 +162,6 @@ static ObjectMesh* objects_load(const char* path) {
 
         om->atlas_texture = objects_load_atlas(atlas_path);
         if (om->atlas_texture.id > 0) {
-            /* assign atlas as diffuse map for the model's material */
             om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = om->atlas_texture;
         }
     }
@@ -195,16 +169,14 @@ static ObjectMesh* objects_load(const char* path) {
     return om;
 }
 
-/* shift object vertices so world coordinates (wx, wy) become local (0, 0).
-   must match terrain_offset() values for alignment. */
 static void objects_offset(ObjectMesh* om, int wx, int wy) {
     if (!om || !om->loaded) return;
     float dx = (float)wx;
     float dz = (float)wy;
     float* verts = om->model.meshes[0].vertices;
     for (int i = 0; i < om->total_vertex_count; i++) {
-        verts[i * 3 + 0] -= dx;        /* X */
-        verts[i * 3 + 2] += dz;        /* Z (negated world Y) */
+        verts[i * 3 + 0] -= dx;
+        verts[i * 3 + 2] += dz;
     }
     UpdateMeshBuffer(om->model.meshes[0], 0, verts,
                      om->total_vertex_count * 3 * sizeof(float), 0);
@@ -224,4 +196,4 @@ static void objects_free(ObjectMesh* om) {
     free(om);
 }
 
-#endif /* OSRS_OBJECTS_H */
+#endif
