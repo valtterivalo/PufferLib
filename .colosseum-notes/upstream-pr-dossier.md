@@ -437,3 +437,21 @@ both the fix-verification run (3.51/0.114) and the trunk reference
 (2.93/0.084). 2M inferno smoke: wave 7.8, exit 0. Campaign state: PR branch
 + description draft FINAL, awaiting user viewer look and PR open. User-owned
 cleanup: delete stale remote osrs-colosseum-inferno, 8 stash drops.
+
+## 2026-07-18 eval gates on box: CUDA eval path fully validated
+
+Both envs: ./puffer eval loads .bins ("Loaded weights from") and steps live
+on CUDA. 5c EVAL SEMANTICS mapped: `eval` = EVAL_RENDER, an infinite
+dashboard loop (num_games IGNORED, exit only by kill) - wall-clock-killed
+readouts are CENSORED (only episodes shorter than the window complete; a
+120s kill can only ever show early deaths, wave 8.8 episodes need 2400+
+ticks). `eval_bot` = EVAL_SCORE, the counted differenced scorer - works on
+our single-agent envs (its num_agents/num_bots ini injections are inert
+extras). HONEST NUMBER: 143M terminal-arm checkpoint scores 0.628 over 4096
+games (burnin 1024) vs training-time 0.636 = agreement to 0.008; no
+inference-path discrepancy in the port. Bonus fail-loud demo: running
+`puffer eval osrs_colosseum` with the inferno binary resident (single-TU =
+env compiled in) crashes with missing key [env] shield_penalty_coeff -
+crashing dict_get doing its job; rebuild the target env first. MacBook side
+(user): --local viewer runs the CPU encoder on .bins; torch --slowly loader
+does NOT read native .bins.
