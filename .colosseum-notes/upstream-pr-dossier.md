@@ -296,3 +296,20 @@ trunc {-36.642,-37.226} = treatment inside baseline run-to-run spread (mean
 delta 0.17 vs spread 0.82). Combined with the 10-assertion bitwise standalone
 check: the truncation channel provably does not perturb existing training.
 Logs ab_*_{base,trunc}_{1,2}.log in /puffertank/PufferLib-5cport.
+
+## 2026-07-17 truncation doctrine A/B (user challenge, decision pending)
+
+User challenge accepted: the 2026-06-17 timeout-as-terminal landmark may be
+confounded (early-dev era), inferno 27.7% is not A/B evidence, and truncation
+bootstrap-from-fresh-start structurally subsidizes stalling (timeout worth
+gamma*V(fresh) more than death) which fights the generous-timeout doctrine
+(limits lax for learners, strict for competent play; stalling must be
+unacceptable). Counterweight: recurrent trunk can count ticks, weakening the
+invisible-clock argument for terminal semantics. RUNNING: 2-line-toggle A/B
+at c8fc950bb (trunc) vs a4e806d2a (terminal-at-timeout), colosseum 143M +
+inferno 138M per arm, seed 42, native runs, logs ab2_* on box. DECISION RULE:
+terminal >= trunc within +-0.08 band on both envs -> adopt terminal doctrine,
+flip T2, DROP truncation commits from the PR (no consumer, zero core lines to
+justify). Trunc clearly wins beyond band on either env -> keep channel, PR
+cites this A/B + upstream-envs A/B + bitwise proof. Asymmetric -> user call.
+Timeout share derivable post-hoc: n - wins - sum(death_by_type).
