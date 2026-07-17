@@ -1,32 +1,9 @@
-/**
- * @file probe_colosseum_winnability.c
- * @brief Winnability probe: can a competent SCRIPTED (non-RL) policy clear the
- *        Fortis Colosseum waves the RL agent plateaus at (~wave 4-5)?
- *
- * The RL agent stalls at wave ~4.5 taking 77.5%-unavoidable-as-played same-tick
- * multi-style damage, and two obs additions were null -> we suspect a learning/
- * credit problem, not an unwinnable sim. This probe removes RL entirely: a hand-
- * coded policy with FULL state access (precise-flick prayer + forecast-greedy
- * de-confliction movement + eat + attack) drives the env. If it clears past
- * wave 5, the env is winnable and the wall is the RL credit signal. If it also
- * caps at ~4-5, the sim is harder than the fidelity audit suggested.
- *
- * Pure CPU env-stepping, no GPU. BUILD:
- *   cc -std=c11 -O2 -I. -o /tmp/probe_colo_win \
- *       ocean/osrs/tests/probe_colosseum_winnability.c -lm
- *   /tmp/probe_colo_win
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-/* ---- scripted policy (full state access) -------------------------------- */
-
-/* overhead to block the soonest, then biggest, prayer-checkable hit landing on
-   the player. Considers queued projectiles + instant manticore orbs about to
-   fire. Returns a COLO_OVERHEAD_* action. */
 static int scripted_overhead(const ColosseumState* s) {
     int best_style = ATTACK_STYLE_NONE, best_ticks = 1 << 30, best_dmg = -1;
     const EncounterPendingHitQueue* q = &s->player_pending_hits;
@@ -38,16 +15,16 @@ static int scripted_overhead(const ColosseumState* s) {
             best_ticks = h->ticks_remaining; best_dmg = h->damage; best_style = h->attack_style;
         }
     }
-    /* manticore orbs resolve instantly on their fire tick (no queue entry). */
+
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (npc->type != COLO_MANTICORE || !col_npc_is_live_enemy(npc)) continue;
         const ColoManticoreState* mc = &npc->type_state.manticore;
-        if (mc->cycle_step < 0) continue;                 /* uncharged */
+        if (mc->cycle_step < 0) continue;
         int orb = mc->cycle_step;
         if (orb >= 3) continue;
-        int ticks = (mc->cycle_step == 0) ? npc->attack_timer : 0;  /* fire tick */
-        int dmg = 36;                                     /* worst orb max hit */
+        int ticks = (mc->cycle_step == 0) ? npc->attack_timer : 0;
+        int dmg = 36;
         if (ticks < best_ticks || (ticks == best_ticks && dmg > best_dmg)) {
             best_ticks = ticks; best_dmg = dmg; best_style = mc->orb_style[orb];
         }
@@ -60,8 +37,6 @@ static int scripted_overhead(const ColosseumState* s) {
     }
 }
 
-/* per-action danger: heavy penalty for a same-tick mixed-style conflict, plus the
-   worst incoming hit over the forecast horizon. Lower is safer. */
 static int forecast_action_danger(const ColoStepOutForecastAction* a, int horizon) {
     if (!a->valid) return 1 << 30;
     int danger = a->same_tick_mixed_style_conflict ? 100000 : 0;
@@ -71,17 +46,15 @@ static int forecast_action_danger(const ColoStepOutForecastAction* a, int horizo
     return danger + worst;
 }
 
-static int g_move_mode = 0;  /* 0 = forecast-greedy de-conflict, 1 = always stand (no move) */
+static int g_move_mode = 0;
 
-/* hold-and-attack when staying put is conflict-free; otherwise step to the
-   lowest-danger move tile (break LoS / offtick). */
 static int scripted_move(ColosseumState* s) {
     if (g_move_mode == 1) return 0;
     ColoStepOutForecast f;
     col_build_step_out_forecast_horizon_mode(s, &f, COLO_STEP_OUT_FORECAST_HORIZON, 0);
     int horizon = COLO_STEP_OUT_FORECAST_HORIZON;
     const ColoStepOutForecastAction* idle = &f.actions[0];
-    if (idle->valid && !idle->same_tick_mixed_style_conflict) return 0;  /* safe: stay + DPS */
+    if (idle->valid && !idle->same_tick_mixed_style_conflict) return 0;
     int best = 0, best_danger = forecast_action_danger(idle, horizon);
     for (int a = 1; a < ENCOUNTER_MOVE_ACTIONS; a++) {
         int d = forecast_action_danger(&f.actions[a], horizon);
@@ -90,7 +63,6 @@ static int scripted_move(ColosseumState* s) {
     return best;
 }
 
-/* target the obs slot of the nearest live enemy (explicit re-click each tick). */
 static int scripted_target(const ColosseumState* s) {
     int best_slot = -1, best_dist = 1 << 30;
     for (int slot = 0; slot < COLO_OBS_NPCS; slot++) {
@@ -124,7 +96,6 @@ static int scripted_heal_cell(const ColosseumState* s) {
     return -1;
 }
 
-/* fill the full action vector for one tick. */
 static void scripted_policy(ColosseumState* s, int* actions) {
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
     if (s->modifiers.draft_pending) {
@@ -145,8 +116,6 @@ static void scripted_policy(ColosseumState* s, int* actions) {
         }
     }
 }
-
-/* ---- harness ------------------------------------------------------------ */
 
 typedef int (*PolicyFn)(ColosseumState*, int*, unsigned int*);
 
@@ -171,7 +140,7 @@ static void run_episodes(const char* label, int scripted, int start_wave, int n_
         int actions[COLO_NUM_ACTION_HEADS] = {0};
         long guard = 0;
         while (!s.episode_over && guard++ < COLO_MAX_TICKS + 16) {
-            col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);  /* refresh obs slots */
+            col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
             if (scripted) {
                 scripted_policy(&s, actions);
             } else {
@@ -182,7 +151,7 @@ static void run_episodes(const char* label, int scripted, int start_wave, int n_
             }
             col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
         }
-        int wave = s.wave;  /* 0-based wave the episode ended on */
+        int wave = s.wave;
         if (s.winner == COLO_OUTCOME_PLAYER_WON) wins++;
         wave_sum += wave;
         if (wave > wave_max) wave_max = wave;

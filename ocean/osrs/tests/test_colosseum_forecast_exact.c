@@ -1,8 +1,3 @@
-/**
- * @file test_colosseum_forecast_exact.c
- * @brief Binary exactness gate for Colosseum step-out forecast hot-path work.
- */
-
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
@@ -75,9 +70,6 @@ static void col_step_out_forecast_landing_selftest(void) {
         ENCOUNTER_MOVE_ACTIONS);
 }
 
-/* Pin BARE late-wave starts for these fixed-scenario tests (honest entry
-   synthesis is covered in test_colosseum_modifiers.c). Function-like macro:
-   the name inside its own body is not re-expanded (standard C). */
 #define col_init_context_typed(ctx_ptr) do { \
     col_init_context_typed(ctx_ptr); \
     (ctx_ptr)->config.late_start_state_mode = 0; \
@@ -162,8 +154,6 @@ static void exact_mkdir_if_needed(const char* dir) {
     perror("mkdir colosseum exact fixture dir");
     abort();
 }
-
-
 
 static void exact_writer_open(ColoExactWriter* writer, const char* path) {
     memset(writer, 0, sizeof(*writer));

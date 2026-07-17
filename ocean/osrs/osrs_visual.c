@@ -1,11 +1,3 @@
-/**
- * @fileoverview Standalone demo for OSRS PvP C Environment
- *
- * Demonstrates environment initialization, stepping, and basic performance.
- * Compile: make
- * Run: ./osrs_pvp
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -249,9 +241,6 @@ typedef struct {
     int offset_y;
 } VisualCollisionLoad;
 
-/* Load the encounter collision map and publish it plus its world offset into the
-   encounter state. The per-encounter offset table lives here as the single source.
-   Returns the loaded map and offset so callers can log a diagnostic. */
 static VisualCollisionLoad visual_load_encounter_collision_map(
     const EncounterDef* edef, OsrsEnv* env, const char* encounter_name
 ) {
@@ -353,7 +342,7 @@ static void run_profile(
     double start = osrs_profile_now_seconds();
     double elapsed = 0;
     int total_steps = 0;
-    int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
+    int enc_actions[64] = {0};
 
     while ((profile_steps > 0 && total_steps < profile_steps) ||
            (profile_steps <= 0 && elapsed < 10.0)) {
@@ -374,10 +363,6 @@ static void run_profile(
             for (int h = 0; h < edef->num_action_heads; h++) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
-            /* gear-stable profile stream: pin the inventory-click heads
-               (equip/eat/drink, heads 2..14 on colosseum) to noop so
-               signature-keyed caches behave as they do under a settled
-               policy instead of random-action thrash */
             if (getenv("OSRS_PROFILE_PIN_INV")) {
                 for (int h = 2; h < 15 && h < edef->num_action_heads; h++)
                     enc_actions[h] = 0;
@@ -510,11 +495,11 @@ static void run_profile(
 /* replay file: binary format for pre-recorded actions.
    header: [int32 num_ticks] [uint32 rng_state], then num_ticks * num_heads int32 values. */
 typedef struct {
-    int* actions;      /* flat array: actions[tick * num_heads + head] */
+    int* actions;
     int  num_ticks;
     int  num_heads;
     int  current_tick;
-    uint32_t rng_seed; /* RNG state at episode start — needed for deterministic replay */
+    uint32_t rng_seed;
     void* initial_snapshot;
     size_t initial_snapshot_size;
 } ReplayFile;
@@ -649,10 +634,6 @@ static int visual_policy_is_continuous(
     return 1;
 }
 
-/* entity-encoder shared-MLP weights added on top of the global Linear (which the
-   encoder term already accounts for): entity_l1 (16x37) + entity_l2 (hidden x 16), plus
-   (mode 2) inv_l1 (16x28) + inv_l2 (hidden x 16). Must match ocean.cu COLO_ENT_* /
-   COLO_ENT_INV_* + osrs_visual_net.h COLO_ENT_INF_*. */
 #define VISUAL_POLICY_ENTITY_FEATS      37
 #define VISUAL_POLICY_ENTITY_BOTTLENECK 16
 #define VISUAL_POLICY_INV_FEATS         28
@@ -694,13 +675,6 @@ static int64_t visual_policy_file_weight_count(const Weights* weights) {
     return weights->size - 7;
 }
 
-/** Resolve the model architecture from the checkpoint's float count. The .bin
-    carries no shape header, so every (hidden_size, num_layers, entity_encoder,
-    input variant, value head) candidate is priced by expected weight count and
-    matched against the file. CLI flags constrain their dimension when given
-    (cli_hidden_size/cli_num_layers > 0, cli_entity_encoder > 0); unconstrained
-    dimensions are scanned. Exactly one match proceeds; zero or several abort
-    loudly with the candidates so the caller pins flags instead of guessing. */
 static VisualPolicyModelShape visual_policy_select_model_shape(
     const VisualPolicy* policy,
     const EncounterDef* edef,
@@ -763,12 +737,6 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     return match;
 }
 
-/* Append one tensor of `count` floats to the running weight offset, rounding up
-   to the next 8-float boundary exactly as get_weights_aligned does, and log the
-   tensor's [start, end) span. For every shape the viewer resolves the raw count
-   is already a multiple of 8 (hidden_size and the 16x{37,28} feature tensors all
-   divide evenly), so the rounding is a no-op and the offsets track the flat .bin
-   byte-for-byte. */
 static int64_t visual_policy_layout_tensor(const char* name, int64_t off, int64_t count) {
     int64_t start = off;
     int64_t end = (off + count + 7) & ~(int64_t)7;
@@ -777,9 +745,6 @@ static int64_t visual_policy_layout_tensor(const char* name, int64_t off, int64_
     return end;
 }
 
-/* Assert the weight cursor sits at the offset the layout predicts after a tensor
-   group. Catches a checkpoint/parser layout drift at the exact group rather than
-   only through the whole-file total. */
 static void visual_policy_assert_offset(
     const char* group, const Weights* weights, int64_t expect
 ) {
@@ -858,7 +823,6 @@ static VisualNet* visual_policy_make_puffernet(
     }
     int64_t off_total = off;
 
-    /* Build in the same order, asserting the cursor at every observable boundary. */
     if (entity_encoder) {
         net->entity_encoder = make_colosseum_entity_encoder(
             weights, 1, input_dim, hidden_dim, entity_encoder);
@@ -896,23 +860,14 @@ static float visual_policy_next_uniform(VisualPolicy* policy) {
 static int g_cli_hidden_size = -1;
 static int g_cli_num_layers = -1;
 static int g_cli_entity_encoder = 0;
-/** headless-ish debug capture: render normally, dump a PNG of the framebuffer
-    at the given frame count, then exit. 0 = disabled. NOTE raylib TakeScreenshot
-    strips directories, so the PNG lands in the CWD under the path's basename. */
 static const char* g_cli_screenshot_path = NULL;
 static int g_cli_screenshot_frame = 0;
 static int g_cli_gui_tab = -1;
-/** replay speed override in game ticks/second (--tps; screenshot harness runs
-    that need sim progress without realtime waits). <= 0 = default cadence. */
 static float g_cli_tps = 0.0f;
-/** debug camera overrides applied at startup (screenshot workflows need a
-    deterministic viewpoint). Negative/NAN = keep the interactive default. */
 static float g_cli_camera_dist = -1.0f;
 static float g_cli_camera_yaw = -1000.0f;
 static float g_cli_camera_pitch = -1000.0f;
-/** colosseum viewer loadout override (0=speedrun, 1=beginner, 2=mixed); -1 = default. */
 static int g_cli_visual_loadout_mode = -1;
-/** colosseum viewer prayer oracle (--prayer-oracle): perfect overhead each tick. */
 static int g_cli_prayer_oracle = 0;
 static void visual_policy_init(
     VisualPolicy* policy,
@@ -1087,13 +1042,6 @@ static void visual_policy_actions(
     }
 }
 
-/**
- * Precomputes the next tick's policy actions on a worker thread during the
- * ~600ms between game ticks, so the obs build + network forward (~50ms for
- * the colosseum entity-encoder net) never lands on a rendered frame. The
- * worker reads live sim state; the drive loop joins it before anything
- * mutates that state (step, reset, restore).
- */
 typedef struct {
     VisualPolicy* policy;
     const EncounterDef* edef;
@@ -1162,8 +1110,7 @@ typedef struct {
     VisualPolicy policy;
     AsyncPolicy async_policy;
     int start_wave;
-    /* per-frame state */
-    double episode_end_time;  /* >0 when holding final frame */
+    double episode_end_time;
     int episode_ended;
     int seen_lab_restore_generation;
 } VisualState;
@@ -1186,13 +1133,11 @@ static void visual_frame(void* arg) {
         visual_policy_reset_recurrent(&vs->policy);
     }
 
-    /* rewind: restore historical state and re-render */
     if (rc->step_back) {
         rc->step_back = 0;
         async_policy_join(&vs->async_policy);
         vs->async_policy.has_actions = 0;
         render_restore_snapshot(rc, env);
-        /* if we restored the latest snapshot, exit rewind mode */
         if (rc->history_cursor >= rc->history_count - 1) {
             rc->history_cursor = -1;
         }
@@ -1200,13 +1145,11 @@ static void visual_frame(void* arg) {
         return;
     }
 
-    /* in rewind mode viewing history: just render, don't step */
     if (rc->history_cursor >= 0) {
         pvp_render(env);
         return;
     }
 
-    /* episode ended: hold final frame for 2 seconds then reset */
     if (vs->episode_ended) {
         pvp_render(env);
         if (GetTime() - vs->episode_end_time >= 2.0) {
@@ -1228,17 +1171,12 @@ static void visual_frame(void* arg) {
         return;
     }
 
-    /* paused: render but don't step */
     if (rc->is_paused && !rc->step_once) {
         pvp_render(env);
         return;
     }
     rc->step_once = 0;
 
-    /* tick pacing: keep rendering while waiting. phase-preserving: the epoch
-       advances by exactly one interval per tick so frame-boundary overshoot
-       never accumulates (mean period == interval); resync only when more
-       than a full interval behind (pause, hitch, first frame). */
     if (rc->ticks_per_second > 0.0f) {
         double interval = 1.0 / (double)rc->ticks_per_second;
         double now = GetTime();
@@ -1251,16 +1189,13 @@ static void visual_frame(void* arg) {
             rc->last_tick_time = now;
     }
 
-    /* the sim mutates from here on: the async obs reader must be done */
     async_policy_join(&vs->async_policy);
 
-    /* step the simulation */
     render_pre_tick(rc, env);
 
     if (env->encounter_def && env->encounter_state) {
-        /* encounter mode */
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
-        int enc_actions[64] = {0};  /* >= max num_action_heads across encounters (colosseum 36, pvp 34) */
+        int enc_actions[64] = {0};
         int used_human_step = 0;
 
         if (rc->human_input.enabled && edef->step_human_commands) {
@@ -1270,14 +1205,10 @@ static void visual_frame(void* arg) {
                 &rc->human_input);
             used_human_step = 1;
         } else if (rc->human_input.enabled) {
-            /* human control: per-encounter translator */
             if (edef->translate_human_input)
                 edef->translate_human_input(&rc->human_input, enc_actions,
                                             env->encounter_state,
                                             (EncounterContext*)env->encounter_context);
-            /* set encounter destination from human click for proper pathfinding.
-               attacking an NPC cancels movement (OSRS: server stops walking
-               to old dest and auto-walks toward target instead). */
             if (rc->human_input.pending_move_x >= 0 && edef->put_int) {
                 edef->put_int(env->encounter_state,
                               (EncounterContext*)env->encounter_context,
@@ -1301,7 +1232,6 @@ static void visual_frame(void* arg) {
             }
             human_input_clear_pending(&rc->human_input);
         } else if (vs->replay && replay_get_actions(vs->replay, enc_actions)) {
-            /* replay mode: actions come from pre-recorded file */
         } else if (vs->policy.enabled) {
             if (vs->async_policy.has_actions) {
                 memcpy(enc_actions, vs->async_policy.actions,
@@ -1321,7 +1251,6 @@ static void visual_frame(void* arg) {
                 enc_actions[h] = rand() % edef->action_head_dims[h];
             }
         }
-        /* consumed by the policy branch or stale after any other branch */
         vs->async_policy.has_actions = 0;
 
         if (!used_human_step) {
@@ -1330,11 +1259,9 @@ static void visual_frame(void* arg) {
                 (EncounterContext*)env->encounter_context,
                 enc_actions);
         }
-        /* sync env->tick so renderer HP bars/splats use correct tick */
         env->tick = edef->get_tick(
             env->encounter_state, (EncounterContext*)env->encounter_context);
 
-        /* clear human move when player arrived at clicked destination */
         if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
             Player* ply = edef->get_entity(
                 env->encounter_state, (EncounterContext*)env->encounter_context, 0);
@@ -1345,12 +1272,9 @@ static void visual_frame(void* arg) {
         }
 
     } else {
-        /* PvP mode */
         if (rc->human_input.enabled) {
-            /* human control: translate staged clicks to PvP actions for agent 0 */
             human_to_pvp_actions(&rc->human_input,
                                   env->actions, &env->players[0], &env->players[1]);
-            /* opponent still gets random actions */
             int* opp = env->actions + NUM_ACTION_HEADS;
             for (int h = 0; h < NUM_ACTION_HEADS; h++) {
                 opp[h] = rand() % ACTION_HEAD_DIMS[h];
@@ -1366,7 +1290,6 @@ static void visual_frame(void* arg) {
         }
         pvp_step(env);
 
-        /* clear human move when player arrived at clicked destination */
         if (rc->human_input.enabled && rc->human_input.pending_move_x >= 0) {
             Player* p0 = &env->players[0];
             if (p0->x == rc->human_input.pending_move_x &&
@@ -1380,7 +1303,6 @@ static void visual_frame(void* arg) {
     render_save_snapshot(rc, env);
     pvp_render(env);
 
-    /* auto-reset on episode end */
     int is_over = env->encounter_def
         ? ((const EncounterDef*)env->encounter_def)->is_terminal(
             env->encounter_state, (EncounterContext*)env->encounter_context)
@@ -1398,11 +1320,6 @@ static void visual_frame(void* arg) {
     }
 }
 
-/* Headless behavioral-metrics mode: run N colosseum episodes with the loaded
-   policy and tally how often each weapon attacks each NPC type. Eval-only --
-   reads ColosseumState after each step, touches no obs/reward/training surface.
-   Weapon equipped at the attack tick is a close proxy for the weapon that fired
-   (the equip phase runs before the attack phase within a tick). */
 static void run_metrics(
     OsrsEnv* env,
     const char* encounter_name,
@@ -1424,9 +1341,6 @@ static void run_metrics(
     env->encounter_state = edef->create();
     env->encounter_context = visual_create_encounter_context(edef);
     visual_load_encounter_collision_map(edef, env, encounter_name);
-    /* loadout_mode picks the kit distribution: 0=speedrun-only, 1=beginner-only,
-       2=mixed (matches the trained golden-eon .ini). col_default_config alone leaves
-       this at 0, so without it the metrics would be speedrun-only regardless. */
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
@@ -1632,7 +1546,6 @@ static void run_visual(
 ) {
     env->client = NULL;
 
-    /* set up encounter if specified, otherwise default to PvP */
     if (encounter_name) {
         const EncounterDef* edef = encounter_find(encounter_name);
         if (!edef) {
@@ -1654,8 +1567,6 @@ static void run_visual(
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
         }
-        /* colosseum: honor --loadout-mode in the interactive viewer too (0=speedrun,
-           1=beginner, 2=mixed), matching the metrics-mode wiring. -1 = env default. */
         if (strcmp(encounter_name, "colosseum") == 0 && edef->put_int &&
                 g_cli_visual_loadout_mode >= 0) {
             edef->put_int(env->encounter_state, env->encounter_context,
@@ -1666,12 +1577,7 @@ static void run_visual(
             edef->put_int(env->encounter_state, env->encounter_context,
                 "prayer_oracle_mode", 1);
         }
-        /* seed=0 matches training binding (uses default RNG, not explicit seed) */
 
-        /* load encounter-specific collision map.
-           world offset translates encounter-local (0,0) → world coords for cmap lookup.
-           the Zulrah island collision data has ~69 walkable tiles forming the
-           irregular island shape (narrow south, wide north, pillar alcoves). */
         VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env, encounter_name);
         if (cload.cmap) {
             fprintf(stderr, "%s collision map: %d regions, offset (%d, %d)\n",
@@ -1698,7 +1604,6 @@ static void run_visual(
         pvp_reset(env);
     }
 
-    /* load collision map from env var if set */
     const char* cmap_path = getenv("OSRS_COLLISION_MAP");
     if (cmap_path && cmap_path[0]) {
         env->collision_map = collision_map_load(cmap_path);
@@ -1708,7 +1613,6 @@ static void run_visual(
         }
     }
 
-    /* init window before main loop (WindowShouldClose needs a window) */
     pvp_render(env);
     RenderClient* rc = (RenderClient*)env->client;
 #ifdef __EMSCRIPTEN__
@@ -1733,12 +1637,10 @@ static void run_visual(
             &rc->gui);
     }
 
-    /* share collision map pointer with renderer for overlays */
     if (env->collision_map) {
         rc->collision_map = (const CollisionMap*)env->collision_map;
     }
 
-    /* load 3D assets if available */
     rc->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));
     if (rc->model_cache) {
         rc->show_models = 1;
@@ -1746,7 +1648,6 @@ static void run_visual(
     rc->anim_cache = anim_cache_load(OSRS_ASSET("equipment.anims"));
     render_load_projectile_assets(rc);
     render_init_overlay_models(rc);
-    /* load terrain/objects per encounter */
     if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
         rc->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
         rc->objects = NULL;
@@ -1755,26 +1656,6 @@ static void run_visual(
         rc->terrain = terrain_load(OSRS_ASSET("zulrah.terrain"));
         rc->objects = objects_load(OSRS_ASSET("zulrah.objects"));
 
-        /* Zulrah coordinate alignment: three coordinate spaces are in play:
-
-           1. OSRS world coords: absolute tile positions (e.g. 2256, 3061).
-              terrain, objects, and collision maps are all authored in this space.
-
-           2. encounter-local coords: the encounter arena uses (0,0) as origin.
-              the encounter state, entity positions, and arena bounds all use this.
-
-           3. raylib world coords: X = east, Y = up, Z = -north (right-handed).
-              terrain_offset/objects_offset subtract the world origin so that
-              encounter-local (0,0) maps to raylib (0,0).
-
-           terrain/objects offset: subtract (2256, 3061) from world coords.
-             regions (35,47)+(35,48) start at world (2240, 3008).
-             the island platform is at world ~(2256, 3061), so offset = 2240+16, 3008+53.
-
-           collision map offset: ADD (2254, 3060) to encounter-local coords.
-             collision_get_flags expects world coords, so when the renderer or
-             encounter queries tile (x, y) in local space, it looks up
-             (x + 2254, y + 3060) in the collision map. */
         int zul_off_x = 2240 + 16;
         int zul_off_y = 3008 + 53;
         if (rc->terrain)
@@ -1795,9 +1676,6 @@ static void run_visual(
         rc->terrain = terrain_load(OSRS_ASSET("inferno.terrain"));
         rc->objects = objects_load(OSRS_ASSET("inferno.objects"));
         rc->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
-        /* inferno region (35,83) starts at world (2240, 5312).
-           encounter uses region-local coords (10-40, 13-44).
-           offset terrain/objects so local coord 0 maps to world 2240. */
         if (rc->terrain)
             terrain_offset(rc->terrain, 2246, 5315);
         if (rc->objects)
@@ -1808,7 +1686,6 @@ static void run_visual(
         rc->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
         rc->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
 
-        /* collision map for debug overlay (C key) */
         if (env->collision_map) {
             rc->collision_map = (const CollisionMap*)env->collision_map;
             rc->collision_world_offset_x = 2246;
@@ -1821,10 +1698,6 @@ static void run_visual(
                 rc->npc_model_cache ? rc->npc_model_cache->count : 0,
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     } else if (encounter_name && strcmp(encounter_name, "colosseum") == 0) {
-        /* Fortis Colosseum overworld stadium: map region (28, 48) starts at world
-           (1792, 3072). The encounter uses arena-local coords (0..33); the 34x34
-           playable square (= the los grid) sits at world SW corner (1808, 3090), so
-           offset terrain/objects/collision so local 0 maps to world 1808/3090. */
         rc->terrain = terrain_load(OSRS_ASSET("colosseum.terrain"));
         rc->objects = objects_load(OSRS_ASSET("colosseum.objects"));
         if (rc->terrain)
@@ -1845,10 +1718,8 @@ static void run_visual(
                 rc->npc_anim_cache ? rc->npc_anim_cache->seq_count : 0);
     }
 
-    /* populate entity pointers (also sets arena bounds from encounter) */
     render_populate_entities(rc, env);
 
-    /* update camera target to center on the (possibly new) arena */
     rc->cam_target_x = (float)rc->arena_base_x + (float)rc->arena_width / 2.0f;
     rc->cam_target_z = -((float)rc->arena_base_y + (float)rc->arena_height / 2.0f);
 
@@ -1860,7 +1731,6 @@ static void run_visual(
         rc->dest_y[i] = rc->sub_y[i];
     }
 
-    /* load replay file if specified */
     ReplayFile* replay = NULL;
     if (replay_path && env->encounter_def) {
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
@@ -1911,7 +1781,6 @@ static void run_visual(
         g_cli_num_layers,
         g_cli_entity_encoder);
 
-    /* save initial state as first snapshot */
     render_save_snapshot(rc, env);
 
 #ifdef __EMSCRIPTEN__
@@ -1953,9 +1822,6 @@ static void run_visual(
 
     int frame_counter = 0;
     while (!WindowShouldClose()) {
-        /* screenshot capture: hard-pin the camera to the followed entity so the
-           captured frame always contains it (the interactive camera only follows
-           in human mode). */
         if (g_cli_screenshot_path && rc->entity_count > 0) {
             int eidx = rc->gui.gui_entity_idx;
             if (eidx >= 0 && eidx < rc->entity_count) {
@@ -1973,7 +1839,6 @@ static void run_visual(
         }
     }
 
-    /* the worker reads the net and encounter state freed below */
     async_policy_join(&vs.async_policy);
 
     replay_free(replay);
@@ -1995,14 +1860,14 @@ static void run_visual(
 #endif
 
 int main(int argc, char** argv) {
-    int use_visual = 1;  /* default to visual mode */
+    int use_visual = 1;
     int use_profile = 0;
-    int gear_tier = -1;  /* -1 = random (default LMS distribution) */
-    int start_wave = -1; /* -1 = default (wave 0) */
+    int gear_tier = -1;
+    int start_wave = -1;
     int profile_steps = 0;
     int metrics_episodes = 0;
     int metrics_bis_oracle = 0;
-    int loadout_mode = 2;  /* metrics kit: 0=speedrun, 1=beginner, 2=mixed (trained default) */
+    int loadout_mode = 2;
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
     const char* model_path __attribute__((unused)) = NULL;
@@ -2068,11 +1933,6 @@ int main(int argc, char** argv) {
     if (!encounter_name) encounter_name = "inferno";
     if (encounter_name && strcmp(encounter_name, "pvp") == 0) encounter_name = "nh_pvp";
 #else
-    /* Each standalone viewer binary picks its own encounter at compile time via
-       OSRS_VISUAL_DEFAULT_ENCOUNTER, so ./osrs_colosseum needs no --encounter
-       flag (which still overrides). The pvp binary leaves it undefined on
-       purpose: a NULL encounter routes the native pvp_init path, not the
-       generic encounter_find path. */
 #ifdef OSRS_VISUAL_DEFAULT_ENCOUNTER
     if (!encounter_name) encounter_name = OSRS_VISUAL_DEFAULT_ENCOUNTER;
 #endif
@@ -2122,15 +1982,11 @@ int main(int argc, char** argv) {
 
     if (use_visual) {
 #ifdef OSRS_VISUAL
-        /* pvp_init uses internal buffers — no malloc needed */
         pvp_init(&env);
-        /* set gear tier: --tier N forces both players to tier N,
-           otherwise default LMS distribution (mostly tier 0) */
         if (gear_tier >= 0 && gear_tier <= 3) {
             for (int t = 0; t < 4; t++) env.pvp_runtime.gear_tier_weights[t] = 0.0f;
             env.pvp_runtime.gear_tier_weights[gear_tier] = 1.0f;
         } else {
-            /* default LMS: 60% tier 0, 25% tier 1, 10% tier 2, 5% tier 3 */
             env.pvp_runtime.gear_tier_weights[0] = 0.60f;
             env.pvp_runtime.gear_tier_weights[1] = 0.25f;
             env.pvp_runtime.gear_tier_weights[2] = 0.10f;
@@ -2155,7 +2011,6 @@ int main(int argc, char** argv) {
         return 1;
 #endif
     } else {
-        /* headless: allocate external buffers (matches original demo) */
         env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
         env.actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
         env.rewards = (float*)calloc(NUM_AGENTS, sizeof(float));

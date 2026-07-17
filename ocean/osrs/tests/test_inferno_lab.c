@@ -1,13 +1,3 @@
-/**
- * @file test_inferno_lab.c
- * @brief tests for the Inferno mechanics lab command and dump layer.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_inferno_lab \
- *       ocean/osrs/tests/test_inferno_lab.c -lm
- *   /tmp/test_inferno_lab
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

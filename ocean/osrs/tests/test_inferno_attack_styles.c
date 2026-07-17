@@ -1,14 +1,3 @@
-/**
- * @file test_inferno_attack_styles.c
- * @brief regression tests for inferno NPC attack-style selection and melee
- * fallback geometry.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_inferno_attack_styles \
- *       ocean/osrs/tests/test_inferno_attack_styles.c -lm
- *   /tmp/test_inferno_attack_styles
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3167,15 +3156,12 @@ static void test_blob_attacks_player_on_six_tick_cadence(void) {
     state.npcs[0].active = 1;
     state.npcs[0].hp = INF_NPC_STATS[INF_NPC_BLOB].hp;
 
-    /* the blob fires on a 2-phase scan/fire cycle; the scan latches a prayer read
-       and the fire clears it. fire-to-fire spacing is the damage cadence: 6 ticks
-       (per-phase speed 3). ref: InfernoTrainer JalAk.ts attackSpeed=3. */
     int prev_scanned = state.npcs[0].blob_scanned_prayer;
     int last_fire = -1, gap_a = -1, gap_b = -1;
     for (int tick = 0; tick < 40; tick++) {
         inf_npc_attack(&state, 0);
         int cur_scanned = state.npcs[0].blob_scanned_prayer;
-        if (prev_scanned >= 0 && cur_scanned < 0) {  /* fire cleared the scan this tick */
+        if (prev_scanned >= 0 && cur_scanned < 0) {
             if (last_fire >= 0) {
                 if (gap_a < 0) gap_a = tick - last_fire;
                 else if (gap_b < 0) gap_b = tick - last_fire;
@@ -5514,9 +5500,6 @@ static void render_motion_continuity_case(
 static void test_render_motion_continuous_movement_never_pauses(void) {
     printf("--- render motion continuous movement never pauses ---\n");
 
-    /* THE regression trap for the per-tick pause bug: because base speed 4
-       (640ms/tile) trails 600ms waypoint production, a continuously moving
-       entity always has queue depth and its walk pose never drops to idle. */
     render_motion_continuity_case("continuous walk", 1.0f, 0);
     render_motion_continuity_case("continuous run", 2.0f, 1);
 }
@@ -5524,8 +5507,6 @@ static void test_render_motion_continuous_movement_never_pauses(void) {
 static void test_render_motion_waypoint_pop_snap_and_overflow(void) {
     printf("--- render motion waypoint pop, axis snap, queue overflow ---\n");
 
-    /* no-carry pop: with two waypoints queued, the arrival tick stops AT the
-       first waypoint instead of continuing toward the second */
     OsrsRenderWaypointQueue q;
     osrs_render_waypoint_queue_clear(&q);
     float sub_x = 64.0f, sub_y = 64.0f;
@@ -5542,9 +5523,6 @@ static void test_render_motion_waypoint_pop_snap_and_overflow(void) {
         sub_x, 192.0f, 1e-6f);
     ASSERT_INT_EQ("first waypoint popped, second still queued", q.length, 1);
 
-    /* whole-position snap: a gap beyond two tiles on EITHER axis teleports
-       both axes to the waypoint and pops it in the same cycle (deob
-       Canvas.java:199-208 else-branch) */
     osrs_render_waypoint_queue_clear(&q);
     sub_x = 0.0f;
     sub_y = 0.0f;
@@ -5561,7 +5539,6 @@ static void test_render_motion_waypoint_pop_snap_and_overflow(void) {
         sub_y, 40.0f, 1e-6f);
     ASSERT_INT_EQ("snapped waypoint pops the same cycle", q.length, 0);
 
-    /* overflow: an 11th push drops the oldest waypoint */
     osrs_render_waypoint_queue_clear(&q);
     for (int i = 1; i <= 11; i++)
         osrs_render_waypoint_push(&q, (float)(i * 128), 0.0f, 0);
@@ -6142,9 +6119,7 @@ static void test_npc_player_projectile_delays_use_reference_options(void) {
     inf_npc_attack(&state, 0);
 
     ASSERT_INT_EQ("ranger queued one pending hit", state.player_pending_hits.count, 1);
-    /* mob->player projectiles land at remainingDelay-1: the SDK processes the
-       player's incoming hits in the same tickRegion the mob fires (World.ts
-       player.attackStep), so the projectile is onTicked on its creation tick. */
+
     ASSERT_INT_EQ("ranger pending hit lands one tick before the raw projectile delay",
         state.player_pending_hits.hits[0].ticks_remaining, timing.damage_delay_ticks - 1);
 }
@@ -7469,7 +7444,6 @@ static void test_echo_boots_recoil_reflects_to_attacker_only(void) {
     state.player.equipped[GEAR_SLOT_FEET] = ITEM_ECHO_BOOTS;
     osrs_refresh_player_equipment(&state.player);
 
-    /* slot 0: adjacent bystander; slot 1: the (distant) attacker; slot 2: Zuk */
     state.npcs[0] = make_test_npc(INF_NPC_BAT, 21, 20, INF_NPC_STATS[INF_NPC_BAT].size);
     state.npcs[0].active = 1;
     state.npcs[0].hp = state.npcs[0].max_hp = 10;
@@ -7480,14 +7454,12 @@ static void test_echo_boots_recoil_reflects_to_attacker_only(void) {
     state.npcs[2].active = 1;
     state.npcs[2].hp = state.npcs[2].max_hp = 1200;
 
-    /* zero damage: no recoil, no charge spent */
     inf_apply_echo_boots_recoil(&state, 1, 0);
     ASSERT_INT_EQ("zero damage does not consume echo charge",
         state.player.item_effect_state.echo_boot_charges, OSRS_ECHO_BOOTS_MAX_CHARGES);
     ASSERT_INT_EQ("zero damage does not recoil the attacker",
         state.npcs[1].hp, 10);
 
-    /* the distant attacker (slot 1) takes recoil; the adjacent bystander does not */
     inf_apply_echo_boots_recoil(&state, 1, 7);
     ASSERT_INT_EQ("positive damage consumes one echo charge",
         state.player.item_effect_state.echo_boot_charges, OSRS_ECHO_BOOTS_MAX_CHARGES - 1);
@@ -7498,7 +7470,6 @@ static void test_echo_boots_recoil_reflects_to_attacker_only(void) {
     ASSERT_FLOAT_NEAR("echo recoil records one damage",
         state.tick_scratch.damage_dealt, 1.0f, 1e-6f);
 
-    /* a Zuk attacker is excluded from recoil */
     inf_apply_echo_boots_recoil(&state, 2, 7);
     ASSERT_INT_EQ("Zuk attacker avoids echo recoil",
         state.npcs[2].hp, 1200);
@@ -7646,11 +7617,9 @@ static void test_inferno_snapshot_restore_round_trip(void) {
     actions_b[INF_HEAD_TARGET] = 2;
     actions_b[INF_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
 
-    /* advance the env into a non-trivial state */
     const int N1 = 12;
     for (int i = 0; i < N1; i++) inf_step(raw, actions_a);
 
-    /* checkpoint A: state at tick N1 */
     size_t snap_size = inf_snapshot_size(raw);
     ASSERT_INT_EQ("snapshot size matches sizeof(InfSnapshot)",
         (int)snap_size, (int)sizeof(InfSnapshot));
@@ -7661,30 +7630,22 @@ static void test_inferno_snapshot_restore_round_trip(void) {
     ASSERT_INT_EQ("snapshot version stamped",
         (int)snap_A->version, (int)INF_SNAPSHOT_VERSION);
 
-    /* step further: this is the "future" trajectory we will reproduce */
     const int N2 = 18;
     for (int i = 0; i < N2; i++) inf_step(raw, actions_b);
 
-    /* checkpoint B: state at tick N1+N2 (without restore) */
     InfSnapshot* snap_B = (InfSnapshot*)malloc(snap_size);
     inf_snapshot(raw, snap_B);
 
-    /* now restore A and replay the same N2 actions */
     inf_restore(raw, snap_A, snap_size);
     ASSERT_INT_EQ("tick reset to N1 after restore", state->tick, N1);
     for (int i = 0; i < N2; i++) inf_step(raw, actions_b);
 
-    /* checkpoint B': state at tick N1+N2 after restore-then-replay */
     InfSnapshot* snap_B_prime = (InfSnapshot*)malloc(snap_size);
     inf_snapshot(raw, snap_B_prime);
 
-    /* the two trajectories must match exactly: this is the core Go-Explore
-       property. compare the InfernoState struct in full via memcmp. */
     int diff = memcmp(&snap_B->state, &snap_B_prime->state, sizeof(InfernoState));
     ASSERT_INT_EQ("memcmp(state at N1+N2, state after restore+replay) == 0", diff, 0);
 
-    /* spot-check critical fields with friendly names so a regression points the
-       reader at the field that drifted */
     InfernoState* a = &snap_B->state;
     InfernoState* b = &snap_B_prime->state;
     ASSERT_INT_EQ("tick", a->tick, b->tick);
@@ -7912,7 +7873,6 @@ static void test_inferno_cell_key_is_deterministic_and_16_bytes(void) {
     ASSERT_INT_EQ("inf_cell_key_size returns sizeof(InfCellKey)",
         (int)inf_cell_key_size(raw), (int)sizeof(InfCellKey));
 
-    /* fresh reset: progress_score is exactly 0 (no Zuk damage yet) */
     ASSERT_INT_EQ("progress_score == 0 at reset",
         (int)(inf_progress_score(raw) * 1000.0f), 0);
 
@@ -7922,23 +7882,19 @@ static void test_inferno_cell_key_is_deterministic_and_16_bytes(void) {
     actions[INF_HEAD_PRAYER] = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
     actions[INF_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
 
-    /* drive A: reset, step N actions, capture key K_A */
     inf_reset(raw, 99u);
     for (int i = 0; i < 20; i++) inf_step(raw, actions);
     InfCellKey key_a;
     inf_write_cell_key(raw, &key_a);
 
-    /* drive B: reset with same seed, step same actions, capture key K_B */
     inf_reset(raw, 99u);
     for (int i = 0; i < 20; i++) inf_step(raw, actions);
     InfCellKey key_b;
     inf_write_cell_key(raw, &key_b);
 
-    /* deterministic given (seed, actions): keys must be byte-identical */
     int diff = memcmp(&key_a, &key_b, sizeof(InfCellKey));
     ASSERT_INT_EQ("memcmp(key_a, key_b) == 0 for same seed+actions", diff, 0);
 
-    /* the key must reflect post-step state, not the reset state */
     inf_reset(raw, 99u);
     InfCellKey key_at_reset;
     inf_write_cell_key(raw, &key_at_reset);
@@ -7959,8 +7915,6 @@ static void test_inferno_cell_key_quantization_groups_neighbors(void) {
     inf_reset(raw_a, 1u);
     inf_reset(raw_b, 1u);
 
-    /* nudge state_b's player by 1 tile in x — within the 2-tile quantization
-       bin, so the key should still match state_a's key */
     state_b->player.x = state_a->player.x + 1;
 
     InfCellKey key_a, key_b;
@@ -7969,7 +7923,6 @@ static void test_inferno_cell_key_quantization_groups_neighbors(void) {
     int diff_within_bin = memcmp(&key_a, &key_b, sizeof(InfCellKey));
     ASSERT_INT_EQ("1-tile player shift stays in same cell", diff_within_bin, 0);
 
-    /* shift by 2 tiles — crosses the bin boundary, key must differ */
     state_b->player.x = state_a->player.x + 2;
     inf_write_cell_key(raw_b, &key_b);
     int diff_cross_bin = memcmp(&key_a, &key_b, sizeof(InfCellKey));

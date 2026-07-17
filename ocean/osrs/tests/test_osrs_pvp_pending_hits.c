@@ -1,13 +1,3 @@
-/**
- * @file test_osrs_pvp_pending_hits.c
- * @brief PvP pending-hit queue contract tests.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_pvp_pending_hits \
- *       ocean/osrs/tests/test_osrs_pvp_pending_hits.c -lm
- *   /tmp/test_osrs_pvp_pending_hits
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

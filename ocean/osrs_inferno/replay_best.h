@@ -1,8 +1,3 @@
-/**
- * @file replay_best.h
- * @brief Deterministic ordering for Inferno replay-best selection.
- */
-
 #ifndef OSRS_INFERNO_REPLAY_BEST_H
 #define OSRS_INFERNO_REPLAY_BEST_H
 

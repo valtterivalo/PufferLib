@@ -1,13 +1,3 @@
-/**
- * @file test_osrs_venator_bow_bounce.c
- * @brief Pure Venator bow bounce geometry, chain selection, and damage laws.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_venator_bow_bounce \
- *       ocean/osrs/tests/test_osrs_venator_bow_bounce.c -lm
- *   /tmp/test_osrs_venator_bow_bounce
- */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -133,12 +123,6 @@ static void test_warband_cluster_and_bounce_back(void) {
         10);
 }
 
-/**
- * Regression: the 2nd bounce is range-gated on the ORIGINAL target's centre, not
- * the 1st-bounce target. A 3rd target 3 tiles from the original (reachable only by
- * chaining the range anchor forward) must never be hit; the bounce returns to the
- * in-range primary instead. Guards osrs_venator.h hit3 range_sender == primary.
- */
 static void test_no_overreach_past_original_centre(void) {
     OsrsVenatorMonster primary = live_monster(100, 0, 0, 1);
     OsrsVenatorMonster candidates[] = {
@@ -158,11 +142,6 @@ static void test_no_overreach_past_original_centre(void) {
               chain.hits[i].slot != 10);
 }
 
-/**
- * Pins the even-centre interpretation and the size-5 CENTRE_SW assumption in
- * osrs_venator.h. The cases separate accept and send failures so the two wiki
- * rules cannot collapse into one looser radius check.
- */
 static void test_rule_matrix_representatives(void) {
     OsrsVenatorFootprint sender1 = osrs_venator_footprint(0, 0, 1);
     OsrsVenatorFootprint sender2 = osrs_venator_footprint(0, 0, 2);

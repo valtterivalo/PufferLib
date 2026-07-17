@@ -1,8 +1,3 @@
-/**
- * @file inferno_profile.h
- * @brief Gated per-bucket profiler for the OSRS Inferno environment.
- */
-
 #ifndef PUFFER_INFERNO_PROFILE_H
 #define PUFFER_INFERNO_PROFILE_H
 
@@ -10,8 +5,6 @@
 #define INFERNO_ENV_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* The only per-env part: the slot table (enum name, print label). The enum, names
-   table, and profiler machinery are generated from this by osrs_env_profile.h. */
 #define OSRS_ENV_PROFILE_SLOTS(X) \
     X(INF_PROF_C_STEP_TOTAL,             "c_step_total") \
     X(INF_PROF_C_ACTIONS,                "c_actions") \

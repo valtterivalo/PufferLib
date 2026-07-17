@@ -1,10 +1,3 @@
-/**
- * @file trace_colo_move.c
- * @brief Minimal movement trace: alternate PRIMARY attack and PRIMARY move while
- *        dumping the env's action_debug_log line.
- *
- * BUILD: cc -std=c11 -O2 -I. -o /tmp/trace_colo_move ocean/osrs/tests/trace_colo_move.c -lm
- */
 #include <stdio.h>
 #include <string.h>
 
@@ -23,7 +16,6 @@ static int nearest_live_obs_target(const ColosseumState* s) {
     return best_slot < 0 ? 0 : col_primary_attack_action_for_obs_slot(best_slot);
 }
 
-/* first walkable move action that actually displaces the player. */
 static int first_walkable_move(const ColosseumState* s) {
     for (int a = 1; a < ENCOUNTER_MOVE_ACTIONS; a++) {
         int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[a];
@@ -49,7 +41,7 @@ int main(void) {
     static float obs[COLO_NUM_OBS];
     int actions[COLO_NUM_ACTION_HEADS] = {0};
     for (int tick = 0; tick < 80 && !s.episode_over; tick++) {
-        col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);  /* refresh obs slots */
+        col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
         for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
         if (s.modifiers.draft_pending) {
             int opt = 0;

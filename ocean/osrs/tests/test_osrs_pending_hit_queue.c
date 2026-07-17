@@ -1,13 +1,3 @@
-/**
- * @file test_osrs_pending_hit_queue.c
- * @brief shared OSRS pending-hit queue contract tests.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_pending_hit_queue \
- *       ocean/osrs/tests/test_osrs_pending_hit_queue.c -lm
- *   /tmp/test_osrs_pending_hit_queue
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

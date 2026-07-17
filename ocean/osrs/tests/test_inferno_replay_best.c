@@ -1,8 +1,3 @@
-/**
- * @file test_inferno_replay_best.c
- * @brief Tests deterministic Inferno replay-best ordering.
- */
-
 #include <stdint.h>
 #include <stdio.h>
 

@@ -1,15 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-/**
- * @file bench_inferno_forecast.c
- * @brief microbenchmark for Inferno step-out forecast and observation encoding.
- *
- * BUILD:
- *   cc -std=c11 -O3 -DNDEBUG -I. -o /tmp/bench_inferno_forecast \
- *       ocean/osrs/tests/bench_inferno_forecast.c -lm
- *   /tmp/bench_inferno_forecast
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

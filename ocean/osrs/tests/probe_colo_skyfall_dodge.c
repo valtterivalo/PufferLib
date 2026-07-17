@@ -1,13 +1,3 @@
-/**
- * @file probe_colo_skyfall_dodge.c
- * @brief Empirical Fortis Colosseum javelin skyfall dodge probe.
- *
- * BUILD:
- *   cc -std=c11 -O2 -I. -o /tmp/probe_skyfall \
- *       ocean/osrs/tests/probe_colo_skyfall_dodge.c -lm
- *   /tmp/probe_skyfall
- */
-
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,25 +1,9 @@
-/**
- * @file probe_colo_bis_gear_prayer.c
- * @brief Verifies the BIS gear-oracle moves the offensive prayer to match the
- * chosen weapon set's style. Regression for the cross-style un-prayed-attack bug:
- * the oracle swapped weapon STYLE every tick but left s->player.offensive_prayer
- * stale, so encounter_offensive_prayer_mults returned identity (no buff) on any
- * cross-style swap and the fired attack ran un-prayed.
- *
- * INVARIANT: after col_apply_bis_gear_oracle commits, for the chosen weapon set the
- * player's offensive_prayer is the style-matched prayer (Piety/Rigour/Augury),
- * regardless of whatever (possibly off-style) prayer was active going in.
- *
- * BUILD: cc -std=c11 -O2 -I. -o /tmp/probe_bis_prayer ocean/osrs/tests/probe_colo_bis_gear_prayer.c -lm
- */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-/* the deliberately-WRONG prayer we plant before each oracle call: cycle through
-   the three offensive prayers so at least one is cross-style for every set. */
 static const OffensivePrayer STALE_PRAYERS[3] = {
     OFFENSIVE_PRAYER_PIETY, OFFENSIVE_PRAYER_RIGOUR, OFFENSIVE_PRAYER_AUGURY
 };
@@ -36,7 +20,6 @@ int main(void) {
         memset(&s, 0, sizeof(s));
         col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);
 
-        /* find any live enemy NPC to target */
         int target = -1;
         for (int n = 0; n < COLO_MAX_NPCS; n++) {
             if (col_npc_is_live_enemy(&s.npcs[n])) { target = n; break; }
