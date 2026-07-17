@@ -1261,26 +1261,12 @@ static void nmmo3_encoder_free_weights(void* weights) { free(weights); }
 static void nmmo3_encoder_free_activations(void* activations) { free(activations); }
 
 // ---- Colosseum entity encoder ----
-//
-// output = global(flat obs) + masked-maxpool over a shared bias-free 2-layer MLP
-// applied to the COLO_ENT_NUM_NPCS NPC records, plus the same pool over the
-// COLO_ENT_INV_NUM_CELLS inventory cells. GELU uses the tanh approximation so the
-// CUDA and torch reference paths stay bit-comparable.
-//
-// Obs layout (encounter_colosseum_obs_mask.inc): the NPC block is COLO_ENT_NUM_NPCS
-// contiguous records of COLO_ENT_FEATS floats starting at COLO_ENT_NPC_START. Each
-// record begins with a COLO_ENT_TYPE_ONEHOT-wide NPC-type one-hot, so an active
-// record has type one-hot sum > 0 and an inactive record is fully zero (the env
-// memsets the obs before writing).
 static constexpr int COLO_ENT_NPC_START   = 1030;
 static constexpr int COLO_ENT_NUM_NPCS    = 24;
 static constexpr int COLO_ENT_FEATS       = 37;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
 static constexpr int COLO_ENT_BOTTLENECK  = 16;
 static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;
-// Inventory-cell pool: COLO_ENT_INV_NUM_CELLS cells of COLO_ENT_INV_FEATS floats at
-// obs offset COLO_ENT_INV_START; a cell is active iff its present flag (cell-local
-// offset COLO_ENT_INV_PRESENT) > 0.
 static constexpr int COLO_ENT_INV_START      = 48;
 static constexpr int COLO_ENT_INV_NUM_CELLS  = 28;
 static constexpr int COLO_ENT_INV_FEATS      = 28;
@@ -1289,35 +1275,34 @@ static constexpr int COLO_ENT_INV_BOTTLENECK = 16;
 static constexpr int COLO_ENT_INV_BLOCK      = COLO_ENT_INV_NUM_CELLS * COLO_ENT_INV_FEATS;
 
 struct ColosseumEntityEncoderWeights {
-    PrecisionTensor global_w;    // [hidden, obs]
-    PrecisionTensor entity_l1_w; // [16, 37]
-    PrecisionTensor entity_l2_w; // [hidden, 16]
-    PrecisionTensor inv_l1_w;    // [16, 28]
-    PrecisionTensor inv_l2_w;    // [hidden, 16]
+    PrecisionTensor global_w;
+    PrecisionTensor entity_l1_w;
+    PrecisionTensor entity_l2_w;
+    PrecisionTensor inv_l1_w;
+    PrecisionTensor inv_l2_w;
     int obs_size, hidden;
 };
 
 struct ColosseumEntityEncoderActivations {
-    PrecisionTensor out;          // [B, hidden] = global + npc pool + inv pool
-    PrecisionTensor saved_obs;    // [B, obs] (for global wgrad)
-    PrecisionTensor npc_flat;     // [B*24, 37] contiguous NPC records (for l1 wgrad + mask)
-    PrecisionTensor entity_z1;    // [B*24, 16] pre-GELU (for GELU' in backward)
-    PrecisionTensor entity_h1;    // [B*24, 16] post-GELU, spilled by the fused fwd (for l2 wgrad)
-    PrecisionTensor grad_z1;      // [B*24, 16] backward scratch
-    IntTensor pool_argmax;        // [B, hidden] winning NPC index per channel (-1 if none)
-    PrecisionTensor global_wgrad;    // [hidden, obs]
-    PrecisionTensor entity_l1_wgrad; // [16, 37]
-    PrecisionTensor entity_l2_wgrad; // [hidden, 16]
-    PrecisionTensor inv_flat;     // [B*28, 28] contiguous inventory cells
-    PrecisionTensor inv_z1;       // [B*28, 16] pre-GELU
-    PrecisionTensor inv_h1;       // [B*28, 16] post-GELU, spilled by the fused fwd
-    PrecisionTensor inv_grad_z1;  // [B*28, 16] backward scratch
-    IntTensor inv_pool_argmax;    // [B, hidden] winning cell index per channel (-1 if none)
-    PrecisionTensor inv_l1_wgrad; // [16, 28]
-    PrecisionTensor inv_l2_wgrad; // [hidden, 16]
+    PrecisionTensor out;
+    PrecisionTensor saved_obs;
+    PrecisionTensor npc_flat;
+    PrecisionTensor entity_z1;
+    PrecisionTensor entity_h1;
+    PrecisionTensor grad_z1;
+    IntTensor pool_argmax;
+    PrecisionTensor global_wgrad;
+    PrecisionTensor entity_l1_wgrad;
+    PrecisionTensor entity_l2_wgrad;
+    PrecisionTensor inv_flat;
+    PrecisionTensor inv_z1;
+    PrecisionTensor inv_h1;
+    PrecisionTensor inv_grad_z1;
+    IntTensor inv_pool_argmax;
+    PrecisionTensor inv_l1_wgrad;
+    PrecisionTensor inv_l2_wgrad;
 };
 
-// Gather the strided NPC block out of the flat obs into a tight [B*24, 37] buffer.
 __global__ void colo_ent_gather_npcs(
     precision_t* __restrict__ npc_flat, const precision_t* __restrict__ obs,
     int B, int obs_size) {
@@ -1329,13 +1314,11 @@ __global__ void colo_ent_gather_npcs(
     npc_flat[idx] = obs[(int64_t)b * obs_size + COLO_ENT_NPC_START + off];
 }
 
-// out[i] = 0.5*x*(1 + tanh(0.7978845608*(x + 0.044715*x^3)))  (tanh GELU)
 __device__ __forceinline__ float colo_ent_gelu_fwd(float x) {
     float inner = 0.7978845608028654f * (x + 0.044715f * x * x * x);
     return 0.5f * x * (1.0f + tanhf(inner));
 }
 
-// d/dx of the tanh GELU above. Matches the forward exactly so finite-difference holds.
 __device__ __forceinline__ float colo_ent_gelu_grad(float x) {
     float x3 = x * x * x;
     float inner = 0.7978845608028654f * (x + 0.044715f * x3);
@@ -1344,7 +1327,6 @@ __device__ __forceinline__ float colo_ent_gelu_grad(float x) {
     return 0.5f * (1.0f + t) + 0.5f * x * (1.0f - t * t) * dinner;
 }
 
-// Gather the strided inventory block into a tight [B*28, 28] buffer.
 __global__ void colo_ent_gather_inv(
     precision_t* __restrict__ inv_flat, const precision_t* __restrict__ obs,
     int B, int obs_size) {
@@ -1357,21 +1339,10 @@ __global__ void colo_ent_gather_inv(
 }
 
 // ---- fused pool kernels ----
-// The [B*num_rec, hidden] per-record embedding tensor is never materialized: the
-// fused forward GELUs z1 into shared memory once per tile and each (b, c) thread
-// scans the num_rec dot-products in registers, keeping the running masked max.
-// Backward routes grads through the recorded argmax only, recomputing GELU from the
-// saved pre-activation z1. Serves both pools: a record is active iff the sum of its
-// first active_width features > 0 (NPC: the 12-wide type one-hot; inventory: the
-// present flag). Ties resolve to the lowest record index (ascending scan, strict >)
-// to match torch.max's argmax tie-break. All-inactive rows contribute 0 / argmax -1.
 static constexpr int COLO_ENT_BATCH_TILE  = 8;
 static constexpr int COLO_ENT_HIDDEN_TILE = 32;
 static constexpr int COLO_ENT_FC_THREADS  = COLO_ENT_BATCH_TILE * COLO_ENT_HIDDEN_TILE;
 
-// out[b,c] += maskedmax_n dot(l2_w[c,:], gelu(z1[b,n,:])); argmax[b,c] = winning n.
-// When h1 is non-null (training), the blockIdx.y == 0 blocks spill their post-GELU
-// shared tile to it so the l2 wgrad kernel reads h1 instead of re-tanh'ing B*H*16x.
 __global__ void colo_ent_fused_pool_fwd(
     precision_t* __restrict__ out, int* __restrict__ argmax,
     precision_t* __restrict__ h1,
@@ -1379,9 +1350,9 @@ __global__ void colo_ent_fused_pool_fwd(
     const precision_t* __restrict__ l2_w,
     int B, int H, int num_rec, int rec_feats, int active_width) {
     extern __shared__ float colo_ent_sh[];
-    float* h1_tile = colo_ent_sh;                                            // [BT, num_rec, 16]
-    float* mask_tile = h1_tile + COLO_ENT_BATCH_TILE * num_rec * COLO_ENT_BOTTLENECK; // [BT, num_rec]
-    float* w_tile = mask_tile + COLO_ENT_BATCH_TILE * num_rec;               // [16, HT]
+    float* h1_tile = colo_ent_sh;
+    float* mask_tile = h1_tile + COLO_ENT_BATCH_TILE * num_rec * COLO_ENT_BOTTLENECK;
+    float* w_tile = mask_tile + COLO_ENT_BATCH_TILE * num_rec;
 
     int batch_base = blockIdx.x * COLO_ENT_BATCH_TILE;
     int hidden_base = blockIdx.y * COLO_ENT_HIDDEN_TILE;
@@ -1443,7 +1414,6 @@ __global__ void colo_ent_fused_pool_fwd(
     argmax[o] = best_n;
 }
 
-// wgrad[c,k] = sum_b grad[b,c] * h1[b, argmax[b,c], k], winners only.
 __global__ void colo_ent_fused_l2_wgrad(
     precision_t* __restrict__ wgrad, const precision_t* __restrict__ grad,
     const precision_t* __restrict__ h1, const int* __restrict__ argmax,
@@ -1489,8 +1459,6 @@ __global__ void colo_ent_fused_l2_wgrad(
     }
 }
 
-// grad_z1[b,n,k] = GELU'(z1[b,n,k]) * sum_{c: argmax[b,c]==n} grad[b,c] * l2_w[c,k].
-// Non-winning records accumulate nothing and write exact zeros.
 __global__ void colo_ent_fused_grad_z1(
     precision_t* __restrict__ grad_z1, const precision_t* __restrict__ grad,
     const precision_t* __restrict__ l2_w, const precision_t* __restrict__ z1,
@@ -1499,9 +1467,9 @@ __global__ void colo_ent_fused_grad_z1(
     if (b >= B) return;
 
     extern __shared__ float colo_ent_sh[];
-    float* accum = colo_ent_sh;                                   // [num_rec * 16]
-    int* arg_s = (int*)(accum + num_rec * COLO_ENT_BOTTLENECK);   // [blockDim.x]
-    float* grad_s = (float*)(arg_s + blockDim.x);                 // [blockDim.x]
+    float* accum = colo_ent_sh;
+    int* arg_s = (int*)(accum + num_rec * COLO_ENT_BOTTLENECK);
+    float* grad_s = (float*)(arg_s + blockDim.x);
 
     for (int idx = threadIdx.x; idx < num_rec * COLO_ENT_BOTTLENECK; idx += blockDim.x)
         accum[idx] = 0.0f;
@@ -1589,7 +1557,6 @@ static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, P
         a->inv_flat.data, input.data, B, ew->obs_size);
     PrecisionTensor inv2d = {.data = a->inv_flat.data, .shape = {IB, COLO_ENT_INV_FEATS}};
     puf_mm(&inv2d, &ew->inv_l1_w, &a->inv_z1, stream);
-    // active_width 1 = the present flag; the fused mask sums features [0, width).
     static_assert(COLO_ENT_INV_PRESENT == 0,
         "fused pool mask reads a prefix; present flag must be cell-local offset 0");
     colo_ent_launch_fused_fwd(
@@ -1638,9 +1605,6 @@ static void colo_entity_encoder_init_weights(void* w, uint64_t* seed, cudaStream
     init2d(ew->inv_l2_w, ew->hidden, COLO_ENT_INV_BOTTLENECK);
 }
 
-// Boot-time guard: muon and the .bin layout pack params with no padding, but
-// alloc_create rounds each tensor up to 16 bytes. They agree only if every param
-// tensor's byte size is a multiple of 16, i.e. (bf16) numel % 8 == 0.
 static void colo_entity_assert_aligned(int64_t numel, const char* name) {
     if (numel % 8 != 0) {
         fprintf(stderr, "colosseum entity encoder: %s numel %lld not a multiple of 8; "
@@ -1699,8 +1663,6 @@ static void colo_entity_encoder_reg_train(void* w, void* activations, Allocator*
     alloc_register(acts, &a->inv_h1);
     alloc_register(acts, &a->inv_grad_z1);
     alloc_register(acts, &a->inv_pool_argmax);
-    // Grad scratch order MUST match reg_params (global, l1, l2, inv_l1, inv_l2) so
-    // muon's shared offset walk pairs each grad with its weight.
     a->global_wgrad    = {.shape = {H, ew->obs_size}};
     a->entity_l1_wgrad = {.shape = {COLO_ENT_BOTTLENECK, COLO_ENT_FEATS}};
     a->entity_l2_wgrad = {.shape = {H, COLO_ENT_BOTTLENECK}};
@@ -1746,7 +1708,6 @@ static void* colo_entity_encoder_create_weights(void* self) {
 static void colo_entity_encoder_free_weights(void* weights) { free(weights); }
 static void colo_entity_encoder_free_activations(void* activations) { free(activations); }
 
-// Override encoder vtable for known ocean environments. No-op for unknown envs.
 static void create_custom_encoder(const char* env_name, Encoder* enc) {
     if (strcmp(env_name, "nmmo3") == 0) {
         *enc = Encoder{
