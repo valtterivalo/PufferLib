@@ -1,15 +1,3 @@
-/**
- * @fileoverview Visual effect system for spell impacts and projectiles.
- *
- * Manages animated spotanim effects (ice barrage splash, blood barrage) and
- * traveling projectiles (crossbow bolts, ice barrage orb). Each effect has a
- * model, animation, position, and lifetime. Projectiles follow parabolic arcs
- * matching OSRS SceneProjectile.java trajectory math.
- *
- * Effects are spawned from game state in render_post_tick and drawn as 3D
- * models in the render pipeline. Animation advances at 50 Hz client ticks.
- */
-
 #ifndef OSRS_PVP_EFFECTS_H
 #define OSRS_PVP_EFFECTS_H
 
@@ -19,8 +7,8 @@
 #include "osrs_gfx_ids.h"
 #include <math.h>
 
-/* Sized for a full Sol Heredit AoE of one-shot impact dust (~160 hazard tiles per
-   shield slam, one puff each); PvP/inferno use only a handful. */
+/* sized for a full Sol Heredit shield slam (~160 one-shot dust puffs); PvP and
+   inferno use only a handful */
 #define MAX_ACTIVE_EFFECTS 384
 
 static const OsrsSpotAnimDef* spotanim_lookup(
@@ -61,11 +49,10 @@ static OsrsModel* effect_find_model(
     return NULL;
 }
 
-
 typedef enum {
     EFFECT_NONE = 0,
-    EFFECT_SPOTANIM,     /* plays at a fixed position (impact effects) */
-    EFFECT_PROJECTILE,   /* travels from source to target with parabolic arc */
+    EFFECT_SPOTANIM,
+    EFFECT_PROJECTILE,
 } EffectType;
 
 typedef struct {
@@ -73,39 +60,34 @@ typedef struct {
     int gfx_id;
     const OsrsSpotAnimDef* meta;
 
-    /* world position in sub-tile coords (128 units per tile) */
-    double src_x, src_y;      /* start (projectiles) */
-    double dst_x, dst_y;      /* end (projectiles) or position (spotanims) */
-    double cur_x, cur_y;      /* current interpolated position */
-    double height;             /* current height in sub-tile units */
+    /* positions are sub-tile coords, 128 units per tile; ticks are 50 Hz client
+       ticks, not 600 ms game ticks */
+    double src_x, src_y;
+    double dst_x, dst_y;
+    double cur_x, cur_y;
+    double height;
 
-    /* projectile trajectory (from SceneProjectile.java) */
     double x_increment;
     double y_increment;
     double diagonal_increment;
     double height_increment;
-    double height_accel;       /* aDouble1578: parabolic curvature */
-    int start_height;          /* sub-tile units */
+    double height_accel;
+    int start_height;
     int end_height;
-    int initial_slope;         /* trajectory arc angle */
+    int initial_slope;
 
-    /* timing in client ticks (50 Hz) */
     int start_tick;
     int stop_tick;
-    int started;               /* has calculateIncrements been called? */
+    int started;
 
-    /* one cursor owning the resolved sequence + frame position; advance and draw
-       both read it (resolved model-aware in the render layer) so they can't diverge. */
     AnimPlayback anim_playback;
-    AnimModelState* anim_state;  /* per-effect vertex transform state (heap) */
+    AnimModelState* anim_state;
 
-    /* orientation */
-    int turn_value;            /* 0-2047 OSRS angle units */
+    /* 0-2047 OSRS angle units */
+    int turn_value;
     int tilt_angle;
 } ActiveEffect;
 
-
-/** Free an effect's animation state and mark it inactive. */
 static void effect_free(ActiveEffect* e) {
     if (e->anim_state) {
         anim_model_state_free(e->anim_state);
@@ -114,12 +96,10 @@ static void effect_free(ActiveEffect* e) {
     e->type = EFFECT_NONE;
 }
 
-/** Find a free effect slot, evicting the oldest if full. */
 static int effect_find_slot(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
     for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
         if (effects[i].type == EFFECT_NONE) return i;
     }
-    /* evict oldest */
     int oldest = 0;
     for (int i = 1; i < MAX_ACTIVE_EFFECTS; i++) {
         if (effects[i].start_tick < effects[oldest].start_tick) oldest = i;
@@ -128,7 +108,6 @@ static int effect_find_slot(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
     return oldest;
 }
 
-/** Create AnimModelState for an effect's model (if it has animation data). */
 static void effect_init_anim_state(
     ActiveEffect* e,
     ModelCache* model_cache,
@@ -146,12 +125,6 @@ static void effect_init_anim_state(
         om->face_alpha_labels, om->base_face_alphas, om->mesh.triangleCount);
 }
 
-
-/**
- * Spawn a spotanim effect at a world position (impact splash, etc).
- * Duration is determined by the animation length, or a fixed 30 client ticks
- * for static models.
- */
 static int effect_spawn_spotanim_subtile(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id,
@@ -182,7 +155,6 @@ static int effect_spawn_spotanim_subtile(
 
     e->start_tick = current_client_tick;
 
-    /* duration from animation, or 30 client ticks default */
     int duration = 30;
     if (meta->animation_id >= 0 && anim_cache) {
         AnimSequence* seq = anim_get_sequence(anim_cache, meta->animation_id);
@@ -199,7 +171,6 @@ static int effect_spawn_spotanim_subtile(
     return slot;
 }
 
-/* convenience wrapper: integer tile coords → sub-tile center */
 static int effect_spawn_spotanim(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id, int world_x, int world_y,
@@ -213,14 +184,6 @@ static int effect_spawn_spotanim(
         secondary_model_cache, projectile_model_cache);
 }
 
-/**
- * Spawn a traveling projectile from source to target position.
- *
- * Trajectory math from SceneProjectile.java calculateIncrements/progressCycles:
- * - parabolic height arc controlled by initialSlope
- * - position advances linearly per client tick
- * - height has quadratic acceleration term
- */
 static int effect_spawn_projectile(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int gfx_id,
@@ -269,10 +232,6 @@ static int effect_spawn_projectile(
     return slot;
 }
 
-/**
- * Advance all active effects by one client tick (20ms).
- * Call this from the 50 Hz client-tick loop.
- */
 static void effect_client_tick(
     ActiveEffect effects[MAX_ACTIVE_EFFECTS],
     int current_client_tick
@@ -281,18 +240,15 @@ static void effect_client_tick(
         ActiveEffect* e = &effects[i];
         if (e->type == EFFECT_NONE) continue;
 
-        /* expired? */
         if (current_client_tick >= e->stop_tick) {
             effect_free(e);
             continue;
         }
 
-        /* not started yet (delayed projectile) */
         if (current_client_tick < e->start_tick) continue;
 
         if (e->type == EFFECT_PROJECTILE) {
             if (!e->started) {
-                /* calculateIncrements (SceneProjectile.java:37-58) */
                 e->cur_x = e->src_x;
                 e->cur_y = e->src_y;
                 e->height = e->start_height;
@@ -315,13 +271,12 @@ static void effect_client_tick(
                 e->started = 1;
             }
 
-            /* progressCycles (SceneProjectile.java:100-118) */
             e->cur_x += e->x_increment;
             e->cur_y += e->y_increment;
             e->height += e->height_increment + 0.5 * e->height_accel;
             e->height_increment += e->height_accel;
 
-            /* update orientation */
+            /* 325.949 = 2048 angle units per 2 pi radians, from the deob client */
             e->turn_value = (int)(atan2(e->x_increment, e->y_increment) *
                 325.949) + 1024;
             e->turn_value &= 0x7FF;
@@ -330,15 +285,9 @@ static void effect_client_tick(
             e->tilt_angle &= 0x7FF;
         }
 
-        /* animation frame advance lives in the render layer
-           (render_anim_playback_resolve + anim_playback_advance); this function
-           owns only position + lifetime. */
     }
 }
 
-/**
- * Clear all active effects (on episode reset).
- */
 static void effect_clear_all(ActiveEffect effects[MAX_ACTIVE_EFFECTS]) {
     for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
         effect_free(&effects[i]);

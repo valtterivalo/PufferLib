@@ -1,16 +1,3 @@
-/**
- * @file encounter_nh_pvp.h
- * @brief NH (No Honor) PvP encounter — the original 1v1 LMS-style fight.
- *
- * Wraps the existing osrs_pvp_api.h (pvp_init/pvp_reset/pvp_step) as an
- * EncounterDef implementation. This is the first encounter and serves as
- * the reference for how to add new encounters.
- *
- * Entity layout: 2 players (agent + opponent).
- * Obs: SLOT_NUM_OBSERVATIONS features. Actions: NUM_ACTION_HEADS heads.
- * Mask: ACTION_MASK_SIZE logits.
- */
-
 #ifndef ENCOUNTER_NH_PVP_H
 #define ENCOUNTER_NH_PVP_H
 
@@ -18,12 +5,11 @@
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
-/* obs/action dimensions from osrs_types.h. order must match HEAD_* indices. */
+/* order must match the HEAD_* indices in osrs_types.h */
 static const int NH_PVP_ACTION_DIMS[] = {
     LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM,
     FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM
 };
-
 
 typedef struct {
     OsrsEnv env;
@@ -37,10 +23,6 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
     for (int h = 0; h < NUM_ACTION_HEADS; h++) actions[h] = 0;
     actions[HEAD_LOADOUT] = LOADOUT_KEEP;
 
-    /* HEAD_COMBAT only carries attack intent now; movement flows via walk_dest
-       in nh_pvp_step_human_commands. encounter_translate_attack_or_move would
-       still emit MOVE_* values if the click is not on the opponent, so we
-       only consult it for attacks. */
     if (hi->pending_attack) {
         if (hi->pending_spell == ATTACK_ICE) actions[HEAD_COMBAT] = ATTACK_ICE;
         else if (hi->pending_spell == ATTACK_BLOOD) actions[HEAD_COMBAT] = ATTACK_BLOOD;
@@ -62,13 +44,9 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
     (void)target;
 }
 
-
 static EncounterState* nh_pvp_create(void) {
     NhPvpState* s = (NhPvpState*)calloc(1, sizeof(NhPvpState));
     pvp_init(&s->env);
-    /* pvp_init sets internal buf pointers for game logic (observations, actions, etc.).
-       also wire the ocean pointers to internal buffers so pvp_step can write obs/rewards
-       without needing the PufferLib binding. */
     s->env.ocean_io.agent_obs = s->env._obs_buf;
     s->env.ocean_io.agent_actions = s->env._acts_buf;
     s->env.ocean_io.agent_rewards = s->env._rews_buf;
@@ -103,7 +81,6 @@ static void nh_pvp_reset(EncounterState* state, EncounterContext* context, uint3
 static void nh_pvp_step(EncounterState* state, EncounterContext* context, const int* actions) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    /* pvp_step reads agent 0 actions from ocean_io.agent_actions. */
     memcpy(s->env.ocean_io.agent_actions, actions, NUM_ACTION_HEADS * sizeof(int));
     pvp_step(&s->env);
 }
@@ -117,9 +94,6 @@ static void nh_pvp_step_human_commands(
     NhPvpState* s = (NhPvpState*)state;
     int saved_use_c_opponent_p0 = s->env.pvp_runtime.use_c_opponent_p0;
     s->env.pvp_runtime.use_c_opponent_p0 = 0;
-    /* click-anywhere: write raw click coords to agent 0's walk_dest before the
-       step. BFS pathfinder walks toward it across as many ticks as needed and
-       clears it on arrival. attack click still flows through HEAD_COMBAT. */
     if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
         s->env.pvp_runtime.walk_dest_x[0] = hi->pending_move_x;
         s->env.pvp_runtime.walk_dest_y[0] = hi->pending_move_y;
@@ -131,8 +105,8 @@ static void nh_pvp_step_human_commands(
         &s->env.players[1]);
     pvp_step(&s->env);
     s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
-    /* only clear non-move pending fields; pending_move stays until the player
-       arrives at the clicked tile so subsequent ticks keep extending walk_dest. */
+    /* pending_move must survive until arrival so later ticks keep re-arming
+       walk_dest for the same click */
     if (s->env.pvp_runtime.walk_dest_x[0] < 0 || s->env.pvp_runtime.walk_dest_y[0] < 0) {
         human_input_clear_move(hi);
     }
@@ -147,12 +121,9 @@ static void nh_pvp_step_human_commands(
     hi->pending_spec = 0;
 }
 
-
 static void nh_pvp_write_obs(EncounterState* state, EncounterContext* context, float* obs_out) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    /* observations are already computed by pvp_step into _obs_buf.
-       copy agent 0's observations (SLOT_NUM_OBSERVATIONS floats). */
     memcpy(obs_out, s->env._obs_buf, SLOT_NUM_OBSERVATIONS * sizeof(float));
 }
 
@@ -163,8 +134,6 @@ static void nh_pvp_write_mask(
 ) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    /* masks are in _masks_buf, ACTION_MASK_SIZE bytes for agent 0.
-       convert to float for the encounter interface. */
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
         mask_out[i] = (float)s->env._masks_buf[i];
     }
@@ -182,11 +151,10 @@ static int nh_pvp_is_terminal(EncounterState* state, EncounterContext* context) 
     return s->env.episode_over;
 }
 
-
 static int nh_pvp_get_entity_count(EncounterState* state, EncounterContext* context) {
     (void)state;
     (void)context;
-    return NUM_AGENTS;  /* always 2 for NH PvP */
+    return NUM_AGENTS;
 }
 
 static void* nh_pvp_get_entity(EncounterState* state, EncounterContext* context, int index) {
@@ -194,7 +162,6 @@ static void* nh_pvp_get_entity(EncounterState* state, EncounterContext* context,
     NhPvpState* s = (NhPvpState*)state;
     return &s->env.players[index];
 }
-
 
 static void nh_pvp_fill_render_entities(
     EncounterState* state,
@@ -212,7 +179,6 @@ static void nh_pvp_fill_render_entities(
     }
     *count = n;
 }
-
 
 static void nh_pvp_put_int(
     EncounterState* state,
@@ -281,7 +247,6 @@ static void nh_pvp_put_ptr(
     }
 }
 
-
 static void* nh_pvp_get_log(EncounterState* state, EncounterContext* context) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
@@ -299,7 +264,6 @@ static int nh_pvp_get_winner(EncounterState* state, EncounterContext* context) {
     NhPvpState* s = (NhPvpState*)state;
     return s->env.winner;
 }
-
 
 static const EncounterDef ENCOUNTER_NH_PVP = {
     .name = "nh_pvp",
@@ -342,7 +306,6 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .head_target = -1,
 };
 
-/* auto-register on include */
 __attribute__((constructor))
 static void nh_pvp_register(void) {
     encounter_register(&ENCOUNTER_NH_PVP);

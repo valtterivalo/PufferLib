@@ -1,11 +1,3 @@
-/**
- * @file osrs_pvp_gear.h
- * @brief Dynamic loadout resolution and gear management
- *
- * Priority-based loadout system: each loadout queries the player's inventory
- * for best available items. No hardcoded loadout definitions.
- */
-
 #ifndef OSRS_PVP_GEAR_H
 #define OSRS_PVP_GEAR_H
 
@@ -38,18 +30,15 @@ static const uint8_t MELEE_WEAPON_PRIORITY[] = {
     ITEM_VESTAS, ITEM_GHRAZI_RAPIER, ITEM_INQUISITORS_MACE, ITEM_ELDER_MAUL,
     ITEM_VOIDWAKER, ITEM_ANCIENT_GS, ITEM_AGS, ITEM_STATIUS_WARHAMMER, ITEM_WHIP
 };
-#define MELEE_WEAPON_PRIORITY_LEN (sizeof(MELEE_WEAPON_PRIORITY) / sizeof(MELEE_WEAPON_PRIORITY[0]))
 
 static const uint8_t RANGE_WEAPON_PRIORITY[] = {
     ITEM_MORRIGANS_JAVELIN, ITEM_ZARYTE_CROSSBOW, ITEM_ARMADYL_CROSSBOW, ITEM_RUNE_CROSSBOW
 };
-#define RANGE_WEAPON_PRIORITY_LEN (sizeof(RANGE_WEAPON_PRIORITY) / sizeof(RANGE_WEAPON_PRIORITY[0]))
 
 static const uint8_t MAGE_WEAPON_PRIORITY[] = {
     ITEM_ZURIELS_STAFF, ITEM_KODAI_WAND, ITEM_VOLATILE_STAFF,
     ITEM_STAFF_OF_DEAD, ITEM_AHRIM_STAFF
 };
-#define MAGE_WEAPON_PRIORITY_LEN (sizeof(MAGE_WEAPON_PRIORITY) / sizeof(MAGE_WEAPON_PRIORITY[0]))
 
 static const uint8_t MELEE_SPEC_PRIORITY[] = {
     ITEM_VESTAS, ITEM_ANCIENT_GS, ITEM_AGS, ITEM_DRAGON_CLAWS,
@@ -71,84 +60,62 @@ static const uint8_t MAGIC_SPEC_PRIORITY[] = {
 static const uint8_t TANK_BODY_PRIORITY[] = {
     ITEM_KARILS_TOP, ITEM_BLACK_DHIDE_BODY
 };
-#define TANK_BODY_PRIORITY_LEN (sizeof(TANK_BODY_PRIORITY) / sizeof(TANK_BODY_PRIORITY[0]))
 
 static const uint8_t MAGE_BODY_PRIORITY[] = {
     ITEM_ANCESTRAL_TOP, ITEM_AHRIMS_ROBETOP, ITEM_MYSTIC_TOP
 };
-#define MAGE_BODY_PRIORITY_LEN (sizeof(MAGE_BODY_PRIORITY) / sizeof(MAGE_BODY_PRIORITY[0]))
 
 static const uint8_t TANK_LEGS_PRIORITY[] = {
     ITEM_BANDOS_TASSETS, ITEM_TORAGS_PLATELEGS, ITEM_DHAROKS_PLATELEGS,
     ITEM_VERACS_PLATESKIRT, ITEM_RUNE_PLATELEGS
 };
-#define TANK_LEGS_PRIORITY_LEN (sizeof(TANK_LEGS_PRIORITY) / sizeof(TANK_LEGS_PRIORITY[0]))
 
 static const uint8_t MAGE_LEGS_PRIORITY[] = {
     ITEM_ANCESTRAL_BOTTOM, ITEM_AHRIMS_ROBESKIRT, ITEM_MYSTIC_BOTTOM
 };
-#define MAGE_LEGS_PRIORITY_LEN (sizeof(MAGE_LEGS_PRIORITY) / sizeof(MAGE_LEGS_PRIORITY[0]))
 
 static const uint8_t MELEE_SHIELD_PRIORITY[] = {
     ITEM_DRAGON_DEFENDER
 };
-#define MELEE_SHIELD_PRIORITY_LEN (sizeof(MELEE_SHIELD_PRIORITY) / sizeof(MELEE_SHIELD_PRIORITY[0]))
 
 static const uint8_t TANK_SHIELD_PRIORITY[] = {
     ITEM_BLESSED_SPIRIT_SHIELD, ITEM_SPIRIT_SHIELD
 };
-#define TANK_SHIELD_PRIORITY_LEN (sizeof(TANK_SHIELD_PRIORITY) / sizeof(TANK_SHIELD_PRIORITY[0]))
 
 static const uint8_t MAGE_SHIELD_PRIORITY[] = {
     ITEM_MAGES_BOOK, ITEM_BLESSED_SPIRIT_SHIELD, ITEM_SPIRIT_SHIELD
 };
-#define MAGE_SHIELD_PRIORITY_LEN (sizeof(MAGE_SHIELD_PRIORITY) / sizeof(MAGE_SHIELD_PRIORITY[0]))
 
 static const uint8_t TANK_HEAD_PRIORITY[] = {
     ITEM_TORAGS_HELM, ITEM_GUTHANS_HELM, ITEM_VERACS_HELM,
     ITEM_DHAROKS_HELM, ITEM_HELM_NEITIZNOT
 };
-#define TANK_HEAD_PRIORITY_LEN (sizeof(TANK_HEAD_PRIORITY) / sizeof(TANK_HEAD_PRIORITY[0]))
 
 static const uint8_t MAGE_HEAD_PRIORITY[] = {ITEM_ANCESTRAL_HAT, ITEM_HELM_NEITIZNOT};
-#define MAGE_HEAD_PRIORITY_LEN (sizeof(MAGE_HEAD_PRIORITY) / sizeof(MAGE_HEAD_PRIORITY[0]))
 
 static const uint8_t MELEE_CAPE_PRIORITY[] = {ITEM_INFERNAL_CAPE, ITEM_GOD_CAPE};
-#define MELEE_CAPE_PRIORITY_LEN (sizeof(MELEE_CAPE_PRIORITY) / sizeof(MELEE_CAPE_PRIORITY[0]))
 
 static const uint8_t MAGE_CAPE_PRIORITY[] = {ITEM_GOD_CAPE};
-#define MAGE_CAPE_PRIORITY_LEN (sizeof(MAGE_CAPE_PRIORITY) / sizeof(MAGE_CAPE_PRIORITY[0]))
 
 static const uint8_t MELEE_NECK_PRIORITY[] = {ITEM_FURY, ITEM_GLORY};
-#define MELEE_NECK_PRIORITY_LEN (sizeof(MELEE_NECK_PRIORITY) / sizeof(MELEE_NECK_PRIORITY[0]))
 
 static const uint8_t MAGE_NECK_PRIORITY[] = {ITEM_OCCULT_NECKLACE, ITEM_GLORY};
-#define MAGE_NECK_PRIORITY_LEN (sizeof(MAGE_NECK_PRIORITY) / sizeof(MAGE_NECK_PRIORITY[0]))
 
 static const uint8_t MELEE_RING_PRIORITY[] = {ITEM_BERSERKER_RING};
-#define MELEE_RING_PRIORITY_LEN (sizeof(MELEE_RING_PRIORITY) / sizeof(MELEE_RING_PRIORITY[0]))
 
 static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I, ITEM_BERSERKER_RING};
-#define MAGE_RING_PRIORITY_LEN (sizeof(MAGE_RING_PRIORITY) / sizeof(MAGE_RING_PRIORITY[0]))
 
-/**
- * Compute total gear bonuses from equipped[] array.
- * Delegates to osrs_sum_equipment_bonuses() from osrs_combat.h, then maps
- * EquipmentBonuses field names to GearBonuses field names.
- */
 static inline GearBonuses compute_slot_gear_bonuses(Player* p) {
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(p->equipped, &eb);
     return osrs_gear_bonuses_from_equipment_bonuses(&eb);
 }
 
-/** Get cached slot-based gear bonuses, recomputing if dirty. */
 static inline GearBonuses* get_slot_gear_bonuses(Player* p) {
     osrs_ensure_player_equipment(p);
     return &p->slot_cached_bonuses;
 }
 
-/** Set spec weapon enums based on equipped weapon. */
 static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item) {
     p->melee_spec_weapon = MELEE_SPEC_NONE;
     p->ranged_spec_weapon = RANGED_SPEC_NONE;
@@ -172,7 +139,7 @@ static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item
         case ITEM_STATIUS_WARHAMMER:
             p->melee_spec_weapon = MELEE_SPEC_DWH; break;
         case ITEM_ELDER_MAUL:
-            break; /* no spec */
+            break;
         case ITEM_DARK_BOW:
             p->ranged_spec_weapon = RANGED_SPEC_DARK_BOW; break;
         case ITEM_HEAVY_BALLISTA:
@@ -190,7 +157,6 @@ static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item
     }
 }
 
-/** Check if a weapon is a spec weapon (any spec enum becomes non-NONE). */
 static inline int item_is_spec_weapon(uint8_t weapon_item) {
     switch (weapon_item) {
         case ITEM_DRAGON_DAGGER:
@@ -213,11 +179,8 @@ static inline int item_is_spec_weapon(uint8_t weapon_item) {
     }
 }
 
-/**
- * Equip an item into a gear slot. Returns 1 if changed, 0 if already equipped.
- * PvP uses per-slot inventory arrays (the LMS upgrade pool), not the flat 28-slot
- * bag in osrs_inventory.h, so it can't use osrs_equip_from_inventory().
- */
+/* PvP inventories are per-slot LMS upgrade pools, not the flat 28-slot bag, so
+   osrs_equip_from_inventory does not apply here */
 static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
     if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
     if (p->equipped[gear_slot] == item_idx) return 0;
@@ -229,7 +192,6 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
         update_spec_weapons_for_weapon(p, item_idx);
         int style = get_item_attack_style(item_idx);
 
-        /* current_gear = internal gear_bonuses[] index (GEAR_SPEC for spec weapons) */
         if (item_is_spec_weapon(item_idx)) {
             p->current_gear = GEAR_SPEC;
         } else if (style == ATTACK_STYLE_MELEE) {
@@ -240,7 +202,6 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
             p->current_gear = GEAR_MAGE;
         }
 
-        /* visible_gear = external damage type; voidwaker is magic despite being melee */
         if (item_idx == ITEM_VOIDWAKER) {
             p->visible_gear = GEAR_MAGE;
         } else if (style == ATTACK_STYLE_MELEE) {
@@ -261,7 +222,6 @@ static inline int slot_equip_item(Player* p, int gear_slot, uint8_t item_idx) {
     return 1;
 }
 
-/** Check if player has an item in the given slot's inventory. */
 static inline int player_has_item_in_slot(Player* p, int gear_slot, uint8_t item_idx) {
     for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
         if (p->inventory[gear_slot][i] == item_idx) return 1;
@@ -269,10 +229,6 @@ static inline int player_has_item_in_slot(Player* p, int gear_slot, uint8_t item
     return 0;
 }
 
-/**
- * Find best available item from a priority list in the player's inventory.
- * Returns ITEM_NONE if no item from the list is available.
- */
 static inline uint8_t find_best_available(
     Player* p, int gear_slot,
     const uint8_t* priority, int priority_len
@@ -285,195 +241,120 @@ static inline uint8_t find_best_available(
     return ITEM_NONE;
 }
 
-/** Find best melee spec weapon available in weapon inventory. */
 static inline uint8_t find_best_melee_spec(Player* p) {
     return find_best_available(p, GEAR_SLOT_WEAPON, MELEE_SPEC_PRIORITY, MELEE_SPEC_PRIORITY_LEN);
 }
 
-/** Find best ranged spec weapon available in weapon inventory. */
 static inline uint8_t find_best_ranged_spec(Player* p) {
     return find_best_available(p, GEAR_SLOT_WEAPON, RANGE_SPEC_PRIORITY, RANGE_SPEC_PRIORITY_LEN);
 }
 
-/** Find best magic spec weapon available in weapon inventory. */
 static inline uint8_t find_best_magic_spec(Player* p) {
     return find_best_available(p, GEAR_SLOT_WEAPON, MAGIC_SPEC_PRIORITY, MAGIC_SPEC_PRIORITY_LEN);
 }
 
-/** Check if player has granite maul in weapon inventory. */
 static inline int player_has_gmaul(Player* p) {
     return player_has_item_in_slot(p, GEAR_SLOT_WEAPON, ITEM_GRANITE_MAUL);
 }
 
-/**
- * Resolve the best-available items for `loadout` (MELEE, RANGE, MAGE, TANK, the
- * SPEC_* variants, GMAUL) from the player's per-slot inventory into
- * out[NUM_DYNAMIC_GEAR_SLOTS]. A slot with no matching item keeps its equipment.
- */
+typedef struct {
+    const uint8_t* items;
+    int len;
+} GearPriorityList;
+
+typedef struct {
+    GearPriorityList weapon;
+    GearPriorityList shield;
+    GearPriorityList body;
+    GearPriorityList legs;
+    GearPriorityList head;
+    GearPriorityList cape;
+    GearPriorityList neck;
+    GearPriorityList ring;
+    int shield_two_handed_aware;
+} LoadoutPriorities;
+
+#define GEAR_LIST(arr) { arr, (int)(sizeof(arr) / sizeof((arr)[0])) }
+
+/* rows are positional in LOADOUT_* enum order (KEEP hole first, then MELEE,
+   RANGE, MAGE, TANK, SPEC_MELEE, SPEC_RANGE, SPEC_MAGIC); columns are weapon,
+   shield, body, legs, head, cape, neck, ring, shield_two_handed_aware.
+   g++ on the trainer include path cannot compile designated initializers here. */
+static const LoadoutPriorities LOADOUT_PRIORITIES[LOADOUT_GMAUL] = {
+    { {NULL, 0}, {NULL, 0}, {NULL, 0}, {NULL, 0},
+      {NULL, 0}, {NULL, 0}, {NULL, 0}, {NULL, 0}, 0 },
+    { GEAR_LIST(MELEE_WEAPON_PRIORITY), GEAR_LIST(MELEE_SHIELD_PRIORITY),
+      GEAR_LIST(TANK_BODY_PRIORITY), GEAR_LIST(TANK_LEGS_PRIORITY),
+      GEAR_LIST(TANK_HEAD_PRIORITY), GEAR_LIST(MELEE_CAPE_PRIORITY),
+      GEAR_LIST(MELEE_NECK_PRIORITY), GEAR_LIST(MELEE_RING_PRIORITY), 1 },
+    { GEAR_LIST(RANGE_WEAPON_PRIORITY), GEAR_LIST(TANK_SHIELD_PRIORITY),
+      GEAR_LIST(TANK_BODY_PRIORITY), GEAR_LIST(TANK_LEGS_PRIORITY),
+      GEAR_LIST(TANK_HEAD_PRIORITY), GEAR_LIST(MAGE_CAPE_PRIORITY),
+      GEAR_LIST(MELEE_NECK_PRIORITY), GEAR_LIST(MAGE_RING_PRIORITY), 0 },
+    { GEAR_LIST(MAGE_WEAPON_PRIORITY), GEAR_LIST(MAGE_SHIELD_PRIORITY),
+      GEAR_LIST(MAGE_BODY_PRIORITY), GEAR_LIST(MAGE_LEGS_PRIORITY),
+      GEAR_LIST(MAGE_HEAD_PRIORITY), GEAR_LIST(MAGE_CAPE_PRIORITY),
+      GEAR_LIST(MAGE_NECK_PRIORITY), GEAR_LIST(MAGE_RING_PRIORITY), 0 },
+    { GEAR_LIST(MAGE_WEAPON_PRIORITY), GEAR_LIST(TANK_SHIELD_PRIORITY),
+      GEAR_LIST(TANK_BODY_PRIORITY), GEAR_LIST(TANK_LEGS_PRIORITY),
+      GEAR_LIST(TANK_HEAD_PRIORITY), GEAR_LIST(MAGE_CAPE_PRIORITY),
+      GEAR_LIST(MELEE_NECK_PRIORITY), GEAR_LIST(MAGE_RING_PRIORITY), 0 },
+    { GEAR_LIST(MELEE_SPEC_PRIORITY), GEAR_LIST(MELEE_SHIELD_PRIORITY),
+      GEAR_LIST(TANK_BODY_PRIORITY), GEAR_LIST(TANK_LEGS_PRIORITY),
+      GEAR_LIST(TANK_HEAD_PRIORITY), GEAR_LIST(MELEE_CAPE_PRIORITY),
+      GEAR_LIST(MELEE_NECK_PRIORITY), GEAR_LIST(MELEE_RING_PRIORITY), 1 },
+    { GEAR_LIST(RANGE_SPEC_PRIORITY), GEAR_LIST(TANK_SHIELD_PRIORITY),
+      GEAR_LIST(TANK_BODY_PRIORITY), GEAR_LIST(TANK_LEGS_PRIORITY),
+      GEAR_LIST(TANK_HEAD_PRIORITY), GEAR_LIST(MAGE_CAPE_PRIORITY),
+      GEAR_LIST(MELEE_NECK_PRIORITY), GEAR_LIST(MELEE_RING_PRIORITY), 1 },
+    { GEAR_LIST(MAGIC_SPEC_PRIORITY), GEAR_LIST(MAGE_SHIELD_PRIORITY),
+      GEAR_LIST(MAGE_BODY_PRIORITY), GEAR_LIST(MAGE_LEGS_PRIORITY),
+      GEAR_LIST(MAGE_HEAD_PRIORITY), GEAR_LIST(MAGE_CAPE_PRIORITY),
+      GEAR_LIST(MAGE_NECK_PRIORITY), GEAR_LIST(MAGE_RING_PRIORITY), 0 },
+};
+
+/* out[] order must match DYNAMIC_GEAR_SLOTS: weapon, shield, body, legs, head,
+   cape, neck, ring */
 static inline void resolve_loadout(Player* p, int loadout, uint8_t out[NUM_DYNAMIC_GEAR_SLOTS]) {
     for (int i = 0; i < NUM_DYNAMIC_GEAR_SLOTS; i++) {
         out[i] = p->equipped[DYNAMIC_GEAR_SLOTS[i]];
     }
 
-    /* out index -> DYNAMIC_GEAR_SLOTS: weapon 0, shield 1, body 2, legs 3,
-       head 4, cape 5, neck 6, ring 7 */
-    switch (loadout) {
-        case LOADOUT_MELEE: {
-            uint8_t weapon = find_best_available(p, GEAR_SLOT_WEAPON, MELEE_WEAPON_PRIORITY, MELEE_WEAPON_PRIORITY_LEN);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-            if (!item_is_two_handed(out[0])) {
-                uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MELEE_SHIELD_PRIORITY, MELEE_SHIELD_PRIORITY_LEN);
-                if (shield != ITEM_NONE) out[1] = shield;
-            } else {
-                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
-            }
-            uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
-            if (body != ITEM_NONE) out[2] = body;
-            uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, TANK_LEGS_PRIORITY, TANK_LEGS_PRIORITY_LEN);
-            if (legs != ITEM_NONE) out[3] = legs;
-            uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, TANK_HEAD_PRIORITY, TANK_HEAD_PRIORITY_LEN);
-            if (head != ITEM_NONE) out[4] = head;
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MELEE_CAPE_PRIORITY, MELEE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MELEE_NECK_PRIORITY, MELEE_NECK_PRIORITY_LEN);
-            if (neck != ITEM_NONE) out[6] = neck;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MELEE_RING_PRIORITY, MELEE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_RANGE: {
-            uint8_t weapon = find_best_available(p, GEAR_SLOT_WEAPON, RANGE_WEAPON_PRIORITY, RANGE_WEAPON_PRIORITY_LEN);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-            uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, TANK_SHIELD_PRIORITY, TANK_SHIELD_PRIORITY_LEN);
-            if (shield != ITEM_NONE) out[1] = shield;
-            uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
-            if (body != ITEM_NONE) out[2] = body;
-            uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, TANK_LEGS_PRIORITY, TANK_LEGS_PRIORITY_LEN);
-            if (legs != ITEM_NONE) out[3] = legs;
-            uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, TANK_HEAD_PRIORITY, TANK_HEAD_PRIORITY_LEN);
-            if (head != ITEM_NONE) out[4] = head;
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MAGE_CAPE_PRIORITY, MAGE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MELEE_NECK_PRIORITY, MELEE_NECK_PRIORITY_LEN);
-            if (neck != ITEM_NONE) out[6] = neck;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MAGE_RING_PRIORITY, MAGE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_MAGE:
-        case LOADOUT_TANK: {
-            uint8_t weapon = find_best_available(p, GEAR_SLOT_WEAPON, MAGE_WEAPON_PRIORITY, MAGE_WEAPON_PRIORITY_LEN);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-
-            if (loadout == LOADOUT_MAGE) {
-                uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MAGE_SHIELD_PRIORITY, MAGE_SHIELD_PRIORITY_LEN);
-                if (shield != ITEM_NONE) out[1] = shield;
-                uint8_t body = find_best_available(p, GEAR_SLOT_BODY, MAGE_BODY_PRIORITY, MAGE_BODY_PRIORITY_LEN);
-                if (body != ITEM_NONE) out[2] = body;
-                uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, MAGE_LEGS_PRIORITY, MAGE_LEGS_PRIORITY_LEN);
-                if (legs != ITEM_NONE) out[3] = legs;
-                uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, MAGE_HEAD_PRIORITY, MAGE_HEAD_PRIORITY_LEN);
-                if (head != ITEM_NONE) out[4] = head;
-                uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MAGE_NECK_PRIORITY, MAGE_NECK_PRIORITY_LEN);
-                if (neck != ITEM_NONE) out[6] = neck;
-            } else {
-                uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, TANK_SHIELD_PRIORITY, TANK_SHIELD_PRIORITY_LEN);
-                if (shield != ITEM_NONE) out[1] = shield;
-                uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
-                if (body != ITEM_NONE) out[2] = body;
-                uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, TANK_LEGS_PRIORITY, TANK_LEGS_PRIORITY_LEN);
-                if (legs != ITEM_NONE) out[3] = legs;
-                uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, TANK_HEAD_PRIORITY, TANK_HEAD_PRIORITY_LEN);
-                if (head != ITEM_NONE) out[4] = head;
-                uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MELEE_NECK_PRIORITY, MELEE_NECK_PRIORITY_LEN);
-                if (neck != ITEM_NONE) out[6] = neck;
-            }
-
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MAGE_CAPE_PRIORITY, MAGE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MAGE_RING_PRIORITY, MAGE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_SPEC_MELEE: {
-            uint8_t weapon = find_best_melee_spec(p);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-            if (!item_is_two_handed(out[0])) {
-                uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MELEE_SHIELD_PRIORITY, MELEE_SHIELD_PRIORITY_LEN);
-                if (shield != ITEM_NONE) out[1] = shield;
-            } else {
-                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
-            }
-            uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
-            if (body != ITEM_NONE) out[2] = body;
-            uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, TANK_LEGS_PRIORITY, TANK_LEGS_PRIORITY_LEN);
-            if (legs != ITEM_NONE) out[3] = legs;
-            uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, TANK_HEAD_PRIORITY, TANK_HEAD_PRIORITY_LEN);
-            if (head != ITEM_NONE) out[4] = head;
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MELEE_CAPE_PRIORITY, MELEE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MELEE_NECK_PRIORITY, MELEE_NECK_PRIORITY_LEN);
-            if (neck != ITEM_NONE) out[6] = neck;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MELEE_RING_PRIORITY, MELEE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_SPEC_RANGE: {
-            uint8_t weapon = find_best_ranged_spec(p);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-            if (!item_is_two_handed(out[0])) {
-                uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, TANK_SHIELD_PRIORITY, TANK_SHIELD_PRIORITY_LEN);
-                if (shield != ITEM_NONE) out[1] = shield;
-            } else {
-                out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
-            }
-            uint8_t body = find_best_available(p, GEAR_SLOT_BODY, TANK_BODY_PRIORITY, TANK_BODY_PRIORITY_LEN);
-            if (body != ITEM_NONE) out[2] = body;
-            uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, TANK_LEGS_PRIORITY, TANK_LEGS_PRIORITY_LEN);
-            if (legs != ITEM_NONE) out[3] = legs;
-            uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, TANK_HEAD_PRIORITY, TANK_HEAD_PRIORITY_LEN);
-            if (head != ITEM_NONE) out[4] = head;
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MAGE_CAPE_PRIORITY, MAGE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MELEE_NECK_PRIORITY, MELEE_NECK_PRIORITY_LEN);
-            if (neck != ITEM_NONE) out[6] = neck;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MELEE_RING_PRIORITY, MELEE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_SPEC_MAGIC: {
-            uint8_t weapon = find_best_magic_spec(p);
-            if (weapon != ITEM_NONE) out[0] = weapon;
-            uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, MAGE_SHIELD_PRIORITY, MAGE_SHIELD_PRIORITY_LEN);
-            if (shield != ITEM_NONE) out[1] = shield;
-            uint8_t body = find_best_available(p, GEAR_SLOT_BODY, MAGE_BODY_PRIORITY, MAGE_BODY_PRIORITY_LEN);
-            if (body != ITEM_NONE) out[2] = body;
-            uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, MAGE_LEGS_PRIORITY, MAGE_LEGS_PRIORITY_LEN);
-            if (legs != ITEM_NONE) out[3] = legs;
-            uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, MAGE_HEAD_PRIORITY, MAGE_HEAD_PRIORITY_LEN);
-            if (head != ITEM_NONE) out[4] = head;
-            uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, MAGE_CAPE_PRIORITY, MAGE_CAPE_PRIORITY_LEN);
-            if (cape != ITEM_NONE) out[5] = cape;
-            uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, MAGE_NECK_PRIORITY, MAGE_NECK_PRIORITY_LEN);
-            if (neck != ITEM_NONE) out[6] = neck;
-            uint8_t ring = find_best_available(p, GEAR_SLOT_RING, MAGE_RING_PRIORITY, MAGE_RING_PRIORITY_LEN);
-            if (ring != ITEM_NONE) out[7] = ring;
-            break;
-        }
-        case LOADOUT_GMAUL: {
-            out[0] = ITEM_GRANITE_MAUL;
-            out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
-            break;
-        }
-        default:
-            break;
+    if (loadout == LOADOUT_GMAUL) {
+        out[0] = ITEM_GRANITE_MAUL;
+        out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
+        return;
     }
+    if (loadout < LOADOUT_MELEE || loadout > LOADOUT_SPEC_MAGIC) {
+        return;
+    }
+
+    const LoadoutPriorities* lp = &LOADOUT_PRIORITIES[loadout];
+
+    uint8_t weapon = find_best_available(p, GEAR_SLOT_WEAPON, lp->weapon.items, lp->weapon.len);
+    if (weapon != ITEM_NONE) out[0] = weapon;
+
+    if (lp->shield_two_handed_aware && item_is_two_handed(out[0])) {
+        out[1] = osrs_suppress_shield_for_two_handed_weapon(out[0], out[1]);
+    } else {
+        uint8_t shield = find_best_available(p, GEAR_SLOT_SHIELD, lp->shield.items, lp->shield.len);
+        if (shield != ITEM_NONE) out[1] = shield;
+    }
+
+    uint8_t body = find_best_available(p, GEAR_SLOT_BODY, lp->body.items, lp->body.len);
+    if (body != ITEM_NONE) out[2] = body;
+    uint8_t legs = find_best_available(p, GEAR_SLOT_LEGS, lp->legs.items, lp->legs.len);
+    if (legs != ITEM_NONE) out[3] = legs;
+    uint8_t head = find_best_available(p, GEAR_SLOT_HEAD, lp->head.items, lp->head.len);
+    if (head != ITEM_NONE) out[4] = head;
+    uint8_t cape = find_best_available(p, GEAR_SLOT_CAPE, lp->cape.items, lp->cape.len);
+    if (cape != ITEM_NONE) out[5] = cape;
+    uint8_t neck = find_best_available(p, GEAR_SLOT_NECK, lp->neck.items, lp->neck.len);
+    if (neck != ITEM_NONE) out[6] = neck;
+    uint8_t ring = find_best_available(p, GEAR_SLOT_RING, lp->ring.items, lp->ring.len);
+    if (ring != ITEM_NONE) out[7] = ring;
 }
 
-/**
- * Apply a loadout to a player using dynamic resolution.
- * Returns number of slots that actually changed.
- */
 static inline int apply_loadout(Player* p, int loadout) {
     if (loadout <= LOADOUT_KEEP || loadout > LOADOUT_GMAUL) return 0;
 
@@ -489,9 +370,6 @@ static inline int apply_loadout(Player* p, int loadout) {
     return changed;
 }
 
-/**
- * Check if current equipment matches a resolved loadout.
- */
 static inline int is_loadout_active(Player* p, int loadout) {
     if (loadout <= LOADOUT_KEEP || loadout > LOADOUT_GMAUL) return 0;
 
@@ -505,9 +383,6 @@ static inline int is_loadout_active(Player* p, int loadout) {
     return 1;
 }
 
-/**
- * Get current active loadout (1-8), or 0 if no loadout matches.
- */
 static inline int get_current_loadout(Player* p) {
     for (int l = 1; l <= LOADOUT_GMAUL; l++) {
         if (is_loadout_active(p, l)) return l;
@@ -515,17 +390,12 @@ static inline int get_current_loadout(Player* p) {
     return 0;
 }
 
-/** Get attack style for currently equipped weapon. */
 static inline AttackStyle get_slot_weapon_attack_style(Player* p) {
     uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
     if (weapon >= NUM_ITEMS) return ATTACK_STYLE_NONE;
     return (AttackStyle)get_item_attack_style(weapon);
 }
 
-/**
- * Initialize basic LMS equipment (tier 0).
- * Sets equipped[] and inventory[] arrays for the basic loadout.
- */
 static inline void init_slot_equipment_lms(Player* p) {
     memset(p->inventory, ITEM_NONE, sizeof(p->inventory));
     memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
@@ -586,10 +456,6 @@ static inline void init_slot_equipment_lms(Player* p) {
     p->current_gear = GEAR_MELEE;
 }
 
-/**
- * Add an item to a player's slot inventory.
- * Returns 1 if added, 0 if slot is full or item already present.
- */
 static inline int add_item_to_inventory(Player* p, int gear_slot, uint8_t item_idx) {
     if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) return 0;
     if (p->num_items_in_slot[gear_slot] >= MAX_ITEMS_PER_SLOT) return 0;
@@ -603,7 +469,6 @@ static inline int add_item_to_inventory(Player* p, int gear_slot, uint8_t item_i
     return 1;
 }
 
-/* Loot item -> the basic item it obsoletes (ITEM_NONE = obsoletes nothing). */
 static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_HELM_NEITIZNOT]       = ITEM_NONE,
     [ITEM_GOD_CAPE]             = ITEM_NONE,
@@ -664,13 +529,9 @@ static const uint8_t UPGRADE_REPLACES[NUM_ITEMS] = {
     [ITEM_DHAROKS_HELM]         = ITEM_HELM_NEITIZNOT,
     [ITEM_VERACS_HELM]          = ITEM_HELM_NEITIZNOT,
     [ITEM_GUTHANS_HELM]         = ITEM_HELM_NEITIZNOT,
-    [ITEM_OPAL_DRAGON_BOLTS]    = ITEM_NONE,  /* conditional; see add_loot_item */
+    [ITEM_OPAL_DRAGON_BOLTS]    = ITEM_NONE,
 };
 
-/**
- * Remove an item from a player's slot inventory.
- * Returns 1 if removed, 0 if item not found.
- */
 static inline int remove_item_from_inventory(Player* p, int gear_slot, uint8_t item_idx) {
     for (int i = 0; i < p->num_items_in_slot[gear_slot]; i++) {
         if (p->inventory[gear_slot][i] == item_idx) {
@@ -685,12 +546,10 @@ static inline int remove_item_from_inventory(Player* p, int gear_slot, uint8_t i
     return 0;
 }
 
-/** Map item database index to GearSlotIndex. Thin wrapper over osrs_item_gear_slot(). */
 static inline int item_to_gear_slot(uint8_t item_idx) {
     return osrs_item_gear_slot(item_idx);
 }
-/* Loot->loot obsolescence chains (UPGRADE_REPLACES covers basic->loot). Adding
- * new_item drops obsolete_item: { new_item, obsolete_item }. */
+
 static const uint8_t CHAIN_REPLACES[][2] = {
     { ITEM_VESTAS, ITEM_WHIP },
     { ITEM_ZURIELS_STAFF, ITEM_STAFF_OF_DEAD },
@@ -748,18 +607,10 @@ static const uint8_t CHAIN_REPLACES[][2] = {
 };
 #define CHAIN_REPLACES_LEN (sizeof(CHAIN_REPLACES) / sizeof(CHAIN_REPLACES[0]))
 
-/**
- * Add a loot item with upgrade replacement logic.
- *
- * 1. UPGRADE_REPLACES: removes the basic item this loot replaces
- * 2. CHAIN_REPLACES: removes lesser loot items made obsolete by this one
- * 3. Crossbow bolt trigger: ACB/ZCB + opal bolts → swap diamond bolts
- */
 static inline void add_loot_item(Player* p, uint8_t item_idx) {
     int gear_slot = item_to_gear_slot(item_idx);
     if (gear_slot < 0) return;
 
-    /* skip if a strictly better item is already owned (reverse chain lookup) */
     for (int i = 0; i < (int)CHAIN_REPLACES_LEN; i++) {
         if (CHAIN_REPLACES[i][1] == item_idx) {
             uint8_t better = CHAIN_REPLACES[i][0];
@@ -798,10 +649,9 @@ static inline void add_loot_item(Player* p, uint8_t item_idx) {
 
 }
 
-/* 28-slot inventory: 11 fixed = 4 brews + 2 restores + 1 combat + 1 ranged + 2 karambwan + 1 rune pouch */
+/* 4 brew + 2 restore + 1 combat + 1 ranged + 2 karambwan + 1 rune pouch */
 #define FIXED_INVENTORY_SLOTS 11
 
-/** Count switch items: items beyond the first in each gear slot. */
 static inline int count_switch_items(Player* p) {
     int switches = 0;
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
@@ -812,7 +662,6 @@ static inline int count_switch_items(Player* p) {
     return switches;
 }
 
-/** Compute food count from 28-slot inventory model. */
 static inline int compute_food_count(Player* p) {
     int switches = count_switch_items(p);
     int food = 28 - FIXED_INVENTORY_SLOTS - switches;
@@ -842,11 +691,8 @@ static const uint8_t BLOODIER_LOOT[] = {
 };
 #define BLOODIER_LOOT_LEN (sizeof(BLOODIER_LOOT) / sizeof(BLOODIER_LOOT[0]))
 
-/**
- * Initialize a player's gear for tier 0-3 by rolling loot (each chest = 2 rolls,
- * add_loot_item dedups + chain-replaces). Roll counts pin the RNG call order:
- *   tier 0: none   tier 1: 2   tier 2: 6   tier 3: 8 + 1 bloodier key item.
- */
+/* roll counts per tier pin the seeded RNG call order: tier 1 adds 2 chest rolls,
+   tier 2 adds 4 more, tier 3 adds 2 more plus 1 bloodier roll */
 static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rng) {
     init_slot_equipment_lms(p);
 
@@ -878,7 +724,6 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
 
     #undef ADD_RANDOM_LOOT
 
-    /* tier 3 only: drop the defender if no 1H melee weapon rolled */
     if (tier >= 3 && player_has_item_in_slot(p, GEAR_SLOT_SHIELD, ITEM_DRAGON_DEFENDER)) {
         int has_1h_melee = 0;
         for (int i = 0; i < p->num_items_in_slot[GEAR_SLOT_WEAPON]; i++) {
@@ -903,10 +748,6 @@ static inline void init_player_gear_randomized(Player* p, int tier, uint32_t* rn
     p->current_gear = GEAR_MELEE;
 }
 
-/**
- * Sample gear tier from weights using RNG.
- * Returns tier 0-3.
- */
 static inline int sample_gear_tier(float weights[4], uint32_t* rng) {
     float r = (float)xorshift32(rng) / (float)UINT32_MAX;
     float cumulative = 0.0f;
