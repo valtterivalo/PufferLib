@@ -355,3 +355,24 @@ hard-masks sampling+loss. RUNNING: trunk 25M reference (healthy trajectory
 anchor) + 5c hs512 (size dependence). Colosseum doctrine A/B arms VOID until
 cured; inferno doctrine arms VALID (term 0.224 wins vs trunc 0.122 = terminal
 doctrine satisfied on inferno). PR holds until this is resolved.
+
+## 2026-07-17 colosseum collapse ROOT-CAUSED AND CURED (user's catch)
+
+TWO trunk fixes never made the port, both from the carving-blocked mini-PR,
+both silent above small head counts: (1) MAX_ATN_HEADS=16 in 5c algo.cu -
+colosseum's 20 heads overflow the loss kernel's per-head stack arrays
+(head_logsumexp/entropy/act) by 4 elements per thread per update = silent
+kernel-stack corruption, no assert (the assert was also ours). User remembered
+the identical trunk-era bug. FIX 5d7f942de implements Suarez's own TODO ("use
+env atn dim directly"): single-TU makes NUM_ATNS compile-time visible in
+algo.cu, so MAX_ATN_HEADS = NUM_ATNS. (2) missing ppo_clamp_logratio (fixed
+earlier, ff6bb9c26). VERIFICATION 25M seed 42: wave 3.51 / score 0.114 /
+masked entropy 4.79 vs trunk reference wave 2.93 / 0.084 - the fixed port
+OUTPACES trunk at 25M. Exoneration trail preserved: encoder, mask content,
+masked loss math, masked sampler, bf16 logp storage (trunk same), hs512 (also
+failed = not size). DIAGNOSTIC LESSON: 2M smokes pass on a broken learner;
+any trainer-touching change needs a does-it-still-learn gate (25M vs a
+reference trajectory). RUNNING: colosseum doctrine A/B round 2 on the fixed
+stack (5d7f942de trunc vs 01ff2917c terminal, 143M seed 42 each); trunc arm
+doubles as the port's colosseum validation. Inferno doctrine verdict stands
+(same-code comparison). PR gains two more justified core commits.
