@@ -1,19 +1,3 @@
-/**
- * @fileoverview osrs_special_attacks.h — weapon special attack dispatch.
- *
- * pure function that resolves a special attack given pre-computed combat stats.
- * encounters call osrs_resolve_spec() and apply the returned SpecResult.
- * osrs_spec_cost() returns spec energy cost by weapon item index (0 = no spec).
- *
- * SHARED FUNCTIONS:
- *   osrs_spec_cost(weapon_idx)            spec energy cost for a weapon
- *   osrs_resolve_spec(weapon, ...)        resolve spec attack, return result
- *   osrs_spec_result_force_max(...)       rewrite a resolved spec to its max
- *   osrs_blowpipe_spec_resolve(...)       blowpipe spec helper
- *
- * multipliers ref .refs/osrs-dps-calc, behavior ref .refs/osrs-sdk.
- */
-
 #ifndef OSRS_SPECIAL_ATTACKS_H
 #define OSRS_SPECIAL_ATTACKS_H
 
@@ -22,14 +6,13 @@
 #include "osrs_combat.h"
 #include "osrs_items.h"
 
-
 #define BLOWPIPE_SPEC_ACC_MULT  2
-#define BLOWPIPE_SPEC_DMG_NUM   3   /* 1.5x = 3/2 */
+#define BLOWPIPE_SPEC_DMG_NUM   3
 #define BLOWPIPE_SPEC_DMG_DEN   2
 #define BLOWPIPE_SPEC_HEAL_PCT  50
 #define BLOWPIPE_SPEC_COST      50
 
-/* Blowpipe special helper used by encounter code and focused tests. */
+/** Blowpipe special: accuracy and damage roll only; the caller applies the heal. */
 static inline int osrs_blowpipe_spec_resolve(
     int base_att_roll, int base_max_hit,
     int target_def_level, int target_ranged_def_bonus,
@@ -43,24 +26,22 @@ static inline int osrs_blowpipe_spec_resolve(
     return 0;
 }
 
-
 typedef struct {
-    int num_hits;               /* number of hits (1-4) */
-    int damage[4];              /* per-hit damage values */
-    int total_damage;           /* sum of damage[] */
-    int heal;                   /* HP healed (blowpipe, SGS) */
-    int def_drain;              /* def levels to drain (DWH=30%, BGS=dmg) */
-    int magic_def_drain;        /* magic def bonus drained (eye of ayak) */
-    int prayer_restore;         /* prayer points restored (SGS) */
-    int freeze_ticks;           /* freeze duration (ZGS) */
-    int spec_cost;              /* energy consumed */
-    int attack_speed_override;  /* 0 = use weapon speed, >0 = override */
+    int num_hits;
+    int damage[4];
+    int total_damage;
+    int heal;
+    int def_drain;
+    int magic_def_drain;
+    int prayer_restore;
+    int freeze_ticks;
+    int spec_cost;
+    int attack_speed_override;  /* 0 = use weapon speed */
 } SpecResult;
 
-
+/** Spec energy cost by weapon item index; 0 = the weapon has no special. */
 static inline int osrs_spec_cost(int weapon_item_idx) {
     switch (weapon_item_idx) {
-        /* melee */
         case ITEM_AGS:                  return 50;
         case ITEM_DRAGON_CLAWS:         return 50;
         case ITEM_STATIUS_WARHAMMER:    return 35;
@@ -73,7 +54,6 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_GRANITE_MAUL:         return 50;
         case ITEM_DRAGON_DAGGER:        return 25;
         case ITEM_ELDER_MAUL:           return 50;
-        /* ranged */
         case ITEM_TOXIC_BLOWPIPE:       return 50;
         case ITEM_MAGIC_SHORTBOW_I:     return 50;
         case ITEM_DARK_BOW:             return 55;
@@ -81,7 +61,6 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_HEAVY_BALLISTA:       return 65;
         case ITEM_MORRIGANS_JAVELIN:    return 50;
         case ITEM_ARMADYL_CROSSBOW:    return 50;
-        /* magic */
         case ITEM_VOLATILE_STAFF:       return 55;
         case ITEM_EYE_OF_AYAK:          return 50;
         default:                        return 0;
@@ -96,7 +75,6 @@ static inline SpecResult osrs_resolve_spec(
 
     switch (weapon_item_idx) {
 
-    /* AGS: 2x accuracy, 1.375x max hit (godsword 1.1 * 1.25). */
     case ITEM_AGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 8;
@@ -108,9 +86,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dragon claws: 4-hit cascade at BASE accuracy. The first accuracy roll to
-       land sets the total damage range; earlier misses shrink it. Split into 4
-       hitsplats per the branches below. All four miss: 2/3 [1,1,0,0], 1/3 [0,0,0,0]. */
     case ITEM_DRAGON_CLAWS: {
         r.spec_cost = 50;
         r.num_hits = 4;
@@ -153,7 +128,6 @@ static inline SpecResult osrs_resolve_spec(
             r.damage[2] = 0;
             r.damage[3] = 0;
         } else {
-            /* all 4 rolls miss: 2/3 chance [1,1,0,0], 1/3 chance [0,0,0,0] */
             if (encounter_rand_int(rng_state, 3) < 2) {
                 r.damage[0] = 1; r.damage[1] = 1;
             }
@@ -163,22 +137,19 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* statius warhammer (LMS): 1.25x accuracy, 1.25x str, 30% def drain on hit. */
     case ITEM_STATIUS_WARHAMMER: {
-        int spec_att = att_roll * 5 / 4;   /* 1.25x */
-        int spec_max = max_hit * 5 / 4;   /* 1.25x */
+        int spec_att = att_roll * 5 / 4;
+        int spec_max = max_hit * 5 / 4;
         r.spec_cost = 35;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
-            r.def_drain = target_def_level * 30 / 100;  /* 30% of current def */
+            r.def_drain = target_def_level * 30 / 100;
         }
         r.total_damage = r.damage[0];
         break;
     }
 
-    /* BGS: 2.0x accuracy, 1.21x str (godsword 1.1 * 1.1), drain def by damage.
-       cascade drain order: def > str > atk > magic > ranged (encounter applies). */
     case ITEM_BGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 121 / 100;
@@ -186,13 +157,12 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
-            r.def_drain = r.damage[0];  /* drain def by damage dealt */
+            r.def_drain = r.damage[0];
         }
         r.total_damage = r.damage[0];
         break;
     }
 
-    /* ZGS: 2x accuracy, 1.1x str (godsword), 32-tick freeze on hit. */
     case ITEM_ZGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -206,8 +176,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* SGS: 2x accuracy, 1.1x str (godsword); a landed hit heals 50% of damage
-       (min 10) and restores 25% as prayer (min 5). */
     case ITEM_SGS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -225,8 +193,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* ancient godsword: 2x accuracy, 1.1x str (godsword). Blood-prison
-       delayed-damage effect not implemented. */
+    /* ancient godsword blood-prison delayed damage is NOT modeled here; the pvp
+       layer approximates it with its own delayed hit */
     case ITEM_ANCIENT_GS: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 11 / 10;
@@ -238,11 +206,10 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* VLS "Feint": 20-120% of (1.2x base max), accuracy vs 25% def roll. */
     case ITEM_VESTAS: {
-        int vls_max = max_hit * 6 / 5;  /* 1.2x */
-        int vls_min = max_hit / 5;      /* 0.2x */
-        int reduced_def = def_roll / 4;  /* 25% of def roll */
+        int vls_max = max_hit * 6 / 5;
+        int vls_min = max_hit / 5;
+        int reduced_def = def_roll / 4;
         r.spec_cost = 25;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, reduced_def))
@@ -251,11 +218,10 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* voidwaker: guaranteed magic damage at 50-150% of base max hit, vs 25% def. */
     case ITEM_VOIDWAKER: {
-        int vw_min = max_hit / 2;       /* 50% */
-        int vw_max = max_hit * 3 / 2;   /* 150% */
-        int reduced_def = def_roll / 4;  /* 25% of def roll */
+        int vw_min = max_hit / 2;
+        int vw_max = max_hit * 3 / 2;
+        int reduced_def = def_roll / 4;
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, reduced_def))
@@ -264,21 +230,19 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* granite maul: 1.0x accuracy, 1.0x str, instant (resets attack timer). */
     case ITEM_GRANITE_MAUL: {
         r.spec_cost = 50;
         r.num_hits = 1;
-        r.attack_speed_override = 1;  /* instant */
+        r.attack_speed_override = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, def_roll))
             r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
         r.total_damage = r.damage[0];
         break;
     }
 
-    /* dragon dagger: 1.15x accuracy and 1.15x str, 2 independent hits. */
     case ITEM_DRAGON_DAGGER: {
-        int spec_att = att_roll * 23 / 20;  /* 1.15x */
-        int spec_max = max_hit * 23 / 20;   /* 1.15x */
+        int spec_att = att_roll * 23 / 20;
+        int spec_max = max_hit * 23 / 20;
         r.spec_cost = 25;
         r.num_hits = 2;
         for (int i = 0; i < 2; i++) {
@@ -289,7 +253,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* elder maul: 1.25x accuracy, 1.0x str, 35% def drain on hit. */
     case ITEM_ELDER_MAUL: {
         int spec_att = att_roll * 5 / 4;
         r.spec_cost = 50;
@@ -302,7 +265,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* blowpipe: 2x accuracy, 1.5x max hit, heal 50% of damage. */
     case ITEM_TOXIC_BLOWPIPE: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 3 / 2;
@@ -315,7 +277,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* MSB(i) Snapshot: 10/7 accuracy boost (~1.43x), 2 arrows. */
     case ITEM_MAGIC_SHORTBOW_I: {
         int spec_att = att_roll * 10 / 7;
         r.spec_cost = 50;
@@ -328,7 +289,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* dark bow: 1.0x accuracy, 1.5x str, 2 arrows, min 8 each (dragon arrows). */
     case ITEM_DARK_BOW: {
         int spec_max = max_hit * 3 / 2;
         if (spec_max > 48) spec_max = 48;
@@ -339,14 +299,13 @@ static inline SpecResult osrs_resolve_spec(
                 int dmg = encounter_rand_int(rng_state, spec_max + 1);
                 r.damage[i] = dmg < 8 ? 8 : dmg;
             } else {
-                r.damage[i] = 8;  /* guaranteed min on miss */
+                r.damage[i] = 8;
             }
         }
         r.total_damage = r.damage[0] + r.damage[1];
         break;
     }
 
-    /* heavy ballista: 1.25x accuracy, 1.25x str. */
     case ITEM_HEAVY_BALLISTA: {
         int spec_att = att_roll * 5 / 4;
         int spec_max = max_hit * 5 / 4;
@@ -358,8 +317,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* zaryte crossbow: 2.0x accuracy, guaranteed enhanced bolt proc. Encounters
-       pass is_zcb_spec=1 to osrs_resolve_bolt_proc() (osrs_bolt_procs.h) after this. */
+    /* the ZCB guaranteed bolt proc is NOT rolled here: the caller must pass
+       is_zcb_spec=1 to osrs_resolve_bolt_proc after this */
     case ITEM_ZARYTE_CROSSBOW: {
         int spec_att = att_roll * 2;
         r.spec_cost = 75;
@@ -370,8 +329,8 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* morrigan's javelin: APPROXIMATE. Modeled VLS-like (20-120% max, vs 25% def).
-       Real mechanic is an initial hit plus a 5-tick bleed, not implemented here. */
+    /* approximation: modeled VLS-like; the real javelin is an initial hit plus a
+       bleed, which the pvp layer adds separately */
     case ITEM_MORRIGANS_JAVELIN: {
         int morr_max = max_hit * 6 / 5;
         int morr_min = max_hit / 5;
@@ -384,7 +343,6 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* ACB: 2x accuracy, normal damage, no special effect. */
     case ITEM_ARMADYL_CROSSBOW: {
         int spec_att = att_roll * 2;
         r.spec_cost = 50;
@@ -395,11 +353,10 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* volatile nightmare staff: 1.5x accuracy, max hit min(58, 58*floor(magic/99)+1).
-       our sim assumes 99 magic, so max 58. */
+    /* volatile max hit scales with magic level; the sim assumes 99 magic = 58 */
     case ITEM_VOLATILE_STAFF: {
         int spec_att = att_roll * 3 / 2;
-        int vol_max = 58;  /* 99 magic */
+        int vol_max = 58;
         r.spec_cost = 55;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
@@ -408,16 +365,15 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
-    /* eye of ayak Soul Rend: 2x accuracy, 1.3x max hit, drains target magic def. */
     case ITEM_EYE_OF_AYAK: {
         int spec_att = att_roll * 2;
         int spec_max = max_hit * 13 / 10;
         r.spec_cost = 50;
         r.num_hits = 1;
-        r.attack_speed_override = 5;  /* 5-tick, slower than normal */
+        r.attack_speed_override = 5;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
             r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
-            r.magic_def_drain = r.damage[0];  /* drain magic def by damage */
+            r.magic_def_drain = r.damage[0];
         }
         r.total_damage = r.damage[0];
         break;

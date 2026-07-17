@@ -1,21 +1,3 @@
-/**
- * @file osrs_pvp_combat.h
- * @brief PvP combat orchestration: spec dispatch, damage application, attack availability.
- *
- * delegates core math to shared modules:
- *   osrs_combat.h           — hit chance, effective levels, max hits, prayer reduction
- *   osrs_special_attacks.h  — osrs_resolve_spec(), osrs_spec_cost()
- *   osrs_damage.h           — osrs_apply_damage_pipeline(), pending hit helpers
- *   osrs_bolt_procs.h       — osrs_resolve_bolt_proc()
- *
- * what stays PvP-specific:
- *   - enum-based spec cost/multiplier tables (used by osrs_pvp_observations.h)
- *   - PvP pending hit queue (PendingHit struct with drain/heal/morr fields)
- *   - combat history tracking for RL observations
- *   - attack availability / action masking
- *   - perform_attack orchestration
- */
-
 #ifndef OSRS_PVP_COMBAT_H
 #define OSRS_PVP_COMBAT_H
 
@@ -26,11 +8,6 @@
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
 
-static void register_hit_calculated(OsrsEnv* env, int attacker_idx, int defender_idx,
-                                     AttackStyle style, int total_damage);
-
-/* maps PvP MeleeSpecWeapon enum → item index for osrs_resolve_spec / osrs_spec_cost.
-   used internally by perform_attack and availability checks. */
 static inline int pvp_melee_spec_to_item(MeleeSpecWeapon w) {
     switch (w) {
         case MELEE_SPEC_AGS:              return ITEM_AGS;
@@ -66,46 +43,22 @@ static inline int pvp_magic_spec_to_item(MagicSpecWeapon w) {
         default:                        return ITEM_NONE;
     }
 }
+
 static int get_melee_spec_cost(MeleeSpecWeapon weapon) {
-    switch (weapon) {
-        case MELEE_SPEC_AGS:             return 50;
-        case MELEE_SPEC_DRAGON_CLAWS:    return 50;
-        case MELEE_SPEC_GRANITE_MAUL:    return 50;
-        case MELEE_SPEC_DRAGON_DAGGER:   return 25;
-        case MELEE_SPEC_VOIDWAKER:       return 50;
-        case MELEE_SPEC_DWH:             return 35;
-        case MELEE_SPEC_BGS:             return 50;
-        case MELEE_SPEC_ZGS:             return 50;
-        case MELEE_SPEC_SGS:             return 50;
-        case MELEE_SPEC_ANCIENT_GS:      return 50;
-        case MELEE_SPEC_VESTAS:          return 25;
-        case MELEE_SPEC_ABYSSAL_DAGGER:  return 50;
-        case MELEE_SPEC_DRAGON_LONGSWORD:return 25;
-        case MELEE_SPEC_DRAGON_MACE:     return 25;
-        case MELEE_SPEC_ABYSSAL_BLUDGEON:return 50;
-        default:                         return 50;
-    }
+    int cost = osrs_spec_cost(pvp_melee_spec_to_item(weapon));
+    return cost > 0 ? cost : 50;
 }
 
 static int get_ranged_spec_cost(RangedSpecWeapon weapon) {
-    switch (weapon) {
-        case RANGED_SPEC_DARK_BOW:    return 55;
-        case RANGED_SPEC_BALLISTA:    return 65;
-        case RANGED_SPEC_ACB:         return 50;
-        case RANGED_SPEC_ZCB:         return 75;
-        case RANGED_SPEC_DRAGON_KNIFE:return 25;
-        case RANGED_SPEC_MSB:         return 50;
-        case RANGED_SPEC_MORRIGANS:   return 50;
-        default:                      return 50;
-    }
+    int cost = osrs_spec_cost(pvp_ranged_spec_to_item(weapon));
+    return cost > 0 ? cost : 50;
 }
 
 static int get_magic_spec_cost(MagicSpecWeapon weapon) {
-    switch (weapon) {
-        case MAGIC_SPEC_VOLATILE_STAFF: return 55;
-        default:                        return 50;
-    }
+    int cost = osrs_spec_cost(pvp_magic_spec_to_item(weapon));
+    return cost > 0 ? cost : 50;
 }
+
 static float get_melee_spec_str_mult(MeleeSpecWeapon weapon) {
     switch (weapon) {
         case MELEE_SPEC_AGS:             return 1.375f;
@@ -160,6 +113,7 @@ static float get_ranged_spec_str_mult(RangedSpecWeapon weapon) {
         default:                      return 1.0f;
     }
 }
+
 static float get_ranged_spec_acc_mult(RangedSpecWeapon weapon) {
     switch (weapon) {
         case RANGED_SPEC_DARK_BOW:    return 1.0f;
@@ -187,7 +141,6 @@ static inline float get_defence_prayer_mult(Player* p) {
             return 1.0f;
     }
 }
-// EFFECTIVE LEVEL ADAPTERS (delegate to osrs_player_eff_level)
 
 static int calculate_effective_attack(Player* p, AttackStyle style) {
     int base_level;
@@ -242,8 +195,6 @@ static int calculate_effective_strength(Player* p, AttackStyle style) {
             return 0;
     }
 
-    /* str bonus only applies to melee (aggressive/controlled); osrs_stance_str_bonus
-       returns 0 for any non-melee stance. */
     int style_bonus = (style == ATTACK_STYLE_MELEE) ? osrs_stance_str_bonus(p->fight_style) : 0;
 
     return osrs_player_eff_level(base_level, prayer_mult, style_bonus);
@@ -255,8 +206,6 @@ static int calculate_effective_defence(Player* p, AttackStyle incoming_style) {
     int style_bonus = osrs_stance_def_bonus(p->fight_style);
 
     if (incoming_style == ATTACK_STYLE_MAGIC) {
-        /* PvP magic defence: floor(magic * prayer * 0.7 + def * prayer * 0.3) + style + 8.
-           augury boosts magic component via offensive prayer mult. */
         float magic_prayer_mult = 1.0f;
         if (p->offensive_prayer == OFFENSIVE_PRAYER_AUGURY) magic_prayer_mult = 1.25f;
         else if (p->offensive_prayer == OFFENSIVE_PRAYER_MAGIC_LOW) magic_prayer_mult = 1.15f;
@@ -330,11 +279,9 @@ static int get_strength_bonus(Player* p, AttackStyle style) {
         default: return 0;
     }
 }
-// HIT CHANCE AND MAX HIT (delegate to shared formulas)
 
-static float calculate_hit_chance(OsrsEnv* env, Player* attacker, Player* defender,
+static float calculate_hit_chance(Player* attacker, Player* defender,
                                    AttackStyle style, float acc_mult) {
-    (void)env;
     int eff_attack = calculate_effective_attack(attacker, style);
     int attack_bonus = get_attack_bonus(attacker, style);
     int attack_roll = (int)(eff_attack * (attack_bonus + 64) * acc_mult);
@@ -399,11 +346,8 @@ static inline int get_blood_heal_percent(int current_magic) {
     return 10;
 }
 
-/* PvP-specific: dark bow second arrow and weapon-specific ranged delays.
-   standard delays use encounter_magic_hit_delay / encounter_ranged_hit_delay
-   from osrs_combat.h. PvP players are always is_player=1 but PvP hit delays
-   historically did NOT include the +1 player offset. keep these for PvP compat. */
-
+/* pvp hit delays historically excluded the +1 attacker-is-player tick, so every
+   wrapper passes is_player=0; passing 1 changes all pvp combat timing */
 static inline int pvp_magic_hit_delay(int distance) {
     return encounter_projectile_hit_delay(
         distance, 0, ENCOUNTER_PROJECTILE_DELAY_MAGIC,
@@ -446,6 +390,12 @@ static inline int pvp_ranged_hit_delay_for_weapon(int distance, int is_special, 
             return pvp_ranged_hit_delay(distance);
     }
 }
+
+typedef enum {
+    PVP_DEF_DRAIN_NONE = 0,
+    PVP_DEF_DRAIN_PERCENT_OF_CURRENT = 1,
+    PVP_DEF_DRAIN_BY_DAMAGE = 2,
+} PvpDefDrainType;
 
 static void pvp_remove_pending_hit(Player* attacker, int idx) {
     if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
@@ -502,7 +452,9 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     int actual_damage = osrs_prayer_reduce_damage(damage, defender->prayer, style, 1);
     attacker->last_queued_hit_damage += actual_damage;
 }
-// DAMAGE APPLICATION (uses osrs_apply_damage_pipeline for core pipeline)
+
+static void register_hit_calculated(OsrsEnv* env, int attacker_idx, int defender_idx,
+                                     AttackStyle style, int total_damage);
 
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
@@ -511,7 +463,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
 
     osrs_ensure_player_equipment(defender);
 
-    /* shared passive pipeline: prayer → elysian → veng → recoil → smite */
     DamageResult dr = osrs_apply_passive_damage_pipeline(
         hit->damage, hit->attack_type,
         hit->defender_prayer_at_attack,
@@ -526,7 +477,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
 
     int damage = dr.final_damage;
 
-    /* hit event recording for observations */
     defender->hit_landed_this_tick = 1;
     defender->hit_was_successful = hit->hit_success;
     defender->hit_damage += damage;
@@ -536,7 +486,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     defender->hit_attacker_idx = attacker_idx;
     defender->damage_applied_this_tick = damage;
 
-    /* apply vengeance reflection */
     if (dr.veng_damage > 0) {
         attacker->current_hitpoints -= dr.veng_damage;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
@@ -548,7 +497,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         defender->veng_active = 0;
     }
 
-    /* apply recoil reflection + charge tracking */
     if (dr.recoil_damage > 0) {
         int recoil = dr.recoil_damage;
         if (defender->equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
@@ -565,7 +513,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         osrs_consume_recoil_charges(defender, recoil);
     }
 
-    /* apply damage to defender */
     defender->current_hitpoints -= damage;
     if (defender->current_hitpoints < 0) defender->current_hitpoints = 0;
     float damage_scale = (float)damage / (float)defender->base_hitpoints;
@@ -576,12 +523,11 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     attacker->last_target_health_percent =
         (float)defender->current_hitpoints / (float)defender->base_hitpoints;
 
-    /* PvP-specific hit effects: drain, freeze, heal, morr bleed */
     if (hit->hit_success) {
-        if (hit->drain_type == 1 && damage > 0) {
+        if (hit->drain_type == PVP_DEF_DRAIN_PERCENT_OF_CURRENT && damage > 0) {
             int drain = (int)(defender->current_defence * hit->drain_percent / 100.0f);
             defender->current_defence = clamp(defender->current_defence - drain, 1, 255);
-        } else if (hit->drain_type == 2 && damage > 0) {
+        } else if (hit->drain_type == PVP_DEF_DRAIN_BY_DAMAGE && damage > 0) {
             defender->current_defence = clamp(defender->current_defence - damage, 1, 255);
         }
 
@@ -604,7 +550,6 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         defender->morr_dot_remaining = damage;
     }
 
-    /* apply smite prayer drain */
     if (dr.smite_drain > 0) {
         defender->current_prayer = clamp(defender->current_prayer - dr.smite_drain, 0, defender->base_prayer);
     }
@@ -907,7 +852,6 @@ static inline int get_attack_range(Player* p, AttackStyle style) {
             return 1;
     }
 }
-// ATTACK EXECUTION (uses osrs_resolve_spec + osrs_resolve_bolt_proc)
 
 static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                            AttackStyle style, int is_special, int magic_type, int distance) {
@@ -956,7 +900,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             is_special = 0;
             spec_item_idx = ITEM_NONE;
         } else {
-            /* spec energy deducted here, not via encounter_use_spec (PvP manages its own step loop) */
             attacker->special_energy -= spec_cost;
             if (!attacker->spec_regen_active && attacker->special_energy < 100) {
                 attacker->spec_regen_active = 1;
@@ -965,7 +908,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         }
     }
 
-    /* update gear based on attack style */
     if (style == ATTACK_STYLE_MELEE)
         attacker->current_gear = was_special_requested ? GEAR_SPEC : GEAR_MELEE;
     else if (style == ATTACK_STYLE_RANGED)
@@ -973,7 +915,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     else if (style == ATTACK_STYLE_MAGIC)
         attacker->current_gear = GEAR_MAGE;
 
-    /* === SPECIAL ATTACK DISPATCH via osrs_resolve_spec === */
     if (is_special && spec_item_idx != ITEM_NONE) {
         int eff_attack = calculate_effective_attack(attacker, style);
         int attack_bonus = get_attack_bonus(attacker, style);
@@ -991,7 +932,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             defender->current_defence, &env->rng_state
         );
 
-        /* queue each hit from the SpecResult */
         int total_damage = sr.total_damage;
         int hit_delay;
         if (style == ATTACK_STYLE_MELEE)
@@ -1001,16 +941,16 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         else
             hit_delay = pvp_magic_hit_delay(distance);
 
-        /* determine PvP-specific hit effects */
-        int drain_type = 0, drain_percent = 0;
+        int drain_type = PVP_DEF_DRAIN_NONE;
+        int drain_percent = 0;
         int freeze_ticks = sr.freeze_ticks;
         int heal_percent = 0, flat_heal = 0;
 
         if (sr.def_drain > 0) {
             if (spec_item_idx == ITEM_BGS) {
-                drain_type = 2;  /* drain def by damage dealt */
+                drain_type = PVP_DEF_DRAIN_BY_DAMAGE;
             } else {
-                drain_type = 1;
+                drain_type = PVP_DEF_DRAIN_PERCENT_OF_CURRENT;
                 drain_percent = (spec_item_idx == ITEM_STATIUS_WARHAMMER) ? 30 :
                                 (spec_item_idx == ITEM_ELDER_MAUL) ? 35 : 0;
             }
@@ -1019,12 +959,10 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             heal_percent = 50;
         }
 
-        /* voidwaker deals magic damage */
         AttackStyle hit_style = (spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
 
         for (int i = 0; i < sr.num_hits; i++) {
             int this_delay = hit_delay;
-            /* dark bow second arrow uses different delay formula */
             if (spec_item_idx == ITEM_DARK_BOW && i == 1)
                 this_delay = pvp_ranged_hit_delay_dbow_second(distance);
             queue_hit(env->tick, attacker_idx, defender_idx,
@@ -1034,14 +972,12 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         register_hit_calculated(env, attacker_idx, defender_idx, hit_style, total_damage);
 
-        /* ancient godsword blood sacrifice: 25 magic damage at 8 ticks + heal */
         if (spec_item_idx == ITEM_ANCIENT_GS && total_damage > 0) {
             int ags_heal = clamp((int)(defender->base_hitpoints * 0.15f), 0, 15);
             queue_hit(env->tick, attacker_idx, defender_idx,
                       attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1, 0, 0, 0, 0, ags_heal);
         }
 
-        /* morrigan's javelin phantom strike bleed */
         if (spec_item_idx == ITEM_MORRIGANS_JAVELIN && total_damage > 0) {
             attacker->pending_hits[attacker->num_pending_hits - 1].is_morr_bleed = 1;
             defender->morr_dot_tick_counter = 3;
@@ -1050,14 +986,12 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         goto post_attack;
     }
 
-    /* === NORMAL ATTACK === */
     {
-        /* zuriel's staff passive: 10% increased accuracy on ice spells */
         int has_zuriels = (attacker->equipped[GEAR_SLOT_WEAPON] == ITEM_ZURIELS_STAFF);
         if (has_zuriels && style == ATTACK_STYLE_MAGIC && magic_type == 1)
             acc_mult *= 1.10f;
 
-        float hit_chance = calculate_hit_chance(env, attacker, defender, style, acc_mult);
+        float hit_chance = calculate_hit_chance(attacker, defender, style, acc_mult);
         int magic_base_hit = 30;
         if (style == ATTACK_STYLE_MAGIC) {
             if (magic_type == 1) magic_base_hit = get_ice_base_hit(attacker->current_magic);
@@ -1088,7 +1022,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int total_damage = 0;
         int apply_magic_freeze_on_calc = (style == ATTACK_STYLE_MAGIC && magic_type == 1);
 
-        /* bolt proc setup */
         int ammo_item = attacker->equipped[GEAR_SLOT_AMMO];
         int is_crossbow_ranged = (style == ATTACK_STYLE_RANGED && !is_special);
 
@@ -1102,7 +1035,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 damage = rand_int(env, max_hit + 1);
             }
 
-            /* bolt proc: resolve after accuracy roll, may override damage */
             if (is_crossbow_ranged) {
                 BoltProcResult bp = osrs_resolve_bolt_proc(
                     ammo_item, damage, hit_success, max_hit,

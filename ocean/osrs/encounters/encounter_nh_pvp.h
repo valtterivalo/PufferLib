@@ -5,6 +5,7 @@
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
+/* order must match the HEAD_* indices in osrs_types.h */
 static const int NH_PVP_ACTION_DIMS[] = {
     LOADOUT_DIM, COMBAT_DIM, OVERHEAD_DIM,
     FOOD_DIM, POTION_DIM, KARAMBWAN_DIM, VENG_DIM, OFFENSIVE_DIM, MOVE_DIM
@@ -46,7 +47,6 @@ static void nh_pvp_translate_human_input(HumanInput* hi, int* actions, Player* a
 static EncounterState* nh_pvp_create(void) {
     NhPvpState* s = (NhPvpState*)calloc(1, sizeof(NhPvpState));
     pvp_init(&s->env);
-
     s->env.ocean_io.agent_obs = s->env._obs_buf;
     s->env.ocean_io.agent_actions = s->env._acts_buf;
     s->env.ocean_io.agent_rewards = s->env._rews_buf;
@@ -94,7 +94,6 @@ static void nh_pvp_step_human_commands(
     NhPvpState* s = (NhPvpState*)state;
     int saved_use_c_opponent_p0 = s->env.pvp_runtime.use_c_opponent_p0;
     s->env.pvp_runtime.use_c_opponent_p0 = 0;
-
     if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
         s->env.pvp_runtime.walk_dest_x[0] = hi->pending_move_x;
         s->env.pvp_runtime.walk_dest_y[0] = hi->pending_move_y;
@@ -106,7 +105,8 @@ static void nh_pvp_step_human_commands(
         &s->env.players[1]);
     pvp_step(&s->env);
     s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
-
+    /* pending_move must survive until arrival so later ticks keep re-arming
+       walk_dest for the same click */
     if (s->env.pvp_runtime.walk_dest_x[0] < 0 || s->env.pvp_runtime.walk_dest_y[0] < 0) {
         human_input_clear_move(hi);
     }
@@ -124,7 +124,6 @@ static void nh_pvp_step_human_commands(
 static void nh_pvp_write_obs(EncounterState* state, EncounterContext* context, float* obs_out) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-
     memcpy(obs_out, s->env._obs_buf, SLOT_NUM_OBSERVATIONS * sizeof(float));
 }
 
@@ -135,7 +134,6 @@ static void nh_pvp_write_mask(
 ) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
         mask_out[i] = (float)s->env._masks_buf[i];
     }
@@ -313,4 +311,4 @@ static void nh_pvp_register(void) {
     encounter_register(&ENCOUNTER_NH_PVP);
 }
 
-#endif
+#endif /* ENCOUNTER_NH_PVP_H */

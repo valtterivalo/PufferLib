@@ -1,8 +1,3 @@
-/**
- * @file osrs_encounter_player.h
- * @brief Shared player movement and target interaction transition helpers.
- */
-
 #ifndef OSRS_ENCOUNTER_PLAYER_H
 #define OSRS_ENCOUNTER_PLAYER_H
 
