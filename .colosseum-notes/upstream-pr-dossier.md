@@ -336,3 +336,22 @@ the shared effect system). DEFERRED (fold agent): pvp file-count collapse
 (~50 lines), 2 dead RNG draws (behavior-pinned). PENDING: truncation A/B
 verdict -> T2 flip or keep -> curated branch rebuild (with build.sh Mac
 hunks stripped to working-branch-only) -> PR draft refresh.
+
+## 2026-07-17 colosseum learning collapse on 5c (INVESTIGATION OPEN)
+
+The doctrine A/B exposed a port-breaking fact the 2M smokes could not: colosseum
+on the 5c stack fights (dmg 174/ep, kills 1.9) but NEVER learns (wave 0.001 at
+143M, entropy 41.5 -> 0.03); inferno learns fine (wave 66.8). Bisection so far:
+encoder EXONERATED (strcmp-disabled run also flat); mask content verified
+correct (legality masks, inventory heads enabled at flag 0); 5c train-side
+masking coherent (mb_action_mask gathered, loss kernel masks per head).
+FOUND + PORTED: 5c lacks trunk's ppo_clamp_logratio - 20-head summed logratio
+overflows __expf -> inf ratios poison the loss (trunk fixed this at the
+36-head era; the carving block kept it out of the port). Clamp commit
+ff6bb9c26. PARTIAL CURE: wave 0.001 -> 0.53 at 25M but entropy 0.122 vs
+trunk-final 21.25 = still sick. KEY STACK DIFFERENCE: trunk trained colosseum
+UNMASKED (mask rode obs as features; "unmasked 36-head vindicated"), 5c
+hard-masks sampling+loss. RUNNING: trunk 25M reference (healthy trajectory
+anchor) + 5c hs512 (size dependence). Colosseum doctrine A/B arms VOID until
+cured; inferno doctrine arms VALID (term 0.224 wins vs trunc 0.122 = terminal
+doctrine satisfied on inferno). PR holds until this is resolved.
