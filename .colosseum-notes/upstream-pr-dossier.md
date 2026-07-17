@@ -271,3 +271,17 @@ SELF-MATCHES the wrapper command line (the pattern is part of the probe's own
 cmdline). The monitor reported chain=up forever and hid completion. Probe
 liveness via ps + exact match or grep markers in log files, never pgrep -f
 with the pattern in the probe string.
+
+## 2026-07-17 surgery smoke GREEN after log-dict regression fix
+
+box_gate caught a REAL surgery regression on first run: dict_set capacity
+assert at first Sol-mode log flush. The surgery had downsized the four fixed
+create_dict sites to 64 off a base-mode key count; colosseum sol-mode emits
+83 keys immediately (the pre-surgery 96 bump existed for exactly this; the
+start-wave-1 validation stayed under the cap, hiding it). Fixed bd7c4e435
+(64 -> 128), SMOKE OK on rerun. PR branch immune: 5c Dict auto-grows
+(dict_insert doubling realloc) and the port smoke already flushed 83 keys.
+Minor debt: the repointed inferno meta-test asserts a "64 CUDA-dict cap"
+that does not exist in 5c - drop that guard next time the file is touched.
+ALL GATES GREEN, BOTH BRANCHES. Campaign closed pending: user viewer look,
+user opens PR, 8 stash drops.
