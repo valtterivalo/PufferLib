@@ -1,8 +1,10 @@
-# PR draft: branch osrs-colosseum-inferno -> PufferAI/PufferLib 5c
+# PR draft: branch osrs-colosseum-inferno-v2 -> PufferAI/PufferLib 5c
 
-PENDING before finalize: colosseum doctrine A/B term arm (ab3_colo_term2.log).
-Verdict picks exactly one of the two commit-list variants below and deletes
-the other plus this note.
+Doctrine verdict applied 2026-07-17: terminal wins both envs, truncation
+commits dropped. Branch rebuilt as osrs-colosseum-inferno-v2 (old remote
+osrs-colosseum-inferno is stale, delete it). Commits:
+16132364b env-name, 1bcda0fdd head arrays, 732602fe3 logratio clamp,
+7fbb7b79d envs, 2a49ae9c7 encoder.
 
 Title: OSRS Fortis Colosseum and Inferno environments
 
@@ -21,8 +23,6 @@ works on a fresh clone.
 Context: 5c branched before these envs landed on our 4.x-line fork, so none
 of this tree exists on 5c yet. This supersedes our fork's OSRS tree, ported
 and re-validated against the 5c trainer.
-
-## VARIANT A: terminal doctrine wins (truncation commits dropped)
 
 Five commits, each builds standalone:
 
@@ -54,33 +54,12 @@ block, strcmp dispatch, textually parallel to nmmo3/minimal): a global obs
 projection plus fused GELU + masked-maxpool pools over 24 NPC records and 28
 inventory slots.
 
-## VARIANT B: truncation wins (channel ships with evidence)
-
-Seven commits, each builds standalone: the five above plus, between 3 and 4,
-
-- truncation channel: Agent grows float* truncations mirroring terminals
-through every vec/rollout/train buffer. In the GAE a truncation zeroes the
-lambda-recursion boundary but keeps the gamma*V bootstrap term; a terminal
-still zeroes both. RNN state reset treats terminal-or-truncation as an
-episode boundary while the advantage math sees the channels separately. With
-truncations all zero the advantage computation is bitwise identical to
-current behavior (10-assertion standalone check; breakout and maze A/B
-bitwise identical, minimal within noise). In these envs the channel beat
-timeout-as-terminal by [INSERT A/B numbers] over 143M-step runs.
-
-and, last,
-
-- the envs report time-limit truncations on the new channel (two-line
-consumers).
-
-## Shared tail (both variants)
-
 Scope notes: zulrah and NH pvp encounter code rides in the shared stack and
 is covered by the test suite, but has no build targets or configs yet, WIP.
 The raylib viewer under --local runs local CPU inference of trained .bins.
 
 Validation: both envs build with nvcc and train end-to-end on a 4090. Full
-colosseum training run (143M steps): reaches wave 8.8 of 12, matching the
+colosseum training run (143M steps): reaches wave 8.9 of 12, matching the
 best results from our fork's trainer on identical config. Inferno learns to
 wave 66+ of 69. Full C battery green: colosseum goldens 12/12, inferno
 goldens 15/15, modifiers battery 10409, attack-style battery 1805.

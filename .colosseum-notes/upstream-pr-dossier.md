@@ -400,3 +400,29 @@ verified before nohup): ab3_colo_term2.log, marker AB3T_DONE. Decision rule
 unchanged: term score >= 0.542 (0.622 - 0.08) -> terminal doctrine wins both
 envs, T2 flips to timeout-as-terminal, truncation core+T2 commits DROP from
 the PR; trunc wins beyond band -> truncation ships with A/B evidence.
+
+## 2026-07-17 doctrine VERDICT: terminal wins both envs, truncation dropped
+
+Term arm (01ff2917c, 143M seed 42): wave 8.944 / score 0.636 - beats the
+trunc arm (8.831/0.622) outright, not just within the band. Colosseum
+three-run picture on the fixed stack: trunc 0.622, trunc-replicate 0.572,
+terminal 0.636 - a ~0.06 spread that says the doctrine is behaviorally
+near-neutral at our generous time limits, exactly the user's original claim.
+With inferno (term 0.224 > trunc 0.122) the pre-registered rule fires:
+terminal doctrine adopted, truncation channel has no consumer, commits DROP.
+
+EXECUTED: pr-target tree built (upstream core restored: pufferenv.h,
+puffercpu.h, pufferl.cu now bit-identical to 92b02cae5; algo.cu = upstream +
+head-array fix + clamp only; both env entries write terminals-only; sim
+time_limit_truncated field stays - the modifiers battery consumes it).
+Strict g++-16 gates 0 errors both envs. Curated branch REBUILT as
+osrs-colosseum-inferno-v2 (force-push to the old name blocked, old remote
+branch is stale - delete it): 16132364b env-name / 1bcda0fdd head arrays /
+732602fe3 logratio clamp / 7fbb7b79d envs / 2a49ae9c7 encoder. Tree
+diff-empty vs pr-target. Working branch osrs-5c-port flipped by the same
+patch (0a89ace01); its whole diff vs curated = the Mac-only build.sh hunks
+(SIMD arch-conditional + OpenMP detection), by construction. Also scrubbed:
+a committed Mac binary + dSYM that had ridden the working branch since an
+early broad git add. PR draft finalized (variant A). RUNNING on box:
+per-commit builds (breakout at each core commit, both envs at c4/c5) + 2M
+inferno smoke + 25M colosseum learn gate vs the 3.5-wave reference.
