@@ -237,7 +237,7 @@ static void cpu_vec_step_py(VecEnv& ve, long long actions_ptr) {
 static py::dict vec_log(VecEnv& ve) {
     // 64 (not upstream's 32): the inferno env log emits 33 keys and dict_set
     // asserts on overflow. Same bound as the trainer-side log dicts.
-    Dict* out = create_dict(64);
+    Dict* out = create_dict(128);
     static_vec_log(ve.vec, out);
     py::dict result;
     for (int i = 0; i < out->size; i++)
