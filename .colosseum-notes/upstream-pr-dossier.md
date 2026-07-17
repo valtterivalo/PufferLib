@@ -376,3 +376,27 @@ reference trajectory). RUNNING: colosseum doctrine A/B round 2 on the fixed
 stack (5d7f942de trunc vs 01ff2917c terminal, 143M seed 42 each); trunc arm
 doubles as the port's colosseum validation. Inferno doctrine verdict stands
 (same-code comparison). PR gains two more justified core commits.
+
+## 2026-07-17 doctrine A/B round 2: trunc arm green, term arm launch was VOID
+
+Trunc arm (5d7f942de, 143M seed 42): wave 8.831 / score 0.622 / ep_len 2440 -
+beats trunk validation (7.93/0.514) and the historical sweep knee (0.526) =
+best full-run colosseum result at this config, clears the wave-8 health bar,
+stands as the port's colosseum validation.
+
+The "term" arm was VOID: the chain launch went through local zsh, which parsed
+$AB2:term with its :t (basename) history modifier - the word collapsed to
+01ff2917cerm, C=${spec%%:*} found no colon, git checkout failed into
+/dev/null, and the arm silently rebuilt and re-ran the TRUNC code at
+5d7f942de. Reflog proves 01ff2917c was never checked out. The accidental
+replicate is still data: wave 8.262 / score 0.572 on identical code+seed =
+GPU-nondeterminism band ~0.05, consistent with the +-0.08 rule band.
+OPS LESSON: never interpolate local shell vars into remote command strings
+under zsh (:t, :h, :r modifiers bite); pipe a script via ssh + docker exec -i
+bash -s instead, and verify the checked-out arm's code before launch.
+
+Term arm RELAUNCHED properly (01ff2917c full hash, checkout + arm-code
+verified before nohup): ab3_colo_term2.log, marker AB3T_DONE. Decision rule
+unchanged: term score >= 0.542 (0.622 - 0.08) -> terminal doctrine wins both
+envs, T2 flips to timeout-as-terminal, truncation core+T2 commits DROP from
+the PR; trunc wins beyond band -> truncation ships with A/B evidence.
