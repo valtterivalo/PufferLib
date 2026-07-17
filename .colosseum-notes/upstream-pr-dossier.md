@@ -285,3 +285,14 @@ Minor debt: the repointed inferno meta-test asserts a "64 CUDA-dict cap"
 that does not exist in 5c - drop that guard next time the file is touched.
 ALL GATES GREEN, BOTH BRANCHES. Campaign closed pending: user viewer look,
 user opens PR, 8 stash drops.
+
+## 2026-07-17 truncation-core A/B on upstream envs (rigor gate for algo.cu changes)
+
+Baseline eb1748e0d (upstream tip + env-name fix only) vs treatment 34caa1050
+(+ truncation core), 50M steps, base.seed=42, 2 runs per side per env on the
+box: breakout 842.437 x4 IDENTICAL across binaries (deterministic stack),
+maze 0.090 x4 IDENTICAL, minimal (nondeterministic) base {-37.517,-36.699}
+trunc {-36.642,-37.226} = treatment inside baseline run-to-run spread (mean
+delta 0.17 vs spread 0.82). Combined with the 10-assertion bitwise standalone
+check: the truncation channel provably does not perturb existing training.
+Logs ab_*_{base,trunc}_{1,2}.log in /puffertank/PufferLib-5cport.
