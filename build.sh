@@ -64,6 +64,22 @@ else
     STANDALONE_LDFLAGS=(-framework Cocoa -framework IOKit -framework CoreVideo -framework OpenGL)
 fi
 
+# OpenMP for the standalone (--local/--fast/--cpu) clang paths. Apple clang rejects
+# -fopenmp; it needs -Xclang -fopenmp plus Homebrew libomp on the include/lib path.
+# Linux clang/gcc take -fopenmp directly, so those defaults are preserved there.
+OMP_CFLAGS=(-fopenmp)
+OMP_LDFLAGS=(-fopenmp)
+if [ "$PLATFORM" != "Linux" ]; then
+    OMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+    if [ -n "$OMP_PREFIX" ]; then
+        OMP_CFLAGS=(-Xclang -fopenmp -I"$OMP_PREFIX/include")
+        OMP_LDFLAGS=(-L"$OMP_PREFIX/lib" -lomp)
+    else
+        OMP_CFLAGS=(-Xclang -fopenmp)
+        OMP_LDFLAGS=(-lomp)
+    fi
+fi
+
 CLANG_WARN=(
     -Wall
     -ferror-limit=3
@@ -146,13 +162,26 @@ else
     echo "Error: environment '$ENV' not found" && exit 1
 fi
 
+case "$ENV" in
+    osrs_*)
+        python3 ocean/osrs/scripts/osrs_asset_manifest.py generate-c-header \
+            ocean/osrs/asset_manifest.json \
+            --output ocean/osrs/osrs_assets_generated.h
+        bash ocean/osrs/scripts/setup-data.sh
+        ;;
+esac
+
 OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
 SRC_FILE=${SRC_FILE:-$SRC_DIR/$ENV.c}
 
 # Standalone environment build
 # -mavx2 enables AVX2 intrinsics (__m256, _mm256_*) which drive.h and
-# src/pufferenv.h use directly. x86_64 only — strip if porting to ARM/Apple Silicon.
-SIMD_FLAGS=(-mavx2 -mfma)
+# src/pufferenv.h use directly. x86_64 only — omitted on ARM/Apple Silicon.
+if [ "$(uname -m)" = "x86_64" ]; then
+    SIMD_FLAGS=(-mavx2 -mfma)
+else
+    SIMD_FLAGS=()
+fi
 if [ -n "$DEBUG" ] || [ "$MODE" = "local" ]; then
     CLANG_OPT=(-g -O0 "${CLANG_WARN[@]}" "${SANITIZE_FLAGS[@]}" "${SIMD_FLAGS[@]}")
     NVCC_OPT="-O0 -g"
@@ -169,7 +198,7 @@ if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ]; then
         "${LINK_ARCHIVES[@]}"
         "${EXTRA_LDFLAGS[@]}"
         "${STANDALONE_LDFLAGS[@]}"
-        -lm -lpthread -fopenmp
+        -lm -lpthread "${OMP_CFLAGS[@]}" "${OMP_LDFLAGS[@]}"
         -DPLATFORM_DESKTOP
         "${EXTRA_CFLAGS[@]}"
     )
@@ -214,7 +243,7 @@ elif [ "$MODE" = "cpu" ]; then
         "${LINK_ARCHIVES[@]}" \
         "${EXTRA_LDFLAGS[@]}" \
         "${STANDALONE_LDFLAGS[@]}" \
-        -lm -lpthread -fopenmp \
+        -lm -lpthread "${OMP_CFLAGS[@]}" "${OMP_LDFLAGS[@]}" \
         -o build_cpu
     echo "Built: ./build_cpu"
     exit 0
