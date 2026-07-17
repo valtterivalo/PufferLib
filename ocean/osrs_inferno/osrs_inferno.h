@@ -348,10 +348,8 @@ void puf_step(Env* env) {
         ENCOUNTER_INFERNO.get_reward(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
     int is_term = ENCOUNTER_INFERNO.is_terminal(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
-    int is_trunc = is_term && env->state.tick >= INF_MAX_TICKS
-        && env->state.player.current_hitpoints > 0;
-    env->agents[0].terminals[0] = (float)(is_term && !is_trunc);
-    env->agents[0].truncations[0] = (float)is_trunc;
+    env->agents[0].terminals[0] = (float)is_term;
+    env->agents[0].truncations[0] = 0.0f;
     INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
 
     INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);
