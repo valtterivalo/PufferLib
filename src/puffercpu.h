@@ -1207,18 +1207,15 @@ int main(int argc, char** argv) {
     float actions[env.num_agents * NUM_ATNS];
     float rewards[env.num_agents];
     float terminals[env.num_agents];
-    float truncations[env.num_agents];
     memset(observations, 0, sizeof(observations));
     memset(actions, 0, sizeof(actions));
     memset(rewards, 0, sizeof(rewards));
     memset(terminals, 0, sizeof(terminals));
-    memset(truncations, 0, sizeof(truncations));
     for (int i = 0; i < env.num_agents; i++) {
         env.agents[i].observations = observations + i * OBS_SIZE;
         env.agents[i].actions = actions + i * NUM_ATNS;
         env.agents[i].rewards = rewards + i;
         env.agents[i].terminals = terminals + i;
-        env.agents[i].truncations = truncations + i;
         env.agents[i].action_mask = NULL;
         env.agents[i].policy = 0;
     }
