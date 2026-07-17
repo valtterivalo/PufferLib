@@ -1,39 +1,8 @@
-/**
- * @file test_inferno_golden.c
- * @brief Characterization (golden-master) test for the Inferno env.
- *
- * Drives deterministic episodes across a battery of (start_wave, seed) configs,
- * stepping with a fixed pseudo-random action stream, and folds the observation
- * vector + reward + outcome flags of every tick into an FNV-1a digest.
- *
- * The digest reads ONLY the public env interface (inf_write_obs, state->reward,
- * episode_over, winner, wave, tick). It is therefore independent of InfNPC /
- * InfernoState memory layout: a behavior-preserving refactor must reproduce the
- * baseline digests bit-for-bit, while any change the agent or reward could
- * observe (including obs drift) flips a digest.
- *
- * The law under test: refactor => identical trajectory.
- *
- * BASELINE is branch-local: re-seeded 2026-06-10 on valtteri/osrs-colosseum
- * after the shared consumable/spec dedup (digests verified bit-identical
- * across that refactor). The previous baseline predated this branch's shared
- * items/effects work and no longer corresponded to any blessed state.
- *
- * BUILD:
- *   cc -std=c11 -O2 -I. -o /tmp/test_inferno_golden \
- *       ocean/osrs/tests/test_inferno_golden.c -lm
- * RUN:
- *   /tmp/test_inferno_golden          # assert against baked-in baseline
- *   /tmp/test_inferno_golden --print  # print digests (to seed the baseline)
- */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
-
-/* ---- FNV-1a 64-bit rolling digest -------------------------------------- */
 
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME  1099511628211ULL
@@ -58,16 +27,12 @@ static inline uint64_t fnv_i32(uint64_t h, int v) {
     return fnv_bytes(h, &w, sizeof(w));
 }
 
-/* ---- deterministic action stream (splitmix64) -------------------------- */
-
 static inline uint64_t splitmix64(uint64_t* s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
-
-/* ---- one episode -> digest --------------------------------------------- */
 
 static uint64_t run_episode(int start_wave, uint32_t seed, int max_ticks) {
     EncounterState* state = inf_create();
@@ -79,8 +44,6 @@ static uint64_t run_episode(int start_wave, uint32_t seed, int max_ticks) {
     static float obs[INF_NUM_OBS];
     int actions[INF_NUM_ACTION_HEADS];
 
-    /* action RNG seeded distinctly from the env RNG so the policy stream is
-       independent of internal env randomness. */
     uint64_t arng = ((uint64_t)seed << 20) ^ (uint64_t)(start_wave + 1) ^ 0xD1B54A32D192ED03ULL;
 
     uint64_t h = FNV_OFFSET;
@@ -110,17 +73,12 @@ static uint64_t run_episode(int start_wave, uint32_t seed, int max_ticks) {
     return h;
 }
 
-/* ---- config battery ----------------------------------------------------- */
-
 typedef struct {
     const char* name;
-    int start_wave;   /* internal 1-indexed start wave (see inf_reset bounds) */
+    int start_wave;
     uint32_t seed;
 } GoldenConfig;
 
-/* covers every NPC-behavior family so the type-specific InfNPC fields
-   (blob scan, meleer dig, mager resurrect, jad, zuk shield/healer/spark)
-   are all exercised under the digest. */
 static const GoldenConfig CONFIGS[] = {
     { "wave1_a",     1, 0x0000001u },
     { "wave1_b",     1, 0x0BADF00Du },
@@ -142,38 +100,23 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 2000
 
-/* baseline digests captured on the pre-refactor commit. regenerate with
-   --print only when an intentional behavior change is made, and explain why.
-   2026-06-14: the 6 jad and zuk digests were re-seeded for the no-active-pillar
-   forecast gate. On pillar-less waves (Jad, Zuk) the step-out forecast skips its
-   rollout and emits zero danger features (the forecast is useless there: no
-   safespotting, no attack overlap). Obs-only change on those waves; sim and
-   reward stay byte-identical (verified: state-hash + reward unchanged on every
-   record, obs differs only by danger features going to zero with valid
-   preserved). The 9 pillar-ful configs are unchanged.
-   2026-06-19: wave1 and meleer digests were re-seeded after matching osrs-sdk
-   under-player shuffle semantics: sample one cardinal direction and stay put
-   when that sampled move is blocked. No fallback scan. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    /* 7 configs (wave1_a/b/c, meleer_a/b, ranger_a, mager_a) re-baselined after the
-       shared no-corner-cut movement fix (osrs_encounter.h encounter_move_to_target):
-       the player no longer cuts a blocked diagonal pillar corner, so early-wave pillar
-       navigation diverges. ranger_b/mager_b and all jad/zuk configs are byte-identical. */
-    0x9d8970300cea947aULL,  /* wave1_a */
-    0xefeefc062898de1bULL,  /* wave1_b */
-    0x300b40b9b6c32f47ULL,  /* wave1_c */
-    0xf600c7a9f79479faULL,  /* meleer_a */
-    0x267ab0fac9ad5b27ULL,  /* meleer_b */
-    0x999a41e1a0916ab9ULL,  /* ranger_a */
-    0x2ddb91b645db1e75ULL,  /* ranger_b */
-    0xd2a1416c4b53157fULL,  /* mager_a */
-    0x84a2ab3540f37ac8ULL,  /* mager_b */
-    0xb98928c437e48005ULL,  /* jad_a */
-    0x3e5a885e173d4674ULL,  /* jad_b */
-    0xd6577872951242fdULL,  /* jad_c */
-    0xc5af52a73611f3f6ULL,  /* zuk_a */
-    0x7a84c874f2b7c5ceULL,  /* zuk_b */
-    0x28c4ccc92a588192ULL,  /* zuk_c */
+
+    0x9d8970300cea947aULL,
+    0xefeefc062898de1bULL,
+    0x300b40b9b6c32f47ULL,
+    0xf600c7a9f79479faULL,
+    0x267ab0fac9ad5b27ULL,
+    0x999a41e1a0916ab9ULL,
+    0x2ddb91b645db1e75ULL,
+    0xd2a1416c4b53157fULL,
+    0x84a2ab3540f37ac8ULL,
+    0xb98928c437e48005ULL,
+    0x3e5a885e173d4674ULL,
+    0xd6577872951242fdULL,
+    0xc5af52a73611f3f6ULL,
+    0x7a84c874f2b7c5ceULL,
+    0x28c4ccc92a588192ULL,
 };
 
 int main(int argc, char** argv) {

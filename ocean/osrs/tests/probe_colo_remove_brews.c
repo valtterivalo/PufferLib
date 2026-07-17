@@ -1,11 +1,3 @@
-/**
- * @file probe_colo_remove_brews.c
- * @brief Positive check for the remove_brews scaffold knob: with the flag on the
- * seeded inventory must hold zero brew doses across both loadouts; with it off it
- * must keep the loadout's brews. Golden covers only the off (bit-identical) path.
- *
- * BUILD: cc -std=c11 -O2 -I. -o /tmp/probe_brews ocean/osrs/tests/probe_colo_remove_brews.c -lm
- */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +12,7 @@ static int reset_brew_doses(int remove_brews, uint32_t seed) {
     ctx.config.loadout_profile_mode = 2;
     ctx.config.beginner_loadout_fraction = 0.5f;
     memset(&s, 0, sizeof(s));
-    /* exercise the real CLI/binding string path, not a direct config write */
+
     ENCOUNTER_COLOSSEUM.put_int((EncounterState*)&s, (EncounterContext*)&ctx,
         "remove_brews", remove_brews);
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, seed);

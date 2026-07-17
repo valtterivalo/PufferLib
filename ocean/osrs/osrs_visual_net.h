@@ -1,28 +1,5 @@
 #pragma once
-/**
- * @file osrs_visual_net.h
- * @brief CPU inference net for the --local OSRS viewer.
- *
- * src/puffercpu.h supplies the generic puffernet primitives (Weights, Linear,
- * MinGRU, Multidiscrete, the aligned weight reader) but not the OSRS-specific
- * colosseum entity encoder. This header adds that encoder plus a small net
- * wrapper (VisualNet) that carries either a plain Linear encoder (inferno) or
- * the entity encoder (colosseum) ahead of the shared MinGRU + decoder stack.
- * Include AFTER src/puffercpu.h so the primitive types are in scope.
- *
- * Checkpoint layout mirrored here matches policy_weights_create in src/algo.cu:
- * encoder tensors, then the decoder weight (+ optional logstd), then the MinGRU
- * layer projections, each tensor started on an 8-float boundary by the native
- * 16-byte allocator (bf16 params) which get_weights_aligned reproduces.
- */
 
-/* Inference mirror of src/ocean.cu ColosseumEntityEncoder: output = global(flat
-   pure obs) + masked maxpool over a shared bias-free 2-layer MLP (Linear ->
-   tanh-approx GELU -> Linear) applied to the NPC records, plus (mode 2) the same
-   pool over the inventory cells. Weight read order matches the native reg_params
-   sequence (global_w, entity_l1_w, entity_l2_w, then inv_l1_w, inv_l2_w),
-   bias-free throughout. Offsets/feature counts track the ocean.cu COLO_ENT_*
-   constants; obs is pure (the action mask lives in a separate channel now). */
 #define COLO_ENT_INF_NPC_START   1030
 #define COLO_ENT_INF_NUM_NPCS    24
 #define COLO_ENT_INF_FEATS       37
@@ -36,22 +13,22 @@
 
 typedef struct ColosseumEntityEncoder ColosseumEntityEncoder;
 struct ColosseumEntityEncoder {
-    float* output;        // [batch, hidden]
-    float* global_w;      // [hidden, obs]
-    float* entity_l1_w;   // [16, 37]
-    float* entity_l2_w;   // [hidden, 16]
-    float* z1;            // [num_npcs, 16] scratch
-    float* h1;            // [num_npcs, 16] scratch
-    float* entity_e;      // [num_npcs, hidden] scratch
+    float* output;
+    float* global_w;
+    float* entity_l1_w;
+    float* entity_l2_w;
+    float* z1;
+    float* h1;
+    float* entity_e;
     int batch_size;
     int input_dim;
     int hidden_dim;
-    int mode;             // 1 = NPC pool, 2 = NPC + inventory pool
-    float* inv_l1_w;      // [16, 28] (mode 2)
-    float* inv_l2_w;      // [hidden, 16] (mode 2)
-    float* inv_z1;        // [num_cells, 16] scratch (mode 2)
-    float* inv_h1;        // [num_cells, 16] scratch (mode 2)
-    float* inv_e;         // [num_cells, hidden] scratch (mode 2)
+    int mode;
+    float* inv_l1_w;
+    float* inv_l2_w;
+    float* inv_z1;
+    float* inv_h1;
+    float* inv_e;
 };
 
 ColosseumEntityEncoder* make_colosseum_entity_encoder(
@@ -121,8 +98,6 @@ void colosseum_entity_encoder(ColosseumEntityEncoder* layer, float* observations
             }
         }
 
-        // Masked maxpool: skip inactive (all-zero type one-hot) records; all-inactive
-        // contributes 0; ties resolve to the lowest NPC index (matches torch.max).
         for (int o = 0; o < H; o++) {
             float best = -INFINITY;
             int best_n = -1;
@@ -137,7 +112,6 @@ void colosseum_entity_encoder(ColosseumEntityEncoder* layer, float* observations
             out[o] += (best_n < 0) ? 0.0f : best;
         }
 
-        // mode 2: inventory-cell pool. Active cell = present flag (offset 0) > 0.
         if (layer->mode >= 2) {
             float* cells = obs + COLO_ENT_INF_INV_START;
             for (int n = 0; n < COLO_ENT_INF_INV_NUM_CELLS; n++) {
@@ -180,25 +154,20 @@ void free_colosseum_entity_encoder(ColosseumEntityEncoder* layer) {
     free(layer->z1);
     free(layer->h1);
     free(layer->entity_e);
-    free(layer->inv_z1);  // NULL (no-op) in mode 1
+    free(layer->inv_z1);
     free(layer->inv_h1);
     free(layer->inv_e);
     free(layer);
 }
 
-/* Viewer net matching the native backend Policy (src/algo.cu): an encoder
-   (plain Linear for inferno, ColosseumEntityEncoder for colosseum) -> N x MinGRU
-   -> Linear decoder whose last output column is the fused value head. The .bin
-   is read in policy_weights_create order: encoder tensors, decoder weight, then
-   the optional continuous logstd, then the MinGRU projections. */
 typedef struct VisualNet VisualNet;
 struct VisualNet {
     int num_agents;
     float* obs;
-    Linear* encoder;                         // NULL when entity_encoder is used
-    ColosseumEntityEncoder* entity_encoder;  // NULL for the default Linear encoder
+    Linear* encoder;
+    ColosseumEntityEncoder* entity_encoder;
     MinGRU* mingru;
-    Linear* decoder;   // output_dim = atn_sum+1; last element is value
+    Linear* decoder;
     float* log_std;
     int is_continuous;
     int num_actions;

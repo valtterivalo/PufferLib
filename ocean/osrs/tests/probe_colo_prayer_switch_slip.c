@@ -1,13 +1,3 @@
-/**
- * @file probe_colo_prayer_switch_slip.c
- * @brief Positive check for the prayer_switch_fail_prob scaffold knob. Driven
- * through the real put_float CLI/binding string path. At p=1.0 an overhead
- * SWITCH must slip back to the previous overhead and leave prayer_just_activated
- * clear; at p=0.0 the switch must apply. Golden covers only the off path.
- *
- * BUILD: cc -std=c11 -O2 -I. -o /tmp/probe_prayer_slip \
- *     ocean/osrs/tests/probe_colo_prayer_switch_slip.c -lm
- */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,11 +8,11 @@ static void prep(ColosseumContext* ctx, ColosseumState* s, float fail_prob) {
     col_init_context_typed(ctx);
     memset(s, 0, sizeof(*s));
     s->rng_state = 0xC0FFEEu;
-    /* exercise the real CLI/binding string path, not a direct config write */
+
     ENCOUNTER_COLOSSEUM.put_float((EncounterState*)s, (EncounterContext*)ctx,
         "prayer_switch_fail_prob", fail_prob);
     s->player.prayer = PRAYER_PROTECT_RANGED;
-    s->player.current_prayer = 990;  /* prayer points, else drain turns the overhead off this tick */
+    s->player.current_prayer = 990;
     s->player.prayer_just_activated = 0;
 }
 

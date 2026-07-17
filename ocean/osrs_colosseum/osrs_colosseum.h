@@ -1,14 +1,4 @@
 #pragma once
-/**
- * @file osrs_colosseum.h
- * @brief 5c env entry for the OSRS Fortis Colosseum encounter.
- *
- * Bridges the 5c trainer contract (pufferenv.h: float actions, per-agent obs and
- * action_mask buffers, an all-float Log the trainer sums then averages) to the
- * shared colosseum encounter vtable. The encounter sim is included verbatim; this
- * file marshals buffers, parses the [env] config, folds the per-episode
- * ColosseumLog into the aggregate Log, and auto-resets on terminal.
- */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -17,12 +7,6 @@
 
 #include "pufferenv.h"
 
-/* The shared OSRS stack defines its own anonymous `Log` typedef (the giant
-   multi-encounter aggregate). That name collides with pufferenv.h's
-   `typedef struct Log Log` and this env's per-env Log. Rename it for the span of
-   the sim include: the token only ever names a sim-internal type (osrs_types.h,
-   the ColosseumContext.log field, and the NULL-context legacy fallback) and never
-   reaches the trainer boundary, so the rename is behavior-preserving. */
 #define Log OsrsSharedLog
 #include "../osrs/encounters/encounter_colosseum.h"
 #undef Log
@@ -36,14 +20,6 @@ typedef float obs_t;
 #define COLO_ENV_CONTEXT(env) ((EncounterContext*)&(env)->context)
 #define COLO_MAX_CURRICULUM_TIERS 8
 
-/**
- * Per-env aggregate metrics. The trainer treats this as a flat float array: it
- * sums every field across envs (skipping envs with n == 0), divides each by the
- * summed n, then hands the result to puf_log. Every field is therefore a
- * per-episode SUM and n counts episodes; rate fields are reconstructed in puf_log
- * as numerator / denominator so the shared n cancels. All fields must stay float
- * with no padding for the flat-array reinterpretation to hold.
- */
 struct Log {
     float episode_return;
     float episode_length;
@@ -80,15 +56,6 @@ struct Log {
     float n;
 };
 
-/**
- * Colosseum env state. The leading fields are the 5c-required prefix the trainer
- * accesses by name (log, num_agents, rng, agents, tag, boundary_reached); the
- * colosseum sim state follows. config_start_wave is the base (0-indexed) start
- * wave, held apart from the live start_wave so curriculum agents (later waves) are
- * excluded from the aggregate metrics. damage_scale_anneal_step and
- * max_episode_depth_seen live outside Log so the trainer's log-window zeroing
- * never resets these per-env lifetime counters.
- */
 struct Env {
     Log log;
     int num_agents;
@@ -105,7 +72,6 @@ struct Env {
     float max_episode_depth_seen;
 };
 
-/** lowbias32 hash: decorrelate consecutive env indices into independent seeds. */
 static inline uint32_t col_lowbias32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;
@@ -115,16 +81,11 @@ static inline uint32_t col_lowbias32(uint32_t x) {
     return x;
 }
 
-/** Uniform draw in [0, 1) from the env index, salted apart from the sim-seed
-    stream so a curriculum tier draw never correlates with the episode RNG. */
 static inline float col_curriculum_uniform(uint32_t env_index) {
     uint32_t h = col_lowbias32(env_index ^ 0x9e3779b9U);
     return (float)(h >> 8) * (1.0f / 16777216.0f);
 }
 
-/** Write per-head validity as bytes (1 = valid) into the 5c action_mask buffer,
-    converting the encounter's float mask. The sampler reads action_mask as bytes,
-    one per action logit, concatenated in action-head order. */
 static void col_write_action_mask_bytes(Env* env, unsigned char* mask_out) {
     float mask_f[COLO_ACTION_MASK_SIZE];
     ENCOUNTER_COLOSSEUM.write_mask(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), mask_f);
@@ -133,7 +94,6 @@ static void col_write_action_mask_bytes(Env* env, unsigned char* mask_out) {
     }
 }
 
-/** Accumulate one boolean DPT sample; sample < 0 means "not applicable this step". */
 static inline void col_log_dpt_sample(float* hit_acc, float* n_acc, int sample) {
     if (sample < 0) {
         return;
@@ -142,13 +102,6 @@ static inline void col_log_dpt_sample(float* hit_acc, float* n_acc, int sample) 
     *n_acc += 1.0f;
 }
 
-/**
- * Fold the wave-mixing curriculum into per-env init. The 5c trainer runs no
- * vec-level pass, so each env independently draws a start-wave tier from the
- * config fractions keyed on its index: the population still lands ~frac_t of envs
- * on tier t. Reads every configured tier key up front (crash on missing) before
- * gating on classic_curriculum_mode.
- */
 static void col_assign_curriculum_wave(Env* env, Dict* kwargs) {
     int classic_curriculum_mode = (int)dict_get(kwargs, "classic_curriculum_mode");
     if (classic_curriculum_mode < 0 || classic_curriculum_mode > 1) {
@@ -207,9 +160,6 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
 
-    /* init_state seeds every env to 12345; hash the trainer-supplied env index
-       (env->rng) into an independent stream. PUFFER_ENV_SEED_OFFSET shifts the
-       whole population for held-out runs. */
     uint32_t seed_offset = 0;
     const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
     if (seed_offset_str) {
@@ -289,9 +239,6 @@ void puf_step(Env* env) {
         env->acts_staging[i] = (int)agent->actions[i];
     }
 
-    /* Damage anneal: only overwrite the live scale while armed (ticks > 0 and
-       start < 1), so a static swept player_damage_received_scale and the 1.0
-       default stay no-ops. The step counter is a per-env lifetime counter. */
     int anneal_ticks = env->context.config.damage_scale_anneal_ticks;
     float anneal_start = env->context.config.damage_scale_anneal_start;
     env->damage_scale_anneal_step++;
@@ -372,8 +319,6 @@ void puf_step(Env* env) {
     }
 }
 
-/** Rich viewer is a separate --local path (wave-2); the native trainer's render
-    hook is a no-op. */
 void puf_render(Env* env) {
     (void)env;
 }
@@ -405,8 +350,6 @@ void puf_log(Log* log, Dict* out) {
         log->attacked_argmax_set_n > 0.0f
             ? log->attacked_argmax_set_hit / log->attacked_argmax_set_n : 0.0f);
 
-    /* per-NPC-type prayer/damage keyed by ColoNpcType. dict_set copies the key, so
-       these are plain literal tables in ColoNpcType order. */
     static const char* const OFFPRAY_RATE_KEYS[COLO_NUM_NPC_TYPES] = {
         "offpray_rate_berserker", "offpray_rate_archer", "offpray_rate_seer",
         "offpray_rate_serpent", "offpray_rate_jaguar", "offpray_rate_javelin",

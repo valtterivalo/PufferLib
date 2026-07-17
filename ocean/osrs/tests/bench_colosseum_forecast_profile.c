@@ -1,10 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-/**
- * @file bench_colosseum_forecast_profile.c
- * @brief Internal profiler for Colosseum step-out forecast buckets.
- */
-
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

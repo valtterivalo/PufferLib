@@ -1,43 +1,12 @@
-/**
- * @file test_osrs_item_effect_masks.c
- * @brief Pins the effect_mask column of the shared item database.
- *
- * osrs_items_generated.h still carries an "AUTO-GENERATED ... DO NOT EDIT"
- * banner, but the generator (tools/generate_items.py) and its source
- * (items_manifest.json) are not present on this branch, so the file is
- * maintained by hand. The effect_mask of each item drives real combat
- * passives (twisted bow scaling, fang reroll, tumeken's shadow 3x magic,
- * crystal/virtus/dharok set bonuses, sanguinesti heal, venom immunity,
- * blood fury, ...). Nothing else guards these values, so a hand-edit slip
- * or a regeneration with a stale manifest would silently reset masks to
- * OSRS_ITEM_EFFECT_NONE and quietly break damage maths.
- *
- * This test is the guard: EXPECTED_ITEM_EFFECTS is the complete, exact
- * spec for the effect_mask column. Every listed item must carry its
- * declared effect, and every other item must be OSRS_ITEM_EFFECT_NONE.
- * When you add, remove, or change an item effect, update this table in
- * the same change.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_item_effect_masks \
- *       ocean/osrs/tests/test_osrs_item_effect_masks.c -lm
- *   /tmp/test_osrs_item_effect_masks
- */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "ocean/osrs/osrs_items.h"
 
-/**
- * The exact item -> effect_mask mapping the database must hold. Grouped by
- * effect for readability. Item and effect names are compile-checked, so the
- * table cannot reference an item or effect that does not exist.
- */
 static const struct {
-    int item;        /* ITEM_* index into ITEM_DATABASE */
-    uint32_t effect; /* exact OSRS_ITEM_EFFECT_* mask the item must carry */
+    int item;
+    uint32_t effect;
 } EXPECTED_ITEM_EFFECTS[] = {
     {ITEM_TWISTED_BOW, OSRS_ITEM_EFFECT_TWISTED_BOW},
     {ITEM_VIRTUS_MASK, OSRS_ITEM_EFFECT_VIRTUS_PIECE},
@@ -63,10 +32,6 @@ static const struct {
     {ITEM_VENATOR_BOW, OSRS_ITEM_EFFECT_VENATOR_BOUNCE},
 };
 
-/**
- * New item rows whose OSRS effects are intentionally not represented in the
- * current mask set.
- */
 static const int EXPECTED_ITEM_EFFECT_FREE_ITEMS[] = {
     ITEM_ABYSSAL_TENTACLE,
 };
@@ -129,8 +94,6 @@ int main(void) {
         if (actual != OSRS_ITEM_EFFECT_NONE) non_none_seen++;
     }
 
-    /* Headline anti-regression: a dropped column or a stale regeneration
-     * changes how many items carry a mask. Pin the population to the table. */
     if (non_none_seen != (int)n_expected) {
         fprintf(stderr,
                 "FAIL: %d items carry an effect mask, expected %zu "

@@ -1,13 +1,3 @@
-/**
- * @file test_osrs_inventory_clicks.c
- * @brief Tests the pure shared inventory-click SDK.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_inventory_clicks \
- *       ocean/osrs/tests/test_osrs_inventory_clicks.c -lm
- *   /tmp/test_osrs_inventory_clicks
- */
-
 #include <stdio.h>
 #include <math.h>
 
@@ -239,13 +229,13 @@ static int test_enriched_feature_counts(void) {
 static int test_brew_cell_semantics(void) {
     float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
     float zero_deltas[6] = {0};
-    /* 4-dose Saradomin brew (raw id 6685), no gear, base levels 99. */
+
     osrs_write_inventory_cell_affordance_features(
         out, ITEM_NONE, 6685, 4, 0, zero_deltas, 99, 99, 99);
     CHECK("brew is not armor", out[12] == 0.0f);
     CHECK("brew is not weapon", out[13] == 0.0f);
     CHECK("brew kind is brew", out[14] == 1.0f);
-    /* osrs_brew_heal_amount(99) == 99*15/100 + 2 == 16; norm == 16/99. */
+
     CHECK("brew hp-heal norm ~= 16/99",
           fabsf(out[19] - (16.0f / 99.0f)) < 1e-4f);
     CHECK("brew has no prayer restore", out[20] == 0.0f);
@@ -257,7 +247,7 @@ static int test_brew_cell_semantics(void) {
 static int test_weapon_cell_semantics(void) {
     float out[OSRS_INVENTORY_CELL_OBS_FEATURES];
     float zero_deltas[6] = {0};
-    /* Osmumten's fang: weapon, attack_speed 5, attack_range 1, effect FANG. */
+
     uint16_t fang_raw = ITEM_DATABASE[ITEM_OSMUMTENS_FANG].item_id;
     osrs_write_inventory_cell_affordance_features(
         out, ITEM_OSMUMTENS_FANG, fang_raw, 0, 0, zero_deltas, 99, 99, 99);
@@ -289,7 +279,6 @@ static int test_effect_class4_decoder(void) {
     CHECK("lightbearer is util only",
           eff4[0] == 0.0f && eff4[1] == 0.0f && eff4[2] == 0.0f && eff4[3] == 1.0f);
 
-    /* equipped-writer end-to-end: blood fury amulet sets lifesteal class. */
     float eq[OSRS_EQUIPPED_SELF_OBS_FEATURES];
     osrs_write_equipped_self_features(eq, ITEM_AMULET_OF_BLOOD_FURY);
     CHECK("equipped blood fury lifesteal", eq[12] == 1.0f);

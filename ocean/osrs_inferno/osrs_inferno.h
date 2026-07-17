@@ -1,13 +1,3 @@
-/**
- * @file osrs_inferno.h
- * @brief 5c env entry header for the OSRS Inferno encounter.
- *
- * Implements the puf_init/puf_reset/puf_step/puf_render/puf_close/puf_log
- * contract from src/pufferenv.h around the shared inferno encounter stack.
- * Observations, actions, rewards, terminals, and the action mask live in
- * env->agents[0].* (the trainer wires those pointers after puf_init).
- */
-
 #ifndef OSRS_INFERNO_ENV_H
 #define OSRS_INFERNO_ENV_H
 
@@ -19,8 +9,6 @@
 #include "pufferenv.h"
 #include "inferno_profile.h"
 
-/* the encounter stack carries static sim/obs helpers not all reachable from one
-   translation unit; silence unused-function so -Wall stays clean. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "../osrs/encounters/encounter_inferno.h"
@@ -36,8 +24,6 @@ typedef float obs_t;
 #define INF_ENV_INFERNO(env) (&((env)->state))
 #define INF_ENV_INFERNO_CONTEXT(env) (&((env)->context))
 
-/* Required 5c prefix (Log log; num_agents; rng; agents; tag; boundary_reached),
-   then the inferno sim state embedded after. */
 struct Env {
     Log log;
     int num_agents;
@@ -48,10 +34,9 @@ struct Env {
 
     InfernoState state;
     InfernoContext context;
-    int config_start_wave;  /* base start_wave (0-indexed); curriculum agents keep this */
+    int config_start_wave;
 };
 
-/** lowbias32 hash: decorrelate consecutive env indices into independent seeds. */
 static inline uint32_t inf_lowbias32(uint32_t x) {
     x ^= x >> 16;
     x *= 0x7feb352dU;
@@ -134,12 +119,6 @@ static void inferno_apply_reward_profile(Env* env, int reward_profile) {
     }
 }
 
-/* Curriculum wave mixing: a fraction of envs start at later waves for late-game
-   signal (curriculum_agent=1 excludes them from scored metrics). The 5c per-env
-   model has no total-env count in puf_init, so the contiguous-tail assignment of
-   the old my_vec_init becomes a per-env draw keyed on env->rng: each env lands in
-   base or a tier with probability equal to the configured fraction. Same wave
-   distribution, deterministic per index. */
 static void inferno_apply_curriculum(Env* env, Dict* kwargs) {
     if ((int)dict_get(kwargs, "classic_curriculum_mode") != 1)
         return;
@@ -171,7 +150,7 @@ static void inferno_apply_curriculum(Env* env, Dict* kwargs) {
 
     float u = (float)inf_lowbias32(inf_lowbias32((uint32_t)env->rng) ^ 0x9e3779b9U)
         / 4294967296.0f;
-    float cursor = 1.0f - total_frac;  /* base occupies [0, cursor) */
+    float cursor = 1.0f - total_frac;
     if (u < cursor)
         return;
     for (int t = 0; t < num_tiers; t++) {
@@ -190,9 +169,6 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_INFERNO.init_context(INF_ENV_CONTEXT(env));
     ENCOUNTER_INFERNO.init_state(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
-    /* per-env scenario RNG: init_state seeds every env to a fixed constant, so
-       without this all envs run the same world. Hash the trainer-assigned index
-       (+PUFFER_ENV_SEED_OFFSET for held-out runs). */
     uint32_t seed_offset = 0;
     const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
     if (seed_offset_str)
@@ -258,8 +234,6 @@ void puf_init(Env* env, Dict* kwargs) {
         inferno_env_put_int(env, int_keys[k], (int)dict_get(kwargs, int_keys[k]));
 
     inferno_apply_obs_profile(env, (int)dict_get(kwargs, "obs_profile"));
-    /* direct step_out_forecast_obs_mode wins over the obs_profile default; the
-       _enabled key is read for completeness and used only if mode is absent. */
     (void)dict_get(kwargs, "step_out_forecast_obs_enabled");
     inferno_env_put_int(env, "step_out_forecast_obs_mode",
         (int)dict_get(kwargs, "step_out_forecast_obs_mode"));
@@ -275,7 +249,6 @@ void puf_init(Env* env, Dict* kwargs) {
     inferno_env_put_int(env, "zuk_force_safe_untagged_healer_target_mask",
         (int)dict_get(kwargs, "zuk_force_safe_untagged_healer_target_mask"));
 
-    /* match the 1-indexed -> 0-indexed conversion done by the encounter's put_int */
     env->config_start_wave = (start_wave > 0) ? start_wave - 1 : 0;
 
     inferno_apply_curriculum(env, kwargs);
@@ -356,8 +329,6 @@ void puf_step(Env* env) {
 
     INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);
 
-    /* terminal-only: accumulate completed-episode stats; vec_log sums each Log
-       field across envs and divides by n for per-episode averages. */
     if (is_term) {
         InfernoState* s = INF_ENV_INFERNO(env);
         float min_zuk_hp_term = (s->winner == INF_OUTCOME_PLAYER_WON)
@@ -366,7 +337,6 @@ void puf_step(Env* env) {
         int terminal_shield_active = inferno_terminal_shield_active(s);
         int terminal_behind_shield = inferno_terminal_behind_shield(s);
 
-        /* only count episodes at the configured start_wave; curriculum agents excluded. */
         if (s->start_wave != env->config_start_wave) goto skip_log;
 
         env->log.episode_return += s->episode_return;
@@ -488,7 +458,6 @@ void puf_step(Env* env) {
             if (min_zuk_hp_term < env->log.best_min_zuk_hp_normal)
                 env->log.best_min_zuk_hp_normal = min_zuk_hp_term;
 
-            /* Per-threshold survival and damage, accumulated only after crossing. */
             if (s->tick_at_le_300 >= 0) {
                 env->log.ticks_after_300_normal_sum += (float)(s->tick - s->tick_at_le_300);
                 env->log.damage_after_300_normal_sum += s->damage_after_300;

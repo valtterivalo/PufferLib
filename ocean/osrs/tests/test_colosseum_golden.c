@@ -1,20 +1,3 @@
-/**
- * @file test_colosseum_golden.c
- * @brief Byte-identity golden-master test for the Fortis Colosseum env.
- *
- * Drives deterministic episodes across a battery of public wave + seed configs,
- * stepping with a splitmix64 action stream that is seeded independently of the
- * env seed. Each tick folds the full observation vector, reward, wave, tick,
- * episode_over, and winner into an FNV-1a digest.
- *
- * BUILD:
- *   cc -std=c11 -O2 -I. -o /tmp/test_colosseum_golden \
- *       ocean/osrs/tests/test_colosseum_golden.c -lm
- * RUN:
- *   /tmp/test_colosseum_golden
- *   /tmp/test_colosseum_golden --print
- */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -200,36 +183,6 @@ static const GoldenConfig CONFIGS[] = {
 #define NUM_CONFIGS ((int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])))
 #define EPISODE_TICKS 4000
 
-/* Re-seeded 2026-07-08 for the forecast landing corner-cut fix: the landing
-   helper (col_step_out_forecast_action_landing_ctx) now mirrors
-   encounter_move_to_target's OSRS no-corner-cut rule (a diagonal step requires
-   both shared-corner tiles walkable), which it had missed since the rule was
-   added to the real mover in ef903951e (2026-06-27). Obs-only: forecast
-   candidates whose path cuts a blocked corner now roll out from the tile the
-   player would actually reach, so pillar-adjacent danger obs stop lying.
-   Dynamics unchanged (battery 10333/10333); w02/w05/w06/w09 digests are
-   bit-identical because those episodes never had a candidate cut a corner.
-   Landing selftest in test_colosseum_forecast_exact.c passes all 3 states.
-   Verified deterministic (two --print runs identical).
-
-   Re-seeded 2026-07-10 for late-start entry-state fidelity
-   (late_start_state_mode, default 2): start_wave>0 resets now synthesize the
-   pre-start modifier draft history, drain supplies to the depletion prior, and
-   open the start wave's own draft LIVE. INTENDED change; w01 (organic start)
-   stayed bit-identical, w02-w12 all moved. Verified deterministic (two
-   --print runs identical).
-
-   w12 re-seeded 2026-07-11 for the Sol reaction-window corrections (A15 AoE
-   damage age 1 -> 2 per real-gameplay frame analysis, sphere enrage delay):
-   INTENDED change; w01-w11 bit-identical (Sol-only mechanics). Verified
-   deterministic (two --print runs identical).
-
-   w12 re-seeded again 2026-07-11 for the Solarflare Sol orbit boxes (orbs
-   move off the pillar rings to 5x5 boxes in the improvised arena's corners;
-   the synthesized wave-12 draft history can carry Solarflare, so the obs
-   trajectory moves). Enrage sand telegraphs + pool dedup ship in the same
-   commit but are unreachable in this trajectory. INTENDED; w01-w11
-   bit-identical. Verified deterministic (two --print runs identical). */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x6b648dbd26450b82ULL,
     0xd25dd5f73aea2df6ULL,

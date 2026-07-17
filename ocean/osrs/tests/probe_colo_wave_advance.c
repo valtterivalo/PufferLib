@@ -1,41 +1,8 @@
-/**
- * @file probe_colo_wave_advance.c
- * @brief DECISIVE probe: is wave-1 -> wave-2 progression reachable in the
- *        Fortis Colosseum env right now?
- *
- * The RL agent is stuck at wave 0 (s->wave never increments) across every run.
- * This probe answers three things with raw numbers, no RL:
- *   (1) does s->wave ever go 0 -> 1 (wave 1 cleared, wave 2 begins)?
- *   (2) does the wave-clear bonus fire on the clear?
- *   (3) how many enemies does wave 1 spawn, and how many die?
- *
- * Three modes:
- *   AGGRESSIVE  - scripted policy: handle drafts, target + attack nearest enemy
- *                 every tick, eat when low. Tests winnability via real combat.
- *   FORCEKILL   - same draft handling, but every tick directly zero the HP of
- *                 every live wave-1 enemy through the sim's own fields, then step.
- *                 This ISOLATES the wave-advance wiring from combat ability: if
- *                 combat can't clear but forcekill can, the wiring is fine and the
- *                 wall is DPS/positioning; if forcekill ALSO can't advance, the
- *                 wave-advance wiring itself is broken.
- *
- * Wave indexing note: COLO_WAVES is 0-based; wave index 0 IS "wave 1" (4 killable
- * enemies: berserker, archer, seer, shaman + a reinforcement jaguar on overrun).
- * start_wave=0 spawns wave 1 immediately with no modifier; the first draft is
- * taken after clearing wave 1, gating entry into wave 2.
- *
- * BUILD:
- *   cc -std=c11 -O2 -I. -o /tmp/colo_wave_probe \
- *       ocean/osrs/tests/probe_colo_wave_advance.c -lm
- *   /tmp/colo_wave_probe
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
-
-/* ---- scripted helpers (mirroring probe_colosseum_winnability.c) ---------- */
 
 static int scripted_overhead(const ColosseumState* s) {
     int best_style = ATTACK_STYLE_NONE, best_ticks = 1 << 30, best_dmg = -1;
@@ -69,7 +36,6 @@ static int scripted_overhead(const ColosseumState* s) {
     }
 }
 
-/* target the obs slot of the nearest live enemy (explicit re-click each tick). */
 static int scripted_target(const ColosseumState* s) {
     int best_slot = -1, best_dist = 1 << 30;
     for (int slot = 0; slot < COLO_OBS_NPCS; slot++) {
@@ -103,7 +69,6 @@ static int scripted_heal_cell(const ColosseumState* s) {
     return -1;
 }
 
-/* aggressive: stand still, keep prayer up, re-click nearest enemy, eat when low. */
 static void aggressive_policy(ColosseumState* s, int* actions) {
     for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
     if (s->modifiers.draft_pending) {
@@ -124,7 +89,6 @@ static void aggressive_policy(ColosseumState* s, int* actions) {
     }
 }
 
-/* count live (non-hazard) enemies currently on the field. */
 static int count_live_enemies(const ColosseumState* s) {
     int n = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++)
@@ -132,10 +96,6 @@ static int count_live_enemies(const ColosseumState* s) {
     return n;
 }
 
-/* directly defeat every live wave-1 enemy via the sim's own fields: drop hp to 0.
-   col_apply_npc_death is not called here on purpose — we mimic exactly what the
-   combat path leaves behind (hp<=0) and let the step loop's own death handling /
-   all-dead scan act on it, to test the wave-advance wiring end to end. */
 static int forcekill_live_enemies(ColosseumState* s) {
     int killed = 0;
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
@@ -147,30 +107,28 @@ static int forcekill_live_enemies(ColosseumState* s) {
     return killed;
 }
 
-/* ---- harness ------------------------------------------------------------- */
-
 enum { MODE_AGGRESSIVE, MODE_FORCEKILL };
 
 static void run_episodes(const char* label, int mode, int n_eps) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
-    ctx.config.start_wave = 0;                                   /* wave index 0 = wave 1 */
+    ctx.config.start_wave = 0;
     ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY;
     ctx.config.beginner_loadout_fraction = 0.0f;
     ctx.config.step_out_forecast_obs_enabled = 1;
-    ctx.config.wave_clear_bonus = 1.0f;                          /* opt the bonus in so we can SEE it fire */
+    ctx.config.wave_clear_bonus = 1.0f;
 
     static float obs[COLO_NUM_OBS];
     ColosseumState s;
     unsigned int rng = 0x9e3779b9u;
 
-    int advanced_eps = 0;            /* episodes where s->wave reached >= 1 */
+    int advanced_eps = 0;
     int max_wave_overall = 0;
     int total_clear_bonus_fires = 0;
     int total_waves_cleared = 0;
     int wins = 0;
     long total_spawned_w1 = 0, total_killed_w1 = 0;
-    int wave_ended_eps = 0;          /* episodes where the wave-clear branch ever ran */
+    int wave_ended_eps = 0;
     double dmg_dealt = 0, dmg_recv = 0;
 
     for (int ep = 0; ep < n_eps; ep++) {
@@ -188,8 +146,6 @@ static void run_episodes(const char* label, int mode, int n_eps) {
         while (!s.episode_over && guard++ < COLO_MAX_TICKS + 16) {
             col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
 
-            /* record the wave-1 roster size the first tick the wave is live
-               (draft resolved, ready delay done, enemies present). */
             if (wave1_spawn_count < 0 && s.wave == 0 && !s.modifiers.draft_pending &&
                     s.wave_spawn_delay == 0 && s.wave_ready_delay == 0) {
                 int live = count_live_enemies(&s);
@@ -197,9 +153,9 @@ static void run_episodes(const char* label, int mode, int n_eps) {
             }
 
             if (s.modifiers.draft_pending) {
-                aggressive_policy(&s, actions);            /* picks the modifier */
+                aggressive_policy(&s, actions);
             } else if (mode == MODE_FORCEKILL) {
-                /* keep draft handling, otherwise no-op actions, then nuke HP. */
+
                 for (int h = 0; h < COLO_NUM_ACTION_HEADS; h++) actions[h] = 0;
                 forcekill_live_enemies(&s);
             } else {
@@ -212,7 +168,7 @@ static void run_episodes(const char* label, int mode, int n_eps) {
 
             if (s.tick_scratch.wave_completed) {
                 wave_completed_seen++;
-                /* wave_clear_bonus is added into s->reward on the clear tick. */
+
                 clear_bonus_seen += ctx.config.wave_clear_bonus;
             }
             if (s.wave > max_wave_this_ep) max_wave_this_ep = s.wave;

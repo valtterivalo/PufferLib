@@ -1,25 +1,3 @@
-/**
- * @file test_osrs_special_attacks.c
- * @brief Shared-layer tests for osrs_special_attacks.h, osrs_item_effects.h,
- *        and the consumable formula/application homes.
- *
- * These layers are consumed by colosseum, inferno, zulrah, and PvP, so their
- * contracts are tested HERE once, property-style, instead of per encounter:
- *   1. consumable amount formulas (osrs_consumables.h is the single home) +
- *      the Player-application laws (restore converges to base and never
- *      overshoots, boosts cap at base + boost, brew drain + restore round-trip);
- *   2. spec resolver: cost table, SGS heal/prayer wiki minimums on landed
- *      specs only, claws cascade bounds, elder maul / statius defence drains;
- *   3. item effects: identity law for an empty profile, tbow target-magic
- *      monotonicity, exact crystal armour scaling, fang bounds and stab-only
- *      accuracy, blood fury proc rate and heal fraction (melee-only).
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_osrs_special_attacks \
- *       ocean/osrs/tests/test_osrs_special_attacks.c -lm
- *   /tmp/test_osrs_special_attacks
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,7 +74,6 @@ static void test_consumable_amounts_and_laws(void) {
     CHECK("PvP float cap expressions match integer helpers for levels 1..99",
         pvp_float_caps_match_integer_helpers);
 
-    /* the drink layer and the amount helpers agree (one formula home) */
     CHECK("osrs_drink_potion super restore matches the amount helper",
         osrs_drink_potion(POTION_SUPER_RESTORE, 0, 99, 0).prayer_restored ==
         osrs_super_restore_amount(99));
@@ -110,7 +87,6 @@ static void test_consumable_amounts_and_laws(void) {
     CHECK("osrs_brew_effect heal matches the amount helper",
         osrs_brew_effect(99, 99, 99, 99, 99, 99).hp_healed == osrs_brew_heal_amount(99));
 
-    /* wiki bases: heal + def boost from BASE levels, drains from CURRENT */
     BrewResult fresh = osrs_brew_effect(99, 99, 99, 99, 99, 99);
     BrewResult drained = osrs_brew_effect(99, 99, 50, 50, 50, 50);
     CHECK("brew def boost computes from base defence (21 at 99)",
@@ -118,7 +94,6 @@ static void test_consumable_amounts_and_laws(void) {
     CHECK("brew drains diminish with the current level",
         drained.att_drain < fresh.att_drain && drained.att_drain == 7);
 
-    /* law: restore caps at base from any drained start */
     Player p = make_maxed_player();
     p.current_attack = 1; p.current_strength = 40; p.current_ranged = 98;
     for (int i = 0; i < 20; i++) encounter_restore_stats(&p);
@@ -126,7 +101,6 @@ static void test_consumable_amounts_and_laws(void) {
         p.current_attack == 99 && p.current_strength == 99 &&
         p.current_ranged == 99 && p.current_magic == 99);
 
-    /* law: boosts cap at base + boost no matter how many doses */
     p = make_maxed_player();
     encounter_super_combat_boost(&p);
     encounter_super_combat_boost(&p);
@@ -136,8 +110,6 @@ static void test_consumable_amounts_and_laws(void) {
     encounter_ranging_boost(&p);
     CHECK("ranging caps at base + boost (112)", p.current_ranged == 112);
 
-    /* law: brew drains recover fully under repeated restores; the def boost
-       comes from BASE defence so double-brews never compound it */
     p = make_maxed_player();
     for (int i = 0; i < 4; i++) encounter_brew_drain_stats(&p);
     CHECK("brews drain offensive stats", p.current_attack < 99 && p.current_magic < 99);
@@ -153,7 +125,6 @@ static void test_consumable_amounts_and_laws(void) {
         p.current_attack == 99 && p.current_strength == 99 &&
         p.current_ranged == 99 && p.current_magic == 99);
 
-    /* sanfew restores more per dose than super restore at base 99 */
     Player a = make_maxed_player(); a.current_attack = 1;
     Player b = make_maxed_player(); b.current_attack = 1;
     encounter_restore_stats(&a);
@@ -162,7 +133,6 @@ static void test_consumable_amounts_and_laws(void) {
         a.current_attack == 33 && b.current_attack == 34);
 }
 
-/** drive the shared E13 stat drift helper for a known tick count. */
 static void drift_ticks(Player* p, int* timer, EncounterStatDriftPins pins, int ticks) {
     for (int i = 0; i < ticks; i++) encounter_tick_stat_drift(p, timer, pins);
 }
@@ -258,8 +228,6 @@ static void test_spec_costs_and_sgs(void) {
         osrs_spec_cost(ITEM_STATIUS_WARHAMMER) == 35 &&
         osrs_spec_cost(ITEM_SCYTHE_OF_VITUR) == 0);
 
-    /* SGS: every LANDED spec heals >= 10 and restores >= 5 prayer (wiki
-       minimums); a miss restores nothing. */
     uint32_t rng = 4242;
     int landed = 0, missed = 0;
     for (int i = 0; i < 4000; i++) {
@@ -284,8 +252,6 @@ static void test_spec_costs_and_sgs(void) {
     CHECK("SGS heal/prayer follow max(d/2,10) / max(d/4,5)", 1);
 }
 
-/** E3: two-handed weapons derive stats and effect profiles as if the shield slot
-    were empty, while one-handed weapons retain shield-slot contributions. */
 static void test_two_handed_loadout_shield_suppression(void) {
     printf("test_two_handed_loadout_shield_suppression\n");
 
@@ -356,9 +322,6 @@ static void test_two_handed_loadout_shield_suppression(void) {
         osrs_effect_profile_has(&one_handed_profile, OSRS_ITEM_EFFECT_ELYSIAN));
 }
 
-/** E12: dps-calc magic accuracy applies prayer first, adds +2 only for Accurate,
-    then adds the folded +9 magic constant. Powered-staff Longrange has no attack
-    stance bonus. */
 static void test_magic_effective_attack_level_law(void) {
     printf("test_magic_effective_attack_level_law\n");
 
@@ -386,8 +349,6 @@ static void test_magic_effective_attack_level_law(void) {
         accurate.eff_level == 113 && longrange.eff_level == 111);
 }
 
-/** E2: Sol perfect-parry force-max rewrites every supported special to the
-    resolver's own deterministic best outcome, including weapon side effects. */
 static void test_spec_force_max_laws(void) {
     printf("test_spec_force_max_laws\n");
 
@@ -462,9 +423,6 @@ static void test_spec_force_max_laws(void) {
         elder.total_damage == 40 && elder.def_drain == 70);
 }
 
-/** dps-calc claws.ts splat table for a drawn total at success branch k (0-3).
-    Splats are floor fractions of the total and need NOT sum back to it — that
-    residue loss is the reference model, not a bug (audit E5 resolution). */
 static void claws_expected_splats(int branch, int total, int out[4]) {
     out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0;
     switch (branch) {
@@ -484,9 +442,6 @@ static void claws_expected_splats(int branch, int total, int out[4]) {
     }
 }
 
-/** Classifies an observed claws SpecResult against the dps-calc tables.
-    Returns 1 with branch 0-3 (success), 4 ([1,1] all-miss), or 5 (zero
-    all-miss); returns 0 if no branch/total in range reproduces the splats. */
 static int claws_classify(const SpecResult* r, int max_hit, int* out_branch) {
     if (r->damage[0] == 0 && r->damage[1] == 0 &&
         r->damage[2] == 0 && r->damage[3] == 0) {
@@ -517,8 +472,6 @@ static int claws_classify(const SpecResult* r, int max_hit, int* out_branch) {
 static void test_claws_and_def_drains(void) {
     printf("test_claws_and_def_drains\n");
 
-    /* near-certain accuracy: the first-success branch dominates. dps-calc
-       claws.ts: total uniform in [max, 2*max-1], splats [t/2,t/4,t/8,t/8+1]. */
     uint32_t rng = 1337;
     int seen_total[40] = {0};
     int classified_ok = 1, branch0 = 0, min_total = 1 << 30, max_total = 0;
@@ -530,8 +483,7 @@ static void test_claws_and_def_drains(void) {
         branch0++;
         int total = r.damage[0] + r.damage[1] + r.damage[2] + r.damage[3];
         if (total != r.total_damage) { classified_ok = 0; break; }
-        /* adjacent totals can floor-split to the same tuple (78 and 79 both
-           give [39,19,9,10]), so mark every total the tuple matches */
+
         for (int t = 40; t <= 79; t++) {
             int e[4];
             claws_expected_splats(0, t, e);
@@ -551,8 +503,6 @@ static void test_claws_and_def_drains(void) {
     CHECK("claws observable extremes match the floor splits (41 / 77 at max 40)",
         min_total == 20 + 10 + 5 + 6 && max_total == 39 + 19 + 9 + 10);
 
-    /* contested accuracy: all four success branches and both all-miss
-       outcomes appear, and every observed tuple matches its branch table */
     rng = 777;
     int seen_class[6] = {0};
     int contested_ok = 1;
@@ -570,7 +520,6 @@ static void test_claws_and_def_drains(void) {
         seen_class[0] && seen_class[1] && seen_class[2] &&
         seen_class[3] && seen_class[4] && seen_class[5]);
 
-    /* defence drains: elder maul 35%, statius 30%, both only on a hit */
     rng = 99;
     int maul_drained = 0, statius_drained = 0;
     for (int i = 0; i < 2000 && (!maul_drained || !statius_drained); i++) {
@@ -594,7 +543,6 @@ static void test_item_effect_laws(void) {
     OsrsItemEffectState state;
     osrs_item_effect_state_init(&state);
 
-    /* identity law: an empty effect profile changes nothing */
     OsrsEquipmentEffectProfile empty;
     memset(&empty, 0, sizeof(empty));
     OsrsPreparedAttackEffects id = osrs_prepare_attack_effects(
@@ -604,7 +552,6 @@ static void test_item_effect_laws(void) {
     CHECK("empty profile is the identity on rolls",
         id.attack_roll == 12345 && id.max_hit == 50 && id.use_double_accuracy == 0);
 
-    /* tbow: monotone non-decreasing in target magic */
     OsrsEquipmentEffectProfile tbow_profile;
     memset(&tbow_profile, 0, sizeof(tbow_profile));
     tbow_profile.effect_mask = OSRS_ITEM_EFFECT_TWISTED_BOW;
@@ -620,7 +567,6 @@ static void test_item_effect_laws(void) {
     }
     CHECK("tbow scaling is monotone in target magic", monotone);
 
-    /* crystal armour: exact piece points and full-set bowfa scaling */
     CHECK("crystal points are helm 1 / legs 2 / body 3",
         osrs_crystal_armour_points(ITEM_CRYSTAL_HELM) == 1 &&
         osrs_crystal_armour_points(ITEM_CRYSTAL_LEGS) == 2 &&
@@ -677,14 +623,12 @@ static void test_item_effect_laws(void) {
     }
     CHECK("fang double-roll accuracy never lowers hit chance", double_accuracy_monotone);
 
-    /* scythe splat rule */
     CHECK("scythe splats: 1 vs 1x1, 2 vs 2x2, 3 vs 3x3+",
         osrs_scythe_splats_for_target_size(1) == 1 &&
         osrs_scythe_splats_for_target_size(2) == 2 &&
         osrs_scythe_splats_for_target_size(3) == 3 &&
         osrs_scythe_splats_for_target_size(5) == 3);
 
-    /* blood fury: ~20% proc on melee damage, heal 30%, never on ranged */
     OsrsEquipmentEffectProfile fury;
     memset(&fury, 0, sizeof(fury));
     fury.effect_mask = OSRS_ITEM_EFFECT_BLOOD_FURY;

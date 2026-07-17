@@ -1,38 +1,3 @@
-/**
- * @file probe_colo_best_gear_dpt.c
- * @brief Validates the colosseum best-gear DPT oracle + equip-and-pray-same-tick fix.
- *
- * Covers the design's tests T1-T7:
- *   T1 best[magic][BERSERKER] argmax setup contains shadow + occult + confliction +
- *      avernic treads, and the obs float reflects clamp01(best.dpt / NORM). The DPT
- *      HAND-REFERENCE is checked on a NON-forced-max NPC (jaguar warrior), because the
- *      forced-max warband path ignores accuracy and would not match an accuracy-weighted
- *      reference (review nit).
- *   T2 best-gear DPT >= the old worn-armour single-weapon-swap DPT for every (type,
- *      weapon): whole-setup search can never be worse than the per-slot shortcut.
- *   T3 per-NPC argmax style == argmax over the 3 best DPTs, and matches the spec
- *      (berserker -> magic, archer -> melee, seer -> ranged, serpent -> ranged).
- *   T4 equip a magic weapon + select Augury same tick: mask allows Augury at T,
- *      offensive_prayer == AUGURY after, shadow x3 + Augury applied to T's attack.
- *   T5 per-cell marginal bit positive for the target's best-setup pieces, 0 otherwise;
- *      removing shadow from the bag flips the magic argmax.
- *   T6 memoization result-preserving: several setups' DPT computed with vs without the
- *      memo cache are bit-identical.
- *   T7 confliction charged double-accuracy matches the reference value with a 1h magic
- *      weapon AND is disabled with a 2h weapon (Tumeken's shadow).
- *   T8 the argmax setup is locally optimal: emptying any single gear slot never raises
- *      DPT (regression for the pruned-empty bug, where off-style armour with a negative
- *      style-relevant bonus was kept while the empty slot would score higher).
- *   (NORM calibration sweep prints the empirical max best-gear DPT; --calibrate.)
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/probe_colo_best_gear_dpt \
- *       ocean/osrs/tests/probe_colo_best_gear_dpt.c -lm
- * RUN:
- *   /tmp/probe_colo_best_gear_dpt
- *   /tmp/probe_colo_best_gear_dpt --calibrate   (prints NORM sweep, no asserts)
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,8 +30,6 @@ static int setup_contains(const uint8_t setup[NUM_GEAR_SLOTS], uint8_t item) {
     return 0;
 }
 
-/* ----- T1 + T3: argmax composition + style ranking ------------------------- */
-
 static void test_argmax_setup_and_style(void) {
     printf("test_argmax_setup_and_style (T1, T3)\n");
     ColosseumContext ctx;
@@ -82,7 +45,6 @@ static void test_argmax_setup_and_style(void) {
     ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     col_build_best_gear_table(&s, best);
 
-    /* T1: the magic argmax setup vs a berserker is the full shadow burst kit. */
     const ColoBestGear* bm = &best[COLO_GEAR_MAGIC][COLO_FREMENNIK_BERSERKER];
     CHECK("T1 magic best weapon is Tumeken's shadow",
         bm->setup[GEAR_SLOT_WEAPON] == ITEM_TUMEKENS_SHADOW);
@@ -93,9 +55,6 @@ static void test_argmax_setup_and_style(void) {
     CHECK("T1 magic best setup includes Avernic treads",
         setup_contains(bm->setup, ITEM_AVERNIC_TREADS));
 
-    /* T1 hand-reference on a NON-forced-max NPC (jaguar: player_style_that_max_hits ==
-       NONE) so accuracy is not bypassed: scoring the oracle's argmax setup through the
-       leaf reproduces best.dpt for the jaguar magic line within float tolerance. */
     const ColoBestGear* jm = &best[COLO_GEAR_MAGIC][COLO_JAGUAR_WARRIOR];
     ColoNPC jnpc = (ColoNPC){
         .type = COLO_JAGUAR_WARRIOR,
@@ -112,7 +71,6 @@ static void test_argmax_setup_and_style(void) {
         setup_contains(jm->setup, ITEM_OCCULT_NECKLACE) &&
         setup_contains(jm->setup, ITEM_CONFLICTION_GAUNTLETS));
 
-    /* T3: per-type argmax-style spec. */
     struct { ColoNpcType type; int want_style; const char* name; } spec[] = {
         { COLO_FREMENNIK_BERSERKER, COLO_GEAR_MAGIC,  "berserker -> magic" },
         { COLO_FREMENNIK_ARCHER,    COLO_GEAR_MELEE,  "archer -> melee" },
@@ -133,8 +91,6 @@ static void test_argmax_setup_and_style(void) {
     }
 }
 
-/* ----- T2: whole-setup never worse than the worn single-swap ---------------- */
-
 static void test_beats_worn_single_swap(void) {
     printf("test_beats_worn_single_swap (T2)\n");
     int modes[] = { COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY,
@@ -153,11 +109,6 @@ static void test_beats_worn_single_swap(void) {
         ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
         col_build_best_gear_table(&s, best);
 
-        /* For every FIELDABLE weapon (worn + bag, matching the oracle's candidate
-           source), score it on the WORN armour (old single-swap shortcut) against every
-           real type, and assert the best-gear table's DPT for that weapon's style >= it.
-           Weapons that exist only in the abstract loadout tables are excluded because the
-           policy cannot field them, so the oracle does not (and must not) score them. */
         uint8_t weapons[64];
         int nweap = 0;
         uint8_t add_seen[256] = {0};
@@ -203,8 +154,6 @@ static void test_beats_worn_single_swap(void) {
     }
 }
 
-/* ----- T4: equip magic weapon + Augury same tick ---------------------------- */
-
 static void test_equip_and_augury_same_tick(void) {
     printf("test_equip_and_augury_same_tick (T4)\n");
     ColosseumContext ctx;
@@ -212,28 +161,20 @@ static void test_equip_and_augury_same_tick(void) {
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 99);
     col_build_npc_stats();
 
-    /* find the magic weapon's inventory cell (Tumeken's shadow). */
     int shadow_cell = -1;
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
         if (s.inventory_cells[cell].item_idx == ITEM_TUMEKENS_SHADOW) { shadow_cell = cell; break; }
     CHECK("T4 shadow is in the bag", shadow_cell >= 0);
     if (shadow_cell < 0) return;
 
-    /* ensure the equipped weapon is NOT magic to start (so the OLD gate would deny
-       Augury), and prayer points are available. */
     CHECK("T4 starts on a non-magic weapon",
         col_equipped_weapon_attack_style(&s.player) != ATTACK_STYLE_MAGIC);
     s.player.current_prayer = 99;
 
-    /* the mask presented BEFORE the swap tick must already allow Augury (points-only). */
     static float mask[COLO_ACTION_MASK_SIZE];
     col_write_mask_ctx((EncounterState*)&s, (EncounterContext*)&ctx, mask);
-    /* offensive head layout: no_change, off, piety, rigour, augury. find the augury bit. */
     int off_base = -1;
     {
-        /* walk the mask via the same offsets the writer uses: replicate by querying the
-           offensive head index. The augury entry is the 5th of the offensive head. We
-           locate it by counting action dims up to COLO_HEAD_OFFENSIVE. */
         int offset = 0;
         for (int h = 0; h < COLO_HEAD_OFFENSIVE; h++) offset += COLO_ACTION_DIMS[h];
         off_base = offset;
@@ -242,10 +183,9 @@ static void test_equip_and_augury_same_tick(void) {
     CHECK("T4 mask allows Augury on a non-magic weapon (points-only)",
         mask[augury_bit] == 1.0f);
 
-    /* drive tick T: equip shadow (equip head for the weapon slot) AND select Augury. */
     int act[COLO_NUM_ACTION_HEADS] = {0};
-    act[COLO_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = shadow_cell + 1;  /* +1: 0 = no-op */
-    act[COLO_HEAD_OFFENSIVE] = 4;  /* augury */
+    act[COLO_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = shadow_cell + 1;
+    act[COLO_HEAD_OFFENSIVE] = 4;
     col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, act);
 
     CHECK("T4 weapon equipped to shadow on the swap tick",
@@ -253,9 +193,6 @@ static void test_equip_and_augury_same_tick(void) {
     CHECK("T4 offensive prayer is Augury after the swap tick",
         s.player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
 
-    /* the recomputed live loadout must show shadow x3 + Augury applied. Compare against
-       a shadow loadout scored WITHOUT augury: magic damage and eff_level must be higher
-       with augury. */
     const EncounterLoadoutStats* live = col_live_loadout_stats(&s);
     EncounterLoadoutStats no_aug;
     int cur_magic = s.player.current_magic;
@@ -270,8 +207,6 @@ static void test_equip_and_augury_same_tick(void) {
         live->eff_level > no_aug.eff_level);
 }
 
-/* ----- T5: per-cell marginal bit + shadow-removal argmax flip --------------- */
-
 static void test_per_cell_marginal_bit(void) {
     printf("test_per_cell_marginal_bit (T5)\n");
     ColosseumContext ctx;
@@ -284,7 +219,6 @@ static void test_per_cell_marginal_bit(void) {
     s.player.current_magic = 99;
     col_mark_live_loadout_dirty(&s);
 
-    /* place a single live berserker (magic argmax) and target it. */
     memset(s.npcs, 0, sizeof(s.npcs));
     s.npcs[0] = (ColoNPC){
         .type = COLO_FREMENNIK_BERSERKER,
@@ -299,8 +233,6 @@ static void test_per_cell_marginal_bit(void) {
     ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     col_build_best_gear_table(&s, best);
 
-    /* removing the shadow from the bag AND worn gear must drop the magic best DPT and
-       flip the argmax style away from magic for the berserker. */
     int magic_was_argmax = -1;
     {
         float bd = -1.0f;
@@ -338,8 +270,6 @@ static void test_per_cell_marginal_bit(void) {
         argmax_without != COLO_GEAR_MAGIC);
 }
 
-/* ----- T6: memoization is result-preserving --------------------------------- */
-
 static void test_memo_result_preserving(void) {
     printf("test_memo_result_preserving (T6)\n");
     ColosseumContext ctx;
@@ -352,9 +282,6 @@ static void test_memo_result_preserving(void) {
     s.player.current_magic = 99;
     col_mark_live_loadout_dirty(&s);
 
-    /* the oracle uses the memo internally; col_expected_dpt_for_equipment_vs_npc does
-       NOT use the memo (direct compute). Assert that the oracle's argmax DPT for each
-       (style, type) equals a direct (un-memoized) re-evaluation of its argmax setup. */
     ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     col_build_best_gear_table(&s, best);
 
@@ -363,7 +290,7 @@ static void test_memo_result_preserving(void) {
         for (int type = 0; type < COLO_NUM_NPC_TYPES; type++) {
             if (col_type_is_hazard_entity((ColoNpcType)type)) continue;
             const ColoBestGear* bg = &best[style][type];
-            if (bg->dpt < 0.0f) continue;  /* no weapon of this style */
+            if (bg->dpt < 0.0f) continue;
             ColoNPC npc = (ColoNPC){
                 .type = (ColoNpcType)type,
                 .hp = COLO_NPC_STATS[type].hp,
@@ -378,8 +305,6 @@ static void test_memo_result_preserving(void) {
     CHECK("T6 memoized oracle DPT bit-identical to un-memoized leaf", mismatches == 0);
 }
 
-/* ----- T7: confliction charged double-accuracy + 2h disable ----------------- */
-
 static void test_confliction_reference(void) {
     printf("test_confliction_reference (T7)\n");
     ColosseumContext ctx;
@@ -389,7 +314,6 @@ static void test_confliction_reference(void) {
     s.player.current_magic = 99;
     col_mark_live_loadout_dirty(&s);
 
-    /* a non-forced-max NPC so the leaf uses accuracy: jaguar warrior. */
     ColoNPC npc = (ColoNPC){
         .type = COLO_JAGUAR_WARRIOR,
         .hp = COLO_NPC_STATS[COLO_JAGUAR_WARRIOR].hp,
@@ -398,15 +322,12 @@ static void test_confliction_reference(void) {
         .active = 1, .death_ticks = 0,
     };
 
-    /* 1h magic weapon = trident of the swamp + confliction gauntlets. */
     uint8_t setup_1h[NUM_GEAR_SLOTS];
     memset(setup_1h, ITEM_NONE, NUM_GEAR_SLOTS);
     setup_1h[GEAR_SLOT_WEAPON] = ITEM_TRIDENT_OF_SWAMP;
     setup_1h[GEAR_SLOT_HANDS] = ITEM_CONFLICTION_GAUNTLETS;
     setup_1h[GEAR_SLOT_NECK] = ITEM_OCCULT_NECKLACE;
 
-    /* same setup with confliction REPLACED by a non-confliction hands piece, to read the
-       single-roll DPT, then assert the confliction DPT exceeds it (double-acc boost). */
     uint8_t setup_1h_nocon[NUM_GEAR_SLOTS];
     memcpy(setup_1h_nocon, setup_1h, NUM_GEAR_SLOTS);
     setup_1h_nocon[GEAR_SLOT_HANDS] = ITEM_NONE;
@@ -414,8 +335,6 @@ static void test_confliction_reference(void) {
     float dpt_con = col_expected_dpt_for_equipment_vs_npc(&s, setup_1h, &npc, 1);
     float dpt_nocon = col_expected_dpt_for_equipment_vs_npc(&s, setup_1h_nocon, &npc, 1);
 
-    /* hand-reference the steady-state confliction hit chance against the leaf. Recompute
-       the prepared attack to get the att_roll, then apply double/(1+double-single). */
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
         setup_1h, ATTACK_STYLE_MAGIC, OFFENSIVE_PRAYER_AUGURY, 99, FIGHT_STYLE_ACCURATE,
@@ -433,17 +352,12 @@ static void test_confliction_reference(void) {
     float single = osrs_hit_chance(att_roll, def_roll);
     float dbl = osrs_hit_chance_double(att_roll, def_roll);
     float ref_hit = dbl / (1.0f + dbl - single);
-    /* reconstruct the confliction DPT from the reference hit chance: max_hit is the
-       trident base, no shadow, splat_count 1. expected = ref_hit * (0 + max) / 2 /
-       attack_speed. */
     float ref_dpt = ref_hit * (0.0f + (float)stats.max_hit) * 0.5f / (float)stats.attack_speed;
     CHECK("T7 confliction DPT matches the reference steady-state formula",
         fabsf(dpt_con - ref_dpt) < 1e-2f);
     CHECK("T7 confliction (charged double-acc) beats no-confliction single roll",
         dpt_con > dpt_nocon - 1e-6f && ref_hit > single);
 
-    /* 2h magic weapon (Tumeken's shadow) + confliction: the gauntlets are DISABLED, so
-       confliction must NOT apply and the leaf must use the single roll. */
     uint8_t setup_2h[NUM_GEAR_SLOTS];
     memset(setup_2h, ITEM_NONE, NUM_GEAR_SLOTS);
     setup_2h[GEAR_SLOT_WEAPON] = ITEM_TUMEKENS_SHADOW;
@@ -454,14 +368,6 @@ static void test_confliction_reference(void) {
         !osrs_confliction_can_apply(&effects_2h, ATTACK_STYLE_MAGIC, ITEM_TUMEKENS_SHADOW, 1));
 }
 
-/* ----- T8: best setup is locally optimal under single-slot empties ---------- */
-
-/** Regression for the pruned-empty bug: the cross-product prunes the empty option from
-    a slot only when some candidate weakly dominates empty for the style. If that prune
-    is wrong (e.g. off-style armour with a negative magic attack bonus is kept while the
-    empty slot would score higher), the argmax setup is not locally optimal. For every
-    (style, type) and every gear slot, emptying that one slot of the argmax setup must
-    never raise DPT. Catches the Finding-A magic/ranged understatement directly. */
 static void test_best_is_locally_optimal(void) {
     printf("test_best_is_locally_optimal (T8)\n");
     int modes[] = { COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY,
@@ -487,7 +393,7 @@ static void test_best_is_locally_optimal(void) {
                 if (bg->dpt < 0.0f) continue;
                 ColoNPC npc = col_matchup_representative_npc((ColoNpcType)type);
                 for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-                    if (slot == GEAR_SLOT_WEAPON) continue;  /* style is keyed to weapon */
+                    if (slot == GEAR_SLOT_WEAPON) continue;
                     if (bg->setup[slot] == ITEM_NONE) continue;
                     uint8_t variant[NUM_GEAR_SLOTS];
                     memcpy(variant, bg->setup, NUM_GEAR_SLOTS);
@@ -500,8 +406,6 @@ static void test_best_is_locally_optimal(void) {
     }
     CHECK("T8 argmax setup is locally optimal under single-slot empties", violations == 0);
 }
-
-/* ----- NORM calibration sweep (informational) ------------------------------- */
 
 static void calibrate_norm(void) {
     printf("NORM calibration sweep (max best-gear DPT over profile x weapon x type)\n");

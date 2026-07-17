@@ -1,28 +1,8 @@
-/**
- * @file test_colo_prayer_wiring.c
- * @brief Decisive prayer-wiring probe. Two stand-and-attack policies differ ONLY
- *        in the overhead they pray:
- *          HOLD_MELEE   - always Protect-from-Melee (what the RL agent collapsed to)
- *          OBS_TELEGRAPH- pray the soonest style reported by col_npc_next_prayer_obs,
- *                         i.e. exactly the per-NPC telegraph the agent observes.
- *
- * It also measures telegraph ACCURACY: of the NPC attacks that landed this tick,
- * how often did the telegraph (computed pre-step) predict the correct style.
- *
- * If OBS_TELEGRAPH crushes HOLD_MELEE on off-prayer damage / prayer-correct, the
- * obs + block + apply wiring works and a competent policy is learnable (the wall
- * is reward/exploration). If it does NOT, the telegraph the agent sees is wrong.
- *
- * BUILD: cc -std=c11 -O2 -I. -o /tmp/test_colo_prayer ocean/osrs/tests/test_colo_prayer_wiring.c -lm
- */
 #include <stdio.h>
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-/* Pin BARE late-wave starts for these fixed-scenario tests (honest entry
-   synthesis is covered in test_colosseum_modifiers.c). Function-like macro:
-   the name inside its own body is not re-expanded (standard C). */
 #define col_init_context_typed(ctx_ptr) do { \
     col_init_context_typed(ctx_ptr); \
     (ctx_ptr)->config.late_start_state_mode = 0; \
@@ -97,8 +77,6 @@ static void run_test(const char* label, PrayerPolicy policy, int start_wave, int
             actions[COLO_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
             actions[COLO_HEAD_PRIMARY] = nearest_target(&s);
 
-            /* telegraph accuracy: record each live NPC's predicted style for hits
-               the telegraph says land THIS tick (ticks <= 1). */
             for (int n = 0; n < COLO_MAX_NPCS; n++) predicted[n] = ATTACK_STYLE_NONE;
             for (int n = 0; n < COLO_MAX_NPCS; n++) {
                 const ColoNPC* npc = &s.npcs[n];

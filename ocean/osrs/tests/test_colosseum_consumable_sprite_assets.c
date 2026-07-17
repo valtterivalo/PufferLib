@@ -1,13 +1,3 @@
-/**
- * @file test_colosseum_consumable_sprite_assets.c
- * @brief Colosseum consumable dose-chain inventory sprite regression.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/test_colosseum_consumable_sprite_assets \
- *       ocean/osrs/tests/test_colosseum_consumable_sprite_assets.c -lm
- *   OSRS_ASSET_ROOT=/path/to/ocean/osrs/data /tmp/test_colosseum_consumable_sprite_assets
- */
-
 #include <stdio.h>
 #include <string.h>
 

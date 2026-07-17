@@ -1,8 +1,3 @@
-/**
- * @file test_osrs_npc_movement.c
- * @brief Shared OSRS NPC movement regression tests.
- */
-
 #include <stdio.h>
 #include <string.h>
 

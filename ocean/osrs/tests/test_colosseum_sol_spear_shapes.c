@@ -1,14 +1,3 @@
-/**
- * @file test_colosseum_sol_spear_shapes.c
- * @brief Tile-exact parity of Sol spear hazard shapes against colosim.
- *
- * Reference = colosim's doFirstSpear/doSecondSpear stamping (fillRect +
- * fillLine, LINE_LENGTH 7, size 5) reimplemented verbatim in colosim's own
- * frame and mapped to ours via (x, y) -> (x, -y). The sim's analytic
- * col_sol_aoe_tile_is_hazard must mark exactly the same tiles for all 8
- * attack directions on both spear variants. Also pins the direction rule:
- * clamp-to-footprint + per-axis sign, under-boss falls to SW.
- */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,7 +43,6 @@ static void ref_fill_line(int fx, int fy, ColosimDir dir, int length) {
         ref_mark(fx + COLOSIM_DIRS[dir][0] * n, fy + COLOSIM_DIRS[dir][1] * n);
 }
 
-/** colosim frame: L = (BX, -BY); footprint x in [Lx, Lx+4], y in [Ly-4, Ly]. */
 static void ref_stamp_spear1(ColosimDir dir) {
     int lx = BX, ly = -BY;
     memset(ref, 0, sizeof(ref));
@@ -148,7 +136,6 @@ static void ref_stamp_spear2(ColosimDir dir) {
     }
 }
 
-/** our (dx, dy) for each colosim direction under the (x, -y) frame map. */
 static const int OUR_DIR[8][2] = {
     { -1, 0 }, { 1, 0 }, { 0, 1 }, { 0, -1 },
     { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 },
@@ -189,15 +176,15 @@ static int compare_shape(int variant, ColosimDir dir) {
 
 static void test_direction_rule(void) {
     struct { int px, py, dx, dy; } cases[] = {
-        { BX - 3, BY + 2, -1, 0 },   /* west of footprint, inside y-band */
-        { BX + 7, BY,      1, 0 },   /* east */
-        { BX + 2, BY + 9,  0, 1 },   /* north */
-        { BX,     BY - 1,  0, -1 },  /* south */
-        { BX + 6, BY + 5,  1, 1 },   /* past the NE corner */
-        { BX - 1, BY + 5, -1, 1 },   /* past the NW corner */
-        { BX + 5, BY - 2,  1, -1 },  /* past the SE corner */
-        { BX - 4, BY - 4, -1, -1 },  /* past the SW corner */
-        { BX + 2, BY + 2, -1, -1 },  /* under the boss: colosim SW fallback */
+        { BX - 3, BY + 2, -1, 0 },
+        { BX + 7, BY,      1, 0 },
+        { BX + 2, BY + 9,  0, 1 },
+        { BX,     BY - 1,  0, -1 },
+        { BX + 6, BY + 5,  1, 1 },
+        { BX - 1, BY + 5, -1, 1 },
+        { BX + 5, BY - 2,  1, -1 },
+        { BX - 4, BY - 4, -1, -1 },
+        { BX + 2, BY + 2, -1, -1 },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         int dx = 0, dy = 0;

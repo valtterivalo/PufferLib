@@ -1,12 +1,3 @@
-/**
- * @file inferno_lab_cli.c
- * @brief tiny command-line harness for Inferno mechanics lab scripts.
- *
- * BUILD:
- *   cc -std=c11 -O0 -g -I. -o /tmp/inferno_lab \
- *       ocean/osrs/tests/inferno_lab_cli.c -lm
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
