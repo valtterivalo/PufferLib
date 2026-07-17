@@ -313,3 +313,26 @@ flip T2, DROP truncation commits from the PR (no consumer, zero core lines to
 justify). Trunc clearly wins beyond band on either env -> keep channel, PR
 cites this A/B + upstream-envs A/B + bitwise proof. Asymmetric -> user call.
 Timeout share derivable post-hoc: n - wins - sum(death_by_type).
+
+## 2026-07-17 cleanup wave integrated (osrs-5c-port c9751d14a, pushed)
+
+Six-agent wave merged, all gates green (battery 17/17 files, strict g++ 0,
+--local both envs). PR surface 99094 -> 90027 (+90k/-31). Comment purge:
+~4.2k comment lines dead across encounters/tests/shared/render/encoder;
+survivors: 1 static-registry-in-header footgun, 1 raylib mesh-copy trap, 2
+house-style dividers in ocean.cu, 4 byte-format/lifetime gotchas in viewer/
+entry files, ~6 ordering/lifetime keeps in pvp (each justified in workflow
+reports). README = title + 3 code blocks. PVP FOLD -2417 lines: rule variants
+were ALREADY shared via is_pvp control flow (user's doctrine pre-existed);
+killed parallel implementations (opponents 3545->2087 via OppNhTier
+parameterization, gear switch->table, spec costs delegate to shared, movement
+selectors); PvP bit-identical proven by differential state+rng hash across 29
+opponents x 2 seeds x 4000 ticks. Render: NOT split (cyclic RenderClient call
+graph, no clean leaf, tests pin paths) - justified in report. monsters_
+generated: KEPT (inferno+zulrah read the DB, colosseum uses the type + its
+own scripted table by design); stale AUTO-GENERATED banner gone. Encoder
+block now ME_/nmmo3-terse. osrs_pvp_effects.h renamed osrs_effects.h (it is
+the shared effect system). DEFERRED (fold agent): pvp file-count collapse
+(~50 lines), 2 dead RNG draws (behavior-pinned). PENDING: truncation A/B
+verdict -> T2 flip or keep -> curated branch rebuild (with build.sh Mac
+hunks stripped to working-branch-only) -> PR draft refresh.
