@@ -259,9 +259,8 @@ void puf_step(Env* env) {
 
     agent->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_terminal = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
-    int is_truncated = is_terminal && env->state.time_limit_truncated;
-    agent->terminals[0] = (float)(is_terminal && !is_truncated);
-    agent->truncations[0] = (float)is_truncated;
+    agent->terminals[0] = (float)is_terminal;
+    agent->truncations[0] = 0.0f;
 
     if (env->state.start_wave == env->config_start_wave) {
         col_log_dpt_sample(
