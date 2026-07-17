@@ -426,3 +426,14 @@ a committed Mac binary + dSYM that had ridden the working branch since an
 early broad git add. PR draft finalized (variant A). RUNNING on box:
 per-commit builds (breakout at each core commit, both envs at c4/c5) + 2M
 inferno smoke + 25M colosseum learn gate vs the 3.5-wave reference.
+
+## 2026-07-17 FINAL GATES GREEN: PR branch ready
+
+osrs-colosseum-inferno-v2 fully gated on the box: per-commit builds green at
+every commit (breakout at each of the three core commits proves
+MAX_ATN_HEADS=NUM_ATNS and the clamp are upstream-safe; both envs at c4/c5).
+25M colosseum learn gate: wave 3.83 / score 0.132 / entropy 4.57 - ahead of
+both the fix-verification run (3.51/0.114) and the trunk reference
+(2.93/0.084). 2M inferno smoke: wave 7.8, exit 0. Campaign state: PR branch
++ description draft FINAL, awaiting user viewer look and PR open. User-owned
+cleanup: delete stale remote osrs-colosseum-inferno, 8 stash drops.
