@@ -31,7 +31,8 @@
 
 #ifdef OSRS_VISUAL
 #include "osrs_render.h"
-#include "puffernet.h"
+#include "puffercpu.h"
+#include "osrs_visual_net.h"
 
 static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
     gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
@@ -612,7 +613,7 @@ typedef struct {
     VisualPolicyMode mode;
     uint32_t rng_state;
     Weights* weights;
-    PufferNet* net;
+    VisualNet* net;
     float* obs;
     int obs_size;
     int mask_size;
@@ -651,7 +652,7 @@ static int visual_policy_is_continuous(
 /* entity-encoder shared-MLP weights added on top of the global Linear (which the
    encoder term already accounts for): entity_l1 (16x37) + entity_l2 (hidden x 16), plus
    (mode 2) inv_l1 (16x28) + inv_l2 (hidden x 16). Must match ocean.cu COLO_ENT_* /
-   COLO_ENT_INV_* + puffernet.h COLO_ENT_INF_*. */
+   COLO_ENT_INV_* + osrs_visual_net.h COLO_ENT_INF_*. */
 #define VISUAL_POLICY_ENTITY_FEATS      37
 #define VISUAL_POLICY_ENTITY_BOTTLENECK 16
 #define VISUAL_POLICY_INV_FEATS         28
@@ -762,7 +763,34 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     return match;
 }
 
-static PufferNet* visual_policy_make_puffernet(
+/* Append one tensor of `count` floats to the running weight offset, rounding up
+   to the next 8-float boundary exactly as get_weights_aligned does, and log the
+   tensor's [start, end) span. For every shape the viewer resolves the raw count
+   is already a multiple of 8 (hidden_size and the 16x{37,28} feature tensors all
+   divide evenly), so the rounding is a no-op and the offsets track the flat .bin
+   byte-for-byte. */
+static int64_t visual_policy_layout_tensor(const char* name, int64_t off, int64_t count) {
+    int64_t start = off;
+    int64_t end = (off + count + 7) & ~(int64_t)7;
+    fprintf(stderr, "policy: tensor %-16s [%lld, %lld) (%lld floats)\n",
+        name, (long long)start, (long long)end, (long long)count);
+    return end;
+}
+
+/* Assert the weight cursor sits at the offset the layout predicts after a tensor
+   group. Catches a checkpoint/parser layout drift at the exact group rather than
+   only through the whole-file total. */
+static void visual_policy_assert_offset(
+    const char* group, const Weights* weights, int64_t expect
+) {
+    if ((int64_t)weights->idx != expect) {
+        fprintf(stderr, "policy: %s weight offset mismatch: cursor=%d expected=%lld\n",
+            group, weights->idx, (long long)expect);
+        abort();
+    }
+}
+
+static VisualNet* visual_policy_make_puffernet(
     Weights* weights,
     int input_dim,
     int hidden_dim,
@@ -772,7 +800,7 @@ static PufferNet* visual_policy_make_puffernet(
     int decoder_value_heads,
     int entity_encoder
 ) {
-    PufferNet* net = (PufferNet*)calloc(1, sizeof(PufferNet));
+    VisualNet* net = (VisualNet*)calloc(1, sizeof(VisualNet));
     if (!net) {
         fprintf(stderr, "policy: failed to allocate puffer net\n");
         abort();
@@ -796,16 +824,60 @@ static PufferNet* visual_policy_make_puffernet(
 
     net->is_continuous = is_continuous;
     net->num_actions = num_action_heads;
+
+    /* Expected .bin layout in policy_weights_create order (src/algo.cu): encoder
+       tensor(s), decoder weight, optional logstd, then the MinGRU projections. */
+    int64_t off = 0;
     if (entity_encoder) {
-        net->entity_encoder = make_colosseum_entity_encoder(weights, 1, input_dim, hidden_dim, entity_encoder);
+        off = visual_policy_layout_tensor("enc.global_w", off, (int64_t)hidden_dim * input_dim);
+        off = visual_policy_layout_tensor("enc.entity_l1_w", off,
+            (int64_t)COLO_ENT_INF_BOTTLENECK * COLO_ENT_INF_FEATS);
+        off = visual_policy_layout_tensor("enc.entity_l2_w", off,
+            (int64_t)hidden_dim * COLO_ENT_INF_BOTTLENECK);
+        if (entity_encoder >= 2) {
+            off = visual_policy_layout_tensor("enc.inv_l1_w", off,
+                (int64_t)COLO_ENT_INF_INV_BOTTLENECK * COLO_ENT_INF_INV_FEATS);
+            off = visual_policy_layout_tensor("enc.inv_l2_w", off,
+                (int64_t)hidden_dim * COLO_ENT_INF_INV_BOTTLENECK);
+        }
+    } else {
+        off = visual_policy_layout_tensor("enc.weight", off, (int64_t)hidden_dim * input_dim);
+    }
+    int64_t off_after_encoder = off;
+    off = visual_policy_layout_tensor("decoder.weight", off,
+        (int64_t)(action_sum + decoder_value_heads) * hidden_dim);
+    int64_t off_after_decoder = off;
+    if (is_continuous) {
+        off = visual_policy_layout_tensor("decoder.logstd", off, (int64_t)num_action_heads);
+    }
+    int64_t off_after_logstd = off;
+    for (int l = 0; l < num_layers; l++) {
+        char name[32];
+        snprintf(name, sizeof(name), "mingru.proj[%d]", l);
+        off = visual_policy_layout_tensor(name, off, (int64_t)3 * hidden_dim * hidden_dim);
+    }
+    int64_t off_total = off;
+
+    /* Build in the same order, asserting the cursor at every observable boundary. */
+    if (entity_encoder) {
+        net->entity_encoder = make_colosseum_entity_encoder(
+            weights, 1, input_dim, hidden_dim, entity_encoder);
     } else {
         net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
     }
+    visual_policy_assert_offset("encoder", weights, off_after_encoder);
+
     net->decoder = make_linear(weights, 1, hidden_dim, action_sum + decoder_value_heads);
+    visual_policy_assert_offset("decoder", weights, off_after_decoder);
+
     if (net->is_continuous) {
-        net->log_std = get_weights(weights, num_action_heads);
+        net->log_std = get_weights_aligned(weights, num_action_heads);
+        visual_policy_assert_offset("logstd", weights, off_after_logstd);
     }
+
     net->mingru = make_mingru(weights, 1, hidden_dim, num_layers);
+    visual_policy_assert_offset("mingru", weights, off_total);
+
     if (!net->is_continuous) {
         net->multidiscrete = make_multidiscrete(1, action_dims, num_action_heads);
     }
@@ -918,7 +990,7 @@ static void visual_policy_init(
 
 static void __attribute__((unused)) visual_policy_destroy(VisualPolicy* policy) {
     if (!policy) return;
-    if (policy->net) free_puffernet(policy->net);
+    if (policy->net) visual_net_free(policy->net);
     free(policy->weights);
     free(policy->obs);
     memset(policy, 0, sizeof(*policy));

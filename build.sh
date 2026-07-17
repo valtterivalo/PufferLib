@@ -64,6 +64,22 @@ else
     STANDALONE_LDFLAGS=(-framework Cocoa -framework IOKit -framework CoreVideo -framework OpenGL)
 fi
 
+# OpenMP for the standalone (--local/--fast/--cpu) clang paths. Apple clang rejects
+# -fopenmp; it needs -Xclang -fopenmp plus Homebrew libomp on the include/lib path.
+# Linux clang/gcc take -fopenmp directly, so those defaults are preserved there.
+OMP_CFLAGS=(-fopenmp)
+OMP_LDFLAGS=(-fopenmp)
+if [ "$PLATFORM" != "Linux" ]; then
+    OMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+    if [ -n "$OMP_PREFIX" ]; then
+        OMP_CFLAGS=(-Xclang -fopenmp -I"$OMP_PREFIX/include")
+        OMP_LDFLAGS=(-L"$OMP_PREFIX/lib" -lomp)
+    else
+        OMP_CFLAGS=(-Xclang -fopenmp)
+        OMP_LDFLAGS=(-lomp)
+    fi
+fi
+
 CLANG_WARN=(
     -Wall
     -ferror-limit=3
@@ -182,7 +198,7 @@ if [ "$MODE" = "local" ] || [ "$MODE" = "fast" ]; then
         "${LINK_ARCHIVES[@]}"
         "${EXTRA_LDFLAGS[@]}"
         "${STANDALONE_LDFLAGS[@]}"
-        -lm -lpthread -fopenmp
+        -lm -lpthread "${OMP_CFLAGS[@]}" "${OMP_LDFLAGS[@]}"
         -DPLATFORM_DESKTOP
         "${EXTRA_CFLAGS[@]}"
     )
@@ -227,7 +243,7 @@ elif [ "$MODE" = "cpu" ]; then
         "${LINK_ARCHIVES[@]}" \
         "${EXTRA_LDFLAGS[@]}" \
         "${STANDALONE_LDFLAGS[@]}" \
-        -lm -lpthread -fopenmp \
+        -lm -lpthread "${OMP_CFLAGS[@]}" "${OMP_LDFLAGS[@]}" \
         -o build_cpu
     echo "Built: ./build_cpu"
     exit 0
