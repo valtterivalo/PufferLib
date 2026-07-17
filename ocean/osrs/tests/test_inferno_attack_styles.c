@@ -6,7 +6,7 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #include "ocean/osrs/osrs_anim.h"
-#include "ocean/osrs/osrs_pvp_effects.h"
+#include "ocean/osrs/osrs_effects.h"
 #include "ocean/osrs/osrs_projectile_orientation.h"
 #include "ocean/osrs/osrs_render_motion.h"
 #include <math.h>

@@ -10,7 +10,7 @@
 #include "osrs_combat_visuals.h"
 #include "osrs_combat.h"
 #include "osrs_pvp_combat.h"
-#include "osrs_pvp_effects.h"
+#include "osrs_effects.h"
 #include "osrs_projectile_orientation.h"
 #include "osrs_render_motion.h"
 #include "osrs_render_click_hull.h"
