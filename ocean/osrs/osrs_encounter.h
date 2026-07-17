@@ -1,59 +1,3 @@
-/**
- * @fileoverview osrs_encounter.h — shared encounter mechanics for the current ocean OSRS envs.
- *
- * this header holds reusable mechanics that current encounters build on.
- * encounter-specific policy should stay in the encounter header; shared helpers
- * here should stay generic enough to be reused by future envs.
- *
- * SHARED SYSTEMS (in order of appearance in this file):
- *
- *   rendering:
- *     RenderEntity                     value struct for renderer (not Player*)
- *     render_entity_from_player()      copy Player fields to RenderEntity
- *     encounter_resolve_attack_target() match npc_slot to render entity index
- *     EncounterOverlay                 visual overlay (hazards, projectiles, boss)
- *
- *   prayer (set/refresh semantic for RL tick commands):
- *     ENCOUNTER_OVERHEAD_*                canonical overhead action encoding (5/6/7 dim)
- *     ENCOUNTER_OFFENSIVE_*               canonical offensive action encoding (5 dim)
- *     encounter_apply_overhead_action()   apply overhead action, returns 1 on activation
- *     encounter_apply_offensive_action()  apply offensive action, returns 1 on activation
- *     encounter_drain_all_prayers()       drain both slots per tick (activation-tick skip)
- *
- *   movement:
- *     ENCOUNTER_MOVE_TARGET_DX/DY[25]  direction tables (idle + 8 walk + 16 run)
- *     encounter_move_to_target()       player movement: walk 1 tile or run 2
- *     encounter_move_toward_dest()     BFS click-to-move toward destination
- *     encounter_pathfind()             shared BFS pathfind wrapper
- *
- *   NPC pathfinding:
- *     encounter_npc_step_out_from_under()  shuffle NPC off player tile (OSRS overlap rule)
- *     encounter_npc_step_toward_policy() OSRS size-aware chase step
- *
- *   damage:
- *     encounter_damage_player()        apply damage to player (HP, clamp, splat, tracker)
- *     encounter_damage_npc()           apply damage to NPC (HP, splat flags)
- *
- *   per-tick flags:
- *     encounter_clear_tick_flags()     reset animation/event flags each tick
- *
- *   gear switching:
- *     encounter_apply_loadout()        memcpy loadout + set gear state
- *     encounter_populate_inventory()   dedup items from multiple loadouts for GUI
- *
- *   combat stats:
- *     EncounterLoadoutStats            derived stats (att bonus, max hit, eff level...)
- *     Player.offensive_prayer          runtime state, source of truth for prayer multipliers
- *     encounter_compute_loadout_stats() derive all stats from ITEM_DATABASE + loadout
- *
- *   hit delays:
- *     EncounterPendingHit              queued damage with tick countdown
- *
- * ALSO SEE:
- *   osrs_combat.h                     hit chance, tbow formula, barrage AoE, delay formulas
- *   osrs_pvp_combat.h                 PvP-specific damage (prayer, veng, recoil, smite)
- */
-
 #ifndef OSRS_ENCOUNTER_H
 #define OSRS_ENCOUNTER_H
 
@@ -77,7 +21,6 @@
 #include "osrs_render_motion.h"
 #include "osrs_lab.h"
 
-/* opaque encounter runtime pieces — each encounter defines its own structs */
 typedef struct EncounterState EncounterState;
 typedef struct EncounterContext EncounterContext;
 
@@ -118,28 +61,25 @@ static inline int encounter_require_int_range_config(
     return value;
 }
 
-
 #define ENCOUNTER_MAX_PENDING_HITS 32
 
-/* spell types for barrage freeze/heal effects on pending hits */
 #define ENCOUNTER_SPELL_NONE  0
-#define ENCOUNTER_SPELL_ICE   1   /* ice barrage: freeze on hit */
-#define ENCOUNTER_SPELL_BLOOD 2   /* blood barrage: heal 25% of AoE damage */
+#define ENCOUNTER_SPELL_ICE   1
+#define ENCOUNTER_SPELL_BLOOD 2
 
 typedef struct {
     int active;
     int damage;
-    int ticks_remaining;   /* countdown to landing */
-    int attack_style;      /* ATTACK_STYLE_* for prayer check at land time */
-    int check_prayer;      /* 1 = prayer has NOT been checked yet (deferred) */
-    int prayer_check_delay;/* ticks until prayer is checked (0 = check on next resolve).
-                              jad uses 3: prayer at T+3 decides the block, independent of
-                              projectile flight time. */
-    int spell_type;        /* ENCOUNTER_SPELL_* for freeze/heal effects */
-    int source_npc_type;   /* encounter-local NPC type for custom delayed rolls */
-    int source_npc_slot;   /* source NPC slot, for attacker-targeted effects (recoil); -1 if none */
-    int hit_success;       /* accuracy result; 0 can still be a visible splash */
-    int elysian_reduced;   /* shield proc already applied before queuing */
+    int ticks_remaining;
+    int attack_style;
+    int check_prayer;
+    int prayer_check_delay;
+
+    int spell_type;
+    int source_npc_type;
+    int source_npc_slot;
+    int hit_success;
+    int elysian_reduced;
 } EncounterPendingHit;
 
 typedef struct {
@@ -147,14 +87,6 @@ typedef struct {
     int count;
 } EncounterPendingHitQueue;
 
-/* Build an NPC->player pending hit whose protect-prayer outcome AND damage LOCK on
-   the THROW tick (OSRS standard): the overhead up now decides the block and freezes
-   the damage; the projectile then lands `ticks_remaining` ticks later. The resolver
-   never re-checks (check_prayer=0). hit_success records a LANDED UNPROTECTED hit
-   (accuracy passed AND not prayed) so on-land effects (venom, recoil) fire only on a
-   connecting hit. `*out_prayed` reports the block for metric attribution. The ONE
-   constructor for throw-resolved player-bound hits; Jad-style deferred checks (see
-   prayer_check_delay) are the exception. */
 static inline EncounterPendingHit encounter_pending_hit_resolved_at_throw(
     int raw_damage, int ticks_remaining, int attack_style, int overhead_prayer,
     int source_npc_type, int source_npc_slot, int accuracy_hit, int* out_prayed
@@ -254,16 +186,13 @@ static inline int encounter_pending_hit_queue_damage_sum(
     return total;
 }
 
-/* visual overlay data: shared between encounter and renderer.
-   encounter's render_post_tick populates this, renderer reads it. */
 #define ENCOUNTER_MAX_OVERLAY_TILES 16
 #define ENCOUNTER_MAX_OVERLAY_ADDS 4
 #define ENCOUNTER_MAX_OVERLAY_TILE_SHADOWS 48
 #define ENCOUNTER_MAX_OVERLAY_FLOATING_MODELS 16
 #define ENCOUNTER_MAX_ACTIVE_MODIFIERS 16
 #define ENCOUNTER_OVERLAY_STATUS_TEXT_LEN 64
-/* sized for real per-tick volume (Zuk healer spark volleys) so the renderer never
-   silently drops visual events. */
+
 #define ENCOUNTER_MAX_OVERLAY_PROJECTILES 48
 
 typedef enum {
@@ -302,16 +231,13 @@ typedef struct {
 } EncounterActiveModifier;
 
 typedef struct {
-    /* encounter-defined area hazards. current users write 3x3 poison clouds. */
     struct { int x, y, active; } hazards[ENCOUNTER_MAX_OVERLAY_TILES];
     int hazard_count;
 
-    /* boss state */
     int boss_x, boss_y, boss_visible;
-    int boss_form;  /* encounter-specific form/phase index */
-    int boss_size;  /* NPC size in tiles (e.g. 5 for Zulrah) */
+    int boss_form;
+    int boss_size;
 
-    /* encounter adds or secondary mobs. variant is encounter-defined. */
     struct { int x, y, active, variant; } adds[ENCOUNTER_MAX_OVERLAY_ADDS];
     int add_count;
 
@@ -324,40 +250,35 @@ typedef struct {
     EncounterActiveModifier active_modifiers[ENCOUNTER_MAX_ACTIVE_MODIFIERS];
     int active_modifier_count;
 
-    /* visual projectiles: brief flash from source to target.
-       encounters fire attacks instantly, but we show a 1-tick projectile
-       for visual clarity. the renderer draws these and auto-expires them. */
     struct {
         int active;
-        int src_x, src_y;   /* source tile (e.g. Zulrah position) */
-        int dst_x, dst_y;   /* target tile (e.g. player position) */
-        int style;           /* 0=ranged, 1=magic, 2=melee, 3=cloud, 4=spawn_orb */
-        int damage;          /* for hit splat at destination */
-        /* flight parameters — encounters set these, renderer reads them */
-        int duration_ticks;  /* flight duration in client ticks (0 = use default 35) */
-        int start_h;         /* start height in OSRS units /128 (0 = use default) */
-        int end_h;           /* end height in OSRS units /128 (0 = use default) */
-        int curve;           /* OSRS slope param (0 = use default 16) */
-        float arc_height;    /* sinusoidal arc peak in tiles (0 = quadratic/straight) */
-        int tracks_target;   /* 1 = re-aim toward target each tick */
+        int src_x, src_y;
+        int dst_x, dst_y;
+        int style;
+        int damage;
+        int duration_ticks;
+        int start_h;
+        int end_h;
+        int curve;
+        float arc_height;
+        int tracks_target;
         int source_kind;
         int source_npc_slot;
         int target_kind;
         int target_npc_slot;
-        int start_delay;     /* ticks before projectile becomes visible (0 = immediate) */
-        int motion_mode;     /* EncounterProjectileMotionMode */
-        float offset_x, offset_y, offset_z; /* local multi-model offset */
-        int src_size;        /* source entity size for center offset (0 = use boss_size) */
-        int dst_size;        /* target entity size for center offset (1 = player) */
-        uint32_t model_id;   /* GFX model from cache (0 = style-based fallback) */
-        int anim_id;         /* spotanim animation sequence (-1 = static model) */
+        int start_delay;
+        int motion_mode;
+        float offset_x, offset_y, offset_z;
+        int src_size;
+        int dst_size;
+        uint32_t model_id;
+        int anim_id;
         int travel_gfx_id;
         int launch_gfx_id;
-        int impact_gfx_id;   /* optional landing spotanim to spawn on arrival */
+        int impact_gfx_id;
     } projectiles[ENCOUNTER_MAX_OVERLAY_PROJECTILES];
     int projectile_count;
 
-    /* melee targeting: shows which tile Zulrah is staring at */
     int melee_target_active;
     int melee_target_x, melee_target_y;
 
@@ -365,8 +286,6 @@ typedef struct {
     char status_text[ENCOUNTER_OVERLAY_STATUS_TEXT_LEN];
 } EncounterOverlay;
 
-/* map AttackStyle enum to overlay projectile style index.
-   used by encounter_emit_projectile and render overlay systems. */
 static inline int encounter_attack_style_to_proj_style(int attack_style) {
     switch (attack_style) {
         case ATTACK_STYLE_RANGED: return 0;
@@ -406,8 +325,6 @@ static inline OffensivePrayer encounter_offensive_prayer_for_style(AttackStyle s
     abort();
 }
 
-/* populate an overlay projectile slot with flight parameters.
-   encounters should call this instead of filling fields manually. */
 static inline int encounter_emit_projectile(
     EncounterOverlay* ov,
     int src_x, int src_y, int dst_x, int dst_y,
@@ -624,7 +541,6 @@ static inline void encounter_set_projectile_offset(
     ov->projectiles[projectile_idx].offset_z = offset_z;
 }
 
-
 typedef struct {
     EntityType entity_type;
     int npc_def_id;
@@ -648,17 +564,17 @@ typedef struct {
     int render_hit_count;
     int render_hit_damage[ENCOUNTER_RENDER_HITS_MAX];
     int hit_was_successful;
-    int hit_spell_type;  /* ENCOUNTER_SPELL_* for barrage impact effects on NPCs */
+    int hit_spell_type;
     int elysian_proc_this_tick;
     int cast_veng_this_tick;
     int ate_food_this_tick;
     int ate_karambwan_this_tick;
     int used_special_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
-    int npc_slot;  /* source slot index in encounter's NPC array; -1 for player */
-    uint32_t npc_instance_id;  /* stable for one NPC lifetime; 0 means slot+def only */
+    int npc_slot;
+    uint32_t npc_instance_id;
     RenderMovementKind render_movement_kind;
-    int attack_target_entity_idx;  /* render entity index of attack target, -1 = none */
+    int attack_target_entity_idx;
     const char* debug_npc_type_name;
     int debug_attack_timer;
     int debug_attack_style;
@@ -718,7 +634,6 @@ static inline RenderEntityFacingMode render_entity_select_facing_mode(
     return RENDER_ENTITY_FACE_DEST_TILE;
 }
 
-/** Fill a RenderEntity from a Player struct. */
 static inline void render_entity_from_player(const Player* p, RenderEntity* out) {
     memset(out, 0, sizeof(RenderEntity));
     out->entity_type = p->entity_type;
@@ -755,15 +670,12 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
     out->used_special_this_tick = p->used_special_this_tick;
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
-    out->npc_slot = -1;  /* player, not an NPC */
+    out->npc_slot = -1;
     out->npc_instance_id = 0;
     out->render_movement_kind = RENDER_MOVEMENT_NORMAL;
     out->attack_target_entity_idx = -1;
 }
 
-/** Resolve attack_target_entity_idx for entity 0 (player) by matching npc_slot.
-    call after fill_render_entities populates the entity array. any encounter with
-    NPC targeting should call this so the renderer faces the correct target. */
 static inline void encounter_resolve_attack_target(
     RenderEntity* entities, int count, int target_npc_slot
 ) {
@@ -776,15 +688,7 @@ static inline void encounter_resolve_attack_target(
         }
     }
 }
-/* Canonical prayer action encoding for tick commands. The RL action space uses
-   explicit no_change / off / set_refresh; human UI clicks translate OSRS toggle
-   behavior into those. Overhead dim per encounter: PvE 5, PvE+Redemption 6, PvP 7.
-   To wire up a new encounter:
-     1. declare overhead + offensive heads (encounter_overhead_dim / ENCOUNTER_OFFENSIVE_DIM)
-     2. call encounter_apply_overhead_action() on pretick
-     3. call encounter_apply_offensive_action() on pretick
-     4. call encounter_drain_all_prayers() on pretick (both slots + activation-tick
-        skip + pp=0 auto-clear) */
+
 #define ENCOUNTER_OVERHEAD_NO_CHANGE                    0
 #define ENCOUNTER_OVERHEAD_OFF                          1
 #define ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE            2
@@ -796,7 +700,6 @@ static inline void encounter_resolve_attack_target(
 #define ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION           6
 #define ENCOUNTER_OVERHEAD_DIM_PVP                      7
 
-/* offensive action encoding — 5 dim, shared by all encounters. */
 #define ENCOUNTER_OFFENSIVE_NO_CHANGE                   0
 #define ENCOUNTER_OFFENSIVE_OFF                         1
 #define ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY           2
@@ -804,9 +707,6 @@ static inline void encounter_resolve_attack_target(
 #define ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY          4
 #define ENCOUNTER_OFFENSIVE_DIM                         5
 
-/** apply an overhead prayer action with set/refresh semantics.
-    set/refresh leaves target active and marks the slot newly activated.
-    off clears the slot. no_change preserves state and drains normally. */
 static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int action) {
     OverheadPrayer target;
     switch (action) {
@@ -826,7 +726,6 @@ static inline int encounter_apply_overhead_action(OverheadPrayer* overhead, int 
     return 1;
 }
 
-/** apply an offensive prayer action with set/refresh semantics. */
 static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, int action) {
     OffensivePrayer target;
     switch (action) {
@@ -844,19 +743,16 @@ static inline int encounter_apply_offensive_action(OffensivePrayer* offensive, i
     return 1;
 }
 
-
-/* 25 movement actions: idle(0), walk(1-8), run(9-24) */
 #define ENCOUNTER_MOVE_ACTIONS 25
 
-/* target offsets: (dx, dy) relative to player position */
 static const int ENCOUNTER_MOVE_TARGET_DX[25] = {
-    0,                          /* 0: idle */
-    -1, -1, -1, 0, 0, 1, 1, 1, /* 1-8: walk (dist 1) */
-    -2, -2, -2, -2, -2,        /* 9-13: run west edge */
-    -1, -1,                     /* 14-15: run inner */
-    0, 0,                       /* 16-17: run N/S 2 tiles */
-    1, 1,                       /* 18-19: run inner */
-    2, 2, 2, 2, 2              /* 20-24: run east edge */
+    0,
+    -1, -1, -1, 0, 0, 1, 1, 1,
+    -2, -2, -2, -2, -2,
+    -1, -1,
+    0, 0,
+    1, 1,
+    2, 2, 2, 2, 2
 };
 static const int ENCOUNTER_MOVE_TARGET_DY[25] = {
     0,
@@ -868,14 +764,8 @@ static const int ENCOUNTER_MOVE_TARGET_DY[25] = {
     -2, -1, 0, 1, 2
 };
 
-/* callback: returns 1 if tile (x, y) is walkable for the encounter.
-   ctx is encounter-specific state (InfernoState*, ZulrahState*, etc.) */
 typedef int (*encounter_walkable_fn)(void* ctx, int x, int y);
 
-/** move player toward target offset via up to 2 greedy steps.
-    walk actions (dist 1) take 1 step, run actions (dist 2) take up to 2.
-    sets is_running = 1 if 2 steps were taken.
-    returns number of tiles moved (0, 1, or 2). */
 static inline int encounter_move_to_target(
     Player* p, int target_dx, int target_dy,
     encounter_walkable_fn is_walkable, void* ctx
@@ -883,19 +773,15 @@ static inline int encounter_move_to_target(
     int tx = p->x + target_dx;
     int ty = p->y + target_dy;
     int dist = abs(target_dx) > abs(target_dy) ? abs(target_dx) : abs(target_dy);
-    int max_steps = dist;  /* 1 for walk, 2 for run */
+    int max_steps = dist;
     int steps = 0;
 
     for (int step = 0; step < max_steps; step++) {
         if (p->x == tx && p->y == ty) break;
-        /* greedy step toward target */
         int dx = 0, dy = 0;
         if (tx > p->x) dx = 1; else if (tx < p->x) dx = -1;
         if (ty > p->y) dy = 1; else if (ty < p->y) dy = -1;
 
-        /* try diagonal, x-only, y-only. OSRS forbids cutting a blocked corner: a
-           diagonal step is legal only when BOTH shared-corner tiles are walkable, so a
-           blocked pillar corner degrades to the open cardinal step. */
         int moved = 0;
         if (dx != 0 && dy != 0 &&
             is_walkable(ctx, p->x + dx, p->y + dy) &&
@@ -917,10 +803,6 @@ static inline int encounter_move_to_target(
     return steps;
 }
 
-
-/* shared BFS pathfind wrapper — translates local coords to world coords for pathfind_step.
-   extra_blocked/blocked_ctx: optional callback for dynamic obstacles (pillars etc.).
-   pass NULL/NULL for encounters with no dynamic obstacles. */
 static inline PathResult encounter_pathfind(
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     int src_x, int src_y, int dst_x, int dst_y,
@@ -932,9 +814,6 @@ static inline PathResult encounter_pathfind(
         extra_blocked, blocked_ctx);
 }
 
-/* arena-scoped BFS: same as encounter_pathfind but uses a smaller grid.
-   arena_base_x/y: world-space origin of the arena.
-   arena_w/h: arena dimensions in tiles (must be <= PATHFIND_ARENA_MAX). */
 static inline PathResult encounter_pathfind_arena(
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     int src_x, int src_y, int dst_x, int dst_y,
@@ -949,10 +828,6 @@ static inline PathResult encounter_pathfind_arena(
         arena_w, arena_h);
 }
 
-/* shared click-to-move: BFS toward destination, take up to 2 steps (run).
-   call each tick when player_dest is set. clears dest when arrived.
-   extra_blocked/blocked_ctx: optional dynamic obstacle callback for BFS.
-   returns steps taken (0, 1, or 2). */
 static inline int encounter_move_toward_dest(
     Player* p, int* dest_x, int* dest_y,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
@@ -987,8 +862,6 @@ static inline int encounter_move_toward_dest(
     return steps;
 }
 
-
-/* footprint helpers for player-vs-target chase and range checks. */
 static inline int encounter_entity_footprint_distance(
     int ax, int ay, int a_size,
     int bx, int by, int b_size
@@ -996,10 +869,6 @@ static inline int encounter_entity_footprint_distance(
     return encounter_rect_distance(ax, ay, a_size, bx, by, b_size);
 }
 
-/* reach-1 melee adjacency: footprints abut on exactly one axis and overlap on the
-   other (Manhattan footprint gap == 1). A purely diagonal corner has both axis gaps
-   == 1 (Manhattan 2) and is NOT meleeable, matching OSRS WorldArea.isInMeleeDistance
-   and the NPC->player side (entity_has_line_of_sight range 1). */
 static inline int encounter_entity_footprint_cardinal_adjacent(
     int ax, int ay, int a_size,
     int bx, int by, int b_size
@@ -1042,7 +911,6 @@ typedef struct {
     void* tile_ctx;
 } OsrsLosQuery;
 
-/** Declare an arena with no line-of-sight obstacles. */
 static inline OsrsLosQuery osrs_los_open(void) {
     OsrsLosQuery query;
     query.kind = OSRS_LOS_OPEN;
@@ -1053,7 +921,6 @@ static inline OsrsLosQuery osrs_los_open(void) {
     return query;
 }
 
-/** Declare an arena whose line of sight is backed by LOSBlocker footprints. */
 static inline OsrsLosQuery osrs_los_blockers(
     const LOSBlocker* blockers,
     int blocker_count
@@ -1067,7 +934,6 @@ static inline OsrsLosQuery osrs_los_blockers(
     return query;
 }
 
-/** Declare an arena whose line of sight is backed by a blocked-tile predicate. */
 static inline OsrsLosQuery osrs_los_tile(
     int (*tile_blocked)(void* ctx, int x, int y),
     void* tile_ctx
@@ -1081,7 +947,6 @@ static inline OsrsLosQuery osrs_los_tile(
     return query;
 }
 
-/** Shared open-arena query for callers that need a stable pointer. */
 static inline const OsrsLosQuery* osrs_los_open_query(void) {
     static const OsrsLosQuery query = {
         OSRS_LOS_OPEN,
@@ -1220,8 +1085,6 @@ static inline int osrs_los_clear(
     abort();
 }
 
-/* check if player can attack: in range and has explicit line-of-sight source.
-   returns 1 if ready to attack, 0 if blocked or out of range. */
 static inline int encounter_player_can_attack(
     int player_x, int player_y,
     int target_x, int target_y, int target_size, int attack_range,
@@ -1517,9 +1380,6 @@ approach_done:
     return result;
 }
 
-/* auto-walk toward attack target: handles out-of-range, blocked LOS, and under-NPC.
-   the caller owns the policy; this helper only computes the chase step.
-   returns 1 if player moved (chasing), 0 if ready to attack or stuck. */
 static inline int encounter_chase_attack_target(
     Player* p, int target_x, int target_y, int target_size, int attack_range,
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
@@ -1531,7 +1391,6 @@ static inline int encounter_chase_attack_target(
     int dist = encounter_entity_footprint_distance(p->x, p->y, 1,
                                                    target_x, target_y, target_size);
 
-    /* player under NPC (dist=0): walk to nearest tile outside the target footprint. */
     if (dist == 0) {
         int max_r = (target_size + 1) / 2 + 1;
         int best_dsq = 9999, bx = -1, by = -1;
@@ -1570,7 +1429,6 @@ static inline int encounter_chase_attack_target(
         return steps > 0 ? 1 : 0;
     }
 
-    /* in range + LOS: ready to attack, no movement needed */
     if (encounter_player_can_attack(p->x, p->y, target_x, target_y,
                                      target_size, attack_range,
                                      los_query))
@@ -1652,7 +1510,6 @@ static inline int encounter_chase_attack_target(
     return steps > 0 ? 1 : 0;
 }
 
-
 typedef int (*encounter_npc_blocked_fn)(void* ctx, int x, int y, int size);
 typedef int (*encounter_npc_overlap_hold_fn)(void* ctx);
 
@@ -1678,11 +1535,6 @@ static inline int encounter_npc_footprint_overlaps_target(
              npc_y + npc_size <= target_y);
 }
 
-/** check if the leading edge tiles are clear for an NPC moving in direction (dx, dy).
-    for size>1 NPCs, OSRS checks the tiles along the leading edge that the NPC
-    sweeps through — not the full destination footprint. for diagonal moves, each
-    edge strip extends by 1 tile to cover the corner.
-    is_blocked is called with size=1 for each individual edge tile. */
 static inline int encounter_npc_x_edge_clear(
     int x, int y, int size, int dx, int dy,
     encounter_npc_blocked_fn is_blocked, void* ctx
@@ -1740,10 +1592,6 @@ static inline int encounter_npc_try_step(
     return 0;
 }
 
-/** OSRS overlap shuffle. When an NPC overlaps the player, sample one cardinal
-    direction: X/Y at 50%, then +/- at 50% (RNG draw order is load-bearing). The
-    sampled move uses normal edge clearance; a blocked sample holds the NPC under
-    the player for this tick instead of scanning for another cardinal. */
 static inline int encounter_npc_step_out_from_under(
     int* npc_x, int* npc_y, int npc_size,
     int player_x, int player_y,
@@ -1766,16 +1614,6 @@ static inline int encounter_npc_step_out_from_under(
     return ENCOUNTER_NPC_UNDER_PLAYER_BLOCKED;
 }
 
-/** OSRS-shaped NPC step toward target: diagonal first, then x-only, then y-only.
-    For size>1 NPCs, validates by the EDGE TILES the NPC sweeps through (not the
-    full destination footprint); diagonal moves need both x-edge and y-edge clear
-    (each extended 1 tile for the corner).
-
-    ENCOUNTER_NPC_STEP_STOP_AT_MELEE matches RuneLite WorldArea.calculateNextTravellingPoint:
-    overlap returns no step, cardinal melee contact returns no step, diagonal
-    contact tries x-only.
-
-    returns 1 if moved, 0 if blocked or already at target. */
 static inline int encounter_npc_step_toward_policy(
     int* x, int* y, int tx, int ty, int npc_size,
     int target_size, EncounterNpcStepPolicy policy,
@@ -1832,13 +1670,7 @@ static inline int encounter_npc_step_toward_policy(
         return 1;
     return 0;
 }
-/* Shared damage-application helpers: use instead of manually subtracting HP,
-   clamping, and setting hit-splat flags. */
-/** apply damage to a player. updates HP (clamped to 0), sets hit splat flags,
-    and accumulates damage into a per-tick tracker (for reward calculation).
-    damage_tracker can be NULL if not needed.
-    always sets hit_landed_this_tick so the renderer shows a splat —
-    0 damage produces a blue "miss" splat (standard OSRS behavior). */
+
 static inline void encounter_damage_player(
     Player* p, int damage, float* damage_tracker
 ) {
@@ -1851,11 +1683,6 @@ static inline void encounter_damage_player(
     p->hit_damage = damage > 0 ? damage : 0;
 }
 
-/** apply damage to an NPC-like entity via raw field pointers.
-    works with any struct that has hp/hit_landed/hit_damage int fields.
-    returns the damage applied after capping to current HP.
-    always sets hit_landed so the renderer shows a splat —
-    0 damage produces a blue "miss" splat (standard OSRS behavior). */
 static inline int encounter_damage_npc(
     int* hp, int* hit_landed, int* hit_damage, int damage
 ) {
@@ -1871,26 +1698,19 @@ static inline int encounter_damage_npc(
     return applied;
 }
 
-
-/** resolve a single NPC's pending hit. tick down, apply damage when it lands.
-    ice barrage: sets *frozen_ticks = BARRAGE_FREEZE_TICKS on hit.
-    blood barrage: accumulates landed damage into *blood_heal_acc for 25% heal.
-    returns 1 if hit landed this call, 0 otherwise. */
 static inline int encounter_resolve_npc_pending_hit(
     EncounterPendingHit* ph,
     int* npc_hp, int* hit_landed, int* hit_damage,
     int* frozen_ticks, int* blood_heal_acc, float* damage_dealt_acc
 ) {
-    (void)frozen_ticks;  /* freeze applied at cast time, not land time */
+    (void)frozen_ticks;
     if (!ph->active) return 0;
     ph->ticks_remaining--;
     if (ph->ticks_remaining > 0) return 0;
 
-    /* hit landed */
     int dmg = encounter_damage_npc(npc_hp, hit_landed, hit_damage, ph->damage);
     if (damage_dealt_acc) *damage_dealt_acc += dmg;
 
-    /* blood barrage: accumulate damage for 25% heal (at land time — heal depends on damage) */
     if (ph->spell_type == ENCOUNTER_SPELL_BLOOD && blood_heal_acc)
         *blood_heal_acc += dmg;
 
@@ -1898,18 +1718,6 @@ static inline int encounter_resolve_npc_pending_hit(
     return 1;
 }
 
-/** resolve player pending hits (NPC attacks landing on the player).
-    ticks down each hit, applies damage when it lands, handles deferred
-    prayer checks (jad-style: check_prayer=1 re-checks at land time).
-    encounters MUST call this each tick for projectile-based NPC attacks.
-    prayer_correct_count: incremented for each deferred prayer check that succeeds.
-    multiple hits can land on the same tick (e.g. mager + ranger). */
-/** per-landing-hit observer for the _observed resolver variant: fires once per
-    landing hit with a real attack style, with the post-prayer damage.
-    prayer_was_checked=0 means the landing bypassed the Protect check (ignore-
-    prayer pushes, or jad-style hits whose deferred check already ran earlier) —
-    deferred decisions are NOT re-observed at land time, so encounters that use
-    prayer_check_delay > 0 see those hits only as unchecked landings. */
 typedef void (*EncounterPendingHitObserver)(
     void* user, const EncounterPendingHit* hit, int damage_after_prayer,
     int prayer_was_correct, int prayer_was_checked);
@@ -1923,11 +1731,7 @@ static inline void encounter_resolve_player_pending_hits_observed(
 ) {
     for (int i = 0; i < queue->count; i++) {
         EncounterPendingHit* hit = &queue->hits[i];
-        /* deferred prayer check (jad): lock in damage at T + prayer_check_delay.
-           runs BEFORE ticks_remaining decrement so the check happens on the exact
-           tick prayer_check_delay reaches 0, regardless of whether the hit lands
-           same tick or later. after the check, damage is frozen (possibly 0)
-           and further flicks don't affect this hit. */
+
         if (hit->check_prayer && hit->prayer_check_delay > 0) {
             hit->prayer_check_delay--;
             if (hit->prayer_check_delay == 0) {
@@ -1977,10 +1781,6 @@ static inline void encounter_resolve_player_pending_hits(
         prayer_correct_count, off_prayer_hit_count, NULL, NULL);
 }
 
-
-/** clear all per-tick animation/event flags on a player.
-    call at the start of each encounter tick, then set flags as events happen.
-    the renderer reads these once per frame via RenderEntity. */
 static inline void encounter_clear_tick_flags(Player* p) {
     p->attack_style_this_tick = ATTACK_STYLE_NONE;
     p->magic_type_this_tick = 0;
@@ -1994,20 +1794,13 @@ static inline void encounter_clear_tick_flags(Player* p) {
     p->used_special_this_tick = 0;
 }
 
-
-/** resolve RNG seed for encounter reset. priority: explicit seed > saved state > default.
-    all encounters MUST use this to ensure consistent RNG initialization. */
 static inline uint32_t encounter_resolve_seed(uint32_t saved_rng, uint32_t explicit_seed) {
     uint32_t rng = 12345;
     if (saved_rng != 0) rng = saved_rng;
     if (explicit_seed != 0) rng = explicit_seed;
     return rng;
 }
-/* Shared prayer drain: call encounter_drain_all_prayers() each tick; encounters
-   with overhead prayers MUST use it rather than hand-rolling drain. OSRS drains
-   1 point per floor((18 + floor(bonus/4)) / drain_effect) seconds; the counter
-   accumulates per tick and resets at the threshold. */
-/** drain effect values for overhead prayers (higher drains faster). */
+
 static inline int encounter_overhead_drain_effect(OverheadPrayer prayer) {
     switch (prayer) {
         case PRAYER_PROTECT_MELEE:  return 12;
@@ -2019,7 +1812,6 @@ static inline int encounter_overhead_drain_effect(OverheadPrayer prayer) {
     }
 }
 
-/** drain effect values for offensive prayers. */
 static inline int encounter_offensive_drain_effect(OffensivePrayer prayer) {
     switch (prayer) {
         case OFFENSIVE_PRAYER_PIETY:       return 24;
@@ -2038,26 +1830,16 @@ static inline int encounter_player_prayer_bonus(const Player* p) {
     return bonuses.prayer;
 }
 
-/** drain both overhead and offensive prayer for one tick.
-    handles activation-tick skip (prayers activated this tick do not drain),
-    the shared drain counter, and pp=0 auto-clear (all prayers off when empty).
-    prayer_bonus: player's total prayer equipment bonus (typically 0-30). */
 static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
-    /* prayers activated this tick don't drain (makes 1-tick flicking free). */
     int overhead_effect  = p->prayer_just_activated
         ? 0 : encounter_overhead_drain_effect(p->prayer);
     int offensive_effect = p->offensive_prayer_just_activated
         ? 0 : encounter_offensive_drain_effect(p->offensive_prayer);
     int total = overhead_effect + offensive_effect;
 
-    /* clear just-activated flags even on zero-drain paths so they don't leak
-       into next tick. */
     p->prayer_just_activated = 0;
     p->offensive_prayer_just_activated = 0;
 
-    /* pp <= 0 entering this tick: force prayers off and skip drain. Covers external
-       drain (smite) and activation attempted at pp=0 (apply_*_action doesn't gate on
-       pp). Without this the enum could stay active at pp=0. */
     if (p->current_prayer <= 0) {
         p->current_prayer = 0;
         p->prayer_drain_counter = 0;
@@ -2081,40 +1863,28 @@ static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
         }
     }
 }
-/* Shared loadout stat computation: call encounter_compute_loadout_stats() with a
-   loadout array to derive attack bonuses, max hits, and effective levels from
-   ITEM_DATABASE. */
-/** combat stats derived from a gear loadout + prayer + style.
-    computed once at reset, read during combat.
-    prayer multipliers and style_bonus are stored for dynamic recomputation
-    when stats change (brew drain, potion boost). */
+
 typedef struct {
-    int attack_bonus;     /* primary attack bonus for the style */
-    int strength_bonus;   /* ranged_strength, magic_damage %, or melee_strength */
-    int eff_level;        /* effective attack level (floor(base*prayer) + style + 8) */
-    int max_hit;          /* base max hit (before tbow/set bonuses) */
-    int attack_speed;     /* ticks between attacks (includes stance speed mod) */
-    int attack_range;     /* max chebyshev distance (includes stance range mod) */
+    int attack_bonus;
+    int strength_bonus;
+    int eff_level;
+    int max_hit;
+    int attack_speed;
+    int attack_range;
     AttackStyle style;
-    FightStyle fight_style;  /* stance picked for this loadout — drives stance bonuses + speed/range mods */
-    /* defence bonuses from gear */
+    FightStyle fight_style;
     int def_stab, def_slash, def_crush, def_magic, def_ranged;
-    /* stored for dynamic max hit recomputation after brew drain / potion boost */
     float att_prayer_mult;
     float str_prayer_mult;
     int spell_base_damage;
 } EncounterLoadoutStats;
 
-/** Magic accuracy effective level: floor(magic * prayer) + 2 for Accurate powered
-    staff, then +9. Longrange is selectable but contributes no attack level. */
 static inline int encounter_magic_effective_attack_level(
     int magic_level, float prayer_mult, FightStyle fight_style
 ) {
     return osrs_magic_effective_attack_level(magic_level, prayer_mult, fight_style);
 }
 
-/** Copy a loadout, suppressing the shield slot (stats and effect bits) when the
-    weapon is two-handed. */
 static inline void encounter_effective_loadout_for_equipment(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     uint8_t out[NUM_GEAR_SLOTS]
@@ -2124,7 +1894,6 @@ static inline void encounter_effective_loadout_for_equipment(
         out[GEAR_SLOT_WEAPON], out[GEAR_SLOT_SHIELD]);
 }
 
-/** Derive item effects from the same two-handed-compatible loadout used for stats. */
 static inline void encounter_derive_loadout_effect_profile(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     OsrsEquipmentEffectProfile* out
@@ -2134,10 +1903,6 @@ static inline void encounter_derive_loadout_effect_profile(
     osrs_derive_equipment_effect_profile(effective_loadout, out);
 }
 
-/** offensive prayer multipliers for effective level computation.
-    used by encounter_compute_loadout_stats() and encounter_update_loadout_level().
-    off-style offensive prayers return identity multipliers.
-    ref: osrs wiki prayer table. */
 static inline void encounter_offensive_prayer_mults(
     OffensivePrayer op, AttackStyle style, float* att_out, float* str_out
 ) {
@@ -2174,26 +1939,10 @@ static inline void encounter_offensive_prayer_mults(
     *str_out = str;
 }
 
-/** augury adds +4% magic damage on top of its accuracy mult (PvP parity). */
 static inline float encounter_offensive_magic_dmg_mult(OffensivePrayer op) {
     return osrs_offensive_magic_dmg_mult(op);
 }
 
-/** derive all combat stats from a loadout array + prayer + fight stance.
-    sums equipment bonuses from ITEM_DATABASE, applies prayer multiplier,
-    computes effective level and max hit. attack_speed and attack_range are
-    also adjusted for the stance (rapid -1 tick, longrange +2 tiles).
-
-    @param loadout          gear array indexed by GEAR_SLOT_* (ITEM_NONE=255 for empty)
-    @param style            ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED, or ATTACK_STYLE_MELEE
-    @param offensive_prayer current offensive prayer (piety/rigour/augury/none/low tiers)
-    @param base_level       base combat level (usually 99)
-    @param fight_style      stance — drives attack/str/def bonuses, attack speed, range
-    @param spell_base_damage 0 for ranged/melee, 30 for ice/blood barrage
-    @param out              output struct to fill. prayer multipliers are stored so
-                            encounter_update_loadout_level() can recompute eff/max without
-                            needing the prayer arg again (callers must re-call update
-                            whenever offensive prayer changes). */
 static inline void encounter_compute_loadout_stats(
     const uint8_t loadout[NUM_GEAR_SLOTS],
     AttackStyle style,
@@ -2210,13 +1959,9 @@ static inline void encounter_compute_loadout_stats(
     uint8_t effective_loadout[NUM_GEAR_SLOTS];
     encounter_effective_loadout_for_equipment(loadout, effective_loadout);
 
-    /* sum equipment bonuses using shared function */
     EquipmentBonuses eb;
     osrs_sum_equipment_bonuses(effective_loadout, &eb);
 
-    /* Tumeken's shadow triples gear magic-damage% (the staff itself is 0%), capped
-       at +100%. Applied to strength_bonus (not spell_base_damage) so the recompute
-       path inherits it. */
     const Item* weapon_item = get_item(loadout[GEAR_SLOT_WEAPON]);
     if (style == ATTACK_STYLE_MAGIC && weapon_item &&
             (weapon_item->effect_mask & OSRS_ITEM_EFFECT_TUMEKENS_SHADOW)) {
@@ -2229,30 +1974,24 @@ static inline void encounter_compute_loadout_stats(
     out->def_crush = eb.defence_crush;
     out->def_magic = eb.defence_magic;
     out->def_ranged = eb.defence_ranged;
-    /* apply stance modifiers to weapon base speed/range. equipment.json stores
-       the base (accurate/longrange speed, non-longrange range). rapid and
-       longrange shift them. */
+
     out->attack_speed = eb.attack_speed + osrs_stance_speed_mod(fight_style);
     out->attack_range = eb.attack_range + osrs_stance_range_mod(fight_style);
 
-    /* primary attack bonus based on style */
     if (style == ATTACK_STYLE_MAGIC) {
         out->attack_bonus = eb.attack_magic;
     } else if (style == ATTACK_STYLE_RANGED) {
         out->attack_bonus = eb.attack_ranged;
     } else {
-        /* melee: best of stab/slash/crush */
         out->attack_bonus = eb.attack_stab;
         if (eb.attack_slash > out->attack_bonus) out->attack_bonus = eb.attack_slash;
         if (eb.attack_crush > out->attack_bonus) out->attack_bonus = eb.attack_crush;
     }
 
-    /* prayer multipliers — single source of truth in encounter_offensive_prayer_mults(). */
     float att_prayer_mult, str_prayer_mult;
     encounter_offensive_prayer_mults(
         offensive_prayer, style, &att_prayer_mult, &str_prayer_mult);
 
-    /* store for dynamic recomputation after brew drain / potion boost / prayer toggle */
     out->att_prayer_mult = att_prayer_mult;
     out->str_prayer_mult = str_prayer_mult;
     out->spell_base_damage = spell_base_damage;
@@ -2267,14 +2006,10 @@ static inline void encounter_compute_loadout_stats(
         out->eff_level = (int)(base_level * att_prayer_mult) + att_stance_bonus + 8;
     }
 
-    /* effective strength level (for max hit): floor(base * str_prayer_mult) + str_stance_bonus + 8.
-       str_stance_bonus is non-zero only for melee (aggressive/controlled). */
     int eff_str_level = (int)(base_level * str_prayer_mult) + str_stance_bonus + 8;
 
-    /* augury magic damage multiplier: +4% (matches PvP calculate_max_hit). */
     float magic_dmg_prayer_mult = encounter_offensive_magic_dmg_mult(offensive_prayer);
 
-    /* max hit and strength bonus depend on combat style */
     if (style == ATTACK_STYLE_RANGED) {
         out->strength_bonus = eb.ranged_strength;
         out->max_hit = (int)(0.5 + eff_str_level * (eb.ranged_strength + 64) / 640.0);
@@ -2286,18 +2021,7 @@ static inline void encounter_compute_loadout_stats(
         out->max_hit = (int)(0.5 + eff_str_level * (eb.melee_strength + 64) / 640.0);
     }
 }
-/* Dynamic max-hit recomputation: call encounter_update_loadout_level() whenever the
-   player's current combat level changes (brew drain, restore, bastion boost). Reuses
-   the prayer multiplier + strength bonus stored by encounter_compute_loadout_stats(). */
-/** recompute eff_level and max_hit for a loadout using a (possibly drained/boosted)
-    current combat level AND current offensive prayer. call whenever either changes:
-      - offensive prayer toggle (pretick action)
-      - brew drain / super restore / bastion boost (consumable effects)
-    current_att_level: the player's current attack/ranged/magic level (for accuracy).
-    current_str_level: the player's current strength/ranged/magic level (for max hit).
-    for ranged: both are current_ranged. for melee: att=current_attack, str=current_strength.
-    for magic: max hit doesn't depend on level (spell base damage), but eff_level does.
-    offensive_prayer is the current Player.offensive_prayer — mults are rewritten from it. */
+
 static inline void encounter_update_loadout_level(
     EncounterLoadoutStats* ls, OffensivePrayer offensive_prayer,
     int current_att_level, int current_str_level
@@ -2348,10 +2072,7 @@ static inline void encounter_compute_player_equipped_stats(
         out);
     encounter_update_loadout_level(out, p->offensive_prayer, current_att, current_str);
 }
-/* Shared potion stat effects: call on drink to modify current combat levels and
-   recompute affected max hits. sara brew heals HP + boosts def + drains
-   att/str/ranged/magic; super restore restores stats toward base; bastion boosts
-   ranged + def. */
+
 static inline void encounter_init_maxed_player_combat_stats(
     Player* p,
     int prayer_level
@@ -2431,7 +2152,6 @@ typedef struct {
     int magic_floor;
 } EncounterStatDriftPins;
 
-/** no active divine potion floor for the 100-tick stat drift helper. */
 static inline EncounterStatDriftPins encounter_stat_drift_no_pins(void) {
     return (EncounterStatDriftPins){
         .attack_floor = ENCOUNTER_STAT_DRIFT_UNPINNED,
@@ -2442,14 +2162,12 @@ static inline EncounterStatDriftPins encounter_stat_drift_no_pins(void) {
     };
 }
 
-/** merge active divine floors so overlapping potion timers compose by maximum. */
 static inline int encounter_merge_stat_drift_floor(int a, int b) {
     if (a == ENCOUNTER_STAT_DRIFT_UNPINNED) return b;
     if (b == ENCOUNTER_STAT_DRIFT_UNPINNED) return a;
     return a > b ? a : b;
 }
 
-/** merge two sets of active divine floors by per-stat maximum. */
 static inline EncounterStatDriftPins encounter_merge_stat_drift_pins(
     EncounterStatDriftPins a,
     EncounterStatDriftPins b
@@ -2463,7 +2181,6 @@ static inline EncounterStatDriftPins encounter_merge_stat_drift_pins(
     };
 }
 
-/** divine super combat floor values for Attack, Strength, and Defence. */
 static inline EncounterStatDriftPins encounter_divine_super_combat_pins(const Player* p) {
     EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
     pins.attack_floor = p->base_attack + osrs_super_combat_boost_amount(p->base_attack);
@@ -2473,14 +2190,12 @@ static inline EncounterStatDriftPins encounter_divine_super_combat_pins(const Pl
     return pins;
 }
 
-/** divine ranging floor value for Ranged. */
 static inline EncounterStatDriftPins encounter_divine_ranging_pins(const Player* p) {
     EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
     pins.ranged_floor = p->base_ranged + osrs_ranging_boost_amount(p->base_ranged);
     return pins;
 }
 
-/** apply one active divine floor. Floors below or equal to base are ignored. */
 static inline int encounter_enforce_stat_drift_floor(int* current, int base, int floor) {
     if (floor <= base) return 0;
     if (*current >= floor) return 0;
@@ -2488,7 +2203,6 @@ static inline int encounter_enforce_stat_drift_floor(int* current, int base, int
     return 1;
 }
 
-/** apply every active divine floor to the player's combat levels. */
 static inline int encounter_enforce_stat_drift_pins(Player* p, EncounterStatDriftPins pins) {
     int changed = 0;
     changed |= encounter_enforce_stat_drift_floor(
@@ -2504,7 +2218,6 @@ static inline int encounter_enforce_stat_drift_pins(Player* p, EncounterStatDrif
     return changed;
 }
 
-/** move one stat one level toward base without crossing an active divine floor. */
 static inline int encounter_drift_stat_toward_base_with_floor(
     int* current,
     int base,
@@ -2527,9 +2240,6 @@ static inline int encounter_drift_stat_toward_base_with_floor(
     return 0;
 }
 
-/** Tick the OSRS 100-tick natural stat-drift cycle once: each completed cycle moves
-    Attack/Strength/Defence/Ranged/Magic/Hitpoints one level toward base. Active
-    divine pins hold their stats at the boosted floor until the caller expires them. */
 static inline int encounter_tick_stat_drift(
     Player* p,
     int* stat_drift_timer,
@@ -2565,7 +2275,6 @@ typedef enum {
     ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
 } EncounterConsumableStatEffect;
 
-/** Apply one brew heal and food-event state without consuming a dose. */
 static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
     p->current_hitpoints += brew_heal;
     if (p->current_hitpoints > p->base_hitpoints + brew_heal)
@@ -2573,34 +2282,26 @@ static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
     p->ate_food_this_tick = 1;
 }
 
-/** Apply the aggregate-model brew HP, dose, timer, and food-event state. */
 static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {
     encounter_apply_brew_heal(p, brew_heal);
     p->brew_doses--;
     p->potion_timer = 3;
 }
 
-/** Add a prayer restore amount before the caller applies any local hooks. */
 static inline void encounter_add_prayer_restore(Player* p, int restore_amount) {
     p->current_prayer += restore_amount;
 }
 
-/** Cap current prayer at the player's base prayer after a restore drink. */
 static inline void encounter_cap_prayer_restore(Player* p) {
     if (p->current_prayer > p->base_prayer)
         p->current_prayer = p->base_prayer;
 }
 
-/** Decrement a potion dose counter and arm the shared 3-tick potion timer. */
 static inline void encounter_finish_potion_dose(Player* p, int* doses) {
     (*doses)--;
     p->potion_timer = 3;
 }
 
-/** sara brew stat drain. call AFTER healing HP (which is encounter-specific).
-    applies osrs_brew_effect: drains att/str/ranged/magic by floor(current/10)+2
-    (CURRENT levels, diminishing on repeat sips), boosts defence by
-    floor(base/5)+2 (BASE level), capped at base + boost. floors drained stats at 0. */
 static inline void encounter_brew_drain_stats(Player* p) {
     BrewResult brew = osrs_brew_effect(p->base_hitpoints, p->base_defence,
                                        p->current_attack, p->current_strength,
@@ -2620,8 +2321,6 @@ static inline void encounter_brew_drain_stats(Player* p) {
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 
-/** restore every combat stat toward base by amount(base), capped at base.
-    the shared shape under super restore and sanfew serum. */
 static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
     int restore = amount(p->base_attack);
     p->current_attack += restore;
@@ -2640,19 +2339,14 @@ static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
     if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
 }
 
-/** super restore stat recovery: floor(base * 0.25) + 8 per stat, capped at base. */
 static inline void encounter_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_super_restore_amount);
 }
 
-/** sanfew serum stat recovery: floor(base * 0.30) + 4 per stat, capped at base
-    (out-restores super restore above level 80). the drink also cures venom —
-    the caller owns venom state. */
 static inline void encounter_sanfew_restore_stats(Player* p) {
     encounter_apply_stat_restore(p, osrs_sanfew_restore_amount);
 }
 
-/** Apply the shared stat side of a consumable effect. */
 static inline void encounter_apply_consumable_stat_effect(
     Player* p,
     EncounterConsumableStatEffect effect
@@ -2673,8 +2367,6 @@ static inline void encounter_apply_consumable_stat_effect(
     abort();
 }
 
-/** bastion potion boost. boosts ranged by floor(base * 0.10) + 4. can exceed base.
-    also boosts defence by floor(base * 0.15) + 5. can exceed base. */
 static inline void encounter_bastion_boost(Player* p) {
     int rng_boost = osrs_ranging_boost_amount(p->base_ranged);
     int def_boost = osrs_super_combat_boost_amount(p->base_defence);
@@ -2686,8 +2378,6 @@ static inline void encounter_bastion_boost(Player* p) {
     if (p->current_defence > def_cap) p->current_defence = def_cap;
 }
 
-/** super combat boost: att/str/def each +floor(base * 0.15) + 5, capped at
-    base + boost. */
 static inline void encounter_super_combat_boost(Player* p) {
     int boost = osrs_super_combat_boost_amount(p->base_attack);
     p->current_attack += boost;
@@ -2700,18 +2390,12 @@ static inline void encounter_super_combat_boost(Player* p) {
     if (p->current_defence > p->base_defence + boost) p->current_defence = p->base_defence + boost;
 }
 
-/** ranging potion boost: ranged +floor(base * 0.10) + 4, capped at base + boost. */
 static inline void encounter_ranging_boost(Player* p) {
     int boost = osrs_ranging_boost_amount(p->base_ranged);
     p->current_ranged += boost;
     if (p->current_ranged > p->base_ranged + boost) p->current_ranged = p->base_ranged + boost;
 }
 
-/** recompute max hit for all loadouts after a stat change or prayer change.
-    encounters should call this after brew_drain_stats, restore_stats, bastion_boost,
-    or when Player.offensive_prayer toggles. ranged loadouts use current_ranged, magic
-    uses current_magic, melee uses current_attack/current_strength. prayer multipliers
-    are rewritten from p->offensive_prayer. */
 static inline void encounter_recompute_loadout_max_hits(
     EncounterLoadoutStats* loadouts, int num_loadouts, Player* p
 ) {
@@ -2726,25 +2410,17 @@ static inline void encounter_recompute_loadout_max_hits(
         }
     }
 }
-/* Shared special attack energy: tick encounter_tick_spec_regen() each tick, call
-   encounter_use_spec() on activation. Energy 0-100, starts at 100, +10 every 50
-   ticks; lightbearer halves the interval to 25. */
-/** tick special attack energy regeneration from current equipped gear. */
+
 static inline void encounter_tick_spec_regen(Player* p) {
     osrs_tick_special_regen(p);
 }
 
-/** attempt to use special attack energy. returns 1 if successful (enough energy),
-    0 if not enough energy. drains on success. */
 static inline int encounter_use_spec(Player* p, int cost) {
     if (p->special_energy < cost) return 0;
     p->special_energy -= cost;
     return 1;
 }
 
-
-/** apply a full static loadout to player equipment and set gear state.
-    used by Zulrah, Inferno, and future boss encounters with fixed loadouts. */
 static inline void encounter_apply_loadout(
     Player* p, const uint8_t loadout[NUM_GEAR_SLOTS], GearSet gear_set
 ) {
@@ -2754,28 +2430,25 @@ static inline void encounter_apply_loadout(
     osrs_refresh_player_equipment(p);
 }
 
-/** populate player inventory from multiple loadouts (deduped per slot).
-    extra_items is an optional overlay array (e.g. justiciar for tank), NULL to skip.
-    the GUI reads p->inventory[][] to display available gear switches. */
 static void encounter_populate_inventory(
     Player* p,
     const uint8_t* const* loadouts, int num_loadouts,
     const uint8_t extra_items[NUM_GEAR_SLOTS]
 ) {
-    memset(p->inventory, 255 /* ITEM_NONE */, sizeof(p->inventory));
+    memset(p->inventory, 255 , sizeof(p->inventory));
     memset(p->num_items_in_slot, 0, sizeof(p->num_items_in_slot));
 
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
         int n = 0;
         for (int l = 0; l < num_loadouts && n < MAX_ITEMS_PER_SLOT; l++) {
             uint8_t item = loadouts[l][s];
-            if (item == 255 /* ITEM_NONE */) continue;
+            if (item == 255 ) continue;
             int dup = 0;
             for (int j = 0; j < n; j++) { if (p->inventory[s][j] == item) { dup = 1; break; } }
             if (dup) continue;
             p->inventory[s][n++] = item;
         }
-        if (extra_items && extra_items[s] != 255 /* ITEM_NONE */ && n < MAX_ITEMS_PER_SLOT) {
+        if (extra_items && extra_items[s] != 255  && n < MAX_ITEMS_PER_SLOT) {
             int dup = 0;
             for (int j = 0; j < n; j++) { if (p->inventory[s][j] == extra_items[s]) { dup = 1; break; } }
             if (!dup) p->inventory[s][n++] = extra_items[s];
@@ -2784,18 +2457,12 @@ static void encounter_populate_inventory(
     }
 }
 
-/**
- * Clear ammo-slot switch candidates after loadout inventory population.
- */
 static inline void encounter_clear_ammo_inventory_slot(Player* p) {
     for (int i = 0; i < MAX_ITEMS_PER_SLOT; i++)
         p->inventory[GEAR_SLOT_AMMO][i] = ITEM_NONE;
     p->num_items_in_slot[GEAR_SLOT_AMMO] = 0;
 }
 
-
-/** translate movement: convert absolute tile to 8-directional walk action.
-    writes to actions[head_move]. head_move < 0 = skip. */
 static inline void encounter_translate_movement(HumanInput* hi, int* actions,
                                                  int head_move,
                                                  void* (*get_entity)(void*, int),
@@ -2817,17 +2484,11 @@ static inline void encounter_translate_movement(HumanInput* hi, int* actions,
     }
 }
 
-/** translate overhead prayer: pending_prayer stores the new ENCOUNTER_OVERHEAD_*
-    value directly (set by GUI click handlers). writes to actions[head_prayer].
-    head_prayer < 0 = skip. */
 static inline void encounter_translate_prayer(HumanInput* hi, int* actions, int head_prayer) {
     if (hi->pending_prayer < 0 || head_prayer < 0) return;
     actions[head_prayer] = hi->pending_prayer;
 }
 
-/** translate offensive prayer: pending_offensive_prayer stores the new
-    ENCOUNTER_OFFENSIVE_* value directly. writes to actions[head_offensive].
-    head_offensive < 0 = skip (encounter doesn't expose offensive as an action). */
 static inline void encounter_translate_offensive_prayer(
     HumanInput* hi, int* actions, int head_offensive
 ) {
@@ -2835,9 +2496,6 @@ static inline void encounter_translate_offensive_prayer(
     actions[head_offensive] = hi->pending_offensive_prayer;
 }
 
-/**
- * Find the observed NPC target slot for a raw encounter NPC slot.
- */
 static inline int encounter_find_observed_target_slot(
     const int* current_obs_slots,
     int observed_slot_count,
@@ -2848,11 +2506,6 @@ static inline int encounter_find_observed_target_slot(
     return -1;
 }
 
-/** translate human attack-or-move click for encounters with a merged combat head
-    (ATTACK_*, MOVE_UNDER/ADJACENT/DIAGONAL, MOVE_FARCAST_2..7).
-    pending_attack takes precedence; otherwise the move click is resolved against
-    the target's tile to pick UNDER/ADJACENT/DIAGONAL or a farcast at the
-    chebyshev distance, clamped to [2, 7]. */
 static inline void encounter_translate_attack_or_move(
     HumanInput* hi,
     int* actions,
@@ -2885,68 +2538,46 @@ static inline void encounter_translate_attack_or_move(
     }
 }
 
-
 typedef struct {
-    const char* name;           /* "nh_pvp", "cerberus", "jad", etc. */
+    const char* name;
 
-    /* observation/action space dimensions */
-    int obs_size;               /* raw observation features (before mask) */
+    int obs_size;
     int num_action_heads;
-    const int* action_head_dims; /* array of per-head dimensions */
-    int mask_size;              /* sum of action_head_dims */
+    const int* action_head_dims;
+    int mask_size;
 
-    /* lifecycle: allocate typed encounter runtime state and context */
     size_t state_size;
     size_t context_size;
     void (*init_context)(EncounterContext* context);
     void (*destroy_context)(EncounterContext* context);
     void (*init_state)(EncounterState* state, EncounterContext* context);
 
-    /* legacy lifecycle for callers that still need a one-pointer runtime */
     EncounterState* (*create)(void);
     void (*destroy)(EncounterState* state);
 
-    /* episode lifecycle */
     void (*reset)(EncounterState* state, EncounterContext* context, uint32_t seed);
     void (*step)(EncounterState* state, EncounterContext* context, const int* actions);
     void (*step_human_commands)(
         EncounterState* state, EncounterContext* context, struct HumanInput* hi);
 
-    /* state snapshot/restore for archive-based exploration. NULL = not supported.
-       snapshot_size returns the byte count the caller must allocate before calling
-       snapshot. snapshot writes the full encounter state to `out`. restore loads
-       it back. snapshot+restore must round-trip exactly: stepping from a restored
-       state with a fixed action sequence reproduces the same trajectory the
-       snapshot was taken from. */
     size_t (*snapshot_size)(EncounterState* state, EncounterContext* context);
     void (*snapshot)(EncounterState* state, EncounterContext* context, void* out);
     void (*restore)(
         EncounterState* state, EncounterContext* context, const void* data, size_t n);
 
-    /* Archive cell representation for Go-Explore-style exploration. NULL = not
-       supported. write_cell_key writes a fixed-size byte struct into `out` that
-       discretizes the state into a cell. Two states map to the same cell iff
-       their cell keys are byte-equal. progress_score returns a scalar in roughly
-       [0, 1.5] where higher = closer to solving the encounter; used to compare
-       elites within a cell and to weight cell selection. */
     size_t (*cell_key_size)(EncounterState* state, EncounterContext* context);
     void (*write_cell_key)(EncounterState* state, EncounterContext* context, void* out);
     float (*progress_score)(EncounterState* state, EncounterContext* context);
 
-    /* RL interface */
     void (*write_obs)(EncounterState* state, EncounterContext* context, float* obs_out);
     void (*write_mask)(EncounterState* state, EncounterContext* context, float* mask_out);
     float (*get_reward)(EncounterState* state, EncounterContext* context);
     int (*is_terminal)(EncounterState* state, EncounterContext* context);
 
-    /* entity access for renderer (returns entity count, writes entity pointers).
-       renderer uses this to draw all entities generically. */
     int (*get_entity_count)(EncounterState* state, EncounterContext* context);
     void* (*get_entity)(
-        EncounterState* state, EncounterContext* context, int index);  /* returns Player* */
+        EncounterState* state, EncounterContext* context, int index);
 
-    /* render entity population: fills array of RenderEntity structs for the renderer.
-       replaces get_entity casting for rendering. NULL = renderer falls back to get_entity. */
     void (*fill_render_entities)(
         EncounterState* state,
         EncounterContext* context,
@@ -2954,48 +2585,32 @@ typedef struct {
         int max_entities,
         int* count);
 
-    /* encounter-specific config (key-value put/get for binding kwargs) */
     void (*put_int)(EncounterState* state, EncounterContext* context, const char* key, int value);
     void (*put_float)(
         EncounterState* state, EncounterContext* context, const char* key, float value);
     void (*put_ptr)(
         EncounterState* state, EncounterContext* context, const char* key, void* value);
 
-    /* arena bounds for renderer (0 = use FIGHT_AREA_* defaults) */
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
 
-    /* human mode input translation (per-encounter, NULL = no human mode).
-       translates semantic HumanInput intents to encounter-specific action arrays.
-       each encounter owns its own mapping since action head layouts differ. */
     void (*translate_human_input)(
         struct HumanInput* hi, int* actions, EncounterState* state, EncounterContext* context);
     int (*is_human_targetable_npc_slot)(
         EncounterState* state, EncounterContext* context, int npc_slot);
 
-    /* scenario lab: apply one line of the encounter's line-based command language
-       to hand-edit the live scenario (spawn/move/kill NPCs, set wave/boss/player,
-       etc). NULL = encounter has no lab. The viewer drives both encounters through
-       this one hook. Returns 1 if the line requested a JSON dump (the encounter
-       printed it to stdout), 0 otherwise. Invalid lines abort loudly. */
     int (*apply_lab_command)(
         EncounterState* state, EncounterContext* context, const char* line);
 
-    /* action head indices used by shared translate helpers and renderer.
-       set to -1 if the encounter doesn't have that action head. */
-    int head_move;     /* movement (walk/run) */
-    int head_prayer;   /* prayer switching */
-    int head_target;   /* NPC target selection (index into NPC array) */
+    int head_move;
+    int head_prayer;
+    int head_target;
 
-    /* render hooks (optional — NULL if not implemented).
-       populates visual overlay data for the renderer. */
     void (*render_post_tick)(
         EncounterState* state, EncounterContext* context, EncounterOverlay* overlay);
 
-    /* logging (returns pointer to encounter's Log struct, or NULL) */
     void* (*get_log)(EncounterState* state, EncounterContext* context);
 
-    /* tick access */
     int (*get_tick)(EncounterState* state, EncounterContext* context);
     int (*get_winner)(EncounterState* state, EncounterContext* context);
 } EncounterDef;
@@ -3029,7 +2644,6 @@ static inline void encounter_runtime_destroy(const EncounterDef* def, EncounterR
     runtime->context = NULL;
 }
 
-
 #define MAX_ENCOUNTERS 32
 
 typedef struct {
@@ -3058,4 +2672,4 @@ static inline const EncounterDef* encounter_find(const char* name) {
     return NULL;
 }
 
-#endif /* OSRS_ENCOUNTER_H */
+#endif

@@ -1,7 +1,3 @@
-/**
- * @fileoverview Small fail-fast helpers for OSRS binary assets and replays.
- */
-
 #ifndef OSRS_BINARY_IO_H
 #define OSRS_BINARY_IO_H
 

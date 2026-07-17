@@ -1,15 +1,3 @@
-/**
- * @fileoverview Sub-tile movement primitives for the OSRS renderer, ported from
- * the deobfuscated client (refs/osrs-client-deob Canvas.java, Actor.java). Pure
- * float math so render code and tests share it without linking raylib.
- *
- * Each actor holds a queue of up to 10 waypoints (one per 600ms server tick,
- * newest at index 0) and consumes the oldest at an integer sub-unit speed per
- * 20ms client tick: 4 per tile, 6 at queue depth >2, 8 at depth >3 or when
- * repaying stall debt, doubled while the waypoint is a run step. Per-axis gaps
- * beyond 2 tiles snap.
- */
-
 #ifndef OSRS_RENDER_MOTION_H
 #define OSRS_RENDER_MOTION_H
 
@@ -30,10 +18,6 @@ typedef enum {
     RENDER_MOVEMENT_TELEPORT = 1,
 } RenderMovementKind;
 
-/**
- * Server-tick waypoint queue for one entity: newest at index 0, oldest (index
- * length-1) consumed first.
- */
 typedef struct {
     float x[OSRS_RENDER_WAYPOINT_QUEUE_DEPTH];
     float y[OSRS_RENDER_WAYPOINT_QUEUE_DEPTH];
@@ -45,11 +29,6 @@ static inline float osrs_render_entity_model_ground(float ground) {
     return ground + OSRS_RENDER_ENTITY_GROUND_LIFT;
 }
 
-/**
- * Integer speed ladder (deob Canvas.java). stall_debt repays one tick at speed
- * 8 while the queue is >1 deep; run doubling applies after the depth bumps (run
- * speeds 8/12/16).
- */
 static inline int osrs_render_speed_one_client_tick(
     int path_length,
     int waypoint_running,
@@ -81,10 +60,6 @@ static inline int osrs_render_should_seed_visual_position(
         movement_kind == RENDER_MOVEMENT_TELEPORT;
 }
 
-/**
- * Advance one sub-tile axis toward dest by at most speed, clamped so sub
- * never overshoots.
- */
 static inline float osrs_render_advance_axis_toward(
     float sub, float dest, float speed
 ) {
@@ -98,9 +73,6 @@ static inline void osrs_render_waypoint_queue_clear(OsrsRenderWaypointQueue* q) 
     q->length = 0;
 }
 
-/**
- * Shift-push a waypoint at index 0; a full queue drops its oldest entry.
- */
 static inline void osrs_render_waypoint_push(
     OsrsRenderWaypointQueue* q, float x, float y, int running
 ) {
@@ -118,12 +90,6 @@ static inline void osrs_render_waypoint_push(
     q->length = n + 1;
 }
 
-/**
- * Consume one client tick toward the oldest waypoint, popping it on arrival. At
- * most one waypoint per tick (residual speed discarded); a gap beyond 2 tiles on
- * either axis snaps the whole position and pops in one cycle. Returns 1 when
- * moving this tick; dir_dx/dir_dy carry the pre-advance delta for yaw.
- */
 static inline int osrs_render_waypoint_advance_one_client_tick(
     OsrsRenderWaypointQueue* q,
     float* sub_x,

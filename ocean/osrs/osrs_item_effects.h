@@ -1,11 +1,3 @@
-/**
- * @fileoverview osrs_item_effects.h — shared passive item effects for current ocean OSRS envs.
- *
- * owns derived equipment effect profiles, mutable passive proc state, and the
- * shared attack/damage/spec-regeneration helpers that consume them. activated
- * weapon specials stay in osrs_special_attacks.h.
- */
-
 #ifndef OSRS_ITEM_EFFECTS_H
 #define OSRS_ITEM_EFFECTS_H
 
@@ -89,8 +81,6 @@ static inline OsrsSpecRegenMode osrs_spec_regen_mode_from_ring(uint8_t ring_item
     return OSRS_SPEC_REGEN_MODE_NORMAL;
 }
 
-/** scythe of vitur splat count by target size: 3 vs 3x3+, 2 vs 2x2, 1 vs 1x1;
-    splat k caps at max_hit >> k, each rolled independently by the caller. */
 static inline int osrs_scythe_splats_for_target_size(int target_size) {
     return target_size >= 3 ? 3 : target_size == 2 ? 2 : 1;
 }
@@ -249,7 +239,6 @@ static inline int osrs_confliction_is_match(
            osrs_target_ref_equal(state->confliction_target, target_ref);
 }
 
-/** Fang max-hit shrink for the min/max damage bounds: trunc(max * 3 / 20) (outside ToA). */
 static inline int osrs_fang_hit_bound_shrink(int max_hit) {
     return max_hit * 3 / 20;
 }
@@ -353,8 +342,6 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects(
         target_context, attacker_current_hitpoints, attacker_base_hitpoints);
 }
 
-/** Roll a prepared attack's accuracy and bounded damage. Fang min/max bounds and
-    its stab-only double-roll are already folded into `prepared`. */
 static inline int osrs_roll_prepared_attack_damage(
     const OsrsPreparedAttackEffects* prepared,
     int def_roll,
@@ -370,8 +357,6 @@ static inline int osrs_roll_prepared_attack_damage(
     return hit ? damage : 0;
 }
 
-/* Blood-fury melee heal: 20% chance to return 30% of a hitsplat's damage.
-   Per hitsplat -- the caller invokes this once per splat, not once per summed swing. */
 static inline int osrs_blood_fury_heal_amount(
     const OsrsEquipmentEffectProfile* profile,
     AttackStyle style,
@@ -423,8 +408,6 @@ static inline OsrsPostAttackEffects osrs_finalize_attack_effects(
         result.heal_amount = damage_dealt / 2;
     }
 
-    /* blood fury is per-hitsplat (osrs_blood_fury_heal_amount, caller-invoked);
-       this finalizer covers only swing-level confliction + sanguinesti. */
     return result;
 }
 
@@ -535,4 +518,4 @@ static inline void osrs_tick_special_regen(Player* player) {
     }
 }
 
-#endif  // OSRS_ITEM_EFFECTS_H
+#endif

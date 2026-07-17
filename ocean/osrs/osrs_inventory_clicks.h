@@ -1,22 +1,3 @@
-/**
- * @file osrs_inventory_clicks.h
- * @brief Pure inventory-click classification and consumable registry.
- *
- * Stage 1 owns only the pure interpretation layer. Stage 2 binds the
- * OSRS_CLICK_EQUIP result to the shared inventory equip primitive and binds
- * consumable results to each encounter's existing boost or heal functions.
- *
- * A single inventory click resolves as follows. Empty cells resolve to
- * OSRS_CLICK_NONE. Gear cells resolve to OSRS_CLICK_EQUIP and Stage 2 must
- * equip-swap through osrs_player_can_equip_from_inventory_slot and
- * osrs_player_equip_from_inventory_slot, preserving two-handed suppression,
- * in-place swap semantics, special-attack disarm, and slot_gear_dirty. Raw
- * consumable OSRS ids resolve through the registry, apply the encounter's
- * existing boost or heal once, then decrement that cell's dose. Repeated clicks
- * on the same cell in the same tick pass OSRS_CLICK_TICK_DUPLICATE and resolve
- * to OSRS_CLICK_NONE, so a duplicate applies at most once.
- */
-
 #ifndef OSRS_INVENTORY_CLICKS_H
 #define OSRS_INVENTORY_CLICKS_H
 
@@ -82,7 +63,7 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
 );
 
 #define OSRS_INVENTORY_CELL_OBS_FEATURES 28
-#define OSRS_EQUIPPED_SELF_OBS_FEATURES 18    /* 12 + REC4(4) + REC5(2) */
+#define OSRS_EQUIPPED_SELF_OBS_FEATURES 18
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {6685, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BREW, 4},
@@ -142,28 +123,12 @@ static inline void osrs_inventory_clicks_trap(void) {
 #endif
 }
 
-/**
- * Clamps an observation feature to [-1, 1].
- *
- * Per-item stat/delta features divide raw bonuses by fixed STAT_NORM divisors
- * that are not guaranteed upper bounds (e.g. aggregate defence, magic damage, or
- * a large gear-swap delta can exceed 1.0). Unbounded obs destabilize the policy
- * net under a learned policy, so every emitted feature is clamped to the
- * normalized obs contract here, matching the rest of the OSRS obs vector.
- */
 static inline float osrs_clamp_unit(float v) {
     if (v < -1.0f) return -1.0f;
     if (v > 1.0f) return 1.0f;
     return v;
 }
 
-/**
- * Collapses the 12 consumable kinds into a 6-way role one-hot for obs.
- *
- * Exhaustive over OsrsConsumableKind with no default, so a future kind addition
- * fails to compile under -Wswitch rather than silently mapping to NONE. The trap
- * after the switch is only reachable on a corrupt enum value (a defect).
- */
 typedef enum {
     COL_CKIND6_NONE = 0,
     COL_CKIND6_BREW,
@@ -195,12 +160,6 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
     return COL_CKIND6_NONE;
 }
 
-/**
- * Raw HP-heal magnitude for a consumable kind; the cell writer normalizes.
- *
- * Returns 0 for kinds that do not heal HP. A default branch is intentional:
- * most kinds have no HP-heal magnitude, and listing all 12 would be noise.
- */
 static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_hp) {
     switch (k) {
         case OSRS_CONSUMABLE_BREW:       return osrs_brew_heal_amount(base_hp);
@@ -210,11 +169,6 @@ static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_
     }
 }
 
-/**
- * Raw prayer-restore magnitude for a consumable kind; the cell writer normalizes.
- *
- * Returns 0 for kinds that do not restore prayer.
- */
 static inline int osrs_consumable_prayer_restore_amount(OsrsConsumableKind k, int base_prayer) {
     switch (k) {
         case OSRS_CONSUMABLE_SUPER_RESTORE: return osrs_super_restore_amount(base_prayer);
@@ -223,19 +177,6 @@ static inline int osrs_consumable_prayer_restore_amount(OsrsConsumableKind k, in
     }
 }
 
-/**
- * Raw offensive-boost magnitude for a consumable kind; the cell writer normalizes.
- *
- * Divine combat/ranging share the base boost magnitude with their non-divine
- * variants (the "divine" part is sustain, no separate amount helper). Saturated
- * heart routes here because its magic boost is offensive. Returns 0 otherwise.
- *
- * base_level is the style-relevant base level (attack for combat, ranged for
- * ranging, magic for saturated heart). Callers that pass a single base level
- * for all kinds rely on base_attack == base_ranged == base_magic, which holds
- * for the colosseum maxed player (all 99); the boost formulas are shallow
- * (4 + level/10) so even an off-style level differs by at most a point or two.
- */
 static inline int osrs_consumable_offensive_boost_amount(OsrsConsumableKind k, int base_level) {
     switch (k) {
         case OSRS_CONSUMABLE_SUPER_COMBAT:
@@ -247,13 +188,6 @@ static inline int osrs_consumable_offensive_boost_amount(OsrsConsumableKind k, i
     }
 }
 
-/**
- * Decodes an item effect mask into a 4-way effect-class one-hot.
- *
- * out[0] lifesteal, out[1] damage_amp, out[2] defensive, out[3] util. Every
- * effect bit (1<<0 .. 1<<15) is covered exactly once across the four classes.
- * Read-only descriptors already in {0, 1}; no clamp required.
- */
 static inline void osrs_item_effect_class4(uint32_t effect_mask, float out[4]) {
     uint32_t lifesteal = OSRS_ITEM_EFFECT_BLOOD_FURY | OSRS_ITEM_EFFECT_SANG_HEAL;
     uint32_t damage_amp = OSRS_ITEM_EFFECT_TWISTED_BOW | OSRS_ITEM_EFFECT_FANG |
@@ -270,11 +204,6 @@ static inline void osrs_item_effect_class4(uint32_t effect_mask, float out[4]) {
     out[3] = (effect_mask & util)       ? 1.0f : 0.0f;
 }
 
-/**
- * Finds an ITEM_DATABASE index by raw OSRS item id.
- *
- * Returns ITEM_NONE when the raw id is not an equippable database item.
- */
 static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
     for (int i = 0; i < NUM_ITEMS; i++) {
         if (ITEM_DATABASE[i].item_id == raw_osrs_id) return (uint8_t)i;
@@ -282,39 +211,6 @@ static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
     return ITEM_NONE;
 }
 
-/**
- * Writes the shared 28-float inventory-cell affordance layout.
- *
- * Layout:
- * [0] present
- * [1] is equipped
- * [2] dose fraction
- * [3] weapon melee style
- * [4] weapon ranged style
- * [5] weapon magic style
- * [6] slash attack delta
- * [7] melee strength delta
- * [8] ranged attack delta
- * [9] ranged strength delta
- * [10] magic attack plus damage delta
- * [11] aggregate defence delta
- * [12] REC1 is armor
- * [13] REC1 is weapon
- * [14] REC2 kind = brew
- * [15] REC2 kind = restore
- * [16] REC2 kind = combat boost
- * [17] REC2 kind = ranged boost
- * [18] REC2 kind = special
- * [19] REC3 hp heal normalized
- * [20] REC3 prayer restore normalized
- * [21] REC3 offensive boost normalized
- * [22] REC4 effect class = lifesteal
- * [23] REC4 effect class = damage amp
- * [24] REC4 effect class = defensive
- * [25] REC4 effect class = util
- * [26] REC5 weapon attack speed normalized
- * [27] REC5 weapon attack range normalized
- */
 static inline void osrs_write_inventory_cell_affordance_features(
     float* out,
     uint8_t item_idx,
@@ -341,18 +237,15 @@ static inline void osrs_write_inventory_cell_affordance_features(
     out[5] = style == 3 ? 1.0f : 0.0f;
     for (int i = 0; i < 6; i++) out[6 + i] = osrs_clamp_unit(post_use_deltas[i]);
 
-    /* REC1 role one-hot */
     int is_weapon = is_gear && ITEM_DATABASE[item_idx].slot == SLOT_WEAPON;
     out[12] = (is_gear && !is_weapon) ? 1.0f : 0.0f;
     out[13] = is_weapon ? 1.0f : 0.0f;
-    /* REC2 consumable kind */
     OsrsConsumableKind6 k6 = col_consumable_kind6(consumable.consumable_kind);
     out[14] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
     out[15] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
     out[16] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
     out[17] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
     out[18] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
-    /* REC3 consumable magnitudes */
     OsrsConsumableKind ck = consumable.consumable_kind;
     int hp_heal = osrs_consumable_hp_heal_amount(ck, base_hitpoints);
     int pray_restore = osrs_consumable_prayer_restore_amount(ck, base_prayer);
@@ -360,43 +253,18 @@ static inline void osrs_write_inventory_cell_affordance_features(
     out[19] = base_hitpoints > 0 ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
     out[20] = base_prayer > 0 ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
     out[21] = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
-    /* REC4 effect class */
     float eff4[4];
     osrs_item_effect_class4(effect_mask, eff4);
     out[22] = eff4[0];
     out[23] = eff4[1];
     out[24] = eff4[2];
     out[25] = eff4[3];
-    /* REC5 weapon speed + range */
     out[26] = is_weapon
         ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED) : 0.0f;
     out[27] = is_weapon
         ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_range / STAT_NORM_RANGE) : 0.0f;
 }
 
-/**
- * Writes the shared 18-float equipped-item self layout.
- *
- * Layout:
- * [0] present
- * [1] melee style
- * [2] ranged style
- * [3] magic style
- * [4] slash attack
- * [5] melee strength
- * [6] ranged attack
- * [7] ranged strength
- * [8] magic attack plus damage
- * [9] aggregate defence
- * [10] has item effect
- * [11] is weapon
- * [12] REC4 effect class = lifesteal
- * [13] REC4 effect class = damage amp
- * [14] REC4 effect class = defensive
- * [15] REC4 effect class = util
- * [16] REC5 weapon attack speed normalized
- * [17] REC5 weapon attack range normalized
- */
 static inline void osrs_write_equipped_self_features(float* out, uint8_t item_idx) {
     for (int i = 0; i < OSRS_EQUIPPED_SELF_OBS_FEATURES; i++) out[i] = 0.0f;
     if (item_idx == ITEM_NONE) return;
@@ -420,26 +288,18 @@ static inline void osrs_write_equipped_self_features(float* out, uint8_t item_id
     out[10] = item->effect_mask != OSRS_ITEM_EFFECT_NONE ? 1.0f : 0.0f;
     out[11] = item->slot == SLOT_WEAPON ? 1.0f : 0.0f;
 
-    /* REC4 effect class */
     float eff4[4];
     osrs_item_effect_class4(item->effect_mask, eff4);
     out[12] = eff4[0];
     out[13] = eff4[1];
     out[14] = eff4[2];
     out[15] = eff4[3];
-    /* REC5 weapon speed + range */
     out[16] = item->slot == SLOT_WEAPON
         ? osrs_clamp_unit((float)item->attack_speed / STAT_NORM_SPEED) : 0.0f;
     out[17] = item->slot == SLOT_WEAPON
         ? osrs_clamp_unit((float)item->attack_range / STAT_NORM_RANGE) : 0.0f;
 }
 
-/**
- * Classifies an ITEM_DATABASE index for the inventory "Use" action.
- *
- * ITEM_NONE is a valid empty cell and resolves to OSRS_CLICK_NONE. Any other
- * index outside ITEM_DATABASE is a defect and traps.
- */
 static inline OsrsClickAction osrs_item_click_action(uint8_t item_idx) {
     if (item_idx == ITEM_NONE) return OSRS_CLICK_NONE;
     if (item_idx >= NUM_ITEMS) osrs_inventory_clicks_trap();
@@ -463,23 +323,12 @@ static inline OsrsClickAction osrs_item_click_action(uint8_t item_idx) {
     }
 }
 
-/**
- * Returns the consumable kind for an ITEM_DATABASE index.
- *
- * Stage 1 keeps consumables out of ITEM_DATABASE, so valid gear and ITEM_NONE
- * return OSRS_CONSUMABLE_NONE. Invalid non-empty item indexes trap.
- */
 static inline OsrsConsumableKind osrs_item_click_consumable_kind(uint8_t item_idx) {
     if (item_idx == ITEM_NONE) return OSRS_CONSUMABLE_NONE;
     if (item_idx >= NUM_ITEMS) osrs_inventory_clicks_trap();
     return OSRS_CONSUMABLE_NONE;
 }
 
-/**
- * Looks up a raw OSRS item id in the colosseum consumable registry.
- *
- * Unknown ids are valid non-consumables and resolve to OSRS_CLICK_NONE.
- */
 static inline OsrsConsumableClick osrs_consumable_click_lookup_raw_osrs_id(
     uint16_t raw_osrs_id
 ) {
@@ -502,12 +351,6 @@ static inline OsrsConsumableClick osrs_consumable_click_lookup_raw_osrs_id(
     };
 }
 
-/**
- * Computes the dose count remaining after one drink.
- *
- * Dose counts outside 1..4 are defects because food and unknown cells should
- * never route through a drink transition.
- */
 static inline uint8_t osrs_consumable_dose_count_after_drink(uint8_t dose_count) {
     switch (dose_count) {
         case 1: return 0;
@@ -520,12 +363,6 @@ static inline uint8_t osrs_consumable_dose_count_after_drink(uint8_t dose_count)
     }
 }
 
-/**
- * Returns the raw OSRS id for a vial after one drink.
- *
- * A one-dose vial returns 0, meaning the cell becomes empty in Stage 2. Unknown
- * ids, food, and non-dose consumables trap because they are not vial drinks.
- */
 static inline uint16_t osrs_consumable_raw_osrs_id_after_drink(uint16_t raw_osrs_id) {
     OsrsConsumableClick before =
         osrs_consumable_click_lookup_raw_osrs_id(raw_osrs_id);
@@ -554,15 +391,6 @@ static inline uint16_t osrs_consumable_raw_osrs_id_after_drink(uint16_t raw_osrs
     return 0;
 }
 
-/**
- * Pure Stage 1 resolver for one inventory-cell click.
- *
- * item_idx is ITEM_DATABASE state for gear cells or ITEM_NONE for raw-id-only
- * consumables. raw_osrs_id is 0 for empty cells, may equal the gear item's
- * ITEM_DATABASE raw id for gear cells, and carries the potion or food item id
- * for consumable cells. If both item_idx and raw_osrs_id are set for gear, they
- * must agree. Stage 2 owns the state mutation after this pure result.
- */
 static inline OsrsInventoryClickResolution osrs_inventory_click_interpret(
     uint8_t item_idx,
     uint16_t raw_osrs_id,
@@ -680,14 +508,6 @@ static inline void osrs_inventory_cell_decrement_drink(
     cell->dose = osrs_consumable_dose_count_after_drink(resolution.dose_count);
 }
 
-/**
- * Consumes exactly one clicked drink cell and applies the one-dose effect.
- *
- * The shared slot-model contract owns the potion timer and raw-id transition.
- * Encounters provide only the effect of one accepted dose. A live timer returns
- * consumed=0 without mutating the cell or applying the effect. Invalid drink
- * resolution, dose mismatch, or a missing callback are defects and abort.
- */
 static inline OsrsInventoryDrinkConsumeResult osrs_inventory_cell_consume_drink_one_dose(
     OsrsInventoryCell* cell,
     OsrsInventoryClickResolution resolution,

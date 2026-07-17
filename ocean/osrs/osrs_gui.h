@@ -1,25 +1,3 @@
-/**
- * @fileoverview OSRS-style GUI panel system for the debug viewer.
- *
- * Renders inventory, equipment, prayer, combat, and spellbook panels
- * using real sprites exported from the OSRS cache (index 8). Tab bar
- * at the TOP matches the real OSRS fixed-mode client (7 tabs).
- *
- * Sprite sources (exported by scripts/export_sprites_modern.py):
- *   - equipment slot backgrounds: sprite IDs 156-165, 170
- *   - prayer icons (enabled/disabled): sprite IDs 115-154, 502-509, 945-951, 1420-1425
- *   - tab icons: sprite IDs 168, 898, 899, 900, 901, 779, 780
- *   - spell icons: sprite IDs 325-348, 375-398, 557, 561, 564, 607, 611, 614
- *   - special attack bar: sprite ID 657
- *
- * Layout constants derived from OSRS client widget definitions:
- *   - inventory: 4 columns x 7 rows, 36x32 item sprites
- *   - equipment: 11 slots in paperdoll layout (interface 387)
- *   - prayer: 5 columns x 6 rows grid (interface 541)
- *   - combat: 4 attack style buttons + special bar (interface 593)
- *   - spellbook: grid layout (interface 218)
- */
-
 #ifndef OSRS_GUI_H
 #define OSRS_GUI_H
 
@@ -45,7 +23,6 @@
 #include "osrs_inventory_clicks.h"
 #include "osrs_ui_interfaces.h"
 
-
 #define GUI_BG_DARK     CLITERAL(Color){ 62, 53, 41, 255 }
 #define GUI_BG_SLOT     CLITERAL(Color){ 56, 48, 38, 255 }
 #define GUI_BORDER      CLITERAL(Color){ 42, 36, 28, 255 }
@@ -56,7 +33,6 @@
 #define GUI_TEXT_GREEN   CLITERAL(Color){ 0, 255, 0, 255 }
 #define GUI_SPEC_GREEN  CLITERAL(Color){ 0, 180, 0, 255 }
 
-/* OSRS text shadow: draw black at (+1,+1) then color on top */
 #define GUI_TEXT_SHADOW CLITERAL(Color){ 0, 0, 0, 255 }
 
 #define GUI_MAP_CONTAINER_W 211
@@ -101,11 +77,10 @@
 
 #define GUI_TAB_PRESS_TICKS 6
 
-
 typedef enum {
     GUI_TAB_COMBAT = 0,
-    GUI_TAB_STATS = 1,       /* empty (no content) */
-    GUI_TAB_QUESTS = 2,      /* empty (no content) */
+    GUI_TAB_STATS = 1,
+    GUI_TAB_QUESTS = 2,
     GUI_TAB_INVENTORY = 3,
     GUI_TAB_EQUIPMENT = 4,
     GUI_TAB_PRAYER = 5,
@@ -113,100 +88,85 @@ typedef enum {
     GUI_TAB_COUNT = 7
 } GuiTab;
 
+#define GUI_NUM_SLOT_SPRITES 12
 
-/* slot background sprite IDs from cache index 8:
-   head=156, cape=157, neck=158, weapon=159, ring=160,
-   body=161, shield=162, legs=163, hands=164, feet=165, tile=170 */
-#define GUI_NUM_SLOT_SPRITES 12  /* 11 slots + tile background */
-
-
-/* prayer icons — authoritative 29-entry standard book.
-   enum order IS display order (left→right, top→bottom) in the 5×6 grid.
-   sprite IDs match the real OSRS SpriteID.Prayeron / Prayeroff mapping. */
 typedef enum {
-    GUI_PRAY_THICK_SKIN = 0,      /* row 0: sprite 115 / 135 */
-    GUI_PRAY_BURST_STR,           /*        sprite 116 / 136 */
-    GUI_PRAY_CLARITY,             /*        sprite 117 / 137 */
-    GUI_PRAY_SHARP_EYE,           /*        sprite 133 / 153 */
-    GUI_PRAY_MYSTIC_WILL,         /*        sprite 134 / 154 */
-    GUI_PRAY_ROCK_SKIN,           /* row 1: sprite 118 / 138 */
-    GUI_PRAY_SUPERHUMAN,          /*        sprite 119 / 139 */
-    GUI_PRAY_IMPROVED_REFLEX,     /*        sprite 120 / 140 */
-    GUI_PRAY_RAPID_RESTORE,       /*        sprite 121 / 141 */
-    GUI_PRAY_RAPID_HEAL,          /*        sprite 122 / 142 */
-    GUI_PRAY_PROTECT_ITEM,        /* row 2: sprite 123 / 143 */
-    GUI_PRAY_HAWK_EYE,            /*        sprite 502 / 506 */
-    GUI_PRAY_MYSTIC_LORE,         /*        sprite 503 / 507 */
-    GUI_PRAY_STEEL_SKIN,          /*        sprite 124 / 144 */
-    GUI_PRAY_ULTIMATE_STR,        /*        sprite 125 / 145 */
-    GUI_PRAY_INCREDIBLE_REFLEX,   /* row 3: sprite 126 / 146 */
-    GUI_PRAY_PROTECT_MAGIC,       /*        sprite 127 / 147 */
-    GUI_PRAY_PROTECT_MISSILES,    /*        sprite 128 / 148 */
-    GUI_PRAY_PROTECT_MELEE,       /*        sprite 129 / 149 */
-    GUI_PRAY_EAGLE_EYE,           /*        sprite 504 / 508 */
-    GUI_PRAY_MYSTIC_MIGHT,        /* row 4: sprite 505 / 509 */
-    GUI_PRAY_RETRIBUTION,         /*        sprite 131 / 151 */
-    GUI_PRAY_REDEMPTION,          /*        sprite 130 / 150 */
-    GUI_PRAY_SMITE,               /*        sprite 132 / 152 */
-    GUI_PRAY_PRESERVE,            /*        sprite 947 / 951 */
-    GUI_PRAY_CHIVALRY,            /* row 5: sprite 945 / 949 */
-    GUI_PRAY_PIETY,               /*        sprite 946 / 950 */
-    GUI_PRAY_RIGOUR,              /*        sprite 1420 / 1424 */
-    GUI_PRAY_AUGURY,              /*        sprite 1421 / 1425 */
-    GUI_NUM_PRAYERS               /* = 29 */
+    GUI_PRAY_THICK_SKIN = 0,
+    GUI_PRAY_BURST_STR,
+    GUI_PRAY_CLARITY,
+    GUI_PRAY_SHARP_EYE,
+    GUI_PRAY_MYSTIC_WILL,
+    GUI_PRAY_ROCK_SKIN,
+    GUI_PRAY_SUPERHUMAN,
+    GUI_PRAY_IMPROVED_REFLEX,
+    GUI_PRAY_RAPID_RESTORE,
+    GUI_PRAY_RAPID_HEAL,
+    GUI_PRAY_PROTECT_ITEM,
+    GUI_PRAY_HAWK_EYE,
+    GUI_PRAY_MYSTIC_LORE,
+    GUI_PRAY_STEEL_SKIN,
+    GUI_PRAY_ULTIMATE_STR,
+    GUI_PRAY_INCREDIBLE_REFLEX,
+    GUI_PRAY_PROTECT_MAGIC,
+    GUI_PRAY_PROTECT_MISSILES,
+    GUI_PRAY_PROTECT_MELEE,
+    GUI_PRAY_EAGLE_EYE,
+    GUI_PRAY_MYSTIC_MIGHT,
+    GUI_PRAY_RETRIBUTION,
+    GUI_PRAY_REDEMPTION,
+    GUI_PRAY_SMITE,
+    GUI_PRAY_PRESERVE,
+    GUI_PRAY_CHIVALRY,
+    GUI_PRAY_PIETY,
+    GUI_PRAY_RIGOUR,
+    GUI_PRAY_AUGURY,
+    GUI_NUM_PRAYERS
 } GuiPrayerIdx;
 
-
-/* Ancient spellbook sorted by level: combat spells followed by teleports. */
 typedef enum {
-    GUI_SPELL_SMOKE_RUSH = 0,     /* sprite 329 / 379 */
-    GUI_SPELL_SHADOW_RUSH,        /* sprite 337 / 387 */
-    GUI_SPELL_BLOOD_RUSH,         /* sprite 333 / 383 */
-    GUI_SPELL_ICE_RUSH,           /* sprite 325 / 375 */
-    GUI_SPELL_SMOKE_BURST,        /* sprite 330 / 380 */
-    GUI_SPELL_SHADOW_BURST,       /* sprite 338 / 388 */
-    GUI_SPELL_BLOOD_BURST,        /* sprite 334 / 384 */
-    GUI_SPELL_ICE_BURST,          /* sprite 326 / 376 */
-    GUI_SPELL_SMOKE_BLITZ,        /* sprite 331 / 381 */
-    GUI_SPELL_SHADOW_BLITZ,       /* sprite 339 / 389 */
-    GUI_SPELL_BLOOD_BLITZ,        /* sprite 335 / 385 */
-    GUI_SPELL_ICE_BLITZ,          /* sprite 327 / 377 */
-    GUI_SPELL_SMOKE_BARRAGE,      /* sprite 332 / 382 */
-    GUI_SPELL_SHADOW_BARRAGE,     /* sprite 340 / 390 */
-    GUI_SPELL_BLOOD_BARRAGE,      /* sprite 336 / 386 */
-    GUI_SPELL_ICE_BARRAGE,        /* sprite 328 / 378 */
-    GUI_SPELL_PADDEWWA_TELEPORT,   /* sprite 341 / 391 */
-    GUI_SPELL_SENNTISTEN_TELEPORT, /* sprite 342 / 392 */
-    GUI_SPELL_KHARYRLL_TELEPORT,   /* sprite 343 / 393 */
-    GUI_SPELL_LASSAR_TELEPORT,     /* sprite 344 / 394 */
-    GUI_SPELL_DAREEYAK_TELEPORT,   /* sprite 345 / 395 */
-    GUI_SPELL_CARRALLANGER_TELEPORT, /* sprite 346 / 396 */
-    GUI_SPELL_ANNAKARL_TELEPORT,   /* sprite 347 / 397 */
-    GUI_SPELL_GHORROCK_TELEPORT,   /* sprite 348 / 398 */
+    GUI_SPELL_SMOKE_RUSH = 0,
+    GUI_SPELL_SHADOW_RUSH,
+    GUI_SPELL_BLOOD_RUSH,
+    GUI_SPELL_ICE_RUSH,
+    GUI_SPELL_SMOKE_BURST,
+    GUI_SPELL_SHADOW_BURST,
+    GUI_SPELL_BLOOD_BURST,
+    GUI_SPELL_ICE_BURST,
+    GUI_SPELL_SMOKE_BLITZ,
+    GUI_SPELL_SHADOW_BLITZ,
+    GUI_SPELL_BLOOD_BLITZ,
+    GUI_SPELL_ICE_BLITZ,
+    GUI_SPELL_SMOKE_BARRAGE,
+    GUI_SPELL_SHADOW_BARRAGE,
+    GUI_SPELL_BLOOD_BARRAGE,
+    GUI_SPELL_ICE_BARRAGE,
+    GUI_SPELL_PADDEWWA_TELEPORT,
+    GUI_SPELL_SENNTISTEN_TELEPORT,
+    GUI_SPELL_KHARYRLL_TELEPORT,
+    GUI_SPELL_LASSAR_TELEPORT,
+    GUI_SPELL_DAREEYAK_TELEPORT,
+    GUI_SPELL_CARRALLANGER_TELEPORT,
+    GUI_SPELL_ANNAKARL_TELEPORT,
+    GUI_SPELL_GHORROCK_TELEPORT,
     GUI_NUM_SPELLS
 } GuiSpellIdx;
 
-
-/* inventory slot types: either an equipment item (ITEM_DATABASE index) or a consumable.
-   consumables are tracked as counts in Player, not as individual ITEM_DATABASE entries,
-   so we use dedicated types with known OSRS item IDs for sprite lookup. */
 typedef enum {
     INV_SLOT_EMPTY = 0,
-    INV_SLOT_EQUIPMENT,     /* item_db_idx holds ITEM_DATABASE index */
-    INV_SLOT_FOOD,          /* shark (OSRS ID 385) */
-    INV_SLOT_KARAMBWAN,     /* cooked karambwan (OSRS ID 3144) */
-    INV_SLOT_BREW,          /* saradomin brew (OSRS IDs 6685/6687/6689/6691 for 4/3/2/1 dose) */
-    INV_SLOT_RESTORE,       /* super restore (OSRS IDs 3024/3026/3028/3030) */
-    INV_SLOT_COMBAT_POT,    /* super combat (OSRS IDs 12695/12697/12699/12701) */
-    INV_SLOT_RANGED_POT,    /* ranging potion (OSRS IDs 2444/169/171/173) */
-    INV_SLOT_ANTIVENOM,     /* anti-venom+ (OSRS IDs 12913/12915/12917/12919) */
-    INV_SLOT_PRAYER_POT,    /* prayer potion (OSRS IDs 2434/139/141/143 for 4/3/2/1 dose) */
-    INV_SLOT_BASTION_POT,   /* bastion potion (OSRS IDs 22461/22464/22467/22470) */
-    INV_SLOT_STAMINA_POT,   /* stamina potion (OSRS IDs 12625/12627/12629/12631) */
-    INV_SLOT_SATURATED_HEART, /* saturated heart (OSRS ID 27641) */
+    INV_SLOT_EQUIPMENT,
+    INV_SLOT_FOOD,
+    INV_SLOT_KARAMBWAN,
+    INV_SLOT_BREW,
+    INV_SLOT_RESTORE,
+    INV_SLOT_COMBAT_POT,
+    INV_SLOT_RANGED_POT,
+    INV_SLOT_ANTIVENOM,
+    INV_SLOT_PRAYER_POT,
+    INV_SLOT_BASTION_POT,
+    INV_SLOT_STAMINA_POT,
+    INV_SLOT_SATURATED_HEART,
 } InvSlotType;
 
-/* OSRS item IDs for consumable sprites (4-dose shown by default) */
 #define OSRS_ID_SHARK         385
 #define OSRS_ID_KARAMBWAN     3144
 #define OSRS_ID_BREW_4        6685
@@ -243,20 +203,17 @@ typedef enum {
 #define OSRS_ID_STAMINA_1     12631
 #define OSRS_ID_SATURATED_HEART 27641
 
-#define INV_GRID_SLOTS 28  /* 4 columns x 7 rows */
+#define INV_GRID_SLOTS 28
 
 typedef struct {
     InvSlotType type;
-    uint8_t     item_db_idx;   /* ITEM_DATABASE index (for INV_SLOT_EQUIPMENT) */
-    int         osrs_id;       /* OSRS item ID (for sprite lookup, all types) */
+    uint8_t     item_db_idx;
+    int         osrs_id;
 } InvSlot;
 
-/* click/drag interaction state */
-#define INV_DIM_TICKS 15       /* client ticks (50 Hz) to show dim after click */
-#define INV_DRAG_DEAD_ZONE 5   /* pixels before drag activates */
-#define INV_DRAG_HOLD_SECONDS 0.030  /* anti-drag: button must be held this long
-                                        before a drag can start; a faster
-                                        press-move-release stays a click */
+#define INV_DIM_TICKS 15
+#define INV_DRAG_DEAD_ZONE 5
+#define INV_DRAG_HOLD_SECONDS 0.030
 
 typedef enum {
     INV_ACTION_NONE = 0,
@@ -335,22 +292,16 @@ typedef struct {
     int panel_x, panel_y;
     int panel_w, panel_h;
     int tab_h;
-    int status_bar_h;    /* compact HP/prayer/spec bar height */
+    int status_bar_h;
 
-    /* chrome draw-time zoom set by the render client (0 = treat as 1.0).
-       panel/minimap coordinates stay native; drawing and hit-testing map
-       through the fixed-point transforms in gui_mouse_to_*_space. */
     float ui_scale;
 
-    /* multi-entity cycling (G key) */
     int gui_entity_idx;
     int gui_entity_count;
 
-    /* encounter state (for boss info display below panel) */
     void* encounter_state;
     const void* encounter_def;
 
-    /* textures loaded from exported cache sprites */
     int sprites_loaded;
     GuiNamedAsset named_assets[GUI_MAX_NAMED_ASSETS];
     int named_asset_count;
@@ -362,59 +313,40 @@ typedef struct {
     GuiItemStackVariant item_stack_variants[GUI_ITEM_STACK_VARIANT_MAX];
     int item_stack_variant_count;
 
-    /* equipment slot background sprites (indexed by GEAR_SLOT_*) */
     Texture2D slot_sprites[GUI_NUM_SLOT_SPRITES];
 
     int tab_press_timer[GUI_TAB_COUNT];
 
-    /* prayer icons: enabled and disabled variants */
     Texture2D prayer_on[GUI_NUM_PRAYERS];
 
-    /* spell icons: enabled and disabled variants */
     Texture2D spell_on[GUI_NUM_SPELLS];
     Texture2D spell_off[GUI_NUM_SPELLS];
 
-    /* interface chrome sprites */
-    Texture2D slot_tile;           /* 170: equipment slot background */
+    Texture2D slot_tile;
 
-    /* minimap chrome sprites (canonical OSRS sprite IDs from RuneLite SpriteID).
-       loaded once at init, then composited each frame in render_draw_minimap_area.
-       both fixed-mode (1182/1183/1184) and resizable-mode (1177/1178/1179)
-       variants are kept resident so the layout can be switched at runtime. */
-    Texture2D minimap_compass;       /* 169: compass disc, rotates with cam yaw */
+    Texture2D minimap_compass;
     Texture2D minimap_compass_masked;
-    Texture2D minimap_alpha_mask;    /* 1183: fixed-mode circular cutout */
-    Texture2D minimap_frame;         /* 1182: fixed-mode frame chrome */
-    Texture2D rm_minimap_alpha_mask; /* 1178: resizable-mode circular cutout */
-    Texture2D rm_minimap_frame;      /* 1177: resizable-mode frame chrome */
-    Texture2D rm_compass_alpha_mask; /* 1179: resizable-mode compass mask */
-    Texture2D rm_tabs_top_row;         /* 1173: 241x37 top tab strip */
-    Texture2D minimap_dot_player;    /* 512: white square for player */
-    Texture2D minimap_dot_npc;       /* 511: yellow square for NPCs */
+    Texture2D minimap_alpha_mask;
+    Texture2D minimap_frame;
+    Texture2D rm_minimap_alpha_mask;
+    Texture2D rm_minimap_frame;
+    Texture2D rm_compass_alpha_mask;
+    Texture2D rm_tabs_top_row;
+    Texture2D minimap_dot_player;
+    Texture2D minimap_dot_npc;
     int minimap_chrome_loaded;
 
-    /* item sprites: keyed by OSRS item ID (from data/sprites/items/{id}.png) */
     #define GUI_MAX_ITEM_SPRITES 256
-    int item_sprite_ids[GUI_MAX_ITEM_SPRITES];     /* OSRS item ID, 0 = empty */
-    Texture2D item_sprite_tex[GUI_MAX_ITEM_SPRITES]; /* corresponding texture */
+    int item_sprite_ids[GUI_MAX_ITEM_SPRITES];
+    Texture2D item_sprite_tex[GUI_MAX_ITEM_SPRITES];
     int item_sprite_count;
 
-    /* inventory grid: 28 slots (4x7). initialized once at reset, then updated
-       incrementally — items stay in their assigned slots (no compaction on eat).
-       positions are user-rearrangeable via drag-and-drop. */
     InvSlot inv_grid[INV_GRID_SLOTS];
-    int inv_grid_dirty;   /* 1 = needs full rebuild from player state */
+    int inv_grid_dirty;
 
-    /* render-only inventory override: when display_inventory_count > 0, the panel
-       renders this fixed list of OSRS item ids instead of the derived grid. The
-       colosseum render bridge sets it to the wiki kit's exact 28-slot inventory so
-       the panel matches the reference 1:1; 0 = use the derived grid. Never read by
-       the sim. */
     int display_inventory_osrs_ids[INV_GRID_SLOTS];
     int display_inventory_count;
 
-    /* previous player state for incremental inventory updates.
-       compared each tick to detect gear switches and consumable use. */
     uint8_t inv_prev_equipped[NUM_GEAR_SLOTS];
     int inv_prev_food_count;
     int inv_prev_karambwan_count;
@@ -428,34 +360,23 @@ typedef struct {
     int inv_prev_antivenom_doses;
     int inv_prev_saturated_heart_count;
 
-    /* human-clicked inventory slot: when a human clicks a consumable, this records
-       the exact slot so gui_update_inventory removes from that slot instead of the
-       last one. -1 = no human click pending, use default last-slot removal. */
     int human_clicked_inv_slot;
 
-    /* click dim animation: slot index and countdown (50 Hz client ticks) */
-    int inv_dim_slot;     /* -1 = none */
-    int inv_dim_timer;    /* counts down from INV_DIM_TICKS */
+    int inv_dim_slot;
+    int inv_dim_timer;
 
-    /* drag state */
-    int inv_drag_active;       /* 1 = currently dragging */
-    int inv_drag_src_slot;     /* slot being dragged */
-    int inv_drag_start_x;     /* mouse position at drag start */
+    int inv_drag_active;
+    int inv_drag_src_slot;
+    int inv_drag_start_x;
     int inv_drag_start_y;
-    int inv_drag_mouse_x;     /* current mouse position during drag */
+    int inv_drag_mouse_x;
     int inv_drag_mouse_y;
-    double inv_drag_press_time; /* GetTime() at mouse-down on the src slot */
+    double inv_drag_press_time;
 
-    /* spell targeting: GuiSpellIdx of the spell awaiting an enemy click, or
-       -1 when not targeting. render code sets this before calling gui_draw. */
     int pending_spell_highlight;
     int autocast_selector_open;
 } GuiState;
 
-/** Map a raw screen coordinate into the side panel's native coordinate space.
-    The panel draws at native sprite size under a ui_scale zoom about the
-    window's bottom-right corner, which coincides with the panel rect's own
-    bottom-right, so the inverse is a fixed-point scale about that corner. */
 static inline void gui_mouse_to_panel_space(
     const GuiState* gs, int mx, int my, int* out_x, int* out_y
 ) {
@@ -466,8 +387,6 @@ static inline void gui_mouse_to_panel_space(
     *out_y = (int)lroundf(fy + ((float)my - fy) / k);
 }
 
-/** Same mapping for the minimap block, which zooms about the window's
-    top-right corner (= the panel column's right edge at y 0). */
 static inline void gui_mouse_to_minimap_space(
     const GuiState* gs, int mx, int my, int* out_x, int* out_y
 ) {
@@ -477,8 +396,6 @@ static inline void gui_mouse_to_minimap_space(
     *out_y = (int)lroundf((float)my / k);
 }
 
-
-/** Try loading a texture, returns 1 on success. */
 static int gui_try_load(Texture2D* tex, const char* path) {
     if (osrs_asset_exists(path)) {
         *tex = osrs_asset_load_texture(path);
@@ -527,12 +444,6 @@ static Rectangle gui_rect_intersect(Rectangle a, Rectangle b) {
     return (Rectangle){x1, y1, x2 - x1, y2 - y1};
 }
 
-/** Scissor a native panel-space rect. BeginScissorMode operates in raw screen
-    coordinates, but the panel chrome draws under the ui_scale fixed-point zoom
-    about the panel rect's bottom-right corner (= the window corner), so the
-    rect must map through the same transform the camera applies or the clip
-    lands offset and eats rows of content. Clip state stays native-space; only
-    this boundary converts. */
 static void gui_apply_scissor(const GuiState* gs, Rectangle rect) {
     float k = gs->ui_scale > 0.0f ? gs->ui_scale : 1.0f;
     float fx = (float)(gs->panel_x + gs->panel_w);
@@ -751,7 +662,6 @@ static void gui_require_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     abort();
 }
 
-/** Load all GUI sprites from data/sprites/gui/. */
 static void gui_load_sprites(GuiState* gs) {
     gs->sprites_loaded = 1;
     int ok = 1;
@@ -760,22 +670,19 @@ static void gui_load_sprites(GuiState* gs) {
     gui_load_fonts(gs);
     gui_load_item_stack_variants(gs);
 
-    /* equipment slot backgrounds: sprite IDs mapped to GEAR_SLOT_* order.
-       GEAR_SLOT: HEAD=0, CAPE=1, NECK=2, AMMO=3, WEAPON=4, SHIELD=5,
-                  BODY=6, LEGS=7, HANDS=8, FEET=9, RING=10 */
     const char* slot_files[] = {
-        OSRS_ASSET("sprites/gui/slot_head.png"),    /* GEAR_SLOT_HEAD */
-        OSRS_ASSET("sprites/gui/slot_cape.png"),    /* GEAR_SLOT_CAPE */
-        OSRS_ASSET("sprites/gui/slot_neck.png"),    /* GEAR_SLOT_NECK */
-        OSRS_ASSET("sprites/gui/slot_tile.png"),    /* GEAR_SLOT_AMMO (use tile bg) */
-        OSRS_ASSET("sprites/gui/slot_weapon.png"),  /* GEAR_SLOT_WEAPON */
-        OSRS_ASSET("sprites/gui/slot_shield.png"),  /* GEAR_SLOT_SHIELD */
-        OSRS_ASSET("sprites/gui/slot_body.png"),    /* GEAR_SLOT_BODY */
-        OSRS_ASSET("sprites/gui/slot_legs.png"),    /* GEAR_SLOT_LEGS */
-        OSRS_ASSET("sprites/gui/slot_hands.png"),   /* GEAR_SLOT_HANDS */
-        OSRS_ASSET("sprites/gui/slot_feet.png"),    /* GEAR_SLOT_FEET */
-        OSRS_ASSET("sprites/gui/slot_ring.png"),    /* GEAR_SLOT_RING */
-        OSRS_ASSET("sprites/gui/slot_tile.png"),    /* spare tile bg */
+        OSRS_ASSET("sprites/gui/slot_head.png"),
+        OSRS_ASSET("sprites/gui/slot_cape.png"),
+        OSRS_ASSET("sprites/gui/slot_neck.png"),
+        OSRS_ASSET("sprites/gui/slot_tile.png"),
+        OSRS_ASSET("sprites/gui/slot_weapon.png"),
+        OSRS_ASSET("sprites/gui/slot_shield.png"),
+        OSRS_ASSET("sprites/gui/slot_body.png"),
+        OSRS_ASSET("sprites/gui/slot_legs.png"),
+        OSRS_ASSET("sprites/gui/slot_hands.png"),
+        OSRS_ASSET("sprites/gui/slot_feet.png"),
+        OSRS_ASSET("sprites/gui/slot_ring.png"),
+        OSRS_ASSET("sprites/gui/slot_tile.png"),
     };
     for (int i = 0; i < GUI_NUM_SLOT_SPRITES; i++) {
         ok &= gui_try_load(&gs->slot_sprites[i], slot_files[i]);
@@ -796,11 +703,8 @@ static void gui_load_sprites(GuiState* gs) {
         gui_try_load(&gs->spell_off[i], off_path);
     }
 
-    /* interface chrome */
     gui_try_load(&gs->slot_tile, OSRS_ASSET("sprites/gui/slot_tile.png"));
 
-    /* canonical OSRS minimap chrome (loaded best-effort; gracefully omitted if
-       the asset bundle predates the export pipeline update). */
     gs->minimap_chrome_loaded = 1;
     gs->minimap_chrome_loaded &= gui_try_load(&gs->minimap_compass,
         OSRS_ASSET("sprites/gui/compass.png"));
@@ -900,7 +804,6 @@ static void gui_load_sprites(GuiState* gs) {
         TraceLog(LOG_WARNING, "GUI: some sprites missing from data/sprites/gui/");
     }
 
-    /* load item sprites from data/sprites/items/{item_id}.png */
     gs->item_sprite_count = 0;
     for (int i = 0; i < NUM_ITEMS && gs->item_sprite_count < GUI_MAX_ITEM_SPRITES; i++) {
         int item_id = ITEM_DATABASE[i].item_id;
@@ -908,7 +811,6 @@ static void gui_load_sprites(GuiState* gs) {
         gui_load_sprite_by_osrs_id_if_present(gs, item_id);
     }
 
-    /* consumable sprites: not in ITEM_DATABASE, load by OSRS item ID directly */
     static const int consumable_ids[] = {
         OSRS_ID_SHARK, OSRS_ID_KARAMBWAN,
         OSRS_ID_BREW_4, OSRS_ID_BREW_3, OSRS_ID_BREW_2, OSRS_ID_BREW_1,
@@ -929,7 +831,6 @@ static void gui_load_sprites(GuiState* gs) {
     TraceLog(LOG_INFO, "GUI: loaded %d item sprites (incl consumables)", gs->item_sprite_count);
 }
 
-/** Look up item sprite texture by item database index. Returns NULL texture (id=0) if not found. */
 static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id);
 
 static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
@@ -939,7 +840,6 @@ static Texture2D gui_get_item_sprite(GuiState* gs, uint8_t item_idx) {
     return gui_get_sprite_by_osrs_id(gs, item_id);
 }
 
-/** Look up item sprite texture by OSRS item ID directly (for consumables). */
 static Texture2D gui_get_sprite_by_osrs_id(GuiState* gs, int osrs_id) {
     Texture2D empty = { 0 };
     if (osrs_id <= 0) return empty;
@@ -1020,7 +920,6 @@ static void gui_format_stack_quantity(int quantity, char* dst, size_t cap) {
     }
 }
 
-/** Unload all GUI textures. */
 static void gui_unload_sprites(GuiState* gs) {
     osrs_ui_interfaces_unload(&gs->ui_interfaces);
     if (!gs->sprites_loaded) return;
@@ -1056,7 +955,6 @@ static void gui_unload_sprites(GuiState* gs) {
     gs->item_stack_variant_count = 0;
     gs->sprites_loaded = 0;
 }
-
 
 static const char* gui_item_short_name(uint8_t item_idx) {
     if (item_idx == ITEM_NONE || item_idx >= NUM_ITEMS) return "";
@@ -1169,8 +1067,6 @@ static const char* gui_item_short_name(uint8_t item_idx) {
     }
 }
 
-
-/** Draw text with OSRS-style shadow (black at +1,+1, then color). */
 static void gui_text_shadow(
     const GuiState* gs,
     const char* text,
@@ -1187,7 +1083,6 @@ static void gui_text_shadow(
     DrawTextEx(font, text, pos, (float)size, 0.0f, color);
 }
 
-/** Draw an OSRS-style beveled slot rectangle. */
 static void gui_draw_slot(int x, int y, int w, int h, Color fill) {
     DrawRectangle(x, y, w, h, fill);
     DrawRectangleLines(x, y, w, h, GUI_BORDER);
@@ -1195,10 +1090,8 @@ static void gui_draw_slot(int x, int y, int w, int h, Color fill) {
     DrawLine(x + 1, y + 1, x + 1, y + h - 2, GUI_BORDER_LT);
 }
 
-/** Draw texture centered within a box, scaled to fit. */
 static void gui_draw_tex_centered(Texture2D tex, int bx, int by, int bw, int bh) {
     if (tex.id == 0) return;
-    /* scale to fit while maintaining aspect ratio */
     float sx = (float)(bw - 4) / (float)tex.width;
     float sy = (float)(bh - 4) / (float)tex.height;
     float s = (sx < sy) ? sx : sy;
@@ -1209,10 +1102,8 @@ static void gui_draw_tex_centered(Texture2D tex, int bx, int by, int bw, int bh)
     DrawTextureEx(tex, (Vector2){ (float)dx, (float)dy }, 0.0f, s, WHITE);
 }
 
-/** Draw an equipment slot using real OSRS slot tile sprite + item/silhouette sprite. */
 static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
                                 int gear_slot, uint8_t item_idx) {
-    /* draw slot_tile (real OSRS 36x36 stone square) as background */
     if (gs->slot_tile.id != 0) {
         Rectangle src = { 0, 0, (float)gs->slot_tile.width, (float)gs->slot_tile.height };
         Rectangle dst = { (float)x, (float)y, (float)w, (float)h };
@@ -1221,7 +1112,6 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
         gui_draw_slot(x, y, w, h, GUI_BG_SLOT);
     }
 
-    /* draw item sprite if equipped, else slot silhouette */
     if (item_idx != ITEM_NONE && item_idx < NUM_ITEMS) {
         Texture2D item_tex = gui_get_item_sprite(gs, item_idx);
         if (item_tex.id != 0) {
@@ -1237,7 +1127,6 @@ static void gui_draw_equip_slot(GuiState* gs, int x, int y, int w, int h,
         }
     }
 }
-
 
 typedef struct {
     int logical_tab;
@@ -1754,16 +1643,10 @@ static int gui_handle_tab_click(GuiState* gs, int mouse_x, int mouse_y) {
     return 0;
 }
 
-
 static int gui_content_y(GuiState* gs) {
     return gs->panel_y + gs->status_bar_h + gs->tab_h;
 }
 
-
-/* inventory grid: OSRS native static-pixel layout per [proc,inventory_build]:
-   slots are 36x32 icons drawn 1:1 at x0 = (42-36)*3-2 = 16, y0 = (36-32)*2 = 8
-   on a 42x36 pitch, with NO backing box behind them. Hit areas are the icon
-   bounds, exactly like the real client's inventory components. */
 #define INV_COLS 4
 #define INV_PANEL_CONTENT_X GUI_SIDE_CONTENT_X
 #define INV_SLOT_X 16
@@ -1773,7 +1656,6 @@ static int gui_content_y(GuiState* gs) {
 #define INV_SPRITE_W 36
 #define INV_SPRITE_H 32
 
-/** Get the OSRS item ID for a consumable based on remaining doses/count. */
 static int gui_consumable_osrs_id(InvSlotType type, int doses) {
     switch (type) {
         case INV_SLOT_FOOD:       return OSRS_ID_SHARK;
@@ -1824,8 +1706,6 @@ static int gui_consumable_osrs_id(InvSlotType type, int doses) {
     }
 }
 
-/** Find first empty slot in inventory grid (scanning left→right, top→bottom).
-    Returns -1 if inventory is full. */
 static int gui_inv_first_empty(GuiState* gs) {
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
         if (gs->inv_grid[i].type == INV_SLOT_EMPTY) return i;
@@ -1833,8 +1713,6 @@ static int gui_inv_first_empty(GuiState* gs) {
     return -1;
 }
 
-/** Find the slot index of an equipment item in the inventory grid.
-    Returns -1 if not found. */
 static int gui_inv_find_equipment(GuiState* gs, uint8_t item_db_idx) {
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
         if (gs->inv_grid[i].type == INV_SLOT_EQUIPMENT &&
@@ -1843,10 +1721,6 @@ static int gui_inv_find_equipment(GuiState* gs, uint8_t item_db_idx) {
     return -1;
 }
 
-/** Remove the last occurrence of a consumable type from the inventory grid.
-    In OSRS, eating removes from the slot the item is in — we remove from the
-    last slot of that type (bottom-right first) since that's where the cursor
-    typically is when spam-eating. Returns 1 if removed, 0 if not found. */
 static int gui_inv_remove_last_consumable(GuiState* gs, InvSlotType type) {
     for (int i = INV_GRID_SLOTS - 1; i >= 0; i--) {
         if (gs->inv_grid[i].type == type) {
@@ -1859,8 +1733,6 @@ static int gui_inv_remove_last_consumable(GuiState* gs, InvSlotType type) {
     return 0;
 }
 
-/** Place an equipment item into the inventory grid at the first empty slot.
-    Returns the slot index, or -1 if full. */
 static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
     int slot = gui_inv_first_empty(gs);
     if (slot < 0) return -1;
@@ -1870,7 +1742,6 @@ static int gui_inv_place_equipment(GuiState* gs, uint8_t item_db_idx) {
     return slot;
 }
 
-/** Copy the player-side inventory snapshot that incremental GUI updates diff against. */
 static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
     memcpy(gs->inv_prev_equipped, p->equipped, NUM_GEAR_SLOTS);
     gs->inv_prev_food_count = p->food_count;
@@ -1886,7 +1757,6 @@ static void gui_snapshot_inventory_state(GuiState* gs, const Player* p) {
     gs->inv_prev_saturated_heart_count = p->saturated_heart_count;
 }
 
-/** Return 1 when any inventory-tracked consumable count changed. */
 static int gui_inventory_consumables_changed(const GuiState* gs, const Player* p) {
     return p->food_count != gs->inv_prev_food_count
         || p->karambwan_count != gs->inv_prev_karambwan_count
@@ -1901,7 +1771,6 @@ static int gui_inventory_consumables_changed(const GuiState* gs, const Player* p
         || p->saturated_heart_count != gs->inv_prev_saturated_heart_count;
 }
 
-/** Clear inventory-only GUI state that must not leak across resets. */
 static void gui_reset_inventory_ui_state(GuiState* gs) {
     gs->inv_grid_dirty = 1;
     gs->human_clicked_inv_slot = -1;
@@ -1919,25 +1788,19 @@ static void gui_reset_inventory_ui_state(GuiState* gs) {
     }
 }
 
-/** Full inventory grid build from player state. Called once at reset.
-    Equipment items go first (unequipped gear), then consumables.
-    After this, use gui_update_inventory() for incremental changes. */
 static void gui_populate_inventory(GuiState* gs, Player* p) {
     memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
     int n = 0;
 
-    /* unequipped gear items from the slot inventory */
     for (int s = 0; s < NUM_GEAR_SLOTS && n < INV_GRID_SLOTS; s++) {
         for (int i = 0; i < p->num_items_in_slot[s] && n < INV_GRID_SLOTS; i++) {
             uint8_t item = p->inventory[s][i];
             if (item == ITEM_NONE) continue;
-            /* skip if currently equipped */
             int is_equipped = 0;
             for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
                 if (p->equipped[e] == item) { is_equipped = 1; break; }
             }
             if (is_equipped) continue;
-            /* skip duplicates */
             int dup = 0;
             for (int j = 0; j < n; j++) {
                 if (gs->inv_grid[j].type == INV_SLOT_EQUIPMENT &&
@@ -1951,11 +1814,6 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* consumables: food/potions are NOT stackable in OSRS.
-       each shark = 1 slot. each potion vial = 1 slot (with dose-specific sprite).
-       total doses are split into individual vials: e.g. 7 brew doses = 1x3-dose + 1x4-dose. */
-
-    /* food: each unit = 1 slot */
     for (int i = 0; i < p->food_count && n < INV_GRID_SLOTS; i++) {
         gs->inv_grid[n].type = INV_SLOT_FOOD;
         gs->inv_grid[n].osrs_id = OSRS_ID_SHARK;
@@ -1967,7 +1825,6 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
         n++;
     }
 
-    /* potions: split doses into individual vials (4-dose first, remainder last) */
     #define ADD_POTION_VIALS(doses_total, slot_type) do { \
         int _rem = (doses_total); \
         while (_rem > 0 && n < INV_GRID_SLOTS) { \
@@ -1995,17 +1852,11 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
         n++;
     }
 
-    /* snapshot player state for incremental change detection */
     gui_snapshot_inventory_state(gs, p);
 }
 
-/** Update potion vial doses in-place when doses change.
-    E.g. drinking 1 dose from a 4-dose brew changes it to 3-dose (different sprite).
-    When human_clicked_inv_slot targets a vial of this type, that specific vial loses
-    the dose first (OSRS behavior: you drink from the vial you clicked). */
 static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
                                          int total_doses) {
-    /* collect existing vials of this type */
     int vial_slots[INV_GRID_SLOTS];
     int vial_count = 0;
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
@@ -2015,10 +1866,8 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
     if (vial_count == 0) return;
 
-    /* figure out how many doses were lost */
     int old_total = 0;
     for (int v = 0; v < vial_count; v++) {
-        /* reverse-lookup current dose count from OSRS ID */
         int oid = gs->inv_grid[vial_slots[v]].osrs_id;
         int d4 = gui_consumable_osrs_id(type, 4);
         int d3 = gui_consumable_osrs_id(type, 3);
@@ -2031,11 +1880,9 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
     int doses_lost = old_total - total_doses;
 
-    /* if a human clicked a specific vial of this type, decrement that one first */
     int clicked = gs->human_clicked_inv_slot;
     if (doses_lost > 0 && clicked >= 0 && clicked < INV_GRID_SLOTS &&
         gs->inv_grid[clicked].type == type) {
-        /* find current dose count of clicked vial */
         int oid = gs->inv_grid[clicked].osrs_id;
         int cur_dose = 0;
         for (int d = 4; d >= 1; d--) {
@@ -2055,11 +1902,9 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
         }
     }
 
-    /* if doses still need removing (non-human or multiple doses lost),
-       take from remaining vials in reverse order (last first) */
     for (int v = vial_count - 1; v >= 0 && doses_lost > 0; v--) {
         int slot = vial_slots[v];
-        if (slot == clicked) continue; /* already handled */
+        if (slot == clicked) continue;
         if (gs->inv_grid[slot].type != type) continue;
         int oid = gs->inv_grid[slot].osrs_id;
         int cur_dose = 0;
@@ -2080,26 +1925,15 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
 }
 
-/** Incremental inventory update. Detects gear switches and consumable changes
-    by comparing against the previous snapshot, then modifies only affected slots.
-    Items stay in their assigned positions — no compaction on eat/drink.
-
-    OSRS gear swap rule: when you click an inventory item to equip it, the
-    previously equipped item goes into that exact inventory slot (direct swap).
-    Exception: equipping a 2H weapon while a shield is equipped — the shield
-    goes to the first empty inventory slot since it wasn't directly clicked. */
 static void gui_update_inventory(GuiState* gs, Player* p) {
-    /* gear switches: direct slot swaps */
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
         uint8_t prev = gs->inv_prev_equipped[s];
         uint8_t curr = p->equipped[s];
         if (prev == curr) continue;
 
         if (curr != ITEM_NONE && prev != ITEM_NONE) {
-            /* swap: new item was in inventory, old item takes its exact slot */
             int src = gui_inv_find_equipment(gs, curr);
             if (src >= 0) {
-                /* check if old item is still a valid swap item */
                 int in_loadout = 0;
                 for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
                     for (int i = 0; i < p->num_items_in_slot[g]; i++) {
@@ -2108,19 +1942,16 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
                     if (in_loadout) break;
                 }
                 if (in_loadout) {
-                    /* direct swap: old item goes into the slot the new item came from */
                     gs->inv_grid[src].type = INV_SLOT_EQUIPMENT;
                     gs->inv_grid[src].item_db_idx = prev;
                     gs->inv_grid[src].osrs_id = ITEM_DATABASE[prev].item_id;
                 } else {
-                    /* old item not in loadout — just clear the slot */
                     gs->inv_grid[src].type = INV_SLOT_EMPTY;
                     gs->inv_grid[src].item_db_idx = 0;
                     gs->inv_grid[src].osrs_id = 0;
                 }
             }
         } else if (curr != ITEM_NONE) {
-            /* equipping from inventory, nothing was in this gear slot before */
             int src = gui_inv_find_equipment(gs, curr);
             if (src >= 0) {
                 gs->inv_grid[src].type = INV_SLOT_EMPTY;
@@ -2128,8 +1959,7 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
                 gs->inv_grid[src].osrs_id = 0;
             }
         } else if (prev != ITEM_NONE) {
-            /* gear slot cleared (e.g. shield removed by 2H weapon equip).
-               the old item goes to the first empty inventory slot. */
+
             int in_loadout = 0;
             for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
                 for (int i = 0; i < p->num_items_in_slot[g]; i++) {
@@ -2143,13 +1973,9 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* consumable changes: remove clicked slot or fall back to last */
-
-    /* if a human clicked a specific consumable slot, remove that exact slot first */
     int clicked = gs->human_clicked_inv_slot;
     int clicked_used = 0;
 
-    /* food */
     int food_diff = gs->inv_prev_food_count - p->food_count;
     for (int i = 0; i < food_diff; i++) {
         if (!clicked_used && clicked >= 0 && clicked < INV_GRID_SLOTS &&
@@ -2163,7 +1989,6 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* karambwan */
     int karam_diff = gs->inv_prev_karambwan_count - p->karambwan_count;
     for (int i = 0; i < karam_diff; i++) {
         if (!clicked_used && clicked >= 0 && clicked < INV_GRID_SLOTS &&
@@ -2177,9 +2002,6 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         }
     }
 
-    /* potions: dose changes update existing vials in-place (sprite change),
-       and remove empty vials when a full vial is consumed.
-       human_clicked_inv_slot is still set here so the clicked vial loses the dose. */
     if (p->brew_doses != gs->inv_prev_brew_doses) {
         gui_inv_update_potion_doses(gs, INV_SLOT_BREW, p->brew_doses);
     }
@@ -2214,17 +2036,13 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         gs->inv_grid[slot].osrs_id = OSRS_ID_SATURATED_HEART;
     }
 
-    /* only clear human click when a consumable was actually used this frame.
-       if no diff happened yet, keep it for the next tick when the sim processes the action. */
     if (clicked_used || gui_inventory_consumables_changed(gs, p)) {
         gs->human_clicked_inv_slot = -1;
     }
 
-    /* update snapshot */
     gui_snapshot_inventory_state(gs, p);
 }
 
-/** Get the inventory grid screen position for a slot index. */
 static void gui_inv_slot_pos(GuiState* gs, int slot, int* out_x, int* out_y) {
     int grid_x = gs->panel_x + INV_PANEL_CONTENT_X + INV_SLOT_X;
     int grid_y = gui_content_y(gs) + INV_SLOT_Y;
@@ -2234,9 +2052,6 @@ static void gui_inv_slot_pos(GuiState* gs, int slot, int* out_x, int* out_y) {
     *out_y = grid_y + row * INV_CELL_H;
 }
 
-/** Hit test: return inventory slot index at screen position, or -1.
-    Matches the real client: the hit area is the 36x32 icon component, so the
-    pitch gaps between icons are dead space. */
 static int gui_inv_slot_at(GuiState* gs, int mx, int my) {
     for (int i = 0; i < INV_GRID_SLOTS; i++) {
         int sx, sy;
@@ -2358,7 +2173,6 @@ static const char* gui_inv_slot_display_name(const InvSlot* inv) {
     }
 }
 
-/** Select an inventory item as the source for the next item target click. */
 static int gui_inv_select_item(GuiState* gs, HumanInput* hi, int slot) {
     if (!hi || !hi->enabled) return 0;
     if (slot < 0 || slot >= INV_GRID_SLOTS) return 0;
@@ -2378,23 +2192,15 @@ static int gui_inv_select_item(GuiState* gs, HumanInput* hi, int slot) {
     return 1;
 }
 
-/** Handle inventory click: equip gear items, eat/drink consumables.
-    hi is a HumanInput* (from osrs_pvp_human_input_types.h, included above).
-    When non-NULL and enabled, food/potion clicks set pending_* fields instead of
-    directly mutating player state, so the action system handles timers. */
-
 static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
                                 HumanInput* hi) {
     if (slot < 0 || slot >= INV_GRID_SLOTS) return INV_ACTION_NONE;
     InvSlot* inv = &gs->inv_grid[slot];
     if (inv->type == INV_SLOT_EMPTY) return INV_ACTION_NONE;
 
-    /* start dim animation */
     gs->inv_dim_slot = slot;
     gs->inv_dim_timer = INV_DIM_TICKS;
 
-    /* when human control is active, route food/potion through action system
-       instead of directly mutating player state (respects timers) */
     int human_active = (hi && hi->enabled);
     if (human_active && hi->cursor_mode == CURSOR_ITEM_TARGET) {
         OsrsUiIntent intent = osrs_ui_intent_item_on_item(
@@ -2501,22 +2307,17 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
     }
 }
 
-/** Handle inventory mouse input: clicks, drag start/move/release.
-    When hi is non-NULL and enabled, food/potion clicks route through the
-    action system instead of directly mutating player state. */
 static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
     if (gs->active_tab != GUI_TAB_INVENTORY) return;
 
     int mx, my;
     gui_mouse_to_panel_space(gs, GetMouseX(), GetMouseY(), &mx, &my);
 
-    /* drag in progress */
     if (gs->inv_drag_active) {
         gs->inv_drag_mouse_x = mx;
         gs->inv_drag_mouse_y = my;
 
         if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-            /* drop: swap src and target slots */
             int target = gui_inv_slot_at(gs, mx, my);
             if (target >= 0 && target != gs->inv_drag_src_slot) {
                 InvSlot source = gs->inv_grid[gs->inv_drag_src_slot];
@@ -2540,7 +2341,6 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
         return;
     }
 
-    /* new click */
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         int slot = gui_inv_slot_at(gs, mx, my);
         if (slot >= 0 && gs->inv_grid[slot].type != INV_SLOT_EMPTY) {
@@ -2551,8 +2351,6 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
         }
     }
 
-    /* held past the anti-drag threshold AND moved past the dead zone → start
-       drag; a quicker press-move-release still resolves as a click below. */
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active &&
         GetTime() - gs->inv_drag_press_time >= INV_DRAG_HOLD_SECONDS) {
         int dx = mx - gs->inv_drag_start_x;
@@ -2562,13 +2360,11 @@ static void gui_inv_handle_mouse(GuiState* gs, Player* p, HumanInput* hi) {
             gs->inv_drag_active = 1;
             gs->inv_drag_mouse_x = mx;
             gs->inv_drag_mouse_y = my;
-            /* dim the source slot during drag */
             gs->inv_dim_slot = gs->inv_drag_src_slot;
-            gs->inv_dim_timer = 9999;  /* stays dim during entire drag */
+            gs->inv_dim_timer = 9999;
         }
     }
 
-    /* click release without drag = activate item */
     if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && gs->inv_drag_src_slot >= 0 && !gs->inv_drag_active) {
         gui_inv_click(gs, p, gs->inv_drag_src_slot, hi);
         gs->inv_drag_src_slot = -1;
@@ -2661,7 +2457,6 @@ static void gui_draw_inventory_manual(GuiState* gs) {
 
         if (inv->type == INV_SLOT_EMPTY) continue;
 
-        /* determine sprite */
         Texture2D tex = { 0 };
         if (inv->type == INV_SLOT_EQUIPMENT) {
             tex = gui_get_item_sprite(gs, inv->item_db_idx);
@@ -2669,14 +2464,12 @@ static void gui_draw_inventory_manual(GuiState* gs) {
             tex = gui_get_sprite_by_osrs_id(gs, inv->osrs_id);
         }
 
-        /* dim tint: 50% alpha when clicked/dragged (matches OSRS var17=128) */
         int is_dimmed = (gs->inv_dim_slot == slot && gs->inv_dim_timer > 0);
         Color tint = is_dimmed ? CLITERAL(Color){ 255, 255, 255, 128 } : WHITE;
 
         int dx = cx;
         int dy = cy;
 
-        /* skip drawing at grid position if being dragged (drawn at cursor instead) */
         if (gs->inv_drag_active && slot == gs->inv_drag_src_slot) {
             if (tex.id != 0) {
                 Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
@@ -2701,10 +2494,6 @@ static void gui_draw_inventory_manual(GuiState* gs) {
     gui_draw_inventory_drag(gs);
 }
 
-/** Render-only: load the panel from a fixed per-kit OSRS-id list (the colosseum
-    wiki inventory) instead of deriving it from sets + dose counts. Every entry is
-    drawn as an equipment-style display slot keyed by osrs_id; no sim state reads
-    this. */
 static void gui_load_display_inventory(GuiState* gs) {
     memset(gs->inv_grid, 0, sizeof(gs->inv_grid));
     int count = gs->display_inventory_count;
@@ -2746,7 +2535,6 @@ static void gui_draw_inventory(GuiState* gs, Player* p) {
 
     gui_draw_inventory_manual(gs);
 }
-
 
 typedef struct {
     int gear_slot;
@@ -2873,13 +2661,8 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
     }
 }
 
-
 #define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
 
-/* prayerbook layout per [proc,prayer_redraw] + the group 541 interface defs:
-   34x34 buttons on a (182-5*34)/4+34 = 37 pitch inside the 182-wide container,
-   which is centered in the 190 content (x0 4) with its top edge at y 9.
-   Active prayers show the 34x34 prayerglow sprite behind a 30x30 icon. */
 #define GUI_PRAYER_GRID_COLS 5
 #define GUI_PRAYER_CELL_PX 34
 #define GUI_PRAYER_ICON_PX 30
@@ -2887,9 +2670,6 @@ static void gui_draw_equipment(GuiState* gs, Player* p) {
 #define GUI_PRAYER_GRID_Y0 9
 #define GUI_PRAYER_PITCH 37
 
-/* ancient spellbook layout per [proc,magic_spellbook_redraw] + script6419
-   case 1: 24x24 icons, 4 columns, x pitch 24+20, y pitch 24+4, the block
-   positioned centre+2 horizontally at y 8. */
 #define GUI_SPELL_GRID_COLS 4
 #define GUI_SPELL_ICON_PX 24
 #define GUI_SPELL_PITCH_X (24 + 20)
@@ -3166,7 +2946,6 @@ static int gui_draw_combat_decoded(
     return gui_draw_ui_group(gs, "combat_interface", gui_side_content_rect(gs), &ui_overrides);
 }
 
-/** Check if a prayer grid slot is currently active based on player state. */
 static int gui_prayer_is_active(GuiPrayerIdx pidx, Player* p) {
     switch (pidx) {
         case GUI_PRAY_PROTECT_MAGIC:    return p->prayer == PRAYER_PROTECT_MAGIC;
@@ -3200,16 +2979,12 @@ static void gui_draw_prayer(GuiState* gs, Player* p) {
             gui_draw_named_asset(gs, "prayerglow_0", cell_rect, WHITE);
         }
 
-        /* every prayer is usable in the sim, so all icons draw in the
-           available (full-color) variant per [proc,prayer_updatebutton];
-           the greyed variant only exists for level-locked prayers. */
         if (gs->sprites_loaded) {
             gui_draw_texture_centered(gs->prayer_on[pidx], cell_rect,
                 GUI_PRAYER_ICON_PX, GUI_PRAYER_ICON_PX, WHITE);
         }
     }
 }
-
 
 static void gui_draw_combat(GuiState* gs, Player* p) {
     const char* wpn_name = "Unarmed";
@@ -3325,14 +3100,11 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     }
 }
 
-
 typedef struct {
     const char* name;
     GuiSpellIdx idx;
 } GuiSpellEntry;
 
-/* display order = the real ancient book's level-sorted order (teleports
-   interleaved with combat spells), minus the home teleport we do not model. */
 static const GuiSpellEntry GUI_SPELL_GRID[] = {
     { "Smoke Rush",    GUI_SPELL_SMOKE_RUSH },
     { "Shadow Rush",   GUI_SPELL_SHADOW_RUSH },
@@ -3554,19 +3326,15 @@ static void gui_draw_stats(GuiState* gs, Player* p) {
         (int)(total.y + 5), 10, GUI_TEXT_YELLOW);
 }
 
-
 static void gui_cycle_entity(GuiState* gs) {
     if (gs->gui_entity_count <= 0) return;
     gs->gui_entity_idx = (gs->gui_entity_idx + 1) % gs->gui_entity_count;
 }
 
-/* Draw the resizable-mode side panel: minimap area at top (handled outside),
-   then top tab row, content area, and bottom tab row at the very bottom. */
 static void gui_draw(GuiState* gs, Player* p) {
     int content_y = gs->panel_y + gs->status_bar_h + gs->tab_h;
     gui_draw_tab_bar(gs);
 
-    /* entity selector header */
     if (gs->gui_entity_count > 1) {
         int hx = gs->panel_x + GUI_SIDE_CONTENT_X + 4;
         int hy = content_y + 2;
@@ -3576,7 +3344,6 @@ static void gui_draw(GuiState* gs, Player* p) {
                         hx, hy, 8, GUI_TEXT_ORANGE);
     }
 
-    /* active tab content */
     switch (gs->active_tab) {
         case GUI_TAB_COMBAT:    gui_draw_combat(gs, p);    break;
         case GUI_TAB_INVENTORY: gui_draw_inventory(gs, p); break;
@@ -3584,9 +3351,9 @@ static void gui_draw(GuiState* gs, Player* p) {
         case GUI_TAB_PRAYER:    gui_draw_prayer(gs, p);    break;
         case GUI_TAB_SPELLBOOK: gui_draw_spellbook(gs, p); break;
         case GUI_TAB_STATS:     gui_draw_stats(gs, p);     break;
-        case GUI_TAB_QUESTS:    /* empty tab */ break;
+        case GUI_TAB_QUESTS:     break;
         default: break;
     }
 }
 
-#endif /* OSRS_GUI_H */
+#endif

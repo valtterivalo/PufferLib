@@ -1,11 +1,3 @@
-/**
- * @file osrs_env.h
- * @brief OSRS environment — include aggregator for all subsystems.
- *
- * Include this file for full environment access. It pulls in shared modules
- * and PvP subsystem headers in the correct order.
- */
-
 #ifndef OSRS_ENV_H
 #define OSRS_ENV_H
 
@@ -25,4 +17,4 @@
 #include "osrs_pvp_opponents.h"
 #include "osrs_pvp_api.h"
 
-#endif // OSRS_ENV_H
+#endif

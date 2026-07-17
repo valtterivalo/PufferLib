@@ -1,8 +1,3 @@
-/**
- * @file osrs_encounter_visual_events.h
- * @brief Shared render entity and projectile event helpers for OSRS encounters.
- */
-
 #ifndef OSRS_ENCOUNTER_VISUAL_EVENTS_H
 #define OSRS_ENCOUNTER_VISUAL_EVENTS_H
 

@@ -1,18 +1,3 @@
-/**
- * @file osrs_collision.h
- * @brief Tile collision flag system for OSRS world simulation
- *
- * Based on OSRS collision system (TraversalConstants + TraversalMap).
- * Implements the OSRS collision flag bitmask system:
- * - Per-tile int flags storing wall directions, blocked state, impenetrability
- * - Region-based storage (64x64 tiles, 4 height planes per region)
- * - Directional traversal checks (N/S/E/W + diagonals)
- * - Hash-map region manager with lazy allocation
- *
- * When collision_map is NULL, all traversal checks return true (backwards
- * compatible with the flat arena).
- */
-
 #ifndef OSRS_COLLISION_H
 #define OSRS_COLLISION_H
 
@@ -48,15 +33,14 @@
 #define REGION_SIZE      64
 #define REGION_HEIGHT_LEVELS 4
 
-/** A single 64x64 OSRS region with 4 height planes of collision flags. */
 typedef struct {
     int flags[REGION_HEIGHT_LEVELS][REGION_SIZE][REGION_SIZE];
 } CollisionRegion;
 
-#define REGION_MAP_CAPACITY 256  /* power of 2, enough for wilderness + surroundings */
+#define REGION_MAP_CAPACITY 256
 
 typedef struct {
-    int key;                  /* region hash: (regionX << 8) | regionY, or -1 if empty */
+    int key;
     CollisionRegion* region;
 } RegionMapEntry;
 
@@ -65,19 +49,16 @@ typedef struct {
     int count;
 } CollisionMap;
 
-/** Compute region hash from global tile coordinates. */
 static inline int collision_region_hash(int x, int y) {
     int region_x = x >> 6;
     int region_y = y >> 6;
     return region_x * 256 + region_y;
 }
 
-/** Extract local coordinate within a 64x64 region. */
 static inline int collision_local(int coord) {
     return coord & 0x3F;
 }
 
-/** Initialize a collision map (all slots empty). */
 static inline void collision_map_init(CollisionMap* map) {
     map->count = 0;
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
@@ -86,14 +67,12 @@ static inline void collision_map_init(CollisionMap* map) {
     }
 }
 
-/** Allocate and initialize a new collision map. */
 static inline CollisionMap* collision_map_create(void) {
     CollisionMap* map = (CollisionMap*)malloc(sizeof(CollisionMap));
     collision_map_init(map);
     return map;
 }
 
-/** Look up a region by hash. Returns NULL if not present. */
 static inline CollisionRegion* collision_map_get(const CollisionMap* map, int key) {
     int idx = key & (REGION_MAP_CAPACITY - 1);
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
@@ -108,7 +87,6 @@ static inline CollisionRegion* collision_map_get(const CollisionMap* map, int ke
     return NULL;
 }
 
-/** Insert a region into the map. Overwrites if key exists. */
 static inline void collision_map_put(CollisionMap* map, int key, CollisionRegion* region) {
     int idx = key & (REGION_MAP_CAPACITY - 1);
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
@@ -124,11 +102,9 @@ static inline void collision_map_put(CollisionMap* map, int key, CollisionRegion
             return;
         }
     }
-    /* map full — shouldn't happen with 256 capacity for wilderness */
     fprintf(stderr, "collision_map_put: map full (capacity %d)\n", REGION_MAP_CAPACITY);
 }
 
-/** Get or lazily create a region for the given global tile coordinates. */
 static inline CollisionRegion* collision_map_get_or_create(CollisionMap* map, int x, int y) {
     int key = collision_region_hash(x, y);
     CollisionRegion* region = collision_map_get(map, key);
@@ -139,7 +115,6 @@ static inline CollisionRegion* collision_map_get_or_create(CollisionMap* map, in
     return region;
 }
 
-/** Free all regions and the map itself. */
 static inline void collision_map_free(CollisionMap* map) {
     if (map == NULL) return;
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
@@ -150,7 +125,6 @@ static inline void collision_map_free(CollisionMap* map) {
     free(map);
 }
 
-/** Get collision flags for a global tile coordinate. Returns 0 if region not loaded. */
 static inline int collision_get_flags(const CollisionMap* map, int height, int x, int y) {
     if (map == NULL) return COLLISION_NONE;
     int key = collision_region_hash(x, y);
@@ -162,7 +136,6 @@ static inline int collision_get_flags(const CollisionMap* map, int height, int x
     return region->flags[h][lx][ly];
 }
 
-/** Set (OR) collision flags on a global tile coordinate. */
 static inline void collision_set_flag(CollisionMap* map, int height, int x, int y, int flag) {
     CollisionRegion* region = collision_map_get_or_create(map, x, y);
     int lx = collision_local(x);
@@ -171,7 +144,6 @@ static inline void collision_set_flag(CollisionMap* map, int height, int x, int 
     region->flags[h][lx][ly] |= flag;
 }
 
-/** Unset (clear) collision flags on a global tile coordinate. */
 static inline void collision_unset_flag(CollisionMap* map, int height, int x, int y, int flag) {
     int key = collision_region_hash(x, y);
     CollisionRegion* region = collision_map_get(map, key);
@@ -182,12 +154,10 @@ static inline void collision_unset_flag(CollisionMap* map, int height, int x, in
     region->flags[h][lx][ly] &= ~flag;
 }
 
-/** Mark a tile as fully blocked (terrain). */
 static inline void collision_mark_blocked(CollisionMap* map, int height, int x, int y) {
     collision_set_flag(map, height, x, y, COLLISION_BLOCKED);
 }
 
-/** Mark a multi-tile occupant (game object) as blocked + optionally impenetrable. */
 static inline void collision_mark_occupant(CollisionMap* map, int height, int x, int y,
                                            int width, int length, int impenetrable) {
     int flag = COLLISION_BLOCKED;
@@ -199,7 +169,6 @@ static inline void collision_mark_occupant(CollisionMap* map, int height, int x,
     }
 }
 
-/** Check if flag bits are INACTIVE (none set) on a tile. */
 static inline int collision_is_inactive(const CollisionMap* map, int height, int x, int y, int flag) {
     return (collision_get_flags(map, height, x, y) & flag) == 0;
 }
@@ -230,9 +199,6 @@ static inline int collision_traversable_west(const CollisionMap* map, int height
 
 static inline int collision_traversable_north_east(const CollisionMap* map, int height, int x, int y) {
     if (map == NULL) return 1;
-    /* diagonal tile: no SW wall, not blocked */
-    /* east tile: no west wall, not blocked */
-    /* north tile: no south wall, not blocked */
     return collision_is_inactive(map, height, x + 1, y + 1,
                COLLISION_WALL_WEST | COLLISION_WALL_SOUTH | COLLISION_WALL_SOUTH_WEST | COLLISION_BLOCKED)
         && collision_is_inactive(map, height, x + 1, y,
@@ -271,19 +237,11 @@ static inline int collision_traversable_south_west(const CollisionMap* map, int 
                COLLISION_WALL_NORTH | COLLISION_BLOCKED);
 }
 
-/**
- * Check if a tile is walkable (not blocked, no incoming walls from any direction).
- * Simple check — just tests the BLOCKED flag on the tile itself.
- */
 static inline int collision_tile_walkable(const CollisionMap* map, int height, int x, int y) {
     if (map == NULL) return 1;
     return (collision_get_flags(map, height, x, y) & COLLISION_BLOCKED) == 0;
 }
 
-/**
- * Check directional traversability given dx/dy step direction.
- * dx and dy should each be -1, 0, or 1.
- */
 static inline int collision_traversable_step(const CollisionMap* map, int height,
                                              int x, int y, int dx, int dy) {
     if (map == NULL) return 1;
@@ -297,14 +255,12 @@ static inline int collision_traversable_step(const CollisionMap* map, int height
     if (dx == 1 && dy == -1) return collision_traversable_south_east(map, height, x, y);
     if (dx == -1 && dy == -1) return collision_traversable_south_west(map, height, x, y);
 
-    /* dx == 0 && dy == 0: no movement */
     return 1;
 }
 
-#define COLLISION_MAP_MAGIC 0x50414D43  /* "CMAP" in little-endian */
+#define COLLISION_MAP_MAGIC 0x50414D43
 #define COLLISION_MAP_VERSION 1
 
-/** Load collision map from a binary file. Returns NULL on failure. */
 static inline CollisionMap* collision_map_load(const char* path) {
     FILE* f = osrs_asset_fopen(path, "rb");
     if (f == NULL) {
@@ -357,7 +313,6 @@ static inline CollisionMap* collision_map_load(const char* path) {
     return map;
 }
 
-/** Save collision map to a binary file. Returns 0 on success, -1 on failure. */
 static inline int collision_map_save(const CollisionMap* map, const char* path) {
     FILE* f = fopen(path, "wb");
     if (f == NULL) return -1;
@@ -389,15 +344,12 @@ static inline int collision_map_save(const CollisionMap* map, const char* path) 
 #define LOS_FP_SCALE    65536
 #define LOS_FP_HALF     32768
 
-/* an entity that blocks line of sight. pillars, walls, etc.
- * the los_mask indicates which directions are blocked. */
 typedef struct {
-    int x, y;       /* top-left tile of the blocker */
-    int size;       /* NxN footprint */
-    uint32_t los_mask;  /* bitmask: which directions block LOS */
+    int x, y;
+    int size;
+    uint32_t los_mask;
 } LOSBlocker;
 
-/* check if point (px,py) overlaps any blocker, return its mask or 0 */
 static uint32_t los_check_tile(const LOSBlocker* blockers, int count,
                                 int px, int py) {
     for (int i = 0; i < count; i++) {
@@ -410,28 +362,21 @@ static uint32_t los_check_tile(const LOSBlocker* blockers, int count,
     return 0;
 }
 
-/* AABB overlap check for two entities */
 static int los_aabb_overlap(int x1, int y1, int s1, int x2, int y2, int s2) {
     return !(x1 >= x2 + s2 || x1 + s1 <= x2 || y1 >= y2 + s2 || y1 + s1 <= y2);
 }
 
-/* fixed-point Q16 ray trace. returns 1 if clear LOS, 0 if blocked.
- * traces from (x1,y1) to (x2,y2). src_size is the source entity size (1 for player).
- * range is max tile distance (-1 = unlimited). */
 static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
                               int x1, int y1, int x2, int y2,
                               int src_size, int range) {
     int dx = x2 - x1;
     int dy = y2 - y1;
 
-    /* reject if either endpoint is inside a blocker */
     if (los_check_tile(blockers, blocker_count, x1, y1)) return 0;
     if (los_check_tile(blockers, blocker_count, x2, y2)) return 0;
 
-    /* self-overlap check */
     if (los_aabb_overlap(x1, y1, src_size, x2, y2, 1)) return 0;
 
-    /* range check */
     if (range > 0) {
         int adx = dx < 0 ? -dx : dx;
         int ady = dy < 0 ? -dy : dy;
@@ -442,7 +387,6 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     int ady = dy < 0 ? -dy : dy;
 
     if (adx > ady) {
-        /* x-dominant ray */
         int x_tile = x1;
         int y_fp = y1 * LOS_FP_SCALE + LOS_FP_HALF;
         int slope = (adx > 0) ? ((dy * LOS_FP_SCALE) / adx) : 0;
@@ -466,7 +410,6 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
             }
         }
     } else if (ady > 0) {
-        /* y-dominant ray */
         int y_tile = y1;
         int x_fp = x1 * LOS_FP_SCALE + LOS_FP_HALF;
         int slope = (ady > 0) ? ((dx * LOS_FP_SCALE) / ady) : 0;
@@ -490,7 +433,6 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
             }
         }
     }
-    /* else dx==0 && dy==0: same tile, always has LOS */
 
     return 1;
 }
@@ -499,10 +441,6 @@ static inline int los_intervals_overlap(int a0, int a1, int b0, int b1) {
     return !(a1 < b0 || b1 < a0);
 }
 
-/* generic LOS between two entity footprints.
- * ref: osrs-sdk LineOfSight.ts playerHasLineOfSightOfMob() and
- * mobHasLineOfSightToMob(). ranged/magic uses closest points on both
- * footprints. melee is pure cardinal adjacency between footprint edges. */
 static inline int entity_has_line_of_sight(
     const LOSBlocker* blockers, int blocker_count,
     int ax, int ay, int a_size,
@@ -544,7 +482,6 @@ static inline int entity_has_line_of_sight(
     return has_line_of_sight(blockers, blocker_count, a_px, a_py, t_px, t_py, 1, range);
 }
 
-/* NPC LOS wrapper for the common "NPC footprint to 1x1 target" case. */
 static inline int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
                                         int nx, int ny, int npc_size,
                                         int tx, int ty, int range) {
@@ -555,4 +492,4 @@ static inline int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_
         range);
 }
 
-#endif /* OSRS_COLLISION_H */
+#endif

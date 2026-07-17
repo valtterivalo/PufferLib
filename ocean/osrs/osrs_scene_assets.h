@@ -1,19 +1,3 @@
-/**
- * @file osrs_scene_assets.h
- * @brief Shared scene asset loader for encounter eval bindings.
- *
- * Each encounter binding's c_render needs to bootstrap the same set of
- * render assets: equipment models/anims, projectile + overlay visuals,
- * arena terrain, placed objects, optional collision map, and optional
- * NPC model/anim caches. This header packages the common path so a new
- * encounter only needs to declare its EncounterSceneConfig and call
- * encounter_load_scene_assets(rc, &cfg).
- *
- * Encounter-specific wiring (e.g. zulrah's put_ptr collision_map onto
- * the encounter state, inferno's custom camera bootstrap) stays in the
- * binding because it depends on the encounter SDK's typed state.
- */
-
 #ifndef OSRS_SCENE_ASSETS_H
 #define OSRS_SCENE_ASSETS_H
 
@@ -24,30 +8,19 @@
 #include "osrs_terrain.h"
 
 typedef struct {
-    /* asset groups to require before any load. terminate with -1. */
     OsrsAssetGroupKind required_groups[4];
 
-    /* logical paths (relative to OSRS_ASSET_ROOT). NULL = skip the load. */
     const char* terrain_path;
     const char* objects_path;
-    const char* objects_secondary_path;  /* e.g. inferno_zuk.objects */
+    const char* objects_secondary_path;
     const char* cmap_path;
     const char* npc_models_path;
     const char* npc_anims_path;
 
-    /* world origin to subtract from terrain/objects so encounter-local (0,0)
-       maps to raylib (0,0). collision_world_offset_{x,y} is set to match.
-       leave at 0 to render with raw world coordinates (PvP arena pattern). */
     int world_origin_x;
     int world_origin_y;
 } EncounterSceneConfig;
 
-/** Load all scene assets defined in cfg into rc.
-    Caller is responsible for: making the RenderClient first, setting
-    rc->ticks_per_second, post-load camera/entity bootstrap, and any
-    encounter-specific wiring (e.g. put_ptr cmap onto encounter state).
-    The loaded CollisionMap pointer (if any) is returned so the caller
-    can also stash it on the OsrsEnv->collision_map field. */
 static inline CollisionMap* encounter_load_scene_assets(
     RenderClient* rc, const EncounterSceneConfig* cfg
 ) {
@@ -104,4 +77,4 @@ static inline CollisionMap* encounter_load_scene_assets(
     return cmap;
 }
 
-#endif /* OSRS_SCENE_ASSETS_H */
+#endif

@@ -1,11 +1,3 @@
-/**
- * @file osrs_inventory.h
- * @brief shared inventory cell model + item-to-gear-slot mapping
- *
- * value types for the 28-slot inventory (OsrsInventoryCell, slot snapshot) plus
- * cell construction, swap, and the item-index to GearSlotIndex mapping.
- */
-
 #ifndef OSRS_INVENTORY_H
 #define OSRS_INVENTORY_H
 
@@ -82,8 +74,6 @@ static inline OsrsInventorySlotSnapshot osrs_inventory_slot_snapshot(
     return snapshot;
 }
 
-
-/** map item index to its gear slot. returns GearSlotIndex or -1 if unmapped. */
 static inline int osrs_item_gear_slot(uint8_t item_idx) {
     if (item_idx >= NUM_ITEMS) return -1;
     switch (ITEM_DATABASE[item_idx].slot) {
@@ -102,4 +92,4 @@ static inline int osrs_item_gear_slot(uint8_t item_idx) {
     }
 }
 
-#endif /* OSRS_INVENTORY_H */
+#endif

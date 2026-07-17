@@ -1,8 +1,3 @@
-/**
- * @file osrs_gfx_ids.h
- * @brief Shared spotanim ids used by combat render paths.
- */
-
 #ifndef OSRS_GFX_IDS_H
 #define OSRS_GFX_IDS_H
 

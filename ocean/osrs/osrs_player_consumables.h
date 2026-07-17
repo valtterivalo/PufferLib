@@ -1,8 +1,3 @@
-/**
- * @file osrs_player_consumables.h
- * @brief shared Player food consumption state transitions.
- */
-
 #ifndef OSRS_PLAYER_CONSUMABLES_H
 #define OSRS_PLAYER_CONSUMABLES_H
 

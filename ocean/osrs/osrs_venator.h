@@ -1,22 +1,3 @@
-/**
- * @fileoverview osrs_venator.h - pure Venator bow bounce targeting and damage.
- *
- * Footprint anchor: an N x N monster at (sw_x, sw_y) occupies
- * [sw_x, sw_x+N-1] x [sw_y, sw_y+N-1]. Even sizes have no true centre, so a
- * wiki "centre" reference maps to the NE tile of the middle 2x2, and a size-5
- * CENTRE_SW reference maps to one tile SW of the true centre. These keep the
- * size-pair cases separable from the send rule and size-1 warbands correct.
- *
- * Selection is deterministic (reproducible rollouts): among valid candidates,
- * pick the smallest Chebyshev distance between the sender and candidate
- * selection anchors, ties broken by lower slot index. Odd footprints anchor on
- * their centre, even footprints on their SW tile.
- *
- * The resolver settles geometry before damage and only attempts hit3 when at
- * least two non-primary live monsters exist, pinning the one-candidate boundary
- * at two hits while allowing bounce-back in three-monster clusters.
- */
-
 #ifndef OSRS_VENATOR_H
 #define OSRS_VENATOR_H
 
@@ -421,8 +402,7 @@ static inline void osrs_venator_consider_candidate(
 ) {
     if (candidate.life != OSRS_VENATOR_MONSTER_ALIVE) return;
     if (candidate.slot == forbidden_slot) return;
-    /* eligibility is measured from the ORIGINAL target (within 2 tiles of its
-       centre); selection (nearest) is measured from the target being bounced from. */
+
     if (!osrs_venator_can_bounce(range_sender, candidate.footprint)) return;
 
     int distance = osrs_venator_selection_distance(selection_sender, candidate.footprint);
@@ -527,9 +507,6 @@ static inline OsrsVenatorChain osrs_venator_resolve_chain(
         return chain;
     }
 
-    /* 2nd bounce ELIGIBILITY stays anchored on the ORIGINAL target's centre
-       (within 2 tiles) -- chaining the range anchor forward would let hit3 reach
-       ~4 tiles out. SELECTION (nearest) is from the 1st-bounce target. */
     OsrsVenatorCandidateSearch hit3 = osrs_venator_find_next_candidate(
         primary.footprint,
         hit2.monster.footprint,

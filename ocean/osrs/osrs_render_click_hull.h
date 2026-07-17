@@ -1,7 +1,3 @@
-/**
- * @fileoverview Human-mode render click hull helpers for projected NPC targets.
- */
-
 #ifndef OSRS_RENDER_CLICK_HULL_H
 #define OSRS_RENDER_CLICK_HULL_H
 
