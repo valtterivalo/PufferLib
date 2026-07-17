@@ -224,3 +224,22 @@ to Suarez as an immediate one-liner PR or flag in the big PR. -fpermissive
 proved unnecessary and the whole NVCC_ENV_HOST_FLAGS hunk was removed. LOCAL
 GATE DISCOVERED: brew g++-16 -fsyntax-only -std=c++17 strict = exact box-g++
 semantics on Mac (clang++ is extension-lenient and lies).
+
+## 2026-07-17 PR branch CURATED: osrs-colosseum-inferno (pushed)
+
+Five commits from upstream/5c 92b02cae5, tree byte-identical to the fully
+gated working branch tip (diff empty): eb1748e0d PUFFER_ENV_NAME build fix ->
+34caa1050 truncation core -> 63194dc31 env payload (entry headers, sim stack,
+configs, build wiring, tests, viewer, C++ portability) -> cd6d7dc04 encoder
+-> fa3756fa0 T2 truncation consumers. Working branch osrs-5c-port keeps the
+full history. PR description draft: .colosseum-notes/pr-description-draft.md.
+Wave-2 viewer landed: osrs_visual_net.h carries the CPU encoder (puffercpu.h
+untouched upstream), .bin parser rewritten for the 5c flat-arena layout with
+per-tensor offset asserts, --local links on arm64 Mac (openmp detection for
+apple clang), synthetic-checkpoint end-to-end inference verified headless.
+Meta-tests repointed: attack_styles 1805/1805 (12 justified deletions,
+render/lab frozen-structure + dead sweep_only format). Full battery on tip:
+17 test files + both forecast-exact round-trips green. Per-commit box build
+chain running. REMAINING: per-commit results, checkpoint RELOAD smoke (not
+yet exercised), validation chain readout, user visual check of the viewer,
+user opens the PR.
