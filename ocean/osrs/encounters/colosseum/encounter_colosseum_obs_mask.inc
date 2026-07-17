@@ -1,17 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_obs_mask.inc
- * @brief Obs section sizes + obs writer.
- *
- * The obs is a flat float vector, every feature egocentric + normalized. The
- * COLO_*_OBS_SIZE section defines below are the single source of truth for the layout;
- * they are summed into COLO_NUM_OBS in section order. col_write_obs_ctx hard-asserts the
- * running index against the section constants after each block and aborts on mismatch:
- * this is the contract that keeps the obs honest as the layout grows.
- *
- * The action mask, reward/terminal getters, and render-entity fill live in
- * encounter_colosseum_mask_render.inc.
- */
 
 #define COLO_PLAYER_OBS_SIZE      36
 #define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
@@ -23,46 +10,25 @@
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
-#define COLO_FEATURES_PER_NPC     37   /* 12-type one-hot + 14 core features + 10 tells + 1 venator */
-#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)  /* 888 */
-/** Best-gear DPT is divided by this before the per-NPC obs clamp. Calibrated (via
-    probe_colo_best_gear_dpt.c --calibrate) so the empirical max best-gear DPT (13.25,
-    speedrun scythe melee vs the Fremennik Archer) lands at ~0.88 instead of pinning at 1.0
-    and losing the ranking gradient. Recalibrate if loadouts or NPC stats change. */
+#define COLO_FEATURES_PER_NPC     37
+#define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)
+
 #define COLO_EXPECTED_DPT_NORM    15.0f
-/** modifier obs = per-modifier active flag + tier (2 * 16) + draft pending + 3
-    draft option ids (36), then a derived-hazard tail (38): Doom lethality,
-    venom cadence, nearest bee swarm, Solarflare current and next tile, top-4
-    molten pools, and Volatility blast previews. */
-#define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)  /* 36 */
+
+#define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 38
-#define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)  /* 74 */
+#define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
 #define COLO_WAVE_OBS_SIZE        4
 #define COLO_BOSS_OBS_SIZE        51
-/** obs surfaces the soonest-landing pending hits only (the 32-deep queue rarely
-    fills; 16 covers a jaguar triple + manticore barrage + a parry combo at once). */
+
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
-#define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)  /* 112 */
-/** current threat composition: count of live NPCs that can hit the player THIS
-    tick (in attack range + line of sight), split into the 3 attack styles
-    [magic, ranged, melee]. The direct de-confliction signal — the agent must
-    position so at most one style is "live" (a same-tick multi-style stack is
-    exactly what a single overhead prayer cannot block). */
+#define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)
+
 #define COLO_THREAT_LOS_OBS_SIZE  3
-/** Arceuus thrall + Death-Charge state, appended after THREAT_LOS: thrall_active,
-    thrall_lifetime_norm, thrall_recast_norm, dc_armed, dc_window_norm, dc_cd_norm. The
-    +15% spec from a Death-Charge proc surfaces downstream via the existing spec_energy
-    obs. */
+
 #define COLO_THRALL_DC_OBS_SIZE   6
-/** Weapon-choice obs, tail-appended so the entity encoder's NPC/inventory pool offsets
-    stay fixed.
-    - per inventory cell: the cell weapon's expected DPT vs the current target (its style's
-      best setup with this weapon swapped in), clamp01(/NORM); 0 for non-weapons, empty
-      cells, or no live target.
-    - per inventory cell: 1 if the item has a special attack.
-    - wielded pair: clamp01(current equipment DPT vs target / NORM) and the ratio vs the
-      best achievable setup. */
+
 #define COLO_CELL_WEAPON_DPT_OBS_SIZE OSRS_INVENTORY_SIZE
 #define COLO_CELL_SPEC_OBS_SIZE       OSRS_INVENTORY_SIZE
 #define COLO_WIELDED_DPT_OBS_SIZE     2
@@ -71,21 +37,10 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS,
     "weapon-choice obs cache float count must match the block size");
 
-/* spawn-phase + spawn-shaping obs:
-    - ticks-until-spawn /12 and ticks-until-attacks-open /16 (the policy times the t5
-      reposition and budgets the 3-tick pillar sprint from these)
-    - 13 anchor-blocked bits: would the player's current tile exclude this primary anchor
-      (zone Chebyshev <= 4) if the spawn resolved now. */
 #define COLO_SPAWN_PHASE_OBS_SIZE 2
 #define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
 #define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
 
-/* egocentric threat field: the spatial extension of the threat-LoS point
-   sample (col_write_threat_los_counts samples the player's tile; this samples
-   every tile of a 17x17 window). Channel 0 = per-tile live shooter count,
-   channel 1 = per-tile standability. Pure current-tick visibility geometry,
-   no movement prediction and no advice -- shelter is visible as a zero pocket
-   and the policy weighs it against uptime itself. */
 #define COLO_THREAT_FIELD_RADIUS 8
 #define COLO_THREAT_FIELD_DIM (2 * COLO_THREAT_FIELD_RADIUS + 1)
 #define COLO_THREAT_FIELD_TILES (COLO_THREAT_FIELD_DIM * COLO_THREAT_FIELD_DIM)
@@ -101,7 +56,6 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
 
-/* running-index checkpoints, asserted after each obs block. */
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
 #define COLO_OBS_AFTER_PILLARS  (COLO_OBS_AFTER_PLAYER + COLO_PILLAR_OBS_SIZE)
 #define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PILLARS + COLO_INVENTORY_OBS_SIZE)
@@ -125,14 +79,12 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_OBS_AFTER_THREAT_FIELD \
     (COLO_OBS_AFTER_SPAWN + COLO_THREAT_FIELD_OBS_SIZE)
 
-
 static inline float col_clamp01(float v) {
     if (v < 0.0f) return 0.0f;
     if (v > 1.0f) return 1.0f;
     return v;
 }
 
-/** egocentric x offset, normalized to [-1, 1] by arena width. */
 static inline float col_obs_rel_x(int nx, int px) {
     return (float)(nx - px) / (float)COLO_ARENA_WIDTH;
 }
@@ -146,7 +98,6 @@ typedef struct {
     int count;
 } ColoVenatorPreviewTargets;
 
-/** Create a live representative NPC for type-level matchup DPT. */
 static ColoNPC col_matchup_representative_npc(ColoNpcType type) {
     if (type < 0 || type >= COLO_NUM_NPC_TYPES) abort();
     const ColoNpcStats* ns = &COLO_NPC_STATS[type];
@@ -160,7 +111,6 @@ static ColoNPC col_matchup_representative_npc(ColoNpcType type) {
     };
 }
 
-/** Collect live non-hazard enemies once for Venator chain preview. */
 static void col_collect_venator_preview_targets(
     const ColosseumState* s,
     ColoVenatorPreviewTargets* out
@@ -174,7 +124,6 @@ static void col_collect_venator_preview_targets(
     }
 }
 
-/** Return extra Venator bounces if the primary NPC were shot now. */
 static int col_venator_extra_bounce_if_shot(
     const ColosseumState* s,
     const ColoVenatorPreviewTargets* targets,
@@ -286,8 +235,6 @@ static inline void col_write_nearest_hazard_xy_values(
     *idx = i;
 }
 
-
-/** assign each active NPC to a fixed obs slot in array order. */
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx) {
     (void)ctx;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
@@ -304,8 +251,6 @@ static int col_obs_slot_is_targetable(const ColosseumState* s, int obs_slot) {
     return col_npc_is_live_target(npc);
 }
 
-
-/** one-hot an attack style into a 3-wide [ranged, magic, melee] slice. */
 static void col_tell_style_onehot(AttackStyle style, float* out3) {
     out3[0] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
     out3[1] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
@@ -452,7 +397,6 @@ static ColoNpcNextPrayerObs col_npc_next_prayer_obs(
     return col_deterministic_npc_next_prayer(s, npc, &COLO_NPC_STATS[npc->type]);
 }
 
-/** return the managed bee state for an NPC slot, or NULL for lab-only bees. */
 static const ColoBeeSwarm* col_obs_bee_state_for_npc_slot(
     const ColosseumState* s,
     int npc_slot
@@ -465,19 +409,6 @@ static const ColoBeeSwarm* col_obs_bee_state_for_npc_slot(
     return NULL;
 }
 
-/** write the 10-wide per-type tell block for an NPC slot (always 10 floats).
-
-    manticore (the prayer puzzle — full upcoming barrage, like the orbs a player
-    watches charge): [ticks-until-next-orb frac, then the REMAINING orbs as three
-    [ranged,magic,melee] one-hots, slot 0 = the next orb to land]. During the
-    charge-up the locked pattern shows all three orbs before any land; mid-barrage
-    the fired orbs drop off so slot 0 is always the orb to pray next. All zero
-    when idle (no pattern locked).
-    javelin    -> [skyfall incoming, skyfall ticks frac, landing dx, landing dy, 0...]
-    bee        -> [move timer frac, current contact, next dx, next dy, next contact, 0...]
-    minotaur   -> [in heal-cast range (player not in its melee), 0...]
-    jaguar     -> [multi-hit marker, 0...]
-    everything else -> zeros. */
 static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, float* obs, int* idx) {
     int i = *idx;
     float tells[10] = {0};
@@ -490,8 +421,7 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
             if (armed) {
                 int start = firing ? mc->cycle_step : 0;
                 int speed = COLO_NPC_STATS[npc->type].attack_speed;
-                /* ticks until the next orb lands: the charge countdown while
-                   arming, ~0 once firing (orbs are one tick apart). */
+
                 tells[0] = firing ? 0.0f
                     : col_clamp01((float)npc->attack_timer / (float)(speed > 0 ? speed : 1));
                 for (int slot = 0; slot < 3; slot++) {
@@ -533,11 +463,11 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
         case COLO_MINOTAUR: {
             int size = col_npc_effective_size(npc);
             int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
-            tells[0] = (dist > 1) ? 1.0f : 0.0f;  /* heals allies when player not in its melee */
+            tells[0] = (dist > 1) ? 1.0f : 0.0f;
             break;
         }
         case COLO_JAGUAR_WARRIOR:
-            tells[0] = 1.0f;  /* multi-hit (3 independent rolls per attack) marker */
+            tells[0] = 1.0f;
             break;
         default:
             break;
@@ -546,7 +476,6 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
     *idx = i;
 }
 
-/** write one NPC slot (COLO_FEATURES_PER_NPC floats). Caller has cleared obs to 0. */
 static void col_write_npc_slot(
     const ColosseumState* s,
     const ColoNPC* npc,
@@ -589,11 +518,6 @@ static void col_write_npc_slot(
     *idx = i;
 }
 
-
-/** nearest crystal whose firing line the player is standing on, damage not
-    yet resolved: writes dx, dy (to the crystal), ticks-to-damage frac,
-    present flag (4 floats). The threat is "you are on an armed line", and it
-    disappears the moment the player steps off the row/column. */
 static void col_write_nearest_armed_line(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.crystal_count; k++) {
@@ -611,7 +535,6 @@ static void col_write_nearest_armed_line(const ColosseumState* s, float* obs, in
     col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
 
-/** nearest molten-sand pool to the player: dx, dy, present flag (3 floats). */
 static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.hazard_tile_count; k++) {
@@ -622,15 +545,12 @@ static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* i
     col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
 }
 
-/** is the player currently standing on a live telegraphed AoE hazard tile? */
 static int col_player_in_aoe_danger(const ColosseumState* s) {
     const SolHereditState* sol = &s->sol;
     if (sol->aoe_attack == COLO_SOL_AOE_NONE) return 0;
     return col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y);
 }
 
-/** nearest active crystal to the player: dx, dy, firing flag, firing ticks
-    frac (4 floats; zeros when no crystal is up). */
 static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < s->sol.crystal_count; k++) {
@@ -649,8 +569,6 @@ static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* 
         idx);
 }
 
-/** nearest active light beam to the player: dx, dy, ticks-to-pool frac,
-    present flag (4 floats). */
 static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
     for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
@@ -666,9 +584,6 @@ static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx
     col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
 
-/** write the Sol Heredit boss block (COLO_BOSS_OBS_SIZE floats). Rich enough to
-    learn the dodge / kite / triple-parry / grapple responses. All zeros
-    pre-wave-12. */
 static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     const SolHereditState* sol = &s->sol;
@@ -678,8 +593,6 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     for (int p = 0; p < COLO_SOL_NUM_PHASES; p++)
         obs[i++] = (sol->phase == p) ? 1.0f : 0.0f;
 
-    /* live AoE one-hot (none/spear1/spear2/shield1/shield2) + age + danger +
-       boss-relative player offset + line direction: the dodge cue set. */
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_NONE) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR1) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SPEAR2) ? 1.0f : 0.0f;
@@ -695,9 +608,7 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
     }
-    /* spear direction is only locked on the bite tick; during the telegraph
-       these carry the direction the player's CURRENT tile would induce — the
-       cue the net needs to pick a rule-based safe tile. Zeros when idle. */
+
     if (sol->aoe_attack == COLO_SOL_AOE_NONE) {
         obs[i++] = 0.0f;
         obs[i++] = 0.0f;
@@ -708,14 +619,11 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
         obs[i++] = (float)ady;
     }
 
-    /* attack engine tells: the kiting clock. */
     obs[i++] = col_clamp01((float)sol->attack_delay / 12.0f);
     obs[i++] = col_clamp01((float)sol->immobile_ticks / 10.0f);
     obs[i++] = sol->special_cooldown <= 0 ? 1.0f : 0.0f;
     obs[i++] = sol->force_spear ? 1.0f : 0.0f;
 
-    /* triple parry: active, ticks-to-next-hit, next-hit damage, hits left,
-       long-combo flag (15/30/45 from phase 3). */
     int next_land = 0, next_dmg = 0;
     for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
         if (sol->parry_land_in[h] <= 0) continue;
@@ -730,46 +638,32 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     obs[i++] = col_clamp01((float)sol->parry_hits_left / (float)COLO_SOL_PARRY_HITS);
     obs[i++] = sol->phase >= 3 ? 1.0f : 0.0f;
 
-    /* grapple: active, called-slot one-hot (the 5-slot domain), timer,
-       guaranteed-max-armed flag. */
     obs[i++] = sol->grapple_active ? 1.0f : 0.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         obs[i++] = (sol->grapple_active && sol->grapple_body_slot == g) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)sol->grapple_timer / (float)COLO_SOL_GRAPPLE_WINDOW);
     obs[i++] = sol->next_attack_guaranteed_max ? 1.0f : 0.0f;
 
-    /* crystals: count + nearest (dx, dy, telegraphing, telegraph frac), then
-       the nearest armed firing-line the player is on (dx, dy, ticks, present). */
     obs[i++] = col_clamp01((float)sol->crystal_count / (float)COLO_SOL_MAX_CRYSTALS);
     *idx = i;
     col_write_nearest_crystal(s, obs, idx);
     col_write_nearest_armed_line(s, obs, idx);
 
-    /* nearest molten-sand pool (dx, dy, present) */
     col_write_nearest_molten(s, obs, idx);
 
-    /* nearest phase-transition beam (dx, dy, ticks-to-pool, present) */
     col_write_nearest_beam(s, obs, idx);
 }
 
-
-/** a pending hit ignores Protect prayer iff it is not flagged for a prayer check
-    yet carries a non-zero typeless-style hit (javelin skyfall / Sol AoE land via
-    encounter_damage_player, so they never enter the queue; queued ignore-prayer
-    hits are the ones pushed with check_prayer=0 and a real style). */
 static inline int col_pending_hit_ignores_prayer(const EncounterPendingHit* ph) {
     return (!ph->check_prayer && ph->attack_style != ATTACK_STYLE_NONE) ? 1 : 0;
 }
 
-/** order the player's pending hits by soonest landing into out[] (indices into
-    the queue), returning how many were written (<= COLO_OBS_PENDING_HITS). */
 static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
     int n = 0;
     for (int h = 0; h < s->player_pending_hits.count && h < ENCOUNTER_MAX_PENDING_HITS; h++) {
         if (!s->player_pending_hits.hits[h].active) continue;
         out[n++] = h;
     }
-    /* insertion sort by ticks_remaining (n is tiny). */
     for (int a = 1; a < n; a++) {
         int key = out[a];
         int kt = s->player_pending_hits.hits[key].ticks_remaining;
@@ -807,7 +701,6 @@ static inline ColoVolatilityBlastPreview col_volatility_blast_preview_none(void)
     };
 }
 
-/** true when a pending hit will damage the player before the next action. */
 static int col_pending_hit_will_damage_pre_move(
     const EncounterPendingHit* hit,
     OverheadPrayer prayer
@@ -822,7 +715,6 @@ static int col_pending_hit_will_damage_pre_move(
     return 1;
 }
 
-/** write the four nearest modifier molten pools, each dx, dy, present. */
 static void col_write_top_modifier_molten(const ColosseumState* s, float* obs, int* idx) {
     ColoNearestHazardTile nearest[COLO_MODIFIER_MOLTEN_OBS_COUNT];
     for (int i = 0; i < COLO_MODIFIER_MOLTEN_OBS_COUNT; i++)
@@ -850,7 +742,6 @@ static void col_write_top_modifier_molten(const ColosseumState* s, float* obs, i
     }
 }
 
-/** nearest Solarflare orb to the player with cadence and next tile preview. */
 static void col_write_nearest_modifier_solarflare(
     const ColosseumState* s,
     float* obs,
@@ -889,7 +780,6 @@ static void col_write_nearest_modifier_solarflare(
     *idx = i;
 }
 
-/** soonest Volatility blast caused by already queued outgoing player hits. */
 static ColoVolatilityBlastPreview col_soonest_queued_volatility_blast(
     const ColosseumState* s
 ) {
@@ -933,7 +823,6 @@ static ColoVolatilityBlastPreview col_soonest_queued_volatility_blast(
     return best;
 }
 
-/** write current-target and queued-kill Volatility blast previews. */
 static void col_write_volatility_blast_previews(
     const ColosseumState* s,
     float* obs,
@@ -973,7 +862,6 @@ static void col_write_volatility_blast_previews(
     *idx = i;
 }
 
-/** count damage instances that can add Doom before the next action. */
 static int col_count_pre_move_doom_instances(const ColosseumState* s) {
     int count = 0;
     for (int h = 0; h < s->player_pending_hits.count; h++) {
@@ -1039,8 +927,6 @@ static int col_count_pre_move_doom_instances(const ColosseumState* s) {
     return count;
 }
 
-/** write the modifier-hazard obs tail (COLO_MODIFIER_HAZARD_OBS_SIZE floats):
-    Doom, venom, nearest bee swarm, Solarflare, top-4 molten pools, Volatility. */
 static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
@@ -1075,14 +961,6 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
     col_write_volatility_blast_previews(s, obs, idx);
 }
 
-
-/** COLO_THREAT_LOS_OBS_SIZE floats: count of live NPCs that can currently hit the
-    player (within attack range, and with line of sight for the ranged/magic ones),
-    split by the style they threaten with [magic, ranged, melee], each normalized by
-    a small cap. This is the direct de-confliction signal — when two of the three are
-    nonzero, a single overhead prayer cannot cover the stack and the agent must
-    reposition (LoS-block or offtick) to drive all-but-one style to zero. The
-    manticore is counted as its next orb's style. */
 static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int magic = 0, ranged = 0, melee = 0;
@@ -1090,7 +968,7 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_enemy(npc)) continue;
         const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-        if (ns->attack_range < 1) continue;   /* non-attackers (e.g. healing totem) */
+        if (ns->attack_range < 1) continue;
         int dist = col_npc_dist_to_player(s, npc);
         if (dist < 1 || dist > ns->attack_range) continue;
         if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
@@ -1110,15 +988,6 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     *idx = i;
 }
 
-/** Content signature over every ColosseumState input the threat-field obs block reads.
-    Folds the player tile (window origin), each live shooter's footprint bounds + range
-    (channel 0's whole descriptor set -- x/y/effective size/attack_range, liveness by
-    inclusion), and the raw npc_collision_flags grid bytes (channel 1 reads the grid
-    directly, which also covers melee bodies and any stamping asymmetry -- warbanders
-    and hazards never stamp). Static tables are process-constant and excluded. FNV-1a,
-    grid folded 8 bytes per step; a collision only costs a missed reuse, never a wrong
-    result, because a true input change almost always moves the hash and forces a
-    recompute. */
 static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
@@ -1147,21 +1016,6 @@ static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
     return h;
 }
 
-/** COLO_THREAT_FIELD_OBS_SIZE floats: egocentric 17x17 threat field, row-major
-    from (-R,-R) to (+R,+R) around the player, two planar channels.
-    Channel 0: for each tile, the count of live shooters (attack_range > 1)
-    that would have range and static LoS to a player standing there (closest-
-    footprint-tile rule, same as col_npc_has_los_to_player), /4 clamped.
-    Channel 1: 1.0 where the player cannot stand (out of bounds, static mask,
-    NPC body). Melee NPCs stay out of channel 0 (their threat is distance,
-    legible from the NPC slots); Sol stays out too (his spear/shield lines are
-    hazard frames with an adjacency gate, already encoded in the boss block --
-    a range-15 LoS shooter model for him would be approximation, not fact).
-
-    Signature-cached (col_threat_field_obs_signature): the block is a pure function of
-    the player tile + shooter descriptors + the collision grid, so on a hit the resident
-    block is byte-identical to a fresh write. Hits are stationary ticks (player and all
-    stamped NPCs holding position), which attack-animation stalls make common. */
 static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
@@ -1178,12 +1032,6 @@ static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) 
     }
     int block_start = i;
 
-    /* Per-shooter footprint bounds + range, hoisted out of the 289-tile loop so
-       the inner body is a Chebyshev distance from the clamped nearest footprint
-       tile plus a single precomputed static-LoS bit read. Both endpoints handed
-       to col_static_los_get are always in bounds (a live enemy's footprint tile
-       and an in-bounds window tile), so we call it directly -- the exact fast
-       path col_tiles_have_los would dispatch to for these arguments. */
     int shooter_x0[COLO_MAX_NPCS], shooter_y0[COLO_MAX_NPCS];
     int shooter_x1[COLO_MAX_NPCS], shooter_y1[COLO_MAX_NPCS];
     int shooter_ranges[COLO_MAX_NPCS];
@@ -1244,8 +1092,6 @@ static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) 
     *idx = i;
 }
 
-/** COLO_THRALL_DC_OBS_SIZE floats: the Arceuus thrall + Death-Charge state the
-    policy needs to time summons/recasts and the kill-window. */
 static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int lifetime_full = COLO_THRALL_LIFETIME_TICKS[s->active_loadout_profile];
@@ -1345,10 +1191,6 @@ static float col_expected_dpt_for_equipment_vs_npc(
     col_current_style_levels(
         &s->player, style, &current_att_level, &current_str_level);
 
-    /* The BIS oracle scores each candidate with the offensive prayer that buffs ITS
-       style (use_style_matched_prayer=1) since it also COMMITS that prayer; the
-       obs/inventory-DPT path passes 0 to keep the player's live prayer so the
-       observation is unchanged and golden stays bit-identical. */
     OffensivePrayer dpt_prayer = use_style_matched_prayer
         ? col_offensive_prayer_for_attack_style(style)
         : s->player.offensive_prayer;
@@ -1383,8 +1225,6 @@ static float col_expected_dpt_for_equipment_vs_npc(
 
 #define COLO_BEST_GEAR_MAX_CAND 16
 
-/** Per-gear-slot candidate item lists for the best-gear cross-product. The union of
-    worn gear + the 3 profile loadout tables + the 28 inventory cells, deduped. */
 typedef struct {
     uint8_t items[NUM_GEAR_SLOTS][COLO_BEST_GEAR_MAX_CAND];
     int count[NUM_GEAR_SLOTS];
@@ -1401,18 +1241,6 @@ static void col_gear_candidates_add(ColoGearCandidates* c, int slot, uint8_t ite
     c->items[slot][c->count[slot]++] = item;
 }
 
-/** Collect the legal candidate item per gear slot from ONLY what the learning policy
-    can physically field: the worn gear + the 28 inventory cells. The abstract profile
-    loadout tables are deliberately NOT a source: the policy equips solely through the
-    11 per-slot equip heads, which pull from inventory cells, so a loadout-table item
-    that is not also worn or in the bag (e.g. the beginner magic trident) is unreachable
-    and surfacing its DPT would be dishonest. (For speedrun every loadout-table item is
-    physically held, so this loses nothing; for beginner it correctly drops the
-    unfieldable magic line.) ITEM_NONE is never stored as a candidate here; whether a
-    slot may be enumerated empty is decided per-style at cross-product time (see
-    col_item_dominates_empty_for_style), because off-style armour can carry a negative
-    style-relevant bonus that makes the empty slot the argmax for that style. The
-    2h-vs-shield rule is applied at setup-build time. */
 static void col_build_gear_candidates(const ColosseumState* s, ColoGearCandidates* c) {
     memset(c, 0, sizeof(*c));
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
@@ -1426,20 +1254,11 @@ static void col_build_gear_candidates(const ColosseumState* s, ColoGearCandidate
     }
 }
 
-/** True iff equipping `item` can never lower expected DPT for `style` vs leaving the
-    slot empty: all of its style-relevant offensive bonuses are >= 0. DPT is monotonic
-    non-decreasing in each such bonus (attack raises hit chance, strength/magic-damage
-    raises max hit, and every modeled set effect is non-negative and additive), so an
-    item with no negative style-relevant bonus weakly dominates empty and the empty
-    option can be pruned from that slot. If NO candidate in a slot dominates empty, the
-    empty option MUST be enumerated, because off-style armour carries a negative attack
-    bonus for the wrong style (e.g. a melee body's magic attack < 0), making empty the
-    true argmax. This keeps the cross-product pruned yet result-identical per style. */
 static int col_item_dominates_empty_for_style(
     uint8_t item, AttackStyle style, MeleeStyle melee_style
 ) {
     const Item* it = get_item(item);
-    if (!it) return 1; /* ITEM_NONE / invalid contributes nothing -> equals empty */
+    if (!it) return 1;
     switch (style) {
         case ATTACK_STYLE_MAGIC:
             return it->attack_magic >= 0 && it->magic_damage >= 0;
@@ -1456,14 +1275,6 @@ static int col_item_dominates_empty_for_style(
     }
 }
 
-/** Memo for encounter_compute_loadout_stats + encounter_derive_loadout_effect_profile,
-    keyed by the 11-byte loadout array. Result-preserving: both functions are
-    referentially transparent over (loadout, style, prayer, levels, fight_style,
-    spell_base), and within one oracle build the style/prayer/levels/spell_base are
-    fixed by the weapon's style (style-matched prayer) + profile + player levels, so
-    the derived stats depend only on the loadout bytes. The same armour combo recurs
-    across all 10 NPC types and the per-cell marginal path, so this is a large
-    result-identical win. Cache lives on the stack for one oracle build. */
 #define COLO_LOADOUT_MEMO_SLOTS 256
 typedef struct {
     uint8_t key[COLO_LOADOUT_MEMO_SLOTS][NUM_GEAR_SLOTS];
@@ -1483,8 +1294,6 @@ static uint32_t col_loadout_hash(const uint8_t equipment[NUM_GEAR_SLOTS]) {
     return h;
 }
 
-/** Resolve (stats, effects) for one setup against the memo, computing + caching on a
-    miss. style/prayer/levels/spell_base are caller-supplied and constant per build. */
 static void col_memo_loadout_stats(
     ColoLoadoutMemo* memo,
     const uint8_t equipment[NUM_GEAR_SLOTS],
@@ -1522,10 +1331,7 @@ static void col_memo_loadout_stats(
             return;
         }
     }
-    /* Memo full: fall back to a direct compute so results stay identical. The build
-       fills at most #setups entries; COLO_LOADOUT_MEMO_SLOTS is sized so this never
-       trips for the real ~1.3k-setup profiles (the per-style armour combo count is
-       far below 256), but never silently corrupt if it does. */
+
     static EncounterLoadoutStats overflow_stats;
     static OsrsEquipmentEffectProfile overflow_effects;
     encounter_compute_loadout_stats(
@@ -1538,18 +1344,6 @@ static void col_memo_loadout_stats(
     *out_effects = &overflow_effects;
 }
 
-/**
- * Build the best-achievable-gear DPT table for one observation write. For each style
- * (melee/ranged/magic) it runs a PRUNED, RESULT-IDENTICAL brute force over every legal
- * gear setup the player can field: the cartesian of the per-slot candidate union, with
- * the weapon slot ranging over that style's weapons and the shield forced empty for 2h
- * weapons. Each setup is evaluated once (stats + effect profile memoized by loadout
- * key) against every real (non-hazard) NPC type, keeping the argmax DPT + setup per
- * (style, type). The style-matched offensive prayer (Piety/Rigour/Augury) is applied so
- * the number reflects each weapon's true potential (this is why equip+pray must co-fire
- * in one tick). Hazard types (totem/bee) are skipped (their DPT obs is force-zeroed).
- * No greedy-per-slot shortcut, no range gating, no result-changing caching.
- */
 static void col_build_best_gear_table(
     ColosseumState* s,
     ColoBestGear best[COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES]
@@ -1564,7 +1358,6 @@ static void col_build_best_gear_table(
     ColoGearCandidates cand;
     col_build_gear_candidates(s, &cand);
 
-    /* representative fresh-HP NPC per real type (DPT depends only on COLO_NPC_STATS). */
     ColoNPC rep[COLO_NUM_NPC_TYPES];
     for (int type = 0; type < COLO_NUM_NPC_TYPES; type++)
         if (!col_type_is_hazard_entity((ColoNpcType)type))
@@ -1573,8 +1366,6 @@ static void col_build_best_gear_table(
     ColoLoadoutMemo memo;
     memset(&memo, 0, sizeof(memo));
 
-    /* the 9 non-weapon contributing slots, cartesian-enumerated; shield handled
-       separately by the 2h rule below so it is not in this list. */
     static const int combo_slots[] = {
         GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_AMMO,
         GEAR_SLOT_BODY, GEAR_SLOT_LEGS, GEAR_SLOT_HANDS, GEAR_SLOT_FEET,
@@ -1597,8 +1388,6 @@ static void col_build_best_gear_table(
         MeleeStyle melee_style = col_item_melee_style(weapon);
         int two_h = item_is_two_handed(weapon);
 
-        /* shield candidate list: the weapon's slot dictates it. 2h -> only empty;
-           else the union's shield candidates (plus empty if none). */
         uint8_t shield_items[COLO_BEST_GEAR_MAX_CAND + 1];
         int shield_count;
         if (two_h) {
@@ -1611,11 +1400,6 @@ static void col_build_best_gear_table(
             if (shield_count == 0) shield_items[shield_count++] = ITEM_NONE;
         }
 
-        /* Per-combo-slot enumeration options for THIS weapon's style. Each option list
-           is the slot's candidate items, plus ITEM_NONE when no candidate dominates the
-           empty slot for `style` (off-style armour with a negative style-relevant bonus
-           -> empty can be the argmax). A slot with no candidates enumerates only
-           ITEM_NONE. This is the pruned-yet-result-identical empty injection. */
         uint8_t slot_opt[16][COLO_BEST_GEAR_MAX_CAND + 1];
         int slot_opt_count[16];
         for (int d = 0; d < n_combo_slots; d++) {
@@ -1636,7 +1420,6 @@ static void col_build_best_gear_table(
             }
         }
 
-        /* odometer cross-product over combo_slots (+ shield as an extra digit). */
         int digit_max[16];
         for (int d = 0; d < n_combo_slots; d++)
             digit_max[d] = slot_opt_count[d];
@@ -1682,17 +1465,6 @@ static void col_build_best_gear_table(
     }
 }
 
-/** Content signature over every ColosseumState input the best-gear table reads: the 11
-    worn slots, the 28 inventory cells, the 4 combat levels that drive accuracy + max hit
-    (attack/strength/ranged/magic), and the active loadout profile (it selects the magic
-    spell base via col_weapon_set_spell_base_damage). HP is excluded on purpose (dharok
-    scores at full HP), as are NPC positions, the alive set, and the live prayer (the
-    table uses the style-matched prayer) -- the table depends on none of them. Consumable
-    cells hash as ITEM_NONE for free (their item_idx IS ITEM_NONE; doses live in
-    raw_osrs_id/dose which the table provably never reads), so potion sips and eating
-    never invalidate. FNV-1a over the bytes; a collision only costs a missed reuse, never
-    a wrong result, because a true input change almost always moves the hash and forces a
-    rebuild. */
 static uint64_t col_best_gear_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
@@ -1709,20 +1481,6 @@ static uint64_t col_best_gear_signature(const ColosseumState* s) {
     return h;
 }
 
-/** Best-gear table for the current state, rebuilt only when the content signature
-    changes (a handful of gear/inventory/level edits per episode) and reused on every
-    other tick. Result-identical to calling col_build_best_gear_table directly: the
-    table is a pure function of the signature inputs, so the cached value equals a fresh
-    build whenever the signature matches. This lifts the per-tick brute force (which was
-    ~80% of training wall-clock) out of the obs hot path; all obs + metric call sites
-    share one build per (env, signature).
-
-    Set-associative (FIFO): a policy cycles through a few gear setups (style kits + spec
-    swaps), so a single cache entry rebuilds on every weapon switch. Keeping the last
-    COLO_BEST_GEAR_CACHE_WAYS distinct signatures resident lets those switches hit. A hit
-    returns the byte-identical table a fresh build would produce, so the obs is unchanged
-    -- only the rebuild FREQUENCY drops. The memo survives episode resets (see
-    ColoObsMemoCaches), so the respawn's identical starting loadout also hits. */
 static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES] {
     if (!s) abort();
     ColoObsMemoCaches* memos = &s->obs_memos;
@@ -1739,15 +1497,6 @@ static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM
     return memos->best_gear[slot];
 }
 
-/**
- * BIS-gear oracle (gated by ColConfig.bis_gear_oracle_mode, default off). When the player
- * is attacking a target, force-equips the weapon set with the highest expected DPT among
- * the sets usable from the player's current tile (melee is only a candidate when the target
- * is melee-adjacent, so the cheat never forces a melee weapon the agent cannot reach with).
- * This removes the weapon-switch skill while leaving positioning to the agent. No target =
- * no switch. Runs in col_tick_player_ctx right before the attack so the chosen set is the
- * one that fires.
- */
 static void col_apply_bis_gear_oracle(ColosseumState* s) {
     int target = col_player_target_slot(s);
     if (target < 0 || target >= COLO_MAX_NPCS) return;
@@ -1763,9 +1512,7 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
         float dpt = col_expected_dpt_for_equipment_vs_npc(s, loadouts[set], npc, 1);
         if (dpt > best_dpt) { best_dpt = dpt; best_set = (ColoWeaponSet)set; }
     }
-    /* Move the offensive prayer to the chosen set's style so the fired attack is
-       actually buffed. col_apply_weapon_set early-returns (skipping its dirty mark)
-       when best_set is already equipped, so set the prayer + mark dirty here. */
+
     OffensivePrayer best_prayer =
         col_offensive_prayer_for_attack_style(col_weapon_set_attack_style(best_set));
     if (s->player.offensive_prayer != best_prayer) {
@@ -1775,9 +1522,6 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
     col_apply_weapon_set(s, best_set);
 }
 
-/** Is the equipped weapon set's STYLE the best-achievable style vs this NPC? Uses the
-    whole-setup best-gear table: 1 if the set's style is the argmax over the 3 styles,
-    0 if a different style achieves higher best-gear DPT, -1 if no live target. */
 static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
     int item_style = get_item_attack_style(item);
     if (item_style == 2) return COLO_GEAR_RANGED;
@@ -1785,16 +1529,6 @@ static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
     return COLO_GEAR_MELEE;
 }
 
-/** Content signature over every ColosseumState input the weapon-choice obs block reads.
-    Folds the best-gear signature (worn gear + inventory + the 4 combat levels + loadout
-    profile -- covers the per-cell items, every candidate setup, the spec bits and the
-    wielded DPT) with the live target descriptor: whether a live non-hazard target
-    exists, its NPC type (selects the static stat row), its drained defence level (spec
-    weapons lower it and it feeds the melee/ranged def roll) and its footprint size (the
-    scythe splat count). HP is excluded on purpose -- the block scores at MAXED_BASE_HITPOINTS
-    (dharok floor), never live HP. Two targets with identical (type, def_drained, size)
-    yield an identical block, so keying on the descriptor rather than the slot index is
-    both complete and maximally reusable. FNV-1a; a collision only costs a missed reuse. */
 static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
     uint64_t h = col_best_gear_signature(s);
     int has_target = 0, type = 0, def_drained = 0, size = 0;
@@ -1814,15 +1548,6 @@ static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
     return h;
 }
 
-/**
- * Weapon-choice obs tail: per-cell target DPT, per-cell spec bit, wielded
- * DPT + wielded-vs-best ratio. All target-conditioned floats are 0 without a
- * live non-hazard target.
- *
- * Signature-cached (col_weapon_choice_obs_signature): the block is a pure function of
- * the best-gear inputs + the live target descriptor, so on a hit the resident block is
- * byte-identical to a fresh write and only the per-item DPT recompute frequency drops.
- */
 static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) {
     int i = *io;
 
@@ -1896,7 +1621,6 @@ static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) 
     *io = i;
 }
 
-/** COLO_SPAWN_OBS_SIZE floats: spawn-phase countdowns + anchor-blocked bits. */
 static void col_write_spawn_obs(ColosseumState* s, float* obs, int* io) {
     int i = *io;
     float until_spawn = (float)s->wave_spawn_delay;
@@ -1968,15 +1692,6 @@ static void col_inventory_cell_post_use_deltas(
     for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
 }
 
-/** Content signature over every ColosseumState input the inventory+equipped obs block
-    reads. Folds the worn gear (equipped-self rows, the is-equipped bit, and the
-    equipment projection that every post-use delta subtracts from), each cell's full
-    contents packed as one word -- item_idx (affordance identity), raw_osrs_id
-    (consumable lookup + present bit) AND dose (the dose feature the best-gear signature
-    deliberately omits) -- and the 3 base stats the consumable magnitudes normalize
-    against. Everything else the leaf writers touch is the process-constant
-    ITEM_DATABASE / consumable tables. FNV-1a; a collision only costs a missed reuse,
-    never a wrong result. */
 static uint64_t col_inventory_obs_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
@@ -1996,12 +1711,6 @@ static uint64_t col_inventory_obs_signature(const ColosseumState* s) {
     return h;
 }
 
-/** Inventory cell affordance rows + equipped-self rows.
-
-    Signature-cached (col_inventory_obs_signature): the block is a pure function of worn
-    gear + cell contents + base stats, so on a hit the resident block is byte-identical
-    to a fresh write. The block only changes on eat/drink/equip/pickup, so nearly every
-    tick hits. */
 static void col_write_inventory_and_equipped_obs(
     ColosseumState* s,
     float* obs,
@@ -2074,12 +1783,11 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     int px = s->player.x, py = s->player.y;
     const EncounterLoadoutStats* ls = col_live_loadout_stats(s);
 
-    /* player block (36) */
     obs[i++] = col_clamp01((float)s->player.current_hitpoints / 99.0f);
-    obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;   /* dist to west wall */
-    obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;   /* dist to east wall */
-    obs[i++] = (float)(py - COLO_ARENA_MIN_Y) / (float)COLO_ARENA_HEIGHT;  /* dist to south wall */
-    obs[i++] = (float)(COLO_ARENA_MAX_Y - py) / (float)COLO_ARENA_HEIGHT;  /* dist to north wall */
+    obs[i++] = (float)(px - COLO_ARENA_MIN_X) / (float)COLO_ARENA_WIDTH;
+    obs[i++] = (float)(COLO_ARENA_MAX_X - px) / (float)COLO_ARENA_WIDTH;
+    obs[i++] = (float)(py - COLO_ARENA_MIN_Y) / (float)COLO_ARENA_HEIGHT;
+    obs[i++] = (float)(COLO_ARENA_MAX_Y - py) / (float)COLO_ARENA_HEIGHT;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
@@ -2103,15 +1811,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = col_clamp01((float)ls->def_crush / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_magic / 300.0f);
     obs[i++] = col_clamp01((float)ls->def_ranged / 300.0f);
-    /* live offensive scalars; divisors sized for boosted+prayer BIS so top loadouts don't flatten to 1.0 (eff_level peaks ~158 melee+Piety, attack_bonus ~180 BIS mage magic-attack, strength_bonus ~150 BIS melee); col_clamp01 is the backstop */
     obs[i++] = col_clamp01((float)ls->eff_level / 165.0f);
     obs[i++] = col_clamp01((float)ls->attack_bonus / 200.0f);
     obs[i++] = col_clamp01((float)ls->strength_bonus / 160.0f);
-    /* spec detail */
     int colo_spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
     obs[i++] = col_clamp01((float)colo_spec_cost / 100.0f);
     obs[i++] = colo_spec_cost > 0 ? 1.0f : 0.0f;
-    /* profile + spell base */
     obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_SPEEDRUN ? 1.0f : 0.0f;
     obs[i++] = s->active_loadout_profile == COLO_LOADOUT_PROFILE_BEGINNER ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)ls->spell_base_damage / 40.0f);
@@ -2137,7 +1842,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_VENATOR);
 #endif
 
-    /* per-NPC slots (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC) */
     for (int n = 0; n < COLO_OBS_NPCS; n++) {
         int npc_idx = s->current_obs_slots[n];
         if (npc_idx < 0 || npc_idx >= COLO_MAX_NPCS || !s->npcs[npc_idx].active) {
@@ -2152,7 +1856,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_NPC_SLOTS);
 #endif
 
-    /* modifiers: per-modifier active flag + tier, then draft state */
     for (int m = 0; m < COLO_NUM_MODIFIERS; m++) {
         obs[i++] = (s->modifiers.active_mask & (1u << m)) ? 1.0f : 0.0f;
         obs[i++] = col_clamp01((float)s->modifiers.tier[m] / 3.0f);
@@ -2169,8 +1872,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_MODIFIERS);
 #endif
 
-    /* wave block (4). npcs_remaining tracks wave progress, so hazard entities
-       (totems/bees — visible in the per-NPC slots) are excluded. */
     int npcs_remaining = 0;
     for (int n = 0; n < COLO_MAX_NPCS; n++)
         if (col_npc_is_live_enemy(&s->npcs[n])) npcs_remaining++;
@@ -2181,14 +1882,12 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) ? 1.0f : 0.0f;
     assert(i == COLO_OBS_AFTER_WAVE);
 
-    /* boss block (51) */
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);
 #endif
 
-    /* pending-hit forecast on the player (soonest-landing first) */
     int order[ENCOUNTER_MAX_PENDING_HITS];
     int nhits = col_collect_obs_pending_hits(s, order);
     for (int h = 0; h < COLO_OBS_PENDING_HITS; h++) {

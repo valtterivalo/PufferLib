@@ -616,7 +616,6 @@ static InfernoLabCommand inf_lab_build_script_command(
                 inf_lab_abort("command %s requires x and y", command);
             if (args->type < 0)
                 inf_lab_abort("npc command requires type");
-            /* slot omitted (-1) = auto-pick a free slot at apply time. */
             out.kind = INF_LAB_COMMAND_SPAWN_NPC;
             out.as.spawn_npc.slot = args->slot;
             out.as.spawn_npc.type = (InfNPCType)args->type;

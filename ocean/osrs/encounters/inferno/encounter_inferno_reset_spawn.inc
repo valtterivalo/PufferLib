@@ -345,10 +345,9 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     osrs_interaction_init(&s->interaction);
     s->player.spec_armed = 0;
     s->player.special_energy = 100;
-    s->player.run_energy = 10000;  /* full run energy (OSRS stores as 0-10000) */
+    s->player.run_energy = 10000;
     s->last_hit_by_type = -1;
 
-    /* offensive prayer is agent-controlled runtime state; pass NONE at reset, updated when the agent toggles a prayer */
     encounter_compute_loadout_stats(loadouts[INF_GEAR_MAGE], ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30, &s->loadout_stats[INF_GEAR_MAGE]);
     encounter_compute_loadout_stats(loadouts[INF_GEAR_LONG_RANGE], ATTACK_STYLE_RANGED,
@@ -362,7 +361,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player.y = is_zuk_wave ? INF_ZUK_PLAYER_START_Y : INF_PLAYER_START_Y;
     inf_rebuild_player_collision_flags(s);
 
-    /* pillars: all destroyed at end of wave 66 (index 65), so waves 66+ have none */
     for (int i = 0; i < INF_NUM_PILLARS; i++) {
         s->pillars[i].x = INF_PILLAR_POS[i][0];
         s->pillars[i].y = INF_PILLAR_POS[i][1];
@@ -389,7 +387,6 @@ static void inf_reset_ctx(EncounterState* state, EncounterContext* context, uint
 static void inf_reset(EncounterState* state, uint32_t seed) {
     inf_reset_ctx(state, (EncounterContext*)inf_legacy_context(), seed);
 }
-
 
 static int inf_find_free_npc(InfernoState* s) {
     for (int i = 0; i < INF_MAX_NPCS; i++) {
@@ -579,7 +576,6 @@ static void inf_spawn_wave(InfernoState* s) {
 
     inf_shuffle_spawns(s);
 
-    /* pick random active pillar for nibblers this wave */
     {
         int active_pillars[INF_NUM_PILLARS];
         int num_active = 0;
@@ -590,7 +586,6 @@ static void inf_spawn_wave(InfernoState* s) {
             ? active_pillars[encounter_rand_int(&s->rng_state, num_active)] : -1;
     }
 
-    /* waves 67-69 have no pillars (InfernoRegion.ts:359); clear on spawn for mid-episode transitions */
     if (s->wave >= 66) {
         int pillars_changed = 0;
         for (int p = 0; p < INF_NUM_PILLARS; p++) {
@@ -603,36 +598,32 @@ static void inf_spawn_wave(InfernoState* s) {
         if (pillars_changed) inf_rebuild_los(s);
     }
 
-    /* wave 67: single jad at fixed pos (InfernoRegion.ts:441-451). coords Y-flipped: ours_y = 57 - ref_y */
     if (s->wave == 66) {
         s->player.x = 18;
-        s->player.y = 32;  /* 57 - 25 */
+        s->player.y = 32;
         inf_rebuild_player_collision_flags(s);
         int slot = inf_find_free_npc(s);
         if (slot >= 0) {
-            inf_init_npc(s, slot, INF_NPC_JAD, 23, 30);  /* 57 - 27 = 30 */
+            inf_init_npc(s, slot, INF_NPC_JAD, 23, 30);
             s->npcs[slot].stun_timer = 1;
             s->npcs[slot].attack_timer = 8;
         }
         return;
     }
 
-    /* wave 68: three jads, staggered first attacks (InfernoRegion.ts:452-479). stun [1,4,7] shuffled;
-       attack_timer decrements during stun, so initial timer folds in the stun offset (cadence parity) */
     if (s->wave == 67) {
         s->player.x = 25;
-        s->player.y = 30;  /* 57 - 27 */
+        s->player.y = 30;
         inf_rebuild_player_collision_flags(s);
-        /* shuffle [1, 4, 7] via Fisher-Yates */
         int stuns[3] = { 1, 4, 7 };
         for (int i = 2; i > 0; i--) {
             int j = encounter_rand_int(&s->rng_state, i + 1);
             int tmp = stuns[i]; stuns[i] = stuns[j]; stuns[j] = tmp;
         }
         static const int JAD_POS[3][2] = {
-            {18, 33},  /* 57 - 24 */
-            {28, 33},  /* 57 - 24 */
-            {23, 22},  /* 57 - 35 */
+            {18, 33},
+            {28, 33},
+            {23, 22},
         };
         for (int i = 0; i < 3; i++) {
             int slot = inf_find_free_npc(s);
@@ -650,7 +641,6 @@ static void inf_spawn_wave(InfernoState* s) {
         if (zuk_idx >= 0) {
             inf_init_npc(s, zuk_idx, INF_NPC_ZUK, INF_ZUK_X, INF_ZUK_Y);
             s->min_zuk_hp_seen = (float)s->npcs[zuk_idx].hp;
-            /* InfernoTrainer: stun=8 counts down first, then attackDelay=14 to first attack */
             s->npcs[zuk_idx].stun_timer = 8;
             s->npcs[zuk_idx].attack_timer = 14;
         }
@@ -660,7 +650,7 @@ static void inf_spawn_wave(InfernoState* s) {
             inf_init_npc(s, shield_idx, INF_NPC_ZUK_SHIELD, INF_ZUK_SHIELD_X, INF_ZUK_SHIELD_Y);
             s->zuk.shield_idx = shield_idx;
             s->zuk.shield_dir = (encounter_rand_int(&s->rng_state, 2) == 0) ? 1 : -1;
-            s->zuk.shield_freeze = 1;  /* 1-tick freeze on spawn */
+            s->zuk.shield_freeze = 1;
         }
 
         s->zuk.set_timer = 72;
@@ -678,7 +668,6 @@ static void inf_spawn_wave(InfernoState* s) {
         return;
     }
 
-    /* regular waves: spawn NPCs at shuffled positions */
     int spawn_idx = 0;
     for (int i = 0; i < w->count && i < INF_MAX_NPCS; i++) {
         InfNPCType type = (InfNPCType)w->types[i];
@@ -687,7 +676,6 @@ static void inf_spawn_wave(InfernoState* s) {
 
         int sx, sy;
         if (type == INF_NPC_NIBBLER) {
-            /* nibblers spawn near pillars with small random offset */
             sx = INF_NIBBLER_SPAWN_X + encounter_rand_int(&s->rng_state, 3) - 1;
             sy = INF_NIBBLER_SPAWN_Y + encounter_rand_int(&s->rng_state, 3) - 1;
         } else {

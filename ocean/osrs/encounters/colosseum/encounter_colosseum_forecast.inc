@@ -1,8 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_forecast.inc
- * @brief Read-only step-out prayer forecast for candidate player movement.
- */
 
 #define COLO_STYLE_MASK_MELEE  1
 #define COLO_STYLE_MASK_RANGED 2
@@ -175,8 +171,6 @@ static ColoForecastLanding col_step_out_forecast_action_landing_ctx(
         if (ty > landing.land_y) dy = 1;
         else if (ty < landing.land_y) dy = -1;
 
-        /* a diagonal step is legal only when both shared-corner tiles are walkable
-           (OSRS no-corner-cut rule) */
         int moved = 0;
         if (dx != 0 && dy != 0 &&
                 col_player_walkable((void*)s, landing.land_x + dx, landing.land_y + dy) &&
@@ -397,7 +391,6 @@ static int col_forecast_local_dist_to_player(
     return encounter_dist_to_npc(player_x, player_y, npc->x, npc->y, npc->size);
 }
 
-/** Forecast mirror of col_npc_melee_adjacent_to_player (footprint cardinal). */
 static int col_forecast_local_melee_adjacent(
     const ColoForecastNpcLocal* npc,
     int player_x,
@@ -407,7 +400,6 @@ static int col_forecast_local_melee_adjacent(
         NULL, 0, npc->x, npc->y, npc->size, player_x, player_y, 1, 1);
 }
 
-/** Conservative distance proof that a forecast NPC cannot threaten a landing. */
 static int col_forecast_npc_threat_distance_impossible(
     const ColoForecastNpcLocal* npc,
     int player_x,
@@ -427,7 +419,6 @@ static int col_forecast_npc_threat_distance_impossible(
     return dist > attack_reach + steps_per_tick * horizon;
 }
 
-/** Return true when all live forecast NPCs are too far away to write threats. */
 static int col_forecast_action_rollout_writes_no_threats(
     const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
     const int slots[COLO_MAX_NPCS],
@@ -465,10 +456,6 @@ static int col_forecast_move_result_matches(
         move->land_x == action->land_x && move->land_y == action->land_y;
 }
 
-/**
- * Forecast movement uses a local collision-grid. Warband and Sol use greedy local
- * stepping instead of the live BFS routefinder.
- */
 static ColoForecastMoveResult col_forecast_local_move_npc(
     const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
@@ -485,10 +472,6 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
             npc->sol_immobile_ticks > 0)
         return result;
 
-    /* Hold-in-place cases are decided before lifting the footprint: neither the
-       ranged-hold test (static-LoS table + geometry) nor the attack-timer test
-       reads npc_flags, so a held NPC keeps its base footprint stamp untouched
-       and skips the unstamp/restamp round trip the moving path needs. */
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
@@ -558,10 +541,6 @@ static int col_forecast_warband_phase(const ColosseumState* s, int tick_idx) {
     return phase;
 }
 
-/** Per-rollout precomputed quantities shared by every candidate landing.
-    warband_phase is a landing-independent function of (s->tick + tick_idx); the
-    multi-manticore flag gates the O(slots) mid-barrage scan, which can only ever
-    fire with at least two live manticores. */
 typedef struct {
     int warband_phase[COLO_STEP_OUT_FORECAST_HORIZON];
     int multi_manticore_possible;
@@ -589,11 +568,6 @@ static ColoForecastPrecomp col_forecast_precompute(
     return pre;
 }
 
-/** forecast mirror of col_manticore_delay_ready_peers: when a local manticore
-    starts a barrage, delay every OTHER ready+able local manticore 5 ticks.
-    Same pre-decrement timer <= 1 eligibility and same +1 as the sim (swept
-    peers sit later in the slot loop, so their own attack_timer decrement
-    still runs this forecast tick). */
 static void col_forecast_manticore_delay_ready_peers(
     const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
@@ -852,16 +826,10 @@ static void col_forecast_local_copy_slot_set(
     }
 }
 
-/** Action layout: idle(0), walk(1-8, Chebyshev-1), run(9-24, Chebyshev-2). The 16
-    run-tile actions are exactly indices 9..24. */
 static int col_forecast_action_is_run_tile(int action_idx) {
     return action_idx >= 9 && action_idx < ENCOUNTER_MOVE_ACTIONS;
 }
 
-/** STATIC_THREAT: the style a single NPC would throw at the true landing from its current
-    tile, gated by range + LoS only, no movement and no per-tick cycle bookkeeping. Records
-    into tick 0. The offtick-opportunity flag and any threat that only materializes after
-    the NPC closes distance are intentionally not modeled here. */
 static void col_forecast_static_threat_npc(
     const ColosseumState* s,
     const ColoForecastNpcLocal* npc,
@@ -917,7 +885,6 @@ static void col_forecast_static_threat_npc(
             action, summary, 0, npc->type, npc->default_style);
 }
 
-/** STATIC_THREAT pass over all forecast NPCs for one run-tile action. */
 static void col_forecast_static_threat_action(
     const ColosseumState* s,
     const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
@@ -932,11 +899,6 @@ static void col_forecast_static_threat_action(
     }
 }
 
-/** Landing-independent Solarflare projection inputs, computed once per rollout.
-    pillar is the single nearest orb to the CURRENT player tile (Chebyshev,
-    first-wins ties), matching col_write_nearest_modifier_solarflare; the orbs
-    hug their own pillars so the player threatens at most one. pillar == -1 when
-    Solarflare is inactive, which short-circuits every per-action projection. */
 typedef struct {
     int pillar;
     int tier;
@@ -967,10 +929,6 @@ static ColoForecastSolarflare col_forecast_solarflare_precompute(const Colosseum
     return pre;
 }
 
-/** Soonest forecast tick in [0, horizon) at which the nearest pillar's orb shares
-    the landing tile, projecting the cadence forward with the shared live advance
-    (col_solarflare_advance_orb) so the step sequence matches the sim tick-for-tick.
-    Returns -1 when the orb never reaches the landing within the horizon. */
 static int col_forecast_solarflare_contact_tick(
     const ColosseumState* s,
     const ColoForecastSolarflare* pre,
@@ -1106,7 +1064,6 @@ static int col_write_step_out_forecast_obs_summary(
     return i;
 }
 
-/** Runs the rollout at the given horizon with the FULL run-tile mode. */
 static void col_build_step_out_forecast_horizon(
     const ColosseumState* s,
     ColoStepOutForecast* out,
@@ -1116,7 +1073,6 @@ static void col_build_step_out_forecast_horizon(
         s, out, horizon, COLO_FORECAST_RUN_TILE_FULL);
 }
 
-/** Compatibility entry point: full compile-time horizon, full run-tile rollout. */
 static void col_build_step_out_forecast_ctx(
     const ColosseumState* s,
     ColoStepOutForecast* out

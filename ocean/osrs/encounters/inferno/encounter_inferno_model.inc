@@ -3,8 +3,8 @@
 #define INF_ARENA_MAX_X    39
 #define INF_ARENA_MIN_Y    14
 #define INF_ARENA_MAX_Y    43
-#define INF_ARENA_WIDTH    (INF_ARENA_MAX_X - INF_ARENA_MIN_X + 1)  /* 29 */
-#define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)  /* 30 */
+#define INF_ARENA_WIDTH    (INF_ARENA_MAX_X - INF_ARENA_MIN_X + 1)
+#define INF_ARENA_HEIGHT   (INF_ARENA_MAX_Y - INF_ARENA_MIN_Y + 1)
 
 #define INF_PLAYER_START_X 25
 #define INF_PLAYER_START_Y 16
@@ -20,29 +20,26 @@
 #define INF_PILLAR_HP     255
 
 static const int INF_PILLAR_POS[INF_NUM_PILLARS][2] = {
-    { 21, 20 },  /* south pillar */
-    { 11, 34 },  /* west pillar */
-    { 28, 36 },  /* north pillar */
+    { 21, 20 },
+    { 11, 34 },
+    { 28, 36 },
 };
 
-/* 9 mob spawn positions (shuffled per wave) */
 #define INF_NUM_SPAWN_POS 9
 static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
     {12, 38}, {33, 38}, {14, 32}, {34, 31}, {27, 26},
     {16, 20}, {34, 18}, {12, 15}, {26, 15},
 };
 
-/* nibbler spawn position (near pillars) */
 #define INF_NIBBLER_SPAWN_X 20
 #define INF_NIBBLER_SPAWN_Y 31
 
-#define INF_MAX_TICKS     18000  /* 3 hours at 0.6s/tick */
+#define INF_MAX_TICKS     18000
 #define INF_NUM_WAVES     69
 #define INF_WAVE_ZUK      (INF_NUM_WAVES - 1)
 #define INF_START_WAVE_ZUK_JAD      (INF_WAVE_ZUK + 1)
 #define INF_MAX_PUBLIC_START_WAVE   (INF_NUM_WAVES + 2)
 #define INF_NUM_ACTION_HEADS 9
-
 
 typedef enum {
     INF_NPC_NIBBLER = 0,
@@ -62,13 +59,11 @@ typedef enum {
     INF_NUM_NPC_TYPES
 } InfNPCType;
 
-/* terminal result of an inferno episode (the InfernoState.winner field) */
 typedef enum {
-    INF_OUTCOME_PLAYER_WON = 0,   /* reached and killed Zuk */
-    INF_OUTCOME_PLAYER_DIED = 1,  /* died or hit the tick cap */
+    INF_OUTCOME_PLAYER_WON = 0,
+    INF_OUTCOME_PLAYER_DIED = 1,
 } InfOutcome;
 
-/* OSRS cache NPC def IDs per type, for renderer model/anim lookup in npc_models.h */
 static const int INF_NPC_DEF_IDS[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = 7691,
     [INF_NPC_BAT]        = 7692,
@@ -112,48 +107,41 @@ typedef struct {
     int attack_range;
     int size;
     AttackStyle default_style;
-    MeleeStyle melee_style;  /* selects incoming-hit defence bonus */
-    int can_melee;       /* 1 if can switch to melee when close */
+    MeleeStyle melee_style;
+    int can_melee;
 
-    /* combat levels (used for attack rolls and max hit computation) */
     int att_level, str_level, def_level, range_level, magic_level;
 
-    /* attack bonuses (for NPC attack roll: (level + 9) * (bonus + 64)) */
-    int melee_att_bonus;   /* best of stab/slash/crush */
+    int melee_att_bonus;
     int range_att_bonus;
     int magic_att_bonus;
 
-    /* strength bonuses (for max hit formulas) */
     int melee_str_bonus;
     int ranged_str_bonus;
-    int magic_base_dmg;    /* base spell damage */
-    int magic_dmg_pct;     /* magic damage multiplier as % (100 = 1.0x) */
+    int magic_base_dmg;
+    int magic_dmg_pct;
 
-    /* defence bonuses (for player hit chance against this NPC) */
     int magic_def_bonus;
     int ranged_def_bonus;
 
-    /* max hit cap: 0 = no cap (use formula), >0 = clamp result (Jad/Zuk vs wiki) */
     int max_hit_cap;
 
-    int stun_on_spawn;   /* ticks of stun when first spawned */
-    int can_move;        /* 0 = cannot move (zuk, zuk healers) */
+    int stun_on_spawn;
+    int can_move;
 } InfNPCStats;
 
-/* encounter-specific fields not in the generated monster database */
 typedef struct {
     int attack_range;
     AttackStyle default_style;
-    MeleeStyle melee_style;  /* selects incoming-hit defence bonus */
-    int can_melee;       /* 1 if can switch to melee when close */
-    int magic_base_dmg;  /* base spell damage */
-    int magic_dmg_pct;   /* magic damage multiplier as % (100 = 1.0x) */
-    int max_hit_cap;     /* 0 = no cap, >0 = clamp formula result to this */
-    int stun_on_spawn;   /* ticks of stun when first spawned */
-    int can_move;        /* 0 = cannot move (zuk, zuk healers) */
+    MeleeStyle melee_style;
+    int can_melee;
+    int magic_base_dmg;
+    int magic_dmg_pct;
+    int max_hit_cap;
+    int stun_on_spawn;
+    int can_move;
 } InfNPCOverlay;
 
-/* maps InfNPCType -> MonsterIndex for MONSTER_DATABASE lookup */
 static const MonsterIndex INF_NPC_TO_MON[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = MON_JAL_NIB,
     [INF_NPC_BAT]        = MON_JAL_MEJRAH,
@@ -171,7 +159,6 @@ static const MonsterIndex INF_NPC_TO_MON[INF_NUM_NPC_TYPES] = {
     [INF_NPC_ZUK_SHIELD] = MON_ZUK_SHIELD,
 };
 
-/* encounter-specific overlay: fields the generated DB doesn't cover */
 static const InfNPCOverlay INF_NPC_OVERLAY[INF_NUM_NPC_TYPES] = {
     [INF_NPC_NIBBLER]    = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 1, 1 },
     [INF_NPC_BAT]        = { 4,  ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  0,   0,   0, 0, 0, 1 },
@@ -184,15 +171,13 @@ static const InfNPCOverlay INF_NPC_OVERLAY[INF_NUM_NPC_TYPES] = {
     [INF_NPC_MAGER]      = { 15, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  1,  70, 100, 0, 0, 1 },
     [INF_NPC_JAD]        = { 50, ATTACK_STYLE_RANGED, MELEE_STYLE_STAB,  1, 113, 100, 113, 0, 1 },
     [INF_NPC_ZUK]        = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0, 148, 100, 0, 8, 0 },
-    [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 1, 1 },  /* stun_on_spawn=1 per YtHurKot.ts:50 */
-    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 1, 0 },  /* stun_on_spawn=1 per InfernoTrainer JalMejJak.ts SPAWN_DELAY */
+    [INF_NPC_HEALER_JAD] = { 1,  ATTACK_STYLE_MELEE,  MELEE_STYLE_CRUSH, 0,   0,   0, 0, 1, 1 },
+    [INF_NPC_HEALER_ZUK] = { 99, ATTACK_STYLE_MAGIC,  MELEE_STYLE_STAB,  0,  10, 100, 0, 1, 0 },
     [INF_NPC_ZUK_SHIELD] = { 0,  ATTACK_STYLE_NONE,   MELEE_STYLE_STAB,  0,   0,   0, 0, 1, 0 },
 };
 
-/* populated at startup by inf_build_npc_stats() */
 static InfNPCStats INF_NPC_STATS[INF_NUM_NPC_TYPES];
 
-/* merge MONSTER_DATABASE + INF_NPC_OVERLAY into INF_NPC_STATS */
 static void inf_build_npc_stats(void) {
     for (int i = 0; i < INF_NUM_NPC_TYPES; i++) {
         const MonsterStats* m = &MONSTER_DATABASE[INF_NPC_TO_MON[i]];
@@ -201,7 +186,6 @@ static void inf_build_npc_stats(void) {
 
         s->hp              = m->hp;
         s->attack_speed    = m->attack_speed;
-        /* blob: 2-phase scan/fire, per-phase speed 3 = 6-tick cadence (JalAk.ts attackSpeed=3) */
         if (i == INF_NPC_BLOB) s->attack_speed = 3;
         s->size            = m->size;
         s->att_level       = m->att_level;
@@ -229,8 +213,7 @@ static void inf_build_npc_stats(void) {
     }
 }
 
-
-#define INF_MAX_NPCS_PER_WAVE 9  /* wave 62: NNN BB BL M R MA = 9 */
+#define INF_MAX_NPCS_PER_WAVE 9
 
 typedef struct {
     uint8_t types[INF_MAX_NPCS_PER_WAVE];
@@ -248,7 +231,6 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     #define Z INF_NPC_ZUK
     #define W(...) { .types = { __VA_ARGS__ }, .count = sizeof((uint8_t[]){__VA_ARGS__}) }
 
-    /* waves 1-8: bats + nibblers introduction */
     [0]  = W(N,N,N, B),
     [1]  = W(N,N,N, B,B),
     [2]  = W(N,N,N, N,N,N),
@@ -258,7 +240,6 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     [6]  = W(N,N,N, BL,BL),
     [7]  = W(N,N,N, N,N,N),
 
-    /* waves 9-17: meleer introduction */
     [8]  = W(N,N,N, M),
     [9]  = W(N,N,N, B,M),
     [10] = W(N,N,N, B,B,M),
@@ -269,7 +250,6 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     [15] = W(N,N,N, M,M),
     [16] = W(N,N,N, N,N,N),
 
-    /* waves 18-34: ranger introduction */
     [17] = W(N,N,N, R),
     [18] = W(N,N,N, B,R),
     [19] = W(N,N,N, B,B,R),
@@ -288,7 +268,6 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     [32] = W(N,N,N, R,R),
     [33] = W(N,N,N, N,N,N),
 
-    /* waves 35-66: mager introduction (all combinations) */
     [34] = W(N,N,N, MA),
     [35] = W(N,N,N, B,MA),
     [36] = W(N,N,N, B,B,MA),
@@ -322,7 +301,6 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     [64] = W(N,N,N, R,R,MA),
     [65] = W(N,N,N, MA,MA),
 
-    /* waves 67-69: jads + zuk */
     [66] = W(J),
     [67] = W(J,J,J),
     [68] = W(Z),
@@ -338,13 +316,10 @@ static const InfWaveDef INF_WAVES[INF_NUM_WAVES] = {
     #undef W
 };
 
-
-/* max active NPCs: wave 62 has 9 + blob splits (3 per blob, up to 2 blobs = 6) + healers */
 #define INF_MAX_NPCS      32
 #define INF_OBS_NPCS      37
 #define INF_START_READY_TICKS 6
 
-/* dead mob store for mager resurrection */
 #define INF_MAX_DEAD_MOBS 16
 
 typedef struct {
@@ -353,7 +328,6 @@ typedef struct {
     int hp, max_hp;
 } InfDeadMob;
 
-/* 4 healers x 3 sparks x 2 overlapping volleys = 24; cap 32 for headroom */
 #define INF_MAX_PENDING_SPARKS 32
 
 typedef struct {
@@ -374,17 +348,15 @@ typedef struct {
     int ticks_remaining;
 } InfNpcTargetHit;
 
-/* jad-only state; valid iff type is INF_NPC_JAD, reach via inf_npc_jad() */
 typedef struct {
-    AttackStyle attack_style;  /* committed next ranged/magic style preview, NONE if unknown */
-    int healer_spawned;  /* 1 once this jad has spawned its healers */
+    AttackStyle attack_style;
+    int healer_spawned;
 } InfJadState;
 
-/* healer-only state; valid iff type is a healer, reach via inf_npc_healer() */
 typedef struct {
-    int owner_idx;  /* which jad/zuk this healer heals (-1 = none) */
-    int target;     /* NPC index of the unit currently being healed (-1 = none) */
-    int timer;      /* ticks until the in-flight heal lands (0 = none) */
+    int owner_idx;
+    int target;
+    int timer;
 } InfHealerState;
 
 typedef struct {
@@ -393,55 +365,45 @@ typedef struct {
     int hp, max_hp;
     int size;
     uint32_t render_id;
-    int attack_timer;      /* ticks until next attack */
-    AttackStyle attack_style;  /* current attack style (may differ from default for blobs) */
+    int attack_timer;
+    AttackStyle attack_style;
     int active;
-    int target_x, target_y; /* movement destination */
-    int stun_timer;        /* ticks of stun remaining (cannot act) */
+    int target_x, target_y;
+    int stun_timer;
 
-    /* meleer dig state (read in generic per-tick loops, so kept flat not unionized) */
-    int no_los_ticks;      /* meleer: consecutive ticks without LOS to player */
-    int dig_freeze_timer;  /* meleer: ticks remaining in dig animation */
-    int dig_attack_delay;  /* meleer: ticks after emerging before first attack */
+    int no_los_ticks;
+    int dig_freeze_timer;
+    int dig_attack_delay;
 
-    /* blob prayer-reading state */
-    int blob_scanned_prayer; /* blob: prayer read during scan (OverheadPrayer value) */
-    /* per-NPC LOS latch; written every attack tick, only blob scan reads it */
+    int blob_scanned_prayer;
     int had_los_last_tick;
 
-    /* resurrection state */
-    int resurrect_cooldown; /* mager: ticks until its next resurrection attempt */
-    int resurrection_count; /* >0 marks an NPC (any type) spawned by mager resurrection */
+    int resurrect_cooldown;
+    int resurrection_count;
 
-    /* freeze state (ice barrage) */
-    int frozen_ticks;       /* ticks remaining in ice barrage freeze */
+    int frozen_ticks;
 
-    /* type-specific state keyed on `type`; reach via the asserting inf_npc_*() accessors */
     union {
-        InfJadState jad;        /* type is INF_NPC_JAD */
-        InfHealerState healer;  /* type is a healer */
+        InfJadState jad;
+        InfHealerState healer;
     } type_state;
 
-    /* pending hits from player attacks (projectiles in flight) */
     EncounterPendingHitQueue pending_hits;
 
-    /* death linger: >0 = dying (decremented per tick), 0 = alive or removed */
     int death_ticks;
 
-    /* aggro target: -1 = player (default), >= 0 = NPC index */
     int aggro_target;
 
-    /* per-tick render flags (cleared at start of each tick) */
-    int attacked_this_tick;     /* 1 when NPC attacks this tick */
-    AttackStyle attack_style_this_tick; /* actual style that fired this tick */
-    int attack_visual_target;   /* NPC index this attack visually targets (-1 = player) */
-    int resurrecting_this_tick;     /* 1 when a mager fires its resurrection visual this tick */
-    int resurrection_visual_target; /* NPC index the resurrection visual points at (-1 = none) */
-    int moved_this_tick;        /* 1 when NPC moves this tick */
-    int hit_landed_this_tick; /* 1 when this NPC was hit by player */
-    int hit_damage;          /* damage dealt to this NPC this tick */
+    int attacked_this_tick;
+    AttackStyle attack_style_this_tick;
+    int attack_visual_target;
+    int resurrecting_this_tick;
+    int resurrection_visual_target;
+    int moved_this_tick;
+    int hit_landed_this_tick;
+    int hit_damage;
     int hit_was_successful_this_tick;
-    int hit_spell_type;      /* ENCOUNTER_SPELL_* from the pending hit that just landed */
+    int hit_spell_type;
     int spawn_blob_splits_on_removal;
 } InfNPC;
 
@@ -449,13 +411,11 @@ static inline int inf_npc_is_healer(InfNPCType type) {
     return type == INF_NPC_HEALER_JAD || type == INF_NPC_HEALER_ZUK;
 }
 
-/* asserting accessor for the healer arm; wrong-arm access crashes in debug, compiled out under NDEBUG */
 static inline InfHealerState* inf_npc_healer(InfNPC* npc) {
     assert(inf_npc_is_healer(npc->type));
     return &npc->type_state.healer;
 }
 
-/* asserting accessor for the jad arm of InfNPC.type_state. see inf_npc_healer(). */
 static inline InfJadState* inf_npc_jad(InfNPC* npc) {
     assert(npc->type == INF_NPC_JAD);
     return &npc->type_state.jad;
@@ -466,7 +426,6 @@ static inline const InfJadState* inf_npc_jad_const(const InfNPC* npc) {
     return &npc->type_state.jad;
 }
 
-/* write spawn-time defaults for npc->type's type_state arm; caller must memset the NPC and set npc->type first */
 static void inf_npc_init_type_state(InfNPC* npc) {
     switch (npc->type) {
         case INF_NPC_JAD:
@@ -489,26 +448,21 @@ typedef struct {
     int active;
 } InfPillar;
 
-
 typedef struct {
-    /* shield */
-    int shield_idx;        /* NPC index of shield (-1 if dead) */
-    int shield_dir;        /* +1 or -1 */
-    int shield_freeze;     /* ticks of freeze at boundary */
+    int shield_idx;
+    int shield_dir;
+    int shield_freeze;
 
-    /* spawn timers */
-    int set_timer;         /* ticks until next set spawn (starts at 72) */
-    int set_interval;      /* 350 ticks between set spawns */
-    int enraged;           /* 1 when HP < 240 */
+    int set_timer;
+    int set_interval;
+    int enraged;
 
-    int healer_spawned;    /* 1 when healers have been spawned */
-    int jad_spawned;       /* 1 when jad has been spawned during shield phase */
+    int healer_spawned;
+    int jad_spawned;
 
-    /* set timer pause: pauses between HP 600→480, resumes with +175 when jad spawns */
     int timer_paused;
     int has_paused;
 } InfZukState;
-
 
 typedef enum {
     INF_GEAR_MAGE = 0,
@@ -529,7 +483,6 @@ typedef enum {
     INF_LOADOUT_PROFILE_MODE_MIXED_MAX_BUDGET,
 } InfLoadoutProfileMode;
 
-/* gear loadout arrays per weapon set */
 static const uint8_t INF_MAX_MAGE_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_HEAD]   = ITEM_MASORI_MASK_F,
     [GEAR_SLOT_CAPE]   = ITEM_DIZANAS_QUIVER,
@@ -550,7 +503,7 @@ static const uint8_t INF_MAX_RANGE_LONG_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
     [GEAR_SLOT_AMMO]   = ITEM_DRAGON_ARROWS,
     [GEAR_SLOT_WEAPON] = ITEM_TWISTED_BOW,
-    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* long-range weapon is 2h */
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
     [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
     [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
@@ -564,7 +517,7 @@ static const uint8_t INF_MAX_RANGE_FAST_LOADOUT[NUM_GEAR_SLOTS] = {
     [GEAR_SLOT_NECK]   = ITEM_NECKLACE_OF_ANGUISH,
     [GEAR_SLOT_AMMO]   = ITEM_DRAGON_DART,
     [GEAR_SLOT_WEAPON] = ITEM_TOXIC_BLOWPIPE,
-    [GEAR_SLOT_SHIELD] = ITEM_NONE,  /* bp is 2h */
+    [GEAR_SLOT_SHIELD] = ITEM_NONE,
     [GEAR_SLOT_BODY]   = ITEM_MASORI_BODY_F,
     [GEAR_SLOT_LEGS]   = ITEM_MASORI_CHAPS_F,
     [GEAR_SLOT_HANDS]  = ITEM_ZARYTE_VAMBRACES,
@@ -692,7 +645,7 @@ typedef struct {
 } InfSupplyProfileAnchor;
 
 typedef struct {
-    int start_wave;        /* internal wave index used when reset starts a new episode */
+    int start_wave;
     InfLoadoutProfileMode loadout_profile_mode;
     float budget_loadout_fraction;
     float damage_reward_coeff;
@@ -756,10 +709,7 @@ typedef struct {
     int human_command_mode;
 } InfernoContext;
 
-/* per-tick scratch: reward/diagnostic accumulators, fully reset each step by one
-   assignment. add new per-tick counters here so the reset cannot miss them. */
 typedef struct {
-    /* player damage dealt this tick, partitioned by target class */
     float damage_dealt;
     float damage_resurrected;
     float damage_zuk;
@@ -768,7 +718,6 @@ typedef struct {
     float damage_jad;
     float damage_set;
     float shield_damage;
-    /* damage / healing received or restored this tick */
     float spark_damage;
     float damage_received;
     float hp_restored;
@@ -776,30 +725,27 @@ typedef struct {
     float hp_restored_zuk;
     float offensive_prayer_correct_damage_roll;
     int offensive_prayer_correct;
-    /* kills and tags credited this tick */
     int kill_jad;
     int kill_zuk_healer;
     int kill_set;
     int healer_tags;
     int zuk_healer_tags;
     int shield_tags;
-    /* zuk healer targeting / attack-shape counters */
     int zuk_untagged_healer_targets;
     int zuk_safe_untagged_healer_targets;
     int zuk_untagged_healer_nonmagic_attacks;
     int zuk_healer_mage_attack_fires;
-    /* prayer / movement / event flags */
     int prayer_correct;
     int off_prayer_hits;
-    int styles_fired;   /* bitmask: bit0 melee, bit1 ranged, bit2 magic */
-    int attacks_fired;  /* count of NPC attacks that fired this tick */
+    int styles_fired;
+    int attacks_fired;
     int wave_completed;
-    int pillar_lost;    /* -1 = none, 0-2 = pillar destroyed this tick */
+    int pillar_lost;
     int player_moved;
-    int player_attacked; /* 1 if the player fired an attack this tick */
-    int behind_shield;  /* 1 if behind shield this tick (for reward) */
-    int brewed;         /* 1 if the player drank a brew this tick */
-    int blood_heal;     /* HP healed from blood barrage this tick */
+    int player_attacked;
+    int behind_shield;
+    int brewed;
+    int blood_heal;
 } InfTickScratch;
 
 typedef struct {
@@ -813,28 +759,23 @@ typedef struct {
     InfPillar pillars[INF_NUM_PILLARS];
     InfZukState zuk;
 
-    /* dead mob store for mager resurrection */
     InfDeadMob dead_mobs[INF_MAX_DEAD_MOBS];
     int dead_mob_count;
 
-    /* LOS blockers (rebuilt when pillars change) */
     LOSBlocker los_blockers[INF_NUM_PILLARS];
     int los_blocker_count;
 
-    /* wave tracking */
-    int wave;              /* current wave (0-indexed, 0-68) */
-    int wave_spawn_target; /* wave index queued to spawn when the inter-wave delay ends */
+    int wave;
+    int wave_spawn_target;
     int tick;
-    int wave_spawn_delay;  /* ticks until first wave spawns (0 = spawn immediately) */
+    int wave_spawn_delay;
     int wave_ready_delay;
     int episode_over;
-    InfOutcome winner;     /* valid only when episode_over is set */
+    InfOutcome winner;
 
-    /* reward tracking */
     float reward;
-    float episode_return;  /* accumulated reward over entire episode */
-    float min_zuk_hp_seen; /* final-wave low watermark for irreversible Zuk progress */
-    /* -1 means the Zuk HP boundary has not been crossed this episode. */
+    float episode_return;
+    float min_zuk_hp_seen;
     int tick_at_le_300;
     int tick_at_le_240;
     int tick_at_le_150;
@@ -843,7 +784,6 @@ typedef struct {
     int tick_at_all_zuk_healers_tagged;
     int tick_at_all_zuk_healers_dead;
     int tick_at_first_zuk_hit_after_all_healers_dead;
-    /* Damage accumulated after crossing each Zuk HP boundary. */
     float damage_after_300;
     float damage_after_240;
     float damage_after_150;
@@ -858,11 +798,10 @@ typedef struct {
     float zuk_hp_max_after_healer_spawn;
     int player_moved_last_tick;
 
-    /* cumulative stats for diagnostics */
     float total_damage_dealt;
     float total_zuk_healer_damage;
     float total_damage_received;
-    float total_hp_restored;   /* cumulative HP restored to enemies this episode */
+    float total_hp_restored;
     int total_zuk_healer_tags;
     int total_zuk_healer_kills;
     int total_zuk_untagged_healer_targets;
@@ -870,24 +809,22 @@ typedef struct {
     int total_zuk_unsafe_untagged_healer_targets;
     int total_zuk_untagged_healer_target_rewards;
     int total_zuk_safe_untagged_healer_target_rewards;
-    int ticks_without_action;  /* consecutive ticks with no attack or movement */
-    int total_prayer_correct;  /* times prayer blocked an NPC attack */
-    int total_npc_attacks;     /* total NPC attacks on player (for prayer_correct_rate) */
-    int total_unavoidable_off; /* off-prayer hits where a different style was correctly prayed */
+    int ticks_without_action;
+    int total_prayer_correct;
+    int total_npc_attacks;
+    int total_unavoidable_off;
     int total_offensive_prayer_attacks;
     int total_offensive_prayer_correct;
     int offensive_prayer_attacks_by_style[4];
     int offensive_prayer_correct_by_style[4];
-    /* per-tick tracking for multi-style analysis */
     int total_ranger_mager_same_tick_attacks;
     int total_step_out_ranger_mager_same_tick_attacks;
-    /* per-NPC-type prayer and damage tracking (for wandb, not dashboard) */
     int prayer_correct_by_type[INF_NUM_NPC_TYPES];
     int attacks_by_type[INF_NUM_NPC_TYPES];
     float dmg_from_type[INF_NUM_NPC_TYPES];
-    int last_hit_by_type;      /* NPC type that last dealt damage to player (-1=none) */
-    int killed_by_type[INF_NUM_NPC_TYPES];  /* count of deaths caused by each NPC type */
-    int total_idle_ticks;      /* cumulative ticks of ticks_without_action > 0 */
+    int last_hit_by_type;
+    int killed_by_type[INF_NUM_NPC_TYPES];
+    int total_idle_ticks;
     int total_attack_ready_no_attack_ticks;
     int total_target_available_no_attack_ticks;
     int total_safe_attack_opportunity_missed_ticks;
@@ -901,73 +838,58 @@ typedef struct {
     int target_available_no_attack_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int safe_attack_opportunity_missed_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
     int progressless_ticks_by_phase[OSRS_INFERNO_IDLE_PHASE_COUNT];
-    int total_brews_used;      /* brew doses consumed this episode */
-    int total_blood_healed;    /* HP healed via blood barrage this episode */
-    int total_npc_kills;       /* NPCs killed this episode */
-    int total_gear_switches;   /* gear switch actions this episode */
+    int total_brews_used;
+    int total_blood_healed;
+    int total_npc_kills;
+    int total_gear_switches;
 
-    /* Zuk-specific diagnostics */
-    int behind_shield_ticks;       /* ticks spent behind shield during Zuk wave */
-    int total_zuk_ticks;           /* total ticks during Zuk wave (for behind_shield_pct) */
+    int behind_shield_ticks;
+    int total_zuk_ticks;
     int offshield_ticks_after_240;
     int offshield_ticks_after_all_zuk_healers_dead;
 
-    /* player combat state */
-    OsrsInteraction interaction;  /* shared interaction state */
+    OsrsInteraction interaction;
     int player_last_interaction_target_slot;
     int player_last_interaction_age;
 
-    /* gear state */
     InfWeaponSet weapon_set;
     InfLoadoutProfile active_loadout_profile;
     EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
     EncounterLoadoutStats human_loadout_stats;
-    int stamina_active_ticks;  /* countdown for stamina effect */
+    int stamina_active_ticks;
 
-    /* per-tick player attack event for renderer projectiles */
-    int player_attack_npc_idx;      /* NPC index targeted by player attack */
-    int player_attack_dmg;          /* total damage dealt */
+    int player_attack_npc_idx;
+    int player_attack_dmg;
     AttackStyle player_attack_style_id;
     EncounterProjectileTiming player_attack_timing;
 
-    /* pending hits on player from NPC attacks (projectiles in flight) */
     EncounterPendingHitQueue player_pending_hits;
     InfPendingSpark pending_sparks[INF_MAX_PENDING_SPARKS];
     InfNpcTargetHit npc_target_hits[INF_MAX_NPC_TARGET_HITS];
 
-    /* nibbler pillar target: random pillar chosen per wave, all nibblers attack it */
     int nibbler_target_pillar;
 
-    /* spawn position shuffle buffer */
     int spawn_order[INF_NUM_SPAWN_POS];
 
-    /* human click-to-move destination (-1 = no dest) */
     int player_dest_x, player_dest_y;
 
-    /* per-tick LOS cache (lazy): -1 = uncomputed, 0 = no LOS, 1 = has LOS;
-       invalidated at tick start and on pillar collapse */
     int8_t npc_los_cache[INF_MAX_NPCS];
 
-    /* OSRS entity collision flags. pathfinding ignores these, movement application checks them. */
     uint8_t npc_collision_flags[INF_ARENA_WIDTH][INF_ARENA_HEIGHT];
     uint8_t player_collision_flags[INF_ARENA_WIDTH][INF_ARENA_HEIGHT];
 
-    /* config */
-    int start_wave;        /* episode origin wave, copied from context config on reset */
+    int start_wave;
     uint32_t rng_state;
     uint32_t supply_milestone_rewarded_mask;
-    /* per-episode milestone-fired flags (cleared at reset) */
     uint8_t phase_900_fired;
     uint8_t phase_600_fired;
     uint8_t phase_300_fired;
     float shield_penalty_episode_total;
 
-    /* per-episode kill bonus accumulators, emitted gradually so the PPO reward clamp [-1,1] doesn't truncate them */
     float pending_jad_kill_bonus;
     float pending_zuk_healer_kill_bonus;
     float pending_set_kill_bonus;
     uint32_t rewarded_zuk_healer_target_mask;
-    /* set once any Jad dies (enables post_jad_zuk_multiplier) */
     uint8_t jad_killed_this_episode;
 
     int tick_at_first_zuk_healer_target;

@@ -1,10 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_lab.inc
- * @brief Scenario harness for the standalone viewer: a line-based command language to
- *        hand-edit a Colosseum scenario (spawn NPCs, jump waves, force boss phases,
- *        toggle modifiers, step ticks) and dump it as JSON.
- */
 
 typedef enum {
     COLO_LAB_COMMAND_NONE = 0,
@@ -171,7 +165,6 @@ static void col_lab_refresh_geometry(ColosseumState* s) {
 
 static void col_lab_remove_all_npcs(ColosseumState* s) {
     memset(s->npcs, 0, sizeof(s->npcs));
-    /* hazard bookkeeping points at NPC slots; a wiped roster orphans it. */
     memset(s->totems, 0, sizeof(s->totems));
     memset(s->bees, 0, sizeof(s->bees));
 }
@@ -320,7 +313,6 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             if (wave < 1 || wave > COLO_NUM_WAVES)
                 col_lab_abort("wave must be in [1,%d], got %d", COLO_NUM_WAVES, wave);
             col_lab_remove_all_npcs(s);
-            /* a direct wave jump bypasses the mandatory draft: drop any open one. */
             s->modifiers.draft_pending = 0;
             s->modifiers.draft_gates_spawn = 0;
             for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
@@ -328,8 +320,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             s->wave = wave - 1;
             s->wave_spawn_target = s->wave;
             s->wave_spawn_delay = 0;
-            /* lab jumps spawn instantly, and col_spawn_wave arms the move (t+2) and
-               attack (t+4) gates itself. */
+
             col_spawn_wave(s);
             col_lab_clear_transient(s);
             col_lab_refresh_geometry(s);
@@ -344,8 +335,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             int idx = col_sol_find_idx(s);
             if (idx < 0)
                 col_lab_abort("no live Sol Heredit; spawn one or 'wave wave=12' first");
-            /* set Sol HP to the top of the target phase band so the boss machine
-               agrees with the forced phase, then enter the phase for its hazards. */
+
             static const int PHASE_HP[COLO_SOL_NUM_PHASES] = {
                 COLO_SOL_HP_MAX,
                 (COLO_SOL_HP_MAX * 90) / 100,
@@ -357,8 +347,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
             s->npcs[idx].hp = PHASE_HP[phase];
             if (!s->sol.started) col_sol_begin_boss_arena(s);
             s->sol.boss_idx = idx;
-            /* entering upward mirrors a real transition: per-phase hazards via
-               col_sol_enter_phase, then the transition freeze + forced spear. */
+
             if (s->sol.phase < phase) {
                 while (s->sol.phase < phase) col_sol_enter_phase(s, s->sol.phase + 1);
                 s->sol.immobile_ticks = COLO_SOL_TRANSITION_FREEZE;
@@ -409,8 +398,7 @@ static void col_lab_apply_command(ColosseumState* s, const ColosseumLabCommand* 
                 if (draft->option[o] >= 0) offered++;
             }
             if (offered == 0) col_lab_abort("draft needs at least one option");
-            /* a lab-opened draft freezes play like the real one but does not gate a
-               wave spawn, the pick just resumes the scenario. */
+
             s->modifiers.draft_pending = 1;
             s->modifiers.draft_gates_spawn = 0;
             return;

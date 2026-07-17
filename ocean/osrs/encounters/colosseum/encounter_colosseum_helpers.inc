@@ -1,9 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_helpers.inc
- * @brief Context lifecycle + shared primitives. `_ctx` variants take an explicit
- *        ColosseumContext*, the bare variant forwards to col_legacy_context().
- */
 
 static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx);
 static void col_spawn_wave(ColosseumState* s);
@@ -200,11 +195,6 @@ typedef struct {
     int linger_ticks;
 } ColoNpcDeathVisual;
 
-/**
- * Death-sequence + corpse-linger metadata. anim_id is render-only (viewer plays it,
- * simulator ignores it). linger_ticks is the sim corpse-despawn budget, normally
- * ceil(client_ticks / 30). Hazard entities despawn instantly and never consult this.
- */
 static const ColoNpcDeathVisual COLO_NPC_DEATH_VISUALS[COLO_NUM_NPC_TYPES] = {
     [COLO_FREMENNIK_BERSERKER] = { .anim_id = 10857, .client_ticks = 63,  .linger_ticks = 3 },
     [COLO_FREMENNIK_ARCHER]    = { .anim_id = 10851, .client_ticks = 63,  .linger_ticks = 3 },
@@ -241,8 +231,6 @@ static inline int col_npc_is_live_enemy(const ColoNPC* npc) {
     return col_npc_is_live_target(npc) && !col_type_is_hazard_entity(npc->type);
 }
 
-
-/** queue a player-attack hit on an NPC's pending-hit queue. */
 static void col_queue_npc_pending_hit(
     ColosseumState* s,
     int npc_slot,
@@ -265,9 +253,6 @@ static void col_queue_npc_pending_hit(
         &npc->pending_hits, hit, "colosseum-npc", s->tick, npc_slot, npc->type);
 }
 
-/** Scale incoming damage by active_player_damage_received_scale. scale >= 1.0 returns
-    the original int unchanged (no float round-trip, so the golden no-op path is
-    bit-exact). Below 1.0 rounds half-up and clamps at 0, so scale 0 = full invuln. */
 static inline int col_scale_incoming_damage(const ColosseumState* s, int dmg) {
     float scale = s->active_player_damage_received_scale;
     if (scale >= 1.0f) return dmg;
@@ -282,7 +267,6 @@ static void col_push_player_pending_hit(ColosseumState* s, EncounterPendingHit h
         &s->player_pending_hits, hit, "colosseum-player", s->tick,
         hit.source_npc_slot, hit.source_npc_type);
 }
-
 
 static int col_default_action_debug_log(void) {
     const char* value = getenv("OSRS_COLOSSEUM_ACTION_LOG");

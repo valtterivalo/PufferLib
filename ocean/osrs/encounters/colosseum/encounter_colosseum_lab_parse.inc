@@ -1,10 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_lab_parse.inc
- * @brief Line parser for the Colosseum lab: trim -> tokenize -> key=value -> build a
- *        ColosseumLabCommand -> apply it. col_lab_apply_script_line_alloc_json is the
- *        entry the viewer and EncounterDef.apply_lab_command call.
- */
 
 static const char* col_lab_npc_type_name(int type) {
     switch (type) {
@@ -105,11 +99,9 @@ static int col_lab_overhead_for_name(const char* value) {
     return PRAYER_NONE;
 }
 
-
 static ColoLabOptionalInt col_lab_parse_optional_hp_value(const char* value) {
     return encounter_lab_parse_optional_full_int("colosseum lab", value);
 }
-
 
 typedef struct {
     int slot;
@@ -324,7 +316,6 @@ static ColosseumLabCommand col_lab_build_script_command(
                 col_lab_abort("command %s requires x and y", command);
             if (args->type < 0)
                 col_lab_abort("npc command requires type");
-            /* slot omitted (-1) = auto-pick a free slot at apply time. */
             out.as.spawn_npc.slot = args->slot;
             out.as.spawn_npc.type = (ColoNpcType)args->type;
             out.as.spawn_npc.x = args->x;
@@ -401,9 +392,7 @@ static ColosseumLabCommand col_lab_build_script_command(
     return out;
 }
 
-
 static char* col_lab_alloc_json(ColosseumState* s);
-
 
 static ColoLabCommandKind col_lab_command_kind_for(const char* command) {
     static const EncounterLabCommandAlias aliases[] = {

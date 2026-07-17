@@ -1,8 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_render_snapshot.inc
- * @brief Config kwargs + snapshot/restore + the EncounterDef vtable.
- */
 
 static void col_put_int_ctx(
     EncounterState* state,
@@ -12,7 +8,6 @@ static void col_put_int_ctx(
 ) {
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
-    /* wave is 1-indexed externally, 0-indexed internally */
     if (strcmp(key, "start_wave") == 0) {
         int internal = value - 1;
         if (internal < 0) internal = 0;
@@ -262,14 +257,11 @@ enum {
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
     COLO_JAVELIN_SKYFALL_DROP_CURVE = 48,
-    /* The javelin lobs straight up for 2 ticks, hangs at apex for 1 tick, then
-       falls straight down for 3 ticks (the drop window) so it lands on the
-       damage tick. In game ticks; the emit converts to client ticks (*30). */
+
     COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS = COLO_JAVELIN_SKYFALL_DELAY / 2,
     COLO_JAVELIN_SKYFALL_APEX_GAME_TICKS = 1,
     COLO_JAVELIN_PROJECTILE_RELEASE_DELAY_TICKS = 1,
-    /* magic casters (serpent shaman, shockwave colossus) release the projectile
-       one tick after the cast animation begins (the wind-up), not at attack-start. */
+
     COLO_MAGIC_CAST_RELEASE_DELAY_TICKS = 1,
 };
 
@@ -293,12 +285,9 @@ static void col_emit_javelin_skyfall_shadow(EncounterOverlay* ov, const ColoJave
         col_javelin_skyfall_shadow_scale(jv));
 }
 
-/* Per-(type, style) projectile release profile: when the projectile leaves the caster
-   relative to the attack-animation start. The one place colosseum tunes NPC projectile
-   release. */
 typedef struct {
-    int release_delay_ticks;  /* game ticks after attack-start before the projectile is visible */
-    int set_delay;            /* >0 pins the damage delay to a fixed, distance-independent tick count */
+    int release_delay_ticks;
+    int set_delay;
 } ColoProjectileReleaseProfile;
 
 static ColoProjectileReleaseProfile col_npc_projectile_release_profile(
@@ -317,8 +306,7 @@ static ColoProjectileReleaseProfile col_npc_projectile_release_profile(
                     .release_delay_ticks = COLO_MAGIC_CAST_RELEASE_DELAY_TICKS };
             break;
         case COLO_MANTICORE:
-            /* orbs fly a fixed one tick regardless of distance: the sim builds the
-               hit with ticks_remaining=1 in col_npc_manticore_fire_orb. */
+
             return (ColoProjectileReleaseProfile){ .set_delay = 1 };
         default:
             break;
@@ -326,14 +314,6 @@ static ColoProjectileReleaseProfile col_npc_projectile_release_profile(
     return (ColoProjectileReleaseProfile){ 0 };
 }
 
-/* Resolve the render timeline for an NPC attack projectile: the projectile leaves
-   release_delay_ticks after attack-start and flies the rest of the way so it lands
-   exactly on the sim damage tick. At point-blank range there may be no wind-up room,
-   so the release is reduced (never the landing tick) to keep at least a one-tick
-   flight. The landing invariant (release + flight == damage tick) is enforced, so a
-   release can never be tuned in a way that silently shifts the impact off the sim
-   hit tick. The sim owns the damage tick (col_npc_projectile_delay); this owns the
-   purely-visual release/flight split, and the two meet at the asserted invariant. */
 static EncounterProjectileTiming col_npc_projectile_timing(
     ColoNpcType type,
     AttackStyle style,
@@ -347,7 +327,7 @@ static EncounterProjectileTiming col_npc_projectile_timing(
     int damage_delay = encounter_projectile_hit_delay(distance, 0, kind, options);
 
     int release = profile.release_delay_ticks;
-    int max_release = damage_delay - 1;   /* leave room for a >= 1-tick flight */
+    int max_release = damage_delay - 1;
     if (release > max_release) release = max_release;
     if (release < 0) release = 0;
     options.start_delay = release;
@@ -407,11 +387,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
 
     int npc_size = col_npc_effective_size(npc);
     encounter_require_projectile_slots(ov, 1);
-    /* The lob fires straight UP out of the colossus's hand (src == dst == the
-       NPC's own tile, so there is no horizontal travel), reaches the sky off the
-       top of the screen, and the separate drop rains straight down on the marked
-       tile -- the colossus->tile displacement happens off-screen at apex. Curve
-       shapes the vertical easing only (it is the OSRS slope, not a lateral bow). */
+
     OsrsProjectileEventSpec projectile_spec = {
         .src_x = npc->x,
         .src_y = npc->y,
@@ -470,11 +446,6 @@ static void col_emit_manticore_orb_telegraphs(
     }
 }
 
-/** Emit the javelin's straight-down descent onto the marked tile. Driven from
-    the live telegraph (not a post-resolution event), so it falls as the shadow
-    grows and its impact burst fires on the damage tick. Called once per skyfall,
-    on the tick the telegraph crosses its midpoint, so it becomes a single
-    descent flight rather than one per tick. */
 static void col_emit_javelin_skyfall_drop_projectile(
     EncounterOverlay* ov,
     const ColoJavelinState* jv
@@ -562,12 +533,7 @@ static void col_emit_npc_attack_projectile(
         projectile->impact_spotanim_id, 0);
     int curve = osrs_combat_projectile_value_or(projectile->projectile_angle, 16);
     float arc = osrs_combat_projectile_profile_arc_height(projectile, actual_style);
-    /* Colosseum-only: magic casters (serpent shaman Water Surge, seer, shockwave)
-       must lob UP. The shared arc-height helper returns 0 for ATTACK_STYLE_MAGIC,
-       which drops them into the quadratic path where the positive projectile_angle
-       (curve=16) gives a negative height_vel and the arc dips into the ground.
-       A positive arc_height routes them into the always-upward sinusoidal path,
-       matching inferno's Jad/Zuk magic projectiles. */
+
     if (actual_style == ATTACK_STYLE_MAGIC && arc <= 0.0f)
         arc = 1.0f;
     encounter_require_projectile_slots(ov, 1);
@@ -601,7 +567,6 @@ static void col_emit_npc_attack_projectile(
     }
 }
 
-/** Emit Venator bounce hops after the primary player-to-NPC projectile. */
 static void col_emit_player_venator_bounce_projectiles(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -771,12 +736,6 @@ static void col_emit_player_attack_projectiles(
         s, ctx, ov, base_profile, p_start_delay + p_duration, 30);
 }
 
-/** Render-only: the allied thrall's magic bolt, lobbed from its render tile to
-    the NPC it hit this tick. Mirrors the NPC magic projectile path (thrall magic
-    spotanims THRALL_MAGIC_TRAVEL 1907 / THRALL_MAGIC_IMPACT 1908, arc_height
-    forced positive so magic lobs up) but keeps the source fixed at the thrall
-    tile and tracks the target so it lands. The damage is cosmetic; the sim
-    already queued it. */
 static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) {
     int slot = s->thrall_target_slot;
     if (!col_npc_is_thrall_target(s, slot))
@@ -819,11 +778,6 @@ static void col_emit_thrall_projectile(ColosseumState* s, EncounterOverlay* ov) 
     encounter_set_projectile_target_npc_slot(ov, idx, slot);
 }
 
-/** Sol hazard VFX (all ids from gameval SpotanimID): the crystal's charge
-    beam while it telegraphs, the launched light sphere (travel + impact), and
-    the sand pillar strike playing over every in-flight beam telegraph. The
-    sphere's source is the nearest active crystal to its locked tile (the sim
-    does not record the shooter; crystals rarely co-fire). */
 enum {
     COLO_SOL_CRYSTAL_CHARGE_MODEL_ID = 51245,
     COLO_SOL_CRYSTAL_CHARGE_ANIM_ID  = 10803,
@@ -841,7 +795,6 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
         const ColoSolCrystal* cr = &sol->crystals[c];
         if (!cr->active) continue;
 
-        /* charge shimmer from fire until the beam window opens */
         if (cr->firing_freeze > COLO_SOL_LASER_BEAM_SHOW_MAX) {
             encounter_emit_floating_model(
                 ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
@@ -850,9 +803,6 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
                 1.1f, 0.0f, 1.0f);
         }
 
-        /* the damaging star travels the beam path once the telegraph closes
-           (colosim projectilePercent, firing_freeze <= 2), crystal to the far
-           end of its row/column one tile inside the opposite boundary. */
         if (cr->firing_freeze == COLO_SOL_LASER_BEAM_SHOW_MIN) {
             int dst_x = cr->x, dst_y = cr->y;
             switch (cr->edge) {
@@ -961,18 +911,11 @@ static void col_render_post_tick_ctx(
         col_emit_thrall_projectile(s, ov);
 }
 
-/* Maps semantic HumanInput intents onto the 9 Colosseum action heads: MOVE (25-dir walk)
-   + TARGET (obs slot of the clicked NPC) drive attacking, plus prayer/gear/eat/potion/spec.
-   The two Colosseum-only heads: MODIFIER_SELECT picks a draft option and GRAPPLE_PARRY
-   clicks a Sol grapple body slot. */
-
 static void* col_get_player_for_input(void* state, int idx) {
     ColosseumState* s = (ColosseumState*)state;
     return (idx == 0) ? (void*)&s->player : NULL;
 }
 
-/** obs slot the agent sees for a raw NPC array index, or -1. Inverse of
-    current_obs_slots, refreshed by the caller. */
 static int col_find_target_obs_slot(const ColosseumState* s, int npc_slot) {
     return encounter_find_observed_target_slot(
         s->current_obs_slots, COLO_OBS_NPCS, npc_slot);
@@ -991,10 +934,6 @@ static int col_is_human_targetable_npc_slot_ctx(
     return col_obs_slot_is_targetable(s, obs_slot);
 }
 
-/* Route a human inventory click to its per-category head: equip -> the gear-slot head for
-   the item, eat -> EAT head, drink -> DRINK head. Two clicks of the same category in one
-   tick collapse to last-wins (matching OSRS), distinct categories all fire. Returns the
-   head index the click landed in, or -1. */
 static int col_queue_inventory_click_action(
     const ColosseumState* s,
     int* actions,
@@ -1027,8 +966,6 @@ static void col_rearrange_inventory_cells(
     osrs_inventory_swap_cells(s->inventory_cells, source_slot, target_slot);
 }
 
-/** Fold the Colosseum-only staged intents (draft pick, grapple body slot) into the
-    per-tick action heads. Shared by both human-input translate paths. */
 static void col_apply_pending_draft_grapple_heads(HumanInput* hi, int* actions) {
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
@@ -1052,7 +989,6 @@ static void col_translate_human_input_ctx(
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     col_refresh_current_obs_slots_ctx(s, ctx);
 
-    /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
         int found_slot = col_find_target_obs_slot(s, hi->pending_target_idx);
         actions[COLO_HEAD_PRIMARY] =
@@ -1065,7 +1001,6 @@ static void col_translate_human_input_ctx(
     if (hi->pending_spec) actions[COLO_HEAD_SPEC] = 1;
     encounter_translate_offensive_prayer(hi, actions, COLO_HEAD_OFFENSIVE);
 
-    /* Colosseum-only heads: draft pick (0=none, 1..3) + grapple body slot. */
     col_apply_pending_draft_grapple_heads(hi, actions);
 }
 
@@ -1138,8 +1073,6 @@ static void col_translate_human_commands_ctx(
         }
     }
 
-    /* gear/draft/grapple intents are staged on pending_* (not the command queue),
-       so fold them in here exactly as the per-tick translate path does. */
     col_apply_pending_draft_grapple_heads(hi, actions);
 }
 
@@ -1160,8 +1093,6 @@ static void col_step_human_commands_ctx(
     ctx->human_command_count = 0;
     human_input_clear_pending(hi);
 }
-
-/* snapshot/restore stores only gameplay state; live process data stays in context. */
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
 #define COLO_SNAPSHOT_VERSION 20u
@@ -1215,7 +1146,6 @@ static void col_restore_ctx(
     col_refresh_after_state_load(dst, ctx);
 }
 
-
 static int col_lab_apply_script_line_alloc_json_void(
     void* state, const char* line, char** out_json
 ) {
@@ -1232,7 +1162,6 @@ static int col_apply_lab_command_ctx(
     return encounter_apply_lab_command_dump_wrapper(
         state, line, COLO_LAB_LINE_DUMP, col_lab_apply_script_line_alloc_json_void);
 }
-
 
 static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .name = "colosseum",

@@ -17,7 +17,6 @@ static void inf_put_int_ctx(
 ) {
     InfernoState* s = (InfernoState*)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
-    /* wave is 1-indexed externally (wave 1 = first, wave 69 = Zuk), 0-indexed internally */
     if (strcmp(key, "start_wave") == 0) {
         inf_require_valid_public_wave(value);
         s->start_wave = value - 1;
@@ -336,8 +335,6 @@ static void inf_npc_projectile_fallback(
     }
 }
 
-
-
 static void inf_render_post_tick_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -357,38 +354,32 @@ static void inf_render_post_tick_ctx(
         sizeof(ov->status_text));
     ov->status_text_active = ov->status_text[0] != '\0';
 
-    /* NPC attack projectiles: per-NPC-type flight parameters */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         InfNPC* npc = &s->npcs[i];
         if (!npc->active || !npc->attacked_this_tick) continue;
 
-        /* nibblers attack pillars, not worth showing as projectile */
         if (npc->type == INF_NPC_NIBBLER) continue;
         if (npc->resurrecting_this_tick) continue;
 
-        /* blob scan has no projectile; emit only on the fire tick (blob_scanned_prayer >= 0 = scan, -1 = fire) */
         if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer >= 0) continue;
 
         const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
         AttackStyle actual_style = npc->attack_style_this_tick;
 
-        /* Zuk is typeless; show as magic for visuals */
         if (actual_style == ATTACK_STYLE_NONE && npc->type == INF_NPC_ZUK)
             actual_style = ATTACK_STYLE_MAGIC;
 
-        /* tagged Zuk healers spawn their own 3-spark visuals from pending_sparks. */
         if (npc->type == INF_NPC_HEALER_ZUK && npc->attack_visual_target < 0)
             continue;
 
         if (actual_style == ATTACK_STYLE_NONE) continue;
 
-        /* melee attacks are instant, no in-flight projectile */
         if (actual_style == ATTACK_STYLE_MELEE) continue;
 
         int proj_style = encounter_attack_style_to_proj_style(actual_style);
         int npc_size = stats->size;
         int start_h = (int)(npc_size * 0.75f * 128);
-        int end_h = 64;  /* default: player size 1 * 0.5 * 128 */
+        int end_h = 64;
         int curve = 16;
         float arc = 0.0f;
 
@@ -433,18 +424,17 @@ static void inf_render_post_tick_ctx(
             inf_npc_projectile_fallback(
                 npc->type, actual_style, &proj_model_id, &proj_anim_id);
 
-        /* NPC-specific flight overrides */
         switch (npc->type) {
             case INF_NPC_JAD:
                 if (actual_style == ATTACK_STYLE_MAGIC) {
-                    arc = 1.0f;  /* arcing magic projectile */
+                    arc = 1.0f;
                 } else {
                     start_h = end_h;
                 }
                 start_delay = INF_JAD_PROJECTILE_DELAY * 30;
                 break;
             case INF_NPC_HEALER_ZUK:
-                arc = 3.0f;      /* high arcing spark */
+                arc = 3.0f;
                 duration = (npc->attack_visual_target >= 0) ? 3 * 30 : 4 * 30;
                 start_delay = 0;
                 break;
@@ -563,21 +553,19 @@ static void inf_render_post_tick_ctx(
         spark->visual_emitted = 1;
     }
 
-    /* player attack projectile (ranged/magic only, melee has none) */
     if (s->tick_scratch.player_attacked &&
         s->player_attack_style_id != ATTACK_STYLE_MELEE) {
         int target_idx = s->player_attack_npc_idx;
         if (target_idx >= 0 && target_idx < INF_MAX_NPCS) {
             InfNPC* target = &s->npcs[target_idx];
             int target_size = INF_NPC_STATS[target->type].size;
-            int p_start_h = 64;   /* player: size 1 * 0.5 * 128 */
+            int p_start_h = 64;
             int p_end_h = (int)(target_size * 0.5f * 128);
             int p_duration = s->player_attack_timing.visual_duration_ticks * 30;
             int p_start_delay = s->player_attack_timing.visual_start_delay_ticks * 30;
             uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
 
             if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
-                /* barrage: no projectile model (effect system handles it) */
             } else {
                 const OsrsCombatProjectileProfile* base_profile =
                     osrs_combat_visual_ranged_projectile_profile(
@@ -625,7 +613,6 @@ static void inf_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     inf_render_post_tick_ctx(state, (EncounterContext*)inf_legacy_context(), ov);
 }
 
-
 static void* inf_get_player_for_input(void* state, int idx) {
     InfernoState* s = (InfernoState*)state;
     return (idx == 0) ? (void*)&s->player : NULL;
@@ -646,7 +633,6 @@ static void inf_translate_human_input_ctx(
     InfernoState* s = (InfernoState*)state;
     InfernoContext* ctx = context ? (InfernoContext*)context : inf_legacy_context();
     inf_refresh_current_obs_slots_ctx(s, ctx);
-    /* map raw pending_target_idx to the observation slot the agent sees */
     if (hi->pending_target_idx >= 0) {
         int found_slot = inf_find_target_obs_slot(s, hi->pending_target_idx);
         if (inf_obs_slot_is_targetable(s, ctx, found_slot)) {
@@ -658,23 +644,18 @@ static void inf_translate_human_input_ctx(
         actions[INF_HEAD_TARGET] = 0;
     }
 
-    /* gear switch */
     if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;
 
-    /* eat: brew */
     if (hi->pending_food || hi->pending_potion == POTION_BREW)
         actions[INF_HEAD_EAT] = 1;
 
-    /* potions: restore=1, bastion=2, stamina=3 */
     if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
     else if (hi->pending_potion == POTION_BASTION) actions[INF_HEAD_POTION] = 2;
     else if (hi->pending_potion == POTION_STAMINA) actions[INF_HEAD_POTION] = 3;
 
-    /* spell: 0=no change, 1=blood, 2=ice */
     if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
     else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
 
-    /* spec */
     if (hi->pending_spec) actions[INF_HEAD_SPEC] = 1;
 }
 
@@ -778,26 +759,23 @@ static void inf_step_human_commands(EncounterState* state, HumanInput* hi) {
         state, (EncounterContext*)inf_legacy_context(), hi);
 }
 
-
-/* archive cell key (Go-Explore): 16-byte struct discretizing env state; byte-equal keys = same cell */
-
 typedef struct {
-    uint8_t wave;                       /* 0..68 */
-    uint8_t weapon_set;                 /* INF_GEAR_* enum */
-    uint8_t player_hp_bin;              /* current_hitpoints / 10 */
-    uint8_t player_prayer_bin;          /* current_prayer / 10 */
-    uint8_t brew_doses;                 /* exact dose count */
-    uint8_t restore_doses;              /* exact dose count */
-    uint8_t overhead_prayer;            /* PRAYER_PROTECT_* enum */
-    uint8_t offensive_prayer_attack_timer; /* low nibble offensive, high nibble player attack_timer */
-    uint8_t player_x_quant;             /* (player.x - INF_ARENA_MIN_X) / 2 */
-    uint8_t player_y_quant;             /* (player.y - INF_ARENA_MIN_Y) / 2 */
-    uint8_t zuk_hp_bin;                 /* live Zuk HP / 50, 0 if no Zuk alive */
-    uint8_t zuk_phase_flags;            /* bit0=healer_spawned, 1=jad_spawned, 2=enraged, 3=timer_paused */
-    uint8_t active_jad_count;           /* live Jads */
-    uint8_t active_zuk_healer_count;    /* live Zuk healers */
-    uint8_t active_set_count;           /* live magers + rangers + meleers */
-    uint8_t jad_hp_bin;                 /* total live Jad HP / 50 */
+    uint8_t wave;
+    uint8_t weapon_set;
+    uint8_t player_hp_bin;
+    uint8_t player_prayer_bin;
+    uint8_t brew_doses;
+    uint8_t restore_doses;
+    uint8_t overhead_prayer;
+    uint8_t offensive_prayer_attack_timer;
+    uint8_t player_x_quant;
+    uint8_t player_y_quant;
+    uint8_t zuk_hp_bin;
+    uint8_t zuk_phase_flags;
+    uint8_t active_jad_count;
+    uint8_t active_zuk_healer_count;
+    uint8_t active_set_count;
+    uint8_t jad_hp_bin;
 } InfCellKey;
 
 typedef struct {
@@ -909,7 +887,6 @@ static void inf_write_cell_key(EncounterState* state, void* out) {
     inf_write_cell_key_ctx(state, (EncounterContext*)inf_legacy_context(), out);
 }
 
-/* progress_score: archive quality for Zuk transitions. */
 static float inf_progress_score_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     const InfernoState* s = (const InfernoState*)state;
@@ -950,9 +927,6 @@ static float inf_progress_score_ctx(EncounterState* state, EncounterContext* con
 static float inf_progress_score(EncounterState* state) {
     return inf_progress_score_ctx(state, (EncounterContext*)inf_legacy_context());
 }
-
-
-/* snapshot/restore stores only gameplay state. live process data stays in context. */
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
 #define INF_SNAPSHOT_VERSION 18u
@@ -1110,7 +1084,6 @@ static void inf_restore(EncounterState* state, const void* data, size_t n) {
     inf_restore_ctx(state, (EncounterContext*)inf_legacy_context(), data, n);
 }
 
-
 static int inf_lab_apply_script_line_alloc_json_void(
     void* state, const char* line, char** out_json
 ) {
@@ -1126,7 +1099,6 @@ static int inf_apply_lab_command_ctx(
     return encounter_apply_lab_command_dump_wrapper(
         state, line, INF_LAB_LINE_DUMP, inf_lab_apply_script_line_alloc_json_void);
 }
-
 
 static const EncounterDef ENCOUNTER_INFERNO = {
     .name = "inferno",

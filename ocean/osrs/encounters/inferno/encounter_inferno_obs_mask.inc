@@ -158,16 +158,14 @@ static void inf_write_obs_ctx(
     const EncounterLoadoutStats* ls = inf_current_loadout_stats(s, ctx);
     InfSupplyDoses full_supplies = inf_full_starting_supplies();
 
-    /* player state (26 features) */
     obs[i++] = (float)s->player.current_hitpoints / 99.0f;
-    obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;   /* dist to west wall */
-    obs[i++] = (float)(INF_ARENA_MAX_X - px) / (float)INF_ARENA_WIDTH;  /* dist to east wall */
-    obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT; /* dist to south wall */
-    obs[i++] = (float)(INF_ARENA_MAX_Y - py) / (float)INF_ARENA_HEIGHT; /* dist to north wall */
+    obs[i++] = (float)(px - INF_ARENA_MIN_X) / (float)INF_ARENA_WIDTH;
+    obs[i++] = (float)(INF_ARENA_MAX_X - px) / (float)INF_ARENA_WIDTH;
+    obs[i++] = (float)(py - INF_ARENA_MIN_Y) / (float)INF_ARENA_HEIGHT;
+    obs[i++] = (float)(INF_ARENA_MAX_Y - py) / (float)INF_ARENA_HEIGHT;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MELEE) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (s->player.prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-    /* offensive prayer one-hot (none implied by all-three-zero). */
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_PIETY) ? 1.0f : 0.0f;
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_RIGOUR) ? 1.0f : 0.0f;
     obs[i++] = (s->player.offensive_prayer == OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
@@ -189,14 +187,12 @@ static void inf_write_obs_ctx(
     obs[i++] = (s->stamina_active_ticks > 0) ? 1.0f : 0.0f;
     obs[i++] = (float)s->player.potion_timer / 3.0f;
     obs[i++] = (float)s->player.attack_timer / 8.0f;
-    /* combat stats, target, weapon range, dead mob pool */
     obs[i++] = (float)s->player.current_defence / 99.0f;
     obs[i++] = (float)s->player.current_ranged / 99.0f;
     obs[i++] = (float)s->player.current_magic / 99.0f;
     obs[i++] = osrs_interaction_active(&s->interaction) ? 1.0f : 0.0f;
     obs[i++] = (float)ls->attack_range / 15.0f;
     obs[i++] = (float)s->dead_mob_count / (float)INF_MAX_DEAD_MOBS;
-    /* gear stats: current loadout combat performance */
     obs[i++] = (float)ls->max_hit / 80.0f;
     obs[i++] = (float)ls->attack_speed / 6.0f;
     obs[i++] = (float)ls->def_stab / 300.0f;
@@ -204,13 +200,11 @@ static void inf_write_obs_ctx(
     obs[i++] = (float)ls->def_ranged / 300.0f;
     obs[i++] = (float)s->player.special_energy / 100.0f;
 
-    /* prayer-critical: distilled from NPC array and pending hits */
     {
         int min_timer = 999;
         int min_style = 0;
         int has_melee_2 = 0, has_ranged_2 = 0, has_magic_2 = 0;
 
-        /* 1. Pending hits (handles Jad, which checks prayer on impact) */
         for (int h = 0; h < s->player_pending_hits.count; h++) {
             EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
             if (ph->check_prayer) {
@@ -227,8 +221,6 @@ static void inf_write_obs_ctx(
             }
         }
 
-        /* 2. NPCs firing or telegraphing (non-Jad checks prayer on launch;
-           Jad enters here only once its committed preview style is visible). */
         for (int n = 0; n < INF_MAX_NPCS; n++) {
             InfNPC* npc = &s->npcs[n];
             if (!npc->active || npc->death_ticks > 0) continue;
@@ -287,7 +279,6 @@ static void inf_write_obs_ctx(
             : 1.0f;
     }
 
-    /* Zuk-phase features (10 features: 1 flag + 9 Zuk-specific) */
     {
         int is_zuk = (s->wave == 68);
         obs[i++] = is_zuk ? 1.0f : 0.0f;
@@ -296,39 +287,31 @@ static void inf_write_obs_ctx(
             int si = s->zuk.shield_idx;
             int shield_active = (si >= 0 && s->npcs[si].active);
 
-            /* shield dir/freeze are meaningful only while the shield exists; zero them after it dies to avoid stale state */
             obs[i++] = shield_active
                 ? ((s->zuk.shield_freeze > 0) ? 0.0f : (float)s->zuk.shield_dir)
                 : 0.0f;
             obs[i++] = shield_active ? (float)s->zuk.shield_freeze / 5.0f : 0.0f;
-            /* behind-shield flag + signed distance to shield center (negative = move east, positive = west, 0 = centered) */
             int behind = 0;
             float shield_offset = 0.0f;
             if (shield_active) {
                 int sx = s->npcs[si].x;
                 int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
                 int shield_center = sx + sz / 2;
-                shield_offset = (float)(px - shield_center) / 15.0f;  /* normalized, ~[-1,1] range */
+                shield_offset = (float)(px - shield_center) / 15.0f;
                 behind = (px >= sx && px < sx + sz && py >= 41);
             }
             obs[i++] = behind ? 1.0f : 0.0f;
             obs[i++] = shield_offset;
-            /* Zuk enraged (attack speed 7 instead of 8) */
             obs[i++] = s->zuk.enraged ? 1.0f : 0.0f;
-            /* set spawn timer / 350 */
             obs[i++] = (float)s->zuk.set_timer / 350.0f;
-            /* set timer paused (Jad spawn phase) */
             obs[i++] = s->zuk.timer_paused ? 1.0f : 0.0f;
-            /* Jad has spawned during Zuk fight */
             obs[i++] = s->zuk.jad_spawned ? 1.0f : 0.0f;
-            /* Zuk healers have spawned */
             obs[i++] = s->zuk.healer_spawned ? 1.0f : 0.0f;
         } else {
             for (int z = 0; z < 9; z++) obs[i++] = 0.0f;
         }
     }
 
-    /* pillars: active, hp, relative southwest tile, active footprint size */
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         obs[i++] = s->pillars[p].active ? 1.0f : 0.0f;
         obs[i++] = (float)s->pillars[p].hp / (float)INF_PILLAR_HP;
@@ -345,7 +328,6 @@ static void inf_write_obs_ctx(
     INF_PROFILE_MARK(INF_PROF_OBS_REFRESH_SLOTS);
 #endif
 
-    /* NPCs: variable features per slot, fixed order */
     int slot_types[INF_OBS_NPCS];
     int st_idx = 0;
     for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_MAGER;
@@ -463,7 +445,6 @@ static void inf_write_obs_ctx(
     INF_PROFILE_MARK(INF_PROF_OBS_NPC_SLOTS);
 #endif
 
-    /* assert the NPC section wrote exactly the expected feature count */
     {
         int expected_npc_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
             INF_TOTAL_NPC_OBS_SIZE;
@@ -523,15 +504,14 @@ static void inf_write_obs_ctx(
         }
     }
 
-    /* pending hits on player (INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS) */
     for (int h = 0; h < ENCOUNTER_MAX_PENDING_HITS; h++) {
         if (h < s->player_pending_hits.count) {
             EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
-            obs[i++] = 1.0f;  /* active */
+            obs[i++] = 1.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
             obs[i++] = (ph->attack_style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
             obs[i++] = (float)inf_pending_hit_obs_timer(ph) / 10.0f;
-            obs[i++] = (float)ph->damage / 150.0f;  /* normalized damage magnitude (Zuk max ~148) */
+            obs[i++] = (float)ph->damage / 150.0f;
         } else {
             for (int j = 0; j < INF_FEATURES_PER_HIT; j++) obs[i++] = 0.0f;
         }
@@ -635,8 +615,7 @@ static void inf_write_mask_ctx(
         }
     }
 
-    /* HEAD_MOVE (25): idle always valid, walk/run valid if target tile reachable */
-    mask[offset++] = 1.0f;  /* idle always valid */
+    mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
         int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[d];
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
@@ -644,8 +623,7 @@ static void inf_write_mask_ctx(
                          ? 1.0f : 0.0f;
     }
 
-    /* HEAD_PRAYER: no_change, off, set_refresh_melee/ranged/magic/redemption. */
-    mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = 1.0f;
     mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
@@ -656,7 +634,6 @@ static void inf_write_mask_ctx(
         ctx->config.zuk_force_safe_untagged_healer_target_mask &&
         inf_has_safe_untagged_zuk_healer_target_now(s, ctx);
 
-    /* HEAD_TARGET (INF_OBS_NPCS+1): slot actions require a valid attack target. */
     mask[offset++] = has_forced_safe_healer_target ? 0.0f : 1.0f;
     for (int n = 0; n < INF_OBS_NPCS; n++) {
         int npc_idx = s->current_obs_slots[n];
@@ -674,22 +651,18 @@ static void inf_write_mask_ctx(
         mask[offset++] = is_targetable ? 1.0f : 0.0f;
     }
 
-    /* HEAD_GEAR (4): no_switch, mage, long_range, bp */
-    mask[offset++] = 1.0f;  /* no_switch always valid */
+    mask[offset++] = 1.0f;
     mask[offset++] = (s->weapon_set != INF_GEAR_MAGE) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != INF_GEAR_LONG_RANGE) ? 1.0f : 0.0f;
     mask[offset++] = (s->weapon_set != INF_GEAR_BP) ? 1.0f : 0.0f;
 
-    /* HEAD_EAT (2): none, brew */
-    mask[offset++] = 1.0f;  /* none always valid */
+    mask[offset++] = 1.0f;
     mask[offset++] = (s->player.brew_doses > 0 &&
                       s->player.potion_timer == 0 &&
                       s->player.current_hitpoints < s->player.base_hitpoints)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_POTION (4): none, restore, bastion, stamina */
-    mask[offset++] = 1.0f;  /* none always valid */
-    /* restore: unmask if any combat stat is below 99 or prayer is low enough to not waste the dose */
+    mask[offset++] = 1.0f;
     {
         int pray_missing = s->player.base_prayer - s->player.current_prayer;
         int stats_drained = s->player.current_attack < 99 || s->player.current_strength < 99 ||
@@ -701,11 +674,9 @@ static void inf_write_mask_ctx(
                           (stats_drained || pray_worth))
                          ? 1.0f : 0.0f;
     }
-    /* bastion: only worth drinking at 99-105 ranged (drained = restore first, >105 = still boosted) */
     mask[offset++] = (s->player.bastion_doses > 0 && s->player.potion_timer == 0 &&
                       s->player.current_ranged >= 99 && s->player.current_ranged <= 105)
                      ? 1.0f : 0.0f;
-    /* stamina: mask if no doses, timer active, or already active */
     mask[offset++] = (s->player.stamina_doses > 0 &&
                       s->player.potion_timer == 0 &&
                       s->stamina_active_ticks == 0)
@@ -715,14 +686,12 @@ static void inf_write_mask_ctx(
     mask[offset++] = s->player.current_magic >= BLOOD_BARRAGE_LEVEL ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_magic >= ICE_BARRAGE_LEVEL ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (2): no_change, toggle. allow when blowpipe equipped + enough energy. */
-    mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = 1.0f;
     mask[offset++] = (s->weapon_set == INF_GEAR_BP &&
                       s->player.special_energy >= BLOWPIPE_SPEC_COST)
                      ? 1.0f : 0.0f;
 
-    /* HEAD_OFFENSIVE: no_change, off, set_refresh_piety/rigour/augury. */
-    mask[offset++] = 1.0f;  /* no_change always valid */
+    mask[offset++] = 1.0f;
     mask[offset++] = s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
@@ -763,7 +732,6 @@ static void inf_write_mask(EncounterState* state, float* mask) {
     inf_write_mask_ctx(state, (EncounterContext*)inf_legacy_context(), mask);
 }
 
-
 static float inf_get_reward_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     return ((InfernoState*)state)->reward;
@@ -786,7 +754,6 @@ static int inf_get_entity_count_ctx(EncounterState* state, EncounterContext* con
 static void* inf_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
     (void)context;
     InfernoState* s = (InfernoState*)state;
-    /* only index 0 (player) returns a Player*; NPC slots return NULL (InfNPC is a different struct), callers must NULL-check */
     if (index == 0) return &s->player;
     return NULL;
 }
@@ -810,7 +777,6 @@ static void inf_fill_render_entities_ctx(
         s->player.gui_strength_bonus = ls->strength_bonus;
     }
 
-    /* index 0: the player */
     if (n < max_entities) {
         osrs_render_entity_from_player_entity(&s->player, &out[n++]);
     }

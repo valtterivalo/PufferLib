@@ -53,7 +53,6 @@ static void inf_shuffle_spawns(InfernoState* s) {
     encounter_shuffle(s->spawn_order, INF_NUM_SPAWN_POS, &s->rng_state);
 }
 
-
 static void inf_rebuild_los(InfernoState* s) {
     s->los_blocker_count = 0;
     for (int i = 0; i < INF_NUM_PILLARS; i++) {
@@ -141,14 +140,12 @@ static int inf_npc_has_los_to_tile(
     return inf_npc_has_los_to_area(s, npc, target_x, target_y, 1);
 }
 
-/* check if NPC at index i has LOS to its current target */
 static int inf_npc_has_los_direct(const InfernoState* s, int i) {
     const InfNPC* npc = &s->npcs[i];
     InfTargetArea target = inf_npc_current_target_area(s, npc);
     return inf_npc_has_los_to_area(s, npc, target.x, target.y, target.size);
 }
 
-/* cached per-tick LOS check (lazy: computes on first access) */
 static int inf_npc_has_los(InfernoState* s, int i) {
     if (s->npc_los_cache[i] >= 0)
         return s->npc_los_cache[i];
@@ -157,7 +154,6 @@ static int inf_npc_has_los(InfernoState* s, int i) {
     return result;
 }
 
-/* invalidate entire LOS cache (call at start of tick and on pillar collapse) */
 static inline void inf_invalidate_los_cache(InfernoState* s) {
     memset(s->npc_los_cache, -1, sizeof(s->npc_los_cache));
 }
@@ -334,7 +330,6 @@ static inline int inf_attack_style_telegraph_mask(
     const InfernoState* s, const InfNPC* npc, const InfNPCStats* stats,
     int planned_style, int dist
 ) {
-    /* Jad telegraphs only its ranged/magic branch; melee is a fire-time fallback, not a prayer cue */
     if (npc->type == INF_NPC_JAD)
         return inf_attack_style_mask_bit(planned_style);
     return inf_attack_style_options_mask(s, npc, stats, planned_style, dist);
@@ -660,7 +655,6 @@ static inline AttackStyle inf_choose_attack_style_for_tick(
     return (AttackStyle)inf_attack_style_from_mask(style_mask);
 }
 
-
 static inline int inf_dead_mob_is_resurrectable(InfNPCType type) {
     switch (type) {
         case INF_NPC_BAT:
@@ -676,7 +670,6 @@ static inline int inf_dead_mob_is_resurrectable(InfNPCType type) {
 
 static void inf_store_dead_mob(InfernoState* s, InfNPC* npc) {
     if (s->dead_mob_count >= INF_MAX_DEAD_MOBS) return;
-    /* only resurrectable types register with the reference MobDeathStore */
     if (!inf_dead_mob_is_resurrectable(npc->type)) return;
     if (npc->resurrection_count != 0) return;
 
@@ -684,10 +677,9 @@ static void inf_store_dead_mob(InfernoState* s, InfNPC* npc) {
     dm->type = npc->type;
     dm->x = npc->x;
     dm->y = npc->y;
-    dm->hp = npc->max_hp / 2;  /* resurrect at 50% HP */
+    dm->hp = npc->max_hp / 2;
     dm->max_hp = npc->max_hp;
 }
-
 
 static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx);
 static float inf_compute_reward(InfernoState* s);

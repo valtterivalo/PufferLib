@@ -1,10 +1,5 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_movement.inc
- * @brief Arena predicates + per-NPC movement.
- */
 
-/** player-walkability callback for shared movement helpers. */
 static int col_player_walkable(void* ctx, int x, int y) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (col_static_blocked(x, y)) return 0;
@@ -14,17 +9,11 @@ static int col_player_walkable(void* ctx, int x, int y) {
     return 1;
 }
 
-/** Static tile predicate for shared line-of-sight queries (player and NPC). */
 static int col_los_tile_blocked(void* ctx, int x, int y) {
     (void)ctx;
     return col_static_blocked(x, y);
 }
 
-/**
- * Centre-to-centre tile line of sight over the static mask. Checks every tile the ray
- * enters including the destination. The source tile is exempt so a perimeter emitter
- * can fire out of a blocked corner.
- */
 static int col_tiles_have_los(const ColosseumState* s, int x0, int y0, int x1, int y1) {
     (void)s;
     if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
@@ -34,13 +23,10 @@ static int col_tiles_have_los(const ColosseumState* s, int x0, int y0, int x1, i
     return col_tiles_have_los_reference_slowpath(x0, y0, x1, y1);
 }
 
-/** Shared player LoS source for the Colosseum static tile mask. */
 static OsrsLosQuery col_player_los_query(ColosseumState* s) {
     return osrs_los_tile(col_los_tile_blocked, s);
 }
 
-/** LoS from the closest tile of the NPC's footprint to the player's tile. Stepping
-    behind a pillar safespots simple chasers. */
 static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc) {
     int size = npc->size > 0 ? npc->size : COLO_NPC_STATS[npc->type].size;
     int sx = s->player.x, sy = s->player.y;
@@ -51,8 +37,6 @@ static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc
     return col_tiles_have_los(s, sx, sy, s->player.x, s->player.y);
 }
 
-/** NPC-blocked callback (size-aware): the static mask, the wave-12 boss clamp, and
-    other NPC footprints. */
 static int col_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
@@ -102,13 +86,10 @@ typedef struct {
     ColosseumState* s;
     int size;
     uint16_t gen;
-    /* warbanders ignore NPC bodies (walk through, stand on top). Static mask, boss
-       clamp and player tile still block. */
+
     int ignore_npcs;
 } ColoNpcPathCtx;
 
-/** Thread-local routefinding collision cache. A cell is valid this query group when
-    blocked_gen[x][y] == counter, and blocked_value is trusted only then. */
 typedef struct {
     uint16_t blocked_gen[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
     uint8_t blocked_value[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
@@ -117,10 +98,6 @@ typedef struct {
 
 static OSRS_THREAD_LOCAL ColoNpcPathCache col_npc_path_cache;
 
-/** Bump the collision-cache generation and return a fresh context. One generation may
-    be shared only across a query group where the collision field is constant (a whole
-    col_warband_move call, one minotaur step, one Sol step). Never share across movers,
-    or a mover's stale pre-move footprint leaks in. */
 static ColoNpcPathCtx col_npc_path_ctx_begin(ColosseumState* s, int size) {
     col_npc_path_cache.counter++;
     if (col_npc_path_cache.counter == 0) {
@@ -150,9 +127,6 @@ static int col_npc_path_blocked_uncached(ColoNpcPathCtx* pc, int x, int y) {
     return col_npc_blocked_ignore_player(s, x, y, pc->size);
 }
 
-/** BFS blocked predicate for NPC routefinding: a size x size footprint at SW (x, y)
-    vs the static mask, the boss clamp, other NPC bodies, and the player's tile. The
-    caller must lift the moving NPC's own footprint stamp. */
 static int col_npc_path_blocked(void* ctx, int x, int y) {
     ColoNpcPathCtx* pc = (ColoNpcPathCtx*)ctx;
     int gx, gy;
@@ -166,11 +140,6 @@ static int col_npc_path_blocked(void* ctx, int x, int y) {
     return col_npc_path_cache.blocked_value[gx][gy];
 }
 
-/** Exact-input BFS memo for warband routefinding. A warbander's blocked predicate
-    (ignore_npcs, size 1) reads only the process-constant static mask, the player's
-    tile, and the boss-clamp rectangle, so (src, dest, player, clamp) fully determines
-    the BFS result. Entries never go stale (every changing input is in the key) and
-    persist across ticks and episodes. Key packing is prefix-free via a leading 1 bit. */
 #define COL_WARBAND_BFS_MEMO_BITS 16
 #define COL_WARBAND_BFS_MEMO_SIZE (1 << COL_WARBAND_BFS_MEMO_BITS)
 static OSRS_THREAD_LOCAL uint64_t col_warband_bfs_memo_key[COL_WARBAND_BFS_MEMO_SIZE];
@@ -188,8 +157,6 @@ static void col_warband_bfs_memo_instr_report(void) {
 }
 #endif
 
-/** Pack every input of the warband blocked predicate. All coords are arena tiles in
-    [0, 33], so 6-bit fields are exact. */
 static uint64_t col_warband_bfs_memo_pack(
     const ColosseumState* s, int x, int y, int tx, int ty) {
     uint64_t key = 1;
@@ -215,16 +182,12 @@ static uint32_t col_warband_bfs_memo_slot(uint64_t key) {
     return (uint32_t)((key * 0x9E3779B97F4A7C15ULL) >> (64 - COL_WARBAND_BFS_MEMO_BITS));
 }
 
-/** result byte: bit 0 found, bits 1-2 next_dx+1, bits 3-4 next_dy+1. */
 static uint8_t col_warband_bfs_memo_encode(PathResult pr) {
     return (uint8_t)((pr.found ? 1 : 0) |
         (uint32_t)(pr.next_dx + 1) << 1 |
         (uint32_t)(pr.next_dy + 1) << 3);
 }
 
-/** One routefinding step of a size x size NPC toward SW-anchor dest, reusing the
-    caller's cache generation (pc->gen). An unreachable dest degrades to the nearest
-    reachable tile. Returns 1 if the NPC advanced. */
 static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx, int ty) {
     if (tx < COLO_ARENA_MIN_X) tx = COLO_ARENA_MIN_X;
     if (tx > COLO_ARENA_MAX_X) tx = COLO_ARENA_MAX_X;
@@ -297,17 +260,11 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
     return 1;
 }
 
-/** One routefinding step in its own fresh cache generation, for single-step movers
-    (Sol, the Red-Flag minotaur) whose collision field is constant only within the call. */
 static int col_npc_path_step(ColosseumState* s, int* x, int* y, int size, int tx, int ty) {
     ColoNpcPathCtx pc = col_npc_path_ctx_begin(s, size);
     return col_npc_path_step_with_ctx(&pc, x, y, tx, ty);
 }
 
-/** Pick a warbander's movement target: its formation tile when free, else the nearest
-    free player-adjacent tile, cardinals before diagonals (diagonal contact cannot
-    attack). The member's own footprint stamp is lifted, so a tile it already holds
-    counts as free and it stands still rather than orbit the player. */
 static void col_warband_pick_target(
     ColosseumState* s, ColoNpcPathCtx* pc, ColoNPC* npc, int* tx, int* ty) {
     int px = s->player.x, py = s->player.y;
@@ -319,8 +276,8 @@ static void col_warband_pick_target(
     if (!col_npc_path_blocked(pc, fx, fy)) return;
 
     static const int ADJ[8][2] = {
-        {0, 1}, {1, 0}, {-1, 0}, {0, -1},        /* cardinals */
-        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };    /* diagonals */
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };
     int best_key = 1 << 30;
     for (int a = 0; a < 8; a++) {
         int x = px + ADJ[a][0], y = py + ADJ[a][1];
@@ -333,15 +290,11 @@ static void col_warband_pick_target(
     }
 }
 
-/** Warbander movement: up to COLO_WARBAND_TILES_PER_TICK BFS steps toward the member's
-    diamond tile, routing around pillars, walls, and other NPCs. A member that moved
-    this tick is ineligible to attack. */
 static void col_warband_move(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
     npc->target_x = s->player.x;
     npc->target_y = s->player.y;
-    /* one generation for the whole move: the player is static, so the collision field
-       is constant across pick_target and every dart. Warbanders never stamp collision. */
+
     ColoNpcPathCtx pc = col_npc_path_ctx_begin(s, 1);
     pc.ignore_npcs = 1;
     int tx, ty;
@@ -355,17 +308,11 @@ static void col_warband_move(ColosseumState* s, int idx) {
     npc->moved_this_tick = steps > 0 ? 1 : 0;
 }
 
-/** Per-NPC movement. Warbanders route to their formation tiles. The Red Flag minotaur
-    (npc 12813) is the routefinding variant: full BFS around obstacles, impossible to
-    safespot. Everything else keeps the simple greedy chase and is meant to be pillar-
-    safespottable: melee NPCs path into melee contact, ranged NPCs hold once within
-    attack_range and in line of sight, else step closer. Multi-tile NPCs use the shared
-    size-aware step. */
 static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) {
     (void)ctx;
     ColoNPC* npc = &s->npcs[idx];
     const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
-    if (npc->type == COLO_SOL_HEREDIT) return;  /* the boss machine owns Sol's chase */
+    if (npc->type == COLO_SOL_HEREDIT) return;
     if (!st->can_move) return;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
 
@@ -399,8 +346,7 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
 
     int moved;
     if (npc->type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG)) {
-        /* BFS toward the footprint-on-player anchor. Blocked dest degrades to the
-           nearest reachable flush anchor. */
+
         moved = 0;
         if (encounter_dist_to_npc(tx, ty, npc->x, npc->y, size) > 1)
             moved = col_npc_path_step(s, &npc->x, &npc->y, size, tx - 1, ty - 1);

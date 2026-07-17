@@ -1,34 +1,14 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_boss.inc
- * @brief Sol Heredit (wave 12) boss state machine.
- *
- * Reads top to bottom as the fight is built: the attack engine ({Spear x2, Shield x2}
- * pool + phase-gated specials, forced spears), chase movement behind the start-of-tick
- * adjacency gate, the AoE hazard tiles, the arena hazards (crystals, beams, molten
- * sand), and the player-response layers (triple parry, grapple).
- *
- * All Sol damage is typeless except the triple-parry melee hits. The player survives by
- * dodging hazard tiles (damage 2 ticks after the cast = one informed reactive move),
- * flicking Protect from Melee per parry hit (early prayer is punished), and clicking the
- * called grapple slot. Damage routes through col_damage_player_from +
- * col_mod_on_player_damaged so the shared HP/splat/Doom bookkeeping holds.
- */
 
-/** boss arena is clamping movement iff wave 12 is live and the machine started. */
 static int col_sol_clamp_active(const ColosseumState* s) {
     return s->wave == COLO_WAVE_BOSS && s->sol.started;
 }
 
-/* The boss_arena bounds are the shield-wall ring. The player fights one tile inside it,
-   so the walkable interior (player + NPC movement + hazard placement) is the bounds
-   shrunk by one tile on every side. */
 static int col_in_boss_arena(const ColosseumState* s, int x, int y) {
     return x > s->sol.boss_arena_min_x && x < s->sol.boss_arena_max_x &&
            y > s->sol.boss_arena_min_y && y < s->sol.boss_arena_max_y;
 }
 
-/** HP-fraction phase: 0 (>90%), 1 (<90%), 2 (<75%), 3 (<50%), 4 (<25%), 5 (<10%). */
 static int col_sol_phase_for_hp(int hp) {
     int max = COLO_SOL_HP_MAX;
     if (hp > (max * 90) / 100) return 0;
@@ -39,7 +19,6 @@ static int col_sol_phase_for_hp(int hp) {
     return 5;
 }
 
-/** find the live Sol NPC slot, or -1. */
 static int col_sol_find_idx(const ColosseumState* s) {
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         const ColoNPC* npc = &s->npcs[i];
@@ -49,19 +28,12 @@ static int col_sol_find_idx(const ColosseumState* s) {
     return -1;
 }
 
-/** Is any overhead protect prayer up? */
 static int col_player_overhead_protect_on(const ColosseumState* s) {
     return s->player.prayer == PRAYER_PROTECT_MELEE ||
            s->player.prayer == PRAYER_PROTECT_RANGED ||
            s->player.prayer == PRAYER_PROTECT_MAGIC;
 }
 
-/**
- * Initialise the boss machine for wave 12: set the interior bounds (the static-mask
- * pillars clip the corners), drop the player onto the south-centre start tile, and zero
- * the boss sub-state so a fight reached by wave progression starts identically to a
- * direct start_wave=12. The fight always opens with a Spear.
- */
 static void col_sol_begin_boss_arena(ColosseumState* s) {
     s->sol = (SolHereditState){0};
     s->sol.started = 1;
@@ -86,8 +58,6 @@ static void col_sol_start_triple_parry(ColosseumState* s, int idx);
 static void col_sol_start_grapple(ColosseumState* s);
 static void col_sol_fire_lasers(ColosseumState* s);
 
-/** Next-attack delay for the attack just initiated. Spear/shield speed up 1t below 75%
-    (phase >= 2), and the triple is 11t only in the 50-75% band. */
 static int col_sol_attack_delay(int kind, int phase) {
     switch (kind) {
         case COLO_SOL_ATTACK_SPEAR:
@@ -104,8 +74,6 @@ static int col_sol_attack_delay(int kind, int phase) {
     }
 }
 
-/** Animation freeze for the attack just initiated. The triple holds Sol through its
-    full hit schedule. */
 static int col_sol_attack_freeze(int kind, int phase) {
     switch (kind) {
         case COLO_SOL_ATTACK_SPEAR:   return COLO_SOL_SPEAR_FREEZE;
@@ -120,13 +88,6 @@ static int col_sol_attack_freeze(int kind, int phase) {
     }
 }
 
-/**
- * Draw Sol's next attack. A forced spear (fight opener, post-transition) short-circuits
- * the pool. Otherwise uniform over {Spear, Spear, Shield, Shield} plus the phase-gated
- * specials once 2 normals have passed since the last special: the triple from phase 1,
- * the grapple from phase 2. Selection maintains the special cooldown, col_sol_pick_variant
- * maintains the variant alternation.
- */
 static int col_sol_select_attack(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->force_spear) {
@@ -154,8 +115,6 @@ static int col_sol_select_attack(ColosseumState* s) {
     return kind;
 }
 
-/** Variant alternation: consecutive same-type casts flip 1 <-> 2, any type switch
-    resets to variant 1. */
 static int col_sol_pick_variant(SolHereditState* sol, int kind) {
     int variant = (sol->last_attack_kind == kind && sol->last_variant == 1) ? 2 : 1;
     sol->last_attack_kind = kind;
@@ -163,19 +122,12 @@ static int col_sol_pick_variant(SolHereditState* sol, int kind) {
     return variant;
 }
 
-/** Sol initiates only when his footprint is melee-adjacent to the player at the start
-    of the tick (the NPC phase runs before player movement, so positions here are exactly
-    start-of-tick). */
 static int col_sol_adjacent_to_player(const ColosseumState* s, int idx) {
     const ColoNPC* boss = &s->npcs[idx];
     return encounter_dist_to_npc(s->player.x, s->player.y, boss->x, boss->y,
         col_npc_effective_size(boss)) == 1;
 }
 
-/** One attack-engine tick: count down the freeze + attack delay, then initiate when
-    unfrozen, off cooldown, and adjacent at tick start (walking away on the cooldown tick
-    delays him). Initiation launches the mechanic, freezes Sol, and rolls the per-attack
-    next delay. */
 static void col_sol_tick_attack_engine(ColosseumState* s, int idx) {
     SolHereditState* sol = &s->sol;
     if (sol->immobile_ticks > 0) sol->immobile_ticks--;
@@ -205,15 +157,10 @@ static void col_sol_tick_attack_engine(ColosseumState* s, int idx) {
     s->npcs[idx].attacked_this_tick = 1;
     s->npcs[idx].attack_style_this_tick = ATTACK_STYLE_MELEE;
 
-    /* every attack commit fires the lasers once the shared cooldown has run out
-       (transitions commit here too via force_spear, and fire as well). */
     if (sol->crystal_count > 0 && sol->laser_cooldown < 0)
         col_sol_fire_lasers(s);
 }
 
-/** Sol's chase: one footprint-aware BFS step toward centring his 5x5 on the
-    player. Frozen while attacking or transitioning; holds once adjacent (the
-    attack engine, which ran first this tick, owns the adjacency decision). */
 static void col_sol_move(ColosseumState* s, int idx) {
     SolHereditState* sol = &s->sol;
     ColoNPC* boss = &s->npcs[idx];
@@ -230,11 +177,6 @@ static void col_sol_move(ColosseumState* s, int idx) {
     boss->moved_this_tick = moved ? 1 : 0;
 }
 
-/** 8-way attack direction from a position vs the recorded 5x5 hazard anchor: clamp the
-    position into the footprint box, take the sign of the remaining offset per axis. A
-    position past a corner resolves diagonal; under the boss (offset 0,0) it falls
-    through to SW. Sampled on the bite tick, not the cast, so running away laterally after
-    the cast cannot force a cardinal miss. */
 static void col_sol_aoe_direction(int px, int py, int anchor_x, int anchor_y,
                                   int* dx, int* dy) {
     int closest_x = px, closest_y = py;
@@ -249,10 +191,6 @@ static void col_sol_aoe_direction(int px, int py, int anchor_x, int anchor_y,
     if (*dx == 0 && *dy == 0) { *dx = -1; *dy = -1; }
 }
 
-/** direction a live spear resolves under for a query at (x, y): the locked
-    bite-tick direction once stamped, else the direction (x, y) itself would
-    induce. Per-tile induction makes telegraph-phase hazard queries the exact
-    rule-based threat field: "if it lands while you stand here, you are hit". */
 static void col_sol_aoe_effective_dir(const SolHereditState* sol, int x, int y,
                                       int* dx, int* dy) {
     if (sol->aoe_dir_x != 0 || sol->aoe_dir_y != 0) {
@@ -263,22 +201,6 @@ static void col_sol_aoe_effective_dir(const SolHereditState* sol, int x, int y,
     col_sol_aoe_direction(x, y, sol->aoe_x, sol->aoe_y, dx, dy);
 }
 
-/**
- * Is (x, y) a hazard tile of the recorded cast? Shapes ported tile-exact from colosim
- * doFirstSpear/doSecondSpear/doShields (frame map: ours = (x_colosim, -y_colosim)).
- * Cardinals in (forward, lateral) along the cast direction, boss centre at forward 0,
- * footprint -2..+2, flush melee row forward 3; lines run forward 4..4+LINE_LEN:
- *   Spear1: footprint + full-width front row + two lines at lateral +-1.
- *   Spear2: 7x7 slam (footprint + 1 ring) + three lines at lateral -2/0/+2.
- * Diagonals in (u, v) = per-axis distance out from the footprint corner K facing the
- * player (K = centre + 2*(dx, dy)), both axes oriented along the cast:
- *   Spear1: footprint + two lines flanking the corner diagonal, anchors K+(0,dy) and
- *           K+(dx,0); the exact corner diagonal stays safe.
- *   Spear2: 7x7 slam + centre line on the diagonal from K+2*(dx,dy) + two flanks from
- *           K+(-dx,2dy) and K+(2dx,-dy).
- *   Shield1: hazard everywhere except the safe ring at Chebyshev 4 (the 9x9 perimeter).
- *   Shield2: inner block to Chebyshev 4 (9x9), safe ring at 5, hazard outside.
- */
 static int col_sol_aoe_tile_is_hazard(const SolHereditState* sol, int x, int y) {
     int cx = sol->aoe_x + 2, cy = sol->aoe_y + 2;
 
@@ -327,9 +249,6 @@ static int col_sol_aoe_tile_is_hazard(const SolHereditState* sol, int x, int y) 
     return 0;
 }
 
-/** Launch a spear/shield cast: record the hazard anchor (boss SW + variant) at age 0 =
-    telegraph. The spear direction stays unresolved (0,0) until the bite tick, so the
-    telegraph is Sol's animation, not a committed direction. */
 static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant) {
     SolHereditState* sol = &s->sol;
     const ColoNPC* boss = &s->npcs[idx];
@@ -344,10 +263,6 @@ static void col_sol_cast_aoe(ColosseumState* s, int idx, int kind, int variant) 
     sol->aoe_dir_y = 0;
 }
 
-/** Age the live AoE: at age 2 (cast + telegraph + damage tick, so the post-telegraph
-    move phase runs before the check) a spear locks its direction from the player's
-    post-move position, then a player on a hazard tile eats the per-tile 20-44 roll.
-    Residue fades after 3 ticks. */
 static void col_sol_tick_aoe(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->aoe_attack == COLO_SOL_AOE_NONE) return;
@@ -368,9 +283,6 @@ static void col_sol_tick_aoe(ColosseumState* s) {
     if (sol->aoe_age >= COLO_SOL_AOE_LIFETIME) sol->aoe_attack = COLO_SOL_AOE_NONE;
 }
 
-/** Patrol segment for an edge: the line one tile inside the boundary, endpoints inset 2
-    from the corners on the perpendicular axis (the insets clear the corner pillar
-    footprints). N/S crystals patrol along x at a fixed y, E/W along y at a fixed x. */
 static void col_sol_crystal_patrol(
     const SolHereditState* sol, int edge, int* fixed, int* lo, int* hi
 ) {
@@ -401,16 +313,12 @@ static void col_sol_crystal_patrol(
     }
 }
 
-/** Is the player on the crystal's firing line? N/S crystals shoot down their column,
-    E/W down their row. */
 static int col_sol_crystal_in_line(const ColosseumState* s, const ColoSolCrystal* c) {
     if (c->edge == COLO_SOL_EDGE_NORTH || c->edge == COLO_SOL_EDGE_SOUTH)
         return s->player.x == c->x;
     return s->player.y == c->y;
 }
 
-/** Spawn the next crystal (one per transition, phases 1-4) on its own edge in order
-    N/E/S/W, at a uniform point on the patrol segment, heading toward a random endpoint. */
 static void col_sol_spawn_crystal(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->crystal_count >= COLO_SOL_MAX_CRYSTALS) return;
@@ -435,8 +343,6 @@ static void col_sol_spawn_crystal(ColosseumState* s) {
     sol->crystal_count++;
 }
 
-/** Fire every crystal simultaneously, called by the attack engine on a non-transition
-    attack commit once the shared cooldown ran out. */
 static void col_sol_fire_lasers(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     for (int i = 0; i < sol->crystal_count; i++)
@@ -448,9 +354,6 @@ static void col_sol_fire_lasers(ColosseumState* s) {
             + encounter_rand_int(&s->rng_state, COLO_SOL_CRYSTAL_COOLDOWN_RAND);
 }
 
-/** Per-crystal tick, in order: patrol step (skipped while firing), then the damage check
-    at firing_freeze == 3, then the timer decrements. The beam crosses the whole arena,
-    pillars do not block it. */
 static void col_sol_tick_crystals(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     for (int i = 0; i < sol->crystal_count; i++) {
@@ -481,8 +384,6 @@ static void col_sol_tick_crystals(ColosseumState* s) {
     }
 }
 
-/** Drop a permanent molten pool. Re-covering an existing pool has no additional effect,
-    and the 32-slot cap recycles a random slot on overflow. */
 static void col_sol_add_pool(ColosseumState* s, int x, int y) {
     if (col_static_blocked(x, y)) return;
     SolHereditState* sol = &s->sol;
@@ -499,9 +400,6 @@ typedef struct {
     int x, y;
 } ColSolMoltenCandidate;
 
-/** Build every valid molten-sand candidate in the 9x9 around the player, then sample
-    without replacement. Phase-transition beams force the player tile first; enrage
-    opening/spam pools do not (random tiles within +-4 of the player). */
 static int col_sol_sample_molten_candidates(
     ColosseumState* s,
     int spread,
@@ -537,9 +435,6 @@ static int col_sol_sample_molten_candidates(
     return out_count;
 }
 
-/** telegraph one sand pillar: the white spot appears now, the pillar strikes
-    2 ticks later (the counter decrements on the drop tick). Silently skips
-    when all slots are in flight (BEAM_MAX covers every legit burst). */
 static void col_sol_drop_beam_at(ColosseumState* s, int x, int y) {
     SolHereditState* sol = &s->sol;
     for (int b = 0; b < COLO_SOL_BEAM_MAX; b++) {
@@ -551,8 +446,6 @@ static void col_sol_drop_beam_at(ColosseumState* s, int x, int y) {
     }
 }
 
-/** 6 light beams in the 9x9 around the player, the first on the player's current tile;
-    each pillar strikes 2 ticks after its telegraph, leaving a permanent molten pool. */
 static void col_sol_drop_beams(ColosseumState* s) {
     ColSolMoltenCandidate tiles[COLO_SOL_BEAM_COUNT];
     int ntiles = col_sol_sample_molten_candidates(
@@ -561,11 +454,6 @@ static void col_sol_drop_beams(ColosseumState* s) {
         col_sol_drop_beam_at(s, tiles[n].x, tiles[n].y);
 }
 
-/** Tick beams into pools, run the enrage spam (1 sand per 3 ticks within +-4 of the
-    player; enrage changes only the frequency, every sand still telegraphs 2 ticks), and
-    burn the player standing on any pool for 5-9 typeless (one burn per tick across
-    overlapping pools). The spam telegraphs before the aging loop so its pillar strikes on
-    the same schedule as transition beams. */
 static void col_sol_tick_molten(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->phase >= 5) {
@@ -599,13 +487,8 @@ static void col_sol_tick_molten(ColosseumState* s) {
     }
 }
 
-/** Per-hit lookback windows (ticks before the hit) during which an overhead protect
-    prayer must have been off, else that hit is unblockable (3 for hit 1, 2 for hits
-    2-3). */
 static const int COLO_SOL_PARRY_LOOKBACK[COLO_SOL_PARRY_HITS] = { 3, 2, 2 };
 
-/** was any overhead protect prayer on during the `lookback` ticks before this
-    one (exclusive)? Reads the per-tick history the boss tick records. */
 static int col_sol_overhead_on_in_window(const ColosseumState* s, int lookback) {
     for (int k = 1; k <= lookback; k++) {
         int t = s->tick - k;
@@ -615,9 +498,6 @@ static int col_sol_overhead_on_in_window(const ColosseumState* s, int lookback) 
     return 0;
 }
 
-/** Start the phase-gated combo: 15/25/35 landing at +3/+6/+9 through phase 2 (HP
-    50-90%), 15/30/45 at +3/+6/+10 from phase 3 (below 50%). A replacement, never an
-    alternation. */
 static void col_sol_start_triple_parry(ColosseumState* s, int idx) {
     (void)idx;
     SolHereditState* sol = &s->sol;
@@ -634,10 +514,6 @@ static void col_sol_start_triple_parry(ColosseumState* s, int idx) {
     sol->parry_hits_left = COLO_SOL_PARRY_HITS;
 }
 
-/** Resolve due parry hits. An overhead on during the hit's lookback window makes it
-    unblockable, otherwise Protect from Melee exactly at land blocks it. Every hit,
-    landed or blocked, deactivates all overhead protect prayers, forcing a re-flick per
-    hit. */
 static void col_sol_tick_triple_parry(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (sol->parry_hits_left <= 0) return;
@@ -665,8 +541,6 @@ static void col_sol_tick_triple_parry(ColosseumState* s) {
     }
 }
 
-/** Drop the shield and call one of exactly 5 slots, uniform. The player has 4 ticks to
-    click that slot via the GRAPPLE_PARRY head. */
 static void col_sol_start_grapple(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     sol->grapple_active = 1;
@@ -675,12 +549,6 @@ static void col_sol_start_grapple(ColosseumState* s) {
     sol->grapple_timer = COLO_SOL_GRAPPLE_WINDOW;
 }
 
-/**
- * Grapple response hook (player action phase): clicking the called slot parries. Clicking
- * on the last window tick (grapple_timer <= 1) is a perfect parry, arming a guaranteed-max
- * window the player-attack path consumes within COLO_SOL_PERFECT_MAX_TICKS. Returns 1 if
- * the click resolved the grapple, else 0.
- */
 static int col_sol_grapple_parry_attempt(ColosseumState* s, int slot) {
     SolHereditState* sol = &s->sol;
     if (!sol->grapple_active || sol->grapple_resolved) return 0;
@@ -700,8 +568,6 @@ static int col_sol_grapple_parry_attempt(ColosseumState* s, int slot) {
     return 1;
 }
 
-/** Count down the window. An unanswered grapple lands 20 + rand(0..24) typeless,
-    unblockable. */
 static void col_sol_tick_grapple(ColosseumState* s) {
     SolHereditState* sol = &s->sol;
     if (!sol->grapple_active) return;
@@ -719,9 +585,6 @@ static void col_sol_tick_grapple(ColosseumState* s) {
     }
 }
 
-/** Enter one phase: 6 beams around the player, the phase's crystal (phases 1-4), and at
-    enrage (phase 5) the 5 opening pools + the 3-tick spam timer. The caller applies the
-    one-off transition freeze and the forced spear. */
 static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     SolHereditState* sol = &s->sol;
     sol->phase = new_phase;
@@ -729,8 +592,7 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     if (new_phase >= 1 && new_phase <= 4) col_sol_spawn_crystal(s);
     if (new_phase >= 5) sol->laser_cooldown = COLO_SOL_CRYSTAL_COOLDOWN_ENRAGE;
     if (new_phase >= 5) {
-        /* the 5 enrage opening sands telegraph like every other sand — only
-           the spawn frequency is special at enrage. */
+
         ColSolMoltenCandidate tiles[COLO_SOL_ENRAGE_OPEN_POOLS];
         int ntiles = col_sol_sample_molten_candidates(
             s, COLO_SOL_ENRAGE_POOL_SPREAD, COLO_SOL_ENRAGE_OPEN_POOLS, 0, tiles);
@@ -741,14 +603,6 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
     if (new_phase > s->log.boss_phase_reached) s->log.boss_phase_reached = new_phase;
 }
 
-/**
- * Sol Heredit boss tick. No-op until wave 12 is live and the boss machine has been
- * started by col_sol_begin_boss_arena. Per-tick order: record the prayer history, run
- * phase transitions, age hazards + resolve player-response layers, then the attack engine
- * and movement. A cast on tick T telegraphs in the obs at end of T, the player's informed
- * move runs during T+1, and the age-2 damage check at the top of T+2 sees that moved
- * position.
- */
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
     (void)ctx;
     SolHereditState* sol = &s->sol;
@@ -756,14 +610,11 @@ static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
 
     int idx = col_sol_find_idx(s);
     sol->boss_idx = idx;
-    if (idx < 0) return;  /* Sol dead/absent: wave-complete handles the win */
+    if (idx < 0) return;
 
-    /* this tick's overhead state (final, prayer actions ran in pretick). */
     sol->overhead_history[s->tick % COLO_SOL_PRAYER_HISTORY] =
         (uint8_t)col_player_overhead_protect_on(s);
 
-    /* phase transitions on downward HP crossings: per-phase hazards, then one transition
-       freeze and a forced spear. */
     int target_phase = col_sol_phase_for_hp(s->npcs[idx].hp);
     if (target_phase > sol->phase) {
         while (sol->phase < target_phase) col_sol_enter_phase(s, sol->phase + 1);

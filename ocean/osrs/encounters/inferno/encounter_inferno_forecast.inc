@@ -1,5 +1,4 @@
 #line 5216 "encounter_inferno.h"
-/* obs layout: player + Zuk phase + pillars + NPC slots + step-out forecast + pending hits + pending Zuk healer sparks */
 #define INF_PLAYER_OBS_SIZE 75
 #define INF_PILLAR_OBS_SIZE (INF_NUM_PILLARS * 5)
 #define INF_BASE_NPC_OBS_SIZE 896
@@ -1170,8 +1169,6 @@ static void inf_build_step_out_forecast_exact_ctx(
     int forecast_slot_count = inf_collect_step_out_forecast_slots(
         s, forecast_slots);
 
-    /* forecast serves pillar safespotting + attack-overlap; with no active pillars neither applies, so skip
-       the heavy rollout (landing/validity still emitted, danger stays zero). read-only: the sim is untouched. */
     int forecast_has_active_pillar = 0;
     for (int p = 0; p < INF_NUM_PILLARS; p++) {
         if (s->pillars[p].active) { forecast_has_active_pillar = 1; break; }

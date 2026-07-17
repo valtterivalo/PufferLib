@@ -1,9 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_lab_json.inc
- * @brief JSON scenario dump for the Colosseum lab. Reuses name tables from
- *        encounter_colosseum_lab_parse.inc, which must be included first.
- */
 
 static void col_lab_append_npcs_json(ColosseumState* s, ColoLabString* out) {
     encounter_lab_string_append(out, "\"npcs\":[");

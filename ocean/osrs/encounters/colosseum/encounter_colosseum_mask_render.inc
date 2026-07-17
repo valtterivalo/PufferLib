@@ -1,10 +1,4 @@
 #line 76 "encounter_colosseum.h"
-/**
- * @file encounter_colosseum_mask_render.inc
- * @brief Action mask + reward/terminal getters + render-entity fill.
- *
- * The mask is per-head validity (1 = valid).
- */
 
 static void col_write_mask_ctx(EncounterState* state, EncounterContext* context, float* mask) {
     ColosseumState* s = (ColosseumState*)state;
@@ -12,8 +6,6 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     col_refresh_current_obs_slots_ctx(s, ctx);
     int offset = 0;
 
-    /* HEAD_PRIMARY (49): noop always valid, moves follow walkability, attacks require
-       a live targetable obs slot. */
     int frozen = s->modifiers.draft_pending && !s->modifiers.draft_free_movement;
     mask[offset++] = 1.0f;
     for (int d = 1; d < ENCOUNTER_MOVE_ACTIONS; d++) {
@@ -21,26 +13,18 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[d];
         mask[offset++] = (!frozen && col_player_walkable(s, nx, ny)) ? 1.0f : 0.0f;
     }
-    /* Inventory clicks run before primary and can clear the lock, so the held target
-       stays valid across a gear switch plus re-attack. */
+
     for (int n = 0; n < COLO_OBS_NPCS; n++)
         mask[offset++] = (!frozen && col_obs_slot_is_targetable(s, n)) ? 1.0f : 0.0f;
 
-    /* HEAD_PRAYER (5): no_change always valid, off valid iff one is active, set
-       melee/ranged/magic valid iff prayer points remain. */
     mask[offset++] = 1.0f;
     mask[offset++] = s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_prayer > 0 ? 1.0f : 0.0f;
 
-    /* Per-category inventory heads. Each cell is classified once by click-action
-       (EQUIP -> gear slot, EAT, DRINK). One equip head per gear slot unmasks only
-       cells whose item belongs to that slot, so a one-tick full switch is possible
-       while "5 helmets" is structurally impossible. Validity mirrors
-       col_inventory_cell_actionable so the mask never unmasks a useless action. */
     int inventory_heads_enabled = !ctx->config.mask_inventory_heads;
-    int cell_equip_slot[COLO_INVENTORY_DISPLAY_SLOTS];  /* gear slot if equippable, else -1 */
+    int cell_equip_slot[COLO_INVENTORY_DISPLAY_SLOTS];
     int cell_can_eat[COLO_INVENTORY_DISPLAY_SLOTS];
     int cell_can_drink[COLO_INVENTORY_DISPLAY_SLOTS];
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
@@ -61,19 +45,18 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         }
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        mask[offset++] = 1.0f;  /* noop */
+        mask[offset++] = 1.0f;
         for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
             mask[offset++] = (inventory_heads_enabled && cell_equip_slot[cell] == slot)
                 ? 1.0f : 0.0f;
     }
-    mask[offset++] = 1.0f;  /* EAT noop */
+    mask[offset++] = 1.0f;
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
         mask[offset++] = (inventory_heads_enabled && cell_can_eat[cell]) ? 1.0f : 0.0f;
-    mask[offset++] = 1.0f;  /* DRINK noop */
+    mask[offset++] = 1.0f;
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
         mask[offset++] = (inventory_heads_enabled && cell_can_drink[cell]) ? 1.0f : 0.0f;
 
-    /* HEAD_SPEC (3): none, arm equipped spec weapon, disarm. */
     mask[offset++] = 1.0f;
     int spec_cost = osrs_spec_cost(s->player.equipped[GEAR_SLOT_WEAPON]);
     mask[offset++] = (spec_cost > 0 &&
@@ -81,24 +64,15 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
         ? 1.0f : 0.0f;
     mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
-    /* HEAD_MODIFIER_SELECT (4): no-op valid except while a draft is pending, when a
-       pick is forced (else an argmax policy that prefers no-op soft-locks the draft
-       until timeout). col_modifier_open_draft always sets >=1 real option, so this
-       head is never all-masked. pick option k valid only while a draft is pending and
-       that option slot holds a real modifier id. */
     mask[offset++] = s->modifiers.draft_pending ? 0.0f : 1.0f;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
         mask[offset++] = (s->modifiers.draft_pending && s->modifiers.draft_options[o] >= 0)
             ? 1.0f : 0.0f;
 
-    /* HEAD_GRAPPLE_PARRY (COLO_NUM_GRAPPLE_SLOTS+1): none always valid, clicking a
-       callout slot valid only while a Sol grapple is active. */
     mask[offset++] = 1.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)
         mask[offset++] = s->sol.grapple_active ? 1.0f : 0.0f;
 
-    /* HEAD_OFFENSIVE (5): no_change always valid, off valid iff one is active,
-       piety/rigour/augury points-only (no weapon-style gate). */
     mask[offset++] = 1.0f;
     mask[offset++] = (s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE) ? 1.0f : 0.0f;
     mask[offset++] = (s->player.current_prayer > 0 &&
@@ -108,9 +82,6 @@ static void col_write_mask_ctx(EncounterState* state, EncounterContext* context,
     mask[offset++] = (s->player.current_prayer > 0 &&
                       s->player.offensive_prayer != OFFENSIVE_PRAYER_AUGURY) ? 1.0f : 0.0f;
 
-    /* HEAD_SPELL (3): none always valid, summon-thrall valid iff not draft-frozen, the
-       recast gate is up, and the current target is a thrall-eligible (live, non-Sol)
-       NPC, death-charge valid iff not frozen, ready (cd==0), and not already armed. */
     mask[offset++] = 1.0f;
     {
         int target = col_player_target_slot(s);
@@ -167,17 +138,15 @@ static void col_prepare_render_player(const ColosseumState* s, int spec_fired_ki
     }
 }
 
-/* Renders a distinct animation per Sol attack, keyed off sol.last_attack_kind (set on
-   the firing tick). The triple's delayed-final-hit variant plays at phase >= 3. */
 static int col_sol_render_attack_anim_id(const SolHereditState* sol) {
     switch (sol->last_attack_kind) {
-        case COLO_SOL_ATTACK_SPEAR:   return 10883;  /* MELEE_ATTACK_TELEGRAPH */
-        case COLO_SOL_ATTACK_SHIELD:  return 10885;  /* SHIELDSLAM_TELEGRAPH */
-        case COLO_SOL_ATTACK_GRAPPLE: return 10884;  /* GRAPPLE_ATTACK_TELEGRAPH */
+        case COLO_SOL_ATTACK_SPEAR:   return 10883;
+        case COLO_SOL_ATTACK_SHIELD:  return 10885;
+        case COLO_SOL_ATTACK_GRAPPLE: return 10884;
         case COLO_SOL_ATTACK_TRIPLE:  return sol->phase >= 3 ? 10886 : 10887;
         default: break;
     }
-    return 10883;  /* default to the spear attack */
+    return 10883;
 }
 
 static int col_npc_render_attack_anim_id(
@@ -202,16 +171,11 @@ static int col_npc_render_attack_anim_id(
     abort();
 }
 
-/** Render-only: a free tile next to the player for the allied thrall. Scans the
-    player-adjacent ring, then one tile further, rejecting static blocks, NPC
-    footprints, and the player's own tile (col_npc_blocked over a 1x1 footprint).
-    Both the render-entity and projectile emitters call this so the model and its bolt
-    share one source tile. */
 static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out_y) {
     static const int RING[16][2] = {
-        {0, 1}, {1, 0}, {-1, 0}, {0, -1},          /* adjacent cardinals */
-        {1, 1}, {1, -1}, {-1, 1}, {-1, -1},        /* adjacent diagonals */
-        {0, 2}, {2, 0}, {-2, 0}, {0, -2},          /* one tile further out */
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1},
+        {0, 2}, {2, 0}, {-2, 0}, {0, -2},
         {1, 2}, {2, 1}, {-1, 2}, {-2, 1} };
     for (int a = 0; a < 16; a++) {
         int x = s->player.x + RING[a][0];
@@ -222,12 +186,10 @@ static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out
             return;
         }
     }
-    /* no clear neighbour: still draw the thrall off the player tile rather than drop it. */
     *out_x = s->player.x;
     *out_y = s->player.y + 1;
 }
 
-/** populate render entities (player + active NPCs). */
 static void col_fill_render_entities_ctx(
     EncounterState* state,
     EncounterContext* context,

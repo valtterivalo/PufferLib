@@ -1,8 +1,3 @@
-/**
- * @file encounter_inferno.h
- * @brief The Inferno: 69-wave PvM challenge, prayer switching behind destructible pillars.
- */
-
 #ifndef ENCOUNTER_INFERNO_H
 #define ENCOUNTER_INFERNO_H
 
@@ -28,7 +23,6 @@
 #include <ctype.h>
 #include <errno.h>
 
-
 #include "inferno/encounter_inferno_model.inc"
 #include "inferno/encounter_inferno_helpers.inc"
 #include "inferno/encounter_inferno_reset_spawn.inc"
@@ -41,4 +35,4 @@
 #include "inferno/encounter_inferno_obs_mask.inc"
 #include "inferno/encounter_inferno_render_snapshot.inc"
 
-#endif /* ENCOUNTER_INFERNO_H */
+#endif

@@ -37,7 +37,6 @@ typedef struct {
     const InfernoContext* ctx;
 } InfWalkCtx;
 
-/* BFS dynamic-obstacle callback: abs world coords -> local pillar check. */
 static int inf_pathfind_blocked(void* data, int abs_x, int abs_y) {
     InfWalkCtx* wc = (InfWalkCtx*)data;
     InfernoState* s = wc->s;
@@ -81,7 +80,6 @@ static int inf_player_collision_flag_blocked(InfernoState* s, int x, int y, int 
     return 0;
 }
 
-/* NPC movement blocked callback for encounter_npc_step_toward. */
 typedef struct {
     InfernoState* s;
     const InfernoContext* ctx;
@@ -201,7 +199,6 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
     if (uses_collision_flag)
         inf_unstamp_npc_collision_footprint(s, npc->x, npc->y, npc->size);
 
-    /* OSRS: NPC shuffles off player tile when overlapping (Mob.ts:109-153) */
     if (npc->type != INF_NPC_NIBBLER) {
         InfMoveCtx mc = { s, ctx, idx };
         int stepped = encounter_npc_step_out_from_under(
@@ -231,7 +228,6 @@ static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx
     npc->target_x = tx;
     npc->target_y = ty;
 
-    /* NPCs stop moving once they have LOS to target (Unit.ts:383: canMove = !hasLOS) */
     if (npc->type != INF_NPC_NIBBLER) {
         int has_los = target.is_player ?
             inf_npc_has_los(s, idx) :
@@ -280,15 +276,12 @@ static void inf_npc_move(InfernoState* s, int idx) {
     inf_npc_move_ctx(s, inf_legacy_context(), idx);
 }
 
-
-/* meleer digs when no LOS for 38+ ticks, 10% per tick, forced at 50 */
 static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->type != INF_NPC_MELEER || !npc->active) return;
     if (npc->dig_freeze_timer > 0) {
         npc->dig_freeze_timer--;
         if (npc->dig_freeze_timer == 0 && npc->dig_attack_delay == 0) {
-            /* emerge: try reference-ordered landing tiles around player, else NW-corner default */
             int ox = npc->x, oy = npc->y;
             if (inf_npc_sets_collision_flag(npc->type))
                 inf_unstamp_npc_collision_footprint(s, ox, oy, npc->size);

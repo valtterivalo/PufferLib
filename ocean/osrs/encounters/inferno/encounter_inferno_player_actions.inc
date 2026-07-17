@@ -1,13 +1,13 @@
 #line 3605 "encounter_inferno.h"
-#define INF_HEAD_MOVE      0   /* 25: idle + 8 walk + 16 run */
-#define INF_HEAD_PRAYER    1   /* no_change, off, set_refresh_melee/ranged/magic/redemption */
-#define INF_HEAD_TARGET    2   /* INF_OBS_NPCS+1: none or observation slot */
-#define INF_HEAD_GEAR      3   /* 4: no_switch, mage, long_range, bp */
-#define INF_HEAD_EAT       4   /* 2: none, brew */
-#define INF_HEAD_POTION    5   /* 4: none, restore, bastion, stamina */
-#define INF_HEAD_SPELL     6   /* 3: no_change, blood_barrage, ice_barrage */
-#define INF_HEAD_SPEC      7   /* 2: no_change, toggle (arm/disarm blowpipe spec) */
-#define INF_HEAD_OFFENSIVE 8   /* no_change, off, set_refresh_piety/rigour/augury */
+#define INF_HEAD_MOVE      0
+#define INF_HEAD_PRAYER    1
+#define INF_HEAD_TARGET    2
+#define INF_HEAD_GEAR      3
+#define INF_HEAD_EAT       4
+#define INF_HEAD_POTION    5
+#define INF_HEAD_SPELL     6
+#define INF_HEAD_SPEC      7
+#define INF_HEAD_OFFENSIVE 8
 #define INF_ACTION_DIMS_INIT { \
     ENCOUNTER_MOVE_ACTIONS, \
     ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION, \
@@ -107,7 +107,6 @@ static float inf_record_player_reward_damage(
     return damage;
 }
 
-/* walkability callback for encounter_move_to_target */
 static int inf_tile_walkable(void* data, int x, int y) {
     InfWalkCtx* wc = (InfWalkCtx*)data;
     InfernoState* s = wc->s;
@@ -162,12 +161,10 @@ static int inf_lookup_player_attack_target(
     return 1;
 }
 
-/* brew heal (16) and super restore (32) at the inferno player's fixed base 99 */
 #define INF_BREW_HEAL       osrs_brew_heal_amount(99)
 #define INF_RESTORE_AMOUNT  osrs_super_restore_amount(99)
 #define INF_NPC_DEATH_LINGER_TICKS 3
 
-/* apply NPC death (blob split, dead-mob store, jad-healer cleanup); call after reducing npc->hp */
 static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
     InfNPC* npc = &s->npcs[npc_idx];
     if (!osrs_npc_death_linger_start(
@@ -363,7 +360,6 @@ static int inf_oracle_gear_action_for(const InfernoState* s, int wanted_gear) {
 }
 
 static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* actions) {
-    /* apply prayer actions; a helper returns 1 when the prayer was activated this tick, so it skips drain */
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     int prayer_act = inf_canonical_overhead_action(actions[INF_HEAD_PRAYER]);
     int offensive_act = actions[INF_HEAD_OFFENSIVE];
@@ -386,10 +382,8 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
     if (encounter_apply_offensive_action(&s->player.offensive_prayer, offensive_act)) {
         s->player.offensive_prayer_just_activated = 1;
     }
-    /* drain can also clear offensive_prayer (pp<=0), so recompute AFTER drain to catch both changes */
     encounter_drain_all_prayers(
         &s->player, encounter_player_prayer_bonus(&s->player));
-    /* offensive prayer feeds eff_level/max_hit via the loadout cache; recompute on any change */
     if (s->player.offensive_prayer != prev_offensive) {
         encounter_recompute_loadout_max_hits(s->loadout_stats, INF_NUM_WEAPON_SETS, &s->player);
         if (ctx->human_command_mode)
@@ -521,14 +515,11 @@ static void inf_tick_player_ctx(
 
     int manual_spell = inf_spell_action_to_spell(actions[INF_HEAD_SPELL]);
 
-    /* special energy regen: 10 energy every 50 ticks (30 seconds) */
     encounter_tick_spec_regen(&s->player);
 
-    /* spec toggle: arm/disarm (does NOT interrupt interaction) */
     if (actions[INF_HEAD_SPEC] == 1)
         osrs_spec_toggle(&s->player.spec_armed);
 
-    /* stat decay: every 60 ticks, boosted/drained stats move 1 toward base */
     if (s->tick > 0 && s->tick % 60 == 0) {
         int* stats[] = { &s->player.current_ranged, &s->player.current_magic,
                          &s->player.current_attack, &s->player.current_strength,
@@ -542,11 +533,9 @@ static void inf_tick_player_ctx(
             inf_refresh_human_loadout_stats(s);
     }
 
-    /* consumables: shared 3-tick potion timer */
     if (s->player.potion_timer > 0) s->player.potion_timer--;
     if (s->stamina_active_ticks > 0) s->stamina_active_ticks--;
 
-    /* brew (INF_HEAD_EAT): heals 16 HP, can overcap to base+16 */
     int eat_act = actions[INF_HEAD_EAT];
     if (eat_act == 1 && s->player.brew_doses > 0 && s->player.potion_timer == 0
         && s->player.current_hitpoints < s->player.base_hitpoints) {
@@ -559,7 +548,6 @@ static void inf_tick_player_ctx(
             inf_refresh_human_loadout_stats(s);
     }
 
-    /* potions (INF_HEAD_POTION): 1=restore, 2=bastion, 3=stamina */
     int pot_act = actions[INF_HEAD_POTION];
     if (pot_act == 1 && s->player.restore_doses > 0 && s->player.potion_timer == 0) {
         encounter_add_prayer_restore(&s->player, INF_RESTORE_AMOUNT);
@@ -582,7 +570,6 @@ static void inf_tick_player_ctx(
         s->player.potion_timer = 3;
     }
 
-    /* inventory actions interrupt interaction (per OSRS entity interaction rules) */
     if (eat_act > 0)
         osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EAT);
     if (pot_act > 0)
@@ -590,7 +577,6 @@ static void inf_tick_player_ctx(
 
     inf_refresh_current_obs_slots_ctx(s, ctx);
 
-    /* attack target: persistent until the NPC dies or the player clicks ground; target=0 = no new target (keep current) */
     int target = actions[INF_HEAD_TARGET];
     if (inf_oracle_overrides_target(ctx->config.oracle_mode)) {
         InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
@@ -664,7 +650,6 @@ static void inf_tick_player_ctx(
                 s->interaction.target_slot)) {
         osrs_interaction_clear(&s->interaction);
     }
-    /* explicit movement (ground click or RL move) cancels the attack target unless a new target was set this tick; auto-chase does not */
     int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
     if (!has_new_target && has_explicit_move)
         osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
@@ -687,7 +672,6 @@ static void inf_tick_player_ctx(
             s->tick_at_first_zuk_healer_target = s->tick;
     }
 
-    /* movement: explicit move, auto-chase, or idle. OSRS order: target, movement, attack */
     OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
     int move_act = actions[INF_HEAD_MOVE];
     if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
@@ -785,7 +769,6 @@ static void inf_tick_player_ctx(
                 int total_dmg = 0;
 
                 if (is_magic_attack) {
-                    /* barrage: 3x3 AoE (osrs_barrage_resolve). ice freezes on hit (even 0 dmg); blood heals 25% of AoE damage */
                     OsrsTargetRef target_ref = {
                         .kind = OSRS_TARGET_NPC,
                         .id = s->interaction.target_slot,
@@ -808,7 +791,6 @@ static void inf_tick_player_ctx(
                         s->player.base_hitpoints
                     );
 
-                    /* build target array: primary target first, then all other active NPCs */
                     BarrageTarget btargets[INF_MAX_NPCS + 1];
                     int bt_count = 0;
                     {
@@ -823,9 +805,7 @@ static void inf_tick_player_ctx(
                     }
                     for (int i = 0; i < INF_MAX_NPCS; i++) {
                         if (i == s->interaction.target_slot || !s->npcs[i].active) continue;
-                        /* shield is invulnerable: no damage, no freeze from AoE */
                         if (s->npcs[i].type == INF_NPC_ZUK_SHIELD) continue;
-                        /* skip dying NPCs: already logged as killed */
                         if (s->npcs[i].death_ticks > 0) continue;
                         const InfNPCStats* ns2 = &INF_NPC_STATS[s->npcs[i].type];
                         btargets[bt_count++] = (BarrageTarget){
@@ -837,7 +817,6 @@ static void inf_tick_player_ctx(
                         };
                     }
 
-                    /* resolve barrage: accuracy/damage rolls + instant ice freeze at cast time */
                     BarrageResult br = osrs_barrage_resolve(
                         btargets, bt_count, attack_effects.attack_roll, attack_effects.max_hit,
                         &s->rng_state, active_spell, attack_effects.use_double_accuracy);
@@ -880,7 +859,6 @@ static void inf_tick_player_ctx(
                     total_dmg = (int)reward_damage;
 
                 } else if (is_blowpipe_spec_attack) {
-                    /* blowpipe spec: 2x accuracy, 1.5x max hit, heal 50% of damage */
                     if (!encounter_use_spec(&s->player, BLOWPIPE_SPEC_COST)) abort();
                     osrs_spec_disarm(&s->player.spec_armed);
                     s->player.used_special_this_tick = 1;
@@ -945,17 +923,14 @@ static void inf_tick_player_ctx(
                         s->tick_at_first_zuk_healer_attack = s->tick;
                 }
 
-                /* player projectile event for renderer */
                 s->tick_scratch.player_attacked = 1;
                 s->player_attack_npc_idx = s->interaction.target_slot;
                 s->player_attack_dmg = total_dmg;
                 s->player_attack_style_id = ls->style;
                 s->player_attack_timing = hit_timing;
 
-                /* player attack animation + spell type for renderer effect system */
                 s->player.attack_style_this_tick = ls->style;
                 if (ls->style == ATTACK_STYLE_MAGIC) {
-                    /* 0=none, 1=ice, 2=blood */
                     s->player.magic_type_this_tick = (active_spell == ENCOUNTER_SPELL_ICE) ? 1 : 2;
                 }
                 if (target_npc->death_ticks > 0)

@@ -183,7 +183,6 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         return inf_compute_joseph_reward(s, ctx, healer_is_actively_healing);
     }
 
-    /* tags-first gate suppresses shaped reward until 4 Zuk healers tagged; final-wave only, so handle as an early return */
     float reward = 0.0f;
     if (inf_is_final_wave(s)) {
         if (tags_first_gate) {
@@ -282,7 +281,6 @@ static float inf_compute_reward_ctx(InfernoState* s, const InfernoContext* ctx) 
         s->pending_set_kill_bonus +=
             (float)s->tick_scratch.kill_set * ctx->config.set_kill_bonus;
     }
-    /* emit pending kill bonuses gradually so a single-tick kill doesn't saturate the [-1,1] PPO reward clamp */
     if (s->pending_jad_kill_bonus > 0.0f) {
         float emit = fminf(0.07f, s->pending_jad_kill_bonus);
         reward += emit;
@@ -492,12 +490,10 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     if (s->episode_over) return;
 
     s->reward = 0.0f;
-    /* one assignment resets every per-tick accumulator; pillar_lost's -1 default is the only non-zero, player_moved is read out first */
     s->player_moved_last_tick = s->tick_scratch.player_moved;
     s->tick_scratch = (InfTickScratch){ .pillar_lost = -1 };
     s->player_attack_timing = (EncounterProjectileTiming){0};
     encounter_clear_tick_flags(&s->player);
-    /* clear NPC per-tick flags BEFORE player actions, so hit flags set by inf_tick_player survive into render_post_tick */
     for (int i = 0; i < INF_MAX_NPCS; i++) {
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
@@ -535,7 +531,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
     }
     inf_update_healer_transition_stats(s);
 
-    /* Stop before player actions so lethal hits cannot be brewed back from 0 HP. */
     if (s->player.current_hitpoints <= 0) {
         (void)inf_compute_reward_ctx(s, ctx);
         if (s->last_hit_by_type >= 0 && s->last_hit_by_type < INF_NUM_NPC_TYPES)
@@ -561,7 +556,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         inf_invalidate_los_cache(s);
     inf_resolve_jad_prayer_checks_after_player(s, ctx);
 
-    /* idle counter: consecutive ticks where the player could attack but didn't */
     {
         int has_alive_npc = can_player_attack && inf_has_live_player_target(s);
         if (has_alive_npc && s->player.attack_timer == 0 && !s->tick_scratch.player_attacked)
@@ -578,7 +572,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         }
     }
 
-    /* accumulate diagnostics; total_npc_attacks counts only player-directed attacks (not nibbler->pillar) */
     s->total_prayer_correct += s->tick_scratch.prayer_correct;
     int ranger_attacked_this_tick = 0;
     int mager_attacked_this_tick = 0;
@@ -600,7 +593,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
         if (s->player_moved_last_tick)
             s->total_step_out_ranger_mager_same_tick_attacks++;
     }
-    /* multi-style analysis: if 2+ styles fired and one was prayed, off-prayer hits from the others were unavoidable (can pray only one) */
     if (s->tick_scratch.attacks_fired > 0) {
         int styles = s->tick_scratch.styles_fired;
         int n_styles = ((styles >> 0) & 1) + ((styles >> 1) & 1) + ((styles >> 2) & 1);
@@ -642,7 +634,6 @@ static void inf_step_ctx(EncounterState* state, EncounterContext* context, const
             s->offshield_ticks_after_all_zuk_healers_dead++;
     }
 
-    /* bank the tick's irreversible HP progress before reward; all damage/heals have resolved by here */
     s->reward = inf_compute_reward_ctx(s, ctx);
     int all_dead = 1;
 
