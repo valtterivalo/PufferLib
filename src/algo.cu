@@ -1548,7 +1548,7 @@ __device__ __forceinline__ float safe_continuous_logstd(const precision_t* logst
 
 // Fused loss function. PPO clipped loss + value + entropy
 constexpr int PPO_THREADS = 256;
-constexpr int MAX_ATN_HEADS = 16; // TODO: use env atn dim directly
+constexpr int MAX_ATN_HEADS = NUM_ATNS;
 
 enum LossIdx {
     LOSS_PG = 0, LOSS_VF = 1, LOSS_ENT = 2, LOSS_TOTAL = 3,
