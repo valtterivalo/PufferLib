@@ -255,3 +255,19 @@ it - "reload smoke via train" is a non-test, and a bogus path under train is
 silently irrelevant, not a soft-fail bug. Port campaign gates complete.
 Open: validation chain readout (runs still on GPU), user viewer look, user
 opens PR from osrs-colosseum-inferno (draft in pr-description-draft.md).
+
+## 2026-07-17 validation readout (runs finished 22:49 / 23:12 UTC Jul 16)
+
+COLOSSEUM DEFAULT (Frankenstein clamp-winner ini, 143M, seed 42): score 0.514,
+wave 7.93, wins 0, ep_return 81.8, SPS 46.7K. Inside the +-0.08 band of the
+knee 0.526 -> shipped ini validates at baseline parity with the clamp-contract
+rewards riding. (Early contention from the zombie clampsweep trial until its
+22:41 kill; wall-clock only.) INFERNO (first run with honest truncations,
+138M): wins 0.277, wave 66.9/69, SPS 196.8K -> learns fine with the truncation
+split live. RETRAIN GATE SATISFIED both envs. box_gate.sh (trunk surgery
+smoke) was never launched with the chain; launched 07:5x Jul 17, GPU free.
+OPS GOTCHA (cost ~9h of blindness): pgrep -f inside ssh docker-exec bash -c
+SELF-MATCHES the wrapper command line (the pattern is part of the probe's own
+cmdline). The monitor reported chain=up forever and hid completion. Probe
+liveness via ps + exact match or grep markers in log files, never pgrep -f
+with the pattern in the probe string.
