@@ -243,3 +243,15 @@ render/lab frozen-structure + dead sweep_only format). Full battery on tip:
 chain running. REMAINING: per-commit results, checkpoint RELOAD smoke (not
 yet exercised), validation chain readout, user visual check of the viewer,
 user opens the PR.
+
+## 2026-07-17 all port gates GREEN
+
+Per-commit box builds: all 5 curated commits build standalone (breakout for
+the two pre-env commits, colosseum/inferno after). Checkpoint reload:
+./puffer eval osrs_colosseum base.load_model_path=<smoke bin> prints "Loaded
+weights from ..." and evals fine. NOTE the 5c semantics: TRAIN never reads
+base.load_model_path (fresh start by design), only eval/eval_bot/match load
+it - "reload smoke via train" is a non-test, and a bogus path under train is
+silently irrelevant, not a soft-fail bug. Port campaign gates complete.
+Open: validation chain readout (runs still on GPU), user viewer look, user
+opens PR from osrs-colosseum-inferno (draft in pr-description-draft.md).
