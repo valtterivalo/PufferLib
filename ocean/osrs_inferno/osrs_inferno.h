@@ -165,7 +165,6 @@ void puf_init(Env* env, Dict* kwargs) {
     env->state.rng_state = env_seed;
 
     memset(&env->log, 0, sizeof(Log));
-    env->log.best_min_zuk_hp_normal = 1200.0f;
 
     int start_wave = (int)dict_get(kwargs, "start_wave");
     inferno_env_put_int(env, "start_wave", start_wave);
@@ -259,25 +258,6 @@ void puf_reset(Env* env) {
     env->agents[0].terminals[0] = 0.0f;
 }
 
-static int inferno_terminal_shield_active(const InfernoState* s) {
-    int si = s->zuk.shield_idx;
-    return si >= 0 &&
-        s->npcs[si].active &&
-        s->npcs[si].death_ticks == 0 &&
-        s->npcs[si].hp > 0;
-}
-
-static int inferno_terminal_behind_shield(const InfernoState* s) {
-    if (!inferno_terminal_shield_active(s)) return 0;
-
-    int si = s->zuk.shield_idx;
-    int sx = s->npcs[si].x;
-    int sz = INF_NPC_STATS[INF_NPC_ZUK_SHIELD].size;
-    return s->player.x >= sx &&
-        s->player.x < sx + sz &&
-        s->player.y >= 41;
-}
-
 void puf_step(Env* env) {
     int inf_prof_enabled = INF_PROFILE_ENABLED();
     double inf_prof_total_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
@@ -309,8 +289,6 @@ void puf_step(Env* env) {
         float min_zuk_hp_term = (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
-        int terminal_shield_active = inferno_terminal_shield_active(s);
-        int terminal_behind_shield = inferno_terminal_behind_shield(s);
 
         if (s->start_wave != env->config_start_wave) goto skip_log;
 
@@ -346,10 +324,6 @@ void puf_step(Env* env) {
             s->total_npc_pressure_if_ready_count;
         env->log.npc_pressure_this_tick_count +=
             s->total_npc_pressure_this_tick_count;
-        env->log.npc_pressure_if_ready_max_hit +=
-            s->total_npc_pressure_if_ready_max_hit;
-        env->log.npc_pressure_this_tick_max_hit +=
-            s->total_npc_pressure_this_tick_max_hit;
         env->log.npc_pressure_max_incoming_hit +=
             s->max_npc_pressure_incoming_hit;
         for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
@@ -363,49 +337,19 @@ void puf_step(Env* env) {
                 (float)s->progressless_ticks_by_phase[i];
         }
         env->log.brews_used += (float)s->total_brews_used;
-        env->log.blood_healed += (float)s->total_blood_healed;
-        env->log.unavoidable_off_prayer += (float)s->total_unavoidable_off;
-        env->log.ranger_mager_same_tick_attacks +=
-            (float)s->total_ranger_mager_same_tick_attacks;
-        env->log.step_out_ranger_mager_same_tick_attacks +=
-            (float)s->total_step_out_ranger_mager_same_tick_attacks;
         env->log.brews_remaining += (float)s->player.brew_doses;
         env->log.restores_remaining += (float)s->player.restore_doses;
-        env->log.prayer_at_death += (float)s->player.current_prayer;
         env->log.npc_kills += (float)s->total_npc_kills;
-        env->log.gear_switches += (float)s->total_gear_switches;
-        env->log.current_ranged += (float)s->player.current_ranged;
-        env->log.current_magic += (float)s->player.current_magic;
         env->log.start_wave += (float)env->config_start_wave;
-
-        for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
-            env->log.prayer_correct_by_type[t] += (float)s->prayer_correct_by_type[t];
-            env->log.attacks_by_type[t] += (float)s->attacks_by_type[t];
-            env->log.dmg_from_type[t] += s->dmg_from_type[t];
-            env->log.killed_by_type[t] += (float)s->killed_by_type[t];
-        }
 
         env->log.behind_shield_pct += (s->total_zuk_ticks > 0)
             ? (float)s->behind_shield_ticks / (float)s->total_zuk_ticks : 0.0f;
 
-        {
-            float zhp = 1200.0f;
-            for (int n = 0; n < INF_MAX_NPCS; n++) {
-                if (s->npcs[n].type == INF_NPC_ZUK) {
-                    zhp = (float)s->npcs[n].hp;
-                    break;
-                }
-            }
-            if (s->winner == INF_OUTCOME_PLAYER_WON) zhp = 0.0f;
-            env->log.zuk_hp_remaining += zhp;
-        }
         env->log.min_zuk_hp_seen += min_zuk_hp_term;
 
         env->log.n += 1.0f;
 
         {
-            env->log.episode_return_normal += s->episode_return;
-            env->log.wins_normal += (s->winner == INF_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f;
             env->log.min_zuk_hp_normal += min_zuk_hp_term;
             env->log.n_normal += 1.0f;
             int won = (s->winner == INF_OUTCOME_PLAYER_WON);
@@ -414,101 +358,17 @@ void puf_step(Env* env) {
                 : (min_zuk_hp_term <= 600.0f) ? 2
                 : (min_zuk_hp_term <= 900.0f) ? 1 : 0;
             env->log.phase_reached_normal_sum += (float)phase_bucket;
-            if (!won) {
-                env->log.episode_length_normal_died += (float)s->tick;
-                env->log.n_normal_died += 1.0f;
-                env->log.brews_remaining_normal_died += (float)s->player.brew_doses;
-                env->log.restores_remaining_normal_died += (float)s->player.restore_doses;
-                env->log.prayer_at_death_normal_died += (float)s->player.current_prayer;
-                if (terminal_shield_active)
-                    env->log.count_died_with_shield_active_normal += 1.0f;
-                if (terminal_behind_shield)
-                    env->log.count_died_behind_shield_normal += 1.0f;
-                for (int t = 0; t < INF_NUM_NPC_TYPES; t++)
-                    env->log.killed_by_type_normal[t] += (float)s->killed_by_type[t];
-            }
-            if (min_zuk_hp_term <= 300.0f) env->log.count_min_hp_le_300_normal += 1.0f;
             if (min_zuk_hp_term <= 240.0f) env->log.count_min_hp_le_240_normal += 1.0f;
-            if (min_zuk_hp_term <= 150.0f) env->log.count_min_hp_le_150_normal += 1.0f;
-            if (min_zuk_hp_term < env->log.best_min_zuk_hp_normal)
-                env->log.best_min_zuk_hp_normal = min_zuk_hp_term;
 
-            if (s->tick_at_le_300 >= 0) {
-                env->log.ticks_after_300_normal_sum += (float)(s->tick - s->tick_at_le_300);
-                env->log.damage_after_300_normal_sum += s->damage_after_300;
-            }
-            if (s->tick_at_le_240 >= 0) {
-                env->log.ticks_after_240_normal_sum += (float)(s->tick - s->tick_at_le_240);
-                env->log.damage_after_240_normal_sum += s->damage_after_240;
-            }
-            if (s->tick_at_le_150 >= 0) {
-                env->log.ticks_after_150_normal_sum += (float)(s->tick - s->tick_at_le_150);
-                env->log.damage_after_150_normal_sum += s->damage_after_150;
-            }
-            if (s->tick_at_zuk_healer_spawn >= 0 || s->zuk.healer_spawned) {
-                env->log.count_healer_spawned_normal += 1.0f;
-                env->log.zuk_hp_max_after_healer_spawn_normal_sum +=
-                    s->zuk_hp_max_after_healer_spawn;
-            }
-            env->log.shield_tags_normal_sum += (float)s->total_shield_tags;
-            if (s->total_shield_tags >= 1)
-                env->log.count_shield_tags_ge_1_normal += 1.0f;
-            if (s->total_zuk_healer_tags >= 1)
-                env->log.count_zuk_healers_tagged_ge_1_normal += 1.0f;
-            if (s->total_zuk_healer_tags >= 2)
-                env->log.count_zuk_healers_tagged_ge_2_normal += 1.0f;
-            if (s->total_zuk_healer_tags >= 4)
-                env->log.count_zuk_healers_tagged_ge_4_normal += 1.0f;
-            if (s->total_zuk_healer_kills >= 1)
-                env->log.count_zuk_healers_killed_ge_1_normal += 1.0f;
-            if (s->total_zuk_healer_kills >= 2)
-                env->log.count_zuk_healers_killed_ge_2_normal += 1.0f;
-            if (s->total_zuk_healer_kills >= 4)
-                env->log.count_zuk_healers_killed_ge_4_normal += 1.0f;
             if (s->tick_at_all_zuk_healers_dead >= 0) {
                 env->log.count_all_zuk_healers_dead_normal += 1.0f;
                 float post_healer_survival =
                     (float)(s->tick - s->tick_at_all_zuk_healers_dead);
-                env->log.post_healer_survival_ticks_normal_sum +=
-                    post_healer_survival;
                 env->log.damage_after_all_zuk_healers_dead_normal_sum +=
                     s->damage_after_all_zuk_healers_dead;
-                env->log.zuk_hp_at_all_zuk_healers_dead_normal_sum +=
-                    s->zuk_hp_at_all_zuk_healers_dead;
-                env->log.offshield_ticks_after_all_zuk_healers_dead_normal_sum +=
-                    (float)s->offshield_ticks_after_all_zuk_healers_dead;
                 if (post_healer_survival >= 20.0f || won)
                     env->log.count_healer_resolved_20_normal += 1.0f;
-                if (s->damage_after_all_zuk_healers_dead > 0.0f)
-                    env->log.count_reengaged_zuk_after_healers_normal += 1.0f;
-                if (s->tick_at_first_zuk_hit_after_all_healers_dead >= 0) {
-                    env->log.ticks_all_healers_dead_to_first_zuk_hit_normal_sum +=
-                        (float)(s->tick_at_first_zuk_hit_after_all_healers_dead -
-                            s->tick_at_all_zuk_healers_dead);
-                }
             }
-            if (s->total_zuk_healer_target_ticks >= 1)
-                env->log.count_zuk_healers_targeted_ge_1_normal += 1.0f;
-            if (s->total_zuk_healer_attack_fires >= 1)
-                env->log.count_zuk_healers_attacked_ge_1_normal += 1.0f;
-            if (s->total_zuk_healer_attackable_ticks >= 1)
-                env->log.count_zuk_healers_attackable_ge_1_normal += 1.0f;
-            env->log.zuk_untagged_healer_target_bonus_coeff_normal_sum +=
-                INF_ENV_INFERNO_CONTEXT(env)->config.zuk_untagged_healer_target_bonus_coeff;
-            env->log.zuk_safe_untagged_healer_target_bonus_coeff_normal_sum +=
-                INF_ENV_INFERNO_CONTEXT(env)->config.zuk_safe_untagged_healer_target_bonus_coeff;
-            env->log.zuk_healer_reward_mode_normal_sum +=
-                (float)INF_ENV_INFERNO_CONTEXT(env)->config.zuk_healer_reward_mode;
-            env->log.zuk_untagged_healer_targets_normal_sum +=
-                (float)s->total_zuk_untagged_healer_targets;
-            env->log.zuk_safe_untagged_healer_targets_normal_sum +=
-                (float)s->total_zuk_safe_untagged_healer_targets;
-            env->log.zuk_unsafe_untagged_healer_targets_normal_sum +=
-                (float)s->total_zuk_unsafe_untagged_healer_targets;
-            env->log.zuk_untagged_healer_target_reward_count_normal_sum +=
-                (float)s->total_zuk_untagged_healer_target_rewards;
-            env->log.zuk_safe_untagged_healer_target_reward_count_normal_sum +=
-                (float)s->total_zuk_safe_untagged_healer_target_rewards;
             env->log.post_healer_set_damage_reward_coeff_normal_sum +=
                 INF_ENV_INFERNO_CONTEXT(env)->config.post_healer_set_damage_reward_coeff;
             env->log.post_healer_set_kill_bonus_coeff_normal_sum +=
@@ -527,111 +387,19 @@ void puf_step(Env* env) {
                 s->post_healer_set_pressure_total;
             env->log.action_mask_checks_normal_sum +=
                 (float)s->total_action_mask_checks;
-            env->log.target_head_valid_healer_count_normal_sum +=
-                (float)s->target_head_valid_healer_count;
-            env->log.target_head_valid_zuk_count_normal_sum +=
-                (float)s->target_head_valid_zuk_count;
-            env->log.target_head_valid_set_count_normal_sum +=
-                (float)s->target_head_valid_set_count;
-            if (s->total_action_mask_checks > 0) {
-                for (int h = 0; h < 9; h++) {
-                    env->log.zero_valid_action_head_count_normal_sum[h] +=
-                        (float)s->zero_valid_action_head_count[h];
-                    env->log.valid_action_count_min_by_head_normal_sum[h] +=
-                        (float)s->min_valid_action_count_by_head[h];
-                }
-            }
-            if (s->total_zuk_healer_target_ticks >= 1) {
-                env->log.zuk_healer_target_cannot_attack_ticks_normal_sum +=
-                    (float)s->total_zuk_healer_cannot_attack_ticks;
-                env->log.zuk_healer_target_cooldown_ticks_normal_sum +=
-                    (float)s->total_zuk_healer_cooldown_ticks;
-                env->log.zuk_healer_target_out_of_range_ticks_normal_sum +=
-                    (float)s->total_zuk_healer_out_of_range_ticks;
-                env->log.zuk_healer_target_attackable_ticks_normal_sum +=
-                    (float)s->total_zuk_healer_attackable_ticks;
-            }
             if (s->tick_at_le_240 >= 0) {
                 env->log.hp_restored_after_240_normal_sum += s->hp_restored_after_240;
                 env->log.spark_damage_after_240_normal_sum += s->spark_damage_after_240;
-                env->log.offshield_ticks_after_240_normal_sum +=
-                    (float)s->offshield_ticks_after_240;
-                if (s->tick_at_first_zuk_healer_target >= 0) {
-                    env->log.ticks_240_to_first_healer_target_normal_sum +=
-                        (float)(s->tick_at_first_zuk_healer_target - s->tick_at_le_240);
-                }
-                if (s->tick_at_first_zuk_healer_attack >= 0) {
-                    env->log.ticks_240_to_first_healer_attack_normal_sum +=
-                        (float)(s->tick_at_first_zuk_healer_attack - s->tick_at_le_240);
-                }
-                if (s->tick_at_first_zuk_healer_tag >= 0) {
-                    env->log.ticks_240_to_first_healer_tag_normal_sum +=
-                        (float)(s->tick_at_first_zuk_healer_tag - s->tick_at_le_240);
-                }
-                if (s->tick_at_all_zuk_healers_tagged >= 0) {
-                    env->log.ticks_240_to_all_healers_tagged_normal_sum +=
-                        (float)(s->tick_at_all_zuk_healers_tagged - s->tick_at_le_240);
-                }
-                if (s->tick_at_all_zuk_healers_dead >= 0) {
-                    env->log.ticks_240_to_all_healers_dead_normal_sum +=
-                        (float)(s->tick_at_all_zuk_healers_dead - s->tick_at_le_240);
-                }
             }
             if (!won) {
-                int jad_alive = 0, zuk_healer_alive = 0, jad_healer_alive = 0, set_alive = 0;
+                int zuk_healer_alive = 0;
                 for (int n = 0; n < INF_MAX_NPCS; n++) {
                     if (s->npcs[n].hp <= 0) continue;
-                    int t = s->npcs[n].type;
-                    if (t == INF_NPC_JAD) jad_alive = 1;
-                    else if (t == INF_NPC_HEALER_ZUK) zuk_healer_alive = 1;
-                    else if (t == INF_NPC_HEALER_JAD) jad_healer_alive = 1;
-                    else if (inf_npc_type_is_set_pressure(t)) set_alive = 1;
+                    if (s->npcs[n].type == INF_NPC_HEALER_ZUK) zuk_healer_alive = 1;
                 }
-                if (jad_alive) env->log.count_died_with_jad_alive_normal += 1.0f;
-                if (zuk_healer_alive || jad_healer_alive)
-                    env->log.count_died_with_healer_alive_normal += 1.0f;
                 if (zuk_healer_alive) env->log.count_died_with_zuk_healer_alive_normal += 1.0f;
-                if (jad_healer_alive) env->log.count_died_with_jad_healer_alive_normal += 1.0f;
-                if (set_alive) env->log.count_died_with_set_alive_normal += 1.0f;
-                if (s->tick_at_le_240 >= 0) {
+                if (s->tick_at_le_240 >= 0)
                     env->log.count_died_after_240_normal += 1.0f;
-                    env->log.brews_remaining_after_240_death_normal_sum +=
-                        (float)s->player.brew_doses;
-                    env->log.restores_remaining_after_240_death_normal_sum +=
-                        (float)s->player.restore_doses;
-                    env->log.prayer_at_death_after_240_normal_sum +=
-                        (float)s->player.current_prayer;
-                    if (terminal_shield_active)
-                        env->log.count_died_after_240_shield_active_normal += 1.0f;
-                    if (terminal_behind_shield)
-                        env->log.count_died_after_240_behind_shield_normal += 1.0f;
-                    if (s->tick_at_all_zuk_healers_dead >= 0 ||
-                            s->total_zuk_healer_kills >= 4) {
-                        env->log.count_died_after_240_all_healers_dead_normal += 1.0f;
-                        if (set_alive)
-                            env->log.count_died_after_all_healers_dead_with_set_alive_normal += 1.0f;
-                        if (s->killed_by_type[INF_NPC_ZUK] > 0)
-                            env->log.count_died_after_all_healers_dead_killed_by_zuk_normal += 1.0f;
-                        if (s->killed_by_type[INF_NPC_RANGER] > 0)
-                            env->log.count_died_after_all_healers_dead_killed_by_ranger_normal += 1.0f;
-                        if (s->killed_by_type[INF_NPC_MAGER] > 0)
-                            env->log.count_died_after_all_healers_dead_killed_by_mager_normal += 1.0f;
-                        if (terminal_shield_active)
-                            env->log.count_died_after_all_healers_dead_with_shield_active_normal += 1.0f;
-                        if (terminal_behind_shield)
-                            env->log.count_died_after_all_healers_dead_behind_shield_normal += 1.0f;
-                        env->log.brews_remaining_after_all_healers_dead_death_normal_sum +=
-                            (float)s->player.brew_doses;
-                        env->log.restores_remaining_after_all_healers_dead_death_normal_sum +=
-                            (float)s->player.restore_doses;
-                    } else if (s->total_zuk_healer_kills > 0) {
-                        env->log.count_died_after_240_some_healers_killed_normal += 1.0f;
-                    } else if (s->total_zuk_healer_tags > 0) {
-                        env->log.count_died_after_240_some_healers_tagged_normal += 1.0f;
-                    } else {
-                        env->log.count_died_after_240_never_tagged_healer_normal += 1.0f;
-                    }
-                }
             }
         }
     skip_log:

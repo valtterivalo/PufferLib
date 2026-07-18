@@ -259,10 +259,6 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
             s->total_npc_pressure_if_ready_count;
         ctx->log->npc_pressure_this_tick_count +=
             s->total_npc_pressure_this_tick_count;
-        ctx->log->npc_pressure_if_ready_max_hit +=
-            s->total_npc_pressure_if_ready_max_hit;
-        ctx->log->npc_pressure_this_tick_max_hit +=
-            s->total_npc_pressure_this_tick_max_hit;
         ctx->log->npc_pressure_max_incoming_hit +=
             s->max_npc_pressure_incoming_hit;
         for (int i = 0; i < OSRS_INFERNO_IDLE_PHASE_COUNT; i++) {
@@ -276,16 +272,8 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
                 (float)s->progressless_ticks_by_phase[i];
         }
         ctx->log->brews_used += (float)s->total_brews_used;
-        ctx->log->blood_healed += (float)s->total_blood_healed;
-        ctx->log->ranger_mager_same_tick_attacks +=
-            (float)s->total_ranger_mager_same_tick_attacks;
-        ctx->log->step_out_ranger_mager_same_tick_attacks +=
-            (float)s->total_step_out_ranger_mager_same_tick_attacks;
         ctx->log->n += 1.0f;
         ctx->log->npc_kills += (float)s->total_npc_kills;
-        ctx->log->gear_switches += (float)s->total_gear_switches;
-        ctx->log->current_ranged += (float)s->player.current_ranged;
-        ctx->log->current_magic += (float)s->player.current_magic;
         ctx->log->min_zuk_hp_seen += (s->winner == INF_OUTCOME_PLAYER_WON)
             ? 0.0f
             : (s->min_zuk_hp_seen > 0.0f ? s->min_zuk_hp_seen : 1200.0f);
