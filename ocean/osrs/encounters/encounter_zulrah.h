@@ -1063,11 +1063,7 @@ static int zul_player_can_attack_zulrah(
         loadout_stats->attack_range, osrs_los_open_query());
 }
 
-static int zul_player_attack_hits(
-    ZulrahState* s, int is_mage, const OsrsPreparedAttackEffects* attack_effects
-) {
-    int att_roll = attack_effects->attack_roll;
-
+static int zul_zulrah_def_roll(ZulrahState* s, int is_mage) {
     int def_magic = 0, def_ranged = 0;
     zul_form_def_bonuses(s->current_form, &def_magic, &def_ranged);
     if (is_mage) {
@@ -1077,6 +1073,14 @@ static int zul_player_attack_hits(
     int def_bonus = is_mage ? def_magic : def_ranged;
     int def_roll = (MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]].def_level + 8) * (def_bonus + 64);
     if (def_roll < 0) def_roll = 0;
+    return def_roll;
+}
+
+static int zul_player_attack_hits(
+    ZulrahState* s, int is_mage, const OsrsPreparedAttackEffects* attack_effects
+) {
+    int att_roll = attack_effects->attack_roll;
+    int def_roll = zul_zulrah_def_roll(s, is_mage);
 
     return attack_effects->use_double_accuracy
         ? encounter_roll_hit_chance_double(&s->rng_state, att_roll, def_roll)
@@ -1176,10 +1180,7 @@ static void zul_player_spec(ZulrahState* s) {
     if (s->player.special_energy < cost) return;
 
     const MonsterStats* m = &MONSTER_DATABASE[ZUL_FORM_MONSTER_IDX[s->current_form]];
-    int def_bonus = is_mage ? (m->magic_def - s->magic_def_drain) : m->ranged_def;
-    if (is_mage && def_bonus < -64) def_bonus = -64;
-    int def_roll = (m->def_level + 8) * (def_bonus + 64);
-    if (def_roll < 0) def_roll = 0;
+    int def_roll = zul_zulrah_def_roll(s, is_mage);
 
     int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     SpecResult sr = osrs_resolve_spec(weapon, att_roll, ls->max_hit,
@@ -1752,7 +1753,8 @@ static void zul_apply_human_player_commands(ZulrahState* s) {
         zul_refresh_human_loadout_stats(s);
 }
 
-static void zul_write_obs(EncounterState* state, float* obs) {
+static void zul_write_obs(EncounterState* state, EncounterContext* context, float* obs) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     memset(obs, 0, ZUL_NUM_OBS * sizeof(float));
     int i = 0;
@@ -1868,7 +1870,8 @@ static void zul_write_obs(EncounterState* state, float* obs) {
     }
 }
 
-static void zul_write_mask(EncounterState* state, float* mask) {
+static void zul_write_mask(EncounterState* state, EncounterContext* context, float* mask) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     for (int i = 0; i < ZUL_ACTION_MASK_SIZE; i++) mask[i] = 1.0f;
     int off = 0;
@@ -1987,8 +1990,6 @@ static EncounterState* zul_create(void) {
 
 static void zul_destroy(EncounterState* state) { free(state); }
 
-static void zul_enter_phase(ZulrahState* s);
-
 static float zul_score_speed_bonus_for_duration(int duration) {
     if (duration < 1) duration = 1;
     if (duration > ZUL_MAX_TICKS) duration = ZUL_MAX_TICKS;
@@ -2093,7 +2094,8 @@ static void zul_record_episode_timeout(ZulrahState* s) {
     }
 }
 
-static void zul_reset(EncounterState* state, uint32_t seed) {
+static void zul_reset(EncounterState* state, EncounterContext* context, uint32_t seed) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     Log saved_log = s->log;
     void* saved_cmap = s->collision_map;
@@ -2156,7 +2158,8 @@ static void zul_reset(EncounterState* state, uint32_t seed) {
     zul_start_active_kill(s);
 }
 
-static void zul_step(EncounterState* state, const int* actions) {
+static void zul_step(EncounterState* state, EncounterContext* context, const int* actions) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     if (s->episode_over) return;
 
@@ -2190,9 +2193,7 @@ static void zul_step(EncounterState* state, const int* actions) {
             s->zulrah.npc_visible = 0;
             zul_finish_boss_death(s);
         }
-        s->reward = zul_compute_reward(s);
-        s->episode_return += s->reward;
-        return;
+        goto finish;
     }
 
     zul_update_npc_anim_lifetime(s);
@@ -2308,14 +2309,14 @@ static void zul_step(EncounterState* state, const int* actions) {
 
     if (s->zulrah_visible && s->zulrah.current_hitpoints <= 0) {
         zul_record_boss_kill(s);
-        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
+        goto finish;
     }
 
     zul_pending_cloud_tick(s);
     zul_cloud_tick(s);
     if (s->player.current_hitpoints <= 0) {
         zul_record_player_loss(s);
-        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
+        goto finish;
     }
 
     zul_phase_tick(s);
@@ -2334,12 +2335,13 @@ static void zul_step(EncounterState* state, const int* actions) {
 
     if (s->player.current_hitpoints <= 0) {
         zul_record_player_loss(s);
-        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
+        goto finish;
     }
     if (s->tick >= ZUL_MAX_TICKS) {
         zul_record_episode_timeout(s);
-        s->reward = zul_compute_reward(s); s->episode_return += s->reward; return;
+        goto finish;
     }
+finish:
     s->reward = zul_compute_reward(s);
     s->episode_return += s->reward;
 }
@@ -2379,7 +2381,7 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     }
 
     if (s->player.potion_timer <= 0 && s->player.antivenom_doses > 0 &&
-        s->antivenom_timer <= 5 && (s->tick <= 1 || s->antivenom_timer <= 5)) {
+        s->antivenom_timer <= 5) {
         actions[ZUL_HEAD_POTION] = 2;
         return;
     }
@@ -2425,21 +2427,25 @@ static void zul_heuristic_actions(ZulrahState* s, int* actions) {
     }
 }
 
-static float zul_get_reward(EncounterState* state) {
+static float zul_get_reward(EncounterState* state, EncounterContext* context) {
+    (void)context;
     return ((ZulrahState*)state)->reward;
 }
-static int zul_is_terminal(EncounterState* state) {
+static int zul_is_terminal(EncounterState* state, EncounterContext* context) {
+    (void)context;
     return ((ZulrahState*)state)->episode_over;
 }
 
-static int zul_get_entity_count(EncounterState* state) {
+static int zul_get_entity_count(EncounterState* state, EncounterContext* context) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     int n = 2;
     for (int i = 0; i < ZUL_MAX_SNAKELINGS; i++)
         if (s->snakelings[i].active) n++;
     return n;
 }
-static void* zul_get_entity(EncounterState* state, int index) {
+static void* zul_get_entity(EncounterState* state, EncounterContext* context, int index) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     if (index == 0) return &s->player;
     if (index == 1) return &s->zulrah;
@@ -2450,10 +2456,18 @@ static void* zul_get_entity(EncounterState* state, int index) {
             si++;
         }
     }
-    return &s->player;
+    fprintf(stderr, "zulrah get_entity invalid index %d\n", index);
+    abort();
 }
 
-static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, int max_entities, int* count) {
+static void zul_fill_render_entities(
+    EncounterState* state,
+    EncounterContext* context,
+    RenderEntity* out,
+    int max_entities,
+    int* count
+) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     int n = 0;
     if (n < max_entities) osrs_render_entity_from_player_entity(&s->player, &out[n++]);
@@ -2507,7 +2521,8 @@ static void zul_fill_render_entities(EncounterState* state, RenderEntity* out, i
     *count = n;
 }
 
-static void zul_put_int(EncounterState* state, const char* key, int value) {
+static void zul_put_int(EncounterState* state, EncounterContext* context, const char* key, int value) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
     else if (strcmp(key, "world_offset_x") == 0) s->world_offset_x = value;
@@ -2544,7 +2559,8 @@ static float zul_require_nonnegative_float_config(const char* k, float v) {
     }
     return v;
 }
-static void zul_put_float(EncounterState* st, const char* k, float v) {
+static void zul_put_float(EncounterState* st, EncounterContext* context, const char* k, float v) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)st;
     if (strncmp(k, "gear_tier_weight_", 17) == 0) {
         int idx = k[17] - '0';
@@ -2575,13 +2591,15 @@ static void zul_put_float(EncounterState* st, const char* k, float v) {
     }
     else encounter_abort_unknown_config("zulrah", "float", k);
 }
-static void zul_put_ptr(EncounterState* st, const char* k, void* v) {
+static void zul_put_ptr(EncounterState* st, EncounterContext* context, const char* k, void* v) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)st;
     if (strcmp(k, "collision_map") == 0) s->collision_map = v;
     else encounter_abort_unknown_config("zulrah", "ptr", k);
 }
 
-static void* zul_get_log(EncounterState* state) {
+static void* zul_get_log(EncounterState* state, EncounterContext* context) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
     if (s->episode_over) {
         s->log.episode_return += s->episode_return;
@@ -2627,7 +2645,10 @@ static void* zul_get_log(EncounterState* state) {
     }
     return &s->log;
 }
-static int zul_get_tick(EncounterState* state) { return ((ZulrahState*)state)->tick; }
+static int zul_get_tick(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return ((ZulrahState*)state)->tick;
+}
 
 static void zul_emit_player_projectile_profile(
     ZulrahState* s,
@@ -2718,7 +2739,8 @@ static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay*
     }
 }
 
-static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
+static void zul_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* ov) {
+    (void)context;
     ZulrahState* s = (ZulrahState*)state;
 
     ov->tile_shadow_count = 0;
@@ -2812,7 +2834,10 @@ static void zul_render_post_tick(EncounterState* state, EncounterOverlay* ov) {
     }
     zul_emit_player_attack_projectiles(s, ov);
 }
-static int zul_get_winner(EncounterState* state) { return ((ZulrahState*)state)->winner; }
+static int zul_get_winner(EncounterState* state, EncounterContext* context) {
+    (void)context;
+    return ((ZulrahState*)state)->winner;
+}
 
 static int zul_attack_action_for_weapon(uint8_t weapon) {
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
@@ -2894,7 +2919,7 @@ static void zul_translate_human_commands(HumanInput* hi, int* actions, ZulrahSta
     }
 }
 
-static void zul_step_human_commands(EncounterState* state, HumanInput* hi) {
+static void zul_step_human_commands(EncounterState* state, EncounterContext* context, HumanInput* hi) {
     ZulrahState* s = (ZulrahState*)state;
     int actions[ZUL_NUM_ACTION_HEADS];
     s->human_command_mode = 1;
@@ -2903,7 +2928,7 @@ static void zul_step_human_commands(EncounterState* state, HumanInput* hi) {
     zul_sync_human_gear_style(s);
     zul_refresh_human_loadout_stats(s);
     zul_translate_human_commands(hi, actions, s);
-    zul_step(state, actions);
+    zul_step(state, context, actions);
     s->human_commands = NULL;
     s->human_command_count = 0;
     human_input_clear_pending(hi);
@@ -2926,120 +2951,6 @@ static void zul_init_state_ctx(EncounterState* state, EncounterContext* context)
     memset(state, 0, sizeof(ZulrahState));
 }
 
-static void zul_reset_ctx(EncounterState* state, EncounterContext* context, uint32_t seed) {
-    (void)context;
-    zul_reset(state, seed);
-}
-
-static void zul_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
-    (void)context;
-    zul_step(state, actions);
-}
-
-static void zul_step_human_commands_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    HumanInput* hi
-) {
-    (void)context;
-    zul_step_human_commands(state, hi);
-}
-
-static void zul_write_obs_ctx(EncounterState* state, EncounterContext* context, float* obs) {
-    (void)context;
-    zul_write_obs(state, obs);
-}
-
-static void zul_write_mask_ctx(EncounterState* state, EncounterContext* context, float* mask) {
-    (void)context;
-    zul_write_mask(state, mask);
-}
-
-static float zul_get_reward_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_get_reward(state);
-}
-
-static int zul_is_terminal_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_is_terminal(state);
-}
-
-static int zul_get_entity_count_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_get_entity_count(state);
-}
-
-static void* zul_get_entity_ctx(EncounterState* state, EncounterContext* context, int index) {
-    (void)context;
-    return zul_get_entity(state, index);
-}
-
-static void zul_fill_render_entities_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    RenderEntity* out,
-    int max_entities,
-    int* count
-) {
-    (void)context;
-    zul_fill_render_entities(state, out, max_entities, count);
-}
-
-static void zul_put_int_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    int value
-) {
-    (void)context;
-    zul_put_int(state, key, value);
-}
-
-static void zul_put_float_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    float value
-) {
-    (void)context;
-    zul_put_float(state, key, value);
-}
-
-static void zul_put_ptr_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    void* value
-) {
-    (void)context;
-    zul_put_ptr(state, key, value);
-}
-
-static void zul_render_post_tick_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    EncounterOverlay* overlay
-) {
-    (void)context;
-    zul_render_post_tick(state, overlay);
-}
-
-static void* zul_get_log_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_get_log(state);
-}
-
-static int zul_get_tick_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_get_tick(state);
-}
-
-static int zul_get_winner_ctx(EncounterState* state, EncounterContext* context) {
-    (void)context;
-    return zul_get_winner(state);
-}
-
 static const EncounterDef ENCOUNTER_ZULRAH = {
     .name = "zulrah",
     .obs_size = ZUL_NUM_OBS,
@@ -3053,19 +2964,19 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .init_state = zul_init_state_ctx,
     .create = zul_create,
     .destroy = zul_destroy,
-    .reset = zul_reset_ctx,
-    .step = zul_step_ctx,
-    .step_human_commands = zul_step_human_commands_ctx,
-    .write_obs = zul_write_obs_ctx,
-    .write_mask = zul_write_mask_ctx,
-    .get_reward = zul_get_reward_ctx,
-    .is_terminal = zul_is_terminal_ctx,
-    .get_entity_count = zul_get_entity_count_ctx,
-    .get_entity = zul_get_entity_ctx,
-    .fill_render_entities = zul_fill_render_entities_ctx,
-    .put_int = zul_put_int_ctx,
-    .put_float = zul_put_float_ctx,
-    .put_ptr = zul_put_ptr_ctx,
+    .reset = zul_reset,
+    .step = zul_step,
+    .step_human_commands = zul_step_human_commands,
+    .write_obs = zul_write_obs,
+    .write_mask = zul_write_mask,
+    .get_reward = zul_get_reward,
+    .is_terminal = zul_is_terminal,
+    .get_entity_count = zul_get_entity_count,
+    .get_entity = zul_get_entity,
+    .fill_render_entities = zul_fill_render_entities,
+    .put_int = zul_put_int,
+    .put_float = zul_put_float,
+    .put_ptr = zul_put_ptr,
     .arena_base_x = 0,
     .arena_base_y = 0,
     .arena_width = ZUL_ARENA_SIZE,
@@ -3074,10 +2985,10 @@ static const EncounterDef ENCOUNTER_ZULRAH = {
     .head_prayer = ZUL_HEAD_PRAYER,
     .head_target = -1,
 
-    .render_post_tick = zul_render_post_tick_ctx,
-    .get_log = zul_get_log_ctx,
-    .get_tick = zul_get_tick_ctx,
-    .get_winner = zul_get_winner_ctx,
+    .render_post_tick = zul_render_post_tick,
+    .get_log = zul_get_log,
+    .get_tick = zul_get_tick,
+    .get_winner = zul_get_winner,
 };
 
 __attribute__((constructor))

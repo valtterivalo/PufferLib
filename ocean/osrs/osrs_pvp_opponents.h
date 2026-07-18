@@ -25,8 +25,6 @@ typedef struct {
     int can_brew;
     int can_karambwan;
     int can_restore;
-    int can_combat_pot;
-    int can_ranged_pot;
 } OppConsumables;
 
 static inline void opp_tick_cooldowns(OpponentState* opp) {
@@ -42,8 +40,6 @@ static inline OppConsumables opp_get_consumables(OpponentState* opp, Player* sel
     c.can_brew = (opp->potion_cooldown <= 0 && self->brew_doses > 0);
     c.can_karambwan = (opp->karambwan_cooldown <= 0 && self->karambwan_count > 0 && hp_pct < 1.0f);
     c.can_restore = (opp->potion_cooldown <= 0 && self->restore_doses > 0);
-    c.can_combat_pot = (opp->potion_cooldown <= 0 && self->combat_potion_doses > 0);
-    c.can_ranged_pot = (opp->potion_cooldown <= 0 && self->ranged_potion_doses > 0);
     return c;
 }
 
@@ -712,7 +708,6 @@ static void opp_sticky_prayer(OsrsEnv* env, OpponentState* opp, int* actions) {
 
 static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
-    Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
     float prayer_pct = (float)self->current_prayer / (float)self->base_prayer;
 
@@ -770,8 +765,6 @@ static void opp_random_eater(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (opp_attack_ready(self) && !eating) {
         opp_attack_random_style_with_spec(env, self, actions);
     }
-
-    (void)target;
 }
 
 static void opp_prayer_rookie(OsrsEnv* env, OpponentState* opp, int* actions) {
@@ -1422,14 +1415,6 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
-static void opp_savant_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
-    opp_master_nh(env, opp, actions);
-}
-
-static void opp_nightmare_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
-    opp_master_nh(env, opp, actions);
-}
-
 static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
@@ -2034,13 +2019,9 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             opp_nh_tier(env, opp, actions, &NH_TIER_EXPERT);
             break;
         case OPP_MASTER_NH:
-            opp_master_nh(env, opp, actions);
-            break;
         case OPP_SAVANT_NH:
-            opp_savant_nh(env, opp, actions);
-            break;
         case OPP_NIGHTMARE_NH:
-            opp_nightmare_nh(env, opp, actions);
+            opp_master_nh(env, opp, actions);
             break;
         case OPP_VENG_FIGHTER:
             opp_veng_fighter(env, opp, actions);

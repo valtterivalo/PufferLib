@@ -258,41 +258,28 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
 
     int potion_action = actions[HEAD_POTION];
+    int potion_ok = 0;
     switch (potion_action) {
         case POTION_BREW:
-            if (can_use_potion(p, POTION_BREW) && can_use_brew_boost(p)) {
-                drink_potion(p, POTION_BREW);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
+            potion_ok = can_use_potion(p, POTION_BREW) && can_use_brew_boost(p);
             break;
         case POTION_RESTORE:
-            if (can_use_potion(p, POTION_RESTORE) && can_restore_stats(p)) {
-                drink_potion(p, POTION_RESTORE);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
+            potion_ok = can_use_potion(p, POTION_RESTORE) && can_restore_stats(p);
             break;
         case POTION_COMBAT:
-            if (can_use_potion(p, POTION_COMBAT) && can_boost_combat_skills(p)) {
-                drink_potion(p, POTION_COMBAT);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
+            potion_ok = can_use_potion(p, POTION_COMBAT) && can_boost_combat_skills(p);
             break;
         case POTION_RANGED:
-            if (can_use_potion(p, POTION_RANGED) && can_boost_ranged(p)) {
-                drink_potion(p, POTION_RANGED);
-                p->consumable_used_this_tick = 1;
-                p->clicks_this_tick++;
-                osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
-            }
+            potion_ok = can_use_potion(p, POTION_RANGED) && can_boost_ranged(p);
             break;
         default:
             break;
+    }
+    if (potion_ok) {
+        drink_potion(p, potion_action);
+        p->consumable_used_this_tick = 1;
+        p->clicks_this_tick++;
+        osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_DRINK);
     }
 
     int karam_action = actions[HEAD_KARAMBWAN];
@@ -369,11 +356,16 @@ static void execute_switches(OsrsEnv* env, int agent_idx, int* actions) {
     }
 }
 
-static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
-    Player* p = &env->players[agent_idx];
-    Player* t = &env->players[1 - agent_idx];
-    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+typedef struct {
+    int attack_action;
+    int move_action;
+    int explicit_move_in_progress;
+    int is_gmaul;
+} PvpAttackDecode;
 
+static PvpAttackDecode pvp_decode_attack_actions(
+    OsrsEnv* env, int agent_idx, Player* p, const int* actions
+) {
     int loadout_action = actions[HEAD_LOADOUT];
     int combat_action = actions[HEAD_COMBAT];
     int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
@@ -394,15 +386,30 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
         attack_action = ATTACK_NONE;
     }
 
-    if (attack_action != ATTACK_NONE)
+    return (PvpAttackDecode){
+        .attack_action = attack_action,
+        .move_action = move_action,
+        .explicit_move_in_progress = explicit_move_in_progress,
+        .is_gmaul = is_gmaul,
+    };
+}
+
+static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
+    Player* p = &env->players[agent_idx];
+    Player* t = &env->players[1 - agent_idx];
+    const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
+
+    PvpAttackDecode decode = pvp_decode_attack_actions(env, agent_idx, p, actions);
+
+    if (decode.attack_action != ATTACK_NONE)
         osrs_interaction_set(&p->interaction, 1 - agent_idx);
 
-    int has_attack = (attack_action != ATTACK_NONE) || osrs_interaction_active(&p->interaction);
+    int has_attack = (decode.attack_action != ATTACK_NONE) || osrs_interaction_active(&p->interaction);
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
-    if (attack_action != ATTACK_NONE) {
-        switch (attack_action) {
+    if (decode.attack_action != ATTACK_NONE) {
+        switch (decode.attack_action) {
             case ATTACK_ATK:
                 attack_style = get_slot_weapon_attack_style(p);
                 break;
@@ -418,16 +425,16 @@ static void execute_attack_movement(OsrsEnv* env, int agent_idx, int* actions) {
     } else if (osrs_interaction_active(&p->interaction)) {
         attack_style = get_slot_weapon_attack_style(p);
     }
-    if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
+    if (decode.attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
-    if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
+    if (decode.attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
     p->did_attack_auto_move = 0;
 
-    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress && can_move(p)) {
+    if (has_attack && decode.move_action == MOVE_NONE && !decode.explicit_move_in_progress && can_move(p)) {
         if (attack_style == ATTACK_STYLE_MELEE && !is_in_melee_range(p, t)) {
             int adj_x, adj_y;
             if (select_closest_adjacent_tile(p, t->x, t->y, &adj_x, &adj_y, cmap)) {
@@ -450,41 +457,23 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
     Player* t = &env->players[1 - agent_idx];
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
 
-    int loadout_action = actions[HEAD_LOADOUT];
-    int combat_action = actions[HEAD_COMBAT];
-    int attack_action = is_attack_action(combat_action) ? combat_action : ATTACK_NONE;
-    int move_action = is_move_action(combat_action) ? combat_action : MOVE_NONE;
-    int explicit_move_in_progress = (actions[HEAD_MOVE] > 0 && actions[HEAD_MOVE] < MOVE_DIM)
-        || env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
+    PvpAttackDecode decode = pvp_decode_attack_actions(env, agent_idx, p, actions);
 
-    int is_gmaul = (loadout_action == LOADOUT_GMAUL);
-    if (is_gmaul) {
-        attack_action = ATTACK_ATK;
-        move_action = MOVE_NONE;
-    }
-
-    int current_loadout = get_current_loadout(p);
-    int in_mage_loadout = (current_loadout == LOADOUT_MAGE);
-    int in_tank_loadout = (current_loadout == LOADOUT_TANK);
-    if (attack_action == ATTACK_ATK && (in_mage_loadout || in_tank_loadout) && !is_gmaul) {
-        attack_action = ATTACK_NONE;
-    }
-
-    if (attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
+    if (decode.attack_action == ATTACK_NONE && osrs_interaction_active(&p->interaction)) {
         AttackStyle weapon_style = get_slot_weapon_attack_style(p);
         if (weapon_style != ATTACK_STYLE_MAGIC) {
-            attack_action = ATTACK_ATK;
+            decode.attack_action = ATTACK_ATK;
         }
     }
 
     int attack_ready = can_attack_now(p);
-    int has_attack = (attack_action != ATTACK_NONE);
+    int has_attack = (decode.attack_action != ATTACK_NONE);
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     int magic_type = 0;
 
-    switch (attack_action) {
+    switch (decode.attack_action) {
         case ATTACK_ATK:
             attack_style = get_slot_weapon_attack_style(p);
             break;
@@ -499,16 +488,16 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         default:
             break;
     }
-    if (attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
+    if (decode.attack_action == ATTACK_ICE && !can_cast_ice_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
-    if (attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
+    if (decode.attack_action == ATTACK_BLOOD && !can_cast_blood_spell(p)) {
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    int can_attack = attack_ready || (is_gmaul && is_granite_maul_attack_available(p));
+    int can_attack = attack_ready || (decode.is_gmaul && is_granite_maul_attack_available(p));
 
-    switch (attack_action) {
+    switch (decode.attack_action) {
         case ATTACK_ATK:
             if (can_attack && attack_style != ATTACK_STYLE_NONE) {
                 AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
@@ -533,10 +522,6 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
         case ATTACK_ICE:
         case ATTACK_BLOOD:
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
-                int can_cast = (attack_action == ATTACK_ICE)
-                    ? can_cast_ice_spell(p)
-                    : can_cast_blood_spell(p);
-                if (!can_cast) break;
                 int range = get_attack_range(p, ATTACK_STYLE_MAGIC);
                 if (dist > 0 && dist <= range) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
@@ -548,7 +533,7 @@ static void execute_attack_combat(OsrsEnv* env, int agent_idx, int* actions) {
             break;
     }
 
-    if (has_attack && move_action == MOVE_NONE && !explicit_move_in_progress
+    if (has_attack && decode.move_action == MOVE_NONE && !decode.explicit_move_in_progress
             && can_move(p) && !p->did_attack_auto_move) {
         int in_range = 0;
         int auto_walk_range = 1;

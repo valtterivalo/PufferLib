@@ -453,9 +453,6 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     attacker->last_queued_hit_damage += actual_damage;
 }
 
-static void register_hit_calculated(OsrsEnv* env, int attacker_idx, int defender_idx,
-                                     AttackStyle style, int total_damage);
-
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
     Player* attacker = &env->players[attacker_idx];
@@ -729,10 +726,6 @@ static inline int can_cast_blood_spell(Player* p) {
 static inline int is_ranged_attack_available(Player* p) {
     if (!is_attack_available(p)) return 0;
     return is_ranged_weapon_equipped(p);
-}
-
-static inline int can_melee(Player* p, Player* t) {
-    return is_in_melee_range(p, t) || can_move(p);
 }
 
 static inline int is_melee_attack_available(Player* p, Player* t) {
