@@ -46,34 +46,17 @@ static int inf_pathfind_blocked(void* data, int abs_x, int abs_y) {
     return inf_blocked_by_pillar(s, lx, ly, 1);
 }
 
-static int inf_npc_collision_flag_blocked(InfernoState* s, int x, int y, int size) {
+static int inf_collision_flags_blocked(
+    uint8_t flags[INF_ARENA_WIDTH][INF_ARENA_HEIGHT], int x, int y, int size
+) {
     if (size == 1) {
         int gx, gy;
-        return inf_grid_index(x, y, &gx, &gy) &&
-            s->npc_collision_flags[gx][gy];
+        return inf_grid_index(x, y, &gx, &gy) && flags[gx][gy];
     }
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int gx, gy;
-            if (inf_grid_index(x + dx, y + dy, &gx, &gy) &&
-                s->npc_collision_flags[gx][gy])
-                return 1;
-        }
-    }
-    return 0;
-}
-
-static int inf_player_collision_flag_blocked(InfernoState* s, int x, int y, int size) {
-    if (size == 1) {
-        int gx, gy;
-        return inf_grid_index(x, y, &gx, &gy) &&
-            s->player_collision_flags[gx][gy];
-    }
-    for (int dx = 0; dx < size; dx++) {
-        for (int dy = 0; dy < size; dy++) {
-            int gx, gy;
-            if (inf_grid_index(x + dx, y + dy, &gx, &gy) &&
-                s->player_collision_flags[gx][gy])
+            if (inf_grid_index(x + dx, y + dy, &gx, &gy) && flags[gx][gy])
                 return 1;
         }
     }
@@ -125,8 +108,8 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
     InfernoState* s = mc->s;
     (void)mc->self_idx;
     if (inf_npc_environment_blocked_ctx(s, mc->ctx, x, y, size)) return 1;
-    if (inf_player_collision_flag_blocked(s, x, y, size)) return 1;
-    return inf_npc_collision_flag_blocked(s, x, y, size);
+    if (inf_collision_flags_blocked(s->player_collision_flags, x, y, size)) return 1;
+    return inf_collision_flags_blocked(s->npc_collision_flags, x, y, size);
 }
 
 static int inf_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
@@ -134,7 +117,7 @@ static int inf_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
     InfernoState* s = mc->s;
     (void)mc->self_idx;
     if (inf_npc_environment_blocked_ctx(s, mc->ctx, x, y, size)) return 1;
-    return inf_npc_collision_flag_blocked(s, x, y, size);
+    return inf_collision_flags_blocked(s->npc_collision_flags, x, y, size);
 }
 
 static int inf_npc_overlap_hold(void* ctx) {
@@ -150,40 +133,8 @@ static int inf_npc_environment_blocked(InfernoState* s, int x, int y, int size) 
     return inf_npc_environment_blocked_ctx(s, inf_legacy_context(), x, y, size);
 }
 
-static int inf_npc_terrain_blocked_ctx(
-    InfernoState* s,
-    const InfernoContext* ctx,
-    int x,
-    int y,
-    int size
-) {
-    if (size == 1) {
-        if (!inf_in_arena(x, y)) return 1;
-        if (inf_blocked_by_pillar_size1(s, x, y)) return 1;
-        if (!ctx->collision_map) return 0;
-        return !collision_tile_walkable(
-            ctx->collision_map, 0,
-            x + ctx->world_offset_x,
-            y + ctx->world_offset_y);
-    }
-    if (!inf_footprint_in_arena(x, y, size)) return 1;
-    if (inf_blocked_by_pillar(s, x, y, size)) return 1;
-    if (!ctx->collision_map) return 0;
-    for (int dx = 0; dx < size; dx++) {
-        for (int dy = 0; dy < size; dy++) {
-            if (!collision_tile_walkable(
-                    ctx->collision_map, 0,
-                    x + dx + ctx->world_offset_x,
-                    y + dy + ctx->world_offset_y)) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
 static int inf_npc_terrain_blocked(InfernoState* s, int x, int y, int size) {
-    return inf_npc_terrain_blocked_ctx(s, inf_legacy_context(), x, y, size);
+    return inf_npc_environment_blocked_ctx(s, inf_legacy_context(), x, y, size);
 }
 
 static void inf_npc_move_ctx(InfernoState* s, const InfernoContext* ctx, int idx) {
@@ -295,7 +246,7 @@ static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx,
             int landing_x = candidates[4][0];
             int landing_y = candidates[4][1];
             for (int i = 0; i < 4; i++) {
-                if (inf_npc_terrain_blocked_ctx(
+                if (inf_npc_environment_blocked_ctx(
                         s, ctx, candidates[i][0], candidates[i][1], npc->size))
                     continue;
                 landing_x = candidates[i][0];

@@ -240,6 +240,12 @@ static int inf_forecast_jad_unknown_style_mask(const InfNPC* npc) {
     return INF_STYLE_MASK_RANGED | INF_STYLE_MASK_MAGIC;
 }
 
+static AttackStyle inf_forecast_blob_scan_style(OverheadPrayer prayer) {
+    if (prayer == PRAYER_PROTECT_MAGIC) return ATTACK_STYLE_RANGED;
+    if (prayer == PRAYER_PROTECT_RANGED) return ATTACK_STYLE_MAGIC;
+    return ATTACK_STYLE_RANGED;
+}
+
 static void inf_step_out_forecast_npc_attack(
     InfernoState* s,
     int idx,
@@ -264,9 +270,7 @@ static void inf_step_out_forecast_npc_attack(
             has_los_now &&
             !npc->had_los_last_tick) {
             npc->blob_scanned_prayer = (int)s->player.prayer;
-            if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
-            else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
-            else npc->attack_style = ATTACK_STYLE_RANGED;
+            npc->attack_style = inf_forecast_blob_scan_style(s->player.prayer);
             npc->had_los_last_tick = has_los_now;
             npc->attack_timer = stats->attack_speed;
             inf_step_out_forecast_record_blob_scan(action, tick_idx);
@@ -294,9 +298,7 @@ static void inf_step_out_forecast_npc_attack(
 
     if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
         npc->blob_scanned_prayer = (int)s->player.prayer;
-        if (s->player.prayer == PRAYER_PROTECT_MAGIC) npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (s->player.prayer == PRAYER_PROTECT_RANGED) npc->attack_style = ATTACK_STYLE_MAGIC;
-        else npc->attack_style = ATTACK_STYLE_RANGED;
+        npc->attack_style = inf_forecast_blob_scan_style(s->player.prayer);
         npc->attack_timer = stats->attack_speed;
         inf_step_out_forecast_record_blob_scan(action, tick_idx);
         return;
@@ -319,11 +321,8 @@ static void inf_step_out_forecast_npc_attack(
     if (npc->type == INF_NPC_JAD)
         inf_npc_jad(npc)->attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;
-        else if (s->wave == 67) npc->attack_timer = 9;
-        else                    npc->attack_timer = 8;
-    }
+    if (npc->type == INF_NPC_JAD)
+        npc->attack_timer = inf_jad_attack_timer(s->wave);
 }
 
 static int inf_collect_step_out_forecast_slots(
@@ -950,12 +949,7 @@ static void inf_forecast_local_attack_npc(
             has_los_now &&
             !npc->had_los_last_tick) {
             npc->blob_scanned_prayer = (int)s->player.prayer;
-            if (s->player.prayer == PRAYER_PROTECT_MAGIC)
-                npc->attack_style = ATTACK_STYLE_RANGED;
-            else if (s->player.prayer == PRAYER_PROTECT_RANGED)
-                npc->attack_style = ATTACK_STYLE_MAGIC;
-            else
-                npc->attack_style = ATTACK_STYLE_RANGED;
+            npc->attack_style = inf_forecast_blob_scan_style(s->player.prayer);
             npc->had_los_last_tick = has_los_now;
             npc->attack_timer = stats->attack_speed;
             inf_step_out_forecast_record_blob_scan(action, tick_idx);
@@ -985,12 +979,7 @@ static void inf_forecast_local_attack_npc(
 
     if (npc->type == INF_NPC_BLOB && npc->blob_scanned_prayer < 0) {
         npc->blob_scanned_prayer = (int)s->player.prayer;
-        if (s->player.prayer == PRAYER_PROTECT_MAGIC)
-            npc->attack_style = ATTACK_STYLE_RANGED;
-        else if (s->player.prayer == PRAYER_PROTECT_RANGED)
-            npc->attack_style = ATTACK_STYLE_MAGIC;
-        else
-            npc->attack_style = ATTACK_STYLE_RANGED;
+        npc->attack_style = inf_forecast_blob_scan_style(s->player.prayer);
         npc->attack_timer = stats->attack_speed;
         inf_step_out_forecast_record_blob_scan(action, tick_idx);
         return;
@@ -1014,11 +1003,8 @@ static void inf_forecast_local_attack_npc(
     if (npc->type == INF_NPC_JAD)
         npc->jad_attack_style = ATTACK_STYLE_NONE;
     npc->attack_timer = stats->attack_speed;
-    if (npc->type == INF_NPC_JAD) {
-        if (s->wave == 66)      npc->attack_timer = 8;
-        else if (s->wave == 67) npc->attack_timer = 9;
-        else                    npc->attack_timer = 8;
-    }
+    if (npc->type == INF_NPC_JAD)
+        npc->attack_timer = inf_jad_attack_timer(s->wave);
 }
 
 static int inf_forecast_npc_uses_readonly_sim(const InfNPC* npc) {

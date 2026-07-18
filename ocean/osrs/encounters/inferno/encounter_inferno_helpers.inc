@@ -531,9 +531,6 @@ static inline int inf_pending_hit_obs_timer(const EncounterPendingHit* ph) {
 }
 
 #define INF_JAD_PROJECTILE_DELAY 3
-#define INF_ANIM_JALTOK_JAD_MAGIC_ATTACK INF_GEN_ANIM_JALTOK_JAD_ATTACK_MAGIC
-#define INF_ANIM_JALTOK_JAD_RANGED_ATTACK INF_GEN_ANIM_JALTOK_JAD_ATTACK_RANGED
-#define INF_ANIM_JALTOK_JAD_MELEE_ATTACK INF_GEN_ANIM_JALTOK_JAD_ATTACK_MELEE
 
 static inline EncounterProjectileDelayOptions inf_npc_projectile_options(
     InfNPCType type, int style
@@ -602,11 +599,11 @@ static inline int inf_npc_attack_anim_id(const InfNPC* npc, const NpcModelMappin
     if (npc->type == INF_NPC_JAD) {
         switch (npc->attack_style_this_tick) {
             case ATTACK_STYLE_MAGIC:
-                return INF_ANIM_JALTOK_JAD_MAGIC_ATTACK;
+                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_MAGIC;
             case ATTACK_STYLE_RANGED:
-                return INF_ANIM_JALTOK_JAD_RANGED_ATTACK;
+                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_RANGED;
             case ATTACK_STYLE_MELEE:
-                return INF_ANIM_JALTOK_JAD_MELEE_ATTACK;
+                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_MELEE;
             default:
                 return -1;
         }

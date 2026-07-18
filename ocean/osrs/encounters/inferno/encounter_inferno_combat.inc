@@ -958,7 +958,7 @@ static int inf_try_sample_jad_healer_spawn(
         int hy = jad->y + offsets[order[i]][1];
         if (encounter_entity_footprints_overlap(hx, hy, 1, jad->x, jad->y, jad->size))
             continue;
-        if (inf_npc_terrain_blocked_ctx(s, ctx, hx, hy, 1))
+        if (inf_npc_environment_blocked_ctx(s, ctx, hx, hy, 1))
             continue;
         *out_x = hx;
         *out_y = hy;
@@ -1056,12 +1056,7 @@ static void inf_zuk_tick(InfernoState* s) {
         s->zuk.jad_spawned = 1;
         s->zuk.timer_paused = 0;
         s->zuk.set_timer += 175;
-        int j_slot = inf_find_free_npc(s);
-        if (j_slot >= 0) {
-            inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 32);
-            s->npcs[j_slot].aggro_target = si;
-            s->npcs[j_slot].stun_timer = 7;
-        }
+        inf_spawn_zuk_jad(s, si);
     }
 
     if (!s->zuk.timer_paused) {
@@ -1087,17 +1082,7 @@ static void inf_zuk_tick(InfernoState* s) {
     if (!s->zuk.healer_spawned && zuk->hp < 240) {
         s->zuk.healer_spawned = 1;
         s->zuk.enraged = 1;
-        static const int healer_pos[4][2] = {
-            {16, 48}, {20, 48}, {30, 48}, {34, 48}
-        };
-        for (int h = 0; h < 4; h++) {
-            int slot = inf_find_free_npc(s);
-            if (slot >= 0) {
-                inf_init_npc(s, slot, INF_NPC_HEALER_ZUK,
-                             healer_pos[h][0], healer_pos[h][1]);
-                s->npcs[slot].aggro_target = zuk_idx;
-            }
-        }
+        inf_spawn_zuk_healers(s, zuk_idx);
     }
 
     if (zuk->hp <= 0) {
