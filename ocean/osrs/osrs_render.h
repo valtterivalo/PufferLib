@@ -987,16 +987,6 @@ static inline int render_world_to_screen_y_rc(RenderClient* rc, int world_y) {
     return RENDER_HEADER_HEIGHT + flipped * RENDER_TILE_SIZE;
 }
 
-static inline int render_world_to_screen_x(int world_x) {
-    return (world_x - FIGHT_AREA_BASE_X) * RENDER_TILE_SIZE;
-}
-
-static inline int render_world_to_screen_y(int world_y) {
-    int local_y = world_y - FIGHT_AREA_BASE_Y;
-    int flipped = (FIGHT_AREA_HEIGHT - 1) - local_y;
-    return RENDER_HEADER_HEIGHT + flipped * RENDER_TILE_SIZE;
-}
-
 static void composite_free(PlayerComposite* comp);
 static int render_select_secondary(RenderClient* rc, int player_idx);
 
@@ -1165,6 +1155,40 @@ static void context_menu_finish_layout(ContextMenu* cm, int mx, int my) {
     cm->visible = (cm->item_count > 0);
 }
 
+static int render_pick_ground_tile(
+    RenderClient* rc, int screen_x, int screen_y,
+    int* out_wx, int* out_wy, Vector3* out_hit_point, Ray* out_ray
+) {
+    *out_wx = -1;
+    *out_wy = -1;
+    Camera3D cam = render_build_3d_camera(rc);
+    Ray ray = GetScreenToWorldRay((Vector2){ (float)screen_x, (float)screen_y }, cam);
+    if (out_ray) *out_ray = ray;
+    float best_dist = 1e30f;
+    for (int dy = 0; dy < rc->arena_height; dy++) {
+        for (int dx = 0; dx < rc->arena_width; dx++) {
+            int wx = rc->arena_base_x + dx;
+            int wy = rc->arena_base_y + dy;
+            float tx = (float)wx;
+            float tz = -(float)(wy + 1);
+            float ground_y = rc->terrain
+                ? terrain_height_avg(rc->terrain, wx, wy) : 2.0f;
+            BoundingBox box = {
+                .min = { tx, ground_y - 0.1f, tz },
+                .max = { tx + 1.0f, ground_y, tz + 1.0f },
+            };
+            RayCollision col = GetRayCollisionBox(ray, box);
+            if (col.hit && col.distance < best_dist) {
+                best_dist = col.distance;
+                *out_wx = wx;
+                *out_wy = wy;
+                if (out_hit_point) *out_hit_point = col.point;
+            }
+        }
+    }
+    return *out_wx >= 0;
+}
+
 static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
     ContextMenu* cm = &rc->context_menu;
     RenderHumanAttackCtx attack_ctx = { .rc = rc, .env = env };
@@ -1193,29 +1217,7 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
         }
     }
 
-    Camera3D cam = render_build_3d_camera(rc);
-    Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
-    float best_dist = 1e30f;
-    for (int dy = 0; dy < rc->arena_height; dy++) {
-        for (int dx = 0; dx < rc->arena_width; dx++) {
-            int wx = rc->arena_base_x + dx;
-            int wy = rc->arena_base_y + dy;
-            float tx = (float)wx;
-            float tz = -(float)(wy + 1);
-            float ground_y = rc->terrain
-                ? terrain_height_avg(rc->terrain, wx, wy) : 2.0f;
-            BoundingBox box = {
-                .min = { tx, ground_y - 0.1f, tz },
-                .max = { tx + 1.0f, ground_y, tz + 1.0f },
-            };
-            RayCollision col = GetRayCollisionBox(ray, box);
-            if (col.hit && col.distance < best_dist) {
-                best_dist = col.distance;
-                cm->walk_tile_x = wx;
-                cm->walk_tile_y = wy;
-            }
-        }
-    }
+    render_pick_ground_tile(rc, mx, my, &cm->walk_tile_x, &cm->walk_tile_y, NULL, NULL);
 
     for (int i = 0; i < hit_count; i++) {
         int ei = hit_entities[i];
@@ -1396,6 +1398,30 @@ static void context_menu_build_gui(
     context_menu_finish_layout(cm, layout_mx, layout_my);
 }
 
+static void render_human_attack_npc_slot(
+    RenderClient* rc, int target_slot, int click_x, int click_y
+) {
+    if (rc->human_input.cursor_mode == CURSOR_ITEM_TARGET) {
+        human_input_clear_selected_ui_target(&rc->human_input);
+    } else if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
+        human_input_apply_ui_intent(
+            &rc->human_input,
+            osrs_ui_intent_spell_on_target(
+                rc->human_input.selected_spell,
+                rc->human_input.selected_spell_gui_idx,
+                target_slot));
+    } else {
+        rc->human_input.pending_attack = 1;
+        rc->human_input.pending_target_idx = target_slot;
+        rc->human_input.pending_move_x = -1;
+        rc->human_input.pending_move_y = -1;
+        human_input_queue_attack_npc(
+            &rc->human_input,
+            rc->human_input.pending_target_idx);
+    }
+    human_set_click_cross(&rc->human_input, click_x, click_y, 1);
+}
+
 static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
     ContextMenu* cm = &rc->context_menu;
     if (item_idx < 0 || item_idx >= cm->item_count) return;
@@ -1414,26 +1440,9 @@ static void context_menu_execute(RenderClient* rc, OsrsEnv* env, int item_idx) {
         case CMENU_ACTION_ATTACK: {
             int ei = item->entity_idx;
             if (ei >= 0 && ei < rc->entity_count) {
-                int target_slot = rc->entities[ei].npc_slot;
-                if (rc->human_input.cursor_mode == CURSOR_ITEM_TARGET) {
-                    human_input_clear_selected_ui_target(&rc->human_input);
-                } else if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
-                    human_input_apply_ui_intent(
-                        &rc->human_input,
-                        osrs_ui_intent_spell_on_target(
-                            rc->human_input.selected_spell,
-                            rc->human_input.selected_spell_gui_idx,
-                            target_slot));
-                } else {
-                    rc->human_input.pending_attack = 1;
-                    rc->human_input.pending_target_idx = target_slot;
-                    rc->human_input.pending_move_x = -1;
-                    rc->human_input.pending_move_y = -1;
-                    human_input_queue_attack_npc(
-                        &rc->human_input,
-                        rc->human_input.pending_target_idx);
-                }
-                human_set_click_cross(&rc->human_input, cm->click_screen_x, cm->click_screen_y, 1);
+                render_human_attack_npc_slot(
+                    rc, rc->entities[ei].npc_slot,
+                    cm->click_screen_x, cm->click_screen_y);
             }
             break;
         }
@@ -2860,62 +2869,25 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                     continue;
                 }
                 if (hull_contains(&rc->entity_hulls[ei], mx, my)) {
-                    int target_slot = rc->entities[ei].npc_slot;
-                    if (rc->human_input.cursor_mode == CURSOR_ITEM_TARGET) {
-                        human_input_clear_selected_ui_target(&rc->human_input);
-                    } else if (rc->human_input.cursor_mode == CURSOR_SPELL_TARGET) {
-                        human_input_apply_ui_intent(
-                            &rc->human_input,
-                            osrs_ui_intent_spell_on_target(
-                                rc->human_input.selected_spell,
-                                rc->human_input.selected_spell_gui_idx,
-                                target_slot));
-                    } else {
-                        rc->human_input.pending_attack = 1;
-                        rc->human_input.pending_target_idx = target_slot;
-                        rc->human_input.pending_move_x = -1;
-                        rc->human_input.pending_move_y = -1;
-                        human_input_queue_attack_npc(
-                            &rc->human_input,
-                            rc->human_input.pending_target_idx);
-                    }
-                    human_set_click_cross(&rc->human_input, mx, my, 1);
+                    render_human_attack_npc_slot(
+                        rc, rc->entities[ei].npc_slot, mx, my);
                     entity_hit = 1;
                     break;
                 }
             }
 
             if (!entity_hit) {
-                Camera3D cam = render_build_3d_camera(rc);
-                Ray ray = GetScreenToWorldRay((Vector2){ (float)mx, (float)my }, cam);
+                int best_wx, best_wy;
+                Vector3 hit_point;
+                Ray ray;
+                int picked = render_pick_ground_tile(
+                    rc, mx, my, &best_wx, &best_wy, &hit_point, &ray);
                 rc->debug_ray_origin = ray.position;
                 rc->debug_ray_dir = ray.direction;
-
-                float best_dist = 1e30f;
-                int best_wx = -1, best_wy = -1;
-                for (int dy = 0; dy < rc->arena_height; dy++) {
-                    for (int dx = 0; dx < rc->arena_width; dx++) {
-                        int wx = rc->arena_base_x + dx;
-                        int wy = rc->arena_base_y + dy;
-                        float tx = (float)wx;
-                        float tz = -(float)(wy + 1);
-                        float ground_y = rc->terrain
-                            ? terrain_height_avg(rc->terrain, wx, wy)
-                            : 2.0f;
-                        BoundingBox box = {
-                            .min = { tx, ground_y - 0.1f, tz },
-                            .max = { tx + 1.0f, ground_y, tz + 1.0f },
-                        };
-                        RayCollision col = GetRayCollisionBox(ray, box);
-                        if (col.hit && col.distance < best_dist) {
-                            best_dist = col.distance;
-                            best_wx = wx;
-                            best_wy = wy;
-                            rc->debug_ray_hit_x = col.point.x;
-                            rc->debug_ray_hit_y = col.point.y;
-                            rc->debug_ray_hit_z = col.point.z;
-                        }
-                    }
+                if (picked) {
+                    rc->debug_ray_hit_x = hit_point.x;
+                    rc->debug_ray_hit_y = hit_point.y;
+                    rc->debug_ray_hit_z = hit_point.z;
                 }
                 rc->debug_hit_wx = best_wx;
                 rc->debug_hit_wy = best_wy;
@@ -2970,30 +2942,8 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     gui_mouse_to_panel_space(&rc->gui, hmx, hmy, &hpx, &hpy);
     if (hmx >= 0 && hpx < rc->gui.panel_x &&
         hmy >= 0 && hmy < RENDER_WINDOW_H) {
-        Camera3D hcam = render_build_3d_camera(rc);
-        Ray hray = GetScreenToWorldRay((Vector2){ (float)hmx, (float)hmy }, hcam);
-        float best_dist = 1e30f;
-        for (int dy = 0; dy < rc->arena_height; dy++) {
-            for (int dx = 0; dx < rc->arena_width; dx++) {
-                int wx = rc->arena_base_x + dx;
-                int wy = rc->arena_base_y + dy;
-                float tx = (float)wx;
-                float tz = -(float)(wy + 1);
-                float ground_y = rc->terrain
-                    ? terrain_height_avg(rc->terrain, wx, wy)
-                    : 2.0f;
-                BoundingBox box = {
-                    .min = { tx, ground_y - 0.1f, tz },
-                    .max = { tx + 1.0f, ground_y, tz + 1.0f },
-                };
-                RayCollision col = GetRayCollisionBox(hray, box);
-                if (col.hit && col.distance < best_dist) {
-                    best_dist = col.distance;
-                    rc->hover_tile_x = wx;
-                    rc->hover_tile_y = wy;
-                }
-            }
-        }
+        render_pick_ground_tile(
+            rc, hmx, hmy, &rc->hover_tile_x, &rc->hover_tile_y, NULL, NULL);
     }
 }
 
@@ -3679,16 +3629,17 @@ static void render_update_splats_client_tick(RenderClient* rc) {
 }
 
 static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type) {
+    HitSplat splat = {
+        .active = 1,
+        .damage = damage,
+        .type = type,
+        .hitmark_move = 5.0,
+        .hitmark_trans = 230,
+        .ticks_remaining = 70,
+    };
     for (int i = 0; i < RENDER_SPLATS_PER_PLAYER; i++) {
         if (!rc->splats[pidx][i].active) {
-            rc->splats[pidx][i] = (HitSplat){
-                .active = 1,
-                .damage = damage,
-                .type = type,
-                .hitmark_move = 5.0,
-                .hitmark_trans = 230,
-                .ticks_remaining = 70,
-            };
+            rc->splats[pidx][i] = splat;
             return;
         }
     }
@@ -3697,14 +3648,7 @@ static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int t
         if (rc->splats[pidx][i].ticks_remaining < rc->splats[pidx][oldest].ticks_remaining)
             oldest = i;
     }
-    rc->splats[pidx][oldest] = (HitSplat){
-        .active = 1,
-        .damage = damage,
-        .type = type,
-        .hitmark_move = 5.0,
-        .hitmark_trans = 230,
-        .ticks_remaining = 70,
-    };
+    rc->splats[pidx][oldest] = splat;
 }
 
 static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, int opacity, int type) {
@@ -4139,6 +4083,24 @@ static OsrsModel* composite_get_model_or_abort(
     abort();
 }
 
+static void composite_recreate_anim_state(PlayerComposite* comp) {
+    if (comp->anim_state) {
+        anim_model_state_free(comp->anim_state);
+        comp->anim_state = NULL;
+    }
+    if (comp->base_vert_count > 0) {
+        if (comp->has_face_alpha) {
+            comp->anim_state = anim_model_state_create_with_face_alpha(
+                comp->vertex_skins, comp->base_vert_count,
+                comp->face_alpha_labels, comp->base_face_alphas,
+                comp->face_count);
+        } else {
+            comp->anim_state = anim_model_state_create(
+                comp->vertex_skins, comp->base_vert_count);
+        }
+    }
+}
+
 static void composite_rebuild(
     PlayerComposite* comp, ModelCache* cache, RenderEntity* p
 ) {
@@ -4163,21 +4125,7 @@ static void composite_rebuild(
         composite_add_model_or_abort(comp, om, model_id, "equipment");
     }
 
-    if (comp->anim_state) {
-        anim_model_state_free(comp->anim_state);
-        comp->anim_state = NULL;
-    }
-    if (comp->base_vert_count > 0) {
-        if (comp->has_face_alpha) {
-            comp->anim_state = anim_model_state_create_with_face_alpha(
-                comp->vertex_skins, comp->base_vert_count,
-                comp->face_alpha_labels, comp->base_face_alphas,
-                comp->face_count);
-        } else {
-            comp->anim_state = anim_model_state_create(
-                comp->vertex_skins, comp->base_vert_count);
-        }
-    }
+    composite_recreate_anim_state(comp);
 
     memcpy(comp->last_equipped, p->equipped, NUM_GEAR_SLOTS);
     comp->needs_rebuild = 0;
@@ -4215,21 +4163,7 @@ static void composite_rebuild_npc(
     }
     composite_add_model_or_abort(comp, om, model_id, "npc");
 
-    if (comp->anim_state) {
-        anim_model_state_free(comp->anim_state);
-        comp->anim_state = NULL;
-    }
-    if (comp->base_vert_count > 0) {
-        if (comp->has_face_alpha) {
-            comp->anim_state = anim_model_state_create_with_face_alpha(
-                comp->vertex_skins, comp->base_vert_count,
-                comp->face_alpha_labels, comp->base_face_alphas,
-                comp->face_count);
-        } else {
-            comp->anim_state = anim_model_state_create(
-                comp->vertex_skins, comp->base_vert_count);
-        }
-    }
+    composite_recreate_anim_state(comp);
 
     comp->last_npc_def_id = npc_def_id;
     comp->needs_rebuild = 0;
@@ -4320,10 +4254,8 @@ static void composite_animate_and_draw(
     UpdateMeshBuffer(comp->mesh, 3, comp->mesh.colors,
                      exp_verts * 4, 0);
 
-    /* CRITICAL: must set vertexCount on
-       model.meshes[0], NOT comp->mesh — LoadModelFromMesh copies the mesh
-       struct by value, so comp->mesh and model.meshes[0] are independent.
-       DrawModel reads model.meshes[0].vertexCount for glDrawArrays count. */
+    /* LoadModelFromMesh copies the mesh struct by value: DrawModel reads
+       vertexCount from model.meshes[0], not comp->mesh. */
     comp->model.meshes[0].vertexCount = exp_verts;
     comp->model.meshes[0].triangleCount = comp->face_count;
     comp->model.transform = transform;

@@ -267,6 +267,18 @@ static VisualCollisionLoad visual_load_encounter_collision_map(
     return result;
 }
 
+static const EncounterDef* visual_open_encounter(OsrsEnv* env, const char* encounter_name) {
+    const EncounterDef* edef = encounter_find(encounter_name);
+    if (!edef) {
+        fprintf(stderr, "unknown encounter: %s\n", encounter_name);
+        return NULL;
+    }
+    env->encounter_def = (void*)edef;
+    env->encounter_state = edef->create();
+    env->encounter_context = visual_create_encounter_context(edef);
+    return edef;
+}
+
 static void run_profile(
     OsrsEnv* env,
     const char* encounter_name,
@@ -282,14 +294,8 @@ static void run_profile(
     }
 
     if (encounter_name) {
-        const EncounterDef* edef = encounter_find(encounter_name);
-        if (!edef) {
-            fprintf(stderr, "unknown encounter: %s\n", encounter_name);
-            return;
-        }
-        env->encounter_def = (void*)edef;
-        env->encounter_state = edef->create();
-        env->encounter_context = visual_create_encounter_context(edef);
+        const EncounterDef* edef = visual_open_encounter(env, encounter_name);
+        if (!edef) return;
 
         visual_load_encounter_collision_map(edef, env, encounter_name);
         if (start_wave >= 0 && edef->put_int) {
@@ -1335,11 +1341,8 @@ static void run_metrics(
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
         return;
     }
-    const EncounterDef* edef = encounter_find(encounter_name);
-    if (!edef) { fprintf(stderr, "unknown encounter: %s\n", encounter_name); return; }
-    env->encounter_def = (void*)edef;
-    env->encounter_state = edef->create();
-    env->encounter_context = visual_create_encounter_context(edef);
+    const EncounterDef* edef = visual_open_encounter(env, encounter_name);
+    if (!edef) return;
     visual_load_encounter_collision_map(edef, env, encounter_name);
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
@@ -1547,14 +1550,8 @@ static void run_visual(
     env->client = NULL;
 
     if (encounter_name) {
-        const EncounterDef* edef = encounter_find(encounter_name);
-        if (!edef) {
-            fprintf(stderr, "unknown encounter: %s\n", encounter_name);
-            return;
-        }
-        env->encounter_def = (void*)edef;
-        env->encounter_state = edef->create();
-        env->encounter_context = visual_create_encounter_context(edef);
+        const EncounterDef* edef = visual_open_encounter(env, encounter_name);
+        if (!edef) return;
         if (encounter_name_is_pvp(encounter_name) && edef->put_int) {
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_IMPROVED);
@@ -1592,9 +1589,8 @@ static void run_visual(
                 start_wave);
         }
         edef->reset(env->encounter_state, env->encounter_context, 0);
-        fprintf(stderr, "encounter: %s (obs=%d, heads=%d)%s\n",
-                edef->name, edef->obs_size, edef->num_action_heads,
-                start_wave >= 0 ? "" : "");
+        fprintf(stderr, "encounter: %s (obs=%d, heads=%d)\n",
+                edef->name, edef->obs_size, edef->num_action_heads);
         if (start_wave >= 0)
             fprintf(stderr, "start_wave: %d\n", start_wave);
     } else {
@@ -1859,6 +1855,28 @@ static void run_visual(
 }
 #endif
 
+static void visual_alloc_env_buffers(OsrsEnv* env) {
+    env->observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
+    env->actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
+    env->rewards = (float*)calloc(NUM_AGENTS, sizeof(float));
+    env->terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
+    env->action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
+    env->action_masks_agents = (1 << NUM_AGENTS) - 1;
+    env->ocean_io.agent_actions = env->actions;
+    env->ocean_io.agent_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
+    env->ocean_io.agent_rewards = env->rewards;
+    env->ocean_io.agent_terminals = env->terminals;
+}
+
+static void visual_free_env_buffers(OsrsEnv* env) {
+    free(env->observations);
+    free(env->actions);
+    free(env->rewards);
+    free(env->terminals);
+    free(env->action_masks);
+    free(env->ocean_io.agent_obs);
+}
+
 int main(int argc, char** argv) {
     int use_visual = 1;
     int use_profile = 0;
@@ -1957,25 +1975,11 @@ int main(int argc, char** argv) {
     }
 
     if (use_profile) {
-        env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
-        env.actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
-        env.rewards = (float*)calloc(NUM_AGENTS, sizeof(float));
-        env.terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
-        env.action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
-        env.action_masks_agents = (1 << NUM_AGENTS) - 1;
-        env.ocean_io.agent_actions = env.actions;
-        env.ocean_io.agent_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
-        env.ocean_io.agent_rewards = env.rewards;
-        env.ocean_io.agent_terminals = env.terminals;
+        visual_alloc_env_buffers(&env);
 
         run_profile(&env, encounter_name, start_wave, profile_steps);
 
-        free(env.observations);
-        free(env.actions);
-        free(env.rewards);
-        free(env.terminals);
-        free(env.action_masks);
-        free(env.ocean_io.agent_obs);
+        visual_free_env_buffers(&env);
         pvp_close(&env);
         return 0;
     }
@@ -2011,16 +2015,7 @@ int main(int argc, char** argv) {
         return 1;
 #endif
     } else {
-        env.observations = (float*)calloc(NUM_AGENTS * SLOT_NUM_OBSERVATIONS, sizeof(float));
-        env.actions = (int*)calloc(NUM_AGENTS * NUM_ACTION_HEADS, sizeof(int));
-        env.rewards = (float*)calloc(NUM_AGENTS, sizeof(float));
-        env.terminals = (unsigned char*)calloc(NUM_AGENTS, sizeof(unsigned char));
-        env.action_masks = (unsigned char*)calloc(NUM_AGENTS * ACTION_MASK_SIZE, sizeof(unsigned char));
-        env.action_masks_agents = (1 << NUM_AGENTS) - 1;
-        env.ocean_io.agent_actions = env.actions;
-        env.ocean_io.agent_obs = (float*)calloc(OCEAN_OBS_SIZE, sizeof(float));
-        env.ocean_io.agent_rewards = env.rewards;
-        env.ocean_io.agent_terminals = env.terminals;
+        visual_alloc_env_buffers(&env);
 
         printf("OSRS PvP C Environment Demo\n\n");
 
@@ -2051,12 +2046,7 @@ int main(int argc, char** argv) {
 
         printf("\nDemo complete.\n");
 
-        free(env.observations);
-        free(env.actions);
-        free(env.rewards);
-        free(env.terminals);
-        free(env.action_masks);
-        free(env.ocean_io.agent_obs);
+        visual_free_env_buffers(&env);
         pvp_close(&env);
     }
 

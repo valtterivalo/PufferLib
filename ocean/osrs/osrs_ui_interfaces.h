@@ -20,83 +20,18 @@
 #define OSRS_UI_BIN_VERSION_MIN 1u
 #define OSRS_UI_BIN_VERSION_MAX 2u
 #define OSRS_UI_INTERFACE_MAX_ACTIONS 10
-#define OSRS_UI_INTERFACE_MAX_LISTENERS 18
-#define OSRS_UI_INTERFACE_MAX_LISTENER_VALUES 16
-#define OSRS_UI_INTERFACE_MAX_TRIGGERS 3
-#define OSRS_UI_INTERFACE_MAX_TRIGGER_VALUES 32
-#if defined(__GNUC__) || defined(__clang__)
-#define OSRS_UI_UNUSED_FUNCTION __attribute__((unused))
-#else
-#define OSRS_UI_UNUSED_FUNCTION
-#endif
-#define OSRS_UI_COMPONENT_HIT_LISTENERS \
-    ((1u << OSRS_UI_LISTENER_ON_OP) \
-     | (1u << OSRS_UI_LISTENER_ON_CLICK) \
-     | (1u << OSRS_UI_LISTENER_ON_RELEASE) \
-     | (1u << OSRS_UI_LISTENER_ON_DRAG) \
-     | (1u << OSRS_UI_LISTENER_ON_DRAG_COMPLETE) \
-     | (1u << OSRS_UI_LISTENER_ON_TARGET_ENTER) \
-     | (1u << OSRS_UI_LISTENER_ON_TARGET_LEAVE))
 
 #define OSRS_UI_COMPONENT_ID(group, file) (((uint32_t)(group) << 16) | (uint32_t)(file))
 #define OSRS_UI_GROUP_INVENTORY 149u
-#define OSRS_UI_GROUP_STATS 320u
 #define OSRS_UI_GROUP_WORNITEMS 387u
 #define OSRS_UI_GROUP_PRAYERBOOK 541u
 #define OSRS_UI_GROUP_MAGIC_SPELLBOOK 218u
 #define OSRS_UI_GROUP_COMBAT_INTERFACE 593u
 
 typedef enum {
-    OSRS_UI_LISTENER_ON_LOAD = 0,
-    OSRS_UI_LISTENER_ON_MOUSE_OVER,
-    OSRS_UI_LISTENER_ON_MOUSE_LEAVE,
-    OSRS_UI_LISTENER_ON_TARGET_LEAVE,
-    OSRS_UI_LISTENER_ON_TARGET_ENTER,
-    OSRS_UI_LISTENER_ON_VAR_TRANSMIT,
-    OSRS_UI_LISTENER_ON_INV_TRANSMIT,
-    OSRS_UI_LISTENER_ON_STAT_TRANSMIT,
-    OSRS_UI_LISTENER_ON_TIMER,
-    OSRS_UI_LISTENER_ON_OP,
-    OSRS_UI_LISTENER_ON_MOUSE_REPEAT,
-    OSRS_UI_LISTENER_ON_CLICK,
-    OSRS_UI_LISTENER_ON_CLICK_REPEAT,
-    OSRS_UI_LISTENER_ON_RELEASE,
-    OSRS_UI_LISTENER_ON_HOLD,
-    OSRS_UI_LISTENER_ON_DRAG,
-    OSRS_UI_LISTENER_ON_DRAG_COMPLETE,
-    OSRS_UI_LISTENER_ON_SCROLL_WHEEL,
-    OSRS_UI_LISTENER_COUNT
-} OsrsUiListenerKind;
-
-typedef enum {
-    OSRS_UI_TRIGGER_VAR_TRANSMIT = 0,
-    OSRS_UI_TRIGGER_INV_TRANSMIT,
-    OSRS_UI_TRIGGER_STAT_TRANSMIT,
-    OSRS_UI_TRIGGER_COUNT
-} OsrsUiTriggerKind;
-
-typedef enum {
     OSRS_UI_LISTENER_VALUE_INT = 0,
     OSRS_UI_LISTENER_VALUE_STRING
 } OsrsUiListenerValueKind;
-
-typedef struct {
-    OsrsUiListenerValueKind kind;
-    int32_t int_value;
-    char* string_value;
-} OsrsUiListenerValue;
-
-typedef struct {
-    OsrsUiListenerKind kind;
-    int value_count;
-    OsrsUiListenerValue values[OSRS_UI_INTERFACE_MAX_LISTENER_VALUES];
-} OsrsUiComponentListener;
-
-typedef struct {
-    OsrsUiTriggerKind kind;
-    int value_count;
-    int32_t values[OSRS_UI_INTERFACE_MAX_TRIGGER_VALUES];
-} OsrsUiComponentTrigger;
 
 typedef struct {
     uint32_t id;
@@ -143,12 +78,6 @@ typedef struct {
     char* target_verb;
     char* actions[OSRS_UI_INTERFACE_MAX_ACTIONS];
     int action_count;
-    uint32_t listener_mask;
-    OsrsUiComponentListener listeners[OSRS_UI_INTERFACE_MAX_LISTENERS];
-    int listener_count;
-    uint32_t trigger_mask;
-    OsrsUiComponentTrigger triggers[OSRS_UI_INTERFACE_MAX_TRIGGERS];
-    int trigger_count;
 } OsrsUiComponent;
 
 typedef struct {
@@ -163,21 +92,6 @@ typedef struct {
     int group_count;
     int loaded;
 } OsrsUiInterfaceStore;
-
-typedef struct {
-    uint32_t component_id;
-    uint32_t group_id;
-    uint32_t file_id;
-    Rectangle rect;
-    uint32_t click_mask;
-    uint32_t listener_mask;
-    uint32_t trigger_mask;
-    int action_count;
-    char name[64];
-    char text[128];
-    char target_verb[64];
-    char actions[OSRS_UI_INTERFACE_MAX_ACTIONS][64];
-} OsrsUiHitResult;
 
 typedef struct {
     const unsigned char* data;
@@ -270,14 +184,6 @@ static void osrs_ui_free_component(OsrsUiComponent* component) {
     free(component->target_verb);
     for (int i = 0; i < component->action_count; i++) {
         free(component->actions[i]);
-    }
-    for (int i = 0; i < component->listener_count; i++) {
-        OsrsUiComponentListener* listener = &component->listeners[i];
-        for (int v = 0; v < listener->value_count; v++) {
-            if (listener->values[v].kind == OSRS_UI_LISTENER_VALUE_STRING) {
-                free(listener->values[v].string_value);
-            }
-        }
     }
 }
 
@@ -399,74 +305,25 @@ static int osrs_ui_interfaces_load(OsrsUiInterfaceStore* store, const char* path
             }
             if (version >= 2) {
                 int encoded_listener_count = (int)osrs_ui_read_u8(&r);
-                component->listener_count = encoded_listener_count;
-                if (component->listener_count > OSRS_UI_INTERFACE_MAX_LISTENERS) {
-                    component->listener_count = OSRS_UI_INTERFACE_MAX_LISTENERS;
-                }
                 for (int l = 0; l < encoded_listener_count; l++) {
-                    int raw_kind = (int)osrs_ui_read_u8(&r);
+                    osrs_ui_read_u8(&r);
                     int encoded_value_count = (int)osrs_ui_read_u8(&r);
-                    OsrsUiComponentListener* listener =
-                        l < OSRS_UI_INTERFACE_MAX_LISTENERS ? &component->listeners[l] : NULL;
-                    if (listener) {
-                        listener->kind = raw_kind >= 0 && raw_kind < OSRS_UI_LISTENER_COUNT
-                            ? (OsrsUiListenerKind)raw_kind
-                            : OSRS_UI_LISTENER_ON_LOAD;
-                        if (raw_kind >= 0 && raw_kind < OSRS_UI_LISTENER_COUNT) {
-                            component->listener_mask |= 1u << (unsigned)raw_kind;
-                        }
-                        listener->value_count = encoded_value_count;
-                        if (listener->value_count > OSRS_UI_INTERFACE_MAX_LISTENER_VALUES) {
-                            listener->value_count = OSRS_UI_INTERFACE_MAX_LISTENER_VALUES;
-                        }
-                    }
                     for (int v = 0; v < encoded_value_count; v++) {
                         int value_type = (int)osrs_ui_read_u8(&r);
                         if (value_type == OSRS_UI_LISTENER_VALUE_STRING) {
-                            char* value = osrs_ui_read_string(&r);
-                            if (listener && v < OSRS_UI_INTERFACE_MAX_LISTENER_VALUES) {
-                                listener->values[v].kind = OSRS_UI_LISTENER_VALUE_STRING;
-                                listener->values[v].string_value = value;
-                            } else {
-                                free(value);
-                            }
+                            free(osrs_ui_read_string(&r));
                         } else {
-                            int32_t value = osrs_ui_read_i32(&r);
-                            if (listener && v < OSRS_UI_INTERFACE_MAX_LISTENER_VALUES) {
-                                listener->values[v].kind = OSRS_UI_LISTENER_VALUE_INT;
-                                listener->values[v].int_value = value;
-                            }
+                            osrs_ui_read_i32(&r);
                         }
                     }
                 }
 
                 int encoded_trigger_count = (int)osrs_ui_read_u8(&r);
-                component->trigger_count = encoded_trigger_count;
-                if (component->trigger_count > OSRS_UI_INTERFACE_MAX_TRIGGERS) {
-                    component->trigger_count = OSRS_UI_INTERFACE_MAX_TRIGGERS;
-                }
                 for (int t = 0; t < encoded_trigger_count; t++) {
-                    int raw_kind = (int)osrs_ui_read_u8(&r);
+                    osrs_ui_read_u8(&r);
                     int encoded_value_count = (int)osrs_ui_read_u8(&r);
-                    OsrsUiComponentTrigger* trigger =
-                        t < OSRS_UI_INTERFACE_MAX_TRIGGERS ? &component->triggers[t] : NULL;
-                    if (trigger) {
-                        trigger->kind = raw_kind >= 0 && raw_kind < OSRS_UI_TRIGGER_COUNT
-                            ? (OsrsUiTriggerKind)raw_kind
-                            : OSRS_UI_TRIGGER_VAR_TRANSMIT;
-                        if (raw_kind >= 0 && raw_kind < OSRS_UI_TRIGGER_COUNT) {
-                            component->trigger_mask |= 1u << (unsigned)raw_kind;
-                        }
-                        trigger->value_count = encoded_value_count;
-                        if (trigger->value_count > OSRS_UI_INTERFACE_MAX_TRIGGER_VALUES) {
-                            trigger->value_count = OSRS_UI_INTERFACE_MAX_TRIGGER_VALUES;
-                        }
-                    }
                     for (int v = 0; v < encoded_value_count; v++) {
-                        int32_t value = osrs_ui_read_i32(&r);
-                        if (trigger && v < OSRS_UI_INTERFACE_MAX_TRIGGER_VALUES) {
-                            trigger->values[v] = value;
-                        }
+                        osrs_ui_read_i32(&r);
                     }
                 }
             }
@@ -491,16 +348,6 @@ static const OsrsUiInterfaceGroup* osrs_ui_interface_group(
         if (store->groups[i].name && strcmp(store->groups[i].name, name) == 0) {
             return &store->groups[i];
         }
-    }
-    return NULL;
-}
-
-static OSRS_UI_UNUSED_FUNCTION const OsrsUiComponent* osrs_ui_find_component(
-    const OsrsUiInterfaceGroup* group,
-    uint32_t id
-) {
-    for (int i = 0; i < group->component_count; i++) {
-        if (group->components[i].id == id) return &group->components[i];
     }
     return NULL;
 }
@@ -602,33 +449,6 @@ static int osrs_ui_find_component_rect_recursive(
     return 0;
 }
 
-static int osrs_ui_find_component_rect_by_id_recursive(
-    const OsrsUiInterfaceGroup* group,
-    const OsrsUiComponent* component,
-    uint32_t component_id,
-    Rectangle rect,
-    Rectangle* out_rect
-) {
-    if (component->id == component_id) {
-        *out_rect = rect;
-        return 1;
-    }
-
-    Rectangle child_parent = component->type == 0
-        ? osrs_ui_rect_expand_to_scroll(rect, component)
-        : rect;
-    for (int i = 0; i < group->component_count; i++) {
-        const OsrsUiComponent* child = &group->components[i];
-        if (child->parent_id != (int32_t)component->id) continue;
-        Rectangle child_rect = osrs_ui_layout_component(child, child_parent, 0);
-        if (osrs_ui_find_component_rect_by_id_recursive(
-                group, child, component_id, child_rect, out_rect)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static int osrs_ui_interfaces_component_rect(
     const OsrsUiInterfaceStore* store,
     const char* group_name,
@@ -645,118 +465,6 @@ static int osrs_ui_interfaces_component_rect(
             component, mount, osrs_ui_component_uses_mount_rect(component));
         if (osrs_ui_find_component_rect_recursive(
                 group, component, component_name, rect, out_rect)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static OSRS_UI_UNUSED_FUNCTION int osrs_ui_interfaces_component_rect_by_id(
-    const OsrsUiInterfaceStore* store,
-    const char* group_name,
-    uint32_t component_id,
-    Rectangle mount,
-    Rectangle* out_rect
-) {
-    const OsrsUiInterfaceGroup* group = osrs_ui_interface_group(store, group_name);
-    if (!group || !out_rect) return 0;
-    for (int i = 0; i < group->component_count; i++) {
-        const OsrsUiComponent* component = &group->components[i];
-        if (component->parent_id != -1) continue;
-        Rectangle rect = osrs_ui_layout_component(
-            component, mount, osrs_ui_component_uses_mount_rect(component));
-        if (osrs_ui_find_component_rect_by_id_recursive(
-                group, component, component_id, rect, out_rect)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int osrs_ui_component_hit_testable(const OsrsUiComponent* component) {
-    return component->click_mask != 0
-        || component->action_count > 0
-        || component->listener_mask & OSRS_UI_COMPONENT_HIT_LISTENERS
-        || (component->target_verb && component->target_verb[0])
-        || component->no_click_through;
-}
-
-static int osrs_ui_point_in_rect(Vector2 point, Rectangle rect) {
-    return point.x >= rect.x
-        && point.x < rect.x + rect.width
-        && point.y >= rect.y
-        && point.y < rect.y + rect.height;
-}
-
-static void osrs_ui_copy_hit_result(
-    const OsrsUiComponent* component,
-    Rectangle rect,
-    OsrsUiHitResult* out_hit
-) {
-    memset(out_hit, 0, sizeof(*out_hit));
-    out_hit->component_id = component->id;
-    out_hit->group_id = component->group_id;
-    out_hit->file_id = component->file_id;
-    out_hit->rect = rect;
-    out_hit->click_mask = component->click_mask;
-    out_hit->listener_mask = component->listener_mask;
-    out_hit->trigger_mask = component->trigger_mask;
-    out_hit->action_count = component->action_count;
-    if (component->name) snprintf(out_hit->name, sizeof(out_hit->name), "%s", component->name);
-    if (component->text) snprintf(out_hit->text, sizeof(out_hit->text), "%s", component->text);
-    if (component->target_verb) {
-        snprintf(out_hit->target_verb, sizeof(out_hit->target_verb), "%s", component->target_verb);
-    }
-    for (int i = 0; i < component->action_count && i < OSRS_UI_INTERFACE_MAX_ACTIONS; i++) {
-        if (component->actions[i]) {
-            snprintf(out_hit->actions[i], sizeof(out_hit->actions[i]), "%s", component->actions[i]);
-        }
-    }
-}
-
-static int osrs_ui_hit_test_component_recursive(
-    const OsrsUiInterfaceGroup* group,
-    const OsrsUiComponent* component,
-    Rectangle rect,
-    Vector2 point,
-    OsrsUiHitResult* out_hit
-) {
-    if (component->hidden || !osrs_ui_point_in_rect(point, rect)) return 0;
-
-    Rectangle child_parent = component->type == 0
-        ? osrs_ui_rect_expand_to_scroll(rect, component)
-        : rect;
-    for (int i = group->component_count - 1; i >= 0; i--) {
-        const OsrsUiComponent* child = &group->components[i];
-        if (child->parent_id != (int32_t)component->id) continue;
-        Rectangle child_rect = osrs_ui_layout_component(child, child_parent, 0);
-        if (osrs_ui_hit_test_component_recursive(group, child, child_rect, point, out_hit)) {
-            return 1;
-        }
-    }
-
-    if (osrs_ui_component_hit_testable(component)) {
-        osrs_ui_copy_hit_result(component, rect, out_hit);
-        return 1;
-    }
-    return 0;
-}
-
-static OSRS_UI_UNUSED_FUNCTION int osrs_ui_interfaces_hit_test(
-    const OsrsUiInterfaceStore* store,
-    const char* group_name,
-    Rectangle mount,
-    Vector2 point,
-    OsrsUiHitResult* out_hit
-) {
-    const OsrsUiInterfaceGroup* group = osrs_ui_interface_group(store, group_name);
-    if (!group || !out_hit) return 0;
-    for (int i = group->component_count - 1; i >= 0; i--) {
-        const OsrsUiComponent* component = &group->components[i];
-        if (component->parent_id != -1) continue;
-        Rectangle rect = osrs_ui_layout_component(
-            component, mount, osrs_ui_component_uses_mount_rect(component));
-        if (osrs_ui_hit_test_component_recursive(group, component, rect, point, out_hit)) {
             return 1;
         }
     }

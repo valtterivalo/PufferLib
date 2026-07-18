@@ -792,15 +792,6 @@ static inline const OsrsCombatProjectileProfile* osrs_combat_projectile_profile(
     return &row->projectile;
 }
 
-static inline OsrsCombatProjectileVisual osrs_combat_visual_ranged_projectile(
-    uint8_t item_db_idx, OsrsCombatProjectileVisual fallback
-) {
-    if (item_db_idx >= NUM_ITEMS) return fallback;
-    const OsrsCombatWeaponProjectileDefault* default_projectile =
-        osrs_combat_visual_default_ranged_projectile(ITEM_DATABASE[item_db_idx].item_id);
-    return default_projectile ? default_projectile->visual : fallback;
-}
-
 static inline const OsrsCombatProjectileProfile* osrs_combat_visual_ranged_projectile_profile(
     uint8_t item_db_idx, OsrsCombatProjectileVisual fallback
 ) {

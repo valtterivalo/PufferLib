@@ -322,17 +322,6 @@ static inline int osrs_emit_combat_projectile_profile_player_to_npc(
     return idx;
 }
 
-static inline int osrs_emit_projectile_player_to_npc(
-    EncounterOverlay* overlay,
-    const OsrsProjectileEventSpec* spec,
-    int target_npc_slot
-) {
-    int idx = osrs_emit_projectile_with_spec(overlay, spec, 1);
-    encounter_set_projectile_source_player(overlay, idx);
-    encounter_set_projectile_target_npc_slot(overlay, idx, target_npc_slot);
-    return idx;
-}
-
 static inline int osrs_emit_projectile_npc_to_player(
     EncounterOverlay* overlay,
     const OsrsProjectileEventSpec* spec,
