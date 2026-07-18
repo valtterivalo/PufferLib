@@ -4,20 +4,7 @@
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
 
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define ASSERT_INT_EQ(label, actual, expected) do { \
-    tests_run++; \
-    if ((actual) == (expected)) { \
-        tests_passed++; \
-    } else { \
-        tests_failed++; \
-        printf("  FAIL: %s - got %d, expected %d\n", \
-            (label), (actual), (expected)); \
-    } \
-} while (0)
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 #define ASSERT_CONTAINS(label, haystack, needle) do { \
     tests_run++; \
@@ -283,11 +270,5 @@ int main(void) {
     test_lab_spawn_wave_and_delete();
     test_lab_snapshot_restore_round_trip();
 
-    printf("\n%d/%d tests passed", tests_passed, tests_run);
-    if (tests_failed) {
-        printf(" (%d failed)\n", tests_failed);
-        return 1;
-    }
-    printf("\n");
-    return 0;
+    return osrs_test_summary();
 }

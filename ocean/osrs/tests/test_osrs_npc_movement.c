@@ -8,16 +8,7 @@ typedef struct {
     int hold_overlap;
 } TestNpcMoveGrid;
 
-static int tests_run = 0;
-static int tests_failed = 0;
-
-#define CHECK(label, cond) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        tests_failed++; \
-        printf("  FAIL: %s\n", (label)); \
-    } \
-} while (0)
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 static int test_npc_move_blocked(void* ctx, int x, int y, int size) {
     TestNpcMoveGrid* grid = (TestNpcMoveGrid*)ctx;
@@ -163,10 +154,5 @@ int main(void) {
     test_shared_melee_policy();
     test_shared_current_overlap();
 
-    if (tests_failed) {
-        printf("FAIL: %d of %d checks failed\n", tests_failed, tests_run);
-        return 1;
-    }
-    printf("PASS: %d checks\n", tests_run);
-    return 0;
+    return osrs_test_summary();
 }

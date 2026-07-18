@@ -5,15 +5,7 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define CHECK(label, cond) do { \
-    tests_run++; \
-    if (cond) { tests_passed++; } \
-    else { tests_failed++; printf("  FAIL: %s\n", label); } \
-} while (0)
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 static void loadout_reset(ColosseumState* s, ColosseumContext* ctx, int mode,
                           float frac, uint32_t seed) {
@@ -455,6 +447,5 @@ int main(int argc, char** argv) {
     test_memo_result_preserving();
     test_confliction_reference();
     test_best_is_locally_optimal();
-    printf("\n%d run, %d passed, %d failed\n", tests_run, tests_passed, tests_failed);
-    return tests_failed == 0 ? 0 : 1;
+    return osrs_test_summary();
 }

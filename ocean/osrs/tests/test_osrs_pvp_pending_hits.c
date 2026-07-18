@@ -6,20 +6,7 @@
 
 #include "ocean/osrs/osrs_pvp_combat.h"
 
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define ASSERT_INT_EQ(label, actual, expected) do { \
-    tests_run++; \
-    if ((actual) == (expected)) { \
-        tests_passed++; \
-    } else { \
-        tests_failed++; \
-        printf("  FAIL: %s - got %d, expected %d\n", \
-            (label), (actual), (expected)); \
-    } \
-} while (0)
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 static void assert_child_aborts(const char* label, void (*fn)(void)) {
     fflush(NULL);
@@ -101,6 +88,5 @@ int main(void) {
     test_pvp_queue_overflow_aborts();
     test_pvp_remove_compacts_and_clears_tail();
 
-    printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-    return tests_failed == 0 ? 0 : 1;
+    return osrs_test_summary();
 }

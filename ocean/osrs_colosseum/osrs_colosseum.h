@@ -246,7 +246,6 @@ void puf_step(Env* env) {
     if (anneal_ticks > 0 && anneal_start < 1.0f) {
         float frac = (float)env->damage_scale_anneal_step / (float)anneal_ticks;
         if (frac > 1.0f) frac = 1.0f;
-        if (frac < 0.0f) frac = 0.0f;
         env->context.config.player_damage_received_scale =
             anneal_start + (1.0f - anneal_start) * frac;
     }

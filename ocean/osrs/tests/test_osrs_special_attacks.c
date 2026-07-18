@@ -5,15 +5,7 @@
 #include "ocean/osrs/osrs_encounter.h"
 #include "ocean/osrs/osrs_special_attacks.h"
 
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define CHECK(label, cond) do { \
-    tests_run++; \
-    if (cond) { tests_passed++; } \
-    else { tests_failed++; printf("  FAIL: %s\n", (label)); } \
-} while (0)
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 static Player make_maxed_player(void) {
     Player p;
@@ -659,8 +651,5 @@ int main(void) {
     test_claws_and_def_drains();
     test_item_effect_laws();
 
-    printf("\n%d/%d passed", tests_passed, tests_run);
-    if (tests_failed) printf(", %d FAILED", tests_failed);
-    printf("\n");
-    return tests_failed ? 1 : 0;
+    return osrs_test_summary();
 }

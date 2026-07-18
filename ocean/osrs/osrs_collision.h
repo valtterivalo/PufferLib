@@ -105,16 +105,6 @@ static inline void collision_map_put(CollisionMap* map, int key, CollisionRegion
     fprintf(stderr, "collision_map_put: map full (capacity %d)\n", REGION_MAP_CAPACITY);
 }
 
-static inline CollisionRegion* collision_map_get_or_create(CollisionMap* map, int x, int y) {
-    int key = collision_region_hash(x, y);
-    CollisionRegion* region = collision_map_get(map, key);
-    if (region == NULL) {
-        region = (CollisionRegion*)calloc(1, sizeof(CollisionRegion));
-        collision_map_put(map, key, region);
-    }
-    return region;
-}
-
 static inline void collision_map_free(CollisionMap* map) {
     if (map == NULL) return;
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
@@ -134,39 +124,6 @@ static inline int collision_get_flags(const CollisionMap* map, int height, int x
     int ly = collision_local(y);
     int h = height < 0 ? 0 : (height >= REGION_HEIGHT_LEVELS ? REGION_HEIGHT_LEVELS - 1 : height);
     return region->flags[h][lx][ly];
-}
-
-static inline void collision_set_flag(CollisionMap* map, int height, int x, int y, int flag) {
-    CollisionRegion* region = collision_map_get_or_create(map, x, y);
-    int lx = collision_local(x);
-    int ly = collision_local(y);
-    int h = height < 0 ? 0 : (height >= REGION_HEIGHT_LEVELS ? REGION_HEIGHT_LEVELS - 1 : height);
-    region->flags[h][lx][ly] |= flag;
-}
-
-static inline void collision_unset_flag(CollisionMap* map, int height, int x, int y, int flag) {
-    int key = collision_region_hash(x, y);
-    CollisionRegion* region = collision_map_get(map, key);
-    if (region == NULL) return;
-    int lx = collision_local(x);
-    int ly = collision_local(y);
-    int h = height < 0 ? 0 : (height >= REGION_HEIGHT_LEVELS ? REGION_HEIGHT_LEVELS - 1 : height);
-    region->flags[h][lx][ly] &= ~flag;
-}
-
-static inline void collision_mark_blocked(CollisionMap* map, int height, int x, int y) {
-    collision_set_flag(map, height, x, y, COLLISION_BLOCKED);
-}
-
-static inline void collision_mark_occupant(CollisionMap* map, int height, int x, int y,
-                                           int width, int length, int impenetrable) {
-    int flag = COLLISION_BLOCKED;
-    if (impenetrable) flag |= COLLISION_IMPENETRABLE_BLOCKED;
-    for (int xi = x; xi < x + width; xi++) {
-        for (int yi = y; yi < y + length; yi++) {
-            collision_set_flag(map, height, xi, yi, flag);
-        }
-    }
 }
 
 static inline int collision_is_inactive(const CollisionMap* map, int height, int x, int y, int flag) {
@@ -313,29 +270,6 @@ static inline CollisionMap* collision_map_load(const char* path) {
     return map;
 }
 
-static inline int collision_map_save(const CollisionMap* map, const char* path) {
-    FILE* f = fopen(path, "wb");
-    if (f == NULL) return -1;
-
-    uint32_t magic = COLLISION_MAP_MAGIC;
-    uint32_t version = COLLISION_MAP_VERSION;
-    uint32_t region_count = (uint32_t)map->count;
-
-    fwrite(&magic, 4, 1, f);
-    fwrite(&version, 4, 1, f);
-    fwrite(&region_count, 4, 1, f);
-
-    for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
-        if (map->entries[i].key == -1) continue;
-        int32_t key = map->entries[i].key;
-        fwrite(&key, 4, 1, f);
-        fwrite(map->entries[i].region->flags, 1, sizeof(map->entries[i].region->flags), f);
-    }
-
-    fclose(f);
-    return 0;
-}
-
 #define LOS_FULL_MASK   0x20000
 #define LOS_EAST_MASK   0x01000
 #define LOS_WEST_MASK   0x10000
@@ -377,19 +311,15 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
 
     if (los_aabb_overlap(x1, y1, src_size, x2, y2, 1)) return 0;
 
-    if (range > 0) {
-        int adx = dx < 0 ? -dx : dx;
-        int ady = dy < 0 ? -dy : dy;
-        if (adx > range || ady > range) return 0;
-    }
-
     int adx = dx < 0 ? -dx : dx;
     int ady = dy < 0 ? -dy : dy;
+
+    if (range > 0 && (adx > range || ady > range)) return 0;
 
     if (adx > ady) {
         int x_tile = x1;
         int y_fp = y1 * LOS_FP_SCALE + LOS_FP_HALF;
-        int slope = (adx > 0) ? ((dy * LOS_FP_SCALE) / adx) : 0;
+        int slope = (dy * LOS_FP_SCALE) / adx;
         int x_inc = (dx > 0) ? 1 : -1;
         uint32_t x_mask = (dx > 0) ? (LOS_WEST_MASK | LOS_FULL_MASK)
                                     : (LOS_EAST_MASK | LOS_FULL_MASK);
@@ -412,7 +342,7 @@ static int has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
     } else if (ady > 0) {
         int y_tile = y1;
         int x_fp = x1 * LOS_FP_SCALE + LOS_FP_HALF;
-        int slope = (ady > 0) ? ((dx * LOS_FP_SCALE) / ady) : 0;
+        int slope = (dx * LOS_FP_SCALE) / ady;
         int y_inc = (dy > 0) ? 1 : -1;
         uint32_t y_mask = (dy > 0) ? (LOS_SOUTH_MASK | LOS_FULL_MASK)
                                     : (LOS_NORTH_MASK | LOS_FULL_MASK);
@@ -480,16 +410,6 @@ static inline int entity_has_line_of_sight(
     if (t_py >= ty + t_size) t_py = ty + t_size - 1;
 
     return has_line_of_sight(blockers, blocker_count, a_px, a_py, t_px, t_py, 1, range);
-}
-
-static inline int npc_has_line_of_sight(const LOSBlocker* blockers, int blocker_count,
-                                        int nx, int ny, int npc_size,
-                                        int tx, int ty, int range) {
-    return entity_has_line_of_sight(
-        blockers, blocker_count,
-        nx, ny, npc_size,
-        tx, ty, 1,
-        range);
 }
 
 #endif
