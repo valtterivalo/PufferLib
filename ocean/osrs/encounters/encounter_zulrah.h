@@ -287,10 +287,11 @@ static const int ZUL_ROT_LENGTHS[ZUL_NUM_ROTATIONS] = { 11, 11, 12, 13 };
 #undef ZA
 #undef ZE
 
-static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = {
-    ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM,
-    ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM, ZUL_OFFENSIVE_DIM,
-};
+#define ZUL_ACTION_DIMS_INIT { \
+    ZUL_MOVE_DIM, ZUL_ATTACK_DIM, ZUL_PRAYER_DIM, \
+    ZUL_FOOD_DIM, ZUL_POTION_DIM, ZUL_SPEC_DIM, ZUL_OFFENSIVE_DIM \
+}
+static const int ZUL_ACTION_HEAD_DIMS[ZUL_NUM_ACTION_HEADS] = ZUL_ACTION_DIMS_INIT;
 
 #define ZUL_NUM_GEAR_TIERS 3
 #define ZUL_GEAR_TIER_FIXED 0
@@ -2004,6 +2005,30 @@ static float zul_current_kill_progress(const ZulrahState* s) {
     return 1.0f - (float)s->zulrah.current_hitpoints / (float)max_hp;
 }
 
+typedef struct {
+    float win;
+    float score;
+} ZulEpisodeOutcome;
+
+static ZulEpisodeOutcome zul_episode_outcome(const ZulrahState* s) {
+    float kills = (float)s->kills_this_episode;
+    float win = (s->episode_mode == ZUL_EPISODE_TRIP)
+        ? kills
+        : ((s->winner == ZUL_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f);
+    float partial = (s->episode_mode == ZUL_EPISODE_TRIP)
+        ? zul_current_kill_progress(s)
+        : 0.0f;
+    float speed_bonus = (s->episode_mode == ZUL_EPISODE_TRIP)
+        ? s->score_speed_bonus_sum
+        : (win > 0.0f
+            ? zul_score_speed_bonus_for_duration(s->tick)
+            : 0.0f);
+    return (ZulEpisodeOutcome){
+        .win = win,
+        .score = win + partial + speed_bonus,
+    };
+}
+
 static void zul_clear_active_kill(ZulrahState* s) {
     memset(s->clouds, 0, sizeof(s->clouds));
     memset(s->pending_clouds, 0, sizeof(s->pending_clouds));
@@ -2158,11 +2183,7 @@ static void zul_reset(EncounterState* state, EncounterContext* context, uint32_t
     zul_start_active_kill(s);
 }
 
-static void zul_step(EncounterState* state, EncounterContext* context, const int* actions) {
-    (void)context;
-    ZulrahState* s = (ZulrahState*)state;
-    if (s->episode_over) return;
-
+static void zul_step_tick(ZulrahState* s, const int* actions) {
     s->reward = 0.0f;
     s->damage_dealt_this_tick = 0.0f;
     s->damage_received_this_tick = 0.0f;
@@ -2193,7 +2214,7 @@ static void zul_step(EncounterState* state, EncounterContext* context, const int
             s->zulrah.npc_visible = 0;
             zul_finish_boss_death(s);
         }
-        goto finish;
+        return;
     }
 
     zul_update_npc_anim_lifetime(s);
@@ -2260,7 +2281,7 @@ static void zul_step(EncounterState* state, EncounterContext* context, const int
         }
     }
 
-    OsrsPlayerStepResult step_result = osrs_encounter_player_step(&(OsrsPlayerStepInput){
+    OsrsPlayerStepInput step_input = {
         .player = &s->player,
         .interaction = &s->interaction,
         .target_lookup = zul_lookup_player_attack_target,
@@ -2284,7 +2305,8 @@ static void zul_step(EncounterState* state, EncounterContext* context, const int
             .arena_w = ZUL_ARENA_SIZE,
             .arena_h = ZUL_ARENA_SIZE,
         },
-    });
+    };
+    OsrsPlayerStepResult step_result = osrs_encounter_player_step(&step_input);
     s->player_moved_this_tick = step_result.moved;
     s->player_chased_target_this_tick = step_result.chased_target;
 
@@ -2309,14 +2331,14 @@ static void zul_step(EncounterState* state, EncounterContext* context, const int
 
     if (s->zulrah_visible && s->zulrah.current_hitpoints <= 0) {
         zul_record_boss_kill(s);
-        goto finish;
+        return;
     }
 
     zul_pending_cloud_tick(s);
     zul_cloud_tick(s);
     if (s->player.current_hitpoints <= 0) {
         zul_record_player_loss(s);
-        goto finish;
+        return;
     }
 
     zul_phase_tick(s);
@@ -2335,13 +2357,19 @@ static void zul_step(EncounterState* state, EncounterContext* context, const int
 
     if (s->player.current_hitpoints <= 0) {
         zul_record_player_loss(s);
-        goto finish;
+        return;
     }
     if (s->tick >= ZUL_MAX_TICKS) {
         zul_record_episode_timeout(s);
-        goto finish;
+        return;
     }
-finish:
+}
+
+static void zul_step(EncounterState* state, EncounterContext* context, const int* actions) {
+    (void)context;
+    ZulrahState* s = (ZulrahState*)state;
+    if (s->episode_over) return;
+    zul_step_tick(s, actions);
     s->reward = zul_compute_reward(s);
     s->episode_return += s->reward;
 }
@@ -2605,18 +2633,8 @@ static void* zul_get_log(EncounterState* state, EncounterContext* context) {
         s->log.episode_return += s->episode_return;
         s->log.episode_length += (float)s->tick;
         float kills = (float)s->kills_this_episode;
-        float win = (s->episode_mode == ZUL_EPISODE_TRIP)
-            ? kills
-            : ((s->winner == ZUL_OUTCOME_PLAYER_WON) ? 1.0f : 0.0f);
-        float partial = (s->episode_mode == ZUL_EPISODE_TRIP)
-            ? zul_current_kill_progress(s)
-            : 0.0f;
-        float speed_bonus = (s->episode_mode == ZUL_EPISODE_TRIP)
-            ? s->score_speed_bonus_sum
-            : (win > 0.0f
-                ? zul_score_speed_bonus_for_duration(s->tick)
-                : 0.0f);
-        s->log.wins += win;
+        ZulEpisodeOutcome outcome = zul_episode_outcome(s);
+        s->log.wins += outcome.win;
         s->log.zulrah_kills += kills;
         s->log.damage_dealt += s->total_damage_dealt;
         s->log.damage_received += s->total_damage_received;
@@ -2633,8 +2651,8 @@ static void* zul_get_log(EncounterState* state, EncounterContext* context) {
             abort();
         }
         s->log.zulrah_tier_n[tier] += 1.0f;
-        s->log.zulrah_tier_wins[tier] += win;
-        s->log.zulrah_tier_score_sum[tier] += win + partial + speed_bonus;
+        s->log.zulrah_tier_wins[tier] += outcome.win;
+        s->log.zulrah_tier_score_sum[tier] += outcome.score;
         s->log.zulrah_tier_damage_received[tier] += s->total_damage_received;
         s->log.zulrah_tier_episode_length[tier] += (float)s->tick;
         s->log.zulrah_tier_cloud_occupancy_ticks[tier] +=
@@ -2674,7 +2692,7 @@ static void zul_emit_player_projectile_profile(
     int p_start_delay = s->player_attack_timing.visual_start_delay_ticks * 30;
     int visual_damage = sequence_index == sequence_count - 1 ? damage : 0;
 
-    (void)osrs_emit_combat_projectile_profile_player_to_npc(ov, profile, &(OsrsCombatProjectileEmitSpec){
+    OsrsCombatProjectileEmitSpec emit_spec = {
         .src_x = s->player.x,
         .src_y = s->player.y,
         .dst_x = s->zulrah.x,
@@ -2690,7 +2708,8 @@ static void zul_emit_player_projectile_profile(
         .fallback_end_h = fallback_end_h,
         .curve = 16,
         .splash_gfx_id = GFX_SPLASH,
-    });
+    };
+    (void)osrs_emit_combat_projectile_profile_player_to_npc(ov, profile, &emit_spec);
 }
 
 static void zul_emit_player_attack_projectiles(ZulrahState* s, EncounterOverlay* ov) {
@@ -2768,7 +2787,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterContext* contex
     ov->projectile_count = 0;
     for (int i = 0; i < s->attack_event_count; i++) {
         if (s->attack_events[i].style == 4) {
-            int pi = osrs_emit_projectile_with_spec(ov, &(OsrsProjectileEventSpec){
+            OsrsProjectileEventSpec spawn_spec = {
                 .src_x = s->attack_events[i].src_x,
                 .src_y = s->attack_events[i].src_y,
                 .dst_x = s->attack_events[i].dst_x,
@@ -2784,7 +2803,8 @@ static void zul_render_post_tick(EncounterState* state, EncounterContext* contex
                 .dst_size = 1,
                 .model_id = GFX_SNAKELING_SPAWN_MODEL,
                 .anim_id = GFX_SNAKELING_SPAWN_ANIM,
-            }, 0);
+            };
+            int pi = osrs_emit_projectile_with_spec(ov, &spawn_spec, 0);
             encounter_set_projectile_source_npc_slot(ov, pi, 0);
         } else if (s->attack_events[i].style == 2) {
             continue;
@@ -2793,7 +2813,7 @@ static void zul_render_post_tick(EncounterState* state, EncounterContext* contex
                 ? GFX_RANGED_PROJ_MODEL : GFX_MAGIC_PROJ_MODEL;
             int zul_proj_anim = (s->attack_events[i].style == 0)
                 ? GFX_RANGED_PROJ_ANIM : GFX_MAGIC_PROJ_ANIM;
-            (void)osrs_emit_projectile_npc_to_player(ov, &(OsrsProjectileEventSpec){
+            OsrsProjectileEventSpec attack_spec = {
                 .src_x = s->attack_events[i].src_x,
                 .src_y = s->attack_events[i].src_y,
                 .dst_x = s->attack_events[i].dst_x,
@@ -2809,11 +2829,12 @@ static void zul_render_post_tick(EncounterState* state, EncounterContext* contex
                 .dst_size = 1,
                 .model_id = zul_proj_model,
                 .anim_id = zul_proj_anim,
-            }, 0);
+            };
+            (void)osrs_emit_projectile_npc_to_player(ov, &attack_spec, 0);
         }
     }
     for (int i = 0; i < s->cloud_event_count; i++) {
-        int pi = osrs_emit_projectile_with_spec(ov, &(OsrsProjectileEventSpec){
+        OsrsProjectileEventSpec cloud_spec = {
             .src_x = s->cloud_events[i].src_x,
             .src_y = s->cloud_events[i].src_y,
             .dst_x = s->cloud_events[i].dst_x,
@@ -2829,7 +2850,8 @@ static void zul_render_post_tick(EncounterState* state, EncounterContext* contex
             .dst_size = 1,
             .model_id = GFX_CLOUD_PROJ_MODEL,
             .anim_id = GFX_CLOUD_PROJ_ANIM,
-        }, 0);
+        };
+        int pi = osrs_emit_projectile_with_spec(ov, &cloud_spec, 0);
         encounter_set_projectile_source_npc_slot(ov, pi, 0);
     }
     zul_emit_player_attack_projectiles(s, ov);
@@ -2949,6 +2971,7 @@ static void zul_destroy_context(EncounterContext* context) {
 static void zul_init_state_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
     memset(state, 0, sizeof(ZulrahState));
+    ((ZulrahState*)state)->reward_config = zul_default_reward_config();
 }
 
 static const EncounterDef ENCOUNTER_ZULRAH = {
