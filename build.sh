@@ -146,6 +146,15 @@ else
     echo "Error: environment '$ENV' not found" && exit 1
 fi
 
+case "$ENV" in
+    osrs_*)
+        python3 ocean/osrs/scripts/osrs_asset_manifest.py generate-c-header \
+            ocean/osrs/asset_manifest.json \
+            --output ocean/osrs/osrs_assets_generated.h
+        bash ocean/osrs/scripts/setup-data.sh
+        ;;
+esac
+
 OUTPUT_NAME=${OUTPUT_NAME:-$ENV}
 SRC_FILE=${SRC_FILE:-$SRC_DIR/$ENV.c}
 
