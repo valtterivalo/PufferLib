@@ -86,6 +86,17 @@ static inline float inf_obs_norm_pillar_size(const InfPillar* pillar) {
     return pillar->active ? (float)INF_PILLAR_SIZE / 7.0f : 0.0f;
 }
 
+static const struct { InfNPCType type; int count; }
+INF_OBS_SLOT_LAYOUT[INF_NUM_NPC_TYPES] = {
+    { INF_NPC_MAGER, 2 },      { INF_NPC_RANGER, 2 },
+    { INF_NPC_MELEER, 2 },     { INF_NPC_BLOB, 2 },
+    { INF_NPC_BAT, 2 },        { INF_NPC_BLOB_MAGE, 2 },
+    { INF_NPC_BLOB_RANGE, 2 }, { INF_NPC_BLOB_MELEE, 2 },
+    { INF_NPC_NIBBLER, 6 },    { INF_NPC_JAD, 3 },
+    { INF_NPC_ZUK, 1 },        { INF_NPC_ZUK_SHIELD, 1 },
+    { INF_NPC_HEALER_JAD, 6 }, { INF_NPC_HEALER_ZUK, 4 },
+};
+
 static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoContext* ctx) {
     int obs_slots[INF_OBS_NPCS];
     for (int j = 0; j < INF_OBS_NPCS; j++) obs_slots[j] = -1;
@@ -94,20 +105,12 @@ static void inf_refresh_current_obs_slots_ctx(InfernoState* s, const InfernoCont
     int slot_offsets[INF_NUM_NPC_TYPES];
     int slot_max[INF_NUM_NPC_TYPES];
 
-    slot_offsets[INF_NPC_MAGER] = 0; slot_max[INF_NPC_MAGER] = 2;
-    slot_offsets[INF_NPC_RANGER] = 2; slot_max[INF_NPC_RANGER] = 2;
-    slot_offsets[INF_NPC_MELEER] = 4; slot_max[INF_NPC_MELEER] = 2;
-    slot_offsets[INF_NPC_BLOB] = 6; slot_max[INF_NPC_BLOB] = 2;
-    slot_offsets[INF_NPC_BAT] = 8; slot_max[INF_NPC_BAT] = 2;
-    slot_offsets[INF_NPC_BLOB_MAGE] = 10; slot_max[INF_NPC_BLOB_MAGE] = 2;
-    slot_offsets[INF_NPC_BLOB_RANGE] = 12; slot_max[INF_NPC_BLOB_RANGE] = 2;
-    slot_offsets[INF_NPC_BLOB_MELEE] = 14; slot_max[INF_NPC_BLOB_MELEE] = 2;
-    slot_offsets[INF_NPC_NIBBLER] = 16; slot_max[INF_NPC_NIBBLER] = 6;
-    slot_offsets[INF_NPC_JAD] = 22; slot_max[INF_NPC_JAD] = 3;
-    slot_offsets[INF_NPC_ZUK] = 25; slot_max[INF_NPC_ZUK] = 1;
-    slot_offsets[INF_NPC_ZUK_SHIELD] = 26; slot_max[INF_NPC_ZUK_SHIELD] = 1;
-    slot_offsets[INF_NPC_HEALER_JAD] = 27; slot_max[INF_NPC_HEALER_JAD] = 6;
-    slot_offsets[INF_NPC_HEALER_ZUK] = 33; slot_max[INF_NPC_HEALER_ZUK] = 4;
+    int offset = 0;
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+        slot_offsets[INF_OBS_SLOT_LAYOUT[t].type] = offset;
+        slot_max[INF_OBS_SLOT_LAYOUT[t].type] = INF_OBS_SLOT_LAYOUT[t].count;
+        offset += INF_OBS_SLOT_LAYOUT[t].count;
+    }
 
     for (int n = 0; n < INF_MAX_NPCS; n++) {
         InfNPC* npc = &s->npcs[n];
@@ -330,20 +333,10 @@ static void inf_write_obs_ctx(
 
     int slot_types[INF_OBS_NPCS];
     int st_idx = 0;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_MAGER;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_RANGER;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_MELEER;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BAT;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_MAGE;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_RANGE;
-    for (int j = 0; j < 2; j++) slot_types[st_idx++] = INF_NPC_BLOB_MELEE;
-    for (int j = 0; j < 6; j++) slot_types[st_idx++] = INF_NPC_NIBBLER;
-    for (int j = 0; j < 3; j++) slot_types[st_idx++] = INF_NPC_JAD;
-    for (int j = 0; j < 1; j++) slot_types[st_idx++] = INF_NPC_ZUK;
-    for (int j = 0; j < 1; j++) slot_types[st_idx++] = INF_NPC_ZUK_SHIELD;
-    for (int j = 0; j < 6; j++) slot_types[st_idx++] = INF_NPC_HEALER_JAD;
-    for (int j = 0; j < 4; j++) slot_types[st_idx++] = INF_NPC_HEALER_ZUK;
+    for (int t = 0; t < INF_NUM_NPC_TYPES; t++) {
+        for (int j = 0; j < INF_OBS_SLOT_LAYOUT[t].count; j++)
+            slot_types[st_idx++] = INF_OBS_SLOT_LAYOUT[t].type;
+    }
 
     for (int k = 0; k < INF_OBS_NPCS; k++) {
         int n = s->current_obs_slots[k];
@@ -354,16 +347,14 @@ static void inf_write_obs_ctx(
         int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER && type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
         int has_target_category = (type != INF_NPC_NIBBLER && type != INF_NPC_ZUK_SHIELD);
         int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
-        int has_targeted = 1;
         int has_meleer_dig = (type == INF_NPC_MELEER);
 
-        int num_features = 11;
+        int num_features = 12;
         if (has_timer) num_features += 1;
         if (has_style) num_features += 3;
         if (has_los) num_features += 1;
         if (has_scan) num_features += 3;
         if (has_target_category) num_features += 4;
-        if (has_targeted) num_features += 1;
         num_features += 1;
         num_features += 6;
         if (has_meleer_dig) num_features += 3;
@@ -428,7 +419,7 @@ static void inf_write_obs_ctx(
                 obs[i++] = (category == INF_TARGET_CATEGORY_SHIELD) ? 1.0f : 0.0f;
                 obs[i++] = (category == INF_TARGET_CATEGORY_OTHER_NPC) ? 1.0f : 0.0f;
             }
-            if (has_targeted) obs[i++] = (osrs_interaction_active(&s->interaction) && s->interaction.target_slot == n) ? 1.0f : 0.0f;
+            obs[i++] = (osrs_interaction_active(&s->interaction) && s->interaction.target_slot == n) ? 1.0f : 0.0f;
             obs[i++] = inf_npc_is_phantom_barrage_targetable_now(s, ctx, n) ? 1.0f : 0.0f;
             if (has_meleer_dig) {
                 float no_los = (float)npc->no_los_ticks / 50.0f;

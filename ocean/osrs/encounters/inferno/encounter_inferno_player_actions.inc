@@ -324,23 +324,14 @@ static int inf_oracle_overrides_overhead(int mode) {
     return mode == 5 || mode == 7 || mode == 8;
 }
 
-static int inf_oracle_overhead_action_for(const InfernoState* s, int wanted_style) {
-    (void)s;
-    int action = ENCOUNTER_OVERHEAD_NO_CHANGE;
-    if (wanted_style == ATTACK_STYLE_RANGED) {
-        action = ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
-    } else if (wanted_style == ATTACK_STYLE_MAGIC) {
-        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
-    } else if (wanted_style == ATTACK_STYLE_MELEE) {
-        action = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
-    } else {
-        return ENCOUNTER_OVERHEAD_NO_CHANGE;
-    }
-    return action;
+static int inf_oracle_overhead_action_for(int wanted_style) {
+    if (wanted_style == ATTACK_STYLE_RANGED) return ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
+    if (wanted_style == ATTACK_STYLE_MAGIC) return ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    if (wanted_style == ATTACK_STYLE_MELEE) return ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+    return ENCOUNTER_OVERHEAD_NO_CHANGE;
 }
 
-static int inf_oracle_offensive_action_for(const InfernoState* s, int wanted_offensive) {
-    (void)s;
+static int inf_oracle_offensive_action_for(int wanted_offensive) {
     if (wanted_offensive == OFFENSIVE_PRAYER_RIGOUR) {
         return ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
     }
@@ -368,11 +359,11 @@ static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* 
         if (pick.target_slot >= 0) {
             if (inf_oracle_overrides_overhead(ctx->config.oracle_mode) &&
                 pick.overhead_style != ATTACK_STYLE_NONE) {
-                prayer_act = inf_oracle_overhead_action_for(s, pick.overhead_style);
+                prayer_act = inf_oracle_overhead_action_for(pick.overhead_style);
             }
             if (inf_oracle_overrides_gear_offensive(ctx->config.oracle_mode) &&
                 pick.offensive != OFFENSIVE_PRAYER_NONE) {
-                offensive_act = inf_oracle_offensive_action_for(s, pick.offensive);
+                offensive_act = inf_oracle_offensive_action_for(pick.offensive);
             }
         }
     }

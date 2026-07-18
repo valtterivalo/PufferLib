@@ -509,6 +509,29 @@ static int inf_find_first_active_npc_of_type(const InfernoState* s, InfNPCType t
     return -1;
 }
 
+static void inf_spawn_zuk_jad(InfernoState* s, int shield_idx) {
+    int j_slot = inf_find_free_npc(s);
+    if (j_slot >= 0) {
+        inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 32);
+        s->npcs[j_slot].aggro_target = shield_idx;
+        s->npcs[j_slot].stun_timer = 7;
+    }
+}
+
+static void inf_spawn_zuk_healers(InfernoState* s, int zuk_idx) {
+    static const int healer_pos[4][2] = {
+        {16, 48}, {20, 48}, {30, 48}, {34, 48}
+    };
+    for (int h = 0; h < 4; h++) {
+        int slot = inf_find_free_npc(s);
+        if (slot >= 0) {
+            inf_init_npc(s, slot, INF_NPC_HEALER_ZUK,
+                healer_pos[h][0], healer_pos[h][1]);
+            s->npcs[slot].aggro_target = zuk_idx;
+        }
+    }
+}
+
 static void inf_seed_joseph_zuk_checkpoint(InfernoState* s) {
     if (s->start_wave < INF_START_WAVE_ZUK_JAD) return;
 
@@ -532,13 +555,7 @@ static void inf_seed_joseph_zuk_checkpoint(InfernoState* s) {
         zuk->hp = 479;
         zuk->attack_timer = INF_NPC_STATS[INF_NPC_ZUK].attack_speed;
         s->min_zuk_hp_seen = (float)zuk->hp;
-
-        int j_slot = inf_find_free_npc(s);
-        if (j_slot >= 0) {
-            inf_init_npc(s, j_slot, INF_NPC_JAD, 24, 32);
-            s->npcs[j_slot].aggro_target = shield_idx;
-            s->npcs[j_slot].stun_timer = 7;
-        }
+        inf_spawn_zuk_jad(s, shield_idx);
         return;
     }
 
@@ -548,18 +565,7 @@ static void inf_seed_joseph_zuk_checkpoint(InfernoState* s) {
     zuk->hp = 239;
     zuk->attack_timer = 7;
     s->min_zuk_hp_seen = (float)zuk->hp;
-
-    static const int healer_pos[4][2] = {
-        {16, 48}, {20, 48}, {30, 48}, {34, 48}
-    };
-    for (int h = 0; h < 4; h++) {
-        int slot = inf_find_free_npc(s);
-        if (slot >= 0) {
-            inf_init_npc(s, slot, INF_NPC_HEALER_ZUK,
-                healer_pos[h][0], healer_pos[h][1]);
-            s->npcs[slot].aggro_target = zuk_idx;
-        }
-    }
+    inf_spawn_zuk_healers(s, zuk_idx);
 }
 
 static void inf_spawn_wave(InfernoState* s) {

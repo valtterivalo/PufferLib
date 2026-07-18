@@ -565,8 +565,7 @@ static void inf_render_post_tick_ctx(
             int p_start_delay = s->player_attack_timing.visual_start_delay_ticks * 30;
             uint8_t weapon = s->player.equipped[GEAR_SLOT_WEAPON];
 
-            if (s->player_attack_style_id == ATTACK_STYLE_MAGIC) {
-            } else {
+            if (s->player_attack_style_id != ATTACK_STYLE_MAGIC) {
                 const OsrsCombatProjectileProfile* base_profile =
                     osrs_combat_visual_ranged_projectile_profile(
                         weapon, OSRS_COMBAT_PROJECTILE_NONE);
