@@ -64,50 +64,41 @@ static const char* human_gui_prayer_name(GuiPrayerIdx pidx) {
 }
 
 static int human_apply_prayer_idx(HumanInput* hi, Player* p, GuiPrayerIdx pidx) {
-    switch (pidx) {
-        case GUI_PRAY_PROTECT_MAGIC:
-            hi->pending_prayer = human_overhead_click_action(
-                p, PRAYER_PROTECT_MAGIC, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC);
-            human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            return 1;
-        case GUI_PRAY_PROTECT_MISSILES:
-            hi->pending_prayer = human_overhead_click_action(
-                p, PRAYER_PROTECT_RANGED, ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
-            human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            return 1;
-        case GUI_PRAY_PROTECT_MELEE:
-            hi->pending_prayer = human_overhead_click_action(
-                p, PRAYER_PROTECT_MELEE, ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE);
-            human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            return 1;
-        case GUI_PRAY_SMITE:
-            hi->pending_prayer = human_overhead_click_action(
-                p, PRAYER_SMITE, ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE);
-            human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            return 1;
-        case GUI_PRAY_REDEMPTION:
-            hi->pending_prayer = human_overhead_click_action(
-                p, PRAYER_REDEMPTION, ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION);
-            human_input_queue_overhead_prayer(hi, hi->pending_prayer);
-            return 1;
-        case GUI_PRAY_PIETY:
-            hi->pending_offensive_prayer = human_offensive_click_action(
-                p, OFFENSIVE_PRAYER_PIETY, ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY);
-            human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            return 1;
-        case GUI_PRAY_RIGOUR:
-            hi->pending_offensive_prayer = human_offensive_click_action(
-                p, OFFENSIVE_PRAYER_RIGOUR, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR);
-            human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            return 1;
-        case GUI_PRAY_AUGURY:
-            hi->pending_offensive_prayer = human_offensive_click_action(
-                p, OFFENSIVE_PRAYER_AUGURY, ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY);
-            human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
-            return 1;
-        default:
-            return 0;
+    static const struct {
+        GuiPrayerIdx idx;
+        OverheadPrayer target;
+        int refresh_action;
+    } overhead_rows[] = {
+        { GUI_PRAY_PROTECT_MAGIC, PRAYER_PROTECT_MAGIC, ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC },
+        { GUI_PRAY_PROTECT_MISSILES, PRAYER_PROTECT_RANGED, ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED },
+        { GUI_PRAY_PROTECT_MELEE, PRAYER_PROTECT_MELEE, ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE },
+        { GUI_PRAY_SMITE, PRAYER_SMITE, ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE },
+        { GUI_PRAY_REDEMPTION, PRAYER_REDEMPTION, ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION },
+    };
+    static const struct {
+        GuiPrayerIdx idx;
+        OffensivePrayer target;
+        int refresh_action;
+    } offensive_rows[] = {
+        { GUI_PRAY_PIETY, OFFENSIVE_PRAYER_PIETY, ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY },
+        { GUI_PRAY_RIGOUR, OFFENSIVE_PRAYER_RIGOUR, ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR },
+        { GUI_PRAY_AUGURY, OFFENSIVE_PRAYER_AUGURY, ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY },
+    };
+    for (size_t i = 0; i < sizeof(overhead_rows) / sizeof(overhead_rows[0]); i++) {
+        if (overhead_rows[i].idx != pidx) continue;
+        hi->pending_prayer = human_overhead_click_action(
+            p, overhead_rows[i].target, overhead_rows[i].refresh_action);
+        human_input_queue_overhead_prayer(hi, hi->pending_prayer);
+        return 1;
     }
+    for (size_t i = 0; i < sizeof(offensive_rows) / sizeof(offensive_rows[0]); i++) {
+        if (offensive_rows[i].idx != pidx) continue;
+        hi->pending_offensive_prayer = human_offensive_click_action(
+            p, offensive_rows[i].target, offensive_rows[i].refresh_action);
+        human_input_queue_offensive_prayer(hi, hi->pending_offensive_prayer);
+        return 1;
+    }
+    return 0;
 }
 
 static int human_gui_spell_idx_at(GuiState* gs, int mouse_x, int mouse_y) {

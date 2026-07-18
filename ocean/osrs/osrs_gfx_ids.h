@@ -1,7 +1,6 @@
 #ifndef OSRS_GFX_IDS_H
 #define OSRS_GFX_IDS_H
 
-#define GFX_RUNE_ARROW      15
 #define GFX_RUNE_ARROW_LAUNCH 24
 #define GFX_SPLASH          85
 #define GFX_TRIDENT_CAST    665
@@ -12,7 +11,6 @@
 #define GFX_TUMEKENS_SHADOW_IMPACT 2127
 #define GFX_BLOWPIPE_SPEC   1043
 #define GFX_DRAGON_ARROW_LAUNCH 1116
-#define GFX_DRAGON_ARROW    1120
 #define GFX_DRAGON_DART     1122
 
 #endif

@@ -1925,6 +1925,15 @@ static void gui_inv_update_potion_doses(GuiState* gs, InvSlotType type,
     }
 }
 
+static int gui_player_loadout_contains(const Player* p, uint8_t item_db_idx) {
+    for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
+        for (int i = 0; i < p->num_items_in_slot[g]; i++) {
+            if (p->inventory[g][i] == item_db_idx) return 1;
+        }
+    }
+    return 0;
+}
+
 static void gui_update_inventory(GuiState* gs, Player* p) {
     for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
         uint8_t prev = gs->inv_prev_equipped[s];
@@ -1934,13 +1943,7 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
         if (curr != ITEM_NONE && prev != ITEM_NONE) {
             int src = gui_inv_find_equipment(gs, curr);
             if (src >= 0) {
-                int in_loadout = 0;
-                for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
-                    for (int i = 0; i < p->num_items_in_slot[g]; i++) {
-                        if (p->inventory[g][i] == prev) { in_loadout = 1; break; }
-                    }
-                    if (in_loadout) break;
-                }
+                int in_loadout = gui_player_loadout_contains(p, prev);
                 if (in_loadout) {
                     gs->inv_grid[src].type = INV_SLOT_EQUIPMENT;
                     gs->inv_grid[src].item_db_idx = prev;
@@ -1959,14 +1962,7 @@ static void gui_update_inventory(GuiState* gs, Player* p) {
                 gs->inv_grid[src].osrs_id = 0;
             }
         } else if (prev != ITEM_NONE) {
-
-            int in_loadout = 0;
-            for (int g = 0; g < NUM_GEAR_SLOTS; g++) {
-                for (int i = 0; i < p->num_items_in_slot[g]; i++) {
-                    if (p->inventory[g][i] == prev) { in_loadout = 1; break; }
-                }
-                if (in_loadout) break;
-            }
+            int in_loadout = gui_player_loadout_contains(p, prev);
             if (in_loadout && gui_inv_find_equipment(gs, prev) < 0) {
                 gui_inv_place_equipment(gs, prev);
             }
