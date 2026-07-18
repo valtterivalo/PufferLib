@@ -963,25 +963,8 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
 
 static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
-    int magic = 0, ranged = 0, melee = 0;
-    for (int n = 0; n < COLO_MAX_NPCS; n++) {
-        const ColoNPC* npc = &s->npcs[n];
-        if (!col_npc_is_live_enemy(npc)) continue;
-        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-        if (ns->attack_range < 1) continue;
-        int dist = col_npc_dist_to_player(s, npc);
-        if (dist < 1 || dist > ns->attack_range) continue;
-        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
-        AttackStyle style = ns->default_style;
-        if (npc->type == COLO_MANTICORE) {
-            const ColoManticoreState* mc = &npc->type_state.manticore;
-            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
-            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
-        }
-        if (style == ATTACK_STYLE_MAGIC) magic++;
-        else if (style == ATTACK_STYLE_RANGED) ranged++;
-        else if (style == ATTACK_STYLE_MELEE) melee++;
-    }
+    int magic, ranged, melee;
+    col_live_threat_style_counts(s, &magic, &ranged, &melee);
     obs[i++] = col_clamp01((float)magic / 4.0f);
     obs[i++] = col_clamp01((float)ranged / 4.0f);
     obs[i++] = col_clamp01((float)melee / 4.0f);

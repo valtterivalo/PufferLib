@@ -58,10 +58,7 @@ static void col_deactivate_npc(ColosseumState* s, int idx) {
 }
 
 static void col_roll_manticore_orb_cycle(ColosseumState* s, AttackStyle out[3]) {
-    int mantimayhem = s->modifiers.tier[COLO_MOD_MANTIMAYHEM];
-    if ((s->modifiers.active_mask & (1u << COLO_MOD_MANTIMAYHEM)) == 0) {
-        mantimayhem = 0;
-    }
+    int mantimayhem = col_mod_tier(s, COLO_MOD_MANTIMAYHEM);
     if (mantimayhem >= 3) {
         out[0] = ATTACK_STYLE_RANGED;
         out[1] = ATTACK_STYLE_MAGIC;
@@ -162,8 +159,6 @@ static int col_spawn_anchor_candidates(const ColosseumState* s, int* out) {
 
 static int col_warband_spawn_tile_ok(const ColosseumState* s, int x, int y) {
     if (col_static_blocked(x, y)) return 0;
-    int gx, gy;
-    if (!col_grid_index(x, y, &gx, &gy)) return 0;
     if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
     return !(x == s->player.x && y == s->player.y);
 }

@@ -4,8 +4,6 @@ static int col_player_walkable(void* ctx, int x, int y) {
     ColosseumState* s = (ColosseumState*)ctx;
     if (col_static_blocked(x, y)) return 0;
     if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
-    int gx, gy;
-    if (!col_grid_index(x, y, &gx, &gy)) return 0;
     return 1;
 }
 
@@ -118,8 +116,6 @@ static int col_npc_path_blocked_uncached(ColoNpcPathCtx* pc, int x, int y) {
                 int tx = x + dx, ty = y + dy;
                 if (col_static_blocked(tx, ty)) return 1;
                 if (col_sol_clamp_active(s) && !col_in_boss_arena(s, tx, ty)) return 1;
-                int gx, gy;
-                if (!col_grid_index(tx, ty, &gx, &gy)) return 1;
             }
         }
         return 0;

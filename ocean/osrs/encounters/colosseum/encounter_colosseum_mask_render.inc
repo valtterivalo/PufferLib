@@ -190,6 +190,36 @@ static void col_thrall_render_tile(const ColosseumState* s, int* out_x, int* out
     *out_y = s->player.y + 1;
 }
 
+static void col_emit_decoration_entity(
+    RenderEntity* out, int* n, int max_entities, int def_id, int npc_slot,
+    uint32_t instance_id, int anim_id, int x, int y, const char* debug_name
+) {
+    if (*n >= max_entities) return;
+    RenderEntity* re = &out[(*n)++];
+    OsrsNpcRenderEntitySpec spec = {
+        .npc_def_id = def_id,
+        .npc_slot = npc_slot,
+        .npc_instance_id = instance_id,
+        .npc_visible = 1,
+        .npc_size = 1,
+        .npc_anim_id = anim_id,
+        .x = x,
+        .y = y,
+        .dest_x = x,
+        .dest_y = y,
+        .current_hitpoints = 1,
+        .base_hitpoints = 1,
+        .attack_style_this_tick = ATTACK_STYLE_NONE,
+        .hit_landed_this_tick = 0,
+        .hit_damage = 0,
+        .hit_was_successful = 0,
+        .hit_spell_type = ENCOUNTER_SPELL_NONE,
+        .attack_target_entity_idx = 0,
+    };
+    osrs_render_entity_from_npc_spec(&spec, re);
+    re->debug_npc_type_name = debug_name;
+}
+
 static void col_fill_render_entities_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -230,9 +260,8 @@ static void col_fill_render_entities_ctx(
         int npc_anim_id = -1;
         if (npc->death_ticks > 0)
             npc_anim_id = col_npc_death_anim_id(npc->type);
-        else if (npc->type == COLO_MANTICORE && ctx->manticore_charge_started[i])
-            npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
-        else if (npc->attacked_this_tick)
+        else if ((npc->type == COLO_MANTICORE && ctx->manticore_charge_started[i]) ||
+                 npc->attacked_this_tick)
             npc_anim_id = col_npc_render_attack_anim_id(s, ctx, i, npc, def_id);
         RenderEntity* re = &out[n++];
         OsrsNpcRenderEntitySpec npc_spec = {
@@ -282,58 +311,19 @@ static void col_fill_render_entities_ctx(
     if (s->thrall_active && n < max_entities) {
         int tx, ty;
         col_thrall_render_tile(s, &tx, &ty);
-        RenderEntity* re = &out[n++];
-        OsrsNpcRenderEntitySpec thrall_spec = {
-            .npc_def_id = COLO_NPC_DEF_ID_THRALL,
-            .npc_slot = COLO_NPC_SLOT_THRALL,
-            .npc_instance_id = COLO_THRALL_RENDER_INSTANCE_ID,
-            .npc_visible = 1,
-            .npc_size = 1,
-            .npc_anim_id = ctx->thrall_attacked_this_tick ? 11101 : -1,
-            .x = tx,
-            .y = ty,
-            .dest_x = tx,
-            .dest_y = ty,
-            .current_hitpoints = 1,
-            .base_hitpoints = 1,
-            .attack_style_this_tick = ATTACK_STYLE_NONE,
-            .hit_landed_this_tick = 0,
-            .hit_damage = 0,
-            .hit_was_successful = 0,
-            .hit_spell_type = ENCOUNTER_SPELL_NONE,
-            .attack_target_entity_idx = 0,
-        };
-        osrs_render_entity_from_npc_spec(&thrall_spec, re);
-        re->debug_npc_type_name = "Arceuus Thrall";
+        col_emit_decoration_entity(out, &n, max_entities,
+            COLO_NPC_DEF_ID_THRALL, COLO_NPC_SLOT_THRALL, COLO_THRALL_RENDER_INSTANCE_ID,
+            ctx->thrall_attacked_this_tick ? 11101 : -1, tx, ty, "Arceuus Thrall");
     }
 
     if (s->solarflare.active) {
         for (int p = 0; p < COLO_NUM_PILLARS && n < max_entities; p++) {
             int x, y;
             col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
-            RenderEntity* re = &out[n++];
-            OsrsNpcRenderEntitySpec orb_spec = {
-                .npc_def_id = COLO_NPC_DEF_ID_SOLARFLARE,
-                .npc_slot = COLO_NPC_SLOT_SOLARFLARE + p,
-                .npc_instance_id = COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p,
-                .npc_visible = 1,
-                .npc_size = 1,
-                .npc_anim_id = COLO_SOLARFLARE_IDLE_ANIM_ID,
-                .x = x,
-                .y = y,
-                .dest_x = x,
-                .dest_y = y,
-                .current_hitpoints = 1,
-                .base_hitpoints = 1,
-                .attack_style_this_tick = ATTACK_STYLE_NONE,
-                .hit_landed_this_tick = 0,
-                .hit_damage = 0,
-                .hit_was_successful = 0,
-                .hit_spell_type = ENCOUNTER_SPELL_NONE,
-                .attack_target_entity_idx = 0,
-            };
-            osrs_render_entity_from_npc_spec(&orb_spec, re);
-            re->debug_npc_type_name = "Solar flare";
+            col_emit_decoration_entity(out, &n, max_entities,
+                COLO_NPC_DEF_ID_SOLARFLARE, COLO_NPC_SLOT_SOLARFLARE + p,
+                COLO_SOLARFLARE_RENDER_INSTANCE_ID + (uint32_t)p,
+                COLO_SOLARFLARE_IDLE_ANIM_ID, x, y, "Solar flare");
         }
     }
 
@@ -341,31 +331,10 @@ static void col_fill_render_entities_ctx(
         for (int c = 0; c < s->sol.crystal_count && n < max_entities; c++) {
             const ColoSolCrystal* cr = &s->sol.crystals[c];
             if (!cr->active) continue;
-            int cx = cr->x, cy = cr->y;
-            RenderEntity* re = &out[n++];
-            OsrsNpcRenderEntitySpec crystal_spec = {
-                .npc_def_id = COLO_NPC_DEF_ID_BEAM_CRYSTAL,
-                .npc_slot = COLO_NPC_SLOT_BEAM_CRYSTAL + c,
-                .npc_instance_id =
-                    COLO_BEAM_CRYSTAL_RENDER_INSTANCE_ID + (uint32_t)c,
-                .npc_visible = 1,
-                .npc_size = 1,
-                .npc_anim_id = COLO_BEAM_CRYSTAL_IDLE_ANIM_ID,
-                .x = cx,
-                .y = cy,
-                .dest_x = cx,
-                .dest_y = cy,
-                .current_hitpoints = 1,
-                .base_hitpoints = 1,
-                .attack_style_this_tick = ATTACK_STYLE_NONE,
-                .hit_landed_this_tick = 0,
-                .hit_damage = 0,
-                .hit_was_successful = 0,
-                .hit_spell_type = ENCOUNTER_SPELL_NONE,
-                .attack_target_entity_idx = 0,
-            };
-            osrs_render_entity_from_npc_spec(&crystal_spec, re);
-            re->debug_npc_type_name = "Beam crystal";
+            col_emit_decoration_entity(out, &n, max_entities,
+                COLO_NPC_DEF_ID_BEAM_CRYSTAL, COLO_NPC_SLOT_BEAM_CRYSTAL + c,
+                COLO_BEAM_CRYSTAL_RENDER_INSTANCE_ID + (uint32_t)c,
+                COLO_BEAM_CRYSTAL_IDLE_ANIM_ID, cr->x, cr->y, "Beam crystal");
         }
     }
 

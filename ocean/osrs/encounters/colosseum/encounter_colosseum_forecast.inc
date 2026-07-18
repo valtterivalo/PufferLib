@@ -1064,18 +1064,10 @@ static int col_write_step_out_forecast_obs_summary(
     return i;
 }
 
-static void col_build_step_out_forecast_horizon(
-    const ColosseumState* s,
-    ColoStepOutForecast* out,
-    int horizon
-) {
-    col_build_step_out_forecast_horizon_mode(
-        s, out, horizon, COLO_FORECAST_RUN_TILE_FULL);
-}
-
 static void col_build_step_out_forecast_ctx(
     const ColosseumState* s,
     ColoStepOutForecast* out
 ) {
-    col_build_step_out_forecast_horizon(s, out, COLO_STEP_OUT_FORECAST_HORIZON);
+    col_build_step_out_forecast_horizon_mode(
+        s, out, COLO_STEP_OUT_FORECAST_HORIZON, COLO_FORECAST_RUN_TILE_FULL);
 }

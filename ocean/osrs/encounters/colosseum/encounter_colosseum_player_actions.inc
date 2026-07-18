@@ -155,7 +155,7 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
     int prayer_before = s->player.current_prayer;
     int overhead_activated = encounter_apply_overhead_action(&s->player.prayer,
         actions[COLO_HEAD_PRAYER]);
-    if (ctx && s->player.prayer != prev_prayer &&
+    if (s->player.prayer != prev_prayer &&
             ctx->config.prayer_switch_fail_prob > 0.0f &&
             col_overhead_switch_slips(&s->rng_state, ctx->config.prayer_switch_fail_prob)) {
         s->player.prayer = prev_prayer;
@@ -169,7 +169,7 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
     encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.offensive_prayer != prev_offensive)
         col_mark_live_loadout_dirty(s);
-    if (ctx && ctx->config.action_debug_log) {
+    if (ctx->config.action_debug_log) {
         fprintf(stderr,
             "colo_action tick=%d pretick primary=%d prayer_action=%d "
             "offensive_action=%d spell=%d prayer=%d->%d offensive=%d->%d pp=%d->%d\n",
@@ -202,10 +202,6 @@ static void col_sync_weapon_set_from_equipped_weapon(ColosseumState* s) {
         : COLO_GEAR_MELEE;
     s->player.current_gear = col_gear_set_for_attack_style(style);
     s->player.visible_gear = s->player.current_gear;
-}
-
-static ColoInvCell col_inventory_cell_from_item(uint8_t item_idx) {
-    return osrs_inventory_cell_from_item(item_idx);
 }
 
 static int col_first_empty_inventory_cell(const ColosseumState* s, int except_slot) {
@@ -262,7 +258,7 @@ static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
             } else {
                 int empty = col_first_empty_inventory_cell(s, cell_idx);
                 if (empty < 0) return;
-                s->inventory_cells[empty] = col_inventory_cell_from_item(shield);
+                s->inventory_cells[empty] = osrs_inventory_cell_from_item(shield);
             }
             s->player.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
         }
@@ -275,7 +271,7 @@ static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
     }
 
     s->player.equipped[gear_slot] = item_idx;
-    *cell = col_inventory_cell_from_item(displaced);
+    *cell = osrs_inventory_cell_from_item(displaced);
     if (gear_slot == GEAR_SLOT_WEAPON) s->player.spec_armed = 0;
     osrs_refresh_player_equipment(&s->player);
     col_sync_weapon_set_from_equipped_weapon(s);
@@ -697,7 +693,7 @@ static void col_tick_thrall_and_death_charge(ColosseumState* s, ColosseumContext
                 int dmg = encounter_rand_int(&s->rng_state, COLO_THRALL_MAX_HIT + 1);
                 col_queue_npc_pending_hit(s, s->thrall_target_slot, dmg, 2,
                     ATTACK_STYLE_MAGIC, ENCOUNTER_SPELL_NONE);
-                if (ctx) ctx->thrall_attacked_this_tick = 1;
+                ctx->thrall_attacked_this_tick = 1;
             }
         }
     }
@@ -1335,7 +1331,7 @@ static void col_tick_player_ctx(
     }
     col_rebuild_player_collision_flags(s);
 
-    if (ctx && ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
+    if (ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
 
     if (can_attack && s->player.attack_timer > 0) s->player.attack_timer--;
     if (can_attack && osrs_interaction_active(&s->interaction) && s->player.attack_timer == 0) {
@@ -1351,7 +1347,7 @@ static void col_tick_player_ctx(
                                   s->player.spec_armed)
                     ? s->player.equipped[GEAR_SLOT_WEAPON] : 0;
                 col_player_attack_target_ctx(s, ctx, slot);
-                if (ctx && armed_kind > 0 && s->player.used_special_this_tick)
+                if (armed_kind > 0 && s->player.used_special_this_tick)
                     ctx->player_spec_fired_kind = armed_kind;
             }
         }

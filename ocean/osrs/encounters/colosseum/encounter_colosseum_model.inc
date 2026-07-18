@@ -1490,7 +1490,6 @@ typedef struct {
 } ColosseumContext;
 
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
-    if (!ctx) return;
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
     memset(ctx->manticore_charge_started, 0, sizeof(ctx->manticore_charge_started));
     ctx->player_render_hit_count = 0;
@@ -1508,7 +1507,6 @@ static inline void col_context_record_venator_chain(
     ColosseumContext* ctx,
     const OsrsVenatorChain* chain
 ) {
-    if (!ctx) abort();
     if (!chain) abort();
     osrs_venator_validate_chain_length(chain->length);
     ctx->player_venator_chain_count = (int)chain->length;

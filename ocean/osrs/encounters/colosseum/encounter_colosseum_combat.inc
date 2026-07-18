@@ -330,13 +330,7 @@ static void col_apply_instant_melee_hit(
 
     int applied = col_scale_incoming_damage(s, dmg);
     if (applied > 0) {
-        int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
-        if (blas > 0 && s->player.current_prayer > 0) {
-            int drain = (applied * COLO_BLASPHEMY_DRAIN_PCT[blas]) / 100;
-            s->player.current_prayer -= drain;
-            if (s->player.current_prayer < 0) s->player.current_prayer = 0;
-        }
-        if (col_mod_active(s, COLO_MOD_DOOM)) s->doom_stacks += 1;
+        col_mod_on_player_damaged(s, applied);
         s->last_hit_by_type = npc_type;
     }
 }
@@ -630,6 +624,32 @@ static void col_warband_attack_phase(ColosseumState* s, ColosseumContext* ctx) {
 #endif
 }
 
+static void col_live_threat_style_counts(
+    const ColosseumState* s, int* magic, int* ranged, int* melee
+) {
+    *magic = 0;
+    *ranged = 0;
+    *melee = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
+        if (ns->attack_range < 1) continue;
+        int dist = col_npc_dist_to_player(s, npc);
+        if (dist < 1 || dist > ns->attack_range) continue;
+        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
+        AttackStyle style = ns->default_style;
+        if (npc->type == COLO_MANTICORE) {
+            const ColoManticoreState* mc = &npc->type_state.manticore;
+            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
+            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
+        }
+        if (style == ATTACK_STYLE_MAGIC) (*magic)++;
+        else if (style == ATTACK_STYLE_RANGED) (*ranged)++;
+        else if (style == ATTACK_STYLE_MELEE) (*melee)++;
+    }
+}
+
 static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const ColoNPC* npc) {
     if (!col_npc_is_live_enemy(npc)) return ATTACK_STYLE_NONE;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return ATTACK_STYLE_NONE;
@@ -682,17 +702,13 @@ static void col_apply_prayer_oracle(ColosseumState* s) {
     else if (ranged) s->player.prayer = PRAYER_PROTECT_RANGED;
 }
 
-static void col_sol_tick(ColosseumState* s, ColosseumContext* ctx) {
-    col_sol_boss_tick(s, ctx);
-}
-
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled = COLO_PROFILE_ENABLED();
     double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
     double col_prof_t0 = col_prof_total_t0;
 #endif
-    col_sol_tick(s, ctx);
+    col_sol_boss_tick(s, ctx);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_STEP_SOL_BOSS);
 #endif

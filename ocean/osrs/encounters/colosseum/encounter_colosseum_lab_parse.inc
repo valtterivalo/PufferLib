@@ -423,9 +423,11 @@ static ColoLabCommandKind col_lab_command_kind_for(const char* command) {
         "colosseum lab", command, aliases, sizeof(aliases) / sizeof(aliases[0]));
 }
 
-static ColoLabLineResult col_lab_apply_script_line_impl(
+static ColoLabLineResult col_lab_apply_script_line_alloc_json(
     ColosseumState* s, const char* line, char** out_json
 ) {
+    if (!out_json) col_lab_abort("json output pointer is required");
+    *out_json = NULL;
     EncounterLabLine lex = encounter_lab_line_begin("colosseum lab", line);
     if (!lex.command) { free(lex.buffer); return COLO_LAB_LINE_NONE; }
 
@@ -451,12 +453,4 @@ static ColoLabLineResult col_lab_apply_script_line_impl(
     col_lab_apply_command(s, &cmd);
     free(lex.buffer);
     return COLO_LAB_LINE_NONE;
-}
-
-static ColoLabLineResult col_lab_apply_script_line_alloc_json(
-    ColosseumState* s, const char* line, char** out_json
-) {
-    if (!out_json) col_lab_abort("json output pointer is required");
-    *out_json = NULL;
-    return col_lab_apply_script_line_impl(s, line, out_json);
 }

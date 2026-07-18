@@ -491,7 +491,7 @@ static void col_emit_npc_attack_projectile(
         return;
     if (col_type_is_hazard_entity(npc->type))
         return;
-    if (ctx && npc->type == COLO_JAVELIN_COLOSSUS &&
+    if (npc->type == COLO_JAVELIN_COLOSSUS &&
             ctx->npc_render_attack_anim[npc_slot] ==
                 COLO_NPC_RENDER_ATTACK_JAVELIN_SKYFALL) {
         col_emit_javelin_skyfall_launch_projectile(s, ov, npc_slot);
@@ -575,7 +575,7 @@ static void col_emit_player_venator_bounce_projectiles(
     int start_delay,
     int duration
 ) {
-    if (!ctx || ctx->player_venator_chain_count <= 1) return;
+    if (ctx->player_venator_chain_count <= 1) return;
     if (ctx->player_venator_chain_count > OSRS_VENATOR_MAX_CHAIN_HITS) abort();
     if (!profile || profile->projectile_model_id <= 0) {
         fprintf(stderr, "colosseum: missing Venator bounce projectile model\n");
@@ -958,14 +958,6 @@ static int col_queue_inventory_click_action(
     return action_head;
 }
 
-static void col_rearrange_inventory_cells(
-    ColosseumState* s,
-    int source_slot,
-    int target_slot
-) {
-    osrs_inventory_swap_cells(s->inventory_cells, source_slot, target_slot);
-}
-
 static void col_apply_pending_draft_grapple_heads(HumanInput* hi, int* actions) {
     if (hi->pending_modifier_select > 0 &&
             hi->pending_modifier_select <= COLO_MODIFIER_DRAFT_OPTIONS)
@@ -1034,16 +1026,12 @@ static void col_translate_human_commands_ctx(
                 actions[COLO_HEAD_PRAYER] = cmd->overhead_prayer;
                 break;
             case HUMAN_COMMAND_EAT:
-                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
-                break;
             case HUMAN_COMMAND_DRINK:
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
                 col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
                 actions[COLO_HEAD_SPEC] = 1;
-                break;
-            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
-                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
             case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: {
                 int action_head =
@@ -1057,8 +1045,8 @@ static void col_translate_human_commands_ctx(
                 break;
             }
             case HUMAN_COMMAND_ITEM_ON_ITEM:
-                col_rearrange_inventory_cells(
-                    s, cmd->inventory_slot, cmd->target_inventory_slot);
+                osrs_inventory_swap_cells(
+                    s->inventory_cells, cmd->inventory_slot, cmd->target_inventory_slot);
                 break;
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
                 actions[COLO_HEAD_OFFENSIVE] = cmd->offensive_prayer;

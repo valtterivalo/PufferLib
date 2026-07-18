@@ -87,26 +87,9 @@ static float col_episode_max_wave_depth(const ColosseumState* s) {
 }
 
 static int col_distinct_live_threat_styles(const ColosseumState* s) {
-    int magic = 0, ranged = 0, melee = 0;
-    for (int n = 0; n < COLO_MAX_NPCS; n++) {
-        const ColoNPC* npc = &s->npcs[n];
-        if (!col_npc_is_live_enemy(npc)) continue;
-        const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
-        if (ns->attack_range < 1) continue;
-        int dist = col_npc_dist_to_player(s, npc);
-        if (dist < 1 || dist > ns->attack_range) continue;
-        if (ns->attack_range > 1 && !col_npc_has_los_to_player(s, npc)) continue;
-        AttackStyle style = ns->default_style;
-        if (npc->type == COLO_MANTICORE) {
-            const ColoManticoreState* mc = &npc->type_state.manticore;
-            int orb = mc->cycle_step >= 0 ? mc->cycle_step : 0;
-            if (orb < 3 && mc->orb_style[orb] != ATTACK_STYLE_NONE) style = mc->orb_style[orb];
-        }
-        if (style == ATTACK_STYLE_MAGIC) magic = 1;
-        else if (style == ATTACK_STYLE_RANGED) ranged = 1;
-        else if (style == ATTACK_STYLE_MELEE) melee = 1;
-    }
-    return magic + ranged + melee;
+    int magic, ranged, melee;
+    col_live_threat_style_counts(s, &magic, &ranged, &melee);
+    return (magic > 0) + (ranged > 0) + (melee > 0);
 }
 
 static float col_rewardable_avoided_damage(ColosseumState* s) {
@@ -290,7 +273,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         return;
     }
     col_player_pretick(s, ctx, actions);
-    if (ctx && ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
+    if (ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
     s->player.prayer_display = s->player.prayer;
 
     if (s->wave_ready_delay > 0) s->wave_ready_delay--;
@@ -329,7 +312,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     col_classify_tick_offpray(s);
 
-    if (ctx && ctx->config.invuln_mode) {
+    if (ctx->config.invuln_mode) {
         s->player.current_hitpoints = s->player.base_hitpoints;
     } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);
@@ -358,7 +341,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int all_dead = 1;
     int wave_cleared = 0;
 
-    if (ctx && ctx->config.invuln_mode) {
+    if (ctx->config.invuln_mode) {
         s->player.current_hitpoints = s->player.base_hitpoints;
     } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         col_record_death_attribution(s);

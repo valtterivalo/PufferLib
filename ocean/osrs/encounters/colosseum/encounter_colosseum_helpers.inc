@@ -19,6 +19,7 @@ static int col_sol_clamp_active(const ColosseumState* s);
 static int col_in_boss_arena(const ColosseumState* s, int x, int y);
 
 static inline int col_mod_active(const ColosseumState* s, ColoModifier mod);
+static inline int col_mod_tier(const ColosseumState* s, ColoModifier mod);
 static void col_modifiers_on_wave_spawn(ColosseumState* s);
 static void col_modifier_open_draft(ColosseumState* s, int next_wave);
 static void col_apply_late_start_entry_state(

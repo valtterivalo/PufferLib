@@ -814,20 +814,8 @@ static int col_solarflare_step_is_corner(int step) {
 }
 
 static void col_mod_sync_solarflare(ColosseumState* s) {
-    if (!col_mod_active(s, COLO_MOD_SOLARFLARE)) {
-        s->solarflare = (ColoSolarflareOrb){
-            .active = 0,
-            .step = 0,
-            .move_timer = 0,
-            .pause_timer = 0,
-        };
-        return;
-    }
     s->solarflare = (ColoSolarflareOrb){
-        .active = 1,
-        .step = 0,
-        .move_timer = 0,
-        .pause_timer = 0,
+        .active = col_mod_active(s, COLO_MOD_SOLARFLARE) ? 1 : 0,
     };
 }
 
@@ -874,12 +862,7 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
     if (!s->solarflare.active) return;
     int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
     if (tier == 0) {
-        s->solarflare = (ColoSolarflareOrb){
-            .active = 0,
-            .step = 0,
-            .move_timer = 0,
-            .pause_timer = 0,
-        };
+        s->solarflare = (ColoSolarflareOrb){0};
         return;
     }
 
