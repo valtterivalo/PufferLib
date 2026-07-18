@@ -455,3 +455,31 @@ env compiled in) crashes with missing key [env] shield_penalty_coeff -
 crashing dict_get doing its job; rebuild the target env first. MacBook side
 (user): --local viewer runs the CPU encoder on .bins; torch --slowly loader
 does NOT read native .bins.
+
+## 2026-07-18 final squeeze: -1626 lines, principles pass, branch rebuilt
+
+User challenge: one more workflow to cut LOC and apply core principles, zero
+regressions. Executed as 18-agent find/verify/apply workflow (6 areas,
+adversarial refutation between find and apply, disjoint file ownership,
+isolated worktrees) + orchestrator cross-area pass + dedicated Log-field
+surgeon. Applied: 81 workflow findings (-1169), 12 cross-area findings
+(-117: duplicate xorshift/chebyshev impls unified onto osrs_types.h
+originals, 3 pass-through wrappers, 2 one-line prayer forwarders, 7 dead pvp
+gating helpers + 4 dead config macros, dead obs_profile knob, 2 no-op
+profile marks), 96 dead write-only inferno Log fields (-344; npc_kills
+saved by a colosseum read, one substring false positive caught). Also
+dropped the clamp comment prose (user nitpick). Verification net: golden
+batteries bit-identical (colo 12/12, inferno 15/15) run repeatedly incl. in
+apply worktrees, modifiers 10409, attack styles 1805 byte-identical output,
+forecast-exact harnesses written at pre-squeeze base and compared at head =
+bit-identical, strict g++-16 gates 0 errors, battery 17/17. The adversarial
+layer caught a real finder error: osrs_emit_projectile_npc_to_npc claimed
+dead but has 4 .inc callers, restored. PR payload now 88275 insertions
+(was ~89.9k). Curated branch REBUILT + force-pushed to
+osrs-colosseum-inferno-v2: 284dd0009 env-name / 6ae8f0d3c head arrays /
+9e4d39b65 clamp (comment-free) / a630c23ad envs / affa6e13e encoder; delta
+vs working tip = Mac build.sh hunks only. RUNNING: gate3 box chain
+(per-commit builds, 25M colosseum learn gate, 2M inferno smoke).
+OPS NOTES: git cherry-pick has no -q flag; zsh expands bare === (=cmd
+lookup); the untracked ocean/osrs/data symlink evaporates across branch
+surgery, relink before battery runs.
