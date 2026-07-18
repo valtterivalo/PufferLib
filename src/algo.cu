@@ -1679,8 +1679,6 @@ __device__ __forceinline__ void ppo_continuous_head(
 }
 
 __device__ __forceinline__ float ppo_clamp_logratio(float logratio) {
-    // comparisons, not fmaxf/fminf: a pre-existing NaN must propagate loudly.
-    // identity for |logratio| <= 10; __expf overflows summed many-head logratios.
     if (logratio > 10.0f) return 10.0f;
     if (logratio < -10.0f) return -10.0f;
     return logratio;
