@@ -300,6 +300,7 @@ static int col_can_eat_consumable_kind(
         case OSRS_CONSUMABLE_GUTHIX_REST:
         case OSRS_CONSUMABLE_SATURATED_HEART:
         case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
         case OSRS_CONSUMABLE_NONE:
             return 0;
     }
@@ -338,6 +339,8 @@ static int col_drink_has_effect(const ColosseumState* s, OsrsConsumableKind kind
             return p->current_magic < COLO_BOOST_REDRINK_LEVEL;
         case OSRS_CONSUMABLE_SUPER_RESTORE:
             return col_restore_worth_drinking(s);
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            return p->current_prayer < p->base_prayer;
         case OSRS_CONSUMABLE_SANFEW:
             return afflicted || col_restore_worth_drinking(s);
         default:
@@ -411,6 +414,11 @@ static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) 
                 &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
             encounter_cap_prayer_restore(&s->player);
             col_finish_stat_moving_consumable(s);
+            return;
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            encounter_add_prayer_restore(
+                &s->player, osrs_prayer_potion_restore_amount(s->player.base_prayer));
+            encounter_cap_prayer_restore(&s->player);
             return;
         case OSRS_CONSUMABLE_SANFEW:
             encounter_add_prayer_restore(
