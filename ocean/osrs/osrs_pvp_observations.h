@@ -128,8 +128,7 @@ static inline int can_move_action(Player* p) {
     return can_move(p);
 }
 
-static inline int can_move_adjacent(Player* p, Player* target, const CollisionMap* cmap) {
-    (void)target;
+static inline int can_move_adjacent(Player* p, const CollisionMap* cmap) {
     int dest_x = 0;
     int dest_y = 0;
     if (!select_closest_adjacent_tile(p, p->last_obs_target_x, p->last_obs_target_y, &dest_x, &dest_y, cmap)) {
@@ -143,8 +142,7 @@ static inline int can_move_under(Player* p, Player* target) {
     return remaining_ticks(target->frozen_ticks) > 0 && dist != 0;
 }
 
-static inline int can_move_to_farcast(Player* p, Player* target, int distance, const CollisionMap* cmap) {
-    (void)target;
+static inline int can_move_to_farcast(Player* p, int distance, const CollisionMap* cmap) {
     int dest_x = 0;
     int dest_y = 0;
     if (!select_farcast_tile(p, p->last_obs_target_x, p->last_obs_target_y, distance, &dest_x, &dest_y, cmap)) {
@@ -153,8 +151,7 @@ static inline int can_move_to_farcast(Player* p, Player* target, int distance, c
     return !(dest_x == p->x && dest_y == p->y);
 }
 
-static inline int can_move_diagonal(Player* p, Player* target, const CollisionMap* cmap) {
-    (void)target;
+static inline int can_move_diagonal(Player* p, const CollisionMap* cmap) {
     int dest_x = 0;
     int dest_y = 0;
     if (!select_closest_diagonal_tile(p, p->last_obs_target_x, p->last_obs_target_y, &dest_x, &dest_y, cmap)) {
@@ -201,32 +198,26 @@ static void ensure_obs_norm_initialized(void) {
     }
 }
 
-/** Binding-facing output layout: [normalized obs, action mask as float]. */
-static void ocean_write_obs(OsrsEnv* env) {
+static void ocean_write_obs_agent(OsrsEnv* env, float* dst, int agent_idx) {
     ensure_obs_norm_initialized();
-    float* dst = env->ocean_io.agent_obs;
-    float* src = env->observations;
+    float* src = env->observations + agent_idx * SLOT_NUM_OBSERVATIONS;
     for (int i = 0; i < SLOT_NUM_OBSERVATIONS; i++) {
         dst[i] = src[i] / OBS_NORM_DIVISORS[i];
     }
 
-    unsigned char* mask = env->action_masks;
+    unsigned char* mask = env->action_masks + agent_idx * ACTION_MASK_SIZE;
     for (int i = 0; i < ACTION_MASK_SIZE; i++) {
         dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
     }
 }
 
-static void ocean_write_obs_p1(OsrsEnv* env) {
-    ensure_obs_norm_initialized();
-    float* dst = env->ocean_io.agent_obs_p1;
-    float* src = env->observations + SLOT_NUM_OBSERVATIONS;
-    for (int i = 0; i < SLOT_NUM_OBSERVATIONS; i++) {
-        dst[i] = src[i] / OBS_NORM_DIVISORS[i];
-    }
+/** Binding-facing output layout: [normalized obs, action mask as float]. */
+static void ocean_write_obs(OsrsEnv* env) {
+    ocean_write_obs_agent(env, env->ocean_io.agent_obs, 0);
+}
 
-    unsigned char* mask = env->action_masks + ACTION_MASK_SIZE;    for (int i = 0; i < ACTION_MASK_SIZE; i++) {
-        dst[SLOT_NUM_OBSERVATIONS + i] = (float)mask[i];
-    }
+static void ocean_write_obs_p1(OsrsEnv* env) {
+    ocean_write_obs_agent(env, env->ocean_io.agent_obs_p1, 1);
 }
 
 static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
@@ -477,7 +468,8 @@ static void generate_slot_observations(OsrsEnv* env, int agent_idx) {
 
     obs[149] = (p->attack_timer <= 0) ? 1.0f : 0.0f;
 
-    obs[150] = (float)p->equipped[GEAR_SLOT_WEAPON] / 63.0f;    obs[151] = (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+    obs[150] = (float)p->equipped[GEAR_SLOT_WEAPON] / 63.0f;
+    obs[151] = (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     obs[152] = (p->attack_style_this_tick == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
     obs[153] = (p->attack_style_this_tick == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
 
@@ -579,21 +571,22 @@ static void compute_action_masks(OsrsEnv* env, int agent_idx) {
         ? (is_in_melee_range(p, t) || can_move(p))
         : 1;
     int can_move_now = can_move(p);
-    mask[offset + ATTACK_NONE] = 1;    mask[offset + ATTACK_ATK] = attack_ready && !in_mage_loadout && !in_tank_loadout &&
+    mask[offset + ATTACK_NONE] = 1;
+    mask[offset + ATTACK_ATK] = attack_ready && !in_mage_loadout && !in_tank_loadout &&
                                  weapon_style != ATTACK_STYLE_NONE &&
                                  melee_reachable;
     mask[offset + ATTACK_ICE] = attack_ready && can_cast_ice_spell(p);
     mask[offset + ATTACK_BLOOD] = attack_ready && can_cast_blood_spell(p);
     const CollisionMap* cmap = (const CollisionMap*)env->collision_map;
-    mask[offset + MOVE_ADJACENT] = can_move_now && can_move_adjacent(p, t, cmap);
+    mask[offset + MOVE_ADJACENT] = can_move_now && can_move_adjacent(p, cmap);
     mask[offset + MOVE_UNDER] = can_move_now && can_move_under(p, t);
-    mask[offset + MOVE_DIAGONAL] = can_move_now && can_move_diagonal(p, t, cmap);
-    mask[offset + MOVE_FARCAST_2] = can_move_now && can_move_to_farcast(p, t, 2, cmap);
-    mask[offset + MOVE_FARCAST_3] = can_move_now && can_move_to_farcast(p, t, 3, cmap);
-    mask[offset + MOVE_FARCAST_4] = can_move_now && can_move_to_farcast(p, t, 4, cmap);
-    mask[offset + MOVE_FARCAST_5] = can_move_now && can_move_to_farcast(p, t, 5, cmap);
-    mask[offset + MOVE_FARCAST_6] = can_move_now && can_move_to_farcast(p, t, 6, cmap);
-    mask[offset + MOVE_FARCAST_7] = can_move_now && can_move_to_farcast(p, t, 7, cmap);
+    mask[offset + MOVE_DIAGONAL] = can_move_now && can_move_diagonal(p, cmap);
+    mask[offset + MOVE_FARCAST_2] = can_move_now && can_move_to_farcast(p, 2, cmap);
+    mask[offset + MOVE_FARCAST_3] = can_move_now && can_move_to_farcast(p, 3, cmap);
+    mask[offset + MOVE_FARCAST_4] = can_move_now && can_move_to_farcast(p, 4, cmap);
+    mask[offset + MOVE_FARCAST_5] = can_move_now && can_move_to_farcast(p, 5, cmap);
+    mask[offset + MOVE_FARCAST_6] = can_move_now && can_move_to_farcast(p, 6, cmap);
+    mask[offset + MOVE_FARCAST_7] = can_move_now && can_move_to_farcast(p, 7, cmap);
     offset += COMBAT_DIM;
 
     int has_prayer = p->current_prayer > 0;

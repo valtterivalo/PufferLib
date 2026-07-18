@@ -105,12 +105,6 @@ static const uint8_t MELEE_RING_PRIORITY[] = {ITEM_BERSERKER_RING};
 
 static const uint8_t MAGE_RING_PRIORITY[] = {ITEM_LIGHTBEARER, ITEM_SEERS_RING_I, ITEM_BERSERKER_RING};
 
-static inline GearBonuses compute_slot_gear_bonuses(Player* p) {
-    EquipmentBonuses eb;
-    osrs_sum_equipment_bonuses(p->equipped, &eb);
-    return osrs_gear_bonuses_from_equipment_bonuses(&eb);
-}
-
 static inline GearBonuses* get_slot_gear_bonuses(Player* p) {
     osrs_ensure_player_equipment(p);
     return &p->slot_cached_bonuses;

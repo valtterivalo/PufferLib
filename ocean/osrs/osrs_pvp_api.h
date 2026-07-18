@@ -180,41 +180,29 @@ static void init_player(Player* p) {
 }
 
 static void set_fight_positions(OsrsEnv* env) {
+    int x0, y0, x1, y1;
     if (env->has_rng_seed) {
-        int x0 = FIGHT_AREA_BASE_X;
-        int y0 = FIGHT_AREA_BASE_Y;
-        int x1 = FIGHT_AREA_BASE_X + FIGHT_NEARBY_RADIUS;
-        int y1 = FIGHT_AREA_BASE_Y;
+        x0 = FIGHT_AREA_BASE_X;
+        y0 = FIGHT_AREA_BASE_Y;
+        x1 = x0 + FIGHT_NEARBY_RADIUS;
+        y1 = y0;
+    } else {
+        int base_x = FIGHT_AREA_BASE_X;
+        int base_y = FIGHT_AREA_BASE_Y;
+        int max_x = base_x + FIGHT_AREA_WIDTH;
+        int max_y = base_y + FIGHT_AREA_HEIGHT;
 
-        env->players[0].x = x0;
-        env->players[0].y = y0;
-        env->players[0].dest_x = x0;
-        env->players[0].dest_y = y0;
-        env->players[0].is_moving = 0;
+        x0 = base_x + rand_int(env, FIGHT_AREA_WIDTH);
+        y0 = base_y + rand_int(env, FIGHT_AREA_HEIGHT);
 
-        env->players[1].x = x1;
-        env->players[1].y = y1;
-        env->players[1].dest_x = x1;
-        env->players[1].dest_y = y1;
-        env->players[1].is_moving = 0;
-        return;
+        int near_min_x = max_int(base_x, x0 - FIGHT_NEARBY_RADIUS);
+        int near_min_y = max_int(base_y, y0 - FIGHT_NEARBY_RADIUS);
+        int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS);
+        int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS);
+
+        x1 = near_min_x + rand_int(env, near_max_x - near_min_x);
+        y1 = near_min_y + rand_int(env, near_max_y - near_min_y);
     }
-
-    int base_x = FIGHT_AREA_BASE_X;
-    int base_y = FIGHT_AREA_BASE_Y;
-    int max_x = base_x + FIGHT_AREA_WIDTH;
-    int max_y = base_y + FIGHT_AREA_HEIGHT;
-
-    int x0 = base_x + rand_int(env, FIGHT_AREA_WIDTH);
-    int y0 = base_y + rand_int(env, FIGHT_AREA_HEIGHT);
-
-    int near_min_x = max_int(base_x, x0 - FIGHT_NEARBY_RADIUS);
-    int near_min_y = max_int(base_y, y0 - FIGHT_NEARBY_RADIUS);
-    int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS);
-    int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS);
-
-    int x1 = near_min_x + rand_int(env, near_max_x - near_min_x);
-    int y1 = near_min_y + rand_int(env, near_max_y - near_min_y);
 
     env->players[0].x = x0;
     env->players[0].y = y0;
@@ -361,6 +349,13 @@ void pvp_reset(OsrsEnv* env) {
     }
 }
 
+static void pvp_resolve_same_tile(OsrsEnv* env, int first, int second) {
+    if (env->players[0].x == env->players[1].x &&
+        env->players[0].y == env->players[1].y) {
+        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
+    }
+}
+
 /** One game tick: switches for both players, then movement, then attacks, then
     pending hits; an action submitted at tick N is visible in state at N+1. */
 void pvp_step(OsrsEnv* env) {
@@ -472,26 +467,17 @@ void pvp_step(OsrsEnv* env) {
     pvp_step_player_movement(env, first);
     pvp_step_player_movement(env, second);
 
-    if (env->players[0].x == env->players[1].x &&
-        env->players[0].y == env->players[1].y) {
-        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
-    }
+    pvp_resolve_same_tile(env, first, second);
 
     execute_attack_movement(env, first, agent_actions[first]);
     execute_attack_movement(env, second, agent_actions[second]);
 
-    if (env->players[0].x == env->players[1].x &&
-        env->players[0].y == env->players[1].y) {
-        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
-    }
+    pvp_resolve_same_tile(env, first, second);
 
     execute_attack_combat(env, first, agent_actions[first]);
     execute_attack_combat(env, second, agent_actions[second]);
 
-    if (env->players[0].x == env->players[1].x &&
-        env->players[0].y == env->players[1].y) {
-        resolve_same_tile(&env->players[second], &env->players[first], (const CollisionMap*)env->collision_map);
-    }
+    pvp_resolve_same_tile(env, first, second);
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         int dx = abs(env->players[i].x - pre_move_x[i]);
@@ -603,13 +589,6 @@ void pvp_step(OsrsEnv* env) {
     } else {
         env->ocean_io.agent_terminals[0] = 0;
     }
-}
-
-/** Seed must be non-zero; zero aborts at the next reset. */
-void pvp_seed(OsrsEnv* env, uint32_t seed) {
-    env->rng_seed = seed;
-    env->rng_reset_count = 0;
-    env->has_rng_seed = 1;
 }
 
 void pvp_close(OsrsEnv* env) {
