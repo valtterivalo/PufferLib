@@ -870,13 +870,6 @@ static inline int encounter_move_toward_dest(
         arena_base_x, arena_base_y, arena_w, arena_h);
 }
 
-static inline int encounter_entity_footprint_distance(
-    int ax, int ay, int a_size,
-    int bx, int by, int b_size
-) {
-    return encounter_rect_distance(ax, ay, a_size, bx, by, b_size);
-}
-
 static inline int encounter_entity_footprint_cardinal_adjacent(
     int ax, int ay, int a_size,
     int bx, int by, int b_size
@@ -1098,7 +1091,7 @@ static inline int encounter_player_can_attack(
     int target_x, int target_y, int target_size, int attack_range,
     const OsrsLosQuery* los_query
 ) {
-    int dist = encounter_entity_footprint_distance(player_x, player_y, 1,
+    int dist = encounter_rect_distance(player_x, player_y, 1,
                                                    target_x, target_y, target_size);
     if (dist < 1 || dist > attack_range) return 0;
     if (attack_range == 1)
@@ -1395,7 +1388,7 @@ static inline int encounter_chase_attack_target(
     const OsrsLosQuery* los_query,
     int arena_base_x, int arena_base_y, int arena_w, int arena_h
 ) {
-    int dist = encounter_entity_footprint_distance(p->x, p->y, 1,
+    int dist = encounter_rect_distance(p->x, p->y, 1,
                                                    target_x, target_y, target_size);
 
     if (dist == 0) {
@@ -1451,7 +1444,7 @@ static inline int encounter_chase_attack_target(
                     int dx = xx - p->x;
                     int dy = yy - p->y;
                     int player_dsq = dx * dx + dy * dy;
-                    int target_dist = encounter_entity_footprint_distance(
+                    int target_dist = encounter_rect_distance(
                         xx, yy, 1, target_x, target_y, target_size);
                     if (player_dsq < best_player_dsq ||
                             (player_dsq == best_player_dsq &&
@@ -2362,10 +2355,6 @@ static inline void encounter_recompute_loadout_max_hits(
             encounter_update_loadout_level(ls, p->offensive_prayer, p->current_attack, p->current_strength);
         }
     }
-}
-
-static inline void encounter_tick_spec_regen(Player* p) {
-    osrs_tick_special_regen(p);
 }
 
 static inline int encounter_use_spec(Player* p, int cost) {

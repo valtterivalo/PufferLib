@@ -53,7 +53,7 @@ static void test_size1_bounce_law(void) {
     for (int dx = -4; dx <= 4; dx++) {
         for (int dy = -4; dy <= 4; dy++) {
             OsrsVenatorFootprint b = osrs_venator_footprint(dx, dy, 1);
-            int expected = encounter_chebyshev_distance(0, 0, dx, dy) <= 2;
+            int expected = chebyshev_distance(0, 0, dx, dy) <= 2;
             int ab = osrs_venator_can_bounce(a, b);
             int ba = osrs_venator_can_bounce(b, a);
             CHECK("size1 bounce equals cheb<=2", ab == expected);
@@ -261,9 +261,9 @@ static void test_damage_rolls_all_chain_nodes(void) {
     uint32_t rng = 12345;
     uint32_t expected_rng = rng;
 
-    encounter_xorshift(&expected_rng);
-    encounter_xorshift(&expected_rng);
-    encounter_xorshift(&expected_rng);
+    xorshift32(&expected_rng);
+    xorshift32(&expected_rng);
+    xorshift32(&expected_rng);
 
     OsrsVenatorDamageResult damage = osrs_venator_roll_chain_damage(
         &chain, defence_rolls, 0, 31, &rng);

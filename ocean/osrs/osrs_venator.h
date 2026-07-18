@@ -327,7 +327,7 @@ static inline int osrs_venator_origins_find_required_tiles(
     for (int origin_idx = 0; origin_idx < origins.count; origin_idx++) {
         int found_all = 1;
         for (int tile_idx = 0; tile_idx < required.count; tile_idx++) {
-            int dist = encounter_chebyshev_distance(
+            int dist = chebyshev_distance(
                 origins.tiles[origin_idx].x,
                 origins.tiles[origin_idx].y,
                 required.tiles[tile_idx].x,
@@ -374,7 +374,7 @@ static inline int osrs_venator_selection_distance(
 ) {
     OsrsVenatorTile sender_anchor = osrs_venator_selection_anchor_tile(sender);
     OsrsVenatorTile candidate_anchor = osrs_venator_selection_anchor_tile(candidate);
-    return encounter_chebyshev_distance(
+    return chebyshev_distance(
         sender_anchor.x,
         sender_anchor.y,
         candidate_anchor.x,

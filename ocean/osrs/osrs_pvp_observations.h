@@ -78,56 +78,6 @@ static inline int can_eat_karambwan(Player* p) {
     return osrs_player_can_eat_food_type(p, FOOD_KARAMBWAN);
 }
 
-static inline int can_switch_to_tank_gear(Player* target) {
-    return remaining_ticks(target->attack_timer) <= 0;
-}
-
-static inline int is_protected_prayer_action_available(Player* p, Player* target) {
-    if (ONLY_SWITCH_PRAYER_WHEN_ABOUT_TO_ATTACK && remaining_ticks(target->attack_timer) > 0) {
-        return 0;
-    }
-    return p->current_prayer > 0;
-}
-
-static inline int is_smite_available(OsrsEnv* env, Player* p) {
-    if (!ALLOW_SMITE || env->is_lms) {
-        return 0;
-    }
-    if (remaining_ticks(p->attack_timer) > 0) {
-        return 0;
-    }
-    return p->current_prayer > 0;
-}
-
-static inline int is_redemption_available(OsrsEnv* env, Player* p, Player* target) {
-    if (!ALLOW_REDEMPTION || env->is_lms) {
-        return 0;
-    }
-    if (p->food_count > 0 || p->karambwan_count > 0 || p->brew_doses > 0) {
-        return 0;
-    }
-    int ticks_until_hit = get_ticks_until_next_hit(target);
-    if (ticks_until_hit < 0 && remaining_ticks(target->attack_timer) > 0) {
-        return 0;
-    }
-    return p->current_prayer > 0;
-}
-
-static inline int is_melee_range_possible(Player* p, Player* target) {
-    return can_move(p) || can_move(target) || is_in_melee_range(p, target);
-}
-
-static inline int can_target_cast_magic_spells(Player* p) {
-    return !p->observed_target_lunar_spellbook;
-}
-
-static inline int can_move_action(Player* p) {
-    if (!ALLOW_MOVING_IF_CAN_ATTACK && remaining_ticks(p->attack_timer) == 0) {
-        return 0;
-    }
-    return can_move(p);
-}
-
 static inline int can_move_adjacent(Player* p, const CollisionMap* cmap) {
     int dest_x = 0;
     int dest_y = 0;

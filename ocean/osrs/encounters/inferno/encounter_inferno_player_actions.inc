@@ -44,16 +44,12 @@ static int inf_local_overhead_action(int action) {
     return action;
 }
 
-static OffensivePrayer inf_required_offensive_prayer_for_style(AttackStyle style) {
-    return encounter_offensive_prayer_for_style(style);
-}
-
 static void inf_record_offensive_prayer_attack(
     InfernoState* s,
     AttackStyle style,
     float damage_roll
 ) {
-    OffensivePrayer required = inf_required_offensive_prayer_for_style(style);
+    OffensivePrayer required = encounter_offensive_prayer_for_style(style);
     if (required == OFFENSIVE_PRAYER_NONE) return;
 
     int style_idx = (int)style;
@@ -506,7 +502,7 @@ static void inf_tick_player_ctx(
 
     int manual_spell = inf_spell_action_to_spell(actions[INF_HEAD_SPELL]);
 
-    encounter_tick_spec_regen(&s->player);
+    osrs_tick_special_regen(&s->player);
 
     if (actions[INF_HEAD_SPEC] == 1)
         osrs_spec_toggle(&s->player.spec_armed);
@@ -1086,7 +1082,7 @@ static void inf_resolve_player_pending_hits(InfernoState* s) {
                 if (elysian_reduced) s->player.elysian_proc_this_tick = 1;
             }
             inf_apply_echo_boots_recoil(s, hit->source_npc_slot, dmg);
-            inf_damage_player_from_type(s, hit->source_npc_type, dmg);
+            inf_damage_player(s, dmg);
             encounter_pending_hit_queue_remove(&s->player_pending_hits, i, "inferno player");
             i--;
         }

@@ -30,7 +30,7 @@ int main(void) {
         for (int p = 0; p < 3; p++) {
             s.player.offensive_prayer = STALE_PRAYERS[p];
             col_apply_bis_gear_oracle(&s);
-            OffensivePrayer expected = col_offensive_prayer_for_attack_style(
+            OffensivePrayer expected = encounter_offensive_prayer_for_style(
                 col_weapon_set_attack_style(s.weapon_set));
             checks++;
             if (s.player.offensive_prayer != expected) {

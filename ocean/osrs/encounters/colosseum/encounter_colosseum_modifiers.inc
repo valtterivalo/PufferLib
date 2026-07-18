@@ -205,7 +205,7 @@ static void col_record_wave_entry(const ColosseumState* s, int entered_wave) {
     if (res->stored < COLO_WAVE_ENTRY_RESERVOIR_CAP) {
         slot = res->stored++;
     } else {
-        int j = (int)(encounter_xorshift(&g_colo_wave_entry_rng) % (uint32_t)res->seen);
+        int j = (int)(xorshift32(&g_colo_wave_entry_rng) % (uint32_t)res->seen);
         if (j < COLO_WAVE_ENTRY_RESERVOIR_CAP) slot = j;
     }
     if (slot >= 0) {
@@ -228,7 +228,7 @@ static int col_apply_wave_entry_sample(ColosseumState* s, int start_wave) {
     col_wave_entry_lock();
     ColoWaveEntryReservoir* res = &g_colo_wave_entry_res[start_wave];
     if (res->stored > 0) {
-        uint32_t r = encounter_xorshift(&g_colo_wave_entry_rng);
+        uint32_t r = xorshift32(&g_colo_wave_entry_rng);
         sample = res->samples[r % (uint32_t)res->stored];
         have = 1;
     }

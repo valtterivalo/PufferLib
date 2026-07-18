@@ -1194,7 +1194,7 @@ static void col_tick_player_ctx(
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
 
-    encounter_tick_spec_regen(&s->player);
+    osrs_tick_special_regen(&s->player);
 
     if (s->player.potion_timer > 0) s->player.potion_timer--;
     if (s->player.food_timer > 0) s->player.food_timer--;

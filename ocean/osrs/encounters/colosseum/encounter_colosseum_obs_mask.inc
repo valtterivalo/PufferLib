@@ -1175,7 +1175,7 @@ static float col_expected_dpt_for_equipment_vs_npc(
         &s->player, style, &current_att_level, &current_str_level);
 
     OffensivePrayer dpt_prayer = use_style_matched_prayer
-        ? col_offensive_prayer_for_attack_style(style)
+        ? encounter_offensive_prayer_for_style(style)
         : s->player.offensive_prayer;
     EncounterLoadoutStats stats;
     encounter_compute_loadout_stats(
@@ -1363,7 +1363,7 @@ static void col_build_best_gear_table(
         ColoWeaponSet style_set = (ColoWeaponSet)(wstyle - 1);
         AttackStyle style = col_weapon_set_attack_style(style_set);
         FightStyle fight_style = col_weapon_set_fight_style(style_set);
-        OffensivePrayer prayer = col_offensive_prayer_for_attack_style(style);
+        OffensivePrayer prayer = encounter_offensive_prayer_for_style(style);
         int spell_base = style == ATTACK_STYLE_MAGIC
             ? col_weapon_set_spell_base_damage(s, COLO_GEAR_MAGIC) : 0;
         int current_att_level, current_str_level;
@@ -1497,7 +1497,7 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
     }
 
     OffensivePrayer best_prayer =
-        col_offensive_prayer_for_attack_style(col_weapon_set_attack_style(best_set));
+        encounter_offensive_prayer_for_style(col_weapon_set_attack_style(best_set));
     if (s->player.offensive_prayer != best_prayer) {
         s->player.offensive_prayer = best_prayer;
         col_mark_live_loadout_dirty(s);

@@ -127,7 +127,7 @@ static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
 }
 
 static int col_spawn_excluded_near_player(const ColosseumState* s, int x, int y, int size) {
-    return encounter_entity_footprint_distance(
+    return encounter_rect_distance(
         s->player.x, s->player.y, 1, x, y, size) <= COLO_SPAWN_EXCLUSION_CHEB;
 }
 

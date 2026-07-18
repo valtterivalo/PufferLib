@@ -25,11 +25,7 @@
 #define FIGHT_AREA_HEIGHT 28
 #define FIGHT_NEARBY_RADIUS 5
 
-#define ONLY_SWITCH_PRAYER_WHEN_ABOUT_TO_ATTACK 1
 #define ONLY_SWITCH_GEAR_WHEN_ATTACK_SOON 1
-#define ALLOW_SMITE 1
-#define ALLOW_REDEMPTION 1
-#define ALLOW_MOVING_IF_CAN_ATTACK 0
 
 #define ICE_RUSH_LEVEL 58
 #define ICE_BURST_LEVEL 70
@@ -1076,6 +1072,7 @@ static inline int is_in_melee_range(Player* p, Player* t) {
     return (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
 }
 
+/** state must be non-zero or the stream sticks at zero. */
 static inline uint32_t xorshift32(uint32_t* state) {
     uint32_t x = *state;
     x ^= x << 13;

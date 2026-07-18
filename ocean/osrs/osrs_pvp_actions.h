@@ -170,7 +170,7 @@ static void update_timers(Player* p) {
     }
 
     if (p->spec_regen_active && p->special_energy < 100) {
-        encounter_tick_spec_regen(p);
+        osrs_tick_special_regen(p);
     } else if (p->spec_regen_active) {
         p->item_effect_state.special_regen_ticks = 0;
     }

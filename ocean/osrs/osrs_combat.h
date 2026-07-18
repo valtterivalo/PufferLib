@@ -40,21 +40,13 @@ static inline float osrs_tbow_dmg_mult(int target_magic) {
     return mult;
 }
 
-/** xorshift32 step; state must be non-zero or the stream sticks at zero. */
-static inline uint32_t encounter_xorshift(uint32_t* state) {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return *state;
-}
-
 static inline int encounter_rand_int(uint32_t* rng_state, int max) {
     if (max <= 0) return 0;
-    return (int)(encounter_xorshift(rng_state) % (unsigned)max);
+    return (int)(xorshift32(rng_state) % (unsigned)max);
 }
 
 static inline float encounter_rand_float(uint32_t* rng_state) {
-    return (float)(encounter_xorshift(rng_state) & 0xFFFF) / 65536.0f;
+    return (float)(xorshift32(rng_state) & 0xFFFF) / 65536.0f;
 }
 
 static inline int encounter_roll_ratio_u16(
@@ -62,7 +54,7 @@ static inline int encounter_roll_ratio_u16(
     uint64_t numerator,
     uint64_t denominator
 ) {
-    uint32_t roll = encounter_xorshift(rng_state) & 0xFFFFu;
+    uint32_t roll = xorshift32(rng_state) & 0xFFFFu;
     if (denominator == 0 || numerator == 0) return 0;
     if (numerator >= denominator) return 1;
     return (uint64_t)roll * denominator < numerator * 65536ull;
@@ -410,12 +402,6 @@ typedef struct {
     int visual_duration_ticks;
 } EncounterProjectileTiming;
 
-static inline int encounter_chebyshev_distance(int ax, int ay, int bx, int by) {
-    int dx = ax - bx; if (dx < 0) dx = -dx;
-    int dy = ay - by; if (dy < 0) dy = -dy;
-    return dx > dy ? dx : dy;
-}
-
 static inline int encounter_rect_distance(
     int ax, int ay, int asize, int bx, int by, int bsize
 ) {
@@ -442,7 +428,7 @@ static inline int encounter_projectile_distance(
             return encounter_rect_distance(
                 source_x, source_y, source_size, target_x, target_y, target_size);
         case ENCOUNTER_PROJECTILE_DISTANCE_TARGET_SW_TILE:
-            return encounter_chebyshev_distance(source_x, source_y, target_x, target_y);
+            return chebyshev_distance(source_x, source_y, target_x, target_y);
     }
     abort();
 }

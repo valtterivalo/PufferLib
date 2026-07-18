@@ -1463,7 +1463,7 @@ static void test_offensive_prayer_melee_maps_to_piety(void) {
     inf_record_offensive_prayer_attack(&state, ATTACK_STYLE_MELEE, 7.0f);
 
     ASSERT_INT_EQ("melee requires Piety",
-        inf_required_offensive_prayer_for_style(ATTACK_STYLE_MELEE),
+        encounter_offensive_prayer_for_style(ATTACK_STYLE_MELEE),
         OFFENSIVE_PRAYER_PIETY);
     ASSERT_INT_EQ("melee Piety counted correct",
         state.total_offensive_prayer_correct, 1);
@@ -7481,7 +7481,7 @@ static void test_redemption_zero_hit_landing_heals_and_drains(void) {
     state.player.prayer = PRAYER_REDEMPTION;
     state.player.offensive_prayer = OFFENSIVE_PRAYER_RIGOUR;
 
-    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 0);
+    inf_damage_player(&state, 0);
 
     ASSERT_INT_EQ("zero hit procs redemption at low HP",
         state.player.current_hitpoints, 31);
@@ -7507,7 +7507,7 @@ static void test_redemption_does_not_prevent_lethal_damage(void) {
     state.player.current_prayer = 12;
     state.player.prayer = PRAYER_REDEMPTION;
 
-    inf_damage_player_from_type(&state, INF_NPC_HEALER_ZUK, 8);
+    inf_damage_player(&state, 8);
 
     ASSERT_INT_EQ("lethal damage still kills through redemption",
         state.player.current_hitpoints, 0);

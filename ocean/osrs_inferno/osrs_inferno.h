@@ -54,20 +54,6 @@ static void inferno_env_put_int(Env* env, const char* key, int value) {
     ENCOUNTER_INFERNO.put_int(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), key, value);
 }
 
-static void inferno_apply_obs_profile(Env* env, int obs_profile) {
-    switch (obs_profile) {
-        case 0:
-            inferno_env_put_int(env, "step_out_forecast_obs_mode", 0);
-            break;
-        case 1:
-            inferno_env_put_int(env, "step_out_forecast_obs_mode", 1);
-            break;
-        default:
-            fprintf(stderr, "obs_profile must be 0 or 1, got %d\n", obs_profile);
-            abort();
-    }
-}
-
 static void inferno_zero_phase_reward_coeffs(Env* env) {
     static const char* const keys[] = {
         "jad_damage_reward_coeff",
@@ -233,8 +219,6 @@ void puf_init(Env* env, Dict* kwargs) {
     for (size_t k = 0; k < sizeof(int_keys) / sizeof(*int_keys); k++)
         inferno_env_put_int(env, int_keys[k], (int)dict_get(kwargs, int_keys[k]));
 
-    inferno_apply_obs_profile(env, (int)dict_get(kwargs, "obs_profile"));
-    (void)dict_get(kwargs, "step_out_forecast_obs_enabled");
     inferno_env_put_int(env, "step_out_forecast_obs_mode",
         (int)dict_get(kwargs, "step_out_forecast_obs_mode"));
     inferno_env_put_int(env, "loadout_profile_mode",
@@ -304,7 +288,6 @@ void puf_step(Env* env) {
         acts[i] = (int)env->agents[0].actions[i];
     INF_PROFILE_MARK(INF_PROF_C_ACTIONS);
 
-    INF_PROFILE_MARK(INF_PROF_C_PRE_STEP_TRACES);
     ENCOUNTER_INFERNO.step(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), acts);
     INF_PROFILE_MARK(INF_PROF_C_ENCOUNTER_STEP);
 
@@ -320,7 +303,6 @@ void puf_step(Env* env) {
     env->agents[0].terminals[0] = (float)is_term;
     INF_PROFILE_MARK(INF_PROF_C_REWARD_TERMINAL);
 
-    INF_PROFILE_MARK(INF_PROF_C_POST_STEP_TRACES);
 
     if (is_term) {
         InfernoState* s = INF_ENV_INFERNO(env);

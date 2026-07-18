@@ -60,10 +60,6 @@ static FightStyle col_weapon_set_fight_style(ColoWeaponSet set) {
     return FIGHT_STYLE_AGGRESSIVE;
 }
 
-static OffensivePrayer col_offensive_prayer_for_attack_style(AttackStyle style) {
-    return encounter_offensive_prayer_for_style(style);
-}
-
 static int col_weapon_set_spell_base_damage(const ColosseumState* s, ColoWeaponSet set) {
     if (set != COLO_GEAR_MAGIC) return 0;
     if (s->active_loadout_profile < 0 ||

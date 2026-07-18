@@ -8,12 +8,10 @@
 #define OSRS_ENV_PROFILE_SLOTS(X) \
     X(INF_PROF_C_STEP_TOTAL,             "c_step_total") \
     X(INF_PROF_C_ACTIONS,                "c_actions") \
-    X(INF_PROF_C_PRE_STEP_TRACES,        "c_pre_step_traces") \
     X(INF_PROF_C_ENCOUNTER_STEP,         "c_encounter_step") \
     X(INF_PROF_C_WRITE_OBS,              "c_write_obs") \
     X(INF_PROF_C_WRITE_MASK,             "c_write_mask") \
     X(INF_PROF_C_REWARD_TERMINAL,        "c_reward_terminal") \
-    X(INF_PROF_C_POST_STEP_TRACES,       "c_post_step_traces") \
     X(INF_PROF_C_TERMINAL_LOG,           "c_terminal_log") \
     X(INF_PROF_C_RESET,                  "c_reset") \
     X(INF_PROF_OBS_PREFIX,               "obs_prefix") \

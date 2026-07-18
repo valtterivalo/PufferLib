@@ -587,7 +587,7 @@ static void test_step_loop_draft(void) {
         const ColoNPC* npc = &s.npcs[i];
         if (!npc->active || col_type_is_warbander(npc->type)) continue;
         if (col_type_is_hazard_entity(npc->type)) continue;
-        if (encounter_entity_footprint_distance(t5_x, t5_y, 1,
+        if (encounter_rect_distance(t5_x, t5_y, 1,
                 npc->x, npc->y, col_npc_effective_size(npc)) <= COLO_SPAWN_EXCLUSION_CHEB)
             exclusion_ok = 0;
     }
@@ -6328,7 +6328,7 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
         attacked_tick >= 0);
     CHECK("attack fires from a LoS-valid tile",
         col_npc_has_los_to_player(&s, npc) == 1 &&
-        encounter_entity_footprint_distance(s.player.x, s.player.y, 1,
+        encounter_rect_distance(s.player.x, s.player.y, 1,
             npc->x, npc->y, col_npc_effective_size(npc)) <= attack_range);
 }
 
