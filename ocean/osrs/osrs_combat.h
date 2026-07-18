@@ -17,8 +17,6 @@ static inline float osrs_hit_chance(int att_roll, int def_roll) {
         return (float)att_roll / (2.0f * (float)(def_roll + 1));
 }
 
-static inline float osrs_hit_chance_double(int att_roll, int def_roll);
-
 /** Twisted bow accuracy multiplier; target_magic =
     min(max(npc_magic_level, npc_magic_attack_bonus), 250). */
 static inline float osrs_tbow_acc_mult(int target_magic) {
@@ -124,6 +122,10 @@ static inline int encounter_roll_hit_chance_double(
     return encounter_roll_ratio_u16(rng_state, numerator, denominator);
 }
 
+#define ENCOUNTER_SPELL_NONE  0
+#define ENCOUNTER_SPELL_ICE   1
+#define ENCOUNTER_SPELL_BLOOD 2
+
 #define BARRAGE_MAX_HITS 9
 #define BARRAGE_FREEZE_TICKS 32
 
@@ -170,7 +172,7 @@ static inline BarrageResult osrs_barrage_resolve(
         result.num_hits++;
         if (targets[0].hit) {
             result.num_successful++;
-            if (spell_type == 1 /* ENCOUNTER_SPELL_ICE */ && targets[0].frozen_ticks)
+            if (spell_type == ENCOUNTER_SPELL_ICE && targets[0].frozen_ticks)
                 *targets[0].frozen_ticks = BARRAGE_FREEZE_TICKS;
         }
     }
@@ -189,7 +191,7 @@ static inline BarrageResult osrs_barrage_resolve(
         result.num_hits++;
         if (targets[i].hit) {
             result.num_successful++;
-            if (spell_type == 1 /* ENCOUNTER_SPELL_ICE */ && targets[i].frozen_ticks)
+            if (spell_type == ENCOUNTER_SPELL_ICE && targets[i].frozen_ticks)
                 *targets[i].frozen_ticks = BARRAGE_FREEZE_TICKS;
         }
     }

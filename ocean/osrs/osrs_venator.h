@@ -151,7 +151,6 @@ static inline OsrsVenatorSizeClass osrs_venator_size_class(int size) {
 }
 
 static inline OsrsVenatorTile osrs_venator_sw_tile(OsrsVenatorFootprint f) {
-    osrs_venator_size_class(f.size);
     return osrs_venator_tile(f.sw_x, f.sw_y);
 }
 
@@ -244,7 +243,6 @@ static inline OsrsVenatorRequiredTiles osrs_venator_accept_required_tiles(
 ) {
     OsrsVenatorRequiredTiles required = {0};
     OsrsVenatorSizeClass sender_class = osrs_venator_size_class(sender.size);
-    osrs_venator_size_class(target.size);
 
     switch (target.size) {
         case 1:

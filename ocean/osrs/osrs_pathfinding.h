@@ -54,6 +54,12 @@ static inline void pathfind_enqueue_or_abort(
     (*tail)++;
 }
 
+static const int pathfind_dir_dx[8] = {0, -1, 0, 1, -1, -1, 1, 1};
+static const int pathfind_dir_dy[8] = {-1, 0, 1, 0, -1, 1, -1, 1};
+static const int pathfind_dir_via[8] = {
+    VIA_S, VIA_W, VIA_N, VIA_E, VIA_SW, VIA_NW, VIA_SE, VIA_NE
+};
+
 static inline PathResult pathfind_step(const CollisionMap* map, int height,
                                        int src_x, int src_y, int dest_x, int dest_y,
                                        pathfind_blocked_fn extra_blocked, void* blocked_ctx) {
@@ -118,85 +124,32 @@ static inline PathResult pathfind_step(const CollisionMap* map, int height,
 
         #define EB(ax, ay) (extra_blocked && extra_blocked(blocked_ctx, (ax), (ay)))
 
-        if (cur_y > 0 && via[cur_x][cur_y - 1] == 0
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && !EB(abs_x, abs_y - 1)) {
+        for (int i = 0; i < 8; i++) {
+            int dx = pathfind_dir_dx[i];
+            int dy = pathfind_dir_dy[i];
+            int next_x = cur_x + dx;
+            int next_y = cur_y + dy;
+            if (next_x < 0 || next_x >= PATHFIND_GRID_SIZE ||
+                next_y < 0 || next_y >= PATHFIND_GRID_SIZE)
+                continue;
+            if (via[next_x][next_y] != 0) continue;
+            if (!collision_traversable_step(map, height, abs_x, abs_y, dx, dy))
+                continue;
+            if (dx != 0 && dy != 0) {
+                if (!collision_traversable_step(map, height, abs_x, abs_y, 0, dy))
+                    continue;
+                if (!collision_traversable_step(map, height, abs_x, abs_y, dx, 0))
+                    continue;
+            }
+            if (EB(abs_x + dx, abs_y + dy)) continue;
+            if (dx != 0 && dy != 0) {
+                if (EB(abs_x, abs_y + dy)) continue;
+                if (EB(abs_x + dx, abs_y)) continue;
+            }
             pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x, cur_y - 1);
-            via[cur_x][cur_y - 1] = VIA_S;
-            cost[cur_x][cur_y - 1] = next_cost;
-        }
-
-        if (cur_x > 0 && via[cur_x - 1][cur_y] == 0
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x - 1, cur_y);
-            via[cur_x - 1][cur_y] = VIA_W;
-            cost[cur_x - 1][cur_y] = next_cost;
-        }
-
-        if (cur_y < PATHFIND_GRID_SIZE - 1 && via[cur_x][cur_y + 1] == 0
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && !EB(abs_x, abs_y + 1)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x, cur_y + 1);
-            via[cur_x][cur_y + 1] = VIA_N;
-            cost[cur_x][cur_y + 1] = next_cost;
-        }
-
-        if (cur_x < PATHFIND_GRID_SIZE - 1 && via[cur_x + 1][cur_y] == 0
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x + 1, cur_y);
-            via[cur_x + 1][cur_y] = VIA_E;
-            cost[cur_x + 1][cur_y] = next_cost;
-        }
-
-        if (cur_x > 0 && cur_y > 0 && via[cur_x - 1][cur_y - 1] == 0
-            && collision_traversable_south_west(map, height, abs_x, abs_y)
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x - 1, cur_y - 1);
-            via[cur_x - 1][cur_y - 1] = VIA_SW;
-            cost[cur_x - 1][cur_y - 1] = next_cost;
-        }
-
-        if (cur_x > 0 && cur_y < PATHFIND_GRID_SIZE - 1 && via[cur_x - 1][cur_y + 1] == 0
-            && collision_traversable_north_west(map, height, abs_x, abs_y)
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x - 1, cur_y + 1);
-            via[cur_x - 1][cur_y + 1] = VIA_NW;
-            cost[cur_x - 1][cur_y + 1] = next_cost;
-        }
-
-        if (cur_x < PATHFIND_GRID_SIZE - 1 && cur_y > 0 && via[cur_x + 1][cur_y - 1] == 0
-            && collision_traversable_south_east(map, height, abs_x, abs_y)
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x + 1, cur_y - 1);
-            via[cur_x + 1][cur_y - 1] = VIA_SE;
-            cost[cur_x + 1][cur_y - 1] = next_cost;
-        }
-
-        if (cur_x < PATHFIND_GRID_SIZE - 1 && cur_y < PATHFIND_GRID_SIZE - 1
-            && via[cur_x + 1][cur_y + 1] == 0
-            && collision_traversable_north_east(map, height, abs_x, abs_y)
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, cur_x + 1, cur_y + 1);
-            via[cur_x + 1][cur_y + 1] = VIA_NE;
-            cost[cur_x + 1][cur_y + 1] = next_cost;
+                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_FULL, next_x, next_y);
+            via[next_x][next_y] = pathfind_dir_via[i];
+            cost[next_x][next_y] = next_cost;
         }
 
         #undef EB
@@ -340,69 +293,31 @@ static inline PathResult pathfind_step_arena(
 
         #define EB(ax, ay) (extra_blocked && extra_blocked(blocked_ctx, (ax), (ay)))
 
-        if (cur_y > 0 && !BFS_VISITED(cur_x, cur_y - 1)
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && !EB(abs_x, abs_y - 1)) {
+        for (int i = 0; i < 8; i++) {
+            int dx = pathfind_dir_dx[i];
+            int dy = pathfind_dir_dy[i];
+            int next_x = cur_x + dx;
+            int next_y = cur_y + dy;
+            if (next_x < 0 || next_x >= arena_w ||
+                next_y < 0 || next_y >= arena_h)
+                continue;
+            if (BFS_VISITED(next_x, next_y)) continue;
+            if (!collision_traversable_step(map, height, abs_x, abs_y, dx, dy))
+                continue;
+            if (dx != 0 && dy != 0) {
+                if (!collision_traversable_step(map, height, abs_x, abs_y, 0, dy))
+                    continue;
+                if (!collision_traversable_step(map, height, abs_x, abs_y, dx, 0))
+                    continue;
+            }
+            if (EB(abs_x + dx, abs_y + dy)) continue;
+            if (dx != 0 && dy != 0) {
+                if (EB(abs_x, abs_y + dy)) continue;
+                if (EB(abs_x + dx, abs_y)) continue;
+            }
             pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x, cur_y - 1);
-            BFS_VISIT(cur_x, cur_y - 1, VIA_S, next_cost);
-        }
-        if (cur_x > 0 && !BFS_VISITED(cur_x - 1, cur_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x - 1, cur_y);
-            BFS_VISIT(cur_x - 1, cur_y, VIA_W, next_cost);
-        }
-        if (cur_y < arena_h - 1 && !BFS_VISITED(cur_x, cur_y + 1)
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && !EB(abs_x, abs_y + 1)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x, cur_y + 1);
-            BFS_VISIT(cur_x, cur_y + 1, VIA_N, next_cost);
-        }
-        if (cur_x < arena_w - 1 && !BFS_VISITED(cur_x + 1, cur_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x + 1, cur_y);
-            BFS_VISIT(cur_x + 1, cur_y, VIA_E, next_cost);
-        }
-        if (cur_x > 0 && cur_y > 0 && !BFS_VISITED(cur_x - 1, cur_y - 1)
-            && collision_traversable_south_west(map, height, abs_x, abs_y)
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x - 1, cur_y - 1);
-            BFS_VISIT(cur_x - 1, cur_y - 1, VIA_SW, next_cost);
-        }
-        if (cur_x > 0 && cur_y < arena_h - 1 && !BFS_VISITED(cur_x - 1, cur_y + 1)
-            && collision_traversable_north_west(map, height, abs_x, abs_y)
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_west(map, height, abs_x, abs_y)
-            && !EB(abs_x - 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x - 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x - 1, cur_y + 1);
-            BFS_VISIT(cur_x - 1, cur_y + 1, VIA_NW, next_cost);
-        }
-        if (cur_x < arena_w - 1 && cur_y > 0 && !BFS_VISITED(cur_x + 1, cur_y - 1)
-            && collision_traversable_south_east(map, height, abs_x, abs_y)
-            && collision_traversable_south(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y - 1) && !EB(abs_x, abs_y - 1) && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x + 1, cur_y - 1);
-            BFS_VISIT(cur_x + 1, cur_y - 1, VIA_SE, next_cost);
-        }
-        if (cur_x < arena_w - 1 && cur_y < arena_h - 1 && !BFS_VISITED(cur_x + 1, cur_y + 1)
-            && collision_traversable_north_east(map, height, abs_x, abs_y)
-            && collision_traversable_north(map, height, abs_x, abs_y)
-            && collision_traversable_east(map, height, abs_x, abs_y)
-            && !EB(abs_x + 1, abs_y + 1) && !EB(abs_x, abs_y + 1) && !EB(abs_x + 1, abs_y)) {
-            pathfind_enqueue_or_abort(
-                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, cur_x + 1, cur_y + 1);
-            BFS_VISIT(cur_x + 1, cur_y + 1, VIA_NE, next_cost);
+                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA, next_x, next_y);
+            BFS_VISIT(next_x, next_y, pathfind_dir_via[i], next_cost);
         }
 
         #undef EB
