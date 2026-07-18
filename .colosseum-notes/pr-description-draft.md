@@ -1,10 +1,11 @@
 # PR draft: branch osrs-colosseum-inferno-v2 -> PufferAI/PufferLib 5c
 
 Doctrine verdict applied 2026-07-17: terminal wins both envs, truncation
-commits dropped. Branch rebuilt as osrs-colosseum-inferno-v2 (old remote
+commits dropped. 2026-07-18 final squeeze folded in (-1626 lines, goldens
+bit-identical). Branch osrs-colosseum-inferno-v2 (old remote
 osrs-colosseum-inferno is stale, delete it). Commits:
-16132364b env-name, 1bcda0fdd head arrays, 732602fe3 logratio clamp,
-7fbb7b79d envs, 2a49ae9c7 encoder.
+284dd0009 env-name, 6ae8f0d3c head arrays, 9e4d39b65 logratio clamp,
+a630c23ad envs, affa6e13e encoder.
 
 Title: OSRS Fortis Colosseum and Inferno environments
 
