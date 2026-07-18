@@ -254,9 +254,12 @@ void puf_init(Env* env, Dict* kwargs) {
     inferno_apply_curriculum(env, kwargs);
 }
 
-static inline void inferno_env_write_obs_mask(Env* env) {
+static inline void inferno_env_write_obs(Env* env) {
     ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
         (float*)env->agents[0].observations);
+}
+
+static inline void inferno_env_write_mask(Env* env) {
     float mask_f[INF_ACTION_MASK_SIZE];
     ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), mask_f);
     unsigned char* mask = env->agents[0].action_mask;
@@ -266,7 +269,8 @@ static inline void inferno_env_write_obs_mask(Env* env) {
 
 void puf_reset(Env* env) {
     ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
-    inferno_env_write_obs_mask(env);
+    inferno_env_write_obs(env);
+    inferno_env_write_mask(env);
     env->agents[0].rewards[0] = 0.0f;
     env->agents[0].terminals[0] = 0.0f;
 }
@@ -304,16 +308,9 @@ void puf_step(Env* env) {
     ENCOUNTER_INFERNO.step(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), acts);
     INF_PROFILE_MARK(INF_PROF_C_ENCOUNTER_STEP);
 
-    ENCOUNTER_INFERNO.write_obs(INF_ENV_STATE(env), INF_ENV_CONTEXT(env),
-        (float*)env->agents[0].observations);
+    inferno_env_write_obs(env);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_OBS);
-    {
-        float mask_f[INF_ACTION_MASK_SIZE];
-        ENCOUNTER_INFERNO.write_mask(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), mask_f);
-        unsigned char* mask = env->agents[0].action_mask;
-        for (int i = 0; i < INF_ACTION_MASK_SIZE; i++)
-            mask[i] = mask_f[i] > 0.0f ? 1u : 0u;
-    }
+    inferno_env_write_mask(env);
     INF_PROFILE_MARK(INF_PROF_C_WRITE_MASK);
 
     env->agents[0].rewards[0] =
@@ -658,7 +655,8 @@ void puf_step(Env* env) {
     skip_log:
         INF_PROFILE_MARK(INF_PROF_C_TERMINAL_LOG);
         ENCOUNTER_INFERNO.reset(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), 0);
-        inferno_env_write_obs_mask(env);
+        inferno_env_write_obs(env);
+        inferno_env_write_mask(env);
         INF_PROFILE_MARK(INF_PROF_C_RESET);
     }
 

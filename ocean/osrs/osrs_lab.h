@@ -90,15 +90,6 @@ static inline void encounter_lab_string_append(EncounterLabString* out, const ch
     out->len += (size_t)written;
 }
 
-static inline void encounter_lab_string_free(EncounterLabString* out) {
-    if (!out) return;
-    free(out->data);
-    out->data = NULL;
-    out->len = 0;
-    out->cap = 0;
-    out->owner_label = NULL;
-}
-
 static inline int encounter_lab_parse_int_value(
     const char* owner_label, const char* value
 ) {

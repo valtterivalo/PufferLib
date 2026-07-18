@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "osrs_assets_generated.h"
+#include "osrs_binary_io.h"
 
 #define OSRS_ASSET_ROOT_DEFAULT "ocean/osrs/data"
 #define OSRS_ASSET(path) osrs_asset_path(path)
@@ -43,36 +44,6 @@ static inline int osrs_asset_manifest_path_is_valid(const char* path) {
         if (len == 2 && part[0] == '.' && part[1] == '.') return 0;
         if (!slash) return 1;
         part = slash + 1;
-    }
-    return 0;
-}
-
-static inline size_t osrs_asset_group_count(void) {
-    return OSRS_ASSET_GROUP_COUNT;
-}
-
-static inline const OsrsAssetGroup* osrs_asset_group_at(size_t idx) {
-    if (idx >= OSRS_ASSET_GROUP_COUNT) return NULL;
-    return &OSRS_ASSET_GROUPS[idx];
-}
-
-static inline const OsrsAssetGroup* osrs_asset_group_by_name(const char* name) {
-    if (!name) return NULL;
-    for (size_t i = 0; i < OSRS_ASSET_GROUP_COUNT; i++) {
-        if (strcmp(OSRS_ASSET_GROUPS[i].name, name) == 0) {
-            return &OSRS_ASSET_GROUPS[i];
-        }
-    }
-    return NULL;
-}
-
-static inline int osrs_asset_group_contains(
-    const OsrsAssetGroup* group,
-    const char* path
-) {
-    if (!group || !path) return 0;
-    for (size_t i = 0; i < group->path_count; i++) {
-        if (strcmp(group->paths[i], path) == 0) return 1;
     }
     return 0;
 }
@@ -135,36 +106,12 @@ static inline int osrs_asset_exists(const char* path) {
     return 1;
 }
 
-static inline size_t osrs_asset_validate_group(
-    OsrsAssetGroupKind kind,
-    const char** missing_paths,
-    size_t missing_path_capacity
-) {
-    const OsrsAssetGroup* group = osrs_asset_group_at((size_t)kind);
-    if (!group) {
-        fprintf(stderr, "osrs_asset_validate_group: bad group: %d\n", (int)kind);
-        abort();
-    }
-
-    size_t missing_count = 0;
-    for (size_t i = 0; i < group->path_count; i++) {
-        const char* path = group->paths[i];
-        if (!osrs_asset_manifest_path_is_valid(path) || !osrs_asset_exists(path)) {
-            if (missing_paths && missing_count < missing_path_capacity) {
-                missing_paths[missing_count] = path;
-            }
-            missing_count++;
-        }
-    }
-    return missing_count;
-}
-
 static inline void osrs_asset_require_group(OsrsAssetGroupKind kind) {
-    const OsrsAssetGroup* group = osrs_asset_group_at((size_t)kind);
-    if (!group) {
+    if ((size_t)kind >= OSRS_ASSET_GROUP_COUNT) {
         fprintf(stderr, "osrs_asset_require_group: bad group: %d\n", (int)kind);
         abort();
     }
+    const OsrsAssetGroup* group = &OSRS_ASSET_GROUPS[kind];
 
     size_t invalid_count = 0;
     size_t missing_count = 0;
@@ -197,30 +144,12 @@ static inline void osrs_asset_require_group(OsrsAssetGroupKind kind) {
     }
 }
 
-static inline void osrs_asset_require_all_groups(void) {
-    for (size_t i = 0; i < OSRS_ASSET_GROUP_COUNT; i++) {
-        osrs_asset_require_group((OsrsAssetGroupKind)i);
-    }
-}
-
 static inline OsrsAssetBytes osrs_asset_read_all(const char* path) {
     OsrsAssetBytes out = {0};
     const char* full_path = osrs_asset_path(path);
     FILE* f = osrs_asset_fopen(path, "rb");
     if (!f) return out;
-    if (fseek(f, 0, SEEK_END) != 0) {
-        fprintf(stderr, "%s: fseek end failed\n", full_path);
-        abort();
-    }
-    long size = ftell(f);
-    if (size < 0) {
-        fprintf(stderr, "%s: ftell failed\n", full_path);
-        abort();
-    }
-    if (fseek(f, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "%s: fseek start failed\n", full_path);
-        abort();
-    }
+    long size = osrs_file_size_or_abort(f, full_path);
     if (size == 0) {
         fclose(f);
         return out;

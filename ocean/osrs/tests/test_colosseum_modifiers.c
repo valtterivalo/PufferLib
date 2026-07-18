@@ -11,9 +11,7 @@
     (ctx_ptr)->config.late_start_state_mode = 0; \
 } while (0)
 
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
+#include "ocean/osrs/tests/osrs_test_check.h"
 
 #define TEST_NPC_TELLS_OFFSET 26
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
@@ -22,12 +20,6 @@ static int tests_failed = 0;
 #define TEST_MOD_OBS_SOLARFLARE (TEST_MOD_HAZARD_BASE + 10)
 #define TEST_MOD_OBS_MOLTEN (TEST_MOD_HAZARD_BASE + 18)
 #define TEST_MOD_OBS_VOLATILITY (TEST_MOD_HAZARD_BASE + 30)
-
-#define CHECK(label, cond) do { \
-    tests_run++; \
-    if (cond) { tests_passed++; } \
-    else { tests_failed++; printf("  FAIL: %s\n", (label)); } \
-} while (0)
 
 static EncounterLoadoutStats test_col_live_stats_for_set(
     const ColosseumState* s,
@@ -7723,8 +7715,5 @@ int main(void) {
     test_threat_field_obs();
     test_inventory_obs_memo();
 
-    printf("\n%d/%d passed", tests_passed, tests_run);
-    if (tests_failed) printf(", %d FAILED", tests_failed);
-    printf("\n");
-    return tests_failed ? 1 : 0;
+    return osrs_test_summary();
 }
