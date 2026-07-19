@@ -204,76 +204,12 @@ static void col_sync_weapon_set_from_equipped_weapon(ColosseumState* s) {
     s->player.visible_gear = s->player.current_gear;
 }
 
-static int col_first_empty_inventory_cell(const ColosseumState* s, int except_slot) {
-    for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++) {
-        if (i == except_slot) continue;
-        if (osrs_inventory_cell_is_empty(&s->inventory_cells[i])) return i;
-    }
-    return -1;
-}
-
-static int col_inventory_cell_holds_equipped_item(const ColosseumState* s, int cell_idx) {
-    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    if (cell->item_idx == ITEM_NONE) return 0;
-    int slot = osrs_item_gear_slot(cell->item_idx);
-    if (slot < 0) return 0;
-    return s->player.equipped[slot] == cell->item_idx;
-}
-
 static int col_can_equip_from_cell(const ColosseumState* s, int cell_idx) {
-    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    if (cell->item_idx == ITEM_NONE) return 0;
-    if (col_inventory_cell_holds_equipped_item(s, cell_idx)) return 0;
-
-    uint8_t item_idx = cell->item_idx;
-    int gear_slot = osrs_item_gear_slot(item_idx);
-    if (gear_slot < 0) return 0;
-    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx) &&
-            s->player.equipped[GEAR_SLOT_SHIELD] != ITEM_NONE &&
-            s->player.equipped[GEAR_SLOT_WEAPON] != ITEM_NONE &&
-            col_first_empty_inventory_cell(s, cell_idx) < 0) return 0;
-    if (gear_slot == GEAR_SLOT_SHIELD &&
-            item_is_two_handed(s->player.equipped[GEAR_SLOT_WEAPON]) &&
-            col_first_empty_inventory_cell(s, cell_idx) < 0) return 0;
-    return 1;
+    return osrs_can_equip_from_cell(&s->player, s->inventory_cells, cell_idx);
 }
 
 static void col_equip_from_cell(ColosseumState* s, int cell_idx) {
-    if (!col_can_equip_from_cell(s, cell_idx)) return;
-
-    ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    uint8_t item_idx = cell->item_idx;
-    int gear_slot = osrs_item_gear_slot(item_idx);
-    if (gear_slot < 0) {
-        fprintf(stderr, "colosseum equip: item %u has no gear slot\n", item_idx);
-        abort();
-    }
-    uint8_t displaced = s->player.equipped[gear_slot];
-
-    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(item_idx)) {
-        uint8_t shield = s->player.equipped[GEAR_SLOT_SHIELD];
-        if (shield != ITEM_NONE) {
-            if (displaced == ITEM_NONE) {
-                displaced = shield;
-            } else {
-                int empty = col_first_empty_inventory_cell(s, cell_idx);
-                if (empty < 0) return;
-                s->inventory_cells[empty] = osrs_inventory_cell_from_item(shield);
-            }
-            s->player.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
-        }
-    } else if (gear_slot == GEAR_SLOT_SHIELD &&
-            item_is_two_handed(s->player.equipped[GEAR_SLOT_WEAPON])) {
-        displaced = s->player.equipped[GEAR_SLOT_WEAPON];
-        s->player.equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
-
-        s->player.spec_armed = 0;
-    }
-
-    s->player.equipped[gear_slot] = item_idx;
-    *cell = osrs_inventory_cell_from_item(displaced);
-    if (gear_slot == GEAR_SLOT_WEAPON) s->player.spec_armed = 0;
-    osrs_refresh_player_equipment(&s->player);
+    if (osrs_equip_from_cell(&s->player, s->inventory_cells, cell_idx) < 0) return;
     col_sync_weapon_set_from_equipped_weapon(s);
     col_mark_live_loadout_dirty(s);
 }
@@ -282,28 +218,7 @@ static int col_can_eat_consumable_kind(
     const ColosseumState* s,
     OsrsConsumableKind kind
 ) {
-    switch (kind) {
-        case OSRS_CONSUMABLE_SHARK_FOOD:
-            return s->player.food_timer == 0 &&
-                s->player.current_hitpoints < s->player.base_hitpoints;
-        case OSRS_CONSUMABLE_KARAMBWAN:
-            return s->player.karambwan_timer == 0 &&
-                s->player.current_hitpoints < s->player.base_hitpoints;
-        case OSRS_CONSUMABLE_BREW:
-        case OSRS_CONSUMABLE_SUPER_RESTORE:
-        case OSRS_CONSUMABLE_SANFEW:
-        case OSRS_CONSUMABLE_SUPER_COMBAT:
-        case OSRS_CONSUMABLE_DIVINE_COMBAT:
-        case OSRS_CONSUMABLE_RANGING:
-        case OSRS_CONSUMABLE_DIVINE_RANGING:
-        case OSRS_CONSUMABLE_SURGE:
-        case OSRS_CONSUMABLE_GUTHIX_REST:
-        case OSRS_CONSUMABLE_SATURATED_HEART:
-        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
-        case OSRS_CONSUMABLE_NONE:
-            return 0;
-    }
-    abort();
+    return osrs_can_eat_consumable_kind(&s->player, kind);
 }
 
 #define COLO_BOOST_REDRINK_LEVEL 105
@@ -338,6 +253,8 @@ static int col_drink_has_effect(const ColosseumState* s, OsrsConsumableKind kind
             return p->current_magic < COLO_BOOST_REDRINK_LEVEL;
         case OSRS_CONSUMABLE_SUPER_RESTORE:
             return col_restore_worth_drinking(s);
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            return p->current_prayer < p->base_prayer;
         case OSRS_CONSUMABLE_SANFEW:
             return afflicted || col_restore_worth_drinking(s);
         default:
@@ -411,6 +328,11 @@ static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) 
                 &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_RESTORE);
             encounter_cap_prayer_restore(&s->player);
             col_finish_stat_moving_consumable(s);
+            return;
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
+            encounter_add_prayer_restore(
+                &s->player, osrs_prayer_potion_restore_amount(s->player.base_prayer));
+            encounter_cap_prayer_restore(&s->player);
             return;
         case OSRS_CONSUMABLE_SANFEW:
             encounter_add_prayer_restore(
@@ -497,136 +419,45 @@ static int col_apply_drink_cell(
     return 1;
 }
 
-typedef struct {
-    int equip_cell_by_slot[NUM_GEAR_SLOTS];
-    int equip_order_by_slot[NUM_GEAR_SLOTS];
-    int eat_cell;
-    int eat_order;
-    OsrsInventoryClickResolution eat_resolution;
-    int drink_cell;
-    int drink_order;
-    OsrsInventoryClickResolution drink_resolution;
-} ColoInventoryTickIntent;
-
-static ColoInventoryTickIntent col_inventory_tick_intent_empty(void) {
-    ColoInventoryTickIntent intent;
-    memset(&intent, 0, sizeof(intent));
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        intent.equip_cell_by_slot[slot] = -1;
-        intent.equip_order_by_slot[slot] = -1;
-    }
-    intent.eat_cell = -1;
-    intent.eat_order = -1;
-    intent.drink_cell = -1;
-    intent.drink_order = -1;
-    return intent;
-}
-
-static ColoInventoryTickIntent col_resolve_inventory_tick_intent(
+static OsrsInventoryTickIntent col_resolve_inventory_tick_intent(
     const ColosseumState* s,
     const int* actions
 ) {
-    ColoInventoryTickIntent intent = col_inventory_tick_intent_empty();
-
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        int action = actions[COLO_HEAD_EQUIP_SLOT(slot)];
-        if (action <= 0 || action > COLO_INVENTORY_DISPLAY_SLOTS) continue;
-        int cell_idx = action - 1;
-        if (!col_can_equip_from_cell(s, cell_idx)) continue;
-        int gear_slot = osrs_item_gear_slot(s->inventory_cells[cell_idx].item_idx);
-        if (gear_slot < 0 || gear_slot >= NUM_GEAR_SLOTS) {
-            fprintf(stderr, "colosseum equip intent: invalid gear slot %d\n", gear_slot);
-            abort();
-        }
-        if (gear_slot != slot) continue;
-        intent.equip_cell_by_slot[slot] = cell_idx;
-        intent.equip_order_by_slot[slot] = slot;
-    }
-
-    int eat_action = actions[COLO_HEAD_EAT];
-    if (eat_action > 0 && eat_action <= COLO_INVENTORY_DISPLAY_SLOTS) {
-        int cell_idx = eat_action - 1;
-        OsrsInventoryClickResolution resolution =
-            osrs_inventory_cell_click_interpret(
-                &s->inventory_cells[cell_idx], OSRS_CLICK_TICK_FIRST);
-        if (resolution.click_action == OSRS_CLICK_EAT &&
-                col_can_eat_consumable_kind(s, resolution.consumable_kind)) {
-            intent.eat_cell = cell_idx;
-            intent.eat_order = NUM_GEAR_SLOTS;
-            intent.eat_resolution = resolution;
-        }
-    }
-
-    int drink_action = actions[COLO_HEAD_DRINK];
-    if (drink_action > 0 && drink_action <= COLO_INVENTORY_DISPLAY_SLOTS) {
-        int cell_idx = drink_action - 1;
-        OsrsInventoryClickResolution resolution =
-            osrs_inventory_cell_click_interpret(
-                &s->inventory_cells[cell_idx], OSRS_CLICK_TICK_FIRST);
-        if (resolution.click_action == OSRS_CLICK_DRINK &&
-                s->inventory_cells[cell_idx].dose > 0 &&
-                s->player.potion_timer == 0) {
-            intent.drink_cell = cell_idx;
-            intent.drink_order = NUM_GEAR_SLOTS + 1;
-            intent.drink_resolution = resolution;
-        }
-    }
-
-    return intent;
-}
-
-static int col_inventory_tick_intent_has_effect(const ColoInventoryTickIntent* intent) {
-    if (intent->eat_cell >= 0 || intent->drink_cell >= 0) return 1;
+    OsrsInventoryClickActions clicks;
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        if (intent->equip_cell_by_slot[slot] >= 0) return 1;
-    return 0;
-}
-
-static int col_next_inventory_apply_order(const ColoInventoryTickIntent* intent) {
-    int sentinel = NUM_GEAR_SLOTS + 2;
-    int best = sentinel;
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        int order = intent->equip_order_by_slot[slot];
-        if (order >= 0 && order < best) best = order;
-    }
-    if (intent->eat_order >= 0 && intent->eat_order < best) best = intent->eat_order;
-    if (intent->drink_order >= 0 && intent->drink_order < best) best = intent->drink_order;
-    return best == sentinel ? -1 : best;
+        clicks.equip_by_slot[slot] = actions[COLO_HEAD_EQUIP_SLOT(slot)];
+    clicks.eat = actions[COLO_HEAD_EAT];
+    clicks.drink = actions[COLO_HEAD_DRINK];
+    return osrs_resolve_inventory_tick_intent(&s->player, s->inventory_cells, &clicks);
 }
 
 static void col_apply_inventory_tick_intent(
     ColosseumState* s,
-    ColoInventoryTickIntent* intent
+    OsrsInventoryTickIntent* intent
 ) {
-    if (col_inventory_tick_intent_has_effect(intent))
+    if (osrs_inventory_tick_intent_has_effect(intent))
         osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_EQUIP);
 
-    int order;
-    while ((order = col_next_inventory_apply_order(intent)) >= 0) {
-        for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-            if (intent->equip_order_by_slot[slot] != order) continue;
-            col_equip_from_cell(s, intent->equip_cell_by_slot[slot]);
-            intent->equip_order_by_slot[slot] = -1;
-            intent->equip_cell_by_slot[slot] = -1;
-        }
-        if (intent->eat_order == order) {
-            col_apply_food_cell(s, intent->eat_resolution.consumable_kind);
-            col_empty_inventory_cell(s, intent->eat_cell);
-            intent->eat_order = -1;
-            intent->eat_cell = -1;
-        }
-        if (intent->drink_order == order) {
-            (void)col_apply_drink_cell(
-                s, intent->drink_cell, intent->drink_resolution);
-            intent->drink_order = -1;
-            intent->drink_cell = -1;
+    OsrsInventoryApplyStep step;
+    while (osrs_inventory_intent_next(intent, &step)) {
+        switch (step.kind) {
+            case OSRS_INVENTORY_APPLY_EQUIP:
+                col_equip_from_cell(s, step.cell_idx);
+                break;
+            case OSRS_INVENTORY_APPLY_EAT:
+                col_apply_food_cell(s, step.resolution.consumable_kind);
+                col_empty_inventory_cell(s, step.cell_idx);
+                break;
+            case OSRS_INVENTORY_APPLY_DRINK:
+                (void)col_apply_drink_cell(s, step.cell_idx, step.resolution);
+                break;
         }
     }
 }
 
 static void col_log_inventory_tick_intent(
     const ColosseumState* s,
-    const ColoInventoryTickIntent* intent,
+    const OsrsInventoryTickIntent* intent,
     const int* actions,
     int interrupted
 ) {
@@ -1203,10 +1034,10 @@ static void col_tick_player_ctx(
         col_mark_live_loadout_dirty(s);
 
     if (!ctx->config.mask_inventory_heads) {
-        ColoInventoryTickIntent intent = col_resolve_inventory_tick_intent(s, actions);
+        OsrsInventoryTickIntent intent = col_resolve_inventory_tick_intent(s, actions);
         if (ctx->config.action_debug_log)
             col_log_inventory_tick_intent(
-                s, &intent, actions, col_inventory_tick_intent_has_effect(&intent));
+                s, &intent, actions, osrs_inventory_tick_intent_has_effect(&intent));
         col_apply_inventory_tick_intent(s, &intent);
     }
 

@@ -1725,7 +1725,7 @@ static void col_write_inventory_and_equipped_obs(
             cell->item_idx,
             cell->raw_osrs_id,
             cell->dose,
-            col_inventory_cell_holds_equipped_item(s, cell_idx),
+            osrs_inventory_cell_holds_equipped_item(&s->player, s->inventory_cells, cell_idx),
             deltas,
             s->player.base_hitpoints,
             s->player.base_prayer,

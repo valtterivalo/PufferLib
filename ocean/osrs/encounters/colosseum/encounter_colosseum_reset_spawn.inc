@@ -420,6 +420,7 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
                 break;
             case OSRS_CONSUMABLE_SUPER_RESTORE:
             case OSRS_CONSUMABLE_SANFEW:
+            case OSRS_CONSUMABLE_PRAYER_RESTORE:
                 restore_doses += cell->dose;
                 break;
             case OSRS_CONSUMABLE_SUPER_COMBAT:

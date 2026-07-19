@@ -27,6 +27,7 @@ typedef enum {
     OSRS_CONSUMABLE_ANTIVENOM_PLUS = 11,
     OSRS_CONSUMABLE_SHARK_FOOD = 12,
     OSRS_CONSUMABLE_KARAMBWAN = 13,
+    OSRS_CONSUMABLE_PRAYER_RESTORE = 14,
 } OsrsConsumableKind;
 
 typedef enum {
@@ -107,6 +108,10 @@ static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {12915, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 3},
     {12917, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 2},
     {12919, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_ANTIVENOM_PLUS, 1},
+    {2434, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 4},
+    {139, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 3},
+    {141, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 2},
+    {143, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 1},
     {385, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SHARK_FOOD, 0},
     {3144, OSRS_CLICK_EAT, OSRS_CONSUMABLE_KARAMBWAN, 0},
 };
@@ -143,7 +148,8 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
     switch (k) {
         case OSRS_CONSUMABLE_BREW:            return COL_CKIND6_BREW;
         case OSRS_CONSUMABLE_SUPER_RESTORE:
-        case OSRS_CONSUMABLE_SANFEW:          return COL_CKIND6_RESTORE;
+        case OSRS_CONSUMABLE_SANFEW:
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:  return COL_CKIND6_RESTORE;
         case OSRS_CONSUMABLE_SUPER_COMBAT:
         case OSRS_CONSUMABLE_DIVINE_COMBAT:   return COL_CKIND6_COMBAT_BOOST;
         case OSRS_CONSUMABLE_RANGING:
@@ -172,6 +178,7 @@ static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_
 static inline int osrs_consumable_prayer_restore_amount(OsrsConsumableKind k, int base_prayer) {
     switch (k) {
         case OSRS_CONSUMABLE_SUPER_RESTORE: return osrs_super_restore_amount(base_prayer);
+        case OSRS_CONSUMABLE_PRAYER_RESTORE: return osrs_prayer_potion_restore_amount(base_prayer);
         case OSRS_CONSUMABLE_SANFEW:        return osrs_sanfew_restore_amount(base_prayer);
         default:                            return 0;
     }
