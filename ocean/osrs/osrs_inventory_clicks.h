@@ -28,6 +28,8 @@ typedef enum {
     OSRS_CONSUMABLE_SHARK_FOOD = 12,
     OSRS_CONSUMABLE_KARAMBWAN = 13,
     OSRS_CONSUMABLE_PRAYER_RESTORE = 14,
+    OSRS_CONSUMABLE_BASTION = 15,
+    OSRS_CONSUMABLE_STAMINA = 16,
 } OsrsConsumableKind;
 
 typedef enum {
@@ -112,6 +114,14 @@ static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
     {139, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 3},
     {141, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 2},
     {143, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_PRAYER_RESTORE, 1},
+    {22461, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BASTION, 4},
+    {22464, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BASTION, 3},
+    {22467, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BASTION, 2},
+    {22470, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_BASTION, 1},
+    {12625, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_STAMINA, 4},
+    {12627, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_STAMINA, 3},
+    {12629, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_STAMINA, 2},
+    {12631, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_STAMINA, 1},
     {385, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SHARK_FOOD, 0},
     {3144, OSRS_CLICK_EAT, OSRS_CONSUMABLE_KARAMBWAN, 0},
 };
@@ -153,11 +163,13 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
         case OSRS_CONSUMABLE_SUPER_COMBAT:
         case OSRS_CONSUMABLE_DIVINE_COMBAT:   return COL_CKIND6_COMBAT_BOOST;
         case OSRS_CONSUMABLE_RANGING:
-        case OSRS_CONSUMABLE_DIVINE_RANGING:  return COL_CKIND6_RANGED_BOOST;
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+        case OSRS_CONSUMABLE_BASTION:         return COL_CKIND6_RANGED_BOOST;
         case OSRS_CONSUMABLE_SURGE:
         case OSRS_CONSUMABLE_GUTHIX_REST:
         case OSRS_CONSUMABLE_SATURATED_HEART:
-        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:  return COL_CKIND6_SPECIAL;
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+        case OSRS_CONSUMABLE_STAMINA:         return COL_CKIND6_SPECIAL;
         case OSRS_CONSUMABLE_SHARK_FOOD:
         case OSRS_CONSUMABLE_KARAMBWAN:       return COL_CKIND6_FOOD;
         case OSRS_CONSUMABLE_NONE:            return COL_CKIND6_NONE;
@@ -189,7 +201,8 @@ static inline int osrs_consumable_offensive_boost_amount(OsrsConsumableKind k, i
         case OSRS_CONSUMABLE_SUPER_COMBAT:
         case OSRS_CONSUMABLE_DIVINE_COMBAT:   return osrs_super_combat_boost_amount(base_level);
         case OSRS_CONSUMABLE_RANGING:
-        case OSRS_CONSUMABLE_DIVINE_RANGING:  return osrs_ranging_boost_amount(base_level);
+        case OSRS_CONSUMABLE_DIVINE_RANGING:
+        case OSRS_CONSUMABLE_BASTION:         return osrs_ranging_boost_amount(base_level);
         case OSRS_CONSUMABLE_SATURATED_HEART: return osrs_saturated_heart_magic_boost(base_level);
         default:                              return 0;
     }
