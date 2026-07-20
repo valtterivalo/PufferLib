@@ -640,10 +640,37 @@ static int visual_policy_is_continuous(
     return 1;
 }
 
-#define VISUAL_POLICY_ENTITY_FEATS      37
-#define VISUAL_POLICY_ENTITY_BOTTLENECK 16
-#define VISUAL_POLICY_INV_FEATS         28
-#define VISUAL_POLICY_INV_BOTTLENECK    16
+typedef enum {
+    VISUAL_ENTITY_ARCH_NONE = 0,
+    VISUAL_ENTITY_ARCH_COLOSSEUM = 1,
+    VISUAL_ENTITY_ARCH_INFERNO = 2,
+} VisualEntityArch;
+
+static VisualEntityArch visual_policy_entity_arch(const EncounterDef* edef) {
+    if (strcmp(edef->name, "colosseum") == 0) return VISUAL_ENTITY_ARCH_COLOSSEUM;
+    if (strcmp(edef->name, "inferno") == 0) return VISUAL_ENTITY_ARCH_INFERNO;
+    return VISUAL_ENTITY_ARCH_NONE;
+}
+
+static int visual_policy_entity_feats(VisualEntityArch entity_arch) {
+    switch (entity_arch) {
+        case VISUAL_ENTITY_ARCH_COLOSSEUM: return COLO_ENT_INF_FEATS;
+        case VISUAL_ENTITY_ARCH_INFERNO: return INF_ENT_FEATS;
+        case VISUAL_ENTITY_ARCH_NONE: break;
+    }
+    fprintf(stderr, "policy: entity feats requested without an entity arch\n");
+    abort();
+}
+
+static int visual_policy_inv_feats(VisualEntityArch entity_arch) {
+    switch (entity_arch) {
+        case VISUAL_ENTITY_ARCH_COLOSSEUM: return COLO_ENT_INF_INV_FEATS;
+        case VISUAL_ENTITY_ARCH_INFERNO: return INF_ENT_INV_FEATS;
+        case VISUAL_ENTITY_ARCH_NONE: break;
+    }
+    fprintf(stderr, "policy: inv feats requested without an entity arch\n");
+    abort();
+}
 
 static int64_t visual_policy_expected_weight_count(
     int input_size,
@@ -652,7 +679,8 @@ static int64_t visual_policy_expected_weight_count(
     const int* action_dims,
     int num_action_heads,
     int decoder_value_heads,
-    int entity_encoder
+    int entity_encoder,
+    VisualEntityArch entity_arch
 ) {
     int action_sum = 0;
     for (int h = 0; h < num_action_heads; h++) {
@@ -662,12 +690,12 @@ static int64_t visual_policy_expected_weight_count(
     int64_t total = 0;
     total += (int64_t)hidden_size * input_size;
     if (entity_encoder >= 1) {
-        total += (int64_t)VISUAL_POLICY_ENTITY_BOTTLENECK * VISUAL_POLICY_ENTITY_FEATS;
-        total += (int64_t)hidden_size * VISUAL_POLICY_ENTITY_BOTTLENECK;
+        total += (int64_t)COLO_ENT_INF_BOTTLENECK * visual_policy_entity_feats(entity_arch);
+        total += (int64_t)hidden_size * COLO_ENT_INF_BOTTLENECK;
     }
     if (entity_encoder >= 2) {
-        total += (int64_t)VISUAL_POLICY_INV_BOTTLENECK * VISUAL_POLICY_INV_FEATS;
-        total += (int64_t)hidden_size * VISUAL_POLICY_INV_BOTTLENECK;
+        total += (int64_t)COLO_ENT_INF_INV_BOTTLENECK * visual_policy_inv_feats(entity_arch);
+        total += (int64_t)hidden_size * COLO_ENT_INF_INV_BOTTLENECK;
     }
     total += (int64_t)(action_sum + decoder_value_heads) * hidden_size;
     if (visual_policy_is_continuous(action_dims, num_action_heads)) {
@@ -692,6 +720,8 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     int obs_input_size = policy->obs_size;
     int full_input_size = policy->obs_size + policy->mask_size;
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
+    VisualEntityArch entity_arch = visual_policy_entity_arch(edef);
+    int enc_max = entity_arch == VISUAL_ENTITY_ARCH_NONE ? 0 : 2;
 
     VisualPolicyModelShape match = {0};
     int matches = 0;
@@ -700,14 +730,14 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
         if (cli_hidden_size > 0 && hs != cli_hidden_size) continue;
         for (int layers = 1; layers <= 8; layers++) {
             if (cli_num_layers > 0 && layers != cli_num_layers) continue;
-            for (int enc = 0; enc <= 2; enc++) {
+            for (int enc = 0; enc <= enc_max; enc++) {
                 if (cli_entity_encoder > 0 && enc != cli_entity_encoder) continue;
                 for (int value_heads = 0; value_heads <= 1; value_heads++) {
                     for (int variant = 0; variant <= 1; variant++) {
                         int input_size = variant ? full_input_size : obs_input_size;
                         int64_t expected = visual_policy_expected_weight_count(
                             input_size, hs, layers, policy->action_dims,
-                            policy->num_action_heads, value_heads, enc);
+                            policy->num_action_heads, value_heads, enc, entity_arch);
                         if (expected != file_weights) continue;
                         match = (VisualPolicyModelShape){
                             input_size, value_heads, enc, hs, layers};
@@ -727,8 +757,9 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
     if (matches == 0) {
         fprintf(stderr,
             "policy: %s model shape mismatch: file=%lld floats matches no architecture"
-            " (obs=%d mask=%d, scanned hs 128..4096, layers 1..8, entity 0..2%s)\n",
+            " (obs=%d mask=%d, scanned hs 128..4096, layers 1..8, entity 0..%d%s)\n",
             edef->name, (long long)file_weights, policy->obs_size, policy->mask_size,
+            enc_max,
             (cli_hidden_size > 0 || cli_num_layers > 0 || cli_entity_encoder > 0)
                 ? " within the given CLI constraints" : "");
         abort();
@@ -769,7 +800,8 @@ static VisualNet* visual_policy_make_puffernet(
     int action_dims[],
     int num_action_heads,
     int decoder_value_heads,
-    int entity_encoder
+    int entity_encoder,
+    VisualEntityArch entity_arch
 ) {
     VisualNet* net = (VisualNet*)calloc(1, sizeof(VisualNet));
     if (!net) {
@@ -802,12 +834,12 @@ static VisualNet* visual_policy_make_puffernet(
     if (entity_encoder) {
         off = visual_policy_layout_tensor("enc.global_w", off, (int64_t)hidden_dim * input_dim);
         off = visual_policy_layout_tensor("enc.entity_l1_w", off,
-            (int64_t)COLO_ENT_INF_BOTTLENECK * COLO_ENT_INF_FEATS);
+            (int64_t)COLO_ENT_INF_BOTTLENECK * visual_policy_entity_feats(entity_arch));
         off = visual_policy_layout_tensor("enc.entity_l2_w", off,
             (int64_t)hidden_dim * COLO_ENT_INF_BOTTLENECK);
         if (entity_encoder >= 2) {
             off = visual_policy_layout_tensor("enc.inv_l1_w", off,
-                (int64_t)COLO_ENT_INF_INV_BOTTLENECK * COLO_ENT_INF_INV_FEATS);
+                (int64_t)COLO_ENT_INF_INV_BOTTLENECK * visual_policy_inv_feats(entity_arch));
             off = visual_policy_layout_tensor("enc.inv_l2_w", off,
                 (int64_t)hidden_dim * COLO_ENT_INF_INV_BOTTLENECK);
         }
@@ -830,8 +862,19 @@ static VisualNet* visual_policy_make_puffernet(
     int64_t off_total = off;
 
     if (entity_encoder) {
-        net->entity_encoder = make_colosseum_entity_encoder(
-            weights, 1, input_dim, hidden_dim, entity_encoder);
+        switch (entity_arch) {
+            case VISUAL_ENTITY_ARCH_COLOSSEUM:
+                net->entity_encoder = make_colosseum_entity_encoder(
+                    weights, 1, input_dim, hidden_dim, entity_encoder);
+                break;
+            case VISUAL_ENTITY_ARCH_INFERNO:
+                net->entity_encoder = make_inferno_entity_encoder(
+                    weights, 1, input_dim, hidden_dim, entity_encoder);
+                break;
+            case VISUAL_ENTITY_ARCH_NONE:
+                fprintf(stderr, "policy: entity encoder resolved without an entity arch\n");
+                abort();
+        }
     } else {
         net->encoder = make_linear(weights, 1, input_dim, hidden_dim);
     }
@@ -930,7 +973,8 @@ static void visual_policy_init(
         policy->action_dims,
         policy->num_action_heads,
         model_shape.decoder_value_heads,
-        model_shape.entity_encoder);
+        model_shape.entity_encoder,
+        visual_policy_entity_arch(edef));
     int64_t file_weights = visual_policy_file_weight_count(policy->weights);
     if (policy->weights->idx != file_weights) {
         fprintf(stderr,
@@ -1019,7 +1063,7 @@ static void visual_policy_actions(
     edef->write_mask(state, context, policy->obs + policy->obs_size);
     float* encoded;
     if (policy->net->entity_encoder) {
-        colosseum_entity_encoder(policy->net->entity_encoder, policy->obs);
+        entity_encoder_forward(policy->net->entity_encoder, policy->obs);
         encoded = policy->net->entity_encoder->output;
     } else {
         linear(policy->net->encoder, policy->obs);
