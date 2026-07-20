@@ -106,21 +106,21 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 2000
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x43f47e4f519ef7f4ULL,  /* wave1_a */
-    0x738d162fceec35bfULL,  /* wave1_b */
-    0x92549035c7110f34ULL,  /* wave1_c */
-    0x8c556a1daee3aec6ULL,  /* meleer_a */
-    0x6a4cdc52502e98d5ULL,  /* meleer_b */
-    0x760d1511973af126ULL,  /* ranger_a */
-    0x1284d2c7f79a7a19ULL,  /* ranger_b */
-    0xa1f258fa6456087cULL,  /* mager_a */
-    0xfa34a07dd7c77b2eULL,  /* mager_b */
-    0xb428b6c81e18e9b9ULL,  /* jad_a */
-    0x4eb72d65d4f43006ULL,  /* jad_b */
-    0x0b436eadf9f36c9aULL,  /* jad_c */
-    0x26e87b6e6edb5e55ULL,  /* zuk_a */
-    0x58fc724e017105e9ULL,  /* zuk_b */
-    0x14fea9397cc94d19ULL,  /* zuk_c */
+    0x3fdfbe815e8d8840ULL,  /* wave1_a */
+    0xd42b778a499f885aULL,  /* wave1_b */
+    0x729fe18291764b18ULL,  /* wave1_c */
+    0x80dcc693f5926987ULL,  /* meleer_a */
+    0x6732954c1b848b90ULL,  /* meleer_b */
+    0x6536c4396d607062ULL,  /* ranger_a */
+    0x8112edb62f6c9591ULL,  /* ranger_b */
+    0x76afc7877700c730ULL,  /* mager_a */
+    0xb3e9c99c087168deULL,  /* mager_b */
+    0x95fbffc1089916ecULL,  /* jad_a */
+    0x62ccffb0ab81edcfULL,  /* jad_b */
+    0xd5cae84c7ac06f9eULL,  /* jad_c */
+    0xe4f2389d716bac1dULL,  /* zuk_a */
+    0xc5c3a2102d12e7b5ULL,  /* zuk_b */
+    0x77241373f92182b5ULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {

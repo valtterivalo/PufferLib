@@ -349,42 +349,34 @@ static void inf_write_obs_ctx(
         int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
         int has_meleer_dig = (type == INF_NPC_MELEER);
 
-        int num_features = 12;
-        if (has_timer) num_features += 1;
-        if (has_style) num_features += 3;
-        if (has_los) num_features += 1;
-        if (has_scan) num_features += 3;
-        if (has_target_category) num_features += 4;
-        num_features += 1;
-        num_features += 6;
-        if (has_meleer_dig) num_features += 3;
-
         if (n >= 0) {
             InfNPC* npc = &s->npcs[n];
+            for (int ty = 0; ty < INF_NPC_TYPE_ONEHOT; ty++)
+                obs[i++] = (ty == type) ? 1.0f : 0.0f;
             obs[i++] = (float)npc->hp / (float)npc->max_hp;
             obs[i++] = (float)(npc->x - px) / (float)INF_ARENA_WIDTH;
             obs[i++] = (float)(npc->y - py) / (float)INF_ARENA_HEIGHT;
             obs[i++] = inf_obs_norm_npc_size(npc->size);
-            if (has_timer) obs[i++] = (float)npc->attack_timer / 10.0f;
+            obs[i++] = has_timer ? (float)npc->attack_timer / 10.0f : 0.0f;
 
             if (has_style) {
                 int style = (npc->type == INF_NPC_JAD) ? inf_npc_jad(npc)->attack_style : npc->attack_style;
                 obs[i++] = (style == ATTACK_STYLE_MELEE) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
                 obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
+            } else {
+                obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
             }
 
-            if (has_los) obs[i++] = inf_npc_has_los(s, n) ? 1.0f : 0.0f;
+            obs[i++] = (has_los && inf_npc_has_los(s, n)) ? 1.0f : 0.0f;
 
-            if (has_scan) {
-                if (npc->blob_scanned_prayer >= 0) {
-                    OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
-                    obs[i++] = (scanned == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
-                    obs[i++] = (scanned == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-                    obs[i++] = (scanned != PRAYER_PROTECT_MAGIC && scanned != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
-                } else {
-                    obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
-                }
+            if (has_scan && npc->blob_scanned_prayer >= 0) {
+                OverheadPrayer scanned = (OverheadPrayer)npc->blob_scanned_prayer;
+                obs[i++] = (scanned == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
+                obs[i++] = (scanned == PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+                obs[i++] = (scanned != PRAYER_PROTECT_MAGIC && scanned != PRAYER_PROTECT_RANGED) ? 1.0f : 0.0f;
+            } else {
+                obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
             }
 
             obs[i++] = (float)inf_barrage_total_target_count(s, n) /
@@ -418,6 +410,8 @@ static void inf_write_obs_ctx(
                 obs[i++] = (category == INF_TARGET_CATEGORY_ZUK) ? 1.0f : 0.0f;
                 obs[i++] = (category == INF_TARGET_CATEGORY_SHIELD) ? 1.0f : 0.0f;
                 obs[i++] = (category == INF_TARGET_CATEGORY_OTHER_NPC) ? 1.0f : 0.0f;
+            } else {
+                obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
             }
             obs[i++] = (osrs_interaction_active(&s->interaction) && s->interaction.target_slot == n) ? 1.0f : 0.0f;
             obs[i++] = inf_npc_is_phantom_barrage_targetable_now(s, ctx, n) ? 1.0f : 0.0f;
@@ -427,9 +421,11 @@ static void inf_write_obs_ctx(
                 obs[i++] = no_los;
                 obs[i++] = (float)npc->dig_freeze_timer / 6.0f;
                 obs[i++] = (float)npc->dig_attack_delay / 6.0f;
+            } else {
+                obs[i++] = 0.0f; obs[i++] = 0.0f; obs[i++] = 0.0f;
             }
         } else {
-            for (int j = 0; j < num_features; j++) obs[i++] = 0.0f;
+            for (int j = 0; j < INF_NPC_SLOT_FEATURES; j++) obs[i++] = 0.0f;
         }
     }
 #ifdef INF_PROFILE_ENABLED

@@ -3335,7 +3335,7 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 2552);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 3432);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
@@ -3364,7 +3364,7 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("pillar obs includes footprint size",
         INF_PILLAR_OBS_SIZE, 15);
     ASSERT_INT_EQ("npc obs includes loadout reachability signals",
-        INF_TOTAL_NPC_OBS_SIZE, 896);
+        INF_TOTAL_NPC_OBS_SIZE, 1776);
     ASSERT_INT_EQ("step-out forecast covers every movement action",
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
@@ -3374,7 +3374,7 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     ASSERT_INT_EQ("equipped obs covers every gear slot",
         INF_EQUIPPED_OBS_SIZE, NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES);
     ASSERT_INT_EQ("inferno obs shape includes inventory cells",
-        INF_NUM_OBS, 2552);
+        INF_NUM_OBS, 3432);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -3648,47 +3648,9 @@ static void test_jad_melee_stays_instant_and_untelegraphed(void) {
     ASSERT_INT_EQ("jad can still choose melee instantly at fire time", saw_melee, 1);
 }
 
-static int inferno_obs_slot_type(int slot_idx) {
-    if (slot_idx >= 0 && slot_idx < 2) return INF_NPC_MAGER;
-    if (slot_idx >= 2 && slot_idx < 4) return INF_NPC_RANGER;
-    if (slot_idx >= 4 && slot_idx < 6) return INF_NPC_MELEER;
-    if (slot_idx >= 6 && slot_idx < 8) return INF_NPC_BLOB;
-    if (slot_idx >= 8 && slot_idx < 10) return INF_NPC_BAT;
-    if (slot_idx >= 10 && slot_idx < 12) return INF_NPC_BLOB_MAGE;
-    if (slot_idx >= 12 && slot_idx < 14) return INF_NPC_BLOB_RANGE;
-    if (slot_idx >= 14 && slot_idx < 16) return INF_NPC_BLOB_MELEE;
-    if (slot_idx >= 16 && slot_idx < 22) return INF_NPC_NIBBLER;
-    if (slot_idx >= 22 && slot_idx < 25) return INF_NPC_JAD;
-    if (slot_idx == 25) return INF_NPC_ZUK;
-    if (slot_idx == 26) return INF_NPC_ZUK_SHIELD;
-    if (slot_idx >= 27 && slot_idx < 33) return INF_NPC_HEALER_JAD;
-    if (slot_idx >= 33 && slot_idx < 37) return INF_NPC_HEALER_ZUK;
-    return -1;
-}
-
-static int inferno_obs_slot_feature_count(int slot_idx) {
-    int type = inferno_obs_slot_type(slot_idx);
-    int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
-    int has_scan = (type == INF_NPC_BLOB);
-    int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER &&
-        type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
-    int has_target_category = (type != INF_NPC_NIBBLER &&
-        type != INF_NPC_ZUK_SHIELD);
-    int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
-        type != INF_NPC_ZUK_SHIELD);
-    int has_targeted = 1;
-    int has_meleer_dig = (type == INF_NPC_MELEER);
-
-    return 11 + has_timer + 3 * has_style + has_los + 3 * has_scan +
-        4 * has_target_category + has_targeted + 1 + 6 + 3 * has_meleer_dig;
-}
-
 static int inferno_obs_slot_start(int slot_idx) {
-    int start = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE;
-    for (int i = 0; i < slot_idx; i++) {
-        start += inferno_obs_slot_feature_count(i);
-    }
-    return start;
+    return INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
+        slot_idx * INF_NPC_SLOT_FEATURES;
 }
 
 static int inferno_pillar_obs_start(int pillar_idx) {
@@ -3716,98 +3678,84 @@ static int inferno_spark_obs_start(void) {
         INF_FEATURES_PER_HIT * ENCOUNTER_MAX_PENDING_HITS;
 }
 
-static int inferno_obs_slot_barrage_count_index(int slot_idx) {
-    int type = inferno_obs_slot_type(slot_idx);
-    int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
-    int has_scan = (type == INF_NPC_BLOB);
-    int has_los = (type != INF_NPC_NIBBLER && type != INF_NPC_MELEER &&
-        type != INF_NPC_HEALER_JAD && type != INF_NPC_ZUK_SHIELD);
-    int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
-        type != INF_NPC_ZUK_SHIELD);
-
-    return inferno_obs_slot_start(slot_idx) + 4 + has_timer +
-        3 * has_style + has_los + 3 * has_scan;
+static int inferno_obs_slot_hp_index(int slot_idx) {
+    return inferno_obs_slot_start(slot_idx) + 14;
 }
 
 static int inferno_obs_slot_size_index(int slot_idx) {
-    return inferno_obs_slot_start(slot_idx) + 3;
+    return inferno_obs_slot_start(slot_idx) + 17;
 }
 
 static int inferno_obs_slot_npc_los_index(int slot_idx) {
-    int type = inferno_obs_slot_type(slot_idx);
-    int has_timer = (type != INF_NPC_NIBBLER && type != INF_NPC_HEALER_JAD &&
-        type != INF_NPC_ZUK_SHIELD);
-    int has_style = (type == INF_NPC_BLOB || type == INF_NPC_JAD);
-    return inferno_obs_slot_start(slot_idx) + 4 + has_timer + 3 * has_style;
+    return inferno_obs_slot_start(slot_idx) + 22;
+}
+
+static int inferno_obs_slot_barrage_count_index(int slot_idx) {
+    return inferno_obs_slot_start(slot_idx) + 26;
 }
 
 static int inferno_obs_slot_edge_distance_index(int slot_idx) {
-    return inferno_obs_slot_barrage_count_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 27;
 }
 
 static int inferno_obs_slot_npc_can_attack_if_ready_index(int slot_idx) {
-    return inferno_obs_slot_edge_distance_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 28;
 }
 
 static int inferno_obs_slot_npc_can_attack_this_tick_index(int slot_idx) {
-    return inferno_obs_slot_npc_can_attack_if_ready_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 29;
 }
 
 static int inferno_obs_slot_frozen_index(int slot_idx) {
-    return inferno_obs_slot_npc_can_attack_this_tick_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 30;
 }
 
 static int inferno_obs_slot_player_can_attack_index(int slot_idx) {
-    return inferno_obs_slot_frozen_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 31;
 }
 
 static int inferno_obs_slot_player_has_los_index(int slot_idx) {
-    return inferno_obs_slot_player_can_attack_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 32;
 }
 
 static int inferno_obs_slot_player_can_mage_index(int slot_idx) {
-    return inferno_obs_slot_player_has_los_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 33;
 }
 
 static int inferno_obs_slot_player_can_long_range_index(int slot_idx) {
-    return inferno_obs_slot_player_can_mage_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 34;
 }
 
 static int inferno_obs_slot_player_can_blowpipe_index(int slot_idx) {
-    return inferno_obs_slot_player_can_long_range_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 35;
 }
 
 static int inferno_obs_slot_mage_range_deficit_index(int slot_idx) {
-    return inferno_obs_slot_player_can_blowpipe_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 36;
 }
 
 static int inferno_obs_slot_long_range_deficit_index(int slot_idx) {
-    return inferno_obs_slot_mage_range_deficit_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 37;
 }
 
 static int inferno_obs_slot_blowpipe_range_deficit_index(int slot_idx) {
-    return inferno_obs_slot_long_range_deficit_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 38;
 }
 
 static int inferno_obs_slot_target_category_start(int slot_idx) {
-    return inferno_obs_slot_barrage_count_index(slot_idx) + 13;
+    return inferno_obs_slot_start(slot_idx) + 39;
 }
 
 static int inferno_obs_slot_targeted_index(int slot_idx) {
-    int type = inferno_obs_slot_type(slot_idx);
-    int has_target_category = (type != INF_NPC_NIBBLER &&
-        type != INF_NPC_ZUK_SHIELD);
-
-    return inferno_obs_slot_target_category_start(slot_idx) +
-        4 * has_target_category;
+    return inferno_obs_slot_start(slot_idx) + 43;
 }
 
 static int inferno_obs_slot_phantom_index(int slot_idx) {
-    return inferno_obs_slot_targeted_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 44;
 }
 
 static int inferno_obs_slot_dig_index(int slot_idx) {
-    return inferno_obs_slot_phantom_index(slot_idx) + 1;
+    return inferno_obs_slot_start(slot_idx) + 45;
 }
 
 static void init_threat_obs_state(InfernoState* state, int player_x, int player_y) {
@@ -6961,12 +6909,12 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
 
     int mager_slot = 0;
     int shield_slot = 26;
-    int shield_start = inferno_obs_slot_start(shield_slot);
+    int shield_hp = inferno_obs_slot_hp_index(shield_slot);
     int mager_target_category = inferno_obs_slot_target_category_start(mager_slot);
 
     ASSERT_INT_EQ("first mager occupies mager slot 0", state.current_obs_slots[mager_slot], 0);
     ASSERT_INT_EQ("shield occupies dedicated shield slot", state.current_obs_slots[shield_slot], 2);
-    ASSERT_FLOAT_NEAR("shield hp ratio visible in shield slot", obs[shield_start], 0.5f, 1e-6f);
+    ASSERT_FLOAT_NEAR("shield hp ratio visible in shield slot", obs[shield_hp], 0.5f, 1e-6f);
     ASSERT_FLOAT_NEAR("mager target_player off while on shield",
         obs[mager_target_category], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("mager target_shield on while on shield",
@@ -6986,7 +6934,7 @@ static void test_zuk_obs_tracks_shield_and_mager_aggro(void) {
     inf_write_mask((EncounterState*)&state, mask);
 
     ASSERT_INT_EQ("dead shield drops out of shield slot", state.current_obs_slots[shield_slot], -1);
-    ASSERT_FLOAT_NEAR("dead shield slot hp zeros out", obs[shield_start], 0.0f, 1e-6f);
+    ASSERT_FLOAT_NEAR("dead shield slot hp zeros out", obs[shield_hp], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("dead shield zeroes stale direction", obs[INF_OBS_ZUK_SHIELD_DIR], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("dead shield zeroes stale freeze", obs[INF_OBS_ZUK_SHIELD_FREEZE], 0.0f, 1e-6f);
     ASSERT_FLOAT_NEAR("mager target_player flips on",
