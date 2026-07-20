@@ -346,6 +346,7 @@ static void init_spell_cast_test_state(InfernoState* state, InfNPCType target_ty
     state->player_dest_y = -1;
     osrs_interaction_init(&state->interaction);
     encounter_apply_loadout(&state->player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state->loadout_stats[INF_GEAR_MAGE]);
@@ -583,6 +584,41 @@ static void assert_supply_doses(const char* label,
     ASSERT_INT_EQ(buf, player->bastion_doses, expected.bastion_doses);
     snprintf(buf, sizeof(buf), "%s stamina doses", label);
     ASSERT_INT_EQ(buf, player->stamina_doses, expected.stamina_doses);
+}
+
+static int test_occupied_inventory_cells(const InfernoState* s) {
+    int occupied = 0;
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        if (!osrs_inventory_cell_is_empty(&s->inventory_cells[c]))
+            occupied++;
+    }
+    return occupied;
+}
+
+static int test_cell_holding_item(const InfernoState* s, uint8_t item) {
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        if (s->inventory_cells[c].item_idx == item)
+            return c;
+    }
+    return -1;
+}
+
+static int test_cell_doses_of_kind(const InfernoState* s, OsrsConsumableKind kind) {
+    int doses = 0;
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        const OsrsInventoryCell* cell = &s->inventory_cells[c];
+        if (cell->raw_osrs_id == 0) continue;
+        if (osrs_consumable_click_lookup_raw_osrs_id(
+                cell->raw_osrs_id).consumable_kind == kind)
+            doses += cell->dose;
+    }
+    return doses;
+}
+
+static OsrsConsumableKind test_drink_click_kind(const InfernoState* s, int action) {
+    if (action <= 0) return OSRS_CONSUMABLE_NONE;
+    return osrs_consumable_click_lookup_raw_osrs_id(
+        s->inventory_cells[action - 1].raw_osrs_id).consumable_kind;
 }
 
 static void test_final_wave_reward_applies_healer_tags_and_heal_cost(void) {
@@ -1362,6 +1398,7 @@ static void init_ranged_offensive_prayer_test_state(InfernoState* state) {
     state->npcs[0].x = 13;
     state->npcs[0].y = 10;
     encounter_apply_loadout(&state->player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_RANGE_FAST_LOADOUT, ATTACK_STYLE_RANGED,
         state->player.offensive_prayer, 99, FIGHT_STYLE_RAPID, 0,
         &state->loadout_stats[INF_GEAR_BP]);
@@ -1500,7 +1537,8 @@ static void test_idle_diagnostics_count_missed_attack_opportunities(void) {
 
     InfernoState state = make_test_state(10, 10);
     state.weapon_set = INF_GEAR_BP;
-    state.loadout_stats[INF_GEAR_BP].attack_range = 7;
+    encounter_apply_loadout(&state.player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.npcs[0] = make_test_npc(
         INF_NPC_RANGER, 14, 10, INF_NPC_STATS[INF_NPC_RANGER].size);
     state.npcs[0].active = 1;
@@ -1710,45 +1748,24 @@ static void test_inferno_reset_supplies_match_current_inventory(void) {
     reset_inferno_at_public_wave(raw_state, 1, 1.0f);
 
     assert_supply_doses("wave 1", &state->player, full);
+    ASSERT_INT_EQ("brew cells match brew counter",
+        test_cell_doses_of_kind(state, OSRS_CONSUMABLE_BREW),
+        state->player.brew_doses);
+    ASSERT_INT_EQ("restore cells match restore counter",
+        test_cell_doses_of_kind(state, OSRS_CONSUMABLE_SUPER_RESTORE),
+        state->player.restore_doses);
+    ASSERT_INT_EQ("bastion cells match bastion counter",
+        test_cell_doses_of_kind(state, OSRS_CONSUMABLE_BASTION),
+        state->player.bastion_doses);
+    ASSERT_INT_EQ("stamina cells match stamina counter",
+        test_cell_doses_of_kind(state, OSRS_CONSUMABLE_STAMINA),
+        state->player.stamina_doses);
 
     inf_destroy(raw_state);
 }
 
 static int test_inventory_potion_vials(int doses) {
     return (doses + 3) / 4;
-}
-
-static int test_player_inventory_occupied_slots(Player* p) {
-    int occupied = 0;
-
-    for (int s = 0; s < NUM_GEAR_SLOTS; s++) {
-        for (int i = 0; i < p->num_items_in_slot[s]; i++) {
-            uint8_t item = p->inventory[s][i];
-            if (item == ITEM_NONE) continue;
-
-            int is_equipped = 0;
-            for (int e = 0; e < NUM_GEAR_SLOTS; e++) {
-                if (p->equipped[e] == item) {
-                    is_equipped = 1;
-                    break;
-                }
-            }
-            if (!is_equipped)
-                occupied++;
-        }
-    }
-
-    occupied += p->food_count;
-    occupied += p->karambwan_count;
-    occupied += test_inventory_potion_vials(p->brew_doses);
-    occupied += test_inventory_potion_vials(p->restore_doses);
-    occupied += test_inventory_potion_vials(p->combat_potion_doses);
-    occupied += test_inventory_potion_vials(p->ranged_potion_doses);
-    occupied += test_inventory_potion_vials(p->bastion_doses);
-    occupied += test_inventory_potion_vials(p->stamina_doses);
-    occupied += test_inventory_potion_vials(p->antivenom_doses);
-    occupied += test_inventory_potion_vials(p->prayer_pot_doses);
-    return occupied;
 }
 
 static int test_player_slot_inventory_contains(
@@ -1774,8 +1791,8 @@ static void test_inferno_reset_inventory_leaves_one_empty_slot(void) {
     ASSERT_INT_EQ("full kit bastion doses", state->player.bastion_doses, 16);
     ASSERT_INT_EQ("full kit bastion vials",
         test_inventory_potion_vials(state->player.bastion_doses), 4);
-    ASSERT_INT_EQ("full kit occupied inventory slots",
-        test_player_inventory_occupied_slots(&state->player), 27);
+    ASSERT_INT_EQ("full kit occupied inventory cells",
+        test_occupied_inventory_cells(state), 27);
 
     inf_destroy(raw_state);
 }
@@ -1851,8 +1868,8 @@ static void test_inferno_budget_profile_reset_uses_budget_gear(void) {
     ASSERT_INT_EQ("budget range legs available",
         test_player_slot_inventory_contains(
             &state->player, GEAR_SLOT_LEGS, ITEM_CRYSTAL_LEGS), 1);
-    ASSERT_INT_EQ("budget inventory leaves one empty slot",
-        test_player_inventory_occupied_slots(&state->player), 27);
+    ASSERT_INT_EQ("budget inventory leaves one empty cell",
+        test_occupied_inventory_cells(state), 27);
 
     inf_destroy(raw_state);
 }
@@ -1890,8 +1907,8 @@ static void test_inferno_mixed_profile_sampling_respects_fraction(void) {
     inf_destroy(raw_c);
 }
 
-static void test_inferno_gear_actions_map_to_active_profile_slots(void) {
-    printf("--- inferno gear actions map to active profile slots ---\n");
+static void test_inferno_equip_actions_move_cells_and_sync_weapon_set(void) {
+    printf("--- inferno equip actions move cells and sync weapon set ---\n");
 
     EncounterState* raw_state = inf_create();
     InfernoState* state = (InfernoState*)raw_state;
@@ -1901,25 +1918,44 @@ static void test_inferno_gear_actions_map_to_active_profile_slots(void) {
     inf_reset(raw_state, 789u);
 
     memset(actions, 0, sizeof(actions));
-    actions[INF_HEAD_GEAR] = 2;
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        test_cell_holding_item(state, ITEM_BOW_OF_FAERDHINEN) + 1;
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_BODY)] =
+        test_cell_holding_item(state, ITEM_CRYSTAL_BODY) + 1;
     inf_tick_player(state, actions, 1);
-    ASSERT_INT_EQ("gear action 2 selects long range",
+    ASSERT_INT_EQ("equipping bowfa syncs long-range weapon set",
         state->weapon_set, INF_GEAR_LONG_RANGE);
     ASSERT_INT_EQ("long range budget weapon",
         state->player.equipped[GEAR_SLOT_WEAPON], ITEM_BOW_OF_FAERDHINEN);
+    ASSERT_INT_EQ("two-handed bow displaces budget shield",
+        state->player.equipped[GEAR_SLOT_SHIELD], ITEM_NONE);
+    ASSERT_INT_EQ("body head equips crystal body in same tick",
+        state->player.equipped[GEAR_SLOT_BODY], ITEM_CRYSTAL_BODY);
+    ASSERT_INT_EQ("equipped bowfa left its cell",
+        test_cell_holding_item(state, ITEM_BOW_OF_FAERDHINEN), -1);
+    ASSERT_INT_EQ("displaced wand returns to a cell",
+        test_cell_holding_item(state, ITEM_DRAGON_HUNTER_WAND) >= 0, 1);
+    ASSERT_INT_EQ("displaced shield returns to a cell",
+        test_cell_holding_item(state, ITEM_CRYSTAL_SHIELD) >= 0, 1);
+    ASSERT_INT_EQ("displaced robe top returns to a cell",
+        test_cell_holding_item(state, ITEM_AHRIMS_ROBETOP) >= 0, 1);
 
     memset(actions, 0, sizeof(actions));
-    actions[INF_HEAD_GEAR] = 3;
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        test_cell_holding_item(state, ITEM_TOXIC_BLOWPIPE) + 1;
     inf_tick_player(state, actions, 1);
-    ASSERT_INT_EQ("gear action 3 selects fast range",
+    ASSERT_INT_EQ("equipping blowpipe syncs fast-range weapon set",
         state->weapon_set, INF_GEAR_BP);
     ASSERT_INT_EQ("fast range budget weapon",
         state->player.equipped[GEAR_SLOT_WEAPON], ITEM_TOXIC_BLOWPIPE);
+    ASSERT_INT_EQ("displaced bowfa returns to a cell",
+        test_cell_holding_item(state, ITEM_BOW_OF_FAERDHINEN) >= 0, 1);
 
     memset(actions, 0, sizeof(actions));
-    actions[INF_HEAD_GEAR] = 1;
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        test_cell_holding_item(state, ITEM_DRAGON_HUNTER_WAND) + 1;
     inf_tick_player(state, actions, 1);
-    ASSERT_INT_EQ("gear action 1 selects mage",
+    ASSERT_INT_EQ("equipping wand syncs mage weapon set",
         state->weapon_set, INF_GEAR_MAGE);
     ASSERT_INT_EQ("mage budget weapon",
         state->player.equipped[GEAR_SLOT_WEAPON], ITEM_DRAGON_HUNTER_WAND);
@@ -1998,7 +2034,7 @@ static void test_supply_milestone_reward_defaults_off(void) {
     InfernoState state = make_test_state(24, 24);
     test_config()->late_start_supply_profile_scale = 1.0f;
     state.player.brew_doses = 24;
-    state.player.restore_doses = 40;
+    state.player.restore_doses = 36;
 
     ASSERT_FLOAT_NEAR("default supply milestone reward",
         test_supply_milestone_surplus_reward(&state, 64), 0.0f, 0.0001f);
@@ -2014,10 +2050,10 @@ static void test_supply_milestone_reward_pays_surplus_at_anchor_once(void) {
     test_config()->supply_milestone_brew_reward_coeff = 0.24f;
     test_config()->supply_milestone_restore_reward_coeff = 0.20f;
     state.player.brew_doses = 18;
-    state.player.restore_doses = 24;
+    state.player.restore_doses = 27;
 
     ASSERT_FLOAT_NEAR("wave 64 supply surplus reward",
-        test_supply_milestone_surplus_reward(&state, 64), 0.06f, 0.0001f);
+        test_supply_milestone_surplus_reward(&state, 64), 0.09f, 0.0001f);
     ASSERT_FLOAT_NEAR("wave 64 supply surplus pays once",
         test_supply_milestone_surplus_reward(&state, 64), 0.0f, 0.0001f);
 }
@@ -2037,7 +2073,7 @@ static void test_supply_milestone_reward_never_penalizes_shortage(void) {
     test_config()->late_start_supply_profile_scale = 1.0f;
     test_config()->supply_milestone_brew_reward_coeff = 0.24f;
     non_anchor.player.brew_doses = 24;
-    non_anchor.player.restore_doses = 40;
+    non_anchor.player.restore_doses = 36;
     ASSERT_FLOAT_NEAR("non-anchor reward is zero",
         test_supply_milestone_surplus_reward(&non_anchor, 63), 0.0f, 0.0001f);
 }
@@ -2139,7 +2175,7 @@ static void test_curriculum_supply_no_brew_is_curriculum_only(void) {
     ASSERT_INT_EQ("curriculum start applies no-brew",
         state->player.brew_doses, 0);
     ASSERT_INT_EQ("curriculum no-brew leaves restores alone",
-        state->player.restore_doses, 6);
+        state->player.restore_doses, 5);
 
     inf_put_int(raw_state, "curriculum_agent", 0);
     inf_put_int(raw_state, "curriculum_no_brew_mode",
@@ -2188,7 +2224,7 @@ static void test_curriculum_supply_jitter_clamps_to_inventory_bounds(void) {
     ASSERT_INT_EQ("jitter keeps restore nonnegative",
         state->player.restore_doses >= 0, 1);
     ASSERT_INT_EQ("jitter keeps restore within full supplies",
-        state->player.restore_doses <= 40, 1);
+        state->player.restore_doses <= 36, 1);
 
     inf_put_int(raw_state, "curriculum_agent", 0);
     inf_put_int(raw_state, "curriculum_supply_jitter_mode",
@@ -3299,18 +3335,25 @@ static void test_triple_jad_pending_threats_fit_obs_layout(void) {
 
     float obs[INF_NUM_OBS];
     inf_write_obs((EncounterState*)&state, obs);
-    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 1570);
+    ASSERT_INT_EQ("inferno obs shape includes exact spark slots", INF_NUM_OBS, 2552);
 }
 
 static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
     printf("--- inferno obs shape includes step-out forecast features ---\n");
 
-    ASSERT_INT_EQ("gear action head removed tank slot",
-        INF_ACTION_DIMS[INF_HEAD_GEAR], 4);
+    ASSERT_INT_EQ("equip heads span every gear slot",
+        INF_HEAD_EAT - INF_HEAD_EQUIP_BASE, NUM_GEAR_SLOTS);
+    ASSERT_INT_EQ("equip head clicks cover every cell",
+        INF_ACTION_DIMS[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)],
+        OSRS_INVENTORY_SIZE + 1);
+    ASSERT_INT_EQ("eat head clicks cover every cell",
+        INF_ACTION_DIMS[INF_HEAD_EAT], OSRS_INVENTORY_SIZE + 1);
+    ASSERT_INT_EQ("drink head clicks cover every cell",
+        INF_ACTION_DIMS[INF_HEAD_DRINK], OSRS_INVENTORY_SIZE + 1);
     ASSERT_INT_EQ("prayer action head includes redemption",
         INF_ACTION_DIMS[INF_HEAD_PRAYER], ENCOUNTER_OVERHEAD_DIM_PVE_REDEMPTION);
-    ASSERT_INT_EQ("action mask includes redemption",
-        INF_ACTION_MASK_SIZE, 89);
+    ASSERT_INT_EQ("action mask spans all inventory click heads",
+        INF_ACTION_MASK_SIZE, 457);
     ASSERT_SOURCE_BLOCK_CONTAINS("native binding reuses inferno action dims",
         "ocean/osrs_inferno/osrs_inferno.h",
         "#define OBS_SIZE INF_NUM_OBS",
@@ -3326,8 +3369,12 @@ static void test_inferno_obs_shape_includes_step_out_forecast_features(void) {
         INF_STEP_OUT_FORECAST_OBS_SIZE, 200);
     ASSERT_INT_EQ("inferno obs shape includes exact spark landings",
         INF_PENDING_SPARK_OBS_SIZE, 224);
-    ASSERT_INT_EQ("inferno obs shape includes reachability pass",
-        INF_NUM_OBS, 1570);
+    ASSERT_INT_EQ("inventory obs covers every cell",
+        INF_INVENTORY_OBS_SIZE, OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES);
+    ASSERT_INT_EQ("equipped obs covers every gear slot",
+        INF_EQUIPPED_OBS_SIZE, NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES);
+    ASSERT_INT_EQ("inferno obs shape includes inventory cells",
+        INF_NUM_OBS, 2552);
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("armor_tank state is removed",
         "armor_tank");
     ASSERT_INFERNO_SOURCE_NOT_CONTAINS("extra npc obs scaffold is removed",
@@ -4945,6 +4992,8 @@ static void init_zuk_timing_state(InfernoState* state) {
     state->tick_at_first_zuk_healer_attack = -1;
     state->weapon_set = INF_GEAR_LONG_RANGE;
     osrs_interaction_init(&state->interaction);
+    encounter_apply_loadout(&state->player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_RANGE_LONG_LOADOUT, ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
         &state->loadout_stats[INF_GEAR_LONG_RANGE]);
@@ -4971,6 +5020,7 @@ static void init_zuk_timing_state(InfernoState* state) {
 static void equip_zuk_timing_state_blowpipe(InfernoState* state) {
     state->weapon_set = INF_GEAR_BP;
     encounter_apply_loadout(&state->player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_RANGE_FAST_LOADOUT, ATTACK_STYLE_RANGED,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_RAPID, 0,
         &state->loadout_stats[INF_GEAR_BP]);
@@ -5674,6 +5724,7 @@ static void test_zuk_healer_target_action_tags_on_landed_hit(void) {
     state.player.x = 20;
     state.player.y = 46;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
 
     state.npcs[2] = make_test_npc(
         INF_NPC_HEALER_ZUK, 20, 48, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
@@ -5742,6 +5793,7 @@ static void test_zuk_healer_mage_attack_counts_penalty_event(void) {
     state.player.autocast_enabled = 1;
     state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
     encounter_apply_loadout(&state.player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    inf_refresh_live_stats(&state);
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state.loadout_stats[INF_GEAR_MAGE]);
@@ -5775,6 +5827,7 @@ static void test_zuk_safe_healer_target_mask_requires_fire_window(void) {
     init_zuk_timing_state(&state);
     test_config()->zuk_safe_untagged_healer_target_mask = 1;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
 
     state.npcs[2] = make_test_npc(
         INF_NPC_HEALER_ZUK, 20, 48, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
@@ -5823,6 +5876,7 @@ static void test_zuk_safe_healer_target_mask_clears_unsafe_target(void) {
     state.player.y = 46;
     state.player.attack_timer = 3;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
 
     state.npcs[2] = make_test_npc(
         INF_NPC_HEALER_ZUK, 20, 48, INF_NPC_STATS[INF_NPC_HEALER_ZUK].size);
@@ -5848,6 +5902,7 @@ static void test_zuk_force_safe_healer_target_mask_blocks_idle_when_safe(void) {
     init_zuk_timing_state(&state);
     test_config()->zuk_force_safe_untagged_healer_target_mask = 1;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.x = 24;
     state.player.y = 46;
     state.player.attack_timer = 0;
@@ -5895,6 +5950,7 @@ static void test_zuk_force_safe_healer_target_mask_clears_stale_target(void) {
     init_zuk_timing_state(&state);
     test_config()->zuk_force_safe_untagged_healer_target_mask = 1;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.x = 24;
     state.player.y = 46;
     state.player.attack_timer = 0;
@@ -6148,6 +6204,7 @@ static void init_phantom_barrage_test_state(
     state->player.autocast_enabled = 1;
     state->player.autocast_spell = ENCOUNTER_SPELL_ICE;
     encounter_apply_loadout(&state->player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state->loadout_stats[INF_GEAR_MAGE]);
@@ -6224,6 +6281,7 @@ static void test_ranged_attack_cannot_fire_on_dying_target(void) {
     init_spell_cast_test_state(&state, INF_NPC_NIBBLER);
     state.weapon_set = INF_GEAR_LONG_RANGE;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_LONG_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.autocast_enabled = 0;
     state.player.attack_timer = 0;
     state.npcs[0].hp = 0;
@@ -6395,6 +6453,7 @@ static void init_confliction_barrage_test_state(
     state->player_dest_y = -1;
     osrs_interaction_init(&state->interaction);
     encounter_apply_loadout(&state->player, INF_MAX_MAGE_LOADOUT, GEAR_MAGE);
+    inf_refresh_live_stats(state);
     encounter_compute_loadout_stats(INF_MAX_MAGE_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_NONE, 99, FIGHT_STYLE_AUTOCAST, 30,
         &state->loadout_stats[INF_GEAR_MAGE]);
@@ -6804,6 +6863,7 @@ static void test_manual_spell_in_range_gear_uses_range_gear_magic_stats(void) {
     init_spell_cast_test_state(&state, INF_NPC_RANGER);
     state.weapon_set = INF_GEAR_BP;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
 
     InfPlayerAttack attack;
@@ -6831,6 +6891,7 @@ static void test_phantom_barrage_allows_explicit_spell_from_range_gear(void) {
     init_phantom_barrage_test_state(&state, 1, 1);
     state.weapon_set = INF_GEAR_BP;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.autocast_enabled = 1;
     state.player.autocast_spell = ENCOUNTER_SPELL_BLOOD;
     inf_refresh_current_obs_slots(&state);
@@ -7243,32 +7304,46 @@ static void test_human_target_and_potion_translation(void) {
         ASSERT_INT_EQ("shield click is rejected",
             actions[INF_HEAD_TARGET], 0);
 
+        state.player.brew_doses = 8;
+        state.player.restore_doses = 8;
+        state.player.bastion_doses = 4;
+        state.player.stamina_doses = 4;
+        inf_seed_inventory_cells(&state);
+
         hi = make_human_input();
         hi.pending_potion = POTION_BREW;
         inf_translate_human_input(&hi, actions, (EncounterState*)&state);
-        ASSERT_INT_EQ("brew still maps to eat head", actions[INF_HEAD_EAT], 1);
-        ASSERT_INT_EQ("brew does not touch potion head", actions[INF_HEAD_POTION], 0);
+        ASSERT_INT_EQ("brew maps to a brew drink click",
+            test_drink_click_kind(&state, actions[INF_HEAD_DRINK]),
+            OSRS_CONSUMABLE_BREW);
+        ASSERT_INT_EQ("brew does not touch eat head", actions[INF_HEAD_EAT], 0);
 
         hi = make_human_input();
         hi.pending_potion = POTION_RESTORE;
         inf_translate_human_input(&hi, actions, (EncounterState*)&state);
-        ASSERT_INT_EQ("restore maps to potion 1", actions[INF_HEAD_POTION], 1);
+        ASSERT_INT_EQ("restore maps to a restore drink click",
+            test_drink_click_kind(&state, actions[INF_HEAD_DRINK]),
+            OSRS_CONSUMABLE_SUPER_RESTORE);
 
         hi = make_human_input();
         hi.pending_potion = POTION_BASTION;
         inf_translate_human_input(&hi, actions, (EncounterState*)&state);
-        ASSERT_INT_EQ("bastion maps to potion 2", actions[INF_HEAD_POTION], 2);
+        ASSERT_INT_EQ("bastion maps to a bastion drink click",
+            test_drink_click_kind(&state, actions[INF_HEAD_DRINK]),
+            OSRS_CONSUMABLE_BASTION);
 
         hi = make_human_input();
         hi.pending_potion = POTION_STAMINA;
         inf_translate_human_input(&hi, actions, (EncounterState*)&state);
-        ASSERT_INT_EQ("stamina maps to potion 3", actions[INF_HEAD_POTION], 3);
+        ASSERT_INT_EQ("stamina maps to a stamina drink click",
+            test_drink_click_kind(&state, actions[INF_HEAD_DRINK]),
+            OSRS_CONSUMABLE_STAMINA);
 
         hi = make_human_input();
         hi.pending_potion = POTION_PRAYER_POT;
         inf_translate_human_input(&hi, actions, (EncounterState*)&state);
         ASSERT_INT_EQ("prayer pot no longer aliases to restore",
-            actions[INF_HEAD_POTION], 0);
+            actions[INF_HEAD_DRINK], 0);
     }
 }
 
@@ -7397,6 +7472,7 @@ static void test_autocast_is_inactive_with_non_autocast_weapon(void) {
     init_spell_cast_test_state(&state, INF_NPC_RANGER);
     state.weapon_set = INF_GEAR_BP;
     encounter_apply_loadout(&state.player, INF_MAX_RANGE_FAST_LOADOUT, GEAR_RANGED);
+    inf_refresh_live_stats(&state);
     state.player.autocast_enabled = 1;
     state.player.autocast_spell = ENCOUNTER_SPELL_ICE;
 
@@ -7779,7 +7855,8 @@ static void test_inferno_state_assignment_copy_replays_trajectory(void) {
     int prefix[INF_NUM_ACTION_HEADS] = {0};
     prefix[INF_HEAD_MOVE] = 1;
     prefix[INF_HEAD_TARGET] = 1;
-    prefix[INF_HEAD_GEAR] = INF_GEAR_LONG_RANGE;
+    prefix[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        test_cell_holding_item(&state_a, ITEM_TWISTED_BOW) + 1;
 
     for (int i = 0; i < 9; i++)
         inf_step_ctx((EncounterState*)&state_a, (EncounterContext*)&ctx_a, prefix);
@@ -9403,7 +9480,7 @@ int main(void) {
     test_inferno_max_profile_reset_uses_existing_gear();
     test_inferno_budget_profile_reset_uses_budget_gear();
     test_inferno_mixed_profile_sampling_respects_fraction();
-    test_inferno_gear_actions_map_to_active_profile_slots();
+    test_inferno_equip_actions_move_cells_and_sync_weapon_set();
     test_inferno_reset_preserves_reward_config();
     test_supply_milestone_reward_defaults_off();
     test_supply_milestone_reward_pays_surplus_at_anchor_once();
