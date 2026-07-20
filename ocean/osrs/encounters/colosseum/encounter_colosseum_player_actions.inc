@@ -395,6 +395,10 @@ static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) 
         case OSRS_CONSUMABLE_KARAMBWAN:
             fprintf(stderr, "colosseum: consumable kind %d is not drinkable\n", (int)kind);
             abort();
+        case OSRS_CONSUMABLE_BASTION:
+        case OSRS_CONSUMABLE_STAMINA:
+            fprintf(stderr, "colosseum: consumable kind %d not in colosseum kits\n", (int)kind);
+            abort();
     }
     abort();
 }

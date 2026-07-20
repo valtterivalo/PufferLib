@@ -22,6 +22,20 @@ static void inf_refresh_human_loadout_stats(InfernoState* s) {
         &s->human_loadout_stats);
 }
 
+static FightStyle inf_live_fight_style_for(AttackStyle style) {
+    if (style == ATTACK_STYLE_MAGIC) return FIGHT_STYLE_AUTOCAST;
+    if (style == ATTACK_STYLE_RANGED) return FIGHT_STYLE_RAPID;
+    return FIGHT_STYLE_ACCURATE;
+}
+
+static void inf_refresh_live_stats(InfernoState* s) {
+    AttackStyle style = inf_player_equipped_attack_style(s);
+    int spell_base_damage = (style == ATTACK_STYLE_MAGIC) ? 30 : 0;
+    encounter_compute_player_equipped_stats(
+        &s->player, style, inf_live_fight_style_for(style), spell_base_damage,
+        &s->live_stats);
+}
+
 static const EncounterLoadoutStats* inf_current_loadout_stats(
     InfernoState* s,
     const InfernoContext* ctx
@@ -30,7 +44,7 @@ static const EncounterLoadoutStats* inf_current_loadout_stats(
         inf_refresh_human_loadout_stats(s);
         return &s->human_loadout_stats;
     }
-    return &s->loadout_stats[s->weapon_set];
+    return &s->live_stats;
 }
 
 static int inf_player_weapon_is(const InfernoState* s, uint8_t item) {
@@ -221,7 +235,7 @@ static int inf_player_can_attack_npc_from_current_tile(
     const InfNPC* npc = &s->npcs[npc_idx];
     if (!npc->active || npc->death_ticks != 0 || npc->hp <= 0) return 0;
 
-    const EncounterLoadoutStats* ls = &s->loadout_stats[s->weapon_set];
+    const EncounterLoadoutStats* ls = &s->live_stats;
     OsrsLosQuery los_query = inf_player_los_query(s);
     return encounter_player_can_attack(
         s->player.x,

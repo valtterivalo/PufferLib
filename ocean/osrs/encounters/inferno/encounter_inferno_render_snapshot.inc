@@ -605,6 +605,40 @@ static void* inf_get_player_for_input(void* state, int idx) {
     return (idx == 0) ? (void*)&s->player : NULL;
 }
 
+static int inf_first_cell_with_kind(const InfernoState* s, OsrsConsumableKind kind) {
+    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+        const OsrsInventoryCell* cell = &s->inventory_cells[c];
+        if (cell->raw_osrs_id == 0) continue;
+        OsrsConsumableClick click =
+            osrs_consumable_click_lookup_raw_osrs_id(cell->raw_osrs_id);
+        if (click.consumable_kind != kind) continue;
+        if (click.click_action == OSRS_CLICK_DRINK && cell->dose == 0) continue;
+        return c;
+    }
+    return -1;
+}
+
+static void inf_translate_drink(const InfernoState* s, int* actions, OsrsConsumableKind kind) {
+    int cell = inf_first_cell_with_kind(s, kind);
+    if (cell >= 0) actions[INF_HEAD_DRINK] = cell + 1;
+}
+
+static void inf_translate_gear_swap(const InfernoState* s, int* actions, InfWeaponSet want) {
+    const uint8_t* const* loadouts =
+        inf_loadouts_for_profile(s->active_loadout_profile);
+    const uint8_t* want_loadout = loadouts[want];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t item = want_loadout[slot];
+        if (item == ITEM_NONE || s->player.equipped[slot] == item) continue;
+        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+            if (s->inventory_cells[c].item_idx == item) {
+                actions[INF_HEAD_EQUIP_SLOT(slot)] = c + 1;
+                break;
+            }
+        }
+    }
+}
+
 static void inf_translate_human_input_ctx(
     HumanInput* hi,
     int* actions,
@@ -631,19 +665,28 @@ static void inf_translate_human_input_ctx(
         actions[INF_HEAD_TARGET] = 0;
     }
 
-    if (hi->pending_gear > 0) actions[INF_HEAD_GEAR] = hi->pending_gear;
+    if (hi->pending_gear >= 1 && hi->pending_gear <= INF_NUM_WEAPON_SETS)
+        inf_translate_gear_swap(s, actions, (InfWeaponSet)(hi->pending_gear - 1));
 
-    if (hi->pending_food || hi->pending_potion == POTION_BREW)
-        actions[INF_HEAD_EAT] = 1;
+    if (hi->pending_food) {
+        int cell = inf_first_cell_with_kind(s, OSRS_CONSUMABLE_SHARK_FOOD);
+        if (cell < 0) cell = inf_first_cell_with_kind(s, OSRS_CONSUMABLE_KARAMBWAN);
+        if (cell >= 0) actions[INF_HEAD_EAT] = cell + 1;
+    }
 
-    if (hi->pending_potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
-    else if (hi->pending_potion == POTION_BASTION) actions[INF_HEAD_POTION] = 2;
-    else if (hi->pending_potion == POTION_STAMINA) actions[INF_HEAD_POTION] = 3;
+    if (hi->pending_potion == POTION_BREW)
+        inf_translate_drink(s, actions, OSRS_CONSUMABLE_BREW);
+    else if (hi->pending_potion == POTION_RESTORE)
+        inf_translate_drink(s, actions, OSRS_CONSUMABLE_SUPER_RESTORE);
+    else if (hi->pending_potion == POTION_BASTION)
+        inf_translate_drink(s, actions, OSRS_CONSUMABLE_BASTION);
+    else if (hi->pending_potion == POTION_STAMINA)
+        inf_translate_drink(s, actions, OSRS_CONSUMABLE_STAMINA);
 
     if (hi->pending_spell == ATTACK_BLOOD) actions[INF_HEAD_SPELL] = 1;
     else if (hi->pending_spell == ATTACK_ICE) actions[INF_HEAD_SPELL] = 2;
 
-    if (hi->pending_spec) actions[INF_HEAD_SPEC] = 1;
+    if (hi->pending_spec) actions[INF_HEAD_SPEC] = s->player.spec_armed ? 2 : 1;
 }
 
 static void inf_translate_human_input(HumanInput* hi, int* actions, EncounterState* state) {
@@ -693,17 +736,25 @@ static void inf_translate_human_commands_ctx(
             case HUMAN_COMMAND_OFFENSIVE_PRAYER:
                 actions[INF_HEAD_OFFENSIVE] = cmd->offensive_prayer;
                 break;
-            case HUMAN_COMMAND_EAT:
-                actions[INF_HEAD_EAT] = 1;
+            case HUMAN_COMMAND_EAT: {
+                int cell = inf_first_cell_with_kind(s, OSRS_CONSUMABLE_SHARK_FOOD);
+                if (cell < 0)
+                    cell = inf_first_cell_with_kind(s, OSRS_CONSUMABLE_KARAMBWAN);
+                if (cell >= 0) actions[INF_HEAD_EAT] = cell + 1;
                 break;
+            }
             case HUMAN_COMMAND_DRINK:
-                if (cmd->potion == POTION_BREW) actions[INF_HEAD_EAT] = 1;
-                else if (cmd->potion == POTION_RESTORE) actions[INF_HEAD_POTION] = 1;
-                else if (cmd->potion == POTION_BASTION) actions[INF_HEAD_POTION] = 2;
-                else if (cmd->potion == POTION_STAMINA) actions[INF_HEAD_POTION] = 3;
+                if (cmd->potion == POTION_BREW)
+                    inf_translate_drink(s, actions, OSRS_CONSUMABLE_BREW);
+                else if (cmd->potion == POTION_RESTORE)
+                    inf_translate_drink(s, actions, OSRS_CONSUMABLE_SUPER_RESTORE);
+                else if (cmd->potion == POTION_BASTION)
+                    inf_translate_drink(s, actions, OSRS_CONSUMABLE_BASTION);
+                else if (cmd->potion == POTION_STAMINA)
+                    inf_translate_drink(s, actions, OSRS_CONSUMABLE_STAMINA);
                 break;
             case HUMAN_COMMAND_SPEC_TOGGLE:
-                actions[INF_HEAD_SPEC] = 1;
+                actions[INF_HEAD_SPEC] = s->player.spec_armed ? 2 : 1;
                 break;
             case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
             case HUMAN_COMMAND_FIGHT_STYLE:

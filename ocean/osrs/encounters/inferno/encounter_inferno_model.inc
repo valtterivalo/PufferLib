@@ -39,7 +39,7 @@ static const int INF_SPAWN_POS[INF_NUM_SPAWN_POS][2] = {
 #define INF_WAVE_ZUK      (INF_NUM_WAVES - 1)
 #define INF_START_WAVE_ZUK_JAD      (INF_WAVE_ZUK + 1)
 #define INF_MAX_PUBLIC_START_WAVE   (INF_NUM_WAVES + 2)
-#define INF_NUM_ACTION_HEADS 9
+#define INF_NUM_ACTION_HEADS 19
 
 typedef enum {
     INF_NPC_NIBBLER = 0,
@@ -855,6 +855,8 @@ typedef struct {
     InfWeaponSet weapon_set;
     InfLoadoutProfile active_loadout_profile;
     EncounterLoadoutStats loadout_stats[INF_NUM_WEAPON_SETS];
+    OsrsInventoryCell inventory_cells[OSRS_INVENTORY_SIZE];
+    EncounterLoadoutStats live_stats;
     EncounterLoadoutStats human_loadout_stats;
     int stamina_active_ticks;
 
@@ -901,8 +903,8 @@ typedef struct {
     int total_zuk_healer_out_of_range_ticks;
     int total_zuk_healer_attackable_ticks;
     int total_action_mask_checks;
-    int zero_valid_action_head_count[9];
-    int min_valid_action_count_by_head[9];
+    int zero_valid_action_head_count[INF_NUM_ACTION_HEADS];
+    int min_valid_action_count_by_head[INF_NUM_ACTION_HEADS];
     int target_head_valid_healer_count;
     int target_head_valid_zuk_count;
     int target_head_valid_set_count;

@@ -119,6 +119,8 @@ static inline int osrs_can_eat_consumable_kind(
         case OSRS_CONSUMABLE_SATURATED_HEART:
         case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
         case OSRS_CONSUMABLE_PRAYER_RESTORE:
+        case OSRS_CONSUMABLE_BASTION:
+        case OSRS_CONSUMABLE_STAMINA:
         case OSRS_CONSUMABLE_NONE:
             return 0;
     }

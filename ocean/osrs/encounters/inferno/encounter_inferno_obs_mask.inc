@@ -542,6 +542,25 @@ static void inf_write_obs_ctx(
     INF_PROFILE_MARK(INF_PROF_OBS_SPARKS);
 #endif
 
+    {
+        static const float inf_zero_post_use_deltas[6] = {0};
+        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+            const OsrsInventoryCell* cell = &s->inventory_cells[c];
+            int is_equipped = osrs_inventory_cell_holds_equipped_item(
+                &s->player, s->inventory_cells, c);
+            osrs_write_inventory_cell_affordance_features(
+                &obs[i], cell->item_idx, cell->raw_osrs_id, cell->dose,
+                is_equipped, inf_zero_post_use_deltas,
+                s->player.base_hitpoints, s->player.base_prayer,
+                s->player.base_ranged);
+            i += OSRS_INVENTORY_CELL_OBS_FEATURES;
+        }
+        for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+            osrs_write_equipped_self_features(&obs[i], s->player.equipped[slot]);
+            i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
+        }
+    }
+
     if (i != INF_NUM_OBS) {
         fprintf(stderr, "BUG: inf_write_obs wrote %d features, expected %d\n", i, INF_NUM_OBS);
         abort();
@@ -590,6 +609,27 @@ static int inf_is_human_targetable_npc_slot(EncounterState* state, int npc_slot)
         state, (EncounterContext*)inf_legacy_context(), npc_slot);
 }
 
+static int inf_drink_has_effect(const InfernoState* s, OsrsConsumableKind kind) {
+    const Player* p = &s->player;
+    switch (kind) {
+        case OSRS_CONSUMABLE_BREW:
+            return p->current_hitpoints < p->base_hitpoints;
+        case OSRS_CONSUMABLE_SUPER_RESTORE: {
+            int pray_missing = p->base_prayer - p->current_prayer;
+            int stats_drained = p->current_attack < 99 || p->current_strength < 99 ||
+                                p->current_defence < 99 || p->current_ranged < 99 ||
+                                p->current_magic < 99;
+            return stats_drained || pray_missing >= (INF_RESTORE_AMOUNT + 1) / 2;
+        }
+        case OSRS_CONSUMABLE_BASTION:
+            return p->current_ranged >= 99 && p->current_ranged <= 105;
+        case OSRS_CONSUMABLE_STAMINA:
+            return s->stamina_active_ticks == 0;
+        default:
+            return 0;
+    }
+}
+
 static void inf_write_mask_ctx(
     EncounterState* state,
     EncounterContext* context,
@@ -600,7 +640,7 @@ static void inf_write_mask_ctx(
     inf_refresh_current_obs_slots_ctx(s, ctx);
     int offset = 0;
     if (s->total_action_mask_checks == 0) {
-        for (int h = 0; h < 9; h++) {
+        for (int h = 0; h < INF_NUM_ACTION_HEADS; h++) {
             if (s->min_valid_action_count_by_head[h] == 0)
                 s->min_valid_action_count_by_head[h] = 1000000;
         }
@@ -642,45 +682,58 @@ static void inf_write_mask_ctx(
         mask[offset++] = is_targetable ? 1.0f : 0.0f;
     }
 
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->weapon_set != INF_GEAR_MAGE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != INF_GEAR_LONG_RANGE) ? 1.0f : 0.0f;
-    mask[offset++] = (s->weapon_set != INF_GEAR_BP) ? 1.0f : 0.0f;
-
-    mask[offset++] = 1.0f;
-    mask[offset++] = (s->player.brew_doses > 0 &&
-                      s->player.potion_timer == 0 &&
-                      s->player.current_hitpoints < s->player.base_hitpoints)
-                     ? 1.0f : 0.0f;
-
-    mask[offset++] = 1.0f;
     {
-        int pray_missing = s->player.base_prayer - s->player.current_prayer;
-        int stats_drained = s->player.current_attack < 99 || s->player.current_strength < 99 ||
-                            s->player.current_defence < 99 || s->player.current_ranged < 99 ||
-                            s->player.current_magic < 99;
-        int pray_worth = pray_missing >= (INF_RESTORE_AMOUNT + 1) / 2;
-        mask[offset++] = (s->player.restore_doses > 0 &&
-                          s->player.potion_timer == 0 &&
-                          (stats_drained || pray_worth))
-                         ? 1.0f : 0.0f;
+        int cell_equip_slot[OSRS_INVENTORY_SIZE];
+        int cell_can_eat[OSRS_INVENTORY_SIZE];
+        int cell_can_drink[OSRS_INVENTORY_SIZE];
+        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
+            cell_equip_slot[c] = -1;
+            cell_can_eat[c] = 0;
+            cell_can_drink[c] = 0;
+            const OsrsInventoryCell* cell = &s->inventory_cells[c];
+            OsrsInventoryClickResolution resolution =
+                osrs_inventory_cell_click_interpret(cell, OSRS_CLICK_TICK_FIRST);
+            switch (resolution.click_action) {
+                case OSRS_CLICK_EQUIP:
+                    if (osrs_can_equip_from_cell(&s->player, s->inventory_cells, c))
+                        cell_equip_slot[c] = osrs_item_gear_slot(cell->item_idx);
+                    break;
+                case OSRS_CLICK_EAT:
+                    cell_can_eat[c] = osrs_can_eat_consumable_kind(
+                        &s->player, resolution.consumable_kind);
+                    break;
+                case OSRS_CLICK_DRINK:
+                    cell_can_drink[c] = cell->dose > 0 &&
+                        s->player.potion_timer == 0 &&
+                        inf_drink_has_effect(s, resolution.consumable_kind);
+                    break;
+                case OSRS_CLICK_NONE:
+                    break;
+            }
+        }
+        for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+            mask[offset++] = 1.0f;
+            for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
+                mask[offset++] = cell_equip_slot[c] == slot ? 1.0f : 0.0f;
+        }
+        mask[offset++] = 1.0f;
+        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
+            mask[offset++] = cell_can_eat[c] ? 1.0f : 0.0f;
+        mask[offset++] = 1.0f;
+        for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
+            mask[offset++] = cell_can_drink[c] ? 1.0f : 0.0f;
     }
-    mask[offset++] = (s->player.bastion_doses > 0 && s->player.potion_timer == 0 &&
-                      s->player.current_ranged >= 99 && s->player.current_ranged <= 105)
-                     ? 1.0f : 0.0f;
-    mask[offset++] = (s->player.stamina_doses > 0 &&
-                      s->player.potion_timer == 0 &&
-                      s->stamina_active_ticks == 0)
-                     ? 1.0f : 0.0f;
 
     mask[offset++] = 1.0f;
     mask[offset++] = s->player.current_magic >= BLOOD_BARRAGE_LEVEL ? 1.0f : 0.0f;
     mask[offset++] = s->player.current_magic >= ICE_BARRAGE_LEVEL ? 1.0f : 0.0f;
 
     mask[offset++] = 1.0f;
-    mask[offset++] = (s->weapon_set == INF_GEAR_BP &&
+    mask[offset++] = (!s->player.spec_armed &&
+                      s->player.equipped[GEAR_SLOT_WEAPON] == ITEM_TOXIC_BLOWPIPE &&
                       s->player.special_energy >= BLOWPIPE_SPEC_COST)
                      ? 1.0f : 0.0f;
+    mask[offset++] = s->player.spec_armed ? 1.0f : 0.0f;
 
     mask[offset++] = 1.0f;
     mask[offset++] = s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE ? 1.0f : 0.0f;
