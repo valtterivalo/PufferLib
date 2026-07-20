@@ -6302,6 +6302,13 @@ void pvp_render(OsrsEnv* env) {
                         zul_inv->inventory_cells[i].raw_osrs_id;
                 rc->gui.display_inventory_count = OSRS_INVENTORY_SIZE;
             }
+            InfernoState* inf_inv = render_inferno_state_from_env(env);
+            if (inf_inv) {
+                for (int i = 0; i < OSRS_INVENTORY_SIZE && i < INV_GRID_SLOTS; i++)
+                    rc->gui.display_inventory_osrs_ids[i] =
+                        inf_inv->inventory_cells[i].raw_osrs_id;
+                rc->gui.display_inventory_count = OSRS_INVENTORY_SIZE;
+            }
         }
         if (gui_player) {
             BeginMode2D(render_chrome_camera(
