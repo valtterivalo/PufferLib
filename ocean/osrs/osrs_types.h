@@ -730,6 +730,10 @@ typedef struct Log {
     float colo_min_sol_hp;
 
     float colo_max_depth_reached;
+
+    float inf_death_wave_hist[6];
+    float inf_death_brew_doses_hist[6];
+    float inf_death_restore_doses_hist[6];
 } Log;
 
 typedef struct {
