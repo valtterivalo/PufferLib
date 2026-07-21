@@ -134,6 +134,14 @@ static void inferno_apply_curriculum(Env* env, Dict* kwargs) {
     if (num_tiers == 0)
         return;
 
+    if (total_frac > 0.9f) {
+        float rescale = 0.9f / total_frac;
+        for (int t = 0; t < num_tiers; t++) {
+            fracs[t] *= rescale;
+        }
+        total_frac = 0.9f;
+    }
+
     float u = (float)inf_lowbias32(inf_lowbias32((uint32_t)env->rng) ^ 0x9e3779b9U)
         / 4294967296.0f;
     float cursor = 1.0f - total_frac;
