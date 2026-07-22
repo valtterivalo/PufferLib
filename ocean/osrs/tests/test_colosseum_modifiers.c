@@ -7510,10 +7510,25 @@ static void test_best_gear_and_weapon_choice_cache_signatures(void) {
     ColoInvCell tmp = s.inventory_cells[weapon_cells[0]];
     s.inventory_cells[weapon_cells[0]] = s.inventory_cells[weapon_cells[1]];
     s.inventory_cells[weapon_cells[1]] = tmp;
-    CHECK("best-gear key preserves weapon candidate order",
-        col_best_gear_cache_signature(&s) != best_gear_signature);
+    CHECK("best-gear key canonicalizes weapon candidate order",
+        col_best_gear_cache_signature(&s) == best_gear_signature);
     CHECK("weapon-choice key preserves per-cell weapon order",
         col_weapon_choice_obs_signature(&s) != weapon_choice_signature);
+    CHECK("weapon reorder reuses best-gear table",
+        col_get_best_gear_table(&s) == best_gear &&
+        s.obs_memos.best_gear_next == best_gear_next);
+
+    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 10, 10);
+    osrs_interaction_set(&s.interaction, manti);
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    float served_block[COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
+    memcpy(served_block, &obs[COLO_OBS_AFTER_THRALL_DC], sizeof(served_block));
+    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("canonical best-gear table preserves weapon-choice observation",
+        memcmp(served_block, &obs[COLO_OBS_AFTER_THRALL_DC],
+            sizeof(served_block)) == 0);
 
     tmp = s.inventory_cells[weapon_cells[0]];
     s.inventory_cells[weapon_cells[0]] = s.inventory_cells[weapon_cells[1]];

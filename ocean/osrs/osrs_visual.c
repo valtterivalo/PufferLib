@@ -146,6 +146,13 @@ static double osrs_profile_now_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 
+static uint64_t osrs_profile_hash_bytes(uint64_t hash, const void* data, size_t size) {
+    const uint8_t* bytes = (const uint8_t*)data;
+    for (size_t i = 0; i < size; i++)
+        hash = (hash ^ bytes[i]) * 1099511628211ULL;
+    return hash;
+}
+
 #ifdef COLO_PROFILE_ENABLED
 static int osrs_colosseum_profile_slot_is_counter(int slot) {
     return slot == COLO_PROF_BEST_GEAR_REQUESTS ||
@@ -1173,6 +1180,7 @@ static void run_policy_profile(
     int total_steps = 0;
     int reset_count = 0;
     double environment_ms = 0.0;
+    uint64_t trace_hash = 1469598103934665603ULL;
     double wall_start = osrs_profile_now_seconds();
     while (total_steps < profile_steps) {
         double environment_step_ms = 0.0;
@@ -1192,8 +1200,16 @@ static void run_policy_profile(
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_ADD(COLO_PROF_C_WRITE_MASK, end_ms - start_ms);
 #endif
+        trace_hash = osrs_profile_hash_bytes(
+            trace_hash,
+            policy.obs,
+            (size_t)(policy.obs_size + policy.mask_size) * sizeof(float));
 
         visual_policy_actions_from_obs(&policy, actions);
+        trace_hash = osrs_profile_hash_bytes(
+            trace_hash,
+            actions,
+            (size_t)policy.num_action_heads * sizeof(int));
 
         start_ms = osrs_profile_now_seconds() * 1000.0;
         edef->step(env->encounter_state, env->encounter_context, actions);
@@ -1204,7 +1220,7 @@ static void run_policy_profile(
 #endif
 
         start_ms = end_ms;
-        (void)edef->get_reward(env->encounter_state, env->encounter_context);
+        float reward = edef->get_reward(env->encounter_state, env->encounter_context);
         int terminal = edef->is_terminal(
             env->encounter_state, env->encounter_context);
         end_ms = osrs_profile_now_seconds() * 1000.0;
@@ -1212,6 +1228,8 @@ static void run_policy_profile(
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_ADD(COLO_PROF_C_REWARD_TERMINAL, end_ms - start_ms);
 #endif
+        trace_hash = osrs_profile_hash_bytes(trace_hash, &reward, sizeof(reward));
+        trace_hash = osrs_profile_hash_bytes(trace_hash, &terminal, sizeof(terminal));
 
         if (terminal) {
             start_ms = end_ms;
@@ -1243,6 +1261,7 @@ static void run_policy_profile(
         environment_ms > 0.0 ? 1000.0 * total_steps / environment_ms : 0.0);
     printf("  Wall steps/sec: %.0f\n",
         wall_elapsed > 0.0 ? total_steps / wall_elapsed : 0.0);
+    printf("  Trace hash: %016llx\n", (unsigned long long)trace_hash);
 #ifdef COLO_PROFILE_ENABLED
     osrs_print_colosseum_profile_results(total_steps);
 #endif

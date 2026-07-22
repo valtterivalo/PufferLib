@@ -1455,8 +1455,19 @@ static uint64_t col_best_gear_cache_signature(const ColosseumState* s) {
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         int count = candidates.count[slot];
         h = (h ^ (uint64_t)(uint32_t)count) * 1099511628211ULL;
+        uint8_t sorted[COLO_BEST_GEAR_MAX_CAND];
+        memcpy(sorted, candidates.items[slot], (size_t)count);
+        for (int i = 1; i < count; i++) {
+            uint8_t item = sorted[i];
+            int j = i;
+            while (j > 0 && sorted[j - 1] > item) {
+                sorted[j] = sorted[j - 1];
+                j--;
+            }
+            sorted[j] = item;
+        }
         for (int i = 0; i < count; i++)
-            h = (h ^ (uint64_t)candidates.items[slot][i]) * 1099511628211ULL;
+            h = (h ^ (uint64_t)sorted[i]) * 1099511628211ULL;
     }
     const int scalars[5] = {
         s->player.current_attack, s->player.current_strength,
