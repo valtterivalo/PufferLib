@@ -1448,30 +1448,48 @@ static void col_build_best_gear_table(
     }
 }
 
-static uint64_t col_best_gear_signature(const ColosseumState* s) {
+static uint64_t col_best_gear_cache_signature(const ColosseumState* s) {
+    ColoGearCandidates candidates;
+    col_build_gear_candidates(s, &candidates);
     uint64_t h = 1469598103934665603ULL;
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
-    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++)
-        h = (h ^ (uint64_t)s->inventory_cells[cell].item_idx) * 1099511628211ULL;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        int count = candidates.count[slot];
+        h = (h ^ (uint64_t)(uint32_t)count) * 1099511628211ULL;
+        for (int i = 0; i < count; i++)
+            h = (h ^ (uint64_t)candidates.items[slot][i]) * 1099511628211ULL;
+    }
     const int scalars[5] = {
         s->player.current_attack, s->player.current_strength,
         s->player.current_ranged, s->player.current_magic,
         (int)s->active_loadout_profile,
     };
-    for (int k = 0; k < 5; k++)
-        h = (h ^ (uint64_t)(uint32_t)scalars[k]) * 1099511628211ULL;
+    for (int i = 0; i < 5; i++)
+        h = (h ^ (uint64_t)(uint32_t)scalars[i]) * 1099511628211ULL;
     return h;
 }
 
 static const ColoBestGear (*col_get_best_gear_table(ColosseumState* s))[COLO_NUM_NPC_TYPES] {
     if (!s) abort();
+#ifdef COLO_PROFILE_ENABLED
+    if (COLO_PROFILE_ENABLED())
+        COLO_PROFILE_ADD(COLO_PROF_BEST_GEAR_REQUESTS, 1.0);
+#endif
     ColoObsMemoCaches* memos = &s->obs_memos;
-    uint64_t sig = col_best_gear_signature(s);
+    uint64_t sig = col_best_gear_cache_signature(s);
     for (int w = 0; w < COLO_BEST_GEAR_CACHE_WAYS; w++) {
-        if (memos->best_gear_valid[w] && memos->best_gear_sig[w] == sig)
+        if (memos->best_gear_valid[w] && memos->best_gear_sig[w] == sig) {
+#ifdef COLO_PROFILE_ENABLED
+            if (COLO_PROFILE_ENABLED())
+                COLO_PROFILE_ADD(COLO_PROF_BEST_GEAR_HITS, 1.0);
+#endif
             return memos->best_gear[w];
+        }
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (COLO_PROFILE_ENABLED()) {
+        COLO_PROFILE_ADD(COLO_PROF_BEST_GEAR_BUILDS, 1.0);
+    }
+#endif
     int slot = memos->best_gear_next;
     col_build_best_gear_table(s, memos->best_gear[slot]);
     memos->best_gear_sig[slot] = sig;
@@ -1513,7 +1531,18 @@ static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
 }
 
 static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
-    uint64_t h = col_best_gear_signature(s);
+    uint64_t h = col_best_gear_cache_signature(s);
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        uint8_t item = s->inventory_cells[cell].item_idx;
+        uint8_t relevant_item = ITEM_NONE;
+        if (item != ITEM_NONE &&
+                (osrs_item_gear_slot(item) == GEAR_SLOT_WEAPON ||
+                    osrs_spec_cost(item) > 0))
+            relevant_item = item;
+        h = (h ^ (uint64_t)relevant_item) * 1099511628211ULL;
+    }
     int has_target = 0, type = 0, def_drained = 0, size = 0;
     int target = col_player_target_slot(s);
     if (target >= 0 && target < COLO_MAX_NPCS) {
@@ -1534,16 +1563,28 @@ static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
 static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) {
     int i = *io;
 
+#ifdef COLO_PROFILE_ENABLED
+    if (COLO_PROFILE_ENABLED())
+        COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_REQUESTS, 1.0);
+#endif
     ColoObsMemoCaches* memos = &s->obs_memos;
     uint64_t sig = col_weapon_choice_obs_signature(s);
     for (int w = 0; w < COLO_WEAPON_CHOICE_OBS_CACHE_WAYS; w++) {
         if (memos->weapon_choice_valid[w] && memos->weapon_choice_sig[w] == sig) {
+#ifdef COLO_PROFILE_ENABLED
+            if (COLO_PROFILE_ENABLED())
+                COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_HITS, 1.0);
+#endif
             memcpy(&obs[i], memos->weapon_choice[w],
                    sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
             *io = i + COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS;
             return;
         }
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (COLO_PROFILE_ENABLED())
+        COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_BUILDS, 1.0);
+#endif
     int block_start = i;
 
     const ColoNPC* npc = NULL;

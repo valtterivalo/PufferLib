@@ -242,6 +242,7 @@ static int test_aggregate_doses_for_kind(
             return s->player.brew_doses;
         case OSRS_CONSUMABLE_SUPER_RESTORE:
         case OSRS_CONSUMABLE_SANFEW:
+        case OSRS_CONSUMABLE_PRAYER_RESTORE:
             return s->player.restore_doses;
         case OSRS_CONSUMABLE_SUPER_COMBAT:
         case OSRS_CONSUMABLE_DIVINE_COMBAT:
@@ -258,6 +259,8 @@ static int test_aggregate_doses_for_kind(
         case OSRS_CONSUMABLE_NONE:
         case OSRS_CONSUMABLE_SHARK_FOOD:
         case OSRS_CONSUMABLE_KARAMBWAN:
+        case OSRS_CONSUMABLE_BASTION:
+        case OSRS_CONSUMABLE_STAMINA:
             return -1;
     }
     abort();
@@ -7463,6 +7466,63 @@ static void test_inventory_obs_memo(void) {
         memcmp(served_block, &obs[COLO_OBS_AFTER_PILLARS], sizeof(served_block)) == 0);
 }
 
+static void test_best_gear_and_weapon_choice_cache_signatures(void) {
+    printf("test_best_gear_and_weapon_choice_cache_signatures\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+
+    int non_gear_cell = -1;
+    int weapon_cells[2] = {-1, -1};
+    int weapon_count = 0;
+    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+        uint8_t item = s.inventory_cells[cell].item_idx;
+        if (item == ITEM_NONE) {
+            if (s.inventory_cells[cell].raw_osrs_id != 0 && non_gear_cell < 0)
+                non_gear_cell = cell;
+            continue;
+        }
+        int gear_slot = osrs_item_gear_slot(item);
+        if (gear_slot < 0 && osrs_spec_cost(item) == 0 && non_gear_cell < 0)
+            non_gear_cell = cell;
+        if (gear_slot == GEAR_SLOT_WEAPON && weapon_count < 2)
+            weapon_cells[weapon_count++] = cell;
+    }
+    CHECK("speedrun kit has a non-gear cell", non_gear_cell >= 0);
+    CHECK("speedrun kit has two weapon cells", weapon_count == 2);
+
+    uint64_t best_gear_signature = col_best_gear_cache_signature(&s);
+    uint64_t weapon_choice_signature = col_weapon_choice_obs_signature(&s);
+    const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(&s);
+    int best_gear_next = s.obs_memos.best_gear_next;
+
+    ColoInvCell non_gear = s.inventory_cells[non_gear_cell];
+    s.inventory_cells[non_gear_cell] = osrs_inventory_cell_empty();
+    CHECK("best-gear key ignores non-gear cells",
+        col_best_gear_cache_signature(&s) == best_gear_signature);
+    CHECK("weapon-choice key ignores non-weapon cells",
+        col_weapon_choice_obs_signature(&s) == weapon_choice_signature);
+    CHECK("non-gear change reuses best-gear table",
+        col_get_best_gear_table(&s) == best_gear &&
+        s.obs_memos.best_gear_next == best_gear_next);
+
+    s.inventory_cells[non_gear_cell] = non_gear;
+    ColoInvCell tmp = s.inventory_cells[weapon_cells[0]];
+    s.inventory_cells[weapon_cells[0]] = s.inventory_cells[weapon_cells[1]];
+    s.inventory_cells[weapon_cells[1]] = tmp;
+    CHECK("best-gear key preserves weapon candidate order",
+        col_best_gear_cache_signature(&s) != best_gear_signature);
+    CHECK("weapon-choice key preserves per-cell weapon order",
+        col_weapon_choice_obs_signature(&s) != weapon_choice_signature);
+
+    tmp = s.inventory_cells[weapon_cells[0]];
+    s.inventory_cells[weapon_cells[0]] = s.inventory_cells[weapon_cells[1]];
+    s.inventory_cells[weapon_cells[1]] = tmp;
+    s.player.current_ranged++;
+    CHECK("best-gear key includes current combat levels",
+        col_best_gear_cache_signature(&s) != best_gear_signature);
+}
+
 static void test_weapon_choice_obs_rank_and_farm_cap(void) {
     printf("test_weapon_choice_obs_rank_and_farm_cap\n");
     ColosseumContext ctx;
@@ -7711,6 +7771,7 @@ int main(void) {
     test_move_action_no_corner_cut();
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
+    test_best_gear_and_weapon_choice_cache_signatures();
     test_weapon_choice_obs_rank_and_farm_cap();
     test_threat_field_obs();
     test_inventory_obs_memo();

@@ -17,7 +17,6 @@
     X(COLO_PROF_OBS_REFRESH_SLOTS,      "obs_refresh_slots") \
     X(COLO_PROF_OBS_PREFIX,             "obs_prefix") \
     X(COLO_PROF_OBS_PILLARS,            "obs_pillars") \
-    X(COLO_PROF_OBS_BESTGEAR,           "obs_bestgear_build") \
     X(COLO_PROF_OBS_INVENTORY,          "obs_inventory") \
     X(COLO_PROF_OBS_VENATOR,            "obs_venator") \
     X(COLO_PROF_OBS_NPC_SLOTS,          "obs_npc_slots") \
@@ -41,7 +40,13 @@
     X(COLO_PROF_STEP_NPC_ATTACK,        "step_npc_attack") \
     X(COLO_PROF_STEP_MANTICORE_BARRAGE, "step_manticore_barrage") \
     X(COLO_PROF_STEP_WARBAND_ATTACK,    "step_warband_attack") \
-    X(COLO_PROF_STEP_MODIFIERS_HAZARDS, "step_modifiers_hazards")
+    X(COLO_PROF_STEP_MODIFIERS_HAZARDS, "step_modifiers_hazards") \
+    X(COLO_PROF_BEST_GEAR_REQUESTS,     "best_gear_requests") \
+    X(COLO_PROF_BEST_GEAR_HITS,         "best_gear_hits") \
+    X(COLO_PROF_BEST_GEAR_BUILDS,       "best_gear_builds") \
+    X(COLO_PROF_WEAPON_CHOICE_REQUESTS, "weapon_choice_requests") \
+    X(COLO_PROF_WEAPON_CHOICE_HITS,     "weapon_choice_hits") \
+    X(COLO_PROF_WEAPON_CHOICE_BUILDS,   "weapon_choice_builds")
 
 #define OSRS_ENV_PROFILE_PREFIX     colosseum
 #define OSRS_ENV_PROFILE_COUNT      COLO_PROF_COUNT

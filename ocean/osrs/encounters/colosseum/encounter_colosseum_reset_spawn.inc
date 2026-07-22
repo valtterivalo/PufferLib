@@ -443,6 +443,11 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
             case OSRS_CONSUMABLE_SHARK_FOOD:
             case OSRS_CONSUMABLE_KARAMBWAN:
                 break;
+            case OSRS_CONSUMABLE_BASTION:
+            case OSRS_CONSUMABLE_STAMINA:
+                fprintf(stderr, "colosseum: consumable kind %d not in colosseum kits\n",
+                    (int)resolution.consumable_kind);
+                abort();
         }
     }
     s->player.brew_doses = brew_doses;

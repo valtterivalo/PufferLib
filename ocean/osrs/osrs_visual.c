@@ -147,18 +147,29 @@ static double osrs_profile_now_seconds(void) {
 }
 
 #ifdef COLO_PROFILE_ENABLED
-static void osrs_print_colosseum_profile_results(void) {
+static int osrs_colosseum_profile_slot_is_counter(int slot) {
+    return slot == COLO_PROF_BEST_GEAR_REQUESTS ||
+        slot == COLO_PROF_BEST_GEAR_HITS ||
+        slot == COLO_PROF_BEST_GEAR_BUILDS ||
+        slot == COLO_PROF_WEAPON_CHOICE_REQUESTS ||
+        slot == COLO_PROF_WEAPON_CHOICE_HITS ||
+        slot == COLO_PROF_WEAPON_CHOICE_BUILDS;
+}
+
+static void osrs_print_colosseum_profile_results(int total_steps) {
     int count = colosseum_env_profile_count();
     if (count <= 0) return;
     double values[COLO_PROF_COUNT];
     int order[COLO_PROF_COUNT];
+    int order_count = 0;
     for (int i = 0; i < count; i++) {
         values[i] = colosseum_env_profile_read_reset_ms(i);
-        order[i] = i;
+        if (!osrs_colosseum_profile_slot_is_counter(i))
+            order[order_count++] = i;
     }
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < order_count; i++) {
         int best = i;
-        for (int j = i + 1; j < count; j++) {
+        for (int j = i + 1; j < order_count; j++) {
             if (values[order[j]] > values[order[best]]) best = j;
         }
         int tmp = order[i];
@@ -167,12 +178,37 @@ static void osrs_print_colosseum_profile_results(void) {
     }
     double total = values[COLO_PROF_C_STEP_TOTAL];
     printf("Colosseum profile buckets:\n");
-    for (int r = 0; r < count; r++) {
+    for (int r = 0; r < order_count; r++) {
         int slot = order[r];
         double pct = total > 0.0 ? 100.0 * values[slot] / total : 0.0;
         printf("  %-28s %.3f ms  %.2f%%\n",
             colosseum_env_profile_name(slot), values[slot], pct);
     }
+    double steps = total_steps > 0 ? (double)total_steps : 1.0;
+    double best_gear_requests = values[COLO_PROF_BEST_GEAR_REQUESTS];
+    double best_gear_hits = values[COLO_PROF_BEST_GEAR_HITS];
+    double weapon_choice_requests = values[COLO_PROF_WEAPON_CHOICE_REQUESTS];
+    double weapon_choice_hits = values[COLO_PROF_WEAPON_CHOICE_HITS];
+    printf("Colosseum cache counters:\n");
+    printf("  %-28s %.0f total  %.6f per step  %.2f%% hit\n",
+        "best_gear",
+        best_gear_requests,
+        best_gear_requests / steps,
+        best_gear_requests > 0.0 ? 100.0 * best_gear_hits / best_gear_requests : 0.0);
+    printf("  %-28s %.0f total  %.6f per step\n",
+        colosseum_env_profile_name(COLO_PROF_BEST_GEAR_BUILDS),
+        values[COLO_PROF_BEST_GEAR_BUILDS],
+        values[COLO_PROF_BEST_GEAR_BUILDS] / steps);
+    printf("  %-28s %.0f total  %.6f per step  %.2f%% hit\n",
+        "weapon_choice",
+        weapon_choice_requests,
+        weapon_choice_requests / steps,
+        weapon_choice_requests > 0.0
+            ? 100.0 * weapon_choice_hits / weapon_choice_requests : 0.0);
+    printf("  %-28s %.0f total  %.6f per step\n",
+        colosseum_env_profile_name(COLO_PROF_WEAPON_CHOICE_BUILDS),
+        values[COLO_PROF_WEAPON_CHOICE_BUILDS],
+        values[COLO_PROF_WEAPON_CHOICE_BUILDS] / steps);
 }
 #endif
 
@@ -480,7 +516,7 @@ static void run_profile(
     printf("  Steps/sec: %.0f\n", total_steps / elapsed);
 #ifdef COLO_PROFILE_ENABLED
     if (encounter_name && strcmp(encounter_name, "colosseum") == 0)
-        osrs_print_colosseum_profile_results();
+        osrs_print_colosseum_profile_results(total_steps);
 #endif
 #ifdef INF_PROFILE_ENABLED
     if (encounter_name && strcmp(encounter_name, "inferno") == 0)
@@ -1051,16 +1087,8 @@ static int visual_policy_sample_masked(
     return best_action;
 }
 
-static void visual_policy_actions(
-    VisualPolicy* policy,
-    const EncounterDef* edef,
-    EncounterState* state,
-    EncounterContext* context,
-    int* actions
-) {
+static void visual_policy_actions_from_obs(VisualPolicy* policy, int* actions) {
     if (!policy || !policy->enabled) return;
-    edef->write_obs(state, context, policy->obs);
-    edef->write_mask(state, context, policy->obs + policy->obs_size);
     float* encoded;
     if (policy->net->entity_encoder) {
         entity_encoder_forward(policy->net->entity_encoder, policy->obs);
@@ -1090,6 +1118,140 @@ static void visual_policy_actions(
         logit_offset += dim;
         mask_offset += dim;
     }
+}
+
+static void visual_policy_actions(
+    VisualPolicy* policy,
+    const EncounterDef* edef,
+    EncounterState* state,
+    EncounterContext* context,
+    int* actions
+) {
+    if (!policy || !policy->enabled) return;
+    edef->write_obs(state, context, policy->obs);
+    edef->write_mask(state, context, policy->obs + policy->obs_size);
+    visual_policy_actions_from_obs(policy, actions);
+}
+
+static void run_policy_profile(
+    OsrsEnv* env,
+    const char* encounter_name,
+    int start_wave,
+    int profile_steps,
+    const char* model_path,
+    VisualPolicyMode policy_mode,
+    uint32_t policy_seed,
+    int loadout_mode
+) {
+    if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) abort();
+    if (profile_steps <= 0) {
+        fprintf(stderr, "policy profile requires --profile-steps > 0\n");
+        abort();
+    }
+    const EncounterDef* edef = visual_open_encounter(env, encounter_name);
+    if (!edef) abort();
+    visual_load_encounter_collision_map(edef, env, encounter_name);
+    if (start_wave >= 0)
+        edef->put_int(env->encounter_state, env->encounter_context,
+            "start_wave", start_wave);
+    edef->put_int(env->encounter_state, env->encounter_context,
+        "loadout_profile_mode", loadout_mode);
+    edef->reset(env->encounter_state, env->encounter_context, policy_seed);
+
+    VisualPolicy policy;
+    visual_policy_init(&policy, edef, model_path, policy_mode, policy_seed,
+        g_cli_hidden_size, g_cli_num_layers, g_cli_entity_encoder);
+    if (!policy.enabled) abort();
+
+#ifdef COLO_PROFILE_ENABLED
+    int profile_count = colosseum_env_profile_count();
+    for (int i = 0; i < profile_count; i++)
+        (void)colosseum_env_profile_read_reset_ms(i);
+#endif
+
+    int actions[VISUAL_POLICY_MAX_ACTION_HEADS] = {0};
+    int total_steps = 0;
+    int reset_count = 0;
+    double environment_ms = 0.0;
+    double wall_start = osrs_profile_now_seconds();
+    while (total_steps < profile_steps) {
+        double environment_step_ms = 0.0;
+        double start_ms = osrs_profile_now_seconds() * 1000.0;
+        edef->write_obs(env->encounter_state, env->encounter_context, policy.obs);
+        double end_ms = osrs_profile_now_seconds() * 1000.0;
+        environment_step_ms += end_ms - start_ms;
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_ADD(COLO_PROF_C_WRITE_OBS, end_ms - start_ms);
+#endif
+
+        start_ms = end_ms;
+        edef->write_mask(env->encounter_state, env->encounter_context,
+            policy.obs + policy.obs_size);
+        end_ms = osrs_profile_now_seconds() * 1000.0;
+        environment_step_ms += end_ms - start_ms;
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_ADD(COLO_PROF_C_WRITE_MASK, end_ms - start_ms);
+#endif
+
+        visual_policy_actions_from_obs(&policy, actions);
+
+        start_ms = osrs_profile_now_seconds() * 1000.0;
+        edef->step(env->encounter_state, env->encounter_context, actions);
+        end_ms = osrs_profile_now_seconds() * 1000.0;
+        environment_step_ms += end_ms - start_ms;
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_ADD(COLO_PROF_C_ENCOUNTER_STEP, end_ms - start_ms);
+#endif
+
+        start_ms = end_ms;
+        (void)edef->get_reward(env->encounter_state, env->encounter_context);
+        int terminal = edef->is_terminal(
+            env->encounter_state, env->encounter_context);
+        end_ms = osrs_profile_now_seconds() * 1000.0;
+        environment_step_ms += end_ms - start_ms;
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_ADD(COLO_PROF_C_REWARD_TERMINAL, end_ms - start_ms);
+#endif
+
+        if (terminal) {
+            start_ms = end_ms;
+            reset_count++;
+            edef->reset(env->encounter_state, env->encounter_context,
+                policy_seed + (uint32_t)reset_count);
+            visual_policy_reset_recurrent(&policy);
+            end_ms = osrs_profile_now_seconds() * 1000.0;
+            environment_step_ms += end_ms - start_ms;
+#ifdef COLO_PROFILE_ENABLED
+            COLO_PROFILE_ADD(COLO_PROF_C_RESET, end_ms - start_ms);
+#endif
+        }
+
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_ADD(COLO_PROF_C_STEP_TOTAL, environment_step_ms);
+#endif
+        environment_ms += environment_step_ms;
+        total_steps++;
+    }
+    double wall_elapsed = osrs_profile_now_seconds() - wall_start;
+
+    printf("Policy profile results:\n");
+    printf("  Total steps: %d\n", total_steps);
+    printf("  Resets: %d\n", reset_count);
+    printf("  Wall time: %.3f seconds\n", wall_elapsed);
+    printf("  Environment time: %.3f seconds\n", environment_ms / 1000.0);
+    printf("  Environment steps/sec: %.0f\n",
+        environment_ms > 0.0 ? 1000.0 * total_steps / environment_ms : 0.0);
+    printf("  Wall steps/sec: %.0f\n",
+        wall_elapsed > 0.0 ? total_steps / wall_elapsed : 0.0);
+#ifdef COLO_PROFILE_ENABLED
+    osrs_print_colosseum_profile_results(total_steps);
+#endif
+
+    visual_policy_destroy(&policy);
+    edef->destroy(env->encounter_state);
+    env->encounter_state = NULL;
+    visual_destroy_encounter_context(
+        edef, (EncounterContext**)&env->encounter_context);
 }
 
 typedef struct {
@@ -2021,7 +2183,12 @@ int main(int argc, char** argv) {
     if (use_profile) {
         visual_alloc_env_buffers(&env);
 
-        run_profile(&env, encounter_name, start_wave, profile_steps);
+        if (model_path && model_path[0]) {
+            run_policy_profile(&env, encounter_name, start_wave, profile_steps,
+                model_path, policy_mode, policy_seed, loadout_mode);
+        } else {
+            run_profile(&env, encounter_name, start_wave, profile_steps);
+        }
 
         visual_free_env_buffers(&env);
         pvp_close(&env);
