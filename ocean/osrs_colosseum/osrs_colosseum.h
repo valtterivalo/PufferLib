@@ -141,6 +141,16 @@ static void col_assign_curriculum_wave(Env* env, Dict* kwargs) {
     if (classic_curriculum_mode == 0 || num_tiers == 0) {
         return;
     }
+    float total_frac = 0.0f;
+    for (int t = 0; t < num_tiers; t++) {
+        total_frac += fracs[t];
+    }
+    if (total_frac > 0.9f) {
+        float rescale = 0.9f / total_frac;
+        for (int t = 0; t < num_tiers; t++) {
+            fracs[t] *= rescale;
+        }
+    }
     float draw = col_curriculum_uniform(env->rng);
     float cumulative = 0.0f;
     for (int t = 0; t < num_tiers; t++) {
