@@ -820,7 +820,7 @@ typedef struct {
     int last_attack_kind;
     int last_variant;
 
-    int aoe_attack;
+    ColoSolAoeAttack aoe_attack;
     int aoe_age;
     int aoe_x, aoe_y;
     int aoe_dir_x, aoe_dir_y;
