@@ -19,7 +19,23 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 38
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
 #define COLO_WAVE_OBS_SIZE        4
-#define COLO_BOSS_OBS_SIZE        51
+
+typedef enum {
+    COLO_SOL_PARRY_CUE_INACTIVE = 0,
+    COLO_SOL_PARRY_CUE_LEAD_TIME,
+    COLO_SOL_PARRY_CUE_OVERHEAD_OFF,
+    COLO_SOL_PARRY_CUE_FLICK_MELEE,
+    COLO_SOL_PARRY_CUE_POISONED,
+    COLO_SOL_PARRY_CUE_COUNT,
+} ColoSolParryCue;
+
+#define COLO_SOL_PARRY_LAND_TICKS_MAX 4
+#define COLO_BOSS_OBS_PARRY_CUE_OFFSET 22
+#define COLO_BOSS_OBS_PARRY_TICKS_OFFSET \
+    (COLO_BOSS_OBS_PARRY_CUE_OFFSET + COLO_SOL_PARRY_CUE_COUNT)
+#define COLO_BOSS_OBS_PARRY_DAMAGE_OFFSET \
+    (COLO_BOSS_OBS_PARRY_TICKS_OFFSET + COLO_SOL_PARRY_LAND_TICKS_MAX)
+#define COLO_BOSS_OBS_SIZE        56
 
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
@@ -584,6 +600,55 @@ static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx
     col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
 }
 
+typedef struct {
+    ColoSolParryCue cue;
+    int ticks_to_land;
+    int damage;
+} ColoSolParryTell;
+
+static ColoSolParryTell col_sol_parry_tell(const ColosseumState* s) {
+    const SolHereditState* sol = &s->sol;
+    int hit = -1;
+    for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
+        if (sol->parry_land_in[h] <= 0) continue;
+        if (hit < 0 || sol->parry_land_in[h] < sol->parry_land_in[hit]) hit = h;
+    }
+    if (hit < 0) {
+        return (ColoSolParryTell){
+            .cue = COLO_SOL_PARRY_CUE_INACTIVE,
+            .ticks_to_land = 0,
+            .damage = 0,
+        };
+    }
+
+    int ticks_to_land = sol->parry_land_in[hit];
+    int landing_tick = s->tick + ticks_to_land;
+    int lookback = COLO_SOL_PARRY_LOOKBACK[hit];
+    int poisoned = 0;
+    for (int k = 1; k <= lookback; k++) {
+        int history_tick = landing_tick - k;
+        if (history_tick < 0 || history_tick > s->tick) continue;
+        if (sol->overhead_history[history_tick % COLO_SOL_PRAYER_HISTORY]) {
+            poisoned = 1;
+            break;
+        }
+    }
+
+    ColoSolParryCue cue = COLO_SOL_PARRY_CUE_LEAD_TIME;
+    if (poisoned)
+        cue = COLO_SOL_PARRY_CUE_POISONED;
+    else if (ticks_to_land == 1)
+        cue = COLO_SOL_PARRY_CUE_FLICK_MELEE;
+    else if (ticks_to_land <= lookback + 1)
+        cue = COLO_SOL_PARRY_CUE_OVERHEAD_OFF;
+
+    return (ColoSolParryTell){
+        .cue = cue,
+        .ticks_to_land = ticks_to_land,
+        .damage = sol->parry_damage[hit],
+    };
+}
+
 static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     const SolHereditState* sol = &s->sol;
@@ -624,19 +689,14 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     obs[i++] = sol->special_cooldown <= 0 ? 1.0f : 0.0f;
     obs[i++] = sol->force_spear ? 1.0f : 0.0f;
 
-    int next_land = 0, next_dmg = 0;
-    for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
-        if (sol->parry_land_in[h] <= 0) continue;
-        if (next_land == 0 || sol->parry_land_in[h] < next_land) {
-            next_land = sol->parry_land_in[h];
-            next_dmg = sol->parry_damage[h];
-        }
-    }
-    obs[i++] = sol->parry_hits_left > 0 ? 1.0f : 0.0f;
-    obs[i++] = col_clamp01((float)next_land / 10.0f);
-    obs[i++] = col_clamp01((float)next_dmg / 45.0f);
-    obs[i++] = col_clamp01((float)sol->parry_hits_left / (float)COLO_SOL_PARRY_HITS);
-    obs[i++] = sol->phase >= 3 ? 1.0f : 0.0f;
+    ColoSolParryTell parry = col_sol_parry_tell(s);
+    assert(parry.ticks_to_land >= 0 &&
+        parry.ticks_to_land <= COLO_SOL_PARRY_LAND_TICKS_MAX);
+    for (int cue = 0; cue < COLO_SOL_PARRY_CUE_COUNT; cue++)
+        obs[i++] = (int)parry.cue == cue ? 1.0f : 0.0f;
+    for (int tick = 1; tick <= COLO_SOL_PARRY_LAND_TICKS_MAX; tick++)
+        obs[i++] = parry.ticks_to_land == tick ? 1.0f : 0.0f;
+    obs[i++] = col_clamp01((float)parry.damage / 45.0f);
 
     obs[i++] = sol->grapple_active ? 1.0f : 0.0f;
     for (int g = 0; g < COLO_NUM_GRAPPLE_SLOTS; g++)

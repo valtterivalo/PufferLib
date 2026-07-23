@@ -3511,6 +3511,23 @@ static void test_sol_parry_schedule_and_damage(void) {
     ColosseumState s;
     int idle[COLO_NUM_ACTION_HEADS] = {0};
 
+    CHECK("751 HP remains above the delayed-third-hit phase",
+        col_sol_phase_for_hp(751) == 2);
+    CHECK("750 HP enters the delayed-third-hit phase",
+        col_sol_phase_for_hp(750) == 3);
+
+    int boundary_idx = sol_setup(&s, &ctx, 108);
+    s.npcs[boundary_idx].hp = 751;
+    s.sol.phase = col_sol_phase_for_hp(s.npcs[boundary_idx].hp);
+    col_sol_start_triple_parry(&s, boundary_idx);
+    CHECK("751 HP schedules the third hit at +9",
+        s.sol.parry_land_in[2] == 9);
+    s.npcs[boundary_idx].hp = 750;
+    s.sol.phase = col_sol_phase_for_hp(s.npcs[boundary_idx].hp);
+    col_sol_start_triple_parry(&s, boundary_idx);
+    CHECK("750 HP schedules the third hit at +10",
+        s.sol.parry_land_in[2] == 10);
+
     for (int low = 0; low <= 1; low++) {
         int idx = sol_setup(&s, &ctx, 109 + (uint32_t)low);
         s.npcs[idx].hp = low ? (COLO_SOL_HP_MAX * 40) / 100 : (COLO_SOL_HP_MAX * 80) / 100;
@@ -3578,6 +3595,116 @@ static void test_sol_parry_prayer_punish(void) {
     }
     CHECK("camping the prayer early makes every hit unblockable (75 total)",
         s.player.current_hitpoints == 99 - (15 + 25 + 35));
+}
+
+static ColoSolParryCue test_sol_parry_cue_from_obs(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    int* ticks_to_land,
+    float* damage
+) {
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
+    int cue_base = COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_PARRY_CUE_OFFSET;
+    int ticks_base = COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_PARRY_TICKS_OFFSET;
+    int damage_idx = COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_PARRY_DAMAGE_OFFSET;
+    ColoSolParryCue cue = COLO_SOL_PARRY_CUE_INACTIVE;
+    int cue_count = 0;
+    *ticks_to_land = 0;
+    for (int c = 0; c < COLO_SOL_PARRY_CUE_COUNT; c++) {
+        if (obs[cue_base + c] != 1.0f) continue;
+        cue = (ColoSolParryCue)c;
+        cue_count++;
+    }
+    for (int tick = 1; tick <= COLO_SOL_PARRY_LAND_TICKS_MAX; tick++) {
+        if (obs[ticks_base + tick - 1] == 1.0f) *ticks_to_land = tick;
+    }
+    *damage = obs[damage_idx] * 45.0f;
+    CHECK("Sol parry cue is one-hot", cue_count == 1);
+    return cue;
+}
+
+static int test_sol_parry_prayer_action(
+    const ColosseumState* s,
+    ColoSolParryCue cue
+) {
+    if (cue == COLO_SOL_PARRY_CUE_FLICK_MELEE) return COLO_OVERHEAD_MELEE;
+    if ((cue == COLO_SOL_PARRY_CUE_OVERHEAD_OFF ||
+            cue == COLO_SOL_PARRY_CUE_POISONED) &&
+            s->player.prayer != PRAYER_NONE)
+        return COLO_OVERHEAD_OFF;
+    return COLO_OVERHEAD_NO_CHANGE;
+}
+
+static void test_sol_parry_observation_contract(void) {
+    printf("test_sol_parry_observation_contract\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    for (int low = 0; low <= 1; low++) {
+        int idx = sol_setup(&s, &ctx, 117 + (uint32_t)low);
+        s.npcs[idx].hp = low ? 750 : 751;
+        s.sol.phase = col_sol_phase_for_hp(s.npcs[idx].hp);
+        s.sol.attack_delay = 1000;
+        sol_move_player(&s, 12, 12);
+        col_sol_start_triple_parry(&s, idx);
+        s.player.current_hitpoints = 99;
+
+        int saw_lead_time = 0;
+        int saw_four_tick_countdown = 0;
+        int saw_third_hit_damage = 0;
+        int actions[COLO_NUM_ACTION_HEADS] = {0};
+        int total_ticks = low ? 10 : 9;
+        for (int t = 0; t < total_ticks; t++) {
+            int ticks_to_land = 0;
+            float damage = 0.0f;
+            ColoSolParryCue cue =
+                test_sol_parry_cue_from_obs(&s, &ctx, &ticks_to_land, &damage);
+            saw_lead_time |= cue == COLO_SOL_PARRY_CUE_LEAD_TIME;
+            saw_four_tick_countdown |= ticks_to_land == 4;
+            saw_third_hit_damage |= damage == (low ? 45.0f : 35.0f);
+            actions[COLO_HEAD_PRAYER] = test_sol_parry_prayer_action(&s, cue);
+            step_and_observe(&s, &ctx, actions);
+        }
+        CHECK("the observation-only parry policy blocks all three hits",
+            s.player.current_hitpoints == 99);
+        CHECK(low ? "the delayed third hit exposes lead time"
+                  : "the normal third hit has no extra lead time",
+            saw_lead_time == low);
+        CHECK(low ? "the delayed third hit exposes a 4-tick one-hot"
+                  : "the normal third hit never exposes a 4-tick one-hot",
+            saw_four_tick_countdown == low);
+        CHECK("the observation exposes the phase-correct third-hit damage",
+            saw_third_hit_damage);
+    }
+
+    int idx = sol_setup(&s, &ctx, 119);
+    s.npcs[idx].hp = 751;
+    s.sol.phase = col_sol_phase_for_hp(s.npcs[idx].hp);
+    s.sol.attack_delay = 1000;
+    sol_move_player(&s, 12, 12);
+    col_sol_start_triple_parry(&s, idx);
+    s.sol.overhead_history[s.tick % COLO_SOL_PRAYER_HISTORY] = 1;
+    s.player.current_hitpoints = 99;
+
+    int saw_poisoned = 0;
+    int saw_poisoned_damage = 0;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    for (int t = 0; t < 9; t++) {
+        int ticks_to_land = 0;
+        float damage = 0.0f;
+        ColoSolParryCue cue =
+            test_sol_parry_cue_from_obs(&s, &ctx, &ticks_to_land, &damage);
+        saw_poisoned |= cue == COLO_SOL_PARRY_CUE_POISONED;
+        saw_poisoned_damage |=
+            cue == COLO_SOL_PARRY_CUE_POISONED && damage == 15.0f;
+        actions[COLO_HEAD_PRAYER] = test_sol_parry_prayer_action(&s, cue);
+        step_and_observe(&s, &ctx, actions);
+    }
+    CHECK("the observation exposes an already-poisoned next hit", saw_poisoned);
+    CHECK("the poisoned cue preserves next-hit damage", saw_poisoned_damage);
+    CHECK("a poisoned first hit does not hide recovery for hits two and three",
+        s.player.current_hitpoints == 99 - 15);
 }
 
 static void test_sol_grapple_perfect_parry(void) {
@@ -5161,7 +5288,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3044", COLO_NUM_OBS == 3044);
+    CHECK("obs width is 3049", COLO_NUM_OBS == 3049);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -7186,7 +7313,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3044);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3049);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -7738,6 +7865,7 @@ int main(void) {
     test_sol_attack_selection_invariants();
     test_sol_parry_schedule_and_damage();
     test_sol_parry_prayer_punish();
+    test_sol_parry_observation_contract();
     test_sol_grapple_perfect_parry();
     test_sol_perfect_parry_forces_spec_attack();
     test_sol_shield_safe_rings();
