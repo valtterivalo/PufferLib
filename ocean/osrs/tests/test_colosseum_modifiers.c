@@ -3536,6 +3536,8 @@ static void test_sol_parry_schedule_and_damage(void) {
         sol_move_player(&s, 12, 12);
         col_sol_start_triple_parry(&s, idx);
         s.player.current_hitpoints = 99;
+        float parry_damage_before =
+            s.log.sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY];
 
         int dmg_at[13] = {0};
         int hp_prev = 99;
@@ -3555,6 +3557,9 @@ static void test_sol_parry_schedule_and_damage(void) {
             if (t != 3 && t != 6 && t != h3 && dmg_at[t] != 0) clean = 0;
         CHECK("no parry damage lands off-schedule", clean);
         CHECK("the combo retires after the third hit", s.sol.parry_hits_left == 0);
+        CHECK("triple-parry damage has its own source total",
+            s.log.sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY] ==
+                parry_damage_before + 15.0f + (float)d2 + (float)d3);
     }
 }
 
@@ -3611,6 +3616,8 @@ static void test_sol_parry_perfect_assistance(void) {
         ctx.config.sol_parry_assistance_mode = COLO_SOL_PARRY_ASSISTANCE_PERFECT;
         col_sol_start_triple_parry(&s, idx);
         s.player.current_hitpoints = 99;
+        float parry_damage_before =
+            s.log.sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY];
 
         int prayer_correct_before = s.log.total_prayer_correct;
         int actions[COLO_NUM_ACTION_HEADS] = {0};
@@ -3625,6 +3632,9 @@ static void test_sol_parry_perfect_assistance(void) {
             s.log.total_prayer_correct == prayer_correct_before + 3);
         CHECK("perfect assistance preserves the phase-specific schedule",
             s.sol.parry_hits_left == 0);
+        CHECK("blocked parries add no applied parry damage",
+            s.log.sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY] ==
+                parry_damage_before);
     }
 }
 
@@ -3752,9 +3762,14 @@ static void test_sol_grapple_perfect_parry(void) {
     CHECK("the called slot is inside the 5-slot A12 domain",
         s.sol.grapple_body_slot >= 0 && s.sol.grapple_body_slot < COLO_NUM_GRAPPLE_SLOTS);
     s.player.current_hitpoints = 99;
+    float grapple_damage_before =
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_GRAPPLE];
     for (int t = 0; t < COLO_SOL_GRAPPLE_WINDOW; t++) step_and_observe(&s, &ctx, idle);
     int fail_dmg = 99 - s.player.current_hitpoints;
     CHECK("an unanswered grapple lands 20-44", fail_dmg >= 20 && fail_dmg <= 44);
+    CHECK("failed grapple damage has its own source total",
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_GRAPPLE] ==
+            grapple_damage_before + (float)fail_dmg);
 
     col_sol_start_grapple(&s);
     s.player.current_hitpoints = 99;
@@ -4074,6 +4089,9 @@ static void test_sol_aoe_reaction_window(void) {
         cast_seen && s.sol.aoe_attack == COLO_SOL_AOE_SPEAR1 &&
         col_sol_aoe_tile_is_hazard(&s.sol, s.player.x, s.player.y));
 
+    ColoSolDamageSource opener_source =
+        col_sol_aoe_damage_source(s.sol.aoe_attack);
+    float opener_damage_before = s.log.sol_damage_by_source[opener_source];
     s.player.current_hitpoints = 99;
     step_and_observe(&s, &ctx, idle);
     CHECK("no AoE damage on the telegraph tick (cast + 1)",
@@ -4081,6 +4099,9 @@ static void test_sol_aoe_reaction_window(void) {
     step_and_observe(&s, &ctx, idle);
     CHECK("a stationary player is hit exactly 2 ticks after the cast",
         s.player.current_hitpoints < 99);
+    CHECK("the opener AOE lands in its shape-specific source total",
+        s.log.sol_damage_by_source[opener_source] ==
+            opener_damage_before + (float)(99 - s.player.current_hitpoints));
 
     sol_move_player(&s, 16, 16);
     cast_seen = 0;
@@ -4127,9 +4148,14 @@ static void test_sol_laser_react_window(void) {
     for (int t = 0; t < 3; t++) step_and_observe(&s, &ctx, idle);
     CHECK("the 3 reaction ticks pass without damage",
         s.player.current_hitpoints == 99);
+    float laser_damage_before =
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_CRYSTAL_LASER];
     step_and_observe(&s, &ctx, idle);
     CHECK("the aligned hit lands on the tick after the reaction window",
         s.player.current_hitpoints < 99);
+    CHECK("crystal-laser damage has its own source total",
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_CRYSTAL_LASER] ==
+            laser_damage_before + (float)(99 - s.player.current_hitpoints));
 }
 
 static void test_sol_phase_transition_sand_guarantees(void) {
@@ -4202,14 +4228,21 @@ static void test_sol_beams_become_pools(void) {
 
     sol_move_player(&s, s.sol.hazard_tile_x[0], s.sol.hazard_tile_y[0]);
     int burns_ok = 1;
+    int burn_damage_total = 0;
+    float molten_damage_before =
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_MOLTEN_SAND];
     for (int t = 0; t < 30; t++) {
         s.player.current_hitpoints = 99;
         step_and_observe(&s, &ctx, idle);
         int dmg = 99 - s.player.current_hitpoints;
+        burn_damage_total += dmg;
         if (dmg < COLO_MOLTEN_SAND_MIN_HIT ||
             dmg > COLO_MOLTEN_SAND_MIN_HIT + COLO_MOLTEN_SAND_RAND - 1) burns_ok = 0;
     }
     CHECK("standing on a pool burns 5-9 every tick", burns_ok);
+    CHECK("molten-sand damage has its own source total",
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_MOLTEN_SAND] ==
+            molten_damage_before + (float)burn_damage_total);
     CHECK("pools persist for the rest of the fight", s.sol.hazard_tile_count == 6);
 }
 
@@ -5205,6 +5238,36 @@ static void test_total_damage_by_type_captures_typeless(void) {
         s.tick_scratch.landed_unprayable_damage == unprayable_before + 17.0f);
     CHECK("typeless NPC damage books the per-type typeless total",
         s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS] == typeless_before + 17.0f);
+}
+
+static void test_sol_damage_source_contract(void) {
+    printf("test_sol_damage_source_contract\n");
+    CHECK("every AOE shape maps to its distinct damage source",
+        col_sol_aoe_damage_source(COLO_SOL_AOE_SPEAR1) == COLO_SOL_DAMAGE_SPEAR_1 &&
+        col_sol_aoe_damage_source(COLO_SOL_AOE_SPEAR2) == COLO_SOL_DAMAGE_SPEAR_2 &&
+        col_sol_aoe_damage_source(COLO_SOL_AOE_SHIELD1) == COLO_SOL_DAMAGE_SHIELD_1 &&
+        col_sol_aoe_damage_source(COLO_SOL_AOE_SHIELD2) == COLO_SOL_DAMAGE_SHIELD_2);
+
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 2324);
+
+    s.player.current_hitpoints = 5;
+    col_damage_player_from_sol(&s, 20, COLO_SOL_DAMAGE_MOLTEN_SAND);
+    CHECK("source totals count applied damage rather than overkill",
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_MOLTEN_SAND] == 5.0f);
+    CHECK("the legacy total retains its requested-damage semantics",
+        s.log.total_damage_by_type[COLO_SOL_HEREDIT] == 20.0f);
+
+    s.player.current_hitpoints = 99;
+    float typeless_before = s.log.typeless_damage_by_type[COLO_SOL_HEREDIT];
+    col_damage_player_from_sol(&s, 15, COLO_SOL_DAMAGE_TRIPLE_PARRY);
+    CHECK("triple-parry source damage uses the off-prayer channel",
+        s.log.sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY] == 15.0f &&
+        s.tick_scratch.landed_offpray_damage == 15.0f &&
+        s.log.typeless_damage_by_type[COLO_SOL_HEREDIT] == typeless_before);
 }
 
 static void test_npc_magic_defence_rolls_off_magic_level(void) {
@@ -7922,6 +7985,7 @@ int main(void) {
     test_loadout_offensive_prayers();
     test_npc_magic_defence_rolls_off_magic_level();
     test_total_damage_by_type_captures_typeless();
+    test_sol_damage_source_contract();
     test_matchup_dpt_obs_ranking();
     test_primary_head_resolution();
     test_combat_fidelity_contract_sizes();

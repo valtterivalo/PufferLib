@@ -172,6 +172,19 @@ static inline void col_damage_player_from(
         s->log.total_damage_by_type[npc_type] += (float)dmg;
 }
 
+static inline void col_damage_player_from_sol(
+    ColosseumState* s, int dmg, ColoSolDamageSource source
+) {
+    assert(source >= 0 && source < COLO_NUM_SOL_DAMAGE_SOURCES);
+    ColoDamageChannel channel = source == COLO_SOL_DAMAGE_TRIPLE_PARRY
+        ? COLO_DMG_OFFPRAY
+        : COLO_DMG_UNPRAYABLE;
+    int hitpoints_before = s->player.current_hitpoints;
+    col_damage_player_from(s, dmg, COLO_SOL_HEREDIT, channel);
+    s->log.sol_damage_by_source[source] +=
+        (float)(hitpoints_before - s->player.current_hitpoints);
+}
+
 typedef struct {
     ColosseumState* state;
     ColosseumContext* context;

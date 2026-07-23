@@ -43,6 +43,7 @@ struct Log {
     float total_damage_by_type[COLO_NUM_NPC_TYPES];
     float death_by_type[COLO_NUM_NPC_TYPES];
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
+    float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float death_fatal_damage;
     float offpray_damage_conflict;
     float offpray_damage_solo;
@@ -311,6 +312,9 @@ void puf_step(Env* env) {
                 env->log.death_by_type[t] += clog->death_by_type[t];
                 env->log.typeless_damage_by_type[t] += clog->typeless_damage_by_type[t];
             }
+            for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
+                env->log.sol_damage_by_source[source] +=
+                    clog->sol_damage_by_source[source];
             env->log.death_fatal_damage += clog->death_fatal_damage;
             env->log.offpray_damage_conflict += clog->offpray_damage_conflict;
             env->log.offpray_damage_solo += clog->offpray_damage_solo;
@@ -404,6 +408,21 @@ void puf_log(Log* log, Dict* out) {
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
         dict_set(out, TYPELESS_DMG_KEYS[t], log->typeless_damage_by_type[t]);
     }
+    static const char* const SOL_DAMAGE_SOURCE_KEYS[COLO_NUM_SOL_DAMAGE_SOURCES] = {
+        "sol_dmg_spear_1",
+        "sol_dmg_spear_2",
+        "sol_dmg_shield_1",
+        "sol_dmg_shield_2",
+        "sol_dmg_triple_parry",
+        "sol_dmg_grapple",
+        "sol_dmg_crystal_laser",
+        "sol_dmg_molten_sand",
+    };
+    for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
+        dict_set(
+            out,
+            SOL_DAMAGE_SOURCE_KEYS[source],
+            log->sol_damage_by_source[source]);
     dict_set(out, "death_dmg_unprayable", log->death_dmg_unprayable);
     dict_set(out, "death_dmg_offpray", log->death_dmg_offpray);
     dict_set(out, "death_dmg_prayed", log->death_dmg_prayed);

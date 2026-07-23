@@ -743,6 +743,18 @@ typedef enum {
 } ColoSolAoeAttack;
 
 typedef enum {
+    COLO_SOL_DAMAGE_SPEAR_1 = 0,
+    COLO_SOL_DAMAGE_SPEAR_2,
+    COLO_SOL_DAMAGE_SHIELD_1,
+    COLO_SOL_DAMAGE_SHIELD_2,
+    COLO_SOL_DAMAGE_TRIPLE_PARRY,
+    COLO_SOL_DAMAGE_GRAPPLE,
+    COLO_SOL_DAMAGE_CRYSTAL_LASER,
+    COLO_SOL_DAMAGE_MOLTEN_SAND,
+    COLO_NUM_SOL_DAMAGE_SOURCES,
+} ColoSolDamageSource;
+
+typedef enum {
     COLO_SOL_ATTACK_NONE = 0,
     COLO_SOL_ATTACK_SPEAR,
     COLO_SOL_ATTACK_SHIELD,
@@ -1584,6 +1596,7 @@ typedef struct {
     float death_heal_remaining;
     float farm_damage;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
+    float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float outcome_score;
     float max_wave_depth;
 } ColosseumLog;

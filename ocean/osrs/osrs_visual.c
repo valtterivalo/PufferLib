@@ -673,6 +673,17 @@ static VisualPolicyMode visual_policy_parse_mode(const char* value) {
     abort();
 }
 
+static ColoSolParryAssistanceMode visual_sol_parry_assistance_parse(
+    const char* value
+) {
+    if (!value || strcmp(value, "disabled") == 0)
+        return COLO_SOL_PARRY_ASSISTANCE_DISABLED;
+    if (strcmp(value, "perfect") == 0)
+        return COLO_SOL_PARRY_ASSISTANCE_PERFECT;
+    fprintf(stderr, "invalid Sol parry assistance mode: %s\n", value);
+    abort();
+}
+
 static int visual_policy_is_continuous(
     const int* action_dims,
     int num_action_heads
@@ -1560,7 +1571,8 @@ static void run_metrics(
     int num_episodes,
     int loadout_mode,
     int bis_oracle,
-    int start_wave
+    int start_wave,
+    ColoSolParryAssistanceMode sol_parry_assistance_mode
 ) {
     if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
@@ -1573,6 +1585,11 @@ static void run_metrics(
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
                   start_wave >= 0 ? start_wave : 1);
+    edef->put_int(
+        env->encounter_state,
+        env->encounter_context,
+        "sol_parry_assistance_mode",
+        (int)sol_parry_assistance_mode);
     if (bis_oracle)
         edef->put_int(env->encounter_state, env->encounter_context,
                       "bis_gear_oracle_mode", 1);
@@ -1599,6 +1616,7 @@ static void run_metrics(
     static uint64_t npc_eff_n[COLO_NUM_NPC_TYPES];
     static uint64_t wave_ticks[12], wave_visits[12], wave_reinforced[12];
     static uint64_t wave_attacks_post_reinforce[12];
+    double sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES] = {0};
     memset(wpn_npc, 0, sizeof(wpn_npc));
     memset(wpn_total, 0, sizeof(wpn_total));
     memset(wpn_spec, 0, sizeof(wpn_spec));
@@ -1613,6 +1631,7 @@ static void run_metrics(
     uint64_t total_attacks = 0, argmax_set_attacks = 0, argmax_evals = 0;
     long total_ticks = 0;
     int episodes = 0;
+    int sol_episodes = 0;
     int prev_wave = 0, prev_reinf_timer = 0, wave_seen = 0;
     int enc_actions[64] = {0};
 
@@ -1689,6 +1708,10 @@ static void run_metrics(
                 (EncounterContext*)env->encounter_context)) {
             ep_scores[episodes] = cs->log.outcome_score;
             ep_winners[episodes] = cs->winner;
+            if (cs->sol.started) sol_episodes++;
+            for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
+                sol_damage_by_source[source] +=
+                    (double)cs->log.sol_damage_by_source[source];
             episodes++;
             edef->reset(env->encounter_state,
                 (EncounterContext*)env->encounter_context,
@@ -1703,6 +1726,11 @@ static void run_metrics(
     printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s bis_oracle=%d\n",
         num_episodes, total_ticks, (unsigned long long)total_attacks,
         policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", bis_oracle);
+    printf("# sol_parry_assistance=%s sol_episodes=%d\n",
+        sol_parry_assistance_mode == COLO_SOL_PARRY_ASSISTANCE_PERFECT
+            ? "perfect"
+            : "disabled",
+        sol_episodes);
     {
         double score_sum = 0.0;
         int wins = 0;
@@ -1746,6 +1774,29 @@ static void run_metrics(
             (double)wave_ticks[wv] / (double)wave_visits[wv],
             100.0 * (double)wave_reinforced[wv] / (double)wave_visits[wv],
             (unsigned long long)wave_attacks_post_reinforce[wv]);
+    }
+    static const char* const sol_damage_source_names[COLO_NUM_SOL_DAMAGE_SOURCES] = {
+        "spear_1",
+        "spear_2",
+        "shield_1",
+        "shield_2",
+        "triple_parry",
+        "grapple",
+        "crystal_laser",
+        "molten_sand",
+    };
+    double sol_damage_total = 0.0;
+    for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
+        sol_damage_total += sol_damage_by_source[source];
+    printf("\nsol_damage_source,total,per_episode,per_sol_episode,pct\n");
+    for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++) {
+        double damage = sol_damage_by_source[source];
+        printf("%s,%.0f,%.3f,%.3f,%.1f%%\n",
+            sol_damage_source_names[source],
+            damage,
+            damage / (double)num_episodes,
+            sol_episodes ? damage / (double)sol_episodes : 0.0,
+            sol_damage_total > 0.0 ? 100.0 * damage / sol_damage_total : 0.0);
     }
     printf("\nweapon\\npc");
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) printf(",%s", npc_names[t]);
@@ -2110,6 +2161,8 @@ int main(int argc, char** argv) {
     int profile_steps = 0;
     int metrics_episodes = 0;
     int metrics_bis_oracle = 0;
+    ColoSolParryAssistanceMode metrics_sol_parry_assistance =
+        COLO_SOL_PARRY_ASSISTANCE_DISABLED;
     int loadout_mode = 2;
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
@@ -2164,6 +2217,10 @@ int main(int argc, char** argv) {
         }
         else if (strcmp(argv[i], "--bis-oracle") == 0)
             metrics_bis_oracle = 1;
+        else if (strcmp(argv[i], "--sol-parry-assistance") == 0 &&
+                i + 1 < argc)
+            metrics_sol_parry_assistance =
+                visual_sol_parry_assistance_parse(argv[++i]);
         else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc) {
             loadout_mode = atoi(argv[++i]);
             g_cli_visual_loadout_mode = loadout_mode;
@@ -2195,7 +2252,8 @@ int main(int argc, char** argv) {
 
     if (metrics_episodes > 0) {
         run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
-            metrics_episodes, loadout_mode, metrics_bis_oracle, start_wave);
+            metrics_episodes, loadout_mode, metrics_bis_oracle, start_wave,
+            metrics_sol_parry_assistance);
         return 0;
     }
 
