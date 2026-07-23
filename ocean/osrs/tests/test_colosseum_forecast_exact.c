@@ -76,7 +76,7 @@ static void col_step_out_forecast_landing_selftest(void) {
 } while (0)
 
 #define EXACT_MAGIC "COLOEXACTv1"
-#define EXACT_VERSION 2u
+#define EXACT_VERSION 3u
 #define EXACT_CHUNK_BYTES 65536
 
 typedef struct {

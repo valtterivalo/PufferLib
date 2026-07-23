@@ -153,6 +153,19 @@ static int forecast_action_has_event(const ColoStepOutForecastAction* action) {
     return 0;
 }
 
+static int sol_hazard_action_obs_index(int action, ColoSolHazardSource source) {
+    assert(action >= 0 && action < ENCOUNTER_MOVE_ACTIONS);
+    assert(source >= 0 && source < COLO_SOL_HAZARD_SOURCE_COUNT);
+    return COLO_OBS_AFTER_BOSS +
+        action * COLO_SOL_HAZARD_ACTION_FEATURES + source;
+}
+
+static int test_obs_slot_for_npc(const ColosseumState* s, int npc_idx) {
+    for (int slot = 0; slot < COLO_OBS_NPCS; slot++)
+        if (s->current_obs_slots[slot] == npc_idx) return slot;
+    return -1;
+}
+
 static int test_find_inventory_cell_with_item(const ColosseumState* s, uint8_t item_idx) {
     for (int i = 0; i < COLO_INVENTORY_DISPLAY_SLOTS; i++)
         if (s->inventory_cells[i].item_idx == item_idx) return i;
@@ -3378,6 +3391,226 @@ static void sol_pin(ColosseumState* s, int idx, int x, int y) {
     s->sol.immobile_ticks = 30000;
 }
 
+static void test_sol_generic_observation_signals_are_neutral(void) {
+    printf("test_sol_generic_observation_signals_are_neutral\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 98, 16, 16);
+    col_init_npc(&s, 0, COLO_SOL_HEREDIT, 17, 16);
+    s.sol.boss_idx = 0;
+    s.sol.attack_delay = 0;
+    s.sol.immobile_ticks = 0;
+    s.npcs[0].attack_timer = 5;
+
+    CHECK("fixture: Sol retains the generic melee metadata internally",
+        s.npcs[0].attack_style == ATTACK_STYLE_MELEE &&
+        s.npcs[0].attack_timer == 5);
+
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int obs_slot = test_obs_slot_for_npc(&s, 0);
+    CHECK("Sol receives an NPC observation slot", obs_slot >= 0);
+    int npc_base = COLO_OBS_AFTER_EQUIPPED_SELF +
+        obs_slot * COLO_FEATURES_PER_NPC;
+    int style_base = npc_base + COLO_NUM_NPC_TYPES + 3;
+    int timer_idx = style_base + 3;
+    int next_prayer_active_idx = timer_idx + 2;
+    CHECK("Sol's generic current-style one-hot is neutral",
+        obs[style_base] == 0.0f &&
+        obs[style_base + 1] == 0.0f &&
+        obs[style_base + 2] == 0.0f);
+    CHECK("Sol's stale generic attack timer is hidden",
+        obs[timer_idx] == 0.0f);
+    CHECK("Sol has no generic next-prayer cue",
+        obs[next_prayer_active_idx] == 0.0f);
+
+    int magic, ranged, melee;
+    col_live_threat_style_counts(&s, &magic, &ranged, &melee);
+    CHECK("adjacent Sol contributes no prayable live threat style",
+        magic == 0 && ranged == 0 && melee == 0);
+    CHECK("the prayer oracle does not invent a Sol overhead",
+        col_oracle_incoming_style(&s, &s.npcs[0]) == ATTACK_STYLE_NONE);
+    CHECK("the global style-count observation stays neutral for Sol",
+        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST] == 0.0f &&
+        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST + 1] == 0.0f &&
+        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST + 2] == 0.0f);
+
+    ColoStepOutForecast forecast;
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    int adjacent_clear = 1;
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++)
+        if (forecast_action_has_event(&forecast.actions[action]))
+            adjacent_clear = 0;
+    CHECK("the step-out forecast invents no adjacent Sol melee attack",
+        adjacent_clear);
+
+    wb_move_npc(&s, 0, 10, 10);
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    int nonadjacent_clear = 1;
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++)
+        if (forecast_action_has_event(&forecast.actions[action]))
+            nonadjacent_clear = 0;
+    CHECK("the step-out forecast invents no nonadjacent Sol ranged attack",
+        nonadjacent_clear);
+}
+
+static void test_sol_hazard_action_observation_contract(void) {
+    printf("test_sol_hazard_action_observation_contract\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    int sol_idx = sol_setup(&s, &ctx, 99);
+    s.sol.attack_delay = 30000;
+    s.sol.immobile_ticks = 30000;
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    memset(s.sol.crystals, 0, sizeof(s.sol.crystals));
+    s.sol.crystal_count = 0;
+    sol_clear_beams_and_sand(&s);
+    sol_move_player(&s, 20, 16);
+    int run_east = forecast_move_action_for_delta(2, 0);
+    int floor_idx =
+        sol_hazard_action_obs_index(run_east, COLO_SOL_HAZARD_MOLTEN_SAND);
+    int laser_idx =
+        sol_hazard_action_obs_index(run_east, COLO_SOL_HAZARD_CRYSTAL_LASER);
+    int aoe_idx =
+        sol_hazard_action_obs_index(run_east, COLO_SOL_HAZARD_AOE);
+
+    static float safe_obs[COLO_NUM_OBS];
+    static float danger_obs[COLO_NUM_OBS];
+
+    s.sol.hazard_tile_count = 1;
+    s.sol.hazard_tile_x[0] = 19;
+    s.sol.hazard_tile_y[0] = 16;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, safe_obs);
+    s.sol.hazard_tile_count = 2;
+    s.sol.hazard_tile_x[1] = 22;
+    s.sol.hazard_tile_y[1] = 16;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("a nearer distractor pool does not hide a run landing",
+        safe_obs[floor_idx] == 0.0f && danger_obs[floor_idx] == 1.0f);
+    CHECK("the formerly aliased pool states now produce different full observations",
+        memcmp(safe_obs, danger_obs, sizeof(safe_obs)) != 0);
+    CHECK("pool exposure stays isolated from AoE and laser channels",
+        danger_obs[aoe_idx] == 0.0f && danger_obs[laser_idx] == 0.0f);
+
+    sol_clear_beams_and_sand(&s);
+    s.sol.beams[0] = (ColoSolBeam){
+        .active = 1, .x = 19, .y = 16, .ticks_to_pool = 3,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, safe_obs);
+    s.sol.beams[1] = (ColoSolBeam){
+        .active = 1, .x = 22, .y = 16, .ticks_to_pool = 3,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("every active beam contributes to its action landing",
+        safe_obs[floor_idx] == 0.0f && danger_obs[floor_idx] == 0.75f);
+    CHECK("the formerly aliased beam states now produce different full observations",
+        memcmp(safe_obs, danger_obs, sizeof(safe_obs)) != 0);
+
+    sol_clear_beams_and_sand(&s);
+    s.sol.crystal_count = 1;
+    s.sol.crystals[0] = (ColoSolCrystal){
+        .active = 1,
+        .edge = COLO_SOL_EDGE_NORTH,
+        .x = 20,
+        .y = 23,
+        .firing_freeze = 4,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, safe_obs);
+    s.sol.crystal_count = 2;
+    s.sol.crystals[1] = (ColoSolCrystal){
+        .active = 1,
+        .edge = COLO_SOL_EDGE_NORTH,
+        .x = 22,
+        .y = 23,
+        .firing_freeze = 4,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("every armed crystal line contributes to its action landing",
+        safe_obs[laser_idx] == 0.0f && danger_obs[laser_idx] == 1.0f);
+    CHECK("the formerly aliased laser states now produce different full observations",
+        memcmp(safe_obs, danger_obs, sizeof(safe_obs)) != 0);
+    CHECK("laser exposure stays isolated from AoE and molten channels",
+        danger_obs[aoe_idx] == 0.0f && danger_obs[floor_idx] == 0.0f);
+
+    memset(s.sol.crystals, 0, sizeof(s.sol.crystals));
+    s.sol.crystal_count = 0;
+    int aoe_classification_ok = 1;
+    int all_variants_have_choices = 1;
+    for (int attack = COLO_SOL_AOE_SPEAR1;
+            attack <= COLO_SOL_AOE_SHIELD2; attack++) {
+        s.sol.aoe_attack = (ColoSolAoeAttack)attack;
+        s.sol.aoe_age = 0;
+        s.sol.aoe_x = 14;
+        s.sol.aoe_y = 14;
+        s.sol.aoe_dir_x = 1;
+        s.sol.aoe_dir_y = 0;
+        col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+        int safe_actions = 0;
+        int exposed_actions = 0;
+        for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+            ColoForecastLanding landing =
+                col_step_out_forecast_action_landing_ctx(&s, action);
+            int expected = landing.valid &&
+                col_sol_aoe_tile_is_hazard(
+                    &s.sol, landing.land_x, landing.land_y);
+            float observed = danger_obs[
+                sol_hazard_action_obs_index(action, COLO_SOL_HAZARD_AOE)];
+            if (observed != (expected ? 1.0f : 0.0f))
+                aoe_classification_ok = 0;
+            if (!landing.valid) continue;
+            if (expected) exposed_actions++;
+            else safe_actions++;
+        }
+        if (safe_actions == 0 || exposed_actions == 0)
+            all_variants_have_choices = 0;
+    }
+    CHECK("all four Sol AoEs classify every movement landing exactly",
+        aoe_classification_ok);
+    CHECK("all four Sol AoEs expose both safe and dangerous actions",
+        all_variants_have_choices);
+
+    s.sol.aoe_attack = COLO_SOL_AOE_SHIELD2;
+    s.sol.aoe_age = 1;
+    s.sol.aoe_x = 14;
+    s.sol.aoe_y = 14;
+    s.sol.aoe_dir_x = 1;
+    s.sol.aoe_dir_y = 0;
+    s.sol.crystal_count = 1;
+    s.sol.crystals[0] = (ColoSolCrystal){
+        .active = 1,
+        .edge = COLO_SOL_EDGE_NORTH,
+        .x = s.player.x,
+        .y = 23,
+        .firing_freeze = COLO_SOL_LASER_DAMAGE_FREEZE,
+    };
+    s.sol.hazard_tile_count = 1;
+    s.sol.hazard_tile_x[0] = s.player.x;
+    s.sol.hazard_tile_y[0] = s.player.y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    int premove_base =
+        COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_PREMOVE_HAZARD_OFFSET;
+    CHECK("unavoidable pre-move hits are source-separated",
+        danger_obs[premove_base + COLO_SOL_HAZARD_AOE] == 1.0f &&
+        danger_obs[premove_base + COLO_SOL_HAZARD_CRYSTAL_LASER] == 1.0f &&
+        danger_obs[premove_base + COLO_SOL_HAZARD_MOLTEN_SAND] == 1.0f);
+    CHECK("an imminent AoE is not mislabeled as action-dodgeable",
+        danger_obs[sol_hazard_action_obs_index(0, COLO_SOL_HAZARD_AOE)] == 0.0f);
+
+    s.sol.hazard_tile_count = 0;
+    memset(s.sol.beams, 0, sizeof(s.sol.beams));
+    s.sol.beams[0] = (ColoSolBeam){
+        .active = 1,
+        .x = s.player.x,
+        .y = s.player.y,
+        .ticks_to_pool = 1,
+    };
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("a beam converting before movement sets the molten pre-move cue",
+        danger_obs[premove_base + COLO_SOL_HAZARD_MOLTEN_SAND] == 1.0f);
+    CHECK("fixture: Sol remains live during the observation checks",
+        sol_idx >= 0 && s.npcs[sol_idx].active);
+}
+
 static void test_sol_adjacency_gate_and_kiting(void) {
     printf("test_sol_adjacency_gate_and_kiting\n");
     ColosseumContext ctx;
@@ -5382,7 +5615,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3049", COLO_NUM_OBS == 3049);
+    CHECK("obs width is 3108", COLO_NUM_OBS == 3108);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -5406,7 +5639,8 @@ static void test_combat_fidelity_contract_sizes(void) {
     int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE +
         COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE +
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
-        COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
+        COLO_SOL_HAZARD_ACTION_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE +
+        COLO_STEP_OUT_FORECAST_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
         COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE +
         COLO_THREAT_FIELD_OBS_SIZE;
@@ -7407,7 +7641,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3049);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3108);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -7605,7 +7839,8 @@ static void test_threat_field_obs(void) {
     CHECK("exposed tile east of the pillar reads the shooter",
         obs[f0 + FIELD_CELL(7, 3)] > 0.0f);
     CHECK("pillar tile is unstandable", obs[f1 + FIELD_CELL(3, -1)] == 1.0f);
-    CHECK("NPC body tile is unstandable", obs[f1 + FIELD_CELL(6, -1)] == 1.0f);
+    CHECK("NPC body tile remains player-walkable",
+        obs[f1 + FIELD_CELL(6, -1)] == 0.0f);
     CHECK("the player's own tile is standable", obs[f1 + FIELD_CELL(0, 0)] == 0.0f);
     CHECK("out-of-arena tile is unstandable", obs[f1 + FIELD_CELL(-8, 0)] == 1.0f);
 
@@ -7614,26 +7849,45 @@ static void test_threat_field_obs(void) {
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("center cell reads one shooter after stepping into LoS",
         obs[f0 + FIELD_CELL(0, 0)] == 0.25f);
+    CHECK("fixture: x=8 is statically walkable before the Sol clamp",
+        !col_static_blocked(8, 12));
+    CHECK("pre-Sol x=8 is player-walkable",
+        obs[f1 + FIELD_CELL(-4, 0)] == 0.0f);
+    s.wave = COLO_WAVE_BOSS;
+    s.sol.started = 1;
+    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
+    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
+    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
+    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("the Sol clamp invalidates the memo and blocks x=8",
+        obs[f1 + FIELD_CELL(-4, 0)] == 1.0f);
+    s.wave = 0;
+    s.sol.started = 0;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("leaving Sol invalidates the memo and frees x=8",
+        obs[f1 + FIELD_CELL(-4, 0)] == 0.0f);
 
     int jag = col_spawn_npc_at(&s, COLO_JAGUAR_WARRIOR, 16, 12);
     CHECK("fixture: melee NPC spawned", jag >= 0);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("jaguar body tile is unstandable", obs[f1 + FIELD_CELL(4, 0)] == 1.0f);
+    CHECK("jaguar body tile remains player-walkable",
+        obs[f1 + FIELD_CELL(4, 0)] == 0.0f);
     int jag_size = col_npc_effective_size(&s.npcs[jag]);
     col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 0);
     s.npcs[jag].x += 1;
     col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 1);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("vacated tile frees after the melee body moves (not a stale memo)",
+    CHECK("vacated melee tile remains player-walkable",
         obs[f1 + FIELD_CELL(4, 0)] == 0.0f);
-    CHECK("the melee body's new tile is unstandable",
-        obs[f1 + FIELD_CELL(6, 0)] == 1.0f);
+    CHECK("the melee body's new tile remains player-walkable",
+        obs[f1 + FIELD_CELL(6, 0)] == 0.0f);
 
     col_deactivate_npc(&s, manti);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("center cell reads zero shooters after the manticore dies",
         obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
-    CHECK("dead manticore's body tile frees in channel 1",
+    CHECK("dead manticore's former body tile stays player-walkable",
         obs[f1 + FIELD_CELL(-1, -4)] == 0.0f);
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
@@ -7955,6 +8209,8 @@ int main(void) {
     test_manticore_shared_wave_cycle();
     test_manticore_stagger_overlap_fidelity();
     test_javelin_skyfall_no_defence_gate();
+    test_sol_generic_observation_signals_are_neutral();
+    test_sol_hazard_action_observation_contract();
     test_sol_adjacency_gate_and_kiting();
     test_sol_attack_selection_invariants();
     test_sol_parry_schedule_and_damage();

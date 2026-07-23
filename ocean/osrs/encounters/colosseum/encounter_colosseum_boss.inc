@@ -331,10 +331,14 @@ static void col_sol_crystal_patrol(
     }
 }
 
-static int col_sol_crystal_in_line(const ColosseumState* s, const ColoSolCrystal* c) {
+static int col_sol_crystal_hits_tile(const ColoSolCrystal* c, int x, int y) {
     if (c->edge == COLO_SOL_EDGE_NORTH || c->edge == COLO_SOL_EDGE_SOUTH)
-        return s->player.x == c->x;
-    return s->player.y == c->y;
+        return x == c->x;
+    return y == c->y;
+}
+
+static int col_sol_crystal_in_line(const ColosseumState* s, const ColoSolCrystal* c) {
+    return col_sol_crystal_hits_tile(c, s->player.x, s->player.y);
 }
 
 static void col_sol_spawn_crystal(ColosseumState* s) {
@@ -402,11 +406,16 @@ static void col_sol_tick_crystals(ColosseumState* s) {
     }
 }
 
+static int col_sol_molten_sand_at(const SolHereditState* sol, int x, int y) {
+    for (int i = 0; i < sol->hazard_tile_count; i++)
+        if (sol->hazard_tile_x[i] == x && sol->hazard_tile_y[i] == y) return 1;
+    return 0;
+}
+
 static void col_sol_add_pool(ColosseumState* s, int x, int y) {
     if (col_static_blocked(x, y)) return;
     SolHereditState* sol = &s->sol;
-    for (int i = 0; i < sol->hazard_tile_count; i++)
-        if (sol->hazard_tile_x[i] == x && sol->hazard_tile_y[i] == y) return;
+    if (col_sol_molten_sand_at(sol, x, y)) return;
     int slot = sol->hazard_tile_count < COLO_SOL_HAZARD_TILES_MAX
         ? sol->hazard_tile_count++
         : encounter_rand_int(&s->rng_state, COLO_SOL_HAZARD_TILES_MAX);
@@ -493,15 +502,12 @@ static void col_sol_tick_molten(ColosseumState* s) {
         sol->beams[b].active = 0;
     }
 
-    for (int i = 0; i < sol->hazard_tile_count; i++) {
-        if (s->player.x != sol->hazard_tile_x[i] || s->player.y != sol->hazard_tile_y[i])
-            continue;
+    if (col_sol_molten_sand_at(sol, s->player.x, s->player.y)) {
         int dmg = COLO_MOLTEN_SAND_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
         col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_MOLTEN_SAND);
         s->last_hit_by_type = COLO_SOL_HEREDIT;
         col_mod_on_player_damaged(s, dmg);
-        break;
     }
 }
 

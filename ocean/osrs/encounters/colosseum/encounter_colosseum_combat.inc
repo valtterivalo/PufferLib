@@ -646,6 +646,7 @@ static void col_live_threat_style_counts(
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_enemy(npc)) continue;
+        if (npc->type == COLO_SOL_HEREDIT) continue;
         const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
         if (ns->attack_range < 1) continue;
         int dist = col_npc_dist_to_player(s, npc);
@@ -665,6 +666,7 @@ static void col_live_threat_style_counts(
 
 static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const ColoNPC* npc) {
     if (!col_npc_is_live_enemy(npc)) return ATTACK_STYLE_NONE;
+    if (npc->type == COLO_SOL_HEREDIT) return ATTACK_STYLE_NONE;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return ATTACK_STYLE_NONE;
     const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
 

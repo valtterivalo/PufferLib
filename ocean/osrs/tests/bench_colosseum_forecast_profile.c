@@ -30,6 +30,7 @@ typedef enum {
     COLO_BENCH_MOVEMENT,
     COLO_BENCH_ATTACK_AI,
     COLO_BENCH_FINALIZE,
+    COLO_BENCH_SOLARFLARE,
     COLO_BENCH_OBS_SCORE,
     COLO_BENCH_COUNT,
 } ColoBenchBucket;
@@ -68,6 +69,7 @@ static const char* const COLO_BENCH_BUCKET_NAMES[COLO_BENCH_COUNT] = {
     "rollout_movement",
     "rollout_attack_ai",
     "action_finalize",
+    "solarflare",
     "obs_score_encode",
 };
 
@@ -227,42 +229,6 @@ static void bench_build_corpus(ColoBenchCorpus* corpus) {
     if (corpus->count <= 0) abort();
 }
 
-static void bench_encode_step_out_forecast_obs(
-    const ColoStepOutForecast* forecast,
-    int horizon,
-    float out[COLO_STEP_OUT_FORECAST_OBS_SIZE]
-) {
-    int i = 0;
-    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
-        const ColoStepOutForecastAction* action = &forecast->actions[action_idx];
-        int first_attack_tick = 0;
-        int first_style_mask = 0;
-        int max_hit = 0;
-        int ranged_magic_same_tick = 0;
-        for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
-            const ColoStepOutForecastTick* tick = &action->ticks[tick_idx];
-            int style_mask = col_step_out_forecast_tick_style_mask(tick);
-            if (first_attack_tick == 0 &&
-                    col_step_out_forecast_tick_has_event(tick)) {
-                first_attack_tick = tick_idx + 1;
-                first_style_mask = style_mask;
-            }
-            if (tick->max_hit > max_hit) max_hit = tick->max_hit;
-            if (tick->ranged_count > 0 && tick->magic_count > 0)
-                ranged_magic_same_tick = 1;
-        }
-        out[i++] = action->valid ? 1.0f : 0.0f;
-        out[i++] = (float)first_attack_tick / (float)horizon;
-        out[i++] = (float)first_style_mask / 7.0f;
-        out[i++] = (float)max_hit / 150.0f;
-        out[i++] = action->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-        out[i++] = ranged_magic_same_tick ? 1.0f : 0.0f;
-        out[i++] = action->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
-        out[i++] = action->melee_fallback_exposure ? 1.0f : 0.0f;
-    }
-    assert(i == COLO_STEP_OUT_FORECAST_OBS_SIZE);
-}
-
 static void bench_profiled_tick(
     const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
@@ -361,6 +327,10 @@ static void bench_profiled_forecast_build(
         profile->valid_actions++;
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
+        if (col_forecast_action_rollout_writes_no_threats(
+                base_npcs, forecast_slots, forecast_slot_count, action, horizon)) {
+            continue;
+        }
         if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
                 col_forecast_action_is_run_tile(action_idx)) {
             col_forecast_static_threat_action(
@@ -396,6 +366,17 @@ static void bench_profiled_forecast_build(
         bench_add_ns(profile, COLO_BENCH_FINALIZE, start);
     }
     profile->fanout_ns += now_ns() - fanout_start;
+
+    start = now_ns();
+    ColoForecastSolarflare solarflare = col_forecast_solarflare_precompute(s);
+    for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
+        ColoStepOutForecastAction* action = &out->actions[action_idx];
+        action->solarflare_contact_tick = action->valid
+            ? col_forecast_solarflare_contact_tick(
+                s, &solarflare, action->land_x, action->land_y, horizon)
+            : -1;
+    }
+    bench_add_ns(profile, COLO_BENCH_SOLARFLARE, start);
     profile->total_ns += now_ns() - total_start;
     profile->forecasts++;
 }
@@ -433,8 +414,6 @@ static void bench_raw_forecast_obs(
 }
 
 static void bench_check_profiled_exact(const ColoBenchCorpus* corpus) {
-    float obs_a[COLO_STEP_OUT_FORECAST_OBS_SIZE];
-    float obs_b[COLO_STEP_OUT_FORECAST_OBS_SIZE];
     for (int i = 0; i < corpus->count; i++) {
         ColoStepOutForecast expected;
         ColoStepOutForecast actual;
@@ -447,14 +426,6 @@ static void bench_check_profiled_exact(const ColoBenchCorpus* corpus) {
             COLO_FORECAST_RUN_TILE_FULL, &profile);
         if (memcmp(&expected, &actual, sizeof(expected)) != 0) {
             fprintf(stderr, "profiled forecast mismatch on corpus state %d\n", i);
-            abort();
-        }
-        bench_encode_step_out_forecast_obs(
-            &expected, COLO_STEP_OUT_FORECAST_HORIZON, obs_a);
-        bench_encode_step_out_forecast_obs(
-            &actual, COLO_STEP_OUT_FORECAST_HORIZON, obs_b);
-        if (memcmp(obs_a, obs_b, sizeof(obs_a)) != 0) {
-            fprintf(stderr, "profiled obs mismatch on corpus state %d\n", i);
             abort();
         }
     }

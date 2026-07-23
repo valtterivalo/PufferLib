@@ -29,13 +29,26 @@ typedef enum {
     COLO_SOL_PARRY_CUE_COUNT,
 } ColoSolParryCue;
 
+typedef enum {
+    COLO_SOL_HAZARD_AOE = 0,
+    COLO_SOL_HAZARD_CRYSTAL_LASER,
+    COLO_SOL_HAZARD_MOLTEN_SAND,
+    COLO_SOL_HAZARD_SOURCE_COUNT,
+} ColoSolHazardSource;
+
 #define COLO_SOL_PARRY_LAND_TICKS_MAX 4
-#define COLO_BOSS_OBS_PARRY_CUE_OFFSET 22
+#define COLO_BOSS_OBS_PARRY_CUE_OFFSET 19
 #define COLO_BOSS_OBS_PARRY_TICKS_OFFSET \
     (COLO_BOSS_OBS_PARRY_CUE_OFFSET + COLO_SOL_PARRY_CUE_COUNT)
 #define COLO_BOSS_OBS_PARRY_DAMAGE_OFFSET \
     (COLO_BOSS_OBS_PARRY_TICKS_OFFSET + COLO_SOL_PARRY_LAND_TICKS_MAX)
-#define COLO_BOSS_OBS_SIZE        56
+#define COLO_BOSS_OBS_PREMOVE_HAZARD_OFFSET 37
+#define COLO_BOSS_OBS_SIZE \
+    (COLO_BOSS_OBS_PREMOVE_HAZARD_OFFSET + COLO_SOL_HAZARD_SOURCE_COUNT)
+
+#define COLO_SOL_HAZARD_ACTION_FEATURES COLO_SOL_HAZARD_SOURCE_COUNT
+#define COLO_SOL_HAZARD_ACTION_OBS_SIZE \
+    (ENCOUNTER_MOVE_ACTIONS * COLO_SOL_HAZARD_ACTION_FEATURES)
 
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
@@ -67,7 +80,8 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
-    COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
+    COLO_SOL_HAZARD_ACTION_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
+    COLO_STEP_OUT_FORECAST_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
     COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
@@ -81,7 +95,10 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_OBS_AFTER_MODS     (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_OBS_SIZE)
 #define COLO_OBS_AFTER_WAVE     (COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE)
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
-#define COLO_OBS_AFTER_PENDING_HITS (COLO_OBS_AFTER_BOSS + COLO_PENDING_HIT_OBS_SIZE)
+#define COLO_OBS_AFTER_SOL_HAZARD_ACTIONS \
+    (COLO_OBS_AFTER_BOSS + COLO_SOL_HAZARD_ACTION_OBS_SIZE)
+#define COLO_OBS_AFTER_PENDING_HITS \
+    (COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + COLO_PENDING_HIT_OBS_SIZE)
 #define COLO_OBS_AFTER_STEP_OUT_FORECAST \
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
@@ -511,9 +528,12 @@ static void col_write_npc_slot(
     obs[i++] = col_obs_rel_y(npc->y, py);
     obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
     *idx = i;
-    col_write_style_onehot_melee_ranged_magic(npc->attack_style, obs, idx);
+    AttackStyle observed_style =
+        npc->type == COLO_SOL_HEREDIT ? ATTACK_STYLE_NONE : npc->attack_style;
+    col_write_style_onehot_melee_ranged_magic(observed_style, obs, idx);
     i = *idx;
-    obs[i++] = col_clamp01((float)npc->attack_timer / 8.0f);
+    obs[i++] = npc->type == COLO_SOL_HEREDIT
+        ? 0.0f : col_clamp01((float)npc->attack_timer / 8.0f);
     int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
     int range = ns->attack_range > 0 ? ns->attack_range : 1;
     obs[i++] = (dist >= 1 && dist <= range) ? 1.0f : 0.0f;
@@ -534,70 +554,103 @@ static void col_write_npc_slot(
     *idx = i;
 }
 
-static void col_write_nearest_armed_line(const ColosseumState* s, float* obs, int* idx) {
-    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
+static int col_sol_premove_aoe_hit(const ColosseumState* s) {
+    return s->sol.aoe_attack != COLO_SOL_AOE_NONE &&
+        s->sol.aoe_age + 1 == COLO_SOL_AOE_DAMAGE_AGE &&
+        col_sol_aoe_tile_is_hazard(&s->sol, s->player.x, s->player.y);
+}
+
+static int col_sol_premove_laser_hit(const ColosseumState* s) {
     for (int k = 0; k < s->sol.crystal_count; k++) {
-        const ColoSolCrystal* c = &s->sol.crystals[k];
-        if (!c->active || c->firing_freeze < COLO_SOL_LASER_DAMAGE_FREEZE) continue;
-        if (!col_sol_crystal_in_line(s, c)) continue;
-        col_nearest_hazard_tile_consider(
-            &nearest, k, c->x, c->y, s->player.x, s->player.y);
+        const ColoSolCrystal* crystal = &s->sol.crystals[k];
+        if (crystal->active &&
+                crystal->firing_freeze == COLO_SOL_LASER_DAMAGE_FREEZE &&
+                col_sol_crystal_hits_tile(crystal, s->player.x, s->player.y))
+            return 1;
     }
-    float ticks_frac = nearest.found
-        ? col_clamp01((float)(s->sol.crystals[nearest.index].firing_freeze
-                              - COLO_SOL_LASER_DAMAGE_FREEZE) /
-              (float)(COLO_SOL_LASER_FREEZE - COLO_SOL_LASER_DAMAGE_FREEZE))
-        : 0.0f;
-    col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
+    return 0;
 }
 
-static void col_write_nearest_molten(const ColosseumState* s, float* obs, int* idx) {
-    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
-    for (int k = 0; k < s->sol.hazard_tile_count; k++) {
-        col_nearest_hazard_tile_consider(
-            &nearest, k, s->sol.hazard_tile_x[k], s->sol.hazard_tile_y[k],
-            s->player.x, s->player.y);
-    }
-    col_write_nearest_hazard_xy_value(s, &nearest, 1.0f, obs, idx);
-}
-
-static int col_player_in_aoe_danger(const ColosseumState* s) {
-    const SolHereditState* sol = &s->sol;
-    if (sol->aoe_attack == COLO_SOL_AOE_NONE) return 0;
-    return col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y);
-}
-
-static void col_write_nearest_crystal(const ColosseumState* s, float* obs, int* idx) {
-    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
-    for (int k = 0; k < s->sol.crystal_count; k++) {
-        const ColoSolCrystal* ck = &s->sol.crystals[k];
-        if (!ck->active) continue;
-        col_nearest_hazard_tile_consider(
-            &nearest, k, ck->x, ck->y, s->player.x, s->player.y);
-    }
-    const ColoSolCrystal* c = nearest.found ? &s->sol.crystals[nearest.index] : NULL;
-    col_write_nearest_hazard_xy_values(
-        s,
-        &nearest,
-        c && c->firing_freeze > 0 ? 1.0f : 0.0f,
-        c ? col_clamp01((float)c->firing_freeze / (float)COLO_SOL_LASER_FREEZE) : 0.0f,
-        obs,
-        idx);
-}
-
-static void col_write_nearest_beam(const ColosseumState* s, float* obs, int* idx) {
-    ColoNearestHazardTile nearest = col_nearest_hazard_tile_none();
+static int col_sol_premove_molten_hit(const ColosseumState* s) {
+    if (col_sol_molten_sand_at(&s->sol, s->player.x, s->player.y)) return 1;
     for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
-        if (!s->sol.beams[k].active) continue;
-        col_nearest_hazard_tile_consider(
-            &nearest, k, s->sol.beams[k].x, s->sol.beams[k].y,
-            s->player.x, s->player.y);
+        const ColoSolBeam* beam = &s->sol.beams[k];
+        if (beam->active && beam->ticks_to_pool <= 1 &&
+                beam->x == s->player.x && beam->y == s->player.y)
+            return 1;
     }
-    float ticks_frac = nearest.found
-        ? col_clamp01((float)s->sol.beams[nearest.index].ticks_to_pool /
-              (float)COLO_SOL_BEAM_TO_POOL_TICKS)
-        : 0.0f;
-    col_write_nearest_hazard_xy_values(s, &nearest, ticks_frac, 1.0f, obs, idx);
+    return 0;
+}
+
+static int col_sol_earliest_hit_tick(int current, int candidate) {
+    if (candidate <= 0 || candidate > COLO_STEP_OUT_FORECAST_HORIZON) return current;
+    if (current == 0 || candidate < current) return candidate;
+    return current;
+}
+
+static int col_sol_aoe_action_hit_tick(const ColosseumState* s, int x, int y) {
+    if (s->sol.aoe_attack == COLO_SOL_AOE_NONE) return 0;
+    int hit_tick = COLO_SOL_AOE_DAMAGE_AGE - (s->sol.aoe_age + 1);
+    if (hit_tick <= 0 || hit_tick > COLO_STEP_OUT_FORECAST_HORIZON) return 0;
+    return col_sol_aoe_tile_is_hazard(&s->sol, x, y) ? hit_tick : 0;
+}
+
+static int col_sol_laser_action_hit_tick(const ColosseumState* s, int x, int y) {
+    int earliest = 0;
+    for (int k = 0; k < s->sol.crystal_count; k++) {
+        const ColoSolCrystal* crystal = &s->sol.crystals[k];
+        if (!crystal->active || !col_sol_crystal_hits_tile(crystal, x, y)) continue;
+        int hit_tick = crystal->firing_freeze - COLO_SOL_LASER_DAMAGE_FREEZE;
+        earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
+    }
+    return earliest;
+}
+
+static int col_sol_molten_action_hit_tick(const ColosseumState* s, int x, int y) {
+    if (col_sol_molten_sand_at(&s->sol, x, y)) return 1;
+    int earliest = 0;
+    for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
+        const ColoSolBeam* beam = &s->sol.beams[k];
+        if (!beam->active || beam->x != x || beam->y != y) continue;
+        int hit_tick = beam->ticks_to_pool - 1;
+        if (hit_tick < 1) hit_tick = 1;
+        earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
+    }
+    return earliest;
+}
+
+static float col_sol_hazard_action_urgency(int hit_tick) {
+    if (hit_tick <= 0) return 0.0f;
+    assert(hit_tick <= COLO_STEP_OUT_FORECAST_HORIZON);
+    return (float)(COLO_STEP_OUT_FORECAST_HORIZON - hit_tick + 1) /
+        (float)COLO_STEP_OUT_FORECAST_HORIZON;
+}
+
+static void col_write_sol_hazard_action_obs(
+    const ColosseumState* s,
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    if (!col_sol_clamp_active(s)) {
+        *idx = i + COLO_SOL_HAZARD_ACTION_OBS_SIZE;
+        return;
+    }
+    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        ColoForecastLanding landing =
+            col_step_out_forecast_action_landing_ctx(s, action);
+        if (!landing.valid) {
+            i += COLO_SOL_HAZARD_ACTION_FEATURES;
+            continue;
+        }
+        obs[i++] = col_sol_hazard_action_urgency(
+            col_sol_aoe_action_hit_tick(s, landing.land_x, landing.land_y));
+        obs[i++] = col_sol_hazard_action_urgency(
+            col_sol_laser_action_hit_tick(s, landing.land_x, landing.land_y));
+        obs[i++] = col_sol_hazard_action_urgency(
+            col_sol_molten_action_hit_tick(s, landing.land_x, landing.land_y));
+    }
+    *idx = i;
 }
 
 typedef struct {
@@ -664,7 +717,6 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD1) ? 1.0f : 0.0f;
     obs[i++] = (sol->aoe_attack == COLO_SOL_AOE_SHIELD2) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)sol->aoe_age / (float)COLO_SOL_AOE_LIFETIME);
-    obs[i++] = col_player_in_aoe_danger(s) ? 1.0f : 0.0f;
     if (sol->boss_idx >= 0) {
         const ColoNPC* boss = &s->npcs[sol->boss_idx];
         int bsz = boss->size > 0 ? boss->size : 5;
@@ -672,16 +724,6 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
         obs[i++] = col_obs_rel_y(py, boss->y + bsz / 2);
     } else {
         obs[i++] = 0.0f; obs[i++] = 0.0f;
-    }
-
-    if (sol->aoe_attack == COLO_SOL_AOE_NONE) {
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-    } else {
-        int adx, ady;
-        col_sol_aoe_effective_dir(sol, px, py, &adx, &ady);
-        obs[i++] = (float)adx;
-        obs[i++] = (float)ady;
     }
 
     obs[i++] = col_clamp01((float)sol->attack_delay / 12.0f);
@@ -703,15 +745,14 @@ static void col_write_boss_obs(const ColosseumState* s, float* obs, int* idx) {
         obs[i++] = (sol->grapple_active && sol->grapple_body_slot == g) ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)sol->grapple_timer / (float)COLO_SOL_GRAPPLE_WINDOW);
     obs[i++] = sol->next_attack_guaranteed_max ? 1.0f : 0.0f;
-
-    obs[i++] = col_clamp01((float)sol->crystal_count / (float)COLO_SOL_MAX_CRYSTALS);
+    if (col_sol_clamp_active(s)) {
+        obs[i++] = col_sol_premove_aoe_hit(s) ? 1.0f : 0.0f;
+        obs[i++] = col_sol_premove_laser_hit(s) ? 1.0f : 0.0f;
+        obs[i++] = col_sol_premove_molten_hit(s) ? 1.0f : 0.0f;
+    } else {
+        i += COLO_SOL_HAZARD_SOURCE_COUNT;
+    }
     *idx = i;
-    col_write_nearest_crystal(s, obs, idx);
-    col_write_nearest_armed_line(s, obs, idx);
-
-    col_write_nearest_molten(s, obs, idx);
-
-    col_write_nearest_beam(s, obs, idx);
 }
 
 static inline int col_pending_hit_ignores_prayer(const EncounterPendingHit* ph) {
@@ -1035,6 +1076,15 @@ static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
     h = (h ^ (uint64_t)(uint32_t)s->player.y) * 1099511628211ULL;
+    int clamp_active = col_sol_clamp_active(s);
+    h = (h ^ (uint64_t)(uint32_t)clamp_active) * 1099511628211ULL;
+    if (clamp_active) {
+        uint64_t bounds = (uint64_t)(uint32_t)s->sol.boss_arena_min_x
+            | ((uint64_t)(uint32_t)s->sol.boss_arena_min_y << 8)
+            | ((uint64_t)(uint32_t)s->sol.boss_arena_max_x << 16)
+            | ((uint64_t)(uint32_t)s->sol.boss_arena_max_y << 24);
+        h = (h ^ bounds) * 1099511628211ULL;
+    }
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_enemy(npc)) continue;
@@ -1046,16 +1096,6 @@ static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
             | ((uint64_t)(uint32_t)range << 24);
         h = (h ^ shooter) * 1099511628211ULL;
     }
-    const uint8_t* grid = &s->npc_collision_flags[0][0];
-    const size_t grid_bytes = sizeof(s->npc_collision_flags);
-    size_t b = 0;
-    for (; b + 8 <= grid_bytes; b += 8) {
-        uint64_t word;
-        memcpy(&word, grid + b, 8);
-        h = (h ^ word) * 1099511628211ULL;
-    }
-    for (; b < grid_bytes; b++)
-        h = (h ^ (uint64_t)grid[b]) * 1099511628211ULL;
     return h;
 }
 
@@ -1117,10 +1157,7 @@ static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) 
     for (int dy = -COLO_THREAT_FIELD_RADIUS; dy <= COLO_THREAT_FIELD_RADIUS; dy++) {
         for (int dx = -COLO_THREAT_FIELD_RADIUS; dx <= COLO_THREAT_FIELD_RADIUS; dx++) {
             int tx = s->player.x + dx, ty = s->player.y + dy;
-            int gx, gy;
-            int blocked = 1;
-            if (col_grid_index(tx, ty, &gx, &gy))
-                blocked = col_static_blocked(tx, ty) || s->npc_collision_flags[gx][gy];
+            int blocked = !col_player_walkable((void*)s, tx, ty);
             obs[i++] = blocked ? 1.0f : 0.0f;
         }
     }
@@ -1979,6 +2016,8 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
+    col_write_sol_hazard_action_obs(s, obs, &i);
+    assert(i == COLO_OBS_AFTER_SOL_HAZARD_ACTIONS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);
 #endif
