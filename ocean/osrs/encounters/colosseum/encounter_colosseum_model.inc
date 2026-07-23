@@ -1399,6 +1399,11 @@ static ColoLoadoutProfile col_sample_loadout_profile(
 #define COLO_SURGE_RESTORE_AMOUNT 25
 #define COLO_SURGE_COOLDOWN_TICKS 500
 
+typedef enum {
+    COLO_SOL_PARRY_ASSISTANCE_DISABLED = 0,
+    COLO_SOL_PARRY_ASSISTANCE_PERFECT = 1,
+} ColoSolParryAssistanceMode;
+
 typedef struct {
     int start_wave;
     float damage_reward_coeff;
@@ -1438,6 +1443,8 @@ typedef struct {
     float late_start_supply_fraction_per_wave;
 
     int prayer_oracle_mode;
+
+    ColoSolParryAssistanceMode sol_parry_assistance_mode;
 
     int bis_gear_oracle_mode;
 

@@ -514,7 +514,7 @@ static void col_sol_start_triple_parry(ColosseumState* s, int idx) {
     sol->parry_hits_left = COLO_SOL_PARRY_HITS;
 }
 
-static void col_sol_tick_triple_parry(ColosseumState* s) {
+static void col_sol_tick_triple_parry(ColosseumState* s, const ColosseumContext* ctx) {
     SolHereditState* sol = &s->sol;
     if (sol->parry_hits_left <= 0) return;
     for (int h = 0; h < COLO_SOL_PARRY_HITS; h++) {
@@ -524,7 +524,9 @@ static void col_sol_tick_triple_parry(ColosseumState* s) {
         sol->parry_hits_left--;
 
         int early = col_sol_overhead_on_in_window(s, COLO_SOL_PARRY_LOOKBACK[h]);
-        int blocked = !early && s->player.prayer == PRAYER_PROTECT_MELEE;
+        int blocked =
+            ctx->config.sol_parry_assistance_mode == COLO_SOL_PARRY_ASSISTANCE_PERFECT ||
+            (!early && s->player.prayer == PRAYER_PROTECT_MELEE);
         s->tick_scratch.styles_faced_mask |= (1 << ATTACK_STYLE_MELEE);
         s->tick_scratch.avoidable_threat_by_style[ATTACK_STYLE_MELEE] +=
             (float)sol->parry_damage[h];
@@ -604,7 +606,6 @@ static void col_sol_enter_phase(ColosseumState* s, int new_phase) {
 }
 
 static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
-    (void)ctx;
     SolHereditState* sol = &s->sol;
     if (s->wave != COLO_WAVE_BOSS || !sol->started) return;
 
@@ -631,7 +632,7 @@ static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx) {
     col_sol_tick_aoe(s);
     col_sol_tick_crystals(s);
     col_sol_tick_molten(s);
-    col_sol_tick_triple_parry(s);
+    col_sol_tick_triple_parry(s, ctx);
     col_sol_tick_grapple(s);
 
     col_sol_tick_attack_engine(s, idx);

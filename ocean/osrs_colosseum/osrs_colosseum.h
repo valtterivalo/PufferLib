@@ -220,6 +220,7 @@ void puf_init(Env* env, Dict* kwargs) {
         "forecast_horizon",
         "mask_inventory_heads",
         "prayer_oracle_mode",
+        "sol_parry_assistance_mode",
         "late_start_state_mode",
         "bis_gear_oracle_mode",
         "invuln_mode",

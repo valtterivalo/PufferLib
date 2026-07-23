@@ -3597,6 +3597,37 @@ static void test_sol_parry_prayer_punish(void) {
         s.player.current_hitpoints == 99 - (15 + 25 + 35));
 }
 
+static void test_sol_parry_perfect_assistance(void) {
+    printf("test_sol_parry_perfect_assistance\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    for (int low = 0; low <= 1; low++) {
+        int idx = sol_setup(&s, &ctx, 114 + (uint32_t)low);
+        s.npcs[idx].hp = low ? 750 : 751;
+        s.sol.phase = col_sol_phase_for_hp(s.npcs[idx].hp);
+        s.sol.attack_delay = 1000;
+        sol_move_player(&s, 12, 12);
+        ctx.config.sol_parry_assistance_mode = COLO_SOL_PARRY_ASSISTANCE_PERFECT;
+        col_sol_start_triple_parry(&s, idx);
+        s.player.current_hitpoints = 99;
+
+        int prayer_correct_before = s.log.total_prayer_correct;
+        int actions[COLO_NUM_ACTION_HEADS] = {0};
+        actions[COLO_HEAD_PRAYER] = COLO_OVERHEAD_MAGIC;
+        int total_ticks = low ? 10 : 9;
+        for (int t = 0; t < total_ticks; t++)
+            step_and_observe(&s, &ctx, actions);
+
+        CHECK("perfect assistance blocks every hit despite the wrong overhead",
+            s.player.current_hitpoints == 99);
+        CHECK("perfect assistance resolves all three hits as blocked",
+            s.log.total_prayer_correct == prayer_correct_before + 3);
+        CHECK("perfect assistance preserves the phase-specific schedule",
+            s.sol.parry_hits_left == 0);
+    }
+}
+
 static ColoSolParryCue test_sol_parry_cue_from_obs(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -7865,6 +7896,7 @@ int main(void) {
     test_sol_attack_selection_invariants();
     test_sol_parry_schedule_and_damage();
     test_sol_parry_prayer_punish();
+    test_sol_parry_perfect_assistance();
     test_sol_parry_observation_contract();
     test_sol_grapple_perfect_parry();
     test_sol_perfect_parry_forces_spec_attack();

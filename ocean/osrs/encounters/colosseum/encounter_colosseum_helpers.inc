@@ -302,6 +302,7 @@ static ColConfig col_default_config(void) {
         .action_debug_log = col_default_action_debug_log(),
         .late_start_state_mode = 2,
         .late_start_supply_fraction_per_wave = 0.07f,
+        .sol_parry_assistance_mode = COLO_SOL_PARRY_ASSISTANCE_DISABLED,
         .prayer_switch_fail_prob = 0.0f,
         .player_damage_received_scale = 1.0f,
         .damage_scale_anneal_start = 1.0f,
