@@ -221,13 +221,12 @@ typedef struct {
 } ColPendingHitObserverContext;
 
 static void col_pending_hit_prayer_observer(
-    void* user, const EncounterPendingHit* hit, int dmg, int prayed, int checked) {
+    void* user, const EncounterPendingHit* hit, int dmg, int applied,
+    int prayed, int checked
+) {
     ColPendingHitObserverContext* observer_ctx = (ColPendingHitObserverContext*)user;
     ColosseumState* s = observer_ctx->state;
     ColosseumContext* ctx = observer_ctx->context;
-    int applied = dmg < s->player.current_hitpoints
-        ? dmg
-        : s->player.current_hitpoints;
     col_render_hit_events_add(
         &ctx->player_render_hit_count, ctx->player_render_hit_damage, dmg);
     if (applied > 0 &&
@@ -268,17 +267,17 @@ static void col_pending_hit_prayer_observer(
 
 static void col_resolve_player_pending_hits_ctx(ColosseumState* s, ColosseumContext* ctx) {
     int prayer_correct = 0;
-    int hitpoints_before = s->player.current_hitpoints;
+    float damage_received = 0.0f;
     ColPendingHitObserverContext observer_ctx = {
         .state = s,
         .context = ctx,
     };
     encounter_resolve_player_pending_hits_observed(
         &s->player_pending_hits, &s->player, s->player.prayer,
-        NULL, &prayer_correct, NULL,
+        &damage_received, &prayer_correct, NULL,
         col_pending_hit_prayer_observer, &observer_ctx);
-    int applied = hitpoints_before - s->player.current_hitpoints;
-    s->tick_scratch.damage_received += (float)applied;
+    int applied = (int)damage_received;
+    s->tick_scratch.damage_received += damage_received;
     s->tick_scratch.prayer_correct += prayer_correct;
 
     int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
@@ -384,7 +383,6 @@ static void col_apply_instant_melee_hit(
     if (!prayed) s->tick_scratch.offpray_damage_this_tick += (float)dmg;
     col_log_prayer_event(s, npc_type, prayed, dmg);
 
-    col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
     int applied =
         col_damage_player_from(s, dmg, npc_type, COLO_DMG_OFFPRAY);
     if (applied > 0) {
@@ -392,6 +390,7 @@ static void col_apply_instant_melee_hit(
             s, applied, COLO_DAMAGE_NPC_ATTACK);
         s->last_hit_by_type = npc_type;
     }
+    col_apply_echo_boots_recoil(s, ctx, attacker_slot, dmg);
 }
 
 static void col_npc_melee_attack(

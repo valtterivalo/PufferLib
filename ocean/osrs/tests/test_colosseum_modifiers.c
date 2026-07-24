@@ -7642,6 +7642,45 @@ static void test_echo_boots_recoil_reflects_to_attacker(void) {
         sol.player.item_effect_state.echo_boot_charges == OSRS_ECHO_BOOTS_MAX_CHARGES);
 }
 
+static void test_pending_hit_recoil_volatility_damage_accounting(void) {
+    printf("test_pending_hit_recoil_volatility_damage_accounting\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 1.0f, 92);
+    geo_clear_npcs(&s);
+    s.player.x = 18;
+    s.player.y = 16;
+    s.player.current_hitpoints = 99;
+    s.player.prayer = PRAYER_NONE;
+    col_rebuild_player_collision_flags(&s);
+    col_init_npc(&s, 0, COLO_JAGUAR_WARRIOR, 16, 16);
+    s.npcs[0].hp = 1;
+    s.npcs[0].min_hp_seen = 1;
+    s.modifiers.active_mask |= 1u << COLO_MOD_VOLATILITY;
+    s.modifiers.tier[COLO_MOD_VOLATILITY] = 1;
+
+    EncounterPendingHit hit = encounter_pending_hit_resolved_at_throw(
+        10,
+        1,
+        ATTACK_STYLE_RANGED,
+        PRAYER_NONE,
+        COLO_JAGUAR_WARRIOR,
+        0,
+        1,
+        NULL);
+    col_push_player_pending_hit(&s, hit);
+    col_resolve_player_pending_hits_ctx(&s, &ctx);
+
+    CHECK("pending hit lands before its echo-boots recoil death effect",
+        s.player.current_hitpoints == 64 &&
+        s.npcs[0].hp == 0);
+    CHECK("nested Volatility and pending-hit damage remain separately exact",
+        s.tick_scratch.damage_received == 35.0f &&
+        s.tick_scratch.landed_offpray_damage == 10.0f &&
+        s.tick_scratch.landed_unprayable_damage == 25.0f);
+    col_compute_reward_ctx(&s, &ctx);
+}
+
 static void test_colosseum_live_inventory_display(void) {
     printf("test_colosseum_live_inventory_display\n");
     ColosseumContext ctx;
@@ -8217,18 +8256,18 @@ static void test_death_attribution_credits_actual_source(void) {
     manticore.source_npc_type = COLO_MANTICORE;
     manticore.source_npc_slot = -1;
     manticore.attack_style = ATTACK_STYLE_MAGIC;
-    col_pending_hit_prayer_observer(&obs, &manticore, 10, 0, 0);
+    col_pending_hit_prayer_observer(&obs, &manticore, 10, 10, 0, 0);
     CHECK("manticore landing credits the manticore", s.last_hit_by_type == COLO_MANTICORE);
 
     EncounterPendingHit shockwave = {0};
     shockwave.source_npc_type = COLO_SHOCKWAVE_COLOSSUS;
     shockwave.source_npc_slot = -1;
     shockwave.attack_style = ATTACK_STYLE_RANGED;
-    col_pending_hit_prayer_observer(&obs, &shockwave, 12, 0, 0);
+    col_pending_hit_prayer_observer(&obs, &shockwave, 12, 12, 0, 0);
     CHECK("a non-manticore landing re-credits the actual source",
           s.last_hit_by_type == COLO_SHOCKWAVE_COLOSSUS);
 
-    col_pending_hit_prayer_observer(&obs, &manticore, 0, 1, 0);
+    col_pending_hit_prayer_observer(&obs, &manticore, 0, 0, 1, 0);
     CHECK("a 0-damage splash does not change attribution",
           s.last_hit_by_type == COLO_SHOCKWAVE_COLOSSUS);
 }
@@ -8767,6 +8806,7 @@ int main(void) {
     test_npc_melee_instant_unprayable();
     test_player_melee_lands_at_delay_zero();
     test_echo_boots_recoil_reflects_to_attacker();
+    test_pending_hit_recoil_volatility_damage_accounting();
     test_manticore_shared_wave_cycle();
     test_manticore_stagger_overlap_fidelity();
     test_javelin_skyfall_no_defence_gate();

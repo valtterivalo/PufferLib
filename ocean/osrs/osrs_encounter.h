@@ -2116,7 +2116,7 @@ static inline int encounter_resolve_npc_pending_hit(
 
 typedef void (*EncounterPendingHitObserver)(
     void* user, const EncounterPendingHit* hit, int damage_after_prayer,
-    int prayer_was_correct, int prayer_was_checked);
+    int damage_applied, int prayer_was_correct, int prayer_was_checked);
 
 static inline void encounter_resolve_player_pending_hits_observed(
     EncounterPendingHitQueue* queue,
@@ -2157,9 +2157,13 @@ static inline void encounter_resolve_player_pending_hits_observed(
                 if (off_prayer_hit_count) (*off_prayer_hit_count)++;
             }
 
+            int hitpoints_before = player->current_hitpoints;
+            encounter_damage_player(player, dmg, NULL);
+            int applied = hitpoints_before - player->current_hitpoints;
+            if (damage_received_acc)
+                *damage_received_acc += (float)applied;
             if (observer && hit->attack_style != ATTACK_STYLE_NONE)
-                observer(observer_user, hit, dmg, prayed, checked);
-            encounter_damage_player(player, dmg, damage_received_acc);
+                observer(observer_user, hit, dmg, applied, prayed, checked);
             encounter_pending_hit_queue_remove(queue, i, "player");
             i--;
         }
