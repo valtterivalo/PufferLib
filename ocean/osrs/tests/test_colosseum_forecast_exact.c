@@ -76,7 +76,7 @@ static void col_step_out_forecast_landing_selftest(void) {
 } while (0)
 
 #define EXACT_MAGIC "COLOEXACTv1"
-#define EXACT_VERSION 3u
+#define EXACT_VERSION 4u
 #define EXACT_CHUNK_BYTES 65536
 
 typedef struct {
@@ -320,6 +320,119 @@ static void exact_prepare_custom(
     exact_refresh_geometry(s, ctx);
 }
 
+static int exact_primary_action_landing_selftest_one_state(
+    const char* scenario,
+    ColosseumState* s,
+    ColosseumContext* ctx
+) {
+    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    float mask[COLO_ACTION_MASK_SIZE];
+    col_build_primary_action_landings_ctx(s, ctx, landings);
+    col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, mask);
+    int primary_mask_offset = col_action_head_mask_offset(COLO_HEAD_PRIMARY);
+    int checked = 0;
+
+    for (int primary_action = 0;
+            primary_action < COLO_PRIMARY_DIM;
+            primary_action++) {
+        int valid = mask[primary_mask_offset + primary_action] == 1.0f;
+        if (landings[primary_action].valid != valid) {
+            fprintf(stderr,
+                "colosseum primary landing validity mismatch scenario=%s action=%d helper=%d mask=%d\n",
+                scenario, primary_action, landings[primary_action].valid, valid);
+            abort();
+        }
+        if (!valid) continue;
+
+        ColosseumState stepped = *s;
+        ColosseumContext stepped_ctx = *ctx;
+        int actions[COLO_NUM_ACTION_HEADS] = {0};
+        actions[COLO_HEAD_PRIMARY] = primary_action;
+        col_tick_player_ctx(&stepped, &stepped_ctx, actions, 0);
+        if (landings[primary_action].land_x != stepped.player.x ||
+                landings[primary_action].land_y != stepped.player.y) {
+            fprintf(stderr,
+                "colosseum primary landing mismatch scenario=%s action=%d helper=(%d,%d) runtime=(%d,%d)\n",
+                scenario, primary_action,
+                landings[primary_action].land_x,
+                landings[primary_action].land_y,
+                stepped.player.x, stepped.player.y);
+            abort();
+        }
+        checked++;
+    }
+
+    return checked;
+}
+
+static void exact_primary_action_landing_selftest(void) {
+    ColosseumContext ctx;
+    ColosseumState s;
+    exact_prepare_custom(&s, &ctx, 0x51A8u, 16, 16);
+
+    int target_count = 0;
+    for (int y = COLO_ARENA_MIN_Y;
+            y <= COLO_ARENA_MAX_Y && target_count < COLO_MAX_NPCS;
+            y++) {
+        for (int x = COLO_ARENA_MIN_X;
+                x <= COLO_ARENA_MAX_X && target_count < COLO_MAX_NPCS;
+                x++) {
+            if (col_static_blocked(x, y) ||
+                    (x == s.player.x && y == s.player.y)) {
+                continue;
+            }
+            col_init_npc(
+                &s, target_count, COLO_FREMENNIK_BERSERKER, x, y);
+            target_count++;
+        }
+    }
+    assert(target_count == COLO_MAX_NPCS);
+    s.player.attack_timer = 10;
+    exact_refresh_geometry(&s, &ctx);
+
+    int checked = exact_primary_action_landing_selftest_one_state(
+        "all-targets", &s, &ctx);
+
+    osrs_interaction_set(
+        &s.interaction, s.current_obs_slots[COLO_OBS_NPCS - 1]);
+    checked += exact_primary_action_landing_selftest_one_state(
+        "held-target", &s, &ctx);
+
+    osrs_interaction_clear(&s.interaction);
+    s.player_dest_x = 20;
+    s.player_dest_y = 20;
+    checked += exact_primary_action_landing_selftest_one_state(
+        "persistent-destination", &s, &ctx);
+
+    s.modifiers.draft_pending = 1;
+    s.modifiers.draft_free_movement = 0;
+    checked += exact_primary_action_landing_selftest_one_state(
+        "frozen-draft", &s, &ctx);
+
+    s.modifiers.draft_free_movement = 1;
+    checked += exact_primary_action_landing_selftest_one_state(
+        "free-movement-draft", &s, &ctx);
+
+    s.modifiers.draft_pending = 0;
+    s.player_dest_x = -1;
+    s.player_dest_y = -1;
+    s.wave = COLO_WAVE_BOSS;
+    s.sol.started = 1;
+    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
+    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
+    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
+    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
+    s.player.x = COLO_BOSS_ARENA_MIN_X + 1;
+    s.player.y = COLO_BOSS_ARENA_MIN_Y + 1;
+    exact_refresh_geometry(&s, &ctx);
+    checked += exact_primary_action_landing_selftest_one_state(
+        "sol-clamp", &s, &ctx);
+
+    printf(
+        "colosseum primary landing selftest PASS: %d valid action-state pairs across 6 states\n",
+        checked);
+}
+
 static void exact_run_steps(
     ColoExactWriter* writer,
     uint32_t scenario_id,
@@ -559,6 +672,7 @@ int main(int argc, char** argv) {
     col_static_los_table_selftest();
     col_static_footprint_table_selftest();
     col_step_out_forecast_landing_selftest();
+    exact_primary_action_landing_selftest();
 
     char fixture_path[1024];
     char current_path[1024];

@@ -48,7 +48,7 @@ typedef enum {
 
 #define COLO_SOL_HAZARD_ACTION_FEATURES COLO_SOL_HAZARD_SOURCE_COUNT
 #define COLO_SOL_HAZARD_ACTION_OBS_SIZE \
-    (ENCOUNTER_MOVE_ACTIONS * COLO_SOL_HAZARD_ACTION_FEATURES)
+    (COLO_PRIMARY_DIM * COLO_SOL_HAZARD_ACTION_FEATURES)
 
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
@@ -627,7 +627,8 @@ static float col_sol_hazard_action_urgency(int hit_tick) {
 }
 
 static void col_write_sol_hazard_action_obs(
-    const ColosseumState* s,
+    ColosseumState* s,
+    ColosseumContext* ctx,
     float* obs,
     int* idx
 ) {
@@ -636,19 +637,45 @@ static void col_write_sol_hazard_action_obs(
         *idx = i + COLO_SOL_HAZARD_ACTION_OBS_SIZE;
         return;
     }
-    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++) {
-        ColoForecastLanding landing =
-            col_step_out_forecast_action_landing_ctx(s, action);
-        if (!landing.valid) {
+
+    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    float hazard_by_action[COLO_PRIMARY_DIM][COLO_SOL_HAZARD_SOURCE_COUNT] = {{0}};
+    col_build_primary_action_landings_ctx(s, ctx, landings);
+    for (int action = 0; action < COLO_PRIMARY_DIM; action++) {
+        if (!landings[action].valid) {
             i += COLO_SOL_HAZARD_ACTION_FEATURES;
             continue;
         }
-        obs[i++] = col_sol_hazard_action_urgency(
-            col_sol_aoe_action_hit_tick(s, landing.land_x, landing.land_y));
-        obs[i++] = col_sol_hazard_action_urgency(
-            col_sol_laser_action_hit_tick(s, landing.land_x, landing.land_y));
-        obs[i++] = col_sol_hazard_action_urgency(
-            col_sol_molten_action_hit_tick(s, landing.land_x, landing.land_y));
+
+        int duplicate_action = -1;
+        for (int prior = 0; prior < action; prior++) {
+            if (landings[prior].valid &&
+                    landings[prior].land_x == landings[action].land_x &&
+                    landings[prior].land_y == landings[action].land_y) {
+                duplicate_action = prior;
+                break;
+            }
+        }
+        if (duplicate_action >= 0) {
+            memcpy(
+                hazard_by_action[action],
+                hazard_by_action[duplicate_action],
+                sizeof(hazard_by_action[action]));
+        } else {
+            int land_x = landings[action].land_x;
+            int land_y = landings[action].land_y;
+            hazard_by_action[action][COLO_SOL_HAZARD_AOE] =
+                col_sol_hazard_action_urgency(
+                    col_sol_aoe_action_hit_tick(s, land_x, land_y));
+            hazard_by_action[action][COLO_SOL_HAZARD_CRYSTAL_LASER] =
+                col_sol_hazard_action_urgency(
+                    col_sol_laser_action_hit_tick(s, land_x, land_y));
+            hazard_by_action[action][COLO_SOL_HAZARD_MOLTEN_SAND] =
+                col_sol_hazard_action_urgency(
+                    col_sol_molten_action_hit_tick(s, land_x, land_y));
+        }
+        for (int source = 0; source < COLO_SOL_HAZARD_SOURCE_COUNT; source++)
+            obs[i++] = hazard_by_action[action][source];
     }
     *idx = i;
 }
@@ -2016,7 +2043,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
-    col_write_sol_hazard_action_obs(s, obs, &i);
+    col_write_sol_hazard_action_obs(s, ctx, obs, &i);
     assert(i == COLO_OBS_AFTER_SOL_HAZARD_ACTIONS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);

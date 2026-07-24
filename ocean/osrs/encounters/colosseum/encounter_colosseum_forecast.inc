@@ -194,6 +194,70 @@ static ColoForecastLanding col_step_out_forecast_action_landing_ctx(
     return landing;
 }
 
+static int col_primary_action_valid(
+    const ColosseumState* s,
+    int primary_action
+) {
+    if (primary_action < 0 || primary_action >= COLO_PRIMARY_DIM) {
+        fprintf(stderr, "colosseum primary action out of range: %d\n", primary_action);
+        abort();
+    }
+    if (primary_action == 0) return 1;
+    if (s->modifiers.draft_pending && !s->modifiers.draft_free_movement) return 0;
+    if (primary_action < ENCOUNTER_MOVE_ACTIONS) {
+        int nx = s->player.x + ENCOUNTER_MOVE_TARGET_DX[primary_action];
+        int ny = s->player.y + ENCOUNTER_MOVE_TARGET_DY[primary_action];
+        return col_player_walkable((void*)s, nx, ny);
+    }
+
+    int obs_slot = col_primary_obs_slot_from_action(primary_action);
+    int npc_slot = col_obs_slot_to_npc(s, obs_slot);
+    return npc_slot >= 0 && col_npc_is_live_target(&s->npcs[npc_slot]);
+}
+
+static ColoForecastLanding col_primary_action_landing_ctx(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    int primary_action
+) {
+    ColoForecastLanding landing = {
+        .valid = col_primary_action_valid(s, primary_action),
+        .land_x = s->player.x,
+        .land_y = s->player.y,
+    };
+    if (!landing.valid ||
+            (s->modifiers.draft_pending && !s->modifiers.draft_free_movement)) {
+        return landing;
+    }
+
+    Player player = s->player;
+    OsrsInteraction interaction = s->interaction;
+    int player_dest_x = s->player_dest_x;
+    int player_dest_y = s->player_dest_y;
+    ColoWalkCtx walk_ctx;
+    OsrsLosQuery los_query;
+    ColoPrimaryStepPlan primary_plan = col_primary_step_plan(
+        s, ctx, &player, &interaction, primary_action,
+        &player_dest_x, &player_dest_y, &walk_ctx, &los_query);
+    osrs_encounter_player_step(&primary_plan.input);
+    landing.land_x = player.x;
+    landing.land_y = player.y;
+    return landing;
+}
+
+static void col_build_primary_action_landings_ctx(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    ColoForecastLanding landings[COLO_PRIMARY_DIM]
+) {
+    for (int primary_action = 0;
+            primary_action < COLO_PRIMARY_DIM;
+            primary_action++) {
+        landings[primary_action] =
+            col_primary_action_landing_ctx(s, ctx, primary_action);
+    }
+}
+
 static ColoForecastLanding col_step_out_forecast_set_action_landing_ctx(
     const ColosseumState* s,
     int action_idx,

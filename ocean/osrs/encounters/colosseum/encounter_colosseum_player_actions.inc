@@ -1020,6 +1020,80 @@ static void col_player_attack_target(ColosseumState* s, int npc_slot) {
     col_player_attack_target_ctx(s, col_legacy_context(), npc_slot);
 }
 
+typedef struct {
+    OsrsPlayerStepInput input;
+    int move_action;
+} ColoPrimaryStepPlan;
+
+static ColoPrimaryStepPlan col_primary_step_plan(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    Player* player,
+    OsrsInteraction* interaction,
+    int primary_action,
+    int* player_dest_x,
+    int* player_dest_y,
+    ColoWalkCtx* walk_ctx,
+    OsrsLosQuery* los_query
+) {
+    if (primary_action < 0 || primary_action >= COLO_PRIMARY_DIM) {
+        fprintf(stderr, "colosseum primary action out of range: %d\n", primary_action);
+        abort();
+    }
+
+    int has_new_target = 0;
+    int new_target_slot = -1;
+    int move_action = 0;
+    if (primary_action > 0 && primary_action < ENCOUNTER_MOVE_ACTIONS) {
+        move_action = primary_action;
+    } else if (primary_action >= COLO_PRIMARY_ATTACK_BASE) {
+        int obs_slot = col_primary_obs_slot_from_action(primary_action);
+        int npc_slot = col_obs_slot_to_npc(s, obs_slot);
+        if (npc_slot >= 0 && s->npcs[npc_slot].active) {
+            has_new_target = 1;
+            new_target_slot = npc_slot;
+        }
+    }
+
+    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
+    if (move_action > 0 || *player_dest_x >= 0) {
+        if (*player_dest_x >= 0) move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+        else move_kind = OSRS_PLAYER_MOVE_ACTION;
+    }
+
+    *walk_ctx = (ColoWalkCtx){s, ctx};
+    *los_query = col_player_los_query(s);
+    return (ColoPrimaryStepPlan){
+        .input = {
+            .player = player,
+            .interaction = interaction,
+            .target_lookup = col_lookup_player_attack_target,
+            .target_ctx = s,
+            .has_new_target = has_new_target,
+            .new_target_slot = new_target_slot,
+            .move_kind = move_kind,
+            .move_action = move_action,
+            .dest_x = player_dest_x,
+            .dest_y = player_dest_y,
+            .arena = {
+                .collision_map = ctx->collision_map,
+                .world_offset_x = ctx->world_offset_x,
+                .world_offset_y = ctx->world_offset_y,
+                .is_walkable = col_tile_walkable,
+                .walkable_ctx = walk_ctx,
+                .extra_blocked = col_pathfind_blocked,
+                .blocked_ctx = walk_ctx,
+                .los_query = los_query,
+                .arena_base_x = COLO_ARENA_MIN_X,
+                .arena_base_y = COLO_ARENA_MIN_Y,
+                .arena_w = COLO_ARENA_WIDTH,
+                .arena_h = COLO_ARENA_HEIGHT,
+            },
+        },
+        .move_action = move_action,
+    };
+}
+
 static void col_tick_player_ctx(
     ColosseumState* s,
     ColosseumContext* ctx,
@@ -1074,69 +1148,22 @@ static void col_tick_player_ctx(
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
     int primary_act = actions[COLO_HEAD_PRIMARY];
-    if (primary_act < 0 || primary_act >= COLO_PRIMARY_DIM) {
-        fprintf(stderr, "colosseum primary action out of range: %d\n", primary_act);
-        abort();
-    }
-
-    int has_new_target = 0;
-    int new_target_slot = -1;
-    int move_act = 0;
-    if (primary_act > 0 && primary_act < ENCOUNTER_MOVE_ACTIONS) {
-        move_act = primary_act;
-    } else if (primary_act >= COLO_PRIMARY_ATTACK_BASE) {
-        int obs_slot = col_primary_obs_slot_from_action(primary_act);
-        int npc_slot = col_obs_slot_to_npc(s, obs_slot);
-        if (npc_slot >= 0 && s->npcs[npc_slot].active) {
-            has_new_target = 1;
-            new_target_slot = npc_slot;
-        }
-    }
-
-    int has_explicit_move = (move_act > 0 || s->player_dest_x >= 0);
-    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
-    if (has_explicit_move) {
-        if (s->player_dest_x >= 0) move_kind = OSRS_PLAYER_MOVE_DESTINATION;
-        else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)
-            move_kind = OSRS_PLAYER_MOVE_ACTION;
-    }
     int player_x_before_step = s->player.x;
     int player_y_before_step = s->player.y;
     int npc_flag_before_step =
         col_npc_collision_flag_at(s, player_x_before_step, player_y_before_step);
     int interaction_before_step = osrs_interaction_active(&s->interaction)
         ? s->interaction.target_slot : -1;
-    ColoWalkCtx wc = { s, ctx };
-    OsrsLosQuery los_query = col_player_los_query(s);
-    OsrsPlayerStepInput step_input = {
-        .player = &s->player,
-        .interaction = &s->interaction,
-        .target_lookup = col_lookup_player_attack_target,
-        .target_ctx = s,
-        .has_new_target = has_new_target,
-        .new_target_slot = new_target_slot,
-        .move_kind = move_kind,
-        .move_action = move_act,
-        .dest_x = &s->player_dest_x,
-        .dest_y = &s->player_dest_y,
-        .arena = {
-            .collision_map = ctx->collision_map,
-            .world_offset_x = ctx->world_offset_x,
-            .world_offset_y = ctx->world_offset_y,
-            .is_walkable = col_tile_walkable,
-            .walkable_ctx = &wc,
-            .extra_blocked = col_pathfind_blocked,
-            .blocked_ctx = &wc,
-            .los_query = &los_query,
-            .arena_base_x = COLO_ARENA_MIN_X,
-            .arena_base_y = COLO_ARENA_MIN_Y,
-            .arena_w = COLO_ARENA_WIDTH,
-            .arena_h = COLO_ARENA_HEIGHT,
-        },
-    };
-    OsrsPlayerStepResult step_result = osrs_encounter_player_step(&step_input);
-    if (has_new_target && step_result.target_slot == new_target_slot) {
-        s->player_last_interaction_target_slot = new_target_slot;
+    ColoWalkCtx walk_ctx;
+    OsrsLosQuery los_query;
+    ColoPrimaryStepPlan primary_plan = col_primary_step_plan(
+        s, ctx, &s->player, &s->interaction, primary_act,
+        &s->player_dest_x, &s->player_dest_y, &walk_ctx, &los_query);
+    OsrsPlayerStepResult step_result =
+        osrs_encounter_player_step(&primary_plan.input);
+    if (primary_plan.input.has_new_target &&
+            step_result.target_slot == primary_plan.input.new_target_slot) {
+        s->player_last_interaction_target_slot = primary_plan.input.new_target_slot;
         s->player_last_interaction_age = 0;
     }
     if (ctx->config.action_debug_log) {
@@ -1144,8 +1171,10 @@ static void col_tick_player_ctx(
             "colo_action tick=%d movement move_kind=%d move_action=%d "
             "dest=%d,%d has_new_target=%d new_target=%d interaction=%d->%d "
             "pos=%d,%d->%d,%d moved=%d explicit=%d chased=%d can_attack=%d\n",
-            s->tick, move_kind, move_act, s->player_dest_x, s->player_dest_y,
-            has_new_target, new_target_slot, interaction_before_step,
+            s->tick, primary_plan.input.move_kind, primary_plan.move_action,
+            s->player_dest_x, s->player_dest_y,
+            primary_plan.input.has_new_target, primary_plan.input.new_target_slot,
+            interaction_before_step,
             step_result.target_slot, player_x_before_step, player_y_before_step,
             s->player.x, s->player.y, step_result.moved,
             step_result.explicit_moved, step_result.chased_target,
@@ -1157,10 +1186,10 @@ static void col_tick_player_ctx(
             col_npc_collision_flag_at(s, s->player.x, s->player.y),
             col_player_walkable(s, player_x_before_step, player_y_before_step),
             col_player_walkable(s, s->player.x, s->player.y),
-            col_pathfind_blocked(&wc,
+            col_pathfind_blocked(&walk_ctx,
                 player_x_before_step + ctx->world_offset_x,
                 player_y_before_step + ctx->world_offset_y),
-            col_pathfind_blocked(&wc,
+            col_pathfind_blocked(&walk_ctx,
                 s->player.x + ctx->world_offset_x,
                 s->player.y + ctx->world_offset_y));
     }

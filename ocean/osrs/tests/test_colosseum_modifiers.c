@@ -154,7 +154,7 @@ static int forecast_action_has_event(const ColoStepOutForecastAction* action) {
 }
 
 static int sol_hazard_action_obs_index(int action, ColoSolHazardSource source) {
-    assert(action >= 0 && action < ENCOUNTER_MOVE_ACTIONS);
+    assert(action >= 0 && action < COLO_PRIMARY_DIM);
     assert(source >= 0 && source < COLO_SOL_HAZARD_SOURCE_COUNT);
     return COLO_OBS_AFTER_BOSS +
         action * COLO_SOL_HAZARD_ACTION_FEATURES + source;
@@ -3607,6 +3607,52 @@ static void test_sol_hazard_action_observation_contract(void) {
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
     CHECK("a beam converting before movement sets the molten pre-move cue",
         danger_obs[premove_base + COLO_SOL_HAZARD_MOLTEN_SAND] == 1.0f);
+
+    sol_clear_beams_and_sand(&s);
+    memset(s.sol.crystals, 0, sizeof(s.sol.crystals));
+    s.sol.crystal_count = 0;
+    s.sol.aoe_attack = COLO_SOL_AOE_NONE;
+    sol_move_player(&s, 12, 16);
+    sol_pin(&s, sol_idx, 20, 16);
+    col_refresh_current_obs_slots_ctx(&s, &ctx);
+    int sol_obs_slot = test_obs_slot_for_npc(&s, sol_idx);
+    int target_action =
+        col_primary_attack_action_for_obs_slot(sol_obs_slot);
+    int target_actions[COLO_NUM_ACTION_HEADS] = {0};
+    target_actions[COLO_HEAD_PRIMARY] = target_action;
+    ColosseumState target_step = s;
+    ColosseumContext target_step_ctx = ctx;
+    col_tick_player_ctx(&target_step, &target_step_ctx, target_actions, 0);
+    CHECK("fixture: a Sol target click chases toward the boss",
+        target_step.player.x != s.player.x ||
+        target_step.player.y != s.player.y);
+    s.sol.hazard_tile_count = 1;
+    s.sol.hazard_tile_x[0] = target_step.player.x;
+    s.sol.hazard_tile_y[0] = target_step.player.y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("a Sol target click exposes its runtime chase landing",
+        danger_obs[sol_hazard_action_obs_index(
+            target_action, COLO_SOL_HAZARD_MOLTEN_SAND)] == 1.0f);
+    CHECK("target-click chase exposure does not poison a stationary noop",
+        danger_obs[sol_hazard_action_obs_index(
+            0, COLO_SOL_HAZARD_MOLTEN_SAND)] == 0.0f);
+
+    sol_clear_beams_and_sand(&s);
+    osrs_interaction_set(&s.interaction, sol_idx);
+    int held_actions[COLO_NUM_ACTION_HEADS] = {0};
+    ColosseumState held_step = s;
+    ColosseumContext held_step_ctx = ctx;
+    col_tick_player_ctx(&held_step, &held_step_ctx, held_actions, 0);
+    CHECK("fixture: PRIMARY noop continues a held Sol chase",
+        held_step.player.x != s.player.x ||
+        held_step.player.y != s.player.y);
+    s.sol.hazard_tile_count = 1;
+    s.sol.hazard_tile_x[0] = held_step.player.x;
+    s.sol.hazard_tile_y[0] = held_step.player.y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, danger_obs);
+    CHECK("PRIMARY noop exposes the runtime landing of its held Sol chase",
+        danger_obs[sol_hazard_action_obs_index(
+            0, COLO_SOL_HAZARD_MOLTEN_SAND)] == 1.0f);
     CHECK("fixture: Sol remains live during the observation checks",
         sol_idx >= 0 && s.npcs[sol_idx].active);
 }
@@ -5615,7 +5661,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3108", COLO_NUM_OBS == 3108);
+    CHECK("obs width is 3180", COLO_NUM_OBS == 3180);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -7641,7 +7687,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3108);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3180);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
