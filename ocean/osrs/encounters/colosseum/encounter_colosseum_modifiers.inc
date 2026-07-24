@@ -285,8 +285,27 @@ static int col_mod_myopia_range(const ColosseumState* s, int base_range) {
     return r < 1 ? 1 : r;
 }
 
-static void col_mod_on_player_damaged(ColosseumState* s, int damage) {
+static void col_mod_add_doom_stack(
+    ColosseumState* s,
+    ColoDamageSource source
+) {
+    assert(source >= 0 && source < COLO_NUM_DAMAGE_SOURCES);
+    int tier = col_mod_tier(s, COLO_MOD_DOOM);
+    if (tier <= 0) return;
+    int cap = COLO_DOOM_CAP[tier];
+    if (s->doom_stacks < cap && s->doom_stacks + 1 >= cap)
+        s->last_doom_damage_source = source;
+    s->doom_stacks++;
+}
+
+static void col_mod_on_player_damaged(
+    ColosseumState* s,
+    int damage,
+    ColoDamageSource source
+) {
     if (damage <= 0) return;
+    assert(source >= 0 && source < COLO_NUM_DAMAGE_SOURCES);
+    s->last_damage_source = source;
 
     int blas = col_mod_tier(s, COLO_MOD_BLASPHEMY);
     if (blas > 0 && s->player.current_prayer > 0) {
@@ -295,7 +314,7 @@ static void col_mod_on_player_damaged(ColosseumState* s, int damage) {
         if (s->player.current_prayer < 0) s->player.current_prayer = 0;
     }
 
-    if (col_mod_active(s, COLO_MOD_DOOM)) s->doom_stacks++;
+    col_mod_add_doom_stack(s, source);
 }
 
 static int col_mod_doom_lethal(const ColosseumState* s) {
@@ -325,9 +344,13 @@ static void col_mod_tick_venom(ColosseumState* s) {
     if (s->player_venom_timer > 0) s->player_venom_timer--;
     if (s->player_venom_timer > 0) return;
     int dmg = s->player_venom;
-    col_damage_player_from(s, dmg, COLO_MANTICORE, COLO_DMG_UNPRAYABLE);
-    s->last_hit_by_type = COLO_MANTICORE;
-    col_mod_on_player_damaged(s, dmg);
+    int applied =
+        col_damage_player_from(s, dmg, COLO_MANTICORE, COLO_DMG_UNPRAYABLE);
+    if (applied > 0) {
+        s->last_hit_by_type = COLO_MANTICORE;
+        col_mod_on_player_damaged(
+            s, applied, COLO_DAMAGE_MANTICORE_VENOM);
+    }
     s->player_venom += COLO_VENOM_STEP;
     if (s->player_venom > COLO_VENOM_CAP) s->player_venom = COLO_VENOM_CAP;
     s->player_venom_timer = COLO_VENOM_INTERVAL;
@@ -347,10 +370,12 @@ static void col_mod_tick_poison(ColosseumState* s) {
     if (s->player_poison_timer > 0) s->player_poison_timer--;
     if (s->player_poison_timer > 0) return;
     int dmg = (s->player_poison + 4) / 5;
-    col_damage_player_from(s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
-    if (dmg > 0) {
+    int applied =
+        col_damage_player_from(s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
+    if (applied > 0) {
         s->last_hit_by_type = COLO_BEE_SWARM;
-        col_mod_on_player_damaged(s, dmg);
+        col_mod_on_player_damaged(
+            s, applied, COLO_DAMAGE_BEE_POISON);
     }
     s->player_poison--;
     if (s->player_poison <= 0) {
@@ -539,7 +564,7 @@ static void col_mod_add_molten_pool(
     if (col_static_blocked(x, y)) return;
     for (int i = 0; i < s->molten_count; i++) {
         if (s->molten_x[i] != x || s->molten_y[i] != y) continue;
-        s->molten_kind[i] = kind;
+        s->molten_kind[i] |= kind;
         if (lifetime == COLO_POOL_PERMANENT) s->molten_lifetime[i] = lifetime;
         s->molten_burn_timer[i] = 0;
         return;
@@ -558,40 +583,69 @@ static void col_mod_clear_wave_end_pools(ColosseumState* s) {
     int out = 0;
     for (int i = 0; i < s->molten_count; i++) {
         if (s->molten_lifetime[i] != COLO_POOL_PERMANENT) continue;
+        assert(s->molten_kind[i] & COLO_POOL_REENTRY);
         if (out != i) {
             s->molten_x[out] = s->molten_x[i];
             s->molten_y[out] = s->molten_y[i];
-            s->molten_kind[out] = s->molten_kind[i];
             s->molten_lifetime[out] = s->molten_lifetime[i];
             s->molten_burn_timer[out] = s->molten_burn_timer[i];
         }
+        s->molten_kind[out] = COLO_POOL_REENTRY;
         out++;
     }
     s->molten_count = out;
 }
 
-static int col_mod_molten_pool_damage(ColosseumState* s, ColoMoltenPoolKind kind) {
-    if (kind == COLO_POOL_REENTRY)
-        return 1 + encounter_rand_int(&s->rng_state, COLO_REENTRY_MOLTEN_MAX_HIT);
-    return COLO_MOLTEN_SAND_MIN_HIT
-        + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
+static int col_mod_molten_pool_damage(ColosseumState* s) {
+    return 1 + encounter_rand_int(
+        &s->rng_state, COLO_REENTRY_MOLTEN_MAX_HIT);
 }
 
 static void col_mod_tick_molten_pools(ColosseumState* s) {
     int burned = 0;
     for (int i = 0; i < s->molten_count; i++) {
-        int reentry = s->molten_kind[i] == COLO_POOL_REENTRY;
+        int reentry = s->molten_kind[i] & COLO_POOL_REENTRY;
+        int volatility = s->molten_kind[i] & COLO_POOL_VOLATILITY;
+        assert(reentry || volatility);
         int player_on_pool = s->player.x == s->molten_x[i] && s->player.y == s->molten_y[i];
-        if (!burned && player_on_pool && (!reentry || s->molten_burn_timer[i] == 0)) {
-            int dmg = col_mod_molten_pool_damage(s, (ColoMoltenPoolKind)s->molten_kind[i]);
-            if (reentry) s->molten_burn_timer[i] = COLO_REENTRY_MOLTEN_BURN_INTERVAL - 1;
-            col_damage_player_from(s, dmg, COLO_JAVELIN_COLOSSUS, COLO_DMG_UNPRAYABLE);
-            s->last_hit_by_type = s->last_hit_by_type < 0 ? COLO_JAVELIN_COLOSSUS : s->last_hit_by_type;
-            col_mod_on_player_damaged(s, dmg);
+        if (!burned && player_on_pool && s->molten_burn_timer[i] == 0) {
+            int dmg = col_mod_molten_pool_damage(s);
+            s->molten_burn_timer[i] =
+                COLO_REENTRY_MOLTEN_BURN_INTERVAL - 1;
+            int hitpoints_before = s->player.current_hitpoints;
+            int applied = col_damage_player_from(
+                s,
+                dmg,
+                reentry && !volatility ? COLO_JAVELIN_COLOSSUS : -1,
+                COLO_DMG_UNPRAYABLE);
+            if (reentry && volatility) {
+                s->log.javelin_damage_by_source[
+                    COLO_JAVELIN_DAMAGE_REENTRY_VOLATILITY_POOL] +=
+                    (float)(hitpoints_before - s->player.current_hitpoints);
+                if (applied > 0) {
+                    s->last_hit_by_type = -1;
+                    col_mod_on_player_damaged(
+                        s, applied, COLO_DAMAGE_REENTRY_VOLATILITY_POOL);
+                }
+            } else if (reentry) {
+                s->log.javelin_damage_by_source[COLO_JAVELIN_DAMAGE_REENTRY_POOL] +=
+                    (float)(hitpoints_before - s->player.current_hitpoints);
+                if (applied > 0) {
+                    s->last_hit_by_type = COLO_JAVELIN_COLOSSUS;
+                    col_mod_on_player_damaged(
+                        s, applied, COLO_DAMAGE_REENTRY_POOL);
+                }
+            } else {
+                if (applied > 0) {
+                    s->last_hit_by_type = -1;
+                    col_mod_on_player_damaged(
+                        s, applied, COLO_DAMAGE_VOLATILITY_POOL);
+                }
+            }
             burned = 1;
             continue;
         }
-        if (reentry && s->molten_burn_timer[i] > 0)
+        if (s->molten_burn_timer[i] > 0)
             s->molten_burn_timer[i]--;
     }
 }
@@ -636,11 +690,13 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
     int tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
     if (tier == 0) return;
     if (col_volatility_player_in_blast(s, x, y, size, tier)) {
-        int vol_dmg = col_scale_incoming_damage(s, COLO_VOLATILITY_MAX_HIT);
-        encounter_damage_player(&s->player, vol_dmg, &s->tick_scratch.damage_received);
-
-        s->tick_scratch.landed_unprayable_damage += (float)vol_dmg;
-        col_mod_on_player_damaged(s, vol_dmg);
+        int applied = col_damage_player_from(
+            s, COLO_VOLATILITY_MAX_HIT, -1, COLO_DMG_UNPRAYABLE);
+        if (applied > 0) {
+            s->last_hit_by_type = -1;
+            col_mod_on_player_damaged(
+                s, applied, COLO_DAMAGE_VOLATILITY_EXPLOSION);
+        }
     }
     if (tier >= 3)
         col_mod_add_molten_pool(
@@ -762,10 +818,12 @@ static void col_mod_tick_bees(ColosseumState* s) {
         if (col_bee_swarm_contacts_player(s, npc)) {
             col_mod_apply_bee_poison(s);
             int dmg = col_bee_swarm_contact_damage(s);
-            col_damage_player_from(s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
-            if (dmg > 0) {
+            int applied = col_damage_player_from(
+                s, dmg, COLO_BEE_SWARM, COLO_DMG_UNPRAYABLE);
+            if (applied > 0) {
                 s->last_hit_by_type = COLO_BEE_SWARM;
-                col_mod_on_player_damaged(s, dmg);
+                col_mod_on_player_damaged(
+                    s, applied, COLO_DAMAGE_BEE_CONTACT);
             }
         }
     }
@@ -830,12 +888,14 @@ static void col_mod_apply_solarflare_contact(ColosseumState* s, int tier) {
         int x, y;
         col_solarflare_tile(s, p, s->solarflare.step, &x, &y);
         if (x != s->player.x || y != s->player.y) continue;
-        int dmg = encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
-        dmg = col_scale_incoming_damage(s, dmg);
-        encounter_damage_player(&s->player, dmg, &s->tick_scratch.damage_received);
-
-        s->tick_scratch.landed_unprayable_damage += (float)dmg;
-        if (dmg > 0) col_mod_on_player_damaged(s, dmg);
+        int dmg =
+            encounter_rand_int(&s->rng_state, col_mod_solarflare_max_hit(tier) + 1);
+        int applied =
+            col_damage_player_from(s, dmg, -1, COLO_DMG_UNPRAYABLE);
+        if (applied > 0) {
+            s->last_hit_by_type = -1;
+            col_mod_on_player_damaged(s, applied, COLO_DAMAGE_SOLARFLARE);
+        }
         if (tier >= 3) s->player.prayer = PRAYER_NONE;
     }
 }
@@ -872,7 +932,8 @@ static void col_mod_tick_solarflare(ColosseumState* s) {
 
 static void col_modifiers_tick(ColosseumState* s) {
 #ifdef COLO_PROFILE_ENABLED
-    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    int col_prof_enabled =
+        COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
 #endif
     col_mod_tick_bees(s);
@@ -888,6 +949,7 @@ static void col_modifiers_tick(ColosseumState* s) {
 
 static void col_modifiers_on_wave_spawn(ColosseumState* s) {
     s->doom_stacks = 0;
+    s->last_doom_damage_source = -1;
     col_mod_clear_wave_end_pools(s);
     col_mod_apply_frailty_hp(s);
     col_mod_sync_bees(s);

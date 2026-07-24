@@ -320,6 +320,233 @@ static void exact_prepare_custom(
     exact_refresh_geometry(s, ctx);
 }
 
+typedef struct {
+    ColoWalkCtx walk;
+    int blocker_count;
+    int blocker_x[16];
+    int blocker_y[16];
+} ExactAttackRouteContext;
+
+static int exact_attack_route_walkable(void* ctx, int x, int y) {
+    ExactAttackRouteContext* route_ctx = (ExactAttackRouteContext*)ctx;
+    return col_tile_walkable(&route_ctx->walk, x, y);
+}
+
+static int exact_attack_route_blocked(void* ctx, int abs_x, int abs_y) {
+    ExactAttackRouteContext* route_ctx = (ExactAttackRouteContext*)ctx;
+    if (col_pathfind_blocked(&route_ctx->walk, abs_x, abs_y)) return 1;
+    int x = abs_x - route_ctx->walk.ctx->world_offset_x;
+    int y = abs_y - route_ctx->walk.ctx->world_offset_y;
+    for (int i = 0; i < route_ctx->blocker_count; i++) {
+        if (route_ctx->blocker_x[i] == x &&
+                route_ctx->blocker_y[i] == y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static EncounterAttackRouteLanding exact_attack_route_runtime_landing(
+    const ColosseumState* s,
+    const ColosseumContext* ctx,
+    ExactAttackRouteContext* route_ctx,
+    int target_x,
+    int target_y,
+    int target_size,
+    int attack_range,
+    const OsrsLosQuery* los_query
+) {
+    Player player = s->player;
+    encounter_chase_attack_target(
+        &player,
+        target_x,
+        target_y,
+        target_size,
+        attack_range,
+        ctx->collision_map,
+        ctx->world_offset_x,
+        ctx->world_offset_y,
+        exact_attack_route_walkable,
+        route_ctx,
+        exact_attack_route_blocked,
+        route_ctx,
+        los_query,
+        COLO_ARENA_MIN_X,
+        COLO_ARENA_MIN_Y,
+        COLO_ARENA_WIDTH,
+        COLO_ARENA_HEIGHT);
+    return (EncounterAttackRouteLanding){
+        .land_x = player.x,
+        .land_y = player.y,
+    };
+}
+
+static int exact_attack_route_property_scenario(
+    const char* scenario,
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    ExactAttackRouteContext* route_ctx
+) {
+    EncounterArenaAttackRouteField field;
+    encounter_build_arena_attack_route_field(
+        &field,
+        ctx->collision_map,
+        ctx->world_offset_x,
+        ctx->world_offset_y,
+        s->player.x,
+        s->player.y,
+        exact_attack_route_walkable,
+        route_ctx,
+        exact_attack_route_blocked,
+        route_ctx,
+        COLO_ARENA_MIN_X,
+        COLO_ARENA_MIN_Y,
+        COLO_ARENA_WIDTH,
+        COLO_ARENA_HEIGHT);
+    OsrsLosQuery los_query = col_player_los_query(s);
+    static const int target_sizes[] = {1, 2, 5};
+    static const int attack_ranges[] = {1, 3, 6, 10};
+    int checks = 0;
+
+    for (int target_y = COLO_ARENA_MIN_Y - 1;
+            target_y <= COLO_ARENA_MAX_Y + 1;
+            target_y += 5) {
+        for (int target_x = COLO_ARENA_MIN_X - 1;
+                target_x <= COLO_ARENA_MAX_X + 1;
+                target_x += 4) {
+            for (size_t size_idx = 0;
+                    size_idx < sizeof(target_sizes) / sizeof(target_sizes[0]);
+                    size_idx++) {
+                for (size_t range_idx = 0;
+                        range_idx < sizeof(attack_ranges) / sizeof(attack_ranges[0]);
+                        range_idx++) {
+                    int target_size = target_sizes[size_idx];
+                    int attack_range = attack_ranges[range_idx];
+                    EncounterAttackRouteLanding expected =
+                        exact_attack_route_runtime_landing(
+                            s, ctx, route_ctx,
+                            target_x, target_y, target_size, attack_range,
+                            &los_query);
+                    EncounterAttackRouteLanding actual =
+                        encounter_arena_attack_route_landing(
+                            &field,
+                            target_x, target_y, target_size, attack_range,
+                            &los_query);
+                    if (actual.land_x != expected.land_x ||
+                            actual.land_y != expected.land_y) {
+                        fprintf(stderr,
+                            "attack route mismatch scenario=%s player=(%d,%d) target=(%d,%d,%d) range=%d field=(%d,%d) runtime=(%d,%d)\n",
+                            scenario,
+                            s->player.x,
+                            s->player.y,
+                            target_x,
+                            target_y,
+                            target_size,
+                            attack_range,
+                            actual.land_x,
+                            actual.land_y,
+                            expected.land_x,
+                            expected.land_y);
+                        abort();
+                    }
+                    checks++;
+                }
+            }
+        }
+    }
+    return checks;
+}
+
+static void exact_attack_route_held_selftest(void) {
+    ColosseumState s;
+    ColosseumContext ctx;
+    exact_prepare_custom(&s, &ctx, 0xA772u, 16, 16);
+    int target_slot = col_spawn_npc_at(
+        &s, COLO_JAVELIN_COLOSSUS, COLO_ARENA_MAX_X - 3, 16);
+    exact_refresh_geometry(&s, &ctx);
+    osrs_interaction_set(&s.interaction, target_slot);
+
+    ExactAttackRouteContext route_ctx = {
+        .walk = {&s, &ctx},
+    };
+    EncounterArenaAttackRouteField field;
+    encounter_build_arena_attack_route_field(
+        &field,
+        ctx.collision_map,
+        ctx.world_offset_x,
+        ctx.world_offset_y,
+        s.player.x,
+        s.player.y,
+        exact_attack_route_walkable,
+        &route_ctx,
+        exact_attack_route_blocked,
+        &route_ctx,
+        COLO_ARENA_MIN_X,
+        COLO_ARENA_MIN_Y,
+        COLO_ARENA_WIDTH,
+        COLO_ARENA_HEIGHT);
+    OsrsAttackTarget target;
+    assert(col_lookup_player_attack_target(&s, target_slot, &target));
+    OsrsLosQuery los_query = col_player_los_query(&s);
+    EncounterAttackRouteLanding actual =
+        encounter_arena_attack_route_landing(
+            &field,
+            target.x,
+            target.y,
+            target.size,
+            target.attack_range,
+            &los_query);
+    ColoForecastLanding expected =
+        col_primary_action_landing_ctx(&s, &ctx, 0);
+    if (actual.land_x != expected.land_x ||
+            actual.land_y != expected.land_y) {
+        fprintf(stderr,
+            "held attack route mismatch field=(%d,%d) runtime=(%d,%d)\n",
+            actual.land_x,
+            actual.land_y,
+            expected.land_x,
+            expected.land_y);
+        abort();
+    }
+}
+
+static void exact_attack_route_property_selftest(void) {
+    ColosseumState s;
+    ColosseumContext ctx;
+    exact_prepare_custom(&s, &ctx, 0xA771u, 16, 16);
+    ExactAttackRouteContext route_ctx = {
+        .walk = {&s, &ctx},
+    };
+    int checks = exact_attack_route_property_scenario(
+        "open-arena", &s, &ctx, &route_ctx);
+
+    route_ctx.blocker_count = 8;
+    int blocker_x[] = {14, 15, 16, 17, 18, 17, 16, 15};
+    int blocker_y[] = {16, 15, 14, 15, 16, 17, 18, 17};
+    memcpy(route_ctx.blocker_x, blocker_x, sizeof(blocker_x));
+    memcpy(route_ctx.blocker_y, blocker_y, sizeof(blocker_y));
+    checks += exact_attack_route_property_scenario(
+        "dynamic-blockers", &s, &ctx, &route_ctx);
+
+    route_ctx.blocker_count = 0;
+    s.wave = COLO_WAVE_BOSS;
+    s.sol.started = 1;
+    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
+    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
+    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
+    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
+    s.player.x = COLO_BOSS_ARENA_MIN_X + 1;
+    s.player.y = COLO_BOSS_ARENA_MIN_Y + 1;
+    exact_refresh_geometry(&s, &ctx);
+    checks += exact_attack_route_property_scenario(
+        "sol-clamp", &s, &ctx, &route_ctx);
+    exact_attack_route_held_selftest();
+
+    printf(
+        "colosseum attack route property selftest PASS: %d target queries across 3 fields and held target\n",
+        checks);
+}
+
 static int exact_primary_action_landing_selftest_one_state(
     const char* scenario,
     ColosseumState* s,
@@ -661,17 +888,23 @@ static int exact_compare_files(const char* expected_path, const char* actual_pat
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && strcmp(argv[1], "--attack-route-selftest") == 0) {
+        exact_attack_route_property_selftest();
+        return 0;
+    }
     if (argc != 3 ||
             (strcmp(argv[1], "--write-golden") != 0 &&
              strcmp(argv[1], "--compare") != 0)) {
         fprintf(stderr,
-            "usage: %s --write-golden DIR | --compare DIR\n", argv[0]);
+            "usage: %s --attack-route-selftest | --write-golden DIR | --compare DIR\n",
+            argv[0]);
         return 2;
     }
 
     col_static_los_table_selftest();
     col_static_footprint_table_selftest();
     col_step_out_forecast_landing_selftest();
+    exact_attack_route_property_selftest();
     exact_primary_action_landing_selftest();
 
     char fixture_path[1024];

@@ -219,6 +219,13 @@ static float col_inventory_heal_remaining(const ColosseumState* s) {
 static void col_record_death_attribution(ColosseumState* s) {
     int kt = s->last_hit_by_type;
     if (kt >= 0 && kt < COLO_NUM_NPC_TYPES) s->log.death_by_type[kt] += 1.0f;
+    if (s->last_damage_source >= 0 &&
+            s->last_damage_source < COLO_NUM_DAMAGE_SOURCES)
+        s->log.death_by_source[s->last_damage_source] += 1.0f;
+    if (col_mod_doom_lethal(s) &&
+            s->last_doom_damage_source >= 0 &&
+            s->last_doom_damage_source < COLO_NUM_DAMAGE_SOURCES)
+        s->log.doom_death_by_source[s->last_doom_damage_source] += 1.0f;
     s->log.death_fatal_damage += s->tick_scratch.damage_received;
     if (__builtin_popcount(s->tick_scratch.styles_faced_mask) >= 2)
         s->log.death_on_conflict_tick += 1.0f;
@@ -238,11 +245,19 @@ static void col_classify_tick_offpray(ColosseumState* s) {
         s->log.offpray_damage_solo += d;
 }
 
-static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
-    ColosseumState* s = (ColosseumState*)state;
-    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
-    if (s->episode_over) return;
+typedef struct {
+    int player_phase_reached;
+    int spawn_wave_now;
+    int in_wave_gap;
+    int in_ready_gap;
+} ColoPrePlayerPhase;
 
+static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    const int* actions
+) {
+    ColoPrePlayerPhase phase = {0};
     s->reward = 0.0f;
     s->tick_scratch = (ColoTickScratch){0};
 
@@ -270,7 +285,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
-        return;
+        return phase;
     }
     col_player_pretick(s, ctx, actions);
     if (ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
@@ -279,26 +294,27 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     if (s->wave_ready_delay > 0) s->wave_ready_delay--;
     if (s->wave_attack_delay > 0) s->wave_attack_delay--;
 
-    int spawn_wave_now = 0;
     if (s->wave_spawn_delay > 0) {
         s->wave_spawn_delay--;
-        if (s->wave_spawn_delay == 0) spawn_wave_now = 1;
+        if (s->wave_spawn_delay == 0) phase.spawn_wave_now = 1;
     }
 
-    if (spawn_wave_now) {
+    if (phase.spawn_wave_now) {
         s->wave = s->wave_spawn_target;
         col_spawn_wave(s);
     }
 
-    int in_wave_gap = (s->wave_spawn_delay > 0 || spawn_wave_now ||
-                       s->modifiers.draft_pending);
-    int in_ready_gap = s->wave_ready_delay > 0;
+    phase.in_wave_gap =
+        s->wave_spawn_delay > 0 ||
+        phase.spawn_wave_now ||
+        s->modifiers.draft_pending;
+    phase.in_ready_gap = s->wave_ready_delay > 0;
 
     col_resolve_player_projectiles_on_npcs_ctx(s, ctx);
     col_resolve_player_pending_hits_ctx(s, ctx);
     col_tick_npc_death_lingers(s);
 
-    if (!in_wave_gap && !in_ready_gap) {
+    if (!phase.in_wave_gap && !phase.in_ready_gap) {
 
         if (s->wave_attack_delay == 0 && s->warband_cycle_anchor < 0)
             s->warband_cycle_anchor = s->tick - 1;
@@ -323,16 +339,31 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
-        return;
+        return phase;
     }
+    phase.player_phase_reached = 1;
+    return phase;
+}
 
-    int can_player_attack = !in_wave_gap;
+static void col_step_ctx(EncounterState* state, EncounterContext* context, const int* actions) {
+    ColosseumState* s = (ColosseumState*)state;
+    ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
+    if (s->episode_over) return;
+
+    ColoPrePlayerPhase phase =
+        col_advance_pre_player_phase_ctx(s, ctx, actions);
+    if (!phase.player_phase_reached) return;
+
+    int can_player_attack = !phase.in_wave_gap;
     int px = s->player.x, py = s->player.y;
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
 
-    if (!in_wave_gap && !in_ready_gap && s->wave_attack_delay == 0)
+    if (!phase.in_wave_gap &&
+            !phase.in_ready_gap &&
+            s->wave_attack_delay == 0) {
         col_warband_attack_phase(s, ctx);
+    }
 
     s->reward = col_compute_reward_ctx(s, ctx);
 
@@ -351,8 +382,11 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         goto finish_step;
     }
 
-    if (spawn_wave_now || s->wave_spawn_delay > 0 || s->modifiers.draft_pending)
+    if (phase.spawn_wave_now ||
+            s->wave_spawn_delay > 0 ||
+            s->modifiers.draft_pending) {
         goto finish_step;
+    }
 
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         if (col_npc_is_live_enemy(&s->npcs[i])) {

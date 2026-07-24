@@ -16,10 +16,12 @@
 #define TEST_NPC_TELLS_OFFSET 26
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
 #define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
+#define TEST_MOD_OBS_DOOM_PENDING (TEST_MOD_HAZARD_BASE + 3)
 #define TEST_MOD_OBS_VENOM_TIMER (TEST_MOD_HAZARD_BASE + 6)
 #define TEST_MOD_OBS_SOLARFLARE (TEST_MOD_HAZARD_BASE + 10)
 #define TEST_MOD_OBS_MOLTEN (TEST_MOD_HAZARD_BASE + 18)
 #define TEST_MOD_OBS_VOLATILITY (TEST_MOD_HAZARD_BASE + 30)
+#define TEST_MOD_OBS_PREMOVE_UNAVOIDABLE (TEST_MOD_HAZARD_BASE + 38)
 
 static EncounterLoadoutStats test_col_live_stats_for_set(
     const ColosseumState* s,
@@ -158,6 +160,22 @@ static int sol_hazard_action_obs_index(int action, ColoSolHazardSource source) {
     assert(source >= 0 && source < COLO_SOL_HAZARD_SOURCE_COUNT);
     return COLO_OBS_AFTER_BOSS +
         action * COLO_SOL_HAZARD_ACTION_FEATURES + source;
+}
+
+static int primary_env_hazard_action_obs_index(int action) {
+    assert(action >= 0 && action < COLO_PRIMARY_DIM);
+    return COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + action;
+}
+
+static int chase_threat_obs_index(int primary_action, int feature) {
+    assert(feature >= 0 && feature < COLO_CHASE_THREAT_ACTION_FEATURES);
+    int chase_action = primary_action == 0
+        ? 0
+        : primary_action - ENCOUNTER_MOVE_ACTIONS + 1;
+    assert(chase_action >= 0 && chase_action < COLO_CHASE_THREAT_ACTIONS);
+    return COLO_OBS_AFTER_STEP_OUT_FORECAST +
+        chase_action * COLO_CHASE_THREAT_ACTION_FEATURES +
+        feature;
 }
 
 static int test_obs_slot_for_npc(const ColosseumState* s, int npc_idx) {
@@ -1213,6 +1231,16 @@ static void test_reentry_sand_tiles(void) {
     col_mod_volatility_on_death(&s, 20, 16, 1);
     CHECK("Volatility T3 leaves a temporary Volatility pool at the centre",
         s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_VOLATILITY);
+    s.player.x = 20;
+    s.player.y = 16;
+    s.player.current_hitpoints = 99;
+    float javelin_typeless_before =
+        s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS];
+    col_mod_tick_molten_pools(&s);
+    CHECK("Volatility pool damage is not attributed to Javelin",
+        s.player.current_hitpoints < 99 &&
+        s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS] ==
+            javelin_typeless_before);
     col_modifiers_on_wave_spawn(&s);
     CHECK("the Volatility (temporary) pool clears at wave end", s.molten_count == 0);
 }
@@ -1677,6 +1705,10 @@ static void test_modifier_hazard_obs_fixes(void) {
     s.molten_x[3] = 10; s.molten_y[3] = 13;
     s.molten_x[4] = 8; s.molten_y[4] = 8;
     s.molten_x[5] = 10; s.molten_y[5] = 14;
+    for (int pool = 0; pool < s.molten_count; pool++) {
+        s.molten_kind[pool] = COLO_POOL_VOLATILITY;
+        s.molten_lifetime[pool] = COLO_POOL_TEMPORARY;
+    }
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     int molten = TEST_MOD_OBS_MOLTEN;
     CHECK("modifier molten obs lists the nearest pool first",
@@ -1722,6 +1754,15 @@ static void test_modifier_hazard_obs_fixes(void) {
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("Doom lethality obs flips at cap minus one",
         obs[TEST_MOD_OBS_DOOM_LETHAL] == 1.0f);
+    s.molten_count = 1;
+    s.molten_x[0] = s.player.x;
+    s.molten_y[0] = s.player.y;
+    s.molten_kind[0] = COLO_POOL_REENTRY;
+    s.molten_lifetime[0] = COLO_POOL_PERMANENT;
+    s.molten_burn_timer[0] = 1;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("Doom pending ignores a Reentry pool on burn cooldown",
+        obs[TEST_MOD_OBS_DOOM_PENDING] == 0.0f);
 
     s.player_venom = COLO_VENOM_START;
     s.player_venom_timer = COLO_VENOM_INTERVAL / 2;
@@ -3657,6 +3698,231 @@ static void test_sol_hazard_action_observation_contract(void) {
         sol_idx >= 0 && s.npcs[sol_idx].active);
 }
 
+static void test_primary_environment_hazard_action_observation_contract(void) {
+    printf("test_primary_environment_hazard_action_observation_contract\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 307, 17, 16);
+    static float obs[COLO_NUM_OBS];
+    int walk_east = forecast_move_action_for_delta(1, 0);
+
+    s.molten_count = 5;
+    const int pool_x[5] = {16, 17, 16, 17, 18};
+    const int pool_y[5] = {16, 15, 15, 17, 16};
+    for (int pool = 0; pool < s.molten_count; pool++) {
+        s.molten_x[pool] = pool_x[pool];
+        s.molten_y[pool] = pool_y[pool];
+        s.molten_kind[pool] = COLO_POOL_REENTRY;
+        s.molten_lifetime[pool] = COLO_POOL_PERMANENT;
+        s.molten_burn_timer[pool] = 0;
+    }
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("the fifth permanent pool still marks its movement landing",
+        obs[primary_env_hazard_action_obs_index(walk_east)] == 1.0f);
+
+    s.molten_count = 0;
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_tile_x = 18;
+    jv->skyfall_tile_y = 16;
+    jv->skyfall_timer = 2;
+    jv->skyfall_damage = 20;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("a skyfall landing next tick marks the selected landing",
+        obs[primary_env_hazard_action_obs_index(walk_east)] == 1.0f);
+
+    s.modifiers.active_mask |= (1u << COLO_MOD_REENTRY);
+    s.modifiers.tier[COLO_MOD_REENTRY] = 3;
+    jv->skyfall_timer = 1;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("an imminent skyfall exposes the Reentry pool created before movement",
+        obs[primary_env_hazard_action_obs_index(walk_east)] == 1.0f);
+
+    geo_clear_npcs(&s);
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 24, 16);
+    s.npcs[0].stun_timer = 100;
+    col_refresh_current_obs_slots_ctx(&s, &ctx);
+    int obs_slot = test_obs_slot_for_npc(&s, 0);
+    int target_action = col_primary_attack_action_for_obs_slot(obs_slot);
+    ColoForecastLanding target_landing =
+        col_primary_action_landing_ctx(&s, &ctx, target_action);
+    CHECK("fixture: the target action produces a chase landing",
+        target_landing.valid &&
+        (target_landing.land_x != s.player.x ||
+            target_landing.land_y != s.player.y));
+    s.molten_count = 1;
+    s.molten_x[0] = target_landing.land_x;
+    s.molten_y[0] = target_landing.land_y;
+    s.molten_kind[0] = COLO_POOL_REENTRY;
+    s.molten_lifetime[0] = COLO_POOL_PERMANENT;
+    s.molten_burn_timer[0] = 0;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("a target-click chase sees the pool on its runtime landing",
+        obs[primary_env_hazard_action_obs_index(target_action)] == 1.0f);
+
+    osrs_interaction_set(&s.interaction, 0);
+    ColoForecastLanding held_landing =
+        col_primary_action_landing_ctx(&s, &ctx, 0);
+    s.molten_x[0] = held_landing.land_x;
+    s.molten_y[0] = held_landing.land_y;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("PRIMARY noop sees the pool on its held-chase landing",
+        obs[primary_env_hazard_action_obs_index(0)] == 1.0f);
+}
+
+static void test_primary_environment_hazard_phase_order(void) {
+    printf("test_primary_environment_hazard_phase_order\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    static float obs[COLO_NUM_OBS];
+    init_forecast_test_state(&s, &ctx, 309, 17, 16);
+    s.modifiers.active_mask |=
+        (1u << COLO_MOD_REENTRY) |
+        (1u << COLO_MOD_DOOM);
+    s.modifiers.tier[COLO_MOD_REENTRY] = 1;
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_tile_x = s.player.x;
+    jv->skyfall_tile_y = s.player.y;
+    jv->skyfall_timer = 1;
+    jv->skyfall_damage = 20;
+
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("imminent Skyfall plus its new pool expose two pre-move Doom hits",
+        fabsf(obs[TEST_MOD_OBS_DOOM_PENDING] - 0.4f) < 0.000001f);
+    CHECK("the newly created pool is unavoidable before movement",
+        obs[TEST_MOD_OBS_PREMOVE_UNAVOIDABLE] == 1.0f);
+    CHECK("staying on a pool that burns before movement forecasts its next burn at tick two",
+        fabsf(obs[primary_env_hazard_action_obs_index(0)] - 0.75f) <
+            0.000001f);
+
+    jv->skyfall_damage = 0;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("zero-damage Skyfall still exposes the guaranteed new-pool hit",
+        fabsf(obs[TEST_MOD_OBS_DOOM_PENDING] - 0.2f) < 0.000001f &&
+        obs[TEST_MOD_OBS_PREMOVE_UNAVOIDABLE] == 1.0f);
+
+    init_forecast_test_state(&s, &ctx, 310, 17, 16);
+    s.modifiers.active_mask |=
+        (1u << COLO_MOD_REENTRY) |
+        (1u << COLO_MOD_DOOM);
+    s.modifiers.tier[COLO_MOD_REENTRY] = 2;
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_tile_x = 24;
+    jv->skyfall_tile_y = 20;
+    jv->skyfall_timer = 1;
+    jv->skyfall_damage = 0;
+    s.molten_count = 1;
+    s.molten_x[0] = jv->skyfall_tile_x - 1;
+    s.molten_y[0] = jv->skyfall_tile_y - 1;
+    s.molten_kind[0] = COLO_POOL_REENTRY;
+    s.molten_lifetime[0] = COLO_POOL_PERMANENT;
+
+    ColosseumState pool_forecast;
+    col_build_post_premove_molten_forecast(&s, &pool_forecast);
+    int fallback_pool = -1;
+    for (int pool = 0; pool < pool_forecast.molten_count; pool++) {
+        int requested =
+            pool_forecast.molten_x[pool] == jv->skyfall_tile_x &&
+            pool_forecast.molten_y[pool] == jv->skyfall_tile_y;
+        int occupied_southwest =
+            pool_forecast.molten_x[pool] == jv->skyfall_tile_x - 1 &&
+            pool_forecast.molten_y[pool] == jv->skyfall_tile_y - 1;
+        if (!requested && !occupied_southwest) fallback_pool = pool;
+    }
+    CHECK("fixture: blocked Reentry southwest tile selects a fallback",
+        fallback_pool >= 0);
+    s.player.x = pool_forecast.molten_x[fallback_pool];
+    s.player.y = pool_forecast.molten_y[fallback_pool];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("the actual RNG-selected Reentry fallback is present in action hazard obs",
+        fabsf(obs[primary_env_hazard_action_obs_index(0)] - 0.75f) <
+            0.000001f &&
+        obs[TEST_MOD_OBS_PREMOVE_UNAVOIDABLE] == 1.0f);
+}
+
+static void test_primary_target_landing_uses_post_npc_position(void) {
+    printf("test_primary_target_landing_uses_post_npc_position\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 311, 10, 16);
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 12, 16);
+    s.npcs[0].attack_timer = 8;
+    s.wave_ready_delay = 0;
+    s.wave_attack_delay = 0;
+    s.wave_spawn_delay = 0;
+    s.modifiers.draft_pending = 0;
+    col_rebuild_player_collision_flags(&s);
+    col_refresh_current_obs_slots_ctx(&s, &ctx);
+    int obs_slot = test_obs_slot_for_npc(&s, 0);
+    int target_action = col_primary_attack_action_for_obs_slot(obs_slot);
+
+    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    col_build_primary_action_landings_ctx(&s, &ctx, landings);
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    actions[COLO_HEAD_PRIMARY] = target_action;
+    ColosseumState runtime = s;
+    ColosseumContext runtime_ctx = ctx;
+    col_step_ctx(
+        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
+
+    CHECK("fixture: the berserker moves into melee range before the player action",
+        (runtime.npcs[0].x != s.npcs[0].x ||
+         runtime.npcs[0].y != s.npcs[0].y) &&
+        encounter_dist_to_npc(
+            s.player.x,
+            s.player.y,
+            runtime.npcs[0].x,
+            runtime.npcs[0].y,
+            col_npc_effective_size(&runtime.npcs[0])) == 1);
+    CHECK("target landing matches the full runtime phase order",
+        landings[target_action].valid &&
+        landings[target_action].land_x == runtime.player.x &&
+        landings[target_action].land_y == runtime.player.y &&
+        runtime.player.x == s.player.x &&
+        runtime.player.y == s.player.y);
+}
+
+static void test_solarflare_action_forecast_phase_order(void) {
+    printf("test_solarflare_action_forecast_phase_order\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 312, 17, 16);
+    s.modifiers.active_mask |= (1u << COLO_MOD_SOLARFLARE);
+    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;
+    s.solarflare = (ColoSolarflareOrb){
+        .active = 1,
+        .step = 3,
+        .move_timer = 1,
+    };
+    int next_x, next_y;
+    col_solarflare_tile(&s, 0, 4, &next_x, &next_y);
+    s.player.x = next_x;
+    s.player.y = next_y;
+    ColoForecastSolarflare pre = {
+        .pillar = 0,
+        .tier = 2,
+        .orb = s.solarflare,
+    };
+    CHECK("Solarflare tick zero evaluates the pre-move player tile",
+        col_forecast_solarflare_contact_tick(
+            &s, &pre, next_x + 1, next_y, 2) == 0);
+
+    s.player.x = next_x + 1;
+    s.player.y = next_y;
+    CHECK("a landing on the old pre-move orb tile is not labeled tick zero",
+        col_forecast_solarflare_contact_tick(
+            &s, &pre, next_x, next_y, 2) != 0);
+}
+
 static void test_sol_adjacency_gate_and_kiting(void) {
     printf("test_sol_adjacency_gate_and_kiting\n");
     ColosseumContext ctx;
@@ -5519,6 +5785,165 @@ static void test_total_damage_by_type_captures_typeless(void) {
         s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS] == typeless_before + 17.0f);
 }
 
+static void test_javelin_and_doom_damage_source_contract(void) {
+    printf("test_javelin_and_doom_damage_source_contract\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 2325, 17, 16);
+
+    EncounterPendingHit basic = {
+        .active = 1,
+        .damage = 11,
+        .ticks_remaining = 1,
+        .attack_style = ATTACK_STYLE_RANGED,
+        .source_npc_type = COLO_JAVELIN_COLOSSUS,
+        .source_npc_slot = -1,
+    };
+    encounter_pending_hit_queue_push(
+        &s.player_pending_hits, basic, "test-javelin", s.tick, -1,
+        COLO_JAVELIN_COLOSSUS);
+    col_resolve_player_pending_hits_ctx(&s, &ctx);
+    CHECK("basic ranged damage has its own Javelin source counter",
+        s.log.javelin_damage_by_source[COLO_JAVELIN_DAMAGE_BASIC_RANGED] ==
+            11.0f);
+    CHECK("basic ranged damage has its own fatal-source identity",
+        s.last_damage_source == COLO_DAMAGE_JAVELIN_BASIC_RANGED);
+
+    col_init_npc(&s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->skyfall_pending = 1;
+    jv->skyfall_tile_x = s.player.x;
+    jv->skyfall_tile_y = s.player.y;
+    jv->skyfall_timer = 1;
+    jv->skyfall_damage = 13;
+    col_npc_resolve_javelin_skyfall(&s, &ctx, 0);
+    CHECK("skyfall damage has its own Javelin source counter",
+        s.log.javelin_damage_by_source[COLO_JAVELIN_DAMAGE_SKYFALL] ==
+            13.0f);
+
+    s.molten_count = 1;
+    s.molten_x[0] = s.player.x;
+    s.molten_y[0] = s.player.y;
+    s.molten_kind[0] = COLO_POOL_REENTRY;
+    s.molten_lifetime[0] = COLO_POOL_PERMANENT;
+    s.molten_burn_timer[0] = 0;
+    col_mod_tick_molten_pools(&s);
+    CHECK("Reentry damage has its own positive Javelin source counter",
+        s.log.javelin_damage_by_source[COLO_JAVELIN_DAMAGE_REENTRY_POOL] >
+            0.0f);
+
+    s.modifiers.active_mask |= (1u << COLO_MOD_DOOM);
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    s.doom_stacks = COLO_DOOM_CAP[3] - 1;
+    s.molten_kind[0] = COLO_POOL_VOLATILITY;
+    s.molten_burn_timer[0] = 0;
+    col_mod_tick_molten_pools(&s);
+    CHECK("the lethal Doom stack records the Volatility-pool mechanism",
+        col_mod_doom_lethal(&s) &&
+        s.last_damage_source == COLO_DAMAGE_VOLATILITY_POOL &&
+        s.last_doom_damage_source == COLO_DAMAGE_VOLATILITY_POOL);
+    col_mod_on_player_damaged(&s, 1, COLO_DAMAGE_SOLARFLARE);
+    CHECK("Doom source latches on the transition to lethal",
+        s.last_damage_source == COLO_DAMAGE_SOLARFLARE &&
+        s.last_doom_damage_source == COLO_DAMAGE_VOLATILITY_POOL);
+    col_record_death_attribution(&s);
+    CHECK("death and Doom death metrics preserve their distinct mechanisms",
+        s.log.death_by_source[COLO_DAMAGE_SOLARFLARE] == 1.0f &&
+        s.log.doom_death_by_source[COLO_DAMAGE_VOLATILITY_POOL] == 1.0f);
+}
+
+static void test_applied_damage_and_merged_pool_attribution(void) {
+    printf("test_applied_damage_and_merged_pool_attribution\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 2326, 17, 16);
+    s.modifiers.active_mask |= (1u << COLO_MOD_DOOM);
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    s.active_player_damage_received_scale = 0.0f;
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = 0;
+    int doom_before = s.doom_stacks;
+    col_mod_tick_venom(&s);
+    CHECK("damage rounded to zero does not add Doom or a fatal source",
+        s.doom_stacks == doom_before &&
+        s.last_damage_source == -1 &&
+        s.tick_scratch.damage_received == 0.0f);
+
+    s.active_player_damage_received_scale = 1.0f;
+    s.player.current_hitpoints = 5;
+    int applied = col_damage_player_from(
+        &s, 20, COLO_JAVELIN_COLOSSUS, COLO_DMG_UNPRAYABLE);
+    col_mod_on_player_damaged(
+        &s, applied, COLO_DAMAGE_JAVELIN_SKYFALL);
+    CHECK("overkill records only the actual five hitpoints lost",
+        applied == 5 &&
+        s.tick_scratch.damage_received == 5.0f &&
+        s.log.total_damage_by_type[COLO_JAVELIN_COLOSSUS] == 5.0f);
+    int source_after_fatal = s.last_damage_source;
+    CHECK("damage after zero hitpoints cannot overwrite the fatal source",
+        col_damage_player_from(
+            &s, 15, COLO_JAVELIN_COLOSSUS, COLO_DMG_UNPRAYABLE) == 0 &&
+        s.last_damage_source == source_after_fatal);
+
+    init_forecast_test_state(&s, &ctx, 2327, 17, 16);
+    s.modifiers.active_mask |=
+        (1u << COLO_MOD_DOOM) |
+        (1u << COLO_MOD_BLASPHEMY);
+    s.modifiers.tier[COLO_MOD_DOOM] = 3;
+    s.modifiers.tier[COLO_MOD_BLASPHEMY] = 3;
+    s.player.current_hitpoints = 5;
+    s.player.current_prayer = 77;
+    col_apply_divine_combat_potion_effect(&s);
+    CHECK("divine self-damage has an explicit source and adds one Doom stack",
+        s.player.current_hitpoints == 0 &&
+        s.tick_scratch.damage_received == 5.0f &&
+        s.tick_scratch.landed_self_damage == 5.0f &&
+        s.last_damage_source == COLO_DAMAGE_SELF &&
+        s.doom_stacks == 1);
+    CHECK("Blasphemy ignores divine self-damage",
+        s.player.current_prayer == 77);
+
+    init_forecast_test_state(&s, &ctx, 2328, 17, 16);
+    col_mod_add_molten_pool(
+        &s,
+        s.player.x,
+        s.player.y,
+        COLO_POOL_REENTRY,
+        COLO_POOL_PERMANENT);
+    col_mod_add_molten_pool(
+        &s,
+        s.player.x,
+        s.player.y,
+        COLO_POOL_VOLATILITY,
+        COLO_POOL_TEMPORARY);
+    CHECK("same-tile Reentry and Volatility preserve both provenances",
+        s.molten_count == 1 &&
+        s.molten_kind[0] == COLO_POOL_REENTRY_VOLATILITY &&
+        s.molten_lifetime[0] == COLO_POOL_PERMANENT);
+    int hp_before = s.player.current_hitpoints;
+    col_mod_tick_molten_pools(&s);
+    int first_burn = hp_before - s.player.current_hitpoints;
+    CHECK("combined pool damage has a distinct source and Javelin counter",
+        first_burn >= 1 &&
+        first_burn <= COLO_REENTRY_MOLTEN_MAX_HIT &&
+        s.last_damage_source == COLO_DAMAGE_REENTRY_VOLATILITY_POOL &&
+        s.log.javelin_damage_by_source[
+            COLO_JAVELIN_DAMAGE_REENTRY_VOLATILITY_POOL] == (float)first_burn);
+    hp_before = s.player.current_hitpoints;
+    col_mod_tick_molten_pools(&s);
+    CHECK("combined modifier pool respects the every-other-tick cadence",
+        s.player.current_hitpoints == hp_before &&
+        s.molten_burn_timer[0] == 0);
+    col_mod_tick_molten_pools(&s);
+    CHECK("combined modifier pool burns again after one clear tick",
+        s.player.current_hitpoints < hp_before);
+    col_mod_clear_wave_end_pools(&s);
+    CHECK("wave end removes the temporary Volatility component only",
+        s.molten_count == 1 &&
+        s.molten_kind[0] == COLO_POOL_REENTRY &&
+        s.molten_lifetime[0] == COLO_POOL_PERMANENT);
+}
+
 static void test_sol_damage_source_contract(void) {
     printf("test_sol_damage_source_contract\n");
     CHECK("every AOE shape maps to its distinct damage source",
@@ -5537,8 +5962,8 @@ static void test_sol_damage_source_contract(void) {
     col_damage_player_from_sol(&s, 20, COLO_SOL_DAMAGE_MOLTEN_SAND);
     CHECK("source totals count applied damage rather than overkill",
         s.log.sol_damage_by_source[COLO_SOL_DAMAGE_MOLTEN_SAND] == 5.0f);
-    CHECK("the legacy total retains its requested-damage semantics",
-        s.log.total_damage_by_type[COLO_SOL_HEREDIT] == 20.0f);
+    CHECK("the NPC-type total also counts applied damage",
+        s.log.total_damage_by_type[COLO_SOL_HEREDIT] == 5.0f);
 
     s.player.current_hitpoints = 99;
     float typeless_before = s.log.typeless_damage_by_type[COLO_SOL_HEREDIT];
@@ -5661,13 +6086,13 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3180", COLO_NUM_OBS == 3180);
+    CHECK("obs width is 3380", COLO_NUM_OBS == 3380);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
-    CHECK("modifier hazard tail has 38 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 38);
-    CHECK("modifier block has 74 features", COLO_MODIFIER_OBS_SIZE == 74);
+    CHECK("modifier hazard tail has 39 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 39);
+    CHECK("modifier block has 75 features", COLO_MODIFIER_OBS_SIZE == 75);
     CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
     CHECK("snapshot version is v20", COLO_SNAPSHOT_VERSION == 20u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
@@ -5685,8 +6110,10 @@ static void test_combat_fidelity_contract_sizes(void) {
     int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE +
         COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE +
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
-        COLO_SOL_HAZARD_ACTION_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE +
-        COLO_STEP_OUT_FORECAST_OBS_SIZE +
+        COLO_SOL_HAZARD_ACTION_OBS_SIZE +
+        COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE +
+        COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
+        COLO_CHASE_THREAT_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
         COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE +
         COLO_THREAT_FIELD_OBS_SIZE;
@@ -6375,8 +6802,96 @@ static void test_step_out_forecast_ranged_los_candidate_tiles(void) {
     int run_north = forecast_move_action_for_delta(0, 2);
     CHECK("pillar-blocked idle tile records no shaman forecast",
         !forecast_action_has_event(&forecast.actions[0]));
-    CHECK("clear run-north tile records the shaman magic forecast",
-        forecast.actions[run_north].ticks[0].magic_count == 1);
+    CHECK("run-north cannot expose the player before runtime movement",
+        forecast.actions[run_north].ticks[0].magic_count == 0);
+
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    actions[COLO_HEAD_PRIMARY] = run_north;
+    ColosseumState runtime = s;
+    ColosseumContext runtime_ctx = ctx;
+    runtime.wave_ready_delay = 0;
+    runtime.wave_attack_delay = 0;
+    runtime.wave_spawn_delay = 0;
+    col_step_ctx(
+        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
+    CHECK("runtime also fires no attack before the run-north movement",
+        runtime.tick_scratch.attacks_fired == 0);
+
+    init_forecast_test_state(&s, &ctx, 404, 7, 11);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
+    s.npcs[0].attack_timer = 1;
+    int run_south = forecast_move_action_for_delta(0, -2);
+    col_build_step_out_forecast_ctx(&s, &forecast);
+    CHECK("run-south cannot hide the player before runtime movement",
+        forecast.actions[run_south].ticks[0].magic_count == 1);
+
+    memset(actions, 0, sizeof(actions));
+    actions[COLO_HEAD_PRIMARY] = run_south;
+    runtime = s;
+    runtime_ctx = ctx;
+    runtime.wave_ready_delay = 0;
+    runtime.wave_attack_delay = 0;
+    runtime.wave_spawn_delay = 0;
+    col_step_ctx(
+        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
+    CHECK("runtime fires before the run-south movement breaks line of sight",
+        runtime.tick_scratch.attacks_fired == 1);
+}
+
+static void test_chase_threat_observation_matches_runtime_order(void) {
+    printf("test_chase_threat_observation_matches_runtime_order\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    init_forecast_test_state(&s, &ctx, 407, 7, 9);
+    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
+    col_init_npc(&s, 1, COLO_FREMENNIK_BERSERKER, 7, 14);
+    s.npcs[0].attack_timer = 1;
+    s.npcs[1].stun_timer = 100;
+    col_refresh_current_obs_slots_ctx(&s, &ctx);
+    int target_obs_slot = test_obs_slot_for_npc(&s, 1);
+    int target_action =
+        col_primary_attack_action_for_obs_slot(target_obs_slot);
+    ColoForecastLanding landing =
+        col_primary_action_landing_ctx(&s, &ctx, target_action);
+    CHECK("fixture: target-click action chases north around the pillar",
+        landing.valid && landing.land_y > s.player.y);
+
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    actions[COLO_HEAD_PRIMARY] = target_action;
+    ColosseumState runtime = s;
+    ColosseumContext runtime_ctx = ctx;
+    runtime.wave_ready_delay = 0;
+    runtime.wave_attack_delay = 0;
+    runtime.wave_spawn_delay = 0;
+    float shaman_faced_before =
+        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
+    col_step_ctx(
+        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
+    float shaman_faced_after_first =
+        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
+    memset(actions, 0, sizeof(actions));
+    col_step_ctx(
+        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
+    float shaman_faced_after_second =
+        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
+    CHECK("runtime shooter waits for the chase movement before attacking",
+        shaman_faced_after_first == shaman_faced_before &&
+        shaman_faced_after_second > shaman_faced_after_first);
+
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("target-click threat observation exposes the future magic attack",
+        obs[chase_threat_obs_index(target_action, 0)] == 0.5f &&
+        obs[chase_threat_obs_index(target_action, 3)] == 1.0f);
+    CHECK("stationary PRIMARY noop does not inherit the target-click threat",
+        obs[chase_threat_obs_index(0, 3)] == 0.0f);
+
+    osrs_interaction_set(&s.interaction, 1);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("held-chase PRIMARY noop exposes the same future magic attack",
+        obs[chase_threat_obs_index(0, 0)] == 0.5f &&
+        obs[chase_threat_obs_index(0, 3)] == 1.0f);
 }
 
 static void test_step_out_forecast_valid_flags(void) {
@@ -7687,7 +8202,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3180);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3380);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -8257,6 +8772,10 @@ int main(void) {
     test_javelin_skyfall_no_defence_gate();
     test_sol_generic_observation_signals_are_neutral();
     test_sol_hazard_action_observation_contract();
+    test_primary_environment_hazard_action_observation_contract();
+    test_primary_environment_hazard_phase_order();
+    test_primary_target_landing_uses_post_npc_position();
+    test_solarflare_action_forecast_phase_order();
     test_sol_adjacency_gate_and_kiting();
     test_sol_attack_selection_invariants();
     test_sol_parry_schedule_and_damage();
@@ -8287,6 +8806,8 @@ int main(void) {
     test_loadout_offensive_prayers();
     test_npc_magic_defence_rolls_off_magic_level();
     test_total_damage_by_type_captures_typeless();
+    test_javelin_and_doom_damage_source_contract();
+    test_applied_damage_and_merged_pool_attribution();
     test_sol_damage_source_contract();
     test_matchup_dpt_obs_ranking();
     test_primary_head_resolution();
@@ -8303,6 +8824,7 @@ int main(void) {
     test_step_out_forecast_manticore_pair_stagger();
     test_step_out_forecast_warband_window_and_break();
     test_step_out_forecast_ranged_los_candidate_tiles();
+    test_chase_threat_observation_matches_runtime_order();
     test_step_out_forecast_valid_flags();
     test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();

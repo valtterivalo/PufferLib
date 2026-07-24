@@ -1149,6 +1149,435 @@ static inline int encounter_attack_seek_has_exact_tile(
     return 0;
 }
 
+typedef struct {
+    const CollisionMap* collision_map;
+    encounter_walkable_fn is_walkable;
+    void* walkable_ctx;
+    pathfind_blocked_fn extra_blocked;
+    void* blocked_ctx;
+    int world_offset_x;
+    int world_offset_y;
+    int arena_base_x;
+    int arena_base_y;
+    int arena_w;
+    int arena_h;
+    int source_x;
+    int source_y;
+    int min_explored_x;
+    int min_explored_y;
+    int max_explored_x;
+    int max_explored_y;
+    uint16_t visit_order[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    uint16_t depth[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    int8_t via[PATHFIND_ARENA_MAX][PATHFIND_ARENA_MAX];
+    int visited_count;
+} EncounterArenaAttackRouteField;
+
+typedef struct {
+    int land_x;
+    int land_y;
+} EncounterAttackRouteLanding;
+
+static inline int encounter_attack_route_field_extra_blocked(
+    const EncounterArenaAttackRouteField* field,
+    int x,
+    int y
+) {
+    return field->extra_blocked &&
+        field->extra_blocked(
+            field->blocked_ctx,
+            x + field->world_offset_x,
+            y + field->world_offset_y);
+}
+
+static inline void encounter_build_arena_attack_route_field(
+    EncounterArenaAttackRouteField* field,
+    const CollisionMap* cmap,
+    int world_offset_x,
+    int world_offset_y,
+    int source_x,
+    int source_y,
+    encounter_walkable_fn is_walkable,
+    void* walkable_ctx,
+    pathfind_blocked_fn extra_blocked,
+    void* blocked_ctx,
+    int arena_base_x,
+    int arena_base_y,
+    int arena_w,
+    int arena_h
+) {
+    if (!field || !is_walkable) {
+        fprintf(stderr, "attack route field is missing required input\n");
+        abort();
+    }
+    if (arena_w <= 0 || arena_w > PATHFIND_ARENA_MAX ||
+            arena_h <= 0 || arena_h > PATHFIND_ARENA_MAX) {
+        fprintf(stderr, "attack route arena dimensions out of bounds: %dx%d\n",
+            arena_w, arena_h);
+        abort();
+    }
+
+    int local_source_x = source_x - arena_base_x;
+    int local_source_y = source_y - arena_base_y;
+    if (local_source_x < 0 || local_source_x >= arena_w ||
+            local_source_y < 0 || local_source_y >= arena_h) {
+        fprintf(stderr,
+            "attack route source out of arena: source=(%d,%d) arena=(%d,%d,%d,%d)\n",
+            source_x, source_y, arena_base_x, arena_base_y, arena_w, arena_h);
+        abort();
+    }
+
+    memset(field, 0, sizeof(*field));
+    field->collision_map = cmap;
+    field->is_walkable = is_walkable;
+    field->walkable_ctx = walkable_ctx;
+    field->extra_blocked = extra_blocked;
+    field->blocked_ctx = blocked_ctx;
+    field->world_offset_x = world_offset_x;
+    field->world_offset_y = world_offset_y;
+    field->arena_base_x = arena_base_x;
+    field->arena_base_y = arena_base_y;
+    field->arena_w = arena_w;
+    field->arena_h = arena_h;
+    field->source_x = source_x;
+    field->source_y = source_y;
+    field->min_explored_x = local_source_x;
+    field->min_explored_y = local_source_y;
+    field->max_explored_x = local_source_x;
+    field->max_explored_y = local_source_y;
+
+    int queue_x[PATHFIND_MAX_QUEUE_ARENA];
+    int queue_y[PATHFIND_MAX_QUEUE_ARENA];
+    int head = 0;
+    int tail = 0;
+    field->visited_count = 1;
+    field->visit_order[local_source_x][local_source_y] = 1;
+    field->via[local_source_x][local_source_y] = VIA_START;
+    pathfind_enqueue_or_abort(
+        queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA,
+        local_source_x, local_source_y);
+
+    static const int route_dx[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+    static const int route_dy[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+    static const int route_via[8] = {
+        VIA_W, VIA_E, VIA_S, VIA_N, VIA_SW, VIA_SE, VIA_NW, VIA_NE
+    };
+
+    while (head < tail) {
+        int cur_x = queue_x[head];
+        int cur_y = queue_y[head];
+        head++;
+
+        int tile_x = arena_base_x + cur_x;
+        int tile_y = arena_base_y + cur_y;
+        int abs_x = tile_x + world_offset_x;
+        int abs_y = tile_y + world_offset_y;
+        uint16_t next_depth = field->depth[cur_x][cur_y] + 1;
+
+        for (int i = 0; i < 8; i++) {
+            int dx = route_dx[i];
+            int dy = route_dy[i];
+            int next_x = cur_x + dx;
+            int next_y = cur_y + dy;
+            if (next_x < 0 || next_x >= arena_w ||
+                    next_y < 0 || next_y >= arena_h) {
+                continue;
+            }
+            if (field->visit_order[next_x][next_y] != 0) continue;
+            if (!collision_traversable_step(cmap, 0, abs_x, abs_y, dx, dy))
+                continue;
+
+            int next_tile_x = tile_x + dx;
+            int next_tile_y = tile_y + dy;
+            if (!is_walkable(walkable_ctx, next_tile_x, next_tile_y)) continue;
+            if (extra_blocked &&
+                    extra_blocked(
+                        blocked_ctx,
+                        next_tile_x + world_offset_x,
+                        next_tile_y + world_offset_y)) {
+                continue;
+            }
+            if (dx != 0 && dy != 0) {
+                if (extra_blocked &&
+                        (extra_blocked(
+                            blocked_ctx,
+                            tile_x + dx + world_offset_x,
+                            tile_y + world_offset_y) ||
+                         extra_blocked(
+                            blocked_ctx,
+                            tile_x + world_offset_x,
+                            tile_y + dy + world_offset_y))) {
+                    continue;
+                }
+                if (!is_walkable(walkable_ctx, tile_x + dx, tile_y) ||
+                        !is_walkable(walkable_ctx, tile_x, tile_y + dy)) {
+                    continue;
+                }
+            }
+
+            pathfind_enqueue_or_abort(
+                queue_x, queue_y, &tail, PATHFIND_MAX_QUEUE_ARENA,
+                next_x, next_y);
+            field->visited_count++;
+            field->visit_order[next_x][next_y] =
+                (uint16_t)field->visited_count;
+            field->depth[next_x][next_y] = next_depth;
+            field->via[next_x][next_y] = (int8_t)route_via[i];
+            if (next_x < field->min_explored_x) field->min_explored_x = next_x;
+            if (next_y < field->min_explored_y) field->min_explored_y = next_y;
+            if (next_x > field->max_explored_x) field->max_explored_x = next_x;
+            if (next_y > field->max_explored_y) field->max_explored_y = next_y;
+        }
+    }
+}
+
+static inline EncounterAttackRouteLanding
+encounter_attack_route_overlap_landing(
+    const EncounterArenaAttackRouteField* field,
+    int target_x,
+    int target_y,
+    int target_size
+) {
+    Player player = {
+        .x = field->source_x,
+        .y = field->source_y,
+    };
+    int max_r = (target_size + 1) / 2 + 1;
+    int best_dsq = 9999;
+    int best_x = -1;
+    int best_y = -1;
+    for (int dy = -max_r; dy <= max_r; dy++) {
+        for (int dx = -max_r; dx <= max_r; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            int x = player.x + dx;
+            int y = player.y + dy;
+            if (!field->is_walkable(field->walkable_ctx, x, y)) continue;
+            if (encounter_entity_footprints_overlap(
+                    x, y, 1, target_x, target_y, target_size)) {
+                continue;
+            }
+            int dsq = dx * dx + dy * dy;
+            if (dsq < best_dsq) {
+                best_dsq = dsq;
+                best_x = x;
+                best_y = y;
+            }
+        }
+    }
+    if (best_x >= 0) {
+        encounter_walk_toward(
+            &player, best_x, best_y,
+            field->collision_map,
+            field->world_offset_x,
+            field->world_offset_y,
+            field->is_walkable,
+            field->walkable_ctx,
+            field->extra_blocked,
+            field->blocked_ctx,
+            field->arena_base_x,
+            field->arena_base_y,
+            field->arena_w,
+            field->arena_h);
+    }
+    return (EncounterAttackRouteLanding){
+        .land_x = player.x,
+        .land_y = player.y,
+    };
+}
+
+static inline EncounterAttackRouteLanding encounter_arena_attack_route_landing(
+    const EncounterArenaAttackRouteField* field,
+    int target_x,
+    int target_y,
+    int target_size,
+    int attack_range,
+    const OsrsLosQuery* los_query
+) {
+    if (!field || !field->is_walkable ||
+            field->arena_w <= 0 || field->arena_w > PATHFIND_ARENA_MAX ||
+            field->arena_h <= 0 || field->arena_h > PATHFIND_ARENA_MAX ||
+            field->visited_count <= 0 ||
+            target_size <= 0 || attack_range <= 0) {
+        fprintf(stderr, "invalid attack route landing query\n");
+        abort();
+    }
+
+    EncounterAttackRouteLanding landing = {
+        .land_x = field->source_x,
+        .land_y = field->source_y,
+    };
+    int dist = encounter_rect_distance(
+        field->source_x, field->source_y, 1,
+        target_x, target_y, target_size);
+    if (dist == 0) {
+        return encounter_attack_route_overlap_landing(
+            field, target_x, target_y, target_size);
+    }
+    if (encounter_player_can_attack(
+            field->source_x, field->source_y,
+            target_x, target_y, target_size, attack_range, los_query)) {
+        return landing;
+    }
+
+    EncounterAttackSeekTile seek_tiles[ENCOUNTER_ATTACK_SEEK_MAX_TILES];
+    int seek_count = 0;
+    for (int xx = 0; xx < target_size; xx++) {
+        int x = target_x + xx;
+        encounter_attack_seek_add_tile(
+            seek_tiles, &seek_count, x, target_y - 1,
+            field->world_offset_x, field->world_offset_y,
+            field->extra_blocked, field->blocked_ctx);
+        encounter_attack_seek_add_tile(
+            seek_tiles, &seek_count, x, target_y + target_size,
+            field->world_offset_x, field->world_offset_y,
+            field->extra_blocked, field->blocked_ctx);
+    }
+    for (int yy = 0; yy < target_size; yy++) {
+        int y = target_y + yy;
+        encounter_attack_seek_add_tile(
+            seek_tiles, &seek_count, target_x - 1, y,
+            field->world_offset_x, field->world_offset_y,
+            field->extra_blocked, field->blocked_ctx);
+        encounter_attack_seek_add_tile(
+            seek_tiles, &seek_count, target_x + target_size, y,
+            field->world_offset_x, field->world_offset_y,
+            field->extra_blocked, field->blocked_ctx);
+    }
+
+    int selected_x = -1;
+    int selected_y = -1;
+    uint16_t selected_order = UINT16_MAX;
+    for (int x = 0; x < field->arena_w; x++) {
+        for (int y = 0; y < field->arena_h; y++) {
+            uint16_t order = field->visit_order[x][y];
+            if (order == 0 || order >= selected_order) continue;
+            int tile_x = field->arena_base_x + x;
+            int tile_y = field->arena_base_y + y;
+            if (!field->is_walkable(field->walkable_ctx, tile_x, tile_y))
+                continue;
+            if (encounter_attack_route_field_extra_blocked(
+                    field, tile_x, tile_y)) {
+                continue;
+            }
+            int exact = seek_count > 0
+                ? encounter_attack_seek_has_exact_tile(
+                    tile_x, tile_y, seek_tiles, seek_count)
+                : encounter_player_can_attack(
+                    tile_x, tile_y,
+                    target_x, target_y, target_size,
+                    attack_range, los_query);
+            if (!exact) continue;
+            selected_x = x;
+            selected_y = y;
+            selected_order = order;
+        }
+    }
+
+    if (selected_x < 0 && seek_count > 0) {
+        int first_local_x = seek_tiles[0].x - field->arena_base_x;
+        int first_local_y = seek_tiles[0].y - field->arena_base_y;
+        int scan_min_x =
+            field->min_explored_x > first_local_x - PATHFIND_MAX_FALLBACK_RADIUS
+                ? field->min_explored_x
+                : first_local_x - PATHFIND_MAX_FALLBACK_RADIUS;
+        int scan_min_y =
+            field->min_explored_y > first_local_y - PATHFIND_MAX_FALLBACK_RADIUS
+                ? field->min_explored_y
+                : first_local_y - PATHFIND_MAX_FALLBACK_RADIUS;
+        int scan_max_x =
+            field->max_explored_x > first_local_x + PATHFIND_MAX_FALLBACK_RADIUS
+                ? field->max_explored_x
+                : first_local_x + PATHFIND_MAX_FALLBACK_RADIUS;
+        int scan_max_y =
+            field->max_explored_y > first_local_y + PATHFIND_MAX_FALLBACK_RADIUS
+                ? field->max_explored_y
+                : first_local_y + PATHFIND_MAX_FALLBACK_RADIUS;
+        if (scan_min_x < 0) scan_min_x = 0;
+        if (scan_min_y < 0) scan_min_y = 0;
+        if (scan_max_x >= field->arena_w) scan_max_x = field->arena_w - 1;
+        if (scan_max_y >= field->arena_h) scan_max_y = field->arena_h - 1;
+
+        int best_dsq = 0x3fffffff;
+        int best_depth = 100;
+        for (int x = scan_min_x; x <= scan_max_x; x++) {
+            for (int y = scan_min_y; y <= scan_max_y; y++) {
+                if (field->visit_order[x][y] == 0) continue;
+                int tile_x = field->arena_base_x + x;
+                int tile_y = field->arena_base_y + y;
+                if (!field->is_walkable(field->walkable_ctx, tile_x, tile_y))
+                    continue;
+                int depth = field->depth[x][y];
+                if (depth >= 100) continue;
+                int dsq = encounter_attack_seek_nearest_dsq(
+                    tile_x, tile_y, seek_tiles, seek_count);
+                if (dsq < best_dsq ||
+                        (dsq == best_dsq && depth < best_depth)) {
+                    selected_x = x;
+                    selected_y = y;
+                    best_dsq = dsq;
+                    best_depth = depth;
+                }
+            }
+        }
+    }
+    if (selected_x < 0) return landing;
+
+    int source_local_x = field->source_x - field->arena_base_x;
+    int source_local_y = field->source_y - field->arena_base_y;
+    int first_x = source_local_x;
+    int first_y = source_local_y;
+    int second_x = source_local_x;
+    int second_y = source_local_y;
+    int cur_x = selected_x;
+    int cur_y = selected_y;
+    uint16_t selected_depth = field->depth[selected_x][selected_y];
+    while (field->depth[cur_x][cur_y] > 0) {
+        uint16_t depth = field->depth[cur_x][cur_y];
+        if (depth == 1) {
+            first_x = cur_x;
+            first_y = cur_y;
+        } else if (depth == 2) {
+            second_x = cur_x;
+            second_y = cur_y;
+        }
+
+        int via = field->via[cur_x][cur_y];
+        if (via == VIA_NONE || via == VIA_START) {
+            fprintf(stderr,
+                "broken attack route parent at local tile (%d,%d)\n",
+                cur_x, cur_y);
+            abort();
+        }
+        if (via & VIA_W) cur_x++;
+        else if (via & VIA_E) cur_x--;
+        if (via & VIA_S) cur_y++;
+        else if (via & VIA_N) cur_y--;
+        if (cur_x < 0 || cur_x >= field->arena_w ||
+                cur_y < 0 || cur_y >= field->arena_h) {
+            fprintf(stderr, "attack route parent left arena\n");
+            abort();
+        }
+    }
+    if (cur_x != source_local_x || cur_y != source_local_y) {
+        fprintf(stderr, "attack route did not terminate at source\n");
+        abort();
+    }
+    if (selected_depth == 0) return landing;
+
+    landing.land_x = field->arena_base_x + first_x;
+    landing.land_y = field->arena_base_y + first_y;
+    if (encounter_player_can_attack(
+            landing.land_x, landing.land_y,
+            target_x, target_y, target_size, attack_range, los_query)) {
+        return landing;
+    }
+    if (selected_depth >= 2) {
+        landing.land_x = field->arena_base_x + second_x;
+        landing.land_y = field->arena_base_y + second_y;
+    }
+    return landing;
+}
+
 static inline PathResult encounter_pathfind_arena_attack_approach(
     const CollisionMap* cmap, int world_offset_x, int world_offset_y,
     int src_x, int src_y,

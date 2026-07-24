@@ -16,7 +16,7 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 #define COLO_EXPECTED_DPT_NORM    15.0f
 
 #define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
-#define COLO_MODIFIER_HAZARD_OBS_SIZE 38
+#define COLO_MODIFIER_HAZARD_OBS_SIZE 39
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
 #define COLO_WAVE_OBS_SIZE        4
 
@@ -50,6 +50,10 @@ typedef enum {
 #define COLO_SOL_HAZARD_ACTION_OBS_SIZE \
     (COLO_PRIMARY_DIM * COLO_SOL_HAZARD_ACTION_FEATURES)
 
+#define COLO_PRIMARY_ENV_HAZARD_ACTION_FEATURES 1
+#define COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE \
+    (COLO_PRIMARY_DIM * COLO_PRIMARY_ENV_HAZARD_ACTION_FEATURES)
+
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
 #define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)
@@ -80,8 +84,10 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
-    COLO_SOL_HAZARD_ACTION_OBS_SIZE + COLO_PENDING_HIT_OBS_SIZE + \
-    COLO_STEP_OUT_FORECAST_OBS_SIZE + \
+    COLO_SOL_HAZARD_ACTION_OBS_SIZE + \
+    COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE + \
+    COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
+    COLO_CHASE_THREAT_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
     COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
@@ -97,12 +103,16 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
 #define COLO_OBS_AFTER_SOL_HAZARD_ACTIONS \
     (COLO_OBS_AFTER_BOSS + COLO_SOL_HAZARD_ACTION_OBS_SIZE)
+#define COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS \
+    (COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE)
 #define COLO_OBS_AFTER_PENDING_HITS \
-    (COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + COLO_PENDING_HIT_OBS_SIZE)
+    (COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS + COLO_PENDING_HIT_OBS_SIZE)
 #define COLO_OBS_AFTER_STEP_OUT_FORECAST \
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
+#define COLO_OBS_AFTER_CHASE_THREAT \
+    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_CHASE_THREAT_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
-    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
+    (COLO_OBS_AFTER_CHASE_THREAT + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_WEAPON_CHOICE \
@@ -627,8 +637,8 @@ static float col_sol_hazard_action_urgency(int hit_tick) {
 }
 
 static void col_write_sol_hazard_action_obs(
-    ColosseumState* s,
-    ColosseumContext* ctx,
+    const ColosseumState* s,
+    const ColoForecastLanding landings[COLO_PRIMARY_DIM],
     float* obs,
     int* idx
 ) {
@@ -638,9 +648,7 @@ static void col_write_sol_hazard_action_obs(
         return;
     }
 
-    ColoForecastLanding landings[COLO_PRIMARY_DIM];
     float hazard_by_action[COLO_PRIMARY_DIM][COLO_SOL_HAZARD_SOURCE_COUNT] = {{0}};
-    col_build_primary_action_landings_ctx(s, ctx, landings);
     for (int action = 0; action < COLO_PRIMARY_DIM; action++) {
         if (!landings[action].valid) {
             i += COLO_SOL_HAZARD_ACTION_FEATURES;
@@ -678,6 +686,203 @@ static void col_write_sol_hazard_action_obs(
             obs[i++] = hazard_by_action[action][source];
     }
     *idx = i;
+}
+
+static int col_premove_molten_forecast_needed(
+    const ColosseumState* s
+) {
+    if (s->molten_count > 0) return 1;
+    if (col_mod_tier(s, COLO_MOD_REENTRY) == 0) return 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_target(npc) ||
+                npc->type != COLO_JAVELIN_COLOSSUS) {
+            continue;
+        }
+        const ColoJavelinState* jv = &npc->type_state.javelin;
+        if (jv->skyfall_pending && jv->skyfall_timer <= 1) return 1;
+    }
+    return 0;
+}
+
+static int col_primary_action_landings_needed(
+    const ColosseumState* s,
+    const ColosseumContext* ctx
+) {
+    if (ctx->config.step_out_forecast_obs_enabled) return 1;
+    if (col_sol_clamp_active(s)) return 1;
+    if (s->molten_count > 0) return 1;
+    if (s->solarflare.active &&
+            col_mod_tier(s, COLO_MOD_SOLARFLARE) > 0) {
+        return 1;
+    }
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_target(npc) ||
+                npc->type != COLO_JAVELIN_COLOSSUS) {
+            continue;
+        }
+        if (npc->type_state.javelin.skyfall_pending) return 1;
+    }
+    return 0;
+}
+
+static int col_build_post_premove_molten_forecast(
+    const ColosseumState* s,
+    ColosseumState* forecast
+) {
+    *forecast = *s;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_target(npc) ||
+                npc->type != COLO_JAVELIN_COLOSSUS) {
+            continue;
+        }
+        const ColoJavelinState* jv = &npc->type_state.javelin;
+        if (!jv->skyfall_pending || jv->skyfall_timer > 1) continue;
+        col_mod_reentry_on_skyfall(
+            forecast, jv->skyfall_tile_x, jv->skyfall_tile_y);
+    }
+
+    int burned = 0;
+    for (int pool = 0; pool < forecast->molten_count; pool++) {
+        int player_on_pool =
+            forecast->molten_x[pool] == forecast->player.x &&
+            forecast->molten_y[pool] == forecast->player.y;
+        if (!burned &&
+                player_on_pool &&
+                forecast->molten_burn_timer[pool] == 0) {
+            forecast->molten_burn_timer[pool] =
+                COLO_REENTRY_MOLTEN_BURN_INTERVAL - 1;
+            burned = 1;
+            continue;
+        }
+        if (forecast->molten_burn_timer[pool] > 0)
+            forecast->molten_burn_timer[pool]--;
+    }
+    return burned;
+}
+
+static int col_primary_env_hazard_action_hit_tick(
+    const ColosseumState* s,
+    const ColosseumState* post_premove_molten,
+    int x,
+    int y
+) {
+    int earliest = 0;
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_target(npc) ||
+                npc->type != COLO_JAVELIN_COLOSSUS) {
+            continue;
+        }
+        const ColoJavelinState* jv = &npc->type_state.javelin;
+        if (!jv->skyfall_pending) continue;
+        int hit_tick = jv->skyfall_timer - 1;
+        if (hit_tick > 0 &&
+                jv->skyfall_tile_x == x &&
+                jv->skyfall_tile_y == y) {
+            earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
+        }
+    }
+
+    for (int pool = 0; pool < post_premove_molten->molten_count; pool++) {
+        if (post_premove_molten->molten_x[pool] != x ||
+                post_premove_molten->molten_y[pool] != y) {
+            continue;
+        }
+        int hit_tick =
+            post_premove_molten->molten_burn_timer[pool] + 1;
+        earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
+    }
+
+    if (s->solarflare.active) {
+        int tier = col_mod_tier(s, COLO_MOD_SOLARFLARE);
+        if (tier > 0) {
+            ColoSolarflareOrb orb = s->solarflare;
+            col_solarflare_advance_orb(&orb, tier);
+            for (int hit_tick = 1;
+                    hit_tick <= COLO_STEP_OUT_FORECAST_HORIZON;
+                    hit_tick++) {
+                col_solarflare_advance_orb(&orb, tier);
+                int contacts = 0;
+                for (int pillar = 0; pillar < COLO_NUM_PILLARS; pillar++) {
+                    int orb_x, orb_y;
+                    col_solarflare_tile(
+                        s, pillar, orb.step, &orb_x, &orb_y);
+                    if (orb_x == x && orb_y == y) {
+                        contacts = 1;
+                        break;
+                    }
+                }
+                if (contacts) {
+                    earliest =
+                        col_sol_earliest_hit_tick(earliest, hit_tick);
+                    break;
+                }
+            }
+        }
+    }
+    return earliest;
+}
+
+static void col_write_primary_env_hazard_action_obs(
+    const ColosseumState* s,
+    const ColosseumState* post_premove_molten,
+    const ColoForecastLanding landings[COLO_PRIMARY_DIM],
+    float* obs,
+    int* idx
+) {
+    int i = *idx;
+    float urgency_by_action[COLO_PRIMARY_DIM] = {0};
+    for (int action = 0; action < COLO_PRIMARY_DIM; action++) {
+        if (!landings[action].valid) {
+            i++;
+            continue;
+        }
+        int duplicate = -1;
+        for (int prior = 0; prior < action; prior++) {
+            if (landings[prior].valid &&
+                    landings[prior].land_x == landings[action].land_x &&
+                    landings[prior].land_y == landings[action].land_y) {
+                duplicate = prior;
+                break;
+            }
+        }
+        if (duplicate >= 0) {
+            urgency_by_action[action] = urgency_by_action[duplicate];
+        } else {
+            urgency_by_action[action] = col_sol_hazard_action_urgency(
+                col_primary_env_hazard_action_hit_tick(
+                    s,
+                    post_premove_molten,
+                    landings[action].land_x,
+                    landings[action].land_y));
+        }
+        obs[i++] = urgency_by_action[action];
+    }
+    *idx = i;
+}
+
+static int col_write_chase_threat_obs(
+    const ColoStepOutForecastAction actions[COLO_CHASE_THREAT_ACTIONS],
+    const ColoForecastObsSummary summaries[COLO_CHASE_THREAT_ACTIONS],
+    int horizon,
+    float* obs,
+    int i
+) {
+    for (int action = 0; action < COLO_CHASE_THREAT_ACTIONS; action++) {
+        const ColoStepOutForecastAction* forecast = &actions[action];
+        const ColoForecastObsSummary* summary = &summaries[action];
+        int style_mask = summary->first_style_mask;
+        obs[i++] = (float)summary->first_attack_tick / (float)horizon;
+        obs[i++] = (style_mask & COLO_STYLE_MASK_MELEE) ? 1.0f : 0.0f;
+        obs[i++] = (style_mask & COLO_STYLE_MASK_RANGED) ? 1.0f : 0.0f;
+        obs[i++] = (style_mask & COLO_STYLE_MASK_MAGIC) ? 1.0f : 0.0f;
+        obs[i++] = forecast->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
+        obs[i++] = forecast->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
+    }
+    return i;
 }
 
 typedef struct {
@@ -990,12 +1195,11 @@ static void col_write_volatility_blast_previews(
     *idx = i;
 }
 
-static int col_count_pre_move_doom_instances(const ColosseumState* s) {
+static int col_count_pre_move_unavoidable_damage_instances(
+    const ColosseumState* s,
+    int premove_molten_burn
+) {
     int count = 0;
-    for (int h = 0; h < s->player_pending_hits.count; h++) {
-        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
-        if (col_pending_hit_will_damage_pre_move(hit, s->player.prayer)) count++;
-    }
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_target(npc) || npc->type != COLO_JAVELIN_COLOSSUS)
@@ -1037,13 +1241,9 @@ static int col_count_pre_move_doom_instances(const ColosseumState* s) {
             if (x == s->player.x && y == s->player.y) count++;
         }
     }
-    for (int m = 0; m < s->molten_count; m++) {
-        if (s->molten_x[m] == s->player.x && s->molten_y[m] == s->player.y) {
-            count++;
-            break;
-        }
-    }
+    count += premove_molten_burn;
     if (s->player_venom > 0 && s->player_venom_timer <= 1) count++;
+    if (s->player_poison > 0 && s->player_poison_timer <= 1) count++;
     int volatility_tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
     if (volatility_tier > 0) {
         ColoVolatilityBlastPreview queued = col_soonest_queued_volatility_blast(s);
@@ -1052,14 +1252,59 @@ static int col_count_pre_move_doom_instances(const ColosseumState* s) {
                     s, queued.x, queued.y, queued.size, volatility_tier))
             count++;
     }
+    if (col_sol_clamp_active(s)) {
+        count += col_sol_premove_aoe_hit(s);
+        count += col_sol_premove_laser_hit(s);
+        count += col_sol_premove_molten_hit(s);
+        if (s->sol.grapple_active &&
+                !s->sol.grapple_resolved &&
+                s->sol.grapple_timer <= 1) {
+            count++;
+        }
+    }
     return count;
 }
 
-static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int* idx) {
+static int col_count_pre_move_doom_instances(
+    const ColosseumState* s,
+    const ColosseumContext* ctx,
+    int premove_molten_burn
+) {
+    int count = col_count_pre_move_unavoidable_damage_instances(
+        s, premove_molten_burn);
+    for (int h = 0; h < s->player_pending_hits.count; h++) {
+        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
+        if (col_pending_hit_will_damage_pre_move(hit, s->player.prayer)) count++;
+    }
+    for (int hit = 0; hit < COLO_SOL_PARRY_HITS; hit++) {
+        if (s->sol.parry_land_in[hit] != 1 ||
+                s->sol.parry_damage[hit] <= 0) {
+            continue;
+        }
+        int early =
+            col_sol_overhead_on_in_window(s, COLO_SOL_PARRY_LOOKBACK[hit]);
+        int blocked =
+            ctx->config.sol_parry_assistance_mode ==
+                COLO_SOL_PARRY_ASSISTANCE_PERFECT ||
+            (!early && s->player.prayer == PRAYER_PROTECT_MELEE);
+        if (!blocked) count++;
+    }
+    return count;
+}
+
+static void col_write_modifier_hazards(
+    const ColosseumState* s,
+    const ColosseumContext* ctx,
+    int premove_molten_burn,
+    float* obs,
+    int* idx
+) {
     int i = *idx;
     int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
     int doom_cap = doom_tier > 0 ? COLO_DOOM_CAP[doom_tier] : 0;
-    int doom_pending = doom_cap > 0 ? col_count_pre_move_doom_instances(s) : 0;
+    int doom_pending = doom_cap > 0
+        ? col_count_pre_move_doom_instances(s, ctx, premove_molten_burn)
+        : 0;
     obs[i++] = doom_tier > 0 ? 1.0f : 0.0f;
     obs[i++] = doom_cap > 0 ? col_clamp01((float)s->doom_stacks / (float)doom_cap) : 0.0f;
     obs[i++] = doom_cap > 0 && s->doom_stacks + 1 >= doom_cap ? 1.0f : 0.0f;
@@ -1087,6 +1332,11 @@ static void col_write_modifier_hazards(const ColosseumState* s, float* obs, int*
     col_write_nearest_modifier_solarflare(s, obs, idx);
     col_write_top_modifier_molten(s, obs, idx);
     col_write_volatility_blast_previews(s, obs, idx);
+    i = *idx;
+    obs[i++] =
+        col_count_pre_move_unavoidable_damage_instances(
+            s, premove_molten_burn) > 0 ? 1.0f : 0.0f;
+    *idx = i;
 }
 
 static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int* idx) {
@@ -1934,6 +2184,15 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
 #endif
     col_refresh_current_obs_slots_ctx(s, ctx);
+    ColosseumState post_premove_molten;
+    const ColosseumState* post_premove_molten_view = s;
+    int premove_molten_burn = 0;
+    if (col_premove_molten_forecast_needed(s)) {
+        premove_molten_burn =
+            col_build_post_premove_molten_forecast(
+                s, &post_premove_molten);
+        post_premove_molten_view = &post_premove_molten;
+    }
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_REFRESH_SLOTS);
 #endif
@@ -2025,7 +2284,8 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         obs[i++] = (s->modifiers.draft_pending && opt >= 0)
             ? (float)(opt + 1) / (float)COLO_NUM_MODIFIERS : 0.0f;
     }
-    col_write_modifier_hazards(s, obs, &i);
+    col_write_modifier_hazards(
+        s, ctx, premove_molten_burn, obs, &i);
     assert(i == COLO_OBS_AFTER_MODS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_MODIFIERS);
@@ -2043,8 +2303,14 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
-    col_write_sol_hazard_action_obs(s, ctx, obs, &i);
+    ColoForecastLanding primary_landings[COLO_PRIMARY_DIM] = {0};
+    if (col_primary_action_landings_needed(s, ctx))
+        col_build_primary_action_landings_ctx(s, ctx, primary_landings);
+    col_write_sol_hazard_action_obs(s, primary_landings, obs, &i);
     assert(i == COLO_OBS_AFTER_SOL_HAZARD_ACTIONS);
+    col_write_primary_env_hazard_action_obs(
+        s, post_premove_molten_view, primary_landings, obs, &i);
+    assert(i == COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);
 #endif
@@ -2084,6 +2350,25 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
     }
     assert(i == COLO_OBS_AFTER_STEP_OUT_FORECAST);
+    if (ctx->config.step_out_forecast_obs_enabled) {
+        int horizon = ctx->config.forecast_horizon;
+        if (horizon < 1) horizon = 1;
+        if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
+            horizon = COLO_STEP_OUT_FORECAST_HORIZON;
+        ColoStepOutForecastAction chase_actions[COLO_CHASE_THREAT_ACTIONS];
+        ColoForecastObsSummary chase_summaries[COLO_CHASE_THREAT_ACTIONS];
+        col_build_chase_action_threat_forecasts(
+            s,
+            primary_landings,
+            chase_actions,
+            chase_summaries,
+            horizon);
+        i = col_write_chase_threat_obs(
+            chase_actions, chase_summaries, horizon, obs, i);
+    } else {
+        i += COLO_CHASE_THREAT_OBS_SIZE;
+    }
+    assert(i == COLO_OBS_AFTER_CHASE_THREAT);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
 #endif

@@ -5,7 +5,7 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-#define PROBE_NPC_TELLS_OFFSET 37
+#define PROBE_NPC_TELLS_OFFSET 26
 #define PROBE_SKYFALL_DAMAGE 38
 #define PROBE_PLAYER_X 17
 #define PROBE_PLAYER_Y 16

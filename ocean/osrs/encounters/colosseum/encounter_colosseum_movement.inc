@@ -237,7 +237,8 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
 #endif
     }
 #ifdef COLO_PROFILE_ENABLED
-    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    int col_prof_enabled =
+        COLO_PROFILE_ENABLED() && !pc->s->profiling_suppressed;
     double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
 #endif
     PathResult pr = pathfind_step_arena(NULL, 0, *x, *y, tx, ty,

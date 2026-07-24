@@ -133,14 +133,28 @@ static void col_tick_live_stat_drift_and_divines(ColosseumState* s) {
 }
 
 static void col_apply_divine_combat_potion_effect(ColosseumState* s) {
-    encounter_damage_player(&s->player, 10, &s->tick_scratch.damage_received);
-    s->tick_scratch.landed_self_damage += 10.0f;
+    int hitpoints_before = s->player.current_hitpoints;
+    encounter_damage_player(&s->player, 10, NULL);
+    int applied = hitpoints_before - s->player.current_hitpoints;
+    s->tick_scratch.damage_received += (float)applied;
+    s->tick_scratch.landed_self_damage += (float)applied;
+    if (applied > 0) {
+        s->last_damage_source = COLO_DAMAGE_SELF;
+        col_mod_add_doom_stack(s, COLO_DAMAGE_SELF);
+    }
     s->divine_combat_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 
 static void col_apply_divine_ranged_potion_effect(ColosseumState* s) {
-    encounter_damage_player(&s->player, 10, &s->tick_scratch.damage_received);
-    s->tick_scratch.landed_self_damage += 10.0f;
+    int hitpoints_before = s->player.current_hitpoints;
+    encounter_damage_player(&s->player, 10, NULL);
+    int applied = hitpoints_before - s->player.current_hitpoints;
+    s->tick_scratch.damage_received += (float)applied;
+    s->tick_scratch.landed_self_damage += (float)applied;
+    if (applied > 0) {
+        s->last_damage_source = COLO_DAMAGE_SELF;
+        col_mod_add_doom_stack(s, COLO_DAMAGE_SELF);
+    }
     s->divine_ranged_timer = ENCOUNTER_DIVINE_POTION_TICKS;
 }
 

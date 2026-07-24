@@ -44,6 +44,9 @@ struct Log {
     float death_by_type[COLO_NUM_NPC_TYPES];
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
+    float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
+    float death_by_source[COLO_NUM_DAMAGE_SOURCES];
+    float doom_death_by_source[COLO_NUM_DAMAGE_SOURCES];
     float death_fatal_damage;
     float offpray_damage_conflict;
     float offpray_damage_solo;
@@ -315,6 +318,17 @@ void puf_step(Env* env) {
             for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
                 env->log.sol_damage_by_source[source] +=
                     clog->sol_damage_by_source[source];
+            for (int source = 0;
+                    source < COLO_NUM_JAVELIN_DAMAGE_SOURCES;
+                    source++)
+                env->log.javelin_damage_by_source[source] +=
+                    clog->javelin_damage_by_source[source];
+            for (int source = 0; source < COLO_NUM_DAMAGE_SOURCES; source++) {
+                env->log.death_by_source[source] +=
+                    clog->death_by_source[source];
+                env->log.doom_death_by_source[source] +=
+                    clog->doom_death_by_source[source];
+            }
             env->log.death_fatal_damage += clog->death_fatal_damage;
             env->log.offpray_damage_conflict += clog->offpray_damage_conflict;
             env->log.offpray_damage_solo += clog->offpray_damage_solo;
@@ -423,6 +437,72 @@ void puf_log(Log* log, Dict* out) {
             out,
             SOL_DAMAGE_SOURCE_KEYS[source],
             log->sol_damage_by_source[source]);
+    static const char* const JAVELIN_DAMAGE_SOURCE_KEYS[
+        COLO_NUM_JAVELIN_DAMAGE_SOURCES
+    ] = {
+        "javelin_dmg_basic_ranged",
+        "javelin_dmg_skyfall",
+        "javelin_dmg_reentry_pool",
+        "javelin_dmg_reentry_volatility_pool",
+    };
+    for (int source = 0;
+            source < COLO_NUM_JAVELIN_DAMAGE_SOURCES;
+            source++)
+        dict_set(
+            out,
+            JAVELIN_DAMAGE_SOURCE_KEYS[source],
+            log->javelin_damage_by_source[source]);
+    static const char* const DEATH_SOURCE_KEYS[COLO_NUM_DAMAGE_SOURCES] = {
+        "death_source_npc_attack",
+        "death_source_javelin_basic_ranged",
+        "death_source_manticore_venom",
+        "death_source_bee_poison",
+        "death_source_bee_contact",
+        "death_source_javelin_skyfall",
+        "death_source_reentry_pool",
+        "death_source_volatility_explosion",
+        "death_source_volatility_pool",
+        "death_source_reentry_volatility_pool",
+        "death_source_solarflare",
+        "death_source_self",
+        "death_source_sol_spear_1",
+        "death_source_sol_spear_2",
+        "death_source_sol_shield_1",
+        "death_source_sol_shield_2",
+        "death_source_sol_triple_parry",
+        "death_source_sol_grapple",
+        "death_source_sol_crystal_laser",
+        "death_source_sol_molten_sand",
+    };
+    static const char* const DOOM_DEATH_SOURCE_KEYS[COLO_NUM_DAMAGE_SOURCES] = {
+        "doom_death_source_npc_attack",
+        "doom_death_source_javelin_basic_ranged",
+        "doom_death_source_manticore_venom",
+        "doom_death_source_bee_poison",
+        "doom_death_source_bee_contact",
+        "doom_death_source_javelin_skyfall",
+        "doom_death_source_reentry_pool",
+        "doom_death_source_volatility_explosion",
+        "doom_death_source_volatility_pool",
+        "doom_death_source_reentry_volatility_pool",
+        "doom_death_source_solarflare",
+        "doom_death_source_self",
+        "doom_death_source_sol_spear_1",
+        "doom_death_source_sol_spear_2",
+        "doom_death_source_sol_shield_1",
+        "doom_death_source_sol_shield_2",
+        "doom_death_source_sol_triple_parry",
+        "doom_death_source_sol_grapple",
+        "doom_death_source_sol_crystal_laser",
+        "doom_death_source_sol_molten_sand",
+    };
+    for (int source = 0; source < COLO_NUM_DAMAGE_SOURCES; source++) {
+        dict_set(out, DEATH_SOURCE_KEYS[source], log->death_by_source[source]);
+        dict_set(
+            out,
+            DOOM_DEATH_SOURCE_KEYS[source],
+            log->doom_death_by_source[source]);
+    }
     dict_set(out, "death_dmg_unprayable", log->death_dmg_unprayable);
     dict_set(out, "death_dmg_offpray", log->death_dmg_offpray);
     dict_set(out, "death_dmg_prayed", log->death_dmg_prayed);

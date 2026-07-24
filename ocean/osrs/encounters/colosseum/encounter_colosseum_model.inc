@@ -38,6 +38,10 @@ static inline int col_wave_entry_delay_ticks(int target_wave) {
 #define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 9
 #define COLO_STEP_OUT_FORECAST_OBS_SIZE \
     (ENCOUNTER_MOVE_ACTIONS * COLO_STEP_OUT_FORECAST_ACTION_FEATURES)
+#define COLO_CHASE_THREAT_ACTIONS (1 + COLO_OBS_NPCS)
+#define COLO_CHASE_THREAT_ACTION_FEATURES 6
+#define COLO_CHASE_THREAT_OBS_SIZE \
+    (COLO_CHASE_THREAT_ACTIONS * COLO_CHASE_THREAT_ACTION_FEATURES)
 
 typedef struct {
     int melee_count;
@@ -708,8 +712,9 @@ static const int COLO_DOOM_CAP[4] = { 0, 15, 10, 5 };
 #define COLO_VOLATILITY_MAX_HIT 25
 
 typedef enum {
-    COLO_POOL_VOLATILITY = 0,
-    COLO_POOL_REENTRY,
+    COLO_POOL_VOLATILITY = 1,
+    COLO_POOL_REENTRY = 2,
+    COLO_POOL_REENTRY_VOLATILITY = 3,
 } ColoMoltenPoolKind;
 
 typedef enum {
@@ -753,6 +758,38 @@ typedef enum {
     COLO_SOL_DAMAGE_MOLTEN_SAND,
     COLO_NUM_SOL_DAMAGE_SOURCES,
 } ColoSolDamageSource;
+
+typedef enum {
+    COLO_JAVELIN_DAMAGE_BASIC_RANGED = 0,
+    COLO_JAVELIN_DAMAGE_SKYFALL,
+    COLO_JAVELIN_DAMAGE_REENTRY_POOL,
+    COLO_JAVELIN_DAMAGE_REENTRY_VOLATILITY_POOL,
+    COLO_NUM_JAVELIN_DAMAGE_SOURCES,
+} ColoJavelinDamageSource;
+
+typedef enum {
+    COLO_DAMAGE_NPC_ATTACK = 0,
+    COLO_DAMAGE_JAVELIN_BASIC_RANGED,
+    COLO_DAMAGE_MANTICORE_VENOM,
+    COLO_DAMAGE_BEE_POISON,
+    COLO_DAMAGE_BEE_CONTACT,
+    COLO_DAMAGE_JAVELIN_SKYFALL,
+    COLO_DAMAGE_REENTRY_POOL,
+    COLO_DAMAGE_VOLATILITY_EXPLOSION,
+    COLO_DAMAGE_VOLATILITY_POOL,
+    COLO_DAMAGE_REENTRY_VOLATILITY_POOL,
+    COLO_DAMAGE_SOLARFLARE,
+    COLO_DAMAGE_SELF,
+    COLO_DAMAGE_SOL_SPEAR_1,
+    COLO_DAMAGE_SOL_SPEAR_2,
+    COLO_DAMAGE_SOL_SHIELD_1,
+    COLO_DAMAGE_SOL_SHIELD_2,
+    COLO_DAMAGE_SOL_TRIPLE_PARRY,
+    COLO_DAMAGE_SOL_GRAPPLE,
+    COLO_DAMAGE_SOL_CRYSTAL_LASER,
+    COLO_DAMAGE_SOL_MOLTEN_SAND,
+    COLO_NUM_DAMAGE_SOURCES,
+} ColoDamageSource;
 
 typedef enum {
     COLO_SOL_ATTACK_NONE = 0,
@@ -1597,6 +1634,9 @@ typedef struct {
     float farm_damage;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
+    float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
+    float death_by_source[COLO_NUM_DAMAGE_SOURCES];
+    float doom_death_by_source[COLO_NUM_DAMAGE_SOURCES];
     float outcome_score;
     float max_wave_depth;
 } ColosseumLog;
@@ -1653,6 +1693,8 @@ typedef struct {
     float reward;
     float episode_return;
     int last_hit_by_type;
+    int last_damage_source;
+    int last_doom_damage_source;
     int rewarded_boss_phase;
     float avoided_damage_already_rewarded;
     int min_sol_hp_seen;
@@ -1702,6 +1744,7 @@ typedef struct {
     uint32_t rng_state;
 
     float active_player_damage_received_scale;
+    int profiling_suppressed;
 
     ColoObsMemoCaches obs_memos;
 } ColosseumState;
@@ -1711,7 +1754,7 @@ typedef enum {
     COLO_DMG_UNPRAYABLE = 1,
 } ColoDamageChannel;
 
-static inline void col_damage_player_from(
+static inline int col_damage_player_from(
     ColosseumState* s, int dmg, int npc_type, ColoDamageChannel channel);
 static void col_apply_bis_gear_oracle(ColosseumState* s);
 

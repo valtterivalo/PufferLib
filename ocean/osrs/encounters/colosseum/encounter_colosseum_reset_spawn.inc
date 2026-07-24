@@ -486,6 +486,8 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     s->player_dest_x = -1;
     s->player_dest_y = -1;
     s->last_hit_by_type = -1;
+    s->last_damage_source = -1;
+    s->last_doom_damage_source = -1;
     s->min_sol_hp_seen = COLO_SOL_HP_MAX;
 
     s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;

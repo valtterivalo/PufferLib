@@ -245,16 +245,190 @@ static ColoForecastLanding col_primary_action_landing_ctx(
     return landing;
 }
 
+#define COLO_ATTACK_ROUTE_CACHE_CAPACITY 256
+
+typedef struct {
+    const CollisionMap* collision_map;
+    int world_offset_x;
+    int world_offset_y;
+    int source_x;
+    int source_y;
+    int sol_clamp_active;
+    int boss_arena_min_x;
+    int boss_arena_min_y;
+    int boss_arena_max_x;
+    int boss_arena_max_y;
+} ColoAttackRouteCacheKey;
+
+typedef struct {
+    int valid;
+    ColoAttackRouteCacheKey key;
+    EncounterArenaAttackRouteField field;
+} ColoAttackRouteCacheEntry;
+
+static int col_attack_route_cache_key_equal(
+    ColoAttackRouteCacheKey a,
+    ColoAttackRouteCacheKey b
+) {
+    return a.collision_map == b.collision_map &&
+        a.world_offset_x == b.world_offset_x &&
+        a.world_offset_y == b.world_offset_y &&
+        a.source_x == b.source_x &&
+        a.source_y == b.source_y &&
+        a.sol_clamp_active == b.sol_clamp_active &&
+        a.boss_arena_min_x == b.boss_arena_min_x &&
+        a.boss_arena_min_y == b.boss_arena_min_y &&
+        a.boss_arena_max_x == b.boss_arena_max_x &&
+        a.boss_arena_max_y == b.boss_arena_max_y;
+}
+
+static EncounterArenaAttackRouteField* col_cached_attack_route_field(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    ColoWalkCtx* walk_ctx
+) {
+    static OSRS_THREAD_LOCAL ColoAttackRouteCacheEntry
+        cache[COLO_ATTACK_ROUTE_CACHE_CAPACITY];
+    static OSRS_THREAD_LOCAL uint32_t next_replacement = 0;
+    int clamp = col_sol_clamp_active(s);
+    ColoAttackRouteCacheKey key = {
+        .collision_map = ctx->collision_map,
+        .world_offset_x = ctx->world_offset_x,
+        .world_offset_y = ctx->world_offset_y,
+        .source_x = s->player.x,
+        .source_y = s->player.y,
+        .sol_clamp_active = clamp,
+        .boss_arena_min_x = clamp ? s->sol.boss_arena_min_x : 0,
+        .boss_arena_min_y = clamp ? s->sol.boss_arena_min_y : 0,
+        .boss_arena_max_x = clamp ? s->sol.boss_arena_max_x : 0,
+        .boss_arena_max_y = clamp ? s->sol.boss_arena_max_y : 0,
+    };
+    ColoAttackRouteCacheEntry* entry = NULL;
+    for (int i = 0; i < COLO_ATTACK_ROUTE_CACHE_CAPACITY; i++) {
+        if (cache[i].valid &&
+                col_attack_route_cache_key_equal(cache[i].key, key)) {
+            entry = &cache[i];
+            break;
+        }
+    }
+    if (!entry) {
+        entry = &cache[next_replacement % COLO_ATTACK_ROUTE_CACHE_CAPACITY];
+        next_replacement++;
+        entry->valid = 1;
+        entry->key = key;
+        encounter_build_arena_attack_route_field(
+            &entry->field,
+            ctx->collision_map,
+            ctx->world_offset_x,
+            ctx->world_offset_y,
+            s->player.x,
+            s->player.y,
+            col_tile_walkable,
+            walk_ctx,
+            col_pathfind_blocked,
+            walk_ctx,
+            COLO_ARENA_MIN_X,
+            COLO_ARENA_MIN_Y,
+            COLO_ARENA_WIDTH,
+            COLO_ARENA_HEIGHT);
+    }
+    entry->field.collision_map = ctx->collision_map;
+    entry->field.is_walkable = col_tile_walkable;
+    entry->field.walkable_ctx = walk_ctx;
+    entry->field.extra_blocked = col_pathfind_blocked;
+    entry->field.blocked_ctx = walk_ctx;
+    return &entry->field;
+}
+
 static void col_build_primary_action_landings_ctx(
     ColosseumState* s,
     ColosseumContext* ctx,
     ColoForecastLanding landings[COLO_PRIMARY_DIM]
 ) {
+    ColosseumState phase_state = *s;
+    ColosseumContext phase_ctx = *ctx;
+    phase_state.profiling_suppressed = 1;
+    int phase_actions[COLO_NUM_ACTION_HEADS] = {0};
+    ColoPrePlayerPhase phase = col_advance_pre_player_phase_ctx(
+        &phase_state, &phase_ctx, phase_actions);
+
     for (int primary_action = 0;
             primary_action < COLO_PRIMARY_DIM;
             primary_action++) {
+        landings[primary_action] = (ColoForecastLanding){
+            .valid = col_primary_action_valid(s, primary_action),
+            .land_x = s->player.x,
+            .land_y = s->player.y,
+        };
+    }
+    if (!phase.player_phase_reached ||
+            (phase_state.modifiers.draft_pending &&
+             !phase_state.modifiers.draft_free_movement)) {
+        return;
+    }
+
+    for (int primary_action = 1;
+            primary_action < ENCOUNTER_MOVE_ACTIONS;
+            primary_action++) {
+        if (!landings[primary_action].valid) continue;
         landings[primary_action] =
-            col_primary_action_landing_ctx(s, ctx, primary_action);
+            col_primary_action_landing_ctx(
+                &phase_state, &phase_ctx, primary_action);
+    }
+
+    ColoWalkCtx walk_ctx = {
+        .s = &phase_state,
+        .ctx = &phase_ctx,
+    };
+    EncounterArenaAttackRouteField* route_field =
+        col_cached_attack_route_field(&phase_state, &phase_ctx, &walk_ctx);
+    OsrsLosQuery los_query = col_player_los_query(&phase_state);
+    int attack_range = col_player_attack_range(&phase_state);
+
+    if (phase_state.player_dest_x >= 0) {
+        landings[0] =
+            col_primary_action_landing_ctx(&phase_state, &phase_ctx, 0);
+    } else if (osrs_interaction_active(&phase_state.interaction)) {
+        int target_slot = phase_state.interaction.target_slot;
+        if (target_slot >= 0 &&
+                target_slot < COLO_MAX_NPCS &&
+                col_npc_is_live_target(&phase_state.npcs[target_slot])) {
+            ColoNPC* target = &phase_state.npcs[target_slot];
+            EncounterAttackRouteLanding route =
+                encounter_arena_attack_route_landing(
+                    route_field,
+                    target->x,
+                    target->y,
+                    col_npc_effective_size(target),
+                    attack_range,
+                    &los_query);
+            landings[0].land_x = route.land_x;
+            landings[0].land_y = route.land_y;
+        }
+    }
+
+    for (int primary_action = COLO_PRIMARY_ATTACK_BASE;
+            primary_action < COLO_PRIMARY_DIM;
+            primary_action++) {
+        if (!landings[primary_action].valid) continue;
+        int obs_slot = col_primary_obs_slot_from_action(primary_action);
+        int target_slot = col_obs_slot_to_npc(s, obs_slot);
+        if (target_slot < 0 ||
+                target_slot >= COLO_MAX_NPCS ||
+                !col_npc_is_live_target(&phase_state.npcs[target_slot])) {
+            continue;
+        }
+        ColoNPC* target = &phase_state.npcs[target_slot];
+        EncounterAttackRouteLanding route =
+            encounter_arena_attack_route_landing(
+                route_field,
+                target->x,
+                target->y,
+                col_npc_effective_size(target),
+                attack_range,
+                &los_query);
+        landings[primary_action].land_x = route.land_x;
+        landings[primary_action].land_y = route.land_y;
     }
 }
 
@@ -482,6 +656,7 @@ static int col_forecast_npc_threat_distance_impossible(
 }
 
 static int col_forecast_action_rollout_writes_no_threats(
+    const ColosseumState* s,
     const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
     const int slots[COLO_MAX_NPCS],
     int slot_count,
@@ -490,8 +665,11 @@ static int col_forecast_action_rollout_writes_no_threats(
 ) {
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
-        if (!col_forecast_npc_threat_distance_impossible(
-                &base_npcs[i], action->land_x, action->land_y, horizon)) {
+        int current_impossible = col_forecast_npc_threat_distance_impossible(
+            &base_npcs[i], s->player.x, s->player.y, 1);
+        int landing_impossible = col_forecast_npc_threat_distance_impossible(
+            &base_npcs[i], action->land_x, action->land_y, horizon);
+        if (!current_impossible || !landing_impossible) {
             return 0;
         }
     }
@@ -511,11 +689,12 @@ static int col_forecast_warband_adjacent(
 static int col_forecast_move_result_matches(
     const ColoForecastMoveResult* move,
     const ColoForecastNpcLocal* npc,
-    const ColoStepOutForecastAction* action
+    int player_x,
+    int player_y
 ) {
     return move && move->held &&
         move->npc_x == npc->x && move->npc_y == npc->y &&
-        move->land_x == action->land_x && move->land_y == action->land_y;
+        move->land_x == player_x && move->land_y == player_y;
 }
 
 static ColoForecastMoveResult col_forecast_local_move_npc(
@@ -523,7 +702,8 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
     uint8_t npc_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT],
     int idx,
-    ColoStepOutForecastAction* action,
+    int player_x,
+    int player_y,
     int sol_clamp_active
 ) {
     ColoForecastMoveResult result = {0};
@@ -537,18 +717,18 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     int ranged_hold = npc->attack_range > 1 &&
         npc->forecast_behavior != COLO_FORECAST_BEHAVIOR_SOL;
     if (ranged_hold) {
-        int dist = col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
+        int dist = col_forecast_local_dist_to_player(npc, player_x, player_y);
         int los = 0;
         if (dist >= 1 && dist <= npc->attack_range &&
                 (los = col_forecast_local_has_los_to_player(
-                    s, npc, action->land_x, action->land_y))) {
+                    s, npc, player_x, player_y))) {
             result.held = 1;
             result.dist = dist;
             result.los = los;
             result.npc_x = npc->x;
             result.npc_y = npc->y;
-            result.land_x = action->land_x;
-            result.land_y = action->land_y;
+            result.land_x = player_x;
+            result.land_y = player_y;
             return result;
         }
     }
@@ -557,13 +737,13 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     ColoForecastMoveCtx move_ctx;
     move_ctx.state = s;
     move_ctx.npc_flags = npc_flags;
-    move_ctx.player_x = action->land_x;
-    move_ctx.player_y = action->land_y;
+    move_ctx.player_x = player_x;
+    move_ctx.player_y = player_y;
     move_ctx.sol_clamp_active = sol_clamp_active;
 
     col_forecast_local_stamp_npc(npc_flags, npc, 0);
-    int tx = action->land_x;
-    int ty = action->land_y;
+    int tx = player_x;
+    int ty = player_y;
     EncounterNpcStepPolicy step_policy = npc->attack_range > 1
         ? ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET
         : ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE;
@@ -571,8 +751,8 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     int steps = 1;
     uint32_t rng = s->rng_state;
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
-        tx = action->land_x + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][0];
-        ty = action->land_y + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][1];
+        tx = player_x + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][0];
+        ty = player_y + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][1];
         step_policy = ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
         blocked = col_forecast_local_npc_blocked;
         steps = COLO_WARBAND_TILES_PER_TICK;
@@ -636,7 +816,8 @@ static void col_forecast_manticore_delay_ready_peers(
     const int slots[COLO_MAX_NPCS],
     int slot_count,
     int idx,
-    const ColoStepOutForecastAction* action
+    int player_x,
+    int player_y
 ) {
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
@@ -648,10 +829,10 @@ static void col_forecast_manticore_delay_ready_peers(
         if (other->cycle_step > 0) continue;
         if (other->stun_timer > 0 || other->frozen_ticks > 0) continue;
         int dist = col_forecast_local_dist_to_player(
-            other, action->land_x, action->land_y);
+            other, player_x, player_y);
         if (dist < 1 || dist > other->attack_range) continue;
         if (!col_forecast_local_has_los_to_player(
-                s, other, action->land_x, action->land_y)) continue;
+                s, other, player_x, player_y)) continue;
         other->attack_timer = COLO_MANTICORE_STAGGER_TICKS + 1;
     }
 }
@@ -685,6 +866,8 @@ static void col_forecast_local_attack_manticore(
     ColoForecastObsSummary* summary,
     int tick_idx,
     const ColoForecastMoveResult* move_result,
+    int player_x,
+    int player_y,
     int multi_manticore_possible
 ) {
     ColoForecastNpcLocal* npc = &npcs[idx];
@@ -697,12 +880,13 @@ static void col_forecast_local_attack_manticore(
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
 
-    int move_result_matches = col_forecast_move_result_matches(move_result, npc, action);
+    int move_result_matches =
+        col_forecast_move_result_matches(move_result, npc, player_x, player_y);
     int dist = move_result_matches ? move_result->dist :
-        col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
+        col_forecast_local_dist_to_player(npc, player_x, player_y);
     if (dist < 1 || dist > npc->attack_range) return;
     int los = move_result_matches ? move_result->los :
-        col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
+        col_forecast_local_has_los_to_player(s, npc, player_x, player_y);
     if (!los) return;
     if (npc->orb_style[0] == ATTACK_STYLE_NONE) {
         for (int orb = 0; orb < 3; orb++) npc->orb_style[orb] = npc->fixed_orb_style[orb];
@@ -712,7 +896,7 @@ static void col_forecast_local_attack_manticore(
     col_forecast_local_fire_manticore_orb(npc, action, summary, tick_idx);
     if (multi_manticore_possible)
         col_forecast_manticore_delay_ready_peers(
-            s, npcs, slots, slot_count, idx, action);
+            s, npcs, slots, slot_count, idx, player_x, player_y);
 }
 
 static void col_forecast_local_attack_warband(
@@ -736,15 +920,18 @@ static void col_forecast_local_attack_standard(
     ColoStepOutForecastAction* action,
     ColoForecastObsSummary* summary,
     int tick_idx,
-    const ColoForecastMoveResult* move_result
+    const ColoForecastMoveResult* move_result,
+    int player_x,
+    int player_y
 ) {
     if (npc->attack_timer > 0) npc->attack_timer--;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
     if (npc->attack_timer > 0) return;
 
-    int move_result_matches = col_forecast_move_result_matches(move_result, npc, action);
+    int move_result_matches =
+        col_forecast_move_result_matches(move_result, npc, player_x, player_y);
     int dist = move_result_matches ? move_result->dist :
-        col_forecast_local_dist_to_player(npc, action->land_x, action->land_y);
+        col_forecast_local_dist_to_player(npc, player_x, player_y);
     if (npc->type == COLO_MINOTAUR) {
         if (dist == 1) {
             col_step_out_forecast_record_style(
@@ -754,7 +941,7 @@ static void col_forecast_local_attack_standard(
         return;
     }
     if (npc->type == COLO_JAGUAR_WARRIOR) {
-        if (col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
+        if (col_forecast_local_melee_adjacent(npc, player_x, player_y)) {
             col_step_out_forecast_record_style(
                 action, summary, tick_idx, npc->type, ATTACK_STYLE_MELEE);
             npc->attack_timer = npc->attack_speed;
@@ -765,10 +952,10 @@ static void col_forecast_local_attack_standard(
     if (npc->attack_range > 1) {
         if (dist < 1 || dist > npc->attack_range) return;
         int los = move_result_matches ? move_result->los :
-            col_forecast_local_has_los_to_player(s, npc, action->land_x, action->land_y);
+            col_forecast_local_has_los_to_player(s, npc, player_x, player_y);
         if (!los)
             return;
-    } else if (!col_forecast_local_melee_adjacent(npc, action->land_x, action->land_y)) {
+    } else if (!col_forecast_local_melee_adjacent(npc, player_x, player_y)) {
         return;
     }
 
@@ -800,6 +987,8 @@ static void col_forecast_local_attack_npc(
     ColoForecastObsSummary* summary,
     int tick_idx,
     const ColoForecastMoveResult* move_result,
+    int player_x,
+    int player_y,
     const ColoForecastPrecomp* pre
 ) {
     ColoForecastNpcLocal* npc = &npcs[idx];
@@ -811,14 +1000,15 @@ static void col_forecast_local_attack_npc(
         case COLO_FORECAST_BEHAVIOR_MANTICORE:
             col_forecast_local_attack_manticore(
                 s, npcs, slots, slot_count, idx, action, summary, tick_idx,
-                move_result, pre->multi_manticore_possible);
+                move_result, player_x, player_y, pre->multi_manticore_possible);
             return;
         case COLO_FORECAST_BEHAVIOR_SOL:
             return;
         case COLO_FORECAST_BEHAVIOR_STANDARD:
             break;
     }
-    col_forecast_local_attack_standard(s, npc, action, summary, tick_idx, move_result);
+    col_forecast_local_attack_standard(
+        s, npc, action, summary, tick_idx, move_result, player_x, player_y);
 }
 
 static void col_step_out_forecast_readonly_tick(
@@ -832,6 +1022,8 @@ static void col_step_out_forecast_readonly_tick(
     int slot_count,
     const ColoForecastPrecomp* pre
 ) {
+    int player_x = tick_idx == 0 ? s->player.x : action->land_x;
+    int player_y = tick_idx == 0 ? s->player.y : action->land_y;
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
         ColoForecastNpcLocal* npc = &npcs[i];
@@ -843,10 +1035,10 @@ static void col_step_out_forecast_readonly_tick(
         }
         ColoForecastMoveResult move_result =
             col_forecast_local_move_npc(
-                s, npcs, npc_flags, i, action, pre->sol_clamp_active);
+                s, npcs, npc_flags, i, player_x, player_y, pre->sol_clamp_active);
         col_forecast_local_attack_npc(
             s, npcs, slots, slot_count, i, action, summary, tick_idx,
-            &move_result, pre);
+            &move_result, player_x, player_y, pre);
     }
 }
 
@@ -967,9 +1159,39 @@ static int col_forecast_solarflare_contact_tick(
         col_solarflare_advance_orb(&orb, pre->tier);
         int x, y;
         col_solarflare_tile(s, pre->pillar, orb.step, &x, &y);
-        if (x == land_x && y == land_y) return tick_idx;
+        int player_x = tick_idx == 0 ? s->player.x : land_x;
+        int player_y = tick_idx == 0 ? s->player.y : land_y;
+        if (x == player_x && y == player_y) return tick_idx;
     }
     return -1;
+}
+
+static void col_forecast_action_rollout(
+    const ColosseumState* s,
+    const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
+    const uint8_t base_npc_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT],
+    const int slots[COLO_MAX_NPCS],
+    int slot_count,
+    const ColoForecastPrecomp* pre,
+    ColoStepOutForecastAction* action,
+    ColoForecastObsSummary* summary,
+    int horizon
+) {
+    if (col_forecast_action_rollout_writes_no_threats(
+            s, base_npcs, slots, slot_count, action, horizon)) {
+        return;
+    }
+    ColoForecastNpcLocal npcs[COLO_MAX_NPCS];
+    uint8_t npc_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
+    col_forecast_local_copy_slot_set(
+        npcs, base_npcs, slots, slot_count);
+    memcpy(npc_flags, base_npc_flags, sizeof(npc_flags));
+    for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
+        col_step_out_forecast_readonly_tick(
+            s, npcs, npc_flags, action, summary, tick_idx,
+            slots, slot_count, pre);
+    }
+    col_step_out_forecast_finalize_action(action, horizon);
 }
 
 static void col_build_step_out_forecast_horizon_mode_summary(
@@ -1014,28 +1236,32 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
-        if (col_forecast_action_rollout_writes_no_threats(
-                base_npcs, forecast_slots, forecast_slot_count, action, horizon)) {
-            continue;
-        }
         if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
                 col_forecast_action_is_run_tile(action_idx)) {
+            if (col_forecast_action_rollout_writes_no_threats(
+                    s,
+                    base_npcs,
+                    forecast_slots,
+                    forecast_slot_count,
+                    action,
+                    horizon)) {
+                continue;
+            }
             col_forecast_static_threat_action(
                 s, base_npcs, forecast_slots, forecast_slot_count, action, summary);
             col_step_out_forecast_finalize_action(action, horizon);
             continue;
         }
-        ColoForecastNpcLocal npcs[COLO_MAX_NPCS];
-        uint8_t npc_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
-        col_forecast_local_copy_slot_set(
-            npcs, base_npcs, forecast_slots, forecast_slot_count);
-        memcpy(npc_flags, base_npc_flags, sizeof(base_npc_flags));
-        for (int tick_idx = 0; tick_idx < horizon; tick_idx++) {
-            col_step_out_forecast_readonly_tick(
-                s, npcs, npc_flags, action, summary, tick_idx,
-                forecast_slots, forecast_slot_count, &pre);
-        }
-        col_step_out_forecast_finalize_action(action, horizon);
+        col_forecast_action_rollout(
+            s,
+            base_npcs,
+            base_npc_flags,
+            forecast_slots,
+            forecast_slot_count,
+            &pre,
+            action,
+            summary,
+            horizon);
     }
 #ifdef COLO_PROFILE_ENABLED
     if (col_fc_prof) { double n = COLO_PROFILE_NOW_MS(); COLO_PROFILE_ADD(COLO_PROF_FC_ROLLOUT, n - col_fc_t); col_fc_t = n; }
@@ -1052,6 +1278,85 @@ static void col_build_step_out_forecast_horizon_mode_summary(
 #ifdef COLO_PROFILE_ENABLED
     if (col_fc_prof) COLO_PROFILE_ADD(COLO_PROF_FC_SOLARFLARE, COLO_PROFILE_NOW_MS() - col_fc_t);
 #endif
+}
+
+static int col_chase_threat_primary_action(int chase_action) {
+    assert(chase_action >= 0 && chase_action < COLO_CHASE_THREAT_ACTIONS);
+    if (chase_action == 0) return 0;
+    return ENCOUNTER_MOVE_ACTIONS + chase_action - 1;
+}
+
+static void col_build_chase_action_threat_forecasts(
+    const ColosseumState* s,
+    const ColoForecastLanding primary_landings[COLO_PRIMARY_DIM],
+    ColoStepOutForecastAction actions[COLO_CHASE_THREAT_ACTIONS],
+    ColoForecastObsSummary summaries[COLO_CHASE_THREAT_ACTIONS],
+    int horizon
+) {
+    memset(
+        actions,
+        0,
+        sizeof(ColoStepOutForecastAction) * COLO_CHASE_THREAT_ACTIONS);
+    memset(
+        summaries,
+        0,
+        sizeof(ColoForecastObsSummary) * COLO_CHASE_THREAT_ACTIONS);
+
+    int slots[COLO_MAX_NPCS];
+    int slot_count = col_collect_step_out_forecast_slots(s, slots);
+    ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS];
+    uint8_t base_npc_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
+    ColoForecastPrecomp pre = {0};
+    if (slot_count > 0) {
+        col_forecast_local_copy_npc_slots(
+            s, base_npcs, slots, slot_count);
+        col_forecast_local_rebuild_npc_flags(
+            base_npcs, base_npc_flags, slots, slot_count);
+        pre = col_forecast_precompute(
+            s, base_npcs, slots, slot_count);
+    }
+
+    for (int chase_action = 0;
+            chase_action < COLO_CHASE_THREAT_ACTIONS;
+            chase_action++) {
+        int primary_action = col_chase_threat_primary_action(chase_action);
+        const ColoForecastLanding* landing = &primary_landings[primary_action];
+        ColoStepOutForecastAction* action = &actions[chase_action];
+        action->valid = landing->valid;
+        action->land_x = landing->land_x;
+        action->land_y = landing->land_y;
+        if (!action->valid || slot_count == 0) continue;
+
+        int duplicate = -1;
+        for (int prior = 0; prior < chase_action; prior++) {
+            if (!actions[prior].valid) continue;
+            if (actions[prior].land_x == action->land_x &&
+                    actions[prior].land_y == action->land_y) {
+                duplicate = prior;
+                break;
+            }
+        }
+        if (duplicate >= 0) {
+            int valid = action->valid;
+            *action = actions[duplicate];
+            action->valid = valid;
+            action->land_x = landing->land_x;
+            action->land_y = landing->land_y;
+            summaries[chase_action] = summaries[duplicate];
+            continue;
+        }
+
+        col_forecast_action_rollout(
+            s,
+            base_npcs,
+            base_npc_flags,
+            slots,
+            slot_count,
+            &pre,
+            action,
+            &summaries[chase_action],
+            horizon);
+    }
 }
 
 static void col_build_step_out_forecast_horizon_mode(

@@ -1617,6 +1617,9 @@ static void run_metrics(
     static uint64_t wave_ticks[12], wave_visits[12], wave_reinforced[12];
     static uint64_t wave_attacks_post_reinforce[12];
     double sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES] = {0};
+    double javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES] = {0};
+    double death_by_source[COLO_NUM_DAMAGE_SOURCES] = {0};
+    double doom_death_by_source[COLO_NUM_DAMAGE_SOURCES] = {0};
     memset(wpn_npc, 0, sizeof(wpn_npc));
     memset(wpn_total, 0, sizeof(wpn_total));
     memset(wpn_spec, 0, sizeof(wpn_spec));
@@ -1712,6 +1715,17 @@ static void run_metrics(
             for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
                 sol_damage_by_source[source] +=
                     (double)cs->log.sol_damage_by_source[source];
+            for (int source = 0;
+                    source < COLO_NUM_JAVELIN_DAMAGE_SOURCES;
+                    source++)
+                javelin_damage_by_source[source] +=
+                    (double)cs->log.javelin_damage_by_source[source];
+            for (int source = 0; source < COLO_NUM_DAMAGE_SOURCES; source++) {
+                death_by_source[source] +=
+                    (double)cs->log.death_by_source[source];
+                doom_death_by_source[source] +=
+                    (double)cs->log.doom_death_by_source[source];
+            }
             episodes++;
             edef->reset(env->encounter_state,
                 (EncounterContext*)env->encounter_context,
@@ -1797,6 +1811,61 @@ static void run_metrics(
             damage / (double)num_episodes,
             sol_episodes ? damage / (double)sol_episodes : 0.0,
             sol_damage_total > 0.0 ? 100.0 * damage / sol_damage_total : 0.0);
+    }
+    static const char* const javelin_damage_source_names[
+        COLO_NUM_JAVELIN_DAMAGE_SOURCES
+    ] = {
+        "basic_ranged",
+        "skyfall",
+        "reentry_pool",
+        "reentry_volatility_pool",
+    };
+    double javelin_damage_total = 0.0;
+    for (int source = 0;
+            source < COLO_NUM_JAVELIN_DAMAGE_SOURCES;
+            source++)
+        javelin_damage_total += javelin_damage_by_source[source];
+    printf("\njavelin_damage_source,total,per_episode,pct\n");
+    for (int source = 0;
+            source < COLO_NUM_JAVELIN_DAMAGE_SOURCES;
+            source++) {
+        double damage = javelin_damage_by_source[source];
+        printf("%s,%.0f,%.3f,%.1f%%\n",
+            javelin_damage_source_names[source],
+            damage,
+            damage / (double)num_episodes,
+            javelin_damage_total > 0.0
+                ? 100.0 * damage / javelin_damage_total
+                : 0.0);
+    }
+    static const char* const damage_source_names[COLO_NUM_DAMAGE_SOURCES] = {
+        "npc_attack",
+        "javelin_basic_ranged",
+        "manticore_venom",
+        "bee_poison",
+        "bee_contact",
+        "javelin_skyfall",
+        "reentry_pool",
+        "volatility_explosion",
+        "volatility_pool",
+        "reentry_volatility_pool",
+        "solarflare",
+        "self",
+        "sol_spear_1",
+        "sol_spear_2",
+        "sol_shield_1",
+        "sol_shield_2",
+        "sol_triple_parry",
+        "sol_grapple",
+        "sol_crystal_laser",
+        "sol_molten_sand",
+    };
+    printf("\ndamage_source,deaths,doom_deaths\n");
+    for (int source = 0; source < COLO_NUM_DAMAGE_SOURCES; source++) {
+        printf("%s,%.0f,%.0f\n",
+            damage_source_names[source],
+            death_by_source[source],
+            doom_death_by_source[source]);
     }
     printf("\nweapon\\npc");
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) printf(",%s", npc_names[t]);

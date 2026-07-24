@@ -293,10 +293,14 @@ static void col_sol_tick_aoe(ColosseumState* s) {
         col_sol_aoe_tile_is_hazard(sol, s->player.x, s->player.y)) {
         int dmg = COLO_SOL_SLAM_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_SOL_SLAM_RAND);
-        col_damage_player_from_sol(
-            s, dmg, col_sol_aoe_damage_source(sol->aoe_attack));
-        s->last_hit_by_type = COLO_SOL_HEREDIT;
-        col_mod_on_player_damaged(s, dmg);
+        ColoSolDamageSource source =
+            col_sol_aoe_damage_source(sol->aoe_attack);
+        int applied = col_damage_player_from_sol(s, dmg, source);
+        if (applied > 0) {
+            s->last_hit_by_type = COLO_SOL_HEREDIT;
+            col_mod_on_player_damaged(
+                s, applied, col_damage_source_from_sol(source));
+        }
     }
     if (sol->aoe_age >= COLO_SOL_AOE_LIFETIME) sol->aoe_attack = COLO_SOL_AOE_NONE;
 }
@@ -396,9 +400,13 @@ static void col_sol_tick_crystals(ColosseumState* s) {
                 col_sol_crystal_in_line(s, c)) {
             int dmg = COLO_SOL_LASER_MIN_HIT
                 + encounter_rand_int(&s->rng_state, COLO_SOL_LASER_RAND);
-            col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_CRYSTAL_LASER);
-            s->last_hit_by_type = COLO_SOL_HEREDIT;
-            col_mod_on_player_damaged(s, dmg);
+            int applied = col_damage_player_from_sol(
+                s, dmg, COLO_SOL_DAMAGE_CRYSTAL_LASER);
+            if (applied > 0) {
+                s->last_hit_by_type = COLO_SOL_HEREDIT;
+                col_mod_on_player_damaged(
+                    s, applied, COLO_DAMAGE_SOL_CRYSTAL_LASER);
+            }
         }
 
         c->move_timer--;
@@ -505,9 +513,13 @@ static void col_sol_tick_molten(ColosseumState* s) {
     if (col_sol_molten_sand_at(sol, s->player.x, s->player.y)) {
         int dmg = COLO_MOLTEN_SAND_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_MOLTEN_SAND_RAND);
-        col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_MOLTEN_SAND);
-        s->last_hit_by_type = COLO_SOL_HEREDIT;
-        col_mod_on_player_damaged(s, dmg);
+        int applied =
+            col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_MOLTEN_SAND);
+        if (applied > 0) {
+            s->last_hit_by_type = COLO_SOL_HEREDIT;
+            col_mod_on_player_damaged(
+                s, applied, COLO_DAMAGE_SOL_MOLTEN_SAND);
+        }
     }
 }
 
@@ -558,10 +570,13 @@ static void col_sol_tick_triple_parry(ColosseumState* s, const ColosseumContext*
             s->tick_scratch.prayer_correct++;
         } else {
             s->tick_scratch.offpray_damage_this_tick += (float)sol->parry_damage[h];
-            col_damage_player_from_sol(
+            int applied = col_damage_player_from_sol(
                 s, sol->parry_damage[h], COLO_SOL_DAMAGE_TRIPLE_PARRY);
-            s->last_hit_by_type = COLO_SOL_HEREDIT;
-            col_mod_on_player_damaged(s, sol->parry_damage[h]);
+            if (applied > 0) {
+                s->last_hit_by_type = COLO_SOL_HEREDIT;
+                col_mod_on_player_damaged(
+                    s, applied, COLO_DAMAGE_SOL_TRIPLE_PARRY);
+            }
         }
         col_log_prayer_event(s, COLO_SOL_HEREDIT, blocked, blocked ? 0 : sol->parry_damage[h]);
         s->player.prayer = PRAYER_NONE;
@@ -602,9 +617,13 @@ static void col_sol_tick_grapple(ColosseumState* s) {
     if (sol->grapple_timer == 0 && !sol->grapple_resolved) {
         int dmg = COLO_SOL_SLAM_MIN_HIT
             + encounter_rand_int(&s->rng_state, COLO_SOL_SLAM_RAND);
-        col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_GRAPPLE);
-        s->last_hit_by_type = COLO_SOL_HEREDIT;
-        col_mod_on_player_damaged(s, dmg);
+        int applied =
+            col_damage_player_from_sol(s, dmg, COLO_SOL_DAMAGE_GRAPPLE);
+        if (applied > 0) {
+            s->last_hit_by_type = COLO_SOL_HEREDIT;
+            col_mod_on_player_damaged(
+                s, applied, COLO_DAMAGE_SOL_GRAPPLE);
+        }
         sol->grapple_active = 0;
         sol->grapple_resolved = 1;
         sol->grapple_outcome = COLO_GRAPPLE_OUTCOME_FAILED;

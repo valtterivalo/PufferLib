@@ -241,6 +241,8 @@ static void bench_profiled_tick(
     const ColoForecastPrecomp* pre,
     ColoForecastBenchProfile* profile
 ) {
+    int player_x = tick_idx == 0 ? s->player.x : action->land_x;
+    int player_y = tick_idx == 0 ? s->player.y : action->land_y;
     for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
         int i = slots[slot_idx];
         ColoForecastNpcLocal* npc = &npcs[i];
@@ -256,13 +258,19 @@ static void bench_profiled_tick(
         start = now_ns();
         ColoForecastMoveResult move_result =
             col_forecast_local_move_npc(
-                s, npcs, npc_flags, i, action, pre->sol_clamp_active);
+                s,
+                npcs,
+                npc_flags,
+                i,
+                player_x,
+                player_y,
+                pre->sol_clamp_active);
         bench_add_ns(profile, COLO_BENCH_MOVEMENT, start);
 
         start = now_ns();
         col_forecast_local_attack_npc(
             s, npcs, slots, slot_count, i, action, summary, tick_idx,
-            &move_result, pre);
+            &move_result, player_x, player_y, pre);
         bench_add_ns(profile, COLO_BENCH_ATTACK_AI, start);
         profile->npc_tick_visits++;
     }
@@ -327,12 +335,17 @@ static void bench_profiled_forecast_build(
         profile->valid_actions++;
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
-        if (col_forecast_action_rollout_writes_no_threats(
-                base_npcs, forecast_slots, forecast_slot_count, action, horizon)) {
-            continue;
-        }
         if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
                 col_forecast_action_is_run_tile(action_idx)) {
+            if (col_forecast_action_rollout_writes_no_threats(
+                    s,
+                    base_npcs,
+                    forecast_slots,
+                    forecast_slot_count,
+                    action,
+                    horizon)) {
+                continue;
+            }
             col_forecast_static_threat_action(
                 s, base_npcs, forecast_slots, forecast_slot_count, action, summary);
             profile->static_threat_actions++;
@@ -455,6 +468,88 @@ static double bench_state_copy_seconds(
     return (double)(now_ns() - start) / 1000000000.0;
 }
 
+static double bench_primary_action_landings_seconds(
+    const ColoBenchCorpus* corpus,
+    const ColosseumContext* template_ctx,
+    int iters
+) {
+    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    uint64_t start = now_ns();
+    for (int i = 0; i < iters; i++) {
+        ColosseumState s = corpus->states[i % corpus->count];
+        ColosseumContext ctx = *template_ctx;
+        col_build_primary_action_landings_ctx(&s, &ctx, landings);
+        bench_sink += (double)landings[i % COLO_PRIMARY_DIM].land_x;
+    }
+    return (double)(now_ns() - start) / 1000000000.0;
+}
+
+static double bench_pre_player_phase_seconds(
+    const ColoBenchCorpus* corpus,
+    const ColosseumContext* template_ctx,
+    int iters
+) {
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    uint64_t start = now_ns();
+    for (int i = 0; i < iters; i++) {
+        ColosseumState s = corpus->states[i % corpus->count];
+        ColosseumContext ctx = *template_ctx;
+        ColoPrePlayerPhase phase =
+            col_advance_pre_player_phase_ctx(&s, &ctx, actions);
+        bench_sink += (double)phase.player_phase_reached;
+        bench_sink += (double)s.player.x;
+    }
+    return (double)(now_ns() - start) / 1000000000.0;
+}
+
+static double bench_attack_route_field_seconds(
+    const ColoBenchCorpus* corpus,
+    const ColosseumContext* template_ctx,
+    int iters
+) {
+    EncounterArenaAttackRouteField field;
+    uint64_t start = now_ns();
+    for (int i = 0; i < iters; i++) {
+        ColosseumState s = corpus->states[i % corpus->count];
+        ColosseumContext ctx = *template_ctx;
+        ColoWalkCtx walk_ctx = {
+            .s = &s,
+            .ctx = &ctx,
+        };
+        encounter_build_arena_attack_route_field(
+            &field,
+            ctx.collision_map,
+            ctx.world_offset_x,
+            ctx.world_offset_y,
+            s.player.x,
+            s.player.y,
+            col_tile_walkable,
+            &walk_ctx,
+            col_pathfind_blocked,
+            &walk_ctx,
+            COLO_ARENA_MIN_X,
+            COLO_ARENA_MIN_Y,
+            COLO_ARENA_WIDTH,
+            COLO_ARENA_HEIGHT);
+        bench_sink += (double)field.visited_count;
+    }
+    return (double)(now_ns() - start) / 1000000000.0;
+}
+
+static double bench_post_premove_molten_seconds(
+    const ColoBenchCorpus* corpus,
+    int iters
+) {
+    ColosseumState forecast;
+    uint64_t start = now_ns();
+    for (int i = 0; i < iters; i++) {
+        bench_sink += (double)col_build_post_premove_molten_forecast(
+            &corpus->states[i % corpus->count], &forecast);
+        bench_sink += (double)forecast.molten_count;
+    }
+    return (double)(now_ns() - start) / 1000000000.0;
+}
+
 static double bench_env_step_seconds(
     const ColoBenchCorpus* corpus,
     const ColosseumContext* template_ctx,
@@ -555,12 +650,34 @@ int main(void) {
     no_forecast_ctx.config.step_out_forecast_obs_enabled = 0;
     bench_build_corpus(corpus);
     bench_check_profiled_exact(corpus);
+    int unique_player_geometries = 0;
+    for (int i = 0; i < corpus->count; i++) {
+        int duplicate = 0;
+        for (int prior = 0; prior < i; prior++) {
+            if (corpus->states[prior].player.x == corpus->states[i].player.x &&
+                    corpus->states[prior].player.y == corpus->states[i].player.y &&
+                    col_sol_clamp_active(&corpus->states[prior]) ==
+                        col_sol_clamp_active(&corpus->states[i])) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (!duplicate) unique_player_geometries++;
+    }
 
     int raw_iters = 50000;
     int env_iters = 20000;
     int profiled_iters = 3000;
     double raw_seconds = bench_raw_forecast_seconds(corpus, raw_iters);
     double copy_seconds = bench_state_copy_seconds(corpus, env_iters);
+    double primary_landings_seconds =
+        bench_primary_action_landings_seconds(corpus, &ctx, env_iters);
+    double pre_player_phase_seconds =
+        bench_pre_player_phase_seconds(corpus, &ctx, env_iters);
+    double attack_route_field_seconds =
+        bench_attack_route_field_seconds(corpus, &ctx, env_iters);
+    double post_premove_molten_seconds =
+        bench_post_premove_molten_seconds(corpus, env_iters);
     double env_seconds = bench_env_step_seconds(corpus, &ctx, env_iters);
     double env_no_forecast_seconds =
         bench_env_step_seconds(corpus, &no_forecast_ctx, env_iters);
@@ -568,19 +685,35 @@ int main(void) {
 
     double raw_us = raw_seconds * 1000000.0 / (double)raw_iters;
     double copy_us = copy_seconds * 1000000.0 / (double)env_iters;
+    double primary_landings_us =
+        primary_landings_seconds * 1000000.0 / (double)env_iters - copy_us;
+    double pre_player_phase_us =
+        pre_player_phase_seconds * 1000000.0 / (double)env_iters - copy_us;
+    double attack_route_field_us =
+        attack_route_field_seconds * 1000000.0 / (double)env_iters - copy_us;
+    double post_premove_molten_us =
+        post_premove_molten_seconds * 1000000.0 / (double)env_iters;
     double env_us = env_seconds * 1000000.0 / (double)env_iters - copy_us;
     double env_no_forecast_us =
         env_no_forecast_seconds * 1000000.0 / (double)env_iters - copy_us;
 
-    printf("sizeof(ColosseumState)=%zu COLO_NUM_OBS=%d COLO_STEP_OUT_FORECAST_OBS_SIZE=%d actions=%d horizon=%d corpus_states=%d\n",
+    printf("sizeof(ColosseumState)=%zu COLO_NUM_OBS=%d COLO_STEP_OUT_FORECAST_OBS_SIZE=%d actions=%d horizon=%d corpus_states=%d unique_player_geometries=%d\n",
         sizeof(ColosseumState),
         COLO_NUM_OBS,
         COLO_STEP_OUT_FORECAST_OBS_SIZE,
         ENCOUNTER_MOVE_ACTIONS,
         COLO_STEP_OUT_FORECAST_HORIZON,
-        corpus->count);
-    printf("raw_iters=%d env_iters=%d profiled_iters=%d state_copy_us=%.3f\n",
-        raw_iters, env_iters, profiled_iters, copy_us);
+        corpus->count,
+        unique_player_geometries);
+    printf("raw_iters=%d env_iters=%d profiled_iters=%d state_copy_us=%.3f primary_landings_us=%.3f pre_player_phase_us=%.3f attack_route_field_us=%.3f post_premove_molten_us=%.3f\n",
+        raw_iters,
+        env_iters,
+        profiled_iters,
+        copy_us,
+        primary_landings_us,
+        pre_player_phase_us,
+        attack_route_field_us,
+        post_premove_molten_us);
     bench_print_profile(&profile, raw_us, env_us, env_no_forecast_us);
     free(corpus);
     return 0;
