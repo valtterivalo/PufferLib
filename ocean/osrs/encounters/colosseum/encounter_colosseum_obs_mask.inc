@@ -76,7 +76,7 @@ static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS
 #define COLO_THREAT_FIELD_RADIUS 8
 #define COLO_THREAT_FIELD_DIM (2 * COLO_THREAT_FIELD_RADIUS + 1)
 #define COLO_THREAT_FIELD_TILES (COLO_THREAT_FIELD_DIM * COLO_THREAT_FIELD_DIM)
-#define COLO_THREAT_FIELD_OBS_SIZE (2 * COLO_THREAT_FIELD_TILES)
+#define COLO_THREAT_FIELD_OBS_SIZE COLO_THREAT_FIELD_TILES
 static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     "threat-field obs cache float count must match the block size");
 
@@ -1354,15 +1354,6 @@ static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
     uint64_t h = 1469598103934665603ULL;
     h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
     h = (h ^ (uint64_t)(uint32_t)s->player.y) * 1099511628211ULL;
-    int clamp_active = col_sol_clamp_active(s);
-    h = (h ^ (uint64_t)(uint32_t)clamp_active) * 1099511628211ULL;
-    if (clamp_active) {
-        uint64_t bounds = (uint64_t)(uint32_t)s->sol.boss_arena_min_x
-            | ((uint64_t)(uint32_t)s->sol.boss_arena_min_y << 8)
-            | ((uint64_t)(uint32_t)s->sol.boss_arena_max_x << 16)
-            | ((uint64_t)(uint32_t)s->sol.boss_arena_max_y << 24);
-        h = (h ^ bounds) * 1099511628211ULL;
-    }
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_enemy(npc)) continue;
@@ -1432,14 +1423,6 @@ static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) 
             obs[i++] = col_clamp01((float)count / 4.0f);
         }
     }
-    for (int dy = -COLO_THREAT_FIELD_RADIUS; dy <= COLO_THREAT_FIELD_RADIUS; dy++) {
-        for (int dx = -COLO_THREAT_FIELD_RADIUS; dx <= COLO_THREAT_FIELD_RADIUS; dx++) {
-            int tx = s->player.x + dx, ty = s->player.y + dy;
-            int blocked = !col_player_walkable((void*)s, tx, ty);
-            obs[i++] = blocked ? 1.0f : 0.0f;
-        }
-    }
-
     int slot = memos->threat_field_next;
     memcpy(memos->threat_field[slot], &obs[block_start],
            sizeof(float) * COLO_THREAT_FIELD_OBS_CACHE_FLOATS);

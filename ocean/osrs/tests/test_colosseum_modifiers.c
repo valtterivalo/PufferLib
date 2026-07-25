@@ -6494,7 +6494,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3281", COLO_NUM_OBS == 3281);
+    CHECK("obs width is 2992", COLO_NUM_OBS == 2992);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
@@ -8723,7 +8723,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3281);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2992);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -8915,7 +8915,6 @@ static void test_threat_field_obs(void) {
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
 
     const int f0 = COLO_OBS_AFTER_SPAWN;
-    const int f1 = f0 + COLO_THREAT_FIELD_TILES;
 #define FIELD_CELL(dx, dy) \
     (((dy) + COLO_THREAT_FIELD_RADIUS) * COLO_THREAT_FIELD_DIM + \
      ((dx) + COLO_THREAT_FIELD_RADIUS))
@@ -8924,57 +8923,25 @@ static void test_threat_field_obs(void) {
         obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
     CHECK("exposed tile east of the pillar reads the shooter",
         obs[f0 + FIELD_CELL(7, 3)] > 0.0f);
-    CHECK("pillar tile is unstandable", obs[f1 + FIELD_CELL(3, -1)] == 1.0f);
-    CHECK("NPC body tile remains player-walkable",
-        obs[f1 + FIELD_CELL(6, -1)] == 0.0f);
-    CHECK("the player's own tile is standable", obs[f1 + FIELD_CELL(0, 0)] == 0.0f);
-    CHECK("out-of-arena tile is unstandable", obs[f1 + FIELD_CELL(-8, 0)] == 1.0f);
 
     s.player.x = 12; s.player.y = 12;
     col_rebuild_player_collision_flags(&s);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("center cell reads one shooter after stepping into LoS",
         obs[f0 + FIELD_CELL(0, 0)] == 0.25f);
-    CHECK("fixture: x=8 is statically walkable before the Sol clamp",
-        !col_static_blocked(8, 12));
-    CHECK("pre-Sol x=8 is player-walkable",
-        obs[f1 + FIELD_CELL(-4, 0)] == 0.0f);
-    s.wave = COLO_WAVE_BOSS;
-    s.sol.started = 1;
-    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
-    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
-    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
-    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("the Sol clamp invalidates the memo and blocks x=8",
-        obs[f1 + FIELD_CELL(-4, 0)] == 1.0f);
-    s.wave = 0;
-    s.sol.started = 0;
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("leaving Sol invalidates the memo and frees x=8",
-        obs[f1 + FIELD_CELL(-4, 0)] == 0.0f);
-
     int jag = col_spawn_npc_at(&s, COLO_JAGUAR_WARRIOR, 16, 12);
     CHECK("fixture: melee NPC spawned", jag >= 0);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("jaguar body tile remains player-walkable",
-        obs[f1 + FIELD_CELL(4, 0)] == 0.0f);
     int jag_size = col_npc_effective_size(&s.npcs[jag]);
     col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 0);
     s.npcs[jag].x += 1;
     col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 1);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("vacated melee tile remains player-walkable",
-        obs[f1 + FIELD_CELL(4, 0)] == 0.0f);
-    CHECK("the melee body's new tile remains player-walkable",
-        obs[f1 + FIELD_CELL(6, 0)] == 0.0f);
 
     col_deactivate_npc(&s, manti);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("center cell reads zero shooters after the manticore dies",
         obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
-    CHECK("dead manticore's former body tile stays player-walkable",
-        obs[f1 + FIELD_CELL(-1, -4)] == 0.0f);
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     float served_field[COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
