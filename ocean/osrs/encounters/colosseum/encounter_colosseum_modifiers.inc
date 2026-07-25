@@ -531,11 +531,30 @@ static int col_totem_spawn_for_owner(ColosseumState* s, int owner_slot) {
     return 1;
 }
 
-static void col_totem_apply_heal(ColoNPC* owner) {
-    owner->hp += owner->type == COLO_SOL_HEREDIT
+static int col_totem_heal_amount(const ColoNPC* owner) {
+    return owner->type == COLO_SOL_HEREDIT
         ? COLO_TOTEM_SOL_HEAL
         : (owner->max_hp * COLO_TOTEM_HEAL_PCT) / 100;
+}
+
+static void col_totem_apply_heal(ColoNPC* owner) {
+    owner->hp += col_totem_heal_amount(owner);
     if (owner->hp > owner->max_hp) owner->hp = owner->max_hp;
+}
+
+static const ColoTotem* col_totem_for_npc_slot(const ColosseumState* s, int npc_slot) {
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
+        const ColoTotem* tot = &s->totems[t];
+        if (tot->phase == COLO_HAZARD_ALIVE && tot->npc_slot == npc_slot) return tot;
+    }
+    return NULL;
+}
+
+static int col_live_totem_count(const ColosseumState* s) {
+    int n = 0;
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++)
+        if (s->totems[t].phase == COLO_HAZARD_ALIVE) n++;
+    return n;
 }
 
 static void col_mod_on_npc_hp_changed(ColosseumState* s, int npc_slot) {

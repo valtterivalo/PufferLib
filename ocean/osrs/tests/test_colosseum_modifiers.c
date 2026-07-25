@@ -1234,6 +1234,109 @@ static void test_totemic_sol_wave12(void) {
         sol_totem && sol_totem->phase == COLO_HAZARD_RESPAWNING);
 }
 
+static void test_totem_heal_timing_obs(void) {
+    printf("test_totem_heal_timing_obs\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    s.player.x = 25; s.player.y = 18;
+    col_rebuild_player_collision_flags(&s);
+
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 16);
+    s.npcs[0].hp = 60;
+    col_mod_on_npc_hp_changed(&s, 0);
+    int tslot = s.totems[0].npc_slot;
+    CHECK("fixture: totem spawned", tslot >= 0);
+
+    static float obs[COLO_NUM_OBS];
+    int totem_base, owner_base;
+
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    totem_base = COLO_OBS_AFTER_EQUIPPED_SELF +
+        test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
+    owner_base = COLO_OBS_AFTER_EQUIPPED_SELF +
+        test_obs_slot_for_npc(&s, 0) * COLO_FEATURES_PER_NPC;
+    int launch_idx = totem_base + COLO_FEATURES_PER_NPC - 3;
+    int flight_idx = totem_base + COLO_FEATURES_PER_NPC - 2;
+    int heal_idx   = totem_base + COLO_FEATURES_PER_NPC - 1;
+
+    CHECK("a fresh totem shows a pending launch and no projectile in flight",
+        obs[launch_idx] > 0.0f && obs[flight_idx] == 0.0f);
+    CHECK("the pending heal is 30% of a non-Sol owner's max HP",
+        fabsf(obs[heal_idx] - 0.30f) < 0.02f);
+    CHECK("a non-totem NPC leaves the totem triple zeroed",
+        obs[owner_base + COLO_FEATURES_PER_NPC - 3] == 0.0f &&
+        obs[owner_base + COLO_FEATURES_PER_NPC - 2] == 0.0f &&
+        obs[owner_base + COLO_FEATURES_PER_NPC - 1] == 0.0f);
+
+    for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY; t++) col_mod_tick_totems(&s);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("once launched the projectile is visible and the launch cue clears",
+        s.totems[0].projectile_timer > 0 &&
+        obs[flight_idx] > 0.0f && obs[launch_idx] == 0.0f);
+
+    float flight_before = obs[flight_idx];
+    col_mod_tick_totems(&s);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("the in-flight cue counts down toward the landing tick",
+        obs[flight_idx] < flight_before && obs[flight_idx] > 0.0f);
+
+    int hazard_base = COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE;
+    int sol_timer_idx = hazard_base + COLO_MODIFIER_HAZARD_OBS_SIZE - 2;
+    int count_idx = hazard_base + COLO_MODIFIER_HAZARD_OBS_SIZE - 1;
+    CHECK("one live totem is reported in the hazard block",
+        fabsf(obs[count_idx] - 1.0f / (float)COLO_TOTEM_OBS_COUNT_NORM) < 1e-6f);
+    CHECK("no Sol extra-totem timer outside wave 12", obs[sol_timer_idx] == 0.0f);
+}
+
+static void test_totem_sol_obs_reports_stacking(void) {
+    printf("test_totem_sol_obs_reports_stacking\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 11;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4243);
+    advance_to_wave_spawn(&s, &ctx);
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    int sol = col_sol_find_idx(&s);
+    s.npcs[sol].hp = COLO_SOL_HP_MAX / 2;
+    col_mod_on_npc_hp_changed(&s, sol);
+
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int hazard_base = COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE;
+    int sol_timer_idx = hazard_base + COLO_MODIFIER_HAZARD_OBS_SIZE - 2;
+    int count_idx = hazard_base + COLO_MODIFIER_HAZARD_OBS_SIZE - 1;
+
+    CHECK("the Sol extra-totem countdown is observable once armed",
+        obs[sol_timer_idx] > 0.0f);
+    float armed = obs[sol_timer_idx];
+
+    int tslot = col_totem_for_owner(&s, sol)->npc_slot;
+    int tbase = COLO_OBS_AFTER_EQUIPPED_SELF +
+        test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
+    CHECK("a Sol totem's pending heal reads as 75 of Sol's max HP",
+        fabsf(obs[tbase + COLO_FEATURES_PER_NPC - 1] -
+              (float)COLO_TOTEM_SOL_HEAL / (float)COLO_SOL_HP_MAX) < 1e-4f);
+
+    for (int t = 0; t < COLO_TOTEM_SOL_EXTRA_INTERVAL; t++) col_mod_tick_totems(&s);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("a second stacked totem raises the observed live count",
+        count_live_totems(&s) == 2 &&
+        fabsf(obs[count_idx] - 2.0f / (float)COLO_TOTEM_OBS_COUNT_NORM) < 1e-6f);
+    CHECK("the countdown rearms after the extra totem spawns",
+        obs[sol_timer_idx] > 0.0f && fabsf(obs[sol_timer_idx] - armed) < 0.05f);
+}
+
 static void test_totemic_sol_extra_totems_every_two_minutes(void) {
     printf("test_totemic_sol_extra_totems_every_two_minutes\n");
     ColosseumContext ctx;
@@ -6335,14 +6438,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3381", COLO_NUM_OBS == 3381);
+    CHECK("obs width is 3455", COLO_NUM_OBS == 3455);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
-    CHECK("modifier hazard tail has 40 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 40);
-    CHECK("modifier block has 76 features", COLO_MODIFIER_OBS_SIZE == 76);
-    CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
+    CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
+    CHECK("modifier block has 78 features", COLO_MODIFIER_OBS_SIZE == 78);
+    CHECK("NPC slots have 40 features (37 + totem heal timing triple)",
+        COLO_FEATURES_PER_NPC == 40);
     CHECK("snapshot version is v21", COLO_SNAPSHOT_VERSION == 21u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -8563,7 +8667,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3381);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3455);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -9099,6 +9203,8 @@ int main(void) {
     test_totem_lifecycle();
     test_totemic_sol_wave12();
     test_totemic_sol_extra_totems_every_two_minutes();
+    test_totem_heal_timing_obs();
+    test_totem_sol_obs_reports_stacking();
     test_reentry_sand_tiles();
     test_mantimayhem_venom_cured_at_wave_end();
     test_frailty_disables_brew_overheal();

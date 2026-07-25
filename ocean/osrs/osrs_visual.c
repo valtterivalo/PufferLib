@@ -26,6 +26,13 @@
 #include "puffercpu.h"
 #include "osrs_visual_net.h"
 
+_Static_assert(COLO_ENT_INF_FEATS == COLO_FEATURES_PER_NPC,
+    "entity encoder per-NPC width must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_NUM_NPCS == COLO_OBS_NPCS,
+    "entity encoder NPC count must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_NPC_START == COLO_OBS_AFTER_EQUIPPED_SELF,
+    "entity encoder NPC block offset must track the colosseum observation layout");
+
 static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
     gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
 }

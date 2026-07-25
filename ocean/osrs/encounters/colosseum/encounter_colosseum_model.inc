@@ -686,6 +686,7 @@ typedef struct {
 #define COLO_TOTEM_RESPAWN_TICKS 200
 #define COLO_TOTEM_SOL_HEAL 75
 #define COLO_TOTEM_SOL_EXTRA_INTERVAL 200
+#define COLO_TOTEM_OBS_COUNT_NORM 4
 
 typedef struct {
     ColoHazardPhase phase;
