@@ -332,27 +332,6 @@ static int col_pending_hit_prayer_ticks(const EncounterPendingHit* hit) {
     return hit->prayer_check_delay > 0 ? hit->prayer_check_delay : hit->ticks_remaining;
 }
 
-static ColoNpcNextPrayerObs col_source_matched_pending_prayer(
-    const ColosseumState* s,
-    int npc_slot
-) {
-    ColoNpcNextPrayerObs best = col_npc_next_prayer_none();
-    for (int h = 0; h < s->player_pending_hits.count && h < ENCOUNTER_MAX_PENDING_HITS; h++) {
-        const EncounterPendingHit* hit = &s->player_pending_hits.hits[h];
-        if (!hit->active) continue;
-        if (!hit->check_prayer) continue;
-        if (hit->source_npc_slot != npc_slot) continue;
-        if (!col_prayer_attack_style((AttackStyle)hit->attack_style)) continue;
-        int ticks = col_pending_hit_prayer_ticks(hit);
-        if (!best.active || ticks < best.ticks) {
-            best.active = 1;
-            best.style = (AttackStyle)hit->attack_style;
-            best.ticks = ticks;
-        }
-    }
-    return best;
-}
-
 static int col_manticore_next_orb_ticks(const ColoNPC* npc) {
     const ColoManticoreState* mc = &npc->type_state.manticore;
     if (mc->cycle_step > 0) return 1;
@@ -433,8 +412,7 @@ static ColoNpcNextPrayerObs col_npc_next_prayer_obs(
     const ColoNPC* npc,
     int npc_slot
 ) {
-    ColoNpcNextPrayerObs pending = col_source_matched_pending_prayer(s, npc_slot);
-    if (pending.active) return pending;
+    (void)npc_slot;
     ColoNpcNextPrayerObs manticore = col_visible_manticore_next_prayer(npc);
     if (manticore.active) return manticore;
     return col_deterministic_npc_next_prayer(s, npc, &COLO_NPC_STATS[npc->type]);
@@ -571,8 +549,8 @@ static void col_write_npc_slot(
     obs[i++] = npc->type == COLO_SOL_HEREDIT
         ? 0.0f : col_clamp01((float)npc->attack_timer / 8.0f);
     int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
-    int range = ns->attack_range > 0 ? ns->attack_range : 1;
-    obs[i++] = (dist >= 1 && dist <= range) ? 1.0f : 0.0f;
+    obs[i++] = (ns->attack_range > 0 && dist >= 1 && dist <= ns->attack_range)
+        ? 1.0f : 0.0f;
 
     ColoNpcNextPrayerObs next_prayer = col_npc_next_prayer_obs(s, npc, npc_slot);
     obs[i++] = next_prayer.active ? 1.0f : 0.0f;

@@ -1234,6 +1234,61 @@ static void test_totemic_sol_wave12(void) {
         sol_totem && sol_totem->phase == COLO_HAZARD_RESPAWNING);
 }
 
+static void test_obs_signal_defects(void) {
+    printf("test_obs_signal_defects\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 1;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 5150);
+
+    CHECK("reset leaves no boss index, so pre-boss waves cannot read one",
+        s.sol.boss_idx == -1);
+
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC) | (1u << COLO_MOD_BEES);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    s.modifiers.tier[COLO_MOD_BEES] = 1;
+    s.player.x = 12; s.player.y = 16;
+    col_rebuild_player_collision_flags(&s);
+
+    static float obs[COLO_NUM_OBS];
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int boss_base = COLO_OBS_AFTER_MODS + COLO_WAVE_OBS_SIZE;
+    int boss_rel_x = boss_base + COLO_SOL_NUM_PHASES + 7;
+    CHECK("pre-boss waves emit no stray boss-relative position",
+        obs[boss_rel_x] == 0.0f && obs[boss_rel_x + 1] == 0.0f);
+
+    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 16);
+    s.npcs[0].hp = 60;
+    col_mod_on_npc_hp_changed(&s, 0);
+    int tslot = col_totem_for_owner(&s, 0)->npc_slot;
+    s.npcs[tslot].x = s.player.x + 1;
+    s.npcs[tslot].y = s.player.y;
+
+    col_mod_sync_bees(&s);
+    int bslot = s.bees[0].npc_slot;
+    s.npcs[bslot].x = s.player.x;
+    s.npcs[bslot].y = s.player.y + 1;
+
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    int in_range_off = COLO_NUM_NPC_TYPES + 3 + 3 + 1;
+    int totem_slot = test_obs_slot_for_npc(&s, tslot);
+    int bee_slot = test_obs_slot_for_npc(&s, bslot);
+    int shaman_slot = test_obs_slot_for_npc(&s, 0);
+    CHECK("an adjacent totem does not claim to threaten the player",
+        obs[COLO_OBS_AFTER_EQUIPPED_SELF +
+            totem_slot * COLO_FEATURES_PER_NPC + in_range_off] == 0.0f);
+    CHECK("a bee adjacent to the player does not claim an attack range",
+        obs[COLO_OBS_AFTER_EQUIPPED_SELF +
+            bee_slot * COLO_FEATURES_PER_NPC + in_range_off] == 0.0f);
+    CHECK("a real attacker in range still reports it",
+        obs[COLO_OBS_AFTER_EQUIPPED_SELF +
+            shaman_slot * COLO_FEATURES_PER_NPC + in_range_off] == 1.0f);
+}
+
 static void test_totem_heal_timing_obs(void) {
     printf("test_totem_heal_timing_obs\n");
     ColosseumContext ctx;
@@ -9209,6 +9264,7 @@ int main(void) {
     test_totem_lifecycle();
     test_totemic_sol_wave12();
     test_totemic_sol_extra_totems_every_two_minutes();
+    test_obs_signal_defects();
     test_totem_heal_timing_obs();
     test_totem_sol_obs_reports_stacking();
     test_reentry_sand_tiles();
