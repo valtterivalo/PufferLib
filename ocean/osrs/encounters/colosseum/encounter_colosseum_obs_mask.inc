@@ -10,7 +10,7 @@
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
-#define COLO_FEATURES_PER_NPC     40
+#define COLO_FEATURES_PER_NPC     37
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)
 
 #define COLO_EXPECTED_DPT_NORM    15.0f
@@ -516,6 +516,25 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
             tells[0] = (dist > 1) ? 1.0f : 0.0f;
             break;
         }
+        case COLO_HEALING_TOTEM: {
+            const ColoTotem* tot = col_totem_for_npc_slot(s, npc_slot);
+            if (tot) {
+                const ColoNPC* owner = &s->npcs[tot->owner_slot];
+                tells[0] = tot->projectile_timer > 0
+                    ? 0.0f
+                    : col_clamp01(
+                        (float)tot->heal_timer / (float)COLO_TOTEM_HEAL_INTERVAL);
+                tells[1] = col_clamp01(
+                    (float)tot->projectile_timer / (float)COLO_TOTEM_PROJECTILE_TICKS);
+                tells[2] = owner->max_hp > 0
+                    ? col_clamp01(
+                        (float)col_totem_heal_amount(owner) / (float)owner->max_hp)
+                    : 0.0f;
+                tells[3] = col_obs_rel_x(owner->x, s->player.x);
+                tells[4] = col_obs_rel_y(owner->y, s->player.y);
+            }
+            break;
+        }
         case COLO_JAGUAR_WARRIOR:
             tells[0] = 1.0f;
             break;
@@ -568,23 +587,6 @@ static void col_write_npc_slot(
     i = *idx;
     int extra_bounces = col_venator_extra_bounce_if_shot(s, venator_targets, npc_slot);
     obs[i++] = (float)extra_bounces / (float)(OSRS_VENATOR_MAX_CHAIN_HITS - 1);
-
-    const ColoTotem* totem = col_totem_for_npc_slot(s, npc_slot);
-    if (totem) {
-        const ColoNPC* owner = &s->npcs[totem->owner_slot];
-        obs[i++] = totem->projectile_timer > 0
-            ? 0.0f
-            : col_clamp01((float)totem->heal_timer / (float)COLO_TOTEM_HEAL_INTERVAL);
-        obs[i++] = col_clamp01(
-            (float)totem->projectile_timer / (float)COLO_TOTEM_PROJECTILE_TICKS);
-        obs[i++] = owner->max_hp > 0
-            ? col_clamp01((float)col_totem_heal_amount(owner) / (float)owner->max_hp)
-            : 0.0f;
-    } else {
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-    }
     *idx = i;
 }
 

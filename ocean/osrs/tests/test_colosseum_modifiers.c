@@ -1263,18 +1263,24 @@ static void test_totem_heal_timing_obs(void) {
         test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
     owner_base = COLO_OBS_AFTER_EQUIPPED_SELF +
         test_obs_slot_for_npc(&s, 0) * COLO_FEATURES_PER_NPC;
-    int launch_idx = totem_base + COLO_FEATURES_PER_NPC - 3;
-    int flight_idx = totem_base + COLO_FEATURES_PER_NPC - 2;
-    int heal_idx   = totem_base + COLO_FEATURES_PER_NPC - 1;
+    int launch_idx = totem_base + TEST_NPC_TELLS_OFFSET + 0;
+    int flight_idx = totem_base + TEST_NPC_TELLS_OFFSET + 1;
+    int heal_idx   = totem_base + TEST_NPC_TELLS_OFFSET + 2;
+    int owner_dx_idx = totem_base + TEST_NPC_TELLS_OFFSET + 3;
+    int owner_dy_idx = totem_base + TEST_NPC_TELLS_OFFSET + 4;
 
     CHECK("a fresh totem shows a pending launch and no projectile in flight",
         obs[launch_idx] > 0.0f && obs[flight_idx] == 0.0f);
     CHECK("the pending heal is 30% of a non-Sol owner's max HP",
         fabsf(obs[heal_idx] - 0.30f) < 0.02f);
-    CHECK("a non-totem NPC leaves the totem triple zeroed",
-        obs[owner_base + COLO_FEATURES_PER_NPC - 3] == 0.0f &&
-        obs[owner_base + COLO_FEATURES_PER_NPC - 2] == 0.0f &&
-        obs[owner_base + COLO_FEATURES_PER_NPC - 1] == 0.0f);
+    CHECK("the totem carries its owner's relative position",
+        obs[owner_dx_idx] != 0.0f || obs[owner_dy_idx] != 0.0f);
+    CHECK("a serpent shaman writes no totem tells",
+        obs[owner_base + TEST_NPC_TELLS_OFFSET + 0] == 0.0f &&
+        obs[owner_base + TEST_NPC_TELLS_OFFSET + 1] == 0.0f &&
+        obs[owner_base + TEST_NPC_TELLS_OFFSET + 2] == 0.0f);
+    CHECK("the totem features cost no extra record width",
+        COLO_FEATURES_PER_NPC == 37);
 
     for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY; t++) col_mod_tick_totems(&s);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
@@ -1325,7 +1331,7 @@ static void test_totem_sol_obs_reports_stacking(void) {
     int tbase = COLO_OBS_AFTER_EQUIPPED_SELF +
         test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
     CHECK("a Sol totem's pending heal reads as 75 of Sol's max HP",
-        fabsf(obs[tbase + COLO_FEATURES_PER_NPC - 1] -
+        fabsf(obs[tbase + TEST_NPC_TELLS_OFFSET + 2] -
               (float)COLO_TOTEM_SOL_HEAL / (float)COLO_SOL_HP_MAX) < 1e-4f);
 
     for (int t = 0; t < COLO_TOTEM_SOL_EXTRA_INTERVAL; t++) col_mod_tick_totems(&s);
@@ -6438,15 +6444,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3455", COLO_NUM_OBS == 3455);
+    CHECK("obs width is 3383", COLO_NUM_OBS == 3383);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
     CHECK("modifier block has 78 features", COLO_MODIFIER_OBS_SIZE == 78);
-    CHECK("NPC slots have 40 features (37 + totem heal timing triple)",
-        COLO_FEATURES_PER_NPC == 40);
+    CHECK("NPC slots still have 37 features (totem tells reuse the union)",
+        COLO_FEATURES_PER_NPC == 37);
     CHECK("snapshot version is v21", COLO_SNAPSHOT_VERSION == 21u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -8667,7 +8673,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3455);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3383);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

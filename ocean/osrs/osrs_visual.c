@@ -32,6 +32,14 @@ _Static_assert(COLO_ENT_INF_NUM_NPCS == COLO_OBS_NPCS,
     "entity encoder NPC count must track the colosseum observation layout");
 _Static_assert(COLO_ENT_INF_NPC_START == COLO_OBS_AFTER_EQUIPPED_SELF,
     "entity encoder NPC block offset must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_TYPE_ONEHOT == COLO_NUM_NPC_TYPES,
+    "entity pool presence mask is the NPC type one-hot; a new NPC type must widen it");
+_Static_assert(COLO_ENT_INF_INV_START == COLO_OBS_AFTER_PILLARS,
+    "entity encoder inventory block offset must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_INV_NUM_CELLS == COLO_INVENTORY_DISPLAY_SLOTS,
+    "entity encoder inventory cell count must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_INV_FEATS == COLO_INVENTORY_CELL_OBS_FEATURES,
+    "entity encoder inventory cell width must track the colosseum observation layout");
 
 static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
     gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
