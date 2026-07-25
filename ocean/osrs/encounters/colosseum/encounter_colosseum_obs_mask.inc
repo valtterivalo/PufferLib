@@ -1,7 +1,6 @@
 #line 76 "encounter_colosseum.h"
 
 #define COLO_PLAYER_OBS_SIZE      36
-#define COLO_PILLAR_OBS_SIZE      (COLO_NUM_PILLARS * 3)
 #define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
@@ -10,12 +9,12 @@
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
-#define COLO_FEATURES_PER_NPC     37
+#define COLO_FEATURES_PER_NPC     34
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)
 
 #define COLO_EXPECTED_DPT_NORM    15.0f
 
-#define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
+#define COLO_MODIFIER_FLAGS_OBS_SIZE  (COLO_NUM_REAL_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 42
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
 #define COLO_WAVE_OBS_SIZE        4
@@ -81,7 +80,7 @@ static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS
 static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     "threat-field obs cache float count must match the block size");
 
-#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE + \
+#define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
     COLO_SOL_HAZARD_ACTION_OBS_SIZE + \
@@ -93,8 +92,7 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_THREAT_FIELD_OBS_SIZE)
 
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
-#define COLO_OBS_AFTER_PILLARS  (COLO_OBS_AFTER_PLAYER + COLO_PILLAR_OBS_SIZE)
-#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PILLARS + COLO_INVENTORY_OBS_SIZE)
+#define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PLAYER + COLO_INVENTORY_OBS_SIZE)
 #define COLO_OBS_AFTER_EQUIPPED_SELF \
     (COLO_OBS_AFTER_INVENTORY + COLO_EQUIPPED_SELF_OBS_SIZE)
 #define COLO_OBS_AFTER_NPCS     (COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_OBS_SIZE)
@@ -541,11 +539,6 @@ static void col_write_npc_slot(
     obs[i++] = col_obs_rel_x(npc->x, px);
     obs[i++] = col_obs_rel_y(npc->y, py);
     obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
-    *idx = i;
-    AttackStyle observed_style =
-        npc->type == COLO_SOL_HEREDIT ? ATTACK_STYLE_NONE : npc->attack_style;
-    col_write_style_onehot_melee_ranged_magic(observed_style, obs, idx);
-    i = *idx;
     obs[i++] = npc->type == COLO_SOL_HEREDIT
         ? 0.0f : col_clamp01((float)npc->attack_timer / 8.0f);
     int dist = encounter_dist_to_npc(px, py, npc->x, npc->y, size);
@@ -1470,15 +1463,6 @@ static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
     *idx = i;
 }
 
-static void col_write_pillar_obs(const ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    for (int p = 0; p < COLO_NUM_PILLARS; p++) {
-        obs[i++] = col_obs_rel_x(COLO_PILLARS[p][0], s->player.x);
-        obs[i++] = col_obs_rel_y(COLO_PILLARS[p][1], s->player.y);
-        obs[i++] = col_clamp01((float)COLO_PILLAR_SIZE / 7.0f);
-    }
-    *idx = i;
-}
 
 static void col_equipment_bonus_projection(
     const uint8_t equipment[NUM_GEAR_SLOTS],
@@ -2251,8 +2235,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_PREFIX);
 #endif
 
-    col_write_pillar_obs(s, obs, &i);
-    assert(i == COLO_OBS_AFTER_PILLARS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PILLARS);
 #endif
@@ -2282,10 +2264,8 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     COLO_PROFILE_MARK(COLO_PROF_OBS_NPC_SLOTS);
 #endif
 
-    for (int m = 0; m < COLO_NUM_MODIFIERS; m++) {
-        obs[i++] = (s->modifiers.active_mask & (1u << m)) ? 1.0f : 0.0f;
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++)
         obs[i++] = col_clamp01((float)s->modifiers.tier[m] / 3.0f);
-    }
     obs[i++] = s->modifiers.draft_pending ? 1.0f : 0.0f;
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
         int opt = s->modifiers.draft_options[o];

@@ -34,7 +34,7 @@ _Static_assert(COLO_ENT_INF_NPC_START == COLO_OBS_AFTER_EQUIPPED_SELF,
     "entity encoder NPC block offset must track the colosseum observation layout");
 _Static_assert(COLO_ENT_INF_TYPE_ONEHOT == COLO_NUM_NPC_TYPES,
     "entity pool presence mask is the NPC type one-hot; a new NPC type must widen it");
-_Static_assert(COLO_ENT_INF_INV_START == COLO_OBS_AFTER_PILLARS,
+_Static_assert(COLO_ENT_INF_INV_START == COLO_OBS_AFTER_PLAYER,
     "entity encoder inventory block offset must track the colosseum observation layout");
 _Static_assert(COLO_ENT_INF_INV_NUM_CELLS == COLO_INVENTORY_DISPLAY_SLOTS,
     "entity encoder inventory cell count must track the colosseum observation layout");

@@ -1264,13 +1264,13 @@ static void nmmo3_encoder_free_activations(void* activations) { free(activations
 // Mirrors the observation layout in encounter_colosseum_obs_mask.inc. No shared
 // header reaches this TU, so drift is caught only by the _Static_asserts in
 // osrs_visual.c; update both when the layout changes.
-static constexpr int COLO_ENT_NPC_START   = 1030;
+static constexpr int COLO_ENT_NPC_START   = 1018;
 static constexpr int COLO_ENT_NUM_NPCS    = 24;
-static constexpr int COLO_ENT_FEATS       = 37;
+static constexpr int COLO_ENT_FEATS       = 34;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
 static constexpr int COLO_ENT_BOTTLENECK  = 16;
 static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;
-static constexpr int COLO_ENT_INV_START      = 48;
+static constexpr int COLO_ENT_INV_START      = 36;
 static constexpr int COLO_ENT_INV_NUM_CELLS  = 28;
 static constexpr int COLO_ENT_INV_FEATS      = 28;
 static constexpr int COLO_ENT_INV_PRESENT    = 0;

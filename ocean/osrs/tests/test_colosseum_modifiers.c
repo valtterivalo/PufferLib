@@ -13,7 +13,7 @@
 
 #include "ocean/osrs/tests/osrs_test_check.h"
 
-#define TEST_NPC_TELLS_OFFSET 26
+#define TEST_NPC_TELLS_OFFSET 23
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
 #define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
 #define TEST_MOD_OBS_DOOM_PENDING (TEST_MOD_HAZARD_BASE + 3)
@@ -387,7 +387,7 @@ static TestDroppedInventoryFields test_reconstructed_dropped_inventory_fields(
     const float mask[COLO_ACTION_MASK_SIZE],
     int cell_idx
 ) {
-    int base = COLO_OBS_AFTER_PILLARS +
+    int base = COLO_OBS_AFTER_PLAYER +
         cell_idx * COLO_INVENTORY_CELL_OBS_FEATURES;
     const float* cell_obs = &obs[base];
     float kind = test_any_inventory_kind_bit(cell_obs);
@@ -1274,7 +1274,7 @@ static void test_obs_signal_defects(void) {
     s.npcs[bslot].y = s.player.y + 1;
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int in_range_off = COLO_NUM_NPC_TYPES + 3 + 3 + 1;
+    int in_range_off = COLO_NUM_NPC_TYPES + 3 + 1;
     int totem_slot = test_obs_slot_for_npc(&s, tslot);
     int bee_slot = test_obs_slot_for_npc(&s, bslot);
     int shaman_slot = test_obs_slot_for_npc(&s, 0);
@@ -1335,7 +1335,7 @@ static void test_totem_heal_timing_obs(void) {
         obs[owner_base + TEST_NPC_TELLS_OFFSET + 1] == 0.0f &&
         obs[owner_base + TEST_NPC_TELLS_OFFSET + 2] == 0.0f);
     CHECK("the totem features cost no extra record width",
-        COLO_FEATURES_PER_NPC == 37);
+        COLO_FEATURES_PER_NPC == 34);
 
     for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY; t++) col_mod_tick_totems(&s);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
@@ -3791,13 +3791,8 @@ static void test_sol_generic_observation_signals_are_neutral(void) {
     CHECK("Sol receives an NPC observation slot", obs_slot >= 0);
     int npc_base = COLO_OBS_AFTER_EQUIPPED_SELF +
         obs_slot * COLO_FEATURES_PER_NPC;
-    int style_base = npc_base + COLO_NUM_NPC_TYPES + 3;
-    int timer_idx = style_base + 3;
+    int timer_idx = npc_base + COLO_NUM_NPC_TYPES + 3;
     int next_prayer_active_idx = timer_idx + 2;
-    CHECK("Sol's generic current-style one-hot is neutral",
-        obs[style_base] == 0.0f &&
-        obs[style_base + 1] == 0.0f &&
-        obs[style_base + 2] == 0.0f);
     CHECK("Sol's stale generic attack timer is hidden",
         obs[timer_idx] == 0.0f);
     CHECK("Sol has no generic next-prayer cue",
@@ -6499,15 +6494,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3383", COLO_NUM_OBS == 3383);
+    CHECK("obs width is 3281", COLO_NUM_OBS == 3281);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
-    CHECK("modifier block has 78 features", COLO_MODIFIER_OBS_SIZE == 78);
-    CHECK("NPC slots still have 37 features (totem tells reuse the union)",
-        COLO_FEATURES_PER_NPC == 37);
+    CHECK("modifier block has 60 features", COLO_MODIFIER_OBS_SIZE == 60);
+    CHECK("NPC slots have 34 features after dropping the redundant style one-hot",
+        COLO_FEATURES_PER_NPC == 34);
     CHECK("snapshot version is v21", COLO_SNAPSHOT_VERSION == 21u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -6521,7 +6516,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("mask size equals the summed action-head dims",
         COLO_ACTION_MASK_SIZE == mask_sum && COLO_ACTION_MASK_SIZE == 452);
 
-    int obs_sum = COLO_PLAYER_OBS_SIZE + COLO_PILLAR_OBS_SIZE +
+    int obs_sum = COLO_PLAYER_OBS_SIZE +
         COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE +
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
         COLO_SOL_HAZARD_ACTION_OBS_SIZE +
@@ -8728,7 +8723,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3383);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3281);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -9012,7 +9007,7 @@ static void test_inventory_obs_memo(void) {
     s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6685);
     CHECK("4-dose brew seeded", s.inventory_cells[cell_brew].dose == 4);
 
-    const int cell_base = COLO_OBS_AFTER_PILLARS +
+    const int cell_base = COLO_OBS_AFTER_PLAYER +
         cell_brew * COLO_INVENTORY_CELL_OBS_FEATURES;
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("4-dose brew renders the full dose feature", obs[cell_base + 2] == 1.0f);
@@ -9025,11 +9020,11 @@ static void test_inventory_obs_memo(void) {
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     float served_block[COLO_INVENTORY_OBS_CACHE_FLOATS];
-    memcpy(served_block, &obs[COLO_OBS_AFTER_PILLARS], sizeof(served_block));
+    memcpy(served_block, &obs[COLO_OBS_AFTER_PLAYER], sizeof(served_block));
     memset(&s.obs_memos, 0, sizeof(s.obs_memos));
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("memo-served inventory block == fresh recompute after the sip",
-        memcmp(served_block, &obs[COLO_OBS_AFTER_PILLARS], sizeof(served_block)) == 0);
+        memcmp(served_block, &obs[COLO_OBS_AFTER_PLAYER], sizeof(served_block)) == 0);
 }
 
 static void test_best_gear_and_weapon_choice_cache_signatures(void) {
