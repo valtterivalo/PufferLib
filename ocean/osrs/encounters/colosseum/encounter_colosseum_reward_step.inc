@@ -410,6 +410,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     if (wave_cleared) {
         s->tick_scratch.wave_completed = 1;
+        col_modifiers_on_wave_cleared(s);
         s->log.waves_cleared++;
         s->reward += ctx->config.wave_clear_bonus;
         if (s->wave + 1 >= COLO_NUM_WAVES) {

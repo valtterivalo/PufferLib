@@ -323,20 +323,20 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
     npc->target_x = tx;
     npc->target_y = ty;
 
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
+    col_stamp_npc_collision(s, npc, 0);
     ColoNpcMoveCtx move_ctx = { s, idx };
 
     int is_ranged = st->attack_range > 1;
     if (is_ranged) {
         int dist = encounter_dist_to_npc(s->player.x, s->player.y, npc->x, npc->y, size);
         if (dist >= 1 && dist <= st->attack_range && col_npc_has_los_to_player(s, npc)) {
-            col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
+            col_stamp_npc_collision(s, npc, 1);
             npc->moved_this_tick = 0;
             return;
         }
     }
     if (npc->attack_timer > st->attack_speed) {
-        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
+        col_stamp_npc_collision(s, npc, 1);
         npc->moved_this_tick = 0;
         return;
     }
@@ -356,6 +356,6 @@ static void col_npc_move_ctx(ColosseumState* s, ColosseumContext* ctx, int idx) 
             col_npc_move_blocked_ignore_player, &move_ctx,
             col_npc_move_overlap_hold, &s->rng_state);
     }
-    col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 1);
+    col_stamp_npc_collision(s, npc, 1);
     npc->moved_this_tick = moved ? 1 : 0;
 }

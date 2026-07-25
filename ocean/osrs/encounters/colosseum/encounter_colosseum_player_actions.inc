@@ -328,13 +328,17 @@ static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
 static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) {
     ColosseumState* s = (ColosseumState*)ctx;
     switch (kind) {
-        case OSRS_CONSUMABLE_BREW:
-            encounter_apply_brew_heal(
-                &s->player, osrs_brew_heal_amount(s->player.base_hitpoints));
+        case OSRS_CONSUMABLE_BREW: {
+            int brew_heal = osrs_brew_heal_amount(s->player.base_hitpoints);
+            int cap = col_mod_active(s, COLO_MOD_FRAILTY)
+                ? s->player.base_hitpoints
+                : s->player.base_hitpoints + brew_heal;
+            encounter_apply_brew_heal_capped(&s->player, brew_heal, cap);
             encounter_apply_consumable_stat_effect(
                 &s->player, ENCOUNTER_CONSUMABLE_STAT_EFFECT_BREW_DRAIN);
             col_finish_stat_moving_consumable(s);
             return;
+        }
         case OSRS_CONSUMABLE_SUPER_RESTORE:
             encounter_add_prayer_restore(
                 &s->player, osrs_super_restore_amount(s->player.base_prayer));

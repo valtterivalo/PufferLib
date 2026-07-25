@@ -10,11 +10,17 @@ static inline int col_mod_tier(const ColosseumState* s, ColoModifier mod) {
     return col_mod_active(s, mod) ? s->modifiers.tier[mod] : 0;
 }
 
+static const ColoModifier COLO_FIRST_DRAFT_OPTIONS[COLO_MODIFIER_DRAFT_OPTIONS] = {
+    COLO_MOD_RELENTLESS,
+    COLO_MOD_BLASPHEMY,
+    COLO_MOD_FRAILTY,
+};
+
 static int col_modifier_eligible(const ColosseumState* s, ColoModifier mod, int next_wave) {
     if (s->modifiers.tier[mod] >= COLO_MODIFIER_MAX_TIER[mod]) return 0;
     if (COLO_MODIFIER_PRE_BOSS_ONLY[mod] && next_wave >= COLO_WAVE_BOSS) return 0;
     if ((mod == COLO_MOD_RED_FLAG || mod == COLO_MOD_DYNAMIC_DUO) &&
-        next_wave > COLO_RFDD_LAST_DRAFT_WAVE) return 0;
+        next_wave < COLO_RFDD_FIRST_DRAFT_WAVE) return 0;
     return 1;
 }
 
@@ -25,8 +31,26 @@ static int col_modifier_draft_weight(const ColosseumState* s, ColoModifier mod) 
     return 1;
 }
 
+static void col_modifier_open_first_draft(ColosseumState* s) {
+    for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+        s->modifiers.draft_options[o] = (int)COLO_FIRST_DRAFT_OPTIONS[o];
+    for (int o = COLO_MODIFIER_DRAFT_OPTIONS - 1; o > 0; o--) {
+        int j = encounter_rand_int(&s->rng_state, o + 1);
+        int tmp = s->modifiers.draft_options[o];
+        s->modifiers.draft_options[o] = s->modifiers.draft_options[j];
+        s->modifiers.draft_options[j] = tmp;
+    }
+    s->modifiers.draft_pending = 1;
+    s->modifiers.draft_gates_spawn = 1;
+}
+
 static void col_modifier_open_draft(ColosseumState* s, int next_wave) {
     for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) s->modifiers.draft_options[o] = -1;
+
+    if (next_wave == 0) {
+        col_modifier_open_first_draft(s);
+        return;
+    }
 
     int pool[COLO_NUM_REAL_MODIFIERS];
     int weight[COLO_NUM_REAL_MODIFIERS];
@@ -386,24 +410,29 @@ static void col_mod_tick_poison(ColosseumState* s) {
     }
 }
 
+static int col_hazard_tile_free(const ColosseumState* s, int x, int y) {
+    if (col_static_blocked(x, y)) return 0;
+    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) return 0;
+    return 1;
+}
+
 static int col_spawn_hazard_npc_beside(
     ColosseumState* s, ColoNpcType type, const ColoNPC* owner
 ) {
+    if (col_find_free_npc(s) < 0) return -1;
     int size = col_npc_effective_size(owner);
+    if (col_hazard_tile_free(s, owner->x - 1, owner->y - 1))
+        return col_spawn_npc_at(s, type, owner->x - 1, owner->y - 1);
+
     for (int ring = 0; ring < 2; ring++) {
         int lo_x = owner->x - 1 - ring, hi_x = owner->x + size + ring;
         int lo_y = owner->y - 1 - ring, hi_y = owner->y + size + ring;
-        for (int pass = 0; pass < 2; pass++) {
-            for (int y = lo_y; y <= hi_y; y++) {
-                for (int x = lo_x; x <= hi_x; x++) {
-                    int on_shell = (x == lo_x || x == hi_x || y == lo_y || y == hi_y);
-                    if (!on_shell) continue;
-                    int is_east = (x == hi_x);
-                    if ((pass == 0) != is_east) continue;
-                    if (col_static_blocked(x, y)) continue;
-                    if (col_sol_clamp_active(s) && !col_in_boss_arena(s, x, y)) continue;
-                    return col_spawn_npc_at(s, type, x, y);
-                }
+        for (int y = lo_y; y <= hi_y; y++) {
+            for (int x = lo_x; x <= hi_x; x++) {
+                int on_shell = (x == lo_x || x == hi_x || y == lo_y || y == hi_y);
+                if (!on_shell) continue;
+                if (!col_hazard_tile_free(s, x, y)) continue;
+                return col_spawn_npc_at(s, type, x, y);
             }
         }
     }
@@ -412,8 +441,28 @@ static int col_spawn_hazard_npc_beside(
 }
 
 static ColoTotem* col_totem_for_owner(ColosseumState* s, int owner_slot) {
-    assert(owner_slot >= 0 && owner_slot < COLO_MAX_TOTEMS);
-    return &s->totems[owner_slot];
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
+        ColoTotem* tot = &s->totems[t];
+        if (tot->phase != COLO_HAZARD_NONE && tot->owner_slot == owner_slot) return tot;
+    }
+    return NULL;
+}
+
+static ColoTotem* col_totem_alloc(ColosseumState* s, int owner_slot) {
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
+        ColoTotem* tot = &s->totems[t];
+        if (tot->phase != COLO_HAZARD_NONE) continue;
+        *tot = (ColoTotem){ .phase = COLO_HAZARD_NONE, .owner_slot = owner_slot, .npc_slot = -1 };
+        return tot;
+    }
+    return NULL;
+}
+
+static int col_find_sol_slot(const ColosseumState* s) {
+    for (int i = 0; i < COLO_MAX_NPCS; i++)
+        if (s->npcs[i].active && s->npcs[i].hp > 0 && s->npcs[i].type == COLO_SOL_HEREDIT)
+            return i;
+    return -1;
 }
 
 static void col_hazard_on_npc_death(ColosseumState* s, int npc_slot) {
@@ -425,6 +474,7 @@ static void col_hazard_on_npc_death(ColosseumState* s, int npc_slot) {
             tot->phase = COLO_HAZARD_RESPAWNING;
             tot->npc_slot = -1;
             tot->respawn_timer = COLO_TOTEM_RESPAWN_TICKS;
+            tot->projectile_timer = 0;
             return;
         }
         return;
@@ -442,8 +492,7 @@ static void col_hazard_on_npc_death(ColosseumState* s, int npc_slot) {
     }
 }
 
-static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
-    ColoTotem* tot = col_totem_for_owner(s, owner_slot);
+static void col_totem_release(ColosseumState* s, ColoTotem* tot) {
     if (tot->phase == COLO_HAZARD_ALIVE && tot->npc_slot >= 0 &&
         s->npcs[tot->npc_slot].active &&
         s->npcs[tot->npc_slot].type == COLO_HEALING_TOTEM)
@@ -451,19 +500,42 @@ static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
     *tot = (ColoTotem){ .phase = COLO_HAZARD_NONE };
 }
 
-static void col_totem_spawn_for_owner(ColosseumState* s, int owner_slot) {
-    ColoTotem* tot = col_totem_for_owner(s, owner_slot);
-    int slot = col_spawn_hazard_npc_beside(s, COLO_HEALING_TOTEM, &s->npcs[owner_slot]);
-    if (slot < 0) {
+static void col_mod_on_owner_death(ColosseumState* s, int owner_slot) {
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
+        ColoTotem* tot = &s->totems[t];
+        if (tot->phase == COLO_HAZARD_NONE || tot->owner_slot != owner_slot) continue;
+        col_totem_release(s, tot);
+    }
+}
 
+static void col_totem_place(ColosseumState* s, ColoTotem* tot) {
+    int slot = col_spawn_hazard_npc_beside(
+        s, COLO_HEALING_TOTEM, &s->npcs[tot->owner_slot]);
+    if (slot < 0) {
         tot->phase = COLO_HAZARD_RESPAWNING;
         tot->npc_slot = -1;
         tot->respawn_timer = 1;
+        tot->projectile_timer = 0;
         return;
     }
     tot->phase = COLO_HAZARD_ALIVE;
     tot->npc_slot = slot;
-    tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
+    tot->heal_timer = COLO_TOTEM_SPAWN_HEAL_DELAY;
+    tot->projectile_timer = 0;
+}
+
+static int col_totem_spawn_for_owner(ColosseumState* s, int owner_slot) {
+    ColoTotem* tot = col_totem_alloc(s, owner_slot);
+    if (!tot) return 0;
+    col_totem_place(s, tot);
+    return 1;
+}
+
+static void col_totem_apply_heal(ColoNPC* owner) {
+    owner->hp += owner->type == COLO_SOL_HEREDIT
+        ? COLO_TOTEM_SOL_HEAL
+        : (owner->max_hp * COLO_TOTEM_HEAL_PCT) / 100;
+    if (owner->hp > owner->max_hp) owner->hp = owner->max_hp;
 }
 
 static void col_mod_on_npc_hp_changed(ColosseumState* s, int npc_slot) {
@@ -472,25 +544,42 @@ static void col_mod_on_npc_hp_changed(ColosseumState* s, int npc_slot) {
     if (!npc->active || npc->hp <= 0 || npc->max_hp <= 0) return;
     if (col_type_is_hazard_entity(npc->type)) return;
     if (npc->hp * 2 > npc->max_hp) return;
-    if (col_totem_for_owner(s, npc_slot)->phase != COLO_HAZARD_NONE) return;
-    col_totem_spawn_for_owner(s, npc_slot);
+    if (col_totem_for_owner(s, npc_slot)) return;
+    if (!col_totem_spawn_for_owner(s, npc_slot)) return;
+    if (npc->type == COLO_SOL_HEREDIT)
+        s->sol_totem_spawn_timer = COLO_TOTEM_SOL_EXTRA_INTERVAL;
+}
+
+static void col_mod_tick_sol_extra_totems(ColosseumState* s) {
+    if (s->sol_totem_spawn_timer <= 0) return;
+    int sol_slot = col_find_sol_slot(s);
+    if (sol_slot < 0) {
+        s->sol_totem_spawn_timer = 0;
+        return;
+    }
+    s->sol_totem_spawn_timer--;
+    if (s->sol_totem_spawn_timer > 0) return;
+    s->sol_totem_spawn_timer = COLO_TOTEM_SOL_EXTRA_INTERVAL;
+    col_totem_spawn_for_owner(s, sol_slot);
 }
 
 static void col_mod_tick_totems(ColosseumState* s) {
-    for (int o = 0; o < COLO_MAX_TOTEMS; o++) {
-        ColoTotem* tot = &s->totems[o];
+    col_mod_tick_sol_extra_totems(s);
+
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++) {
+        ColoTotem* tot = &s->totems[t];
         if (tot->phase == COLO_HAZARD_NONE) continue;
 
-        ColoNPC* owner = &s->npcs[o];
+        ColoNPC* owner = &s->npcs[tot->owner_slot];
         if (!owner->active || owner->hp <= 0 ||
             col_type_is_hazard_entity(owner->type)) {
-            col_mod_on_owner_death(s, o);
+            col_totem_release(s, tot);
             continue;
         }
 
         if (tot->phase == COLO_HAZARD_RESPAWNING) {
             if (tot->respawn_timer > 0) tot->respawn_timer--;
-            if (tot->respawn_timer == 0) col_totem_spawn_for_owner(s, o);
+            if (tot->respawn_timer == 0) col_totem_place(s, tot);
             continue;
         }
 
@@ -500,16 +589,21 @@ static void col_mod_tick_totems(ColosseumState* s) {
             continue;
         }
 
+        if (tot->projectile_timer > 0) {
+            tot->projectile_timer--;
+            if (tot->projectile_timer == 0) {
+                col_totem_apply_heal(owner);
+                tot->heal_timer =
+                    COLO_TOTEM_HEAL_INTERVAL - COLO_TOTEM_PROJECTILE_TICKS;
+            }
+            continue;
+        }
+
+        if (owner->hp >= owner->max_hp) continue;
+
         if (tot->heal_timer > 0) tot->heal_timer--;
         if (tot->heal_timer > 0) continue;
-        tot->heal_timer = COLO_TOTEM_HEAL_INTERVAL;
-        if (owner->type == COLO_SOL_HEREDIT) {
-            owner->hp += COLO_TOTEM_SOL_HEAL;
-        } else {
-            if (owner->hp * 2 > owner->max_hp) continue;
-            owner->hp += (owner->max_hp * COLO_TOTEM_HEAL_PCT) / 100;
-        }
-        if (owner->hp > owner->max_hp) owner->hp = owner->max_hp;
+        tot->projectile_timer = COLO_TOTEM_PROJECTILE_TICKS;
     }
 }
 
@@ -583,14 +677,13 @@ static void col_mod_clear_wave_end_pools(ColosseumState* s) {
     int out = 0;
     for (int i = 0; i < s->molten_count; i++) {
         if (s->molten_lifetime[i] != COLO_POOL_PERMANENT) continue;
-        assert(s->molten_kind[i] & COLO_POOL_REENTRY);
         if (out != i) {
             s->molten_x[out] = s->molten_x[i];
             s->molten_y[out] = s->molten_y[i];
+            s->molten_kind[out] = s->molten_kind[i];
             s->molten_lifetime[out] = s->molten_lifetime[i];
             s->molten_burn_timer[out] = s->molten_burn_timer[i];
         }
-        s->molten_kind[out] = COLO_POOL_REENTRY;
         out++;
     }
     s->molten_count = out;
@@ -710,9 +803,12 @@ static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int siz
                 s, applied, COLO_DAMAGE_VOLATILITY_EXPLOSION);
         }
     }
-    if (tier >= 3)
+    if (tier >= 3) {
+        ColoMoltenPoolLifetime lifetime = col_mod_tier(s, COLO_MOD_REENTRY) >= 2
+            ? COLO_POOL_PERMANENT : COLO_POOL_TEMPORARY;
         col_mod_add_molten_pool(
-            s, x + size / 2, y + size / 2, COLO_POOL_VOLATILITY, COLO_POOL_TEMPORARY);
+            s, x + size / 2, y + size / 2, COLO_POOL_VOLATILITY, lifetime);
+    }
 }
 
 static void col_clamp_bee_swarm_to_arena(ColoNPC* npc) {
@@ -789,10 +885,11 @@ static void col_bee_swarm_next_tile_toward(
 }
 
 static int col_bee_swarm_contact_damage(ColosseumState* s) {
-    if (osrs_effect_profile_has(col_live_effects(s), OSRS_ITEM_EFFECT_VENOM_IMMUNE))
-        return 0;
     int span = COLO_BEE_MAX_DAMAGE - COLO_BEE_MIN_DAMAGE + 1;
-    return COLO_BEE_MIN_DAMAGE + encounter_rand_int(&s->rng_state, span);
+    int dmg = COLO_BEE_MIN_DAMAGE + encounter_rand_int(&s->rng_state, span);
+    if (osrs_effect_profile_has(col_live_effects(s), OSRS_ITEM_EFFECT_VENOM_IMMUNE))
+        dmg /= 2;
+    return dmg;
 }
 
 static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
@@ -966,9 +1063,15 @@ static void col_modifiers_tick(ColosseumState* s) {
 #endif
 }
 
+static void col_modifiers_on_wave_cleared(ColosseumState* s) {
+    s->player_venom = 0;
+    s->player_venom_timer = 0;
+}
+
 static void col_modifiers_on_wave_spawn(ColosseumState* s) {
     s->doom_stacks = 0;
     s->last_doom_damage_source = -1;
+    s->sol_totem_spawn_timer = 0;
     col_mod_clear_wave_end_pools(s);
     col_mod_apply_frailty_hp(s);
     col_mod_sync_bees(s);

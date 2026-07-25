@@ -2654,11 +2654,16 @@ typedef enum {
     ENCOUNTER_CONSUMABLE_STAT_EFFECT_SANFEW,
 } EncounterConsumableStatEffect;
 
-static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
+static inline void encounter_apply_brew_heal_capped(
+    Player* p, int brew_heal, int hitpoints_cap
+) {
     p->current_hitpoints += brew_heal;
-    if (p->current_hitpoints > p->base_hitpoints + brew_heal)
-        p->current_hitpoints = p->base_hitpoints + brew_heal;
+    if (p->current_hitpoints > hitpoints_cap) p->current_hitpoints = hitpoints_cap;
     p->ate_food_this_tick = 1;
+}
+
+static inline void encounter_apply_brew_heal(Player* p, int brew_heal) {
+    encounter_apply_brew_heal_capped(p, brew_heal, p->base_hitpoints + brew_heal);
 }
 
 static inline void encounter_apply_brew_heal_and_timer(Player* p, int brew_heal) {

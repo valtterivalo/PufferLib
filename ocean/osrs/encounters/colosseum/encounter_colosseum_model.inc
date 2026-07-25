@@ -620,7 +620,7 @@ static const ColoWaveDef COLO_WAVES[COLO_NUM_WAVES] = {
 #define COLO_NUM_MODIFIERS 16
 #define COLO_MODIFIER_DRAFT_OPTIONS 3
 
-#define COLO_RFDD_LAST_DRAFT_WAVE 6
+#define COLO_RFDD_FIRST_DRAFT_WAVE 6
 
 #define COLO_DRAFT_UPGRADE_WEIGHT 2
 
@@ -681,14 +681,19 @@ typedef struct {
 #define COLO_MAX_TOTEMS COLO_MAX_NPCS
 #define COLO_TOTEM_HEAL_PCT 30
 #define COLO_TOTEM_HEAL_INTERVAL 7
+#define COLO_TOTEM_SPAWN_HEAL_DELAY 5
+#define COLO_TOTEM_PROJECTILE_TICKS 2
 #define COLO_TOTEM_RESPAWN_TICKS 200
 #define COLO_TOTEM_SOL_HEAL 75
+#define COLO_TOTEM_SOL_EXTRA_INTERVAL 200
 
 typedef struct {
     ColoHazardPhase phase;
+    int owner_slot;
     int npc_slot;
     int respawn_timer;
     int heal_timer;
+    int projectile_timer;
 } ColoTotem;
 
 #define COLO_SOLARFLARE_RING_STEPS       16
@@ -1678,6 +1683,7 @@ typedef struct {
     int doom_stacks;
     ColoBeeSwarm bees[COLO_MAX_BEE_SWARMS];
     ColoTotem totems[COLO_MAX_TOTEMS];
+    int sol_totem_spawn_timer;
     ColoSolarflareOrb solarflare;
     int player_venom;
     int player_venom_timer;

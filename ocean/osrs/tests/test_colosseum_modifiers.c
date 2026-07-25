@@ -765,18 +765,17 @@ static void test_draft_offer_and_select(void) {
     col_spawn_wave(&s);
     CHECK("modifier persists across waves", col_mod_active(&s, (ColoModifier)chosen));
 
-    int rfdd_late = 0, rfdd_window = 0, boss_excluded_seen = 0;
+    int rfdd_before_window = 0, rfdd_in_window = 0, boss_excluded_seen = 0;
     for (int rep = 0; rep < 400; rep++) {
-        int late_wave = 7 + rep % 4;
-        col_modifier_open_draft(&s, late_wave);
+        col_modifier_open_draft(&s, rep % COLO_RFDD_FIRST_DRAFT_WAVE);
         for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
             int m = s.modifiers.draft_options[o];
-            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_late = 1;
+            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_before_window = 1;
         }
-        col_modifier_open_draft(&s, 2 + rep % 5);
+        col_modifier_open_draft(&s, COLO_RFDD_FIRST_DRAFT_WAVE + rep % 5);
         for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
             int m = s.modifiers.draft_options[o];
-            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_window = 1;
+            if (m == COLO_MOD_RED_FLAG || m == COLO_MOD_DYNAMIC_DUO) rfdd_in_window = 1;
         }
         col_modifier_open_draft(&s, COLO_WAVE_BOSS);
         for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
@@ -785,9 +784,49 @@ static void test_draft_offer_and_select(void) {
         }
     }
     s.modifiers.draft_pending = 0;
-    CHECK("Red Flag / Dynamic Duo never offered into wave 8+", rfdd_late == 0);
-    CHECK("Red Flag / Dynamic Duo do appear in drafts before wave 7", rfdd_window == 1);
+    CHECK("Red Flag / Dynamic Duo are not offered before the wave-7 draft",
+        rfdd_before_window == 0);
+    CHECK("Red Flag / Dynamic Duo appear from the wave-7 draft through wave 11",
+        rfdd_in_window == 1);
     CHECK("the wave-12 draft excludes RF/DD/Mantimayhem/Reentry", boss_excluded_seen == 0);
+}
+
+static void test_first_draft_is_fixed_trio(void) {
+    printf("test_first_draft_is_fixed_trio\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+
+    int all_trios_exact = 1;
+    int order_varied = 0;
+    int first_order[COLO_MODIFIER_DRAFT_OPTIONS] = { -1, -1, -1 };
+    for (int rep = 0; rep < 200; rep++) {
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 1234u + (uint32_t)rep);
+
+        int seen_relentless = 0, seen_blasphemy = 0, seen_frailty = 0;
+        for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++) {
+            int m = s.modifiers.draft_options[o];
+            if (m == COLO_MOD_RELENTLESS) seen_relentless = 1;
+            else if (m == COLO_MOD_BLASPHEMY) seen_blasphemy = 1;
+            else if (m == COLO_MOD_FRAILTY) seen_frailty = 1;
+            else all_trios_exact = 0;
+        }
+        if (!(seen_relentless && seen_blasphemy && seen_frailty)) all_trios_exact = 0;
+
+        if (rep == 0) {
+            for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+                first_order[o] = s.modifiers.draft_options[o];
+        } else {
+            for (int o = 0; o < COLO_MODIFIER_DRAFT_OPTIONS; o++)
+                if (s.modifiers.draft_options[o] != first_order[o]) order_varied = 1;
+        }
+    }
+
+    CHECK("the wave-1 draft is always exactly Relentless/Blasphemy/Frailty",
+        all_trios_exact == 1);
+    CHECK("the wave-1 draft is pending on reset", s.modifiers.draft_pending == 1);
+    CHECK("the wave-1 draft slot order is not a fixed constant", order_varied == 1);
 }
 
 static void test_draft_upgrade_bias(void) {
@@ -1043,6 +1082,13 @@ static void test_bees_hazard(void) {
         draft_is_open(&sc) && sc.wave_spawn_target == 1);
 }
 
+static int count_live_totems(const ColosseumState* s) {
+    int n = 0;
+    for (int t = 0; t < COLO_MAX_TOTEMS; t++)
+        if (s->totems[t].phase != COLO_HAZARD_NONE) n++;
+    return n;
+}
+
 static void test_totem_lifecycle(void) {
     printf("test_totem_lifecycle\n");
     ColosseumContext ctx;
@@ -1071,15 +1117,38 @@ static void test_totem_lifecycle(void) {
     col_mod_on_npc_hp_changed(&s, 0);
     CHECK("no duplicate totem for the same owner", s.totems[0].phase == COLO_HAZARD_ALIVE);
 
-    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL - 1; t++) col_mod_tick_totems(&s);
-    CHECK("no heal before the 7th tick", s.npcs[0].hp == 60);
+    CHECK("the totem spawns on the owner's south-west tile",
+        s.npcs[tslot].x == s.npcs[0].x - 1 && s.npcs[tslot].y == s.npcs[0].y - 1);
+
+    int heal = s.npcs[0].max_hp * COLO_TOTEM_HEAL_PCT / 100;
+    for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY + COLO_TOTEM_PROJECTILE_TICKS - 1; t++)
+        col_mod_tick_totems(&s);
+    CHECK("no heal lands before the spawn delay plus projectile flight",
+        s.npcs[0].hp == 60);
     col_mod_tick_totems(&s);
-    CHECK("the 7th tick heals 30% of the owner's max HP", s.npcs[0].hp == 60 + 37);
+    CHECK("the first heal restores 30% of the owner's max HP",
+        s.npcs[0].hp == 60 + heal);
     for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
-    CHECK("the pulse is gated while the owner is above 50%", s.npcs[0].hp == 97);
+    CHECK("heals land every 7 ticks and continue above 50%",
+        s.npcs[0].hp == 60 + 2 * heal || s.npcs[0].hp == s.npcs[0].max_hp);
+    for (int t = 0; t < 4 * COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("the totem heals the owner back to full and then stops",
+        s.npcs[0].hp == s.npcs[0].max_hp);
+
     s.npcs[0].hp = 50;
+    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL - COLO_TOTEM_PROJECTILE_TICKS; t++)
+        col_mod_tick_totems(&s);
+    CHECK("a heal projectile is in flight before it lands",
+        s.totems[0].projectile_timer > 0 && s.npcs[0].hp == 50);
+    col_player_attack_target(&s, tslot);
+    land_pending_player_hits(&s);
     for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
-    CHECK("the pulse resumes once the owner re-crosses 50%", s.npcs[0].hp == 87);
+    CHECK("destroying the totem cancels the in-flight heal",
+        s.npcs[0].hp == 50 && s.totems[0].phase == COLO_HAZARD_RESPAWNING);
+    s.totems[0].phase = COLO_HAZARD_ALIVE;
+    s.totems[0].npc_slot = tslot;
+    s.npcs[tslot].active = 1;
+    s.npcs[tslot].hp = 1;
 
     col_player_attack_target(&s, tslot);
     land_pending_player_hits(&s);
@@ -1131,18 +1200,24 @@ static void test_totemic_sol_wave12(void) {
 
     s.npcs[sol].hp = COLO_SOL_HP_MAX * 60 / 100;
     col_mod_on_npc_hp_changed(&s, sol);
-    CHECK("no totem while Sol is above 50%", s.totems[sol].phase == COLO_HAZARD_NONE);
+    CHECK("no totem while Sol is above 50%", col_totem_for_owner(&s, sol) == NULL);
     s.npcs[sol].hp = COLO_SOL_HP_MAX / 2;
     col_mod_on_npc_hp_changed(&s, sol);
-    CHECK("Sol at 50% spawns a totem", s.totems[sol].phase == COLO_HAZARD_ALIVE);
-    int tslot = s.totems[sol].npc_slot;
+    ColoTotem* sol_totem = col_totem_for_owner(&s, sol);
+    CHECK("Sol at 50% spawns a totem",
+        sol_totem && sol_totem->phase == COLO_HAZARD_ALIVE);
+    int tslot = sol_totem->npc_slot;
     CHECK("Sol's totem is an attackable 1-HP NPC inside the boss arena",
         s.npcs[tslot].type == COLO_HEALING_TOTEM && s.npcs[tslot].hp == 1 &&
         col_in_boss_arena(&s, s.npcs[tslot].x, s.npcs[tslot].y));
+    CHECK("the first Sol totem arms the two-minute extra-totem timer",
+        s.sol_totem_spawn_timer == COLO_TOTEM_SOL_EXTRA_INTERVAL);
 
     int hp0 = s.npcs[sol].hp;
-    for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL - 1; t++) col_mod_tick_totems(&s);
-    CHECK("no Sol heal before the 7th tick", s.npcs[sol].hp == hp0);
+    for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY + COLO_TOTEM_PROJECTILE_TICKS - 1; t++)
+        col_mod_tick_totems(&s);
+    CHECK("no Sol heal before the spawn delay plus projectile flight",
+        s.npcs[sol].hp == hp0);
     col_mod_tick_totems(&s);
     CHECK("the pulse heals Sol exactly 75", s.npcs[sol].hp == hp0 + COLO_TOTEM_SOL_HEAL);
     for (int t = 0; t < COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
@@ -1153,9 +1228,44 @@ static void test_totemic_sol_wave12(void) {
     land_pending_player_hits(&s);
     int hp1 = s.npcs[sol].hp;
     for (int t = 0; t < 3 * COLO_TOTEM_HEAL_INTERVAL; t++) col_mod_tick_totems(&s);
+    sol_totem = col_totem_for_owner(&s, sol);
     CHECK("a destroyed totem stops the Sol heal (until the 200t respawn)",
         !s.npcs[tslot].active && s.npcs[sol].hp == hp1 &&
-        s.totems[sol].phase == COLO_HAZARD_RESPAWNING);
+        sol_totem && sol_totem->phase == COLO_HAZARD_RESPAWNING);
+}
+
+static void test_totemic_sol_extra_totems_every_two_minutes(void) {
+    printf("test_totemic_sol_extra_totems_every_two_minutes\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 11;
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 227);
+    advance_to_wave_spawn(&s, &ctx);
+    s.modifiers.active_mask |= (1u << COLO_MOD_TOTEMIC);
+    s.modifiers.tier[COLO_MOD_TOTEMIC] = 1;
+    int sol = col_sol_find_idx(&s);
+    CHECK("Sol is live", sol >= 0);
+
+    s.npcs[sol].hp = COLO_SOL_HP_MAX / 2;
+    col_mod_on_npc_hp_changed(&s, sol);
+
+    int totems_after_first = count_live_totems(&s);
+    CHECK("exactly one totem at the 50% trigger", totems_after_first == 1);
+
+    for (int t = 0; t < COLO_TOTEM_SOL_EXTRA_INTERVAL - 1; t++) col_mod_tick_totems(&s);
+    CHECK("no extra totem one tick early", count_live_totems(&s) == 1);
+    col_mod_tick_totems(&s);
+    CHECK("a second totem spawns two minutes after the first",
+        count_live_totems(&s) == 2);
+
+    for (int t = 0; t < COLO_TOTEM_SOL_EXTRA_INTERVAL; t++) col_mod_tick_totems(&s);
+    CHECK("a third totem spawns two minutes later", count_live_totems(&s) == 3);
+
+    s.npcs[sol].hp = 0;
+    col_apply_npc_death(&s, sol);
+    CHECK("Sol's death despawns every totem it owned", count_live_totems(&s) == 0);
 }
 
 static void test_reentry_sand_tiles(void) {
@@ -1228,11 +1338,12 @@ static void test_reentry_sand_tiles(void) {
     CHECK("Reentry T3 pools are PERMANENT (survive wave end)", s.molten_count == 3);
 
     s.molten_count = 0;
+    s.modifiers.tier[COLO_MOD_REENTRY] = 1;
     s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
     s.modifiers.tier[COLO_MOD_VOLATILITY] = 3;
     s.player.x = 5; s.player.y = 18;
     col_mod_volatility_on_death(&s, 20, 16, 1);
-    CHECK("Volatility T3 leaves a temporary Volatility pool at the centre",
+    CHECK("Volatility T3 leaves a Volatility pool at the centre",
         s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_VOLATILITY);
     s.player.x = 20;
     s.player.y = 16;
@@ -1245,7 +1356,51 @@ static void test_reentry_sand_tiles(void) {
         s.log.typeless_damage_by_type[COLO_JAVELIN_COLOSSUS] ==
             javelin_typeless_before);
     col_modifiers_on_wave_spawn(&s);
-    CHECK("the Volatility (temporary) pool clears at wave end", s.molten_count == 0);
+    CHECK("under Reentry I the Volatility pool is temporary and clears at wave end",
+        s.molten_count == 0);
+
+    s.modifiers.tier[COLO_MOD_REENTRY] = 2;
+    col_mod_volatility_on_death(&s, 20, 16, 1);
+    CHECK("Reentry II makes the Volatility III pool permanent",
+        s.molten_count == 1 && s.molten_lifetime[0] == COLO_POOL_PERMANENT);
+    col_modifiers_on_wave_spawn(&s);
+    CHECK("that permanent Volatility pool survives wave end with its kind intact",
+        s.molten_count == 1 && s.molten_kind[0] == COLO_POOL_VOLATILITY);
+
+    s.molten_count = 0;
+    s.modifiers.tier[COLO_MOD_REENTRY] = 3;
+    col_mod_volatility_on_death(&s, 20, 16, 1);
+    CHECK("Reentry III also makes the Volatility III pool permanent",
+        s.molten_count == 1 && s.molten_lifetime[0] == COLO_POOL_PERMANENT);
+}
+
+static void test_mantimayhem_venom_cured_at_wave_end(void) {
+    printf("test_mantimayhem_venom_cured_at_wave_end\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 41);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.wave = 0;
+    s.wave_spawn_delay = 0;
+    s.wave_ready_delay = 0;
+    s.reinforcement_timer = COLO_REINFORCEMENT_TICKS;
+    s.player.x = 12;
+    s.player.y = 16;
+    s.modifiers.active_mask |= (1u << COLO_MOD_MANTIMAYHEM);
+    s.modifiers.tier[COLO_MOD_MANTIMAYHEM] = 2;
+
+    s.player_venom = COLO_VENOM_START;
+    s.player_venom_timer = COLO_VENOM_INTERVAL;
+    CHECK("rig sanity: the player is venomed mid-wave", s.player_venom > 0);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    step_and_observe(&s, &ctx, idle);
+    CHECK("rig sanity: the empty wave clears", s.tick_scratch.wave_completed == 1);
+    CHECK("Mantimayhem venom is cured at the end of each wave",
+        s.player_venom == 0 && s.player_venom_timer == 0);
 }
 
 static void test_venom_escalation(void) {
@@ -6032,9 +6187,9 @@ static void test_applied_damage_and_merged_pool_attribution(void) {
     CHECK("combined modifier pool burns again after one clear tick",
         s.player.current_hitpoints < hp_before);
     col_mod_clear_wave_end_pools(&s);
-    CHECK("wave end removes the temporary Volatility component only",
+    CHECK("a permanent merged tile survives wave end with both provenances",
         s.molten_count == 1 &&
-        s.molten_kind[0] == COLO_POOL_REENTRY &&
+        s.molten_kind[0] == COLO_POOL_REENTRY_VOLATILITY &&
         s.molten_lifetime[0] == COLO_POOL_PERMANENT);
 }
 
@@ -6449,6 +6604,68 @@ static void test_venator_bow_bounce_colosseum_integration(void) {
         ov.projectiles[2].start_delay > ov.projectiles[1].start_delay);
 }
 
+static void test_frailty_disables_brew_overheal(void) {
+    printf("test_frailty_disables_brew_overheal\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 909);
+    int base = s.player.base_hitpoints;
+    int brew_heal = osrs_brew_heal_amount(base);
+    s.player.current_hitpoints = base;
+    col_apply_drink_one_dose_effect(&s, OSRS_CONSUMABLE_BREW);
+    CHECK("without Frailty a brew overheals above base hitpoints",
+        s.player.current_hitpoints == base + brew_heal);
+
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_BEGINNER_ONLY, 0.0f, 909);
+    s.modifiers.active_mask |= (1u << COLO_MOD_FRAILTY);
+    s.modifiers.tier[COLO_MOD_FRAILTY] = 1;
+    col_mod_apply_frailty_hp(&s);
+    int frail_base = s.player.base_hitpoints;
+    CHECK("Frailty I cuts base hitpoints by 10%",
+        frail_base == 99 - (99 * COLO_FRAILTY_HP_CUT_PCT[1]) / 100);
+
+    s.player.current_hitpoints = frail_base - 1;
+    col_apply_drink_one_dose_effect(&s, OSRS_CONSUMABLE_BREW);
+    CHECK("under Frailty a brew heals up to the reduced base but never past it",
+        s.player.current_hitpoints == frail_base);
+}
+
+static void test_red_flag_minotaur_not_solid_to_other_npcs(void) {
+    printf("test_red_flag_minotaur_not_solid_to_other_npcs\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ColosseumState s;
+
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 77);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    col_init_npc(&s, 0, COLO_MINOTAUR, 14, 16);
+    int size = col_npc_effective_size(&s.npcs[0]);
+    CHECK("without Red Flag the minotaur blocks other NPCs",
+        col_npc_blocked_ignore_player(&s, 14, 16, size));
+
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 77);
+    geo_clear_npcs(&s);
+    s.modifiers.draft_pending = 0;
+    s.modifiers.active_mask |= (1u << COLO_MOD_RED_FLAG);
+    s.modifiers.tier[COLO_MOD_RED_FLAG] = 1;
+    col_init_npc(&s, 0, COLO_MINOTAUR, 14, 16);
+    CHECK("with Red Flag other NPCs can move into the minotaur's tiles",
+        !col_npc_blocked_ignore_player(&s, 14, 16, size));
+
+    col_init_npc(&s, 1, COLO_SERPENT_SHAMAN, 20, 16);
+    int shaman_size = col_npc_effective_size(&s.npcs[1]);
+    CHECK("Red Flag does not make other NPC types passable",
+        col_npc_blocked_ignore_player(&s, 20, 16, shaman_size));
+
+    col_deactivate_npc(&s, 1);
+    CHECK("deactivating a non-solid minotaur leaves no stale collision flags",
+        !col_npc_blocked_ignore_player(&s, 14, 16, size));
+}
+
 static void test_bee_contact_damage_band(void) {
     printf("test_bee_contact_damage_band\n");
     ColosseumContext ctx;
@@ -6479,12 +6696,23 @@ static void test_bee_contact_damage_band(void) {
     col_apply_weapon_set(&s, COLO_GEAR_MELEE);
     CHECK("rig sanity: the melee set is venom-immune",
         osrs_effect_profile_has(col_live_effects(&s), OSRS_ITEM_EFFECT_VENOM_IMMUNE));
-    bee->x = s.player.x;
-    bee->y = s.player.y;
-    s.player.current_hitpoints = 99;
-    col_mod_tick_bees(&s);
-    CHECK("serpentine-helm immunity zeroes bee contact damage",
-        s.player.current_hitpoints == 99);
+
+    s.player_poison = 0;
+    s.player_poison_timer = 0;
+    int halved_in_band = 1, halved_any_zero = 0;
+    for (int t = 0; t < 200; t++) {
+        bee->x = s.player.x;
+        bee->y = s.player.y;
+        s.player.current_hitpoints = 99;
+        col_mod_tick_bees(&s);
+        int dmg = 99 - s.player.current_hitpoints;
+        if (dmg < COLO_BEE_MIN_DAMAGE / 2 || dmg > COLO_BEE_MAX_DAMAGE / 2)
+            halved_in_band = 0;
+        if (dmg == 0) halved_any_zero = 1;
+    }
+    CHECK("antipoison halves bee contact damage rather than nulling it",
+        halved_in_band && !halved_any_zero);
+    CHECK("antipoison still blocks the bee poison stack", s.player_poison == 0);
 }
 
 static void test_divine_state_obs_presence(void) {
@@ -8860,6 +9088,7 @@ int main(void) {
     test_modifier_hazard_obs_fixes();
     test_death_linger_wave_clear_and_render();
     test_draft_offer_and_select();
+    test_first_draft_is_fixed_trio();
     test_draft_upgrade_bias();
     test_mantimayhem_stress();
     test_frailty_hp();
@@ -8869,7 +9098,10 @@ int main(void) {
     test_bees_hazard();
     test_totem_lifecycle();
     test_totemic_sol_wave12();
+    test_totemic_sol_extra_totems_every_two_minutes();
     test_reentry_sand_tiles();
+    test_mantimayhem_venom_cured_at_wave_end();
+    test_frailty_disables_brew_overheal();
     test_venom_escalation();
     test_bee_poison_status();
     test_mantimayhem_t3_shuffle();
@@ -8952,6 +9184,7 @@ int main(void) {
     test_combat_fidelity_contract_sizes();
     test_scythe_multihit_per_size();
     test_venator_bow_bounce_colosseum_integration();
+    test_red_flag_minotaur_not_solid_to_other_npcs();
     test_bee_contact_damage_band();
     test_divine_state_obs_presence();
     test_magic_set_max_hit_math();

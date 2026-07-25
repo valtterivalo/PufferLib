@@ -20,6 +20,16 @@ static void col_stamp_npc_collision_footprint(ColosseumState* s, int x, int y, i
     }
 }
 
+static int col_npc_blocks_other_npcs(const ColosseumState* s, ColoNpcType type) {
+    return !(type == COLO_MINOTAUR && col_mod_active(s, COLO_MOD_RED_FLAG));
+}
+
+static void col_stamp_npc_collision(ColosseumState* s, const ColoNPC* npc, uint8_t v) {
+    if (!col_npc_blocks_other_npcs(s, npc->type)) return;
+    col_stamp_npc_collision_footprint(
+        s, npc->x, npc->y, col_npc_effective_size(npc), v);
+}
+
 static void col_rebuild_player_collision_flags(ColosseumState* s) {
     memset(s->player_collision_flags, 0, sizeof(s->player_collision_flags));
     int gx, gy;
@@ -50,10 +60,8 @@ static void col_record_score_spawn(ColosseumState* s, ColoNpcType type) {
 static void col_deactivate_npc(ColosseumState* s, int idx) {
     ColoNPC* npc = &s->npcs[idx];
 
-    if (!col_type_is_hazard_entity(npc->type) && !col_type_is_warbander(npc->type)) {
-        int size = col_npc_effective_size(npc);
-        col_stamp_npc_collision_footprint(s, npc->x, npc->y, size, 0);
-    }
+    if (!col_type_is_hazard_entity(npc->type) && !col_type_is_warbander(npc->type))
+        col_stamp_npc_collision(s, npc, 0);
     npc->active = 0;
 }
 
@@ -115,7 +123,7 @@ static void col_init_npc(ColosseumState* s, int idx, ColoNpcType type, int x, in
 
     if (!col_type_is_hazard_entity(type) && !col_type_is_warbander(type) &&
             col_npc_effective_size(npc) > 0)
-        col_stamp_npc_collision_footprint(s, x, y, col_npc_effective_size(npc), 1);
+        col_stamp_npc_collision(s, npc, 1);
 }
 
 static int col_spawn_npc_at(ColosseumState* s, ColoNpcType type, int x, int y) {
