@@ -672,6 +672,21 @@ static int col_volatility_reach_for_tier(int tier) {
     return tier >= 2 ? 2 : 1;
 }
 
+static int col_volatility_tile_in_blast(
+    int x,
+    int y,
+    int size,
+    int tier,
+    int player_x,
+    int player_y
+) {
+    int reach = col_volatility_reach_for_tier(tier);
+    if (reach <= 0) return 0;
+    int span = size + 2 * reach;
+    return encounter_entity_footprints_overlap(
+        x - reach, y - reach, span, player_x, player_y, 1);
+}
+
 static int col_volatility_player_in_blast(
     const ColosseumState* s,
     int x,
@@ -679,11 +694,8 @@ static int col_volatility_player_in_blast(
     int size,
     int tier
 ) {
-    int reach = col_volatility_reach_for_tier(tier);
-    if (reach <= 0) return 0;
-    int span = size + 2 * reach;
-    return encounter_entity_footprints_overlap(
-        x - reach, y - reach, span, s->player.x, s->player.y, 1);
+    return col_volatility_tile_in_blast(
+        x, y, size, tier, s->player.x, s->player.y);
 }
 
 static void col_mod_volatility_on_death(ColosseumState* s, int x, int y, int size) {
@@ -750,22 +762,22 @@ static int col_bee_swarm_contacts_player(const ColosseumState* s, const ColoNPC*
     return encounter_entity_footprints_overlap(npc->x, npc->y, size, s->player.x, s->player.y, 1);
 }
 
-static void col_bee_swarm_next_tile_toward_player(
-    const ColosseumState* s,
-    const ColoNPC* npc,
+static void col_bee_swarm_next_tile_toward(
+    int player_x,
+    int player_y,
+    int x,
+    int y,
+    int size,
     int* out_x,
     int* out_y
 ) {
-    if (!s || !npc || !out_x || !out_y) abort();
-    int size = col_npc_effective_size(npc);
-    int x = npc->x;
-    int y = npc->y;
+    if (!out_x || !out_y || size <= 0) abort();
     int hi_x = x + size - 1;
     int hi_y = y + size - 1;
-    if (s->player.x < x) x--;
-    else if (s->player.x > hi_x) x++;
-    if (s->player.y < y) y--;
-    else if (s->player.y > hi_y) y++;
+    if (player_x < x) x--;
+    else if (player_x > hi_x) x++;
+    if (player_y < y) y--;
+    else if (player_y > hi_y) y++;
     int max_x = COLO_ARENA_MAX_X - size + 1;
     int max_y = COLO_ARENA_MAX_Y - size + 1;
     if (x < COLO_ARENA_MIN_X) x = COLO_ARENA_MIN_X;
@@ -785,7 +797,14 @@ static int col_bee_swarm_contact_damage(ColosseumState* s) {
 
 static void col_bee_swarm_step_toward_player(ColosseumState* s, ColoNPC* npc) {
     int next_x, next_y;
-    col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
+    col_bee_swarm_next_tile_toward(
+        s->player.x,
+        s->player.y,
+        npc->x,
+        npc->y,
+        col_npc_effective_size(npc),
+        &next_x,
+        &next_y);
     npc->x = next_x;
     npc->y = next_y;
     npc->target_x = s->player.x;

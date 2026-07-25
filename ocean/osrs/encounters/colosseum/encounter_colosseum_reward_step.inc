@@ -219,6 +219,11 @@ static float col_inventory_heal_remaining(const ColosseumState* s) {
 static void col_record_death_attribution(ColosseumState* s) {
     int kt = s->last_hit_by_type;
     if (kt >= 0 && kt < COLO_NUM_NPC_TYPES) s->log.death_by_type[kt] += 1.0f;
+    if (s->last_damage_source == COLO_DAMAGE_NPC_ATTACK &&
+            kt >= 0 &&
+            kt < COLO_NUM_NPC_TYPES) {
+        s->log.npc_attack_death_by_type[kt] += 1.0f;
+    }
     if (s->last_damage_source >= 0 &&
             s->last_damage_source < COLO_NUM_DAMAGE_SOURCES)
         s->log.death_by_source[s->last_damage_source] += 1.0f;

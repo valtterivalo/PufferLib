@@ -29,11 +29,95 @@ typedef struct {
 } ColoForecastLanding;
 
 typedef struct {
+    int x;
+    int y;
+    int size;
+    int move_timer;
+} ColoBeeActionForecast;
+
+typedef struct {
+    int found;
+    int npc_slot;
+    int x;
+    int y;
+    int size;
+    int ticks;
+    int distance;
+} ColoVolatilityBlastPreview;
+
+typedef struct {
+    int bee_count;
+    ColoBeeActionForecast bees[COLO_MAX_BEE_SWARMS];
+    ColoVolatilityBlastPreview volatility;
+} ColoPrimaryEnvHazardBasis;
+
+typedef struct {
+    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    ColoPrimaryEnvHazardBasis hazard_basis;
+} ColoPrimaryActionForecast;
+
+typedef struct {
     int first_attack_tick;
     int first_style_mask;
     int max_hit;
     int ranged_magic_same_tick;
 } ColoForecastObsSummary;
+
+static inline ColoVolatilityBlastPreview col_volatility_blast_preview_none(void) {
+    return (ColoVolatilityBlastPreview){
+        .found = 0,
+        .npc_slot = -1,
+        .x = 0,
+        .y = 0,
+        .size = 0,
+        .ticks = 0,
+        .distance = 1 << 30,
+    };
+}
+
+static ColoVolatilityBlastPreview col_soonest_queued_volatility_blast(
+    const ColosseumState* s
+) {
+    ColoVolatilityBlastPreview best = col_volatility_blast_preview_none();
+    for (int n = 0; n < COLO_MAX_NPCS; n++) {
+        const ColoNPC* npc = &s->npcs[n];
+        if (!col_npc_is_live_enemy(npc)) continue;
+        for (int h = 0; h < npc->pending_hits.count; h++) {
+            const EncounterPendingHit* hit = &npc->pending_hits.hits[h];
+            if (!hit->active) continue;
+            int ticks = hit->ticks_remaining < 0 ? 0 : hit->ticks_remaining;
+            int damage = 0;
+            for (int j = 0; j < npc->pending_hits.count; j++) {
+                const EncounterPendingHit* other = &npc->pending_hits.hits[j];
+                if (!other->active) continue;
+                int other_ticks =
+                    other->ticks_remaining < 0 ? 0 : other->ticks_remaining;
+                if (other_ticks <= ticks) damage += other->damage;
+            }
+            if (damage < npc->hp) continue;
+            int size = col_npc_effective_size(npc);
+            int center_x = npc->x + size / 2;
+            int center_y = npc->y + size / 2;
+            int dx = abs(center_x - s->player.x);
+            int dy = abs(center_y - s->player.y);
+            int distance = dx > dy ? dx : dy;
+            if (best.found &&
+                    (ticks > best.ticks ||
+                     (ticks == best.ticks && distance >= best.distance)))
+                continue;
+            best = (ColoVolatilityBlastPreview){
+                .found = 1,
+                .npc_slot = n,
+                .x = npc->x,
+                .y = npc->y,
+                .size = size,
+                .ticks = ticks,
+                .distance = distance,
+            };
+        }
+    }
+    return best;
+}
 
 static int col_forecast_style_mask(AttackStyle style) {
     if (style == ATTACK_STYLE_MELEE) return COLO_STYLE_MASK_MELEE;
@@ -340,11 +424,13 @@ static EncounterArenaAttackRouteField* col_cached_attack_route_field(
     return &entry->field;
 }
 
-static void col_build_primary_action_landings_ctx(
+static void col_build_primary_action_forecast_ctx(
     ColosseumState* s,
     ColosseumContext* ctx,
-    ColoForecastLanding landings[COLO_PRIMARY_DIM]
+    ColoPrimaryActionForecast* out
 ) {
+    if (!out) abort();
+    *out = (ColoPrimaryActionForecast){0};
     ColosseumState phase_state = *s;
     ColosseumContext phase_ctx = *ctx;
     phase_state.profiling_suppressed = 1;
@@ -352,10 +438,30 @@ static void col_build_primary_action_landings_ctx(
     ColoPrePlayerPhase phase = col_advance_pre_player_phase_ctx(
         &phase_state, &phase_ctx, phase_actions);
 
+    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++) {
+        const ColoBeeSwarm* bee = &phase_state.bees[b];
+        if (bee->phase != COLO_HAZARD_ALIVE ||
+                bee->npc_slot < 0 ||
+                bee->npc_slot >= COLO_MAX_NPCS) {
+            continue;
+        }
+        const ColoNPC* npc = &phase_state.npcs[bee->npc_slot];
+        if (!npc->active || npc->type != COLO_BEE_SWARM) continue;
+        out->hazard_basis.bees[out->hazard_basis.bee_count++] =
+            (ColoBeeActionForecast){
+                .x = npc->x,
+                .y = npc->y,
+                .size = col_npc_effective_size(npc),
+                .move_timer = bee->move_timer,
+            };
+    }
+    out->hazard_basis.volatility =
+        col_soonest_queued_volatility_blast(&phase_state);
+
     for (int primary_action = 0;
             primary_action < COLO_PRIMARY_DIM;
             primary_action++) {
-        landings[primary_action] = (ColoForecastLanding){
+        out->landings[primary_action] = (ColoForecastLanding){
             .valid = col_primary_action_valid(s, primary_action),
             .land_x = s->player.x,
             .land_y = s->player.y,
@@ -370,8 +476,8 @@ static void col_build_primary_action_landings_ctx(
     for (int primary_action = 1;
             primary_action < ENCOUNTER_MOVE_ACTIONS;
             primary_action++) {
-        if (!landings[primary_action].valid) continue;
-        landings[primary_action] =
+        if (!out->landings[primary_action].valid) continue;
+        out->landings[primary_action] =
             col_primary_action_landing_ctx(
                 &phase_state, &phase_ctx, primary_action);
     }
@@ -386,7 +492,7 @@ static void col_build_primary_action_landings_ctx(
     int attack_range = col_player_attack_range(&phase_state);
 
     if (phase_state.player_dest_x >= 0) {
-        landings[0] =
+        out->landings[0] =
             col_primary_action_landing_ctx(&phase_state, &phase_ctx, 0);
     } else if (osrs_interaction_active(&phase_state.interaction)) {
         int target_slot = phase_state.interaction.target_slot;
@@ -402,15 +508,15 @@ static void col_build_primary_action_landings_ctx(
                     col_npc_effective_size(target),
                     attack_range,
                     &los_query);
-            landings[0].land_x = route.land_x;
-            landings[0].land_y = route.land_y;
+            out->landings[0].land_x = route.land_x;
+            out->landings[0].land_y = route.land_y;
         }
     }
 
     for (int primary_action = COLO_PRIMARY_ATTACK_BASE;
             primary_action < COLO_PRIMARY_DIM;
             primary_action++) {
-        if (!landings[primary_action].valid) continue;
+        if (!out->landings[primary_action].valid) continue;
         int obs_slot = col_primary_obs_slot_from_action(primary_action);
         int target_slot = col_obs_slot_to_npc(s, obs_slot);
         if (target_slot < 0 ||
@@ -427,8 +533,8 @@ static void col_build_primary_action_landings_ctx(
                 col_npc_effective_size(target),
                 attack_range,
                 &los_query);
-        landings[primary_action].land_x = route.land_x;
-        landings[primary_action].land_y = route.land_y;
+        out->landings[primary_action].land_x = route.land_x;
+        out->landings[primary_action].land_y = route.land_y;
     }
 }
 

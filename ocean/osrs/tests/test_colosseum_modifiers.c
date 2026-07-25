@@ -17,11 +17,14 @@
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
 #define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
 #define TEST_MOD_OBS_DOOM_PENDING (TEST_MOD_HAZARD_BASE + 3)
-#define TEST_MOD_OBS_VENOM_TIMER (TEST_MOD_HAZARD_BASE + 6)
-#define TEST_MOD_OBS_SOLARFLARE (TEST_MOD_HAZARD_BASE + 10)
-#define TEST_MOD_OBS_MOLTEN (TEST_MOD_HAZARD_BASE + 18)
-#define TEST_MOD_OBS_VOLATILITY (TEST_MOD_HAZARD_BASE + 30)
-#define TEST_MOD_OBS_PREMOVE_UNAVOIDABLE (TEST_MOD_HAZARD_BASE + 38)
+#define TEST_MOD_OBS_VENOM_SEVERITY (TEST_MOD_HAZARD_BASE + 4)
+#define TEST_MOD_OBS_VENOM_TIMER (TEST_MOD_HAZARD_BASE + 5)
+#define TEST_MOD_OBS_POISON_SEVERITY (TEST_MOD_HAZARD_BASE + 6)
+#define TEST_MOD_OBS_POISON_TIMER (TEST_MOD_HAZARD_BASE + 7)
+#define TEST_MOD_OBS_SOLARFLARE (TEST_MOD_HAZARD_BASE + 11)
+#define TEST_MOD_OBS_MOLTEN (TEST_MOD_HAZARD_BASE + 19)
+#define TEST_MOD_OBS_VOLATILITY (TEST_MOD_HAZARD_BASE + 31)
+#define TEST_MOD_OBS_PREMOVE_UNAVOIDABLE (TEST_MOD_HAZARD_BASE + 39)
 
 static EncounterLoadoutStats test_col_live_stats_for_set(
     const ColosseumState* s,
@@ -1696,6 +1699,22 @@ static void test_modifier_hazard_obs_fixes(void) {
         fabsf(obs[tells + 2] - col_obs_rel_x(11, s.player.x)) < 0.000001f &&
         fabsf(obs[tells + 3] - col_obs_rel_y(10, s.player.y)) < 0.000001f &&
         obs[tells + 4] == 1.0f);
+
+    s.player_venom = 8;
+    s.player_venom_timer = 17;
+    s.player_poison = 4;
+    s.player_poison_timer = 23;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("venom observation is a compact severity and timer pair",
+        fabsf(obs[TEST_MOD_OBS_VENOM_SEVERITY] -
+            8.0f / (float)COLO_VENOM_CAP) < 0.000001f &&
+        fabsf(obs[TEST_MOD_OBS_VENOM_TIMER] -
+            17.0f / (float)COLO_VENOM_INTERVAL) < 0.000001f);
+    CHECK("bee poison observation exposes remaining hits and time to tick",
+        fabsf(obs[TEST_MOD_OBS_POISON_SEVERITY] -
+            4.0f / (float)COLO_POISON_BEE_CONTACT_SEVERITY) < 0.000001f &&
+        fabsf(obs[TEST_MOD_OBS_POISON_TIMER] -
+            23.0f / (float)COLO_POISON_INTERVAL) < 0.000001f);
 
     init_forecast_test_state(&s, &ctx, 303, 10, 10);
     s.molten_count = 6;
@@ -3770,6 +3789,81 @@ static void test_primary_environment_hazard_action_observation_contract(void) {
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     CHECK("PRIMARY noop sees the pool on its held-chase landing",
         obs[primary_env_hazard_action_obs_index(0)] == 1.0f);
+
+    init_forecast_test_state(&s, &ctx, 308, 12, 10);
+    ctx.config.step_out_forecast_obs_enabled = 0;
+    col_apply_weapon_set(&s, COLO_GEAR_RANGED);
+    col_init_npc(&s, 0, COLO_BEE_SWARM, 10, 10);
+    s.bees[0] = (ColoBeeSwarm){
+        .phase = COLO_HAZARD_ALIVE,
+        .npc_slot = 0,
+        .move_timer = 2,
+    };
+    col_init_npc(&s, 1, COLO_FREMENNIK_ARCHER, 24, 20);
+    s.npcs[1].stun_timer = 100;
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("staying exposes next-tick bee contact",
+        obs[primary_env_hazard_action_obs_index(0)] == 1.0f);
+    CHECK("walking away exposes a safe bee landing without step-out forecasts",
+        obs[primary_env_hazard_action_obs_index(walk_east)] == 0.0f);
+
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+    ColosseumState danger = s;
+    ColosseumContext danger_ctx = ctx;
+    col_step_ctx(
+        (EncounterState*)&danger, (EncounterContext*)&danger_ctx, idle);
+    int danger_hp = danger.player.current_hitpoints;
+    col_step_ctx(
+        (EncounterState*)&danger, (EncounterContext*)&danger_ctx, idle);
+    CHECK("staying takes the forecast bee contact on the next pre-player phase",
+        danger.player.current_hitpoints < danger_hp);
+
+    int walk[COLO_NUM_ACTION_HEADS] = {0};
+    walk[COLO_HEAD_PRIMARY] = walk_east;
+    ColosseumState safe = s;
+    ColosseumContext safe_ctx = ctx;
+    col_step_ctx(
+        (EncounterState*)&safe, (EncounterContext*)&safe_ctx, walk);
+    int safe_hp = safe.player.current_hitpoints;
+    col_step_ctx(
+        (EncounterState*)&safe, (EncounterContext*)&safe_ctx, idle);
+    CHECK("walking away avoids the forecast bee contact",
+        safe.player.current_hitpoints == safe_hp);
+
+    init_forecast_test_state(&s, &ctx, 312, 12, 10);
+    ctx.config.step_out_forecast_obs_enabled = 0;
+    s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
+    s.modifiers.tier[COLO_MOD_VOLATILITY] = 2;
+    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 10, 10);
+    s.npcs[0].hp = 1;
+    s.npcs[0].stun_timer = 100;
+    col_queue_npc_pending_hit(
+        &s, 0, 1, 2, ATTACK_STYLE_RANGED, ENCOUNTER_SPELL_NONE);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    CHECK("staying exposes an explosion queued for the next pre-player phase",
+        obs[primary_env_hazard_action_obs_index(0)] == 1.0f);
+    CHECK("walking out exposes a safe queued-explosion landing",
+        obs[primary_env_hazard_action_obs_index(walk_east)] == 0.0f);
+
+    danger = s;
+    danger_ctx = ctx;
+    col_step_ctx(
+        (EncounterState*)&danger, (EncounterContext*)&danger_ctx, idle);
+    danger_hp = danger.player.current_hitpoints;
+    col_step_ctx(
+        (EncounterState*)&danger, (EncounterContext*)&danger_ctx, idle);
+    CHECK("staying takes the forecast queued explosion",
+        danger.player.current_hitpoints < danger_hp);
+
+    safe = s;
+    safe_ctx = ctx;
+    col_step_ctx(
+        (EncounterState*)&safe, (EncounterContext*)&safe_ctx, walk);
+    safe_hp = safe.player.current_hitpoints;
+    col_step_ctx(
+        (EncounterState*)&safe, (EncounterContext*)&safe_ctx, idle);
+    CHECK("walking out avoids the forecast queued explosion",
+        safe.player.current_hitpoints == safe_hp);
 }
 
 static void test_primary_environment_hazard_phase_order(void) {
@@ -3865,8 +3959,8 @@ static void test_primary_target_landing_uses_post_npc_position(void) {
     int obs_slot = test_obs_slot_for_npc(&s, 0);
     int target_action = col_primary_attack_action_for_obs_slot(obs_slot);
 
-    ColoForecastLanding landings[COLO_PRIMARY_DIM];
-    col_build_primary_action_landings_ctx(&s, &ctx, landings);
+    ColoPrimaryActionForecast forecast;
+    col_build_primary_action_forecast_ctx(&s, &ctx, &forecast);
     int actions[COLO_NUM_ACTION_HEADS] = {0};
     actions[COLO_HEAD_PRIMARY] = target_action;
     ColosseumState runtime = s;
@@ -3884,9 +3978,9 @@ static void test_primary_target_landing_uses_post_npc_position(void) {
             runtime.npcs[0].y,
             col_npc_effective_size(&runtime.npcs[0])) == 1);
     CHECK("target landing matches the full runtime phase order",
-        landings[target_action].valid &&
-        landings[target_action].land_x == runtime.player.x &&
-        landings[target_action].land_y == runtime.player.y &&
+        forecast.landings[target_action].valid &&
+        forecast.landings[target_action].land_x == runtime.player.x &&
+        forecast.landings[target_action].land_y == runtime.player.y &&
         runtime.player.x == s.player.x &&
         runtime.player.y == s.player.y);
 }
@@ -5273,8 +5367,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v20 for Solarflare shared cadence",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 20u);
+    CHECK("snapshot version is v21 for exact NPC death telemetry",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 21u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -6086,15 +6180,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 3380", COLO_NUM_OBS == 3380);
+    CHECK("obs width is 3381", COLO_NUM_OBS == 3381);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
-    CHECK("modifier hazard tail has 39 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 39);
-    CHECK("modifier block has 75 features", COLO_MODIFIER_OBS_SIZE == 75);
+    CHECK("modifier hazard tail has 40 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 40);
+    CHECK("modifier block has 76 features", COLO_MODIFIER_OBS_SIZE == 76);
     CHECK("NPC slots have 37 features (DPT obs removed, B0 neutral)", COLO_FEATURES_PER_NPC == 37);
-    CHECK("snapshot version is v20", COLO_SNAPSHOT_VERSION == 20u);
+    CHECK("snapshot version is v21", COLO_SNAPSHOT_VERSION == 21u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -6693,7 +6787,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v20", snap.version == 20u);
+    CHECK("snapshot frame is v21", snap.version == 21u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -8241,7 +8335,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3380);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 3381);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -8270,6 +8364,10 @@ static void test_death_attribution_credits_actual_source(void) {
     col_pending_hit_prayer_observer(&obs, &manticore, 0, 0, 1, 0);
     CHECK("a 0-damage splash does not change attribution",
           s.last_hit_by_type == COLO_SHOCKWAVE_COLOSSUS);
+
+    col_record_death_attribution(&s);
+    CHECK("generic NPC deaths retain their exact attacker type",
+        s.log.npc_attack_death_by_type[COLO_SHOCKWAVE_COLOSSUS] == 1.0f);
 }
 
 static int test_walkable_block_corner(void* ctx, int x, int y) {

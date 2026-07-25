@@ -552,9 +552,10 @@ static int exact_primary_action_landing_selftest_one_state(
     ColosseumState* s,
     ColosseumContext* ctx
 ) {
-    ColoForecastLanding landings[COLO_PRIMARY_DIM];
+    ColoPrimaryActionForecast forecast;
+    const ColoForecastLanding* landings = forecast.landings;
     float mask[COLO_ACTION_MASK_SIZE];
-    col_build_primary_action_landings_ctx(s, ctx, landings);
+    col_build_primary_action_forecast_ctx(s, ctx, &forecast);
     col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, mask);
     int primary_mask_offset = col_action_head_mask_offset(COLO_HEAD_PRIMARY);
     int checked = 0;

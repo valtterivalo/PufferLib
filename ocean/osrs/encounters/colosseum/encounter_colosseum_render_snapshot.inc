@@ -1092,7 +1092,7 @@ static void col_step_human_commands_ctx(
 }
 
 #define COLO_SNAPSHOT_MAGIC 0xC010C001u
-#define COLO_SNAPSHOT_VERSION 20u
+#define COLO_SNAPSHOT_VERSION 21u
 
 typedef struct {
     uint32_t magic;

@@ -42,6 +42,7 @@ struct Log {
     float offpray_damage_by_type[COLO_NUM_NPC_TYPES];
     float total_damage_by_type[COLO_NUM_NPC_TYPES];
     float death_by_type[COLO_NUM_NPC_TYPES];
+    float npc_attack_death_by_type[COLO_NUM_NPC_TYPES];
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
@@ -313,6 +314,8 @@ void puf_step(Env* env) {
                 env->log.offpray_damage_by_type[t] += clog->offpray_damage_by_type[t];
                 env->log.total_damage_by_type[t] += clog->total_damage_by_type[t];
                 env->log.death_by_type[t] += clog->death_by_type[t];
+                env->log.npc_attack_death_by_type[t] +=
+                    clog->npc_attack_death_by_type[t];
                 env->log.typeless_damage_by_type[t] += clog->typeless_damage_by_type[t];
             }
             for (int source = 0; source < COLO_NUM_SOL_DAMAGE_SOURCES; source++)
@@ -408,6 +411,26 @@ void puf_log(Log* log, Dict* out) {
         "death_by_sol", "death_by_totem", "death_by_bee"};
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
         dict_set(out, DEATH_BY_KEYS[t], log->death_by_type[t]);
+    }
+    static const char* const NPC_ATTACK_DEATH_BY_KEYS[COLO_NUM_NPC_TYPES] = {
+        "npc_attack_death_by_berserker",
+        "npc_attack_death_by_archer",
+        "npc_attack_death_by_seer",
+        "npc_attack_death_by_serpent",
+        "npc_attack_death_by_jaguar",
+        "npc_attack_death_by_javelin",
+        "npc_attack_death_by_shockwave",
+        "npc_attack_death_by_minotaur",
+        "npc_attack_death_by_manticore",
+        "npc_attack_death_by_sol",
+        "npc_attack_death_by_totem",
+        "npc_attack_death_by_bee",
+    };
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+        dict_set(
+            out,
+            NPC_ATTACK_DEATH_BY_KEYS[t],
+            log->npc_attack_death_by_type[t]);
     }
     dict_set(out, "death_fatal_damage", log->death_fatal_damage);
     dict_set(out, "offpray_dmg_conflict", log->offpray_damage_conflict);

@@ -16,7 +16,7 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 #define COLO_EXPECTED_DPT_NORM    15.0f
 
 #define COLO_MODIFIER_FLAGS_OBS_SIZE  (2 * COLO_NUM_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
-#define COLO_MODIFIER_HAZARD_OBS_SIZE 39
+#define COLO_MODIFIER_HAZARD_OBS_SIZE 40
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
 #define COLO_WAVE_OBS_SIZE        4
 
@@ -492,7 +492,14 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
             const ColoBeeSwarm* bee = col_obs_bee_state_for_npc_slot(s, npc_slot);
             int next_x, next_y;
             int size = col_npc_effective_size(npc);
-            col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
+            col_bee_swarm_next_tile_toward(
+                s->player.x,
+                s->player.y,
+                npc->x,
+                npc->y,
+                size,
+                &next_x,
+                &next_y);
             tells[0] = bee
                 ? col_clamp01((float)bee->move_timer / (float)COLO_BEE_MOVE_INTERVAL)
                 : 0.0f;
@@ -716,6 +723,12 @@ static int col_primary_action_landings_needed(
             col_mod_tier(s, COLO_MOD_SOLARFLARE) > 0) {
         return 1;
     }
+    if (col_mod_tier(s, COLO_MOD_VOLATILITY) > 0 &&
+            col_soonest_queued_volatility_blast(s).found) {
+        return 1;
+    }
+    for (int b = 0; b < COLO_MAX_BEE_SWARMS; b++)
+        if (s->bees[b].phase == COLO_HAZARD_ALIVE) return 1;
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_target(npc) ||
@@ -766,6 +779,7 @@ static int col_build_post_premove_molten_forecast(
 static int col_primary_env_hazard_action_hit_tick(
     const ColosseumState* s,
     const ColosseumState* post_premove_molten,
+    const ColoPrimaryEnvHazardBasis* hazard_basis,
     int x,
     int y
 ) {
@@ -823,12 +837,57 @@ static int col_primary_env_hazard_action_hit_tick(
             }
         }
     }
+
+    for (int b = 0; b < hazard_basis->bee_count; b++) {
+        const ColoBeeActionForecast* bee = &hazard_basis->bees[b];
+        int bee_x = bee->x;
+        int bee_y = bee->y;
+        int move_timer = bee->move_timer;
+        for (int hit_tick = 1;
+                hit_tick <= COLO_STEP_OUT_FORECAST_HORIZON;
+                hit_tick++) {
+            if (move_timer > 0) move_timer--;
+            if (move_timer == 0) {
+                col_bee_swarm_next_tile_toward(
+                    x,
+                    y,
+                    bee_x,
+                    bee_y,
+                    bee->size,
+                    &bee_x,
+                    &bee_y);
+                move_timer = COLO_BEE_MOVE_INTERVAL;
+            }
+            if (encounter_entity_footprints_overlap(
+                    bee_x, bee_y, bee->size, x, y, 1)) {
+                earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
+                break;
+            }
+        }
+    }
+
+    const ColoVolatilityBlastPreview* volatility =
+        &hazard_basis->volatility;
+    int volatility_tier = col_mod_tier(s, COLO_MOD_VOLATILITY);
+    if (volatility_tier > 0 &&
+            volatility->found &&
+            volatility->ticks <= 1 &&
+            col_volatility_tile_in_blast(
+                volatility->x,
+                volatility->y,
+                volatility->size,
+                volatility_tier,
+                x,
+                y)) {
+        earliest = col_sol_earliest_hit_tick(earliest, 1);
+    }
     return earliest;
 }
 
 static void col_write_primary_env_hazard_action_obs(
     const ColosseumState* s,
     const ColosseumState* post_premove_molten,
+    const ColoPrimaryEnvHazardBasis* hazard_basis,
     const ColoForecastLanding landings[COLO_PRIMARY_DIM],
     float* obs,
     int* idx
@@ -856,6 +915,7 @@ static void col_write_primary_env_hazard_action_obs(
                 col_primary_env_hazard_action_hit_tick(
                     s,
                     post_premove_molten,
+                    hazard_basis,
                     landings[action].land_x,
                     landings[action].land_y));
         }
@@ -1012,28 +1072,6 @@ static int col_collect_obs_pending_hits(const ColosseumState* s, int* out) {
 
 #define COLO_MODIFIER_MOLTEN_OBS_COUNT 4
 
-typedef struct {
-    int found;
-    int npc_slot;
-    int x;
-    int y;
-    int size;
-    int ticks;
-    int distance;
-} ColoVolatilityBlastPreview;
-
-static inline ColoVolatilityBlastPreview col_volatility_blast_preview_none(void) {
-    return (ColoVolatilityBlastPreview){
-        .found = 0,
-        .npc_slot = -1,
-        .x = 0,
-        .y = 0,
-        .size = 0,
-        .ticks = 0,
-        .distance = 1 << 30,
-    };
-}
-
 static int col_pending_hit_will_damage_pre_move(
     const EncounterPendingHit* hit,
     OverheadPrayer prayer
@@ -1113,49 +1151,6 @@ static void col_write_nearest_modifier_solarflare(
     *idx = i;
 }
 
-static ColoVolatilityBlastPreview col_soonest_queued_volatility_blast(
-    const ColosseumState* s
-) {
-    ColoVolatilityBlastPreview best = col_volatility_blast_preview_none();
-    for (int n = 0; n < COLO_MAX_NPCS; n++) {
-        const ColoNPC* npc = &s->npcs[n];
-        if (!col_npc_is_live_enemy(npc)) continue;
-        for (int h = 0; h < npc->pending_hits.count; h++) {
-            const EncounterPendingHit* hit = &npc->pending_hits.hits[h];
-            if (!hit->active) continue;
-            int ticks = hit->ticks_remaining < 0 ? 0 : hit->ticks_remaining;
-            int damage = 0;
-            for (int j = 0; j < npc->pending_hits.count; j++) {
-                const EncounterPendingHit* other = &npc->pending_hits.hits[j];
-                if (!other->active) continue;
-                int other_ticks = other->ticks_remaining < 0 ? 0 : other->ticks_remaining;
-                if (other_ticks <= ticks) damage += other->damage;
-            }
-            if (damage < npc->hp) continue;
-            int size = col_npc_effective_size(npc);
-            int center_x = npc->x + size / 2;
-            int center_y = npc->y + size / 2;
-            int dx = abs(center_x - s->player.x);
-            int dy = abs(center_y - s->player.y);
-            int distance = dx > dy ? dx : dy;
-            if (best.found &&
-                    (ticks > best.ticks ||
-                     (ticks == best.ticks && distance >= best.distance)))
-                continue;
-            best = (ColoVolatilityBlastPreview){
-                .found = 1,
-                .npc_slot = n,
-                .x = npc->x,
-                .y = npc->y,
-                .size = size,
-                .ticks = ticks,
-                .distance = distance,
-            };
-        }
-    }
-    return best;
-}
-
 static void col_write_volatility_blast_previews(
     const ColosseumState* s,
     float* obs,
@@ -1219,8 +1214,15 @@ static int col_count_pre_move_unavoidable_damage_instances(
         int contact = 0;
         if (bee->move_timer <= 1) {
             int next_x, next_y;
-            col_bee_swarm_next_tile_toward_player(s, npc, &next_x, &next_y);
             int size = col_npc_effective_size(npc);
+            col_bee_swarm_next_tile_toward(
+                s->player.x,
+                s->player.y,
+                npc->x,
+                npc->y,
+                size,
+                &next_x,
+                &next_y);
             contact = encounter_entity_footprints_overlap(
                 next_x, next_y, size, s->player.x, s->player.y, 1);
         } else {
@@ -1310,10 +1312,14 @@ static void col_write_modifier_hazards(
     obs[i++] = doom_cap > 0 && s->doom_stacks + 1 >= doom_cap ? 1.0f : 0.0f;
     obs[i++] = doom_cap > 0 ? col_clamp01((float)doom_pending / (float)doom_cap) : 0.0f;
 
-    obs[i++] = s->player_venom > 0 ? 1.0f : 0.0f;
     obs[i++] = col_clamp01((float)s->player_venom / (float)COLO_VENOM_CAP);
     obs[i++] = s->player_venom > 0
         ? col_clamp01((float)s->player_venom_timer / (float)COLO_VENOM_INTERVAL)
+        : 0.0f;
+    obs[i++] = col_clamp01(
+        (float)s->player_poison / (float)COLO_POISON_BEE_CONTACT_SEVERITY);
+    obs[i++] = s->player_poison > 0
+        ? col_clamp01((float)s->player_poison_timer / (float)COLO_POISON_INTERVAL)
         : 0.0f;
 
     ColoNearestHazardTile nearest_bee = col_nearest_hazard_tile_none();
@@ -2303,13 +2309,20 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 
     col_write_boss_obs(s, obs, &i);
     assert(i == COLO_OBS_AFTER_BOSS);
-    ColoForecastLanding primary_landings[COLO_PRIMARY_DIM] = {0};
+    ColoPrimaryActionForecast primary_forecast = {0};
     if (col_primary_action_landings_needed(s, ctx))
-        col_build_primary_action_landings_ctx(s, ctx, primary_landings);
-    col_write_sol_hazard_action_obs(s, primary_landings, obs, &i);
+        col_build_primary_action_forecast_ctx(
+            s, ctx, &primary_forecast);
+    col_write_sol_hazard_action_obs(
+        s, primary_forecast.landings, obs, &i);
     assert(i == COLO_OBS_AFTER_SOL_HAZARD_ACTIONS);
     col_write_primary_env_hazard_action_obs(
-        s, post_premove_molten_view, primary_landings, obs, &i);
+        s,
+        post_premove_molten_view,
+        &primary_forecast.hazard_basis,
+        primary_forecast.landings,
+        obs,
+        &i);
     assert(i == COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_BOSS);
@@ -2359,7 +2372,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         ColoForecastObsSummary chase_summaries[COLO_CHASE_THREAT_ACTIONS];
         col_build_chase_action_threat_forecasts(
             s,
-            primary_landings,
+            primary_forecast.landings,
             chase_actions,
             chase_summaries,
             horizon);

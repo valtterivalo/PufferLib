@@ -1620,6 +1620,7 @@ typedef struct {
     float total_damage_by_type[COLO_NUM_NPC_TYPES];
 
     float death_by_type[COLO_NUM_NPC_TYPES];
+    float npc_attack_death_by_type[COLO_NUM_NPC_TYPES];
     float death_fatal_damage;
 
     float offpray_damage_conflict;
