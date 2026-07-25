@@ -66,6 +66,10 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
 );
 
 #define OSRS_INVENTORY_CELL_OBS_FEATURES 28
+#define OSRS_INVENTORY_CELL_OBS_SHARED 5
+#define OSRS_INVENTORY_CELL_OBS_KIND_UNION 15
+#define OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT \
+    (OSRS_INVENTORY_CELL_OBS_SHARED + OSRS_INVENTORY_CELL_OBS_KIND_UNION)
 #define OSRS_EQUIPPED_SELF_OBS_FEATURES 18
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
@@ -231,8 +235,24 @@ static inline uint8_t osrs_item_index_for_raw_osrs_id(uint16_t raw_osrs_id) {
     return ITEM_NONE;
 }
 
-static inline void osrs_write_inventory_cell_affordance_features(
-    float* out,
+typedef struct {
+    float present;
+    float is_equipped;
+    float dose;
+    float is_armor;
+    float is_weapon;
+    float style3[3];
+    float post_use_deltas[6];
+    float effect_class4[4];
+    float attack_speed;
+    float attack_range;
+    float kind5[5];
+    float hp_heal;
+    float prayer_restore;
+    float offensive_boost;
+} OsrsInventoryCellAffordance;
+
+static inline OsrsInventoryCellAffordance osrs_inventory_cell_affordance(
     uint8_t item_idx,
     uint16_t raw_osrs_id,
     uint8_t dose,
@@ -247,42 +267,116 @@ static inline void osrs_write_inventory_cell_affordance_features(
     int present = raw_osrs_id != 0 || item_idx != ITEM_NONE;
     int is_gear = item_idx != ITEM_NONE;
     int style = is_gear ? get_item_attack_style(item_idx) : 0;
-    uint32_t effect_mask = is_gear ? ITEM_DATABASE[item_idx].effect_mask : OSRS_ITEM_EFFECT_NONE;
-
-    out[0] = present ? 1.0f : 0.0f;
-    out[1] = is_equipped ? 1.0f : 0.0f;
-    out[2] = dose > 0 ? osrs_clamp_unit((float)dose / 4.0f) : 0.0f;
-    out[3] = style == 1 ? 1.0f : 0.0f;
-    out[4] = style == 2 ? 1.0f : 0.0f;
-    out[5] = style == 3 ? 1.0f : 0.0f;
-    for (int i = 0; i < 6; i++) out[6 + i] = osrs_clamp_unit(post_use_deltas[i]);
-
+    uint32_t effect_mask =
+        is_gear ? ITEM_DATABASE[item_idx].effect_mask : OSRS_ITEM_EFFECT_NONE;
     int is_weapon = is_gear && ITEM_DATABASE[item_idx].slot == SLOT_WEAPON;
-    out[12] = (is_gear && !is_weapon) ? 1.0f : 0.0f;
-    out[13] = is_weapon ? 1.0f : 0.0f;
     OsrsConsumableKind6 k6 = col_consumable_kind6(consumable.consumable_kind);
-    out[14] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
-    out[15] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
-    out[16] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
-    out[17] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
-    out[18] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
     OsrsConsumableKind ck = consumable.consumable_kind;
     int hp_heal = osrs_consumable_hp_heal_amount(ck, base_hitpoints);
     int pray_restore = osrs_consumable_prayer_restore_amount(ck, base_prayer);
     int off_boost = osrs_consumable_offensive_boost_amount(ck, base_level);
-    out[19] = base_hitpoints > 0 ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
-    out[20] = base_prayer > 0 ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
-    out[21] = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
-    float eff4[4];
-    osrs_item_effect_class4(effect_mask, eff4);
-    out[22] = eff4[0];
-    out[23] = eff4[1];
-    out[24] = eff4[2];
-    out[25] = eff4[3];
-    out[26] = is_weapon
-        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED) : 0.0f;
-    out[27] = is_weapon
-        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_range / STAT_NORM_RANGE) : 0.0f;
+
+    OsrsInventoryCellAffordance a;
+    a.present = present ? 1.0f : 0.0f;
+    a.is_equipped = is_equipped ? 1.0f : 0.0f;
+    a.dose = dose > 0 ? osrs_clamp_unit((float)dose / 4.0f) : 0.0f;
+    a.is_armor = (is_gear && !is_weapon) ? 1.0f : 0.0f;
+    a.is_weapon = is_weapon ? 1.0f : 0.0f;
+    a.style3[0] = style == 1 ? 1.0f : 0.0f;
+    a.style3[1] = style == 2 ? 1.0f : 0.0f;
+    a.style3[2] = style == 3 ? 1.0f : 0.0f;
+    for (int i = 0; i < 6; i++)
+        a.post_use_deltas[i] = osrs_clamp_unit(post_use_deltas[i]);
+    osrs_item_effect_class4(effect_mask, a.effect_class4);
+    a.attack_speed = is_weapon
+        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED)
+        : 0.0f;
+    a.attack_range = is_weapon
+        ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_range / STAT_NORM_RANGE)
+        : 0.0f;
+    a.kind5[0] = k6 == COL_CKIND6_BREW ? 1.0f : 0.0f;
+    a.kind5[1] = k6 == COL_CKIND6_RESTORE ? 1.0f : 0.0f;
+    a.kind5[2] = k6 == COL_CKIND6_COMBAT_BOOST ? 1.0f : 0.0f;
+    a.kind5[3] = k6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
+    a.kind5[4] = k6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
+    a.hp_heal = base_hitpoints > 0
+        ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints) : 0.0f;
+    a.prayer_restore = base_prayer > 0
+        ? osrs_clamp_unit((float)pray_restore / (float)base_prayer) : 0.0f;
+    a.offensive_boost = osrs_clamp_unit((float)off_boost / STAT_NORM_STRENGTH);
+    return a;
+}
+
+static inline void osrs_write_inventory_cell_affordance_features(
+    float* out,
+    uint8_t item_idx,
+    uint16_t raw_osrs_id,
+    uint8_t dose,
+    int is_equipped,
+    const float post_use_deltas[6],
+    int base_hitpoints,
+    int base_prayer,
+    int base_level
+) {
+    OsrsInventoryCellAffordance a = osrs_inventory_cell_affordance(
+        item_idx, raw_osrs_id, dose, is_equipped, post_use_deltas,
+        base_hitpoints, base_prayer, base_level);
+
+    out[0] = a.present;
+    out[1] = a.is_equipped;
+    out[2] = a.dose;
+    out[3] = a.style3[0];
+    out[4] = a.style3[1];
+    out[5] = a.style3[2];
+    for (int i = 0; i < 6; i++) out[6 + i] = a.post_use_deltas[i];
+    out[12] = a.is_armor;
+    out[13] = a.is_weapon;
+    for (int i = 0; i < 5; i++) out[14 + i] = a.kind5[i];
+    out[19] = a.hp_heal;
+    out[20] = a.prayer_restore;
+    out[21] = a.offensive_boost;
+    for (int i = 0; i < 4; i++) out[22 + i] = a.effect_class4[i];
+    out[26] = a.attack_speed;
+    out[27] = a.attack_range;
+}
+
+static inline void osrs_write_inventory_cell_affordance_features_compact(
+    float* out,
+    uint8_t item_idx,
+    uint16_t raw_osrs_id,
+    uint8_t dose,
+    int is_equipped,
+    const float post_use_deltas[6],
+    int base_hitpoints,
+    int base_prayer,
+    int base_level
+) {
+    OsrsInventoryCellAffordance a = osrs_inventory_cell_affordance(
+        item_idx, raw_osrs_id, dose, is_equipped, post_use_deltas,
+        base_hitpoints, base_prayer, base_level);
+
+    out[0] = a.present;
+    out[1] = a.is_equipped;
+    out[2] = a.dose;
+    out[3] = a.is_armor;
+    out[4] = a.is_weapon;
+
+    float* u = out + OSRS_INVENTORY_CELL_OBS_SHARED;
+    for (int i = 0; i < OSRS_INVENTORY_CELL_OBS_KIND_UNION; i++) u[i] = 0.0f;
+    if (a.is_armor != 0.0f || a.is_weapon != 0.0f) {
+        u[0] = a.style3[0];
+        u[1] = a.style3[1];
+        u[2] = a.style3[2];
+        for (int i = 0; i < 6; i++) u[3 + i] = a.post_use_deltas[i];
+        for (int i = 0; i < 4; i++) u[9 + i] = a.effect_class4[i];
+        u[13] = a.attack_speed;
+        u[14] = a.attack_range;
+    } else {
+        for (int i = 0; i < 5; i++) u[i] = a.kind5[i];
+        u[5] = a.hp_heal;
+        u[6] = a.prayer_restore;
+        u[7] = a.offensive_boost;
+    }
 }
 
 static inline void osrs_write_equipped_self_features(float* out, uint8_t item_idx) {

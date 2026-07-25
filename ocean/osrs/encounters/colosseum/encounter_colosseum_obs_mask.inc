@@ -1,7 +1,7 @@
 #line 76 "encounter_colosseum.h"
 
 #define COLO_PLAYER_OBS_SIZE      36
-#define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES
+#define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE \
@@ -2121,7 +2121,7 @@ static void col_write_inventory_and_equipped_obs(
         const ColoInvCell* cell = &s->inventory_cells[cell_idx];
         col_inventory_cell_post_use_deltas(
             s, cell_idx, current_equipment_projection, deltas);
-        osrs_write_inventory_cell_affordance_features(
+        osrs_write_inventory_cell_affordance_features_compact(
             &obs[i],
             cell->item_idx,
             cell->raw_osrs_id,
@@ -2131,7 +2131,7 @@ static void col_write_inventory_and_equipped_obs(
             s->player.base_hitpoints,
             s->player.base_prayer,
             s->player.base_attack);
-        i += OSRS_INVENTORY_CELL_OBS_FEATURES;
+        i += COLO_INVENTORY_CELL_OBS_FEATURES;
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 

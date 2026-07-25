@@ -320,17 +320,17 @@ static void test_prepare_for_drink_kind(
 }
 
 typedef enum {
-    TEST_INV_OBS_ROLE_ARMOR = 12,
-    TEST_INV_OBS_ROLE_WEAPON = 13,
-    TEST_INV_OBS_KIND_BREW = 14,
-    TEST_INV_OBS_KIND_RESTORE = 15,
-    TEST_INV_OBS_KIND_COMBAT_BOOST = 16,
-    TEST_INV_OBS_KIND_RANGED_BOOST = 17,
-    TEST_INV_OBS_KIND_SPECIAL = 18,
-    TEST_INV_OBS_EFFECT_LIFESTEAL = 22,
-    TEST_INV_OBS_EFFECT_DAMAGE_AMP = 23,
-    TEST_INV_OBS_EFFECT_DEFENSIVE = 24,
-    TEST_INV_OBS_EFFECT_UTIL = 25,
+    TEST_INV_OBS_ROLE_ARMOR = 3,
+    TEST_INV_OBS_ROLE_WEAPON = 4,
+    TEST_INV_OBS_KIND_BREW = OSRS_INVENTORY_CELL_OBS_SHARED + 0,
+    TEST_INV_OBS_KIND_RESTORE = OSRS_INVENTORY_CELL_OBS_SHARED + 1,
+    TEST_INV_OBS_KIND_COMBAT_BOOST = OSRS_INVENTORY_CELL_OBS_SHARED + 2,
+    TEST_INV_OBS_KIND_RANGED_BOOST = OSRS_INVENTORY_CELL_OBS_SHARED + 3,
+    TEST_INV_OBS_KIND_SPECIAL = OSRS_INVENTORY_CELL_OBS_SHARED + 4,
+    TEST_INV_OBS_EFFECT_LIFESTEAL = OSRS_INVENTORY_CELL_OBS_SHARED + 9,
+    TEST_INV_OBS_EFFECT_DAMAGE_AMP = OSRS_INVENTORY_CELL_OBS_SHARED + 10,
+    TEST_INV_OBS_EFFECT_DEFENSIVE = OSRS_INVENTORY_CELL_OBS_SHARED + 11,
+    TEST_INV_OBS_EFFECT_UTIL = OSRS_INVENTORY_CELL_OBS_SHARED + 12,
 } TestInventoryObsFeature;
 
 typedef struct {
@@ -390,17 +390,17 @@ static TestDroppedInventoryFields test_reconstructed_dropped_inventory_fields(
     int base = COLO_OBS_AFTER_PLAYER +
         cell_idx * COLO_INVENTORY_CELL_OBS_FEATURES;
     const float* cell_obs = &obs[base];
-    float kind = test_any_inventory_kind_bit(cell_obs);
-    float effect = test_binary_float(
+    int is_gear_cell = cell_obs[TEST_INV_OBS_ROLE_ARMOR] != 0.0f ||
+        cell_obs[TEST_INV_OBS_ROLE_WEAPON] != 0.0f;
+    float kind = is_gear_cell ? 0.0f : test_any_inventory_kind_bit(cell_obs);
+    float effect = is_gear_cell ? test_binary_float(
         cell_obs[TEST_INV_OBS_EFFECT_LIFESTEAL] != 0.0f ||
         cell_obs[TEST_INV_OBS_EFFECT_DAMAGE_AMP] != 0.0f ||
         cell_obs[TEST_INV_OBS_EFFECT_DEFENSIVE] != 0.0f ||
-        cell_obs[TEST_INV_OBS_EFFECT_UTIL] != 0.0f);
+        cell_obs[TEST_INV_OBS_EFFECT_UTIL] != 0.0f) : 0.0f;
 
     return (TestDroppedInventoryFields){
-        .is_gear = test_binary_float(
-            cell_obs[TEST_INV_OBS_ROLE_ARMOR] != 0.0f ||
-            cell_obs[TEST_INV_OBS_ROLE_WEAPON] != 0.0f),
+        .is_gear = test_binary_float(is_gear_cell),
         .is_consumable = kind,
         .can_use = test_click_mask_for_cell_s(s, mask, cell_idx),
         .has_effect = effect,
@@ -6494,10 +6494,11 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2992", COLO_NUM_OBS == 2992);
+    CHECK("obs width is 2768", COLO_NUM_OBS == 2768);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
-    CHECK("inventory block has 784 features", COLO_INVENTORY_OBS_SIZE == 784);
+    CHECK("inventory block has 560 features (28 cells x 20 compact)",
+        COLO_INVENTORY_OBS_SIZE == 560);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
     CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
     CHECK("modifier block has 60 features", COLO_MODIFIER_OBS_SIZE == 60);
@@ -8723,7 +8724,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2992);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2768);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
