@@ -449,8 +449,6 @@ static void* colo_entity_encoder_create_weights(void* self) {
     ew->hidden = e->out_dim;
     return ew;
 }
-static void colo_entity_encoder_free_weights(void* weights) { free(weights); }
-static void colo_entity_encoder_free_activations(void* activations) { free(activations); }
 
 // ---- Inferno entity encoder ----
 static constexpr int INF_ENT_NPC_START   = 90;
@@ -656,8 +654,6 @@ static void create_osrs_colosseum_encoder(Encoder* enc) {
         .reg_train = colo_entity_encoder_reg_train,
         .reg_rollout = colo_entity_encoder_reg_rollout,
         .create_weights = colo_entity_encoder_create_weights,
-        .free_weights = colo_entity_encoder_free_weights,
-        .free_activations = colo_entity_encoder_free_activations,
         .in_dim = enc->in_dim, .out_dim = enc->out_dim,
         .activation_size = sizeof(ColosseumEntityEncoderActivations),
     };
@@ -672,8 +668,6 @@ static void create_osrs_inferno_encoder(Encoder* enc) {
         .reg_train = inf_entity_encoder_reg_train,
         .reg_rollout = inf_entity_encoder_reg_rollout,
         .create_weights = inf_entity_encoder_create_weights,
-        .free_weights = colo_entity_encoder_free_weights,
-        .free_activations = colo_entity_encoder_free_activations,
         .in_dim = enc->in_dim, .out_dim = enc->out_dim,
         .activation_size = sizeof(ColosseumEntityEncoderActivations),
     };
