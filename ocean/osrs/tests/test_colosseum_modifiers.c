@@ -112,7 +112,7 @@ static void kill_first_live_score_enemy(ColosseumState* s) {
 
 static float score_for_depth(float depth) {
     float ratio = depth / (float)COLO_NUM_WAVES;
-    return 0.99f * ratio * ratio;
+    return COLO_SCORE_LOSS_CEILING * ratio * ratio;
 }
 
 static void land_pending_player_hits(ColosseumState* s) {
