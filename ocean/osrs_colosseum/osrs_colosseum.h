@@ -26,6 +26,8 @@ struct Log {
     float damage_dealt;
     float damage_received;
     float wins;
+    float deaths;
+    float timeouts;
     float wave;
     float npc_kills;
     float prayer_correct;
@@ -300,6 +302,8 @@ void puf_step(Env* env) {
             env->log.episode_return += clog->episode_return;
             env->log.episode_length += (float)clog->episode_length;
             env->log.wins += (float)clog->win;
+            env->log.deaths += (float)clog->died;
+            env->log.timeouts += (float)(!clog->win && !clog->died);
             env->log.wave += (float)clog->wave_reached;
             env->log.damage_dealt += clog->total_damage_dealt;
             env->log.damage_received += clog->total_damage_received;
@@ -363,6 +367,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "wins", log->wins);
+    dict_set(out, "deaths", log->deaths);
+    dict_set(out, "timeouts", log->timeouts);
     dict_set(out, "wave", log->wave);
     dict_set(out, "npc_kills", log->npc_kills);
 
