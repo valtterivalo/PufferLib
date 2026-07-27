@@ -1610,6 +1610,7 @@ typedef struct {
     int waves_cleared;
     int win;
     int died;
+    int timed_out;
     float total_damage_dealt;
     float total_damage_received;
     float total_boss_damage;

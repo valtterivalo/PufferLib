@@ -303,7 +303,7 @@ void puf_step(Env* env) {
             env->log.episode_length += (float)clog->episode_length;
             env->log.wins += (float)clog->win;
             env->log.deaths += (float)clog->died;
-            env->log.timeouts += (float)(!clog->win && !clog->died);
+            env->log.timeouts += (float)clog->timed_out;
             env->log.wave += (float)clog->wave_reached;
             env->log.damage_dealt += clog->total_damage_dealt;
             env->log.damage_received += clog->total_damage_received;

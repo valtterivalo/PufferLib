@@ -224,7 +224,11 @@ static void* col_get_log_ctx(EncounterState* state, EncounterContext* context) {
     s->log.episode_length = s->tick;
     s->log.wave_reached = s->wave;
     s->log.win = (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_WON) ? 1 : 0;
-    s->log.died = (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_DIED) ? 1 : 0;
+    /* the tick cap reports PLAYER_DIED so training keeps timeout-as-terminal, but a
+       truncation has no killer and no damage source, so it must not count as a death. */
+    s->log.timed_out = (s->episode_over && s->time_limit_truncated) ? 1 : 0;
+    s->log.died = (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_DIED
+                   && !s->time_limit_truncated) ? 1 : 0;
     s->log.boss_phase_reached = s->sol.phase;
     s->log.active_tier_sum = col_modifier_active_tier_sum(s);
     return &s->log;
