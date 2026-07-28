@@ -974,9 +974,7 @@ static void col_player_attack_target_ctx(
         abort();
     }
 
-    int ticks = ls->style == ATTACK_STYLE_MELEE
-        ? hit_timing.damage_delay_ticks
-        : (ls->attack_range > 1 ? 3 : 1);
+    int ticks = hit_timing.damage_delay_ticks;
     int damage = 0;
     int bf_heal = 0;
     for (int splat = 0; splat < resolved_count; splat++) {
