@@ -332,6 +332,7 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         col_tick_live_stat_drift_and_divines(s);
         col_rebuild_player_collision_flags(s);
         col_tick_npcs_ctx(s, ctx);
+        if (s->wave_attack_delay == 0) col_warband_attack_phase(s, ctx);
         col_modifiers_tick(s);
 
         if (s->surge_cooldown > 0) s->surge_cooldown--;
@@ -369,12 +370,6 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int px = s->player.x, py = s->player.y;
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
-
-    if (!phase.in_wave_gap &&
-            !phase.in_ready_gap &&
-            s->wave_attack_delay == 0) {
-        col_warband_attack_phase(s, ctx);
-    }
 
     s->reward = col_compute_reward_ctx(s, ctx);
 

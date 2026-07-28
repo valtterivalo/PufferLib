@@ -2725,20 +2725,85 @@ static void test_warband_move_skip(void) {
     while ((s.wave_ready_delay > 0 || s.wave_attack_delay > 1) && !s.episode_over)
         step_and_observe(&s, &ctx, idle);
 
-    int attacks = 0;
+    int attacks_while_moving = 0;
+    int attacks_once_chasing = 0;
     int moved_every_tick = 1;
     for (int t = 0; t < 14 && !s.episode_over; t++) {
         s.player.current_hitpoints = 9999;
         step_and_observe(&s, &ctx, walk_south);
         if (!s.tick_scratch.player_moved) moved_every_tick = 0;
-        for (int sp = 0; sp < COLO_MAX_NPCS; sp++)
-            if (s.npcs[sp].active && col_type_is_warbander(s.npcs[sp].type) &&
-                s.npcs[sp].attacked_this_tick) attacks++;
+        for (int sp = 0; sp < COLO_MAX_NPCS; sp++) {
+            const ColoNPC* npc = &s.npcs[sp];
+            if (!npc->active || !col_type_is_warbander(npc->type)) continue;
+            if (!npc->attacked_this_tick) continue;
+            if (npc->moved_this_tick || npc->moved_last_tick) attacks_while_moving++;
+            if (t > 0) attacks_once_chasing++;
+        }
     }
     CHECK("the scripted stutter-step actually moved every tick", moved_every_tick);
-    CHECK("warband fired zero attacks across the stutter-step run", attacks == 0);
-    CHECK("zero warband damage across the stutter-step run",
-        s.log.total_damage_received == 0.0f);
+    CHECK("no warbander attacked on a tick it moved on or moved the tick before",
+        attacks_while_moving == 0);
+    /* t == 0 is excluded: the berserker starts stationary and adjacent, and NPCs
+       process before players, so its attack is calculated before the first step. */
+    CHECK("once the warband is chasing the stutter-step suppresses every attack",
+        attacks_once_chasing == 0);
+}
+
+/** Regression: warband melee is calculated before the player tick, so a same-tick
+    step-out cannot dodge it. */
+static void test_warband_melee_not_dodged_by_same_tick_step_out(void) {
+    printf("test_warband_melee_not_dodged_by_same_tick_step_out\n");
+    ColosseumContext ctx;
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = 0;
+
+    int attacked_standing = 0;
+    int attacked_stepping = 0;
+    for (int step_out = 0; step_out <= 1; step_out++) {
+        ColosseumState s;
+        memset(&s, 0, sizeof(s));
+        col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 53);
+        advance_to_wave_spawn(&s, &ctx);
+        complete_open_draft(&s, &ctx, 1);
+        wb_isolate_warband(&s);
+        int berserker = wb_find_npc(&s, COLO_FREMENNIK_BERSERKER);
+        for (int i = 0; i < COLO_MAX_NPCS; i++)
+            if (s.npcs[i].active && i != berserker) col_deactivate_npc(&s, i);
+        wb_move_npc(&s, berserker, s.player.x, s.player.y + 1);
+
+        int idle[COLO_NUM_ACTION_HEADS] = {0};
+        int step_east[COLO_NUM_ACTION_HEADS] = {0};
+        step_east[COLO_HEAD_PRIMARY] = 7;
+
+        while ((s.wave_ready_delay > 0 || s.wave_attack_delay > 1) && !s.episode_over)
+            step_and_observe(&s, &ctx, idle);
+
+        int px = s.player.x, py = s.player.y;
+        for (int t = 0; t < 12 && !s.episode_over; t++) {
+            const ColoNPC* npc = &s.npcs[berserker];
+            int anchor = s.warband_cycle_anchor;
+            int next_phase = anchor < 0 ? -1
+                : (s.tick + 1 - anchor) % COLO_WARBAND_CYCLE_TICKS;
+            int fires_now =
+                next_phase == col_warband_window_offset(COLO_FREMENNIK_BERSERKER) &&
+                !npc->moved_this_tick && !npc->moved_last_tick &&
+                col_warband_melee_adjacent(&s, npc);
+
+            s.player.current_hitpoints = 9999;
+            step_and_observe(&s, &ctx, fires_now && step_out ? step_east : idle);
+
+            if (fires_now) {
+                if (step_out) attacked_stepping = npc->attacked_this_tick;
+                else attacked_standing = npc->attacked_this_tick;
+                break;
+            }
+            s.player.x = px;
+            s.player.y = py;
+        }
+    }
+
+    CHECK("stationary player takes the warband melee", attacked_standing == 1);
+    CHECK("same-tick step-out does not dodge the warband melee", attacked_stepping == 1);
 }
 
 static uint64_t wb_trajectory_hash(ColosseumState* s, ColosseumContext* ctx,
@@ -9250,6 +9315,7 @@ int main(void) {
     test_player_walks_through_npc_footprint();
     test_warband_cycle_offsets();
     test_warband_move_skip();
+    test_warband_melee_not_dodged_by_same_tick_step_out();
     test_warband_bfs_memo_bit_identity();
     test_warband_melee_distance_gate();
     test_warband_two_tick_stationary_gate();
