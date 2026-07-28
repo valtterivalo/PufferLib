@@ -7344,8 +7344,11 @@ static void test_step_out_forecast_warband_window_and_break(void) {
     int run_west = forecast_move_action_for_delta(-2, 0);
     CHECK("adjacent berserker records melee on its next window",
         forecast.actions[0].ticks[0].melee_count == 1);
-    CHECK("running west breaks the berserker forecast adjacency",
-        !forecast_action_has_event(&forecast.actions[run_west]));
+    /* warbanders attack before the player tick, so a tick-0 hit resolves against
+       the tile the player is standing on. stepping away cannot dodge it, and the
+       forecast has to say so or it would promise a dodge the sim will not honour. */
+    CHECK("running west does not dodge the tick-0 warband window",
+        forecast_action_has_event(&forecast.actions[run_west]));
 }
 
 static void test_step_out_forecast_ranged_los_candidate_tiles(void) {

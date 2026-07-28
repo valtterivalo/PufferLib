@@ -1010,12 +1010,14 @@ static void col_forecast_local_attack_warband(
     ColoStepOutForecastAction* action,
     ColoForecastObsSummary* summary,
     int tick_idx,
-    int phase
+    int phase,
+    int player_x,
+    int player_y
 ) {
     if (phase < 0) return;
     if (phase != col_warband_window_offset(npc->type)) return;
     if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
-    if (!col_forecast_warband_adjacent(npc, action->land_x, action->land_y)) return;
+    if (!col_forecast_warband_adjacent(npc, player_x, player_y)) return;
     col_step_out_forecast_record_style(
         action, summary, tick_idx, npc->type, npc->default_style);
 }
@@ -1101,7 +1103,8 @@ static void col_forecast_local_attack_npc(
     switch (npc->forecast_behavior) {
         case COLO_FORECAST_BEHAVIOR_WARBAND:
             col_forecast_local_attack_warband(
-                npc, action, summary, tick_idx, pre->warband_phase[tick_idx]);
+                npc, action, summary, tick_idx, pre->warband_phase[tick_idx],
+                player_x, player_y);
             return;
         case COLO_FORECAST_BEHAVIOR_MANTICORE:
             col_forecast_local_attack_manticore(
@@ -1179,7 +1182,7 @@ static void col_forecast_static_threat_npc(
     int dist = col_forecast_local_dist_to_player(npc, lx, ly);
 
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
-        if (col_forecast_warband_adjacent(npc, lx, ly))
+        if (col_forecast_warband_adjacent(npc, s->player.x, s->player.y))
             col_step_out_forecast_record_style(
                 action, summary, 0, npc->type, npc->default_style);
         return;

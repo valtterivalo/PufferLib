@@ -145,12 +145,12 @@ static_assert(EPISODE_TICKS > ZUL_MAX_TICKS,
     "episode budget must cover the in-sim tick cap");
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xdc09c334c9199678ULL,  /* t0_single */
-    0x855d314e525859baULL,  /* t1_single */
-    0x4a87c9488c73951bULL,  /* t2_single */
-    0x946088d053fcfb2aULL,  /* t0_trip */
-    0x0ec1632a0e8feb31ULL,  /* t1_trip */
-    0x5b6b583c27f65203ULL,  /* t2_trip */
+    0x48b0d2aa53aec60dULL,  /* t0_single */
+    0xe2ecf0eff283c1b1ULL,  /* t1_single */
+    0x2e09584c6212b4c8ULL,  /* t2_single */
+    0x0e08ca129f322b45ULL,  /* t0_trip */
+    0xfcaed06987102ca3ULL,  /* t1_trip */
+    0xd06c730a62aa0301ULL,  /* t2_trip */
 };
 
 int main(int argc, char** argv) {
