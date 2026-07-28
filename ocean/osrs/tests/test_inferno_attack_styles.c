@@ -6140,8 +6140,84 @@ static void test_npc_player_projectile_delays_use_reference_options(void) {
 
     ASSERT_INT_EQ("ranger queued one pending hit", state.player_pending_hits.count, 1);
 
-    ASSERT_INT_EQ("ranger pending hit lands one tick before the raw projectile delay",
-        state.player_pending_hits.hits[0].ticks_remaining, timing.damage_delay_ticks - 1);
+    /* Was `- 1`. The queue is resolved before NPCs throw and lands on
+       --ticks_remaining <= 0, so a hit queued with the raw delay D lands exactly D
+       ticks after the throw tick, which is what the section-8 table states. The old
+       expectation pinned every inferno NPC->player hit one tick early. */
+    ASSERT_INT_EQ("ranger pending hit carries the raw projectile delay",
+        state.player_pending_hits.hits[0].ticks_remaining, timing.damage_delay_ticks);
+}
+
+/** Regression: an NPC hit thrown on tick N must land on tick N + hit_delay. */
+static void test_npc_hit_lands_on_the_reference_tick(void) {
+    printf("--- npc hit lands on the reference tick ---\n");
+
+    const struct { const char* label; InfNPCType type; AttackStyle style; int x; int y; }
+    cases[] = {
+        { "ranger d=5", INF_NPC_RANGER, ATTACK_STYLE_RANGED, 29, 24 },
+        { "ranger d=8", INF_NPC_RANGER, ATTACK_STYLE_RANGED, 32, 24 },
+        { "mager d=5",  INF_NPC_MAGER,  ATTACK_STYLE_MAGIC,  29, 24 },
+        { "mager d=9",  INF_NPC_MAGER,  ATTACK_STYLE_MAGIC,  33, 24 },
+    };
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        InfernoState* s = (InfernoState*)inf_create();
+        inf_reset((EncounterState*)s, 20260728u);
+        inf_lab_apply_command(s, &(InfernoLabCommand){ .kind = INF_LAB_COMMAND_CLEAR_NPCS });
+        inf_lab_apply_command(s, &(InfernoLabCommand){
+            .kind = INF_LAB_COMMAND_SET_PLAYER,
+            .as.tile = { .x = 24, .y = 24 },
+        });
+        inf_lab_apply_command(s, &(InfernoLabCommand){
+            .kind = INF_LAB_COMMAND_SPAWN_NPC,
+            .as.spawn_npc = {
+                .slot = 0, .type = cases[c].type, .x = cases[c].x, .y = cases[c].y,
+                .hp = { .kind = INF_LAB_OPTIONAL_INT_UNSET },
+                .timer = { .kind = INF_LAB_OPTIONAL_INT_SET, .value = 0 },
+            },
+        });
+
+        InfNPC* npc = &s->npcs[0];
+        npc->attack_style = cases[c].style;
+        npc->aggro_target = -1;
+        npc->had_los_last_tick = 1;
+        s->player.prayer = PRAYER_NONE;
+        s->wave_spawn_delay = 0;
+        s->wave_ready_delay = 0;
+
+        int dist = encounter_projectile_distance(
+            npc->x, npc->y, npc->size, s->player.x, s->player.y, 1,
+            ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+        int expected_delay =
+            inf_npc_projectile_timing(cases[c].type, cases[c].style, dist)
+                .damage_delay_ticks;
+
+        int actions[INF_NUM_ACTION_HEADS] = {0};
+        int throw_tick = -1;
+        int land_tick = -1;
+
+        for (int t = 1; t <= 20 && land_tick < 0; t++) {
+            int hp_before = s->player.current_hitpoints;
+            npc->x = cases[c].x;
+            npc->y = cases[c].y;
+            inf_step((EncounterState*)s, actions);
+
+            if (throw_tick < 0 && npc->attacked_this_tick) {
+                throw_tick = t;
+                npc->attack_timer = 10000;
+                for (int i = 0; i < s->player_pending_hits.count; i++) {
+                    if (!s->player_pending_hits.hits[i].active) continue;
+                    s->player_pending_hits.hits[i].damage = 7;
+                    s->player_pending_hits.hits[i].hit_success = 1;
+                }
+            } else if (throw_tick >= 0 && s->player.current_hitpoints != hp_before) {
+                land_tick = t;
+            }
+        }
+
+        ASSERT_INT_EQ(cases[c].label, land_tick - throw_tick, expected_delay);
+        inf_destroy((EncounterState*)s);
+    }
 }
 
 static void test_player_projectile_timing_uses_reference_options(void) {
@@ -9542,6 +9618,7 @@ int main(void) {
     test_set_attack_to_shield_is_projectile_delayed();
     test_npc_target_projectile_delays_match_reference();
     test_npc_player_projectile_delays_use_reference_options();
+    test_npc_hit_lands_on_the_reference_tick();
     test_player_projectile_timing_uses_reference_options();
     test_phantom_barrage_target_is_masked_until_cast_window();
     test_phantom_barrage_hits_aoe_on_first_cast_window();

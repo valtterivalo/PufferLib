@@ -861,7 +861,7 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             };
         } else {
             hit = encounter_pending_hit_resolved_at_throw(
-                dmg, hit_delay - 1, actual_style, s->player.prayer,
+                dmg, hit_delay, actual_style, s->player.prayer,
                 npc->type, 0 , accuracy_hit, NULL);
         }
         inf_queue_player_pending_hit(s, idx, npc->type, hit);
