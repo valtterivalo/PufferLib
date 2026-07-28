@@ -9,7 +9,12 @@
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
-#define COLO_FEATURES_PER_NPC     34
+#define COLO_NPC_CORE_FEATURES    11
+#define COLO_NPC_TELLS_FEATURES   10
+#define COLO_NPC_VENATOR_FEATURES 1
+#define COLO_NPC_TELLS_OFFSET     (COLO_NUM_NPC_TYPES + COLO_NPC_CORE_FEATURES)
+#define COLO_FEATURES_PER_NPC \
+    (COLO_NPC_TELLS_OFFSET + COLO_NPC_TELLS_FEATURES + COLO_NPC_VENATOR_FEATURES)
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)
 
 #define COLO_EXPECTED_DPT_NORM    15.0f
@@ -517,7 +522,7 @@ static void col_write_npc_tells(const ColosseumState* s, const ColoNPC* npc, flo
         default:
             break;
     }
-    for (int t = 0; t < 10; t++) obs[i++] = tells[t];
+    for (int t = 0; t < COLO_NPC_TELLS_FEATURES; t++) obs[i++] = tells[t];
     *idx = i;
 }
 
@@ -530,6 +535,7 @@ static void col_write_npc_slot(
     int* idx
 ) {
     int i = *idx;
+    int slot_base = i;
     int px = s->player.x, py = s->player.y;
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     int size = col_npc_effective_size(npc);
@@ -553,11 +559,13 @@ static void col_write_npc_slot(
     i = *idx;
     obs[i++] = next_prayer.active ? col_clamp01((float)next_prayer.ticks / 10.0f) : 0.0f;
     obs[i++] = col_npc_has_los_to_player(s, npc) ? 1.0f : 0.0f;
+    assert(i - slot_base == COLO_NPC_TELLS_OFFSET);
     *idx = i;
     col_write_npc_tells(s, npc, obs, idx);
     i = *idx;
     int extra_bounces = col_venator_extra_bounce_if_shot(s, venator_targets, npc_slot);
     obs[i++] = (float)extra_bounces / (float)(OSRS_VENATOR_MAX_CHAIN_HITS - 1);
+    assert(i - slot_base == COLO_FEATURES_PER_NPC);
     *idx = i;
 }
 

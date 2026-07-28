@@ -5,7 +5,6 @@
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
-#define PROBE_NPC_TELLS_OFFSET 26
 #define PROBE_SKYFALL_DAMAGE 38
 #define PROBE_PLAYER_X 17
 #define PROBE_PLAYER_Y 16
@@ -123,7 +122,7 @@ static int probe_obs_slot_for_npc(const ColosseumState* s, int npc_idx) {
 static float* probe_npc_tells(float* obs, int obs_slot) {
     int base = COLO_OBS_AFTER_EQUIPPED_SELF +
         obs_slot * COLO_FEATURES_PER_NPC +
-        PROBE_NPC_TELLS_OFFSET;
+        COLO_NPC_TELLS_OFFSET;
     return &obs[base];
 }
 
@@ -514,16 +513,19 @@ static void probe_direct_resolve(void) {
 
 static void probe_full_step_dodgeability(void) {
     printf("\n== FULL-STEP DODGEABILITY ==\n");
-    ProbeStepDodgeResult wait0 = probe_run_no_lock_wait_case(0);
-    ProbeStepDodgeResult wait1 = probe_run_no_lock_wait_case(1);
-    ProbeStepDodgeResult wait2 = probe_run_no_lock_wait_case(2);
-    probe_print_step_result("FULL_STEP wait0_move_from_timer3", wait0);
-    probe_print_step_result("FULL_STEP wait1_move_from_timer2", wait1);
-    probe_print_step_result("FULL_STEP wait2_move_from_timer1", wait2);
-    probe_check("timer 3 visible action dodges skyfall", wait0.damage_taken == 0);
-    probe_check("timer 2 visible action dodges skyfall", wait1.damage_taken == 0);
-    probe_check("timer 1 visible action is too late", wait2.damage_taken == PROBE_SKYFALL_DAMAGE);
-    printf("ACTIONABLE_LEAD move_actions=2 visible_timers=3,2 too_late_timer=1\n");
+    char label[96];
+    for (int wait = 0; wait < COLO_JAVELIN_SKYFALL_DELAY; wait++) {
+        int visible_timer = COLO_JAVELIN_SKYFALL_DELAY - wait;
+        int too_late = visible_timer <= 1;
+        ProbeStepDodgeResult r = probe_run_no_lock_wait_case(wait);
+        snprintf(label, sizeof(label), "FULL_STEP move_from_timer%d", visible_timer);
+        probe_print_step_result(label, r);
+        snprintf(label, sizeof(label), "timer %d visible action %s",
+            visible_timer, too_late ? "is too late" : "dodges skyfall");
+        probe_check(label, r.damage_taken == (too_late ? PROBE_SKYFALL_DAMAGE : 0));
+    }
+    printf("ACTIONABLE_LEAD move_actions=%d visible_timers=%d..2 too_late_timer=1\n",
+        COLO_JAVELIN_SKYFALL_DELAY - 1, COLO_JAVELIN_SKYFALL_DELAY);
 }
 
 static void probe_attack_lock_interaction(void) {
@@ -552,11 +554,12 @@ static void probe_attack_lock_interaction(void) {
 
 int main(void) {
     printf("=== Colosseum javelin skyfall dodge probe ===\n");
-    printf("step order under test: action pretick, NPC skyfall resolve, NPC attack fire, player movement, obs write\n");
+    printf("javelin step order under test: action pretick, NPC skyfall resolve, NPC movement, NPC attack fire, warband melee, player movement, obs write\n");
     probe_obs_honesty();
     probe_direct_resolve();
     probe_full_step_dodgeability();
     probe_attack_lock_interaction();
-    printf("\nVERDICT_DATA obs_honest=1 off_tile_dodges=1 real_step_actionable_lead=2 move_only_lock_dodges=1 target_plus_move_blocks_dodge=1\n");
+    printf("\nVERDICT_DATA obs_honest=1 off_tile_dodges=1 real_step_actionable_lead=%d move_only_lock_dodges=1 target_plus_move_blocks_dodge=1\n",
+        COLO_JAVELIN_SKYFALL_DELAY - 1);
     return 0;
 }

@@ -13,7 +13,6 @@
 
 #include "ocean/osrs/tests/osrs_test_check.h"
 
-#define TEST_NPC_TELLS_OFFSET 23
 #define TEST_MOD_HAZARD_BASE (COLO_OBS_AFTER_NPCS + COLO_MODIFIER_FLAGS_OBS_SIZE)
 #define TEST_MOD_OBS_DOOM_LETHAL (TEST_MOD_HAZARD_BASE + 2)
 #define TEST_MOD_OBS_DOOM_PENDING (TEST_MOD_HAZARD_BASE + 3)
@@ -1318,11 +1317,11 @@ static void test_totem_heal_timing_obs(void) {
         test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
     owner_base = COLO_OBS_AFTER_EQUIPPED_SELF +
         test_obs_slot_for_npc(&s, 0) * COLO_FEATURES_PER_NPC;
-    int launch_idx = totem_base + TEST_NPC_TELLS_OFFSET + 0;
-    int flight_idx = totem_base + TEST_NPC_TELLS_OFFSET + 1;
-    int heal_idx   = totem_base + TEST_NPC_TELLS_OFFSET + 2;
-    int owner_dx_idx = totem_base + TEST_NPC_TELLS_OFFSET + 3;
-    int owner_dy_idx = totem_base + TEST_NPC_TELLS_OFFSET + 4;
+    int launch_idx = totem_base + COLO_NPC_TELLS_OFFSET + 0;
+    int flight_idx = totem_base + COLO_NPC_TELLS_OFFSET + 1;
+    int heal_idx   = totem_base + COLO_NPC_TELLS_OFFSET + 2;
+    int owner_dx_idx = totem_base + COLO_NPC_TELLS_OFFSET + 3;
+    int owner_dy_idx = totem_base + COLO_NPC_TELLS_OFFSET + 4;
 
     CHECK("a fresh totem shows a pending launch and no projectile in flight",
         obs[launch_idx] > 0.0f && obs[flight_idx] == 0.0f);
@@ -1331,9 +1330,9 @@ static void test_totem_heal_timing_obs(void) {
     CHECK("the totem carries its owner's relative position",
         obs[owner_dx_idx] != 0.0f || obs[owner_dy_idx] != 0.0f);
     CHECK("a serpent shaman writes no totem tells",
-        obs[owner_base + TEST_NPC_TELLS_OFFSET + 0] == 0.0f &&
-        obs[owner_base + TEST_NPC_TELLS_OFFSET + 1] == 0.0f &&
-        obs[owner_base + TEST_NPC_TELLS_OFFSET + 2] == 0.0f);
+        obs[owner_base + COLO_NPC_TELLS_OFFSET + 0] == 0.0f &&
+        obs[owner_base + COLO_NPC_TELLS_OFFSET + 1] == 0.0f &&
+        obs[owner_base + COLO_NPC_TELLS_OFFSET + 2] == 0.0f);
     CHECK("the totem features cost no extra record width",
         COLO_FEATURES_PER_NPC == 34);
 
@@ -1386,7 +1385,7 @@ static void test_totem_sol_obs_reports_stacking(void) {
     int tbase = COLO_OBS_AFTER_EQUIPPED_SELF +
         test_obs_slot_for_npc(&s, tslot) * COLO_FEATURES_PER_NPC;
     CHECK("a Sol totem's pending heal reads as 75 of Sol's max HP",
-        fabsf(obs[tbase + TEST_NPC_TELLS_OFFSET + 2] -
+        fabsf(obs[tbase + COLO_NPC_TELLS_OFFSET + 2] -
               (float)COLO_TOTEM_SOL_HEAL / (float)COLO_SOL_HP_MAX) < 1e-4f);
 
     for (int t = 0; t < COLO_TOTEM_SOL_EXTRA_INTERVAL; t++) col_mod_tick_totems(&s);
@@ -1991,7 +1990,7 @@ static void test_modifier_hazard_obs_fixes(void) {
     jv->skyfall_tile_y = 14;
     jv->skyfall_timer = 2;
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int tells = COLO_OBS_AFTER_EQUIPPED_SELF + TEST_NPC_TELLS_OFFSET;
+    int tells = COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_TELLS_OFFSET;
     CHECK("javelin skyfall tells expose landing dx while pending",
         fabsf(obs[tells + 2] - col_obs_rel_x(19, s.player.x)) < 0.000001f);
     CHECK("javelin skyfall tells expose landing dy while pending",
@@ -2010,7 +2009,7 @@ static void test_modifier_hazard_obs_fixes(void) {
         .move_timer = 1,
     };
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    tells = COLO_OBS_AFTER_EQUIPPED_SELF + TEST_NPC_TELLS_OFFSET;
+    tells = COLO_OBS_AFTER_EQUIPPED_SELF + COLO_NPC_TELLS_OFFSET;
     CHECK("bee tells expose a nonzero move timer",
         obs[tells] > 0.0f && obs[tells] <= 1.0f);
     CHECK("bee tells expose next-step contact",
