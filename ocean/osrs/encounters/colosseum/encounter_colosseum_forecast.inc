@@ -803,6 +803,43 @@ static int col_forecast_move_result_matches(
         move->land_x == player_x && move->land_y == player_y;
 }
 
+/** Mirror of the sim's warband blocked predicate (col_npc_path_blocked with
+    ignore_npcs at size 1): the player tile, the static mask and the boss clamp,
+    but not other NPC bodies. */
+static int col_forecast_warband_target_blocked(
+    const ColoForecastMoveCtx* ctx, int x, int y) {
+    if (ctx->player_x == x && ctx->player_y == y) return 1;
+    if (col_static_blocked(x, y)) return 1;
+    return ctx->sol_clamp_active && !col_in_boss_arena(ctx->state, x, y);
+}
+
+/** Forecast mirror of col_warband_pick_target: the formation tile when free, else
+    the nearest free player-adjacent tile, cardinals before diagonals. */
+static void col_forecast_warband_pick_target(
+    const ColoForecastMoveCtx* ctx, const ColoForecastNpcLocal* npc,
+    int px, int py, int* tx, int* ty) {
+    int pref = npc->formation_dir;
+    int fx = px + COLO_WARBAND_FORM_OFFSET[pref][0];
+    int fy = py + COLO_WARBAND_FORM_OFFSET[pref][1];
+    *tx = fx;
+    *ty = fy;
+    if (!col_forecast_warband_target_blocked(ctx, fx, fy)) return;
+
+    static const int ADJ[8][2] = {
+        {0, 1}, {1, 0}, {-1, 0}, {0, -1},
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };
+    int best_key = 1 << 30;
+    for (int a = 0; a < 8; a++) {
+        int x = px + ADJ[a][0], y = py + ADJ[a][1];
+        if (col_forecast_warband_target_blocked(ctx, x, y)) continue;
+        int dx = npc->x > x ? npc->x - x : x - npc->x;
+        int dy = npc->y > y ? npc->y - y : y - npc->y;
+        int cheb = dx > dy ? dx : dy;
+        int key = (a >= 4 ? 4096 : 0) + cheb * 16 + a;
+        if (key < best_key) { best_key = key; *tx = x; *ty = y; }
+    }
+}
+
 static ColoForecastMoveResult col_forecast_local_move_npc(
     const ColosseumState* s,
     ColoForecastNpcLocal npcs[COLO_MAX_NPCS],
@@ -857,8 +894,7 @@ static ColoForecastMoveResult col_forecast_local_move_npc(
     int steps = 1;
     uint32_t rng = s->rng_state;
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
-        tx = player_x + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][0];
-        ty = player_y + COLO_WARBAND_FORM_OFFSET[npc->formation_dir][1];
+        col_forecast_warband_pick_target(&move_ctx, npc, player_x, player_y, &tx, &ty);
         step_policy = ENCOUNTER_NPC_STEP_TRAVEL_TARGET;
         blocked = col_forecast_local_npc_blocked;
         steps = COLO_WARBAND_TILES_PER_TICK;
