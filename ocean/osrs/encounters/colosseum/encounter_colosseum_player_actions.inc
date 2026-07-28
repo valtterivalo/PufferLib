@@ -299,7 +299,7 @@ static void col_heal_player_capped(ColosseumState* s, int amount) {
         s->player.current_hitpoints = s->player.base_hitpoints;
 }
 
-static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
+static int col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
     FoodType type;
     if (kind == OSRS_CONSUMABLE_SHARK_FOOD) type = FOOD_SHARK;
     else if (kind == OSRS_CONSUMABLE_KARAMBWAN) type = FOOD_KARAMBWAN;
@@ -307,22 +307,7 @@ static void col_apply_food_cell(ColosseumState* s, OsrsConsumableKind kind) {
         fprintf(stderr, "colosseum: consumable kind %d is not food\n", (int)kind);
         abort();
     }
-
-    EatResult r = osrs_eat_food(type, s->player.current_hitpoints,
-        s->player.base_hitpoints, osrs_player_food_timer(&s->player, type));
-    if (!r.consumed) return;
-    if (type == FOOD_KARAMBWAN) {
-        s->player.karambwan_timer = 2;
-        s->player.food_timer = 3;
-        s->player.potion_timer = 3;
-        s->player.ate_karambwan_this_tick = 1;
-        s->player.last_karambwan_heal = r.hp_healed;
-    } else {
-        s->player.food_timer = 3;
-        s->player.ate_food_this_tick = 1;
-        s->player.last_food_heal = r.hp_healed;
-    }
-    col_heal_player_capped(s, r.hp_healed);
+    return osrs_player_eat_food_effects(&s->player, type).consumed;
 }
 
 static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) {
@@ -467,8 +452,8 @@ static void col_apply_inventory_tick_intent(
                 col_equip_from_cell(s, step.cell_idx);
                 break;
             case OSRS_INVENTORY_APPLY_EAT:
-                col_apply_food_cell(s, step.resolution.consumable_kind);
-                col_empty_inventory_cell(s, step.cell_idx);
+                if (col_apply_food_cell(s, step.resolution.consumable_kind))
+                    col_empty_inventory_cell(s, step.cell_idx);
                 break;
             case OSRS_INVENTORY_APPLY_DRINK:
                 (void)col_apply_drink_cell(s, step.cell_idx, step.resolution);
