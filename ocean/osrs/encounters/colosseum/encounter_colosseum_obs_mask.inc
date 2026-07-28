@@ -602,6 +602,16 @@ static int col_sol_aoe_action_hit_tick(const ColosseumState* s, int x, int y) {
     return col_sol_aoe_tile_is_hazard(&s->sol, x, y) ? hit_tick : 0;
 }
 
+/* Fraction of a mechanic's own telegraph that has already elapsed. Hazards whose
+   wind-up is longer than the generic step-out horizon must pass their own depth
+   here, or the horizon reports the opening ticks of the wind-up as no hazard. */
+static float col_hazard_telegraph_urgency(int hit_tick, int telegraph) {
+    if (hit_tick <= 0) return 0.0f;
+    assert(telegraph > 0);
+    assert(hit_tick <= telegraph);
+    return (float)(telegraph - hit_tick + 1) / (float)telegraph;
+}
+
 /* The laser telegraphs for LASER_FREEZE - LASER_DAMAGE_FREEZE ticks, which is longer
    than the step-out forecast horizon. Filtering it through the generic horizon reported
    an arming volley as no hazard at all until it was already 2 ticks in, so the channel
@@ -610,10 +620,7 @@ static int col_sol_aoe_action_hit_tick(const ColosseumState* s, int x, int y) {
     (COLO_SOL_LASER_FREEZE - COLO_SOL_LASER_DAMAGE_FREEZE)
 
 static float col_sol_laser_urgency(int hit_tick) {
-    if (hit_tick <= 0) return 0.0f;
-    assert(hit_tick <= COLO_SOL_LASER_TELEGRAPH);
-    return (float)(COLO_SOL_LASER_TELEGRAPH - hit_tick + 1) /
-        (float)COLO_SOL_LASER_TELEGRAPH;
+    return col_hazard_telegraph_urgency(hit_tick, COLO_SOL_LASER_TELEGRAPH);
 }
 
 static int col_sol_laser_action_hit_tick(const ColosseumState* s, int x, int y) {
@@ -642,10 +649,8 @@ static int col_sol_molten_action_hit_tick(const ColosseumState* s, int x, int y)
 }
 
 static float col_sol_hazard_action_urgency(int hit_tick) {
-    if (hit_tick <= 0) return 0.0f;
-    assert(hit_tick <= COLO_STEP_OUT_FORECAST_HORIZON);
-    return (float)(COLO_STEP_OUT_FORECAST_HORIZON - hit_tick + 1) /
-        (float)COLO_STEP_OUT_FORECAST_HORIZON;
+    return col_hazard_telegraph_urgency(
+        hit_tick, COLO_STEP_OUT_FORECAST_HORIZON);
 }
 
 static void col_write_sol_hazard_action_obs(
@@ -781,14 +786,18 @@ static int col_build_post_premove_molten_forecast(
     return burned;
 }
 
-static int col_primary_env_hazard_action_hit_tick(
+/* The skyfall commits its tile SKYFALL_DELAY ticks ahead; the final decrement resolves
+   against the tile the player already stands on, so SKYFALL_DELAY - 1 ticks still admit
+   a move. That is longer than the step-out horizon, which reported the opening ticks of
+   a live mark as an empty landing, so the channel carries the skyfall's own depth. */
+#define COLO_JAVELIN_SKYFALL_TELEGRAPH (COLO_JAVELIN_SKYFALL_DELAY - 1)
+
+static float col_javelin_skyfall_action_urgency(
     const ColosseumState* s,
-    const ColosseumState* post_premove_molten,
-    const ColoPrimaryEnvHazardBasis* hazard_basis,
     int x,
     int y
 ) {
-    int earliest = 0;
+    float urgency = 0.0f;
     for (int n = 0; n < COLO_MAX_NPCS; n++) {
         const ColoNPC* npc = &s->npcs[n];
         if (!col_npc_is_live_target(npc) ||
@@ -797,14 +806,22 @@ static int col_primary_env_hazard_action_hit_tick(
         }
         const ColoJavelinState* jv = &npc->type_state.javelin;
         if (!jv->skyfall_pending) continue;
-        int hit_tick = jv->skyfall_timer - 1;
-        if (hit_tick > 0 &&
-                jv->skyfall_tile_x == x &&
-                jv->skyfall_tile_y == y) {
-            earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
-        }
+        if (jv->skyfall_tile_x != x || jv->skyfall_tile_y != y) continue;
+        float candidate = col_hazard_telegraph_urgency(
+            jv->skyfall_timer - 1, COLO_JAVELIN_SKYFALL_TELEGRAPH);
+        if (candidate > urgency) urgency = candidate;
     }
+    return urgency;
+}
 
+static int col_primary_env_hazard_action_hit_tick(
+    const ColosseumState* s,
+    const ColosseumState* post_premove_molten,
+    const ColoPrimaryEnvHazardBasis* hazard_basis,
+    int x,
+    int y
+) {
+    int earliest = 0;
     for (int pool = 0; pool < post_premove_molten->molten_count; pool++) {
         if (post_premove_molten->molten_x[pool] != x ||
                 post_premove_molten->molten_y[pool] != y) {
@@ -916,13 +933,19 @@ static void col_write_primary_env_hazard_action_obs(
         if (duplicate >= 0) {
             urgency_by_action[action] = urgency_by_action[duplicate];
         } else {
-            urgency_by_action[action] = col_sol_hazard_action_urgency(
+            int land_x = landings[action].land_x;
+            int land_y = landings[action].land_y;
+            float horizon_urgency = col_sol_hazard_action_urgency(
                 col_primary_env_hazard_action_hit_tick(
                     s,
                     post_premove_molten,
                     hazard_basis,
-                    landings[action].land_x,
-                    landings[action].land_y));
+                    land_x,
+                    land_y));
+            float skyfall_urgency = col_javelin_skyfall_action_urgency(
+                s, land_x, land_y);
+            urgency_by_action[action] = skyfall_urgency > horizon_urgency
+                ? skyfall_urgency : horizon_urgency;
         }
         obs[i++] = urgency_by_action[action];
     }

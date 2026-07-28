@@ -4065,6 +4065,17 @@ static void test_primary_environment_hazard_action_observation_contract(void) {
     CHECK("a skyfall landing next tick marks the selected landing",
         obs[primary_env_hazard_action_obs_index(walk_east)] == 1.0f);
 
+    for (int timer = COLO_JAVELIN_SKYFALL_DELAY; timer >= 2; timer--) {
+        jv->skyfall_timer = timer;
+        col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+        float expected = (float)(COLO_JAVELIN_SKYFALL_TELEGRAPH - timer + 2) /
+            (float)COLO_JAVELIN_SKYFALL_TELEGRAPH;
+        CHECK("every dodgeable skyfall tick reports its own telegraph depth",
+            fabsf(obs[primary_env_hazard_action_obs_index(walk_east)] -
+                expected) < 1e-6f);
+    }
+    jv->skyfall_timer = 2;
+
     s.modifiers.active_mask |= (1u << COLO_MOD_REENTRY);
     s.modifiers.tier[COLO_MOD_REENTRY] = 3;
     jv->skyfall_timer = 1;
