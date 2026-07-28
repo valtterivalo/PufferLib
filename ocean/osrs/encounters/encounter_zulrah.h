@@ -2375,20 +2375,25 @@ static void zul_step_tick(ZulrahState* s, const int* actions) {
         new_target_slot = primary - ZUL_PRIMARY_ATTACK_BASE;
     }
 
-    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
-    if (s->player_dest_explicit) {
+    OsrsPlayerCommand command = { .kind = OSRS_PLAYER_CMD_NONE };
+    if (has_new_target) {
+        command.kind = OSRS_PLAYER_CMD_TARGET;
+        command.target_slot = new_target_slot;
         s->player_dest_explicit = 0;
-        move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
+    } else if (s->player_dest_explicit) {
+        s->player_dest_explicit = 0;
+        command.kind = OSRS_PLAYER_CMD_MOVE;
+        command.move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+    } else if (primary > 0 && primary < ZUL_MOVE_DIM) {
+        s->player_dest_x = s->player.x + ENCOUNTER_MOVE_TARGET_DX[primary];
+        s->player_dest_y = s->player.y + ENCOUNTER_MOVE_TARGET_DY[primary];
+        command.kind = OSRS_PLAYER_CMD_MOVE;
+        command.move_kind = OSRS_PLAYER_MOVE_DESTINATION;
     } else {
-        int m = has_new_target ? 0 : primary;
-        if (m > 0 && m < ZUL_MOVE_DIM) {
-            s->player_dest_x = s->player.x + ENCOUNTER_MOVE_TARGET_DX[m];
-            s->player_dest_y = s->player.y + ENCOUNTER_MOVE_TARGET_DY[m];
-            move_kind = OSRS_PLAYER_MOVE_DESTINATION;
-        } else {
-            s->player_dest_x = -1;
-            s->player_dest_y = -1;
-        }
+        s->player_dest_x = -1;
+        s->player_dest_y = -1;
     }
 
     OsrsPlayerStepInput step_input = {
@@ -2396,10 +2401,7 @@ static void zul_step_tick(ZulrahState* s, const int* actions) {
         .interaction = &s->interaction,
         .target_lookup = zul_lookup_player_attack_target,
         .target_ctx = s,
-        .has_new_target = has_new_target,
-        .new_target_slot = new_target_slot,
-        .move_kind = move_kind,
-        .target_move_policy = OSRS_PLAYER_TARGET_MOVE_EXPLICIT_FIRST,
+        .command = command,
         .dest_x = &s->player_dest_x,
         .dest_y = &s->player_dest_y,
         .blocked_ticks = s->player_stunned_ticks,

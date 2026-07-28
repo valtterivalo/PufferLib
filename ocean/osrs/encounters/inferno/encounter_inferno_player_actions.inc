@@ -675,8 +675,6 @@ static void inf_tick_player_ctx(
         osrs_interaction_clear(&s->interaction);
     }
     int has_explicit_move = (actions[INF_HEAD_MOVE] > 0 || s->player_dest_x >= 0);
-    if (!has_new_target && has_explicit_move)
-        osrs_interaction_check_interrupt(&s->interaction, OSRS_IACT_MOVE);
     if (osrs_interaction_active(&s->interaction)) {
         int target_slot = s->interaction.target_slot;
         int target_can_manual_phantom =
@@ -696,13 +694,19 @@ static void inf_tick_player_ctx(
             s->tick_at_first_zuk_healer_target = s->tick;
     }
 
-    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
+    int claimed_target_standing =
+        has_new_target && osrs_interaction_active(&s->interaction);
+    OsrsPlayerCommand command = { .kind = OSRS_PLAYER_CMD_NONE };
     int move_act = actions[INF_HEAD_MOVE];
-    if (has_explicit_move && !osrs_interaction_active(&s->interaction)) {
-        if (s->player_dest_x >= 0)
-            move_kind = OSRS_PLAYER_MOVE_DESTINATION;
-        else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS)
-            move_kind = OSRS_PLAYER_MOVE_ACTION;
+    if (!claimed_target_standing && has_explicit_move) {
+        if (s->player_dest_x >= 0) {
+            command.kind = OSRS_PLAYER_CMD_MOVE;
+            command.move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+        } else if (move_act > 0 && move_act < ENCOUNTER_MOVE_ACTIONS) {
+            command.kind = OSRS_PLAYER_CMD_MOVE;
+            command.move_kind = OSRS_PLAYER_MOVE_ACTION;
+            command.move_action = move_act;
+        }
     }
     InfWalkCtx wc = { s, ctx };
     InfPlayerStepTargetCtx target_ctx = {
@@ -716,8 +720,7 @@ static void inf_tick_player_ctx(
         .interaction = &s->interaction,
         .target_lookup = inf_lookup_player_attack_target,
         .target_ctx = &target_ctx,
-        .move_kind = move_kind,
-        .move_action = move_act,
+        .command = command,
         .dest_x = &s->player_dest_x,
         .dest_y = &s->player_dest_y,
         .arena = {

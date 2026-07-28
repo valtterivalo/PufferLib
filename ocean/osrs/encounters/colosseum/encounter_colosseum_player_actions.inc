@@ -1073,10 +1073,17 @@ static ColoPrimaryStepPlan col_primary_step_plan(
         }
     }
 
-    OsrsPlayerMoveKind move_kind = OSRS_PLAYER_MOVE_NONE;
-    if (move_action > 0 || *player_dest_x >= 0) {
-        if (*player_dest_x >= 0) move_kind = OSRS_PLAYER_MOVE_DESTINATION;
-        else move_kind = OSRS_PLAYER_MOVE_ACTION;
+    OsrsPlayerCommand command = { .kind = OSRS_PLAYER_CMD_NONE };
+    if (has_new_target) {
+        command.kind = OSRS_PLAYER_CMD_TARGET;
+        command.target_slot = new_target_slot;
+    } else if (*player_dest_x >= 0) {
+        command.kind = OSRS_PLAYER_CMD_MOVE;
+        command.move_kind = OSRS_PLAYER_MOVE_DESTINATION;
+    } else if (move_action > 0 && move_action < ENCOUNTER_MOVE_ACTIONS) {
+        command.kind = OSRS_PLAYER_CMD_MOVE;
+        command.move_kind = OSRS_PLAYER_MOVE_ACTION;
+        command.move_action = move_action;
     }
 
     *walk_ctx = (ColoWalkCtx){s, ctx};
@@ -1087,10 +1094,7 @@ static ColoPrimaryStepPlan col_primary_step_plan(
             .interaction = interaction,
             .target_lookup = col_lookup_player_attack_target,
             .target_ctx = s,
-            .has_new_target = has_new_target,
-            .new_target_slot = new_target_slot,
-            .move_kind = move_kind,
-            .move_action = move_action,
+            .command = command,
             .dest_x = player_dest_x,
             .dest_y = player_dest_y,
             .arena = {
@@ -1179,19 +1183,21 @@ static void col_tick_player_ctx(
         &s->player_dest_x, &s->player_dest_y, &walk_ctx, &los_query);
     OsrsPlayerStepResult step_result =
         osrs_encounter_player_step(&primary_plan.input);
-    if (primary_plan.input.has_new_target &&
-            step_result.target_slot == primary_plan.input.new_target_slot) {
-        s->player_last_interaction_target_slot = primary_plan.input.new_target_slot;
+    if (primary_plan.input.command.kind == OSRS_PLAYER_CMD_TARGET &&
+            step_result.target_slot == primary_plan.input.command.target_slot) {
+        s->player_last_interaction_target_slot = primary_plan.input.command.target_slot;
         s->player_last_interaction_age = 0;
     }
     if (ctx->config.action_debug_log) {
         fprintf(stderr,
-            "colo_action tick=%d movement move_kind=%d move_action=%d "
-            "dest=%d,%d has_new_target=%d new_target=%d interaction=%d->%d "
+            "colo_action tick=%d movement command_kind=%d move_kind=%d move_action=%d "
+            "dest=%d,%d new_target=%d interaction=%d->%d "
             "pos=%d,%d->%d,%d moved=%d explicit=%d chased=%d can_attack=%d\n",
-            s->tick, primary_plan.input.move_kind, primary_plan.move_action,
+            s->tick, primary_plan.input.command.kind,
+            primary_plan.input.command.move_kind, primary_plan.move_action,
             s->player_dest_x, s->player_dest_y,
-            primary_plan.input.has_new_target, primary_plan.input.new_target_slot,
+            primary_plan.input.command.kind == OSRS_PLAYER_CMD_TARGET
+                ? primary_plan.input.command.target_slot : -1,
             interaction_before_step,
             step_result.target_slot, player_x_before_step, player_y_before_step,
             s->player.x, s->player.y, step_result.moved,

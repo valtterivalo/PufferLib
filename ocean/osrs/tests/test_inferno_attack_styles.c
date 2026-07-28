@@ -1963,6 +1963,47 @@ static void test_inferno_equip_actions_move_cells_and_sync_weapon_set(void) {
     inf_destroy(raw_state);
 }
 
+/* the random-action golden battery cannot see this: it drives INF_HEAD_MOVE > 0 on
+   24/25 ticks, and that move interrupt already clears the interaction. */
+static void test_inferno_gear_switch_cancels_entity_interaction(void) {
+    printf("--- inferno gear switch cancels entity interaction ---\n");
+
+    EncounterState* raw_state = inf_create();
+    InfernoState* state = (InfernoState*)raw_state;
+    int actions[INF_NUM_ACTION_HEADS];
+
+    inf_put_int(raw_state, "loadout_profile_mode", INF_LOADOUT_PROFILE_MODE_BUDGET_ONLY);
+    inf_reset(raw_state, 789u);
+
+    int npc_slot = -1;
+    for (int i = 0; i < INF_MAX_NPCS; i++) {
+        if (state->npcs[i].active) { npc_slot = i; break; }
+    }
+    ASSERT_INT_EQ("reset spawns an npc to target", npc_slot >= 0, 1);
+
+    int body_cell = test_cell_holding_item(state, ITEM_CRYSTAL_BODY);
+    ASSERT_INT_EQ("budget reset carries a crystal body", body_cell >= 0, 1);
+
+    osrs_interaction_set(&state->interaction, npc_slot);
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = body_cell + 1;
+    inf_tick_player(state, actions, 1);
+    ASSERT_INT_EQ("a click that equips nothing keeps interaction",
+        osrs_interaction_active(&state->interaction), 1);
+
+    osrs_interaction_set(&state->interaction, npc_slot);
+    memset(actions, 0, sizeof(actions));
+    actions[INF_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        test_cell_holding_item(state, ITEM_BOW_OF_FAERDHINEN) + 1;
+    inf_tick_player(state, actions, 1);
+    ASSERT_INT_EQ("gear switch equips the clicked weapon",
+        state->player.equipped[GEAR_SLOT_WEAPON], ITEM_BOW_OF_FAERDHINEN);
+    ASSERT_INT_EQ("gear switch clears interaction",
+        osrs_interaction_active(&state->interaction), 0);
+
+    inf_destroy(raw_state);
+}
+
 static void test_inferno_reset_preserves_reward_config(void) {
     printf("--- inferno reset preserves reward config ---\n");
 
@@ -9429,6 +9470,7 @@ int main(void) {
     test_inferno_budget_profile_reset_uses_budget_gear();
     test_inferno_mixed_profile_sampling_respects_fraction();
     test_inferno_equip_actions_move_cells_and_sync_weapon_set();
+    test_inferno_gear_switch_cancels_entity_interaction();
     test_inferno_reset_preserves_reward_config();
     test_supply_milestone_reward_defaults_off();
     test_supply_milestone_reward_pays_surplus_at_anchor_once();
