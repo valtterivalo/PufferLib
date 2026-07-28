@@ -1182,7 +1182,7 @@ static void col_forecast_static_threat_npc(
     int dist = col_forecast_local_dist_to_player(npc, lx, ly);
 
     if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
-        if (col_forecast_warband_adjacent(npc, s->player.x, s->player.y))
+        if (col_forecast_warband_adjacent(npc, lx, ly))
             col_step_out_forecast_record_style(
                 action, summary, 0, npc->type, npc->default_style);
         return;
