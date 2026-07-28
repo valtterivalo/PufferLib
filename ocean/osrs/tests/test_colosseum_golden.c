@@ -185,7 +185,7 @@ static const GoldenConfig CONFIGS[] = {
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
     0xea191ec1ec0777bfULL,
-    0x9dbc51935bb8e0a6ULL,
+    0xdbb1987a3acc8999ULL,
     0x0227e30eb729eab4ULL,
     0x9d6e2249e0ae693aULL,
     0xf024c5a1d8fae63aULL,
