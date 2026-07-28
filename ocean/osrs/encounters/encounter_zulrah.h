@@ -424,6 +424,10 @@ typedef struct {
     int melee_target_x, melee_target_y;
     int melee_pending;
     int melee_stare_timer;
+    OverheadPrayer melee_prayer_at_calc;
+
+    EncounterPendingHitQueue player_pending_hits;
+    EncounterPendingHitQueue zulrah_pending_hits;
 
     int phase_timer;
     int surface_timer;
@@ -881,6 +885,31 @@ static inline int zul_cap_damage(ZulrahState* s, int damage) {
     return damage;
 }
 
+static void zul_apply_recoil(ZulrahState* s, int damage, AttackStyle style,
+                             Player* attacker) {
+    osrs_ensure_player_equipment(&s->player);
+    DamageResult damage_result = osrs_apply_passive_damage_pipeline(
+        damage,
+        style,
+        s->player.prayer,
+         0,
+         0,
+         0,
+        &s->player.equipment_effect_profile,
+        &s->player.item_effect_state,
+        &s->rng_state
+    );
+    if (damage_result.recoil_damage > 0) {
+        int recoil = damage_result.recoil_damage;
+        if (s->player.equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
+            recoil > s->player.item_effect_state.recoil_charges) {
+            recoil = s->player.item_effect_state.recoil_charges;
+        }
+        encounter_damage_player(attacker, recoil, NULL);
+        osrs_consume_recoil_charges(&s->player, recoil);
+    }
+}
+
 static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle style,
                                     Player* attacker) {
     if (damage <= 0) return;
@@ -888,27 +917,61 @@ static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle styl
     s->total_damage_received += damage;
     s->player.hit_style = style;
 
-    if (attacker) {
-        osrs_ensure_player_equipment(&s->player);
-        DamageResult damage_result = osrs_apply_passive_damage_pipeline(
-            damage,
-            style,
-            s->player.prayer,
-             0,
-             0,
-             0,
-            &s->player.equipment_effect_profile,
-            &s->player.item_effect_state,
-            &s->rng_state
-        );
-        if (damage_result.recoil_damage > 0) {
-            int recoil = damage_result.recoil_damage;
-            if (s->player.equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
-                recoil > s->player.item_effect_state.recoil_charges) {
-                recoil = s->player.item_effect_state.recoil_charges;
-            }
-            encounter_damage_player(attacker, recoil, NULL);
-            osrs_consume_recoil_charges(&s->player, recoil);
+    if (attacker) zul_apply_recoil(s, damage, style, attacker);
+}
+
+/** Landing-side accounting for one player->Zulrah hit; returns 1 when it landed
+    this tick. Shared by the instant (delay 0) and queued paths. */
+static int zul_land_zulrah_hit(ZulrahState* s, EncounterPendingHit* ph) {
+    int landed = 0;
+    int hit_damage = 0;
+    float dealt = 0.0f;
+    if (!encounter_resolve_npc_pending_hit(
+            ph, &s->zulrah.current_hitpoints, &landed, &hit_damage,
+            NULL, NULL, &dealt))
+        return 0;
+    s->damage_dealt_this_tick += dealt;
+    s->total_damage_dealt += dealt;
+    s->zulrah.hit_landed_this_tick = 1;
+    s->zulrah.hit_damage = hit_damage;
+    s->zulrah.hit_was_successful = hit_damage > 0;
+    return 1;
+}
+
+static void zul_queue_zulrah_hit(ZulrahState* s, int damage, AttackStyle style,
+                                 int is_special) {
+    int distance = encounter_projectile_distance(
+        s->player.x, s->player.y, 1,
+        s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int delay = zul_player_projectile_timing(
+        style, s->player.equipped[GEAR_SLOT_WEAPON], is_special, distance)
+        .damage_delay_ticks;
+
+    EncounterPendingHit hit = {
+        .active = 1,
+        .damage = damage,
+        .ticks_remaining = delay,
+        .attack_style = style,
+        .check_prayer = 0,
+        .spell_type = ENCOUNTER_SPELL_NONE,
+        .source_npc_slot = -1,
+    };
+    if (delay <= 0) {
+        zul_land_zulrah_hit(s, &hit);
+        return;
+    }
+    encounter_pending_hit_queue_push(
+        &s->zulrah_pending_hits, hit, "zulrah-npc", s->tick, -1, 0);
+}
+
+static void zul_resolve_zulrah_pending_hits(ZulrahState* s) {
+    for (int i = 0; i < s->zulrah_pending_hits.count; i++) {
+        EncounterPendingHit* ph = &s->zulrah_pending_hits.hits[i];
+        zul_land_zulrah_hit(s, ph);
+        if (!ph->active) {
+            encounter_pending_hit_queue_remove(&s->zulrah_pending_hits, i, "zulrah-npc");
+            i--;
         }
     }
 }
@@ -948,33 +1011,69 @@ static void zul_record_attack(ZulrahState* s, int src_x, int src_y,
     s->attack_events[i].damage = damage;
 }
 
+/** Queues one Zulrah->player hit. Protect-prayer and damage freeze on THIS tick
+    (the calculation tick); only the application waits out the hit delay. */
+static int zul_queue_player_hit(ZulrahState* s, int raw_damage, AttackStyle style,
+                                int accuracy_hit) {
+    int distance = encounter_projectile_distance(
+        s->zulrah.x, s->zulrah.y, ZUL_NPC_SIZE,
+        s->player.x, s->player.y, 1,
+        ENCOUNTER_PROJECTILE_DISTANCE_CLOSEST_TILE);
+    int delay = encounter_projectile_base_hit_delay(
+        distance, 0, encounter_projectile_delay_kind_for_style(style));
+
+    int prayed = 0;
+    EncounterPendingHit hit = encounter_pending_hit_resolved_at_throw(
+        raw_damage, delay, style, s->player.prayer,
+        s->zulrah.npc_def_id, -1, accuracy_hit, &prayed);
+    encounter_pending_hit_queue_push(
+        &s->player_pending_hits, hit, "zulrah-player", s->tick, -1, style);
+    return prayed ? 0 : raw_damage;
+}
+
+static void zul_player_hit_landed(
+    void* user, const EncounterPendingHit* hit, int damage_after_prayer,
+    int damage_applied, int prayer_was_correct, int prayer_was_checked
+) {
+    (void)damage_applied;
+    (void)prayer_was_correct;
+    (void)prayer_was_checked;
+    ZulrahState* s = (ZulrahState*)user;
+    if (damage_after_prayer <= 0) return;
+    s->total_damage_received += damage_after_prayer;
+    s->player.hit_style = (AttackStyle)hit->attack_style;
+    zul_apply_recoil(s, damage_after_prayer, (AttackStyle)hit->attack_style,
+                     &s->zulrah);
+}
+
+static void zul_resolve_player_pending_hits(ZulrahState* s) {
+    encounter_resolve_player_pending_hits_observed(
+        &s->player_pending_hits, &s->player, s->player.prayer,
+        &s->damage_received_this_tick, NULL, NULL,
+        zul_player_hit_landed, s);
+}
+
 static void zul_attack_ranged(ZulrahState* s) {
     const MonsterStats* m = &MONSTER_DATABASE[MON_ZULRAH_GREEN];
     int npc_att_roll = osrs_npc_attack_roll(m->range_level, m->range_att_bonus);
-    int dmg = 0;
+    int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
     int did_hit = 0;
-    if (encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_RANGED)) {
-        int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        did_hit = encounter_roll_hit_chance(&s->rng_state, npc_att_roll, def_roll);
-    } else {
-        int def_roll = zul_player_def_roll(s, ATTACK_STYLE_RANGED);
-        if (encounter_roll_hit_chance(&s->rng_state, npc_att_roll, def_roll)) {
-            did_hit = 1;
-            dmg = encounter_rand_int(&s->rng_state, m->max_hit + 1);
-            zul_apply_player_damage(s, dmg, ATTACK_STYLE_RANGED, &s->zulrah);
-        }
-    }
+    int raw = encounter_npc_roll_attack_ex(
+        npc_att_roll, def_roll, m->max_hit, 0, &s->rng_state, &did_hit);
+    int dmg = zul_queue_player_hit(s, raw, ATTACK_STYLE_RANGED, did_hit);
     if (did_hit) zul_try_envenom(s);
     zul_record_attack(s, s->zulrah.x, s->zulrah.y,
                       s->player.x, s->player.y, 0, dmg);
 }
 
 static void zul_attack_magic(ZulrahState* s) {
-    int dmg = 0;
-    if (!encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MAGIC)) {
-        dmg = encounter_rand_int(&s->rng_state, MONSTER_DATABASE[MON_ZULRAH_BLUE].max_hit + 1);
-        zul_apply_player_damage(s, dmg, ATTACK_STYLE_MAGIC, &s->zulrah);
-    }
+    const MonsterStats* m = &MONSTER_DATABASE[MON_ZULRAH_BLUE];
+    int npc_att_roll = osrs_npc_attack_roll(m->magic_level, m->magic_att_bonus);
+    int def_roll = zul_player_def_roll(s, ATTACK_STYLE_MAGIC);
+    int did_hit = 0;
+    int raw = encounter_npc_roll_attack_ex(
+        npc_att_roll, def_roll, m->max_hit, 0, &s->rng_state, &did_hit);
+    int dmg = zul_queue_player_hit(s, raw, ATTACK_STYLE_MAGIC, did_hit);
     zul_try_envenom(s);
     zul_record_attack(s, s->zulrah.x, s->zulrah.y,
                       s->player.x, s->player.y, 1, dmg);
@@ -998,6 +1097,7 @@ static void zul_melee_start(ZulrahState* s) {
     s->melee_target_y = s->player.y;
     s->melee_pending = 1;
     s->melee_stare_timer = ZUL_MELEE_STARE_TICKS;
+    s->melee_prayer_at_calc = s->player.prayer;
 }
 
 static void zul_melee_hit(ZulrahState* s) {
@@ -1005,7 +1105,7 @@ static void zul_melee_hit(ZulrahState* s) {
     int dmg = 0;
     if (s->player.x == s->melee_target_x && s->player.y == s->melee_target_y
         && !zul_on_pillar_safespot(s->player.x, s->player.y)) {
-        if (!encounter_prayer_correct_for_style(s->player.prayer, ATTACK_STYLE_MELEE)) {
+        if (!encounter_prayer_correct_for_style(s->melee_prayer_at_calc, ATTACK_STYLE_MELEE)) {
             dmg = 20 + encounter_rand_int(&s->rng_state, 11);
             zul_apply_player_damage(s, dmg, ATTACK_STYLE_MELEE, &s->zulrah);
             s->player_stunned_ticks = ZUL_MELEE_STUN_TICKS;
@@ -1129,9 +1229,8 @@ static void zul_player_attack(ZulrahState* s) {
     if (hit) {
         dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
         dmg = zul_cap_damage(s, dmg);
-        encounter_damage_player(&s->zulrah, dmg, &s->damage_dealt_this_tick);
-        s->total_damage_dealt += dmg;
     }
+    zul_queue_zulrah_hit(s, dmg, style, 0);
     {
         OsrsPostAttackEffects post_effects = osrs_finalize_attack_effects(
             &s->player.equipment_effect_profile,
@@ -1157,10 +1256,6 @@ static void zul_player_attack(ZulrahState* s) {
     s->player.attack_style_this_tick = style;
     zul_record_player_attack_visual(
         s, s->player.attack_style_this_tick, dmg, 0);
-
-    s->zulrah.hit_landed_this_tick = 1;
-    s->zulrah.hit_damage = dmg;
-    s->zulrah.hit_was_successful = (dmg > 0);
 }
 
 static void zul_player_spec(ZulrahState* s) {
@@ -1197,7 +1292,7 @@ static void zul_player_spec(ZulrahState* s) {
     int total_dmg = 0;
     for (int i = 0; i < sr.num_hits; i++) {
         int dmg = zul_cap_damage(s, sr.damage[i]);
-        encounter_damage_player(&s->zulrah, dmg, NULL);
+        zul_queue_zulrah_hit(s, dmg, style, 1);
         total_dmg += dmg;
     }
 
@@ -1209,12 +1304,7 @@ static void zul_player_spec(ZulrahState* s) {
 
     s->magic_def_drain += sr.magic_def_drain;
 
-    s->damage_dealt_this_tick += total_dmg;
-    s->total_damage_dealt += total_dmg;
     s->player_attack_dmg = total_dmg;
-    s->zulrah.hit_landed_this_tick = 1;
-    s->zulrah.hit_damage = total_dmg;
-    s->zulrah.hit_was_successful = (total_dmg > 0);
 }
 
 static void zul_pick_snakeling_pos(ZulrahState* s, int* ox, int* oy) {
@@ -2108,6 +2198,8 @@ static void zul_clear_active_kill(ZulrahState* s) {
     s->cloud_event_count = 0;
     s->melee_pending = 0;
     s->melee_stare_timer = 0;
+    encounter_pending_hit_queue_clear(&s->player_pending_hits);
+    encounter_pending_hit_queue_clear(&s->zulrah_pending_hits);
     s->phase_timer = 0;
     s->surface_timer = 0;
     s->is_diving = 0;
@@ -2320,9 +2412,21 @@ static void zul_step_tick(ZulrahState* s, const int* actions) {
     if (stats_changed)
         zul_mark_live_stats_dirty(s);
 
+    zul_resolve_zulrah_pending_hits(s);
+    zul_resolve_player_pending_hits(s);
+
     if (s->melee_pending) {
         s->melee_stare_timer--;
         if (s->melee_stare_timer <= 0) zul_melee_hit(s);
+    }
+
+    if (s->zulrah_visible && s->zulrah.current_hitpoints <= 0) {
+        zul_record_boss_kill(s);
+        return;
+    }
+    if (s->player.current_hitpoints <= 0) {
+        zul_record_player_loss(s);
+        return;
     }
 
     zul_process_prayer(s, actions[ZUL_HEAD_PRAYER], actions[ZUL_HEAD_OFFENSIVE]);
