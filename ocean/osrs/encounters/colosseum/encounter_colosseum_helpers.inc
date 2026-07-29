@@ -296,7 +296,6 @@ static ColConfig col_default_config(void) {
         .curriculum_agent = 0,
         .step_out_forecast_obs_enabled = 1,
         .threat_field_obs_enabled = 1,
-        .episode_clock_obs_enabled = 1,
         .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
         .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
         .mask_inventory_heads = 0,
