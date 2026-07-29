@@ -22,7 +22,7 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 #define COLO_MODIFIER_FLAGS_OBS_SIZE  (COLO_NUM_REAL_MODIFIERS + 1 + COLO_MODIFIER_DRAFT_OPTIONS)
 #define COLO_MODIFIER_HAZARD_OBS_SIZE 42
 #define COLO_MODIFIER_OBS_SIZE    (COLO_MODIFIER_FLAGS_OBS_SIZE + COLO_MODIFIER_HAZARD_OBS_SIZE)
-#define COLO_WAVE_OBS_SIZE        4
+#define COLO_WAVE_OBS_SIZE        5
 
 typedef enum {
     COLO_SOL_PARRY_CUE_INACTIVE = 0,
@@ -2316,6 +2316,10 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     obs[i++] = (s->reinforcement_timer > 0)
         ? col_clamp01((float)s->reinforcement_timer / (float)COLO_REINFORCEMENT_TICKS) : 0.0f;
     obs[i++] = (s->wave_spawn_delay > 0 || s->wave_ready_delay > 0) ? 1.0f : 0.0f;
+    /* The tick cap terminates the episode as a death, so without this the agent
+       is killed by a clock it cannot see and V must average over elapsed time. */
+    obs[i++] = (ctx->config.episode_clock_obs_enabled && s->episode_max_ticks > 0)
+        ? col_clamp01((float)s->tick / (float)s->episode_max_ticks) : 0.0f;
     assert(i == COLO_OBS_AFTER_WAVE);
 
     col_write_boss_obs(s, obs, &i);

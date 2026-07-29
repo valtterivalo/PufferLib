@@ -1489,6 +1489,7 @@ typedef struct {
     float beginner_loadout_fraction;
     int step_out_forecast_obs_enabled;
     int threat_field_obs_enabled;
+    int episode_clock_obs_enabled;
     int forecast_horizon;
     int forecast_run_tile_mode;
     int mask_inventory_heads;

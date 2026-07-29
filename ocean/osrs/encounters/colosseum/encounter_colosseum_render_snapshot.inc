@@ -31,6 +31,9 @@ static void col_put_int_ctx(
     else if (strcmp(key, "threat_field_obs_enabled") == 0)
         ctx->config.threat_field_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
+    else if (strcmp(key, "episode_clock_obs_enabled") == 0)
+        ctx->config.episode_clock_obs_enabled =
+            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "mask_inventory_heads") == 0)
         ctx->config.mask_inventory_heads =
             encounter_require_binary_config("colosseum", key, value);
