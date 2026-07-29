@@ -4045,6 +4045,9 @@ int sweep_obs_resume(const char* path, ProteinSweep* protein,
     free(sample);
     free(col_of);
     fclose(f);
+    if (replayed > 0) {
+        protein_sweep_skip_random(protein);
+    }
     printf("sweep resume: replayed %d observations from %s (%d skipped as "
         "out of range or malformed)\n", replayed, path, skipped);
     fflush(stdout);

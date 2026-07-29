@@ -2050,6 +2050,13 @@ void protein_sweep_observe(ProteinSweep *sw, const float *norm_params, float sco
     protein_obs_add(sw->obs, norm_params, score, cost, is_failure);
 }
 
+// The random phase is gated on suggestions made this process, not observations
+// held, so a resumed sweep would re-draw Sobol samples it already has data for.
+void protein_sweep_skip_random(ProteinSweep *sw) {
+    if (sw->suggestion_idx < sw->num_random_samples)
+        sw->suggestion_idx = sw->num_random_samples;
+}
+
 void protein_sweep_add_running(ProteinSweep *sw, float val) {
     sw->running_buf[sw->running_pos] = val;
     sw->running_pos = (sw->running_pos + 1) % PROTEIN_RUNNING_BUF_CAP;
