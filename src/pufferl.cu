@@ -4020,14 +4020,17 @@ int sweep_obs_resume(const char* path, ProteinSweep* protein,
             skipped++;
             continue;
         }
+        // A value written at a range endpoint round-trips through float32 a hair
+        // outside it, so admit that epsilon and snap it back. A genuinely
+        // narrowed range lands far outside and is still rejected.
         int in_range = 1;
         for (int i = 0; i < space->num; i++) {
             float norm = space_normalize(&space->spaces[i], vals[col_of[i]]);
-            if (!isfinite(norm) || norm < -1.0f || norm > 1.0f) {
+            if (!isfinite(norm) || norm < -1.001f || norm > 1.001f) {
                 in_range = 0;
                 break;
             }
-            sample[i] = norm;
+            sample[i] = fmaxf(-1.0f, fminf(1.0f, norm));
         }
         float score = vals[2];
         float cost = vals[3];
