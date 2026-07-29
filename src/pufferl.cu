@@ -3939,10 +3939,120 @@ SweepJob sweep_start_job(Ini* ini, const char* exe_path,
     return job;
 }
 
+// Raw (denormalized) values, so a resume can re-normalize against a space whose
+// ranges have since moved. Normalized samples would silently change meaning.
+void sweep_obs_append(const char* path, SweepParam* params, SweepSpace* space,
+        const float* sample, int run, int point, float score, float cost) {
+    if (!path || !path[0]) {
+        return;
+    }
+    int fresh = access(path, F_OK) != 0;
+    FILE* f = fopen(path, "a");
+    if (!f) {
+        fprintf(stderr, "sweep: cannot append observations to %s: %s\n",
+            path, strerror(errno));
+        return;
+    }
+    if (fresh) {
+        fprintf(f, "run,point,score,cost");
+        for (int i = 0; i < space->num; i++) {
+            fprintf(f, ",%s.%s", params[i].section, params[i].key);
+        }
+        fprintf(f, "\n");
+    }
+    fprintf(f, "%d,%d,%.9g,%.9g", run, point, score, cost);
+    for (int i = 0; i < space->num; i++) {
+        fprintf(f, ",%.9g", space_unnormalize(&space->spaces[i], sample[i]));
+    }
+    fprintf(f, "\n");
+    fclose(f);
+}
+
+// Replays (score, cost) from a prior sweep's observation log so the surrogate
+// starts warm. Rows whose values fall outside the current ranges are counted and
+// reported, never dropped quietly.
+int sweep_obs_resume(const char* path, ProteinSweep* protein,
+        SweepParam* params, SweepSpace* space) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        puf_die("sweep.resume_from: cannot read %s: %s", path, strerror(errno));
+    }
+    char line[16384];
+    if (!fgets(line, sizeof(line), f)) {
+        puf_die("sweep.resume_from: %s is empty", path);
+    }
+    int* col_of = (int*)calloc((size_t)space->num, sizeof(int));
+    for (int i = 0; i < space->num; i++) {
+        col_of[i] = -1;
+    }
+    int ncols = 0;
+    char* save = NULL;
+    for (char* tok = strtok_r(line, ",\r\n", &save); tok;
+            tok = strtok_r(NULL, ",\r\n", &save)) {
+        for (int i = 0; i < space->num; i++) {
+            char name[160];
+            snprintf(name, sizeof(name), "%s.%s", params[i].section, params[i].key);
+            if (strcmp(tok, name) == 0) {
+                col_of[i] = ncols;
+            }
+        }
+        ncols++;
+    }
+    for (int i = 0; i < space->num; i++) {
+        if (col_of[i] < 0) {
+            puf_die("sweep.resume_from: %s has no column for [%s] %s",
+                path, params[i].section, params[i].key);
+        }
+    }
+
+    float* sample = (float*)calloc((size_t)space->num, sizeof(float));
+    float* vals = (float*)calloc((size_t)ncols, sizeof(float));
+    int replayed = 0;
+    int skipped = 0;
+    while (fgets(line, sizeof(line), f)) {
+        int n = 0;
+        save = NULL;
+        for (char* tok = strtok_r(line, ",\r\n", &save); tok && n < ncols;
+                tok = strtok_r(NULL, ",\r\n", &save)) {
+            vals[n++] = strtof(tok, NULL);
+        }
+        if (n < ncols) {
+            skipped++;
+            continue;
+        }
+        int in_range = 1;
+        for (int i = 0; i < space->num; i++) {
+            float norm = space_normalize(&space->spaces[i], vals[col_of[i]]);
+            if (!isfinite(norm) || norm < -1.0f || norm > 1.0f) {
+                in_range = 0;
+                break;
+            }
+            sample[i] = norm;
+        }
+        float score = vals[2];
+        float cost = vals[3];
+        if (!in_range || !isfinite(score) || !isfinite(cost)) {
+            skipped++;
+            continue;
+        }
+        protein_sweep_observe(protein, sample, score, cost, 0);
+        replayed++;
+    }
+    free(vals);
+    free(sample);
+    free(col_of);
+    fclose(f);
+    printf("sweep resume: replayed %d observations from %s (%d skipped as "
+        "out of range or malformed)\n", replayed, path, skipped);
+    fflush(stdout);
+    return replayed;
+}
+
 // Returns 1 on success, 0 if the worker failed. Failures are observed as bad
 // samples so the sweep can keep going and fill the slot later.
 int sweep_wait_job(ProteinSweep* protein, SweepJob* job,
-        int league, const char* league_state_path, float max_cost) {
+        int league, const char* league_state_path, float max_cost,
+        const char* obs_path, SweepParam* params, SweepSpace* space) {
     int ok = sweep_read_result(job->fd, &job->result);
     close(job->fd);
 
@@ -3975,6 +4085,8 @@ int sweep_wait_job(ProteinSweep* protein, SweepJob* job,
         for (int i = 0; i < points; i++) {
             protein_sweep_observe(protein, job->sample,
                 job->result.scores[i], job->result.costs[i], 0);
+            sweep_obs_append(obs_path, params, space, job->sample, job->run, i,
+                job->result.scores[i], job->result.costs[i]);
         }
     }
     printf("sweep run=%d score=%.4f cost=%.2f steps=%.0f random=%d gp_obs=%d pareto=%d\n",
@@ -4104,6 +4216,20 @@ void run_sweep(Ini* ini, const char* exe_path) {
         1.0f, max_cost, 0.1f, -0.8f, early_stop_quantile,
         success_cap, 1024, 5, 73ULL);
 
+    char obs_path[2048];
+    {
+        char dir[1024];
+        snprintf(dir, sizeof(dir), "%s/%s",
+            puf_ini_get_str(ini, "base", "log_dir"),
+            puf_ini_get_str(ini, "base", "env_name"));
+        mkdir_p(dir);
+        snprintf(obs_path, sizeof(obs_path), "%s/sweep_observations.csv", dir);
+    }
+    const char* resume_from = puf_ini_get_str(ini, "sweep", "resume_from");
+    if (resume_from && resume_from[0]) {
+        sweep_obs_resume(resume_from, protein, params, space);
+    }
+
     float* sample = (float*)calloc((size_t)space->num, sizeof(float));
     SweepJob* jobs = (SweepJob*)calloc((size_t)parallel, sizeof(SweepJob));
     int invalid_samples = 0;
@@ -4162,7 +4288,8 @@ void run_sweep(Ini* ini, const char* exe_path) {
                 info, job_run, i * train_gpus, apply_sample);
         }
         for (int i = 0; i < batch; i++) {
-            if (sweep_wait_job(protein, &jobs[i], league, league_state_path, max_cost)) {
+            if (sweep_wait_job(protein, &jobs[i], league, league_state_path,
+                    max_cost, obs_path, params, space)) {
                 completed++;
             } else {
                 failed_workers++;
