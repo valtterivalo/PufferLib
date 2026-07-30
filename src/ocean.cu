@@ -1486,21 +1486,15 @@ __global__ void colo_ent_fused_grad_z1(
         }
         __syncthreads();
 
-        // Gathered, not scattered: one thread owns each (record, k) accumulator and
-        // walks j in order, so the summation order is fixed. An atomicAdd scatter
-        // here let warp scheduling pick the order, and non-associative float
-        // addition then made training irreproducible run to run.
         int tile = H - base;
         if (tile > (int)blockDim.x) tile = blockDim.x;
-        for (int idx = threadIdx.x; idx < num_rec * COLO_ENT_BOTTLENECK; idx += blockDim.x) {
-            int n = idx / COLO_ENT_BOTTLENECK;
-            int k = idx - n * COLO_ENT_BOTTLENECK;
-            float sum = 0.0f;
-            for (int j = 0; j < tile; j++) {
-                if (arg_s[j] != n) continue;
-                sum += grad_s[j] * to_float(l2_w[(int64_t)(base + j) * COLO_ENT_BOTTLENECK + k]);
-            }
-            accum[idx] += sum;
+        for (int idx = threadIdx.x; idx < tile * COLO_ENT_BOTTLENECK; idx += blockDim.x) {
+            int j = idx / COLO_ENT_BOTTLENECK;
+            int k = idx - j * COLO_ENT_BOTTLENECK;
+            int n = arg_s[j];
+            if (n < 0) continue;
+            float g = grad_s[j] * to_float(l2_w[(int64_t)(base + j) * COLO_ENT_BOTTLENECK + k]);
+            atomicAdd(&accum[n * COLO_ENT_BOTTLENECK + k], g);
         }
         __syncthreads();
     }
