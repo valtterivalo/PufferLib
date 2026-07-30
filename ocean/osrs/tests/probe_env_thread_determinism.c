@@ -34,6 +34,20 @@ static uint64_t sm(uint64_t* s) {
 
 static ProbeEnv* g_envs;
 static float* g_obs;
+static uint64_t g_state_hash[NUM_ENVS];
+
+/* Observations are a lossy view of the state, so hash the whole struct too:
+   divergence in rewards, timers or RNG can be invisible in obs yet still steer
+   training. States are memset before reset, so padding hashes deterministically. */
+static uint64_t fnv1a(const void* p, size_t n) {
+    const unsigned char* b = (const unsigned char*)p;
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; i++) {
+        h ^= b[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
 
 static void run_pass(int workers, int late_start_mode, const int* actions) {
     for (int i = 0; i < NUM_ENVS; i++) {
@@ -65,29 +79,37 @@ static void run_pass(int workers, int late_start_mode, const int* actions) {
     for (int i = 0; i < NUM_ENVS; i++) {
         col_write_obs_ctx((EncounterState*)&g_envs[i].state,
             (EncounterContext*)&g_envs[i].ctx, &g_obs[(size_t)i * COLO_NUM_OBS]);
+        g_state_hash[i] = fnv1a(&g_envs[i].state, sizeof(ColosseumState));
     }
 }
 
-static int compare(const float* a, const float* b, const char* label) {
-    long diffs = 0;
-    int first_env = -1, first_idx = -1;
+static int compare(const float* ref_obs, const uint64_t* ref_hash, const char* label) {
+    long obs_diffs = 0, state_diffs = 0;
+    int first_env = -1, first_idx = -1, first_state_env = -1;
     for (int i = 0; i < NUM_ENVS; i++) {
+        if (g_state_hash[i] != ref_hash[i]) {
+            if (first_state_env < 0) first_state_env = i;
+            state_diffs++;
+        }
         for (int k = 0; k < COLO_NUM_OBS; k++) {
             size_t o = (size_t)i * COLO_NUM_OBS + k;
-            if (a[o] == b[o]) continue;
+            if (ref_obs[o] == g_obs[o]) continue;
             if (first_env < 0) { first_env = i; first_idx = k; }
-            diffs++;
+            obs_diffs++;
         }
     }
-    if (diffs == 0) {
-        printf("  %-28s IDENTICAL across %d envs x %d obs floats\n",
+    if (obs_diffs == 0 && state_diffs == 0) {
+        printf("  %-26s IDENTICAL  (%d envs, %d obs floats, full state hash)\n",
             label, NUM_ENVS, COLO_NUM_OBS);
         return 0;
     }
-    printf("  %-28s DIFFERS: %ld of %lld floats, first at env %d index %d (%.9g vs %.9g)\n",
-        label, diffs, (long long)NUM_ENVS * COLO_NUM_OBS, first_env, first_idx,
-        a[(size_t)first_env * COLO_NUM_OBS + first_idx],
-        b[(size_t)first_env * COLO_NUM_OBS + first_idx]);
+    printf("  %-26s DIFFERS  obs %ld/%lld floats, state %ld/%d envs",
+        label, obs_diffs, (long long)NUM_ENVS * COLO_NUM_OBS, state_diffs, NUM_ENVS);
+    if (obs_diffs == 0 && state_diffs > 0)
+        printf("  <-- state only, obs did not show it (first env %d)", first_state_env);
+    else if (first_env >= 0)
+        printf("  (first env %d idx %d)", first_env, first_idx);
+    printf("\n");
     return 1;
 }
 
@@ -103,29 +125,33 @@ int main(int argc, char** argv) {
     g_envs = (ProbeEnv*)malloc(sizeof(ProbeEnv) * NUM_ENVS);
     g_obs = (float*)malloc(sizeof(float) * NUM_ENVS * COLO_NUM_OBS);
     float* ref = (float*)malloc(sizeof(float) * NUM_ENVS * COLO_NUM_OBS);
+    uint64_t ref_hash[NUM_ENVS];
     size_t obs_bytes = sizeof(float) * NUM_ENVS * COLO_NUM_OBS;
 
     int failures = 0;
     for (int mode = 0; mode <= 2; mode += 2) {
         printf("late_start_state_mode = %d\n", mode);
-
-        run_pass(1, mode, actions);
-        memcpy(ref, g_obs, obs_bytes);
-        run_pass(1, mode, actions);
-        failures += compare(ref, g_obs, "1 worker vs 1 worker");
-
-        run_pass(1, mode, actions);
-        memcpy(ref, g_obs, obs_bytes);
-        run_pass(workers, mode, actions);
         char label[64];
+
+        run_pass(1, mode, actions);
+        memcpy(ref, g_obs, obs_bytes);
+        memcpy(ref_hash, g_state_hash, sizeof(ref_hash));
+        run_pass(1, mode, actions);
+        failures += compare(ref, ref_hash, "1 worker vs 1 worker");
+
+        run_pass(1, mode, actions);
+        memcpy(ref, g_obs, obs_bytes);
+        memcpy(ref_hash, g_state_hash, sizeof(ref_hash));
+        run_pass(workers, mode, actions);
         snprintf(label, sizeof(label), "1 worker vs %d workers", workers);
-        failures += compare(ref, g_obs, label);
+        failures += compare(ref, ref_hash, label);
 
         run_pass(workers, mode, actions);
         memcpy(ref, g_obs, obs_bytes);
+        memcpy(ref_hash, g_state_hash, sizeof(ref_hash));
         run_pass(workers, mode, actions);
         snprintf(label, sizeof(label), "%d workers, twice", workers);
-        failures += compare(ref, g_obs, label);
+        failures += compare(ref, ref_hash, label);
         printf("\n");
     }
 
