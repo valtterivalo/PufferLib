@@ -161,10 +161,18 @@ static uint64_t COLO_STATIC_LOS_BITS[COLO_STATIC_LOS_TABLE_WORDS];
 static uint8_t COLO_STATIC_FOOTPRINT_BLOCKED[COLO_STATIC_FOOTPRINT_MAX_SIZE]
     [COLO_STATIC_FOOTPRINT_WIDTH][COLO_STATIC_FOOTPRINT_HEIGHT];
 static int COLO_STATIC_LOOKUP_TABLES_BUILT = 0;
+static int COLO_STATIC_ARENA_BUILT = 0;
+static int COLO_NPC_STATS_BUILT = 0;
 
 static void col_build_static_lookup_tables_once(void);
 
+/* Derived purely from compile-time tables, so build it once. Rebuilding per reset
+   zeroed a grid that every other env thread paths against, which handed them an
+   arena with no walls for the width of the rebuild. puf_init runs serially, so the
+   single build lands before any worker thread exists. */
 static void col_build_static_arena(void) {
+    if (COLO_STATIC_ARENA_BUILT) return;
+    COLO_STATIC_ARENA_BUILT = 1;
     memset(COLO_STATIC_BLOCKED, 0, sizeof(COLO_STATIC_BLOCKED));
     for (int y = 0; y < COLO_ARENA_HEIGHT; y++) {
         for (int sp = 0; sp < COLO_WALL_SPANS_PER_ROW; sp++) {
@@ -528,6 +536,8 @@ static ColoNpcStats COLO_NPC_STATS[COLO_NUM_NPC_TYPES];
 
 static void col_build_npc_stats(void) {
     col_build_static_arena();
+    if (COLO_NPC_STATS_BUILT) return;
+    COLO_NPC_STATS_BUILT = 1;
     for (int i = 0; i < COLO_NUM_NPC_TYPES; i++) {
         const MonsterStats* m = &COLO_NPC_BASE[i];
         const ColoNpcOverlay* o = &COLO_NPC_OVERLAY[i];
