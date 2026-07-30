@@ -44,12 +44,21 @@ static void run_pass(int workers, int late_start_mode, const int* actions) {
         col_reset_ctx((EncounterState*)&g_envs[i].state,
             (EncounterContext*)&g_envs[i].ctx, 900u + (unsigned)i * 7u);
     }
+    /* The trainer resets inside the parallel loop when an episode ends, which is
+       the path col_apply_late_start_entry_state and the wave-entry reservoir sit
+       on. Stepping without it leaves finished envs frozen and never exercises it. */
     for (int t = 0; t < NUM_TICKS; t++) {
         #pragma omp parallel for schedule(static) num_threads(workers)
         for (int i = 0; i < NUM_ENVS; i++) {
             const int* act = &actions[(size_t)(t * NUM_ENVS + i) * COLO_NUM_ACTION_HEADS];
             col_step_ctx((EncounterState*)&g_envs[i].state,
                 (EncounterContext*)&g_envs[i].ctx, act);
+            if (g_envs[i].state.episode_over) {
+                unsigned seed = 900u + (unsigned)i * 7u + (unsigned)(t + 1) * 65537u;
+                memset(&g_envs[i].state, 0, sizeof(ColosseumState));
+                col_reset_ctx((EncounterState*)&g_envs[i].state,
+                    (EncounterContext*)&g_envs[i].ctx, seed);
+            }
         }
     }
     #pragma omp parallel for schedule(static) num_threads(workers)
