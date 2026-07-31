@@ -1468,8 +1468,6 @@ typedef struct {
 
     int episode_max_ticks_override;
 
-    int remove_brews;
-
     float prayer_switch_fail_prob;
 
     float player_damage_received_scale;

@@ -79,9 +79,6 @@ static void col_put_int_ctx(
         }
         ctx->config.episode_max_ticks_override = value;
     }
-    else if (strcmp(key, "remove_brews") == 0)
-        ctx->config.remove_brews =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "damage_scale_anneal_ticks") == 0) {
         if (value < 0) {
             fprintf(stderr, "colosseum: damage_scale_anneal_ticks must be >= 0, got %d\n",

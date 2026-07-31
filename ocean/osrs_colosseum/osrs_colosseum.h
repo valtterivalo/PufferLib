@@ -231,7 +231,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "late_start_state_mode",
         "bis_gear_oracle_mode",
         "episode_max_ticks_override",
-        "remove_brews",
         "damage_scale_anneal_ticks",
     };
     for (size_t k = 0; k < sizeof(int_keys) / sizeof(*int_keys); k++) {
