@@ -113,20 +113,10 @@ static void col_put_float_ctx(
     else if (strcmp(key, "wave_clear_bonus") == 0) ctx->config.wave_clear_bonus = value;
     else if (strcmp(key, "boss_phase_bonus") == 0) ctx->config.boss_phase_bonus = value;
     else if (strcmp(key, "win_bonus") == 0) ctx->config.win_bonus = value;
-    else if (strcmp(key, "prayer_correct_reward") == 0)
-        ctx->config.prayer_correct_reward = value;
-    else if (strcmp(key, "offpray_damage_penalty_coeff") == 0)
-        ctx->config.offpray_damage_penalty_coeff = value;
-    else if (strcmp(key, "multistyle_exposure_penalty_coeff") == 0)
-        ctx->config.multistyle_exposure_penalty_coeff = value;
     else if (strcmp(key, "argmax_gear_reward_coeff") == 0)
         ctx->config.argmax_gear_reward_coeff = value;
     else if (strcmp(key, "offensive_boost_reward_coeff") == 0)
         ctx->config.offensive_boost_reward_coeff = value;
-    else if (strcmp(key, "stall_penalty_coeff") == 0)
-        ctx->config.stall_penalty_coeff = value;
-    else if (strcmp(key, "avoided_damage_coeff") == 0)
-        ctx->config.avoided_damage_coeff = value;
     else if (strcmp(key, "death_penalty_coeff") == 0) ctx->config.death_penalty_coeff = value;
     else if (strcmp(key, "timeout_penalty") == 0) ctx->config.timeout_penalty = value;
     else if (strcmp(key, "beginner_loadout_fraction") == 0) {

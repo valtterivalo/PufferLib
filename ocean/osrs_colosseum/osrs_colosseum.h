@@ -136,8 +136,16 @@ static void col_assign_curriculum_wave(Env* env, Dict* kwargs) {
     float fracs[COLO_MAX_CURRICULUM_TIERS];
     int num_tiers = 0;
     for (int i = 0; i < num_tiers_config; i++) {
-        int wave = (int)dict_get(kwargs, wave_keys[i]);
-        float frac = (float)dict_get(kwargs, frac_keys[i]);
+        DictItem* wave_item = dict_find(kwargs, wave_keys[i]);
+        DictItem* frac_item = dict_find(kwargs, frac_keys[i]);
+        if (!wave_item || !frac_item) {
+            fprintf(stderr,
+                "colosseum: curriculum_num_tiers=%d requires %s and %s, which are not set\n",
+                num_tiers_config, wave_keys[i], frac_keys[i]);
+            abort();
+        }
+        int wave = (int)wave_item->value;
+        float frac = (float)frac_item->value;
         if (frac > 0.0f) {
             waves[num_tiers] = wave;
             fracs[num_tiers] = frac;

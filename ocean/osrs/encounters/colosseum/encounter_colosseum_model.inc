@@ -1424,22 +1424,14 @@ typedef struct {
     float wave_clear_bonus;
     float boss_phase_bonus;
     float win_bonus;
-    float prayer_correct_reward;
-    float offpray_damage_penalty_coeff;
-
-    float multistyle_exposure_penalty_coeff;
 
     float argmax_gear_reward_coeff;
 
     float offensive_boost_reward_coeff;
 
-    float stall_penalty_coeff;
-
     int farm_safe_damage_cap;
 
     int farm_cap_waves;
-
-    float avoided_damage_coeff;
     float death_penalty_coeff;
     float timeout_penalty;
     int curriculum_agent;
@@ -1647,7 +1639,6 @@ typedef struct {
     int last_damage_source;
     int last_doom_damage_source;
     int rewarded_boss_phase;
-    float avoided_damage_already_rewarded;
     int min_sol_hp_seen;
 
     OsrsInteraction interaction;

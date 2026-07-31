@@ -91,23 +91,6 @@ static float col_episode_max_wave_depth(const ColosseumState* s) {
         col_sol_score_progress(s);
 }
 
-static int col_distinct_live_threat_styles(const ColosseumState* s) {
-    int magic, ranged, melee;
-    col_live_threat_style_counts(s, &magic, &ranged, &melee);
-    return (magic > 0) + (ranged > 0) + (melee > 0);
-}
-
-static float col_rewardable_avoided_damage(ColosseumState* s) {
-    ColoTickScratch* t = &s->tick_scratch;
-    if (__builtin_popcount((unsigned)t->styles_faced_mask) != 1) return 0.0f;
-    int style = __builtin_ctz((unsigned)t->styles_faced_mask);
-    float raw_avoided = t->avoidable_threat_by_style[style] - t->offpray_damage_this_tick;
-    if (raw_avoided <= 0.0f) return 0.0f;
-    float progress_budget = s->log.total_damage_dealt - s->avoided_damage_already_rewarded;
-    if (progress_budget <= 0.0f) return 0.0f;
-    return raw_avoided < progress_budget ? raw_avoided : progress_budget;
-}
-
 static float col_attacked_gear_quality_ratio(ColosseumState* s) {
     if (!s->tick_scratch.player_attacked) return -1.0f;
     int npc_slot = s->player_attack_npc_idx;
@@ -178,13 +161,6 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     }
     reward += cfg->damage_reward_coeff * rewarded_fresh;
     reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
-    reward += cfg->prayer_correct_reward * (float)t->prayer_correct;
-    reward -= cfg->offpray_damage_penalty_coeff * t->offpray_damage_this_tick;
-    if (cfg->multistyle_exposure_penalty_coeff != 0.0f) {
-        int excess_styles = col_distinct_live_threat_styles(s) - 1;
-        if (excess_styles > 0)
-            reward -= cfg->multistyle_exposure_penalty_coeff * (float)excess_styles;
-    }
     if (cfg->argmax_gear_reward_coeff != 0.0f) {
         float gear_quality = col_attacked_gear_quality_ratio(s);
         if (gear_quality >= 0.0f)
@@ -194,10 +170,6 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
         if (col_attacked_with_offensive_boost(s) > 0)
             reward += cfg->offensive_boost_reward_coeff;
     }
-    float rewardable_avoided = col_rewardable_avoided_damage(s);
-    reward += cfg->avoided_damage_coeff * rewardable_avoided;
-    s->avoided_damage_already_rewarded += rewardable_avoided;
-
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
         reward += cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
         s->rewarded_boss_phase = s->sol.phase;
@@ -369,8 +341,6 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
 
     s->reward = col_compute_reward_ctx(s, ctx);
 
-    if (can_player_attack && ctx->config.stall_penalty_coeff != 0.0f)
-        s->reward -= ctx->config.stall_penalty_coeff;
     int all_dead = 1;
     int wave_cleared = 0;
 
