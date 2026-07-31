@@ -1449,7 +1449,6 @@ typedef struct {
     int threat_field_obs_enabled;
     int forecast_horizon;
     int mask_inventory_heads;
-    int action_debug_log;
     int late_start_state_mode;
 
     float late_start_supply_fraction_per_wave;

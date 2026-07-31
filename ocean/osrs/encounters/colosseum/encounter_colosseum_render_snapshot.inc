@@ -45,9 +45,6 @@ static void col_put_int_ctx(
         }
         ctx->config.farm_cap_waves = value;
     }
-    else if (strcmp(key, "action_debug_log") == 0)
-        ctx->config.action_debug_log =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "late_start_state_mode") == 0) {
         if (value < 0 || value > 2) {
             fprintf(stderr, "colosseum: late_start_state_mode must be 0..2, got %d\n",
@@ -1020,17 +1017,9 @@ static void col_translate_human_commands_ctx(
             case HUMAN_COMMAND_SPEC_TOGGLE:
                 actions[COLO_HEAD_SPEC] = 1;
                 break;
-            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: {
-                int action_head =
-                    col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
-                if (ctx->config.action_debug_log) {
-                    fprintf(stderr,
-                        "colo_action tick=%d human_inventory_click slot=%d head=%d action=%d\n",
-                        s->tick, cmd->inventory_slot, action_head,
-                        action_head >= 0 ? actions[action_head] : 0);
-                }
+            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
+                col_queue_inventory_click_action(s, actions, cmd->inventory_slot);
                 break;
-            }
             case HUMAN_COMMAND_ITEM_ON_ITEM:
                 osrs_inventory_swap_cells(
                     s->inventory_cells, cmd->inventory_slot, cmd->target_inventory_slot);

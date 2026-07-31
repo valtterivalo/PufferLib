@@ -166,7 +166,6 @@ static int col_overhead_switch_slips(uint32_t* rng_state, float fail_prob) {
 static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const int* actions) {
     OverheadPrayer prev_prayer = s->player.prayer;
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
-    int prayer_before = s->player.current_prayer;
     int overhead_activated = encounter_apply_overhead_action(&s->player.prayer,
         actions[COLO_HEAD_PRAYER]);
     if (s->player.prayer != prev_prayer &&
@@ -183,16 +182,6 @@ static void col_player_pretick(ColosseumState* s, ColosseumContext* ctx, const i
     encounter_drain_all_prayers(&s->player, encounter_player_prayer_bonus(&s->player));
     if (s->player.offensive_prayer != prev_offensive)
         col_mark_live_loadout_dirty(s);
-    if (ctx->config.action_debug_log) {
-        fprintf(stderr,
-            "colo_action tick=%d pretick primary=%d prayer_action=%d "
-            "offensive_action=%d spell=%d prayer=%d->%d offensive=%d->%d pp=%d->%d\n",
-            s->tick, actions[COLO_HEAD_PRIMARY], actions[COLO_HEAD_PRAYER],
-            actions[COLO_HEAD_OFFENSIVE],
-            actions[COLO_HEAD_SPELL], prev_prayer, s->player.prayer,
-            prev_offensive, s->player.offensive_prayer, prayer_before,
-            s->player.current_prayer);
-    }
 }
 
 static void col_apply_weapon_set(ColosseumState* s, ColoWeaponSet set) {
@@ -460,29 +449,6 @@ static void col_apply_inventory_tick_intent(
                 break;
         }
     }
-}
-
-static void col_log_inventory_tick_intent(
-    const ColosseumState* s,
-    const OsrsInventoryTickIntent* intent,
-    const int* actions,
-    int interrupted
-) {
-    fprintf(stderr, "colo_action tick=%d equip_heads=", s->tick);
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        fprintf(stderr, "%s%d", slot == 0 ? "" : ",",
-            actions[COLO_HEAD_EQUIP_SLOT(slot)]);
-    fprintf(stderr, " eat_head=%d drink_head=%d equips=",
-        actions[COLO_HEAD_EAT], actions[COLO_HEAD_DRINK]);
-    int wrote = 0;
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        if (intent->equip_cell_by_slot[slot] < 0) continue;
-        fprintf(stderr, "%sslot%d:cell%d", wrote ? "," : "",
-            slot, intent->equip_cell_by_slot[slot]);
-        wrote = 1;
-    }
-    fprintf(stderr, " eat_cell=%d drink_cell=%d interrupted=%d\n",
-        intent->eat_cell, intent->drink_cell, interrupted);
 }
 
 static int col_npc_is_thrall_target(const ColosseumState* s, int slot) {
@@ -1118,9 +1084,6 @@ static void col_tick_player_ctx(
 
     if (!ctx->config.mask_inventory_heads) {
         OsrsInventoryTickIntent intent = col_resolve_inventory_tick_intent(s, actions);
-        if (ctx->config.action_debug_log)
-            col_log_inventory_tick_intent(
-                s, &intent, actions, osrs_inventory_tick_intent_has_effect(&intent));
         col_apply_inventory_tick_intent(s, &intent);
     }
 
@@ -1153,12 +1116,6 @@ static void col_tick_player_ctx(
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
     int primary_act = actions[COLO_HEAD_PRIMARY];
-    int player_x_before_step = s->player.x;
-    int player_y_before_step = s->player.y;
-    int npc_flag_before_step =
-        col_npc_collision_flag_at(s, player_x_before_step, player_y_before_step);
-    int interaction_before_step = osrs_interaction_active(&s->interaction)
-        ? s->interaction.target_slot : -1;
     ColoWalkCtx walk_ctx;
     OsrsLosQuery los_query;
     ColoPrimaryStepPlan primary_plan = col_primary_step_plan(
@@ -1170,35 +1127,6 @@ static void col_tick_player_ctx(
             step_result.target_slot == primary_plan.input.command.target_slot) {
         s->player_last_interaction_target_slot = primary_plan.input.command.target_slot;
         s->player_last_interaction_age = 0;
-    }
-    if (ctx->config.action_debug_log) {
-        fprintf(stderr,
-            "colo_action tick=%d movement command_kind=%d move_kind=%d move_action=%d "
-            "dest=%d,%d new_target=%d interaction=%d->%d "
-            "pos=%d,%d->%d,%d moved=%d explicit=%d chased=%d can_attack=%d\n",
-            s->tick, primary_plan.input.command.kind,
-            primary_plan.input.command.move_kind, primary_plan.move_action,
-            s->player_dest_x, s->player_dest_y,
-            primary_plan.input.command.kind == OSRS_PLAYER_CMD_TARGET
-                ? primary_plan.input.command.target_slot : -1,
-            interaction_before_step,
-            step_result.target_slot, player_x_before_step, player_y_before_step,
-            s->player.x, s->player.y, step_result.moved,
-            step_result.explicit_moved, step_result.chased_target,
-            step_result.can_attack);
-        fprintf(stderr,
-            "colo_action tick=%d movement_walkability npc_flag=%d->%d "
-            "walkable=%d->%d path_extra=%d->%d\n",
-            s->tick, npc_flag_before_step,
-            col_npc_collision_flag_at(s, s->player.x, s->player.y),
-            col_player_walkable(s, player_x_before_step, player_y_before_step),
-            col_player_walkable(s, s->player.x, s->player.y),
-            col_pathfind_blocked(&walk_ctx,
-                player_x_before_step + ctx->world_offset_x,
-                player_y_before_step + ctx->world_offset_y),
-            col_pathfind_blocked(&walk_ctx,
-                s->player.x + ctx->world_offset_x,
-                s->player.y + ctx->world_offset_y));
     }
     col_rebuild_player_collision_flags(s);
 
