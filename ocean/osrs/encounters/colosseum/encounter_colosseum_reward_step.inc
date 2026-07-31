@@ -339,9 +339,7 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
 
     col_classify_tick_offpray(s);
 
-    if (ctx->config.invuln_mode) {
-        s->player.current_hitpoints = s->player.base_hitpoints;
-    } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
+    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);
         col_record_death_attribution(s);
         s->episode_over = 1;
@@ -377,9 +375,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     int all_dead = 1;
     int wave_cleared = 0;
 
-    if (ctx->config.invuln_mode) {
-        s->player.current_hitpoints = s->player.base_hitpoints;
-    } else if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
+    if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;

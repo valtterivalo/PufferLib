@@ -71,9 +71,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "bis_gear_oracle_mode") == 0)
         ctx->config.bis_gear_oracle_mode =
             encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "invuln_mode") == 0)
-        ctx->config.invuln_mode =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "episode_max_ticks_override") == 0) {
         if (value < 0) {
             fprintf(stderr, "colosseum: episode_max_ticks_override must be >= 0, got %d\n",

@@ -1466,8 +1466,6 @@ typedef struct {
 
     int bis_gear_oracle_mode;
 
-    int invuln_mode;
-
     int episode_max_ticks_override;
 
     int remove_brews;
