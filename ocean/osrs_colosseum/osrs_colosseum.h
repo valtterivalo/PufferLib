@@ -226,7 +226,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "threat_field_obs_enabled",
         "forecast_horizon",
         "mask_inventory_heads",
-        "prayer_oracle_mode",
         "late_start_state_mode",
         "bis_gear_oracle_mode",
         "episode_max_ticks_override",

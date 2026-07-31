@@ -716,59 +716,6 @@ static void col_live_threat_style_counts(
     }
 }
 
-static AttackStyle col_oracle_incoming_style(const ColosseumState* s, const ColoNPC* npc) {
-    if (!col_npc_is_live_enemy(npc)) return ATTACK_STYLE_NONE;
-    if (npc->type == COLO_SOL_HEREDIT) return ATTACK_STYLE_NONE;
-    if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return ATTACK_STYLE_NONE;
-    const ColoNpcStats* st = &COLO_NPC_STATS[npc->type];
-
-    if (col_type_is_warbander(npc->type)) {
-        if (s->warband_cycle_anchor < 0) return ATTACK_STYLE_NONE;
-        int phase = (s->tick - s->warband_cycle_anchor + COLO_WARBAND_CYCLE_TICKS)
-                    % COLO_WARBAND_CYCLE_TICKS;
-        if (phase != col_warband_window_offset(npc->type)) return ATTACK_STYLE_NONE;
-        if (!col_warband_melee_adjacent(s, npc)) return ATTACK_STYLE_NONE;
-        return st->default_style;
-    }
-
-    if (npc->type == COLO_MANTICORE) {
-        const ColoManticoreState* mc = &npc->type_state.manticore;
-        if (mc->cycle_step > 0) return mc->orb_style[mc->cycle_step];
-        if (npc->attack_timer > 1) return ATTACK_STYLE_NONE;
-        int d = col_npc_dist_to_player(s, npc);
-        if (d < 1 || d > st->attack_range) return ATTACK_STYLE_NONE;
-        if (!col_npc_has_los_to_player(s, npc)) return ATTACK_STYLE_NONE;
-        return mc->fixed_orb_style[0];
-    }
-
-    if (npc->type == COLO_MINOTAUR) {
-        if (npc->attack_timer > 1) return ATTACK_STYLE_NONE;
-        return (col_npc_dist_to_player(s, npc) == 1) ? ATTACK_STYLE_MELEE : ATTACK_STYLE_NONE;
-    }
-
-    if (npc->attack_timer > 1) return ATTACK_STYLE_NONE;
-    if (st->attack_range > 1) {
-        int d = col_npc_dist_to_player(s, npc);
-        if (d < 1 || d > st->attack_range) return ATTACK_STYLE_NONE;
-        if (!col_npc_has_los_to_player(s, npc)) return ATTACK_STYLE_NONE;
-        return st->default_style;
-    }
-    return col_npc_melee_adjacent_to_player(s, npc) ? ATTACK_STYLE_MELEE : ATTACK_STYLE_NONE;
-}
-
-static void col_apply_prayer_oracle(ColosseumState* s) {
-    int magic = 0, melee = 0, ranged = 0;
-    for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        AttackStyle style = col_oracle_incoming_style(s, &s->npcs[i]);
-        if (style == ATTACK_STYLE_MAGIC) magic = 1;
-        else if (style == ATTACK_STYLE_MELEE) melee = 1;
-        else if (style == ATTACK_STYLE_RANGED) ranged = 1;
-    }
-    if (magic) s->player.prayer = PRAYER_PROTECT_MAGIC;
-    else if (melee) s->player.prayer = PRAYER_PROTECT_MELEE;
-    else if (ranged) s->player.prayer = PRAYER_PROTECT_RANGED;
-}
-
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled =

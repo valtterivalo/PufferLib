@@ -1455,8 +1455,6 @@ typedef struct {
 
     float late_start_supply_fraction_per_wave;
 
-    int prayer_oracle_mode;
-
     int bis_gear_oracle_mode;
 
     int episode_max_ticks_override;

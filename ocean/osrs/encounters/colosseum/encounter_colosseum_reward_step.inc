@@ -298,7 +298,6 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         return phase;
     }
     col_player_pretick(s, ctx, actions);
-    if (ctx->config.prayer_oracle_mode) col_apply_prayer_oracle(s);
     s->player.prayer_display = s->player.prayer;
 
     if (s->wave_ready_delay > 0) s->wave_ready_delay--;

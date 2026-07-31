@@ -48,9 +48,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "action_debug_log") == 0)
         ctx->config.action_debug_log =
             encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "prayer_oracle_mode") == 0)
-        ctx->config.prayer_oracle_mode =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "late_start_state_mode") == 0) {
         if (value < 0 || value > 2) {
             fprintf(stderr, "colosseum: late_start_state_mode must be 0..2, got %d\n",

@@ -975,7 +975,6 @@ static float g_cli_camera_dist = -1.0f;
 static float g_cli_camera_yaw = -1000.0f;
 static float g_cli_camera_pitch = -1000.0f;
 static int g_cli_visual_loadout_mode = -1;
-static int g_cli_prayer_oracle = 0;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
@@ -1908,11 +1907,6 @@ static void run_visual(
             edef->put_int(env->encounter_state, env->encounter_context,
                 "loadout_profile_mode", g_cli_visual_loadout_mode);
         }
-        if (strcmp(encounter_name, "colosseum") == 0 && edef->put_int &&
-                g_cli_prayer_oracle) {
-            edef->put_int(env->encounter_state, env->encounter_context,
-                "prayer_oracle_mode", 1);
-        }
 
         VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env, encounter_name);
         if (cload.cmap) {
@@ -2282,8 +2276,6 @@ int main(int argc, char** argv) {
             loadout_mode = atoi(argv[++i]);
             g_cli_visual_loadout_mode = loadout_mode;
         }
-        else if (strcmp(argv[i], "--prayer-oracle") == 0)
-            g_cli_prayer_oracle = 1;
     }
 
 #ifdef __EMSCRIPTEN__
