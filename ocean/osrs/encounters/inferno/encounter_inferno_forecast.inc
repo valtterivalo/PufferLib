@@ -426,49 +426,6 @@ static void inf_restore_step_out_forecast_action_state(
         sim, prev_player_x, prev_player_y);
 }
 
-#ifdef INF_POISON_FORECAST
-static void inf_poison_step_out_forecast_restore_source(
-    InfernoState* restore_source,
-    const InfernoState* s,
-    const int slots[INF_MAX_NPCS],
-    int slot_count
-) {
-    memset(restore_source, 0xAA, sizeof(*restore_source));
-    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
-        int i = slots[slot_idx];
-        restore_source->npcs[i] = s->npcs[i];
-    }
-    restore_source->rng_state = s->rng_state;
-    memcpy(
-        restore_source->npc_collision_flags,
-        s->npc_collision_flags,
-        sizeof(restore_source->npc_collision_flags));
-}
-
-static void inf_poison_step_out_forecast_check_player_flags(
-    const InfernoState* sim,
-    const InfernoState* s,
-    const Player* moved
-) {
-    InfernoState oracle = *s;
-    memset(
-        oracle.player_collision_flags,
-        0xAA,
-        sizeof(oracle.player_collision_flags));
-    oracle.player.x = moved->x;
-    oracle.player.y = moved->y;
-    oracle.player.is_running = moved->is_running;
-    inf_rebuild_player_collision_flags(&oracle);
-    if (memcmp(
-            sim->player_collision_flags,
-            oracle.player_collision_flags,
-            sizeof(sim->player_collision_flags)) != 0) {
-        fprintf(stderr, "inferno forecast player collision restore mismatch\n");
-        abort();
-    }
-}
-#endif
-
 static void inf_step_out_forecast_finalize_action(
     InfStepOutForecastAction* action
 ) {
@@ -1174,13 +1131,6 @@ static void inf_build_step_out_forecast_exact_ctx(
             INF_PROFILE_NOW_MS() - base_copy_t0);
     }
 #endif
-    const InfernoState* restore_source = s;
-#ifdef INF_POISON_FORECAST
-    InfernoState poison_restore_source;
-    inf_poison_step_out_forecast_restore_source(
-        &poison_restore_source, s, forecast_slots, forecast_slot_count);
-    restore_source = &poison_restore_source;
-#endif
     for (int action_idx = 0; action_idx < ENCOUNTER_MOVE_ACTIONS; action_idx++) {
         InfStepOutForecastAction* action = &out->actions[action_idx];
 #ifdef INF_PROFILE_ENABLED
@@ -1218,10 +1168,7 @@ static void inf_build_step_out_forecast_exact_ctx(
         double state_copy_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
 #endif
         inf_restore_step_out_forecast_action_state(
-            &sim, restore_source, forecast_slots, forecast_slot_count, &moved);
-#ifdef INF_POISON_FORECAST
-        inf_poison_step_out_forecast_check_player_flags(&sim, s, &moved);
-#endif
+            &sim, s, forecast_slots, forecast_slot_count, &moved);
 #ifdef INF_PROFILE_ENABLED
         if (inf_prof_enabled) {
             INF_PROFILE_ADD(

@@ -141,18 +141,6 @@ static int col_npc_path_blocked(void* ctx, int x, int y) {
 static OSRS_THREAD_LOCAL uint64_t col_warband_bfs_memo_key[COL_WARBAND_BFS_MEMO_SIZE];
 static OSRS_THREAD_LOCAL uint8_t col_warband_bfs_memo_result[COL_WARBAND_BFS_MEMO_SIZE];
 
-#ifdef COLO_BFS_INSTR
-static long col_warband_bfs_memo_instr_hits;
-static long col_warband_bfs_memo_instr_misses;
-static int col_warband_bfs_memo_instr_registered;
-static void col_warband_bfs_memo_instr_report(void) {
-    long total = col_warband_bfs_memo_instr_hits + col_warband_bfs_memo_instr_misses;
-    fprintf(stderr, "COLO_BFS_INSTR: memo hits=%ld misses=%ld (%.1f%% hit)\n",
-        col_warband_bfs_memo_instr_hits, col_warband_bfs_memo_instr_misses,
-        total ? 100.0 * col_warband_bfs_memo_instr_hits / total : 0.0);
-}
-#endif
-
 static uint64_t col_warband_bfs_memo_pack(
     const ColosseumState* s, int x, int y, int tx, int ty) {
     uint64_t key = 1;
@@ -211,18 +199,9 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
     uint64_t memo_key = 0;
     uint32_t memo_slot = 0;
     if (memoable) {
-#ifdef COLO_BFS_INSTR
-        if (!col_warband_bfs_memo_instr_registered) {
-            col_warband_bfs_memo_instr_registered = 1;
-            atexit(col_warband_bfs_memo_instr_report);
-        }
-#endif
         memo_key = col_warband_bfs_memo_pack(pc->s, *x, *y, tx, ty);
         memo_slot = col_warband_bfs_memo_slot(memo_key);
         if (col_warband_bfs_memo_key[memo_slot] == memo_key) {
-#ifdef COLO_BFS_INSTR
-            col_warband_bfs_memo_instr_hits++;
-#endif
             uint8_t r = col_warband_bfs_memo_result[memo_slot];
             int found = r & 1;
             int next_dx = (int)((r >> 1) & 3) - 1;
@@ -232,9 +211,6 @@ static int col_npc_path_step_with_ctx(ColoNpcPathCtx* pc, int* x, int* y, int tx
             *y += next_dy;
             return 1;
         }
-#ifdef COLO_BFS_INSTR
-        col_warband_bfs_memo_instr_misses++;
-#endif
     }
 #ifdef COLO_PROFILE_ENABLED
     int col_prof_enabled =
