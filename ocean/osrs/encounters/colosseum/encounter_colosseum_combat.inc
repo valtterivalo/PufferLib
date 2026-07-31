@@ -776,7 +776,7 @@ static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx) {
     double col_prof_total_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
     double col_prof_t0 = col_prof_total_t0;
 #endif
-    col_sol_boss_tick(s, ctx);
+    col_sol_boss_tick(s);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_STEP_SOL_BOSS);
 #endif

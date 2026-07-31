@@ -1278,7 +1278,6 @@ static int col_count_pre_move_unavoidable_damage_instances(
 
 static int col_count_pre_move_doom_instances(
     const ColosseumState* s,
-    const ColosseumContext* ctx,
     int premove_molten_burn
 ) {
     int count = col_count_pre_move_unavoidable_damage_instances(
@@ -1294,10 +1293,7 @@ static int col_count_pre_move_doom_instances(
         }
         int early =
             col_sol_overhead_on_in_window(s, COLO_SOL_PARRY_LOOKBACK[hit]);
-        int blocked =
-            ctx->config.sol_parry_assistance_mode ==
-                COLO_SOL_PARRY_ASSISTANCE_PERFECT ||
-            (!early && s->player.prayer == PRAYER_PROTECT_MELEE);
+        int blocked = !early && s->player.prayer == PRAYER_PROTECT_MELEE;
         if (!blocked) count++;
     }
     return count;
@@ -1305,7 +1301,6 @@ static int col_count_pre_move_doom_instances(
 
 static void col_write_modifier_hazards(
     const ColosseumState* s,
-    const ColosseumContext* ctx,
     int premove_molten_burn,
     float* obs,
     int* idx
@@ -1314,7 +1309,7 @@ static void col_write_modifier_hazards(
     int doom_tier = col_mod_tier(s, COLO_MOD_DOOM);
     int doom_cap = doom_tier > 0 ? COLO_DOOM_CAP[doom_tier] : 0;
     int doom_pending = doom_cap > 0
-        ? col_count_pre_move_doom_instances(s, ctx, premove_molten_burn)
+        ? col_count_pre_move_doom_instances(s, premove_molten_burn)
         : 0;
     obs[i++] = doom_tier > 0 ? 1.0f : 0.0f;
     obs[i++] = doom_cap > 0 ? col_clamp01((float)s->doom_stacks / (float)doom_cap) : 0.0f;
@@ -2275,7 +2270,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
             ? (float)(opt + 1) / (float)COLO_NUM_MODIFIERS : 0.0f;
     }
     col_write_modifier_hazards(
-        s, ctx, premove_molten_burn, obs, &i);
+        s, premove_molten_burn, obs, &i);
     assert(i == COLO_OBS_AFTER_MODS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_MODIFIERS);

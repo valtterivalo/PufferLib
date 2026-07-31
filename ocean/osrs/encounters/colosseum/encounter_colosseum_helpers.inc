@@ -13,7 +13,7 @@ static void col_resolve_player_pending_hits(ColosseumState* s);
 static void col_rebuild_player_collision_flags(ColosseumState* s);
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx);
 
-static void col_sol_boss_tick(ColosseumState* s, ColosseumContext* ctx);
+static void col_sol_boss_tick(ColosseumState* s);
 static void col_sol_begin_boss_arena(ColosseumState* s);
 static int col_sol_clamp_active(const ColosseumState* s);
 static int col_in_boss_arena(const ColosseumState* s, int x, int y);
@@ -302,7 +302,6 @@ static ColConfig col_default_config(void) {
         .action_debug_log = col_default_action_debug_log(),
         .late_start_state_mode = 2,
         .late_start_supply_fraction_per_wave = 0.07f,
-        .sol_parry_assistance_mode = COLO_SOL_PARRY_ASSISTANCE_DISABLED,
         .prayer_switch_fail_prob = 0.0f,
         .player_damage_received_scale = 1.0f,
         .damage_scale_anneal_start = 1.0f,

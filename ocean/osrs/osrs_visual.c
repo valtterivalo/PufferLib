@@ -688,17 +688,6 @@ static VisualPolicyMode visual_policy_parse_mode(const char* value) {
     abort();
 }
 
-static ColoSolParryAssistanceMode visual_sol_parry_assistance_parse(
-    const char* value
-) {
-    if (!value || strcmp(value, "disabled") == 0)
-        return COLO_SOL_PARRY_ASSISTANCE_DISABLED;
-    if (strcmp(value, "perfect") == 0)
-        return COLO_SOL_PARRY_ASSISTANCE_PERFECT;
-    fprintf(stderr, "invalid Sol parry assistance mode: %s\n", value);
-    abort();
-}
-
 static int visual_policy_is_continuous(
     const int* action_dims,
     int num_action_heads
@@ -1586,8 +1575,7 @@ static void run_metrics(
     int num_episodes,
     int loadout_mode,
     int bis_oracle,
-    int start_wave,
-    ColoSolParryAssistanceMode sol_parry_assistance_mode
+    int start_wave
 ) {
     if (!encounter_name || strcmp(encounter_name, "colosseum") != 0) {
         fprintf(stderr, "metrics mode requires --encounter colosseum\n");
@@ -1600,11 +1588,6 @@ static void run_metrics(
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
                   start_wave >= 0 ? start_wave : 1);
-    edef->put_int(
-        env->encounter_state,
-        env->encounter_context,
-        "sol_parry_assistance_mode",
-        (int)sol_parry_assistance_mode);
     if (bis_oracle)
         edef->put_int(env->encounter_state, env->encounter_context,
                       "bis_gear_oracle_mode", 1);
@@ -1755,11 +1738,7 @@ static void run_metrics(
     printf("# episodes=%d ticks=%ld total_attacks=%llu mode=%s bis_oracle=%d\n",
         num_episodes, total_ticks, (unsigned long long)total_attacks,
         policy_mode == VISUAL_POLICY_ARGMAX ? "argmax" : "sample", bis_oracle);
-    printf("# sol_parry_assistance=%s sol_episodes=%d\n",
-        sol_parry_assistance_mode == COLO_SOL_PARRY_ASSISTANCE_PERFECT
-            ? "perfect"
-            : "disabled",
-        sol_episodes);
+    printf("# sol_episodes=%d\n", sol_episodes);
     {
         double score_sum = 0.0;
         int wins = 0;
@@ -2245,8 +2224,6 @@ int main(int argc, char** argv) {
     int profile_steps = 0;
     int metrics_episodes = 0;
     int metrics_bis_oracle = 0;
-    ColoSolParryAssistanceMode metrics_sol_parry_assistance =
-        COLO_SOL_PARRY_ASSISTANCE_DISABLED;
     int loadout_mode = 2;
     const char* encounter_name __attribute__((unused)) = NULL;
     const char* replay_path __attribute__((unused)) = NULL;
@@ -2301,10 +2278,6 @@ int main(int argc, char** argv) {
         }
         else if (strcmp(argv[i], "--bis-oracle") == 0)
             metrics_bis_oracle = 1;
-        else if (strcmp(argv[i], "--sol-parry-assistance") == 0 &&
-                i + 1 < argc)
-            metrics_sol_parry_assistance =
-                visual_sol_parry_assistance_parse(argv[++i]);
         else if (strcmp(argv[i], "--loadout-mode") == 0 && i + 1 < argc) {
             loadout_mode = atoi(argv[++i]);
             g_cli_visual_loadout_mode = loadout_mode;
@@ -2336,8 +2309,7 @@ int main(int argc, char** argv) {
 
     if (metrics_episodes > 0) {
         run_metrics(&env, encounter_name, model_path, policy_mode, policy_seed,
-            metrics_episodes, loadout_mode, metrics_bis_oracle, start_wave,
-            metrics_sol_parry_assistance);
+            metrics_episodes, loadout_mode, metrics_bis_oracle, start_wave);
         return 0;
     }
 
