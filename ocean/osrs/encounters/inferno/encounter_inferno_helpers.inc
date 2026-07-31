@@ -746,7 +746,6 @@ static InfConfig inf_default_config(void) {
         .zuk_healer_reward_mode = INF_ZUK_HEALER_REWARD_MODE_BASELINE,
         .post_jad_zuk_multiplier = 1.0f,
         .jad_alive_zuk_multiplier = 1.0f,
-        .oracle_mode = 0,
         .shield_tag_reward_coeff = 0.0f,
         .joseph_reward_mode = INF_JOSEPH_REWARD_MODE_OFF,
     };

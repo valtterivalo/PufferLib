@@ -215,7 +215,6 @@ void puf_init(Env* env, Dict* kwargs) {
 
     inferno_env_put_float(env, "late_start_supply_profile_scale",
         (float)dict_get(kwargs, "late_start_supply_profile_scale"));
-    inferno_env_put_int(env, "oracle_mode", (int)dict_get(kwargs, "oracle_mode"));
     inferno_env_put_int(env, "terminal_penalty_enabled",
         (int)dict_get(kwargs, "terminal_penalty_enabled"));
 

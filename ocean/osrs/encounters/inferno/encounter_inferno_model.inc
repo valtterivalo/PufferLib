@@ -693,7 +693,6 @@ typedef struct {
     int zuk_healer_reward_mode;
     float post_jad_zuk_multiplier;
     float jad_alive_zuk_multiplier;
-    int oracle_mode;
     float shield_tag_reward_coeff;
     int joseph_reward_mode;
 } InfConfig;

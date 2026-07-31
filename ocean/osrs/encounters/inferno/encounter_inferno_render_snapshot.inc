@@ -60,13 +60,6 @@ static void inf_put_int_ctx(
         inf_require_valid_loadout_profile_mode(value);
         ctx->config.loadout_profile_mode = (InfLoadoutProfileMode)value;
     }
-    else if (strcmp(key, "oracle_mode") == 0) {
-        if (value < 0 || value > 11) {
-            fprintf(stderr, "inferno: oracle_mode must be in [0,11], got %d\n", value);
-            abort();
-        }
-        ctx->config.oracle_mode = value;
-    }
     else if (strcmp(key, "zuk_healer_reward_mode") == 0) {
         if (value < INF_ZUK_HEALER_REWARD_MODE_BASELINE ||
                 value > INF_ZUK_HEALER_REWARD_MODE_TAGS_FIRST) {
@@ -868,7 +861,6 @@ static uint64_t inf_config_fingerprint(const InfConfig* config) {
     INF_HASH_CONFIG_FIELD(config, &h, zuk_healer_reward_mode);
     INF_HASH_CONFIG_FIELD(config, &h, post_jad_zuk_multiplier);
     INF_HASH_CONFIG_FIELD(config, &h, jad_alive_zuk_multiplier);
-    INF_HASH_CONFIG_FIELD(config, &h, oracle_mode);
     INF_HASH_CONFIG_FIELD(config, &h, shield_tag_reward_coeff);
     INF_HASH_CONFIG_FIELD(config, &h, joseph_reward_mode);
     return h;

@@ -199,170 +199,10 @@ static void inf_apply_blood_barrage_heal_damage(InfernoState* s, int damage) {
     s->tick_scratch.blood_heal += s->player.current_hitpoints - hp_before;
 }
 
-typedef struct {
-    int target_slot;
-    int gear;
-    int overhead_style;
-    int offensive;
-} InfOraclePick;
-
-static int inf_oracle_trigger_active(const InfernoState* s, int mode) {
-    int zuk_idx = inf_find_live_zuk_idx(s);
-    if (zuk_idx < 0) return 0;
-    int zuk_hp = s->npcs[zuk_idx].hp;
-    if (mode == 1 || mode == 2 || mode == 8) return zuk_hp <= 300;
-    if (mode == 3) return zuk_hp <= 240;
-    if (mode >= 4 && mode <= 7) return s->zuk.jad_spawned || zuk_hp <= 600;
-    if (mode == 9 || mode == 10 || mode == 11)
-        return s->zuk.healer_spawned && s->total_zuk_healer_tags < 4;
-    return 0;
-}
-
-static InfOraclePick inf_oracle_pick_full(const InfernoState* s, int mode) {
-    InfOraclePick pick = { -1, -1, ATTACK_STYLE_NONE, OFFENSIVE_PRAYER_NONE };
-    if (mode <= 0 || !inf_oracle_trigger_active(s, mode)) return pick;
-
-    if (mode == 9) {
-        for (int o = 33; o < 37; o++) {
-            int n = s->current_obs_slots[o];
-            if (n < 0 || n >= INF_MAX_NPCS) continue;
-            const InfNPC* npc = &s->npcs[n];
-            if (!npc->active || npc->death_ticks != 0 ||
-                    npc->type != INF_NPC_HEALER_ZUK)
-                continue;
-            if (npc->aggro_target >= 0 && npc->aggro_target < INF_MAX_NPCS &&
-                    s->npcs[npc->aggro_target].active &&
-                    s->npcs[npc->aggro_target].type == INF_NPC_ZUK) {
-                pick.target_slot = o;
-                return pick;
-            }
-        }
-        return pick;
-    }
-
-    if (mode == 10 || mode == 11) {
-        if (!inf_player_behind_zuk_shield_now(s)) return pick;
-        if (mode == 11 && s->player.attack_timer != 0) return pick;
-
-        for (int o = 33; o < 37; o++) {
-            int n = s->current_obs_slots[o];
-            if (!inf_is_untagged_live_zuk_healer_slot(s, n))
-                continue;
-            if (inf_player_can_attack_npc_from_current_tile(s, n)) {
-                pick.target_slot = o;
-                return pick;
-            }
-        }
-        return pick;
-    }
-
-    for (int o = 22; o < 25; o++) {
-        int n = s->current_obs_slots[o];
-        if (n >= 0 && n < INF_MAX_NPCS &&
-            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
-            s->npcs[n].type == INF_NPC_JAD) {
-            pick.target_slot = o;
-            pick.gear = INF_GEAR_LONG_RANGE;
-            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
-            AttackStyle jas = inf_npc_jad_const(&s->npcs[n])->attack_style;
-            if (jas == ATTACK_STYLE_RANGED) pick.overhead_style = ATTACK_STYLE_RANGED;
-            else if (jas == ATTACK_STYLE_MAGIC) pick.overhead_style = ATTACK_STYLE_MAGIC;
-            return pick;
-        }
-    }
-    if (mode == 1) return pick;
-
-    for (int o = 33; o < 37; o++) {
-        int n = s->current_obs_slots[o];
-        if (n >= 0 && n < INF_MAX_NPCS &&
-            s->npcs[n].active && s->npcs[n].death_ticks == 0 &&
-            s->npcs[n].type == INF_NPC_HEALER_ZUK) {
-            pick.target_slot = o;
-            pick.gear = INF_GEAR_BP;
-            pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
-            pick.overhead_style = ATTACK_STYLE_MAGIC;
-            return pick;
-        }
-    }
-
-    for (int o = 0; o < 22; o++) {
-        int n = s->current_obs_slots[o];
-        if (n < 0 || n >= INF_MAX_NPCS) continue;
-        if (!s->npcs[n].active || s->npcs[n].death_ticks != 0) continue;
-        int t = s->npcs[n].type;
-        if (t == INF_NPC_ZUK || t == INF_NPC_ZUK_SHIELD ||
-            t == INF_NPC_JAD ||
-            t == INF_NPC_HEALER_ZUK || t == INF_NPC_HEALER_JAD)
-            continue;
-        pick.target_slot = o;
-        pick.offensive = OFFENSIVE_PRAYER_RIGOUR;
-        if (t == INF_NPC_MAGER) {
-            pick.gear = INF_GEAR_LONG_RANGE;
-            pick.overhead_style = ATTACK_STYLE_MAGIC;
-        } else if (t == INF_NPC_RANGER) {
-            pick.gear = INF_GEAR_LONG_RANGE;
-            pick.overhead_style = ATTACK_STYLE_RANGED;
-        } else if (t == INF_NPC_MELEER) {
-            pick.gear = INF_GEAR_BP;
-            pick.overhead_style = ATTACK_STYLE_MELEE;
-        } else {
-            pick.gear = INF_GEAR_BP;
-        }
-        return pick;
-    }
-
-    return pick;
-}
-
-static int inf_oracle_overrides_target(int mode) {
-    return mode >= 1 && mode <= 11;
-}
-
-static int inf_oracle_overrides_gear_offensive(int mode) {
-    return mode == 6 || mode == 7 || mode == 8;
-}
-
-static int inf_oracle_overrides_overhead(int mode) {
-    return mode == 5 || mode == 7 || mode == 8;
-}
-
-static int inf_oracle_overhead_action_for(int wanted_style) {
-    if (wanted_style == ATTACK_STYLE_RANGED) return ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED;
-    if (wanted_style == ATTACK_STYLE_MAGIC) return ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
-    if (wanted_style == ATTACK_STYLE_MELEE) return ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
-    return ENCOUNTER_OVERHEAD_NO_CHANGE;
-}
-
-static int inf_oracle_offensive_action_for(int wanted_offensive) {
-    if (wanted_offensive == OFFENSIVE_PRAYER_RIGOUR) {
-        return ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
-    }
-    if (wanted_offensive == OFFENSIVE_PRAYER_PIETY) {
-        return ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
-    }
-    if (wanted_offensive == OFFENSIVE_PRAYER_AUGURY) {
-        return ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
-    }
-    return ENCOUNTER_OFFENSIVE_NO_CHANGE;
-}
-
 static void inf_player_pretick(InfernoState* s, InfernoContext* ctx, const int* actions) {
     OffensivePrayer prev_offensive = s->player.offensive_prayer;
     int prayer_act = inf_canonical_overhead_action(actions[INF_HEAD_PRAYER]);
     int offensive_act = actions[INF_HEAD_OFFENSIVE];
-    if (ctx->config.oracle_mode > 0) {
-        InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
-        if (pick.target_slot >= 0) {
-            if (inf_oracle_overrides_overhead(ctx->config.oracle_mode) &&
-                pick.overhead_style != ATTACK_STYLE_NONE) {
-                prayer_act = inf_oracle_overhead_action_for(pick.overhead_style);
-            }
-            if (inf_oracle_overrides_gear_offensive(ctx->config.oracle_mode) &&
-                pick.offensive != OFFENSIVE_PRAYER_NONE) {
-                offensive_act = inf_oracle_offensive_action_for(pick.offensive);
-            }
-        }
-    }
     if (encounter_apply_overhead_action(&s->player.prayer, prayer_act)) {
         s->player.prayer_just_activated = 1;
     }
@@ -602,10 +442,6 @@ static void inf_tick_player_ctx(
     inf_refresh_current_obs_slots_ctx(s, ctx);
 
     int target = actions[INF_HEAD_TARGET];
-    if (inf_oracle_overrides_target(ctx->config.oracle_mode)) {
-        InfOraclePick pick = inf_oracle_pick_full(s, ctx->config.oracle_mode);
-        if (pick.target_slot >= 0) target = pick.target_slot + 1;
-    }
     int has_new_target = 0;
     if (target > 0 && target <= INF_OBS_NPCS) {
         int obs_idx = target - 1;
@@ -649,15 +485,6 @@ static void inf_tick_player_ctx(
             s->player_last_interaction_age = 0;
             has_new_target = 1;
         }
-    }
-    if ((ctx->config.oracle_mode == 10 || ctx->config.oracle_mode == 11) &&
-            osrs_interaction_active(&s->interaction) &&
-            inf_is_untagged_live_zuk_healer_slot(s, s->interaction.target_slot) &&
-            (!inf_player_behind_zuk_shield_now(s) ||
-                !inf_player_can_attack_npc_from_current_tile(
-                    s, s->interaction.target_slot) ||
-                (ctx->config.oracle_mode == 11 && s->player.attack_timer != 0))) {
-        osrs_interaction_clear(&s->interaction);
     }
     if (ctx->config.zuk_safe_untagged_healer_target_mask &&
             osrs_interaction_active(&s->interaction) &&
