@@ -26,11 +26,6 @@ typedef struct EncounterContext EncounterContext;
 
 #define ENCOUNTER_RENDER_HITS_MAX 32
 
-typedef struct {
-    EncounterState* state;
-    EncounterContext* context;
-} EncounterRuntime;
-
 static inline void encounter_abort_unknown_config(
     const char* encounter_name, const char* config_type, const char* key
 ) {
@@ -2962,35 +2957,6 @@ typedef struct {
     int (*get_tick)(EncounterState* state, EncounterContext* context);
     int (*get_winner)(EncounterState* state, EncounterContext* context);
 } EncounterDef;
-
-static inline EncounterRuntime encounter_runtime_create(const EncounterDef* def) {
-    EncounterRuntime runtime = {0};
-    if (!def || def->state_size == 0 || def->context_size == 0) {
-        fprintf(stderr, "encounter_runtime_create: %s has no typed runtime\n",
-            def ? def->name : "(null)");
-        abort();
-    }
-    runtime.state = (EncounterState*)calloc(1, def->state_size);
-    runtime.context = (EncounterContext*)calloc(1, def->context_size);
-    if (!runtime.state || !runtime.context) {
-        fprintf(stderr, "encounter_runtime_create: out of memory for %s\n", def->name);
-        abort();
-    }
-    if (def->init_context) def->init_context(runtime.context);
-    if (def->init_state) def->init_state(runtime.state, runtime.context);
-    return runtime;
-}
-
-static inline void encounter_runtime_destroy(const EncounterDef* def, EncounterRuntime* runtime) {
-    if (!runtime) return;
-    if (def && def->destroy_context && runtime->context) {
-        def->destroy_context(runtime->context);
-    }
-    free(runtime->state);
-    free(runtime->context);
-    runtime->state = NULL;
-    runtime->context = NULL;
-}
 
 #define MAX_ENCOUNTERS 32
 

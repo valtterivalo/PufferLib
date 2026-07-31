@@ -45,14 +45,6 @@ static inline int osrs_player_can_eat_food_type(const Player* p, FoodType type) 
     return r.consumed;
 }
 
-static inline int osrs_player_food_wasted_hp(const Player* p, FoodType type) {
-    osrs_require_player_food_action(type);
-    EatResult r = osrs_eat_food(type, p->current_hitpoints,
-        p->base_hitpoints, osrs_player_food_timer(p, type));
-    if (!r.consumed) return 0;
-    return osrs_food_heal_amount(type) - r.hp_healed;
-}
-
 static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodType type) {
     osrs_require_player_food_action(type);
     OsrsPlayerEatResult out = {0, 0, 0, 0};

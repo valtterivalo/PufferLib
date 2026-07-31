@@ -193,14 +193,6 @@ static void col_step_out_forecast_record_style(
         col_forecast_style_max_hit(type, style));
 }
 
-static int col_step_out_forecast_tick_style_mask(const ColoStepOutForecastTick* tick) {
-    int mask = 0;
-    if (tick->melee_count > 0) mask |= COLO_STYLE_MASK_MELEE;
-    if (tick->ranged_count > 0) mask |= COLO_STYLE_MASK_RANGED;
-    if (tick->magic_count > 0) mask |= COLO_STYLE_MASK_MAGIC;
-    return mask;
-}
-
 static int col_step_out_forecast_tick_has_event(const ColoStepOutForecastTick* tick) {
     return tick->melee_count > 0 ||
         tick->ranged_count > 0 ||

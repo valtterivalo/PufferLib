@@ -258,29 +258,6 @@ static inline void col_write_nearest_hazard_xy_value(
         s, nearest->found, nearest->x, nearest->y, value, obs, idx);
 }
 
-static inline void col_write_nearest_hazard_xy_values(
-    const ColosseumState* s,
-    const ColoNearestHazardTile* nearest,
-    float value0,
-    float value1,
-    float* obs,
-    int* idx
-) {
-    int i = *idx;
-    if (nearest->found) {
-        obs[i++] = col_obs_rel_x(nearest->x, s->player.x);
-        obs[i++] = col_obs_rel_y(nearest->y, s->player.y);
-        obs[i++] = value0;
-        obs[i++] = value1;
-    } else {
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-        obs[i++] = 0.0f;
-    }
-    *idx = i;
-}
-
 static void col_refresh_current_obs_slots_ctx(ColosseumState* s, const ColosseumContext* ctx) {
     (void)ctx;
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
@@ -329,10 +306,6 @@ static void col_write_style_onehot_melee_ranged_magic(AttackStyle style, float* 
     obs[i++] = (style == ATTACK_STYLE_RANGED) ? 1.0f : 0.0f;
     obs[i++] = (style == ATTACK_STYLE_MAGIC) ? 1.0f : 0.0f;
     *idx = i;
-}
-
-static int col_pending_hit_prayer_ticks(const EncounterPendingHit* hit) {
-    return hit->prayer_check_delay > 0 ? hit->prayer_check_delay : hit->ticks_remaining;
 }
 
 static int col_manticore_next_orb_ticks(const ColoNPC* npc) {
