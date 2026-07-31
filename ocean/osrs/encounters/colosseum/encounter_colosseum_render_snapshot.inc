@@ -1187,10 +1187,6 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .snapshot = col_snapshot_ctx,
     .restore = col_restore_ctx,
 
-    .cell_key_size = NULL,
-    .write_cell_key = NULL,
-    .progress_score = NULL,
-
     .write_obs = col_write_obs_ctx,
     .write_mask = col_write_mask_ctx,
     .get_reward = col_get_reward_ctx,

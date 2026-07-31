@@ -2908,10 +2908,6 @@ typedef struct {
     void (*restore)(
         EncounterState* state, EncounterContext* context, const void* data, size_t n);
 
-    size_t (*cell_key_size)(EncounterState* state, EncounterContext* context);
-    void (*write_cell_key)(EncounterState* state, EncounterContext* context, void* out);
-    float (*progress_score)(EncounterState* state, EncounterContext* context);
-
     void (*write_obs)(EncounterState* state, EncounterContext* context, float* obs_out);
     void (*write_mask)(EncounterState* state, EncounterContext* context, float* mask_out);
     float (*get_reward)(EncounterState* state, EncounterContext* context);
