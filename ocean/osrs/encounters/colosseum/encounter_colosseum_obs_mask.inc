@@ -2336,7 +2336,7 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         ColoStepOutForecast forecast;
         ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
         col_build_step_out_forecast_horizon_mode_summary(
-            s, &forecast, summaries, horizon, ctx->config.forecast_run_tile_mode);
+            s, &forecast, summaries, horizon);
         i = col_write_step_out_forecast_obs_summary(&forecast, summaries, horizon, obs, i);
     } else {
         i += COLO_STEP_OUT_FORECAST_OBS_SIZE;

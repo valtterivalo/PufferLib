@@ -1448,7 +1448,6 @@ typedef struct {
     int step_out_forecast_obs_enabled;
     int threat_field_obs_enabled;
     int forecast_horizon;
-    int forecast_run_tile_mode;
     int mask_inventory_heads;
     int action_debug_log;
     int late_start_state_mode;
@@ -1468,11 +1467,6 @@ typedef struct {
     int damage_scale_anneal_ticks;
 
 } ColConfig;
-
-typedef enum {
-    COLO_FORECAST_RUN_TILE_FULL = 0,
-    COLO_FORECAST_RUN_TILE_STATIC_THREAT = 1,
-} ColoForecastRunTileMode;
 
 typedef enum {
     COLO_NPC_RENDER_ATTACK_NORMAL = 0,

@@ -1191,68 +1191,6 @@ static void col_forecast_local_copy_slot_set(
     }
 }
 
-static int col_forecast_action_is_run_tile(int action_idx) {
-    return action_idx >= 9 && action_idx < ENCOUNTER_MOVE_ACTIONS;
-}
-
-static void col_forecast_static_threat_npc(
-    const ColosseumState* s,
-    const ColoForecastNpcLocal* npc,
-    ColoStepOutForecastAction* action,
-    ColoForecastObsSummary* summary
-) {
-    if (!npc->active || npc->death_ticks > 0 || npc->hp <= 0) return;
-    if (col_type_is_hazard_entity(npc->type)) return;
-    if (npc->stun_timer > 0 || npc->frozen_ticks > 0) return;
-    if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_SOL) return;
-    int lx = action->land_x;
-    int ly = action->land_y;
-    int dist = col_forecast_local_dist_to_player(npc, lx, ly);
-
-    if (npc->forecast_behavior == COLO_FORECAST_BEHAVIOR_WARBAND) {
-        if (col_forecast_warband_adjacent(npc, lx, ly))
-            col_step_out_forecast_record_style(
-                action, summary, 0, npc->type, npc->default_style);
-        return;
-    }
-    if (npc->type == COLO_MINOTAUR || npc->type == COLO_JAGUAR_WARRIOR) {
-        if (dist == 1)
-            col_step_out_forecast_record_style(
-                action, summary, 0, npc->type, ATTACK_STYLE_MELEE);
-        return;
-    }
-    if (npc->attack_range > 1) {
-        if (dist < 1 || dist > npc->attack_range) return;
-        if (!col_forecast_local_has_los_to_player(s, npc, lx, ly)) return;
-        AttackStyle style = npc->default_style;
-        if (npc->type == COLO_MANTICORE) {
-            int orb = npc->cycle_step > 0 ? npc->cycle_step : 0;
-            AttackStyle cur = npc->cycle_step > 0 ? npc->orb_style[orb]
-                : npc->fixed_orb_style[0];
-            if (cur != ATTACK_STYLE_NONE) style = cur;
-        }
-        col_step_out_forecast_record_style(action, summary, 0, npc->type, style);
-        return;
-    }
-    if (dist == 1)
-        col_step_out_forecast_record_style(
-            action, summary, 0, npc->type, npc->default_style);
-}
-
-static void col_forecast_static_threat_action(
-    const ColosseumState* s,
-    const ColoForecastNpcLocal base_npcs[COLO_MAX_NPCS],
-    const int slots[COLO_MAX_NPCS],
-    int slot_count,
-    ColoStepOutForecastAction* action,
-    ColoForecastObsSummary* summary
-) {
-    for (int slot_idx = 0; slot_idx < slot_count; slot_idx++) {
-        int i = slots[slot_idx];
-        col_forecast_static_threat_npc(s, &base_npcs[i], action, summary);
-    }
-}
-
 typedef struct {
     int pillar;
     int tier;
@@ -1335,8 +1273,7 @@ static void col_build_step_out_forecast_horizon_mode_summary(
     const ColosseumState* s,
     ColoStepOutForecast* out,
     ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS],
-    int horizon,
-    int run_tile_mode
+    int horizon
 ) {
     if (horizon < 1) horizon = 1;
     if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
@@ -1373,22 +1310,6 @@ static void col_build_step_out_forecast_horizon_mode_summary(
         }
         ColoStepOutForecastAction* action = &out->actions[action_idx];
         ColoForecastObsSummary* summary = summaries ? &summaries[action_idx] : NULL;
-        if (run_tile_mode == COLO_FORECAST_RUN_TILE_STATIC_THREAT &&
-                col_forecast_action_is_run_tile(action_idx)) {
-            if (col_forecast_action_rollout_writes_no_threats(
-                    s,
-                    base_npcs,
-                    forecast_slots,
-                    forecast_slot_count,
-                    action,
-                    horizon)) {
-                continue;
-            }
-            col_forecast_static_threat_action(
-                s, base_npcs, forecast_slots, forecast_slot_count, action, summary);
-            col_step_out_forecast_finalize_action(action, horizon);
-            continue;
-        }
         col_forecast_action_rollout(
             s,
             base_npcs,
@@ -1499,11 +1420,10 @@ static void col_build_chase_action_threat_forecasts(
 static void col_build_step_out_forecast_horizon_mode(
     const ColosseumState* s,
     ColoStepOutForecast* out,
-    int horizon,
-    int run_tile_mode
+    int horizon
 ) {
     col_build_step_out_forecast_horizon_mode_summary(
-        s, out, NULL, horizon, run_tile_mode);
+        s, out, NULL, horizon);
 }
 
 static int col_write_step_out_forecast_obs_summary(
@@ -1536,5 +1456,5 @@ static void col_build_step_out_forecast_ctx(
     ColoStepOutForecast* out
 ) {
     col_build_step_out_forecast_horizon_mode(
-        s, out, COLO_STEP_OUT_FORECAST_HORIZON, COLO_FORECAST_RUN_TILE_FULL);
+        s, out, COLO_STEP_OUT_FORECAST_HORIZON);
 }

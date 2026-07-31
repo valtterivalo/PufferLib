@@ -259,8 +259,7 @@ static void exact_capture(
 
     ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
     col_build_step_out_forecast_horizon_mode_summary(
-        s, &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON,
-        ctx->config.forecast_run_tile_mode);
+        s, &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON);
     int fi = col_write_step_out_forecast_obs_summary(
         &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON, forecast_obs, 0);
     assert(fi == COLO_STEP_OUT_FORECAST_OBS_SIZE);

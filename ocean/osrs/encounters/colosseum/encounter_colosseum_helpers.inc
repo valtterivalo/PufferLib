@@ -297,7 +297,6 @@ static ColConfig col_default_config(void) {
         .step_out_forecast_obs_enabled = 1,
         .threat_field_obs_enabled = 1,
         .forecast_horizon = COLO_STEP_OUT_FORECAST_HORIZON,
-        .forecast_run_tile_mode = COLO_FORECAST_RUN_TILE_FULL,
         .mask_inventory_heads = 0,
         .action_debug_log = col_default_action_debug_log(),
         .late_start_state_mode = 2,

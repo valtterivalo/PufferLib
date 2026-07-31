@@ -83,14 +83,6 @@ static void col_put_int_ctx(
         }
         ctx->config.forecast_horizon = value;
     }
-    else if (strcmp(key, "forecast_run_tile_mode") == 0) {
-        if (value < 0 || value > COLO_FORECAST_RUN_TILE_STATIC_THREAT) {
-            fprintf(stderr, "colosseum: forecast_run_tile_mode must be 0..%d, got %d\n",
-                COLO_FORECAST_RUN_TILE_STATIC_THREAT, value);
-            abort();
-        }
-        ctx->config.forecast_run_tile_mode = value;
-    }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
             fprintf(stderr, "colosseum: loadout_profile_mode must be 0..2, got %d\n", value);
