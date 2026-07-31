@@ -70,6 +70,53 @@ static void col_step_out_forecast_landing_selftest(void) {
         ENCOUNTER_MOVE_ACTIONS);
 }
 
+static void col_static_los_table_selftest(void) {
+    col_build_static_arena();
+    for (int x0 = COLO_ARENA_MIN_X; x0 <= COLO_ARENA_MAX_X; x0++) {
+        for (int y0 = COLO_ARENA_MIN_Y; y0 <= COLO_ARENA_MAX_Y; y0++) {
+            for (int x1 = COLO_ARENA_MIN_X; x1 <= COLO_ARENA_MAX_X; x1++) {
+                for (int y1 = COLO_ARENA_MIN_Y; y1 <= COLO_ARENA_MAX_Y; y1++) {
+                    int table = col_static_los_get(x0, y0, x1, y1);
+                    int slow = col_tiles_have_los_reference_slowpath(x0, y0, x1, y1);
+                    if (table != slow) {
+                        fprintf(stderr,
+                            "colosseum LoS table mismatch (%d,%d)->(%d,%d): table=%d slow=%d\n",
+                            x0, y0, x1, y1, table, slow);
+                        abort();
+                    }
+                }
+            }
+        }
+    }
+    printf("colosseum LoS table selftest PASS: %u pairs\n",
+        (unsigned)COLO_STATIC_LOS_TABLE_BITS);
+}
+
+static void col_static_footprint_table_selftest(void) {
+    col_build_static_arena();
+    int checks = 0;
+    int min_x = COLO_STATIC_FOOTPRINT_MIN_X - COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int min_y = COLO_STATIC_FOOTPRINT_MIN_Y - COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int max_x = COLO_STATIC_FOOTPRINT_MAX_X + COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    int max_y = COLO_STATIC_FOOTPRINT_MAX_Y + COLO_STATIC_FOOTPRINT_MAX_SIZE;
+    for (int size = 1; size <= COLO_STATIC_FOOTPRINT_MAX_SIZE; size++) {
+        for (int x = min_x; x <= max_x; x++) {
+            for (int y = min_y; y <= max_y; y++) {
+                int table = col_static_footprint_blocked_lookup(x, y, size);
+                int slow = col_static_footprint_blocked_reference_slowpath(x, y, size);
+                if (table != slow) {
+                    fprintf(stderr,
+                        "colosseum footprint table mismatch (%d,%d) size=%d: table=%d slow=%d\n",
+                        x, y, size, table, slow);
+                    abort();
+                }
+                checks++;
+            }
+        }
+    }
+    printf("colosseum footprint table selftest PASS: %d checks\n", checks);
+}
+
 #define col_init_context_typed(ctx_ptr) do { \
     col_init_context_typed(ctx_ptr); \
     (ctx_ptr)->config.late_start_state_mode = 0; \
