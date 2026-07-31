@@ -1678,8 +1678,8 @@ static void col_memo_loadout_stats(
         }
     }
 
-    static EncounterLoadoutStats overflow_stats;
-    static OsrsEquipmentEffectProfile overflow_effects;
+    static OSRS_THREAD_LOCAL EncounterLoadoutStats overflow_stats;
+    static OSRS_THREAD_LOCAL OsrsEquipmentEffectProfile overflow_effects;
     encounter_compute_loadout_stats(
         equipment, style, prayer, current_att_level, fight_style,
         spell_base_damage, &overflow_stats);
