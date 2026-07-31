@@ -1544,7 +1544,6 @@ typedef struct {
     const CollisionMap* collision_map;
     int world_offset_x;
     int world_offset_y;
-    Log* log;
     const HumanCommand* human_commands;
     int human_command_count;
     int human_command_mode;

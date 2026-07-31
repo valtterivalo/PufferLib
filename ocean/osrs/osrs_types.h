@@ -704,33 +704,6 @@ typedef struct Log {
     float post_healer_set_pressure_normal_sum;
     float action_mask_checks_normal_sum;
 
-    float hist_score_bank[8];
-    float hist_n_bank[8];
-
-    float colo_pray_faced_by_type[12];
-    float colo_pray_correct_by_type[12];
-    float colo_offpray_damage_by_type[12];
-    float colo_total_damage_by_type[12];
-
-    float colo_death_by_type[12];
-    float colo_death_fatal_damage;
-
-    float colo_offpray_damage_conflict;
-    float colo_offpray_damage_solo;
-    float colo_death_on_conflict_tick;
-
-    float colo_death_dmg_unprayable;
-    float colo_death_dmg_offpray;
-    float colo_death_dmg_prayed;
-    float colo_death_dmg_self;
-    float colo_death_heal_remaining;
-    float colo_farm_damage;
-    float colo_typeless_damage_by_type[12];
-    float colo_outcome_score;
-    float colo_min_sol_hp;
-
-    float colo_max_depth_reached;
-
     float inf_death_wave_hist[6];
     float inf_death_brew_doses_hist[6];
     float inf_death_restore_doses_hist[6];

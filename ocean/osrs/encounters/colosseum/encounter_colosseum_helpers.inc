@@ -325,11 +325,9 @@ static void col_destroy_context(EncounterContext* context) {
 
 static ColosseumContext* col_legacy_context(void) {
     static ColosseumContext ctx;
-    static Log log;
     static int initialized = 0;
     if (!initialized) {
         col_init_context_typed(&ctx);
-        ctx.log = &log;
         initialized = 1;
     }
     return &ctx;
