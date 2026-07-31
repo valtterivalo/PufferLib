@@ -61,6 +61,9 @@ static float col_current_wave_score_progress(const ColosseumState* s) {
     return progress;
 }
 
+/* A loss caps here, a win scores 1.0. At the old 0.99 a policy that always reached
+   Sol's last phase and never won scored ~0.973, so winning was worth under 3% and the
+   sweep optimised depth instead. */
 #define COLO_SCORE_LOSS_CEILING 0.5f
 
 static float col_episode_outcome_score(const ColosseumState* s) {
