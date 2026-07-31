@@ -3766,6 +3766,109 @@ static void test_javelin_skyfall_no_defence_gate(void) {
         s.player.current_hitpoints == 99 && jv->skyfall_pending == 0);
 }
 
+#define SKYFALL_DODGE_FORCED_DAMAGE 38
+
+static void skyfall_dodge_init_state(
+    ColosseumState* s,
+    ColosseumContext* ctx,
+    uint32_t seed
+) {
+    col_init_context_typed(ctx);
+    ctx->config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY;
+    ctx->config.beginner_loadout_fraction = 0.0f;
+    memset(s, 0, sizeof(*s));
+    col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
+    geo_clear_npcs(s);
+    s->wave_spawn_delay = 0;
+    s->wave_ready_delay = 0;
+    s->modifiers.draft_pending = 0;
+    s->warband_cycle_anchor = s->tick;
+    s->player.x = 17;
+    s->player.y = 16;
+    s->player.current_hitpoints = 99;
+    s->player.attack_timer = 99;
+    s->player_dest_x = -1;
+    s->player_dest_y = -1;
+    col_apply_weapon_set(s, COLO_GEAR_RANGED);
+    encounter_pending_hit_queue_clear(&s->player_pending_hits);
+    col_rebuild_player_collision_flags(s);
+    col_init_npc(s, 0, COLO_JAVELIN_COLOSSUS, 20, 16);
+    s->npcs[0].stun_timer = 0;
+    s->npcs[0].frozen_ticks = 0;
+}
+
+static int skyfall_dodge_move_action_off_tile(
+    const ColosseumState* s,
+    int marked_x,
+    int marked_y
+) {
+    for (int action = 1; action < ENCOUNTER_MOVE_ACTIONS; action++) {
+        ColosseumState tmp = *s;
+        int moved = encounter_move_to_target(
+            &tmp.player,
+            ENCOUNTER_MOVE_TARGET_DX[action],
+            ENCOUNTER_MOVE_TARGET_DY[action],
+            col_player_walkable,
+            &tmp);
+        if (moved > 0 && (tmp.player.x != marked_x || tmp.player.y != marked_y))
+            return action;
+    }
+    assert(0 && "no move action leaves the marked tile");
+    return 0;
+}
+
+static int skyfall_dodge_damage_after_wait(int wait_visible_ticks) {
+    ColosseumContext ctx;
+    ColosseumState s;
+    int actions[COLO_NUM_ACTION_HEADS] = {0};
+    skyfall_dodge_init_state(&s, &ctx, 0x5100u + (uint32_t)wait_visible_ticks);
+
+    ColoJavelinState* jv = colo_npc_javelin(&s.npcs[0]);
+    jv->attack_count = 4;
+    s.npcs[0].attack_timer = 0;
+    col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
+    assert(jv->skyfall_pending == 1 &&
+        jv->skyfall_timer == COLO_JAVELIN_SKYFALL_DELAY);
+    jv->skyfall_damage = SKYFALL_DODGE_FORCED_DAMAGE;
+
+    int move_action = skyfall_dodge_move_action_off_tile(
+        &s, jv->skyfall_tile_x, jv->skyfall_tile_y);
+    int hp_before = s.player.current_hitpoints;
+
+    for (int i = 0; i < wait_visible_ticks; i++) {
+        memset(actions, 0, sizeof(actions));
+        col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
+    }
+
+    if (colo_npc_javelin(&s.npcs[0])->skyfall_pending) {
+        memset(actions, 0, sizeof(actions));
+        actions[COLO_HEAD_PRIMARY] = move_action;
+        col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
+    }
+
+    while (colo_npc_javelin(&s.npcs[0])->skyfall_pending) {
+        memset(actions, 0, sizeof(actions));
+        col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
+    }
+    return hp_before - s.player.current_hitpoints;
+}
+
+static void test_javelin_skyfall_dodge_lead_window(void) {
+    printf("test_javelin_skyfall_dodge_lead_window\n");
+    int dodged_all = 1;
+    for (int wait = 0; wait < COLO_JAVELIN_SKYFALL_DELAY - 1; wait++) {
+        int visible_timer = COLO_JAVELIN_SKYFALL_DELAY - wait;
+        if (skyfall_dodge_damage_after_wait(wait) != 0) {
+            printf("  skyfall not dodged at visible timer %d\n", visible_timer);
+            dodged_all = 0;
+        }
+    }
+    CHECK("moving with skyfall timer >= 2 dodges the marked tile", dodged_all);
+    CHECK("moving with skyfall timer == 1 is too late",
+        skyfall_dodge_damage_after_wait(COLO_JAVELIN_SKYFALL_DELAY - 1) ==
+            SKYFALL_DODGE_FORCED_DAMAGE);
+}
+
 static int sol_setup(ColosseumState* s, ColosseumContext* ctx, uint32_t seed) {
     col_init_context_typed(ctx);
     ctx->config.start_wave = 11;
@@ -9350,6 +9453,7 @@ int main(void) {
     test_manticore_shared_wave_cycle();
     test_manticore_stagger_overlap_fidelity();
     test_javelin_skyfall_no_defence_gate();
+    test_javelin_skyfall_dodge_lead_window();
     test_sol_generic_observation_signals_are_neutral();
     test_sol_hazard_action_observation_contract();
     test_primary_environment_hazard_action_observation_contract();
