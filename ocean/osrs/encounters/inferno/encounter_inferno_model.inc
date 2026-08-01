@@ -395,6 +395,8 @@ typedef struct {
         InfHealerState healer;
     } type_state;
 
+    EncounterPendingHitQueue pending_hits;
+
     int death_ticks;
 
     int aggro_target;
@@ -410,11 +412,6 @@ typedef struct {
     int hit_was_successful_this_tick;
     int hit_spell_type;
     int spawn_blob_splits_on_removal;
-
-    /* Trails every scalar: the step-out forecast reads death_ticks and aggro_target once
-     * per move action per NPC, and with the queue in the middle those sit six cache lines
-     * away from active/hp/stun_timer. Keeping it last makes the hot fields contiguous. */
-    EncounterPendingHitQueue pending_hits;
 } InfNPC;
 
 static inline int inf_npc_is_healer(InfNPCType type) {
