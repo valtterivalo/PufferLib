@@ -531,65 +531,6 @@ static int col_sol_premove_molten_hit(const ColosseumState* s) {
     return 0;
 }
 
-static int col_sol_earliest_hit_tick(int current, int candidate) {
-    if (candidate <= 0 || candidate > COLO_STEP_OUT_FORECAST_HORIZON) return current;
-    if (current == 0 || candidate < current) return candidate;
-    return current;
-}
-
-static int col_sol_aoe_action_hit_tick(const ColosseumState* s, int x, int y) {
-    if (s->sol.aoe_attack == COLO_SOL_AOE_NONE) return 0;
-    int hit_tick = COLO_SOL_AOE_DAMAGE_AGE - (s->sol.aoe_age + 1);
-    if (hit_tick <= 0 || hit_tick > COLO_STEP_OUT_FORECAST_HORIZON) return 0;
-    return col_sol_aoe_tile_is_hazard(&s->sol, x, y) ? hit_tick : 0;
-}
-
-/* Fraction of a mechanic's own telegraph that has already elapsed. Hazards whose
-   wind-up is longer than the generic step-out horizon must pass their own depth
-   here, or the horizon reports the opening ticks of the wind-up as no hazard. */
-static float col_hazard_telegraph_urgency(int hit_tick, int telegraph) {
-    if (hit_tick <= 0) return 0.0f;
-    assert(telegraph > 0);
-    assert(hit_tick <= telegraph);
-    return (float)(telegraph - hit_tick + 1) / (float)telegraph;
-}
-
-/* The laser telegraphs for LASER_FREEZE - LASER_DAMAGE_FREEZE ticks, which is longer
-   than the step-out forecast horizon. Filtering it through the generic horizon reported
-   an arming volley as no hazard at all until it was already 2 ticks in, so the channel
-   carries the laser's own telegraph depth instead. */
-#define COLO_SOL_LASER_TELEGRAPH \
-    (COLO_SOL_LASER_FREEZE - COLO_SOL_LASER_DAMAGE_FREEZE)
-
-static float col_sol_laser_urgency(int hit_tick) {
-    return col_hazard_telegraph_urgency(hit_tick, COLO_SOL_LASER_TELEGRAPH);
-}
-
-static int col_sol_laser_action_hit_tick(const ColosseumState* s, int x, int y) {
-    int earliest = 0;
-    for (int k = 0; k < s->sol.crystal_count; k++) {
-        const ColoSolCrystal* crystal = &s->sol.crystals[k];
-        if (!crystal->active || !col_sol_crystal_hits_tile(crystal, x, y)) continue;
-        int hit_tick = crystal->firing_freeze - COLO_SOL_LASER_DAMAGE_FREEZE;
-        if (hit_tick <= 0 || hit_tick > COLO_SOL_LASER_TELEGRAPH) continue;
-        if (earliest == 0 || hit_tick < earliest) earliest = hit_tick;
-    }
-    return earliest;
-}
-
-static int col_sol_molten_action_hit_tick(const ColosseumState* s, int x, int y) {
-    if (col_sol_molten_sand_at(&s->sol, x, y)) return 1;
-    int earliest = 0;
-    for (int k = 0; k < COLO_SOL_BEAM_MAX; k++) {
-        const ColoSolBeam* beam = &s->sol.beams[k];
-        if (!beam->active || beam->x != x || beam->y != y) continue;
-        int hit_tick = beam->ticks_to_pool - 1;
-        if (hit_tick < 1) hit_tick = 1;
-        earliest = col_sol_earliest_hit_tick(earliest, hit_tick);
-    }
-    return earliest;
-}
-
 static int col_premove_molten_forecast_needed(
     const ColosseumState* s
 ) {

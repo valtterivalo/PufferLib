@@ -34,8 +34,6 @@ static inline int col_wave_entry_delay_ticks(int target_wave) {
 #define COLO_MAX_NPCS 24
 #define COLO_OBS_NPCS COLO_MAX_NPCS
 
-#define COLO_STEP_OUT_FORECAST_HORIZON 4
-
 typedef enum {
     COLO_FORECAST_BEHAVIOR_STANDARD = 0,
     COLO_FORECAST_BEHAVIOR_WARBAND,

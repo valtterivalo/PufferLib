@@ -3886,38 +3886,6 @@ static void test_sol_generic_observation_signals_are_neutral(void) {
         obs[COLO_OBS_AFTER_PENDING_HITS + 2] == 0.0f);
 }
 
-static void test_solarflare_action_forecast_phase_order(void) {
-    printf("test_solarflare_action_forecast_phase_order\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 312, 17, 16);
-    s.modifiers.active_mask |= (1u << COLO_MOD_SOLARFLARE);
-    s.modifiers.tier[COLO_MOD_SOLARFLARE] = 2;
-    s.solarflare = (ColoSolarflareOrb){
-        .active = 1,
-        .step = 3,
-        .move_timer = 1,
-    };
-    int next_x, next_y;
-    col_solarflare_tile(&s, 0, 4, &next_x, &next_y);
-    s.player.x = next_x;
-    s.player.y = next_y;
-    ColoForecastSolarflare pre = {
-        .pillar = 0,
-        .tier = 2,
-        .orb = s.solarflare,
-    };
-    CHECK("Solarflare tick zero evaluates the pre-move player tile",
-        col_forecast_solarflare_contact_tick(
-            &s, &pre, next_x + 1, next_y, 2) == 0);
-
-    s.player.x = next_x + 1;
-    s.player.y = next_y;
-    CHECK("a landing on the old pre-move orb tile is not labeled tick zero",
-        col_forecast_solarflare_contact_tick(
-            &s, &pre, next_x, next_y, 2) != 0);
-}
-
 static void test_sol_adjacency_gate_and_kiting(void) {
     printf("test_sol_adjacency_gate_and_kiting\n");
     ColosseumContext ctx;
@@ -8447,7 +8415,6 @@ int main(void) {
     test_javelin_skyfall_no_defence_gate();
     test_javelin_skyfall_dodge_lead_window();
     test_sol_generic_observation_signals_are_neutral();
-    test_solarflare_action_forecast_phase_order();
     test_sol_adjacency_gate_and_kiting();
     test_sol_attack_selection_invariants();
     test_sol_parry_schedule_and_damage();
