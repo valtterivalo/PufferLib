@@ -5,13 +5,14 @@
  * half and a sim regression landed in the same commit is invisible. This probe is
  * the half that must not move when the observation is recut.
  *
- * Covers the whole ColosseumState with the obs memo caches zeroed (they are derived
- * and their size tracks the obs), plus the full action mask. */
+ * Covers the whole ColosseumState except the obs memo caches, which are derived and
+ * whose SIZE tracks the obs, plus the full 452-float action mask. */
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 
@@ -48,18 +49,18 @@ typedef struct {
  * determinism fixes. Regenerate with --print only when a SIMULATION change is
  * intended, never to make an observation edit pass. */
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x6275317f96d2047dULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x45e93262b17998d0ULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x8519d08310e0c1deULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0xd13d1e9571ec270dULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0x3a1ccf6e45ce4401ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xd24e0b46eebcb45cULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x3de9958e7bc72b44ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xa3ed6cfd43287c30ULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0xae207c5c3d9911acULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0xf829b5ecb41d7933ULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x4eb1681f6cbd04b5ULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0xe92dc857d82bcf0aULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x1b63fd37134721bdULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x155c06df3bd0db90ULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x2568826d6ae236deULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0xb42fc087a322b74dULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xd2c7d0fd3994e301ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0x9008d847b737b95cULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x4b0144154d35a204ULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xebc689a710acb330ULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x451da4ccf2c922acULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0xd74df72718a523b3ULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x45d610ceb99a3d35ULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x8cf17ed4fba85bcaULL},
 };
 
 static void fill_actions(
@@ -75,14 +76,15 @@ static void fill_actions(
 }
 
 static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask) {
-    /* Copy so the memo caches can be zeroed without disturbing the live run. They
-     * are derived from state and their width tracks the observation, so hashing
-     * them would couple this probe to exactly what it exists to be independent of. */
-    ColosseumState* c = (ColosseumState*)malloc(sizeof(*c));
-    memcpy(c, s, sizeof(*c));
-    memset(&c->obs_memos, 0, sizeof(c->obs_memos));
-    h = fnv_bytes(h, c, sizeof(*c));
-    free(c);
+    /* Hash AROUND obs_memos rather than zeroing it. Zeroing decouples the memo
+     * contents but not its length, and FNV-1a multiplies once per byte, so the
+     * struct size stays in the digest and shrinking a memo cache moves every hash.
+     * That is a false alarm on exactly the edits this probe exists to clear. */
+    const uint8_t* base = (const uint8_t*)s;
+    size_t memo_off = offsetof(ColosseumState, obs_memos);
+    size_t memo_end = memo_off + sizeof(s->obs_memos);
+    h = fnv_bytes(h, base, memo_off);
+    h = fnv_bytes(h, base + memo_end, sizeof(*s) - memo_end);
     for (int i = 0; i < COLO_ACTION_MASK_SIZE; i++) h = fnv_f32(h, mask[i]);
     return h;
 }
