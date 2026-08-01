@@ -76,7 +76,7 @@ typedef struct {
 /* Replicated per NPC per env and streamed every step, so the width is load-bearing for
  * throughput, not tidiness. damage trails the int8 run so the record packs to 12 with no
  * padding; C++ also requires designated initializers in this order, so keep it last. */
-_Static_assert(sizeof(EncounterPendingHit) == 12, "pending hit record must stay 12 bytes");
+static_assert(sizeof(EncounterPendingHit) == 12, "pending hit record must stay 12 bytes");
 
 typedef struct {
     EncounterPendingHit hits[ENCOUNTER_MAX_PENDING_HITS];
