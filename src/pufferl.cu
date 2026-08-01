@@ -2866,6 +2866,9 @@ void puf_dashboard_print(Ini* ini, PuffeRL* p, Dict* log, int epoch) {
     puf_panel_row("Uptime", uptime, "  Model", train_model_t, train_model_pct, "kl", loss_kl);
     puf_panel_row("To go", remaining, "  Misc", misc_t, misc_pct, "clipfrac", loss_clipfrac);
     puf_dashboard_blank();
+#ifdef PUF_ENV_PROFILE_REPORT
+    PUF_ENV_PROFILE_REPORT();
+#endif
 
     int user_rows = PUF_DASH_MAX_USER_ROWS;
     if (puf_dashboard_tty) {

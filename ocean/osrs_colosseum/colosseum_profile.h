@@ -26,6 +26,10 @@
     X(COLO_PROF_OBS_THREAT_LOS,         "obs_threat_los") \
     X(COLO_PROF_OBS_THRALL_DC,          "obs_thrall_dc") \
     X(COLO_PROF_OBS_SPAWN,              "obs_spawn") \
+    X(COLO_PROF_STEP_PRE_PLAYER,        "step_pre_player") \
+    X(COLO_PROF_STEP_PLAYER,            "step_player") \
+    X(COLO_PROF_STEP_REWARD,            "step_reward") \
+    X(COLO_PROF_STEP_WAVE_LOGIC,        "step_wave_logic") \
     X(COLO_PROF_STEP_NPC_TOTAL,         "step_npc_total") \
     X(COLO_PROF_STEP_SOL_BOSS,          "step_sol_boss") \
     X(COLO_PROF_STEP_JAVELIN_SKYFALL,   "step_javelin_skyfall") \

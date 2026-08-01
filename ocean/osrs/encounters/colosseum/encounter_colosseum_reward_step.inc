@@ -329,17 +329,31 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     ColosseumState* s = (ColosseumState*)state;
     ColosseumContext* ctx = context ? (ColosseumContext*)context : col_legacy_context();
     if (s->episode_over) return;
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled =
+        COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
 
     ColoPrePlayerPhase phase =
         col_advance_pre_player_phase_ctx(s, ctx, actions);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_PRE_PLAYER);
+#endif
     if (!phase.player_phase_reached) return;
 
     int can_player_attack = !phase.in_wave_gap;
     int px = s->player.x, py = s->player.y;
     col_tick_player_ctx(s, ctx, actions, can_player_attack);
     s->tick_scratch.player_moved = (s->player.x != px || s->player.y != py) ? 1 : 0;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_PLAYER);
+#endif
 
     s->reward = col_compute_reward_ctx(s, ctx);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_REWARD);
+#endif
 
     int all_dead = 1;
     int wave_cleared = 0;
@@ -399,6 +413,9 @@ finish_step:
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
     }
     s->episode_return += s->reward;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_STEP_WAVE_LOGIC);
+#endif
 }
 
 static void col_step(EncounterState* state, const int* actions) {

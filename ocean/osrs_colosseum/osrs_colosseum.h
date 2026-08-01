@@ -7,6 +7,11 @@
 
 #include "pufferenv.h"
 
+/* Before the encounter header, so the COLO_PROFILE_MARK sites inside it compile in.
+ * Every mark is a branch on a static int and does no work until
+ * PUFFER_COLOSSEUM_PROFILE is set, so the training path pays a predictable branch. */
+#include "colosseum_profile.h"
+
 #define Log OsrsSharedLog
 #include "../osrs/encounters/encounter_colosseum.h"
 #undef Log
@@ -254,6 +259,11 @@ void puf_reset(Env* env) {
 }
 
 void puf_step(Env* env) {
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled = COLO_PROFILE_ENABLED();
+    double col_prof_step_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+    double col_prof_t0 = col_prof_step_t0;
+#endif
     Agent* agent = &env->agents[0];
     for (int i = 0; i < NUM_ATNS; i++) {
         env->acts_staging[i] = (int)agent->actions[i];
@@ -269,15 +279,31 @@ void puf_step(Env* env) {
             anneal_start + (1.0f - anneal_start) * frac;
     }
 
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_C_ACTIONS);
+#endif
+
     ENCOUNTER_COLOSSEUM.step(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), env->acts_staging);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_C_ENCOUNTER_STEP);
+#endif
 
     float* obs = (float*)agent->observations;
     ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_C_WRITE_OBS);
+#endif
     col_write_action_mask_bytes(env, agent->action_mask);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_C_WRITE_MASK);
+#endif
 
     agent->rewards[0] = ENCOUNTER_COLOSSEUM.get_reward(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     int is_terminal = ENCOUNTER_COLOSSEUM.is_terminal(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
     agent->terminals[0] = (float)is_terminal;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
+#endif
 
     if (env->state.start_wave == env->config_start_wave) {
         col_log_dpt_sample(
@@ -348,11 +374,42 @@ void puf_step(Env* env) {
             env->log.death_heal_remaining += clog->death_heal_remaining;
             env->log.farm_damage += clog->farm_damage;
         }
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
+#endif
         ENCOUNTER_COLOSSEUM.reset(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), 0);
         ENCOUNTER_COLOSSEUM.write_obs(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env), obs);
         col_write_action_mask_bytes(env, agent->action_mask);
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_MARK(COLO_PROF_C_RESET);
+#endif
     }
+#ifdef COLO_PROFILE_ENABLED
+    if (col_prof_enabled)
+        COLO_PROFILE_ADD(COLO_PROF_C_STEP_TOTAL, COLO_PROFILE_NOW_MS() - col_prof_step_t0);
+#endif
 }
+
+#ifdef COLO_PROFILE_ENABLED
+#define PUF_ENV_PROFILE_REPORT puf_env_profile_report
+void puf_env_profile_report(void) {
+    int n = colosseum_env_profile_count();
+    if (n <= 0) return;
+
+    double v[COLO_PROF_COUNT];
+    for (int i = 0; i < n; i++) v[i] = colosseum_env_profile_read_reset_ms(i);
+    double total = v[COLO_PROF_C_STEP_TOTAL];
+    if (total <= 0.0) return;
+
+    printf("\nenv profile (ms across all worker threads, %% of c_step_total)\n");
+    for (int i = 0; i < n; i++) {
+        if (v[i] <= 0.0) continue;
+        printf("  %-24s %10.1f  %5.1f%%\n",
+            colosseum_env_profile_name(i), v[i], 100.0 * v[i] / total);
+    }
+    fflush(stdout);
+}
+#endif
 
 void puf_render(Env* env) {
     (void)env;
