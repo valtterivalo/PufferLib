@@ -1039,9 +1039,6 @@ typedef struct {
 
 #define COLO_BEST_GEAR_CACHE_WAYS 12
 
-#define COLO_WEAPON_CHOICE_OBS_CACHE_WAYS 8
-#define COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS (2 * OSRS_INVENTORY_SIZE + 2)
-
 #define COLO_INVENTORY_OBS_CACHE_WAYS 8
 #define COLO_INVENTORY_OBS_CACHE_FLOATS \
     (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT + \
@@ -1055,10 +1052,6 @@ typedef struct {
     uint64_t best_gear_sig[COLO_BEST_GEAR_CACHE_WAYS];
     int best_gear_valid[COLO_BEST_GEAR_CACHE_WAYS];
     int best_gear_next;
-    float weapon_choice[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS][COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
-    uint64_t weapon_choice_sig[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
-    int weapon_choice_valid[COLO_WEAPON_CHOICE_OBS_CACHE_WAYS];
-    int weapon_choice_next;
     float inventory[COLO_INVENTORY_OBS_CACHE_WAYS][COLO_INVENTORY_OBS_CACHE_FLOATS];
     uint64_t inventory_sig[COLO_INVENTORY_OBS_CACHE_WAYS];
     int inventory_valid[COLO_INVENTORY_OBS_CACHE_WAYS];

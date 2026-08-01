@@ -5750,8 +5750,8 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     s.divine_ranged_timer = 234;
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot version is v21 for exact NPC death telemetry",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 21u);
+    CHECK("snapshot version is v22 for exact NPC death telemetry",
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 22u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -6563,9 +6563,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2618", COLO_NUM_OBS == 2618);
-    CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
-        COLO_WEAPON_CHOICE_OBS_SIZE == 58);
+    CHECK("obs width is 2560", COLO_NUM_OBS == 2560);
     CHECK("inventory block has 560 features (28 cells x 20 compact)",
         COLO_INVENTORY_OBS_SIZE == 560);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
@@ -6573,7 +6571,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier block has 60 features", COLO_MODIFIER_OBS_SIZE == 60);
     CHECK("NPC slots have 34 features after dropping the redundant style one-hot",
         COLO_FEATURES_PER_NPC == 34);
-    CHECK("snapshot version is v21", COLO_SNAPSHOT_VERSION == 21u);
+    CHECK("snapshot version is v22", COLO_SNAPSHOT_VERSION == 22u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",
@@ -6593,7 +6591,7 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
-        COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE +
+        COLO_SPAWN_OBS_SIZE +
         COLO_THREAT_FIELD_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
 
@@ -7244,7 +7242,7 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
 
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
-    CHECK("snapshot frame is v21", snap.version == 21u);
+    CHECK("snapshot frame is v22", snap.version == 22u);
 
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
@@ -8739,7 +8737,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2618);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2560);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -9010,8 +9008,8 @@ static void test_inventory_obs_memo(void) {
         memcmp(served_block, &obs[COLO_OBS_AFTER_PLAYER], sizeof(served_block)) == 0);
 }
 
-static void test_best_gear_and_weapon_choice_cache_signatures(void) {
-    printf("test_best_gear_and_weapon_choice_cache_signatures\n");
+static void test_best_gear_cache_signatures(void) {
+    printf("test_best_gear_cache_signatures\n");
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
@@ -9036,7 +9034,6 @@ static void test_best_gear_and_weapon_choice_cache_signatures(void) {
     CHECK("speedrun kit has two weapon cells", weapon_count == 2);
 
     uint64_t best_gear_signature = col_best_gear_cache_signature(&s);
-    uint64_t weapon_choice_signature = col_weapon_choice_obs_signature(&s);
     const ColoBestGear (*best_gear)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(&s);
     int best_gear_next = s.obs_memos.best_gear_next;
 
@@ -9044,8 +9041,6 @@ static void test_best_gear_and_weapon_choice_cache_signatures(void) {
     s.inventory_cells[non_gear_cell] = osrs_inventory_cell_empty();
     CHECK("best-gear key ignores non-gear cells",
         col_best_gear_cache_signature(&s) == best_gear_signature);
-    CHECK("weapon-choice key ignores non-weapon cells",
-        col_weapon_choice_obs_signature(&s) == weapon_choice_signature);
     CHECK("non-gear change reuses best-gear table",
         col_get_best_gear_table(&s) == best_gear &&
         s.obs_memos.best_gear_next == best_gear_next);
@@ -9056,23 +9051,9 @@ static void test_best_gear_and_weapon_choice_cache_signatures(void) {
     s.inventory_cells[weapon_cells[1]] = tmp;
     CHECK("best-gear key canonicalizes weapon candidate order",
         col_best_gear_cache_signature(&s) == best_gear_signature);
-    CHECK("weapon-choice key preserves per-cell weapon order",
-        col_weapon_choice_obs_signature(&s) != weapon_choice_signature);
     CHECK("weapon reorder reuses best-gear table",
         col_get_best_gear_table(&s) == best_gear &&
         s.obs_memos.best_gear_next == best_gear_next);
-
-    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 10, 10);
-    osrs_interaction_set(&s.interaction, manti);
-    static float obs[COLO_NUM_OBS];
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    float served_block[COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
-    memcpy(served_block, &obs[COLO_OBS_AFTER_THRALL_DC], sizeof(served_block));
-    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("canonical best-gear table preserves weapon-choice observation",
-        memcmp(served_block, &obs[COLO_OBS_AFTER_THRALL_DC],
-            sizeof(served_block)) == 0);
 
     tmp = s.inventory_cells[weapon_cells[0]];
     s.inventory_cells[weapon_cells[0]] = s.inventory_cells[weapon_cells[1]];
@@ -9082,84 +9063,11 @@ static void test_best_gear_and_weapon_choice_cache_signatures(void) {
         col_best_gear_cache_signature(&s) != best_gear_signature);
 }
 
-static void test_weapon_choice_obs_rank_and_farm_cap(void) {
-    printf("test_weapon_choice_obs_rank_and_farm_cap\n");
+static void test_farm_safe_damage_cap(void) {
+    printf("test_farm_safe_damage_cap\n");
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
-
-    static float obs[COLO_NUM_OBS];
-    const int dpt_base = COLO_OBS_AFTER_THRALL_DC;
-    const int spec_base = dpt_base + COLO_CELL_WEAPON_DPT_OBS_SIZE;
-    const int wielded_base = spec_base + COLO_CELL_SPEC_OBS_SIZE;
-
-    int cell_tentacle = colo_test_cell_of_named_item(&s, "Abyssal tentacle");
-    int cell_claws = colo_test_cell_of_named_item(&s, "Dragon claws");
-    int cell_tbow = colo_test_cell_of_named_item(&s, "Twisted bow");
-    CHECK("speedrun kit carries tentacle+claws+tbow in cells",
-        cell_tentacle >= 0 && cell_claws >= 0 && cell_tbow >= 0);
-
-    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 10, 10);
-    osrs_interaction_set(&s.interaction, manti);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("3x3: wielded scythe DPT outranks the tentacle cell",
-        obs[wielded_base] > obs[dpt_base + cell_tentacle]);
-    CHECK("3x3: claws cell ranks below tentacle cell",
-        obs[dpt_base + cell_claws] < obs[dpt_base + cell_tentacle]);
-    CHECK("3x3: wielded scythe is ~the best achievable (ratio ~1)",
-        obs[wielded_base + 1] > 0.95f);
-    CHECK("claws cell carries the spec bit", obs[spec_base + cell_claws] == 1.0f);
-    CHECK("tentacle cell carries no spec bit", obs[spec_base + cell_tentacle] == 0.0f);
-
-    int serpent = col_spawn_npc_at(&s, COLO_SERPENT_SHAMAN, 20, 10);
-    osrs_interaction_set(&s.interaction, serpent);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("1x1: tbow cell outranks the wielded scythe",
-        obs[dpt_base + cell_tbow] > obs[wielded_base]);
-    CHECK("1x1: wielded-vs-best ratio exposes the scythe gap",
-        obs[wielded_base + 1] < 0.85f);
-
-    osrs_interaction_clear(&s.interaction);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("no target: cell DPT + wielded floats are zero",
-        obs[dpt_base + cell_tentacle] == 0.0f && obs[wielded_base] == 0.0f &&
-        obs[wielded_base + 1] == 0.0f);
-    CHECK("no target: spec bits stay up (target-independent)",
-        obs[spec_base + cell_claws] == 1.0f);
-
-    osrs_interaction_set(&s.interaction, manti);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    float pre_drain_tentacle = obs[dpt_base + cell_tentacle];
-    float pre_drain_tbow = obs[dpt_base + cell_tbow];
-    float pre_drain_wielded = obs[wielded_base];
-    s.npcs[manti].def_drained = COLO_NPC_STATS[COLO_MANTICORE].def_level;
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("def drain raises the melee tentacle cell DPT (not a stale block)",
-        obs[dpt_base + cell_tentacle] > pre_drain_tentacle);
-    CHECK("def drain raises the ranged tbow cell DPT (not a stale block)",
-        obs[dpt_base + cell_tbow] > pre_drain_tbow);
-    CHECK("def drain raises the wielded DPT (not a stale block)",
-        obs[wielded_base] > pre_drain_wielded);
-
-    int cell_brew = -1;
-    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++)
-        if (s.inventory_cells[c].item_idx == ITEM_NONE) { cell_brew = c; break; }
-    CHECK("a gear-free cell exists to hold the brew", cell_brew >= 0);
-    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6685);
-    CHECK("4-dose brew seeded", s.inventory_cells[cell_brew].dose == 4);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6687);
-    CHECK("sip took a dose", s.inventory_cells[cell_brew].dose == 3);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    float served_block[COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS];
-    memcpy(served_block, &obs[dpt_base],
-           sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
-    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("memo-served weapon-choice block == fresh recompute after the sip",
-        memcmp(served_block, &obs[dpt_base],
-               sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS) == 0);
-    s.inventory_cells[cell_brew] = osrs_inventory_cell_empty();
 
     col_spawn_reinforcements(&s);
     int jaguar = -1;
@@ -9350,8 +9258,8 @@ int main(void) {
     test_move_action_no_corner_cut();
     test_modifier_draft_forces_pick();
     test_gear_and_boost_reward_signals();
-    test_best_gear_and_weapon_choice_cache_signatures();
-    test_weapon_choice_obs_rank_and_farm_cap();
+    test_best_gear_cache_signatures();
+    test_farm_safe_damage_cap();
     test_threat_field_obs();
     test_inventory_obs_memo();
 

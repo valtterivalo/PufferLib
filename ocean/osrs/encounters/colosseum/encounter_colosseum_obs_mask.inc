@@ -66,14 +66,6 @@ typedef enum {
 
 #define COLO_THRALL_DC_OBS_SIZE   6
 
-#define COLO_CELL_WEAPON_DPT_OBS_SIZE OSRS_INVENTORY_SIZE
-#define COLO_CELL_SPEC_OBS_SIZE       OSRS_INVENTORY_SIZE
-#define COLO_WIELDED_DPT_OBS_SIZE     2
-#define COLO_WEAPON_CHOICE_OBS_SIZE (COLO_CELL_WEAPON_DPT_OBS_SIZE + \
-    COLO_CELL_SPEC_OBS_SIZE + COLO_WIELDED_DPT_OBS_SIZE)
-static_assert(COLO_WEAPON_CHOICE_OBS_SIZE == COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS,
-    "weapon-choice obs cache float count must match the block size");
-
 #define COLO_SPAWN_PHASE_OBS_SIZE 2
 #define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
 #define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
@@ -92,7 +84,7 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
-    COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
+    COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
 
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
@@ -115,10 +107,8 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
-#define COLO_OBS_AFTER_WEAPON_CHOICE \
-    (COLO_OBS_AFTER_THRALL_DC + COLO_WEAPON_CHOICE_OBS_SIZE)
 #define COLO_OBS_AFTER_SPAWN \
-    (COLO_OBS_AFTER_WEAPON_CHOICE + COLO_SPAWN_OBS_SIZE)
+    (COLO_OBS_AFTER_THRALL_DC + COLO_SPAWN_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_FIELD \
     (COLO_OBS_AFTER_SPAWN + COLO_THREAT_FIELD_OBS_SIZE)
 
@@ -1873,128 +1863,6 @@ static void col_apply_bis_gear_oracle(ColosseumState* s) {
     col_apply_weapon_set(s, best_set);
 }
 
-static ColoWeaponSet col_weapon_set_for_item(uint8_t item) {
-    int item_style = get_item_attack_style(item);
-    if (item_style == 2) return COLO_GEAR_RANGED;
-    if (item_style == 3) return COLO_GEAR_MAGIC;
-    return COLO_GEAR_MELEE;
-}
-
-static uint64_t col_weapon_choice_obs_signature(ColosseumState* s) {
-    uint64_t h = col_best_gear_cache_signature(s);
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
-    for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
-        uint8_t item = s->inventory_cells[cell].item_idx;
-        uint8_t relevant_item = ITEM_NONE;
-        if (item != ITEM_NONE &&
-                (osrs_item_gear_slot(item) == GEAR_SLOT_WEAPON ||
-                    osrs_spec_cost(item) > 0))
-            relevant_item = item;
-        h = (h ^ (uint64_t)relevant_item) * 1099511628211ULL;
-    }
-    int has_target = 0, type = 0, def_drained = 0, size = 0;
-    int target = col_player_target_slot(s);
-    if (target >= 0 && target < COLO_MAX_NPCS) {
-        const ColoNPC* npc = &s->npcs[target];
-        if (col_npc_is_live_target(npc) && !col_type_is_hazard_entity(npc->type)) {
-            has_target = 1;
-            type = (int)npc->type;
-            def_drained = npc->def_drained;
-            size = npc->size;
-        }
-    }
-    const int target_fields[4] = { has_target, type, def_drained, size };
-    for (int k = 0; k < 4; k++)
-        h = (h ^ (uint64_t)(uint32_t)target_fields[k]) * 1099511628211ULL;
-    return h;
-}
-
-static void col_write_weapon_choice_obs(ColosseumState* s, float* obs, int* io) {
-    int i = *io;
-
-#ifdef COLO_PROFILE_ENABLED
-    if (COLO_PROFILE_ENABLED())
-        COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_REQUESTS, 1.0);
-#endif
-    ColoObsMemoCaches* memos = &s->obs_memos;
-    uint64_t sig = col_weapon_choice_obs_signature(s);
-    for (int w = 0; w < COLO_WEAPON_CHOICE_OBS_CACHE_WAYS; w++) {
-        if (memos->weapon_choice_valid[w] && memos->weapon_choice_sig[w] == sig) {
-#ifdef COLO_PROFILE_ENABLED
-            if (COLO_PROFILE_ENABLED())
-                COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_HITS, 1.0);
-#endif
-            memcpy(&obs[i], memos->weapon_choice[w],
-                   sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
-            *io = i + COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS;
-            return;
-        }
-    }
-#ifdef COLO_PROFILE_ENABLED
-    if (COLO_PROFILE_ENABLED())
-        COLO_PROFILE_ADD(COLO_PROF_WEAPON_CHOICE_BUILDS, 1.0);
-#endif
-    int block_start = i;
-
-    const ColoNPC* npc = NULL;
-    int target = col_player_target_slot(s);
-    if (target >= 0 && target < COLO_MAX_NPCS) {
-        const ColoNPC* cand = &s->npcs[target];
-        if (col_npc_is_live_target(cand) && !col_type_is_hazard_entity(cand->type))
-            npc = cand;
-    }
-    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = NULL;
-    float best_dpt = 0.0f;
-    if (npc) {
-        best = col_get_best_gear_table(s);
-        for (int st = 0; st < COLO_NUM_WEAPON_SETS; st++)
-            if (best[st][npc->type].dpt > best_dpt)
-                best_dpt = best[st][npc->type].dpt;
-    }
-
-    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
-        float v = 0.0f;
-        uint8_t item = s->inventory_cells[c].item_idx;
-        if (npc && item != ITEM_NONE &&
-                osrs_item_gear_slot(item) == GEAR_SLOT_WEAPON) {
-            ColoWeaponSet set = col_weapon_set_for_item(item);
-            const ColoBestGear* bs = &best[set][npc->type];
-            if (bs->dpt >= 0.0f) {
-                uint8_t setup[NUM_GEAR_SLOTS];
-                memcpy(setup, bs->setup, NUM_GEAR_SLOTS);
-                setup[GEAR_SLOT_WEAPON] = item;
-                if (item_is_two_handed(item))
-                    setup[GEAR_SLOT_SHIELD] = ITEM_NONE;
-                float dpt = col_expected_dpt_for_equipment_vs_npc(
-                    s, setup, npc, 1);
-                v = col_clamp01(dpt / COLO_EXPECTED_DPT_NORM);
-            }
-        }
-        obs[i++] = v;
-    }
-
-    for (int c = 0; c < OSRS_INVENTORY_SIZE; c++) {
-        uint8_t item = s->inventory_cells[c].item_idx;
-        obs[i++] = (item != ITEM_NONE && osrs_spec_cost(item) > 0) ? 1.0f : 0.0f;
-    }
-
-    float cur = npc
-        ? col_expected_dpt_for_equipment_vs_npc(s, s->player.equipped, npc, 1)
-        : 0.0f;
-    obs[i++] = col_clamp01(cur / COLO_EXPECTED_DPT_NORM);
-    obs[i++] = (npc && best_dpt > 0.0f) ? col_clamp01(cur / best_dpt) : 0.0f;
-
-    int slot = memos->weapon_choice_next;
-    memcpy(memos->weapon_choice[slot], &obs[block_start],
-           sizeof(float) * COLO_WEAPON_CHOICE_OBS_CACHE_FLOATS);
-    memos->weapon_choice_sig[slot] = sig;
-    memos->weapon_choice_valid[slot] = 1;
-    memos->weapon_choice_next = (slot + 1) % COLO_WEAPON_CHOICE_OBS_CACHE_WAYS;
-
-    *io = i;
-}
-
 static void col_write_spawn_obs(ColosseumState* s, float* obs, int* io) {
     int i = *io;
     float until_spawn = (float)s->wave_spawn_delay;
@@ -2332,12 +2200,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     assert(i == COLO_OBS_AFTER_THRALL_DC);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_THRALL_DC);
-#endif
-
-    col_write_weapon_choice_obs(s, obs, &i);
-    assert(i == COLO_OBS_AFTER_WEAPON_CHOICE);
-#ifdef COLO_PROFILE_ENABLED
-    COLO_PROFILE_MARK(COLO_PROF_OBS_WEAPON_CHOICE);
 #endif
 
     col_write_spawn_obs(s, obs, &i);

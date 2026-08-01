@@ -26,7 +26,6 @@
     X(COLO_PROF_OBS_FORECAST,           "obs_forecast") \
     X(COLO_PROF_OBS_THREAT_LOS,         "obs_threat_los") \
     X(COLO_PROF_OBS_THRALL_DC,          "obs_thrall_dc") \
-    X(COLO_PROF_OBS_WEAPON_CHOICE,      "obs_weapon_choice") \
     X(COLO_PROF_OBS_SPAWN,              "obs_spawn") \
     X(COLO_PROF_OBS_THREAT_FIELD,       "obs_threat_field") \
     X(COLO_PROF_FC_SETUP,               "fc_setup") \
@@ -43,10 +42,7 @@
     X(COLO_PROF_STEP_MODIFIERS_HAZARDS, "step_modifiers_hazards") \
     X(COLO_PROF_BEST_GEAR_REQUESTS,     "best_gear_requests") \
     X(COLO_PROF_BEST_GEAR_HITS,         "best_gear_hits") \
-    X(COLO_PROF_BEST_GEAR_BUILDS,       "best_gear_builds") \
-    X(COLO_PROF_WEAPON_CHOICE_REQUESTS, "weapon_choice_requests") \
-    X(COLO_PROF_WEAPON_CHOICE_HITS,     "weapon_choice_hits") \
-    X(COLO_PROF_WEAPON_CHOICE_BUILDS,   "weapon_choice_builds")
+    X(COLO_PROF_BEST_GEAR_BUILDS,       "best_gear_builds")
 
 #define OSRS_ENV_PROFILE_PREFIX     colosseum
 #define OSRS_ENV_PROFILE_COUNT      COLO_PROF_COUNT

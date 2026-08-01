@@ -172,10 +172,7 @@ static uint64_t osrs_profile_hash_bytes(uint64_t hash, const void* data, size_t 
 static int osrs_colosseum_profile_slot_is_counter(int slot) {
     return slot == COLO_PROF_BEST_GEAR_REQUESTS ||
         slot == COLO_PROF_BEST_GEAR_HITS ||
-        slot == COLO_PROF_BEST_GEAR_BUILDS ||
-        slot == COLO_PROF_WEAPON_CHOICE_REQUESTS ||
-        slot == COLO_PROF_WEAPON_CHOICE_HITS ||
-        slot == COLO_PROF_WEAPON_CHOICE_BUILDS;
+        slot == COLO_PROF_BEST_GEAR_BUILDS;
 }
 
 static void osrs_print_colosseum_profile_results(int total_steps) {
@@ -209,8 +206,6 @@ static void osrs_print_colosseum_profile_results(int total_steps) {
     double steps = total_steps > 0 ? (double)total_steps : 1.0;
     double best_gear_requests = values[COLO_PROF_BEST_GEAR_REQUESTS];
     double best_gear_hits = values[COLO_PROF_BEST_GEAR_HITS];
-    double weapon_choice_requests = values[COLO_PROF_WEAPON_CHOICE_REQUESTS];
-    double weapon_choice_hits = values[COLO_PROF_WEAPON_CHOICE_HITS];
     printf("Colosseum cache counters:\n");
     printf("  %-28s %.0f total  %.6f per step  %.2f%% hit\n",
         "best_gear",
@@ -221,16 +216,6 @@ static void osrs_print_colosseum_profile_results(int total_steps) {
         colosseum_env_profile_name(COLO_PROF_BEST_GEAR_BUILDS),
         values[COLO_PROF_BEST_GEAR_BUILDS],
         values[COLO_PROF_BEST_GEAR_BUILDS] / steps);
-    printf("  %-28s %.0f total  %.6f per step  %.2f%% hit\n",
-        "weapon_choice",
-        weapon_choice_requests,
-        weapon_choice_requests / steps,
-        weapon_choice_requests > 0.0
-            ? 100.0 * weapon_choice_hits / weapon_choice_requests : 0.0);
-    printf("  %-28s %.0f total  %.6f per step\n",
-        colosseum_env_profile_name(COLO_PROF_WEAPON_CHOICE_BUILDS),
-        values[COLO_PROF_WEAPON_CHOICE_BUILDS],
-        values[COLO_PROF_WEAPON_CHOICE_BUILDS] / steps);
 }
 #endif
 
