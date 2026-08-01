@@ -1380,7 +1380,6 @@ typedef struct {
     float boss_phase_bonus;
     float win_bonus;
 
-    float argmax_gear_reward_coeff;
 
     float offensive_boost_reward_coeff;
 

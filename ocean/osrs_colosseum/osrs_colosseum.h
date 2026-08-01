@@ -217,7 +217,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "timeout_penalty",
         "boss_damage_reward_coeff",
         "boss_phase_bonus",
-        "argmax_gear_reward_coeff",
         "offensive_boost_reward_coeff",
         "beginner_loadout_fraction",
         "late_start_supply_fraction_per_wave",

@@ -30,7 +30,6 @@
     X(COLO_PROF_STEP_PRE_PLAYER,        "step_pre_player") \
     X(COLO_PROF_STEP_PLAYER,            "step_player") \
     X(COLO_PROF_STEP_REWARD,            "step_reward") \
-    X(COLO_PROF_REWARD_ARGMAX_GEAR,     "reward_argmax_gear") \
     X(COLO_PROF_STEP_WAVE_LOGIC,        "step_wave_logic") \
     X(COLO_PROF_STEP_NPC_TOTAL,         "step_npc_total") \
     X(COLO_PROF_STEP_SOL_BOSS,          "step_sol_boss") \

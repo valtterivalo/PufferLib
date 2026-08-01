@@ -8137,8 +8137,8 @@ static void test_modifier_draft_forces_pick(void) {
     CHECK("no-op valid again once no draft is pending", mask[base] == 1.0f);
 }
 
-static void test_gear_and_boost_reward_signals(void) {
-    printf("test_gear_and_boost_reward_signals\n");
+static void test_offensive_boost_reward_signal(void) {
+    printf("test_offensive_boost_reward_signal\n");
     ColosseumContext ctx;
     ColosseumState s;
     loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
@@ -8154,22 +8154,6 @@ static void test_gear_and_boost_reward_signals(void) {
     s.tick_scratch.player_attacked = 1;
     s.player_attack_npc_idx = slot;
 
-    float q_attack = col_attacked_gear_quality_ratio(&s);
-    CHECK("gear-quality signal fires in [0,1] when attacking", q_attack >= 0.0f && q_attack <= 1.0f);
-
-    const ColoNPC* tnpc = &s.npcs[slot];
-    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(&s);
-    int argmax_set = 0;
-    float argmax_dpt = -1.0f;
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++)
-        if (best[set][tnpc->type].dpt > argmax_dpt) {
-            argmax_dpt = best[set][tnpc->type].dpt;
-            argmax_set = set;
-        }
-    memcpy(s.player.equipped, best[argmax_set][tnpc->type].setup, sizeof(s.player.equipped));
-    CHECK("oracle's argmax-best kit yields ~max gear quality",
-          col_attacked_gear_quality_ratio(&s) > 0.99f);
-
     s.player_attack_style_id = ATTACK_STYLE_RANGED;
     s.player.current_ranged = s.player.base_ranged;
     CHECK("no boost reward when ranged is at base",
@@ -8179,7 +8163,6 @@ static void test_gear_and_boost_reward_signals(void) {
           col_attacked_with_offensive_boost(&s) == 1);
 
     s.tick_scratch.player_attacked = 0;
-    CHECK("gear-quality is the no-attack sentinel", col_attacked_gear_quality_ratio(&s) < 0.0f);
     CHECK("boost signal is the no-attack sentinel", col_attacked_with_offensive_boost(&s) < 0);
 }
 
@@ -8465,7 +8448,7 @@ int main(void) {
     test_death_attribution_credits_actual_source();
     test_move_action_no_corner_cut();
     test_modifier_draft_forces_pick();
-    test_gear_and_boost_reward_signals();
+    test_offensive_boost_reward_signal();
     test_best_gear_cache_signatures();
     test_farm_safe_damage_cap();
     test_inventory_obs_memo();

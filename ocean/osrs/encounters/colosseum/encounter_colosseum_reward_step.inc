@@ -91,28 +91,6 @@ static float col_episode_max_wave_depth(const ColosseumState* s) {
         col_sol_score_progress(s);
 }
 
-static float col_attacked_gear_quality_ratio(ColosseumState* s) {
-    if (!s->tick_scratch.player_attacked) return -1.0f;
-    int npc_slot = s->player_attack_npc_idx;
-    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return -1.0f;
-    const ColoNPC* npc = &s->npcs[npc_slot];
-    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
-        return -1.0f;
-    const ColoBestGear (*best)[COLO_NUM_NPC_TYPES] = col_get_best_gear_table(s);
-    float best_dpt = 0.0f;
-    for (int set = 0; set < COLO_NUM_WEAPON_SETS; set++) {
-        float d = best[set][npc->type].dpt;
-        if (d > best_dpt) best_dpt = d;
-    }
-    if (best_dpt <= 0.0f) return -1.0f;
-
-    float actual = col_expected_dpt_for_equipment_vs_npc(s, s->player.equipped, npc, 1);
-    float ratio = actual / best_dpt;
-    if (ratio < 0.0f) ratio = 0.0f;
-    if (ratio > 1.0f) ratio = 1.0f;
-    return ratio;
-}
-
 static int col_attacked_with_offensive_boost(ColosseumState* s) {
     if (!s->tick_scratch.player_attacked) return -1;
     int npc_slot = s->player_attack_npc_idx;
@@ -161,21 +139,6 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     }
     reward += cfg->damage_reward_coeff * rewarded_fresh;
     reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
-    if (cfg->argmax_gear_reward_coeff != 0.0f) {
-#ifdef COLO_PROFILE_ENABLED
-        int col_prof_enabled =
-            COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
-        double col_prof_gear_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
-#endif
-        float gear_quality = col_attacked_gear_quality_ratio(s);
-        if (gear_quality >= 0.0f)
-            reward += cfg->argmax_gear_reward_coeff * gear_quality;
-#ifdef COLO_PROFILE_ENABLED
-        if (col_prof_enabled)
-            COLO_PROFILE_ADD(COLO_PROF_REWARD_ARGMAX_GEAR,
-                COLO_PROFILE_NOW_MS() - col_prof_gear_t0);
-#endif
-    }
     if (cfg->offensive_boost_reward_coeff != 0.0f) {
         if (col_attacked_with_offensive_boost(s) > 0)
             reward += cfg->offensive_boost_reward_coeff;
