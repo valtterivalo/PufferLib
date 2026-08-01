@@ -1019,9 +1019,6 @@ typedef struct {
     (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT + \
      NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
 
-#define COLO_THREAT_FIELD_OBS_CACHE_WAYS 4
-#define COLO_THREAT_FIELD_OBS_CACHE_FLOATS (17 * 17)
-
 typedef struct {
     ColoBestGear best_gear[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];
     uint64_t best_gear_sig[COLO_BEST_GEAR_CACHE_WAYS];
@@ -1031,10 +1028,6 @@ typedef struct {
     uint64_t inventory_sig[COLO_INVENTORY_OBS_CACHE_WAYS];
     int inventory_valid[COLO_INVENTORY_OBS_CACHE_WAYS];
     int inventory_next;
-    float threat_field[COLO_THREAT_FIELD_OBS_CACHE_WAYS][COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
-    uint64_t threat_field_sig[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
-    int threat_field_valid[COLO_THREAT_FIELD_OBS_CACHE_WAYS];
-    int threat_field_next;
 } ColoObsMemoCaches;
 
 typedef enum {
@@ -1401,7 +1394,6 @@ typedef struct {
     int curriculum_agent;
     int loadout_profile_mode;
     float beginner_loadout_fraction;
-    int threat_field_obs_enabled;
     int mask_inventory_heads;
     int late_start_state_mode;
 

@@ -70,13 +70,6 @@ typedef enum {
 #define COLO_ANCHOR_BLOCKED_OBS_SIZE COLO_NUM_SPAWN_ANCHORS
 #define COLO_SPAWN_OBS_SIZE (COLO_SPAWN_PHASE_OBS_SIZE + COLO_ANCHOR_BLOCKED_OBS_SIZE)
 
-#define COLO_THREAT_FIELD_RADIUS 8
-#define COLO_THREAT_FIELD_DIM (2 * COLO_THREAT_FIELD_RADIUS + 1)
-#define COLO_THREAT_FIELD_TILES (COLO_THREAT_FIELD_DIM * COLO_THREAT_FIELD_DIM)
-#define COLO_THREAT_FIELD_OBS_SIZE COLO_THREAT_FIELD_TILES
-static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
-    "threat-field obs cache float count must match the block size");
-
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
@@ -84,8 +77,7 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
-    COLO_SPAWN_OBS_SIZE + \
-    COLO_THREAT_FIELD_OBS_SIZE)
+    COLO_SPAWN_OBS_SIZE)
 
 #define COLO_OBS_AFTER_PLAYER   COLO_PLAYER_OBS_SIZE
 #define COLO_OBS_AFTER_INVENTORY (COLO_OBS_AFTER_PLAYER + COLO_INVENTORY_OBS_SIZE)
@@ -107,8 +99,6 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_SPAWN \
     (COLO_OBS_AFTER_THRALL_DC + COLO_SPAWN_OBS_SIZE)
-#define COLO_OBS_AFTER_THREAT_FIELD \
-    (COLO_OBS_AFTER_SPAWN + COLO_THREAT_FIELD_OBS_SIZE)
 
 static inline float col_clamp01(float v) {
     if (v < 0.0f) return 0.0f;
@@ -1327,89 +1317,6 @@ static void col_write_threat_los_counts(const ColosseumState* s, float* obs, int
     *idx = i;
 }
 
-static uint64_t col_threat_field_obs_signature(const ColosseumState* s) {
-    uint64_t h = 1469598103934665603ULL;
-    h = (h ^ (uint64_t)(uint32_t)s->player.x) * 1099511628211ULL;
-    h = (h ^ (uint64_t)(uint32_t)s->player.y) * 1099511628211ULL;
-    for (int n = 0; n < COLO_MAX_NPCS; n++) {
-        const ColoNPC* npc = &s->npcs[n];
-        if (!col_npc_is_live_enemy(npc)) continue;
-        int range = COLO_NPC_STATS[npc->type].attack_range;
-        if (range <= 1) continue;
-        uint64_t shooter = (uint64_t)(uint32_t)npc->x
-            | ((uint64_t)(uint32_t)npc->y << 8)
-            | ((uint64_t)(uint32_t)col_npc_effective_size(npc) << 16)
-            | ((uint64_t)(uint32_t)range << 24);
-        h = (h ^ shooter) * 1099511628211ULL;
-    }
-    return h;
-}
-
-static void col_write_threat_field_obs(ColosseumState* s, float* obs, int* idx) {
-    int i = *idx;
-    if (!COLO_STATIC_LOOKUP_TABLES_BUILT) col_build_static_arena();
-
-    ColoObsMemoCaches* memos = &s->obs_memos;
-    uint64_t sig = col_threat_field_obs_signature(s);
-    for (int w = 0; w < COLO_THREAT_FIELD_OBS_CACHE_WAYS; w++) {
-        if (memos->threat_field_valid[w] && memos->threat_field_sig[w] == sig) {
-            memcpy(&obs[i], memos->threat_field[w],
-                   sizeof(float) * COLO_THREAT_FIELD_OBS_CACHE_FLOATS);
-            *idx = i + COLO_THREAT_FIELD_OBS_CACHE_FLOATS;
-            return;
-        }
-    }
-    int block_start = i;
-
-    int shooter_x0[COLO_MAX_NPCS], shooter_y0[COLO_MAX_NPCS];
-    int shooter_x1[COLO_MAX_NPCS], shooter_y1[COLO_MAX_NPCS];
-    int shooter_ranges[COLO_MAX_NPCS];
-    int n_shooters = 0;
-    for (int n = 0; n < COLO_MAX_NPCS; n++) {
-        const ColoNPC* npc = &s->npcs[n];
-        if (!col_npc_is_live_enemy(npc)) continue;
-        int range = COLO_NPC_STATS[npc->type].attack_range;
-        if (range <= 1) continue;
-        int size = col_npc_effective_size(npc);
-        shooter_x0[n_shooters] = npc->x;
-        shooter_y0[n_shooters] = npc->y;
-        shooter_x1[n_shooters] = npc->x + size - 1;
-        shooter_y1[n_shooters] = npc->y + size - 1;
-        shooter_ranges[n_shooters] = range;
-        n_shooters++;
-    }
-    for (int dy = -COLO_THREAT_FIELD_RADIUS; dy <= COLO_THREAT_FIELD_RADIUS; dy++) {
-        for (int dx = -COLO_THREAT_FIELD_RADIUS; dx <= COLO_THREAT_FIELD_RADIUS; dx++) {
-            int tx = s->player.x + dx, ty = s->player.y + dy;
-            int gx, gy;
-            int count = 0;
-            if (col_grid_index(tx, ty, &gx, &gy)) {
-                for (int k = 0; k < n_shooters; k++) {
-                    int sx = tx < shooter_x0[k] ? shooter_x0[k]
-                        : (tx > shooter_x1[k] ? shooter_x1[k] : tx);
-                    int sy = ty < shooter_y0[k] ? shooter_y0[k]
-                        : (ty > shooter_y1[k] ? shooter_y1[k] : ty);
-                    int adx = tx - sx; if (adx < 0) adx = -adx;
-                    int ady = ty - sy; if (ady < 0) ady = -ady;
-                    int dist = adx > ady ? adx : ady;
-                    if (dist < 1 || dist > shooter_ranges[k]) continue;
-                    if (!col_static_los_get(sx, sy, tx, ty)) continue;
-                    count++;
-                }
-            }
-            obs[i++] = col_clamp01((float)count / 4.0f);
-        }
-    }
-    int slot = memos->threat_field_next;
-    memcpy(memos->threat_field[slot], &obs[block_start],
-           sizeof(float) * COLO_THREAT_FIELD_OBS_CACHE_FLOATS);
-    memos->threat_field_sig[slot] = sig;
-    memos->threat_field_valid[slot] = 1;
-    memos->threat_field_next = (slot + 1) % COLO_THREAT_FIELD_OBS_CACHE_WAYS;
-
-    *idx = i;
-}
-
 static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
     int i = *idx;
     int lifetime_full = COLO_THRALL_LIFETIME_TICKS[s->active_loadout_profile];
@@ -2185,16 +2092,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     assert(i == COLO_OBS_AFTER_SPAWN);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_SPAWN);
-#endif
-
-    if (ctx->config.threat_field_obs_enabled) {
-        col_write_threat_field_obs(s, obs, &i);
-    } else {
-        i += COLO_THREAT_FIELD_OBS_SIZE;
-    }
-    assert(i == COLO_OBS_AFTER_THREAT_FIELD);
-#ifdef COLO_PROFILE_ENABLED
-    COLO_PROFILE_MARK(COLO_PROF_OBS_THREAT_FIELD);
 #endif
 
     if (i != COLO_NUM_OBS) {

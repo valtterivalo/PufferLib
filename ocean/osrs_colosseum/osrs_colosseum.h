@@ -230,7 +230,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "farm_safe_damage_cap",
         "farm_cap_waves",
         "loadout_profile_mode",
-        "threat_field_obs_enabled",
         "mask_inventory_heads",
         "late_start_state_mode",
         "bis_gear_oracle_mode",

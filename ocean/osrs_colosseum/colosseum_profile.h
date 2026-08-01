@@ -26,7 +26,6 @@
     X(COLO_PROF_OBS_THREAT_LOS,         "obs_threat_los") \
     X(COLO_PROF_OBS_THRALL_DC,          "obs_thrall_dc") \
     X(COLO_PROF_OBS_SPAWN,              "obs_spawn") \
-    X(COLO_PROF_OBS_THREAT_FIELD,       "obs_threat_field") \
     X(COLO_PROF_STEP_NPC_TOTAL,         "step_npc_total") \
     X(COLO_PROF_STEP_SOL_BOSS,          "step_sol_boss") \
     X(COLO_PROF_STEP_JAVELIN_SKYFALL,   "step_javelin_skyfall") \

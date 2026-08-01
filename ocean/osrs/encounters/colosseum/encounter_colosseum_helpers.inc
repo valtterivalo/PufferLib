@@ -280,7 +280,6 @@ static ColConfig col_default_config(void) {
         .death_penalty_coeff = 0.0f,
         .timeout_penalty = 0.0f,
         .curriculum_agent = 0,
-        .threat_field_obs_enabled = 1,
         .mask_inventory_heads = 0,
         .late_start_state_mode = 2,
         .late_start_supply_fraction_per_wave = 0.07f,

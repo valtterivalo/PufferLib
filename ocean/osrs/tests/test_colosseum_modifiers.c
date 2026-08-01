@@ -6537,7 +6537,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2335", COLO_NUM_OBS == 2335);
+    CHECK("obs width is 2046", COLO_NUM_OBS == 2046);
     CHECK("inventory block has 560 features (28 cells x 20 compact)",
         COLO_INVENTORY_OBS_SIZE == 560);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
@@ -6565,8 +6565,7 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
-        COLO_SPAWN_OBS_SIZE +
-        COLO_THREAT_FIELD_OBS_SIZE;
+        COLO_SPAWN_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
 
     float opa, ops;
@@ -8545,7 +8544,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2335);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2046);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -8718,68 +8717,6 @@ static int colo_test_cell_of_named_item(const ColosseumState* s, const char* nam
         if (meta && strcmp(meta->name, name) == 0) return c;
     }
     return -1;
-}
-
-static void test_threat_field_obs(void) {
-    printf("test_threat_field_obs\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
-
-    s.player.x = 5; s.player.y = 9;
-    col_rebuild_player_collision_flags(&s);
-    int manti = col_spawn_npc_at(&s, COLO_MANTICORE, 11, 8);
-    CHECK("fixture: shooter spawned", manti >= 0);
-    CHECK("fixture: the pillar blocks LoS to the player's tile",
-        !col_npc_has_los_to_player(&s, &s.npcs[manti]));
-
-    static float obs[COLO_NUM_OBS];
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-
-    const int f0 = COLO_OBS_AFTER_SPAWN;
-#define FIELD_CELL(dx, dy) \
-    (((dy) + COLO_THREAT_FIELD_RADIUS) * COLO_THREAT_FIELD_DIM + \
-     ((dx) + COLO_THREAT_FIELD_RADIUS))
-
-    CHECK("pillar shadow: the player's tile reads zero shooters",
-        obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
-    CHECK("exposed tile east of the pillar reads the shooter",
-        obs[f0 + FIELD_CELL(7, 3)] > 0.0f);
-
-    s.player.x = 12; s.player.y = 12;
-    col_rebuild_player_collision_flags(&s);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("center cell reads one shooter after stepping into LoS",
-        obs[f0 + FIELD_CELL(0, 0)] == 0.25f);
-    int jag = col_spawn_npc_at(&s, COLO_JAGUAR_WARRIOR, 16, 12);
-    CHECK("fixture: melee NPC spawned", jag >= 0);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int jag_size = col_npc_effective_size(&s.npcs[jag]);
-    col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 0);
-    s.npcs[jag].x += 1;
-    col_stamp_npc_collision_footprint(&s, s.npcs[jag].x, s.npcs[jag].y, jag_size, 1);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-
-    col_deactivate_npc(&s, manti);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("center cell reads zero shooters after the manticore dies",
-        obs[f0 + FIELD_CELL(0, 0)] == 0.0f);
-
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    float served_field[COLO_THREAT_FIELD_OBS_CACHE_FLOATS];
-    memcpy(served_field, &obs[f0], sizeof(served_field));
-    memset(&s.obs_memos, 0, sizeof(s.obs_memos));
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("memo-served threat field == fresh recompute",
-        memcmp(served_field, &obs[f0], sizeof(served_field)) == 0);
-
-    ctx.config.threat_field_obs_enabled = 0;
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int all_zero = 1;
-    for (int k = 0; k < COLO_THREAT_FIELD_OBS_SIZE; k++)
-        if (obs[f0 + k] != 0.0f) all_zero = 0;
-    CHECK("disabled threat field leaves the block zeroed", all_zero);
-#undef FIELD_CELL
 }
 
 static void test_inventory_obs_memo(void) {
@@ -9062,7 +8999,6 @@ int main(void) {
     test_gear_and_boost_reward_signals();
     test_best_gear_cache_signatures();
     test_farm_safe_damage_cap();
-    test_threat_field_obs();
     test_inventory_obs_memo();
 
     return osrs_test_summary();
