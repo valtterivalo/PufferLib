@@ -24,6 +24,7 @@ typedef float obs_t;
 #define COLO_ENV_STATE(env) ((EncounterState*)&(env)->state)
 #define COLO_ENV_CONTEXT(env) ((EncounterContext*)&(env)->context)
 #define COLO_MAX_CURRICULUM_TIERS 8
+#define COLO_DPT_SAMPLE_INTERVAL 64
 
 struct Log {
     float episode_return;
@@ -81,6 +82,7 @@ struct Env {
     int config_start_wave;
     int acts_staging[COLO_NUM_ACTION_HEADS];
     uint64_t damage_scale_anneal_step;
+    uint64_t dpt_sample_step;
     float max_episode_depth_seen;
 };
 
@@ -304,7 +306,11 @@ void puf_step(Env* env) {
     COLO_PROFILE_MARK(COLO_PROF_C_REWARD_TERMINAL);
 #endif
 
-    if (env->state.start_wave == env->config_start_wave) {
+    /* Both readings run the best-gear oracle, which is the single most expensive thing
+     * left in the env step. They are means over millions of steps, so a 1-in-N sample is
+     * just as precise and costs N times less. */
+    if (env->state.start_wave == env->config_start_wave &&
+            (env->dpt_sample_step++ % COLO_DPT_SAMPLE_INTERVAL) == 0) {
         col_log_dpt_sample(
             &env->log.current_set_argmax_dpt_hit,
             &env->log.current_set_argmax_dpt_n,
