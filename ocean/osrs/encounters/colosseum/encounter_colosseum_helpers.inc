@@ -239,12 +239,12 @@ static void col_queue_npc_pending_hit(
     ColoNPC* npc = &s->npcs[npc_slot];
     EncounterPendingHit hit = {
         .active = 1,
-        .damage = damage,
-        .ticks_remaining = ticks,
-        .attack_style = style,
+        .ticks_remaining = (int8_t)ticks,
+        .attack_style = (int8_t)style,
         .check_prayer = 0,
-        .spell_type = spell_type,
+        .spell_type = (int8_t)spell_type,
         .source_npc_slot = -1,
+        .damage = (int16_t)damage,
     };
     encounter_pending_hit_queue_push(
         &npc->pending_hits, hit, "colosseum-npc", s->tick, npc_slot, npc->type);
@@ -259,7 +259,7 @@ static inline int col_scale_incoming_damage(const ColosseumState* s, int dmg) {
 }
 
 static void col_push_player_pending_hit(ColosseumState* s, EncounterPendingHit hit) {
-    hit.damage = col_scale_incoming_damage(s, hit.damage);
+    hit.damage = (int16_t)col_scale_incoming_damage(s, hit.damage);
     encounter_pending_hit_queue_push(
         &s->player_pending_hits, hit, "colosseum-player", s->tick,
         hit.source_npc_slot, hit.source_npc_type);

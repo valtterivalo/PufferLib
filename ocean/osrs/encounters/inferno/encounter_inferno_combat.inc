@@ -706,15 +706,15 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
             EncounterProjectileTiming zuk_timing =
                 inf_npc_projectile_timing(npc->type, ATTACK_STYLE_MAGIC, dist);
             inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
-                .damage = dmg,
-                .ticks_remaining = zuk_timing.damage_delay_ticks,
+                .ticks_remaining = (int8_t)zuk_timing.damage_delay_ticks,
                 .attack_style = ATTACK_STYLE_NONE,
                 .check_prayer = 0,
                 .prayer_check_delay = 0,
                 .spell_type = 0,
-                .source_npc_type = npc->type,
+                .source_npc_type = (int8_t)npc->type,
                 .hit_success = 1,
                 .elysian_reduced = 0,
+                .damage = (int16_t)dmg,
             });
             s->last_hit_by_type = INF_NPC_ZUK;
             npc->attacked_this_tick = 1;
@@ -833,15 +833,15 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         EncounterPendingHit hit;
         if (is_jad) {
             hit = (EncounterPendingHit){
-                .damage = dmg,
-                .ticks_remaining = hit_delay,
-                .attack_style = actual_style,
+                .ticks_remaining = (int8_t)hit_delay,
+                .attack_style = (int8_t)actual_style,
                 .check_prayer = 1,
                 .prayer_check_delay = INF_JAD_PROJECTILE_DELAY + 1,
                 .spell_type = ENCOUNTER_SPELL_NONE,
-                .source_npc_type = npc->type,
-                .hit_success = accuracy_hit,
+                .source_npc_type = (int8_t)npc->type,
+                .hit_success = (int8_t)accuracy_hit,
                 .elysian_reduced = 0,
+                .damage = (int16_t)dmg,
             };
         } else {
             hit = encounter_pending_hit_resolved_at_throw(

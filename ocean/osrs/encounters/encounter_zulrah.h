@@ -950,12 +950,12 @@ static void zul_queue_zulrah_hit(ZulrahState* s, int damage, AttackStyle style,
 
     EncounterPendingHit hit = {
         .active = 1,
-        .damage = damage,
-        .ticks_remaining = delay,
-        .attack_style = style,
+        .ticks_remaining = (int8_t)delay,
+        .attack_style = (int8_t)style,
         .check_prayer = 0,
         .spell_type = ENCOUNTER_SPELL_NONE,
         .source_npc_slot = -1,
+        .damage = (int16_t)damage,
     };
     if (delay <= 0) {
         zul_land_zulrah_hit(s, &hit);

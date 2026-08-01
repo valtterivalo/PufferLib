@@ -59,19 +59,24 @@ static inline int encounter_require_int_range_config(
 #define ENCOUNTER_MAX_PENDING_HITS 32
 
 typedef struct {
-    int active;
-    int damage;
-    int ticks_remaining;
-    int attack_style;
-    int check_prayer;
-    int prayer_check_delay;
+    int8_t active;
+    int8_t ticks_remaining;
+    int8_t attack_style;
+    int8_t check_prayer;
+    int8_t prayer_check_delay;
 
-    int spell_type;
-    int source_npc_type;
-    int source_npc_slot;
-    int hit_success;
-    int elysian_reduced;
+    int8_t spell_type;
+    int8_t source_npc_type;
+    int8_t source_npc_slot;
+    int8_t hit_success;
+    int8_t elysian_reduced;
+    int16_t damage;
 } EncounterPendingHit;
+
+/* Replicated per NPC per env and streamed every step, so the width is load-bearing for
+ * throughput, not tidiness. damage trails the int8 run so the record packs to 12 with no
+ * padding; C++ also requires designated initializers in this order, so keep it last. */
+_Static_assert(sizeof(EncounterPendingHit) == 12, "pending hit record must stay 12 bytes");
 
 typedef struct {
     EncounterPendingHit hits[ENCOUNTER_MAX_PENDING_HITS];
@@ -87,16 +92,16 @@ static inline EncounterPendingHit encounter_pending_hit_resolved_at_throw(
     if (out_prayed) *out_prayed = pr.prayed;
     return (EncounterPendingHit){
         .active = 1,
-        .damage = pr.frozen_damage,
-        .ticks_remaining = ticks_remaining,
-        .attack_style = attack_style,
+        .ticks_remaining = (int8_t)ticks_remaining,
+        .attack_style = (int8_t)attack_style,
         .check_prayer = 0,
         .prayer_check_delay = 0,
         .spell_type = ENCOUNTER_SPELL_NONE,
-        .source_npc_type = source_npc_type,
-        .source_npc_slot = source_npc_slot,
-        .hit_success = accuracy_hit && !pr.prayed,
+        .source_npc_type = (int8_t)source_npc_type,
+        .source_npc_slot = (int8_t)source_npc_slot,
+        .hit_success = (int8_t)(accuracy_hit && !pr.prayed),
         .elysian_reduced = 0,
+        .damage = (int16_t)pr.frozen_damage,
     };
 }
 

@@ -5,8 +5,14 @@
  * half and a sim regression landed in the same commit is invisible. This probe is
  * the half that must not move when the observation is recut.
  *
- * Covers the whole ColosseumState except the obs memo caches, which are derived and
- * whose SIZE tracks the obs, plus the full 452-float action mask. */
+ * Covers the whole ColosseumState plus the full 452-float action mask. Storage whose
+ * SIZE is not part of the simulation contract -- the obs memo caches, and the pending-hit
+ * queues' spare capacity -- is hashed by content rather than by raw bytes, so resizing or
+ * renarrowing it does not move a digest.
+ *
+ * Baselines were carried across the pending-hit narrowing by computing them on the old
+ * 44-byte record with this same hash and confirming the 12-byte record reproduced all 12.
+ * Re-seed the same way: prove the digests first, never re-print to make an edit pass. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,6 +36,11 @@ static inline uint64_t fnv_f32(uint64_t h, float v) {
     return fnv_bytes(h, &bits, sizeof(bits));
 }
 
+static inline uint64_t fnv_i32(uint64_t h, int v) {
+    int32_t w = (int32_t)v;
+    return fnv_bytes(h, &w, sizeof(w));
+}
+
 static inline uint64_t splitmix64(uint64_t* s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -49,18 +60,18 @@ typedef struct {
  * determinism fixes. Regenerate with --print only when a SIMULATION change is
  * intended, never to make an observation edit pass. */
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x1b63fd37134721bdULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x155c06df3bd0db90ULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x2568826d6ae236deULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0xb42fc087a322b74dULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xd2c7d0fd3994e301ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0x9008d847b737b95cULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x4b0144154d35a204ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xebc689a710acb330ULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x451da4ccf2c922acULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0xd74df72718a523b3ULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x45d610ceb99a3d35ULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x8cf17ed4fba85bcaULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x2fb2bf4f807157e5ULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0xabd4373aaf7848fcULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x395a7e1ec104d2daULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x3cbf70e094c0bd09ULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xe1f83e8a82abee09ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xc80aecf660500078ULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x986d1384f733fbc4ULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xbd962abd16f89534ULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x3009c17f9f147d44ULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x237767f3dd2b529bULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x6872189e9dedcff9ULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0xce233cb1dd2b54aaULL},
 };
 
 static void fill_actions(
@@ -75,16 +86,68 @@ static void fill_actions(
     }
 }
 
+/* Queue contents widened back to int32, so narrowing a field's storage type does not
+ * move the digest. Only the live prefix is hashed: readers all loop to count, so bytes
+ * past it are not simulation state. */
+static uint64_t fnv_queue(uint64_t h, const EncounterPendingHitQueue* q) {
+    h = fnv_i32(h, q->count);
+    for (int i = 0; i < q->count; i++) {
+        const EncounterPendingHit* p = &q->hits[i];
+        h = fnv_i32(h, p->active);
+        h = fnv_i32(h, p->damage);
+        h = fnv_i32(h, p->ticks_remaining);
+        h = fnv_i32(h, p->attack_style);
+        h = fnv_i32(h, p->check_prayer);
+        h = fnv_i32(h, p->prayer_check_delay);
+        h = fnv_i32(h, p->spell_type);
+        h = fnv_i32(h, p->source_npc_type);
+        h = fnv_i32(h, p->source_npc_slot);
+        h = fnv_i32(h, p->hit_success);
+        h = fnv_i32(h, p->elysian_reduced);
+    }
+    return h;
+}
+
+static uint64_t fnv_npc(uint64_t h, const ColoNPC* n) {
+    const uint8_t* b = (const uint8_t*)n;
+    size_t off = offsetof(ColoNPC, pending_hits);
+    size_t end = off + sizeof(n->pending_hits);
+    h = fnv_bytes(h, b, off);
+    h = fnv_bytes(h, b + end, sizeof(*n) - end);
+    return fnv_queue(h, &n->pending_hits);
+}
+
+typedef struct { size_t off, len; } SkipRegion;
+
+static int skip_cmp(const void* a, const void* b) {
+    size_t x = ((const SkipRegion*)a)->off, y = ((const SkipRegion*)b)->off;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
 static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask) {
-    /* Hash AROUND obs_memos rather than zeroing it. Zeroing decouples the memo
-     * contents but not its length, and FNV-1a multiplies once per byte, so the
-     * struct size stays in the digest and shrinking a memo cache moves every hash.
-     * That is a false alarm on exactly the edits this probe exists to clear. */
+    /* Hash AROUND storage whose SIZE is not part of the simulation contract, then hash
+     * its contents semantically. FNV-1a multiplies once per byte, so leaving a memo
+     * cache or a queue's spare capacity in the byte range makes resizing it move every
+     * digest -- a false alarm on exactly the edits this probe exists to clear. */
+    SkipRegion skip[] = {
+        {offsetof(ColosseumState, obs_memos), sizeof(s->obs_memos)},
+        {offsetof(ColosseumState, npcs), sizeof(s->npcs)},
+        {offsetof(ColosseumState, player_pending_hits), sizeof(s->player_pending_hits)},
+    };
+    int nskip = (int)(sizeof(skip) / sizeof(skip[0]));
+    qsort(skip, (size_t)nskip, sizeof(skip[0]), skip_cmp);
+
     const uint8_t* base = (const uint8_t*)s;
-    size_t memo_off = offsetof(ColosseumState, obs_memos);
-    size_t memo_end = memo_off + sizeof(s->obs_memos);
-    h = fnv_bytes(h, base, memo_off);
-    h = fnv_bytes(h, base + memo_end, sizeof(*s) - memo_end);
+    size_t cur = 0;
+    for (int i = 0; i < nskip; i++) {
+        h = fnv_bytes(h, base + cur, skip[i].off - cur);
+        cur = skip[i].off + skip[i].len;
+    }
+    h = fnv_bytes(h, base + cur, sizeof(*s) - cur);
+
+    for (int i = 0; i < COLO_MAX_NPCS; i++) h = fnv_npc(h, &s->npcs[i]);
+    h = fnv_queue(h, &s->player_pending_hits);
+
     for (int i = 0; i < COLO_ACTION_MASK_SIZE; i++) h = fnv_f32(h, mask[i]);
     return h;
 }

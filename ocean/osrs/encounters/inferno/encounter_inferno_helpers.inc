@@ -50,13 +50,13 @@ static EncounterPendingHit* inf_queue_npc_pending_hit(
     }
 
     EncounterPendingHit hit = {
-        .damage = damage,
-        .ticks_remaining = ticks_remaining,
-        .attack_style = attack_style,
+        .ticks_remaining = (int8_t)ticks_remaining,
+        .attack_style = (int8_t)attack_style,
         .check_prayer = 0,
-        .spell_type = spell_type,
-        .hit_success = hit_success,
+        .spell_type = (int8_t)spell_type,
+        .hit_success = (int8_t)hit_success,
         .elysian_reduced = 0,
+        .damage = (int16_t)damage,
     };
     return encounter_pending_hit_queue_push(
         &npc->pending_hits, hit, "inferno npc", s->tick, npc_idx, npc->type);
@@ -68,7 +68,7 @@ static EncounterPendingHit* inf_queue_player_pending_hit(
     int npc_type,
     EncounterPendingHit hit
 ) {
-    hit.source_npc_slot = npc_idx;
+    hit.source_npc_slot = (int8_t)npc_idx;
     return encounter_pending_hit_queue_push(
         &s->player_pending_hits, hit, "inferno player", s->tick, npc_idx, npc_type);
 }
