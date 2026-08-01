@@ -207,22 +207,19 @@ typedef struct {
     ColoWaveEntrySample samples[COLO_WAVE_ENTRY_RESERVOIR_CAP];
 } ColoWaveEntryReservoir;
 
-static ColoWaveEntryReservoir g_colo_wave_entry_res[COLO_NUM_WAVES];
-static char g_colo_wave_entry_lock;
-static uint32_t g_colo_wave_entry_rng = 0x9e3779b9u;
-
-static void col_wave_entry_lock(void) {
-    while (__atomic_test_and_set(&g_colo_wave_entry_lock, __ATOMIC_ACQUIRE)) {}
-}
-
-static void col_wave_entry_unlock(void) {
-    __atomic_clear(&g_colo_wave_entry_lock, __ATOMIC_RELEASE);
-}
+/* Per worker thread, not global. A shared reservoir is order dependent by
+   construction: res->seen and the slot draw both advance in whichever order
+   threads happen to clear waves, and locking fixes tearing but not order. Envs
+   are partitioned schedule(static) (src/pufferl.cu:1040,1334), so each thread
+   sees a fixed env subset in a fixed order and its reservoir is reproducible.
+   Donors are spread across threads because start_wave is drawn per env, so a
+   thread's ~256 envs still hold ~80 wave-1 donors to sample from. */
+static OSRS_THREAD_LOCAL ColoWaveEntryReservoir g_colo_wave_entry_res[COLO_NUM_WAVES];
+static OSRS_THREAD_LOCAL uint32_t g_colo_wave_entry_rng = 0x9e3779b9u;
 
 static void col_record_wave_entry(const ColosseumState* s, int entered_wave) {
     if (s->start_wave != 0) return;
     if (entered_wave <= 0 || entered_wave >= COLO_NUM_WAVES) return;
-    col_wave_entry_lock();
     ColoWaveEntryReservoir* res = &g_colo_wave_entry_res[entered_wave];
     res->seen++;
     int slot = -1;
@@ -242,21 +239,18 @@ static void col_record_wave_entry(const ColosseumState* s, int entered_wave) {
         out->prayer_points = (int16_t)s->player.current_prayer;
         out->special_energy = (uint8_t)s->player.special_energy;
     }
-    col_wave_entry_unlock();
 }
 
 static int col_apply_wave_entry_sample(ColosseumState* s, int start_wave) {
     if (start_wave <= 0 || start_wave >= COLO_NUM_WAVES) return 0;
     ColoWaveEntrySample sample;
     int have = 0;
-    col_wave_entry_lock();
     ColoWaveEntryReservoir* res = &g_colo_wave_entry_res[start_wave];
     if (res->stored > 0) {
         uint32_t r = xorshift32(&g_colo_wave_entry_rng);
         sample = res->samples[r % (uint32_t)res->stored];
         have = 1;
     }
-    col_wave_entry_unlock();
     if (!have) return 0;
 
     memcpy(s->inventory_cells, sample.cells, sizeof(sample.cells));
