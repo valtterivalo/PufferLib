@@ -35,31 +35,6 @@ static inline int col_wave_entry_delay_ticks(int target_wave) {
 #define COLO_OBS_NPCS COLO_MAX_NPCS
 
 #define COLO_STEP_OUT_FORECAST_HORIZON 4
-#define COLO_STEP_OUT_FORECAST_ACTION_FEATURES 9
-#define COLO_STEP_OUT_FORECAST_OBS_SIZE \
-    (ENCOUNTER_MOVE_ACTIONS * COLO_STEP_OUT_FORECAST_ACTION_FEATURES)
-
-typedef struct {
-    int melee_count;
-    int ranged_count;
-    int magic_count;
-    int max_hit;
-} ColoStepOutForecastTick;
-
-typedef struct {
-    int valid;
-    int land_x;
-    int land_y;
-    ColoStepOutForecastTick ticks[COLO_STEP_OUT_FORECAST_HORIZON];
-    int same_tick_mixed_style_conflict;
-    int ranged_magic_offtick_opportunity;
-    int melee_fallback_exposure;
-    int solarflare_contact_tick;
-} ColoStepOutForecastAction;
-
-typedef struct {
-    ColoStepOutForecastAction actions[ENCOUNTER_MOVE_ACTIONS];
-} ColoStepOutForecast;
 
 typedef enum {
     COLO_FORECAST_BEHAVIOR_STANDARD = 0,
@@ -1426,9 +1401,7 @@ typedef struct {
     int curriculum_agent;
     int loadout_profile_mode;
     float beginner_loadout_fraction;
-    int step_out_forecast_obs_enabled;
     int threat_field_obs_enabled;
-    int forecast_horizon;
     int mask_inventory_heads;
     int late_start_state_mode;
 

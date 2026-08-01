@@ -123,18 +123,15 @@ static void col_static_footprint_table_selftest(void) {
 } while (0)
 
 #define EXACT_MAGIC "COLOEXACTv1"
-#define EXACT_VERSION 4u
+#define EXACT_VERSION 5u
 #define EXACT_CHUNK_BYTES 65536
 
 typedef struct {
     char magic[16];
     uint32_t version;
     uint32_t state_size;
-    uint32_t forecast_size;
-    uint32_t forecast_obs_size;
     uint32_t obs_size;
     uint32_t action_mask_size;
-    uint32_t action_features;
     uint32_t record_count;
 } ColoExactFileHeader;
 
@@ -148,10 +145,7 @@ typedef struct {
     uint32_t state_size;
     uint32_t obs_size;
     uint32_t action_mask_size;
-    uint32_t forecast_size;
     uint64_t state_hash;
-    uint64_t forecast_hash;
-    uint64_t forecast_obs_hash;
     uint64_t obs_hash;
     uint64_t action_mask_hash;
     float reward;
@@ -214,11 +208,8 @@ static void exact_writer_open(ColoExactWriter* writer, const char* path) {
     memcpy(header.magic, EXACT_MAGIC, sizeof(EXACT_MAGIC));
     header.version = EXACT_VERSION;
     header.state_size = (uint32_t)sizeof(ColosseumState);
-    header.forecast_size = (uint32_t)sizeof(ColoStepOutForecast);
-    header.forecast_obs_size = COLO_STEP_OUT_FORECAST_OBS_SIZE;
     header.obs_size = COLO_NUM_OBS;
     header.action_mask_size = COLO_ACTION_MASK_SIZE;
-    header.action_features = COLO_STEP_OUT_FORECAST_ACTION_FEATURES;
     exact_write_all(writer->file, &header, sizeof(header));
 }
 
@@ -227,11 +218,8 @@ static void exact_writer_close(ColoExactWriter* writer) {
     memcpy(header.magic, EXACT_MAGIC, sizeof(EXACT_MAGIC));
     header.version = EXACT_VERSION;
     header.state_size = (uint32_t)sizeof(ColosseumState);
-    header.forecast_size = (uint32_t)sizeof(ColoStepOutForecast);
-    header.forecast_obs_size = COLO_STEP_OUT_FORECAST_OBS_SIZE;
     header.obs_size = COLO_NUM_OBS;
     header.action_mask_size = COLO_ACTION_MASK_SIZE;
-    header.action_features = COLO_STEP_OUT_FORECAST_ACTION_FEATURES;
     header.record_count = writer->record_count;
     if (fseek(writer->file, 0, SEEK_SET) != 0) {
         perror("seek colosseum exact fixture");
@@ -252,17 +240,9 @@ static void exact_capture(
     ColosseumState* s,
     ColosseumContext* ctx
 ) {
-    ColoStepOutForecast forecast;
-    float forecast_obs[COLO_STEP_OUT_FORECAST_OBS_SIZE];
     float obs[COLO_NUM_OBS];
     float action_mask[COLO_ACTION_MASK_SIZE];
 
-    ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
-    col_build_step_out_forecast_horizon_mode_summary(
-        s, &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON);
-    int fi = col_write_step_out_forecast_obs_summary(
-        &forecast, summaries, COLO_STEP_OUT_FORECAST_HORIZON, forecast_obs, 0);
-    assert(fi == COLO_STEP_OUT_FORECAST_OBS_SIZE);
     col_write_obs_ctx((EncounterState*)s, (EncounterContext*)ctx, obs);
     col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, action_mask);
 
@@ -277,17 +257,12 @@ static void exact_capture(
     record.state_size = (uint32_t)sizeof(*s);
     record.obs_size = COLO_NUM_OBS;
     record.action_mask_size = COLO_ACTION_MASK_SIZE;
-    record.forecast_size = (uint32_t)sizeof(forecast);
     record.state_hash = exact_hash_bytes(s, sizeof(*s));
-    record.forecast_hash = exact_hash_bytes(&forecast, sizeof(forecast));
-    record.forecast_obs_hash = exact_hash_bytes(forecast_obs, sizeof(forecast_obs));
     record.obs_hash = exact_hash_bytes(obs, sizeof(obs));
     record.action_mask_hash = exact_hash_bytes(action_mask, sizeof(action_mask));
     record.reward = col_get_reward_ctx((EncounterState*)s, (EncounterContext*)ctx);
 
     exact_write_all(writer->file, &record, sizeof(record));
-    exact_write_all(writer->file, &forecast, sizeof(forecast));
-    exact_write_all(writer->file, forecast_obs, sizeof(forecast_obs));
     exact_write_all(writer->file, obs, sizeof(obs));
     exact_write_all(writer->file, action_mask, sizeof(action_mask));
     exact_write_all(writer->file, s, sizeof(*s));
@@ -328,7 +303,6 @@ static void exact_init_state(
 ) {
     col_init_context_typed(ctx);
     ctx->config.start_wave = start_wave;
-    ctx->config.step_out_forecast_obs_enabled = 1;
     memset(s, 0, sizeof(*s));
     col_reset_ctx((EncounterState*)s, (EncounterContext*)ctx, seed);
 }

@@ -151,12 +151,6 @@ static int forecast_move_action_for_delta(int dx, int dy) {
     return 0;
 }
 
-static int forecast_action_has_event(const ColoStepOutForecastAction* action) {
-    for (int tick = 0; tick < COLO_STEP_OUT_FORECAST_HORIZON; tick++)
-        if (col_step_out_forecast_tick_has_event(&action->ticks[tick])) return 1;
-    return 0;
-}
-
 static int sol_hazard_action_obs_index(int action, ColoSolHazardSource source) {
     assert(action >= 0 && action < COLO_PRIMARY_DIM);
     assert(source >= 0 && source < COLO_SOL_HAZARD_SOURCE_COUNT);
@@ -3899,27 +3893,9 @@ static void test_sol_generic_observation_signals_are_neutral(void) {
     CHECK("adjacent Sol contributes no prayable live threat style",
         magic == 0 && ranged == 0 && melee == 0);
     CHECK("the global style-count observation stays neutral for Sol",
-        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST] == 0.0f &&
-        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST + 1] == 0.0f &&
-        obs[COLO_OBS_AFTER_STEP_OUT_FORECAST + 2] == 0.0f);
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    int adjacent_clear = 1;
-    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++)
-        if (forecast_action_has_event(&forecast.actions[action]))
-            adjacent_clear = 0;
-    CHECK("the step-out forecast invents no adjacent Sol melee attack",
-        adjacent_clear);
-
-    wb_move_npc(&s, 0, 10, 10);
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    int nonadjacent_clear = 1;
-    for (int action = 0; action < ENCOUNTER_MOVE_ACTIONS; action++)
-        if (forecast_action_has_event(&forecast.actions[action]))
-            nonadjacent_clear = 0;
-    CHECK("the step-out forecast invents no nonadjacent Sol ranged attack",
-        nonadjacent_clear);
+        obs[COLO_OBS_AFTER_PENDING_HITS] == 0.0f &&
+        obs[COLO_OBS_AFTER_PENDING_HITS + 1] == 0.0f &&
+        obs[COLO_OBS_AFTER_PENDING_HITS + 2] == 0.0f);
 }
 
 static void test_sol_hazard_action_observation_contract(void) {
@@ -4210,7 +4186,6 @@ static void test_primary_environment_hazard_action_observation_contract(void) {
         obs[primary_env_hazard_action_obs_index(0)] == 1.0f);
 
     init_forecast_test_state(&s, &ctx, 308, 12, 10);
-    ctx.config.step_out_forecast_obs_enabled = 0;
     col_apply_weapon_set(&s, COLO_GEAR_RANGED);
     col_init_npc(&s, 0, COLO_BEE_SWARM, 10, 10);
     s.bees[0] = (ColoBeeSwarm){
@@ -4250,7 +4225,6 @@ static void test_primary_environment_hazard_action_observation_contract(void) {
         safe.player.current_hitpoints == safe_hp);
 
     init_forecast_test_state(&s, &ctx, 312, 12, 10);
-    ctx.config.step_out_forecast_obs_enabled = 0;
     s.modifiers.active_mask |= (1u << COLO_MOD_VOLATILITY);
     s.modifiers.tier[COLO_MOD_VOLATILITY] = 2;
     col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 10, 10);
@@ -6563,7 +6537,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2560", COLO_NUM_OBS == 2560);
+    CHECK("obs width is 2335", COLO_NUM_OBS == 2335);
     CHECK("inventory block has 560 features (28 cells x 20 compact)",
         COLO_INVENTORY_OBS_SIZE == 560);
     CHECK("equipped-self block has 198 features", COLO_EQUIPPED_SELF_OBS_SIZE == 198);
@@ -6589,7 +6563,7 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
         COLO_SOL_HAZARD_ACTION_OBS_SIZE +
         COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE +
-        COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
+        COLO_PENDING_HIT_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
         COLO_SPAWN_OBS_SIZE +
         COLO_THREAT_FIELD_OBS_SIZE;
@@ -7257,172 +7231,6 @@ static void test_combat_fidelity_snapshot_roundtrip(void) {
         restored.thrall_recast_cd == 9);
     CHECK("Death-Charge fields round-trip bit-identically",
         restored.death_charge_window_left == 44 && restored.death_charge_cd == 0);
-}
-
-static void test_step_out_forecast_manticore_armed_pattern(void) {
-    printf("test_step_out_forecast_manticore_armed_pattern\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 401, 17, 16);
-    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
-    s.npcs[0].attack_timer = 1;
-    ColoManticoreState* mc = colo_npc_manticore(&s.npcs[0]);
-    mc->cycle_step = 0;
-    mc->orb_style[0] = ATTACK_STYLE_MAGIC;
-    mc->orb_style[1] = ATTACK_STYLE_RANGED;
-    mc->orb_style[2] = ATTACK_STYLE_MELEE;
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    const ColoStepOutForecastAction* idle = &forecast.actions[0];
-    CHECK("armed manticore idle forecast is valid", idle->valid == 1);
-    CHECK("armed manticore orb 0 records magic on tick 1",
-        idle->ticks[0].magic_count == 1 && idle->ticks[0].max_hit == COLO_MANTICORE_MAX_HIT_MAGIC);
-    CHECK("armed manticore orb 1 records ranged on tick 2",
-        idle->ticks[1].ranged_count == 1 && idle->ticks[1].max_hit == COLO_MANTICORE_MAX_HIT_RANGED);
-    CHECK("armed manticore orb 2 records melee on tick 3",
-        idle->ticks[2].melee_count == 1 && idle->melee_fallback_exposure == 1);
-}
-
-static void test_step_out_forecast_manticore_pair_stagger(void) {
-    printf("test_step_out_forecast_manticore_pair_stagger\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 406, 17, 16);
-    col_init_npc(&s, 0, COLO_MANTICORE, 16, 12);
-    col_init_npc(&s, 1, COLO_MANTICORE, 12, 12);
-    s.npcs[0].attack_timer = 1;
-    s.npcs[1].attack_timer = 1;
-    ColoManticoreState* amc = colo_npc_manticore(&s.npcs[0]);
-    ColoManticoreState* bmc = colo_npc_manticore(&s.npcs[1]);
-    amc->cycle_step = 0;
-    amc->orb_style[0] = ATTACK_STYLE_MAGIC;
-    amc->orb_style[1] = ATTACK_STYLE_RANGED;
-    amc->orb_style[2] = ATTACK_STYLE_MELEE;
-    bmc->cycle_step = 0;
-    bmc->orb_style[0] = ATTACK_STYLE_MAGIC;
-    bmc->orb_style[1] = ATTACK_STYLE_RANGED;
-    bmc->orb_style[2] = ATTACK_STYLE_MELEE;
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    const ColoStepOutForecastAction* idle = &forecast.actions[0];
-    CHECK("synced-pair forecast predicts ONE orb per tick, not two",
-        idle->ticks[0].magic_count == 1 &&
-        idle->ticks[1].ranged_count == 1 &&
-        idle->ticks[2].melee_count == 1);
-
-    s.npcs[1].attack_timer = 3;
-    bmc->orb_style[0] = ATTACK_STYLE_RANGED;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    idle = &forecast.actions[0];
-    CHECK("still-charging peer forecast overlaps mid-barrage",
-        idle->ticks[2].melee_count == 1 && idle->ticks[2].ranged_count == 1);
-}
-
-static void test_step_out_forecast_warband_window_and_break(void) {
-    printf("test_step_out_forecast_warband_window_and_break\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 402, 7, 18);
-    s.tick = 100;
-    s.warband_cycle_anchor = 100;
-    col_init_npc(&s, 0, COLO_FREMENNIK_BERSERKER, 8, 18);
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    int run_west = forecast_move_action_for_delta(-2, 0);
-    CHECK("adjacent berserker records melee on its next window",
-        forecast.actions[0].ticks[0].melee_count == 1);
-    /* warbanders attack before the player tick, so a tick-0 hit resolves against
-       the tile the player is standing on. stepping away cannot dodge it, and the
-       forecast has to say so or it would promise a dodge the sim will not honour. */
-    CHECK("running west does not dodge the tick-0 warband window",
-        forecast_action_has_event(&forecast.actions[run_west]));
-}
-
-static void test_step_out_forecast_ranged_los_candidate_tiles(void) {
-    printf("test_step_out_forecast_ranged_los_candidate_tiles\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 403, 7, 9);
-    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
-    s.npcs[0].attack_timer = 1;
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    int run_north = forecast_move_action_for_delta(0, 2);
-    CHECK("pillar-blocked idle tile records no shaman forecast",
-        !forecast_action_has_event(&forecast.actions[0]));
-    CHECK("run-north cannot expose the player before runtime movement",
-        forecast.actions[run_north].ticks[0].magic_count == 0);
-
-    int actions[COLO_NUM_ACTION_HEADS] = {0};
-    actions[COLO_HEAD_PRIMARY] = run_north;
-    ColosseumState runtime = s;
-    ColosseumContext runtime_ctx = ctx;
-    runtime.wave_ready_delay = 0;
-    runtime.wave_attack_delay = 0;
-    runtime.wave_spawn_delay = 0;
-    col_step_ctx(
-        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
-    CHECK("runtime also fires no attack before the run-north movement",
-        runtime.tick_scratch.attacks_fired == 0);
-
-    init_forecast_test_state(&s, &ctx, 404, 7, 11);
-    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
-    s.npcs[0].attack_timer = 1;
-    int run_south = forecast_move_action_for_delta(0, -2);
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    CHECK("run-south cannot hide the player before runtime movement",
-        forecast.actions[run_south].ticks[0].magic_count == 1);
-
-    memset(actions, 0, sizeof(actions));
-    actions[COLO_HEAD_PRIMARY] = run_south;
-    runtime = s;
-    runtime_ctx = ctx;
-    runtime.wave_ready_delay = 0;
-    runtime.wave_attack_delay = 0;
-    runtime.wave_spawn_delay = 0;
-    col_step_ctx(
-        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
-    CHECK("runtime fires before the run-south movement breaks line of sight",
-        runtime.tick_scratch.attacks_fired == 1);
-}
-
-static void test_step_out_forecast_valid_flags(void) {
-    printf("test_step_out_forecast_valid_flags\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 404, 7, 9);
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    int walk_east = forecast_move_action_for_delta(1, 0);
-    int walk_west = forecast_move_action_for_delta(-1, 0);
-    CHECK("pillar move has invalid step-out forecast flag",
-        forecast.actions[walk_east].valid == 0);
-    CHECK("clear move has valid step-out forecast flag",
-        forecast.actions[walk_west].valid == 1);
-}
-
-static void test_step_out_forecast_same_tick_mixed_styles(void) {
-    printf("test_step_out_forecast_same_tick_mixed_styles\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 405, 17, 16);
-    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 13, 16);
-    col_init_npc(&s, 1, COLO_JAVELIN_COLOSSUS, 20, 15);
-    s.npcs[0].attack_timer = 1;
-    s.npcs[1].attack_timer = 1;
-
-    ColoStepOutForecast forecast;
-    col_build_step_out_forecast_ctx(&s, &forecast);
-    const ColoStepOutForecastAction* idle = &forecast.actions[0];
-    CHECK("same tick magic and ranged forecast conflict is flagged",
-        idle->same_tick_mixed_style_conflict == 1);
-    CHECK("same tick magic and ranged counts are both recorded",
-        idle->ticks[0].magic_count == 1 && idle->ticks[0].ranged_count == 1);
 }
 
 static void test_render_bridge_combat_visuals_and_loadout(void) {
@@ -8737,7 +8545,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2560);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2335);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -9245,12 +9053,6 @@ int main(void) {
     test_thrall_regression();
     test_death_charge_regression();
     test_combat_fidelity_snapshot_roundtrip();
-    test_step_out_forecast_manticore_armed_pattern();
-    test_step_out_forecast_manticore_pair_stagger();
-    test_step_out_forecast_warband_window_and_break();
-    test_step_out_forecast_ranged_los_candidate_tiles();
-    test_step_out_forecast_valid_flags();
-    test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();
     test_render_bridge_npc_debug_and_warband_motion();
     test_melee_reach_cardinal_vs_diagonal();

@@ -66,8 +66,6 @@ static uint64_t run_episode(const GoldenConfig* cfg, int max_ticks) {
 
     col_init_context_typed(&ctx);
     ctx.config.start_wave = cfg->public_start_wave - 1;
-    ctx.config.step_out_forecast_obs_enabled = 1;
-    ctx.config.forecast_horizon = 4;
 
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, cfg->env_seed);
@@ -184,18 +182,18 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 4000
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xdc5ac20512087640ULL,
-    0xbd53cb9b2e64b63aULL,
-    0xe479b0871731ca28ULL,
-    0x165fcdbce9b8af4bULL,
-    0x5036f9577e3dc10fULL,
-    0x5022371d9933f614ULL,
-    0x3fe57438f720e7b2ULL,
-    0x3da36b0e6261c842ULL,
-    0x0c7a0636fb8d7c67ULL,
-    0xa1714465085e9f04ULL,
-    0x44ccf7ebda104a30ULL,
-    0xbfda96355eab1e85ULL,
+    0xeb20f9d5d54dd324ULL,
+    0x32320b385b3376a8ULL,
+    0x42a5467e844e86f2ULL,
+    0x8c9700537f89f81dULL,
+    0x5eb0376b73f86273ULL,
+    0x1a96d6d289fa76daULL,
+    0xe49d8312b630a06bULL,
+    0x777037063d278646ULL,
+    0xbc12b47df360b251ULL,
+    0xe2457491db882c45ULL,
+    0x4f57ee2ced34d137ULL,
+    0xd1b34821091d2d50ULL,
 };
 
 int main(int argc, char** argv) {

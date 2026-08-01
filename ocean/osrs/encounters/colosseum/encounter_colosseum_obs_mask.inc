@@ -82,7 +82,7 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
     COLO_SOL_HAZARD_ACTION_OBS_SIZE + \
     COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE + \
-    COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
+    COLO_PENDING_HIT_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
     COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
@@ -101,10 +101,8 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     (COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE)
 #define COLO_OBS_AFTER_PENDING_HITS \
     (COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS + COLO_PENDING_HIT_OBS_SIZE)
-#define COLO_OBS_AFTER_STEP_OUT_FORECAST \
-    (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
-    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
+    (COLO_OBS_AFTER_PENDING_HITS + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_SPAWN \
@@ -694,7 +692,6 @@ static int col_primary_action_landings_needed(
     const ColosseumState* s,
     const ColosseumContext* ctx
 ) {
-    if (ctx->config.step_out_forecast_obs_enabled) return 1;
     if (col_sol_clamp_active(s)) return 1;
     if (s->molten_count > 0) return 1;
     if (s->solarflare.active &&
@@ -2170,24 +2167,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
     assert(i == COLO_OBS_AFTER_PENDING_HITS);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PENDING_HITS);
-#endif
-
-    if (ctx->config.step_out_forecast_obs_enabled) {
-        int horizon = ctx->config.forecast_horizon;
-        if (horizon < 1) horizon = 1;
-        if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
-            horizon = COLO_STEP_OUT_FORECAST_HORIZON;
-        ColoStepOutForecast forecast;
-        ColoForecastObsSummary summaries[ENCOUNTER_MOVE_ACTIONS];
-        col_build_step_out_forecast_horizon_mode_summary(
-            s, &forecast, summaries, horizon);
-        i = col_write_step_out_forecast_obs_summary(&forecast, summaries, horizon, obs, i);
-    } else {
-        i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
-    }
-    assert(i == COLO_OBS_AFTER_STEP_OUT_FORECAST);
-#ifdef COLO_PROFILE_ENABLED
-    COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
 #endif
 
     col_write_threat_los_counts(s, obs, &i);

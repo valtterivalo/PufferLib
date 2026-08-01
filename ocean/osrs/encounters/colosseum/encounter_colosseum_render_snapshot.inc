@@ -25,9 +25,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "curriculum_agent") == 0)
         ctx->config.curriculum_agent =
             encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "step_out_forecast_obs_enabled") == 0)
-        ctx->config.step_out_forecast_obs_enabled =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "threat_field_obs_enabled") == 0)
         ctx->config.threat_field_obs_enabled =
             encounter_require_binary_config("colosseum", key, value);
@@ -71,14 +68,6 @@ static void col_put_int_ctx(
             abort();
         }
         ctx->config.damage_scale_anneal_ticks = value;
-    }
-    else if (strcmp(key, "forecast_horizon") == 0) {
-        if (value < 1 || value > COLO_STEP_OUT_FORECAST_HORIZON) {
-            fprintf(stderr, "colosseum: forecast_horizon must be 1..%d, got %d\n",
-                COLO_STEP_OUT_FORECAST_HORIZON, value);
-            abort();
-        }
-        ctx->config.forecast_horizon = value;
     }
     else if (strcmp(key, "loadout_profile_mode") == 0) {
         if (value < 0 || value > COLO_LOADOUT_PROFILE_MODE_MIXED) {
