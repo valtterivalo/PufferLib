@@ -16,7 +16,8 @@ static AttackStyle inf_player_equipped_attack_style(const InfernoState* s) {
 
 static void inf_refresh_human_loadout_stats(InfernoState* s) {
     AttackStyle style = inf_player_equipped_attack_style(s);
-    int spell_base_damage = (style == ATTACK_STYLE_MAGIC) ? 30 : 0;
+    int spell_base_damage = (style == ATTACK_STYLE_MAGIC)
+        ? inf_player_magic_base_damage(&s->player) : 0;
     encounter_compute_player_equipped_stats(
         &s->player, style, s->player.fight_style, spell_base_damage,
         &s->human_loadout_stats);
@@ -30,7 +31,8 @@ static FightStyle inf_live_fight_style_for(AttackStyle style) {
 
 static void inf_refresh_live_stats(InfernoState* s) {
     AttackStyle style = inf_player_equipped_attack_style(s);
-    int spell_base_damage = (style == ATTACK_STYLE_MAGIC) ? 30 : 0;
+    int spell_base_damage = (style == ATTACK_STYLE_MAGIC)
+        ? inf_player_magic_base_damage(&s->player) : 0;
     encounter_compute_player_equipped_stats(
         &s->player, style, inf_live_fight_style_for(style), spell_base_damage,
         &s->live_stats);
@@ -60,10 +62,6 @@ typedef struct {
     uint8_t weapon;
 } InfPlayerAttack;
 
-static int inf_is_barrage_spell(int spell) {
-    return spell == ENCOUNTER_SPELL_BLOOD || spell == ENCOUNTER_SPELL_ICE;
-}
-
 static int inf_spell_magic_level_requirement(int spell) {
     if (spell == ENCOUNTER_SPELL_ICE) return ICE_BARRAGE_LEVEL;
     if (spell == ENCOUNTER_SPELL_BLOOD) return BLOOD_BARRAGE_LEVEL;
@@ -75,20 +73,6 @@ static int inf_spell_action_to_spell(int action_spell) {
     if (action_spell == 1) return ENCOUNTER_SPELL_BLOOD;
     if (action_spell == 2) return ENCOUNTER_SPELL_ICE;
     return ENCOUNTER_SPELL_NONE;
-}
-
-static int inf_spell_base_damage(int spell) {
-    if (!inf_is_barrage_spell(spell)) {
-        fprintf(stderr, "BUG: invalid Inferno spell %d\n", spell);
-        abort();
-    }
-    return 30;
-}
-
-static int inf_player_autocast_spell(const Player* p) {
-    return p->autocast_spell == ENCOUNTER_SPELL_ICE
-        ? ENCOUNTER_SPELL_ICE
-        : ENCOUNTER_SPELL_BLOOD;
 }
 
 static FightStyle inf_player_spell_fight_style(const Player* p) {
@@ -113,8 +97,7 @@ static void inf_compute_manual_spell_stats(
         inf_player_spell_fight_style(&s->player),
         inf_spell_base_damage(spell),
         out);
-    out->attack_speed = 5;
-    out->attack_range = 10;
+    inf_apply_spell_cast_stats(out);
 }
 
 static int inf_resolve_player_attack_ctx(
@@ -151,8 +134,7 @@ static int inf_resolve_player_attack_ctx(
 
     out->spell = autocast_spell;
     out->is_barrage = 1;
-    out->stats.attack_speed = 5;
-    out->stats.attack_range = 10;
+    inf_apply_spell_cast_stats(&out->stats);
     return 1;
 }
 

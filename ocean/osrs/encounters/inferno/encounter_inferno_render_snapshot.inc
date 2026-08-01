@@ -874,7 +874,8 @@ static void inf_refresh_after_state_load(InfernoState* s, InfernoContext* ctx) {
         inf_loadouts_for_profile(s->active_loadout_profile);
     encounter_compute_loadout_stats(loadouts[INF_GEAR_MAGE], ATTACK_STYLE_MAGIC,
         s->player.offensive_prayer, s->player.current_magic,
-        inf_player_spell_fight_style(&s->player), 30,
+        inf_player_spell_fight_style(&s->player),
+        inf_player_magic_base_damage(&s->player),
         &s->loadout_stats[INF_GEAR_MAGE]);
     encounter_compute_loadout_stats(loadouts[INF_GEAR_LONG_RANGE], ATTACK_STYLE_RANGED,
         s->player.offensive_prayer, s->player.current_ranged,

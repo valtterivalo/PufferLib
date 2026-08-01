@@ -193,7 +193,7 @@ static void inf_apply_npc_death(InfernoState* s, int npc_idx) {
 static void inf_apply_blood_barrage_heal_damage(InfernoState* s, int damage) {
     if (damage <= 0) return;
     int hp_before = s->player.current_hitpoints;
-    s->player.current_hitpoints += damage / 4;
+    s->player.current_hitpoints += damage * BLOOD_BARRAGE_HEAL_PERCENT / 100;
     if (s->player.current_hitpoints > s->player.base_hitpoints)
         s->player.current_hitpoints = s->player.base_hitpoints;
     s->tick_scratch.blood_heal += s->player.current_hitpoints - hp_before;

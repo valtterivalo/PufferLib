@@ -1,4 +1,30 @@
 #line 862 "encounter_inferno.h"
+static inline int inf_is_barrage_spell(int spell) {
+    return spell == ENCOUNTER_SPELL_BLOOD || spell == ENCOUNTER_SPELL_ICE;
+}
+
+static inline int inf_spell_base_damage(int spell) {
+    if (spell == ENCOUNTER_SPELL_ICE) return ICE_BARRAGE_MAX_HIT;
+    if (spell == ENCOUNTER_SPELL_BLOOD) return BLOOD_BARRAGE_MAX_HIT;
+    fprintf(stderr, "BUG: invalid Inferno spell %d\n", spell);
+    abort();
+}
+
+static inline int inf_player_autocast_spell(const Player* p) {
+    return p->autocast_spell == ENCOUNTER_SPELL_ICE
+        ? ENCOUNTER_SPELL_ICE
+        : ENCOUNTER_SPELL_BLOOD;
+}
+
+static inline int inf_player_magic_base_damage(const Player* p) {
+    return inf_spell_base_damage(inf_player_autocast_spell(p));
+}
+
+static inline void inf_apply_spell_cast_stats(EncounterLoadoutStats* out) {
+    out->attack_speed = COMBAT_SPELL_CAST_SPEED;
+    out->attack_range = COMBAT_SPELL_ATTACK_RANGE;
+}
+
 static EncounterPendingHit* inf_queue_npc_pending_hit(
     InfernoState* s,
     int npc_idx,
