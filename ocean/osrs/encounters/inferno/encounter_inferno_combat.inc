@@ -721,9 +721,11 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
         } else {
             int max_hit = osrs_npc_magic_max_hit(stats->magic_base_dmg, stats->magic_dmg_pct);
             int dmg = encounter_rand_int(&s->rng_state, max_hit + 1);
+            EncounterProjectileTiming zuk_timing =
+                inf_npc_projectile_timing(npc->type, ATTACK_STYLE_MAGIC, dist);
             inf_queue_player_pending_hit(s, idx, npc->type, (EncounterPendingHit){
                 .damage = dmg,
-                .ticks_remaining = 3,
+                .ticks_remaining = zuk_timing.damage_delay_ticks,
                 .attack_style = ATTACK_STYLE_NONE,
                 .check_prayer = 0,
                 .prayer_check_delay = 0,

@@ -118,9 +118,9 @@ static const uint64_t BASELINE[NUM_CONFIGS] = {
     0x95fbffc1089916ecULL,  /* jad_a */
     0x62ccffb0ab81edcfULL,  /* jad_b */
     0xd5cae84c7ac06f9eULL,  /* jad_c */
-    0xe4f2389d716bac1dULL,  /* zuk_a */
-    0xc5c3a2102d12e7b5ULL,  /* zuk_b */
-    0x77241373f92182b5ULL,  /* zuk_c */
+    0x82d94c5228bb3e9aULL,  /* zuk_a */
+    0xf17ca10f76c2a9beULL,  /* zuk_b */
+    0x4701c472714d9ee5ULL,  /* zuk_c */
 };
 
 int main(int argc, char** argv) {
