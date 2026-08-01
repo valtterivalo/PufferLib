@@ -91,7 +91,6 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     COLO_SOL_HAZARD_ACTION_OBS_SIZE + \
     COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE + \
     COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE + \
-    COLO_CHASE_THREAT_OBS_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
     COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE + \
     COLO_THREAT_FIELD_OBS_SIZE)
@@ -112,10 +111,8 @@ static_assert(COLO_THREAT_FIELD_OBS_SIZE == COLO_THREAT_FIELD_OBS_CACHE_FLOATS,
     (COLO_OBS_AFTER_PRIMARY_ENV_HAZARD_ACTIONS + COLO_PENDING_HIT_OBS_SIZE)
 #define COLO_OBS_AFTER_STEP_OUT_FORECAST \
     (COLO_OBS_AFTER_PENDING_HITS + COLO_STEP_OUT_FORECAST_OBS_SIZE)
-#define COLO_OBS_AFTER_CHASE_THREAT \
-    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_CHASE_THREAT_OBS_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
-    (COLO_OBS_AFTER_CHASE_THREAT + COLO_THREAT_LOS_OBS_SIZE)
+    (COLO_OBS_AFTER_STEP_OUT_FORECAST + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_WEAPON_CHOICE \
@@ -931,27 +928,6 @@ static void col_write_primary_env_hazard_action_obs(
         obs[i++] = urgency_by_action[action];
     }
     *idx = i;
-}
-
-static int col_write_chase_threat_obs(
-    const ColoStepOutForecastAction actions[COLO_CHASE_THREAT_ACTIONS],
-    const ColoForecastObsSummary summaries[COLO_CHASE_THREAT_ACTIONS],
-    int horizon,
-    float* obs,
-    int i
-) {
-    for (int action = 0; action < COLO_CHASE_THREAT_ACTIONS; action++) {
-        const ColoStepOutForecastAction* forecast = &actions[action];
-        const ColoForecastObsSummary* summary = &summaries[action];
-        int style_mask = summary->first_style_mask;
-        obs[i++] = (float)summary->first_attack_tick / (float)horizon;
-        obs[i++] = (style_mask & COLO_STYLE_MASK_MELEE) ? 1.0f : 0.0f;
-        obs[i++] = (style_mask & COLO_STYLE_MASK_RANGED) ? 1.0f : 0.0f;
-        obs[i++] = (style_mask & COLO_STYLE_MASK_MAGIC) ? 1.0f : 0.0f;
-        obs[i++] = forecast->same_tick_mixed_style_conflict ? 1.0f : 0.0f;
-        obs[i++] = forecast->ranged_magic_offtick_opportunity ? 1.0f : 0.0f;
-    }
-    return i;
 }
 
 typedef struct {
@@ -2342,25 +2318,6 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
         i += COLO_STEP_OUT_FORECAST_OBS_SIZE;
     }
     assert(i == COLO_OBS_AFTER_STEP_OUT_FORECAST);
-    if (ctx->config.step_out_forecast_obs_enabled) {
-        int horizon = ctx->config.forecast_horizon;
-        if (horizon < 1) horizon = 1;
-        if (horizon > COLO_STEP_OUT_FORECAST_HORIZON)
-            horizon = COLO_STEP_OUT_FORECAST_HORIZON;
-        ColoStepOutForecastAction chase_actions[COLO_CHASE_THREAT_ACTIONS];
-        ColoForecastObsSummary chase_summaries[COLO_CHASE_THREAT_ACTIONS];
-        col_build_chase_action_threat_forecasts(
-            s,
-            primary_forecast.landings,
-            chase_actions,
-            chase_summaries,
-            horizon);
-        i = col_write_chase_threat_obs(
-            chase_actions, chase_summaries, horizon, obs, i);
-    } else {
-        i += COLO_CHASE_THREAT_OBS_SIZE;
-    }
-    assert(i == COLO_OBS_AFTER_CHASE_THREAT);
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_FORECAST);
 #endif

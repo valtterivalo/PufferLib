@@ -169,17 +169,6 @@ static int primary_env_hazard_action_obs_index(int action) {
     return COLO_OBS_AFTER_SOL_HAZARD_ACTIONS + action;
 }
 
-static int chase_threat_obs_index(int primary_action, int feature) {
-    assert(feature >= 0 && feature < COLO_CHASE_THREAT_ACTION_FEATURES);
-    int chase_action = primary_action == 0
-        ? 0
-        : primary_action - ENCOUNTER_MOVE_ACTIONS + 1;
-    assert(chase_action >= 0 && chase_action < COLO_CHASE_THREAT_ACTIONS);
-    return COLO_OBS_AFTER_STEP_OUT_FORECAST +
-        chase_action * COLO_CHASE_THREAT_ACTION_FEATURES +
-        feature;
-}
-
 static int test_obs_slot_for_npc(const ColosseumState* s, int npc_idx) {
     for (int slot = 0; slot < COLO_OBS_NPCS; slot++)
         if (s->current_obs_slots[slot] == npc_idx) return slot;
@@ -6574,7 +6563,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 2768", COLO_NUM_OBS == 2768);
+    CHECK("obs width is 2618", COLO_NUM_OBS == 2618);
     CHECK("weapon-choice tail has 58 features (28 cell DPT + 28 spec + 2 wielded)",
         COLO_WEAPON_CHOICE_OBS_SIZE == 58);
     CHECK("inventory block has 560 features (28 cells x 20 compact)",
@@ -6603,7 +6592,6 @@ static void test_combat_fidelity_contract_sizes(void) {
         COLO_SOL_HAZARD_ACTION_OBS_SIZE +
         COLO_PRIMARY_ENV_HAZARD_ACTION_OBS_SIZE +
         COLO_PENDING_HIT_OBS_SIZE + COLO_STEP_OUT_FORECAST_OBS_SIZE +
-        COLO_CHASE_THREAT_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
         COLO_WEAPON_CHOICE_OBS_SIZE + COLO_SPAWN_OBS_SIZE +
         COLO_THREAT_FIELD_OBS_SIZE;
@@ -7402,62 +7390,6 @@ static void test_step_out_forecast_ranged_los_candidate_tiles(void) {
         (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
     CHECK("runtime fires before the run-south movement breaks line of sight",
         runtime.tick_scratch.attacks_fired == 1);
-}
-
-static void test_chase_threat_observation_matches_runtime_order(void) {
-    printf("test_chase_threat_observation_matches_runtime_order\n");
-    ColosseumContext ctx;
-    ColosseumState s;
-    init_forecast_test_state(&s, &ctx, 407, 7, 9);
-    col_apply_weapon_set(&s, COLO_GEAR_MELEE);
-    col_init_npc(&s, 0, COLO_SERPENT_SHAMAN, 12, 12);
-    col_init_npc(&s, 1, COLO_FREMENNIK_BERSERKER, 7, 14);
-    s.npcs[0].attack_timer = 1;
-    s.npcs[1].stun_timer = 100;
-    col_refresh_current_obs_slots_ctx(&s, &ctx);
-    int target_obs_slot = test_obs_slot_for_npc(&s, 1);
-    int target_action =
-        col_primary_attack_action_for_obs_slot(target_obs_slot);
-    ColoForecastLanding landing =
-        col_primary_action_landing_ctx(&s, &ctx, target_action);
-    CHECK("fixture: target-click action chases north around the pillar",
-        landing.valid && landing.land_y > s.player.y);
-
-    int actions[COLO_NUM_ACTION_HEADS] = {0};
-    actions[COLO_HEAD_PRIMARY] = target_action;
-    ColosseumState runtime = s;
-    ColosseumContext runtime_ctx = ctx;
-    runtime.wave_ready_delay = 0;
-    runtime.wave_attack_delay = 0;
-    runtime.wave_spawn_delay = 0;
-    float shaman_faced_before =
-        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
-    col_step_ctx(
-        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
-    float shaman_faced_after_first =
-        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
-    memset(actions, 0, sizeof(actions));
-    col_step_ctx(
-        (EncounterState*)&runtime, (EncounterContext*)&runtime_ctx, actions);
-    float shaman_faced_after_second =
-        runtime.log.pray_faced_by_type[COLO_SERPENT_SHAMAN];
-    CHECK("runtime shooter waits for the chase movement before attacking",
-        shaman_faced_after_first == shaman_faced_before &&
-        shaman_faced_after_second > shaman_faced_after_first);
-
-    static float obs[COLO_NUM_OBS];
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("target-click threat observation exposes the future magic attack",
-        obs[chase_threat_obs_index(target_action, 0)] == 0.5f &&
-        obs[chase_threat_obs_index(target_action, 3)] == 1.0f);
-    CHECK("stationary PRIMARY noop does not inherit the target-click threat",
-        obs[chase_threat_obs_index(0, 3)] == 0.0f);
-
-    osrs_interaction_set(&s.interaction, 1);
-    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("held-chase PRIMARY noop exposes the same future magic attack",
-        obs[chase_threat_obs_index(0, 0)] == 0.5f &&
-        obs[chase_threat_obs_index(0, 3)] == 1.0f);
 }
 
 static void test_step_out_forecast_valid_flags(void) {
@@ -8807,7 +8739,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2768);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 2618);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -9409,7 +9341,6 @@ int main(void) {
     test_step_out_forecast_manticore_pair_stagger();
     test_step_out_forecast_warband_window_and_break();
     test_step_out_forecast_ranged_los_candidate_tiles();
-    test_chase_threat_observation_matches_runtime_order();
     test_step_out_forecast_valid_flags();
     test_step_out_forecast_same_tick_mixed_styles();
     test_render_bridge_combat_visuals_and_loadout();
