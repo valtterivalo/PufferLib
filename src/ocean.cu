@@ -1718,6 +1718,10 @@ static void colo_entity_encoder_free_weights(void* weights) { free(weights); }
 static void colo_entity_encoder_free_activations(void* activations) { free(activations); }
 
 // ---- Inferno entity encoder ----
+// Mirrors the observation layout in encounter_inferno_obs_mask.inc, whose block
+// offsets are the INF_OBS_AFTER_* macros in encounter_inferno_forecast.inc. No
+// shared header reaches this TU, so drift is caught only by the _Static_asserts
+// in osrs_visual.c; update both when the layout changes.
 static constexpr int INF_ENT_NPC_START   = 90;
 static constexpr int INF_ENT_NUM_NPCS    = 37;
 static constexpr int INF_ENT_FEATS       = 48;

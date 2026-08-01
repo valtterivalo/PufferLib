@@ -41,6 +41,21 @@ _Static_assert(COLO_ENT_INF_INV_NUM_CELLS == COLO_INVENTORY_DISPLAY_SLOTS,
 _Static_assert(COLO_ENT_INF_INV_FEATS == COLO_INVENTORY_CELL_OBS_FEATURES,
     "entity encoder inventory cell width must track the colosseum observation layout");
 
+_Static_assert(INF_ENT_FEATS == INF_NPC_SLOT_FEATURES,
+    "entity encoder per-NPC width must track the inferno observation layout");
+_Static_assert(INF_ENT_NUM_NPCS == INF_OBS_NPCS,
+    "entity encoder NPC count must track the inferno observation layout");
+_Static_assert(INF_ENT_NPC_START == INF_OBS_AFTER_PILLARS,
+    "entity encoder NPC block offset must track the inferno observation layout");
+_Static_assert(INF_ENT_TYPE_ONEHOT == INF_NUM_NPC_TYPES,
+    "entity pool presence mask is the NPC type one-hot; a new NPC type must widen it");
+_Static_assert(INF_ENT_INV_START == INF_OBS_AFTER_SPARKS,
+    "entity encoder inventory block offset must track the inferno observation layout");
+_Static_assert(INF_ENT_INV_NUM_CELLS == OSRS_INVENTORY_SIZE,
+    "entity encoder inventory cell count must track the inferno observation layout");
+_Static_assert(INF_ENT_INV_FEATS == OSRS_INVENTORY_CELL_OBS_FEATURES,
+    "entity encoder inventory cell width must track the inferno observation layout");
+
 static void visual_require_gui_item_sprite(int raw_osrs_id, void* ctx) {
     gui_require_sprite_by_osrs_id((GuiState*)ctx, raw_osrs_id);
 }

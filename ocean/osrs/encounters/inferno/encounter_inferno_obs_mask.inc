@@ -433,11 +433,9 @@ static void inf_write_obs_ctx(
 #endif
 
     {
-        int expected_npc_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
-            INF_TOTAL_NPC_OBS_SIZE;
-        if (i != expected_npc_end) {
+        if (i != INF_OBS_AFTER_NPCS) {
             fprintf(stderr, "FATAL: obs misaligned after NPC section: i=%d expected=%d\n",
-                    i, expected_npc_end);
+                    i, INF_OBS_AFTER_NPCS);
             abort();
         }
     }
@@ -482,11 +480,9 @@ static void inf_write_obs_ctx(
 #endif
 
     {
-        int expected_forecast_end = INF_PLAYER_OBS_SIZE + INF_PILLAR_OBS_SIZE +
-            INF_TOTAL_NPC_OBS_SIZE + INF_STEP_OUT_FORECAST_OBS_SIZE;
-        if (i != expected_forecast_end) {
+        if (i != INF_OBS_AFTER_FORECAST) {
             fprintf(stderr, "FATAL: obs misaligned after step-out forecast: i=%d expected=%d\n",
-                    i, expected_forecast_end);
+                    i, INF_OBS_AFTER_FORECAST);
             abort();
         }
     }
@@ -506,6 +502,12 @@ static void inf_write_obs_ctx(
 #ifdef INF_PROFILE_ENABLED
     INF_PROFILE_MARK(INF_PROF_OBS_PENDING_HITS);
 #endif
+
+    if (i != INF_OBS_AFTER_PENDING_HITS) {
+        fprintf(stderr, "FATAL: obs misaligned after pending hits: i=%d expected=%d\n",
+                i, INF_OBS_AFTER_PENDING_HITS);
+        abort();
+    }
 
     int used_sparks[INF_MAX_PENDING_SPARKS] = {0};
     for (int slot = 0; slot < INF_SPARK_OBS_SLOTS; slot++) {
@@ -537,6 +539,12 @@ static void inf_write_obs_ctx(
 #ifdef INF_PROFILE_ENABLED
     INF_PROFILE_MARK(INF_PROF_OBS_SPARKS);
 #endif
+
+    if (i != INF_OBS_AFTER_SPARKS) {
+        fprintf(stderr, "FATAL: obs misaligned before inventory block: i=%d expected=%d\n",
+                i, INF_OBS_AFTER_SPARKS);
+        abort();
+    }
 
     {
         static const float inf_zero_post_use_deltas[6] = {0};
