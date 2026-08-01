@@ -477,59 +477,6 @@ static int exact_attack_route_property_scenario(
     return checks;
 }
 
-static void exact_attack_route_held_selftest(void) {
-    ColosseumState s;
-    ColosseumContext ctx;
-    exact_prepare_custom(&s, &ctx, 0xA772u, 16, 16);
-    int target_slot = col_spawn_npc_at(
-        &s, COLO_JAVELIN_COLOSSUS, COLO_ARENA_MAX_X - 3, 16);
-    exact_refresh_geometry(&s, &ctx);
-    osrs_interaction_set(&s.interaction, target_slot);
-
-    ExactAttackRouteContext route_ctx = {
-        .walk = {&s, &ctx},
-    };
-    EncounterArenaAttackRouteField field;
-    encounter_build_arena_attack_route_field(
-        &field,
-        ctx.collision_map,
-        ctx.world_offset_x,
-        ctx.world_offset_y,
-        s.player.x,
-        s.player.y,
-        exact_attack_route_walkable,
-        &route_ctx,
-        exact_attack_route_blocked,
-        &route_ctx,
-        COLO_ARENA_MIN_X,
-        COLO_ARENA_MIN_Y,
-        COLO_ARENA_WIDTH,
-        COLO_ARENA_HEIGHT);
-    OsrsAttackTarget target;
-    assert(col_lookup_player_attack_target(&s, target_slot, &target));
-    OsrsLosQuery los_query = col_player_los_query(&s);
-    EncounterAttackRouteLanding actual =
-        encounter_arena_attack_route_landing(
-            &field,
-            target.x,
-            target.y,
-            target.size,
-            target.attack_range,
-            &los_query);
-    ColoForecastLanding expected =
-        col_primary_action_landing_ctx(&s, &ctx, 0);
-    if (actual.land_x != expected.land_x ||
-            actual.land_y != expected.land_y) {
-        fprintf(stderr,
-            "held attack route mismatch field=(%d,%d) runtime=(%d,%d)\n",
-            actual.land_x,
-            actual.land_y,
-            expected.land_x,
-            expected.land_y);
-        abort();
-    }
-}
-
 static void exact_attack_route_property_selftest(void) {
     ColosseumState s;
     ColosseumContext ctx;
@@ -560,125 +507,9 @@ static void exact_attack_route_property_selftest(void) {
     exact_refresh_geometry(&s, &ctx);
     checks += exact_attack_route_property_scenario(
         "sol-clamp", &s, &ctx, &route_ctx);
-    exact_attack_route_held_selftest();
-
     printf(
-        "colosseum attack route property selftest PASS: %d target queries across 3 fields and held target\n",
+        "colosseum attack route property selftest PASS: %d target queries across 3 fields\n",
         checks);
-}
-
-static int exact_primary_action_landing_selftest_one_state(
-    const char* scenario,
-    ColosseumState* s,
-    ColosseumContext* ctx
-) {
-    ColoPrimaryActionForecast forecast;
-    const ColoForecastLanding* landings = forecast.landings;
-    float mask[COLO_ACTION_MASK_SIZE];
-    col_build_primary_action_forecast_ctx(s, ctx, &forecast);
-    col_write_mask_ctx((EncounterState*)s, (EncounterContext*)ctx, mask);
-    int primary_mask_offset = col_action_head_mask_offset(COLO_HEAD_PRIMARY);
-    int checked = 0;
-
-    for (int primary_action = 0;
-            primary_action < COLO_PRIMARY_DIM;
-            primary_action++) {
-        int valid = mask[primary_mask_offset + primary_action] == 1.0f;
-        if (landings[primary_action].valid != valid) {
-            fprintf(stderr,
-                "colosseum primary landing validity mismatch scenario=%s action=%d helper=%d mask=%d\n",
-                scenario, primary_action, landings[primary_action].valid, valid);
-            abort();
-        }
-        if (!valid) continue;
-
-        ColosseumState stepped = *s;
-        ColosseumContext stepped_ctx = *ctx;
-        int actions[COLO_NUM_ACTION_HEADS] = {0};
-        actions[COLO_HEAD_PRIMARY] = primary_action;
-        col_tick_player_ctx(&stepped, &stepped_ctx, actions, 0);
-        if (landings[primary_action].land_x != stepped.player.x ||
-                landings[primary_action].land_y != stepped.player.y) {
-            fprintf(stderr,
-                "colosseum primary landing mismatch scenario=%s action=%d helper=(%d,%d) runtime=(%d,%d)\n",
-                scenario, primary_action,
-                landings[primary_action].land_x,
-                landings[primary_action].land_y,
-                stepped.player.x, stepped.player.y);
-            abort();
-        }
-        checked++;
-    }
-
-    return checked;
-}
-
-static void exact_primary_action_landing_selftest(void) {
-    ColosseumContext ctx;
-    ColosseumState s;
-    exact_prepare_custom(&s, &ctx, 0x51A8u, 16, 16);
-
-    int target_count = 0;
-    for (int y = COLO_ARENA_MIN_Y;
-            y <= COLO_ARENA_MAX_Y && target_count < COLO_MAX_NPCS;
-            y++) {
-        for (int x = COLO_ARENA_MIN_X;
-                x <= COLO_ARENA_MAX_X && target_count < COLO_MAX_NPCS;
-                x++) {
-            if (col_static_blocked(x, y) ||
-                    (x == s.player.x && y == s.player.y)) {
-                continue;
-            }
-            col_init_npc(
-                &s, target_count, COLO_FREMENNIK_BERSERKER, x, y);
-            target_count++;
-        }
-    }
-    assert(target_count == COLO_MAX_NPCS);
-    s.player.attack_timer = 10;
-    exact_refresh_geometry(&s, &ctx);
-
-    int checked = exact_primary_action_landing_selftest_one_state(
-        "all-targets", &s, &ctx);
-
-    osrs_interaction_set(
-        &s.interaction, s.current_obs_slots[COLO_OBS_NPCS - 1]);
-    checked += exact_primary_action_landing_selftest_one_state(
-        "held-target", &s, &ctx);
-
-    osrs_interaction_clear(&s.interaction);
-    s.player_dest_x = 20;
-    s.player_dest_y = 20;
-    checked += exact_primary_action_landing_selftest_one_state(
-        "persistent-destination", &s, &ctx);
-
-    s.modifiers.draft_pending = 1;
-    s.modifiers.draft_free_movement = 0;
-    checked += exact_primary_action_landing_selftest_one_state(
-        "frozen-draft", &s, &ctx);
-
-    s.modifiers.draft_free_movement = 1;
-    checked += exact_primary_action_landing_selftest_one_state(
-        "free-movement-draft", &s, &ctx);
-
-    s.modifiers.draft_pending = 0;
-    s.player_dest_x = -1;
-    s.player_dest_y = -1;
-    s.wave = COLO_WAVE_BOSS;
-    s.sol.started = 1;
-    s.sol.boss_arena_min_x = COLO_BOSS_ARENA_MIN_X;
-    s.sol.boss_arena_min_y = COLO_BOSS_ARENA_MIN_Y;
-    s.sol.boss_arena_max_x = COLO_BOSS_ARENA_MAX_X;
-    s.sol.boss_arena_max_y = COLO_BOSS_ARENA_MAX_Y;
-    s.player.x = COLO_BOSS_ARENA_MIN_X + 1;
-    s.player.y = COLO_BOSS_ARENA_MIN_Y + 1;
-    exact_refresh_geometry(&s, &ctx);
-    checked += exact_primary_action_landing_selftest_one_state(
-        "sol-clamp", &s, &ctx);
-
-    printf(
-        "colosseum primary landing selftest PASS: %d valid action-state pairs across 6 states\n",
-        checked);
 }
 
 static void exact_run_steps(
@@ -926,7 +757,6 @@ int main(int argc, char** argv) {
     col_static_footprint_table_selftest();
     col_step_out_forecast_landing_selftest();
     exact_attack_route_property_selftest();
-    exact_primary_action_landing_selftest();
 
     char fixture_path[1024];
     char current_path[1024];
