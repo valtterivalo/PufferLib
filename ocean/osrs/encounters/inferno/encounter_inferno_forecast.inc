@@ -24,7 +24,7 @@
 #define INF_OBS_AFTER_INVENTORY     (INF_OBS_AFTER_SPARKS + INF_INVENTORY_OBS_SIZE)
 #define INF_NUM_OBS                 (INF_OBS_AFTER_INVENTORY + INF_EQUIPPED_OBS_SIZE)
 
-_Static_assert(INF_NPC_TYPE_ONEHOT == INF_NUM_NPC_TYPES,
+static_assert(INF_NPC_TYPE_ONEHOT == INF_NUM_NPC_TYPES,
     "the per-NPC obs one-hot is the NPC type one-hot; a new NPC type must widen it");
 
 typedef struct {
