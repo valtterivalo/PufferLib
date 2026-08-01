@@ -314,6 +314,9 @@ void puf_step(Env* env) {
             &env->log.attacked_argmax_set_hit,
             &env->log.attacked_argmax_set_n,
             col_attacked_with_argmax_set(&env->state));
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_MARK(COLO_PROF_C_LOG_DPT);
+#endif
     }
 
     if (is_terminal) {

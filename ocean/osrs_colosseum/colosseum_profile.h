@@ -14,6 +14,7 @@
     X(COLO_PROF_C_REWARD_TERMINAL,      "c_reward_terminal") \
     X(COLO_PROF_C_TERMINAL_LOG,         "c_terminal_log") \
     X(COLO_PROF_C_RESET,                "c_reset") \
+    X(COLO_PROF_C_LOG_DPT,              "c_log_dpt") \
     X(COLO_PROF_OBS_REFRESH_SLOTS,      "obs_refresh_slots") \
     X(COLO_PROF_OBS_PREFIX,             "obs_prefix") \
     X(COLO_PROF_OBS_PILLARS,            "obs_pillars") \
