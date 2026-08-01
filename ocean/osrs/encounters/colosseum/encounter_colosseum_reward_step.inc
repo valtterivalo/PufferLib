@@ -162,9 +162,19 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     reward += cfg->damage_reward_coeff * rewarded_fresh;
     reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
     if (cfg->argmax_gear_reward_coeff != 0.0f) {
+#ifdef COLO_PROFILE_ENABLED
+        int col_prof_enabled =
+            COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
+        double col_prof_gear_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
         float gear_quality = col_attacked_gear_quality_ratio(s);
         if (gear_quality >= 0.0f)
             reward += cfg->argmax_gear_reward_coeff * gear_quality;
+#ifdef COLO_PROFILE_ENABLED
+        if (col_prof_enabled)
+            COLO_PROFILE_ADD(COLO_PROF_REWARD_ARGMAX_GEAR,
+                COLO_PROFILE_NOW_MS() - col_prof_gear_t0);
+#endif
     }
     if (cfg->offensive_boost_reward_coeff != 0.0f) {
         if (col_attacked_with_offensive_boost(s) > 0)

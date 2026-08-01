@@ -1478,7 +1478,10 @@ static int col_weapon_set_is_argmax_dpt_for_npc(
     return 1;
 }
 
+/* Sampled on attack ticks only. Reading it on every tick that merely has a target fired
+ * the best-gear oracle ~4x more often than the reward that motivated the metric. */
 static int col_current_set_is_argmax_dpt_for_target(ColosseumState* s) {
+    if (!s->tick_scratch.player_attacked) return -1;
     int target = col_player_target_slot(s);
     if (target < 0 || target >= COLO_MAX_NPCS) return -1;
     const ColoNPC* npc = &s->npcs[target];
