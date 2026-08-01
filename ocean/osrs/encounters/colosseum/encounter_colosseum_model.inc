@@ -924,8 +924,6 @@ typedef struct {
         ColoWarbandState warband;
     } type_state;
 
-    EncounterPendingHitQueue pending_hits;
-
     int death_ticks;
     int spawned_as_reinforcement;
 
@@ -937,6 +935,10 @@ typedef struct {
     int hit_landed_this_tick;
     int hit_damage;
     int hit_was_successful_this_tick;
+
+    /* Trails every scalar: the per-tick NPC sweeps read the fields above and never touch
+     * this, so keeping it last packs the hot ones into the leading cache lines. */
+    EncounterPendingHitQueue pending_hits;
 } ColoNPC;
 
 static inline ColoManticoreState* colo_npc_manticore(ColoNPC* npc) {
