@@ -391,6 +391,14 @@ void puf_step(Env* env) {
 }
 
 #ifdef COLO_PROFILE_ENABLED
+/* best_gear_* accumulate event counts, not milliseconds, so a %-of-step column on them
+ * is meaningless. */
+static int col_profile_slot_is_counter(int slot) {
+    return slot == COLO_PROF_BEST_GEAR_REQUESTS ||
+        slot == COLO_PROF_BEST_GEAR_HITS ||
+        slot == COLO_PROF_BEST_GEAR_BUILDS;
+}
+
 #define PUF_ENV_PROFILE_REPORT puf_env_profile_report
 void puf_env_profile_report(void) {
     int n = colosseum_env_profile_count();
@@ -403,9 +411,13 @@ void puf_env_profile_report(void) {
 
     printf("\nenv profile (ms across all worker threads, %% of c_step_total)\n");
     for (int i = 0; i < n; i++) {
-        if (v[i] <= 0.0) continue;
+        if (v[i] <= 0.0 || col_profile_slot_is_counter(i)) continue;
         printf("  %-24s %10.1f  %5.1f%%\n",
             colosseum_env_profile_name(i), v[i], 100.0 * v[i] / total);
+    }
+    for (int i = 0; i < n; i++) {
+        if (v[i] <= 0.0 || !col_profile_slot_is_counter(i)) continue;
+        printf("  %-24s %10.0f  (count)\n", colosseum_env_profile_name(i), v[i]);
     }
     fflush(stdout);
 }
