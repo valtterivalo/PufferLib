@@ -234,14 +234,19 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_PRE_RESET_PLAYER);
 #endif
+    /* Mean live NPCs is 4.4 of 24, and the tick-flag fields sit in their own cache line
+     * per NPC, so clearing all 24 touched 24 lines to reset ~4. col_deactivate_npc clears
+     * a slot on the way out, so skipping inactive slots here is equivalent. */
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
-        s->npcs[i].attacked_this_tick = 0;
-        s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
-        s->npcs[i].moved_last_tick = s->npcs[i].moved_this_tick;
-        s->npcs[i].moved_this_tick = 0;
-        s->npcs[i].hit_landed_this_tick = 0;
-        s->npcs[i].hit_damage = 0;
-        s->npcs[i].hit_was_successful_this_tick = 0;
+        ColoNPC* npc = &s->npcs[i];
+        if (!npc->active) continue;
+        npc->attacked_this_tick = 0;
+        npc->attack_style_this_tick = ATTACK_STYLE_NONE;
+        npc->moved_last_tick = npc->moved_this_tick;
+        npc->moved_this_tick = 0;
+        npc->hit_landed_this_tick = 0;
+        npc->hit_damage = 0;
+        npc->hit_was_successful_this_tick = 0;
     }
     s->tick++;
 #ifdef COLO_PROFILE_ENABLED
