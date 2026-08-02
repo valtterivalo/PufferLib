@@ -3,6 +3,8 @@
 #define COLO_ENT_INF_NPC_START   606
 #define COLO_ENT_INF_NUM_NPCS    24
 #define COLO_ENT_INF_FEATS       34
+/* obs carries a type CODE per slot; the encoder expands it back to the one-hot */
+#define COLO_ENT_INF_OBS_FEATS   23
 #define COLO_ENT_INF_TYPE_ONEHOT 12
 #define COLO_ENT_INF_BOTTLENECK  16
 #define COLO_ENT_INF_INV_START      36
@@ -23,6 +25,8 @@ struct EntityPoolBranch {
     int start;
     int num_recs;
     int feats;
+    int obs_feats;
+    int type_onehot;
     int bottleneck;
     int mask_prefix;
     float* l1_w;
@@ -45,10 +49,13 @@ struct EntityEncoder {
 
 static void entity_pool_branch_init(
         EntityPoolBranch* branch, Weights* weights, int hidden_dim,
-        int start, int num_recs, int feats, int bottleneck, int mask_prefix) {
+        int start, int num_recs, int feats, int obs_feats, int type_onehot,
+        int bottleneck, int mask_prefix) {
     branch->start = start;
     branch->num_recs = num_recs;
     branch->feats = feats;
+    branch->obs_feats = obs_feats;
+    branch->type_onehot = type_onehot;
     branch->bottleneck = bottleneck;
     branch->mask_prefix = mask_prefix;
     branch->l1_w = get_weights_aligned(weights, bottleneck * feats);
@@ -79,12 +86,14 @@ EntityEncoder* make_colosseum_entity_encoder(
         weights, batch_size, input_dim, hidden_dim);
     entity_pool_branch_init(&layer->branches[0], weights, hidden_dim,
         COLO_ENT_INF_NPC_START, COLO_ENT_INF_NUM_NPCS,
-        COLO_ENT_INF_FEATS, COLO_ENT_INF_BOTTLENECK, COLO_ENT_INF_TYPE_ONEHOT);
+        COLO_ENT_INF_FEATS, COLO_ENT_INF_OBS_FEATS, COLO_ENT_INF_TYPE_ONEHOT,
+        COLO_ENT_INF_BOTTLENECK, COLO_ENT_INF_TYPE_ONEHOT);
     layer->num_branches = 1;
     if (mode >= 2) {
         entity_pool_branch_init(&layer->branches[1], weights, hidden_dim,
             COLO_ENT_INF_INV_START, COLO_ENT_INF_INV_NUM_CELLS,
-            COLO_ENT_INF_INV_FEATS, COLO_ENT_INF_INV_BOTTLENECK, 1);
+            COLO_ENT_INF_INV_FEATS, COLO_ENT_INF_INV_FEATS, 0,
+            COLO_ENT_INF_INV_BOTTLENECK, 1);
         layer->num_branches = 2;
     }
     return layer;
@@ -96,12 +105,14 @@ EntityEncoder* make_inferno_entity_encoder(
         weights, batch_size, input_dim, hidden_dim);
     entity_pool_branch_init(&layer->branches[0], weights, hidden_dim,
         INF_ENT_NPC_START, INF_ENT_NUM_NPCS,
-        INF_ENT_FEATS, COLO_ENT_INF_BOTTLENECK, INF_ENT_TYPE_ONEHOT);
+        INF_ENT_FEATS, INF_ENT_FEATS, 0,
+        COLO_ENT_INF_BOTTLENECK, INF_ENT_TYPE_ONEHOT);
     layer->num_branches = 1;
     if (mode >= 2) {
         entity_pool_branch_init(&layer->branches[1], weights, hidden_dim,
             INF_ENT_INV_START, INF_ENT_INV_NUM_CELLS,
-            INF_ENT_INV_FEATS, COLO_ENT_INF_INV_BOTTLENECK, 1);
+            INF_ENT_INV_FEATS, INF_ENT_INV_FEATS, 0,
+            COLO_ENT_INF_INV_BOTTLENECK, 1);
         layer->num_branches = 2;
     }
     return layer;
@@ -124,12 +135,19 @@ void entity_encoder_forward(EntityEncoder* layer, float* observations) {
             EntityPoolBranch* p = &layer->branches[br];
             float* recs = obs + p->start;
             for (int n = 0; n < p->num_recs; n++) {
-                float* rec = recs + n * p->feats;
+                float* rec = recs + n * p->obs_feats;
                 float* z1n = p->z1 + n * p->bottleneck;
                 for (int k = 0; k < p->bottleneck; k++) {
+                    const float* w = p->l1_w + k * p->feats;
                     float sum = 0.0f;
-                    for (int i = 0; i < p->feats; i++)
-                        sum += rec[i] * p->l1_w[k * p->feats + i];
+                    if (p->type_onehot > 0) {
+                        int code = (int)lrintf(rec[0]);
+                        if (code >= 1 && code <= p->type_onehot) sum += w[code - 1];
+                        for (int i = 0; i < p->feats - p->type_onehot; i++)
+                            sum += rec[1 + i] * w[p->type_onehot + i];
+                    } else {
+                        for (int i = 0; i < p->feats; i++) sum += rec[i] * w[i];
+                    }
                     z1n[k] = sum;
                 }
             }
@@ -148,9 +166,10 @@ void entity_encoder_forward(EntityEncoder* layer, float* observations) {
                 float best = -INFINITY;
                 int best_n = -1;
                 for (int n = 0; n < p->num_recs; n++) {
-                    float* rec = recs + n * p->feats;
+                    float* rec = recs + n * p->obs_feats;
                     float mask_sum = 0.0f;
-                    for (int t = 0; t < p->mask_prefix; t++) mask_sum += rec[t];
+                    if (p->type_onehot > 0) mask_sum = rec[0] > 0.0f ? 1.0f : 0.0f;
+                    else for (int t = 0; t < p->mask_prefix; t++) mask_sum += rec[t];
                     if (mask_sum <= 0.0f) continue;
                     float v = p->e[(size_t)n * H + o];
                     if (v > best) { best = v; best_n = n; }

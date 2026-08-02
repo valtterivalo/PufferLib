@@ -1270,6 +1270,12 @@ static constexpr int COLO_ENT_FEATS       = 34;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
 static constexpr int COLO_ENT_BOTTLENECK  = 16;
 static constexpr int COLO_ENT_NPC_BLOCK   = COLO_ENT_NUM_NPCS * COLO_ENT_FEATS;
+// The observation carries a type CODE per slot (0 empty, type+1 otherwise) where the
+// encoder wants a one-hot. colo_ent_gather_npcs expands it, so every kernel downstream --
+// including the deterministic backward -- is unchanged.
+static constexpr int COLO_ENT_OBS_FEATS =
+    1 + (COLO_ENT_FEATS - COLO_ENT_TYPE_ONEHOT);
+static constexpr int COLO_ENT_NPC_OBS_BLOCK = COLO_ENT_NUM_NPCS * COLO_ENT_OBS_FEATS;
 static constexpr int COLO_ENT_INV_START      = 36;
 static constexpr int COLO_ENT_INV_NUM_CELLS  = 28;
 static constexpr int COLO_ENT_INV_FEATS      = 20;
@@ -1314,7 +1320,16 @@ __global__ void colo_ent_gather_npcs(
     if (idx >= total) return;
     int b = idx / COLO_ENT_NPC_BLOCK;
     int off = idx % COLO_ENT_NPC_BLOCK;
-    npc_flat[idx] = obs[(int64_t)b * obs_size + COLO_ENT_NPC_START + off];
+    int rec = off / COLO_ENT_FEATS;
+    int f = off - rec * COLO_ENT_FEATS;
+    const precision_t* src = obs + (int64_t)b * obs_size + COLO_ENT_NPC_START
+        + rec * COLO_ENT_OBS_FEATS;
+    if (f < COLO_ENT_TYPE_ONEHOT) {
+        int code = (int)lrintf(to_float(src[0]));
+        npc_flat[idx] = from_float(code == f + 1 ? 1.0f : 0.0f);
+    } else {
+        npc_flat[idx] = src[1 + (f - COLO_ENT_TYPE_ONEHOT)];
+    }
 }
 
 __device__ __forceinline__ float colo_ent_gelu_fwd(float x) {

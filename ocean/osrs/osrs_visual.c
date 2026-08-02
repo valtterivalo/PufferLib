@@ -26,8 +26,12 @@
 #include "puffercpu.h"
 #include "osrs_visual_net.h"
 
-_Static_assert(COLO_ENT_INF_FEATS == COLO_FEATURES_PER_NPC,
-    "entity encoder per-NPC width must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_OBS_FEATS == COLO_FEATURES_PER_NPC,
+    "entity encoder per-NPC OBSERVATION width must track the colosseum layout");
+_Static_assert(
+    COLO_ENT_INF_FEATS ==
+        COLO_ENT_INF_TYPE_ONEHOT + (COLO_FEATURES_PER_NPC - COLO_NPC_TYPE_CODE_FEATURES),
+    "encoder record width is the obs record with the type code expanded to a one-hot");
 _Static_assert(COLO_ENT_INF_NUM_NPCS == COLO_OBS_NPCS,
     "entity encoder NPC count must track the colosseum observation layout");
 _Static_assert(COLO_ENT_INF_NPC_START == COLO_OBS_AFTER_EQUIPPED_SELF,

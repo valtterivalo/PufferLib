@@ -1244,7 +1244,7 @@ static void test_obs_signal_defects(void) {
     s.npcs[bslot].y = s.player.y + 1;
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    int in_range_off = COLO_NUM_NPC_TYPES + 3 + 1;
+    int in_range_off = COLO_NPC_TYPE_CODE_FEATURES + 3 + 1;
     int totem_slot = test_obs_slot_for_npc(&s, tslot);
     int bee_slot = test_obs_slot_for_npc(&s, bslot);
     int shaman_slot = test_obs_slot_for_npc(&s, 0);
@@ -1305,7 +1305,7 @@ static void test_totem_heal_timing_obs(void) {
         obs[owner_base + COLO_NPC_TELLS_OFFSET + 1] == 0.0f &&
         obs[owner_base + COLO_NPC_TELLS_OFFSET + 2] == 0.0f);
     CHECK("the totem features cost no extra record width",
-        COLO_FEATURES_PER_NPC == 34);
+        COLO_FEATURES_PER_NPC == 23);
 
     for (int t = 0; t < COLO_TOTEM_SPAWN_HEAL_DELAY; t++) col_mod_tick_totems(&s);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
@@ -6013,15 +6013,15 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 1662", COLO_NUM_OBS == 1662);
+    CHECK("obs width is 1398", COLO_NUM_OBS == 1398);
     CHECK("inventory block has 560 features (28 cells x 20 compact)",
         COLO_INVENTORY_OBS_SIZE == 560);
     CHECK("equipped block is the 10-feature effect aggregate, not 11 item stat rows",
         COLO_EQUIPPED_SELF_OBS_SIZE == 10);
     CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
     CHECK("modifier block has 60 features", COLO_MODIFIER_OBS_SIZE == 60);
-    CHECK("NPC slots have 34 features after dropping the redundant style one-hot",
-        COLO_FEATURES_PER_NPC == 34);
+    CHECK("NPC slots carry a type code, not a type one-hot",
+        COLO_FEATURES_PER_NPC == 23);
     CHECK("snapshot version is v22", COLO_SNAPSHOT_VERSION == 22u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
@@ -8019,7 +8019,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1662);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1398);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

@@ -11,7 +11,8 @@ static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
 #define COLO_NPC_CORE_FEATURES    11
 #define COLO_NPC_TELLS_FEATURES   10
 #define COLO_NPC_VENATOR_FEATURES 1
-#define COLO_NPC_TELLS_OFFSET     (COLO_NUM_NPC_TYPES + COLO_NPC_CORE_FEATURES)
+#define COLO_NPC_TYPE_CODE_FEATURES 1
+#define COLO_NPC_TELLS_OFFSET     (COLO_NPC_TYPE_CODE_FEATURES + COLO_NPC_CORE_FEATURES)
 #define COLO_FEATURES_PER_NPC \
     (COLO_NPC_TELLS_OFFSET + COLO_NPC_TELLS_FEATURES + COLO_NPC_VENATOR_FEATURES)
 #define COLO_NPC_OBS_SIZE         (COLO_OBS_NPCS * COLO_FEATURES_PER_NPC)
@@ -473,8 +474,10 @@ static void col_write_npc_slot(
     const ColoNpcStats* ns = &COLO_NPC_STATS[npc->type];
     int size = col_npc_effective_size(npc);
 
-    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++)
-        obs[i++] = (npc->type == t) ? 1.0f : 0.0f;
+    /* type+1, so 0 stays "empty slot" from the memset. The entity encoder expands this
+     * back to the same one-hot on the GPU, so the network sees exactly what it did before
+     * while the observation carries 1 float per slot instead of COLO_NUM_NPC_TYPES. */
+    obs[i++] = (float)(npc->type + 1);
     obs[i++] = col_obs_rel_x(npc->x, px);
     obs[i++] = col_obs_rel_y(npc->y, py);
     obs[i++] = npc->max_hp > 0 ? col_clamp01((float)npc->hp / (float)npc->max_hp) : 0.0f;
