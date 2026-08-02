@@ -28,7 +28,10 @@
     X(COLO_PROF_OBS_THRALL_DC,          "obs_thrall_dc") \
     X(COLO_PROF_OBS_SPAWN,              "obs_spawn") \
     X(COLO_PROF_STEP_PRE_PLAYER,        "step_pre_player") \
-    X(COLO_PROF_PRE_RESET,              "pre_reset") \
+    X(COLO_PROF_PRE_RESET_SCRATCH,      "pre_reset_scratch") \
+    X(COLO_PROF_PRE_RESET_RENDER,       "pre_reset_render") \
+    X(COLO_PROF_PRE_RESET_PLAYER,       "pre_reset_player") \
+    X(COLO_PROF_PRE_RESET_NPCS,         "pre_reset_npcs") \
     X(COLO_PROF_PRE_PLAYER_PRETICK,     "pre_player_pretick") \
     X(COLO_PROF_PRE_SPAWN,              "pre_spawn") \
     X(COLO_PROF_PRE_RESOLVE_HITS,       "pre_resolve_hits") \

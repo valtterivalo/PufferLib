@@ -222,9 +222,18 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
     s->tick_scratch = (ColoTickScratch){0};
 
     s->active_player_damage_received_scale = ctx->config.player_damage_received_scale;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET_SCRATCH);
+#endif
     col_context_clear_render_events(ctx);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET_RENDER);
+#endif
     s->player_attack_timing = (EncounterProjectileTiming){0};
     encounter_clear_tick_flags(&s->player);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET_PLAYER);
+#endif
     for (int i = 0; i < COLO_MAX_NPCS; i++) {
         s->npcs[i].attacked_this_tick = 0;
         s->npcs[i].attack_style_this_tick = ATTACK_STYLE_NONE;
@@ -236,7 +245,7 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
     }
     s->tick++;
 #ifdef COLO_PROFILE_ENABLED
-    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET);
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET_NPCS);
 #endif
 
     if (s->tick >= s->episode_max_ticks) {
