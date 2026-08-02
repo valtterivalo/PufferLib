@@ -213,6 +213,11 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
     const int* actions
 ) {
     ColoPrePlayerPhase phase = {0};
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled =
+        COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     s->reward = 0.0f;
     s->tick_scratch = (ColoTickScratch){0};
 
@@ -230,6 +235,9 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         s->npcs[i].hit_was_successful_this_tick = 0;
     }
     s->tick++;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESET);
+#endif
 
     if (s->tick >= s->episode_max_ticks) {
         (void)col_compute_reward_ctx(s, ctx);
@@ -244,6 +252,9 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
     }
     col_player_pretick(s, ctx, actions);
     s->player.prayer_display = s->player.prayer;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_PLAYER_PRETICK);
+#endif
 
     if (s->wave_ready_delay > 0) s->wave_ready_delay--;
     if (s->wave_attack_delay > 0) s->wave_attack_delay--;
@@ -263,10 +274,16 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         phase.spawn_wave_now ||
         s->modifiers.draft_pending;
     phase.in_ready_gap = s->wave_ready_delay > 0;
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_SPAWN);
+#endif
 
     col_resolve_player_projectiles_on_npcs_ctx(s, ctx);
     col_resolve_player_pending_hits_ctx(s, ctx);
     col_tick_npc_death_lingers(s);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_RESOLVE_HITS);
+#endif
 
     if (!phase.in_wave_gap && !phase.in_ready_gap) {
 
@@ -274,6 +291,9 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
             s->warband_cycle_anchor = s->tick - 1;
         col_tick_live_stat_drift_and_divines(s);
         col_rebuild_player_collision_flags(s);
+#ifdef COLO_PROFILE_ENABLED
+        COLO_PROFILE_MARK(COLO_PROF_PRE_COLLISION);
+#endif
         col_tick_npcs_ctx(s, ctx);
         if (s->wave_attack_delay == 0) col_warband_attack_phase(s, ctx);
         col_modifiers_tick(s);
@@ -282,6 +302,9 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
     }
 
     col_classify_tick_offpray(s);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_OFFPRAY);
+#endif
 
     if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
         (void)col_compute_reward_ctx(s, ctx);

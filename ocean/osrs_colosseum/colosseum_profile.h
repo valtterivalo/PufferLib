@@ -28,6 +28,12 @@
     X(COLO_PROF_OBS_THRALL_DC,          "obs_thrall_dc") \
     X(COLO_PROF_OBS_SPAWN,              "obs_spawn") \
     X(COLO_PROF_STEP_PRE_PLAYER,        "step_pre_player") \
+    X(COLO_PROF_PRE_RESET,              "pre_reset") \
+    X(COLO_PROF_PRE_PLAYER_PRETICK,     "pre_player_pretick") \
+    X(COLO_PROF_PRE_SPAWN,              "pre_spawn") \
+    X(COLO_PROF_PRE_RESOLVE_HITS,       "pre_resolve_hits") \
+    X(COLO_PROF_PRE_COLLISION,          "pre_collision") \
+    X(COLO_PROF_PRE_OFFPRAY,            "pre_offpray") \
     X(COLO_PROF_STEP_PLAYER,            "step_player") \
     X(COLO_PROF_STEP_REWARD,            "step_reward") \
     X(COLO_PROF_STEP_WAVE_LOGIC,        "step_wave_logic") \
