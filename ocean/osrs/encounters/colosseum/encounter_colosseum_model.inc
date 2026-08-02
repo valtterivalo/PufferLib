@@ -1443,13 +1443,23 @@ typedef struct {
     int player_venator_chain_slots[OSRS_VENATOR_MAX_CHAIN_HITS];
 } ColosseumContext;
 
+/* Clears only what was written. col_render_hit_events_add aborts past
+ * ENCOUNTER_RENDER_HITS_MAX and fills strictly below count, and a row whose count is zero
+ * is already zero from the previous clear, so the old blanket memset of
+ * COLO_MAX_NPCS x ENCOUNTER_RENDER_HITS_MAX ints re-zeroed memory that was already zero.
+ * That was 3488 B per tick per env and 15% of the whole env step. */
 static inline void col_context_clear_render_events(ColosseumContext* ctx) {
     memset(ctx->npc_render_attack_anim, 0, sizeof(ctx->npc_render_attack_anim));
     memset(ctx->manticore_charge_started, 0, sizeof(ctx->manticore_charge_started));
+    for (int h = 0; h < ctx->player_render_hit_count; h++)
+        ctx->player_render_hit_damage[h] = 0;
     ctx->player_render_hit_count = 0;
-    memset(ctx->player_render_hit_damage, 0, sizeof(ctx->player_render_hit_damage));
-    memset(ctx->npc_render_hit_count, 0, sizeof(ctx->npc_render_hit_count));
-    memset(ctx->npc_render_hit_damage, 0, sizeof(ctx->npc_render_hit_damage));
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        int n = ctx->npc_render_hit_count[i];
+        if (n <= 0) continue;
+        for (int h = 0; h < n; h++) ctx->npc_render_hit_damage[i][h] = 0;
+        ctx->npc_render_hit_count[i] = 0;
+    }
     ctx->thrall_attacked_this_tick = 0;
     ctx->player_spec_fired_kind = 0;
     ctx->player_venator_chain_count = 0;
