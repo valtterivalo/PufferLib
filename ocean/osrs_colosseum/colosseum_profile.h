@@ -33,6 +33,7 @@
     X(COLO_PROF_PRE_SPAWN,              "pre_spawn") \
     X(COLO_PROF_PRE_RESOLVE_HITS,       "pre_resolve_hits") \
     X(COLO_PROF_PRE_COLLISION,          "pre_collision") \
+    X(COLO_PROF_PRE_NPC_PHASE,          "pre_npc_phase") \
     X(COLO_PROF_PRE_OFFPRAY,            "pre_offpray") \
     X(COLO_PROF_STEP_PLAYER,            "step_player") \
     X(COLO_PROF_STEP_REWARD,            "step_reward") \

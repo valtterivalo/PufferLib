@@ -300,6 +300,9 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
 
         if (s->surge_cooldown > 0) s->surge_cooldown--;
     }
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PRE_NPC_PHASE);
+#endif
 
     col_classify_tick_offpray(s);
 #ifdef COLO_PROFILE_ENABLED
