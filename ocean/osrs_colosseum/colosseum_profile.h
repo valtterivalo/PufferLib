@@ -39,6 +39,11 @@
     X(COLO_PROF_PRE_NPC_PHASE,          "pre_npc_phase") \
     X(COLO_PROF_PRE_OFFPRAY,            "pre_offpray") \
     X(COLO_PROF_STEP_PLAYER,            "step_player") \
+    X(COLO_PROF_PLAYER_TIMERS,          "player_timers") \
+    X(COLO_PROF_PLAYER_INVENTORY,       "player_inventory") \
+    X(COLO_PROF_PLAYER_INTENT,          "player_intent") \
+    X(COLO_PROF_PLAYER_MOVE,            "player_move") \
+    X(COLO_PROF_PLAYER_ATTACK,          "player_attack") \
     X(COLO_PROF_STEP_REWARD,            "step_reward") \
     X(COLO_PROF_STEP_WAVE_LOGIC,        "step_wave_logic") \
     X(COLO_PROF_STEP_NPC_TOTAL,         "step_npc_total") \

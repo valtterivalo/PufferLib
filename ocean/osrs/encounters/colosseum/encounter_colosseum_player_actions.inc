@@ -1071,6 +1071,11 @@ static void col_tick_player_ctx(
     const int* actions,
     int can_attack
 ) {
+#ifdef COLO_PROFILE_ENABLED
+    int col_prof_enabled =
+        COLO_PROFILE_ENABLED() && !s->profiling_suppressed;
+    double col_prof_t0 = col_prof_enabled ? COLO_PROFILE_NOW_MS() : 0.0;
+#endif
     if (s->player_last_interaction_age == 0)
         s->player_last_interaction_age = 1;
 
@@ -1082,10 +1087,17 @@ static void col_tick_player_ctx(
     if (encounter_tick_saturated_heart(&s->player))
         col_mark_live_loadout_dirty(s);
 
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PLAYER_TIMERS);
+#endif
+
     if (!ctx->config.mask_inventory_heads) {
         OsrsInventoryTickIntent intent = col_resolve_inventory_tick_intent(s, actions);
         col_apply_inventory_tick_intent(s, &intent);
     }
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PLAYER_INVENTORY);
+#endif
 
     int spec_act = actions[COLO_HEAD_SPEC];
     uint8_t equipped_weapon = s->player.equipped[GEAR_SLOT_WEAPON];
@@ -1115,6 +1127,10 @@ static void col_tick_player_ctx(
     if (grapple_act > 0 && grapple_act <= COLO_NUM_GRAPPLE_SLOTS)
         col_sol_grapple_parry_attempt(s, grapple_act - 1);
 
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PLAYER_INTENT);
+#endif
+
     int primary_act = actions[COLO_HEAD_PRIMARY];
     ColoWalkCtx walk_ctx;
     OsrsLosQuery los_query;
@@ -1129,6 +1145,9 @@ static void col_tick_player_ctx(
         s->player_last_interaction_age = 0;
     }
     col_rebuild_player_collision_flags(s);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PLAYER_MOVE);
+#endif
 
     if (ctx->config.bis_gear_oracle_mode) col_apply_bis_gear_oracle(s);
 
@@ -1153,4 +1172,7 @@ static void col_tick_player_ctx(
     }
 
     if (can_attack) col_tick_thrall_and_death_charge(s, ctx);
+#ifdef COLO_PROFILE_ENABLED
+    COLO_PROFILE_MARK(COLO_PROF_PLAYER_ATTACK);
+#endif
 }
