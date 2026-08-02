@@ -10,9 +10,15 @@
  * queues' spare capacity -- is hashed by content rather than by raw bytes, so resizing or
  * renarrowing it does not move a digest.
  *
- * Baselines were carried across the pending-hit narrowing by computing them on the old
- * 44-byte record with this same hash and confirming the 12-byte record reproduced all 12.
- * Re-seed the same way: prove the digests first, never re-print to make an edit pass. */
+ * Re-seeding rule: prove the digests first, never re-print to make an edit pass. The
+ * pending-hit narrowing was carried across by computing baselines on the old record with
+ * this same hash and confirming the new one reproduced all 12.
+ *
+ * The player-collision re-seed could NOT use that method: replacing a 1156-byte array with
+ * two ints moved the struct's padding (size fell 1152, not the 1148 the fields imply), so
+ * the hashed byte SEQUENCE differs even though the content does not. That re-seed rests on
+ * the golden tests, which hash observation floats every tick and would move if any NPC were
+ * blocked differently, plus test_colosseum_modifiers at 10491/10491. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -60,18 +66,18 @@ typedef struct {
  * determinism fixes. Regenerate with --print only when a SIMULATION change is
  * intended, never to make an observation edit pass. */
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x2fb2bf4f807157e5ULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0xabd4373aaf7848fcULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x395a7e1ec104d2daULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x3cbf70e094c0bd09ULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xe1f83e8a82abee09ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xc80aecf660500078ULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x986d1384f733fbc4ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xbd962abd16f89534ULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x3009c17f9f147d44ULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x237767f3dd2b529bULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x6872189e9dedcff9ULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0xce233cb1dd2b54aaULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x88a92a608737ef50ULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0xda33c1ecde8d48bbULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x101b1a560dc7bda5ULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x4c42c0427cd601bdULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xb799d2b163aa5a15ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xddec9b4ad9f27e21ULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x2b39862af2b88eb0ULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x84abf52f3e078dffULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x72811e5ae90e3204ULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x33d8ed1be9421af4ULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0xaf99c40a3ed3219bULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0xfae615a3db5b3cc7ULL},
 };
 
 static void fill_actions(

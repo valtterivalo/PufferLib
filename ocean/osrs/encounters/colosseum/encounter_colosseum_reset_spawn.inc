@@ -31,10 +31,10 @@ static void col_stamp_npc_collision(ColosseumState* s, const ColoNPC* npc, uint8
 }
 
 static void col_rebuild_player_collision_flags(ColosseumState* s) {
-    memset(s->player_collision_flags, 0, sizeof(s->player_collision_flags));
-    int gx, gy;
-    if (col_grid_index(s->player.x, s->player.y, &gx, &gy))
-        s->player_collision_flags[gx][gy] = 1;
+    if (!col_grid_index(s->player.x, s->player.y, &s->player_grid_x, &s->player_grid_y)) {
+        s->player_grid_x = -1;
+        s->player_grid_y = -1;
+    }
 }
 
 static int col_find_free_npc(ColosseumState* s) {

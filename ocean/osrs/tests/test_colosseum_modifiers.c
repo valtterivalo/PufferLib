@@ -2583,7 +2583,8 @@ static void test_player_walks_through_npc_footprint(void) {
     col_rebuild_player_collision_flags(&s);
     int gx, gy;
     int npc_flag = col_grid_index(17, 16, &gx, &gy) && s.npc_collision_flags[gx][gy];
-    int player_flag = col_grid_index(17, 16, &gx, &gy) && s.player_collision_flags[gx][gy];
+    int player_flag = col_grid_index(17, 16, &gx, &gy) &&
+        gx == s.player_grid_x && gy == s.player_grid_y;
     ColoWalkCtx wc = { .s = &s, .ctx = &ctx };
     CHECK("NPC footprint remains stamped for NPC systems", npc_flag != 0);
     CHECK("NPC footprint is not stamped as player collision", player_flag == 0);

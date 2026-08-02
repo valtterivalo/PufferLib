@@ -1646,7 +1646,9 @@ typedef struct {
     int player_dest_x, player_dest_y;
 
     uint8_t npc_collision_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
-    uint8_t player_collision_flags[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
+    /* The player occupies one tile, so a full arena grid recorded one cell and was
+     * memset in full twice per tick. Cache the cell instead. -1 means off-grid. */
+    int player_grid_x, player_grid_y;
 
     ColosseumLog log;
 

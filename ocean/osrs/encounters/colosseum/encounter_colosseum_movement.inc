@@ -57,7 +57,7 @@ static int col_npc_blocked(void* ctx, int x, int y, int size) {
         for (int dy = 0; dy < size; dy++) {
             int gx, gy;
             if (!col_grid_index(x + dx, y + dy, &gx, &gy)) return 1;
-            if (s->player_collision_flags[gx][gy]) return 1;
+            if (gx == s->player_grid_x && gy == s->player_grid_y) return 1;
         }
     }
     return 0;
