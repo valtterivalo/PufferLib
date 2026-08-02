@@ -1012,10 +1012,17 @@ typedef struct {
 
 #define COLO_BEST_GEAR_CACHE_WAYS 12
 
+/* Replaces the 11 per-slot item stat rows. Those were a second encoding of combat maths
+ * the player block already carries: encounter_compute_loadout_stats sums the equipped set
+ * into EncounterLoadoutStats and the prefix emits attack_bonus, strength_bonus, max_hit,
+ * attack_speed, attack_range, all five defence bonuses, eff_level and spell_base_damage.
+ * Equipment EFFECTS were the one part with no aggregate in the observation. */
+#define COLO_EQUIPPED_AGG_OBS_FEATURES 10
+
 #define COLO_INVENTORY_OBS_CACHE_WAYS 8
 #define COLO_INVENTORY_OBS_CACHE_FLOATS \
     (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT + \
-     NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+     COLO_EQUIPPED_AGG_OBS_FEATURES)
 
 typedef struct {
     ColoBestGear best_gear[COLO_BEST_GEAR_CACHE_WAYS][COLO_NUM_WEAPON_SETS][COLO_NUM_NPC_TYPES];

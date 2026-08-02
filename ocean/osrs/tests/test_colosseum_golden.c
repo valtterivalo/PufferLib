@@ -182,18 +182,18 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 4000
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xc9d87fac41d15192ULL,
-    0x99696a296b231817ULL,
-    0x91f6c81e55430129ULL,
-    0xaffea6ec6fb4b4d9ULL,
-    0x1efc1bc89a099d5eULL,
-    0x79ad4f7770fa68bdULL,
-    0x703f8c3ce5366ac6ULL,
-    0x1ee23f09c326c7f0ULL,
-    0x6e1de914b3e20c8bULL,
-    0xbec492bfd874e6ddULL,
-    0x9165caa4aa3b0dedULL,
-    0xf445a646198f0819ULL,
+    0xa623b23009a9561cULL,
+    0xffa657b9012444d9ULL,
+    0x5bca70ef678ec5acULL,
+    0x82d644540471808fULL,
+    0xe4c274b1ddb896e7ULL,
+    0x41ac2ac1cd411446ULL,
+    0xbda6f04a55f67924ULL,
+    0x68efe0f2e5cc126cULL,
+    0xb3a2f7dda1dc505dULL,
+    0x58e53463350731b1ULL,
+    0x08a5ed2c66c12e65ULL,
+    0x92eb5561cc96efffULL,
 };
 
 int main(int argc, char** argv) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLO_ENT_INF_NPC_START   794
+#define COLO_ENT_INF_NPC_START   606
 #define COLO_ENT_INF_NUM_NPCS    24
 #define COLO_ENT_INF_FEATS       34
 #define COLO_ENT_INF_TYPE_ONEHOT 12

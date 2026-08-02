@@ -4,8 +4,7 @@
 #define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
-#define COLO_EQUIPPED_SELF_OBS_SIZE \
-    (NUM_GEAR_SLOTS * OSRS_EQUIPPED_SELF_OBS_FEATURES)
+#define COLO_EQUIPPED_SELF_OBS_SIZE COLO_EQUIPPED_AGG_OBS_FEATURES
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
@@ -1577,10 +1576,19 @@ static void col_write_inventory_and_equipped_obs(
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        osrs_write_equipped_self_features(&obs[i], s->player.equipped[slot]);
-        i += OSRS_EQUIPPED_SELF_OBS_FEATURES;
-    }
+    const OsrsEquipmentEffectProfile* fx = col_live_effects(s);
+    float agg_eff4[4];
+    osrs_item_effect_class4(fx->effect_mask, agg_eff4);
+    obs[i++] = agg_eff4[0];
+    obs[i++] = agg_eff4[1];
+    obs[i++] = agg_eff4[2];
+    obs[i++] = agg_eff4[3];
+    obs[i++] = col_clamp01((float)fx->virtus_piece_count / 3.0f);
+    obs[i++] = col_clamp01((float)fx->dharok_piece_count / 4.0f);
+    obs[i++] = col_clamp01((float)fx->crystal_armour_points / 6.0f);
+    obs[i++] = fx->recoil_source != OSRS_RECOIL_SOURCE_NONE ? 1.0f : 0.0f;
+    obs[i++] = fx->spec_regen_mode == OSRS_SPEC_REGEN_MODE_LIGHTBEARER ? 1.0f : 0.0f;
+    obs[i++] = fx->shield_item != ITEM_NONE ? 1.0f : 0.0f;
     assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
 
     int slot = memos->inventory_next;
