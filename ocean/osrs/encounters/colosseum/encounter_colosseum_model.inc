@@ -1548,6 +1548,13 @@ typedef struct {
     float reward_raw_peak;
     float clamp_loss_wave_clear;
     float clamp_loss_win;
+    float rew_damage;
+    float rew_boost;
+    float rew_boss_phase;
+    float rew_wave_clear;
+    float rew_win;
+    float rew_death;
+    float rew_timeout;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
@@ -1656,14 +1663,17 @@ typedef struct {
      * memset in full twice per tick. Cache the cell instead. -1 means off-grid. */
     int player_grid_x, player_grid_y;
 
-    ColosseumLog log;
-
     int start_wave;
     uint32_t rng_state;
 
     float active_player_damage_received_scale;
     int profiling_suppressed;
 
+    /* Last two members, and both are skipped by probe_colo_sim_invariant. The probe hashes
+     * this struct's raw bytes, so a member that grows mid-struct repads everything after it
+     * and moves all twelve digests with no behaviour change -- which is exactly what adding
+     * reward telemetry to the log did. At the tail, neither can shift a hashed byte. */
+    ColosseumLog log;
     ColoObsMemoCaches obs_memos;
 } ColosseumState;
 

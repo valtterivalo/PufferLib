@@ -18,14 +18,19 @@ static void col_record_reward_clamp_headroom(ColosseumState* s) {
     s->log.reward_clamped_steps += 1.0f;
     s->log.reward_clamp_loss += over;
     if (s->tick_scratch.wave_completed) s->log.clamp_loss_wave_clear += over;
-    if (s->winner == COLO_OUTCOME_PLAYER_WON) s->log.clamp_loss_win += over;
+    /* episode_over guards the winner read: COLO_OUTCOME_PLAYER_WON is 0, which is also
+     * what winner holds on every non-terminal tick. */
+    if (s->episode_over && s->winner == COLO_OUTCOME_PLAYER_WON)
+        s->log.clamp_loss_win += over;
 }
 
-static float col_terminal_death_reward(const ColosseumContext* ctx) {
+static float col_terminal_death_reward(ColosseumState* s, const ColosseumContext* ctx) {
+    s->log.rew_death -= ctx->config.death_penalty_coeff;
     return -ctx->config.death_penalty_coeff;
 }
 
-static float col_terminal_timeout_reward(const ColosseumContext* ctx) {
+static float col_terminal_timeout_reward(ColosseumState* s, const ColosseumContext* ctx) {
+    s->log.rew_timeout -= ctx->config.timeout_penalty;
     return -ctx->config.timeout_penalty;
 }
 
@@ -153,14 +158,23 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
         if (cfg->farm_safe_damage_cap)
             rewarded_fresh -= t->fresh_damage_reinforcement;
     }
+    /* Left as two separate accumulations onto reward, deliberately: folding them into one
+     * term first would change the floating-point association and move the sim digest. */
     reward += cfg->damage_reward_coeff * rewarded_fresh;
     reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
+    s->log.rew_damage += cfg->damage_reward_coeff * rewarded_fresh;
+    s->log.rew_damage += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
     if (cfg->offensive_boost_reward_coeff != 0.0f) {
-        if (col_attacked_with_offensive_boost(s) > 0)
+        if (col_attacked_with_offensive_boost(s) > 0) {
             reward += cfg->offensive_boost_reward_coeff;
+            s->log.rew_boost += cfg->offensive_boost_reward_coeff;
+        }
     }
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
-        reward += cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
+        float phase_term =
+            cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
+        reward += phase_term;
+        s->log.rew_boss_phase += phase_term;
         s->rewarded_boss_phase = s->sol.phase;
     }
     return reward;
@@ -274,7 +288,7 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         s->episode_over = 1;
         s->time_limit_truncated = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_timeout_reward(ctx);
+        s->reward = col_terminal_timeout_reward(s, ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
@@ -344,7 +358,7 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_death_reward(ctx);
+        s->reward = col_terminal_death_reward(s, ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
         s->episode_return += s->reward;
@@ -391,7 +405,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
-        s->reward = col_terminal_death_reward(ctx);
+        s->reward = col_terminal_death_reward(s, ctx);
         goto finish_step;
     }
 
@@ -421,10 +435,12 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         col_modifiers_on_wave_cleared(s);
         s->log.waves_cleared++;
         s->reward += ctx->config.wave_clear_bonus;
+        s->log.rew_wave_clear += ctx->config.wave_clear_bonus;
         if (s->wave + 1 >= COLO_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = COLO_OUTCOME_PLAYER_WON;
             s->reward += ctx->config.win_bonus;
+            s->log.rew_win += ctx->config.win_bonus;
         } else {
 
             s->wave_spawn_target = s->wave + 1;

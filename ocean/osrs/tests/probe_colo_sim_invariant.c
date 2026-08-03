@@ -141,11 +141,15 @@ static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask)
      * its contents semantically. FNV-1a multiplies once per byte, so leaving a memo
      * cache or a queue's spare capacity in the byte range makes resizing it move every
      * digest -- a false alarm on exactly the edits this probe exists to clear. */
+    /* log and obs_memos are the last two members, skipped as ONE region running to the end
+     * of the struct. Skipping them individually left the alignment padding between them in
+     * the hash, and that padding is 4 bytes or 0 depending on sizeof(ColosseumLog) mod 8 --
+     * so adding three floats to the log moved all twelve digests with no behaviour change.
+     * Taking the whole tail removes the padding from the hash entirely. */
     SkipRegion skip[] = {
-        {offsetof(ColosseumState, obs_memos), sizeof(s->obs_memos)},
         {offsetof(ColosseumState, npcs), sizeof(s->npcs)},
         {offsetof(ColosseumState, player_pending_hits), sizeof(s->player_pending_hits)},
-        {offsetof(ColosseumState, log), sizeof(s->log)},
+        {offsetof(ColosseumState, log), sizeof(*s) - offsetof(ColosseumState, log)},
     };
     int nskip = (int)(sizeof(skip) / sizeof(skip[0]));
     qsort(skip, (size_t)nskip, sizeof(skip[0]), skip_cmp);
