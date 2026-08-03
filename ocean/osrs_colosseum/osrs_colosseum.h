@@ -469,6 +469,16 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "score", log->score);
     dict_set(out, "sol_min_hp", log->sol_min_hp);
     dict_set(out, "max_depth_reached", log->max_depth_reached);
+
+    /* Ahead of the per-type breakdowns on purpose: the dashboard renders only the first
+     * PUF_DASH_MAX_USER_ROWS*2 keys, and how much reward the [-1,1] clamp discards is a
+     * health check on the whole reward design, not a per-NPC detail. */
+    dict_set(out, "reward_clamp_frac", log->reward_steps > 0.0f
+        ? log->reward_clamped_steps / log->reward_steps : 0.0f);
+    dict_set(out, "reward_clamp_loss", log->reward_clamp_loss);
+    dict_set(out, "reward_raw_peak", log->reward_raw_peak);
+    dict_set(out, "clamp_loss_wave_clear", log->clamp_loss_wave_clear);
+    dict_set(out, "clamp_loss_win", log->clamp_loss_win);
     dict_set(out, "current_set_is_argmax_dpt_for_target",
         log->current_set_argmax_dpt_n > 0.0f
             ? log->current_set_argmax_dpt_hit / log->current_set_argmax_dpt_n : 0.0f);
@@ -628,10 +638,4 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "death_dmg_self", log->death_dmg_self);
     dict_set(out, "death_heal_remaining", log->death_heal_remaining);
     dict_set(out, "farm_damage", log->farm_damage);
-    dict_set(out, "reward_clamp_frac", log->reward_steps > 0.0f
-        ? log->reward_clamped_steps / log->reward_steps : 0.0f);
-    dict_set(out, "reward_clamp_loss", log->reward_clamp_loss);
-    dict_set(out, "reward_raw_peak", log->reward_raw_peak);
-    dict_set(out, "clamp_loss_wave_clear", log->clamp_loss_wave_clear);
-    dict_set(out, "clamp_loss_win", log->clamp_loss_win);
 }
