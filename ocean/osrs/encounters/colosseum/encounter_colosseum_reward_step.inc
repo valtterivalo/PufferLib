@@ -134,7 +134,10 @@ static int col_attacked_with_offensive_boost(ColosseumState* s) {
     return (cur_att > base_att || cur_str > base_str) ? 1 : 0;
 }
 
-static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx) {
+/* Split from the reward so the three terminal paths, which compute a shaped reward and then
+ * throw it away in favour of a terminal penalty, still record their tick statistics without
+ * crediting reward the agent never receives. */
+static void col_accumulate_tick_stats(ColosseumState* s, const ColosseumContext* ctx) {
     const ColConfig* cfg = &ctx->config;
     ColoTickScratch* t = &s->tick_scratch;
 
@@ -150,34 +153,49 @@ static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* c
     s->log.total_npc_attacks += t->attacks_fired;
     col_update_min_sol_hp_seen(s);
     if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
-
-    float reward = 0.0f;
-    float rewarded_fresh = t->fresh_damage_dealt;
-    if (s->wave < cfg->farm_cap_waves) {
+    if (s->wave < cfg->farm_cap_waves)
         s->log.farm_damage += t->fresh_damage_reinforcement;
-        if (cfg->farm_safe_damage_cap)
-            rewarded_fresh -= t->fresh_damage_reinforcement;
-    }
-    /* Left as two separate accumulations onto reward, deliberately: folding them into one
-     * term first would change the floating-point association and move the sim digest. */
-    reward += cfg->damage_reward_coeff * rewarded_fresh;
-    reward += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
-    s->log.rew_damage += cfg->damage_reward_coeff * rewarded_fresh;
-    s->log.rew_damage += cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
-    if (cfg->offensive_boost_reward_coeff != 0.0f) {
-        if (col_attacked_with_offensive_boost(s) > 0) {
-            reward += cfg->offensive_boost_reward_coeff;
-            s->log.rew_boost += cfg->offensive_boost_reward_coeff;
-        }
-    }
+}
+
+/* Returned by value rather than logged in place: a tick that ends in death, timeout or a win
+ * overwrites the shaped reward with a terminal one, and the per-term log must record what was
+ * actually paid. col_commit_reward_terms is the single place that credits the log. */
+typedef struct {
+    float damage;
+    float boost;
+    float boss_phase;
+} ColoShapedReward;
+
+static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumContext* ctx) {
+    const ColConfig* cfg = &ctx->config;
+    ColoTickScratch* t = &s->tick_scratch;
+    ColoShapedReward out = {0.0f, 0.0f, 0.0f};
+
+    float rewarded_fresh = t->fresh_damage_dealt;
+    if (s->wave < cfg->farm_cap_waves && cfg->farm_safe_damage_cap)
+        rewarded_fresh -= t->fresh_damage_reinforcement;
+
+    out.damage = cfg->damage_reward_coeff * rewarded_fresh
+        + cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
+    if (cfg->offensive_boost_reward_coeff != 0.0f &&
+            col_attacked_with_offensive_boost(s) > 0)
+        out.boost = cfg->offensive_boost_reward_coeff;
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
-        float phase_term =
+        out.boss_phase =
             cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
-        reward += phase_term;
-        s->log.rew_boss_phase += phase_term;
         s->rewarded_boss_phase = s->sol.phase;
     }
-    return reward;
+    return out;
+}
+
+static float col_shaped_total(ColoShapedReward r) {
+    return r.damage + r.boost + r.boss_phase;
+}
+
+static void col_commit_reward_terms(ColosseumState* s, ColoShapedReward r) {
+    s->log.rew_damage += r.damage;
+    s->log.rew_boost += r.boost;
+    s->log.rew_boss_phase += r.boss_phase;
 }
 
 static float col_inventory_heal_remaining(const ColosseumState* s) {
@@ -284,13 +302,14 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
 #endif
 
     if (s->tick >= s->episode_max_ticks) {
-        (void)col_compute_reward_ctx(s, ctx);
+        col_accumulate_tick_stats(s, ctx);
         s->episode_over = 1;
         s->time_limit_truncated = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_timeout_reward(s, ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
+        col_record_reward_clamp_headroom(s);
         s->episode_return += s->reward;
         return phase;
     }
@@ -354,13 +373,14 @@ static ColoPrePlayerPhase col_advance_pre_player_phase_ctx(
 #endif
 
     if (s->player.current_hitpoints <= 0 || col_mod_doom_lethal(s)) {
-        (void)col_compute_reward_ctx(s, ctx);
+        col_accumulate_tick_stats(s, ctx);
         col_record_death_attribution(s);
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_death_reward(s, ctx);
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
+        col_record_reward_clamp_headroom(s);
         s->episode_return += s->reward;
         return phase;
     }
@@ -393,7 +413,10 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     COLO_PROFILE_MARK(COLO_PROF_STEP_PLAYER);
 #endif
 
-    s->reward = col_compute_reward_ctx(s, ctx);
+    col_accumulate_tick_stats(s, ctx);
+    ColoShapedReward shaped = col_shaped_reward(s, ctx);
+    s->reward = col_shaped_total(shaped);
+    int shaped_paid = 1;
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_STEP_REWARD);
 #endif
@@ -406,6 +429,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->episode_over = 1;
         s->winner = COLO_OUTCOME_PLAYER_DIED;
         s->reward = col_terminal_death_reward(s, ctx);
+        shaped_paid = 0;
         goto finish_step;
     }
 
@@ -434,14 +458,18 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
         s->tick_scratch.wave_completed = 1;
         col_modifiers_on_wave_cleared(s);
         s->log.waves_cleared++;
-        s->reward += ctx->config.wave_clear_bonus;
-        s->log.rew_wave_clear += ctx->config.wave_clear_bonus;
         if (s->wave + 1 >= COLO_NUM_WAVES) {
             s->episode_over = 1;
             s->winner = COLO_OUTCOME_PLAYER_WON;
-            s->reward += ctx->config.win_bonus;
+            /* Terminal, so paid as an assignment exactly like death and timeout. Stacking
+             * the win onto the same tick's shaped reward AND wave clear pushed the tick past
+             * the trainer's [-1,1] clamp and destroyed 59% of the win bonus (measured). */
+            s->reward = ctx->config.win_bonus;
             s->log.rew_win += ctx->config.win_bonus;
+            shaped_paid = 0;
         } else {
+            s->reward += ctx->config.wave_clear_bonus;
+            s->log.rew_wave_clear += ctx->config.wave_clear_bonus;
 
             s->wave_spawn_target = s->wave + 1;
             col_record_wave_entry(s, s->wave + 1);
@@ -453,6 +481,7 @@ static void col_step_ctx(EncounterState* state, EncounterContext* context, const
     }
 
 finish_step:
+    if (shaped_paid) col_commit_reward_terms(s, shaped);
     if (s->episode_over) {
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);

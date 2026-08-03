@@ -1,6 +1,6 @@
 #line 76 "encounter_colosseum.h"
 
-static float col_compute_reward_ctx(ColosseumState* s, const ColosseumContext* ctx);
+static void col_accumulate_tick_stats(ColosseumState* s, const ColosseumContext* ctx);
 static void col_spawn_wave(ColosseumState* s);
 static void col_tick_npcs_ctx(ColosseumState* s, ColosseumContext* ctx);
 static void col_tick_player_ctx(

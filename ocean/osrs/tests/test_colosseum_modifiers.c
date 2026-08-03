@@ -7457,7 +7457,59 @@ static void test_pending_hit_recoil_volatility_damage_accounting(void) {
         s.tick_scratch.damage_received == 35.0f &&
         s.tick_scratch.landed_offpray_damage == 10.0f &&
         s.tick_scratch.landed_unprayable_damage == 25.0f);
-    col_compute_reward_ctx(&s, &ctx);
+    col_accumulate_tick_stats(&s, &ctx);
+}
+
+/* The win bonus used to be `+=` onto the same tick's shaped reward and wave-clear bonus,
+ * which pushed the tick past the trainer's [-1,1] clamp and measurably destroyed 59% of it.
+ * Terminal outcomes are now assignments, like death and timeout. */
+static void test_colosseum_win_tick_is_not_stacked(void) {
+    printf("test_colosseum_win_tick_is_not_stacked\n");
+    ColosseumState s;
+    ColosseumContext ctx;
+    int idle[COLO_NUM_ACTION_HEADS] = {0};
+
+    col_init_context_typed(&ctx);
+    ctx.config.start_wave = COLO_WAVE_BOSS;
+    ctx.config.win_bonus = 0.7f;
+    ctx.config.wave_clear_bonus = 0.9f;
+    ctx.config.damage_reward_coeff = 0.01f;
+    ctx.config.boss_phase_bonus = 1.0f;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242u);
+
+    for (int t = 0; t < 60 && !s.episode_over; t++) {
+        if (s.modifiers.draft_pending) {
+            int draft[COLO_NUM_ACTION_HEADS] = {0};
+            draft[COLO_HEAD_MODIFIER_SELECT] = 1;
+            col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, draft);
+            continue;
+        }
+        if (s.sol.started && col_sol_find_idx(&s) >= 0) break;
+        col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, idle);
+    }
+    CHECK("reached the boss wave with Sol alive",
+        !s.episode_over && s.wave == COLO_WAVE_BOSS && col_sol_find_idx(&s) >= 0);
+
+    for (int i = 0; i < COLO_MAX_NPCS; i++) {
+        if (s.npcs[i].active) col_deactivate_npc(&s, i);
+    }
+    s.tick_scratch.fresh_damage_dealt = 90.0f;
+    col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, idle);
+
+    CHECK("clearing the final wave ends the episode as a win",
+        s.episode_over == 1 && s.winner == COLO_OUTCOME_PLAYER_WON);
+    CHECK("the winning tick pays exactly win_bonus, with nothing stacked on it",
+        fabsf(s.reward - 0.7f) < 1e-5f);
+    CHECK("the winning tick stays inside the trainer clamp",
+        fabsf(s.reward) <= 1.0f);
+    CHECK("the win tick pays no wave_clear_bonus",
+        fabsf(s.log.rew_wave_clear) < 1e-6f);
+    CHECK("the per-term log credits only what was paid",
+        fabsf(s.log.rew_win - 0.7f) < 1e-5f &&
+        fabsf(s.log.rew_damage) < 1e-6f);
+    CHECK("the clamp telemetry counted the winning tick",
+        s.log.reward_steps > 0.0f && fabsf(s.log.reward_clamp_loss) < 1e-6f);
 }
 
 static void test_colosseum_live_inventory_display(void) {
@@ -8286,7 +8338,8 @@ static void test_farm_safe_damage_cap(void) {
     s.tick_scratch = (ColoTickScratch){0};
     s.tick_scratch.fresh_damage_dealt = 100.0f;
     s.tick_scratch.fresh_damage_reinforcement = 30.0f;
-    float r_capped = col_compute_reward_ctx(&s, &ctx);
+    col_accumulate_tick_stats(&s, &ctx);
+    float r_capped = col_shaped_total(col_shaped_reward(&s, &ctx));
     CHECK("cap on, wave 1: reinforcement damage pays nothing",
         fabsf(r_capped - 70.0f) < 1e-3f);
     CHECK("farm damage is logged", fabsf(s.log.farm_damage - 30.0f) < 1e-3f);
@@ -8294,21 +8347,24 @@ static void test_farm_safe_damage_cap(void) {
     ctx.config.farm_safe_damage_cap = 0;
     s.tick_scratch.fresh_damage_dealt = 100.0f;
     s.tick_scratch.fresh_damage_reinforcement = 30.0f;
-    float r_uncapped = col_compute_reward_ctx(&s, &ctx);
+    col_accumulate_tick_stats(&s, &ctx);
+    float r_uncapped = col_shaped_total(col_shaped_reward(&s, &ctx));
     CHECK("cap off: full damage pays", fabsf(r_uncapped - 100.0f) < 1e-3f);
 
     ctx.config.farm_safe_damage_cap = 1;
     s.wave = COLO_FARM_CAP_WAVES;
     s.tick_scratch.fresh_damage_dealt = 100.0f;
     s.tick_scratch.fresh_damage_reinforcement = 30.0f;
-    float r_late = col_compute_reward_ctx(&s, &ctx);
+    col_accumulate_tick_stats(&s, &ctx);
+    float r_late = col_shaped_total(col_shaped_reward(&s, &ctx));
     CHECK("cap on, wave 5+: reinforcements stay full-value at the default window",
         fabsf(r_late - 100.0f) < 1e-3f);
 
     ctx.config.farm_cap_waves = COLO_FARM_CAP_WAVES + 1;
     s.tick_scratch.fresh_damage_dealt = 100.0f;
     s.tick_scratch.fresh_damage_reinforcement = 30.0f;
-    float r_widened = col_compute_reward_ctx(&s, &ctx);
+    col_accumulate_tick_stats(&s, &ctx);
+    float r_widened = col_shaped_total(col_shaped_reward(&s, &ctx));
     CHECK("widened farm_cap_waves caps the same wave-5 reinforcement damage",
         fabsf(r_widened - 70.0f) < 1e-3f);
     ctx.config.farm_cap_waves = COLO_FARM_CAP_WAVES;
@@ -8424,6 +8480,7 @@ int main(void) {
     test_consumable_overdrink_mask();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();
+    test_colosseum_win_tick_is_not_stacked();
     test_colosseum_live_inventory_display();
     test_loadout_item_effects();
     test_loadout_offensive_prayers();
