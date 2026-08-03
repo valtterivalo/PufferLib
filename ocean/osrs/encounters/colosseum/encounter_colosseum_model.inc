@@ -1542,6 +1542,12 @@ typedef struct {
     float death_dmg_self;
     float death_heal_remaining;
     float farm_damage;
+    float reward_steps;
+    float reward_clamped_steps;
+    float reward_clamp_loss;
+    float reward_raw_peak;
+    float clamp_loss_wave_clear;
+    float clamp_loss_win;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];

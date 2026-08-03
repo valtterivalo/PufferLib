@@ -5,6 +5,22 @@ static float col_expected_dpt_for_equipment_vs_npc(
     ColosseumState* s, const uint8_t equipment[NUM_GEAR_SLOTS],
     const ColoNPC* npc, int use_style_matched_prayer);
 
+/* The trainer hard-clamps every per-step reward to [-1,1] before PPO, so any tick whose
+ * terms sum past 1 delivers a signal the agent never sees. Measured here rather than
+ * bounded per-coefficient, because the terms stack: a wave-12 clear carries the killing
+ * blow's damage reward, wave_clear_bonus and win_bonus on one tick. */
+static void col_record_reward_clamp_headroom(ColosseumState* s) {
+    float mag = fabsf(s->reward);
+    s->log.reward_steps += 1.0f;
+    if (mag > s->log.reward_raw_peak) s->log.reward_raw_peak = mag;
+    if (mag <= 1.0f) return;
+    float over = mag - 1.0f;
+    s->log.reward_clamped_steps += 1.0f;
+    s->log.reward_clamp_loss += over;
+    if (s->tick_scratch.wave_completed) s->log.clamp_loss_wave_clear += over;
+    if (s->winner == COLO_OUTCOME_PLAYER_WON) s->log.clamp_loss_win += over;
+}
+
 static float col_terminal_death_reward(const ColosseumContext* ctx) {
     return -ctx->config.death_penalty_coeff;
 }
@@ -425,6 +441,7 @@ finish_step:
         col_record_terminal_outcome_score(s);
         s->log.max_wave_depth = col_episode_max_wave_depth(s);
     }
+    col_record_reward_clamp_headroom(s);
     s->episode_return += s->reward;
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_STEP_WAVE_LOGIC);

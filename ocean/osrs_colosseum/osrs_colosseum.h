@@ -66,6 +66,12 @@ struct Log {
     float death_dmg_self;
     float death_heal_remaining;
     float farm_damage;
+    float reward_steps;
+    float reward_clamped_steps;
+    float reward_clamp_loss;
+    float reward_raw_peak;
+    float clamp_loss_wave_clear;
+    float clamp_loss_win;
     float n;
 };
 
@@ -381,6 +387,12 @@ void puf_step(Env* env) {
             env->log.death_dmg_self += clog->death_dmg_self;
             env->log.death_heal_remaining += clog->death_heal_remaining;
             env->log.farm_damage += clog->farm_damage;
+            env->log.reward_steps += clog->reward_steps;
+            env->log.reward_clamped_steps += clog->reward_clamped_steps;
+            env->log.reward_clamp_loss += clog->reward_clamp_loss;
+            env->log.clamp_loss_wave_clear += clog->clamp_loss_wave_clear;
+            env->log.clamp_loss_win += clog->clamp_loss_win;
+            env->log.reward_raw_peak += clog->reward_raw_peak;
         }
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
@@ -616,4 +628,10 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "death_dmg_self", log->death_dmg_self);
     dict_set(out, "death_heal_remaining", log->death_heal_remaining);
     dict_set(out, "farm_damage", log->farm_damage);
+    dict_set(out, "reward_clamp_frac", log->reward_steps > 0.0f
+        ? log->reward_clamped_steps / log->reward_steps : 0.0f);
+    dict_set(out, "reward_clamp_loss", log->reward_clamp_loss);
+    dict_set(out, "reward_raw_peak", log->reward_raw_peak);
+    dict_set(out, "clamp_loss_wave_clear", log->clamp_loss_wave_clear);
+    dict_set(out, "clamp_loss_win", log->clamp_loss_win);
 }

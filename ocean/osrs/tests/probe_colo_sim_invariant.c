@@ -18,7 +18,13 @@
  * two ints moved the struct's padding (size fell 1152, not the 1148 the fields imply), so
  * the hashed byte SEQUENCE differs even though the content does not. That re-seed rests on
  * the golden tests, which hash observation floats every tick and would move if any NPC were
- * blocked differently, plus test_colosseum_modifiers at 10491/10491. */
+ * blocked differently, plus test_colosseum_modifiers at 10491/10491.
+ *
+ * ColosseumLog is skipped as of the reward-clamp telemetry: it is an observation OF the
+ * simulation, not part of it, so adding a counter to it must not read as a sim regression.
+ * That re-seed WAS proved by the differential method: digests printed with the log skipped
+ * on the tree without the telemetry reproduced all 12 with it. Sim quantities the log
+ * derives from still reach the goldens through the observation. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -66,18 +72,18 @@ typedef struct {
  * determinism fixes. Regenerate with --print only when a SIMULATION change is
  * intended, never to make an observation edit pass. */
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x88a92a608737ef50ULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0xda33c1ecde8d48bbULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0x101b1a560dc7bda5ULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x4c42c0427cd601bdULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0xb799d2b163aa5a15ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xddec9b4ad9f27e21ULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x2b39862af2b88eb0ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x84abf52f3e078dffULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0x72811e5ae90e3204ULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x33d8ed1be9421af4ULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0xaf99c40a3ed3219bULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0xfae615a3db5b3cc7ULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x9c4cbcde5d159413ULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x926e334416bc21f0ULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0xcc8a421a35859befULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x14b1e80d759d1cb2ULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0x22f415d9f4d6dd02ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xb82309c9c86c363bULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x4fd42a575b3fd127ULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x48548d73bd727fd2ULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0xb3f7b27247b54a07ULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x2b0b3f61efb8b43fULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x1e8ff8d2425f33a7ULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x210c0b6ce8537df3ULL},
 };
 
 static void fill_actions(
@@ -139,6 +145,7 @@ static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask)
         {offsetof(ColosseumState, obs_memos), sizeof(s->obs_memos)},
         {offsetof(ColosseumState, npcs), sizeof(s->npcs)},
         {offsetof(ColosseumState, player_pending_hits), sizeof(s->player_pending_hits)},
+        {offsetof(ColosseumState, log), sizeof(s->log)},
     };
     int nskip = (int)(sizeof(skip) / sizeof(skip[0]));
     qsort(skip, (size_t)nskip, sizeof(skip[0]), skip_cmp);
