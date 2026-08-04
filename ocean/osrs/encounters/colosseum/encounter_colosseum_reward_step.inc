@@ -155,6 +155,25 @@ static void col_accumulate_tick_stats(ColosseumState* s, const ColosseumContext*
     if (s->sol.phase > s->log.boss_phase_reached) s->log.boss_phase_reached = s->sol.phase;
     if (s->wave < cfg->farm_cap_waves)
         s->log.farm_damage += t->fresh_damage_reinforcement;
+
+    /* Headroom split for a defensive reward. Only ONE overhead can be up, so on a tick where
+     * two styles land only the larger can ever be prayed: the remainder is structurally
+     * unavoidable and no reward shape can recover it. Separating that from what the policy
+     * simply misplayed is the number that decides whether a defensive term is worth building. */
+    float total = 0.0f, best = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        float v = t->avoidable_threat_by_style[i];
+        total += v;
+        if (v > best) best = v;
+    }
+    float achieved = total - t->offpray_damage_this_tick;
+    if (achieved < 0.0f) achieved = 0.0f;
+    if (achieved > best) achieved = best;
+    s->log.avoid_total += total;
+    s->log.avoid_achieved += achieved;
+    s->log.avoid_missed += best - achieved;
+    s->log.avoid_impossible += total - best;
+    s->log.dmg_unprayable += t->landed_unprayable_damage;
 }
 
 /* Returned by value rather than logged in place: a tick that ends in death, timeout or a win

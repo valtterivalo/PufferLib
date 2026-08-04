@@ -79,6 +79,11 @@ struct Log {
     float rew_win;
     float rew_death;
     float rew_timeout;
+    float avoid_total;
+    float avoid_achieved;
+    float avoid_missed;
+    float avoid_impossible;
+    float dmg_unprayable;
     float n;
 };
 
@@ -407,6 +412,11 @@ void puf_step(Env* env) {
             env->log.rew_win += clog->rew_win;
             env->log.rew_death += clog->rew_death;
             env->log.rew_timeout += clog->rew_timeout;
+            env->log.avoid_total += clog->avoid_total;
+            env->log.avoid_achieved += clog->avoid_achieved;
+            env->log.avoid_missed += clog->avoid_missed;
+            env->log.avoid_impossible += clog->avoid_impossible;
+            env->log.dmg_unprayable += clog->dmg_unprayable;
         }
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
@@ -483,6 +493,11 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "score", log->score);
     dict_set(out, "sol_min_hp", log->sol_min_hp);
     dict_set(out, "max_depth_reached", log->max_depth_reached);
+    dict_set(out, "avoid_total", log->avoid_total);
+    dict_set(out, "avoid_achieved", log->avoid_achieved);
+    dict_set(out, "avoid_missed", log->avoid_missed);
+    dict_set(out, "avoid_impossible", log->avoid_impossible);
+    dict_set(out, "dmg_unprayable", log->dmg_unprayable);
 
     /* Ahead of the per-type breakdowns on purpose: the dashboard renders only the first
      * PUF_DASH_MAX_USER_ROWS*2 keys, and how much reward the [-1,1] clamp discards is a

@@ -1555,6 +1555,11 @@ typedef struct {
     float rew_win;
     float rew_death;
     float rew_timeout;
+    float avoid_total;
+    float avoid_achieved;
+    float avoid_missed;
+    float avoid_impossible;
+    float dmg_unprayable;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
