@@ -7463,6 +7463,67 @@ static void test_pending_hit_recoil_volatility_damage_accounting(void) {
 /* The win bonus used to be `+=` onto the same tick's shaped reward and wave-clear bonus,
  * which pushed the tick past the trainer's [-1,1] clamp and measurably destroyed 59% of it.
  * Terminal outcomes are now assignments, like death and timeout. */
+/* Measured headroom: 220 of the 456 damage taken per episode was prayer-checkable and not
+ * prayed. This term pays for the part a policy can actually control, so the contract is that
+ * it credits the prayed style only, never the second style on a conflict tick. */
+static void test_colosseum_avoided_damage_reward(void) {
+    printf("test_colosseum_avoided_damage_reward\n");
+    ColosseumState s;
+    ColosseumContext ctx;
+
+    col_init_context_typed(&ctx);
+    ctx.config.avoided_damage_reward_coeff = 0.01f;
+    ctx.config.damage_reward_coeff = 0.0f;
+    ctx.config.offensive_boost_reward_coeff = 0.0f;
+    ctx.config.boss_phase_bonus = 0.0f;
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 777u);
+
+    /* One style thrown, all of it prayed away. */
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.avoidable_threat_by_style[0] = 40.0f;
+    s.tick_scratch.offpray_damage_this_tick = 0.0f;
+    CHECK("fully prayed damage pays the full avoided amount",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx)) - 0.40f) < 1e-5f);
+
+    /* Same threat, nothing prayed. */
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.avoidable_threat_by_style[0] = 40.0f;
+    s.tick_scratch.offpray_damage_this_tick = 40.0f;
+    CHECK("unprayed damage pays nothing",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx))) < 1e-6f);
+
+    /* Conflict tick: two styles land, only the larger can ever be prayed. Praying it must
+     * not also be credited for the other, which no overhead could have stopped. */
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.avoidable_threat_by_style[0] = 30.0f;
+    s.tick_scratch.avoidable_threat_by_style[1] = 12.0f;
+    s.tick_scratch.offpray_damage_this_tick = 12.0f;
+    CHECK("a conflict tick credits only the style actually prayed",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx)) - 0.30f) < 1e-5f);
+
+    /* Credit can never exceed what one overhead could stop. */
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.avoidable_threat_by_style[0] = 30.0f;
+    s.tick_scratch.avoidable_threat_by_style[1] = 12.0f;
+    s.tick_scratch.offpray_damage_this_tick = 0.0f;
+    CHECK("credit is capped at the best single overhead, never the sum",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx)) - 0.30f) < 1e-5f);
+
+    /* Unprayable damage never enters the term at all. */
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.landed_unprayable_damage = 50.0f;
+    CHECK("unprayable damage pays nothing",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx))) < 1e-6f);
+
+    /* Off by default, so every existing config is unchanged. */
+    ctx.config.avoided_damage_reward_coeff = 0.0f;
+    s.tick_scratch = (ColoTickScratch){0};
+    s.tick_scratch.avoidable_threat_by_style[0] = 40.0f;
+    CHECK("the term is inert at coeff 0",
+        fabsf(col_shaped_total(col_shaped_reward(&s, &ctx))) < 1e-6f);
+}
+
 static void test_colosseum_win_tick_is_not_stacked(void) {
     printf("test_colosseum_win_tick_is_not_stacked\n");
     ColosseumState s;
@@ -8480,6 +8541,7 @@ int main(void) {
     test_consumable_overdrink_mask();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();
+    test_colosseum_avoided_damage_reward();
     test_colosseum_win_tick_is_not_stacked();
     test_colosseum_live_inventory_display();
     test_loadout_item_effects();

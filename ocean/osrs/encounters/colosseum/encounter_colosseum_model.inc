@@ -1389,6 +1389,7 @@ typedef struct {
 
 
     float offensive_boost_reward_coeff;
+    float avoided_damage_reward_coeff;
 
     int farm_safe_damage_cap;
 
@@ -1555,6 +1556,7 @@ typedef struct {
     float rew_win;
     float rew_death;
     float rew_timeout;
+    float rew_avoided;
     float avoid_total;
     float avoid_achieved;
     float avoid_missed;

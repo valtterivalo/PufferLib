@@ -134,6 +134,28 @@ static int col_attacked_with_offensive_boost(ColosseumState* s) {
     return (cur_att > base_att || cur_str > base_str) ? 1 : 0;
 }
 
+/* Damage the player was thrown, could have prayed, and did pray away this tick. Only one
+ * overhead can be up, so `best` is the most any policy could have stopped and the remainder
+ * is structurally unrecoverable -- crediting it would pay for luck, not play. */
+typedef struct {
+    float total;
+    float best;
+    float achieved;
+} ColoTickAvoidance;
+
+static ColoTickAvoidance col_tick_avoidance(const ColoTickScratch* t) {
+    ColoTickAvoidance a = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 4; i++) {
+        float v = t->avoidable_threat_by_style[i];
+        a.total += v;
+        if (v > a.best) a.best = v;
+    }
+    a.achieved = a.total - t->offpray_damage_this_tick;
+    if (a.achieved < 0.0f) a.achieved = 0.0f;
+    if (a.achieved > a.best) a.achieved = a.best;
+    return a;
+}
+
 /* Split from the reward so the three terminal paths, which compute a shaped reward and then
  * throw it away in favour of a terminal penalty, still record their tick statistics without
  * crediting reward the agent never receives. */
@@ -160,19 +182,11 @@ static void col_accumulate_tick_stats(ColosseumState* s, const ColosseumContext*
      * two styles land only the larger can ever be prayed: the remainder is structurally
      * unavoidable and no reward shape can recover it. Separating that from what the policy
      * simply misplayed is the number that decides whether a defensive term is worth building. */
-    float total = 0.0f, best = 0.0f;
-    for (int i = 0; i < 4; i++) {
-        float v = t->avoidable_threat_by_style[i];
-        total += v;
-        if (v > best) best = v;
-    }
-    float achieved = total - t->offpray_damage_this_tick;
-    if (achieved < 0.0f) achieved = 0.0f;
-    if (achieved > best) achieved = best;
-    s->log.avoid_total += total;
-    s->log.avoid_achieved += achieved;
-    s->log.avoid_missed += best - achieved;
-    s->log.avoid_impossible += total - best;
+    ColoTickAvoidance av = col_tick_avoidance(t);
+    s->log.avoid_total += av.total;
+    s->log.avoid_achieved += av.achieved;
+    s->log.avoid_missed += av.best - av.achieved;
+    s->log.avoid_impossible += av.total - av.best;
     s->log.dmg_unprayable += t->landed_unprayable_damage;
 }
 
@@ -183,12 +197,13 @@ typedef struct {
     float damage;
     float boost;
     float boss_phase;
+    float avoided;
 } ColoShapedReward;
 
 static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumContext* ctx) {
     const ColConfig* cfg = &ctx->config;
     ColoTickScratch* t = &s->tick_scratch;
-    ColoShapedReward out = {0.0f, 0.0f, 0.0f};
+    ColoShapedReward out = {0.0f, 0.0f, 0.0f, 0.0f};
 
     float rewarded_fresh = t->fresh_damage_dealt;
     if (s->wave < cfg->farm_cap_waves && cfg->farm_safe_damage_cap)
@@ -199,6 +214,12 @@ static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumCont
     if (cfg->offensive_boost_reward_coeff != 0.0f &&
             col_attacked_with_offensive_boost(s) > 0)
         out.boost = cfg->offensive_boost_reward_coeff;
+    /* Measured on the 0.3243 checkpoint: 220 of the 456 damage taken per episode was
+     * prayer-checkable and simply not prayed, so this is the largest recoverable slice of
+     * the damage-taken budget. Paid on the tick the switch happens, and weighted by damage
+     * at stake so it chases the colossus rather than the bee. */
+    if (cfg->avoided_damage_reward_coeff != 0.0f)
+        out.avoided = cfg->avoided_damage_reward_coeff * col_tick_avoidance(t).achieved;
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
         out.boss_phase =
             cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
@@ -208,13 +229,14 @@ static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumCont
 }
 
 static float col_shaped_total(ColoShapedReward r) {
-    return r.damage + r.boost + r.boss_phase;
+    return r.damage + r.boost + r.boss_phase + r.avoided;
 }
 
 static void col_commit_reward_terms(ColosseumState* s, ColoShapedReward r) {
     s->log.rew_damage += r.damage;
     s->log.rew_boost += r.boost;
     s->log.rew_boss_phase += r.boss_phase;
+    s->log.rew_avoided += r.avoided;
 }
 
 static float col_inventory_heal_remaining(const ColosseumState* s) {
