@@ -8,7 +8,10 @@
  *
  * Equip heads are PINNED. The env memoises on a loadout signature, and uniform random actions
  * churn every equip head each tick, which is a genuine signature change any correct memo must
- * miss -- that artifact once produced a bogus "87% of env time is gear/DPT" conclusion. */
+ * miss -- that artifact once produced a bogus "87% of env time is gear/DPT" conclusion.
+ *
+ * Build with -std=gnu11: plain c11 hides clock_gettime on glibc and _POSIX_C_SOURCE hides
+ * snprintf on macOS. */
 
 #include <stdint.h>
 #include <stdio.h>
