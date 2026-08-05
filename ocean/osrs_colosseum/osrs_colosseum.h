@@ -73,13 +73,11 @@ struct Log {
     float clamp_loss_wave_clear;
     float clamp_loss_win;
     float rew_damage;
-    float rew_boost;
     float rew_boss_phase;
     float rew_wave_clear;
     float rew_win;
     float rew_death;
     float rew_timeout;
-    float rew_avoided;
     float avoid_total;
     float avoid_achieved;
     float avoid_missed;
@@ -238,8 +236,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "timeout_penalty",
         "boss_damage_reward_coeff",
         "boss_phase_bonus",
-        "offensive_boost_reward_coeff",
-        "avoided_damage_reward_coeff",
         "beginner_loadout_fraction",
         "late_start_supply_fraction_per_wave",
         "prayer_switch_fail_prob",
@@ -408,13 +404,11 @@ void puf_step(Env* env) {
             env->log.clamp_loss_win += clog->clamp_loss_win;
             env->log.reward_raw_peak += clog->reward_raw_peak;
             env->log.rew_damage += clog->rew_damage;
-            env->log.rew_boost += clog->rew_boost;
             env->log.rew_boss_phase += clog->rew_boss_phase;
             env->log.rew_wave_clear += clog->rew_wave_clear;
             env->log.rew_win += clog->rew_win;
             env->log.rew_death += clog->rew_death;
             env->log.rew_timeout += clog->rew_timeout;
-            env->log.rew_avoided += clog->rew_avoided;
             env->log.avoid_total += clog->avoid_total;
             env->log.avoid_achieved += clog->avoid_achieved;
             env->log.avoid_missed += clog->avoid_missed;
@@ -512,13 +506,11 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "clamp_loss_wave_clear", log->clamp_loss_wave_clear);
     dict_set(out, "clamp_loss_win", log->clamp_loss_win);
     dict_set(out, "rew_damage", log->rew_damage);
-    dict_set(out, "rew_boost", log->rew_boost);
     dict_set(out, "rew_boss_phase", log->rew_boss_phase);
     dict_set(out, "rew_wave_clear", log->rew_wave_clear);
     dict_set(out, "rew_win", log->rew_win);
     dict_set(out, "rew_death", log->rew_death);
     dict_set(out, "rew_timeout", log->rew_timeout);
-    dict_set(out, "rew_avoided", log->rew_avoided);
     dict_set(out, "current_set_is_argmax_dpt_for_target",
         log->current_set_argmax_dpt_n > 0.0f
             ? log->current_set_argmax_dpt_hit / log->current_set_argmax_dpt_n : 0.0f);

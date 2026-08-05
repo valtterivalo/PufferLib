@@ -112,28 +112,6 @@ static float col_episode_max_wave_depth(const ColosseumState* s) {
         col_sol_score_progress(s);
 }
 
-static int col_attacked_with_offensive_boost(ColosseumState* s) {
-    if (!s->tick_scratch.player_attacked) return -1;
-    int npc_slot = s->player_attack_npc_idx;
-    if (npc_slot < 0 || npc_slot >= COLO_MAX_NPCS) return -1;
-    const ColoNPC* npc = &s->npcs[npc_slot];
-    if (!col_npc_is_live_target(npc) || col_type_is_hazard_entity(npc->type))
-        return -1;
-    AttackStyle style = (AttackStyle)s->player_attack_style_id;
-    int cur_att = 0, cur_str = 0;
-    col_current_style_levels(&s->player, style, &cur_att, &cur_str);
-    int base_att, base_str;
-    if (style == ATTACK_STYLE_RANGED) {
-        base_att = base_str = s->player.base_ranged;
-    } else if (style == ATTACK_STYLE_MAGIC) {
-        base_att = base_str = s->player.base_magic;
-    } else {
-        base_att = s->player.base_attack;
-        base_str = s->player.base_strength;
-    }
-    return (cur_att > base_att || cur_str > base_str) ? 1 : 0;
-}
-
 /* Damage the player was thrown, could have prayed, and did pray away this tick. Only one
  * overhead can be up, so `best` is the most any policy could have stopped and the remainder
  * is structurally unrecoverable -- crediting it would pay for luck, not play. */
@@ -195,15 +173,13 @@ static void col_accumulate_tick_stats(ColosseumState* s, const ColosseumContext*
  * actually paid. col_commit_reward_terms is the single place that credits the log. */
 typedef struct {
     float damage;
-    float boost;
     float boss_phase;
-    float avoided;
 } ColoShapedReward;
 
 static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumContext* ctx) {
     const ColConfig* cfg = &ctx->config;
     ColoTickScratch* t = &s->tick_scratch;
-    ColoShapedReward out = {0.0f, 0.0f, 0.0f, 0.0f};
+    ColoShapedReward out = {0.0f, 0.0f};
 
     float rewarded_fresh = t->fresh_damage_dealt;
     if (s->wave < cfg->farm_cap_waves && cfg->farm_safe_damage_cap)
@@ -211,15 +187,6 @@ static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumCont
 
     out.damage = cfg->damage_reward_coeff * rewarded_fresh
         + cfg->boss_damage_reward_coeff * t->fresh_damage_boss;
-    if (cfg->offensive_boost_reward_coeff != 0.0f &&
-            col_attacked_with_offensive_boost(s) > 0)
-        out.boost = cfg->offensive_boost_reward_coeff;
-    /* Measured on the 0.3243 checkpoint: 220 of the 456 damage taken per episode was
-     * prayer-checkable and simply not prayed, so this is the largest recoverable slice of
-     * the damage-taken budget. Paid on the tick the switch happens, and weighted by damage
-     * at stake so it chases the colossus rather than the bee. */
-    if (cfg->avoided_damage_reward_coeff != 0.0f)
-        out.avoided = cfg->avoided_damage_reward_coeff * col_tick_avoidance(t).achieved;
     if (s->sol.started && s->sol.phase > s->rewarded_boss_phase) {
         out.boss_phase =
             cfg->boss_phase_bonus * (float)(s->sol.phase - s->rewarded_boss_phase);
@@ -229,14 +196,12 @@ static ColoShapedReward col_shaped_reward(ColosseumState* s, const ColosseumCont
 }
 
 static float col_shaped_total(ColoShapedReward r) {
-    return r.damage + r.boost + r.boss_phase + r.avoided;
+    return r.damage + r.boss_phase;
 }
 
 static void col_commit_reward_terms(ColosseumState* s, ColoShapedReward r) {
     s->log.rew_damage += r.damage;
-    s->log.rew_boost += r.boost;
     s->log.rew_boss_phase += r.boss_phase;
-    s->log.rew_avoided += r.avoided;
 }
 
 static float col_inventory_heal_remaining(const ColosseumState* s) {

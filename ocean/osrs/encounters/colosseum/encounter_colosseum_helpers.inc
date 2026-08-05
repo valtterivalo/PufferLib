@@ -273,8 +273,6 @@ static ColConfig col_default_config(void) {
         .wave_clear_bonus = 1.0f,
         .boss_phase_bonus = 0.0f,
         .win_bonus = 0.0f,
-        .offensive_boost_reward_coeff = 0.0f,
-        .avoided_damage_reward_coeff = 0.0f,
         .farm_safe_damage_cap = 0,
         .farm_cap_waves = COLO_FARM_CAP_WAVES,
         .death_penalty_coeff = 0.0f,
