@@ -53,6 +53,68 @@ static void fill_actions(const ColosseumState* s, uint64_t* rng,
 
 typedef struct { double step, obs, mask, total; long n; } Bench;
 
+/* STREAM-triad-style scan: the machine's practical DRAM ceiling as a function of thread count.
+ * If the env's parallel efficiency curve has the same shape, the env is bandwidth-bound and
+ * not, say, lock-bound or oversubscribed. */
+static void bandwidth_scan(void) {
+    const size_t N = 24u << 20;   /* 192 MB per array, far past the 36 MiB L3 */
+    double* a = (double*)malloc(N * sizeof(double));
+    double* b = (double*)malloc(N * sizeof(double));
+    double* c = (double*)malloc(N * sizeof(double));
+    if (!a || !b || !c) { printf("  (allocation failed)\n"); return; }
+    for (size_t i = 0; i < N; i++) { a[i] = 1.0; b[i] = 2.0; c[i] = 0.0; }
+
+    printf("memory bandwidth ceiling (triad, 3 x %zu MB)\n", N * sizeof(double) / (1u << 20));
+    printf("  %8s %14s %12s\n", "threads", "GB/s", "vs 1 thread");
+    double one = 0.0;
+    int tc[] = {1, 2, 4, 8, 16, 24, 32};
+    for (int i = 0; i < (int)(sizeof(tc)/sizeof(tc[0])); i++) {
+        int T = tc[i];
+        double t0 = now_ns();
+        for (int rep = 0; rep < 4; rep++) {
+#ifdef _OPENMP
+            #pragma omp parallel for num_threads(T) schedule(static)
+#endif
+            for (size_t j = 0; j < N; j++) c[j] = a[j] + 3.0 * b[j];
+        }
+        double sec = (now_ns() - t0) / 1e9;
+        double gbs = 4.0 * 3.0 * N * sizeof(double) / sec / 1e9;
+        if (i == 0) one = gbs;
+        printf("  %8d %14.1f %11.2fx\n", T, gbs, gbs / one);
+    }
+    printf("\n");
+    free(a); free(b); free(c);
+}
+
+/* Same as run_multi but skips the observation and mask writes, removing ~7 KB of stores per
+ * step while leaving the simulation identical. If the env is bandwidth-bound, dropping those
+ * bytes should visibly improve parallel efficiency, not just lower the single-thread cost. */
+static Bench run_multi_sim_only(int num_envs, int steps_per_env) {
+    ColosseumContext* ctxs = (ColosseumContext*)calloc(num_envs, sizeof(ColosseumContext));
+    ColosseumState* ss = (ColosseumState*)calloc(num_envs, sizeof(ColosseumState));
+    int actions[COLO_NUM_ACTION_HEADS];
+    Bench b = {0};
+    uint64_t rng = 0xABCDEF01ULL;
+    for (int e = 0; e < num_envs; e++) {
+        col_init_context_typed(&ctxs[e]);
+        col_reset_ctx((EncounterState*)&ss[e], (EncounterContext*)&ctxs[e], (uint32_t)(e + 1));
+    }
+    double t0 = now_ns();
+    for (int rep = 0; rep < steps_per_env; rep++) {
+        for (int e = 0; e < num_envs; e++) {
+            if (ss[e].episode_over)
+                col_reset_ctx((EncounterState*)&ss[e], (EncounterContext*)&ctxs[e],
+                    (uint32_t)(e * 7919 + rep + 1));
+            fill_actions(&ss[e], &rng, actions);
+            col_step_ctx((EncounterState*)&ss[e], (EncounterContext*)&ctxs[e], actions);
+            b.n++;
+        }
+    }
+    b.total = now_ns() - t0;
+    free(ctxs); free(ss);
+    return b;
+}
+
 /* Steps N independent envs round-robin, which is what the trainer does. One env fits in L2;
  * N of them do not, and the gap between those two numbers is the working-set cost that a
  * single-env benchmark cannot see. */
@@ -141,6 +203,7 @@ int main(void) {
     /* The trainer runs 8192 envs across 32 threads and its profiler reports ~7x the
      * single-threaded cost per step. Neither cache pressure nor profiler overhead accounts
      * for that, so scan thread count directly with the env count held fixed. */
+    bandwidth_scan();
     printf("thread scan: 8192 envs, %d steps each\n", 40);
     printf("  %8s %12s %12s %12s\n", "threads", "ns/step", "speedup", "efficiency");
     double t1 = 0.0;
@@ -161,6 +224,24 @@ int main(void) {
         if (i == 0) t1 = wall_ns;
         printf("  %8d %12.1f %11.2fx %11.0f%%\n", T, ns, t1 / wall_ns,
             100.0 * (t1 / wall_ns) / T);
+    }
+    printf("\n  sim only, no obs/mask writes (~7 KB/step less traffic)\n");
+    printf("  %8s %12s %12s %12s\n", "threads", "ns/step", "speedup", "efficiency");
+    double s1 = 0.0;
+    for (int i = 0; i < (int)(sizeof(tcounts)/sizeof(tcounts[0])); i++) {
+        int T = tcounts[i];
+        int per_thread = 8192 / T;
+        double t0 = now_ns();
+        long total = 0;
+        #pragma omp parallel num_threads(T) reduction(+:total)
+        {
+            Bench m = run_multi_sim_only(per_thread, 40);
+            total += m.n;
+        }
+        double wall_ns = (now_ns() - t0) / (double)total;
+        if (i == 0) s1 = wall_ns;
+        printf("  %8d %12.1f %11.2fx %11.0f%%\n", T, wall_ns * T, s1 / wall_ns,
+            100.0 * (s1 / wall_ns) / T);
     }
     printf("\n");
 #endif
