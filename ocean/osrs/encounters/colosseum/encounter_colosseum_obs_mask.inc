@@ -1553,9 +1553,11 @@ static void col_write_inventory_and_equipped_obs(
             memcpy(&obs[i], memos->inventory[w],
                    sizeof(float) * COLO_INVENTORY_OBS_CACHE_FLOATS);
             *idx = i + COLO_INVENTORY_OBS_CACHE_FLOATS;
+            s->log.inv_memo_hits += 1.0f;
             return;
         }
     }
+    s->log.inv_memo_misses += 1.0f;
     int block_start = i;
 
     float current_equipment_projection[6];

@@ -83,6 +83,11 @@ struct Log {
     float avoid_missed;
     float avoid_impossible;
     float dmg_unprayable;
+    float inv_memo_hits;
+    float inv_memo_misses;
+    float npc_blocked_calls;
+    float npc_blocked_tiles;
+    float npc_stamp_tiles;
     float n;
 };
 
@@ -414,6 +419,11 @@ void puf_step(Env* env) {
             env->log.avoid_missed += clog->avoid_missed;
             env->log.avoid_impossible += clog->avoid_impossible;
             env->log.dmg_unprayable += clog->dmg_unprayable;
+            env->log.inv_memo_hits += clog->inv_memo_hits;
+            env->log.inv_memo_misses += clog->inv_memo_misses;
+            env->log.npc_blocked_calls += clog->npc_blocked_calls;
+            env->log.npc_blocked_tiles += clog->npc_blocked_tiles;
+            env->log.npc_stamp_tiles += clog->npc_stamp_tiles;
         }
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_MARK(COLO_PROF_C_TERMINAL_LOG);
@@ -494,7 +504,12 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "avoid_achieved", log->avoid_achieved);
     dict_set(out, "avoid_missed", log->avoid_missed);
     dict_set(out, "avoid_impossible", log->avoid_impossible);
-    dict_set(out, "dmg_unprayable", log->dmg_unprayable);
+    float inv_lookups = log->inv_memo_hits + log->inv_memo_misses;
+    dict_set(out, "inv_memo_hit_rate", inv_lookups > 0.0f
+        ? log->inv_memo_hits / inv_lookups : 0.0f);
+    dict_set(out, "inv_memo_misses", log->inv_memo_misses);
+    dict_set(out, "npc_blocked_tiles", log->npc_blocked_tiles);
+    dict_set(out, "npc_stamp_tiles", log->npc_stamp_tiles);
 
     /* Ahead of the per-type breakdowns on purpose: the dashboard renders only the first
      * PUF_DASH_MAX_USER_ROWS*2 keys, and how much reward the [-1,1] clamp discards is a

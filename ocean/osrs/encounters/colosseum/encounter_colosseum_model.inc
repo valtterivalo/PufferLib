@@ -1558,6 +1558,11 @@ typedef struct {
     float avoid_missed;
     float avoid_impossible;
     float dmg_unprayable;
+    float inv_memo_hits;
+    float inv_memo_misses;
+    float npc_blocked_calls;
+    float npc_blocked_tiles;
+    float npc_stamp_tiles;
     float typeless_damage_by_type[COLO_NUM_NPC_TYPES];
     float sol_damage_by_source[COLO_NUM_SOL_DAMAGE_SOURCES];
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];

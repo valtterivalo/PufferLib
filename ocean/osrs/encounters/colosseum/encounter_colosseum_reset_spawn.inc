@@ -11,6 +11,7 @@ static int col_npc_effective_size(const ColoNPC* npc) {
 }
 
 static void col_stamp_npc_collision_footprint(ColosseumState* s, int x, int y, int size, uint8_t v) {
+    s->log.npc_stamp_tiles += (float)(size * size);
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int gx, gy;

@@ -37,6 +37,8 @@ static int col_npc_has_los_to_player(const ColosseumState* s, const ColoNPC* npc
 
 static int col_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
     ColosseumState* s = (ColosseumState*)ctx;
+    s->log.npc_blocked_calls += 1.0f;
+    s->log.npc_blocked_tiles += (float)(size * size);
     if (col_static_footprint_blocked_lookup(x, y, size)) return 1;
     int sol_clamp_active = col_sol_clamp_active(s);
     for (int dx = 0; dx < size; dx++) {
