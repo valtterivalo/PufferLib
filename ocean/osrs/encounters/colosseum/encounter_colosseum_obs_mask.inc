@@ -1474,12 +1474,48 @@ static uint64_t col_inventory_obs_signature(const ColosseumState* s) {
     return h;
 }
 
+/* Gear-dependent, so it is written fresh on every path. The memo key covers cell contents
+ * only -- putting equipped gear back in it would send the hit rate back to the 34.9% that
+ * made this block expensive in the first place. */
+/* Non-const because col_live_effects memoises internally. C accepts the implicit cast and
+ * g++/nvcc reject it, so this only shows up in check-builds.sh, never in the C test gate. */
+static void col_write_equipped_effect_aggregate(
+    ColosseumState* s, float* obs, int* pi
+) {
+    int i = *pi;
+    const OsrsEquipmentEffectProfile* fx = col_live_effects(s);
+    float agg_eff4[4];
+    osrs_item_effect_class4(fx->effect_mask, agg_eff4);
+    obs[i++] = agg_eff4[0];
+    obs[i++] = agg_eff4[1];
+    obs[i++] = agg_eff4[2];
+    obs[i++] = agg_eff4[3];
+    obs[i++] = col_clamp01((float)fx->virtus_piece_count / 3.0f);
+    obs[i++] = col_clamp01((float)fx->dharok_piece_count / 4.0f);
+    obs[i++] = col_clamp01((float)fx->crystal_armour_points / 6.0f);
+    obs[i++] = fx->recoil_source != OSRS_RECOIL_SOURCE_NONE ? 1.0f : 0.0f;
+    obs[i++] = fx->spec_regen_mode == OSRS_SPEC_REGEN_MODE_LIGHTBEARER ? 1.0f : 0.0f;
+    obs[i++] = fx->shield_item != ITEM_NONE ? 1.0f : 0.0f;
+    *pi = i;
+}
+
+/* Likewise gear-dependent: it asks whether the item in this cell is the one currently worn
+ * in its slot. Stamped after a cache hit so a gear swap shows up on the tick it happens. */
+static void col_stamp_equipped_flags(const ColosseumState* s, float* obs, int block_start) {
+    for (int c = 0; c < COLO_INVENTORY_DISPLAY_SLOTS; c++) {
+        obs[block_start + c * COLO_INVENTORY_CELL_OBS_FEATURES + 1] =
+            osrs_inventory_cell_holds_equipped_item(&s->player, s->inventory_cells, c)
+                ? 1.0f : 0.0f;
+    }
+}
+
 static void col_write_inventory_and_equipped_obs(
     ColosseumState* s,
     float* obs,
     int* idx
 ) {
     int i = *idx;
+    int block_start = i;
 
     ColoObsMemoCaches* memos = &s->obs_memos;
     uint64_t sig = col_inventory_obs_signature(s);
@@ -1487,13 +1523,15 @@ static void col_write_inventory_and_equipped_obs(
         if (memos->inventory_valid[w] && memos->inventory_sig[w] == sig) {
             memcpy(&obs[i], memos->inventory[w],
                    sizeof(float) * COLO_INVENTORY_OBS_CACHE_FLOATS);
-            *idx = i + COLO_INVENTORY_OBS_CACHE_FLOATS;
+            col_stamp_equipped_flags(s, obs, block_start);
+            int j = block_start + COLO_INVENTORY_OBS_SIZE;
+            col_write_equipped_effect_aggregate(s, obs, &j);
             s->log.inv_memo_hits += 1.0f;
+            *idx = block_start + COLO_INVENTORY_OBS_CACHE_FLOATS;
             return;
         }
     }
     s->log.inv_memo_misses += 1.0f;
-    int block_start = i;
 
     for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
         const ColoInvCell* cell = &s->inventory_cells[cell_idx];
@@ -1510,19 +1548,7 @@ static void col_write_inventory_and_equipped_obs(
     }
     assert(i == COLO_OBS_AFTER_INVENTORY);
 
-    const OsrsEquipmentEffectProfile* fx = col_live_effects(s);
-    float agg_eff4[4];
-    osrs_item_effect_class4(fx->effect_mask, agg_eff4);
-    obs[i++] = agg_eff4[0];
-    obs[i++] = agg_eff4[1];
-    obs[i++] = agg_eff4[2];
-    obs[i++] = agg_eff4[3];
-    obs[i++] = col_clamp01((float)fx->virtus_piece_count / 3.0f);
-    obs[i++] = col_clamp01((float)fx->dharok_piece_count / 4.0f);
-    obs[i++] = col_clamp01((float)fx->crystal_armour_points / 6.0f);
-    obs[i++] = fx->recoil_source != OSRS_RECOIL_SOURCE_NONE ? 1.0f : 0.0f;
-    obs[i++] = fx->spec_regen_mode == OSRS_SPEC_REGEN_MODE_LIGHTBEARER ? 1.0f : 0.0f;
-    obs[i++] = fx->shield_item != ITEM_NONE ? 1.0f : 0.0f;
+    col_write_equipped_effect_aggregate(s, obs, &i);
     assert(i == COLO_OBS_AFTER_EQUIPPED_SELF);
 
     int slot = memos->inventory_next;

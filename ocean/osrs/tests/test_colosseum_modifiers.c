@@ -7470,6 +7470,50 @@ static void test_pending_hit_recoil_volatility_damage_accounting(void) {
  * which pushed the tick past the trainer's [-1,1] clamp and measurably destroyed 59% of it.
  * Terminal outcomes are now assignments, like death and timeout. */
 
+/* The inventory memo key covers cell contents but deliberately NOT equipped gear, so that a
+ * gear swap does not evict the block. Two fields in the cached range are still gear-dependent
+ * -- the per-cell is_equipped flag and the trailing effect aggregate -- and both must be
+ * rewritten on a cache hit. Swapping gear WITHOUT touching any cell leaves the key unchanged,
+ * which is exactly the case a stale cache would get wrong, and the goldens do not cover it. */
+static void test_colosseum_inventory_memo_tracks_gear_swaps(void) {
+    printf("test_colosseum_inventory_memo_tracks_gear_swaps\n");
+    ColosseumState s;
+    ColosseumContext ctx;
+    static float obs_a[COLO_NUM_OBS];
+    static float obs_b[COLO_NUM_OBS];
+
+    col_init_context_typed(&ctx);
+    memset(&s, 0, sizeof(s));
+    col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 4242u);
+
+    int cell = -1, slot = -1;
+    for (int c = 0; c < COLO_INVENTORY_DISPLAY_SLOTS; c++) {
+        uint8_t it = s.inventory_cells[c].item_idx;
+        if (it == ITEM_NONE) continue;
+        int gs = osrs_item_gear_slot(it);
+        if (gs < 0) continue;
+        if (s.player.equipped[gs] == it) continue;
+        cell = c; slot = gs; break;
+    }
+    CHECK("a swappable gear cell exists at reset", cell >= 0);
+    if (cell < 0) return;
+
+    uint64_t sig_before = col_inventory_obs_signature(&s);
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_a);
+
+    /* Equip it directly. No cell changes, so the memo key is untouched. */
+    s.player.equipped[slot] = s.inventory_cells[cell].item_idx;
+    CHECK("a gear swap alone does not move the memo key",
+        col_inventory_obs_signature(&s) == sig_before);
+
+    col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs_b);
+
+    int flag = COLO_OBS_AFTER_PLAYER + cell * COLO_INVENTORY_CELL_OBS_FEATURES + 1;
+    CHECK("the cell reads not-equipped before the swap", obs_a[flag] == 0.0f);
+    CHECK("a cache hit still reports the freshly equipped item",
+        obs_b[flag] == 1.0f);
+}
+
 static void test_colosseum_win_tick_is_not_stacked(void) {
     printf("test_colosseum_win_tick_is_not_stacked\n");
     ColosseumState s;
@@ -8459,6 +8503,7 @@ int main(void) {
     test_consumable_overdrink_mask();
     test_loadout_surge_potion();
     test_loadout_spec_weapons();
+    test_colosseum_inventory_memo_tracks_gear_swaps();
     test_colosseum_win_tick_is_not_stacked();
     test_colosseum_live_inventory_display();
     test_loadout_item_effects();
