@@ -1447,14 +1447,45 @@ __global__ void compute_prio_imp_weights(
     }
 }
 
+/* One block, scanning B elements in chunks and carrying the running total between them.
+ * The previous version ran the whole prefix sum on a single thread, which measured 30.5% of
+ * all GPU kernel time under nsys -- 83us per call with 16383 cores idle. B is total_agents,
+ * so this is on the critical path of every minibatch draw.
+ *
+ * The accumulation order differs from the serial version, so the CDF differs in the low bits
+ * and sampled indices shift. Deterministic for a given seed, but not bit-comparable with runs
+ * from before this change. */
+#define CDF_SCAN_THREADS 1024
+
 __global__ void build_cdf(
     float* __restrict__ cdf, const float* __restrict__ probs, int B) {
-    if (blockIdx.x == 0 && threadIdx.x == 0) {
-        float cum = 0.0f;
-        for (int i = 0; i < B; i++) {
-            cum += probs[i];
-            cdf[i] = cum;
+    __shared__ float sh[CDF_SCAN_THREADS];
+    __shared__ float carry;
+    if (threadIdx.x == 0) {
+        carry = 0.0f;
+    }
+    __syncthreads();
+
+    for (int base = 0; base < B; base += CDF_SCAN_THREADS) {
+        int i = base + (int)threadIdx.x;
+        sh[threadIdx.x] = (i < B) ? probs[i] : 0.0f;
+        __syncthreads();
+
+        for (int off = 1; off < CDF_SCAN_THREADS; off <<= 1) {
+            float add = (threadIdx.x >= (unsigned)off) ? sh[threadIdx.x - off] : 0.0f;
+            __syncthreads();
+            sh[threadIdx.x] += add;
+            __syncthreads();
         }
+
+        if (i < B) {
+            cdf[i] = sh[threadIdx.x] + carry;
+        }
+        __syncthreads();
+        if (threadIdx.x == CDF_SCAN_THREADS - 1) {
+            carry += sh[CDF_SCAN_THREADS - 1];
+        }
+        __syncthreads();
     }
 }
 
@@ -1501,7 +1532,8 @@ void prio_replay_cuda(PrecisionTensor& advantages, float prio_alpha,
         advantages.data, bufs.prio_probs.data, prio_alpha, T);
     compute_prio_normalize<<<1, PRIO_BLOCK_SIZE, 0, stream>>>(
         bufs.prio_probs.data, B);
-    build_cdf<<<1, 1, 0, stream>>>(bufs.cdf.data, bufs.prio_probs.data, B);
+    build_cdf<<<1, CDF_SCAN_THREADS, 0, stream>>>(
+        bufs.cdf.data, bufs.prio_probs.data, B);
     int threads = 256;
     int blocks = (minibatch_segments + threads - 1) / threads;
     multinomial_sample<<<blocks, threads, 0, stream>>>(
