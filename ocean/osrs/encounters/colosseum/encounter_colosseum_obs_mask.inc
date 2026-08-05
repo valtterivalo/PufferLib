@@ -1,13 +1,31 @@
 #line 76 "encounter_colosseum.h"
 
 #define COLO_PLAYER_OBS_SIZE      36
-#define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT
+/* Each cell ships an item code plus the two features the item does not determine; the entity
+ * encoder rebuilds the other twelve from COLO_ITEM_OBS_TABLE, exactly as it rebuilds the NPC
+ * type one-hot from a code. Keeping the EXPANDED record identical to the old compact one
+ * means the inventory branch weights keep their meaning across this recut. */
+#define COLO_INVENTORY_CELL_OBS_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES_CODED
+#define COLO_INVENTORY_CELL_ENCODER_FEATURES OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT
 #define COLO_INVENTORY_OBS_SIZE \
     (COLO_INVENTORY_DISPLAY_SLOTS * COLO_INVENTORY_CELL_OBS_FEATURES)
 #define COLO_EQUIPPED_SELF_OBS_SIZE COLO_EQUIPPED_AGG_OBS_FEATURES
 static_assert(COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE ==
     COLO_INVENTORY_OBS_CACHE_FLOATS,
     "inventory obs cache float count must match the inventory+equipped block size");
+static_assert(COLO_ITEM_OBS_TABLE_ROWS == OSRS_INVENTORY_CELL_OBS_CODE_COUNT,
+    "regenerate osrs_colosseum_item_obs_table.inc: the cell code space changed");
+static_assert(COLO_ITEM_OBS_TABLE_COLS == COLO_INVENTORY_CELL_ENCODER_FEATURES,
+    "regenerate osrs_colosseum_item_obs_table.inc: the expanded record width changed");
+static_assert(COLO_ITEM_OBS_TABLE_BASE_PRAYER == COLO_PLAYER_PRAYER_LEVEL,
+    "regenerate osrs_colosseum_item_obs_table.inc: it bakes prayer_restore at this level");
+static_assert(COLO_ITEM_OBS_TABLE_BASE_LEVEL == MAXED_BASE_ATTACK,
+    "regenerate osrs_colosseum_item_obs_table.inc: it bakes offensive_boost at this level");
+static_assert(COLO_ITEM_OBS_OVERLAY_EQUIPPED == OSRS_INVENTORY_CELL_COMPACT_EQUIPPED &&
+    COLO_ITEM_OBS_OVERLAY_HP_HEAL == OSRS_INVENTORY_CELL_COMPACT_HP_HEAL,
+    "the gather adds the observed floats at these expanded slots; the table holds zero there");
+static_assert(COLO_ITEM_OBS_CODE_SCALE == OSRS_INVENTORY_CELL_OBS_CODE_SCALE,
+    "the gather multiplies the observed code back by this scale before indexing a row");
 #define COLO_NPC_CORE_FEATURES    11
 #define COLO_NPC_TELLS_FEATURES   10
 #define COLO_NPC_VENATOR_FEATURES 1
@@ -1503,7 +1521,8 @@ static void col_write_equipped_effect_aggregate(
  * in its slot. Stamped after a cache hit so a gear swap shows up on the tick it happens. */
 static void col_stamp_equipped_flags(const ColosseumState* s, float* obs, int block_start) {
     for (int c = 0; c < COLO_INVENTORY_DISPLAY_SLOTS; c++) {
-        obs[block_start + c * COLO_INVENTORY_CELL_OBS_FEATURES + 1] =
+        obs[block_start + c * COLO_INVENTORY_CELL_OBS_FEATURES +
+            OSRS_INVENTORY_CELL_OBS_EQUIPPED] =
             osrs_inventory_cell_holds_equipped_item(&s->player, s->inventory_cells, c)
                 ? 1.0f : 0.0f;
     }
@@ -1533,9 +1552,22 @@ static void col_write_inventory_and_equipped_obs(
     }
     s->log.inv_memo_misses += 1.0f;
 
+    /* prayer_restore and offensive_boost are baked into COLO_ITEM_OBS_TABLE at these levels.
+     * base_hitpoints is deliberately absent from that list: Frailty rewrites it, which is why
+     * hp_heal still rides the observation. Anything that starts moving the other two the same
+     * way has to ship them too, and must not discover that during a training run. */
+    if (s->player.base_prayer != COLO_ITEM_OBS_TABLE_BASE_PRAYER ||
+            s->player.base_attack != COLO_ITEM_OBS_TABLE_BASE_LEVEL) {
+        fprintf(stderr,
+            "colosseum inventory obs: base prayer %d attack %d, item table baked %d/%d\n",
+            s->player.base_prayer, s->player.base_attack,
+            COLO_ITEM_OBS_TABLE_BASE_PRAYER, COLO_ITEM_OBS_TABLE_BASE_LEVEL);
+        abort();
+    }
+
     for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
         const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-        osrs_write_inventory_cell_affordance_features_compact(
+        osrs_write_inventory_cell_obs_code_features(
             &obs[i],
             cell->item_idx,
             cell->raw_osrs_id,

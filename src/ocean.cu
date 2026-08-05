@@ -1264,7 +1264,18 @@ static void nmmo3_encoder_free_activations(void* activations) { free(activations
 // Mirrors the observation layout in encounter_colosseum_obs_mask.inc. No shared
 // header reaches this TU, so drift is caught only by the _Static_asserts in
 // osrs_visual.c; update both when the layout changes.
-static constexpr int COLO_ENT_NPC_START   = 466;
+//
+// The one exception is the item table, which is generated precisely so it can cross this
+// boundary with no OSRS dependency. ENV_HEADER is included before this file and also pulls
+// the guarded header, so the rows live in a separate .inc and each side names its own
+// storage -- a single guarded definition would hand the host copy to the kernel.
+#include "../ocean/osrs/osrs_colosseum_item_obs_generated.h"
+__device__ static const float COLO_ITEM_OBS_TABLE_DEV
+    [COLO_ITEM_OBS_TABLE_ROWS][COLO_ITEM_OBS_TABLE_COLS] = {
+#include "../ocean/osrs/osrs_colosseum_item_obs_table.inc"
+};
+
+static constexpr int COLO_ENT_NPC_START   = 130;
 static constexpr int COLO_ENT_NUM_NPCS    = 24;
 static constexpr int COLO_ENT_FEATS       = 34;
 static constexpr int COLO_ENT_TYPE_ONEHOT = 12;
@@ -1282,6 +1293,17 @@ static constexpr int COLO_ENT_INV_FEATS      = 15;
 static constexpr int COLO_ENT_INV_PRESENT    = 0;
 static constexpr int COLO_ENT_INV_BOTTLENECK = 16;
 static constexpr int COLO_ENT_INV_BLOCK      = COLO_ENT_INV_NUM_CELLS * COLO_ENT_INV_FEATS;
+// Each cell observes an item CODE plus the two features the item does not fix: whether it is
+// the piece currently worn in its slot, and how much it heals -- the latter divides by
+// base_hitpoints, which the Frailty modifier rewrites mid-episode. colo_ent_gather_inv
+// rebuilds the other twelve from the table and adds these two in, so the encoder record
+// keeps the width and meaning it had before the recut.
+static constexpr int COLO_ENT_INV_OBS_FEATS    = 3;
+static constexpr int COLO_ENT_INV_OBS_CODE     = 0;
+static constexpr int COLO_ENT_INV_OBS_EQUIPPED = 1;
+static constexpr int COLO_ENT_INV_OBS_HP_HEAL  = 2;
+static_assert(COLO_ENT_INV_FEATS == COLO_ITEM_OBS_TABLE_COLS,
+    "encoder record width is one item table row");
 
 struct ColosseumEntityEncoderWeights {
     PrecisionTensor global_w;
@@ -1353,7 +1375,19 @@ __global__ void colo_ent_gather_inv(
     if (idx >= total) return;
     int b = idx / COLO_ENT_INV_BLOCK;
     int off = idx % COLO_ENT_INV_BLOCK;
-    inv_flat[idx] = obs[(int64_t)b * obs_size + COLO_ENT_INV_START + off];
+    int cell = off / COLO_ENT_INV_FEATS;
+    int f = off - cell * COLO_ENT_INV_FEATS;
+    const precision_t* src = obs + (int64_t)b * obs_size + COLO_ENT_INV_START
+        + cell * COLO_ENT_INV_OBS_FEATS;
+    int code = (int)lrintf(
+        to_float(src[COLO_ENT_INV_OBS_CODE]) * (float)COLO_ITEM_OBS_CODE_SCALE);
+    assert(code >= 0 && code < COLO_ITEM_OBS_TABLE_ROWS);
+    float v = COLO_ITEM_OBS_TABLE_DEV[code][f];
+    if (f == COLO_ITEM_OBS_OVERLAY_EQUIPPED)
+        v += to_float(src[COLO_ENT_INV_OBS_EQUIPPED]);
+    if (f == COLO_ITEM_OBS_OVERLAY_HP_HEAL)
+        v += to_float(src[COLO_ENT_INV_OBS_HP_HEAL]);
+    inv_flat[idx] = from_float(v);
 }
 
 // ---- fused pool kernels ----
@@ -1582,7 +1616,8 @@ static PrecisionTensor colo_entity_encoder_forward(void* w, void* activations, P
     PrecisionTensor inv2d = {.data = a->inv_flat.data, .shape = {IB, COLO_ENT_INV_FEATS}};
     puf_mm(&inv2d, &ew->inv_l1_w, &a->inv_z1, stream);
     static_assert(COLO_ENT_INV_PRESENT == 0,
-        "fused pool mask reads a prefix; present flag must be cell-local offset 0");
+        "fused pool masks the EXPANDED record, so present must be cell-local offset 0 there; "
+        "the observation carries the item code at that offset instead");
     colo_ent_launch_fused_fwd(
         a->out.data, a->inv_pool_argmax.data, a->inv_h1.data,
         a->inv_z1.data, a->inv_flat.data,

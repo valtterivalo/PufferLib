@@ -502,7 +502,7 @@ static void col_reset_ctx(EncounterState* state, EncounterContext* context, uint
     for (int i = 0; i < COLO_OBS_NPCS; i++) s->current_obs_slots[i] = -1;
 
     s->player.entity_type = ENTITY_PLAYER;
-    encounter_init_maxed_player_combat_stats(&s->player, 99);
+    encounter_init_maxed_player_combat_stats(&s->player, COLO_PLAYER_PRAYER_LEVEL);
     osrs_item_effect_state_init(&s->player.item_effect_state);
 
     s->weapon_set = COLO_GEAR_MELEE;

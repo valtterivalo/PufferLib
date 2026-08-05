@@ -42,8 +42,10 @@ _Static_assert(COLO_ENT_INF_INV_START == COLO_OBS_AFTER_PLAYER,
     "entity encoder inventory block offset must track the colosseum observation layout");
 _Static_assert(COLO_ENT_INF_INV_NUM_CELLS == COLO_INVENTORY_DISPLAY_SLOTS,
     "entity encoder inventory cell count must track the colosseum observation layout");
-_Static_assert(COLO_ENT_INF_INV_FEATS == COLO_INVENTORY_CELL_OBS_FEATURES,
-    "entity encoder inventory cell width must track the colosseum observation layout");
+_Static_assert(COLO_ENT_INF_INV_OBS_FEATS == COLO_INVENTORY_CELL_OBS_FEATURES,
+    "entity encoder inventory cell OBSERVATION width must track the colosseum layout");
+_Static_assert(COLO_ENT_INF_INV_FEATS == COLO_INVENTORY_CELL_ENCODER_FEATURES,
+    "encoder inventory record is one item table row with the observed floats added in");
 
 _Static_assert(INF_ENT_FEATS == INF_NPC_SLOT_FEATURES,
     "entity encoder per-NPC width must track the inferno observation layout");

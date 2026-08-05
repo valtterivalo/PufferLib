@@ -71,6 +71,24 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
 #define OSRS_INVENTORY_CELL_OBS_KIND_UNION 10
 #define OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT \
     (OSRS_INVENTORY_CELL_OBS_SHARED + OSRS_INVENTORY_CELL_OBS_KIND_UNION)
+
+/* Slot names for the compact record. The coded observation ships three of these and an
+   item-table gather rebuilds the rest, so both sides must agree on where they sit. */
+#define OSRS_INVENTORY_CELL_COMPACT_PRESENT   0
+#define OSRS_INVENTORY_CELL_COMPACT_EQUIPPED  1
+#define OSRS_INVENTORY_CELL_COMPACT_DOSE      2
+#define OSRS_INVENTORY_CELL_COMPACT_IS_ARMOR  3
+#define OSRS_INVENTORY_CELL_COMPACT_IS_WEAPON 4
+/* Union slot: effect_class4[2] on a gear cell, hp_heal on a consumable cell. */
+#define OSRS_INVENTORY_CELL_COMPACT_HP_HEAL   (OSRS_INVENTORY_CELL_OBS_SHARED + 5)
+
+/* The coded observation: everything a cell carries that the item alone does not determine.
+   hp_heal is here because it divides by base_hitpoints, which the Frailty modifier rewrites
+   mid-episode; dose and the other ten features are pure item facts and live in the table. */
+#define OSRS_INVENTORY_CELL_OBS_CODE     0
+#define OSRS_INVENTORY_CELL_OBS_EQUIPPED 1
+#define OSRS_INVENTORY_CELL_OBS_HP_HEAL  2
+#define OSRS_INVENTORY_CELL_OBS_FEATURES_CODED 3
 #define OSRS_EQUIPPED_SELF_OBS_FEATURES 18
 
 static const OsrsConsumableClick OSRS_CONSUMABLE_CLICK_REGISTRY[] = {
@@ -362,11 +380,11 @@ static inline void osrs_write_inventory_cell_affordance_features_compact(
         item_idx, raw_osrs_id, dose, is_equipped, NULL,
         base_hitpoints, base_prayer, base_level);
 
-    out[0] = a.present;
-    out[1] = a.is_equipped;
-    out[2] = a.dose;
-    out[3] = a.is_armor;
-    out[4] = a.is_weapon;
+    out[OSRS_INVENTORY_CELL_COMPACT_PRESENT] = a.present;
+    out[OSRS_INVENTORY_CELL_COMPACT_EQUIPPED] = a.is_equipped;
+    out[OSRS_INVENTORY_CELL_COMPACT_DOSE] = a.dose;
+    out[OSRS_INVENTORY_CELL_COMPACT_IS_ARMOR] = a.is_armor;
+    out[OSRS_INVENTORY_CELL_COMPACT_IS_WEAPON] = a.is_weapon;
 
     float* u = out + OSRS_INVENTORY_CELL_OBS_SHARED;
     for (int i = 0; i < OSRS_INVENTORY_CELL_OBS_KIND_UNION; i++) u[i] = 0.0f;
@@ -670,6 +688,142 @@ static inline OsrsInventoryDrinkConsumeResult osrs_inventory_cell_consume_drink_
 
 static inline void osrs_inventory_cell_consume_eat(OsrsInventoryCell* cell) {
     *cell = osrs_inventory_cell_empty();
+}
+
+/* One dense code per distinguishable cell content. Gear keys on the item index; consumables
+   key on their click-registry entry, because a potion's raw id is what carries its kind and
+   its dose; every remaining present-but-inert raw id collapses onto a single code, since no
+   derived feature can tell two of them apart.
+
+   The code rides the observation divided by OSRS_INVENTORY_CELL_OBS_CODE_SCALE. The encoder's
+   global linear layer reads the WHOLE observation, so 28 raw codes near 200 sitting beside
+   894 features in [0,1] outweigh everything else by four orders of magnitude in the input
+   variance -- measured, and it cost episode_return 7.8 -> 0.6 with entropy collapsing 7.3 ->
+   1.9 over 30M steps. Scaling by a power of two only shifts the exponent, so a code that is
+   exact in bf16 stays exact and the gather's multiply-back is lossless; that is also why the
+   count must stay at or under the scale. */
+#define OSRS_CONSUMABLE_CLICK_REGISTRY_COUNT \
+    ((int)(sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY) / \
+           sizeof(OSRS_CONSUMABLE_CLICK_REGISTRY[0])))
+#define OSRS_INVENTORY_CELL_OBS_CODE_EMPTY 0
+#define OSRS_INVENTORY_CELL_OBS_CODE_GEAR_BASE 1
+#define OSRS_INVENTORY_CELL_OBS_CODE_CONSUMABLE_BASE \
+    (OSRS_INVENTORY_CELL_OBS_CODE_GEAR_BASE + NUM_ITEMS)
+#define OSRS_INVENTORY_CELL_OBS_CODE_INERT \
+    (OSRS_INVENTORY_CELL_OBS_CODE_CONSUMABLE_BASE + OSRS_CONSUMABLE_CLICK_REGISTRY_COUNT)
+#define OSRS_INVENTORY_CELL_OBS_CODE_COUNT (OSRS_INVENTORY_CELL_OBS_CODE_INERT + 1)
+#define OSRS_INVENTORY_CELL_OBS_CODE_SCALE 256
+
+static inline float osrs_inventory_cell_obs_code_encode(int code) {
+    return (float)code / (float)OSRS_INVENTORY_CELL_OBS_CODE_SCALE;
+}
+
+static inline int osrs_inventory_cell_obs_code_decode(float observed) {
+    return (int)lrintf(observed * (float)OSRS_INVENTORY_CELL_OBS_CODE_SCALE);
+}
+
+/* Stands in for every present raw id that is neither gear nor a registered consumable. */
+#define OSRS_INVENTORY_CELL_INERT_RAW_OSRS_ID 0xFFFFu
+
+static inline int osrs_inventory_cell_obs_code(uint8_t item_idx, uint16_t raw_osrs_id) {
+    if (item_idx != ITEM_NONE) {
+        if (item_idx >= NUM_ITEMS) osrs_inventory_clicks_trap();
+        return OSRS_INVENTORY_CELL_OBS_CODE_GEAR_BASE + item_idx;
+    }
+    if (raw_osrs_id == 0) return OSRS_INVENTORY_CELL_OBS_CODE_EMPTY;
+    for (int i = 0; i < OSRS_CONSUMABLE_CLICK_REGISTRY_COUNT; i++) {
+        if (OSRS_CONSUMABLE_CLICK_REGISTRY[i].raw_osrs_id == raw_osrs_id) {
+            return OSRS_INVENTORY_CELL_OBS_CODE_CONSUMABLE_BASE + i;
+        }
+    }
+    return OSRS_INVENTORY_CELL_OBS_CODE_INERT;
+}
+
+static inline OsrsInventoryCell osrs_inventory_cell_for_obs_code(int code) {
+    if (code < 0 || code >= OSRS_INVENTORY_CELL_OBS_CODE_COUNT) {
+        osrs_inventory_clicks_trap();
+    }
+    if (code == OSRS_INVENTORY_CELL_OBS_CODE_EMPTY) return osrs_inventory_cell_empty();
+    if (code < OSRS_INVENTORY_CELL_OBS_CODE_CONSUMABLE_BASE) {
+        return osrs_inventory_cell_from_item(
+            (uint8_t)(code - OSRS_INVENTORY_CELL_OBS_CODE_GEAR_BASE));
+    }
+    if (code < OSRS_INVENTORY_CELL_OBS_CODE_INERT) {
+        return osrs_inventory_cell_from_raw_osrs_id(
+            OSRS_CONSUMABLE_CLICK_REGISTRY[
+                code - OSRS_INVENTORY_CELL_OBS_CODE_CONSUMABLE_BASE].raw_osrs_id);
+    }
+    return (OsrsInventoryCell){
+        .item_idx = ITEM_NONE,
+        .raw_osrs_id = OSRS_INVENTORY_CELL_INERT_RAW_OSRS_ID,
+        .dose = 0,
+    };
+}
+
+/* The item-table row: the compact record with the two slots the observation supplies zeroed,
+   so a gather can add the observed values in without branching on the cell's kind. On a gear
+   cell the union slot holds effect_class4[2], which is an item fact and stays. */
+static inline void osrs_write_inventory_cell_obs_table_row(
+    float* out,
+    int code,
+    int base_hitpoints,
+    int base_prayer,
+    int base_level
+) {
+    OsrsInventoryCell cell = osrs_inventory_cell_for_obs_code(code);
+    osrs_write_inventory_cell_affordance_features_compact(
+        out, cell.item_idx, cell.raw_osrs_id, cell.dose, 0,
+        base_hitpoints, base_prayer, base_level);
+
+    out[OSRS_INVENTORY_CELL_COMPACT_EQUIPPED] = 0.0f;
+    if (out[OSRS_INVENTORY_CELL_COMPACT_IS_ARMOR] == 0.0f &&
+            out[OSRS_INVENTORY_CELL_COMPACT_IS_WEAPON] == 0.0f) {
+        out[OSRS_INVENTORY_CELL_COMPACT_HP_HEAL] = 0.0f;
+    }
+}
+
+/* The other half of the same record. Projecting both sides off one compact write is what
+   makes them complementary: a change to the affordance reaches the table and the
+   observation together instead of drifting between them. */
+static inline void osrs_write_inventory_cell_obs_code_features(
+    float* out,
+    uint8_t item_idx,
+    uint16_t raw_osrs_id,
+    uint8_t dose,
+    int is_equipped,
+    int base_hitpoints,
+    int base_prayer,
+    int base_level
+) {
+    float compact[OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT];
+    osrs_write_inventory_cell_affordance_features_compact(
+        compact, item_idx, raw_osrs_id, dose, is_equipped,
+        base_hitpoints, base_prayer, base_level);
+
+    int is_gear = compact[OSRS_INVENTORY_CELL_COMPACT_IS_ARMOR] != 0.0f ||
+        compact[OSRS_INVENTORY_CELL_COMPACT_IS_WEAPON] != 0.0f;
+
+    out[OSRS_INVENTORY_CELL_OBS_CODE] = osrs_inventory_cell_obs_code_encode(
+        osrs_inventory_cell_obs_code(item_idx, raw_osrs_id));
+    out[OSRS_INVENTORY_CELL_OBS_EQUIPPED] =
+        compact[OSRS_INVENTORY_CELL_COMPACT_EQUIPPED];
+    out[OSRS_INVENTORY_CELL_OBS_HP_HEAL] =
+        is_gear ? 0.0f : compact[OSRS_INVENTORY_CELL_COMPACT_HP_HEAL];
+}
+
+/* Inverse of the split above, and the exact arithmetic colo_ent_gather_inv performs. */
+static inline void osrs_expand_inventory_cell_obs_code_features(
+    float* out,
+    const float* coded,
+    const float* table_row
+) {
+    for (int f = 0; f < OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT; f++) {
+        out[f] = table_row[f];
+    }
+    out[OSRS_INVENTORY_CELL_COMPACT_EQUIPPED] +=
+        coded[OSRS_INVENTORY_CELL_OBS_EQUIPPED];
+    out[OSRS_INVENTORY_CELL_COMPACT_HP_HEAL] +=
+        coded[OSRS_INVENTORY_CELL_OBS_HP_HEAL];
 }
 
 #endif

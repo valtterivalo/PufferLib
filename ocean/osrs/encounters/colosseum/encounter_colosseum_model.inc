@@ -1012,6 +1012,10 @@ typedef struct {
 
 #define COLO_BEST_GEAR_CACHE_WAYS 12
 
+/* Feeds encounter_init_maxed_player_combat_stats and, through it, every prayer-restore
+ * feature the item observation table bakes. Never rewritten during an episode. */
+#define COLO_PLAYER_PRAYER_LEVEL 99
+
 /* Replaces the 11 per-slot item stat rows. Those were a second encoding of combat maths
  * the player block already carries: encounter_compute_loadout_stats sums the equipped set
  * into EncounterLoadoutStats and the prefix emits attack_bonus, strength_bonus, max_hit,
@@ -1021,7 +1025,7 @@ typedef struct {
 
 #define COLO_INVENTORY_OBS_CACHE_WAYS 8
 #define COLO_INVENTORY_OBS_CACHE_FLOATS \
-    (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT + \
+    (OSRS_INVENTORY_SIZE * OSRS_INVENTORY_CELL_OBS_FEATURES_CODED + \
      COLO_EQUIPPED_AGG_OBS_FEATURES)
 
 typedef struct {

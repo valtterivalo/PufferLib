@@ -289,6 +289,32 @@ static void test_prepare_for_drink_kind(
     }
 }
 
+/* The committed table src/ocean.cu and the viewer both read. Kept here as a third,
+   independent copy so test_item_obs_table_is_current can diff it against a fresh build. */
+static const float TEST_ITEM_OBS_TABLE
+    [COLO_ITEM_OBS_TABLE_ROWS][COLO_ITEM_OBS_TABLE_COLS] = {
+#include "ocean/osrs/osrs_colosseum_item_obs_table.inc"
+};
+
+/* Exactly what colo_ent_gather_inv does: the observation names a table row and supplies the
+   two features the item does not fix. Every per-cell assertion below reads the result, so it
+   asserts against what the encoder actually sees rather than against the raw observation. */
+static void test_expand_inventory_cell(
+    const float obs[COLO_NUM_OBS],
+    int cell_idx,
+    float out[COLO_INVENTORY_CELL_ENCODER_FEATURES]
+) {
+    const float* coded = &obs[COLO_OBS_AFTER_PLAYER +
+        cell_idx * COLO_INVENTORY_CELL_OBS_FEATURES];
+    int code = osrs_inventory_cell_obs_code_decode(coded[OSRS_INVENTORY_CELL_OBS_CODE]);
+    if (code < 0 || code >= COLO_ITEM_OBS_TABLE_ROWS) {
+        fprintf(stderr, "inventory cell %d observed item code %d\n", cell_idx, code);
+        abort();
+    }
+    osrs_expand_inventory_cell_obs_code_features(out, coded, TEST_ITEM_OBS_TABLE[code]);
+}
+
+/* Offsets into the EXPANDED record above, not into the observation. */
 typedef enum {
     TEST_INV_OBS_ROLE_ARMOR = 3,
     TEST_INV_OBS_ROLE_WEAPON = 4,
@@ -358,9 +384,9 @@ static TestDroppedInventoryFields test_reconstructed_dropped_inventory_fields(
     const float mask[COLO_ACTION_MASK_SIZE],
     int cell_idx
 ) {
-    int base = COLO_OBS_AFTER_PLAYER +
-        cell_idx * COLO_INVENTORY_CELL_OBS_FEATURES;
-    const float* cell_obs = &obs[base];
+    float expanded[COLO_INVENTORY_CELL_ENCODER_FEATURES];
+    test_expand_inventory_cell(obs, cell_idx, expanded);
+    const float* cell_obs = expanded;
     int is_gear_cell = cell_obs[TEST_INV_OBS_ROLE_ARMOR] != 0.0f ||
         cell_obs[TEST_INV_OBS_ROLE_WEAPON] != 0.0f;
     float kind = is_gear_cell ? 0.0f : test_any_inventory_kind_bit(cell_obs);
@@ -6015,9 +6041,12 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 1258", COLO_NUM_OBS == 1258);
-    CHECK("inventory block has 420 features (28 cells x 15 compact)",
-        COLO_INVENTORY_OBS_SIZE == 420);
+    CHECK("obs width is 922", COLO_NUM_OBS == 922);
+    CHECK("inventory block has 84 features (28 cells x code, equipped, hp_heal)",
+        COLO_INVENTORY_OBS_SIZE == 84);
+    CHECK("the encoder still sees the 15-feature record, rebuilt from the item table",
+        COLO_INVENTORY_CELL_ENCODER_FEATURES == 15 &&
+        COLO_ITEM_OBS_TABLE_COLS == 15);
     /* spec_cost is 0 for everything without a special, so it doubles as the has-spec flag
      * while also telling the agent whether it can afford one. */
     CHECK("spec cost is exposed and normalised for a spec weapon",
@@ -8123,7 +8152,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1258);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 922);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
@@ -8253,6 +8282,97 @@ static int colo_test_cell_of_named_item(const ColosseumState* s, const char* nam
     return -1;
 }
 
+/* Round-to-nearest-even bf16, which is what the trainer stores observations in by default. */
+static float test_through_bf16(float v) {
+    uint32_t bits;
+    memcpy(&bits, &v, sizeof(bits));
+    uint32_t rounded = (bits + 0x7FFFu + ((bits >> 16) & 1u)) & 0xFFFF0000u;
+    float out;
+    memcpy(&out, &rounded, sizeof(out));
+    return out;
+}
+
+/* The whole scheme rests on the code surviving the observation buffer. Nothing else in the
+   C gate runs at training precision, so pin it here. */
+static void test_item_obs_code_survives_bf16(void) {
+    printf("test_item_obs_code_survives_bf16\n");
+    int worst = -1;
+    for (int code = 0; code < OSRS_INVENTORY_CELL_OBS_CODE_COUNT; code++) {
+        float observed = test_through_bf16(osrs_inventory_cell_obs_code_encode(code));
+        if (osrs_inventory_cell_obs_code_decode(observed) != code) worst = code;
+    }
+    CHECK("every item code round-trips through bf16", worst < 0);
+    CHECK("the code stays inside the unit range the rest of the observation lives in",
+        osrs_inventory_cell_obs_code_encode(OSRS_INVENTORY_CELL_OBS_CODE_COUNT - 1) <= 1.0f);
+}
+
+/* The table is generated and committed, so a checkout can hold a stale one and train on
+   silently wrong observations. Rebuild every row and diff it, float for float. */
+static void test_item_obs_table_is_current(void) {
+    printf("test_item_obs_table_is_current\n");
+    for (int code = 0; code < COLO_ITEM_OBS_TABLE_ROWS; code++) {
+        float row[COLO_ITEM_OBS_TABLE_COLS];
+        osrs_write_inventory_cell_obs_table_row(
+            row, code, MAXED_BASE_HITPOINTS,
+            COLO_ITEM_OBS_TABLE_BASE_PRAYER, COLO_ITEM_OBS_TABLE_BASE_LEVEL);
+        for (int f = 0; f < COLO_ITEM_OBS_TABLE_COLS; f++) {
+            char label[160];
+            snprintf(label, sizeof(label),
+                "item table row %d feature %d matches a fresh build "
+                "(rerun ocean/osrs/tools/gen_colosseum_item_obs_table.c)", code, f);
+            CHECK(label, row[f] == TEST_ITEM_OBS_TABLE[code][f]);
+        }
+    }
+}
+
+/* The recut is only legitimate if the encoder still sees the record it saw before. Drive a
+   live episode and compare the expanded record against the writer the observation used to
+   call, cell by cell and tick by tick, across a Frailty draft so base_hitpoints moves. */
+static void test_inventory_obs_expansion_is_lossless(void) {
+    printf("test_inventory_obs_expansion_is_lossless\n");
+    ColosseumContext ctx;
+    ColosseumState s;
+    loadout_reset(&s, &ctx, COLO_LOADOUT_PROFILE_MODE_SPEEDRUN_ONLY, 0.0f, 71);
+
+    static float obs[COLO_NUM_OBS];
+    int mismatches = 0;
+    int hp_heal_seen = 0;
+
+    for (int tier = 0; tier < 4; tier++) {
+        s.modifiers.active_mask |= (1u << COLO_MOD_FRAILTY);
+        s.modifiers.tier[COLO_MOD_FRAILTY] = tier;
+        col_mod_apply_frailty_hp(&s);
+        memset(&s.obs_memos, 0, sizeof(s.obs_memos));
+        col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+
+        for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
+            const ColoInvCell* c = &s.inventory_cells[cell];
+            float want[COLO_INVENTORY_CELL_ENCODER_FEATURES];
+            osrs_write_inventory_cell_affordance_features_compact(
+                want, c->item_idx, c->raw_osrs_id, c->dose,
+                osrs_inventory_cell_holds_equipped_item(&s.player, s.inventory_cells, cell),
+                s.player.base_hitpoints, s.player.base_prayer, s.player.base_attack);
+
+            float got[COLO_INVENTORY_CELL_ENCODER_FEATURES];
+            test_expand_inventory_cell(obs, cell, got);
+
+            if (want[OSRS_INVENTORY_CELL_COMPACT_HP_HEAL] != 0.0f &&
+                    want[OSRS_INVENTORY_CELL_COMPACT_IS_ARMOR] == 0.0f &&
+                    want[OSRS_INVENTORY_CELL_COMPACT_IS_WEAPON] == 0.0f) {
+                hp_heal_seen++;
+            }
+            for (int f = 0; f < COLO_INVENTORY_CELL_ENCODER_FEATURES; f++) {
+                if (want[f] != got[f]) mismatches++;
+            }
+        }
+    }
+
+    CHECK("expanded record equals the pre-recut compact record on every cell and tier",
+        mismatches == 0);
+    CHECK("the sweep actually exercised hp_heal, the one feature the table cannot hold",
+        hp_heal_seen > 0);
+}
+
 static void test_inventory_obs_memo(void) {
     printf("test_inventory_obs_memo\n");
     ColosseumContext ctx;
@@ -8267,16 +8387,20 @@ static void test_inventory_obs_memo(void) {
     s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6685);
     CHECK("4-dose brew seeded", s.inventory_cells[cell_brew].dose == 4);
 
-    const int cell_base = COLO_OBS_AFTER_PLAYER +
-        cell_brew * COLO_INVENTORY_CELL_OBS_FEATURES;
+    /* Dose rides the item code now: a potion's raw id names its dose, so the sip lands a
+       different code and the expanded record picks the dose up from the table row. */
+    float expanded[COLO_INVENTORY_CELL_ENCODER_FEATURES];
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
-    CHECK("4-dose brew renders the full dose feature", obs[cell_base + 2] == 1.0f);
+    test_expand_inventory_cell(obs, cell_brew, expanded);
+    CHECK("4-dose brew renders the full dose feature",
+        expanded[OSRS_INVENTORY_CELL_COMPACT_DOSE] == 1.0f);
 
     s.inventory_cells[cell_brew] = osrs_inventory_cell_from_raw_osrs_id(6687);
     CHECK("sip took a dose", s.inventory_cells[cell_brew].dose == 3);
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
+    test_expand_inventory_cell(obs, cell_brew, expanded);
     CHECK("sip moves the dose feature (dose is in the memo key, not a stale block)",
-        obs[cell_base + 2] == 0.75f);
+        expanded[OSRS_INVENTORY_CELL_COMPACT_DOSE] == 0.75f);
 
     col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
     float served_block[COLO_INVENTORY_OBS_CACHE_FLOATS];
@@ -8533,6 +8657,9 @@ int main(void) {
     test_modifier_draft_forces_pick();
     test_best_gear_cache_signatures();
     test_farm_safe_damage_cap();
+    test_item_obs_code_survives_bf16();
+    test_item_obs_table_is_current();
+    test_inventory_obs_expansion_is_lossless();
     test_inventory_obs_memo();
 
     return osrs_test_summary();
