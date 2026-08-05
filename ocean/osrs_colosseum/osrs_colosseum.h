@@ -438,6 +438,7 @@ void puf_step(Env* env) {
 #ifdef COLO_PROFILE_ENABLED
     if (col_prof_enabled)
         COLO_PROFILE_ADD(COLO_PROF_C_STEP_TOTAL, COLO_PROFILE_NOW_MS() - col_prof_step_t0);
+        COLO_PROFILE_ADD(COLO_PROF_ENV_STEPS, 1.0);
 #endif
 }
 
@@ -445,7 +446,8 @@ void puf_step(Env* env) {
 /* best_gear_* accumulate event counts, not milliseconds, so a %-of-step column on them
  * is meaningless. */
 static int col_profile_slot_is_counter(int slot) {
-    return slot == COLO_PROF_BEST_GEAR_REQUESTS ||
+    return slot == COLO_PROF_ENV_STEPS ||
+        slot == COLO_PROF_BEST_GEAR_REQUESTS ||
         slot == COLO_PROF_BEST_GEAR_HITS ||
         slot == COLO_PROF_BEST_GEAR_BUILDS;
 }
@@ -460,11 +462,17 @@ void puf_env_profile_report(void) {
     double total = v[COLO_PROF_C_STEP_TOTAL];
     if (total <= 0.0) return;
 
-    printf("\nenv profile (ms across all worker threads, %% of c_step_total)\n");
+    /* Absolute ns per env step is the number worth judging: a share only says how a slot
+     * compares to its siblings, never whether the work itself is justified. */
+    double steps = v[COLO_PROF_ENV_STEPS];
+    if (steps <= 0.0) return;
+    printf("\nenv profile: %.0f env-steps, %.0f ns/env-step total\n",
+        steps, total * 1e6 / steps);
+    printf("  %-24s %12s %8s\n", "", "ns/env-step", "share");
     for (int i = 0; i < n; i++) {
         if (v[i] <= 0.0 || col_profile_slot_is_counter(i)) continue;
-        printf("  %-24s %10.1f  %5.1f%%\n",
-            colosseum_env_profile_name(i), v[i], 100.0 * v[i] / total);
+        printf("  %-24s %12.1f %7.1f%%\n",
+            colosseum_env_profile_name(i), v[i] * 1e6 / steps, 100.0 * v[i] / total);
     }
     for (int i = 0; i < n; i++) {
         if (v[i] <= 0.0 || !col_profile_slot_is_counter(i)) continue;

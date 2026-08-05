@@ -55,6 +55,7 @@
     X(COLO_PROF_STEP_MANTICORE_BARRAGE, "step_manticore_barrage") \
     X(COLO_PROF_STEP_WARBAND_ATTACK,    "step_warband_attack") \
     X(COLO_PROF_STEP_MODIFIERS_HAZARDS, "step_modifiers_hazards") \
+    X(COLO_PROF_ENV_STEPS,              "env_steps") \
     X(COLO_PROF_BEST_GEAR_REQUESTS,     "best_gear_requests") \
     X(COLO_PROF_BEST_GEAR_HITS,         "best_gear_hits") \
     X(COLO_PROF_BEST_GEAR_BUILDS,       "best_gear_builds")
