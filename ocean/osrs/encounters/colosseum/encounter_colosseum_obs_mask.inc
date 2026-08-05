@@ -1010,56 +1010,6 @@ static void col_write_thrall_dc(const ColosseumState* s, float* obs, int* idx) {
 }
 
 
-static void col_equipment_bonus_projection(
-    const uint8_t equipment[NUM_GEAR_SLOTS],
-    float out[6]
-) {
-    int slash = 0;
-    int melee_str = 0;
-    int ranged_att = 0;
-    int ranged_str = 0;
-    int magic = 0;
-    int defence = 0;
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        uint8_t item_idx = equipment[slot];
-        if (item_idx == ITEM_NONE) continue;
-        if (item_idx >= NUM_ITEMS) {
-            fprintf(stderr, "colosseum obs: invalid equipped item %u\n", item_idx);
-            abort();
-        }
-        const Item* item = &ITEM_DATABASE[item_idx];
-        slash += item->attack_slash;
-        melee_str += item->melee_strength;
-        ranged_att += item->attack_ranged;
-        ranged_str += item->ranged_strength;
-        magic += item->attack_magic + item->magic_damage;
-        defence += item->defence_stab + item->defence_slash + item->defence_crush +
-            item->defence_magic + item->defence_ranged;
-    }
-    out[0] = (float)slash / STAT_NORM_ATTACK;
-    out[1] = (float)melee_str / STAT_NORM_STRENGTH;
-    out[2] = (float)ranged_att / STAT_NORM_ATTACK;
-    out[3] = (float)ranged_str / STAT_NORM_STRENGTH;
-    out[4] = (float)magic / (STAT_NORM_ATTACK + STAT_NORM_MAGIC_DMG);
-    out[5] = (float)defence / (5.0f * STAT_NORM_DEFENCE);
-}
-
-static void col_hypothetical_equipment_after_cell(
-    const ColosseumState* s,
-    int cell_idx,
-    uint8_t out[NUM_GEAR_SLOTS]
-) {
-    memcpy(out, s->player.equipped, NUM_GEAR_SLOTS);
-    const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-    if (cell->item_idx == ITEM_NONE) return;
-    int gear_slot = osrs_item_gear_slot(cell->item_idx);
-    if (gear_slot < 0) return;
-    if (gear_slot == GEAR_SLOT_WEAPON && item_is_two_handed(cell->item_idx))
-        out[GEAR_SLOT_SHIELD] = ITEM_NONE;
-    if (gear_slot == GEAR_SLOT_SHIELD && item_is_two_handed(out[GEAR_SLOT_WEAPON]))
-        out[GEAR_SLOT_WEAPON] = ITEM_NONE;
-    out[gear_slot] = cell->item_idx;
-}
 
 static float col_expected_dpt_for_equipment_vs_npc(
     ColosseumState* s,
@@ -1504,26 +1454,11 @@ static int col_attacked_with_argmax_set(ColosseumState* s) {
     return col_weapon_set_is_argmax_dpt_for_npc(s, npc_slot, s->weapon_set, best);
 }
 
-static void col_inventory_cell_post_use_deltas(
-    const ColosseumState* s,
-    int cell_idx,
-    const float before[6],
-    float out[6]
-) {
-    for (int i = 0; i < 6; i++) out[i] = 0.0f;
-    if (s->inventory_cells[cell_idx].item_idx == ITEM_NONE) return;
-
-    float after[6];
-    uint8_t hypothetical[NUM_GEAR_SLOTS];
-    col_hypothetical_equipment_after_cell(s, cell_idx, hypothetical);
-    col_equipment_bonus_projection(hypothetical, after);
-    for (int i = 0; i < 6; i++) out[i] = after[i] - before[i];
-}
-
 static uint64_t col_inventory_obs_signature(const ColosseumState* s) {
+    /* Equipped gear is deliberately NOT in the key. It was only ever an input through the
+     * counterfactual deltas, and hashing it made every gear swap evict the block -- measured
+     * at a 34.9% hit rate. What remains depends on cell contents and base stats only. */
     uint64_t h = 1469598103934665603ULL;
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
-        h = (h ^ (uint64_t)s->player.equipped[slot]) * 1099511628211ULL;
     for (int cell = 0; cell < COLO_INVENTORY_DISPLAY_SLOTS; cell++) {
         const ColoInvCell* c = &s->inventory_cells[cell];
         uint64_t packed = (uint64_t)c->item_idx
@@ -1560,20 +1495,14 @@ static void col_write_inventory_and_equipped_obs(
     s->log.inv_memo_misses += 1.0f;
     int block_start = i;
 
-    float current_equipment_projection[6];
-    col_equipment_bonus_projection(s->player.equipped, current_equipment_projection);
     for (int cell_idx = 0; cell_idx < COLO_INVENTORY_DISPLAY_SLOTS; cell_idx++) {
-        float deltas[6];
         const ColoInvCell* cell = &s->inventory_cells[cell_idx];
-        col_inventory_cell_post_use_deltas(
-            s, cell_idx, current_equipment_projection, deltas);
         osrs_write_inventory_cell_affordance_features_compact(
             &obs[i],
             cell->item_idx,
             cell->raw_osrs_id,
             cell->dose,
             osrs_inventory_cell_holds_equipped_item(&s->player, s->inventory_cells, cell_idx),
-            deltas,
             s->player.base_hitpoints,
             s->player.base_prayer,
             s->player.base_attack);

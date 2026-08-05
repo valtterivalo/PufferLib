@@ -297,10 +297,11 @@ typedef enum {
     TEST_INV_OBS_KIND_COMBAT_BOOST = OSRS_INVENTORY_CELL_OBS_SHARED + 2,
     TEST_INV_OBS_KIND_RANGED_BOOST = OSRS_INVENTORY_CELL_OBS_SHARED + 3,
     TEST_INV_OBS_KIND_SPECIAL = OSRS_INVENTORY_CELL_OBS_SHARED + 4,
-    TEST_INV_OBS_EFFECT_LIFESTEAL = OSRS_INVENTORY_CELL_OBS_SHARED + 9,
-    TEST_INV_OBS_EFFECT_DAMAGE_AMP = OSRS_INVENTORY_CELL_OBS_SHARED + 10,
-    TEST_INV_OBS_EFFECT_DEFENSIVE = OSRS_INVENTORY_CELL_OBS_SHARED + 11,
-    TEST_INV_OBS_EFFECT_UTIL = OSRS_INVENTORY_CELL_OBS_SHARED + 12,
+    TEST_INV_OBS_EFFECT_LIFESTEAL = OSRS_INVENTORY_CELL_OBS_SHARED + 3,
+    TEST_INV_OBS_EFFECT_DAMAGE_AMP = OSRS_INVENTORY_CELL_OBS_SHARED + 4,
+    TEST_INV_OBS_EFFECT_DEFENSIVE = OSRS_INVENTORY_CELL_OBS_SHARED + 5,
+    TEST_INV_OBS_EFFECT_UTIL = OSRS_INVENTORY_CELL_OBS_SHARED + 6,
+    TEST_INV_OBS_SPEC_COST = OSRS_INVENTORY_CELL_OBS_SHARED + 9,
 } TestInventoryObsFeature;
 
 typedef struct {
@@ -6014,9 +6015,14 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 1398", COLO_NUM_OBS == 1398);
-    CHECK("inventory block has 560 features (28 cells x 20 compact)",
-        COLO_INVENTORY_OBS_SIZE == 560);
+    CHECK("obs width is 1258", COLO_NUM_OBS == 1258);
+    CHECK("inventory block has 420 features (28 cells x 15 compact)",
+        COLO_INVENTORY_OBS_SIZE == 420);
+    /* spec_cost is 0 for everything without a special, so it doubles as the has-spec flag
+     * while also telling the agent whether it can afford one. */
+    CHECK("spec cost is exposed and normalised for a spec weapon",
+        osrs_clamp_unit((float)osrs_spec_cost(ITEM_DRAGON_CLAWS) / 100.0f) == 0.5f);
+    CHECK("a non-spec weapon reads zero spec cost", osrs_spec_cost(ITEM_NONE) == 0);
     CHECK("equipped block is the 10-feature effect aggregate, not 11 item stat rows",
         COLO_EQUIPPED_SELF_OBS_SIZE == 10);
     CHECK("modifier hazard tail has 42 features", COLO_MODIFIER_HAZARD_OBS_SIZE == 42);
@@ -8073,7 +8079,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1398);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 1258);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

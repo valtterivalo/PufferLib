@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLO_ENT_INF_NPC_START   606
+#define COLO_ENT_INF_NPC_START   466
 #define COLO_ENT_INF_NUM_NPCS    24
 #define COLO_ENT_INF_FEATS       34
 /* obs carries a type CODE per slot; the encoder expands it back to the one-hot */
@@ -9,7 +9,7 @@
 #define COLO_ENT_INF_BOTTLENECK  16
 #define COLO_ENT_INF_INV_START      36
 #define COLO_ENT_INF_INV_NUM_CELLS  28
-#define COLO_ENT_INF_INV_FEATS      20
+#define COLO_ENT_INF_INV_FEATS      15
 #define COLO_ENT_INF_INV_BOTTLENECK 16
 
 #define INF_ENT_NPC_START   90

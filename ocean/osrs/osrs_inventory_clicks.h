@@ -4,6 +4,7 @@
 #include "osrs_inventory.h"
 #include "osrs_items.h"
 #include "osrs_consumables.h"
+#include "osrs_special_attacks.h"
 
 typedef enum {
     OSRS_CLICK_NONE = 0,
@@ -67,7 +68,7 @@ typedef void (*OsrsInventoryDrinkOneDoseEffectFn)(
 
 #define OSRS_INVENTORY_CELL_OBS_FEATURES 28
 #define OSRS_INVENTORY_CELL_OBS_SHARED 5
-#define OSRS_INVENTORY_CELL_OBS_KIND_UNION 15
+#define OSRS_INVENTORY_CELL_OBS_KIND_UNION 10
 #define OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT \
     (OSRS_INVENTORY_CELL_OBS_SHARED + OSRS_INVENTORY_CELL_OBS_KIND_UNION)
 #define OSRS_EQUIPPED_SELF_OBS_FEATURES 18
@@ -246,6 +247,7 @@ typedef struct {
     float effect_class4[4];
     float attack_speed;
     float attack_range;
+    float spec_cost;
     float kind5[5];
     float hp_heal;
     float prayer_restore;
@@ -286,7 +288,13 @@ static inline OsrsInventoryCellAffordance osrs_inventory_cell_affordance(
     a.style3[1] = style == 2 ? 1.0f : 0.0f;
     a.style3[2] = style == 3 ? 1.0f : 0.0f;
     for (int i = 0; i < 6; i++)
-        a.post_use_deltas[i] = osrs_clamp_unit(post_use_deltas[i]);
+        a.post_use_deltas[i] =
+            post_use_deltas ? osrs_clamp_unit(post_use_deltas[i]) : 0.0f;
+    /* Normalised energy cost, 0 when the weapon has no special. Doubles as the "this item
+     * has a special attack" flag while also telling the agent whether it can afford one. */
+    a.spec_cost = is_weapon
+        ? osrs_clamp_unit((float)osrs_spec_cost(item_idx) / 100.0f)
+        : 0.0f;
     osrs_item_effect_class4(effect_mask, a.effect_class4);
     a.attack_speed = is_weapon
         ? osrs_clamp_unit((float)ITEM_DATABASE[item_idx].attack_speed / STAT_NORM_SPEED)
@@ -346,13 +354,12 @@ static inline void osrs_write_inventory_cell_affordance_features_compact(
     uint16_t raw_osrs_id,
     uint8_t dose,
     int is_equipped,
-    const float post_use_deltas[6],
     int base_hitpoints,
     int base_prayer,
     int base_level
 ) {
     OsrsInventoryCellAffordance a = osrs_inventory_cell_affordance(
-        item_idx, raw_osrs_id, dose, is_equipped, post_use_deltas,
+        item_idx, raw_osrs_id, dose, is_equipped, NULL,
         base_hitpoints, base_prayer, base_level);
 
     out[0] = a.present;
@@ -367,10 +374,10 @@ static inline void osrs_write_inventory_cell_affordance_features_compact(
         u[0] = a.style3[0];
         u[1] = a.style3[1];
         u[2] = a.style3[2];
-        for (int i = 0; i < 6; i++) u[3 + i] = a.post_use_deltas[i];
-        for (int i = 0; i < 4; i++) u[9 + i] = a.effect_class4[i];
-        u[13] = a.attack_speed;
-        u[14] = a.attack_range;
+        for (int i = 0; i < 4; i++) u[3 + i] = a.effect_class4[i];
+        u[7] = a.attack_speed;
+        u[8] = a.attack_range;
+        u[9] = a.spec_cost;
     } else {
         for (int i = 0; i < 5; i++) u[i] = a.kind5[i];
         u[5] = a.hp_heal;
