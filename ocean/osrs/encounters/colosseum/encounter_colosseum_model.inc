@@ -1417,6 +1417,14 @@ typedef struct {
      * 0 = same width, laser channels forced to 0 (ablation / A/B). */
     int laser_obs_mode;
 
+    /* 1 = publish next pray style/timer without requiring range+LOS (default).
+     * 0 = restore geometry gate on next_prayer (ablation). */
+    int next_style_ungate_mode;
+
+    /* 1 = write pending style schedule t=1..K (default).
+     * 0 = same width, schedule zeros (ablation). */
+    int pending_style_schedule_mode;
+
     int episode_max_ticks_override;
 
     float prayer_switch_fail_prob;
