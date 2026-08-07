@@ -1413,6 +1413,10 @@ typedef struct {
 
     int bis_gear_oracle_mode;
 
+    /* 1 = honest multi-crystal laser pack in boss obs (default).
+     * 0 = same width, laser channels forced to 0 (ablation / A/B). */
+    int laser_obs_mode;
+
     int episode_max_ticks_override;
 
     float prayer_switch_fail_prob;

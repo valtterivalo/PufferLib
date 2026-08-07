@@ -167,7 +167,9 @@ static void col_episode_csv_dump(const Env* env, const ColosseumState* s, const 
             "laser_aligned_at_damage,laser_react_ok,laser_react_fail,"
             "avoid_total,avoid_achieved,avoid_missed,avoid_impossible,"
             "sol_dmg_laser,sol_dmg_sand,sol_dmg_parry,javelin_dmg_basic,"
-            "javelin_dmg_reentry,javelin_dmg_skyfall,start_wave,curriculum\n",
+            "javelin_dmg_reentry,javelin_dmg_skyfall,"
+            "mod_mask,mod_tiers,modifiers_picked,"
+            "start_wave,curriculum\n",
             fp);
         header_done = 1;
     }
@@ -179,6 +181,15 @@ static void col_episode_csv_dump(const Env* env, const ColosseumState* s, const 
     for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
         if (clog->death_by_type[t] > 0.0f) { death_type = t; break; }
     }
+    /* Final draft loadout: mask of active mods + per-mod tier digits (0-3), real mods only. */
+    char mod_tiers[COLO_NUM_REAL_MODIFIERS + 1];
+    for (int m = 0; m < COLO_NUM_REAL_MODIFIERS; m++) {
+        int tier = (int)s->modifiers.tier[m];
+        if (tier < 0) tier = 0;
+        if (tier > 9) tier = 9;
+        mod_tiers[m] = (char)('0' + tier);
+    }
+    mod_tiers[COLO_NUM_REAL_MODIFIERS] = '\0';
     fprintf(fp,
         "%d,%d,%d,%.6f,%d,%.4f,%d,%d,"
         "%.1f,%.1f,%d,%d,%d,"
@@ -190,7 +201,9 @@ static void col_episode_csv_dump(const Env* env, const ColosseumState* s, const 
         "%.0f,%.0f,%.0f,"
         "%.1f,%.1f,%.1f,%.1f,"
         "%.1f,%.1f,%.1f,%.1f,"
-        "%.1f,%.1f,%d,%d\n",
+        "%.1f,%.1f,"
+        "%u,%s,%d,"
+        "%d,%d\n",
         clog->win, clog->died, clog->timed_out,
         clog->outcome_score, clog->wave_reached, clog->max_wave_depth,
         s->min_sol_hp_seen, clog->episode_length,
@@ -210,6 +223,9 @@ static void col_episode_csv_dump(const Env* env, const ColosseumState* s, const 
         clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_BASIC_RANGED],
         clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_REENTRY_POOL],
         clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_SKYFALL],
+        (unsigned)s->modifiers.active_mask,
+        mod_tiers,
+        s->log.modifiers_picked,
         s->start_wave,
         0);
     fclose(fp);
@@ -336,6 +352,7 @@ void puf_init(Env* env, Dict* kwargs) {
         "mask_inventory_heads",
         "late_start_state_mode",
         "bis_gear_oracle_mode",
+        "laser_obs_mode",
         "episode_max_ticks_override",
         "damage_scale_anneal_ticks",
     };
