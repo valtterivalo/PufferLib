@@ -6041,7 +6041,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 922", COLO_NUM_OBS == 922);
+    CHECK("obs width is 934", COLO_NUM_OBS == 934);
     CHECK("inventory block has 84 features (28 cells x code, equipped, hp_heal)",
         COLO_INVENTORY_OBS_SIZE == 84);
     CHECK("the encoder still sees the 15-feature record, rebuilt from the item table",
@@ -8152,7 +8152,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 922);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 934);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 

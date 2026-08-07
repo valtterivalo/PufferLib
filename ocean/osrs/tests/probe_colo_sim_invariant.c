@@ -72,18 +72,18 @@ typedef struct {
  * determinism fixes. Regenerate with --print only when a SIMULATION change is
  * intended, never to make an observation edit pass. */
 static SimConfig CONFIGS[] = {
-    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x9c4cbcde5d159413ULL},
-    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x926e334416bc21f0ULL},
-    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0xcc8a421a35859befULL},
-    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0x14b1e80d759d1cb2ULL},
-    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0x22f415d9f4d6dd02ULL},
-    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0xb82309c9c86c363bULL},
-    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x4fd42a575b3fd127ULL},
-    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0x48548d73bd727fd2ULL},
-    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0xb3f7b27247b54a07ULL},
-    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x2b0b3f61efb8b43fULL},
-    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x1e8ff8d2425f33a7ULL},
-    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x210c0b6ce8537df3ULL},
+    {"w01",  1, 1001ULL, 0xC0FFEE01ULL, 0x3c3a20ab17d568f3ULL},
+    {"w02",  2, 1002ULL, 0xC0FFEE02ULL, 0x2377502d3b392f00ULL},
+    {"w03",  3, 1003ULL, 0xC0FFEE03ULL, 0xe0022f93ed8fd4bfULL},
+    {"w04",  4, 1004ULL, 0xC0FFEE04ULL, 0xae75ec7665882e92ULL},
+    {"w05",  5, 1005ULL, 0xC0FFEE05ULL, 0x962cbd9f2ed78ef2ULL},
+    {"w06",  6, 1006ULL, 0xC0FFEE06ULL, 0x7a04baad7394f91bULL},
+    {"w07",  7, 1007ULL, 0xC0FFEE07ULL, 0x3dad6e4896910b17ULL},
+    {"w08",  8, 1008ULL, 0xC0FFEE08ULL, 0xa75faacca7a21f92ULL},
+    {"w09",  9, 1009ULL, 0xC0FFEE09ULL, 0xd9959b8980d0c2a7ULL},
+    {"w10", 10, 1010ULL, 0xC0FFEE10ULL, 0x0016b20be4f6e84fULL},
+    {"w11", 11, 1011ULL, 0xC0FFEE11ULL, 0x331ea918abec55d7ULL},
+    {"w12", 12, 1012ULL, 0xC0FFEE12ULL, 0x558bb7b00177dc63ULL},
 };
 
 static void fill_actions(

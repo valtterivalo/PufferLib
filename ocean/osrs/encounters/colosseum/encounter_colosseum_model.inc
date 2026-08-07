@@ -817,6 +817,11 @@ typedef struct {
     ColoSolCrystal crystals[COLO_SOL_MAX_CRYSTALS];
     int crystal_count;
     int laser_cooldown;
+    int laser_volley_active;
+    int laser_show_seen;
+    int laser_aligned_show;
+    int laser_n_aligned_show;
+    int laser_n_active_at_fire;
 
     ColoSolBeam beams[COLO_SOL_BEAM_MAX];
     int hazard_tile_x[COLO_SOL_HAZARD_TILES_MAX];
@@ -1572,6 +1577,15 @@ typedef struct {
     float javelin_damage_by_source[COLO_NUM_JAVELIN_DAMAGE_SOURCES];
     float death_by_source[COLO_NUM_DAMAGE_SOURCES];
     float doom_death_by_source[COLO_NUM_DAMAGE_SOURCES];
+    float laser_volleys;
+    float laser_hits;
+    float laser_dmg;
+    float laser_aligned_at_fire;
+    float laser_aligned_at_show;
+    float laser_aligned_at_pre;
+    float laser_aligned_at_damage;
+    float laser_react_ok;
+    float laser_react_fail;
     float outcome_score;
     float max_wave_depth;
 } ColosseumLog;

@@ -78,6 +78,15 @@ struct Log {
     float rew_win;
     float rew_death;
     float rew_timeout;
+    float laser_volleys;
+    float laser_hits;
+    float laser_dmg;
+    float laser_aligned_at_fire;
+    float laser_aligned_at_show;
+    float laser_aligned_at_pre;
+    float laser_aligned_at_damage;
+    float laser_react_ok;
+    float laser_react_fail;
     float avoid_total;
     float avoid_achieved;
     float avoid_missed;
@@ -137,6 +146,73 @@ static inline void col_log_dpt_sample(float* hit_acc, float* n_acc, int sample) 
     }
     *hit_acc += sample ? 1.0f : 0.0f;
     *n_acc += 1.0f;
+}
+
+
+static void col_episode_csv_dump(const Env* env, const ColosseumState* s, const ColosseumLog* clog) {
+    const char* path = getenv("COLO_EPISODE_LOG");
+    if (!path || !path[0]) return;
+    static int header_done = 0;
+    FILE* fp = fopen(path, header_done ? "a" : "w");
+    if (!fp) return;
+    if (!header_done) {
+        fputs(
+            "win,died,timeout,score,wave,wave_depth,sol_min_hp,episode_length,"
+            "damage_dealt,damage_received,npc_kills,prayer_correct,prayer_total,"
+            "death_source,death_by_type,death_fatal_damage,death_on_conflict,"
+            "death_dmg_unprayable,death_dmg_offpray,death_dmg_prayed,death_heal_remaining,"
+            "offpray_conflict,offpray_solo,"
+            "laser_volleys,laser_hits,laser_dmg,"
+            "laser_aligned_at_fire,laser_aligned_at_show,laser_aligned_at_pre,"
+            "laser_aligned_at_damage,laser_react_ok,laser_react_fail,"
+            "avoid_total,avoid_achieved,avoid_missed,avoid_impossible,"
+            "sol_dmg_laser,sol_dmg_sand,sol_dmg_parry,javelin_dmg_basic,"
+            "javelin_dmg_reentry,javelin_dmg_skyfall,start_wave,curriculum\n",
+            fp);
+        header_done = 1;
+    }
+    int death_source = -1;
+    for (int i = 0; i < COLO_NUM_DAMAGE_SOURCES; i++) {
+        if (clog->death_by_source[i] > 0.0f) { death_source = i; break; }
+    }
+    int death_type = -1;
+    for (int t = 0; t < COLO_NUM_NPC_TYPES; t++) {
+        if (clog->death_by_type[t] > 0.0f) { death_type = t; break; }
+    }
+    fprintf(fp,
+        "%d,%d,%d,%.6f,%d,%.4f,%d,%d,"
+        "%.1f,%.1f,%d,%d,%d,"
+        "%d,%d,%.1f,%.0f,"
+        "%.1f,%.1f,%.1f,%.1f,"
+        "%.1f,%.1f,"
+        "%.0f,%.0f,%.1f,"
+        "%.0f,%.0f,%.0f,"
+        "%.0f,%.0f,%.0f,"
+        "%.1f,%.1f,%.1f,%.1f,"
+        "%.1f,%.1f,%.1f,%.1f,"
+        "%.1f,%.1f,%d,%d\n",
+        clog->win, clog->died, clog->timed_out,
+        clog->outcome_score, clog->wave_reached, clog->max_wave_depth,
+        s->min_sol_hp_seen, clog->episode_length,
+        clog->total_damage_dealt, clog->total_damage_received,
+        clog->total_npc_kills, clog->total_prayer_correct, clog->total_npc_attacks,
+        death_source, death_type, clog->death_fatal_damage, clog->death_on_conflict_tick,
+        clog->death_dmg_unprayable, clog->death_dmg_offpray, clog->death_dmg_prayed,
+        clog->death_heal_remaining,
+        clog->offpray_damage_conflict, clog->offpray_damage_solo,
+        clog->laser_volleys, clog->laser_hits, clog->laser_dmg,
+        clog->laser_aligned_at_fire, clog->laser_aligned_at_show, clog->laser_aligned_at_pre,
+        clog->laser_aligned_at_damage, clog->laser_react_ok, clog->laser_react_fail,
+        clog->avoid_total, clog->avoid_achieved, clog->avoid_missed, clog->avoid_impossible,
+        clog->sol_damage_by_source[COLO_SOL_DAMAGE_CRYSTAL_LASER],
+        clog->sol_damage_by_source[COLO_SOL_DAMAGE_MOLTEN_SAND],
+        clog->sol_damage_by_source[COLO_SOL_DAMAGE_TRIPLE_PARRY],
+        clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_BASIC_RANGED],
+        clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_REENTRY_POOL],
+        clog->javelin_damage_by_source[COLO_JAVELIN_DAMAGE_SKYFALL],
+        s->start_wave,
+        0);
+    fclose(fp);
 }
 
 static void col_assign_curriculum_wave(Env* env, Dict* kwargs) {
@@ -414,6 +490,16 @@ void puf_step(Env* env) {
             env->log.rew_win += clog->rew_win;
             env->log.rew_death += clog->rew_death;
             env->log.rew_timeout += clog->rew_timeout;
+            env->log.laser_volleys += clog->laser_volleys;
+            env->log.laser_hits += clog->laser_hits;
+            env->log.laser_dmg += clog->laser_dmg;
+            env->log.laser_aligned_at_fire += clog->laser_aligned_at_fire;
+            env->log.laser_aligned_at_show += clog->laser_aligned_at_show;
+            env->log.laser_aligned_at_pre += clog->laser_aligned_at_pre;
+            env->log.laser_aligned_at_damage += clog->laser_aligned_at_damage;
+            env->log.laser_react_ok += clog->laser_react_ok;
+            env->log.laser_react_fail += clog->laser_react_fail;
+            col_episode_csv_dump(env, s, clog);
             env->log.avoid_total += clog->avoid_total;
             env->log.avoid_achieved += clog->avoid_achieved;
             env->log.avoid_missed += clog->avoid_missed;
@@ -526,6 +612,13 @@ void puf_log(Log* log, Dict* out) {
         ? log->reward_clamped_steps / log->reward_steps : 0.0f);
     dict_set(out, "reward_clamp_loss", log->reward_clamp_loss);
     dict_set(out, "reward_raw_peak", log->reward_raw_peak);
+    dict_set(out, "laser_volleys", log->laser_volleys);
+    dict_set(out, "laser_hits", log->laser_hits);
+    dict_set(out, "laser_dmg", log->laser_dmg);
+    dict_set(out, "laser_aligned_at_show", log->laser_aligned_at_show);
+    dict_set(out, "laser_aligned_at_damage", log->laser_aligned_at_damage);
+    dict_set(out, "laser_react_ok", log->laser_react_ok);
+    dict_set(out, "laser_react_fail", log->laser_react_fail);
     dict_set(out, "clamp_loss_wave_clear", log->clamp_loss_wave_clear);
     dict_set(out, "clamp_loss_win", log->clamp_loss_win);
     dict_set(out, "rew_damage", log->rew_damage);
