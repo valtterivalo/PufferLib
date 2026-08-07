@@ -353,8 +353,6 @@ void puf_init(Env* env, Dict* kwargs) {
         "late_start_state_mode",
         "bis_gear_oracle_mode",
         "laser_obs_mode",
-        "next_style_ungate_mode",
-        "pending_style_schedule_mode",
         "episode_max_ticks_override",
         "damage_scale_anneal_ticks",
     };

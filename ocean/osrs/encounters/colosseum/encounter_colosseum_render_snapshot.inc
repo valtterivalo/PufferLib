@@ -53,12 +53,6 @@ static void col_put_int_ctx(
     else if (strcmp(key, "laser_obs_mode") == 0)
         ctx->config.laser_obs_mode =
             encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "next_style_ungate_mode") == 0)
-        ctx->config.next_style_ungate_mode =
-            encounter_require_binary_config("colosseum", key, value);
-    else if (strcmp(key, "pending_style_schedule_mode") == 0)
-        ctx->config.pending_style_schedule_mode =
-            encounter_require_binary_config("colosseum", key, value);
     else if (strcmp(key, "episode_max_ticks_override") == 0) {
         if (value < 0) {
             fprintf(stderr, "colosseum: episode_max_ticks_override must be >= 0, got %d\n",

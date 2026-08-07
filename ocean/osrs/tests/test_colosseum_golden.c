@@ -182,22 +182,22 @@ static const GoldenConfig CONFIGS[] = {
 #define EPISODE_TICKS 4000
 
 /* Re-seeded for the inventory observation recut: 15 floats per cell became an item code plus
- * is_equipped and hp_heal, obs 1258 -> 922; laser pack 922 -> 934; threat schedule 934 -> 946. All twelve moved because the hash folds obs
+ * is_equipped and hp_heal, obs 1258 -> 922; laser pack 922 -> 934. All twelve moved because the hash folds obs
  * floats and every episode carries 28 inventory cells from tick zero. probe_colo_sim_invariant
  * stayed 12/12 across the change, which is the proof no simulated tick moved. */
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0xb315df7e674ecbf7ULL,
-    0x8b5d9aae1f5c8967ULL,
-    0x23ec7dd0bae7f5b2ULL,
-    0xd78df74a84381f22ULL,
-    0xddc76a3cbc6137d8ULL,
-    0x043f7bcdc9bfa4f3ULL,
-    0x62263f6145939f65ULL,
-    0x18b803fde628e02dULL,
-    0x9145e1082f7a3c13ULL,
-    0xcb3517de915ff79fULL,
-    0xd8943302d5b1b4c1ULL,
-    0x69747b0c17eacfaeULL,
+    0x8983fba980eeb343ULL,
+    0xf9ac8d67e179963cULL,
+    0x82d722083b2296c6ULL,
+    0xc0b0a82e4a46b5edULL,
+    0x24edc358d993c24eULL,
+    0x407e13aabedcfbefULL,
+    0x1843d6aa41e20446ULL,
+    0xa767aac6bbbd1b8bULL,
+    0xb67de03f41fc3e1bULL,
+    0x1050e881ff8fb49eULL,
+    0xa430c4ffdd4503e0ULL,
+    0x0abb4ca1dcd5770aULL,
 };
 
 int main(int argc, char** argv) {

@@ -18,7 +18,7 @@ static int telegraph_overhead(const ColosseumState* s) {
         if (idx < 0 || idx >= COLO_MAX_NPCS) continue;
         const ColoNPC* npc = &s->npcs[idx];
         if (!col_npc_is_live_enemy(npc)) continue;
-        ColoNpcNextPrayerObs t = col_npc_next_prayer_obs(s, npc, idx, 1);
+        ColoNpcNextPrayerObs t = col_npc_next_prayer_obs(s, npc, idx);
         if (!t.active) continue;
         if (t.ticks < best_ticks) { best_ticks = t.ticks; best_style = t.style; }
     }
@@ -80,7 +80,7 @@ static void run_test(const char* label, PrayerPolicy policy, int start_wave, int
             for (int n = 0; n < COLO_MAX_NPCS; n++) {
                 const ColoNPC* npc = &s.npcs[n];
                 if (!col_npc_is_live_enemy(npc)) continue;
-                ColoNpcNextPrayerObs t = col_npc_next_prayer_obs(&s, npc, n, 1);
+                ColoNpcNextPrayerObs t = col_npc_next_prayer_obs(&s, npc, n);
                 if (t.active && t.ticks <= 1) predicted[n] = t.style;
             }
 

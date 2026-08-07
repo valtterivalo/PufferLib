@@ -6041,7 +6041,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("prayer head uses shared PVE overhead dim",
         COLO_ACTION_DIMS[COLO_HEAD_PRAYER] == ENCOUNTER_OVERHEAD_DIM_PVE);
     CHECK("spell head dim is 3 (none/summon-thrall/death-charge)", COLO_SPELL_DIM == 3);
-    CHECK("obs width is 946", COLO_NUM_OBS == 946);
+    CHECK("obs width is 934", COLO_NUM_OBS == 934);
     CHECK("inventory block has 84 features (28 cells x code, equipped, hp_heal)",
         COLO_INVENTORY_OBS_SIZE == 84);
     CHECK("the encoder still sees the 15-feature record, rebuilt from the item table",
@@ -6074,7 +6074,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     int obs_sum = COLO_PLAYER_OBS_SIZE +
         COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE +
         COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE +
-        COLO_PENDING_HIT_OBS_SIZE + COLO_PENDING_STYLE_SCHEDULE_SIZE +
+        COLO_PENDING_HIT_OBS_SIZE +
         COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE +
         COLO_SPAWN_OBS_SIZE;
     CHECK("obs width equals the summed section sizes", COLO_NUM_OBS == obs_sum);
@@ -8152,7 +8152,7 @@ static void test_stage3_t6_obs_mask_fuzz_contract(void) {
         }
         step_and_observe(&s, &ctx, actions);
     }
-    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 946);
+    CHECK("T6 obs running-index assert reached COLO_NUM_OBS", COLO_NUM_OBS == 934);
     CHECK("T6 mask running-index assert reached 452", COLO_ACTION_MASK_SIZE == 452);
 }
 
