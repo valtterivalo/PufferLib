@@ -77,6 +77,11 @@ typedef enum {
 #define COLO_OBS_PENDING_HITS     16
 #define COLO_FEATURES_PER_HIT     7
 #define COLO_PENDING_HIT_OBS_SIZE (COLO_FEATURES_PER_HIT * COLO_OBS_PENDING_HITS)
+/* Per future tick t=1..K: melee, ranged, magic, unprayable (from pending + on-tile skyfall). */
+#define COLO_PENDING_STYLE_HORIZON 3
+#define COLO_PENDING_STYLE_CHANS   4
+#define COLO_PENDING_STYLE_SCHEDULE_SIZE \
+    (COLO_PENDING_STYLE_HORIZON * COLO_PENDING_STYLE_CHANS)
 
 #define COLO_THREAT_LOS_OBS_SIZE  3
 
@@ -89,7 +94,7 @@ typedef enum {
 #define COLO_NUM_OBS (COLO_PLAYER_OBS_SIZE + \
     COLO_INVENTORY_OBS_SIZE + COLO_EQUIPPED_SELF_OBS_SIZE + COLO_NPC_OBS_SIZE + \
     COLO_MODIFIER_OBS_SIZE + COLO_WAVE_OBS_SIZE + COLO_BOSS_OBS_SIZE + \
-    COLO_PENDING_HIT_OBS_SIZE + \
+    COLO_PENDING_HIT_OBS_SIZE + COLO_PENDING_STYLE_SCHEDULE_SIZE + \
     COLO_THREAT_LOS_OBS_SIZE + COLO_THRALL_DC_OBS_SIZE + \
     COLO_SPAWN_OBS_SIZE)
 
@@ -103,8 +108,10 @@ typedef enum {
 #define COLO_OBS_AFTER_BOSS     (COLO_OBS_AFTER_WAVE + COLO_BOSS_OBS_SIZE)
 #define COLO_OBS_AFTER_PENDING_HITS \
     (COLO_OBS_AFTER_BOSS + COLO_PENDING_HIT_OBS_SIZE)
+#define COLO_OBS_AFTER_PENDING_STYLE \
+    (COLO_OBS_AFTER_PENDING_HITS + COLO_PENDING_STYLE_SCHEDULE_SIZE)
 #define COLO_OBS_AFTER_THREAT_LOS \
-    (COLO_OBS_AFTER_PENDING_HITS + COLO_THREAT_LOS_OBS_SIZE)
+    (COLO_OBS_AFTER_PENDING_STYLE + COLO_THREAT_LOS_OBS_SIZE)
 #define COLO_OBS_AFTER_THRALL_DC \
     (COLO_OBS_AFTER_THREAT_LOS + COLO_THRALL_DC_OBS_SIZE)
 #define COLO_OBS_AFTER_SPAWN \
@@ -355,7 +362,8 @@ static ColoNpcNextPrayerObs col_deterministic_npc_next_prayer(
     if (npc->type == COLO_JAVELIN_COLOSSUS &&
             (npc->type_state.javelin.attack_count + 1) % 5 == 0)
         return col_npc_next_prayer_none();
-    if (!col_npc_current_attack_geometry(s, npc, ns)) return col_npc_next_prayer_none();
+    /* Publish next style/timer without requiring current range+LOS. Geometry stays on
+     * the separate in_range / has_los channels (compose, don't pre-AND). */
     int ticks = npc->attack_timer == 0 ? 1 : npc->attack_timer;
     if (col_type_is_warbander(npc->type)) {
         if (s->warband_cycle_anchor < 0) return col_npc_next_prayer_none();
@@ -1770,6 +1778,39 @@ static void col_write_obs_ctx(EncounterState* state, EncounterContext* context, 
 #ifdef COLO_PROFILE_ENABLED
     COLO_PROFILE_MARK(COLO_PROF_OBS_PENDING_HITS);
 #endif
+
+    {
+        float sched[COLO_PENDING_STYLE_SCHEDULE_SIZE];
+        for (int z = 0; z < COLO_PENDING_STYLE_SCHEDULE_SIZE; z++) sched[z] = 0.0f;
+        for (int h = 0; h < s->player_pending_hits.count && h < ENCOUNTER_MAX_PENDING_HITS; h++) {
+            const EncounterPendingHit* ph = &s->player_pending_hits.hits[h];
+            if (!ph->active) continue;
+            int t = ph->ticks_remaining;
+            if (t < 1 || t > COLO_PENDING_STYLE_HORIZON) continue;
+            int base = (t - 1) * COLO_PENDING_STYLE_CHANS;
+            if (col_pending_hit_ignores_prayer(ph)) {
+                sched[base + 3] = 1.0f;
+            } else if (ph->attack_style == ATTACK_STYLE_MELEE) {
+                sched[base + 0] = 1.0f;
+            } else if (ph->attack_style == ATTACK_STYLE_RANGED) {
+                sched[base + 1] = 1.0f;
+            } else if (ph->attack_style == ATTACK_STYLE_MAGIC) {
+                sched[base + 2] = 1.0f;
+            }
+        }
+        for (int n = 0; n < COLO_MAX_NPCS; n++) {
+            const ColoNPC* npc = &s->npcs[n];
+            if (npc->type != COLO_JAVELIN_COLOSSUS || npc->hp <= 0) continue;
+            const ColoJavelinState* jv = &npc->type_state.javelin;
+            if (!jv->skyfall_pending) continue;
+            int t = jv->skyfall_timer;
+            if (t < 1 || t > COLO_PENDING_STYLE_HORIZON) continue;
+            if (s->player.x != jv->skyfall_tile_x || s->player.y != jv->skyfall_tile_y) continue;
+            sched[(t - 1) * COLO_PENDING_STYLE_CHANS + 3] = 1.0f;
+        }
+        for (int z = 0; z < COLO_PENDING_STYLE_SCHEDULE_SIZE; z++) obs[i++] = sched[z];
+    }
+    assert(i == COLO_OBS_AFTER_PENDING_STYLE);
 
     col_write_threat_los_counts(s, obs, &i);
     assert(i == COLO_OBS_AFTER_THREAT_LOS);
