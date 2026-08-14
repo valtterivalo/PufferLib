@@ -79,10 +79,6 @@ static void inf_shuffle_spawns(InfernoState* s) {
     encounter_shuffle(s->spawn_order, INF_NUM_SPAWN_POS, &s->rng_state);
 }
 static InfernoContext* inf_legacy_context(void);
-static const EncounterArenaTopology* inf_route_topology_for_state(
-    const InfernoContext* ctx,
-    const InfernoState* state
-);
 
 
 static int inf_pillar_footprint_blocked(
@@ -117,6 +113,16 @@ static int inf_pillars_at_canonical_positions(
     return 1;
 }
 
+typedef struct {
+    const EncounterArenaTopology* topology;
+    int dynamic_pillars;
+} InfCollisionView;
+
+static InfCollisionView inf_collision_view(
+    const InfernoContext* ctx,
+    const InfernoState* state
+);
+
 
 
 static uint32_t inf_pillar_los_flags(void* data, int x, int y) {
@@ -137,11 +143,10 @@ static int inf_footprint_blocked_ctx(
     int y,
     int size
 ) {
-    const EncounterArenaTopology* topology =
-        inf_route_topology_for_state(ctx, s);
+    InfCollisionView collision = inf_collision_view(ctx, s);
     return encounter_arena_topology_footprint_blocked(
-            topology, x, y, size) ||
-        (!inf_pillars_at_canonical_positions(s) &&
+            collision.topology, x, y, size) ||
+        (collision.dynamic_pillars &&
          inf_pillar_footprint_blocked(s, x, y, size));
 }
 
@@ -156,9 +161,10 @@ static int inf_los_clear_ctx(
     int target_size,
     int attack_range
 ) {
-    if (inf_pillars_at_canonical_positions(s))
+    InfCollisionView collision = inf_collision_view(ctx, s);
+    if (!collision.dynamic_pillars)
         return encounter_arena_topology_los_clear(
-            inf_route_topology_for_state(ctx, s),
+            collision.topology,
             actor_x,
             actor_y,
             actor_size,
@@ -166,11 +172,10 @@ static int inf_los_clear_ctx(
             target_y,
             target_size,
             attack_range);
-    const EncounterArenaTopology* topology = ctx->route_topology;
     if (!encounter_arena_topology_footprint_in_bounds_assume_finalized_size_in_range(
-            topology, actor_x, actor_y, actor_size) ||
+            collision.topology, actor_x, actor_y, actor_size) ||
             !encounter_arena_topology_footprint_in_bounds_assume_finalized_size_in_range(
-                topology, target_x, target_y, target_size))
+                collision.topology, target_x, target_y, target_size))
         return 0;
     return entity_has_line_of_sight_with_flags(
         inf_pillar_los_flags,
@@ -268,38 +273,64 @@ static int inf_npc_has_los_to_tile_ctx(
 }
 
 
-static int inf_npc_has_los_direct_ctx(
+static int inf_npc_has_los_to_area_cached_ctx(
     const InfernoState* s,
-    const InfernoContext* ctx,
-    int npc_idx
+    InfernoContext* ctx,
+    int npc_idx,
+    InfTargetArea target
 ) {
     const InfNPC* npc = &s->npcs[npc_idx];
-    InfTargetArea target = inf_npc_current_target_area(s, npc);
-    return inf_npc_has_los_to_area_ctx(
+    const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
+    int active_pillar_mask = inf_active_pillar_mask(s);
+    InfNpcLosFrame* frame = &ctx->npc_player_los_frame[npc_idx];
+    if (frame->result >= 0 &&
+            frame->actor_x == npc->x &&
+            frame->actor_y == npc->y &&
+            frame->actor_size == npc->size &&
+            frame->target_x == target.x &&
+            frame->target_y == target.y &&
+            frame->target_size == target.size &&
+            frame->attack_range == stats->attack_range &&
+            frame->active_pillar_mask == active_pillar_mask)
+        return frame->result;
+
+    int result = inf_npc_has_los_to_area_ctx(
         s, ctx, npc, target.x, target.y, target.size);
+    *frame = (InfNpcLosFrame){
+        .actor_x = npc->x,
+        .actor_y = npc->y,
+        .actor_size = npc->size,
+        .target_x = target.x,
+        .target_y = target.y,
+        .target_size = target.size,
+        .attack_range = stats->attack_range,
+        .active_pillar_mask = active_pillar_mask,
+        .result = result,
+    };
+    return result;
 }
 
+static int inf_npc_has_los_direct_ctx(
+    const InfernoState* s,
+    InfernoContext* ctx,
+    int npc_idx
+) {
+    InfTargetArea target = inf_npc_current_target_area(
+        s, &s->npcs[npc_idx]);
+    return inf_npc_has_los_to_area_cached_ctx(
+        s, ctx, npc_idx, target);
+}
 
 static void inf_reset_npc_player_los_frame(InfernoContext* ctx) {
     memset(ctx->npc_player_los_frame, -1, sizeof(ctx->npc_player_los_frame));
 }
 
-static void inf_sample_npc_player_los_frame(
+static int inf_npc_has_los_ctx(
     const InfernoState* s,
     InfernoContext* ctx,
     int npc_idx
 ) {
-    ctx->npc_player_los_frame[npc_idx] =
-        (int8_t)inf_npc_has_los_direct_ctx(s, ctx, npc_idx);
-}
-
-static int inf_npc_has_los_ctx(
-    const InfernoState* s,
-    const InfernoContext* ctx,
-    int npc_idx
-) {
-    int8_t sampled = ctx->npc_player_los_frame[npc_idx];
-    return sampled >= 0 ? sampled : inf_npc_has_los_direct_ctx(s, ctx, npc_idx);
+    return inf_npc_has_los_direct_ctx(s, ctx, npc_idx);
 }
 
 
@@ -925,16 +956,21 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
     ctx->route_topology = inf_route_topology_owner.topologies[0];
 }
 
-static const EncounterArenaTopology* inf_route_topology_for_state(
+static InfCollisionView inf_collision_view(
     const InfernoContext* ctx,
     const InfernoState* state
 ) {
     encounter_arena_topology_require_finalized(ctx->route_topology);
-    if (!inf_pillars_at_canonical_positions(state))
-        return ctx->route_topology;
-    return inf_route_topology_owner.topologies[
-        inf_active_pillar_mask(state)];
+    int canonical = inf_pillars_at_canonical_positions(state);
+    return (InfCollisionView){
+        .topology = canonical
+            ? inf_route_topology_owner.topologies[
+                inf_active_pillar_mask(state)]
+            : ctx->route_topology,
+        .dynamic_pillars = !canonical,
+    };
 }
+
 
 static void inf_finalize_context(
     EncounterState* state,

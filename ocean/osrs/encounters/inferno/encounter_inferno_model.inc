@@ -704,11 +704,23 @@ typedef struct {
 } InfConfig;
 
 typedef struct {
+    int actor_x;
+    int actor_y;
+    int actor_size;
+    int target_x;
+    int target_y;
+    int target_size;
+    int attack_range;
+    int active_pillar_mask;
+    int result;
+} InfNpcLosFrame;
+
+typedef struct {
     InfConfig config;
     const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
     OsrsActorRouteCache player_route_cache;
-    int8_t npc_player_los_frame[INF_MAX_NPCS];
+    InfNpcLosFrame npc_player_los_frame[INF_MAX_NPCS];
     int world_offset_x;
     int world_offset_y;
     Log* log;

@@ -468,11 +468,9 @@ static void inf_npc_attack_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     if (npc->dig_freeze_timer > 0) return;
     if (npc->dig_attack_delay > 0) return;
 
-    int has_los_now = 0;
-    if (stats->attack_range > 1) {
-        inf_sample_npc_player_los_frame(s, ctx, idx);
-        has_los_now = inf_npc_has_los_ctx(s, ctx, idx);
-    }
+    int has_los_now = stats->attack_range > 1
+        ? inf_npc_has_los_ctx(s, ctx, idx)
+        : 0;
 
     if (npc->type == INF_NPC_BLOB &&
         npc->blob_scanned_prayer < 0 &&

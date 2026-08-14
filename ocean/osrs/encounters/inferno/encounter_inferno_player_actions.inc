@@ -17,9 +17,21 @@
 static const int INF_ACTION_DIMS[INF_NUM_ACTION_HEADS] = INF_ACTION_DIMS_INIT;
 #define INF_ACTION_MASK_SIZE OSRS_BASE_ACTION_MASK_SIZE(INF_OBS_NPCS)
 
-static int inf_action_head_mask_offset(int head) {
-    return osrs_base_action_head_mask_offset(INF_OBS_NPCS, head);
-}
+enum {
+    INF_MASK_PRIMARY_OFFSET = 0,
+    INF_MASK_PRAYER_OFFSET = INF_PRIMARY_DIM,
+    INF_MASK_EQUIP_BASE_OFFSET =
+        INF_MASK_PRAYER_OFFSET + OSRS_OVERHEAD_DIM,
+    INF_MASK_EAT_OFFSET =
+        INF_MASK_EQUIP_BASE_OFFSET + NUM_GEAR_SLOTS * INF_INV_CLICK_DIM,
+    INF_MASK_DRINK_OFFSET = INF_MASK_EAT_OFFSET + INF_INV_CLICK_DIM,
+    INF_MASK_SPELL_OFFSET = INF_MASK_DRINK_OFFSET + INF_INV_CLICK_DIM,
+    INF_MASK_SPEC_OFFSET = INF_MASK_SPELL_OFFSET + OSRS_SPELL_DIM,
+    INF_MASK_OFFENSIVE_OFFSET = INF_MASK_SPEC_OFFSET + INF_SPEC_DIM,
+    INF_MASK_END = INF_MASK_OFFENSIVE_OFFSET + OSRS_OFFENSIVE_DIM,
+};
+static_assert(INF_MASK_END == INF_ACTION_MASK_SIZE,
+    "Inferno action mask offsets cover every head");
 
 static int inf_primary_attack_action_for_obs_slot(int obs_slot) {
     if (obs_slot < 0 || obs_slot >= INF_OBS_NPCS) {
@@ -546,8 +558,9 @@ static void inf_tick_player_ctx(
         }
     }
     InfWalkCtx wc = { s, ctx };
+    InfCollisionView collision = inf_collision_view(ctx, s);
     EncounterRouteBlockers route_blockers = {0};
-    if (!inf_pillars_at_canonical_positions(s)) {
+    if (collision.dynamic_pillars) {
         route_blockers = (EncounterRouteBlockers){
             .is_blocked = inf_player_route_blocked,
             .ctx = &wc,
@@ -570,7 +583,7 @@ static void inf_tick_player_ctx(
         .dest_x = &s->player_dest_x,
         .dest_y = &s->player_dest_y,
         .arena = {
-            .topology = inf_route_topology_for_state(ctx, s),
+            .topology = collision.topology,
             .blockers = route_blockers,
             .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
             .cost_policy = s->wave >= INF_WAVE_ZUK

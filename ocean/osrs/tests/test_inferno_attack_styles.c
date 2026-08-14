@@ -2433,6 +2433,62 @@ static void test_large_npc_overlap_shuffle_can_partially_unclip(void) {
     ASSERT_INT_EQ("large npc marks moved", state.npcs[0].moved_this_tick, 1);
 }
 
+typedef struct {
+    int calls;
+} BlockFirstStepTile;
+
+static int block_first_step_tile(void* ctx, int x, int y, int size) {
+    (void)x;
+    (void)y;
+    (void)size;
+    BlockFirstStepTile* blocker = (BlockFirstStepTile*)ctx;
+    blocker->calls++;
+    return blocker->calls == 1;
+}
+
+static void test_npc_step_skips_y_edge_after_blocked_x_edge(void) {
+    printf("--- npc step skips y edge after blocked x edge ---\n");
+
+    BlockFirstStepTile blocker = {0};
+    int x = 20;
+    int y = 20;
+    int moved = encounter_npc_try_step(
+        &x, &y, 1, 1, 1, block_first_step_tile, &blocker);
+
+    ASSERT_INT_EQ("blocked x edge prevents movement", moved, 0);
+    ASSERT_INT_EQ("blocked x edge skips y edge queries", blocker.calls, 1);
+}
+
+static void test_stationary_npc_does_not_repair_collision_grid(void) {
+    printf("--- stationary npc does not repair collision grid ---\n");
+
+    InfernoState state = make_test_state(20, 23);
+    state.npcs[0] = make_test_npc(
+        INF_NPC_RANGER, 20, 20, INF_NPC_STATS[INF_NPC_RANGER].size);
+    state.npcs[0].active = 1;
+
+    int grid_x;
+    int grid_y;
+    ASSERT_INT_EQ(
+        "stationary NPC origin maps to collision grid",
+        inf_grid_index(20, 20, &grid_x, &grid_y),
+        1);
+    ASSERT_INT_EQ(
+        "stationary NPC starts without test collision ownership",
+        state.npc_collision_flags[grid_x][grid_y],
+        0);
+
+    inf_npc_move(&state, 0);
+
+    ASSERT_INT_EQ("stationary NPC does not move", state.npcs[0].moved_this_tick, 0);
+    ASSERT_INT_EQ(
+        "stationary NPC leaves collision ownership untouched",
+        state.npc_collision_flags[grid_x][grid_y],
+        0);
+}
+
+
+
 static void test_player_movement_ignores_npc_occupancy(void) {
     printf("--- player movement ignores npc occupancy ---\n");
 
@@ -2499,6 +2555,7 @@ static void test_tagged_jad_healers_queue_behind_front_healer(void) {
         state.npcs[i].aggro_target = -1;
         state.npcs[i].attack_timer = 0;
     }
+    inf_rebuild_npc_collision_flags(&state);
 
     inf_tick_npcs(&state);
 
@@ -4013,6 +4070,35 @@ static void assert_inferno_npc_sw_origin_step(
     snprintf(msg, sizeof(msg), "%s y", label);
     ASSERT_INT_EQ(msg, state.npcs[0].y, expected_y);
 }
+
+static void test_npc_los_cache_keys_actor_position(void) {
+    printf("--- npc LOS cache keys actor position ---\n");
+
+    InfernoState state;
+    init_step_out_forecast_stack_state(&state, 15, 14);
+    for (int p = 0; p < INF_NUM_PILLARS; p++) {
+        state.pillars[p].active = p == 0;
+        state.pillars[p].hp = p == 0 ? INF_PILLAR_HP : 0;
+    }
+    add_step_out_forecast_npc(&state, 0, INF_NPC_MAGER, 12, 30, 0);
+    InfTargetArea target = inf_npc_current_target_area(
+        &state, &state.npcs[0]);
+
+    ASSERT_INT_EQ(
+        "initial keyed LOS is blocked",
+        inf_npc_has_los_to_area_cached_ctx(
+            &state, inf_legacy_context(), 0, target),
+        0);
+
+    state.npcs[0].x = 15;
+    state.npcs[0].y = 15;
+    ASSERT_INT_EQ(
+        "actor movement invalidates keyed LOS",
+        inf_npc_has_los_to_area_cached_ctx(
+            &state, inf_legacy_context(), 0, target),
+        1);
+}
+
 
 static void test_inferno_npc_travel_uses_sw_origin_around_all_pillars(void) {
     printf("--- inferno NPC travel uses SW origin around all pillars ---\n");
@@ -9430,6 +9516,36 @@ static void set_inferno_pillar_phase(
     }
 }
 
+static void test_inferno_collision_view_selects_static_or_dynamic_pillars(void) {
+    printf("--- inferno collision view selects static or dynamic pillars ---\n");
+
+    InfernoState state = make_test_state(20, 20);
+    InfernoContext* ctx = inf_legacy_context();
+    set_inferno_pillar_phase(&state, 5);
+
+    InfCollisionView canonical = inf_collision_view(ctx, &state);
+    ASSERT_INT_EQ(
+        "canonical pillar view selects active-mask topology",
+        canonical.topology == inf_route_topology_owner.topologies[5],
+        1);
+    ASSERT_INT_EQ(
+        "canonical pillar view needs no dynamic blockers",
+        canonical.dynamic_pillars,
+        0);
+
+    state.pillars[0].x++;
+    InfCollisionView moved = inf_collision_view(ctx, &state);
+    ASSERT_INT_EQ(
+        "moved pillar view selects base topology",
+        moved.topology == ctx->route_topology,
+        1);
+    ASSERT_INT_EQ(
+        "moved pillar view enables dynamic blockers",
+        moved.dynamic_pillars,
+        1);
+}
+
+
 static void test_inferno_topology_geometry_parity(void) {
     printf("--- inferno topology geometry parity ---\n");
 
@@ -9457,7 +9573,7 @@ static void test_inferno_topology_geometry_parity(void) {
                         &state, ctx, x, y, size);
                     int topology_actual =
                         encounter_arena_topology_footprint_blocked(
-                            inf_route_topology_for_state(ctx, &state),
+                            inf_collision_view(ctx, &state).topology,
                             x,
                             y,
                             size);
@@ -9596,7 +9712,8 @@ static void test_pillar_removal_resets_same_tick_los_frame(void) {
     ASSERT_INT_EQ("nibbler removes one-hp pillar", state.pillars[0].active, 0);
     int stale_entries = 0;
     for (int npc_idx = 0; npc_idx < INF_MAX_NPCS; npc_idx++)
-        stale_entries += ctx->npc_player_los_frame[npc_idx] != -1;
+        stale_entries +=
+            ctx->npc_player_los_frame[npc_idx].result != -1;
     ASSERT_INT_EQ(
         "pillar removal clears every same-tick NPC LOS sample",
         stale_entries,
@@ -9716,6 +9833,7 @@ int main(void) {
     inf_build_npc_stats();
     inf_finalize_route_topology(inf_legacy_context());
     test_inferno_topology_geometry_parity();
+    test_inferno_collision_view_selects_static_or_dynamic_pillars();
     test_pillar_removal_resets_same_tick_los_frame();
     test_inferno_topology_observation_mask_identity();
     test_compact_observation_layout_contract();
@@ -9740,6 +9858,8 @@ int main(void) {
     test_overlap_shuffle_respects_npc_occupancy();
     test_large_npc_overlap_shuffle_can_partially_unclip();
     test_player_movement_ignores_npc_occupancy();
+    test_npc_step_skips_y_edge_after_blocked_x_edge();
+    test_stationary_npc_does_not_repair_collision_grid();
     test_tagged_jad_healer_stops_at_melee_contact();
     test_tagged_jad_healers_queue_behind_front_healer();
     test_meleer_dig_can_stack_without_losing_collision_flag();
@@ -9828,6 +9948,7 @@ int main(void) {
     test_jad_melee_stays_instant_and_untelegraphed();
     test_step_out_forecast_matches_movement_head_destinations();
     test_inferno_npc_travel_uses_sw_origin_around_all_pillars();
+    test_npc_los_cache_keys_actor_position();
     test_inferno_jal_npcs_use_edge_clearance_at_pillars();
     test_step_out_forecast_north_pillar_ranger_mager_order();
     test_fast_step_out_forecast_matches_movement_head_destinations();

@@ -227,6 +227,7 @@ static void inf_write_obs_ctx(
     int inf_prof_enabled = INF_PROFILE_ENABLED();
     double inf_prof_t0 = inf_prof_enabled ? INF_PROFILE_NOW_MS() : 0.0;
 #endif
+    memset(obs, 0, INF_NUM_OBS * sizeof(*obs));
     int i = 0;
     int px = s->player.x;
     int py = s->player.y;
@@ -291,7 +292,6 @@ static void inf_write_obs_ctx(
         obs[i++] = s->zuk.jad_spawned ? 1.0f : 0.0f;
         obs[i++] = s->zuk.healer_spawned ? 1.0f : 0.0f;
     } else {
-        memset(&obs[i], 0, 9 * sizeof(*obs));
         i += 9;
     }
     assert(i == INF_OBS_AFTER_ENCOUNTER);
@@ -315,7 +315,6 @@ static void inf_write_obs_ctx(
     for (int slot_idx = 0; slot_idx < INF_OBS_NPCS; slot_idx++) {
         int npc_idx = s->current_obs_slots[slot_idx];
         if (npc_idx < 0) {
-            memset(&obs[i], 0, INF_NPC_SLOT_FEATURES * sizeof(*obs));
             i += INF_NPC_SLOT_FEATURES;
             continue;
         }
@@ -365,7 +364,6 @@ static void inf_write_obs_ctx(
             obs[i++] = (float)inf_pending_hit_obs_timer(hit) / 10.0f;
             obs[i++] = (float)hit->damage / 150.0f;
         } else {
-            memset(&obs[i], 0, INF_FEATURES_PER_HIT * sizeof(*obs));
             i += INF_FEATURES_PER_HIT;
         }
     }
@@ -394,7 +392,6 @@ static void inf_write_obs_ctx(
 
     for (int slot_idx = 0; slot_idx < INF_SPARK_OBS_SLOTS; slot_idx++) {
         if (slot_idx >= spark_count) {
-            memset(&obs[i], 0, INF_FEATURES_PER_SPARK * sizeof(*obs));
             i += INF_FEATURES_PER_SPARK;
             continue;
         }
@@ -503,13 +500,12 @@ static void inf_write_mask_ctx(
     inf_ensure_current_obs_slots_ctx(s, ctx);
     memset(mask, 0, INF_ACTION_MASK_SIZE * sizeof(*mask));
 
-    int primary_offset = inf_action_head_mask_offset(INF_HEAD_PRIMARY);
+    int primary_offset = INF_MASK_PRIMARY_OFFSET;
     mask[primary_offset] = 1.0f;
-    int pillars_at_canonical_positions =
-        inf_pillars_at_canonical_positions(s);
+    InfCollisionView collision = inf_collision_view(ctx, s);
     uint32_t static_footprint_mask =
         encounter_arena_topology_nearby_unit_footprint_mask(
-            inf_route_topology_for_state(ctx, s),
+            collision.topology,
             s->player.x,
             s->player.y);
     for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++) {
@@ -521,7 +517,7 @@ static void inf_write_mask_ctx(
         int ny = s->player.y + dy;
         int blocked =
             !(static_footprint_mask & (UINT32_C(1) << step_bit)) ||
-            (!pillars_at_canonical_positions &&
+            (collision.dynamic_pillars &&
              inf_pillar_footprint_blocked(s, nx, ny, 1));
         mask[primary_offset + action] = blocked ? 0.0f : 1.0f;
     }
@@ -550,7 +546,7 @@ static void inf_write_mask_ctx(
     }
     if (has_forced_safe_healer_target) mask[primary_offset] = 0.0f;
 
-    int overhead_offset = inf_action_head_mask_offset(INF_HEAD_PRAYER);
+    int overhead_offset = INF_MASK_PRAYER_OFFSET;
     mask[overhead_offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1.0f;
     mask[overhead_offset + ENCOUNTER_OVERHEAD_OFF] =
         s->player.prayer != PRAYER_NONE ? 1.0f : 0.0f;
@@ -565,11 +561,11 @@ static void inf_write_mask_ctx(
 
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         int head_offset =
-            inf_action_head_mask_offset(INF_HEAD_EQUIP_SLOT(slot));
+            INF_MASK_EQUIP_BASE_OFFSET + slot * INF_INV_CLICK_DIM;
         mask[head_offset] = 1.0f;
     }
-    int eat_offset = inf_action_head_mask_offset(INF_HEAD_EAT);
-    int drink_offset = inf_action_head_mask_offset(INF_HEAD_DRINK);
+    int eat_offset = INF_MASK_EAT_OFFSET;
+    int drink_offset = INF_MASK_DRINK_OFFSET;
     mask[eat_offset] = 1.0f;
     mask[drink_offset] = 1.0f;
     for (int cell_idx = 0; cell_idx < OSRS_INVENTORY_SIZE; cell_idx++) {
@@ -591,8 +587,8 @@ static void inf_write_mask_ctx(
                         cell_idx, gear_slot);
                     abort();
                 }
-                int head_offset = inf_action_head_mask_offset(
-                    INF_HEAD_EQUIP_SLOT(gear_slot));
+                int head_offset = INF_MASK_EQUIP_BASE_OFFSET +
+                    gear_slot * INF_INV_CLICK_DIM;
                 mask[head_offset + cell_idx + 1] = 1.0f;
                 break;
             }
@@ -617,14 +613,14 @@ static void inf_write_mask_ctx(
         }
     }
 
-    int spell_offset = inf_action_head_mask_offset(INF_HEAD_SPELL);
+    int spell_offset = INF_MASK_SPELL_OFFSET;
     mask[spell_offset + OSRS_SPELL_NONE] = 1.0f;
     mask[spell_offset + OSRS_SPELL_BLOOD_BARRAGE] =
         s->player.current_magic >= BLOOD_BARRAGE_LEVEL ? 1.0f : 0.0f;
     mask[spell_offset + OSRS_SPELL_ICE_BARRAGE] =
         s->player.current_magic >= ICE_BARRAGE_LEVEL ? 1.0f : 0.0f;
 
-    int spec_offset = inf_action_head_mask_offset(INF_HEAD_SPEC);
+    int spec_offset = INF_MASK_SPEC_OFFSET;
     mask[spec_offset] = 1.0f;
     mask[spec_offset + 1] =
         !s->player.spec_armed &&
@@ -632,8 +628,7 @@ static void inf_write_mask_ctx(
         s->player.special_energy >= BLOWPIPE_SPEC_COST ? 1.0f : 0.0f;
     mask[spec_offset + 2] = s->player.spec_armed ? 1.0f : 0.0f;
 
-    int offensive_offset =
-        inf_action_head_mask_offset(INF_HEAD_OFFENSIVE);
+    int offensive_offset = INF_MASK_OFFENSIVE_OFFSET;
     mask[offensive_offset] = 1.0f;
     mask[offensive_offset + 1] =
         s->player.offensive_prayer != OFFENSIVE_PRAYER_NONE ? 1.0f : 0.0f;

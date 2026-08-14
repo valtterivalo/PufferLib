@@ -240,7 +240,7 @@ static AttackStyle inf_forecast_blob_scan_style(OverheadPrayer prayer) {
 
 static void inf_step_out_forecast_npc_attack(
     InfernoState* s,
-    const InfernoContext* ctx,
+    InfernoContext* ctx,
     int idx,
     InfStepOutForecastAction* action,
     int tick_idx
@@ -333,7 +333,7 @@ static int inf_collect_step_out_forecast_slots(
 
 static void inf_step_out_forecast_tick(
     InfernoState* sim,
-    const InfernoContext* ctx,
+    InfernoContext* ctx,
     InfStepOutForecastAction* action,
     int tick_idx,
     const int slots[INF_MAX_NPCS],
@@ -354,7 +354,7 @@ static void inf_step_out_forecast_tick(
 #ifdef INF_PROFILE_ENABLED
 static void inf_step_out_forecast_tick_profiled(
     InfernoState* sim,
-    const InfernoContext* ctx,
+    InfernoContext* ctx,
     InfStepOutForecastAction* action,
     int tick_idx,
     const int slots[INF_MAX_NPCS],

@@ -770,7 +770,7 @@ static void inf_lab_append_forecast_json(
 
 static void inf_lab_append_npcs_json(
     InfernoState* s,
-    const InfernoContext* ctx,
+    InfernoContext* ctx,
     InfLabString* out
 ) {
     encounter_lab_string_append(out, "\"npcs\":[");
@@ -822,7 +822,7 @@ static void inf_lab_append_pillars_json(const InfernoState* s, InfLabString* out
 
 static char* inf_lab_alloc_json_ctx(
     InfernoState* s,
-    const InfernoContext* ctx
+    InfernoContext* ctx
 ) {
     InfLabString out;
     encounter_lab_string_init(&out, "inferno lab");

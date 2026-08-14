@@ -6,36 +6,41 @@ typedef struct {
 } InfWalkCtx;
 
 
-static int inf_npc_collision_flags_blocked(
-    const InfernoState* s,
-    int x,
-    int y,
-    int size
-) {
-    if (size == 1) {
-        int grid_x;
-        int grid_y;
-        return inf_grid_index(x, y, &grid_x, &grid_y) &&
-            s->npc_collision_flags[grid_x][grid_y] != 0;
-    }
-    for (int dx = 0; dx < size; dx++) {
-        for (int dy = 0; dy < size; dy++) {
-            int grid_x;
-            int grid_y;
-            if (inf_grid_index(
-                    x + dx, y + dy, &grid_x, &grid_y) &&
-                    s->npc_collision_flags[grid_x][grid_y] != 0)
-                return 1;
-        }
-    }
-    return 0;
-}
-
 typedef struct {
     InfernoState* s;
     const InfernoContext* ctx;
     int self_idx;
 } InfMoveCtx;
+
+static int inf_npc_collision_flags_blocked(
+    const InfMoveCtx* move_ctx,
+    int x,
+    int y,
+    int size
+) {
+    const InfernoState* s = move_ctx->s;
+    const InfNPC* self = &s->npcs[move_ctx->self_idx];
+    int self_sets_collision = inf_npc_sets_collision_flag(self->type);
+    for (int dx = 0; dx < size; dx++) {
+        for (int dy = 0; dy < size; dy++) {
+            int tile_x = x + dx;
+            int tile_y = y + dy;
+            int grid_x;
+            int grid_y;
+            if (!inf_grid_index(tile_x, tile_y, &grid_x, &grid_y))
+                continue;
+            int self_occupies_tile =
+                self_sets_collision &&
+                tile_x >= self->x &&
+                tile_x < self->x + self->size &&
+                tile_y >= self->y &&
+                tile_y < self->y + self->size;
+            if (s->npc_collision_flags[grid_x][grid_y] > self_occupies_tile)
+                return 1;
+        }
+    }
+    return 0;
+}
 
 static int inf_npc_environment_blocked_ctx(
     InfernoState* s,
@@ -56,7 +61,7 @@ static int inf_npc_blocked(void* ctx, int x, int y, int size) {
     if (los_aabb_overlap(
             x, y, size, s->player.x, s->player.y, 1))
         return 1;
-    return inf_npc_collision_flags_blocked(s, x, y, size);
+    return inf_npc_collision_flags_blocked(mc, x, y, size);
 }
 
 static int inf_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
@@ -65,7 +70,7 @@ static int inf_npc_blocked_ignore_player(void* ctx, int x, int y, int size) {
     if (inf_npc_environment_blocked_ctx(
             s, mc->ctx, x, y, size))
         return 1;
-    return inf_npc_collision_flags_blocked(s, x, y, size);
+    return inf_npc_collision_flags_blocked(mc, x, y, size);
 }
 
 static int inf_npc_overlap_hold(void* ctx) {
@@ -80,7 +85,7 @@ static int inf_tile_walkable(void* ctx, int x, int y);
 
 static void inf_npc_move_ctx(
     InfernoState* s,
-    const InfernoContext* ctx,
+    InfernoContext* ctx,
     int idx
 ) {
     InfNPC* npc = &s->npcs[idx];
@@ -92,10 +97,8 @@ static void inf_npc_move_ctx(
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
     int uses_collision_flag = inf_npc_sets_collision_flag(npc->type);
-    if (uses_collision_flag)
-        inf_unstamp_npc_collision_footprint(
-            s, npc->x, npc->y, npc->size);
-
+    int collision_origin_x = npc->x;
+    int collision_origin_y = npc->y;
     do {
         if (npc->type != INF_NPC_NIBBLER) {
             InfMoveCtx move_ctx = {s, ctx, idx};
@@ -128,7 +131,8 @@ static void inf_npc_move_ctx(
         npc->target_y = target_y;
 
         if (npc->type != INF_NPC_NIBBLER &&
-                inf_npc_has_los_direct_ctx(s, ctx, idx))
+                inf_npc_has_los_to_area_cached_ctx(
+                    s, ctx, idx, target))
             break;
         if (npc->attack_timer > stats->attack_speed)
             break;
@@ -165,16 +169,20 @@ static void inf_npc_move_ctx(
             npc->moved_this_tick = 1;
     } while (0);
 
-    if (uses_collision_flag)
+    if (uses_collision_flag &&
+            (npc->x != collision_origin_x || npc->y != collision_origin_y)) {
+        inf_unstamp_npc_collision_footprint(
+            s, collision_origin_x, collision_origin_y, npc->size);
         inf_stamp_npc_collision_footprint(
             s, npc->x, npc->y, npc->size);
+    }
 }
 
 static void inf_npc_move(InfernoState* s, int idx) {
     inf_npc_move_ctx(s, inf_legacy_context(), idx);
 }
 
-static void inf_meleer_dig_check_ctx(InfernoState* s, const InfernoContext* ctx, int idx) {
+static void inf_meleer_dig_check_ctx(InfernoState* s, InfernoContext* ctx, int idx) {
     InfNPC* npc = &s->npcs[idx];
     if (npc->type != INF_NPC_MELEER || !npc->active) return;
     if (npc->dig_freeze_timer > 0) {
