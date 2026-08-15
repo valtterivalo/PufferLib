@@ -1495,6 +1495,17 @@ static void zul_spawn_snakeling(
     }
 }
 
+static int zul_snakeling_move_blocked(
+    void* data,
+    int x,
+    int y,
+    int size
+) {
+    const ZulrahContext* ctx = (const ZulrahContext*)data;
+    return encounter_arena_topology_footprint_blocked(
+        ctx->route_topology, x, y, size);
+}
+
 static void zul_snakeling_tick(
     ZulrahState* s,
     const ZulrahContext* ctx
@@ -1507,34 +1518,22 @@ static void zul_snakeling_tick(
         sn->lifespan--;
         if (sn->lifespan <= 0) { sn->active = 0; continue; }
 
-        int adx = abs_int(sn->entity.x - s->player.x);
-        int ady = abs_int(sn->entity.y - s->player.y);
-        int in_range = (adx <= 1 && ady <= 1);
-        if (!in_range) {
-            EncounterRouteInput route_input = {
-                .topology = ctx->route_topology,
-                .blockers = {0},
-                .source_x = sn->entity.x,
-                .source_y = sn->entity.y,
-                .actor_size = 1,
-                .target_x = s->player.x,
-                .target_y = s->player.y,
-                .target_size = 1,
-                .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_WALK,
-                .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST,
-            };
-            EncounterRouteResult route = encounter_route_solve(&route_input);
-            if (route.outcome != ROUTE_INVALID_INPUT &&
-                    route.outcome != ROUTE_UNREACHABLE &&
-                    (route.first_dx != 0 || route.first_dy != 0)) {
-                sn->entity.x += route.first_dx;
-                sn->entity.y += route.first_dy;
-            }
-        }
+        encounter_npc_step_toward_policy(
+            &sn->entity.x,
+            &sn->entity.y,
+            s->player.x,
+            s->player.y,
+            1,
+            1,
+            ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE,
+            zul_snakeling_move_blocked,
+            (void*)ctx,
+            NULL,
+            &s->rng_state);
 
         if (sn->attack_timer > 0) { sn->attack_timer--; continue; }
-        adx = abs_int(sn->entity.x - s->player.x);
-        ady = abs_int(sn->entity.y - s->player.y);
+        int adx = abs_int(sn->entity.x - s->player.x);
+        int ady = abs_int(sn->entity.y - s->player.y);
         if (adx > 1 || ady > 1) continue;
 
         sn->attack_timer = ZUL_SNAKELING_SPEED;

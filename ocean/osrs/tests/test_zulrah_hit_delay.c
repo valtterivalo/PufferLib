@@ -484,6 +484,62 @@ static void test_unified_player_contract_semantics(void) {
     }
 }
 
+typedef struct {
+    uint8_t blocked[8][8];
+} ZulSnakelingMovementGeometry;
+
+static uint32_t zul_snakeling_movement_flags(void* data, int x, int y) {
+    const ZulSnakelingMovementGeometry* geometry =
+        (const ZulSnakelingMovementGeometry*)data;
+    if (x < 0 || x >= 8 || y < 0 || y >= 8)
+        return COLLISION_BLOCKED | LOS_FULL_MASK;
+    return geometry->blocked[x][y] ? COLLISION_BLOCKED : 0;
+}
+
+static void test_snakeling_uses_shared_npc_pathing(void) {
+    printf("\n--- snakelings use shared NPC pathing ---\n");
+    ZulSnakelingMovementGeometry geometry;
+    memset(&geometry, 0, sizeof(geometry));
+    geometry.blocked[3][2] = 1;
+    geometry.blocked[2][3] = 1;
+    geometry.blocked[3][3] = 1;
+    EncounterArenaTopologyBuildSpec spec = {
+        .origin_x = 0,
+        .origin_y = 0,
+        .width = 8,
+        .height = 8,
+        .max_footprint_size = 1,
+        .revision = 1,
+        .tile_flags = zul_snakeling_movement_flags,
+        .tile_flags_ctx = &geometry,
+    };
+    EncounterArenaTopology* topology =
+        encounter_arena_topology_build(&spec);
+    encounter_arena_topology_finalize(topology);
+
+    ZulrahContext context = {
+        .route_topology = topology,
+    };
+    ZulrahState state;
+    memset(&state, 0, sizeof(state));
+    state.player.x = 5;
+    state.player.y = 5;
+    state.player.current_hitpoints = 99;
+    state.snakelings[0].active = 1;
+    state.snakelings[0].lifespan = 10;
+    state.snakelings[0].attack_timer = 10;
+    state.snakelings[0].entity.x = 2;
+    state.snakelings[0].entity.y = 2;
+    state.snakelings[0].entity.current_hitpoints = 1;
+
+    zul_snakeling_tick(&state, &context);
+
+    CHECK("blocked toward-player steps hold instead of routing around",
+        state.snakelings[0].entity.x == 2 &&
+        state.snakelings[0].entity.y == 2);
+    free(topology);
+}
+
 
 int main(void) {
     printf("zulrah hit-delay and roll-order regressions\n\n");
@@ -497,6 +553,7 @@ int main(void) {
     test_prayer_resolves_at_throw_not_landing();
     test_topology_geometry_parity();
     test_melee_stare_reads_prayer_at_calculation();
+    test_snakeling_uses_shared_npc_pathing();
 
     return osrs_test_summary();
 }

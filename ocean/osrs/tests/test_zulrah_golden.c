@@ -153,21 +153,21 @@ static_assert(EPISODE_TICKS > ZUL_MAX_TICKS,
     "episode budget must cover the in-sim tick cap");
 
 static const uint64_t BASELINE[NUM_CONFIGS] = {
-    0x9ef8a0cef416f781ULL,  /* t0_single */
-    0xf8b5969beba40413ULL,  /* t1_single */
-    0x069ea11e537ca6ffULL,  /* t2_single */
-    0x97de7b21c6970b1aULL,  /* t0_trip */
-    0x2c039ba671b594bdULL,  /* t1_trip */
-    0x41329c81c35a1694ULL,  /* t2_trip */
+    0x2b297fe3b1f77200ULL,  /* t0_single */
+    0xb85e5046caf6cc64ULL,  /* t1_single */
+    0xb9ed837807094d57ULL,  /* t2_single */
+    0x3f92561977ab79b2ULL,  /* t0_trip */
+    0xc2709f3078eb3733ULL,  /* t1_trip */
+    0x1d1eeda28fb43d66ULL,  /* t2_trip */
 };
 
 static const uint64_t SIMULATION_BASELINE[NUM_CONFIGS] = {
-    0xd1297d5ee0382522ULL,  /* t0_single */
-    0x8e586a704d1ccd01ULL,  /* t1_single */
-    0x8d7b82dd02af49d1ULL,  /* t2_single */
-    0x0a5d8f989ce34467ULL,  /* t0_trip */
-    0x3a737efafde6efc6ULL,  /* t1_trip */
-    0xfbb31e45ea44b25dULL,  /* t2_trip */
+    0x9f860c24de0fd445ULL,  /* t0_single */
+    0x6b6c1e689fc243aeULL,  /* t1_single */
+    0x60f419c2a5ed3b35ULL,  /* t2_single */
+    0x6f96a045321ae322ULL,  /* t0_trip */
+    0x2af10e05d0cde581ULL,  /* t1_trip */
+    0x8c3b2197c269e6abULL,  /* t2_trip */
 };
 
 int main(int argc, char** argv) {
