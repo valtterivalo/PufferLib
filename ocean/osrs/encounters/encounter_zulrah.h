@@ -1518,18 +1518,21 @@ static void zul_snakeling_tick(
         sn->lifespan--;
         if (sn->lifespan <= 0) { sn->active = 0; continue; }
 
-        encounter_npc_step_toward_policy(
-            &sn->entity.x,
-            &sn->entity.y,
-            s->player.x,
-            s->player.y,
-            1,
-            1,
-            ENCOUNTER_NPC_STEP_OSRS_AGGRO_STOP_AT_MELEE,
-            zul_snakeling_move_blocked,
-            (void*)ctx,
-            NULL,
-            &s->rng_state);
+        if (abs_int(sn->entity.x - s->player.x) > 1 ||
+                abs_int(sn->entity.y - s->player.y) > 1) {
+            encounter_npc_step_toward_policy(
+                &sn->entity.x,
+                &sn->entity.y,
+                s->player.x,
+                s->player.y,
+                1,
+                1,
+                ENCOUNTER_NPC_STEP_OSRS_AGGRO_TARGET,
+                zul_snakeling_move_blocked,
+                (void*)ctx,
+                NULL,
+                &s->rng_state);
+        }
 
         if (sn->attack_timer > 0) { sn->attack_timer--; continue; }
         int adx = abs_int(sn->entity.x - s->player.x);

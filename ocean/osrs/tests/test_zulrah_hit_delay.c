@@ -537,6 +537,37 @@ static void test_snakeling_uses_shared_npc_pathing(void) {
     CHECK("blocked toward-player steps hold instead of routing around",
         state.snakelings[0].entity.x == 2 &&
         state.snakelings[0].entity.y == 2);
+
+    state.snakelings[0].lifespan = 10;
+    state.snakelings[0].attack_timer = 0;
+    state.snakelings[0].entity.x = 4;
+    state.snakelings[0].is_magic = 0;
+    state.player.prayer = PRAYER_PROTECT_MELEE;
+    state.snakelings[0].entity.y = 4;
+    zul_snakeling_tick(&state, &context);
+    CHECK("diagonal attack range holds position and attack cadence",
+        state.snakelings[0].entity.x == 4 &&
+        state.snakelings[0].entity.y == 4 &&
+        state.snakelings[0].attack_timer == ZUL_SNAKELING_SPEED);
+
+    state.rng_state = 1234;
+    state.snakelings[0].lifespan = 10;
+    state.snakelings[0].attack_timer = 10;
+    state.snakelings[0].entity.x = 5;
+    state.snakelings[0].entity.y = 5;
+    zul_snakeling_tick(&state, &context);
+    CHECK("overlapping attack range holds the snakeling position",
+        state.snakelings[0].entity.x == 5 &&
+        state.snakelings[0].entity.y == 5);
+
+    state.snakelings[0].lifespan = 10;
+    state.snakelings[0].attack_timer = 10;
+    state.snakelings[0].entity.x = 0;
+    state.snakelings[0].entity.y = 0;
+    zul_snakeling_tick(&state, &context);
+    CHECK("clear shared NPC movement advances diagonally",
+        state.snakelings[0].entity.x == 1 &&
+        state.snakelings[0].entity.y == 1);
     free(topology);
 }
 
