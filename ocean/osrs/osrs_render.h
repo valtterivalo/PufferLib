@@ -27,6 +27,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef OSRS_VISUAL_WINDOW_TITLE
+#define OSRS_VISUAL_WINDOW_TITLE "OSRS Debug Viewer"
+#endif
 #define RENDER_TILE_SIZE       20
 #define RENDER_WINDOW_W        1240
 #define RENDER_WINDOW_H        840
@@ -1864,7 +1867,7 @@ static RenderClient* render_make_client(void) {
         rc->prev_npc_slot[i] = -1;
     }
 
-    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, "OSRS PvP Debug Viewer");
+    InitWindow(RENDER_WINDOW_W, RENDER_WINDOW_H, OSRS_VISUAL_WINDOW_TITLE);
     SetTargetFPS(60);
 
     {
