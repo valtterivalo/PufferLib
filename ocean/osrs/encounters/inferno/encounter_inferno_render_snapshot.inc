@@ -241,46 +241,36 @@ static void* inf_get_log_ctx(EncounterState* state, EncounterContext* context) {
     return ctx->log;
 }
 
-static const OsrsCombatVisualRow* inf_npc_combat_visual_row(
+static const OsrsCombatVisualRow* inf_require_npc_combat_visual_projectile_row(
     InfNPCType type, AttackStyle style
 ) {
     assert(type >= 0 && type < INF_NUM_NPC_TYPES);
-    return osrs_combat_visual_find_npc_id(
-        (uint16_t)INF_NPC_DEF_IDS[type], style);
+    int npc_def_id = INF_NPC_DEF_IDS[type];
+    const OsrsCombatVisualRow* row = osrs_combat_visual_find_npc_id(
+        (uint16_t)npc_def_id, style);
+    if (!row || row->projectile.projectile_model_id <= 0) {
+        fprintf(stderr,
+            "inferno: missing combat visual projectile for npc %s def id %d style %d\n",
+            inf_npc_type_name(type), npc_def_id, style);
+        abort();
+    }
+    return row;
 }
 
-static void inf_npc_projectile_fallback(
+static int inf_require_npc_combat_visual_impact_spotanim_id(
     InfNPCType type,
     AttackStyle style,
-    uint32_t* model_id,
-    int* anim_id
+    const OsrsCombatVisualRow* row
 ) {
-    assert(model_id && anim_id);
-    switch (type) {
-        case INF_NPC_BAT:
-            *model_id = INF_GFX_1374_MODEL;
-            *anim_id = INF_GFX_1374_ANIM;
-            return;
-        case INF_NPC_BLOB:
-            if (style == ATTACK_STYLE_RANGED) {
-                *model_id = INF_GFX_1383_MODEL;
-                *anim_id = INF_GFX_1383_ANIM;
-            } else if (style == ATTACK_STYLE_MAGIC) {
-                *model_id = INF_GFX_1384_MODEL;
-                *anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
-            }
-            return;
-        case INF_NPC_BLOB_RANGE:
-            *model_id = INF_GFX_1379_MODEL;
-            *anim_id = INF_GFX_1379_ANIM;
-            return;
-        case INF_NPC_BLOB_MAGE:
-            *model_id = INF_GFX_1381_MODEL;
-            *anim_id = INF_GFX_1381_ANIM;
-            return;
-        default:
-            return;
+    assert(type >= 0 && type < INF_NUM_NPC_TYPES);
+    assert(row);
+    if (row->projectile.impact_spotanim_id <= 0) {
+        fprintf(stderr,
+            "inferno: missing combat visual impact for npc %s def id %d style %d\n",
+            inf_npc_type_name(type), INF_NPC_DEF_IDS[type], style);
+        abort();
     }
+    return row->projectile.impact_spotanim_id;
 }
 
 static void inf_render_post_tick_ctx(
@@ -355,22 +345,14 @@ static void inf_render_post_tick_ctx(
         int start_delay = timing.visual_start_delay_ticks * 30;
 
         const OsrsCombatVisualRow* npc_visual =
-            inf_npc_combat_visual_row(npc->type, actual_style);
-        uint32_t proj_model_id = 0;
-        int proj_anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
-        int impact_gfx_id = 0;
-        if (npc_visual) {
-            if (npc_visual->projectile.projectile_model_id > 0)
-                proj_model_id = (uint32_t)npc_visual->projectile.projectile_model_id;
-            if (npc_visual->projectile.projectile_anim_id > 0)
-                proj_anim_id = npc_visual->projectile.projectile_anim_id;
-            if (npc_visual->projectile.impact_spotanim_id > 0)
-                impact_gfx_id = npc_visual->projectile.impact_spotanim_id;
-        }
-
-        if (proj_model_id == 0)
-            inf_npc_projectile_fallback(
-                npc->type, actual_style, &proj_model_id, &proj_anim_id);
+            inf_require_npc_combat_visual_projectile_row(
+                npc->type, actual_style);
+        uint32_t proj_model_id =
+            (uint32_t)npc_visual->projectile.projectile_model_id;
+        int proj_anim_id = npc_visual->projectile.projectile_anim_id;
+        int impact_gfx_id = npc_visual->projectile.impact_spotanim_id > 0
+            ? npc_visual->projectile.impact_spotanim_id
+            : 0;
 
         switch (npc->type) {
             case INF_NPC_JAD:
@@ -430,8 +412,9 @@ static void inf_render_post_tick_ctx(
         if (target_npc_slot < 0)
             impact_gfx_id = 0;
 
-        if (npc->type == INF_NPC_HEALER_ZUK && impact_gfx_id <= 0)
-            impact_gfx_id = INF_GFX_659_ID;
+        if (npc->type == INF_NPC_HEALER_ZUK)
+            impact_gfx_id = inf_require_npc_combat_visual_impact_spotanim_id(
+                npc->type, actual_style, npc_visual);
         OsrsProjectileEventSpec attack_spec = {
             .src_x = npc->x,
             .src_y = npc->y,
@@ -466,18 +449,14 @@ static void inf_render_post_tick_ctx(
         if (!spark->active || spark->visual_emitted) continue;
 
         const OsrsCombatVisualRow* spark_visual =
-            inf_npc_combat_visual_row(INF_NPC_HEALER_ZUK, ATTACK_STYLE_MAGIC);
-        uint32_t spark_model_id = INF_GFX_660_MODEL;
-        int spark_anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
-        int spark_impact_gfx_id = INF_GFX_659_ID;
-        if (spark_visual) {
-            if (spark_visual->projectile.projectile_model_id > 0)
-                spark_model_id = (uint32_t)spark_visual->projectile.projectile_model_id;
-            if (spark_visual->projectile.projectile_anim_id > 0)
-                spark_anim_id = spark_visual->projectile.projectile_anim_id;
-            if (spark_visual->projectile.impact_spotanim_id > 0)
-                spark_impact_gfx_id = spark_visual->projectile.impact_spotanim_id;
-        }
+            inf_require_npc_combat_visual_projectile_row(
+                INF_NPC_HEALER_ZUK, ATTACK_STYLE_MAGIC);
+        uint32_t spark_model_id =
+            (uint32_t)spark_visual->projectile.projectile_model_id;
+        int spark_anim_id = spark_visual->projectile.projectile_anim_id;
+        int spark_impact_gfx_id =
+            inf_require_npc_combat_visual_impact_spotanim_id(
+                INF_NPC_HEALER_ZUK, ATTACK_STYLE_MAGIC, spark_visual);
 
         OsrsProjectileEventSpec spark_spec = {
             .src_x = spark->src_x,

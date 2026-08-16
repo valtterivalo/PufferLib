@@ -7170,9 +7170,9 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
     ASSERT_INT_EQ("blob split ranged projectile count",
         blob_split_range_ov.projectile_count, 1);
     ASSERT_INT_EQ("blob split ranged projectile model",
-        blob_split_range_ov.projectiles[0].model_id, INF_GFX_1379_MODEL);
+        blob_split_range_ov.projectiles[0].model_id, INF_GFX_1383_MODEL);
     ASSERT_INT_EQ("blob split ranged projectile animation",
-        blob_split_range_ov.projectiles[0].anim_id, INF_GFX_1379_ANIM);
+        blob_split_range_ov.projectiles[0].anim_id, INF_GFX_1383_ANIM);
 
     InfernoState blob_split_magic_state = make_test_state(10, 10);
     blob_split_magic_state.npcs[3] = make_test_npc(
@@ -7188,9 +7188,9 @@ static void test_inferno_npc_projectile_render_uses_reference_visual_timing(void
     ASSERT_INT_EQ("blob split magic projectile count",
         blob_split_magic_ov.projectile_count, 1);
     ASSERT_INT_EQ("blob split magic projectile model",
-        blob_split_magic_ov.projectiles[0].model_id, INF_GFX_1381_MODEL);
+        blob_split_magic_ov.projectiles[0].model_id, INF_GFX_1384_MODEL);
     ASSERT_INT_EQ("blob split magic projectile animation",
-        blob_split_magic_ov.projectiles[0].anim_id, INF_GFX_1381_ANIM);
+        blob_split_magic_ov.projectiles[0].anim_id, OSRS_COMBAT_PROJECTILE_MISSING);
 }
 
 static void test_inferno_npc_projectile_render_tracks_target_npc_slot(void) {
