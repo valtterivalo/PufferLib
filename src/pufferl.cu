@@ -2979,6 +2979,12 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     }
 
     PuffeRL* pufferl = create_pufferl(ini, ctx);
+    char load_model_path_buffer[4096];
+    const char* load_model_path = puf_checkpoint_path_key(ini,
+        "load_model_path", load_model_path_buffer, sizeof(load_model_path_buffer));
+    if (load_model_path) {
+        pufferl_load_policy(pufferl, 0, load_model_path);
+    }
     Selfplay selfplay = {0};
     if (use_selfplay) {
         char initial_checkpoint[4096];
