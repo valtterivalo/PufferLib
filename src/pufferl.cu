@@ -3032,6 +3032,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     char final_checkpoint[4096] = {0};
 
     for (long epoch = 0; epoch < train_epochs; epoch++) {
+        bool collected_rollout_metrics = !pufferl->hypers.async;
         if (pufferl->hypers.async) {
             // Cleanba 2-slot: warmup fills slot 0; then collect into write
             // while training the other slot (exactly one epoch old).
@@ -3039,6 +3040,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             if (!pufferl->async_boot) {
                 double t0 = rollout_start(pufferl, 0);
                 rollout_finish(pufferl, t0);
+                collected_rollout_metrics = true;
                 pufferl->async_ready_slot = 0;
                 pufferl->async_write_slot = 1;
                 pufferl->async_boot = true;
@@ -3059,6 +3061,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
 
             if (prefetch_next) {
                 rollout_finish(pufferl, t0);
+                collected_rollout_metrics = true;
                 pufferl->async_ready_slot = 1 - ready_slot;
                 pufferl->async_write_slot = 1 - write_slot;
             }
@@ -3093,6 +3096,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
                     hist->opp_started_step = step;
                 }
             }
+        }
+
+        if (!collected_rollout_metrics) {
+            continue;
         }
 
         if (last_log.size && wall_clock()
