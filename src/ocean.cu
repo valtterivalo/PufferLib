@@ -120,7 +120,12 @@ static void create_custom_decoder(const char* env_name, Decoder* dec) {
 #endif
 #ifdef PUFFER_OSRS_INFERNO
     if (strcmp(env_name, "osrs_inferno") == 0) {
-        create_osrs_entity_decoder(dec);
+        if constexpr (
+            OSRS_INFERNO_COMPILED_DECODER_MODE !=
+            OSRS_INFERNO_DECODER_FLAT
+        ) {
+            create_osrs_entity_decoder<OSRS_INFERNO_COMPILED_DECODER_MODE>(dec);
+        }
         return;
     }
 #endif

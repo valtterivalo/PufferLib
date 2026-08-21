@@ -1,3 +1,20 @@
+enum OsrsInfernoDecoderMode {
+    OSRS_INFERNO_DECODER_FLAT = 0,
+    OSRS_INFERNO_DECODER_POINTER_STOP_ENCODER_GRAD = 1,
+    OSRS_INFERNO_DECODER_POINTER_FULL_GRAD = 2,
+};
+
+#ifndef OSRS_INFERNO_DECODER_MODE
+#define OSRS_INFERNO_DECODER_MODE OSRS_INFERNO_DECODER_POINTER_FULL_GRAD
+#endif
+
+static_assert(
+    OSRS_INFERNO_DECODER_MODE >= OSRS_INFERNO_DECODER_FLAT &&
+    OSRS_INFERNO_DECODER_MODE <= OSRS_INFERNO_DECODER_POINTER_FULL_GRAD);
+
+static constexpr OsrsInfernoDecoderMode OSRS_INFERNO_COMPILED_DECODER_MODE =
+    static_cast<OsrsInfernoDecoderMode>(OSRS_INFERNO_DECODER_MODE);
+
 static constexpr int OSRS_ENTITY_TARGET_BRANCH = 1;
 static constexpr int OSRS_ENTITY_TARGET_START = 25;
 static constexpr int OSRS_ENTITY_TARGET_SLOTS = 14;
@@ -232,6 +249,7 @@ static void osrs_entity_decoder_reg_params(void* weights, Allocator* allocator) 
     alloc_register(allocator, &dw->log_temperature);
 }
 
+template <OsrsInfernoDecoderMode mode>
 static void osrs_entity_decoder_reg_train(
     void* weights,
     void* activations,
@@ -259,7 +277,9 @@ static void osrs_entity_decoder_reg_train(
     a->linear_grad = a->linear_out;
     a->query_grad = a->query;
     a->projected_key_grad = a->projected_keys;
-    a->key_grad = a->projected_keys;
+    if constexpr (mode == OSRS_INFERNO_DECODER_POINTER_FULL_GRAD) {
+        a->key_grad = a->projected_keys;
+    }
     a->linear_hidden_grad = {.shape = {B, dw->hidden_dim}};
     a->query_hidden_grad = a->linear_hidden_grad;
     a->grad_input = a->linear_hidden_grad;
@@ -274,7 +294,9 @@ static void osrs_entity_decoder_reg_train(
     alloc_register(acts, &a->linear_grad);
     alloc_register(acts, &a->query_grad);
     alloc_register(acts, &a->projected_key_grad);
-    alloc_register(acts, &a->key_grad);
+    if constexpr (mode == OSRS_INFERNO_DECODER_POINTER_FULL_GRAD) {
+        alloc_register(acts, &a->key_grad);
+    }
     alloc_register(acts, &a->linear_hidden_grad);
     alloc_register(acts, &a->query_hidden_grad);
     alloc_register(acts, &a->grad_input);
@@ -291,7 +313,9 @@ static void osrs_entity_decoder_reg_train(
     alloc_register(grads, &a->query_wgrad);
     alloc_register(grads, &a->key_wgrad);
     alloc_register(grads, &a->temperature_grad);
-    osrs_entity_decoder_keygrad = &a->key_grad;
+    if constexpr (mode == OSRS_INFERNO_DECODER_POINTER_FULL_GRAD) {
+        osrs_entity_decoder_keygrad = &a->key_grad;
+    }
 }
 
 static void osrs_entity_decoder_reg_rollout(
@@ -331,6 +355,7 @@ static void* osrs_entity_decoder_create_weights(void* self) {
     return weights;
 }
 
+template <OsrsInfernoDecoderMode mode>
 static Prec osrs_entity_decoder_backward(
     void* weights,
     void* activations,
@@ -368,7 +393,10 @@ static Prec osrs_entity_decoder_backward(
     puf_mm_nn(
         &a->linear_grad, &dw->linear_w, &a->linear_hidden_grad, stream);
     puf_mm_nn(&a->query_grad, &dw->query_w, &a->query_hidden_grad, stream);
-    puf_mm_nn(&a->projected_key_grad, &dw->key_w, &a->key_grad, stream);
+    if constexpr (mode == OSRS_INFERNO_DECODER_POINTER_FULL_GRAD) {
+        puf_mm_nn(
+            &a->projected_key_grad, &dw->key_w, &a->key_grad, stream);
+    }
     int hidden_count = B * dw->hidden_dim;
     osrs_entity_decoder_add_hidden_grad<<<
         grid_size(hidden_count), BLOCK_SIZE, 0, stream>>>(
@@ -377,15 +405,16 @@ static Prec osrs_entity_decoder_backward(
     return a->grad_input;
 }
 
+template <OsrsInfernoDecoderMode mode>
 static void create_osrs_entity_decoder(Decoder* decoder) {
     assert(!decoder->continuous);
     assert(decoder->output_dim == 436);
     *decoder = Decoder{
         .forward = osrs_entity_decoder_forward,
-        .backward = osrs_entity_decoder_backward,
+        .backward = osrs_entity_decoder_backward<mode>,
         .init_weights = osrs_entity_decoder_init_weights,
         .reg_params = osrs_entity_decoder_reg_params,
-        .reg_train = osrs_entity_decoder_reg_train,
+        .reg_train = osrs_entity_decoder_reg_train<mode>,
         .reg_rollout = osrs_entity_decoder_reg_rollout,
         .create_weights = osrs_entity_decoder_create_weights,
         .hidden_dim = decoder->hidden_dim,

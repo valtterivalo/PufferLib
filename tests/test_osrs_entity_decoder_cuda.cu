@@ -32,6 +32,25 @@ static void test_reset() {
     test_weights = nullptr;
     test_activations = nullptr;
     test_encoder_activations = nullptr;
+    osrs_entity_encoder_last = nullptr;
+    osrs_entity_decoder_keygrad = nullptr;
+}
+
+int osrs_entity_decoder_test_compiled_mode() {
+    return OSRS_INFERNO_COMPILED_DECODER_MODE;
+}
+
+int osrs_entity_decoder_test_uses_default_decoder() {
+    Decoder decoder = {
+        .hidden_dim = 40,
+        .output_dim = 436,
+    };
+    create_custom_decoder("osrs_inferno", &decoder);
+    return decoder.forward == nullptr;
+}
+
+int osrs_entity_decoder_test_has_encoder_keygrad() {
+    return osrs_entity_decoder_keygrad != nullptr;
 }
 
 void osrs_entity_decoder_test_init(int batch, int hidden) {
@@ -43,7 +62,7 @@ void osrs_entity_decoder_test_init(int batch, int hidden) {
     test_decoder = {};
     test_decoder.hidden_dim = hidden;
     test_decoder.output_dim = 436;
-    create_osrs_entity_decoder(&test_decoder);
+    create_osrs_entity_decoder<OSRS_INFERNO_COMPILED_DECODER_MODE>(&test_decoder);
     test_weights = (OsrsEntityDecoderWeights*)
         test_decoder.create_weights(&test_decoder);
     test_decoder.reg_params(test_weights, &test_params);
