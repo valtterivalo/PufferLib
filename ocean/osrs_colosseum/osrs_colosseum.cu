@@ -23,4 +23,5 @@ static_assert(101 + 24 * 23 <= 904);
 static constexpr OsrsEntityEncoderDescriptor OSRS_COLOSSEUM_ENTITY_DESCRIPTOR = {
     .branches = OSRS_COLOSSEUM_ENTITY_BRANCHES,
     .num_branches = 2,
+    .pointer_branch = -1,
 };

@@ -23,4 +23,5 @@ static_assert(124 + 14 * 13 <= 530);
 static constexpr OsrsEntityEncoderDescriptor OSRS_INFERNO_ENTITY_DESCRIPTOR = {
     .branches = OSRS_INFERNO_ENTITY_BRANCHES,
     .num_branches = 2,
+    .pointer_branch = 1,
 };

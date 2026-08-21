@@ -218,18 +218,29 @@ def _torch_reference(
             ~active.unsqueeze(2),
             -torch.inf,
         ).amax(dim=1)
-        return torch.where(
+        output = torch.where(
             active.any(dim=1, keepdim=True),
             pooled,
             torch.zeros_like(pooled),
         )
+        return output, hidden
 
-    return (
-        functional.linear(observations, global_w)
-        + branch(inventory, inventory_l1_w, inventory_l2_w, 1)
-        + branch(equipment, equipment_l1_w, equipment_l2_w, 1)
-        + branch(npc, npc_l1_w, npc_l2_w, contract.type_count)
+    inventory_output, _ = branch(
+        inventory, inventory_l1_w, inventory_l2_w, 1
     )
+    equipment_output, _ = branch(
+        equipment, equipment_l1_w, equipment_l2_w, 1
+    )
+    npc_output, npc_hidden = branch(
+        npc, npc_l1_w, npc_l2_w, contract.type_count
+    )
+    output = (
+        functional.linear(observations, global_w)
+        + inventory_output
+        + equipment_output
+        + npc_output
+    )
+    return output, npc_hidden
 
 
 def _configure_library(path: Path):
@@ -242,6 +253,7 @@ def _configure_library(path: Path):
         ctypes.c_int,
     ]
     library.osrs_entity_test_set_weights.argtypes = [pointer] * 7
+    library.osrs_entity_test_set_pointer_keygrad.argtypes = [pointer]
     library.osrs_entity_test_forward.argtypes = [
         pointer,
         pointer,
@@ -341,7 +353,7 @@ def test_cuda_forward_and_all_weight_gradients(cuda_library, contract):
         BATCH,
         contract.obs_size,
     )
-    reference_output = _torch_reference(
+    reference_output, npc_hidden = _torch_reference(
         torch,
         functional,
         contract,
@@ -356,8 +368,24 @@ def test_cuda_forward_and_all_weight_gradients(cuda_library, contract):
         generator=generator,
         device="cuda",
     )
-    reference_output.backward(output_gradient)
-    cuda_library.osrs_entity_test_backward(_pointer(output_gradient), BATCH, HIDDEN)
+    if contract.kind == 1:
+        pointer_key_gradient = torch.randn(
+            (BATCH, contract.npc_count, BOTTLENECK),
+            generator=generator,
+            device="cuda",
+        )
+        torch.autograd.backward(
+            (reference_output, npc_hidden),
+            (output_gradient, pointer_key_gradient),
+        )
+        cuda_library.osrs_entity_test_set_pointer_keygrad(
+            _pointer(pointer_key_gradient)
+        )
+    else:
+        reference_output.backward(output_gradient)
+    cuda_library.osrs_entity_test_backward(
+        _pointer(output_gradient), BATCH, HIDDEN
+    )
 
     for index, weight in enumerate(weights):
         cuda_gradient = torch.empty_like(weight)
