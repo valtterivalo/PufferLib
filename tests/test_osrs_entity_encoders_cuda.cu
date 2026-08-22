@@ -2,8 +2,6 @@
 #define ENV_HEADER "../ocean/minimal/minimal.h"
 #define PUFFER_ENV_NAME "minimal"
 #define NUM_GEAR_SLOTS 11
-#define PUFFER_OSRS_COLOSSEUM
-#define PUFFER_OSRS_INFERNO
 #include "../src/pufferl.cu"
 
 extern "C" {
@@ -11,7 +9,6 @@ extern "C" {
 static Encoder test_encoder;
 static OsrsEntityEncoderWeights* test_weights;
 static OsrsEntityEncoderActivations* test_activations;
-static Prec test_pointer_keygrad;
 static Allocator test_params;
 static Allocator test_acts;
 static Allocator test_grads;
@@ -31,7 +28,6 @@ static void test_reset() {
     free(test_activations);
     test_weights = nullptr;
     test_activations = nullptr;
-    test_pointer_keygrad = {};
 }
 
 void osrs_entity_test_init(int kind, int batch, int obs_size, int hidden) {
@@ -83,14 +79,6 @@ void osrs_entity_test_set_weights(
         cudaMemcpy(dst[i]->data, src[i], numel(dst[i]->shape) * sizeof(float),
             cudaMemcpyDeviceToDevice);
     }
-}
-
-void osrs_entity_test_set_pointer_keygrad(void* grad) {
-    OsrsEntityBranchActivations* branches =
-        osrs_entity_branch_activations(test_activations);
-    test_pointer_keygrad = branches[OSRS_ENTITY_TARGET_BRANCH].h1;
-    test_pointer_keygrad.data = (precision_t*)grad;
-    osrs_entity_decoder_keygrad = &test_pointer_keygrad;
 }
 
 void osrs_entity_test_forward(void* output, void* observations, int batch, int obs_size) {

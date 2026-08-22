@@ -30,7 +30,6 @@ struct OsrsEntityBranchDescriptor {
 struct OsrsEntityEncoderDescriptor {
     const OsrsEntityBranchDescriptor* branches;
     int num_branches;
-    int pointer_branch;
 };
 
 struct OsrsEntityBranchWeights {
@@ -69,9 +68,6 @@ struct OsrsEntityEncoderActivations {
     Prec inv_l1_wgrad;
     Prec inv_l2_wgrad;
 };
-
-static OsrsEntityEncoderActivations* osrs_entity_encoder_last = nullptr;
-static Prec* osrs_entity_decoder_keygrad = nullptr;
 
 static OsrsEntityBranchWeights* osrs_entity_branch_weights(
     OsrsEntityEncoderWeights* weights
@@ -266,7 +262,6 @@ __global__ void osrs_entity_fused_grad_z1(
     const precision_t* __restrict__ grad,
     const precision_t* __restrict__ l2_w,
     const precision_t* __restrict__ z1,
-    const precision_t* __restrict__ additional_grad_h1,
     const int* __restrict__ argmax,
     int B,
     int H,
@@ -312,11 +307,8 @@ __global__ void osrs_entity_fused_grad_z1(
             idx += blockDim.x) {
         int64_t out_idx =
             (int64_t)b * num_records * OSRS_ENTITY_BOTTLENECK + idx;
-        float additional = additional_grad_h1 == nullptr
-            ? 0.0f : to_float(additional_grad_h1[out_idx]);
         grad_z1[out_idx] = from_float(
-            (accum[idx] + additional) *
-            osrs_entity_gelu_grad(to_float(z1[out_idx])));
+            accum[idx] * osrs_entity_gelu_grad(to_float(z1[out_idx])));
     }
 }
 
@@ -354,7 +346,6 @@ static void osrs_entity_launch_fused_bwd(
     const precision_t* l2_w,
     const precision_t* z1,
     const precision_t* h1,
-    const precision_t* additional_grad_h1,
     const int* argmax,
     int B,
     int H,
@@ -367,8 +358,7 @@ static void osrs_entity_launch_fused_bwd(
         ((size_t)num_records * OSRS_ENTITY_BOTTLENECK + 2 * BLOCK_SIZE) *
         sizeof(float);
     osrs_entity_fused_grad_z1<<<B, BLOCK_SIZE, shared_bytes, stream>>>(
-        grad_z1, grad, l2_w, z1, additional_grad_h1,
-        argmax, B, H, num_records);
+        grad_z1, grad, l2_w, z1, argmax, B, H, num_records);
 }
 
 static int osrs_entity_branch_features(const OsrsEntityBranchDescriptor* branch) {
@@ -456,7 +446,7 @@ static void osrs_entity_encoder_backward(
     int inventory_batch = B * OSRS_ENTITY_INV_NUM_RECORDS;
     osrs_entity_launch_fused_bwd(
         a->inv_l2_wgrad.data, a->inv_grad_z1.data, grad.data,
-        ew->inv_l2_w.data, a->inv_z1.data, a->inv_h1.data, nullptr,
+        ew->inv_l2_w.data, a->inv_z1.data, a->inv_h1.data,
         a->inv_pool_argmax.data, B, H, OSRS_ENTITY_INV_NUM_RECORDS, stream);
     Prec inventory_2d = {
         .data = a->inv_flat.data,
@@ -475,14 +465,10 @@ static void osrs_entity_encoder_backward(
             &osrs_entity_branch_activations(a)[branch_idx];
         int features = osrs_entity_branch_features(descriptor);
         int branch_batch = B * descriptor->num_records;
-        const precision_t* additional_grad_h1 =
-            branch_idx == ew->descriptor->pointer_branch &&
-            osrs_entity_decoder_keygrad != nullptr
-                ? osrs_entity_decoder_keygrad->data : nullptr;
         osrs_entity_launch_fused_bwd(
             ba->l2_wgrad.data, ba->grad_z1.data, grad.data,
-            bw->l2_w.data, ba->z1.data, ba->h1.data, additional_grad_h1,
-            ba->pool_argmax.data, B, H, descriptor->num_records, stream);
+            bw->l2_w.data, ba->z1.data, ba->h1.data, ba->pool_argmax.data,
+            B, H, descriptor->num_records, stream);
         Prec branch_2d = {
             .data = ba->flat.data,
             .shape = {branch_batch, features},
@@ -614,8 +600,6 @@ static void osrs_entity_encoder_reg_train(
             &osrs_entity_branch_activations(a)[branch_idx],
             acts, grads, B, H);
     }
-    osrs_entity_encoder_last = a;
-    osrs_entity_decoder_keygrad = nullptr;
 }
 
 static void osrs_entity_register_branch_rollout(
@@ -656,22 +640,11 @@ static void osrs_entity_encoder_reg_rollout(
     for (int branch_idx = 0;
             branch_idx < ew->descriptor->num_branches;
             branch_idx++) {
-        OsrsEntityBranchActivations* branch =
-            &osrs_entity_branch_activations(a)[branch_idx];
         osrs_entity_register_branch_rollout(
             &ew->descriptor->branches[branch_idx],
-            branch, allocator, B);
-        if (branch_idx == ew->descriptor->pointer_branch) {
-            branch->h1 = {
-                .shape = {
-                    B * ew->descriptor->branches[branch_idx].num_records,
-                    OSRS_ENTITY_BOTTLENECK,
-                },
-            };
-            alloc_register(allocator, &branch->h1);
-        }
+            &osrs_entity_branch_activations(a)[branch_idx],
+            allocator, B);
     }
-    osrs_entity_encoder_last = a;
 }
 
 template <const OsrsEntityEncoderDescriptor* descriptor>
@@ -719,7 +692,6 @@ static constexpr OsrsEntityBranchDescriptor OSRS_EQUIPMENT_ENTITY_BRANCH[] = {
 static constexpr OsrsEntityEncoderDescriptor OSRS_EQUIPMENT_ENTITY_DESCRIPTOR = {
     .branches = OSRS_EQUIPMENT_ENTITY_BRANCH,
     .num_branches = 1,
-    .pointer_branch = -1,
 };
 #ifdef ZUL_NUM_OBS
 static_assert(ZUL_NUM_OBS == 205);

@@ -39,7 +39,6 @@ __device__ static const float OSRS_ITEM_OBS_TABLE_DEV
 #include "../ocean/osrs/osrs_item_obs_table.inc"
 };
 #include "../ocean/osrs/osrs_entity_encoder.cu"
-#include "../ocean/osrs/osrs_entity_decoder.cu"
 #endif
 #ifdef PUFFER_OSRS_COLOSSEUM
 #include "../ocean/osrs_colosseum/osrs_colosseum.cu"
@@ -115,17 +114,6 @@ static void create_custom_decoder(const char* env_name, Decoder* dec) {
 #ifdef PUFFER_NETHACK
     if (strcmp(env_name, "nethack") == 0) {
         create_nethack_decoder(dec);
-        return;
-    }
-#endif
-#ifdef PUFFER_OSRS_INFERNO
-    if (strcmp(env_name, "osrs_inferno") == 0) {
-        if constexpr (
-            OSRS_INFERNO_COMPILED_DECODER_MODE !=
-            OSRS_INFERNO_DECODER_FLAT
-        ) {
-            create_osrs_entity_decoder<OSRS_INFERNO_COMPILED_DECODER_MODE>(dec);
-        }
         return;
     }
 #endif
