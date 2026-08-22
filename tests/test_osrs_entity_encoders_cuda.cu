@@ -2,6 +2,8 @@
 #define ENV_HEADER "../ocean/minimal/minimal.h"
 #define PUFFER_ENV_NAME "minimal"
 #define NUM_GEAR_SLOTS 11
+#define PUFFER_OSRS_COLOSSEUM
+#define PUFFER_OSRS_INFERNO
 #include "../src/pufferl.cu"
 
 extern "C" {
