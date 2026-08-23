@@ -71,7 +71,10 @@ def test_osrs_web_build_links_vsync_library(tmp_path: Path) -> None:
     (scripts / "osrs_asset_manifest.py").write_text("")
     write_executable(scripts / "setup-data.sh", "#!/bin/bash\n")
     (tmp_path / "ocean/osrs/asset_manifest.json").write_text("{}")
-    (tmp_path / "raylib-5.5_webassembly").mkdir()
+    raylib = tmp_path / "raylib-5.5/src"
+    raylib.mkdir(parents=True)
+    (raylib / "libraylib.a").write_bytes(b"")
+    (raylib / ".puffer-web-es3").write_bytes(b"")
 
     tools = tmp_path / "tools"
     tools.mkdir()

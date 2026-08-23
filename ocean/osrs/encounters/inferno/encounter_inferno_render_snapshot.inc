@@ -378,6 +378,12 @@ static void inf_render_post_tick_ctx(
         int impact_gfx_id = npc_visual->projectile.impact_spotanim_id > 0
             ? npc_visual->projectile.impact_spotanim_id
             : 0;
+        int travel_gfx_id = 0;
+        if (npc->type == INF_NPC_BLOB &&
+                npc_visual->projectile.travel_spotanim_id > 0) {
+            proj_model_id = 0;
+            travel_gfx_id = npc_visual->projectile.travel_spotanim_id;
+        }
 
         switch (npc->type) {
             case INF_NPC_JAD:

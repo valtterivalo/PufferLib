@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from ocean.osrs.scripts import osrs_asset_manifest
 
 
