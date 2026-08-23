@@ -56,3 +56,44 @@ def test_osrs_cpu_build_selects_visual_entrypoint(tmp_path: Path) -> None:
     assert "ocean/osrs_inferno/osrs_inferno.c" in arguments
     assert "src/puffercpu.c" not in arguments
     assert arguments[arguments.index("-o") + 1] == "osrs_inferno"
+
+
+
+def test_osrs_web_build_links_vsync_library(tmp_path: Path) -> None:
+    shutil.copy(REPOSITORY_ROOT / "build.sh", tmp_path / "build.sh")
+
+    source = tmp_path / "ocean/osrs_inferno/osrs_inferno.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("")
+
+    scripts = tmp_path / "ocean/osrs/scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "osrs_asset_manifest.py").write_text("")
+    write_executable(scripts / "setup-data.sh", "#!/bin/bash\n")
+    (tmp_path / "ocean/osrs/asset_manifest.json").write_text("{}")
+    (tmp_path / "raylib-5.5_webassembly").mkdir()
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    write_executable(tools / "brew", "#!/bin/bash\nprintf '%s\\n' \"$PWD/libomp\"\n")
+    compiler_arguments = tmp_path / "compiler-arguments"
+    write_executable(
+        tools / "emcc",
+        "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$COMPILER_ARGUMENTS\"\n",
+    )
+
+    environment = os.environ | {
+        "COMPILER_ARGUMENTS": str(compiler_arguments),
+        "PATH": f"{tools}:{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["bash", "build.sh", "osrs_inferno", "--web"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    arguments = compiler_arguments.read_text().splitlines()
+    assert arguments[arguments.index("--js-library") + 1] == "vendor/puf_web_vsync.js"
