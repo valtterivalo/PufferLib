@@ -144,6 +144,7 @@
       statusElement.hidden = false;
       statusElement.textContent = "Error: " + message;
       console.error(reason);
+      window.parent.postMessage({ type: "osrs-simulator-error", message: message }, window.location.origin);
     }
 
     if (!modelBasename) {
@@ -210,6 +211,7 @@
       onRuntimeInitialized: function () {
         statusElement.hidden = true;
         canvasElement.focus();
+        window.parent.postMessage({ type: "osrs-simulator-ready" }, window.location.origin);
       },
       preRun: [function () {
         var dependencyName = "osrs-policy";
