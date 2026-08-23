@@ -272,6 +272,30 @@ static int inf_require_npc_combat_visual_impact_spotanim_id(
     }
     return row->projectile.impact_spotanim_id;
 }
+
+enum {
+    INF_BLOB_RANGED_TRAVEL_GFX_ID = 1378,
+    INF_BLOB_SPLIT_RANGED_TRAVEL_GFX_ID = 1379,
+    INF_BLOB_MAGIC_TRAVEL_GFX_ID = 1380,
+    INF_BLOB_SPLIT_MAGIC_TRAVEL_GFX_ID = 1381,
+};
+
+static int inf_blob_projectile_travel_gfx_id(
+    InfNPCType type,
+    AttackStyle style
+) {
+    if (type == INF_NPC_BLOB) {
+        if (style == ATTACK_STYLE_RANGED)
+            return INF_BLOB_RANGED_TRAVEL_GFX_ID;
+        if (style == ATTACK_STYLE_MAGIC)
+            return INF_BLOB_MAGIC_TRAVEL_GFX_ID;
+    }
+    if (type == INF_NPC_BLOB_RANGE && style == ATTACK_STYLE_RANGED)
+        return INF_BLOB_SPLIT_RANGED_TRAVEL_GFX_ID;
+    if (type == INF_NPC_BLOB_MAGE && style == ATTACK_STYLE_MAGIC)
+        return INF_BLOB_SPLIT_MAGIC_TRAVEL_GFX_ID;
+    return 0;
+}
 static int inf_queue_inventory_click_action(
     const InfernoState* s,
     int* actions,
@@ -378,11 +402,11 @@ static void inf_render_post_tick_ctx(
         int impact_gfx_id = npc_visual->projectile.impact_spotanim_id > 0
             ? npc_visual->projectile.impact_spotanim_id
             : 0;
-        int travel_gfx_id = 0;
-        if (npc->type == INF_NPC_BLOB &&
-                npc_visual->projectile.travel_spotanim_id > 0) {
+        int travel_gfx_id =
+            inf_blob_projectile_travel_gfx_id(npc->type, actual_style);
+        if (travel_gfx_id > 0) {
             proj_model_id = 0;
-            travel_gfx_id = npc_visual->projectile.travel_spotanim_id;
+            proj_anim_id = OSRS_COMBAT_PROJECTILE_MISSING;
         }
 
         switch (npc->type) {
