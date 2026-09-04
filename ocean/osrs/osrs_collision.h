@@ -770,6 +770,19 @@ static inline void encounter_arena_topology_set_los(
         UINT64_C(1) << (bit_index & 63);
 }
 
+static inline void encounter_arena_topology_clear_los(
+    EncounterArenaTopology* topology,
+    int source_index,
+    int target_index
+) {
+    size_t bit_index =
+        (size_t)source_index * (size_t)topology->tile_count +
+        (size_t)target_index;
+    topology->static_los_bits[bit_index >> 6] &=
+        ~(UINT64_C(1) << (bit_index & 63));
+}
+
+
 static inline uint32_t encounter_arena_topology_los_grid_at(
     const uint32_t* flags,
     int origin_x,
@@ -1224,6 +1237,14 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
             int occ_x1 = -1;
             int occ_y1 = -1;
             if (occupancy_only) {
+                size_t los_bit_count =
+                    (size_t)topology->tile_count *
+                    (size_t)topology->tile_count;
+                size_t los_words = (los_bit_count + 63) / 64;
+                memset(
+                    topology->static_los_bits,
+                    0xff,
+                    los_words * sizeof(topology->static_los_bits[0]));
                 for (int i = 0; i < topology->tile_count; i++) {
                     if (!los_flag_grid[i]) continue;
                     int lx = i / topology->height;
@@ -1232,8 +1253,13 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                     if (ly < occ_y0) occ_y0 = ly;
                     if (lx > occ_x1) occ_x1 = lx;
                     if (ly > occ_y1) occ_y1 = ly;
+                    for (int j = 0; j < topology->tile_count; j++) {
+                        encounter_arena_topology_clear_los(topology, i, j);
+                        encounter_arena_topology_clear_los(topology, j, i);
+                    }
                 }
             }
+
 
             for (int source = 0; source < topology->tile_count; source++) {
                 if (los_flag_grid[source]) continue;
@@ -1241,8 +1267,9 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                 int source_ly = source % topology->height;
                 int source_x = topology->origin_x + source_lx;
                 int source_y = topology->origin_y + source_ly;
-                encounter_arena_topology_set_los(
-                    topology, source, source);
+                if (!occupancy_only)
+                    encounter_arena_topology_set_los(
+                        topology, source, source);
 
                 for (int target = source + 1;
                         target < topology->tile_count;
@@ -1252,71 +1279,77 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                     int target_ly = target % topology->height;
                     int target_x = topology->origin_x + target_lx;
                     int target_y = topology->origin_y + target_ly;
-                    int forward;
-                    int reverse;
                     if (!encounter_arena_topology_local_aabb_blocked(
                             blocked_prefix,
                             source_lx, source_ly,
                             target_lx, target_ly)) {
-                        forward = 1;
-                        reverse = 1;
-                    } else if (occupancy_only) {
-                        forward = los_tile_ray_clear_grid_clipped(
-                            los_flag_grid,
-                            topology->origin_x,
-                            topology->origin_y,
-                            topology->width,
-                            topology->height,
-                            source_x,
-                            source_y,
-                            target_x,
-                            target_y,
-                            occ_x0,
-                            occ_y0,
-                            occ_x1,
-                            occ_y1);
-                        reverse = los_tile_ray_clear_grid_clipped(
-                            los_flag_grid,
-                            topology->origin_x,
-                            topology->origin_y,
-                            topology->width,
-                            topology->height,
-                            target_x,
-                            target_y,
-                            source_x,
-                            source_y,
-                            occ_x0,
-                            occ_y0,
-                            occ_x1,
-                            occ_y1);
-                    } else {
-                        forward = los_has_line_of_sight_grid(
-                            los_flag_grid,
-                            topology->origin_x,
-                            topology->origin_y,
-                            topology->width,
-                            topology->height,
-                            source_x,
-                            source_y,
-                            target_x,
-                            target_y);
-                        reverse = los_has_line_of_sight_grid(
-                            los_flag_grid,
-                            topology->origin_x,
-                            topology->origin_y,
-                            topology->width,
-                            topology->height,
-                            target_x,
-                            target_y,
-                            source_x,
-                            source_y);
+                        if (!occupancy_only) {
+                            encounter_arena_topology_set_los(
+                                topology, source, target);
+                            encounter_arena_topology_set_los(
+                                topology, target, source);
+                        }
+                        continue;
                     }
-                    if (forward)
-                        encounter_arena_topology_set_los(
-                            topology, source, target);
-                    if (reverse)
-                        encounter_arena_topology_set_los(
-                            topology, target, source);
+                    if (occupancy_only) {
+                        if (!los_tile_ray_clear_grid_clipped(
+                                los_flag_grid,
+                                topology->origin_x,
+                                topology->origin_y,
+                                topology->width,
+                                topology->height,
+                                source_x,
+                                source_y,
+                                target_x,
+                                target_y,
+                                occ_x0,
+                                occ_y0,
+                                occ_x1,
+                                occ_y1))
+                            encounter_arena_topology_clear_los(
+                                topology, source, target);
+                        if (!los_tile_ray_clear_grid_clipped(
+                                los_flag_grid,
+                                topology->origin_x,
+                                topology->origin_y,
+                                topology->width,
+                                topology->height,
+                                target_x,
+                                target_y,
+                                source_x,
+                                source_y,
+                                occ_x0,
+                                occ_y0,
+                                occ_x1,
+                                occ_y1))
+                            encounter_arena_topology_clear_los(
+                                topology, target, source);
+                    } else {
+                        if (los_has_line_of_sight_grid(
+                                los_flag_grid,
+                                topology->origin_x,
+                                topology->origin_y,
+                                topology->width,
+                                topology->height,
+                                source_x,
+                                source_y,
+                                target_x,
+                                target_y))
+                            encounter_arena_topology_set_los(
+                                topology, source, target);
+                        if (los_has_line_of_sight_grid(
+                                los_flag_grid,
+                                topology->origin_x,
+                                topology->origin_y,
+                                topology->width,
+                                topology->height,
+                                target_x,
+                                target_y,
+                                source_x,
+                                source_y))
+                            encounter_arena_topology_set_los(
+                                topology, target, source);
+                    }
                 }
             }
         }
