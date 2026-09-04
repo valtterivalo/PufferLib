@@ -993,6 +993,20 @@ static void inf_write_baked_route_topologies(const InfernoContext* ctx) {
     (void)ctx;
 #endif
 }
+static void inf_and_topology_los(
+    EncounterArenaTopology* dst,
+    const EncounterArenaTopology* a,
+    const EncounterArenaTopology* b
+) {
+    size_t los_bits =
+        (size_t)dst->tile_count * (size_t)dst->tile_count;
+    size_t los_words = (los_bits + 63) / 64;
+    for (size_t w = 0; w < los_words; w++)
+        dst->static_los_bits[w] =
+            a->static_los_bits[w] & b->static_los_bits[w];
+    dst->static_los_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
+}
+
 
 static void inf_finalize_route_topology(InfernoContext* ctx) {
     if (!ctx || ctx->route_topology) {
@@ -1010,6 +1024,8 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
             ctx->world_offset_y,
             (uint8_t)pillar_mask,
         };
+        int compose_los = pillar_mask != 0 &&
+            (pillar_mask & (pillar_mask - 1)) != 0;
         EncounterArenaTopologyBuildSpec spec = {
             .origin_x = INF_TOPOLOGY_MIN_X,
             .origin_y = INF_TOPOLOGY_MIN_Y,
@@ -1023,14 +1039,40 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
             .tile_flags_ctx = &build,
             .los_tile_flags = inf_route_topology_los_flags,
             .los_tile_flags_ctx = &build,
+            .los_build_mode = compose_los
+                ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN
+                : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
         };
         EncounterArenaTopology** topology =
             &inf_route_topology_owner.topologies[pillar_mask];
         if (!*topology) {
             *topology = encounter_arena_topology_build(&spec);
+            if (compose_los) {
+                EncounterArenaTopology* acc = NULL;
+                for (int bit = 0; bit < INF_NUM_PILLARS; bit++) {
+                    if ((pillar_mask & (1 << bit)) == 0) continue;
+                    EncounterArenaTopology* part =
+                        inf_route_topology_owner.topologies[1 << bit];
+                    if (!part || !part->finalized) {
+                        fprintf(stderr,
+                            "inferno composed LoS missing single-pillar map %d\n",
+                            1 << bit);
+                        abort();
+                    }
+                    if (!acc) {
+                        acc = part;
+                        continue;
+                    }
+                    inf_and_topology_los(*topology, acc, part);
+                    acc = *topology;
+                }
+            }
             encounter_arena_topology_finalize(*topology);
             built = 1;
         } else {
+            spec.los_build_mode = compose_los
+                ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN
+                : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED;
             encounter_arena_topology_require_spec(
                 *topology, &spec, "inferno");
         }
@@ -1038,6 +1080,7 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
     ctx->route_topology = inf_route_topology_owner.topologies[0];
     if (built) inf_write_baked_route_topologies(ctx);
 }
+
 
 static const EncounterArenaTopology* inf_route_topology_for_state(
     const InfernoContext* ctx,
