@@ -925,6 +925,47 @@ static inline int los_occ_row_blocked(
     return (int)((rows[y] >> x) & 1u);
 }
 
+static inline int los_segment_hits_closed_aabb(
+    int x0,
+    int y0,
+    int x1,
+    int y1,
+    int xmin,
+    int ymin,
+    int xmax,
+    int ymax
+) {
+    double dx = (double)(x1 - x0);
+    double dy = (double)(y1 - y0);
+    double t0 = 0.0;
+    double t1 = 1.0;
+    double p[4];
+    double q[4];
+    p[0] = -dx;
+    p[1] = dx;
+    p[2] = -dy;
+    p[3] = dy;
+    q[0] = (double)(x0 - xmin);
+    q[1] = (double)(xmax - x0);
+    q[2] = (double)(y0 - ymin);
+    q[3] = (double)(ymax - y0);
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.0) {
+            if (q[i] < 0.0) return 0;
+        } else {
+            double t = q[i] / p[i];
+            if (p[i] < 0.0) {
+                if (t > t0) t0 = t;
+            } else {
+                if (t < t1) t1 = t;
+            }
+            if (t0 > t1) return 0;
+        }
+    }
+    return 1;
+}
+
+
 static inline int los_tile_ray_clear_occ_rows(
     const uint64_t* rows,
     int width,
@@ -949,6 +990,9 @@ static inline int los_tile_ray_clear_occ_rows(
     if (cy0 > 0) cy0--;
     if (cx1 < width - 1) cx1++;
     if (cy1 < height - 1) cy1++;
+    if (!los_segment_hits_closed_aabb(
+            x0, y0, x1, y1, cx0, cy0, cx1, cy1))
+        return 1;
 
     if (adx > ady) {
         int x = x0;
