@@ -1007,6 +1007,36 @@ static void inf_and_topology_los(
     dst->static_los_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
 }
 
+static void inf_compose_derived_topology(
+    EncounterArenaTopology* dst,
+    const EncounterArenaTopology* a,
+    const EncounterArenaTopology* b
+) {
+    int n = dst->tile_count;
+    int max_size = dst->max_footprint_size;
+    for (int i = 0; i < n; i++) {
+        dst->static_collision_flags[i] =
+            a->static_collision_flags[i] | b->static_collision_flags[i];
+        dst->static_blocked[i] =
+            (uint8_t)(a->static_blocked[i] | b->static_blocked[i]);
+        dst->nearby_unit_footprint_masks[i] =
+            a->nearby_unit_footprint_masks[i] &
+            b->nearby_unit_footprint_masks[i];
+    }
+    for (int size = 0; size < max_size; size++) {
+        for (int i = 0; i < n; i++) {
+            dst->footprint_blocked[size][i] =
+                (uint8_t)(a->footprint_blocked[size][i] |
+                    b->footprint_blocked[size][i]);
+            dst->legal_step_masks[size][i] =
+                (uint8_t)(a->legal_step_masks[size][i] &
+                    b->legal_step_masks[size][i]);
+        }
+    }
+    inf_and_topology_los(dst, a, b);
+}
+
+
 
 static void inf_finalize_route_topology(InfernoContext* ctx) {
     if (!ctx || ctx->route_topology) {
@@ -1046,8 +1076,13 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
         EncounterArenaTopology** topology =
             &inf_route_topology_owner.topologies[pillar_mask];
         if (!*topology) {
-            *topology = encounter_arena_topology_build(&spec);
             if (compose_los) {
+                *topology = (EncounterArenaTopology*)calloc(
+                    1, sizeof(EncounterArenaTopology));
+                if (!*topology) {
+                    fprintf(stderr, "failed to allocate Inferno compose topology\n");
+                    abort();
+                }
                 EncounterArenaTopology* acc = NULL;
                 for (int bit = 0; bit < INF_NUM_PILLARS; bit++) {
                     if ((pillar_mask & (1 << bit)) == 0) continue;
@@ -1060,12 +1095,19 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
                         abort();
                     }
                     if (!acc) {
-                        acc = part;
+                        memcpy(*topology, part, sizeof(**topology));
+                        (*topology)->revision = spec.revision;
+                        (*topology)->los_build_mode =
+                            ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN;
+                        (*topology)->finalized = 0;
+                        acc = *topology;
                         continue;
                     }
-                    inf_and_topology_los(*topology, acc, part);
+                    inf_compose_derived_topology(*topology, acc, part);
                     acc = *topology;
                 }
+            } else {
+                *topology = encounter_arena_topology_build(&spec);
             }
             encounter_arena_topology_finalize(*topology);
             built = 1;
