@@ -91,6 +91,19 @@ static void inf_npc_move_ctx(
 
     const InfNPCStats* stats = &INF_NPC_STATS[npc->type];
     if (!stats->can_move) return;
+    if (npc->type != INF_NPC_NIBBLER &&
+            !encounter_entity_footprints_overlap(
+                npc->x, npc->y, npc->size, s->player.x, s->player.y, 1)) {
+        InfTargetArea target = inf_npc_current_target_area(s, npc);
+        if (target.is_player && npc->aggro_target >= 0)
+            npc->aggro_target = -1;
+        npc->target_x = target.x;
+        npc->target_y = target.y;
+        if (inf_npc_has_los_direct_ctx(s, ctx, idx))
+            return;
+        if (npc->attack_timer > stats->attack_speed)
+            return;
+    }
     int uses_collision_flag = inf_npc_sets_collision_flag(npc->type);
     if (uses_collision_flag)
         inf_unstamp_npc_collision_footprint(
