@@ -157,6 +157,9 @@ dmypy.json
 *.gb
 
 checkpoints/
+# Root-level Inferno run dumps (weights, configs, plots)
+/inferno_*
+
 experiments/
 wandb/
 .neptune/
