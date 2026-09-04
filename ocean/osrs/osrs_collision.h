@@ -1096,6 +1096,7 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
     } else {
         uint32_t los_flag_grid[ENCOUNTER_ARENA_TOPOLOGY_MAX_TILES];
         int flagged = 0;
+        int occupancy_only = 1;
         for (int source = 0; source < topology->tile_count; source++) {
             int source_x =
                 topology->origin_x + source / topology->height;
@@ -1105,6 +1106,7 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                 &los_build, source_x, source_y);
             los_flag_grid[source] = flags;
             if (flags) flagged = 1;
+            if (flags & ~(uint32_t)LOS_FULL_MASK) occupancy_only = 0;
         }
         uint16_t blocked_prefix
             [ENCOUNTER_ARENA_TOPOLOGY_MAX_DIMENSION + 1]
@@ -1167,17 +1169,18 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
             topology->static_los_mode =
                 ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
             for (int source = 0; source < topology->tile_count; source++) {
+                if (los_flag_grid[source]) continue;
                 int source_lx = source / topology->height;
                 int source_ly = source % topology->height;
                 int source_x = topology->origin_x + source_lx;
                 int source_y = topology->origin_y + source_ly;
-                if (los_flag_grid[source] == 0)
-                    encounter_arena_topology_set_los(
-                        topology, source, source);
+                encounter_arena_topology_set_los(
+                    topology, source, source);
 
                 for (int target = source + 1;
                         target < topology->tile_count;
                         target++) {
+                    if (los_flag_grid[target]) continue;
                     int target_lx = target / topology->height;
                     int target_ly = target % topology->height;
                     int target_x = topology->origin_x + target_lx;
@@ -1190,6 +1193,27 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                             target_lx, target_ly)) {
                         forward = 1;
                         reverse = 1;
+                    } else if (occupancy_only) {
+                        forward = los_tile_ray_clear_grid(
+                            los_flag_grid,
+                            topology->origin_x,
+                            topology->origin_y,
+                            topology->width,
+                            topology->height,
+                            source_x,
+                            source_y,
+                            target_x,
+                            target_y);
+                        reverse = los_tile_ray_clear_grid(
+                            los_flag_grid,
+                            topology->origin_x,
+                            topology->origin_y,
+                            topology->width,
+                            topology->height,
+                            target_x,
+                            target_y,
+                            source_x,
+                            source_y);
                     } else {
                         forward = los_has_line_of_sight_grid(
                             los_flag_grid,
