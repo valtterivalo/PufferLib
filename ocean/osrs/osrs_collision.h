@@ -787,6 +787,19 @@ static inline uint32_t encounter_arena_topology_los_grid_at(
     return flags[(int)(local_x * height + local_y)];
 }
 
+static inline uint32_t los_grid_local(
+    const uint32_t* flags,
+    int width,
+    int height,
+    int x,
+    int y
+) {
+    if ((unsigned)x >= (unsigned)width ||
+            (unsigned)y >= (unsigned)height)
+        return LOS_FULL_MASK;
+    return flags[x * height + y];
+}
+
 static inline int los_tile_ray_clear_grid(
     const uint32_t* flags,
     int origin_x,
@@ -798,13 +811,16 @@ static inline int los_tile_ray_clear_grid(
     int x1,
     int y1
 ) {
+    x0 -= origin_x;
+    y0 -= origin_y;
+    x1 -= origin_x;
+    y1 -= origin_y;
     int dx = x1 - x0;
     int dy = y1 - y0;
     int adx = dx < 0 ? -dx : dx;
     int ady = dy < 0 ? -dy : dy;
     if (adx == 0 && ady == 0) return 1;
-    if (encounter_arena_topology_los_grid_at(
-            flags, origin_x, origin_y, width, height, x1, y1))
+    if (los_grid_local(flags, width, height, x1, y1))
         return 0;
 
     if (adx > ady) {
@@ -816,14 +832,12 @@ static inline int los_tile_ray_clear_grid(
         while (x != x1) {
             x += x_inc;
             int y = y_fp >> 16;
-            if (encounter_arena_topology_los_grid_at(
-                    flags, origin_x, origin_y, width, height, x, y))
+            if (los_grid_local(flags, width, height, x, y))
                 return 0;
             y_fp += slope;
             int new_y = y_fp >> 16;
             if (new_y != y &&
-                    encounter_arena_topology_los_grid_at(
-                        flags, origin_x, origin_y, width, height, x, new_y))
+                    los_grid_local(flags, width, height, x, new_y))
                 return 0;
         }
     } else {
@@ -835,14 +849,12 @@ static inline int los_tile_ray_clear_grid(
         while (y != y1) {
             y += y_inc;
             int x = x_fp >> 16;
-            if (encounter_arena_topology_los_grid_at(
-                    flags, origin_x, origin_y, width, height, x, y))
+            if (los_grid_local(flags, width, height, x, y))
                 return 0;
             x_fp += slope;
             int new_x = x_fp >> 16;
             if (new_x != x &&
-                    encounter_arena_topology_los_grid_at(
-                        flags, origin_x, origin_y, width, height, new_x, y))
+                    los_grid_local(flags, width, height, new_x, y))
                 return 0;
         }
     }
