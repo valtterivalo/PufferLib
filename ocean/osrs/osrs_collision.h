@@ -770,6 +770,168 @@ static inline void encounter_arena_topology_set_los(
         UINT64_C(1) << (bit_index & 63);
 }
 
+static inline uint32_t encounter_arena_topology_los_grid_at(
+    const uint32_t* flags,
+    int origin_x,
+    int origin_y,
+    int width,
+    int height,
+    int x,
+    int y
+) {
+    int64_t local_x = (int64_t)x - origin_x;
+    int64_t local_y = (int64_t)y - origin_y;
+    if (local_x < 0 || local_y < 0 ||
+            local_x >= width || local_y >= height)
+        return LOS_FULL_MASK;
+    return flags[(int)(local_x * height + local_y)];
+}
+
+static inline int los_tile_ray_clear_grid(
+    const uint32_t* flags,
+    int origin_x,
+    int origin_y,
+    int width,
+    int height,
+    int x0,
+    int y0,
+    int x1,
+    int y1
+) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+    if (adx == 0 && ady == 0) return 1;
+    if (encounter_arena_topology_los_grid_at(
+            flags, origin_x, origin_y, width, height, x1, y1))
+        return 0;
+
+    if (adx > ady) {
+        int x = x0;
+        int y_fp = y0 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dy * LOS_FP_SCALE) / adx;
+        int x_inc = dx > 0 ? 1 : -1;
+        if (dy < 0) y_fp--;
+        while (x != x1) {
+            x += x_inc;
+            int y = y_fp >> 16;
+            if (encounter_arena_topology_los_grid_at(
+                    flags, origin_x, origin_y, width, height, x, y))
+                return 0;
+            y_fp += slope;
+            int new_y = y_fp >> 16;
+            if (new_y != y &&
+                    encounter_arena_topology_los_grid_at(
+                        flags, origin_x, origin_y, width, height, x, new_y))
+                return 0;
+        }
+    } else {
+        int y = y0;
+        int x_fp = x0 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dx * LOS_FP_SCALE) / ady;
+        int y_inc = dy > 0 ? 1 : -1;
+        if (dx < 0) x_fp--;
+        while (y != y1) {
+            y += y_inc;
+            int x = x_fp >> 16;
+            if (encounter_arena_topology_los_grid_at(
+                    flags, origin_x, origin_y, width, height, x, y))
+                return 0;
+            x_fp += slope;
+            int new_x = x_fp >> 16;
+            if (new_x != x &&
+                    encounter_arena_topology_los_grid_at(
+                        flags, origin_x, origin_y, width, height, new_x, y))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+static inline int los_has_line_of_sight_grid(
+    const uint32_t* flags,
+    int origin_x,
+    int origin_y,
+    int width,
+    int height,
+    int x1,
+    int y1,
+    int x2,
+    int y2
+) {
+    int dx = x2 - x1;
+    int dy = y2 - y1;
+
+    if (encounter_arena_topology_los_grid_at(
+            flags, origin_x, origin_y, width, height, x1, y1))
+        return 0;
+    if (encounter_arena_topology_los_grid_at(
+            flags, origin_x, origin_y, width, height, x2, y2))
+        return 0;
+    if (los_aabb_overlap(x1, y1, 1, x2, y2, 1)) return 0;
+
+    int adx = dx < 0 ? -dx : dx;
+    int ady = dy < 0 ? -dy : dy;
+
+    if (adx > ady) {
+        int x_tile = x1;
+        int y_fp = y1 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dy * LOS_FP_SCALE) / adx;
+        int x_inc = (dx > 0) ? 1 : -1;
+        uint32_t x_mask = (dx > 0) ? (LOS_WEST_MASK | LOS_FULL_MASK)
+                                    : (LOS_EAST_MASK | LOS_FULL_MASK);
+        uint32_t y_mask = (dy < 0) ? (LOS_NORTH_MASK | LOS_FULL_MASK)
+                                    : (LOS_SOUTH_MASK | LOS_FULL_MASK);
+        if (dy < 0) y_fp -= 1;
+
+        while (x_tile != x2) {
+            x_tile += x_inc;
+            int y_tile = y_fp >> 16;
+            if (encounter_arena_topology_los_grid_at(
+                    flags, origin_x, origin_y, width, height,
+                    x_tile, y_tile) & x_mask)
+                return 0;
+            y_fp += slope;
+            int new_y = y_fp >> 16;
+            if (new_y != y_tile &&
+                    (encounter_arena_topology_los_grid_at(
+                        flags, origin_x, origin_y, width, height,
+                        x_tile, new_y) & y_mask))
+                return 0;
+        }
+    } else if (ady > 0) {
+        int y_tile = y1;
+        int x_fp = x1 * LOS_FP_SCALE + LOS_FP_HALF;
+        int slope = (dx * LOS_FP_SCALE) / ady;
+        int y_inc = (dy > 0) ? 1 : -1;
+        uint32_t y_mask = (dy > 0) ? (LOS_SOUTH_MASK | LOS_FULL_MASK)
+                                    : (LOS_NORTH_MASK | LOS_FULL_MASK);
+        uint32_t x_mask = (dx < 0) ? (LOS_EAST_MASK | LOS_FULL_MASK)
+                                    : (LOS_WEST_MASK | LOS_FULL_MASK);
+        if (dx < 0) x_fp -= 1;
+
+        while (y_tile != y2) {
+            y_tile += y_inc;
+            int x_tile = x_fp >> 16;
+            if (encounter_arena_topology_los_grid_at(
+                    flags, origin_x, origin_y, width, height,
+                    x_tile, y_tile) & y_mask)
+                return 0;
+            x_fp += slope;
+            int new_x = x_fp >> 16;
+            if (new_x != x_tile &&
+                    (encounter_arena_topology_los_grid_at(
+                        flags, origin_x, origin_y, width, height,
+                        new_x, y_tile) & x_mask))
+                return 0;
+        }
+    }
+
+    return 1;
+}
+
+
 static inline EncounterArenaTopology* encounter_arena_topology_build(
     const EncounterArenaTopologyBuildSpec* spec
 ) {
@@ -911,56 +1073,61 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
             ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN) {
         topology->static_los_mode =
             ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN;
-    } else if (topology->los_build_mode ==
-            ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED) {
-        topology->static_los_mode =
-            ENCOUNTER_ARENA_TOPOLOGY_LOS_TILE_BLOCKED;
-        for (int source = 0; source < topology->tile_count; source++) {
-            int source_x =
-                topology->origin_x + source / topology->height;
-            int source_y =
-                topology->origin_y + source % topology->height;
-            for (int target = 0;
-                    target < topology->tile_count;
-                    target++) {
-                int target_x =
-                    topology->origin_x + target / topology->height;
-                int target_y =
-                    topology->origin_y + target % topology->height;
-                if (los_tile_ray_clear(
-                        encounter_arena_topology_los_tile_blocked,
-                        &los_build,
-                        source_x,
-                        source_y,
-                        target_x,
-                        target_y))
-                    encounter_arena_topology_set_los(
-                        topology, source, target);
-            }
-        }
     } else {
-        topology->static_los_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN;
+        uint32_t los_flag_grid[ENCOUNTER_ARENA_TOPOLOGY_MAX_TILES];
+        int flagged = 0;
         for (int source = 0; source < topology->tile_count; source++) {
             int source_x =
                 topology->origin_x + source / topology->height;
             int source_y =
                 topology->origin_y + source % topology->height;
-            if (encounter_arena_topology_los_flags(
-                    &los_build, source_x, source_y) != 0) {
-                topology->static_los_mode =
-                    ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
-                break;
-            }
+            uint32_t flags = encounter_arena_topology_los_flags(
+                &los_build, source_x, source_y);
+            los_flag_grid[source] = flags;
+            if (flags) flagged = 1;
         }
-        if (topology->static_los_mode ==
-                ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED) {
+        if (topology->los_build_mode ==
+                ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED) {
+            topology->static_los_mode =
+                ENCOUNTER_ARENA_TOPOLOGY_LOS_TILE_BLOCKED;
             for (int source = 0; source < topology->tile_count; source++) {
                 int source_x =
                     topology->origin_x + source / topology->height;
                 int source_y =
                     topology->origin_y + source % topology->height;
-                if (encounter_arena_topology_los_flags(
-                        &los_build, source_x, source_y) == 0)
+                for (int target = 0;
+                        target < topology->tile_count;
+                        target++) {
+                    int target_x =
+                        topology->origin_x + target / topology->height;
+                    int target_y =
+                        topology->origin_y + target % topology->height;
+                    if (los_tile_ray_clear_grid(
+                            los_flag_grid,
+                            topology->origin_x,
+                            topology->origin_y,
+                            topology->width,
+                            topology->height,
+                            source_x,
+                            source_y,
+                            target_x,
+                            target_y))
+                        encounter_arena_topology_set_los(
+                            topology, source, target);
+                }
+            }
+        } else if (!flagged) {
+            topology->static_los_mode =
+                ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN;
+        } else {
+            topology->static_los_mode =
+                ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
+            for (int source = 0; source < topology->tile_count; source++) {
+                int source_x =
+                    topology->origin_x + source / topology->height;
+                int source_y =
+                    topology->origin_y + source % topology->height;
+                if (los_flag_grid[source] == 0)
                     encounter_arena_topology_set_los(
                         topology, source, source);
 
@@ -971,24 +1138,26 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                         topology->origin_x + target / topology->height;
                     int target_y =
                         topology->origin_y + target % topology->height;
-                    int forward = los_has_line_of_sight_with_flags(
-                        encounter_arena_topology_los_flags,
-                        &los_build,
+                    int forward = los_has_line_of_sight_grid(
+                        los_flag_grid,
+                        topology->origin_x,
+                        topology->origin_y,
+                        topology->width,
+                        topology->height,
                         source_x,
                         source_y,
                         target_x,
-                        target_y,
-                        1,
-                        0);
-                    int reverse = los_has_line_of_sight_with_flags(
-                        encounter_arena_topology_los_flags,
-                        &los_build,
+                        target_y);
+                    int reverse = los_has_line_of_sight_grid(
+                        los_flag_grid,
+                        topology->origin_x,
+                        topology->origin_y,
+                        topology->width,
+                        topology->height,
                         target_x,
                         target_y,
                         source_x,
-                        source_y,
-                        1,
-                        0);
+                        source_y);
                     if (forward)
                         encounter_arena_topology_set_los(
                             topology, source, target);
