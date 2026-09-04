@@ -800,7 +800,7 @@ static inline uint32_t los_grid_local(
     return flags[x * height + y];
 }
 
-static inline int los_tile_ray_clear_grid(
+static inline int los_tile_ray_clear_grid_clipped(
     const uint32_t* flags,
     int origin_x,
     int origin_y,
@@ -809,7 +809,11 @@ static inline int los_tile_ray_clear_grid(
     int x0,
     int y0,
     int x1,
-    int y1
+    int y1,
+    int cx0,
+    int cy0,
+    int cx1,
+    int cy1
 ) {
     x0 -= origin_x;
     y0 -= origin_y;
@@ -822,6 +826,10 @@ static inline int los_tile_ray_clear_grid(
     if (adx == 0 && ady == 0) return 1;
     if (los_grid_local(flags, width, height, x1, y1))
         return 0;
+    if (cx0 > 0) cx0--;
+    if (cy0 > 0) cy0--;
+    if (cx1 < width - 1) cx1++;
+    if (cy1 < height - 1) cy1++;
 
     if (adx > ady) {
         int x = x0;
@@ -829,6 +837,11 @@ static inline int los_tile_ray_clear_grid(
         int slope = (dy * LOS_FP_SCALE) / adx;
         int x_inc = dx > 0 ? 1 : -1;
         if (dy < 0) y_fp--;
+        int n_pre = x_inc > 0 ? (cx0 - x0 - 1) : (x0 - cx1 - 1);
+        if (n_pre < 0) n_pre = 0;
+        if (n_pre > adx) n_pre = adx;
+        x += n_pre * x_inc;
+        y_fp += n_pre * slope;
         while (x != x1) {
             x += x_inc;
             int y = y_fp >> 16;
@@ -839,6 +852,8 @@ static inline int los_tile_ray_clear_grid(
             if (new_y != y &&
                     los_grid_local(flags, width, height, x, new_y))
                 return 0;
+            if ((x_inc > 0 && x >= cx1) || (x_inc < 0 && x <= cx0))
+                break;
         }
     } else {
         int y = y0;
@@ -846,6 +861,11 @@ static inline int los_tile_ray_clear_grid(
         int slope = (dx * LOS_FP_SCALE) / ady;
         int y_inc = dy > 0 ? 1 : -1;
         if (dx < 0) x_fp--;
+        int n_pre = y_inc > 0 ? (cy0 - y0 - 1) : (y0 - cy1 - 1);
+        if (n_pre < 0) n_pre = 0;
+        if (n_pre > ady) n_pre = ady;
+        y += n_pre * y_inc;
+        x_fp += n_pre * slope;
         while (y != y1) {
             y += y_inc;
             int x = x_fp >> 16;
@@ -856,10 +876,29 @@ static inline int los_tile_ray_clear_grid(
             if (new_x != x &&
                     los_grid_local(flags, width, height, new_x, y))
                 return 0;
+            if ((y_inc > 0 && y >= cy1) || (y_inc < 0 && y <= cy0))
+                break;
         }
     }
     return 1;
 }
+
+static inline int los_tile_ray_clear_grid(
+    const uint32_t* flags,
+    int origin_x,
+    int origin_y,
+    int width,
+    int height,
+    int x0,
+    int y0,
+    int x1,
+    int y1
+) {
+    return los_tile_ray_clear_grid_clipped(
+        flags, origin_x, origin_y, width, height,
+        x0, y0, x1, y1, 0, 0, width - 1, height - 1);
+}
+
 
 static inline int los_has_line_of_sight_grid(
     const uint32_t* flags,
@@ -1180,6 +1219,22 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
         } else {
             topology->static_los_mode =
                 ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED;
+            int occ_x0 = topology->width;
+            int occ_y0 = topology->height;
+            int occ_x1 = -1;
+            int occ_y1 = -1;
+            if (occupancy_only) {
+                for (int i = 0; i < topology->tile_count; i++) {
+                    if (!los_flag_grid[i]) continue;
+                    int lx = i / topology->height;
+                    int ly = i % topology->height;
+                    if (lx < occ_x0) occ_x0 = lx;
+                    if (ly < occ_y0) occ_y0 = ly;
+                    if (lx > occ_x1) occ_x1 = lx;
+                    if (ly > occ_y1) occ_y1 = ly;
+                }
+            }
+
             for (int source = 0; source < topology->tile_count; source++) {
                 if (los_flag_grid[source]) continue;
                 int source_lx = source / topology->height;
@@ -1206,7 +1261,7 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                         forward = 1;
                         reverse = 1;
                     } else if (occupancy_only) {
-                        forward = los_tile_ray_clear_grid(
+                        forward = los_tile_ray_clear_grid_clipped(
                             los_flag_grid,
                             topology->origin_x,
                             topology->origin_y,
@@ -1215,8 +1270,12 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                             source_x,
                             source_y,
                             target_x,
-                            target_y);
-                        reverse = los_tile_ray_clear_grid(
+                            target_y,
+                            occ_x0,
+                            occ_y0,
+                            occ_x1,
+                            occ_y1);
+                        reverse = los_tile_ray_clear_grid_clipped(
                             los_flag_grid,
                             topology->origin_x,
                             topology->origin_y,
@@ -1225,7 +1284,11 @@ static inline EncounterArenaTopology* encounter_arena_topology_build(
                             target_x,
                             target_y,
                             source_x,
-                            source_y);
+                            source_y,
+                            occ_x0,
+                            occ_y0,
+                            occ_x1,
+                            occ_y1);
                     } else {
                         forward = los_has_line_of_sight_grid(
                             los_flag_grid,
