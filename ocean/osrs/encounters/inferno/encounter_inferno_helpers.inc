@@ -1069,9 +1069,7 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
             .tile_flags_ctx = &build,
             .los_tile_flags = inf_route_topology_los_flags,
             .los_tile_flags_ctx = &build,
-            .los_build_mode = compose_los
-                ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN
-                : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
+            .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
         };
         EncounterArenaTopology** topology =
             &inf_route_topology_owner.topologies[pillar_mask];
@@ -1097,8 +1095,6 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
                     if (!acc) {
                         memcpy(*topology, part, sizeof(**topology));
                         (*topology)->revision = spec.revision;
-                        (*topology)->los_build_mode =
-                            ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN;
                         (*topology)->finalized = 0;
                         acc = *topology;
                         continue;
@@ -1112,9 +1108,6 @@ static void inf_finalize_route_topology(InfernoContext* ctx) {
             encounter_arena_topology_finalize(*topology);
             built = 1;
         } else {
-            spec.los_build_mode = compose_los
-                ? ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN
-                : ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED;
             encounter_arena_topology_require_spec(
                 *topology, &spec, "inferno");
         }

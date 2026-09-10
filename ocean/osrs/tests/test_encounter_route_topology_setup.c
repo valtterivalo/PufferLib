@@ -144,6 +144,13 @@ int main(void) {
         }
     }
 #if defined(TEST_ROUTE_TOPOLOGY_INFERNO)
+    for (int mask = 0; mask < INF_ROUTE_BAKE_COUNT; mask++) {
+        if (!inf_baked_topology_matches(
+                inf_route_topology_owner.topologies[mask], mask)) {
+            fprintf(stderr, "inferno topology %d violates route cache contract\n", mask);
+            abort();
+        }
+    }
     if (first->static_los_mode != ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN) {
         fprintf(stderr,
             "inferno collision map incorrectly contributed static LOS blockers\n");

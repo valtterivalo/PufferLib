@@ -749,15 +749,6 @@ static uint32_t encounter_arena_topology_los_flags(
         (LOS_FULL_MASK | LOS_EAST_MASK | LOS_WEST_MASK |
          LOS_NORTH_MASK | LOS_SOUTH_MASK);
 }
-static int encounter_arena_topology_los_tile_blocked(
-    void* data,
-    int x,
-    int y
-) {
-    return encounter_arena_topology_los_flags(data, x, y) != 0;
-}
-
-
 static inline void encounter_arena_topology_set_los(
     EncounterArenaTopology* topology,
     int source_index,
