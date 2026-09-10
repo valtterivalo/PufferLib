@@ -55,4 +55,5 @@ def test_osrs_cpu_build_selects_visual_entrypoint(tmp_path: Path) -> None:
     arguments = compiler_arguments.read_text().splitlines()
     assert "ocean/osrs_inferno/osrs_inferno.c" in arguments
     assert "src/puffercpu.c" not in arguments
+    assert "-DPUFFER_OSRS_INFERNO" in arguments
     assert arguments[arguments.index("-o") + 1] == "osrs_inferno"
