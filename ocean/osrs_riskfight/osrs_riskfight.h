@@ -1,0 +1,109 @@
+#pragma once
+
+typedef float obs_t;
+#include "pufferenv.h"
+#define Log OsrsSharedLog
+#include "../osrs/encounters/encounter_riskfight.h"
+#undef Log
+#ifdef OSRS_PUFFER_RENDER
+#include "../osrs/osrs_puffer_render.h"
+#endif
+
+#define OBS_SIZE RF_OBS_SIZE
+#define NUM_ATNS RF_HEADS
+#define ACT_SIZES RF_ACTION_DIMS_INIT
+
+struct Log {
+    float episode_return, episode_length;
+    float kills, deaths, escapes, mutual_deaths, net_stake, n;
+};
+struct Env {
+    Log log;
+    int num_agents;
+    unsigned int rng;
+    Agent agents[2];
+    int tag, boundary_reached;
+    RiskfightState state;
+    RiskfightContext context;
+#ifdef OSRS_PUFFER_RENDER
+    void* renderer;
+#endif
+};
+
+void puf_init(Env* env, Dict* kwargs) {
+    riskfight_init_context((EncounterContext*)&env->context);
+    riskfight_init_state((EncounterState*)&env->state, (EncounterContext*)&env->context);
+    const char* keys[] = {"opponent_type", "self_play"};
+    for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
+        (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
+    env->num_agents = env->context.self_play ? 2 : 1;
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
+    env->state.env.rng_state = env->rng ? env->rng : 1;
+    memset(&env->log, 0, sizeof(env->log));
+    riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
+}
+static void riskfight_native_observe(Env* env) {
+    float mask[RF_MASK_SIZE];
+    for (int i = 0; i < env->num_agents; i++) {
+        riskfight_write_observation(&env->state, i, env->agents[i].observations);
+        riskfight_write_action_mask(&env->state, i, mask);
+        for (int j = 0; j < RF_MASK_SIZE; j++) env->agents[i].action_mask[j] = (unsigned char)mask[j];
+    }
+}
+void puf_reset(Env* env) {
+    riskfight_reset((EncounterState*)&env->state, (EncounterContext*)&env->context, 0);
+    riskfight_native_observe(env);
+    for (int i = 0; i < env->num_agents; i++) {
+        env->agents[i].rewards[0] = 0;
+        env->agents[i].terminals[0] = 0;
+    }
+}
+void puf_step(Env* env) {
+    int actions[2 * RF_HEADS] = {0};
+    for (int i = 0; i < env->num_agents; i++)
+        for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
+    riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
+    for (int i = 0; i < env->num_agents; i++) {
+        env->agents[i].rewards[0] = env->state.rewards[i];
+        env->agents[i].terminals[0] = env->state.env.episode_over;
+    }
+    if (env->state.env.episode_over) {
+        RiskfightOutcome outcome = env->state.outcome[0];
+        env->log.kills += outcome == RISKFIGHT_KILL;
+        env->log.deaths += outcome == RISKFIGHT_DEATH;
+        env->log.escapes += outcome == RISKFIGHT_ESCAPE;
+        env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
+        env->log.net_stake += env->state.rewards[0];
+        env->log.episode_return += env->state.rewards[0];
+        env->log.episode_length += env->state.env.tick;
+        env->log.n++;
+        riskfight_reset((EncounterState*)&env->state, (EncounterContext*)&env->context, 0);
+    }
+    riskfight_native_observe(env);
+}
+void puf_render(Env* env) {
+#ifdef OSRS_PUFFER_RENDER
+    if (!env->renderer) env->renderer = osrs_puffer_render_create(&ENCOUNTER_RISKFIGHT,
+        (EncounterState*)&env->state, (EncounterContext*)&env->context);
+    osrs_puffer_render_draw(env->renderer);
+#else
+    (void)env;
+#endif
+}
+void puf_close(Env* env) {
+#ifdef OSRS_PUFFER_RENDER
+    if (env->renderer) osrs_puffer_render_destroy(env->renderer);
+#endif
+    riskfight_destroy_context((EncounterContext*)&env->context);
+}
+void puf_log(Log* log, Dict* out) {
+    dict_set(out, "episode_return", log->episode_return);
+    dict_set(out, "episode_length", log->episode_length);
+    dict_set(out, "kills", log->kills);
+    dict_set(out, "deaths", log->deaths);
+    dict_set(out, "escapes", log->escapes);
+    dict_set(out, "mutual_deaths", log->mutual_deaths);
+    dict_set(out, "net_stake", log->net_stake);
+    dict_set(out, "score", log->net_stake);
+    dict_set(out, "perf", log->net_stake);
+}

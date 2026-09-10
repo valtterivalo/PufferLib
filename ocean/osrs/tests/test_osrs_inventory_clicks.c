@@ -543,7 +543,7 @@ static int test_exhaustive_content_metadata(void) {
 
         OsrsInventoryClickResolution interpreted =
             osrs_inventory_cell_click_interpret(&cell, OSRS_CLICK_TICK_FIRST);
-        uint16_t expected_next_raw = metadata->next_content_code == 0
+        uint16_t expected_next_raw = metadata->click_action != OSRS_CLICK_DRINK || metadata->next_content_code == 0
             ? 0
             : osrs_item_content_metadata(
                 metadata->next_content_code)->raw_osrs_id;
@@ -561,8 +561,12 @@ static int test_exhaustive_content_metadata(void) {
                 CHECK("drink transition decrements exactly one dose",
                     next->dose_count + 1 == metadata->dose_count);
             }
+        } else if (metadata->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE) {
+            osrs_inventory_cell_consume_eat(&cell);
+            CHECK("pie bite preserves its remaining half or dish",
+                cell.content_code == metadata->next_content_code);
         } else {
-            CHECK("non-drink content has no dose transition",
+            CHECK("other non-drink content has no dose transition",
                 metadata->next_content_code == 0);
         }
 

@@ -1602,21 +1602,26 @@ static inline void encounter_brew_drain_stats(Player* p) {
 }
 
 static inline void encounter_apply_stat_restore(Player* p, int (*amount)(int)) {
-    int restore = amount(p->base_attack);
-    p->current_attack += restore;
-    if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
-    restore = amount(p->base_strength);
-    p->current_strength += restore;
-    if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;
-    restore = amount(p->base_defence);
-    p->current_defence += restore;
-    if (p->current_defence > p->base_defence) p->current_defence = p->base_defence;
-    restore = amount(p->base_ranged);
-    p->current_ranged += restore;
-    if (p->current_ranged > p->base_ranged) p->current_ranged = p->base_ranged;
-    restore = amount(p->base_magic);
-    p->current_magic += restore;
-    if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
+    if (p->current_attack < p->base_attack) {
+        p->current_attack += amount(p->base_attack);
+        if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
+    }
+    if (p->current_strength < p->base_strength) {
+        p->current_strength += amount(p->base_strength);
+        if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;
+    }
+    if (p->current_defence < p->base_defence) {
+        p->current_defence += amount(p->base_defence);
+        if (p->current_defence > p->base_defence) p->current_defence = p->base_defence;
+    }
+    if (p->current_ranged < p->base_ranged) {
+        p->current_ranged += amount(p->base_ranged);
+        if (p->current_ranged > p->base_ranged) p->current_ranged = p->base_ranged;
+    }
+    if (p->current_magic < p->base_magic) {
+        p->current_magic += amount(p->base_magic);
+        if (p->current_magic > p->base_magic) p->current_magic = p->base_magic;
+    }
 }
 
 static inline void encounter_restore_stats(Player* p) {

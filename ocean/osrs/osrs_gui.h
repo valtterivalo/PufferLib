@@ -2059,6 +2059,10 @@ static const char* gui_inv_primary_action_label(const InvSlot* inv) {
                 ? "Wield"
                 : "Wear";
         }
+        case OSRS_CLICK_SELF_DAMAGE:
+            return "Feel";
+        case OSRS_CLICK_TELEPORT:
+            return "Break";
         case OSRS_CLICK_EAT:
             return "Eat";
         case OSRS_CLICK_DRINK:
@@ -3108,6 +3112,14 @@ static inline int gui_spell_castable(GuiSpellIdx s) {
 static void gui_draw_spellbook(GuiState* gs, Player* p) {
     int gx, gy;
     gui_spell_grid_origin(gs, &gx, &gy);
+    if (p->is_lunar_spellbook) {
+        Color color = !p->veng_active && p->veng_cooldown <= 0 && p->current_magic >= 94 ? WHITE : GRAY;
+        DrawRectangleLines(gx, gy, 140, 38, color);
+        DrawText("Vengeance", gx + 8, gy + 10, 18, color);
+        DrawText(p->veng_active ? "Active" : TextFormat("Cooldown: %d", p->veng_cooldown),
+            gx, gy + 48, 16, color);
+        return;
+    }
 
     for (int i = 0; i < GUI_SPELL_GRID_COUNT; i++) {
         int col = i % GUI_SPELL_GRID_COLS;

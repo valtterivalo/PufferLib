@@ -103,9 +103,12 @@ static inline int osrs_can_eat_consumable_kind(
     OsrsConsumableKind kind
 ) {
     switch (kind) {
+        case OSRS_CONSUMABLE_MARLIN:
+        case OSRS_CONSUMABLE_SUMMER_PIE:
         case OSRS_CONSUMABLE_SHARK_FOOD:
             return p->food_timer == 0 &&
                 p->current_hitpoints < p->base_hitpoints;
+        case OSRS_CONSUMABLE_HALIBUT:
         case OSRS_CONSUMABLE_KARAMBWAN:
             return p->karambwan_timer == 0 &&
                 p->current_hitpoints < p->base_hitpoints;
@@ -123,6 +126,10 @@ static inline int osrs_can_eat_consumable_kind(
         case OSRS_CONSUMABLE_PRAYER_RESTORE:
         case OSRS_CONSUMABLE_BASTION:
         case OSRS_CONSUMABLE_STAMINA:
+        case OSRS_CONSUMABLE_PIE_DISH:
+        case OSRS_CONSUMABLE_LOCATOR_ORB:
+        case OSRS_CONSUMABLE_TELEPORT:
+        case OSRS_CONSUMABLE_VENGEANCE_SACK:
         case OSRS_CONSUMABLE_NONE:
             return 0;
         case OSRS_CONSUMABLE_COUNT:

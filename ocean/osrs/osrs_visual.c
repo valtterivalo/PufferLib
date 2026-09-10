@@ -13,6 +13,7 @@
 #include "osrs_encounter.h"
 #include "osrs_binary_io.h"
 #include "encounters/encounter_nh_pvp.h"
+#include "encounters/encounter_riskfight.h"
 #include "encounters/encounter_zulrah.h"
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -1611,6 +1612,9 @@ static void visual_frame(void* arg) {
         int used_human_step = 0;
 
         if (rc->human_input.enabled && edef->step_human_commands) {
+            if (strcmp(edef->name, "riskfight") == 0)
+                edef->put_int(env->encounter_state, env->encounter_context,
+                    "human_player", rc->gui.gui_entity_idx);
             edef->step_human_commands(
                 env->encounter_state,
                 (EncounterContext*)env->encounter_context,
@@ -1656,6 +1660,10 @@ static void visual_frame(void* arg) {
                     (EncounterContext*)env->encounter_context,
                     enc_actions);
             }
+        } else if (strcmp(edef->name, "riskfight") == 0) {
+            float observation[RF_OBS_SIZE];
+            riskfight_write_observation((RiskfightState*)env->encounter_state, 0, observation);
+            riskfight_script(observation, RISKFIGHT_TRADER, enc_actions);
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {
@@ -2074,7 +2082,7 @@ static void run_visual(
     if (encounter_name) {
         const EncounterDef* edef = visual_open_encounter(env, encounter_name);
         if (!edef) return;
-        if (encounter_name_is_pvp(encounter_name) && edef->put_int) {
+        if ((strcmp(encounter_name, "nh_pvp") == 0 || strcmp(encounter_name, "pvp") == 0) && edef->put_int) {
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_IMPROVED);
 #ifdef __EMSCRIPTEN__

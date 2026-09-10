@@ -579,6 +579,13 @@ static void col_sync_consumable_counters_from_inventory(ColosseumState* s) {
                 break;
             case OSRS_CONSUMABLE_GUTHIX_REST:
             case OSRS_CONSUMABLE_SATURATED_HEART:
+            case OSRS_CONSUMABLE_MARLIN:
+            case OSRS_CONSUMABLE_HALIBUT:
+            case OSRS_CONSUMABLE_SUMMER_PIE:
+            case OSRS_CONSUMABLE_PIE_DISH:
+            case OSRS_CONSUMABLE_LOCATOR_ORB:
+            case OSRS_CONSUMABLE_TELEPORT:
+            case OSRS_CONSUMABLE_VENGEANCE_SACK:
             case OSRS_CONSUMABLE_NONE:
             case OSRS_CONSUMABLE_SHARK_FOOD:
             case OSRS_CONSUMABLE_KARAMBWAN:

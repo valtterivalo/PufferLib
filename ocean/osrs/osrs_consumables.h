@@ -8,6 +8,9 @@ typedef enum {
     FOOD_KARAMBWAN,
     FOOD_MANTA_RAY,
     FOOD_ANGLERFISH,
+    FOOD_MARLIN,
+    FOOD_HALIBUT,
+    FOOD_SUMMER_PIE,
     NUM_FOOD_TYPES
 } FoodType;
 
@@ -46,6 +49,9 @@ typedef struct {
 
 static inline int osrs_food_heal_amount(FoodType type) {
     switch (type) {
+        case FOOD_MARLIN:      return 24;
+        case FOOD_HALIBUT:     return 20;
+        case FOOD_SUMMER_PIE:  return 11;
         case FOOD_SHARK:       return 20;
         case FOOD_KARAMBWAN:   return 18;
         case FOOD_MANTA_RAY:   return 22;

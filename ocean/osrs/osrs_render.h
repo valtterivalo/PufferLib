@@ -2767,6 +2767,10 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     }
 
     if (rc->human_input.enabled) {
+        if (env->encounter_def &&
+            strcmp(((const EncounterDef*)env->encounter_def)->name, "riskfight") == 0 &&
+            IsKeyPressed(KEY_X))
+            human_input_queue_command(&rc->human_input, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
         ColosseumState* cs = render_colosseum_state_from_env(env);
         if (cs && IsKeyPressed(KEY_B) && cs->sol.grapple_active)
             rc->human_input.pending_grapple_slot = cs->sol.grapple_body_slot + 1;
@@ -2835,7 +2839,7 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                         handled = 1;
                         break;
                     case GUI_TAB_SPELLBOOK:
-                        human_handle_spell_click(&rc->human_input, &rc->gui, pmx, pmy);
+                        human_handle_spell_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
                         handled = 1;
                         break;
                     case GUI_TAB_COMBAT:
@@ -5699,7 +5703,7 @@ static int render_display_tick(OsrsEnv* env) {
 static int render_scene_is_pvp(OsrsEnv* env) {
     if (!env->encounter_def) return 1;
     const EncounterDef* def = (const EncounterDef*)env->encounter_def;
-    return strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
+    return strcmp(def->name, "riskfight") == 0 || strcmp(def->name, "nh_pvp") == 0 || strcmp(def->name, "pvp") == 0;
 }
 
 static int render_scene_is_inferno(OsrsEnv* env) {
@@ -6218,6 +6222,12 @@ void pvp_render(OsrsEnv* env) {
             rc->gui.pending_spell_highlight = rc->human_input.selected_spell_gui_idx;
         }
         rc->gui.display_inventory_count = 0;
+        if (render_scene_is_pvp(env) && gui_player) {
+            for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+                rc->gui.display_inventory_osrs_ids[i] =
+                    osrs_inventory_cell_raw_osrs_id(&gui_player->inventory_cells[i]);
+            rc->gui.display_inventory_count = OSRS_INVENTORY_SIZE;
+        }
         {
             ColosseumState* colo_inv = render_colosseum_state_from_env(env);
             if (colo_inv && colo_inv->active_loadout_profile >= 0 &&

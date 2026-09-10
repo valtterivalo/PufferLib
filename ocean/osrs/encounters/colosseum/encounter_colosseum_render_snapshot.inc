@@ -1077,6 +1077,8 @@ static void col_translate_human_commands(
             case HUMAN_COMMAND_SET_AUTOCAST:
             case HUMAN_COMMAND_ITEM_ON_WIDGET:
             case HUMAN_COMMAND_SPELL_ON_WIDGET:
+            case HUMAN_COMMAND_STOP:
+            case HUMAN_COMMAND_VENGEANCE:
             case HUMAN_COMMAND_NONE:
                 break;
         }

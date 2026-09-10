@@ -51,7 +51,8 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_ANCIENT_GS:           return 50;
         case ITEM_VESTAS:               return 25;
         case ITEM_VOIDWAKER:            return 50;
-        case ITEM_GRANITE_MAUL:         return 50;
+        case ITEM_GRANITE_MAUL:         return 60;
+        case ITEM_GRANITE_MAUL_ORNATE:  return 50;
         case ITEM_DRAGON_DAGGER:        return 25;
         case ITEM_ELDER_MAUL:           return 50;
         case ITEM_TOXIC_BLOWPIPE:       return 50;
@@ -230,6 +231,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
+    case ITEM_GRANITE_MAUL_ORNATE:
     case ITEM_GRANITE_MAUL: {
         r.spec_cost = 50;
         r.num_hits = 1;
@@ -455,6 +457,7 @@ static inline void osrs_spec_result_force_max(
         forced.damage[0] = max_hit * 3 / 2;
         break;
 
+    case ITEM_GRANITE_MAUL_ORNATE:
     case ITEM_GRANITE_MAUL:
         forced.num_hits = 1;
         forced.damage[0] = max_hit;

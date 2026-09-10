@@ -192,6 +192,11 @@ static inline void osrs_derive_equipment_effect_profile(
     }
 }
 
+static inline int osrs_dharok_max_hit(int max_hit, int base_hp, int current_hp) {
+    int missing_hp = base_hp > current_hp ? base_hp - current_hp : 0;
+    return max_hit * (10000 + base_hp * missing_hp) / 10000;
+}
+
 static inline void osrs_sync_item_effect_state(
     Player* player, const OsrsEquipmentEffectProfile* previous_profile
 ) {
@@ -209,7 +214,8 @@ static inline void osrs_sync_item_effect_state(
 
     if (previous_profile->recoil_source != current_profile->recoil_source) {
         if (current_profile->recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL) {
-            player->item_effect_state.recoil_charges = RECOIL_MAX_CHARGES;
+            player->item_effect_state.recoil_charges = RECOIL_MAX_CHARGES -
+                player->item_effect_state.recoil_damage_used;
         } else if (current_profile->recoil_source == OSRS_RECOIL_SOURCE_RING_OF_SUFFERING_RI) {
             player->item_effect_state.recoil_charges = RECOIL_MAX_CHARGES;
         } else {
@@ -330,8 +336,8 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects_for_melee_st
     }
 
     if (style == ATTACK_STYLE_MELEE && profile->dharok_piece_count >= 4) {
-        float hp_ratio = 1.0f - ((float)attacker_current_hitpoints / (float)attacker_base_hitpoints);
-        result.max_hit = (int)(result.max_hit * (1.0f + hp_ratio * hp_ratio));
+        result.max_hit = osrs_dharok_max_hit(result.max_hit,
+            attacker_base_hitpoints, attacker_current_hitpoints);
     }
 
     if (style == ATTACK_STYLE_MELEE &&
@@ -523,12 +529,14 @@ static inline void osrs_consume_recoil_charges(Player* defender, int recoil_dama
         return;
     }
 
+    defender->item_effect_state.recoil_damage_used += recoil_damage;
     defender->item_effect_state.recoil_charges -= recoil_damage;
     if (defender->item_effect_state.recoil_charges > 0) {
         return;
     }
 
     defender->item_effect_state.recoil_charges = 0;
+    defender->item_effect_state.recoil_damage_used = 0;
     defender->equipped[GEAR_SLOT_RING] = ITEM_NONE;
     osrs_refresh_player_equipment(defender);
 }

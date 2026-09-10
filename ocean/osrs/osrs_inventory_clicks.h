@@ -98,6 +98,13 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
         case OSRS_CONSUMABLE_STAMINA:         return COL_CKIND6_SPECIAL;
         case OSRS_CONSUMABLE_SHARK_FOOD:
         case OSRS_CONSUMABLE_KARAMBWAN:       return COL_CKIND6_FOOD;
+        case OSRS_CONSUMABLE_MARLIN:
+        case OSRS_CONSUMABLE_HALIBUT:
+        case OSRS_CONSUMABLE_SUMMER_PIE: return COL_CKIND6_FOOD;
+        case OSRS_CONSUMABLE_PIE_DISH:
+        case OSRS_CONSUMABLE_LOCATOR_ORB:
+        case OSRS_CONSUMABLE_TELEPORT:
+        case OSRS_CONSUMABLE_VENGEANCE_SACK:
         case OSRS_CONSUMABLE_NONE:            return COL_CKIND6_NONE;
         case OSRS_CONSUMABLE_COUNT:           break;
     }
@@ -107,6 +114,10 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
 
 static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_hp) {
     switch (k) {
+        case OSRS_CONSUMABLE_MARLIN: return 24;
+        case OSRS_CONSUMABLE_HALIBUT: return 20;
+        case OSRS_CONSUMABLE_SUMMER_PIE: return 11;
+        case OSRS_CONSUMABLE_LOCATOR_ORB: return -10;
         case OSRS_CONSUMABLE_BREW:       return osrs_brew_heal_amount(base_hp);
         case OSRS_CONSUMABLE_SHARK_FOOD: return osrs_food_heal_amount(FOOD_SHARK);
         case OSRS_CONSUMABLE_KARAMBWAN:  return osrs_food_heal_amount(FOOD_KARAMBWAN);
@@ -212,7 +223,7 @@ static inline OsrsInventoryCellAffordance osrs_item_content_affordance(
     affordance.kind5[3] = kind6 == COL_CKIND6_RANGED_BOOST ? 1.0f : 0.0f;
     affordance.kind5[4] = kind6 == COL_CKIND6_SPECIAL ? 1.0f : 0.0f;
     affordance.hp_heal = base_hitpoints > 0
-        ? osrs_clamp_unit((float)hp_heal / (float)base_hitpoints)
+        ? (float)hp_heal / (float)base_hitpoints
         : 0.0f;
     affordance.prayer_restore = base_prayer > 0
         ? osrs_clamp_unit((float)prayer_restore / (float)base_prayer)
@@ -477,7 +488,8 @@ static inline OsrsInventoryDrinkConsumeResult osrs_inventory_cell_consume_drink_
 }
 
 static inline void osrs_inventory_cell_consume_eat(OsrsInventoryCell* cell) {
-    *cell = osrs_inventory_cell_empty();
+    *cell = osrs_inventory_cell_from_content_code(
+        osrs_inventory_cell_metadata(cell)->next_content_code);
 }
 
 static inline float osrs_inventory_cell_obs_code_encode(uint16_t content_code) {

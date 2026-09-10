@@ -85,6 +85,8 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_AGS:
         case ITEM_ANCIENT_GS:
         case ITEM_GRANITE_MAUL:
+        case ITEM_GRANITE_MAUL_ORNATE:
+        case ITEM_DHAROKS_GREATAXE:
         case ITEM_ELDER_MAUL:
         case ITEM_SGS:
         case ITEM_SCYTHE_OF_VITUR:

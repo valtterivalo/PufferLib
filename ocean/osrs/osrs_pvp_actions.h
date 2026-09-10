@@ -248,7 +248,7 @@ static void pvp_apply_drink_one_dose_effect(
 
 /* consumable timers are NOT decremented here: they tick after execute_switches
    in pvp_step so observations show the post-use countdown */
-static void update_timers(Player* p) {
+static void update_player_timers(Player* p, int prayer_bonus) {
     p->damage_applied_this_tick = 0;
 
     if (p->has_attack_timer) {
@@ -262,7 +262,7 @@ static void update_timers(Player* p) {
     if (p->veng_cooldown > 0) p->veng_cooldown--;
 
     if (!p->is_lms) {
-        encounter_drain_all_prayers(p, PRAYER_BONUS);
+        encounter_drain_all_prayers(p, prayer_bonus);
     } else {
         p->prayer_just_activated = 0;
         p->offensive_prayer_just_activated = 0;
@@ -287,6 +287,10 @@ static void update_timers(Player* p) {
     } else if (p->spec_regen_active) {
         p->item_effect_state.special_regen_ticks = 0;
     }
+}
+
+static void update_timers(Player* p) {
+    update_player_timers(p, PRAYER_BONUS);
 }
 
 static void reset_tick_flags(Player* p) {
@@ -461,7 +465,8 @@ static PvpAttackDecode pvp_decode_attack_actions(
         (primary > 0 && primary < OSRS_PRIMARY_MOVE_ACTIONS) ||
         env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
     int is_gmaul =
-        p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL &&
+        (p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL ||
+         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL_ORNATE) &&
         p->spec_armed;
     return (PvpAttackDecode){
         .attack_action = attack_action,

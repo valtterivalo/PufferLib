@@ -342,6 +342,13 @@ static void col_apply_drink_one_dose_effect(void* ctx, OsrsConsumableKind kind) 
             s->player_poison = 0;
             s->player_poison_timer = 0;
             return;
+        case OSRS_CONSUMABLE_MARLIN:
+        case OSRS_CONSUMABLE_HALIBUT:
+        case OSRS_CONSUMABLE_SUMMER_PIE:
+        case OSRS_CONSUMABLE_PIE_DISH:
+        case OSRS_CONSUMABLE_LOCATOR_ORB:
+        case OSRS_CONSUMABLE_TELEPORT:
+        case OSRS_CONSUMABLE_VENGEANCE_SACK:
         case OSRS_CONSUMABLE_NONE:
         case OSRS_CONSUMABLE_SHARK_FOOD:
         case OSRS_CONSUMABLE_KARAMBWAN:

@@ -26,7 +26,8 @@ static inline DamageResult osrs_apply_post_mitigation_pipeline(
     r.final_damage = mitigated_damage;
 
     if (target_veng_active && r.final_damage > 0) {
-        r.veng_damage = (int)(r.final_damage * 0.75f);
+        r.veng_damage = r.final_damage * 3 / 4;
+        if (r.veng_damage == 0) r.veng_damage = 1;
     }
 
     if (target_has_recoil && r.final_damage > 0) {

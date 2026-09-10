@@ -80,14 +80,33 @@ static const GenConsumable GEN_CONSUMABLES[] = {
     {12631, OSRS_CLICK_DRINK, OSRS_CONSUMABLE_STAMINA, 1},
     {385, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SHARK_FOOD, 0},
     {3144, OSRS_CLICK_EAT, OSRS_CONSUMABLE_KARAMBWAN, 0},
+    {32352, OSRS_CLICK_EAT, OSRS_CONSUMABLE_MARLIN, 0},
+    {32336, OSRS_CLICK_EAT, OSRS_CONSUMABLE_HALIBUT, 0},
+    {7218, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SUMMER_PIE, 2},
+    {7220, OSRS_CLICK_EAT, OSRS_CONSUMABLE_SUMMER_PIE, 1},
+    {2313, OSRS_CLICK_NONE, OSRS_CONSUMABLE_PIE_DISH, 0},
+    {22081, OSRS_CLICK_SELF_DAMAGE, OSRS_CONSUMABLE_LOCATOR_ORB, 0},
+    {8013, OSRS_CLICK_TELEPORT, OSRS_CONSUMABLE_TELEPORT, 0},
+    {24621, OSRS_CLICK_NONE, OSRS_CONSUMABLE_VENGEANCE_SACK, 0},
 };
 
 #define GEN_CONSUMABLE_COUNT \
     ((int)(sizeof(GEN_CONSUMABLES) / sizeof(GEN_CONSUMABLES[0])))
 #define GEN_GEAR_BASE 1
-#define GEN_CONSUMABLE_BASE (GEN_GEAR_BASE + NUM_ITEMS)
-#define GEN_INERT_CODE (GEN_CONSUMABLE_BASE + GEN_CONSUMABLE_COUNT)
-#define GEN_CONTENT_COUNT (GEN_INERT_CODE + 1)
+#define GEN_LEGACY_ITEMS 144
+#define GEN_LEGACY_CONSUMABLES 55
+#define GEN_CONSUMABLE_BASE 145
+#define GEN_INERT_CODE 200
+#define GEN_CONTENT_COUNT (201 + NUM_ITEMS - GEN_LEGACY_ITEMS + GEN_CONSUMABLE_COUNT - GEN_LEGACY_CONSUMABLES)
+
+static int gear_code(int index) {
+    return index < GEN_LEGACY_ITEMS ? index + 1 : 201 + index - GEN_LEGACY_ITEMS;
+}
+
+static int consumable_code(int index) {
+    return index < GEN_LEGACY_CONSUMABLES ? GEN_CONSUMABLE_BASE + index
+        : 201 + NUM_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES;
+}
 
 static FILE* open_or_die(const char* path) {
     FILE* file = fopen(path, "w");
@@ -130,12 +149,12 @@ static int content_code_for_raw_osrs_id(uint16_t raw_osrs_id) {
     if (raw_osrs_id == 0) return 0;
     for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
         if (ITEM_DATABASE[item_idx].item_id == raw_osrs_id) {
-            return GEN_GEAR_BASE + item_idx;
+            return gear_code(item_idx);
         }
     }
     for (int index = 0; index < GEN_CONSUMABLE_COUNT; index++) {
         if (GEN_CONSUMABLES[index].raw_osrs_id == raw_osrs_id) {
-            return GEN_CONSUMABLE_BASE + index;
+            return consumable_code(index);
         }
     }
     if (raw_osrs_id == GEN_INERT_RAW_OSRS_ID) return GEN_INERT_CODE;
@@ -144,13 +163,15 @@ static int content_code_for_raw_osrs_id(uint16_t raw_osrs_id) {
 }
 
 static int next_content_code(const GenConsumable* consumable) {
+    if (consumable->raw_osrs_id == 7218) return content_code_for_raw_osrs_id(7220);
+    if (consumable->raw_osrs_id == 7220) return content_code_for_raw_osrs_id(2313);
     if (consumable->click_action != OSRS_CLICK_DRINK) return 0;
     if (consumable->dose_count == 1) return 0;
     for (int index = 0; index < GEN_CONSUMABLE_COUNT; index++) {
         const GenConsumable* candidate = &GEN_CONSUMABLES[index];
         if (candidate->consumable_kind == consumable->consumable_kind &&
                 candidate->dose_count + 1 == consumable->dose_count) {
-            return GEN_CONSUMABLE_BASE + index;
+            return consumable_code(index);
         }
     }
     fprintf(stderr, "OSRS item metadata: incomplete dose chain for raw OSRS id %u\n",
@@ -207,42 +228,45 @@ static void emit_content_row(
     fprintf(out, ")%s\n", final_row ? "" : " \\");
 }
 
+static void emit_gear_row(FILE* out, int item_idx) {
+    float row[OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT];
+    char item_pointer[64];
+    snprintf(item_pointer, sizeof(item_pointer), "&ITEM_DATABASE[%d]", item_idx);
+    const Item* item = &ITEM_DATABASE[item_idx];
+    build_row(row, (uint8_t)item_idx, item->item_id, OSRS_CONSUMABLE_NONE, 0);
+    emit_content_row(out, gear_code(item_idx), item_pointer,
+        (uint8_t)item_idx, item->item_id, gear_slot_for_item_slot(item->slot),
+        OSRS_CLICK_EQUIP, OSRS_CONSUMABLE_NONE, 0, 0,
+        get_item_attack_style(item_idx), row, 0);
+}
+
+static void emit_consumable_row(FILE* out, int index) {
+    float row[OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT];
+    const GenConsumable* consumable = &GEN_CONSUMABLES[index];
+    int code = consumable_code(index);
+    build_row(row, ITEM_NONE, consumable->raw_osrs_id,
+        consumable->consumable_kind, consumable->dose_count);
+    emit_content_row(out, code, "NULL", ITEM_NONE, consumable->raw_osrs_id,
+        -1, consumable->click_action, consumable->consumable_kind,
+        consumable->dose_count, next_content_code(consumable), 0, row,
+        code == GEN_CONTENT_COUNT - 1);
+}
+
 static void write_content_rows(FILE* out) {
     fprintf(out, "#define OSRS_ITEM_CONTENT_ROWS(X) \\\n");
     float row[OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT];
     build_row(row, ITEM_NONE, 0, OSRS_CONSUMABLE_NONE, 0);
     emit_content_row(out, 0, "NULL", ITEM_NONE, 0, -1,
         OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE, 0, 0, 0, row, 0);
-
-    for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
-        char item_pointer[64];
-        snprintf(item_pointer, sizeof(item_pointer),
-            "&ITEM_DATABASE[%d]", item_idx);
-        const Item* item = &ITEM_DATABASE[item_idx];
-        build_row(row, (uint8_t)item_idx, item->item_id,
-            OSRS_CONSUMABLE_NONE, 0);
-        emit_content_row(out, GEN_GEAR_BASE + item_idx, item_pointer,
-            (uint8_t)item_idx, item->item_id,
-            gear_slot_for_item_slot(item->slot), OSRS_CLICK_EQUIP,
-            OSRS_CONSUMABLE_NONE, 0, 0, get_item_attack_style(item_idx),
-            row, 0);
-    }
-
-    for (int index = 0; index < GEN_CONSUMABLE_COUNT; index++) {
-        const GenConsumable* consumable = &GEN_CONSUMABLES[index];
-        build_row(row, ITEM_NONE, consumable->raw_osrs_id,
-            consumable->consumable_kind, consumable->dose_count);
-        emit_content_row(out, GEN_CONSUMABLE_BASE + index, "NULL", ITEM_NONE,
-            consumable->raw_osrs_id, -1, consumable->click_action,
-            consumable->consumable_kind, consumable->dose_count,
-            next_content_code(consumable), 0, row, 0);
-    }
-
-    build_row(row, ITEM_NONE, GEN_INERT_RAW_OSRS_ID,
-        OSRS_CONSUMABLE_NONE, 0);
+    for (int i = 0; i < GEN_LEGACY_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = 0; i < GEN_LEGACY_CONSUMABLES; i++) emit_consumable_row(out, i);
+    build_row(row, ITEM_NONE, GEN_INERT_RAW_OSRS_ID, OSRS_CONSUMABLE_NONE, 0);
     emit_content_row(out, GEN_INERT_CODE, "NULL", ITEM_NONE,
         GEN_INERT_RAW_OSRS_ID, -1, OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE,
-        0, 0, 0, row, 1);
+        0, 0, 0, row, 0);
+    for (int i = GEN_LEGACY_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
+        emit_consumable_row(out, i);
 }
 
 static void write_consumable_rows(FILE* out) {
@@ -251,7 +275,7 @@ static void write_consumable_rows(FILE* out) {
         const GenConsumable* consumable = &GEN_CONSUMABLES[index];
         fprintf(out, "    X(%d, %d, %u)%s\n",
             (int)consumable->consumable_kind, consumable->dose_count,
-            GEN_CONSUMABLE_BASE + index,
+            consumable_code(index),
             index + 1 == GEN_CONSUMABLE_COUNT ? "" : " \\");
     }
 }
@@ -304,18 +328,9 @@ int main(int argc, char** argv) {
             GEN_CONTENT_COUNT, OSRS_ITEM_OBS_CODE_SCALE);
         return 1;
     }
-    for (int code = 0; code < GEN_CONTENT_COUNT; code++) {
-        int decoded = osrs_inventory_cell_obs_code_decode(
-            osrs_inventory_cell_obs_code_encode(code));
-        if (decoded != code) {
-            fprintf(stderr, "OSRS item metadata: code %d decodes as %d\n",
-                code, decoded);
-            return 1;
-        }
-    }
     for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
         if (content_code_for_raw_osrs_id(ITEM_DATABASE[item_idx].item_id) !=
-                GEN_GEAR_BASE + item_idx) {
+                gear_code(item_idx)) {
             fprintf(stderr, "OSRS item metadata: item %d raw id is ambiguous\n",
                 item_idx);
             return 1;

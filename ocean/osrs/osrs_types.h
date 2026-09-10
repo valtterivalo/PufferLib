@@ -349,6 +349,7 @@ typedef struct {
     int echo_boot_charges;
     uint8_t confliction_is_primed;
     uint8_t confliction_weapon_item;
+    uint8_t recoil_damage_used;
     OsrsMagicAttackKind confliction_magic_kind;
     OsrsTargetRef confliction_target;
 } OsrsItemEffectState;

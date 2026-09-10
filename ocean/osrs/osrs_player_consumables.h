@@ -16,6 +16,9 @@ typedef struct {
 
 static inline void osrs_require_player_food_action(FoodType type) {
     switch (type) {
+        case FOOD_MARLIN:
+        case FOOD_HALIBUT:
+        case FOOD_SUMMER_PIE:
         case FOOD_SHARK:
         case FOOD_KARAMBWAN:
         case FOOD_MANTA_RAY:
@@ -29,12 +32,12 @@ static inline void osrs_require_player_food_action(FoodType type) {
 
 static inline int osrs_player_food_timer(const Player* p, FoodType type) {
     osrs_require_player_food_action(type);
-    return type == FOOD_KARAMBWAN ? p->karambwan_timer : p->food_timer;
+    return (type == FOOD_KARAMBWAN || type == FOOD_HALIBUT) ? p->karambwan_timer : p->food_timer;
 }
 
 static inline int osrs_player_food_count(const Player* p, FoodType type) {
     osrs_require_player_food_action(type);
-    return type == FOOD_KARAMBWAN ? p->karambwan_count : p->food_count;
+    return (type == FOOD_KARAMBWAN || type == FOOD_HALIBUT) ? p->karambwan_count : p->food_count;
 }
 
 static inline int osrs_player_can_eat_food_type(const Player* p, FoodType type) {
@@ -58,7 +61,7 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
     out.hp_healed = r.hp_healed;
     out.hp_wasted = heal_amount - r.hp_healed;
 
-    if (type == FOOD_KARAMBWAN) {
+    if ((type == FOOD_KARAMBWAN || type == FOOD_HALIBUT)) {
         p->karambwan_timer = 2;
         p->food_timer = 3;
         p->potion_timer = 3;
@@ -67,7 +70,7 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
         p->last_karambwan_waste = out.hp_wasted;
         out.attack_delay_ticks = 2;
     } else {
-        p->food_timer = 3;
+        p->food_timer = type == FOOD_SUMMER_PIE ? 1 : 3;
         p->ate_food_this_tick = 1;
         p->last_food_heal = out.hp_healed;
         p->last_food_waste = out.hp_wasted;
@@ -78,11 +81,10 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
     if (type != FOOD_ANGLERFISH && p->current_hitpoints > p->base_hitpoints)
         p->current_hitpoints = p->base_hitpoints;
 
-    if (p->attack_timer > 0) {
-        int combat_ticks = p->attack_timer;
-        p->attack_timer = combat_ticks + out.attack_delay_ticks;
-        p->attack_timer_uncapped = combat_ticks + out.attack_delay_ticks;
-    }
+    int combat_ticks = p->has_attack_timer ? p->attack_timer : -1;
+    if (combat_ticks < -1) combat_ticks = -1;
+    p->attack_timer = combat_ticks + out.attack_delay_ticks;
+    p->attack_timer_uncapped = p->attack_timer;
     p->has_attack_timer = 1;
 
     return out;
@@ -92,7 +94,7 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_type(Player* p, FoodType 
     if (osrs_player_food_count(p, type) <= 0) return (OsrsPlayerEatResult){0, 0, 0, 0};
     OsrsPlayerEatResult out = osrs_player_eat_food_effects(p, type);
     if (out.consumed) {
-        if (type == FOOD_KARAMBWAN) p->karambwan_count--;
+        if ((type == FOOD_KARAMBWAN || type == FOOD_HALIBUT)) p->karambwan_count--;
         else p->food_count--;
     }
     return out;

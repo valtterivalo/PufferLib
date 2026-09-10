@@ -12,7 +12,7 @@
 static int encounter_name_is_pvp(const char* encounter_name) {
     return encounter_name &&
         (strcmp(encounter_name, "pvp") == 0 ||
-         strcmp(encounter_name, "nh_pvp") == 0);
+         strcmp(encounter_name, "nh_pvp") == 0 || strcmp(encounter_name, "riskfight") == 0);
 }
 
 static void visual_require_gui_item_sprite(int raw_osrs_id, void* context) {

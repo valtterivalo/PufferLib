@@ -234,7 +234,7 @@ static float calculate_hit_chance(Player* attacker, Player* defender,
     return clampf(osrs_hit_chance(attack_roll, defence_roll), 0.0f, 1.0f);
 }
 
-static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int magic_base_hit) {
+static int calculate_base_max_hit(Player* p, AttackStyle style, float str_mult, int magic_base_hit) {
     int eff_strength = calculate_effective_strength(p, style);
     int strength_bonus = get_strength_bonus(p, style);
 
@@ -249,13 +249,14 @@ static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int m
         max_hit = (int)(osrs_player_melee_max_hit(eff_strength, strength_bonus) * str_mult);
     }
 
-    osrs_ensure_player_equipment(p);
-    if (p->equipment_effect_profile.dharok_piece_count >= 4 &&
-        style == ATTACK_STYLE_MELEE) {
-        float hp_ratio = 1.0f - ((float)p->current_hitpoints / p->base_hitpoints);
-        max_hit = (int)(max_hit * (1.0f + hp_ratio * hp_ratio));
-    }
+    return max_hit;
+}
 
+static int calculate_max_hit(Player* p, AttackStyle style, float str_mult, int magic_base_hit) {
+    int max_hit = calculate_base_max_hit(p, style, str_mult, magic_base_hit);
+    osrs_ensure_player_equipment(p);
+    if (style == ATTACK_STYLE_MELEE && p->equipment_effect_profile.dharok_piece_count >= 4)
+        return osrs_dharok_max_hit(max_hit, p->base_hitpoints, p->current_hitpoints);
     return max_hit;
 }
 
@@ -424,7 +425,11 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     defender->hit_attacker_idx = attacker_idx;
     defender->damage_applied_this_tick = damage;
 
+    if (damage > 0) defender->veng_active = 0;
     if (dr.veng_damage > 0) {
+        attacker->hit_landed_this_tick = 1;
+        attacker->hit_damage += dr.veng_damage;
+        attacker->hit_attacker_idx = defender_idx;
         attacker->current_hitpoints -= dr.veng_damage;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
         float reflect_scale = (float)dr.veng_damage / (float)attacker->base_hitpoints;
@@ -441,6 +446,9 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             recoil > defender->item_effect_state.recoil_charges) {
             recoil = defender->item_effect_state.recoil_charges;
         }
+        attacker->hit_landed_this_tick = 1;
+        attacker->hit_damage += recoil;
+        attacker->hit_attacker_idx = defender_idx;
         attacker->current_hitpoints -= recoil;
         if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
         float recoil_scale = (float)recoil / (float)attacker->base_hitpoints;
@@ -701,12 +709,12 @@ static inline int can_equip_two_handed_weapon(Player* p) {
 
 static inline int can_spec(Player* p) {
     if (p->melee_spec_weapon == MELEE_SPEC_NONE) return 0;
-    return p->special_energy >= get_melee_spec_cost(p->melee_spec_weapon);
+    return p->special_energy >= osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]);
 }
 
 static inline int is_granite_maul_attack_available(Player* p) {
     if (p->melee_spec_weapon != MELEE_SPEC_GRANITE_MAUL) return 0;
-    return p->special_energy >= get_melee_spec_cost(MELEE_SPEC_GRANITE_MAUL);
+    return p->special_energy >= osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]);
 }
 
 static inline int is_melee_spec_attack_available(Player* p, Player* t) {
@@ -737,7 +745,7 @@ static inline int is_blood_attack_available(Player* p) {
 static inline int can_toggle_spec(Player* p) {
     if (is_melee_spec_weapon_equipped(p) && p->melee_spec_weapon != MELEE_SPEC_NONE) {
         if (is_melee_spec_two_handed(p->melee_spec_weapon) && !can_equip_two_handed_weapon(p)) return 0;
-        return p->special_energy >= get_melee_spec_cost(p->melee_spec_weapon);
+        return p->special_energy >= osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]);
     }
     if (is_ranged_spec_weapon_equipped(p) && p->ranged_spec_weapon != RANGED_SPEC_NONE)
         return p->special_energy >= get_ranged_spec_cost(p->ranged_spec_weapon);
@@ -751,7 +759,7 @@ static inline int is_special_ready(Player* p, AttackStyle style) {
         case ATTACK_STYLE_MELEE:
             if (!is_melee_spec_weapon_equipped(p) || p->melee_spec_weapon == MELEE_SPEC_NONE) return 0;
             if (is_melee_spec_two_handed(p->melee_spec_weapon) && !can_equip_two_handed_weapon(p)) return 0;
-            return p->special_energy >= get_melee_spec_cost(p->melee_spec_weapon);
+            return p->special_energy >= osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]);
         case ATTACK_STYLE_RANGED:
             if (!is_ranged_spec_weapon_equipped(p) || p->ranged_spec_weapon == RANGED_SPEC_NONE) return 0;
             return p->special_energy >= get_ranged_spec_cost(p->ranged_spec_weapon);
@@ -807,9 +815,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (is_special) {
         switch (style) {
             case ATTACK_STYLE_MELEE: {
-                MeleeSpecWeapon weapon = attacker->melee_spec_weapon;
-                spec_cost = get_melee_spec_cost(weapon);
-                spec_item_idx = pvp_melee_spec_to_item(weapon);
+                spec_item_idx = attacker->equipped[GEAR_SLOT_WEAPON];
+                spec_cost = osrs_spec_cost(spec_item_idx);
                 break;
             }
             case ATTACK_STYLE_RANGED: {
@@ -929,7 +936,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             if (magic_type == 1) magic_base_hit = get_ice_base_hit(attacker->current_magic);
             else if (magic_type == 2) magic_base_hit = get_blood_base_hit(attacker->current_magic);
         }
-        int max_hit = calculate_max_hit(attacker, style, str_mult, magic_base_hit);
+        int max_hit = calculate_base_max_hit(attacker, style, str_mult, magic_base_hit);
 
         int hit_delay;
         if (style == ATTACK_STYLE_MELEE)
@@ -965,6 +972,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             if (rand_float(env) < hit_chance) {
                 hit_success = 1;
                 damage = rand_int(env, max_hit + 1);
+                if (style == ATTACK_STYLE_MELEE && attacker->equipment_effect_profile.dharok_piece_count >= 4)
+                    damage = osrs_dharok_max_hit(damage, attacker->base_hitpoints, attacker->current_hitpoints);
             }
 
             if (is_crossbow_ranged) {
@@ -1007,7 +1016,8 @@ post_attack:
     attacker->used_special_this_tick = is_special;
 
     int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed;
-    int is_instant = (is_special && spec_item_idx == ITEM_GRANITE_MAUL);
+    int is_instant = (is_special && (spec_item_idx == ITEM_GRANITE_MAUL ||
+        spec_item_idx == ITEM_GRANITE_MAUL_ORNATE));
     if (!is_instant) {
         attacker->attack_timer = attack_speed - 1;
         attacker->attack_timer_uncapped = attack_speed - 1;

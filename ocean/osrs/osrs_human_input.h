@@ -259,8 +259,17 @@ static void human_handle_prayer_click(HumanInput* hi, GuiState* gs, Player* p,
     }
 }
 
-static void human_handle_spell_click(HumanInput* hi, GuiState* gs,
+static void human_handle_spell_click(HumanInput* hi, GuiState* gs, Player* player,
                                       int mouse_x, int mouse_y) {
+    if (player->is_lunar_spellbook) {
+        int gx, gy;
+        gui_spell_grid_origin(gs, &gx, &gy);
+        if (mouse_x >= gx && mouse_x < gx + 140 && mouse_y >= gy && mouse_y < gy + 38) {
+            hi->pending_veng = 1;
+            human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE});
+        }
+        return;
+    }
     int idx = human_gui_spell_idx_at(gs, mouse_x, mouse_y);
     if (idx >= 0) {
         if (hi->cursor_mode != CURSOR_NORMAL) {

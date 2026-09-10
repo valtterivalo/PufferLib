@@ -127,6 +127,7 @@ static inline void update_spec_weapons_for_weapon(Player* p, uint8_t weapon_item
             p->melee_spec_weapon = MELEE_SPEC_AGS; break;
         case ITEM_ANCIENT_GS:
             p->melee_spec_weapon = MELEE_SPEC_ANCIENT_GS; break;
+        case ITEM_GRANITE_MAUL_ORNATE:
         case ITEM_GRANITE_MAUL:
             p->melee_spec_weapon = MELEE_SPEC_GRANITE_MAUL; break;
         case ITEM_VESTAS:
@@ -160,6 +161,7 @@ static inline int item_is_spec_weapon(uint8_t weapon_item) {
         case ITEM_DRAGON_CLAWS:
         case ITEM_AGS:
         case ITEM_ANCIENT_GS:
+        case ITEM_GRANITE_MAUL_ORNATE:
         case ITEM_GRANITE_MAUL:
         case ITEM_VESTAS:
         case ITEM_VOIDWAKER:

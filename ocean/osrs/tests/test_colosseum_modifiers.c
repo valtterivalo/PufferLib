@@ -298,6 +298,13 @@ static int test_aggregate_doses_for_kind(
             return s->surge_doses;
         case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
             return s->player.antivenom_doses;
+        case OSRS_CONSUMABLE_MARLIN:
+        case OSRS_CONSUMABLE_HALIBUT:
+        case OSRS_CONSUMABLE_SUMMER_PIE:
+        case OSRS_CONSUMABLE_PIE_DISH:
+        case OSRS_CONSUMABLE_LOCATOR_ORB:
+        case OSRS_CONSUMABLE_TELEPORT:
+        case OSRS_CONSUMABLE_VENGEANCE_SACK:
         case OSRS_CONSUMABLE_GUTHIX_REST:
         case OSRS_CONSUMABLE_SATURATED_HEART:
         case OSRS_CONSUMABLE_NONE:

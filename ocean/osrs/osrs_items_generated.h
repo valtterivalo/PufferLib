@@ -146,7 +146,10 @@ typedef enum {
     ITEM_OATHPLATE_LEGS = 141,
     ITEM_VENATOR_BOW = 142,
     ITEM_ABYSSAL_TENTACLE = 143,
-    NUM_ITEMS = 144,
+    ITEM_DHAROKS_PLATEBODY = 144,
+    ITEM_DHAROKS_GREATAXE = 145,
+    ITEM_GRANITE_MAUL_ORNATE = 146,
+    NUM_ITEMS = 147,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1465,6 +1468,25 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_magic = 0, .defence_ranged = 0,
         .melee_strength = 86, .ranged_strength = 0, .magic_damage = 0, .prayer = 0, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
+    [ITEM_DHAROKS_PLATEBODY] = {
+        .item_id = 4720, .name = "Dharok's platebody", .slot = SLOT_BODY,
+        .attack_magic = -30, .attack_ranged = -10,
+        .defence_stab = 122, .defence_slash = 120, .defence_crush = 107,
+        .defence_magic = -6, .defence_ranged = 132,
+        .effect_mask = OSRS_ITEM_EFFECT_DHAROK_PIECE
+    },
+    [ITEM_DHAROKS_GREATAXE] = {
+        .item_id = 4718, .name = "Dharok's greataxe", .slot = SLOT_WEAPON,
+        .two_handed = 1, .attack_speed = 7, .attack_range = 1,
+        .attack_slash = 103, .attack_crush = 95, .melee_strength = 105,
+        .effect_mask = OSRS_ITEM_EFFECT_DHAROK_PIECE
+    },
+    [ITEM_GRANITE_MAUL_ORNATE] = {
+        .item_id = 24225, .name = "Granite maul (ornate handle)", .slot = SLOT_WEAPON,
+        .two_handed = 1, .attack_speed = 7, .attack_range = 1,
+        .attack_crush = 81, .melee_strength = 79
+    },
+
 };
 static_assert(
     sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS,
