@@ -25,6 +25,25 @@ int main(void) {
         riskfight_write_action_mask(&env->state, i, expected);
         for (int j = 0; j < RF_MASK_SIZE; j++) assert(masks[i][j] == expected[j]);
     }
+    assert(env->log.policy_0_score == 0.5f && env->log.draw_rate == 1);
+    memset(&env->log, 0, sizeof(env->log));
+    actions[0][RF_PRIMARY] = 0;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(env->log.policy_0_score == 1 && env->log.draw_rate == 0);
+    assert(env->log.kills == 1 && env->log.net_stake == 1);
+    env->state.env.players[0].current_hitpoints = 0;
+    puf_step(env);
+    assert(env->log.policy_0_score == 1 && env->log.deaths == 1 && env->log.net_stake == 0);
+    env->state.env.players[0].current_hitpoints = 0;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(env->log.policy_0_score == 1.5f && env->log.draw_rate == 1);
+    Dict output = {0};
+    puf_log(&env->log, &output);
+    assert(dict_get(&output, "policy_0_score") == 1.5);
+    assert(dict_get(&output, "draw_rate") == 1);
+    dict_clear(&output);
     puf_close(env); free(env);
     items[1].value = 0;
     env = calloc(1, sizeof(*env));
@@ -33,7 +52,12 @@ int main(void) {
     assert(env->num_agents == 1 && env->agents[0].policy == 0);
     env->agents[0] = (Agent){.observations = obs[0], .actions = actions[0],
         .rewards = &rewards[0], .terminals = &terminals[0], .action_mask = masks[0]};
-    puf_reset(env);
+    for (int bot = RISKFIGHT_TRADER; bot <= RISKFIGHT_AGGRESSIVE; bot++) {
+        puf_set_bot_policy(env, bot);
+        puf_reset(env);
+        assert(env->context.opponent == bot && env->num_agents == 1);
+    }
+    actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(terminals[0] == 1 && rewards[0] == 0 && env->log.escapes == 1);
     puf_close(env); free(env);

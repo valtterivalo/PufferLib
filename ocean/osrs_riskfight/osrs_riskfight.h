@@ -1,6 +1,7 @@
 #pragma once
 
 typedef float obs_t;
+#define PUF_HAS_BOT_POLICY
 #include "pufferenv.h"
 #define Log OsrsSharedLog
 #include "../osrs/encounters/encounter_riskfight.h"
@@ -15,6 +16,7 @@ typedef float obs_t;
 
 struct Log {
     float episode_return, episode_length;
+    float policy_0_score, draw_rate;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
 };
 struct Env {
@@ -42,6 +44,11 @@ void puf_init(Env* env, Dict* kwargs) {
     memset(&env->log, 0, sizeof(env->log));
     riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
 }
+static inline void puf_set_bot_policy(Env* env, int bot_policy) {
+    assert(bot_policy >= RISKFIGHT_TRADER && bot_policy <= RISKFIGHT_AGGRESSIVE);
+    env->context.opponent = (RiskfightOpponent)bot_policy;
+}
+
 static void riskfight_native_observe(Env* env) {
     float mask[RF_MASK_SIZE];
     for (int i = 0; i < env->num_agents; i++) {
@@ -73,6 +80,8 @@ void puf_step(Env* env) {
         env->log.deaths += outcome == RISKFIGHT_DEATH;
         env->log.escapes += outcome == RISKFIGHT_ESCAPE;
         env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
+        env->log.policy_0_score += 0.5f * (env->state.rewards[0] + 1.0f);
+        env->log.draw_rate += env->state.rewards[0] == 0;
         env->log.net_stake += env->state.rewards[0];
         env->log.episode_return += env->state.rewards[0];
         env->log.episode_length += env->state.env.tick;
@@ -99,6 +108,8 @@ void puf_close(Env* env) {
 void puf_log(Log* log, Dict* out) {
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
+    dict_set(out, "policy_0_score", log->policy_0_score);
+    dict_set(out, "draw_rate", log->draw_rate);
     dict_set(out, "kills", log->kills);
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);
