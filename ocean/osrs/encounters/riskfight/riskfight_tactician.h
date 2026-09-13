@@ -14,16 +14,21 @@ typedef struct {
     int clicks;
 } RiskfightEatPlan;
 
+typedef enum { RISKFIGHT_TIMING_TRADE, RISKFIGHT_TIMING_FLOOR } RiskfightAttackTiming;
+
 typedef struct {
     int extra_eat_hp;
     int finisher_hp_margin;
     int reflection_reserve_percent;
+    RiskfightAttackTiming timing;
 } RiskfightTacticianProfile;
 
-static const RiskfightTacticianProfile RISKFIGHT_PROFILE_BALANCED = {0, 0, 100};
-static const RiskfightTacticianProfile RISKFIGHT_PROFILE_PRESSURE = {0, 8, 85};
-static const RiskfightTacticianProfile RISKFIGHT_PROFILE_CAUTIOUS = {8, -8, 110};
-static const RiskfightTacticianProfile RISKFIGHT_PROFILE_HELDOUT = {4, 4, 95};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_BALANCED = {0, 0, 100, RISKFIGHT_TIMING_TRADE};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_PRESSURE = {0, 8, 85, RISKFIGHT_TIMING_TRADE};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_CAUTIOUS = {8, -8, 110, RISKFIGHT_TIMING_TRADE};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_HELDOUT = {4, 4, 95, RISKFIGHT_TIMING_TRADE};
+
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_FLOOR = {0, 0, 100, RISKFIGHT_TIMING_FLOOR};
 
 typedef enum {
     RISKFIGHT_HP_FRESH,
@@ -185,6 +190,21 @@ static RiskfightEatPlan riskfight_timed_eat(const Player* p, RiskfightThreatWind
     return riskfight_choose_eat(p, target - (later.healed_hp - p->current_hitpoints));
 }
 
+static int riskfight_floor_attack_window(const float* obs, const Player* self,
+        RiskfightThreatWindow threat) {
+    const float* event = obs + RF_HISTORY_START;
+    if (threat.incoming_animation || event[6] || (event[3] && event[4] > 0)) return 1;
+    if (self->attack_timer > 1) return 0;
+    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+    if (opponent[3] && threat.ticks_until <= 1) return 0;
+    EquipmentBonuses gear;
+    osrs_sum_equipment_bonuses(self->equipped, &gear);
+    int speed = gear.attack_speed;
+    int tick = (int)lroundf(obs[20] * RF_OBSERVATION_TICK_SCALE);
+    int side = opponent[1] < 0 ? speed : 0;
+    return (tick + side) % (2 * speed) < 2;
+}
+
 static void riskfight_tactician_profile(const float* obs, int* actions,
         RiskfightTacticianProfile profile) {
     Player self = riskfight_observed_self(obs);
@@ -209,6 +229,9 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
     int reflecting = obs[11] || actions[RF_VENGEANCE];
     int own_ready = self.attack_timer <= 1;
     if (!eating && own_ready && reflecting && threat.ticks_until == 1) actions[RF_PRIMARY] = RF_STOP;
+    int attack_window = profile.timing == RISKFIGHT_TIMING_TRADE ||
+        riskfight_floor_attack_window(obs, &self, threat);
+    if (!attack_window) actions[RF_PRIMARY] = RF_STOP;
     int equipped_weapon = self.equipped[GEAR_SLOT_WEAPON];
     int chosen_weapon = ITEM_ABYSSAL_TENTACLE;
     int best_max = -1;
@@ -234,7 +257,7 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
         OsrsMeleeThreat hit = osrs_melee_threat(candidate.equipped,
             calculate_effective_strength(&candidate, ATTACK_STYLE_MELEE), candidate.base_hitpoints,
             candidate.current_hitpoints, candidate.special_energy);
-        int spec = i >= 2 && hit.special_count > 0 && !eating &&
+        int spec = i >= 2 && hit.special_count > 0 && !eating && attack_window &&
             (own_ready || hit.instant_special_max > 0) &&
             (opponent_hp_upper <= hit.special_stack_max + profile.finisher_hp_margin || (reflecting && threat.incoming_animation));
         if (i >= 2 && !spec) continue;
@@ -250,7 +273,10 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
             opponent_hp_upper, 0, 1, 1, 0);
         int return_damage = ((returned.veng_damage + returned.recoil_damage) *
             profile.reflection_reserve_percent + 99) / 100;
-        int required_hp = return_damage + (threat.ticks_until == 0 ? threat.damage : 0) + 1;
+        const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+        int contesting = profile.timing == RISKFIGHT_TIMING_TRADE ||
+            opponent[3] || threat.incoming_animation;
+        int required_hp = return_damage + (threat.ticks_until == 0 && contesting ? threat.damage : 0) + 1;
         if (self.current_hitpoints < required_hp) {
             if (threat.ticks_until == 0) eat = riskfight_choose_eat(&self, required_hp);
             actions[RF_FOOD] = eat.food;
@@ -290,7 +316,12 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
                 self.current_strength < 110)
             actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
     }
-    if (threat.ticks_until == 0 && eat.healed_hp <= eating_threat.damage && eat.clicks == 0)
+    int has_healing = riskfight_player_find_food(&self, OSRS_CONSUMABLE_SUMMER_PIE) ||
+        riskfight_player_find_food(&self, OSRS_CONSUMABLE_MARLIN) ||
+        riskfight_player_find_food(&self, OSRS_CONSUMABLE_BREW) ||
+        riskfight_player_find_food(&self, OSRS_CONSUMABLE_HALIBUT);
+    if (threat.ticks_until == 0 && eat.healed_hp <= eating_threat.damage && eat.clicks == 0 &&
+            (profile.timing == RISKFIGHT_TIMING_TRADE || !has_healing || threat.incoming_animation))
         actions[RF_PRIMARY] = RF_TELEPORT;
 }
 static void riskfight_tactician(const float* obs, int* actions) {
