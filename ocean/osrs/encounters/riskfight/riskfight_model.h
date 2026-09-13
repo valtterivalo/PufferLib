@@ -121,7 +121,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->env.winner = -1;
-    s->env.pid_holder = (int)(xorshift32(&s->env.rng_state) % 2);
+    pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
     static const uint8_t equipment[NUM_GEAR_SLOTS] = {
         [GEAR_SLOT_AMMO] = ITEM_NONE,
         [GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM,

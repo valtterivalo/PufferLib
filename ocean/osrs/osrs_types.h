@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "osrs_interaction.h"
+#include "osrs_entity_priority.h"
 
 #define NUM_AGENTS 2
 #define MAX_PENDING_HITS 8
@@ -270,6 +271,13 @@ typedef struct {
     int melee_defence;
 } VisibleGearBonuses;
 
+typedef enum {
+    OSRS_HIT_DIRECT,
+    OSRS_HIT_RECOIL,
+    OSRS_HIT_VENGEANCE,
+    OSRS_HIT_MORRIGAN_BLEED,
+} OsrsHitKind;
+
 typedef struct {
     int damage;
     int ticks_until_hit;
@@ -281,7 +289,7 @@ typedef struct {
     int drain_type;
     int drain_percent;
     int flat_heal;
-    int is_morr_bleed;
+    OsrsHitKind kind;
     OverheadPrayer defender_prayer_at_attack;
 } PendingHit;
 
@@ -815,7 +823,8 @@ typedef struct {
     int winner;
     int auto_reset;
     int pid_holder;
-    int pid_shuffle_countdown;
+    OsrsEntityPriority priority[NUM_AGENTS];
+    OsrsPriorityPolicy priority_policy;
 
     int is_lms;
 

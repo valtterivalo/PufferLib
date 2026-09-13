@@ -137,9 +137,10 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
 
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
-    s->env.episode_over = dead[0] || dead[1] || s->escaped[0] || s->escaped[1];
+    s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
     for (int i = 0; i < 2; i++) {
-        s->outcome[i] = dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
+        s->outcome[i] = !s->env.episode_over ? RISKFIGHT_ONGOING :
+            dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
             s->env.episode_over ? RISKFIGHT_ESCAPE : RISKFIGHT_ONGOING;
         s->rewards[i] = s->outcome[i] == RISKFIGHT_KILL ? 1 :
@@ -167,16 +168,20 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         const HumanCommandQueue* queue = queues[i];
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
+    }
+    for (int turn = 0; turn < 2; turn++) {
+        int i = s->env.pid_holder ^ turn;
+        if (!s->escaped[0] && !s->escaped[1]) {
+            int active = s->env.players[i].veng_active;
+            pvp_process_incoming_hits(&s->env, i);
+            if (active && !s->env.players[i].veng_active)
+                s->inventory_use[i].vengeance_consumed_tick = s->env.tick;
+        }
+        if (s->env.players[i].current_hitpoints <= 0) continue;
         pvp_step_player_movement(&s->env, i, ctx->route_topology, &ctx->routes[i]);
         int idle_actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
         execute_attack_movement(&s->env, i, idle_actions, ctx->route_topology, &ctx->routes[i]);
         riskfight_attack(s, i, 0);
-        if (!s->escaped[0] && !s->escaped[1]) {
-            int active = s->env.players[1 - i].veng_active;
-            process_pending_hits(&s->env, i, 1 - i);
-            if (active && !s->env.players[1 - i].veng_active)
-                s->inventory_use[1 - i].vengeance_consumed_tick = s->env.tick;
-        }
     }
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
@@ -186,6 +191,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         osrs_player_inventory_tick(p, &s->inventory_use[i]);
     }
     s->env.tick++;
+    pvp_tick_priority(&s->env);
     riskfight_finish(s);
     for (int i = 0; i < 2; i++) riskfight_observe_visible(s, i, 0);
 }

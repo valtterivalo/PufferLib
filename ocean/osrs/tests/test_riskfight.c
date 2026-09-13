@@ -110,20 +110,29 @@ static void test_vengeance(void) {
     PendingHit hit = {.damage = 20, .attack_type = ATTACK_STYLE_MELEE, .hit_success = 1};
     apply_damage(&state.env, 1, 0, &hit);
     assert(!p->veng_active && p->current_hitpoints == 101);
+    assert(state.env.players[1].current_hitpoints == 121);
+    assert(p->num_pending_hits == 1 && p->pending_hits[0].damage == 15);
+    pvp_process_incoming_hits(&state.env, 1);
     assert(state.env.players[1].current_hitpoints == 106);
     assert(state.env.players[1].hit_landed_this_tick && state.env.players[1].hit_damage == 15);
+    state.env.tick++;
     assert(osrs_player_cast_inventory_vengeance(p, &state.inventory_use[0], state.env.tick));
     assert(state.inventory_use[0].vengeance_sacks == 99);
     apply_damage(&state.env, 1, 0, &hit);
+    pvp_process_incoming_hits(&state.env, 1);
     assert(state.env.players[1].current_hitpoints == 91 && !p->veng_active);
     assert(!osrs_player_cast_inventory_vengeance(p, &state.inventory_use[0], state.env.tick));
     p->veng_cooldown = 0; p->veng_active = 1; hit.damage = 1;
     int before_chip = state.env.players[1].current_hitpoints;
     apply_damage(&state.env, 1, 0, &hit); assert(!p->veng_active);
+    pvp_process_incoming_hits(&state.env, 1);
     assert(state.env.players[1].current_hitpoints == before_chip - 1);
     p->veng_active = 1; p->current_hitpoints = 5;
     state.env.players[1].current_hitpoints = 10; hit.damage = 20;
     apply_damage(&state.env, 1, 0, &hit); riskfight_finish(&state);
+    assert(!state.env.episode_over && state.outcome[0] == RISKFIGHT_ONGOING);
+    pvp_process_incoming_hits(&state.env, 1);
+    riskfight_finish(&state);
     assert(state.outcome[0] == RISKFIGHT_MUTUAL_DEATH && state.rewards[0] == 0 && state.rewards[1] == 0);
 }
 static void test_special_and_outcomes(void) {
@@ -238,12 +247,40 @@ static void test_tick_order_and_boundaries(void) {
     }
 }
 
+static void test_live_attack_processing_order(void) {
+    for (int first = 0; first < 2; first++) {
+        reset();
+        state.env.pid_holder = first;
+        state.env.priority[first].rank = 0;
+        state.env.priority[1 - first].rank = 1;
+        int actions[2 * RF_HEADS] = {0};
+        for (int i = 0; i < 2; i++) {
+            state.env.players[i].veng_active = 0;
+            actions[i * RF_HEADS + RF_WEAPON] = 24;
+            actions[i * RF_HEADS + RF_PRIMARY] = RF_ATTACK;
+            actions[i * RF_HEADS + RF_SPECIAL] = 1;
+        }
+        step(actions);
+        assert(state.env.players[first].current_hitpoints == 121);
+        assert(state.env.players[1 - first].current_hitpoints < 121);
+        assert(state.env.players[first].num_pending_hits == 0);
+        assert(state.env.players[1 - first].num_pending_hits == 1);
+        assert(state.env.players[0].special_energy == 50 && state.env.players[1].special_energy == 50);
+        memset(actions, 0, sizeof(actions));
+        actions[RF_PRIMARY] = actions[RF_HEADS + RF_PRIMARY] = RF_STOP;
+        step(actions);
+        assert(state.env.players[first].current_hitpoints < 121);
+        assert(state.env.players[0].num_pending_hits == 0 && state.env.players[1].num_pending_hits == 0);
+    }
+}
+
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_reset_and_equipment(); test_food(); test_orb_and_stop(); test_dharok_recoil();
     test_potions(); test_vengeance(); test_special_and_outcomes(); test_hidden_state_and_replay();
     test_tick_order_and_boundaries();
+    test_live_attack_processing_order();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight contracts passed");
 }

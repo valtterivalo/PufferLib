@@ -341,6 +341,7 @@ static void execute_switches(
 ) {
     Player* p = &env->players[agent_idx];
     p->consumable_used_this_tick = 0;
+    if (p->current_hitpoints <= 0) return;
 
     OsrsInventoryClickActions clicks = {0};
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)

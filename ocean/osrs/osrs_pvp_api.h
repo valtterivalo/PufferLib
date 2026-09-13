@@ -329,12 +329,7 @@ void pvp_reset(
     env->tick = 0;
     env->episode_over = 0;
     env->winner = -1;
-    if (env->has_rng_seed) {
-        env->pid_holder = 1 - (int)(env->rng_seed & 1u);
-    } else {
-        env->pid_holder = rand_int(env, 2);
-    }
-    env->pid_shuffle_countdown = 100 + rand_int(env, 51);
+    pvp_reset_priority(env, OSRS_PRIORITY_STANDARD);
 
     env->pvp_runtime.is_pvp_arena = 0;
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -508,24 +503,20 @@ void pvp_step(
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
     }
 
-    pvp_step_player_movement(env, first, route_topology, &route_cache[first]);
-    pvp_step_player_movement(env, second, route_topology, &route_cache[second]);
-
-    pvp_resolve_same_tile(env, first, second, route_topology);
-
-    execute_attack_movement(
-        env, first, agent_actions[first], route_topology, &route_cache[first]);
-    execute_attack_movement(
-        env, second, agent_actions[second], route_topology, &route_cache[second]);
-
-    pvp_resolve_same_tile(env, first, second, route_topology);
-
-    execute_attack_combat(
-        env, first, agent_actions[first], route_topology, &route_cache[first]);
-    execute_attack_combat(
-        env, second, agent_actions[second], route_topology, &route_cache[second]);
-
-    pvp_resolve_same_tile(env, first, second, route_topology);
+    for (int turn = 0; turn < NUM_AGENTS; turn++) {
+        int player_idx = first ^ turn;
+        pvp_process_incoming_hits(env, player_idx);
+        if (env->players[player_idx].current_hitpoints <= 0) continue;
+        pvp_step_player_movement(env, player_idx, route_topology, &route_cache[player_idx]);
+        pvp_resolve_same_tile(env, first, second, route_topology);
+        execute_attack_movement(env, player_idx, agent_actions[player_idx],
+            route_topology, &route_cache[player_idx]);
+        pvp_resolve_same_tile(env, first, second, route_topology);
+        if (env->players[1 - player_idx].current_hitpoints > 0)
+            execute_attack_combat(env, player_idx, agent_actions[player_idx],
+                route_topology, &route_cache[player_idx]);
+        pvp_resolve_same_tile(env, first, second, route_topology);
+    }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         int dx = abs(env->players[i].x - pre_move_x[i]);
@@ -533,9 +524,6 @@ void pvp_step(
         int dist = (dx > dy) ? dx : dy;
         env->players[i].is_running = (dist >= 2) ? 1 : 0;
     }
-
-    process_pending_hits(env, 0, 1);
-    process_pending_hits(env, 1, 0);
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         Player* p = &env->players[i];
@@ -560,21 +548,15 @@ void pvp_step(
     }
     env->tick++;
 
-    if (!env->has_rng_seed) {
-        env->pid_shuffle_countdown--;
-        if (env->pid_shuffle_countdown <= 0) {
-            env->pid_holder = 1 - env->pid_holder;
-            env->pid_shuffle_countdown = 100 + rand_int(env, 51);
-        }
-    }
+    pvp_tick_priority(env);
 
     memcpy(env->pending_actions, env->actions,
         NUM_AGENTS * OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
-    for (int i = 0; i < NUM_AGENTS; i++) {
-        if (env->players[i].current_hitpoints <= 0) {
-            env->episode_over = 1;
-            env->winner = 1 - i;
-        }
+    if (pvp_death_is_settled(env)) {
+        env->episode_over = 1;
+        env->winner = env->players[0].current_hitpoints <= 0 &&
+            env->players[1].current_hitpoints <= 0 ? -1 :
+            env->players[0].current_hitpoints <= 0 ? 1 : 0;
     }
 
     if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS) {

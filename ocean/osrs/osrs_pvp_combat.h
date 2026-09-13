@@ -8,6 +8,22 @@
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
 
+static void pvp_reset_priority(OsrsEnv* env, OsrsPriorityPolicy policy) {
+    env->priority_policy = policy;
+    for (int i = 0; i < NUM_AGENTS; i++)
+        osrs_entity_priority_init(&env->priority[i], policy, &env->rng_state, xorshift32);
+    env->pid_holder = osrs_entity_priority_compare(&env->priority[0], 0,
+        &env->priority[1], 1) < 0 ? 0 : 1;
+}
+
+static void pvp_tick_priority(OsrsEnv* env) {
+    for (int i = 0; i < NUM_AGENTS; i++)
+        osrs_entity_priority_tick(&env->priority[i], env->priority_policy,
+            &env->rng_state, xorshift32);
+    env->pid_holder = osrs_entity_priority_compare(&env->priority[0], 0,
+        &env->priority[1], 1) < 0 ? 0 : 1;
+}
+
 static inline int pvp_melee_spec_to_item(MeleeSpecWeapon w) {
     switch (w) {
         case MELEE_SPEC_AGS:              return ITEM_AGS;
@@ -378,6 +394,7 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     }
 
     PendingHit* hit = &attacker->pending_hits[attacker->num_pending_hits++];
+    *hit = (PendingHit){0};
     hit->damage = damage;
     hit->ticks_until_hit = delay;
     hit->attack_type = style;
@@ -388,17 +405,32 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     hit->drain_type = drain_type;
     hit->drain_percent = drain_percent;
     hit->flat_heal = flat_heal;
-    hit->is_morr_bleed = 0;
     hit->defender_prayer_at_attack = defender->prayer;
 
     int actual_damage = osrs_prayer_reduce_damage(damage, defender->prayer, style, 1);
-    attacker->last_queued_hit_damage += actual_damage;
+    if (style != ATTACK_STYLE_NONE) attacker->last_queued_hit_damage += actual_damage;
 }
 
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
+
+    if (defender->current_hitpoints <= 0) return;
+
+    if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE) {
+        defender->hit_landed_this_tick = 1;
+        defender->hit_damage += hit->damage;
+        defender->hit_attacker_idx = attacker_idx;
+        defender->damage_applied_this_tick += hit->damage;
+        defender->current_hitpoints = max_int(0, defender->current_hitpoints - hit->damage);
+        float scale = (float)hit->damage / (float)defender->base_hitpoints;
+        defender->total_damage_received += scale;
+        attacker->total_damage_dealt += scale;
+        defender->damage_received_scale += scale;
+        attacker->damage_dealt_scale += scale;
+        return;
+    }
 
     osrs_ensure_player_equipment(defender);
 
@@ -423,40 +455,25 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     defender->hit_defender_prayer = hit->defender_prayer_at_attack;
     defender->hit_was_on_prayer = dr.prayer_blocked;
     defender->hit_attacker_idx = attacker_idx;
-    defender->damage_applied_this_tick = damage;
+    defender->damage_applied_this_tick += damage;
 
     if (damage > 0) defender->veng_active = 0;
-    if (dr.veng_damage > 0) {
-        attacker->hit_landed_this_tick = 1;
-        attacker->hit_damage += dr.veng_damage;
-        attacker->hit_attacker_idx = defender_idx;
-        attacker->current_hitpoints -= dr.veng_damage;
-        if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
-        float reflect_scale = (float)dr.veng_damage / (float)attacker->base_hitpoints;
-        attacker->total_damage_received += reflect_scale;
-        defender->total_damage_dealt += reflect_scale;
-        attacker->damage_received_scale += reflect_scale;
-        defender->damage_dealt_scale += reflect_scale;
-        defender->veng_active = 0;
-    }
-
     if (dr.recoil_damage > 0) {
         int recoil = dr.recoil_damage;
         if (defender->equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL &&
             recoil > defender->item_effect_state.recoil_charges) {
             recoil = defender->item_effect_state.recoil_charges;
         }
-        attacker->hit_landed_this_tick = 1;
-        attacker->hit_damage += recoil;
-        attacker->hit_attacker_idx = defender_idx;
-        attacker->current_hitpoints -= recoil;
-        if (attacker->current_hitpoints < 0) attacker->current_hitpoints = 0;
-        float recoil_scale = (float)recoil / (float)attacker->base_hitpoints;
-        attacker->total_damage_received += recoil_scale;
-        defender->total_damage_dealt += recoil_scale;
-        attacker->damage_received_scale += recoil_scale;
-        defender->damage_dealt_scale += recoil_scale;
         osrs_consume_recoil_charges(defender, recoil);
+        queue_hit(env->tick, defender_idx, attacker_idx, defender, attacker,
+            recoil, ATTACK_STYLE_NONE, 0, 0, 1, 0, 0, 0, 0, 0);
+        defender->pending_hits[defender->num_pending_hits - 1].kind = OSRS_HIT_RECOIL;
+    }
+
+    if (dr.veng_damage > 0) {
+        queue_hit(env->tick, defender_idx, attacker_idx, defender, attacker,
+            dr.veng_damage, ATTACK_STYLE_NONE, 0, 0, 1, 0, 0, 0, 0, 0);
+        defender->pending_hits[defender->num_pending_hits - 1].kind = OSRS_HIT_VENGEANCE;
     }
 
     defender->current_hitpoints -= damage;
@@ -483,16 +500,16 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             defender->freeze_applied_this_tick = 1;
         }
 
-        if (hit->heal_percent > 0) {
+        if (hit->heal_percent > 0 && attacker->current_hitpoints > 0) {
             int heal = (damage * hit->heal_percent) / 100;
             attacker->current_hitpoints = clamp(attacker->current_hitpoints + heal, 0, attacker->base_hitpoints);
         }
-        if (hit->flat_heal > 0) {
+        if (hit->flat_heal > 0 && attacker->current_hitpoints > 0) {
             attacker->current_hitpoints = clamp(attacker->current_hitpoints + hit->flat_heal, 0, attacker->base_hitpoints);
         }
     }
 
-    if (hit->is_morr_bleed && hit->hit_success && damage > 0) {
+    if (hit->kind == OSRS_HIT_MORRIGAN_BLEED && hit->hit_success && damage > 0) {
         defender->morr_dot_remaining = damage;
     }
 
@@ -515,6 +532,19 @@ static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_id
             i--;
         }
     }
+}
+
+static void pvp_process_incoming_hits(OsrsEnv* env, int recipient_idx) {
+    process_pending_hits(env, 1 - recipient_idx, recipient_idx);
+}
+
+static int pvp_death_is_settled(const OsrsEnv* env) {
+    int dead0 = env->players[0].current_hitpoints <= 0;
+    int dead1 = env->players[1].current_hitpoints <= 0;
+    if (dead0 && dead1) return 1;
+    if (dead0) return env->players[0].num_pending_hits == 0;
+    if (dead1) return env->players[1].num_pending_hits == 0;
+    return 0;
 }
 
 static inline void push_recent_attack(AttackStyle* buffer, int* index, AttackStyle style) {
@@ -918,7 +948,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         }
 
         if (spec_item_idx == ITEM_MORRIGANS_JAVELIN && total_damage > 0) {
-            attacker->pending_hits[attacker->num_pending_hits - 1].is_morr_bleed = 1;
+            attacker->pending_hits[attacker->num_pending_hits - 1].kind = OSRS_HIT_MORRIGAN_BLEED;
             defender->morr_dot_tick_counter = 3;
         }
 
