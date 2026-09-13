@@ -59,8 +59,16 @@ static int riskfight_inventory_head_accepts(const Player* p, int head, int slot)
     const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
     if (head <= RF_RING) {
         const int gear_slots[] = {GEAR_SLOT_WEAPON, GEAR_SLOT_SHIELD, GEAR_SLOT_RING};
-        return m->gear_slot == gear_slots[head] &&
-            osrs_can_equip_from_cell(p, p->inventory_cells, slot);
+        if (m->gear_slot != gear_slots[head]) return 0;
+        if (osrs_can_equip_from_cell(p, p->inventory_cells, slot)) return 1;
+        if (head == RF_SHIELD && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
+            for (int weapon_slot = 0; weapon_slot < OSRS_INVENTORY_SIZE; weapon_slot++) {
+                const OsrsItemContentMetadata* weapon = osrs_inventory_cell_metadata(&p->inventory_cells[weapon_slot]);
+                if (weapon->gear_slot == GEAR_SLOT_WEAPON && !item_is_two_handed(weapon->item_idx) &&
+                    osrs_can_equip_from_cell(p, p->inventory_cells, weapon_slot)) return 1;
+            }
+        }
+        return 0;
     }
     if (head == RF_DRINK) return m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
         (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
@@ -129,8 +137,21 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
         if (obs[9] == 0) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
         if (hp < 45 && obs[10] == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
         if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
-    } else if (obs[2] < 0.9f && obs[9] == 0) {
-        actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+    }
+    if (!actions[RF_DRINK] && obs[9] == 0) {
+        float attack = obs[2] * 118;
+        float strength = obs[3] * 118;
+        float defence = obs[4] * 120;
+        int needs_restore = obs[1] * 99 <= 40 || attack < 98.5f ||
+            strength < 98.5f || defence < 98.5f || obs[5] * 99 < 98.5f;
+        if (needs_restore) {
+            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+            if (!actions[RF_DRINK])
+                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
+        }
+        if (!actions[RF_DRINK] && hp >= threshold && hp > OSRS_DIVINE_DAMAGE &&
+                (attack < 110 || strength < 110 || defence < 110))
+            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
     }
     if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
     uint8_t weapon = hp < 70 ? ITEM_DHAROKS_GREATAXE : ITEM_ABYSSAL_TENTACLE;
@@ -139,11 +160,17 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
         actions[RF_SPECIAL] = weapon == ITEM_GRANITE_MAUL_ORNATE ? 2 : 1;
     }
     actions[RF_WEAPON] = riskfight_find_gear(obs, weapon);
+    if (!item_is_two_handed(weapon))
+        actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
     if (type == RISKFIGHT_AGGRESSIVE && opponent[4] && opponent[6] > 2 && hp > 55 && hp < 100)
         actions[RF_ORB] = 1;
     actions[RF_RING] = riskfight_find_gear(obs,
         obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
-    if (type == RISKFIGHT_CAUTIOUS && hp < 30 && !actions[RF_FOOD] && !actions[RF_COMBO])
+    if (type == RISKFIGHT_CAUTIOUS && hp < 30 &&
+        !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
+        !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
+        !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) &&
+        !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW))
         actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif

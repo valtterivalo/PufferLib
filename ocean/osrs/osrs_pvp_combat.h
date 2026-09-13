@@ -411,12 +411,21 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     if (style != ATTACK_STYLE_NONE) attacker->last_queued_hit_damage += actual_damage;
 }
 
+static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
+    const PendingHit* hit, int damage, int hitpoints_before) {
+    if (!env->pvp_runtime.hit_observer) return;
+    OsrsPvpHitEvent event = {env->tick, source, target, hit->kind, damage,
+        hitpoints_before - env->players[target].current_hitpoints};
+    env->pvp_runtime.hit_observer(env->pvp_runtime.hit_observer_context, &event);
+}
+
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
 
     if (defender->current_hitpoints <= 0) return;
+    int hitpoints_before = defender->current_hitpoints;
 
     if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE) {
         defender->hit_landed_this_tick = 1;
@@ -429,6 +438,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         attacker->total_damage_dealt += scale;
         defender->damage_received_scale += scale;
         attacker->damage_dealt_scale += scale;
+        pvp_observe_hit(env, attacker_idx, defender_idx, hit, hit->damage, hitpoints_before);
         return;
     }
 
@@ -516,6 +526,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (dr.smite_drain > 0) {
         defender->current_prayer = clamp(defender->current_prayer - dr.smite_drain, 0, defender->base_prayer);
     }
+    pvp_observe_hit(env, attacker_idx, defender_idx, hit, damage, hitpoints_before);
 }
 
 static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_idx) {

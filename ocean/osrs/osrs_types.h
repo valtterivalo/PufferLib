@@ -295,6 +295,17 @@ typedef struct {
     OverheadPrayer defender_prayer_at_attack;
 } PendingHit;
 
+typedef struct {
+    int tick;
+    int source;
+    int target;
+    OsrsHitKind kind;
+    int damage;
+    int hitpoints_lost;
+} OsrsPvpHitEvent;
+
+typedef void (*OsrsPvpHitObserver)(void* context, const OsrsPvpHitEvent* event);
+
 typedef enum {
     ENTITY_PLAYER = 0,
     ENTITY_NPC = 1,
@@ -801,6 +812,8 @@ typedef struct {
     OsrsGraniteMaulState maul[NUM_AGENTS];
     OsrsTeleportState teleport[NUM_AGENTS];
     OsrsTeleportWorld teleport_world;
+    OsrsPvpHitObserver hit_observer;
+    void* hit_observer_context;
 } OsrsPvpRuntime;
 
 typedef struct {

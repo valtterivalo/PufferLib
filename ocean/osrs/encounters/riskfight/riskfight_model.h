@@ -97,6 +97,8 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     const Player* opponent = &s->env.players[1 - viewer];
     RiskfightVisibleOpponent* v = &s->visible[viewer];
     memcpy(v->equipment, opponent->equipped, sizeof(v->equipment));
+    v->equipment[GEAR_SLOT_RING] = ITEM_NONE;
+    v->equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);
@@ -109,7 +111,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     event[3] = opponent->hit_landed_this_tick;
     event[4] = opponent->hit_damage;
     event[5] = opponent->cast_veng_this_tick && !opponent->just_attacked;
-    event[6] = opponent->ate_food_this_tick || opponent->ate_karambwan_this_tick;
+    event[6] = 0;
     event[7] = v->health_bar;
 
 }

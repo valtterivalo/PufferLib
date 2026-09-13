@@ -160,6 +160,37 @@ static void test_special_and_outcomes(void) {
     reset(); state.env.players[1].current_hitpoints = 0; riskfight_finish(&state);
     assert(state.rewards[0] == 1 && state.rewards[1] == -1);
 }
+static void test_visible_observation_boundary(void) {
+    reset();
+    state.env.tick = 1;
+    Player* opponent = &state.env.players[1];
+    float before[RF_OBS_SIZE], after[RF_OBS_SIZE];
+    riskfight_observe_visible(&state, 0, 0);
+    riskfight_write_observation(&state, 0, before);
+    opponent->equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    opponent->equipped[GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS;
+    opponent->ate_food_this_tick = 1;
+    opponent->ate_karambwan_this_tick = 1;
+    riskfight_observe_visible(&state, 0, 0);
+    riskfight_write_observation(&state, 0, after);
+    assert(memcmp(before, after, sizeof(before)) == 0);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_RING] == ITEM_NONE);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_AMMO] == ITEM_NONE);
+    assert(after[RF_HISTORY_START + 6] == 0);
+
+    opponent->equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
+    opponent->hit_landed_this_tick = 1;
+    opponent->hit_damage = 10;
+    opponent->current_hitpoints = 90;
+    riskfight_observe_visible(&state, 0, 0);
+    riskfight_write_observation(&state, 0, after);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+    assert(after[RF_HISTORY_START + 3] == 1);
+    assert(after[RF_HISTORY_START + 4] == 10);
+    assert(after[RF_OPPONENT_START + NUM_GEAR_SLOTS] < 1);
+    assert(memcmp(before, after, sizeof(before)) != 0);
+}
+
 static void test_hidden_state_and_replay(void) {
     reset(); float a[RF_OBS_SIZE], b[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, a);
@@ -290,7 +321,7 @@ int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_reset_and_equipment(); test_food(); test_orb_and_stop(); test_dharok_recoil();
-    test_potions(); test_vengeance(); test_special_and_outcomes(); test_hidden_state_and_replay();
+    test_potions(); test_vengeance(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
     test_tick_order_and_boundaries();
     test_live_attack_processing_order();
     riskfight_destroy_context((EncounterContext*)&context);
