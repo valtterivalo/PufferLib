@@ -169,8 +169,6 @@ static void test_visible_observation_boundary(void) {
     riskfight_write_observation(&state, 0, before);
     opponent->equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
     opponent->equipped[GEAR_SLOT_AMMO] = ITEM_DRAGON_ARROWS;
-    opponent->ate_food_this_tick = 1;
-    opponent->ate_karambwan_this_tick = 1;
     riskfight_observe_visible(&state, 0, 0);
     riskfight_write_observation(&state, 0, after);
     assert(memcmp(before, after, sizeof(before)) == 0);

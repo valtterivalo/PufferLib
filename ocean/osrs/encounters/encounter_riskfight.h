@@ -24,10 +24,13 @@ static void* riskfight_entity(EncounterState* state, EncounterContext* context, 
 }
 static void riskfight_render_entities(EncounterState* state, EncounterContext* context,
     RenderEntity* out, int capacity, int* count) {
+    RiskfightState* s = (RiskfightState*)state;
     *count = capacity < 2 ? capacity : 2;
     for (int i = 0; i < *count; i++) {
         Player* p = (Player*)riskfight_entity(state, context, i);
         osrs_render_entity_from_player_entity(p, &out[i]);
+        out[i].ate_food_this_tick |= s->env.tick > 0 &&
+            s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick;
         out[i].attack_target_entity_idx = osrs_interaction_active(&p->interaction) ? 1 - i : -1;
     }
 }

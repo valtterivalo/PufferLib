@@ -3915,7 +3915,8 @@ static int render_select_primary(RenderEntity* p) {
             OSRS_PLAYER_UNARMED_ATTACK_ANIM);
     }
 
-    if (p->ate_food_this_tick || p->ate_karambwan_this_tick) {
+    if (osrs_consumption_animation_visible(p->current_hitpoints, p->attack_style_this_tick,
+            p->ate_food_this_tick, p->ate_karambwan_this_tick, 0)) {
         return ANIM_SEQ_EAT;
     }
 

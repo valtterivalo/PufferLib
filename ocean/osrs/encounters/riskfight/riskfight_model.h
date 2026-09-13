@@ -131,8 +131,12 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     float* event = v->events[index];
     event[3] = opponent->hit_landed_this_tick;
     event[4] = opponent->hit_damage;
-    event[5] = opponent->cast_veng_this_tick && !opponent->just_attacked;
-    event[6] = 0;
+    int consuming = osrs_consumption_animation_visible(opponent->current_hitpoints,
+        opponent->attack_style_this_tick, opponent->ate_food_this_tick,
+        opponent->ate_karambwan_this_tick,
+        s->inventory_use[1 - viewer].potion_animation_tick_plus_one == s->env.tick);
+    event[5] = opponent->cast_veng_this_tick && !opponent->just_attacked && !consuming;
+    event[6] = consuming;
     event[7] = v->health_bar;
 
 }

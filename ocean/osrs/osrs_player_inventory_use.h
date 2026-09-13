@@ -19,6 +19,7 @@ typedef struct {
     int vengeance_consumed_tick;
     int divine_combat_ticks;
     int stat_drift_timer;
+    int potion_animation_tick_plus_one;
 } OsrsInventoryUseState;
 
 typedef enum {
@@ -108,6 +109,7 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
             if (!osrs_inventory_cell_consume_drink_one_dose(cell, click,
                     &p->potion_timer, osrs_player_inventory_drink_effect, p).consumed)
                 return OSRS_INVENTORY_USE_NONE;
+            state->potion_animation_tick_plus_one = tick + 1;
             p->food_timer = 3;
             if (kind == OSRS_CONSUMABLE_DIVINE_COMBAT)
                 state->divine_combat_ticks = OSRS_DIVINE_DURATION;

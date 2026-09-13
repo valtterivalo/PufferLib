@@ -19,6 +19,11 @@ enum {
     OSRS_COMBAT_PROJECTILE_MISSING = -1,
 };
 
+static inline int osrs_consumption_animation_visible(int hp, AttackStyle attack_style,
+    int ate_food, int ate_combo, int drank_potion) {
+    return hp > 0 && attack_style == ATTACK_STYLE_NONE && (ate_food || ate_combo || drank_potion);
+}
+
 typedef enum {
     OSRS_ITEM_ID_RUNE_ARROW = 892,
     OSRS_ITEM_ID_ABYSSAL_WHIP = 4151,
