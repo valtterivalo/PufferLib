@@ -70,8 +70,6 @@ static void riskfight_render_post_tick(EncounterState* state, EncounterContext* 
         overlay->status_text_active ? "Not enough space in your inventory." : "");
 }
 static const EncounterDef ENCOUNTER_RISKFIGHT = {
-    .human_equipment_mode = HUMAN_EQUIPMENT_UNEQUIP_COMMANDS,
-    .render_post_tick = riskfight_render_post_tick,
     .name = "riskfight", .display_name = "Riskfight",
     .obs_size = RF_OBS_SIZE, .num_action_heads = RF_HEADS,
     .action_head_dims = RF_ACTION_DIMS, .mask_size = RF_MASK_SIZE,
@@ -80,6 +78,7 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .init_state = riskfight_init_state, .finalize_context = riskfight_finalize_context,
     .create = riskfight_create, .destroy = riskfight_destroy, .reset = riskfight_reset,
     .step = riskfight_step, .step_human_commands = riskfight_step_human,
+    .human_equipment_mode = HUMAN_EQUIPMENT_UNEQUIP_COMMANDS,
     .write_obs = riskfight_obs, .write_mask = riskfight_mask,
     .get_reward = riskfight_reward, .is_terminal = riskfight_terminal,
     .get_entity_count = riskfight_entity_count, .get_entity = riskfight_entity,
@@ -88,6 +87,7 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .arena_base_x = FIGHT_AREA_BASE_X, .arena_base_y = FIGHT_AREA_BASE_Y,
     .arena_width = FIGHT_AREA_WIDTH, .arena_height = FIGHT_AREA_HEIGHT,
     .head_move = RF_PRIMARY, .head_prayer = -1, .head_target = RF_PRIMARY,
+    .render_post_tick = riskfight_render_post_tick,
     .get_log = riskfight_log, .get_tick = riskfight_tick, .get_winner = riskfight_winner,
 };
 __attribute__((constructor)) static void riskfight_register(void) {
