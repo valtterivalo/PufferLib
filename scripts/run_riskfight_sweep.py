@@ -32,6 +32,7 @@ def main():
     command.extend([
         f'--base.checkpoint_dir={args.root}/checkpoints', f'--base.log_dir={args.root}/logs',
         '--base.checkpoint_interval=64', '--base.eval_episodes=0', '--base.seed=73',
+        '--vec.hist_policy_hidden_size=0', '--vec.hist_policy_num_layers=0',
         '--selfplay.eval_bots=0,1,2,4,5,6', '--selfplay.eval_bot_games=256',
         '--sweep.max_runs=24', '--sweep.max_suggestion_cost=300', '--sweep.resume_dir=',
         '--sweep.objective_id=riskfight-six-bot-consumption-v1'])
