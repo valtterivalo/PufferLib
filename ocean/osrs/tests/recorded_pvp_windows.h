@@ -29,6 +29,8 @@ typedef struct {
     int expected_candidates;
 } RecordedPvpWindow;
 
+#include "recorded_pvp_124331.h"
+
 static const ConditionedAttack spec_attacks[] = {
     {89, 1, 15, ATTACK_STYLE_MELEE, RECORDED_BEFORE_PASSES},
     {89, 0, 65, ATTACK_STYLE_MAGIC, RECORDED_AFTER_SOURCE_PASS},
@@ -52,8 +54,17 @@ static const ConditionedAttack lethal_attacks[] = {
 static const RecordedHitsplat lethal_hits[] = {
     {484, 0, 4}, {484, 0, 22}, {483, 1, 45},
 };
+static const ConditionedAttack mutual_voidwaker_attacks[] = {
+    {21888, 0, 28, ATTACK_STYLE_MAGIC, RECORDED_AFTER_SOURCE_PASS},
+    {21888, 1, 61, ATTACK_STYLE_MAGIC, RECORDED_AFTER_SOURCE_PASS},
+};
+static const RecordedHitsplat mutual_voidwaker_hits[] = {
+    {21889, 0, 3}, {21889, 0, 21}, {21889, 0, 61},
+    {21888, 1, 28}, {21889, 1, 5}, {21889, 1, 34},
+};
 #define RECORDED_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 static const RecordedPvpWindow recorded_pvp_windows[] = {
+    RECORDED_PVP_124331_LETHAL_WINDOW,
     {
         "voidwaker_vengeance_maul",
         "session_20260913T072938.012Z_20260913T072839Z.64834_8380fc35-d98c-4f15-a1c5-6eb8b70da9de.jsonl.zst",
@@ -77,6 +88,15 @@ static const RecordedPvpWindow recorded_pvp_windows[] = {
         "Actors lul-zuiger and 3lephante. Attacker HP 121 is a reconstruction. Defender HP enumerated 1 through 45. Defender recoil and Vengeance active. Direct 45 and source-pass launch phase conditioned on footage.",
         483, 484, {121, 1}, {121, 45}, {0, 1}, {0, 1},
         lethal_attacks, RECORDED_COUNT(lethal_attacks), lethal_hits, RECORDED_COUNT(lethal_hits), 1, 1,
+    },
+    {
+        "mutual_voidwaker_lethal_reflection",
+        "session_20260913T130428.291Z_20260913T093024Z.89354_8b1bd9d1-5884-480b-9c2b-fee8c3f269e9.jsonl.zst",
+        "e2505b16f30787b23531d4471d7b374d63400f6b4900f63fa5aa11b2c956fe2c",
+        "Actors Perseveratie and ThieveOfLife. Both Voidwaker animations observed at 21888. Direct rolls 28 and 61, recoil, Vengeance and source-pass phases are conditioned explanations, not observed PID or hidden state. Raw pre-exchange health bars 21/30 and 24/30 do not supply exact HP. Victim HP enumerated 1 through 121 and survivor HP 68 through 121. Death callback sequence 10375 precedes serialized hitsplats 10376 through 10378, not server damage ordering.",
+        21888, 21889, {1, 68}, {121, 121}, {1, 1}, {1, 1},
+        mutual_voidwaker_attacks, RECORDED_COUNT(mutual_voidwaker_attacks),
+        mutual_voidwaker_hits, RECORDED_COUNT(mutual_voidwaker_hits), 0, 54,
     },
 };
 #undef RECORDED_COUNT

@@ -145,9 +145,16 @@ int main(void) {
         hits[0].damage += 100;
         impossible.hits = hits;
         int negative_candidates = enumerate(&impossible, 0, 0);
-        free(hits);
         if (negative_candidates != 0) {
             fprintf(stderr, "%s: altered recorded hitsplat incorrectly accepted\n", window->name);
+            return EXIT_FAILURE;
+        }
+        memcpy(hits, window->hits, window->hit_count * sizeof(*hits));
+        hits[0].tick++;
+        negative_candidates = enumerate(&impossible, 0, 0);
+        free(hits);
+        if (negative_candidates != 0) {
+            fprintf(stderr, "%s: shifted hitsplat tick incorrectly accepted\n", window->name);
             return EXIT_FAILURE;
         }
     }
