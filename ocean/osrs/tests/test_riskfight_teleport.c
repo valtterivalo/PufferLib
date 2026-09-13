@@ -51,8 +51,39 @@ static void test_context_and_boundaries(void) {
     assert(osrs_teleport_allowed(lock, 30 + OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS));
     OsrsTeleportState recorded = osrs_teleport_record_offensive_pvp_special(
         unlocked, OSRS_TELEPORT_COMBAT_PVP_AREA, 217);
-    assert(!osrs_teleport_allowed(recorded, 225));
+    assert(!osrs_teleport_allowed(recorded, 224));
+    assert(osrs_teleport_allowed(recorded, 225));
     assert(osrs_teleport_allowed(recorded, 226));
+}
+
+static void test_recorded_eight_tick_teleports(void) {
+    const int weapon_slots[] = {24, 23};
+    const int special_ticks[] = {1527, 1909};
+    const int teleport_ticks[] = {1535, 1917};
+    for (int i = 0; i < 2; i++) {
+        reset();
+        state.env.tick = special_ticks[i];
+        HumanCommand commands[] = {
+            {.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = weapon_slots[i]},
+            {.kind = HUMAN_COMMAND_SPEC_TOGGLE},
+            {.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1},
+        };
+        HumanCommandQueue queue = {.items = commands, .count = 3};
+        HumanCommandQueue empty = {0};
+        riskfight_step_queues(&state, &context, &queue, &empty);
+        assert(state.env.players[0].special_energy == 50);
+        assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == teleport_ticks[i]);
+        state.env.tick = teleport_ticks[i] - 1;
+        assert(!mask_allows_teleport());
+        equip(teleport_slot());
+        assert(!state.escaped[0]);
+        state.env.tick++;
+        assert(mask_allows_teleport());
+        int slot = teleport_slot();
+        equip(slot);
+        assert(state.escaped[0]);
+        assert(osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[slot]));
+    }
 }
 
 static void test_executed_special_and_consumption(void) {
@@ -148,6 +179,7 @@ int main(void) {
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_context_and_boundaries();
     test_executed_special_and_consumption();
+    test_recorded_eight_tick_teleports();
     test_non_triggering_actions();
     test_policy_and_human_blocked_teleport();
     riskfight_destroy_context((EncounterContext*)&context);

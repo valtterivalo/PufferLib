@@ -138,21 +138,52 @@ static void conditioned_recorded_maul_teleport_boundary(void) {
     frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(24), SPEC, TARGET}}, .count = {3},
         .actions = {[RF_WEAPON] = 25, [RF_SPECIAL] = 1, [RF_PRIMARY] = RF_ATTACK}});
     assert(attack_events(0) == 1 && state.env.players[0].used_special_this_tick);
-    assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == 226);
+    assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == 225);
     frame((CommandFrame){0});
     assert(attack_events(0) == 1 && !state.env.players[0].used_special_this_tick);
     frame((CommandFrame){.commands = {(HumanCommand[]){STOP}}, .count = {1},
         .actions = {[RF_PRIMARY] = RF_STOP}});
-    while (state.env.tick < 225) frame((CommandFrame){0});
+    while (state.env.tick < 224) frame((CommandFrame){0});
     frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(20)}}, .count = {1},
         .actions = {[RF_PRIMARY] = RF_TELEPORT}});
     assert(!state.env.episode_over && !state.escaped[0]);
     assert(!osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[20]));
+    frame((CommandFrame){0});
     frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(20)}}, .count = {1},
         .actions = {[RF_PRIMARY] = RF_TELEPORT}});
     assert(state.escaped[0] && state.env.episode_over);
     assert(state.outcome[0] == RISKFIGHT_ESCAPE && state.rewards[0] == 0);
     assert(osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[20]));
+}
+
+static void conditioned_recorded_eight_tick_teleport(int special_tick, int weapon_slot) {
+    reset();
+    state.env.tick = special_tick;
+    state.env.players[0].veng_active = 0;
+    state.env.players[1].veng_active = 0;
+    frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(weapon_slot), SPEC, TARGET}}, .count = {3},
+        .actions = {[RF_WEAPON] = weapon_slot + 1, [RF_SPECIAL] = 1, [RF_PRIMARY] = RF_ATTACK}});
+    assert(state.env.players[0].special_energy == 50);
+    assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == special_tick + 8);
+    while (state.env.tick < special_tick + 7)
+        frame((CommandFrame){.commands = {(HumanCommand[]){STOP}}, .count = {1},
+            .actions = {[RF_PRIMARY] = RF_STOP}});
+    frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(20)}}, .count = {1},
+        .actions = {[RF_PRIMARY] = RF_TELEPORT}});
+    assert(!state.escaped[0]);
+    assert(!osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[20]));
+    frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(20)}}, .count = {1},
+        .actions = {[RF_PRIMARY] = RF_TELEPORT}});
+    assert(state.escaped[0] && state.outcome[0] == RISKFIGHT_ESCAPE);
+    assert(osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[20]));
+}
+
+static void conditioned_recorded_maul_eight_tick_teleport(void) {
+    conditioned_recorded_eight_tick_teleport(1527, 24);
+}
+
+static void conditioned_recorded_voidwaker_eight_tick_teleport(void) {
+    conditioned_recorded_eight_tick_teleport(1909, 23);
 }
 
 static void synthetic_double_maul(void) {
@@ -258,9 +289,17 @@ int main(void) {
         "RECORDED_VISIBLE_TIMING_WITH_SYNTHETIC_COMMANDS_AND_DAMAGE", conditioned_recorded_armour_cycle);
     verify("maul217_ordinary218_teleport226", "RECORDED_TIMING_BOUNDARY_WITH_SYNTHETIC_COMMANDS",
         conditioned_recorded_maul_teleport_boundary);
+    verify("maul1527_teleport1535", "RECORDED_TIMING_WITH_SYNTHETIC_COMMANDS_AND_DAMAGE",
+        conditioned_recorded_maul_eight_tick_teleport);
+    verify("voidwaker1909_teleport1917", "RECORDED_TIMING_WITH_SYNTHETIC_COMMANDS_AND_DAMAGE",
+        conditioned_recorded_voidwaker_eight_tick_teleport);
+    puts("{\"recorded_boundary_provenance\":{\"archive\":\"session_20260913T193455.542Z_20260913T192128Z.83289_5c487d2d-63e5-4472-ac56-43eb67ed821b.jsonl.zst\","
+        "\"source_sha256\":\"2d73da7ece38ea351ef639d1b3ee0d7d6a0942c7f40dbfdd405f4fadb3833746\","
+        "\"special_sequences\":[6027,17417],\"teleport_sequences\":[6255,17772],"
+        "\"assumptions\":\"Observed special and teleport-start animations are eight ticks apart. Initial state, stop commands, blocked attempts and damage are synthetic. Teleport animation duration and despawn are not reproduced.\"}}");
     puts("{\"recorded_boundary_provenance\":{\"archive\":\"session_20260913T093112.716Z_20260913T093024Z.89354_81a22aa0-6e18-4b36-b953-a3c8cab6906a.jsonl.zst\","
         "\"source_sha256\":\"d844cb703d1f1525a880b987837c992c1112a4a0cddebc7c76ef2023d5c4866b\","
         "\"actor\":\"Amers\",\"special_sequence\":5540,\"teleport_sequences\":[5740,5741],"
-        "\"assumptions\":\"Reset gear, HP, supplies, attack readiness and seeded damage are synthetic. Stop at219 and blocked teleport attempt225 are synthetic. Observed special217, ordinary218 and teleport226 constrain timing only. Escape is immediate in simulator, observed despawn229 is not reproduced.\"}}");
+        "\"assumptions\":\"Reset gear, HP, supplies, attack readiness and seeded damage are synthetic. Stop at219 and blocked teleport attempt224 are synthetic. Observed special217, ordinary218 and teleport226 constrain timing only, not the earliest legal teleport. Escape is immediate in simulator, observed despawn229 is not reproduced.\"}}");
     riskfight_destroy_context((EncounterContext*)&context);
 }
