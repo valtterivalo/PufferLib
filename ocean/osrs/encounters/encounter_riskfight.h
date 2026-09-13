@@ -62,7 +62,16 @@ static int riskfight_tick(EncounterState* state, EncounterContext* context) {
 static int riskfight_winner(EncounterState* state, EncounterContext* context) {
     (void)context; return ((RiskfightState*)state)->env.winner;
 }
+static void riskfight_render_post_tick(EncounterState* state, EncounterContext* context, EncounterOverlay* overlay) {
+    RiskfightState* s = (RiskfightState*)state;
+    int human = ((RiskfightContext*)context)->human_player;
+    overlay->status_text_active = s->last_unequip_result[human] == OSRS_UNEQUIP_FULL;
+    snprintf(overlay->status_text, sizeof(overlay->status_text), "%s",
+        overlay->status_text_active ? "Not enough space in your inventory." : "");
+}
 static const EncounterDef ENCOUNTER_RISKFIGHT = {
+    .human_equipment_mode = HUMAN_EQUIPMENT_UNEQUIP_COMMANDS,
+    .render_post_tick = riskfight_render_post_tick,
     .name = "riskfight", .display_name = "Riskfight",
     .obs_size = RF_OBS_SIZE, .num_action_heads = RF_HEADS,
     .action_head_dims = RF_ACTION_DIMS, .mask_size = RF_MASK_SIZE,

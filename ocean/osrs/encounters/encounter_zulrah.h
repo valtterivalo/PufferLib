@@ -3324,6 +3324,7 @@ static void zul_translate_human_commands(HumanInput* hi, int* actions, ZulrahSta
             case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
             case HUMAN_COMMAND_STOP:
             case HUMAN_COMMAND_VENGEANCE:
+            case HUMAN_COMMAND_UNEQUIP:
             case HUMAN_COMMAND_NONE:
                 break;
         }

@@ -11,11 +11,14 @@ typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
 enum {
     RF_WEAPON, RF_SHIELD, RF_RING, RF_FOOD, RF_DRINK, RF_COMBO,
     RF_ORB, RF_VENGEANCE, RF_SPECIAL, RF_PRIMARY, RF_PRAYER, RF_STYLE,
+    RF_HEAD, RF_CAPE, RF_NECK, RF_BODY, RF_LEGS, RF_HANDS, RF_FEET, RF_AMMO,
     RF_HEADS,
+    RF_UNEQUIP = OSRS_INVENTORY_SIZE + 1,
     RF_STOP = OSRS_PRIMARY_DIM(1),
     RF_ATTACK = OSRS_PRIMARY_MOVE_ACTIONS,
     RF_TELEPORT = RF_STOP + 1,
-    RF_MASK_SIZE = 6 * (OSRS_INVENTORY_SIZE + 1) + 2 + 2 + 3 +
+    RF_MASK_SIZE = NUM_GEAR_SLOTS * (OSRS_INVENTORY_SIZE + 2) +
+        3 * (OSRS_INVENTORY_SIZE + 1) + 2 + 2 + 3 +
         OSRS_PRIMARY_DIM(1) + 2 + 5 + 4,
     RF_HISTORY_TICKS = 16,
     RF_EVENT_WIDTH = 8,
@@ -27,8 +30,14 @@ enum {
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 7,
     RF_OBS_SIZE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,
 };
-#define RF_ACTION_DIMS_INIT {29,29,29,29,29,29,2,2,3,28,5,4}
+#define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
+static const int RF_GEAR_SLOT_BY_HEAD[RF_HEADS] = {
+    GEAR_SLOT_WEAPON, GEAR_SLOT_SHIELD, GEAR_SLOT_RING,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_BODY,
+    GEAR_SLOT_LEGS, GEAR_SLOT_HANDS, GEAR_SLOT_FEET, GEAR_SLOT_AMMO,
+};
 
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -47,6 +56,7 @@ typedef struct {
     RiskfightOutcome outcome[2];
     RiskfightOpponent mixed_opponent;
     int escaped[2];
+    OsrsUnequipResult last_unequip_result[2];
     float rewards[2];
 } RiskfightState;
 

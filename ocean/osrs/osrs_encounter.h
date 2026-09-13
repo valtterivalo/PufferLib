@@ -1820,6 +1820,7 @@ typedef struct {
     void (*step)(EncounterState* state, EncounterContext* context, const int* actions);
     void (*step_human_commands)(
         EncounterState* state, EncounterContext* context, struct HumanInput* hi);
+    HumanEquipmentMode human_equipment_mode;
 
     size_t (*snapshot_size)(EncounterState* state, EncounterContext* context);
     void (*snapshot)(EncounterState* state, EncounterContext* context, void* out);

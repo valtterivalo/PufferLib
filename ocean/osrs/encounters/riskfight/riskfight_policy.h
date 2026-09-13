@@ -81,9 +81,8 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
 
 static int riskfight_inventory_head_accepts(const Player* p, int head, int slot) {
     const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
-    if (head <= RF_RING) {
-        const int gear_slots[] = {GEAR_SLOT_WEAPON, GEAR_SLOT_SHIELD, GEAR_SLOT_RING};
-        if (m->gear_slot != gear_slots[head]) return 0;
+    if (RF_GEAR_SLOT_BY_HEAD[head] >= 0) {
+        if (m->gear_slot != RF_GEAR_SLOT_BY_HEAD[head]) return 0;
         if (osrs_can_equip_from_cell(p, p->inventory_cells, slot)) return 1;
         if (head == RF_SHIELD && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
             for (int weapon_slot = 0; weapon_slot < OSRS_INVENTORY_SIZE; weapon_slot++) {
@@ -110,7 +109,12 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, floa
         mask[offset] = 1;
         for (int action = 1; action < RF_ACTION_DIMS[head]; action++) {
             int allowed = 1;
-            if (head <= RF_COMBO) allowed = riskfight_inventory_head_accepts(p, head, action - 1);
+            int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
+            if (gear_slot >= 0 && action == RF_UNEQUIP)
+                allowed = p->equipped[gear_slot] != ITEM_NONE &&
+                    osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
+            else if (head <= RF_COMBO || gear_slot >= 0)
+                allowed = riskfight_inventory_head_accepts(p, head, action - 1);
             if (head == RF_VENGEANCE) allowed = !p->veng_active && p->veng_cooldown <= 1 &&
                 p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
             if (head == RF_SPECIAL) allowed = p->special_energy >= action * 50;

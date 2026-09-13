@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
+#include "osrs_types.h"
 #include "osrs_ui_intent.h"
 
 typedef enum {
@@ -12,6 +14,11 @@ typedef enum {
     CURSOR_ITEM_TARGET,
     CURSOR_SPELL_TARGET,
 } CursorMode;
+
+typedef enum {
+    HUMAN_EQUIPMENT_VIEW_ONLY,
+    HUMAN_EQUIPMENT_UNEQUIP_COMMANDS,
+} HumanEquipmentMode;
 
 typedef enum {
     HUMAN_COMMAND_NONE = 0,
@@ -32,6 +39,7 @@ typedef enum {
     HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
     HUMAN_COMMAND_STOP,
     HUMAN_COMMAND_VENGEANCE,
+    HUMAN_COMMAND_UNEQUIP,
 } HumanCommandKind;
 
 typedef struct {
@@ -303,6 +311,14 @@ static inline void human_input_queue_inventory_primary_click(
     human_input_queue_command(hi, (HumanCommand){
         .kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
         .inventory_slot = inventory_slot,
+    });
+}
+
+static inline void human_input_queue_unequip(HumanInput* hi, int gear_slot) {
+    assert(gear_slot >= 0 && gear_slot < NUM_GEAR_SLOTS);
+    human_input_queue_command(hi, (HumanCommand){
+        .kind = HUMAN_COMMAND_UNEQUIP,
+        .gear_slot = gear_slot,
     });
 }
 

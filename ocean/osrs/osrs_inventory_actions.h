@@ -98,6 +98,27 @@ static inline int osrs_equip_from_cell(
     return gear_slot;
 }
 
+typedef enum {
+    OSRS_UNEQUIP_SUCCESS,
+    OSRS_UNEQUIP_EMPTY,
+    OSRS_UNEQUIP_FULL,
+} OsrsUnequipResult;
+
+static inline OsrsUnequipResult osrs_unequip_to_inventory(
+    Player* p, OsrsInventoryCell* cells, int gear_slot
+) {
+    assert(gear_slot >= 0 && gear_slot < NUM_GEAR_SLOTS);
+    uint8_t item = p->equipped[gear_slot];
+    if (item == ITEM_NONE) return OSRS_UNEQUIP_EMPTY;
+    int cell = osrs_first_empty_inventory_cell(cells, -1);
+    if (cell < 0) return OSRS_UNEQUIP_FULL;
+    cells[cell] = osrs_inventory_cell_from_item(item);
+    p->equipped[gear_slot] = ITEM_NONE;
+    if (gear_slot == GEAR_SLOT_WEAPON) p->spec_armed = 0;
+    osrs_refresh_player_equipment(p);
+    return OSRS_UNEQUIP_SUCCESS;
+}
+
 static inline int osrs_can_eat_consumable_kind(
     const Player* p,
     OsrsConsumableKind kind

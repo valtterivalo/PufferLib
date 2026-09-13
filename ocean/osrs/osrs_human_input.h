@@ -23,6 +23,20 @@ static int human_gui_rect_contains(Rectangle rect, int mouse_x, int mouse_y) {
            mouse_y >= rect.y && mouse_y < rect.y + rect.height;
 }
 
+static void human_handle_equipment_click(HumanInput* hi, GuiState* gs, const Player* player,
+    int mouse_x, int mouse_y) {
+    if (hi->cursor_mode != CURSOR_NORMAL) return;
+    for (size_t i = 0; i < sizeof(GUI_WORN_SLOT_REFS) / sizeof(GUI_WORN_SLOT_REFS[0]); i++) {
+        const GuiWornSlotRef* slot = &GUI_WORN_SLOT_REFS[i];
+        Rectangle rect = gui_side_component_rect(gs, "wornitems", slot->component_name, slot->rect);
+        if (human_gui_rect_contains(rect, mouse_x, mouse_y)) {
+            if (player->equipped[slot->gear_slot] != ITEM_NONE)
+                human_input_queue_unequip(hi, slot->gear_slot);
+            return;
+        }
+    }
+}
+
 static int human_gui_prayer_idx_at(GuiState* gs, int mouse_x, int mouse_y) {
     int cols = GUI_PRAYER_GRID_COLS;
     int gap, icon_sz, gx, gy;

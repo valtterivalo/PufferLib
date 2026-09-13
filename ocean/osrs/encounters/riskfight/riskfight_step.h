@@ -53,9 +53,18 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM: {
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
+            if (osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot])->gear_slot >= 0)
+                s->last_unequip_result[agent] = OSRS_UNEQUIP_SUCCESS;
             s->escaped[agent] = osrs_player_use_inventory(p, &s->inventory_use[agent],
                 &s->env.pvp_runtime.teleport[agent], command->inventory_slot,
                 s->env.tick) == OSRS_INVENTORY_USE_ESCAPED;
+            pvp_maul_weapon_changed(&s->env, agent, old_weapon);
+            pvp_refresh_visible_gear(p);
+            break;
+        }
+        case HUMAN_COMMAND_UNEQUIP: {
+            int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
+            s->last_unequip_result[agent] = osrs_unequip_to_inventory(p, p->inventory_cells, command->gear_slot);
             pvp_maul_weapon_changed(&s->env, agent, old_weapon);
             pvp_refresh_visible_gear(p);
             break;
@@ -111,7 +120,17 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     human_input_clear_pending(hi);
     for (int head = 0; head < RF_HEADS; head++)
         assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);
-    for (int head = RF_WEAPON; head <= RF_COMBO; head++) {
+    for (int head = 0; head < RF_HEADS; head++) {
+        int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
+        if (gear_slot < 0 || !actions[head]) continue;
+        if (actions[head] == RF_UNEQUIP)
+            human_input_queue_unequip(hi, gear_slot);
+        else human_input_queue_command(hi, (HumanCommand){
+            .kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
+            .inventory_slot = actions[head] - 1,
+        });
+    }
+    for (int head = RF_FOOD; head <= RF_COMBO; head++) {
         if (actions[head]) human_input_queue_command(hi, (HumanCommand){
             .kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
             .inventory_slot = actions[head] - 1,

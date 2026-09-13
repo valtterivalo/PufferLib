@@ -2846,6 +2846,13 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
                         human_handle_combat_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
                         handled = 1;
                         break;
+                    case GUI_TAB_EQUIPMENT: {
+                        const EncounterDef* def = (const EncounterDef*)env->encounter_def;
+                        if (def && def->human_equipment_mode == HUMAN_EQUIPMENT_UNEQUIP_COMMANDS)
+                            human_handle_equipment_click(&rc->human_input, &rc->gui, viewed, pmx, pmy);
+                        handled = 1;
+                        break;
+                    }
                     default:
                         break;
                 }
