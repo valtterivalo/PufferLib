@@ -2419,6 +2419,17 @@ static void puf_log_history_add(PufLogHistory* h, Dict* log) {
     h->size++;
 }
 
+static void puf_log_stream_write(FILE* stream, Dict* log) {
+    fputc('{', stream);
+    for (int i = 0; i < log->size; i++) {
+        fprintf(stream, "%s\"%s\":%.17g", i ? "," : "",
+            log->items[i].key, log->items[i].value);
+    }
+    fputs("}\n", stream);
+    int flushed = fflush(stream);
+    assert(flushed == 0 && !ferror(stream));
+}
+
 // Bin-mean of history[key] over agent_steps into out[0..points-1]. Dense keys.
 // points==1 → last value only. Last bin forced to final sample.
 static void log_history_bin_mean(PufLogHistory* h, const char* key,
@@ -3021,9 +3032,20 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     snprintf(log_dir, sizeof(log_dir), "%s/%s",
         puf_ini_get_str(ini, "base", "log_dir"),
         puf_ini_get_str(ini, "base", "env_name"));
+    FILE* metric_stream = NULL;
     if (ctx->artifact_owner) {
         mkdir_p(checkpoint_dir);
         mkdir_p(log_dir);
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s.ini", log_dir, run_id);
+        FILE* config_file = fopen(path, "w");
+        assert(config_file);
+        puf_ini_write(config_file, ini);
+        int config_close = fclose(config_file);
+        assert(config_close == 0);
+        snprintf(path, sizeof(path), "%s/%s.jsonl", log_dir, run_id);
+        metric_stream = fopen(path, "w");
+        assert(metric_stream);
     }
 
     PuffeRL* pufferl = create_pufferl(ini, ctx);
@@ -3188,6 +3210,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         int episodes = dict_get(&new_log, "env/n") > 0;
         if (ctx->artifact_owner) {
             puf_dashboard_print(ini, pufferl, &new_log, (int)pufferl->epoch);
+            puf_log_stream_write(metric_stream, &new_log);
         }
         result.cost = dict_get(&new_log, "uptime");
         result.steps = dict_get(&new_log, "agent_steps");
@@ -3365,6 +3388,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
 
     if (ctx->artifact_owner) {
         assert(log_history.size == 0 || dict_find(&last_log, target_key));
+        puf_log_stream_write(metric_stream, &last_log);
+        fputs("{\"_finished\":1}\n", metric_stream);
+        int stream_close = fclose(metric_stream);
+        assert(stream_close == 0);
         puf_log_history_add(&log_history, &last_log);
         FILE* fp = fopen(log_path, "a");
         assert(fp && "failed to open log for writing");
