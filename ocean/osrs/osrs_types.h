@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "osrs_interaction.h"
 #include "osrs_entity_priority.h"
+#include "osrs_granite_maul.h"
 
 #define NUM_AGENTS 2
 #define MAX_PENDING_HITS 8
@@ -796,6 +797,7 @@ typedef struct {
     int walk_dest_x[NUM_AGENTS];
     int walk_dest_y[NUM_AGENTS];
     int initial_supply_units[NUM_AGENTS];
+    OsrsGraniteMaulState maul[NUM_AGENTS];
 } OsrsPvpRuntime;
 
 typedef struct {
@@ -893,7 +895,7 @@ static inline int chebyshev_distance(int x1, int y1, int x2, int y2) {
     return (dx > dy) ? dx : dy;
 }
 
-static inline int is_in_melee_range(Player* p, Player* t) {
+static inline int is_in_melee_range(const Player* p, const Player* t) {
     int dx = abs_int(p->x - t->x);
     int dy = abs_int(p->y - t->y);
     return (dx == 1 && dy == 0) || (dx == 0 && dy == 1);

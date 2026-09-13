@@ -10,30 +10,35 @@ static void riskfight_stop(RiskfightState* s, int agent) {
     p->is_moving = 0;
 }
 
-static void riskfight_attack(RiskfightState* s, int agent, int instant_only) {
+static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int instant) {
+    if (hits == 0) return;
     Player* p = &s->env.players[agent];
-    Player* opponent = &s->env.players[1 - agent];
-    uint8_t weapon = p->equipped[GEAR_SLOT_WEAPON];
-    int cost = osrs_spec_cost(weapon);
-    int special = p->spec_armed && cost > 0 && p->special_energy >= cost;
-    int instant = special && (weapon == ITEM_GRANITE_MAUL_ORNATE || weapon == ITEM_GRANITE_MAUL);
-    if (!osrs_interaction_active(&p->interaction) ||
-        p->current_hitpoints <= 0 || opponent->current_hitpoints <= 0 ||
-        s->escaped[agent] || s->escaped[1 - agent] ||
-        !is_in_melee_range(p, opponent)) return;
-    if (instant_only && !instant) return;
-    if (!instant && !can_attack_now(p)) return;
-    perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
-        chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
+    int weapon = p->equipped[GEAR_SLOT_WEAPON];
     RiskfightVisibleOpponent* visible = &s->visible[1 - agent];
     float* event = visible->events[s->env.tick % RF_HISTORY_TICKS];
-    event[0] += 1;
+    event[0] += hits;
     event[1] = weapon;
     event[2] = p->attack_style_this_tick;
     if (!instant) {
         visible->last_attack_tick = s->env.tick;
         visible->last_attack_speed = ITEM_DATABASE[weapon].attack_speed;
     }
+}
+
+static void riskfight_attack(RiskfightState* s, int agent) {
+    Player* p = &s->env.players[agent];
+    Player* opponent = &s->env.players[1 - agent];
+    int weapon = p->equipped[GEAR_SLOT_WEAPON];
+    int cost = osrs_spec_cost(weapon);
+    int special = !pvp_is_maul(weapon) && p->spec_armed && cost > 0 && p->special_energy >= cost;
+    if (!osrs_interaction_active(&p->interaction) ||
+        p->current_hitpoints <= 0 || opponent->current_hitpoints <= 0 ||
+        s->escaped[agent] || s->escaped[1 - agent] ||
+        !is_in_melee_range(p, opponent) || !can_attack_now(p) ||
+        s->env.pvp_runtime.maul[agent].last_special_tick == s->env.tick) return;
+    perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
+        chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
+    riskfight_record_attack(s, agent, 1, 0);
     if (special) osrs_spec_disarm(&p->spec_armed);
 }
 
@@ -45,12 +50,15 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
         case HUMAN_COMMAND_EAT:
         case HUMAN_COMMAND_DRINK:
-        case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+        case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM: {
+            int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
             s->escaped[agent] = osrs_player_use_inventory(p, &s->inventory_use[agent],
                 command->inventory_slot, s->env.tick) == OSRS_INVENTORY_USE_ESCAPED;
+            pvp_maul_weapon_changed(&s->env, agent, old_weapon);
             pvp_refresh_visible_gear(p);
             break;
+        }
         case HUMAN_COMMAND_STOP:
             riskfight_stop(s, agent);
             break;
@@ -63,10 +71,14 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             osrs_interaction_set(&p->interaction, 1 - agent);
             s->env.pvp_runtime.walk_dest_x[agent] = -1;
             s->env.pvp_runtime.walk_dest_y[agent] = -1;
+            if (!s->escaped[1 - agent])
+                riskfight_record_attack(s, agent, pvp_maul_target_click(&s->env, agent, 1 - agent), 1);
             break;
         case HUMAN_COMMAND_SPEC_TOGGLE:
-            p->spec_armed = 1;
-            riskfight_attack(s, agent, 1);
+            if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]))
+                pvp_maul_special_click(&s->env, agent);
+            else
+                p->spec_armed = !p->spec_armed;
             break;
         case HUMAN_COMMAND_VENGEANCE:
             osrs_player_cast_inventory_vengeance(p, &s->inventory_use[agent], s->env.tick);
@@ -120,6 +132,8 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
         .offensive_prayer = actions[RF_PRAYER]});
     human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_FIGHT_STYLE,
         .fight_style = actions[RF_STYLE]});
+    for (int n = 0; n < actions[RF_SPECIAL]; n++)
+        human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
     int primary = actions[RF_PRIMARY];
     if (primary == RF_STOP)
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
@@ -131,8 +145,6 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_WALK,
             .world_x = s->env.players[agent].x + dx, .world_y = s->env.players[agent].y + dy});
     }
-    for (int n = 0; n < actions[RF_SPECIAL]; n++)
-        human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
 }
 
 static void riskfight_finish(RiskfightState* s) {
@@ -168,6 +180,8 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         const HumanCommandQueue* queue = queues[i];
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
+        if (!s->escaped[0] && !s->escaped[1])
+            riskfight_record_attack(s, i, pvp_maul_finish_inputs(&s->env, i), 1);
     }
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
@@ -181,7 +195,9 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         pvp_step_player_movement(&s->env, i, ctx->route_topology, &ctx->routes[i]);
         int idle_actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
         execute_attack_movement(&s->env, i, idle_actions, ctx->route_topology, &ctx->routes[i]);
-        riskfight_attack(s, i, 0);
+        if (!s->escaped[0] && !s->escaped[1])
+            riskfight_record_attack(s, i, pvp_maul_continue_attack(&s->env, i), 1);
+        riskfight_attack(s, i);
     }
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];

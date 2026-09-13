@@ -1039,6 +1039,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
 post_attack:
+    env->pvp_runtime.maul[attacker_idx] = osrs_granite_maul_record_attack(
+        env->pvp_runtime.maul[attacker_idx], env->tick, defender_idx);
     attacker->just_attacked = 1;
     attacker->last_attack_style = (is_special && spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
     attacker->attack_style_this_tick = attacker->last_attack_style;
@@ -1048,6 +1050,9 @@ post_attack:
     int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed;
     int is_instant = (is_special && (spec_item_idx == ITEM_GRANITE_MAUL ||
         spec_item_idx == ITEM_GRANITE_MAUL_ORNATE));
+    if (is_instant)
+        env->pvp_runtime.maul[attacker_idx] = osrs_granite_maul_record_special(
+            env->pvp_runtime.maul[attacker_idx], env->tick);
     if (!is_instant) {
         attacker->attack_timer = attack_speed - 1;
         attacker->attack_timer_uncapped = attack_speed - 1;

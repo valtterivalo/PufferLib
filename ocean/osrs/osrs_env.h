@@ -11,6 +11,7 @@
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
+#include "osrs_pvp_maul.h"
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"
 #include "osrs_pvp_actions.h"

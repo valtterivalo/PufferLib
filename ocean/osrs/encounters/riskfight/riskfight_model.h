@@ -138,6 +138,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
         init_player(p);
+        s->env.pvp_runtime.maul[i] = osrs_granite_maul_init();
         encounter_init_maxed_player_combat_stats(p, 99);
         p->has_blood_fury = 0;
         p->is_lunar_spellbook = 1;

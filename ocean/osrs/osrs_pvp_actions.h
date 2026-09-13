@@ -361,9 +361,12 @@ static void execute_switches(
     OsrsInventoryApplyStep step;
     while (osrs_inventory_intent_next(&intent, &step)) {
         if (step.kind == OSRS_INVENTORY_APPLY_EQUIP) {
+            int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (osrs_equip_from_cell(
-                    p, p->inventory_cells, step.cell_idx) >= 0)
+                    p, p->inventory_cells, step.cell_idx) >= 0) {
+                pvp_maul_weapon_changed(env, agent_idx, old_weapon);
                 p->clicks_this_tick++;
+            }
         } else if (step.kind == OSRS_INVENTORY_APPLY_EAT) {
             FoodType type =
                 step.resolution.consumable_kind == OSRS_CONSUMABLE_KARAMBWAN
@@ -413,8 +416,14 @@ static void execute_switches(
         p->clicks_this_tick++;
 
     int special_action = actions[OSRS_HEAD_SPECIAL];
-    if (special_action == 1 && can_toggle_spec(p)) p->spec_armed = 1;
-    else if (special_action == 2) p->spec_armed = 0;
+    if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) {
+        if ((special_action == 1 && !p->spec_armed && can_toggle_spec(p)) ||
+                (special_action == 2 && p->spec_armed))
+            pvp_maul_special_click(env, agent_idx);
+    } else {
+        if (special_action == 1 && can_toggle_spec(p)) p->spec_armed = 1;
+        else if (special_action == 2) p->spec_armed = 0;
+    }
 
     int primary = actions[OSRS_HEAD_PRIMARY];
     if (primary >= OSRS_PRIMARY_MOVE_ACTIONS &&
@@ -422,6 +431,8 @@ static void execute_switches(
         osrs_interaction_set(&p->interaction, 1 - agent_idx);
         env->pvp_runtime.walk_dest_x[agent_idx] = -1;
         env->pvp_runtime.walk_dest_y[agent_idx] = -1;
+        if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]))
+            pvp_maul_target_click(env, agent_idx, 1 - agent_idx);
     } else if (primary > 0 && primary < OSRS_PRIMARY_MOVE_ACTIONS) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, primary);
         p->clicks_this_tick++;
@@ -437,6 +448,7 @@ static void execute_switches(
         p->cast_veng_this_tick = 1;
         p->clicks_this_tick++;
     }
+    pvp_maul_finish_inputs(env, agent_idx);
     (void)topology;
 }
 
@@ -447,7 +459,6 @@ typedef struct {
     int attack_action;
     int move_action;
     int explicit_move_in_progress;
-    int is_gmaul;
 } PvpAttackDecode;
 
 static PvpAttackDecode pvp_decode_attack_actions(
@@ -465,15 +476,10 @@ static PvpAttackDecode pvp_decode_attack_actions(
     int explicit_move_in_progress =
         (primary > 0 && primary < OSRS_PRIMARY_MOVE_ACTIONS) ||
         env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
-    int is_gmaul =
-        (p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL ||
-         p->equipped[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL_ORNATE) &&
-        p->spec_armed;
     return (PvpAttackDecode){
         .attack_action = attack_action,
         .move_action = PVP_MOVE_NONE,
         .explicit_move_in_progress = explicit_move_in_progress,
-        .is_gmaul = is_gmaul,
     };
 }
 
@@ -548,7 +554,9 @@ static void execute_attack_combat(
         }
     }
 
-    int attack_ready = can_attack_now(p);
+    pvp_maul_continue_attack(env, agent_idx);
+    int attack_ready = can_attack_now(p) &&
+        env->pvp_runtime.maul[agent_idx].last_special_tick != env->tick;
     int has_attack = (decode.attack_action != PVP_ATTACK_NONE);
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
@@ -577,11 +585,9 @@ static void execute_attack_combat(
         attack_style = ATTACK_STYLE_NONE;
     }
 
-    int can_attack = attack_ready || (decode.is_gmaul && is_granite_maul_attack_available(p));
-
     switch (decode.attack_action) {
         case PVP_ATTACK_WEAPON:
-            if (can_attack && attack_style != ATTACK_STYLE_NONE) {
+            if (attack_ready && attack_style != ATTACK_STYLE_NONE) {
                 AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
                     ? ATTACK_STYLE_MELEE
                     : attack_style;
@@ -593,7 +599,8 @@ static void execute_attack_combat(
                     in_attack_range = (dist > 0 && dist <= range);
                 }
                 if (in_attack_range) {
-                    int is_special = p->spec_armed && is_special_ready(p, actual_style);
+                    int is_special = !pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]) &&
+                        p->spec_armed && is_special_ready(p, actual_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);
