@@ -48,6 +48,13 @@ def sync_trial(path, args):
                 row = json.loads(line)
                 if '_finished' in row:
                     return
+                if configuration['base']['env_name'] == 'osrs_riskfight':
+                    original_bots = [f'selfplay/bot_{bot}_perf' for bot in (0, 1, 2)]
+                    if all(key in row for key in original_bots):
+                        original_sum = sum(row[key] for key in original_bots)
+                        row['eval/three_bot_net_stake'] = original_sum / 3
+                        if 'selfplay/bot_4_perf' in row:
+                            row['eval/four_bot_net_stake'] = (original_sum + row['selfplay/bot_4_perf']) / 4
                 if index > previous_index:
                     run.log({**row, '_capture_index': index})
                 index += 1

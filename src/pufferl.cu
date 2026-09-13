@@ -36,6 +36,7 @@
 
 // Project
 #include "ini.h"
+#include "sweep_resume.h"
 
 #ifdef PRECISION_FLOAT
 typedef float precision_t;
@@ -2503,6 +2504,8 @@ typedef struct {
     float perf;
     float draw;
     int games;
+    double kills_rate, deaths_rate, escapes_rate;
+    int has_outcomes;
 } EvalResult;
 
 #define TRAIN_RESULT_MAX_POINTS 64
@@ -2692,6 +2695,52 @@ void run_sweep(Ini* ini, const char* exe_path) {
         .rng_seed = 73ULL,
     });
 
+    int imported = 0;
+    DictItem* resume_dir = dict_find(puf_ini_section(ini, "sweep", 0), "resume_dir");
+    if (resume_dir && resume_dir->str[0]) {
+        struct dirent** entries;
+        int count = scandir(resume_dir->str, &entries, NULL, alphasort);
+        assert(count >= 0 && "failed to read sweep.resume_dir");
+        float* sample = (float*)calloc(space->num, sizeof(float));
+        for (int i = 0; i < count; i++) {
+            const char* name = entries[i]->d_name;
+            size_t len = strlen(name);
+            if (len > 4 && strcmp(name + len - 4, ".ini") == 0) {
+                char* path;
+                int path_length = asprintf(&path, "%s/%s", resume_dir->str, name);
+                assert(path_length >= 0 && "failed to allocate sweep resume path");
+                Ini previous = {0};
+                puf_ini_load_file(&previous, path);
+                sweep_resume_validate(ini, &previous);
+                for (int j = 0; j < space->num; j++) {
+                    float value = puf_ini_get(&previous, params[j].section, params[j].key);
+                    sample[j] = space_normalize(&space->spaces[j], value);
+                    float restored = space_unnormalize(&space->spaces[j], sample[j]);
+                    if (!(value >= space->spaces[j].min && value <= space->spaces[j].max
+                            && isfinite(sample[j]) && sample[j] >= -1 && sample[j] <= 1)
+                            || (space->spaces[j].is_integer && restored != value)) {
+                        fprintf(stderr, "invalid sweep resume parameter: %s %s.%s\n",
+                            path, params[j].section, params[j].key);
+                        exit(1);
+                    }
+                }
+                assert(imported < success_cap && "sweep resume exceeds observation capacity");
+                protein_sweep_observe(protein, sample,
+                    puf_ini_get(&previous, "resume", "score"),
+                    puf_ini_get(&previous, "resume", "cost"), 0);
+                imported++;
+                puf_ini_free(&previous);
+                free(path);
+            }
+            free(entries[i]);
+        }
+        free(entries);
+        free(sample);
+        assert(imported > 0 && "sweep.resume_dir contains no INI observations");
+        printf("sweep imported=%d objective_id=%s\n", imported,
+            puf_ini_get_str(ini, "sweep", "objective_id"));
+    }
+
     int parallel = sweep_gpus / train_gpus;
     // Row 0 = staging for suggest; rows 1..parallel = per-slot copies for observe.
     float* samples = (float*)calloc((parallel + 1) * space->num, sizeof(float));
@@ -2710,7 +2759,7 @@ void run_sweep(Ini* ini, const char* exe_path) {
             }
 
             ProteinSweepInfo info = {0};
-            if (!next_run_id) {
+            if (!next_run_id && !imported) {
                 for (int j = 0; j < space->num; j++) {
                     float val = puf_ini_get(ini, params[j].section, params[j].key);
                     float norm = space_normalize(&space->spaces[j], val);
@@ -2911,6 +2960,15 @@ static EvalResult eval_loop(Ini* ini, PuffeRL* p, int mode, int verbose,
             result.draw = dict_get(&el, "env/draw_rate");
         }
         result.games = (int)n;
+        DictItem* kills = dict_find(&el, "env/kills");
+        DictItem* deaths = dict_find(&el, "env/deaths");
+        DictItem* escapes = dict_find(&el, "env/escapes");
+        if (kills && deaths && escapes) {
+            result.has_outcomes = 1;
+            result.kills_rate = kills->value;
+            result.deaths_rate = deaths->value;
+            result.escapes_rate = escapes->value;
+        }
         dict_clear(&el);
         return result;
     }
@@ -2973,6 +3031,72 @@ static PuffeRL* eval_make(Ini* ini, TrainContext* ctx, int mode, int render) {
         }
     }
     return p;
+}
+
+static float run_bot_ladder(Ini* ini, TrainContext* ctx, Dict* log) {
+    long bot_games = puf_ini_get(ini, "selfplay", "eval_bot_games");
+    assert(bot_games > 0 && "ladder requires positive selfplay.eval_bot_games");
+    assert(puf_ini_get_str(ini, "base", "load_model_path")[0] && "ladder requires checkpoint");
+    puf_ini_put(ini, "env.num_agents", "1");
+    puf_ini_put(ini, "env.num_bots", "1");
+    puf_ini_put(ini, "selfplay.enabled", "0");
+    puf_ini_put(ini, "vec.num_policies", "1");
+    puf_ini_put(ini, "vec.hist_policy_percent", "0");
+    // [bot_eval] keys are [env] names (dr, not env.dr). Dotted keys break
+    // sweep argv, which flattens as section.key and splits on the last dot.
+    Dict* bot_eval = puf_ini_section(ini, "bot_eval", 1);
+    for (int i = 0; i < bot_eval->size; i++) {
+        DictItem* over = &bot_eval->items[i];
+        char ek[PUF_DICT_MAX_KEY + 8];
+        snprintf(ek, sizeof(ek), "env.%s", over->key);
+        puf_ini_put(ini, ek, over->str);
+    }
+    // Fixed parallelism; ignore swept train total_agents. Each env plays
+    // bot_games / ladder_envs games, so bots face a warmed-up kNN rather
+    // than being re-measured cold once per env.
+    char nbuf[32];
+    long envs = puf_ini_get(ini, "selfplay", "eval_bot_envs");
+    snprintf(nbuf, sizeof(nbuf), "%ld", envs);
+    puf_ini_put(ini, "vec.total_agents", nbuf);
+    long threads = puf_ini_get(ini, "selfplay", "eval_bot_threads");
+    if (threads > 0) {
+        snprintf(nbuf, sizeof(nbuf), "%ld", threads);
+        puf_ini_put(ini, "vec.num_threads", nbuf);
+    }
+    double ladder[SELFPLAY_MAX_LADDER];
+    int rungs = puf_ini_get_list(ini, "selfplay", "eval_bots", ladder,
+        SELFPLAY_MAX_LADDER);
+    assert(rungs > 0 && "ladder requires selfplay.eval_bots");
+    // One PuffeRL for the whole ladder. close_pufferl frees nothing, so a
+    // trainer per rung is a leak. Swap bot_policy and restart instead.
+    PuffeRL* ep = eval_make(ini, ctx, EVAL_SCORE, 0);
+    float sum = 0;
+    for (int i = 0; i < rungs; i++) {
+        if (PUF_BACKEND != PUF_GPU) {
+            for (int e = 0; e < ep->vec->size; e++) {
+                puf_set_bot_policy(&ep->vec->envs[e], (int)ladder[i]);
+            }
+        }
+        env_restart(ep);
+        EvalResult r = eval_loop(ini, ep, EVAL_SCORE, 0, 0, bot_games, NULL, 0);
+        sum += r.perf;
+        printf("LADDER_EVAL bot=%d games=%d perf=%.9g", (int)ladder[i], r.games, r.perf);
+        if (r.has_outcomes) printf(" kills_rate=%.9g deaths_rate=%.9g escapes_rate=%.9g",
+            r.kills_rate, r.deaths_rate, r.escapes_rate);
+        printf("\n");
+        if (log) {
+            char key[128];
+            snprintf(key, sizeof(key), "selfplay/bot_%d_perf", (int)ladder[i]);
+            dict_set(log, key, r.perf);
+            snprintf(key, sizeof(key), "selfplay/bot_%d_games", (int)ladder[i]);
+            dict_set(log, key, r.games);
+        }
+    }
+    close_pufferl(ep);
+    float mean = sum / rungs;
+    printf("LADDER_EVAL mean_perf=%.9g rungs=%d\n", mean, rungs);
+    if (log) dict_set(log, "selfplay/bot_ladder_perf", mean);
+    return mean;
 }
 
 EvalResult run_eval(Ini* ini, TrainContext* ctx, int mode, int verbose,
@@ -3306,58 +3430,11 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     // Final Protein point (points=1): bot ladder > pool match > train curve.
     if (bot_ladder && ctx->artifact_owner) {
         puf_ini_put(ini, "base.load_model_path", final_checkpoint);
-        puf_ini_put(ini, "env.num_agents", "1");
-        puf_ini_put(ini, "env.num_bots", "1");
-        puf_ini_put(ini, "selfplay.enabled", "0");
-        puf_ini_put(ini, "vec.num_policies", "1");
-        puf_ini_put(ini, "vec.hist_policy_percent", "0");
-        // [bot_eval] keys are [env] names (dr, not env.dr). Dotted keys break
-        // sweep argv, which flattens as section.key and splits on the last dot.
-        Dict* bot_eval = puf_ini_section(ini, "bot_eval", 1);
-        for (int i = 0; i < bot_eval->size; i++) {
-            DictItem* over = &bot_eval->items[i];
-            char ek[PUF_DICT_MAX_KEY + 8];
-            snprintf(ek, sizeof(ek), "env.%s", over->key);
-            puf_ini_put(ini, ek, over->str);
-        }
-        // Fixed parallelism; ignore swept train total_agents. Each env plays
-        // bot_games / ladder_envs games, so bots face a warmed-up kNN rather
-        // than being re-measured cold once per env.
-        char nbuf[32];
-        long envs = puf_ini_get(ini, "selfplay", "eval_bot_envs");
-        snprintf(nbuf, sizeof(nbuf), "%ld", envs);
-        puf_ini_put(ini, "vec.total_agents", nbuf);
-        long threads = puf_ini_get(ini, "selfplay", "eval_bot_threads");
-        if (threads > 0) {
-            snprintf(nbuf, sizeof(nbuf), "%ld", threads);
-            puf_ini_put(ini, "vec.num_threads", nbuf);
-        }
-        double ladder[SELFPLAY_MAX_LADDER];
-        int rungs = puf_ini_get_list(ini, "selfplay", "eval_bots", ladder,
-            SELFPLAY_MAX_LADDER);
-        // One PuffeRL for the whole ladder. close_pufferl frees nothing, so a
-        // trainer per rung is a leak. Swap bot_policy and restart instead.
-        PuffeRL* ep = eval_make(ini, ctx, EVAL_SCORE, 0);
-        float sum = 0;
-        for (int i = 0; i < rungs; i++) {
-            if (PUF_BACKEND != PUF_GPU) {
-                for (int e = 0; e < ep->vec->size; e++) {
-                    puf_set_bot_policy(&ep->vec->envs[e], (int)ladder[i]);
-                }
-            }
-            env_restart(ep);
-            EvalResult r = eval_loop(ini, ep, EVAL_SCORE, 0, 0, bot_games, NULL, 0);
-            sum += r.perf;
-            printf("bot_eval policy=%d games=%d perf=%.4f\n",
-                (int)ladder[i], r.games, r.perf);
-        }
-        close_pufferl(ep);
-        result.score = result.scores[0] = sum / rungs;
+        result.score = result.scores[0] = run_bot_ladder(ini, ctx, &last_log);
         result.points = 1;
         result.costs[0] = result.cost;
         result.step_points[0] = result.steps;
-        dict_set(&last_log, "selfplay/bot_ladder_perf", result.score);
-        printf("bot_eval mean_perf=%.4f\n", result.score);
+
     } else if (pool_eval && ctx->artifact_owner) {
         puf_ini_put(ini, "base.load_model_path", final_checkpoint);
         TrainContext eval_ctx = {.world_size = 1, .artifact_owner = 1};
@@ -3536,7 +3613,7 @@ int main(int argc, char** argv) {
     setbuf(stderr, NULL);
     if (argc < 2) {
         fprintf(stderr,
-            "usage: %s train|eval|match|sweep [latest|MODEL.bin] [--headless] [--section.key=value ...]\n",
+            "usage: %s train|eval|match|ladder|sweep [latest|MODEL.bin] [--headless] [--section.key=value ...]\n",
             argv[0]);
         exit(1);
     }
@@ -3564,7 +3641,12 @@ int main(int argc, char** argv) {
         ini_argv[ini_argc++] = argv[i];
     }
     Ini ini = {0};
-    puf_ini_load_env(&ini, PUFFER_ENV_NAME, ini_argc, ini_argv);
+    puf_ini_load_env(&ini, PUFFER_ENV_NAME, 0, NULL);
+    Dict* sweep = puf_ini_section(&ini, "sweep", 0);
+    if (!dict_find(sweep, "resume_dir")) puf_ini_set(sweep, "resume_dir", "");
+    if (!dict_find(sweep, "objective_id")) puf_ini_set(sweep, "objective_id", "");
+    for (int i = 0; i < ini_argc; i++)
+        puf_ini_apply_arg(&ini, "base", ini_argv[i], i);
     if (model) {
         puf_ini_put(&ini, "base.load_model_path", model);
     }
@@ -3575,12 +3657,18 @@ int main(int argc, char** argv) {
         launch_train(&ini);
     } else if (strcmp(mode, "sweep") == 0) {
         run_sweep(&ini, argv[0]);
+    } else if (strcmp(mode, "ladder") == 0) {
+        Dict log = {0};
+        run_bot_ladder(&ini, &ctx, &log);
+        for (int i = 0; i < log.size; i++)
+            printf("LADDER_METRIC %s=%.9g\n", log.items[i].key, log.items[i].value);
+        dict_clear(&log);
     } else if (strcmp(mode, "eval") == 0) {
         run_eval(&ini, &ctx, EVAL_SCORE, 1, render);
     } else if (strcmp(mode, "match") == 0) {
         run_eval(&ini, &ctx, EVAL_MATCH, 1, render);
     } else {
-        assert(0 && "unknown mode (train|eval|match|sweep)");
+        assert(0 && "unknown mode (train|eval|match|ladder|sweep)");
     }
 
     puf_ini_free(&ini);
