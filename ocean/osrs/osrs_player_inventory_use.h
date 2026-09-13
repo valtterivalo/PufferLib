@@ -77,7 +77,7 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
     assert(slot >= 0 && slot < OSRS_INVENTORY_SIZE);
     OsrsInventoryCell* cell = &p->inventory_cells[slot];
     const OsrsItemContentMetadata* meta = osrs_inventory_cell_metadata(cell);
-    OsrsConsumableKind kind = meta->consumable_kind;
+    OsrsConsumableKind kind = (OsrsConsumableKind)meta->consumable_kind;
     switch (meta->click_action) {
         case OSRS_CLICK_EQUIP:
             if (osrs_equip_from_cell(p, p->inventory_cells, slot) < 0)

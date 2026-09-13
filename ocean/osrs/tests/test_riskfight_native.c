@@ -4,7 +4,7 @@
 int main(void) {
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1}};
     Dict kwargs = {.items = items, .size = 2};
-    Env* env = calloc(1, sizeof(*env));
+    Env* env = (Env*)calloc(1, sizeof(*env));
     float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2];
     unsigned char masks[2][RF_MASK_SIZE];
     env->rng = 123;
@@ -46,7 +46,7 @@ int main(void) {
     dict_clear(&output);
     puf_close(env); free(env);
     items[1].value = 0;
-    env = calloc(1, sizeof(*env));
+    env = (Env*)calloc(1, sizeof(*env));
     env->rng = 123;
     puf_init(env, &kwargs);
     assert(env->num_agents == 1 && env->agents[0].policy == 0);

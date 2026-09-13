@@ -76,10 +76,10 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .get_entity_count = riskfight_entity_count, .get_entity = riskfight_entity,
     .fill_render_entities = riskfight_render_entities,
     .put_int = riskfight_put_int, .put_float = riskfight_put_float, .put_ptr = riskfight_put_ptr,
-    .head_move = RF_PRIMARY, .head_target = RF_PRIMARY, .head_prayer = -1,
-    .get_log = riskfight_log, .get_tick = riskfight_tick, .get_winner = riskfight_winner,
     .arena_base_x = FIGHT_AREA_BASE_X, .arena_base_y = FIGHT_AREA_BASE_Y,
     .arena_width = FIGHT_AREA_WIDTH, .arena_height = FIGHT_AREA_HEIGHT,
+    .head_move = RF_PRIMARY, .head_prayer = -1, .head_target = RF_PRIMARY,
+    .get_log = riskfight_log, .get_tick = riskfight_tick, .get_winner = riskfight_winner,
 };
 __attribute__((constructor)) static void riskfight_register(void) {
     encounter_register(&ENCOUNTER_RISKFIGHT);

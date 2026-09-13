@@ -12,19 +12,19 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         p->current_defence / 120.0f, p->current_magic / 99.0f,
         p->special_energy / 100.0f, p->attack_timer / 10.0f,
         p->food_timer / 3.0f, p->potion_timer / 3.0f, p->karambwan_timer / 3.0f,
-        p->veng_active, p->veng_cooldown / 50.0f,
-        p->spec_armed, osrs_interaction_active(&p->interaction),
+        (float)p->veng_active, p->veng_cooldown / 50.0f,
+        (float)p->spec_armed, (float)osrs_interaction_active(&p->interaction),
         p->offensive_prayer / 4.0f, p->fight_style / 3.0f,
         p->item_effect_state.recoil_damage_used / 40.0f,
         use->divine_combat_ticks / 500.0f, use->vengeance_sacks / 100.0f,
-        (float)s->env.tick, (float)p->x, (float)p->y, p->has_attack_timer,
+        (float)s->env.tick, (float)p->x, (float)p->y, (float)p->has_attack_timer,
     };
     memcpy(obs, self, sizeof(self));
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
         float* row = obs + RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH;
         row[0] = osrs_inventory_cell_obs_code_encode(p->inventory_cells[slot].content_code);
-        row[1] = osrs_consumable_hp_heal_amount(m->consumable_kind, p->base_hitpoints) / 121.0f;
+        row[1] = osrs_consumable_hp_heal_amount((OsrsConsumableKind)m->consumable_kind, p->base_hitpoints) / 121.0f;
         row[2] = m->click_action == OSRS_CLICK_EAT ?
             (m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE ? 1.0f :
              m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
@@ -65,9 +65,9 @@ static int riskfight_inventory_head_accepts(const Player* p, int head, int slot)
     if (head == RF_DRINK) return m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
         (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
     if (head == RF_COMBO) return m->consumable_kind == OSRS_CONSUMABLE_HALIBUT &&
-        osrs_can_eat_consumable_kind(p, m->consumable_kind);
+        osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
     return m->click_action == OSRS_CLICK_EAT && m->consumable_kind != OSRS_CONSUMABLE_HALIBUT &&
-        osrs_can_eat_consumable_kind(p, m->consumable_kind);
+        osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
 }
 
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, float* mask) {
