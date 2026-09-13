@@ -135,6 +135,7 @@ static RiskfightEatPlan riskfight_timed_eat(const Player* p, RiskfightThreatWind
 
 static void riskfight_tactician(const float* obs, int* actions) {
     Player self = riskfight_observed_self(obs);
+    if (self.current_hitpoints <= 0) return;
     RiskfightThreatWindow threat = riskfight_threat_window(obs);
     RiskfightEatPlan eat = riskfight_timed_eat(&self, threat);
     actions[RF_PRIMARY] = RF_ATTACK;

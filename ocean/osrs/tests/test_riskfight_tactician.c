@@ -135,12 +135,23 @@ static void test_supply_and_equipment_plans(void) {
     }
 }
 
+static void test_dead_fighter_waits_for_pending_hits(void) {
+    reset();
+    state.env.players[0].current_hitpoints = 0;
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&state, 0, obs);
+    int actions[RF_HEADS];
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    for (int head = 0; head < RF_HEADS; head++) assert(actions[head] == 0);
+}
+
 int main(void) {
     test_timed_combo_eating();
     test_pie_and_blocked_food();
     test_animation_and_maul_threat();
     test_veng_armour_and_hidden_state();
     test_supply_and_equipment_plans();
+    test_dead_fighter_waits_for_pending_hits();
     puts("Riskfight tactician contracts passed");
     return 0;
 }
