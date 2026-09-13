@@ -1,0 +1,239 @@
+#ifndef OSRS_RISKFIGHT_TACTICIAN_H
+#define OSRS_RISKFIGHT_TACTICIAN_H
+#include "../../osrs_pvp_threat.h"
+
+typedef struct {
+    int damage;
+    int ticks_until;
+    int incoming_animation;
+} RiskfightThreatWindow;
+
+typedef struct {
+    int food, drink, combo;
+    int healed_hp;
+    int clicks;
+} RiskfightEatPlan;
+
+static Player riskfight_observed_self(const float* obs) {
+    Player p;
+    memset(&p, 0, sizeof(p));
+    encounter_init_maxed_player_combat_stats(&p, 99);
+    p.current_hitpoints = (int)lroundf(obs[0] * 121);
+    p.current_prayer = (int)lroundf(obs[1] * 99);
+    p.current_attack = (int)lroundf(obs[2] * 118);
+    p.current_strength = (int)lroundf(obs[3] * 118);
+    p.current_defence = (int)lroundf(obs[4] * 120);
+    p.current_magic = (int)lroundf(obs[5] * 99);
+    p.special_energy = (int)lroundf(obs[6] * 100);
+    p.attack_timer = (int)lroundf(obs[7] * 10);
+    p.food_timer = (int)lroundf(obs[8] * 3);
+    p.potion_timer = (int)lroundf(obs[9] * 3);
+    p.karambwan_timer = (int)lroundf(obs[10] * 3);
+    p.has_attack_timer = obs[23] != 0;
+    p.offensive_prayer = p.current_prayer > 0 ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
+    p.fight_style = FIGHT_STYLE_AGGRESSIVE;
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++)
+        p.equipped[i] = (uint8_t)lroundf(obs[RF_EQUIPPED_START + i] * RF_OBSERVATION_ITEM_SCALE);
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        p.inventory_cells[i] = osrs_inventory_cell_from_content_code(
+            osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + i * RF_INVENTORY_WIDTH]));
+    return p;
+}
+
+static RiskfightThreatWindow riskfight_threat_window(const float* obs) {
+    Player assumed;
+    memset(&assumed, 0, sizeof(assumed));
+    encounter_init_maxed_player_combat_stats(&assumed, 99);
+    encounter_super_combat_boost(&assumed);
+    assumed.offensive_prayer = OFFENSIVE_PRAYER_PIETY;
+    assumed.fight_style = FIGHT_STYLE_AGGRESSIVE;
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++)
+        assumed.equipped[i] = (uint8_t)lroundf(obs[RF_OPPONENT_START + i] * RF_OBSERVATION_ITEM_SCALE);
+    assumed.equipped[GEAR_SLOT_RING] = ITEM_ULTOR_RING;
+    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+    int bar = (int)lroundf(opponent[0] * 30);
+    int hp_lower = bar > 0 ? (bar - 1) * assumed.base_hitpoints / 30 + 1 : 1;
+    OsrsMeleeThreat threat = osrs_melee_threat(assumed.equipped,
+        calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, hp_lower, 100);
+    int age = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
+    int ticks = opponent[4] ? (int)lroundf(opponent[6] * RF_OBSERVATION_ATTACK_AGE_SCALE) : 0;
+    int animation = opponent[4] && age == 1;
+    if (animation || threat.instant_special_max > 0) ticks = 0;
+    int damage = threat.normal_plus_instant_max;
+    const float* event = obs + RF_HISTORY_START;
+    if (event[0] > 0) {
+        int launched_weapon = (int)lroundf(event[1] * RF_OBSERVATION_ITEM_SCALE);
+        assumed.equipped[GEAR_SLOT_WEAPON] = launched_weapon;
+        if (item_is_two_handed(launched_weapon)) assumed.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        OsrsMeleeThreat pending = osrs_melee_threat(assumed.equipped,
+            calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, 1, 100);
+        int pending_max = pending.normal_plus_instant_max;
+        if (pending.special_stack_max > pending_max) pending_max = pending.special_stack_max;
+        if (pending_max > damage) damage = pending_max;
+        ticks = 0;
+        animation = 1;
+    }
+    if (threat.special_stack_max > damage) damage = threat.special_stack_max;
+    return (RiskfightThreatWindow){damage, ticks, animation};
+}
+
+static int riskfight_player_find_food(const Player* p, OsrsConsumableKind kind) {
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        if (osrs_inventory_cell_metadata(&p->inventory_cells[i])->consumable_kind == kind) return i + 1;
+    return 0;
+}
+
+static RiskfightEatPlan riskfight_eat_candidate(Player* p, int food, int drink, int combo) {
+    RiskfightEatPlan plan = {food, drink, combo, p->current_hitpoints, 0};
+    OsrsInventoryUseState use = {0};
+    int slots[] = {food, drink, combo};
+    for (int i = 0; i < 3; i++) {
+        if (!slots[i]) continue;
+        OsrsInventoryUseResult result = osrs_player_use_inventory(p, &use, NULL, slots[i] - 1, 0);
+        if (result != OSRS_INVENTORY_USE_CONSUMED) {
+            plan.clicks = -1;
+            return plan;
+        }
+        plan.clicks++;
+    }
+    plan.healed_hp = p->current_hitpoints;
+    return plan;
+}
+
+static RiskfightEatPlan riskfight_choose_eat(const Player* p, int target) {
+    if (p->current_hitpoints >= target) return (RiskfightEatPlan){0, 0, 0, p->current_hitpoints, 0};
+    int foods[] = {0, riskfight_player_find_food(p, OSRS_CONSUMABLE_SUMMER_PIE),
+        riskfight_player_find_food(p, OSRS_CONSUMABLE_MARLIN)};
+    int brew = riskfight_player_find_food(p, OSRS_CONSUMABLE_BREW);
+    int halibut = riskfight_player_find_food(p, OSRS_CONSUMABLE_HALIBUT);
+    RiskfightEatPlan best = {0, 0, 0, p->current_hitpoints, 0};
+    for (int f = 0; f < 3; f++) for (int b = 0; b < 2; b++) for (int h = 0; h < 2; h++) {
+        Player next = *p;
+        RiskfightEatPlan candidate = riskfight_eat_candidate(&next, foods[f], b ? brew : 0, h ? halibut : 0);
+        if (candidate.clicks < 0) continue;
+        int safe = candidate.healed_hp >= target;
+        int best_safe = best.healed_hp >= target;
+        if ((safe && !best_safe) || (safe && best_safe &&
+                (candidate.healed_hp < best.healed_hp ||
+                 (candidate.healed_hp == best.healed_hp && candidate.clicks < best.clicks))) ||
+                (!safe && !best_safe && candidate.healed_hp > best.healed_hp)) best = candidate;
+    }
+    return best;
+}
+
+static RiskfightEatPlan riskfight_timed_eat(const Player* p, RiskfightThreatWindow threat) {
+    int target = threat.damage + 1;
+    if (threat.ticks_until == 0) return riskfight_choose_eat(p, target);
+    Player future = *p;
+    future.food_timer = future.food_timer > threat.ticks_until ? future.food_timer - threat.ticks_until : 0;
+    future.potion_timer = future.potion_timer > threat.ticks_until ? future.potion_timer - threat.ticks_until : 0;
+    future.karambwan_timer = future.karambwan_timer > threat.ticks_until ? future.karambwan_timer - threat.ticks_until : 0;
+    RiskfightEatPlan later = riskfight_choose_eat(&future, target);
+    if (later.healed_hp >= target) return (RiskfightEatPlan){0, 0, 0, p->current_hitpoints, 0};
+    return riskfight_choose_eat(p, target - (later.healed_hp - p->current_hitpoints));
+}
+
+static void riskfight_tactician(const float* obs, int* actions) {
+    Player self = riskfight_observed_self(obs);
+    RiskfightThreatWindow threat = riskfight_threat_window(obs);
+    RiskfightEatPlan eat = riskfight_timed_eat(&self, threat);
+    actions[RF_PRIMARY] = RF_ATTACK;
+    actions[RF_PRAYER] = self.offensive_prayer;
+    actions[RF_STYLE] = self.fight_style;
+    actions[RF_FOOD] = eat.food;
+    actions[RF_DRINK] = eat.drink;
+    actions[RF_COMBO] = eat.combo;
+    int eating = eat.clicks > 0;
+    if (eating) actions[RF_PRIMARY] = RF_STOP;
+    Player after_eating = self;
+    riskfight_eat_candidate(&after_eating, eat.food, eat.drink, eat.combo);
+    int veng_ready = !obs[11] && obs[12] <= 1.0f / OSRS_VENGEANCE_COOLDOWN &&
+        after_eating.current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && obs[19] > 0;
+    if (veng_ready && threat.ticks_until == 0) actions[RF_VENGEANCE] = 1;
+    int reflecting = obs[11] || actions[RF_VENGEANCE];
+    int own_ready = self.attack_timer <= 1;
+    if (!eating && own_ready && reflecting && threat.ticks_until == 1) actions[RF_PRIMARY] = RF_STOP;
+    int equipped_weapon = self.equipped[GEAR_SLOT_WEAPON];
+    int chosen_weapon = ITEM_ABYSSAL_TENTACLE;
+    int best_max = -1;
+    const int weapons[] = {ITEM_ABYSSAL_TENTACLE, ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL_ORNATE};
+    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+    int opponent_hp_upper = opponent[0] >= 1 ? 121 : (int)ceilf(opponent[0] * self.base_hitpoints);
+    for (int i = 0; i < 4; i++) {
+        int weapon = weapons[i];
+        if (equipped_weapon != weapon && !riskfight_find_gear(obs, weapon)) continue;
+        Player candidate = self;
+        int weapon_slot = riskfight_find_gear(obs, weapon) - 1;
+        if (equipped_weapon != weapon && osrs_equip_from_cell(&candidate, candidate.inventory_cells, weapon_slot) < 0) continue;
+        int shield_slot = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER) - 1;
+        if (!item_is_two_handed(weapon) && shield_slot >= 0)
+            osrs_equip_from_cell(&candidate, candidate.inventory_cells, shield_slot);
+        const int armour[] = {ITEM_DHAROKS_HELM, ITEM_DHAROKS_PLATEBODY, ITEM_DHAROKS_PLATELEGS};
+        for (int a = 0; a < 3; a++) {
+            int slot = riskfight_find_gear(obs, armour[a]) - 1;
+            if (slot >= 0) osrs_equip_from_cell(&candidate, candidate.inventory_cells, slot);
+        }
+        candidate.current_hitpoints = after_eating.current_hitpoints;
+        candidate.current_strength = after_eating.current_strength;
+        OsrsMeleeThreat hit = osrs_melee_threat(candidate.equipped,
+            calculate_effective_strength(&candidate, ATTACK_STYLE_MELEE), candidate.base_hitpoints,
+            candidate.current_hitpoints, candidate.special_energy);
+        int spec = i >= 2 && hit.special_count > 0 && !eating &&
+            (own_ready || hit.instant_special_max > 0) &&
+            (opponent_hp_upper <= hit.special_stack_max || (reflecting && threat.incoming_animation));
+        if (i >= 2 && !spec) continue;
+        int max_hit = spec ? hit.special_stack_max : hit.normal_max;
+        if (max_hit > best_max) {
+            best_max = max_hit;
+            chosen_weapon = weapon;
+            actions[RF_SPECIAL] = spec ? hit.special_count : 0;
+        }
+    }
+    if (!eating && ((own_ready && actions[RF_PRIMARY] == RF_ATTACK) || actions[RF_SPECIAL])) {
+        DamageResult returned = osrs_apply_post_mitigation_pipeline(best_max,
+            opponent_hp_upper, 0, 1, 1, 0);
+        int return_damage = returned.veng_damage + returned.recoil_damage;
+        int required_hp = return_damage + (threat.ticks_until == 0 ? threat.damage : 0) + 1;
+        if (self.current_hitpoints < required_hp) {
+            if (threat.ticks_until == 0) eat = riskfight_choose_eat(&self, required_hp);
+            actions[RF_FOOD] = eat.food;
+            actions[RF_DRINK] = eat.drink;
+            actions[RF_COMBO] = eat.combo;
+            actions[RF_PRIMARY] = RF_STOP;
+            actions[RF_SPECIAL] = 0;
+            eating = eat.clicks > 0;
+            after_eating = self;
+            riskfight_eat_candidate(&after_eating, eat.food, eat.drink, eat.combo);
+            if (after_eating.current_magic < OSRS_VENGEANCE_MAGIC_LEVEL) actions[RF_VENGEANCE] = 0;
+        }
+    }
+    actions[RF_WEAPON] = riskfight_find_gear(obs, chosen_weapon);
+    if (!item_is_two_handed(chosen_weapon)) actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
+    actions[RF_RING] = riskfight_find_gear(obs,
+        !own_ready && threat.ticks_until == 0 ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
+    Player equipped = self;
+    for (int head = RF_WEAPON; head <= RF_RING; head++)
+        if (actions[head]) osrs_equip_from_cell(&equipped, equipped.inventory_cells, actions[head] - 1);
+    int free_slots = 0;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) free_slots += osrs_inventory_cell_is_empty(&equipped.inventory_cells[i]);
+    const int armour_heads[] = {RF_HEAD, RF_BODY, RF_LEGS};
+    const int armour_items[] = {ITEM_DHAROKS_HELM, ITEM_DHAROKS_PLATEBODY, ITEM_DHAROKS_PLATELEGS};
+    int bait = !eating && !actions[RF_SPECIAL] && !own_ready && reflecting && threat.incoming_animation && self.current_hitpoints > threat.damage;
+    for (int i = 0; i < 3; i++) {
+        if (bait && free_slots > 0 && self.equipped[RF_GEAR_SLOT_BY_HEAD[armour_heads[i]]] != ITEM_NONE) {
+            actions[armour_heads[i]] = RF_UNEQUIP;
+            free_slots--;
+        } else if (!bait) actions[armour_heads[i]] = riskfight_find_gear(obs, armour_items[i]);
+    }
+    if (!eating && self.potion_timer == 0 && self.current_hitpoints > threat.damage) {
+        if (self.current_prayer <= 40 || self.current_attack < self.base_attack || self.current_strength < self.base_strength ||
+            self.current_magic < self.base_magic)
+            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+        else if (threat.ticks_until > 1 && self.current_hitpoints > threat.damage + OSRS_DIVINE_DAMAGE &&
+                self.current_strength < 110)
+            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    }
+    if (threat.ticks_until == 0 && eat.healed_hp <= threat.damage && eat.clicks == 0)
+        actions[RF_PRIMARY] = RF_TELEPORT;
+}
+#endif

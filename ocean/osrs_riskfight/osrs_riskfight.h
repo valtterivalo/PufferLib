@@ -52,7 +52,8 @@ void puf_init(Env* env, Dict* kwargs) {
     riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
 }
 static inline void puf_set_bot_policy(Env* env, int bot_policy) {
-    assert(bot_policy >= RISKFIGHT_TRADER && bot_policy <= RISKFIGHT_AGGRESSIVE);
+    assert((bot_policy >= RISKFIGHT_TRADER && bot_policy <= RISKFIGHT_AGGRESSIVE) ||
+        bot_policy == RISKFIGHT_TACTICIAN);
     env->context.opponent = (RiskfightOpponent)bot_policy;
 }
 

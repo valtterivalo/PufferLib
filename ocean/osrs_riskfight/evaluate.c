@@ -7,8 +7,11 @@ int main(void) {
     riskfight_finalize_context((EncounterState*)state, (EncounterContext*)&context);
     context.self_play = 1;
     puts("agent,opponent,fights,kills,deaths,escapes,mutual_deaths,net_stake_per_fight,mean_ticks");
-    for (int agent = RISKFIGHT_TRADER; agent <= RISKFIGHT_AGGRESSIVE; agent++) {
-        for (int opponent = RISKFIGHT_TRADER; opponent <= RISKFIGHT_AGGRESSIVE; opponent++) {
+    const RiskfightOpponent bots[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_TACTICIAN};
+    for (size_t a = 0; a < sizeof(bots) / sizeof(*bots); a++) {
+        int agent = bots[a];
+        for (size_t b = 0; b < sizeof(bots) / sizeof(*bots); b++) {
+            int opponent = bots[b];
             int outcomes[5] = {0}, ticks = 0;
             for (int seed = 1; seed <= 16; seed++) {
                 riskfight_reset((EncounterState*)state, (EncounterContext*)&context, (uint32_t)seed);

@@ -52,7 +52,9 @@ int main(void) {
     assert(env->num_agents == 1 && env->agents[0].policy == 0);
     env->agents[0] = (Agent){.observations = obs[0], .actions = actions[0],
         .rewards = &rewards[0], .terminals = &terminals[0], .action_mask = masks[0]};
-    for (int bot = RISKFIGHT_TRADER; bot <= RISKFIGHT_AGGRESSIVE; bot++) {
+    const int bots[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_TACTICIAN};
+    for (size_t i = 0; i < sizeof(bots) / sizeof(*bots); i++) {
+        int bot = bots[i];
         puf_set_bot_policy(env, bot);
         puf_reset(env);
         assert(env->context.opponent == bot && env->num_agents == 1);

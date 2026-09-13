@@ -149,8 +149,11 @@ static int riskfight_find_gear(const float* obs, uint8_t item) {
     return 0;
 }
 
+#include "riskfight_tactician.h"
+
 static void riskfight_script(const float* obs, RiskfightOpponent type, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
+    if (type == RISKFIGHT_TACTICIAN) { riskfight_tactician(obs, actions); return; }
     float hp = obs[0] * 121;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     int threshold = type == RISKFIGHT_CAUTIOUS ? 80 : type == RISKFIGHT_AGGRESSIVE ? 45 : 65;

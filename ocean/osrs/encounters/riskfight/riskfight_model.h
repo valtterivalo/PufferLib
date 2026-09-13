@@ -5,7 +5,7 @@
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
 
-typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_MIXED } RiskfightOpponent;
+typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_MIXED, RISKFIGHT_TACTICIAN } RiskfightOpponent;
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
     RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH } RiskfightOutcome;
 enum {
