@@ -49,6 +49,10 @@ static void test_context_and_boundaries(void) {
     OsrsTeleportState lock = osrs_teleport_record_offensive_pvp_special(unlocked, OSRS_TELEPORT_COMBAT_PVP_AREA, 30);
     assert(!osrs_teleport_allowed(lock, 30 + OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS - 1));
     assert(osrs_teleport_allowed(lock, 30 + OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS));
+    OsrsTeleportState recorded = osrs_teleport_record_offensive_pvp_special(
+        unlocked, OSRS_TELEPORT_COMBAT_PVP_AREA, 217);
+    assert(!osrs_teleport_allowed(recorded, 225));
+    assert(osrs_teleport_allowed(recorded, 226));
 }
 
 static void test_executed_special_and_consumption(void) {
