@@ -10,6 +10,7 @@ typedef struct {
     RecordedAttackPhase phase;
 } ConditionedAttack;
 typedef struct { int tick; int target; int damage; } RecordedHitsplat;
+typedef struct { int tick; int target; int ratio; int scale; } RecordedHealthBar;
 typedef struct {
     const char* name;
     const char* archive;
@@ -27,9 +28,16 @@ typedef struct {
     size_t hit_count;
     int dead_actor;
     int expected_candidates;
+    const RecordedHealthBar* health_bars;
+    size_t health_bar_count;
 } RecordedPvpWindow;
 
 #include "recorded_pvp_124331.h"
+
+static const RecordedHealthBar mutual_voidwaker_bars[] = {
+    {21887, 0, 21, 30}, {21887, 1, 24, 30},
+    {21888, 1, 16, 30}, {21889, 0, 0, 30}, {21889, 1, 5, 30},
+};
 
 static const ConditionedAttack spec_attacks[] = {
     {89, 1, 15, ATTACK_STYLE_MELEE, RECORDED_BEFORE_PASSES},
@@ -93,10 +101,11 @@ static const RecordedPvpWindow recorded_pvp_windows[] = {
         "mutual_voidwaker_lethal_reflection",
         "session_20260913T130428.291Z_20260913T093024Z.89354_8b1bd9d1-5884-480b-9c2b-fee8c3f269e9.jsonl.zst",
         "e2505b16f30787b23531d4471d7b374d63400f6b4900f63fa5aa11b2c956fe2c",
-        "Actors Perseveratie and ThieveOfLife. Both Voidwaker animations observed at 21888. Direct rolls 28 and 61, recoil, Vengeance and source-pass phases are conditioned explanations, not observed PID or hidden state. Raw pre-exchange health bars 21/30 and 24/30 do not supply exact HP. Victim HP enumerated 1 through 121 and survivor HP 68 through 121. Death callback sequence 10375 precedes serialized hitsplats 10376 through 10378, not server damage ordering.",
+        "Actors Perseveratie and ThieveOfLife. Both Voidwaker animations observed at 21888. Direct rolls 28 and 61, recoil, Vengeance and source-pass phases are conditioned explanations, not observed PID or hidden state. Base HP 99 and no intervening healing are assumed. Pre-exchange bars 21/30 and 24/30 and final bar updates constrain enumerated HP using the shared quantizer. Bar samples represent pre-exchange and end-of-tick states, not intermediate callback states. Death callback sequence 10375 precedes serialized hitsplats 10376 through 10378, not server damage ordering.",
         21888, 21889, {1, 68}, {121, 121}, {1, 1}, {1, 1},
         mutual_voidwaker_attacks, RECORDED_COUNT(mutual_voidwaker_attacks),
-        mutual_voidwaker_hits, RECORDED_COUNT(mutual_voidwaker_hits), 0, 54,
+        mutual_voidwaker_hits, RECORDED_COUNT(mutual_voidwaker_hits), 0, 1,
+        mutual_voidwaker_bars, RECORDED_COUNT(mutual_voidwaker_bars),
     },
 };
 #undef RECORDED_COUNT

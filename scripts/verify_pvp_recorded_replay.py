@@ -8,6 +8,10 @@ from pathlib import Path
 def verify_records(lines, expected_hash, candidates, actor_ids):
     first = min(hit['tick'] for candidate in candidates for hit in candidate['simulated_hits'])
     last = max(hit['tick'] for candidate in candidates for hit in candidate['simulated_hits'])
+    bars = candidates[0].get('health_bars', [])
+    if bars:
+        first = min(first, min(bar['tick'] for bar in bars))
+    observed_bars = {}
     digest = hashlib.sha256()
     observed = [[], []]
     deaths = []
@@ -24,6 +28,12 @@ def verify_records(lines, expected_hash, candidates, actor_ids):
         if not first <= tick <= last:
             continue
         payload = record['payload']
+        state = payload.get('state', payload.get('initialState'))
+        if state is not None:
+            identity = payload.get('actor', payload).get('actorTraceId')
+            if identity in actor_ids:
+                actor = actor_ids.index(identity)
+                observed_bars[tick, actor] = {**state['healthBar'], 'sequence': sequence}
         if last_kind not in ('HITSPLAT_APPLIED_OBSERVED', 'ACTOR_DEATH_OBSERVED'):
             continue
         identity = payload['actor']['actorTraceId']
@@ -40,6 +50,10 @@ def verify_records(lines, expected_hash, candidates, actor_ids):
         raise ValueError('Decompressed source hash mismatch')
     if last_kind != 'SESSION_ENDED':
         raise ValueError('Recording has no clean session end')
+    for bar in bars:
+        observed_bar = observed_bars[bar['tick'], bar['target']]
+        if any(observed_bar[key] != bar[key] for key in ('ratio', 'scale')):
+            raise ValueError(f'Recorded health bar disagrees: {bar} != {observed_bar}')
     for candidate in candidates:
         for actor in range(2):
             simulated = [(hit['tick'], hit['damage']) for hit in candidate['simulated_hits']
@@ -51,6 +65,8 @@ def verify_records(lines, expected_hash, candidates, actor_ids):
     return {'window': candidates[0]['window'], 'source_sha256': expected_hash,
             'records': count, 'compatible_candidates': len(candidates),
             'actor_trace_ids': actor_ids, 'observed_hits': observed, 'death_callbacks': deaths,
+            'health_bars': [{**bar, 'sequence': observed_bars[bar['tick'], bar['target']]['sequence']}
+                            for bar in bars],
             'scope': 'Conditioned damage and queue phases, not recovered inputs or server PID'}
 
 

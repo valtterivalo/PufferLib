@@ -51,8 +51,11 @@ static RiskfightThreatWindow riskfight_threat_window(const float* obs) {
         assumed.equipped[i] = (uint8_t)lroundf(obs[RF_OPPONENT_START + i] * RF_OBSERVATION_ITEM_SCALE);
     assumed.equipped[GEAR_SLOT_RING] = ITEM_ULTOR_RING;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    int bar = (int)lroundf(opponent[0] * 30);
-    int hp_lower = bar > 0 ? (bar - 1) * assumed.base_hitpoints / 30 + 1 : 1;
+    int bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+    OsrsHealthBarRange hp = osrs_health_bar_range(bar, OSRS_PLAYER_HEALTH_BAR_SCALE,
+        assumed.base_hitpoints, 121);
+    assert(hp.kind == OSRS_HEALTH_BAR_KNOWN);
+    int hp_lower = bar == 0 ? 1 : hp.lower;
     OsrsMeleeThreat threat = osrs_melee_threat(assumed.equipped,
         calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, hp_lower, 100);
     int age = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
@@ -159,7 +162,11 @@ static void riskfight_tactician(const float* obs, int* actions) {
     int best_max = -1;
     const int weapons[] = {ITEM_ABYSSAL_TENTACLE, ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL_ORNATE};
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    int opponent_hp_upper = opponent[0] >= 1 ? 121 : (int)ceilf(opponent[0] * self.base_hitpoints);
+    OsrsHealthBarRange opponent_hp = osrs_health_bar_range(
+        (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE),
+        OSRS_PLAYER_HEALTH_BAR_SCALE, self.base_hitpoints, 121);
+    assert(opponent_hp.kind == OSRS_HEALTH_BAR_KNOWN);
+    int opponent_hp_upper = opponent_hp.upper;
     for (int i = 0; i < 4; i++) {
         int weapon = weapons[i];
         if (equipped_weapon != weapon && !riskfight_find_gear(obs, weapon)) continue;

@@ -2,13 +2,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../osrs_env.h"
+#include "../osrs_health_bar.h"
 #include "recorded_pvp_windows.h"
 
 typedef struct {
     OsrsPvpHitEvent* hits;
     size_t count;
     int actor_swap;
+    int mismatched_bars;
 } ReplayTrace;
+
+static void check_health_bars(const OsrsEnv* env, const RecordedPvpWindow* window,
+    int tick, int actor_swap, ReplayTrace* trace) {
+    if (!trace) return;
+    for (size_t i = 0; i < window->health_bar_count; i++) {
+        const RecordedHealthBar* bar = &window->health_bars[i];
+        if (bar->tick != tick) continue;
+        const Player* player = &env->players[bar->target ^ actor_swap];
+        trace->mismatched_bars += osrs_health_bar_ratio(player->current_hitpoints,
+            player->base_hitpoints, bar->scale) != bar->ratio;
+    }
+}
 
 static void collect_hit(void* context, const OsrsPvpHitEvent* event) {
     ReplayTrace* trace = context;
@@ -53,6 +67,7 @@ static void replay(OsrsEnv* env, const RecordedPvpWindow* window, const int hp[2
         env->pvp_runtime.hit_observer = collect_hit;
         env->pvp_runtime.hit_observer_context = trace;
     }
+    check_health_bars(env, window, window->start_tick - 1, actor_swap, trace);
     for (env->tick = window->start_tick; env->tick <= window->end_tick; env->tick++) {
         emit_conditioned_attacks(env, window, actor_swap, RECORDED_BEFORE_PASSES, -1);
         for (int pass = 0; pass < 2; pass++) {
@@ -60,12 +75,13 @@ static void replay(OsrsEnv* env, const RecordedPvpWindow* window, const int hp[2
             pvp_process_incoming_hits(env, actor ^ actor_swap);
             emit_conditioned_attacks(env, window, actor_swap, RECORDED_AFTER_SOURCE_PASS, actor);
         }
+        check_health_bars(env, window, env->tick, actor_swap, trace);
     }
 }
 
 static int matches(const RecordedPvpWindow* window, const ReplayTrace* trace,
     const OsrsEnv* env) {
-    if (trace->count != window->hit_count) return 0;
+    if (trace->count != window->hit_count || trace->mismatched_bars) return 0;
     for (int actor = 0; actor < 2; actor++) {
         size_t observed = 0;
         for (size_t simulated = 0; simulated < trace->count; simulated++) {
@@ -92,6 +108,12 @@ static void print_candidate(const RecordedPvpWindow* window, const ReplayTrace* 
         printf("%s{\"tick\":%d,\"source\":%d,\"target\":%d,\"kind\":%d,"
             "\"damage\":%d,\"hp_lost\":%d}", i ? "," : "", hit->tick,
             hit->source, hit->target, hit->kind, hit->damage, hit->hitpoints_lost);
+    }
+    printf("],\"health_bars\":[");
+    for (size_t i = 0; i < window->health_bar_count; i++) {
+        const RecordedHealthBar* bar = &window->health_bars[i];
+        printf("%s{\"tick\":%d,\"target\":%d,\"ratio\":%d,\"scale\":%d}",
+            i ? "," : "", bar->tick, bar->target, bar->ratio, bar->scale);
     }
     puts("]}");
 }

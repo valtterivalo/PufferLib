@@ -2,6 +2,7 @@
 #define OSRS_RISKFIGHT_MODEL_H
 
 #include "../../osrs_env.h"
+#include "../../osrs_health_bar.h"
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
 
@@ -122,9 +123,8 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);
-    v->health_bar = (opponent->current_hitpoints * 30 + opponent->base_hitpoints - 1) /
-        opponent->base_hitpoints;
-    if (v->health_bar > 30) v->health_bar = 30;
+    v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
+        opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
     if (reset) { v->last_attack_tick = -1; return; }
     int index = (s->env.tick - 1) % RF_HISTORY_TICKS;
     float* event = v->events[index];
