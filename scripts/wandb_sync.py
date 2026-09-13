@@ -73,6 +73,10 @@ def sync_trial(path, args):
                 if '_finished' in row:
                     return
                 if configuration['base']['env_name'] == 'osrs_riskfight':
+                    selection_bots = configuration['manifest'].get('eval_bots', [])
+                    selection_keys = [f'selfplay/bot_{bot}_perf' for bot in selection_bots]
+                    if selection_keys and all(key in row for key in selection_keys):
+                        row['eval/selection_net_stake'] = sum(row[key] for key in selection_keys) / len(selection_keys)
                     original_bots = [f'selfplay/bot_{bot}_perf' for bot in (0, 1, 2)]
                     if all(key in row for key in original_bots):
                         original_sum = sum(row[key] for key in original_bots)

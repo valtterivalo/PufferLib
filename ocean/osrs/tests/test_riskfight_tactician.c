@@ -145,6 +145,87 @@ static void test_dead_fighter_waits_for_pending_hits(void) {
     for (int head = 0; head < RF_HEADS; head++) assert(actions[head] == 0);
 }
 
+static void test_retained_health_evidence(void) {
+    reset();
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&state, 0, obs);
+    obs[RF_OPPONENT_START + NUM_GEAR_SLOTS] = 8.0f / 30;
+    RiskfightInferredHp missing = riskfight_inferred_opponent_hp(obs);
+    assert(missing.evidence == RISKFIGHT_HP_HISTORY_MISSING && missing.range.upper == 121);
+    obs[RF_HISTORY_START + 3] = 1;
+    RiskfightInferredHp fresh = riskfight_inferred_opponent_hp(obs);
+    assert(fresh.evidence == RISKFIGHT_HP_FRESH);
+    assert(fresh.range.lower == 24 && fresh.range.upper == 27);
+    obs[RF_HISTORY_START + 6] = 1;
+    RiskfightInferredHp simultaneous = riskfight_inferred_opponent_hp(obs);
+    assert(simultaneous.evidence == RISKFIGHT_HP_CONSUMPTION_AMBIGUOUS && simultaneous.range.upper == 121);
+    obs[RF_HISTORY_START + 3] = 0;
+    obs[RF_HISTORY_START + 3 * RF_EVENT_WIDTH + 3] = 1;
+    RiskfightInferredHp consumed = riskfight_inferred_opponent_hp(obs);
+    assert(consumed.evidence == RISKFIGHT_HP_CONSUMPTION_AMBIGUOUS && consumed.range.upper == 121);
+    obs[RF_HISTORY_START + 6] = 0;
+    RiskfightInferredHp retained = riskfight_inferred_opponent_hp(obs);
+    assert(retained.evidence == RISKFIGHT_HP_RETAINED);
+    assert(retained.range.lower == 24 && retained.range.upper == 28);
+    obs[RF_HISTORY_START + 4 * RF_EVENT_WIDTH + 6] = 1;
+    RiskfightInferredHp old_consumption = riskfight_inferred_opponent_hp(obs);
+    assert(old_consumption.evidence == RISKFIGHT_HP_RETAINED && old_consumption.range.upper == 28);
+    obs[RF_HISTORY_START + 3] = 1;
+    RiskfightInferredHp refreshed = riskfight_inferred_opponent_hp(obs);
+    assert(refreshed.evidence == RISKFIGHT_HP_FRESH && refreshed.range.upper == 27);
+}
+
+static void test_weapon_switch_does_not_reset_observed_readiness(void) {
+    reset();
+    state.env.tick = 10;
+    state.visible[0].last_attack_tick = 8;
+    state.visible[0].last_attack_speed = 4;
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&state, 0, obs);
+    int remaining = riskfight_threat_window(obs).ticks_until;
+    obs[RF_OPPONENT_START + GEAR_SLOT_WEAPON] = (float)ITEM_DHAROKS_GREATAXE / RF_OBSERVATION_ITEM_SCALE;
+    obs[RF_OPPONENT_START + GEAR_SLOT_SHIELD] = (float)ITEM_NONE / RF_OBSERVATION_ITEM_SCALE;
+    assert(riskfight_threat_window(obs).ticks_until == remaining);
+}
+
+static void test_profile_determinism_and_masks(void) {
+    const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
+        RISKFIGHT_PROFILE_PRESSURE, RISKFIGHT_PROFILE_CAUTIOUS, RISKFIGHT_PROFILE_HELDOUT};
+    uint32_t signatures[4] = {0};
+    for (int profile = 0; profile < 4; profile++) {
+        reset();
+        for (int frame = 0; frame < 400 && !state.env.episode_over; frame++) {
+            float obs[RF_OBS_SIZE], opponent_obs[RF_OBS_SIZE], mask[RF_MASK_SIZE];
+            int actions[2 * RF_HEADS] = {0}, repeated[RF_HEADS] = {0};
+            riskfight_write_observation(&state, 0, obs);
+            riskfight_write_action_mask(&state, 0, mask);
+            riskfight_tactician_profile(obs, actions, profiles[profile]);
+            riskfight_tactician_profile(obs, repeated, profiles[profile]);
+            assert(memcmp(actions, repeated, sizeof(repeated)) == 0);
+            if (profile == 0) {
+                memset(repeated, 0, sizeof(repeated));
+                riskfight_tactician(obs, repeated);
+                assert(memcmp(actions, repeated, sizeof(repeated)) == 0);
+            }
+            int offset = 0;
+            for (int head = 0; head < RF_HEADS; head++) {
+                assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);
+                if (!mask[offset + actions[head]]) {
+                    fprintf(stderr, "profile=%d frame=%d masked head=%d action=%d\n",
+                        profile, frame, head, actions[head]);
+                    assert(0);
+                }
+                signatures[profile] = signatures[profile] * 16777619u + (uint32_t)actions[head];
+                offset += RF_ACTION_DIMS[head];
+            }
+            riskfight_write_observation(&state, 1, opponent_obs);
+            riskfight_script(opponent_obs, RISKFIGHT_TRADER, actions + RF_HEADS);
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+        }
+    }
+    assert(signatures[0] != signatures[1] || signatures[0] != signatures[2] || signatures[0] != signatures[3]);
+}
+
 int main(void) {
     test_timed_combo_eating();
     test_pie_and_blocked_food();
@@ -152,6 +233,9 @@ int main(void) {
     test_veng_armour_and_hidden_state();
     test_supply_and_equipment_plans();
     test_dead_fighter_waits_for_pending_hits();
+    test_retained_health_evidence();
+    test_weapon_switch_does_not_reset_observed_readiness();
+    test_profile_determinism_and_masks();
     puts("Riskfight tactician contracts passed");
     return 0;
 }

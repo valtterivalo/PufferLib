@@ -153,7 +153,12 @@ static int riskfight_find_gear(const float* obs, uint8_t item) {
 
 static void riskfight_script(const float* obs, RiskfightOpponent type, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
-    if (type == RISKFIGHT_TACTICIAN) { riskfight_tactician(obs, actions); return; }
+    if (type >= RISKFIGHT_TACTICIAN && type <= RISKFIGHT_HELDOUT) {
+        const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
+            RISKFIGHT_PROFILE_PRESSURE, RISKFIGHT_PROFILE_CAUTIOUS, RISKFIGHT_PROFILE_HELDOUT};
+        riskfight_tactician_profile(obs, actions, profiles[type - RISKFIGHT_TACTICIAN]);
+        return;
+    }
     float hp = obs[0] * 121;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     int threshold = type == RISKFIGHT_CAUTIOUS ? 80 : type == RISKFIGHT_AGGRESSIVE ? 45 : 65;

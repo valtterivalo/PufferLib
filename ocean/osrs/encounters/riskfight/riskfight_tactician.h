@@ -14,6 +14,55 @@ typedef struct {
     int clicks;
 } RiskfightEatPlan;
 
+typedef struct {
+    int extra_eat_hp;
+    int finisher_hp_margin;
+    int reflection_reserve_percent;
+} RiskfightTacticianProfile;
+
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_BALANCED = {0, 0, 100};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_PRESSURE = {0, 8, 85};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_CAUTIOUS = {8, -8, 110};
+static const RiskfightTacticianProfile RISKFIGHT_PROFILE_HELDOUT = {4, 4, 95};
+
+typedef enum {
+    RISKFIGHT_HP_FRESH,
+    RISKFIGHT_HP_RETAINED,
+    RISKFIGHT_HP_CONSUMPTION_AMBIGUOUS,
+    RISKFIGHT_HP_HISTORY_MISSING,
+} RiskfightHpEvidence;
+
+typedef struct {
+    OsrsHealthBarRange range;
+    RiskfightHpEvidence evidence;
+} RiskfightInferredHp;
+
+static RiskfightInferredHp riskfight_inferred_opponent_hp(const float* obs) {
+    int bar = (int)lroundf(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+    RiskfightInferredHp hp = {osrs_health_bar_range(bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121),
+        RISKFIGHT_HP_HISTORY_MISSING};
+    assert(hp.range.kind == OSRS_HEALTH_BAR_KNOWN);
+    int consumed = 0;
+    for (int ago = 0; ago < RF_HISTORY_TICKS; ago++) {
+        const float* event = obs + RF_HISTORY_START + ago * RF_EVENT_WIDTH;
+        consumed |= event[6] != 0;
+        if (event[3] == 0) continue;
+        if (consumed) {
+            hp.range.upper = 121;
+            hp.evidence = RISKFIGHT_HP_CONSUMPTION_AMBIGUOUS;
+        } else {
+            hp.evidence = ago == 0 ? RISKFIGHT_HP_FRESH : RISKFIGHT_HP_RETAINED;
+            int possible_regen = (ago + ENCOUNTER_STAT_DRIFT_TICKS - 1) / ENCOUNTER_STAT_DRIFT_TICKS;
+            hp.range.upper += possible_regen;
+            if (hp.range.upper > 121) hp.range.upper = 121;
+        }
+        return hp;
+    }
+    hp.range.upper = 121;
+    hp.evidence = consumed ? RISKFIGHT_HP_CONSUMPTION_AMBIGUOUS : RISKFIGHT_HP_HISTORY_MISSING;
+    return hp;
+}
+
 static Player riskfight_observed_self(const float* obs) {
     Player p;
     memset(&p, 0, sizeof(p));
@@ -136,11 +185,14 @@ static RiskfightEatPlan riskfight_timed_eat(const Player* p, RiskfightThreatWind
     return riskfight_choose_eat(p, target - (later.healed_hp - p->current_hitpoints));
 }
 
-static void riskfight_tactician(const float* obs, int* actions) {
+static void riskfight_tactician_profile(const float* obs, int* actions,
+        RiskfightTacticianProfile profile) {
     Player self = riskfight_observed_self(obs);
     if (self.current_hitpoints <= 0) return;
     RiskfightThreatWindow threat = riskfight_threat_window(obs);
-    RiskfightEatPlan eat = riskfight_timed_eat(&self, threat);
+    RiskfightThreatWindow eating_threat = threat;
+    eating_threat.damage += profile.extra_eat_hp;
+    RiskfightEatPlan eat = riskfight_timed_eat(&self, eating_threat);
     actions[RF_PRIMARY] = RF_ATTACK;
     actions[RF_PRAYER] = self.offensive_prayer;
     actions[RF_STYLE] = self.fight_style;
@@ -161,12 +213,8 @@ static void riskfight_tactician(const float* obs, int* actions) {
     int chosen_weapon = ITEM_ABYSSAL_TENTACLE;
     int best_max = -1;
     const int weapons[] = {ITEM_ABYSSAL_TENTACLE, ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL_ORNATE};
-    const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    OsrsHealthBarRange opponent_hp = osrs_health_bar_range(
-        (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE),
-        OSRS_PLAYER_HEALTH_BAR_SCALE, self.base_hitpoints, 121);
-    assert(opponent_hp.kind == OSRS_HEALTH_BAR_KNOWN);
-    int opponent_hp_upper = opponent_hp.upper;
+    RiskfightInferredHp opponent_hp = riskfight_inferred_opponent_hp(obs);
+    int opponent_hp_upper = opponent_hp.range.upper;
     for (int i = 0; i < 4; i++) {
         int weapon = weapons[i];
         if (equipped_weapon != weapon && !riskfight_find_gear(obs, weapon)) continue;
@@ -188,7 +236,7 @@ static void riskfight_tactician(const float* obs, int* actions) {
             candidate.current_hitpoints, candidate.special_energy);
         int spec = i >= 2 && hit.special_count > 0 && !eating &&
             (own_ready || hit.instant_special_max > 0) &&
-            (opponent_hp_upper <= hit.special_stack_max || (reflecting && threat.incoming_animation));
+            (opponent_hp_upper <= hit.special_stack_max + profile.finisher_hp_margin || (reflecting && threat.incoming_animation));
         if (i >= 2 && !spec) continue;
         int max_hit = spec ? hit.special_stack_max : hit.normal_max;
         if (max_hit > best_max) {
@@ -200,7 +248,8 @@ static void riskfight_tactician(const float* obs, int* actions) {
     if (!eating && ((own_ready && actions[RF_PRIMARY] == RF_ATTACK) || actions[RF_SPECIAL])) {
         DamageResult returned = osrs_apply_post_mitigation_pipeline(best_max,
             opponent_hp_upper, 0, 1, 1, 0);
-        int return_damage = returned.veng_damage + returned.recoil_damage;
+        int return_damage = ((returned.veng_damage + returned.recoil_damage) *
+            profile.reflection_reserve_percent + 99) / 100;
         int required_hp = return_damage + (threat.ticks_until == 0 ? threat.damage : 0) + 1;
         if (self.current_hitpoints < required_hp) {
             if (threat.ticks_until == 0) eat = riskfight_choose_eat(&self, required_hp);
@@ -241,7 +290,10 @@ static void riskfight_tactician(const float* obs, int* actions) {
                 self.current_strength < 110)
             actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
     }
-    if (threat.ticks_until == 0 && eat.healed_hp <= threat.damage && eat.clicks == 0)
+    if (threat.ticks_until == 0 && eat.healed_hp <= eating_threat.damage && eat.clicks == 0)
         actions[RF_PRIMARY] = RF_TELEPORT;
+}
+static void riskfight_tactician(const float* obs, int* actions) {
+    riskfight_tactician_profile(obs, actions, RISKFIGHT_PROFILE_BALANCED);
 }
 #endif
