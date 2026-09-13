@@ -27,7 +27,7 @@ def sync_trial(path, args):
     configuration['manifest'] = json.loads((args.root / 'manifest.json').read_text())
     run_id = f'{args.root.name}-{path.stem.rsplit("_", 1)[-1]}'
     with wandb.init(entity=args.entity, project=args.project, group=args.root.name,
-                    id=run_id, resume='allow', config=configuration,
+                    id=run_id, name=run_id, resume='allow', config=configuration,
                     dir=str(args.root), save_code=False,
                     settings=wandb.Settings(disable_git=True, console='off')) as run:
         run.define_metric('agent_steps')
