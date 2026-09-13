@@ -9,6 +9,7 @@
 #include "osrs_interaction.h"
 #include "osrs_entity_priority.h"
 #include "osrs_granite_maul.h"
+#include "osrs_teleport.h"
 
 #define NUM_AGENTS 2
 #define MAX_PENDING_HITS 8
@@ -798,6 +799,8 @@ typedef struct {
     int walk_dest_y[NUM_AGENTS];
     int initial_supply_units[NUM_AGENTS];
     OsrsGraniteMaulState maul[NUM_AGENTS];
+    OsrsTeleportState teleport[NUM_AGENTS];
+    OsrsTeleportWorld teleport_world;
 } OsrsPvpRuntime;
 
 typedef struct {

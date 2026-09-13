@@ -54,7 +54,8 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
             s->escaped[agent] = osrs_player_use_inventory(p, &s->inventory_use[agent],
-                command->inventory_slot, s->env.tick) == OSRS_INVENTORY_USE_ESCAPED;
+                &s->env.pvp_runtime.teleport[agent], command->inventory_slot,
+                s->env.tick) == OSRS_INVENTORY_USE_ESCAPED;
             pvp_maul_weapon_changed(&s->env, agent, old_weapon);
             pvp_refresh_visible_gear(p);
             break;

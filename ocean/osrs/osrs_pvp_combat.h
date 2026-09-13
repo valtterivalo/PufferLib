@@ -1039,6 +1039,11 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
 post_attack:
+    if (is_special)
+        env->pvp_runtime.teleport[attacker_idx] = osrs_teleport_record_offensive_pvp_special(
+            env->pvp_runtime.teleport[attacker_idx],
+            osrs_teleport_combat_context(env->pvp_runtime.teleport_world,
+                is_in_wilderness(attacker->x, attacker->y)), env->tick);
     env->pvp_runtime.maul[attacker_idx] = osrs_granite_maul_record_attack(
         env->pvp_runtime.maul[attacker_idx], env->tick, defender_idx);
     attacker->just_attacked = 1;

@@ -308,8 +308,10 @@ void pvp_reset(
 
     init_player(&env->players[0]);
     init_player(&env->players[1]);
-    for (int i = 0; i < NUM_AGENTS; i++)
+    for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.maul[i] = osrs_granite_maul_init();
+        env->pvp_runtime.teleport[i] = (OsrsTeleportState){0};
+    }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->players[i].is_lms = env->is_lms;

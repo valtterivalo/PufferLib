@@ -12,7 +12,8 @@ static void step(int* actions) {
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
 }
 static void use(int agent, int slot) {
-    osrs_player_use_inventory(&state.env.players[agent], &state.inventory_use[agent], slot, state.env.tick);
+    osrs_player_use_inventory(&state.env.players[agent], &state.inventory_use[agent],
+        &state.env.pvp_runtime.teleport[agent], slot, state.env.tick);
 }
 static void test_reset_and_equipment(void) {
     reset();

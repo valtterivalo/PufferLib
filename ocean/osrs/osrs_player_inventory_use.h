@@ -72,7 +72,7 @@ static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumab
 }
 
 static inline OsrsInventoryUseResult osrs_player_use_inventory(
-    Player* p, OsrsInventoryUseState* state, int slot, int tick
+    Player* p, OsrsInventoryUseState* state, const OsrsTeleportState* teleport, int slot, int tick
 ) {
     assert(slot >= 0 && slot < OSRS_INVENTORY_SIZE);
     OsrsInventoryCell* cell = &p->inventory_cells[slot];
@@ -121,6 +121,7 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
             osrs_interaction_clear(&p->interaction);
             return OSRS_INVENTORY_USE_CONSUMED;
         case OSRS_CLICK_TELEPORT:
+            if (!osrs_teleport_allowed(*teleport, tick)) return OSRS_INVENTORY_USE_NONE;
             *cell = osrs_inventory_cell_empty();
             osrs_interaction_clear(&p->interaction);
             return OSRS_INVENTORY_USE_ESCAPED;

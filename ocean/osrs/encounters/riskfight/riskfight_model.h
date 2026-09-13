@@ -121,6 +121,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->env.winner = -1;
+    s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
     uint8_t equipment[NUM_GEAR_SLOTS] = {0};
     equipment[GEAR_SLOT_AMMO] = ITEM_NONE;

@@ -82,6 +82,13 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, floa
             if (head == RF_VENGEANCE) allowed = !p->veng_active && p->veng_cooldown <= 1 &&
                 p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
             if (head == RF_SPECIAL) allowed = p->special_energy >= action * 50;
+            if (head == RF_PRIMARY && action == RF_TELEPORT) {
+                allowed = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
+                int has_teleport = 0;
+                for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+                    has_teleport |= osrs_inventory_cell_metadata(&p->inventory_cells[slot])->click_action == OSRS_CLICK_TELEPORT;
+                allowed &= has_teleport;
+            }
             if (head == RF_PRAYER) allowed = p->current_prayer > 0;
             mask[offset + action] = allowed;
         }
