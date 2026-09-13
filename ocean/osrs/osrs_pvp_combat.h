@@ -7,6 +7,7 @@
 #include "osrs_damage.h"
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
+#include "osrs_pvp_chance.h"
 
 static void pvp_reset_priority(OsrsEnv* env, OsrsPriorityPolicy policy) {
     env->priority_policy = policy;
@@ -834,6 +835,15 @@ static inline int get_attack_range(Player* p, AttackStyle style) {
     }
 }
 
+static void pvp_observe_attack_chance(OsrsEnv* env, int source, int target,
+    int min_hit, int max_hit, float accuracy, int dharok_base_hp, AttackStyle style) {
+    Player* defender = &env->players[target];
+    OsrsPvpAttackChanceEvent event = {env->tick, source, target, defender->current_hitpoints,
+        osrs_direct_ko_probability(min_hit, max_hit, accuracy, defender->current_hitpoints,
+            dharok_base_hp, env->players[source].current_hitpoints, defender->prayer, style)};
+    env->pvp_runtime.attack_chance_observer(env->pvp_runtime.attack_chance_observer_context, &event);
+}
+
 static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                            AttackStyle style, int is_special, int magic_type, int distance) {
     Player* attacker = &env->players[attacker_idx];
@@ -907,6 +917,17 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int magic_base_hit = 30;
         int max_hit = calculate_max_hit(attacker, style, 1.0f, magic_base_hit);
 
+        if (env->pvp_runtime.attack_chance_observer) {
+            assert(spec_item_idx == ITEM_VOIDWAKER || spec_item_idx == ITEM_GRANITE_MAUL ||
+                spec_item_idx == ITEM_GRANITE_MAUL_ORNATE);
+            int voidwaker = spec_item_idx == ITEM_VOIDWAKER;
+            pvp_observe_attack_chance(env, attacker_idx, defender_idx,
+                voidwaker ? osrs_voidwaker_min_hit(max_hit) : 0,
+                voidwaker ? osrs_voidwaker_max_hit(max_hit) : max_hit,
+                voidwaker ? 1.0f : osrs_hit_chance(att_roll, def_roll), 0,
+                voidwaker ? ATTACK_STYLE_MAGIC : style);
+        }
+
         SpecResult sr = osrs_resolve_spec(
             spec_item_idx, att_roll, max_hit, def_roll,
             defender->current_defence, &env->rng_state
@@ -978,6 +999,12 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             else if (magic_type == 2) magic_base_hit = get_blood_base_hit(attacker->current_magic);
         }
         int max_hit = calculate_base_max_hit(attacker, style, str_mult, magic_base_hit);
+
+        if (env->pvp_runtime.attack_chance_observer) {
+            assert(style == ATTACK_STYLE_MELEE);
+            pvp_observe_attack_chance(env, attacker_idx, defender_idx, 0, max_hit, hit_chance,
+                attacker->equipment_effect_profile.dharok_piece_count >= 4 ? attacker->base_hitpoints : 0, style);
+        }
 
         int hit_delay;
         if (style == ATTACK_STYLE_MELEE)

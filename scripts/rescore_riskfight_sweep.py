@@ -22,7 +22,8 @@ def read_config(path):
 def ladder_args(binary, checkpoint, config, bots):
     args = [str(binary), 'ladder', f'--base.load_model_path={checkpoint}',
             f'--selfplay.eval_bots={bots}', '--env.self_play=0',
-            '--env.damage_reward_coeff=0', '--env.teleport_penalty=0']
+            '--env.damage_reward_coeff=0', '--env.teleport_penalty=0',
+            '--env.chance_reward_coeff=0']
     for section, keys in {
         'base': ('seed', 'reset_every_horizon', 'async', 'eval_agents'),
         'policy': ('hidden_size', 'num_layers'),

@@ -306,6 +306,13 @@ typedef struct {
 
 typedef void (*OsrsPvpHitObserver)(void* context, const OsrsPvpHitEvent* event);
 
+typedef struct {
+    int tick, source, target, target_hitpoints;
+    float ko_probability;
+} OsrsPvpAttackChanceEvent;
+
+typedef void (*OsrsPvpAttackChanceObserver)(void* context, const OsrsPvpAttackChanceEvent* event);
+
 typedef enum {
     ENTITY_PLAYER = 0,
     ENTITY_NPC = 1,
@@ -814,6 +821,8 @@ typedef struct {
     OsrsTeleportWorld teleport_world;
     OsrsPvpHitObserver hit_observer;
     void* hit_observer_context;
+    OsrsPvpAttackChanceObserver attack_chance_observer;
+    void* attack_chance_observer_context;
 } OsrsPvpRuntime;
 
 typedef struct {

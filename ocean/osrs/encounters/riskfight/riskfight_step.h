@@ -194,6 +194,19 @@ static void riskfight_observe_reward_damage(void* context, const OsrsPvpHitEvent
     if (observer->next) observer->next(observer->next_context, event);
 }
 
+typedef struct {
+    RiskfightState* state;
+    OsrsPvpAttackChanceObserver next;
+    void* next_context;
+} RiskfightChanceObserver;
+
+static void riskfight_observe_attack_chance(void* context, const OsrsPvpAttackChanceEvent* event) {
+    RiskfightChanceObserver* observer = (RiskfightChanceObserver*)context;
+    float* chance = &observer->state->direct_ko_chance_mass[event->source];
+    *chance += (1.0f - *chance) * event->ko_probability;
+    if (observer->next) observer->next(observer->next_context, event);
+}
+
 static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     const HumanCommandQueue* first, const HumanCommandQueue* second) {
     assert(!s->env.episode_over);
@@ -205,6 +218,14 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         s->env.pvp_runtime.hit_observer = riskfight_observe_reward_damage;
         s->env.pvp_runtime.hit_observer_context = &reward_observer;
     }
+    float previous_chance[2] = {s->direct_ko_chance_mass[0], s->direct_ko_chance_mass[1]};
+    RiskfightChanceObserver chance_observer = {
+        .state = s,
+        .next = s->env.pvp_runtime.attack_chance_observer,
+        .next_context = s->env.pvp_runtime.attack_chance_observer_context,
+    };
+    s->env.pvp_runtime.attack_chance_observer = riskfight_observe_attack_chance;
+    s->env.pvp_runtime.attack_chance_observer_context = &chance_observer;
     memset(s->rewards, 0, sizeof(s->rewards));
     const HumanCommandQueue* queues[] = {first, second};
     for (int i = 0; i < 2; i++) {
@@ -255,12 +276,16 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         s->env.pvp_runtime.hit_observer = reward_observer.next;
         s->env.pvp_runtime.hit_observer_context = reward_observer.next_context;
     }
+    s->env.pvp_runtime.attack_chance_observer = chance_observer.next;
+    s->env.pvp_runtime.attack_chance_observer_context = chance_observer.next_context;
     for (int i = 0; i < 2; i++) {
+        float chance_reward = ctx->chance_reward_coeff * (s->direct_ko_chance_mass[i] - previous_chance[i]);
         float damage_reward = ctx->damage_reward_coeff * reward_observer.direct_hitpoints_lost[i];
         float teleport_penalty = s->escaped[i] ? ctx->teleport_penalty : 0;
-        s->rewards[i] += damage_reward - teleport_penalty;
+        s->rewards[i] += damage_reward + chance_reward - teleport_penalty;
         s->episode_returns[i] += s->rewards[i];
         s->damage_rewards[i] += damage_reward;
+        s->chance_rewards[i] += chance_reward;
         s->teleport_penalties[i] += teleport_penalty;
         riskfight_observe_visible(s, i, 0);
     }

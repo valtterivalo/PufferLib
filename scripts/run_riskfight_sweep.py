@@ -10,7 +10,7 @@ from pathlib import Path
 from rescore_riskfight_sweep import read_config
 
 
-OBJECTIVE_ID = 'riskfight-six-bot-consumption-v1'
+OBJECTIVE_ID = 'riskfight-seven-bot-chance-v1'
 
 
 def stage_resume(source, destination, binary):
@@ -80,20 +80,20 @@ def main():
         f'--base.checkpoint_dir={args.root}/checkpoints', f'--base.log_dir={args.root}/logs',
         '--base.checkpoint_interval=64', '--base.eval_episodes=0', '--base.seed=73',
         '--vec.hist_policy_hidden_size=0', '--vec.hist_policy_num_layers=0',
-        '--selfplay.eval_bots=0,1,2,4,5,6', '--selfplay.eval_bot_games=256',
+        '--selfplay.eval_bots=0,1,2,4,5,6,8', '--selfplay.eval_bot_games=256',
         f'--sweep.max_runs={args.trials}', '--sweep.max_suggestion_cost=300',
         f'--sweep.resume_dir={args.root / "resume" if args.resume_from else ""}',
         f'--sweep.objective_id={OBJECTIVE_ID}'])
     manifest = {
         'git_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.repo, text=True).strip(),
         'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-        'anchor': str(args.anchor), 'command': command, 'eval_bots': [0, 1, 2, 4, 5, 6],
+        'anchor': str(args.anchor), 'command': command, 'eval_bots': [0, 1, 2, 4, 5, 6, 8],
         'objective_id': OBJECTIVE_ID, 'selection_seed': 73,
         'heldout_bots': [7], 'heldout_seeds': [1009, 2027, 3037],
         'max_suggestion_cost_seconds': 300, 'trials': args.trials,
         'observation_schema': 2, 'observation_size': 349, 'action_heads': 20,
         'training': 'Current and historical policy self-play',
-        'score': 'Equal-weight unshaped net stake over six selection bots',
+        'score': 'Equal-weight unshaped net stake over seven selection bots',
         'historical_scores_imported': imported,
         'resume_from': str(args.resume_from) if args.resume_from else None,
         'failed_resume_cost': 'Last logged training uptime before failure',

@@ -61,6 +61,8 @@ typedef struct {
     float rewards[2];
     float episode_returns[2];
     float damage_rewards[2];
+    float direct_ko_chance_mass[2];
+    float chance_rewards[2];
     float teleport_penalties[2];
 } RiskfightState;
 
@@ -73,6 +75,7 @@ typedef struct {
     int self_play;
     int human_player;
     float damage_reward_coeff;
+    float chance_reward_coeff;
     float teleport_penalty;
 } RiskfightContext;
 

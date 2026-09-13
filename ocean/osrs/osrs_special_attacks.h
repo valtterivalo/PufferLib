@@ -12,6 +12,9 @@
 #define BLOWPIPE_SPEC_HEAL_PCT  50
 #define BLOWPIPE_SPEC_COST      50
 
+static inline int osrs_voidwaker_min_hit(int max_hit) { return max_hit / 2; }
+static inline int osrs_voidwaker_max_hit(int max_hit) { return max_hit * 3 / 2; }
+
 /** Blowpipe special: accuracy and damage roll only; the caller applies the heal. */
 static inline int osrs_blowpipe_spec_resolve(
     int base_att_roll, int base_max_hit,
@@ -220,13 +223,11 @@ static inline SpecResult osrs_resolve_spec(
     }
 
     case ITEM_VOIDWAKER: {
-        int vw_min = max_hit / 2;
-        int vw_max = max_hit * 3 / 2;
-        int reduced_def = def_roll / 4;
+        int vw_min = osrs_voidwaker_min_hit(max_hit);
+        int vw_max = osrs_voidwaker_max_hit(max_hit);
         r.spec_cost = 50;
         r.num_hits = 1;
-        if (encounter_roll_hit_chance(rng_state, att_roll, reduced_def))
-            r.damage[0] = vw_min + encounter_rand_int(rng_state, vw_max - vw_min + 1);
+        r.damage[0] = vw_min + encounter_rand_int(rng_state, vw_max - vw_min + 1);
         r.total_damage = r.damage[0];
         break;
     }
@@ -454,7 +455,7 @@ static inline void osrs_spec_result_force_max(
 
     case ITEM_VOIDWAKER:
         forced.num_hits = 1;
-        forced.damage[0] = max_hit * 3 / 2;
+        forced.damage[0] = osrs_voidwaker_max_hit(max_hit);
         break;
 
     case ITEM_GRANITE_MAUL_ORNATE:
