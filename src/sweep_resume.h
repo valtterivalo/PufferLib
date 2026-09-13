@@ -16,7 +16,12 @@ static void sweep_resume_require_equal(Ini* current, Ini* previous,
     }
 }
 
-static void sweep_resume_validate(Ini* current, Ini* previous) {
+typedef enum {
+    SWEEP_RESUME_SUCCESS,
+    SWEEP_RESUME_FAILED,
+} SweepResumeStatus;
+
+static SweepResumeStatus sweep_resume_validate(Ini* current, Ini* previous) {
     const char* objective = puf_ini_get_str(current, "sweep", "objective_id");
     if (!objective[0] || strcmp(objective,
             puf_ini_get_str(previous, "resume", "objective_id")) != 0) {
@@ -48,11 +53,24 @@ static void sweep_resume_validate(Ini* current, Ini* previous) {
         fprintf(stderr, "sweep resume search parameter count mismatch\n");
         exit(1);
     }
-    double score = puf_ini_get(previous, "resume", "score");
-    double cost = puf_ini_get(previous, "resume", "cost");
-    if (!isfinite(score) || !isfinite(cost) || cost <= 0) {
-        fprintf(stderr, "sweep resume requires finite score and positive finite cost\n");
+    const char* status = puf_ini_get_str(previous, "resume", "status");
+    SweepResumeStatus outcome;
+    if (strcmp(status, "success") == 0) outcome = SWEEP_RESUME_SUCCESS;
+    else if (strcmp(status, "failed") == 0) outcome = SWEEP_RESUME_FAILED;
+    else {
+        fprintf(stderr, "sweep resume status must be success or failed\n");
         exit(1);
     }
+    double cost = puf_ini_get(previous, "resume", "cost");
+    if (!isfinite(cost) || cost <= 0) {
+        fprintf(stderr, "sweep resume requires positive finite cost\n");
+        exit(1);
+    }
+    if (outcome == SWEEP_RESUME_SUCCESS &&
+            !isfinite(puf_ini_get(previous, "resume", "score"))) {
+        fprintf(stderr, "successful sweep resume requires finite score\n");
+        exit(1);
+    }
+    return outcome;
 }
 #endif

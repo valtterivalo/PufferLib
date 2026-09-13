@@ -2711,7 +2711,7 @@ void run_sweep(Ini* ini, const char* exe_path) {
                 assert(path_length >= 0 && "failed to allocate sweep resume path");
                 Ini previous = {0};
                 puf_ini_load_file(&previous, path);
-                sweep_resume_validate(ini, &previous);
+                SweepResumeStatus outcome = sweep_resume_validate(ini, &previous);
                 for (int j = 0; j < space->num; j++) {
                     float value = puf_ini_get(&previous, params[j].section, params[j].key);
                     sample[j] = space_normalize(&space->spaces[j], value);
@@ -2724,10 +2724,12 @@ void run_sweep(Ini* ini, const char* exe_path) {
                         exit(1);
                     }
                 }
-                assert(imported < success_cap && "sweep resume exceeds observation capacity");
+                int failed = outcome == SWEEP_RESUME_FAILED;
+                assert((failed ? protein->fail_n < protein->failure_cap :
+                    protein->succ_n < protein->success_cap) && "sweep resume exceeds observation capacity");
                 protein_sweep_observe(protein, sample,
-                    puf_ini_get(&previous, "resume", "score"),
-                    puf_ini_get(&previous, "resume", "cost"), 0);
+                    failed ? NAN : puf_ini_get(&previous, "resume", "score"),
+                    puf_ini_get(&previous, "resume", "cost"), failed);
                 imported++;
                 puf_ini_free(&previous);
                 free(path);
@@ -2737,7 +2739,9 @@ void run_sweep(Ini* ini, const char* exe_path) {
         free(entries);
         free(sample);
         assert(imported > 0 && "sweep.resume_dir contains no INI observations");
-        printf("sweep imported=%d objective_id=%s\n", imported,
+        protein->suggestion_idx = imported;
+        printf("sweep imported=%d successes=%d failures=%d objective_id=%s\n",
+            imported, protein->succ_n, protein->fail_n,
             puf_ini_get_str(ini, "sweep", "objective_id"));
     }
 
@@ -3304,6 +3308,14 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         float losses_host[NUM_LOSSES];
         cudaMemcpy(losses_host, pufferl->losses, sizeof(losses_host),
             cudaMemcpyDeviceToHost);
+        for (int i = 0; i < NUM_LOSSES; i++) {
+            if (!isfinite(losses_host[i])) {
+                fprintf(stderr, "nonfinite training loss: %s=%g agent_steps=%ld\n",
+                    i == LOSS_N ? "loss/count" : LOSS_NAMES[i], losses_host[i],
+                    global_step * pufferl->hypers.world_size);
+                exit(1);
+            }
+        }
         float inv_n = losses_host[LOSS_N] > 0 ? 1.0f / losses_host[LOSS_N] : 0.0f;
         for (int i = 0; i < LOSS_N; i++) {
             dict_set(&new_log, LOSS_NAMES[i], losses_host[i] * inv_n);

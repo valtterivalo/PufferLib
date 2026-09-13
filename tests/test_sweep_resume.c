@@ -18,6 +18,7 @@ static Ini fixture(void) {
     put(&ini, "sweep.metric", "net_stake");
     put(&ini, "sweep.metric_distribution", "linear");
     put(&ini, "resume.objective_id", "four-bot-v1");
+    put(&ini, "resume.status", "success");
     put(&ini, "resume.score", "0.125");
     put(&ini, "resume.cost", "65");
     put(&ini, "selfplay.eval_bots", "0,1,2,4");
@@ -49,9 +50,16 @@ static void rejects(const char* key, const char* value) {
 int main(void) {
     Ini current = fixture(), previous = fixture();
     put(&previous, "sweep.policy.hidden_size.min", "64.0");
-    sweep_resume_validate(&current, &previous);
+    SweepResumeStatus status = sweep_resume_validate(&current, &previous);
+    assert(status == SWEEP_RESUME_SUCCESS);
+    put(&previous, "resume.status", "failed");
+    put(&previous, "resume.score", "nan");
+    status = sweep_resume_validate(&current, &previous);
+    assert(status == SWEEP_RESUME_FAILED);
     puf_ini_free(&current);
     puf_ini_free(&previous);
+    rejects("resume.status", "unknown");
+    rejects("resume.score", "nan");
     rejects("resume.objective_id", "three-bot-v1");
     rejects("sweep.goal", "minimize");
     rejects("sweep.metric", "episode_return");

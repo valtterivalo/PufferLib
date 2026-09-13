@@ -1,11 +1,26 @@
 import argparse
 import configparser
 import json
+import math
 import re
 import time
 from pathlib import Path
 
-import wandb
+def metric_row(line):
+    normalized = re.sub(r'(?<=:)\s*(-?nan|-?inf)(?=\s*[,}])',
+                        lambda match: 'NaN' if 'nan' in match[1] else
+                        ('-Infinity' if match[1].startswith('-') else 'Infinity'), line)
+    row = json.loads(normalized)
+    invalid = [key for key, value in row.items()
+               if isinstance(value, float) and not math.isfinite(value)]
+    return row, invalid
+
+
+def trial_stopped(root, path):
+    number = int(path.stem.rsplit('_', 1)[-1])
+    failed = f'sweep worker run={number} failed; marking sample bad'
+    return failed in (root / 'logs/sweep.log').read_text() or \
+        json.loads((root / 'status.json').read_text())['status'] != 'running'
 
 
 def config_value(value):
@@ -17,6 +32,8 @@ def config_value(value):
 
 
 def sync_trial(path, args):
+    import wandb
+
     config = configparser.ConfigParser()
     config.optionxform = str
     config.read(path.with_suffix('.ini'))
@@ -40,12 +57,19 @@ def sync_trial(path, args):
                 line = stream.readline()
                 if not line.endswith('\n'):
                     stream.seek(position)
-                    status = json.loads((args.root / 'status.json').read_text())
-                    if status['status'] != 'running':
-                        raise RuntimeError(f'Incomplete metric stream: {path}')
+                    if trial_stopped(args.root, path):
+                        run.summary['failure/reason'] = 'Worker failed or sweep interrupted before final metrics'
+                        run.finish(exit_code=1)
+                        return
                     time.sleep(1)
                     continue
-                row = json.loads(line)
+                row, invalid = metric_row(line)
+                if invalid:
+                    run.summary['failure/reason'] = 'Nonfinite training metrics'
+                    run.summary['failure/metrics'] = invalid
+                    run.summary['failure/agent_steps'] = row['agent_steps']
+                    run.finish(exit_code=1)
+                    return
                 if '_finished' in row:
                     return
                 if configuration['base']['env_name'] == 'osrs_riskfight':

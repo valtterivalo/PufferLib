@@ -6,6 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from wandb_sync import metric_row
+
 
 OBJECTIVE_ID = 'riskfight-four-bot-v1'
 
@@ -66,9 +68,19 @@ def main():
         if int(path.stem.rsplit('_', 1)[1]) not in completed:
             continue
         config = read_config(path)
+        invalid = next((row['agent_steps'] for row, bad in
+                        (metric_row(line) for line in path.with_suffix('.jsonl').open()) if bad), None)
+        if invalid is not None:
+            config['selfplay']['eval_bots'] = '0,1,2,4'
+            config['resume'] = {'objective_id': OBJECTIVE_ID, 'status': 'failed',
+                                'cost': config['metrics']['uptime']}
+            with (resume / path.name).open('w') as output:
+                config.write(output)
+            summary.append({'run': path.stem, 'status': 'failed', 'failure_agent_steps': invalid})
+            continue
         checkpoint = sorted((args.source / 'checkpoints' / 'osrs_riskfight' / path.stem).glob('*.bin'))[-1]
         original = float(config['metrics']['selfplay/bot_ladder_perf'])
-        if not summary:
+        if not any(row.get('status') != 'failed' for row in summary):
             gate = evaluate(ladder_args(args.binary, checkpoint, config, '0,1,2'),
                             args.repo, logs / 'three-bot-protocol-gate.log')
             assert [row['bot'] for row in gate] == [0, 1, 2]
@@ -87,7 +99,7 @@ def main():
                   'four_bot_score': score, 'bots': rows, 'command': command}
         summary.append(record)
         config['selfplay']['eval_bots'] = '0,1,2,4'
-        config['resume'] = {'objective_id': OBJECTIVE_ID, 'score': str(score),
+        config['resume'] = {'objective_id': OBJECTIVE_ID, 'status': 'success', 'score': str(score),
                             'cost': config['metrics']['uptime']}
         with (resume / path.name).open('w') as output:
             config.write(output)
