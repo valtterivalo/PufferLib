@@ -58,6 +58,9 @@ typedef struct {
     int escaped[2];
     OsrsUnequipResult last_unequip_result[2];
     float rewards[2];
+    float episode_returns[2];
+    float damage_rewards[2];
+    float teleport_penalties[2];
 } RiskfightState;
 
 typedef struct {
@@ -68,7 +71,13 @@ typedef struct {
     RiskfightOpponent opponent;
     int self_play;
     int human_player;
+    float damage_reward_coeff;
+    float teleport_penalty;
 } RiskfightContext;
+
+static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
+    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH ? -1 : 0;
+}
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
 static void riskfight_script(const float*, RiskfightOpponent, int*);

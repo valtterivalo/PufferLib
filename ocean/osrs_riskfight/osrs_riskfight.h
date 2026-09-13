@@ -17,6 +17,7 @@ typedef float obs_t;
 struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
+    float damage_reward, teleport_penalty;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
 };
 struct Env {
@@ -38,6 +39,12 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
+    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty"};
+    for (int i = 0; i < 2; i++) {
+        DictItem* item = dict_find(kwargs, reward_keys[i]);
+        if (item) riskfight_put_float((EncounterState*)&env->state,
+            (EncounterContext*)&env->context, reward_keys[i], (float)item->value);
+    }
     env->num_agents = env->context.self_play ? 2 : 1;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
     env->state.env.rng_state = env->rng ? env->rng : 1;
@@ -80,10 +87,13 @@ void puf_step(Env* env) {
         env->log.deaths += outcome == RISKFIGHT_DEATH;
         env->log.escapes += outcome == RISKFIGHT_ESCAPE;
         env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
-        env->log.policy_0_score += 0.5f * (env->state.rewards[0] + 1.0f);
-        env->log.draw_rate += env->state.rewards[0] == 0;
-        env->log.net_stake += env->state.rewards[0];
-        env->log.episode_return += env->state.rewards[0];
+        float net_stake = riskfight_outcome_reward(outcome);
+        env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
+        env->log.draw_rate += net_stake == 0;
+        env->log.net_stake += net_stake;
+        env->log.episode_return += env->state.episode_returns[0];
+        env->log.damage_reward += env->state.damage_rewards[0];
+        env->log.teleport_penalty += env->state.teleport_penalties[0];
         env->log.episode_length += env->state.env.tick;
         env->log.n++;
         riskfight_reset((EncounterState*)&env->state, (EncounterContext*)&env->context, 0);
@@ -110,6 +120,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "policy_0_score", log->policy_0_score);
     dict_set(out, "draw_rate", log->draw_rate);
+    dict_set(out, "damage_reward", log->damage_reward);
+    dict_set(out, "teleport_penalty", log->teleport_penalty);
     dict_set(out, "kills", log->kills);
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);

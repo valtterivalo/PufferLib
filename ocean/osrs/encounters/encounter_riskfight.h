@@ -45,8 +45,12 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
     } else encounter_abort_unknown_config("riskfight", "int", key);
 }
 static void riskfight_put_float(EncounterState* state, EncounterContext* context, const char* key, float value) {
-    (void)state; (void)context; (void)value;
-    encounter_abort_unknown_config("riskfight", "float", key);
+    (void)state;
+    RiskfightContext* ctx = (RiskfightContext*)context;
+    assert(value >= 0);
+    if (strcmp(key, "damage_reward_coeff") == 0) ctx->damage_reward_coeff = value;
+    else if (strcmp(key, "teleport_penalty") == 0) ctx->teleport_penalty = value;
+    else encounter_abort_unknown_config("riskfight", "float", key);
 }
 static void riskfight_put_ptr(EncounterState* state, EncounterContext* context, const char* key, void* value) {
     (void)state;

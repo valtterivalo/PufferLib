@@ -175,15 +175,37 @@ static void riskfight_finish(RiskfightState* s) {
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
             s->env.episode_over ? RISKFIGHT_ESCAPE : RISKFIGHT_ONGOING;
-        s->rewards[i] = s->outcome[i] == RISKFIGHT_KILL ? 1 :
-            s->outcome[i] == RISKFIGHT_DEATH ? -1 : 0;
+        s->rewards[i] = riskfight_outcome_reward(s->outcome[i]);
     }
-    s->env.winner = s->rewards[0] > 0 ? 0 : s->rewards[1] > 0 ? 1 : -1;
+    s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :
+        s->outcome[1] == RISKFIGHT_KILL ? 1 : -1;
+}
+
+typedef struct {
+    int direct_hitpoints_lost[2];
+    OsrsPvpHitObserver next;
+    void* next_context;
+} RiskfightRewardObserver;
+
+static void riskfight_observe_reward_damage(void* context, const OsrsPvpHitEvent* event) {
+    RiskfightRewardObserver* observer = (RiskfightRewardObserver*)context;
+    if (event->kind == OSRS_HIT_DIRECT && event->source != event->target)
+        observer->direct_hitpoints_lost[event->source] += event->hitpoints_lost;
+    if (observer->next) observer->next(observer->next_context, event);
 }
 
 static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     const HumanCommandQueue* first, const HumanCommandQueue* second) {
     assert(!s->env.episode_over);
+    RiskfightRewardObserver reward_observer = {
+        .next = s->env.pvp_runtime.hit_observer,
+        .next_context = s->env.pvp_runtime.hit_observer_context,
+    };
+    if (ctx->damage_reward_coeff != 0) {
+        s->env.pvp_runtime.hit_observer = riskfight_observe_reward_damage;
+        s->env.pvp_runtime.hit_observer_context = &reward_observer;
+    }
+    memset(s->rewards, 0, sizeof(s->rewards));
     const HumanCommandQueue* queues[] = {first, second};
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
@@ -229,7 +251,19 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     s->env.tick++;
     pvp_tick_priority(&s->env);
     riskfight_finish(s);
-    for (int i = 0; i < 2; i++) riskfight_observe_visible(s, i, 0);
+    if (ctx->damage_reward_coeff != 0) {
+        s->env.pvp_runtime.hit_observer = reward_observer.next;
+        s->env.pvp_runtime.hit_observer_context = reward_observer.next_context;
+    }
+    for (int i = 0; i < 2; i++) {
+        float damage_reward = ctx->damage_reward_coeff * reward_observer.direct_hitpoints_lost[i];
+        float teleport_penalty = s->escaped[i] ? ctx->teleport_penalty : 0;
+        s->rewards[i] += damage_reward - teleport_penalty;
+        s->episode_returns[i] += s->rewards[i];
+        s->damage_rewards[i] += damage_reward;
+        s->teleport_penalties[i] += teleport_penalty;
+        riskfight_observe_visible(s, i, 0);
+    }
 }
 
 static void riskfight_step(EncounterState* state, EncounterContext* context, const int* actions) {
