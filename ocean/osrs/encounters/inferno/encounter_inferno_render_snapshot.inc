@@ -759,6 +759,7 @@ static void inf_translate_human_commands_ctx(
             case HUMAN_COMMAND_SPELL_ON_WIDGET:
             case HUMAN_COMMAND_STOP:
             case HUMAN_COMMAND_VENGEANCE:
+            case HUMAN_COMMAND_UNEQUIP:
             case HUMAN_COMMAND_NONE:
                 break;
         }
