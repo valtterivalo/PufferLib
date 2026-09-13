@@ -18,8 +18,8 @@ int main(void) {
     puf_step(env);
     assert(terminals[0] == 1 && terminals[1] == 1 && rewards[0] == 0 && rewards[1] == 0);
     assert(env->state.env.tick == 0 && env->log.escapes == 1);
-    assert(obs[0][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] == 1);
-    assert(obs[1][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] == -1);
+    assert(obs[0][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
+    assert(obs[1][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == -1);
     for (int i = 0; i < 2; i++) {
         float expected[RF_MASK_SIZE];
         riskfight_write_action_mask(&env->state, i, expected);

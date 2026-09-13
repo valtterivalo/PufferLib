@@ -174,8 +174,8 @@ static void test_visible_observation_boundary(void) {
     riskfight_observe_visible(&state, 0, 0);
     riskfight_write_observation(&state, 0, after);
     assert(memcmp(before, after, sizeof(before)) == 0);
-    assert(after[RF_OPPONENT_START + GEAR_SLOT_RING] == ITEM_NONE);
-    assert(after[RF_OPPONENT_START + GEAR_SLOT_AMMO] == ITEM_NONE);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
     assert(after[RF_HISTORY_START + 6] == 0);
 
     opponent->equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
@@ -184,9 +184,9 @@ static void test_visible_observation_boundary(void) {
     opponent->current_hitpoints = 90;
     riskfight_observe_visible(&state, 0, 0);
     riskfight_write_observation(&state, 0, after);
-    assert(after[RF_OPPONENT_START + GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+    assert(after[RF_OPPONENT_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE == ITEM_DHAROKS_GREATAXE);
     assert(after[RF_HISTORY_START + 3] == 1);
-    assert(after[RF_HISTORY_START + 4] == 10);
+    assert(after[RF_HISTORY_START + 4] * RF_OBSERVATION_DAMAGE_SCALE == 10);
     assert(after[RF_OPPONENT_START + NUM_GEAR_SLOTS] < 1);
     assert(memcmp(before, after, sizeof(before)) != 0);
 }

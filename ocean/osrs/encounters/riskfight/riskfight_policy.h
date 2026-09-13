@@ -2,6 +2,19 @@
 #define OSRS_RISKFIGHT_POLICY_H
 #include "riskfight_model.h"
 
+enum {
+    RF_OBSERVATION_SCHEMA_VERSION = 2,
+    RF_OBSERVATION_TICK_SCALE = 1024,
+    RF_OBSERVATION_TILE_SCALE = 64,
+    RF_OBSERVATION_ITEM_SCALE = 256,
+    RF_OBSERVATION_DAMAGE_SCALE = 128,
+    RF_OBSERVATION_HEALTH_BAR_SCALE = 32,
+    RF_OBSERVATION_ATTACK_AGE_SCALE = 16,
+    RF_OBSERVATION_ATTACK_COUNT_SCALE = 4,
+    RF_OBSERVATION_STYLE_SCALE = 4,
+    RF_OBSERVATION_SACK_SCALE = 128,
+};
+
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     const Player* p = &s->env.players[agent];
     const OsrsInventoryUseState* use = &s->inventory_use[agent];
@@ -17,7 +30,10 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         p->offensive_prayer / 4.0f, p->fight_style / 3.0f,
         p->item_effect_state.recoil_damage_used / 40.0f,
         use->divine_combat_ticks / 500.0f, use->vengeance_sacks / 100.0f,
-        (float)s->env.tick, (float)p->x, (float)p->y, (float)p->has_attack_timer,
+        (float)s->env.tick / RF_OBSERVATION_TICK_SCALE,
+        (float)(p->x - FIGHT_AREA_BASE_X - FIGHT_AREA_WIDTH / 2) / RF_OBSERVATION_TILE_SCALE,
+        (float)(p->y - FIGHT_AREA_BASE_Y - FIGHT_AREA_HEIGHT / 2) / RF_OBSERVATION_TILE_SCALE,
+        (float)p->has_attack_timer,
     };
     memcpy(obs, self, sizeof(self));
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -32,26 +48,34 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
             (m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
         row[4] = m->dose_count / 4.0f;
         row[5] = m->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
-            (float)use->vengeance_sacks : !osrs_inventory_cell_is_empty(&p->inventory_cells[slot]);
+            (float)use->vengeance_sacks / RF_OBSERVATION_SACK_SCALE : !osrs_inventory_cell_is_empty(&p->inventory_cells[slot]);
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        obs[RF_EQUIPPED_START + slot] = p->equipped[slot];
-        obs[RF_OPPONENT_START + slot] = v->equipment[slot];
+        obs[RF_EQUIPPED_START + slot] = (float)p->equipped[slot] / RF_OBSERVATION_ITEM_SCALE;
+        obs[RF_OPPONENT_START + slot] = (float)v->equipment[slot] / RF_OBSERVATION_ITEM_SCALE;
     }
     float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     opponent[0] = v->health_bar / 30.0f;
-    opponent[1] = v->x - p->x;
-    opponent[2] = v->y - p->y;
+    opponent[1] = (float)(v->x - p->x) / RF_OBSERVATION_TILE_SCALE;
+    opponent[2] = (float)(v->y - p->y) / RF_OBSERVATION_TILE_SCALE;
     opponent[3] = v->interacting;
     opponent[4] = v->last_attack_tick >= 0;
-    opponent[5] = v->last_attack_tick >= 0 ? s->env.tick - v->last_attack_tick : 0;
+    opponent[5] = v->last_attack_tick >= 0 ?
+        (float)(s->env.tick - v->last_attack_tick) / RF_OBSERVATION_ATTACK_AGE_SCALE : 0;
     opponent[6] = v->last_attack_tick >= 0 ?
-        fmaxf(0, v->last_attack_tick + v->last_attack_speed - s->env.tick) : 0;
+        fmaxf(0, v->last_attack_tick + v->last_attack_speed - s->env.tick) /
+            RF_OBSERVATION_ATTACK_AGE_SCALE : 0;
     for (int ago = 0; ago < RF_HISTORY_TICKS; ago++) {
         int index = (s->env.tick - 1 - ago + RF_HISTORY_TICKS) % RF_HISTORY_TICKS;
         float* out = obs + RF_HISTORY_START + ago * RF_EVENT_WIDTH;
-        if (ago < s->env.tick) memcpy(out, v->events[index], RF_EVENT_WIDTH * sizeof(float));
-        else memset(out, 0, RF_EVENT_WIDTH * sizeof(float));
+        if (ago < s->env.tick) {
+            memcpy(out, v->events[index], RF_EVENT_WIDTH * sizeof(float));
+            out[0] /= RF_OBSERVATION_ATTACK_COUNT_SCALE;
+            out[1] /= RF_OBSERVATION_ITEM_SCALE;
+            out[2] /= RF_OBSERVATION_STYLE_SCALE;
+            out[4] /= RF_OBSERVATION_DAMAGE_SCALE;
+            out[7] /= RF_OBSERVATION_HEALTH_BAR_SCALE;
+        } else memset(out, 0, RF_EVENT_WIDTH * sizeof(float));
     }
 }
 
@@ -162,7 +186,7 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
     actions[RF_WEAPON] = riskfight_find_gear(obs, weapon);
     if (!item_is_two_handed(weapon))
         actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
-    if (type == RISKFIGHT_AGGRESSIVE && opponent[4] && opponent[6] > 2 && hp > 55 && hp < 100)
+    if (type == RISKFIGHT_AGGRESSIVE && opponent[4] && opponent[6] * RF_OBSERVATION_ATTACK_AGE_SCALE > 2 && hp > 55 && hp < 100)
         actions[RF_ORB] = 1;
     actions[RF_RING] = riskfight_find_gear(obs,
         obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);

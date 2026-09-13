@@ -5,7 +5,7 @@
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
 
-typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE } RiskfightOpponent;
+typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_MIXED } RiskfightOpponent;
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
     RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH } RiskfightOutcome;
 enum {
@@ -45,6 +45,7 @@ typedef struct {
     OsrsInventoryUseState inventory_use[2];
     RiskfightVisibleOpponent visible[2];
     RiskfightOutcome outcome[2];
+    RiskfightOpponent mixed_opponent;
     int escaped[2];
     float rewards[2];
 } RiskfightState;
@@ -125,6 +126,8 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
+    if (ctx->opponent == RISKFIGHT_MIXED && !ctx->self_play)
+        s->mixed_opponent = (RiskfightOpponent)rand_int(&s->env, RISKFIGHT_MIXED);
     uint8_t equipment[NUM_GEAR_SLOTS] = {0};
     equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
     equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;

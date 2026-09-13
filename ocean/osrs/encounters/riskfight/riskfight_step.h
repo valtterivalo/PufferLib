@@ -220,7 +220,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     if (!ctx->self_play) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(s, 1, obs);
-        riskfight_script(obs, ctx->opponent, opponent_actions);
+        riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, opponent_actions);
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
@@ -234,7 +234,7 @@ static void riskfight_step_human(EncounterState* state, EncounterContext* contex
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(s, 1 - human, obs);
-    riskfight_script(obs, ctx->opponent, actions);
+    riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, actions);
     riskfight_policy_commands(s, 1 - human, actions, &ctx->policy_commands[1 - human]);
     riskfight_step_queues(s, ctx,
         human == 0 ? &hi->commands : &ctx->policy_commands[0].commands,

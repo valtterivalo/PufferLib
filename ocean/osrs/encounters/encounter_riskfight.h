@@ -34,7 +34,7 @@ static void riskfight_render_entities(EncounterState* state, EncounterContext* c
 static void riskfight_put_int(EncounterState* state, EncounterContext* context, const char* key, int value) {
     RiskfightContext* ctx = (RiskfightContext*)context;
     if (strcmp(key, "opponent_type") == 0) {
-        assert(value >= RISKFIGHT_TRADER && value <= RISKFIGHT_AGGRESSIVE);
+        assert(value >= RISKFIGHT_TRADER && value <= RISKFIGHT_MIXED);
         ctx->opponent = (RiskfightOpponent)value;
     } else if (strcmp(key, "self_play") == 0) {
         assert(value == 0 || value == 1); ctx->self_play = value;
