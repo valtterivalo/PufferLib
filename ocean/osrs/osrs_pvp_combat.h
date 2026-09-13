@@ -435,7 +435,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     osrs_ensure_player_equipment(defender);
 
     DamageResult dr = osrs_apply_passive_damage_pipeline(
-        hit->damage, hit->attack_type,
+        hit->damage, defender->current_hitpoints, hit->attack_type,
         hit->defender_prayer_at_attack,
         /* is_pvp */ 1,
         defender->veng_active,

@@ -17,6 +17,7 @@ typedef struct {
     smite drain. Computes amounts only; the caller applies them to game state. */
 static inline DamageResult osrs_apply_post_mitigation_pipeline(
     int mitigated_damage,
+    int target_hitpoints,
     int prayer_blocked,
     int target_veng_active,
     int target_has_recoil,
@@ -25,13 +26,15 @@ static inline DamageResult osrs_apply_post_mitigation_pipeline(
     DamageResult r = {0, 0, 0, 0, prayer_blocked, 0};
     r.final_damage = mitigated_damage;
 
-    if (target_veng_active && r.final_damage > 0) {
-        r.veng_damage = r.final_damage * 3 / 4;
+    int damage_taken = mitigated_damage < target_hitpoints ? mitigated_damage : target_hitpoints;
+
+    if (target_veng_active && damage_taken > 0) {
+        r.veng_damage = damage_taken * 3 / 4;
         if (r.veng_damage == 0) r.veng_damage = 1;
     }
 
-    if (target_has_recoil && r.final_damage > 0) {
-        r.recoil_damage = r.final_damage / 10 + 1;
+    if (target_has_recoil && damage_taken > 0) {
+        r.recoil_damage = damage_taken / 10 + 1;
     }
 
     if (attacker_smite_active && r.final_damage > 0) {

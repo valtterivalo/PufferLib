@@ -987,11 +987,12 @@ static inline int zul_cap_damage(ZulrahState* s, int damage) {
     return damage;
 }
 
-static void zul_apply_recoil(ZulrahState* s, int damage, AttackStyle style,
-                             Player* attacker) {
+static void zul_apply_recoil(ZulrahState* s, int damage, int hitpoints_before,
+                             AttackStyle style, Player* attacker) {
     osrs_ensure_player_equipment(&s->player);
     DamageResult damage_result = osrs_apply_passive_damage_pipeline(
         damage,
+        hitpoints_before,
         style,
         s->player.prayer,
         0,
@@ -1015,11 +1016,12 @@ static void zul_apply_recoil(ZulrahState* s, int damage, AttackStyle style,
 static void zul_apply_player_damage(ZulrahState* s, int damage, AttackStyle style,
                                     Player* attacker) {
     if (damage <= 0) return;
+    int hitpoints_before = s->player.current_hitpoints;
     encounter_damage_player(&s->player, damage, &s->damage_received_this_tick);
     s->total_damage_received += damage;
     s->player.hit_style = style;
 
-    if (attacker) zul_apply_recoil(s, damage, style, attacker);
+    if (attacker) zul_apply_recoil(s, damage, hitpoints_before, style, attacker);
 }
 
 static int zul_land_zulrah_hit(ZulrahState* s, EncounterPendingHit* ph) {
@@ -1133,15 +1135,14 @@ static void zul_player_hit_landed(
     void* user, const EncounterPendingHit* hit, int damage_after_prayer,
     int damage_applied, int prayer_was_correct, int prayer_was_checked
 ) {
-    (void)damage_applied;
     (void)prayer_was_correct;
     (void)prayer_was_checked;
     ZulrahState* s = (ZulrahState*)user;
     if (damage_after_prayer <= 0) return;
     s->total_damage_received += damage_after_prayer;
     s->player.hit_style = (AttackStyle)hit->attack_style;
-    zul_apply_recoil(s, damage_after_prayer, (AttackStyle)hit->attack_style,
-                     &s->zulrah);
+    zul_apply_recoil(s, damage_after_prayer, s->player.current_hitpoints + damage_applied,
+                     (AttackStyle)hit->attack_style, &s->zulrah);
 }
 
 

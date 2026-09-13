@@ -146,9 +146,29 @@ static void test_lethal_hit_preserves_reflections(void) {
         assert(!pvp_death_is_settled(&env));
         env.tick++;
         pvp_process_incoming_hits(&env, attacker);
-        assert(env.players[attacker].current_hitpoints == 0);
+        assert(env.players[attacker].current_hitpoints == 7);
         assert(env.players[defender].num_pending_hits == 0);
         assert(pvp_death_is_settled(&env));
+    }
+}
+
+static void test_recorded_lethal_overkill_reflections(void) {
+    for (int attacker = 0; attacker < 2; attacker++) {
+        reset();
+        int defender = 1 - attacker;
+        env.players[defender].current_hitpoints = 30;
+        env.players[defender].veng_active = 1;
+        equip_recoil(defender);
+        pvp_process_incoming_hits(&env, attacker);
+        queue_damage(attacker, 45, ATTACK_STYLE_MELEE, 0);
+        pvp_process_incoming_hits(&env, defender);
+        assert(env.players[defender].current_hitpoints == 0);
+        assert(env.players[defender].hit_damage == 45);
+        assert_reflected_pair(defender, 4, 22);
+        assert(env.players[defender].item_effect_state.recoil_charges == 36);
+        env.tick++;
+        pvp_process_incoming_hits(&env, attacker);
+        assert(env.players[attacker].current_hitpoints == 95);
     }
 }
 
@@ -259,6 +279,7 @@ int main(void) {
     test_recorded_spec_exchange();
     test_reflections_do_not_recurse();
     test_lethal_hit_preserves_reflections();
+    test_recorded_lethal_overkill_reflections();
     test_dead_source_pending_hit_lands();
     test_instant_input_hits_precede_actor_passes();
     test_dead_nh_inputs_cannot_revive();

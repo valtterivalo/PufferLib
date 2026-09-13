@@ -481,6 +481,7 @@ static inline int osrs_echo_boots_recoil_damage(
 
 static inline DamageResult osrs_apply_passive_damage_pipeline(
     int raw_damage,
+    int target_hitpoints,
     int attack_style,
     int target_prayer,
     int is_pvp,
@@ -503,6 +504,7 @@ static inline DamageResult osrs_apply_passive_damage_pipeline(
 
     DamageResult result = osrs_apply_post_mitigation_pipeline(
         final_damage,
+        target_hitpoints,
         prayer_correct,
         target_veng_active,
         osrs_has_recoil_available(defender_profile, defender_state),

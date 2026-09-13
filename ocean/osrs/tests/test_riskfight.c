@@ -133,7 +133,18 @@ static void test_vengeance(void) {
     assert(!state.env.episode_over && state.outcome[0] == RISKFIGHT_ONGOING);
     pvp_process_incoming_hits(&state.env, 1);
     riskfight_finish(&state);
-    assert(state.outcome[0] == RISKFIGHT_MUTUAL_DEATH && state.rewards[0] == 0 && state.rewards[1] == 0);
+    assert(state.env.players[1].current_hitpoints == 7);
+    assert(state.outcome[0] == RISKFIGHT_DEATH && state.rewards[0] == -1 && state.rewards[1] == 1);
+    reset();
+    state.env.players[0].current_hitpoints = 5;
+    state.env.players[1].current_hitpoints = 2;
+    apply_damage(&state.env, 1, 0, &hit);
+    riskfight_finish(&state);
+    assert(!state.env.episode_over);
+    pvp_process_incoming_hits(&state.env, 1);
+    riskfight_finish(&state);
+    assert(state.outcome[0] == RISKFIGHT_MUTUAL_DEATH);
+    assert(state.rewards[0] == 0 && state.rewards[1] == 0);
 }
 static void test_special_and_outcomes(void) {
     reset(); Player* p = &state.env.players[0];
