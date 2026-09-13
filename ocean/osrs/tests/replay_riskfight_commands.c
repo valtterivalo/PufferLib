@@ -175,6 +175,39 @@ static void synthetic_double_maul(void) {
     assert(trace.count == 2);
 }
 
+static void conditioned_recorded_armour_cycle(void) {
+    reset();
+    state.env.tick = 23807;
+    Player* player = &state.env.players[0];
+    player->inventory_cells[9] = osrs_inventory_cell_empty();
+    player->inventory_cells[10] = osrs_inventory_cell_empty();
+    player->veng_active = 0;
+    frame((CommandFrame){
+        .commands = {(HumanCommand[]){
+            {.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = GEAR_SLOT_HEAD},
+            {.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = GEAR_SLOT_BODY},
+            {.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = GEAR_SLOT_LEGS}}}, .count = {3},
+        .actions = {[RF_HEAD] = RF_UNEQUIP, [RF_BODY] = RF_UNEQUIP, [RF_LEGS] = RF_UNEQUIP},
+    });
+    assert(player->equipped[GEAR_SLOT_HEAD] == ITEM_NONE);
+    assert(player->equipped[GEAR_SLOT_BODY] == ITEM_NONE);
+    assert(player->equipped[GEAR_SLOT_LEGS] == ITEM_NONE);
+    frame((CommandFrame){.commands = {(HumanCommand[]){VENGEANCE}}, .count = {1},
+        .actions = {[RF_VENGEANCE] = 1}});
+    assert(player->veng_active);
+    frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(23), SPEC, TARGET}}, .count = {3},
+        .actions = {[RF_WEAPON] = 24, [RF_SPECIAL] = 1, [RF_PRIMARY] = RF_ATTACK}});
+    assert(player->special_energy == 50);
+    frame((CommandFrame){.commands = {(HumanCommand[]){STOP}}, .count = {1},
+        .actions = {[RF_PRIMARY] = RF_STOP}});
+    while (state.env.tick < 23813) frame((CommandFrame){0});
+    frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(9), CLICK(10), CLICK(27)}}, .count = {3},
+        .actions = {[RF_HEAD] = 10, [RF_BODY] = 11, [RF_LEGS] = 28}});
+    assert(player->equipped[GEAR_SLOT_HEAD] == ITEM_DHAROKS_HELM);
+    assert(player->equipped[GEAR_SLOT_BODY] == ITEM_DHAROKS_PLATEBODY);
+    assert(player->equipped[GEAR_SLOT_LEGS] == ITEM_DHAROKS_PLATELEGS);
+}
+
 static void verify(const char* name, const char* evidence, void (*scenario)(void)) {
     static RiskfightState expected;
     CommandTrace expected_trace = {0};
@@ -221,6 +254,8 @@ int main(void) {
     verify("triple_eat_orb_stop", "SYNTHETIC", synthetic_triple_eat_orb_stop);
     verify("precast_vengeance_recast_second_reflection", "SYNTHETIC", synthetic_vengeance_recast);
     verify("double_ornate_maul_two_payable_hits", "SYNTHETIC", synthetic_double_maul);
+    verify("strip23807_vengeance23808_voidwaker23809_restore23813",
+        "RECORDED_VISIBLE_TIMING_WITH_SYNTHETIC_COMMANDS_AND_DAMAGE", conditioned_recorded_armour_cycle);
     verify("maul217_ordinary218_teleport226", "RECORDED_TIMING_BOUNDARY_WITH_SYNTHETIC_COMMANDS",
         conditioned_recorded_maul_teleport_boundary);
     puts("{\"recorded_boundary_provenance\":{\"archive\":\"session_20260913T093112.716Z_20260913T093024Z.89354_81a22aa0-6e18-4b36-b953-a3c8cab6906a.jsonl.zst\","

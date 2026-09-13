@@ -58,9 +58,23 @@ static void test_observation_domains(void) {
     assert(dead.kind == OSRS_HEALTH_BAR_KNOWN && dead.lower == 0 && dead.upper == 0);
 }
 
+static void test_recorded_stale_bar_healing_interval(void) {
+    OsrsHealthBarRange after_23276 = osrs_health_bar_range(8, 30, 99, 121);
+    OsrsHealthBarRange after_23285 = osrs_health_bar_range(25, 30, 99, 121);
+    assert(after_23276.upper < 55);
+    OsrsHealthChangeRange change = osrs_health_bar_unobserved_change(after_23276, after_23285, 55);
+    assert(change.lower == 110 && change.upper == 116);
+    for (int before = after_23276.lower; before <= after_23276.upper; before++)
+        for (int after = after_23285.lower; after <= after_23285.upper; after++) {
+            int gain = after - before + 55;
+            assert(gain >= change.lower && gain <= change.upper);
+        }
+}
+
 int main(void) {
     test_round_trip();
     test_recorded_damage_sequence();
     test_observation_domains();
+    test_recorded_stale_bar_healing_interval();
     puts("Health-bar quantization and recorded damage constraints passed");
 }

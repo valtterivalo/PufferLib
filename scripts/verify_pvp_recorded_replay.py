@@ -11,6 +11,7 @@ def verify_records(lines, expected_hash, candidates, actor_ids):
     bars = candidates[0].get('health_bars', [])
     if bars:
         first = min(first, min(bar['tick'] for bar in bars))
+        last = max(last, max(bar['tick'] for bar in bars))
     observed_bars = {}
     digest = hashlib.sha256()
     observed = [[], []]

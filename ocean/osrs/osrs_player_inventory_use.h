@@ -139,10 +139,6 @@ static inline void osrs_player_inventory_tick(Player* p, OsrsInventoryUseState* 
         pins.defence_floor = p->current_defence;
     }
     encounter_tick_stat_drift(p, &state->stat_drift_timer, pins);
-    if (state->stat_drift_timer == 0 && p->current_hitpoints > 0) {
-        if (p->current_hitpoints < p->base_hitpoints) p->current_hitpoints++;
-        else if (p->current_hitpoints > p->base_hitpoints) p->current_hitpoints--;
-    }
     if (state->divine_combat_ticks > 0 && --state->divine_combat_ticks == 0) {
         if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
         if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;

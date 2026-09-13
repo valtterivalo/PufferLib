@@ -16,6 +16,18 @@ typedef struct {
     int lower, upper;
 } OsrsHealthBarRange;
 
+typedef struct { int lower, upper; } OsrsHealthChangeRange;
+
+/** Net HP change outside accounted damage between two fresh bar observations. */
+static inline OsrsHealthChangeRange osrs_health_bar_unobserved_change(
+    OsrsHealthBarRange before, OsrsHealthBarRange after, int accounted_damage
+) {
+    assert(before.kind == OSRS_HEALTH_BAR_KNOWN && after.kind == OSRS_HEALTH_BAR_KNOWN);
+    assert(accounted_damage >= 0);
+    return (OsrsHealthChangeRange){after.lower - before.upper + accounted_damage,
+        after.upper - before.lower + accounted_damage};
+}
+
 /** Current HP to capped server health ratio, with zero reserved for death. */
 static inline int osrs_health_bar_ratio(int hp, int base_hp, int scale) {
     assert(hp >= 0 && base_hp > 0 && scale > 0);

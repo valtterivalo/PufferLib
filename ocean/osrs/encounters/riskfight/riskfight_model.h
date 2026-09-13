@@ -123,8 +123,9 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);
-    v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
-        opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
+    if (reset || opponent->hit_landed_this_tick)
+        v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
+            opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
     if (reset) { v->last_attack_tick = -1; return; }
     int index = (s->env.tick - 1) % RF_HISTORY_TICKS;
     float* event = v->events[index];

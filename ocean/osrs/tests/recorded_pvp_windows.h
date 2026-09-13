@@ -33,6 +33,7 @@ typedef struct {
 } RecordedPvpWindow;
 
 #include "recorded_pvp_124331.h"
+#include "recorded_pvp_132330.h"
 
 static const RecordedHealthBar mutual_voidwaker_bars[] = {
     {21887, 0, 21, 30}, {21887, 1, 24, 30},
@@ -73,6 +74,7 @@ static const RecordedHitsplat mutual_voidwaker_hits[] = {
 #define RECORDED_COUNT(array) (sizeof(array) / sizeof((array)[0]))
 static const RecordedPvpWindow recorded_pvp_windows[] = {
     RECORDED_PVP_124331_LETHAL_WINDOW,
+    RECORDED_PVP_132330_STRIP_WINDOW,
     {
         "voidwaker_vengeance_maul",
         "session_20260913T072938.012Z_20260913T072839Z.64834_8380fc35-d98c-4f15-a1c5-6eb8b70da9de.jsonl.zst",
