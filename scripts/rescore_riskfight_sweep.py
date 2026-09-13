@@ -13,7 +13,7 @@ OBJECTIVE_ID = 'riskfight-four-bot-v1'
 def read_config(path):
     config = configparser.ConfigParser()
     config.optionxform = str
-    assert config.read(path) == [str(path)]
+    assert config.read(str(path)) == [str(path)]
     return config
 
 
