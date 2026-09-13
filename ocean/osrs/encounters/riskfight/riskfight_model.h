@@ -122,19 +122,18 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     s->env.rng_state = rng;
     s->env.winner = -1;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
-    static const uint8_t equipment[NUM_GEAR_SLOTS] = {
-        [GEAR_SLOT_AMMO] = ITEM_NONE,
-        [GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM,
-        [GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE,
-        [GEAR_SLOT_NECK] = ITEM_AMULET_OF_RANCOUR,
-        [GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE,
-        [GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY,
-        [GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER,
-        [GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS,
-        [GEAR_SLOT_HANDS] = ITEM_FEROCIOUS_GLOVES,
-        [GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS,
-        [GEAR_SLOT_RING] = ITEM_ULTOR_RING,
-    };
+    uint8_t equipment[NUM_GEAR_SLOTS] = {0};
+    equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
+    equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
+    equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+    equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_RANCOUR;
+    equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
+    equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
+    equipment[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
+    equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
+    equipment[GEAR_SLOT_HANDS] = ITEM_FEROCIOUS_GLOVES;
+    equipment[GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS;
+    equipment[GEAR_SLOT_RING] = ITEM_ULTOR_RING;
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
         init_player(p);
