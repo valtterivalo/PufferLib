@@ -21,6 +21,8 @@ struct Log {
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
+    float self_teleports, opponent_teleports, both_teleports;
+    float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
 };
 struct Env {
     Log log;
@@ -31,6 +33,7 @@ struct Env {
     RiskfightState state;
     RiskfightContext context;
     RiskfightTraining training;
+    int escape_trace;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -53,6 +56,9 @@ void puf_init(Env* env, Dict* kwargs) {
     env->state.env.rng_state = env->rng ? env->rng : 1;
     env->training = (RiskfightTraining){0};
     env->training.config = riskfight_training_config(kwargs);
+    DictItem* trace = dict_find(kwargs, "escape_trace");
+    env->escape_trace = trace ? (int)trace->value : 0;
+    assert(!trace || trace->value == 0 || trace->value == 1);
     env->training.rng = env->state.env.rng_state;
     assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
         env->training.config.midfight_probability == 0));
@@ -97,6 +103,30 @@ void puf_step(Env* env) {
         env->agents[i].terminals[0] = env->state.env.episode_over;
     }
     if (env->state.env.episode_over) {
+        env->log.self_teleports += env->state.escaped[0];
+        env->log.opponent_teleports += env->state.escaped[1];
+        env->log.both_teleports += env->state.escaped[0] && env->state.escaped[1];
+        for (int actor = 0; actor < 2; actor++) {
+            if (!env->state.escaped[actor]) continue;
+            const OsrsEscapeSupplies* supplies = &env->state.escape_supplies[actor][actor];
+            const OsrsEscapeSupplies* other = &env->state.escape_supplies[actor][1 - actor];
+            int both_no_special = osrs_escape_no_special(supplies) && osrs_escape_no_special(other);
+            if (actor == 0) {
+                env->log.self_escape_healing[supplies->healing]++;
+                env->log.self_escape_no_boost += osrs_escape_no_boost(supplies);
+                env->log.self_escape_both_no_special += both_no_special;
+            }
+            if (env->escape_trace) printf("RF_ESCAPE {\"actor\":%d,\"tick\":%d,\"hp\":%d,\"healing\":%d,"
+                "\"marlins\":%d,\"brew_doses\":%d,\"halibut\":%d,\"pie_bites\":%d,\"boost_doses\":%d,"
+                "\"attack\":%d,\"strength\":%d,\"no_boost\":%d,\"special_energy\":%d,\"minimum_spec_cost\":%d,"
+                "\"opponent_special_energy\":%d,\"opponent_minimum_spec_cost\":%d,\"both_no_special\":%d,"
+                "\"food_timer\":%d,\"potion_timer\":%d,\"combo_timer\":%d}\n",
+                actor, env->state.escape_tick[actor], supplies->hp, supplies->healing,
+                supplies->marlins, supplies->brew_doses, supplies->halibut, supplies->pie_bites, supplies->boost_doses,
+                supplies->attack, supplies->strength, osrs_escape_no_boost(supplies), supplies->special_energy,
+                supplies->minimum_spec_cost, other->special_energy, other->minimum_spec_cost, both_no_special,
+                supplies->food_timer, supplies->potion_timer, supplies->combo_timer);
+        }
         RiskfightOutcome outcome = env->state.outcome[0];
         env->log.kills += outcome == RISKFIGHT_KILL;
         env->log.deaths += outcome == RISKFIGHT_DEATH;
@@ -157,4 +187,12 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "scripted_omissions", log->scripted_omissions);
     dict_set(out, "midfight_ticks", log->midfight_ticks);
     dict_set(out, "prefix_terminal", log->prefix_terminal);
+    dict_set(out, "self_teleports", log->self_teleports);
+    dict_set(out, "opponent_teleports", log->opponent_teleports);
+    dict_set(out, "both_teleports", log->both_teleports);
+    const char* healing_keys[] = {"self_escape_no_healing", "self_escape_other_healing",
+        "self_escape_double_eats", "self_escape_triple_eats"};
+    for (int i = 0; i < 4; i++) dict_set(out, healing_keys[i], log->self_escape_healing[i]);
+    dict_set(out, "self_escape_no_boost", log->self_escape_no_boost);
+    dict_set(out, "self_escape_both_no_special", log->self_escape_both_no_special);
 }

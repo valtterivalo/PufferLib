@@ -5,6 +5,7 @@
 #include "../../osrs_health_bar.h"
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
+#include "../../osrs_pvp_escape.h"
 
 typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_MIXED, RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_SURVIVAL, RISKFIGHT_HELDOUT, RISKFIGHT_FLOOR } RiskfightOpponent;
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
@@ -57,6 +58,8 @@ typedef struct {
     RiskfightOutcome outcome[2];
     RiskfightOpponent mixed_opponent;
     int escaped[2];
+    OsrsEscapeSupplies escape_supplies[2][2];
+    int escape_tick[2];
     OsrsUnequipResult last_unequip_result[2];
     float rewards[2];
     float episode_returns[2];

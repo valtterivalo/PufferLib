@@ -18,6 +18,8 @@ int main(void) {
     puf_step(env);
     assert(terminals[0] == 1 && terminals[1] == 1 && rewards[0] == 0 && rewards[1] == 0);
     assert(env->state.env.tick == 0 && env->log.escapes == 1);
+    assert(env->log.self_teleports == 1 && env->log.opponent_teleports == 0);
+    assert(env->log.self_escape_healing[OSRS_ESCAPE_TRIPLE_EATS] == 1);
     assert(obs[0][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
     assert(obs[1][RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == -1);
     for (int i = 0; i < 2; i++) {
@@ -44,6 +46,12 @@ int main(void) {
     assert(dict_get(&output, "policy_0_score") == 1.5);
     assert(dict_get(&output, "draw_rate") == 1);
     dict_clear(&output);
+    actions[1][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(env);
+    assert(env->log.opponent_teleports == 1 && env->log.self_teleports == 0);
+    actions[0][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(env);
+    assert(env->log.both_teleports == 1 && env->log.self_teleports == 1 && env->log.opponent_teleports == 2);
     puf_close(env); free(env);
     items[1].value = 0;
     env = (Env*)calloc(1, sizeof(*env));
