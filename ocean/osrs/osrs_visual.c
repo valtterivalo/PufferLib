@@ -460,6 +460,8 @@ static void osrs_print_inferno_profile_results(int total_steps) {
 #endif
 
 
+static int g_cli_riskfight_opponent = RISKFIGHT_TRADER;
+
 static const EncounterDef* visual_open_encounter(OsrsEnv* env, const char* encounter_name) {
     const EncounterDef* edef = encounter_find(encounter_name);
     if (!edef) {
@@ -469,6 +471,9 @@ static const EncounterDef* visual_open_encounter(OsrsEnv* env, const char* encou
     env->encounter_def = (void*)edef;
     env->encounter_state = edef->create();
     env->encounter_context = visual_create_encounter_context(edef);
+    if (strcmp(encounter_name, "riskfight") == 0)
+        edef->put_int(env->encounter_state, env->encounter_context,
+            "opponent_type", g_cli_riskfight_opponent);
     return edef;
 }
 static void visual_finalize_encounter(
@@ -2371,6 +2376,8 @@ int main(int argc, char** argv) {
             replay_path = argv[++i];
         else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc)
             model_path = argv[++i];
+        else if (strcmp(argv[i], "--riskfight-opponent") == 0 && i + 1 < argc)
+            g_cli_riskfight_opponent = atoi(argv[++i]);
         else if (strcmp(argv[i], "--policy-mode") == 0 && i + 1 < argc)
             policy_mode_name = argv[++i];
         else if (strcmp(argv[i], "--policy-seed") == 0 && i + 1 < argc)
