@@ -8,6 +8,7 @@ typedef struct {
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
+typedef enum { RF_START_FRESH, RF_START_MIDFIGHT, RF_START_PREFIX_TERMINAL } RiskfightTrainingStart;
 
 typedef struct {
     RiskfightTrainingConfig config;
@@ -15,10 +16,10 @@ typedef struct {
     uint64_t ticks;
     RiskfightTrainingOpponent opponent;
     RiskfightOpponent script;
+    RiskfightTrainingStart start;
     int start_tick;
+    int omissions;
 } RiskfightTraining;
-
-typedef enum { RF_START_FRESH, RF_START_MIDFIGHT, RF_START_PREFIX_TERMINAL } RiskfightTrainingStart;
 
 static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     RiskfightTrainingConfig config = {0};
@@ -104,6 +105,8 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
         start = riskfight_training_prefix(state, context, first, second, ticks);
     }
     training->start_tick = state->env.tick;
+    training->start = start;
+    training->omissions = 0;
     return start;
 }
 

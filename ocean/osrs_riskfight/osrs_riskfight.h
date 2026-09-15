@@ -74,10 +74,7 @@ static void riskfight_native_observe(Env* env) {
     }
 }
 static void riskfight_native_reset(Env* env) {
-    RiskfightTrainingStart start = riskfight_training_reset(&env->training,
-        &env->state, &env->context, env->tag);
-    env->log.prefix_terminal += start == RF_START_PREFIX_TERMINAL;
-    env->log.midfight_ticks += env->training.start_tick;
+    riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
 }
 void puf_reset(Env* env) {
     riskfight_native_reset(env);
@@ -91,9 +88,8 @@ void puf_step(Env* env) {
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
-    env->log.scripted_omissions += riskfight_training_actions(&env->training,
+    env->training.omissions += riskfight_training_actions(&env->training,
         &env->state, env->tag, actions);
-    env->log.scripted_ticks += env->training.opponent == RF_TRAIN_SCRIPTED;
     env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
     for (int i = 0; i < env->num_agents; i++) {
@@ -116,6 +112,11 @@ void puf_step(Env* env) {
         env->log.chance_reward += env->state.chance_rewards[0];
         env->log.teleport_penalty += env->state.teleport_penalties[0];
         env->log.episode_length += env->state.env.tick - env->training.start_tick;
+        if (env->training.opponent == RF_TRAIN_SCRIPTED)
+            env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
+        env->log.scripted_omissions += env->training.omissions;
+        env->log.midfight_ticks += env->training.start_tick;
+        env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
         env->log.n++;
         riskfight_native_reset(env);
     }

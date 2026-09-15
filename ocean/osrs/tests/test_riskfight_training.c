@@ -82,7 +82,11 @@ int main(void) {
     assert(commands[RF_PRIMARY] == RF_STOP);
     teacher->actions[1][RF_PRIMARY] = RF_TELEPORT;
     puf_step(&teacher->env);
-    assert(teacher->terminals[0] == 0 && teacher->env.log.scripted_ticks == 1);
+    assert(teacher->terminals[0] == 0 && teacher->env.training.ticks == 11);
+    assert(teacher->env.log.n == 0 && teacher->env.log.scripted_ticks == 0);
+    teacher->actions[0][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(&teacher->env);
+    assert(teacher->terminals[0] == 1 && teacher->env.log.scripted_ticks == 2);
     destroy(teacher);
 
     Fixture* generated = fixture(&baseline, 1);
