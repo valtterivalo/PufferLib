@@ -202,6 +202,21 @@ static inline const OsrsItemContentMetadata* osrs_inventory_cell_metadata(
     return osrs_item_content_metadata(cell->content_code);
 }
 
+typedef struct {
+    uint8_t item_slot_plus_one[NUM_ITEMS];
+    uint8_t consumable_slot_plus_one[OSRS_CONSUMABLE_COUNT];
+} OsrsInventoryIndex;
+
+static inline OsrsInventoryIndex osrs_inventory_index(const OsrsInventoryCell* cells) {
+    OsrsInventoryIndex index = {0};
+    for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0; slot--) {
+        const OsrsItemContentMetadata* item = osrs_inventory_cell_metadata(&cells[slot]);
+        if (item->item_idx != ITEM_NONE) index.item_slot_plus_one[item->item_idx] = slot + 1;
+        index.consumable_slot_plus_one[item->consumable_kind] = slot + 1;
+    }
+    return index;
+}
+
 static inline uint8_t osrs_inventory_cell_item_index(
     const OsrsInventoryCell* cell
 ) {

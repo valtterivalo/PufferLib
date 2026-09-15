@@ -229,6 +229,7 @@ static int riskfight_floor_attack_window(const float* obs, const Player* self,
 static void riskfight_tactician_profile(const float* obs, int* actions,
         RiskfightTacticianProfile profile) {
     Player self = riskfight_observed_self(obs);
+    OsrsInventoryIndex inventory = osrs_inventory_index(self.inventory_cells);
     if (self.current_hitpoints <= 0) return;
     RiskfightThreatWindow threat = riskfight_threat_window(obs);
     RiskfightThreatWindow eating_threat = threat;
@@ -263,16 +264,16 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
     int opponent_hp_upper = opponent_hp.range.upper;
     for (int i = 0; i < 4; i++) {
         int weapon = weapons[i];
-        if (equipped_weapon != weapon && !riskfight_find_gear(obs, weapon)) continue;
+        if (equipped_weapon != weapon && !inventory.item_slot_plus_one[weapon]) continue;
         Player candidate = self;
-        int weapon_slot = riskfight_find_gear(obs, weapon) - 1;
+        int weapon_slot = inventory.item_slot_plus_one[weapon] - 1;
         if (equipped_weapon != weapon && osrs_equip_from_cell(&candidate, candidate.inventory_cells, weapon_slot) < 0) continue;
-        int shield_slot = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER) - 1;
+        int shield_slot = inventory.item_slot_plus_one[ITEM_AVERNIC_DEFENDER] - 1;
         if (!item_is_two_handed(weapon) && shield_slot >= 0)
             osrs_equip_from_cell(&candidate, candidate.inventory_cells, shield_slot);
         const int armour[] = {ITEM_DHAROKS_HELM, ITEM_DHAROKS_PLATEBODY, ITEM_DHAROKS_PLATELEGS};
         for (int a = 0; a < 3; a++) {
-            int slot = riskfight_find_gear(obs, armour[a]) - 1;
+            int slot = inventory.item_slot_plus_one[armour[a]] - 1;
             if (slot >= 0) osrs_equip_from_cell(&candidate, candidate.inventory_cells, slot);
         }
         candidate.current_hitpoints = after_eating.current_hitpoints;
@@ -313,10 +314,10 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
             if (after_eating.current_magic < OSRS_VENGEANCE_MAGIC_LEVEL) actions[RF_VENGEANCE] = 0;
         }
     }
-    actions[RF_WEAPON] = riskfight_find_gear(obs, chosen_weapon);
-    if (!item_is_two_handed(chosen_weapon)) actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
-    actions[RF_RING] = riskfight_find_gear(obs,
-        !own_ready && threat.ticks_until == 0 ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
+    actions[RF_WEAPON] = inventory.item_slot_plus_one[chosen_weapon];
+    if (!item_is_two_handed(chosen_weapon)) actions[RF_SHIELD] = inventory.item_slot_plus_one[ITEM_AVERNIC_DEFENDER];
+    actions[RF_RING] = inventory.item_slot_plus_one[
+        !own_ready && threat.ticks_until == 0 ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
     Player equipped = self;
     for (int head = RF_WEAPON; head <= RF_RING; head++)
         if (actions[head]) osrs_equip_from_cell(&equipped, equipped.inventory_cells, actions[head] - 1);
@@ -329,15 +330,15 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
         if (bait && free_slots > 0 && self.equipped[RF_GEAR_SLOT_BY_HEAD[armour_heads[i]]] != ITEM_NONE) {
             actions[armour_heads[i]] = RF_UNEQUIP;
             free_slots--;
-        } else if (!bait) actions[armour_heads[i]] = riskfight_find_gear(obs, armour_items[i]);
+        } else if (!bait) actions[armour_heads[i]] = inventory.item_slot_plus_one[armour_items[i]];
     }
     if (!eating && self.potion_timer == 0 && self.current_hitpoints > threat.damage) {
         if (self.current_prayer <= 40 || self.current_attack < self.base_attack || self.current_strength < self.base_strength ||
             self.current_magic < self.base_magic)
-            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+            actions[RF_DRINK] = inventory.consumable_slot_plus_one[OSRS_CONSUMABLE_SANFEW];
         else if (threat.ticks_until > 1 && self.current_hitpoints > threat.damage + OSRS_DIVINE_DAMAGE &&
                 self.current_strength < 110)
-            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
+            actions[RF_DRINK] = inventory.consumable_slot_plus_one[OSRS_CONSUMABLE_DIVINE_COMBAT];
     }
     DamageResult reflection = osrs_apply_post_mitigation_pipeline(best_max,
         opponent_hp_upper, 0, 1, 1, 0);
