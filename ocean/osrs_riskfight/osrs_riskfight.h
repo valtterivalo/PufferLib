@@ -120,12 +120,15 @@ void puf_step(Env* env) {
                 "\"marlins\":%d,\"brew_doses\":%d,\"halibut\":%d,\"pie_bites\":%d,\"boost_doses\":%d,"
                 "\"attack\":%d,\"strength\":%d,\"no_boost\":%d,\"special_energy\":%d,\"minimum_spec_cost\":%d,"
                 "\"opponent_special_energy\":%d,\"opponent_minimum_spec_cost\":%d,\"both_no_special\":%d,"
-                "\"food_timer\":%d,\"potion_timer\":%d,\"combo_timer\":%d}\n",
+                "\"food_timer\":%d,\"potion_timer\":%d,\"combo_timer\":%d,\"outcome\":%d,\"other_escaped\":%d,"
+                "\"weapon\":%d,\"opponent_weapon\":%d,\"opponent_hp\":%d}\n",
                 actor, env->state.escape_tick[actor], supplies->hp, supplies->healing,
                 supplies->marlins, supplies->brew_doses, supplies->halibut, supplies->pie_bites, supplies->boost_doses,
                 supplies->attack, supplies->strength, osrs_escape_no_boost(supplies), supplies->special_energy,
                 supplies->minimum_spec_cost, other->special_energy, other->minimum_spec_cost, both_no_special,
-                supplies->food_timer, supplies->potion_timer, supplies->combo_timer);
+                supplies->food_timer, supplies->potion_timer, supplies->combo_timer,
+                env->state.outcome[actor], env->state.escaped[1 - actor],
+                supplies->weapon, other->weapon, other->hp);
         }
         RiskfightOutcome outcome = env->state.outcome[0];
         env->log.kills += outcome == RISKFIGHT_KILL;

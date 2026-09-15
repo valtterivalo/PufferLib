@@ -15,6 +15,9 @@ def summarize(events):
         rows = [row for row in events if row['actor'] == actor]
         actors[str(actor)] = {
             'teleports': len(rows),
+            'both_teleported': sum(row['other_escaped'] for row in rows),
+            'outcomes': dict(Counter(row['outcome'] for row in rows)),
+            'triple_opponent_weapons': dict(Counter(row['opponent_weapon'] for row in rows if row['healing'] == 3)),
             'healing': dict(Counter(row['healing'] for row in rows)),
             'no_boost': sum(row['no_boost'] for row in rows),
             'both_no_special_truth': sum(row['both_no_special'] for row in rows),

@@ -9,6 +9,7 @@ typedef struct {
     int hp, attack, strength, attack_base, strength_base;
     int food_timer, potion_timer, combo_timer;
     int special_energy, minimum_spec_cost;
+    int weapon;
 } OsrsEscapeSupplies;
 
 static OsrsEscapeSupplies osrs_escape_supplies(const Player* player) {
@@ -44,6 +45,7 @@ static OsrsEscapeSupplies osrs_escape_supplies(const Player* player) {
     out.food_timer = player->food_timer; out.potion_timer = player->potion_timer;
     out.combo_timer = player->karambwan_timer;
     out.special_energy = player->special_energy;
+    out.weapon = player->equipped[GEAR_SLOT_WEAPON];
     return out;
 }
 
