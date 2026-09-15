@@ -256,11 +256,17 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         }
         if (s->env.players[i].current_hitpoints <= 0) continue;
         pvp_step_player_movement(&s->env, i, ctx->route_topology, &ctx->routes[i]);
+        pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
+            ctx->route_topology);
         int idle_actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
         execute_attack_movement(&s->env, i, idle_actions, ctx->route_topology, &ctx->routes[i]);
+        pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
+            ctx->route_topology);
         if (!s->escaped[0] && !s->escaped[1])
             riskfight_record_attack(s, i, pvp_maul_continue_attack(&s->env, i), 1);
         riskfight_attack(s, i);
+        pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
+            ctx->route_topology);
     }
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
