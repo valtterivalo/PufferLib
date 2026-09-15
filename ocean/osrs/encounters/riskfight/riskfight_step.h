@@ -173,6 +173,7 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
 }
 
 static void riskfight_finish(RiskfightState* s) {
+    // TODO: Resolve departure, pending hits and Vengeance ordering before supporting same-tick attack/teleport.
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
     for (int i = 0; i < 2; i++) {

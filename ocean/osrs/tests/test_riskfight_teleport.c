@@ -155,6 +155,35 @@ static void test_non_triggering_actions(void) {
     assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS);
 }
 
+static void test_axe_then_teleport_two_ticks_later(void) {
+    for (int pid = 0; pid < 2; pid++) {
+        reset();
+        state.env.pid_holder = pid;
+        state.env.players[1].veng_active = 1;
+        equip(22);
+        assert(state.env.players[0].equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+        int actions[2 * RF_HEADS] = {0};
+        actions[RF_PRIMARY] = RF_ATTACK;
+        int start = state.env.tick;
+        riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+        assert(state.env.players[0].just_attacked);
+        assert(state.env.players[0].special_energy == 100);
+        assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == 0);
+        actions[RF_PRIMARY] = RF_STOP;
+        riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+        assert(state.env.tick == start + 2);
+        int own_hp = state.env.players[0].current_hitpoints;
+        int opponent_hp = state.env.players[1].current_hitpoints;
+        assert(opponent_hp < 121 && own_hp < 121);
+        assert(!state.env.players[1].veng_active);
+        actions[RF_PRIMARY] = RF_TELEPORT;
+        riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+        assert(state.escaped[0] && state.outcome[0] == RISKFIGHT_ESCAPE);
+        assert(state.env.players[0].current_hitpoints == own_hp);
+        assert(state.env.players[1].current_hitpoints == opponent_hp);
+    }
+}
+
 static void test_policy_and_human_blocked_teleport(void) {
     reset();
     equip(24);
@@ -181,6 +210,7 @@ int main(void) {
     test_executed_special_and_consumption();
     test_recorded_eight_tick_teleports();
     test_non_triggering_actions();
+    test_axe_then_teleport_two_ticks_later();
     test_policy_and_human_blocked_teleport();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight teleport contracts passed");
