@@ -47,6 +47,18 @@ class ResumeTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 stage_resume(source, root / 'mismatch', binary, OBJECTIVE_ID)
             self.assertFalse((root / 'mismatch').exists())
+            manifest['git_sha'] = 'old-version'
+            (source / 'manifest.json').write_text(json.dumps(manifest))
+            (source / 'status.json').write_text('{"status":"stopped"}')
+            (logs / 'sweep_123_0002.ini').write_text('[policy]\nhidden_size=64\n')
+            migrated = root / 'migrated'
+            self.assertEqual(stage_resume(source, migrated, binary, OBJECTIVE_ID,
+                                          manifest['binary_sha256']), 3)
+            self.assertEqual(read_config(migrated / 'sweep_123_0000.ini')['resume']['cost'], '30')
+            self.assertFalse((migrated / 'sweep_123_0002.ini').exists())
+            self.assertEqual(len(json.loads((migrated / 'interrupted.json').read_text())), 1)
+            with self.assertRaises(AssertionError):
+                stage_resume(source, root / 'wrong-hash', binary, OBJECTIVE_ID, 'wrong-hash')
 
 
 if __name__ == '__main__':

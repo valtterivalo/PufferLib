@@ -13,11 +13,13 @@ from rescore_riskfight_sweep import read_config
 OBJECTIVE_ID = 'riskfight-seven-bot-chance-v1'
 
 
-def stage_resume(source, destination, binary, objective_id):
+def stage_resume(source, destination, binary, objective_id, compatible_binary_sha256=None):
     manifest = json.loads((source / 'manifest.json').read_text())
-    assert json.loads((source / 'status.json').read_text())['status'] == 'complete'
+    source_status = json.loads((source / 'status.json').read_text())['status']
+    assert source_status in ('complete', 'stopped')
     assert manifest['objective_id'] == objective_id
-    assert manifest['binary_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert manifest['binary_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest() or (
+        compatible_binary_sha256 is not None and compatible_binary_sha256 == manifest['binary_sha256'])
     destination.mkdir()
     if (source / 'resume').exists():
         for path in (source / 'resume').glob('*.ini'):
@@ -27,9 +29,13 @@ def stage_resume(source, destination, binary, objective_id):
     failed = {int(value) for value in re.findall(r'^sweep worker run=(\d+) failed;', log, re.M)}
     assert not completed & failed
     imported = set()
+    interrupted = []
     for path in sorted((source / 'logs/osrs_riskfight').glob('sweep_*.ini')):
         trial = int(path.stem.rsplit('_', 1)[1])
-        assert trial in completed | failed, f'Unfinished trial: {path}'
+        if trial not in completed | failed:
+            assert source_status == 'stopped', f'Unfinished trial: {path}'
+            interrupted.append(str(path))
+            continue
         config = read_config(path)
         if trial in completed:
             config['resume'] = {'objective_id': objective_id, 'status': 'success',
@@ -48,6 +54,7 @@ def stage_resume(source, destination, binary, objective_id):
         with target.open('w') as output:
             config.write(output)
         imported.add(trial)
+    (destination / "interrupted.json").write_text(json.dumps(interrupted, indent=2))
     assert imported == completed | failed
     return len(list(destination.glob('*.ini')))
 
@@ -61,6 +68,7 @@ def main():
     parser.add_argument('--trials', type=int, required=True)
     parser.add_argument('--resume-from', type=Path)
     parser.add_argument('--objective-id', default=OBJECTIVE_ID)
+    parser.add_argument('--resume-compatible-binary-sha256')
     args = parser.parse_args()
     assert args.trials > 0
     anchor = read_config(args.anchor)
@@ -73,7 +81,7 @@ def main():
     binary = args.root / 'riskfight'
     shutil.copyfile(args.binary, binary)
     binary.chmod(0o755)
-    imported = stage_resume(args.resume_from, args.root / 'resume', binary, args.objective_id) if args.resume_from else 0
+    imported = stage_resume(args.resume_from, args.root / 'resume', binary, args.objective_id, args.resume_compatible_binary_sha256) if args.resume_from else 0
     command = [str(binary), 'sweep']
     for section in ('base', 'vec', 'selfplay', 'env', 'policy', 'train', 'bot_eval'):
         command.extend(f'--{section}.{key}={value}' for key, value in anchor[section].items())
@@ -97,6 +105,8 @@ def main():
         'score': 'Equal-weight unshaped net stake over seven selection bots',
         'historical_scores_imported': imported,
         'resume_from': str(args.resume_from) if args.resume_from else None,
+        'resume_compatible_binary_sha256': args.resume_compatible_binary_sha256,
+        'resume_cost_policy': 'Preserve measured historical runtimes without rescaling. New trials measure the new binary.',
         'failed_resume_cost': 'Last logged training uptime before failure',
     }
     (args.root / 'manifest.json').write_text(json.dumps(manifest, indent=2))
