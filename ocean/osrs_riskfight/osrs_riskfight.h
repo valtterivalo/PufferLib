@@ -6,6 +6,7 @@ typedef float obs_t;
 #define Log OsrsSharedLog
 #include "../osrs/encounters/encounter_riskfight.h"
 #undef Log
+#include "riskfight_training.h"
 #ifdef OSRS_PUFFER_RENDER
 #include "../osrs/osrs_puffer_render.h"
 #endif
@@ -19,6 +20,7 @@ struct Log {
     float policy_0_score, draw_rate;
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
+    float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
 };
 struct Env {
     Log log;
@@ -28,6 +30,7 @@ struct Env {
     int tag, boundary_reached;
     RiskfightState state;
     RiskfightContext context;
+    RiskfightTraining training;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -48,6 +51,11 @@ void puf_init(Env* env, Dict* kwargs) {
     env->num_agents = env->context.self_play ? 2 : 1;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
     env->state.env.rng_state = env->rng ? env->rng : 1;
+    env->training = (RiskfightTraining){0};
+    env->training.config = riskfight_training_config(kwargs);
+    env->training.rng = env->state.env.rng_state;
+    assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
+        env->training.config.midfight_probability == 0));
     memset(&env->log, 0, sizeof(env->log));
     riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
 }
@@ -65,8 +73,14 @@ static void riskfight_native_observe(Env* env) {
         for (int j = 0; j < RF_MASK_SIZE; j++) env->agents[i].action_mask[j] = (unsigned char)mask[j];
     }
 }
+static void riskfight_native_reset(Env* env) {
+    RiskfightTrainingStart start = riskfight_training_reset(&env->training,
+        &env->state, &env->context, env->tag);
+    env->log.prefix_terminal += start == RF_START_PREFIX_TERMINAL;
+    env->log.midfight_ticks += env->training.start_tick;
+}
 void puf_reset(Env* env) {
-    riskfight_reset((EncounterState*)&env->state, (EncounterContext*)&env->context, 0);
+    riskfight_native_reset(env);
     riskfight_native_observe(env);
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].rewards[0] = 0;
@@ -77,6 +91,10 @@ void puf_step(Env* env) {
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
+    env->log.scripted_omissions += riskfight_training_actions(&env->training,
+        &env->state, env->tag, actions);
+    env->log.scripted_ticks += env->training.opponent == RF_TRAIN_SCRIPTED;
+    env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].rewards[0] = env->state.rewards[i];
@@ -97,9 +115,9 @@ void puf_step(Env* env) {
         env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
         env->log.chance_reward += env->state.chance_rewards[0];
         env->log.teleport_penalty += env->state.teleport_penalties[0];
-        env->log.episode_length += env->state.env.tick;
+        env->log.episode_length += env->state.env.tick - env->training.start_tick;
         env->log.n++;
-        riskfight_reset((EncounterState*)&env->state, (EncounterContext*)&env->context, 0);
+        riskfight_native_reset(env);
     }
     riskfight_native_observe(env);
 }
@@ -134,4 +152,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "score", log->net_stake);
     dict_set(out, "perf", log->net_stake);
+    dict_set(out, "scripted_ticks", log->scripted_ticks);
+    dict_set(out, "scripted_omissions", log->scripted_omissions);
+    dict_set(out, "midfight_ticks", log->midfight_ticks);
+    dict_set(out, "prefix_terminal", log->prefix_terminal);
 }
