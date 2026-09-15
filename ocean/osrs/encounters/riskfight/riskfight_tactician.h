@@ -185,7 +185,8 @@ static RiskfightEatPlan riskfight_choose_eat(const Player* p, int target) {
     int brew = riskfight_player_find_food(p, OSRS_CONSUMABLE_BREW);
     int halibut = riskfight_player_find_food(p, OSRS_CONSUMABLE_HALIBUT);
     RiskfightEatPlan best = {0, 0, 0, p->current_hitpoints, 0};
-    for (int f = 0; f < 3; f++) for (int b = 0; b < 2; b++) for (int h = 0; h < 2; h++) {
+    for (int f = 0; f < 3; f++) for (int b = 0; b <= (brew != 0); b++) for (int h = 0; h <= (halibut != 0); h++) {
+        if (f > 0 && !foods[f]) continue;
         Player next = *p;
         RiskfightEatPlan candidate = riskfight_eat_candidate(&next, foods[f], b ? brew : 0, h ? halibut : 0);
         if (candidate.clicks < 0) continue;
