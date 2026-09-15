@@ -79,58 +79,57 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     }
 }
 
-static int riskfight_inventory_head_accepts(const Player* p, int head, int slot) {
-    const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
-    if (RF_GEAR_SLOT_BY_HEAD[head] >= 0) {
-        if (m->gear_slot != RF_GEAR_SLOT_BY_HEAD[head]) return 0;
-        if (osrs_can_equip_from_cell(p, p->inventory_cells, slot)) return 1;
-        if (head == RF_SHIELD && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
-            for (int weapon_slot = 0; weapon_slot < OSRS_INVENTORY_SIZE; weapon_slot++) {
-                const OsrsItemContentMetadata* weapon = osrs_inventory_cell_metadata(&p->inventory_cells[weapon_slot]);
-                if (weapon->gear_slot == GEAR_SLOT_WEAPON && !item_is_two_handed(weapon->item_idx) &&
-                    osrs_can_equip_from_cell(p, p->inventory_cells, weapon_slot)) return 1;
-            }
-        }
-        return 0;
-    }
-    if (head == RF_DRINK) return m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
-        (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
-    if (head == RF_COMBO) return m->consumable_kind == OSRS_CONSUMABLE_HALIBUT &&
-        osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
-    return m->click_action == OSRS_CLICK_EAT && m->consumable_kind != OSRS_CONSUMABLE_HALIBUT &&
-        osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
-}
-
 static void riskfight_write_action_mask(const RiskfightState* s, int agent, float* mask) {
     const Player* p = &s->env.players[agent];
     memset(mask, 0, RF_MASK_SIZE * sizeof(float));
+    float* heads[RF_HEADS];
+    float* gear_masks[NUM_GEAR_SLOTS];
+    int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
     int offset = 0;
     for (int head = 0; head < RF_HEADS; head++) {
-        mask[offset] = 1;
-        for (int action = 1; action < RF_ACTION_DIMS[head]; action++) {
-            int allowed = 1;
-            int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
-            if (gear_slot >= 0 && action == RF_UNEQUIP)
-                allowed = p->equipped[gear_slot] != ITEM_NONE &&
-                    osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
-            else if (head <= RF_COMBO || gear_slot >= 0)
-                allowed = riskfight_inventory_head_accepts(p, head, action - 1);
-            if (head == RF_VENGEANCE) allowed = !p->veng_active && p->veng_cooldown <= 1 &&
-                p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
-            if (head == RF_SPECIAL) allowed = p->special_energy >= action * 50;
-            if (head == RF_PRIMARY && action == RF_TELEPORT) {
-                allowed = osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
-                int has_teleport = 0;
-                for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
-                    has_teleport |= osrs_inventory_cell_metadata(&p->inventory_cells[slot])->click_action == OSRS_CLICK_TELEPORT;
-                allowed &= has_teleport;
-            }
-            if (head == RF_PRAYER) allowed = p->current_prayer > 0;
-            mask[offset + action] = allowed;
+        heads[head] = mask + offset;
+        heads[head][0] = 1;
+        int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
+        if (gear_slot >= 0) {
+            gear_masks[gear_slot] = heads[head];
+            heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
+        } else if (head > RF_COMBO) {
+            for (int action = 1; action < RF_ACTION_DIMS[head]; action++) heads[head][action] = 1;
         }
         offset += RF_ACTION_DIMS[head];
     }
     assert(offset == RF_MASK_SIZE);
+    int has_teleport = 0, one_handed_switch = 0, shield_slot = -1;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+        if (m->gear_slot >= 0) {
+            int allowed = osrs_can_equip_metadata(p, m, has_empty);
+            gear_masks[m->gear_slot][slot + 1] = allowed;
+            if (m->gear_slot == GEAR_SLOT_WEAPON && !item_is_two_handed(m->item_idx))
+                one_handed_switch |= allowed;
+            if (m->gear_slot == GEAR_SLOT_SHIELD) shield_slot = slot;
+        }
+        if (m->click_action == OSRS_CLICK_EAT) {
+            int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? RF_COMBO : RF_FOOD;
+            heads[head][slot + 1] = osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
+        }
+        heads[RF_DRINK][slot + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
+            (m->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT || p->current_hitpoints > OSRS_DIVINE_DAMAGE);
+        has_teleport |= m->click_action == OSRS_CLICK_TELEPORT;
+    }
+    if (shield_slot >= 0 && one_handed_switch && item_is_two_handed(p->equipped[GEAR_SLOT_WEAPON])) {
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+            if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->gear_slot == GEAR_SLOT_SHIELD)
+                heads[RF_SHIELD][slot + 1] = 1;
+    }
+    heads[RF_VENGEANCE][1] = !p->veng_active && p->veng_cooldown <= 1 &&
+        p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[agent].vengeance_sacks > 0;
+    for (int action = 1; action < RF_ACTION_DIMS[RF_SPECIAL]; action++)
+        heads[RF_SPECIAL][action] = p->special_energy >= action * 50;
+    heads[RF_PRIMARY][RF_TELEPORT] = has_teleport &&
+        osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
+    for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)
+        heads[RF_PRAYER][action] = p->current_prayer > 0;
 }
 
 static int riskfight_find_kind(const float* obs, OsrsConsumableKind kind) {

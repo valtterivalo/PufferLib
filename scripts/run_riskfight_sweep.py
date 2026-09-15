@@ -13,10 +13,10 @@ from rescore_riskfight_sweep import read_config
 OBJECTIVE_ID = 'riskfight-seven-bot-chance-v1'
 
 
-def stage_resume(source, destination, binary):
+def stage_resume(source, destination, binary, objective_id):
     manifest = json.loads((source / 'manifest.json').read_text())
     assert json.loads((source / 'status.json').read_text())['status'] == 'complete'
-    assert manifest['objective_id'] == OBJECTIVE_ID
+    assert manifest['objective_id'] == objective_id
     assert manifest['binary_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
     destination.mkdir()
     if (source / 'resume').exists():
@@ -32,7 +32,7 @@ def stage_resume(source, destination, binary):
         assert trial in completed | failed, f'Unfinished trial: {path}'
         config = read_config(path)
         if trial in completed:
-            config['resume'] = {'objective_id': OBJECTIVE_ID, 'status': 'success',
+            config['resume'] = {'objective_id': objective_id, 'status': 'success',
                 'score': config['metrics']['selfplay/bot_ladder_perf'],
                 'cost': config['metrics']['uptime']}
         else:
@@ -41,7 +41,7 @@ def stage_resume(source, destination, binary):
                 for line in rows:
                     last = json.loads(line)
             assert last is not None and last['uptime'] > 0
-            config['resume'] = {'objective_id': OBJECTIVE_ID, 'status': 'failed',
+            config['resume'] = {'objective_id': objective_id, 'status': 'failed',
                 'cost': str(last['uptime'])}
         target = destination / path.name
         assert not target.exists(), f'Duplicate resume observation: {target}'
@@ -60,6 +60,7 @@ def main():
     parser.add_argument('--anchor', type=Path, required=True)
     parser.add_argument('--trials', type=int, required=True)
     parser.add_argument('--resume-from', type=Path)
+    parser.add_argument('--objective-id', default=OBJECTIVE_ID)
     args = parser.parse_args()
     assert args.trials > 0
     anchor = read_config(args.anchor)
@@ -72,7 +73,7 @@ def main():
     binary = args.root / 'riskfight'
     shutil.copyfile(args.binary, binary)
     binary.chmod(0o755)
-    imported = stage_resume(args.resume_from, args.root / 'resume', binary) if args.resume_from else 0
+    imported = stage_resume(args.resume_from, args.root / 'resume', binary, args.objective_id) if args.resume_from else 0
     command = [str(binary), 'sweep']
     for section in ('base', 'vec', 'selfplay', 'env', 'policy', 'train', 'bot_eval'):
         command.extend(f'--{section}.{key}={value}' for key, value in anchor[section].items())
@@ -83,16 +84,16 @@ def main():
         '--selfplay.eval_bots=0,1,2,4,5,6,8', '--selfplay.eval_bot_games=256',
         f'--sweep.max_runs={args.trials}', '--sweep.max_suggestion_cost=300',
         f'--sweep.resume_dir={args.root / "resume" if args.resume_from else ""}',
-        f'--sweep.objective_id={OBJECTIVE_ID}'])
+        f'--sweep.objective_id={args.objective_id}'])
     manifest = {
         'git_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.repo, text=True).strip(),
         'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
         'anchor': str(args.anchor), 'command': command, 'eval_bots': [0, 1, 2, 4, 5, 6, 8],
-        'objective_id': OBJECTIVE_ID, 'selection_seed': 73,
+        'objective_id': args.objective_id, 'selection_seed': 73,
         'heldout_bots': [7], 'heldout_seeds': [1009, 2027, 3037],
         'max_suggestion_cost_seconds': 300, 'trials': args.trials,
         'observation_schema': 2, 'observation_size': 349, 'action_heads': 20,
-        'training': 'Current and historical policy self-play',
+        'training': 'Current and historical policy self-play with configurable scripted mixing and midfight starts',
         'score': 'Equal-weight unshaped net stake over seven selection bots',
         'historical_scores_imported': imported,
         'resume_from': str(args.resume_from) if args.resume_from else None,

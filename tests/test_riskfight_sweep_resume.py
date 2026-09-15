@@ -32,7 +32,7 @@ class ResumeTests(unittest.TestCase):
             prior.mkdir()
             (prior / 'sweep_100_0000.ini').write_text('[resume]\nstatus=success\n')
             destination = root / 'resume'
-            self.assertEqual(stage_resume(source, destination, binary), 3)
+            self.assertEqual(stage_resume(source, destination, binary, OBJECTIVE_ID), 3)
             success = read_config(destination / 'sweep_123_0000.ini')
             failure = read_config(destination / 'sweep_123_0001.ini')
             self.assertEqual(success['resume']['score'], '0.25')
@@ -40,9 +40,12 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(failure['resume']['status'], 'failed')
             self.assertEqual(failure['resume']['cost'], '12')
             self.assertNotIn('score', failure['resume'])
+            with self.assertRaises(AssertionError):
+                stage_resume(source, root / 'different-objective', binary, 'supply-aware-exits-v2')
+            self.assertFalse((root / 'different-objective').exists())
             binary.write_bytes(b'changed simulator')
             with self.assertRaises(AssertionError):
-                stage_resume(source, root / 'mismatch', binary)
+                stage_resume(source, root / 'mismatch', binary, OBJECTIVE_ID)
             self.assertFalse((root / 'mismatch').exists())
 
 
