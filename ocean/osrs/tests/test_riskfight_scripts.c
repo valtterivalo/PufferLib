@@ -40,9 +40,21 @@ static int item_count(int item) {
 }
 
 static void test_return_to_one_handed_weapon(void) {
+    // Legacy scripts share the tactician's axe discipline: tentacle default,
+    // axe only as a boosted finisher. At 65 HP vs a full bar the script
+    // holds the tentacle; retarget via a low fresh opponent bar below.
     reset();
     Player* p = &state.env.players[0];
     p->current_hitpoints = 65;
+    p->attack_timer = 0;
+    state.env.tick = 10;
+    riskfight_observe_visible(&state, 0, 1);
+    state.env.tick = 11;
+    state.env.players[1].hit_landed_this_tick = 1;
+    state.env.players[1].hit_damage = 95;
+    state.env.players[1].current_hitpoints = 25;
+    state.env.players[0].special_energy = 0;
+    riskfight_observe_visible(&state, 0, 0);
     int actions[RF_HEADS];
     decide(RISKFIGHT_TRADER, actions);
     execute(actions);
@@ -60,9 +72,20 @@ static void test_return_to_one_handed_weapon(void) {
 }
 
 static void test_joint_weapon_shield_mask(void) {
+    // Same finisher setup as above: boosted 65 HP with a fresh low opponent
+    // bar so the legacy script requests the axe (2H, no empty cell margin).
     reset();
     Player* p = &state.env.players[0];
     p->current_hitpoints = 65;
+    p->attack_timer = 0;
+    state.env.tick = 10;
+    riskfight_observe_visible(&state, 0, 1);
+    state.env.tick = 11;
+    state.env.players[1].hit_landed_this_tick = 1;
+    state.env.players[1].hit_damage = 95;
+    state.env.players[1].current_hitpoints = 25;
+    state.env.players[0].special_energy = 0;
+    riskfight_observe_visible(&state, 0, 0);
     int actions[RF_HEADS];
     decide(RISKFIGHT_TRADER, actions);
     execute(actions);
@@ -112,10 +135,10 @@ static void test_restore_and_boost_priority(void) {
     p->current_strength = 99;
     p->current_defence = 99;
     decide(RISKFIGHT_TRADER, actions);
-    assert(drink_kind(actions) == OSRS_CONSUMABLE_DIVINE_COMBAT);
+    assert(drink_kind(actions) == OSRS_CONSUMABLE_SUPER_COMBAT);
     execute(actions);
     assert(p->current_attack == 118 && p->current_strength == 118 && p->current_defence == 118);
-    assert(p->current_hitpoints == 111);
+    assert(p->current_hitpoints == 121);
 
     reset();
     p->current_magic = 89;

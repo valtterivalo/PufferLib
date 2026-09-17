@@ -22,10 +22,15 @@ static void test_reset_and_equipment(void) {
         assert(p->equipped[GEAR_SLOT_AMMO] == ITEM_NONE);
         assert(p->current_hitpoints == 121 && p->current_prayer == 99);
         assert(p->current_attack == 118 && p->current_strength == 118 && p->current_defence == 118);
+        assert(state.inventory_use[i].divine_combat_ticks == OSRS_DIVINE_DURATION);
         assert(p->veng_active && p->veng_cooldown == 0 && p->special_energy == 100);
         assert(!osrs_interaction_active(&p->interaction));
         for (int slot = 0; slot < 27; slot++) assert(!osrs_inventory_cell_is_empty(&p->inventory_cells[slot]));
         assert(osrs_inventory_cell_is_empty(&p->inventory_cells[27]));
+        // Slot 19 holds regular super combat; no divine exists in the bag.
+        assert(osrs_inventory_cell_metadata(&p->inventory_cells[19])->consumable_kind == OSRS_CONSUMABLE_SUPER_COMBAT);
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+            assert(osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT);
         p->attack_timer = 6;
         use(i, 22);
         assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
@@ -98,12 +103,20 @@ static void test_dharok_recoil(void) {
 static void test_potions(void) {
     reset(); Player* p = &state.env.players[0];
     p->current_hitpoints = 50; use(0, 7);
-    assert(p->current_hitpoints == 66 && p->current_attack == 105 && p->current_magic == 88);
+    // The 100-tick pulse holds the brew drain: no snap-up while divine lasts.
+    // (HP also regens 66 -> 67 on the pulse.)
+    int drained_attack = p->current_attack;
+    for (int i = 0; i < ENCOUNTER_STAT_DRIFT_TICKS; i++)
+        osrs_player_inventory_tick(p, &state.inventory_use[0]);
+    assert(p->current_attack == drained_attack);
+    assert(p->current_hitpoints == 67);
     p->potion_timer = 0; use(0, 17);
     assert(p->current_attack == 105 && p->current_magic == 99);
+    // Regular super combat (slot 19) re-boosts with no HP cost, clock untouched.
+    int ticks_before = state.inventory_use[0].divine_combat_ticks;
     p->potion_timer = 0; use(0, 19);
-    assert(p->current_hitpoints == 56 && p->current_attack == 118);
-    assert(state.inventory_use[0].divine_combat_ticks == OSRS_DIVINE_DURATION);
+    assert(p->current_hitpoints == 67 && p->current_attack == 118);
+    assert(state.inventory_use[0].divine_combat_ticks == ticks_before);
 }
 static void test_vengeance(void) {
     reset(); Player* p = &state.env.players[0];
@@ -269,11 +282,17 @@ static void test_tick_order_and_boundaries(void) {
     use(0, 7); use(0, 9);
     assert(p->current_hitpoints == 36);
     p->potion_timer = 0; use(0, 19);
+    assert(p->current_attack == 118);
     p->potion_timer = 0; use(0, 7);
+    // Pre-pot divine holds the drain: a single pulse tick changes nothing...
     int drained = p->current_attack;
+    // ...but the hold only bites on the 100-tick pulse, so force the pulse.
+    state.inventory_use[0].stat_drift_timer = ENCOUNTER_STAT_DRIFT_TICKS - 1;
     osrs_player_inventory_tick(p, &state.inventory_use[0]);
     assert(p->current_attack == drained);
+    // ...and expiry of the 500-tick clock still snaps boosted stats to base.
     state.inventory_use[0].divine_combat_ticks = 1;
+    state.inventory_use[0].stat_drift_timer = 0;
     p->current_attack = 118;
     osrs_player_inventory_tick(p, &state.inventory_use[0]);
     assert(p->current_attack == 99);

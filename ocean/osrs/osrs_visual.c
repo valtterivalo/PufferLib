@@ -1145,6 +1145,7 @@ static float g_cli_camera_dist = -1.0f;
 static float g_cli_camera_yaw = -1000.0f;
 static float g_cli_camera_pitch = -1000.0f;
 static int g_cli_visual_loadout_mode = -1;
+static int g_cli_hidpi = 0;
 static void visual_policy_init(
     VisualPolicy* policy,
     const EncounterDef* edef,
@@ -1371,6 +1372,12 @@ static void run_policy_profile(
     int actions[VISUAL_POLICY_MAX_ACTION_HEADS] = {0};
     int total_steps = 0;
     int reset_count = 0;
+    int ep_kills = 0, ep_deaths = 0, ep_escapes = 0, ep_mutual = 0;
+    long ep_drink_brew = 0, ep_drink_sanfew = 0, ep_drink_combat = 0;
+    long ep_eat_marlin = 0, ep_eat_halibut = 0, ep_eat_pie = 0;
+    long ep_spec_vw = 0, ep_spec_maul = 0;
+    long ep_tick_tent = 0, ep_tick_axe = 0, ep_tick_vw = 0, ep_tick_maul = 0;
+    long ep_combat_opp = 0, ep_maul_opp = 0, ep_axe_opp = 0;
     double environment_ms = 0.0;
     uint64_t trace_hash = 1469598103934665603ULL;
     double wall_start = osrs_profile_now_seconds();
@@ -1379,7 +1386,6 @@ static void run_policy_profile(
         double start_ms = osrs_profile_now_seconds() * 1000.0;
         edef->write_obs(env->encounter_state, env->encounter_context, policy.obs);
         double end_ms = osrs_profile_now_seconds() * 1000.0;
-        environment_step_ms += end_ms - start_ms;
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_ADD(COLO_PROF_C_WRITE_OBS, end_ms - start_ms);
 #endif
@@ -1422,8 +1428,26 @@ static void run_policy_profile(
 #endif
         trace_hash = osrs_profile_hash_bytes(trace_hash, &reward, sizeof(reward));
         trace_hash = osrs_profile_hash_bytes(trace_hash, &terminal, sizeof(terminal));
-
         if (terminal) {
+            if (encounter_name && strcmp(encounter_name, "riskfight") == 0) {
+                const RiskfightState* rf = (const RiskfightState*)env->encounter_state;
+                switch (rf->outcome[0]) {
+                    case RISKFIGHT_KILL: ep_kills++; break;
+                    case RISKFIGHT_DEATH: ep_deaths++; break;
+                    case RISKFIGHT_ESCAPE: ep_escapes++; break;
+                    case RISKFIGHT_MUTUAL_DEATH: ep_mutual++; break;
+                    default: break;
+                }
+                ep_drink_brew += rf->drink_brew[0]; ep_drink_sanfew += rf->drink_sanfew[0];
+                ep_drink_combat += rf->drink_combat[0];
+                ep_eat_marlin += rf->eat_marlin[0]; ep_eat_halibut += rf->eat_halibut[0];
+                ep_eat_pie += rf->eat_pie[0];
+                ep_spec_vw += rf->spec_voidwaker[0]; ep_spec_maul += rf->spec_maul[0];
+                ep_tick_tent += rf->ticks_tentacle[0]; ep_tick_axe += rf->ticks_axe[0];
+                ep_tick_vw += rf->ticks_voidwaker[0]; ep_tick_maul += rf->ticks_maul[0];
+                ep_combat_opp += rf->combat_opp[0]; ep_maul_opp += rf->maul_opp[0];
+                ep_axe_opp += rf->axe_opp[0];
+            }
             start_ms = end_ms;
             reset_count++;
             edef->reset(env->encounter_state, env->encounter_context,
@@ -1435,7 +1459,6 @@ static void run_policy_profile(
             COLO_PROFILE_ADD(COLO_PROF_C_RESET, end_ms - start_ms);
 #endif
         }
-
 #ifdef COLO_PROFILE_ENABLED
         COLO_PROFILE_ADD(COLO_PROF_C_STEP_TOTAL, environment_step_ms);
 #endif
@@ -1443,10 +1466,18 @@ static void run_policy_profile(
         total_steps++;
     }
     double wall_elapsed = osrs_profile_now_seconds() - wall_start;
-
     printf("Policy profile results:\n");
     printf("  Total steps: %d\n", total_steps);
     printf("  Resets: %d\n", reset_count);
+    if (encounter_name && strcmp(encounter_name, "riskfight") == 0) {
+        printf("  Consumption (agent 0 totals): brew=%ld sanfew=%ld combat=%ld marlin=%ld halibut=%ld pie=%ld\n",
+            ep_drink_brew, ep_drink_sanfew, ep_drink_combat, ep_eat_marlin, ep_eat_halibut, ep_eat_pie);
+        printf("  Specs (agent 0 totals): voidwaker=%ld maul=%ld\n", ep_spec_vw, ep_spec_maul);
+        printf("  Weapon ticks (agent 0, sampled pre-terminal): tentacle=%ld axe=%ld voidwaker=%ld maul=%ld\n",
+            ep_tick_tent, ep_tick_axe, ep_tick_vw, ep_tick_maul);
+        printf("  Opportunities (agent 0 tick-denominators): combat=%ld maul=%ld axe=%ld\n",
+            ep_combat_opp, ep_maul_opp, ep_axe_opp);
+    }
     printf("  Wall time: %.3f seconds\n", wall_elapsed);
     printf("  Environment time: %.3f seconds\n", environment_ms / 1000.0);
     printf("  Environment steps/sec: %.0f\n",
@@ -2368,6 +2399,9 @@ int main(int argc, char** argv) {
     const char* policy_mode_name __attribute__((unused)) = "sample";
     uint32_t policy_seed __attribute__((unused)) = 1;
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "eval") == 0) continue;
+        if (argv[i][0] != '-' && strchr(argv[i], '=') == NULL &&
+            (model_path == NULL || model_path[0] == '\0')) { model_path = argv[i]; continue; }
         if (strcmp(argv[i], "--visual") == 0) use_visual = 1;
         else if (strcmp(argv[i], "--profile") == 0) { use_profile = 1; use_visual = 0; }
         else if (strcmp(argv[i], "--encounter") == 0 && i + 1 < argc)
@@ -2376,7 +2410,8 @@ int main(int argc, char** argv) {
             replay_path = argv[++i];
         else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc)
             model_path = argv[++i];
-        else if (strcmp(argv[i], "--riskfight-opponent") == 0 && i + 1 < argc)
+        else if ((strcmp(argv[i], "--opponent") == 0 ||
+                strcmp(argv[i], "--riskfight-opponent") == 0) && i + 1 < argc)
             g_cli_riskfight_opponent = atoi(argv[++i]);
         else if (strcmp(argv[i], "--policy-mode") == 0 && i + 1 < argc)
             policy_mode_name = argv[++i];
@@ -2390,6 +2425,7 @@ int main(int argc, char** argv) {
             g_cli_entity_encoder = (i + 1 < argc && argv[i + 1][0] != '-') ? atoi(argv[++i]) : 1;
         else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
             g_cli_screenshot_path = argv[++i];
+        else if (strcmp(argv[i], "--hidpi") == 0) g_cli_hidpi = 1;
         else if (strcmp(argv[i], "--screenshot-frame") == 0 && i + 1 < argc)
             g_cli_screenshot_frame = atoi(argv[++i]);
         else if (strcmp(argv[i], "--clip") == 0 && i + 1 < argc) {
@@ -2471,6 +2507,7 @@ int main(int argc, char** argv) {
     if (use_visual) {
 #ifdef OSRS_VISUAL
         visual_init_env_buffers(&env);
+        if (g_cli_hidpi) SetConfigFlags(FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
         if (gear_tier >= 0 && gear_tier <= 3) {
             for (int t = 0; t < 4; t++) env.pvp_runtime.gear_tier_weights[t] = 0.0f;
             env.pvp_runtime.gear_tier_weights[gear_tier] = 1.0f;

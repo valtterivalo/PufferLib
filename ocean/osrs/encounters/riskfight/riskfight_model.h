@@ -67,8 +67,28 @@ typedef struct {
     float direct_ko_chance_mass[2];
     float chance_rewards[2];
     float teleport_penalties[2];
+    // Consumption + weapon metrics (policy-side only, never observed):
+    // drink/eat/spec event counts per episode and per-tick equipped-weapon
+    // samples. Reset in riskfight_reset; puf_step aggregates agent 0.
+    int drink_brew[2];
+    int drink_sanfew[2];
+    int drink_combat[2];
+    int eat_marlin[2];
+    int eat_halibut[2];
+    int eat_pie[2];
+    int spec_voidwaker[2];
+    int spec_maul[2];
+    // Opportunity denominators (per tick, pre-terminal, agent-indexed):
+    // combat_opp = drained (atk/str/def < 110... see step site) + timer free.
+    // maul_opp = maul equipped + energy>=50. axe_opp = finisher gate open.
+    int combat_opp[2];
+    int maul_opp[2];
+    int axe_opp[2];
+    int ticks_tentacle[2];
+    int ticks_axe[2];
+    int ticks_voidwaker[2];
+    int ticks_maul[2];
 } RiskfightState;
-
 typedef struct {
     const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
@@ -186,6 +206,9 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         memcpy(p->equipped, equipment, sizeof(equipment));
         osrs_refresh_player_equipment(p);
         pvp_refresh_visible_gear(p);
+        // Divine pre-pot: full 500-tick clock, no HP cost. The bag carries
+        // regular super combat for brew-drain re-boosts (no clock refresh).
+        s->inventory_use[i].divine_combat_ticks = OSRS_DIVINE_DURATION;
         int slot = 0;
         const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
             {OSRS_CONSUMABLE_SUMMER_PIE, 2, 3},
@@ -193,7 +216,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
             {OSRS_CONSUMABLE_BREW, 4, 2},
             {OSRS_CONSUMABLE_MARLIN, 0, 8},
             {OSRS_CONSUMABLE_SANFEW, 4, 2},
-            {OSRS_CONSUMABLE_DIVINE_COMBAT, 4, 1},
+            {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
             {OSRS_CONSUMABLE_TELEPORT, 0, 1},
             {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
         };

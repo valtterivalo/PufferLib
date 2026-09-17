@@ -23,6 +23,11 @@ struct Log {
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
+    float drink_brew, drink_sanfew, drink_combat;
+    float eat_marlin, eat_halibut, eat_pie;
+    float spec_voidwaker, spec_maul;
+    float combat_opp, maul_opp, axe_opp;
+    float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
 };
 struct Env {
     Log log;
@@ -98,6 +103,21 @@ void puf_step(Env* env) {
         &env->state, env->tag, actions);
     env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
+    // Weapon-tick samples accrue in state every tick; drain agent-0 samples
+    // into the log now so a mid-episode reset never double-counts. Agent-1
+    env->log.ticks_tentacle += env->state.ticks_tentacle[0];
+    env->log.ticks_axe += env->state.ticks_axe[0];
+    env->log.ticks_voidwaker += env->state.ticks_voidwaker[0];
+    env->log.ticks_maul += env->state.ticks_maul[0];
+    env->log.combat_opp += env->state.combat_opp[0];
+    env->log.maul_opp += env->state.maul_opp[0];
+    env->log.axe_opp += env->state.axe_opp[0];
+    env->state.ticks_tentacle[0] = env->state.ticks_axe[0] = 0;
+    env->state.ticks_voidwaker[0] = env->state.ticks_maul[0] = 0;
+    env->state.ticks_tentacle[1] = env->state.ticks_axe[1] = 0;
+    env->state.ticks_voidwaker[1] = env->state.ticks_maul[1] = 0;
+    env->state.combat_opp[0] = env->state.maul_opp[0] = env->state.axe_opp[0] = 0;
+    env->state.combat_opp[1] = env->state.maul_opp[1] = env->state.axe_opp[1] = 0;
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].rewards[0] = env->state.rewards[i];
         env->agents[i].terminals[0] = env->state.env.episode_over;
@@ -139,18 +159,14 @@ void puf_step(Env* env) {
         env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
         env->log.draw_rate += net_stake == 0;
         env->log.net_stake += net_stake;
-        env->log.episode_return += env->state.episode_returns[0];
-        env->log.damage_reward += env->state.damage_rewards[0];
-        env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
-        env->log.chance_reward += env->state.chance_rewards[0];
-        env->log.teleport_penalty += env->state.teleport_penalties[0];
-        env->log.episode_length += env->state.env.tick - env->training.start_tick;
-        if (env->training.opponent == RF_TRAIN_SCRIPTED)
-            env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
-        env->log.scripted_omissions += env->training.omissions;
-        env->log.midfight_ticks += env->training.start_tick;
-        env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
-        env->log.n++;
+        env->log.drink_brew += env->state.drink_brew[0];
+        env->log.drink_sanfew += env->state.drink_sanfew[0];
+        env->log.drink_combat += env->state.drink_combat[0];
+        env->log.eat_marlin += env->state.eat_marlin[0];
+        env->log.eat_halibut += env->state.eat_halibut[0];
+        env->log.eat_pie += env->state.eat_pie[0];
+        env->log.spec_voidwaker += env->state.spec_voidwaker[0];
+        env->log.spec_maul += env->state.spec_maul[0];
         riskfight_native_reset(env);
     }
     riskfight_native_observe(env);
@@ -198,4 +214,16 @@ void puf_log(Log* log, Dict* out) {
     for (int i = 0; i < 4; i++) dict_set(out, healing_keys[i], log->self_escape_healing[i]);
     dict_set(out, "self_escape_no_boost", log->self_escape_no_boost);
     dict_set(out, "self_escape_both_no_special", log->self_escape_both_no_special);
+    dict_set(out, "drink_brew", log->drink_brew);
+    dict_set(out, "drink_sanfew", log->drink_sanfew);
+    dict_set(out, "drink_combat", log->drink_combat);
+    dict_set(out, "eat_marlin", log->eat_marlin);
+    dict_set(out, "eat_halibut", log->eat_halibut);
+    dict_set(out, "eat_pie", log->eat_pie);
+    dict_set(out, "spec_voidwaker", log->spec_voidwaker);
+    dict_set(out, "spec_maul", log->spec_maul);
+    dict_set(out, "combat_opp", log->combat_opp);
+    dict_set(out, "maul_opp", log->maul_opp);
+    dict_set(out, "axe_opp", log->axe_opp);
+    dict_set(out, "ticks_tentacle", log->ticks_tentacle);
 }

@@ -83,9 +83,13 @@ static void test_veng_armour_and_hidden_state(void) {
     float obs[RF_OBS_SIZE], changed[RF_OBS_SIZE];
     int actions[RF_HEADS], repeated[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
+    // Tentacle is the default (axe is a low-HP finisher only): with full
+    // supplies the weapon head stays 0 and all three armour pieces unequip
+    // for the vengeance bait.
     riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
     assert(actions[RF_VENGEANCE]);
-    assert(actions[RF_HEAD] == RF_UNEQUIP && actions[RF_BODY] == RF_UNEQUIP && actions[RF_LEGS] == 0);
+    assert(actions[RF_WEAPON] == 0);
+    assert(actions[RF_HEAD] == RF_UNEQUIP && actions[RF_BODY] == RF_UNEQUIP && actions[RF_LEGS] == RF_UNEQUIP);
     state.env.players[1].attack_timer = 99;
     state.env.players[1].special_energy = 0;
     state.env.players[1].inventory_cells[0] = osrs_inventory_cell_empty();
@@ -187,6 +191,56 @@ static void test_weapon_switch_does_not_reset_observed_readiness(void) {
     obs[RF_OPPONENT_START + GEAR_SLOT_SHIELD] = (float)ITEM_NONE / RF_OBSERVATION_ITEM_SCALE;
     assert(riskfight_threat_window(obs).ticks_until == remaining);
 }
+static void test_dharok_finisher_discipline(void) {
+    // Helper gates: unboosted HP, idle tick, or full-bar opponent never axe.
+    assert(!riskfight_dharok_finisher(1, 121, 99, 60, 30, 60,
+        RISKFIGHT_CONTINUE, 0, 0));
+    assert(!riskfight_dharok_finisher(0, 50, 99, 60, 30, 60,
+        RISKFIGHT_CONTINUE, 0, 0));
+    assert(!riskfight_dharok_finisher(1, 50, 99, 60, 121, 60,
+        RISKFIGHT_CONTINUE, 0, 0));
+    // Boosted + fresh low upper bound within axe_max + margin: finisher.
+    assert(riskfight_dharok_finisher(1, 50, 99, 60, 90, 60,
+        RISKFIGHT_CONTINUE, 0, 0));
+    // Reflecting an incoming animation is a finisher even at high upper.
+    assert(riskfight_dharok_finisher(1, 50, 99, 60, 121, 60,
+        RISKFIGHT_CONTINUE, 1, 1));
+    // Profile: at 121 HP vs a full bar the tactician holds the tentacle...
+    reset();
+    float obs[RF_OBS_SIZE];
+    int actions[RF_HEADS];
+    riskfight_write_observation(&state, 0, obs);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    assert(actions[RF_WEAPON] == 0);
+    // ...stays tentacle between hits (attack_timer > 1)...
+    state.env.players[0].attack_timer = 4;
+    state.env.players[0].current_hitpoints = 50;
+    riskfight_write_observation(&state, 0, obs);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    assert(actions[RF_WEAPON] == 0);
+    // ...and may axe only with a fresh low opponent upper, own ready, and
+    // boosted HP: force a fresh hit event with a low bar (upper ~27) while
+    // own HP is safe enough to skip eating (threat ~51, HP 80).
+    reset();
+    state.env.players[0].attack_timer = 0;
+    state.env.players[0].current_hitpoints = 60;
+    state.env.players[0].special_energy = 0;
+    riskfight_observe_visible(&state, 0, 1);
+    state.env.tick = 11;
+    state.env.players[1].hit_landed_this_tick = 1;
+    state.env.players[1].hit_damage = 95;
+    state.env.players[1].current_hitpoints = 25;
+    riskfight_observe_visible(&state, 0, 0);
+    riskfight_write_observation(&state, 0, obs);
+    RiskfightInferredHp hp = riskfight_inferred_opponent_hp(obs);
+    assert(hp.evidence == RISKFIGHT_HP_FRESH && hp.range.upper <= 60);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    int axe_slot = 0;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        if (osrs_inventory_cell_metadata(&state.env.players[0].inventory_cells[i])->item_idx == ITEM_DHAROKS_GREATAXE)
+            axe_slot = i + 1;
+    assert(axe_slot > 0 && actions[RF_WEAPON] == axe_slot);
+}
 
 static void test_profile_determinism_and_masks(void) {
     const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
@@ -236,6 +290,7 @@ int main(void) {
     test_retained_health_evidence();
     test_weapon_switch_does_not_reset_observed_readiness();
     test_profile_determinism_and_masks();
+    test_dharok_finisher_discipline();
     puts("Riskfight tactician contracts passed");
     return 0;
 }

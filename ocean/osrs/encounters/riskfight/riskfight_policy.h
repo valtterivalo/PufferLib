@@ -3,7 +3,7 @@
 #include "riskfight_model.h"
 
 enum {
-    RF_OBSERVATION_SCHEMA_VERSION = 2,
+    RF_OBSERVATION_SCHEMA_VERSION = 3,
     RF_OBSERVATION_TICK_SCALE = 1024,
     RF_OBSERVATION_TILE_SCALE = 64,
     RF_OBSERVATION_ITEM_SCALE = 256,
@@ -33,7 +33,13 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         (float)s->env.tick / RF_OBSERVATION_TICK_SCALE,
         (float)(p->x - FIGHT_AREA_BASE_X - FIGHT_AREA_WIDTH / 2) / RF_OBSERVATION_TILE_SCALE,
         (float)(p->y - FIGHT_AREA_BASE_Y - FIGHT_AREA_HEIGHT / 2) / RF_OBSERVATION_TILE_SCALE,
-        (float)p->has_attack_timer,
+        // Maul preparation state: SELECTED exposes spec_armed (obs 13), but
+        // DESELECTED (double armed, 2 paid hits queued, 3-tick expiry) is
+        // otherwise identical to idle. Without this the double-spec skill is
+        // unlearnable: the commit tick looks exactly like doing nothing.
+        // Scale: prepared_hits / 2 (0, 0.5, 1). Replaces the reserved
+        // has_attack_timer bit (derivable from attack_timer anyway).
+        (float)s->env.pvp_runtime.maul[agent].prepared_hits / 2.0f,
     };
     memcpy(obs, self, sizeof(self));
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -184,15 +190,55 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
             if (!actions[RF_DRINK])
                 actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
         }
-        if (!actions[RF_DRINK] && hp >= threshold && hp > OSRS_DIVINE_DAMAGE &&
+        if (!actions[RF_DRINK] && hp >= threshold &&
                 (attack < 110 || strength < 110 || defence < 110))
-            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_DIVINE_COMBAT);
+            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
     }
     if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
-    uint8_t weapon = hp < 70 ? ITEM_DHAROKS_GREATAXE : ITEM_ABYSSAL_TENTACLE;
-    if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.5f && opponent[0] < 0.65f) {
-        weapon = obs[6] >= 1 && opponent[0] < 0.4f ? ITEM_GRANITE_MAUL_ORNATE : ITEM_VOIDWAKER;
-        actions[RF_SPECIAL] = weapon == ITEM_GRANITE_MAUL_ORNATE ? 2 : 1;
+    // Axe discipline shared with the tactician: tentacle default, axe only
+    // as a boosted low-HP finisher (recorded one-tick lethal switch, not
+    // camping). Legacy scripts lack exit/threat state, so evaluate with
+    // CONTINUE, non-reflecting, and the fresh bar upper bound.
+    uint8_t weapon = ITEM_ABYSSAL_TENTACLE;
+    {
+        int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+        OsrsHealthBarRange opp_hp =
+            osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+        int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
+        Player probe = riskfight_observed_self(obs);
+        probe.equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
+        probe.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        int hp_lower = probe.current_hitpoints < 1 ? 1 : probe.current_hitpoints;
+        OsrsMeleeThreat axe = osrs_melee_threat(probe.equipped,
+            calculate_effective_strength(&probe, ATTACK_STYLE_MELEE),
+            probe.base_hitpoints, hp_lower, probe.special_energy);
+        int ready = probe.attack_timer <= 1;
+        if (riskfight_dharok_finisher(ready, probe.current_hitpoints,
+                probe.base_hitpoints, axe.normal_max, opp_upper, 60,
+                RISKFIGHT_CONTINUE, 0, 0))
+            weapon = ITEM_DHAROKS_GREATAXE;
+    }
+    // Granite-maul double (ornate, 50+50): the recorded KO line is
+    // [equip maul, toggle, toggle, target-click] in ONE tick for ~76 into a
+    // ~60-HP opponent (vs voidwaker ~61 ceiling at 50 energy). Teach it only
+    // where the model can afford to learn it: full 100 energy, adjacent
+    // (instant), fresh low opp bar, and boosted own HP (post-axe-trade zone).
+    // Single toggle (SELECTED, obs13=1) is the visible half; the double
+    // commit (DESELECTED, obs23=1) is now observable too (schema 3).
+    if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.99f && opponent[0] < 0.65f) {
+        int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+        OsrsHealthBarRange opp_hp =
+            osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+        if (opp_hp.kind == OSRS_HEALTH_BAR_KNOWN && opp_hp.upper <= 76 && hp < 99) {
+            weapon = ITEM_GRANITE_MAUL_ORNATE;
+            actions[RF_SPECIAL] = 2;
+        } else {
+            weapon = ITEM_VOIDWAKER;
+            actions[RF_SPECIAL] = 1;
+        }
+    } else if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.5f && opponent[0] < 0.65f) {
+        weapon = ITEM_VOIDWAKER;
+        actions[RF_SPECIAL] = 1;
     }
     actions[RF_WEAPON] = riskfight_find_gear(obs, weapon);
     if (!item_is_two_handed(weapon))

@@ -36,6 +36,9 @@ static void riskfight_attack(RiskfightState* s, int agent) {
         s->escaped[agent] || s->escaped[1 - agent] ||
         !is_in_melee_range(p, opponent) || !can_attack_now(p) ||
         s->env.pvp_runtime.maul[agent].last_special_tick == s->env.tick) return;
+    // Spec attribution before disarm: only non-maul armed specials flow
+    // through here (maul resolves via pvp_maul_* paths below).
+    if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
     perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
         chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
     riskfight_record_attack(s, agent, 1, 0);
@@ -53,15 +56,39 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM: {
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
+            // Pre-command kind for exact drink/eat attribution: the shared
+            // drink helper collapses all drinks into one timer flag.
+            OsrsConsumableKind pre_kind = OSRS_CONSUMABLE_NONE;
+            OsrsClickAction pre_click = OSRS_CLICK_NONE;
+            {
+                const OsrsItemContentMetadata* pre_meta =
+                    osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot]);
+                pre_click = (OsrsClickAction)pre_meta->click_action;
+                if (pre_click == OSRS_CLICK_DRINK || pre_click == OSRS_CLICK_EAT)
+                    pre_kind = (OsrsConsumableKind)pre_meta->consumable_kind;
+            }
             if (osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot])->gear_slot >= 0)
                 s->last_unequip_result[agent] = OSRS_UNEQUIP_SUCCESS;
-            s->escaped[agent] = osrs_player_use_inventory(p, &s->inventory_use[agent],
+            OsrsInventoryUseResult use_result = osrs_player_use_inventory(p, &s->inventory_use[agent],
                 &s->env.pvp_runtime.teleport[agent], command->inventory_slot,
-                s->env.tick) == OSRS_INVENTORY_USE_ESCAPED;
+                s->env.tick);
+            s->escaped[agent] = use_result == OSRS_INVENTORY_USE_ESCAPED;
             if (s->escaped[agent]) {
                 s->escape_tick[agent] = s->env.tick;
                 for (int i = 0; i < 2; i++)
                     s->escape_supplies[agent][i] = osrs_escape_supplies(&s->env.players[i]);
+            }
+            if (use_result == OSRS_INVENTORY_USE_CONSUMED) {
+                switch (pre_kind) {
+                    case OSRS_CONSUMABLE_BREW: s->drink_brew[agent]++; break;
+                    case OSRS_CONSUMABLE_SANFEW: s->drink_sanfew[agent]++; break;
+                    case OSRS_CONSUMABLE_SUPER_COMBAT:
+                    case OSRS_CONSUMABLE_DIVINE_COMBAT: s->drink_combat[agent]++; break;
+                    case OSRS_CONSUMABLE_MARLIN: s->eat_marlin[agent]++; break;
+                    case OSRS_CONSUMABLE_HALIBUT: s->eat_halibut[agent]++; break;
+                    case OSRS_CONSUMABLE_SUMMER_PIE: s->eat_pie[agent]++; break;
+                    default: break;
+                }
             }
             pvp_maul_weapon_changed(&s->env, agent, old_weapon);
             pvp_refresh_visible_gear(p);
@@ -77,22 +104,33 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_STOP:
             riskfight_stop(s, agent);
             break;
-        case HUMAN_COMMAND_WALK:
-            riskfight_stop(s, agent);
-            s->env.pvp_runtime.walk_dest_x[agent] = command->world_x;
-            s->env.pvp_runtime.walk_dest_y[agent] = command->world_y;
-            break;
         case HUMAN_COMMAND_ATTACK_NPC:
+            // Target lock (no-op when already locked). Queued BEFORE the
+            // spec toggles for maul (see policy_commands): the release
+            // toggle's target click needs pending_target set by
+            // pvp_maul_target_click, which needs the lock held first.
             osrs_interaction_set(&p->interaction, 1 - agent);
             s->env.pvp_runtime.walk_dest_x[agent] = -1;
             s->env.pvp_runtime.walk_dest_y[agent] = -1;
             if (!s->escaped[1 - agent])
                 riskfight_record_attack(s, agent, pvp_maul_target_click(&s->env, agent, 1 - agent), 1);
             break;
+        case HUMAN_COMMAND_WALK:
+            riskfight_stop(s, agent);
+            s->env.pvp_runtime.walk_dest_x[agent] = command->world_x;
+            s->env.pvp_runtime.walk_dest_y[agent] = command->world_y;
+            break;
         case HUMAN_COMMAND_SPEC_TOGGLE:
-            if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]))
+            if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) {
+                int before = p->special_energy;
                 pvp_maul_special_click(&s->env, agent);
-            else
+                // The release toggle (SELECTED -> DESELECTED) fires the
+                // queued pair through the target click queued later this
+                // tick, so energy is spent inside execute_command, not at
+                // the finish_inputs drain. Count paid releases here.
+                if (before >= 50 && p->special_energy < before)
+                    s->spec_maul[agent]++;
+            } else
                 p->spec_armed = !p->spec_armed;
             break;
         case HUMAN_COMMAND_VENGEANCE:
@@ -157,9 +195,9 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
         .offensive_prayer = actions[RF_PRAYER]});
     human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_FIGHT_STYLE,
         .fight_style = actions[RF_STYLE]});
+    int primary = actions[RF_PRIMARY];
     for (int n = 0; n < actions[RF_SPECIAL]; n++)
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
-    int primary = actions[RF_PRIMARY];
     if (primary == RF_STOP)
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
     else if (primary == RF_ATTACK)
@@ -249,8 +287,14 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         const HumanCommandQueue* queue = queues[i];
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
-        if (!s->escaped[0] && !s->escaped[1])
-            riskfight_record_attack(s, i, pvp_maul_finish_inputs(&s->env, i), 1);
+        if (!s->escaped[0] && !s->escaped[1]) {
+            int maul_hits = pvp_maul_finish_inputs(&s->env, i);
+            // Maul double-spec resolves instantly here (DESELECTED state is
+            // invisible in obs), so count paid maul specials at this site.
+            if (maul_hits > 0 && pvp_is_maul(s->env.players[i].equipped[GEAR_SLOT_WEAPON]))
+                s->spec_maul[i]++;
+            riskfight_record_attack(s, i, maul_hits, 1);
+        }
     }
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
@@ -280,6 +324,43 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         if (p->potion_timer > 0) p->potion_timer--;
         if (p->karambwan_timer > 0) p->karambwan_timer--;
         osrs_player_inventory_tick(p, &s->inventory_use[i]);
+        // Equipped-weapon tick sample (post-step, post-equip state).
+        if (!s->env.episode_over) {
+            int weapon = p->equipped[GEAR_SLOT_WEAPON];
+            if (weapon == ITEM_ABYSSAL_TENTACLE) s->ticks_tentacle[i]++;
+            else if (weapon == ITEM_DHAROKS_GREATAXE) s->ticks_axe[i]++;
+            else if (weapon == ITEM_VOIDWAKER) s->ticks_voidwaker[i]++;
+            else if (pvp_is_maul(weapon)) s->ticks_maul[i]++;
+            // Opportunity denominators: was the skipped tool LEGAL+USEFUL here?
+            int drained = p->current_attack < 110 || p->current_strength < 110 ||
+                p->current_defence < 110;
+            if (drained && p->potion_timer == 0) {
+                int has_combat = 0;
+                for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+                    OsrsConsumableKind k = (OsrsConsumableKind)
+                        osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind;
+                    if (k == OSRS_CONSUMABLE_SUPER_COMBAT || k == OSRS_CONSUMABLE_DIVINE_COMBAT) {
+                        has_combat = 1;
+                        break;
+                    }
+                }
+                if (has_combat) s->combat_opp[i]++;
+            }
+            if (pvp_is_maul(weapon) && p->special_energy >= 50) s->maul_opp[i]++;
+            if (weapon != ITEM_DHAROKS_GREATAXE && p->current_hitpoints < p->base_hitpoints &&
+                    p->attack_timer <= 1) {
+                // Cheap axe-gate proxy (full helper needs opp-HP inference):
+                // boosted + ready + axe in bag. Overcounts slightly vs the
+                // true finisher gate, which also requires a fresh low opp bar.
+                for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+                    if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx ==
+                            ITEM_DHAROKS_GREATAXE) {
+                        s->axe_opp[i]++;
+                        break;
+                    }
+                }
+            }
+        }
     }
     s->env.tick++;
     pvp_tick_priority(&s->env);

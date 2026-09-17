@@ -565,6 +565,7 @@ typedef struct {
     int ate_food_this_tick;
     int ate_karambwan_this_tick;
     int used_special_this_tick;
+    int teleported_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;
     uint32_t npc_instance_id;
@@ -661,6 +662,7 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->hit_spell_type = 0;
     out->elysian_proc_this_tick = p->elysian_proc_this_tick;
     out->cast_veng_this_tick = p->cast_veng_this_tick;
+    out->teleported_this_tick = 0;
     out->ate_food_this_tick = p->ate_food_this_tick;
     out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
     out->used_special_this_tick = p->used_special_this_tick;
@@ -1515,6 +1517,42 @@ static inline int encounter_drift_stat_toward_base_with_floor(
     return 0;
 }
 
+// Divine-hold drift: decay stops at the floor but drained stats stay low
+// until an explicit re-boost. No snap-up: current < floor holds (except
+// natural recovery when below base), current == floor holds, current >
+// floor decays toward the floor. Colosseum keeps the snap-up variant above.
+static inline int encounter_drift_stat_toward_base_hold_floor(
+    int* current,
+    int base,
+    int floor
+) {
+    if (floor > base) {
+        if (*current >= floor) {
+            if (*current == floor) return 0;
+            if (*current > base) {
+                *current -= 1;
+                if (*current < floor) *current = floor;
+                return 1;
+            }
+            return 0;
+        }
+        if (*current < base) {
+            *current += 1;
+            return 1;
+        }
+        return 0;
+    }
+    if (*current > base) {
+        *current -= 1;
+        return 1;
+    }
+    if (*current < base) {
+        *current += 1;
+        return 1;
+    }
+    return 0;
+}
+
 static inline int encounter_tick_stat_drift(
     Player* p,
     int* stat_drift_timer,
@@ -1533,6 +1571,38 @@ static inline int encounter_tick_stat_drift(
     changed |= encounter_drift_stat_toward_base_with_floor(
         &p->current_strength, p->base_strength, pins.strength_floor);
     changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_defence, p->base_defence, pins.defence_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_ranged, p->base_ranged, pins.ranged_floor);
+    changed |= encounter_drift_stat_toward_base_with_floor(
+        &p->current_magic, p->base_magic, pins.magic_floor);
+    if (p->current_hitpoints > 0)
+        changed |= encounter_decay_stat_toward_base(&p->current_hitpoints, p->base_hitpoints);
+    return changed;
+}
+
+// Shared PvP tick: divine holds the super-combat floor against decay only.
+// Skips the snap-up enforce so brew/restore drains below the floor persist
+// until a super-combat or divine re-boost. Colosseum stays on the snap-up
+// tick above.
+static inline int encounter_tick_stat_drift_hold_high(
+    Player* p,
+    int* stat_drift_timer,
+    EncounterStatDriftPins pins
+) {
+    assert(p && stat_drift_timer);
+    assert(*stat_drift_timer >= 0 && *stat_drift_timer < ENCOUNTER_STAT_DRIFT_TICKS);
+
+    *stat_drift_timer += 1;
+    if (*stat_drift_timer < ENCOUNTER_STAT_DRIFT_TICKS) return 0;
+    *stat_drift_timer = 0;
+
+    int changed = 0;
+    changed |= encounter_drift_stat_toward_base_hold_floor(
+        &p->current_attack, p->base_attack, pins.attack_floor);
+    changed |= encounter_drift_stat_toward_base_hold_floor(
+        &p->current_strength, p->base_strength, pins.strength_floor);
+    changed |= encounter_drift_stat_toward_base_hold_floor(
         &p->current_defence, p->base_defence, pins.defence_floor);
     changed |= encounter_drift_stat_toward_base_with_floor(
         &p->current_ranged, p->base_ranged, pins.ranged_floor);

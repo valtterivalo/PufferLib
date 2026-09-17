@@ -8,7 +8,7 @@
 enum {
     OSRS_LOCATOR_ORB_DAMAGE = 10,
     OSRS_DIVINE_DAMAGE = 10,
-    OSRS_DIVINE_DURATION = 500,
+    OSRS_DIVINE_DURATION = ENCOUNTER_DIVINE_POTION_TICKS,
     OSRS_VENGEANCE_COOLDOWN = 50,
     OSRS_VENGEANCE_MAGIC_LEVEL = 94,
 };
@@ -135,12 +135,9 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
 
 static inline void osrs_player_inventory_tick(Player* p, OsrsInventoryUseState* state) {
     EncounterStatDriftPins pins = encounter_stat_drift_no_pins();
-    if (state->divine_combat_ticks > 0) {
-        pins.attack_floor = p->current_attack;
-        pins.strength_floor = p->current_strength;
-        pins.defence_floor = p->current_defence;
-    }
-    encounter_tick_stat_drift(p, &state->stat_drift_timer, pins);
+    if (state->divine_combat_ticks > 0)
+        pins = encounter_merge_stat_drift_pins(pins, encounter_divine_super_combat_pins(p));
+    encounter_tick_stat_drift_hold_high(p, &state->stat_drift_timer, pins);
     if (state->divine_combat_ticks > 0 && --state->divine_combat_ticks == 0) {
         if (p->current_attack > p->base_attack) p->current_attack = p->base_attack;
         if (p->current_strength > p->base_strength) p->current_strength = p->base_strength;

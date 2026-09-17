@@ -38,7 +38,7 @@ int main(void) {
     assert(riskfight_exit_decision(&p, threat, OSRS_ESCAPE_TRIPLE_EATS, 1, 0, 0, 50) == RISKFIGHT_RETREAT);
     p = state.env.players[0];
     p.attack_timer = 7;
-    remove_kind(&p, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    remove_kind(&p, OSRS_CONSUMABLE_SUPER_COMBAT);
     assert(riskfight_exit_decision(&p, threat, OSRS_ESCAPE_DOUBLE_EATS, 1, 0, 0, 50) == RISKFIGHT_CONTINUE);
     p.current_attack = p.base_attack;
     p.current_strength = p.base_strength;

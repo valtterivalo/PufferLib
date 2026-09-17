@@ -3281,6 +3281,7 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
         if (p->npc_anim_id >= 0 ||
             p->attack_style_this_tick != ATTACK_STYLE_NONE ||
             p->cast_veng_this_tick ||
+            p->teleported_this_tick ||
             p->ate_food_this_tick ||
             p->ate_karambwan_this_tick ||
             p->used_special_this_tick ||
@@ -3411,6 +3412,23 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 }
             }
         }
+        // Lunar vengeance cast flash on the caster (footage spotanim 726).
+        // Render-only: sim timing/flags untouched. Missing-asset path returns
+        // -1 without aborting, matching the splash-fallback convention below.
+        if (p->cast_veng_this_tick)
+            effect_spawn_spotanim(rc->effects, GFX_VENGEANCE,
+                p->x, p->y, ct, rc->spotanims, rc->anim_cache,
+                rc->model_cache, rc->npc_model_cache,
+                rc->projectile_model_cache);
+        // Teleport-tablet departure flash on the escape frame (gfx 678).
+        // Render-only: sim escape/episode timing untouched. Hide is handled
+        // by the episode freeze (viewer holds the last frame 2s); no entity
+        // visibility state changes here.
+        if (p->teleported_this_tick)
+            effect_spawn_spotanim(rc->effects, GFX_TELEPORT_BREAK,
+                p->x, p->y, ct, rc->spotanims, rc->anim_cache,
+                rc->model_cache, rc->npc_model_cache,
+                rc->projectile_model_cache);
     }
 
     if (env->encounter_def && env->encounter_state) {
@@ -3902,6 +3920,18 @@ static int render_select_primary(RenderEntity* p) {
     if (p->current_hitpoints <= 0) return ANIM_SEQ_DEATH;
 
     if (p->attack_style_this_tick != ATTACK_STYLE_NONE) {
+        // Voidwaker special is tagged ATTACK_STYLE_MAGIC for prayer/hitsplat
+        // routing, but its cast is a melee weapon swing (fallback anim 1378),
+        // never a barrage pose. Resolve via the weapon-special path first.
+        if (p->used_special_this_tick) {
+            int special_anim = osrs_combat_visual_weapon_attack_anim_for_fight_style(
+                p->equipped[GEAR_SLOT_WEAPON],
+                ATTACK_STYLE_MELEE,
+                p->fight_style,
+                1,
+                OSRS_COMBAT_VISUAL_NO_ANIMATION);
+            if (special_anim != OSRS_COMBAT_VISUAL_NO_ANIMATION) return special_anim;
+        }
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
             uint8_t wpn = p->equipped[GEAR_SLOT_WEAPON];
             return osrs_combat_visual_magic_attack_anim_for_fight_style(

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ocean/osrs/osrs_encounter.h"
+#include "ocean/osrs/osrs_combat_visuals.h"
 #include "ocean/osrs/osrs_special_attacks.h"
 
 #include "ocean/osrs/tests/osrs_test_check.h"
@@ -207,6 +208,24 @@ static void test_stat_drift_laws(void) {
     pins = encounter_divine_ranging_pins(&p);
     drift_ticks(&p, &timer, pins, ENCOUNTER_STAT_DRIFT_TICKS * 3);
     CHECK("divine ranging pins ranged through drift", p.current_ranged == 112);
+}
+
+static void test_voidwaker_special_visual(void) {
+    printf("test_voidwaker_special_visual\n");
+    // Footage + deob: voidwaker special (Disrupt) is a melee weapon swing,
+    // anim 1378 — never the barrage cast pose 1979 the MAGIC branch defaults
+    // to for non-powered-staff weapons.
+    int vw = ITEM_VOIDWAKER;
+    CHECK("voidwaker special resolves to melee swing 1378",
+        osrs_combat_visual_weapon_attack_anim_for_fight_style(
+            (uint8_t)vw, ATTACK_STYLE_MELEE, FIGHT_STYLE_AGGRESSIVE, 1, 422) == 1378);
+    const OsrsCombatVisualRow* row =
+        osrs_combat_visual_find_special_item_id(27690, ATTACK_STYLE_MELEE);
+    CHECK("voidwaker KIND_SPECIAL row carries anim 1378",
+        row && row->attack_anim_id == 1378);
+    CHECK("voidwaker ordinary swing stays 390",
+        osrs_combat_visual_weapon_attack_anim_for_fight_style(
+            (uint8_t)vw, ATTACK_STYLE_MELEE, FIGHT_STYLE_AGGRESSIVE, 0, 422) == 390);
 }
 
 static void test_spec_costs_and_sgs(void) {
@@ -644,6 +663,7 @@ static void test_item_effect_laws(void) {
 int main(void) {
     test_consumable_amounts_and_laws();
     test_stat_drift_laws();
+    test_voidwaker_special_visual();
     test_spec_costs_and_sgs();
     test_two_handed_loadout_shield_suppression();
     test_magic_effective_attack_level_law();
