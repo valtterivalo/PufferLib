@@ -19,6 +19,7 @@ static void test_initial_scale_and_purity(void) {
     assert(memcmp(&state, &before, sizeof(state)) == 0);
     for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
     assert(obs[21] == 0 && obs[22] == 0);
+    assert(obs[23] == 0);  // schema 3: idle maul exposes no prepared hits
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
         assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);

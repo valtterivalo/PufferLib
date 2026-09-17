@@ -52,6 +52,19 @@ int main(void) {
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(env->log.both_teleports == 1 && env->log.self_teleports == 1 && env->log.opponent_teleports == 2);
+    // Terminal accounting: every finished episode advances n and populates
+    // per-episode keys (regression: metric-only edits once dropped these).
+    assert(env->log.n == 5);
+    assert(env->log.episode_length > 0);
+    {
+        Dict output2 = {0};
+        puf_log(&env->log, &output2);
+        assert(dict_find(&output2, "episode_length") != NULL);
+        assert(dict_find(&output2, "ticks_tentacle") != NULL);
+        assert(dict_find(&output2, "ticks_maul") != NULL);
+        assert(dict_find(&output2, "drink_combat") != NULL);
+        dict_clear(&output2);
+    }
     puf_close(env); free(env);
     items[1].value = 0;
     env = (Env*)calloc(1, sizeof(*env));

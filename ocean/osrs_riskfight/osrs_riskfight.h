@@ -159,6 +159,17 @@ void puf_step(Env* env) {
         env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
         env->log.draw_rate += net_stake == 0;
         env->log.net_stake += net_stake;
+        env->log.episode_return += env->state.episode_returns[0];
+        env->log.damage_reward += env->state.damage_rewards[0];
+        env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
+        env->log.chance_reward += env->state.chance_rewards[0];
+        env->log.teleport_penalty += env->state.teleport_penalties[0];
+        env->log.episode_length += env->state.env.tick - env->training.start_tick;
+        if (env->training.opponent == RF_TRAIN_SCRIPTED)
+            env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
+        env->log.scripted_omissions += env->training.omissions;
+        env->log.midfight_ticks += env->training.start_tick;
+        env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
         env->log.drink_brew += env->state.drink_brew[0];
         env->log.drink_sanfew += env->state.drink_sanfew[0];
         env->log.drink_combat += env->state.drink_combat[0];
@@ -167,6 +178,7 @@ void puf_step(Env* env) {
         env->log.eat_pie += env->state.eat_pie[0];
         env->log.spec_voidwaker += env->state.spec_voidwaker[0];
         env->log.spec_maul += env->state.spec_maul[0];
+        env->log.n++;
         riskfight_native_reset(env);
     }
     riskfight_native_observe(env);
@@ -226,4 +238,7 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "maul_opp", log->maul_opp);
     dict_set(out, "axe_opp", log->axe_opp);
     dict_set(out, "ticks_tentacle", log->ticks_tentacle);
+    dict_set(out, "ticks_axe", log->ticks_axe);
+    dict_set(out, "ticks_voidwaker", log->ticks_voidwaker);
+    dict_set(out, "ticks_maul", log->ticks_maul);
 }

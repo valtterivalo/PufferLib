@@ -45,6 +45,11 @@ static void test_double_click_needs_target_or_third_click(void) {
         assert(state.env.players[0].special_energy == 100);
         assert(recorded_hits() == 0);
         assert(state.env.pvp_runtime.maul[0].prepared_hits == 2);
+        {
+            float obs[RF_OBS_SIZE];
+            riskfight_write_observation(&state, 0, obs);
+            assert(obs[23] == 1.0f);  // DESELECTED double exposes prepared_hits/2
+        }
         assert(state.env.players[0].attack_timer == original_timer - 1);
         HumanCommand release[] = {use_target ? target() : special()};
         run(release, 1);
