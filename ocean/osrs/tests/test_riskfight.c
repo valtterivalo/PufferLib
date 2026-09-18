@@ -245,6 +245,13 @@ static void test_hidden_state_and_replay(void) {
     opponent->pending_hits[0].damage = 99; opponent->num_pending_hits = 1;
     opponent->veng_cooldown = 44;
     riskfight_write_observation(&state, 0, b);
+    // Schema 4 exposes opponent veng state; cooldown differs (0 vs 44).
+    assert(memcmp(a, b, sizeof(a)) != 0);
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 44 / 50.0f);
+    // Hidden state that must NOT leak: timers, energy, inventory, hits.
+    opponent->veng_cooldown = 0;
+    riskfight_write_observation(&state, 0, b);
     assert(memcmp(a, b, sizeof(a)) == 0);
     state.env.tick = 1;
     opponent->cast_veng_this_tick = 1; opponent->just_attacked = 1;

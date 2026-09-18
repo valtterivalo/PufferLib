@@ -25,6 +25,27 @@ static void test_initial_scale_and_purity(void) {
         assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
+    // Schema 4: opponent vengeance mirrors self scale (reset pre-venges both).
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
+}
+
+static void test_opponent_vengeance_roundtrip(void) {
+    reset();
+    // Active + mid-cooldown opponent exposes both floats at self scale.
+    state.env.players[1].veng_active = 1;
+    state.env.players[1].veng_cooldown = 25;
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&state, 0, obs);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.5f);
+    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
+    // Broken veng reads inactive with a live cooldown (the bait window).
+    state.env.players[1].veng_active = 0;
+    state.env.players[1].veng_cooldown = 40;
+    riskfight_write_observation(&state, 0, obs);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 0);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.8f);
 }
 
 static void test_unbounded_values_are_not_clipped(void) {
@@ -168,11 +189,12 @@ static void test_passive_healing_keeps_last_known_bar(void) {
 }
 
 int main(void) {
-    _Static_assert(RF_OBS_SIZE == 349, "Riskfight observation shape");
-    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 3, "Riskfight observation schema");
+    _Static_assert(RF_OBS_SIZE == 351, "Riskfight observation shape");
+    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 4, "Riskfight observation schema");
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();
+    test_opponent_vengeance_roundtrip();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();
     test_script_readiness_units();

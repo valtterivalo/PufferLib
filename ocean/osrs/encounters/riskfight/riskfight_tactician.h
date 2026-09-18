@@ -336,14 +336,17 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
             actions[RF_SPECIAL] = spec ? hit.special_count : 0;
         }
     }
+    const float* opp_veng_state = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+    // Opponent vengeance now observed (schema 4, opp[7..8]); without an
+    // active veng there is no reflect to reserve HP against.
+    int opp_veng = opp_veng_state[7] != 0;
     if (!eating && ((own_ready && actions[RF_PRIMARY] == RF_ATTACK) || actions[RF_SPECIAL])) {
         DamageResult returned = osrs_apply_post_mitigation_pipeline(best_max,
-            opponent_hp_upper, 0, 1, 1, 0);
+            opponent_hp_upper, 0, opp_veng, 1, 0);
         int return_damage = ((returned.veng_damage + returned.recoil_damage) *
             profile.reflection_reserve_percent + 99) / 100;
-        const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
         int contesting = profile.timing == RISKFIGHT_TIMING_TRADE ||
-            opponent[3] || threat.incoming_animation;
+            opp_veng_state[3] || threat.incoming_animation;
         int required_hp = return_damage + (threat.ticks_until == 0 && contesting ? threat.damage : 0) + 1;
         if (self.current_hitpoints < required_hp) {
             if (threat.ticks_until == 0) eat = riskfight_choose_eat(&self, required_hp);
@@ -384,7 +387,7 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
             actions[RF_DRINK] = inventory.consumable_slot_plus_one[OSRS_CONSUMABLE_SUPER_COMBAT];
     }
     DamageResult reflection = osrs_apply_post_mitigation_pipeline(best_max,
-        opponent_hp_upper, 0, 1, 1, 0);
+        opponent_hp_upper, 0, opp_veng, 1, 0);
     const float* observed_opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     int observed_pressure = threat.incoming_animation ||
         (profile.timing == RISKFIGHT_TIMING_TRADE && observed_opponent[3]);
