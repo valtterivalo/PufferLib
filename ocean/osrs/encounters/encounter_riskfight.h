@@ -58,6 +58,8 @@ static void riskfight_put_float(EncounterState* state, EncounterContext* context
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->damage_reward_coeff = value;
     else if (strcmp(key, "chance_reward_coeff") == 0) ctx->chance_reward_coeff = value;
     else if (strcmp(key, "teleport_penalty") == 0) ctx->teleport_penalty = value;
+    else if (strcmp(key, "maul_double_reward") == 0) ctx->maul_double_reward = value;
+    else if (strcmp(key, "axe_hit_reward") == 0) ctx->axe_hit_reward = value;
     else encounter_abort_unknown_config("riskfight", "float", key);
 }
 static void riskfight_put_ptr(EncounterState* state, EncounterContext* context, const char* key, void* value) {

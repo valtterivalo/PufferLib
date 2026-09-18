@@ -177,10 +177,32 @@ static void test_selected_without_homing_waits_for_ready_attack(void) {
     assert(state.env.players[0].used_special_this_tick);
 }
 
+static void test_debug_maul_double_reward_probe(void) {
+    // DEBUG-ONLY probe: paid maul double pays maul_double_reward per hit
+    // into rewards/episode_returns/debug_maul_rewards; zero coeff pays nothing.
+    HumanCommand commands[] = {inventory(24), special(), special(), target()};
+    reset();
+    context.maul_double_reward = 0.5f;
+    run(commands, 4);
+    assert(state.env.players[0].special_energy == 0);
+    assert(recorded_hits() == 2);
+    assert(state.debug_maul_rewards[0] == 1.0f);
+    // Shaping lands in episode_returns; s->rewards is zeroed/recomputed at
+    // the step tail (damage/chance/teleport only), so assert the accumulate.
+    assert(state.episode_returns[0] == state.debug_maul_rewards[0]);
+    riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 12345);
+    context.self_play = 1;
+    context.maul_double_reward = 0;
+    for (int i = 0; i < 2; i++) state.env.players[i].veng_active = 0;
+    run(commands, 4);
+    assert(state.debug_maul_rewards[0] == 0 && state.episode_returns[0] == 0);
+}
+
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_double_click_needs_target_or_third_click();
+    test_debug_maul_double_reward_probe();
     test_ornate_and_ordinary_energy_costs();
     test_voidwaker_then_only_payable_maul();
     test_instant_special_defers_ready_ordinary_attack();

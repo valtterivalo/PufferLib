@@ -20,6 +20,7 @@ struct Log {
     float policy_0_score, draw_rate;
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
+    float debug_maul_reward, debug_axe_reward;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
@@ -50,8 +51,9 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
-    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
-    for (int i = 0; i < 3; i++) {
+    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff",
+        "maul_double_reward", "axe_hit_reward"};
+    for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
         if (item) riskfight_put_float((EncounterState*)&env->state,
             (EncounterContext*)&env->context, reward_keys[i], (float)item->value);
@@ -164,6 +166,8 @@ void puf_step(Env* env) {
         env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
         env->log.chance_reward += env->state.chance_rewards[0];
         env->log.teleport_penalty += env->state.teleport_penalties[0];
+        env->log.debug_maul_reward += env->state.debug_maul_rewards[0];
+        env->log.debug_axe_reward += env->state.debug_axe_rewards[0];
         env->log.episode_length += env->state.env.tick - env->training.start_tick;
         if (env->training.opponent == RF_TRAIN_SCRIPTED)
             env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
@@ -207,6 +211,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
     dict_set(out, "chance_reward", log->chance_reward);
     dict_set(out, "teleport_penalty", log->teleport_penalty);
+    dict_set(out, "debug_maul_reward", log->debug_maul_reward);
+    dict_set(out, "debug_axe_reward", log->debug_axe_reward);
     dict_set(out, "kills", log->kills);
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);

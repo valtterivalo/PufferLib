@@ -25,7 +25,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     }
 }
 
-static void riskfight_attack(RiskfightState* s, int agent) {
+static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent) {
     Player* p = &s->env.players[agent];
     Player* opponent = &s->env.players[1 - agent];
     int weapon = p->equipped[GEAR_SLOT_WEAPON];
@@ -39,6 +39,23 @@ static void riskfight_attack(RiskfightState* s, int agent) {
     // Spec attribution before disarm: only non-maul armed specials flow
     // through here (maul resolves via pvp_maul_* paths below).
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
+    // DEBUG probe: boosted low-HP axe NORMAL swing pays immediately (melee
+    // normal hits land same-tick, instant, range checked above). Gate: axe
+    // equipped, attacker actually boosted, defender fresh-low (bar-visible).
+    if (!special && weapon == ITEM_DHAROKS_GREATAXE && ctx->axe_hit_reward != 0 &&
+        p->current_hitpoints < p->base_hitpoints) {
+        int bar = osrs_health_bar_ratio(opponent->current_hitpoints,
+            opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
+        OsrsHealthBarRange range = osrs_health_bar_range(bar,
+            OSRS_PLAYER_HEALTH_BAR_SCALE, opponent->base_hitpoints,
+            opponent->base_hitpoints);
+        if (range.kind == OSRS_HEALTH_BAR_KNOWN && range.upper < opponent->base_hitpoints) {
+            float axe_bonus = ctx->axe_hit_reward;
+            s->rewards[agent] += axe_bonus;
+            s->episode_returns[agent] += axe_bonus;
+            s->debug_axe_rewards[agent] += axe_bonus;
+        }
+    }
     perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
         chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
     riskfight_record_attack(s, agent, 1, 0);
@@ -109,11 +126,22 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             // spec toggles for maul (see policy_commands): the release
             // toggle's target click needs pending_target set by
             // pvp_maul_target_click, which needs the lock held first.
+            // DEBUG probe pays per resolved maul hit here (energy spent in
+            // pvp_maul_target_click -> pvp_maul_resolve).
             osrs_interaction_set(&p->interaction, 1 - agent);
             s->env.pvp_runtime.walk_dest_x[agent] = -1;
             s->env.pvp_runtime.walk_dest_y[agent] = -1;
-            if (!s->escaped[1 - agent])
-                riskfight_record_attack(s, agent, pvp_maul_target_click(&s->env, agent, 1 - agent), 1);
+            if (!s->escaped[1 - agent]) {
+                int before = p->special_energy;
+                int maul_hits = pvp_maul_target_click(&s->env, agent, 1 - agent);
+                if (maul_hits > 0 && p->special_energy < before && ctx->maul_double_reward != 0) {
+                    float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
+                    s->rewards[agent] += maul_bonus;
+                    s->episode_returns[agent] += maul_bonus;
+                    s->debug_maul_rewards[agent] += maul_bonus;
+                }
+                riskfight_record_attack(s, agent, maul_hits, 1);
+            }
             break;
         case HUMAN_COMMAND_WALK:
             riskfight_stop(s, agent);
@@ -122,14 +150,11 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             break;
         case HUMAN_COMMAND_SPEC_TOGGLE:
             if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) {
-                int before = p->special_energy;
+                // The release toggle (SELECTED -> DESELECTED) queues the pair;
+                // energy is spent when the target click resolves (same tick
+                // via the queued ATTACK_NPC, or the finish_inputs drain).
+                // DEBUG probe pays per RESOLVED hit at the resolve sites.
                 pvp_maul_special_click(&s->env, agent);
-                // The release toggle (SELECTED -> DESELECTED) fires the
-                // queued pair through the target click queued later this
-                // tick, so energy is spent inside execute_command, not at
-                // the finish_inputs drain. Count paid releases here.
-                if (before >= 50 && p->special_energy < before)
-                    s->spec_maul[agent]++;
             } else
                 p->spec_armed = !p->spec_armed;
             break;
@@ -155,7 +180,6 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_SPELL_ON_WIDGET:
             break;
     }
-    (void)ctx;
 }
 
 static void riskfight_policy_commands(const RiskfightState* s, int agent,
@@ -288,11 +312,20 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
         if (!s->escaped[0] && !s->escaped[1]) {
-            int maul_hits = pvp_maul_finish_inputs(&s->env, i);
             // Maul double-spec resolves instantly here (DESELECTED state is
             // invisible in obs), so count paid maul specials at this site.
-            if (maul_hits > 0 && pvp_is_maul(s->env.players[i].equipped[GEAR_SLOT_WEAPON]))
+            // DEBUG probe pays per resolved hit that actually spent energy.
+            int before = s->env.players[i].special_energy;
+            int maul_hits = pvp_maul_finish_inputs(&s->env, i);
+            if (maul_hits > 0 && pvp_is_maul(s->env.players[i].equipped[GEAR_SLOT_WEAPON])) {
                 s->spec_maul[i]++;
+                if (s->env.players[i].special_energy < before && ctx->maul_double_reward != 0) {
+                    float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
+                    s->rewards[i] += maul_bonus;
+                    s->episode_returns[i] += maul_bonus;
+                    s->debug_maul_rewards[i] += maul_bonus;
+                }
+            }
             riskfight_record_attack(s, i, maul_hits, 1);
         }
     }
@@ -314,7 +347,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
             ctx->route_topology);
         if (!s->escaped[0] && !s->escaped[1])
             riskfight_record_attack(s, i, pvp_maul_continue_attack(&s->env, i), 1);
-        riskfight_attack(s, i);
+        riskfight_attack(s, ctx, i);
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);
     }

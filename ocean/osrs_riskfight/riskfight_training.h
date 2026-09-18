@@ -62,6 +62,8 @@ static void riskfight_training_clear_returns(RiskfightState* state) {
     memset(state->direct_ko_chance_mass, 0, sizeof(state->direct_ko_chance_mass));
     memset(state->chance_rewards, 0, sizeof(state->chance_rewards));
     memset(state->teleport_penalties, 0, sizeof(state->teleport_penalties));
+    memset(state->debug_maul_rewards, 0, sizeof(state->debug_maul_rewards));
+    memset(state->debug_axe_rewards, 0, sizeof(state->debug_axe_rewards));
 }
 
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,

@@ -160,6 +160,40 @@ static void test_vengeance(void) {
     assert(state.outcome[0] == RISKFIGHT_MUTUAL_DEATH);
     assert(state.rewards[0] == 0 && state.rewards[1] == 0);
 }
+static void test_debug_axe_hit_reward_probe(void) {
+    // DEBUG-ONLY probe: boosted low-HP axe normal swing vs fresh-low bar
+    // pays axe_hit_reward; full-HP bar or zero coeff pays nothing.
+    reset();
+    Player* p = &state.env.players[0];
+    Player* opp = &state.env.players[1];
+    use(0, 22);  // equip greataxe (slot 22 per reset asserts)
+    assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+    p->current_hitpoints = 50;  // boosted (base 99)
+    opp->current_hitpoints = 60;  // fresh-low bar
+    p->attack_timer = 0; p->has_attack_timer = 0;
+    context.axe_hit_reward = 0.25f;
+    int actions[2 * RF_HEADS] = {0};
+    actions[RF_PRIMARY] = RF_ATTACK;
+    step(actions);
+    assert(state.debug_axe_rewards[0] == 0.25f);
+    // Shaping lands in episode_returns; s->rewards is zeroed/recomputed at
+    // the step tail (damage/chance/teleport only).
+    assert(state.episode_returns[0] == state.debug_axe_rewards[0]);
+    // Full-HP bar: no pay.
+    reset();
+    p = &state.env.players[0];
+    opp = &state.env.players[1];
+    use(0, 22);
+    p->current_hitpoints = 50;
+    opp->current_hitpoints = 121;
+    p->attack_timer = 0; p->has_attack_timer = 0;
+    context.axe_hit_reward = 0.25f;
+    memset(actions, 0, sizeof(actions));
+    actions[RF_PRIMARY] = RF_ATTACK;
+    step(actions);
+    assert(state.debug_axe_rewards[0] == 0 && state.rewards[0] == 0);
+}
+
 static void test_special_and_outcomes(void) {
     reset(); Player* p = &state.env.players[0];
     use(0, 24); p->attack_timer = 5; p->has_attack_timer = 1;
@@ -338,7 +372,7 @@ int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_reset_and_equipment(); test_food(); test_orb_and_stop(); test_dharok_recoil();
-    test_potions(); test_vengeance(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
+    test_potions(); test_vengeance(); test_debug_axe_hit_reward_probe(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
     test_tick_order_and_boundaries();
     test_live_attack_processing_order();
     riskfight_destroy_context((EncounterContext*)&context);

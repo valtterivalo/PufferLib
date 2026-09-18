@@ -67,6 +67,9 @@ typedef struct {
     float direct_ko_chance_mass[2];
     float chance_rewards[2];
     float teleport_penalties[2];
+    // DEBUG-ONLY shaping accumulators (parallel to damage/chance rewards).
+    float debug_maul_rewards[2];
+    float debug_axe_rewards[2];
     // Consumption + weapon metrics (policy-side only, never observed):
     // drink/eat/spec event counts per episode and per-tick equipped-weapon
     // samples. Reset in riskfight_reset; puf_step aggregates agent 0.
@@ -100,6 +103,10 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     float teleport_penalty;
+    // DEBUG-ONLY shaping probes (default 0, never ship nonzero): paid maul
+    // double event bonus + low-HP axe swing bonus. See step sites.
+    float maul_double_reward;
+    float axe_hit_reward;
 } RiskfightContext;
 
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
