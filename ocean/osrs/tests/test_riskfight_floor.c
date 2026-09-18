@@ -122,8 +122,8 @@ static void test_escape_requires_exhaustion_or_observed_attack(void) {
 
 static void test_matches(void) {
     const int bots[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE,
-        RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_SURVIVAL, RISKFIGHT_HELDOUT, RISKFIGHT_FLOOR};
-    for (int b = 0; b < 8; b++) {
+        RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_SURVIVAL, RISKFIGHT_HELDOUT, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
+    for (int b = 0; b < 9; b++) {
         reset();
         int attacks = 0, stops = 0;
         for (int tick = 0; tick < 600 && !state.env.episode_over; tick++) {

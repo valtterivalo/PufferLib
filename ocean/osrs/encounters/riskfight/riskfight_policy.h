@@ -177,12 +177,138 @@ static int riskfight_find_gear(const float* obs, uint8_t item) {
 
 #include "riskfight_tactician.h"
 
+// Tick-hash sampler for RISKFIGHT_HUMANLIKE: riskfight_script takes const
+// obs and no mutable RNG (encounter_rand_* need state, test-only splitmix64
+// is out of scope), so distribution-matched jitter hashes (tick, salt).
+// Same obs+tick always yields same actions (replay-safe); behavior varies
+// across ticks. Salts: eat-early 11, eat-delay 12, vw 21, maul 22,
+// axe-camp 23, teleport-early 31.
+static uint32_t riskfight_sample_hash(uint32_t tick, uint32_t salt) {
+    uint32_t x = tick * 0x9E3779B1u + salt * 0x85EBCA6Bu + 0xC2B2AE35u;
+    x ^= x >> 15; x *= 0x2C1B3C6Du; x ^= x >> 12; x *= 0x297A2D39u; x ^= x >> 15;
+    return x;
+}
+static int riskfight_sample_event(uint32_t tick, uint32_t salt, int per_mille) {
+    return (int)(riskfight_sample_hash(tick, salt) % 1000u) < per_mille;
+}
+// Mined 2026-09-18 via scripts/mine_riskfight_behavior.py
+// (/tmp/rf_humanlike_tables.json): 10 SPECTATOR_COMBAT_V1 archives, 18
+// usable fights. eat_delay is fixed reaction jitter (not minable); drink
+// shares eat anim 829 so all consumes are joint.
+enum {
+    RISKFIGHT_HL_EARLY_EAT_PM = 600,
+    RISKFIGHT_HL_EAT_DELAY_PM = 150,
+    RISKFIGHT_HL_VW_PM = 23,
+    RISKFIGHT_HL_MAUL_PM = 5,
+    RISKFIGHT_HL_AXE_PM = 28,
+    RISKFIGHT_HL_TP_PM = 19,
+};
 static void riskfight_script(const float* obs, RiskfightOpponent type, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
     if (type >= RISKFIGHT_TACTICIAN && type <= RISKFIGHT_FLOOR) {
         const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
             RISKFIGHT_PROFILE_PRESSURE, RISKFIGHT_PROFILE_CAUTIOUS, RISKFIGHT_PROFILE_HELDOUT, RISKFIGHT_PROFILE_FLOOR};
         riskfight_tactician_profile(obs, actions, profiles[type - RISKFIGHT_TACTICIAN]);
+        return;
+    }
+    if (type == RISKFIGHT_HUMANLIKE) {
+        int tick = (int)lroundf(obs[20] * RF_OBSERVATION_TICK_SCALE);
+        float hl_hp = obs[0] * 121;
+        const float* hl_opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+        actions[RF_PRIMARY] = RF_ATTACK;
+        actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
+        actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
+        // Eat base: legacy 65-threshold shape (runs before drinks so the
+        // restore-priority guards below behave exactly as in legacy).
+        if (hl_hp < 65) {
+            if (obs[8] == 0) {
+                actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
+                if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
+            }
+            if (obs[9] == 0) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
+            if (hl_hp < 45 && obs[10] == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
+        }
+        if (!actions[RF_DRINK] && obs[9] == 0) {
+            float attack = obs[2] * 118;
+            float strength = obs[3] * 118;
+            float defence = obs[4] * 120;
+            int needs_restore = obs[1] * 99 <= 40 || attack < 98.5f ||
+                strength < 98.5f || defence < 98.5f || obs[5] * 99 < 98.5f;
+            if (needs_restore) {
+                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+                if (!actions[RF_DRINK])
+                    actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
+            }
+            if (!actions[RF_DRINK] && hl_hp >= 65 &&
+                    (attack < 110 || strength < 110 || defence < 110))
+                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
+        }
+        if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
+        // Sampled eating: early bites above the 65 line, reaction-delay
+        // skips. The delay roll also covers brew (miner cannot split food
+        // vs brew). No consecutive-skip memory by design: a skipped tick
+        // just delays eating a tick.
+        if (!actions[RF_FOOD] && !actions[RF_DRINK] && !actions[RF_COMBO] &&
+                hl_hp < 73 && obs[8] == 0 &&
+                riskfight_sample_event((uint32_t)tick, 11, RISKFIGHT_HL_EARLY_EAT_PM)) {
+            actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
+            if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
+        }
+        if ((actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) &&
+                riskfight_sample_event((uint32_t)tick, 12, RISKFIGHT_HL_EAT_DELAY_PM)) {
+            actions[RF_FOOD] = actions[RF_DRINK] = actions[RF_COMBO] = 0;
+        }
+        if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
+        // Weapon/spec cascade: mined VW/maul rolls gate the recorded lines;
+        // axe is the deterministic finisher OR a sampled mid-zone camp.
+        uint8_t hl_weapon = ITEM_ABYSSAL_TENTACLE;
+        {
+            int opp_bar = (int)lroundf(hl_opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+            OsrsHealthBarRange opp_hp =
+                osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+            int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
+            Player probe = riskfight_observed_self(obs);
+            probe.equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
+            probe.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+            int hp_lower = probe.current_hitpoints < 1 ? 1 : probe.current_hitpoints;
+            OsrsMeleeThreat axe = osrs_melee_threat(probe.equipped,
+                calculate_effective_strength(&probe, ATTACK_STYLE_MELEE),
+                probe.base_hitpoints, hp_lower, probe.special_energy);
+            int ready = probe.attack_timer <= 1;
+            int finisher = riskfight_dharok_finisher(ready, probe.current_hitpoints,
+                    probe.base_hitpoints, axe.normal_max, opp_upper, 60,
+                    RISKFIGHT_CONTINUE, 0, 0);
+            int camp = probe.current_hitpoints < probe.base_hitpoints &&
+                hl_opponent[0] >= 0.4f && hl_opponent[0] < 0.8f &&
+                riskfight_sample_event((uint32_t)tick, 23, RISKFIGHT_HL_AXE_PM);
+            if (obs[6] >= 0.5f && hl_opponent[0] < 0.65f &&
+                    riskfight_sample_event((uint32_t)tick, 21, RISKFIGHT_HL_VW_PM)) {
+                hl_weapon = ITEM_VOIDWAKER;
+                actions[RF_SPECIAL] = 1;
+            } else if (obs[6] >= 0.99f && hl_opponent[0] < 0.65f &&
+                    opp_upper <= 76 && hl_hp < 99 &&
+                    riskfight_sample_event((uint32_t)tick, 22, RISKFIGHT_HL_MAUL_PM)) {
+                hl_weapon = ITEM_GRANITE_MAUL_ORNATE;
+                actions[RF_SPECIAL] = 2;
+            } else if (finisher || camp) {
+                hl_weapon = ITEM_DHAROKS_GREATAXE;
+            }
+        }
+        actions[RF_WEAPON] = riskfight_find_gear(obs, hl_weapon);
+        if (!item_is_two_handed(hl_weapon))
+            actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
+        actions[RF_RING] = riskfight_find_gear(obs,
+            obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
+        // Teleport last: out-of-supplies rule plus a sampled early exit.
+        if (hl_hp < 30 &&
+            !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
+            !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
+            !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) &&
+            !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW))
+            actions[RF_PRIMARY] = RF_TELEPORT;
+        else if (hl_hp < 40 &&
+                riskfight_sample_event((uint32_t)tick, 31, RISKFIGHT_HL_TP_PM))
+            actions[RF_PRIMARY] = RF_TELEPORT;
         return;
     }
     float hp = obs[0] * 121;
