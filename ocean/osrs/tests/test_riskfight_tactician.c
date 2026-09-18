@@ -90,8 +90,13 @@ static void test_veng_armour_and_hidden_state(void) {
     assert(actions[RF_VENGEANCE]);
     assert(actions[RF_WEAPON] == 0);
     assert(actions[RF_HEAD] == RF_UNEQUIP && actions[RF_BODY] == RF_UNEQUIP && actions[RF_LEGS] == RF_UNEQUIP);
-    state.env.players[1].attack_timer = 99;
-    state.env.players[1].special_energy = 0;
+    // Neutralize the schema-4/5 exposed fields back to reset defaults
+    // (p0 was mutated pre-obs; p1 still holds defaults, so only the emptied
+    // cell + pid flip must be invisible).
+    state.env.players[1].veng_active = 1;
+    state.env.players[1].veng_cooldown = 0;
+    state.env.players[1].attack_timer = 0;
+    state.env.players[1].special_energy = 100;
     state.env.players[1].inventory_cells[0] = osrs_inventory_cell_empty();
     state.env.pid_holder ^= 1;
     riskfight_write_observation(&state, 0, changed);

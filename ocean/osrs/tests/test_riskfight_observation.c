@@ -48,6 +48,19 @@ static void test_opponent_vengeance_roundtrip(void) {
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.8f);
 }
 
+static void test_opponent_spec_and_timer_roundtrip(void) {
+    reset();
+    // Spec spend is public: voidwaker spec leaves exactly 50/100.
+    state.env.players[1].special_energy = 50;
+    // Food delay stacks onto the live cooldown (karambwan +2 here).
+    state.env.players[1].attack_timer = 6;
+    float obs[RF_OBS_SIZE];
+    riskfight_write_observation(&state, 0, obs);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 0.5f);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0.6f);
+    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
+}
+
 static void test_unbounded_values_are_not_clipped(void) {
     reset();
     const int ticks[] = {1, 1024, 65536, 1048576};
@@ -189,12 +202,13 @@ static void test_passive_healing_keeps_last_known_bar(void) {
 }
 
 int main(void) {
-    _Static_assert(RF_OBS_SIZE == 351, "Riskfight observation shape");
-    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 4, "Riskfight observation schema");
+    _Static_assert(RF_OBS_SIZE == 353, "Riskfight observation shape");
+    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 5, "Riskfight observation schema");
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();
     test_opponent_vengeance_roundtrip();
+    test_opponent_spec_and_timer_roundtrip();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();
     test_script_readiness_units();

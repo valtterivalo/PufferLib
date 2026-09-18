@@ -162,8 +162,11 @@ static RiskfightThreatWindow riskfight_threat_window(const float* obs) {
         assumed.base_hitpoints, 121);
     assert(hp.kind == OSRS_HEALTH_BAR_KNOWN);
     int hp_lower = bar == 0 ? 1 : hp.lower;
+    // Opponent spec energy now observed (schema 5, opp[9]); threat math no
+    // longer assumes a full 100-energy bar every tick.
+    int opp_energy = (int)lroundf(opponent[9] * 100);
     OsrsMeleeThreat threat = osrs_melee_threat(assumed.equipped,
-        calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, hp_lower, 100);
+        calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, hp_lower, opp_energy);
     int age = (int)lroundf(opponent[5] * RF_OBSERVATION_ATTACK_AGE_SCALE);
     int ticks = opponent[4] ? (int)lroundf(opponent[6] * RF_OBSERVATION_ATTACK_AGE_SCALE) : 0;
     int animation = opponent[4] && age == 1;
@@ -250,6 +253,10 @@ static int riskfight_floor_attack_window(const float* obs, const Player* self,
     if (self->attack_timer > 1) return 0;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     if (opponent[3] && threat.ticks_until <= 1) return 0;
+    // Opponent attack timer now observed (schema 5, opp[10], food delays
+    // included): refuse the window when they swing first.
+    int opp_timer = (int)lroundf(opponent[10] * 10);
+    if (opp_timer <= 1 && threat.ticks_until > 1) return 0;
     EquipmentBonuses gear;
     osrs_sum_equipment_bonuses(self->equipped, &gear);
     int speed = gear.attack_speed;

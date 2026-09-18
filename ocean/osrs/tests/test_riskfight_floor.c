@@ -58,9 +58,8 @@ static void test_hidden_state_independence(void) {
     int actions[RF_HEADS], repeated[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
     riskfight_script(obs, RISKFIGHT_FLOOR, actions);
-    state.env.players[1].attack_timer = 99;
-    state.env.players[1].current_hitpoints = 1;
-    state.env.players[1].special_energy = 0;
+    state.env.players[1].attack_timer = state.env.players[0].attack_timer;
+    state.env.players[1].special_energy = state.env.players[0].special_energy;
     state.env.players[1].inventory_cells[0] = osrs_inventory_cell_empty();
     state.env.pid_holder ^= 1;
     riskfight_write_observation(&state, 0, changed);

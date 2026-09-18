@@ -3,7 +3,7 @@
 #include "riskfight_model.h"
 
 enum {
-    RF_OBSERVATION_SCHEMA_VERSION = 4,
+    RF_OBSERVATION_SCHEMA_VERSION = 5,
     RF_OBSERVATION_TICK_SCALE = 1024,
     RF_OBSERVATION_TILE_SCALE = 64,
     RF_OBSERVATION_ITEM_SCALE = 256,
@@ -77,6 +77,15 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     // is what a good player does anyway. Same scale as self obs[11..12].
     opponent[7] = (float)opp->veng_active;
     opponent[8] = opp->veng_cooldown / 50.0f;
+    // Opponent spec energy (schema 5, obs 9): exact value, same scale as self
+    // obs[6]. Spends are public (anim + energy math), regen is deterministic
+    // (10/50 ticks, 10/25 with lightbearer whose ring is visible gear).
+    // No surge potion exists in the riskfight bag, so no hidden restore.
+    opponent[9] = opp->special_energy / 100.0f;
+    // Opponent attack timer (schema 5, obs 10): exact cooldown incl. food
+    // delay (shark +3, karambwan +2 stack onto the live timer). Same scale
+    // as self obs[7].
+    opponent[10] = opp->attack_timer / 10.0f;
     for (int ago = 0; ago < RF_HISTORY_TICKS; ago++) {
         int index = (s->env.tick - 1 - ago + RF_HISTORY_TICKS) % RF_HISTORY_TICKS;
         float* out = obs + RF_HISTORY_START + ago * RF_EVENT_WIDTH;
