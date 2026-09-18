@@ -92,17 +92,17 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     training->opponent = RF_TRAIN_LEARNED;
     if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
-        const RiskfightOpponent scripts[] = {RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_FLOOR};
+        const RiskfightOpponent scripts[] = {RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
         training->opponent = RF_TRAIN_SCRIPTED;
-        training->script = scripts[encounter_rand_int(&training->rng, 3)];
+        training->script = scripts[encounter_rand_int(&training->rng, 4)];
     }
     RiskfightTrainingStart start = RF_START_FRESH;
     if (riskfight_training_draw(training, training->config.midfight_probability)) {
         const RiskfightOpponent scripts[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS,
             RISKFIGHT_AGGRESSIVE, RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE,
-            RISKFIGHT_SURVIVAL, RISKFIGHT_FLOOR};
-        RiskfightOpponent first = scripts[encounter_rand_int(&training->rng, 7)];
-        RiskfightOpponent second = scripts[encounter_rand_int(&training->rng, 7)];
+            RISKFIGHT_SURVIVAL, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
+        RiskfightOpponent first = scripts[encounter_rand_int(&training->rng, 8)];
+        RiskfightOpponent second = scripts[encounter_rand_int(&training->rng, 8)];
         int ticks = 1 + encounter_rand_int(&training->rng, training->config.midfight_max_ticks);
         start = riskfight_training_prefix(state, context, first, second, ticks);
     }
