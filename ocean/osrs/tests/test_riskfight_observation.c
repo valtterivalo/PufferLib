@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include "../encounters/encounter_riskfight.h"
 
@@ -52,12 +53,16 @@ static void test_opponent_spec_and_timer_roundtrip(void) {
     reset();
     // Spec spend is public: voidwaker spec leaves exactly 50/100.
     state.env.players[1].special_energy = 50;
-    // Food delay stacks onto the live cooldown (karambwan +2 here).
+    // Hidden sim timers do not leak: exact attack_timer reads as est 0
+    // with no consume observed (unknown implies can-eat).
     state.env.players[1].attack_timer = 6;
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 0.5f);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0.6f);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
     for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
 }
 
@@ -150,6 +155,56 @@ static void use_consumable(OsrsConsumableKind kind) {
     riskfight_observe_visible(&state, 0, 0);
 }
 
+static void test_opponent_consume_timer_inference(void) {
+    // Real-step drives (direct helpers skip the step-end tick++ that arms
+    // the potion stamp): opponent eats via RF_FOOD/RF_DRINK/RF_COMBO, then
+    // a 5-damage hit refreshes the bar and classifies the pending consume.
+    // Marlin 24 unions with pie+brew 27, so the max-lock estimate arms
+    // food+potion+delay; brew 16 alone arms food+potion with no delay;
+    // halibut 20 unions with marlin 24, arming all three locks.
+    context.self_play = 1;
+    const struct {
+        int head, slot;
+        int food, potion, karam, delay;
+    } cases[] = {
+        {RF_FOOD, 10, 1, 1, 0, 1},
+        {RF_DRINK, 8, 1, 1, 0, 0},
+        {RF_COMBO, 4, 1, 1, 1, 1},
+    };
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        reset();
+        context.self_play = 1;
+        state.env.players[0].veng_active = 0;
+        state.env.players[1].veng_active = 0;
+        state.env.players[1].current_hitpoints = 50;
+        observe_next_tick();
+        received_hit(0, OSRS_HIT_DIRECT);
+        int actions[2 * RF_HEADS] = {0};
+        actions[RF_HEADS + cases[c].head] = cases[c].slot;
+        riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+        float obs[RF_OBS_SIZE];
+        riskfight_write_observation(&state, 0, obs);
+        // No bar refresh yet: estimates stay 0 (unknown implies can-eat).
+        assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
+        assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
+        assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
+        assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
+        // Next-tick hit with consume flags cleared so only the pending
+        // classification (opened on the eat tick) is measured.
+        state.env.players[1].ate_food_this_tick = 0;
+        state.env.players[1].ate_karambwan_this_tick = 0;
+        state.env.players[1].ate_brew_this_tick = 0;
+        state.inventory_use[1].potion_animation_tick_plus_one = -1;
+        observe_next_tick();
+        received_hit(5, OSRS_HIT_DIRECT);
+        riskfight_write_observation(&state, 0, obs);
+        assert((obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] > 0) == cases[c].delay);
+        assert((obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] > 0) == cases[c].food);
+        assert((obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] > 0) == cases[c].potion);
+        assert((obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] > 0) == cases[c].karam);
+    }
+}
+
 static void test_health_bar_refresh_requires_received_hit(void) {
     reset();
     state.env.players[1].veng_active = 0;
@@ -202,13 +257,14 @@ static void test_passive_healing_keeps_last_known_bar(void) {
 }
 
 int main(void) {
-    _Static_assert(RF_OBS_SIZE == 353, "Riskfight observation shape");
-    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 5, "Riskfight observation schema");
+    _Static_assert(RF_OBS_SIZE == 356, "Riskfight observation shape");
+    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 6, "Riskfight observation schema");
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();
     test_opponent_vengeance_roundtrip();
     test_opponent_spec_and_timer_roundtrip();
+    test_opponent_consume_timer_inference();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();
     test_script_readiness_units();

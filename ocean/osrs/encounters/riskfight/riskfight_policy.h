@@ -3,7 +3,7 @@
 #include "riskfight_model.h"
 
 enum {
-    RF_OBSERVATION_SCHEMA_VERSION = 5,
+    RF_OBSERVATION_SCHEMA_VERSION = 6,
     RF_OBSERVATION_TICK_SCALE = 1024,
     RF_OBSERVATION_TILE_SCALE = 64,
     RF_OBSERVATION_ITEM_SCALE = 256,
@@ -82,10 +82,16 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     // (10/50 ticks, 10/25 with lightbearer whose ring is visible gear).
     // No surge potion exists in the riskfight bag, so no hidden restore.
     opponent[9] = opp->special_energy / 100.0f;
-    // Opponent attack timer (schema 5, obs 10): exact cooldown incl. food
-    // delay (shark +3, karambwan +2 stack onto the live timer). Same scale
-    // as self obs[7].
-    opponent[10] = opp->attack_timer / 10.0f;
+    // Opponent consumption locks (schema 6, obs 10..13): inferred attack-
+    // delay remainder + food/potion/karam lock estimates from the public
+    // consume bit + bar deltas (riskfight render agrees: potion ticks merge
+    // into the consume bit in encounter_riskfight.h, unlike the shared
+    // render path which hardcodes drank_potion=0 elsewhere). Unknown reads
+    // as 0 (can-eat). Same scales as self obs[7..10].
+    opponent[10] = v->consume_delay_est / 10.0f;
+    opponent[11] = v->consume_food_est / 3.0f;
+    opponent[12] = v->consume_potion_est / 3.0f;
+    opponent[13] = v->consume_karam_est / 3.0f;
     for (int ago = 0; ago < RF_HISTORY_TICKS; ago++) {
         int index = (s->env.tick - 1 - ago + RF_HISTORY_TICKS) % RF_HISTORY_TICKS;
         float* out = obs + RF_HISTORY_START + ago * RF_EVENT_WIDTH;

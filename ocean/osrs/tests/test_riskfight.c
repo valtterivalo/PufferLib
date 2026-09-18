@@ -245,16 +245,19 @@ static void test_hidden_state_and_replay(void) {
     opponent->pending_hits[0].damage = 99; opponent->num_pending_hits = 1;
     opponent->veng_cooldown = 44;
     riskfight_write_observation(&state, 0, b);
-    // Schemas 4-5 expose opponent veng state, spec energy, attack timer.
+    // Schemas 4-6 expose opponent veng state + spec energy; the attack
+    // timer is inferred (schema 6) so hidden sim timers do not leak.
     assert(memcmp(a, b, sizeof(a)) != 0);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 44 / 50.0f);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 3 / 100.0f);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 88 / 10.0f);
-    // Hidden state that must NOT leak: inventory, pending hits. Restore
-    // the exposed fields too (self timer/energy differ from 88/3).
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
+    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
+    // Hidden state that must NOT leak: inventory, pending hits, sim timers.
+    // Restore the exposed fields too (self cooldown/energy differ from 44/3).
     opponent->veng_cooldown = 0;
-    opponent->attack_timer = state.env.players[0].attack_timer;
     opponent->special_energy = state.env.players[0].special_energy;
     riskfight_write_observation(&state, 0, b);
     assert(memcmp(a, b, sizeof(a)) == 0);

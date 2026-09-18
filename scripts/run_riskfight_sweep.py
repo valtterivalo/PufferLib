@@ -100,7 +100,7 @@ def main():
         'objective_id': args.objective_id, 'selection_seed': 73,
         'heldout_bots': [7], 'heldout_seeds': [1009, 2027, 3037],
         'max_suggestion_cost_seconds': 300, 'trials': args.trials,
-        'observation_schema': 5, 'observation_size': 353, 'action_heads': 20,
+        'observation_schema': 6, 'observation_size': 356, 'action_heads': 20,
         'training': 'Current and historical policy self-play with configurable scripted mixing and midfight starts',
         'score': 'Equal-weight unshaped net stake over seven selection bots',
         'historical_scores_imported': imported,

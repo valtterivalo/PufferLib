@@ -31,16 +31,16 @@ int main(void) {
     actions[RF_HEADS + RF_COMBO] = 4;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert_consumption_visible(triple);
-    // Schema 5 exposes opponent attack_timer: single eats marlin (+3) while
-    // triple stacks the leftover FOOD=10 with brew+halibut (+2 on top of +3),
-    // so the full vectors differ exactly in the timer float.
-    assert(memcmp(single, triple, sizeof(single)) != 0);
-    assert(single[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 2 / 10.0f);
-    assert(triple[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 4 / 10.0f);
-    for (int i = 0; i < RF_OBS_SIZE; i++) {
-        if (i == RF_OPPONENT_START + NUM_GEAR_SLOTS + 10) continue;
-        assert(single[i] == triple[i]);
-    }
+    // Schema 6 gates classification on a bar refresh: with no hit yet the
+    // single (marlin) and triple (marlin+brew+halibut) vectors are
+    // identical, while the hidden sim timers already differ (2 vs 4).
+    assert(memcmp(single, triple, sizeof(single)) == 0);
+    assert(state.env.players[1].attack_timer == 4);
+    reset();
+    memset(actions, 0, sizeof(actions));
+    actions[RF_HEADS + RF_FOOD] = 10;
+    riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+    assert(state.env.players[1].attack_timer == 2);
     const int potion_slots[] = {7, 17, 19};
     for (size_t i = 0; i < sizeof(potion_slots) / sizeof(potion_slots[0]); i++) {
         reset();

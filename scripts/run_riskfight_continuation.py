@@ -38,7 +38,7 @@ def main():
         'score': 'Equal-weight mean unshaped net stake against trader, cautious, aggressive and tactician',
         'imported_trials': prior['trials'], 'additional_trials': args.additional_trials,
         'max_suggestion_cost_seconds': 300, 'command': command,
-        'observation_schema': 5, 'action_heads': 20, 'action_mask_size': 461,
+        'observation_schema': 6, 'action_heads': 20, 'action_mask_size': 461,
         'training': 'Unchanged current-policy and historical-policy self-play'}
     (args.root / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     (args.root / 'status.json').write_text(json.dumps({'status': 'running', 'stage': 'sweep'}))

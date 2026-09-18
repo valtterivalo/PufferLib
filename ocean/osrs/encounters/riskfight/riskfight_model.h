@@ -29,7 +29,7 @@ enum {
     RF_INVENTORY_START = RF_SELF_SIZE,
     RF_EQUIPPED_START = RF_INVENTORY_START + OSRS_INVENTORY_SIZE * RF_INVENTORY_WIDTH,
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
-    RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 11,
+    RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
     RF_OBS_SIZE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,
 };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30}
@@ -48,6 +48,13 @@ typedef struct {
     int interacting;
     int last_attack_tick;
     int last_attack_speed;
+    // Inferred opponent consumption locks (schema 6): estimated remainders
+    // derived solely from the public consume bit + bar deltas. Unknown
+    // (no bar refresh yet) reads as 0 (can-eat).
+    int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
+    // Pending consume awaiting a bar refresh: tick opened, bar before the
+    // heal, and accounted damage since (-1 tick = none open).
+    int pending_consume_tick, pending_bar_before, pending_damage_since;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
 } RiskfightVisibleOpponent;
 
@@ -147,6 +154,32 @@ static void riskfight_finalize_context(EncounterState* state, EncounterContext* 
     ctx->route_topology = pvp_route_topology_finalize(ctx->collision_map);
 }
 
+// Bag-legal nominal heals -> (food, potion, karam, delay) effects. Drink
+// adds no attack delay and arms food+potion locks; food +3 delay; halibut
+// +2 delay stacked with food (5 total). Ambiguous heals are pre-unioned
+// rows (e.g. 24 = marlin alone or marlin+0-heal potion), so lookup is a
+// direct map. 31 = pie+halibut with or without a 0-heal potion folded in.
+static void riskfight_classify_consume_heal(int lo, int hi,
+        int* food, int* potion, int* karam, int* delay) {
+    static const int heals[] = {0, 11, 16, 20, 24, 27, 31, 36, 40, 44, 47, 60};
+    static const int eff_food[] = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+    static const int eff_potion[] = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+    static const int eff_karam[] = {0, 0, 0, 2, 0, 0, 2, 2, 0, 2, 2, 2};
+    static const int eff_delay[] = {0, 3, 0, 2, 3, 3, 5, 2, 3, 5, 5, 5};
+    int n = (int)(sizeof(heals) / sizeof(heals[0]));
+    int f = 0, po = 0, k = 0, d = 0, matched = 0;
+    for (int i = 0; i < n; i++) {
+        if (heals[i] < lo || heals[i] > hi) continue;
+        matched = 1;
+        if (eff_food[i] > f) f = eff_food[i];
+        if (eff_potion[i] > po) po = eff_potion[i];
+        if (eff_karam[i] > k) k = eff_karam[i];
+        if (eff_delay[i] > d) d = eff_delay[i];
+    }
+    if (!matched) { f = 3; po = 3; k = 2; d = 5; }
+    *food = f; *potion = po; *karam = k; *delay = d;
+}
+
 static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) {
     const Player* opponent = &s->env.players[1 - viewer];
     RiskfightVisibleOpponent* v = &s->visible[viewer];
@@ -156,10 +189,22 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     v->x = opponent->x;
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);
+    int bar_before = v->health_bar;
     if (reset || opponent->hit_landed_this_tick)
         v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
             opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
-    if (reset) { v->last_attack_tick = -1; return; }
+    if (reset) {
+        v->last_attack_tick = -1;
+        v->consume_food_est = 0; v->consume_potion_est = 0;
+        v->consume_karam_est = 0; v->consume_delay_est = 0;
+        v->pending_consume_tick = -1; v->pending_bar_before = 0;
+        v->pending_damage_since = 0;
+        return;
+    }
+    if (v->consume_food_est > 0) v->consume_food_est--;
+    if (v->consume_potion_est > 0) v->consume_potion_est--;
+    if (v->consume_karam_est > 0) v->consume_karam_est--;
+    if (v->consume_delay_est > 0) v->consume_delay_est--;
     int index = (s->env.tick - 1) % RF_HISTORY_TICKS;
     float* event = v->events[index];
     event[3] = opponent->hit_landed_this_tick;
@@ -171,8 +216,43 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     event[5] = opponent->cast_veng_this_tick && !opponent->just_attacked && !consuming;
     event[6] = consuming;
     event[7] = v->health_bar;
-
+    int bar_event = opponent->hit_landed_this_tick;
+    // Open before accounting so a same-tick eat+hit attributes this tick's
+    // damage to the new pending (otherwise the heal is underestimated).
+    if (consuming && v->pending_consume_tick < 0) {
+        v->pending_consume_tick = s->env.tick;
+        v->pending_bar_before = bar_before;
+        v->pending_damage_since = 0;
+    }
+    if (bar_event && v->pending_consume_tick >= 0)
+        v->pending_damage_since += opponent->hit_damage;
+    if (bar_event && v->pending_consume_tick >= 0) {
+        if (opponent->current_hitpoints > 0) {
+            OsrsHealthBarRange before = osrs_health_bar_range(v->pending_bar_before,
+                OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+            OsrsHealthBarRange after = osrs_health_bar_range(v->health_bar,
+                OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+            if (before.kind == OSRS_HEALTH_BAR_KNOWN && after.kind == OSRS_HEALTH_BAR_KNOWN) {
+                OsrsHealthChangeRange ch = osrs_health_bar_unobserved_change(before, after,
+                    v->pending_damage_since);
+                int f, po, k, d;
+                riskfight_classify_consume_heal(ch.lower, ch.upper, &f, &po, &k, &d);
+                // effect - elapsed: observer decrements once per step,
+                // mirroring sim cadence.
+                int elapsed = s->env.tick - v->pending_consume_tick;
+                v->consume_food_est = f - elapsed > 0 ? f - elapsed : 0;
+                v->consume_potion_est = po - elapsed > 0 ? po - elapsed : 0;
+                v->consume_karam_est = k - elapsed > 0 ? k - elapsed : 0;
+                v->consume_delay_est = d - elapsed > 0 ? d - elapsed : 0;
+            }
+            v->pending_consume_tick = -1;
+            v->pending_damage_since = 0;
+        }
+    } else if (bar_event) {
+        v->pending_damage_since = 0;
+    }
 }
+
 
 static void riskfight_reset(EncounterState* state, EncounterContext* context, uint32_t seed) {
     RiskfightState* s = (RiskfightState*)state;
