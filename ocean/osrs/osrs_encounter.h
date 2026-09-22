@@ -26,7 +26,7 @@ typedef struct EncounterState EncounterState;
 typedef struct EncounterContext EncounterContext;
 typedef struct EncounterArenaTopology EncounterArenaTopology;
 
-#define ENCOUNTER_RENDER_HITS_MAX 32
+#define ENCOUNTER_RENDER_HITS_MAX OSRS_RENDER_HITS_MAX
 
 static inline void encounter_abort_unknown_config(
     const char* encounter_name, const char* config_type, const char* key
@@ -562,9 +562,12 @@ typedef struct {
     int hit_spell_type;
     int elysian_proc_this_tick;
     int cast_veng_this_tick;
+    int said_taste_vengeance_this_tick;
     int ate_food_this_tick;
     int ate_karambwan_this_tick;
     int used_special_this_tick;
+    int just_attacked;
+    int last_queued_hit_damage;
     int teleported_this_tick;
     uint8_t equipped[NUM_GEAR_SLOTS];
     int npc_slot;
@@ -654,7 +657,11 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->magic_type_this_tick = p->magic_type_this_tick;
     out->hit_landed_this_tick = p->hit_landed_this_tick;
     out->hit_damage = p->hit_damage;
-    if (p->hit_landed_this_tick) {
+    if (p->render_hit_count > 0) {
+        out->render_hit_count = p->render_hit_count;
+        memcpy(out->render_hit_damage, p->render_hit_damage,
+            (size_t)p->render_hit_count * sizeof(int));
+    } else if (p->hit_landed_this_tick) {
         out->render_hit_count = 1;
         out->render_hit_damage[0] = p->hit_damage;
     }
@@ -662,10 +669,13 @@ static inline void render_entity_from_player(const Player* p, RenderEntity* out)
     out->hit_spell_type = 0;
     out->elysian_proc_this_tick = p->elysian_proc_this_tick;
     out->cast_veng_this_tick = p->cast_veng_this_tick;
+    out->said_taste_vengeance_this_tick = p->said_taste_vengeance_this_tick;
     out->teleported_this_tick = 0;
     out->ate_food_this_tick = p->ate_food_this_tick;
     out->ate_karambwan_this_tick = p->ate_karambwan_this_tick;
     out->used_special_this_tick = p->used_special_this_tick;
+    out->just_attacked = p->just_attacked;
+    out->last_queued_hit_damage = p->last_queued_hit_damage;
     memcpy(out->equipped, p->equipped, NUM_GEAR_SLOTS);
     out->npc_slot = -1;
     out->npc_instance_id = 0;
@@ -1073,9 +1083,11 @@ static inline void encounter_clear_tick_flags(Player* p) {
     p->magic_type_this_tick = 0;
     p->hit_landed_this_tick = 0;
     p->hit_damage = 0;
+    p->render_hit_count = 0;
     p->hit_was_successful = 0;
     p->elysian_proc_this_tick = 0;
     p->cast_veng_this_tick = 0;
+    p->said_taste_vengeance_this_tick = 0;
     p->ate_food_this_tick = 0;
     p->ate_karambwan_this_tick = 0;
     p->used_special_this_tick = 0;

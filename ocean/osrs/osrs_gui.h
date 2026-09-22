@@ -317,6 +317,7 @@ typedef struct {
 
     Texture2D spell_on[GUI_NUM_SPELLS];
     Texture2D spell_off[GUI_NUM_SPELLS];
+    Texture2D veng_spell;
 
     Texture2D slot_tile;
 
@@ -755,6 +756,7 @@ static void gui_load_sprites(GuiState* gs) {
         gs->spell_on[i] = gui_require_texture(OSRS_ASSET(on_logical_path));
         gs->spell_off[i] = gui_require_texture(OSRS_ASSET(off_logical_path));
     }
+    gs->veng_spell = gui_require_texture(OSRS_ASSET("sprites/gui/spell_vengeance.png"));
 
     gs->slot_tile = gui_require_texture(OSRS_ASSET("sprites/gui/slot_tile.png"));
 
@@ -943,6 +945,7 @@ static void gui_unload_sprites(GuiState* gs) {
         UnloadTexture(gs->spell_on[i]);
         UnloadTexture(gs->spell_off[i]);
     }
+    UnloadTexture(gs->veng_spell);
     UnloadTexture(gs->slot_tile);
     UnloadTexture(gs->minimap_compass);
     UnloadTexture(gs->minimap_compass_masked);
@@ -2656,6 +2659,21 @@ static void gui_spell_grid_origin(GuiState* gs, int* gx, int* gy) {
     *gy = gui_content_y(gs) + GUI_SPELL_GRID_Y0;
 }
 
+static int gui_lunar_pitch_y(void) {
+    return (GUI_SIDE_CONTENT_H - GUI_SPELL_GRID_Y0 - GUI_SPELL_ICON_PX) / 10;
+}
+
+static Rectangle gui_lunar_vengeance_cell(GuiState* gs) {
+    int gx, gy;
+    gui_spell_grid_origin(gs, &gx, &gy);
+    return (Rectangle){
+        (float)(gx + 2 * GUI_SPELL_PITCH_X),
+        (float)(gy + 9 * gui_lunar_pitch_y()),
+        (float)GUI_SPELL_ICON_PX,
+        (float)GUI_SPELL_ICON_PX
+    };
+}
+
 typedef struct {
     const char* names[4];
     FightStyle values[4];
@@ -3113,11 +3131,10 @@ static void gui_draw_spellbook(GuiState* gs, Player* p) {
     int gx, gy;
     gui_spell_grid_origin(gs, &gx, &gy);
     if (p->is_lunar_spellbook) {
-        Color color = !p->veng_active && p->veng_cooldown <= 0 && p->current_magic >= 94 ? WHITE : GRAY;
-        DrawRectangleLines(gx, gy, 140, 38, color);
-        DrawText("Vengeance", gx + 8, gy + 10, 18, color);
-        DrawText(p->veng_active ? "Active" : TextFormat("Cooldown: %d", p->veng_cooldown),
-            gx, gy + 48, 16, color);
+        Rectangle cell = gui_lunar_vengeance_cell(gs);
+        Color tint = !p->veng_active && p->veng_cooldown <= 0 && p->current_magic >= 94
+            ? WHITE : GRAY;
+        gui_draw_texture(gs->veng_spell, cell, tint);
         return;
     }
 

@@ -200,6 +200,7 @@ static void test_special_and_outcomes(void) {
     int actions[2 * RF_HEADS] = {0}; actions[RF_PRIMARY] = RF_ATTACK; actions[RF_SPECIAL] = 2;
     step(actions);
     assert(p->special_energy == 0 && p->attack_timer == 4);
+    assert(state.spec_maul[0] == 1);
     assert(osrs_spec_cost(ITEM_GRANITE_MAUL) == 60 && osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE) == 50);
     reset(); memset(actions, 0, sizeof(actions)); actions[RF_PRIMARY] = RF_TELEPORT;
     step(actions); assert(state.env.episode_over && state.outcome[0] == RISKFIGHT_ESCAPE);
@@ -383,6 +384,48 @@ static void test_live_attack_processing_order(void) {
     }
 }
 
+static void test_prayer_actions(void) {
+    reset();
+    assert(state.env.players[0].current_prayer > 0);
+    HumanCommand piety = {
+        .kind = HUMAN_COMMAND_OFFENSIVE_PRAYER,
+        .offensive_prayer = ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY,
+    };
+    riskfight_execute_command(&state, &context, 0, &piety);
+    assert(state.env.players[0].offensive_prayer == OFFENSIVE_PRAYER_PIETY);
+
+    reset();
+    HumanCommand smite = {
+        .kind = HUMAN_COMMAND_OVERHEAD_PRAYER,
+        .overhead_prayer = ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE,
+    };
+    riskfight_execute_command(&state, &context, 0, &smite);
+    assert(state.env.players[0].prayer == PRAYER_SMITE);
+
+    reset();
+    int a[RF_HEADS] = {0};
+    a[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
+    HumanInput hi;
+    human_input_init(&hi);
+    riskfight_policy_commands(&state, 0, a, &hi);
+    HumanCommandQueue empty = {0};
+    riskfight_step_queues(&state, &context, &hi.commands, &empty);
+    assert(state.env.players[0].offensive_prayer == OFFENSIVE_PRAYER_PIETY);
+    free(hi.commands.items);
+
+    reset();
+    state.env.players[0].current_prayer = 0;
+    float mask[RF_MASK_SIZE];
+    riskfight_write_action_mask(&state, 0, mask);
+    assert(RF_ACTION_DIMS[RF_OVERHEAD] == 7);
+    int offset = 0;
+    for (int head = 0; head < RF_OVERHEAD; head++)
+        offset += RF_ACTION_DIMS[head];
+    assert(mask[offset] == 1);
+    for (int action = 1; action < RF_ACTION_DIMS[RF_OVERHEAD]; action++)
+        assert(mask[offset + action] == 0);
+}
+
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
@@ -390,6 +433,7 @@ int main(void) {
     test_potions(); test_vengeance(); test_debug_axe_hit_reward_probe(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
     test_tick_order_and_boundaries();
     test_live_attack_processing_order();
+    test_prayer_actions();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight contracts passed");
 }

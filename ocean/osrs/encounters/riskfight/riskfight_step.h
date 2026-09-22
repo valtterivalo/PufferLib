@@ -24,6 +24,9 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
         visible->last_attack_speed = ITEM_DATABASE[weapon].attack_speed;
     }
 }
+static void riskfight_count_maul_spec(RiskfightState* s, int agent, int hits) {
+    if (hits > 0) s->spec_maul[agent]++;
+}
 
 static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent) {
     Player* p = &s->env.players[agent];
@@ -60,6 +63,16 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
         chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
     riskfight_record_attack(s, agent, 1, 0);
     if (special) osrs_spec_disarm(&p->spec_armed);
+}
+
+static int riskfight_encode_offensive_prayer(int offensive) {
+    switch ((OffensivePrayer)offensive) {
+        case OFFENSIVE_PRAYER_NONE:   return ENCOUNTER_OFFENSIVE_OFF;
+        case OFFENSIVE_PRAYER_PIETY:  return ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+        case OFFENSIVE_PRAYER_RIGOUR: return ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR;
+        case OFFENSIVE_PRAYER_AUGURY: return ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
+        default:                      return ENCOUNTER_OFFENSIVE_NO_CHANGE;
+    }
 }
 
 static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
@@ -134,6 +147,7 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             if (!s->escaped[1 - agent]) {
                 int before = p->special_energy;
                 int maul_hits = pvp_maul_target_click(&s->env, agent, 1 - agent);
+                riskfight_count_maul_spec(s, agent, maul_hits);
                 if (maul_hits > 0 && p->special_energy < before && ctx->maul_double_reward != 0) {
                     float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
                     s->rewards[agent] += maul_bonus;
@@ -163,7 +177,11 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             break;
         case HUMAN_COMMAND_OFFENSIVE_PRAYER:
             if (p->current_prayer > 0)
-                p->offensive_prayer = (OffensivePrayer)command->offensive_prayer;
+                encounter_apply_offensive_action(&p->offensive_prayer, command->offensive_prayer);
+            break;
+        case HUMAN_COMMAND_OVERHEAD_PRAYER:
+            if (p->current_prayer > 0)
+                encounter_apply_overhead_action(&p->prayer, command->overhead_prayer);
             break;
         case HUMAN_COMMAND_FIGHT_STYLE:
             p->fight_style = (FightStyle)command->fight_style;
@@ -173,7 +191,6 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
                 command->inventory_slot, command->target_inventory_slot);
             break;
         case HUMAN_COMMAND_NONE:
-        case HUMAN_COMMAND_OVERHEAD_PRAYER:
         case HUMAN_COMMAND_SPELL_TARGET:
         case HUMAN_COMMAND_SET_AUTOCAST:
         case HUMAN_COMMAND_ITEM_ON_WIDGET:
@@ -216,7 +233,9 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     if (actions[RF_VENGEANCE])
         human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE});
     human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_OFFENSIVE_PRAYER,
-        .offensive_prayer = actions[RF_PRAYER]});
+        .offensive_prayer = riskfight_encode_offensive_prayer(actions[RF_PRAYER])});
+    human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_OVERHEAD_PRAYER,
+        .overhead_prayer = actions[RF_OVERHEAD]});
     human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_FIGHT_STYLE,
         .fight_style = actions[RF_STYLE]});
     int primary = actions[RF_PRIMARY];
@@ -301,6 +320,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         memset(s->visible[i].events[s->env.tick % RF_HISTORY_TICKS], 0, RF_EVENT_WIDTH * sizeof(float));
         reset_tick_flags(p);
         p->hit_damage = 0;
+        p->render_hit_count = 0;
         p->hit_landed_this_tick = 0;
         EquipmentBonuses bonuses;
         osrs_sum_equipment_bonuses(p->equipped, &bonuses);
@@ -312,19 +332,17 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
         if (!s->escaped[0] && !s->escaped[1]) {
-            // Maul double-spec resolves instantly here (DESELECTED state is
-            // invisible in obs), so count paid maul specials at this site.
-            // DEBUG probe pays per resolved hit that actually spent energy.
+            // Homing single (no click this tick). Click-path doubles count at
+            // ATTACK_NPC / continue_attack; prep is already cleared here.
             int before = s->env.players[i].special_energy;
             int maul_hits = pvp_maul_finish_inputs(&s->env, i);
-            if (maul_hits > 0 && pvp_is_maul(s->env.players[i].equipped[GEAR_SLOT_WEAPON])) {
-                s->spec_maul[i]++;
-                if (s->env.players[i].special_energy < before && ctx->maul_double_reward != 0) {
-                    float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
-                    s->rewards[i] += maul_bonus;
-                    s->episode_returns[i] += maul_bonus;
-                    s->debug_maul_rewards[i] += maul_bonus;
-                }
+            riskfight_count_maul_spec(s, i, maul_hits);
+            if (maul_hits > 0 && s->env.players[i].special_energy < before &&
+                    ctx->maul_double_reward != 0) {
+                float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
+                s->rewards[i] += maul_bonus;
+                s->episode_returns[i] += maul_bonus;
+                s->debug_maul_rewards[i] += maul_bonus;
             }
             riskfight_record_attack(s, i, maul_hits, 1);
         }
@@ -345,8 +363,11 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         execute_attack_movement(&s->env, i, idle_actions, ctx->route_topology, &ctx->routes[i]);
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);
-        if (!s->escaped[0] && !s->escaped[1])
-            riskfight_record_attack(s, i, pvp_maul_continue_attack(&s->env, i), 1);
+        if (!s->escaped[0] && !s->escaped[1]) {
+            int maul_hits = pvp_maul_continue_attack(&s->env, i);
+            riskfight_count_maul_spec(s, i, maul_hits);
+            riskfight_record_attack(s, i, maul_hits, 1);
+        }
         riskfight_attack(s, ctx, i);
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);

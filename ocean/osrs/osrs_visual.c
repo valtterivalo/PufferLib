@@ -476,6 +476,18 @@ static const EncounterDef* visual_open_encounter(OsrsEnv* env, const char* encou
             "opponent_type", g_cli_riskfight_opponent);
     return edef;
 }
+
+static void visual_riskfight_clear_precast_veng(OsrsEnv* env) {
+    if (!env->encounter_def || !env->encounter_state) return;
+    if (strcmp(((const EncounterDef*)env->encounter_def)->name, "riskfight") != 0)
+        return;
+    RiskfightState* s = (RiskfightState*)env->encounter_state;
+    for (int i = 0; i < 2; i++) {
+        s->env.players[i].veng_active = 0;
+        s->env.players[i].veng_cooldown = 0;
+    }
+}
+
 static void visual_finalize_encounter(
     const EncounterDef* edef,
     OsrsEnv* env
@@ -1604,7 +1616,7 @@ static void visual_frame(void* arg) {
 
     if (vs->episode_ended) {
         pvp_render(env);
-        if (GetTime() - vs->episode_end_time >= 2.0) {
+        if (render_episode_outro_ready(rc, env)) {
             vs->episode_ended = 0;
             async_policy_join(&vs->async_policy);
             vs->async_policy.has_actions = 0;
@@ -1616,6 +1628,7 @@ static void visual_frame(void* arg) {
             } else {
                 pvp_reset(env, rc->route_topology);
             }
+            visual_riskfight_clear_precast_veng(env);
             render_reset_episode_visual_state(rc, env);
             visual_policy_reset_recurrent(&vs->policy);
             render_save_snapshot(rc, env);
@@ -2228,6 +2241,7 @@ static void run_visual(
         g_cli_entity_encoder);
     osrs_time_log("visual_policy_init", &t0);
 
+    visual_riskfight_clear_precast_veng(env);
     render_save_snapshot(rc, env);
 
 #ifdef __EMSCRIPTEN__

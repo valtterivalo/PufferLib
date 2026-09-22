@@ -420,6 +420,15 @@ static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
     env->pvp_runtime.hit_observer(env->pvp_runtime.hit_observer_context, &event);
 }
 
+static inline void pvp_render_hit_events_add(Player* p, int hit_damage) {
+    if (!p || p->render_hit_count < 0 || p->render_hit_count >= OSRS_RENDER_HITS_MAX) {
+        fprintf(stderr, "invalid pvp render hit event\n");
+        abort();
+    }
+    p->render_hit_damage[p->render_hit_count] = hit_damage > 0 ? hit_damage : 0;
+    p->render_hit_count += 1;
+}
+
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
                          PendingHit* hit) {
     Player* attacker = &env->players[attacker_idx];
@@ -431,6 +440,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE) {
         defender->hit_landed_this_tick = 1;
         defender->hit_damage += hit->damage;
+        pvp_render_hit_events_add(defender, hit->damage);
         defender->hit_attacker_idx = attacker_idx;
         defender->damage_applied_this_tick += hit->damage;
         defender->current_hitpoints = max_int(0, defender->current_hitpoints - hit->damage);
@@ -462,6 +472,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     defender->hit_landed_this_tick = 1;
     defender->hit_was_successful = hit->hit_success;
     defender->hit_damage += damage;
+    pvp_render_hit_events_add(defender, damage);
     defender->hit_style = hit->attack_type;
     defender->hit_defender_prayer = hit->defender_prayer_at_attack;
     defender->hit_was_on_prayer = dr.prayer_blocked;
@@ -482,6 +493,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
     if (dr.veng_damage > 0) {
+        defender->said_taste_vengeance_this_tick = 1;
         queue_hit(env->tick, defender_idx, attacker_idx, defender, attacker,
             dr.veng_damage, ATTACK_STYLE_NONE, 0, 0, 1, 0, 0, 0, 0, 0);
         defender->pending_hits[defender->num_pending_hits - 1].kind = OSRS_HIT_VENGEANCE;

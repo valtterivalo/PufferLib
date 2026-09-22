@@ -98,6 +98,16 @@ void puf_reset(Env* env) {
     }
 }
 void puf_step(Env* env) {
+#ifdef OSRS_PUFFER_RENDER
+    if (env->renderer && env->state.env.episode_over) {
+        for (int i = 0; i < env->num_agents; i++) {
+            env->agents[i].rewards[0] = 0;
+            env->agents[i].terminals[0] = 1;
+        }
+        riskfight_native_observe(env);
+        return;
+    }
+#endif
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
@@ -183,7 +193,12 @@ void puf_step(Env* env) {
         env->log.spec_voidwaker += env->state.spec_voidwaker[0];
         env->log.spec_maul += env->state.spec_maul[0];
         env->log.n++;
+#ifdef OSRS_PUFFER_RENDER
+        if (!env->renderer)
+            riskfight_native_reset(env);
+#else
         riskfight_native_reset(env);
+#endif
     }
     riskfight_native_observe(env);
 }

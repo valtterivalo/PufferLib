@@ -255,6 +255,15 @@ typedef struct {
 } HitSplat;
 
 typedef struct {
+    int active;
+    int damage;
+    int skill_icon; /* 0 attack, 1 strength, 3 ranged, 5 magic */
+    double move;
+    int trans;
+    int ticks_remaining;
+} XpDrop;
+
+typedef struct {
     AnimPlayback primary;
     AnimPlayback secondary;
 } RenderAnimationState;
@@ -276,7 +285,10 @@ typedef struct {
     float target_yaw;
     int facing_opponent;
     int hp_bar_visible_until;
+    int chat_visible_until;
     HitSplat splats[RENDER_SPLATS_PER_PLAYER];
+    XpDrop xp_drops[RENDER_SPLATS_PER_PLAYER];
+    int xp_drop_tick;
 } RenderVisualSlotSnapshot;
 
 #define CONTEXT_MENU_MAX_ITEMS 64
@@ -440,6 +452,8 @@ typedef struct RenderClient {
     float zoom;
 
     HitSplat splats[MAX_RENDER_ENTITIES][RENDER_SPLATS_PER_PLAYER];
+    XpDrop xp_drops[MAX_RENDER_ENTITIES][RENDER_SPLATS_PER_PLAYER];
+    int xp_drop_tick[MAX_RENDER_ENTITIES];
 
     float sub_x[MAX_RENDER_ENTITIES], sub_y[MAX_RENDER_ENTITIES];
     float dest_x[MAX_RENDER_ENTITIES], dest_y[MAX_RENDER_ENTITIES];
@@ -453,9 +467,19 @@ typedef struct RenderClient {
     int facing_opponent[MAX_RENDER_ENTITIES];
 
     int hp_bar_visible_until[MAX_RENDER_ENTITIES];
+    int chat_visible_until[MAX_RENDER_ENTITIES];
 
     ActiveEffect effects[MAX_ACTIVE_EFFECTS];
     int effect_client_tick_counter;
+    int outro_active;
+    int outro_saw_death;
+    int outro_saw_teleport;
+    int outro_death_lie_tick;
+    double outro_start_time;
+    double outro_condition_time;
+    int veng_gfx_spawned[MAX_RENDER_ENTITIES];
+
+
     int prev_sol_aoe_age;
 
     double client_tick_accumulator;
@@ -638,6 +662,23 @@ static AnimSequence* render_get_anim_sequence_for_model(
     }
     if (mismatched_maya) return mismatched_maya;
     return render_get_anim_sequence(rc, seq_id);
+}
+
+static AnimSequence* render_get_matching_anim_sequence(
+    RenderClient* rc, uint16_t seq_id, int model_vert_count
+) {
+    AnimCache* caches[3] = {
+        rc->anim_cache, rc->npc_anim_cache, rc->projectile_anim_cache
+    };
+    for (int i = 0; i < 3; i++) {
+        if (!caches[i]) continue;
+        AnimSequence* seq = anim_get_sequence(caches[i], seq_id);
+        if (!seq || anim_sequence_is_empty_stub(seq)) continue;
+        int maya_vc = anim_sequence_maya_vert_count(seq);
+        if (maya_vc > 0 && maya_vc != model_vert_count) continue;
+        return seq;
+    }
+    return NULL;
 }
 
 static int render_sequence_stalls_movement(const AnimSequence* seq) {
@@ -1864,6 +1905,7 @@ static RenderClient* render_make_client(OsrsEnv* env) {
         anim_playback_set_seq(&rc->anim[i].secondary, ANIM_SEQ_IDLE, ANIM_PLAY_LOOP);
         rc->primary_event_tick[i] = -1;
         rc->last_primary_event_tick[i] = -2;
+        rc->xp_drop_tick[i] = -1;
         rc->prev_npc_slot[i] = -1;
     }
 
@@ -2728,10 +2770,10 @@ static void render_handle_input(RenderClient* rc, OsrsEnv* env) {
     }
 
     if (IsKeyPressed(KEY_ONE))    rc->gui.active_tab = GUI_TAB_INVENTORY;
-    if (IsKeyPressed(KEY_TWO))    rc->gui.active_tab = GUI_TAB_COMBAT;
+    if (IsKeyPressed(KEY_TWO))    rc->gui.active_tab = GUI_TAB_EQUIPMENT;
     if (IsKeyPressed(KEY_THREE))  rc->gui.active_tab = GUI_TAB_PRAYER;
     if (IsKeyPressed(KEY_FOUR))   rc->gui.active_tab = GUI_TAB_SPELLBOOK;
-    if (IsKeyPressed(KEY_FIVE))   rc->gui.active_tab = GUI_TAB_EQUIPMENT;
+    if (IsKeyPressed(KEY_FIVE))   rc->gui.active_tab = GUI_TAB_COMBAT;
 
     {
         static const float speed_steps[] = {
@@ -2999,6 +3041,7 @@ static void render_clear_history(RenderClient* rc) {
 }
 
 static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type);
+static void render_push_xp_drop(RenderClient* rc, int pidx, int damage, int skill_icon);
 
 static int render_hit_splat_type_for_damage(int damage) {
     return damage > 0 ? 1 : 0;
@@ -3066,6 +3109,7 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     anim_playback_reset(&rc->anim[i].secondary);
     rc->primary_event_tick[i] = -1;
     rc->last_primary_event_tick[i] = -2;
+    rc->xp_drop_tick[i] = -1;
     rc->composites[i].needs_rebuild = 1;
     rc->prev_npc_slot[i] = -1;
     rc->sub_x[i] = 0;
@@ -3081,11 +3125,14 @@ static void render_reset_entity_visual_slot(RenderClient* rc, int i) {
     rc->yaw[i] = 0.0f;
     rc->target_yaw[i] = 0.0f;
     rc->hp_bar_visible_until[i] = 0;
+    rc->chat_visible_until[i] = 0;
     rc->entity_hulls[i].count = 0;
     rc->entity_visual_top_y[i] = 0.0f;
     rc->entity_visual_mid_y[i] = 0.0f;
     for (int s = 0; s < RENDER_SPLATS_PER_PLAYER; s++)
         rc->splats[i][s].active = 0;
+    for (int s = 0; s < RENDER_SPLATS_PER_PLAYER; s++)
+        rc->xp_drops[i][s].active = 0;
 }
 
 static RenderVisualSlotSnapshot render_snapshot_entity_visual_slot(
@@ -3109,7 +3156,10 @@ static RenderVisualSlotSnapshot render_snapshot_entity_visual_slot(
     out.target_yaw = rc->target_yaw[i];
     out.facing_opponent = rc->facing_opponent[i];
     out.hp_bar_visible_until = rc->hp_bar_visible_until[i];
+    out.chat_visible_until = rc->chat_visible_until[i];
     memcpy(out.splats, rc->splats[i], sizeof(out.splats));
+    memcpy(out.xp_drops, rc->xp_drops[i], sizeof(out.xp_drops));
+    out.xp_drop_tick = rc->xp_drop_tick[i];
     return out;
 }
 
@@ -3132,7 +3182,10 @@ static void render_restore_entity_visual_slot(
     rc->target_yaw[i] = snapshot->target_yaw;
     rc->facing_opponent[i] = snapshot->facing_opponent;
     rc->hp_bar_visible_until[i] = snapshot->hp_bar_visible_until;
+    rc->chat_visible_until[i] = snapshot->chat_visible_until;
     memcpy(rc->splats[i], snapshot->splats, sizeof(snapshot->splats));
+    memcpy(rc->xp_drops[i], snapshot->xp_drops, sizeof(snapshot->xp_drops));
+    rc->xp_drop_tick[i] = snapshot->xp_drop_tick;
 }
 
 static void render_seed_entity_visual_slot(RenderClient* rc, int i) {
@@ -3172,9 +3225,42 @@ static void render_reset_episode_visual_state(RenderClient* rc, OsrsEnv* env) {
         }
     }
     rc->prev_entity_count = rc->entity_count;
+    rc->outro_active = 0;
+    rc->outro_saw_death = 0;
+    rc->outro_saw_teleport = 0;
+    rc->outro_death_lie_tick = -1;
+    rc->outro_start_time = 0.0;
+    rc->outro_condition_time = -1.0;
+    memset(rc->veng_gfx_spawned, 0, sizeof(rc->veng_gfx_spawned));
+
+
 }
 
 static void render_pre_tick(RenderClient* rc, OsrsEnv* env) {
+}
+
+static int render_spawn_followed_spotanim(
+    RenderClient* rc, int entity_i, int gfx_id, int height)
+{
+    RenderEntity* p = &rc->entities[entity_i];
+    int slot = effect_spawn_spotanim(rc->effects, gfx_id,
+            p->x, p->y, rc->effect_client_tick_counter, rc->spotanims, rc->anim_cache,
+            rc->model_cache, rc->npc_model_cache,
+            rc->projectile_model_cache);
+    if (slot < 0) {
+        if (gfx_id == GFX_VENGEANCE) {
+            static int missing_veng_gfx;
+            if (!missing_veng_gfx) {
+                fprintf(stderr, "render: missing spotanim %d\n", GFX_VENGEANCE);
+                missing_veng_gfx = 1;
+            }
+        }
+        return slot;
+    }
+    rc->effects[slot].height = height;
+    rc->effects[slot].follow_entity = entity_i;
+    rc->effects[slot].follow_yaw = rc->yaw[entity_i];
+    return slot;
 }
 
 static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
@@ -3287,6 +3373,14 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
             p->used_special_this_tick ||
             render_hit_count > 0) {
             rc->primary_event_tick[i] = env->tick;
+        }
+        if (i == rc->gui.gui_entity_idx &&
+                p->just_attacked && rc->xp_drop_tick[i] != env->tick) {
+            rc->xp_drop_tick[i] = env->tick;
+            int icon = 1;
+            if (p->attack_style_this_tick == ATTACK_STYLE_RANGED) icon = 3;
+            else if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) icon = 5;
+            render_push_xp_drop(rc, i, p->last_queued_hit_damage, icon);
         }
     }
 
@@ -3412,24 +3506,20 @@ static void render_post_tick(RenderClient* rc, OsrsEnv* env) {
                 }
             }
         }
-        // Lunar vengeance cast flash on the caster (footage spotanim 726).
-        // Render-only: sim timing/flags untouched. Missing-asset path returns
-        // -1 without aborting, matching the splash-fallback convention below.
-        if (p->cast_veng_this_tick)
-            effect_spawn_spotanim(rc->effects, GFX_VENGEANCE,
-                p->x, p->y, ct, rc->spotanims, rc->anim_cache,
-                rc->model_cache, rc->npc_model_cache,
-                rc->projectile_model_cache);
-        // Teleport-tablet departure flash on the escape frame (gfx 678).
-        // Render-only: sim escape/episode timing untouched. Hide is handled
-        // by the episode freeze (viewer holds the last frame 2s); no entity
-        // visibility state changes here.
-        if (p->teleported_this_tick)
-            effect_spawn_spotanim(rc->effects, GFX_TELEPORT_BREAK,
-                p->x, p->y, ct, rc->spotanims, rc->anim_cache,
-                rc->model_cache, rc->npc_model_cache,
-                rc->projectile_model_cache);
+
     }
+    for (int i = 0; i < rc->entity_count; i++) {
+        RenderEntity* p = &rc->entities[i];
+        int want_veng = p->cast_veng_this_tick ||
+            (p->veng_active && !rc->veng_gfx_spawned[i]);
+        if (want_veng) {
+            render_spawn_followed_spotanim(rc, i, GFX_VENGEANCE, 124);
+            rc->veng_gfx_spawned[i] = 1;
+        }
+        if (p->teleported_this_tick)
+            render_spawn_followed_spotanim(rc, i, GFX_TELEPORT_BREAK, 124);
+    }
+
 
     if (env->encounter_def && env->encounter_state) {
         const EncounterDef* edef = (const EncounterDef*)env->encounter_def;
@@ -3654,6 +3744,21 @@ static void render_update_splats_client_tick(RenderClient* rc) {
     }
 }
 
+static void render_update_xp_drops_client_tick(RenderClient* rc) {
+    for (int p = 0; p < rc->entity_count; p++) {
+        for (int i = 0; i < RENDER_SPLATS_PER_PLAYER; i++) {
+            XpDrop* d = &rc->xp_drops[p][i];
+            if (!d->active) continue;
+            d->move -= 0.4;
+            d->ticks_remaining--;
+            if (d->ticks_remaining <= 40)
+                d->trans = (int)(255.0 * d->ticks_remaining / 40.0);
+            if (d->ticks_remaining <= 0)
+                d->active = 0;
+        }
+    }
+}
+
 static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int type) {
     HitSplat splat = {
         .active = 1,
@@ -3675,6 +3780,124 @@ static void render_push_splat_type(RenderClient* rc, int damage, int pidx, int t
             oldest = i;
     }
     rc->splats[pidx][oldest] = splat;
+}
+
+static void render_push_xp_drop(RenderClient* rc, int pidx, int damage, int skill_icon) {
+    XpDrop drop = {
+        .active = 1,
+        .damage = damage,
+        .skill_icon = skill_icon,
+        .move = 0,
+        .trans = 255,
+        .ticks_remaining = 90,
+    };
+    for (int i = 0; i < RENDER_SPLATS_PER_PLAYER; i++) {
+        if (!rc->xp_drops[pidx][i].active) {
+            rc->xp_drops[pidx][i] = drop;
+            return;
+        }
+    }
+    int oldest = 0;
+    for (int i = 1; i < RENDER_SPLATS_PER_PLAYER; i++) {
+        if (rc->xp_drops[pidx][i].ticks_remaining < rc->xp_drops[pidx][oldest].ticks_remaining)
+            oldest = i;
+    }
+    rc->xp_drops[pidx][oldest] = drop;
+}
+
+static int render_spotanim_active(RenderClient* rc, int gfx_id) {
+    for (int i = 0; i < MAX_ACTIVE_EFFECTS; i++) {
+        if (rc->effects[i].type == EFFECT_SPOTANIM &&
+                rc->effects[i].gfx_id == gfx_id)
+            return 1;
+    }
+    return 0;
+}
+
+static int render_death_lying(RenderClient* rc) {
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].current_hitpoints > 0) continue;
+        AnimPlayback* pb = &rc->anim[i].primary;
+        if (pb->seq_id != ANIM_SEQ_DEATH) continue;
+        render_anim_playback_resolve(rc, pb, rc->composites[i].base_vert_count);
+        if (!pb->sequence || pb->sequence->frame_count <= 0) continue;
+        if (pb->frame_idx >= pb->sequence->frame_count - 1)
+            return 1;
+    }
+    return 0;
+}
+
+static int render_episode_outro_ready(RenderClient* rc, OsrsEnv* env) {
+    (void)env;
+    if (!rc->outro_active) {
+        rc->outro_active = 1;
+        rc->outro_start_time = GetTime();
+        rc->outro_condition_time = -1.0;
+        rc->outro_death_lie_tick = -1;
+    }
+    for (int i = 0; i < rc->entity_count; i++) {
+        if (rc->entities[i].current_hitpoints <= 0)
+            rc->outro_saw_death = 1;
+        if (rc->entities[i].teleported_this_tick)
+            rc->outro_saw_teleport = 1;
+    }
+    if (GetTime() - rc->outro_start_time >= 4.0)
+        return 1;
+
+    int death_ok = 1;
+    if (rc->outro_saw_death) {
+        death_ok = 0;
+        if (render_death_lying(rc)) {
+            if (rc->outro_death_lie_tick < 0)
+                rc->outro_death_lie_tick = rc->effect_client_tick_counter;
+            if (rc->effect_client_tick_counter - rc->outro_death_lie_tick >= 30)
+                death_ok = 1;
+        }
+    }
+    int teleport_ok = !rc->outro_saw_teleport ||
+        !render_spotanim_active(rc, GFX_TELEPORT_BREAK);
+    if (!(death_ok && teleport_ok))
+        return 0;
+    if (rc->outro_condition_time < 0.0)
+        rc->outro_condition_time = GetTime();
+    double min_hold = rc->outro_saw_death ? 2.0
+        : (rc->outro_saw_teleport ? 1.2 : 0.0);
+    if (GetTime() - rc->outro_start_time < min_hold)
+        return 0;
+    return GetTime() - rc->outro_condition_time >= 0.4;
+}
+
+
+static void render_draw_xp_drops(RenderClient* rc) {
+    int i = rc->gui.gui_entity_idx;
+    if (i < 0 || i >= rc->entity_count) return;
+    /* Interface 122 XP_DROPS defaults to TOP_RIGHT: left of the minimap
+     * orbs, local player only. Same chrome camera as the map container. */
+    int map_x = GetScreenWidth() - GUI_MAP_CONTAINER_W;
+    int origin_x = map_x - 8;
+    int origin_y = GUI_MINIMAP_Y + 72;
+    BeginMode2D(render_chrome_camera((float)RENDER_WINDOW_W, 0.0f));
+    for (int xi = 0; xi < RENDER_SPLATS_PER_PLAYER; xi++) {
+        XpDrop* d = &rc->xp_drops[i][xi];
+        if (!d->active) continue;
+        unsigned char a = (unsigned char)(
+            d->trans > 255 ? 255 : (d->trans < 0 ? 0 : d->trans));
+        Texture2D icon = gui_asset(
+            &rc->gui, TextFormat("skill_icon_%d", d->skill_icon));
+        float icon_px = 16.0f;
+        float scale = icon.width > 0 ? icon_px / (float)icon.width : 1.0f;
+        const char* txt = TextFormat("%d", d->damage);
+        int tw = MeasureText(txt, 10);
+        int draw_y = origin_y + (int)d->move;
+        int text_x = origin_x - tw;
+        int icon_x = text_x - (int)icon_px - 2;
+        DrawTextureEx(
+            icon, (Vector2){(float)icon_x, (float)draw_y}, 0.0f, scale,
+            (Color){255, 255, 255, a});
+        DrawText(txt, text_x + 1, draw_y + 3, 10, (Color){0, 0, 0, a});
+        DrawText(txt, text_x, draw_y + 2, 10, (Color){255, 255, 255, a});
+    }
+    EndMode2D();
 }
 
 static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, int opacity, int type) {
@@ -3949,7 +4172,6 @@ static int render_select_primary(RenderEntity* p) {
             p->ate_food_this_tick, p->ate_karambwan_this_tick, 0)) {
         return ANIM_SEQ_EAT;
     }
-
     if (p->cast_veng_this_tick) {
         return ANIM_SEQ_CAST_VENG;
     }
@@ -4347,14 +4569,26 @@ static void render_player_composite(
             ? p->npc_anim_id : -1;
     } else {
         new_primary = render_select_primary(p);
+        if (new_primary >= 0 &&
+                !render_get_matching_anim_sequence(
+                    rc, (uint16_t)new_primary, comp->base_vert_count)) {
+            if (new_primary == ANIM_SEQ_DEATH) {
+                static int death_unmatched;
+                if (!death_unmatched) {
+                    fprintf(stderr, "render: death 836 unmatched\n");
+                    death_unmatched = 1;
+                }
+            }
+            new_primary = -1;
+        }
     }
     if (new_primary >= 0) {
         int event_changed =
             rc->primary_event_tick[player_idx] !=
             rc->last_primary_event_tick[player_idx];
-        int need_restart = (rc->anim[player_idx].primary.seq_id != new_primary) ||
-                           (rc->anim[player_idx].primary.completed_loops > 0) ||
-                           (event_changed && new_primary != ANIM_SEQ_DEATH);
+        int need_restart = (new_primary == ANIM_SEQ_DEATH)
+            ? (rc->anim[player_idx].primary.seq_id != ANIM_SEQ_DEATH)
+            : event_changed;
         if (need_restart) {
             anim_playback_restart(
                 &rc->anim[player_idx].primary, new_primary, ANIM_PLAY_ONCE);
@@ -5112,8 +5346,24 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
 
             OsrsModel* om = effect_find_model(e->meta, rc->model_cache,
                 rc->npc_model_cache, rc->projectile_model_cache);
-            if (!om) continue;
+            if (!om) {
+                if (e->gfx_id == GFX_VENGEANCE) {
+                    static int missing_veng_model;
+                    if (!missing_veng_model) {
+                        fprintf(stderr, "render: spotanim 726 model missing\n");
+                        missing_veng_model = 1;
+                    }
+                }
+                continue;
+            }
 
+            if (e->follow_entity >= 0 && e->follow_entity < rc->entity_count) {
+                int fi = e->follow_entity;
+                e->cur_x = rc->sub_x[fi];
+                e->cur_y = rc->sub_y[fi];
+                if (e->gfx_id == GFX_VENGEANCE)
+                    e->follow_yaw = rc->yaw[fi];
+            }
             float ex = (float)(e->cur_x / 128.0);
             float ez = -(float)(e->cur_y / 128.0);
             float ground = rc->terrain
@@ -5124,7 +5374,43 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
             float scale_xy = eff_scale * (float)e->meta->resize_xy / 128.0f;
             float scale_y = eff_scale * (float)e->meta->resize_z / 128.0f;
 
-            if (e->anim_state && e->anim_playback.seq_id >= 0 && om->face_indices) {
+            if (e->gfx_id == GFX_VENGEANCE && e->anim_state) {
+                // Gfx 726 (seq 4417): the skull rises, tilts down, and
+                // plummets while fading — matches the real-game gif (skull
+                // grows above the caster, hangs, then dives and vanishes).
+                // Motion comes from the live 4417 frames. The type-5 dx in
+                // each frame is the client's fade step: dx*8 added onto the
+                // face value each frame the slot appears, clamped [0,255],
+                // starting from the baked base. The skull's baked base is 255
+                // while player models bake 0 (both read as opaque at rest),
+                // so the running value is tracked relative to that base:
+                // rel = face - 255, meshAlpha = 255 - rel. Early frames sit
+                // near transparent, mid-swoop lands opaque, the plummet fades
+                // back out. meshAlpha inverts to raylib convention
+                // (255=opaque). Render-only; sim untouched.
+                render_anim_playback_resolve(
+                    rc, &e->anim_playback, (int)om->base_vert_count);
+                AnimSequence* seq = e->anim_playback.sequence;
+                if (seq && seq->frame_count > 0) {
+                    int frame_idx = e->anim_playback.frame_idx % seq->frame_count;
+                    render_apply_anim_sequence_frame_to_model_state(
+                        rc, e->anim_state, om, seq, frame_idx,
+                        "spotanim");
+                    if (e->anim_state->face_alphas && e->anim_state->base_face_alphas) {
+                        int rel = e->anim_state->face_alphas[0] - e->anim_state->base_face_alphas[0];
+                        int a = 255 - rel;
+                        if (a < 0) a = 0;
+                        if (a > 255) a = 255;
+                        for (int fi = 0; fi < om->mesh.triangleCount; fi++) {
+                            for (int corner = 0; corner < 3; corner++)
+                                om->mesh.colors[(fi * 3 + corner) * 4 + 3] =
+                                    (unsigned char)a;
+                        }
+                        UpdateMeshBuffer(om->mesh, 3, om->mesh.colors,
+                            om->mesh.vertexCount * 4, 0);
+                    }
+                }
+            } else if (e->anim_state && e->anim_playback.seq_id >= 0 && om->face_indices) {
                 render_anim_playback_resolve(
                     rc, &e->anim_playback, (int)om->base_vert_count);
                 AnimSequence* seq = e->anim_playback.sequence;
@@ -5135,7 +5421,6 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                         "spotanim");
                 }
             }
-
             Matrix t;
 
             if (e->type == EFFECT_PROJECTILE && e->started) {
@@ -5147,6 +5432,15 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                 t = render_projectile_transform(scale_xy, scale_y, scale_xy,
                     orientation.yaw, orientation.pitch,
                     (Vector3){ ex, ey, ez });
+            } else if (e->gfx_id == GFX_VENGEANCE) {
+                // Face where the caster faces: caster target yaw snapped each
+                // draw while following. No PI offset — model 16828's forward
+                // matches the player composite's facing. Render-only.
+                t = MatrixMultiply(
+                    MatrixMultiply(
+                        MatrixScale(-scale_xy, scale_y, scale_xy),
+                        MatrixRotateY(e->follow_yaw)),
+                    MatrixTranslate(ex, ey, ez));
             } else {
                 t = MatrixMultiply(
                     MatrixScale(-scale_xy, scale_y, scale_xy),
@@ -5340,6 +5634,18 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
             float draw_x = screen_overhead.x - (float)tex.width * scale / 2.0f;
             float draw_y = cursor_y - (float)tex.height * scale;
             DrawTextureEx(tex, (Vector2){draw_x, draw_y}, 0.0f, scale, WHITE);
+        }
+
+        if (p->said_taste_vengeance_this_tick)
+            rc->chat_visible_until[i] = env->tick + 4;
+        if (env->tick < rc->chat_visible_until[i]) {
+            const char* chat = "Taste Vengeance!";
+            int fs = 12;
+            int tw = MeasureText(chat, fs);
+            int cx = (int)screen_overhead.x - tw / 2;
+            int cy = (int)cursor_y - fs - 1;
+            DrawText(chat, cx + 1, cy + 1, fs, BLACK);
+            DrawText(chat, cx, cy, fs, GUI_TEXT_YELLOW);
         }
 
         if (rc->show_debug && p->entity_type == ENTITY_NPC &&
@@ -6093,6 +6399,7 @@ void pvp_render(OsrsEnv* env) {
                     render_client_tick(rc, i);
                 }
                 render_update_splats_client_tick(rc);
+                render_update_xp_drops_client_tick(rc);
                 flight_client_tick(rc);
                 rc->effect_client_tick_counter++;
                 effect_client_tick(rc->effects, rc->effect_client_tick_counter);
@@ -6302,6 +6609,7 @@ void pvp_render(OsrsEnv* env) {
         }
 
         render_draw_minimap_area(rc, env, gui_player);
+        render_draw_xp_drops(rc);
 
         if (rc->show_debug) {
             int target_idx = render_target_label_entity_idx(rc);

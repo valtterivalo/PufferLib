@@ -98,6 +98,8 @@ static void init_player(Player* p) {
     p->hit_landed_this_tick = 0;
     p->hit_was_successful = 0;
     p->hit_damage = 0;
+    p->render_hit_count = 0;
+    p->said_taste_vengeance_this_tick = 0;
     p->hit_style = ATTACK_STYLE_NONE;
     p->hit_defender_prayer = PRAYER_NONE;
     p->hit_was_on_prayer = 0;
@@ -421,6 +423,7 @@ void pvp_step(
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
         env->players[i].hit_damage = 0;
+        env->players[i].render_hit_count = 0;
         env->players[i].hit_style = ATTACK_STYLE_NONE;
         env->players[i].hit_defender_prayer = PRAYER_NONE;
         env->players[i].hit_was_on_prayer = 0;

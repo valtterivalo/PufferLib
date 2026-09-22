@@ -58,6 +58,8 @@ typedef enum {
 typedef struct {
     EffectType type;
     int gfx_id;
+    int follow_entity;
+    float follow_yaw;
     const OsrsSpotAnimDef* meta;
 
     /* positions are sub-tile coords, 128 units per tile; ticks are 50 Hz client
@@ -142,6 +144,7 @@ static int effect_spawn_spotanim_subtile(
     int slot = effect_find_slot(effects);
     ActiveEffect* e = &effects[slot];
     memset(e, 0, sizeof(ActiveEffect));
+    e->follow_entity = -1;
     e->type = EFFECT_SPOTANIM;
     e->gfx_id = gfx_id;
     e->meta = meta;
@@ -206,6 +209,7 @@ static int effect_spawn_projectile(
     int slot = effect_find_slot(effects);
     ActiveEffect* e = &effects[slot];
     memset(e, 0, sizeof(ActiveEffect));
+    e->follow_entity = -1;
     e->type = EFFECT_PROJECTILE;
     e->gfx_id = gfx_id;
     e->meta = meta;

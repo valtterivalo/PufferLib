@@ -157,6 +157,8 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, floa
         osrs_teleport_allowed(s->env.pvp_runtime.teleport[agent], s->env.tick);
     for (int action = 1; action < RF_ACTION_DIMS[RF_PRAYER]; action++)
         heads[RF_PRAYER][action] = p->current_prayer > 0;
+    for (int action = 1; action < RF_ACTION_DIMS[RF_OVERHEAD]; action++)
+        heads[RF_OVERHEAD][action] = p->current_prayer > 0;
 }
 
 static int riskfight_find_kind(const float* obs, OsrsConsumableKind kind) {

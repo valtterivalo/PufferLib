@@ -31,10 +31,9 @@ static void riskfight_render_entities(EncounterState* state, EncounterContext* c
         osrs_render_entity_from_player_entity(p, &out[i]);
         out[i].ate_food_this_tick |= s->env.tick > 0 &&
             s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick;
-        // Render-only departure marker: escape lands the same tick the tab
-        // is clicked (sim timing untouched), so the escape tick doubles as
-        // the one-frame teleport gfx trigger. No Player field, no sim read.
-        out[i].teleported_this_tick = s->escaped[i] && s->escape_tick[i] == s->env.tick;
+        // Render-only: keep the tablet gfx latch while escaped remains set.
+        // Reset zeros escaped, so a new fight does not keep the marker.
+        out[i].teleported_this_tick = s->escaped[i];
         out[i].attack_target_entity_idx = osrs_interaction_active(&p->interaction) ? 1 - i : -1;
     }
 }

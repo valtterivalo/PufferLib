@@ -509,7 +509,7 @@ typedef struct {
 
     Log log;
 } ZulrahState;
-static_assert(sizeof(ZulrahState) == 12160, "ZulrahState serialized layout");
+static_assert(sizeof(ZulrahState) == 12976, "ZulrahState serialized layout");
 
 static void zul_set_npc_anim_event(ZulrahState* s, int anim_id, int duration_ticks) {
     osrs_npc_primary_anim_event_set(

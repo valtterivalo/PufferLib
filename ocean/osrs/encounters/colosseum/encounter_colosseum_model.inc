@@ -1524,7 +1524,7 @@ typedef struct {
     ColosseumLog log;
     ColoObsMemoCaches obs_memos;
 } ColosseumState;
-static_assert(sizeof(ColosseumState) == 26640, "ColosseumState serialized layout");
+static_assert(sizeof(ColosseumState) == 26776, "ColosseumState serialized layout");
 
 typedef enum {
     COLO_DMG_OFFPRAY = 0,

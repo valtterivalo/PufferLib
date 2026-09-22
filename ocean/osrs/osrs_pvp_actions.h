@@ -319,6 +319,7 @@ static void reset_tick_flags(Player* p) {
     p->ate_karambwan_this_tick = 0;
     p->ate_brew_this_tick = 0;
     p->cast_veng_this_tick = 0;
+    p->said_taste_vengeance_this_tick = 0;
     p->clicks_this_tick = 0;
 }
 

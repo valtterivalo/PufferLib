@@ -13,6 +13,8 @@
 
 #define NUM_AGENTS 2
 #define MAX_PENDING_HITS 8
+#define OSRS_RENDER_HITS_MAX 32
+
 #define HISTORY_SIZE 5
 
 #define TICK_DURATION_MS 600
@@ -492,6 +494,8 @@ typedef struct {
     int hit_landed_this_tick;
     int hit_was_successful;
     int hit_damage;
+    int render_hit_count;
+    int render_hit_damage[OSRS_RENDER_HITS_MAX];
     AttackStyle hit_style;
     OverheadPrayer hit_defender_prayer;
     int hit_was_on_prayer;
@@ -589,6 +593,7 @@ typedef struct {
     int ate_karambwan_this_tick;
     int ate_brew_this_tick;
     int cast_veng_this_tick;
+    int said_taste_vengeance_this_tick;
     int clicks_this_tick;
 
     float prev_hp_percent;

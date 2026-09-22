@@ -42,8 +42,11 @@ void osrs_puffer_render_draw(void* opaque_renderer) {
         renderer->env.encounter_context);
     renderer->env.tick = tick;
     RenderClient* render_client = (RenderClient*)renderer->env.client;
+    int terminal = def->is_terminal(
+        renderer->env.encounter_state,
+        renderer->env.encounter_context);
     if (renderer->has_drawn) {
-        if (tick < renderer->last_tick) {
+        if (!terminal && tick < renderer->last_tick) {
             render_reset_episode_visual_state(render_client, &renderer->env);
         } else if (tick > renderer->last_tick) {
             render_post_tick(render_client, &renderer->env);
@@ -69,6 +72,18 @@ void osrs_puffer_render_draw(void* opaque_renderer) {
     renderer->tick_anchor += interval;
     if (GetTime() - renderer->tick_anchor >= interval)
         renderer->tick_anchor = GetTime();
+
+    if (terminal && render_episode_outro_ready(render_client, &renderer->env)) {
+        def->reset(
+            renderer->env.encounter_state,
+            renderer->env.encounter_context,
+            (uint32_t)rand());
+        render_reset_episode_visual_state(render_client, &renderer->env);
+        renderer->last_tick = def->get_tick(
+            renderer->env.encounter_state,
+            renderer->env.encounter_context);
+        renderer->env.tick = renderer->last_tick;
+    }
 }
 
 void osrs_puffer_render_destroy(void* opaque_renderer) {

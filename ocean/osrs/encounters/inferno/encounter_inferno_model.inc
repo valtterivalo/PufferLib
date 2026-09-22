@@ -913,4 +913,4 @@ typedef struct {
     float total_hp_restored_jad;
     float total_hp_restored_zuk;
 } InfernoState;
-static_assert(sizeof(InfernoState) == 27012, "InfernoState serialized layout");
+static_assert(sizeof(InfernoState) == 27148, "InfernoState serialized layout");
