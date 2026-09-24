@@ -77,7 +77,7 @@ def main():
     parser.add_argument('--window', required=True)
     parser.add_argument('--actor-ids', required=True, type=int, nargs=2)
     parser.add_argument('--recordings', type=Path,
-                        default=Path.home() / '.storm2/gameplay-recordings')
+                        default=Path.home() / '.light2/gameplay-recordings/spectator-combat')
     args = parser.parse_args()
     with args.replay.open() as stream:
         candidates = [row for line in stream if (row := json.loads(line))['window'] == args.window]

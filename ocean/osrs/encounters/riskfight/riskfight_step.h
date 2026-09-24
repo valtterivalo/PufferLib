@@ -39,26 +39,7 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
         s->escaped[agent] || s->escaped[1 - agent] ||
         !is_in_melee_range(p, opponent) || !can_attack_now(p) ||
         s->env.pvp_runtime.maul[agent].last_special_tick == s->env.tick) return;
-    // Spec attribution before disarm: only non-maul armed specials flow
-    // through here (maul resolves via pvp_maul_* paths below).
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
-    // DEBUG probe: boosted low-HP axe NORMAL swing pays immediately (melee
-    // normal hits land same-tick, instant, range checked above). Gate: axe
-    // equipped, attacker actually boosted, defender fresh-low (bar-visible).
-    if (!special && weapon == ITEM_DHAROKS_GREATAXE && ctx->axe_hit_reward != 0 &&
-        p->current_hitpoints < p->base_hitpoints) {
-        int bar = osrs_health_bar_ratio(opponent->current_hitpoints,
-            opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
-        OsrsHealthBarRange range = osrs_health_bar_range(bar,
-            OSRS_PLAYER_HEALTH_BAR_SCALE, opponent->base_hitpoints,
-            opponent->base_hitpoints);
-        if (range.kind == OSRS_HEALTH_BAR_KNOWN && range.upper < opponent->base_hitpoints) {
-            float axe_bonus = ctx->axe_hit_reward;
-            s->rewards[agent] += axe_bonus;
-            s->episode_returns[agent] += axe_bonus;
-            s->debug_axe_rewards[agent] += axe_bonus;
-        }
-    }
     perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
         chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
     riskfight_record_attack(s, agent, 1, 0);
@@ -86,8 +67,6 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM: {
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
-            // Pre-command kind for exact drink/eat attribution: the shared
-            // drink helper collapses all drinks into one timer flag.
             OsrsConsumableKind pre_kind = OSRS_CONSUMABLE_NONE;
             OsrsClickAction pre_click = OSRS_CLICK_NONE;
             {
@@ -135,25 +114,12 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             riskfight_stop(s, agent);
             break;
         case HUMAN_COMMAND_ATTACK_NPC:
-            // Target lock (no-op when already locked). Queued BEFORE the
-            // spec toggles for maul (see policy_commands): the release
-            // toggle's target click needs pending_target set by
-            // pvp_maul_target_click, which needs the lock held first.
-            // DEBUG probe pays per resolved maul hit here (energy spent in
-            // pvp_maul_target_click -> pvp_maul_resolve).
             osrs_interaction_set(&p->interaction, 1 - agent);
             s->env.pvp_runtime.walk_dest_x[agent] = -1;
             s->env.pvp_runtime.walk_dest_y[agent] = -1;
             if (!s->escaped[1 - agent]) {
-                int before = p->special_energy;
                 int maul_hits = pvp_maul_target_click(&s->env, agent, 1 - agent);
                 riskfight_count_maul_spec(s, agent, maul_hits);
-                if (maul_hits > 0 && p->special_energy < before && ctx->maul_double_reward != 0) {
-                    float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
-                    s->rewards[agent] += maul_bonus;
-                    s->episode_returns[agent] += maul_bonus;
-                    s->debug_maul_rewards[agent] += maul_bonus;
-                }
                 riskfight_record_attack(s, agent, maul_hits, 1);
             }
             break;
@@ -164,10 +130,6 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             break;
         case HUMAN_COMMAND_SPEC_TOGGLE:
             if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) {
-                // The release toggle (SELECTED -> DESELECTED) queues the pair;
-                // energy is spent when the target click resolves (same tick
-                // via the queued ATTACK_NPC, or the finish_inputs drain).
-                // DEBUG probe pays per RESOLVED hit at the resolve sites.
                 pvp_maul_special_click(&s->env, agent);
             } else
                 p->spec_armed = !p->spec_armed;
@@ -254,7 +216,7 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
 }
 
 static void riskfight_finish(RiskfightState* s) {
-    // TODO: Resolve departure, pending hits and Vengeance ordering before supporting same-tick attack/teleport.
+    // TODO: resolve departure, pending hits and vengeance ordering for same-tick attack plus teleport from recordings.
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
     for (int i = 0; i < 2; i++) {
@@ -332,18 +294,8 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
         if (!s->escaped[0] && !s->escaped[1]) {
-            // Homing single (no click this tick). Click-path doubles count at
-            // ATTACK_NPC / continue_attack; prep is already cleared here.
-            int before = s->env.players[i].special_energy;
             int maul_hits = pvp_maul_finish_inputs(&s->env, i);
             riskfight_count_maul_spec(s, i, maul_hits);
-            if (maul_hits > 0 && s->env.players[i].special_energy < before &&
-                    ctx->maul_double_reward != 0) {
-                float maul_bonus = ctx->maul_double_reward * (float)maul_hits;
-                s->rewards[i] += maul_bonus;
-                s->episode_returns[i] += maul_bonus;
-                s->debug_maul_rewards[i] += maul_bonus;
-            }
             riskfight_record_attack(s, i, maul_hits, 1);
         }
     }
@@ -378,14 +330,12 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         if (p->potion_timer > 0) p->potion_timer--;
         if (p->karambwan_timer > 0) p->karambwan_timer--;
         osrs_player_inventory_tick(p, &s->inventory_use[i]);
-        // Equipped-weapon tick sample (post-step, post-equip state).
         if (!s->env.episode_over) {
             int weapon = p->equipped[GEAR_SLOT_WEAPON];
             if (weapon == ITEM_ABYSSAL_TENTACLE) s->ticks_tentacle[i]++;
             else if (weapon == ITEM_DHAROKS_GREATAXE) s->ticks_axe[i]++;
             else if (weapon == ITEM_VOIDWAKER) s->ticks_voidwaker[i]++;
             else if (pvp_is_maul(weapon)) s->ticks_maul[i]++;
-            // Opportunity denominators: was the skipped tool LEGAL+USEFUL here?
             int drained = p->current_attack < 110 || p->current_strength < 110 ||
                 p->current_defence < 110;
             if (drained && p->potion_timer == 0) {
@@ -401,19 +351,6 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
                 if (has_combat) s->combat_opp[i]++;
             }
             if (pvp_is_maul(weapon) && p->special_energy >= 50) s->maul_opp[i]++;
-            if (weapon != ITEM_DHAROKS_GREATAXE && p->current_hitpoints < p->base_hitpoints &&
-                    p->attack_timer <= 1) {
-                // Cheap axe-gate proxy (full helper needs opp-HP inference):
-                // boosted + ready + axe in bag. Overcounts slightly vs the
-                // true finisher gate, which also requires a fresh low opp bar.
-                for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-                    if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->item_idx ==
-                            ITEM_DHAROKS_GREATAXE) {
-                        s->axe_opp[i]++;
-                        break;
-                    }
-                }
-            }
         }
     }
     s->env.tick++;
@@ -445,7 +382,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     if (!ctx->self_play) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(s, 1, obs);
-        riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, opponent_actions);
+        riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, s->script_seed[1], opponent_actions);
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
@@ -459,7 +396,7 @@ static void riskfight_step_human(EncounterState* state, EncounterContext* contex
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(s, 1 - human, obs);
-    riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, actions);
+    riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, s->script_seed[1 - human], actions);
     riskfight_policy_commands(s, 1 - human, actions, &ctx->policy_commands[1 - human]);
     riskfight_step_queues(s, ctx,
         human == 0 ? &hi->commands : &ctx->policy_commands[0].commands,

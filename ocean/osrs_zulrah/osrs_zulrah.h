@@ -54,15 +54,6 @@ struct Env {
 #endif
 };
 
-static inline uint32_t zul_lowbias32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
 static void zul_write_native_action_mask(Env* env, unsigned char* mask_out) {
     zul_write_mask_bytes(
         ZUL_ENV_STATE(env), ZUL_ENV_CONTEXT(env), mask_out);
@@ -74,15 +65,7 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_ZULRAH.init_context(ZUL_ENV_CONTEXT(env));
     ENCOUNTER_ZULRAH.init_state(ZUL_ENV_STATE(env), ZUL_ENV_CONTEXT(env));
 
-    uint32_t seed_offset = 0;
-    const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
-    if (seed_offset_str) {
-        seed_offset = (uint32_t)strtoul(seed_offset_str, NULL, 10);
-    }
-    uint32_t env_seed = zul_lowbias32(env->rng + seed_offset);
-    if (env_seed == 0) {
-        env_seed = 1;
-    }
+    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
     env->state.rng_state = env_seed;
 
     memset(&env->log, 0, sizeof(Log));

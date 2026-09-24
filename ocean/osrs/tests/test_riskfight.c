@@ -27,7 +27,6 @@ static void test_reset_and_equipment(void) {
         assert(!osrs_interaction_active(&p->interaction));
         for (int slot = 0; slot < 27; slot++) assert(!osrs_inventory_cell_is_empty(&p->inventory_cells[slot]));
         assert(osrs_inventory_cell_is_empty(&p->inventory_cells[27]));
-        // Slot 19 holds regular super combat; no divine exists in the bag.
         assert(osrs_inventory_cell_metadata(&p->inventory_cells[19])->consumable_kind == OSRS_CONSUMABLE_SUPER_COMBAT);
         for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
             assert(osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind != OSRS_CONSUMABLE_DIVINE_COMBAT);
@@ -103,8 +102,6 @@ static void test_dharok_recoil(void) {
 static void test_potions(void) {
     reset(); Player* p = &state.env.players[0];
     p->current_hitpoints = 50; use(0, 7);
-    // The 100-tick pulse holds the brew drain: no snap-up while divine lasts.
-    // (HP also regens 66 -> 67 on the pulse.)
     int drained_attack = p->current_attack;
     for (int i = 0; i < ENCOUNTER_STAT_DRIFT_TICKS; i++)
         osrs_player_inventory_tick(p, &state.inventory_use[0]);
@@ -112,7 +109,6 @@ static void test_potions(void) {
     assert(p->current_hitpoints == 67);
     p->potion_timer = 0; use(0, 17);
     assert(p->current_attack == 105 && p->current_magic == 99);
-    // Regular super combat (slot 19) re-boosts with no HP cost, clock untouched.
     int ticks_before = state.inventory_use[0].divine_combat_ticks;
     p->potion_timer = 0; use(0, 19);
     assert(p->current_hitpoints == 67 && p->current_attack == 118);
@@ -160,40 +156,6 @@ static void test_vengeance(void) {
     assert(state.outcome[0] == RISKFIGHT_MUTUAL_DEATH);
     assert(state.rewards[0] == 0 && state.rewards[1] == 0);
 }
-static void test_debug_axe_hit_reward_probe(void) {
-    // DEBUG-ONLY probe: boosted low-HP axe normal swing vs fresh-low bar
-    // pays axe_hit_reward; full-HP bar or zero coeff pays nothing.
-    reset();
-    Player* p = &state.env.players[0];
-    Player* opp = &state.env.players[1];
-    use(0, 22);  // equip greataxe (slot 22 per reset asserts)
-    assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
-    p->current_hitpoints = 50;  // boosted (base 99)
-    opp->current_hitpoints = 60;  // fresh-low bar
-    p->attack_timer = 0; p->has_attack_timer = 0;
-    context.axe_hit_reward = 0.25f;
-    int actions[2 * RF_HEADS] = {0};
-    actions[RF_PRIMARY] = RF_ATTACK;
-    step(actions);
-    assert(state.debug_axe_rewards[0] == 0.25f);
-    // Shaping lands in episode_returns; s->rewards is zeroed/recomputed at
-    // the step tail (damage/chance/teleport only).
-    assert(state.episode_returns[0] == state.debug_axe_rewards[0]);
-    // Full-HP bar: no pay.
-    reset();
-    p = &state.env.players[0];
-    opp = &state.env.players[1];
-    use(0, 22);
-    p->current_hitpoints = 50;
-    opp->current_hitpoints = 121;
-    p->attack_timer = 0; p->has_attack_timer = 0;
-    context.axe_hit_reward = 0.25f;
-    memset(actions, 0, sizeof(actions));
-    actions[RF_PRIMARY] = RF_ATTACK;
-    step(actions);
-    assert(state.debug_axe_rewards[0] == 0 && state.rewards[0] == 0);
-}
-
 static void test_special_and_outcomes(void) {
     reset(); Player* p = &state.env.players[0];
     use(0, 24); p->attack_timer = 5; p->has_attack_timer = 1;
@@ -246,8 +208,6 @@ static void test_hidden_state_and_replay(void) {
     opponent->pending_hits[0].damage = 99; opponent->num_pending_hits = 1;
     opponent->veng_cooldown = 44;
     riskfight_write_observation(&state, 0, b);
-    // Schemas 4-6 expose opponent veng state + spec energy; the attack
-    // timer is inferred (schema 6) so hidden sim timers do not leak.
     assert(memcmp(a, b, sizeof(a)) != 0);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 44 / 50.0f);
@@ -256,8 +216,6 @@ static void test_hidden_state_and_replay(void) {
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
     assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
-    // Hidden state that must NOT leak: inventory, pending hits, sim timers.
-    // Restore the exposed fields too (self cooldown/energy differ from 44/3).
     opponent->veng_cooldown = 0;
     opponent->special_energy = state.env.players[0].special_energy;
     riskfight_write_observation(&state, 0, b);
@@ -286,14 +244,14 @@ static void test_hidden_state_and_replay(void) {
     free(hi.commands.items);
     reset(); initial = state;
     for (int i = 0; i < 25 && !state.env.episode_over; i++) {
-        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, actions);
-        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, actions + RF_HEADS);
+        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, 1, actions);
+        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, 1, actions + RF_HEADS);
         step(actions);
     }
     expected = state; state = initial;
     for (int i = 0; i < 25 && !state.env.episode_over; i++) {
-        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, actions);
-        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, actions + RF_HEADS);
+        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, 1, actions);
+        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, 1, actions + RF_HEADS);
         step(actions);
     }
     assert(memcmp(&state, &expected, sizeof(state)) == 0);
@@ -334,13 +292,10 @@ static void test_tick_order_and_boundaries(void) {
     p->potion_timer = 0; use(0, 19);
     assert(p->current_attack == 118);
     p->potion_timer = 0; use(0, 7);
-    // Pre-pot divine holds the drain: a single pulse tick changes nothing...
     int drained = p->current_attack;
-    // ...but the hold only bites on the 100-tick pulse, so force the pulse.
     state.inventory_use[0].stat_drift_timer = ENCOUNTER_STAT_DRIFT_TICKS - 1;
     osrs_player_inventory_tick(p, &state.inventory_use[0]);
     assert(p->current_attack == drained);
-    // ...and expiry of the 500-tick clock still snaps boosted stats to base.
     state.inventory_use[0].divine_combat_ticks = 1;
     state.inventory_use[0].stat_drift_timer = 0;
     p->current_attack = 118;
@@ -430,7 +385,7 @@ int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_reset_and_equipment(); test_food(); test_orb_and_stop(); test_dharok_recoil();
-    test_potions(); test_vengeance(); test_debug_axe_hit_reward_probe(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
+    test_potions(); test_vengeance(); test_special_and_outcomes(); test_visible_observation_boundary(); test_hidden_state_and_replay();
     test_tick_order_and_boundaries();
     test_live_attack_processing_order();
     test_prayer_actions();

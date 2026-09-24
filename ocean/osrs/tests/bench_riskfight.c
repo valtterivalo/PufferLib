@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
         int actions[2 * RF_HEADS];
         double t = seconds();
         for (int side = 0; side < 2; side++)
-            riskfight_script(f->obs[side], (RiskfightOpponent)bot, actions + side * RF_HEADS);
+            riskfight_script(f->obs[side], (RiskfightOpponent)bot, f->state.script_seed[side], actions + side * RF_HEADS);
         double next = seconds(); script += next - t; t = next;
         riskfight_step((EncounterState*)&f->state, (EncounterContext*)&f->context, actions);
         next = seconds(); step += next - t; t = next;

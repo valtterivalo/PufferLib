@@ -48,7 +48,7 @@ int main(void) {
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_PRIMARY] != RF_TELEPORT);
     riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, 12345);
     state.env.tick = 10;
@@ -58,7 +58,7 @@ int main(void) {
     remove_kind(&state.env.players[0], OSRS_CONSUMABLE_BREW);
     remove_kind(&state.env.players[0], OSRS_CONSUMABLE_HALIBUT);
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_PRIMARY] == RF_ATTACK && actions[RF_SPECIAL] == 0);
     int paired[2 * RF_HEADS] = {0};
     memcpy(paired, actions, sizeof(actions));

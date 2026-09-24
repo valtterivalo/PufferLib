@@ -11,6 +11,7 @@ from rescore_riskfight_sweep import read_config
 
 
 OBJECTIVE_ID = 'riskfight-seven-bot-chance-v1'
+HELDOUT_BOTS = [7]
 
 
 def stage_resume(source, destination, binary, objective_id, compatible_binary_sha256=None):
@@ -72,6 +73,9 @@ def main():
     args = parser.parse_args()
     assert args.trials > 0
     anchor = read_config(args.anchor)
+    eval_bot_list = read_config(args.repo / 'config/osrs_riskfight.ini')['selfplay']['eval_bots']
+    assert anchor['selfplay'].get('eval_bots', eval_bot_list) == eval_bot_list
+    eval_bots = [int(bot) for bot in eval_bot_list.split(',')]
     args.root.mkdir(exist_ok=False)
     for name in ('config', 'logs', 'checkpoints'):
         (args.root / name).mkdir()
@@ -89,18 +93,17 @@ def main():
         f'--base.checkpoint_dir={args.root}/checkpoints', f'--base.log_dir={args.root}/logs',
         '--base.checkpoint_interval=64', '--base.eval_episodes=0', '--base.seed=73',
         '--vec.hist_policy_hidden_size=0', '--vec.hist_policy_num_layers=0',
-        '--selfplay.eval_bots=0,1,2,4,5,6,8', '--selfplay.eval_bot_games=256',
+        '--selfplay.eval_bot_games=256',
         f'--sweep.max_runs={args.trials}', '--sweep.max_suggestion_cost=300',
         f'--sweep.resume_dir={args.root / "resume" if args.resume_from else ""}',
         f'--sweep.objective_id={args.objective_id}'])
     manifest = {
         'git_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.repo, text=True).strip(),
         'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-        'anchor': str(args.anchor), 'command': command, 'eval_bots': [0, 1, 2, 4, 5, 6, 8],
+        'anchor': str(args.anchor), 'command': command, 'eval_bots': eval_bots,
         'objective_id': args.objective_id, 'selection_seed': 73,
-        'heldout_bots': [7], 'heldout_seeds': [1009, 2027, 3037],
+        'heldout_bots': HELDOUT_BOTS, 'heldout_seeds': [1009, 2027, 3037],
         'max_suggestion_cost_seconds': 300, 'trials': args.trials,
-        'observation_schema': 6, 'observation_size': 356, 'action_heads': 20,
         'training': 'Current and historical policy self-play with configurable scripted mixing and midfight starts',
         'score': 'Equal-weight unshaped net stake over seven selection bots',
         'historical_scores_imported': imported,

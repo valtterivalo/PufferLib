@@ -33,7 +33,7 @@ int main(void) {
     assert(osrs_escape_supplies(p).pie_bites == 5);
     remove_kind(p, OSRS_CONSUMABLE_SUMMER_PIE);
     assert(osrs_escape_supplies(p).healing == OSRS_ESCAPE_NO_HEALING);
-    remove_kind(p, OSRS_CONSUMABLE_DIVINE_COMBAT);
+    remove_kind(p, OSRS_CONSUMABLE_SUPER_COMBAT);
     profile = osrs_escape_supplies(p);
     assert(!osrs_escape_no_boost(&profile));
     p->current_attack = p->base_attack;

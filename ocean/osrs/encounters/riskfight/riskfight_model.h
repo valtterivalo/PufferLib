@@ -49,12 +49,7 @@ typedef struct {
     int interacting;
     int last_attack_tick;
     int last_attack_speed;
-    // Inferred opponent consumption locks (schema 6): estimated remainders
-    // derived solely from the public consume bit + bar deltas. Unknown
-    // (no bar refresh yet) reads as 0 (can-eat).
     int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
-    // Pending consume awaiting a bar refresh: tick opened, bar before the
-    // heal, and accounted damage since (-1 tick = none open).
     int pending_consume_tick, pending_bar_before, pending_damage_since;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
 } RiskfightVisibleOpponent;
@@ -65,6 +60,7 @@ typedef struct {
     RiskfightVisibleOpponent visible[2];
     RiskfightOutcome outcome[2];
     RiskfightOpponent mixed_opponent;
+    uint32_t script_seed[2];
     int escaped[2];
     OsrsEscapeSupplies escape_supplies[2][2];
     int escape_tick[2];
@@ -75,12 +71,6 @@ typedef struct {
     float direct_ko_chance_mass[2];
     float chance_rewards[2];
     float teleport_penalties[2];
-    // DEBUG-ONLY shaping accumulators (parallel to damage/chance rewards).
-    float debug_maul_rewards[2];
-    float debug_axe_rewards[2];
-    // Consumption + weapon metrics (policy-side only, never observed):
-    // drink/eat/spec event counts per episode and per-tick equipped-weapon
-    // samples. Reset in riskfight_reset; puf_step aggregates agent 0.
     int drink_brew[2];
     int drink_sanfew[2];
     int drink_combat[2];
@@ -89,12 +79,8 @@ typedef struct {
     int eat_pie[2];
     int spec_voidwaker[2];
     int spec_maul[2];
-    // Opportunity denominators (per tick, pre-terminal, agent-indexed):
-    // combat_opp = drained (atk/str/def < 110... see step site) + timer free.
-    // maul_opp = maul equipped + energy>=50. axe_opp = finisher gate open.
     int combat_opp[2];
     int maul_opp[2];
-    int axe_opp[2];
     int ticks_tentacle[2];
     int ticks_axe[2];
     int ticks_voidwaker[2];
@@ -111,10 +97,6 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     float teleport_penalty;
-    // DEBUG-ONLY shaping probes (default 0, never ship nonzero): paid maul
-    // double event bonus + low-HP axe swing bonus. See step sites.
-    float maul_double_reward;
-    float axe_hit_reward;
 } RiskfightContext;
 
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
@@ -122,7 +104,7 @@ static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
-static void riskfight_script(const float*, RiskfightOpponent, int*);
+static void riskfight_script(const float*, RiskfightOpponent, uint32_t, int*);
 static void riskfight_write_action_mask(const RiskfightState*, int, float*);
 
 static void riskfight_init_context(EncounterContext* context) {
@@ -155,11 +137,7 @@ static void riskfight_finalize_context(EncounterState* state, EncounterContext* 
     ctx->route_topology = pvp_route_topology_finalize(ctx->collision_map);
 }
 
-// Bag-legal nominal heals -> (food, potion, karam, delay) effects. Drink
-// adds no attack delay and arms food+potion locks; food +3 delay; halibut
-// +2 delay stacked with food (5 total). Ambiguous heals are pre-unioned
-// rows (e.g. 24 = marlin alone or marlin+0-heal potion), so lookup is a
-// direct map. 31 = pie+halibut with or without a 0-heal potion folded in.
+/** Observed heal range -> max (food, potion, karambwan, attack delay) lock ticks over bag-legal consume combos. */
 static void riskfight_classify_consume_heal(int lo, int hi,
         int* food, int* potion, int* karam, int* delay) {
     static const int heals[] = {0, 11, 16, 20, 24, 27, 31, 36, 40, 44, 47, 60};
@@ -218,8 +196,6 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     event[6] = consuming;
     event[7] = v->health_bar;
     int bar_event = opponent->hit_landed_this_tick;
-    // Open before accounting so a same-tick eat+hit attributes this tick's
-    // damage to the new pending (otherwise the heal is underestimated).
     if (consuming && v->pending_consume_tick < 0) {
         v->pending_consume_tick = s->env.tick;
         v->pending_bar_before = bar_before;
@@ -238,8 +214,6 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
                     v->pending_damage_since);
                 int f, po, k, d;
                 riskfight_classify_consume_heal(ch.lower, ch.upper, &f, &po, &k, &d);
-                // effect - elapsed: observer decrements once per step,
-                // mirroring sim cadence.
                 int elapsed = s->env.tick - v->pending_consume_tick;
                 v->consume_food_est = f - elapsed > 0 ? f - elapsed : 0;
                 v->consume_potion_est = po - elapsed > 0 ? po - elapsed : 0;
@@ -294,8 +268,6 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         memcpy(p->equipped, equipment, sizeof(equipment));
         osrs_refresh_player_equipment(p);
         pvp_refresh_visible_gear(p);
-        // Divine pre-pot: full 500-tick clock, no HP cost. The bag carries
-        // regular super combat for brew-drain re-boosts (no clock refresh).
         s->inventory_use[i].divine_combat_ticks = OSRS_DIVINE_DURATION;
         int slot = 0;
         const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
@@ -324,6 +296,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         s->env.pvp_runtime.walk_dest_x[i] = -1;
         s->env.pvp_runtime.walk_dest_y[i] = -1;
         osrs_actor_route_cache_clear(&ctx->routes[i]);
+        s->script_seed[i] = osrs_lowbias32(s->env.rng_state + (uint32_t)(i + 1) * 0x9e3779b9U);
     }
     riskfight_observe_visible(s, 0, 1);
     riskfight_observe_visible(s, 1, 1);

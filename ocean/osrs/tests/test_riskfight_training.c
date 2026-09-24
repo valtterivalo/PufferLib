@@ -76,7 +76,8 @@ int main(void) {
     assert(riskfight_training_omission(&teacher->env.training) == 0.5f);
     teacher->env.training.ticks = 10;
     int expected[RF_HEADS];
-    riskfight_script(teacher->observations[1], teacher->env.training.script, expected);
+    riskfight_script(teacher->observations[1], teacher->env.training.script,
+        teacher->env.state.script_seed[1], expected);
     assert(riskfight_training_actions(&teacher->env.training, &teacher->env.state, 1, commands) == 0);
     assert(memcmp(commands + RF_HEADS, expected, sizeof(expected)) == 0);
     assert(commands[RF_PRIMARY] == RF_STOP);
@@ -98,7 +99,7 @@ int main(void) {
         for (int i = 0; i < 2; i++) {
             float obs[RF_OBS_SIZE];
             riskfight_write_observation(&replay->env.state, i, obs);
-            riskfight_script(obs, RISKFIGHT_CAUTIOUS, commands + i * RF_HEADS);
+            riskfight_script(obs, RISKFIGHT_CAUTIOUS, 1, commands + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)&replay->env.state,
             (EncounterContext*)&replay->env.context, commands);

@@ -19,9 +19,9 @@ int main(void) {
                     float obs[RF_OBS_SIZE];
                     int actions[2 * RF_HEADS];
                     riskfight_write_observation(state, 0, obs);
-                    riskfight_script(obs, (RiskfightOpponent)agent, actions);
+                    riskfight_script(obs, (RiskfightOpponent)agent, state->script_seed[0], actions);
                     riskfight_write_observation(state, 1, obs);
-                    riskfight_script(obs, (RiskfightOpponent)opponent, actions + RF_HEADS);
+                    riskfight_script(obs, (RiskfightOpponent)opponent, state->script_seed[1], actions + RF_HEADS);
                     riskfight_step((EncounterState*)state, (EncounterContext*)&context, actions);
                 }
                 outcomes[state->outcome[0]]++;

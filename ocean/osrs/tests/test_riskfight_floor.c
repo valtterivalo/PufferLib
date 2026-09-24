@@ -16,24 +16,24 @@ static void test_wait_and_release(void) {
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_STOP && actions[RF_SPECIAL] == 0);
     assert(!actions[RF_FOOD] && !actions[RF_DRINK] && !actions[RF_COMBO]);
     obs[RF_HISTORY_START + 6] = 1;
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_ATTACK);
     obs[RF_HISTORY_START + 6] = 0;
     obs[RF_HISTORY_START + 3] = 1;
     obs[RF_HISTORY_START + 4] = 10.0f / RF_OBSERVATION_DAMAGE_SCALE;
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_ATTACK);
     obs[RF_HISTORY_START + 3] = 0;
     obs[RF_HISTORY_START + 4] = 0;
     obs[20] = 8.0f / RF_OBSERVATION_TICK_SCALE;
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_ATTACK);
     obs[7] = 0.3f;
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_STOP && actions[RF_SPECIAL] == 0);
 }
 
@@ -47,7 +47,7 @@ static void test_vengeance_timing(void) {
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_VENGEANCE]);
     assert(actions[RF_PRIMARY] == RF_ATTACK);
 }
@@ -57,14 +57,14 @@ static void test_hidden_state_independence(void) {
     float obs[RF_OBS_SIZE], changed[RF_OBS_SIZE];
     int actions[RF_HEADS], repeated[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     state.env.players[1].attack_timer = state.env.players[0].attack_timer;
     state.env.players[1].special_energy = state.env.players[0].special_energy;
     state.env.players[1].inventory_cells[0] = osrs_inventory_cell_empty();
     state.env.pid_holder ^= 1;
     riskfight_write_observation(&state, 0, changed);
     assert(memcmp(obs, changed, sizeof(obs)) == 0);
-    riskfight_script(changed, RISKFIGHT_FLOOR, repeated);
+    riskfight_script(changed, RISKFIGHT_FLOOR, 1, repeated);
     assert(memcmp(actions, repeated, sizeof(actions)) == 0);
 }
 
@@ -80,7 +80,7 @@ static void test_mutual_waiting_releases_both_sides(void) {
         for (int tick = 0; tick < 2 * gear.attack_speed; tick++) {
             obs[20] = (float)tick / RF_OBSERVATION_TICK_SCALE;
             int actions[RF_HEADS];
-            riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+            riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
             attacks += actions[RF_PRIMARY] == RF_ATTACK;
             waits += actions[RF_PRIMARY] == RF_STOP;
         }
@@ -100,12 +100,12 @@ static void test_escape_requires_exhaustion_or_observed_attack(void) {
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_STOP);
     state.visible[0].last_attack_tick = 2;
     state.visible[0].last_attack_speed = 7;
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_TELEPORT);
     state.visible[0].last_attack_tick = -1;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -116,7 +116,7 @@ static void test_escape_requires_exhaustion_or_observed_attack(void) {
             state.env.players[0].inventory_cells[slot] = osrs_inventory_cell_empty();
     }
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_FLOOR, actions);
+    riskfight_script(obs, RISKFIGHT_FLOOR, 1, actions);
     assert(actions[RF_PRIMARY] == RF_TELEPORT);
 }
 
@@ -135,18 +135,14 @@ static void test_matches(void) {
                 riskfight_write_action_mask(&state, fighter, mask);
                 RiskfightOpponent bot = fighter ? (RiskfightOpponent)bots[b] : RISKFIGHT_FLOOR;
                 int* action = actions + fighter * RF_HEADS;
-                riskfight_script(obs, bot, action);
-                riskfight_script(obs, bot, repeated);
+                riskfight_script(obs, bot, 1, action);
+                riskfight_script(obs, bot, 1, repeated);
                 assert(memcmp(action, repeated, sizeof(repeated)) == 0);
                 if (bot == RISKFIGHT_FLOOR) {
                     int offset = 0;
                     for (int head = 0; head < RF_HEADS; head++) {
                         assert(action[head] >= 0 && action[head] < RF_ACTION_DIMS[head]);
                         if (head == RF_PRIMARY && action[head] == RF_TELEPORT) {
-                            // Own teleport lock (8 ticks after our offensive
-                            // spec) has no obs bit by design, so a retreat
-                            // desire during self-inflicted lock falls back to
-                            // STOP here; the sim no-ops blocked teleports.
                             int teleport_offset = 0;
                             for (int h = 0; h < RF_PRIMARY; h++)
                                 teleport_offset += RF_ACTION_DIMS[h];
@@ -163,10 +159,6 @@ static void test_matches(void) {
             attacks += state.env.players[0].just_attacked + state.env.players[1].just_attacked;
         }
         assert(attacks > 0 && stops > 0);
-        // The mirror bound is trajectory-sensitive (pre-pot divine + axe
-        // discipline shifted the floor-vs-floor exchange from 21 to 12
-        // attacks over 41 ticks); the invariant is both sides trade. Keep a
-        // loose floor that still fails a pacifist regression.
         if (bots[b] == RISKFIGHT_FLOOR) assert(state.env.episode_over && attacks > 10);
     }
 }

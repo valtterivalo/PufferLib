@@ -51,23 +51,6 @@ static RiskfightExitDecision riskfight_exit_decision(const Player* after_eating,
     return RISKFIGHT_RETREAT;
 }
 
-// Dharok axe discipline: tentacle is the default; the axe is a low-HP
-// finisher only. Recorded play (session 20260913T124331: tentacle anim 1658
-// at 19629, axe anim 2067 at 19630 for the KO) shows a one-tick lethal
-// switch, not camping. At 99-121 HP the 4-piece multiplier is 1.0 and the
-// 7-tick 2H axe is strictly -EV vs the 4-tick tentacle, so require the
-// post-eat HP to sit below base (actually boosted) before the axe may
-// compete. All three gates must hold:
-//   (a) attacking this tick (own_ready, RF_ATTACK, attack window, eating
-//       plans handled by the caller via attacking_this_tick),
-//   (b) dharok actually boosted (own_hp_after_eating < base_hp),
-//   (c) finisher/trade +EV on axe normal_max: fresh low opponent_hp_upper
-//       within axe_max + margin, OR last-attack exit, OR reflecting an
-//       incoming animation (the same exception specs already enjoy).
-// opponent_hp_upper is the fresh upper bound; callers pass the inferred
-// range upper (upper == 121 means unknown/full — never a finisher).
-// Default margin 60 calibrates to the recorded axe-swing HP window
-// (victim upper bound 105, lethal 68; ±10 covers bar quantization).
 static int riskfight_dharok_finisher(int attacking_this_tick, int own_hp_after_eating,
     int own_base_hp, int axe_max, int opponent_hp_upper, int finisher_hp_margin,
     RiskfightExitDecision exit, int reflecting, int incoming_animation) {
@@ -133,8 +116,6 @@ static Player riskfight_observed_self(const float* obs) {
     p.food_timer = (int)lroundf(obs[8] * 3);
     p.potion_timer = (int)lroundf(obs[9] * 3);
     p.karambwan_timer = (int)lroundf(obs[10] * 3);
-    // obs[23] is now maul prepared_hits/2 (schema 3); the timer flag it
-    // replaced is derivable: a live cooldown implies the timer exists.
     p.has_attack_timer = p.attack_timer != 0;
     p.offensive_prayer = p.current_prayer > 0 ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
     p.fight_style = FIGHT_STYLE_AGGRESSIVE;
@@ -162,8 +143,6 @@ static RiskfightThreatWindow riskfight_threat_window(const float* obs) {
         assumed.base_hitpoints, 121);
     assert(hp.kind == OSRS_HEALTH_BAR_KNOWN);
     int hp_lower = bar == 0 ? 1 : hp.lower;
-    // Opponent spec energy now observed (schema 5, opp[9]); threat math no
-    // longer assumes a full 100-energy bar every tick.
     int opp_energy = (int)lroundf(opponent[9] * 100);
     OsrsMeleeThreat threat = osrs_melee_threat(assumed.equipped,
         calculate_effective_strength(&assumed, ATTACK_STYLE_MELEE), assumed.base_hitpoints, hp_lower, opp_energy);
@@ -253,8 +232,6 @@ static int riskfight_floor_attack_window(const float* obs, const Player* self,
     if (self->attack_timer > 1) return 0;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     if (opponent[3] && threat.ticks_until <= 1) return 0;
-    // Opponent attack delay now inferred (schema 6, opp[10], food delays via
-    // bar-delta classification): refuse the window when they swing first.
     int opp_timer = (int)lroundf(opponent[10] * 10);
     if (opp_timer <= 1 && threat.ticks_until > 1) return 0;
     EquipmentBonuses gear;
@@ -324,11 +301,6 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
             (own_ready || hit.instant_special_max > 0) &&
             (opponent_hp_upper <= hit.special_stack_max + profile.finisher_hp_margin || (reflecting && threat.incoming_animation));
         if (i >= 2 && !spec) continue;
-        // Axe (index 1) is a finisher, not a default: it only competes when
-        // the dharok-finisher gates hold. Exit is not decided until below,
-        // so evaluate the helper with RISKFIGHT_CONTINUE here and re-check
-        // LAST_ATTACK after the exit decision (axe stays tentacle unless the
-        // re-check promotes it).
         int axe_max = hit.normal_max;
         if (i == 1 && !riskfight_dharok_finisher(
                 !eating && own_ready && actions[RF_PRIMARY] == RF_ATTACK && attack_window,
@@ -344,8 +316,6 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
         }
     }
     const float* opp_veng_state = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    // Opponent vengeance now observed (schema 4, opp[7..8]); without an
-    // active veng there is no reflect to reserve HP against.
     int opp_veng = opp_veng_state[7] != 0;
     if (!eating && ((own_ready && actions[RF_PRIMARY] == RF_ATTACK) || actions[RF_SPECIAL])) {
         DamageResult returned = osrs_apply_post_mitigation_pipeline(best_max,
@@ -406,8 +376,6 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
         actions[RF_SPECIAL] = 0;
         actions[RF_ORB] = 0;
     } else if (exit == RISKFIGHT_LAST_ATTACK) actions[RF_SPECIAL] = 0;
-    // LAST_ATTACK re-check: the loop above ran with CONTINUE, so promote a
-    // boosted axe for the final trade when the finisher gates now hold.
     if (exit == RISKFIGHT_LAST_ATTACK && chosen_weapon == ITEM_ABYSSAL_TENTACLE &&
             !eating && own_ready && actions[RF_PRIMARY] == RF_ATTACK && attack_window &&
             after_eating.current_hitpoints < after_eating.base_hitpoints &&

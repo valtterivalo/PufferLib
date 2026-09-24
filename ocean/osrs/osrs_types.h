@@ -941,6 +941,23 @@ static inline uint32_t xorshift32(uint32_t* state) {
     return x;
 }
 
+static inline uint32_t osrs_lowbias32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+/** Nonzero xorshift32 seed for (env index + PUFFER_ENV_SEED_OFFSET, stream). Stream 0 is the combat stream. */
+static inline uint32_t osrs_env_seed(uint32_t env_index, uint32_t stream) {
+    const char* offset = getenv("PUFFER_ENV_SEED_OFFSET");
+    uint32_t seed = osrs_lowbias32(env_index + (offset ? (uint32_t)strtoul(offset, NULL, 10) : 0));
+    if (stream) seed = osrs_lowbias32(seed + stream * 0x9e3779b9U);
+    return seed ? seed : 1;
+}
+
 static inline int rand_int(OsrsEnv* env, int max) {
     if (max <= 0) return 0;
     return xorshift32(&env->rng_state) % max;

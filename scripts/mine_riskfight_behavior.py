@@ -421,7 +421,7 @@ def summarize(fight, snaps):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recordings",
-                        default=os.path.expanduser("~/.storm2/gameplay-recordings"))
+                        default=os.path.expanduser("~/.light2/gameplay-recordings/spectator-combat"))
     parser.add_argument("--out", default=None)
     parser.add_argument("--min-anims", type=int, default=50)
     args = parser.parse_args()

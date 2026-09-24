@@ -52,8 +52,6 @@ int main(void) {
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(env->log.both_teleports == 1 && env->log.self_teleports == 1 && env->log.opponent_teleports == 2);
-    // Terminal accounting: every finished episode advances n and populates
-    // per-episode keys (regression: metric-only edits once dropped these).
     assert(env->log.n == 5);
     assert(env->log.episode_length > 0);
     {
@@ -84,5 +82,12 @@ int main(void) {
     puf_step(env);
     assert(terminals[0] == 1 && rewards[0] == 0 && env->log.escapes == 1);
     puf_close(env); free(env);
+    enum { SEEDED_ENVS = 8192 };
+    static uint32_t combat[SEEDED_ENVS];
+    for (uint32_t i = 0; i < SEEDED_ENVS; i++) {
+        combat[i] = osrs_env_seed(i, 0);
+        assert(combat[i] != osrs_env_seed(i, 1));
+        for (uint32_t j = 0; j < i; j++) assert(combat[i] != combat[j]);
+    }
     puts("Riskfight native scripted and self-play contracts passed");
 }

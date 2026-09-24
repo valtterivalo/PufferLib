@@ -31,8 +31,6 @@ static void riskfight_render_entities(EncounterState* state, EncounterContext* c
         osrs_render_entity_from_player_entity(p, &out[i]);
         out[i].ate_food_this_tick |= s->env.tick > 0 &&
             s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick;
-        // Render-only: keep the tablet gfx latch while escaped remains set.
-        // Reset zeros escaped, so a new fight does not keep the marker.
         out[i].teleported_this_tick = s->escaped[i];
         out[i].attack_target_entity_idx = osrs_interaction_active(&p->interaction) ? 1 - i : -1;
     }
@@ -57,8 +55,6 @@ static void riskfight_put_float(EncounterState* state, EncounterContext* context
     if (strcmp(key, "damage_reward_coeff") == 0) ctx->damage_reward_coeff = value;
     else if (strcmp(key, "chance_reward_coeff") == 0) ctx->chance_reward_coeff = value;
     else if (strcmp(key, "teleport_penalty") == 0) ctx->teleport_penalty = value;
-    else if (strcmp(key, "maul_double_reward") == 0) ctx->maul_double_reward = value;
-    else if (strcmp(key, "axe_hit_reward") == 0) ctx->axe_hit_reward = value;
     else encounter_abort_unknown_config("riskfight", "float", key);
 }
 static void riskfight_put_ptr(EncounterState* state, EncounterContext* context, const char* key, void* value) {

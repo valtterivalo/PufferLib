@@ -54,15 +54,6 @@ struct Env {
 #endif
 };
 
-static inline uint32_t nh_pvp_lowbias32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
 static void nh_pvp_write_native_action_mask(Env* env, unsigned char* mask_out) {
     pvp_write_action_mask_bytes(
         mask_out, &env->state.env, 0, env->context.route_topology);
@@ -102,13 +93,7 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_NH_PVP.init_context(NH_PVP_ENV_CONTEXT(env));
     ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
 
-    uint32_t seed_offset = 0;
-    const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
-    if (seed_offset_str) {
-        seed_offset = (uint32_t)strtoul(seed_offset_str, NULL, 10);
-    }
-    uint32_t env_seed = nh_pvp_lowbias32(env->rng + seed_offset);
-    if (env_seed == 0) env_seed = 1;
+    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
 
     static const char* const int_keys[] = {
         "opponent_type",

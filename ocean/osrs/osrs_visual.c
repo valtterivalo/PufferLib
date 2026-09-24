@@ -1389,7 +1389,7 @@ static void run_policy_profile(
     long ep_eat_marlin = 0, ep_eat_halibut = 0, ep_eat_pie = 0;
     long ep_spec_vw = 0, ep_spec_maul = 0;
     long ep_tick_tent = 0, ep_tick_axe = 0, ep_tick_vw = 0, ep_tick_maul = 0;
-    long ep_combat_opp = 0, ep_maul_opp = 0, ep_axe_opp = 0;
+    long ep_combat_opp = 0, ep_maul_opp = 0;
     double environment_ms = 0.0;
     uint64_t trace_hash = 1469598103934665603ULL;
     double wall_start = osrs_profile_now_seconds();
@@ -1458,7 +1458,6 @@ static void run_policy_profile(
                 ep_tick_tent += rf->ticks_tentacle[0]; ep_tick_axe += rf->ticks_axe[0];
                 ep_tick_vw += rf->ticks_voidwaker[0]; ep_tick_maul += rf->ticks_maul[0];
                 ep_combat_opp += rf->combat_opp[0]; ep_maul_opp += rf->maul_opp[0];
-                ep_axe_opp += rf->axe_opp[0];
             }
             start_ms = end_ms;
             reset_count++;
@@ -1487,8 +1486,8 @@ static void run_policy_profile(
         printf("  Specs (agent 0 totals): voidwaker=%ld maul=%ld\n", ep_spec_vw, ep_spec_maul);
         printf("  Weapon ticks (agent 0, sampled pre-terminal): tentacle=%ld axe=%ld voidwaker=%ld maul=%ld\n",
             ep_tick_tent, ep_tick_axe, ep_tick_vw, ep_tick_maul);
-        printf("  Opportunities (agent 0 tick-denominators): combat=%ld maul=%ld axe=%ld\n",
-            ep_combat_opp, ep_maul_opp, ep_axe_opp);
+        printf("  Opportunities (agent 0 tick-denominators): combat=%ld maul=%ld\n",
+            ep_combat_opp, ep_maul_opp);
     }
     printf("  Wall time: %.3f seconds\n", wall_elapsed);
     printf("  Environment time: %.3f seconds\n", environment_ms / 1000.0);
@@ -1715,7 +1714,8 @@ static void visual_frame(void* arg) {
         } else if (strcmp(edef->name, "riskfight") == 0) {
             float observation[RF_OBS_SIZE];
             riskfight_write_observation((RiskfightState*)env->encounter_state, 0, observation);
-            riskfight_script(observation, RISKFIGHT_TRADER, enc_actions);
+            riskfight_script(observation, RISKFIGHT_TRADER,
+                ((RiskfightState*)env->encounter_state)->script_seed[0], enc_actions);
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {

@@ -13,7 +13,7 @@ static void reset(void) {
 static void decide(RiskfightOpponent opponent, int* actions) {
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, opponent, actions);
+    riskfight_script(obs, opponent, 1, actions);
 }
 
 static OsrsConsumableKind drink_kind(const int* actions) {
@@ -40,9 +40,6 @@ static int item_count(int item) {
 }
 
 static void test_return_to_one_handed_weapon(void) {
-    // Legacy scripts share the tactician's axe discipline: tentacle default,
-    // axe only as a boosted finisher. At 65 HP vs a full bar the script
-    // holds the tentacle; retarget via a low fresh opponent bar below.
     reset();
     Player* p = &state.env.players[0];
     p->current_hitpoints = 65;
@@ -72,8 +69,6 @@ static void test_return_to_one_handed_weapon(void) {
 }
 
 static void test_joint_weapon_shield_mask(void) {
-    // Same finisher setup as above: boosted 65 HP with a fresh low opponent
-    // bar so the legacy script requests the axe (2H, no empty cell margin).
     reset();
     Player* p = &state.env.players[0];
     p->current_hitpoints = 65;

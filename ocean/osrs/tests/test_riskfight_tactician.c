@@ -83,16 +83,10 @@ static void test_veng_armour_and_hidden_state(void) {
     float obs[RF_OBS_SIZE], changed[RF_OBS_SIZE];
     int actions[RF_HEADS], repeated[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    // Tentacle is the default (axe is a low-HP finisher only): with full
-    // supplies the weapon head stays 0 and all three armour pieces unequip
-    // for the vengeance bait.
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_VENGEANCE]);
     assert(actions[RF_WEAPON] == 0);
     assert(actions[RF_HEAD] == RF_UNEQUIP && actions[RF_BODY] == RF_UNEQUIP && actions[RF_LEGS] == RF_UNEQUIP);
-    // Neutralize the schema-4/5 exposed fields back to reset defaults
-    // (p0 was mutated pre-obs; p1 still holds defaults, so only the emptied
-    // cell + pid flip must be invisible).
     state.env.players[1].veng_active = 1;
     state.env.players[1].veng_cooldown = 0;
     state.env.players[1].attack_timer = 0;
@@ -101,11 +95,11 @@ static void test_veng_armour_and_hidden_state(void) {
     state.env.pid_holder ^= 1;
     riskfight_write_observation(&state, 0, changed);
     assert(memcmp(obs, changed, sizeof(obs)) == 0);
-    riskfight_script(changed, RISKFIGHT_TACTICIAN, repeated);
+    riskfight_script(changed, RISKFIGHT_TACTICIAN, 1, repeated);
     assert(memcmp(actions, repeated, sizeof(actions)) == 0);
     p->veng_active = 1;
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_VENGEANCE] == 0);
 }
 
@@ -125,11 +119,11 @@ static void test_supply_and_equipment_plans(void) {
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
     assert(riskfight_threat_window(obs).ticks_until == 1);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_DRINK] == 0);
     state.visible[0].last_attack_tick = 9;
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_DRINK] > 0);
     assert(actions[RF_VENGEANCE] == 0);
     reset();
@@ -137,7 +131,7 @@ static void test_supply_and_equipment_plans(void) {
     p->inventory_cells[27] = osrs_inventory_cell_from_item(ITEM_ULTOR_RING);
     state.visible[0].health_bar = 5;
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     if (actions[RF_WEAPON]) {
         int weapon = osrs_inventory_cell_metadata(&p->inventory_cells[actions[RF_WEAPON] - 1])->item_idx;
         assert(!item_is_two_handed(weapon));
@@ -150,7 +144,7 @@ static void test_dead_fighter_waits_for_pending_hits(void) {
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
     int actions[RF_HEADS];
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     for (int head = 0; head < RF_HEADS; head++) assert(actions[head] == 0);
 }
 
@@ -197,35 +191,27 @@ static void test_weapon_switch_does_not_reset_observed_readiness(void) {
     assert(riskfight_threat_window(obs).ticks_until == remaining);
 }
 static void test_dharok_finisher_discipline(void) {
-    // Helper gates: unboosted HP, idle tick, or full-bar opponent never axe.
     assert(!riskfight_dharok_finisher(1, 121, 99, 60, 30, 60,
         RISKFIGHT_CONTINUE, 0, 0));
     assert(!riskfight_dharok_finisher(0, 50, 99, 60, 30, 60,
         RISKFIGHT_CONTINUE, 0, 0));
     assert(!riskfight_dharok_finisher(1, 50, 99, 60, 121, 60,
         RISKFIGHT_CONTINUE, 0, 0));
-    // Boosted + fresh low upper bound within axe_max + margin: finisher.
     assert(riskfight_dharok_finisher(1, 50, 99, 60, 90, 60,
         RISKFIGHT_CONTINUE, 0, 0));
-    // Reflecting an incoming animation is a finisher even at high upper.
     assert(riskfight_dharok_finisher(1, 50, 99, 60, 121, 60,
         RISKFIGHT_CONTINUE, 1, 1));
-    // Profile: at 121 HP vs a full bar the tactician holds the tentacle...
     reset();
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_WEAPON] == 0);
-    // ...stays tentacle between hits (attack_timer > 1)...
     state.env.players[0].attack_timer = 4;
     state.env.players[0].current_hitpoints = 50;
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     assert(actions[RF_WEAPON] == 0);
-    // ...and may axe only with a fresh low opponent upper, own ready, and
-    // boosted HP: force a fresh hit event with a low bar (upper ~27) while
-    // own HP is safe enough to skip eating (threat ~51, HP 80).
     reset();
     state.env.players[0].attack_timer = 0;
     state.env.players[0].current_hitpoints = 60;
@@ -239,7 +225,7 @@ static void test_dharok_finisher_discipline(void) {
     riskfight_write_observation(&state, 0, obs);
     RiskfightInferredHp hp = riskfight_inferred_opponent_hp(obs);
     assert(hp.evidence == RISKFIGHT_HP_FRESH && hp.range.upper <= 60);
-    riskfight_script(obs, RISKFIGHT_TACTICIAN, actions);
+    riskfight_script(obs, RISKFIGHT_TACTICIAN, 1, actions);
     int axe_slot = 0;
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
         if (osrs_inventory_cell_metadata(&state.env.players[0].inventory_cells[i])->item_idx == ITEM_DHAROKS_GREATAXE)
@@ -278,7 +264,7 @@ static void test_profile_determinism_and_masks(void) {
                 offset += RF_ACTION_DIMS[head];
             }
             riskfight_write_observation(&state, 1, opponent_obs);
-            riskfight_script(opponent_obs, RISKFIGHT_TRADER, actions + RF_HEADS);
+            riskfight_script(opponent_obs, RISKFIGHT_TRADER, 1, actions + RF_HEADS);
             riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
         }
     }

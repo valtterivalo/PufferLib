@@ -15,8 +15,7 @@ static void decide_at_tick(int tick, int* actions) {
     state.env.tick = tick;
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
-    // Writer stamps obs[20] from env.tick, so the sampler sees `tick`.
-    riskfight_script(obs, RISKFIGHT_HUMANLIKE, actions);
+    riskfight_script(obs, RISKFIGHT_HUMANLIKE, 1, actions);
 }
 
 static void decide(int* actions) {
@@ -28,18 +27,19 @@ int main(void) {
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     assert(RISKFIGHT_HUMANLIKE == 9);
 
-    // Replay-safe: identical obs+tick yields identical actions.
     reset();
     state.env.tick = 77;
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
     int first[RF_HEADS], second[RF_HEADS];
-    riskfight_script(obs, RISKFIGHT_HUMANLIKE, first);
-    riskfight_script(obs, RISKFIGHT_HUMANLIKE, second);
+    riskfight_script(obs, RISKFIGHT_HUMANLIKE, 1, first);
+    riskfight_script(obs, RISKFIGHT_HUMANLIKE, 1, second);
     assert(memcmp(first, second, sizeof(first)) == 0);
+    int early_eats = 0;
+    for (uint32_t seed = 1; seed <= 10000; seed++)
+        early_eats += riskfight_sample_event(seed, 77, 11, RISKFIGHT_HL_EARLY_EAT_PM);
+    assert(abs(early_eats - 10 * RISKFIGHT_HL_EARLY_EAT_PM) < 300);
 
-    // Sampling live both ways: fixed mid-HP obs over 1000 ticks eats
-    // on some ticks and skips on others (any sane mined 0 < p < 1000).
     reset();
     state.env.players[0].current_hitpoints = 60;
     int eat_ticks = 0;
@@ -52,7 +52,6 @@ int main(void) {
     }
     assert(eat_ticks > 0 && eat_ticks < 1000);
 
-    // Full HP with supplies: no food/combo/teleport over 200 ticks.
     reset();
     state.env.players[0].current_hitpoints = 121;
     for (int tick = 0; tick < 200; tick++) {
@@ -64,7 +63,6 @@ int main(void) {
             assert(actions[head] >= 0 && actions[head] < RF_ACTION_DIMS[head]);
     }
 
-    // Zero energy: no spec over 200 ticks.
     reset();
     state.env.players[0].special_energy = 0;
     state.env.players[0].current_hitpoints = 60;

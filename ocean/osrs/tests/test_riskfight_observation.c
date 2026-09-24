@@ -20,20 +20,18 @@ static void test_initial_scale_and_purity(void) {
     assert(memcmp(&state, &before, sizeof(state)) == 0);
     for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
     assert(obs[21] == 0 && obs[22] == 0);
-    assert(obs[23] == 0);  // schema 3: idle maul exposes no prepared hits
+    assert(obs[23] == 0);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 1] * RF_OBSERVATION_TILE_SCALE == 1);
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
         assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
-    // Schema 4: opponent vengeance mirrors self scale (reset pre-venges both).
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
 }
 
 static void test_opponent_vengeance_roundtrip(void) {
     reset();
-    // Active + mid-cooldown opponent exposes both floats at self scale.
     state.env.players[1].veng_active = 1;
     state.env.players[1].veng_cooldown = 25;
     float obs[RF_OBS_SIZE];
@@ -41,7 +39,6 @@ static void test_opponent_vengeance_roundtrip(void) {
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.5f);
     for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
-    // Broken veng reads inactive with a live cooldown (the bait window).
     state.env.players[1].veng_active = 0;
     state.env.players[1].veng_cooldown = 40;
     riskfight_write_observation(&state, 0, obs);
@@ -51,10 +48,7 @@ static void test_opponent_vengeance_roundtrip(void) {
 
 static void test_opponent_spec_and_timer_roundtrip(void) {
     reset();
-    // Spec spend is public: voidwaker spec leaves exactly 50/100.
     state.env.players[1].special_energy = 50;
-    // Hidden sim timers do not leak: exact attack_timer reads as est 0
-    // with no consume observed (unknown implies can-eat).
     state.env.players[1].attack_timer = 6;
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
@@ -117,7 +111,7 @@ static void test_script_readiness_units(void) {
         float obs[RF_OBS_SIZE];
         int actions[RF_HEADS];
         riskfight_write_observation(&state, 0, obs);
-        riskfight_script(obs, RISKFIGHT_AGGRESSIVE, actions);
+        riskfight_script(obs, RISKFIGHT_AGGRESSIVE, 1, actions);
         assert(actions[RF_ORB] == (7 - tick > 2));
     }
 }
@@ -156,12 +150,6 @@ static void use_consumable(OsrsConsumableKind kind) {
 }
 
 static void test_opponent_consume_timer_inference(void) {
-    // Real-step drives (direct helpers skip the step-end tick++ that arms
-    // the potion stamp): opponent eats via RF_FOOD/RF_DRINK/RF_COMBO, then
-    // a 5-damage hit refreshes the bar and classifies the pending consume.
-    // Marlin 24 unions with pie+brew 27, so the max-lock estimate arms
-    // food+potion+delay; brew 16 alone arms food+potion with no delay;
-    // halibut 20 unions with marlin 24, arming all three locks.
     context.self_play = 1;
     const struct {
         int head, slot;
@@ -184,13 +172,10 @@ static void test_opponent_consume_timer_inference(void) {
         riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&state, 0, obs);
-        // No bar refresh yet: estimates stay 0 (unknown implies can-eat).
         assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
         assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
         assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
         assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
-        // Next-tick hit with consume flags cleared so only the pending
-        // classification (opened on the eat tick) is measured.
         state.env.players[1].ate_food_this_tick = 0;
         state.env.players[1].ate_karambwan_this_tick = 0;
         state.env.players[1].ate_brew_this_tick = 0;

@@ -120,17 +120,8 @@ struct Env {
     float max_episode_depth_seen;
 };
 
-static inline uint32_t col_lowbias32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
 static inline float col_curriculum_uniform(uint32_t env_index) {
-    uint32_t h = col_lowbias32(env_index ^ 0x9e3779b9U);
+    uint32_t h = osrs_lowbias32(env_index ^ 0x9e3779b9U);
     return (float)(h >> 8) * (1.0f / 16777216.0f);
 }
 
@@ -226,15 +217,7 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_COLOSSEUM.init_context(COLO_ENV_CONTEXT(env));
     ENCOUNTER_COLOSSEUM.init_state(COLO_ENV_STATE(env), COLO_ENV_CONTEXT(env));
 
-    uint32_t seed_offset = 0;
-    const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
-    if (seed_offset_str) {
-        seed_offset = (uint32_t)strtoul(seed_offset_str, NULL, 10);
-    }
-    uint32_t env_seed = col_lowbias32(env->rng + seed_offset);
-    if (env_seed == 0) {
-        env_seed = 1;
-    }
+    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
     env->state.rng_state = env_seed;
 
     memset(&env->log, 0, sizeof(Log));

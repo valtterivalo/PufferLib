@@ -43,15 +43,6 @@ struct Env {
 #endif
 };
 
-static inline uint32_t inf_lowbias32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
 static void inferno_env_put_float(Env* env, const char* key, float value) {
     ENCOUNTER_INFERNO.put_float(INF_ENV_STATE(env), INF_ENV_CONTEXT(env), key, value);
 }
@@ -148,7 +139,7 @@ static void inferno_apply_curriculum(Env* env, Dict* kwargs) {
         total_frac = 0.9f;
     }
 
-    float u = (float)inf_lowbias32(inf_lowbias32((uint32_t)env->rng) ^ 0x9e3779b9U)
+    float u = (float)osrs_lowbias32(osrs_lowbias32((uint32_t)env->rng) ^ 0x9e3779b9U)
         / 4294967296.0f;
     float cursor = 1.0f - total_frac;
     if (u < cursor)
@@ -169,13 +160,7 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_INFERNO.init_context(INF_ENV_CONTEXT(env));
     ENCOUNTER_INFERNO.init_state(INF_ENV_STATE(env), INF_ENV_CONTEXT(env));
 
-    uint32_t seed_offset = 0;
-    const char* seed_offset_str = getenv("PUFFER_ENV_SEED_OFFSET");
-    if (seed_offset_str)
-        seed_offset = (uint32_t)strtoul(seed_offset_str, NULL, 10);
-    uint32_t env_seed = inf_lowbias32((uint32_t)env->rng + seed_offset);
-    if (env_seed == 0)
-        env_seed = 1;
+    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
     env->state.rng_state = env_seed;
 
     memset(&env->log, 0, sizeof(Log));

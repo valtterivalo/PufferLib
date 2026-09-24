@@ -62,8 +62,6 @@ static void riskfight_training_clear_returns(RiskfightState* state) {
     memset(state->direct_ko_chance_mass, 0, sizeof(state->direct_ko_chance_mass));
     memset(state->chance_rewards, 0, sizeof(state->chance_rewards));
     memset(state->teleport_penalties, 0, sizeof(state->teleport_penalties));
-    memset(state->debug_maul_rewards, 0, sizeof(state->debug_maul_rewards));
-    memset(state->debug_axe_rewards, 0, sizeof(state->debug_axe_rewards));
 }
 
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
@@ -75,7 +73,7 @@ static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
         for (int i = 0; i < 2; i++) {
             float observation[RF_OBS_SIZE];
             riskfight_write_observation(state, i, observation);
-            riskfight_script(observation, scripts[i], actions + i * RF_HEADS);
+            riskfight_script(observation, scripts[i], state->script_seed[i], actions + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)state, (EncounterContext*)context, actions);
         if (state->env.episode_over) {
@@ -120,6 +118,6 @@ static int riskfight_training_actions(RiskfightTraining* training,
     riskfight_write_observation(state, 1, observation);
     int omitted = riskfight_training_draw(training, riskfight_training_omission(training));
     if (omitted) memset(actions + RF_HEADS, 0, RF_HEADS * sizeof(int));
-    else riskfight_script(observation, training->script, actions + RF_HEADS);
+    else riskfight_script(observation, training->script, state->script_seed[1], actions + RF_HEADS);
     return omitted;
 }

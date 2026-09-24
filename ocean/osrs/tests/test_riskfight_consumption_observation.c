@@ -31,9 +31,6 @@ int main(void) {
     actions[RF_HEADS + RF_COMBO] = 4;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert_consumption_visible(triple);
-    // Schema 6 gates classification on a bar refresh: with no hit yet the
-    // single (marlin) and triple (marlin+brew+halibut) vectors are
-    // identical, while the hidden sim timers already differ (2 vs 4).
     assert(memcmp(single, triple, sizeof(single)) == 0);
     assert(state.env.players[1].attack_timer == 4);
     reset();

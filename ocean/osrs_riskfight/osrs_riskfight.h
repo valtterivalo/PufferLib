@@ -20,14 +20,13 @@ struct Log {
     float policy_0_score, draw_rate;
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
     float kills, deaths, escapes, mutual_deaths, net_stake, n;
-    float debug_maul_reward, debug_axe_reward;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
     float drink_brew, drink_sanfew, drink_combat;
     float eat_marlin, eat_halibut, eat_pie;
     float spec_voidwaker, spec_maul;
-    float combat_opp, maul_opp, axe_opp;
+    float combat_opp, maul_opp;
     float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
 };
 struct Env {
@@ -39,7 +38,6 @@ struct Env {
     RiskfightState state;
     RiskfightContext context;
     RiskfightTraining training;
-    int escape_trace;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -51,22 +49,18 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
-    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff",
-        "maul_double_reward", "axe_hit_reward"};
-    for (int i = 0; i < 5; i++) {
+    const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
+    for (int i = 0; i < 3; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
         if (item) riskfight_put_float((EncounterState*)&env->state,
             (EncounterContext*)&env->context, reward_keys[i], (float)item->value);
     }
     env->num_agents = env->context.self_play ? 2 : 1;
     for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
-    env->state.env.rng_state = env->rng ? env->rng : 1;
+    env->state.env.rng_state = osrs_env_seed((uint32_t)env->rng, 0);
     env->training = (RiskfightTraining){0};
     env->training.config = riskfight_training_config(kwargs);
-    DictItem* trace = dict_find(kwargs, "escape_trace");
-    env->escape_trace = trace ? (int)trace->value : 0;
-    assert(!trace || trace->value == 0 || trace->value == 1);
-    env->training.rng = env->state.env.rng_state;
+    env->training.rng = osrs_env_seed((uint32_t)env->rng, 1);
     assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
         env->training.config.midfight_probability == 0));
     memset(&env->log, 0, sizeof(env->log));
@@ -115,21 +109,18 @@ void puf_step(Env* env) {
         &env->state, env->tag, actions);
     env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
-    // Weapon-tick samples accrue in state every tick; drain agent-0 samples
-    // into the log now so a mid-episode reset never double-counts. Agent-1
     env->log.ticks_tentacle += env->state.ticks_tentacle[0];
     env->log.ticks_axe += env->state.ticks_axe[0];
     env->log.ticks_voidwaker += env->state.ticks_voidwaker[0];
     env->log.ticks_maul += env->state.ticks_maul[0];
     env->log.combat_opp += env->state.combat_opp[0];
     env->log.maul_opp += env->state.maul_opp[0];
-    env->log.axe_opp += env->state.axe_opp[0];
     env->state.ticks_tentacle[0] = env->state.ticks_axe[0] = 0;
     env->state.ticks_voidwaker[0] = env->state.ticks_maul[0] = 0;
     env->state.ticks_tentacle[1] = env->state.ticks_axe[1] = 0;
     env->state.ticks_voidwaker[1] = env->state.ticks_maul[1] = 0;
-    env->state.combat_opp[0] = env->state.maul_opp[0] = env->state.axe_opp[0] = 0;
-    env->state.combat_opp[1] = env->state.maul_opp[1] = env->state.axe_opp[1] = 0;
+    env->state.combat_opp[0] = env->state.maul_opp[0] = 0;
+    env->state.combat_opp[1] = env->state.maul_opp[1] = 0;
     for (int i = 0; i < env->num_agents; i++) {
         env->agents[i].rewards[0] = env->state.rewards[i];
         env->agents[i].terminals[0] = env->state.env.episode_over;
@@ -148,19 +139,6 @@ void puf_step(Env* env) {
                 env->log.self_escape_no_boost += osrs_escape_no_boost(supplies);
                 env->log.self_escape_both_no_special += both_no_special;
             }
-            if (env->escape_trace) printf("RF_ESCAPE {\"actor\":%d,\"tick\":%d,\"hp\":%d,\"healing\":%d,"
-                "\"marlins\":%d,\"brew_doses\":%d,\"halibut\":%d,\"pie_bites\":%d,\"boost_doses\":%d,"
-                "\"attack\":%d,\"strength\":%d,\"no_boost\":%d,\"special_energy\":%d,\"minimum_spec_cost\":%d,"
-                "\"opponent_special_energy\":%d,\"opponent_minimum_spec_cost\":%d,\"both_no_special\":%d,"
-                "\"food_timer\":%d,\"potion_timer\":%d,\"combo_timer\":%d,\"outcome\":%d,\"other_escaped\":%d,"
-                "\"weapon\":%d,\"opponent_weapon\":%d,\"opponent_hp\":%d}\n",
-                actor, env->state.escape_tick[actor], supplies->hp, supplies->healing,
-                supplies->marlins, supplies->brew_doses, supplies->halibut, supplies->pie_bites, supplies->boost_doses,
-                supplies->attack, supplies->strength, osrs_escape_no_boost(supplies), supplies->special_energy,
-                supplies->minimum_spec_cost, other->special_energy, other->minimum_spec_cost, both_no_special,
-                supplies->food_timer, supplies->potion_timer, supplies->combo_timer,
-                env->state.outcome[actor], env->state.escaped[1 - actor],
-                supplies->weapon, other->weapon, other->hp);
         }
         RiskfightOutcome outcome = env->state.outcome[0];
         env->log.kills += outcome == RISKFIGHT_KILL;
@@ -176,8 +154,6 @@ void puf_step(Env* env) {
         env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
         env->log.chance_reward += env->state.chance_rewards[0];
         env->log.teleport_penalty += env->state.teleport_penalties[0];
-        env->log.debug_maul_reward += env->state.debug_maul_rewards[0];
-        env->log.debug_axe_reward += env->state.debug_axe_rewards[0];
         env->log.episode_length += env->state.env.tick - env->training.start_tick;
         if (env->training.opponent == RF_TRAIN_SCRIPTED)
             env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
@@ -226,8 +202,6 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
     dict_set(out, "chance_reward", log->chance_reward);
     dict_set(out, "teleport_penalty", log->teleport_penalty);
-    dict_set(out, "debug_maul_reward", log->debug_maul_reward);
-    dict_set(out, "debug_axe_reward", log->debug_axe_reward);
     dict_set(out, "kills", log->kills);
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);
@@ -257,7 +231,6 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "spec_maul", log->spec_maul);
     dict_set(out, "combat_opp", log->combat_opp);
     dict_set(out, "maul_opp", log->maul_opp);
-    dict_set(out, "axe_opp", log->axe_opp);
     dict_set(out, "ticks_tentacle", log->ticks_tentacle);
     dict_set(out, "ticks_axe", log->ticks_axe);
     dict_set(out, "ticks_voidwaker", log->ticks_voidwaker);

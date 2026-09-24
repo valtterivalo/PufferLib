@@ -55,7 +55,7 @@ static void test_policy_gear_heads(void) {
         if (actions[h]) assert(mask[offset + actions[h]]);
         offset += RF_ACTION_DIMS[h];
     }
-    assert(offset == RF_MASK_SIZE && RF_MASK_SIZE == 461);
+    assert(offset == RF_MASK_SIZE);
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     Player* p = &state.env.players[0];
     assert(p->equipped[GEAR_SLOT_HEAD] == ITEM_NONE);

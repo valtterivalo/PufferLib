@@ -33,12 +33,6 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         (float)s->env.tick / RF_OBSERVATION_TICK_SCALE,
         (float)(p->x - FIGHT_AREA_BASE_X - FIGHT_AREA_WIDTH / 2) / RF_OBSERVATION_TILE_SCALE,
         (float)(p->y - FIGHT_AREA_BASE_Y - FIGHT_AREA_HEIGHT / 2) / RF_OBSERVATION_TILE_SCALE,
-        // Maul preparation state: SELECTED exposes spec_armed (obs 13), but
-        // DESELECTED (double armed, 2 paid hits queued, 3-tick expiry) is
-        // otherwise identical to idle. Without this the double-spec skill is
-        // unlearnable: the commit tick looks exactly like doing nothing.
-        // Scale: prepared_hits / 2 (0, 0.5, 1). Replaces the reserved
-        // has_attack_timer bit (derivable from attack_timer anyway).
         (float)s->env.pvp_runtime.maul[agent].prepared_hits / 2.0f,
     };
     memcpy(obs, self, sizeof(self));
@@ -72,22 +66,9 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     opponent[6] = v->last_attack_tick >= 0 ?
         fmaxf(0, v->last_attack_tick + v->last_attack_speed - s->env.tick) /
             RF_OBSERVATION_ATTACK_AGE_SCALE : 0;
-    // Opponent vengeance state (schema 4, fully observable): both sides spawn
-    // pre-vengeanced, casts are public anims, and exact-tick cooldown counting
-    // is what a good player does anyway. Same scale as self obs[11..12].
     opponent[7] = (float)opp->veng_active;
     opponent[8] = opp->veng_cooldown / 50.0f;
-    // Opponent spec energy (schema 5, obs 9): exact value, same scale as self
-    // obs[6]. Spends are public (anim + energy math), regen is deterministic
-    // (10/50 ticks, 10/25 with lightbearer whose ring is visible gear).
-    // No surge potion exists in the riskfight bag, so no hidden restore.
     opponent[9] = opp->special_energy / 100.0f;
-    // Opponent consumption locks (schema 6, obs 10..13): inferred attack-
-    // delay remainder + food/potion/karam lock estimates from the public
-    // consume bit + bar deltas (riskfight render agrees: potion ticks merge
-    // into the consume bit in encounter_riskfight.h, unlike the shared
-    // render path which hardcodes drank_potion=0 elsewhere). Unknown reads
-    // as 0 (can-eat). Same scales as self obs[7..10].
     opponent[10] = v->consume_delay_est / 10.0f;
     opponent[11] = v->consume_food_est / 3.0f;
     opponent[12] = v->consume_potion_est / 3.0f;
@@ -179,24 +160,16 @@ static int riskfight_find_gear(const float* obs, uint8_t item) {
 
 #include "riskfight_tactician.h"
 
-// Tick-hash sampler for RISKFIGHT_HUMANLIKE: riskfight_script takes const
-// obs and no mutable RNG (encounter_rand_* need state, test-only splitmix64
-// is out of scope), so distribution-matched jitter hashes (tick, salt).
-// Same obs+tick always yields same actions (replay-safe); behavior varies
-// across ticks. Salts: eat-early 11, eat-delay 12, vw 21, maul 22,
-// axe-camp 23, teleport-early 31.
-static uint32_t riskfight_sample_hash(uint32_t tick, uint32_t salt) {
-    uint32_t x = tick * 0x9E3779B1u + salt * 0x85EBCA6Bu + 0xC2B2AE35u;
+/** Per-episode HUMANLIKE roll source. Scripts stay pure functions of (obs, seed). */
+static uint32_t riskfight_sample_hash(uint32_t seed, uint32_t tick, uint32_t salt) {
+    uint32_t x = seed ^ (tick * 0x9E3779B1u + salt * 0x85EBCA6Bu + 0xC2B2AE35u);
     x ^= x >> 15; x *= 0x2C1B3C6Du; x ^= x >> 12; x *= 0x297A2D39u; x ^= x >> 15;
     return x;
 }
-static int riskfight_sample_event(uint32_t tick, uint32_t salt, int per_mille) {
-    return (int)(riskfight_sample_hash(tick, salt) % 1000u) < per_mille;
+static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, int per_mille) {
+    return (int)(riskfight_sample_hash(seed, tick, salt) % 1000u) < per_mille;
 }
-// Mined 2026-09-18 via scripts/mine_riskfight_behavior.py
-// (/tmp/rf_humanlike_tables.json): 10 SPECTATOR_COMBAT_V1 archives, 18
-// usable fights. eat_delay is fixed reaction jitter (not minable); drink
-// shares eat anim 829 so all consumes are joint.
+/** Per-mille rates mined by scripts/mine_riskfight_behavior.py from spectator fights. */
 enum {
     RISKFIGHT_HL_EARLY_EAT_PM = 600,
     RISKFIGHT_HL_EAT_DELAY_PM = 150,
@@ -205,7 +178,7 @@ enum {
     RISKFIGHT_HL_AXE_PM = 28,
     RISKFIGHT_HL_TP_PM = 19,
 };
-static void riskfight_script(const float* obs, RiskfightOpponent type, int* actions) {
+static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t seed, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
     if (type >= RISKFIGHT_TACTICIAN && type <= RISKFIGHT_FLOOR) {
         const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
@@ -220,8 +193,6 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
         actions[RF_PRIMARY] = RF_ATTACK;
         actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
         actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
-        // Eat base: legacy 65-threshold shape (runs before drinks so the
-        // restore-priority guards below behave exactly as in legacy).
         if (hl_hp < 65) {
             if (obs[8] == 0) {
                 actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
@@ -246,23 +217,17 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
                 actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
         }
         if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
-        // Sampled eating: early bites above the 65 line, reaction-delay
-        // skips. The delay roll also covers brew (miner cannot split food
-        // vs brew). No consecutive-skip memory by design: a skipped tick
-        // just delays eating a tick.
         if (!actions[RF_FOOD] && !actions[RF_DRINK] && !actions[RF_COMBO] &&
                 hl_hp < 73 && obs[8] == 0 &&
-                riskfight_sample_event((uint32_t)tick, 11, RISKFIGHT_HL_EARLY_EAT_PM)) {
+                riskfight_sample_event(seed, (uint32_t)tick, 11, RISKFIGHT_HL_EARLY_EAT_PM)) {
             actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
             if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
         }
         if ((actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) &&
-                riskfight_sample_event((uint32_t)tick, 12, RISKFIGHT_HL_EAT_DELAY_PM)) {
+                riskfight_sample_event(seed, (uint32_t)tick, 12, RISKFIGHT_HL_EAT_DELAY_PM)) {
             actions[RF_FOOD] = actions[RF_DRINK] = actions[RF_COMBO] = 0;
         }
         if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
-        // Weapon/spec cascade: mined VW/maul rolls gate the recorded lines;
-        // axe is the deterministic finisher OR a sampled mid-zone camp.
         uint8_t hl_weapon = ITEM_ABYSSAL_TENTACLE;
         {
             int opp_bar = (int)lroundf(hl_opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
@@ -282,14 +247,14 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
                     RISKFIGHT_CONTINUE, 0, 0);
             int camp = probe.current_hitpoints < probe.base_hitpoints &&
                 hl_opponent[0] >= 0.4f && hl_opponent[0] < 0.8f &&
-                riskfight_sample_event((uint32_t)tick, 23, RISKFIGHT_HL_AXE_PM);
+                riskfight_sample_event(seed, (uint32_t)tick, 23, RISKFIGHT_HL_AXE_PM);
             if (obs[6] >= 0.5f && hl_opponent[0] < 0.65f &&
-                    riskfight_sample_event((uint32_t)tick, 21, RISKFIGHT_HL_VW_PM)) {
+                    riskfight_sample_event(seed, (uint32_t)tick, 21, RISKFIGHT_HL_VW_PM)) {
                 hl_weapon = ITEM_VOIDWAKER;
                 actions[RF_SPECIAL] = 1;
             } else if (obs[6] >= 0.99f && hl_opponent[0] < 0.65f &&
                     opp_upper <= 76 && hl_hp < 99 &&
-                    riskfight_sample_event((uint32_t)tick, 22, RISKFIGHT_HL_MAUL_PM)) {
+                    riskfight_sample_event(seed, (uint32_t)tick, 22, RISKFIGHT_HL_MAUL_PM)) {
                 hl_weapon = ITEM_GRANITE_MAUL_ORNATE;
                 actions[RF_SPECIAL] = 2;
             } else if (finisher || camp) {
@@ -301,7 +266,6 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
             actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
         actions[RF_RING] = riskfight_find_gear(obs,
             obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
-        // Teleport last: out-of-supplies rule plus a sampled early exit.
         if (hl_hp < 30 &&
             !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
             !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
@@ -309,7 +273,7 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
             !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW))
             actions[RF_PRIMARY] = RF_TELEPORT;
         else if (hl_hp < 40 &&
-                riskfight_sample_event((uint32_t)tick, 31, RISKFIGHT_HL_TP_PM))
+                riskfight_sample_event(seed, (uint32_t)tick, 31, RISKFIGHT_HL_TP_PM))
             actions[RF_PRIMARY] = RF_TELEPORT;
         return;
     }
@@ -344,10 +308,6 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
             actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
     }
     if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
-    // Axe discipline shared with the tactician: tentacle default, axe only
-    // as a boosted low-HP finisher (recorded one-tick lethal switch, not
-    // camping). Legacy scripts lack exit/threat state, so evaluate with
-    // CONTINUE, non-reflecting, and the fresh bar upper bound.
     uint8_t weapon = ITEM_ABYSSAL_TENTACLE;
     {
         int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
@@ -367,13 +327,6 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, int* acti
                 RISKFIGHT_CONTINUE, 0, 0))
             weapon = ITEM_DHAROKS_GREATAXE;
     }
-    // Granite-maul double (ornate, 50+50): the recorded KO line is
-    // [equip maul, toggle, toggle, target-click] in ONE tick for ~76 into a
-    // ~60-HP opponent (vs voidwaker ~61 ceiling at 50 energy). Teach it only
-    // where the model can afford to learn it: full 100 energy, adjacent
-    // (instant), fresh low opp bar, and boosted own HP (post-axe-trade zone).
-    // Single toggle (SELECTED, obs13=1) is the visible half; the double
-    // commit (DESELECTED, obs23=1) is now observable too (schema 3).
     if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.99f && opponent[0] < 0.65f) {
         int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
         OsrsHealthBarRange opp_hp =
