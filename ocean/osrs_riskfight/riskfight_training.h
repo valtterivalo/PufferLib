@@ -5,6 +5,7 @@ typedef struct {
     uint64_t omission_decay_ticks;
     float midfight_probability;
     int midfight_max_ticks;
+    int session_rounds;
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
@@ -26,6 +27,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     const char* names[] = {"scripted_probability", "scripted_omission_initial",
         "scripted_omission_decay_ticks", "midfight_probability", "midfight_max_ticks"};
     double values[5] = {0};
+    DictItem* rounds = dict_find(kwargs, "session_rounds");
+    assert(rounds && rounds->value >= 1 && rounds->value == floor(rounds->value));
+    config.session_rounds = (int)rounds->value;
     for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, names[i]);
         if (item) values[i] = item->value;
@@ -108,6 +112,15 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     training->start = start;
     training->omissions = 0;
     return start;
+}
+
+/** Fresh round against the same opponent after an escape: full supplies, new priorities and script seeds. */
+static void riskfight_training_next_round(RiskfightTraining* training,
+    RiskfightState* state, RiskfightContext* context) {
+    RiskfightOpponent mixed = state->mixed_opponent;
+    riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    state->mixed_opponent = mixed;
+    training->start_tick = 0;
 }
 
 static int riskfight_training_actions(RiskfightTraining* training,

@@ -155,33 +155,84 @@ static void test_non_triggering_actions(void) {
     assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS);
 }
 
+static void hold_pid(int first) {
+    state.env.priority[first].rank = 0;
+    state.env.priority[1 - first].rank = UINT32_MAX;
+    state.env.priority[0].shuffle_ticks = state.env.priority[1].shuffle_ticks = 1000;
+    state.env.pid_holder = first;
+}
+
 static void test_axe_then_teleport_two_ticks_later(void) {
     for (int pid = 0; pid < 2; pid++) {
-        reset();
-        state.env.pid_holder = pid;
+        int checked = 0;
+        for (uint32_t seed = 1; seed <= 64 && !checked; seed++) {
+            riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, seed);
+            context.self_play = 1;
+            hold_pid(pid);
+            state.env.players[0].veng_active = 0;
+            state.env.players[1].veng_active = 1;
+            equip(22);
+            assert(state.env.players[0].equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
+            int actions[2 * RF_HEADS] = {0};
+            actions[RF_PRIMARY] = RF_ATTACK;
+            int start = state.env.tick;
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            assert(state.env.players[0].just_attacked);
+            assert(state.env.players[0].special_energy == 100);
+            assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == 0);
+            actions[RF_PRIMARY] = RF_STOP;
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            assert(state.env.tick == start + 2);
+            int own_hp = state.env.players[0].current_hitpoints;
+            int opponent_hp = state.env.players[1].current_hitpoints;
+            if (opponent_hp == 121) continue;
+            assert(own_hp < 121 && !state.env.players[1].veng_active);
+            actions[RF_PRIMARY] = RF_TELEPORT;
+            riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+            assert(state.escaped[0] && state.outcome[0] == RISKFIGHT_ESCAPE);
+            assert(state.env.players[0].current_hitpoints == own_hp);
+            assert(state.env.players[1].current_hitpoints == opponent_hp);
+            checked = 1;
+        }
+        assert(checked);
+    }
+}
+
+static void test_tab_after_attack_lands_outgoing_and_drops_incoming(void) {
+    int damaged = 0;
+    for (uint32_t seed = 1; seed <= 64; seed++) {
+        riskfight_reset((EncounterState*)&state, (EncounterContext*)&context, seed);
+        context.self_play = 1;
+        hold_pid(1);
+        state.env.players[0].veng_active = 0;
         state.env.players[1].veng_active = 1;
         equip(22);
-        assert(state.env.players[0].equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
         int actions[2 * RF_HEADS] = {0};
         actions[RF_PRIMARY] = RF_ATTACK;
-        int start = state.env.tick;
         riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
-        assert(state.env.players[0].just_attacked);
-        assert(state.env.players[0].special_energy == 100);
-        assert(state.env.pvp_runtime.teleport[0].blocked_until_tick == 0);
-        actions[RF_PRIMARY] = RF_STOP;
-        riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
-        assert(state.env.tick == start + 2);
+        assert(state.env.players[0].just_attacked && state.env.players[0].num_pending_hits == 1);
         int own_hp = state.env.players[0].current_hitpoints;
         int opponent_hp = state.env.players[1].current_hitpoints;
-        assert(opponent_hp < 121 && own_hp < 121);
-        assert(!state.env.players[1].veng_active);
         actions[RF_PRIMARY] = RF_TELEPORT;
         riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
-        assert(state.escaped[0] && state.outcome[0] == RISKFIGHT_ESCAPE);
+        assert(state.escaped[0] && state.env.players[1].hit_landed_this_tick);
         assert(state.env.players[0].current_hitpoints == own_hp);
-        assert(state.env.players[1].current_hitpoints == opponent_hp);
+        damaged += state.env.players[1].current_hitpoints < opponent_hp;
     }
+    assert(damaged > 0);
+
+    reset();
+    hold_pid(0);
+    int actions[2 * RF_HEADS] = {0};
+    actions[RF_HEADS + RF_PRIMARY] = RF_ATTACK;
+    riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+    assert(state.env.players[1].just_attacked && state.env.players[1].num_pending_hits == 1);
+    int own_hp = state.env.players[0].current_hitpoints;
+    actions[RF_HEADS + RF_PRIMARY] = RF_STOP;
+    actions[RF_PRIMARY] = RF_TELEPORT;
+    riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
+    assert(state.escaped[0] && !state.env.players[0].hit_landed_this_tick);
+    assert(state.env.players[0].current_hitpoints == own_hp);
 }
 
 static void test_policy_and_human_blocked_teleport(void) {
@@ -211,6 +262,7 @@ int main(void) {
     test_recorded_eight_tick_teleports();
     test_non_triggering_actions();
     test_axe_then_teleport_two_ticks_later();
+    test_tab_after_attack_lands_outgoing_and_drops_incoming();
     test_policy_and_human_blocked_teleport();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight teleport contracts passed");

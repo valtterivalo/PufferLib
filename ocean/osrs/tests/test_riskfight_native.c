@@ -2,8 +2,9 @@
 #include <assert.h>
 
 int main(void) {
-    DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1}};
-    Dict kwargs = {.items = items, .size = 2};
+    DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
+        {.key = "session_rounds", .value = 1}};
+    Dict kwargs = {.items = items, .size = 3};
     Env* env = (Env*)calloc(1, sizeof(*env));
     float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2];
     unsigned char masks[2][RF_MASK_SIZE];
@@ -81,6 +82,34 @@ int main(void) {
     actions[0][RF_PRIMARY] = RF_TELEPORT;
     puf_step(env);
     assert(terminals[0] == 1 && rewards[0] == 0 && env->log.escapes == 1);
+    puf_close(env); free(env);
+    items[1].value = 1;
+    items[2].value = 3;
+    env = (Env*)calloc(1, sizeof(*env));
+    env->rng = 123;
+    puf_init(env, &kwargs);
+    for (int i = 0; i < 2; i++) env->agents[i] = (Agent){
+        .observations = obs[i], .actions = actions[i], .rewards = &rewards[i],
+        .terminals = &terminals[i], .action_mask = masks[i], .policy = i};
+    puf_reset(env);
+    memset(actions, 0, sizeof(actions));
+    for (int round = 0; round < 3; round++) {
+        env->state.env.players[0].current_hitpoints = 50;
+        actions[0][RF_PRIMARY] = RF_TELEPORT;
+        puf_step(env);
+        assert(terminals[0] == (round == 2) && terminals[1] == (round == 2));
+        assert(env->state.env.tick == 0 && env->state.env.players[0].current_hitpoints == 121);
+        assert(!env->state.escaped[0] && env->log.self_teleports == round + 1);
+    }
+    assert(env->log.n == 1 && env->log.escapes == 1 && env->log.rounds == 3 && env->log.net_stake == 0);
+    actions[0][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(env);
+    assert(terminals[0] == 0 && env->round == 1);
+    actions[0][RF_PRIMARY] = 0;
+    env->state.env.players[1].current_hitpoints = 0;
+    puf_step(env);
+    assert(terminals[0] == 1 && env->round == 0);
+    assert(env->log.n == 2 && env->log.kills == 1 && env->log.rounds == 5 && env->log.net_stake == 1);
     puf_close(env); free(env);
     enum { SEEDED_ENVS = 8192 };
     static uint32_t combat[SEEDED_ENVS];

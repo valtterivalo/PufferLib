@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-"""Mine distribution-matched behavior rates from SPECTATOR_COMBAT_V1 archives.
+"""Mine RISKFIGHT_HUMANLIKE per-mille rates from SPECTATOR_COMBAT archives.
 
-Reads every session_*.zst under --recordings, segments each archive into
-fights (maximal tick runs with a stable visible fighter pair), and derives
-per-mille sample rolls for the RISKFIGHT_HUMANLIKE script branch.
-
-Spectator data has no inputs by construction
-(unknown=EXACT_HP_..._INPUTS_CAUSALITY): drink shares eat anim 829 with no
-ID split, so all 829s are joint consumes. Ratio bands avoid any base-HP
-assumption; health-bar scale is normalized to 30 per record.
-
-Anim meanings: 1658 tentacle, 2067 axe, 1665 maul ordinary, 1667 maul spec,
-390 voidwaker ordinary, 1378 or 11275 voidwaker spec, 829 consume, 4069
-teleport (4071 is its tail), 4410 veng, 836 death, 4177/424/1156 blocks,
-808/819/824 idle/walk/run, -1 cleared.
+A bout is a mutual player pair with hitsplats both ways, from its first
+interaction to the first round end: a tab 4069, a standard teleport 714,
+a death, or either fighter leaving view. Rates come from modeled-setup
+fighters only. Own and opponent HP are health-bar ratios on scale 30,
+mapped to HP at base 99, and a bar is stale from an eat until its next
+hitsplat. Spec energy is estimated from 100 at each presence start.
 """
 
 import argparse
@@ -21,543 +14,328 @@ import collections
 import glob
 import json
 import os
-import statistics
 import subprocess
-import sys
 
-COMBAT_ANIMS = {1658, 2067, 1665, 1667, 390, 1378, 11275, 829}
-WEAPON_ANIMS = {1658, 2067, 1665, 1667, 390, 1378, 11275}
-CONSUME_ANIM = 829
-TELEPORT_ANIM = 4069
-TELEPORT_TAIL_ANIM = 4071
-VENG_ANIM = 4410
-VENG_SPOTANIM = 726
-VW_SPEC_ANIMS = {1378, 11275}
-MAUL_SPEC_ANIM = 1667
-AXE_ANIM = 2067
-
-BANDS = [(0, 10), (11, 15), (16, 19), (20, 24), (25, 30)]
-BAND_NAMES = ["0-10", "11-15", "16-19", "20-24", "25-30"]
-
-
-def band_of(r30):
-    for (lo, hi), name in zip(BANDS, BAND_NAMES):
-        if lo <= r30 <= hi:
-            return name
-    return None
+TENT, VW, VW_SPEC, DH_CRUSH, DH_SLASH = 1658, 390, 11275, 2067, 2066
+MAUL, MAUL_SPEC, DDS, DDS_SPEC, ATLATL = 1665, 1667, 376, 1062, 11057
+CONSUME, TAB, TAB_TAIL, TELEPORT, DEATH = 829, 4069, 4071, 714, 836
+VENG_CAST_ANIMS = {8316, 8317}
+VENG_SPOTANIMS = {726, 2605}
+ATTACK_ANIMS = {TENT, VW, VW_SPEC, DH_CRUSH, DH_SLASH, MAUL, MAUL_SPEC, DDS, DDS_SPEC, ATLATL}
+MODELED_ATTACKS = {TENT, VW, VW_SPEC, DH_CRUSH, DH_SLASH, MAUL, MAUL_SPEC}
+SPEC_COST = {VW_SPEC: 50, MAUL_SPEC: 50, DDS_SPEC: 25}
+WEAPON_NAMES = {TENT: "tent", VW: "vw", VW_SPEC: "vw", DH_CRUSH: "dh", DH_SLASH: "dh",
+                MAUL: "maul", MAUL_SPEC: "maul", DDS: "dds", DDS_SPEC: "dds", ATLATL: "atlatl"}
+FIGHTER_ROLES = {"SELECTED", "PLAYER_FIGHTER"}
+BASE_HP = 99
+TARGET_MEMORY_TICKS = 20
+FOLLOW_TAB_TICKS = 15
+EAT_LOCK_TICKS = 3
 
 
-def r30_of(health_bar):
-    """Normalize an observed health bar to scale-30 ratio; None if unknown."""
-    if not isinstance(health_bar, dict):
-        return None
-    if health_bar.get("availability") != "OBSERVED_RAW_BAR":
-        return None
-    try:
-        ratio = health_bar["ratio"]
-        scale = health_bar["scale"]
-    except KeyError:
-        return None
-    if not isinstance(ratio, (int, float)) or not isinstance(scale, (int, float)):
-        return None
-    if scale <= 0:
-        return None
-    return int(round(ratio * 30.0 / scale))
+def hp_of(r30):
+    """Midpoint HP of a scale-30 bar at base 99."""
+    if r30 == 0:
+        return 0
+    lower = 1 if r30 == 1 else (BASE_HP * (r30 - 1) + 28) // 29
+    upper = BASE_HP if r30 == 30 else (BASE_HP * r30 - 1) // 29
+    return (lower + upper) / 2
 
 
-def spotanim_ids(state):
-    try:
-        spots = state["effects"]["spotAnims"]
-    except (KeyError, TypeError):
-        return []
-    if not isinstance(spots, list):
-        return []
-    return [s.get("id") for s in spots if isinstance(s, dict)]
+class Actor:
+    def __init__(self):
+        self.name = None
+        self.fighter = False
+        self.anims = []
+        self.hits = []
+        self.targets = []
+        self.bars = []
+        self.veng_casts = []
+        self.leaves = []
+        self.enters = []
+        self.deaths = []
+        self.spots = set()
 
 
-def overhead_text(state):
-    try:
-        return state["effects"]["overheadText"].get("text") or ""
-    except (KeyError, TypeError, AttributeError):
-        return ""
+def load(path):
+    """Actors keyed by actorTraceId from one archive, or None for a non-spectator archive."""
+    proc = subprocess.run(["zstd", "-dc", path], check=True, capture_output=True)
+    actors = collections.defaultdict(Actor)
+
+    def seen(ref):
+        actor = actors[ref["actorTraceId"]]
+        actor.name = ref["normalizedName"]
+        actor.fighter |= ref["scopeRole"] in FIGHTER_ROLES and ref["kind"] == "PLAYER"
+        return actor
+
+    def observe_state(actor, tick, state):
+        bar = state["healthBar"]
+        if bar["availability"] == "OBSERVED_RAW_BAR":
+            actor.bars.append((tick, round(bar["ratio"] * 30 / bar["scale"])))
+        current = {s["id"] for s in state["effects"]["spotAnims"] if s["id"] in VENG_SPOTANIMS}
+        if current - actor.spots:
+            actor.veng_casts.append(tick)
+        actor.spots = current
+
+    for line in proc.stdout.splitlines():
+        record = json.loads(line)
+        kind, tick, payload = record["eventKind"], record["lastObservedGameTick"], record["payload"]
+        if kind == "SESSION_STARTED" and "spectatorPolicy" not in payload:
+            return None
+        if kind == "ACTOR_VISIBILITY_OBSERVED" and "actorTraceId" in payload:
+            actor = seen(payload)
+            if payload["visibility"] == "ENTERED":
+                actor.enters.append(tick)
+                actor.spots = set()
+                observe_state(actor, tick, payload["initialState"])
+            else:
+                actor.leaves.append(tick)
+        elif kind in ("ACTOR_STATE_OBSERVED", "ACTOR_EFFECT_OBSERVED", "ANIMATION_OBSERVED"):
+            actor = seen(payload["actor"])
+            observe_state(actor, tick, payload["state"])
+            if kind == "ANIMATION_OBSERVED" and payload["animation"] != -1:
+                actor.anims.append((tick, payload["animation"]))
+        elif kind == "HITSPLAT_APPLIED_OBSERVED":
+            seen(payload["recipient"]).hits.append((tick, payload["hitsplatType"], payload["amount"]))
+        elif kind == "INTERACTING_OBSERVED" and "actorTraceId" in payload["source"]:
+            target = payload["target"].get("actorTraceId")
+            seen(payload["source"]).targets.append((tick, target))
+        elif kind == "ACTOR_DEATH_OBSERVED":
+            seen(payload["actor"]).deaths.append(tick)
+    return {k: v for k, v in actors.items() if v.name}
 
 
-def is_veng(anim, state):
-    if anim == VENG_ANIM:
-        return True
-    if VENG_SPOTANIM in spotanim_ids(state):
-        return True
-    return "vengeance" in overhead_text(state).lower()
+def target_at(actor, tick):
+    """Last non-null interaction target within TARGET_MEMORY_TICKS before tick."""
+    best = None
+    for t, target in actor.targets:
+        if t > tick:
+            break
+        if target is not None:
+            best = (t, target)
+    return best[1] if best and tick - best[0] < TARGET_MEMORY_TICKS else None
 
 
-def actor_ref(payload, key):
-    ref = payload.get(key)
-    return ref if isinstance(ref, dict) else {}
+def round_end(actor, start):
+    ends = [t for t, a in actor.anims if a in (TAB, TELEPORT) and t >= start]
+    ends += [t for t in actor.deaths + actor.leaves if t >= start]
+    return min(ends, default=None)
 
 
-def split_anim_events(seq_events):
-    """Split a fighter's combat-anim id sequence into (prev, curr) bigrams."""
-    return [(seq_events[i], seq_events[i + 1]) for i in range(len(seq_events) - 1)]
+def bouts(actors):
+    """(a, b, start, end, end_kind) for every mutual pair round with hits both ways."""
+    fighters = {k for k, v in actors.items() if v.fighter}
+    edges = collections.defaultdict(list)
+    for a in fighters:
+        for t, target in actors[a].targets:
+            if target in fighters and target != a:
+                edges[tuple(sorted((a, target)))].append(t)
+    out = []
+    for (a, b), ticks in edges.items():
+        ticks.sort()
+        cursor = ticks[0]
+        while True:
+            ends = [e for e in (round_end(actors[a], cursor), round_end(actors[b], cursor)) if e is not None]
+            end = min(ends) if ends else max(ticks)
+            mutual = {x for x in (a, b) if any(cursor <= t <= end and target_at(actors[x], t) == (b if x == a else a)
+                                               for t, _ in actors[x].targets)}
+            hit_both = all(any(cursor <= t <= end and kind in (12, 13, 16, 17)
+                               for t, kind, _ in actors[x].hits) for x in (a, b))
+            if len(mutual) == 2 and hit_both:
+                out.append((a, b, cursor, end, end_kind(actors, a, b, end)))
+            later = [t for t in ticks if t > end]
+            if not later:
+                break
+            cursor = later[0]
+    return out
 
 
-def mine_archive(path, min_anims):
-    """Stream one archive. Returns (status, data) where status selects
-    'used' (has >=1 usable fight), 'empty' (spectator, no usable fight),
-    or 'skipped' (reason in data)."""
-    manifest_path = path + ".manifest.json"
-    source_sha256 = None
-    try:
-        with open(manifest_path) as mf:
-            source_sha256 = json.load(mf).get("sourceSha256")
-    except (OSError, ValueError):
-        pass
-    meta = {"archive": os.path.basename(path), "source_sha256": source_sha256}
+def end_kind(actors, a, b, end):
+    for x in (a, b):
+        if end in actors[x].deaths:
+            return "death"
+    for x in (a, b):
+        if any(t == end and anim in (TAB, TELEPORT) for t, anim in actors[x].anims):
+            return "teleport"
+    return "left_view"
 
-    proc = subprocess.Popen(["zstd", "-dc", path], stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL)
-    try:
-        selected_names = None
-        ended = False
-        index = 0
-        anim_nostate = 0
-        anim_state = 0
-        tick_visible = {}  # game_tick -> {traceId: normalizedName}
-        roles = collections.defaultdict(set)  # traceId -> set(scopeRole)
-        names = {}  # traceId -> normalizedName
-        snaps = collections.defaultdict(dict)  # game_tick -> {traceId: r30}
-        last_r30 = {}  # traceId -> last known r30
-        anim_events = []  # (tick, traceId, anim, own_r30)
-        teleports = []  # (tick, traceId)
-        vengs = []  # (tick, traceId)
-        deaths = []  # (tick, traceId)
-        hitsplats = 0
 
-        for raw in proc.stdout:
-            try:
-                record = json.loads(raw)
-            except ValueError:
-                proc.kill()
-                return "skipped", dict(meta, reason="json_parse_error")
-            if record.get("sequence") != index:
-                proc.kill()
-                return "skipped", dict(meta, reason="sequence_gap")
-            index += 1
-            kind = record.get("eventKind")
-            tick = record.get("lastObservedGameTick")
-            payload = record.get("payload") or {}
+def setup(actor, start, end):
+    weapons = {a for t, a in actor.anims if start <= t <= end and a in ATTACK_ANIMS}
+    if weapons and weapons <= MODELED_ATTACKS and weapons & {DH_CRUSH, DH_SLASH, VW, VW_SPEC}:
+        return "dharok_veng"
+    return "+".join(sorted({WEAPON_NAMES[w] for w in weapons})) or "none"
 
-            if kind == "SESSION_STARTED":
-                if not isinstance(payload.get("spectatorPolicy"), dict):
-                    # Not a spectator archive; stop early without full decode.
-                    proc.kill()
-                    return "skipped", dict(meta, reason="not_spectator")
-                try:
-                    selected_names = list(payload["spectatorPolicy"]["selectedNames"])
-                except (KeyError, TypeError):
-                    selected_names = []
-            elif kind == "SESSION_ENDED":
-                ended = True
-            elif kind == "GAME_TICK_OBSERVED":
-                vis = {}
-                for target in payload.get("spectatorTargets") or []:
-                    if not isinstance(target, dict):
-                        continue
-                    if target.get("visibility") == "VISIBLE":
-                        tid = target.get("actorTraceId")
-                        if tid is not None:
-                            vis[tid] = target.get("normalizedName")
-                            if target.get("normalizedName"):
-                                names.setdefault(tid, target.get("normalizedName"))
-                if isinstance(tick, int):
-                    tick_visible[tick] = vis
-            elif kind == "ACTOR_VISIBILITY_OBSERVED":
-                tid = payload.get("actorTraceId")
-                if tid is not None:
-                    roles[tid].add(str(payload.get("scopeRole")) + ":" +
-                                   str(payload.get("visibility")))
-                    if payload.get("normalizedName"):
-                        names.setdefault(tid, payload.get("normalizedName"))
-                    state = payload.get("initialState") or {}
-                    r30 = r30_of(state.get("healthBar"))
-                    if r30 is not None:
-                        last_r30[tid] = r30
-                        if isinstance(tick, int):
-                            snaps[tick][tid] = r30
-            elif kind in ("ACTOR_STATE_OBSERVED", "ACTOR_EFFECT_OBSERVED"):
-                actor = actor_ref(payload, "actor")
-                tid = actor.get("actorTraceId")
-                if tid is None:
-                    continue
-                if actor.get("scopeRole"):
-                    roles[tid].add(actor.get("scopeRole"))
-                if actor.get("normalizedName"):
-                    names.setdefault(tid, actor.get("normalizedName"))
-                state = payload.get("state")
-                if not isinstance(state, dict):
-                    continue
-                r30 = r30_of(state.get("healthBar"))
-                if r30 is not None:
-                    last_r30[tid] = r30
-                    if isinstance(tick, int):
-                        snaps[tick][tid] = r30
-            elif kind == "ANIMATION_OBSERVED":
-                actor = actor_ref(payload, "actor")
-                tid = actor.get("actorTraceId")
-                if tid is None:
-                    continue
-                if actor.get("scopeRole"):
-                    roles[tid].add(actor.get("scopeRole"))
-                if actor.get("normalizedName"):
-                    names.setdefault(tid, actor.get("normalizedName"))
-                state = payload.get("state")
-                if not isinstance(state, dict):
-                    anim_nostate += 1
-                    continue
-                anim_nostate_check = payload.get("animation")
-                anim = state.get("animation")
-                if anim is None:
-                    anim = anim_nostate_check
-                anim_state += 1
-                r30 = r30_of(state.get("healthBar"))
-                if r30 is not None:
-                    last_r30[tid] = r30
-                    if isinstance(tick, int):
-                        snaps[tick][tid] = r30
-                if isinstance(anim, int) and isinstance(tick, int):
-                    if anim == CONSUME_ANIM:
-                        anim_events.append((tick, tid, anim, r30))
-                    elif anim in WEAPON_ANIMS:
-                        anim_events.append((tick, tid, anim, r30))
-                    elif anim == TELEPORT_ANIM:
-                        teleports.append((tick, tid))
-                    # 4071 tail ignored; -1/blocks/idle carry no signal.
-                    if is_veng(anim, state):
-                        vengs.append((tick, tid))
-            elif kind == "HITSPLAT_APPLIED_OBSERVED":
-                hitsplats += 1
-            elif kind == "ACTOR_DEATH_OBSERVED":
-                actor = actor_ref(payload, "actor")
-                tid = actor.get("actorTraceId")
-                if tid is not None and isinstance(tick, int):
-                    deaths.append((tick, tid))
-                    if actor.get("normalizedName"):
-                        names.setdefault(tid, actor.get("normalizedName"))
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait()
-    if not ended:
-        return "skipped", dict(meta, reason="no_session_ended")
 
-    def ever_selected(tid):
-        return any(r == "SELECTED" or r.startswith("SELECTED:") for r in roles[tid])
-
-    # Segment into fights: maximal tick runs with a stable visible pair,
-    # interferers (never SELECTED) excluded.
-    ordered_ticks = sorted(tick_visible)
-    fights = []
-    run_start = None
-    run_pair = None
-    run_names = None
-
-    def close_run(run_end):
-        if run_start is None or run_pair is None:
-            return
-        a, b = run_pair
-        span_events = [e for e in anim_events
-                       if run_start <= e[0] <= run_end and e[1] in run_pair]
-        n_state = len(span_events)
-        combat = [e for e in span_events if e[2] in COMBAT_ANIMS]
-        if n_state < min_anims or not combat:
-            return
-        fights.append({
-            "fighters": sorted(run_pair),
-            "fighter_names": run_names,
-            "tick_start": run_start,
-            "tick_end": run_end,
-            "anim_events": span_events,
-            "teleports": [t for t in teleports
-                          if run_start <= t[0] <= run_end and t[1] in run_pair],
-            "vengs": [v for v in vengs
-                      if run_start <= v[0] <= run_end and v[1] in run_pair],
-            "deaths": [d for d in deaths
-                       if run_start <= d[0] <= run_end and d[1] in run_pair],
-        })
-
-    prev_tick = None
-    for tick in ordered_ticks:
-        vis = tick_visible[tick]
-        pair = tuple(sorted(t for t in vis if ever_selected(t)))
-        if len(pair) != 2:
-            close_run(prev_tick if prev_tick is not None else tick)
-            run_start = run_pair = run_names = None
-            prev_tick = tick
+def bar_timeline(actor, start, end):
+    """Per tick own r30 or None when unknown or stale after an eat."""
+    eats = {t for t, a in actor.anims if a == CONSUME}
+    bar_ticks = dict(actor.bars)
+    hit_ticks = {t for t, _, _ in actor.hits}
+    current = None
+    for t, r in actor.bars:
+        if t < start:
+            current = r
+    out = {}
+    for t in range(start, end + 1):
+        if t in bar_ticks:
+            current = bar_ticks[t]
+        if t in eats:
+            out[t] = current
+            current = None
             continue
-        if pair != run_pair or (prev_tick is not None and tick != prev_tick + 1):
-            close_run(prev_tick if prev_tick is not None else tick)
-            run_start = tick
-            run_pair = pair
-            run_names = {str(t): names.get(t) for t in pair}
-        prev_tick = tick
-    close_run(prev_tick if prev_tick is not None else 0)
-
-    if not fights:
-        return "empty", dict(meta, selected_names=selected_names,
-                             anim_with_state=anim_state,
-                             anim_without_state=anim_nostate,
-                             hitsplats=hitsplats)
-    return "used", dict(meta, selected_names=selected_names,
-                        anim_with_state=anim_state,
-                        anim_without_state=anim_nostate,
-                        hitsplats=hitsplats, fights=fights, snaps=dict(snaps),
-                        names={str(k): v for k, v in names.items()})
+        if current is None and t in hit_ticks and t in bar_ticks:
+            current = bar_ticks[t]
+        out[t] = current
+    return out
 
 
-def summarize(fight, snaps):
-    """Per-fight tables + opportunity denominators (perspective-ticks)."""
-    a, b = fight["fighters"]
-    opp_of = {a: b, b: a}
-    ticks = range(fight["tick_start"], fight["tick_end"] + 1)
-    # Forward-filled carry-forward over the integer span.
-    last = {}
-    bands_eat = collections.Counter()
-    bands_vw = collections.Counter()
-    weapon_mix = collections.Counter()
-    vw_specs = 0
-    maul_specs = 0
-    axe_mid = 0
-    o_le19 = o_le18 = own_le10 = o_mid = 0
-    for tick in ticks:
-        for tid in (a, b):
-            if tid in snaps.get(tick, {}):
-                last[tid] = snaps[tick][tid]
-        for tid in (a, b):
-            own = last.get(tid)
-            opp = last.get(opp_of[tid])
-            if own is None or opp is None:
-                continue
-            if opp <= 19:
-                o_le19 += 1
-            if opp <= 18:
-                o_le18 += 1
-            if own <= 10:
-                own_le10 += 1
-            if 10 <= own <= 24 and 12 <= opp <= 24:
-                o_mid += 1
-    eats = specs_vw = specs_maul = teles = 0
-    consume_ticks = collections.defaultdict(list)
-    seqs = collections.defaultdict(list)
-    bigrams = collections.Counter()
-    for (tick, tid, anim, own_r30) in fight["anim_events"]:
-        opp = None
-        snap = snaps.get(tick, {})
-        if opp_of[tid] in snap:
-            opp = snap[opp_of[tid]]
-        elif last.get(opp_of[tid]) is not None:
-            opp = last.get(opp_of[tid])
-        if anim == CONSUME_ANIM:
-            eats += 1
-            consume_ticks[tid].append(tick)
-            if own_r30 is not None:
-                band = band_of(own_r30)
-                if band:
-                    bands_eat[band] += 1
-        elif anim in VW_SPEC_ANIMS:
-            specs_vw += 1
-            vw_specs += 1
-            weapon_mix["1378+11275"] += 1
-            if opp is not None:
-                band = band_of(opp)
-                if band:
-                    bands_vw[band] += 1
-        elif anim == MAUL_SPEC_ANIM:
-            specs_maul += 1
-            maul_specs += 1
-            weapon_mix[str(anim)] += 1
-        else:
-            weapon_mix[str(anim)] += 1
-        if anim in WEAPON_ANIMS:
-            seqs[tid].append(anim)
-            if anim == AXE_ANIM and own_r30 is not None and opp is not None:
-                if 10 <= own_r30 <= 24 and 12 <= opp <= 24:
-                    axe_mid += 1
-    for tid, seq in seqs.items():
-        for prev, curr in split_anim_events(seq):
-            if prev != curr:
-                bigrams["%d>%d" % (prev, curr)] += 1
-    for (tick, tid) in fight["teleports"]:
-        teles += 1
-    gaps = []
-    for tid, ticks_c in consume_ticks.items():
-        ticks_c.sort()
-        gaps.extend(b - a_ for a_, b in zip(ticks_c, ticks_c[1:]))
-    swings = sum(1 for e in fight["anim_events"] if e[2] in WEAPON_ANIMS)
-    active_ticks = len({e[0] for e in fight["anim_events"] if e[2] in WEAPON_ANIMS})
-    return {
-        "fighters": fight["fighter_names"],
-        "tick_start": fight["tick_start"],
-        "tick_end": fight["tick_end"],
-        "eats": eats,
-        "specs_vw": specs_vw,
-        "specs_maul": specs_maul,
-        "teleports": teles,
-        "vengs": len(fight["vengs"]),
-        "deaths": len(fight["deaths"]),
-        "bands_eat": dict(bands_eat),
-        "bands_vw": dict(bands_vw),
-        "weapon_mix": dict(weapon_mix),
-        "bigrams": dict(bigrams),
-        "axe_mid": axe_mid,
-        "ticks_opp_le19": o_le19,
-        "ticks_opp_le18": o_le18,
-        "ticks_own_le10": own_le10,
-        "ticks_midzone": o_mid,
-        "consume_gaps": gaps,
-        "swings": swings,
-        "active_ticks": active_ticks,
-    }
+def spec_energy(actor, start, end):
+    """Per tick estimated special energy, 100 at the last presence start."""
+    begin = max([t for t in actor.enters if t <= start], default=start)
+    costs = collections.Counter()
+    for t, a in actor.anims:
+        if a in SPEC_COST and begin <= t <= end:
+            costs[t] += SPEC_COST[a]
+    energy, out = 100.0, {}
+    for t in range(begin, end + 1):
+        energy = min(100.0, energy + 0.2) - costs[t]
+        out[t] = energy
+    return out
+
+
+class Counts:
+    def __init__(self):
+        self.eat_events = collections.Counter()
+        self.eat_ticks = collections.Counter()
+        self.vw_specs = self.vw_opportunities = 0
+        self.maul_specs = self.maul_ticks = 0
+        self.axes = self.axe_opportunities = 0
+        self.tabs = self.tab_ticks = 0
+        self.first_tab_hp = []
+        self.follow_tab_gaps = []
+        self.attack_to_tab = []
+        self.orb_axes = 0
+        self.veng_recast_after_ready = []
+        self.bout_ends = collections.Counter()
+        self.setups = collections.Counter()
+
+
+EAT_BANDS = [(0, 40), (40, 65), (65, 73), (73, 90), (90, 200)]
+
+
+def band(hp):
+    return next(f"{lo}-{hi}" for lo, hi in EAT_BANDS if lo <= hp < hi)
+
+
+def mine(actors, counts):
+    for a, b, start, end, kind in bouts(actors):
+        counts.bout_ends[kind] += 1
+        for me, opp in ((a, b), (b, a)):
+            s = setup(actors[me], start, end)
+            counts.setups[s] += 1
+            if s == "dharok_veng":
+                mine_fighter(actors[me], actors[opp], start, end, counts)
+
+
+def mine_fighter(me, opp, start, end, counts):
+    own, other = bar_timeline(me, start, end), bar_timeline(opp, start, end)
+    energy = spec_energy(me, start, end)
+    anims = collections.defaultdict(set)
+    for t, anim in me.anims:
+        if start <= t <= end:
+            anims[t].add(anim)
+    last_eat = -10**9
+    for t in range(start, end + 1):
+        if CONSUME in anims[t] and own[t] is not None:
+            counts.eat_events[band(hp_of(own[t]))] += 1
+        if t - last_eat >= EAT_LOCK_TICKS and own[t] is not None:
+            counts.eat_ticks[band(hp_of(own[t]))] += 1
+        if CONSUME in anims[t]:
+            last_eat = t
+        attacks = anims[t] & ATTACK_ANIMS
+        o = other[t]
+        if attacks and o is not None and o <= 19 and energy[t] + SPEC_COST.get(VW_SPEC, 0) * (VW_SPEC in attacks) >= 50:
+            counts.vw_opportunities += 1
+            counts.vw_specs += VW_SPEC in attacks
+        if o is not None and o <= 19 and own[t] is not None and own[t] < 30 and \
+                energy[t] + 50 * (MAUL_SPEC in anims[t]) >= 99.5:
+            counts.maul_ticks += 1
+            counts.maul_specs += MAUL_SPEC in anims[t] and MAUL_SPEC not in anims[t - 1]
+        normal = attacks - {VW_SPEC, MAUL_SPEC, DDS_SPEC}
+        if normal and own[t] is not None and own[t] < 30 and o is not None and 12 <= o <= 23:
+            counts.axe_opportunities += 1
+            counts.axes += bool(normal & {DH_CRUSH, DH_SLASH})
+        if own[t] is not None and hp_of(own[t]) < 40:
+            counts.tab_ticks += 1
+    my_tabs = [t for t, anim in me.anims if anim in (TAB, TELEPORT) and start <= t <= end + FOLLOW_TAB_TICKS]
+    opp_tabs = [t for t, anim in opp.anims if anim in (TAB, TELEPORT) and start <= t <= end + FOLLOW_TAB_TICKS]
+    for t in my_tabs:
+        leader = [u for u in opp_tabs if 0 < t - u <= FOLLOW_TAB_TICKS]
+        if leader:
+            counts.follow_tab_gaps.append(t - leader[0])
+            continue
+        hp = own.get(t)
+        counts.first_tab_hp.append(None if hp is None else round(hp_of(hp)))
+        counts.tabs += hp is not None and hp_of(hp) < 40
+        last_attack = max([u for u, anim in me.anims if anim in ATTACK_ANIMS and u <= t], default=None)
+        if last_attack is not None:
+            counts.attack_to_tab.append(t - last_attack)
+    orbs = [t for t, kind, amount in me.hits if kind in (16, 17) and amount == 10 and start <= t <= end]
+    axes = [t for t, anim in me.anims if anim in (DH_CRUSH, DH_SLASH) and start <= t <= end]
+    counts.orb_axes += sum(1 for t in axes if any(0 <= t - o <= 2 for o in orbs))
+    casts = sorted(c for c in me.veng_casts if start <= c <= end)
+    counts.veng_recast_after_ready.extend(c2 - (c1 + 50) for c1, c2 in zip(casts, casts[1:]))
+
+
+def per_mille(numerator, denominator):
+    return round(1000 * numerator / denominator)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recordings",
-                        default=os.path.expanduser("~/.light2/gameplay-recordings/spectator-combat"))
-    parser.add_argument("--out", default=None)
-    parser.add_argument("--min-anims", type=int, default=50)
+    parser.add_argument("--recordings", default=os.path.expanduser("~/.light2/gameplay-recordings/spectator-combat"))
+    parser.add_argument("--out")
     args = parser.parse_args()
-
-    paths = sorted(glob.glob(os.path.join(args.recordings, "session_*.zst")))
-    provenance = {"archives_used": [], "archives_skipped": []}
-    fight_rows = []
-    tables = {
-        "eat_consume_events_by_own_ratio_band": collections.Counter(),
-        "weapon_anim_mix": collections.Counter(),
-        "switch_bigrams": collections.Counter(),
-        "vw_specs_by_opp_ratio_band": collections.Counter(),
-        "maul_specs": 0,
-        "axe_anims_midzone": 0,
-        "teleports": 0,
-        "ticks_opp_le19": 0,
-        "ticks_opp_le18": 0,
-        "ticks_own_le10": 0,
-        "ticks_midzone": 0,
-        "ticks_between_consumes": {},
-        "eats_per_fight": [],
-        "teleports_per_fight": [],
-        "deaths_per_fight": [],
-        "swing_rate_per_100_active_ticks": 0.0,
+    counts = Counts()
+    archives = collections.Counter()
+    for path in sorted(glob.glob(os.path.join(args.recordings, "session_*.jsonl.zst"))):
+        actors = load(path)
+        archives["spectator" if actors is not None else "not_spectator"] += 1
+        if actors is not None:
+            mine(actors, counts)
+    hazard = {k: (counts.eat_events[k], counts.eat_ticks[k]) for k in counts.eat_ticks}
+    low_events = counts.eat_events["0-40"] + counts.eat_events["40-65"]
+    low_ticks = counts.eat_ticks["0-40"] + counts.eat_ticks["40-65"]
+    rolls = {
+        "RISKFIGHT_HL_EARLY_EAT_PM": per_mille(counts.eat_events["65-73"], counts.eat_ticks["65-73"]),
+        "RISKFIGHT_HL_EAT_DELAY_PM": 1000 - per_mille(low_events, low_ticks),
+        "RISKFIGHT_HL_VW_PM": per_mille(counts.vw_specs, counts.vw_opportunities),
+        "RISKFIGHT_HL_MAUL_PM": per_mille(counts.maul_specs, counts.maul_ticks),
+        "RISKFIGHT_HL_AXE_PM": per_mille(counts.axes, counts.axe_opportunities),
+        "RISKFIGHT_HL_TP_PM": per_mille(counts.tabs, counts.tab_ticks),
     }
-    gaps_all = []
-    swings_all = 0
-    active_all = 0
-    usable_fights = 0
-
-    for path in paths:
-        status, data = mine_archive(path, args.min_anims)
-        if status == "skipped":
-            provenance["archives_skipped"].append(data)
-            continue
-        if status == "empty":
-            provenance["archives_skipped"].append(
-                {"archive": data["archive"],
-                 "source_sha256": data["source_sha256"],
-                 "reason": "no_usable_fight"})
-            continue
-        provenance["archives_used"].append(
-            {"archive": data["archive"], "source_sha256": data["source_sha256"]})
-        snaps = {int(k): v for k, v in data["snaps"].items()}
-        for fight in data["fights"]:
-            usable_fights += 1
-            row = summarize(fight, snaps)
-            fight_rows.append({"archive": data["archive"], **row})
-            tables["eat_consume_events_by_own_ratio_band"].update(row["bands_eat"])
-            tables["weapon_anim_mix"].update(row["weapon_mix"])
-            tables["switch_bigrams"].update(row["bigrams"])
-            tables["vw_specs_by_opp_ratio_band"].update(row["bands_vw"])
-            tables["maul_specs"] += row["specs_maul"]
-            tables["axe_anims_midzone"] += row["axe_mid"]
-            tables["teleports"] += row["teleports"]
-            tables["ticks_opp_le19"] += row["ticks_opp_le19"]
-            tables["ticks_opp_le18"] += row["ticks_opp_le18"]
-            tables["ticks_own_le10"] += row["ticks_own_le10"]
-            tables["ticks_midzone"] += row["ticks_midzone"]
-            tables["eats_per_fight"].append(row["eats"])
-            tables["teleports_per_fight"].append(row["teleports"])
-            tables["deaths_per_fight"].append(row["deaths"])
-            gaps_all.extend(row["consume_gaps"])
-            swings_all += row["swings"]
-            active_all += row["active_ticks"]
-
-    for key in ("eat_consume_events_by_own_ratio_band", "weapon_anim_mix",
-                "switch_bigrams", "vw_specs_by_opp_ratio_band"):
-        tables[key] = dict(tables[key])
-    tables["switch_bigrams"] = dict(
-        sorted(tables["switch_bigrams"].items(), key=lambda kv: -kv[1])[:10])
-    if gaps_all:
-        gaps_all.sort()
-        tables["ticks_between_consumes"] = {
-            "median": statistics.median(gaps_all),
-            "p90": gaps_all[min(len(gaps_all) - 1, int(len(gaps_all) * 0.9))],
-        }
-    else:
-        tables["ticks_between_consumes"] = {"median": None, "p90": None}
-    if active_all:
-        tables["swing_rate_per_100_active_ticks"] = round(100.0 * swings_all / active_all, 2)
-
-    for row in fight_rows:
-        del row["consume_gaps"]
-        del row["bands_eat"]
-        del row["bands_vw"]
-        del row["weapon_mix"]
-        del row["bigrams"]
-        del row["axe_mid"]
-        del row["ticks_opp_le19"]
-        del row["ticks_opp_le18"]
-        del row["ticks_own_le10"]
-        del row["ticks_midzone"]
-        del row["swings"]
-        del row["active_ticks"]
-
-    if usable_fights < 10:
-        rolls = {"early_eat_pm": 250, "eat_delay_pm": 150, "vw_pm": 400,
-                 "maul_pm": 200, "axe_pm": 100, "teleport_early_pm": 50,
-                 "fallback": True}
-    else:
-        bands = tables["eat_consume_events_by_own_ratio_band"]
-        e_total = sum(bands.get(b, 0) for b in BAND_NAMES)
-        e_high = sum(bands.get(b, 0) for b in ("16-19", "20-24", "25-30"))
-        s_vw = sum(tables["weapon_anim_mix"].get(k, 0) for k in ("1378+11275",))
-        s_vw += tables["weapon_anim_mix"].get("1378", 0)
-        m_maul = tables["maul_specs"]
-        a_mid = tables["axe_anims_midzone"]
-        o_19 = tables["ticks_opp_le19"]
-        o_18 = tables["ticks_opp_le18"]
-        o_mid = tables["ticks_midzone"]
-        t_tp = tables["teleports"]
-        t_le10 = tables["ticks_own_le10"]
-        rolls = {
-            "early_eat_pm": min(600, round(1000 * e_high / max(1, e_total))),
-            "eat_delay_pm": 150,
-            "vw_pm": (0 if s_vw == 0
-                      else min(800, max(20, round(1000 * s_vw / max(1, o_19))))),
-            "maul_pm": (0 if m_maul == 0
-                        else min(500, round(1000 * m_maul / max(1, o_18)))),
-            "axe_pm": (0 if a_mid == 0
-                       else min(400, round(1000 * a_mid / max(1, o_mid)))),
-            "teleport_early_pm": (0 if t_tp == 0
-                                  else min(300, round(1000 * t_tp / max(1, t_le10)))),
-            "fallback": False,
-        }
-
-    out = {"provenance": provenance, "fights": fight_rows, "tables": tables,
-           "rolls": rolls}
+    report = {
+        "archives": dict(archives),
+        "bout_ends": dict(counts.bout_ends),
+        "fighter_setups": dict(counts.setups),
+        "eat_events_over_eligible_ticks_by_hp": hazard,
+        "vw_specs_over_attacks": (counts.vw_specs, counts.vw_opportunities),
+        "maul_specs_over_ready_ticks": (counts.maul_specs, counts.maul_ticks),
+        "axes_over_normal_attacks": (counts.axes, counts.axe_opportunities),
+        "leading_tabs_under_40_over_ticks_under_40": (counts.tabs, counts.tab_ticks),
+        "leading_tab_hp": sorted(counts.first_tab_hp, key=lambda x: (x is None, x)),
+        "follow_tab_gaps": sorted(counts.follow_tab_gaps),
+        "attack_to_leading_tab": sorted(counts.attack_to_tab),
+        "axes_within_2_ticks_of_orb": counts.orb_axes,
+        "veng_recast_ticks_after_cooldown": sorted(counts.veng_recast_after_ready),
+        "rolls": rolls,
+    }
     if args.out:
         with open(args.out, "w") as handle:
-            json.dump(out, handle, indent=1)
-    print("usable_fights=%d" % usable_fights)
-    print(json.dumps(rolls, indent=1))
-    return 0
+            json.dump(report, handle, indent=1)
+    print(json.dumps(report, indent=1))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

@@ -67,7 +67,7 @@ int main(void) {
     Player* p = &state.env.players[1];
     p->cast_veng_this_tick = 1;
     riskfight_observe_visible(&state, 0, 0);
-    assert(state.visible[0].events[0][5] == 0);
+    assert(state.visible[0].events[0][5] == 1);
     p->attack_style_this_tick = ATTACK_STYLE_MELEE;
     riskfight_observe_visible(&state, 0, 0);
     assert(state.visible[0].events[0][6] == 0);

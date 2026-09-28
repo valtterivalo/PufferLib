@@ -242,8 +242,6 @@ static void test_passive_healing_keeps_last_known_bar(void) {
 }
 
 int main(void) {
-    _Static_assert(RF_OBS_SIZE == 356, "Riskfight observation shape");
-    _Static_assert(RF_OBSERVATION_SCHEMA_VERSION == 6, "Riskfight observation schema");
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();

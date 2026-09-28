@@ -38,14 +38,15 @@ static void same_observations(const RiskfightState* a, const RiskfightState* b) 
 int main(void) {
     DictItem items[] = {
         {.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
+        {.key = "session_rounds", .value = 1},
         {.key = "scripted_probability", .value = 1},
         {.key = "scripted_omission_initial", .value = 1},
         {.key = "scripted_omission_decay_ticks", .value = 10},
         {.key = "midfight_probability", .value = 0},
         {.key = "midfight_max_ticks", .value = 64},
     };
-    Dict config = {.items = items, .size = 7};
-    Dict baseline = {.items = items, .size = 2};
+    Dict config = {.items = items, .size = 8};
+    Dict baseline = {.items = items, .size = 3};
     Fixture* plain = fixture(&baseline, 0);
     Fixture* protected_learner = fixture(&config, 0);
     assert(protected_learner->env.training.opponent == RF_TRAIN_LEARNED);
@@ -120,8 +121,8 @@ int main(void) {
     destroy(generated);
     destroy(replay);
 
-    items[2].value = 0;
-    items[5].value = 1;
+    items[3].value = 0;
+    items[6].value = 1;
     Fixture* first = fixture(&config, 1);
     Fixture* second = fixture(&config, 1);
     assert(first->env.training.start_tick > 0);

@@ -3,7 +3,6 @@
 #include "riskfight_model.h"
 
 enum {
-    RF_OBSERVATION_SCHEMA_VERSION = 6,
     RF_OBSERVATION_TICK_SCALE = 1024,
     RF_OBSERVATION_TILE_SCALE = 64,
     RF_OBSERVATION_ITEM_SCALE = 256,
@@ -34,6 +33,8 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         (float)(p->x - FIGHT_AREA_BASE_X - FIGHT_AREA_WIDTH / 2) / RF_OBSERVATION_TILE_SCALE,
         (float)(p->y - FIGHT_AREA_BASE_Y - FIGHT_AREA_HEIGHT / 2) / RF_OBSERVATION_TILE_SCALE,
         (float)s->env.pvp_runtime.maul[agent].prepared_hits / 2.0f,
+        (float)max_int(0, s->env.pvp_runtime.teleport[agent].blocked_until_tick - s->env.tick) /
+            OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS,
     };
     memcpy(obs, self, sizeof(self));
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -171,12 +172,12 @@ static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, i
 }
 /** Per-mille rates mined by scripts/mine_riskfight_behavior.py from spectator fights. */
 enum {
-    RISKFIGHT_HL_EARLY_EAT_PM = 600,
-    RISKFIGHT_HL_EAT_DELAY_PM = 150,
-    RISKFIGHT_HL_VW_PM = 23,
-    RISKFIGHT_HL_MAUL_PM = 5,
-    RISKFIGHT_HL_AXE_PM = 28,
-    RISKFIGHT_HL_TP_PM = 19,
+    RISKFIGHT_HL_EARLY_EAT_PM = 82,
+    RISKFIGHT_HL_EAT_DELAY_PM = 834,
+    RISKFIGHT_HL_VW_PM = 200,
+    RISKFIGHT_HL_MAUL_PM = 3,
+    RISKFIGHT_HL_AXE_PM = 210,
+    RISKFIGHT_HL_TP_PM = 10,
 };
 static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t seed, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
@@ -235,6 +236,7 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t 
                 osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
             int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
             Player probe = riskfight_observed_self(obs);
+            int holding_maul = pvp_is_maul(probe.equipped[GEAR_SLOT_WEAPON]);
             probe.equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
             probe.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
             int hp_lower = probe.current_hitpoints < 1 ? 1 : probe.current_hitpoints;
@@ -248,10 +250,11 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t 
             int camp = probe.current_hitpoints < probe.base_hitpoints &&
                 hl_opponent[0] >= 0.4f && hl_opponent[0] < 0.8f &&
                 riskfight_sample_event(seed, (uint32_t)tick, 23, RISKFIGHT_HL_AXE_PM);
-            if (obs[6] >= 0.5f && hl_opponent[0] < 0.65f &&
-                    riskfight_sample_event(seed, (uint32_t)tick, 21, RISKFIGHT_HL_VW_PM)) {
+            int vw_spec = obs[6] >= 0.5f && hl_opponent[0] < 0.65f &&
+                riskfight_sample_event(seed, (uint32_t)tick, 21, RISKFIGHT_HL_VW_PM);
+            actions[RF_SPECIAL] = !holding_maul && vw_spec != (obs[13] >= 0.5f);
+            if (vw_spec) {
                 hl_weapon = ITEM_VOIDWAKER;
-                actions[RF_SPECIAL] = 1;
             } else if (obs[6] >= 0.99f && hl_opponent[0] < 0.65f &&
                     opp_upper <= 76 && hl_hp < 99 &&
                     riskfight_sample_event(seed, (uint32_t)tick, 22, RISKFIGHT_HL_MAUL_PM)) {
@@ -266,6 +269,7 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t 
             actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
         actions[RF_RING] = riskfight_find_gear(obs,
             obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
+        if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
         if (hl_hp < 30 &&
             !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
             !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
@@ -349,7 +353,7 @@ static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t 
         actions[RF_ORB] = 1;
     actions[RF_RING] = riskfight_find_gear(obs,
         obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
-    if (type == RISKFIGHT_CAUTIOUS && hp < 30 &&
+    if (type == RISKFIGHT_CAUTIOUS && hp < 30 && obs[RF_SELF_TELEPORT_LOCK] == 0 &&
         !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
         !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
         !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) &&

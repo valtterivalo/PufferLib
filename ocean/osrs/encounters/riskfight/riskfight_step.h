@@ -216,7 +216,6 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
 }
 
 static void riskfight_finish(RiskfightState* s) {
-    // TODO: resolve departure, pending hits and vengeance ordering for same-tick attack plus teleport from recordings.
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
     for (int i = 0; i < 2; i++) {
@@ -301,7 +300,9 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     }
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
-        if (!s->escaped[0] && !s->escaped[1]) {
+        if (s->escaped[i]) {
+            s->env.players[1 - i].num_pending_hits = 0;
+        } else {
             int active = s->env.players[i].veng_active;
             pvp_process_incoming_hits(&s->env, i);
             if (active && !s->env.players[i].veng_active)

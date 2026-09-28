@@ -110,11 +110,12 @@ static void test_native_reward_kwargs(void) {
     Env* configured = (Env*)calloc(1, sizeof(*configured));
     DictItem items[] = {
         {.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
+        {.key = "session_rounds", .value = 1},
         {.key = "damage_reward_coeff", .value = 0.00390625},
         {.key = "teleport_penalty", .value = 0.25},
         {.key = "chance_reward_coeff", .value = 0.125},
     };
-    Dict kwargs = {.items = items, .size = 5};
+    Dict kwargs = {.items = items, .size = 6};
     puf_init(configured, &kwargs);
     assert(configured->context.damage_reward_coeff == 0.00390625f);
     assert(configured->context.teleport_penalty == 0.25f);
@@ -236,8 +237,9 @@ static void test_voidwaker_chance_is_guaranteed_below_minimum(void) {
 
 int main(void) {
     env = (Env*)calloc(1, sizeof(*env));
-    DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1}};
-    Dict kwargs = {.items = items, .size = 2};
+    DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
+        {.key = "session_rounds", .value = 1}};
+    Dict kwargs = {.items = items, .size = 3};
     puf_init(env, &kwargs);
     assert(env->context.damage_reward_coeff == 0 && env->context.teleport_penalty == 0);
     for (int i = 0; i < 2; i++) env->agents[i] = (Agent){

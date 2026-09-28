@@ -371,7 +371,7 @@ static void riskfight_tactician_profile(const float* obs, int* actions,
     RiskfightExitDecision exit = riskfight_exit_decision(&after_eating, eating_threat,
         profile.minimum_healing, observed_pressure, eat.clicks,
         actions[RF_PRIMARY] == RF_ATTACK, reflection.veng_damage + reflection.recoil_damage);
-    if (exit == RISKFIGHT_RETREAT) {
+    if (exit == RISKFIGHT_RETREAT && obs[RF_SELF_TELEPORT_LOCK] == 0) {
         actions[RF_PRIMARY] = RF_TELEPORT;
         actions[RF_SPECIAL] = 0;
         actions[RF_ORB] = 0;

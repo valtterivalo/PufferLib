@@ -224,10 +224,6 @@ static void test_hidden_state_and_replay(void) {
     opponent->cast_veng_this_tick = 1; opponent->just_attacked = 1;
     riskfight_observe_visible(&state, 0, 0);
     riskfight_write_observation(&state, 0, a);
-    assert(a[RF_HISTORY_START + 5] == 0);
-    opponent->just_attacked = 0;
-    riskfight_observe_visible(&state, 0, 0);
-    riskfight_write_observation(&state, 0, a);
     assert(a[RF_HISTORY_START + 5] == 1);
     reset(); static RiskfightState initial; initial = state;
     int actions[2 * RF_HEADS] = {0}; actions[RF_FOOD] = 10; actions[RF_DRINK] = 8; actions[RF_COMBO] = 4;

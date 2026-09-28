@@ -11,8 +11,12 @@
 
 static void pvp_reset_priority(OsrsEnv* env, OsrsPriorityPolicy policy) {
     env->priority_policy = policy;
-    for (int i = 0; i < NUM_AGENTS; i++)
-        osrs_entity_priority_init(&env->priority[i], policy, &env->rng_state, xorshift32);
+    for (int i = 0; i < NUM_AGENTS; i++) {
+        OsrsEntityPriority* priority = &env->priority[i];
+        osrs_entity_priority_init(priority, policy, &env->rng_state, xorshift32);
+        if (priority->shuffle_ticks > 0)
+            priority->shuffle_ticks = 1 + (int)(xorshift32(&env->rng_state) % (uint32_t)priority->shuffle_ticks);
+    }
     env->pid_holder = osrs_entity_priority_compare(&env->priority[0], 0,
         &env->priority[1], 1) < 0 ? 0 : 1;
 }

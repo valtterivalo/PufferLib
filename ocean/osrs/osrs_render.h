@@ -49,7 +49,8 @@ typedef float obs_t;
 #define ANIM_SEQ_DEATH          836
 #define ANIM_SEQ_CAST_STANDARD  1162
 #define ANIM_SEQ_CAST_BARRAGE   1979
-#define ANIM_SEQ_CAST_VENG      4410
+#define ANIM_SEQ_CAST_VENG      8317
+#define ANIM_SEQ_TAB_BREAK      4069
 #define ANIM_SEQ_BLOCK_SHIELD   1156
 #define ANIM_SEQ_BLOCK_MELEE    424
 
@@ -4141,6 +4142,7 @@ static void render_draw_entity_debug_metadata(
 
 static int render_select_primary(RenderEntity* p) {
     if (p->current_hitpoints <= 0) return ANIM_SEQ_DEATH;
+    if (p->teleported_this_tick) return ANIM_SEQ_TAB_BREAK;
 
     if (p->attack_style_this_tick != ATTACK_STYLE_NONE) {
         // Voidwaker special is tagged ATTACK_STYLE_MAGIC for prayer/hitsplat

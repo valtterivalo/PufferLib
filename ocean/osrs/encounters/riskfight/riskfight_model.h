@@ -25,7 +25,8 @@ enum {
         OSRS_PRIMARY_DIM(1) + 2 + 5 + 4 + 7,
     RF_HISTORY_TICKS = 16,
     RF_EVENT_WIDTH = 8,
-    RF_SELF_SIZE = 24,
+    RF_SELF_TELEPORT_LOCK = 24,
+    RF_SELF_SIZE = 25,
     RF_INVENTORY_WIDTH = 6,
     RF_INVENTORY_START = RF_SELF_SIZE,
     RF_EQUIPPED_START = RF_INVENTORY_START + OSRS_INVENTORY_SIZE * RF_INVENTORY_WIDTH,
@@ -192,7 +193,7 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
         opponent->attack_style_this_tick, opponent->ate_food_this_tick,
         opponent->ate_karambwan_this_tick,
         s->inventory_use[1 - viewer].potion_animation_tick_plus_one == s->env.tick);
-    event[5] = opponent->cast_veng_this_tick && !opponent->just_attacked && !consuming;
+    event[5] = opponent->cast_veng_this_tick;
     event[6] = consuming;
     event[7] = v->health_bar;
     int bar_event = opponent->hit_landed_this_tick;

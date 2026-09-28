@@ -10,7 +10,7 @@ from pathlib import Path
 from rescore_riskfight_sweep import read_config
 
 
-OBJECTIVE_ID = 'riskfight-seven-bot-chance-v1'
+OBJECTIVE_ID = 'riskfight-seven-bot-session-v1'
 HELDOUT_BOTS = [7]
 
 

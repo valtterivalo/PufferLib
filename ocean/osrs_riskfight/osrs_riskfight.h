@@ -19,7 +19,7 @@ struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
-    float kills, deaths, escapes, mutual_deaths, net_stake, n;
+    float kills, deaths, escapes, mutual_deaths, net_stake, rounds, n;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
@@ -34,7 +34,7 @@ struct Env {
     int num_agents;
     unsigned int rng;
     Agent agents[2];
-    int tag, boundary_reached;
+    int tag, boundary_reached, round;
     RiskfightState state;
     RiskfightContext context;
     RiskfightTraining training;
@@ -64,6 +64,7 @@ void puf_init(Env* env, Dict* kwargs) {
     assert(env->context.self_play || (env->training.config.scripted_probability == 0 &&
         env->training.config.midfight_probability == 0));
     memset(&env->log, 0, sizeof(env->log));
+    env->round = 0;
     riskfight_finalize_context((EncounterState*)&env->state, (EncounterContext*)&env->context);
 }
 static inline void puf_set_bot_policy(Env* env, int bot_policy) {
@@ -90,6 +91,40 @@ void puf_reset(Env* env) {
         env->agents[i].rewards[0] = 0;
         env->agents[i].terminals[0] = 0;
     }
+}
+/** Adds one finished round's tallies to the log. Outcome tallies wait for the session end. */
+static void riskfight_native_log_round(Env* env) {
+    const RiskfightState* s = &env->state;
+    env->log.self_teleports += s->escaped[0];
+    env->log.opponent_teleports += s->escaped[1];
+    env->log.both_teleports += s->escaped[0] && s->escaped[1];
+    if (s->escaped[0]) {
+        const OsrsEscapeSupplies* supplies = &s->escape_supplies[0][0];
+        env->log.self_escape_healing[supplies->healing]++;
+        env->log.self_escape_no_boost += osrs_escape_no_boost(supplies);
+        env->log.self_escape_both_no_special += osrs_escape_no_special(supplies) &&
+            osrs_escape_no_special(&s->escape_supplies[0][1]);
+    }
+    if (env->round == 0) {
+        env->log.midfight_ticks += env->training.start_tick;
+        env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
+    }
+    env->log.episode_return += s->episode_returns[0];
+    env->log.damage_reward += s->damage_rewards[0];
+    env->log.direct_ko_chance_mass += s->direct_ko_chance_mass[0];
+    env->log.chance_reward += s->chance_rewards[0];
+    env->log.teleport_penalty += s->teleport_penalties[0];
+    env->log.episode_length += s->env.tick - env->training.start_tick;
+    if (env->training.opponent == RF_TRAIN_SCRIPTED)
+        env->log.scripted_ticks += s->env.tick - env->training.start_tick;
+    env->log.drink_brew += s->drink_brew[0];
+    env->log.drink_sanfew += s->drink_sanfew[0];
+    env->log.drink_combat += s->drink_combat[0];
+    env->log.eat_marlin += s->eat_marlin[0];
+    env->log.eat_halibut += s->eat_halibut[0];
+    env->log.eat_pie += s->eat_pie[0];
+    env->log.spec_voidwaker += s->spec_voidwaker[0];
+    env->log.spec_maul += s->spec_maul[0];
 }
 void puf_step(Env* env) {
 #ifdef OSRS_PUFFER_RENDER
@@ -126,55 +161,31 @@ void puf_step(Env* env) {
         env->agents[i].terminals[0] = env->state.env.episode_over;
     }
     if (env->state.env.episode_over) {
-        env->log.self_teleports += env->state.escaped[0];
-        env->log.opponent_teleports += env->state.escaped[1];
-        env->log.both_teleports += env->state.escaped[0] && env->state.escaped[1];
-        for (int actor = 0; actor < 2; actor++) {
-            if (!env->state.escaped[actor]) continue;
-            const OsrsEscapeSupplies* supplies = &env->state.escape_supplies[actor][actor];
-            const OsrsEscapeSupplies* other = &env->state.escape_supplies[actor][1 - actor];
-            int both_no_special = osrs_escape_no_special(supplies) && osrs_escape_no_special(other);
-            if (actor == 0) {
-                env->log.self_escape_healing[supplies->healing]++;
-                env->log.self_escape_no_boost += osrs_escape_no_boost(supplies);
-                env->log.self_escape_both_no_special += both_no_special;
-            }
-        }
+        riskfight_native_log_round(env);
         RiskfightOutcome outcome = env->state.outcome[0];
-        env->log.kills += outcome == RISKFIGHT_KILL;
-        env->log.deaths += outcome == RISKFIGHT_DEATH;
-        env->log.escapes += outcome == RISKFIGHT_ESCAPE;
-        env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
-        float net_stake = riskfight_outcome_reward(outcome);
-        env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
-        env->log.draw_rate += net_stake == 0;
-        env->log.net_stake += net_stake;
-        env->log.episode_return += env->state.episode_returns[0];
-        env->log.damage_reward += env->state.damage_rewards[0];
-        env->log.direct_ko_chance_mass += env->state.direct_ko_chance_mass[0];
-        env->log.chance_reward += env->state.chance_rewards[0];
-        env->log.teleport_penalty += env->state.teleport_penalties[0];
-        env->log.episode_length += env->state.env.tick - env->training.start_tick;
-        if (env->training.opponent == RF_TRAIN_SCRIPTED)
-            env->log.scripted_ticks += env->state.env.tick - env->training.start_tick;
-        env->log.scripted_omissions += env->training.omissions;
-        env->log.midfight_ticks += env->training.start_tick;
-        env->log.prefix_terminal += env->training.start == RF_START_PREFIX_TERMINAL;
-        env->log.drink_brew += env->state.drink_brew[0];
-        env->log.drink_sanfew += env->state.drink_sanfew[0];
-        env->log.drink_combat += env->state.drink_combat[0];
-        env->log.eat_marlin += env->state.eat_marlin[0];
-        env->log.eat_halibut += env->state.eat_halibut[0];
-        env->log.eat_pie += env->state.eat_pie[0];
-        env->log.spec_voidwaker += env->state.spec_voidwaker[0];
-        env->log.spec_maul += env->state.spec_maul[0];
-        env->log.n++;
+        if (outcome == RISKFIGHT_ESCAPE && ++env->round < env->training.config.session_rounds) {
+            for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = 0;
+            riskfight_training_next_round(&env->training, &env->state, &env->context);
+        } else {
+            env->log.kills += outcome == RISKFIGHT_KILL;
+            env->log.deaths += outcome == RISKFIGHT_DEATH;
+            env->log.escapes += outcome == RISKFIGHT_ESCAPE;
+            env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
+            float net_stake = riskfight_outcome_reward(outcome);
+            env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
+            env->log.draw_rate += net_stake == 0;
+            env->log.net_stake += net_stake;
+            env->log.rounds += env->round + (outcome != RISKFIGHT_ESCAPE);
+            env->log.scripted_omissions += env->training.omissions;
+            env->log.n++;
+            env->round = 0;
 #ifdef OSRS_PUFFER_RENDER
-        if (!env->renderer)
-            riskfight_native_reset(env);
+            if (!env->renderer)
+                riskfight_native_reset(env);
 #else
-        riskfight_native_reset(env);
+            riskfight_native_reset(env);
 #endif
+        }
     }
     riskfight_native_observe(env);
 }
@@ -207,6 +218,7 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "escapes", log->escapes);
     dict_set(out, "mutual_deaths", log->mutual_deaths);
     dict_set(out, "net_stake", log->net_stake);
+    dict_set(out, "rounds", log->rounds);
     dict_set(out, "score", log->net_stake);
     dict_set(out, "perf", log->net_stake);
     dict_set(out, "scripted_ticks", log->scripted_ticks);
