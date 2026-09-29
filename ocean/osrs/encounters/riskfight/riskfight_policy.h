@@ -14,6 +14,25 @@ enum {
     RF_OBSERVATION_SACK_SCALE = 128,
 };
 
+/** Per content code: obs code, heal fraction, food kind, combo kind, dose fraction. Built once at load. */
+static float RF_INVENTORY_ROWS[OSRS_ITEM_CONTENT_COUNT][RF_INVENTORY_WIDTH - 1];
+
+__attribute__((constructor)) static void riskfight_build_inventory_rows(void) {
+    for (int code = 0; code < OSRS_ITEM_CONTENT_COUNT; code++) {
+        const OsrsItemContentMetadata* m = osrs_item_content_metadata((uint16_t)code);
+        float* row = RF_INVENTORY_ROWS[code];
+        row[0] = osrs_inventory_cell_obs_code_encode((uint16_t)code);
+        row[1] = osrs_consumable_hp_heal_amount((OsrsConsumableKind)m->consumable_kind,
+            OSRS_ITEM_OBS_TABLE_BASE_HITPOINTS) / 121.0f;
+        row[2] = m->click_action == OSRS_CLICK_EAT ?
+            (m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE ? 1.0f :
+             m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
+        row[3] = m->click_action == OSRS_CLICK_EAT ?
+            (m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
+        row[4] = m->dose_count / 4.0f;
+    }
+}
+
 static void riskfight_write_observation(const RiskfightState* s, int agent, float* obs) {
     const Player* p = &s->env.players[agent];
     const OsrsInventoryUseState* use = &s->inventory_use[agent];
@@ -37,19 +56,13 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
             OSRS_PVP_SPECIAL_TELEPORT_LOCK_TICKS,
     };
     memcpy(obs, self, sizeof(self));
+    assert(p->base_hitpoints == OSRS_ITEM_OBS_TABLE_BASE_HITPOINTS);
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
+        uint16_t code = p->inventory_cells[slot].content_code;
         float* row = obs + RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH;
-        row[0] = osrs_inventory_cell_obs_code_encode(p->inventory_cells[slot].content_code);
-        row[1] = osrs_consumable_hp_heal_amount((OsrsConsumableKind)m->consumable_kind, p->base_hitpoints) / 121.0f;
-        row[2] = m->click_action == OSRS_CLICK_EAT ?
-            (m->consumable_kind == OSRS_CONSUMABLE_SUMMER_PIE ? 1.0f :
-             m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
-        row[3] = m->click_action == OSRS_CLICK_EAT ?
-            (m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? 2.0f : 3.0f) / 3.0f : 0;
-        row[4] = m->dose_count / 4.0f;
-        row[5] = m->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
-            (float)use->vengeance_sacks / RF_OBSERVATION_SACK_SCALE : !osrs_inventory_cell_is_empty(&p->inventory_cells[slot]);
+        memcpy(row, RF_INVENTORY_ROWS[code], sizeof(RF_INVENTORY_ROWS[code]));
+        row[5] = osrs_item_content_metadata(code)->consumable_kind == OSRS_CONSUMABLE_VENGEANCE_SACK ?
+            (float)use->vengeance_sacks / RF_OBSERVATION_SACK_SCALE : code != 0;
     }
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
         obs[RF_EQUIPPED_START + slot] = (float)p->equipped[slot] / RF_OBSERVATION_ITEM_SCALE;
@@ -88,26 +101,36 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     }
 }
 
-static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
-    const Player* p = &s->env.players[agent];
-    memset(mask, 0, RF_MASK_SIZE);
-    unsigned char* heads[RF_HEADS];
-    unsigned char* gear_masks[NUM_GEAR_SLOTS];
-    int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
+/** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all
+ * actions of the non-inventory heads. Built once at load. */
+static int RF_HEAD_OFFSET[RF_HEADS];
+static unsigned char RF_MASK_TEMPLATE[RF_MASK_SIZE];
+
+__attribute__((constructor)) static void riskfight_build_mask_template(void) {
     int offset = 0;
     for (int head = 0; head < RF_HEADS; head++) {
-        heads[head] = mask + offset;
-        heads[head][0] = 1;
-        int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
-        if (gear_slot >= 0) {
-            gear_masks[gear_slot] = heads[head];
-            heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
-        } else if (head > RF_COMBO) {
-            for (int action = 1; action < RF_ACTION_DIMS[head]; action++) heads[head][action] = 1;
-        }
+        RF_HEAD_OFFSET[head] = offset;
+        RF_MASK_TEMPLATE[offset] = 1;
+        if (RF_GEAR_SLOT_BY_HEAD[head] < 0 && head > RF_COMBO)
+            memset(RF_MASK_TEMPLATE + offset, 1, RF_ACTION_DIMS[head]);
         offset += RF_ACTION_DIMS[head];
     }
     assert(offset == RF_MASK_SIZE);
+}
+
+static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
+    const Player* p = &s->env.players[agent];
+    memcpy(mask, RF_MASK_TEMPLATE, RF_MASK_SIZE);
+    unsigned char* heads[RF_HEADS];
+    unsigned char* gear_masks[NUM_GEAR_SLOTS];
+    int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
+    for (int head = 0; head < RF_HEADS; head++) {
+        heads[head] = mask + RF_HEAD_OFFSET[head];
+        int gear_slot = RF_GEAR_SLOT_BY_HEAD[head];
+        if (gear_slot < 0) continue;
+        gear_masks[gear_slot] = heads[head];
+        heads[head][RF_UNEQUIP] = p->equipped[gear_slot] != ITEM_NONE && has_empty;
+    }
     int has_teleport = 0, one_handed_switch = 0, shield_slot = -1;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&p->inventory_cells[slot]);

@@ -2,10 +2,9 @@
 
 #if defined(from_float) && !defined(PRECISION_FLOAT)
 typedef precision_t obs_t;
-#define RF_OBS_FROM_FLOAT(x) from_float(x)
+#define RF_BF16_OBS
 #else
 typedef float obs_t;
-#define RF_OBS_FROM_FLOAT(x) (x)
 #endif
 #define PUF_HAS_BOT_POLICY
 #include "pufferenv.h"
@@ -78,11 +77,23 @@ static inline void puf_set_bot_policy(Env* env, int bot_policy) {
     env->context.opponent = (RiskfightOpponent)bot_policy;
 }
 
+/** Writes obs as round-to-nearest-even bf16, bit-identical to __float2bfloat16 for finite values. */
+static inline void riskfight_obs_store(obs_t* out, const float* obs) {
+#ifdef RF_BF16_OBS
+    uint32_t bits[RF_OBS_SIZE];
+    uint16_t rounded[RF_OBS_SIZE];
+    memcpy(bits, obs, sizeof(bits));
+    for (int j = 0; j < RF_OBS_SIZE; j++) rounded[j] = (uint16_t)((bits[j] + 0x7FFFu + ((bits[j] >> 16) & 1u)) >> 16);
+    memcpy(out, rounded, sizeof(rounded));
+#else
+    memcpy(out, obs, RF_OBS_SIZE * sizeof(float));
+#endif
+}
 static void riskfight_native_observe(Env* env) {
     for (int i = 0; i < env->num_agents; i++) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(&env->state, i, obs);
-        for (int j = 0; j < RF_OBS_SIZE; j++) env->agents[i].observations[j] = RF_OBS_FROM_FLOAT(obs[j]);
+        riskfight_obs_store(env->agents[i].observations, obs);
         riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
     }
 }
