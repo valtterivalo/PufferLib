@@ -37,7 +37,8 @@ static const RiskfightProfile* riskfight_pick_profile(RiskfightOpponent pool, ui
     return NULL;
 }
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
-    RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH } RiskfightOutcome;
+    RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH, RISKFIGHT_TIMEOUT } RiskfightOutcome;
+enum { RISKFIGHT_ROUND_TICKS = 500 };
 enum {
     RF_WEAPON, RF_SHIELD, RF_RING, RF_FOOD, RF_DRINK, RF_COMBO,
     RF_ORB, RF_VENGEANCE, RF_SPECIAL, RF_PRIMARY, RF_PRAYER, RF_STYLE,
@@ -130,7 +131,7 @@ typedef struct {
 } RiskfightContext;
 
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
-    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH ? -1 : 0;
+    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -1 : 0;
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);

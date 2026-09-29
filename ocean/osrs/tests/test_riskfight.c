@@ -298,8 +298,11 @@ static void test_tick_order_and_boundaries(void) {
     osrs_player_inventory_tick(p, &state.inventory_use[0]);
     assert(p->current_attack == 99);
     reset(); memset(actions, 0, sizeof(actions));
-    for (int tick = 0; tick < 601; tick++) step(actions);
-    assert(!state.env.episode_over && state.env.tick == 601);
+    for (int tick = 1; tick < RISKFIGHT_ROUND_TICKS; tick++) step(actions);
+    assert(!state.env.episode_over);
+    step(actions);
+    assert(state.outcome[0] == RISKFIGHT_TIMEOUT && state.outcome[1] == RISKFIGHT_TIMEOUT);
+    assert(state.rewards[0] == -1 && state.rewards[1] == -1 && state.env.winner == -1);
     for (int code = 0; code < OSRS_ITEM_CONTENT_COUNT; code++) {
         const OsrsItemContentMetadata* meta = osrs_item_content_metadata(code);
         assert(osrs_inventory_cell_obs_code_decode(osrs_inventory_cell_obs_code_encode(code)) == code);

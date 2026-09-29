@@ -19,7 +19,7 @@ struct Log {
     float episode_return, episode_length;
     float policy_0_score, draw_rate;
     float damage_reward, teleport_penalty, direct_ko_chance_mass, chance_reward;
-    float kills, deaths, escapes, mutual_deaths, net_stake, rounds, n;
+    float kills, deaths, escapes, mutual_deaths, timeouts, net_stake, rounds, n;
     float scripted_ticks, scripted_omissions, midfight_ticks, prefix_terminal;
     float self_teleports, opponent_teleports, both_teleports;
     float self_escape_healing[4], self_escape_no_boost, self_escape_both_no_special;
@@ -170,6 +170,7 @@ void puf_step(Env* env) {
             env->log.deaths += outcome == RISKFIGHT_DEATH;
             env->log.escapes += outcome == RISKFIGHT_ESCAPE;
             env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
+            env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
             float net_stake = riskfight_outcome_reward(outcome);
             env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
             env->log.draw_rate += net_stake == 0;
@@ -216,6 +217,7 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);
     dict_set(out, "mutual_deaths", log->mutual_deaths);
+    dict_set(out, "timeouts", log->timeouts);
     dict_set(out, "net_stake", log->net_stake);
     dict_set(out, "rounds", log->rounds);
     dict_set(out, "score", log->net_stake);

@@ -108,6 +108,15 @@ int main(void) {
     puf_step(env);
     assert(terminals[0] == 1 && env->round == 0);
     assert(env->log.n == 2 && env->log.kills == 1 && env->log.rounds == 5 && env->log.net_stake == 1);
+    actions[0][RF_PRIMARY] = RF_TELEPORT;
+    puf_step(env);
+    assert(terminals[0] == 0 && env->round == 1);
+    actions[0][RF_PRIMARY] = 0;
+    env->state.env.tick = RISKFIGHT_ROUND_TICKS - 1;
+    puf_step(env);
+    assert(terminals[0] == 1 && terminals[1] == 1 && rewards[0] == -1 && rewards[1] == -1);
+    assert(env->state.env.tick == 0 && env->round == 0);
+    assert(env->log.n == 3 && env->log.timeouts == 1 && env->log.rounds == 7 && env->log.net_stake == 0);
     puf_close(env); free(env);
     enum { SEEDED_ENVS = 8192 };
     static uint32_t combat[SEEDED_ENVS];

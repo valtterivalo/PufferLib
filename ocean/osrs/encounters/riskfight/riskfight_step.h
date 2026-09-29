@@ -222,12 +222,13 @@ static int riskfight_consumed_units(const RiskfightState* s, int agent) {
 
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
-    s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
+    int escaped = s->escaped[0] || s->escaped[1];
+    s->env.episode_over = pvp_death_is_settled(&s->env) || escaped || s->env.tick >= RISKFIGHT_ROUND_TICKS;
     for (int i = 0; i < 2; i++) {
         s->outcome[i] = !s->env.episode_over ? RISKFIGHT_ONGOING :
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
-            s->env.episode_over ? RISKFIGHT_ESCAPE : RISKFIGHT_ONGOING;
+            escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
         s->rewards[i] = riskfight_outcome_reward(s->outcome[i]);
     }
     s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :

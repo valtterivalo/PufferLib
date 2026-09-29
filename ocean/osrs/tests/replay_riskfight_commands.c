@@ -179,11 +179,11 @@ static void conditioned_recorded_eight_tick_teleport(int special_tick, int weapo
 }
 
 static void conditioned_recorded_maul_eight_tick_teleport(void) {
-    conditioned_recorded_eight_tick_teleport(1527, 24);
+    conditioned_recorded_eight_tick_teleport(247, 24);
 }
 
 static void conditioned_recorded_voidwaker_eight_tick_teleport(void) {
-    conditioned_recorded_eight_tick_teleport(1909, 23);
+    conditioned_recorded_eight_tick_teleport(229, 23);
 }
 
 static void synthetic_double_maul(void) {
@@ -208,7 +208,7 @@ static void synthetic_double_maul(void) {
 
 static void conditioned_recorded_armour_cycle(void) {
     reset();
-    state.env.tick = 23807;
+    state.env.tick = 207;
     Player* player = &state.env.players[0];
     player->inventory_cells[9] = osrs_inventory_cell_empty();
     player->inventory_cells[10] = osrs_inventory_cell_empty();
@@ -231,7 +231,7 @@ static void conditioned_recorded_armour_cycle(void) {
     assert(player->special_energy == 50);
     frame((CommandFrame){.commands = {(HumanCommand[]){STOP}}, .count = {1},
         .actions = {[RF_PRIMARY] = RF_STOP}});
-    while (state.env.tick < 23813) frame((CommandFrame){0});
+    while (state.env.tick < 213) frame((CommandFrame){0});
     frame((CommandFrame){.commands = {(HumanCommand[]){CLICK(9), CLICK(10), CLICK(27)}}, .count = {3},
         .actions = {[RF_HEAD] = 10, [RF_BODY] = 11, [RF_LEGS] = 28}});
     assert(player->equipped[GEAR_SLOT_HEAD] == ITEM_DHAROKS_HELM);
