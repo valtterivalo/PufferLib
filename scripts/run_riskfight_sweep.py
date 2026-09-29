@@ -10,8 +10,8 @@ from pathlib import Path
 from rescore_riskfight_sweep import read_config
 
 
-OBJECTIVE_ID = 'riskfight-seven-bot-session-v1'
-HELDOUT_BOTS = [7]
+OBJECTIVE_ID = 'riskfight-heldout-human-session-v1'
+DIAGNOSTIC_BOTS = [0, 2, 3]
 
 
 def stage_resume(source, destination, binary, objective_id, compatible_binary_sha256=None):
@@ -102,10 +102,10 @@ def main():
         'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
         'anchor': str(args.anchor), 'command': command, 'eval_bots': eval_bots,
         'objective_id': args.objective_id, 'selection_seed': 73,
-        'heldout_bots': HELDOUT_BOTS, 'heldout_seeds': [1009, 2027, 3037],
+        'diagnostic_bots': DIAGNOSTIC_BOTS, 'heldout_seeds': [1009, 2027, 3037],
         'max_suggestion_cost_seconds': 300, 'trials': args.trials,
         'training': 'Current and historical policy self-play with configurable scripted mixing and midfight starts',
-        'score': 'Equal-weight unshaped net stake over seven selection bots',
+        'score': 'Unshaped net stake per session against held-out human profiles',
         'historical_scores_imported': imported,
         'resume_from': str(args.resume_from) if args.resume_from else None,
         'resume_compatible_binary_sha256': args.resume_compatible_binary_sha256,

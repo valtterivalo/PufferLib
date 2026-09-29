@@ -240,14 +240,14 @@ static void test_hidden_state_and_replay(void) {
     free(hi.commands.items);
     reset(); initial = state;
     for (int i = 0; i < 25 && !state.env.episode_over; i++) {
-        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, 1, actions);
-        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, 1, actions + RF_HEADS);
+        riskfight_write_observation(&state, 0, a); riskfight_script(a, &RISKFIGHT_HUMAN_PROFILES[0], 1, state.consume_ticks[0], actions);
+        riskfight_write_observation(&state, 1, a); riskfight_script(a, &RISKFIGHT_ALL_IN_PROFILE, 1, state.consume_ticks[1], actions + RF_HEADS);
         step(actions);
     }
     expected = state; state = initial;
     for (int i = 0; i < 25 && !state.env.episode_over; i++) {
-        riskfight_write_observation(&state, 0, a); riskfight_script(a, RISKFIGHT_TRADER, 1, actions);
-        riskfight_write_observation(&state, 1, a); riskfight_script(a, RISKFIGHT_AGGRESSIVE, 1, actions + RF_HEADS);
+        riskfight_write_observation(&state, 0, a); riskfight_script(a, &RISKFIGHT_HUMAN_PROFILES[0], 1, state.consume_ticks[0], actions);
+        riskfight_write_observation(&state, 1, a); riskfight_script(a, &RISKFIGHT_ALL_IN_PROFILE, 1, state.consume_ticks[1], actions + RF_HEADS);
         step(actions);
     }
     assert(memcmp(&state, &expected, sizeof(state)) == 0);

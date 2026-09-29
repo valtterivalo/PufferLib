@@ -7,7 +7,35 @@
 #include "../../osrs_encounter_visual_events.h"
 #include "../../osrs_pvp_escape.h"
 
-typedef enum { RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_MIXED, RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_SURVIVAL, RISKFIGHT_HELDOUT, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE } RiskfightOpponent;
+typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
+enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
+/** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
+ * axe bands split the opponent bar (scale 30) at 12 and 24, tab rates are indexed by
+ * [consume ticks this round / 8, capped][own HP below 40]. */
+typedef struct {
+    uint16_t consume_pm[RISKFIGHT_CONSUME_BANDS];
+    uint16_t vw_pm, maul_pm;
+    uint16_t axe_pm[RISKFIGHT_AXE_BANDS];
+    uint16_t orb_axe_pm, veng_pm;
+    uint16_t tab_pm[RISKFIGHT_TAB_SUPPLY_BANDS][2];
+} RiskfightProfile;
+#include "riskfight_profiles.h"
+static const RiskfightProfile RISKFIGHT_ALL_IN_PROFILE = {{300, 80, 0, 0, 0}, 1000, 1000, {1000, 1000, 1000}, 1000, 1000, {{0, 0}, {0, 0}, {0, 0}}};
+static const RiskfightProfile RISKFIGHT_ESCAPER_PROFILE = {{500, 300, 200, 100, 100}, 150, 3, {200, 100, 50}, 100, 1000, {{20, 100}, {50, 250}, {100, 500}}};
+
+/** Profile drawn from an opponent pool by a uniform 32-bit roll. */
+static const RiskfightProfile* riskfight_pick_profile(RiskfightOpponent pool, uint32_t roll) {
+    switch (pool) {
+    case RISKFIGHT_HUMAN: return &RISKFIGHT_HUMAN_PROFILES[roll % RISKFIGHT_HUMAN_TRAIN_PROFILES];
+    case RISKFIGHT_HUMAN_HELDOUT:
+        return &RISKFIGHT_HUMAN_PROFILES[RISKFIGHT_HUMAN_TRAIN_PROFILES + roll % RISKFIGHT_HUMAN_HELDOUT_PROFILES];
+    case RISKFIGHT_ALL_IN: return &RISKFIGHT_ALL_IN_PROFILE;
+    case RISKFIGHT_ESCAPER: return &RISKFIGHT_ESCAPER_PROFILE;
+    case RISKFIGHT_OPPONENTS: break;
+    }
+    assert(0 && "unknown opponent pool");
+    return NULL;
+}
 typedef enum { RISKFIGHT_ONGOING, RISKFIGHT_KILL, RISKFIGHT_DEATH,
     RISKFIGHT_ESCAPE, RISKFIGHT_MUTUAL_DEATH } RiskfightOutcome;
 enum {
@@ -60,8 +88,9 @@ typedef struct {
     OsrsInventoryUseState inventory_use[2];
     RiskfightVisibleOpponent visible[2];
     RiskfightOutcome outcome[2];
-    RiskfightOpponent mixed_opponent;
+    const RiskfightProfile* opponent_profile;
     uint32_t script_seed[2];
+    int consume_ticks[2];
     int escaped[2];
     OsrsEscapeSupplies escape_supplies[2][2];
     int escape_tick[2];
@@ -105,7 +134,7 @@ static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
-static void riskfight_script(const float*, RiskfightOpponent, uint32_t, int*);
+static void riskfight_script(const float*, const RiskfightProfile*, uint32_t, int, int*);
 static void riskfight_write_action_mask(const RiskfightState*, int, float*);
 
 static void riskfight_init_context(EncounterContext* context) {
@@ -239,8 +268,6 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
-    if (ctx->opponent == RISKFIGHT_MIXED && !ctx->self_play)
-        s->mixed_opponent = (RiskfightOpponent)rand_int(&s->env, RISKFIGHT_MIXED);
     uint8_t equipment[NUM_GEAR_SLOTS] = {0};
     equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
     equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
@@ -299,6 +326,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         osrs_actor_route_cache_clear(&ctx->routes[i]);
         s->script_seed[i] = osrs_lowbias32(s->env.rng_state + (uint32_t)(i + 1) * 0x9e3779b9U);
     }
+    s->opponent_profile = riskfight_pick_profile(ctx->opponent, osrs_lowbias32(s->env.rng_state + 3 * 0x9e3779b9U));
     riskfight_observe_visible(s, 0, 1);
     riskfight_observe_visible(s, 1, 1);
 }

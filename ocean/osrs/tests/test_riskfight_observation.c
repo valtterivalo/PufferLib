@@ -100,22 +100,6 @@ static void test_event_and_position_roundtrip(void) {
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 6] * RF_OBSERVATION_ATTACK_AGE_SCALE == 6);
 }
 
-static void test_script_readiness_units(void) {
-    reset();
-    state.env.players[0].current_hitpoints = 80;
-    state.env.players[0].special_energy = 0;
-    state.visible[0].last_attack_tick = 0;
-    state.visible[0].last_attack_speed = 7;
-    for (int tick = 1; tick <= 7; tick++) {
-        state.env.tick = tick;
-        float obs[RF_OBS_SIZE];
-        int actions[RF_HEADS];
-        riskfight_write_observation(&state, 0, obs);
-        riskfight_script(obs, RISKFIGHT_AGGRESSIVE, 1, actions);
-        assert(actions[RF_ORB] == (7 - tick > 2));
-    }
-}
-
 static void observe_next_tick(void) {
     state.env.tick++;
     state.env.players[1].hit_landed_this_tick = 0;
@@ -250,7 +234,6 @@ int main(void) {
     test_opponent_consume_timer_inference();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();
-    test_script_readiness_units();
     test_health_bar_refresh_requires_received_hit();
     test_passive_healing_keeps_last_known_bar();
     riskfight_destroy_context((EncounterContext*)&context);

@@ -35,18 +35,20 @@ static void same_observations(const RiskfightState* a, const RiskfightState* b) 
     assert(a->env.tick == b->env.tick);
 }
 
+static const RiskfightProfile STEADY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0}, 0, 1000, {{0}}};
+
 int main(void) {
     DictItem items[] = {
         {.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
-        {.key = "session_rounds", .value = 1},
+        {.key = "session_rounds", .value = 1}, {.key = "curveball_probability", .value = 0},
         {.key = "scripted_probability", .value = 1},
         {.key = "scripted_omission_initial", .value = 1},
         {.key = "scripted_omission_decay_ticks", .value = 10},
         {.key = "midfight_probability", .value = 0},
         {.key = "midfight_max_ticks", .value = 64},
     };
-    Dict config = {.items = items, .size = 8};
-    Dict baseline = {.items = items, .size = 3};
+    Dict config = {.items = items, .size = sizeof(items) / sizeof(*items)};
+    Dict baseline = {.items = items, .size = 4};
     Fixture* plain = fixture(&baseline, 0);
     Fixture* protected_learner = fixture(&config, 0);
     assert(protected_learner->env.training.opponent == RF_TRAIN_LEARNED);
@@ -66,7 +68,8 @@ int main(void) {
 
     Fixture* teacher = fixture(&config, 1);
     assert(teacher->env.training.opponent == RF_TRAIN_SCRIPTED);
-    assert(teacher->env.training.script != RISKFIGHT_HELDOUT);
+    ptrdiff_t profile = teacher->env.state.opponent_profile - RISKFIGHT_HUMAN_PROFILES;
+    assert(profile >= 0 && profile < RISKFIGHT_HUMAN_TRAIN_PROFILES);
     int commands[2 * RF_HEADS] = {0};
     commands[RF_PRIMARY] = RF_STOP;
     commands[RF_HEADS + RF_PRIMARY] = RF_TELEPORT;
@@ -77,8 +80,8 @@ int main(void) {
     assert(riskfight_training_omission(&teacher->env.training) == 0.5f);
     teacher->env.training.ticks = 10;
     int expected[RF_HEADS];
-    riskfight_script(teacher->observations[1], teacher->env.training.script,
-        teacher->env.state.script_seed[1], expected);
+    riskfight_script(teacher->observations[1], teacher->env.state.opponent_profile,
+        teacher->env.state.script_seed[1], teacher->env.state.consume_ticks[1], expected);
     assert(riskfight_training_actions(&teacher->env.training, &teacher->env.state, 1, commands) == 0);
     assert(memcmp(commands + RF_HEADS, expected, sizeof(expected)) == 0);
     assert(commands[RF_PRIMARY] == RF_STOP);
@@ -94,13 +97,14 @@ int main(void) {
     Fixture* generated = fixture(&baseline, 1);
     Fixture* replay = fixture(&baseline, 1);
     RiskfightTrainingStart start = riskfight_training_prefix(&generated->env.state,
-        &generated->env.context, RISKFIGHT_CAUTIOUS, RISKFIGHT_CAUTIOUS, 64);
+        &generated->env.context, &STEADY, &STEADY, 64);
     assert(start == RF_START_MIDFIGHT);
     for (int tick = 0; tick < 64; tick++) {
         for (int i = 0; i < 2; i++) {
             float obs[RF_OBS_SIZE];
             riskfight_write_observation(&replay->env.state, i, obs);
-            riskfight_script(obs, RISKFIGHT_CAUTIOUS, 1, commands + i * RF_HEADS);
+            riskfight_script(obs, &STEADY, replay->env.state.script_seed[i], replay->env.state.consume_ticks[i],
+                commands + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)&replay->env.state,
             (EncounterContext*)&replay->env.context, commands);
@@ -114,15 +118,15 @@ int main(void) {
     }
     generated->env.state.env.players[0].current_hitpoints = 0;
     start = riskfight_training_prefix(&generated->env.state, &generated->env.context,
-        RISKFIGHT_CAUTIOUS, RISKFIGHT_CAUTIOUS, 1);
+        &STEADY, &STEADY, 1);
     assert(start == RF_START_PREFIX_TERMINAL);
     assert(generated->env.state.env.tick == 0 && !generated->env.state.env.episode_over);
     assert(generated->env.state.env.players[0].current_hitpoints == 121);
     destroy(generated);
     destroy(replay);
 
-    items[3].value = 0;
-    items[6].value = 1;
+    items[4].value = 0;
+    items[7].value = 1;
     Fixture* first = fixture(&config, 1);
     Fixture* second = fixture(&config, 1);
     assert(first->env.training.start_tick > 0);

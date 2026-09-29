@@ -10,10 +10,14 @@ static void reset(void) {
     context.self_play = 1;
 }
 
-static void decide(RiskfightOpponent opponent, int* actions) {
+static const RiskfightProfile QUIET = {{0}, 0, 0, {0}, 0, 0, {{0}}};
+static const RiskfightProfile AXER = {{0}, 0, 0, {1000, 1000, 1000}, 0, 0, {{0}}};
+static const RiskfightProfile HUNGRY = {{1000, 1000, 1000, 1000, 1000}, 0, 0, {0}, 0, 0, {{0}}};
+
+static void decide(const RiskfightProfile* profile, int* actions) {
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
-    riskfight_script(obs, opponent, 1, actions);
+    riskfight_script(obs, profile, 1, 0, actions);
 }
 
 static OsrsConsumableKind drink_kind(const int* actions) {
@@ -53,12 +57,12 @@ static void test_return_to_one_handed_weapon(void) {
     state.env.players[0].special_energy = 0;
     riskfight_observe_visible(&state, 0, 0);
     int actions[RF_HEADS];
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&AXER, actions);
     execute(actions);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
     assert(p->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
     p->current_hitpoints = 100;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&AXER, actions);
     assert(actions[RF_WEAPON] && actions[RF_SHIELD]);
     execute(actions);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_ABYSSAL_TENTACLE);
@@ -82,12 +86,12 @@ static void test_joint_weapon_shield_mask(void) {
     state.env.players[0].special_energy = 0;
     riskfight_observe_visible(&state, 0, 0);
     int actions[RF_HEADS];
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&AXER, actions);
     execute(actions);
     assert(p->equipped[GEAR_SLOT_WEAPON] == ITEM_DHAROKS_GREATAXE);
     assert(osrs_first_empty_inventory_cell(p->inventory_cells, -1) == -1);
     p->current_hitpoints = 100;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&AXER, actions);
     int shield_action = actions[RF_SHIELD];
     assert(shield_action > 0);
     assert(!osrs_can_equip_from_cell(p, p->inventory_cells, shield_action - 1));
@@ -117,19 +121,19 @@ static void test_restore_and_boost_priority(void) {
     Player* p = &state.env.players[0];
     int actions[RF_HEADS];
     p->current_prayer = 20;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&HUNGRY, actions);
     assert(drink_kind(actions) == OSRS_CONSUMABLE_SANFEW);
     execute(actions);
     assert(p->current_prayer > 20);
     p->current_prayer = 20;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&HUNGRY, actions);
     assert(actions[RF_DRINK] == 0);
 
     reset();
     p->current_attack = 99;
     p->current_strength = 99;
     p->current_defence = 99;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&HUNGRY, actions);
     assert(drink_kind(actions) == OSRS_CONSUMABLE_SUPER_COMBAT);
     execute(actions);
     assert(p->current_attack == 118 && p->current_strength == 118 && p->current_defence == 118);
@@ -138,7 +142,7 @@ static void test_restore_and_boost_priority(void) {
     reset();
     p->current_magic = 89;
     p->current_attack = 99;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&HUNGRY, actions);
     assert(drink_kind(actions) == OSRS_CONSUMABLE_SANFEW);
     execute(actions);
     assert(p->current_magic == 99);
@@ -147,29 +151,29 @@ static void test_restore_and_boost_priority(void) {
     p->current_hitpoints = 20;
     p->current_prayer = 0;
     p->current_attack = 80;
-    decide(RISKFIGHT_TRADER, actions);
+    decide(&HUNGRY, actions);
     assert(drink_kind(actions) == OSRS_CONSUMABLE_BREW);
 }
 
-static void test_cautious_checks_supplies_not_cooldowns(void) {
+static void test_forced_tab_checks_supplies_not_cooldowns(void) {
     reset();
     Player* p = &state.env.players[0];
     int actions[RF_HEADS];
     p->current_hitpoints = 20;
     p->food_timer = p->karambwan_timer = p->potion_timer = 3;
-    decide(RISKFIGHT_CAUTIOUS, actions);
+    decide(&QUIET, actions);
     assert(actions[RF_PRIMARY] != RF_TELEPORT);
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
         const OsrsItemContentMetadata* meta = osrs_inventory_cell_metadata(&p->inventory_cells[i]);
         if (meta->click_action == OSRS_CLICK_EAT)
             p->inventory_cells[i] = osrs_inventory_cell_empty();
     }
-    decide(RISKFIGHT_CAUTIOUS, actions);
+    decide(&QUIET, actions);
     assert(actions[RF_PRIMARY] != RF_TELEPORT);
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
         if (osrs_inventory_cell_metadata(&p->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_BREW)
             p->inventory_cells[i] = osrs_inventory_cell_empty();
-    decide(RISKFIGHT_CAUTIOUS, actions);
+    decide(&QUIET, actions);
     assert(actions[RF_PRIMARY] == RF_TELEPORT);
 }
 
@@ -179,7 +183,7 @@ int main(void) {
     test_return_to_one_handed_weapon();
     test_joint_weapon_shield_mask();
     test_restore_and_boost_priority();
-    test_cautious_checks_supplies_not_cooldowns();
+    test_forced_tab_checks_supplies_not_cooldowns();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight script contracts passed");
 }

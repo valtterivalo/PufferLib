@@ -20,9 +20,8 @@ int main(int argc, char** argv) {
     assert(argc == 4);
     long ticks = strtol(argv[1], NULL, 10);
     int count = atoi(argv[2]);
-    int bot = atoi(argv[3]);
-    assert(ticks > 0 && count > 0);
-    assert(bot == RISKFIGHT_TRADER || bot == RISKFIGHT_TACTICIAN || bot == RISKFIGHT_FLOOR);
+    int pool = atoi(argv[3]);
+    assert(ticks > 0 && count > 0 && pool >= 0 && pool < RISKFIGHT_OPPONENTS);
     BenchFight* fights = calloc(count, sizeof(*fights));
     assert(fights);
     for (int i = 0; i < count; i++) {
@@ -43,7 +42,8 @@ int main(int argc, char** argv) {
         int actions[2 * RF_HEADS];
         double t = seconds();
         for (int side = 0; side < 2; side++)
-            riskfight_script(f->obs[side], (RiskfightOpponent)bot, f->state.script_seed[side], actions + side * RF_HEADS);
+            riskfight_script(f->obs[side], riskfight_pick_profile((RiskfightOpponent)pool, f->state.script_seed[side]),
+                f->state.script_seed[side], f->state.consume_ticks[side], actions + side * RF_HEADS);
         double next = seconds(); script += next - t; t = next;
         riskfight_step((EncounterState*)&f->state, (EncounterContext*)&f->context, actions);
         next = seconds(); step += next - t; t = next;
@@ -61,10 +61,10 @@ int main(int argc, char** argv) {
         }
         mask += seconds() - t;
     }
-    printf("{\"ticks\":%ld,\"agents_per_tick\":2,\"envs\":%d,\"bot\":%d,\"state_bytes\":%zu,"
+    printf("{\"ticks\":%ld,\"agents_per_tick\":2,\"envs\":%d,\"pool\":%d,\"state_bytes\":%zu,"
         "\"wall_s\":%.6f,\"script_s\":%.6f,\"step_s\":%.6f,\"reset_s\":%.6f,"
         "\"observation_s\":%.6f,\"mask_s\":%.6f,\"episodes\":%ld,\"checksum\":%llu}\n",
-        ticks, count, bot, sizeof(RiskfightState), seconds()-start, script, step, reset,
+        ticks, count, pool, sizeof(RiskfightState), seconds()-start, script, step, reset,
         observation, mask, episodes, (unsigned long long)checksum);
     for (int i = 0; i < count; i++) riskfight_destroy_context((EncounterContext*)&fights[i].context);
     free(fights);

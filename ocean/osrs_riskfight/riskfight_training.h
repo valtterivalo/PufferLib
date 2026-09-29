@@ -6,6 +6,7 @@ typedef struct {
     float midfight_probability;
     int midfight_max_ticks;
     int session_rounds;
+    float curveball_probability;
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
@@ -16,7 +17,6 @@ typedef struct {
     uint32_t rng;
     uint64_t ticks;
     RiskfightTrainingOpponent opponent;
-    RiskfightOpponent script;
     RiskfightTrainingStart start;
     int start_tick;
     int omissions;
@@ -30,6 +30,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* rounds = dict_find(kwargs, "session_rounds");
     assert(rounds && rounds->value >= 1 && rounds->value == floor(rounds->value));
     config.session_rounds = (int)rounds->value;
+    DictItem* curveball = dict_find(kwargs, "curveball_probability");
+    assert(curveball && curveball->value >= 0 && curveball->value <= 1);
+    config.curveball_probability = (float)curveball->value;
     for (int i = 0; i < 5; i++) {
         DictItem* item = dict_find(kwargs, names[i]);
         if (item) values[i] = item->value;
@@ -68,16 +71,24 @@ static void riskfight_training_clear_returns(RiskfightState* state) {
     memset(state->teleport_penalties, 0, sizeof(state->teleport_penalties));
 }
 
+/** A scripted session opponent: a training human, or a synthetic curveball. */
+static const RiskfightProfile* riskfight_training_profile(RiskfightTraining* training) {
+    RiskfightOpponent pool = RISKFIGHT_HUMAN;
+    if (riskfight_training_draw(training, training->config.curveball_probability))
+        pool = encounter_rand_int(&training->rng, 2) ? RISKFIGHT_ESCAPER : RISKFIGHT_ALL_IN;
+    return riskfight_pick_profile(pool, xorshift32(&training->rng));
+}
+
 static RiskfightTrainingStart riskfight_training_prefix(RiskfightState* state,
-    RiskfightContext* context, RiskfightOpponent first, RiskfightOpponent second, int ticks) {
+    RiskfightContext* context, const RiskfightProfile* first, const RiskfightProfile* second, int ticks) {
     assert(context->self_play);
-    const RiskfightOpponent scripts[2] = {first, second};
+    const RiskfightProfile* scripts[2] = {first, second};
     for (int tick = 0; tick < ticks; tick++) {
         int actions[2 * RF_HEADS];
         for (int i = 0; i < 2; i++) {
             float observation[RF_OBS_SIZE];
             riskfight_write_observation(state, i, observation);
-            riskfight_script(observation, scripts[i], state->script_seed[i], actions + i * RF_HEADS);
+            riskfight_script(observation, scripts[i], state->script_seed[i], state->consume_ticks[i], actions + i * RF_HEADS);
         }
         riskfight_step((EncounterState*)state, (EncounterContext*)context, actions);
         if (state->env.episode_over) {
@@ -93,21 +104,19 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     training->opponent = RF_TRAIN_LEARNED;
+    const RiskfightProfile* scripted = NULL;
     if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
-        const RiskfightOpponent scripts[] = {RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
         training->opponent = RF_TRAIN_SCRIPTED;
-        training->script = scripts[encounter_rand_int(&training->rng, 4)];
+        scripted = riskfight_training_profile(training);
     }
     RiskfightTrainingStart start = RF_START_FRESH;
     if (riskfight_training_draw(training, training->config.midfight_probability)) {
-        const RiskfightOpponent scripts[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS,
-            RISKFIGHT_AGGRESSIVE, RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE,
-            RISKFIGHT_SURVIVAL, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
-        RiskfightOpponent first = scripts[encounter_rand_int(&training->rng, 8)];
-        RiskfightOpponent second = scripts[encounter_rand_int(&training->rng, 8)];
+        const RiskfightProfile* first = riskfight_training_profile(training);
+        const RiskfightProfile* second = riskfight_training_profile(training);
         int ticks = 1 + encounter_rand_int(&training->rng, training->config.midfight_max_ticks);
         start = riskfight_training_prefix(state, context, first, second, ticks);
     }
+    if (scripted) state->opponent_profile = scripted;
     training->start_tick = state->env.tick;
     training->start = start;
     training->omissions = 0;
@@ -117,9 +126,9 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
 /** Fresh round against the same opponent after an escape: full supplies, new priorities and script seeds. */
 static void riskfight_training_next_round(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context) {
-    RiskfightOpponent mixed = state->mixed_opponent;
+    const RiskfightProfile* profile = state->opponent_profile;
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
-    state->mixed_opponent = mixed;
+    state->opponent_profile = profile;
     training->start_tick = 0;
 }
 
@@ -131,6 +140,6 @@ static int riskfight_training_actions(RiskfightTraining* training,
     riskfight_write_observation(state, 1, observation);
     int omitted = riskfight_training_draw(training, riskfight_training_omission(training));
     if (omitted) memset(actions + RF_HEADS, 0, RF_HEADS * sizeof(int));
-    else riskfight_script(observation, training->script, state->script_seed[1], actions + RF_HEADS);
+    else riskfight_script(observation, state->opponent_profile, state->script_seed[1], state->consume_ticks[1], actions + RF_HEADS);
     return omitted;
 }

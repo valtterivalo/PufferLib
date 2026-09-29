@@ -3,8 +3,8 @@
 
 int main(void) {
     DictItem items[] = {{.key = "opponent_type", .value = 0}, {.key = "self_play", .value = 1},
-        {.key = "session_rounds", .value = 1}};
-    Dict kwargs = {.items = items, .size = 3};
+        {.key = "session_rounds", .value = 1}, {.key = "curveball_probability", .value = 0}};
+    Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     Env* env = (Env*)calloc(1, sizeof(*env));
     float obs[2][RF_OBS_SIZE], actions[2][RF_HEADS] = {{0}}, rewards[2], terminals[2];
     unsigned char masks[2][RF_MASK_SIZE];
@@ -72,9 +72,7 @@ int main(void) {
     assert(env->num_agents == 1 && env->agents[0].policy == 0);
     env->agents[0] = (Agent){.observations = obs[0], .actions = actions[0],
         .rewards = &rewards[0], .terminals = &terminals[0], .action_mask = masks[0]};
-    const int bots[] = {RISKFIGHT_TRADER, RISKFIGHT_CAUTIOUS, RISKFIGHT_AGGRESSIVE, RISKFIGHT_TACTICIAN, RISKFIGHT_PRESSURE, RISKFIGHT_SURVIVAL, RISKFIGHT_HELDOUT, RISKFIGHT_FLOOR, RISKFIGHT_HUMANLIKE};
-    for (size_t i = 0; i < sizeof(bots) / sizeof(*bots); i++) {
-        int bot = bots[i];
+    for (int bot = 0; bot < RISKFIGHT_OPPONENTS; bot++) {
         puf_set_bot_policy(env, bot);
         puf_reset(env);
         assert(env->context.opponent == bot && env->num_agents == 1);

@@ -215,6 +215,11 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     }
 }
 
+static int riskfight_consumed_units(const RiskfightState* s, int agent) {
+    return s->drink_brew[agent] + s->drink_sanfew[agent] + s->drink_combat[agent] +
+        s->eat_marlin[agent] + s->eat_halibut[agent] + s->eat_pie[agent];
+}
+
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     s->env.episode_over = pvp_death_is_settled(&s->env) || s->escaped[0] || s->escaped[1];
@@ -290,8 +295,10 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
         const HumanCommandQueue* queue = queues[i];
+        int consumed = riskfight_consumed_units(s, i);
         for (int n = 0; n < queue->count; n++)
             riskfight_execute_command(s, ctx, i, &queue->items[n]);
+        s->consume_ticks[i] += riskfight_consumed_units(s, i) != consumed;
         if (!s->escaped[0] && !s->escaped[1]) {
             int maul_hits = pvp_maul_finish_inputs(&s->env, i);
             riskfight_count_maul_spec(s, i, maul_hits);
@@ -383,7 +390,7 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     if (!ctx->self_play) {
         float obs[RF_OBS_SIZE];
         riskfight_write_observation(s, 1, obs);
-        riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, s->script_seed[1], opponent_actions);
+        riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
@@ -397,7 +404,7 @@ static void riskfight_step_human(EncounterState* state, EncounterContext* contex
     float obs[RF_OBS_SIZE];
     int actions[RF_HEADS];
     riskfight_write_observation(s, 1 - human, obs);
-    riskfight_script(obs, ctx->opponent == RISKFIGHT_MIXED ? s->mixed_opponent : ctx->opponent, s->script_seed[1 - human], actions);
+    riskfight_script(obs, s->opponent_profile, s->script_seed[1 - human], s->consume_ticks[1 - human], actions);
     riskfight_policy_commands(s, 1 - human, actions, &ctx->policy_commands[1 - human]);
     riskfight_step_queues(s, ctx,
         human == 0 ? &hi->commands : &ctx->policy_commands[0].commands,

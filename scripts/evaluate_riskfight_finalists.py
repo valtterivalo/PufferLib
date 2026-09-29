@@ -25,7 +25,7 @@ def main():
     trials.sort(key=lambda trial: (-trial[0], trial[1].name))
     assert trials, 'No successful sweep trials to evaluate'
     results = []
-    evaluation_bots = manifest['eval_bots'] + manifest['heldout_bots']
+    evaluation_bots = manifest['eval_bots'] + manifest['diagnostic_bots']
     for rank, (score, path) in enumerate(trials[:3]):
         config = read_config(path)
         checkpoint = sorted((args.root / 'checkpoints/osrs_riskfight' / path.stem).glob('*.bin'))[-1]

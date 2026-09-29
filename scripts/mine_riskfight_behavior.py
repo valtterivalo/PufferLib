@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Mine RISKFIGHT_HUMANLIKE per-mille rates from SPECTATOR_COMBAT archives.
+"""Mine per-player RISKFIGHT_HUMAN profiles from SPECTATOR_COMBAT archives.
 
-A bout is a mutual player pair with hitsplats both ways, from its first
+Writes riskfight_profiles.h: one profile per Dharok/veng player, each rate
+shrunk toward the training pool by one mean player's worth of evidence.
+Players whose name hash lands in HELDOUT_BUCKET are held out, so a player's
+split never changes as recordings accumulate. A bout is a mutual player pair with hitsplats both ways, from its first
 interaction to the first round end: a tab 4069, a standard teleport 714,
 a death, or either fighter leaving view. Rates come from modeled-setup
 fighters only. Own and opponent HP are health-bar ratios on scale 30,
@@ -12,6 +15,7 @@ hitsplat. Spec energy is estimated from 100 at each presence start.
 import argparse
 import collections
 import glob
+import hashlib
 import json
 import os
 import subprocess
@@ -31,6 +35,9 @@ BASE_HP = 99
 TARGET_MEMORY_TICKS = 20
 FOLLOW_TAB_TICKS = 15
 EAT_LOCK_TICKS = 3
+VENG_COOLDOWN_TICKS = 50
+HELDOUT_BUCKETS, HELDOUT_BUCKET = 5, 0
+HEADER = os.path.join(os.path.dirname(__file__), "../ocean/osrs/encounters/riskfight/riskfight_profiles.h")
 
 
 def hp_of(r30):
@@ -210,32 +217,52 @@ class Counts:
         self.eat_ticks = collections.Counter()
         self.vw_specs = self.vw_opportunities = 0
         self.maul_specs = self.maul_ticks = 0
-        self.axes = self.axe_opportunities = 0
-        self.tabs = self.tab_ticks = 0
+        self.axes = collections.Counter()
+        self.axe_opportunities = collections.Counter()
+        self.tabs = collections.Counter()
+        self.tab_ticks = collections.Counter()
         self.first_tab_hp = []
         self.follow_tab_gaps = []
         self.attack_to_tab = []
-        self.orb_axes = 0
+        self.orb_axes = self.axe_swings = 0
         self.veng_recast_after_ready = []
         self.bout_ends = collections.Counter()
         self.setups = collections.Counter()
 
 
 EAT_BANDS = [(0, 40), (40, 65), (65, 73), (73, 90), (90, 200)]
+AXE_BAND_UPPER_R30 = [11, 23]
+TAB_SUPPLY_TICKS, TAB_SUPPLY_BANDS = 8, 3
+TAB_CELLS = [(supply, low) for supply in range(TAB_SUPPLY_BANDS) for low in (False, True)]
+
+
+def tab_cell(consumes, tick, r30):
+    """(consume ticks before tick / 8 capped, own HP below 40)."""
+    before = sum(1 for t in consumes if t < tick)
+    return min(before // TAB_SUPPLY_TICKS, TAB_SUPPLY_BANDS - 1), hp_of(r30) < 40
+
+
+def axe_band(r30):
+    """Opponent bar band on scale 30: below 12, 12 to 23, 24 and up."""
+    return sum(r30 > upper for upper in AXE_BAND_UPPER_R30)
 
 
 def band(hp):
     return next(f"{lo}-{hi}" for lo, hi in EAT_BANDS if lo <= hp < hi)
 
 
-def mine(actors, counts):
+def mine(actors, pooled, players, both):
     for a, b, start, end, kind in bouts(actors):
-        counts.bout_ends[kind] += 1
-        for me, opp in ((a, b), (b, a)):
-            s = setup(actors[me], start, end)
-            counts.setups[s] += 1
+        pooled.bout_ends[kind] += 1
+        setups = [setup(actors[x], start, end) for x in (a, b)]
+        if setups == ["dharok_veng", "dharok_veng"]:
+            both.append({"end": kind, "length": end - start,
+                         "hits": [amount for x in (a, b) for t, _, amount in actors[x].hits if start <= t <= end]})
+        for (me, opp), s in zip(((a, b), (b, a)), setups):
+            pooled.setups[s] += 1
             if s == "dharok_veng":
-                mine_fighter(actors[me], actors[opp], start, end, counts)
+                mine_fighter(actors[me], actors[opp], start, end, pooled)
+                mine_fighter(actors[me], actors[opp], start, end, players[actors[me].name])
 
 
 def mine_fighter(me, opp, start, end, counts):
@@ -246,6 +273,7 @@ def mine_fighter(me, opp, start, end, counts):
         if start <= t <= end:
             anims[t].add(anim)
     last_eat = -10**9
+    consumes = sorted(t for t in anims if CONSUME in anims[t])
     for t in range(start, end + 1):
         if CONSUME in anims[t] and own[t] is not None:
             counts.eat_events[band(hp_of(own[t]))] += 1
@@ -263,11 +291,11 @@ def mine_fighter(me, opp, start, end, counts):
             counts.maul_ticks += 1
             counts.maul_specs += MAUL_SPEC in anims[t] and MAUL_SPEC not in anims[t - 1]
         normal = attacks - {VW_SPEC, MAUL_SPEC, DDS_SPEC}
-        if normal and own[t] is not None and own[t] < 30 and o is not None and 12 <= o <= 23:
-            counts.axe_opportunities += 1
-            counts.axes += bool(normal & {DH_CRUSH, DH_SLASH})
-        if own[t] is not None and hp_of(own[t]) < 40:
-            counts.tab_ticks += 1
+        if normal and own[t] is not None and own[t] < 30 and o is not None:
+            counts.axe_opportunities[axe_band(o)] += 1
+            counts.axes[axe_band(o)] += bool(normal & {DH_CRUSH, DH_SLASH})
+        if own[t] is not None:
+            counts.tab_ticks[tab_cell(consumes, t, own[t])] += 1
     my_tabs = [t for t, anim in me.anims if anim in (TAB, TELEPORT) and start <= t <= end + FOLLOW_TAB_TICKS]
     opp_tabs = [t for t, anim in opp.anims if anim in (TAB, TELEPORT) and start <= t <= end + FOLLOW_TAB_TICKS]
     for t in my_tabs:
@@ -277,64 +305,136 @@ def mine_fighter(me, opp, start, end, counts):
             continue
         hp = own.get(t)
         counts.first_tab_hp.append(None if hp is None else round(hp_of(hp)))
-        counts.tabs += hp is not None and hp_of(hp) < 40
+        if hp is not None:
+            counts.tabs[tab_cell(consumes, t, hp)] += 1
         last_attack = max([u for u, anim in me.anims if anim in ATTACK_ANIMS and u <= t], default=None)
         if last_attack is not None:
             counts.attack_to_tab.append(t - last_attack)
     orbs = [t for t, kind, amount in me.hits if kind in (16, 17) and amount == 10 and start <= t <= end]
     axes = [t for t, anim in me.anims if anim in (DH_CRUSH, DH_SLASH) and start <= t <= end]
     counts.orb_axes += sum(1 for t in axes if any(0 <= t - o <= 2 for o in orbs))
+    counts.axe_swings += len(axes)
     casts = sorted(c for c in me.veng_casts if start <= c <= end)
-    counts.veng_recast_after_ready.extend(c2 - (c1 + 50) for c1, c2 in zip(casts, casts[1:]))
+    counts.veng_recast_after_ready.extend(c2 - (c1 + VENG_COOLDOWN_TICKS) for c1, c2 in zip(casts, casts[1:]))
 
 
-def per_mille(numerator, denominator):
-    return round(1000 * numerator / denominator)
+def recorded_rounds(both):
+    """Round statistics over bouts where both fighters used the modeled setup, matching riskfight_human_calibration."""
+    resolved = [b for b in both if b["end"] != "left_view"]
+    lengths = sorted(b["length"] for b in both)
+    hits = [amount for b in both for amount in b["hits"]]
+    ticks = sum(2 * b["length"] for b in both)
+    return {
+        "rounds": len(both),
+        "death_share": round(sum(b["end"] == "death" for b in resolved) / len(resolved), 3),
+        "under_50_ticks_share": round(sum(n < 50 for n in lengths) / len(lengths), 3),
+        "length_p10_p50_p90": [lengths[len(lengths) // 10], lengths[len(lengths) // 2], lengths[len(lengths) * 9 // 10]],
+        "damage_per_fighter_tick": round(sum(hits) / ticks, 3),
+        "zero_hit_share": round(sum(h == 0 for h in hits) / len(hits), 3),
+        "hit_40_plus_share": round(sum(h >= 40 for h in hits) / len(hits), 3),
+    }
+
+
+def evidence(c):
+    """(successes, trials) per profile field, in RiskfightProfile order."""
+    veng_waits = sum(max(0, d) for d in c.veng_recast_after_ready)
+    veng_casts = len(c.veng_recast_after_ready)
+    return [(c.eat_events[band(lo)], c.eat_ticks[band(lo)]) for lo, _ in EAT_BANDS] + [
+        (c.vw_specs, c.vw_opportunities),
+        (c.maul_specs, c.maul_ticks),
+        *[(c.axes[b], c.axe_opportunities[b]) for b in range(len(AXE_BAND_UPPER_R30) + 1)],
+        (c.orb_axes, c.axe_swings),
+        (veng_casts, veng_casts + veng_waits),
+    ]
+
+
+def tab_evidence(c):
+    """(tabs, ticks) per tab cell, in RiskfightProfile.tab_pm order."""
+    return [(c.tabs[cell], c.tab_ticks[cell]) for cell in TAB_CELLS]
+
+
+def tab_profiles(train, players):
+    """Pooled tab cell rates scaled per player by a shrunk observed-over-expected tab ratio."""
+    pooled = [(sum(e[i][0] for e in train), sum(e[i][1] for e in train)) for i in range(len(TAB_CELLS))]
+    assert all(n > 0 for _, n in pooled)
+    rates = [k / n for k, n in pooled]
+    expected = lambda e: sum(n * r for (_, n), r in zip(e, rates))
+    prior = sum(map(expected, train)) / len(train)
+    out = []
+    for e in players:
+        scale = (sum(k for k, _ in e) + prior) / (expected(e) + prior)
+        out.append([min(1000, round(1000 * r * scale)) for r in rates])
+    return out, pooled
+
+
+def shrunk_profiles(train, players):
+    """Per-mille profiles, each rate pulled toward the training pool by its mean per-player trials."""
+    pooled = [(sum(e[i][0] for e in train), sum(e[i][1] for e in train)) for i in range(len(train[0]))]
+    assert all(n > 0 for _, n in pooled)
+    priors = [(k / n, n / len(train)) for k, n in pooled]
+    return [[round(1000 * (k + m * p) / (n + m)) for (k, n), (p, m) in zip(e, priors)] for e in players], pooled
+
+
+def name_hash(name):
+    return hashlib.sha256(name.encode()).hexdigest()
+
+
+def header(train, heldout, archives):
+    def row(p):
+        consume, (vw, maul), axe, (orb, veng), tab = p[:5], p[5:7], p[7:10], p[10:12], p[12:]
+        tabs = ", ".join(f"{{{tab[i]}, {tab[i + 1]}}}" for i in range(0, len(tab), 2))
+        return (f"    {{{{{', '.join(map(str, consume))}}}, {vw}, {maul}, {{{', '.join(map(str, axe))}}}, "
+                f"{orb}, {veng}, {{{tabs}}}}},")
+    return "\n".join([
+        "#ifndef OSRS_RISKFIGHT_PROFILES_H",
+        "#define OSRS_RISKFIGHT_PROFILES_H",
+        f"/** Generated by scripts/mine_riskfight_behavior.py from {archives} spectator archives. Training profiles, then held-out. */",
+        f"enum {{ RISKFIGHT_HUMAN_TRAIN_PROFILES = {len(train)}, RISKFIGHT_HUMAN_HELDOUT_PROFILES = {len(heldout)} }};",
+        "static const RiskfightProfile RISKFIGHT_HUMAN_PROFILES[] = {",
+        *map(row, train + heldout),
+        "};",
+        "#endif",
+        "",
+    ])
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recordings", default=os.path.expanduser("~/.light2/gameplay-recordings/spectator-combat"))
-    parser.add_argument("--out")
+    parser.add_argument("--header", default=HEADER)
     args = parser.parse_args()
-    counts = Counts()
-    archives = collections.Counter()
+    pooled = Counts()
+    players = collections.defaultdict(Counts)
+    both = []
+    archives = 0
     for path in sorted(glob.glob(os.path.join(args.recordings, "session_*.jsonl.zst"))):
         actors = load(path)
-        archives["spectator" if actors is not None else "not_spectator"] += 1
         if actors is not None:
-            mine(actors, counts)
-    hazard = {k: (counts.eat_events[k], counts.eat_ticks[k]) for k in counts.eat_ticks}
-    low_events = counts.eat_events["0-40"] + counts.eat_events["40-65"]
-    low_ticks = counts.eat_ticks["0-40"] + counts.eat_ticks["40-65"]
-    rolls = {
-        "RISKFIGHT_HL_EARLY_EAT_PM": per_mille(counts.eat_events["65-73"], counts.eat_ticks["65-73"]),
-        "RISKFIGHT_HL_EAT_DELAY_PM": 1000 - per_mille(low_events, low_ticks),
-        "RISKFIGHT_HL_VW_PM": per_mille(counts.vw_specs, counts.vw_opportunities),
-        "RISKFIGHT_HL_MAUL_PM": per_mille(counts.maul_specs, counts.maul_ticks),
-        "RISKFIGHT_HL_AXE_PM": per_mille(counts.axes, counts.axe_opportunities),
-        "RISKFIGHT_HL_TP_PM": per_mille(counts.tabs, counts.tab_ticks),
-    }
-    report = {
-        "archives": dict(archives),
-        "bout_ends": dict(counts.bout_ends),
-        "fighter_setups": dict(counts.setups),
-        "eat_events_over_eligible_ticks_by_hp": hazard,
-        "vw_specs_over_attacks": (counts.vw_specs, counts.vw_opportunities),
-        "maul_specs_over_ready_ticks": (counts.maul_specs, counts.maul_ticks),
-        "axes_over_normal_attacks": (counts.axes, counts.axe_opportunities),
-        "leading_tabs_under_40_over_ticks_under_40": (counts.tabs, counts.tab_ticks),
-        "leading_tab_hp": sorted(counts.first_tab_hp, key=lambda x: (x is None, x)),
-        "follow_tab_gaps": sorted(counts.follow_tab_gaps),
-        "attack_to_leading_tab": sorted(counts.attack_to_tab),
-        "axes_within_2_ticks_of_orb": counts.orb_axes,
-        "veng_recast_ticks_after_cooldown": sorted(counts.veng_recast_after_ready),
-        "rolls": rolls,
-    }
-    if args.out:
-        with open(args.out, "w") as handle:
-            json.dump(report, handle, indent=1)
-    print(json.dumps(report, indent=1))
+            archives += 1
+            mine(actors, pooled, players, both)
+    names = sorted(players, key=name_hash)
+    heldout_names = [n for n in names if int(name_hash(n), 16) % HELDOUT_BUCKETS == HELDOUT_BUCKET]
+    train_names = [n for n in names if n not in heldout_names]
+    train = [evidence(players[n]) for n in train_names]
+    names = train_names + heldout_names
+    profiles, pool = shrunk_profiles(train, [evidence(players[n]) for n in names])
+    tabs, tab_pool = tab_profiles([tab_evidence(players[n]) for n in train_names], [tab_evidence(players[n]) for n in names])
+    profiles = [p + t for p, t in zip(profiles, tabs)]
+    with open(args.header, "w") as handle:
+        handle.write(header(profiles[:len(train_names)], profiles[len(train_names):], archives))
+    print(json.dumps({
+        "archives": archives,
+        "players": {"train": len(train_names), "heldout": len(heldout_names)},
+        "recorded_rounds": recorded_rounds(both),
+        "bout_ends": dict(pooled.bout_ends),
+        "fighter_setups": dict(pooled.setups),
+        "training_pool_successes_over_trials": pool,
+        "training_pool_tabs_over_ticks": tab_pool,
+        "leading_tab_hp": sorted(pooled.first_tab_hp, key=lambda x: (x is None, x)),
+        "follow_tab_gaps": sorted(pooled.follow_tab_gaps),
+        "attack_to_leading_tab": sorted(pooled.attack_to_tab),
+        "veng_recast_ticks_after_cooldown": sorted(pooled.veng_recast_after_ready),
+    }, indent=1))
 
 
 if __name__ == "__main__":

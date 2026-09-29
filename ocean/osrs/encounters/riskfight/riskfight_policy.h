@@ -159,9 +159,33 @@ static int riskfight_find_gear(const float* obs, uint8_t item) {
     return 0;
 }
 
-#include "riskfight_tactician.h"
+static Player riskfight_observed_self(const float* obs) {
+    Player p;
+    memset(&p, 0, sizeof(p));
+    encounter_init_maxed_player_combat_stats(&p, 99);
+    p.current_hitpoints = (int)lroundf(obs[0] * 121);
+    p.current_prayer = (int)lroundf(obs[1] * 99);
+    p.current_attack = (int)lroundf(obs[2] * 118);
+    p.current_strength = (int)lroundf(obs[3] * 118);
+    p.current_defence = (int)lroundf(obs[4] * 120);
+    p.current_magic = (int)lroundf(obs[5] * 99);
+    p.special_energy = (int)lroundf(obs[6] * 100);
+    p.attack_timer = (int)lroundf(obs[7] * 10);
+    p.food_timer = (int)lroundf(obs[8] * 3);
+    p.potion_timer = (int)lroundf(obs[9] * 3);
+    p.karambwan_timer = (int)lroundf(obs[10] * 3);
+    p.has_attack_timer = p.attack_timer != 0;
+    p.offensive_prayer = p.current_prayer > 0 ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
+    p.fight_style = FIGHT_STYLE_AGGRESSIVE;
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++)
+        p.equipped[i] = (uint8_t)lroundf(obs[RF_EQUIPPED_START + i] * RF_OBSERVATION_ITEM_SCALE);
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        p.inventory_cells[i] = osrs_inventory_cell_from_content_code(
+            osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + i * RF_INVENTORY_WIDTH]));
+    return p;
+}
 
-/** Per-episode HUMANLIKE roll source. Scripts stay pure functions of (obs, seed). */
+/** Per-episode script roll source. Scripts stay pure functions of (obs, profile, seed). */
 static uint32_t riskfight_sample_hash(uint32_t seed, uint32_t tick, uint32_t salt) {
     uint32_t x = seed ^ (tick * 0x9E3779B1u + salt * 0x85EBCA6Bu + 0xC2B2AE35u);
     x ^= x >> 15; x *= 0x2C1B3C6Du; x ^= x >> 12; x *= 0x297A2D39u; x ^= x >> 15;
@@ -170,194 +194,75 @@ static uint32_t riskfight_sample_hash(uint32_t seed, uint32_t tick, uint32_t sal
 static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, int per_mille) {
     return (int)(riskfight_sample_hash(seed, tick, salt) % 1000u) < per_mille;
 }
-/** Per-mille rates mined by scripts/mine_riskfight_behavior.py from spectator fights. */
-enum {
-    RISKFIGHT_HL_EARLY_EAT_PM = 82,
-    RISKFIGHT_HL_EAT_DELAY_PM = 834,
-    RISKFIGHT_HL_VW_PM = 200,
-    RISKFIGHT_HL_MAUL_PM = 3,
-    RISKFIGHT_HL_AXE_PM = 210,
-    RISKFIGHT_HL_TP_PM = 10,
-};
-static void riskfight_script(const float* obs, RiskfightOpponent type, uint32_t seed, int* actions) {
+
+/** Heals below 73 HP, a restore when drained, a combat repot when the boost has faded. */
+static void riskfight_script_consume(const float* obs, const Player* self, int* actions) {
+    int hp = self->current_hitpoints;
+    if (hp < 73 && self->food_timer == 0) {
+        actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
+        if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
+    }
+    if (hp < 45 && self->karambwan_timer == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
+    if (self->potion_timer != 0) return;
+    if (hp < 65) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
+    if (actions[RF_DRINK]) return;
+    int drained = self->current_prayer <= 40 || self->current_attack < 99 || self->current_strength < 99 ||
+        self->current_defence < 99 || self->current_magic < 99;
+    if (drained) {
+        actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
+        if (!actions[RF_DRINK]) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
+    } else if (hp >= 65 && (self->current_attack < 110 || self->current_strength < 110 || self->current_defence < 110)) {
+        actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
+    }
+}
+
+/** Weapon rolls are keyed on the tick the next attack comes off cooldown, so one attack gets one decision.
+ * consume_ticks counts this round's ticks on which the fighter ate or drank. */
+static void riskfight_script(const float* obs, const RiskfightProfile* profile, uint32_t seed,
+    int consume_ticks, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
-    if (type >= RISKFIGHT_TACTICIAN && type <= RISKFIGHT_FLOOR) {
-        const RiskfightTacticianProfile profiles[] = {RISKFIGHT_PROFILE_BALANCED,
-            RISKFIGHT_PROFILE_PRESSURE, RISKFIGHT_PROFILE_CAUTIOUS, RISKFIGHT_PROFILE_HELDOUT, RISKFIGHT_PROFILE_FLOOR};
-        riskfight_tactician_profile(obs, actions, profiles[type - RISKFIGHT_TACTICIAN]);
-        return;
-    }
-    if (type == RISKFIGHT_HUMANLIKE) {
-        int tick = (int)lroundf(obs[20] * RF_OBSERVATION_TICK_SCALE);
-        float hl_hp = obs[0] * 121;
-        const float* hl_opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-        actions[RF_PRIMARY] = RF_ATTACK;
-        actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
-        actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
-        if (hl_hp < 65) {
-            if (obs[8] == 0) {
-                actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
-                if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
-            }
-            if (obs[9] == 0) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
-            if (hl_hp < 45 && obs[10] == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
-        }
-        if (!actions[RF_DRINK] && obs[9] == 0) {
-            float attack = obs[2] * 118;
-            float strength = obs[3] * 118;
-            float defence = obs[4] * 120;
-            int needs_restore = obs[1] * 99 <= 40 || attack < 98.5f ||
-                strength < 98.5f || defence < 98.5f || obs[5] * 99 < 98.5f;
-            if (needs_restore) {
-                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
-                if (!actions[RF_DRINK])
-                    actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
-            }
-            if (!actions[RF_DRINK] && hl_hp >= 65 &&
-                    (attack < 110 || strength < 110 || defence < 110))
-                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
-        }
-        if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
-        if (!actions[RF_FOOD] && !actions[RF_DRINK] && !actions[RF_COMBO] &&
-                hl_hp < 73 && obs[8] == 0 &&
-                riskfight_sample_event(seed, (uint32_t)tick, 11, RISKFIGHT_HL_EARLY_EAT_PM)) {
-            actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
-            if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
-        }
-        if ((actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) &&
-                riskfight_sample_event(seed, (uint32_t)tick, 12, RISKFIGHT_HL_EAT_DELAY_PM)) {
-            actions[RF_FOOD] = actions[RF_DRINK] = actions[RF_COMBO] = 0;
-        }
-        if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
-        uint8_t hl_weapon = ITEM_ABYSSAL_TENTACLE;
-        {
-            int opp_bar = (int)lroundf(hl_opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
-            OsrsHealthBarRange opp_hp =
-                osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-            int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
-            Player probe = riskfight_observed_self(obs);
-            int holding_maul = pvp_is_maul(probe.equipped[GEAR_SLOT_WEAPON]);
-            probe.equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
-            probe.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
-            int hp_lower = probe.current_hitpoints < 1 ? 1 : probe.current_hitpoints;
-            OsrsMeleeThreat axe = osrs_melee_threat(probe.equipped,
-                calculate_effective_strength(&probe, ATTACK_STYLE_MELEE),
-                probe.base_hitpoints, hp_lower, probe.special_energy);
-            int ready = probe.attack_timer <= 1;
-            int finisher = riskfight_dharok_finisher(ready, probe.current_hitpoints,
-                    probe.base_hitpoints, axe.normal_max, opp_upper, 60,
-                    RISKFIGHT_CONTINUE, 0, 0);
-            int camp = probe.current_hitpoints < probe.base_hitpoints &&
-                hl_opponent[0] >= 0.4f && hl_opponent[0] < 0.8f &&
-                riskfight_sample_event(seed, (uint32_t)tick, 23, RISKFIGHT_HL_AXE_PM);
-            int vw_spec = obs[6] >= 0.5f && hl_opponent[0] < 0.65f &&
-                riskfight_sample_event(seed, (uint32_t)tick, 21, RISKFIGHT_HL_VW_PM);
-            actions[RF_SPECIAL] = !holding_maul && vw_spec != (obs[13] >= 0.5f);
-            if (vw_spec) {
-                hl_weapon = ITEM_VOIDWAKER;
-            } else if (obs[6] >= 0.99f && hl_opponent[0] < 0.65f &&
-                    opp_upper <= 76 && hl_hp < 99 &&
-                    riskfight_sample_event(seed, (uint32_t)tick, 22, RISKFIGHT_HL_MAUL_PM)) {
-                hl_weapon = ITEM_GRANITE_MAUL_ORNATE;
-                actions[RF_SPECIAL] = 2;
-            } else if (finisher || camp) {
-                hl_weapon = ITEM_DHAROKS_GREATAXE;
-            }
-        }
-        actions[RF_WEAPON] = riskfight_find_gear(obs, hl_weapon);
-        if (!item_is_two_handed(hl_weapon))
-            actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
-        actions[RF_RING] = riskfight_find_gear(obs,
-            obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
-        if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
-        if (hl_hp < 30 &&
-            !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
-            !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
-            !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) &&
-            !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW))
-            actions[RF_PRIMARY] = RF_TELEPORT;
-        else if (hl_hp < 40 &&
-                riskfight_sample_event(seed, (uint32_t)tick, 31, RISKFIGHT_HL_TP_PM))
-            actions[RF_PRIMARY] = RF_TELEPORT;
-        return;
-    }
-    float hp = obs[0] * 121;
+    uint32_t tick = (uint32_t)lroundf(obs[20] * RF_OBSERVATION_TICK_SCALE);
+    Player self = riskfight_observed_self(obs);
+    uint32_t attack_tick = tick + (uint32_t)self.attack_timer;
+    int hp = self.current_hitpoints;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    int threshold = type == RISKFIGHT_CAUTIOUS ? 80 : type == RISKFIGHT_AGGRESSIVE ? 45 : 65;
     actions[RF_PRIMARY] = RF_ATTACK;
     actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
     actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
-    if (hp < threshold) {
-        if (obs[8] == 0) {
-            actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
-            if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
-        }
-        if (obs[9] == 0) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
-        if (hp < 45 && obs[10] == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
-        if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
-    }
-    if (!actions[RF_DRINK] && obs[9] == 0) {
-        float attack = obs[2] * 118;
-        float strength = obs[3] * 118;
-        float defence = obs[4] * 120;
-        int needs_restore = obs[1] * 99 <= 40 || attack < 98.5f ||
-            strength < 98.5f || defence < 98.5f || obs[5] * 99 < 98.5f;
-        if (needs_restore) {
-            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
-            if (!actions[RF_DRINK])
-                actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
-        }
-        if (!actions[RF_DRINK] && hp >= threshold &&
-                (attack < 110 || strength < 110 || defence < 110))
-            actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
-    }
-    if (!obs[11] && obs[12] <= 0.02f) actions[RF_VENGEANCE] = 1;
-    uint8_t weapon = ITEM_ABYSSAL_TENTACLE;
-    {
-        int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
-        OsrsHealthBarRange opp_hp =
-            osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-        int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
-        Player probe = riskfight_observed_self(obs);
-        probe.equipped[GEAR_SLOT_WEAPON] = ITEM_DHAROKS_GREATAXE;
-        probe.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
-        int hp_lower = probe.current_hitpoints < 1 ? 1 : probe.current_hitpoints;
-        OsrsMeleeThreat axe = osrs_melee_threat(probe.equipped,
-            calculate_effective_strength(&probe, ATTACK_STYLE_MELEE),
-            probe.base_hitpoints, hp_lower, probe.special_energy);
-        int ready = probe.attack_timer <= 1;
-        if (riskfight_dharok_finisher(ready, probe.current_hitpoints,
-                probe.base_hitpoints, axe.normal_max, opp_upper, 60,
-                RISKFIGHT_CONTINUE, 0, 0))
-            weapon = ITEM_DHAROKS_GREATAXE;
-    }
-    if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.99f && opponent[0] < 0.65f) {
-        int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
-        OsrsHealthBarRange opp_hp =
-            osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
-        if (opp_hp.kind == OSRS_HEALTH_BAR_KNOWN && opp_hp.upper <= 76 && hp < 99) {
-            weapon = ITEM_GRANITE_MAUL_ORNATE;
-            actions[RF_SPECIAL] = 2;
-        } else {
-            weapon = ITEM_VOIDWAKER;
-            actions[RF_SPECIAL] = 1;
-        }
-    } else if (type == RISKFIGHT_AGGRESSIVE && obs[6] >= 0.5f && opponent[0] < 0.65f) {
-        weapon = ITEM_VOIDWAKER;
-        actions[RF_SPECIAL] = 1;
-    }
+    int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
+    if (riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
+        riskfight_script_consume(obs, &self, actions);
+    if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
+    actions[RF_VENGEANCE] = !obs[11] && obs[12] <= 0.02f && riskfight_sample_event(seed, tick, 13, profile->veng_pm);
+
+    int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
+    OsrsHealthBarRange opp_hp = osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
+    int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
+    int holding_maul = pvp_is_maul(self.equipped[GEAR_SLOT_WEAPON]);
+    int axe_band = (opp_bar >= 12) + (opp_bar >= 24);
+    int axe_swing = hp < self.base_hitpoints &&
+        riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band]);
+    int vw_spec = obs[6] >= 0.5f && opponent[0] < 0.65f &&
+        riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
+    int maul_spec = !vw_spec && obs[6] >= 0.99f && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
+        riskfight_sample_event(seed, tick, 22, profile->maul_pm);
+    uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? ITEM_GRANITE_MAUL_ORNATE :
+        axe_swing ? ITEM_DHAROKS_GREATAXE : ITEM_ABYSSAL_TENTACLE;
+    actions[RF_SPECIAL] = maul_spec ? 2 : !holding_maul && vw_spec != (obs[13] >= 0.5f);
     actions[RF_WEAPON] = riskfight_find_gear(obs, weapon);
     if (!item_is_two_handed(weapon))
         actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
-    if (type == RISKFIGHT_AGGRESSIVE && opponent[4] && opponent[6] * RF_OBSERVATION_ATTACK_AGE_SCALE > 2 && hp > 55 && hp < 100)
-        actions[RF_ORB] = 1;
+    actions[RF_ORB] = weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 &&
+        riskfight_sample_event(seed, attack_tick, 24, profile->orb_axe_pm);
     actions[RF_RING] = riskfight_find_gear(obs,
         obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
-    if (type == RISKFIGHT_CAUTIOUS && hp < 30 && obs[RF_SELF_TELEPORT_LOCK] == 0 &&
-        !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
+    if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
+    int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
+    int out_of_heals = !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
         !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
-        !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) &&
-        !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW))
+        !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) && !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
+    if ((hp < 30 && out_of_heals) ||
+            riskfight_sample_event(seed, tick, 31, profile->tab_pm[supply_band][hp < 40]))
         actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif

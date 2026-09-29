@@ -460,7 +460,7 @@ static void osrs_print_inferno_profile_results(int total_steps) {
 #endif
 
 
-static int g_cli_riskfight_opponent = RISKFIGHT_TRADER;
+static int g_cli_riskfight_opponent = RISKFIGHT_HUMAN;
 
 static const EncounterDef* visual_open_encounter(OsrsEnv* env, const char* encounter_name) {
     const EncounterDef* edef = encounter_find(encounter_name);
@@ -1714,8 +1714,9 @@ static void visual_frame(void* arg) {
         } else if (strcmp(edef->name, "riskfight") == 0) {
             float observation[RF_OBS_SIZE];
             riskfight_write_observation((RiskfightState*)env->encounter_state, 0, observation);
-            riskfight_script(observation, RISKFIGHT_TRADER,
-                ((RiskfightState*)env->encounter_state)->script_seed[0], enc_actions);
+            uint32_t seed = ((RiskfightState*)env->encounter_state)->script_seed[0];
+            riskfight_script(observation, riskfight_pick_profile(RISKFIGHT_HUMAN, seed), seed,
+                ((RiskfightState*)env->encounter_state)->consume_ticks[0], enc_actions);
         } else if (strcmp(edef->name, "zulrah") == 0) {
             zul_heuristic_actions((ZulrahState*)env->encounter_state, enc_actions);
         } else {
