@@ -197,6 +197,12 @@ static void test_visible_observation_boundary(void) {
     assert(after[RF_HISTORY_START + 4] * RF_OBSERVATION_DAMAGE_SCALE == 10);
     assert(after[RF_OPPONENT_START + NUM_GEAR_SLOTS] < 1);
     assert(memcmp(before, after, sizeof(before)) != 0);
+
+    Player* self = &state.env.players[0];
+    self->equipped[GEAR_SLOT_WEAPON] = ITEM_NONE;
+    self->slot_gear_dirty = 1;
+    riskfight_record_attack(&state, 0, 1, 0);
+    assert(state.visible[1].last_attack_speed == 4);
 }
 
 static void test_hidden_state_and_replay(void) {

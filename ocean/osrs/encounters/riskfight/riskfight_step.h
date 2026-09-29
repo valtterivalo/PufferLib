@@ -21,7 +21,7 @@ static void riskfight_record_attack(RiskfightState* s, int agent, int hits, int 
     event[2] = p->attack_style_this_tick;
     if (!instant) {
         visible->last_attack_tick = s->env.tick;
-        visible->last_attack_speed = ITEM_DATABASE[weapon].attack_speed;
+        visible->last_attack_speed = get_slot_gear_bonuses(p)->attack_speed;
     }
 }
 static void riskfight_count_maul_spec(RiskfightState* s, int agent, int hits) {
