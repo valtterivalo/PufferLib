@@ -1,6 +1,12 @@
 #pragma once
 
+#if defined(from_float) && !defined(PRECISION_FLOAT)
+typedef precision_t obs_t;
+#define RF_OBS_FROM_FLOAT(x) from_float(x)
+#else
 typedef float obs_t;
+#define RF_OBS_FROM_FLOAT(x) (x)
+#endif
 #define PUF_HAS_BOT_POLICY
 #include "pufferenv.h"
 #define Log OsrsSharedLog
@@ -74,7 +80,9 @@ static inline void puf_set_bot_policy(Env* env, int bot_policy) {
 
 static void riskfight_native_observe(Env* env) {
     for (int i = 0; i < env->num_agents; i++) {
-        riskfight_write_observation(&env->state, i, env->agents[i].observations);
+        float obs[RF_OBS_SIZE];
+        riskfight_write_observation(&env->state, i, obs);
+        for (int j = 0; j < RF_OBS_SIZE; j++) env->agents[i].observations[j] = RF_OBS_FROM_FLOAT(obs[j]);
         riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
     }
 }
