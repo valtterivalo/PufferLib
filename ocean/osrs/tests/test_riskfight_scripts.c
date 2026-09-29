@@ -95,7 +95,7 @@ static void test_joint_weapon_shield_mask(void) {
     int shield_action = actions[RF_SHIELD];
     assert(shield_action > 0);
     assert(!osrs_can_equip_from_cell(p, p->inventory_cells, shield_action - 1));
-    float mask[RF_MASK_SIZE];
+    unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, mask);
     assert(mask[RF_ACTION_DIMS[RF_WEAPON] + shield_action] == 1);
     assert(mask[actions[RF_WEAPON]] == 1);

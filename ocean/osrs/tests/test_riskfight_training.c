@@ -134,7 +134,7 @@ int main(void) {
     for (int episode = 0; episode < 25; episode++) {
         same_observations(&first->env.state, &second->env.state);
         for (int i = 0; i < 2; i++) {
-            float mask[RF_MASK_SIZE];
+            unsigned char mask[RF_MASK_SIZE];
             riskfight_write_action_mask(&first->env.state, i, mask);
             for (int j = 0; j < RF_MASK_SIZE; j++) assert(first->masks[i][j] == mask[j]);
             assert(first->rewards[i] == 0 && first->terminals[i] == 0);

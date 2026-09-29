@@ -289,9 +289,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         p->hit_damage = 0;
         p->render_hit_count = 0;
         p->hit_landed_this_tick = 0;
-        EquipmentBonuses bonuses;
-        osrs_sum_equipment_bonuses(p->equipped, &bonuses);
-        update_player_timers(p, bonuses.prayer);
+        update_player_timers(p, encounter_player_prayer_bonus(p));
     }
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;

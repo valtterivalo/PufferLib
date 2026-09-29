@@ -6,7 +6,9 @@ static void riskfight_obs(EncounterState* state, EncounterContext* context, floa
     riskfight_write_observation((RiskfightState*)state, ((RiskfightContext*)context)->human_player, out);
 }
 static void riskfight_mask(EncounterState* state, EncounterContext* context, float* out) {
-    riskfight_write_action_mask((RiskfightState*)state, ((RiskfightContext*)context)->human_player, out);
+    unsigned char mask[RF_MASK_SIZE];
+    riskfight_write_action_mask((RiskfightState*)state, ((RiskfightContext*)context)->human_player, mask);
+    for (int i = 0; i < RF_MASK_SIZE; i++) out[i] = mask[i];
 }
 static float riskfight_reward(EncounterState* state, EncounterContext* context) {
     return ((RiskfightState*)state)->rewards[((RiskfightContext*)context)->human_player];

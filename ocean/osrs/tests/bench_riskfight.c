@@ -6,7 +6,7 @@ typedef struct {
     RiskfightState state;
     RiskfightContext context;
     float obs[2][RF_OBS_SIZE];
-    float masks[2][RF_MASK_SIZE];
+    unsigned char masks[2][RF_MASK_SIZE];
 } BenchFight;
 
 static double seconds(void) {

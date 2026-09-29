@@ -88,11 +88,11 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     }
 }
 
-static void riskfight_write_action_mask(const RiskfightState* s, int agent, float* mask) {
+static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsigned char* mask) {
     const Player* p = &s->env.players[agent];
-    memset(mask, 0, RF_MASK_SIZE * sizeof(float));
-    float* heads[RF_HEADS];
-    float* gear_masks[NUM_GEAR_SLOTS];
+    memset(mask, 0, RF_MASK_SIZE);
+    unsigned char* heads[RF_HEADS];
+    unsigned char* gear_masks[NUM_GEAR_SLOTS];
     int has_empty = osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
     int offset = 0;
     for (int head = 0; head < RF_HEADS; head++) {
@@ -143,46 +143,38 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, floa
         heads[RF_OVERHEAD][action] = p->current_prayer > 0;
 }
 
-static int riskfight_find_kind(const float* obs, OsrsConsumableKind kind) {
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint16_t code = osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]);
-        if (osrs_item_content_metadata(code)->consumable_kind == kind) return slot + 1;
+/** First inventory slot (1-based, 0 when absent) per consumable kind and per item. */
+typedef struct {
+    int kind_slot[OSRS_CONSUMABLE_COUNT];
+    uint8_t item_slot[ITEM_NONE + 1];
+} RiskfightObservedInventory;
+
+static RiskfightObservedInventory riskfight_observed_inventory(const float* obs) {
+    RiskfightObservedInventory inventory = {{0}};
+    for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0; slot--) {
+        const OsrsItemContentMetadata* m = osrs_item_content_metadata(
+            osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]));
+        inventory.kind_slot[m->consumable_kind] = slot + 1;
+        inventory.item_slot[m->item_idx] = slot + 1;
     }
-    return 0;
+    return inventory;
 }
 
-static int riskfight_find_gear(const float* obs, uint8_t item) {
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint16_t code = osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]);
-        if (osrs_item_content_metadata(code)->item_idx == item) return slot + 1;
-    }
-    return 0;
-}
+typedef struct {
+    int hitpoints, prayer, attack, strength, defence, magic;
+    int attack_timer, food_timer, potion_timer, karambwan_timer;
+    uint8_t weapon;
+} RiskfightObservedSelf;
 
-static Player riskfight_observed_self(const float* obs) {
-    Player p;
-    memset(&p, 0, sizeof(p));
-    encounter_init_maxed_player_combat_stats(&p, 99);
-    p.current_hitpoints = (int)lroundf(obs[0] * 121);
-    p.current_prayer = (int)lroundf(obs[1] * 99);
-    p.current_attack = (int)lroundf(obs[2] * 118);
-    p.current_strength = (int)lroundf(obs[3] * 118);
-    p.current_defence = (int)lroundf(obs[4] * 120);
-    p.current_magic = (int)lroundf(obs[5] * 99);
-    p.special_energy = (int)lroundf(obs[6] * 100);
-    p.attack_timer = (int)lroundf(obs[7] * 10);
-    p.food_timer = (int)lroundf(obs[8] * 3);
-    p.potion_timer = (int)lroundf(obs[9] * 3);
-    p.karambwan_timer = (int)lroundf(obs[10] * 3);
-    p.has_attack_timer = p.attack_timer != 0;
-    p.offensive_prayer = p.current_prayer > 0 ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
-    p.fight_style = FIGHT_STYLE_AGGRESSIVE;
-    for (int i = 0; i < NUM_GEAR_SLOTS; i++)
-        p.equipped[i] = (uint8_t)lroundf(obs[RF_EQUIPPED_START + i] * RF_OBSERVATION_ITEM_SCALE);
-    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
-        p.inventory_cells[i] = osrs_inventory_cell_from_content_code(
-            osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + i * RF_INVENTORY_WIDTH]));
-    return p;
+static RiskfightObservedSelf riskfight_observed_self(const float* obs) {
+    return (RiskfightObservedSelf){
+        .hitpoints = (int)lroundf(obs[0] * 121), .prayer = (int)lroundf(obs[1] * 99),
+        .attack = (int)lroundf(obs[2] * 118), .strength = (int)lroundf(obs[3] * 118),
+        .defence = (int)lroundf(obs[4] * 120), .magic = (int)lroundf(obs[5] * 99),
+        .attack_timer = (int)lroundf(obs[7] * 10), .food_timer = (int)lroundf(obs[8] * 3),
+        .potion_timer = (int)lroundf(obs[9] * 3), .karambwan_timer = (int)lroundf(obs[10] * 3),
+        .weapon = (uint8_t)lroundf(obs[RF_EQUIPPED_START + GEAR_SLOT_WEAPON] * RF_OBSERVATION_ITEM_SCALE),
+    };
 }
 
 /** Per-episode script roll source. Scripts stay pure functions of (obs, profile, seed). */
@@ -196,23 +188,24 @@ static int riskfight_sample_event(uint32_t seed, uint32_t tick, uint32_t salt, i
 }
 
 /** Heals below 73 HP, a restore when drained, a combat repot when the boost has faded. */
-static void riskfight_script_consume(const float* obs, const Player* self, int* actions) {
-    int hp = self->current_hitpoints;
+static void riskfight_script_consume(const RiskfightObservedSelf* self,
+    const RiskfightObservedInventory* inventory, int* actions) {
+    int hp = self->hitpoints;
     if (hp < 73 && self->food_timer == 0) {
-        actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN);
-        if (!actions[RF_FOOD]) actions[RF_FOOD] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE);
+        actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_MARLIN];
+        if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_SUMMER_PIE];
     }
-    if (hp < 45 && self->karambwan_timer == 0) actions[RF_COMBO] = riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT);
+    if (hp < 45 && self->karambwan_timer == 0) actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_HALIBUT];
     if (self->potion_timer != 0) return;
-    if (hp < 65) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
+    if (hp < 65) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_BREW];
     if (actions[RF_DRINK]) return;
-    int drained = self->current_prayer <= 40 || self->current_attack < 99 || self->current_strength < 99 ||
-        self->current_defence < 99 || self->current_magic < 99;
+    int drained = self->prayer <= 40 || self->attack < 99 || self->strength < 99 ||
+        self->defence < 99 || self->magic < 99;
     if (drained) {
-        actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SANFEW);
-        if (!actions[RF_DRINK]) actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_RESTORE);
-    } else if (hp >= 65 && (self->current_attack < 110 || self->current_strength < 110 || self->current_defence < 110)) {
-        actions[RF_DRINK] = riskfight_find_kind(obs, OSRS_CONSUMABLE_SUPER_COMBAT);
+        actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SANFEW];
+        if (!actions[RF_DRINK]) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_RESTORE];
+    } else if (hp >= 65 && (self->attack < 110 || self->strength < 110 || self->defence < 110)) {
+        actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_SUPER_COMBAT];
     }
 }
 
@@ -222,25 +215,26 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     int consume_ticks, int* actions) {
     memset(actions, 0, RF_HEADS * sizeof(int));
     uint32_t tick = (uint32_t)lroundf(obs[20] * RF_OBSERVATION_TICK_SCALE);
-    Player self = riskfight_observed_self(obs);
+    RiskfightObservedSelf self = riskfight_observed_self(obs);
+    RiskfightObservedInventory inventory = riskfight_observed_inventory(obs);
     uint32_t attack_tick = tick + (uint32_t)self.attack_timer;
-    int hp = self.current_hitpoints;
+    int hp = self.hitpoints;
     const float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
     actions[RF_PRIMARY] = RF_ATTACK;
     actions[RF_PRAYER] = OFFENSIVE_PRAYER_PIETY;
     actions[RF_STYLE] = FIGHT_STYLE_AGGRESSIVE;
     int consume_band = (hp >= 40) + (hp >= 65) + (hp >= 73) + (hp >= 90);
     if (riskfight_sample_event(seed, tick, 11, profile->consume_pm[consume_band]))
-        riskfight_script_consume(obs, &self, actions);
+        riskfight_script_consume(&self, &inventory, actions);
     if (actions[RF_FOOD] || actions[RF_DRINK] || actions[RF_COMBO]) actions[RF_PRIMARY] = RF_STOP;
     actions[RF_VENGEANCE] = !obs[11] && obs[12] <= 0.02f && riskfight_sample_event(seed, tick, 13, profile->veng_pm);
 
     int opp_bar = (int)lroundf(opponent[0] * OSRS_PLAYER_HEALTH_BAR_SCALE);
     OsrsHealthBarRange opp_hp = osrs_health_bar_range(opp_bar, OSRS_PLAYER_HEALTH_BAR_SCALE, 99, 121);
     int opp_upper = opp_hp.kind == OSRS_HEALTH_BAR_KNOWN ? opp_hp.upper : 121;
-    int holding_maul = pvp_is_maul(self.equipped[GEAR_SLOT_WEAPON]);
+    int holding_maul = pvp_is_maul(self.weapon);
     int axe_band = (opp_bar >= 12) + (opp_bar >= 24);
-    int axe_swing = hp < self.base_hitpoints &&
+    int axe_swing = hp < 99 &&
         riskfight_sample_event(seed, attack_tick, 23, profile->axe_pm[axe_band]);
     int vw_spec = obs[6] >= 0.5f && opponent[0] < 0.65f &&
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
@@ -249,18 +243,17 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? ITEM_GRANITE_MAUL_ORNATE :
         axe_swing ? ITEM_DHAROKS_GREATAXE : ITEM_ABYSSAL_TENTACLE;
     actions[RF_SPECIAL] = maul_spec ? 2 : !holding_maul && vw_spec != (obs[13] >= 0.5f);
-    actions[RF_WEAPON] = riskfight_find_gear(obs, weapon);
+    actions[RF_WEAPON] = inventory.item_slot[weapon];
     if (!item_is_two_handed(weapon))
-        actions[RF_SHIELD] = riskfight_find_gear(obs, ITEM_AVERNIC_DEFENDER);
+        actions[RF_SHIELD] = inventory.item_slot[ITEM_AVERNIC_DEFENDER];
     actions[RF_ORB] = weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 &&
         riskfight_sample_event(seed, attack_tick, 24, profile->orb_axe_pm);
-    actions[RF_RING] = riskfight_find_gear(obs,
-        obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING);
+    actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
     int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
-    int out_of_heals = !riskfight_find_kind(obs, OSRS_CONSUMABLE_MARLIN) &&
-        !riskfight_find_kind(obs, OSRS_CONSUMABLE_SUMMER_PIE) &&
-        !riskfight_find_kind(obs, OSRS_CONSUMABLE_HALIBUT) && !riskfight_find_kind(obs, OSRS_CONSUMABLE_BREW);
+    int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&
+        !inventory.kind_slot[OSRS_CONSUMABLE_SUMMER_PIE] &&
+        !inventory.kind_slot[OSRS_CONSUMABLE_HALIBUT] && !inventory.kind_slot[OSRS_CONSUMABLE_BREW];
     if ((hp < 30 && out_of_heals) ||
             riskfight_sample_event(seed, tick, 31, profile->tab_pm[supply_band][hp < 40]))
         actions[RF_PRIMARY] = RF_TELEPORT;

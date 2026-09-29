@@ -136,7 +136,7 @@ static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
 static void riskfight_script(const float*, const RiskfightProfile*, uint32_t, int, int*);
-static void riskfight_write_action_mask(const RiskfightState*, int, float*);
+static void riskfight_write_action_mask(const RiskfightState*, int, unsigned char*);
 
 static void riskfight_init_context(EncounterContext* context) {
     RiskfightContext* ctx = (RiskfightContext*)context;

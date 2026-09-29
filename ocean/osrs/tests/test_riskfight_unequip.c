@@ -48,7 +48,7 @@ static void test_policy_gear_heads(void) {
     reset();
     int actions[2 * RF_HEADS] = {0};
     actions[RF_HEAD] = actions[RF_CAPE] = actions[RF_NECK] = actions[RF_BODY] = actions[RF_LEGS] = RF_UNEQUIP;
-    float mask[RF_MASK_SIZE];
+    unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, mask);
     int offset = 0;
     for (int h = 0; h < RF_HEADS; h++) {

@@ -20,7 +20,7 @@ static int teleport_slot(void) {
 }
 
 static int mask_allows_teleport(void) {
-    float mask[RF_MASK_SIZE];
+    unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, mask);
     int offset = 0;
     for (int i = 0; i < RF_PRIMARY; i++) offset += RF_ACTION_DIMS[i];

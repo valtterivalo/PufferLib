@@ -73,11 +73,9 @@ static inline void puf_set_bot_policy(Env* env, int bot_policy) {
 }
 
 static void riskfight_native_observe(Env* env) {
-    float mask[RF_MASK_SIZE];
     for (int i = 0; i < env->num_agents; i++) {
         riskfight_write_observation(&env->state, i, env->agents[i].observations);
-        riskfight_write_action_mask(&env->state, i, mask);
-        for (int j = 0; j < RF_MASK_SIZE; j++) env->agents[i].action_mask[j] = (unsigned char)mask[j];
+        riskfight_write_action_mask(&env->state, i, env->agents[i].action_mask);
     }
 }
 static void riskfight_native_reset(Env* env) {

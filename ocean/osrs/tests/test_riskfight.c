@@ -251,7 +251,7 @@ static void test_hidden_state_and_replay(void) {
         step(actions);
     }
     assert(memcmp(&state, &expected, sizeof(state)) == 0);
-    float mask[RF_MASK_SIZE]; riskfight_write_action_mask(&state, 0, mask);
+    unsigned char mask[RF_MASK_SIZE]; riskfight_write_action_mask(&state, 0, mask);
 }
 static void test_tick_order_and_boundaries(void) {
     reset(); state.env.pid_holder = 0;
@@ -369,7 +369,7 @@ static void test_prayer_actions(void) {
 
     reset();
     state.env.players[0].current_prayer = 0;
-    float mask[RF_MASK_SIZE];
+    unsigned char mask[RF_MASK_SIZE];
     riskfight_write_action_mask(&state, 0, mask);
     assert(RF_ACTION_DIMS[RF_OVERHEAD] == 7);
     int offset = 0;

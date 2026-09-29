@@ -1124,9 +1124,10 @@ static inline int encounter_offensive_drain_effect(OffensivePrayer prayer) {
 }
 
 static inline int encounter_player_prayer_bonus(const Player* p) {
-    EquipmentBonuses bonuses;
-    osrs_sum_equipment_bonuses(p->equipped, &bonuses);
-    return bonuses.prayer;
+    int prayer = 0;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++)
+        if (p->equipped[slot] != ITEM_NONE) prayer += ITEM_DATABASE[p->equipped[slot]].prayer;
+    return prayer;
 }
 
 static inline void encounter_drain_all_prayers(Player* p, int prayer_bonus) {
