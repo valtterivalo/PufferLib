@@ -34,4 +34,16 @@
 #define MODEL_COLOSSEUM_SOL_SAND_PILLAR    51243
 #define ANIM_COLOSSEUM_SOL_SAND_PILLAR     10812
 
+#define ANIM_SEQ_IDLE           808
+#define ANIM_SEQ_WALK           819
+#define ANIM_SEQ_RUN            824
+#define ANIM_SEQ_EAT            829
+#define ANIM_SEQ_DEATH          836
+#define ANIM_SEQ_CAST_STANDARD  1162
+#define ANIM_SEQ_CAST_BARRAGE   1979
+#define ANIM_SEQ_CAST_VENG      8317
+#define ANIM_SEQ_TAB_BREAK      4069
+#define ANIM_SEQ_BLOCK_SHIELD   1156
+#define ANIM_SEQ_BLOCK_MELEE    424
+
 #endif

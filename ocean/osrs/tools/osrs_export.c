@@ -1,10 +1,13 @@
 #include "ocean/osrs/cache/osrs_cache_anim.h"
+#include "ocean/osrs/cache/osrs_cache_item.h"
 #include "ocean/osrs/cache/osrs_cache_map.h"
 #include "ocean/osrs/cache/osrs_cache_maya.h"
 #include "ocean/osrs/cache/osrs_cache_model.h"
 #include "ocean/osrs/osrs_asset_formats.h"
 #include "ocean/osrs/osrs_collision.h"
 #include "ocean/osrs/osrs_combat_visuals.h"
+#include "ocean/osrs/osrs_combat_visuals_generated.h"
+#include "ocean/osrs/osrs_items.h"
 
 typedef struct {
     int x0, y0, x1, y1;
@@ -1250,6 +1253,251 @@ static void export_projectiles(OsrsCache* cache, const char* out_dir) {
     printf("projectiles: %d spotanims, %d raw models, %d sequences\n", set.gfx.count, set.raw_count, pack.seq_count);
 }
 
+enum {
+    ITEM_MODEL_BASE = 0xE0000,
+    BODY_MODEL_BASE = 0xF0000,
+    EQUIP_RENDER_FLAG_TWO_HANDED = 1u,
+    EQUIP_RENDER_FLAG_WEARPOS_AUTHORITY = 2u,
+    EQUIP_MISSING = 0xFFFFFFFFu,
+};
+
+enum { BP_HEAD = 0, BP_JAW, BP_TORSO, BP_ARMS, BP_HANDS, BP_LEGS, BP_FEET, BODY_PART_COUNT };
+static const char* const BODY_PART_NAMES[BODY_PART_COUNT] = {"HEAD", "JAW", "TORSO", "ARMS", "HANDS", "LEGS", "FEET"};
+
+static const int DEFAULT_MALE_KITS[BODY_PART_COUNT] = {0, 10, 18, 26, 34, 36, 42};
+
+enum {
+    WEARPOS_HAT = 0, WEARPOS_BACK = 1, WEARPOS_FRONT = 2, WEARPOS_RIGHT_HAND = 3, WEARPOS_TORSO = 4,
+    WEARPOS_LEFT_HAND = 5, WEARPOS_ARMS = 6, WEARPOS_LEGS = 7, WEARPOS_HEAD = 8, WEARPOS_HANDS = 9,
+    WEARPOS_FEET = 10, WEARPOS_JAW = 11,
+};
+
+static const struct { int item_id, ready, walk, run; } STANCE_OVERRIDES[] = {
+    {11802, 7053, 7052, 7043}, {26233, 7053, 7052, 7043}, {11806, 7053, 7052, 7043},
+    {4153, 1662, 1663, 1664}, {24225, 1662, 1663, 1664}, {19481, 7220, 7223, 7221},
+    {27690, 244, 247, 248}, {4718, 2065, 2064, -1},
+};
+
+static void stance_override(int item_id, int* ready, int* walk, int* run) {
+    *ready = -1, *walk = -1, *run = -1;
+    for (size_t i = 0; i < sizeof(STANCE_OVERRIDES) / sizeof(STANCE_OVERRIDES[0]); i++)
+        if (STANCE_OVERRIDES[i].item_id == item_id) {
+            *ready = STANCE_OVERRIDES[i].ready, *walk = STANCE_OVERRIDES[i].walk, *run = STANCE_OVERRIDES[i].run;
+            return;
+        }
+}
+
+static uint32_t equip_hide_mask(const ItemDef* item, int equip_slot) {
+    uint32_t mask = 0;
+    int wearpos[3] = {item->wearpos1, item->wearpos2, item->wearpos3};
+    for (int i = 0; i < 3; i++) {
+        if (wearpos[i] == WEARPOS_TORSO) mask |= 1u << BP_TORSO;
+        else if (wearpos[i] == WEARPOS_ARMS) mask |= 1u << BP_ARMS;
+        else if (wearpos[i] == WEARPOS_LEGS) mask |= 1u << BP_LEGS;
+        else if (wearpos[i] == WEARPOS_HEAD) mask |= 1u << BP_HEAD;
+        else if (wearpos[i] == WEARPOS_HANDS) mask |= 1u << BP_HANDS;
+        else if (wearpos[i] == WEARPOS_FEET) mask |= 1u << BP_FEET;
+        else if (wearpos[i] == WEARPOS_JAW) mask |= 1u << BP_JAW;
+    }
+    int has_wearpos = item->wearpos1 >= 0 || item->wearpos2 >= 0 || item->wearpos3 >= 0;
+    if (mask == 0 && !has_wearpos) {
+        if (equip_slot == SLOT_BODY) mask |= 1u << BP_TORSO;
+        else if (equip_slot == SLOT_LEGS) mask |= 1u << BP_LEGS;
+        else if (equip_slot == SLOT_HANDS) mask |= 1u << BP_HANDS;
+        else if (equip_slot == SLOT_FEET) mask |= 1u << BP_FEET;
+    }
+    return mask;
+}
+
+static uint32_t equip_render_flags(const ItemDef* item, int equip_slot, int two_handed) {
+    uint32_t flags = 0;
+    if (item->wearpos1 >= 0 || item->wearpos2 >= 0 || item->wearpos3 >= 0) flags |= EQUIP_RENDER_FLAG_WEARPOS_AUTHORITY;
+    if (equip_slot == SLOT_WEAPON &&
+        (two_handed || item->wearpos2 == WEARPOS_LEFT_HAND || item->wearpos3 == WEARPOS_LEFT_HAND))
+        flags |= EQUIP_RENDER_FLAG_TWO_HANDED;
+    return flags;
+}
+
+static uint32_t u32_or_missing(int v) { return v < 0 ? EQUIP_MISSING : (uint32_t)v; }
+
+typedef struct {
+    uint16_t item_id;
+    uint32_t inv_model, wield_model, hide_mask, equip_slot;
+    uint32_t wearpos1, wearpos2, wearpos3, render_flags, ready, walk, run;
+} EquipRow;
+
+static void pack_equipment_seqs(NpcPack* p) {
+    static const int fixed[] = {
+        ANIM_SEQ_IDLE, ANIM_SEQ_WALK, ANIM_SEQ_RUN, ANIM_SEQ_EAT, ANIM_SEQ_DEATH, ANIM_SEQ_CAST_STANDARD,
+        ANIM_SEQ_CAST_BARRAGE, ANIM_SEQ_CAST_VENG, ANIM_SEQ_TAB_BREAK, ANIM_SEQ_BLOCK_SHIELD, ANIM_SEQ_BLOCK_MELEE,
+        OSRS_PLAYER_UNARMED_ATTACK_ANIM, OSRS_PLAYER_POWERED_STAFF_ATTACK_ANIM,
+    };
+    for (size_t i = 0; i < sizeof(fixed) / sizeof(*fixed); i++) pack_seq(p, fixed[i]);
+    pack_seq(p, OSRS_COMBAT_VISUAL_VOIDWAKER_SPECIAL_ROW.attack_anim_id);
+    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_ROW_COUNT; i++)
+        if (OSRS_COMBAT_VISUAL_ROWS[i].kind != OSRS_COMBAT_VISUAL_KIND_NPC) pack_seq(p, OSRS_COMBAT_VISUAL_ROWS[i].attack_anim_id);
+    for (size_t i = 0; i < sizeof(OSRS_COMBAT_SPECIAL_FALLBACKS) / sizeof(*OSRS_COMBAT_SPECIAL_FALLBACKS); i++)
+        pack_seq(p, OSRS_COMBAT_SPECIAL_FALLBACKS[i].special_attack_anim_id);
+}
+
+static void write_tanim(const char* path, const Defs* d) {
+    FILE* f = fopen(path, "wb");
+    assert(f);
+    uint32_t header[3] = {TANM_MAGIC, TANM_VERSION, 0};
+    fwrite(header, sizeof(header), 1, f);
+    uint32_t count = 0;
+    for (int t = 0; t < d->texture_count; t++) {
+        if (!d->textures[t].present || !d->textures[t].speed) continue;
+        uint32_t texture_id = (uint32_t)t;
+        uint16_t x = (uint16_t)(t % ATLAS_COLUMNS * ATLAS_CELL), y = (uint16_t)(t / ATLAS_COLUMNS * ATLAS_CELL);
+        uint16_t w = ATLAS_CELL, h = ATLAS_CELL, pad = 0;
+        uint8_t direction = (uint8_t)d->textures[t].direction, speed = (uint8_t)d->textures[t].speed;
+        fwrite(&texture_id, 4, 1, f);
+        fwrite(&x, 2, 1, f);
+        fwrite(&y, 2, 1, f);
+        fwrite(&w, 2, 1, f);
+        fwrite(&h, 2, 1, f);
+        fwrite(&direction, 1, 1, f);
+        fwrite(&speed, 1, 1, f);
+        fwrite(&pad, 2, 1, f);
+        count++;
+    }
+    fseek(f, 0, SEEK_SET);
+    header[2] = count;
+    fwrite(header, sizeof(header), 1, f);
+    fclose(f);
+}
+
+static void write_item_model_header(const char* out_dir, const EquipRow* rows, int row_count) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/item_models.h", out_dir);
+    FILE* h = fopen(path, "w");
+    assert(h);
+    fprintf(h, "/* generated by ocean/osrs/tools/osrs_export.c equipment, do not edit */\n");
+    fprintf(h, "#ifndef ITEM_MODELS_H\n#define ITEM_MODELS_H\n\n#include <stdint.h>\n\n");
+    fprintf(h, "#define ITEM_RENDER_MODEL_MISSING 0xFFFFFFFFu\n");
+    fprintf(h, "#define ITEM_RENDER_FLAG_TWO_HANDED %uu\n", EQUIP_RENDER_FLAG_TWO_HANDED);
+    fprintf(h, "#define ITEM_RENDER_FLAG_WEARPOS_AUTHORITY %uu\n\n", EQUIP_RENDER_FLAG_WEARPOS_AUTHORITY);
+    fprintf(h, "typedef struct {\n"
+               "    uint16_t item_id;\n"
+               "    uint32_t inv_model;\n"
+               "    uint32_t wield_model;\n"
+               "    uint32_t hide_body_mask;\n"
+               "    uint32_t equip_slot;\n"
+               "    uint32_t wearpos1;\n"
+               "    uint32_t wearpos2;\n"
+               "    uint32_t wearpos3;\n"
+               "    uint32_t render_flags;\n"
+               "    uint32_t ready_anim_id;\n"
+               "    uint32_t walk_anim_id;\n"
+               "    uint32_t run_anim_id;\n"
+               "} ItemModelMapping;\n\n");
+    fprintf(h, "#define ITEM_MODEL_COUNT %d\n\n", row_count);
+    fprintf(h, "static const ItemModelMapping ITEM_MODEL_MAP[] = {\n");
+    for (int i = 0; i < row_count; i++) {
+        const EquipRow* r = &rows[i];
+        fprintf(h, "    { %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u },\n", r->item_id, r->inv_model,
+            r->wield_model, r->hide_mask, r->equip_slot, r->wearpos1, r->wearpos2, r->wearpos3, r->render_flags,
+            r->ready, r->walk, r->run);
+    }
+    fprintf(h, "};\n\n#endif\n");
+    fclose(h);
+}
+
+static void write_player_model_header(const char* out_dir) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/player_models.h", out_dir);
+    FILE* h = fopen(path, "w");
+    assert(h);
+    fprintf(h, "/* generated by ocean/osrs/tools/osrs_export.c equipment, do not edit */\n");
+    fprintf(h, "#ifndef PLAYER_MODELS_H\n#define PLAYER_MODELS_H\n\n#include <stdint.h>\n\n");
+    for (int bp = 0; bp < BODY_PART_COUNT; bp++) fprintf(h, "#define BODY_PART_%s %d\n", BODY_PART_NAMES[bp], bp);
+    fprintf(h, "#define BODY_PART_COUNT %d\n\n", BODY_PART_COUNT);
+    fprintf(h, "static const uint32_t DEFAULT_BODY_MODELS[BODY_PART_COUNT] = {\n");
+    for (int bp = 0; bp < BODY_PART_COUNT; bp++)
+        fprintf(h, "    0x%X,  /* %s */\n", BODY_MODEL_BASE + bp, BODY_PART_NAMES[bp]);
+    fprintf(h, "};\n\n#endif /* PLAYER_MODELS_H */\n");
+    fclose(h);
+}
+
+static void export_equipment(OsrsCache* cache, const char* out_dir) {
+    Defs defs = {.cache = cache};
+    defs_load_floors(&defs);
+    NpcPack pack = {0};
+
+    CacheGroup idk_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_IDK);
+    for (int bp = 0; bp < BODY_PART_COUNT; bp++) {
+        const CacheFile* kf = cache_group_file(&idk_files, DEFAULT_MALE_KITS[bp]);
+        assert(kf);
+        IdentityKitDef kit = kit_decode(kf);
+        assert(kit.model_count > 0);
+        Model merged = build_merged(&defs, kit.model_ids, kit.model_count);
+        for (int i = 0; i < kit.recolor_count; i++) model_recolor(&merged, kit.recolor_from[i], kit.recolor_to[i]);
+        for (int i = 0; i < kit.retexture_count; i++) model_retexture(&merged, kit.retexture_from[i], kit.retexture_to[i]);
+        pack_model(&pack, BODY_MODEL_BASE + bp, merged, 64, 850, 128, 128);
+    }
+
+    CacheGroup obj_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_OBJ);
+    EquipRow* rows = calloc((size_t)NUM_ITEMS, sizeof(EquipRow));
+    for (int i = 0; i < NUM_ITEMS; i++) {
+        uint16_t item_id = ITEM_DATABASE[i].item_id;
+        const CacheFile* f = cache_group_file(&obj_files, item_id);
+        assert(f);
+        ItemDef item = item_decode(f);
+
+        int wield_ids[3], wield_count = 0;
+        for (int k = 0; k < 3; k++)
+            if (item.male_model[k] >= 0) wield_ids[wield_count++] = item.male_model[k];
+        uint32_t wield_model = EQUIP_MISSING;
+        if (wield_count) {
+            Model merged = build_merged(&defs, wield_ids, wield_count);
+            for (int r = 0; r < item.recolor_count; r++) model_recolor(&merged, item.recolor_from[r], item.recolor_to[r]);
+            for (int r = 0; r < item.retexture_count; r++)
+                model_retexture(&merged, item.retexture_from[r], item.retexture_to[r]);
+            if (item.male_offset) model_translate(&merged, 0, item.male_offset, 0);
+            wield_model = (uint32_t)(ITEM_MODEL_BASE + i);
+            pack_model(&pack, (int)wield_model, merged, 64, 850, 128, 128);
+        }
+
+        int equip_slot = ITEM_DATABASE[i].slot;
+        int ready, walk, run;
+        stance_override(item_id, &ready, &walk, &run);
+        rows[i] = (EquipRow){
+            .item_id = item_id,
+            .inv_model = u32_or_missing(item.inv_model),
+            .wield_model = wield_model,
+            .hide_mask = equip_hide_mask(&item, equip_slot),
+            .equip_slot = (uint32_t)equip_slot,
+            .wearpos1 = u32_or_missing(item.wearpos1),
+            .wearpos2 = u32_or_missing(item.wearpos2),
+            .wearpos3 = u32_or_missing(item.wearpos3),
+            .render_flags = equip_render_flags(&item, equip_slot, ITEM_DATABASE[i].two_handed),
+            .ready = u32_or_missing(ready),
+            .walk = u32_or_missing(walk),
+            .run = u32_or_missing(run),
+        };
+        pack_seq(&pack, ready);
+        pack_seq(&pack, walk);
+        pack_seq(&pack, run);
+    }
+    pack_equipment_seqs(&pack);
+
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/equipment.models", out_dir);
+    write_models(path, &defs, &pack);
+    snprintf(path, sizeof(path), "%s/equipment.anims", out_dir);
+    write_anims(path, cache, &pack, &(SeqBakeTable){0});
+    snprintf(path, sizeof(path), "%s/equipment.atlas", out_dir);
+    write_atlas(path, &defs);
+    snprintf(path, sizeof(path), "%s/equipment.tanim", out_dir);
+    write_tanim(path, &defs);
+    write_item_model_header(out_dir, rows, NUM_ITEMS);
+    write_player_model_header(out_dir);
+    printf("equipment: %d body parts, %d items, %d models, %d sequences\n", BODY_PART_COUNT, NUM_ITEMS,
+        pack.model_count, pack.seq_count);
+    free(rows);
+}
+
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
     Defs defs = {.cache = cache};
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
@@ -1267,7 +1515,8 @@ static void usage(void) {
         "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1]\n"
         "       osrs_export <cache_dir> <out_dir> npcs <name> "
         "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
-        "       osrs_export <cache_dir> <out_dir> projectiles\n");
+        "       osrs_export <cache_dir> <out_dir> projectiles\n"
+        "       osrs_export <cache_dir> <out_dir> equipment\n");
     exit(2);
 }
 
@@ -1313,6 +1562,10 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[3], "projectiles") == 0 && argc == 4) {
         export_projectiles(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "equipment") == 0) {
+        export_equipment(cache, out_dir);
         return 0;
     }
     usage();

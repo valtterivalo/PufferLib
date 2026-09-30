@@ -42,17 +42,6 @@ typedef float obs_t;
 #define RENDER_HISTORY_INITIAL_CAPACITY 2000
 #define MAX_RENDER_ENTITIES    64
 
-#define ANIM_SEQ_IDLE           808
-#define ANIM_SEQ_WALK           819
-#define ANIM_SEQ_RUN            824
-#define ANIM_SEQ_EAT            829
-#define ANIM_SEQ_DEATH          836
-#define ANIM_SEQ_CAST_STANDARD  1162
-#define ANIM_SEQ_CAST_BARRAGE   1979
-#define ANIM_SEQ_CAST_VENG      8317
-#define ANIM_SEQ_TAB_BREAK      4069
-#define ANIM_SEQ_BLOCK_SHIELD   1156
-#define ANIM_SEQ_BLOCK_MELEE    424
 
 #define RENDER_PANEL_SCREEN_W  ((int)(RENDER_PANEL_WIDTH * RENDER_UI_SCALE + 0.5f))
 #define RENDER_GRID_W (RENDER_WINDOW_W - RENDER_PANEL_SCREEN_W)
