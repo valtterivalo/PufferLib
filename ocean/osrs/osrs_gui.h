@@ -649,6 +649,8 @@ static const int GUI_SPELL_ON_SPRITE_IDS[GUI_NUM_SPELLS] = {
     345, 346, 347, 348,
 };
 
+enum { GUI_SPELL_VENGEANCE_SPRITE_ID = 564 };
+
 static const int GUI_SPELL_OFF_SPRITE_IDS[GUI_NUM_SPELLS] = {
     379, 387, 383, 375,
     380, 388, 384, 376,
@@ -756,7 +758,9 @@ static void gui_load_sprites(GuiState* gs) {
         gs->spell_on[i] = gui_require_texture(OSRS_ASSET(on_logical_path));
         gs->spell_off[i] = gui_require_texture(OSRS_ASSET(off_logical_path));
     }
-    gs->veng_spell = gui_require_texture(OSRS_ASSET("sprites/gui/spell_vengeance.png"));
+    char veng_path[64];
+    snprintf(veng_path, sizeof(veng_path), "sprites/gui/%d.png", GUI_SPELL_VENGEANCE_SPRITE_ID);
+    gs->veng_spell = gui_require_texture(OSRS_ASSET(veng_path));
 
     gs->slot_tile = gui_require_texture(OSRS_ASSET("sprites/gui/slot_tile.png"));
 

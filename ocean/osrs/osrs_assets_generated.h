@@ -27,16 +27,14 @@ typedef struct {
 static const char* const OSRS_ASSET_CORE_PATHS[] = {
     "equipment.models",
     "equipment.anims",
-    "equipment.atlas",
-    "equipment.tanim",
     "projectiles.models",
-    "projectiles.atlas",
     "projectiles.anims",
     "spotanims.bin",
     "fonts/runescape.ttf",
     "fonts/runescape_small.ttf",
     "ui/interfaces.bin",
-    "ui/interface_manifest.json",
+    "textures.atlas",
+    "textures.tanim",
 };
 
 static const char* const OSRS_ASSET_INFERNO_PATHS[] = {
@@ -44,12 +42,8 @@ static const char* const OSRS_ASSET_INFERNO_PATHS[] = {
     "inferno.anims",
     "inferno.terrain",
     "inferno.objects",
-    "inferno.atlas",
     "inferno_zuk.objects",
     "inferno.cmap",
-    "inferno_npcs.models",
-    "inferno_npcs.anims",
-    "inferno_npcs.atlas",
 };
 
 static const char* const OSRS_ASSET_ZULRAH_PATHS[] = {
@@ -57,18 +51,15 @@ static const char* const OSRS_ASSET_ZULRAH_PATHS[] = {
     "zulrah.anims",
     "zulrah.terrain",
     "zulrah.objects",
-    "zulrah.atlas",
     "zulrah.cmap",
 };
 
 static const char* const OSRS_ASSET_COLOSSEUM_PATHS[] = {
     "colosseum.terrain",
     "colosseum.objects",
-    "colosseum.atlas",
     "colosseum.cmap",
-    "colosseum_npcs.models",
-    "colosseum_npcs.anims",
-    "colosseum_npcs.atlas",
+    "colosseum.models",
+    "colosseum.anims",
     "sprites/colosseum/modifiers/5534.png",
     "sprites/colosseum/modifiers/5535.png",
     "sprites/colosseum/modifiers/5536.png",
@@ -1045,18 +1036,9 @@ static const char* const OSRS_ASSET_GUI_PATHS[] = {
     "sprites/gui/osrs_stretch_side_columns_1.png",
     "sprites/gui/osrs_stretch_side_topbottom_0.png",
     "sprites/gui/osrs_stretch_side_topbottom_1.png",
-    "sprites/gui/pray_augury.png",
-    "sprites/gui/pray_chivalry.png",
-    "sprites/gui/pray_eagle_eye.png",
-    "sprites/gui/pray_mage.png",
     "sprites/gui/pray_melee.png",
-    "sprites/gui/pray_mystic_might.png",
-    "sprites/gui/pray_piety.png",
     "sprites/gui/pray_preserve.png",
-    "sprites/gui/pray_range.png",
-    "sprites/gui/pray_redemption.png",
     "sprites/gui/pray_retribution.png",
-    "sprites/gui/pray_rigour.png",
     "sprites/gui/pray_smite.png",
     "sprites/gui/prayerglow_0.png",
     "sprites/gui/prayerglow_1.png",
@@ -1188,8 +1170,6 @@ static const char* const OSRS_ASSET_GUI_PATHS[] = {
     "sprites/gui/sideicons_interface_8.png",
     "sprites/gui/sideicons_interface_9.png",
     "sprites/gui/skill_attack.png",
-    "sprites/gui/skill_defence.png",
-    "sprites/gui/skill_hitpoints.png",
     "sprites/gui/skill_icon_0.png",
     "sprites/gui/skill_icon_1.png",
     "sprites/gui/skill_icon_10.png",
@@ -1214,10 +1194,6 @@ static const char* const OSRS_ASSET_GUI_PATHS[] = {
     "sprites/gui/skill_icon_7.png",
     "sprites/gui/skill_icon_8.png",
     "sprites/gui/skill_icon_9.png",
-    "sprites/gui/skill_magic.png",
-    "sprites/gui/skill_prayer.png",
-    "sprites/gui/skill_ranged.png",
-    "sprites/gui/skill_strength.png",
     "sprites/gui/slanted_tab.png",
     "sprites/gui/slanted_tab_hover.png",
     "sprites/gui/slot_ammo.png",
@@ -1234,15 +1210,6 @@ static const char* const OSRS_ASSET_GUI_PATHS[] = {
     "sprites/gui/slot_tile.png",
     "sprites/gui/slot_weapon.png",
     "sprites/gui/special_attack.png",
-    "sprites/gui/spell_blood_barrage.png",
-    "sprites/gui/spell_blood_blitz.png",
-    "sprites/gui/spell_blood_burst.png",
-    "sprites/gui/spell_blood_rush.png",
-    "sprites/gui/spell_ice_barrage.png",
-    "sprites/gui/spell_ice_blitz.png",
-    "sprites/gui/spell_ice_burst.png",
-    "sprites/gui/spell_ice_rush.png",
-    "sprites/gui/spell_vengeance.png",
     "sprites/gui/standard_spell_off_0.png",
     "sprites/gui/standard_spell_off_1.png",
     "sprites/gui/standard_spell_off_10.png",
@@ -1659,7 +1626,6 @@ static const char* const OSRS_ASSET_ITEMS_PATHS[] = {
 static const char* const OSRS_ASSET_HEADERS_PATHS[] = {
     "item_models.h",
     "player_models.h",
-    "npc_models.h",
     "npc_models_inferno.h",
     "npc_models_zulrah.h",
     "npc_models_colosseum.h",
@@ -1667,36 +1633,33 @@ static const char* const OSRS_ASSET_HEADERS_PATHS[] = {
 
 static const char* const OSRS_ASSET_COMBAT_VISUALS_PATHS[] = {
     "projectiles.models",
-    "projectiles.atlas",
     "projectiles.anims",
     "spotanims.bin",
     "equipment.anims",
     "inferno.anims",
     "zulrah.anims",
+    "textures.atlas",
+    "textures.tanim",
 };
 
 static const char* const OSRS_ASSET_WILDERNESS_PATHS[] = {
     "wilderness.cmap",
     "wilderness.terrain",
     "wilderness.objects",
-    "wilderness.atlas",
 };
 
 static const char* const OSRS_ASSET_PVP_PATHS[] = {
     "equipment.models",
     "equipment.anims",
-    "equipment.atlas",
-    "equipment.tanim",
     "projectiles.models",
-    "projectiles.atlas",
     "projectiles.anims",
     "spotanims.bin",
     "ui/interfaces.bin",
-    "ui/interface_manifest.json",
     "wilderness.cmap",
     "wilderness.terrain",
     "wilderness.objects",
-    "wilderness.atlas",
+    "textures.atlas",
+    "textures.tanim",
 };
 
 static const OsrsAssetGroup OSRS_ASSET_GROUPS[OSRS_ASSET_GROUP_COUNT] = {
