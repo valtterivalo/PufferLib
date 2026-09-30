@@ -29,7 +29,6 @@ void* osrs_puffer_render_create(
     renderer->env.encounter_context = encounter_context;
     renderer->env.tick = def->get_tick(encounter_state, encounter_context);
     renderer->last_tick = renderer->env.tick;
-    visual_load_encounter_collision_map(def, &renderer->env, def->name);
     visual_init_render_scene(&renderer->env, def->name, NULL);
     return renderer;
 }
@@ -89,6 +88,5 @@ void osrs_puffer_render_draw(void* opaque_renderer) {
 void osrs_puffer_render_destroy(void* opaque_renderer) {
     OsrsPufferRenderer* renderer = (OsrsPufferRenderer*)opaque_renderer;
     render_destroy_client((RenderClient*)renderer->env.client);
-    collision_map_free((CollisionMap*)renderer->env.collision_map);
     free(renderer);
 }
