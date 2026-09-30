@@ -244,14 +244,6 @@ static void inf_npc_projectile_fallback(
             *model_id = INF_GFX_1374_MODEL;
             *anim_id = INF_GFX_1374_ANIM;
             return;
-        case INF_NPC_BLOB_RANGE:
-            *model_id = INF_GFX_1379_MODEL;
-            *anim_id = INF_GFX_1379_ANIM;
-            return;
-        case INF_NPC_BLOB_MAGE:
-            *model_id = INF_GFX_1381_MODEL;
-            *anim_id = INF_GFX_1381_ANIM;
-            return;
 
         default:
             return;

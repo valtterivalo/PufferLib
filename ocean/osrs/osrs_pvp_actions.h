@@ -8,6 +8,7 @@
 #include "osrs_human_input_types.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_combat.h"
+#include "osrs_pvp_maul.h"
 #include "osrs_pvp_movement.h"
 #include "osrs_pvp_observations.h"
 #include "osrs_encounter.h"

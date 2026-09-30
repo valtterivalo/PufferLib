@@ -1251,10 +1251,11 @@ static void route_generation_wrap_operation(void) {
     EncounterArenaTopology* topology = route_test_topology(&geometry);
     EncounterRouteInput input = route_test_input(topology, &blockers);
     int stale_index = 2 * topology->height + 1;
-    encounter_route_scratch.current_generation = UINT16_MAX;
-    encounter_route_scratch.generation[stale_index] = 2;
-    encounter_route_scratch.depth[stale_index] = 0;
-    encounter_route_scratch.via[stale_index] = VIA_START;
+    EncounterRouteScratch* scratch = encounter_route_scratch_get();
+    scratch->current_generation = UINT16_MAX;
+    scratch->generation[stale_index] = 2;
+    scratch->depth[stale_index] = 0;
+    scratch->via[stale_index] = VIA_START;
 
     input.cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_REVERSE;
     EncounterRouteResult reverse = {0};
