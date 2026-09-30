@@ -7404,7 +7404,7 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].src_y == s.npcs[0].y &&
         ov.projectiles[0].dst_x == ov.projectiles[0].src_x &&
         ov.projectiles[0].dst_y == ov.projectiles[0].src_y &&
-        ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID &&
+        ov.projectiles[0].travel_gfx_id == GFX_COLOSSEUM_JAVELIN_SKYFALL_LAUNCH_TRAVEL &&
         ov.projectiles[0].travel_gfx_id != 2673 &&
         ov.projectiles[0].impact_gfx_id == 0 &&
         ov.projectiles[0].start_h < ov.projectiles[0].end_h &&
@@ -7482,9 +7482,9 @@ static void test_render_bridge_combat_visuals_and_loadout(void) {
         ov.projectiles[0].src_y == jv->skyfall_tile_y &&
         ov.projectiles[0].dst_x == jv->skyfall_tile_x &&
         ov.projectiles[0].dst_y == jv->skyfall_tile_y &&
-        ov.projectiles[0].travel_gfx_id == COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID &&
+        ov.projectiles[0].travel_gfx_id == GFX_COLOSSEUM_JAVELIN_SKYFALL_DROP_TRAVEL &&
         ov.projectiles[0].travel_gfx_id != 2673 &&
-        ov.projectiles[0].impact_gfx_id == COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID &&
+        ov.projectiles[0].impact_gfx_id == GFX_COLOSSEUM_JAVELIN_SKYFALL_IMPACT &&
         ov.projectiles[0].start_h > ov.projectiles[0].end_h &&
         ov.projectiles[0].curve == COLO_JAVELIN_SKYFALL_DROP_CURVE &&
         ov.projectiles[0].duration_ticks == COLO_JAVELIN_SKYFALL_DROP_GAME_TICKS * 30);

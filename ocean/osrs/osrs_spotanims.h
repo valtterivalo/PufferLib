@@ -1,26 +1,11 @@
 #ifndef OSRS_SPOTANIMS_H
 #define OSRS_SPOTANIMS_H
 
+#include "osrs_asset_formats.h"
 #include "osrs_assets.h"
 #include "osrs_binary_io.h"
 #include <stdint.h>
 #include <limits.h>
-
-#define OSRS_SPOTANIM_MAGIC 0x544F5053u
-#define OSRS_SPOTANIM_VERSION 1u
-#define OSRS_SPOTANIM_MODEL_BASE 0xA2000000u
-#define OSRS_SPOTANIM_RECOLOR_MODEL_BASE 0x000D0000u
-
-typedef struct {
-    uint32_t id;
-    int32_t model_id;
-    int32_t animation_id;
-    uint32_t resize_xy;
-    uint32_t resize_z;
-    uint32_t rotation;
-    int32_t brightness;
-    int32_t shadow;
-} OsrsSpotAnimDef;
 
 typedef struct {
     OsrsSpotAnimDef* defs;

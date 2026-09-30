@@ -4427,7 +4427,7 @@ static void test_spotanim_lookup_prefers_recolored_model_alias(void) {
     OsrsModel models[2];
     memset(models, 0, sizeof(models));
     models[0].model_id = 3136;
-    models[1].model_id = OSRS_SPOTANIM_RECOLOR_MODEL_BASE | 1384u;
+    models[1].model_id = OSRS_SPOTANIM_MODEL_BASE | 1384u;
 
     ModelCache secondary_cache;
     memset(&secondary_cache, 0, sizeof(secondary_cache));
@@ -4442,7 +4442,7 @@ static void test_spotanim_lookup_prefers_recolored_model_alias(void) {
     OsrsModel* found = effect_find_model(&meta, NULL, &secondary_cache, NULL);
     ASSERT_INT_EQ("blob magic spotanim resolves recolored model",
         found ? (int)found->model_id : -1,
-        (int)(OSRS_SPOTANIM_RECOLOR_MODEL_BASE | 1384u));
+        (int)(OSRS_SPOTANIM_MODEL_BASE | 1384u));
 }
 
 static void test_inferno_npc_spawn_id_changes_on_slot_reuse(void) {

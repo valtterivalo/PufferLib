@@ -403,7 +403,6 @@ static void maya_bake_frame(const MayaAnimation* anim, const Model* model, int f
     int bc = anim->skeleton.bone_count;
     double(*skin)[16] = malloc(sizeof(*skin) * (size_t)bc);
     maya_world_matrices(anim, frame, skin);
-    int animated = 0;
     for (int v = 0; v < model->vertex_count; v++) {
         int start = model->maya_bones ? model->maya_start[v] : 0;
         int end = model->maya_bones ? model->maya_start[v + 1] : 0;
@@ -426,9 +425,7 @@ static void maya_bake_frame(const MayaAnimation* anim, const Model* model, int f
         out[v * 3] = maya_clamp_i16(ox);
         out[v * 3 + 1] = maya_clamp_i16(oy);
         out[v * 3 + 2] = maya_clamp_i16(oz);
-        animated++;
     }
-    assert(animated > 0);
     free(skin);
 }
 

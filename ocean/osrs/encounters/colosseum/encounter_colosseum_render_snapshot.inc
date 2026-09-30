@@ -193,9 +193,6 @@ static const OsrsCombatVisualRow* col_require_npc_combat_visual_projectile_row(
 }
 
 enum {
-    COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID = 2674,
-    COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID = 2675,
-    COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID = 2676,
     COLO_JAVELIN_SKYFALL_SKY_HEIGHT = 1536,
     COLO_JAVELIN_SKYFALL_GROUND_HEIGHT = 16,
     COLO_JAVELIN_SKYFALL_LAUNCH_CURVE = -48,
@@ -349,7 +346,7 @@ static void col_emit_javelin_skyfall_launch_projectile(
         .dst_size = npc_size,
         .model_id = 0u,
         .anim_id = -1,
-        .travel_gfx_id = COLO_JAVELIN_SKYFALL_LAUNCH_TRAVEL_GFX_ID,
+        .travel_gfx_id = GFX_COLOSSEUM_JAVELIN_SKYFALL_LAUNCH_TRAVEL,
         .impact_gfx_id = 0,
         .start_delay = 0,
     };
@@ -414,8 +411,8 @@ static void col_emit_javelin_skyfall_drop_projectile(
         .dst_size = 1,
         .model_id = 0u,
         .anim_id = -1,
-        .travel_gfx_id = COLO_JAVELIN_SKYFALL_DROP_TRAVEL_GFX_ID,
-        .impact_gfx_id = COLO_JAVELIN_SKYFALL_IMPACT_GFX_ID,
+        .travel_gfx_id = GFX_COLOSSEUM_JAVELIN_SKYFALL_DROP_TRAVEL,
+        .impact_gfx_id = GFX_COLOSSEUM_JAVELIN_SKYFALL_IMPACT,
         .start_delay = 0,
     };
     (void)osrs_emit_projectile_with_spec(
@@ -729,36 +726,19 @@ static void col_emit_thrall_projectile(
     encounter_set_projectile_target_npc_slot(ov, idx, slot);
 }
 
-enum {
-    COLO_SOL_CRYSTAL_CHARGE_MODEL_ID = 51245,
-    COLO_SOL_CRYSTAL_CHARGE_ANIM_ID  = 10803,
-    COLO_SOL_SPHERE_TRAVEL_GFX_ID    = 2693,
-    COLO_SOL_SPHERE_IMPACT_GFX_ID    = 2697,
-    COLO_SOL_SAND_PILLAR_MODEL_ID    = 51243,
-    COLO_SOL_SAND_PILLAR_ANIM_ID     = 10812,
-};
-
-enum {
-    COLO_VOLATILITY_HUMAN_EXPLOSION_GFX_ID = 2713,
-    COLO_VOLATILITY_MANTICORE_EXPLOSION_GFX_ID = 2721,
-    COLO_VOLATILITY_COLOSSUS_EXPLOSION_GFX_ID = 2722,
-    COLO_VOLATILITY_MINOTAUR_EXPLOSION_GFX_ID = 2723,
-    COLO_VOLATILITY_SOL_EXPLOSION_GFX_ID = 2724,
-};
-
 static int col_volatility_explosion_gfx_id(ColoNpcType npc_type) {
     switch (npc_type) {
         case COLO_MANTICORE:
-            return COLO_VOLATILITY_MANTICORE_EXPLOSION_GFX_ID;
+            return GFX_COLOSSEUM_VOLATILITY_MANTICORE_EXPLOSION;
         case COLO_JAVELIN_COLOSSUS:
         case COLO_SHOCKWAVE_COLOSSUS:
-            return COLO_VOLATILITY_COLOSSUS_EXPLOSION_GFX_ID;
+            return GFX_COLOSSEUM_VOLATILITY_COLOSSUS_EXPLOSION;
         case COLO_MINOTAUR:
-            return COLO_VOLATILITY_MINOTAUR_EXPLOSION_GFX_ID;
+            return GFX_COLOSSEUM_VOLATILITY_MINOTAUR_EXPLOSION;
         case COLO_SOL_HEREDIT:
-            return COLO_VOLATILITY_SOL_EXPLOSION_GFX_ID;
+            return GFX_COLOSSEUM_VOLATILITY_SOL_EXPLOSION;
         default:
-            return COLO_VOLATILITY_HUMAN_EXPLOSION_GFX_ID;
+            return GFX_COLOSSEUM_VOLATILITY_HUMAN_EXPLOSION;
     }
 }
 
@@ -808,7 +788,7 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
             encounter_emit_floating_model(
                 ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
                 COLO_NPC_SLOT_BEAM_CRYSTAL + c, cr->x, cr->y,
-                COLO_SOL_CRYSTAL_CHARGE_MODEL_ID, COLO_SOL_CRYSTAL_CHARGE_ANIM_ID,
+                MODEL_COLOSSEUM_SOL_CRYSTAL_CHARGE, ANIM_COLOSSEUM_SOL_CRYSTAL_CHARGE,
                 1.1f, 0.0f, 1.0f);
         }
 
@@ -838,8 +818,8 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
                 .dst_size = 1,
                 .model_id = 0u,
                 .anim_id = -1,
-                .travel_gfx_id = COLO_SOL_SPHERE_TRAVEL_GFX_ID,
-                .impact_gfx_id = COLO_SOL_SPHERE_IMPACT_GFX_ID,
+                .travel_gfx_id = GFX_COLOSSEUM_SOL_SPHERE_TRAVEL,
+                .impact_gfx_id = GFX_COLOSSEUM_SOL_SPHERE_IMPACT,
                 .start_delay = 0,
             };
             (void)osrs_emit_projectile_with_spec(ov, &sphere_spec, 0);
@@ -852,7 +832,7 @@ static void col_emit_sol_hazard_vfx(ColosseumState* s, EncounterOverlay* ov) {
             ov, ENCOUNTER_PROJECTILE_TARGET_NPC_SLOT,
             COLO_NPC_SLOT_BEAM_CRYSTAL + COLO_SOL_MAX_CRYSTALS + b,
             sol->beams[b].x, sol->beams[b].y,
-            COLO_SOL_SAND_PILLAR_MODEL_ID, COLO_SOL_SAND_PILLAR_ANIM_ID,
+            MODEL_COLOSSEUM_SOL_SAND_PILLAR, ANIM_COLOSSEUM_SOL_SAND_PILLAR,
             0.05f, 0.0f, 1.0f);
     }
 }

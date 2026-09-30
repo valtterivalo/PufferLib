@@ -135,6 +135,9 @@ static SpotAnimDef spotanim_decode(const CacheFile* file) {
         else if (op == 8) d.contrast = cache_u8(&b);
         else if (op == 40) cache_pairs(&b, &d.recolor_count, d.recolor_from, d.recolor_to);
         else if (op == 41) cache_pairs(&b, &d.retexture_count, d.retexture_from, d.retexture_to);
+        else if (op == 9) cache_skip_string(&b);
+        else if (op == 10) {}
+        else if (op == 42) cache_u16(&b);
         else {
             fprintf(stderr, "spotanim_decode: unknown opcode %d\n", op);
             abort();

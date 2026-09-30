@@ -4,6 +4,7 @@
 #include "ocean/osrs/cache/osrs_cache_model.h"
 #include "ocean/osrs/osrs_asset_formats.h"
 #include "ocean/osrs/osrs_collision.h"
+#include "ocean/osrs/osrs_combat_visuals.h"
 
 typedef struct {
     int x0, y0, x1, y1;
@@ -760,7 +761,6 @@ static void export_scene(OsrsCache* cache, const char* out_dir, const char* name
     map_free(&g);
 }
 
-enum { NPC_MODEL_BASE = 0xC0000, SPOTANIM_MODEL_BASE = 0xD0000 };
 
 typedef struct {
     int id;
@@ -827,6 +827,26 @@ static void pack_model(NpcPack* p, int id, Model m, int ambient, int contrast, i
     e->shade = model_light(&m, ambient, contrast, -30, -50, -30);
     if (width_scale != 128 || height_scale != 128) model_resize(&m, width_scale, height_scale, width_scale);
     e->model = m;
+}
+
+static const Model* skin_copy(const Model* m) {
+    Model* s = malloc(sizeof(Model));
+    *s = model_copy(m);
+    return s;
+}
+
+static int pack_spotanim(Defs* d, const CacheGroup* gfx_files, NpcPack* p, SeqBakeTable* bakes, int gfx) {
+    const CacheFile* file = cache_group_file(gfx_files, gfx);
+    assert(file);
+    SpotAnimDef g = spotanim_decode(file);
+    assert(g.model_id >= 0);
+    Model m = build_merged(d, &g.model_id, 1);
+    for (int k = 0; k < g.recolor_count; k++) model_recolor(&m, g.recolor_from[k], g.recolor_to[k]);
+    for (int k = 0; k < g.retexture_count; k++) model_retexture(&m, g.retexture_from[k], g.retexture_to[k]);
+    bind_seq(bakes, g.sequence, skin_copy(&m), 128, 128);
+    pack_model(p, (int)(OSRS_SPOTANIM_MODEL_BASE | (uint32_t)gfx), m, g.ambient + 64, g.contrast + 850, 128, 128);
+    pack_seq(p, g.sequence);
+    return g.sequence;
 }
 
 static void write_models(const char* path, const Defs* d, const NpcPack* p) {
@@ -1057,8 +1077,6 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
     CacheGroup gfx_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_SPOTANIM);
     NpcPack pack = {0};
     SeqBakeTable bakes = {0};
-    Model skin_pool[256];
-    int skin_pool_count = 0;
     char path[4096];
     snprintf(path, sizeof(path), "%s/npc_models_%s.h", out_dir, name);
     FILE* h = fopen(path, "w");
@@ -1076,42 +1094,25 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
         Model m = build_merged(&defs, n.model_ids, n.model_count);
         for (int k = 0; k < n.recolor_count; k++) model_recolor(&m, n.recolor_from[k], n.recolor_to[k]);
         for (int k = 0; k < n.retexture_count; k++) model_retexture(&m, n.retexture_from[k], n.retexture_to[k]);
-        assert(skin_pool_count < 256);
-        Model* skin = &skin_pool[skin_pool_count++];
-        *skin = model_copy(&m);
-        pack_model(&pack, NPC_MODEL_BASE | npcs[i].npc, m, n.ambient + 64, n.contrast * 5 + 850, n.width_scale, n.height_scale);
+        const Model* skin = skin_copy(&m);
+        pack_model(&pack, OSRS_NPC_MODEL_BASE | npcs[i].npc, m, n.ambient + 64, n.contrast * 5 + 850, n.width_scale, n.height_scale);
         int anims[] = {n.idle, n.walk, n.run, n.turn_180, n.turn_cw, n.turn_ccw, npcs[i].attack};
         for (size_t k = 0; k < sizeof(anims) / sizeof(*anims); k++) pack_seq(&pack, anims[k]);
         for (int k = 0; k < npcs[i].owned_count; k++) pack_seq(&pack, npcs[i].owned[k]);
         bind_npc_seqs(&bakes, &npcs[i], &n, skin);
-        fprintf(h, "    {%d, 0x%X, %d, %d, %d, %d},\n", npcs[i].npc, NPC_MODEL_BASE | npcs[i].npc,
+        fprintf(h, "    {%d, 0x%X, %d, %d, %d, %d},\n", npcs[i].npc, OSRS_NPC_MODEL_BASE | npcs[i].npc,
             n.idle < 0 ? 65535 : n.idle, npcs[i].attack < 0 ? 65535 : npcs[i].attack,
             n.walk < 0 ? 65535 : n.walk, n.run < 0 ? 65535 : n.run);
     }
     fprintf(h, "};\n\n");
     for (int i = 0; i < gfx_count; i++) {
-        const CacheFile* file = cache_group_file(&gfx_files, gfx[i]);
-        assert(file);
-        SpotAnimDef g = spotanim_decode(file);
-        assert(g.model_id >= 0);
-        Model m = build_merged(&defs, &g.model_id, 1);
-        for (int k = 0; k < g.recolor_count; k++) model_recolor(&m, g.recolor_from[k], g.recolor_to[k]);
-        for (int k = 0; k < g.retexture_count; k++) model_retexture(&m, g.retexture_from[k], g.retexture_to[k]);
-        assert(skin_pool_count < 256);
-        Model* skin = &skin_pool[skin_pool_count++];
-        *skin = model_copy(&m);
-        pack_model(&pack, SPOTANIM_MODEL_BASE | gfx[i], m, g.ambient + 64, g.contrast + 850, 128, 128);
-        pack_seq(&pack, g.sequence);
-        bind_seq(&bakes, g.sequence, skin, 128, 128);
-        fprintf(h, "#define %s_GFX_%d_MODEL 0x%X\n#define %s_GFX_%d_ANIM %d\n", upper, gfx[i], SPOTANIM_MODEL_BASE | gfx[i], upper, gfx[i], g.sequence);
+        int seq = pack_spotanim(&defs, &gfx_files, &pack, &bakes, gfx[i]);
+        fprintf(h, "#define %s_GFX_%d_MODEL 0x%X\n#define %s_GFX_%d_ANIM %d\n", upper, gfx[i], OSRS_SPOTANIM_MODEL_BASE | gfx[i], upper, gfx[i], seq);
     }
     for (int i = 0; i < seq_count; i++) pack_seq(&pack, seqs[i]);
     for (int i = 0; i < seqmodel_count; i++) {
-        assert(skin_pool_count < 256);
-        Model* skin = &skin_pool[skin_pool_count++];
-        *skin = model_copy(defs_model(&defs, seqmodels[i].model));
         pack_seq(&pack, seqmodels[i].seq);
-        bind_seq(&bakes, seqmodels[i].seq, skin, 128, 128);
+        bind_seq(&bakes, seqmodels[i].seq, skin_copy(defs_model(&defs, seqmodels[i].model)), 128, 128);
     }
     fprintf(h, "\n#endif\n");
     fclose(h);
@@ -1122,7 +1123,131 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
     snprintf(path, sizeof(path), "%s/%s.atlas", out_dir, name);
     write_atlas(path, &defs);
     printf("%s: %d models, %d sequences\n", name, pack.model_count, pack.seq_count);
-    for (int i = 0; i < skin_pool_count; i++) model_free(&skin_pool[i]);
+}
+
+typedef struct {
+    int ids[1024];
+    int count;
+} IdSet;
+
+static void id_add(IdSet* s, int id) {
+    if (id <= 0) return;
+    for (int i = 0; i < s->count; i++)
+        if (s->ids[i] == id) return;
+    assert(s->count < 1024);
+    s->ids[s->count++] = id;
+}
+
+typedef struct {
+    IdSet gfx;
+    SeqModelSpec raw[256];
+    int raw_count;
+} ProjectileSet;
+
+static void projectile_add_raw(ProjectileSet* p, int model, int seq) {
+    if (model <= 0 || (uint32_t)model >= OSRS_NPC_MODEL_BASE) return;
+    for (int i = 0; i < p->raw_count; i++)
+        if (p->raw[i].model == model) return;
+    assert(p->raw_count < 256);
+    p->raw[p->raw_count++] = (SeqModelSpec){seq, model};
+}
+
+static void projectile_add_profile(ProjectileSet* p, const OsrsCombatProjectileProfile* pr) {
+    id_add(&p->gfx, pr->launch_spotanim_id);
+    id_add(&p->gfx, pr->travel_spotanim_id);
+    id_add(&p->gfx, pr->impact_spotanim_id);
+    projectile_add_raw(p, pr->projectile_model_id, pr->projectile_anim_id);
+}
+
+static void projectile_add_row(ProjectileSet* p, const OsrsCombatVisualRow* row) {
+    projectile_add_profile(p, &row->projectile);
+    id_add(&p->gfx, row->aux_travel_spotanim_id);
+    id_add(&p->gfx, row->aux_impact_spotanim_id);
+    id_add(&p->gfx, row->double_launch_spotanim_id);
+    projectile_add_raw(p, row->aux_projectile_model_id, row->aux_projectile_anim_id);
+}
+
+static ProjectileSet projectile_set(void) {
+    ProjectileSet p = {0};
+    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_ROW_COUNT; i++) projectile_add_row(&p, &OSRS_COMBAT_VISUAL_ROWS[i]);
+    for (size_t i = 0; i < OSRS_COMBAT_VISUAL_COLOSSEUM_ROW_COUNT; i++)
+        projectile_add_row(&p, &OSRS_COMBAT_VISUAL_COLOSSEUM_ROWS[i]);
+    projectile_add_row(&p, &OSRS_COMBAT_VISUAL_VOIDWAKER_SPECIAL_ROW);
+    projectile_add_profile(&p, &OSRS_POWERED_STAFF_PROJECTILE_PROFILE);
+    projectile_add_profile(&p, &OSRS_TUMEKENS_SHADOW_PROJECTILE_PROFILE);
+    static const int gfx[] = {
+        GFX_VENGEANCE, GFX_TELEPORT_BREAK, GFX_SPLASH, GFX_RUNE_ARROW_LAUNCH, GFX_TRIDENT_CAST, GFX_TRIDENT_PROJ,
+        GFX_TRIDENT_IMPACT, GFX_TUMEKENS_SHADOW_CAST, GFX_TUMEKENS_SHADOW_PROJ, GFX_TUMEKENS_SHADOW_IMPACT,
+        GFX_BLOWPIPE_SPEC, GFX_DRAGON_ARROW_LAUNCH, GFX_DRAGON_DART,
+        GFX_COLOSSEUM_JAVELIN_SKYFALL_LAUNCH_TRAVEL, GFX_COLOSSEUM_JAVELIN_SKYFALL_DROP_TRAVEL,
+        GFX_COLOSSEUM_JAVELIN_SKYFALL_IMPACT, GFX_COLOSSEUM_SOL_SPHERE_TRAVEL, GFX_COLOSSEUM_SOL_SPHERE_IMPACT,
+        GFX_COLOSSEUM_VOLATILITY_HUMAN_EXPLOSION, GFX_COLOSSEUM_VOLATILITY_MANTICORE_EXPLOSION,
+        GFX_COLOSSEUM_VOLATILITY_COLOSSUS_EXPLOSION, GFX_COLOSSEUM_VOLATILITY_MINOTAUR_EXPLOSION,
+        GFX_COLOSSEUM_VOLATILITY_SOL_EXPLOSION,
+    };
+    for (size_t i = 0; i < sizeof(gfx) / sizeof(*gfx); i++) id_add(&p.gfx, gfx[i]);
+    for (int i = 0; i < GFX_COLOSSEUM_SOL_DUST_COUNT; i++) id_add(&p.gfx, GFX_COLOSSEUM_SOL_DUST_BASE + i);
+    projectile_add_raw(&p, MODEL_COLOSSEUM_SOL_CRYSTAL_CHARGE, ANIM_COLOSSEUM_SOL_CRYSTAL_CHARGE);
+    projectile_add_raw(&p, MODEL_COLOSSEUM_SOL_SAND_PILLAR, ANIM_COLOSSEUM_SOL_SAND_PILLAR);
+    return p;
+}
+
+static int compare_gfx_row(const void* a, const void* b) {
+    uint32_t x = ((const OsrsSpotAnimDef*)a)->id, y = ((const OsrsSpotAnimDef*)b)->id;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static void write_spotanims_bin(const char* out_dir, CacheGroup* spotanim_files) {
+    OsrsSpotAnimDef* rows = calloc((size_t)spotanim_files->file_count, sizeof(OsrsSpotAnimDef));
+    int count = 0;
+    for (int i = 0; i < spotanim_files->file_count; i++) {
+        SpotAnimDef d = spotanim_decode(&spotanim_files->files[i]);
+        if (d.model_id < 0) continue;
+        rows[count].id = (uint32_t)spotanim_files->file_ids[i];
+        rows[count].model_id = d.model_id;
+        rows[count].animation_id = d.sequence;
+        rows[count].resize_xy = (uint32_t)d.width_scale;
+        rows[count].resize_z = (uint32_t)d.height_scale;
+        rows[count].rotation = (uint32_t)d.rotation;
+        rows[count].brightness = d.ambient;
+        rows[count].shadow = d.contrast;
+        count++;
+    }
+    qsort(rows, (size_t)count, sizeof(OsrsSpotAnimDef), compare_gfx_row);
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/spotanims.bin", out_dir);
+    FILE* f = fopen(path, "wb");
+    assert(f);
+    uint32_t header[3] = {OSRS_SPOTANIM_MAGIC, OSRS_SPOTANIM_VERSION, (uint32_t)count};
+    fwrite(header, sizeof(header), 1, f);
+    fwrite(rows, sizeof(OsrsSpotAnimDef), (size_t)count, f);
+    fclose(f);
+    free(rows);
+}
+
+static void export_projectiles(OsrsCache* cache, const char* out_dir) {
+    Defs defs = {.cache = cache};
+    defs_load_floors(&defs);
+    CacheGroup gfx_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_SPOTANIM);
+    NpcPack pack = {0};
+    SeqBakeTable bakes = {0};
+    ProjectileSet set = projectile_set();
+    for (int i = 0; i < set.gfx.count; i++) pack_spotanim(&defs, &gfx_files, &pack, &bakes, set.gfx.ids[i]);
+    for (int i = 0; i < set.raw_count; i++) {
+        Model m = build_merged(&defs, &set.raw[i].model, 1);
+        bind_seq(&bakes, set.raw[i].seq, skin_copy(&m), 128, 128);
+        pack_model(&pack, set.raw[i].model, m, 64, 850, 128, 128);
+        pack_seq(&pack, set.raw[i].seq);
+    }
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/projectiles.models", out_dir);
+    write_models(path, &defs, &pack);
+    snprintf(path, sizeof(path), "%s/projectiles.anims", out_dir);
+    write_anims(path, cache, &pack, &bakes);
+    snprintf(path, sizeof(path), "%s/projectiles.atlas", out_dir);
+    write_atlas(path, &defs);
+    write_spotanims_bin(out_dir, &gfx_files);
+    printf("projectiles: %d spotanims, %d raw models, %d sequences\n", set.gfx.count, set.raw_count, pack.seq_count);
 }
 
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
@@ -1141,7 +1266,8 @@ static void usage(void) {
         "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1]\n"
         "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1]\n"
         "       osrs_export <cache_dir> <out_dir> npcs <name> "
-        "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n");
+        "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
+        "       osrs_export <cache_dir> <out_dir> projectiles\n");
     exit(2);
 }
 
@@ -1183,6 +1309,10 @@ int main(int argc, char** argv) {
             else usage();
         }
         export_npcs(cache, out_dir, argv[4], npcs, n, gfx, g, seqs, q, seqmodels, sm);
+        return 0;
+    }
+    if (strcmp(argv[3], "projectiles") == 0 && argc == 4) {
+        export_projectiles(cache, out_dir);
         return 0;
     }
     usage();

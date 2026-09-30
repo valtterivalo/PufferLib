@@ -6429,8 +6429,9 @@ void pvp_render(OsrsEnv* env) {
                                         tx <= sol->boss_arena_max_x; tx++) {
                                     if (!col_sol_aoe_tile_is_hazard(sol, tx, ty))
                                         continue;
-                                    int dust_gfx = 2699 +
-                                        (((tx * 7 + ty * 13) & 0x7fffffff) % 8);
+                                    int dust_gfx = GFX_COLOSSEUM_SOL_DUST_BASE +
+                                        (((tx * 7 + ty * 13) & 0x7fffffff) %
+                                            GFX_COLOSSEUM_SOL_DUST_COUNT);
                                     effect_spawn_spotanim_subtile(
                                         rc->effects, dust_gfx,
                                         tx * 128.0f + 64.0f, ty * 128.0f + 64.0f,
