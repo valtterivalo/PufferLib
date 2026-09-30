@@ -2,6 +2,7 @@
 #include "ocean/osrs/cache/osrs_cache_item.h"
 #include "ocean/osrs/cache/osrs_cache_gameval.h"
 #include "ocean/osrs/cache/osrs_cache_interfaces.h"
+#include "ocean/osrs/cache/osrs_cache_item_icon.h"
 #include "ocean/osrs/cache/osrs_cache_map.h"
 #include "ocean/osrs/cache/osrs_cache_maya.h"
 #include "ocean/osrs/cache/osrs_cache_model.h"
@@ -11,6 +12,7 @@
 #include "ocean/osrs/osrs_combat_visuals.h"
 #include "ocean/osrs/osrs_combat_visuals_generated.h"
 #include "ocean/osrs/osrs_items.h"
+#include "ocean/osrs/osrs_item_obs_generated.h"
 
 typedef struct {
     int x0, y0, x1, y1;
@@ -1884,6 +1886,49 @@ static void export_fonts(OsrsCache* cache, const char* out_dir) {
     }
 }
 
+static const int ICON_ITEM_IDS[] = {
+#define ICON_ITEM_ID(row, item, db, osrs_id, ...) osrs_id,
+    OSRS_ITEM_CONTENT_ROWS(ICON_ITEM_ID)
+#undef ICON_ITEM_ID
+};
+
+static void export_icons(OsrsCache* cache, const char* out_dir) {
+    char dir[4096], path[4096];
+    snprintf(dir, sizeof(dir), "%s/sprites/items", out_dir);
+    ensure_dir(dir);
+    IconSource src = icon_source_open(cache);
+    IdSet icons = {0};
+    snprintf(path, sizeof(path), "%s/item_stack_variants.tsv", dir);
+    FILE* f = fopen(path, "w");
+    assert(f);
+    fprintf(f, "# base_item_id\tcount_threshold\tdisplay_item_id\n");
+    int rows = 0;
+    for (int i = 0; i < (int)(sizeof(ICON_ITEM_IDS) / sizeof(ICON_ITEM_IDS[0])); i++) {
+        int id = ICON_ITEM_IDS[i];
+        if (id == 0) continue;
+        id_add(&icons, id);
+        ItemDef d = item_decode(cache_group_file(&src.objs, id));
+        for (int k = 0; k < 10; k++) {
+            if (!d.count_co[k]) continue;
+            fprintf(f, "%d\t%d\t%d\n", id, d.count_co[k], d.count_obj[k]);
+            id_add(&icons, d.count_obj[k]);
+            rows++;
+        }
+    }
+    fclose(f);
+    for (int i = 0; i < icons.count; i++) {
+        int32_t px[ICON_W * ICON_H];
+        IconResult drawn = icon_render(&src, icons.ids[i], 1, 1, ICON_SHADOW, ICON_PLAIN, px);
+        assert(drawn == ICON_DRAWN);
+        uint32_t rgba[ICON_W * ICON_H];
+        for (int k = 0; k < ICON_W * ICON_H; k++)
+            rgba[k] = px[k] ? 0xFF000000u | (uint32_t)(px[k] >> 16 & 0xFF) | (uint32_t)(px[k] & 0xFF00) | (uint32_t)(px[k] & 0xFF) << 16 : 0;
+        snprintf(path, sizeof(path), "%s/%d.png", dir, icons.ids[i]);
+        png_write_rgba(path, rgba, ICON_W, ICON_H);
+    }
+    printf("sprites/items: %d icons, %d stack variants\n", icons.count, rows);
+}
+
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
     Defs defs = {.cache = cache};
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
@@ -1906,7 +1951,8 @@ static void usage(void) {
         "       osrs_export <cache_dir> <out_dir> textures\n"
         "       osrs_export <cache_dir> <out_dir> sprites\n"
         "       osrs_export <cache_dir> <out_dir> interfaces\n"
-        "       osrs_export <cache_dir> <out_dir> fonts\n");
+        "       osrs_export <cache_dir> <out_dir> fonts\n"
+        "       osrs_export <cache_dir> <out_dir> icons\n");
     exit(2);
 }
 
@@ -1995,6 +2041,10 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[3], "fonts") == 0 && argc == 4) {
         export_fonts(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "icons") == 0 && argc == 4) {
+        export_icons(cache, out_dir);
         return 0;
     }
     usage();

@@ -512,7 +512,7 @@ static int palette_brighten(int rgb, double brightness) {
 
 enum { PALETTE_BRIGHTNESS_PERMILLE = 800 };
 
-__attribute__((constructor)) static void model_build_palette(void) {
+static void model_palette_build(int* out, double brightness) {
     for (int i = 0, k = 0; i < 512; i++) {
         double hue = (i >> 3) / 64.0 + 0.0078125, sat = (i & 7) / 8.0 + 0.0625;
         for (int l = 0; l < 128; l++, k++) {
@@ -523,10 +523,14 @@ __attribute__((constructor)) static void model_build_palette(void) {
             hr -= hr > 1.0 ? 1.0 : 0.0;
             hb += hb < 0.0 ? 1.0 : 0.0;
             int rgb = (palette_channel(p, q, hr) << 16) + (palette_channel(p, q, hue) << 8) + palette_channel(p, q, hb);
-            rgb = palette_brighten(rgb, PALETTE_BRIGHTNESS_PERMILLE / 1000.0);
-            model_palette[k] = rgb ? rgb : 1;
+            rgb = palette_brighten(rgb, brightness);
+            out[k] = rgb ? rgb : 1;
         }
     }
+}
+
+__attribute__((constructor)) static void model_build_palette(void) {
+    model_palette_build(model_palette, PALETTE_BRIGHTNESS_PERMILLE / 1000.0);
 }
 
 #endif

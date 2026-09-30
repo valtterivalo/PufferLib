@@ -4,7 +4,7 @@ cache=$1
 out=$2
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 bin=$(mktemp -d)/osrs_export
-cc -std=c11 -O2 -D_DEFAULT_SOURCE -I"$root" -o "$bin" "$root/ocean/osrs/tools/osrs_export.c" -lz -lbz2 -lm
+cc -std=c11 -O2 -fwrapv -D_DEFAULT_SOURCE -I"$root" -o "$bin" "$root/ocean/osrs/tools/osrs_export.c" -lz -lbz2 -lm
 mkdir -p "$out"
 x() { "$bin" "$cache" "$out" "$@"; }
 
@@ -41,3 +41,4 @@ x interfaces
 x fonts
 x projectiles
 x equipment
+x icons

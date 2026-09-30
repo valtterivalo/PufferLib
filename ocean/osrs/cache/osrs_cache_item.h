@@ -13,15 +13,25 @@ typedef struct {
     int retexture_count;
     uint16_t retexture_from[32], retexture_to[32];
     int ambient, contrast;
+    int zoom2d, xan2d, yan2d, zan2d, xoff2d, yoff2d;
+    int resize_x, resize_y, resize_z;
+    int count_obj[10], count_co[10];
+    int note, note_template, bought, bought_template, placeholder, placeholder_template;
 } ItemDef;
 
 static ItemDef item_decode(const CacheFile* file) {
-    ItemDef d = {.inv_model = -1, .male_model = {-1, -1, -1}, .wearpos1 = -1, .wearpos2 = -1, .wearpos3 = -1};
+    ItemDef d = {.inv_model = -1, .male_model = {-1, -1, -1}, .wearpos1 = -1, .wearpos2 = -1, .wearpos3 = -1,
+        .zoom2d = 2000, .resize_x = 128, .resize_y = 128, .resize_z = 128, .note = -1, .note_template = -1,
+        .bought = -1, .bought_template = -1, .placeholder = -1, .placeholder_template = -1};
     CacheBuf b = {file->data, file->data + file->size};
     for (int op = cache_u8(&b); op; op = cache_u8(&b)) {
         if (op == 1) d.inv_model = cache_u16(&b);
         else if (op == 2 || op == 3 || op == 9 || (op >= 30 && op < 40)) cache_skip_string(&b);
-        else if (op == 4 || op == 5 || op == 6 || op == 7 || op == 8) cache_u16(&b);
+        else if (op == 4) d.zoom2d = cache_u16(&b);
+        else if (op == 5) d.xan2d = cache_u16(&b);
+        else if (op == 6) d.yan2d = cache_u16(&b);
+        else if (op == 7) d.xoff2d = cache_i16(&b);
+        else if (op == 8) d.yoff2d = cache_i16(&b);
         else if (op == 11 || op == 15 || op == 16 || op == 65 || op == 160 || op == 251) {}
         else if (op == 12) cache_u32(&b);
         else if (op == 13) d.wearpos1 = cache_i8(&b);
@@ -45,10 +55,18 @@ static ItemDef item_decode(const CacheFile* file) {
         else if (op == 49 || op == 50 || op == 51 || op == 52 || op == 53 || op == 54) cache_u32(&b);
         else if (op == 75) cache_i16(&b);
         else if (op == 78) d.male_model[2] = cache_u16(&b);
-        else if (op == 79 || op == 90 || op == 91 || op == 92 || op == 93 || op == 94 || op == 95 || op == 97 ||
-                 op == 98 || op == 99 || op == 139 || op == 140 || op == 148 || op == 149) cache_u16(&b);
-        else if (op >= 100 && op < 110) cache_u16(&b), cache_u16(&b);
-        else if (op == 110 || op == 111 || op == 112) cache_u16(&b);
+        else if (op == 79 || op == 90 || op == 91 || op == 92 || op == 93 || op == 94 || op == 99) cache_u16(&b);
+        else if (op == 95) d.zan2d = cache_u16(&b);
+        else if (op == 97) d.note = cache_u16(&b);
+        else if (op == 98) d.note_template = cache_u16(&b);
+        else if (op == 139) d.bought = cache_u16(&b);
+        else if (op == 140) d.bought_template = cache_u16(&b);
+        else if (op == 148) d.placeholder = cache_u16(&b);
+        else if (op == 149) d.placeholder_template = cache_u16(&b);
+        else if (op >= 100 && op < 110) d.count_obj[op - 100] = cache_u16(&b), d.count_co[op - 100] = cache_u16(&b);
+        else if (op == 110) d.resize_x = cache_u16(&b);
+        else if (op == 111) d.resize_y = cache_u16(&b);
+        else if (op == 112) d.resize_z = cache_u16(&b);
         else if (op == 113) d.ambient = cache_i8(&b);
         else if (op == 114) d.contrast = cache_i8(&b);
         else if (op == 115) cache_u8(&b);

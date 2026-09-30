@@ -381,14 +381,17 @@ static Overlay overlay_decode(const CacheFile* file) {
     return o;
 }
 
+typedef enum { TEXTURE_ALPHA_KEYED, TEXTURE_ALPHA_OPAQUE } TextureAlpha;
+
 typedef struct {
     int present, sprite, average_hsl, direction, speed;
+    TextureAlpha alpha;
 } TextureDef;
 
 static TextureDef texture_decode(const CacheFile* file) {
     CacheBuf b = {file->data, file->data + file->size};
     TextureDef t = {.present = 1, .sprite = cache_u16(&b), .average_hsl = cache_u16(&b)};
-    cache_u8(&b);
+    t.alpha = cache_u8(&b) == 1 ? TEXTURE_ALPHA_OPAQUE : TEXTURE_ALPHA_KEYED;
     t.direction = cache_u8(&b);
     t.speed = cache_u8(&b);
     assert(b.p == b.end);
