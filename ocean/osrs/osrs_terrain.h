@@ -3,13 +3,13 @@
 
 #include "raylib.h"
 #include "osrs_assets.h"
+#include "osrs_asset_formats.h"
 #include "osrs_binary_io.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TERR_MAGIC 0x54455252
 
 typedef enum {
     TERRAIN_SELECTION_ALL,

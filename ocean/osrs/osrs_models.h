@@ -9,6 +9,7 @@
 #error "raylib.h not found"
 #endif
 #include "osrs_assets.h"
+#include "osrs_asset_formats.h"
 #include "osrs_asset_raylib.h"
 #include "osrs_binary_io.h"
 #include "osrs_types.h"
@@ -20,9 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MDL4_MAGIC 0x4D444C34
-#define TANM_MAGIC 0x4D4E4154
-#define TANM_VERSION 1
 #define MODEL_CACHE_DENSE_INDEX_LIMIT 0x100000u
 
 typedef struct {

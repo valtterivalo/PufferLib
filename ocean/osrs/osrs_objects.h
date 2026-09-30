@@ -4,6 +4,7 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "osrs_assets.h"
+#include "osrs_asset_formats.h"
 #include "osrs_asset_raylib.h"
 #include "osrs_binary_io.h"
 #include <stdio.h>
@@ -11,8 +12,6 @@
 #include <string.h>
 #include <math.h>
 
-#define OBJS_MAGIC 0x4F424A53
-#define OBJ2_MAGIC 0x4F424A32
 
 typedef struct {
     Model model;

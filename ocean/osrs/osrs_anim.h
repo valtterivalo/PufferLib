@@ -2,6 +2,7 @@
 #define OSRS_ANIM_H
 
 #include "osrs_assets.h"
+#include "osrs_asset_formats.h"
 #include "osrs_binary_io.h"
 #include <math.h>
 #include <stdint.h>
@@ -9,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ANIM2_MAGIC 0x324D4E41
 #define ANIM_FORMAT_VERSION_MIN 2
 #define ANIM_FORMAT_VERSION_MAX 3
 #define ANIM_HEADER_SIZE_V2 24

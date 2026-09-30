@@ -2,6 +2,7 @@
 #define OSRS_ASSET_RAYLIB_H
 
 #include "osrs_assets.h"
+#include "osrs_asset_formats.h"
 
 #if __has_include("raylib.h")
 #include "raylib.h"
@@ -39,7 +40,6 @@ static inline Image osrs_asset_load_image(const char* path) {
     return image;
 }
 
-#define ATLS_MAGIC 0x41544C53
 
 // .atlas is ATLS (raw RGBA) or a PNG with the same filename. Decodes to RGBA8.
 static inline Image osrs_asset_load_atlas_image(const char* path) {
