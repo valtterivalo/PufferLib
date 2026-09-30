@@ -198,11 +198,11 @@ static const GoldenConfig CONFIGS[] = {
 
 /* Canonical inventory cells intentionally change the serialized player state hash. */
 static const uint64_t EXPECTED_STATE[NUM_CONFIGS] = {
-    0xc3c6ce9caedec932ULL, 0x5aefeff0eb53a8a0ULL, 0x1739fcfce20b0ac2ULL,
-    0xb92f9a0ae51bf788ULL, 0xfdad7f55f7b7cb44ULL, 0xb8752e59eeff0240ULL,
-    0x0eb8aa0167d94fdeULL, 0x7854ed938c91eb29ULL, 0x32c791f341d46705ULL,
-    0xc562b4dc92c92dacULL, 0xa71848001975683aULL, 0xb3bb2650586b2fbeULL,
-    0x2449187994da170aULL, 0x2f6ccb091a0432dcULL, 0x0600b75367c4e45fULL,
+    0xca39e9781a010772ULL, 0xe2380b41529a5580ULL, 0x9f5c9a70dc38d2a2ULL,
+    0x725d6ac815196158ULL, 0x7125e46091913184ULL, 0x3bb0137696e9b900ULL,
+    0xfb08d2e440f5255eULL, 0xca7ad37462aa6b69ULL, 0x19c6aec9be3355c5ULL,
+    0x2c1c7b404e00155cULL, 0x2cb1614c207486baULL, 0x4fd95e4e32938a7eULL,
+    0xfc21d9dc38cb186aULL, 0xe2a032e5272f486cULL, 0xb17815312a89ec9fULL,
 };
 
 static const uint64_t EXPECTED_REWARD[NUM_CONFIGS] = {
