@@ -1835,6 +1835,55 @@ static void export_interfaces(OsrsCache* cache, const char* out_dir) {
         group_count, total_components, total_if3, total_components - total_if3);
 }
 
+static const char* const FONT_NAMES[] = {"p11_full", "p12_full", "b12_full", "q8_full"};
+
+static void export_fonts(OsrsCache* cache, const char* out_dir) {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/fonts", out_dir);
+    ensure_dir(dir);
+    for (int i = 0; i < (int)(sizeof(FONT_NAMES) / sizeof(FONT_NAMES[0])); i++) {
+        int group = cache_find_group(cache, CACHE_INDEX_SPRITES, FONT_NAMES[i]);
+        CacheFile metrics = cache_read_file(cache, CACHE_INDEX_FONTS, group, 0);
+        assert(metrics.size == 257);
+        CacheFile f = cache_read_container(cache, CACHE_INDEX_SPRITES, group);
+        SpriteGroup g = sprite_group_decode(f.data, f.size, 1.0, SPRITE_ALPHA_CHANNEL);
+        assert(g.count == 256);
+        int cell_w = 0, cell_h = 0, top = INT_MAX, bottom = INT_MIN;
+        for (int c = 0; c < 256; c++) {
+            const SpriteFrame* fr = &g.frames[c];
+            if (fr->width > cell_w) cell_w = fr->width;
+            if (fr->height > cell_h) cell_h = fr->height;
+            if (fr->sub_height && fr->y_offset < top) top = fr->y_offset;
+            if (fr->y_offset + fr->sub_height > bottom) bottom = fr->y_offset + fr->sub_height;
+        }
+        int ascent = metrics.data[256];
+        assert(ascent >= top && bottom >= ascent && cell_w < 256 && cell_h < 256);
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s.font", dir, FONT_NAMES[i]);
+        FILE* out = fopen(path, "wb");
+        assert(out);
+        uint32_t magic = OSRS_FONT_MAGIC;
+        fwrite(&magic, 4, 1, out);
+        uint8_t header[5] = {(uint8_t)cell_w, (uint8_t)cell_h, (uint8_t)ascent, (uint8_t)(ascent - top), (uint8_t)(bottom - ascent)};
+        fwrite(header, 1, sizeof(header), out);
+        fwrite(metrics.data, 1, 256, out);
+        uint8_t* mask = calloc((size_t)(256 * cell_w * cell_h), 1);
+        for (int c = 0; c < 256; c++) {
+            const SpriteFrame* fr = &g.frames[c];
+            for (int y = 0; y < fr->height; y++)
+                for (int x = 0; x < fr->width; x++)
+                    mask[(c * cell_h + y) * cell_w + x] = fr->pixels[y * fr->width + x] >> 24 ? 1 : 0;
+        }
+        fwrite(mask, 1, (size_t)(256 * cell_w * cell_h), out);
+        fclose(out);
+        free(mask);
+        sprite_group_free(&g);
+        free(f.data);
+        free(metrics.data);
+        printf("fonts/%s.font: cell %dx%d ascent %d\n", FONT_NAMES[i], cell_w, cell_h, ascent);
+    }
+}
+
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
     Defs defs = {.cache = cache};
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
@@ -1856,7 +1905,8 @@ static void usage(void) {
         "       osrs_export <cache_dir> <out_dir> equipment\n"
         "       osrs_export <cache_dir> <out_dir> textures\n"
         "       osrs_export <cache_dir> <out_dir> sprites\n"
-        "       osrs_export <cache_dir> <out_dir> interfaces\n");
+        "       osrs_export <cache_dir> <out_dir> interfaces\n"
+        "       osrs_export <cache_dir> <out_dir> fonts\n");
     exit(2);
 }
 
@@ -1941,6 +1991,10 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[3], "interfaces") == 0 && argc == 4) {
         export_interfaces(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "fonts") == 0 && argc == 4) {
+        export_fonts(cache, out_dir);
         return 0;
     }
     usage();

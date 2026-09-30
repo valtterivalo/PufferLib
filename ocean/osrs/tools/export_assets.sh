@@ -38,5 +38,6 @@ x npcs colosseum npc=10880:11101:11595 npc=12810:10847:10848 npc=12811:10859:108
 x textures
 x sprites
 x interfaces
+x fonts
 x projectiles
 x equipment

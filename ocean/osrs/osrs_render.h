@@ -282,12 +282,8 @@ typedef struct {
 } RenderVisualSlotSnapshot;
 
 #define CONTEXT_MENU_MAX_ITEMS 64
-#define CONTEXT_MENU_ROW_H     20
-#define CONTEXT_MENU_ITEM_TOP  22
-#define CONTEXT_MENU_ITEM_H    18
-#define CONTEXT_MENU_TITLE_H   24
-#define CONTEXT_MENU_PADDING    4
-#define CONTEXT_MENU_MIN_W    158
+#define CONTEXT_MENU_ROW_H     15
+#define CONTEXT_MENU_ITEM_TOP  19
 
 typedef enum {
     CMENU_ACTION_NONE = 0,
@@ -336,30 +332,13 @@ typedef struct {
 } ContextMenu;
 
 static int context_menu_height(const ContextMenu* cm) {
-    return CONTEXT_MENU_TITLE_H + cm->item_count * CONTEXT_MENU_ROW_H;
+    return CONTEXT_MENU_ITEM_TOP + 3 + cm->item_count * CONTEXT_MENU_ROW_H;
 }
 
 static int context_menu_row_at(const ContextMenu* cm, int mx, int my) {
-    int menu_h = context_menu_height(cm);
-    if (mx < cm->screen_x || mx >= cm->screen_x + cm->width ||
-            my < cm->screen_y || my >= cm->screen_y + menu_h) {
-        return -1;
-    }
-    if (my < cm->screen_y + CONTEXT_MENU_ITEM_TOP) return -1;
+    if (mx <= cm->screen_x || mx >= cm->screen_x + cm->width || my < cm->screen_y + CONTEXT_MENU_ITEM_TOP) return -1;
     int row = (my - cm->screen_y - CONTEXT_MENU_ITEM_TOP) / CONTEXT_MENU_ROW_H;
-    if (row < 0 || row >= cm->item_count) return -1;
-    return row;
-}
-
-static void context_menu_draw_text_shadow(
-    const GuiState* gs,
-    const char* text,
-    int x,
-    int y,
-    int size,
-    Color color
-) {
-    gui_text_shadow(gs, text, x, y, size, color);
+    return row < cm->item_count ? row : -1;
 }
 
 typedef struct RenderClient {
@@ -1175,20 +1154,18 @@ static void render_lab_add_spawn_palette(ContextMenu* cm, const char* encounter_
     }
 }
 
-static void context_menu_finish_layout(ContextMenu* cm, int mx, int my) {
-    int max_w = CONTEXT_MENU_MIN_W;
-    int title_w = MeasureText("Choose Option", 11) + CONTEXT_MENU_PADDING * 2 + 10;
-    if (title_w > max_w) max_w = title_w;
+static void context_menu_finish_layout(ContextMenu* cm, const OsrsFont* bold, int mx, int my) {
+    int max_w = osrs_font_width(bold, "Choose Option");
     for (int i = 0; i < cm->item_count; i++) {
-        int w = MeasureText(cm->items[i].label, 11) + CONTEXT_MENU_PADDING * 2 + 12;
+        int w = osrs_font_width(bold, cm->items[i].label);
         if (w > max_w) max_w = w;
     }
-    cm->width = max_w;
+    cm->width = max_w + 8;
     cm->click_screen_x = mx;
     cm->click_screen_y = my;
 
     int menu_h = context_menu_height(cm);
-    cm->screen_x = mx;
+    cm->screen_x = mx - cm->width / 2;
     cm->screen_y = my;
     if (cm->screen_x + cm->width > RENDER_WINDOW_W)
         cm->screen_x = RENDER_WINDOW_W - cm->width;
@@ -1308,7 +1285,7 @@ static void context_menu_build(RenderClient* rc, OsrsEnv* env, int mx, int my) {
 
     context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
 
-    context_menu_finish_layout(cm, mx, my);
+    context_menu_finish_layout(cm, &rc->gui.fonts[OSRS_FONT_B12], mx, my);
 }
 
 static void context_menu_build_gui(
@@ -1440,7 +1417,7 @@ static void context_menu_build_gui(
     }
 
     context_menu_add(cm, CMENU_ACTION_CANCEL, -1, "Cancel");
-    context_menu_finish_layout(cm, layout_mx, layout_my);
+    context_menu_finish_layout(cm, &rc->gui.fonts[OSRS_FONT_B12], layout_mx, layout_my);
 }
 
 static void render_human_attack_npc_slot(
@@ -1683,48 +1660,16 @@ static void context_menu_draw(RenderClient* rc) {
 
     cm->hover_idx = context_menu_row_at(cm, mx, my);
 
-    Color bg = (Color){53, 44, 31, 244};
-    Color border = (Color){170, 137, 72, 255};
-    Color row_bg = (Color){28, 23, 17, 215};
-    Color hover_bg = (Color){74, 60, 38, 235};
-    Color title_color = (Color){255, 255, 0, 255};
-    Color text_normal = (Color){255, 152, 31, 255};
-    Color text_hover = (Color){255, 255, 0, 255};
-
-    DrawRectangle(cm->screen_x, cm->screen_y, cm->width, menu_h, bg);
-    DrawRectangleLinesEx(
-        (Rectangle){
-            (float)cm->screen_x,
-            (float)cm->screen_y,
-            (float)cm->width,
-            (float)menu_h,
-        },
-        1.0f,
-        border
-    );
-    context_menu_draw_text_shadow(
-        &rc->gui,
-        "Choose Option", cm->screen_x + 5, cm->screen_y + 4, 11, title_color);
-
+    const OsrsFont* bold = &rc->gui.fonts[OSRS_FONT_B12];
+    Color menu_color = {0x5D, 0x54, 0x47, 255};
+    DrawRectangle(cm->screen_x, cm->screen_y, cm->width, menu_h, menu_color);
+    DrawRectangle(cm->screen_x + 1, cm->screen_y + 1, cm->width - 2, 16, BLACK);
+    DrawRectangleLines(cm->screen_x + 1, cm->screen_y + 18, cm->width - 2, menu_h - 19, BLACK);
+    osrs_font_draw(bold, "Choose Option", cm->screen_x + 3, cm->screen_y + 14, menu_color, OSRS_TEXT_PLAIN);
     for (int i = 0; i < cm->item_count; i++) {
-        int iy = cm->screen_y + CONTEXT_MENU_ITEM_TOP + i * CONTEXT_MENU_ROW_H;
-        Color bg_color = (i == cm->hover_idx) ? hover_bg : row_bg;
-        DrawRectangle(
-            cm->screen_x + CONTEXT_MENU_PADDING,
-            iy,
-            cm->width - CONTEXT_MENU_PADDING * 2,
-            CONTEXT_MENU_ITEM_H,
-            bg_color
-        );
-        Color tc = (i == cm->hover_idx) ? text_hover : text_normal;
-        context_menu_draw_text_shadow(
-            &rc->gui,
-            cm->items[i].label,
-            cm->screen_x + CONTEXT_MENU_PADDING + 4,
-            iy + 3,
-            11,
-            tc
-        );
+        osrs_font_draw(bold, cm->items[i].label, cm->screen_x + 3,
+            cm->screen_y + CONTEXT_MENU_ITEM_TOP + 12 + i * CONTEXT_MENU_ROW_H,
+            i == cm->hover_idx ? (Color){255, 255, 0, 255} : WHITE, OSRS_TEXT_SHADOWED);
     }
 }
 
@@ -3828,15 +3773,15 @@ static void render_draw_xp_drops(RenderClient* rc) {
         float icon_px = 16.0f;
         float scale = icon.width > 0 ? icon_px / (float)icon.width : 1.0f;
         const char* txt = TextFormat("%d", d->damage);
-        int tw = MeasureText(txt, 10);
+        const OsrsFont* font = &rc->gui.fonts[OSRS_FONT_P11];
+        int tw = osrs_font_width(font, txt);
         int draw_y = origin_y + (int)d->move;
         int text_x = origin_x - tw;
         int icon_x = text_x - (int)icon_px - 2;
         DrawTextureEx(
             icon, (Vector2){(float)icon_x, (float)draw_y}, 0.0f, scale,
             (Color){255, 255, 255, a});
-        DrawText(txt, text_x + 1, draw_y + 3, 10, (Color){0, 0, 0, a});
-        DrawText(txt, text_x, draw_y + 2, 10, (Color){255, 255, 255, a});
+        osrs_font_draw(font, txt, text_x, draw_y + 12, (Color){255, 255, 255, a}, OSRS_TEXT_SHADOWED);
     }
     EndMode2D();
 }
@@ -3849,10 +3794,8 @@ static void render_draw_hitmark(RenderClient* rc, int cx, int cy, int damage, in
     float draw_y = (float)cy - (float)tex.height / 2.0f;
     DrawTexture(tex, (int)draw_x, (int)draw_y, (Color){255, 255, 255, a});
 
-    const char* txt = TextFormat("%d", damage);
-    int tw = MeasureText(txt, 10);
-    DrawText(txt, cx - tw / 2 + 1, cy - 4, 10, (Color){0, 0, 0, a});
-    DrawText(txt, cx - tw / 2, cy - 5, 10, (Color){255, 255, 255, a});
+    osrs_font_draw_centered(&rc->gui.fonts[OSRS_FONT_P11], TextFormat("%d", damage), cx, cy + 4,
+        (Color){255, 255, 255, a}, OSRS_TEXT_SHADOWED);
 }
 
 static void render_splat_slot_offset(int slot, int* dx, int* dy) {
@@ -5537,13 +5480,8 @@ static void render_draw_overhead_status(RenderClient* rc, OsrsEnv* env) {
         if (p->said_taste_vengeance_this_tick)
             rc->chat_visible_until[i] = env->tick + 4;
         if (env->tick < rc->chat_visible_until[i]) {
-            const char* chat = "Taste Vengeance!";
-            int fs = 12;
-            int tw = MeasureText(chat, fs);
-            int cx = (int)screen_overhead.x - tw / 2;
-            int cy = (int)cursor_y - fs - 1;
-            DrawText(chat, cx + 1, cy + 1, fs, BLACK);
-            DrawText(chat, cx, cy, fs, GUI_TEXT_YELLOW);
+            osrs_font_draw_centered(&rc->gui.fonts[OSRS_FONT_B12], "Taste Vengeance!",
+                (int)screen_overhead.x, (int)cursor_y - 2, GUI_TEXT_YELLOW, OSRS_TEXT_SHADOWED);
         }
 
         if (rc->show_debug && p->entity_type == ENTITY_NPC &&
@@ -5633,12 +5571,8 @@ static void render_draw_minimap_orb(
     Color text_color = max_value > 0 && value < max_value / 3
         ? (Color){255, 80, 70, 255}
         : (Color){70, 255, 70, 255};
-    Rectangle text_rect = {rect.x + 3, rect.y + 14, 24, 13};
-    int tw = MeasureText(text, 12);
-    int tx = (int)(text_rect.x + text_rect.width / 2 - tw / 2);
-    int ty = (int)(text_rect.y + 1);
-    DrawText(text, tx + 1, ty + 1, 12, BLACK);
-    DrawText(text, tx, ty, 12, text_color);
+    osrs_font_draw_lines(&gs->fonts[OSRS_FONT_P11], text, (Rectangle){rect.x + 3, rect.y + 14, 24, 13},
+        text_color, OSRS_TEXT_SHADOWED, OSRS_TEXT_ALIGN_CENTER, OSRS_TEXT_ALIGN_CENTER, 0);
 }
 
 static int render_minimap_inside(int x, int y) {
@@ -6112,58 +6046,22 @@ static void render_draw_colosseum_modifier_hud(RenderClient* rc) {
         } else {
             snprintf(title, sizeof(title), "%s", name);
         }
-        const int title_fs = 12;
-        const int desc_fs = 10;
+        const OsrsFont* bold = &rc->gui.fonts[OSRS_FONT_B12];
+        const OsrsFont* plain = &rc->gui.fonts[OSRS_FONT_P11];
         const int pad = 6;
-        int title_w = MeasureText(title, title_fs);
-        int desc_w = MeasureText(desc, desc_fs);
+        int title_w = osrs_font_width(bold, title);
+        int desc_w = osrs_font_width(plain, desc);
         int box_w = (title_w > desc_w ? title_w : desc_w) + pad * 2;
-        int box_h = title_fs + desc_fs + pad * 2 + 2;
+        int box_h = bold->ascent + plain->ascent + pad * 2 + 4;
         int box_x = hover_x;
         int box_y = y0 + icon_size + 6;
         if (box_x + box_w > RENDER_WINDOW_W - 4) box_x = RENDER_WINDOW_W - 4 - box_w;
         if (box_x < 4) box_x = 4;
         DrawRectangle(box_x, box_y, box_w, box_h, CLITERAL(Color){18, 16, 14, 235});
         DrawRectangleLines(box_x, box_y, box_w, box_h, CLITERAL(Color){184, 146, 72, 230});
-        DrawText(title, box_x + pad, box_y + pad, title_fs, CLITERAL(Color){238, 222, 180, 255});
-        DrawText(desc, box_x + pad, box_y + pad + title_fs + 2, desc_fs, CLITERAL(Color){200, 200, 200, 255});
-    }
-}
-
-static void render_colosseum_draft_wrap_text(
-    const GuiState* gs, const char* text, int x, int y, int max_w, int fs, int line_h, Color color
-) {
-    char line[160];
-    int line_len = 0;
-    int cur_y = y;
-    int i = 0;
-    while (text[i] != '\0') {
-        int ws = i;
-        while (text[i] != '\0' && text[i] != ' ') i++;
-        int word_len = i - ws;
-        if (word_len > (int)sizeof(line) - 1) word_len = (int)sizeof(line) - 1;
-        char candidate[160];
-        int cand_len = line_len;
-        memcpy(candidate, line, (size_t)line_len);
-        if (line_len > 0) candidate[cand_len++] = ' ';
-        memcpy(candidate + cand_len, text + ws, (size_t)word_len);
-        cand_len += word_len;
-        candidate[cand_len] = '\0';
-        if (line_len > 0 && MeasureText(candidate, fs) > max_w) {
-            line[line_len] = '\0';
-            context_menu_draw_text_shadow(gs, line, x, cur_y, fs, color);
-            cur_y += line_h;
-            memcpy(line, text + ws, (size_t)word_len);
-            line_len = word_len;
-        } else {
-            memcpy(line, candidate, (size_t)cand_len);
-            line_len = cand_len;
-        }
-        while (text[i] == ' ') i++;
-    }
-    if (line_len > 0) {
-        line[line_len] = '\0';
-        context_menu_draw_text_shadow(gs, line, x, cur_y, fs, color);
+        osrs_font_draw(bold, title, box_x + pad, box_y + pad + bold->ascent, CLITERAL(Color){238, 222, 180, 255}, OSRS_TEXT_SHADOWED);
+        osrs_font_draw(plain, desc, box_x + pad, box_y + pad + bold->ascent + 4 + plain->ascent,
+            CLITERAL(Color){200, 200, 200, 255}, OSRS_TEXT_SHADOWED);
     }
 }
 
@@ -6185,12 +6083,9 @@ static void render_draw_colosseum_modifier_draft(RenderClient* rc, OsrsEnv* env)
     DrawRectangle(0, 0, RENDER_GRID_W, RENDER_WINDOW_H, CLITERAL(Color){0, 0, 0, 150});
 
     Rectangle first = render_colosseum_draft_card_rect(0);
-    const char* banner = "Choose a modifier to start the next wave";
-    int banner_fs = 16;
-    int banner_w = MeasureText(banner, banner_fs);
-    context_menu_draw_text_shadow(&rc->gui, banner,
-        (RENDER_GRID_W - banner_w) / 2, (int)first.y - 34, banner_fs,
-        CLITERAL(Color){255, 255, 0, 255});
+    const OsrsFont* fonts = rc->gui.fonts;
+    osrs_font_draw_centered(&fonts[OSRS_FONT_B12], "Choose a modifier to start the next wave",
+        RENDER_GRID_W / 2, (int)first.y - 20, CLITERAL(Color){255, 255, 0, 255}, OSRS_TEXT_SHADOWED);
 
     static const char* roman[4] = {"", "I", "II", "III"};
     Vector2 mouse = GetMousePosition();
@@ -6216,14 +6111,14 @@ static void render_draw_colosseum_modifier_draft(RenderClient* rc, OsrsEnv* env)
             snprintf(title, sizeof(title), "%s", name);
 
         const int pad = 9;
-        context_menu_draw_text_shadow(&rc->gui, title,
-            (int)card.x + pad, (int)card.y + pad, 15, CLITERAL(Color){255, 255, 0, 255});
-        render_colosseum_draft_wrap_text(&rc->gui, desc,
-            (int)card.x + pad, (int)card.y + pad + 28, (int)card.width - pad * 2, 11, 14,
-            CLITERAL(Color){255, 152, 31, 255});
-        context_menu_draw_text_shadow(&rc->gui, hover ? "> click to pick <" : "click to pick",
-            (int)card.x + pad, (int)card.y + (int)card.height - 22, 11,
-            hover ? CLITERAL(Color){255, 255, 255, 255} : CLITERAL(Color){170, 170, 170, 255});
+        osrs_font_draw(&fonts[OSRS_FONT_B12], title, (int)card.x + pad, (int)card.y + pad + 12,
+            CLITERAL(Color){255, 255, 0, 255}, OSRS_TEXT_SHADOWED);
+        osrs_font_draw_lines(&fonts[OSRS_FONT_P12], desc,
+            (Rectangle){card.x + pad, card.y + pad + 22, card.width - pad * 2, card.height - pad * 2 - 44},
+            CLITERAL(Color){255, 152, 31, 255}, OSRS_TEXT_SHADOWED, OSRS_TEXT_ALIGN_START, OSRS_TEXT_ALIGN_START, 14);
+        osrs_font_draw(&fonts[OSRS_FONT_P11], "Click to pick",
+            (int)card.x + pad, (int)card.y + (int)card.height - 12,
+            hover ? CLITERAL(Color){255, 255, 255, 255} : CLITERAL(Color){170, 170, 170, 255}, OSRS_TEXT_SHADOWED);
     }
 }
 

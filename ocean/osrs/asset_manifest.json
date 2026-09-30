@@ -16,8 +16,10 @@
         "projectiles.models",
         "projectiles.anims",
         "spotanims.bin",
-        "fonts/runescape.ttf",
-        "fonts/runescape_small.ttf",
+        "fonts/p11_full.font",
+        "fonts/p12_full.font",
+        "fonts/b12_full.font",
+        "fonts/q8_full.font",
         "ui/interfaces.bin",
         "textures.atlas",
         "textures.tanim"

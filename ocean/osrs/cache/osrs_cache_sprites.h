@@ -10,6 +10,7 @@ typedef enum { SPRITE_ALPHA_CHANNEL, SPRITE_ALPHA_INDEX } SpriteAlpha;
 
 typedef struct {
     int width, height;
+    int y_offset, sub_height;
     uint32_t* pixels;
 } SpriteFrame;
 
@@ -56,12 +57,13 @@ static SpriteGroup sprite_group_decode(const uint8_t* data, int size, double bri
         if (canvas_h < 1) canvas_h = 1;
         SpriteFrame* frame = &g.frames[i];
         frame->width = canvas_w, frame->height = canvas_h;
+        frame->y_offset = y_off[i], frame->sub_height = h;
         frame->pixels = calloc((size_t)canvas_w * (size_t)canvas_h, sizeof(uint32_t));
+        int flags = cache_u8(&px);
         if (w <= 0 || h <= 0) continue;
         int dim = w * h;
         uint8_t* index = malloc((size_t)dim);
         uint8_t* alpha = malloc((size_t)dim);
-        int flags = cache_u8(&px);
         if (flags & SPRITE_FLAG_VERTICAL) {
             for (int x = 0; x < w; x++)
                 for (int y = 0; y < h; y++) index[y * w + x] = cache_u8(&px);

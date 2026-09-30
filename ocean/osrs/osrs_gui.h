@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "osrs_asset_raylib.h"
+#include "osrs_font.h"
 #include "osrs_human_input_types.h"
 #include "osrs_inventory_drag.h"
 
@@ -34,7 +35,6 @@
 #define GUI_TEXT_GREEN   CLITERAL(Color){ 0, 255, 0, 255 }
 #define GUI_SPEC_GREEN  CLITERAL(Color){ 0, 180, 0, 255 }
 
-#define GUI_TEXT_SHADOW CLITERAL(Color){ 0, 0, 0, 255 }
 
 #define GUI_MAP_CONTAINER_W 211
 #define GUI_MAP_CONTAINER_H 207
@@ -304,8 +304,7 @@ typedef struct {
     GuiNamedAsset named_assets[GUI_MAX_NAMED_ASSETS];
     int named_asset_count;
     OsrsUiInterfaceStore ui_interfaces;
-    Font font;
-    Font small_font;
+    OsrsFont fonts[OSRS_FONT_COUNT];
     GuiItemStackVariant item_stack_variants[GUI_ITEM_STACK_VARIANT_MAX];
     int item_stack_variant_count;
 
@@ -484,30 +483,12 @@ static void gui_pop_clip(
     if (clip->active) gui_apply_scissor(gs, clip->current);
 }
 
-static Font gui_font_for_size(const GuiState* gs, int size) {
-    return size <= 12 ? gs->small_font : gs->font;
-}
-
-static int gui_measure_text(const GuiState* gs, const char* text, int size) {
-    if (!text || !text[0]) return 0;
-    Font font = gui_font_for_size(gs, size);
-    Vector2 measured = MeasureTextEx(font, text, (float)size, 0.0f);
-    return (int)(measured.x + 0.5f);
-}
-
-static Font gui_require_font(const char* path, int size) {
-    Font font = osrs_asset_load_font(path, size);
-    if (font.texture.id != 0) return font;
-
-    fprintf(stderr, "GUI: failed to load required font %s\n", path);
-    abort();
+static int gui_text_width(const GuiState* gs, OsrsFontId font, const char* text) {
+    return osrs_font_width(&gs->fonts[font], text);
 }
 
 static void gui_load_fonts(GuiState* gs) {
-    gs->font = gui_require_font(OSRS_ASSET("fonts/runescape.ttf"), 14);
-    SetTextureFilter(gs->font.texture, TEXTURE_FILTER_POINT);
-    gs->small_font = gui_require_font(OSRS_ASSET("fonts/runescape_small.ttf"), 12);
-    SetTextureFilter(gs->small_font.texture, TEXTURE_FILTER_POINT);
+    for (int i = 0; i < OSRS_FONT_COUNT; i++) gs->fonts[i] = osrs_font_load(OSRS_ASSET(OSRS_FONT_FILES[i]));
 }
 
 static void gui_load_item_stack_variants(GuiState* gs) {
@@ -962,8 +943,7 @@ static void gui_unload_sprites(GuiState* gs) {
     UnloadTexture(gs->minimap_dot_player);
     UnloadTexture(gs->minimap_dot_npc);
     for (int i = 0; i < gs->item_sprite_count; i++) UnloadTexture(gs->item_sprite_tex[i]);
-    UnloadFont(gs->font);
-    UnloadFont(gs->small_font);
+    for (int i = 0; i < OSRS_FONT_COUNT; i++) UnloadTexture(gs->fonts[i].atlas);
     gs->item_sprite_count = 0;
     gs->item_stack_variant_count = 0;
 }
@@ -1079,20 +1059,8 @@ static const char* gui_item_short_name(uint8_t item_idx) {
     }
 }
 
-static void gui_text_shadow(
-    const GuiState* gs,
-    const char* text,
-    int x,
-    int y,
-    int size,
-    Color color
-) {
-    if (!text || !text[0]) return;
-    Font font = gui_font_for_size(gs, size);
-    Vector2 shadow = {(float)x + 1.0f, (float)y + 1.0f};
-    Vector2 pos = {(float)x, (float)y};
-    DrawTextEx(font, text, shadow, (float)size, 0.0f, GUI_TEXT_SHADOW);
-    DrawTextEx(font, text, pos, (float)size, 0.0f, color);
+static void gui_text(const GuiState* gs, OsrsFontId font, const char* text, int x, int baseline, Color color) {
+    osrs_font_draw(&gs->fonts[font], text, x, baseline, color, OSRS_TEXT_SHADOWED);
 }
 
 
@@ -1330,7 +1298,7 @@ static void gui_draw_ui_item_slot(GuiState* gs, const GuiUiItemSlot* slot, Recta
         if (slot->quantity > 1) {
             char text[16];
             gui_format_stack_quantity(slot->quantity, text, sizeof(text));
-            gui_text_shadow(gs, text, (int)rect.x + 1, (int)rect.y - 1, 10,
+            gui_text(gs, OSRS_FONT_P11, text, (int)rect.x + 1, (int)rect.y + 10,
                 gui_stack_text_color(slot->quantity));
         }
     }
@@ -1443,28 +1411,11 @@ static void gui_draw_ui_text_component(
 ) {
     const char* text = override && override->text ? override->text : component->text;
     if (!text || !text[0]) return;
-    int size = component->line_height > 0 ? component->line_height + 9 : 12;
-    if (size < 10) size = 10;
-    Color color = gui_ui_color_from_rgb(component->text_color, component->opacity);
-    int width = gui_measure_text(gs, text, size);
-    int x = (int)rect.x;
-    int y = (int)rect.y;
-    if (component->x_text_alignment == 1) {
-        x = (int)(rect.x + (rect.width - width) * 0.5f);
-    } else if (component->x_text_alignment == 2) {
-        x = (int)(rect.x + rect.width - width);
-    }
-    if (component->y_text_alignment == 1) {
-        y = (int)(rect.y + (rect.height - size) * 0.5f);
-    } else if (component->y_text_alignment == 2) {
-        y = (int)(rect.y + rect.height - size);
-    }
-    Font font = gui_font_for_size(gs, size);
-    if (component->text_shadowed) {
-        DrawTextEx(font, text, (Vector2){(float)x + 1.0f, (float)y + 1.0f},
-            (float)size, 0.0f, BLACK);
-    }
-    DrawTextEx(font, text, (Vector2){(float)x, (float)y}, (float)size, 0.0f, color);
+    osrs_font_draw_lines(&gs->fonts[osrs_font_from_cache_id(component->font_id)], text, rect,
+        gui_ui_color_from_rgb(component->text_color, component->opacity),
+        component->text_shadowed ? OSRS_TEXT_SHADOWED : OSRS_TEXT_PLAIN,
+        (OsrsTextAlign)component->x_text_alignment, (OsrsTextAlign)component->y_text_alignment,
+        component->line_height);
 }
 
 static void gui_draw_ui_component(
@@ -1541,14 +1492,14 @@ static void gui_draw_ui_component(
     }
 }
 
-static int gui_draw_ui_group(
+static void gui_draw_ui_group(
     GuiState* gs,
     const char* group_name,
     Rectangle mount,
     const GuiUiOverrides* overrides
 ) {
     const OsrsUiInterfaceGroup* group = osrs_ui_interface_group(&gs->ui_interfaces, group_name);
-    if (!group) return 0;
+    assert(group);
     GuiUiClipState clip = {0};
     Rectangle prev = {0};
     int prev_active = 0;
@@ -1561,7 +1512,6 @@ static int gui_draw_ui_group(
         gui_draw_ui_component(gs, group, component, rect, &clip, overrides);
     }
     gui_pop_clip(gs, &clip, prev, prev_active);
-    return 1;
 }
 
 static void gui_draw_side_chrome(GuiState* gs) {
@@ -2415,7 +2365,7 @@ static void gui_draw_inventory_drag(GuiState* gs) {
         CLITERAL(Color){255, 255, 255, 200});
 }
 
-static int gui_draw_inventory_decoded(GuiState* gs) {
+static void gui_draw_inventory_decoded(GuiState* gs) {
     GuiUiItemContainerOverride container = {
         .component_id = OSRS_UI_COMPONENT_ID(OSRS_UI_GROUP_INVENTORY, 0),
         .slot_count = INV_GRID_SLOTS,
@@ -2434,42 +2384,7 @@ static int gui_draw_inventory_decoded(GuiState* gs) {
         .item_containers = &container,
         .item_container_count = 1,
     };
-    return gui_draw_ui_group(gs, "inventory", gui_side_content_rect(gs), &overrides);
-}
-
-static void gui_draw_inventory_manual(GuiState* gs) {
-    for (int slot = 0; slot < INV_GRID_SLOTS; slot++) {
-        int cx, cy;
-        gui_inv_slot_pos(gs, slot, &cx, &cy);
-        InvSlot* inv = &gs->inv_grid[slot];
-
-        if (inv->type == INV_SLOT_EMPTY) continue;
-
-        Texture2D tex = { 0 };
-        if (inv->type == INV_SLOT_EQUIPMENT) {
-            tex = gui_get_item_sprite(gs, inv->item_db_idx);
-        } else {
-            tex = gui_get_sprite_by_osrs_id(gs, inv->osrs_id);
-        }
-
-        int is_dimmed = (gs->inv_dim_slot == slot && gs->inv_dim_timer > 0);
-        Color tint = is_dimmed ? CLITERAL(Color){ 255, 255, 255, 128 } : WHITE;
-
-        int dx = cx;
-        int dy = cy;
-
-        Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
-        Rectangle dst = {(float)dx, (float)dy, (float)INV_SPRITE_W, (float)INV_SPRITE_H};
-        if (gs->inv_drag_active && slot == gs->inv_drag_src_slot) {
-            DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f,
-                CLITERAL(Color){255, 255, 255, 80});
-            continue;
-        }
-
-        DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
-    }
-
-    gui_draw_inventory_drag(gs);
+    gui_draw_ui_group(gs, "inventory", gui_side_content_rect(gs), &overrides);
 }
 
 static void gui_load_display_inventory(GuiState* gs) {
@@ -2494,11 +2409,8 @@ static void gui_draw_inventory(GuiState* gs, Player* p) {
     if (gs->display_inventory_count > 0) {
         gui_load_display_inventory(gs);
         gs->inv_grid_dirty = 0;
-        if (gui_draw_inventory_decoded(gs)) {
-            gui_draw_inventory_drag(gs);
-            return;
-        }
-        gui_draw_inventory_manual(gs);
+        gui_draw_inventory_decoded(gs);
+        gui_draw_inventory_drag(gs);
         return;
     }
     if (gs->inv_grid_dirty) {
@@ -2508,12 +2420,8 @@ static void gui_draw_inventory(GuiState* gs, Player* p) {
         gui_update_inventory(gs, p);
     }
 
-    if (gui_draw_inventory_decoded(gs)) {
-        gui_draw_inventory_drag(gs);
-        return;
-    }
-
-    gui_draw_inventory_manual(gs);
+    gui_draw_inventory_decoded(gs);
+    gui_draw_inventory_drag(gs);
 }
 
 typedef struct {
@@ -2553,7 +2461,7 @@ static const GuiWornButtonRef GUI_WORN_BUTTON_REFS[] = {
     {"call_follower", "com_8",          "whistle",          {142, 208, 40, 40}, {145, 211, 32, 32}},
 };
 
-static int gui_draw_equipment_decoded(GuiState* gs, Player* p) {
+static void gui_draw_equipment(GuiState* gs, Player* p) {
     GuiUiComponentOverride overrides[GUI_UI_MAX_COMPONENT_OVERRIDES];
     memset(overrides, 0, sizeof(overrides));
     int override_count = 0;
@@ -2589,50 +2497,7 @@ static int gui_draw_equipment_decoded(GuiState* gs, Player* p) {
         gui_draw_named_asset(gs, "combatboxes_0", rect, WHITE);
     }
 
-    return gui_draw_ui_group(gs, "wornitems", gui_side_content_rect(gs), &ui_overrides);
-}
-
-static void gui_draw_equipment(GuiState* gs, Player* p) {
-    if (gui_draw_equipment_decoded(gs, p)) return;
-
-    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
-        gui_side_ref_rect(gs, (Rectangle){77, 39, 36, 124}), WHITE);
-    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
-        gui_side_ref_rect(gs, (Rectangle){21, 118, 36, 45}), WHITE);
-    gui_draw_named_asset_tiled(gs, "miscgraphics_2",
-        gui_side_ref_rect(gs, (Rectangle){133, 118, 36, 45}), WHITE);
-    gui_draw_named_asset_tiled(gs, "miscgraphics_3",
-        gui_side_ref_rect(gs, (Rectangle){56, 81, 78, 36}), WHITE);
-    gui_draw_named_asset_tiled(gs, "miscgraphics_3",
-        gui_side_ref_rect(gs, (Rectangle){71, 42, 48, 36}), WHITE);
-
-    int slot_count = (int)(sizeof(GUI_WORN_SLOT_REFS) / sizeof(GUI_WORN_SLOT_REFS[0]));
-    for (int i = 0; i < slot_count; i++) {
-        const GuiWornSlotRef* ref = &GUI_WORN_SLOT_REFS[i];
-        Rectangle dst = gui_side_component_rect(gs, "wornitems", ref->component_name, ref->rect);
-        int item_idx = p->equipped[ref->gear_slot];
-        gui_draw_equip_slot(
-            gs,
-            (int)dst.x,
-            (int)dst.y,
-            (int)dst.width,
-            (int)dst.height,
-            ref->gear_slot,
-            item_idx);
-        if (item_idx == ITEM_NONE) {
-            gui_draw_named_asset_centered(gs, ref->worn_asset, dst, dst.width, dst.height, WHITE);
-        }
-    }
-
-    int button_count = (int)(sizeof(GUI_WORN_BUTTON_REFS) / sizeof(GUI_WORN_BUTTON_REFS[0]));
-    for (int i = 0; i < button_count; i++) {
-        const GuiWornButtonRef* ref = &GUI_WORN_BUTTON_REFS[i];
-        Rectangle rect = gui_side_component_rect(gs, "wornitems", ref->component_name, ref->rect);
-        Rectangle icon = gui_side_component_rect(
-            gs, "wornitems", ref->icon_component_name, ref->icon_rect);
-        gui_draw_named_asset(gs, "combatboxes_0", rect, WHITE);
-        gui_draw_named_asset_centered(gs, ref->asset, icon, icon.width, icon.height, WHITE);
-    }
+    gui_draw_ui_group(gs, "wornitems", gui_side_content_rect(gs), &ui_overrides);
 }
 
 #define GUI_PRAYER_GRID_COUNT GUI_NUM_PRAYERS
@@ -2763,28 +2628,6 @@ static Rectangle gui_combat_style_rect(GuiState* gs, int index) {
         gui_combat_style_fallback_rect(index));
 }
 
-static Rectangle gui_combat_style_icon_rect(int index) {
-    static const Rectangle rects[4] = {
-        {37,  51, 34, 24},
-        {119, 51, 34, 24},
-        {37, 104, 34, 24},
-        {119,104, 34, 24},
-    };
-    assert(index >= 0 && index < 4);
-    return rects[index];
-}
-
-static Rectangle gui_combat_style_text_rect(int index) {
-    static const Rectangle rects[4] = {
-        {20,  67, 68, 13},
-        {102, 76, 68, 13},
-        {20, 129, 68, 13},
-        {102,129, 68, 13},
-    };
-    assert(index >= 0 && index < 4);
-    return rects[index];
-}
-
 static Rectangle gui_combat_autocast_rect(void) {
     return (Rectangle){20, 153, 150, 26};
 }
@@ -2800,17 +2643,6 @@ static Rectangle gui_combat_autocast_spell_rect(int index) {
 
 static Rectangle gui_combat_special_rect(void) {
     return (Rectangle){20, 200, 150, 26};
-}
-
-static Rectangle gui_combat_category_rect(void) {
-    return (Rectangle){0, 233, 190, 28};
-}
-
-static void gui_draw_combat_box(GuiState* gs, Rectangle rect, int selected) {
-    gui_draw_named_asset(gs, selected ? "combatboxes_1" : "combatboxes_0", rect, WHITE);
-    if (selected) {
-        DrawRectangleRec(rect, (Color){120, 27, 20, 54});
-    }
 }
 
 static const char* gui_combat_icon_asset(uint8_t weapon, FightStyle style, int index) {
@@ -2866,7 +2698,7 @@ static const char* gui_combat_selected_style_name(
     return "Accurate";
 }
 
-static int gui_draw_combat_decoded(
+static void gui_draw_combat_decoded(
     GuiState* gs,
     Player* p,
     const char* wpn_name,
@@ -2928,7 +2760,7 @@ static int gui_draw_combat_decoded(
         .components = overrides,
         .component_count = override_count,
     };
-    return gui_draw_ui_group(gs, "combat_interface", gui_side_content_rect(gs), &ui_overrides);
+    gui_draw_ui_group(gs, "combat_interface", gui_side_content_rect(gs), &ui_overrides);
 }
 
 static int gui_prayer_is_active(GuiPrayerIdx pidx, Player* p) {
@@ -2977,44 +2809,7 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     }
 
     GuiCombatStyleOptions styles = gui_combat_style_options(p->equipped[GEAR_SLOT_WEAPON]);
-    int decoded = gui_draw_combat_decoded(gs, p, wpn_name, &styles);
-
-    if (!decoded) {
-        Rectangle title = gui_side_ref_rect(gs, (Rectangle){10, 6, 170, 14});
-        Rectangle level = gui_side_ref_rect(gs, (Rectangle){10, 26, 170, 12});
-        int tw = gui_measure_text(gs, wpn_name, 11);
-        gui_text_shadow(gs, wpn_name, (int)(title.x + title.width / 2 - tw / 2),
-            (int)title.y, 11, GUI_TEXT_ORANGE);
-        const char* combat_level = TextFormat("Combat Lvl: %d",
-            p->base_attack + p->base_strength + p->base_defence);
-        int cw = gui_measure_text(gs, combat_level, 10);
-        gui_text_shadow(gs, combat_level, (int)(level.x + level.width / 2 - cw / 2),
-            (int)level.y, 10, GUI_TEXT_YELLOW);
-
-        for (int i = 0; i < styles.count; i++) {
-            Rectangle rect = gui_combat_style_rect(gs, i);
-            Rectangle icon = gui_side_ref_rect(gs, gui_combat_style_icon_rect(i));
-            Rectangle text = gui_side_ref_rect(gs, gui_combat_style_text_rect(i));
-            int active = p->fight_style == styles.values[i];
-            gui_draw_combat_box(gs, rect, active);
-            gui_draw_named_asset_centered(
-                gs,
-                gui_combat_icon_asset(p->equipped[GEAR_SLOT_WEAPON], styles.values[i], i),
-                icon,
-                icon.width,
-                icon.height,
-                WHITE);
-            Color txt_c = active ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE;
-            int txt_w = gui_measure_text(gs, styles.names[i], 10);
-            gui_text_shadow(
-                gs,
-                styles.names[i],
-                (int)(text.x + text.width / 2 - txt_w / 2),
-                (int)(text.y + 1),
-                10,
-                txt_c);
-        }
-    }
+    gui_draw_combat_decoded(gs, p, wpn_name, &styles);
 
     if (item_supports_ancient_autocast(p->equipped[GEAR_SLOT_WEAPON])) {
         Rectangle ac = gui_side_ref_rect(gs, gui_combat_autocast_rect());
@@ -3023,12 +2818,12 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
         gui_draw_named_asset(gs, "combatboxes_1", ac, WHITE);
         DrawRectangleLines((int)ac.x, (int)ac.y, (int)ac.width, (int)ac.height,
             p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_BORDER);
-        gui_text_shadow(
+        gui_text(
             gs,
+            OSRS_FONT_P11,
             TextFormat("Autocast: %s", spell_name),
             (int)ac.x + 8,
-            (int)ac.y + 7,
-            10,
+            (int)ac.y + 17,
             p->autocast_enabled ? GUI_TEXT_YELLOW : GUI_TEXT_WHITE);
 
         if (gs->autocast_selector_open) {
@@ -3040,13 +2835,13 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
                 gui_draw_named_asset(gs, "combatboxes_1", rect, WHITE);
                 DrawRectangleLines((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height,
                     spells[i] == spell ? GUI_TEXT_YELLOW : GUI_BORDER);
-                int tw = gui_measure_text(gs, names[i], 10);
-                gui_text_shadow(
+                int tw = gui_text_width(gs, OSRS_FONT_P11, names[i]);
+                gui_text(
                     gs,
+                    OSRS_FONT_P11,
                     names[i],
                     (int)(rect.x + rect.width / 2 - tw / 2),
-                    (int)rect.y + 7,
-                    10,
+                    (int)rect.y + 17,
                     c);
             }
         }
@@ -3066,18 +2861,9 @@ static void gui_draw_combat(GuiState* gs, Player* p) {
     DrawRectangleLinesEx((Rectangle){spec.x + 2, spec.y + 6, spec.width - 4, 14}, 1,
         (Color){44, 42, 35, 255});
     const char* spec_text = TextFormat("Special Attack: %d%%", p->special_energy);
-    int spec_w = gui_measure_text(gs, spec_text, 10);
-    gui_text_shadow(gs, spec_text, (int)(spec.x + spec.width / 2 - spec_w / 2),
-        (int)(spec.y + 8), 10, GUI_TEXT_YELLOW);
-
-    if (!decoded) {
-        Rectangle category = gui_side_ref_rect(gs, gui_combat_category_rect());
-        const char* category_text = TextFormat("Attack style: %s",
-            gui_combat_selected_style_name(&styles, p->fight_style));
-        int category_w = gui_measure_text(gs, category_text, 12);
-        gui_text_shadow(gs, category_text, (int)(category.x + category.width / 2 - category_w / 2),
-            (int)(category.y + 7), 12, GUI_TEXT_ORANGE);
-    }
+    int spec_w = gui_text_width(gs, OSRS_FONT_P11, spec_text);
+    gui_text(gs, OSRS_FONT_P11, spec_text, (int)(spec.x + spec.width / 2 - spec_w / 2),
+        (int)(spec.y + 18), GUI_TEXT_YELLOW);
 }
 
 typedef struct {
@@ -3279,9 +3065,9 @@ static void gui_draw_skill_panel_slot(
     char base_text[8];
     snprintf(current_text, sizeof(current_text), "%d", current);
     snprintf(base_text, sizeof(base_text), "%d", base);
-    gui_text_shadow(gs, current_text, (int)rect.x + 39, (int)rect.y + 2, 10,
+    gui_text(gs, OSRS_FONT_P11, current_text, (int)rect.x + 39, (int)rect.y + 12,
         gui_skill_current_color(current, base));
-    gui_text_shadow(gs, base_text, (int)rect.x + 39, (int)rect.y + 17, 9, GUI_TEXT_GREEN);
+    gui_text(gs, OSRS_FONT_P11, base_text, (int)rect.x + 39, (int)rect.y + 27, GUI_TEXT_GREEN);
 }
 
 static void gui_draw_stats(GuiState* gs, Player* p) {
@@ -3303,9 +3089,9 @@ static void gui_draw_stats(GuiState* gs, Player* p) {
     DrawRectangleRec(total, (Color){7, 7, 7, 238});
     DrawRectangleLinesEx(total, 1, (Color){99, 91, 68, 255});
     const char* total_text = TextFormat("Total level: %d", total_level);
-    int width = gui_measure_text(gs, total_text, 10);
-    gui_text_shadow(gs, total_text, (int)(total.x + (total.width - width) * 0.5f),
-        (int)(total.y + 5), 10, GUI_TEXT_YELLOW);
+    int width = gui_text_width(gs, OSRS_FONT_P11, total_text);
+    gui_text(gs, OSRS_FONT_P11, total_text, (int)(total.x + (total.width - width) * 0.5f),
+        (int)(total.y + 15), GUI_TEXT_YELLOW);
 }
 
 static void gui_cycle_entity(GuiState* gs) {
@@ -3321,9 +3107,9 @@ static void gui_draw(GuiState* gs, Player* p) {
         int hx = gs->panel_x + GUI_SIDE_CONTENT_X + 4;
         int hy = content_y + 2;
         const char* etype = (p->entity_type == ENTITY_NPC) ? "NPC" : "Player";
-        gui_text_shadow(gs, TextFormat("[G] %s %d/%d", etype,
+        gui_text(gs, OSRS_FONT_P11, TextFormat("[G] %s %d/%d", etype,
                         gs->gui_entity_idx + 1, gs->gui_entity_count),
-                        hx, hy, 8, GUI_TEXT_ORANGE);
+                        hx, hy + 10, GUI_TEXT_ORANGE);
     }
 
     switch (gs->active_tab) {

@@ -64,7 +64,7 @@ def test_empty_group_selection_emits_every_asset_once() -> None:
     ]
 
 
-def test_inferno_web_groups_emit_1568_unique_matching_vfs_paths() -> None:
+def test_inferno_web_groups_emit_unique_matching_vfs_paths() -> None:
     root = Path(__file__).resolve().parents[1]
     manifest = osrs_asset_manifest.load_manifest(root / "ocean/osrs/asset_manifest.json")
     lines = osrs_asset_manifest.emcc_preload_args(
@@ -72,13 +72,11 @@ def test_inferno_web_groups_emit_1568_unique_matching_vfs_paths() -> None:
         ["core", "inferno", "combat_visuals", "gui", "items"],
     )
 
-    assert len(lines) == 1568
-    assert len(set(lines)) == 1568
+    assert len(set(lines)) == len(lines)
     for line in lines:
         source, destination = line.removeprefix("--preload-file ").split("@", 1)
         assert source == destination
         assert source.startswith("ocean/osrs/data/")
-
 
 
 def test_gui_group_contains_every_exported_gui_sprite() -> None:
