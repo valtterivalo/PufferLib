@@ -42,9 +42,6 @@ typedef struct {
     EncounterRouteCostPolicy cost_policy;
     EncounterRouteCostPolicy destination_cost_policy;
     EncounterRouteAttackGeometry attack_geometry;
-    const CollisionMap* collision_map;
-    int world_offset_x;
-    int world_offset_y;
     const OsrsLosQuery* los_query;
 } OsrsEncounterArena;
 
@@ -123,16 +120,14 @@ static OSRS_ROUTE_NOINLINE int osrs_player_step_can_attack_target(
             target->size,
             target->attack_range);
     }
-    return encounter_player_can_attack(
+    return encounter_attack_position_valid(
         input->player->x,
         input->player->y,
         target->x,
         target->y,
         target->size,
         target->attack_range,
-        input->arena.collision_map,
-        input->arena.world_offset_x,
-        input->arena.world_offset_y,
+        input->arena.topology,
         input->arena.los_query);
 }
 
@@ -259,9 +254,6 @@ static inline void osrs_player_step_build_attack_route(
         .target_kind = ENCOUNTER_ROUTE_TARGET_ATTACK_RANGE,
         .attack_range = target->attack_range,
         .attack_geometry = input->arena.attack_geometry,
-        .collision_map = input->arena.collision_map,
-        .world_offset_x = input->arena.world_offset_x,
-        .world_offset_y = input->arena.world_offset_y,
         .los_query = input->arena.los_query,
         .movement_mode = input->arena.movement_mode,
         .cost_policy = input->arena.cost_policy,

@@ -3020,7 +3020,6 @@ static void render_restore_snapshot(RenderClient* rc, OsrsEnv* env) {
     if (rc->history_cursor < 0 || rc->history_cursor >= rc->history_count) return;
 
     void* saved_client = env->client;
-    void* saved_cmap = env->collision_map;
     float* saved_ocean_obs = env->ocean_io.agent_obs;
     int* saved_ocean_acts = env->ocean_io.agent_actions;
     float* saved_ocean_rew = env->ocean_io.agent_rewards;
@@ -3029,7 +3028,6 @@ static void render_restore_snapshot(RenderClient* rc, OsrsEnv* env) {
     *env = rc->history[rc->history_cursor];
 
     env->client = saved_client;
-    env->collision_map = saved_cmap;
     env->ocean_io.agent_obs = saved_ocean_obs;
     env->ocean_io.agent_actions = saved_ocean_acts;
     env->ocean_io.agent_rewards = saved_ocean_rew;
@@ -4653,7 +4651,7 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
     if (rc->terrain && rc->terrain->loaded) {
         DrawModel(rc->terrain->model, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
 
-        if (rc->show_collision && rc->collision_map) {
+        if (rc->show_collision) {
             for (int dx = 0; dx < rc->arena_width; dx++) {
                 for (int dy = 0; dy < rc->arena_height; dy++) {
                     int wx = rc->arena_base_x + dx + rc->collision_world_offset_x;
@@ -4703,15 +4701,9 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                 float tx = (float)(rc->arena_base_x + dx);
                 float tz = -(float)(rc->arena_base_y + dy + 1);
 
-                int on_plat;
-                if (rc->collision_map) {
-                    int wx = rc->arena_base_x + dx + rc->collision_world_offset_x;
-                    int wy = rc->arena_base_y + dy + rc->collision_world_offset_y;
-                    on_plat = collision_tile_walkable(rc->collision_map, 0, wx, wy);
-                } else {
-                    on_plat = (dx >= ZUL_PLATFORM_MIN && dx <= ZUL_PLATFORM_MAX &&
-                               dy >= ZUL_PLATFORM_MIN && dy <= ZUL_PLATFORM_MAX);
-                }
+                int on_plat = collision_tile_walkable(rc->collision_map, 0,
+                    rc->arena_base_x + dx + rc->collision_world_offset_x,
+                    rc->arena_base_y + dy + rc->collision_world_offset_y);
 
                 if (on_plat) {
                     int shade = 35 + ((dx * 7 + dy * 13) % 15);
@@ -5770,7 +5762,6 @@ static void render_minimap_fill_rect(int x, int y, int w, int h, Color c) {
 }
 
 static int render_minimap_collision_flags(RenderClient* rc, int wx, int wy) {
-    if (rc->collision_map == NULL) return COLLISION_NONE;
     return collision_get_flags(rc->collision_map, 0,
         wx + rc->collision_world_offset_x,
         wy + rc->collision_world_offset_y);
@@ -6370,6 +6361,7 @@ void pvp_render(OsrsEnv* env) {
     RenderClient* rc = (RenderClient*)env->client;
     if (rc == NULL) {
         rc = render_make_client(env);
+        rc->collision_map = collision_map_scene(PVP_SCENE);
         env->client = rc;
     }
 

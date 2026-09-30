@@ -231,7 +231,7 @@ static void print_env_state(OsrsEnv* env) {
 
 static void run_random_episode(OsrsEnv* env, int verbose) {
     const EncounterArenaTopology* route_topology =
-        pvp_route_topology_finalize((const CollisionMap*)env->collision_map);
+        pvp_route_topology_finalize();
     OsrsActorRouteCache route_cache[NUM_AGENTS] = {0};
     pvp_reset(env, route_topology);
 
@@ -262,7 +262,7 @@ static void run_random_episode(OsrsEnv* env, int verbose) {
 
 static void benchmark(OsrsEnv* env, int num_steps) {
     const EncounterArenaTopology* route_topology =
-        pvp_route_topology_finalize((const CollisionMap*)env->collision_map);
+        pvp_route_topology_finalize();
     OsrsActorRouteCache route_cache[NUM_AGENTS] = {0};
     printf("Benchmarking %d steps...\n", num_steps);
 
@@ -517,7 +517,6 @@ static void run_profile(
         const EncounterDef* edef = visual_open_encounter(env, encounter_name);
         if (!edef) return;
 
-        visual_load_encounter_collision_map(edef, env);
         if (start_wave >= 0 && edef->put_int) {
             edef->put_int(
                 env->encounter_state,
@@ -535,8 +534,7 @@ static void run_profile(
         env->rng_seed = profile_seed;
         env->is_lms = 1;
         direct_pvp_topology =
-            pvp_route_topology_finalize(
-                (const CollisionMap*)env->collision_map);
+            pvp_route_topology_finalize();
         pvp_reset(env, direct_pvp_topology);
     }
     OsrsActorRouteCache direct_pvp_route_cache[NUM_AGENTS] = {0};
@@ -1356,7 +1354,6 @@ static void run_policy_profile(
     }
     const EncounterDef* edef = visual_open_encounter(env, encounter_name);
     if (!edef) abort();
-    visual_load_encounter_collision_map(edef, env);
     if (strcmp(encounter_name, "colosseum") == 0) {
         if (start_wave >= 0)
             edef->put_int(env->encounter_state, env->encounter_context,
@@ -1811,7 +1808,6 @@ static void run_metrics(
     }
     const EncounterDef* edef = visual_open_encounter(env, encounter_name);
     if (!edef) return;
-    visual_load_encounter_collision_map(edef, env);
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
@@ -2119,17 +2115,8 @@ static void run_visual(
     double t0 = osrs_now_ms();
     const EncounterArenaTopology* direct_pvp_topology = NULL;
     if (!encounter_name) {
-        const char* cmap_path = getenv("OSRS_COLLISION_MAP");
-        if (cmap_path && cmap_path[0]) {
-            env->collision_map = collision_map_load(cmap_path);
-            if (env->collision_map) {
-                fprintf(stderr, "collision map loaded: %d regions\n",
-                    ((CollisionMap*)env->collision_map)->count);
-            }
-        }
         direct_pvp_topology =
-            pvp_route_topology_finalize(
-                (const CollisionMap*)env->collision_map);
+            pvp_route_topology_finalize();
     }
 
     if (encounter_name) {
@@ -2154,12 +2141,6 @@ static void run_visual(
         }
 
         osrs_time_log("encounter_create", &t0);
-        VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env);
-        if (cload.cmap) {
-            fprintf(stderr, "%s collision map: %d regions, offset (%d, %d)\n",
-                    encounter_name, cload.cmap->count, cload.offset_x, cload.offset_y);
-        }
-        osrs_time_log("collision_map", &t0);
 
         if (start_wave >= 0 && edef->put_int) {
             edef->put_int(
@@ -2560,8 +2541,7 @@ int main(int argc, char** argv) {
         printf("\nVerifying observations...\n");
         pvp_reset(
             &env,
-            pvp_route_topology_finalize(
-                (const CollisionMap*)env.collision_map));
+            pvp_route_topology_finalize());
         float observations[NH_PVP_NUM_OBS];
         pvp_write_observations(observations, &env, 0);
         printf("Observation count per agent: %d\n", NH_PVP_NUM_OBS);

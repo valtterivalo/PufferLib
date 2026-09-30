@@ -13,8 +13,6 @@ static void inf_put_int_ctx(
         ctx->config.start_wave = value - 1;
     }
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
-    else if (strcmp(key, "world_offset_x") == 0) ctx->world_offset_x = value;
-    else if (strcmp(key, "world_offset_y") == 0) ctx->world_offset_y = value;
     else if (strcmp(key, "player_dest_x") == 0) s->player_dest_x = value;
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
@@ -165,20 +163,6 @@ static void inf_put_float_ctx(
     else encounter_abort_unknown_config("inferno", "float", key);
 }
 
-
-static void inf_put_ptr_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    void* value
-) {
-    (void)state;
-    InfernoContext* ctx = (InfernoContext*)context;
-    if (strcmp(key, "collision_map") == 0)
-        ctx->collision_map = (const CollisionMap*)value;
-    else
-        encounter_abort_unknown_config("inferno", "ptr", key);
-}
 
 static int inf_get_tick_ctx(EncounterState* state, EncounterContext* context) {
     (void)context;
@@ -1004,16 +988,15 @@ static const EncounterDef ENCOUNTER_INFERNO = {
 
     .put_int = inf_put_int_ctx,
     .put_float = inf_put_float_ctx,
-    .put_ptr = inf_put_ptr_ctx,
 
     .arena_base_x = INF_ARENA_MIN_X,
     .arena_base_y = INF_ARENA_MIN_Y,
     .arena_width = INF_ARENA_WIDTH,
     .arena_height = INF_ARENA_HEIGHT,
-    .scene = "inferno",
-    .npc_pack = "inferno",
-    .scene_origin_x = 2246,
-    .scene_origin_y = 5315,
+    .scene = INF_SCENE,
+    .npc_pack = INF_SCENE,
+    .scene_origin_x = INF_SCENE_ORIGIN_X,
+    .scene_origin_y = INF_SCENE_ORIGIN_Y,
 
     .translate_human_input = inf_translate_human_input_ctx,
     .is_human_targetable_npc_slot = inf_is_human_targetable_npc_slot_ctx,

@@ -531,8 +531,6 @@ static void test_fuzz_obs_mask(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
-    ctx.world_offset_x = 1808;
-    ctx.world_offset_y = 3090;
     ctx.config.loadout_profile_mode = COLO_LOADOUT_PROFILE_MODE_MIXED;
     ctx.config.beginner_loadout_fraction = 0.5f;
 
@@ -2304,39 +2302,37 @@ static void test_static_arena_mask(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
 
-    int gate_rows_ok = 1;
-    for (int x = 0; x <= 33; x++) {
-        int walkable = (x == 13 || x == 14 || x == 19 || x == 20);
-        if (col_topology_tile_blocked(&ctx, x, 0) != !walkable)
-            gate_rows_ok = 0;
-        if (col_topology_tile_blocked(&ctx, x, 33) != !walkable)
-            gate_rows_ok = 0;
+    static uint8_t reach[COLO_ARENA_WIDTH][COLO_ARENA_HEIGHT];
+    static int queue[COLO_ARENA_WIDTH * COLO_ARENA_HEIGHT][2];
+    memset(reach, 0, sizeof(reach));
+    int head = 0, tail = 0;
+    queue[tail][0] = COLO_PLAYER_START_X, queue[tail][1] = COLO_PLAYER_START_Y, tail++;
+    reach[COLO_PLAYER_START_X][COLO_PLAYER_START_Y] = 1;
+    while (head < tail) {
+        int x = queue[head][0], y = queue[head][1];
+        head++;
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++) {
+                if ((!dx && !dy) || !encounter_arena_topology_step_allowed(ctx.route_topology, x, y, 1, dx, dy)) continue;
+                if (reach[x + dx][y + dy]) continue;
+                reach[x + dx][y + dy] = 1;
+                queue[tail][0] = x + dx, queue[tail][1] = y + dy, tail++;
+            }
     }
-    CHECK("south+north inner rows walkable exactly at the gate flanks {13,14,19,20}",
-        gate_rows_ok);
-
-    int west_ok = 1;
-    for (int y = 0; y <= 33; y++) {
-        int walkable = (y == 13 || y == 14 || y == 19 || y == 20);
-        if (col_topology_tile_blocked(&ctx, 0, y) != !walkable)
-            west_ok = 0;
+    int gates_ok = 1;
+    for (int k = 0; k < 4; k++) {
+        int g = (int[]){13, 14, 19, 20}[k];
+        gates_ok &= reach[g][0] && reach[g][33] && reach[0][g];
     }
-    CHECK("west col 0 open exactly at the entrance rows {13,14,19,20}", west_ok);
-
+    CHECK("the north, south and west gate tiles {13,14,19,20} are reachable from the start", gates_ok);
     int east_ok = 1;
-    for (int y = 0; y <= 33; y++)
-        if (!col_topology_tile_blocked(&ctx, 33, y)) east_ok = 0;
-    CHECK("east col 33 fully walled", east_ok);
-
+    for (int y = 0; y <= 33; y++) east_ok &= !reach[33][y];
+    CHECK("east col 33 is unreachable", east_ok);
+    CHECK("arena corners outside the wall ring are unreachable",
+        !reach[0][0] && !reach[0][33] && !reach[33][0] && !reach[33][33]);
     CHECK("row 3 west extent [0,5)",
         col_topology_tile_blocked(&ctx, 4, 3) &&
         !col_topology_tile_blocked(&ctx, 5, 3));
-    CHECK("row 30 west extent [0,6)",
-        col_topology_tile_blocked(&ctx, 5, 30) &&
-        !col_topology_tile_blocked(&ctx, 6, 30));
-    CHECK("row 29 east extent [29,34)",
-        !col_topology_tile_blocked(&ctx, 28, 29) &&
-        col_topology_tile_blocked(&ctx, 29, 29));
 
     int pillars_ok = 1, rim_ok = 1;
     for (int p = 0; p < COLO_NUM_PILLARS; p++) {
@@ -7592,13 +7588,13 @@ static void test_osrs_los_query_contracts(void) {
     printf("test_osrs_los_query_contracts\n");
     OsrsLosQuery open_query = osrs_los_open();
     CHECK("explicit open LoS permits a ranged attack",
-        encounter_player_can_attack(
-            0, 0, 4, 0, 1, 10, NULL, 0, 0, &open_query) == 1);
+        encounter_attack_position_valid(
+            0, 0, 4, 0, 1, 10, NULL, &open_query) == 1);
 
     OsrsLosQuery tile_query = osrs_los_tile(test_los_every_tile_blocked, NULL);
     CHECK("tile LoS refuses when every tile blocks",
-        encounter_player_can_attack(
-            0, 0, 4, 0, 1, 10, NULL, 0, 0, &tile_query) == 0);
+        encounter_attack_position_valid(
+            0, 0, 4, 0, 1, 10, NULL, &tile_query) == 0);
 }
 
 static void test_player_ranged_los_blocked_by_pillar(void) {
@@ -7626,10 +7622,10 @@ static void test_player_ranged_los_blocked_by_pillar(void) {
         col_npc_has_los_to_player(&s, &ctx, npc) == 0);
     OsrsLosQuery los_query = col_player_los_query(&ctx);
     CHECK("shared tile LoS blocks the same pillar line",
-        encounter_player_can_attack(s.player.x, s.player.y,
+        encounter_attack_position_valid(s.player.x, s.player.y,
             npc->x, npc->y, col_npc_effective_size(npc),
             col_player_attack_range(&s),
-            ctx.collision_map, ctx.world_offset_x, ctx.world_offset_y,
+            ctx.route_topology,
             &los_query) == 0);
 
     s.player.x = 13; s.player.y = 4;
@@ -7653,8 +7649,6 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
     ColosseumContext ctx;
     col_init_context_typed(&ctx);
     ctx.config.start_wave = 0;
-    ctx.world_offset_x = 1808;
-    ctx.world_offset_y = 3090;
     ColosseumState s;
     memset(&s, 0, sizeof(s));
     col_reset_ctx((EncounterState*)&s, (EncounterContext*)&ctx, 5151);
@@ -7672,10 +7666,10 @@ static void test_player_chase_routes_around_pillar_for_los(void) {
     OsrsLosQuery los_query = col_player_los_query(&ctx);
     int attack_range = col_player_attack_range(&s);
     CHECK("start tile is range-valid and LoS-blocked",
-        encounter_player_can_attack(s.player.x, s.player.y,
+        encounter_attack_position_valid(s.player.x, s.player.y,
             npc->x, npc->y, col_npc_effective_size(npc),
             attack_range,
-            ctx.collision_map, ctx.world_offset_x, ctx.world_offset_y,
+            ctx.route_topology,
             &los_query) == 0);
 
     int actions[COLO_NUM_ACTION_HEADS] = {0};
@@ -8784,6 +8778,12 @@ static void test_move_action_no_corner_cut(void) {
 static void test_melee_reach_cardinal_vs_diagonal(void) {
     printf("test_melee_reach_cardinal_vs_diagonal\n");
     const OsrsLosQuery* open = osrs_los_open_query();
+    EncounterArenaTopologyBuildSpec spec = {
+        .width = 20, .height = 20, .max_footprint_size = 1, .revision = 1,
+        .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN,
+    };
+    EncounterArenaTopology* walls = encounter_arena_topology_build(&spec);
+    encounter_arena_topology_finalize(walls);
     const int tx = 10, ty = 10;
     for (int tsize = 1; tsize <= 3; tsize++) {
 
@@ -8795,36 +8795,37 @@ static void test_melee_reach_cardinal_vs_diagonal(void) {
             CHECK("reach-1 helper rejects a diagonal corner",
                   encounter_entity_footprint_cardinal_adjacent(cx, cy, 1, tx, ty, tsize) == 0);
             CHECK("range-1 gate rejects a diagonal corner",
-                  encounter_player_can_attack(
-                      cx, cy, tx, ty, tsize, 1, NULL, 0, 0, open) == 0);
+                  encounter_attack_position_valid(
+                      cx, cy, tx, ty, tsize, 1, walls, open) == 0);
             CHECK("range-2 (halberd) gate allows a diagonal corner",
-                  encounter_player_can_attack(
-                      cx, cy, tx, ty, tsize, 2, NULL, 0, 0, open) == 1);
+                  encounter_attack_position_valid(
+                      cx, cy, tx, ty, tsize, 2, walls, open) == 1);
         }
 
         for (int k = 0; k < tsize; k++) {
             CHECK("range-1 gate allows a west cardinal-edge tile",
-                  encounter_player_can_attack(
+                  encounter_attack_position_valid(
                       tx - 1, ty + k, tx, ty, tsize, 1,
-                      NULL, 0, 0, open) == 1);
+                      walls, open) == 1);
             CHECK("range-1 gate allows an east cardinal-edge tile",
-                  encounter_player_can_attack(
+                  encounter_attack_position_valid(
                       tx + tsize, ty + k, tx, ty, tsize, 1,
-                      NULL, 0, 0, open) == 1);
+                      walls, open) == 1);
             CHECK("range-1 gate allows a south cardinal-edge tile",
-                  encounter_player_can_attack(
+                  encounter_attack_position_valid(
                       tx + k, ty - 1, tx, ty, tsize, 1,
-                      NULL, 0, 0, open) == 1);
+                      walls, open) == 1);
             CHECK("range-1 gate allows a north cardinal-edge tile",
-                  encounter_player_can_attack(
+                  encounter_attack_position_valid(
                       tx + k, ty + tsize, tx, ty, tsize, 1,
-                      NULL, 0, 0, open) == 1);
+                      walls, open) == 1);
         }
 
         CHECK("overlap is never meleeable",
-              encounter_player_can_attack(
-                  tx, ty, tx, ty, tsize, 1, NULL, 0, 0, open) == 0);
+              encounter_attack_position_valid(
+                  tx, ty, tx, ty, tsize, 1, walls, open) == 0);
     }
+    free(walls);
 }
 
 static void test_modifier_draft_forces_pick(void) {

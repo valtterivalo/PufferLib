@@ -214,7 +214,6 @@ static void test_melee_attack_does_not_cross_cardinal_wall(void) {
     int dest_x = -1;
     int dest_y = -1;
     OsrsEncounterArena arena = step_arena();
-    arena.collision_map = &map;
     EncounterArenaTopology* wall_topology =
         step_collision_topology(&map, 20);
     arena.topology = wall_topology;

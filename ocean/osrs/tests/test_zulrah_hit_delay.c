@@ -20,7 +20,7 @@ static int spec8_magic_delay(int distance, int is_player) {
 
 static ZulrahContext g_ctx;
 static ZulrahState g_state;
-static CollisionMap* g_collision_map;
+static const CollisionMap* g_collision_map;
 
 
 static ZulrahState* fresh_state(uint32_t seed) {
@@ -28,12 +28,7 @@ static ZulrahState* fresh_state(uint32_t seed) {
     EncounterContext* context = (EncounterContext*)&g_ctx;
     ENCOUNTER_ZULRAH.init_context(context);
     ENCOUNTER_ZULRAH.init_state(state, context);
-    if (!g_collision_map)
-        g_collision_map = collision_map_load("ocean/osrs/data/zulrah.cmap");
-    if (!g_collision_map) abort();
-    ENCOUNTER_ZULRAH.put_ptr(state, context, "collision_map", g_collision_map);
-    ENCOUNTER_ZULRAH.put_int(state, context, "world_offset_x", 2256);
-    ENCOUNTER_ZULRAH.put_int(state, context, "world_offset_y", 3061);
+    g_collision_map = collision_map_scene(ZUL_SCENE);
 
     ENCOUNTER_ZULRAH.put_int(state, context, "gear_tier", 0);
     ENCOUNTER_ZULRAH.put_int(state, context, "gear_tier_mode", ZUL_GEAR_TIER_FIXED);
@@ -366,7 +361,7 @@ static void test_topology_geometry_parity(void) {
     for (int x = 0; x < ZUL_ARENA_SIZE; x++) {
         for (int y = 0; y < ZUL_ARENA_SIZE; y++) {
             int expected_walkable = collision_tile_walkable(
-                g_collision_map, 0, x + 2256, y + 3061);
+                g_collision_map, 0, x + ZUL_SCENE_ORIGIN_X, y + ZUL_SCENE_ORIGIN_Y);
             CHECK("Zulrah player tile parity",
                 !encounter_arena_topology_tile_blocked(topology, x, y) ==
                     expected_walkable);
@@ -377,7 +372,7 @@ static void test_topology_geometry_parity(void) {
                     if (dx == 0 && dy == 0) continue;
                     int expected_step = collision_traversable_step(
                         g_collision_map, 0,
-                        x + 2256, y + 3061, dx, dy);
+                        x + ZUL_SCENE_ORIGIN_X, y + ZUL_SCENE_ORIGIN_Y, dx, dy);
                     CHECK("Zulrah player step parity",
                         encounter_arena_topology_step_allowed(
                             topology, x, y, 1, dx, dy) == expected_step);

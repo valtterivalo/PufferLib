@@ -242,16 +242,14 @@ static int inf_player_can_phantom_barrage_npc(
     if (!inf_player_has_any_barrage_spell_available(s)) return 0;
 
     OsrsLosQuery los_query = inf_player_los_query(s);
-    return encounter_player_can_attack(
+    return encounter_attack_position_valid(
         s->player.x,
         s->player.y,
         npc->x,
         npc->y,
         npc->size,
         10,
-        ctx->collision_map,
-        ctx->world_offset_x,
-        ctx->world_offset_y,
+        ctx->route_topology,
         &los_query);
 }
 

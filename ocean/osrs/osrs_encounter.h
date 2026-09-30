@@ -1929,8 +1929,6 @@ typedef struct {
     void (*put_int)(EncounterState* state, EncounterContext* context, const char* key, int value);
     void (*put_float)(
         EncounterState* state, EncounterContext* context, const char* key, float value);
-    void (*put_ptr)(
-        EncounterState* state, EncounterContext* context, const char* key, void* value);
 
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;

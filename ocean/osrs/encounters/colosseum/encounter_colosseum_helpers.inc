@@ -355,24 +355,7 @@ typedef struct {
 static ColRouteTopologyOwner col_route_topology_owner;
 
 static uint32_t col_route_topology_flags(void* data, int x, int y) {
-    (void)data;
-    if (x < COLO_ARENA_MIN_X || x > COLO_ARENA_MAX_X ||
-            y < COLO_ARENA_MIN_Y || y > COLO_ARENA_MAX_Y)
-        return COLLISION_BLOCKED | LOS_FULL_MASK;
-    int row = y - COLO_ARENA_MIN_Y;
-    for (int span = 0; span < COLO_WALL_SPANS_PER_ROW; span++) {
-        ColoWallSpan wall = COLO_WALL_SPANS[row][span];
-        if (x >= wall.lo && x < wall.hi)
-            return COLLISION_BLOCKED | LOS_FULL_MASK;
-    }
-    for (int pillar = 0; pillar < COLO_NUM_PILLARS; pillar++) {
-        int pillar_x = COLO_PILLARS[pillar][0];
-        int pillar_y = COLO_PILLARS[pillar][1];
-        if (x >= pillar_x && x < pillar_x + COLO_PILLAR_SIZE &&
-                y >= pillar_y && y < pillar_y + COLO_PILLAR_SIZE)
-            return COLLISION_BLOCKED | LOS_FULL_MASK;
-    }
-    return 0;
+    return collision_scene_flags((const CollisionMap*)data, COLO_SCENE_ORIGIN_X, COLO_SCENE_ORIGIN_Y, x, y);
 }
 
 static void col_finalize_route_topology(ColosseumContext* ctx) {
@@ -386,11 +369,10 @@ static void col_finalize_route_topology(ColosseumContext* ctx) {
         .width = COLO_ARENA_WIDTH,
         .height = COLO_ARENA_HEIGHT,
         .max_footprint_size = ENCOUNTER_ARENA_TOPOLOGY_MAX_FOOTPRINT_SIZE,
-        .revision = UINT64_C(0x434f4c4f53534501),
+        .revision = UINT64_C(0x434f4c4f53534502),
         .tile_flags = col_route_topology_flags,
-        .tile_flags_ctx = NULL,
-        .los_build_mode =
-            ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_TILE_BLOCKED,
+        .tile_flags_ctx = (void*)collision_map_scene(COLO_SCENE),
+        .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
     };
     if (!col_route_topology_owner.topology) {
         col_route_topology_owner.topology =

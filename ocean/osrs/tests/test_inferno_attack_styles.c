@@ -59,9 +59,6 @@ static InfernoContext test_context;
 static void reset_test_context(void) {
     InfernoContext* ctx = &test_context;
     ctx->config = inf_default_config();
-    ctx->collision_map = NULL;
-    ctx->world_offset_x = 0;
-    ctx->world_offset_y = 0;
     ctx->human_commands = NULL;
     ctx->human_command_count = 0;
     ctx->human_command_mode = 0;
@@ -6696,16 +6693,9 @@ static void test_inferno_snapshot_preserves_external_pointers(void) {
     InfernoContext ctx_b;
     Log log_a = {0};
     Log log_b = {0};
-    int dummy_a = 1, dummy_b = 2;
 
     inf_init_context_typed(&ctx_a);
     inf_init_context_typed(&ctx_b);
-    ctx_a.collision_map = (const CollisionMap*)&dummy_a;
-    ctx_b.collision_map = (const CollisionMap*)&dummy_b;
-    ctx_a.world_offset_x = 100;
-    ctx_a.world_offset_y = 200;
-    ctx_b.world_offset_x = 300;
-    ctx_b.world_offset_y = 400;
     ctx_a.log = &log_a;
     ctx_b.log = &log_b;
     ctx_a.config.start_wave = 12;
@@ -6721,12 +6711,6 @@ static void test_inferno_snapshot_preserves_external_pointers(void) {
     inf_snapshot_ctx((EncounterState*)&state_a, (EncounterContext*)&ctx_a, snap);
 
     inf_restore_ctx((EncounterState*)&state_b, (EncounterContext*)&ctx_b, snap, snap_size);
-    ASSERT_INT_EQ("env B keeps its own collision_map after restore",
-        (int)(ctx_b.collision_map == (const CollisionMap*)&dummy_b), 1);
-    ASSERT_INT_EQ("env A snapshot did not leak its collision_map into B",
-        (int)(ctx_b.collision_map != (const CollisionMap*)&dummy_a), 1);
-    ASSERT_INT_EQ("env B keeps world offset x after restore", ctx_b.world_offset_x, 300);
-    ASSERT_INT_EQ("env B keeps world offset y after restore", ctx_b.world_offset_y, 400);
     ASSERT_INT_EQ("env B keeps live log pointer after restore",
         (int)(ctx_b.log == &log_b), 1);
     ASSERT_INT_EQ("env B keeps live start_wave after restore",

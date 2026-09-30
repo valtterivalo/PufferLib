@@ -991,9 +991,6 @@ static OsrsPlayerStepInput col_primary_step_input(
             .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
             .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
             .destination_cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
-            .collision_map = ctx->collision_map,
-            .world_offset_x = ctx->world_offset_x,
-            .world_offset_y = ctx->world_offset_y,
             .los_query = los_query,
         },
     };
@@ -1085,10 +1082,10 @@ static void col_tick_player_ctx(
         ColoNPC* npc = &s->npcs[slot];
         if (npc->active) {
             int player_range = col_player_attack_range(s);
-            if (encounter_player_can_attack(s->player.x, s->player.y,
+            if (encounter_attack_position_valid(s->player.x, s->player.y,
                     npc->x, npc->y, col_npc_effective_size(npc),
                     player_range,
-                    ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
+                    ctx->route_topology,
                     primary_input.arena.los_query)) {
 
                 int armed_kind = (!col_type_is_hazard_entity(npc->type) &&

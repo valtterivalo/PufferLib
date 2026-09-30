@@ -118,7 +118,6 @@ typedef struct {
     int ticks_maul[2];
 } RiskfightState;
 typedef struct {
-    const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
     OsrsActorRouteCache routes[2];
     HumanInput policy_commands[2];
@@ -165,7 +164,7 @@ static void riskfight_destroy(EncounterState* s) { free(s); }
 static void riskfight_finalize_context(EncounterState* state, EncounterContext* context) {
     (void)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
-    ctx->route_topology = pvp_route_topology_finalize(ctx->collision_map);
+    ctx->route_topology = pvp_route_topology_finalize();
 }
 
 /** Observed heal range -> max (food, potion, karambwan, attack delay) lock ticks over bag-legal consume combos. */

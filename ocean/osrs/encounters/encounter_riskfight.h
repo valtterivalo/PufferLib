@@ -59,11 +59,6 @@ static void riskfight_put_float(EncounterState* state, EncounterContext* context
     else if (strcmp(key, "teleport_penalty") == 0) ctx->teleport_penalty = value;
     else encounter_abort_unknown_config("riskfight", "float", key);
 }
-static void riskfight_put_ptr(EncounterState* state, EncounterContext* context, const char* key, void* value) {
-    (void)state;
-    if (strcmp(key, "collision_map") == 0) ((RiskfightContext*)context)->collision_map = (const CollisionMap*)value;
-    else encounter_abort_unknown_config("riskfight", "ptr", key);
-}
 static void* riskfight_log(EncounterState* state, EncounterContext* context) {
     (void)context; return &((RiskfightState*)state)->env.log;
 }
@@ -94,10 +89,10 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .get_reward = riskfight_reward, .is_terminal = riskfight_terminal,
     .get_entity_count = riskfight_entity_count, .get_entity = riskfight_entity,
     .fill_render_entities = riskfight_render_entities,
-    .put_int = riskfight_put_int, .put_float = riskfight_put_float, .put_ptr = riskfight_put_ptr,
+    .put_int = riskfight_put_int, .put_float = riskfight_put_float,
     .arena_base_x = FIGHT_AREA_BASE_X, .arena_base_y = FIGHT_AREA_BASE_Y,
     .arena_width = FIGHT_AREA_WIDTH, .arena_height = FIGHT_AREA_HEIGHT,
-    .scene = "wilderness",
+    .scene = PVP_SCENE,
     .head_move = RF_PRIMARY, .head_prayer = -1, .head_target = RF_PRIMARY,
     .render_post_tick = riskfight_render_post_tick,
     .get_log = riskfight_log, .get_tick = riskfight_tick, .get_winner = riskfight_winner,

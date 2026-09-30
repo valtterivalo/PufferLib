@@ -16,8 +16,6 @@ static void col_put_int_ctx(
         ctx->config.start_wave = internal;
     }
     else if (strcmp(key, "seed") == 0) s->rng_state = (uint32_t)value;
-    else if (strcmp(key, "world_offset_x") == 0) ctx->world_offset_x = value;
-    else if (strcmp(key, "world_offset_y") == 0) ctx->world_offset_y = value;
     else if (strcmp(key, "player_dest_x") == 0) s->player_dest_x = value;
     else if (strcmp(key, "player_dest_y") == 0) s->player_dest_y = value;
     else if (strcmp(key, "human_command_mode") == 0)
@@ -139,20 +137,6 @@ static void col_put_float_ctx(
         ctx->config.damage_scale_anneal_start = value;
     }
     else encounter_abort_unknown_config("colosseum", "float", key);
-}
-
-static void col_put_ptr_ctx(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    void* value
-) {
-    (void)state;
-    ColosseumContext* ctx = col_require_context(context);
-    if (strcmp(key, "collision_map") == 0)
-        ctx->collision_map = (const CollisionMap*)value;
-    else
-        encounter_abort_unknown_config("colosseum", "ptr", key);
 }
 
 static int col_get_tick_ctx(EncounterState* state, EncounterContext* context) {
@@ -1229,16 +1213,15 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
 
     .put_int = col_put_int_ctx,
     .put_float = col_put_float_ctx,
-    .put_ptr = col_put_ptr_ctx,
 
     .arena_base_x = COLO_ARENA_MIN_X,
     .arena_base_y = COLO_ARENA_MIN_Y,
     .arena_width = COLO_ARENA_WIDTH,
     .arena_height = COLO_ARENA_HEIGHT,
-    .scene = "colosseum",
+    .scene = COLO_SCENE,
     .npc_pack = "colosseum_npcs",
-    .scene_origin_x = 1808,
-    .scene_origin_y = 3090,
+    .scene_origin_x = COLO_SCENE_ORIGIN_X,
+    .scene_origin_y = COLO_SCENE_ORIGIN_Y,
 
     .translate_human_input = col_translate_human_input_ctx,
     .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,

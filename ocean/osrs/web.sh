@@ -27,18 +27,6 @@ if [ "${#OSRS_PRELOAD[@]}" -eq 0 ]; then
     exit 1
 fi
 
-# Inferno route graphs are optional: not in the required tarball, but the
-# browser pack should ship them so WASM does not rebuild LOS at startup.
-if [ "$ENV" = "osrs_inferno" ]; then
-    INF_ROUTE_BAKE="ocean/osrs/data/inferno_route.bin"
-    if [ -f "$INF_ROUTE_BAKE" ]; then
-        OSRS_PRELOAD+=(--preload-file "$INF_ROUTE_BAKE@$INF_ROUTE_BAKE")
-        echo "Preloading Inferno route bake: $INF_ROUTE_BAKE"
-    else
-        echo "Warning: $INF_ROUTE_BAKE missing; Inferno web will rebuild route topology at runtime" >&2
-    fi
-fi
-
 mkdir -p "build/web/$ENV"
 echo "Compiling $ENV for web..."
 emcc \

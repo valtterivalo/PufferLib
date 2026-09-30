@@ -107,12 +107,11 @@ static const uint8_t PVP_MOVE_ACTION_BY_DELTA[25] = {
     20, 21, 22, 23, 24,
 };
 
+#define PVP_SCENE "wilderness"
+
 static uint32_t pvp_route_topology_flags(void* data, int x, int y) {
-    const CollisionMap* collision_map = (const CollisionMap*)data;
     if (!is_in_wilderness(x, y)) return COLLISION_BLOCKED | LOS_FULL_MASK;
-    return collision_map
-        ? (uint32_t)collision_get_flags(collision_map, 0, x, y)
-        : 0;
+    return collision_scene_flags((const CollisionMap*)data, 0, 0, x, y);
 }
 
 static void pvp_local_move_routes_build(PvpRouteTopologyOwner* owner) {
@@ -208,19 +207,17 @@ static inline int pvp_topology_tile_walkable(
     return !encounter_arena_topology_tile_blocked(topology, x, y);
 }
 
-static const EncounterArenaTopology* pvp_route_topology_finalize(
-    const CollisionMap* collision_map
-) {
+static const EncounterArenaTopology* pvp_route_topology_finalize(void) {
     EncounterArenaTopologyBuildSpec spec = {
         .origin_x = FIGHT_AREA_BASE_X,
         .origin_y = FIGHT_AREA_BASE_Y,
         .width = FIGHT_AREA_WIDTH,
         .height = FIGHT_AREA_HEIGHT,
         .max_footprint_size = 1,
-        .revision = UINT64_C(0x4e48505650000004),
+        .revision = UINT64_C(0x4e48505650000005),
         .tile_flags = pvp_route_topology_flags,
-        .tile_flags_ctx = (void*)collision_map,
-        .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_OPEN,
+        .tile_flags_ctx = (void*)collision_map_scene(PVP_SCENE),
+        .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
     };
     if (!pvp_route_topology_owner.topology) {
         pvp_route_topology_owner.topology =

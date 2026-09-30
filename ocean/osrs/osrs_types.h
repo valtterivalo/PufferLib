@@ -876,7 +876,6 @@ typedef struct {
     void* encounter_state;
     void* encounter_context;
 
-    void* collision_map;
 
     void* client;
 

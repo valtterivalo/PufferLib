@@ -1,5 +1,8 @@
 #line 76 "encounter_colosseum.h"
 
+#define COLO_SCENE "colosseum"
+#define COLO_SCENE_ORIGIN_X 1808
+#define COLO_SCENE_ORIGIN_Y 3090
 #define COLO_ARENA_MIN_X    0
 #define COLO_ARENA_MAX_X    33
 #define COLO_ARENA_MIN_Y    0
@@ -34,45 +37,6 @@ static inline int col_wave_entry_delay_ticks(int target_wave) {
 #define COLO_MAX_NPCS 24
 #define COLO_OBS_NPCS COLO_MAX_NPCS
 
-
-typedef struct { uint8_t lo, hi; } ColoWallSpan;
-#define COLO_WALL_SPANS_PER_ROW 3
-static const ColoWallSpan COLO_WALL_SPANS[COLO_ARENA_HEIGHT][COLO_WALL_SPANS_PER_ROW] = {
-    [0]  = { {0,13}, {15,19}, {21,34} },
-    [1]  = { {0,9},  {25,34} },
-    [2]  = { {0,7},  {27,34} },
-    [3]  = { {0,5},  {29,34} },
-    [4]  = { {0,5},  {29,34} },
-    [5]  = { {0,3},  {31,34} },
-    [6]  = { {0,3},  {31,34} },
-    [7]  = { {0,2},  {32,34} },
-    [8]  = { {0,2},  {32,34} },
-    [9]  = { {0,1},  {33,34} },
-    [10] = { {0,1},  {33,34} },
-    [11] = { {0,1},  {32,34} },
-    [12] = { {0,1},  {31,34} },
-    [13] = { {31,34} },
-    [14] = { {31,34} },
-    [15] = { {0,1},  {31,34} },
-    [16] = { {0,1},  {31,34} },
-    [17] = { {0,1},  {31,34} },
-    [18] = { {0,1},  {31,34} },
-    [19] = { {31,34} },
-    [20] = { {31,34} },
-    [21] = { {0,1},  {31,34} },
-    [22] = { {0,1},  {32,34} },
-    [23] = { {0,1},  {33,34} },
-    [24] = { {0,1},  {33,34} },
-    [25] = { {0,2},  {32,34} },
-    [26] = { {0,2},  {32,34} },
-    [27] = { {0,3},  {31,34} },
-    [28] = { {0,3},  {31,34} },
-    [29] = { {0,5},  {29,34} },
-    [30] = { {0,6},  {29,34} },
-    [31] = { {0,7},  {27,34} },
-    [32] = { {0,9},  {25,34} },
-    [33] = { {0,13}, {15,19}, {21,34} },
-};
 
 #define COLO_NUM_PILLARS  4
 #define COLO_PILLAR_SIZE  3
@@ -1269,12 +1233,9 @@ typedef enum {
 
 typedef struct {
     ColConfig config;
-    const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
     OsrsActorRouteCache player_route_cache;
     ColoVenatorPreviewCache venator_preview_cache;
-    int world_offset_x;
-    int world_offset_y;
     const HumanCommand* human_commands;
     int human_command_count;
     int human_command_mode;

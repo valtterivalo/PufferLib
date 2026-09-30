@@ -1,4 +1,7 @@
 #line 39 "encounter_inferno.h"
+#define INF_SCENE "inferno"
+#define INF_SCENE_ORIGIN_X 2246
+#define INF_SCENE_ORIGIN_Y 5315
 #define INF_ARENA_MIN_X    11
 #define INF_ARENA_MAX_X    39
 #define INF_ARENA_MIN_Y    14
@@ -700,12 +703,9 @@ typedef struct {
 
 typedef struct {
     InfConfig config;
-    const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
     OsrsActorRouteCache player_route_cache;
     int8_t npc_player_los_frame[INF_MAX_NPCS];
-    int world_offset_x;
-    int world_offset_y;
     Log* log;
     const HumanCommand* human_commands;
     int human_command_count;

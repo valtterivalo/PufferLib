@@ -17,7 +17,6 @@ typedef struct {
 } NhPvpState;
 
 typedef struct {
-    const CollisionMap* collision_map;
     const EncounterArenaTopology* route_topology;
     OsrsActorRouteCache player_route_cache[NUM_AGENTS];
 } NhPvpContext;
@@ -63,8 +62,7 @@ static void nh_pvp_finalize_context(
     (void)state;
     NhPvpContext* ctx = (NhPvpContext*)context;
     if (ctx->route_topology) abort();
-    ctx->route_topology =
-        pvp_route_topology_finalize(ctx->collision_map);
+    ctx->route_topology = pvp_route_topology_finalize();
 }
 
 
@@ -228,20 +226,6 @@ static void nh_pvp_put_float(
     }
 }
 
-static void nh_pvp_put_ptr(
-    EncounterState* state,
-    EncounterContext* context,
-    const char* key,
-    void* value
-) {
-    (void)state;
-    NhPvpContext* ctx = (NhPvpContext*)context;
-    if (strcmp(key, "collision_map") == 0)
-        ctx->collision_map = (const CollisionMap*)value;
-    else
-        encounter_abort_unknown_config("nh_pvp", "ptr", key);
-}
-
 static void* nh_pvp_get_log(EncounterState* state, EncounterContext* context) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
@@ -291,9 +275,8 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
 
     .put_int = nh_pvp_put_int,
     .put_float = nh_pvp_put_float,
-    .put_ptr = nh_pvp_put_ptr,
 
-    .scene = "wilderness",
+    .scene = PVP_SCENE,
 
     .translate_human_input = NULL,
     .head_move = OSRS_HEAD_PRIMARY,

@@ -5,9 +5,9 @@
 #if defined(TEST_ROUTE_TOPOLOGY_INFERNO)
 #include "ocean/osrs/encounters/encounter_inferno.h"
 #define TEST_DEF ENCOUNTER_INFERNO
-#define TEST_MAP_PATH "ocean/osrs/data/inferno.cmap"
-#define TEST_OFFSET_X 2246
-#define TEST_OFFSET_Y 5315
+#define TEST_SCENE INF_SCENE
+#define TEST_OFFSET_X INF_SCENE_ORIGIN_X
+#define TEST_OFFSET_Y INF_SCENE_ORIGIN_Y
 #define TEST_ORIGIN_X INF_TOPOLOGY_MIN_X
 #define TEST_ORIGIN_Y INF_TOPOLOGY_MIN_Y
 #define TEST_WIDTH INF_TOPOLOGY_WIDTH
@@ -24,9 +24,9 @@ static uint32_t expected_flags(const CollisionMap* map, int x, int y) {
 #elif defined(TEST_ROUTE_TOPOLOGY_COLOSSEUM)
 #include "ocean/osrs/encounters/encounter_colosseum.h"
 #define TEST_DEF ENCOUNTER_COLOSSEUM
-#define TEST_MAP_PATH "ocean/osrs/data/colosseum.cmap"
-#define TEST_OFFSET_X 1808
-#define TEST_OFFSET_Y 3090
+#define TEST_SCENE COLO_SCENE
+#define TEST_OFFSET_X COLO_SCENE_ORIGIN_X
+#define TEST_OFFSET_Y COLO_SCENE_ORIGIN_Y
 #define TEST_ORIGIN_X COLO_ARENA_MIN_X
 #define TEST_ORIGIN_Y COLO_ARENA_MIN_Y
 #define TEST_WIDTH COLO_ARENA_WIDTH
@@ -34,15 +34,15 @@ static uint32_t expected_flags(const CollisionMap* map, int x, int y) {
 typedef ColosseumContext TestContext;
 #define TEST_TOPOLOGY(ctx) ((ctx)->route_topology)
 static uint32_t expected_flags(const CollisionMap* map, int x, int y) {
-    (void)map;
-    return col_route_topology_flags(NULL, x, y);
+    return (uint32_t)collision_get_flags(
+        map, 0, x + TEST_OFFSET_X, y + TEST_OFFSET_Y);
 }
 #elif defined(TEST_ROUTE_TOPOLOGY_ZULRAH)
 #include "ocean/osrs/encounters/encounter_zulrah.h"
 #define TEST_DEF ENCOUNTER_ZULRAH
-#define TEST_MAP_PATH "ocean/osrs/data/zulrah.cmap"
-#define TEST_OFFSET_X 2256
-#define TEST_OFFSET_Y 3061
+#define TEST_SCENE ZUL_SCENE
+#define TEST_OFFSET_X ZUL_SCENE_ORIGIN_X
+#define TEST_OFFSET_Y ZUL_SCENE_ORIGIN_Y
 #define TEST_ORIGIN_X 0
 #define TEST_ORIGIN_Y 0
 #define TEST_WIDTH ZUL_ARENA_SIZE
@@ -56,7 +56,7 @@ static uint32_t expected_flags(const CollisionMap* map, int x, int y) {
 #elif defined(TEST_ROUTE_TOPOLOGY_NH_PVP)
 #include "ocean/osrs/encounters/encounter_nh_pvp.h"
 #define TEST_DEF ENCOUNTER_NH_PVP
-#define TEST_MAP_PATH "ocean/osrs/data/wilderness.cmap"
+#define TEST_SCENE "wilderness"
 #define TEST_OFFSET_X 0
 #define TEST_OFFSET_Y 0
 #define TEST_ORIGIN_X FIGHT_AREA_BASE_X
@@ -73,26 +73,7 @@ static uint32_t expected_flags(const CollisionMap* map, int x, int y) {
 #error "define one TEST_ROUTE_TOPOLOGY_* encounter"
 #endif
 
-static void put_geometry(
-    EncounterState* state,
-    EncounterContext* context,
-    CollisionMap* map,
-    int map_first
-) {
-    if (map_first)
-        TEST_DEF.put_ptr(state, context, "collision_map", map);
-#if !defined(TEST_ROUTE_TOPOLOGY_NH_PVP)
-    TEST_DEF.put_int(state, context, "world_offset_x", TEST_OFFSET_X);
-    TEST_DEF.put_int(state, context, "world_offset_y", TEST_OFFSET_Y);
-#endif
-    if (!map_first)
-        TEST_DEF.put_ptr(state, context, "collision_map", map);
-}
-
-static const EncounterArenaTopology* finalize_with_map(
-    CollisionMap* map,
-    int map_first
-) {
+static const EncounterArenaTopology* finalize_fresh(void) {
     TestContext* context = calloc(1, sizeof(*context));
     if (!context) abort();
     TEST_DEF.init_context((EncounterContext*)context);
@@ -102,7 +83,6 @@ static const EncounterArenaTopology* finalize_with_map(
     }
     EncounterState* state = TEST_DEF.create();
     if (!state) abort();
-    put_geometry(state, (EncounterContext*)context, map, map_first);
     if (TEST_TOPOLOGY(context) != NULL) {
         fprintf(stderr, "%s topology initialized before explicit finalization\n",
             TEST_DEF.name);
@@ -117,18 +97,15 @@ static const EncounterArenaTopology* finalize_with_map(
 }
 
 int main(void) {
-    CollisionMap* first_map = collision_map_load(TEST_MAP_PATH);
-    CollisionMap* second_map = collision_map_load(TEST_MAP_PATH);
-    if (!first_map || !second_map || first_map == second_map) abort();
-
-    const EncounterArenaTopology* first = finalize_with_map(first_map, 1);
+    const CollisionMap* map = collision_map_scene(TEST_SCENE);
+    const EncounterArenaTopology* first = finalize_fresh();
     int open_tiles = 0;
     int blocked_tiles = 0;
     for (int x = TEST_ORIGIN_X; x < TEST_ORIGIN_X + TEST_WIDTH; x++) {
         for (int y = TEST_ORIGIN_Y; y < TEST_ORIGIN_Y + TEST_HEIGHT; y++) {
             int index = (x - TEST_ORIGIN_X) * TEST_HEIGHT +
                 (y - TEST_ORIGIN_Y);
-            uint32_t expected = expected_flags(first_map, x, y);
+            uint32_t expected = expected_flags(map, x, y);
             if (first->static_collision_flags[index] != expected) {
                 fprintf(stderr,
                     "%s topology mismatch at (%d,%d): expected %u got %u\n",
@@ -144,13 +121,6 @@ int main(void) {
         }
     }
 #if defined(TEST_ROUTE_TOPOLOGY_INFERNO)
-    for (int mask = 0; mask < INF_ROUTE_BAKE_COUNT; mask++) {
-        if (!inf_baked_topology_matches(
-                inf_route_topology_owner.topologies[mask], mask)) {
-            fprintf(stderr, "inferno topology %d violates route cache contract\n", mask);
-            abort();
-        }
-    }
     if (first->static_los_mode != ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN) {
         fprintf(stderr,
             "inferno collision map incorrectly contributed static LOS blockers\n");
@@ -191,14 +161,12 @@ int main(void) {
     }
 #endif
 
-    const EncounterArenaTopology* second = finalize_with_map(second_map, 0);
+    const EncounterArenaTopology* second = finalize_fresh();
     if (second != first) {
         fprintf(stderr, "%s did not reuse process topology\n", TEST_DEF.name);
         abort();
     }
-    printf("%s route topology setup PASS: %d open %d blocked, order-independent, identical-map reuse\n",
+    printf("%s route topology PASS: %d open %d blocked, matches the scene collision map, process reuse\n",
         TEST_DEF.name, open_tiles, blocked_tiles);
-    collision_map_free(first_map);
-    collision_map_free(second_map);
     return 0;
 }

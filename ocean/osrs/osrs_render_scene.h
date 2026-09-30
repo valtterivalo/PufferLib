@@ -19,35 +19,14 @@ static void visual_require_gui_item_sprite(int raw_osrs_id, void* context) {
     gui_require_sprite_by_osrs_id((GuiState*)context, raw_osrs_id);
 }
 
-typedef struct {
-    CollisionMap* cmap;
-    int offset_x;
-    int offset_y;
-} VisualCollisionLoad;
-
 static const char* visual_scene_name(const EncounterDef* encounter_def) {
-    return encounter_def ? encounter_def->scene : "wilderness";
+    return encounter_def ? encounter_def->scene : PVP_SCENE;
 }
 
 static const char* visual_scene_asset(const char* scene, const char* extension) {
     char name[256];
     snprintf(name, sizeof(name), "%s.%s", scene, extension);
     return OSRS_ASSET(name);
-}
-
-static VisualCollisionLoad visual_load_encounter_collision_map(const EncounterDef* encounter_def, OsrsEnv* env) {
-    VisualCollisionLoad result = {
-        collision_map_load(visual_scene_asset(visual_scene_name(encounter_def), "cmap")),
-        encounter_def->scene_origin_x,
-        encounter_def->scene_origin_y,
-    };
-    if (result.offset_x || result.offset_y) {
-        encounter_def->put_int(env->encounter_state, env->encounter_context, "world_offset_x", result.offset_x);
-        encounter_def->put_int(env->encounter_state, env->encounter_context, "world_offset_y", result.offset_y);
-    }
-    encounter_def->put_ptr(env->encounter_state, env->encounter_context, "collision_map", result.cmap);
-    env->collision_map = result.cmap;
-    return result;
 }
 
 static void visual_load_scene_meshes(RenderClient* rc, const EncounterDef* encounter_def) {
@@ -60,10 +39,9 @@ static void visual_load_scene_meshes(RenderClient* rc, const EncounterDef* encou
     terrain_offset(rc->terrain, origin_x, origin_y);
     objects_offset(rc->objects, origin_x, origin_y);
     objects_offset(rc->objects_zuk, origin_x, origin_y);
-    if (rc->collision_map) {
-        rc->collision_world_offset_x = origin_x;
-        rc->collision_world_offset_y = origin_y;
-    }
+    rc->collision_map = collision_map_scene(scene);
+    rc->collision_world_offset_x = origin_x;
+    rc->collision_world_offset_y = origin_y;
     if (encounter_def && encounter_def->npc_pack) {
         rc->npc_model_cache = model_cache_load(visual_scene_asset(encounter_def->npc_pack, "models"));
         rc->npc_anim_cache = anim_cache_load(visual_scene_asset(encounter_def->npc_pack, "anims"));
@@ -101,9 +79,6 @@ static RenderClient* visual_init_render_scene(
             &render_client->gui);
     }
 
-    if (env->collision_map) {
-        render_client->collision_map = (const CollisionMap*)env->collision_map;
-    }
 
     double t0 = osrs_now_ms();
     render_client->model_cache = model_cache_load(OSRS_ASSET("equipment.models"));

@@ -1,6 +1,7 @@
 #ifndef OSRS_COLLISION_H
 #define OSRS_COLLISION_H
 
+#include <assert.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -105,10 +106,10 @@ static inline void collision_map_put(CollisionMap* map, int key, CollisionRegion
         }
     }
     fprintf(stderr, "collision_map_put: map full (capacity %d)\n", REGION_MAP_CAPACITY);
+    abort();
 }
 
 static inline void collision_map_free(CollisionMap* map) {
-    if (map == NULL) return;
     for (int i = 0; i < REGION_MAP_CAPACITY; i++) {
         if (map->entries[i].region != NULL) {
             free(map->entries[i].region);
@@ -118,14 +119,13 @@ static inline void collision_map_free(CollisionMap* map) {
 }
 
 static inline int collision_get_flags(const CollisionMap* map, int height, int x, int y) {
-    if (map == NULL) return COLLISION_NONE;
     int key = collision_region_hash(x, y);
     const CollisionRegion* region = collision_map_get(map, key);
     if (region == NULL) return COLLISION_NONE;
     int lx = collision_local(x);
     int ly = collision_local(y);
-    int h = height < 0 ? 0 : (height >= REGION_HEIGHT_LEVELS ? REGION_HEIGHT_LEVELS - 1 : height);
-    return region->flags[h][lx][ly];
+    assert(height >= 0 && height < REGION_HEIGHT_LEVELS);
+    return region->flags[height][lx][ly];
 }
 
 
@@ -187,7 +187,6 @@ static inline int collision_traversable_step(
     int dx,
     int dy
 ) {
-    if (map == NULL) return 1;
     uint32_t horizontal_side_flags = 0;
     uint32_t vertical_side_flags = 0;
     if (dx != 0 && dy != 0) {
@@ -213,7 +212,6 @@ static inline int collision_traversable_step(
 
 
 static inline int collision_tile_walkable(const CollisionMap* map, int height, int x, int y) {
-    if (map == NULL) return 1;
     return (collision_get_flags(map, height, x, y) & COLLISION_BLOCKED) == 0;
 }
 
@@ -223,53 +221,53 @@ static inline int collision_tile_walkable(const CollisionMap* map, int height, i
 static inline CollisionMap* collision_map_load(const char* path) {
     FILE* f = osrs_asset_fopen(path, "rb");
     if (f == NULL) {
-        fprintf(stderr, "collision_map_load: cannot open %s\n", path);
-        return NULL;
+        fprintf(stderr, "collision_map_load: cannot open %s\n", osrs_asset_path(path));
+        abort();
     }
-
-    uint32_t magic, version, region_count;
-    if (fread(&magic, 4, 1, f) != 1 || magic != COLLISION_MAP_MAGIC) {
-        fprintf(stderr, "collision_map_load: bad magic in %s\n", path);
-        fclose(f);
-        return NULL;
+    uint32_t header[3];
+    osrs_read_exact(f, header, sizeof(header), 1, path, "collision map header");
+    if (header[0] != COLLISION_MAP_MAGIC || header[1] != COLLISION_MAP_VERSION) {
+        fprintf(stderr, "collision_map_load: bad header in %s\n", path);
+        abort();
     }
-    if (fread(&version, 4, 1, f) != 1 || version != COLLISION_MAP_VERSION) {
-        fprintf(stderr, "collision_map_load: unsupported version %u in %s\n", version, path);
-        fclose(f);
-        return NULL;
-    }
-    if (fread(&region_count, 4, 1, f) != 1) {
-        fprintf(stderr, "collision_map_load: truncated header in %s\n", path);
-        fclose(f);
-        return NULL;
-    }
-
     CollisionMap* map = collision_map_create();
-
-    for (uint32_t i = 0; i < region_count; i++) {
+    for (uint32_t i = 0; i < header[2]; i++) {
         int32_t key;
-        if (fread(&key, 4, 1, f) != 1) {
-            fprintf(stderr, "collision_map_load: truncated at region %u in %s\n", i, path);
-            collision_map_free(map);
-            fclose(f);
-            return NULL;
-        }
-
-        CollisionRegion* region = (CollisionRegion*)calloc(1, sizeof(CollisionRegion));
-        size_t flags_size = sizeof(region->flags);
-        if (fread(region->flags, 1, flags_size, f) != flags_size) {
-            fprintf(stderr, "collision_map_load: truncated flags at region %u in %s\n", i, path);
-            free(region);
-            collision_map_free(map);
-            fclose(f);
-            return NULL;
-        }
-
+        CollisionRegion* region = (CollisionRegion*)osrs_malloc_or_abort(sizeof(CollisionRegion), "collision region");
+        osrs_read_exact(f, &key, sizeof(key), 1, path, "collision region key");
+        osrs_read_exact(f, region->flags, sizeof(region->flags), 1, path, "collision region flags");
         collision_map_put(map, key, region);
     }
-
     fclose(f);
     return map;
+}
+
+typedef struct {
+    char name[32];
+    const CollisionMap* map;
+} CollisionScene;
+
+enum { COLLISION_SCENE_CAPACITY = 8 };
+
+static CollisionScene collision_scenes[COLLISION_SCENE_CAPACITY];
+
+static inline const CollisionMap* collision_map_scene(const char* scene) {
+    int slot = 0;
+    for (; slot < COLLISION_SCENE_CAPACITY && collision_scenes[slot].map; slot++)
+        if (strcmp(collision_scenes[slot].name, scene) == 0) return collision_scenes[slot].map;
+    if (slot == COLLISION_SCENE_CAPACITY || strlen(scene) >= sizeof(collision_scenes[slot].name)) {
+        fprintf(stderr, "collision_map_scene: cannot cache scene %s\n", scene);
+        abort();
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "%s.cmap", scene);
+    strcpy(collision_scenes[slot].name, scene);
+    collision_scenes[slot].map = collision_map_load(path);
+    return collision_scenes[slot].map;
+}
+
+static inline uint32_t collision_scene_flags(const CollisionMap* map, int origin_x, int origin_y, int x, int y) {
+    return (uint32_t)collision_get_flags(map, 0, x + origin_x, y + origin_y);
 }
 
 #define LOS_FULL_MASK   0x20000

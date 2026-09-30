@@ -1,6 +1,7 @@
 #ifndef OSRS_PATHFINDING_H
 #define OSRS_PATHFINDING_H
 
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,9 +26,7 @@ static inline int encounter_attack_rect_distance(
 }
 
 static inline int encounter_entity_footprint_cardinal_reachable(
-    const CollisionMap* cmap,
-    int world_offset_x,
-    int world_offset_y,
+    const EncounterArenaTopology* topology,
     int player_x,
     int player_y,
     int target_x,
@@ -36,8 +35,9 @@ static inline int encounter_entity_footprint_cardinal_reachable(
 ) {
     int target_max_x = target_x + target_size - 1;
     int target_max_y = target_y + target_size - 1;
-    int flags = collision_get_flags(
-        cmap, 0, player_x + world_offset_x, player_y + world_offset_y);
+    assert(encounter_arena_topology_contains_raw(topology, player_x, player_y));
+    uint32_t flags = topology->static_collision_flags[
+        encounter_arena_topology_index_raw(topology, player_x, player_y)];
 
     if (player_x + 1 == target_x &&
             player_y >= target_y && player_y <= target_max_y)
@@ -220,9 +220,7 @@ static inline int encounter_attack_position_valid(
     int target_y,
     int target_size,
     int attack_range,
-    const CollisionMap* cmap,
-    int world_offset_x,
-    int world_offset_y,
+    const EncounterArenaTopology* topology,
     const OsrsLosQuery* los_query
 ) {
     int distance = encounter_attack_rect_distance(
@@ -230,8 +228,7 @@ static inline int encounter_attack_position_valid(
     if (distance < 1 || distance > attack_range) return 0;
     if (attack_range == 1)
         return encounter_entity_footprint_cardinal_reachable(
-            cmap, world_offset_x, world_offset_y,
-            player_x, player_y, target_x, target_y, target_size);
+            topology, player_x, player_y, target_x, target_y, target_size);
     return osrs_los_clear(
         los_query,
         player_x, player_y, 1,
@@ -239,17 +236,6 @@ static inline int encounter_attack_position_valid(
         attack_range);
 }
 
-static inline int encounter_player_can_attack(
-    int player_x, int player_y,
-    int target_x, int target_y, int target_size, int attack_range,
-    const CollisionMap* cmap, int world_offset_x, int world_offset_y,
-    const OsrsLosQuery* los_query
-) {
-    return encounter_attack_position_valid(
-        player_x, player_y,
-        target_x, target_y, target_size, attack_range,
-        cmap, world_offset_x, world_offset_y, los_query);
-}
 #ifdef __cplusplus
 #define OSRS_THREAD_LOCAL thread_local
 #else
@@ -359,9 +345,6 @@ typedef struct {
     EncounterRouteTargetKind target_kind;
     int attack_range;
     EncounterRouteAttackGeometry attack_geometry;
-    const CollisionMap* collision_map;
-    int world_offset_x;
-    int world_offset_y;
     const OsrsLosQuery* los_query;
     EncounterRouteMovementMode movement_mode;
     EncounterRouteCostPolicy cost_policy;
@@ -668,9 +651,7 @@ static inline int encounter_route_is_target(
             x, y,
             input->target_x, input->target_y, input->target_size,
             input->attack_range,
-            input->collision_map,
-            input->world_offset_x,
-            input->world_offset_y,
+            input->topology,
             input->los_query);
     }
     return encounter_route_footprints_cardinal_adjacent(

@@ -84,7 +84,7 @@ static void test_pvp_remove_compacts_and_clears_tail(void) {
     ASSERT_INT_EQ("tail timer cleared", attacker.pending_hits[2].ticks_until_hit, 0);
 }
 
-static CollisionMap* nh_map;
+static const CollisionMap* nh_map;
 static NhPvpContext nh_context;
 static NhPvpState* nh_state;
 
@@ -93,10 +93,7 @@ static void init_nh_fixture(void) {
     if (!state) abort();
     nh_state = (NhPvpState*)state;
     ENCOUNTER_NH_PVP.init_context((EncounterContext*)&nh_context);
-    nh_map = collision_map_load("ocean/osrs/data/wilderness.cmap");
-    if (!nh_map) abort();
-    ENCOUNTER_NH_PVP.put_ptr(
-        state, (EncounterContext*)&nh_context, "collision_map", nh_map);
+    nh_map = collision_map_scene("wilderness");
     ENCOUNTER_NH_PVP.put_int(
         state, (EncounterContext*)&nh_context, "seed", 1);
     ENCOUNTER_NH_PVP.finalize_context(
@@ -113,8 +110,8 @@ static void test_nh_topology_geometry_parity(void) {
         topology->origin_x == FIGHT_AREA_BASE_X &&
         topology->origin_y == FIGHT_AREA_BASE_Y &&
         topology->width == 61 && topology->height == 28);
-    CHECK("NH PvP keeps the existing open static LOS combat rule",
-        topology->static_los_mode == ENCOUNTER_ARENA_TOPOLOGY_LOS_OPEN);
+    CHECK("NH PvP line of sight follows the wilderness collision map",
+        topology->static_los_mode == ENCOUNTER_ARENA_TOPOLOGY_LOS_FLAGGED);
 
     int diagonal_wall_steps = 0;
     for (int x = FIGHT_AREA_BASE_X;

@@ -570,9 +570,6 @@ static void inf_tick_player_ctx(
                 : ENCOUNTER_ROUTE_COST_OSRS,
             .destination_cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
             .attack_geometry = ENCOUNTER_ROUTE_ATTACK_GEOMETRY_TOPOLOGY,
-            .collision_map = ctx->collision_map,
-            .world_offset_x = ctx->world_offset_x,
-            .world_offset_y = ctx->world_offset_y,
             .los_query = &los_query,
         },
     };
@@ -590,10 +587,10 @@ static void inf_tick_player_ctx(
             InfNPC* target_npc = &s->npcs[s->interaction.target_slot];
             InfPlayerAttack healer_attack;
             int has_healer_attack = inf_resolve_player_attack_ctx(s, ctx, manual_spell, &healer_attack);
-            if (has_healer_attack && encounter_player_can_attack(s->player.x, s->player.y,
+            if (has_healer_attack && encounter_attack_position_valid(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     healer_attack.stats.attack_range,
-                    ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
+                    ctx->route_topology,
                     &los_query)) {
                 s->total_zuk_healer_attackable_ticks++;
             } else {
@@ -616,10 +613,10 @@ static void inf_tick_player_ctx(
 
             if (target_npc->death_ticks > 0 && !is_manual_dying_barrage) {
                 osrs_interaction_clear(&s->interaction);
-            } else if (has_attack && encounter_player_can_attack(s->player.x, s->player.y,
+            } else if (has_attack && encounter_attack_position_valid(s->player.x, s->player.y,
                     target_npc->x, target_npc->y, target_npc->size,
                     ls->attack_range,
-                    ctx->collision_map, ctx->world_offset_x, ctx->world_offset_y,
+                    ctx->route_topology,
                     &los_query)) {
                 int is_blowpipe_spec_attack = weapon_is_blowpipe &&
                     s->player.spec_armed && s->player.special_energy >= BLOWPIPE_SPEC_COST;
