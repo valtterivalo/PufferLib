@@ -18,7 +18,7 @@
 #include "../osrs_inventory_actions.h"
 #include "../osrs_policy.h"
 #include "../osrs_interaction.h"
-#include "../data/npc_models.h"
+#include "../osrs_npc_models.h"
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>

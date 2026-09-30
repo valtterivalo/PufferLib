@@ -588,22 +588,22 @@ static inline AttackStyle inf_jad_roll_primary_style(uint32_t* rng_state) {
 
 static inline int inf_npc_attack_anim_id(const InfNPC* npc, const NpcModelMapping* nm) {
     if (npc->resurrecting_this_tick)
-        return INF_GEN_ANIM_MAGER_RESURRECT;
+        return SEQ_INFERNO_JALAKXIL_RESURRECT;
     if (npc->type == INF_NPC_RANGER &&
         npc->attack_style_this_tick == ATTACK_STYLE_MELEE)
-        return INF_GEN_ANIM_RANGER_ATTACK_MELEE;
+        return SEQ_INFERNO_JALXIL_ATTACK_MELEE;
     if (npc->type == INF_NPC_MAGER &&
         npc->attack_style_this_tick == ATTACK_STYLE_MELEE)
-        return INF_GEN_ANIM_MAGER_ATTACK_MELEE;
+        return SEQ_INFERNO_JALAKXIL_ATTACK_MELEE;
 
     if (npc->type == INF_NPC_JAD) {
         switch (npc->attack_style_this_tick) {
             case ATTACK_STYLE_MAGIC:
-                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_MAGIC;
+                return SEQ_INFERNO_JALTOKJAD_ATTACK_MAGIC;
             case ATTACK_STYLE_RANGED:
-                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_RANGED;
+                return SEQ_INFERNO_JALTOKJAD_ATTACK_RANGED;
             case ATTACK_STYLE_MELEE:
-                return INF_GEN_ANIM_JALTOK_JAD_ATTACK_MELEE;
+                return SEQ_INFERNO_JALTOKJAD_ATTACK_MELEE;
             default:
                 return -1;
         }
@@ -617,26 +617,26 @@ static inline int inf_npc_attack_anim_id(const InfNPC* npc, const NpcModelMappin
 static inline int inf_npc_death_anim_id(const InfNPC* npc, const NpcModelMapping* nm) {
     switch (npc->type) {
         case INF_NPC_NIBBLER:
-            return INF_GEN_ANIM_NIBBLER_DEATH;
+            return SEQ_INFERNO_JALNIB_DEATH;
         case INF_NPC_BAT:
-            return INF_GEN_ANIM_BAT_DEATH;
+            return SEQ_INFERNO_JALMEJRAH_DEATH;
         case INF_NPC_BLOB:
         case INF_NPC_BLOB_MELEE:
         case INF_NPC_BLOB_RANGE:
         case INF_NPC_BLOB_MAGE:
-            return INF_GEN_ANIM_BLOB_DEATH;
+            return SEQ_INFERNO_JALAK_DEATH;
         case INF_NPC_MELEER:
-            return INF_GEN_ANIM_MELEER_DEATH;
+            return SEQ_INFERNO_JALIMKOT_DEATH;
         case INF_NPC_RANGER:
-            return INF_GEN_ANIM_RANGER_DEATH;
+            return SEQ_INFERNO_JALXIL_DEATH;
         case INF_NPC_MAGER:
-            return INF_GEN_ANIM_MAGER_DEATH;
+            return SEQ_INFERNO_JALAKXIL_DEATH;
         case INF_NPC_JAD:
-            return INF_GEN_ANIM_JALTOK_JAD_DEATH;
+            return SEQ_INFERNO_JALTOKJAD_DEATH;
         case INF_NPC_ZUK:
-            return INF_GEN_ANIM_TZKAL_ZUK_DEATH;
+            return SEQ_INFERNO_ZUK_DEATH;
         case INF_NPC_ZUK_SHIELD:
-            return INF_GEN_ANIM_ZUK_SHIELD_DEATH;
+            return SEQ_INFERNO_MOVING_SAFE_SPOT_DEATH;
         default:
             return nm ? (int)nm->idle_anim : -1;
     }

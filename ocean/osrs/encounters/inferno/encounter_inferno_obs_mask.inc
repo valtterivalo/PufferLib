@@ -697,10 +697,10 @@ static void inf_fill_render_entities_ctx(
             npc_anim_id = inf_npc_death_anim_id(npc, nm);
         } else if (npc->type == INF_NPC_MELEER &&
                    npc->dig_freeze_timer == 6) {
-            npc_anim_id = INF_GEN_ANIM_MELEER_DIG_DOWN;
+            npc_anim_id = SEQ_INFERNO_JALIMKOT_DIGDOWN;
         } else if (npc->type == INF_NPC_MELEER &&
                    npc->dig_attack_delay == 6) {
-            npc_anim_id = INF_GEN_ANIM_MELEER_DIG_UP;
+            npc_anim_id = SEQ_INFERNO_JALIMKOT_DIGUP;
         } else if (npc->attacked_this_tick) {
             npc_anim_id = inf_npc_attack_anim_id(npc, nm);
         }

@@ -2651,7 +2651,7 @@ static void test_mager_resurrection_render_event_is_not_magic_projectile(void) {
     inf_fill_render_entities_ctx((EncounterState*)&state, (EncounterContext*)&test_context, entities, 4, &count);
     ASSERT_INT_EQ("resurrection render has mager and resurrected mob", count >= 3, 1);
     ASSERT_INT_EQ("mager uses resurrection animation",
-        entities[1].npc_anim_id, INF_GEN_ANIM_MAGER_RESURRECT);
+        entities[1].npc_anim_id, SEQ_INFERNO_JALAKXIL_RESURRECT);
     ASSERT_INT_EQ("mager faces resurrected mob",
         entities[1].dest_x,
         state.npcs[state.npcs[0].resurrection_visual_target].x +
@@ -7070,7 +7070,7 @@ static void test_inferno_render_uses_npc_death_animation(void) {
 
     ASSERT_INT_EQ("dying NPC still renders", count >= 2, 1);
     ASSERT_INT_EQ("nibbler death animation",
-        entities[1].npc_anim_id, INF_GEN_ANIM_NIBBLER_DEATH);
+        entities[1].npc_anim_id, SEQ_INFERNO_JALNIB_DEATH);
 }
 
 static void test_jad_magic_render_emits_three_offset_projectiles(void) {

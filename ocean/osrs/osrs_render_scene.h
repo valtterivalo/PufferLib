@@ -87,7 +87,6 @@ static RenderClient* visual_init_render_scene(
     osrs_time_log("equipment models+anims", &t0);
     render_load_projectile_assets(render_client);
     osrs_time_log("projectile assets", &t0);
-    render_init_overlay_models(render_client);
     osrs_time_log("overlay models", &t0);
 
     visual_load_scene_meshes(render_client, (const EncounterDef*)env->encounter_def);

@@ -20,7 +20,6 @@ typedef struct {
     int total_vertex_count;
     int min_world_x;
     int min_world_y;
-    int has_textures;
     int loaded;
 } ObjectMesh;
 
@@ -44,11 +43,7 @@ static ObjectMesh* objects_load(const char* path) {
     uint32_t magic, placement_count, total_verts;
     int32_t min_wx, min_wy;
     osrs_read_exact(f, &magic, 4, 1, path, "magic");
-
-    int has_textures = 0;
-    if (magic == OBJ2_MAGIC) {
-        has_textures = 1;
-    } else if (magic != OBJS_MAGIC) {
+    if (magic != OBJ2_MAGIC) {
         fprintf(stderr, "objects_load: bad magic %08x\n", magic);
         abort();
     }
@@ -58,8 +53,7 @@ static ObjectMesh* objects_load(const char* path) {
     osrs_read_exact(f, &min_wy, 4, 1, path, "min world y");
     osrs_read_exact(f, &total_verts, 4, 1, path, "vertex count");
 
-    fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
-            placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
+    fprintf(stderr, "objects_load: %u placements, %u verts\n", placement_count, total_verts);
 
     float* raw_verts = (float*)osrs_malloc_or_abort(
         total_verts * 3 * sizeof(float), "object vertices");
@@ -69,13 +63,9 @@ static ObjectMesh* objects_load(const char* path) {
         total_verts * 4, "object colors");
     osrs_read_exact(f, raw_colors, 1, total_verts * 4, path, "colors");
 
-    float* raw_texcoords = NULL;
-    if (has_textures) {
-        raw_texcoords = (float*)osrs_malloc_or_abort(
-            total_verts * 2 * sizeof(float), "object texture coordinates");
-        osrs_read_exact(f, raw_texcoords, sizeof(float),
-            total_verts * 2, path, "texture coordinates");
-    }
+    float* raw_texcoords = (float*)osrs_malloc_or_abort(
+        total_verts * 2 * sizeof(float), "object texture coordinates");
+    osrs_read_exact(f, raw_texcoords, sizeof(float), total_verts * 2, path, "texture coordinates");
     fclose(f);
 
     Mesh mesh = { 0 };
@@ -117,24 +107,11 @@ static ObjectMesh* objects_load(const char* path) {
     om->total_vertex_count = (int)total_verts;
     om->min_world_x = min_wx;
     om->min_world_y = min_wy;
-    om->has_textures = has_textures;
     om->loaded = 1;
 
-    if (has_textures) {
-        char atlas_path[1024];
-        strncpy(atlas_path, path, sizeof(atlas_path) - 1);
-        atlas_path[sizeof(atlas_path) - 1] = '\0';
-        char* dot = strrchr(atlas_path, '.');
-        if (dot) {
-            strcpy(dot, ".atlas");
-        } else {
-            strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
-        }
-
-        om->atlas_texture = objects_load_atlas(atlas_path);
-        if (om->atlas_texture.id > 0) {
-            om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = om->atlas_texture;
-        }
+    om->atlas_texture = objects_load_atlas(OSRS_ASSET("textures.atlas"));
+    if (om->atlas_texture.id > 0) {
+        om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = om->atlas_texture;
     }
 
     return om;

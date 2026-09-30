@@ -18,7 +18,7 @@
 #include "../osrs_damage.h"
 #include "../osrs_collision.h"
 #include "../osrs_monsters_generated.h"
-#include "../data/npc_models.h"
+#include "../osrs_npc_models.h"
 #include <stdlib.h>
 #include <string.h>
 

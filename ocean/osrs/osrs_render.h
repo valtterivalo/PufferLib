@@ -17,7 +17,7 @@
 typedef float obs_t;
 #include "pufferenv.h"
 #include "data/player_models.h"
-#include "data/npc_models.h"
+#include "osrs_npc_models.h"
 #include "osrs_terrain.h"
 #include "osrs_objects.h"
 #include "osrs_gui.h"
@@ -478,13 +478,6 @@ typedef struct RenderClient {
     int arena_width, arena_height;
 
     EncounterOverlay encounter_overlay;
-
-    Model cloud_model;       int cloud_model_ready;
-    Model snakeling_model;   int snakeling_model_ready;
-    Model ranged_proj_model; int ranged_proj_model_ready;
-    Model magic_proj_model;  int magic_proj_model_ready;
-    Model cloud_proj_model;  int cloud_proj_model_ready;
-    Model pillar_models[4];  int pillar_models_ready;
 
     FlightProjectile flights[MAX_FLIGHT_PROJECTILES];
 
@@ -1993,7 +1986,7 @@ static void render_load_projectile_assets(RenderClient* rc) {
     }
 }
 
-static Model* render_get_proj_model(RenderClient* rc, uint32_t model_id) {
+static Model* render_static_model(RenderClient* rc, uint32_t model_id) {
     if (model_id == 0) return NULL;
     for (int i = 0; i < rc->proj_model_count; i++) {
         if (rc->proj_models[i].id == model_id)
@@ -2161,38 +2154,6 @@ static OsrsModel* render_animate_effect_model(
     render_apply_anim_sequence_frame_to_model_state(
         rc, state, om, seq, frame, "effect-spotanim");
     return om;
-}
-
-static void render_init_overlay_models(RenderClient* rc) {
-    if (!rc->model_cache) return;
-
-    rc->cloud_model_ready = render_build_static_model(
-        rc->model_cache, GFX_TOXIC_CLOUD_MODEL, &rc->cloud_model);
-    rc->snakeling_model_ready = render_build_static_model(
-        rc->model_cache, SNAKELING_MODEL_ID, &rc->snakeling_model);
-    rc->ranged_proj_model_ready = render_build_static_model(
-        rc->model_cache, GFX_RANGED_PROJ_MODEL, &rc->ranged_proj_model);
-    rc->magic_proj_model_ready = render_build_static_model(
-        rc->model_cache, GFX_MAGIC_PROJ_MODEL, &rc->magic_proj_model);
-
-    rc->cloud_proj_model_ready = render_build_static_model(
-        rc->model_cache, GFX_CLOUD_PROJ_MODEL, &rc->cloud_proj_model);
-    {
-        uint32_t pillar_ids[4] = { INF_PILLAR_MODEL_100, INF_PILLAR_MODEL_75,
-                                    INF_PILLAR_MODEL_50, INF_PILLAR_MODEL_25 };
-        rc->pillar_models_ready = 1;
-        for (int i = 0; i < 4; i++) {
-            if (!render_build_static_model(rc->model_cache, pillar_ids[i], &rc->pillar_models[i]))
-                rc->pillar_models_ready = 0;
-        }
-    }
-
-    if (rc->cloud_model_ready) printf("overlay: cloud model loaded\n");
-    if (rc->pillar_models_ready) printf("overlay: pillar models loaded (4 HP levels)\n");
-    if (rc->snakeling_model_ready) printf("overlay: snakeling model loaded\n");
-    if (rc->ranged_proj_model_ready) printf("overlay: ranged projectile model loaded\n");
-    if (rc->magic_proj_model_ready) printf("overlay: magic projectile model loaded\n");
-    if (rc->cloud_proj_model_ready) printf("overlay: cloud projectile model loaded\n");
 }
 
 static void flight_deactivate(FlightProjectile* fp) {
@@ -2588,14 +2549,6 @@ static void __attribute__((unused)) render_destroy_client(RenderClient* rc) {
     }
     for (int i = 0; i < 8; i++) {
         UnloadTexture(rc->click_cross_sprites[i]);
-    }
-    if (rc->cloud_model_ready) UnloadModel(rc->cloud_model);
-    if (rc->snakeling_model_ready) UnloadModel(rc->snakeling_model);
-    if (rc->ranged_proj_model_ready) UnloadModel(rc->ranged_proj_model);
-    if (rc->magic_proj_model_ready) UnloadModel(rc->magic_proj_model);
-    if (rc->cloud_proj_model_ready) UnloadModel(rc->cloud_proj_model);
-    if (rc->pillar_models_ready) {
-        for (int i = 0; i < 4; i++) UnloadModel(rc->pillar_models[i]);
     }
     for (int i = 0; i < rc->proj_model_count; i++) {
         if (rc->proj_models[i].ready) UnloadModel(rc->proj_models[i].model);
@@ -4721,34 +4674,15 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
             float cx = (float)is->pillars[p].x + INF_PILLAR_SIZE / 2.0f;
             float cz = -(float)(is->pillars[p].y + INF_PILLAR_SIZE / 2) - 0.5f;
 
-            if (rc->pillar_models_ready) {
-                int mi = 0;
-                if (hp_frac <= 0.25f) mi = 3;
-                else if (hp_frac <= 0.50f) mi = 2;
-                else if (hp_frac <= 0.75f) mi = 1;
-
-                rlDisableBackfaceCulling();
-                rc->pillar_models[mi].transform = MatrixMultiply(
-                    MatrixScale(-ms, ms, ms),
-                    MatrixTranslate(cx, plat_y, cz));
-                DrawModel(rc->pillar_models[mi], (Vector3){0,0,0}, 1.0f, WHITE);
-                rlEnableBackfaceCulling();
-            } else {
-                int base_r = (int)(140 * hp_frac + 180 * (1.0f - hp_frac));
-                int base_g = (int)(130 * hp_frac + 40 * (1.0f - hp_frac));
-                int base_b = (int)(100 * hp_frac + 20 * (1.0f - hp_frac));
-                Color pillar_col = { (unsigned char)base_r, (unsigned char)base_g, (unsigned char)base_b, 240 };
-                for (int dx = 0; dx < INF_PILLAR_SIZE; dx++) {
-                    for (int dy = 0; dy < INF_PILLAR_SIZE; dy++) {
-                        float tx = (float)(is->pillars[p].x + dx);
-                        float tz2 = -(float)(is->pillars[p].y + dy + 1);
-                        for (int h = 0; h < 3; h++) {
-                            DrawCube((Vector3){ tx + 0.5f, plat_y + 0.5f + (float)h, tz2 + 0.5f },
-                                     0.95f, 0.95f, 0.95f, pillar_col);
-                        }
-                    }
-                }
-            }
+            static const uint32_t pillar_models[4] = {
+                INF_PILLAR_MODEL_100, INF_PILLAR_MODEL_75, INF_PILLAR_MODEL_50, INF_PILLAR_MODEL_25,
+            };
+            int mi = hp_frac <= 0.25f ? 3 : hp_frac <= 0.50f ? 2 : hp_frac <= 0.75f ? 1 : 0;
+            Model* pillar = render_static_model(rc, pillar_models[mi]);
+            rlDisableBackfaceCulling();
+            pillar->transform = MatrixMultiply(MatrixScale(-ms, ms, ms), MatrixTranslate(cx, plat_y, cz));
+            DrawModel(*pillar, (Vector3){0,0,0}, 1.0f, WHITE);
+            rlEnableBackfaceCulling();
         }
     }
 
@@ -4869,7 +4803,7 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                 continue;
             }
 
-            Model* model = render_get_proj_model(rc, floating->model_id);
+            Model* model = render_static_model(rc, floating->model_id);
             float spin = 0.0f;
             if (floating_bob_spin) {
                 float bob_phase = floating_anim_t * (2.0f * PI / 100.0f)
@@ -4899,27 +4833,13 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
             if (!ov->hazards[i].active) continue;
             float ground = OV_GROUND(ov->hazards[i].x + 1, ov->hazards[i].y + 1);
 
-            if (rc->cloud_model_ready) {
-                float cx = (float)ov->hazards[i].x + 1.5f;
-                float cz = -(float)(ov->hazards[i].y + 2) + 0.5f;
-                rlDisableBackfaceCulling();
-                rc->cloud_model.transform = MatrixMultiply(
-                    MatrixScale(ms, ms, ms),
-                    MatrixTranslate(cx, ground + 0.1f, cz));
-                DrawModel(rc->cloud_model, (Vector3){0,0,0}, 1.0f, WHITE);
-                rlEnableBackfaceCulling();
-            } else {
-                for (int cdx = 0; cdx < 3; cdx++) {
-                    for (int cdy = 0; cdy < 3; cdy++) {
-                        float fx = (float)(ov->hazards[i].x + cdx);
-                        float fz = -(float)(ov->hazards[i].y + cdy + 1);
-                        float tg = OV_GROUND(ov->hazards[i].x + cdx, ov->hazards[i].y + cdy);
-                        DrawCube((Vector3){ fx + 0.5f, tg + 0.08f, fz + 0.5f },
-                                 0.95f, 0.06f, 0.95f,
-                                 CLITERAL(Color){ 80, 180, 50, 100 });
-                    }
-                }
-            }
+            float cx = (float)ov->hazards[i].x + 1.5f;
+            float cz = -(float)(ov->hazards[i].y + 2) + 0.5f;
+            Model* cloud = render_static_model(rc, GFX_TOXIC_CLOUD_MODEL);
+            rlDisableBackfaceCulling();
+            cloud->transform = MatrixMultiply(MatrixScale(ms, ms, ms), MatrixTranslate(cx, ground + 0.1f, cz));
+            DrawModel(*cloud, (Vector3){0,0,0}, 1.0f, WHITE);
+            rlEnableBackfaceCulling();
         }
 
         if (rc->show_debug && ov->boss_visible && ov->boss_size > 0) {
@@ -5113,20 +5033,11 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
             float ground = OV_GROUND(ov->adds[i].x, ov->adds[i].y);
             float sx = (float)ov->adds[i].x + 0.5f;
             float sz = -(float)(ov->adds[i].y + 1) + 0.5f;
-            if (rc->snakeling_model_ready) {
-                rlDisableBackfaceCulling();
-                rc->snakeling_model.transform = MatrixMultiply(
-                    MatrixScale(ms, ms, ms),
-                    MatrixTranslate(sx, ground, sz));
-                DrawModel(rc->snakeling_model, (Vector3){0,0,0}, 1.0f, WHITE);
-                rlEnableBackfaceCulling();
-            } else {
-                Color sc = ov->adds[i].variant
-                    ? CLITERAL(Color){ 100, 150, 255, 200 }
-                    : CLITERAL(Color){ 255, 150, 50, 200 };
-                DrawCube((Vector3){ sx, ground + 0.2f, sz },
-                         0.6f, 0.3f, 0.6f, sc);
-            }
+            Model* snakeling = render_static_model(rc, ov->adds[i].variant ? SNAKELING_MODEL_MAGIC : SNAKELING_MODEL_MELEE);
+            rlDisableBackfaceCulling();
+            snakeling->transform = MatrixMultiply(MatrixScale(ms, ms, ms), MatrixTranslate(sx, ground, sz));
+            DrawModel(*snakeling, (Vector3){0,0,0}, 1.0f, WHITE);
+            rlEnableBackfaceCulling();
         }
 
         for (int i = 0; i < MAX_FLIGHT_PROJECTILES; i++) {
@@ -5155,7 +5066,7 @@ static void render_draw_3d_world(RenderClient* rc, OsrsEnv* env) {
                 OsrsModel* om = render_get_flight_osrs_model(rc, fp);
                 proj_model = &om->model;
             } else if (fp->model_id > 0) {
-                proj_model = render_get_proj_model(rc, fp->model_id);
+                proj_model = render_static_model(rc, fp->model_id);
             }
             if (!proj_model && (fp->launch_gfx_id > 0 || fp->impact_gfx_id > 0)) {
                 continue;

@@ -1199,7 +1199,7 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .arena_width = COLO_ARENA_WIDTH,
     .arena_height = COLO_ARENA_HEIGHT,
     .scene = COLO_SCENE,
-    .npc_pack = "colosseum_npcs",
+    .npc_pack = "colosseum",
     .scene_origin_x = COLO_SCENE_ORIGIN_X,
     .scene_origin_y = COLO_SCENE_ORIGIN_Y,
 

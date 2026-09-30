@@ -8,6 +8,7 @@
 #else
 #error "raylib.h not found"
 #endif
+#include <assert.h>
 #include "osrs_assets.h"
 #include "osrs_asset_formats.h"
 #include "osrs_asset_raylib.h"
@@ -113,28 +114,10 @@ static OsrsModelAppendResult osrs_model_append_check(
     return OSRS_MODEL_APPEND_OK;
 }
 
-static int model_cache_companion_path(
-    char* out,
-    size_t cap,
-    const char* path,
-    const char* suffix
-) {
-    if (!out || cap == 0 || !path || !suffix) return 0;
-    const char* dot = strrchr(path, '.');
-    size_t stem_len = dot ? (size_t)(dot - path) : strlen(path);
-    int n = snprintf(out, cap, "%.*s%s", (int)stem_len, path, suffix);
-    return n > 0 && (size_t)n < cap;
-}
-
-static void model_cache_load_texture_anims(ModelCache* cache, const char* model_path) {
-    if (!cache || !model_path) return;
-
-    char tanm_path[1024];
-    if (!model_cache_companion_path(tanm_path, sizeof(tanm_path), model_path, ".tanim"))
-        return;
-
+static void model_cache_load_texture_anims(ModelCache* cache) {
+    const char* tanm_path = OSRS_ASSET("textures.tanim");
     FILE* f = osrs_asset_fopen(tanm_path, "rb");
-    if (!f) return;
+    assert(f);
 
     uint32_t magic = 0;
     uint32_t version = 0;
@@ -228,12 +211,8 @@ static void model_cache_update_texture_anims(ModelCache* cache, float dt) {
     UpdateTexture(cache->atlas_texture, cache->atlas_pixels);
 }
 
-static Texture2D model_cache_load_atlas(ModelCache* cache, const char* model_path) {
-    char atlas_path[1024];
-    if (!model_cache_companion_path(atlas_path, sizeof(atlas_path), model_path, ".atlas")) {
-        return (Texture2D){0};
-    }
-    if (!osrs_asset_exists(atlas_path)) return (Texture2D){0};
+static Texture2D model_cache_load_atlas(ModelCache* cache) {
+    const char* atlas_path = OSRS_ASSET("textures.atlas");
 
     Image image = osrs_asset_load_atlas_image(atlas_path);
     Texture2D texture = LoadTextureFromImage(image);
@@ -248,7 +227,7 @@ static Texture2D model_cache_load_atlas(ModelCache* cache, const char* model_pat
             pixel_count, "model atlas working pixels");
         memcpy(cache->atlas_base_pixels, image.data, pixel_count);
         memcpy(cache->atlas_pixels, image.data, pixel_count);
-        model_cache_load_texture_anims(cache, model_path);
+        model_cache_load_texture_anims(cache);
     }
     fprintf(stderr, "model_cache_load: loaded atlas %dx%d from %s\n",
         image.width, image.height, atlas_path);
@@ -330,7 +309,7 @@ static ModelCache* model_cache_load(const char* path) {
         size_t index_limit = model_cache_index_limit_or_abort(f, offsets, count, path);
         model_cache_init_index(cache, index_limit);
     }
-    cache->atlas_texture = model_cache_load_atlas(cache, path);
+    cache->atlas_texture = model_cache_load_atlas(cache);
     cache->has_atlas = cache->atlas_texture.id > 0;
     if (!cache->has_atlas) {
         fprintf(stderr, "model_cache_load: MDL4 model set requires a sibling .atlas file: %s\n", path);

@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 #define TERR_MAGIC 0x54455252
-#define OBJS_MAGIC 0x4F424A53
 #define OBJ2_MAGIC 0x4F424A32
 #define ATLS_MAGIC 0x41544C53
 #define MDL4_MAGIC 0x4D444C34
@@ -14,6 +13,7 @@
 
 #define OSRS_SPOTANIM_MAGIC 0x544F5053u
 #define OSRS_SPOTANIM_VERSION 1u
+#define OSRS_LOC_MODEL_BASE 0x000B0000u
 #define OSRS_NPC_MODEL_BASE 0x000C0000u
 #define OSRS_SPOTANIM_MODEL_BASE 0x000D0000u
 
@@ -27,5 +27,14 @@ typedef struct {
     int32_t brightness;
     int32_t shadow;
 } OsrsSpotAnimDef;
+
+typedef struct {
+    uint16_t npc_id;
+    uint32_t model_id;
+    uint32_t idle_anim;
+    uint32_t attack_anim;
+    uint32_t walk_anim;
+    uint32_t run_anim;
+} NpcModelMapping;
 
 #endif

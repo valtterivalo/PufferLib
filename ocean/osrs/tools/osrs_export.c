@@ -1,5 +1,6 @@
 #include "ocean/osrs/cache/osrs_cache_anim.h"
 #include "ocean/osrs/cache/osrs_cache_item.h"
+#include "ocean/osrs/cache/osrs_cache_gameval.h"
 #include "ocean/osrs/cache/osrs_cache_map.h"
 #include "ocean/osrs/cache/osrs_cache_maya.h"
 #include "ocean/osrs/cache/osrs_cache_model.h"
@@ -572,7 +573,13 @@ static void scene_shadows(Scene* s) {
     }
 }
 
-static void scene_objects(Scene* s, Soup* out) {
+static int id_in_set(const int* ids, int count, int id) {
+    for (int i = 0; i < count; i++)
+        if (ids[i] == id) return 1;
+    return 0;
+}
+
+static void scene_objects(Scene* s, Soup* out, const int* exclude_ids, int exclude_count) {
     const MapGrid* g = s->g;
     static const int deco_x[4] = {1, 0, -1, 0}, deco_y[4] = {0, -1, 0, 1};
     static const int diag_x[4] = {1, -1, -1, 1}, diag_y[4] = {-1, -1, 1, 1};
@@ -586,6 +593,7 @@ static void scene_objects(Scene* s, Soup* out) {
     for (int i = 0; i < g->loc_count; i++) {
         const MapLoc* loc = &g->locs[i];
         if (!scene_in_rect(s, loc->x, loc->y, 0)) continue;
+        if (id_in_set(exclude_ids, exclude_count, loc->id)) continue;
         int linked = g->settings[map_tile(g, 1, loc->x, loc->y)] & 2;
         if (loc->plane != 0 && !(loc->plane == 1 && linked)) continue;
         const LocDef* base = defs_loc(s->defs, loc->id);
@@ -692,6 +700,44 @@ static void write_atlas(const char* path, Defs* d) {
     free(pixels);
 }
 
+static void write_tanim(const char* path, const Defs* d) {
+    FILE* f = fopen(path, "wb");
+    assert(f);
+    uint32_t header[3] = {TANM_MAGIC, TANM_VERSION, 0};
+    fwrite(header, sizeof(header), 1, f);
+    uint32_t count = 0;
+    for (int t = 0; t < d->texture_count; t++) {
+        if (!d->textures[t].present || !d->textures[t].speed) continue;
+        uint32_t texture_id = (uint32_t)t;
+        uint16_t x = (uint16_t)(t % ATLAS_COLUMNS * ATLAS_CELL), y = (uint16_t)(t / ATLAS_COLUMNS * ATLAS_CELL);
+        uint16_t w = ATLAS_CELL, h = ATLAS_CELL, pad = 0;
+        uint8_t direction = (uint8_t)d->textures[t].direction, speed = (uint8_t)d->textures[t].speed;
+        fwrite(&texture_id, 4, 1, f);
+        fwrite(&x, 2, 1, f);
+        fwrite(&y, 2, 1, f);
+        fwrite(&w, 2, 1, f);
+        fwrite(&h, 2, 1, f);
+        fwrite(&direction, 1, 1, f);
+        fwrite(&speed, 1, 1, f);
+        fwrite(&pad, 2, 1, f);
+        count++;
+    }
+    fseek(f, 0, SEEK_SET);
+    header[2] = count;
+    fwrite(header, sizeof(header), 1, f);
+    fclose(f);
+}
+
+static void export_textures(OsrsCache* cache, const char* out_dir) {
+    Defs defs = {.cache = cache};
+    defs_load_floors(&defs);
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/textures.atlas", out_dir);
+    write_atlas(path, &defs);
+    snprintf(path, sizeof(path), "%s/textures.tanim", out_dir);
+    write_tanim(path, &defs);
+}
+
 static void write_terrain(const char* path, const Scene* s, const Soup* soup) {
     const MapGrid* g = s->g;
     RegionRect r = s->r;
@@ -737,7 +783,13 @@ static void write_objects(const char* path, const Scene* s, const Soup* soup, in
     fclose(f);
 }
 
-static void export_scene(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
+typedef struct {
+    const char* name;
+    int ids[64];
+    int count;
+} AltObjects;
+
+static void export_scene(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r, const AltObjects* alt) {
     Defs defs = {.cache = cache};
     defs_load_floors(&defs);
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
@@ -754,13 +806,21 @@ static void export_scene(OsrsCache* cache, const char* out_dir, const char* name
     scene_terrain_plane(&terrain, &s, 1, 1);
     snprintf(path, sizeof(path), "%s/%s.terrain", out_dir, name);
     write_terrain(path, &s, &terrain);
-    scene_objects(&s, &objects);
+    scene_objects(&s, &objects, NULL, 0);
     snprintf(path, sizeof(path), "%s/%s.objects", out_dir, name);
     write_objects(path, &s, &objects, g.loc_count);
-    snprintf(path, sizeof(path), "%s/%s.atlas", out_dir, name);
-    write_atlas(path, &defs);
     printf("%s: %d locs, %d terrain vertices, %d object vertices\n", name, g.loc_count, terrain.count, objects.count);
+    if (alt) {
+        Soup alt_objects = {0};
+        scene_objects(&s, &alt_objects, alt->ids, alt->count);
+        snprintf(path, sizeof(path), "%s/%s.objects", out_dir, alt->name);
+        write_objects(path, &s, &alt_objects, g.loc_count);
+        printf("%s: %d locs excluded, %d object vertices\n", alt->name, alt->count, alt_objects.count);
+        free(alt_objects.xyz); free(alt_objects.rgba); free(alt_objects.uv);
+    }
     free(flags);
+    free(terrain.xyz); free(terrain.rgba); free(terrain.uv);
+    free(objects.xyz); free(objects.rgba); free(objects.uv);
     map_free(&g);
 }
 
@@ -823,13 +883,15 @@ static Model build_merged(Defs* d, const int* ids, int count) {
     return m;
 }
 
-static void pack_model(NpcPack* p, int id, Model m, int ambient, int contrast, int width_scale, int height_scale) {
+static void pack_shaded(NpcPack* p, int id, Model m, ModelShade shade) {
     p->models = realloc(p->models, sizeof(ExportModel) * (size_t)(p->model_count + 1));
-    ExportModel* e = &p->models[p->model_count++];
-    e->id = id;
-    e->shade = model_light(&m, ambient, contrast, -30, -50, -30);
+    p->models[p->model_count++] = (ExportModel){.id = id, .model = m, .shade = shade};
+}
+
+static void pack_model(NpcPack* p, int id, Model m, int ambient, int contrast, int width_scale, int height_scale) {
+    ModelShade shade = model_light(&m, ambient, contrast, -30, -50, -30);
     if (width_scale != 128 || height_scale != 128) model_resize(&m, width_scale, height_scale, width_scale);
-    e->model = m;
+    pack_shaded(p, id, m, shade);
 }
 
 static const Model* skin_copy(const Model* m) {
@@ -850,6 +912,16 @@ static int pack_spotanim(Defs* d, const CacheGroup* gfx_files, NpcPack* p, SeqBa
     pack_model(p, (int)(OSRS_SPOTANIM_MODEL_BASE | (uint32_t)gfx), m, g.ambient + 64, g.contrast + 850, 128, 128);
     pack_seq(p, g.sequence);
     return g.sequence;
+}
+
+static void pack_loc(Defs* d, NpcPack* p, int loc) {
+    assert(loc < 0x10000);
+    const LocDef* def = defs_loc(d, loc);
+    Model m;
+    int built = loc_model(d, def, 10, 0, &m);
+    assert(built);
+    ModelShade shade = model_light(&m, def->ambient + 64, def->contrast + 768, -50, -10, -50);
+    pack_shaded(p, (int)(OSRS_LOC_MODEL_BASE | (uint32_t)loc), m, shade);
 }
 
 static void write_models(const char* path, const Defs* d, const NpcPack* p) {
@@ -1065,19 +1137,28 @@ typedef struct {
     int seq, model;
 } SeqModelSpec;
 
+typedef struct {
+    NpcSpec npcs[256];
+    SeqModelSpec seqmodels[256];
+    int gfx[256], seqs[256], locs[64];
+    int npc_count, seqmodel_count, gfx_count, seq_count, loc_count;
+} PackSpec;
+
 static void bind_npc_seqs(SeqBakeTable* bakes, const NpcSpec* spec, const NpcDef* n, const Model* skin) {
     int seqs[] = {n->idle, n->walk, n->run, n->turn_180, n->turn_cw, n->turn_ccw, spec->attack};
     for (size_t k = 0; k < sizeof(seqs) / sizeof(*seqs); k++) bind_seq(bakes, seqs[k], skin, n->width_scale, n->height_scale);
     for (int k = 0; k < spec->owned_count; k++) bind_seq(bakes, spec->owned[k], skin, n->width_scale, n->height_scale);
 }
 
-static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name, NpcSpec* npcs, int npc_count,
-                        const int* gfx, int gfx_count, const int* seqs, int seq_count,
-                        const SeqModelSpec* seqmodels, int seqmodel_count) {
+static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name, const PackSpec* spec) {
     Defs defs = {.cache = cache};
     defs_load_floors(&defs);
     CacheGroup npc_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_NPC);
     CacheGroup gfx_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_SPOTANIM);
+    GamevalTable npc_names = gameval_load(cache, GAMEVAL_NPCS);
+    GamevalTable seq_names = gameval_load(cache, GAMEVAL_ANIMATIONS);
+    GamevalTable gfx_names = gameval_load(cache, GAMEVAL_SPOTANIMS);
+    GamevalTable loc_names = gameval_load(cache, GAMEVAL_OBJECTS);
     NpcPack pack = {0};
     SeqBakeTable bakes = {0};
     char path[4096];
@@ -1088,34 +1169,50 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
     size_t len = strlen(name);
     assert(len < sizeof(upper));
     for (size_t i = 0; i <= len; i++) upper[i] = (char)(name[i] >= 'a' && name[i] <= 'z' ? name[i] - 32 : name[i]);
-    fprintf(h, "#ifndef NPC_MODELS_%s_H\n#define NPC_MODELS_%s_H\n\n#include \"npc_models.h\"\n\n", upper, upper);
+    fprintf(h, "#ifndef NPC_MODELS_%s_H\n#define NPC_MODELS_%s_H\n\n#include \"../osrs_asset_formats.h\"\n\n", upper, upper);
     fprintf(h, "static const NpcModelMapping NPC_MODEL_MAP_%s_GEN[] = {\n", upper);
-    for (int i = 0; i < npc_count; i++) {
-        const CacheFile* file = cache_group_file(&npc_files, npcs[i].npc);
+    for (int i = 0; i < spec->npc_count; i++) {
+        const CacheFile* file = cache_group_file(&npc_files, spec->npcs[i].npc);
         assert(file);
         NpcDef n = npc_decode(file);
         Model m = build_merged(&defs, n.model_ids, n.model_count);
         for (int k = 0; k < n.recolor_count; k++) model_recolor(&m, n.recolor_from[k], n.recolor_to[k]);
         for (int k = 0; k < n.retexture_count; k++) model_retexture(&m, n.retexture_from[k], n.retexture_to[k]);
         const Model* skin = skin_copy(&m);
-        pack_model(&pack, OSRS_NPC_MODEL_BASE | npcs[i].npc, m, n.ambient + 64, n.contrast * 5 + 850, n.width_scale, n.height_scale);
-        int anims[] = {n.idle, n.walk, n.run, n.turn_180, n.turn_cw, n.turn_ccw, npcs[i].attack};
+        pack_model(&pack, OSRS_NPC_MODEL_BASE | spec->npcs[i].npc, m, n.ambient + 64, n.contrast * 5 + 850, n.width_scale, n.height_scale);
+        int anims[] = {n.idle, n.walk, n.run, n.turn_180, n.turn_cw, n.turn_ccw, spec->npcs[i].attack};
         for (size_t k = 0; k < sizeof(anims) / sizeof(*anims); k++) pack_seq(&pack, anims[k]);
-        for (int k = 0; k < npcs[i].owned_count; k++) pack_seq(&pack, npcs[i].owned[k]);
-        bind_npc_seqs(&bakes, &npcs[i], &n, skin);
-        fprintf(h, "    {%d, 0x%X, %d, %d, %d, %d},\n", npcs[i].npc, OSRS_NPC_MODEL_BASE | npcs[i].npc,
-            n.idle < 0 ? 65535 : n.idle, npcs[i].attack < 0 ? 65535 : npcs[i].attack,
-            n.walk < 0 ? 65535 : n.walk, n.run < 0 ? 65535 : n.run);
+        for (int k = 0; k < spec->npcs[i].owned_count; k++) pack_seq(&pack, spec->npcs[i].owned[k]);
+        bind_npc_seqs(&bakes, &spec->npcs[i], &n, skin);
+        fprintf(h, "    {%d, 0x%X, %d, %d, %d, %d},  /* %s */\n", spec->npcs[i].npc, OSRS_NPC_MODEL_BASE | spec->npcs[i].npc,
+            n.idle < 0 ? 65535 : n.idle, spec->npcs[i].attack < 0 ? 65535 : spec->npcs[i].attack,
+            n.walk < 0 ? 65535 : n.walk, n.run < 0 ? 65535 : n.run, gameval_name(&npc_names, spec->npcs[i].npc));
     }
     fprintf(h, "};\n\n");
-    for (int i = 0; i < gfx_count; i++) {
-        int seq = pack_spotanim(&defs, &gfx_files, &pack, &bakes, gfx[i]);
-        fprintf(h, "#define %s_GFX_%d_MODEL 0x%X\n#define %s_GFX_%d_ANIM %d\n", upper, gfx[i], OSRS_SPOTANIM_MODEL_BASE | gfx[i], upper, gfx[i], seq);
+    fprintf(h, "/* spotanim model + animation ids, named from the cache's gameval archive */\n");
+    for (int i = 0; i < spec->gfx_count; i++) {
+        int seq = pack_spotanim(&defs, &gfx_files, &pack, &bakes, spec->gfx[i]);
+        char ident[128];
+        gameval_ident(gameval_name(&gfx_names, spec->gfx[i]), ident, sizeof(ident));
+        fprintf(h, "#define SPOTANIM_%s_%s 0x%X\n#define SPOTANIM_%s_%s_ANIM %d\n", upper, ident,
+            OSRS_SPOTANIM_MODEL_BASE | spec->gfx[i], upper, ident, seq);
     }
-    for (int i = 0; i < seq_count; i++) pack_seq(&pack, seqs[i]);
-    for (int i = 0; i < seqmodel_count; i++) {
-        pack_seq(&pack, seqmodels[i].seq);
-        bind_seq(&bakes, seqmodels[i].seq, skin_copy(defs_model(&defs, seqmodels[i].model)), 128, 128);
+    for (int i = 0; i < spec->loc_count; i++) {
+        pack_loc(&defs, &pack, spec->locs[i]);
+        char ident[128];
+        gameval_ident(gameval_name(&loc_names, spec->locs[i]), ident, sizeof(ident));
+        fprintf(h, "#define LOC_%s_%s 0x%X\n", upper, ident, OSRS_LOC_MODEL_BASE | spec->locs[i]);
+    }
+    for (int i = 0; i < spec->seq_count; i++) pack_seq(&pack, spec->seqs[i]);
+    for (int i = 0; i < spec->seqmodel_count; i++) {
+        pack_seq(&pack, spec->seqmodels[i].seq);
+        bind_seq(&bakes, spec->seqmodels[i].seq, skin_copy(defs_model(&defs, spec->seqmodels[i].model)), 128, 128);
+    }
+    fprintf(h, "\n/* sequence ids, named from the cache's gameval archive */\n");
+    for (int i = 0; i < pack.seq_count; i++) {
+        char ident[128];
+        gameval_ident(gameval_name(&seq_names, pack.seqs[i]), ident, sizeof(ident));
+        fprintf(h, "#define SEQ_%s_%s %d\n", upper, ident, pack.seqs[i]);
     }
     fprintf(h, "\n#endif\n");
     fclose(h);
@@ -1123,8 +1220,6 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
     write_models(path, &defs, &pack);
     snprintf(path, sizeof(path), "%s/%s.anims", out_dir, name);
     write_anims(path, cache, &pack, &bakes);
-    snprintf(path, sizeof(path), "%s/%s.atlas", out_dir, name);
-    write_atlas(path, &defs);
     printf("%s: %d models, %d sequences\n", name, pack.model_count, pack.seq_count);
 }
 
@@ -1247,8 +1342,6 @@ static void export_projectiles(OsrsCache* cache, const char* out_dir) {
     write_models(path, &defs, &pack);
     snprintf(path, sizeof(path), "%s/projectiles.anims", out_dir);
     write_anims(path, cache, &pack, &bakes);
-    snprintf(path, sizeof(path), "%s/projectiles.atlas", out_dir);
-    write_atlas(path, &defs);
     write_spotanims_bin(out_dir, &gfx_files);
     printf("projectiles: %d spotanims, %d raw models, %d sequences\n", set.gfx.count, set.raw_count, pack.seq_count);
 }
@@ -1340,33 +1433,6 @@ static void pack_equipment_seqs(NpcPack* p) {
         pack_seq(p, OSRS_COMBAT_SPECIAL_FALLBACKS[i].special_attack_anim_id);
 }
 
-static void write_tanim(const char* path, const Defs* d) {
-    FILE* f = fopen(path, "wb");
-    assert(f);
-    uint32_t header[3] = {TANM_MAGIC, TANM_VERSION, 0};
-    fwrite(header, sizeof(header), 1, f);
-    uint32_t count = 0;
-    for (int t = 0; t < d->texture_count; t++) {
-        if (!d->textures[t].present || !d->textures[t].speed) continue;
-        uint32_t texture_id = (uint32_t)t;
-        uint16_t x = (uint16_t)(t % ATLAS_COLUMNS * ATLAS_CELL), y = (uint16_t)(t / ATLAS_COLUMNS * ATLAS_CELL);
-        uint16_t w = ATLAS_CELL, h = ATLAS_CELL, pad = 0;
-        uint8_t direction = (uint8_t)d->textures[t].direction, speed = (uint8_t)d->textures[t].speed;
-        fwrite(&texture_id, 4, 1, f);
-        fwrite(&x, 2, 1, f);
-        fwrite(&y, 2, 1, f);
-        fwrite(&w, 2, 1, f);
-        fwrite(&h, 2, 1, f);
-        fwrite(&direction, 1, 1, f);
-        fwrite(&speed, 1, 1, f);
-        fwrite(&pad, 2, 1, f);
-        count++;
-    }
-    fseek(f, 0, SEEK_SET);
-    header[2] = count;
-    fwrite(header, sizeof(header), 1, f);
-    fclose(f);
-}
 
 static void write_item_model_header(const char* out_dir, const EquipRow* rows, int row_count) {
     char path[4096];
@@ -1487,10 +1553,6 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
     write_models(path, &defs, &pack);
     snprintf(path, sizeof(path), "%s/equipment.anims", out_dir);
     write_anims(path, cache, &pack, &(SeqBakeTable){0});
-    snprintf(path, sizeof(path), "%s/equipment.atlas", out_dir);
-    write_atlas(path, &defs);
-    snprintf(path, sizeof(path), "%s/equipment.tanim", out_dir);
-    write_tanim(path, &defs);
     write_item_model_header(out_dir, rows, NUM_ITEMS);
     write_player_model_header(out_dir);
     printf("equipment: %d body parts, %d items, %d models, %d sequences\n", BODY_PART_COUNT, NUM_ITEMS,
@@ -1511,12 +1573,13 @@ static void export_collision(OsrsCache* cache, const char* out_dir, const char* 
 
 static void usage(void) {
     fprintf(stderr,
-        "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1]\n"
+        "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1] [altobjects=NAME:ID,ID,...]\n"
         "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1]\n"
         "       osrs_export <cache_dir> <out_dir> npcs <name> "
-        "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
+        "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [loc=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
         "       osrs_export <cache_dir> <out_dir> projectiles\n"
-        "       osrs_export <cache_dir> <out_dir> equipment\n");
+        "       osrs_export <cache_dir> <out_dir> equipment\n"
+        "       osrs_export <cache_dir> <out_dir> textures\n");
     exit(2);
 }
 
@@ -1524,44 +1587,71 @@ int main(int argc, char** argv) {
     if (argc < 4) usage();
     OsrsCache* cache = osrs_cache_open(argv[1]);
     const char* out_dir = argv[2];
-    int regions = strcmp(argv[3], "scene") == 0 || strcmp(argv[3], "collision") == 0;
-    if (regions && (argc == 6 || argc == 7)) {
+    int is_scene = strcmp(argv[3], "scene") == 0, is_collision = strcmp(argv[3], "collision") == 0;
+    if ((is_scene || is_collision) && argc >= 6 && argc <= 8) {
         RegionRect r;
         if (sscanf(argv[5], "%d,%d", &r.x0, &r.y0) != 2) usage();
         r.x1 = r.x0, r.y1 = r.y0;
-        if (argc == 7 && sscanf(argv[6], "%d,%d", &r.x1, &r.y1) != 2) usage();
-        if (argv[3][0] == 's') export_scene(cache, out_dir, argv[4], r);
+        int next = 6;
+        if (argc >= 7 && sscanf(argv[6], "%d,%d", &r.x1, &r.y1) == 2) next = 7;
+        else r.x1 = r.x0, r.y1 = r.y0;
+        AltObjects alt = {0};
+        int has_alt = 0;
+        if (argc == next + 1) {
+            if (!is_scene) usage();
+            char alt_name[256];
+            const char* spec = argv[next];
+            if (sscanf(spec, "altobjects=%255[^:]:", alt_name) != 1) usage();
+            alt.name = strdup(alt_name);
+            const char* ids = strchr(spec, ':');
+            if (!ids) usage();
+            ids++;
+            while (*ids) {
+                int id, n = 0;
+                if (sscanf(ids, "%d%n", &id, &n) != 1) usage();
+                alt.ids[alt.count++] = id;
+                ids += n;
+                if (*ids == ',') ids++;
+            }
+            has_alt = 1;
+        } else if (argc != next) {
+            usage();
+        }
+        if (is_scene) export_scene(cache, out_dir, argv[4], r, has_alt ? &alt : NULL);
         else export_collision(cache, out_dir, argv[4], r);
         return 0;
     }
     if (strcmp(argv[3], "npcs") == 0 && argc >= 5) {
-        NpcSpec npcs[256];
-        SeqModelSpec seqmodels[256];
-        int gfx[256], seqs[256], n = 0, g = 0, q = 0, sm = 0;
+        static PackSpec spec;
         for (int i = 5; i < argc; i++) {
             int id, extra = -1;
             if (strncmp(argv[i], "npc=", 4) == 0) {
-                assert(n < 256);
-                NpcSpec spec = {.attack = -1};
+                assert(spec.npc_count < 256);
+                NpcSpec* n = &spec.npcs[spec.npc_count++];
+                *n = (NpcSpec){.attack = -1};
                 char* tok = strtok(argv[i] + 4, ":");
                 assert(tok);
-                spec.npc = atoi(tok);
-                if ((tok = strtok(NULL, ":"))) spec.attack = atoi(tok);
+                n->npc = atoi(tok);
+                if ((tok = strtok(NULL, ":"))) n->attack = atoi(tok);
                 while ((tok = strtok(NULL, ":"))) {
-                    assert(spec.owned_count < 8);
-                    spec.owned[spec.owned_count++] = atoi(tok);
+                    assert(n->owned_count < 8);
+                    n->owned[n->owned_count++] = atoi(tok);
                 }
-                npcs[n++] = spec;
-            } else if (sscanf(argv[i], "gfx=%d", &id) == 1) gfx[g++] = id;
-            else if (sscanf(argv[i], "seqmodel=%d:%d", &id, &extra) == 2) seqmodels[sm++] = (SeqModelSpec){id, extra};
-            else if (sscanf(argv[i], "seq=%d", &id) == 1) seqs[q++] = id;
+            } else if (sscanf(argv[i], "gfx=%d", &id) == 1) spec.gfx[spec.gfx_count++] = id;
+            else if (sscanf(argv[i], "loc=%d", &id) == 1) spec.locs[spec.loc_count++] = id;
+            else if (sscanf(argv[i], "seqmodel=%d:%d", &id, &extra) == 2) spec.seqmodels[spec.seqmodel_count++] = (SeqModelSpec){id, extra};
+            else if (sscanf(argv[i], "seq=%d", &id) == 1) spec.seqs[spec.seq_count++] = id;
             else usage();
         }
-        export_npcs(cache, out_dir, argv[4], npcs, n, gfx, g, seqs, q, seqmodels, sm);
+        export_npcs(cache, out_dir, argv[4], &spec);
         return 0;
     }
     if (strcmp(argv[3], "projectiles") == 0 && argc == 4) {
         export_projectiles(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "textures") == 0 && argc == 4) {
+        export_textures(cache, out_dir);
         return 0;
     }
     if (strcmp(argv[3], "equipment") == 0) {

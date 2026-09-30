@@ -13,16 +13,15 @@
       "files": [
         "equipment.models",
         "equipment.anims",
-        "equipment.atlas",
-        "equipment.tanim",
         "projectiles.models",
-        "projectiles.atlas",
         "projectiles.anims",
         "spotanims.bin",
         "fonts/runescape.ttf",
         "fonts/runescape_small.ttf",
         "ui/interfaces.bin",
-        "ui/interface_manifest.json"
+        "ui/interface_manifest.json",
+        "textures.atlas",
+        "textures.tanim"
       ]
     },
     {
@@ -32,12 +31,8 @@
         "inferno.anims",
         "inferno.terrain",
         "inferno.objects",
-        "inferno.atlas",
         "inferno_zuk.objects",
-        "inferno.cmap",
-        "inferno_npcs.models",
-        "inferno_npcs.anims",
-        "inferno_npcs.atlas"
+        "inferno.cmap"
       ]
     },
     {
@@ -47,7 +42,6 @@
         "zulrah.anims",
         "zulrah.terrain",
         "zulrah.objects",
-        "zulrah.atlas",
         "zulrah.cmap"
       ]
     },
@@ -56,11 +50,9 @@
       "files": [
         "colosseum.terrain",
         "colosseum.objects",
-        "colosseum.atlas",
         "colosseum.cmap",
-        "colosseum_npcs.models",
-        "colosseum_npcs.anims",
-        "colosseum_npcs.atlas",
+        "colosseum.models",
+        "colosseum.anims",
         "sprites/colosseum/modifiers/5534.png",
         "sprites/colosseum/modifiers/5535.png",
         "sprites/colosseum/modifiers/5536.png",
@@ -1657,7 +1649,6 @@
       "files": [
         "item_models.h",
         "player_models.h",
-        "npc_models.h",
         "npc_models_inferno.h",
         "npc_models_zulrah.h",
         "npc_models_colosseum.h"
@@ -1667,12 +1658,13 @@
       "name": "combat_visuals",
       "files": [
         "projectiles.models",
-        "projectiles.atlas",
         "projectiles.anims",
         "spotanims.bin",
         "equipment.anims",
         "inferno.anims",
-        "zulrah.anims"
+        "zulrah.anims",
+        "textures.atlas",
+        "textures.tanim"
       ]
     },
     {
@@ -1680,8 +1672,7 @@
       "files": [
         "wilderness.cmap",
         "wilderness.terrain",
-        "wilderness.objects",
-        "wilderness.atlas"
+        "wilderness.objects"
       ]
     },
     {
@@ -1689,10 +1680,7 @@
       "files": [
         "equipment.models",
         "equipment.anims",
-        "equipment.atlas",
-        "equipment.tanim",
         "projectiles.models",
-        "projectiles.atlas",
         "projectiles.anims",
         "spotanims.bin",
         "ui/interfaces.bin",
@@ -1700,7 +1688,8 @@
         "wilderness.cmap",
         "wilderness.terrain",
         "wilderness.objects",
-        "wilderness.atlas"
+        "textures.atlas",
+        "textures.tanim"
       ]
     }
   ]
