@@ -1,5 +1,6 @@
 #include "ocean/osrs/cache/osrs_cache_anim.h"
 #include "ocean/osrs/cache/osrs_cache_map.h"
+#include "ocean/osrs/cache/osrs_cache_maya.h"
 #include "ocean/osrs/cache/osrs_cache_model.h"
 #include "ocean/osrs/osrs_asset_formats.h"
 #include "ocean/osrs/osrs_collision.h"
@@ -782,6 +783,34 @@ static void pack_seq(NpcPack* p, int seq) {
     p->seqs[p->seq_count++] = seq;
 }
 
+typedef struct {
+    int seq;
+    const Model* model;
+    int width_scale, height_scale;
+} SeqBake;
+
+typedef struct {
+    SeqBake binds[1024];
+    int count;
+} SeqBakeTable;
+
+static void bind_seq(SeqBakeTable* t, int seq, const Model* model, int width_scale, int height_scale) {
+    if (seq < 0) return;
+    for (int i = 0; i < t->count; i++)
+        if (t->binds[i].seq == seq) {
+            t->binds[i] = (SeqBake){seq, model, width_scale, height_scale};
+            return;
+        }
+    assert(t->count < 1024);
+    t->binds[t->count++] = (SeqBake){seq, model, width_scale, height_scale};
+}
+
+static const SeqBake* find_bind(const SeqBakeTable* t, int seq) {
+    for (int i = 0; i < t->count; i++)
+        if (t->binds[i].seq == seq) return &t->binds[i];
+    return NULL;
+}
+
 static Model build_merged(Defs* d, const int* ids, int count) {
     Model parts[32];
     for (int i = 0; i < count; i++) parts[i] = model_copy(defs_model(d, ids[i]));
@@ -883,7 +912,7 @@ static void write_models(const char* path, const Defs* d, const NpcPack* p) {
 
 static int compare_int(const void* a, const void* b) { return *(const int*)a - *(const int*)b; }
 
-static void write_anims(const char* path, OsrsCache* cache, NpcPack* p) {
+static void write_anims(const char* path, OsrsCache* cache, NpcPack* p, const SeqBakeTable* bakes) {
     CacheGroup seq_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_SEQ);
     CacheIndex* bases = cache_index(cache, CACHE_INDEX_BASES);
     Skeleton* skeletons = calloc((size_t)bases->id_limit, sizeof(Skeleton));
@@ -891,14 +920,33 @@ static void write_anims(const char* path, OsrsCache* cache, NpcPack* p) {
     qsort(p->seqs, (size_t)p->seq_count, sizeof(int), compare_int);
     SeqDef* seqs = calloc((size_t)p->seq_count, sizeof(SeqDef));
     Frame** frames = calloc((size_t)p->seq_count, sizeof(Frame*));
+    int16_t** maya_frames = calloc((size_t)p->seq_count, sizeof(int16_t*));
+    int* maya_vcount = calloc((size_t)p->seq_count, sizeof(int));
     uint32_t total = 0;
+    int any_maya = 0;
     for (int i = 0; i < p->seq_count; i++) {
         const CacheFile* file = cache_group_file(&seq_files, p->seqs[i]);
         assert(file);
         seqs[i] = seq_decode(file);
         if (seqs[i].maya >= 0) {
-            fprintf(stderr, "osrs_export: sequence %d is a skeletal animation, not supported yet\n", p->seqs[i]);
-            exit(1);
+            any_maya = 1;
+            const SeqBake* bind = find_bind(bakes, p->seqs[i]);
+            assert(bind);
+            assert(seqs[i].maya_end > seqs[i].maya_start);
+            seqs[i].frame_count = seqs[i].maya_end - seqs[i].maya_start;
+            seqs[i].interleave_count = 0;
+            int vc = bind->model->vertex_count;
+            maya_vcount[i] = vc;
+            maya_frames[i] = malloc(sizeof(int16_t) * (size_t)vc * 3 * (size_t)seqs[i].frame_count);
+            MayaAnimation anim = maya_animation_decode(cache, seqs[i].maya);
+            for (int k = 0; k < seqs[i].frame_count; k++) {
+                int16_t* out = maya_frames[i] + (size_t)k * (size_t)vc * 3;
+                maya_bake_frame(&anim, bind->model, seqs[i].maya_start + k, out);
+                maya_apply_npc_scale(out, vc, bind->width_scale, bind->height_scale);
+            }
+            maya_animation_free(&anim);
+            total += (uint32_t)seqs[i].frame_count;
+            continue;
         }
         frames[i] = calloc((size_t)seqs[i].frame_count + 1, sizeof(Frame));
         for (int k = 0; k < seqs[i].frame_count; k++) {
@@ -921,8 +969,8 @@ static void write_anims(const char* path, OsrsCache* cache, NpcPack* p) {
     FILE* f = fopen(path, "wb");
     assert(f);
     uint32_t magic = ANIM2_MAGIC;
-    uint16_t version[2] = {2, 24};
-    uint32_t header[4] = {(uint32_t)base_count, (uint32_t)p->seq_count, total, 1};
+    uint16_t version[2] = {(uint16_t)(any_maya ? 3 : 2), 24};
+    uint32_t header[4] = {(uint32_t)base_count, (uint32_t)p->seq_count, total, any_maya ? 7u : 1u};
     fwrite(&magic, 4, 1, f);
     fwrite(version, sizeof(version), 1, f);
     fwrite(header, sizeof(header), 1, f);
@@ -948,11 +996,27 @@ static void write_anims(const char* path, OsrsCache* cache, NpcPack* p) {
         fwrite(&interleave, 1, 1, f);
         fwrite(q->interleave, 1, (size_t)q->interleave_count, f);
         fwrite(&walk, 1, 1, f);
+        if (q->maya >= 0) {
+            uint16_t vc16 = (uint16_t)maya_vcount[i];
+            for (int k = 0; k < q->frame_count; k++) {
+                uint16_t delay = 1;
+                uint8_t kind = ANIM_FRAME_MAYA_BAKED;
+                fwrite(&delay, 2, 1, f);
+                fwrite(&kind, 1, 1, f);
+                fwrite(&vc16, 2, 1, f);
+                fwrite(maya_frames[i] + (size_t)k * (size_t)vc16 * 3, sizeof(int16_t), (size_t)vc16 * 3, f);
+            }
+            continue;
+        }
         for (int k = 0; k < q->frame_count; k++) {
             const Frame* fr = &frames[i][k];
             uint16_t delay = (uint16_t)q->delays[k], base = (uint16_t)fr->skeleton;
             uint8_t count = (uint8_t)fr->count;
             fwrite(&delay, 2, 1, f);
+            if (any_maya) {
+                uint8_t kind = ANIM_FRAME_LEGACY;
+                fwrite(&kind, 1, 1, f);
+            }
             fwrite(&base, 2, 1, f);
             fwrite(&count, 1, 1, f);
             for (int t = 0; t < fr->count; t++) {
@@ -963,19 +1027,38 @@ static void write_anims(const char* path, OsrsCache* cache, NpcPack* p) {
         }
     }
     fclose(f);
+    for (int i = 0; i < p->seq_count; i++) free(maya_frames[i]);
+    free(maya_frames);
+    free(maya_vcount);
 }
 
 typedef struct {
     int npc, attack;
+    int owned[8];
+    int owned_count;
 } NpcSpec;
 
+typedef struct {
+    int seq, model;
+} SeqModelSpec;
+
+static void bind_npc_seqs(SeqBakeTable* bakes, const NpcSpec* spec, const NpcDef* n, const Model* skin) {
+    int seqs[] = {n->idle, n->walk, n->run, n->turn_180, n->turn_cw, n->turn_ccw, spec->attack};
+    for (size_t k = 0; k < sizeof(seqs) / sizeof(*seqs); k++) bind_seq(bakes, seqs[k], skin, n->width_scale, n->height_scale);
+    for (int k = 0; k < spec->owned_count; k++) bind_seq(bakes, spec->owned[k], skin, n->width_scale, n->height_scale);
+}
+
 static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name, NpcSpec* npcs, int npc_count,
-                        const int* gfx, int gfx_count, const int* seqs, int seq_count) {
+                        const int* gfx, int gfx_count, const int* seqs, int seq_count,
+                        const SeqModelSpec* seqmodels, int seqmodel_count) {
     Defs defs = {.cache = cache};
     defs_load_floors(&defs);
     CacheGroup npc_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_NPC);
     CacheGroup gfx_files = cache_read_group(cache, CACHE_INDEX_CONFIGS, CACHE_CONFIG_SPOTANIM);
     NpcPack pack = {0};
+    SeqBakeTable bakes = {0};
+    Model skin_pool[256];
+    int skin_pool_count = 0;
     char path[4096];
     snprintf(path, sizeof(path), "%s/npc_models_%s.h", out_dir, name);
     FILE* h = fopen(path, "w");
@@ -993,9 +1076,14 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
         Model m = build_merged(&defs, n.model_ids, n.model_count);
         for (int k = 0; k < n.recolor_count; k++) model_recolor(&m, n.recolor_from[k], n.recolor_to[k]);
         for (int k = 0; k < n.retexture_count; k++) model_retexture(&m, n.retexture_from[k], n.retexture_to[k]);
+        assert(skin_pool_count < 256);
+        Model* skin = &skin_pool[skin_pool_count++];
+        *skin = model_copy(&m);
         pack_model(&pack, NPC_MODEL_BASE | npcs[i].npc, m, n.ambient + 64, n.contrast * 5 + 850, n.width_scale, n.height_scale);
         int anims[] = {n.idle, n.walk, n.run, n.turn_180, n.turn_cw, n.turn_ccw, npcs[i].attack};
         for (size_t k = 0; k < sizeof(anims) / sizeof(*anims); k++) pack_seq(&pack, anims[k]);
+        for (int k = 0; k < npcs[i].owned_count; k++) pack_seq(&pack, npcs[i].owned[k]);
+        bind_npc_seqs(&bakes, &npcs[i], &n, skin);
         fprintf(h, "    {%d, 0x%X, %d, %d, %d, %d},\n", npcs[i].npc, NPC_MODEL_BASE | npcs[i].npc,
             n.idle < 0 ? 65535 : n.idle, npcs[i].attack < 0 ? 65535 : npcs[i].attack,
             n.walk < 0 ? 65535 : n.walk, n.run < 0 ? 65535 : n.run);
@@ -1009,20 +1097,32 @@ static void export_npcs(OsrsCache* cache, const char* out_dir, const char* name,
         Model m = build_merged(&defs, &g.model_id, 1);
         for (int k = 0; k < g.recolor_count; k++) model_recolor(&m, g.recolor_from[k], g.recolor_to[k]);
         for (int k = 0; k < g.retexture_count; k++) model_retexture(&m, g.retexture_from[k], g.retexture_to[k]);
+        assert(skin_pool_count < 256);
+        Model* skin = &skin_pool[skin_pool_count++];
+        *skin = model_copy(&m);
         pack_model(&pack, SPOTANIM_MODEL_BASE | gfx[i], m, g.ambient + 64, g.contrast + 850, 128, 128);
         pack_seq(&pack, g.sequence);
+        bind_seq(&bakes, g.sequence, skin, 128, 128);
         fprintf(h, "#define %s_GFX_%d_MODEL 0x%X\n#define %s_GFX_%d_ANIM %d\n", upper, gfx[i], SPOTANIM_MODEL_BASE | gfx[i], upper, gfx[i], g.sequence);
     }
     for (int i = 0; i < seq_count; i++) pack_seq(&pack, seqs[i]);
+    for (int i = 0; i < seqmodel_count; i++) {
+        assert(skin_pool_count < 256);
+        Model* skin = &skin_pool[skin_pool_count++];
+        *skin = model_copy(defs_model(&defs, seqmodels[i].model));
+        pack_seq(&pack, seqmodels[i].seq);
+        bind_seq(&bakes, seqmodels[i].seq, skin, 128, 128);
+    }
     fprintf(h, "\n#endif\n");
     fclose(h);
     snprintf(path, sizeof(path), "%s/%s.models", out_dir, name);
     write_models(path, &defs, &pack);
     snprintf(path, sizeof(path), "%s/%s.anims", out_dir, name);
-    write_anims(path, cache, &pack);
+    write_anims(path, cache, &pack, &bakes);
     snprintf(path, sizeof(path), "%s/%s.atlas", out_dir, name);
     write_atlas(path, &defs);
     printf("%s: %d models, %d sequences\n", name, pack.model_count, pack.seq_count);
+    for (int i = 0; i < skin_pool_count; i++) model_free(&skin_pool[i]);
 }
 
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
@@ -1040,7 +1140,8 @@ static void usage(void) {
     fprintf(stderr,
         "usage: osrs_export <cache_dir> <out_dir> scene <name> <rx0,ry0> [rx1,ry1]\n"
         "       osrs_export <cache_dir> <out_dir> collision <name> <rx0,ry0> [rx1,ry1]\n"
-        "       osrs_export <cache_dir> <out_dir> npcs <name> [npc=ID[:ATTACK_SEQ]] [gfx=ID] [seq=ID]...\n");
+        "       osrs_export <cache_dir> <out_dir> npcs <name> "
+        "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n");
     exit(2);
 }
 
@@ -1060,15 +1161,28 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[3], "npcs") == 0 && argc >= 5) {
         NpcSpec npcs[256];
-        int gfx[256], seqs[256], n = 0, g = 0, q = 0;
+        SeqModelSpec seqmodels[256];
+        int gfx[256], seqs[256], n = 0, g = 0, q = 0, sm = 0;
         for (int i = 5; i < argc; i++) {
             int id, extra = -1;
-            if (sscanf(argv[i], "npc=%d:%d", &id, &extra) >= 1) npcs[n++] = (NpcSpec){id, extra};
-            else if (sscanf(argv[i], "gfx=%d", &id) == 1) gfx[g++] = id;
+            if (strncmp(argv[i], "npc=", 4) == 0) {
+                assert(n < 256);
+                NpcSpec spec = {.attack = -1};
+                char* tok = strtok(argv[i] + 4, ":");
+                assert(tok);
+                spec.npc = atoi(tok);
+                if ((tok = strtok(NULL, ":"))) spec.attack = atoi(tok);
+                while ((tok = strtok(NULL, ":"))) {
+                    assert(spec.owned_count < 8);
+                    spec.owned[spec.owned_count++] = atoi(tok);
+                }
+                npcs[n++] = spec;
+            } else if (sscanf(argv[i], "gfx=%d", &id) == 1) gfx[g++] = id;
+            else if (sscanf(argv[i], "seqmodel=%d:%d", &id, &extra) == 2) seqmodels[sm++] = (SeqModelSpec){id, extra};
             else if (sscanf(argv[i], "seq=%d", &id) == 1) seqs[q++] = id;
             else usage();
         }
-        export_npcs(cache, out_dir, argv[4], npcs, n, gfx, g, seqs, q);
+        export_npcs(cache, out_dir, argv[4], npcs, n, gfx, g, seqs, q, seqmodels, sm);
         return 0;
     }
     usage();

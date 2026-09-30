@@ -152,6 +152,7 @@ typedef struct {
     uint8_t interleave[256];
     int walk_flag;
     int maya;
+    int maya_start, maya_end;
 } SeqDef;
 
 static SeqDef seq_decode(const CacheFile* file) {
@@ -182,7 +183,8 @@ static SeqDef seq_decode(const CacheFile* file) {
         } else if (op == 14) {
             cache_skip(&b, cache_u16(&b) * 8);
         } else if (op == 15) {
-            cache_skip(&b, 4);
+            d.maya_start = cache_u16(&b);
+            d.maya_end = cache_u16(&b);
         } else if (op == 17) {
             has_mask = 1;
             cache_skip(&b, cache_u8(&b));
