@@ -32,12 +32,12 @@ int main(void) {
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert_consumption_visible(triple);
     assert(memcmp(single, triple, sizeof(single)) == 0);
-    assert(state.env.players[1].attack_timer == 4);
+    assert(state.env.players[1].attack_timer == 0);
     reset();
     memset(actions, 0, sizeof(actions));
     actions[RF_HEADS + RF_FOOD] = 10;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
-    assert(state.env.players[1].attack_timer == 2);
+    assert(state.env.players[1].attack_timer == 0);
     const int potion_slots[] = {7, 17, 19};
     for (size_t i = 0; i < sizeof(potion_slots) / sizeof(potion_slots[0]); i++) {
         reset();

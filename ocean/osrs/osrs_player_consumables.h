@@ -81,10 +81,10 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
     if (type != FOOD_ANGLERFISH && p->current_hitpoints > p->base_hitpoints)
         p->current_hitpoints = p->base_hitpoints;
 
-    int combat_ticks = p->has_attack_timer ? p->attack_timer : -1;
-    if (combat_ticks < -1) combat_ticks = -1;
-    p->attack_timer = combat_ticks + out.attack_delay_ticks;
-    p->attack_timer_uncapped = p->attack_timer;
+    if (p->attack_timer > 0) {
+        p->attack_timer += out.attack_delay_ticks;
+        p->attack_timer_uncapped = p->attack_timer;
+    }
     p->has_attack_timer = 1;
 
     return out;

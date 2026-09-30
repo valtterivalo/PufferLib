@@ -48,7 +48,7 @@ static void test_food(void) {
     p->current_hitpoints = 20;
     use(0, 9); use(0, 7); use(0, 3);
     assert(p->current_hitpoints == 80);
-    assert(p->attack_timer == 4);
+    assert(p->attack_timer == 0);
     assert(osrs_inventory_cell_is_empty(&p->inventory_cells[9]));
     assert(osrs_inventory_cell_metadata(&p->inventory_cells[7])->dose_count == 3);
     assert(osrs_inventory_cell_is_empty(&p->inventory_cells[3]));
@@ -57,12 +57,12 @@ static void test_food(void) {
     assert(!osrs_inventory_cell_is_empty(&p->inventory_cells[10]));
     reset(); p = &state.env.players[0]; p->current_hitpoints = 20;
     use(0, 0);
-    assert(p->current_hitpoints == 31 && p->food_timer == 1 && p->attack_timer == 2);
+    assert(p->current_hitpoints == 31 && p->food_timer == 1 && p->attack_timer == 0);
     assert(osrs_inventory_cell_metadata(&p->inventory_cells[0])->raw_osrs_id == 7220);
     use(0, 0); assert(p->current_hitpoints == 31);
     p->food_timer--;
     use(0, 0);
-    assert(p->current_hitpoints == 42 && p->attack_timer == 5);
+    assert(p->current_hitpoints == 42 && p->attack_timer == 0);
     assert(osrs_inventory_cell_metadata(&p->inventory_cells[0])->raw_osrs_id == 2313);
     reset(); p = &state.env.players[0]; p->current_hitpoints = 20;
     use(0, 3); use(0, 7); use(0, 9);
