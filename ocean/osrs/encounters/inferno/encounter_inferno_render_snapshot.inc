@@ -1010,6 +1010,10 @@ static const EncounterDef ENCOUNTER_INFERNO = {
     .arena_base_y = INF_ARENA_MIN_Y,
     .arena_width = INF_ARENA_WIDTH,
     .arena_height = INF_ARENA_HEIGHT,
+    .scene = "inferno",
+    .npc_pack = "inferno",
+    .scene_origin_x = 2246,
+    .scene_origin_y = 5315,
 
     .translate_human_input = inf_translate_human_input_ctx,
     .is_human_targetable_npc_slot = inf_is_human_targetable_npc_slot_ctx,

@@ -25,54 +25,49 @@ typedef struct {
     int offset_y;
 } VisualCollisionLoad;
 
-static VisualCollisionLoad visual_load_encounter_collision_map(
-    const EncounterDef* encounter_def,
-    OsrsEnv* env,
-    const char* encounter_name
-) {
-    CollisionMap* collision_map = NULL;
-    int offset_x = 0;
-    int offset_y = 0;
+static const char* visual_scene_name(const EncounterDef* encounter_def) {
+    return encounter_def ? encounter_def->scene : "wilderness";
+}
 
-    if (encounter_name_is_pvp(encounter_name)) {
-        collision_map = collision_map_load(OSRS_ASSET("wilderness.cmap"));
-    } else if (strcmp(encounter_name, "zulrah") == 0) {
-        collision_map = collision_map_load(OSRS_ASSET("zulrah.cmap"));
-        offset_x = 2256;
-        offset_y = 3061;
-    } else if (strcmp(encounter_name, "inferno") == 0) {
-        collision_map = collision_map_load(OSRS_ASSET("inferno.cmap"));
-        offset_x = 2246;
-        offset_y = 5315;
-    } else if (strcmp(encounter_name, "colosseum") == 0) {
-        collision_map = collision_map_load(OSRS_ASSET("colosseum.cmap"));
-        offset_x = 1808;
-        offset_y = 3090;
+static const char* visual_scene_asset(const char* scene, const char* extension) {
+    char name[256];
+    snprintf(name, sizeof(name), "%s.%s", scene, extension);
+    return OSRS_ASSET(name);
+}
+
+static VisualCollisionLoad visual_load_encounter_collision_map(const EncounterDef* encounter_def, OsrsEnv* env) {
+    VisualCollisionLoad result = {
+        collision_map_load(visual_scene_asset(visual_scene_name(encounter_def), "cmap")),
+        encounter_def->scene_origin_x,
+        encounter_def->scene_origin_y,
+    };
+    if (result.offset_x || result.offset_y) {
+        encounter_def->put_int(env->encounter_state, env->encounter_context, "world_offset_x", result.offset_x);
+        encounter_def->put_int(env->encounter_state, env->encounter_context, "world_offset_y", result.offset_y);
     }
-
-    VisualCollisionLoad result = {NULL, offset_x, offset_y};
-    if (collision_map == NULL) return result;
-
-    if (!encounter_name_is_pvp(encounter_name)) {
-        encounter_def->put_int(
-            env->encounter_state,
-            env->encounter_context,
-            "world_offset_x",
-            offset_x);
-        encounter_def->put_int(
-            env->encounter_state,
-            env->encounter_context,
-            "world_offset_y",
-            offset_y);
-    }
-    encounter_def->put_ptr(
-        env->encounter_state,
-        env->encounter_context,
-        "collision_map",
-        collision_map);
-    env->collision_map = collision_map;
-    result.cmap = collision_map;
+    encounter_def->put_ptr(env->encounter_state, env->encounter_context, "collision_map", result.cmap);
+    env->collision_map = result.cmap;
     return result;
+}
+
+static void visual_load_scene_meshes(RenderClient* rc, const EncounterDef* encounter_def) {
+    const char* scene = visual_scene_name(encounter_def);
+    int origin_x = encounter_def ? encounter_def->scene_origin_x : 0;
+    int origin_y = encounter_def ? encounter_def->scene_origin_y : 0;
+    rc->terrain = terrain_load(visual_scene_asset(scene, "terrain"));
+    rc->objects = objects_load(visual_scene_asset(scene, "objects"));
+    if (strcmp(scene, "inferno") == 0) rc->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
+    terrain_offset(rc->terrain, origin_x, origin_y);
+    objects_offset(rc->objects, origin_x, origin_y);
+    objects_offset(rc->objects_zuk, origin_x, origin_y);
+    if (rc->collision_map) {
+        rc->collision_world_offset_x = origin_x;
+        rc->collision_world_offset_y = origin_y;
+    }
+    if (encounter_def && encounter_def->npc_pack) {
+        rc->npc_model_cache = model_cache_load(visual_scene_asset(encounter_def->npc_pack, "models"));
+        rc->npc_anim_cache = anim_cache_load(visual_scene_asset(encounter_def->npc_pack, "anims"));
+    }
 }
 
 static RenderClient* visual_init_render_scene(
@@ -120,69 +115,8 @@ static RenderClient* visual_init_render_scene(
     render_init_overlay_models(render_client);
     osrs_time_log("overlay models", &t0);
 
-    if (!encounter_name || encounter_name_is_pvp(encounter_name)) {
-        render_client->terrain = terrain_load(OSRS_ASSET("wilderness.terrain"));
-    } else if (strcmp(encounter_name, "zulrah") == 0) {
-        render_client->terrain = terrain_load(OSRS_ASSET("zulrah.terrain"));
-        render_client->objects = objects_load(OSRS_ASSET("zulrah.objects"));
-
-        int offset_x = 2256;
-        int offset_y = 3061;
-        if (render_client->terrain)
-            terrain_offset(render_client->terrain, offset_x, offset_y);
-        if (render_client->objects)
-            objects_offset(render_client->objects, offset_x, offset_y);
-
-        render_client->collision_world_offset_x = offset_x;
-        render_client->collision_world_offset_y = offset_y;
-        render_client->npc_model_cache = model_cache_load(OSRS_ASSET("zulrah.models"));
-        render_client->npc_anim_cache = anim_cache_load(OSRS_ASSET("zulrah.anims"));
-        fprintf(stderr, "zulrah: npc_models=%d, npc_anims=%d seqs\n",
-            render_client->npc_model_cache ? render_client->npc_model_cache->count : 0,
-            render_client->npc_anim_cache ? render_client->npc_anim_cache->seq_count : 0);
-    } else if (strcmp(encounter_name, "inferno") == 0) {
-        render_client->terrain = terrain_load_region(OSRS_ASSET("inferno.terrain"), 35, 83);
-        render_client->objects = objects_load(OSRS_ASSET("inferno.objects"));
-        render_client->objects_zuk = objects_load(OSRS_ASSET("inferno_zuk.objects"));
-        if (render_client->terrain)
-            terrain_offset(render_client->terrain, 2246, 5315);
-        if (render_client->objects)
-            objects_offset(render_client->objects, 2246, 5315);
-        if (render_client->objects_zuk)
-            objects_offset(render_client->objects_zuk, 2246, 5315);
-
-        render_client->npc_model_cache = model_cache_load(OSRS_ASSET("inferno.models"));
-        render_client->npc_anim_cache = anim_cache_load(OSRS_ASSET("inferno.anims"));
-        if (env->collision_map) {
-            render_client->collision_world_offset_x = 2246;
-            render_client->collision_world_offset_y = 5315;
-        }
-        fprintf(stderr, "inferno: terrain=%s, cmap=%s, npc_models=%d, npc_anims=%d seqs\n",
-            render_client->terrain ? "loaded" : "MISSING",
-            render_client->collision_map ? "loaded" : "MISSING",
-            render_client->npc_model_cache ? render_client->npc_model_cache->count : 0,
-            render_client->npc_anim_cache ? render_client->npc_anim_cache->seq_count : 0);
-        osrs_time_log("inferno scene meshes", &t0);
-    } else if (strcmp(encounter_name, "colosseum") == 0) {
-        render_client->terrain = terrain_load(OSRS_ASSET("colosseum.terrain"));
-        render_client->objects = objects_load(OSRS_ASSET("colosseum.objects"));
-        if (render_client->terrain)
-            terrain_offset(render_client->terrain, 1808, 3090);
-        if (render_client->objects)
-            objects_offset(render_client->objects, 1808, 3090);
-        render_client->npc_model_cache = model_cache_load(OSRS_ASSET("colosseum_npcs.models"));
-        render_client->npc_anim_cache = anim_cache_load(OSRS_ASSET("colosseum_npcs.anims"));
-        if (env->collision_map) {
-            render_client->collision_world_offset_x = 1808;
-            render_client->collision_world_offset_y = 3090;
-        }
-        fprintf(stderr, "colosseum: terrain=%s, cmap=%s, npc_models=%d, npc_anims=%d seqs\n",
-            render_client->terrain ? "loaded" : "MISSING",
-            render_client->collision_map ? "loaded" : "MISSING",
-            render_client->npc_model_cache ? render_client->npc_model_cache->count : 0,
-            render_client->npc_anim_cache ? render_client->npc_anim_cache->seq_count : 0);
-        osrs_time_log("colosseum scene meshes", &t0);
-    }
+    visual_load_scene_meshes(render_client, (const EncounterDef*)env->encounter_def);
+    osrs_time_log("scene meshes", &t0);
 
     render_populate_entities(render_client, env);
     render_client->cam_target_x = (float)render_client->arena_base_x +

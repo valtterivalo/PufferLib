@@ -1935,6 +1935,10 @@ typedef struct {
     int arena_base_x, arena_base_y;
     int arena_width, arena_height;
 
+    const char* scene;
+    const char* npc_pack;
+    int scene_origin_x, scene_origin_y;
+
     void (*translate_human_input)(
         struct HumanInput* hi, int* actions, EncounterState* state, EncounterContext* context);
     int (*is_human_targetable_npc_slot)(

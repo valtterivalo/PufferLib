@@ -293,6 +293,8 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .put_float = nh_pvp_put_float,
     .put_ptr = nh_pvp_put_ptr,
 
+    .scene = "wilderness",
+
     .translate_human_input = NULL,
     .head_move = OSRS_HEAD_PRIMARY,
     .head_prayer = OSRS_HEAD_OVERHEAD,

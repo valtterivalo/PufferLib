@@ -4408,15 +4408,19 @@ static void composite_rebuild_npc(
     }
     model_id = mapping->model_id;
 
+    ModelCache* owner = cache;
     OsrsModel* om = model_cache_get(cache, model_id);
-    if (!om && npc_cache)
+    if (!om && npc_cache) {
+        owner = npc_cache;
         om = model_cache_get(npc_cache, model_id);
+    }
     if (!om) {
         fprintf(stderr, "render: npc_def_id=%d mapped model %u is missing from loaded caches\n",
                 npc_def_id, model_id);
         abort();
     }
     composite_add_model_or_abort(comp, om, model_id, "npc");
+    comp->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = owner->atlas_texture;
 
     composite_recreate_anim_state(comp);
 

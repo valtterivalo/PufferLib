@@ -517,7 +517,7 @@ static void run_profile(
         const EncounterDef* edef = visual_open_encounter(env, encounter_name);
         if (!edef) return;
 
-        visual_load_encounter_collision_map(edef, env, encounter_name);
+        visual_load_encounter_collision_map(edef, env);
         if (start_wave >= 0 && edef->put_int) {
             edef->put_int(
                 env->encounter_state,
@@ -1356,7 +1356,7 @@ static void run_policy_profile(
     }
     const EncounterDef* edef = visual_open_encounter(env, encounter_name);
     if (!edef) abort();
-    visual_load_encounter_collision_map(edef, env, encounter_name);
+    visual_load_encounter_collision_map(edef, env);
     if (strcmp(encounter_name, "colosseum") == 0) {
         if (start_wave >= 0)
             edef->put_int(env->encounter_state, env->encounter_context,
@@ -1811,7 +1811,7 @@ static void run_metrics(
     }
     const EncounterDef* edef = visual_open_encounter(env, encounter_name);
     if (!edef) return;
-    visual_load_encounter_collision_map(edef, env, encounter_name);
+    visual_load_encounter_collision_map(edef, env);
     edef->put_int(env->encounter_state, env->encounter_context, "loadout_profile_mode", loadout_mode);
     edef->put_float(env->encounter_state, env->encounter_context, "beginner_loadout_fraction", 0.5f);
     edef->put_int(env->encounter_state, env->encounter_context, "start_wave",
@@ -2154,7 +2154,7 @@ static void run_visual(
         }
 
         osrs_time_log("encounter_create", &t0);
-        VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env, encounter_name);
+        VisualCollisionLoad cload = visual_load_encounter_collision_map(edef, env);
         if (cload.cmap) {
             fprintf(stderr, "%s collision map: %d regions, offset (%d, %d)\n",
                     encounter_name, cload.cmap->count, cload.offset_x, cload.offset_y);

@@ -1235,6 +1235,10 @@ static const EncounterDef ENCOUNTER_COLOSSEUM = {
     .arena_base_y = COLO_ARENA_MIN_Y,
     .arena_width = COLO_ARENA_WIDTH,
     .arena_height = COLO_ARENA_HEIGHT,
+    .scene = "colosseum",
+    .npc_pack = "colosseum_npcs",
+    .scene_origin_x = 1808,
+    .scene_origin_y = 3090,
 
     .translate_human_input = col_translate_human_input_ctx,
     .is_human_targetable_npc_slot = col_is_human_targetable_npc_slot_ctx,

@@ -97,6 +97,7 @@ static const EncounterDef ENCOUNTER_RISKFIGHT = {
     .put_int = riskfight_put_int, .put_float = riskfight_put_float, .put_ptr = riskfight_put_ptr,
     .arena_base_x = FIGHT_AREA_BASE_X, .arena_base_y = FIGHT_AREA_BASE_Y,
     .arena_width = FIGHT_AREA_WIDTH, .arena_height = FIGHT_AREA_HEIGHT,
+    .scene = "wilderness",
     .head_move = RF_PRIMARY, .head_prayer = -1, .head_target = RF_PRIMARY,
     .render_post_tick = riskfight_render_post_tick,
     .get_log = riskfight_log, .get_tick = riskfight_tick, .get_winner = riskfight_winner,
