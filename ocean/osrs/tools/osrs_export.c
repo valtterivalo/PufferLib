@@ -1,9 +1,11 @@
 #include "ocean/osrs/cache/osrs_cache_anim.h"
 #include "ocean/osrs/cache/osrs_cache_item.h"
 #include "ocean/osrs/cache/osrs_cache_gameval.h"
+#include "ocean/osrs/cache/osrs_cache_interfaces.h"
 #include "ocean/osrs/cache/osrs_cache_map.h"
 #include "ocean/osrs/cache/osrs_cache_maya.h"
 #include "ocean/osrs/cache/osrs_cache_model.h"
+#include "ocean/osrs/cache/osrs_cache_sprites.h"
 #include "ocean/osrs/osrs_asset_formats.h"
 #include "ocean/osrs/osrs_collision.h"
 #include "ocean/osrs/osrs_combat_visuals.h"
@@ -640,39 +642,16 @@ static void scene_objects(Scene* s, Soup* out, const int* exclude_ids, int exclu
 static void texture_pixels(OsrsCache* cache, const TextureDef* t, uint32_t* out) {
     CacheFile f = cache_read_file(cache, CACHE_INDEX_SPRITES, t->sprite, 0);
     assert(f.data);
-    CacheBuf b = {f.data + f.size - 2, f.data + f.size};
-    int count = cache_u16(&b);
-    b.p = f.data + f.size - 7 - count * 8;
-    int width = cache_u16(&b), height = cache_u16(&b), palette_size = cache_u8(&b) + 1;
-    int x_off = cache_u16(&b);
-    cache_skip(&b, (count - 1) * 2);
-    int y_off = cache_u16(&b);
-    cache_skip(&b, (count - 1) * 2);
-    int sub_w = cache_u16(&b);
-    cache_skip(&b, (count - 1) * 2);
-    int sub_h = cache_u16(&b);
-    b.p = f.data + f.size - 7 - count * 8 - (palette_size - 1) * 3;
-    uint32_t palette[256] = {0};
-    for (int i = 1; i < palette_size; i++) {
-        uint32_t rgb = cache_u24(&b);
-        palette[i] = (uint32_t)palette_brighten((int)(rgb ? rgb : 1), PALETTE_BRIGHTNESS_PERMILLE / 1000.0);
-    }
-    uint8_t* index = calloc((size_t)width * height, 1);
-    b.p = f.data;
-    int flags = cache_u8(&b);
-    for (int i = 0; i < sub_w * sub_h; i++) {
-        int x = flags & 1 ? i / sub_h : i % sub_w, y = flags & 1 ? i % sub_h : i / sub_w;
-        index[(y + y_off) * width + x + x_off] = cache_u8(&b);
-    }
-    assert(width == height && (width == 64 || width == ATLAS_CELL));
+    SpriteGroup g = sprite_group_decode(f.data, f.size, PALETTE_BRIGHTNESS_PERMILLE / 1000.0, SPRITE_ALPHA_INDEX);
+    SpriteFrame* frame = &g.frames[0];
+    int width = frame->width;
+    assert(width == frame->height && (width == 64 || width == ATLAS_CELL));
     for (int y = 0; y < ATLAS_CELL; y++)
         for (int x = 0; x < ATLAS_CELL; x++) {
-            int i = width == ATLAS_CELL ? y * width + x : (y >> 1) * width + (x >> 1);
-            uint32_t rgb = palette[index[i]];
-            uint32_t alpha = index[i] ? 0xFF000000u : 0;
-            out[y * ATLAS_CELL + x] = alpha | (rgb & 0xFF) << 16 | (rgb & 0xFF00) | (rgb >> 16 & 0xFF);
+            int sx = width == ATLAS_CELL ? x : x >> 1, sy = width == ATLAS_CELL ? y : y >> 1;
+            out[y * ATLAS_CELL + x] = frame->pixels[sy * width + sx];
         }
-    free(index);
+    sprite_group_free(&g);
     free(f.data);
 }
 
@@ -1560,6 +1539,302 @@ static void export_equipment(OsrsCache* cache, const char* out_dir) {
     free(rows);
 }
 
+static void ensure_dir(const char* path) {
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s", path);
+    for (char* p = buf + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        mkdir(buf, 0755);
+        *p = '/';
+    }
+    mkdir(buf, 0755);
+}
+
+static uint32_t png_crc_table[256];
+
+__attribute__((constructor)) static void png_build_crc_table(void) {
+    for (uint32_t n = 0; n < 256; n++) {
+        uint32_t c = n;
+        for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        png_crc_table[n] = c;
+    }
+}
+
+static uint32_t png_crc(const uint8_t* buf, size_t len) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) c = png_crc_table[(c ^ buf[i]) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+static void png_write_u32(FILE* f, uint32_t v) {
+    uint8_t b[4] = {(uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v};
+    fwrite(b, 1, 4, f);
+}
+
+static void png_write_chunk(FILE* f, const char* type, const uint8_t* data, uint32_t len) {
+    png_write_u32(f, len);
+    uint8_t* buf = malloc(4 + (size_t)len);
+    memcpy(buf, type, 4);
+    if (len) memcpy(buf + 4, data, len);
+    fwrite(buf, 1, 4 + (size_t)len, f);
+    png_write_u32(f, png_crc(buf, 4 + (size_t)len));
+    free(buf);
+}
+
+static void png_write_rgba(const char* path, const uint32_t* pixels, int width, int height) {
+    size_t stride = 1 + (size_t)width * 4;
+    uint8_t* raw = malloc((size_t)height * stride);
+    for (int y = 0; y < height; y++) {
+        uint8_t* row = raw + (size_t)y * stride;
+        row[0] = 0;
+        memcpy(row + 1, pixels + (size_t)y * width, (size_t)width * 4);
+    }
+    uLongf bound = compressBound((uLong)((size_t)height * stride));
+    uint8_t* comp = malloc(bound);
+    assert(compress2(comp, &bound, raw, (uLong)((size_t)height * stride), 6) == Z_OK);
+    FILE* f = fopen(path, "wb");
+    assert(f);
+    fwrite("\x89PNG\r\n\x1a\n", 1, 8, f);
+    uint8_t ihdr[13] = {
+        (uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
+        (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
+        8, 6, 0, 0, 0,
+    };
+    png_write_chunk(f, "IHDR", ihdr, sizeof(ihdr));
+    png_write_chunk(f, "IDAT", comp, (uint32_t)bound);
+    png_write_chunk(f, "IEND", NULL, 0);
+    fclose(f);
+    free(raw);
+    free(comp);
+}
+
+typedef struct {
+    const char* name;
+    int sprite_id;
+    int frame;
+    int masked;
+} GuiSpriteEntry;
+
+static const GuiSpriteEntry GUI_SPRITE_TABLE[] = {
+#include "ocean/osrs/tools/osrs_gui_sprite_table_generated.inc"
+};
+
+static const int COLOSSEUM_MODIFIER_SPRITE_IDS[] = {
+    5544, 5559, 5574, 5538, 5553, 5568, 5543, 5558, 5573, 5545,
+    5541, 5556, 5571, 5539, 5554, 5569, 5547, 5562, 5577, 5536,
+    5551, 5566, 5540, 5535, 5550, 5565, 5537, 5552, 5567, 5546,
+    5542, 5534, 5549, 5564,
+};
+
+static SpriteFrame sprite_frame_read(OsrsCache* cache, int sprite_id, int frame) {
+    CacheFile f = cache_read_container(cache, CACHE_INDEX_SPRITES, sprite_id);
+    assert(f.data);
+    SpriteGroup g = sprite_group_decode(f.data, f.size, 1.0, SPRITE_ALPHA_CHANNEL);
+    assert(frame < g.count);
+    SpriteFrame out = g.frames[frame];
+    g.frames[frame] = (SpriteFrame){0};
+    sprite_group_free(&g);
+    free(f.data);
+    return out;
+}
+
+static void sprite_frame_whiten(SpriteFrame* frame) {
+    for (int i = 0; i < frame->width * frame->height; i++) {
+        uint32_t a = frame->pixels[i] >> 24 & 0xFF;
+        frame->pixels[i] = a << 24 | (a ? 0x00FFFFFFu : 0);
+    }
+}
+
+static void export_gui_sprites(OsrsCache* cache, const char* out_dir) {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/sprites/gui", out_dir);
+    ensure_dir(dir);
+    int n = (int)(sizeof(GUI_SPRITE_TABLE) / sizeof(GUI_SPRITE_TABLE[0]));
+    for (int i = 0; i < n; i++) {
+        const GuiSpriteEntry* e = &GUI_SPRITE_TABLE[i];
+        SpriteFrame frame = sprite_frame_read(cache, e->sprite_id, e->frame);
+        if (e->masked) sprite_frame_whiten(&frame);
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s.png", dir, e->name);
+        png_write_rgba(path, frame.pixels, frame.width, frame.height);
+        free(frame.pixels);
+    }
+    printf("sprites/gui: %d files\n", n);
+
+    char mod_dir[4096];
+    snprintf(mod_dir, sizeof(mod_dir), "%s/sprites/colosseum/modifiers", out_dir);
+    ensure_dir(mod_dir);
+    int m = (int)(sizeof(COLOSSEUM_MODIFIER_SPRITE_IDS) / sizeof(COLOSSEUM_MODIFIER_SPRITE_IDS[0]));
+    for (int i = 0; i < m; i++) {
+        int id = COLOSSEUM_MODIFIER_SPRITE_IDS[i];
+        SpriteFrame frame = sprite_frame_read(cache, id, 0);
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%d.png", mod_dir, id);
+        png_write_rgba(path, frame.pixels, frame.width, frame.height);
+        free(frame.pixels);
+    }
+    printf("sprites/colosseum/modifiers: %d files\n", m);
+}
+
+typedef struct {
+    int id;
+    const char* name;
+} CoreInterfaceGroup;
+
+static const CoreInterfaceGroup CORE_INTERFACE_GROUPS[] = {
+    {161, "toplevel_osrs_stretch"}, {162, "chatbox"}, {160, "orbs"}, {303, "hpbar_hud"},
+    {90, "pvp_icons"}, {651, "buff_bar"}, {708, "stat_boosts_hud"}, {163, "pm_chat"},
+    {122, "xp_drops"}, {149, "inventory"}, {320, "stats"}, {119, "questjournal"},
+    {629, "side_journal"}, {387, "wornitems"}, {541, "prayerbook"}, {218, "magic_spellbook"},
+    {429, "friends"}, {109, "account"}, {182, "logout"}, {116, "settings_side"},
+    {216, "emote"}, {239, "music"}, {707, "side_channels"}, {593, "combat_interface"},
+    {84, "equipment"}, {85, "equipment_side"}, {238, "ge_pricechecker_side"}, {4, "deathkeep"},
+};
+
+static void bin_u8(FILE* f, int v) { uint8_t b = (uint8_t)v; fwrite(&b, 1, 1, f); }
+
+static void bin_u32(FILE* f, uint32_t v) {
+    uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24)};
+    fwrite(b, 1, 4, f);
+}
+
+static void bin_i32(FILE* f, int32_t v) { bin_u32(f, (uint32_t)v); }
+
+static void bin_string(FILE* f, const char* s) {
+    size_t len = s ? strlen(s) : 0;
+    if (len > 0xFFFF) len = 0xFFFF;
+    uint8_t lb[2] = {(uint8_t)len, (uint8_t)(len >> 8)};
+    fwrite(lb, 1, 2, f);
+    if (len) fwrite(s, 1, len, f);
+}
+
+static void bin_listener_value(FILE* f, const IfListenerValue* v) {
+    if (v->is_string) {
+        bin_u8(f, 1);
+        bin_string(f, v->str_value);
+    } else {
+        bin_u8(f, 0);
+        bin_i32(f, v->int_value);
+    }
+}
+
+static void bin_component(FILE* f, const IfComponent* c) {
+    bin_u32(f, c->id);
+    bin_i32(f, c->parent_id);
+    bin_u32(f, c->group_id);
+    bin_u32(f, c->file_id);
+    bin_u8(f, c->is_if3 ? 1 : 0);
+    bin_u8(f, c->type);
+    bin_u8(f, c->hidden ? 1 : 0);
+    bin_u8(f, c->sprite_tiling ? 1 : 0);
+    bin_u8(f, c->filled ? 1 : 0);
+    bin_u8(f, c->line_direction ? 1 : 0);
+    bin_u8(f, c->text_shadowed ? 1 : 0);
+    bin_u8(f, c->flipped_vertically ? 1 : 0);
+    bin_u8(f, c->flipped_horizontally ? 1 : 0);
+    bin_u8(f, c->no_click_through ? 1 : 0);
+    bin_u8(f, c->opacity);
+    bin_u8(f, c->border_type);
+    bin_u8(f, c->line_width);
+    bin_u8(f, c->line_height);
+    bin_i32(f, c->content_type);
+    bin_i32(f, c->x);
+    bin_i32(f, c->y);
+    bin_i32(f, c->width);
+    bin_i32(f, c->height);
+    bin_i32(f, c->width_mode);
+    bin_i32(f, c->height_mode);
+    bin_i32(f, c->x_position_mode);
+    bin_i32(f, c->y_position_mode);
+    bin_i32(f, c->scroll_width);
+    bin_i32(f, c->scroll_height);
+    bin_i32(f, c->sprite_id);
+    bin_i32(f, c->texture_id);
+    bin_i32(f, c->shadow_color);
+    bin_i32(f, c->model_id);
+    bin_i32(f, c->model_type);
+    bin_i32(f, c->font_id);
+    bin_i32(f, c->text_color);
+    bin_u32(f, c->click_mask);
+    bin_i32(f, c->x_text_alignment);
+    bin_i32(f, c->y_text_alignment);
+    bin_string(f, c->name);
+    bin_string(f, c->text);
+    bin_string(f, c->target_verb);
+    int action_count = c->action_count < 255 ? c->action_count : 255;
+    bin_u8(f, action_count);
+    for (int i = 0; i < action_count; i++) bin_string(f, c->actions[i]);
+
+    int listener_count = 0;
+    for (int i = 0; i < IF_LISTENER_COUNT; i++) listener_count += c->listeners[i].present;
+    bin_u8(f, listener_count);
+    for (int i = 0; i < IF_LISTENER_COUNT; i++) {
+        if (!c->listeners[i].present) continue;
+        bin_u8(f, i);
+        int n = c->listeners[i].count < 255 ? c->listeners[i].count : 255;
+        bin_u8(f, n);
+        for (int j = 0; j < n; j++) bin_listener_value(f, &c->listeners[i].values[j]);
+    }
+
+    int trigger_count = 0;
+    for (int i = 0; i < IF_TRIGGER_COUNT; i++) trigger_count += c->triggers[i].present;
+    bin_u8(f, trigger_count);
+    for (int i = 0; i < IF_TRIGGER_COUNT; i++) {
+        if (!c->triggers[i].present) continue;
+        bin_u8(f, i);
+        int n = c->triggers[i].count < 255 ? c->triggers[i].count : 255;
+        bin_u8(f, n);
+        for (int j = 0; j < n; j++) bin_i32(f, c->triggers[i].values[j]);
+    }
+}
+
+static void export_interfaces(OsrsCache* cache, const char* out_dir) {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/ui", out_dir);
+    ensure_dir(dir);
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/interfaces.bin", dir);
+    FILE* f = fopen(path, "wb");
+    assert(f);
+    fwrite("RCUIBIN2", 1, 8, f);
+    bin_u32(f, 2);
+    int group_count = (int)(sizeof(CORE_INTERFACE_GROUPS) / sizeof(CORE_INTERFACE_GROUPS[0]));
+    bin_u32(f, (uint32_t)group_count);
+
+    int total_components = 0, total_if3 = 0;
+    for (int gi = 0; gi < group_count; gi++) {
+        int group_id = CORE_INTERFACE_GROUPS[gi].id;
+        CacheGroup g = cache_read_group(cache, CACHE_INDEX_INTERFACES, group_id);
+        bin_u32(f, (uint32_t)group_id);
+        bin_string(f, CORE_INTERFACE_GROUPS[gi].name);
+        bin_u32(f, (uint32_t)g.file_count);
+        int* order = malloc(sizeof(int) * (size_t)g.file_count);
+        for (int i = 0; i < g.file_count; i++) order[i] = i;
+        for (int i = 0; i < g.file_count; i++)
+            for (int j = i + 1; j < g.file_count; j++)
+                if (g.file_ids[order[j]] < g.file_ids[order[i]]) {
+                    int t = order[i];
+                    order[i] = order[j];
+                    order[j] = t;
+                }
+        for (int k = 0; k < g.file_count; k++) {
+            int i = order[k];
+            uint32_t component_id = ((uint32_t)group_id << 16) | (uint32_t)g.file_ids[i];
+            IfComponent c = if_component_decode(component_id, &g.files[i]);
+            bin_component(f, &c);
+            total_components++;
+            total_if3 += c.is_if3;
+            if_component_free(&c);
+        }
+        free(order);
+        cache_group_free(&g);
+    }
+    fclose(f);
+    printf("ui/interfaces.bin: %d groups, %d components (%d IF3, %d IF1)\n",
+        group_count, total_components, total_if3, total_components - total_if3);
+}
+
 static void export_collision(OsrsCache* cache, const char* out_dir, const char* name, RegionRect r) {
     Defs defs = {.cache = cache};
     MapGrid g = map_load(cache, r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1);
@@ -1579,7 +1854,9 @@ static void usage(void) {
         "[npc=ID[:ATTACK_SEQ[:OWNED_SEQ]...]] [gfx=ID] [loc=ID] [seq=ID] [seqmodel=SEQ_ID:MODEL_ID]...\n"
         "       osrs_export <cache_dir> <out_dir> projectiles\n"
         "       osrs_export <cache_dir> <out_dir> equipment\n"
-        "       osrs_export <cache_dir> <out_dir> textures\n");
+        "       osrs_export <cache_dir> <out_dir> textures\n"
+        "       osrs_export <cache_dir> <out_dir> sprites\n"
+        "       osrs_export <cache_dir> <out_dir> interfaces\n");
     exit(2);
 }
 
@@ -1656,6 +1933,14 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[3], "equipment") == 0) {
         export_equipment(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "sprites") == 0 && argc == 4) {
+        export_gui_sprites(cache, out_dir);
+        return 0;
+    }
+    if (strcmp(argv[3], "interfaces") == 0 && argc == 4) {
+        export_interfaces(cache, out_dir);
         return 0;
     }
     usage();
