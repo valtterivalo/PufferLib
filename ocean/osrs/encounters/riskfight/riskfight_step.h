@@ -34,14 +34,18 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
     int weapon = p->equipped[GEAR_SLOT_WEAPON];
     int cost = osrs_spec_cost(weapon);
     int special = !pvp_is_maul(weapon) && p->spec_armed && cost > 0 && p->special_energy >= cost;
+    AttackStyle style = get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED ?
+        ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
+    int distance = chebyshev_distance(p->x, p->y, opponent->x, opponent->y);
+    int in_range = style == ATTACK_STYLE_MELEE ? is_in_melee_range(p, opponent) :
+        distance > 0 && distance <= get_attack_range(p, style);
     if (!osrs_interaction_active(&p->interaction) ||
         p->current_hitpoints <= 0 || opponent->current_hitpoints <= 0 ||
         s->escaped[agent] || s->escaped[1 - agent] ||
-        !is_in_melee_range(p, opponent) || !can_attack_now(p) ||
+        !in_range || !can_attack_now(p) ||
         s->env.pvp_runtime.maul[agent].last_special_tick == s->env.tick) return;
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
-    perform_attack(&s->env, agent, 1 - agent, ATTACK_STYLE_MELEE, special, 0,
-        chebyshev_distance(p->x, p->y, opponent->x, opponent->y));
+    perform_attack(&s->env, agent, 1 - agent, style, special, 0, distance);
     riskfight_record_attack(s, agent, 1, 0);
     if (special) osrs_spec_disarm(&p->spec_armed);
 }

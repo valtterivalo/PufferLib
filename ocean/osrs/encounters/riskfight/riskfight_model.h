@@ -118,7 +118,15 @@ typedef struct {
     int ticks_maul[2];
 } RiskfightState;
 typedef struct {
+    uint8_t equipment[NUM_GEAR_SLOTS];
+    uint16_t inventory[OSRS_INVENTORY_SIZE];
+    int hitpoints;
+    int vengeance_sacks;
+} RiskfightLoadout;
+
+typedef struct {
     const EncounterArenaTopology* route_topology;
+    const RiskfightLoadout* loadout[2];
     OsrsActorRouteCache routes[2];
     HumanInput policy_commands[2];
     RiskfightOpponent opponent;
@@ -136,6 +144,48 @@ static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
 static void riskfight_write_observation(const RiskfightState*, int, float*);
 static void riskfight_script(const float*, const RiskfightProfile*, uint32_t, int, int*);
 static void riskfight_write_action_mask(const RiskfightState*, int, unsigned char*);
+
+static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
+    return osrs_inventory_content_code_from_consumable(kind, (uint8_t)doses);
+}
+
+static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
+
+__attribute__((constructor)) static void riskfight_build_default_loadout(void) {
+    RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
+    loadout.equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
+    loadout.equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
+    loadout.equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+    loadout.equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_RANCOUR;
+    loadout.equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
+    loadout.equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
+    loadout.equipment[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
+    loadout.equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
+    loadout.equipment[GEAR_SLOT_HANDS] = ITEM_FEROCIOUS_GLOVES;
+    loadout.equipment[GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS;
+    loadout.equipment[GEAR_SLOT_RING] = ITEM_ULTOR_RING;
+    const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
+        {OSRS_CONSUMABLE_SUMMER_PIE, 2, 3},
+        {OSRS_CONSUMABLE_HALIBUT, 0, 4},
+        {OSRS_CONSUMABLE_BREW, 4, 2},
+        {OSRS_CONSUMABLE_MARLIN, 0, 8},
+        {OSRS_CONSUMABLE_SANFEW, 4, 2},
+        {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
+        {OSRS_CONSUMABLE_TELEPORT, 0, 1},
+        {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
+    };
+    int slot = 0;
+    for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
+        for (int n = 0; n < supplies[k].count; n++)
+            loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
+    const uint8_t switches[] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER,
+        ITEM_GRANITE_MAUL_ORNATE, ITEM_RING_OF_RECOIL};
+    for (size_t k = 0; k < sizeof(switches); k++)
+        loadout.inventory[slot++] = osrs_inventory_content_code_from_item(switches[k]);
+    loadout.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0);
+    assert(slot == 27);
+    RISKFIGHT_DEFAULT_LOADOUT = loadout;
+}
 
 static void riskfight_init_context(EncounterContext* context) {
     RiskfightContext* ctx = (RiskfightContext*)context;
@@ -268,19 +318,8 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
-    uint8_t equipment[NUM_GEAR_SLOTS] = {0};
-    equipment[GEAR_SLOT_AMMO] = ITEM_NONE;
-    equipment[GEAR_SLOT_HEAD] = ITEM_DHAROKS_HELM;
-    equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
-    equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_RANCOUR;
-    equipment[GEAR_SLOT_WEAPON] = ITEM_ABYSSAL_TENTACLE;
-    equipment[GEAR_SLOT_BODY] = ITEM_DHAROKS_PLATEBODY;
-    equipment[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
-    equipment[GEAR_SLOT_LEGS] = ITEM_DHAROKS_PLATELEGS;
-    equipment[GEAR_SLOT_HANDS] = ITEM_FEROCIOUS_GLOVES;
-    equipment[GEAR_SLOT_FEET] = ITEM_AVERNIC_TREADS;
-    equipment[GEAR_SLOT_RING] = ITEM_ULTOR_RING;
     for (int i = 0; i < 2; i++) {
+        const RiskfightLoadout* loadout = ctx->loadout[i] ? ctx->loadout[i] : &RISKFIGHT_DEFAULT_LOADOUT;
         Player* p = &s->env.players[i];
         init_player(p);
         s->env.pvp_runtime.maul[i] = osrs_granite_maul_init();
@@ -288,39 +327,20 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
         p->has_blood_fury = 0;
         p->is_lunar_spellbook = 1;
         p->veng_active = 1;
-        p->current_hitpoints = 121;
+        p->current_hitpoints = loadout->hitpoints;
         encounter_super_combat_boost(p);
         p->x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2 + i;
         p->y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;
         p->dest_x = p->x; p->dest_y = p->y;
-        memcpy(p->equipped, equipment, sizeof(equipment));
+        memcpy(p->equipped, loadout->equipment, sizeof(loadout->equipment));
         osrs_refresh_player_equipment(p);
         pvp_refresh_visible_gear(p);
         s->inventory_use[i].divine_combat_ticks = OSRS_DIVINE_DURATION;
-        int slot = 0;
-        const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
-            {OSRS_CONSUMABLE_SUMMER_PIE, 2, 3},
-            {OSRS_CONSUMABLE_HALIBUT, 0, 4},
-            {OSRS_CONSUMABLE_BREW, 4, 2},
-            {OSRS_CONSUMABLE_MARLIN, 0, 8},
-            {OSRS_CONSUMABLE_SANFEW, 4, 2},
-            {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
-            {OSRS_CONSUMABLE_TELEPORT, 0, 1},
-            {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
-        };
-        for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
-            for (int n = 0; n < supplies[k].count; n++)
-                p->inventory_cells[slot++] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_consumable(
-                    supplies[k].kind, supplies[k].doses));
-        const uint8_t switches[] = {ITEM_DHAROKS_GREATAXE, ITEM_VOIDWAKER,
-            ITEM_GRANITE_MAUL_ORNATE, ITEM_RING_OF_RECOIL};
-        for (size_t k = 0; k < sizeof(switches); k++)
-            p->inventory_cells[slot++] = osrs_inventory_cell_from_item(switches[k]);
-        p->inventory_cells[slot++] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_consumable(OSRS_CONSUMABLE_LOCATOR_ORB, 0));
-        assert(slot == 27);
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+            p->inventory_cells[slot] = osrs_inventory_cell_from_content_code(loadout->inventory[slot]);
         s->inventory_use[i].orb_used_tick = -1;
         s->inventory_use[i].vengeance_consumed_tick = -1;
-        s->inventory_use[i].vengeance_sacks = 100;
+        s->inventory_use[i].vengeance_sacks = loadout->vengeance_sacks;
         s->env.pvp_runtime.walk_dest_x[i] = -1;
         s->env.pvp_runtime.walk_dest_y[i] = -1;
         osrs_actor_route_cache_clear(&ctx->routes[i]);

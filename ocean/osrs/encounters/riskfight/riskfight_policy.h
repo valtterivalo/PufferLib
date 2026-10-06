@@ -170,15 +170,23 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
 typedef struct {
     int kind_slot[OSRS_CONSUMABLE_COUNT];
     uint8_t item_slot[ITEM_NONE + 1];
+    uint8_t main_weapon, shield;
 } RiskfightObservedInventory;
 
+static int riskfight_is_switch_weapon(uint8_t weapon) {
+    return weapon == ITEM_VOIDWAKER || weapon == ITEM_DHAROKS_GREATAXE || pvp_is_maul(weapon);
+}
+
 static RiskfightObservedInventory riskfight_observed_inventory(const float* obs) {
-    RiskfightObservedInventory inventory = {{0}};
+    RiskfightObservedInventory inventory = {{0}, {0}, ITEM_NONE, ITEM_NONE};
     for (int slot = OSRS_INVENTORY_SIZE - 1; slot >= 0; slot--) {
         const OsrsItemContentMetadata* m = osrs_item_content_metadata(
             osrs_inventory_cell_obs_code_decode(obs[RF_INVENTORY_START + slot * RF_INVENTORY_WIDTH]));
         inventory.kind_slot[m->consumable_kind] = slot + 1;
         inventory.item_slot[m->item_idx] = slot + 1;
+        if (m->gear_slot == GEAR_SLOT_WEAPON && !riskfight_is_switch_weapon(m->item_idx))
+            inventory.main_weapon = m->item_idx;
+        if (m->gear_slot == GEAR_SLOT_SHIELD) inventory.shield = m->item_idx;
     }
     return inventory;
 }
@@ -263,12 +271,13 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
     int maul_spec = !vw_spec && obs[6] >= 0.99f && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
         riskfight_sample_event(seed, tick, 22, profile->maul_pm);
+    uint8_t main_weapon = riskfight_is_switch_weapon(self.weapon) ? inventory.main_weapon : self.weapon;
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? ITEM_GRANITE_MAUL_ORNATE :
-        axe_swing ? ITEM_DHAROKS_GREATAXE : ITEM_ABYSSAL_TENTACLE;
+        axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
     actions[RF_SPECIAL] = maul_spec ? 2 : !holding_maul && vw_spec != (obs[13] >= 0.5f);
     actions[RF_WEAPON] = inventory.item_slot[weapon];
-    if (!item_is_two_handed(weapon))
-        actions[RF_SHIELD] = inventory.item_slot[ITEM_AVERNIC_DEFENDER];
+    if (!item_is_two_handed(weapon) && inventory.shield != ITEM_NONE)
+        actions[RF_SHIELD] = inventory.item_slot[inventory.shield];
     actions[RF_ORB] = weapon == ITEM_DHAROKS_GREATAXE && self.attack_timer == 1 && hp > 20 &&
         riskfight_sample_event(seed, attack_tick, 24, profile->orb_axe_pm);
     actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
