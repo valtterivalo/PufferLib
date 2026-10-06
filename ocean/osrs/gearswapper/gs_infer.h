@@ -15,7 +15,7 @@ typedef struct {
     uint64_t prayers;
     int spec_energy_varp, sa_attack, com_mode;
     int lx, ly, local_interacting;
-    int worn[GS_WORN_SLOTS];
+    int worn[GS_WORN_SLOTS], inventory[28];
     int player_count, player_id[GS_MAX_PLAYERS], player_interacting[GS_MAX_PLAYERS];
     int tracked, tracked_interacting;
     int ox, oy, ratio, scale, oweapon;
@@ -779,5 +779,17 @@ static int gs_opponent_spec_cost(const GsInfer* s) {
     for (int i = 0; i < s->arsenal_count; i++)
         if (s->arsenal[i].has_spec) cost = imin(cost, GS_WEAPON_ROWS[s->arsenal[i].weapon].cost);
     return cost;
+}
+
+/* The held ornate maul and the bag */
+static void gs_own_of(const GsClient* c, int* maul_id, int* inventory_count, int* shield_worn) {
+    *maul_id = 0;
+    *inventory_count = 0;
+    for (int i = 0; i < 28; i++) {
+        if (c->inventory[i] < 0) continue;
+        (*inventory_count)++;
+        if (!*maul_id && (c->inventory[i] == GS_ITEM_GRANITE_MAUL_PLUS || c->inventory[i] == GS_ITEM_GRANITE_MAUL_PRETTY_PLUS)) *maul_id = c->inventory[i];
+    }
+    *shield_worn = c->worn[5] > 0;
 }
 #endif
