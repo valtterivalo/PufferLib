@@ -1,19 +1,14 @@
 #ifndef RISKFIGHT_ROLLOUT_H
 #define RISKFIGHT_ROLLOUT_H
-#include "riskfight_seed.h"
+#include "riskfight_opp.h"
 
-enum { MAX_STEPS = 32, BIG_HIT = 20, NO_BIG_HIT = -1000000, BIG_HIT_MEMORY = 8, HAZARD_BANDS = 6, HAZARD_DELAYS = 5, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
-typedef enum { MODEL_PROFILES, MODEL_HAZARD } ModelKind;
-typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_IDLE } OursKind;
-
-enum { PAUSE_LENGTHS = 64, RATES = 4 };
+enum { MAX_STEPS = 32, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
+typedef enum { MODEL_PROFILES, MODEL_FIT } ModelKind;
+typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_IDLE } OursKind;
 
 typedef struct {
     ModelKind kind;
-    float hazard[HAZARD_BANDS][HAZARD_DELAYS];
-    float rate_scale[RATES];
-    float pause_chance;
-    int pause_length[PAUSE_LENGTHS], pause_lengths;
+    const OppFit* fit;
 } OppModel;
 
 typedef struct {
@@ -28,14 +23,15 @@ typedef struct {
     int his_hits, his_damage, his_vw_specs, his_maul_specs, his_vengs;
     int our_damage, our_hits;
     int first_eat, our_death, his_death;
-    int hp_us, hp_him;
+    int hp_us, hp_him, bar_him;
 } Outcome;
 
 typedef struct {
     RiskfightState state;
     RiskfightContext context;
     Outcome* outcome;
-    int last_big_hit_step, pause_until;
+    int tick_base, step_damage, step_max_hit;
+    Hist hist;
 } Sim;
 
 static void sim_init(Sim* sim) {
@@ -59,51 +55,63 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
         out->our_hits++;
         out->our_damage += event->hitpoints_lost;
     }
-    if (event->target == 1 && event->hitpoints_lost >= BIG_HIT) sim->last_big_hit_step = step;
+    if (event->target == 1) {
+        sim->step_damage += event->hitpoints_lost;
+        if (event->hitpoints_lost > sim->step_max_hit) sim->step_max_hit = event->hitpoints_lost;
+    }
 }
-
-static int hazard_band(int hitpoints) {
-    int r = osrs_health_bar_ratio(hitpoints, 99, 30);
-    return r <= 8 ? 0 : r <= 13 ? 1 : r <= 19 ? 2 : r <= 24 ? 3 : r <= 29 ? 4 : 5;
-}
-
-static int hazard_delay(int since) {
-    return since < 1 || since > 8 ? 0 : since == 1 ? 1 : since == 2 ? 2 : since == 3 ? 3 : 4;
-}
-
-static const float SERVING_SHARES[4] = {0.15f, 0.34f, 0.34f, 0.17f};
 
 static void opponent_actions(const OppModel* model, Sim* sim, int step, uint32_t seed, int* actions) {
     const RiskfightState* s = &sim->state;
+    if (model->kind == MODEL_FIT) {
+        opp_fit_actions(model->fit, s, &sim->hist, sim->tick_base + 1 + step, seed, actions);
+        return;
+    }
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(s, 1, obs);
     RiskfightProfile profile = RISKFIGHT_HUMAN_PROFILES[osrs_lowbias32(seed) % PROFILE_COUNT];
-    if (model->kind == MODEL_HAZARD) {
-        memset(profile.consume_pm, 0, sizeof(profile.consume_pm));
-        profile.veng_pm = (uint16_t)fminf(1000, profile.veng_pm * model->rate_scale[0]);
-        profile.vw_pm = (uint16_t)fminf(1000, profile.vw_pm * model->rate_scale[1]);
-        profile.maul_pm = (uint16_t)fminf(1000, profile.maul_pm * model->rate_scale[2]);
-    }
     riskfight_script(obs, &profile, s->script_seed[1], s->consume_ticks[1], actions);
-    if (model->kind == MODEL_PROFILES) return;
-    uint32_t pause_roll = riskfight_sample_hash(s->script_seed[1], s->env.tick, 43);
-    if (step > 0 && (sim->outcome->his_hit_mask >> (step - 1) & 1) && model->pause_lengths &&
-            (pause_roll % 10000) < (uint32_t)(model->pause_chance * 10000))
-        sim->pause_until = step + model->pause_length[(pause_roll >> 14) % model->pause_lengths];
-    if (step < sim->pause_until) actions[RF_PRIMARY] = RF_STOP;
-    RiskfightObservedSelf self = riskfight_observed_self(obs);
-    int since = sim->last_big_hit_step == NO_BIG_HIT ? 0 : step - sim->last_big_hit_step;
-    float p = fminf(0.95f, model->hazard[hazard_band(self.hitpoints)][hazard_delay(since)] * model->rate_scale[3]);
-    uint32_t roll = riskfight_sample_hash(s->script_seed[1], s->env.tick, 41);
-    if (self.food_timer != 0 || (roll % 10000) >= (uint32_t)(p * 10000)) return;
-    RiskfightObservedInventory inventory = riskfight_observed_inventory(obs);
-    float serving = (float)(riskfight_sample_hash(s->script_seed[1], s->env.tick, 42) % 10000) / 10000.0f;
-    int k = serving < SERVING_SHARES[0] ? 0 : serving < SERVING_SHARES[0] + SERVING_SHARES[1] ? 1 :
-        serving < SERVING_SHARES[0] + SERVING_SHARES[1] + SERVING_SHARES[2] ? 2 : 3;
-    actions[RF_FOOD] = inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
-    if (k == 1 || k == 3) actions[RF_COMBO] = inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
-    if ((k == 2 || k == 3) && self.potion_timer == 0) actions[RF_DRINK] = inventory.kind_slot[OSRS_CONSUMABLE_BREW];
-    actions[RF_PRIMARY] = RF_STOP;
+}
+
+static int is_consumable_raw(int raw) {
+    return raw == RAW_ANGLERFISH || raw == RAW_KARAMBWAN || (raw >= 6685 && raw <= 6691) || (raw >= 3024 && raw <= 3030) || (raw >= 12695 && raw <= 12701);
+}
+
+static int slot_of_kind(const Player* p, OsrsConsumableKind kind) {
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->consumable_kind == kind) return slot;
+    return -1;
+}
+
+/** Replays our recorded clicks other than meals, and eats when our hitpoints are within his worst single swing plus a margin. */
+static void queue_ours_at_risk(Sim* sim, const Tape* tape, const OursPolicy* policy, int tick, int step) {
+    (void)step;
+    HumanInput* hi = &sim->context.policy_commands[0];
+    Player* p = &sim->state.env.players[0];
+    Player* him = &sim->state.env.players[1];
+    for (int i = 0; i < tape->action_count; i++) {
+        const TapeAction* a = &tape->actions[i];
+        if (a->tick != tick || (a->kind == ACTION_CLICK && is_consumable_raw(a->raw_id))) continue;
+        HumanCommand command = {0};
+        switch (a->kind) {
+            case ACTION_CLICK: command = (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = a->slot}; break;
+            case ACTION_ATTACK: command = (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1}; break;
+            case ACTION_SPEC: command = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE}; break;
+            case ACTION_VENGEANCE: command = (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE}; break;
+        }
+        human_input_queue_command(hi, command);
+    }
+    AttackStyle style = get_slot_weapon_attack_style(him) == ATTACK_STYLE_RANGED ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
+    int normal = calculate_max_hit(him, style, 1.0f, 30);
+    int worst = him->special_energy >= ENERGY_FOR_SPEC && style == ATTACK_STYLE_MELEE ? osrs_voidwaker_max_hit(normal) : normal;
+    if (p->current_hitpoints > worst + policy->eat_below) return;
+    int hard = slot_of_kind(p, OSRS_CONSUMABLE_ANGLERFISH), karambwan = slot_of_kind(p, OSRS_CONSUMABLE_KARAMBWAN), brew = slot_of_kind(p, OSRS_CONSUMABLE_BREW);
+    if (p->food_timer == 0 && hard >= 0)
+        human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = hard});
+    if (p->karambwan_timer == 0 && karambwan >= 0 && p->current_hitpoints <= worst)
+        human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = karambwan});
+    if (p->potion_timer == 0 && brew >= 0 && p->current_hitpoints <= worst)
+        human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = brew});
 }
 
 static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int tick, int step) {
@@ -123,6 +131,8 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
             }
             human_input_queue_command(hi, command);
         }
+    } else if (policy->kind == OURS_EAT_AT_RISK) {
+        queue_ours_at_risk(sim, tape, policy, tick, step);
     } else if (policy->kind == OURS_EAT_AT_THRESHOLD) {
         if (!osrs_interaction_active(&p->interaction) || step == 0)
             human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1});
@@ -142,22 +152,14 @@ static int consumption_visible(const RiskfightState* s, int agent) {
 }
 
 /** Runs k steps from the loaded sim state. tick_base is the tape tick the state is the end of. */
-static int big_hit_step_before(const Tape* tape, int tick_base) {
-    for (int u = tick_base; u >= tick_base - BIG_HIT_MEMORY && u >= tape->lo; u--)
-        for (int i = 0; i < tape->hit_count; i++)
-            if (tape->hits[i].tick == u && tape->hits[i].side == SIDE_HIM && tape->hits[i].amount >= BIG_HIT) return u - tick_base - 1;
-    return NO_BIG_HIT;
-}
-
 static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const OppModel* model, const OursPolicy* policy,
     uint32_t seed, Outcome* out) {
-    int last_big_hit_step = big_hit_step_before(tape, tick_base);
     RiskfightState* s = &sim->state;
     memset(out, 0, sizeof(*out));
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
     sim->outcome = out;
-    sim->last_big_hit_step = last_big_hit_step;
-    sim->pause_until = -1;
+    sim->tick_base = tick_base;
+    if (tape->hist_series) sim->hist = ((const Hist*)tape->hist_series)[tick_base - tape->lo];
     s->env.pvp_runtime.hit_observer = sim_observe_hit;
     s->env.pvp_runtime.hit_observer_context = sim;
     for (int step = 0; step < k && !s->env.episode_over; step++) {
@@ -166,7 +168,14 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
+        sim->step_damage = sim->step_max_hit = 0;
         riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
+        const Player* him = &s->env.players[1];
+        int ate_true = him->ate_food_this_tick || him->ate_karambwan_this_tick || s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick;
+        StepEvents events = {.ate_visible = consumption_visible(s, 1), .ate = ate_true,
+            .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
+            .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
+        hist_step(&sim->hist, s, tick_base + 1 + step, &events);
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);
         if (out->his_eat[step] && out->first_eat < 0) out->first_eat = step;
@@ -178,5 +187,6 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     }
     out->hp_us = s->env.players[0].current_hitpoints;
     out->hp_him = s->env.players[1].current_hitpoints;
+    out->bar_him = s->visible[0].health_bar;
 }
 #endif

@@ -14,7 +14,7 @@ typedef struct {
     int spec_us, spec_phase_us, veng_us, veng_cooldown_us, sacks, recoil_used;
     int bar_ratio, bar_scale, last_bar_hit, meals_since;
     int spec_him, spec_phase_him, veng_him, veng_cooldown_him;
-    int swing_him_tick, swing_him_speed, swing_us_tick, swing_us_speed, recoil_evidence;
+    int swing_him_tick, swing_him_speed, swing_us_tick, swing_us_speed, recoil_evidence, bar_now_ratio, bar_now_scale;
     char pid, overhead[16];
     int piety, worn[TAPE_WORN], bag[TAPE_BAG];
 } TapeTick;
@@ -31,6 +31,8 @@ typedef struct {
     TapeAnim* anims; int anim_count;
     TapeHit* hits; int hit_count;
     TapeAction* actions; int action_count;
+    void* hist_series;
+    uint8_t* his_flags;
 } Tape;
 
 static const TapeTick* tape_tick(const Tape* tape, int tick) {
@@ -97,7 +99,8 @@ static int tape_load(Tape* tape, const char* path) {
                 &t->ux, &t->uy, &t->ox, &t->oy, &t->spec_us, &t->spec_phase_us, &t->veng_us, &t->veng_cooldown_us,
                 &t->sacks, &t->recoil_used, &t->bar_ratio, &t->bar_scale, &t->last_bar_hit, &t->meals_since,
                 &t->spec_him, &t->spec_phase_him, &t->veng_him, &t->veng_cooldown_him, &t->swing_him_tick,
-                &t->swing_him_speed, &t->swing_us_tick, &t->swing_us_speed, &t->recoil_evidence};
+                &t->swing_him_speed, &t->swing_us_tick, &t->swing_us_speed, &t->recoil_evidence,
+                &t->bar_now_ratio, &t->bar_now_scale};
             char* p = (char*)rest;
             for (size_t i = 0; i < sizeof(ints) / sizeof(*ints); i++) *ints[i] = (int)strtol(p, &p, 10);
             while (*p == ' ') p++;
@@ -116,6 +119,7 @@ static int tape_load(Tape* tape, const char* path) {
 }
 
 static void tape_free(Tape* tape) {
+    free(tape->hist_series); free(tape->his_flags);
     free(tape->ticks); free(tape->anims); free(tape->hits); free(tape->actions);
 }
 
