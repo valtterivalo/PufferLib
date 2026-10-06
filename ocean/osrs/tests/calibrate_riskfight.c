@@ -487,13 +487,14 @@ static void attribute(int n, int k, Tape* tapes, int count, int train_day, int t
     OppModel models[4] = {{MODEL_FIT, &fit}, {MODEL_FIT, &heavy}, {MODEL_FIT, &eager}, {MODEL_FIT, &slow}};
     const char* names[4] = {"fitted opponent", "every meal a triple", "eats 2x as often", "eats half as often"};
     OursPolicy ideal = {OURS_RULES, 0, 0}, late = {OURS_RULES, 0, 1};
+    OppModel combined = {MODEL_FIT, &heavy};
     printf("=== attribution: fit on day %d, test on day %d, N=%d, k=%d; played spec decisions, planner chance against kills within %d ticks ===\n", train_day, test_day, n, k, OURS_HORIZON);
-    for (int variant = 0; variant < 5; variant++) {
-        const OppModel* model = &models[variant < 4 ? variant : 0];
-        const OursPolicy* side = variant == 4 ? &late : &ideal;
+    for (int variant = 0; variant < 6; variant++) {
+        const OppModel* model = variant == 5 ? &combined : &models[variant < 4 ? variant : 0];
+        const OursPolicy* side = variant >= 4 ? &late : &ideal;
         WindowStats stats = {{0}};
         for (int i = 0; i < count; i++) if (tape_day(&tapes[i]) == test_day) evaluate_windows(&tapes[i], model, side, n, k, &stats);
-        printf("  %-22s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n", variant == 4 ? "our clicks 1 tick late" : names[variant],
+        printf("  %-22s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n", variant == 4 ? "our clicks 1 tick late" : variant == 5 ? "late + every meal triple" : names[variant],
             stats.spec_counted, stats.spec_predicted, stats.spec_realized, stats.spec_realized / stats.spec_predicted, stats.sim[7], stats.sim[6]);
     }
 }
