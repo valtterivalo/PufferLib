@@ -131,7 +131,7 @@ typedef struct { int low, high, max; } GsHealthRange;
 typedef struct { int seen, next, earliest; } GsTimer;
 typedef struct { int since; int unseen[16]; int unseen_count; } GsWarning;
 typedef struct { int lands, least, most; double accuracy; } GsSwing;
-typedef struct { GsStyle style; int least, most, cost, interval; double accuracy; } GsAttack;
+typedef struct { GsStyle style; int least, most, cost, interval; double accuracy; int godsword; } GsAttack;
 
 static int gs_beats(int processed, int lands, GsPid pid) {
     return processed < lands || (processed == lands && pid == GS_PID_LOCAL);

@@ -298,7 +298,7 @@ static GsReflect gs_reflect_of_max(int max) { return max >= 40 ? GS_REFLECT_WORT
 
 static GsAttack gs_spec_attack(const GsInfer* s, const GsArmament* a) {
     return (GsAttack){(GsStyle)a->style, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)), gs_protected_damage(&s->c, gs_spec_style(a), a->spec),
-        GS_WEAPON_ROWS[a->weapon].cost, a->interval, gs_spec_accuracy(&s->c, a)};
+        GS_WEAPON_ROWS[a->weapon].cost, a->interval, gs_spec_accuracy(&s->c, a), a->weapon == GS_W_ARMADYL_GODSWORD};
 }
 
 /* AutoEater.localAccuracy */
@@ -657,8 +657,8 @@ static GsTimer gs_timer_view(GsTimerState t, int tick) {
     return (GsTimer){t.seen, t.seen ? gs_next_attack(t, tick) : 0, t.seen ? t.earliest : 0};
 }
 
-static const double GS_VOIDWAKER_CARRIED = 41 / 59.0;
-static const double GS_GRANITE_MAUL_CARRIED = 23 / 59.0;
+static const double GS_VOIDWAKER_CARRIED = (41 + 103) / (59 + 162.0);
+static const double GS_GRANITE_MAUL_CARRIED = (23 + 90) / (59 + 162.0);
 
 static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tolerance, double eat_cost, double stakes, GsEatSituation* out) {
     const GsClient* c = &s->c;

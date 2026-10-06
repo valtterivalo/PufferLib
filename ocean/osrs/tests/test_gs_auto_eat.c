@@ -21,10 +21,11 @@ static GsDecision decision_of(const char* s) { return !strcmp(s, "EAT_NOW") ? GS
 
 static GsAttack read_attack(char** p) {
     GsAttack a;
-    char style[16];
+    char style[16], source[24];
     int n;
-    sscanf(*p, "%15s %d %d %d %d %lf%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, &n);
+    sscanf(*p, "%15s %d %d %d %d %lf %23s%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, source, &n);
     a.style = style_of(style);
+    a.godsword = !strcmp(source, "GODSWORD_SPEC");
     *p += n;
     return a;
 }

@@ -2,12 +2,13 @@
 #define RISKFIGHT_OPP_H
 #include "riskfight_seed.h"
 #include "riskfight_warning.h"
+#include "../gearswapper/gs_wire.h"
 #include <math.h>
 
 /* Fitted opponent policy: six small logistic hazards on aggregate buckets, no per-opponent terms.
  * Every probability is a function of Hist plus the sim state, so one-step probing and rollouts share it. */
 typedef enum { ACT_EAT_BIG, ACT_EAT_WARNING, ACT_SWING, ACT_VW_SPEC, ACT_MAUL_SPEC, ACT_VENGEANCE, ACT_COUNT } Action;
-enum { MAX_DIM = 10, BIG_HIT_DAMAGE = 20, LAG_NONE = 99, ENERGY_FOR_SPEC = 50, RECENT_EAT = 3, FOLLOW_UP = 5 };
+enum { MAX_DIM = 10, BIG_HIT_DAMAGE = 20, LAG_NONE = 99, ENERGY_FOR_SPEC = 50, RECENT_EAT = 3, FOLLOW_UP = 5, LOCK_TICKS = 2 };
 static const int ACTION_DIM[ACT_COUNT] = {9, 9, 5, 4, 2, 1};
 static const char* ACTION_NAME[ACT_COUNT] = {"eat (anchor: big hit)", "eat (anchor: warning)", "swing when ready", "VW spec given swing",
     "maul spec", "Vengeance cast"};
@@ -62,7 +63,7 @@ static void logit_fit(Logit* l, int dim, const Sample* samples, int count) {
 
 static int lag_bin(int lag) { return lag < 1 || lag >= LAG_NONE ? 0 : lag == 1 ? 1 : lag == 2 ? 2 : lag == 3 ? 3 : lag <= 8 ? 4 : 0; }
 static int hp_band4(int hp_bar_ratio) { return hp_bar_ratio <= 8 ? 0 : hp_bar_ratio <= 13 ? 1 : hp_bar_ratio <= 24 ? 2 : 3; }
-static int our_hp_band(int hp) { return hp < 45 ? 0 : hp <= 85 ? 1 : 2; }
+static int our_hp_band(int bar_ratio) { int hp = bar_ratio <= 0 ? 0 : (bar_ratio * 99 + 15) / 30; return hp < 45 ? 0 : hp <= 85 ? 1 : 2; }
 
 static Sparse eat_features(int band, int lag, int warned) {
     Sparse x = {1, {0}};
@@ -82,9 +83,9 @@ static Sparse swing_features(const Hist* h) {
     return x;
 }
 
-static Sparse vw_features(int our_hp, int follow) {
+static Sparse vw_features(int our_bar, int follow) {
     Sparse x = {1, {0}};
-    int b = our_hp_band(our_hp);
+    int b = our_hp_band(our_bar);
     if (b) x.idx[x.n++] = b;
     if (follow) x.idx[x.n++] = 3;
     return x;
@@ -103,84 +104,132 @@ typedef struct {
 
 static int lag_of(int step_tick, int anchor) { return anchor == WARNING_NONE ? LAG_NONE : step_tick - anchor; }
 
-/** What the model would see before the tick `tick` of his decisions, from the sim state s and the history h. */
-static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int kit_vw, int kit_maul) {
-    const Player* him = &s->env.players[1];
-    const Player* us = &s->env.players[0];
+/** What he knows when he decides, all of it readable from his side of a duel: his own bar, the bar of ours he sees, and the history of
+ * what both showed. The fit on spectated duels and the sim build it the same way. */
+typedef struct {
+    int hp_ratio, our_bar_ratio;
+    int vw_ok, maul_ok, veng_ok;
+} HimInputs;
+
+/** The features and the legal actions of the tick `tick` from his inputs and the history after the tick before. */
+static Probe probe_from_inputs(const HimInputs* in, const Hist* h, int tick) {
     Probe p = {{0}};
-    int ratio = osrs_health_bar_ratio(him->current_hitpoints, 99, 30);
-    int lockfree = him->food_timer == 0;
-    p.eligible[ACT_EAT_BIG] = p.eligible[ACT_EAT_WARNING] = lockfree;
-    p.x[ACT_EAT_BIG] = eat_features(hp_band4(ratio), lag_of(tick, h->big_hit_tick), warning_since(&h->warning) != WARNING_NONE);
-    p.x[ACT_EAT_WARNING] = eat_features(hp_band4(ratio), lag_of(tick, warning_since(&h->warning)), warning_since(&h->warning) != WARNING_NONE);
-    p.eligible[ACT_SWING] = him->attack_timer <= 0;
+    p.eligible[ACT_EAT_BIG] = p.eligible[ACT_EAT_WARNING] = h->since_eat >= LOCK_TICKS;
+    int warned = warning_since(&h->warning) != WARNING_NONE;
+    p.x[ACT_EAT_BIG] = eat_features(hp_band4(in->hp_ratio), lag_of(tick, h->big_hit_tick), warned);
+    p.x[ACT_EAT_WARNING] = eat_features(hp_band4(in->hp_ratio), lag_of(tick, warning_since(&h->warning)), warned);
+    p.eligible[ACT_SWING] = h->ready_age > 0;
     p.x[ACT_SWING] = swing_features(h);
-    p.eligible[ACT_VW_SPEC] = kit_vw && him->special_energy >= ENERGY_FOR_SPEC;
+    p.eligible[ACT_VW_SPEC] = in->vw_ok;
     int vw_follow = h->since_vw_spec >= 1 && h->since_vw_spec <= FOLLOW_UP;
-    p.x[ACT_VW_SPEC] = vw_features(us->current_hitpoints, vw_follow);
-    p.eligible[ACT_MAUL_SPEC] = kit_maul && him->special_energy >= ENERGY_FOR_SPEC;
+    p.x[ACT_VW_SPEC] = vw_features(in->our_bar_ratio, vw_follow);
+    p.eligible[ACT_MAUL_SPEC] = in->maul_ok;
     p.x[ACT_MAUL_SPEC] = follow_features(h->since_vw_spec <= 1);
-    p.eligible[ACT_VENGEANCE] = !him->veng_active && him->veng_cooldown <= 0;
+    p.eligible[ACT_VENGEANCE] = in->veng_ok;
     p.x[ACT_VENGEANCE] = (Sparse){1, {0}};
     return p;
 }
 
-typedef struct { int normal, spec; } Reach;
+/** What the sim shows him of himself and of us before tick `tick`. */
+static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int kit_vw, int kit_maul) {
+    const Player* him = &s->env.players[1];
+    HimInputs in = {
+        .hp_ratio = osrs_health_bar_ratio(him->current_hitpoints, 99, 30),
+        .our_bar_ratio = s->visible[1].health_bar,
+        .vw_ok = kit_vw && him->special_energy >= ENERGY_FOR_SPEC,
+        .maul_ok = kit_maul && him->special_energy >= ENERGY_FOR_SPEC,
+        .veng_ok = !him->veng_active && him->veng_cooldown <= 0,
+    };
+    return probe_from_inputs(&in, h, tick);
+}
 
 static int worn_slot_item(const TapeTick* t, int worn) { return t->worn[worn] >= 0 ? raw_id_to_item(t->worn[worn]) : ITEM_NONE; }
 
-/** Max hit of our next swing and of the spec of the weapon, as the sim computes them for the tape's gear and levels. */
-static Reach our_reach(const TapeTick* t) {
-    static Player p;
-    init_player(&p);
-    encounter_init_maxed_player_combat_stats(&p, 99);
-    p.current_attack = t->attack; p.current_strength = t->strength; p.current_defence = t->defence;
-    p.offensive_prayer = t->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
-    for (int i = 0; i < NUM_GEAR_SLOTS; i++) p.equipped[i] = ITEM_NONE;
-    for (int i = 0; i < TAPE_WORN; i++) if (WORN_TO_GEAR[i] >= 0) p.equipped[WORN_TO_GEAR[i]] = (uint8_t)worn_slot_item(t, i);
-    osrs_refresh_player_equipment(&p);
-    int normal = calculate_max_hit(&p, ATTACK_STYLE_MELEE, 1.0f, 30);
-    int weapon = p.equipped[GEAR_SLOT_WEAPON];
-    return (Reach){normal, weapon == ITEM_VOIDWAKER ? osrs_voidwaker_max_hit(normal) : normal};
+/** The kit composition ids (item id plus the client's offset, -1 for none) a viewer reads of a fighter: the nine visible slots, no ring or ammunition. */
+enum { KIT_SLOTS = 12 };
+static void kit_of_equipped(const uint8_t equipped[NUM_GEAR_SLOTS], int kit[KIT_SLOTS]) {
+    static const int GEAR_OF_KIT[KIT_SLOTS] = {GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_WEAPON, GEAR_SLOT_BODY, GEAR_SLOT_SHIELD, -1,
+        GEAR_SLOT_LEGS, -1, GEAR_SLOT_HANDS, GEAR_SLOT_FEET, -1};
+    for (int k = 0; k < KIT_SLOTS; k++) kit[k] = GEAR_OF_KIT[k] < 0 || equipped[GEAR_OF_KIT[k]] == ITEM_NONE ? -1 : ITEM_DATABASE[equipped[GEAR_OF_KIT[k]]].item_id + GS_ITEM_OFFSET;
+}
+
+/** The most the visible weapon can hit for, as a viewer who knows nothing of its wielder's levels or energy reads it: the plugin's assumed
+ * levels and gear, the spec if the weapon has one. 0 when the weapon's stats are unknown. */
+static int assumed_reach(const int kit[KIT_SLOTS], int weapon, int* has_spec) {
+    GsClient c = {0};
+    c.equipment_count = KIT_SLOTS;
+    memcpy(c.equipment, kit, sizeof(int) * KIT_SLOTS);
+    GsArmament a;
+    *has_spec = 0;
+    if (!gs_armed(&c, weapon, &a)) return 0;
+    *has_spec = GS_WEAPON_ROWS[a.weapon].cost > 0;
+    return *has_spec && a.has_spec ? a.spec : a.normal;
+}
+
+/** One tick of what the other side showed of this fighter. */
+typedef struct {
+    int ate_visible, ate, animated, hits, damage;
+    int bar_ratio, bar_scale;
+    int weapon, has_spec, reach;
+    int swing, vw, maul;
+    int ready;
+} HistInput;
+
+static Hist hist_start(void) {
+    return (Hist){.big_hit_tick = WARNING_NONE, .since_eat = 99, .since_vw_spec = 99, .since_maul_spec = 99, .warning = warning_start(), .last_swing_tick = -100};
+}
+
+/** Moves the history of a fighter one tick on. `ate` is his own knowledge of his meals, `ate_visible` the 829 the viewer saw. */
+static void hist_update(Hist* h, int tick, const HistInput* in) {
+    h->since_eat = in->ate ? 0 : h->since_eat + 1;
+    h->since_vw_spec = in->vw ? 0 : h->since_vw_spec + 1;
+    h->since_maul_spec = in->maul ? 0 : h->since_maul_spec + 1;
+    if (in->swing) h->last_swing_tick = tick;
+    h->ready_age = in->ready ? h->ready_age + 1 : 0;
+    if (in->damage >= BIG_HIT_DAMAGE) h->big_hit_tick = tick;
+    if (in->ate_visible) warning_ate(&h->warning, tick);
+    if (in->animated) warning_animated(&h->warning, tick);
+    if (in->hits) warning_hitsplat(&h->warning);
+    if (in->damage) warning_struck(&h->warning, tick, in->damage);
+    warning_observe(&h->warning, tick, in->bar_ratio, in->bar_scale, in->weapon, in->has_spec, in->reach);
 }
 
 static int attack_hitsplat(int type) { return type == 16 || type == 17 || type == 43; }
 
 /** Hist after each tape tick lo..hi, from his animations, the hitsplats on him and the bar as shown. */
 static void hist_series(const Tape* tape, Hist* out) {
-    Hist h = {.big_hit_tick = WARNING_NONE, .since_eat = 99, .since_vw_spec = 99, .since_maul_spec = 99, .warning = warning_start(), .last_swing_tick = -100};
+    Hist h = hist_start();
     int ready_age = 0;
     for (int x = tape->lo; x <= tape->hi; x++) {
         const TapeTick* t = tape_tick(tape, x);
-        int ate = 0, vw = 0, maul = 0;
+        HistInput in = {.bar_ratio = t->bar_now_ratio, .bar_scale = t->bar_now_scale};
+        int other_anim = 0;
         for (int i = 0; i < tape->anim_count; i++) {
             const TapeAnim* a = &tape->anims[i];
             if (a->tick != x || a->side != SIDE_HIM) continue;
-            ate |= a->anim == ANIM_EAT;
-            vw |= a->anim == ANIM_VW_SPEC;
-            maul |= a->anim == ANIM_MAUL_SPEC;
+            in.ate |= a->anim == ANIM_EAT;
+            in.vw |= a->anim == ANIM_VW_SPEC;
+            in.maul |= a->anim == ANIM_MAUL_SPEC;
+            other_anim |= a->anim != ANIM_EAT;
         }
-        h.since_eat = ate ? 0 : h.since_eat + 1;
-        h.since_vw_spec = vw ? 0 : h.since_vw_spec + 1;
-        h.since_maul_spec = maul ? 0 : h.since_maul_spec + 1;
-        if (ate) warning_ate(&h.warning, x);
-        int other_anim = 0;
-        for (int i = 0; i < tape->anim_count; i++)
-            other_anim |= tape->anims[i].tick == x && tape->anims[i].side == SIDE_HIM && tape->anims[i].anim != ANIM_EAT;
-        if (other_anim) warning_animated(&h.warning, x);
+        in.ate_visible = in.ate;
+        in.animated = other_anim;
         for (int i = 0; i < tape->hit_count; i++) {
             const TapeHit* hit = &tape->hits[i];
             if (hit->tick != x || hit->side != SIDE_HIM) continue;
-            warning_hitsplat(&h.warning);
-            if (attack_hitsplat(hit->type)) warning_struck(&h.warning, x, hit->amount);
-            if (hit->amount >= BIG_HIT_DAMAGE) h.big_hit_tick = x;
+            in.hits++;
+            if (attack_hitsplat(hit->type)) in.damage += hit->amount;
         }
-        int weapon = worn_slot_item(t, 3);
-        int has_spec = weapon == ITEM_VOIDWAKER || pvp_is_maul(weapon);
-        Reach reach = our_reach(t);
-        int energy_ok = t->spec_us >= ENERGY_FOR_SPEC;
-        warning_observe(&h.warning, x, t->bar_now_ratio, t->bar_now_scale, weapon, has_spec, has_spec && energy_ok ? reach.spec : reach.normal);
+        uint8_t equipped[NUM_GEAR_SLOTS];
+        for (int i = 0; i < NUM_GEAR_SLOTS; i++) equipped[i] = ITEM_NONE;
+        for (int i = 0; i < TAPE_WORN; i++) if (WORN_TO_GEAR[i] >= 0) equipped[WORN_TO_GEAR[i]] = (uint8_t)worn_slot_item(t, i);
+        int kit[KIT_SLOTS];
+        kit_of_equipped(equipped, kit);
+        in.weapon = t->worn[3];
+        in.reach = assumed_reach(kit, in.weapon, &in.has_spec);
         ready_age = replay_attack_timer(tape, SIDE_HIM, x) <= 0 ? ready_age + 1 : 0;
+        in.ready = ready_age > 0;
+        hist_update(&h, x, &in);
         h.ready_age = ready_age;
         out[x - tape->lo] = h;
     }
@@ -200,28 +249,20 @@ static int has_maul(const RiskfightState* s, int agent) {
 }
 
 typedef struct { int ate_visible, ate, swung, vw, maul, damage_on_him, max_hit_on_him, hit_on_him; } StepEvents;
+static int raw_of_item_id(uint8_t item) { return item == ITEM_NONE ? -1 : ITEM_DATABASE[item].item_id; }
 
 /** Moves the history one sim step on. tick is the tape tick the step covered. */
 static void hist_step(Hist* h, RiskfightState* s, int tick, const StepEvents* e) {
     const Player* him = &s->env.players[1];
-    h->since_eat = e->ate ? 0 : h->since_eat + 1;
-    h->since_vw_spec = e->vw ? 0 : h->since_vw_spec + 1;
-    h->since_maul_spec = e->maul ? 0 : h->since_maul_spec + 1;
-    if (e->swung) h->last_swing_tick = tick;
-    h->ready_age = him->attack_timer <= 0 ? h->ready_age + 1 : 0;
-    if (e->max_hit_on_him >= BIG_HIT_DAMAGE) h->big_hit_tick = tick;
-    if (e->ate_visible) warning_ate(&h->warning, tick);
-    if (e->swung || e->hit_on_him) warning_animated(&h->warning, tick);
-    if (e->hit_on_him) warning_hitsplat(&h->warning);
-    if (e->damage_on_him) warning_struck(&h->warning, tick, e->damage_on_him);
-    Player* us = &s->env.players[0];
-    int weapon = us->equipped[GEAR_SLOT_WEAPON];
-    int has_spec = weapon == ITEM_VOIDWAKER || pvp_is_maul(weapon);
-    int normal = calculate_max_hit(us, ATTACK_STYLE_MELEE, 1.0f, 30);
-    int spec = weapon == ITEM_VOIDWAKER ? osrs_voidwaker_max_hit(normal) : normal;
-    int ratio = s->visible[0].health_bar;
-    warning_observe(&h->warning, tick, ratio, OSRS_PLAYER_HEALTH_BAR_SCALE, weapon, has_spec,
-        has_spec && us->special_energy >= ENERGY_FOR_SPEC ? spec : normal);
+    const Player* us = &s->env.players[0];
+    HistInput in = {.ate_visible = e->ate_visible, .ate = e->ate, .animated = e->swung || e->hit_on_him, .hits = e->hit_on_him, .damage = e->damage_on_him,
+        .bar_ratio = s->visible[0].health_bar, .bar_scale = OSRS_PLAYER_HEALTH_BAR_SCALE, .swing = e->swung, .vw = e->vw, .maul = e->maul,
+        .ready = him->attack_timer <= 0};
+    int kit[KIT_SLOTS];
+    kit_of_equipped(us->equipped, kit);
+    in.weapon = raw_of_item_id(us->equipped[GEAR_SLOT_WEAPON]);
+    in.reach = assumed_reach(kit, in.weapon, &in.has_spec);
+    hist_update(h, tick, &in);
 }
 
 static const float SERVING_SHARES[4] = {0.15f, 0.34f, 0.34f, 0.17f};

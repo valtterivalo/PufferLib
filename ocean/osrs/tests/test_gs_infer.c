@@ -91,8 +91,9 @@ static void format_inference(GsInfer* s, int tick, char* out) {
         sprintf(out + strlen(out), " %s cost %d", gs_weapon_reflect(s, tick) == GS_REFLECT_WORTH ? "WORTH" : "WEAK", gs_opponent_spec_cost(s));
 }
 
-static void format_attack(char* out, const char* tag, const GsAttack* a) {
-    sprintf(out + strlen(out), "%s %s %d %d %d %d %.17g\n", tag, STYLE_NAMES[a->style], a->least, a->most, a->cost, a->interval, a->accuracy);
+static void format_attack(char* out, const char* tag, const GsAttack* a, int maul) {
+    sprintf(out + strlen(out), "%s %s %d %d %d %d %.17g %s\n", tag, STYLE_NAMES[a->style], a->least, a->most, a->cost, a->interval, a->accuracy,
+        maul ? "MAUL" : a->godsword ? "GODSWORD_SPEC" : "SPEC");
 }
 
 static void format_situation(const GsEatSituation* s, char* out) {
@@ -105,12 +106,12 @@ static void format_situation(const GsEatSituation* s, char* out) {
     if (s->local_timer.seen) sprintf(out + strlen(out), "LT 1 %d %d\n", s->local_timer.next, s->local_timer.earliest);
     else sprintf(out + strlen(out), "LT 0 0 %d\n", s->tick + 1);
     sprintf(out + strlen(out), "OH %d %d %d\n", s->opponent_hp.low, s->opponent_hp.high, s->opponent_hp.max);
-    for (int i = 0; i < s->attack_count; i++) format_attack(out, "OA", &s->attacks[i]);
-    if (s->has_maul) format_attack(out, "GM", &s->maul);
+    for (int i = 0; i < s->attack_count; i++) format_attack(out, "OA", &s->attacks[i], 0);
+    if (s->has_maul) format_attack(out, "GM", &s->maul, 1);
     for (int i = 0; i < s->hidden_count; i++) {
         sprintf(out + strlen(out), "HID %d ", s->hidden[i].is_maul);
         char one[256] = "";
-        format_attack(one, "", &s->hidden[i].attack);
+        format_attack(one, "", &s->hidden[i].attack, s->hidden[i].is_maul);
         one[strlen(one) - 1] = 0;
         sprintf(out + strlen(out), "%s %.17g\n", one + 1, s->hidden[i].probability);
     }

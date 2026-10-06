@@ -11,6 +11,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <time.h>
 #include "riskfight_rollout.h"
+#include "riskfight_spectator.h"
 
 enum { MAX_TAPES = 64, METRICS = 11, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
     FIT_SAMPLES = 4, SCORE_SAMPLES = 16, PROFILE_SAMPLES = 64, BIG_HIT_EPISODE = 30, REARM_TICKS = 4, MARGIN = 10 };
@@ -220,16 +221,17 @@ static void print_score(const char* action, const Score* model, const Score* pro
             model->rel_p[b] / model->rel_n[b], model->rel_y[b] / model->rel_n[b]);
 }
 
-static void teacher(Tape* tapes, int count, int train_day, int test_day) {
-    static OppFit fit;
-    memset(&fit, 0, sizeof(fit));
-    fit_default_servings(&fit);
-    fit_model(tapes, count, train_day, &fit);
-    int eats, identified[2];
-    infer_servings(tapes, count, train_day, &fit, &eats, identified);
-    char title[128];
-    snprintf(title, sizeof(title), "=== teacher forcing: fit on day %d, score on day %d", train_day, test_day);
-    print_fit(title, &fit, eats, identified);
+/* GS_FIT=path replaces the fit on our own tapes with a saved one, the opponent fitted on spectated duels. */
+static void fit_override(OppFit* fit) {
+    const char* path = getenv("GS_FIT");
+    if (!path) return;
+    FILE* f = fopen(path, "rb");
+    assert(f && fread(fit, sizeof(*fit), 1, f) == 1);
+    fclose(f);
+}
+
+static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test_day) {
+    const OppFit fit = *fit_in;
     static Score fitted[ACT_COUNT], profiles[ACT_COUNT];
     memset(fitted, 0, sizeof(fitted));
     memset(profiles, 0, sizeof(profiles));
@@ -272,6 +274,20 @@ static void teacher(Tape* tapes, int count, int train_day, int test_day) {
     for (int a = 0; a < ACT_COUNT; a++)
         print_score(ACTION_NAME[a], &fitted[a], &profiles[a], (double)fit.logit[a].events / fit.logit[a].opportunities);
     free(sim);
+}
+
+static void teacher(Tape* tapes, int count, int train_day, int test_day) {
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    fit_model(tapes, count, train_day, &fit);
+    int eats, identified[2];
+    infer_servings(tapes, count, train_day, &fit, &eats, identified);
+    fit_override(&fit);
+    char title[128];
+    snprintf(title, sizeof(title), "=== teacher forcing: fit on day %d, score on day %d", train_day, test_day);
+    print_fit(title, &fit, eats, identified);
+    teacher_score(tapes, count, &fit, test_day);
 }
 
 /* ---------- k-tick rollouts ---------- */
@@ -453,6 +469,7 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
     fit_model(tapes, count, train_day, &fit_big);
     int eats, identified[2];
     infer_servings(tapes, count, train_day, &fit_big, &eats, identified);
+    fit_override(&fit_big);
     fit_big.eat_action = ACT_EAT_BIG;
     fit_warning = fit_big;
     fit_warning.eat_action = ACT_EAT_WARNING;
@@ -486,6 +503,7 @@ static void attribute(int n, int k, Tape* tapes, int count, int train_day, int t
     fit_model(tapes, count, train_day, &fit);
     int eats, identified[2];
     infer_servings(tapes, count, train_day, &fit, &eats, identified);
+    fit_override(&fit);
     fit.eat_action = ACT_EAT_WARNING;
     heavy = fit;
     for (int w = 0; w < 2; w++) { heavy.serving[w][0] = heavy.serving[w][1] = heavy.serving[w][2] = 0; heavy.serving[w][3] = 1; }
@@ -518,6 +536,7 @@ static void ablate(int n, int k, Tape* tapes, int count, int train_day, int test
     fit_model(tapes, count, train_day, &fit);
     int eats, identified[2];
     infer_servings(tapes, count, train_day, &fit, &eats, identified);
+    fit_override(&fit);
     fit.eat_action = ACT_EAT_WARNING;
     OppModel model = {MODEL_FIT, &fit};
     static const struct { const char* name; int truth; } variants[] = {
@@ -571,14 +590,155 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
     free(sim);
 }
 
+/* ---------- the opponent fitted on spectated duels ---------- */
+
+static SpecCorpus corpus;
+static SpecTick* spec_ticks[2048];
+
+static void spec_prepare(void) {
+    assert(corpus.count <= 2048);
+    for (int i = 0; i < corpus.count; i++) {
+        spec_ticks[i] = malloc((size_t)corpus.duels[i].row_count * 2 * sizeof(SpecTick));
+        for (int side = 0; side < 2; side++) spec_series(&corpus.duels[i], side, spec_ticks[i] + side * corpus.duels[i].row_count);
+    }
+}
+
+/* the hazards of one fighter's ticks, one sample per tick for each action he could take; skip: the session held out */
+static void spec_samples(int session_in, int session_out, SampleSet sets[ACT_COUNT]) {
+    for (int i = 0; i < corpus.count; i++) {
+        const SpecDuel* d = &corpus.duels[i];
+        if ((session_in >= 0 && d->session != session_in) || d->session == session_out) continue;
+        for (int side = 0; side < 2; side++) {
+            const SpecTick* series = spec_ticks[i] + side * d->row_count;
+            for (int r = 1; r < d->row_count; r++) {
+                if (d->rows[r].third) continue;
+                Probe probe = probe_from_inputs(&series[r - 1].in, &series[r - 1].h, d->rows[r].tick);
+                int labels = series[r].labels;
+                int flags = (labels & SPEC_EAT ? FLAG_EAT : 0) | (labels & SPEC_SWING ? FLAG_SWING : 0) | (labels & SPEC_VW ? FLAG_VW : 0) |
+                    (labels & SPEC_MAUL ? FLAG_MAUL : 0) | (labels & SPEC_VENG ? FLAG_VENG : 0);
+                for (int a = 0; a < ACT_COUNT; a++) {
+                    Conditioned c = conditioned((Action)a, &probe, flags);
+                    if (!c.eligible) continue;
+                    SampleSet* set = &sets[a];
+                    for (int copy = 0; copy < FIT_SAMPLES; copy++) {
+                        if (set->count == set->capacity) {
+                            set->capacity = set->capacity ? set->capacity * 2 : 4096;
+                            set->samples = realloc(set->samples, set->capacity * sizeof(Sample));
+                        }
+                        set->samples[set->count++] = (Sample){probe.x[a], (float)c.y, 1.0f / FIT_SAMPLES};
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Meal size from the heal the bar showed: one hard food, a second food, or three. */
+static void spec_servings(int session_out, OppFit* fit, int identified[2]) {
+    int counts[2][3] = {{0}};
+    for (int i = 0; i < corpus.count; i++) {
+        const SpecDuel* d = &corpus.duels[i];
+        if (d->session == session_out) continue;
+        for (int side = 0; side < 2; side++) {
+            const SpecTick* series = spec_ticks[i] + side * d->row_count;
+            for (int r = 1; r < d->row_count; r++) {
+                const SpecSide* x = &d->rows[r].s[side];
+                if (d->rows[r].third || (x->meal != MEAL_EAT && x->meal != MEAL_HIDDEN) || x->meal_heal < 0) continue;
+                int warned = warning_since(&series[r - 1].h.warning) != WARNING_NONE;
+                counts[warned][x->meal_heal < SERVING_SINGLE_MAX ? 0 : x->meal_heal < SERVING_DOUBLE_MAX ? 1 : 2]++;
+            }
+        }
+    }
+    for (int w = 0; w < 2; w++) {
+        int total = counts[w][0] + counts[w][1] + counts[w][2];
+        identified[w] = total;
+        if (!total) continue;
+        fit->serving[w][0] = (float)counts[w][0] / total;
+        fit->serving[w][1] = fit->serving[w][2] = (float)counts[w][1] / total / 2;
+        fit->serving[w][3] = (float)counts[w][2] / total;
+        for (int k = 0; k < 3; k++) fit->served[w][k] = counts[w][k];
+    }
+}
+
+static void spec_fit(int session_out, OppFit* fit, int identified[2]) {
+    static SampleSet sets[ACT_COUNT];
+    for (int a = 0; a < ACT_COUNT; a++) sets[a].count = 0;
+    spec_samples(-1, session_out, sets);
+    memset(fit, 0, sizeof(*fit));
+    fit_default_servings(fit);
+    for (int a = 0; a < ACT_COUNT; a++) logit_fit(&fit->logit[a], ACTION_DIM[a], sets[a].samples, sets[a].count);
+    fit->eat_action = ACT_EAT_WARNING;
+    spec_servings(session_out, fit, identified);
+}
+
+static void spec_score(const OppFit* fit, int session, Score scores[ACT_COUNT]) {
+    static SampleSet sets[ACT_COUNT];
+    for (int a = 0; a < ACT_COUNT; a++) sets[a].count = 0;
+    spec_samples(session, -1, sets);
+    memset(scores, 0, ACT_COUNT * sizeof(Score));
+    for (int a = 0; a < ACT_COUNT; a++)
+        for (int i = 0; i < sets[a].count; i += FIT_SAMPLES) {
+            const Sample* sample = &sets[a].samples[i];
+            score_add(&scores[a], logit_p(&fit->logit[a], &sample->x), sample->y > 0);
+        }
+}
+
+static void fit_save(const char* path, const OppFit* fit) {
+    FILE* f = fopen(path, "wb");
+    assert(f && fwrite(fit, sizeof(*fit), 1, f) == 1);
+    fclose(f);
+}
+
+static int fit_load(const char* path, OppFit* fit) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    assert(fread(fit, sizeof(*fit), 1, f) == 1);
+    fclose(f);
+    return 1;
+}
+
+/* Fit on two spectated sessions, score on the third, for each; then fit on all and test on our own fights. */
+static void spectator(Tape* tapes, int count, const char* save) {
+    spec_prepare();
+    printf("=== opponent fitted on %d spectated duels in %d sessions ===\n", corpus.count, corpus.session_count);
+    for (int out = 0; out < corpus.session_count; out++) {
+        static OppFit fit;
+        int identified[2];
+        spec_fit(out, &fit, identified);
+        static Score scores[ACT_COUNT];
+        spec_score(&fit, out, scores);
+        static OppFit base;
+        printf("held out session %s (fit on the others)\n", corpus.sessions[out]);
+        for (int a = 0; a < ACT_COUNT; a++) {
+            const Score* sc = &scores[a];
+            if (!sc->n) continue;
+            double rate = sc->y / sc->n, train_rate = (double)fit.logit[a].events / fit.logit[a].opportunities;
+            double constant = -sc->n * (rate * log(clip(train_rate)) + (1 - rate) * log(1 - clip(train_rate)));
+            printf("  %-24s %6.0f ticks %4.0f events rate %.3f (train %.3f)  logloss/tick %.4f const %.4f (%+.1f%%)\n", ACTION_NAME[a], sc->n, sc->y, rate, train_rate,
+                sc->logloss / sc->n, constant / sc->n, 100 * (constant - sc->logloss) / constant);
+        }
+        (void)base;
+    }
+    static OppFit all;
+    int identified[2];
+    spec_fit(-1, &all, identified);
+    print_fit("=== fit on all spectated sessions", &all, 0, identified);
+    if (save) { fit_save(save, &all); printf("saved the fit to %s\n", save); }
+    for (int day = 20261005; day <= 20261006; day++) {
+        printf("=== transfer: spectator fit scored on our own fights of day %d\n", day);
+        teacher_score(tapes, count, &all, day);
+    }
+}
+
 int main(int argc, char** argv) {
-    assert(argc >= 5);
+    assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
     const char* mode = argv[1];
-    int first = !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
+    int first = !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
-    if (!strcmp(mode, "teacher")) teacher(tapes, count, atoi(argv[2]), atoi(argv[3]));
+    if (!strcmp(mode, "spectator")) { spec_load(&corpus, argv[2]); spectator(tapes, count, argv[3]); }
+    else if (!strcmp(mode, "teacher")) teacher(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "ablate")) ablate(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));

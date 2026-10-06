@@ -40,7 +40,7 @@ typedef struct {
 
 typedef struct { GsDecision decision; double risk, meal_risk; int foods[GS_MAX_MEAL], food_count, complete; } GsVerdict;
 
-typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
+typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_GODSWORD_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
 typedef struct { GsSource source; int tick, least, most; double accuracy; } GsHit;
 typedef struct { GsHit* hits; int count; } GsScenario;
 typedef struct { int tick, amount; } GsHeal;
@@ -288,17 +288,20 @@ static GsEvaluation eat_odds(Arena* arena, GsHit* hits, int hit_count, const GsV
     return (GsEvaluation){dead, useful, waste};
 }
 
-typedef enum { COMBO_NONE, COMBO_SPEC_THEN_MAUL, COMBO_MAUL_THEN_SPEC, COMBO_SPEC_THEN_SPEC, COMBOS } GsCombo;
-static const double GS_COMBO_EXECUTED[COMBOS] = {1, 12 / 93.0, 2 / 38.0, 14 / 93.0};
+typedef enum { COMBO_NONE, COMBO_SPEC_THEN_MAUL, COMBO_MAUL_THEN_SPEC, COMBO_SPEC_THEN_SPEC, COMBO_GODSWORD_THEN_MAUL, COMBOS } GsCombo;
+static const double GS_COMBO_EXECUTED[COMBOS] = {1, 27 / 314.0, 21 / 219.0, 38 / 314.0, 12 / 50.0};
 
 static GsCombo eat_combo_of(const GsHit* hits, int count) {
     for (int m = 0; m < count; m++) {
         if (hits[m].source != SRC_MAUL) continue;
         for (int p = 0; p < count; p++)
-            if (hits[p].source == SRC_SPEC && abs(hits[p].tick - hits[m].tick) <= 1) return hits[p].tick <= hits[m].tick ? COMBO_SPEC_THEN_MAUL : COMBO_MAUL_THEN_SPEC;
+            if ((hits[p].source == SRC_SPEC || hits[p].source == SRC_GODSWORD_SPEC) && abs(hits[p].tick - hits[m].tick) <= 1) {
+                if (hits[p].tick > hits[m].tick) return COMBO_MAUL_THEN_SPEC;
+                return hits[p].source == SRC_GODSWORD_SPEC ? COMBO_GODSWORD_THEN_MAUL : COMBO_SPEC_THEN_MAUL;
+            }
     }
     int specs = 0;
-    for (int i = 0; i < count; i++) specs += hits[i].source == SRC_SPEC;
+    for (int i = 0; i < count; i++) specs += hits[i].source == SRC_SPEC || hits[i].source == SRC_GODSWORD_SPEC;
     return specs >= 2 ? COMBO_SPEC_THEN_SPEC : COMBO_NONE;
 }
 
@@ -383,7 +386,7 @@ static void eat_regulars(Arena* arena, const GsEatSituation* s, int due, int ene
             GsHit next[GS_MAX_HITS];
             assert(hit_count + 1 <= GS_MAX_HITS);
             memcpy(next, hits, (size_t)hit_count * sizeof(GsHit));
-            next[hit_count] = (GsHit){attack->cost == 0 ? SRC_NORMAL : SRC_SPEC, at, attack->least, attack->most, attack->accuracy};
+            next[hit_count] = (GsHit){attack->cost == 0 ? SRC_NORMAL : attack->godsword ? SRC_GODSWORD_SPEC : SRC_SPEC, at, attack->least, attack->most, attack->accuracy};
             eat_regulars(arena, s, started + attack->interval, energy - attack->cost, next, hit_count + 1, mauled, mauled_count, horizon, schedule, heals, scenarios);
         }
         (void)mark;
