@@ -88,6 +88,7 @@ static const GenConsumable GEN_CONSUMABLES[] = {
     {22081, OSRS_CLICK_SELF_DAMAGE, OSRS_CONSUMABLE_LOCATOR_ORB, 0},
     {8013, OSRS_CLICK_TELEPORT, OSRS_CONSUMABLE_TELEPORT, 0},
     {24621, OSRS_CLICK_NONE, OSRS_CONSUMABLE_VENGEANCE_SACK, 0},
+    {13441, OSRS_CLICK_EAT, OSRS_CONSUMABLE_ANGLERFISH, 0},
 };
 
 #define GEN_CONSUMABLE_COUNT \
@@ -95,17 +96,23 @@ static const GenConsumable GEN_CONSUMABLES[] = {
 #define GEN_GEAR_BASE 1
 #define GEN_LEGACY_ITEMS 144
 #define GEN_LEGACY_CONSUMABLES 55
+#define GEN_FROZEN_ITEMS 147
+#define GEN_FROZEN_CONSUMABLES 63
+#define GEN_FROZEN_COUNT 212
 #define GEN_CONSUMABLE_BASE 145
 #define GEN_INERT_CODE 200
-#define GEN_CONTENT_COUNT (201 + NUM_ITEMS - GEN_LEGACY_ITEMS + GEN_CONSUMABLE_COUNT - GEN_LEGACY_CONSUMABLES)
+#define GEN_CONTENT_COUNT (GEN_FROZEN_COUNT + NUM_ITEMS - GEN_FROZEN_ITEMS + GEN_CONSUMABLE_COUNT - GEN_FROZEN_CONSUMABLES)
 
 static int gear_code(int index) {
-    return index < GEN_LEGACY_ITEMS ? index + 1 : 201 + index - GEN_LEGACY_ITEMS;
+    return index < GEN_LEGACY_ITEMS ? index + 1
+        : index < GEN_FROZEN_ITEMS ? 201 + index - GEN_LEGACY_ITEMS
+        : GEN_FROZEN_COUNT + index - GEN_FROZEN_ITEMS;
 }
 
 static int consumable_code(int index) {
     return index < GEN_LEGACY_CONSUMABLES ? GEN_CONSUMABLE_BASE + index
-        : 201 + NUM_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES;
+        : index < GEN_FROZEN_CONSUMABLES ? 201 + GEN_FROZEN_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES
+        : GEN_FROZEN_COUNT + NUM_ITEMS - GEN_FROZEN_ITEMS + index - GEN_FROZEN_CONSUMABLES;
 }
 
 static FILE* open_or_die(const char* path) {
@@ -264,8 +271,11 @@ static void write_content_rows(FILE* out) {
     emit_content_row(out, GEN_INERT_CODE, "NULL", ITEM_NONE,
         GEN_INERT_RAW_OSRS_ID, -1, OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE,
         0, 0, 0, row, 0);
-    for (int i = GEN_LEGACY_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
-    for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
+    for (int i = GEN_LEGACY_ITEMS; i < GEN_FROZEN_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_FROZEN_CONSUMABLES; i++)
+        emit_consumable_row(out, i);
+    for (int i = GEN_FROZEN_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_FROZEN_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
         emit_consumable_row(out, i);
 }
 

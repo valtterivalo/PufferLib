@@ -100,8 +100,9 @@ static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp,
     if (heal <= 0) return r;
 
     if (type == FOOD_ANGLERFISH) {
+        int room = max_hp + heal - current_hp;
         r.consumed = 1;
-        r.hp_healed = heal;
+        r.hp_healed = room < heal ? (room > 0 ? room : 0) : heal;
         return r;
     }
 

@@ -1742,6 +1742,7 @@ static void gui_populate_inventory(GuiState* gs, Player* p) {
         gs->inv_grid[cell].osrs_id = metadata->raw_osrs_id;
         switch ((OsrsConsumableKind)metadata->consumable_kind) {
             case OSRS_CONSUMABLE_SHARK_FOOD:
+            case OSRS_CONSUMABLE_ANGLERFISH:
                 gs->inv_grid[cell].type = INV_SLOT_FOOD;
                 break;
             case OSRS_CONSUMABLE_KARAMBWAN:

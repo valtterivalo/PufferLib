@@ -149,7 +149,10 @@ typedef enum {
     ITEM_DHAROKS_PLATEBODY = 144,
     ITEM_DHAROKS_GREATAXE = 145,
     ITEM_GRANITE_MAUL_ORNATE = 146,
-    NUM_ITEMS = 147,
+    ITEM_DRAGON_SCIMITAR = 147,
+    ITEM_AMULET_OF_STRENGTH = 148,
+    ITEM_DRAGON_BOOTS = 149,
+    NUM_ITEMS = 150,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1485,6 +1488,22 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .item_id = 24225, .name = "Granite maul (ornate handle)", .slot = SLOT_WEAPON,
         .two_handed = 1, .attack_speed = 7, .attack_range = 1,
         .attack_crush = 81, .melee_strength = 79
+    },
+    [ITEM_DRAGON_SCIMITAR] = {
+        .item_id = 4587, .name = "Dragon scimitar", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 1,
+        .attack_stab = 8, .attack_slash = 67, .attack_crush = -2,
+        .defence_slash = 1, .melee_strength = 66
+    },
+    [ITEM_AMULET_OF_STRENGTH] = {
+        .item_id = 1725, .name = "Amulet of strength", .slot = SLOT_NECK,
+        .melee_strength = 10
+    },
+    [ITEM_DRAGON_BOOTS] = {
+        .item_id = 11840, .name = "Dragon boots", .slot = SLOT_FEET,
+        .attack_magic = -3, .attack_ranged = -1,
+        .defence_stab = 16, .defence_slash = 17, .defence_crush = 18,
+        .melee_strength = 4
     },
 
 };

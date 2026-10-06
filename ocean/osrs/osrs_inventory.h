@@ -43,7 +43,8 @@ typedef enum {
     OSRS_CONSUMABLE_LOCATOR_ORB = 21,
     OSRS_CONSUMABLE_TELEPORT = 22,
     OSRS_CONSUMABLE_VENGEANCE_SACK = 23,
-    OSRS_CONSUMABLE_COUNT = 24,
+    OSRS_CONSUMABLE_ANGLERFISH = 24,
+    OSRS_CONSUMABLE_COUNT = 25,
 } OsrsConsumableKind;
 
 #include "osrs_item_obs_generated.h"
@@ -122,7 +123,8 @@ static inline uint16_t osrs_inventory_content_code_from_item(uint8_t item_idx) {
         abort();
     }
     return item_idx < 144 ? (uint16_t)(1 + item_idx)
-        : (uint16_t)(201 + item_idx - 144);
+        : item_idx < 147 ? (uint16_t)(201 + item_idx - 144)
+        : (uint16_t)(212 + item_idx - 147);
 }
 
 #define OSRS_RAW_CONTENT_CODE_CASE( \

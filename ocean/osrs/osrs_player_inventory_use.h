@@ -92,6 +92,7 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
                 case OSRS_CONSUMABLE_HALIBUT: food = FOOD_HALIBUT; break;
                 case OSRS_CONSUMABLE_SUMMER_PIE: food = FOOD_SUMMER_PIE; break;
                 case OSRS_CONSUMABLE_SHARK_FOOD: food = FOOD_SHARK; break;
+                case OSRS_CONSUMABLE_ANGLERFISH: food = FOOD_ANGLERFISH; break;
                 case OSRS_CONSUMABLE_KARAMBWAN: food = FOOD_KARAMBWAN; break;
                 default: abort();
             }

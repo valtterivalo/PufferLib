@@ -78,6 +78,7 @@ static inline int item_supports_ancient_autocast(uint8_t item_index) {
 static inline int get_item_attack_style(uint8_t item_index) {
     switch (item_index) {
         case ITEM_WHIP:
+        case ITEM_DRAGON_SCIMITAR:
         case ITEM_DRAGON_DAGGER:
         case ITEM_GHRAZI_RAPIER:
         case ITEM_INQUISITORS_MACE:

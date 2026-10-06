@@ -97,6 +97,7 @@ static inline OsrsConsumableKind6 col_consumable_kind6(OsrsConsumableKind k) {
         case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
         case OSRS_CONSUMABLE_STAMINA:         return COL_CKIND6_SPECIAL;
         case OSRS_CONSUMABLE_SHARK_FOOD:
+        case OSRS_CONSUMABLE_ANGLERFISH:
         case OSRS_CONSUMABLE_KARAMBWAN:       return COL_CKIND6_FOOD;
         case OSRS_CONSUMABLE_MARLIN:
         case OSRS_CONSUMABLE_HALIBUT:
@@ -120,6 +121,7 @@ static inline int osrs_consumable_hp_heal_amount(OsrsConsumableKind k, int base_
         case OSRS_CONSUMABLE_LOCATOR_ORB: return -10;
         case OSRS_CONSUMABLE_BREW:       return osrs_brew_heal_amount(base_hp);
         case OSRS_CONSUMABLE_SHARK_FOOD: return osrs_food_heal_amount(FOOD_SHARK);
+        case OSRS_CONSUMABLE_ANGLERFISH: return osrs_food_heal_amount(FOOD_ANGLERFISH);
         case OSRS_CONSUMABLE_KARAMBWAN:  return osrs_food_heal_amount(FOOD_KARAMBWAN);
         default:                         return 0;
     }
