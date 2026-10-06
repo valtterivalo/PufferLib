@@ -142,7 +142,7 @@ static void riskfight_write_action_mask(const RiskfightState* s, int agent, unsi
             if (m->gear_slot == GEAR_SLOT_SHIELD) shield_slot = slot;
         }
         if (m->click_action == OSRS_CLICK_EAT) {
-            int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT ? RF_COMBO : RF_FOOD;
+            int head = m->consumable_kind == OSRS_CONSUMABLE_HALIBUT || m->consumable_kind == OSRS_CONSUMABLE_KARAMBWAN ? RF_COMBO : RF_FOOD;
             heads[head][slot + 1] = osrs_can_eat_consumable_kind(p, (OsrsConsumableKind)m->consumable_kind);
         }
         heads[RF_DRINK][slot + 1] = m->click_action == OSRS_CLICK_DRINK && p->potion_timer == 0 &&
@@ -223,10 +223,14 @@ static void riskfight_script_consume(const RiskfightObservedSelf* self,
     const RiskfightObservedInventory* inventory, int* actions) {
     int hp = self->hitpoints;
     if (hp < 73 && self->food_timer == 0) {
-        actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_MARLIN];
+        actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
+        if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_MARLIN];
         if (!actions[RF_FOOD]) actions[RF_FOOD] = inventory->kind_slot[OSRS_CONSUMABLE_SUMMER_PIE];
     }
-    if (hp < 45 && self->karambwan_timer == 0) actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_HALIBUT];
+    if (hp < 45 && self->karambwan_timer == 0) {
+        actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
+        if (!actions[RF_COMBO]) actions[RF_COMBO] = inventory->kind_slot[OSRS_CONSUMABLE_HALIBUT];
+    }
     if (self->potion_timer != 0) return;
     if (hp < 65) actions[RF_DRINK] = inventory->kind_slot[OSRS_CONSUMABLE_BREW];
     if (actions[RF_DRINK]) return;
@@ -271,7 +275,9 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
         riskfight_sample_event(seed, attack_tick, 21, profile->vw_pm);
     int maul_spec = !vw_spec && obs[6] >= 0.99f && opponent[0] < 0.65f && opp_upper <= 76 && hp < 99 &&
         riskfight_sample_event(seed, tick, 22, profile->maul_pm);
-    uint8_t main_weapon = riskfight_is_switch_weapon(self.weapon) ? inventory.main_weapon : self.weapon;
+    int voidwaker_main = inventory.main_weapon == ITEM_NONE && (self.weapon == ITEM_VOIDWAKER || inventory.item_slot[ITEM_VOIDWAKER]);
+    uint8_t main_weapon = !riskfight_is_switch_weapon(self.weapon) ? self.weapon :
+        voidwaker_main ? ITEM_VOIDWAKER : inventory.main_weapon != ITEM_NONE ? inventory.main_weapon : self.weapon;
     uint8_t weapon = vw_spec ? ITEM_VOIDWAKER : maul_spec ? ITEM_GRANITE_MAUL_ORNATE :
         axe_swing ? ITEM_DHAROKS_GREATAXE : main_weapon;
     actions[RF_SPECIAL] = maul_spec ? 2 : !holding_maul && vw_spec != (obs[13] >= 0.5f);
@@ -283,7 +289,8 @@ static void riskfight_script(const float* obs, const RiskfightProfile* profile, 
     actions[RF_RING] = inventory.item_slot[obs[7] > 0.1f ? ITEM_RING_OF_RECOIL : ITEM_ULTOR_RING];
     if (obs[RF_SELF_TELEPORT_LOCK] > 0) return;
     int supply_band = min_int(consume_ticks / RISKFIGHT_TAB_SUPPLY_TICKS, RISKFIGHT_TAB_SUPPLY_BANDS - 1);
-    int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&
+    int out_of_heals = !inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH] && !inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN] &&
+        !inventory.kind_slot[OSRS_CONSUMABLE_MARLIN] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_SUMMER_PIE] &&
         !inventory.kind_slot[OSRS_CONSUMABLE_HALIBUT] && !inventory.kind_slot[OSRS_CONSUMABLE_BREW];
     if ((hp < 30 && out_of_heals) ||

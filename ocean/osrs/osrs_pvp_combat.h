@@ -1017,7 +1017,6 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int max_hit = calculate_base_max_hit(attacker, style, str_mult, magic_base_hit);
 
         if (env->pvp_runtime.attack_chance_observer) {
-            assert(style == ATTACK_STYLE_MELEE);
             pvp_observe_attack_chance(env, attacker_idx, defender_idx, 0, max_hit, hit_chance,
                 attacker->equipment_effect_profile.dharok_piece_count >= 4 ? attacker->base_hitpoints : 0, style);
         }

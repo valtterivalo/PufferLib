@@ -1,6 +1,6 @@
 #ifndef ENCOUNTER_RISKFIGHT_H
 #define ENCOUNTER_RISKFIGHT_H
-#include "riskfight/riskfight_step.h"
+#include "riskfight/riskfight_snapshot.h"
 
 static void riskfight_obs(EncounterState* state, EncounterContext* context, float* out) {
     riskfight_write_observation((RiskfightState*)state, ((RiskfightContext*)context)->human_player, out);

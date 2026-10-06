@@ -152,7 +152,8 @@ typedef enum {
     ITEM_DRAGON_SCIMITAR = 147,
     ITEM_AMULET_OF_STRENGTH = 148,
     ITEM_DRAGON_BOOTS = 149,
-    NUM_ITEMS = 150,
+    ITEM_DRAGON_PLATELEGS = 150,
+    NUM_ITEMS = 151,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1504,6 +1505,12 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_magic = -3, .attack_ranged = -1,
         .defence_stab = 16, .defence_slash = 17, .defence_crush = 18,
         .melee_strength = 4
+    },
+    [ITEM_DRAGON_PLATELEGS] = {
+        .item_id = 4087, .name = "Dragon platelegs", .slot = SLOT_LEGS,
+        .attack_magic = -21, .attack_ranged = -11,
+        .defence_stab = 68, .defence_slash = 66, .defence_crush = 63,
+        .defence_magic = -4, .defence_ranged = 65
     },
 
 };
