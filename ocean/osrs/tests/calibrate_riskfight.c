@@ -604,11 +604,14 @@ static void spec_prepare(void) {
 }
 
 /* the hazards of one fighter's ticks, one sample per tick for each action he could take; skip: the session held out */
+static int spec_dharok = -1;
+
 static void spec_samples(int session_in, int session_out, SampleSet sets[ACT_COUNT]) {
     for (int i = 0; i < corpus.count; i++) {
         const SpecDuel* d = &corpus.duels[i];
         if ((session_in >= 0 && d->session != session_in) || d->session == session_out) continue;
         for (int side = 0; side < 2; side++) {
+            if (spec_dharok >= 0 && d->dharok[side] != spec_dharok) continue;
             const SpecTick* series = spec_ticks[i] + side * d->row_count;
             for (int r = 1; r < d->row_count; r++) {
                 if (d->rows[r].third) continue;
@@ -640,6 +643,7 @@ static void spec_servings(int session_out, OppFit* fit, int identified[2]) {
         const SpecDuel* d = &corpus.duels[i];
         if (d->session == session_out) continue;
         for (int side = 0; side < 2; side++) {
+            if (spec_dharok >= 0 && d->dharok[side] != spec_dharok) continue;
             const SpecTick* series = spec_ticks[i] + side * d->row_count;
             for (int r = 1; r < d->row_count; r++) {
                 const SpecSide* x = &d->rows[r].s[side];
@@ -700,6 +704,7 @@ static int fit_load(const char* path, OppFit* fit) {
 /* Fit on two spectated sessions, score on the third, for each; then fit on all and test on our own fights. */
 static void spectator(Tape* tapes, int count, const char* save) {
     spec_prepare();
+    if (getenv("GS_DHAROK")) spec_dharok = atoi(getenv("GS_DHAROK"));
     printf("=== opponent fitted on %d spectated duels in %d sessions ===\n", corpus.count, corpus.session_count);
     for (int out = 0; out < corpus.session_count; out++) {
         static OppFit fit;

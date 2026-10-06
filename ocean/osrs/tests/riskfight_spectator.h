@@ -14,7 +14,7 @@ typedef struct {
 } SpecSide;
 typedef struct { int tick, third; SpecSide s[2]; } SpecRow;
 typedef struct { int tick, side; int kit[KIT_SLOTS]; } SpecEq;
-typedef struct { char id[40]; int session, start, end; SpecRow* rows; int row_count, capacity; SpecEq* eq; int eq_count, eq_capacity; } SpecDuel;
+typedef struct { char id[40]; int session, start, end, dharok[2]; SpecRow* rows; int row_count, capacity; SpecEq* eq; int eq_count, eq_capacity; } SpecDuel;
 typedef struct { SpecDuel* duels; int count, capacity; char sessions[SP_MAX_SESSIONS][24]; int session_count; } SpecCorpus;
 
 static int spec_session(SpecCorpus* c, const char* name) {
@@ -41,7 +41,7 @@ static void spec_load(SpecCorpus* c, const char* path) {
             memset(d, 0, sizeof(*d));
             strcpy(d->id, t[1]);
             d->session = spec_session(c, t[2]);
-            d->start = atoi(t[3]); d->end = atoi(t[4]);
+            d->start = atoi(t[3]); d->end = atoi(t[4]); d->dharok[0] = atoi(t[7]); d->dharok[1] = atoi(t[8]);
         } else if (!strcmp(t[0], "E")) {
             assert(d && n == 15);
             if (d->eq_count == d->eq_capacity) { d->eq_capacity = d->eq_capacity ? d->eq_capacity * 2 : 8; d->eq = realloc(d->eq, (size_t)d->eq_capacity * sizeof(SpecEq)); }
