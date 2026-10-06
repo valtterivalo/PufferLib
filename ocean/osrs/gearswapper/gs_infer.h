@@ -419,7 +419,7 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
     } else armed = gs_armament_of(s);
     if (!armed) return;
     int spec_cost = gs_animation_spec_cost(animation);
-    s->swing_reflect = spec_cost ? GS_REFLECT_WORTH : gs_reflect_of_max(gs_armament_most(s, armed, tick));
+    s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_armament_most(s, armed, tick));
     s->has_opponent_swing = 1;
     if (spec_cost) {
         s->opponent_swing = gs_opponent_swing(tick, (GsStyle)armed->style, gs_distance(c), pid, gs_protected_damage(c, gs_spec_style(armed), gs_spec_least(armed)),

@@ -23,6 +23,8 @@ static int index_of(const char* const* table, size_t n, const char* name) {
     abort();
 }
 
+static GsReflect reflect_of(const char* name) { return !strcmp(name, "SPEC") ? GS_REFLECT_SPEC : !strcmp(name, "WORTH") ? GS_REFLECT_WORTH : GS_REFLECT_WEAK; }
+
 static uint32_t mask_of(const char* csv) {
     uint32_t mask = 0;
     if (!strcmp(csv, "-")) return 0;
@@ -52,11 +54,11 @@ int main(int argc, char** argv) {
         char tag[128], a[128], b[128], c[128], d[128], e[128], g[128], h[128], i[128], oe[128], en[128], arrow[8], r1[128], r2[128];
         int ok = 0;
         total++;
-        if (sscanf(line, "VC %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, r1) == 8) {
+        if (sscanf(line, "VC %127s %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, i, r1) == 9) {
             GsRebound rebound = {!strcmp(b, "UP") ? GS_REBOUND_UP : !strcmp(b, "CASTABLE") ? GS_REBOUND_CASTABLE : GS_REBOUND_SPENT, atoi(c)};
             int has_attack = strcmp(d, "none") != 0;
             GsCastReason reason = gs_vengeance_reason((GsCast)INDEX(CAST, a), &rebound, has_attack, has_attack ? atoi(d) : 0, (GsPid)INDEX(PIDS, e),
-                !strcmp(g, "WORTH") ? GS_REFLECT_WORTH : GS_REFLECT_WEAK, !strcmp(h, "WORTH") ? GS_REFLECT_WORTH : GS_REFLECT_WEAK);
+                reflect_of(g), reflect_of(h), !strcmp(i, "COVERS") ? GS_ENERGY_COVERS : GS_ENERGY_SHORT);
             ok = reason == (GsCastReason)INDEX(REASONS, r1);
             per[0]++;
         } else if (sscanf(line, "BAIT %127s %127s %127s %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, oe, en, i, r1) == 11) {

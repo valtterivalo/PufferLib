@@ -201,6 +201,7 @@ static GsVengeanceState gs_vengeance_cast(int tick) {
     return (GsVengeanceState){GS_VPHASE_CAST, 1, tick + GS_VENGEANCE_COOLDOWN, tick + GS_VENGEANCE_COOLDOWN, 0};
 }
 
+static GsVengeanceState gs_vengeance_cast_after(GsVengeanceState s, int tick);
 static GsVengeance gs_vengeance_reading(GsVengeanceState s, int tick) {
     switch (s.phase) {
         case GS_VPHASE_UNKNOWN: return GS_VENGEANCE_UNKNOWN;
@@ -211,6 +212,12 @@ static GsVengeance gs_vengeance_reading(GsVengeanceState s, int tick) {
         case GS_VPHASE_DISARMED: return GS_VENGEANCE_DOWN;
     }
     abort();
+}
+
+/* Vengeance.cast(State, tick): a cast seen on the tick of a proc leaves the cooldown running from the cast. */
+static GsVengeanceState gs_vengeance_cast_after(GsVengeanceState s, int tick) {
+    if (s.phase == GS_VPHASE_PROCCED && s.proc == tick) return (GsVengeanceState){GS_VPHASE_PROCCED, 1, tick + GS_VENGEANCE_COOLDOWN, tick + GS_VENGEANCE_COOLDOWN, tick};
+    return gs_vengeance_cast(tick);
 }
 
 static GsVengeanceState gs_vengeance_procced(GsVengeanceState s, int tick) {
@@ -258,7 +265,7 @@ static GsOpponentInference gs_inference_animated(GsOpponentInference s, GsKind k
     GsOpponentInference out = s;
     if (spec_cost > 0) out.spec = gs_energy_spec(s.spec, tick, spec_cost);
     out.timer = gs_timer_observe(s.timer, kind, tick, speed);
-    if (kind == GS_KIND_VENGEANCE_CAST) out.vengeance = gs_vengeance_cast(tick);
+    if (kind == GS_KIND_VENGEANCE_CAST) out.vengeance = gs_vengeance_cast_after(s.vengeance, tick);
     if (kind == GS_KIND_ATTACK) out.has_pending = 0;
     else if (kind == GS_KIND_EAT) {
         out.has_pending = 1;
@@ -285,7 +292,7 @@ static GsOpponentInference gs_inference_veng_procced(GsOpponentInference s, int 
 }
 
 static GsOpponentInference gs_inference_veng_cast(GsOpponentInference s, int tick) {
-    s.vengeance = gs_vengeance_cast(tick);
+    s.vengeance = gs_vengeance_cast_after(s.vengeance, tick);
     return s;
 }
 

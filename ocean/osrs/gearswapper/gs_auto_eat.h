@@ -45,7 +45,8 @@ typedef struct { GsDecision decision; double risk, meal_risk; int foods[GS_MAX_M
 typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_GODSWORD_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
 typedef struct { GsSource source; int tick, least, most; double accuracy; } GsHit;
 typedef struct { GsHit* hits; int count; } GsScenario;
-typedef struct { int tick, amount; } GsHeal;
+typedef struct { int tick, amount, ceiling; } GsHeal;
+static int gs_ceiling(const GsFood* food) { return GS_ASSUMED_MAX_HP + (food->drained ? food->heal : 0); }
 typedef struct { int tick, resume, delay, earliest_resume, restored_at; } GsConsumptionAt;
 typedef struct { double risk; int useful, waste; } GsEvaluation;
 typedef enum { GS_SCHEDULE_ANY, GS_SCHEDULE_EARLIEST } GsSchedule;
@@ -112,6 +113,7 @@ static GsPlan plan_eat(const GsEatCall* call, const GsPlan* plan, const GsMeal* 
         GsHeal* heal = vec_push(&result.heals);
         heal->tick = at;
         heal->amount = food->heal;
+        heal->ceiling = gs_ceiling(food);
         result.remaining[index]--;
         for (int kind = 0; kind < GS_CONSUMABLES; kind++) result.ready[kind] = consumable_ready_after((GsConsumable)kind, food->kind, at, result.ready[kind]);
     }
@@ -258,10 +260,27 @@ static void eat_sort_hits(GsHit* hits, int count) {
 }
 
 /* AutoEat.odds */
-static GsEvaluation eat_odds(Arena* arena, GsHit* hits, int hit_count, const GsVec* heals, int counted, int hitpoints, GsPid pid) {
+static double eat_stream_sum(const double* values, int count) {
+    double sum = 0, compensation = 0;
+    for (int i = 0; i < count; i++) {
+        double tmp = values[i] - compensation;
+        double velvel = sum + tmp;
+        compensation = (velvel - sum) - tmp;
+        sum = velvel;
+    }
+    return sum - compensation;
+}
+
+/* AutoEat.odds: hits that are unavoidable (before the floor, or on it without our PID) deal their damage and give no death credit, the survivors are renormalised. */
+static GsEvaluation eat_odds(Arena* arena, GsHit* hits, int hit_count, const GsVec* heals, int counted, int hitpoints, GsPid pid, int floor_tick) {
     size_t mark = arena->used;
     eat_sort_hits(hits, hit_count);
-    int length = imax(hitpoints, GS_ASSUMED_MAX_HP) + 1;
+    int top = GS_ASSUMED_MAX_HP;
+    if (heals->count) {
+        top = INT_MIN;
+        for (int i = 0; i < heals->count; i++) top = imax(top, VEC_AT(GsHeal, *heals, i).ceiling);
+    }
+    int length = imax(hitpoints, top) + 1;
     double* alive = arena_alloc(arena, (size_t)length * sizeof(double));
     memset(alive, 0, (size_t)length * sizeof(double));
     alive[hitpoints] = 1;
@@ -270,22 +289,26 @@ static GsEvaluation eat_odds(Arena* arena, GsHit* hits, int hit_count, const GsV
     for (int i = 0; i < hit_count; i++) {
         const GsHit* hit = &hits[i];
         while (next < heals->count && gs_beats(VEC_AT(GsHeal, *heals, next).tick, hit->tick, pid)) {
-            int amount = VEC_AT(GsHeal, *heals, next).amount;
-            int added = imax(0, imin(GS_ASSUMED_MAX_HP - expected, amount));
+            int amount = VEC_AT(GsHeal, *heals, next).amount, ceiling = VEC_AT(GsHeal, *heals, next).ceiling;
+            int added = imax(0, imin(ceiling - expected, amount));
             expected += added;
             if (next < counted) {
                 useful += added;
                 waste += amount - added;
             }
-            hp_heal(alive, amount, GS_ASSUMED_MAX_HP);
+            hp_heal(alive, amount, ceiling);
             next++;
         }
-        dead += hp_strike_range(arena, alive, length, hit->least, hit->most, hit->accuracy);
+        double killed = hp_strike_range(arena, alive, length, hit->least, hit->most, hit->accuracy);
+        if (hit->tick < floor_tick || (hit->tick == floor_tick && pid != GS_PID_LOCAL)) {
+            double living = eat_stream_sum(alive, length);
+            for (int hp = 1; living > 0 && hp < length; hp++) alive[hp] /= living;
+        } else dead += killed;
         expected -= (int)floor(hit->accuracy * (hit->least + hit->most) / 2 + 0.5);
     }
     while (next < counted) {
-        int amount = VEC_AT(GsHeal, *heals, next).amount;
-        int added = imax(0, imin(GS_ASSUMED_MAX_HP - expected, amount));
+        int amount = VEC_AT(GsHeal, *heals, next).amount, ceiling = VEC_AT(GsHeal, *heals, next).ceiling;
+        int added = imax(0, imin(ceiling - expected, amount));
         expected += added;
         useful += added;
         waste += amount - added;
@@ -330,12 +353,15 @@ static GsEvaluation eat_danger(Arena* arena, const GsEatSituation* s, const GsVe
             assert(count <= GS_MAX_HITS);
             int kept = 0;
             for (int i = 0; i < count; i++) {
-                const GsHit* hit = &hits[i];
-                if (hit->tick > horizon || hit->tick < s->floor || (hit->tick == s->floor && s->pid != GS_PID_LOCAL)) continue;
-                hits[kept++] = *hit;
+                if (hits[i].tick > horizon) continue;
+                hits[kept++] = hits[i];
             }
-            GsEvaluation evaluation = eat_odds(arena, hits, kept, heals, counted, s->hitpoints, s->pid);
-            GsCombo combo = eat_combo_of(hits, kept);
+            GsEvaluation evaluation = eat_odds(arena, hits, kept, heals, counted, s->hitpoints, s->pid, s->floor);
+            GsHit avoidable[GS_MAX_HITS];
+            int avoidable_count = 0;
+            for (int i = 0; i < kept; i++)
+                if (!(hits[i].tick < s->floor || (hits[i].tick == s->floor && s->pid != GS_PID_LOCAL))) avoidable[avoidable_count++] = hits[i];
+            GsCombo combo = eat_combo_of(avoidable, avoidable_count);
             if (evaluation.risk > risks[combo]) {
                 risks[combo] = evaluation.risk;
                 if (combo == COMBO_NONE && evaluation.risk > bound) { arena->used = mark; return (GsEvaluation){INFINITY, 0, 0}; }
@@ -626,6 +652,9 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
     int legal_count = 0;
     for (int m = 0; m < meal_count; m++) {
         int eatable = eat_ordered(&meals[m], foods);
+        int helps = 0;
+        for (int i = 0; i < meals[m].n; i++) helps |= foods[meals[m].foods[i]].heal > 0 && s->hitpoints < gs_ceiling(&foods[meals[m].foods[i]]);
+        eatable &= helps;
         for (int i = 0; i < meals[m].n; i++) {
             const GsFood* food = &foods[meals[m].foods[i]];
             eatable &= food->remaining > 0 && s->tick + meals[m].earliest_process >= food->ready;
@@ -650,14 +679,14 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
     GsVerdict verdict = {GS_WAIT, waiting.risk, waiting.risk, {0}, 0, s->tick};
     if (waiting.risk <= s->tolerance) { arena->used = base; return verdict; }
     GsEatSituation late = eat_late(s);
-    double avoidable = fmax(s->tolerance, eat_mixed(&call, &late, NULL, window, answerable).risk);
+    double avoidable = eat_mixed(&call, &late, NULL, window, answerable).risk;
     GsChoice choices[GS_MAX_MEALS];
     int choice_count = 0;
     for (int l = 0; l < legal_count; l++) {
         const GsMeal* meal = legal[l];
         GsEvaluation evaluation = eat_mixed(&call, s, meal, window, answerable);
         if (evaluation.useful == 0) continue;
-        double gain = avoidable - fmax(s->tolerance, eat_mixed(&call, &late, meal, window, answerable).risk);
+        double gain = avoidable - eat_mixed(&call, &late, meal, window, answerable).risk;
         int delay = eat_delay(s, meal, foods);
         int drain = 0;
         for (int i = 0; i < meal->n; i++) drain |= foods[meal->foods[i]].drained;
@@ -676,8 +705,13 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
         }
     }
     const GsChoice* selected = NULL;
-    for (int c = 0; c < choice_count; c++)
-        if ((choices[c].evaluation.risk <= s->tolerance || choices[c].gain >= s->tolerance) && (!selected || choice_less(&choices[c], selected))) selected = &choices[c];
+    int fewest = INT_MAX;
+    for (int c = 0; c < choice_count; c++) if (choices[c].evaluation.risk <= s->tolerance) fewest = imin(fewest, choices[c].size);
+    for (int c = 0; c < choice_count; c++) {
+        int sufficient = choices[c].evaluation.risk <= s->tolerance;
+        int taken = fewest != INT_MAX ? sufficient && choices[c].size == fewest : choices[c].gain >= s->tolerance;
+        if (taken && (!selected || choice_less(&choices[c], selected))) selected = &choices[c];
+    }
     verdict.decision = selected && selected->evaluation.risk <= s->tolerance ? GS_EAT_NOW : GS_EXPOSED;
     verdict.meal_risk = selected ? selected->evaluation.risk : waiting.risk;
     if (selected) {

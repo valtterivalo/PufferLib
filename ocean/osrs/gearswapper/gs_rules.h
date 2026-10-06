@@ -3,13 +3,16 @@
 #include "gs_auto_eat.h"
 
 /* VengeanceCast.java, Bait.java and PrayerKeeper.java: the small pure rules around the knockout decisions. */
-typedef enum { GS_REFLECT_WORTH, GS_REFLECT_WEAK } GsReflect;
+typedef enum { GS_REFLECT_SPEC, GS_REFLECT_WORTH, GS_REFLECT_WEAK } GsReflect;
+typedef enum { GS_ENERGY_COVERS, GS_ENERGY_SHORT } GsEnergyCover;
 typedef enum { GS_REASON_NONE, GS_REASON_PLAN, GS_REASON_CASTABLE, GS_REASON_ANSWER } GsCastReason;
 
-static GsCastReason gs_vengeance_reason(GsCast planned, const GsRebound* rebound, int has_attack, int attack_lands, GsPid first, GsReflect weapon, GsReflect thrown) {
+static GsCastReason gs_vengeance_reason(GsCast planned, const GsRebound* rebound, int has_attack, int attack_lands, GsPid first, GsReflect weapon, GsReflect thrown,
+    GsEnergyCover energy) {
     if (planned == GS_CAST_NOW) return GS_REASON_PLAN;
     if (first != GS_PID_LOCAL) return rebound->kind == GS_REBOUND_CASTABLE && weapon == GS_REFLECT_WORTH ? GS_REASON_CASTABLE : GS_REASON_NONE;
-    return thrown == GS_REFLECT_WORTH && has_attack && spec_rebound_casts_before(rebound, attack_lands, first) ? GS_REASON_ANSWER : GS_REASON_NONE;
+    int worth = thrown == GS_REFLECT_SPEC || (thrown == GS_REFLECT_WORTH && energy == GS_ENERGY_SHORT);
+    return worth && has_attack && spec_rebound_casts_before(rebound, attack_lands, first) ? GS_REASON_ANSWER : GS_REASON_NONE;
 }
 
 typedef enum { GS_BAIT_HOLD, GS_BAIT_OFF, GS_BAIT_NO_RIVAL, GS_BAIT_PID, GS_BAIT_HIS_VENGEANCE, GS_BAIT_OUR_VENGEANCE, GS_BAIT_HIS_ENERGY, GS_BAIT_OUR_PLAN,

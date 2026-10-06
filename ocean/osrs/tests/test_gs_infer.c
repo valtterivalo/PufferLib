@@ -43,6 +43,8 @@ static void format_optional_int(char* out, int present, int value) {
 
 static int cmp_int(const void* a, const void* b) { return *(const int*)a - *(const int*)b; }
 
+static const char* reflect_name(GsReflect r) { return r == GS_REFLECT_SPEC ? "SPEC" : r == GS_REFLECT_WORTH ? "WORTH" : "WEAK"; }
+
 static void format_inference(GsInfer* s, int tick, char* out) {
     char timer[64], local[64], typical[32], possible[32], earliest[40];
     format_timer(timer, s->opponent.timer);
@@ -86,9 +88,9 @@ static void format_inference(GsInfer* s, int tick, char* out) {
         PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor,
         PHASE_NAMES[s->opponent.vengeance.phase], earliest, s->opponent.vengeance.latest, local, hp, ate, reach, BAR_NAMES[s->bar], s->damage_since_bar, list, food,
         RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, arsenal);
-    sprintf(out + strlen(out), " | reflect %s", s->swing_reflect == GS_REFLECT_WORTH ? "WORTH" : "WEAK");
+    sprintf(out + strlen(out), " | reflect %s", reflect_name(s->swing_reflect));
     if (gs_living_rival(s) && s->tick == tick)
-        sprintf(out + strlen(out), " %s cost %d", gs_weapon_reflect(s, tick) == GS_REFLECT_WORTH ? "WORTH" : "WEAK", gs_opponent_spec_cost(s));
+        sprintf(out + strlen(out), " %s cost %d", reflect_name(gs_weapon_reflect(s, tick)), gs_opponent_spec_cost(s));
 }
 
 static void format_attack(char* out, const char* tag, const GsAttack* a, int maul) {

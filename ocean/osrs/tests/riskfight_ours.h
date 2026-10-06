@@ -158,7 +158,8 @@ static int ours_venged_reason(const GsInfer* inf, int tick, GsCast cast, const G
     GsIncoming attack;
     int has_attack = inf->attack_tick == tick && gs_swing_underway(inf, tick, &attack);
     GsReflect weapon = gs_weapon_reflect((GsInfer*)inf, tick);
-    return gs_vengeance_reason(cast, rebound, has_attack, has_attack ? attack.lands : 0, pid, weapon, inf->swing_reflect);
+    GsEnergyCover cover = gs_energy_range(&inf->opponent.spec, tick).low >= gs_opponent_spec_cost(inf) ? GS_ENERGY_COVERS : GS_ENERGY_SHORT;
+    return gs_vengeance_reason(cast, rebound, has_attack, has_attack ? attack.lands : 0, pid, weapon, inf->swing_reflect, cover);
 }
 
 static void ours_group_two(Ours* ours, const Player* us, int tick, GsChoiceKind choice) {
