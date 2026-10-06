@@ -55,6 +55,9 @@ static GsSpecHit gs_echo(Arena* a, const GsIncoming* incoming, GsEcho echo, int 
     return (GsSpecHit){incoming->lands + (pid == GS_PID_LOCAL ? 0 : 1), damage, most + 1};
 }
 
+typedef enum { GS_REBOUND_UP, GS_REBOUND_CASTABLE, GS_REBOUND_SPENT } GsReboundKind;
+typedef struct { GsReboundKind kind; int cast; } GsRebound;
+
 typedef struct {
     GsHealthRange hitpoints;
     const GsSpecHit* underway; int underway_count;
@@ -64,6 +67,7 @@ typedef struct {
     int has_incoming; GsIncoming incoming;
     int recoil_charges, tick;
     GsWarning warning;
+    GsRebound rebound;
 } GsSpecSituation;
 
 typedef struct { int tick, amount, cap; } GsSpecHeal;
@@ -117,7 +121,7 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
     int anchor = has_since ? s->warning.since : first;
     int last = INT_MIN;
     for (int i = 0; i < struck_count; i++) last = imax(last, struck[i].lands);
-    double shares = 0;
+    double shares_sum = 0, shares_compensation = 0;
     int live[GS_REACTIONS], live_count = 0;
     for (int r = 0; r < GS_REACTIONS; r++) {
         const GsReaction* reaction = &GS_REACTION_TABLE[r];
@@ -126,9 +130,13 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
             for (int u = 0; u < s->warning.unseen_count; u++) unseen |= s->warning.unseen[u] == anchor + reaction->meal.after;
         if (!has_since || !reaction->has_meal || anchor + reaction->meal.after > s->tick || unseen) {
             live[live_count++] = r;
-            shares += reaction->share;
+            double tmp = reaction->share - shares_compensation;
+            double velvel = shares_sum + tmp;
+            shares_compensation = (velvel - shares_sum) - tmp;
+            shares_sum = velvel;
         }
     }
+    double shares = shares_sum - shares_compensation;
     double dead = 0;
     for (int li = 0; li < live_count; li++) {
         const GsReaction* reaction = &GS_REACTION_TABLE[live[li]];
@@ -167,5 +175,96 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
     }
     arena->used = mark;
     return dead;
+}
+
+/* AutoSpec.decide */
+typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS_CHOICE_MAUL } GsChoiceKind;
+static const int GS_CHOICE_TICKETS[4] = {0, 1, 2, 1};
+typedef enum { GS_CAST_NOW, GS_CAST_KEEP } GsCast;
+typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; } GsSpecPlan;
+typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar; } GsSpecDecision;
+
+enum { GS_TICKET = 50, GS_MOST_TICKETS = 2 };
+#define GS_WINDOW_PEAK_COUNT 128
+static const double GS_WINDOW_PEAKS[GS_WINDOW_PEAK_COUNT] = {
+    0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+    0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+    0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000,
+    0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.002,
+    0.002, 0.004, 0.004, 0.005, 0.006, 0.008, 0.010, 0.016, 0.016, 0.016, 0.017, 0.021,
+    0.032, 0.034, 0.034, 0.035, 0.045, 0.047, 0.048, 0.049, 0.050, 0.051, 0.054, 0.054,
+    0.055, 0.057, 0.067, 0.071, 0.071, 0.072, 0.075, 0.076, 0.078, 0.087, 0.091, 0.093,
+    0.095, 0.095, 0.096, 0.097, 0.098, 0.098, 0.099, 0.100, 0.110, 0.117, 0.117, 0.118,
+    0.120, 0.120, 0.126, 0.141, 0.150, 0.151, 0.155, 0.163, 0.164, 0.166, 0.166, 0.166,
+    0.170, 0.172, 0.188, 0.188, 0.205, 0.212, 0.218, 0.222, 0.238, 0.257, 0.273, 0.330,
+    0.330, 0.344, 0.438, 0.456, 0.456, 0.521, 0.617, 0.705};
+static double GS_WORTH[GS_MOST_TICKETS + 1];
+#define GS_FIGHT_ENDS (21 / 206.0)
+
+__attribute__((constructor)) static void gs_build_worth(void) {
+    GS_WORTH[0] = 0;
+    for (int k = 1; k <= GS_MOST_TICKETS; k++) {
+        double previous;
+        GS_WORTH[k] = 0;
+        do {
+            previous = GS_WORTH[k];
+            double total = 0;
+            for (int i = 0; i < GS_WINDOW_PEAK_COUNT; i++) {
+                double peak = GS_WINDOW_PEAKS[i];
+                total += fmax(peak + (1 - peak) * (1 - GS_FIGHT_ENDS) * GS_WORTH[k - 1], (1 - GS_FIGHT_ENDS) * GS_WORTH[k]);
+            }
+            GS_WORTH[k] = total / GS_WINDOW_PEAK_COUNT;
+        } while (fabs(GS_WORTH[k] - previous) > 1e-12);
+    }
+}
+
+/* AutoSpec.bar: the chance a plan costing cost specs must reach with energy to be played. */
+static double gs_spec_bar(int energy, int cost) {
+    int tickets = imin(GS_MOST_TICKETS, energy / GS_TICKET);
+    if (tickets < cost) return INFINITY;
+    double spent = (1 - GS_FIGHT_ENDS) * GS_WORTH[tickets - cost];
+    return ((1 - GS_FIGHT_ENDS) * GS_WORTH[tickets] - spent) / (1 - spent);
+}
+
+static int spec_plan_done(const GsSpecPlan* plan) {
+    int done = INT_MIN;
+    for (int i = 0; i < plan->hit_count; i++) done = imax(done, plan->hits[i].lands);
+    return plan->hit_count ? done : INT_MAX;
+}
+
+static int spec_rebound_casts_before(const GsRebound* r, int lands, GsPid first) {
+    return r->kind == GS_REBOUND_CASTABLE && (r->cast < lands || (r->cast == lands && first == GS_PID_LOCAL));
+}
+
+static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
+    const GsSpecPlan* after_cast, int after_cast_count, int energy) {
+    if (s->vengeance == GS_VENGEANCE_UP) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0};
+    static const GsSpecPlan nothing = {GS_CHOICE_HOLD, NULL, 0};
+    GsEcho standing = s->rebound.kind == GS_REBOUND_UP ? GS_ECHO_VENGEANCE : GS_ECHO_RECOIL;
+    const GsSpecPlan* best = &nothing;
+    GsCast cast = GS_CAST_KEEP;
+    double chance = 0;
+    for (int i = 0; i <= plan_count; i++) {
+        const GsSpecPlan* plan = i < plan_count ? &plans[i] : &nothing;
+        double kept = gs_spec_knockout(arena, s, plan->hits, plan->hit_count, standing);
+        if (kept > chance || (kept == chance && kept > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
+            best = plan;
+            chance = kept;
+        }
+    }
+    if (s->has_incoming && s->incoming.attack == GS_NONE && spec_rebound_casts_before(&s->rebound, s->incoming.lands, s->pid)) {
+        for (int i = 0; i <= after_cast_count; i++) {
+            const GsSpecPlan* plan = i < after_cast_count ? &after_cast[i] : &nothing;
+            double with_cast = gs_spec_knockout(arena, s, plan->hits, plan->hit_count, GS_ECHO_VENGEANCE);
+            if (with_cast > chance) {
+                best = plan;
+                cast = GS_CAST_NOW;
+                chance = with_cast;
+            }
+        }
+    }
+    double bar = gs_spec_bar(energy, GS_CHOICE_TICKETS[best->choice]);
+    if (chance < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chance, bar};
+    return (GsSpecDecision){best->choice, cast, best->choice, chance, bar};
 }
 #endif

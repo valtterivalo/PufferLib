@@ -543,7 +543,7 @@ static int eat_delay(const GsEatSituation* s, const GsMeal* meal, const GsFood* 
 }
 
 static GsSpecSituation eat_hunt(const GsEatSituation* s) {
-    return (GsSpecSituation){s->opponent_hp, NULL, 0, GS_NONE, s->vengeance, s->pid, 0, {0}, 0, s->tick, s->warning};
+    return (GsSpecSituation){s->opponent_hp, NULL, 0, GS_NONE, s->vengeance, s->pid, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}};
 }
 
 static double eat_knockout(const GsEatCall* call, const GsEatSituation* s, const GsSpecSituation* hunt, const GsVec* consumptions, int until) {
