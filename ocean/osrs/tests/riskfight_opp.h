@@ -7,8 +7,8 @@
 /* Fitted opponent policy: six small logistic hazards on aggregate buckets, no per-opponent terms.
  * Every probability is a function of Hist plus the sim state, so one-step probing and rollouts share it. */
 typedef enum { ACT_EAT_BIG, ACT_EAT_WARNING, ACT_SWING, ACT_VW_SPEC, ACT_MAUL_SPEC, ACT_VENGEANCE, ACT_COUNT } Action;
-enum { MAX_DIM = 8, BIG_HIT_DAMAGE = 20, LAG_NONE = 99, ENERGY_FOR_SPEC = 50, RECENT_EAT = 3, FOLLOW_UP = 5 };
-static const int ACTION_DIM[ACT_COUNT] = {8, 8, 5, 4, 2, 1};
+enum { MAX_DIM = 10, BIG_HIT_DAMAGE = 20, LAG_NONE = 99, ENERGY_FOR_SPEC = 50, RECENT_EAT = 3, FOLLOW_UP = 5 };
+static const int ACTION_DIM[ACT_COUNT] = {9, 9, 5, 4, 2, 1};
 static const char* ACTION_NAME[ACT_COUNT] = {"eat (anchor: big hit)", "eat (anchor: warning)", "swing when ready", "VW spec given swing",
     "maul spec", "Vengeance cast"};
 
@@ -17,10 +17,10 @@ typedef struct {
     Warning warning;
 } Hist;
 
-typedef struct { int n, idx[4]; } Sparse;
+typedef struct { int n, idx[5]; } Sparse;
 typedef struct { Sparse x; float y, weight; } Sample;
 typedef struct { double w[MAX_DIM]; long events, opportunities; } Logit;
-typedef struct { Logit logit[ACT_COUNT]; Action eat_action; } OppFit;
+typedef struct { Logit logit[ACT_COUNT]; Action eat_action; float serving[2][4]; int served[2][4]; } OppFit;
 
 static double sigmoid(double z) { return 1.0 / (1.0 + exp(-z)); }
 
@@ -64,8 +64,9 @@ static int lag_bin(int lag) { return lag < 1 || lag >= LAG_NONE ? 0 : lag == 1 ?
 static int hp_band4(int hp_bar_ratio) { return hp_bar_ratio <= 8 ? 0 : hp_bar_ratio <= 13 ? 1 : hp_bar_ratio <= 24 ? 2 : 3; }
 static int our_hp_band(int hp) { return hp < 45 ? 0 : hp <= 85 ? 1 : 2; }
 
-static Sparse eat_features(int band, int lag) {
+static Sparse eat_features(int band, int lag, int warned) {
     Sparse x = {1, {0}};
+    if (warned) x.idx[x.n++] = 8;
     if (band) x.idx[x.n++] = band;
     int b = lag_bin(lag);
     if (b) x.idx[x.n++] = 3 + b;
@@ -110,8 +111,8 @@ static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int k
     int ratio = osrs_health_bar_ratio(him->current_hitpoints, 99, 30);
     int lockfree = him->food_timer == 0;
     p.eligible[ACT_EAT_BIG] = p.eligible[ACT_EAT_WARNING] = lockfree;
-    p.x[ACT_EAT_BIG] = eat_features(hp_band4(ratio), lag_of(tick, h->big_hit_tick));
-    p.x[ACT_EAT_WARNING] = eat_features(hp_band4(ratio), lag_of(tick, warning_since(&h->warning)));
+    p.x[ACT_EAT_BIG] = eat_features(hp_band4(ratio), lag_of(tick, h->big_hit_tick), warning_since(&h->warning) != WARNING_NONE);
+    p.x[ACT_EAT_WARNING] = eat_features(hp_band4(ratio), lag_of(tick, warning_since(&h->warning)), warning_since(&h->warning) != WARNING_NONE);
     p.eligible[ACT_SWING] = him->attack_timer <= 0;
     p.x[ACT_SWING] = swing_features(h);
     p.eligible[ACT_VW_SPEC] = kit_vw && him->special_energy >= ENERGY_FOR_SPEC;
@@ -220,6 +221,10 @@ static void hist_step(Hist* h, RiskfightState* s, int tick, const StepEvents* e)
 
 static const float SERVING_SHARES[4] = {0.15f, 0.34f, 0.34f, 0.17f};
 
+static void fit_default_servings(OppFit* fit) {
+    for (int w = 0; w < 2; w++) for (int k = 0; k < 4; k++) fit->serving[w][k] = SERVING_SHARES[k];
+}
+
 static double action_probability(const OppFit* fit, const Probe* p, Action a) {
     return p->eligible[a] ? logit_p(&fit->logit[a], &p->x[a]) : 0;
 }
@@ -239,9 +244,9 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     Probe probe = probe_state(s, h, tick, has_item(s, 1, ITEM_VOIDWAKER), has_maul(s, 1));
     int eating = roll(seed, tick, 41, action_probability(fit, &probe, fit->eat_action));
     if (eating) {
+        const float* shares = fit->serving[warning_since(&h->warning) != WARNING_NONE];
         float serving = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 42) % 10000) / 10000.0f;
-        int k = serving < SERVING_SHARES[0] ? 0 : serving < SERVING_SHARES[0] + SERVING_SHARES[1] ? 1 :
-            serving < SERVING_SHARES[0] + SERVING_SHARES[1] + SERVING_SHARES[2] ? 2 : 3;
+        int k = serving < shares[0] ? 0 : serving < shares[0] + shares[1] ? 1 : serving < shares[0] + shares[1] + shares[2] ? 2 : 3;
         actions[RF_FOOD] = inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
         if (k == 1 || k == 3) actions[RF_COMBO] = inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
         if ((k == 2 || k == 3) && self.potion_timer == 0) actions[RF_DRINK] = inventory.kind_slot[OSRS_CONSUMABLE_BREW];

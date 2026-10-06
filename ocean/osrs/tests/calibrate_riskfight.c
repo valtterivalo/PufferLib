@@ -126,10 +126,62 @@ static void fit_model(Tape* tapes, int count, int day, OppFit* fit) {
     free(sim);
 }
 
-static void print_fit(const char* title, const OppFit* fit) {
+enum { SERVING_MIN = 6, SERVING_SINGLE_MAX = 30, SERVING_DOUBLE_MAX = 48, SERVING_WINDOW = 10, BEFORE_WINDOW = 8 };
+
+static int bar_mid(int ratio, int scale) { return (warning_bar_low(ratio, scale) + warning_bar_high(ratio, scale)) / 2; }
+
+/* Meal size from the bar on both sides of an eat: heal = hp after + damage taken since - hp before, bars read at ticks a hit on him
+ * refreshed them with no other meal between. Single is one hard food, double a hard food and one more, triple all three. */
+static void infer_servings(const Tape* tapes, int count, int day, OppFit* fit, int* eats, int identified[2]) {
+    int counts[2][3] = {{0}};
+    *eats = 0;
+    for (int i = 0; i < count; i++) {
+        const Tape* tape = &tapes[i];
+        if (tape_day(tape) != day) continue;
+        const Hist* series = tape->hist_series;
+        for (int e = tape->lo + 1; e + SERVING_WINDOW <= tape->hi; e++) {
+            if (!rec_eat_at(tape, e)) continue;
+            (*eats)++;
+            const TapeTick* before = tape_tick(tape, e - 1);
+            if (before->last_bar_hit < e - BEFORE_WINDOW || before->meals_since != 0 || before->bar_ratio <= 0 || before->bar_ratio >= before->bar_scale) continue;
+            int hit_now = 0, after = -1, damage = 0;
+            for (int x = e; x <= e + SERVING_WINDOW && after < 0; x++) {
+                if (x > e && rec_eat_at(tape, x)) break;
+                for (int h = 0; h < tape->hit_count; h++) {
+                    const TapeHit* hit = &tape->hits[h];
+                    if (hit->tick != x || hit->side != SIDE_HIM) continue;
+                    if (x == e) hit_now = 1;
+                    damage += hit->type == 65 ? 0 : hit->amount;
+                    after = x;
+                }
+            }
+            if (hit_now || after < 0) continue;
+            const TapeTick* later = tape_tick(tape, after);
+            if (later->bar_ratio <= 0 || later->bar_ratio >= later->bar_scale) continue;
+            int heal = bar_mid(later->bar_ratio, later->bar_scale) + damage - bar_mid(before->bar_ratio, before->bar_scale);
+            int state = warning_since(&series[e - 1 - tape->lo].warning) != WARNING_NONE;
+            counts[state][heal < SERVING_SINGLE_MAX ? 0 : heal < SERVING_DOUBLE_MAX ? 1 : 2]++;
+        }
+    }
+    int pooled[3] = {counts[0][0] + counts[1][0], counts[0][1] + counts[1][1], counts[0][2] + counts[1][2]};
+    int pooled_total = pooled[0] + pooled[1] + pooled[2];
+    for (int w = 0; w < 2; w++) {
+        int total = counts[w][0] + counts[w][1] + counts[w][2];
+        identified[w] = total;
+        const int* c = total >= SERVING_MIN ? counts[w] : pooled_total >= SERVING_MIN ? pooled : NULL;
+        if (!c) continue;
+        double sum = c[0] + c[1] + c[2];
+        fit->serving[w][0] = (float)(c[0] / sum);
+        fit->serving[w][1] = fit->serving[w][2] = (float)(c[1] / sum / 2);
+        fit->serving[w][3] = (float)(c[2] / sum);
+        for (int k = 0; k < 3; k++) fit->served[w][k] = counts[w][k];
+    }
+}
+
+static void print_fit(const char* title, const OppFit* fit, int eats, const int identified[2]) {
     static const char* TERMS[ACT_COUNT] = {
-        "intercept (bar <=8), bar 9-13, bar 14-24, bar 25+, lag 1, lag 2, lag 3, lag 4-8 (ticks since a >=20 hit on him)",
-        "intercept (bar <=8), bar 9-13, bar 14-24, bar 25+, lag 1, lag 2, lag 3, lag 4-8 (ticks since the Java warning)",
+        "intercept (bar <=8), bar 9-13, bar 14-24, bar 25+, lag 1, lag 2, lag 3, lag 4-8 (ticks since a >=20 hit on him), warning active",
+        "intercept (bar <=8), bar 9-13, bar 14-24, bar 25+, lag 1, lag 2, lag 3, lag 4-8 (ticks since the Java warning), warning active",
         "intercept (ready 1 tick), ready 2, ready 3-5, ready 6+, ate within 3 ticks",
         "intercept (our hp <45), our hp 45-85, our hp >85, VW spec within 5 ticks",
         "intercept, VW spec this or last tick",
@@ -141,6 +193,10 @@ static void print_fit(const char* title, const OppFit* fit) {
         for (int d = 0; d < ACTION_DIM[a]; d++) printf(" %6.2f", l->w[d]);
         printf("\n      terms: %s\n", TERMS[a]);
     }
+    printf("  meal size: %d eats on the day, identifiable %d with the warning off and %d with it on\n", eats, identified[0], identified[1]);
+    for (int w = 0; w < 2; w++)
+        printf("    warning %-3s single %d double %d triple %d -> shares %.2f %.2f %.2f %.2f%s\n", w ? "on" : "off", fit->served[w][0], fit->served[w][1], fit->served[w][2],
+            fit->serving[w][0], fit->serving[w][1], fit->serving[w][2], fit->serving[w][3], identified[w] >= SERVING_MIN ? "" : (identified[0] + identified[1] >= SERVING_MIN ? " (pooled)" : " (AutoSpec.SERVING_SHARES)"));
 }
 
 static void print_score(const char* action, const Score* model, const Score* profiles, double train_rate) {
@@ -158,10 +214,13 @@ static void print_score(const char* action, const Score* model, const Score* pro
 static void teacher(Tape* tapes, int count, int train_day, int test_day) {
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
     fit_model(tapes, count, train_day, &fit);
+    int eats, identified[2];
+    infer_servings(tapes, count, train_day, &fit, &eats, identified);
     char title[128];
     snprintf(title, sizeof(title), "=== teacher forcing: fit on day %d, score on day %d", train_day, test_day);
-    print_fit(title, &fit);
+    print_fit(title, &fit, eats, identified);
     static Score fitted[ACT_COUNT], profiles[ACT_COUNT];
     memset(fitted, 0, sizeof(fitted));
     memset(profiles, 0, sizeof(profiles));
@@ -370,7 +429,10 @@ static void print_episodes(const char* title, const EpisodeStats* s, const char*
 static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
     static OppFit fit_big, fit_warning;
     memset(&fit_big, 0, sizeof(fit_big));
+    fit_default_servings(&fit_big);
     fit_model(tapes, count, train_day, &fit_big);
+    int eats, identified[2];
+    infer_servings(tapes, count, train_day, &fit_big, &eats, identified);
     fit_big.eat_action = ACT_EAT_BIG;
     fit_warning = fit_big;
     fit_warning.eat_action = ACT_EAT_WARNING;
