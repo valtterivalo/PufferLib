@@ -6,13 +6,20 @@
  * wielded the spec weapon that reaches them if later, absent once he has eaten since. */
 enum { WARNING_NONE = -1000000, UNSEEN_HEAL = 8, FOOD_CAP_TICKS = 16, FIGHTING_OVERHEAL = 115, OVERHEALED = 121, ASSUMED_MAX_HP = 99,
     SMALLEST_HEAL = 16 };
+enum { WARNING_UNSEEN = 64 };
 typedef enum { BAR_READ, BAR_FRESH, BAR_BEHIND_A_MEAL } BarState;
 
 typedef struct {
     int low, high;
     int in_reach_since, wielded_weapon, wielded_since, spec_wielded_since, ate, struck_tick, damage_since_bar;
     BarState bar;
+    int unseen[WARNING_UNSEEN], unseen_count;
 } Warning;
+
+static void warning_animated(Warning* w, int tick) {
+    assert(w->unseen_count < WARNING_UNSEEN);
+    w->unseen[w->unseen_count++] = tick;
+}
 
 static Warning warning_start(void) {
     return (Warning){.low = 1, .high = ASSUMED_MAX_HP, .in_reach_since = WARNING_NONE, .wielded_weapon = -1, .wielded_since = WARNING_NONE,
@@ -50,6 +57,9 @@ static void warning_observe(Warning* w, int tick, int ratio, int scale, int weap
         int low = warning_bar_low(ratio, scale), high = warning_bar_high(ratio, scale);
         if (w->bar == BAR_FRESH) {
             if (low - (w->high - w->damage_since_bar) >= UNSEEN_HEAL) w->ate = tick - 1;
+            int kept = 0;
+            for (int i = 0; i < w->unseen_count; i++) if (w->unseen[i] >= tick) w->unseen[kept++] = w->unseen[i];
+            w->unseen_count = kept;
             w->damage_since_bar = 0;
             w->bar = BAR_READ;
         }

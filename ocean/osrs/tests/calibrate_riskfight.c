@@ -296,6 +296,7 @@ typedef struct {
     double rec[METRICS], sim[METRICS];
     int pit[METRICS][PIT_BINS];
     int windows;
+    double seconds, decisions, ticks, rollouts, spec_counted, spec_predicted, spec_realized;
 } WindowStats;
 
 static const char* METRIC[METRICS] = {"his meals", "his hits", "his damage", "his VW specs", "his maul specs", "his vengeance", "we die", "he dies", "our hits", "our damage", "his bar at end"};
@@ -311,6 +312,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
     uint32_t pit_rng = 2463534242u;
+    double started = seconds();
     for (int t0 = tape->lo + 1; t0 + k <= tape->hi; t0++) {
         Recorded rec = recorded_window(tape, t0, k);
         double sums[METRICS] = {0};
@@ -320,7 +322,11 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
             riskfight_load_state(&sim->state, &sim->context, &snap);
             Outcome out;
+            long decisions = sim->ours.decisions, ticks = sim->ours.ticks;
             run_steps(sim, tape, t0, k, model, ours, xorshift32(&rng), &out);
+            stats->decisions += sim->ours.decisions - decisions;
+            stats->ticks += sim->ours.ticks - ticks;
+            stats->rollouts++;
             int eats = 0;
             for (int j = 0; j < out.steps; j++) eats += out.his_eat[j];
             int values[METRICS] = {eats, out.his_hits, out.his_damage, out.his_vw_specs, out.his_maul_specs, out.his_vengs,
@@ -339,10 +345,15 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
         }
         stats->windows++;
     }
+    stats->seconds += seconds() - started;
+    stats->spec_counted += sim->spec_counted;
+    stats->spec_predicted += sim->spec_predicted;
+    stats->spec_realized += sim->spec_realized;
     free(sim);
 }
 
 static void print_window_stats(const char* title, const WindowStats* s) {
+    if (s->ticks > 0) printf("%s: %.0f rollouts in %.2f s = %.0f rollouts/s with decide in the loop, %.3f decisions per tick (%.0f of %.0f ticks); played spec decisions %.0f, predicted kills %.1f, realized %.1f\n", title, s->rollouts, s->seconds, s->rollouts / s->seconds, s->decisions / s->ticks, s->decisions, s->ticks, s->spec_counted, s->spec_predicted, s->spec_realized);
     printf("%s: %d windows\n  %-16s %10s %10s %7s   PIT histogram (10 bins, flat means calibrated)\n", title, s->windows, "metric", "recorded", "sim mean", "ratio");
     for (int m = 0; m < METRICS; m++) {
         printf("  %-16s %10.0f %10.1f %7.2f  ", METRIC[m], s->rec[m], s->sim[m], s->rec[m] > 0 ? s->sim[m] / s->rec[m] : 0.0);
@@ -438,32 +449,59 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
     fit_warning.eat_action = ACT_EAT_WARNING;
     OppModel models[3] = {{MODEL_PROFILES, NULL}, {MODEL_FIT, &fit_big}, {MODEL_FIT, &fit_warning}};
     const char* names[3] = {"profiles", "fit big-hit", "fit warning"};
-    OursPolicy closed = {OURS_EAT_AT_RISK, MARGIN}, replay = {OURS_REPLAY, 0};
+    OursPolicy proxy = {OURS_EAT_AT_RISK, MARGIN, 0}, replay = {OURS_REPLAY, 0, 0}, rules = {OURS_RULES, 0, 0};
     printf("=== rollouts: fit on day %d, test on day %d, N=%d, k=%d ===\n", train_day, test_day, n, k);
-    static WindowStats stats[4];
+    static WindowStats stats[5];
     static EpisodeStats episodes[2];
     memset(stats, 0, sizeof(stats));
     memset(episodes, 0, sizeof(episodes));
+    const OppModel* chosen[5] = {&models[0], &models[2], &models[0], &models[1], &models[2]};
+    const OursPolicy* sides[5] = {&replay, &proxy, &rules, &rules, &rules};
+    const char* titles[5] = {"profiles, our recorded actions replayed (open loop)", "fit warning, our side eats at risk (proxy)", "profiles, our side on the ported rules",
+        "fit big-hit, our side on the ported rules", "fit warning, our side on the ported rules"};
     for (int i = 0; i < count; i++) {
         if (tape_day(&tapes[i]) != test_day) continue;
-        evaluate_windows(&tapes[i], &models[0], &replay, n, k, &stats[0]);
-        for (int m = 0; m < 3; m++) evaluate_windows(&tapes[i], &models[m], &closed, n, k, &stats[m + 1]);
-        for (int trigger = 0; trigger < 2; trigger++) evaluate_episodes(&tapes[i], (Trigger)trigger, models, &closed, n, &episodes[trigger]);
+        for (int c = 0; c < 5; c++) evaluate_windows(&tapes[i], chosen[c], sides[c], n, k, &stats[c]);
+        for (int trigger = 0; trigger < 2; trigger++) evaluate_episodes(&tapes[i], (Trigger)trigger, models, &rules, n, &episodes[trigger]);
     }
-    print_window_stats("profiles, our recorded actions replayed (open loop)", &stats[0]);
-    for (int m = 0; m < 3; m++) {
-        char title[96];
-        snprintf(title, sizeof(title), "%s, our side eats at risk (closed loop)", names[m]);
-        print_window_stats(title, &stats[m + 1]);
+    for (int c = 0; c < 5; c++) print_window_stats(titles[c], &stats[c]);
+    print_episodes("first meal after the Java warning (ported rules)", &episodes[0], names);
+    print_episodes("first meal after our single hit of 30 or more (ported rules)", &episodes[1], names);
+}
+
+/* Where the planner's predicted kills go: the played spec decisions of the ported rules against what the sim opponent then did, with one term changed at a time. */
+static void attribute(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
+    static OppFit fit, heavy, eager, slow;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    fit_model(tapes, count, train_day, &fit);
+    int eats, identified[2];
+    infer_servings(tapes, count, train_day, &fit, &eats, identified);
+    fit.eat_action = ACT_EAT_WARNING;
+    heavy = fit;
+    for (int w = 0; w < 2; w++) { heavy.serving[w][0] = heavy.serving[w][1] = heavy.serving[w][2] = 0; heavy.serving[w][3] = 1; }
+    eager = fit;
+    eager.logit[ACT_EAT_WARNING].w[0] += 0.7;
+    slow = fit;
+    slow.logit[ACT_EAT_WARNING].w[0] -= 0.7;
+    OppModel models[4] = {{MODEL_FIT, &fit}, {MODEL_FIT, &heavy}, {MODEL_FIT, &eager}, {MODEL_FIT, &slow}};
+    const char* names[4] = {"fitted opponent", "every meal a triple", "eats 2x as often", "eats half as often"};
+    OursPolicy ideal = {OURS_RULES, 0, 0}, late = {OURS_RULES, 0, 1};
+    printf("=== attribution: fit on day %d, test on day %d, N=%d, k=%d; played spec decisions, planner chance against kills within %d ticks ===\n", train_day, test_day, n, k, OURS_HORIZON);
+    for (int variant = 0; variant < 5; variant++) {
+        const OppModel* model = &models[variant < 4 ? variant : 0];
+        const OursPolicy* side = variant == 4 ? &late : &ideal;
+        WindowStats stats = {{0}};
+        for (int i = 0; i < count; i++) if (tape_day(&tapes[i]) == test_day) evaluate_windows(&tapes[i], model, side, n, k, &stats);
+        printf("  %-22s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n", variant == 4 ? "our clicks 1 tick late" : names[variant],
+            stats.spec_counted, stats.spec_predicted, stats.spec_realized, stats.spec_realized / stats.spec_predicted, stats.sim[7], stats.sim[6]);
     }
-    print_episodes("first meal after the Java warning (closed loop)", &episodes[0], names);
-    print_episodes("first meal after our single hit of 30 or more (closed loop)", &episodes[1], names);
 }
 
 static void branch(int n, int horizon, Tape* tapes, int count) {
     OppModel model = {MODEL_PROFILES, NULL};
-    OursPolicy policies[3] = {{OURS_REPLAY, 0}, {OURS_EAT_AT_THRESHOLD, 50}, {OURS_EAT_AT_RISK, MARGIN}};
-    const char* names[3] = {"replay recorded", "eat below 50", "eat at risk"};
+    OursPolicy policies[4] = {{OURS_REPLAY, 0, 0}, {OURS_EAT_AT_THRESHOLD, 50, 0}, {OURS_EAT_AT_RISK, MARGIN, 0}, {OURS_RULES, 0, 0}};
+    const char* names[4] = {"replay recorded", "eat below 50", "eat at risk", "ported rules"};
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
     for (int i = 0; i < count; i++) {
@@ -475,7 +513,7 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
         riskfight_load_state(&sim->state, &sim->context, &snap);
         RiskfightState base = sim->state;
         printf("%s tick %d: our hp %d\n", tape->name, t0, base.env.players[0].current_hitpoints);
-        for (int p = 0; p < 3; p++) {
+        for (int p = 0; p < 4; p++) {
             int die = 0, kill = 0;
             double start = seconds();
             for (int r = 0; r < n; r++) {
@@ -499,11 +537,12 @@ int main(int argc, char** argv) {
     assert(argc >= 5);
     static Tape tapes[MAX_TAPES];
     const char* mode = argv[1];
-    int first = !strcmp(mode, "rollouts") ? 6 : 4;
+    int first = !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
     if (!strcmp(mode, "teacher")) teacher(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
+    else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else abort();
     return 0;

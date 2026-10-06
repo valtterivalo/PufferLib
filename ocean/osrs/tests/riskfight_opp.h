@@ -164,6 +164,10 @@ static void hist_series(const Tape* tape, Hist* out) {
         h.since_vw_spec = vw ? 0 : h.since_vw_spec + 1;
         h.since_maul_spec = maul ? 0 : h.since_maul_spec + 1;
         if (ate) warning_ate(&h.warning, x);
+        int other_anim = 0;
+        for (int i = 0; i < tape->anim_count; i++)
+            other_anim |= tape->anims[i].tick == x && tape->anims[i].side == SIDE_HIM && tape->anims[i].anim != ANIM_EAT;
+        if (other_anim) warning_animated(&h.warning, x);
         for (int i = 0; i < tape->hit_count; i++) {
             const TapeHit* hit = &tape->hits[i];
             if (hit->tick != x || hit->side != SIDE_HIM) continue;
@@ -207,6 +211,7 @@ static void hist_step(Hist* h, RiskfightState* s, int tick, const StepEvents* e)
     h->ready_age = him->attack_timer <= 0 ? h->ready_age + 1 : 0;
     if (e->max_hit_on_him >= BIG_HIT_DAMAGE) h->big_hit_tick = tick;
     if (e->ate_visible) warning_ate(&h->warning, tick);
+    if (e->swung || e->hit_on_him) warning_animated(&h->warning, tick);
     if (e->hit_on_him) warning_hitsplat(&h->warning);
     if (e->damage_on_him) warning_struck(&h->warning, tick, e->damage_on_him);
     Player* us = &s->env.players[0];

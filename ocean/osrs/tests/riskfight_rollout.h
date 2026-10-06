@@ -1,10 +1,11 @@
 #ifndef RISKFIGHT_ROLLOUT_H
 #define RISKFIGHT_ROLLOUT_H
 #include "riskfight_opp.h"
+#include "riskfight_ours_state.h"
 
 enum { MAX_STEPS = 32, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
 typedef enum { MODEL_PROFILES, MODEL_FIT } ModelKind;
-typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_IDLE } OursKind;
+typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES, OURS_IDLE } OursKind;
 
 typedef struct {
     ModelKind kind;
@@ -14,6 +15,7 @@ typedef struct {
 typedef struct {
     OursKind kind;
     int eat_below;
+    int delay;
 } OursPolicy;
 
 typedef struct {
@@ -32,13 +34,21 @@ typedef struct {
     Outcome* outcome;
     int tick_base, step_damage, step_max_hit;
     Hist hist;
+    Ours ours;
+    StepEvents previous;
+    double spec_predicted, spec_realized, spec_counted;
+    HumanCommand held[16];
+    int held_count;
 } Sim;
+
+#include "riskfight_ours.h"
 
 static void sim_init(Sim* sim) {
     memset(sim, 0, sizeof(*sim));
     riskfight_init_context((EncounterContext*)&sim->context);
     riskfight_init_state((EncounterState*)&sim->state, (EncounterContext*)&sim->context);
     sim->context.self_play = 1;
+    ours_init(&sim->ours);
     riskfight_finalize_context((EncounterState*)&sim->state, (EncounterContext*)&sim->context);
 }
 
@@ -131,6 +141,18 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
             }
             human_input_queue_command(hi, command);
         }
+    } else if (policy->kind == OURS_RULES) {
+        ours_act(sim, &sim->ours, hi, step, &sim->previous);
+        if (policy->delay) {
+            HumanCommand fresh[16];
+            int fresh_count = hi->commands.count;
+            assert(fresh_count <= 16);
+            memcpy(fresh, hi->commands.items, (size_t)fresh_count * sizeof(HumanCommand));
+            human_input_clear_pending(hi);
+            for (int i = 0; i < sim->held_count; i++) human_input_queue_command(hi, sim->held[i]);
+            memcpy(sim->held, fresh, (size_t)fresh_count * sizeof(HumanCommand));
+            sim->held_count = fresh_count;
+        }
     } else if (policy->kind == OURS_EAT_AT_RISK) {
         queue_ours_at_risk(sim, tape, policy, tick, step);
     } else if (policy->kind == OURS_EAT_AT_THRESHOLD) {
@@ -159,6 +181,16 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
     sim->outcome = out;
     sim->tick_base = tick_base;
+    sim->previous = (StepEvents){0};
+    sim->held_count = 0;
+    sim->ours.stage = 0;
+    sim->ours.played_count = 0;
+    sim->ours.last_played_step = INT_MIN / 2;
+    sim->ours.last_played_choice = -1;
+    sim->ours.eat_added = 0;
+    sim->ours.last_swing_seen = -1;
+    sim->ours.seen_weapons = 0;
+    sim->ours.last_decision = INT_MIN / 2;
     if (tape->hist_series) sim->hist = ((const Hist*)tape->hist_series)[tick_base - tape->lo];
     s->env.pvp_runtime.hit_observer = sim_observe_hit;
     s->env.pvp_runtime.hit_observer_context = sim;
@@ -176,6 +208,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
             .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
         hist_step(&sim->hist, s, tick_base + 1 + step, &events);
+        sim->previous = events;
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);
         if (out->his_eat[step] && out->first_eat < 0) out->first_eat = step;
@@ -184,6 +217,13 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         out->his_vengs += s->env.players[1].cast_veng_this_tick;
         if (s->env.players[0].current_hitpoints <= 0 && out->our_death < 0) out->our_death = step;
         if (s->env.players[1].current_hitpoints <= 0 && out->his_death < 0) out->his_death = step;
+    }
+    for (int i = 0; i < sim->ours.played_count; i++) {
+        int step = sim->ours.played[i].step;
+        if (step + OURS_HORIZON > k) continue;
+        sim->spec_counted++;
+        sim->spec_predicted += sim->ours.played[i].chance;
+        sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }
     out->hp_us = s->env.players[0].current_hitpoints;
     out->hp_him = s->env.players[1].current_hitpoints;

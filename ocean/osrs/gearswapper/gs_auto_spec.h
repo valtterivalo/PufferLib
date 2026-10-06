@@ -4,7 +4,7 @@
 
 /* AutoSpec.java: the knockout chance of a plan against an opponent that reacts as the recorded first meals did. */
 enum { GS_REACTION_TICKS = 7 };
-static const double GS_FIRST_MEAL[9] = {0.01, 0.21, 0.49, 0.18, 0.03, 0.05, 0.01, 0.01, 0.01};
+static const double GS_FIRST_MEAL[9] = {0.006, 0.221, 0.493, 0.166, 0.038, 0.032, 0.006, 0.006, 0.032};
 static const double GS_SERVING_SHARES[4] = {0.15, 0.34, 0.34, 0.17};
 typedef enum { GS_FOOD_HARD, GS_FOOD_BREW, GS_FOOD_KARAMBWAN } GsSpecFood;
 static const int GS_FOOD_HEALS[3] = {22, 16, 18};
