@@ -1,33 +1,18 @@
 #ifndef RISKFIGHT_OURS_H
 #define RISKFIGHT_OURS_H
 
-/* Our side of a rollout driven by the ported Gear Swapper rules. Beliefs come from the sim as the plugin would have them
- * (the health bar and animations through Hist.warning, his arsenal as seen) with PID, his spec energy and Vengeance read
- * from the truth, which the Java inference only approximates. Timing is ideal: a click is processed the next tick. */
-enum { OURS_PROCESS = 1, OURS_COMPLETE = 2, OURS_MAUL_PROCESS = 2, OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, SEEN_VW = 1, SEEN_MAUL = 2 };
-static const double VOIDWAKER_CARRIED = 41 / 59.0;
-static const double MAUL_CARRIED = 23 / 59.0;
+/* Our side of a rollout driven by the ported Gear Swapper rules on what the client shows: every belief about him is the plugin's inference
+ * from the observed events, ours is read from the sim as the client reads it. Clicks are timed as the hand times them: the first press lands
+ * 130 to 460 ms after the decision, the next 80 to 170 ms after the one before, and a press after the 490 ms server cutoff is processed a tick later. */
+enum { OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, CUTOFF_MS = 490, TICK_MS = 600, FIRST_PRESS_MS = 130, FIRST_PRESS_SPAN = 330,
+    GAP_MS = 80, GAP_SPAN = 90, MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, MAUL_GROUP_ABORT_PER_8 = 2, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
+enum { KIND_HARD, KIND_BREW, KIND_KARAMBWAN };
 
-typedef struct { int most; double accuracy; } Strike;
-
-static Strike weapon_strike(const Player* owner, Player* target, uint8_t weapon) {
-    static Player copy;
-    memcpy(&copy, owner, sizeof(copy));
-    copy.equipped[GEAR_SLOT_WEAPON] = weapon;
-    if (item_is_two_handed(weapon)) copy.equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
-    osrs_refresh_player_equipment(&copy);
-    AttackStyle style = get_slot_weapon_attack_style(&copy) == ATTACK_STYLE_RANGED ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
-    return (Strike){calculate_max_hit(&copy, style, 1.0f, 30), calculate_hit_chance(&copy, target, style, 1.0f)};
+static uint32_t ours_random(Ours* ours) {
+    ours->rng ^= ours->rng << 13; ours->rng ^= ours->rng >> 17; ours->rng ^= ours->rng << 5;
+    return ours->rng;
 }
-
-static GsStyle gs_style_of_weapon(uint8_t weapon) { return get_item_attack_style(weapon) == 2 ? GS_RANGED : GS_MELEE; }
-static int weapon_interval(const Player* owner, uint8_t weapon) {
-    static Player copy;
-    memcpy(&copy, owner, sizeof(copy));
-    copy.equipped[GEAR_SLOT_WEAPON] = weapon;
-    osrs_refresh_player_equipment(&copy);
-    return get_slot_gear_bonuses(&copy)->attack_speed;
-}
+static double ours_uniform(Ours* ours, double low, double span) { return low + span * (ours_random(ours) >> 8) / 16777216.0; }
 
 static int slot_with_kind(const Player* p, OsrsConsumableKind kind, int* count) {
     int first = -1;
@@ -49,144 +34,46 @@ static int slot_with_item(const Player* p, int (*matches)(uint8_t)) {
 }
 static int is_voidwaker(uint8_t item) { return item == ITEM_VOIDWAKER; }
 
-static GsWarning to_gs_warning(const Warning* w) {
-    GsWarning out = {warning_since(w), {0}, w->unseen_count};
-    assert(w->unseen_count <= 16);
-    memcpy(out.unseen, w->unseen, (size_t)w->unseen_count * sizeof(int));
-    return out;
+static void command(HumanInput* hi, HumanCommand c) { human_input_queue_command(hi, c); }
+static HumanCommand click_command(int slot) { return (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = slot}; }
+static HumanCommand attack_command(void) { return (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1}; }
+static HumanCommand spec_command(void) { return (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE}; }
+static HumanCommand vengeance_command(void) { return (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE}; }
+
+static void ours_push(Ours* ours, int due, HumanCommand c) {
+    assert(ours->pending_count < OURS_PENDING);
+    ours->pending[ours->pending_count++] = (OursPending){due, c};
+    ours->busy_until = imax(ours->busy_until, due);
 }
 
-static GsTimer timer_of(int seen, int tick, int earliest) { return (GsTimer){seen, seen ? imax(tick + 1, earliest) : 0, earliest}; }
-
-typedef struct {
-    GsEatSituation eat;
-    GsFood foods[3];
-    int food_slot[3], food_count;
-    GsMeal meals[8];
-    int meal_count;
-} OursBeliefs;
-
-static void ours_beliefs(Sim* sim, Ours* ours, int tick, OursBeliefs* b) {
-    RiskfightState* s = &sim->state;
-    Player* us = &s->env.players[0];
-    Player* him = &s->env.players[1];
-    const Hist* h = &sim->hist;
-    memset(b, 0, sizeof(*b));
-    GsEatSituation* e = &b->eat;
-    e->tick = tick;
-    e->hitpoints = us->current_hitpoints;
-    e->pid = s->env.pid_holder == 0 ? GS_PID_LOCAL : GS_PID_OPPONENT;
-    e->distance = chebyshev_distance(us->x, us->y, him->x, him->y);
-    const RiskfightVisibleOpponent* his_view = &s->visible[0];
-    const RiskfightVisibleOpponent* our_view = &s->visible[1];
-    int his_last = sim->tick_base + (his_view->last_attack_tick - RISKFIGHT_LOAD_TICK);
-    e->opponent_timer = timer_of(his_view->last_attack_tick >= 0, tick, his_last + his_view->last_attack_speed);
-    uint8_t his_weapon = him->equipped[GEAR_SLOT_WEAPON];
-    ours->seen_weapons |= (his_weapon == ITEM_VOIDWAKER || h->since_vw_spec < 99 ? SEEN_VW : 0) | (is_maul_item(his_weapon) || h->since_maul_spec < 99 ? SEEN_MAUL : 0);
-    Strike normal = weapon_strike(him, us, his_weapon);
-    e->attacks[e->attack_count++] = (GsAttack){gs_style_of_weapon(his_weapon), 0, normal.most, 0, weapon_interval(him, his_weapon), normal.accuracy};
-    if (ours->seen_weapons & SEEN_VW) {
-        Strike vw = weapon_strike(him, us, ITEM_VOIDWAKER);
-        e->attacks[e->attack_count++] = (GsAttack){GS_MELEE, osrs_voidwaker_min_hit(vw.most), osrs_voidwaker_max_hit(vw.most), 50, 4, 1.0};
-    } else {
-        Strike vw = weapon_strike(him, us, ITEM_VOIDWAKER);
-        e->hidden[e->hidden_count++] = (GsHidden){0, {GS_MELEE, osrs_voidwaker_min_hit(vw.most), osrs_voidwaker_max_hit(vw.most), 50, 4, 1.0}, VOIDWAKER_CARRIED};
+/* A run of clicks from the decision at `tick`: each click's processing tick follows from when the hand presses it. */
+static void ours_run(Ours* ours, int tick, const HumanCommand* clicks, int count) {
+    if (ours->ideal_timing) {
+        for (int i = 0; i < count; i++) ours_push(ours, tick + 1, clicks[i]);
+        return;
     }
-    Strike maul = weapon_strike(him, us, ITEM_GRANITE_MAUL_ORNATE);
-    GsAttack maul_attack = {GS_MELEE, 0, maul.most, 50, 1, maul.accuracy};
-    if (ours->seen_weapons & SEEN_MAUL) { e->has_maul = 1; e->maul = maul_attack; }
-    else e->hidden[e->hidden_count++] = (GsHidden){1, maul_attack, MAUL_CARRIED};
-    e->energy_high = him->special_energy;
-    e->vengeance = him->veng_active ? GS_VENGEANCE_UP : GS_VENGEANCE_DOWN;
-    e->recoil_seen = him->equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL;
-    uint8_t our_weapon = us->equipped[GEAR_SLOT_WEAPON];
-    int our_last = sim->tick_base + (our_view->last_attack_tick - RISKFIGHT_LOAD_TICK);
-    int stored = our_view->last_attack_tick >= 0 ? our_last + our_view->last_attack_speed + ours->eat_added : tick + 1;
-    e->local_timer = (GsTimer){1, tick + 1 + imax(0, us->attack_timer), stored};
-    e->local_style = GS_MELEE;
-    Strike ours_normal = weapon_strike(us, him, our_weapon);
-    int armed = us->spec_armed && osrs_spec_cost(our_weapon) > 0 && us->special_energy >= osrs_spec_cost(our_weapon);
-    e->local_normal = ours_normal.most;
-    e->local_most = armed && our_weapon == ITEM_VOIDWAKER ? osrs_voidwaker_max_hit(ours_normal.most) : ours_normal.most;
-    e->local_interval = weapon_interval(us, our_weapon);
-    e->local_accuracy = ours_normal.accuracy;
-    e->local_opening_accuracy = armed ? 1.0 : ours_normal.accuracy;
-    e->opponent_hp = (GsHealthRange){h->warning.low, h->warning.high, GS_ASSUMED_MAX_HP};
-    e->offence = osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE;
-    e->tolerance = 0.01;
-    e->eat_cost = 0.01;
-    e->stakes = 1;
-    e->warning = to_gs_warning(&h->warning);
-    e->floor = GS_NONE;
-    static const OsrsConsumableKind kinds[3] = {OSRS_CONSUMABLE_ANGLERFISH, OSRS_CONSUMABLE_BREW, OSRS_CONSUMABLE_KARAMBWAN};
-    static const GsConsumable gs_kinds[3] = {GS_HARD_FOOD, GS_POTION, GS_FAST_FOOD};
-    static const int heals[3] = {22, 16, 18};
-    for (int k = 0; k < 3; k++) {
-        int count;
-        int slot = slot_with_kind(us, kinds[k], &count);
-        if (slot < 0) continue;
-        int timer = k == 0 ? us->food_timer : k == 1 ? us->potion_timer : us->karambwan_timer;
-        int total = count;
-        if (k == 1) {
-            total = 0;
-            for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
-                if (osrs_inventory_cell_metadata(&us->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_BREW)
-                    total += osrs_inventory_cell_metadata(&us->inventory_cells[i])->dose_count;
-        }
-        b->foods[b->food_count] = (GsFood){gs_kinds[k], heals[k], timer > 0 ? tick + timer + 1 : GS_NONE, total, k == 1};
-        b->food_slot[b->food_count++] = slot;
-    }
-    for (int mask = 1; mask < 1 << b->food_count; mask++) {
-        GsMeal* meal = &b->meals[b->meal_count];
-        memset(meal, 0, sizeof(*meal));
-        int seen[GS_CONSUMABLES] = {0};
-        int fine = 1;
-        for (int i = 0; i < b->food_count; i++) {
-            if (!(mask >> i & 1)) continue;
-            fine &= !seen[b->foods[i].kind];
-            seen[b->foods[i].kind] = 1;
-            meal->foods[meal->n] = i;
-            meal->offsets[meal->n] = OURS_PROCESS;
-            meal->following[meal->n++] = OURS_PROCESS;
-        }
-        if (!fine) continue;
-        meal->earliest_process = OURS_PROCESS;
-        meal->resume = OURS_PROCESS;
-        meal->complete = OURS_COMPLETE;
-        b->meal_count++;
+    double ms = ours_uniform(ours, FIRST_PRESS_MS, FIRST_PRESS_SPAN);
+    for (int i = 0; i < count; i++) {
+        if (i) ms += ours_uniform(ours, GAP_MS, GAP_SPAN);
+        int rel = ms < CUTOFF_MS ? 1 : 2 + (int)((ms - CUTOFF_MS) / TICK_MS);
+        ours_push(ours, tick + rel, clicks[i]);
     }
 }
 
-static int ours_landing(int process, GsPid pid) { return gs_lands(process, GS_MELEE, 1, gs_local_lead(pid)); }
-
-typedef struct { GsSpecSituation s; GsSpecPlan plans[4], after[4]; int plan_count, after_count; GsRebound rebound; int energy; GsReflect reflect; } OursSpecBeliefs;
-
-static void ours_spec_beliefs(Sim* sim, Ours* ours, int tick, const GsEatSituation* e, Arena* arena, OursSpecBeliefs* b) {
-    RiskfightState* s = &sim->state;
-    Player* us = &s->env.players[0];
-    Player* him = &s->env.players[1];
-    const Hist* h = &sim->hist;
-    memset(b, 0, sizeof(*b));
-    GsSpecSituation* sp = &b->s;
-    sp->hitpoints = e->opponent_hp;
-    sp->hard_food_ready = h->since_eat < 99 ? tick - h->since_eat + 3 : GS_NONE;
-    sp->vengeance = e->vengeance;
-    sp->pid = e->pid;
-    sp->recoil_charges = us->equipped[GEAR_SLOT_RING] == ITEM_RING_OF_RECOIL ? RECOIL_MAX_CHARGES - us->item_effect_state.recoil_damage_used : 0;
-    sp->tick = tick;
-    sp->warning = e->warning;
-    int veng_ready = !us->veng_active && us->veng_cooldown <= 1 && us->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && s->inventory_use[0].vengeance_sacks > 0;
-    b->rebound = us->veng_active ? (GsRebound){GS_REBOUND_UP, GS_NONE} : veng_ready ? (GsRebound){GS_REBOUND_CASTABLE, tick + OURS_PROCESS} : (GsRebound){GS_REBOUND_SPENT, GS_NONE};
-    sp->rebound = b->rebound;
-    int due = e->opponent_timer.seen ? e->opponent_timer.next : tick + 1;
-    if (e->attack_count > 0 && osrs_interaction_active(&him->interaction)) {
-        const GsAttack* a = &e->attacks[0];
-        sp->has_incoming = 1;
-        sp->incoming = (GsIncoming){gs_lands(due, a->style, e->distance, gs_opponent_lead(e->pid)), a->least, a->most, a->accuracy, due};
+static void ours_pop_due(Ours* ours, HumanInput* hi, int due) {
+    int kept = 0;
+    for (int i = 0; i < ours->pending_count; i++) {
+        if (ours->pending[i].due == due) command(hi, ours->pending[i].command);
+        else ours->pending[kept++] = ours->pending[i];
     }
-    b->energy = us->special_energy;
-    b->reflect = e->attacks[0].most >= 40 ? GS_REFLECT_WORTH : GS_REFLECT_WEAK;
-    (void)ours;
+    ours->pending_count = kept;
+}
+
+static GsSpecHit gs_certain_hit(Arena* arena, int lands, int damage) {
+    double* d = arena_alloc(arena, (size_t)(damage + 1) * sizeof(double));
+    memset(d, 0, (size_t)(damage + 1) * sizeof(double));
+    d[damage] = 1;
+    return (GsSpecHit){lands, d, damage + 1};
 }
 
 static int ours_maul_slot(const Player* p) {
@@ -197,85 +84,165 @@ static int ours_maul_slot(const Player* p) {
     return p->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE || used < OSRS_INVENTORY_SIZE ? slot : -1;
 }
 
-static int ours_build_plans(Arena* arena, Sim* sim, const GsEatSituation* e, int tick, int extra, GsSpecPlan* plans) {
-    Player* us = &sim->state.env.players[0];
-    Player* him = &sim->state.env.players[1];
-    int energy = us->special_energy, count = 0;
-    int swing = imax(tick + 1, e->local_timer.next);
-    Strike vw = weapon_strike(us, him, ITEM_VOIDWAKER);
-    int vw_min = osrs_voidwaker_min_hit(vw.most), vw_max = osrs_voidwaker_max_hit(vw.most);
-    if (us->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER && energy >= 50) {
-        GsSpecHit* hit = arena_alloc(arena, sizeof(GsSpecHit));
-        *hit = gs_spec_hit_of(arena, ours_landing(swing, e->pid), vw_min, vw_max, 1.0);
-        plans[count++] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, hit, 1};
-    }
-    if (ours_maul_slot(us) >= 0 && energy >= 50) {
-        Strike maul = weapon_strike(us, him, ITEM_GRANITE_MAUL_ORNATE);
-        int process = tick + OURS_MAUL_PROCESS + extra;
-        GsSpecHit* hits = arena_alloc(arena, 2 * sizeof(GsSpecHit));
-        hits[0] = gs_spec_hit_of(arena, ours_landing(process, e->pid), 0, maul.most, maul.accuracy);
-        plans[count++] = (GsSpecPlan){GS_CHOICE_MAUL, hits, 1};
-        if (energy >= 100) {
-            GsSpecHit* both = arena_alloc(arena, 2 * sizeof(GsSpecHit));
-            both[0] = hits[0];
-            both[1] = gs_spec_hit_of(arena, ours_landing(imax(process + 1, swing), e->pid), vw_min, vw_max, 1.0);
-            plans[count++] = (GsSpecPlan){GS_CHOICE_MAUL_VOIDWAKER, both, 2};
+typedef struct {
+    GsFood foods[3];
+    int food_slot[3], food_count;
+    GsMeal meals[8];
+    int meal_count;
+} OursFoods;
+
+/* AutoEater.meals: every set of foods of distinct channels, depth first in offer order, the first food processed next tick and the rest the tick after. */
+static void ours_meals(OursFoods* f, int next, int* selected, int depth) {
+    if (depth) {
+        GsMeal* meal = &f->meals[f->meal_count++];
+        memset(meal, 0, sizeof(*meal));
+        meal->n = depth;
+        for (int j = 0; j < depth; j++) {
+            meal->foods[j] = selected[j];
+            meal->offsets[j] = j == 0 ? 1 : 2;
+            meal->following[j] = j == 0 ? 1 : 2;
         }
+        meal->earliest_process = 1;
+        meal->resume = 1;
+        meal->complete = 2;
     }
-    return count;
+    for (int i = next; i < f->food_count; i++) {
+        selected[depth] = i;
+        ours_meals(f, i + 1, selected, depth + 1);
+    }
 }
 
-static void command(HumanInput* hi, HumanCommand c) { human_input_queue_command(hi, c); }
-static void click_slot(HumanInput* hi, int slot) { command(hi, (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = slot}); }
-static void attack(HumanInput* hi) { command(hi, (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1}); }
-
-/* Queues our commands for the step after tick `tick`. previous holds what the last step showed. */
-static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step, const StepEvents* previous) {
-    RiskfightState* s = &sim->state;
-    Player* us = &s->env.players[0];
-    int tick = sim->tick_base + step;
-    human_input_clear_pending(hi);
-    ours->ticks++;
-    const RiskfightVisibleOpponent* our_view = &s->visible[1];
-    if (our_view->last_attack_tick != ours->last_swing_seen) {
-        ours->last_swing_seen = our_view->last_attack_tick;
-        ours->eat_added = 0;
+static void ours_foods(const Sim* sim, OursFoods* f) {
+    const Player* us = &sim->state.env.players[0];
+    const GsInfer* inf = &sim->obs.inf;
+    memset(f, 0, sizeof(*f));
+    static const OsrsConsumableKind kinds[3] = {OSRS_CONSUMABLE_ANGLERFISH, OSRS_CONSUMABLE_BREW, OSRS_CONSUMABLE_KARAMBWAN};
+    static const GsConsumable channels[3] = {GS_HARD_FOOD, GS_POTION, GS_FAST_FOOD};
+    static const int heals[3] = {22, 16, 18};
+    for (int k = 0; k < 3; k++) {
+        int count;
+        int slot = slot_with_kind(us, kinds[k], &count);
+        if (slot < 0) continue;
+        int total = count;
+        if (k == KIND_BREW) {
+            total = 0;
+            for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+                const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&us->inventory_cells[i]);
+                if (m->consumable_kind == OSRS_CONSUMABLE_BREW) total += m->dose_count;
+            }
+        }
+        f->foods[f->food_count] = (GsFood){channels[k], heals[k], inf->ready[channels[k]], total, k == KIND_BREW};
+        f->food_slot[f->food_count++] = slot;
     }
-    if (ours->stage) {
-        int slot = slot_with_item(us, is_voidwaker);
-        if (slot >= 0) click_slot(hi, slot);
-        if (ours->stage_choice == GS_CHOICE_MAUL_VOIDWAKER) command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
-        attack(hi);
-        ours->stage = 0;
+    int selected[3];
+    ours_meals(f, 0, selected, 0);
+}
+
+static GsRebound ours_rebound(const Sim* sim, const Ours* ours, int tick, int servings) {
+    const Player* us = &sim->state.env.players[0];
+    if (us->veng_active) return (GsRebound){GS_REBOUND_UP, GS_NONE};
+    int ready = us->veng_cooldown <= 1 && us->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL && sim->state.inventory_use[0].vengeance_sacks > 0 &&
+        tick > ours->vengeance_clicked + 1;
+    return ready ? (GsRebound){GS_REBOUND_CASTABLE, tick + 1 + servings} : (GsRebound){GS_REBOUND_SPENT, GS_NONE};
+}
+
+static GsOwn ours_own(const Sim* sim) {
+    const Player* us = &sim->state.env.players[0];
+    GsOwn own;
+    gs_own_of(&sim->obs.inf.c, &own.maul_id, &own.inventory_count, &own.shield_worn);
+    (void)us;
+    return own;
+}
+
+static int ours_venged_reason(const GsInfer* inf, int tick, GsCast cast, const GsRebound* rebound, GsPid pid) {
+    GsIncoming attack;
+    int has_attack = inf->attack_tick == tick && gs_swing_underway(inf, tick, &attack);
+    GsReflect weapon = gs_weapon_reflect((GsInfer*)inf, tick);
+    return gs_vengeance_reason(cast, rebound, has_attack, has_attack ? attack.lands : 0, pid, weapon, inf->swing_reflect);
+}
+
+static void ours_group_two(Ours* ours, const Player* us, int tick, GsChoiceKind choice) {
+    int vw_slot = slot_with_item(us, is_voidwaker);
+    if (vw_slot < 0) return;
+    if (ours->ideal_timing) {
+        ours_push(ours, tick + 2, click_command(vw_slot));
+        if (choice == GS_CHOICE_MAUL_VOIDWAKER) ours_push(ours, tick + 2, spec_command());
+        ours_push(ours, tick + 2, attack_command());
         return;
     }
-    int interesting = step == 0 || previous->ate || previous->swung || previous->vw || previous->maul || previous->hit_on_him || us->hit_landed_this_tick ||
-        s->env.players[1].cast_veng_this_tick || tick - ours->last_decision >= OURS_REFRESH;
-    if (!osrs_interaction_active(&us->interaction) && !interesting) attack(hi);
-    if (!interesting) return;
+    if (ours_random(ours) % 8 < MAUL_GROUP_ABORT_PER_8) {
+        ours_push(ours, tick + ABORT_RESTORE, click_command(vw_slot));
+        ours_push(ours, tick + ABORT_RESTORE, attack_command());
+        return;
+    }
+    ours_push(ours, tick + MAUL_GROUP_WIELD, click_command(vw_slot));
+    if (choice == GS_CHOICE_MAUL_VOIDWAKER) ours_push(ours, tick + MAUL_GROUP_BAR, spec_command());
+    ours_push(ours, tick + MAUL_GROUP_BAR, attack_command());
+}
+
+/* The plugin's state with the beliefs an ablation reads from the sim put in place of its inference. */
+static void ours_truth(const Sim* sim, int truth, int tick, GsInfer* view) {
+    const RiskfightState* s = &sim->state;
+    const Player* him = &s->env.players[1];
+    if (truth & TRUTH_PID) { view->pid = gs_pid_unknown(); view->pid.owner = s->env.pid_holder == 0 ? GS_PID_LOCAL : GS_PID_OPPONENT; view->pid.observed_tick = tick; }
+    if (truth & TRUTH_ENERGY) view->opponent.spec = (GsSpecEnergy){tick, {him->special_energy, him->special_energy}, {him->special_energy, him->special_energy}, 0};
+    if (truth & TRUTH_VENGEANCE) view->opponent.vengeance = him->veng_active ? gs_vengeance_cast(tick) : (GsVengeanceState){GS_VPHASE_DISARMED, 0, 0, 0, 0};
+    if (truth & TRUTH_HP) view->opponent_hitpoints = (GsHealthRange){imax(1, him->current_hitpoints), imax(1, him->current_hitpoints), imax(GS_ASSUMED_MAX_HP, him->current_hitpoints)};
+    if (truth & TRUTH_TIMER) {
+        const RiskfightVisibleOpponent* seen = &s->visible[0];
+        int next = sim->tick_base + (seen->last_attack_tick - RISKFIGHT_LOAD_TICK) + seen->last_attack_speed;
+        view->opponent.timer = seen->last_attack_tick >= 0 ? (GsTimerState){1, next, next} : (GsTimerState){0, 0, 0};
+    }
+}
+
+/* Plans what the plugin would on this tick and queues the clicks. */
+static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
+    RiskfightState* s = &sim->state;
+    Player* us = &s->env.players[0];
+    static GsInfer view;
+    view = sim->obs.inf;
+    ours_truth(sim, ours->truth, tick, &view);
+    GsInfer* inf = &view;
     ours->last_decision = tick;
     ours->decisions++;
     ours->arena.used = 0;
-    static OursBeliefs beliefs;
-    ours_beliefs(sim, ours, tick, &beliefs);
-    GsVerdict verdict = gs_auto_eat_decide(&beliefs.eat, beliefs.foods, beliefs.food_count, beliefs.meals, beliefs.meal_count, &ours->arena);
-    int cast = 0;
-    if (verdict.decision != GS_WAIT && verdict.food_count > 0) {
-        int kinds[GS_CONSUMABLES] = {0};
-        for (int i = 0; i < verdict.food_count; i++) {
-            click_slot(hi, beliefs.food_slot[verdict.foods[i]]);
-            kinds[beliefs.foods[verdict.foods[i]].kind] = 1;
+    GsPid pid = gs_pid_at(inf, tick);
+    GsEatSituation e;
+    gs_eat_situation(inf, tick, osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE, 0.01, 0.01, ours->equal_stakes ? 1.0 : gs_stakes_ratio(sim->obs.stakes), &e);
+    OursFoods foods;
+    ours_foods(sim, &foods);
+    GsVerdict verdict = gs_auto_eat_decide(&e, foods.foods, foods.food_count, foods.meals, foods.meal_count, &ours->arena);
+    if (verdict.food_count > 0) {
+        ours->pending_count = 0;
+        HumanCommand clicks[8];
+        int n = 0;
+        for (int i = 0; i < verdict.food_count; i++) clicks[n++] = click_command(foods.food_slot[verdict.foods[i]]);
+        GsRebound rebound = ours_rebound(sim, ours, tick, verdict.food_count);
+        if (rebound.kind == GS_REBOUND_CASTABLE && ours_venged_reason(inf, tick, GS_CAST_KEEP, &rebound, pid) != GS_REASON_NONE) {
+            clicks[n++] = vengeance_command();
+            ours->vengeance_clicked = tick + 1;
         }
-        ours->eat_added += consumption_delay(consumption_of(kinds[GS_POTION], kinds[GS_FAST_FOOD], kinds[GS_HARD_FOOD]));
-        attack(hi);
+        clicks[n++] = attack_command();
+        ours_run(ours, tick, clicks, n);
         return;
     }
-    static OursSpecBeliefs spec;
-    ours_spec_beliefs(sim, ours, tick, &beliefs.eat, &ours->arena, &spec);
-    GsSpecPlan plans[4], after[4];
-    int plan_count = ours_build_plans(&ours->arena, sim, &beliefs.eat, tick, 0, plans);
-    int after_count = spec.rebound.kind == GS_REBOUND_CASTABLE ? ours_build_plans(&ours->arena, sim, &beliefs.eat, tick, 1, after) : 0;
-    GsSpecDecision decision = gs_auto_spec_decide(&ours->arena, &spec.s, plans, plan_count, after, after_count, spec.energy);
+    if (ours->pending_count > 0) return;
+    GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0};
+    GsRebound rebound = ours_rebound(sim, ours, tick, 0);
+    int planned = gs_spec_plannable(inf);
+    if (planned) {
+        GsSpecSituation spec;
+        GsUnderway underway;
+        gs_spec_inputs(inf, tick, &spec, &underway);
+        GsSpecHit certain;
+        if (underway.certain) { certain = gs_certain_hit(&ours->arena, underway.lands, underway.damage); spec.underway = &certain; spec.underway_count = 1; }
+        spec.rebound = rebound;
+        GsOwn own = ours_own(sim);
+        GsSpecPlan plans[4], after[4];
+        int plan_count = gs_spec_plans(&ours->arena, inf, tick, 0, &own, plans);
+        int after_count = rebound.kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
+        decision = gs_auto_spec_decide(&ours->arena, &spec, plans, plan_count, after, after_count, gs_spec_energy(&inf->c));
+    }
     if (decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;
@@ -285,25 +252,43 @@ static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step, const StepE
         ours->last_played_choice = decision.choice;
         ours->last_played_step = step;
     }
-    GsPid first = beliefs.eat.pid;
-    int attack_underway = 0;
-    GsCastReason reason = gs_vengeance_reason(decision.cast, &spec.rebound, attack_underway, 0, first, spec.reflect, spec.reflect);
-    if (reason != GS_REASON_NONE && spec.rebound.kind == GS_REBOUND_CASTABLE) { command(hi, (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE}); cast = 1; }
-    (void)cast;
+    HumanCommand clicks[10];
+    int n = 0;
+    GsCastReason reason = planned || inf->timed >= 0 ? ours_venged_reason(inf, tick, decision.cast, &rebound, pid) : GS_REASON_NONE;
+    if (reason != GS_REASON_NONE && rebound.kind == GS_REBOUND_CASTABLE) {
+        clicks[n++] = vengeance_command();
+        ours->vengeance_clicked = tick + 1;
+    }
+    int maul_slot = ours_maul_slot(us);
     switch (decision.choice) {
         case GS_CHOICE_VOIDWAKER:
-            if (!us->spec_armed) command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
+            if (!us->spec_armed) clicks[n++] = spec_command();
+            clicks[n++] = attack_command();
             break;
         case GS_CHOICE_MAUL:
         case GS_CHOICE_MAUL_VOIDWAKER:
-            click_slot(hi, ours_maul_slot(us));
-            command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
-            ours->stage = 1;
-            ours->stage_choice = decision.choice;
+            clicks[n++] = click_command(maul_slot);
+            clicks[n++] = spec_command();
+            clicks[n++] = attack_command();
             break;
         case GS_CHOICE_HOLD:
             break;
     }
-    attack(hi);
+    if (n) ours_run(ours, tick, clicks, n);
+    if (decision.choice == GS_CHOICE_MAUL || decision.choice == GS_CHOICE_MAUL_VOIDWAKER) ours_group_two(ours, us, tick, decision.choice);
+}
+
+/* Queues our commands for the step after tick `tick`: the clicks due then, and a decision when the client showed something new. */
+static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step) {
+    RiskfightState* s = &sim->state;
+    Player* us = &s->env.players[0];
+    int tick = sim->tick_base + step;
+    human_input_clear_pending(hi);
+    ours->ticks++;
+    const GsInfer* inf = &sim->obs.inf;
+    int rival = inf->timed >= 0 && inf->c.ratio != 0;
+    if (rival && (step == 0 || sim->obs.events > 0 || tick - ours->last_decision >= OURS_REFRESH)) ours_decide(sim, ours, step, tick);
+    ours_pop_due(ours, hi, tick + 1);
+    if (!osrs_interaction_active(&us->interaction) && ours->pending_count == 0 && hi->commands.count == 0) command(hi, attack_command());
 }
 #endif

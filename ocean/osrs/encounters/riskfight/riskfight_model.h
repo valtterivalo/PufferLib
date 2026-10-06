@@ -81,6 +81,7 @@ typedef struct {
     int last_attack_speed;
     int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
     int pending_consume_tick, pending_bar_before, pending_damage_since;
+    int last_cast_tick, last_proc_tick;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
 } RiskfightVisibleOpponent;
 
@@ -252,7 +253,12 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     if (reset || opponent->hit_landed_this_tick)
         v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
             opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
+    if (!reset) {
+        if (opponent->cast_veng_this_tick) v->last_cast_tick = s->env.tick;
+        if (opponent->said_taste_vengeance_this_tick) v->last_proc_tick = s->env.tick;
+    }
     if (reset) {
+        v->last_cast_tick = v->last_proc_tick = -1000;
         v->last_attack_tick = -1;
         v->consume_food_est = 0; v->consume_potion_est = 0;
         v->consume_karam_est = 0; v->consume_delay_est = 0;

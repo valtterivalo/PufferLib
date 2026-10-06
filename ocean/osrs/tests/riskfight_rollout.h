@@ -2,6 +2,7 @@
 #define RISKFIGHT_ROLLOUT_H
 #include "riskfight_opp.h"
 #include "riskfight_ours_state.h"
+#include "riskfight_observe.h"
 
 enum { MAX_STEPS = 32, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
 typedef enum { MODEL_PROFILES, MODEL_FIT } ModelKind;
@@ -12,10 +13,18 @@ typedef struct {
     const OppFit* fit;
 } OppModel;
 
+typedef enum { TIMING_MEASURED, TIMING_IDEAL } OursTiming;
+typedef enum { STAKES_COMPUTED, STAKES_EQUAL } OursStakes;
+
+/* Beliefs about him that an ablation reads from the sim instead of the plugin's inference. */
+enum { TRUTH_NONE = 0, TRUTH_PID = 1, TRUTH_ENERGY = 2, TRUTH_VENGEANCE = 4, TRUTH_HP = 8, TRUTH_TIMER = 16, TRUTH_ALL = 31 };
+
 typedef struct {
     OursKind kind;
     int eat_below;
-    int delay;
+    OursTiming timing;
+    OursStakes stakes;
+    int truth;
 } OursPolicy;
 
 typedef struct {
@@ -35,10 +44,9 @@ typedef struct {
     int tick_base, step_damage, step_max_hit;
     Hist hist;
     Ours ours;
+    Observer obs;
     StepEvents previous;
     double spec_predicted, spec_realized, spec_counted;
-    HumanCommand held[16];
-    int held_count;
 } Sim;
 
 #include "riskfight_ours.h"
@@ -65,6 +73,8 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
         out->our_hits++;
         out->our_damage += event->hitpoints_lost;
     }
+    if (sim->obs.hit_count < OBSERVE_HITS)
+        sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost};
     if (event->target == 1) {
         sim->step_damage += event->hitpoints_lost;
         if (event->hitpoints_lost > sim->step_max_hit) sim->step_max_hit = event->hitpoints_lost;
@@ -142,17 +152,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
             human_input_queue_command(hi, command);
         }
     } else if (policy->kind == OURS_RULES) {
-        ours_act(sim, &sim->ours, hi, step, &sim->previous);
-        if (policy->delay) {
-            HumanCommand fresh[16];
-            int fresh_count = hi->commands.count;
-            assert(fresh_count <= 16);
-            memcpy(fresh, hi->commands.items, (size_t)fresh_count * sizeof(HumanCommand));
-            human_input_clear_pending(hi);
-            for (int i = 0; i < sim->held_count; i++) human_input_queue_command(hi, sim->held[i]);
-            memcpy(sim->held, fresh, (size_t)fresh_count * sizeof(HumanCommand));
-            sim->held_count = fresh_count;
-        }
+        ours_act(sim, &sim->ours, hi, step);
     } else if (policy->kind == OURS_EAT_AT_RISK) {
         queue_ours_at_risk(sim, tape, policy, tick, step);
     } else if (policy->kind == OURS_EAT_AT_THRESHOLD) {
@@ -182,15 +182,12 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     sim->outcome = out;
     sim->tick_base = tick_base;
     sim->previous = (StepEvents){0};
-    sim->held_count = 0;
-    sim->ours.stage = 0;
-    sim->ours.played_count = 0;
-    sim->ours.last_played_step = INT_MIN / 2;
-    sim->ours.last_played_choice = -1;
-    sim->ours.eat_added = 0;
-    sim->ours.last_swing_seen = -1;
-    sim->ours.seen_weapons = 0;
-    sim->ours.last_decision = INT_MIN / 2;
+    if (policy->kind == OURS_RULES) {
+        assert(tape->observer_series);
+        sim->obs = ((const Observer*)tape->observer_series)[tick_base - tape->lo];
+        ours_reset(&sim->ours, seed ^ 0x9e3779b9u, policy->timing, policy->stakes, policy->truth);
+        observer_branch(&sim->state, &sim->obs);
+    } else sim->ours.played_count = 0;
     if (tape->hist_series) sim->hist = ((const Hist*)tape->hist_series)[tick_base - tape->lo];
     s->env.pvp_runtime.hit_observer = sim_observe_hit;
     s->env.pvp_runtime.hit_observer_context = sim;
@@ -201,6 +198,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
         sim->step_damage = sim->step_max_hit = 0;
+        sim->obs.hit_count = 0;
         riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
         const Player* him = &s->env.players[1];
         int ate_true = him->ate_food_this_tick || him->ate_karambwan_this_tick || s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick;
@@ -208,6 +206,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
             .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
         hist_step(&sim->hist, s, tick_base + 1 + step, &events);
+        if (policy->kind == OURS_RULES) observer_step(s, &sim->obs, tick_base + 1 + step);
         sim->previous = events;
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);

@@ -30,7 +30,16 @@ static int flag_at(const Tape* tape, int tick, int flag) {
 static int rec_eat_at(const Tape* tape, int tick) { return flag_at(tape, tick, FLAG_EAT); }
 
 static void prepare(Tape* tape) {
+    static WireIndex wire_index;
+    static int wire_indexed;
+    const char* wire_path = getenv("GS_WIRE");
+    observer_register_items();
+    if (wire_path && !wire_indexed) { wire_index_build(wire_path, &wire_index); wire_indexed = 1; }
     int n = tape->hi - tape->lo + 1;
+    if (wire_path) {
+        tape->observer_series = calloc((size_t)n, sizeof(Observer));
+        observer_series_build(wire_path, &wire_index, tape, tape->observer_series);
+    }
     tape->his_flags = calloc(n, 1);
     tape->hist_series = calloc(n, sizeof(Hist));
     for (int i = 0; i < tape->anim_count; i++) {
@@ -449,7 +458,7 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
     fit_warning.eat_action = ACT_EAT_WARNING;
     OppModel models[3] = {{MODEL_PROFILES, NULL}, {MODEL_FIT, &fit_big}, {MODEL_FIT, &fit_warning}};
     const char* names[3] = {"profiles", "fit big-hit", "fit warning"};
-    OursPolicy proxy = {OURS_EAT_AT_RISK, MARGIN, 0}, replay = {OURS_REPLAY, 0, 0}, rules = {OURS_RULES, 0, 0};
+    OursPolicy proxy = {OURS_EAT_AT_RISK, MARGIN}, replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0};
     printf("=== rollouts: fit on day %d, test on day %d, N=%d, k=%d ===\n", train_day, test_day, n, k);
     static WindowStats stats[5];
     static EpisodeStats episodes[2];
@@ -486,22 +495,48 @@ static void attribute(int n, int k, Tape* tapes, int count, int train_day, int t
     slow.logit[ACT_EAT_WARNING].w[0] -= 0.7;
     OppModel models[4] = {{MODEL_FIT, &fit}, {MODEL_FIT, &heavy}, {MODEL_FIT, &eager}, {MODEL_FIT, &slow}};
     const char* names[4] = {"fitted opponent", "every meal a triple", "eats 2x as often", "eats half as often"};
-    OursPolicy ideal = {OURS_RULES, 0, 0}, late = {OURS_RULES, 0, 1};
-    OppModel combined = {MODEL_FIT, &heavy};
+    OursPolicy real = {OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED};
+    OursPolicy steps[4] = {{OURS_RULES, 0, TIMING_IDEAL, STAKES_EQUAL}, {OURS_RULES, 0, TIMING_IDEAL, STAKES_COMPUTED}, {OURS_RULES, 0, TIMING_MEASURED, STAKES_EQUAL}, real};
+    const char* step_names[4] = {"inferred, ideal clicks, equal stakes", "+ stakes computed", "+ measured clicks, equal stakes", "inferred, measured clicks, stakes"};
     printf("=== attribution: fit on day %d, test on day %d, N=%d, k=%d; played spec decisions, planner chance against kills within %d ticks ===\n", train_day, test_day, n, k, OURS_HORIZON);
-    for (int variant = 0; variant < 6; variant++) {
-        const OppModel* model = variant == 5 ? &combined : &models[variant < 4 ? variant : 0];
-        const OursPolicy* side = variant >= 4 ? &late : &ideal;
+    for (int variant = 0; variant < 8; variant++) {
+        const OppModel* model = variant < 4 ? &models[0] : &models[variant - 4];
+        const OursPolicy* side = variant < 4 ? &steps[variant] : &real;
         WindowStats stats = {{0}};
         for (int i = 0; i < count; i++) if (tape_day(&tapes[i]) == test_day) evaluate_windows(&tapes[i], model, side, n, k, &stats);
-        printf("  %-22s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n", variant == 4 ? "our clicks 1 tick late" : variant == 5 ? "late + every meal triple" : names[variant],
+        printf("  %-38s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n",
+            variant < 4 ? step_names[variant] : names[variant - 4], stats.spec_counted, stats.spec_predicted, stats.spec_realized, stats.spec_realized / stats.spec_predicted, stats.sim[7], stats.sim[6]);
+        fflush(stdout);
+    }
+}
+
+/* Which belief drives the planner's overconfidence: the ported rules with one belief about him read from the sim at a time. */
+static void ablate(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    fit_model(tapes, count, train_day, &fit);
+    int eats, identified[2];
+    infer_servings(tapes, count, train_day, &fit, &eats, identified);
+    fit.eat_action = ACT_EAT_WARNING;
+    OppModel model = {MODEL_FIT, &fit};
+    static const struct { const char* name; int truth; } variants[] = {
+        {"all inferred", TRUTH_NONE}, {"PID from the sim", TRUTH_PID}, {"his spec energy from the sim", TRUTH_ENERGY}, {"his Vengeance from the sim", TRUTH_VENGEANCE},
+        {"his HP from the sim", TRUTH_HP}, {"his attack timer from the sim", TRUTH_TIMER}, {"all beliefs from the sim", TRUTH_ALL}};
+    printf("=== ablation: fit on day %d, test on day %d, N=%d, k=%d; measured clicks and stakes ===\n", train_day, test_day, n, k);
+    for (size_t v = 0; v < sizeof(variants) / sizeof(*variants); v++) {
+        OursPolicy side = {OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED, variants[v].truth};
+        WindowStats stats = {{0}};
+        for (int i = 0; i < count; i++) if (tape_day(&tapes[i]) == test_day) evaluate_windows(&tapes[i], &model, &side, n, k, &stats);
+        printf("  %-32s played %5.0f  predicted kills %7.1f  realized %7.1f  realized/predicted %.2f   he dies %.1f we die %.1f\n", variants[v].name,
             stats.spec_counted, stats.spec_predicted, stats.spec_realized, stats.spec_realized / stats.spec_predicted, stats.sim[7], stats.sim[6]);
+        fflush(stdout);
     }
 }
 
 static void branch(int n, int horizon, Tape* tapes, int count) {
     OppModel model = {MODEL_PROFILES, NULL};
-    OursPolicy policies[4] = {{OURS_REPLAY, 0, 0}, {OURS_EAT_AT_THRESHOLD, 50, 0}, {OURS_EAT_AT_RISK, MARGIN, 0}, {OURS_RULES, 0, 0}};
+    OursPolicy policies[4] = {{OURS_REPLAY, 0}, {OURS_EAT_AT_THRESHOLD, 50}, {OURS_EAT_AT_RISK, MARGIN}, {OURS_RULES, 0}};
     const char* names[4] = {"replay recorded", "eat below 50", "eat at risk", "ported rules"};
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
@@ -513,7 +548,9 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
         tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
         riskfight_load_state(&sim->state, &sim->context, &snap);
         RiskfightState base = sim->state;
-        printf("%s tick %d: our hp %d\n", tape->name, t0, base.env.players[0].current_hitpoints);
+        printf("%s tick %d: our hp %d  stakes r %.1f (us %ld gp, him %ld gp)\n", tape->name, t0, base.env.players[0].current_hitpoints,
+            tape->observer_series ? gs_stakes_ratio(((const Observer*)tape->observer_series)[t0 - tape->lo].stakes) : 0.0,
+            tape->observer_series ? ((const Observer*)tape->observer_series)[t0 - tape->lo].stakes.us : 0L, tape->observer_series ? ((const Observer*)tape->observer_series)[t0 - tape->lo].stakes.him : 0L);
         for (int p = 0; p < 4; p++) {
             int die = 0, kill = 0;
             double start = seconds();
@@ -538,12 +575,13 @@ int main(int argc, char** argv) {
     assert(argc >= 5);
     static Tape tapes[MAX_TAPES];
     const char* mode = argv[1];
-    int first = !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") ? 6 : 4;
+    int first = !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
     if (!strcmp(mode, "teacher")) teacher(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
+    else if (!strcmp(mode, "ablate")) ablate(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else abort();
     return 0;

@@ -32,6 +32,7 @@ typedef struct {
     TapeHit* hits; int hit_count;
     TapeAction* actions; int action_count;
     void* hist_series;
+    void* observer_series;
     uint8_t* his_flags;
 } Tape;
 

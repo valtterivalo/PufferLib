@@ -214,14 +214,7 @@ static void test_hidden_state_and_replay(void) {
     opponent->pending_hits[0].damage = 99; opponent->num_pending_hits = 1;
     opponent->veng_cooldown = 44;
     riskfight_write_observation(&state, 0, b);
-    assert(memcmp(a, b, sizeof(a)) != 0);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 44 / 50.0f);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 3 / 100.0f);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
-    assert(b[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
+    assert(memcmp(a, b, sizeof(a)) == 0);
     opponent->veng_cooldown = 0;
     opponent->special_energy = state.env.players[0].special_energy;
     riskfight_write_observation(&state, 0, b);
@@ -231,6 +224,8 @@ static void test_hidden_state_and_replay(void) {
     riskfight_observe_visible(&state, 0, 0);
     riskfight_write_observation(&state, 0, a);
     assert(a[RF_HISTORY_START + 5] == 1);
+    assert(a[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
+    assert(a[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
     reset(); static RiskfightState initial; initial = state;
     int actions[2 * RF_HEADS] = {0}; actions[RF_FOOD] = 10; actions[RF_DRINK] = 8; actions[RF_COMBO] = 4;
     state.env.players[0].current_hitpoints = 20; initial = state;
