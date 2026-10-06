@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     long total = 0, bad = 0;
     long per[8] = {0};
     while (fgets(line, sizeof(line), f)) {
-        char tag[128], a[128], b[128], c[128], d[128], e[128], g[128], h[128], i[128], arrow[8], r1[128], r2[128];
+        char tag[128], a[128], b[128], c[128], d[128], e[128], g[128], h[128], i[128], oe[128], en[128], arrow[8], r1[128], r2[128];
         int ok = 0;
         total++;
         if (sscanf(line, "VC %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, r1) == 8) {
@@ -59,10 +59,10 @@ int main(int argc, char** argv) {
                 !strcmp(g, "WORTH") ? GS_REFLECT_WORTH : GS_REFLECT_WEAK, !strcmp(h, "WORTH") ? GS_REFLECT_WORTH : GS_REFLECT_WEAK);
             ok = reason == (GsCastReason)INDEX(REASONS, r1);
             per[0]++;
-        } else if (sscanf(line, "BAIT %127s %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, i, r1) == 9) {
+        } else if (sscanf(line, "BAIT %127s %127s %127s %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, oe, en, i, r1) == 11) {
             int owner = INDEX(OWNERS, i);
             GsBait verdict = gs_bait_decide((GsDecision)(!strcmp(a, "EAT_NOW") ? GS_EAT_NOW : !strcmp(a, "WAIT") ? GS_WAIT : GS_EXPOSED), (GsPid)INDEX(PIDS, b),
-                (GsVengeance)INDEX(VENG, c), (GsOurVengeance)INDEX(OURS, d), atoi(e), atoi(g), atoi(h), owner == 2 || owner == 3, owner == 3 || owner == 4);
+                (GsVengeance)INDEX(VENG, c), (GsOurVengeance)INDEX(OURS, d), atoi(e), atoi(g), atoi(h), atoi(oe), !strcmp(en, "INTERACTING"), owner == 2 || owner == 3, owner == 3 || owner == 4);
             ok = verdict == (GsBait)INDEX(BAITS, r1);
             per[1]++;
         } else if (sscanf(line, "PRW %127s %127s -> %127s", a, b, r1) == 3) {

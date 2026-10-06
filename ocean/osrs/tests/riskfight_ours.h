@@ -208,7 +208,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     ours->arena.used = 0;
     GsPid pid = gs_pid_at(inf, tick);
     GsEatSituation e;
-    gs_eat_situation(inf, tick, osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE, 0.01, 0.01, ours->equal_stakes ? 1.0 : gs_stakes_ratio(sim->obs.stakes), &e);
+    gs_eat_situation(inf, tick, osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE, 0.01, ours->equal_stakes ? 1.0 : gs_stakes_ratio(sim->obs.stakes), &e);
     OursFoods foods;
     ours_foods(sim, &foods);
     GsVerdict verdict = gs_auto_eat_decide(&e, foods.foods, foods.food_count, foods.meals, foods.meal_count, &ours->arena);
@@ -218,7 +218,9 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         int n = 0;
         for (int i = 0; i < verdict.food_count; i++) clicks[n++] = click_command(foods.food_slot[verdict.foods[i]]);
         GsRebound rebound = ours_rebound(sim, ours, tick, verdict.food_count);
-        if (rebound.kind == GS_REBOUND_CASTABLE && ours_venged_reason(inf, tick, GS_CAST_KEEP, &rebound, pid) != GS_REASON_NONE) {
+        int drain = 0;
+        for (int i = 0; i < verdict.food_count; i++) drain |= foods.foods[verdict.foods[i]].drained;
+        if (!drain && rebound.kind == GS_REBOUND_CASTABLE && ours_venged_reason(inf, tick, GS_CAST_KEEP, &rebound, pid) != GS_REASON_NONE) {
             clicks[n++] = vengeance_command();
             ours->vengeance_clicked = tick + 1;
         }
@@ -269,7 +271,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         case GS_CHOICE_MAUL_VOIDWAKER:
             clicks[n++] = click_command(maul_slot);
             clicks[n++] = spec_command();
-            clicks[n++] = attack_command();
+            if (!osrs_interaction_active(&us->interaction)) clicks[n++] = attack_command();
             break;
         case GS_CHOICE_HOLD:
             break;

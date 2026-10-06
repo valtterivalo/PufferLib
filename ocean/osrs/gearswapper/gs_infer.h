@@ -112,12 +112,13 @@ static int gs_spec_energy(const GsClient* c) { return c->spec_energy_varp / 10; 
 
 static GsWeapon gs_local_weapon_kind(const GsClient* c, int weapon) { (void)c; return gs_weapon_kind(weapon); }
 
-static GsLevels gs_local_levels(const GsClient* c) {
+static GsLevels gs_local_levels_with(const GsClient* c, int strength_level, int ranged_level) {
     double strength = gs_prayer_active(c, GS_PRAYER_PIETY) ? 1.23 : gs_prayer_active(c, GS_PRAYER_CHIVALRY) ? 1.18 : gs_prayer_active(c, GS_PRAYER_ULTIMATE_STRENGTH) ? 1.15 : 1;
     double ranged = gs_prayer_active(c, GS_PRAYER_RIGOUR) ? 1.23 : gs_prayer_active(c, GS_PRAYER_DEADEYE) ? 1.18 : gs_prayer_active(c, GS_PRAYER_EAGLE_EYE) ? 1.15 : 1;
     double magic = gs_prayer_active(c, GS_PRAYER_AUGURY) ? 1.04 : gs_prayer_active(c, GS_PRAYER_MYSTIC_VIGOUR) ? 1.03 : gs_prayer_active(c, GS_PRAYER_MYSTIC_MIGHT) ? 1.02 : 1;
-    return (GsLevels){c->strength, c->ranged, strength, ranged, magic};
+    return (GsLevels){strength_level, ranged_level, strength, ranged, magic};
 }
+static GsLevels gs_local_levels(const GsClient* c) { return gs_local_levels_with(c, c->strength, c->ranged); }
 
 static GsBonuses gs_local_bonuses(const GsClient* c) {
     GsBonuses bonuses = GS_NO_BONUSES;
@@ -302,7 +303,7 @@ static GsAttack gs_spec_attack(const GsInfer* s, const GsArmament* a) {
 }
 
 /* AutoEater.localAccuracy */
-static double gs_local_accuracy(const GsClient* c, int weapon) {
+static double gs_local_accuracy_dropped(const GsClient* c, int weapon, int level_drop) {
     int style = gs_local_style(weapon);
     const GsItem* ours[GS_WORN_SLOTS];
     int count = 0;
@@ -327,20 +328,22 @@ static double gs_local_accuracy(const GsClient* c, int weapon) {
         case GS_MELEE: {
             int prayer = gs_prayer_active(c, GS_PRAYER_PIETY) ? 120 : gs_prayer_active(c, GS_PRAYER_CHIVALRY) || gs_prayer_active(c, GS_PRAYER_INCREDIBLE_REFLEXES) ? 115
                 : gs_prayer_active(c, GS_PRAYER_IMPROVED_REFLEXES) ? 110 : gs_prayer_active(c, GS_PRAYER_CLARITY_OF_THOUGHT) ? 105 : 100;
-            return gs_chance(gs_roll(gs_effective_level(c->attack, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
+            return gs_chance(gs_roll(gs_effective_level(c->attack + level_drop, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
         }
         case GS_RANGED: {
             int prayer = gs_prayer_active(c, GS_PRAYER_RIGOUR) ? 120 : gs_prayer_active(c, GS_PRAYER_DEADEYE) ? 118 : gs_prayer_active(c, GS_PRAYER_EAGLE_EYE) ? 115
                 : gs_prayer_active(c, GS_PRAYER_SHARP_EYE) ? 110 : gs_prayer_active(c, GS_PRAYER_HAWK_EYE) ? 105 : 100;
-            return gs_chance(gs_roll(gs_effective_level(c->ranged, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
+            return gs_chance(gs_roll(gs_effective_level(c->ranged + level_drop, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
         }
         default: {
             int prayer = gs_prayer_active(c, GS_PRAYER_AUGURY) ? 125 : gs_prayer_active(c, GS_PRAYER_MYSTIC_VIGOUR) ? 118
                 : gs_prayer_active(c, GS_PRAYER_MYSTIC_MIGHT) ? 115 : gs_prayer_active(c, GS_PRAYER_MYSTIC_LORE) ? 110 : gs_prayer_active(c, GS_PRAYER_MYSTIC_WILL) ? 105 : 100;
-            return gs_chance(gs_roll(gs_effective_level(c->magic, prayer, 0), attack_bonus), gs_roll(gs_effective_magic_defence(99, 125, 120, 125), defence_bonus));
+            return gs_chance(gs_roll(gs_effective_level(c->magic + level_drop, prayer, 0), attack_bonus), gs_roll(gs_effective_magic_defence(99, 125, 120, 125), defence_bonus));
         }
     }
 }
+
+static double gs_local_accuracy(const GsClient* c, int weapon) { return gs_local_accuracy_dropped(c, weapon, 0); }
 
 /* ---- AutoEater: events */
 static void gs_eater_opponent_hitsplat(GsInfer* s) { s->bar = GS_BAR_FRESH; }
@@ -660,7 +663,19 @@ static GsTimer gs_timer_view(GsTimerState t, int tick) {
 static const double GS_VOIDWAKER_CARRIED = (41 + 103) / (59 + 162.0);
 static const double GS_GRANITE_MAUL_CARRIED = (23 + 90) / (59 + 162.0);
 
-static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tolerance, double eat_cost, double stakes, GsEatSituation* out) {
+static int gs_brew_in_bag(const GsClient* c) {
+    for (int i = 0; i < 28; i++) if (c->inventory[i] == 6685 || c->inventory[i] == 6687 || c->inventory[i] == 6689 || c->inventory[i] == 6691) return 1;
+    return 0;
+}
+
+static int gs_brew_drop(int level) { return level > 1 ? -((int)(level * 0.1) + 2) : 0; }
+
+static double gs_pid_flip_odds(const GsPidState* pid, int tick) {
+    if (gs_pid_fresh_owner(pid, tick) == GS_PID_UNKNOWN) return 0;
+    return tick - pid->observed_tick <= 5 ? 6.0 / 69 : 6.0 / 39;
+}
+
+static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tolerance, double stakes, GsEatSituation* out) {
     const GsClient* c = &s->c;
     memset(out, 0, sizeof(*out));
     int weapon = gs_local_weapon(c);
@@ -692,7 +707,23 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     out->opponent_hp = s->opponent_hitpoints;
     out->offence = offence;
     out->tolerance = tolerance;
-    out->eat_cost = eat_cost;
+    out->pid_flip = gs_pid_flip_odds(&s->pid, tick);
+    out->drained_normal = normal;
+    out->drained_most = armed ? out->local_most : normal;
+    out->drained_accuracy = accuracy;
+    out->drained_opening_accuracy = armed ? 1 : accuracy;
+    if (gs_brew_in_bag(c)) {
+        int drop_strength = gs_brew_drop(c->strength), drop_ranged = gs_brew_drop(c->ranged);
+        int drop_style = style == GS_MELEE ? gs_brew_drop(c->attack) : style == GS_RANGED ? drop_ranged : gs_brew_drop(c->magic);
+        GsLevels drained = gs_local_levels_with(c, c->strength + drop_strength, c->ranged + drop_ranged);
+        GsBonuses bonuses = gs_local_bonuses(c);
+        GsWeapon kind = gs_weapon_kind(weapon);
+        int spec;
+        out->drained_normal = gs_max_normal(kind, style, drained, bonuses);
+        out->drained_most = armed ? (gs_max_spec(kind, style, drained, bonuses, &spec) ? spec : out->drained_normal) : out->drained_normal;
+        out->drained_accuracy = gs_local_accuracy_dropped(c, weapon, drop_style);
+        out->drained_opening_accuracy = armed ? 1 : out->drained_accuracy;
+    }
     out->warning = gs_eater_warning(s);
     out->stakes = stakes;
     out->floor = GS_NONE;

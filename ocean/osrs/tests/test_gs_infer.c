@@ -100,7 +100,8 @@ static void format_situation(const GsEatSituation* s, char* out) {
     out[0] = 0;
     sprintf(out + strlen(out), "S %d %d %s %d %s %d %d %d %.17g %.17g %s %.17g %.17g %.17g %d %s %s %d\n", s->tick, s->hitpoints, PID_NAMES[s->pid], s->distance,
         STYLE_NAMES[s->local_style], s->local_most, s->local_normal, s->local_interval, s->local_opening_accuracy, s->local_accuracy,
-        s->offence == GS_ENGAGED ? "ENGAGED" : "IDLE", s->tolerance, s->eat_cost, s->stakes, s->floor, VENGEANCE_NAMES[s->vengeance], s->recoil_seen ? "SEEN" : "UNSEEN", s->energy_high);
+        s->offence == GS_ENGAGED ? "ENGAGED" : "IDLE", s->tolerance, s->pid_flip, s->stakes, s->floor, VENGEANCE_NAMES[s->vengeance], s->recoil_seen ? "SEEN" : "UNSEEN", s->energy_high);
+    sprintf(out + strlen(out), "DR %d %d %.17g %.17g\n", s->drained_normal, s->drained_most, s->drained_accuracy, s->drained_opening_accuracy);
     if (s->opponent_timer.seen) sprintf(out + strlen(out), "OT 1 %d\n", s->opponent_timer.next);
     else sprintf(out + strlen(out), "OT 0 0\n");
     if (s->local_timer.seen) sprintf(out + strlen(out), "LT 1 %d %d\n", s->local_timer.next, s->local_timer.earliest);
@@ -347,7 +348,7 @@ int main(int argc, char** argv) {
             if (inf.timed >= 0 && inf.c.ratio != 0) {
                 GsEatSituation s;
                 gs_eater_observe(&inf, tick);
-                gs_eat_situation(&inf, tick, inf.c.local_interacting >= 0 ? GS_ENGAGED : GS_IDLE, 0.01, 0.01, 1.0, &s);
+                gs_eat_situation(&inf, tick, inf.c.local_interacting >= 0 ? GS_ENGAGED : GS_IDLE, 0.01, 1.0, &s);
                 format_situation(&s, mine_situation);
                 have_mine = 1;
             }

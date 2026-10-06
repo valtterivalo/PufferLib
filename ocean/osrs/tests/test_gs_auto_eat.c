@@ -62,10 +62,11 @@ static int read_record(FILE* f, Record* r) {
             char pid[16], style[16], offence[16], vengeance[16], recoil[16];
             sscanf(p, "%d %d %15s %d %15s %d %d %d %lf %lf %15s %lf %lf %lf %d %15s %15s %d", &s->tick, &s->hitpoints, pid, &s->distance, style,
                 &s->local_most, &s->local_normal, &s->local_interval, &s->local_opening_accuracy, &s->local_accuracy, offence, &s->tolerance,
-                &s->eat_cost, &s->stakes, &s->floor, vengeance, recoil, &s->energy_high);
+                &s->pid_flip, &s->stakes, &s->floor, vengeance, recoil, &s->energy_high);
             s->pid = pid_of(pid); s->local_style = style_of(style); s->offence = !strcmp(offence, "ENGAGED") ? GS_ENGAGED : GS_IDLE;
             s->vengeance = vengeance_of(vengeance); s->recoil_seen = !strcmp(recoil, "SEEN");
-        } else if (!strcmp(tag, "OT")) sscanf(p, "%d %d", &s->opponent_timer.seen, &s->opponent_timer.next);
+        } else if (!strcmp(tag, "DR")) sscanf(p, "%d %d %lf %lf", &s->drained_normal, &s->drained_most, &s->drained_accuracy, &s->drained_opening_accuracy);
+        else if (!strcmp(tag, "OT")) sscanf(p, "%d %d", &s->opponent_timer.seen, &s->opponent_timer.next);
         else if (!strcmp(tag, "LT")) sscanf(p, "%d %d %d", &s->local_timer.seen, &s->local_timer.next, &s->local_timer.earliest);
         else if (!strcmp(tag, "OH")) sscanf(p, "%d %d %d", &s->opponent_hp.low, &s->opponent_hp.high, &s->opponent_hp.max);
         else if (!strcmp(tag, "OA")) { assert(s->attack_count < GS_MAX_ATTACKS); s->attacks[s->attack_count++] = read_attack(&p); }

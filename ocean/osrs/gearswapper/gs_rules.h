@@ -17,12 +17,12 @@ typedef enum { GS_BAIT_HOLD, GS_BAIT_OFF, GS_BAIT_NO_RIVAL, GS_BAIT_PID, GS_BAIT
 typedef enum { GS_OURS_UP, GS_OURS_COOLDOWN, GS_OURS_CLICKED, GS_OURS_BLOCKED, GS_OURS_MAGIC_LEVEL, GS_OURS_CASTABLE } GsOurVengeance;
 
 static GsBait gs_bait_decide(GsDecision eat, GsPid pid, GsVengeance his_vengeance, GsOurVengeance ours, int his_energy_high, int his_spec_cost, int has_plan,
-    int run_is_meal, int run_is_spec) {
+    int our_energy, int engaged, int run_is_meal, int run_is_spec) {
     if (pid != GS_PID_LOCAL) return GS_BAIT_PID;
     if (his_vengeance != GS_VENGEANCE_DOWN) return GS_BAIT_HIS_VENGEANCE;
     if (ours != GS_OURS_CASTABLE) return GS_BAIT_OUR_VENGEANCE;
     if (his_energy_high < his_spec_cost) return GS_BAIT_HIS_ENERGY;
-    if (!has_plan) return GS_BAIT_OUR_PLAN;
+    if (our_energy < 50 || (engaged && !has_plan)) return GS_BAIT_OUR_PLAN;
     if (eat != GS_WAIT) return GS_BAIT_EAT;
     return run_is_meal || run_is_spec ? GS_BAIT_BUSY : GS_BAIT_HOLD;
 }
