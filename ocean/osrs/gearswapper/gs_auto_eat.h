@@ -3,7 +3,8 @@
 #include "gs_auto_spec.h"
 
 /* AutoEat.java: the smallest meal that keeps the opponent's knockout chance at or under a tolerance. Ticks are GameTick numbers.
- * The eat cost terms live in gs_auto_eat_decide (gain against eat_cost * (delay + GS_DRAIN_TICKS) + forgone * stakes) and eat_forgone_knockout. */
+ * The eat cost terms live in gs_auto_eat_decide (value = gain - eat_cost * (delay + GS_DRAIN_TICKS) - forgone * stakes), eat_delay and
+ * eat_forgone_knockout. */
 enum { GS_MAX_ATTACKS = 8, GS_MAX_HIDDEN = 6, GS_MAX_FOODS = 8, GS_MAX_MEAL = 4, GS_MAX_MEALS = 128, GS_DRAIN_TICKS = 2, GS_MAX_HITS = 512 };
 typedef enum { GS_EAT_NOW, GS_WAIT, GS_EXPOSED } GsDecision;
 typedef enum { GS_ENGAGED, GS_IDLE } GsOffence;
@@ -60,6 +61,7 @@ typedef struct { GsVec heals, consumptions, follows; } GsBranch;
 typedef struct { const GsFood* foods; int food_count; const GsMeal* meals; int meal_count; Arena* arena; } GsEatCall;
 
 static int eat_next_local(const GsEatSituation* s) { return s->local_timer.seen ? s->local_timer.next : s->tick + 1; }
+static int eat_stored_local(const GsEatSituation* s) { return s->local_timer.seen ? s->local_timer.earliest : s->tick + 1; }
 static int eat_next_opponent(const GsEatSituation* s) { return s->opponent_timer.seen ? s->opponent_timer.next : s->tick + 1; }
 
 static int eat_ordered(const GsMeal* meal, const GsFood* foods) {
@@ -181,26 +183,28 @@ static int eat_own_lands(const GsEatSituation* s, int at) { return gs_lands(at, 
 static GsVec eat_own_swings(Arena* arena, const GsEatSituation* s, const GsVec* consumptions, int horizon, GsResumeTiming timing) {
     GsVec swings = vec_make(arena, sizeof(GsSwing));
     if (s->has_local_swing) *(GsSwing*)vec_push(&swings) = s->local_swing;
-    int next = eat_next_local(s);
+    int next = eat_stored_local(s);
     GsOffence offence = s->offence;
     int most = s->local_most;
     double accuracy = s->local_opening_accuracy;
     for (int i = 0; i < consumptions->count; i++) {
         const GsConsumptionAt* c = &VEC_AT(GsConsumptionAt, *consumptions, i);
         int at = timing == GS_RESUME_EARLIEST ? imin(c->tick, c->earliest_resume) : c->tick;
-        while (offence == GS_ENGAGED && next < at) {
+        while (offence == GS_ENGAGED && imax(next, s->tick + 1) < at) {
+            next = imax(next, s->tick + 1);
             *(GsSwing*)vec_push(&swings) = (GsSwing){eat_own_lands(s, next), 0, most, accuracy};
             most = s->local_normal;
             accuracy = s->local_accuracy;
             next += s->local_interval;
         }
-        next = next <= c->tick ? imax(next, at) : next + c->delay;
+        next += c->delay;
         offence = GS_IDLE;
         if (c->resume != GS_NONE) {
             next = imax(next, c->resume);
             offence = GS_ENGAGED;
         }
     }
+    next = imax(next, s->tick + 1);
     while (offence == GS_ENGAGED && next <= horizon) {
         *(GsSwing*)vec_push(&swings) = (GsSwing){eat_own_lands(s, next), 0, most, accuracy};
         most = s->local_normal;
@@ -539,7 +543,7 @@ static int eat_delay(const GsEatSituation* s, const GsMeal* meal, const GsFood* 
     int has[GS_CONSUMABLES] = {0};
     for (int i = 0; i < meal->n; i++) has[foods[meal->foods[i]].kind] = 1;
     GsConsumption consumption = consumption_of(has[GS_POTION], has[GS_FAST_FOOD], has[GS_HARD_FOOD]);
-    return eat_next_local(s) <= s->tick + meal->offsets[0] ? 0 : consumption_delay(consumption);
+    return imax(0, consumption_delay(consumption) - imax(0, s->tick + meal->offsets[0] - eat_stored_local(s)));
 }
 
 static GsSpecSituation eat_hunt(const GsEatSituation* s) {
@@ -570,9 +574,18 @@ static double eat_forgone_knockout(const GsEatCall* call, const GsEatSituation* 
     return eat_knockout(call, s, &hunt, &none, until) - eat_knockout(call, s, &hunt, &eaten, until);
 }
 
-typedef struct { const GsMeal* meal; GsEvaluation evaluation; double gain; int size, non_hard, brew, fast_food, heal; } GsChoice;
+typedef struct { const GsMeal* meal; GsEvaluation evaluation; double gain, value; int size, non_hard, brew, fast_food, heal; } GsChoice;
+
+/* Double.compare of the negated values, the first key of the Java comparator. */
+static int value_order(double a, double b) {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return signbit(a) == signbit(b) ? 0 : signbit(a) ? -1 : 1;
+}
 
 static int choice_less(const GsChoice* a, const GsChoice* b) {
+    int order = value_order(-a->value, -b->value);
+    if (order) return order < 0;
     if (a->size != b->size) return a->size < b->size;
     if (a->non_hard != b->non_hard) return a->non_hard < b->non_hard;
     if (a->brew != b->brew) return a->brew < b->brew;
@@ -632,9 +645,10 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
         for (int i = 0; i < meal->n; i++) drain |= foods[meal->foods[i]].drained;
         drain = drain ? GS_DRAIN_TICKS : 0;
         double forgone = delay == 0 ? 0 : eat_forgone_knockout(&call, s, meal, delay);
-        if (gain >= s->eat_cost * (delay + drain) + forgone * s->stakes) {
+        double value = gain - s->eat_cost * (delay + drain) - forgone * s->stakes;
+        if (value >= 0) {
             GsChoice* c = &choices[choice_count++];
-            *c = (GsChoice){meal, evaluation, gain, meal->n, 0, 0, 0, 0};
+            *c = (GsChoice){meal, evaluation, gain, value, meal->n, 0, 0, 0, 0};
             for (int i = 0; i < meal->n; i++) {
                 const GsFood* food = &foods[meal->foods[i]];
                 c->non_hard += food->kind != GS_HARD_FOOD;
@@ -644,16 +658,10 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
             }
         }
     }
-    double lowest = waiting.risk;
-    for (int c = 0; c < choice_count; c++) lowest = fmin(lowest, choices[c].evaluation.risk);
-    const GsChoice* safe = NULL;
+    const GsChoice* selected = NULL;
     for (int c = 0; c < choice_count; c++)
-        if (choices[c].evaluation.risk <= s->tolerance && (!safe || choice_less(&choices[c], safe))) safe = &choices[c];
-    const GsChoice* selected = safe;
-    if (!safe)
-        for (int c = 0; c < choice_count; c++)
-            if (choices[c].evaluation.risk <= lowest + s->tolerance && choices[c].gain >= s->tolerance && (!selected || choice_less(&choices[c], selected))) selected = &choices[c];
-    verdict.decision = safe ? GS_EAT_NOW : GS_EXPOSED;
+        if ((choices[c].evaluation.risk <= s->tolerance || choices[c].gain >= s->tolerance) && (!selected || choice_less(&choices[c], selected))) selected = &choices[c];
+    verdict.decision = selected && selected->evaluation.risk <= s->tolerance ? GS_EAT_NOW : GS_EXPOSED;
     verdict.meal_risk = selected ? selected->evaluation.risk : waiting.risk;
     if (selected) {
         verdict.food_count = selected->meal->n;

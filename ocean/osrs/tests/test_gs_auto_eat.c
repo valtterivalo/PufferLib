@@ -65,7 +65,7 @@ static int read_record(FILE* f, Record* r) {
             s->pid = pid_of(pid); s->local_style = style_of(style); s->offence = !strcmp(offence, "ENGAGED") ? GS_ENGAGED : GS_IDLE;
             s->vengeance = vengeance_of(vengeance); s->recoil_seen = !strcmp(recoil, "SEEN");
         } else if (!strcmp(tag, "OT")) sscanf(p, "%d %d", &s->opponent_timer.seen, &s->opponent_timer.next);
-        else if (!strcmp(tag, "LT")) sscanf(p, "%d %d", &s->local_timer.seen, &s->local_timer.next);
+        else if (!strcmp(tag, "LT")) sscanf(p, "%d %d %d", &s->local_timer.seen, &s->local_timer.next, &s->local_timer.earliest);
         else if (!strcmp(tag, "OH")) sscanf(p, "%d %d %d", &s->opponent_hp.low, &s->opponent_hp.high, &s->opponent_hp.max);
         else if (!strcmp(tag, "OA")) { assert(s->attack_count < GS_MAX_ATTACKS); s->attacks[s->attack_count++] = read_attack(&p); }
         else if (!strcmp(tag, "GM")) { s->has_maul = 1; s->maul = read_attack(&p); }

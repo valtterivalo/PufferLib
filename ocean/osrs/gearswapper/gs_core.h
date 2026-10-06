@@ -128,7 +128,7 @@ static GsConsumption consumption_of(int has_potion, int has_fast, int has_hard) 
 }
 
 typedef struct { int low, high, max; } GsHealthRange;
-typedef struct { int seen, next; } GsTimer;
+typedef struct { int seen, next, earliest; } GsTimer;
 typedef struct { int since; int unseen[16]; int unseen_count; } GsWarning;
 typedef struct { int lands, least, most; double accuracy; } GsSwing;
 typedef struct { GsStyle style; int least, most, cost, interval; double accuracy; } GsAttack;
