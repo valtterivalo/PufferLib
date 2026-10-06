@@ -13,7 +13,7 @@
 #include "riskfight_rollout.h"
 #include "riskfight_spectator.h"
 
-enum { MAX_TAPES = 64, METRICS = 11, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
+enum { MAX_TAPES = 64, METRICS = 12, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
     FIT_SAMPLES = 4, SCORE_SAMPLES = 16, PROFILE_SAMPLES = 64, BIG_HIT_EPISODE = 30, REARM_TICKS = 4, MARGIN = 10 };
 enum { FLAG_EAT = 1, FLAG_SWING = 2, FLAG_VW = 4, FLAG_MAUL = 8, FLAG_VENG = 16 };
 
@@ -293,13 +293,15 @@ static void teacher(Tape* tapes, int count, int train_day, int test_day) {
 /* ---------- k-tick rollouts ---------- */
 
 typedef struct {
-    int eats, his_hits, his_damage, vw_specs, maul_specs, vengs, our_dead, his_dead, our_hits, our_damage, bar_end;
+    int eats, his_hits, his_damage, vw_specs, maul_specs, vengs, our_dead, his_dead, our_hits, our_damage, bar_end, our_meals;
 } Recorded;
 
 static Recorded recorded_window(const Tape* tape, int t0, int k) {
     Recorded r = {0};
     for (int x = t0 + 1; x <= t0 + k; x++) {
         r.eats += flag_at(tape, x, FLAG_EAT);
+        for (int i = 0; i < tape->action_count; i++)
+            if (tape->actions[i].tick == x && tape->actions[i].kind == ACTION_CLICK && is_consumable_raw(tape->actions[i].raw_id)) { r.our_meals++; break; }
         r.vw_specs += flag_at(tape, x, FLAG_VW);
         r.maul_specs += flag_at(tape, x, FLAG_MAUL);
         r.vengs += flag_at(tape, x, FLAG_VENG);
@@ -324,7 +326,7 @@ typedef struct {
     double seconds, decisions, ticks, rollouts, spec_counted, spec_predicted, spec_realized;
 } WindowStats;
 
-static const char* METRIC[METRICS] = {"his meals", "his hits", "his damage", "his VW specs", "his maul specs", "his vengeance", "we die", "he dies", "our hits", "our damage", "his bar at end"};
+static const char* METRIC[METRICS] = {"his meals", "his hits", "his damage", "his VW specs", "his maul specs", "his vengeance", "we die", "he dies", "our hits", "our damage", "his bar at end", "our meals"};
 
 static double pit_value(const int* sim, int n, int observed, uint32_t* rng) {
     int below = 0, equal = 0;
@@ -355,11 +357,11 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             int eats = 0;
             for (int j = 0; j < out.steps; j++) eats += out.his_eat[j];
             int values[METRICS] = {eats, out.his_hits, out.his_damage, out.his_vw_specs, out.his_maul_specs, out.his_vengs,
-                out.our_death >= 0, out.his_death >= 0, out.our_hits, out.our_damage, out.bar_him};
+                out.our_death >= 0, out.his_death >= 0, out.our_hits, out.our_damage, out.bar_him, out.our_meals};
             for (int m = 0; m < METRICS; m++) { sim_values[m][i] = values[m]; sums[m] += values[m]; }
         }
         int rec_values[METRICS] = {rec.eats, rec.his_hits, rec.his_damage, rec.vw_specs, rec.maul_specs, rec.vengs, rec.our_dead, rec.his_dead,
-            rec.our_hits, rec.our_damage, rec.bar_end};
+            rec.our_hits, rec.our_damage, rec.bar_end, rec.our_meals};
         for (int m = 0; m < METRICS; m++) {
             stats->rec[m] += rec_values[m];
             stats->sim[m] += sums[m] / n;

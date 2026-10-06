@@ -33,7 +33,7 @@ typedef struct {
     uint32_t his_hit_mask;
     int his_hits, his_damage, his_vw_specs, his_maul_specs, his_vengs;
     int our_damage, our_hits;
-    int first_eat, our_death, his_death;
+    int first_eat, our_death, his_death, our_meals;
     int hp_us, hp_him, bar_him;
 } Outcome;
 
@@ -224,6 +224,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         sim->spec_predicted += sim->ours.played[i].chance;
         sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }
+    out->our_meals = s->consume_ticks[0];
     out->hp_us = s->env.players[0].current_hitpoints;
     out->hp_him = s->env.players[1].current_hitpoints;
     out->bar_him = s->visible[0].health_bar;
