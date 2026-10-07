@@ -17,7 +17,7 @@ typedef struct {
     Plan plans[MAX_PLANS]; int plan_count;
     Plan after[MAX_PLANS]; int after_count;
     int energy;
-    GsChoiceKind choice, aim; GsCast cast; double chance, bar;
+    GsChoiceKind choice, aim; GsCast cast; double chance, bar, death;
 } Record;
 
 static double pool[POOL];
@@ -38,6 +38,9 @@ static int read_hits(char* p, GsSpecHit* hits) {
         GsSpecHit* hit = &hits[count++];
         hit->lands = (int)strtol(p, &p, 10);
         hit->damages = (int)strtol(p, &p, 10);
+        while (*p == ' ') p++;
+        hit->origin = *p == 'O' ? GS_ORIGIN_OURS : GS_ORIGIN_REFLECTED;
+        while (*p != ' ') p++;
         assert(pooled + hit->damages <= POOL);
         double* damage = &pool[pooled];
         pooled += hit->damages;
@@ -63,6 +66,14 @@ static int read_record(FILE* f, Record* r) {
                 &s->rebound.cast, &s->recoil_charges, &s->tick, &r->energy);
             s->vengeance = vengeance_of(vengeance); s->pid = pid_of(pid);
             s->rebound.kind = !strcmp(kind, "UP") ? GS_REBOUND_UP : !strcmp(kind, "CASTABLE") ? GS_REBOUND_CASTABLE : GS_REBOUND_SPENT;
+        } else if (!strcmp(tag, "LOCAL")) {
+            s->local.hitpoints = (int)strtol(p, &p, 10);
+            while (*p == ' ') {
+                GsSpecHeal* heal = &s->local.heals[s->local.heal_count++];
+                heal->tick = (int)strtol(p, &p, 10); p++;
+                heal->amount = (int)strtol(p, &p, 10); p++;
+                heal->cap = (int)strtol(p, &p, 10);
+            }
         } else if (!strcmp(tag, "UW")) { s->underway = r->underway; s->underway_count = read_hits(p, r->underway); }
         else if (!strcmp(tag, "IN")) {
             char attack[16];
@@ -88,7 +99,7 @@ static int read_record(FILE* f, Record* r) {
             plan->count = read_hits(p + n, plan->hits);
         } else if (!strcmp(tag, "D")) {
             char choice[24], cast[8], aim[24], bar[32];
-            sscanf(p, "%23s %7s %23s %lf %31s", choice, cast, aim, &r->chance, bar);
+            sscanf(p, "%23s %7s %23s %lf %31s %lf", choice, cast, aim, &r->chance, bar, &r->death);
             r->choice = choice_of(choice); r->aim = choice_of(aim); r->cast = !strcmp(cast, "NOW") ? GS_CAST_NOW : GS_CAST_KEEP;
             r->bar = strtod(bar, NULL);
         } else if (!strcmp(tag, "END")) return 1;
@@ -115,7 +126,7 @@ int main(int argc, char** argv) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         seconds += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
         total++;
-        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.chance == record.chance && d.bar == record.bar;
+        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.chance == record.chance && d.bar == record.bar && d.death == record.death;
         matched += ok;
         choices[record.choice]++;
         casts += record.cast == GS_CAST_NOW;

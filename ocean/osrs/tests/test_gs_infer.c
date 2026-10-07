@@ -69,7 +69,10 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     }
     strcat(list, "]");
     char swing[96];
-    if (s->has_opponent_swing) sprintf(swing, "Optional[%d..%d@%d]", s->opponent_swing.least, s->opponent_swing.most, s->opponent_swing.lands);
+    if (s->has_opponent_swing) {
+        GsSwing thrown = gs_opponent_swing_for(s, gs_pid_at(s, tick));
+        sprintf(swing, "Optional[%d..%d@%dx%d]", thrown.least, thrown.most, thrown.lands, thrown.arrows);
+    }
     else sprintf(swing, "Optional.empty");
     char arsenal[2048] = "";
     int order[GS_ARSENAL_SIZE];
@@ -84,18 +87,19 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     }
     char ate[16], reach[16], food[16];
     sprintf(ate, "%d", s->opponent_ate); sprintf(reach, "%d", s->opponent_in_reach_since); sprintf(food, "%d", s->opponent_hard_food_ready);
-    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d unseen %s food %s recoil %s swing %s soul %d@%d arsenal %s",
+    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d unseen %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
         PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor,
         PHASE_NAMES[s->opponent.vengeance.phase], earliest, s->opponent.vengeance.latest, local, hp, ate, reach, BAR_NAMES[s->bar], s->damage_since_bar, list, food,
-        RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, arsenal);
+        RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, gs_hidden_opportunities(&s->opponent), s->surplus.strength, s->surplus.ranged_strength,
+        s->surplus.magic_damage, arsenal);
     sprintf(out + strlen(out), " | reflect %s", reflect_name(s->swing_reflect));
     if (gs_living_rival(s) && s->tick == tick)
         sprintf(out + strlen(out), " %s cost %d", reflect_name(gs_weapon_reflect(s, tick)), gs_opponent_spec_cost(s));
 }
 
 static void format_attack(char* out, const char* tag, const GsAttack* a, int maul) {
-    sprintf(out + strlen(out), "%s %s %d %d %d %d %.17g %s\n", tag, STYLE_NAMES[a->style], a->least, a->most, a->cost, a->interval, a->accuracy,
-        maul ? "MAUL" : a->godsword ? "GODSWORD_SPEC" : "SPEC");
+    sprintf(out + strlen(out), "%s %s %d %d %d %d %.17g %s %d\n", tag, STYLE_NAMES[a->style], a->least, a->most, a->cost, a->interval, a->accuracy,
+        maul ? "MAUL" : a->godsword ? "GODSWORD_SPEC" : "SPEC", a->arrows);
 }
 
 static void format_situation(const GsEatSituation* s, char* out) {
@@ -118,8 +122,8 @@ static void format_situation(const GsEatSituation* s, char* out) {
         one[strlen(one) - 1] = 0;
         sprintf(out + strlen(out), "%s %.17g\n", one + 1, s->hidden[i].probability);
     }
-    if (s->has_swing) sprintf(out + strlen(out), "OSW %d %d %d %.17g\n", s->swing.lands, s->swing.least, s->swing.most, s->swing.accuracy);
-    if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy);
+    if (s->has_swing) sprintf(out + strlen(out), "OSW %d %d %d %.17g %d\n", s->swing.lands, s->swing.least, s->swing.most, s->swing.accuracy, s->swing.arrows);
+    if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g %d\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy, s->local_swing.arrows);
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
     int sorted[16];
@@ -196,11 +200,11 @@ static void compare_plans(char* java_plans, GsInfer* inf, int tick, Stats* stats
         if (!bad) {
             int at = 2;
             for (int h = 0; h < mine[match].hit_count && !bad; h++) {
-                if (at + 3 > n || strcmp(t[at], "H")) { bad = 1; break; }
+                if (at + 4 > n || strcmp(t[at], "H")) { bad = 1; break; }
                 int len = atoi(t[at + 2]);
-                if (len != mine[match].hits[h].damages) { bad = 1; break; }
-                for (int d = 0; d < len; d++) { double j = strtod(t[at + 3 + d], NULL); if (memcmp(&j, &mine[match].hits[h].damage[d], sizeof(double))) { bad = 1; break; } }
-                at += 3 + len;
+                if (len != mine[match].hits[h].damages || strcmp(t[at + 3], mine[match].hits[h].origin == GS_ORIGIN_OURS ? "OURS" : "REFLECTED")) { bad = 1; break; }
+                for (int d = 0; d < len; d++) { double j = strtod(t[at + 4 + d], NULL); if (memcmp(&j, &mine[match].hits[h].damage[d], sizeof(double))) { bad = 1; break; } }
+                at += 4 + len;
             }
             if (!bad && at != n) bad = 1;
             found[match] = 1;
@@ -261,6 +265,7 @@ int main(int argc, char** argv) {
     assert(f);
     static char plan_lines[LINE * 4], line[LINE], record[LINE * 4], mine_situation[LINE * 2], mine_spec[LINE * 2], spec_record[LINE * 4], copy[LINE];
     GsInfer inf;
+    GsEatSituation mine_situation_state;
     GsWire wire = {0};
     Stats stats = {0};
     gs_infer_init(&inf);
@@ -290,7 +295,7 @@ int main(int argc, char** argv) {
                 plan_lines[0] = 0;
             }
             else if (capturing == 3) {}
-            else if (capturing == 1 && (!strncmp(line, "F ", 2) || !strncmp(line, "M ", 2) || !strncmp(line, "V ", 2))) {}
+            else if (capturing == 1 && (!strncmp(line, "F ", 2) || !strncmp(line, "M ", 2) || !strncmp(line, "V ", 2) || !strncmp(line, "VH ", 3))) {}
             else if (capturing == 2 && !strncmp(line, "PL ", 3)) strcat(plan_lines, line);
             else if (capturing == 2 && (!strncmp(line, "AC ", 3) || !strncmp(line, "D ", 2))) {}
             else strcat(capturing == 1 ? record : spec_record, line);
@@ -332,6 +337,14 @@ int main(int argc, char** argv) {
             if (!same_line(mine, theirs)) {
                 stats.inference_mismatches++;
                 if (stats.shown < 12) { fprintf(stderr, "INF tick %d mismatch\n  C:    %s\n  Java: %s\n", pending_tick, mine, theirs); stats.shown++; }
+            }
+            if (have_mine && record[0] != 0) {
+                char first[LINE];
+                strcpy(first, record);
+                char* tokens[GS_WIRE_TOKENS];
+                gs_wire_split(first, tokens);
+                gs_eat_situation(&inf, pending_tick, inf.c.local_interacting >= 0 ? GS_ENGAGED : GS_IDLE, 0.01, atof(tokens[14]), &mine_situation_state);
+                format_situation(&mine_situation_state, mine_situation);
             }
             if (have_mine) {
                 stats.situations++;

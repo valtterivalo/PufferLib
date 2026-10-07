@@ -73,7 +73,7 @@ static GsSpecHit gs_certain_hit(Arena* arena, int lands, int damage) {
     double* d = arena_alloc(arena, (size_t)(damage + 1) * sizeof(double));
     memset(d, 0, (size_t)(damage + 1) * sizeof(double));
     d[damage] = 1;
-    return (GsSpecHit){lands, d, damage + 1};
+    return (GsSpecHit){lands, d, damage + 1, GS_ORIGIN_OURS};
 }
 
 static int ours_maul_slot(const Player* p) {
@@ -156,7 +156,7 @@ static GsOwn ours_own(const Sim* sim) {
 
 static int ours_venged_reason(const GsInfer* inf, int tick, GsCast cast, const GsRebound* rebound, GsPid pid) {
     GsIncoming attack;
-    int has_attack = inf->attack_tick == tick && gs_swing_underway(inf, tick, &attack);
+    int has_attack = inf->attack_tick == tick && gs_swing_underway(inf, tick, gs_pid_at(inf, tick), &attack);
     GsReflect weapon = gs_weapon_reflect((GsInfer*)inf, tick);
     GsEnergyCover cover = gs_energy_range(&inf->opponent.spec, tick).low >= gs_opponent_spec_cost(inf) ? GS_ENERGY_COVERS : GS_ENERGY_SHORT;
     return gs_vengeance_reason(cast, rebound, has_attack, has_attack ? attack.lands : 0, pid, weapon, inf->swing_reflect, cover);
@@ -196,6 +196,29 @@ static void ours_truth(const Sim* sim, int truth, int tick, GsInfer* view) {
     }
 }
 
+/* Arbiter.value: his loss times the kill chance less ours times the death chance. */
+static double ours_value(double kill, double death, GsStakes stakes) { return kill * (double)stakes.him - death * (double)stakes.us; }
+
+/* The spec decision of AutoSpecialAttack on this tick, HOLD where the Arbiter would drop a spec whose own death outweighs its kill. */
+static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, const GsRebound* rebound, GsStakes stakes, int* planned) {
+    GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0};
+    *planned = gs_spec_plannable(inf);
+    if (!*planned) return decision;
+    GsSpecSituation spec;
+    GsUnderway underway;
+    gs_spec_inputs(inf, tick, &spec, &underway);
+    GsSpecHit certain;
+    if (underway.certain) { certain = gs_certain_hit(&ours->arena, underway.lands, underway.damage); spec.underway = &certain; spec.underway_count = 1; }
+    spec.rebound = *rebound;
+    GsOwn own = ours_own(sim);
+    GsSpecPlan plans[4], after[4];
+    int plan_count = gs_spec_plans(&ours->arena, inf, tick, 0, &own, plans);
+    int after_count = rebound->kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
+    decision = gs_auto_spec_decide(&ours->arena, &spec, plans, plan_count, after, after_count, gs_spec_energy(&inf->c));
+    if (decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, decision.death, stakes) <= 0) decision.choice = GS_CHOICE_HOLD;
+    return decision;
+}
+
 /* Plans what the plugin would on this tick and queues the clicks. */
 static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     RiskfightState* s = &sim->state;
@@ -213,7 +236,12 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     OursFoods foods;
     ours_foods(sim, &foods);
     GsVerdict verdict = gs_auto_eat_decide(&e, foods.foods, foods.food_count, foods.meals, foods.meal_count, &ours->arena);
-    if (verdict.food_count > 0) {
+    GsStakes stakes = ours->equal_stakes ? (GsStakes){1, 1} : sim->obs.stakes;
+    GsRebound rebound = ours_rebound(sim, ours, tick, 0);
+    int planned;
+    GsSpecDecision decision = verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0};
+    int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) > ours_value(0, verdict.meal_risk, stakes));
+    if (meal) {
         ours->pending_count = 0;
         HumanCommand clicks[8];
         int n = 0;
@@ -230,22 +258,6 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         return;
     }
     if (ours->pending_count > 0) return;
-    GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0};
-    GsRebound rebound = ours_rebound(sim, ours, tick, 0);
-    int planned = gs_spec_plannable(inf);
-    if (planned) {
-        GsSpecSituation spec;
-        GsUnderway underway;
-        gs_spec_inputs(inf, tick, &spec, &underway);
-        GsSpecHit certain;
-        if (underway.certain) { certain = gs_certain_hit(&ours->arena, underway.lands, underway.damage); spec.underway = &certain; spec.underway_count = 1; }
-        spec.rebound = rebound;
-        GsOwn own = ours_own(sim);
-        GsSpecPlan plans[4], after[4];
-        int plan_count = gs_spec_plans(&ours->arena, inf, tick, 0, &own, plans);
-        int after_count = rebound.kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
-        decision = gs_auto_spec_decide(&ours->arena, &spec, plans, plan_count, after, after_count, gs_spec_energy(&inf->c));
-    }
     if (decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;

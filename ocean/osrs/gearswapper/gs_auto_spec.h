@@ -29,14 +29,15 @@ __attribute__((constructor)) static void gs_build_reactions(void) {
     GS_REACTION_TABLE[n++] = (GsReaction){GS_FIRST_MEAL[GS_REACTION_TICKS + 1], 0, {0, 0, NULL}};
 }
 
-typedef struct { int lands; const double* damage; int damages; } GsSpecHit;
+typedef enum { GS_ORIGIN_OURS, GS_ORIGIN_REFLECTED } GsOrigin;
+typedef struct { int lands; const double* damage; int damages; GsOrigin origin; } GsSpecHit;
 
 static GsSpecHit gs_spec_hit_of(Arena* a, int lands, int least, int most, double accuracy) {
     double* damage = arena_alloc(a, (size_t)(most + 1) * sizeof(double));
     memset(damage, 0, (size_t)(most + 1) * sizeof(double));
     damage[0] = 1 - accuracy;
     for (int roll = least; roll <= most; roll++) damage[roll] += accuracy / (most - least + 1);
-    return (GsSpecHit){lands, damage, most + 1};
+    return (GsSpecHit){lands, damage, most + 1, GS_ORIGIN_OURS};
 }
 
 typedef struct { int lands, least, most; double accuracy; int attack; } GsIncoming;
@@ -52,11 +53,26 @@ static GsSpecHit gs_echo(Arena* a, const GsIncoming* incoming, GsEcho echo, int 
         int reflected = (echo == GS_ECHO_VENGEANCE ? dealt * 3 / 4 : 0) + (dealt > 0 ? imin(recoil_charges, dealt / 10 + 1) : 0);
         damage[reflected] += incoming->accuracy / (incoming->most - incoming->least + 1);
     }
-    return (GsSpecHit){incoming->lands + (pid == GS_PID_LOCAL ? 0 : 1), damage, most + 1};
+    return (GsSpecHit){incoming->lands + (pid == GS_PID_LOCAL ? 0 : 1), damage, most + 1, GS_ORIGIN_REFLECTED};
 }
 
 typedef enum { GS_REBOUND_UP, GS_REBOUND_CASTABLE, GS_REBOUND_SPENT } GsReboundKind;
 typedef struct { GsReboundKind kind; int cast; } GsRebound;
+
+typedef struct { int tick, amount, cap; } GsSpecHeal;
+enum { GS_HEALTH_HEALS = 4 };
+typedef struct { int hitpoints; GsSpecHeal heals[GS_HEALTH_HEALS]; int heal_count; } GsHealth;
+
+static GsHealth gs_health_of(int hitpoints) { return (GsHealth){hitpoints, {{0}}, 0}; }
+
+static GsHealth gs_health_healing(GsHealth health, int tick, int amount, int cap) {
+    assert(health.heal_count < GS_HEALTH_HEALS);
+    int at = health.heal_count;
+    while (at > 0 && health.heals[at - 1].tick > tick) { health.heals[at] = health.heals[at - 1]; at--; }
+    health.heals[at] = (GsSpecHeal){tick, amount, cap};
+    health.heal_count++;
+    return health;
+}
 
 typedef struct {
     GsHealthRange hitpoints;
@@ -68,23 +84,71 @@ typedef struct {
     int recoil_charges, tick;
     GsWarning warning;
     GsRebound rebound;
+    GsHealth local;
 } GsSpecSituation;
 
-typedef struct { int tick, amount, cap; } GsSpecHeal;
+static double jdk_sum(const double* values, int count) {
+    double sum = 0, compensation = 0;
+    for (int i = 0; i < count; i++) {
+        double tmp = values[i] - compensation;
+        double velvel = sum + tmp;
+        compensation = (velvel - sum) - tmp;
+        sum = velvel;
+    }
+    return sum - compensation;
+}
 
-static double gs_knockout_with_heals(Arena* a, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count, const GsSpecHeal* heals, int heal_count) {
+typedef struct { double kill, death; } GsOutcome;
+
+/* AutoSpec.Health.survives */
+static double gs_health_survives(Arena* a, const GsHealth* health, const GsIncoming* hit, GsPid pid) {
+    int length = imax(health->hitpoints, GS_OVERHEALED_HP) + 1;
+    size_t mark = a->used;
+    double* alive = hp_uniform(a, health->hitpoints, health->hitpoints, length);
+    for (int i = 0; i < health->heal_count; i++)
+        if (health->heals[i].tick < hit->lands || (health->heals[i].tick == hit->lands && pid == GS_PID_LOCAL))
+            hp_heal(alive, health->heals[i].amount, health->heals[i].cap);
+    double survives = 1 - hp_strike_range(a, alive, length, hit->least, hit->most, hit->accuracy);
+    a->used = mark;
+    return survives;
+}
+
+static double gs_spec_alive(Arena* a, const GsSpecSituation* s, const GsIncoming* his, const GsSpecHit* hit) {
+    if (!his) return 1;
+    int first = hit->origin == GS_ORIGIN_OURS && (hit->lands < his->lands || (hit->lands == his->lands && s->pid == GS_PID_LOCAL));
+    return first ? 1 : gs_health_survives(a, &s->local, his, s->pid);
+}
+
+static int gs_lethal_echo(const GsSpecSituation* s, const GsSpecHit* hit, int damage) {
+    return s->vengeance == GS_VENGEANCE_UP && hit->origin == GS_ORIGIN_OURS && damage * 3 / 4 >= s->local.hitpoints;
+}
+
+/* AutoSpec.strikes */
+static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count, const GsSpecHeal* heals, int heal_count, const GsIncoming* his) {
     int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
     double* alive = hp_uniform(a, imax(1, s->hitpoints.low), s->hitpoints.high, length);
-    double dead = 0;
+    double dead = 0, suicide = 0;
     int next = 0;
     for (int i = 0; i < hit_count; i++) {
+        size_t mark = a->used;
         while (next < heal_count && (heals[next].tick < hits[i].lands || (heals[next].tick == hits[i].lands && s->pid != GS_PID_LOCAL))) {
             hp_heal(alive, heals[next].amount, heals[next].cap);
             next++;
         }
-        dead += hp_strike_damage(a, alive, length, hits[i].damage, hits[i].damages);
+        double* spared = arena_alloc(a, (size_t)hits[i].damages * sizeof(double));
+        memcpy(spared, hits[i].damage, (size_t)hits[i].damages * sizeof(double));
+        double lethal = 0;
+        for (int roll = 0; roll < hits[i].damages; roll++)
+            if (gs_lethal_echo(s, &hits[i], roll)) {
+                lethal += spared[roll];
+                spared[roll] = 0;
+            }
+        double chance = gs_spec_alive(a, s, his, &hits[i]);
+        suicide += chance * jdk_sum(alive, length) * lethal;
+        dead += chance * hp_strike_damage(a, alive, length, spared, hits[i].damages);
+        (void)mark;
     }
-    return dead;
+    return (GsOutcome){dead, suicide};
 }
 
 static void spec_hits_sort(GsSpecHit* hits, int count) {
@@ -103,7 +167,7 @@ static int reaction_delay(const GsReactionMeal* meal) {
 }
 
 /* AutoSpec.knockout(Situation, planned, echo) */
-static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo) {
+static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo) {
     size_t mark = arena->used;
     int struck_count = s->underway_count + planned_count;
     GsSpecHit* struck = arena_alloc(arena, (size_t)(struck_count + 1) * sizeof(GsSpecHit));
@@ -116,7 +180,7 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
         undelayed = gs_echo(arena, &s->incoming, echo, s->recoil_charges, s->pid);
         first = imin(first, undelayed.lands);
     }
-    if (first == INT_MAX) { arena->used = mark; return 0; }
+    if (first == INT_MAX) { arena->used = mark; return (GsOutcome){0, 0}; }
     int has_since = s->warning.since != GS_NONE && s->warning.since >= s->tick - GS_REACTION_TICKS;
     int anchor = has_since ? s->warning.since : first;
     int last = INT_MIN;
@@ -137,22 +201,25 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
         }
     }
     double shares = shares_sum - shares_compensation;
-    double dead = 0;
+    double dead = 0, suicide = 0;
     for (int li = 0; li < live_count; li++) {
         const GsReaction* reaction = &GS_REACTION_TABLE[live[li]];
         size_t inner = arena->used;
         GsSpecHit* hits = arena_alloc(arena, (size_t)(struck_count + 1) * sizeof(GsSpecHit));
         int count = struck_count;
         memcpy(hits, struck, (size_t)struck_count * sizeof(GsSpecHit));
+        const GsIncoming* landing = NULL;
+        GsIncoming thrown;
         if (s->has_incoming) {
             int delay = 0;
             if (s->incoming.attack != GS_NONE && reaction->has_meal && anchor + reaction->meal.after < s->incoming.attack)
                 delay = reaction_delay(&reaction->meal);
-            GsIncoming thrown = s->incoming;
+            thrown = s->incoming;
             if (delay) {
                 thrown.lands += delay;
                 thrown.attack += delay;
             }
+            landing = &thrown;
             if (delay == 0 || thrown.lands <= last) hits[count++] = gs_echo(arena, &thrown, echo, s->recoil_charges, s->pid);
         }
         spec_hits_sort(hits, count);
@@ -170,11 +237,17 @@ static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsS
             while (j >= 0 && heals[j].tick > heal.tick) { heals[j + 1] = heals[j]; j--; }
             heals[j + 1] = heal;
         }
-        dead += reaction->share / shares * gs_knockout_with_heals(arena, s, hits, count, heals, heal_count);
+        GsOutcome outcome = gs_strikes(arena, s, hits, count, heals, heal_count, landing);
+        dead += reaction->share / shares * outcome.kill;
+        suicide += reaction->share / shares * outcome.death;
         arena->used = inner;
     }
     arena->used = mark;
-    return dead;
+    return (GsOutcome){dead, suicide};
+}
+
+static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo) {
+    return gs_spec_outcome(arena, s, planned, planned_count, echo).kill;
 }
 
 /* AutoSpec.decide */
@@ -182,7 +255,7 @@ typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS
 static const int GS_CHOICE_TICKETS[4] = {0, 1, 2, 1};
 typedef enum { GS_CAST_NOW, GS_CAST_KEEP } GsCast;
 typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; } GsSpecPlan;
-typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar; } GsSpecDecision;
+typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death; } GsSpecDecision;
 
 enum { GS_TICKET = 50, GS_MOST_TICKETS = 2 };
 #define GS_WINDOW_PEAK_COUNT 128
@@ -238,33 +311,32 @@ static int spec_rebound_casts_before(const GsRebound* r, int lands, GsPid first)
 
 static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
     const GsSpecPlan* after_cast, int after_cast_count, int energy) {
-    if (s->vengeance == GS_VENGEANCE_UP) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0};
     static const GsSpecPlan nothing = {GS_CHOICE_HOLD, NULL, 0};
     GsEcho standing = s->rebound.kind == GS_REBOUND_UP ? GS_ECHO_VENGEANCE : GS_ECHO_RECOIL;
     const GsSpecPlan* best = &nothing;
     GsCast cast = GS_CAST_KEEP;
-    double chance = 0;
+    GsOutcome chosen = {0, 0};
     for (int i = 0; i <= plan_count; i++) {
         const GsSpecPlan* plan = i < plan_count ? &plans[i] : &nothing;
-        double kept = gs_spec_knockout(arena, s, plan->hits, plan->hit_count, standing);
-        if (kept > chance || (kept == chance && kept > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
+        GsOutcome kept = gs_spec_outcome(arena, s, plan->hits, plan->hit_count, standing);
+        if (kept.kill > chosen.kill || (kept.kill == chosen.kill && kept.kill > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
             best = plan;
-            chance = kept;
+            chosen = kept;
         }
     }
     if (s->has_incoming && s->incoming.attack == GS_NONE && spec_rebound_casts_before(&s->rebound, s->incoming.lands, s->pid)) {
         for (int i = 0; i <= after_cast_count; i++) {
             const GsSpecPlan* plan = i < after_cast_count ? &after_cast[i] : &nothing;
-            double with_cast = gs_spec_knockout(arena, s, plan->hits, plan->hit_count, GS_ECHO_VENGEANCE);
-            if (with_cast > chance) {
+            GsOutcome with_cast = gs_spec_outcome(arena, s, plan->hits, plan->hit_count, GS_ECHO_VENGEANCE);
+            if (with_cast.kill > chosen.kill) {
                 best = plan;
                 cast = GS_CAST_NOW;
-                chance = with_cast;
+                chosen = with_cast;
             }
         }
     }
     double bar = gs_spec_bar(energy, GS_CHOICE_TICKETS[best->choice]);
-    if (chance < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chance, bar};
-    return (GsSpecDecision){best->choice, cast, best->choice, chance, bar};
+    if (chosen.kill < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death};
+    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death};
 }
 #endif

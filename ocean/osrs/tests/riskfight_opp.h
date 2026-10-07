@@ -161,7 +161,7 @@ static int assumed_reach(const int kit[KIT_SLOTS], int weapon, int* has_spec) {
     memcpy(c.equipment, kit, sizeof(int) * KIT_SLOTS);
     GsArmament a;
     *has_spec = 0;
-    if (!gs_armed(&c, weapon, &a)) return 0;
+    if (!gs_armed(&c, GS_NO_BONUSES, weapon, &a)) return 0;
     *has_spec = GS_WEAPON_ROWS[a.weapon].cost > 0;
     return *has_spec && a.has_spec ? a.spec : a.normal;
 }

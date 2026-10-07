@@ -55,7 +55,9 @@ typedef struct {
     GsArmament arsenal[GS_ARSENAL_SIZE];
     int inventory_units[3], ready[3];
     GsHealthRange opponent_hitpoints;
-    int has_opponent_swing; GsSwing opponent_swing;
+    int has_opponent_swing, swing_spec, swing_distance, swing_tick; GsArmament swing_armament;
+    int has_swung, swung_spec, swung_tick; GsArmament swung_armament;
+    GsBonuses surplus;
     GsReflect swing_reflect;
     GsSoulStacks soul_stacks;
     int has_local_swing; GsSwing local_swing;
@@ -71,6 +73,8 @@ static void gs_eater_reset(GsInfer* s) {
     s->arsenal_count = 0;
     s->opponent_hitpoints = (GsHealthRange){GS_OVERHEALED_HP, GS_OVERHEALED_HP, GS_OVERHEALED_HP};
     s->has_opponent_swing = 0;
+    s->has_swung = 0;
+    s->surplus = GS_NO_BONUSES;
     s->soul_stacks = GS_NO_STACKS;
     s->has_local_swing = 0;
     s->opponent_hard_food_ready = INT_MIN;
@@ -159,16 +163,19 @@ static GsHealthRange gs_health_healed(GsHealthRange r) {
 }
 
 /* ---- AutoEater: armaments */
+static int gs_arrows(GsWeapon w) { return w == GS_W_DARK_BOW ? 2 : 1; }
+static int gs_most_per_arrow(const GsArmament* a, int most) { return most / gs_arrows(a->weapon); }
+
 static GsBonuses gs_ammo_bonuses(GsWeapon w) { return (GsBonuses){0, GS_WEAPON_ROWS[w].assumed_ammo, 0}; }
 
 /* AutoEater.armed: the opponent's visible gear with its weapon swapped for weapon_id */
-static int gs_armed(const GsClient* c, int weapon_id, GsArmament* out) {
+static int gs_armed(const GsClient* c, GsBonuses surplus, int weapon_id, GsArmament* out) {
     int style = gs_weapon_style(weapon_id);
     if (style < 0) return 0;
     GsWeapon weapon = weapon_id == -1 ? GS_W_OTHER : gs_item(weapon_id)->weapon;
     int base = gs_base_speed(weapon_id);
     if (base < 0) return 0;
-    GsBonuses bonuses = gs_bonuses_plus(GS_ASSUMED_RING, gs_ammo_bonuses(weapon));
+    GsBonuses bonuses = gs_bonuses_plus(gs_bonuses_plus(GS_ASSUMED_RING, gs_ammo_bonuses(weapon)), surplus);
     int ids[GS_MAX_EQUIPMENT + 1], count = 0;
     for (int slot = 0; slot < c->equipment_count; slot++)
         if (slot != GS_KIT_WEAPON && c->equipment[slot] >= GS_ITEM_OFFSET) ids[count++] = c->equipment[slot] - GS_ITEM_OFFSET;
@@ -215,7 +222,7 @@ static GsArmament* gs_arsenal_merge(GsInfer* s, int weapon_id, GsArmament seen) 
 /* AutoEater.armamentOf: the opponent's current weapon recorded in the arsenal */
 static GsArmament* gs_armament_of(GsInfer* s) {
     GsArmament seen;
-    if (!gs_armed(&s->c, s->c.oweapon, &seen)) return NULL;
+    if (!gs_armed(&s->c, s->surplus, s->c.oweapon, &seen)) return NULL;
     return gs_arsenal_merge(s, s->c.oweapon, seen);
 }
 
@@ -284,22 +291,35 @@ static GsStrike gs_strike(const GsInfer* s, const GsArmament* a, int tick) {
 static int gs_lands_for(int attack_tick, GsStyle style, int distance, GsLead lead) { return gs_lands(attack_tick, style, distance, lead); }
 
 static GsSwing gs_opponent_swing(int attack_tick, GsStyle style, int distance, GsPid pid, int least, int most, double accuracy) {
-    return (GsSwing){gs_lands_for(attack_tick, style, distance, gs_opponent_lead(pid)), least, most, accuracy};
+    return (GsSwing){gs_lands_for(attack_tick, style, distance, gs_opponent_lead(pid)), least, most, accuracy, 1};
 }
 static GsSwing gs_local_swing_of(int attack_tick, GsStyle style, int distance, GsPid pid, int most, double accuracy) {
-    return (GsSwing){gs_lands_for(attack_tick, style, distance, gs_local_lead(pid)), 0, most, accuracy};
+    return (GsSwing){gs_lands_for(attack_tick, style, distance, gs_local_lead(pid)), 0, most, accuracy, 1};
 }
 
-static GsSwing gs_swing_of(const GsInfer* s, const GsArmament* a, int tick, GsPid pid) {
+static GsSwing gs_swing_of(const GsInfer* s, const GsArmament* a, int distance, int tick, GsPid pid) {
     GsStrike strike = gs_strike(s, a, tick);
-    return gs_opponent_swing(tick, (GsStyle)a->style, gs_distance(&s->c), pid, strike.least, strike.most, strike.accuracy);
+    return gs_opponent_swing(tick, (GsStyle)a->style, distance, pid, strike.least, gs_most_per_arrow(a, strike.most), strike.accuracy);
 }
 
 static GsReflect gs_reflect_of_max(int max) { return max >= 40 ? GS_REFLECT_WORTH : GS_REFLECT_WEAK; }
 
+/* AutoEater.opponentSwing: the animated swing as the pid applies, the numbers read from the client now */
+static GsSwing gs_opponent_swing_for(const GsInfer* s, GsPid pid) {
+    const GsArmament* a = &s->swing_armament;
+    GsSwing swing;
+    if (s->swing_spec)
+        swing = gs_opponent_swing(s->swing_tick, (GsStyle)a->style, s->swing_distance, pid, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
+            gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->has_spec ? a->spec : a->normal)), gs_spec_accuracy(&s->c, a));
+    else swing = gs_swing_of(s, a, s->swing_distance, s->swing_tick, pid);
+    swing.arrows = gs_arrows(a->weapon);
+    return swing;
+}
+
 static GsAttack gs_spec_attack(const GsInfer* s, const GsArmament* a) {
-    return (GsAttack){(GsStyle)a->style, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)), gs_protected_damage(&s->c, gs_spec_style(a), a->spec),
-        GS_WEAPON_ROWS[a->weapon].cost, a->interval, gs_spec_accuracy(&s->c, a), a->weapon == GS_W_ARMADYL_GODSWORD};
+    return (GsAttack){(GsStyle)a->style, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
+        gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->spec)), GS_WEAPON_ROWS[a->weapon].cost, a->interval, gs_spec_accuracy(&s->c, a),
+        a->weapon == GS_W_ARMADYL_GODSWORD, gs_arrows(a->weapon)};
 }
 
 /* AutoEater.localAccuracy */
@@ -399,7 +419,7 @@ static void gs_eater_observe(GsInfer* s, int tick) {
 
 enum { GS_GRANITE_MAUL_SPEC_ANIMATION = 1667 };
 
-static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, int tick, GsPid pid) {
+static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, int tick) {
     const GsClient* c = &s->c;
     if (kind == GS_KIND_EAT) {
         s->opponent_hitpoints = gs_health_healed(s->opponent_hitpoints);
@@ -415,18 +435,59 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
     if (animation == GS_GRANITE_MAUL_SPEC_ANIMATION) {
         armed = gs_granite_maul(s);
         GsArmament seen;
-        if (!armed && gs_armed(c, GS_ITEM_GRANITE_MAUL_PLUS, &seen)) armed = gs_arsenal_merge(s, GS_ITEM_GRANITE_MAUL_PLUS, seen);
+        if (!armed && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &seen)) armed = gs_arsenal_merge(s, GS_ITEM_GRANITE_MAUL_PLUS, seen);
     } else armed = gs_armament_of(s);
     if (!armed) return;
     int spec_cost = gs_animation_spec_cost(animation);
-    s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_armament_most(s, armed, tick));
+    s->has_swung = 1;
+    s->swung_armament = *armed;
+    s->swung_spec = spec_cost != 0;
+    s->swung_tick = tick;
+    s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_most_per_arrow(armed, gs_armament_most(s, armed, tick)));
     s->has_opponent_swing = 1;
-    if (spec_cost) {
-        s->opponent_swing = gs_opponent_swing(tick, (GsStyle)armed->style, gs_distance(c), pid, gs_protected_damage(c, gs_spec_style(armed), gs_spec_least(armed)),
-            gs_protected_damage(c, gs_spec_style(armed), armed->has_spec ? armed->spec : armed->normal), gs_spec_accuracy(c, armed));
-    } else s->opponent_swing = gs_swing_of(s, armed, tick, pid);
+    s->swing_armament = *armed;
+    s->swing_spec = spec_cost != 0;
+    s->swing_distance = gs_distance(c);
+    s->swing_tick = tick;
     if (armed->weapon == GS_W_SOULREAPER_AXE && kind == GS_KIND_ATTACK)
         s->soul_stacks = animation == GS_BEHEAD_ANIMATION ? gs_soul_beheaded(tick) : gs_soul_swung(s->soul_stacks, tick);
+}
+
+static GsBonuses gs_bonuses_of_style(GsStyle style, int points) {
+    switch (style) {
+        case GS_MELEE: return (GsBonuses){points, 0, 0};
+        case GS_RANGED: return (GsBonuses){0, points, 0};
+        default: return (GsBonuses){0, 0, points};
+    }
+}
+
+static GsArmament gs_armament_plus(GsArmament a, GsBonuses extra) {
+    GsBonuses learned = gs_bonuses_plus(a.bonuses, extra);
+    a.normal = gs_max_normal(a.weapon, a.style, GS_ASSUMED_LEVELS, learned);
+    a.has_spec = gs_max_spec(a.weapon, a.style, GS_ASSUMED_LEVELS, learned, &a.spec);
+    a.bonuses = learned;
+    return a;
+}
+
+static int gs_most_of(const GsInfer* s, const GsArmament* a, int spec, int tick) {
+    return gs_most_per_arrow(a, spec ? a->spec : gs_armament_most(s, a, tick));
+}
+
+/* AutoEater.maxHit */
+enum { GS_MAX_SURPLUS = 200 };
+static void gs_eater_max_hit(GsInfer* s, int amount) {
+    if (!s->has_swung) return;
+    GsArmament latest = s->swung_armament;
+    int points;
+    for (points = -GS_MAX_SURPLUS; points <= GS_MAX_SURPLUS; points++) {
+        GsArmament candidate = gs_armament_plus(latest, gs_bonuses_of_style((GsStyle)latest.style, points));
+        if (gs_protected_damage(&s->c, latest.style, gs_most_of(s, &candidate, s->swung_spec, s->swung_tick)) >= amount) break;
+    }
+    assert(points <= GS_MAX_SURPLUS);
+    GsBonuses delta = gs_bonuses_of_style((GsStyle)latest.style, points);
+    s->surplus = gs_bonuses_plus(s->surplus, delta);
+    for (int i = 0; i < s->arsenal_count; i++) s->arsenal[i] = gs_armament_plus(s->arsenal[i], delta);
+    s->swung_armament = gs_armament_plus(latest, delta);
 }
 
 static void gs_eater_local_animated(GsInfer* s, GsKind kind, int animation, int tick, GsPid pid) {
@@ -445,8 +506,13 @@ static void gs_eater_struck(GsInfer* s, int damage, int tick) {
     s->struck_damage = damage;
 }
 
+static int gs_recoil_of(int struck, int echo) {
+    for (int damage = struck - 1; damage <= struck + 1; damage++) if (echo == damage / 10 + 1) return 1;
+    return 0;
+}
+
 static void gs_eater_struck_back(GsInfer* s, int amount, int tick) {
-    if (s->has_struck_damage && tick >= s->struck_tick && tick <= s->struck_tick + 1 && amount == s->struck_damage / 10 + 1) {
+    if (s->has_struck_damage && tick >= s->struck_tick && tick <= s->struck_tick + 1 && gs_recoil_of(s->struck_damage, amount)) {
         s->recoil = GS_RECOIL_SEEN;
         s->has_struck_damage = 0;
     }
@@ -526,7 +592,7 @@ static void gs_on_animation(GsInfer* s, int observed_tick, int who, int animatio
         return;
     }
     if (rival && s->timed == who) {
-        gs_eater_opponent_animated(s, kind, animation, observed_tick, gs_pid_at(s, observed_tick));
+        gs_eater_opponent_animated(s, kind, animation, observed_tick);
         s->opponent = gs_inference_animated(s->opponent, kind, gs_animation_spec_cost(animation), observed_tick, gs_speed_after(c->oweapon, animation, GS_PACE_UNKNOWN));
         if (gs_pid_counts(animation, gs_weapon_style(c->oweapon)) && gs_duel(s, s->timed, 0)) s->pid = gs_pid_opponent_attacked(s->pid, observed_tick);
         if (kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC) s->attack_tick = observed_tick;
@@ -543,6 +609,13 @@ static void gs_on_graphic(GsInfer* s, int observed_tick, int who) {
     if (s->tracker_current != who) return;
     gs_sync_opponent_timer(s, observed_tick);
     s->opponent = gs_inference_veng_cast(s->opponent, observed_tick);
+}
+
+/* GearSwapperPlugin.onAreaSoundEffectPlayed: the cast sound on the tracked player's own tile, not ours */
+static void gs_on_sound(GsInfer* s, int observed_tick, int sound, int x, int y) {
+    if (s->tracker_current < 0) return;
+    if (s->c.ox != x || s->c.oy != y || (s->c.ox == s->c.lx && s->c.oy == s->c.ly)) return;
+    gs_on_graphic(s, observed_tick, s->tracker_current);
 }
 
 static int gs_parse_int_after(const char* text, const char* prefix, int* out) {
@@ -586,6 +659,7 @@ static void gs_on_hitsplat(GsInfer* s, int hit_tick, int who, int amount, int ty
     if (struck && rival && who == 0 && gs_duel(s, s->timed, 0)) {
         s->pid = gs_pid_hit_on_local(s->pid, hit_tick, amount);
         gs_eater_struck_back(s, amount, hit_tick);
+        if (type == GS_ATTACK_HITSPLAT_MAX_ME) gs_eater_max_hit(s, amount);
     }
     if (struck && rival && who == s->timed && mine && gs_duel(s, 0, s->timed)) s->pid = gs_pid_hit_on_opponent(s->pid, hit_tick, amount);
     if (who != 0 && s->timed == who) {
@@ -660,8 +734,14 @@ static GsTimer gs_timer_view(GsTimerState t, int tick) {
     return (GsTimer){t.seen, t.seen ? gs_next_attack(t, tick) : 0, t.seen ? t.earliest : 0};
 }
 
-static const double GS_VOIDWAKER_CARRIED = (41 + 103) / (59 + 162.0);
-static const double GS_GRANITE_MAUL_CARRIED = (23 + 90) / (59 + 162.0);
+static const double GS_VOIDWAKER_CARRIED = (41 + 103) / (59 + 162.0), GS_VOIDWAKER_USE = 0.0449;
+static const double GS_GRANITE_MAUL_CARRIED = (23 + 90) / (59 + 162.0), GS_GRANITE_MAUL_USE = 0.0834;
+
+/* HiddenWeapon.carried */
+static double gs_hidden_carried(double carried, double use, int opportunities) {
+    double unused = carried * gs_pow(1 - use, opportunities);
+    return unused / (unused + 1 - carried);
+}
 
 static int gs_brew_in_bag(const GsClient* c) {
     for (int i = 0; i < 28; i++) if (c->inventory[i] == 6685 || c->inventory[i] == 6687 || c->inventory[i] == 6689 || c->inventory[i] == 6691) return 1;
@@ -730,7 +810,8 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     GsArmament* current = gs_armament_of(s);
     if (current) {
         GsStrike strike = gs_strike(s, current, tick);
-        out->attacks[out->attack_count++] = (GsAttack){(GsStyle)current->style, strike.least, strike.most, 0, current->interval, strike.accuracy};
+        out->attacks[out->attack_count++] = (GsAttack){(GsStyle)current->style, strike.least, gs_most_per_arrow(current, strike.most), 0, current->interval, strike.accuracy, 0,
+            gs_arrows(current->weapon)};
     }
     int order[GS_ARSENAL_SIZE];
     int n = gs_arsenal_order(s, order);
@@ -738,37 +819,47 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
         const GsArmament* a = &s->arsenal[order[k]];
         if (a->weapon == GS_W_GRANITE_MAUL) {
             out->has_maul = 1;
-            out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), 50, 1, gs_armament_accuracy(c, a)};
+            out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), 50, 1, gs_armament_accuracy(c, a), 0, 1};
         } else if (a->has_spec) out->attacks[out->attack_count++] = gs_spec_attack(s, a);
     }
     int has_vw = 0;
     for (int i = 0; i < s->arsenal_count; i++) has_vw |= s->arsenal[i].weapon == GS_W_VOIDWAKER;
     GsArmament hidden;
-    if (!has_vw && gs_armed(c, GS_ITEM_VOIDWAKER, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden), GS_VOIDWAKER_CARRIED};
-    if (!gs_granite_maul(s) && gs_armed(c, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden)},
-            GS_GRANITE_MAUL_CARRIED};
-    if (s->has_opponent_swing && s->opponent_swing.lands > tick) { out->has_swing = 1; out->swing = s->opponent_swing; }
+    int opportunities = gs_hidden_opportunities(&s->opponent);
+    if (!has_vw && gs_armed(c, s->surplus, GS_ITEM_VOIDWAKER, &hidden))
+        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden), gs_hidden_carried(GS_VOIDWAKER_CARRIED, GS_VOIDWAKER_USE, opportunities)};
+    if (!gs_granite_maul(s) && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
+        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1},
+            gs_hidden_carried(GS_GRANITE_MAUL_CARRIED, GS_GRANITE_MAUL_USE, opportunities)};
+    if (s->has_opponent_swing) {
+        GsSwing swing = gs_opponent_swing_for(s, out->pid);
+        int landed = imax(0, imin(swing.arrows, tick - swing.lands + 1));
+        if (landed != swing.arrows) {
+            out->has_swing = 1;
+            out->swing = (GsSwing){swing.lands + landed, swing.least, swing.most, swing.accuracy, swing.arrows - landed};
+        }
+    }
     if (s->has_local_swing && s->local_swing.lands > tick) { out->has_local_swing = 1; out->local_swing = s->local_swing; }
 }
 
 /* ---- AutoEater.incoming and the inferred inputs of the spec decision */
 static int gs_living_rival(const GsInfer* s) { return s->timed >= 0 && s->c.ratio != 0; }
 
-static int gs_swing_underway(const GsInfer* s, int tick, GsIncoming* out) {
-    if (!(s->has_opponent_swing && s->opponent_swing.lands > tick)) return 0;
-    *out = (GsIncoming){s->opponent_swing.lands, s->opponent_swing.least, s->opponent_swing.most, s->opponent_swing.accuracy, GS_NONE};
+static int gs_swing_underway(const GsInfer* s, int tick, GsPid pid, GsIncoming* out) {
+    if (!s->has_opponent_swing) return 0;
+    GsSwing swing = gs_opponent_swing_for(s, pid);
+    if (swing.lands <= tick) return 0;
+    *out = (GsIncoming){swing.lands, swing.least, swing.most, swing.accuracy, GS_NONE};
     return 1;
 }
 
 static int gs_incoming(GsInfer* s, int tick, GsPid pid, GsIncoming* out) {
-    if (gs_swing_underway(s, tick, out)) return 1;
+    if (gs_swing_underway(s, tick, pid, out)) return 1;
     if (gs_timer_reading(s->opponent.timer, tick) != GS_READING_COOLDOWN) return 0;
     int due = tick + 1 + gs_timer_until_earliest(s->opponent.timer, tick + 1);
     GsArmament* armament = gs_armament_of(s);
     if (!armament) return 0;
-    GsSwing next = gs_swing_of(s, armament, due, pid);
+    GsSwing next = gs_swing_of(s, armament, gs_distance(&s->c), due, pid);
     *out = (GsIncoming){next.lands, next.least, next.most, next.accuracy, due};
     return 1;
 }
@@ -786,6 +877,7 @@ static void gs_spec_inputs(GsInfer* s, int tick, GsSpecSituation* out, GsUnderwa
     out->recoil_charges = gs_recoil_reflectable(s);
     out->tick = tick;
     out->warning = gs_eater_warning(s);
+    out->local = gs_health_of(s->c.hitpoints);
     *underway = (GsUnderway){s->own_hit_lands > tick, s->own_hit_lands, s->own_hit_damage};
 }
 
@@ -802,7 +894,7 @@ static int gs_spec_plannable(const GsInfer* s) {
 /* AutoEater.weaponReflect and opponentSpecCost, the inputs of the Vengeance and Bait rules */
 static GsReflect gs_weapon_reflect(GsInfer* s, int tick) {
     GsArmament* a = gs_armament_of(s);
-    return a ? gs_reflect_of_max(gs_armament_most(s, a, tick)) : GS_REFLECT_WEAK;
+    return a ? gs_reflect_of_max(gs_most_per_arrow(a, gs_armament_most(s, a, tick))) : GS_REFLECT_WEAK;
 }
 
 static int gs_opponent_spec_cost(const GsInfer* s) {

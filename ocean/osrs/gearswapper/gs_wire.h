@@ -85,6 +85,7 @@ static char gs_wire_apply(GsInfer* inf, GsWire* w, const char* line) {
     else if (!strcmp(tag, "H")) gs_on_hitsplat(inf, atoi(t[1]), atoi(t[2]), atoi(t[3]), atoi(t[4]), !strcmp(t[5], "true"));
     else if (!strcmp(tag, "O")) { if (!strcmp(t[3], "true")) gs_on_overhead_text(inf, atoi(t[1]), atoi(t[2])); }
     else if (!strcmp(tag, "G")) gs_on_graphic(inf, atoi(t[1]), atoi(t[2]));
+    else if (!strcmp(tag, "Z")) gs_on_sound(inf, atoi(t[1]), atoi(t[2]), atoi(t[3]), atoi(t[4]));
     else if (!strcmp(tag, "C")) {
         if (!strcmp(t[2], "GAMEMESSAGE") || !strcmp(t[2], "SPAM")) {
             const char* text = strstr(line, t[2]) + strlen(t[2]) + 1;

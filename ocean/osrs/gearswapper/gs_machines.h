@@ -255,7 +255,10 @@ typedef struct {
     int has_pending;
     GsPending pending;
     GsVengeanceState vengeance;
+    int full_energy_swings;
 } GsOpponentInference;
+
+enum { GS_OPPORTUNITY_ENERGY = 50 };
 
 static GsOpponentInference gs_inference_tracked(int tick) {
     return (GsOpponentInference){.spec = gs_energy_full(tick)};
@@ -263,6 +266,7 @@ static GsOpponentInference gs_inference_tracked(int tick) {
 
 static GsOpponentInference gs_inference_animated(GsOpponentInference s, GsKind kind, int spec_cost, int tick, GsSpeed speed) {
     GsOpponentInference out = s;
+    if ((kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC) && gs_energy_range(&s.spec, tick).low >= GS_OPPORTUNITY_ENERGY) out.full_energy_swings++;
     if (spec_cost > 0) out.spec = gs_energy_spec(s.spec, tick, spec_cost);
     out.timer = gs_timer_observe(s.timer, kind, tick, speed);
     if (kind == GS_KIND_VENGEANCE_CAST) out.vengeance = gs_vengeance_cast_after(s.vengeance, tick);
@@ -285,6 +289,8 @@ static GsOpponentInference gs_inference_revealed(GsOpponentInference s, int hp, 
     out.has_pending = 0;
     return out;
 }
+
+static int gs_hidden_opportunities(const GsOpponentInference* s) { return imax(0, s->full_energy_swings - 1); }
 
 static GsOpponentInference gs_inference_veng_procced(GsOpponentInference s, int tick) {
     s.vengeance = gs_vengeance_procced(s.vengeance, tick);

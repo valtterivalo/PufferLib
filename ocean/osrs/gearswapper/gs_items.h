@@ -45,8 +45,9 @@ static GsWeapon gs_weapon_named(const char* name) {
     return GS_W_OTHER;
 }
 
-static int gs_style_of(int stab, int slash, int crush, int ranged, int magic) {
+static int gs_style_of(int stab, int slash, int crush, int ranged, int ranged_strength, int magic) {
     if (magic >= 10) return GS_MAGIC;
+    if (ranged_strength > 0) return GS_RANGED;
     return ranged > imax(stab, imax(slash, crush)) && ranged > magic ? GS_RANGED : GS_MELEE;
 }
 
@@ -63,7 +64,7 @@ static void gs_item_register(int id, const char* name, int has_stats, const int 
         item->str = stats[10]; item->rstr = stats[11];
         item->mdmg = mdmg;
         item->aspeed = aspeed;
-        item->style = gs_style_of(item->astab, item->aslash, item->acrush, item->arange, item->amagic);
+        item->style = gs_style_of(item->astab, item->aslash, item->acrush, item->arange, item->rstr, item->amagic);
     } else item->style = -1;
 }
 
@@ -138,7 +139,7 @@ static int gs_weapon_spec_cost(int item) {
 
 /* Pid.counts */
 static int gs_pid_counts(int animation, int style) {
-    return gs_animation_kind(animation) == GS_KIND_ATTACK && gs_animation_spec_cost(animation) == 0 && style == GS_MELEE;
+    return gs_animation_kind(animation) == GS_KIND_ATTACK && style == GS_MELEE;
 }
 
 /* MaxHit.java */

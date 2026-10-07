@@ -23,7 +23,7 @@ static GsAttack read_attack(char** p) {
     GsAttack a;
     char style[16], source[24];
     int n;
-    sscanf(*p, "%15s %d %d %d %d %lf %23s%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, source, &n);
+    sscanf(*p, "%15s %d %d %d %d %lf %23s %d%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, source, &a.arrows, &n);
     a.style = style_of(style);
     a.godsword = !strcmp(source, "GODSWORD_SPEC");
     *p += n;
@@ -44,7 +44,7 @@ typedef struct {
     GsEatSituation s;
     GsFood foods[GS_MAX_FOODS]; int food_count;
     GsMeal meals[GS_MAX_MEALS]; int meal_count;
-    char decision[16]; double risk, meal_risk; int verdict_foods[GS_MAX_MEAL], verdict_food_count, complete;
+    char decision[16]; double risk, meal_risk; int verdict_foods[GS_MAX_MEAL], verdict_food_count, complete; GsUrgency urgency; GsHealth health;
 } Record;
 
 static int read_record(FILE* f, Record* r) {
@@ -80,8 +80,8 @@ static int read_record(FILE* f, Record* r) {
             h->is_maul = slot == 1;
             h->attack = read_attack(&p);
             h->probability = strtod(p, NULL);
-        } else if (!strcmp(tag, "OSW")) { s->has_swing = 1; sscanf(p, "%d %d %d %lf", &s->swing.lands, &s->swing.least, &s->swing.most, &s->swing.accuracy); }
-        else if (!strcmp(tag, "LSW")) { s->has_local_swing = 1; sscanf(p, "%d %d %d %lf", &s->local_swing.lands, &s->local_swing.least, &s->local_swing.most, &s->local_swing.accuracy); }
+        } else if (!strcmp(tag, "OSW")) { s->has_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->swing.lands, &s->swing.least, &s->swing.most, &s->swing.accuracy, &s->swing.arrows); }
+        else if (!strcmp(tag, "LSW")) { s->has_local_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->local_swing.lands, &s->local_swing.least, &s->local_swing.most, &s->local_swing.accuracy, &s->local_swing.arrows); }
         else if (!strcmp(tag, "W")) {
             s->warning.since = GS_NONE;
             if (strncmp(p, "none", 4)) s->warning.since = (int)strtol(p, &p, 10); else p += 4;
@@ -109,9 +109,18 @@ static int read_record(FILE* f, Record* r) {
             read_list(b, m->offsets);
             read_list(c, m->following);
         } else if (!strcmp(tag, "V")) {
-            char foods[64];
-            sscanf(p, "%15s %lf %lf %63s %d", r->decision, &r->risk, &r->meal_risk, foods, &r->complete);
+            char foods[64], urgency[16];
+            sscanf(p, "%15s %lf %lf %63s %d %15s", r->decision, &r->risk, &r->meal_risk, foods, &r->complete, urgency);
             r->verdict_food_count = read_list(foods, r->verdict_foods);
+            r->urgency = !strcmp(urgency, "DEFERRABLE") ? GS_DEFERRABLE : GS_URGENT;
+        } else if (!strcmp(tag, "VH")) {
+            r->health.hitpoints = (int)strtol(p, &p, 10);
+            while (*p == ' ') {
+                GsSpecHeal* heal = &r->health.heals[r->health.heal_count++];
+                heal->tick = (int)strtol(p, &p, 10); p++;
+                heal->amount = (int)strtol(p, &p, 10); p++;
+                heal->cap = (int)strtol(p, &p, 10);
+            }
         } else if (!strcmp(tag, "END")) return 1;
     }
     return started && 0;
@@ -136,7 +145,7 @@ int main(int argc, char** argv) {
         total++;
         int bad_decision = v.decision != decision_of(record.decision);
         int bad_foods = v.food_count != record.verdict_food_count || memcmp(v.foods, record.verdict_foods, (size_t)v.food_count * sizeof(int));
-        int bad_complete = v.complete != record.complete;
+        int bad_complete = v.complete != record.complete || v.urgency != record.urgency || memcmp(&v.health, &record.health, sizeof(GsHealth));
         double diff = fmax(fabs(v.risk - record.risk), fabs(v.meal_risk - record.meal_risk));
         int bad_risk = diff > 1e-9 * fmax(1, fabs(record.risk));
         decision_bad += bad_decision; foods_bad += bad_foods; complete_bad += bad_complete; risk_bad += bad_risk;
