@@ -181,6 +181,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
     sim->outcome = out;
     g_tape = tape;
+    g_rollout_seed = seed;
     sim->tick_base = tick_base;
     sim->previous = (StepEvents){0};
     if (policy->kind == OURS_RULES) {
@@ -242,6 +243,8 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }
     out->our_meals = s->consume_ticks[0];
+    g_sim_escapes += s->escaped[1];
+    g_sim_rollouts++;
     out->hp_us = s->env.players[0].current_hitpoints;
     out->hp_him = s->env.players[1].current_hitpoints;
     out->bar_him = s->visible[0].health_bar;

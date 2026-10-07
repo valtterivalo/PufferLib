@@ -145,6 +145,9 @@ static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int k
     return probe_from_inputs(&in, h, tick);
 }
 
+/** Ticks since his bar last moved on which a meal would have been hidden behind another animation. */
+static int unseen_ticks(const Tape* tape, int tick) { return ((const Hist*)tape->hist_series)[tick - tape->lo].warning.unseen_count; }
+
 static int worn_slot_item(const TapeTick* t, int worn) { return t->worn[worn] >= 0 ? raw_id_to_item(t->worn[worn]) : ITEM_NONE; }
 
 /** The kit composition ids (item id plus the client's offset, -1 for none) a viewer reads of a fighter: the nine visible slots, no ring or ammunition. */
@@ -273,6 +276,40 @@ static void fit_default_servings(OppFit* fit) {
     for (int w = 0; w < 2; w++) for (int k = 0; k < 4; k++) fit->serving[w][k] = SERVING_SHARES[k];
 }
 
+enum { EAT_DIM = 24 };
+typedef struct { double w[EAT_DIM]; } EatLogit;
+typedef struct { int base_n, base[9], hp, timer, y, masked; double weight; } EatRow;
+typedef struct { EatRow* rows; int count, capacity; } EatRows;
+
+static int eat_features_of(const EatRow* r, int model, int* idx) {
+    int n = 0;
+    for (int i = 0; i < r->base_n; i++) idx[n++] = r->base[i];
+    if (model >= 1) idx[n++] = r->hp <= 30 ? 9 : r->hp <= 44 ? 10 : r->hp <= 60 ? 11 : r->hp <= 87 ? 12 : 13;
+    if (model >= 2) idx[n++] = r->timer == 0 ? 14 : r->timer == 1 ? 15 : r->timer == 2 ? 16 : 17;
+    if (model >= 3) {
+        int low = r->hp <= 60;
+        if (low && r->timer == 0) idx[n++] = 18;
+        if (low && r->timer == 1) idx[n++] = 19;
+        if (low && r->timer == 2) idx[n++] = 20;
+    }
+    return n;
+}
+
+static double eat_p(const EatLogit* l, const EatRow* r, int model) {
+    int idx[16];
+    int n = eat_features_of(r, model, idx);
+    double z = 0;
+    for (int i = 0; i < n; i++) z += l->w[idx[i]];
+    return sigmoid(z);
+}
+
+
+/** The eat hazard that replaces the logit when a model is loaded: his bar band, lag and warning plus his hitpoints and our swing timer. */
+static struct { int on, model; EatLogit logit; } g_eat_model;
+
+/** His chance to leave by teleport each tick: 14 teleports in 5094 ticks of the 38 recorded fights, flat across his hitpoints (0.4 percent a tick at every band). */
+static const double ESCAPE_RATE = 14.0 / 5094;
+
 static double action_probability(const OppFit* fit, const Probe* p, Action a) {
     if (!p->eligible[a]) return 0;
     return logit_p(&fit->logit[a], &p->x[a]);
@@ -300,7 +337,17 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
         int reach = assumed_reach(kit, raw_of_item_id(us->equipped[GEAR_SLOT_WEAPON]), &has_spec);
         threatened = us->attack_timer <= g_ablation.threat_timer && him->current_hitpoints <= reach && roll(seed, tick, 47, g_ablation.threat);
     }
-    int eating = threatened || (g_ablation.eats ? tape_his_anim_at(g_tape, tick, ANIM_EAT) : roll(seed, tick, 41, action_probability(fit, &probe, fit->eat_action)));
+    double p_eat = action_probability(fit, &probe, fit->eat_action);
+    if (g_eat_model.on && probe.eligible[fit->eat_action]) {
+        EatRow row = {.base_n = probe.x[fit->eat_action].n, .hp = s->env.players[1].current_hitpoints, .timer = s->env.players[0].attack_timer};
+        memcpy(row.base, probe.x[fit->eat_action].idx, sizeof(int) * (size_t)row.base_n);
+        p_eat = eat_p(&g_eat_model.logit, &row, g_eat_model.model);
+    }
+    if (g_ablation.appetite > 0 && probe.eligible[fit->eat_action]) {
+        int level = g_ablation.level_low + (int)(riskfight_sample_hash(g_rollout_seed, 0, 77) % (uint32_t)(g_ablation.level_high - g_ablation.level_low + 1));
+        p_eat = s->env.players[1].current_hitpoints < level ? g_ablation.appetite : 0;
+    }
+    int eating = threatened || (g_ablation.eats ? tape_his_anim_at(g_tape, tick, ANIM_EAT) : roll(seed, tick, 41, p_eat));
     if (eating) {
         const float* shares = fit->serving[warning_since(&h->warning) != WARNING_NONE];
         float serving = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 42) % 10000) / 10000.0f;
@@ -329,5 +376,6 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     }
     actions[RF_VENGEANCE] = roll(seed, tick, 46, action_probability(fit, &probe, ACT_VENGEANCE));
     if (g_ablation.escape && tick == tape_escape_tick(g_tape)) actions[RF_PRIMARY] = RF_TELEPORT;
+    if (g_ablation.escape_model && roll(seed, tick, 48, ESCAPE_RATE)) actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif

@@ -38,11 +38,14 @@ typedef struct {
 
 /* Components of a rollout that an ablation replaces by what the recording shows, read from GS_ABL: hp=uniform|heals|oracle, eats, escape, pid, damage,
  * threat=P with timer=N (he eats with probability P when our swing lands within N ticks and his hitpoints are within our reach). */
-typedef enum { HP_UNIFORM, HP_HEALS, HP_ORACLE } HpMode;
-typedef struct { HpMode hp; int eats, escape, pid, damage, threat_timer; double threat; } Ablation;
+typedef enum { HP_UNIFORM, HP_HEALS, HP_HIDDEN, HP_ORACLE } HpMode;
+typedef struct { HpMode hp; int eats, escape, pid, damage, threat_timer, level_low, level_high, escape_model; double threat, appetite; } Ablation;
 static Ablation g_ablation;
 static const Tape* g_tape;
 static int g_trace;
+static long g_sim_escapes, g_sim_rollouts;
+static uint32_t g_rollout_seed;
+static int (*g_unseen_ticks)(const Tape*, int tick);
 
 static const TapeTick* tape_tick(const Tape* tape, int tick) {
     assert(tick >= tape->lo && tick <= tape->hi);

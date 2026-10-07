@@ -131,6 +131,9 @@ static int damage_dealt_before(const Tape* tape, char side, int t) {
 static int swing_ago(int t, int swing_tick) { return t - swing_tick > ARRIVAL_AGE ? -1 : t - swing_tick; }
 
 /** The heal of one meal served as the opponent fit serves them: a single hard food, hard food and karambwan, hard food and brew, or all three. */
+/* Chance a tick whose animation could have hidden a meal held one: Appetite.FITTED.hides. */
+#define HIDDEN_MEAL_CHANCE 0.687
+
 static int serving_heal(uint32_t* rng, int* brew) {
     static const float shares[4] = {0.15f, 0.34f, 0.34f, 0.17f};
     static const int heal[4] = {22, 40, 38, 56};
@@ -162,7 +165,12 @@ static int sample_his_hitpoints(const TapeTick* tick, uint32_t* rng) {
         return bar.lower + (int)(uniform(rng) * (hi - bar.lower + 1));
     }
     int hp = bar.lower + (int)(uniform(rng) * (bar.upper - bar.lower + 1));
-    for (int meal = 0; meal < tick->meals_since; meal++) {
+    int meals = tick->meals_since;
+    if (g_ablation.hp == HP_HIDDEN) {
+        int masked = g_unseen_ticks(g_tape, tick->tick);
+        for (int m = 0; m < masked; m++) meals += uniform(rng) < HIDDEN_MEAL_CHANCE;
+    }
+    for (int meal = 0; meal < meals; meal++) {
         int brew;
         hp += serving_heal(rng, &brew);
         int cap = brew ? 115 : 99;

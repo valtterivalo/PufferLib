@@ -115,6 +115,7 @@ static void fit_model(Tape* tapes, int count, int day, OppFit* fit) {
     sim_init(sim);
     for (int i = 0; i < count; i++) {
         if (!in_day(&tapes[i], day)) continue;
+        g_tape = &tapes[i];
         for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
             int flags = tapes[i].his_flags[t - tapes[i].lo];
             for (int j = 0; j < FIT_SAMPLES; j++) {
@@ -518,6 +519,8 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
 }
 
 /* Where the planner's predicted kills go: the played spec decisions of the ported rules against what the sim opponent then did, with one term changed at a time. */
+static void eat_model_setup(Tape* tapes, int count);
+
 static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
@@ -530,6 +533,7 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     }
     fit_override(&fit);
     fit.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
     OppModel model = {MODEL_FIT, &fit};
     OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0};
     static WindowStats open, closed;
@@ -546,8 +550,202 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     printf("=== autopsy N=%d k=%d day %d ablation hp %d eats %d escape %d pid %d damage %d ===\n", n, k, test_day, g_ablation.hp, g_ablation.eats, g_ablation.escape, g_ablation.pid, g_ablation.damage);
     print_window_stats("open loop, fit warning", &open);
     if (!getenv("GS_OPEN_ONLY")) print_window_stats("closed loop, fit warning", &closed);
+    printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);
     if (g_windows) fclose(g_windows);
+}
+
+
+/* ---------- eat model study: candidate hazards for his meals, fitted on one set of days and scored on the others ---------- */
+
+enum { EAT_MODELS = 6 };
+static void eat_fit(EatLogit* l, int model, const EatRows* rows) {
+    memset(l, 0, sizeof(*l));
+    double ridge = 0.5;
+    for (int iteration = 0; iteration < 40; iteration++) {
+        static double g[EAT_DIM], h[EAT_DIM][EAT_DIM];
+        memset(g, 0, sizeof(g));
+        memset(h, 0, sizeof(h));
+        for (int d = 1; d < EAT_DIM; d++) { g[d] -= ridge * l->w[d]; h[d][d] += ridge; }
+        for (int i = 0; i < rows->count; i++) {
+            const EatRow* r = &rows->rows[i];
+            int idx[16];
+            int n = eat_features_of(r, model, idx);
+            double p = eat_p(l, r, model), rr = r->weight * (r->y - p), v = r->weight * p * (1 - p);
+            for (int a = 0; a < n; a++) {
+                g[idx[a]] += rr;
+                for (int b = 0; b < n; b++) h[idx[a]][idx[b]] += v;
+            }
+        }
+        static double m[EAT_DIM][EAT_DIM + 1];
+        for (int a = 0; a < EAT_DIM; a++) { for (int b = 0; b < EAT_DIM; b++) m[a][b] = h[a][b] + (a == b ? 1e-6 : 0); m[a][EAT_DIM] = g[a]; }
+        for (int c = 0; c < EAT_DIM; c++) {
+            int pivot = c;
+            for (int r = c + 1; r < EAT_DIM; r++) if (fabs(m[r][c]) > fabs(m[pivot][c])) pivot = r;
+            for (int k = 0; k <= EAT_DIM; k++) { double t = m[c][k]; m[c][k] = m[pivot][k]; m[pivot][k] = t; }
+            for (int r = 0; r < EAT_DIM; r++) {
+                if (r == c) continue;
+                double f = m[r][c] / m[c][c];
+                for (int k = c; k <= EAT_DIM; k++) m[r][k] -= f * m[c][k];
+            }
+        }
+        for (int a = 0; a < EAT_DIM; a++) l->w[a] += m[a][EAT_DIM] / m[a][a];
+    }
+}
+
+/* The planner's structure: he eats with chance c while under a level he wants (uniform 44 to 87), more on the tick before our hit. */
+static double appetite_p(double c, double anticipate, const EatRow* r) {
+    double wants = fmax(0, fmin(1, (87 - r->hp) / 43.0));
+    double p = c * wants + (r->timer == 1 ? anticipate * wants : 0);
+    return p;
+}
+
+static double eat_ll(double p, const EatRow* r) { double c = clip(p); return r->weight * (r->y ? log(c) : log(1 - c)); }
+
+static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, Sim* sim) {
+    for (int i = 0; i < count; i++) {
+        if (!in_day(&tapes[i], day)) continue;
+        g_tape = &tapes[i];
+        for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
+            int flags = tapes[i].his_flags[t - tapes[i].lo];
+            for (int j = 0; j < FIT_SAMPLES; j++) {
+                Probe probe;
+                load_hidden(sim, &tapes[i], t, j, &probe);
+                if (!probe.eligible[ACT_EAT_WARNING]) continue;
+                if (rows->count == rows->capacity) { rows->capacity = rows->capacity ? rows->capacity * 2 : 8192; rows->rows = realloc(rows->rows, rows->capacity * sizeof(EatRow)); }
+                EatRow* r = &rows->rows[rows->count++];
+                r->base_n = probe.x[ACT_EAT_WARNING].n;
+                for (int k = 0; k < r->base_n; k++) r->base[k] = probe.x[ACT_EAT_WARNING].idx[k];
+                r->hp = sim->state.env.players[1].current_hitpoints;
+                r->timer = sim->state.env.players[0].attack_timer;
+                r->y = (flags & FLAG_EAT) != 0;
+                r->masked = 0;
+                for (int k = 0; k < tapes[i].anim_count; k++)
+                    r->masked |= tapes[i].anims[k].tick == t && tapes[i].anims[k].side == SIDE_HIM && tapes[i].anims[k].anim != ANIM_EAT;
+                for (int k = 0; k < tapes[i].hit_count; k++) r->masked |= tapes[i].hits[k].tick == t && tapes[i].hits[k].side == SIDE_HIM;
+                r->weight = 1.0 / FIT_SAMPLES;
+            }
+        }
+    }
+}
+
+
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
+ * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+ * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
+
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
+ * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+ * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
+
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
+ * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+ * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
+static void eat_model_setup(Tape* tapes, int count) {
+    const char* model = getenv("GS_EAT_MODEL");
+    if (model && !strcmp(model, "off")) return;
+    g_eat_model.on = 1;
+    g_eat_model.model = model ? atoi(model) : 1;
+    const char* load = getenv("GS_EAT_LOAD");
+    if (!model && !load) load = "ocean/osrs/tests/fixtures/eat_unmasked.fit";
+    if (load) {
+        FILE* f = fopen(load, "rb");
+        assert(f && fread(&g_eat_model.logit, sizeof(g_eat_model.logit), 1, f) == 1);
+        fclose(f);
+        return;
+    }
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    static EatRows rows;
+    rows.count = 0;
+    eat_rows_add(&rows, tapes, count, atoi(getenv("GS_EAT_TRAIN")), sim);
+    int kept = 0;
+    for (int i = 0; i < rows.count; i++) if (!rows.rows[i].masked) rows.rows[kept++] = rows.rows[i];
+    rows.count = kept;
+    eat_fit(&g_eat_model.logit, g_eat_model.model, &rows);
+    free(sim);
+    const char* save = getenv("GS_EAT_SAVE");
+    if (save) {
+        FILE* f = fopen(save, "wb");
+        fwrite(&g_eat_model.logit, sizeof(g_eat_model.logit), 1, f);
+        fclose(f);
+    }
+}
+
+static void eat_study(Tape* tapes, int count, int train_day, int test_day) {
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    static EatRows train, test;
+    train.count = test.count = 0;
+    eat_rows_add(&train, tapes, count, train_day, sim);
+    eat_rows_add(&test, tapes, count, test_day, sim);
+    for (EatRows* rows = &train; rows; rows = rows == &train ? &test : NULL) {
+        int kept = 0;
+        for (int i = 0; i < rows->count; i++) if (!rows->rows[i].masked) rows->rows[kept++] = rows->rows[i];
+        rows->count = kept;
+    }
+    double events_train = 0, events_test = 0;
+    for (int i = 0; i < train.count; i++) events_train += train.rows[i].y * train.rows[i].weight;
+    for (int i = 0; i < test.count; i++) events_test += test.rows[i].y * test.rows[i].weight;
+    printf("=== eat study on unmasked ticks: fit on day %d (%.0f ticks, %.0f eats), score on day %d (%.0f ticks, %.0f eats) ===\n", train_day, train.count / (double)FIT_SAMPLES, events_train,
+        test_day, test.count / (double)FIT_SAMPLES, events_test);
+    static const char* NAMES[4] = {"current logit (bar band, lag, warning)", "+ his hp bands", "+ our swing timer", "+ low hp x timer"};
+    double rate = events_train / (train.count / (double)FIT_SAMPLES), constant = 0;
+    for (int i = 0; i < test.count; i++) constant += eat_ll(rate, &test.rows[i]);
+    printf("  %-44s test log likelihood %9.2f (rate %.4f)\n", "constant", constant, rate);
+    for (int m = 0; m < 4; m++) {
+        static EatLogit l;
+        eat_fit(&l, m, &train);
+        double ll_train = 0, ll_test = 0;
+        for (int i = 0; i < train.count; i++) ll_train += eat_ll(eat_p(&l, &train.rows[i], m), &train.rows[i]);
+        for (int i = 0; i < test.count; i++) ll_test += eat_ll(eat_p(&l, &test.rows[i], m), &test.rows[i]);
+        printf("  %-44s train %9.2f test %9.2f\n", NAMES[m], ll_train, ll_test);
+    }
+    for (int anticipation = 0; anticipation < 2; anticipation++) {
+        double best = -1e300, bc = 0, ba = 0, bl = 0, bh = 0;
+        for (double c = 0.1; c <= 1.0; c += 0.05)
+            for (int low = 20; low <= 80; low += 10)
+                for (int high = low + 10; high <= 120; high += 10)
+                    for (double a = 0; a <= (anticipation ? 1.0 : 0.0); a += 0.1) {
+                        double ll = 0;
+                        for (int i = 0; i < train.count; i++) {
+                            const EatRow* r = &train.rows[i];
+                            double wants = fmax(0, fmin(1, (high - r->hp) / (double)(high - low)));
+                            ll += eat_ll(c * wants + (r->timer == 1 ? a * wants : 0), r);
+                        }
+                        if (ll > best) { best = ll; bc = c; ba = a; bl = low; bh = high; }
+                    }
+        double ll_test = 0;
+        for (int i = 0; i < test.count; i++) {
+            const EatRow* r = &test.rows[i];
+            double wants = fmax(0, fmin(1, (bh - r->hp) / (bh - bl)));
+            ll_test += eat_ll(bc * wants + (r->timer == 1 ? ba * wants : 0), r);
+        }
+        printf("  %-44s train %9.2f test %9.2f (c %.2f anticipation %.1f levels %.0f-%.0f)\n", anticipation ? "appetite c*wants(hp) + anticipation" : "appetite c*wants(hp)", best, ll_test, bc, ba, bl, bh);
+    }
+    {
+        static const int EDGES[6] = {0, 31, 45, 61, 88, 200};
+        printf("  unmasked eat rate by his hp (train + test): band, ticks, rate, planner 0.481 * wants at the band middle\n");
+        for (int b = 0; b < 5; b++) {
+            double n = 0, e = 0;
+            for (int pass = 0; pass < 2; pass++) {
+                const EatRows* rows = pass ? &test : &train;
+                for (int i = 0; i < rows->count; i++) if (rows->rows[i].hp >= EDGES[b] && rows->rows[i].hp < EDGES[b + 1]) { n += rows->rows[i].weight; e += rows->rows[i].y * rows->rows[i].weight; }
+            }
+            double middle = b == 4 ? 100 : (EDGES[b] + EDGES[b + 1]) / 2.0;
+            printf("    hp %3d-%3d  %6.0f ticks  rate %.3f  planner %.3f\n", EDGES[b], EDGES[b + 1] - 1, n, n > 0 ? e / n : 0, 0.481 * fmax(0, fmin(1, (87 - middle) / 43.0)));
+        }
+    }
+    {
+        double ll_test = 0;
+        for (int i = 0; i < test.count; i++) {
+            const EatRow* r = &test.rows[i];
+            double wants = fmax(0, fmin(1, (87 - r->hp) / 43.0));
+            ll_test += eat_ll(0.481 * wants + (r->timer == 1 ? 0.066 * wants : 0), r);
+        }
+        printf("  %-44s test %9.2f\n", "planner constants (0.481, 44-87, 0.066)", ll_test);
+    }
+    free(sim);
 }
 
 static void attribute(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
@@ -592,6 +790,7 @@ static void ablate(int n, int k, Tape* tapes, int count, int train_day, int test
     infer_servings(tapes, count, train_day, &fit, &eats, identified);
     fit_override(&fit);
     fit.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
     OppModel model = {MODEL_FIT, &fit};
     static const struct { const char* name; int truth; } variants[] = {
         {"all inferred", TRUTH_NONE}, {"PID from the sim", TRUTH_PID}, {"his spec energy from the sim", TRUTH_ENERGY}, {"his Vengeance from the sim", TRUTH_VENGEANCE},
@@ -793,20 +992,28 @@ int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
     const char* mode = argv[1];
-    g_ablation.hp = HP_HEALS;
+    g_ablation.hp = HP_HIDDEN;
+    g_ablation.escape_model = 1;
+    g_unseen_ticks = unseen_ticks;
     const char* ablation = getenv("GS_ABL");
     if (ablation) {
-        g_ablation.hp = strstr(ablation, "hp=uniform") ? HP_UNIFORM : strstr(ablation, "hp=oracle") ? HP_ORACLE : HP_HEALS;
+        g_ablation.hp = strstr(ablation, "hp=hidden") ? HP_HIDDEN : strstr(ablation, "hp=uniform") ? HP_UNIFORM : strstr(ablation, "hp=oracle") ? HP_ORACLE : HP_HIDDEN;
+        const char* appetite = strstr(ablation, "appetite=");
+        g_ablation.appetite = appetite ? atof(appetite + 9) : 0;
+        const char* low = strstr(ablation, "levels=");
+        g_ablation.level_low = low ? atoi(low + 7) : 44;
+        g_ablation.level_high = low ? atoi(strchr(low, ':') + 1) : 87;
         const char* threat = strstr(ablation, "threat=");
         g_ablation.threat = threat ? atof(threat + 7) : 0;
         const char* threat_timer = strstr(ablation, "timer=");
         g_ablation.threat_timer = threat_timer ? atoi(threat_timer + 6) : 2;
         g_ablation.eats = strstr(ablation, "eats") != NULL;
-        g_ablation.escape = strstr(ablation, "escape") != NULL;
+        g_ablation.escape = strstr(ablation, "escape") != NULL && !strstr(ablation, "escape=off");
+        g_ablation.escape_model = strstr(ablation, "escape=off") == NULL;
         g_ablation.pid = strstr(ablation, "pid") != NULL;
         g_ablation.damage = strstr(ablation, "damage") != NULL;
     }
-    int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
+    int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "eatstudy") ? 4 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
     if (!strcmp(mode, "spectator")) { spec_load(&corpus, argv[2]); spectator(tapes, count, argv[3]); }
@@ -814,6 +1021,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "ablate")) ablate(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
+    else if (!strcmp(mode, "eatstudy")) eat_study(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else abort();
