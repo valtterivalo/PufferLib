@@ -550,6 +550,8 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     printf("=== autopsy N=%d k=%d day %d ablation hp %d eats %d escape %d pid %d damage %d ===\n", n, k, test_day, g_ablation.hp, g_ablation.eats, g_ablation.escape, g_ablation.pid, g_ablation.damage);
     print_window_stats("open loop, fit warning", &open);
     if (!getenv("GS_OPEN_ONLY")) print_window_stats("closed loop, fit warning", &closed);
+    printf("planner kills by his true hp at the spec decision (<=44, 45-87, 88+): played %.0f %.0f %.0f, predicted %.1f %.1f %.1f, realized %.1f %.1f %.1f\n", g_spec_counted[0], g_spec_counted[1], g_spec_counted[2],
+        g_spec_predicted[0], g_spec_predicted[1], g_spec_predicted[2], g_spec_realized[0], g_spec_realized[1], g_spec_realized[2]);
     printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);
     if (g_windows) fclose(g_windows);
@@ -620,6 +622,9 @@ static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, Sim* si
                 r->timer = sim->state.env.players[0].attack_timer;
                 r->y = (flags & FLAG_EAT) != 0;
                 r->masked = 0;
+                r->type = 0;
+                r->fight = i * FIT_SAMPLES + j;
+                r->group = tape_day(&tapes[i]);
                 for (int k = 0; k < tapes[i].anim_count; k++)
                     r->masked |= tapes[i].anims[k].tick == t && tapes[i].anims[k].side == SIDE_HIM && tapes[i].anims[k].anim != ANIM_EAT;
                 for (int k = 0; k < tapes[i].hit_count; k++) r->masked |= tapes[i].hits[k].tick == t && tapes[i].hits[k].side == SIDE_HIM;
@@ -630,24 +635,138 @@ static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, Sim* si
 }
 
 
-/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
- * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+
+/* ---------- latent eater types: his eating as a mixture of K types drawn once per fight ---------- */
+
+typedef struct { int types; double pi[MAX_TYPES]; EatLogit logit; } EatMixture;
+
+static int eat_fights(const EatRows* rows) { int n = 0; for (int i = 0; i < rows->count; i++) n = imax(n, rows->rows[i].fight + 1); return n; }
+
+/* Log likelihood of each fight's eat sequence under each type, weight of the fight (its rows' weight per tick are the draws of his hitpoints, one fight per draw). */
+static void mix_fight_ll(const EatMixture* m, const EatRows* rows, int fights, double* ll) {
+    memset(ll, 0, (size_t)fights * MAX_TYPES * sizeof(double));
+    for (int i = 0; i < rows->count; i++) {
+        EatRow r = rows->rows[i];
+        for (int k = 0; k < m->types; k++) {
+            r.type = k;
+            double p = clip(eat_p(&m->logit, &r, EAT_MIXTURE));
+            ll[r.fight * MAX_TYPES + k] += r.y ? log(p) : log(1 - p);
+        }
+    }
+}
+
+static void mix_posteriors(const EatMixture* m, const double* ll, int fights, double* post, double* marginal) {
+    for (int f = 0; f < fights; f++) {
+        double top = -1e300;
+        for (int k = 0; k < m->types; k++) top = fmax(top, log(m->pi[k]) + ll[f * MAX_TYPES + k]);
+        double sum = 0;
+        for (int k = 0; k < m->types; k++) { post[f * MAX_TYPES + k] = exp(log(m->pi[k]) + ll[f * MAX_TYPES + k] - top); sum += post[f * MAX_TYPES + k]; }
+        for (int k = 0; k < m->types; k++) post[f * MAX_TYPES + k] /= sum;
+        marginal[f] = top + log(sum);
+    }
+}
+
+/* Expectation maximisation: types share the slopes of the logit and differ by an intercept. */
+static void mix_fit(EatMixture* m, int types, const EatRows* rows) {
+    int fights = eat_fights(rows);
+    double* ll = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* post = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* marginal = malloc((size_t)fights * sizeof(double));
+    static EatRows expanded;
+    memset(m, 0, sizeof(*m));
+    m->types = types;
+    for (int k = 0; k < types; k++) m->pi[k] = 1.0 / types;
+    EatRows plain = *rows;
+    eat_fit(&m->logit, 1, &plain);
+    if (types > 1) m->logit.w[21] = 0.8;
+    if (types > 2) m->logit.w[22] = -0.8;
+    for (int iteration = 0; iteration < 30; iteration++) {
+        mix_fight_ll(m, rows, fights, ll);
+        mix_posteriors(m, ll, fights, post, marginal);
+        double total[MAX_TYPES] = {0};
+        double fights_seen = 0;
+        expanded.count = 0;
+        for (int i = 0; i < rows->count; i++) {
+            if (expanded.count + types > expanded.capacity) { expanded.capacity = expanded.capacity ? expanded.capacity * 2 : 1 << 16; expanded.rows = realloc(expanded.rows, expanded.capacity * sizeof(EatRow)); }
+            for (int k = 0; k < types; k++) {
+                EatRow r = rows->rows[i];
+                r.type = k;
+                r.weight *= post[r.fight * MAX_TYPES + k];
+                expanded.rows[expanded.count++] = r;
+            }
+        }
+        static char seen_fight[1 << 16];
+        memset(seen_fight, 0, sizeof(seen_fight));
+        assert(fights < (int)sizeof(seen_fight));
+        for (int i = 0; i < rows->count; i++) {
+            int f = rows->rows[i].fight;
+            if (seen_fight[f]) continue;
+            seen_fight[f] = 1;
+            double w = rows->rows[i].weight;
+            fights_seen += w;
+            for (int k = 0; k < types; k++) total[k] += w * post[f * MAX_TYPES + k];
+        }
+        for (int k = 0; k < types; k++) m->pi[k] = fmax(1e-3, total[k] / fights_seen);
+        double norm = 0;
+        for (int k = 0; k < types; k++) norm += m->pi[k];
+        for (int k = 0; k < types; k++) m->pi[k] /= norm;
+        eat_fit(&m->logit, EAT_MIXTURE, &expanded);
+    }
+    free(ll); free(post); free(marginal);
+}
+
+/* Fight level log likelihood marginalised over the type, each fight counted once (a fight is one draw of his hitpoints, `weight` of them per tick). */
+static double mix_score(const EatMixture* m, const EatRows* rows, double* fights_out) {
+    int fights = eat_fights(rows);
+    double* ll = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* post = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* marginal = malloc((size_t)fights * sizeof(double));
+    mix_fight_ll(m, rows, fights, ll);
+    mix_posteriors(m, ll, fights, post, marginal);
+    static char seen[1 << 16];
+    memset(seen, 0, sizeof(seen));
+    double total = 0, count = 0;
+    for (int i = 0; i < rows->count; i++) {
+        int f = rows->rows[i].fight;
+        if (seen[f]) continue;
+        seen[f] = 1;
+        total += marginal[f] * rows->rows[i].weight;
+        count += rows->rows[i].weight;
+    }
+    free(ll); free(post); free(marginal);
+    if (fights_out) *fights_out = count;
+    return total;
+}
+
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands,
+ * with a type drawn once per rollout (GS_EAT_MODEL=mix, the default: fixtures/eat_mixture.fit from `eatmix`); GS_EAT_MODEL=1 is the single logit of fixtures/eat_unmasked.fit, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
  * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
 
-/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
- * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands,
+ * with a type drawn once per rollout (GS_EAT_MODEL=mix, the default: fixtures/eat_mixture.fit from `eatmix`); GS_EAT_MODEL=1 is the single logit of fixtures/eat_unmasked.fit, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
  * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
 
-/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands:
- * fixtures/eat_unmasked.fit by default, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
+/* His meals are drawn from a hazard fitted on the ticks his eat animation could show (not hidden behind another animation), the current logit plus his hitpoints bands,
+ * with a type drawn once per rollout (GS_EAT_MODEL=mix, the default: fixtures/eat_mixture.fit from `eatmix`); GS_EAT_MODEL=1 is the single logit of fixtures/eat_unmasked.fit, GS_EAT_MODEL=m refits model m (2 adds our swing timer, 3 the low hp interaction) on the days GS_EAT_TRAIN names (minus a day for all others),
  * GS_EAT_LOAD loads a saved fit, GS_EAT_SAVE writes it, GS_EAT_MODEL=off keeps the logit of the spectator fit. */
 static void eat_model_setup(Tape* tapes, int count) {
     const char* model = getenv("GS_EAT_MODEL");
     if (model && !strcmp(model, "off")) return;
     g_eat_model.on = 1;
-    g_eat_model.model = model ? atoi(model) : 1;
+    if (!model || !strcmp(model, "mix")) {
+        const char* path = getenv("GS_EAT_LOAD") ? getenv("GS_EAT_LOAD") : "ocean/osrs/tests/fixtures/eat_mixture.fit";
+        FILE* f = fopen(path, "rb");
+        EatMixture mixture;
+        assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1);
+        fclose(f);
+        g_eat_model.model = EAT_MIXTURE;
+        g_eat_model.types = mixture.types;
+        memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi));
+        g_eat_model.logit = mixture.logit;
+        return;
+    }
+    g_eat_model.model = atoi(model);
     const char* load = getenv("GS_EAT_LOAD");
-    if (!model && !load) load = "ocean/osrs/tests/fixtures/eat_unmasked.fit";
     if (load) {
         FILE* f = fopen(load, "rb");
         assert(f && fread(&g_eat_model.logit, sizeof(g_eat_model.logit), 1, f) == 1);
@@ -988,6 +1107,203 @@ static void spectator(Tape* tapes, int count, const char* save) {
     }
 }
 
+
+/* Rows of the spectated duels: every fighter-duel is a fight, his true meals (the spectator log shows hidden ones) on the ticks he could eat, hitpoints read off his bar. */
+static void spec_eat_rows(EatRows* rows, int session_in, int session_out, int fight_offset) {
+    for (int i = 0; i < corpus.count; i++) {
+        const SpecDuel* d = &corpus.duels[i];
+        if ((session_in >= 0 && d->session != session_in) || d->session == session_out) continue;
+        for (int side = 0; side < 2; side++) {
+            if (d->dharok[side] != 0) continue;
+            const SpecTick* series = spec_ticks[i] + side * d->row_count;
+            for (int r = 1; r < d->row_count; r++) {
+                if (d->rows[r].third) continue;
+                Probe probe = probe_from_inputs(&series[r - 1].in, &series[r - 1].h, d->rows[r].tick);
+                if (!probe.eligible[ACT_EAT_WARNING]) continue;
+                if (rows->count == rows->capacity) { rows->capacity = rows->capacity ? rows->capacity * 2 : 8192; rows->rows = realloc(rows->rows, rows->capacity * sizeof(EatRow)); }
+                EatRow* row = &rows->rows[rows->count++];
+                int ratio = series[r - 1].in.hp_ratio;
+                row->base_n = probe.x[ACT_EAT_WARNING].n;
+                for (int k = 0; k < row->base_n; k++) row->base[k] = probe.x[ACT_EAT_WARNING].idx[k];
+                row->hp = ratio >= 30 ? 105 : (warning_bar_low(ratio, 30) + warning_bar_high(ratio, 30)) / 2;
+                row->timer = 3;
+                row->y = (series[r].labels & SPEC_EAT) != 0;
+                row->masked = 0;
+                row->type = 0;
+                row->fight = fight_offset + i * 2 + side;
+                row->group = d->session;
+                row->weight = 1;
+            }
+        }
+    }
+}
+
+static void eat_rows_unmasked(EatRows* rows) {
+    int kept = 0;
+    for (int i = 0; i < rows->count; i++) if (!rows->rows[i].masked) rows->rows[kept++] = rows->rows[i];
+    rows->count = kept;
+}
+
+static void mix_print(const char* name, const EatMixture* m) {
+    printf("    %s: types %d, shares", name, m->types);
+    for (int k = 0; k < m->types; k++) printf(" %.2f", m->pi[k]);
+    printf(", intercept shifts 0.00");
+    if (m->types > 1) printf(" %+.2f", m->logit.w[21]);
+    if (m->types > 2) printf(" %+.2f", m->logit.w[22]);
+    printf(", slopes (bar band, lag, warning, hp bands):");
+    for (int d = 0; d < 14; d++) printf(" %.2f", m->logit.w[d]);
+    printf("\n");
+}
+
+/* Posterior over the types after each fight's visible ticks, as the plugin could keep it live: ticks of one fight until the leading type holds 80 percent. */
+static void mix_separation(const EatMixture* m, const EatRows* rows, const char* name, int fights_total) {
+    int fights = eat_fights(rows);
+    double* ll = calloc((size_t)fights * MAX_TYPES, sizeof(double));
+    double* post = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* marginal = malloc((size_t)fights * sizeof(double));
+    mix_fight_ll(m, rows, fights, ll);
+    mix_posteriors(m, ll, fights, post, marginal);
+    static int ticks_seen[1 << 16], reached[1 << 16], first_tick[1 << 16];
+    static double running[1 << 16][MAX_TYPES];
+    memset(ticks_seen, 0, sizeof(ticks_seen));
+    memset(reached, 0, sizeof(reached));
+    for (int f = 0; f < fights; f++) for (int k = 0; k < m->types; k++) running[f][k] = log(m->pi[k]);
+    static int final_type[1 << 16];
+    for (int f = 0; f < fights; f++) { final_type[f] = 0; for (int k = 1; k < m->types; k++) if (post[f * MAX_TYPES + k] > post[f * MAX_TYPES + final_type[f]]) final_type[f] = k; }
+    (void)fights_total;
+    static int lengths[1 << 16];
+    memset(lengths, 0, sizeof(lengths));
+    for (int i = 0; i < rows->count; i++) lengths[rows->rows[i].fight]++;
+    for (int i = 0; i < rows->count; i++) {
+        EatRow r = rows->rows[i];
+        int f = r.fight;
+        ticks_seen[f]++;
+        for (int k = 0; k < m->types; k++) { r.type = k; double p = clip(eat_p(&m->logit, &r, EAT_MIXTURE)); running[f][k] += r.y ? log(p) : log(1 - p); }
+        double top = -1e300, sum = 0;
+        for (int k = 0; k < m->types; k++) top = fmax(top, running[f][k]);
+        for (int k = 0; k < m->types; k++) sum += exp(running[f][k] - top);
+        double lead = exp(running[f][final_type[f]] - top) / sum;
+        if (!reached[f] && lead >= 0.8) { reached[f] = 1; first_tick[f] = ticks_seen[f]; }
+    }
+    static char seen[1 << 16];
+    memset(seen, 0, sizeof(seen));
+    int list[MAX_TYPES][1 << 13], n[MAX_TYPES] = {0}, total[MAX_TYPES] = {0};
+    for (int i = 0; i < rows->count; i++) {
+        int f = rows->rows[i].fight;
+        if (seen[f]) continue;
+        seen[f] = 1;
+        if (lengths[f] < 20 || post[f * MAX_TYPES + final_type[f]] < 0.9) continue;
+        total[final_type[f]]++;
+        if (reached[f]) list[final_type[f]][n[final_type[f]]++] = first_tick[f];
+    }
+    printf("  %s: ticks of one fight (eatable ticks) until the posterior of its final type holds 80%%, among fights of 20 or more eatable ticks that end 90%% sure:\n", name);
+    for (int k = 0; k < m->types; k++) {
+        int* l = list[k];
+        for (int i = 1; i < n[k]; i++) { int v = l[i], j = i - 1; while (j >= 0 && l[j] > v) { l[j + 1] = l[j]; j--; } l[j + 1] = v; }
+        printf("    type %d: %d fights, %d reach it, median %d, quartiles %d..%d, fights never reaching it %d\n", k, total[k], n[k], n[k] ? l[n[k] / 2] : -1, n[k] ? l[n[k] / 4] : -1, n[k] ? l[(3 * n[k]) / 4] : -1, total[k] - n[k]);
+    }
+    (void)marginal;
+    free(ll); free(post); free(marginal);
+}
+
+/* Eat rate by his hitpoints for each fight's most likely type, against the planner's. */
+static void mix_rates(const EatMixture* m, const EatRows* rows, const char* name) {
+    int fights = eat_fights(rows);
+    double* ll = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* post = malloc((size_t)fights * MAX_TYPES * sizeof(double));
+    double* marginal = malloc((size_t)fights * sizeof(double));
+    mix_fight_ll(m, rows, fights, ll);
+    mix_posteriors(m, ll, fights, post, marginal);
+    static const int EDGES[6] = {0, 31, 45, 61, 88, 200};
+    double n[MAX_TYPES][5] = {{0}}, e[MAX_TYPES][5] = {{0}}, fights_of[MAX_TYPES] = {0};
+    static char seen[1 << 16];
+    memset(seen, 0, sizeof(seen));
+    for (int i = 0; i < rows->count; i++) {
+        const EatRow* r = &rows->rows[i];
+        int type = 0;
+        for (int k = 1; k < m->types; k++) if (post[r->fight * MAX_TYPES + k] > post[r->fight * MAX_TYPES + type]) type = k;
+        if (!seen[r->fight]) { seen[r->fight] = 1; fights_of[type] += r->weight; }
+        for (int b = 0; b < 5; b++) if (r->hp >= EDGES[b] && r->hp < EDGES[b + 1]) { n[type][b] += r->weight; e[type][b] += r->y * r->weight; }
+    }
+    printf("  %s eat rate by his hp and most likely type (ticks, rate); planner 0.481*wants(hp) at the band middle:\n", name);
+    printf("    %-10s", "hp band");
+    for (int k = 0; k < m->types; k++) printf("   type %d (%.0f fights)", k, fights_of[k]);
+    printf("   planner\n");
+    for (int b = 0; b < 5; b++) {
+        double middle = b == 4 ? 100 : (EDGES[b] + EDGES[b + 1]) / 2.0;
+        printf("    %3d-%-3d   ", EDGES[b], b == 4 ? 199 : EDGES[b + 1] - 1);
+        for (int k = 0; k < m->types; k++) printf("   %6.0f  %.3f       ", n[k][b], n[k][b] > 0 ? e[k][b] / n[k][b] : 0);
+        printf("   %.3f\n", 0.481 * fmax(0, fmin(1, (87 - middle) / 43.0)));
+    }
+    free(ll); free(post); free(marginal);
+}
+
+static void eat_mixture_study(Tape* tapes, int count, int train_day, int test_day, const char* spectator_path, const char* save) {
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    static EatRows train, test, all;
+    eat_rows_add(&train, tapes, count, train_day, sim);
+    eat_rows_add(&test, tapes, count, test_day, sim);
+    eat_rows_add(&all, tapes, count, 0, sim);
+    eat_rows_unmasked(&train);
+    eat_rows_unmasked(&test);
+    eat_rows_unmasked(&all);
+    printf("=== eater types, own fights: fit on day %d, held out day %d (fight level log likelihood, marginal over the type) ===\n", train_day, test_day);
+    static EatMixture fit[MAX_TYPES + 1];
+    for (int k = 1; k <= 3; k++) {
+        mix_fit(&fit[k], k, &train);
+        double train_fights, test_fights;
+        double ll_train = mix_score(&fit[k], &train, &train_fights), ll_test = mix_score(&fit[k], &test, &test_fights);
+        printf("  K=%d  train %9.2f (%.0f fights)  held out %9.2f (%.0f fights)\n", k, ll_train, train_fights, ll_test, test_fights);
+        mix_print("fit", &fit[k]);
+    }
+    if (getenv("GS_MIX_SAVE_TRAIN")) {
+        FILE* f = fopen(getenv("GS_MIX_SAVE_TRAIN"), "wb");
+        fwrite(&fit[getenv("GS_TYPES") ? atoi(getenv("GS_TYPES")) : 2], sizeof(EatMixture), 1, f);
+        fclose(f);
+    }
+    printf("=== eater types, own fights: all tapes (in sample) ===\n");
+    static EatMixture full[MAX_TYPES + 1];
+    for (int k = 1; k <= 3; k++) {
+        mix_fit(&full[k], k, &all);
+        double fights;
+        printf("  K=%d  %9.2f (%.0f fights)\n", k, mix_score(&full[k], &all, &fights), fights);
+        mix_print("fit", &full[k]);
+    }
+    for (int k = 2; k <= 3; k++) {
+        mix_separation(&full[k], &all, k == 2 ? "own fights K=2" : "own fights K=3", 0);
+        mix_rates(&full[k], &all, k == 2 ? "own fights K=2" : "own fights K=3");
+    }
+    if (save) {
+        FILE* f = fopen(save, "wb");
+        fwrite(&full[atoi(getenv("GS_TYPES") ? getenv("GS_TYPES") : "2")], sizeof(EatMixture), 1, f);
+        fclose(f);
+    }
+    if (spectator_path) {
+        spec_load(&corpus, spectator_path);
+        spec_prepare();
+        printf("=== eater types, spectator corpus (non-Dharok), %d sessions: leave the last session out ===\n", corpus.session_count);
+        static EatRows s_train, s_test, s_all;
+        spec_eat_rows(&s_train, -1, corpus.session_count - 1, 0);
+        spec_eat_rows(&s_test, corpus.session_count - 1, -1, 0);
+        spec_eat_rows(&s_all, -1, -1, 0);
+        static EatMixture sfit[MAX_TYPES + 1], sfull[MAX_TYPES + 1];
+        for (int k = 1; k <= 3; k++) {
+            mix_fit(&sfit[k], k, &s_train);
+            double tf, hf;
+            double lt = mix_score(&sfit[k], &s_train, &tf), lh = mix_score(&sfit[k], &s_test, &hf);
+            printf("  K=%d  train %10.2f (%.0f fighter-duels)  held out %10.2f (%.0f)\n", k, lt, tf, lh, hf);
+            mix_print("fit", &sfit[k]);
+        }
+        for (int k = 2; k <= 3; k++) {
+            mix_fit(&sfull[k], k, &s_all);
+            mix_separation(&sfull[k], &s_all, k == 2 ? "spectator K=2" : "spectator K=3", 0);
+            mix_rates(&sfull[k], &s_all, k == 2 ? "spectator K=2" : "spectator K=3");
+        }
+    }
+    free(sim);
+}
+
 int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
@@ -1013,7 +1329,7 @@ int main(int argc, char** argv) {
         g_ablation.pid = strstr(ablation, "pid") != NULL;
         g_ablation.damage = strstr(ablation, "damage") != NULL;
     }
-    int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "eatstudy") ? 4 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
+    int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "eatstudy") ? 4 : !strcmp(mode, "eatmix") ? 5 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
     if (!strcmp(mode, "spectator")) { spec_load(&corpus, argv[2]); spectator(tapes, count, argv[3]); }
@@ -1021,6 +1337,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "ablate")) ablate(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
+    else if (!strcmp(mode, "eatmix")) eat_mixture_study(tapes, count, atoi(argv[2]), atoi(argv[3]), strcmp(argv[4], "-") ? argv[4] : NULL, getenv("GS_MIX_SAVE"));
     else if (!strcmp(mode, "eatstudy")) eat_study(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);

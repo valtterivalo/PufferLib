@@ -261,6 +261,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     if (decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;
+        ours->played[ours->played_count].his_hitpoints = s->env.players[1].current_hitpoints;
         ours->played[ours->played_count++].chance = decision.chance;
     }
     if (decision.choice != GS_CHOICE_HOLD) {

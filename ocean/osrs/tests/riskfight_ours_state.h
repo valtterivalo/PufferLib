@@ -13,7 +13,7 @@ typedef struct {
     int last_decision;
     long decisions, ticks;
     int played_count, last_played_step, last_played_choice;
-    struct { int step; double chance; } played[64];
+    struct { int step; double chance; int his_hitpoints; } played[64];
     uint32_t rng;
     int ideal_timing, equal_stakes, truth;
 } Ours;

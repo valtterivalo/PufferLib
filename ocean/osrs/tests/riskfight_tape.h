@@ -44,6 +44,7 @@ static Ablation g_ablation;
 static const Tape* g_tape;
 static int g_trace;
 static long g_sim_escapes, g_sim_rollouts;
+static double g_spec_counted[3], g_spec_predicted[3], g_spec_realized[3];
 static uint32_t g_rollout_seed;
 static int (*g_unseen_ticks)(const Tape*, int tick);
 

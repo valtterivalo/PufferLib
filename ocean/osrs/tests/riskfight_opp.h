@@ -276,14 +276,19 @@ static void fit_default_servings(OppFit* fit) {
     for (int w = 0; w < 2; w++) for (int k = 0; k < 4; k++) fit->serving[w][k] = SERVING_SHARES[k];
 }
 
-enum { EAT_DIM = 24 };
+enum { EAT_DIM = 24, EAT_MIXTURE = 4, MAX_TYPES = 3 };
 typedef struct { double w[EAT_DIM]; } EatLogit;
-typedef struct { int base_n, base[9], hp, timer, y, masked; double weight; } EatRow;
+typedef struct { int base_n, base[9], hp, timer, y, masked, type, fight, group; double weight; } EatRow;
 typedef struct { EatRow* rows; int count, capacity; } EatRows;
 
 static int eat_features_of(const EatRow* r, int model, int* idx) {
     int n = 0;
     for (int i = 0; i < r->base_n; i++) idx[n++] = r->base[i];
+    if (model == EAT_MIXTURE) {
+        idx[n++] = r->hp <= 30 ? 9 : r->hp <= 44 ? 10 : r->hp <= 60 ? 11 : r->hp <= 87 ? 12 : 13;
+        if (r->type > 0) idx[n++] = 20 + r->type;
+        return n;
+    }
     if (model >= 1) idx[n++] = r->hp <= 30 ? 9 : r->hp <= 44 ? 10 : r->hp <= 60 ? 11 : r->hp <= 87 ? 12 : 13;
     if (model >= 2) idx[n++] = r->timer == 0 ? 14 : r->timer == 1 ? 15 : r->timer == 2 ? 16 : 17;
     if (model >= 3) {
@@ -305,7 +310,7 @@ static double eat_p(const EatLogit* l, const EatRow* r, int model) {
 
 
 /** The eat hazard that replaces the logit when a model is loaded: his bar band, lag and warning plus his hitpoints and our swing timer. */
-static struct { int on, model; EatLogit logit; } g_eat_model;
+static struct { int on, model, types; double pi[MAX_TYPES]; EatLogit logit; } g_eat_model;
 
 /** His chance to leave by teleport each tick: 14 teleports in 5094 ticks of the 38 recorded fights, flat across his hitpoints (0.4 percent a tick at every band). */
 static const double ESCAPE_RATE = 14.0 / 5094;
@@ -340,6 +345,10 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     double p_eat = action_probability(fit, &probe, fit->eat_action);
     if (g_eat_model.on && probe.eligible[fit->eat_action]) {
         EatRow row = {.base_n = probe.x[fit->eat_action].n, .hp = s->env.players[1].current_hitpoints, .timer = s->env.players[0].attack_timer};
+        if (g_eat_model.model == EAT_MIXTURE) {
+            double u = (riskfight_sample_hash(g_rollout_seed, 0, 78) % 1000000u) / 1e6, acc = 0;
+            for (row.type = 0; row.type < g_eat_model.types - 1; row.type++) { acc += g_eat_model.pi[row.type]; if (u < acc) break; }
+        }
         memcpy(row.base, probe.x[fit->eat_action].idx, sizeof(int) * (size_t)row.base_n);
         p_eat = eat_p(&g_eat_model.logit, &row, g_eat_model.model);
     }

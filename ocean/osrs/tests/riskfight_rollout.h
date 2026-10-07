@@ -241,6 +241,10 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         sim->spec_counted++;
         sim->spec_predicted += sim->ours.played[i].chance;
         sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
+        int band = sim->ours.played[i].his_hitpoints <= 44 ? 0 : sim->ours.played[i].his_hitpoints <= 87 ? 1 : 2;
+        g_spec_counted[band]++;
+        g_spec_predicted[band] += sim->ours.played[i].chance;
+        g_spec_realized[band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }
     out->our_meals = s->consume_ticks[0];
     g_sim_escapes += s->escaped[1];
