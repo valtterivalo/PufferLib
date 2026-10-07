@@ -152,7 +152,8 @@ static int gs_next_attack(GsTimerState s, int tick) { return tick + 1 + gs_timer
 /* SpecEnergy.java */
 enum { GS_ENERGY_FULL = 100, GS_ENERGY_REGEN = 10, GS_ENERGY_REGEN_TICKS = 50, GS_ENERGY_SURGE = 25, GS_ENERGY_SURGE_TICKS = 500 };
 typedef struct { int low, high; } GsEnergyRange;
-typedef struct { int anchor; GsEnergyRange typical, possible; int broken; } GsSpecEnergy;
+enum { GS_ENERGY_SURGE_DELAY = 6, GS_ENERGY_LANDINGS = 16 };
+typedef struct { int anchor; GsEnergyRange typical, possible; int broken; int landing_count, landings[GS_ENERGY_LANDINGS]; } GsSpecEnergy;
 
 static int gs_ceil_div(int dividend, int divisor) { return (dividend + divisor - 1) / divisor; }
 
@@ -161,19 +162,27 @@ static GsSpecEnergy gs_energy_full(int tick) {
     return (GsSpecEnergy){tick, full, full, 0};
 }
 
+static int gs_energy_landed(const GsSpecEnergy* s, int tick) {
+    int landed = 0;
+    for (int i = 0; i < s->landing_count; i++) landed += s->landings[i] <= tick;
+    return landed;
+}
+
 static GsEnergyRange gs_energy_typical(const GsSpecEnergy* s, int tick) {
     assert(tick >= s->anchor);
     int elapsed = tick - s->anchor;
-    return (GsEnergyRange){imin(GS_ENERGY_FULL, s->typical.low + elapsed / GS_ENERGY_REGEN_TICKS * GS_ENERGY_REGEN),
-        imin(GS_ENERGY_FULL, s->typical.high + gs_ceil_div(elapsed, GS_ENERGY_REGEN_TICKS) * GS_ENERGY_REGEN)};
+    int surged = gs_energy_landed(s, tick) * GS_ENERGY_SURGE;
+    return (GsEnergyRange){imin(GS_ENERGY_FULL, s->typical.low + elapsed / GS_ENERGY_REGEN_TICKS * GS_ENERGY_REGEN + surged),
+        imin(GS_ENERGY_FULL, s->typical.high + gs_ceil_div(elapsed, GS_ENERGY_REGEN_TICKS) * GS_ENERGY_REGEN + surged)};
 }
 
 static GsEnergyRange gs_energy_possible(const GsSpecEnergy* s, int tick) {
     assert(tick >= s->anchor);
     int elapsed = tick - s->anchor;
-    return (GsEnergyRange){imin(GS_ENERGY_FULL, s->possible.low + elapsed / GS_ENERGY_REGEN_TICKS * GS_ENERGY_REGEN),
+    int surged = gs_energy_landed(s, tick) * GS_ENERGY_SURGE;
+    return (GsEnergyRange){imin(GS_ENERGY_FULL, s->possible.low + elapsed / GS_ENERGY_REGEN_TICKS * GS_ENERGY_REGEN + surged),
         imin(GS_ENERGY_FULL, s->possible.high + 2 * gs_ceil_div(elapsed, GS_ENERGY_REGEN_TICKS) * GS_ENERGY_REGEN
-            + gs_ceil_div(elapsed, GS_ENERGY_SURGE_TICKS) * GS_ENERGY_SURGE)};
+            + gs_ceil_div(elapsed, GS_ENERGY_SURGE_TICKS) * GS_ENERGY_SURGE + surged)};
 }
 
 static GsEnergyRange gs_energy_range(const GsSpecEnergy* s, int tick) {
@@ -189,13 +198,21 @@ static GsSpecEnergy gs_energy_spec(GsSpecEnergy s, int tick, int cost) {
     GsEnergyRange typical = gs_energy_typical(&s, tick);
     GsEnergyRange possible = gs_energy_possible(&s, tick);
     int broken = typical.high < cost ? 1 : s.broken;
-    return (GsSpecEnergy){tick, gs_energy_after_spec(typical, cost), gs_energy_after_spec(possible, cost), broken};
+    GsSpecEnergy out = {tick, gs_energy_after_spec(typical, cost), gs_energy_after_spec(possible, cost), broken, 0, {0}};
+    for (int i = 0; i < s.landing_count; i++) if (s.landings[i] > tick) out.landings[out.landing_count++] = s.landings[i];
+    return out;
+}
+
+static GsSpecEnergy gs_energy_surge(GsSpecEnergy s, int tick) {
+    assert(s.landing_count < GS_ENERGY_LANDINGS);
+    s.landings[s.landing_count++] = tick + GS_ENERGY_SURGE_DELAY;
+    return s;
 }
 
 /* Vengeance.java */
 enum { GS_VENGEANCE_COOLDOWN = 50 };
 typedef enum { GS_VPHASE_UNKNOWN, GS_VPHASE_CAST, GS_VPHASE_PROCCED, GS_VPHASE_DISARMED } GsVengeancePhase;
-typedef struct { GsVengeancePhase phase; int has_earliest, earliest, latest, proc; } GsVengeanceState;
+typedef struct { GsVengeancePhase phase; int has_earliest, earliest, latest, proc, blind; } GsVengeanceState;
 
 static GsVengeanceState gs_vengeance_cast(int tick) {
     return (GsVengeanceState){GS_VPHASE_CAST, 1, tick + GS_VENGEANCE_COOLDOWN, tick + GS_VENGEANCE_COOLDOWN, 0};
@@ -208,6 +225,7 @@ static GsVengeance gs_vengeance_reading(GsVengeanceState s, int tick) {
         case GS_VPHASE_CAST: return GS_VENGEANCE_UP;
         case GS_VPHASE_PROCCED:
             if (s.has_earliest && tick < s.earliest) return GS_VENGEANCE_DOWN;
+            if (s.has_earliest && s.earliest == s.latest && tick >= s.latest && s.blind == 0) return GS_VENGEANCE_DOWN;
             return tick < s.latest ? GS_VENGEANCE_MAYBE : GS_VENGEANCE_UP;
         case GS_VPHASE_DISARMED: return GS_VENGEANCE_DOWN;
     }
@@ -218,6 +236,11 @@ static GsVengeance gs_vengeance_reading(GsVengeanceState s, int tick) {
 static GsVengeanceState gs_vengeance_cast_after(GsVengeanceState s, int tick) {
     if (s.phase == GS_VPHASE_PROCCED && s.proc == tick) return (GsVengeanceState){GS_VPHASE_PROCCED, 1, tick + GS_VENGEANCE_COOLDOWN, tick + GS_VENGEANCE_COOLDOWN, tick};
     return gs_vengeance_cast(tick);
+}
+
+static GsVengeanceState gs_vengeance_stacked(GsVengeanceState s, int tick) {
+    if (s.phase == GS_VPHASE_PROCCED && s.has_earliest && tick >= s.earliest) s.blind++;
+    return s;
 }
 
 static GsVengeanceState gs_vengeance_procced(GsVengeanceState s, int tick) {
@@ -294,6 +317,16 @@ static int gs_hidden_opportunities(const GsOpponentInference* s) { return imax(0
 
 static GsOpponentInference gs_inference_veng_procced(GsOpponentInference s, int tick) {
     s.vengeance = gs_vengeance_procced(s.vengeance, tick);
+    return s;
+}
+
+static GsOpponentInference gs_inference_stacked(GsOpponentInference s, int tick) {
+    s.vengeance = gs_vengeance_stacked(s.vengeance, tick);
+    return s;
+}
+
+static GsOpponentInference gs_inference_surged(GsOpponentInference s, int tick) {
+    s.spec = gs_energy_surge(s.spec, tick);
     return s;
 }
 

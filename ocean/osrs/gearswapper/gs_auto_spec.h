@@ -255,7 +255,7 @@ typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS
 static const int GS_CHOICE_TICKETS[4] = {0, 1, 2, 1};
 typedef enum { GS_CAST_NOW, GS_CAST_KEEP } GsCast;
 typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; } GsSpecPlan;
-typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death; } GsSpecDecision;
+typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death, held, kept; } GsSpecDecision;
 
 enum { GS_TICKET = 50, GS_MOST_TICKETS = 2 };
 #define GS_WINDOW_PEAK_COUNT 128
@@ -292,11 +292,15 @@ __attribute__((constructor)) static void gs_build_worth(void) {
 }
 
 /* AutoSpec.bar: the chance a plan costing cost specs must reach with energy to be played. */
-static double gs_spec_bar(int energy, int cost) {
+static double gs_spec_held(int energy) { return (1 - GS_FIGHT_ENDS) * GS_WORTH[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
+static double gs_spec_kept(int energy, int cost) {
     int tickets = imin(GS_MOST_TICKETS, energy / GS_TICKET);
-    if (tickets < cost) return INFINITY;
-    double spent = (1 - GS_FIGHT_ENDS) * GS_WORTH[tickets - cost];
-    return ((1 - GS_FIGHT_ENDS) * GS_WORTH[tickets] - spent) / (1 - spent);
+    return tickets < cost ? 0 : (1 - GS_FIGHT_ENDS) * GS_WORTH[tickets - cost];
+}
+static double gs_spec_bar(int energy, int cost) {
+    if (imin(GS_MOST_TICKETS, energy / GS_TICKET) < cost) return INFINITY;
+    double spent = gs_spec_kept(energy, cost);
+    return (gs_spec_held(energy) - spent) / (1 - spent);
 }
 
 static int spec_plan_done(const GsSpecPlan* plan) {
@@ -336,7 +340,8 @@ static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s
         }
     }
     double bar = gs_spec_bar(energy, GS_CHOICE_TICKETS[best->choice]);
-    if (chosen.kill < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death};
-    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death};
+    double held = gs_spec_held(energy), kept = gs_spec_kept(energy, GS_CHOICE_TICKETS[best->choice]);
+    if (chosen.kill < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death, held, kept};
+    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death, held, kept};
 }
 #endif

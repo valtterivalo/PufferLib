@@ -67,6 +67,9 @@ int main(int argc, char** argv) {
                 (GsVengeance)INDEX(VENG, c), (GsOurVengeance)INDEX(OURS, d), atoi(e), atoi(g), atoi(h), atoi(oe), !strcmp(en, "INTERACTING"), owner == 2 || owner == 3, owner == 3 || owner == 4);
             ok = verdict == (GsBait)INDEX(BAITS, r1);
             per[1]++;
+        } else if (sscanf(line, "VU %127s %127s %127s -> %127s", a, b, c, r1) == 4) {
+            ok = gs_vengeance_restore(!strcmp(a, "DRAINED"), !strcmp(b, "YES"), !strcmp(c, "COVERS") ? GS_ENERGY_COVERS : GS_ENERGY_SHORT) == !strcmp(r1, "RESTORE");
+            per[0]++;
         } else if (sscanf(line, "PRW %127s %127s -> %127s", a, b, r1) == 3) {
             ok = gs_wilderness_level(atoi(a), atoi(b)) == atoi(r1);
             per[2]++;

@@ -17,7 +17,7 @@ typedef struct {
     Plan plans[MAX_PLANS]; int plan_count;
     Plan after[MAX_PLANS]; int after_count;
     int energy;
-    GsChoiceKind choice, aim; GsCast cast; double chance, bar, death;
+    GsChoiceKind choice, aim; GsCast cast; double chance, bar, death, held, kept;
 } Record;
 
 static double pool[POOL];
@@ -99,7 +99,7 @@ static int read_record(FILE* f, Record* r) {
             plan->count = read_hits(p + n, plan->hits);
         } else if (!strcmp(tag, "D")) {
             char choice[24], cast[8], aim[24], bar[32];
-            sscanf(p, "%23s %7s %23s %lf %31s %lf", choice, cast, aim, &r->chance, bar, &r->death);
+            sscanf(p, "%23s %7s %23s %lf %31s %lf %lf %lf", choice, cast, aim, &r->chance, bar, &r->death, &r->held, &r->kept);
             r->choice = choice_of(choice); r->aim = choice_of(aim); r->cast = !strcmp(cast, "NOW") ? GS_CAST_NOW : GS_CAST_KEEP;
             r->bar = strtod(bar, NULL);
         } else if (!strcmp(tag, "END")) return 1;
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         seconds += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
         total++;
-        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.chance == record.chance && d.bar == record.bar && d.death == record.death;
+        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.chance == record.chance && d.bar == record.bar && d.death == record.death && d.held == record.held && d.kept == record.kept;
         matched += ok;
         choices[record.choice]++;
         casts += record.cast == GS_CAST_NOW;

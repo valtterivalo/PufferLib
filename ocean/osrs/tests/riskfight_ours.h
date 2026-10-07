@@ -201,7 +201,7 @@ static double ours_value(double kill, double death, GsStakes stakes) { return ki
 
 /* The spec decision of AutoSpecialAttack on this tick, HOLD where the Arbiter would drop a spec whose own death outweighs its kill. */
 static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, const GsRebound* rebound, GsStakes stakes, int* planned) {
-    GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0};
+    GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0};
     *planned = gs_spec_plannable(inf);
     if (!*planned) return decision;
     GsSpecSituation spec;
@@ -239,8 +239,8 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     GsStakes stakes = ours->equal_stakes ? (GsStakes){1, 1} : sim->obs.stakes;
     GsRebound rebound = ours_rebound(sim, ours, tick, 0);
     int planned;
-    GsSpecDecision decision = verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0};
-    int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) > ours_value(0, verdict.meal_risk, stakes));
+    GsSpecDecision decision = verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0};
+    int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) + (1 - decision.chance) * decision.kept * (double)stakes.him > ours_value(0, verdict.meal_risk, stakes) + decision.held * (double)stakes.him);
     if (meal) {
         ours->pending_count = 0;
         HumanCommand clicks[8];

@@ -30,6 +30,9 @@ static GsBait gs_bait_decide(GsDecision eat, GsPid pid, GsVengeance his_vengeanc
     return run_is_meal || run_is_spec ? GS_BAIT_BUSY : GS_BAIT_HOLD;
 }
 
+/* VengeanceCast.upkeep: restore a drained magic level while a cast is coming and his energy covers a spec */
+static int gs_vengeance_restore(int drained, int coming, GsEnergyCover energy) { return drained && coming && energy == GS_ENERGY_COVERS; }
+
 typedef enum { GS_MEMORY_HELD, GS_MEMORY_DROPPED } GsMemoryMode;
 typedef struct { GsMemoryMode mode; uint32_t prayers; } GsPrayerMemory;
 typedef enum { GS_UPKEEP_HOLD, GS_UPKEEP_DRINK } GsUpkeep;

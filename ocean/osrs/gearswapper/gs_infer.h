@@ -605,6 +605,11 @@ static void gs_on_overhead_text(GsInfer* s, int observed_tick, int who) {
     s->opponent = gs_inference_veng_procced(s->opponent, observed_tick);
 }
 
+static void gs_on_surge(GsInfer* s, int observed_tick) {
+    gs_sync_opponent_timer(s, observed_tick);
+    s->opponent = gs_inference_surged(s->opponent, observed_tick);
+}
+
 static void gs_on_graphic(GsInfer* s, int observed_tick, int who) {
     if (s->tracker_current != who) return;
     gs_sync_opponent_timer(s, observed_tick);
@@ -710,6 +715,7 @@ static void gs_on_game_tick(GsInfer* s, int tick) {
     s->tick = tick;
     if (s->tracker_current >= 0 && gs_chebyshev(s->c.lx, s->c.ly, s->c.ox, s->c.oy) > GS_TRACKING_MAXIMUM_DISTANCE) s->tracker_current = -1;
     gs_sync_opponent_timer(s, tick);
+    if (s->c.tracked >= 0 && s->c.ox == s->c.lx && s->c.oy == s->c.ly) s->opponent = gs_inference_stacked(s->opponent, tick);
     gs_eater_settle(s, tick);
     if (s->has_unprocced && tick > s->unprocced) {
         s->opponent = gs_inference_veng_unprocced(s->opponent, s->unprocced);

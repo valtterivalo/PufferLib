@@ -68,6 +68,9 @@ static void format_inference(GsInfer* s, int tick, char* out) {
         sprintf(list + strlen(list), "%s%d", unique++ ? ", " : "", unseen[i]);
     }
     strcat(list, "]");
+    char landings[160] = "[";
+    for (int i = 0; i < s->opponent.spec.landing_count; i++) sprintf(landings + strlen(landings), "%s%d", i ? ", " : "", s->opponent.spec.landings[i]);
+    strcat(landings, "]");
     char swing[96];
     if (s->has_opponent_swing) {
         GsSwing thrown = gs_opponent_swing_for(s, gs_pid_at(s, tick));
@@ -87,8 +90,8 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     }
     char ate[16], reach[16], food[16];
     sprintf(ate, "%d", s->opponent_ate); sprintf(reach, "%d", s->opponent_in_reach_since); sprintf(food, "%d", s->opponent_hard_food_ready);
-    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d unseen %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
-        PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor,
+    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d landing %s | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d unseen %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
+        PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor, landings,
         PHASE_NAMES[s->opponent.vengeance.phase], earliest, s->opponent.vengeance.latest, local, hp, ate, reach, BAR_NAMES[s->bar], s->damage_since_bar, list, food,
         RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, gs_hidden_opportunities(&s->opponent), s->surplus.strength, s->surplus.ranged_strength,
         s->surplus.magic_damage, arsenal);
