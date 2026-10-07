@@ -36,7 +36,7 @@ typedef struct {
     int first_eat, our_death, his_death, our_meals;
     int hp_us, hp_him, bar_him, start_hp;
     int trace_hp[MAX_STEPS], trace_damage[MAX_STEPS], trace_direct[MAX_STEPS], trace_our_hp[MAX_STEPS];
-    uint8_t trace_ate[MAX_STEPS], trace_our_swing[MAX_STEPS], trace_his_swing[MAX_STEPS], trace_pid[MAX_STEPS];
+    uint8_t trace_ate[MAX_STEPS], trace_our_swing[MAX_STEPS], trace_his_swing[MAX_STEPS], trace_pid[MAX_STEPS], trace_our_spec[MAX_STEPS];
 } Outcome;
 
 typedef struct {
@@ -207,7 +207,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         opponent_actions(model, sim, step, seed + (uint32_t)step * 2654435761u, actions);
         riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
-        int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
+        int vw = s->spec_voidwaker[1], maul = s->spec_maul[1], our_specs = s->spec_voidwaker[0] + s->spec_maul[0];
         if (g_ablation.pid) {
             char holder = tape_tick(tape, tick_base + 1 + step < tape->hi ? tick_base + 1 + step : tape->hi)->pid;
             if (holder == 'L' || holder == 'l') s->env.pid_holder = 0;
@@ -230,6 +230,9 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
         hist_step(&sim->hist, s, tick_base + 1 + step, &events);
         if (policy->kind == OURS_RULES) observer_step(s, &sim->obs, tick_base + 1 + step);
+#ifdef GS_HP_BELIEF
+        if (policy->kind == OURS_RULES && sim->obs.inf.watched_count > 0) { int c = sim->obs.inf.watched[sim->obs.inf.watched_count - 1]; g_cls[c][events.ate ? 1 : 0]++; }
+#endif
         sim->previous = events;
         if (g_trace) {
             const Player* t = &s->env.players[1];
@@ -247,19 +250,56 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);
         if (out->his_eat[step] && out->first_eat < 0) out->first_eat = step;
+        out->trace_our_spec[step] = (uint8_t)(s->spec_voidwaker[0] + s->spec_maul[0] - our_specs);
         out->his_vw_specs += s->spec_voidwaker[1] - vw;
         out->his_maul_specs += s->spec_maul[1] - maul;
         out->his_vengs += s->env.players[1].cast_veng_this_tick;
         if (s->env.players[0].current_hitpoints <= 0 && out->our_death < 0) out->our_death = step;
         if (s->env.players[1].current_hitpoints <= 0 && out->his_death < 0) out->his_death = step;
     }
+    uint8_t thrown[64] = {0};
+    for (int t = 0; t < out->steps; t++) {
+        if (!out->trace_our_spec[t]) continue;
+        for (int i = sim->ours.played_count - 1; i >= 0; i--)
+            if (sim->ours.played[i].step <= t) { if (t - sim->ours.played[i].step <= 8) thrown[i] = 1; break; }
+    }
     for (int i = 0; i < sim->ours.played_count; i++) {
         int step = sim->ours.played[i].step;
         if (step + OURS_HORIZON > k) continue;
+        if (g_thrown_only && !thrown[i]) continue;
+        if (g_vw_only && sim->ours.played[i].choice != GS_CHOICE_VOIDWAKER) continue;
         sim->spec_counted++;
         sim->spec_predicted += sim->ours.played[i].chance;
         sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
         int band = sim->ours.played[i].his_hitpoints <= 44 ? 0 : sim->ours.played[i].his_hitpoints <= 87 ? 1 : 2;
+        int dmg = 0, ate_in = 0;
+        for (int t = step; t <= step + OURS_HORIZON && t < out->steps; t++) { dmg += out->trace_damage[t]; ate_in |= out->trace_ate[t] != 0; }
+        int fb = sim->ours.played[i].his_hitpoints <= 44 ? 0 : sim->ours.played[i].his_hitpoints <= 60 ? 1 : sim->ours.played[i].his_hitpoints <= 87 ? 2 : 3, fj = 10;
+        for (int t = step; t < step + 10 && t < out->steps; t++) if (out->trace_ate[t]) { fj = t - step; break; }
+        g_fm[fb][fj]++;
+        if (getenv("GS_COMBO_DBG") && sim->ours.played[i].choice == GS_CHOICE_MAUL_VOIDWAKER) {
+            static int shown;
+            if (shown++ < 8) {
+                fprintf(stderr, "combo at step %d plan_land %d plan_last %d chance %.2f hp %d:", step, sim->ours.played[i].plan_land, sim->ours.played[i].plan_last, sim->ours.played[i].chance, sim->ours.played[i].his_hitpoints);
+                for (int t = step; t <= step + 10 && t < out->steps; t++) fprintf(stderr, " [%d d%d s%d w%d e%d]", t - step, out->trace_damage[t], out->trace_our_spec[t], out->trace_our_swing[t], out->trace_ate[t]);
+                fprintf(stderr, "\n");
+            }
+        }
+        {
+            int c = sim->ours.played[i].choice, w = sim->ours.played[i].plan_last + 1, tot = 0, first = -1;
+            for (int t = step; t <= step + w + 1 && t < out->steps; t++) { tot += out->trace_damage[t]; if (first < 0 && out->trace_damage[t] > 0) first = t - step; }
+            g_pc_n[c]++; g_pc_plan[c] += sim->ours.played[i].plan_mean; g_pc_act[c] += tot; g_pc_land[c] += sim->ours.played[i].plan_land;
+            g_pc_actland[c] += first < 0 ? sim->ours.played[i].plan_land : first; g_pc_any[c] += first >= 0;
+            for (int t = step; t <= step + 8 && t < out->steps; t++) g_pc_specs[c] += out->trace_our_spec[t];
+            g_pc_chance[c] += sim->ours.played[i].chance; g_pc_dead[c] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
+        }
+        { int d = (int)(sim->ours.played[i].pit * 10); if (d > 9) d = 9; g_pit_played[d]++; g_pit_played_n++; }
+        g_dm_n[band]++;
+        g_dm_sum[band] += dmg;
+        g_dm_any[band] += dmg > 0;
+        g_dm_lethal[band] += dmg >= sim->ours.played[i].his_hitpoints;
+        g_dm_ate[band] += ate_in;
+        g_dm_dead[band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
         g_spec_counted[band]++;
         g_spec_predicted[band] += sim->ours.played[i].chance;
         g_spec_realized[band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
@@ -268,10 +308,6 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         g_exp_counted[planner_band]++;
         g_exp_mean[planner_band] += expected;
         g_exp_true[planner_band] += sim->ours.played[i].his_hitpoints;
-        g_exp_meal_p[planner_band] += sim->ours.played[i].meal_p;
-        int ate = 0;
-        for (int t = step; t <= step + sim->ours.played[i].window && t < out->steps; t++) ate |= out->trace_ate[t] != 0;
-        g_exp_meal[planner_band] += ate;
         g_exp_predicted[planner_band] += sim->ours.played[i].chance;
         g_exp_realized[planner_band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }

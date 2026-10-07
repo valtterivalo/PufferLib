@@ -359,6 +359,7 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     /* No recorded tick sits below 30 hitpoints long enough to fit a hazard there: panic is the rate that reproduces the share of ticks the recorded fights spend at 0-29 hp (0.8 a tick at 25 or less). */
     if (g_ablation.panic > 0 && probe.eligible[fit->eat_action] && s->env.players[1].current_hitpoints <= g_ablation.panic_hp && p_eat < g_ablation.panic) p_eat = g_ablation.panic;
     int eating = threatened || (g_ablation.eats ? tape_his_anim_at(g_tape, tick, ANIM_EAT) : roll(seed, tick, 41, p_eat));
+    if (g_no_eat) eating = 0;
     if (eating) {
         const float* shares = fit->serving[warning_since(&h->warning) != WARNING_NONE];
         float serving = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 42) % 10000) / 10000.0f;

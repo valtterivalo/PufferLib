@@ -567,6 +567,9 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
 static void eat_model_setup(Tape* tapes, int count);
 
 static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
+    g_thrown_only = getenv("GS_THROWN") != NULL;
+    g_no_eat = getenv("GS_NOEAT") != NULL;
+    g_vw_only = getenv("GS_VWONLY") != NULL;
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
     fit_default_servings(&fit);
@@ -580,7 +583,7 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     fit.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
     OppModel model = {MODEL_FIT, &fit};
-    OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0};
+    OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0, getenv("GS_IDEAL") ? TIMING_IDEAL : TIMING_MEASURED};
     static WindowStats open, closed;
     memset(&open, 0, sizeof(open));
     memset(&closed, 0, sizeof(closed));
@@ -608,8 +611,37 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
         g_spec_predicted[0], g_spec_predicted[1], g_spec_predicted[2], g_spec_realized[0], g_spec_realized[1], g_spec_realized[2]);
     printf("planner kills by the planner's expected hp (<=60, 60-75, 75-90, 90+): played %.0f %.0f %.0f %.0f, predicted %.1f %.1f %.1f %.1f, realized %.1f %.1f %.1f %.1f\n", g_exp_counted[0], g_exp_counted[1], g_exp_counted[2], g_exp_counted[3],
         g_exp_predicted[0], g_exp_predicted[1], g_exp_predicted[2], g_exp_predicted[3], g_exp_realized[0], g_exp_realized[1], g_exp_realized[2], g_exp_realized[3]);
-    printf("by the planner's expected hp band: mean expected hp, mean true hp, planner P(he eats before the last hit), actual share who ate:\n");
-    for (int b = 0; b < 4; b++) if (g_exp_counted[b]) printf("  band %d  n %5.0f  expected %5.1f  true %5.1f  planner meal %.3f  actual meal %.3f\n", b, g_exp_counted[b], g_exp_mean[b] / g_exp_counted[b], g_exp_true[b] / g_exp_counted[b], g_exp_meal_p[b] / g_exp_counted[b], g_exp_meal[b] / g_exp_counted[b]);
+    for (int b = 0; b < 3; b++) if (g_dm_n[b]) printf("window outcome, true hp band %d: n %.0f mean damage %.1f any damage %.3f damage >= hp %.3f he dies %.3f he ate %.3f\n", b, g_dm_n[b], g_dm_sum[b] / g_dm_n[b], g_dm_any[b] / g_dm_n[b], g_dm_lethal[b] / g_dm_n[b], g_dm_dead[b] / g_dm_n[b], g_dm_ate[b] / g_dm_n[b]);
+    for (int c = 1; c < 4; c++) if (g_pc_n[c]) { printf("specs thrown per decision %.2f; ", g_pc_specs[c] / g_pc_n[c]);
+        printf("choice %d (1 vw, 2 maul+vw, 3 maul): n %.0f planned mean damage %.1f realized damage in the plan window %.1f, first hit planned +%.2f realized +%.2f, any damage %.3f, planner chance %.3f he dies %.3f\n", c, g_pc_n[c], g_pc_plan[c] / g_pc_n[c], g_pc_act[c] / g_pc_n[c], g_pc_land[c] / g_pc_n[c], g_pc_actland[c] / g_pc_n[c], g_pc_any[c] / g_pc_n[c], g_pc_chance[c] / g_pc_n[c], g_pc_dead[c] / g_pc_n[c]); }
+    {
+        static const char* FB[4] = {"hp<=44", "45-60", "61-87", "88+"};
+        for (int b = 0; b < 4; b++) {
+            double n = 0; for (int j = 0; j < 11; j++) n += g_fm[b][j];
+            printf("first meal after the decision, %s (n %.0f), hazard per tick 0..9:", FB[b], n);
+            double risk = n;
+            for (int j = 0; j < 10; j++) { printf(" %.2f", risk > 0 ? g_fm[b][j] / risk : 0); risk -= g_fm[b][j]; }
+            printf("  none %.2f\n", n > 0 ? g_fm[b][10] / n : 0);
+        }
+    }
+    for (int c = 0; c < 3; c++) printf("plugin class %s: ticks %.0f, true meal on %.3f\n", c == 0 ? "QUIET" : c == 1 ? "ATE" : "HIDDEN", g_cls[c][0] + g_cls[c][1], g_cls[c][1] / (g_cls[c][0] + g_cls[c][1] + 1e-9));
+    printf("belief PIT deciles of his true hp, all decisions:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_pit_n ? g_pit_all[d] / g_pit_n : 0);
+    printf("\n  expected <= 60:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_pit_low_n ? g_pit_low[d] / g_pit_low_n : 0);
+    printf("\n  played decisions:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_pit_played_n ? g_pit_played[d] / g_pit_played_n : 0);
+    printf("\n");
+    printf("belief calibration over every decision, by the planner's expected hp (<=30,<=45,<=60,<=75,<=90,90+): n, mean expected, mean true, share 15 under, share 15 over:\n");
+    for (int b = 0; b < 6; b++) if (g_eb_n[b]) printf("  [%.0f %.1f %.1f %.2f %.2f]", g_eb_n[b], g_eb_exp[b] / g_eb_n[b], g_eb_true[b] / g_eb_n[b], g_eb_low[b] / g_eb_n[b], g_eb_high[b] / g_eb_n[b]);
+    printf("\n");
+    {
+        static const char* KEY[4] = {"hidden ticks (0,1,2-3,4+)", "ate ticks (0,1,2+)", "quiet ticks (<3,<8,<20,20+)", "bar width (<3,<10,10+)"};
+        for (int k = 0; k < 4; k++) {
+            printf("belief bias by %s: n, mean expected, mean true:", KEY[k]);
+            for (int b = 0; b < 4; b++) if (g_diag_n[k][b]) printf("  [%.0f %.1f %.1f]", g_diag_n[k][b], g_diag_exp[k][b] / g_diag_n[k][b], g_diag_true[k][b] / g_diag_n[k][b]);
+            printf("\n");
+        }
+    }
+    printf("by the planner's expected hp band: mean expected hp, mean true hp:\n");
+    for (int b = 0; b < 4; b++) if (g_exp_counted[b]) printf("  band %d  n %5.0f  expected %5.1f  true %5.1f\n", b, g_exp_counted[b], g_exp_mean[b] / g_exp_counted[b], g_exp_true[b] / g_exp_counted[b]);
     {
         long rec_our_a = 0, rec_our_b = 0, rec_his_a = 0, rec_his_b = 0;
         for (int i = 0; i < count; i++) {

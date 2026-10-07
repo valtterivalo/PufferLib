@@ -46,7 +46,16 @@ static int g_trace;
 static long g_hit_hist[160], g_sim_hp_ticks[13];
 static long g_sim_escapes, g_sim_rollouts, g_our_events, g_our_positive, g_his_events, g_his_positive;
 static double g_spec_counted[3], g_spec_predicted[3], g_spec_realized[3];
-static double g_exp_counted[4], g_exp_predicted[4], g_exp_realized[4], g_exp_mean[4], g_exp_true[4], g_exp_meal_p[4], g_exp_meal[4];
+static double g_cls[3][2];
+static double g_pit_all[10], g_pit_low[10], g_pit_played[10], g_pit_n, g_pit_low_n, g_pit_played_n;
+static double g_eb_n[6], g_eb_exp[6], g_eb_true[6], g_eb_low[6], g_eb_high[6];
+static int g_thrown_only, g_vw_only, g_no_eat, g_plan_land, g_plan_last;
+static double g_plan_mean;
+static double g_pc_specs[4], g_pc_n[4], g_pc_plan[4], g_pc_act[4], g_pc_land[4], g_pc_actland[4], g_pc_any[4], g_pc_chance[4], g_pc_dead[4];
+static double g_fm[4][12];
+static double g_dm_n[3], g_dm_lethal[3], g_dm_any[3], g_dm_dead[3], g_dm_ate[3], g_dm_sum[3];
+static double g_diag_n[4][4], g_diag_exp[4][4], g_diag_true[4][4];
+static double g_exp_counted[4], g_exp_predicted[4], g_exp_realized[4], g_exp_mean[4], g_exp_true[4];
 static uint32_t g_rollout_seed;
 static int (*g_unseen_ticks)(const Tape*, int tick);
 

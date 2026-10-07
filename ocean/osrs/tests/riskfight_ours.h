@@ -214,7 +214,30 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
     GsSpecPlan plans[4], after[4];
     int plan_count = gs_spec_plans(&ours->arena, inf, tick, 0, &own, plans);
     int after_count = rebound->kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
+    g_gs_expected_hp = -1;
+    g_gs_truth_hp = sim->state.env.players[1].current_hitpoints;
     decision = gs_auto_spec_decide(&ours->arena, &spec, plans, plan_count, after, after_count, gs_spec_energy(&inf->c));
+#ifdef GS_HP_BELIEF
+    if (g_gs_expected_hp >= 0) {
+        int h = 0, a = 0, q = 0;
+        for (int i = 0; i < inf->watched_count; i++) { h += inf->watched[i] == GS_SEEN_HIDDEN; a += inf->watched[i] == GS_SEEN_ATE; q += inf->watched[i] == GS_SEEN_QUIET; }
+        int width = inf->opponent_bar.high - inf->opponent_bar.low;
+        int keys[4] = {h == 0 ? 0 : h == 1 ? 1 : h <= 3 ? 2 : 3, a == 0 ? 0 : a == 1 ? 1 : 2, q < 3 ? 0 : q < 8 ? 1 : q < 20 ? 2 : 3, width < 3 ? 0 : width < 10 ? 1 : 2};
+        double truth = sim->state.env.players[1].current_hitpoints;
+        { int d = (int)(g_gs_pit * 10); if (d > 9) d = 9; g_pit_all[d]++; g_pit_n++; if (g_gs_expected_hp <= 60) { g_pit_low[d]++; g_pit_low_n++; } }
+        { int eb = g_gs_expected_hp <= 30 ? 0 : g_gs_expected_hp <= 45 ? 1 : g_gs_expected_hp <= 60 ? 2 : g_gs_expected_hp <= 75 ? 3 : g_gs_expected_hp <= 90 ? 4 : 5; g_eb_n[eb]++; g_eb_exp[eb] += g_gs_expected_hp; g_eb_true[eb] += truth; g_eb_low[eb] += truth <= g_gs_expected_hp - 15; g_eb_high[eb] += truth >= g_gs_expected_hp + 15; }
+        for (int k = 0; k < 4; k++) { g_diag_n[k][keys[k]]++; g_diag_exp[k][keys[k]] += g_gs_expected_hp; g_diag_true[k][keys[k]] += truth; }
+    }
+#endif
+    g_plan_mean = 0; g_plan_land = 0; g_plan_last = 0;
+    for (int i = 0; i < plan_count; i++)
+        if (plans[i].choice == decision.choice) {
+            for (int h = 0; h < plans[i].hit_count; h++) {
+                for (int r = 0; r < plans[i].hits[h].damages; r++) g_plan_mean += r * plans[i].hits[h].damage[r];
+                g_plan_last = plans[i].hits[h].lands - tick;
+            }
+            g_plan_land = plans[i].hits[0].lands - tick;
+        }
     if (decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, decision.death, stakes) <= 0) decision.choice = GS_CHOICE_HOLD;
     return decision;
 }
@@ -263,8 +286,11 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         ours->played[ours->played_count].step = step;
         ours->played[ours->played_count].his_hitpoints = s->env.players[1].current_hitpoints;
         ours->played[ours->played_count].expected = g_gs_expected_hp;
-        ours->played[ours->played_count].meal_p = g_gs_meal_p;
-        ours->played[ours->played_count].window = g_gs_last_offset;
+        ours->played[ours->played_count].pit = g_gs_pit;
+        ours->played[ours->played_count].plan_mean = g_plan_mean;
+        ours->played[ours->played_count].plan_land = g_plan_land;
+        ours->played[ours->played_count].plan_last = g_plan_last;
+        ours->played[ours->played_count].choice = (int)decision.choice;
         ours->played[ours->played_count++].chance = decision.chance;
     }
     if (decision.choice != GS_CHOICE_HOLD) {
