@@ -130,16 +130,45 @@ static int damage_dealt_before(const Tape* tape, char side, int t) {
 
 static int swing_ago(int t, int swing_tick) { return t - swing_tick > ARRIVAL_AGE ? -1 : t - swing_tick; }
 
-/** His hitpoints drawn inside the health bar band, widened by one serving per meal since the last hit on him. */
+/** The heal of one meal served as the opponent fit serves them: a single hard food, hard food and karambwan, hard food and brew, or all three. */
+static int serving_heal(uint32_t* rng, int* brew) {
+    static const float shares[4] = {0.15f, 0.34f, 0.34f, 0.17f};
+    static const int heal[4] = {22, 40, 38, 56};
+    float u = (float)(xorshift32(rng) >> 8) / (float)(1 << 24);
+    int k = u < shares[0] ? 0 : u < shares[0] + shares[1] ? 1 : u < shares[0] + shares[1] + shares[2] ? 2 : 3;
+    *brew = k >= 2;
+    return heal[k];
+}
+
+/** His hitpoints at the end of a tick: drawn inside the health bar band, which only a hit on him refreshes, then raised by one drawn serving for each
+ * meal since (a hard food stops at 99, a brew at 115). Without a bar, uniform. The oracle reads them off the bar after the first recorded hit instead. */
 static int sample_his_hitpoints(const TapeTick* tick, uint32_t* rng) {
-    int lo = 60, hi = 121;
-    OsrsHealthBarRange range = osrs_health_bar_range(tick->bar_ratio, tick->bar_scale, 99, 121);
-    if (range.kind == OSRS_HEALTH_BAR_KNOWN) {
-        lo = range.lower;
-        hi = range.upper + 24 * tick->meals_since;
-        if (hi > 121) hi = 121;
+    OsrsHealthBarRange bar = osrs_health_bar_range(tick->bar_ratio, tick->bar_scale, 99, 121);
+    if (g_ablation.hp == HP_ORACLE) {
+        for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= g_tape->hi; x++) {
+            int damage = tape_damage_on_him(g_tape, x);
+            const TapeTick* after = tape_tick(g_tape, x);
+            if (damage > 0 && after->bar_ratio > 0 && after->bar_scale > 1 && after->last_bar_hit == x) {
+                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+                int hp = (shown.lower + shown.upper) / 2 + damage;
+                return hp > 121 ? 121 : hp;
+            }
+        }
     }
-    return lo + (int)(uniform(rng) * (hi - lo + 1));
+    if (bar.kind != OSRS_HEALTH_BAR_KNOWN) return 60 + (int)(uniform(rng) * 62);
+    if (g_ablation.hp == HP_UNIFORM) {
+        int hi = bar.upper + 24 * tick->meals_since;
+        if (hi > 121) hi = 121;
+        return bar.lower + (int)(uniform(rng) * (hi - bar.lower + 1));
+    }
+    int hp = bar.lower + (int)(uniform(rng) * (bar.upper - bar.lower + 1));
+    for (int meal = 0; meal < tick->meals_since; meal++) {
+        int brew;
+        hp += serving_heal(rng, &brew);
+        int cap = brew ? 115 : 99;
+        if (hp > cap) hp = hp > bar.upper ? (bar.upper > cap ? bar.upper : cap) : cap;
+    }
+    return hp > 121 ? 121 : hp;
 }
 
 /** Snapshot of the tape at the end of tick t. Hidden values come from the stated priors and the rng. */

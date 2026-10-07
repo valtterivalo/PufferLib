@@ -24,6 +24,7 @@ static double seconds(void) {
 }
 
 static int tape_day(const Tape* tape) { return atoi(tape->session); }
+static int in_day(const Tape* tape, int day) { return day == 0 || (day > 0 ? tape_day(tape) == day : tape_day(tape) != -day); }
 
 static int flag_at(const Tape* tape, int tick, int flag) {
     return tick >= tape->lo && tick <= tape->hi && (tape->his_flags[tick - tape->lo] & flag);
@@ -113,7 +114,7 @@ static void fit_model(Tape* tapes, int count, int day, OppFit* fit) {
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
     for (int i = 0; i < count; i++) {
-        if (tape_day(&tapes[i]) != day) continue;
+        if (!in_day(&tapes[i], day)) continue;
         for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
             int flags = tapes[i].his_flags[t - tapes[i].lo];
             for (int j = 0; j < FIT_SAMPLES; j++) {
@@ -147,7 +148,7 @@ static void infer_servings(const Tape* tapes, int count, int day, OppFit* fit, i
     *eats = 0;
     for (int i = 0; i < count; i++) {
         const Tape* tape = &tapes[i];
-        if (tape_day(tape) != day) continue;
+        if (!in_day(tape, day)) continue;
         const Hist* series = tape->hist_series;
         for (int e = tape->lo + 1; e + SERVING_WINDOW <= tape->hi; e++) {
             if (!rec_eat_at(tape, e)) continue;
@@ -334,8 +335,12 @@ static double pit_value(const int* sim, int n, int observed, uint32_t* rng) {
     return ((double)below + uniform(rng) * equal) / n;
 }
 
+static FILE* g_deaths;
+static FILE* g_windows;
+
 static void evaluate_windows(const Tape* tape, const OppModel* model, const OursPolicy* ours, int n, int k, WindowStats* stats) {
     static int sim_values[METRICS][MAX_ROLLOUTS];
+    g_tape = tape;
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
     uint32_t pit_rng = 2463534242u;
@@ -344,6 +349,15 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
         Recorded rec = recorded_window(tape, t0, k);
         double sums[METRICS] = {0};
         for (int i = 0; i < n; i++) {
+            const char* trace = getenv("GS_TRACE");
+            g_trace = 0;
+            if (trace) {
+                char want[64];
+                int at;
+                sscanf(trace, "%63[^:]:%d", want, &at);
+                g_trace = !strcmp(want, tape->name) && at == t0;
+                if (g_trace) printf("rollout %d tape %s t0 %d recorded damage on him %d eats %d bar %d/%d\n", i, tape->name, t0, rec.our_damage, rec.eats, tape_tick(tape, t0)->bar_ratio, tape_tick(tape, t0)->bar_scale);
+            }
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + i * 104729 + tape->index * 13 + tape->lo)) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
@@ -362,6 +376,12 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
         }
         int rec_values[METRICS] = {rec.eats, rec.his_hits, rec.his_damage, rec.vw_specs, rec.maul_specs, rec.vengs, rec.our_dead, rec.his_dead,
             rec.our_hits, rec.our_damage, rec.bar_end, rec.our_meals};
+        if (g_windows)
+            fprintf(g_windows, "%s,%d,%d,%d,%d,%d,%d,%d,%.4f,%.3f,%.3f,%.1f,%.1f,%.1f\n", tape->name, t0, tape_tick(tape, t0)->bar_ratio, tape_tick(tape, t0)->bar_scale, rec.eats, rec.our_damage,
+                rec.bar_end, rec.his_dead, sums[7] / n, sums[0] / n, sums[9] / n, sums[10] / n, sums[2] / n, sums[1] / n);
+        if (g_deaths && sums[7] > 0)
+            fprintf(g_deaths, "%s t0 %d bar %d/%d escape %d died %.3f recorded_eats %d recorded_damage_on_him %d\n", tape->name, t0, tape_tick(tape, t0)->bar_ratio,
+                tape_tick(tape, t0)->bar_scale, tape_escape_tick(tape) > t0 && tape_escape_tick(tape) <= t0 + k, sums[7] / n, rec.eats, rec.our_damage);
         for (int m = 0; m < METRICS; m++) {
             stats->rec[m] += rec_values[m];
             stats->sim[m] += sums[m] / n;
@@ -498,6 +518,38 @@ static void rollouts(int n, int k, Tape* tapes, int count, int train_day, int te
 }
 
 /* Where the planner's predicted kills go: the played spec decisions of the ported rules against what the sim opponent then did, with one term changed at a time. */
+static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    if (getenv("GS_TRAIN")) {
+        int train = atoi(getenv("GS_TRAIN")), eats, identified[2];
+        fit_model(tapes, count, train, &fit);
+        infer_servings(tapes, count, train, &fit, &eats, identified);
+        print_fit("fit on own tapes", &fit, eats, identified);
+    }
+    fit_override(&fit);
+    fit.eat_action = ACT_EAT_WARNING;
+    OppModel model = {MODEL_FIT, &fit};
+    OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0};
+    static WindowStats open, closed;
+    memset(&open, 0, sizeof(open));
+    memset(&closed, 0, sizeof(closed));
+    const char* log = getenv("GS_DEATHS");
+    g_deaths = log ? fopen(log, "w") : NULL;
+    g_windows = getenv("GS_WINDOWS") ? fopen(getenv("GS_WINDOWS"), "w") : NULL;
+    for (int i = 0; i < count; i++) {
+        if (!in_day(&tapes[i], test_day)) continue;
+        evaluate_windows(&tapes[i], &model, &replay, n, k, &open);
+        if (!getenv("GS_OPEN_ONLY")) evaluate_windows(&tapes[i], &model, &rules, n, k, &closed);
+    }
+    printf("=== autopsy N=%d k=%d day %d ablation hp %d eats %d escape %d pid %d damage %d ===\n", n, k, test_day, g_ablation.hp, g_ablation.eats, g_ablation.escape, g_ablation.pid, g_ablation.damage);
+    print_window_stats("open loop, fit warning", &open);
+    if (!getenv("GS_OPEN_ONLY")) print_window_stats("closed loop, fit warning", &closed);
+    if (g_deaths) fclose(g_deaths);
+    if (g_windows) fclose(g_windows);
+}
+
 static void attribute(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
     static OppFit fit, heavy, eager, slow;
     memset(&fit, 0, sizeof(fit));
@@ -741,7 +793,20 @@ int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
     const char* mode = argv[1];
-    int first = !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
+    g_ablation.hp = HP_HEALS;
+    const char* ablation = getenv("GS_ABL");
+    if (ablation) {
+        g_ablation.hp = strstr(ablation, "hp=uniform") ? HP_UNIFORM : strstr(ablation, "hp=oracle") ? HP_ORACLE : HP_HEALS;
+        const char* threat = strstr(ablation, "threat=");
+        g_ablation.threat = threat ? atof(threat + 7) : 0;
+        const char* threat_timer = strstr(ablation, "timer=");
+        g_ablation.threat_timer = threat_timer ? atoi(threat_timer + 6) : 2;
+        g_ablation.eats = strstr(ablation, "eats") != NULL;
+        g_ablation.escape = strstr(ablation, "escape") != NULL;
+        g_ablation.pid = strstr(ablation, "pid") != NULL;
+        g_ablation.damage = strstr(ablation, "damage") != NULL;
+    }
+    int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
     if (!strcmp(mode, "spectator")) { spec_load(&corpus, argv[2]); spectator(tapes, count, argv[3]); }
@@ -749,6 +814,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "attribute")) attribute(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
     else if (!strcmp(mode, "ablate")) ablate(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
+    else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else abort();
     return 0;

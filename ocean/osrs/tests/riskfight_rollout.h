@@ -180,6 +180,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     memset(out, 0, sizeof(*out));
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
     sim->outcome = out;
+    g_tape = tape;
     sim->tick_base = tick_base;
     sim->previous = (StepEvents){0};
     if (policy->kind == OURS_RULES) {
@@ -197,9 +198,21 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
+        if (g_ablation.pid) {
+            char holder = tape_tick(tape, tick_base + 1 + step < tape->hi ? tick_base + 1 + step : tape->hi)->pid;
+            if (holder == 'L' || holder == 'l') s->env.pid_holder = 0;
+            else if (holder == 'O' || holder == 'o') s->env.pid_holder = 1;
+        }
         sim->step_damage = sim->step_max_hit = 0;
         sim->obs.hit_count = 0;
         riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
+        if (g_ablation.damage && s->env.players[1].current_hitpoints > 0 && !s->escaped[1]) {
+            int adjust = sim->step_damage - tape_damage_on_him(tape, tick_base + 1 + step);
+            Player* target = &s->env.players[1];
+            target->current_hitpoints += adjust;
+            if (target->current_hitpoints > 121) target->current_hitpoints = 121;
+            if (target->current_hitpoints < 0) target->current_hitpoints = 0;
+        }
         const Player* him = &s->env.players[1];
         int ate_true = him->ate_food_this_tick || him->ate_karambwan_this_tick || s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick;
         StepEvents events = {.ate_visible = consumption_visible(s, 1), .ate = ate_true,
@@ -208,6 +221,10 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         hist_step(&sim->hist, s, tick_base + 1 + step, &events);
         if (policy->kind == OURS_RULES) observer_step(s, &sim->obs, tick_base + 1 + step);
         sim->previous = events;
+        if (g_trace) {
+            const Player* t = &s->env.players[1];
+            printf("  step %d his hp %d dmg_on_him %d ate %d veng %d | our hp %d\n", step, t->current_hitpoints, sim->step_damage, events.ate, t->veng_active, s->env.players[0].current_hitpoints);
+        }
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);
         if (out->his_eat[step] && out->first_eat < 0) out->first_eat = step;

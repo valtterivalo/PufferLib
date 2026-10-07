@@ -36,11 +36,44 @@ typedef struct {
     uint8_t* his_flags;
 } Tape;
 
+/* Components of a rollout that an ablation replaces by what the recording shows, read from GS_ABL: hp=uniform|heals|oracle, eats, escape, pid, damage,
+ * threat=P with timer=N (he eats with probability P when our swing lands within N ticks and his hitpoints are within our reach). */
+typedef enum { HP_UNIFORM, HP_HEALS, HP_ORACLE } HpMode;
+typedef struct { HpMode hp; int eats, escape, pid, damage, threat_timer; double threat; } Ablation;
+static Ablation g_ablation;
+static const Tape* g_tape;
+static int g_trace;
+
 static const TapeTick* tape_tick(const Tape* tape, int tick) {
     assert(tick >= tape->lo && tick <= tape->hi);
     const TapeTick* t = &tape->ticks[tick - tape->lo];
     assert(t->tick == tick);
     return t;
+}
+
+static int tape_his_anim_at(const Tape* tape, int tick, int anim) {
+    for (int i = 0; i < tape->anim_count; i++)
+        if (tape->anims[i].tick == tick && tape->anims[i].side == SIDE_HIM && tape->anims[i].anim == anim) return 1;
+    return 0;
+}
+
+/** The tick he starts leaving the fight, a teleport tab or spell animation of his, INT_MAX when the recording shows none. */
+static int tape_escape_tick(const Tape* tape) {
+    int first = INT_MAX;
+    for (int i = 0; i < tape->anim_count; i++) {
+        const TapeAnim* a = &tape->anims[i];
+        if (a->side == SIDE_HIM && (a->anim == 4069 || a->anim == 4071 || a->anim == 714) && a->tick < first) first = a->tick;
+    }
+    return first;
+}
+
+static int tape_damage_on_him(const Tape* tape, int tick) {
+    int total = 0;
+    for (int i = 0; i < tape->hit_count; i++) {
+        const TapeHit* h = &tape->hits[i];
+        if (h->tick == tick && h->side == SIDE_HIM && h->klass != 'B') total += h->amount;
+    }
+    return total;
 }
 
 static int tape_load(Tape* tape, const char* path) {

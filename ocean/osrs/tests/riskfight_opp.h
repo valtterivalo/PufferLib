@@ -130,6 +130,8 @@ static Probe probe_from_inputs(const HimInputs* in, const Hist* h, int tick) {
     return p;
 }
 
+static int raw_of_item_id(uint8_t item);
+
 /** What the sim shows him of himself and of us before tick `tick`. */
 static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int kit_vw, int kit_maul) {
     const Player* him = &s->env.players[1];
@@ -272,7 +274,8 @@ static void fit_default_servings(OppFit* fit) {
 }
 
 static double action_probability(const OppFit* fit, const Probe* p, Action a) {
-    return p->eligible[a] ? logit_p(&fit->logit[a], &p->x[a]) : 0;
+    if (!p->eligible[a]) return 0;
+    return logit_p(&fit->logit[a], &p->x[a]);
 }
 
 static int roll(uint32_t seed, int tick, int salt, double p) {
@@ -288,7 +291,16 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     RiskfightObservedSelf self = riskfight_observed_self(obs);
     RiskfightObservedInventory inventory = riskfight_observed_inventory(obs);
     Probe probe = probe_state(s, h, tick, has_item(s, 1, ITEM_VOIDWAKER), has_maul(s, 1));
-    int eating = roll(seed, tick, 41, action_probability(fit, &probe, fit->eat_action));
+    int threatened = 0;
+    if (g_ablation.threat > 0 && probe.eligible[fit->eat_action]) {
+        const Player* us = &s->env.players[0];
+        const Player* him = &s->env.players[1];
+        int kit[KIT_SLOTS], has_spec;
+        kit_of_equipped(us->equipped, kit);
+        int reach = assumed_reach(kit, raw_of_item_id(us->equipped[GEAR_SLOT_WEAPON]), &has_spec);
+        threatened = us->attack_timer <= g_ablation.threat_timer && him->current_hitpoints <= reach && roll(seed, tick, 47, g_ablation.threat);
+    }
+    int eating = threatened || (g_ablation.eats ? tape_his_anim_at(g_tape, tick, ANIM_EAT) : roll(seed, tick, 41, action_probability(fit, &probe, fit->eat_action)));
     if (eating) {
         const float* shares = fit->serving[warning_since(&h->warning) != WARNING_NONE];
         float serving = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 42) % 10000) / 10000.0f;
@@ -316,5 +328,6 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
         actions[RF_SPECIAL] = !holding_maul && armed;
     }
     actions[RF_VENGEANCE] = roll(seed, tick, 46, action_probability(fit, &probe, ACT_VENGEANCE));
+    if (g_ablation.escape && tick == tape_escape_tick(g_tape)) actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif
