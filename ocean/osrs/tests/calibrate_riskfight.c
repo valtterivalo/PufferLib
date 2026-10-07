@@ -13,7 +13,7 @@
 #include "riskfight_rollout.h"
 #include "riskfight_spectator.h"
 
-enum { MAX_TAPES = 64, METRICS = 12, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
+enum { MAX_TAPES = 2048, METRICS = 12, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
     FIT_SAMPLES = 4, SCORE_SAMPLES = 16, PROFILE_SAMPLES = 64, BIG_HIT_EPISODE = 30, REARM_TICKS = 4, MARGIN = 10 };
 enum { FLAG_EAT = 1, FLAG_SWING = 2, FLAG_VW = 4, FLAG_MAUL = 8, FLAG_VENG = 16 };
 
@@ -386,6 +386,7 @@ static void death_autopsy(const Tape* tape, int t0, int rollout, const Outcome* 
 
 
 static double g_ha_hist[10], g_ha_n, g_ha_sum, g_ha_dead, g_ha_band_n[3], g_ha_band_pit[3], g_ha_band_diff[3], g_ha_band_dead[3];
+static double g_haz_exposure[3], g_haz_deaths[3];
 static double g_hb_hist[10], g_hb_n, g_hb_sum, g_hb_tails, g_hb_mean_diff, g_hb_band_n[3], g_hb_band_pit[3], g_hb_band_diff[3];
 
 /* The first recorded hit on him in the window with a health bar after it: the tick and the hitpoints that leave him at, plus the damage, as the PIT of the recordings reads them. */
@@ -680,7 +681,14 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
                 tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap);
                 riskfight_load_state(&sim->state, &sim->context, &snap);
                 Outcome out;
-                run_steps(sim, tp, t0, kk, &model, &rules, xorshift32(&rng), &out);
+                run_steps(sim, tp, t0, kk, &model, getenv("GS_REPLAY") ? &replay : &rules, xorshift32(&rng), &out);
+                for (int j = 0; j < out.steps; j++) {
+                    int before = j > 0 ? out.trace_hp[j - 1] : out.start_hp;
+                    int band = before <= 44 ? 0 : before <= 87 ? 1 : 2;
+                    if (out.his_death >= 0 && j > out.his_death) break;
+                    g_haz_exposure[band]++;
+                    if (j == out.his_death) g_haz_deaths[band]++;
+                }
                 hd += out.his_death >= 0; od += out.our_death >= 0; meals += out.our_meals; ticks += out.steps;
                 for (int j = 0; j < out.steps; j++) { swings += out.trace_our_swing[j]; specs += out.trace_our_spec[j]; }
                 rr = sim->obs.stakes.us > 0 ? (double)sim->obs.stakes.him / sim->obs.stakes.us : 1;
@@ -689,6 +697,9 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
             printf("FIGHT %s rollouts %d his_dead %.4f our_dead %.4f meals %.3f swings %.3f specs %.3f ticks %.2f r %.3f\n", tp->name, n, hd / n, od / n, meals / n, swings / n, specs / n, ticks / n, rr);
             free(sim);
         }
+        printf("HAZARD by his hp before the tick (44-, 45-87, 88+), exposure ticks / deaths:");
+        for (int b = 0; b < 3; b++) printf(" %.0f / %.1f", g_haz_exposure[b] / n, g_haz_deaths[b] / n);
+        printf("\n");
         return;
     }
     g_dump_limit = getenv("GS_DEATH_AUTOPSY") ? atoi(getenv("GS_DEATH_AUTOPSY")) : -1;
