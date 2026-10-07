@@ -49,6 +49,7 @@ static double g_spec_counted[3], g_spec_predicted[3], g_spec_realized[3];
 static double g_cls[3][2];
 static double g_pit_all[10], g_pit_low[10], g_pit_played[10], g_pit_n, g_pit_low_n, g_pit_played_n;
 static double g_eb_n[6], g_eb_exp[6], g_eb_true[6], g_eb_low[6], g_eb_high[6];
+static double g_eat_risk = 0.01;
 static int g_thrown_only, g_vw_only, g_no_eat, g_plan_land, g_plan_last;
 static double g_plan_mean;
 static double g_cb_split[2][2];

@@ -266,7 +266,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     ours->arena.used = 0;
     GsPid pid = gs_pid_at(inf, tick);
     GsEatSituation e;
-    gs_eat_situation(inf, tick, osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE, 0.01, ours->equal_stakes ? 1.0 : gs_stakes_ratio(sim->obs.stakes), &e);
+    gs_eat_situation(inf, tick, osrs_interaction_active(&us->interaction) ? GS_ENGAGED : GS_IDLE, g_eat_risk, ours->equal_stakes ? 1.0 : gs_stakes_ratio(sim->obs.stakes), &e);
     OursFoods foods;
     ours_foods(sim, &foods);
     GsVerdict verdict = gs_auto_eat_decide(&e, foods.foods, foods.food_count, foods.meals, foods.meal_count, &ours->arena);

@@ -639,6 +639,7 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     if (getenv("GS_HIDDEN")) g_hidden_meal_chance = atof(getenv("GS_HIDDEN"));
     if (getenv("GS_GATE_LOW")) g_gate_low = atof(getenv("GS_GATE_LOW"));
     if (getenv("GS_GATE_HIGH")) g_gate_high = atof(getenv("GS_GATE_HIGH"));
+    if (getenv("GS_EAT_RISK")) g_eat_risk = atof(getenv("GS_EAT_RISK"));
     if (getenv("GS_EAT_INERT")) g_eat_inert = atof(getenv("GS_EAT_INERT"));
     if (getenv("GS_NOSURV")) g_survival_seed = 0;
     if (getenv("GS_ESCFLAT")) g_escape_by_hp = 0;
@@ -659,10 +660,37 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     fit.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
     OppModel model = {MODEL_FIT, &fit};
-    OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0, getenv("GS_IDEAL") ? TIMING_IDEAL : TIMING_MEASURED};
+    OursPolicy replay = {OURS_REPLAY, 0}, rules = {OURS_RULES, 0, getenv("GS_IDEAL") ? TIMING_IDEAL : TIMING_MEASURED, getenv("GS_EQUAL") ? STAKES_EQUAL : STAKES_COMPUTED};
     static WindowStats open, closed;
     memset(&open, 0, sizeof(open));
     memset(&closed, 0, sizeof(closed));
+    if (getenv("GS_FULL_FIGHT")) {
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            const Tape* tp = &tapes[i];
+            g_tape = tp;
+            Sim* sim = malloc(sizeof(Sim));
+            sim_init(sim);
+            int t0 = tp->lo + 1, kk = tp->hi - t0;
+            assert(kk <= MAX_STEPS);
+            double hd = 0, od = 0, meals = 0, swings = 0, specs = 0, ticks = 0, hd_first = 0, rr = 0;
+            for (int r = 0; r < n; r++) {
+                uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + tp->index * 13 + tp->lo)) | 1;
+                RiskfightSnapshot snap;
+                tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap);
+                riskfight_load_state(&sim->state, &sim->context, &snap);
+                Outcome out;
+                run_steps(sim, tp, t0, kk, &model, &rules, xorshift32(&rng), &out);
+                hd += out.his_death >= 0; od += out.our_death >= 0; meals += out.our_meals; ticks += out.steps;
+                for (int j = 0; j < out.steps; j++) { swings += out.trace_our_swing[j]; specs += out.trace_our_spec[j]; }
+                rr = sim->obs.stakes.us > 0 ? (double)sim->obs.stakes.him / sim->obs.stakes.us : 1;
+                (void)hd_first;
+            }
+            printf("FIGHT %s rollouts %d his_dead %.4f our_dead %.4f meals %.3f swings %.3f specs %.3f ticks %.2f r %.3f\n", tp->name, n, hd / n, od / n, meals / n, swings / n, specs / n, ticks / n, rr);
+            free(sim);
+        }
+        return;
+    }
     g_dump_limit = getenv("GS_DEATH_AUTOPSY") ? atoi(getenv("GS_DEATH_AUTOPSY")) : -1;
     const char* log = getenv("GS_DEATHS");
     g_deaths = log ? fopen(log, "w") : NULL;
