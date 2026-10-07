@@ -383,6 +383,25 @@ static void death_autopsy(const Tape* tape, int t0, int rollout, const Outcome* 
     }
 }
 
+
+static double g_hb_hist[10], g_hb_n, g_hb_sum, g_hb_tails, g_hb_mean_diff, g_hb_band_n[3], g_hb_band_pit[3], g_hb_band_diff[3];
+
+/* The first recorded hit on him in the window with a health bar after it: the tick and the hitpoints that leave him at, plus the damage, as the PIT of the recordings reads them. */
+static int recorded_first_hit(const Tape* tape, int t0, int k, int* tick, int* low, int* high) {
+    for (int x = t0 + 1; x <= t0 + k && x <= tape->hi; x++) {
+        int damage = tape_damage_on_him(tape, x);
+        const TapeTick* after = tape_tick(tape, x);
+        if (damage > 0 && after->bar_ratio > 0 && after->bar_scale > 1 && after->last_bar_hit == x) {
+            OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+            *tick = x;
+            *low = shown.lower + damage;
+            *high = after->bar_ratio == after->bar_scale ? (shown.upper + damage > 121 ? shown.upper + damage : 121) : shown.upper + damage;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void evaluate_windows(const Tape* tape, const OppModel* model, const OursPolicy* ours, int n, int k, WindowStats* stats) {
     static int sim_values[METRICS][MAX_ROLLOUTS];
     g_tape = tape;
@@ -393,6 +412,9 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
     for (int t0 = tape->lo + 1; t0 + k <= tape->hi; t0++) {
         Recorded rec = recorded_window(tape, t0, k);
         double sums[METRICS] = {0};
+        int hb_tick = 0, hb_low = 0, hb_high = 0, hb_count = 0;
+        int hb_values[MAX_ROLLOUTS];
+        int hb_known = recorded_first_hit(tape, t0, k, &hb_tick, &hb_low, &hb_high);
         for (int i = 0; i < n; i++) {
             const char* trace = getenv("GS_TRACE");
             g_trace = 0;
@@ -413,12 +435,31 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             stats->decisions += sim->ours.decisions - decisions;
             stats->ticks += sim->ours.ticks - ticks;
             stats->rollouts++;
+            if (hb_known) {
+                int step = hb_tick - t0 - 1, quiet = 1;
+                for (int j = 0; j < step; j++) quiet &= out.trace_damage[j] == 0;
+                if (quiet && step < out.steps) hb_values[hb_count++] = step > 0 ? out.trace_hp[step - 1] : out.start_hp;
+            }
             if (g_death_on && g_dump_limit >= 0 && out.his_death >= 0) death_autopsy(tape, t0, i, &out);
             int eats = 0;
             for (int j = 0; j < out.steps; j++) eats += out.his_eat[j];
             int values[METRICS] = {eats, out.his_hits, out.his_damage, out.his_vw_specs, out.his_maul_specs, out.his_vengs,
                 out.our_death >= 0, out.his_death >= 0, out.our_hits, out.our_damage, out.bar_him, out.our_meals};
             for (int m = 0; m < METRICS; m++) { sim_values[m][i] = values[m]; sums[m] += values[m]; }
+        }
+        if (hb_known && hb_count >= 3) {
+            double pit = 0;
+            for (int v = hb_low; v <= hb_high; v++) {
+                int below = 0, equal = 0;
+                for (int j = 0; j < hb_count; j++) { below += hb_values[j] < v; equal += hb_values[j] == v; }
+                pit += (below + 0.5 * equal) / hb_count / (hb_high - hb_low + 1);
+            }
+            int d = (int)(pit * 10); if (d > 9) d = 9;
+            g_hb_hist[d]++; g_hb_n++; g_hb_sum += pit; g_hb_tails += pit < 0.1 || pit > 0.9;
+            double mean = 0; for (int j = 0; j < hb_count; j++) mean += hb_values[j]; mean /= hb_count;
+            double mid = (hb_low + hb_high) / 2.0;
+            int band = mid <= 44 ? 0 : mid <= 87 ? 1 : 2;
+            g_hb_band_n[band]++; g_hb_band_pit[band] += pit; g_hb_band_diff[band] += mean - mid; g_hb_mean_diff += mean - mid;
         }
         int rec_values[METRICS] = {rec.eats, rec.his_hits, rec.his_damage, rec.vw_specs, rec.maul_specs, rec.vengs, rec.our_dead, rec.his_dead,
             rec.our_hits, rec.our_damage, rec.bar_end, rec.our_meals};
@@ -569,6 +610,11 @@ static void eat_model_setup(Tape* tapes, int count);
 static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     g_thrown_only = getenv("GS_THROWN") != NULL;
     g_no_eat = getenv("GS_NOEAT") != NULL;
+    if (getenv("GS_HIDDEN")) g_hidden_meal_chance = atof(getenv("GS_HIDDEN"));
+    if (getenv("GS_ESCFLAT")) g_escape_by_hp = 0;
+    if (getenv("GS_GATED")) g_hidden_gated = atof(getenv("GS_GATED"));
+    if (getenv("GS_SEED_INERT")) g_seed_inert = atof(getenv("GS_SEED_INERT"));
+    g_abort_per_8 = getenv("GS_ABORT") ? atoi(getenv("GS_ABORT")) : 0;
     g_vw_only = getenv("GS_VWONLY") != NULL;
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
@@ -612,6 +658,31 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     printf("planner kills by the planner's expected hp (<=60, 60-75, 75-90, 90+): played %.0f %.0f %.0f %.0f, predicted %.1f %.1f %.1f %.1f, realized %.1f %.1f %.1f %.1f\n", g_exp_counted[0], g_exp_counted[1], g_exp_counted[2], g_exp_counted[3],
         g_exp_predicted[0], g_exp_predicted[1], g_exp_predicted[2], g_exp_predicted[3], g_exp_realized[0], g_exp_realized[1], g_exp_realized[2], g_exp_realized[3]);
     for (int b = 0; b < 3; b++) if (g_dm_n[b]) printf("window outcome, true hp band %d: n %.0f mean damage %.1f any damage %.3f damage >= hp %.3f he dies %.3f he ate %.3f\n", b, g_dm_n[b], g_dm_sum[b] / g_dm_n[b], g_dm_any[b] / g_dm_n[b], g_dm_lethal[b] / g_dm_n[b], g_dm_dead[b] / g_dm_n[b], g_dm_ate[b] / g_dm_n[b]);
+    {
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            const Tape* tp = &tapes[i];
+            for (int a = 0; a < tp->action_count; a++) {
+                if (tp->actions[a].kind != ACTION_SPEC || tp->actions[a].tick <= tp->lo || tp->actions[a].tick + 3 > tp->hi) continue;
+                int t = tp->actions[a].tick;
+                const TapeTick* at = tape_tick(tp, t);
+                if (at->bar_ratio <= 0 || at->bar_scale <= 1) continue;
+                OsrsHealthBarRange bar = osrs_health_bar_range(at->bar_ratio, at->bar_scale, 99, 121);
+                double m = (bar.lower + bar.upper) / 2.0;
+                int rb = m <= 44 ? 0 : m <= 60 ? 1 : m <= 87 ? 2 : 3, ate3 = 0;
+                for (int x = t; x <= t + 3; x++) ate3 |= tape_his_anim_at(tp, x, ANIM_EAT);
+                g_react_rec[rb][ate3]++;
+            }
+        }
+        static const char* NAME[4] = {"44 or less", "45-60", "61-87", "88+"};
+        printf("his eat within 3 ticks of our spec decision, by the bar's hp (recorded spec toggles vs sim played decisions): band recorded n / share ate | sim n / share ate\n");
+        for (int b = 0; b < 4; b++) {
+            double rn = g_react_rec[b][0] + g_react_rec[b][1], sn = g_react_sim[b][0] + g_react_sim[b][1];
+            printf("  %-10s %6.0f %.3f | %6.0f %.3f\n", NAME[b], rn, rn ? g_react_rec[b][1] / rn : 0, sn, sn ? g_react_sim[b][1] / sn : 0);
+        }
+    }
+    printf("combo groups started %ld, aborted by the hand %ld, Voidwaker leg preempted by our meal %ld\n", g_cb_total, g_cb_abort, g_cb_preempt);
+    printf("combo decisions: not preempted %.0f of which both specs thrown %.0f; preempted %.0f of which both specs thrown %.0f\n", g_cb_split[0][0] + g_cb_split[0][1], g_cb_split[0][1], g_cb_split[1][0] + g_cb_split[1][1], g_cb_split[1][1]);
     for (int c = 1; c < 4; c++) if (g_pc_n[c]) { printf("specs thrown per decision %.2f; ", g_pc_specs[c] / g_pc_n[c]);
         printf("choice %d (1 vw, 2 maul+vw, 3 maul): n %.0f planned mean damage %.1f realized damage in the plan window %.1f, first hit planned +%.2f realized +%.2f, any damage %.3f, planner chance %.3f he dies %.3f\n", c, g_pc_n[c], g_pc_plan[c] / g_pc_n[c], g_pc_act[c] / g_pc_n[c], g_pc_land[c] / g_pc_n[c], g_pc_actland[c] / g_pc_n[c], g_pc_any[c] / g_pc_n[c], g_pc_chance[c] / g_pc_n[c], g_pc_dead[c] / g_pc_n[c]); }
     {
@@ -639,6 +710,12 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
             for (int b = 0; b < 4; b++) if (g_diag_n[k][b]) printf("  [%.0f %.1f %.1f]", g_diag_n[k][b], g_diag_exp[k][b] / g_diag_n[k][b], g_diag_true[k][b] / g_diag_n[k][b]);
             printf("\n");
         }
+    }
+    if (g_hb_n) {
+        printf("sim hp before our first hit against the recordings' bar-derived hp (the PIT quantity), %.0f windows: mean PIT %.3f, tails %.3f, mean sim minus recorded %.1f; by recorded hp 44-, 45-87, 88+: PIT", g_hb_n, g_hb_sum / g_hb_n, g_hb_tails / g_hb_n, g_hb_mean_diff / g_hb_n);
+        for (int b = 0; b < 3; b++) printf(" %.3f (n %.0f, diff %.1f)", g_hb_band_n[b] ? g_hb_band_pit[b] / g_hb_band_n[b] : 0, g_hb_band_n[b], g_hb_band_n[b] ? g_hb_band_diff[b] / g_hb_band_n[b] : 0);
+        printf("\n  deciles:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_hb_hist[d] / g_hb_n);
+        printf("\n");
     }
     printf("by the planner's expected hp band: mean expected hp, mean true hp:\n");
     for (int b = 0; b < 4; b++) if (g_exp_counted[b]) printf("  band %d  n %5.0f  expected %5.1f  true %5.1f\n", b, g_exp_counted[b], g_exp_mean[b] / g_exp_counted[b], g_exp_true[b] / g_exp_counted[b]);
@@ -686,6 +763,42 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
         for (int b = 0; b < 13; b++) { rec_total += recorded_ticks[b]; sim_total += g_sim_hp_ticks[b]; }
         printf("share of ticks by his hp: recorded (seeded hp of every tape tick), sim rollouts\n");
         for (int b = 0; b < 13; b++) printf("    hp %3d-%3d  recorded %.4f  sim %.4f\n", b * 10, b == 12 ? 199 : b * 10 + 9, recorded_ticks[b] / (double)rec_total, g_sim_hp_ticks[b] / (double)sim_total);
+    }
+    {
+        int tapes_n = 0, escapes = 0, in_window = 0, windows = 0;
+        double mid_sum = 0; int low_hp = 0;
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            tapes_n++;
+            int e = tape_escape_tick(&tapes[i]);
+            windows += tapes[i].hi - tapes[i].lo - k;
+            if (e == INT_MAX) continue;
+            escapes++;
+            const TapeTick* at = tape_tick(&tapes[i], e > tapes[i].lo ? e - 1 : e);
+            if (at->bar_ratio > 0 && at->bar_scale > 1) { OsrsHealthBarRange bar = osrs_health_bar_range(at->bar_ratio, at->bar_scale, 99, 121); double m = (bar.lower + bar.upper) / 2.0; mid_sum += m; low_hp += m <= 60; }
+            in_window += k;
+        }
+        printf("recorded escapes: %d of %d tapes, %.2f per 1000 windows' rollouts at the window rate (%d windows), at bar hp mean %.0f, %d at 60 or less\n", escapes, tapes_n, 1000.0 * in_window / (windows > 0 ? windows : 1), windows, escapes ? mid_sum / escapes : 0.0, low_hp);
+    }
+    {
+        double exposure[4] = {0}, left[4] = {0};
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            int e = tape_escape_tick(&tapes[i]);
+            for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
+                if (t > e) break;
+                const TapeTick* at = tape_tick(&tapes[i], t);
+                if (at->bar_ratio <= 0 || at->bar_scale <= 1) continue;
+                OsrsHealthBarRange bar = osrs_health_bar_range(at->bar_ratio, at->bar_scale, 99, 121);
+                double m = (bar.lower + bar.upper) / 2.0;
+                int b = m <= 44 ? 0 : m <= 60 ? 1 : m <= 87 ? 2 : 3;
+                exposure[b]++;
+                if (t == e) left[b]++;
+            }
+        }
+        printf("recorded escape hazard per tick by the bar's hp (44-, 45-60, 61-87, 88+):");
+        for (int b = 0; b < 4; b++) printf(" %.4f (%0.f of %.0f ticks)", exposure[b] ? left[b] / exposure[b] : 0, left[b], exposure[b]);
+        printf("\n");
     }
     printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);

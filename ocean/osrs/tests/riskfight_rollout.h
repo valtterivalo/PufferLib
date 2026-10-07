@@ -206,6 +206,8 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         int actions[RF_HEADS];
         opponent_actions(model, sim, step, seed + (uint32_t)step * 2654435761u, actions);
         riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
+        g_cmd_trace = 0;
+        if (getenv("GS_COMBO_TRACE") && policy->kind == OURS_RULES && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) g_cmd_trace = 1;
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1], our_specs = s->spec_voidwaker[0] + s->spec_maul[0];
         if (g_ablation.pid) {
@@ -233,6 +235,12 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
 #ifdef GS_HP_BELIEF
         if (policy->kind == OURS_RULES && sim->obs.inf.watched_count > 0) { int c = sim->obs.inf.watched[sim->obs.inf.watched_count - 1]; g_cls[c][events.ate ? 1 : 0]++; }
 #endif
+        if (getenv("GS_COMBO_TRACE") && policy->kind == OURS_RULES && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) {
+            static int shown;
+            const Player* u = &s->env.players[0];
+            if (step == sim->ours.played[sim->ours.played_count - 1].step) shown++;
+            if (shown <= 6) fprintf(stderr, "combo#%d +%d (vw %d maul %d) weapon %d armed %d energy %d atk_timer %d dmg_on_him %d pending %d interacting %d specs %d\n", shown, step - sim->ours.played[sim->ours.played_count - 1].step, ITEM_VOIDWAKER, ITEM_GRANITE_MAUL_ORNATE, u->equipped[GEAR_SLOT_WEAPON], u->spec_armed, u->special_energy, u->attack_timer, sim->step_damage, sim->ours.pending_count, osrs_interaction_active(&u->interaction), s->spec_voidwaker[0] + s->spec_maul[0]);
+        }
         sim->previous = events;
         if (g_trace) {
             const Player* t = &s->env.players[1];
@@ -288,6 +296,8 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         {
             int c = sim->ours.played[i].choice, w = sim->ours.played[i].plan_last + 1, tot = 0, first = -1;
             for (int t = step; t <= step + w + 1 && t < out->steps; t++) { tot += out->trace_damage[t]; if (first < 0 && out->trace_damage[t] > 0) first = t - step; }
+            if (c == GS_CHOICE_MAUL_VOIDWAKER) { int sp = 0; for (int t = step; t <= step + 8 && t < out->steps; t++) sp += out->trace_our_spec[t]; g_cb_split[sim->ours.played[i].preempted][sp >= 2]++; }
+            { double m = sim->ours.played[i].bar_mid; int rb = m <= 44 ? 0 : m <= 60 ? 1 : m <= 87 ? 2 : 3, ate3 = 0; for (int t = step; t <= step + 3 && t < out->steps; t++) ate3 |= out->trace_ate[t] != 0; g_react_sim[rb][ate3]++; }
             g_pc_n[c]++; g_pc_plan[c] += sim->ours.played[i].plan_mean; g_pc_act[c] += tot; g_pc_land[c] += sim->ours.played[i].plan_land;
             g_pc_actland[c] += first < 0 ? sim->ours.played[i].plan_land : first; g_pc_any[c] += first >= 0;
             for (int t = step; t <= step + 8 && t < out->steps; t++) g_pc_specs[c] += out->trace_our_spec[t];

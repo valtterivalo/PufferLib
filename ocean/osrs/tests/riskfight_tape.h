@@ -51,6 +51,8 @@ static double g_pit_all[10], g_pit_low[10], g_pit_played[10], g_pit_n, g_pit_low
 static double g_eb_n[6], g_eb_exp[6], g_eb_true[6], g_eb_low[6], g_eb_high[6];
 static int g_thrown_only, g_vw_only, g_no_eat, g_plan_land, g_plan_last;
 static double g_plan_mean;
+static double g_cb_split[2][2];
+static double g_react_sim[4][2], g_react_rec[4][2];
 static double g_pc_specs[4], g_pc_n[4], g_pc_plan[4], g_pc_act[4], g_pc_land[4], g_pc_actland[4], g_pc_any[4], g_pc_chance[4], g_pc_dead[4];
 static double g_fm[4][12];
 static double g_dm_n[3], g_dm_lethal[3], g_dm_any[3], g_dm_dead[3], g_dm_ate[3], g_dm_sum[3];

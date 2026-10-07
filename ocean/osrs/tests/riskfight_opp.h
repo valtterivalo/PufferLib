@@ -314,6 +314,9 @@ static struct { int on, model, types; double pi[MAX_TYPES]; EatLogit logit; } g_
 
 /** His chance to leave by teleport each tick: 14 teleports in 5094 ticks of the 38 recorded fights, flat across his hitpoints (0.4 percent a tick at every band). */
 static const double ESCAPE_RATE = 14.0 / 5094;
+static int g_escape_by_hp = 1;
+/** The same by his hitpoints, 44 or less, 45-60, 61-87, 88 and more: 4 of 690, 5 of 729, 5 of 2485 and 0 of 1069 recorded ticks by the health bar. */
+static double escape_rate_at(int hitpoints) { return hitpoints <= 44 ? 4.0 / 690 : hitpoints <= 60 ? 5.0 / 729 : hitpoints <= 87 ? 5.0 / 2485 : 0; }
 
 static double action_probability(const OppFit* fit, const Probe* p, Action a) {
     if (!p->eligible[a]) return 0;
@@ -388,6 +391,6 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     }
     actions[RF_VENGEANCE] = roll(seed, tick, 46, action_probability(fit, &probe, ACT_VENGEANCE));
     if (g_ablation.escape && tick == tape_escape_tick(g_tape)) actions[RF_PRIMARY] = RF_TELEPORT;
-    if (g_ablation.escape_model && roll(seed, tick, 48, ESCAPE_RATE)) actions[RF_PRIMARY] = RF_TELEPORT;
+    if (g_ablation.escape_model && roll(seed, tick, 48, g_escape_by_hp ? escape_rate_at(s->env.players[1].current_hitpoints) : ESCAPE_RATE)) actions[RF_PRIMARY] = RF_TELEPORT;
 }
 #endif

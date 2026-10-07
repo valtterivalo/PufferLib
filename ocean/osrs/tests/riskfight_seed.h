@@ -132,15 +132,16 @@ static int swing_ago(int t, int swing_tick) { return t - swing_tick > ARRIVAL_AG
 
 /** The heal of one meal served as the opponent fit serves them: a single hard food, hard food and karambwan, hard food and brew, or all three. */
 /* Chance a tick whose animation could have hidden a meal held one: Appetite.FITTED.hides. */
-#define HIDDEN_MEAL_CHANCE 0.687
+static double g_hidden_meal_chance = 0, g_seed_inert = 0.5, g_hidden_gated = 0;
 
-static int serving_heal(uint32_t* rng, int* brew) {
+static int serve_hitpoints(uint32_t* rng, int hp) {
     static const float shares[4] = {0.15f, 0.34f, 0.34f, 0.17f};
-    static const int heal[4] = {22, 40, 38, 56};
+    static const int foods[4] = {1, 3, 5, 7}, heals[3] = {22, 18, 16}, caps[3] = {121, 99, 115};
     float u = (float)(xorshift32(rng) >> 8) / (float)(1 << 24);
     int k = u < shares[0] ? 0 : u < shares[0] + shares[1] ? 1 : u < shares[0] + shares[1] + shares[2] ? 2 : 3;
-    *brew = k >= 2;
-    return heal[k];
+    for (int f = 0; f < 3; f++)
+        if (foods[k] >> f & 1) hp = hp > caps[f] ? hp : (hp + heals[f] < caps[f] ? hp + heals[f] : caps[f]);
+    return hp;
 }
 
 /** His hitpoints at the end of a tick: drawn inside the health bar band, which only a hit on him refreshes, then raised by one drawn serving for each
@@ -166,15 +167,16 @@ static int sample_his_hitpoints(const TapeTick* tick, uint32_t* rng) {
     }
     int hp = bar.lower + (int)(uniform(rng) * (bar.upper - bar.lower + 1));
     int meals = tick->meals_since;
+    for (int meal = 0; meal < meals; meal++) {
+        int served = serve_hitpoints(rng, hp);
+        if (uniform(rng) >= g_seed_inert) hp = served;
+    }
     if (g_ablation.hp == HP_HIDDEN) {
         int masked = g_unseen_ticks(g_tape, tick->tick);
-        for (int m = 0; m < masked; m++) meals += uniform(rng) < HIDDEN_MEAL_CHANCE;
-    }
-    for (int meal = 0; meal < meals; meal++) {
-        int brew;
-        hp += serving_heal(rng, &brew);
-        int cap = brew ? 115 : 99;
-        if (hp > cap) hp = hp > bar.upper ? (bar.upper > cap ? bar.upper : cap) : cap;
+        for (int m = 0; m < masked; m++) {
+            double wants = g_hidden_gated ? fmax(0, fmin(1, (85 - hp) / 35.0)) : 1;
+            if (uniform(rng) < g_hidden_meal_chance * wants) hp = serve_hitpoints(rng, hp);
+        }
     }
     return hp > 121 ? 121 : hp;
 }

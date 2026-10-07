@@ -5,7 +5,7 @@
  * from the observed events, ours is read from the sim as the client reads it. Clicks are timed as the hand times them: the first press lands
  * 130 to 460 ms after the decision, the next 80 to 170 ms after the one before, and a press after the 490 ms server cutoff is processed a tick later. */
 enum { OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, CUTOFF_MS = 490, TICK_MS = 600, FIRST_PRESS_MS = 130, FIRST_PRESS_SPAN = 330,
-    GAP_MS = 80, GAP_SPAN = 90, MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, MAUL_GROUP_ABORT_PER_8 = 2, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
+    GAP_MS = 80, GAP_SPAN = 90, MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
 enum { KIND_HARD, KIND_BREW, KIND_KARAMBWAN };
 
 static uint32_t ours_random(Ours* ours) {
@@ -40,6 +40,10 @@ static HumanCommand attack_command(void) { return (HumanCommand){.kind = HUMAN_C
 static HumanCommand spec_command(void) { return (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE}; }
 static HumanCommand vengeance_command(void) { return (HumanCommand){.kind = HUMAN_COMMAND_VENGEANCE}; }
 
+enum { WIELD_VOIDWAKER = -2 };
+static int g_cmd_trace, g_abort_per_8;
+static long g_cb_total, g_cb_abort, g_cb_preempt, g_cb_ran;
+
 static void ours_push(Ours* ours, int due, HumanCommand c) {
     assert(ours->pending_count < OURS_PENDING);
     ours->pending[ours->pending_count++] = (OursPending){due, c};
@@ -60,10 +64,15 @@ static void ours_run(Ours* ours, int tick, const HumanCommand* clicks, int count
     }
 }
 
-static void ours_pop_due(Ours* ours, HumanInput* hi, int due) {
+static void ours_pop_due(Ours* ours, const Player* us, HumanInput* hi, int due) {
     int kept = 0;
     for (int i = 0; i < ours->pending_count; i++) {
-        if (ours->pending[i].due == due) command(hi, ours->pending[i].command);
+        if (ours->pending[i].due == due) {
+            HumanCommand c = ours->pending[i].command;
+            if (c.kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK && c.inventory_slot == WIELD_VOIDWAKER) c.inventory_slot = slot_with_item(us, is_voidwaker);
+            if (getenv("GS_COMBO_TRACE") && g_cmd_trace) fprintf(stderr, "   cmd for tick %d kind %d slot %d\n", due, (int)c.kind, c.inventory_slot);
+            command(hi, c);
+        }
         else ours->pending[kept++] = ours->pending[i];
     }
     ours->pending_count = kept;
@@ -163,15 +172,17 @@ static int ours_venged_reason(const GsInfer* inf, int tick, GsCast cast, const G
 }
 
 static void ours_group_two(Ours* ours, const Player* us, int tick, GsChoiceKind choice) {
-    int vw_slot = slot_with_item(us, is_voidwaker);
-    if (vw_slot < 0) return;
+    int vw_slot = WIELD_VOIDWAKER;
+    (void)us;
+    g_cb_total++;
     if (ours->ideal_timing) {
         ours_push(ours, tick + 2, click_command(vw_slot));
-        if (choice == GS_CHOICE_MAUL_VOIDWAKER) ours_push(ours, tick + 2, spec_command());
-        ours_push(ours, tick + 2, attack_command());
+        if (choice == GS_CHOICE_MAUL_VOIDWAKER) ours_push(ours, tick + 3, spec_command());
+        ours_push(ours, tick + 3, attack_command());
         return;
     }
-    if (ours_random(ours) % 8 < MAUL_GROUP_ABORT_PER_8) {
+    if (ours_random(ours) % 8 < (uint32_t)g_abort_per_8) {
+        g_cb_abort++;
         ours_push(ours, tick + ABORT_RESTORE, click_command(vw_slot));
         ours_push(ours, tick + ABORT_RESTORE, attack_command());
         return;
@@ -265,6 +276,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     GsSpecDecision decision = verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0};
     int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) + (1 - decision.chance) * decision.kept * (double)stakes.him > ours_value(0, verdict.meal_risk, stakes) + decision.held * (double)stakes.him);
     if (meal) {
+        for (int i = 0; i < ours->pending_count; i++) if (ours->pending[i].command.inventory_slot == WIELD_VOIDWAKER) { g_cb_preempt++; if (ours->played_count) ours->played[ours->played_count - 1].preempted = 1; break; }
         ours->pending_count = 0;
         HumanCommand clicks[8];
         int n = 0;
@@ -281,6 +293,10 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         return;
     }
     if (ours->pending_count > 0) return;
+    if (getenv("GS_COMBO_TRACE") && decision.choice == GS_CHOICE_MAUL_VOIDWAKER) {
+        static int shown;
+        if (shown++ < 30) fprintf(stderr, "maul slot %d shield %d | combo decision step %d: inferred energy %d actual %d weapon vw %d maul %d armed %d\n", ours_maul_slot(us), us->equipped[GEAR_SLOT_SHIELD], step, gs_spec_energy(&inf->c), us->special_energy, us->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER, is_maul_item(us->equipped[GEAR_SLOT_WEAPON]), us->spec_armed);
+    }
     if (decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;
@@ -288,6 +304,8 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         ours->played[ours->played_count].expected = g_gs_expected_hp;
         ours->played[ours->played_count].pit = g_gs_pit;
         ours->played[ours->played_count].plan_mean = g_plan_mean;
+        ours->played[ours->played_count].preempted = 0;
+        ours->played[ours->played_count].bar_mid = (inf->opponent_hitpoints.low + inf->opponent_hitpoints.high) / 2.0;
         ours->played[ours->played_count].plan_land = g_plan_land;
         ours->played[ours->played_count].plan_last = g_plan_last;
         ours->played[ours->played_count].choice = (int)decision.choice;
@@ -314,7 +332,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         case GS_CHOICE_MAUL_VOIDWAKER:
             clicks[n++] = click_command(maul_slot);
             clicks[n++] = spec_command();
-            if (!osrs_interaction_active(&us->interaction)) clicks[n++] = attack_command();
+            clicks[n++] = attack_command();
             break;
         case GS_CHOICE_HOLD:
             break;
@@ -333,7 +351,7 @@ static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step) {
     const GsInfer* inf = &sim->obs.inf;
     int rival = inf->timed >= 0 && inf->c.ratio != 0;
     if (rival && (step == 0 || sim->obs.events > 0 || tick - ours->last_decision >= OURS_REFRESH)) ours_decide(sim, ours, step, tick);
-    ours_pop_due(ours, hi, tick + 1);
+    ours_pop_due(ours, us, hi, tick + 1);
     if (!osrs_interaction_active(&us->interaction) && ours->pending_count == 0 && hi->commands.count == 0) command(hi, attack_command());
 }
 #endif
