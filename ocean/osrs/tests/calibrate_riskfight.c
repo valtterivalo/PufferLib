@@ -326,6 +326,7 @@ typedef struct {
     int pit[METRICS][PIT_BINS];
     int windows;
     double seconds, decisions, ticks, rollouts, spec_counted, spec_predicted, spec_realized;
+    int death_tapes, our_death_tapes;
 } WindowStats;
 
 static const char* METRIC[METRICS] = {"his meals", "his hits", "his damage", "his VW specs", "his maul specs", "his vengeance", "we die", "he dies", "our hits", "our damage", "his bar at end", "our meals"};
@@ -384,6 +385,7 @@ static void death_autopsy(const Tape* tape, int t0, int rollout, const Outcome* 
 }
 
 
+static double g_ha_hist[10], g_ha_n, g_ha_sum, g_ha_dead, g_ha_band_n[3], g_ha_band_pit[3], g_ha_band_diff[3], g_ha_band_dead[3];
 static double g_hb_hist[10], g_hb_n, g_hb_sum, g_hb_tails, g_hb_mean_diff, g_hb_band_n[3], g_hb_band_pit[3], g_hb_band_diff[3];
 
 /* The first recorded hit on him in the window with a health bar after it: the tick and the hitpoints that leave him at, plus the damage, as the PIT of the recordings reads them. */
@@ -409,11 +411,12 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
     sim_init(sim);
     uint32_t pit_rng = 2463534242u;
     double started = seconds();
+    int tape_rec_dead = 0, tape_rec_our_dead = 0;
     for (int t0 = tape->lo + 1; t0 + k <= tape->hi; t0++) {
         Recorded rec = recorded_window(tape, t0, k);
         double sums[METRICS] = {0};
         int hb_tick = 0, hb_low = 0, hb_high = 0, hb_count = 0;
-        int hb_values[MAX_ROLLOUTS];
+        int hb_values[MAX_ROLLOUTS], ha_values[MAX_ROLLOUTS];
         int hb_known = recorded_first_hit(tape, t0, k, &hb_tick, &hb_low, &hb_high);
         for (int i = 0; i < n; i++) {
             const char* trace = getenv("GS_TRACE");
@@ -438,7 +441,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             if (hb_known) {
                 int step = hb_tick - t0 - 1, quiet = 1;
                 for (int j = 0; j < step; j++) quiet &= out.trace_damage[j] == 0;
-                if (quiet && step < out.steps) hb_values[hb_count++] = step > 0 ? out.trace_hp[step - 1] : out.start_hp;
+                if (quiet && step < out.steps && out.trace_damage[step] > 0) { ha_values[hb_count] = out.trace_hp[step]; hb_values[hb_count++] = step > 0 ? out.trace_hp[step - 1] : out.start_hp; }
             }
             if (g_death_on && g_dump_limit >= 0 && out.his_death >= 0) death_autopsy(tape, t0, i, &out);
             int eats = 0;
@@ -453,6 +456,24 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
                 int below = 0, equal = 0;
                 for (int j = 0; j < hb_count; j++) { below += hb_values[j] < v; equal += hb_values[j] == v; }
                 pit += (below + 0.5 * equal) / hb_count / (hb_high - hb_low + 1);
+            }
+            {
+                const TapeTick* after = tape_tick(tape, hb_tick);
+                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+                int lo = shown.lower, hi = shown.upper, dead = 0;
+                double apit = 0, amean = 0;
+                for (int v = lo; v <= hi; v++) {
+                    int below = 0, equal = 0;
+                    for (int j = 0; j < hb_count; j++) { below += ha_values[j] < v; equal += ha_values[j] == v; }
+                    apit += (below + 0.5 * equal) / hb_count / (hi - lo + 1);
+                }
+                for (int j = 0; j < hb_count; j++) { amean += ha_values[j]; dead += ha_values[j] <= 0; }
+                amean /= hb_count;
+                double mid = (lo + hi) / 2.0;
+                int band = mid <= 44 ? 0 : mid <= 87 ? 1 : 2;
+                int ad = (int)(apit * 10); if (ad > 9) ad = 9;
+                g_ha_hist[ad]++; g_ha_n++; g_ha_sum += apit; g_ha_dead += dead / (double)hb_count;
+                g_ha_band_n[band]++; g_ha_band_pit[band] += apit; g_ha_band_diff[band] += amean - mid; g_ha_band_dead[band] += dead / (double)hb_count;
             }
             int d = (int)(pit * 10); if (d > 9) d = 9;
             g_hb_hist[d]++; g_hb_n++; g_hb_sum += pit; g_hb_tails += pit < 0.1 || pit > 0.9;
@@ -477,8 +498,12 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
                 stats->pit[m][u >= 1 ? PIT_BINS - 1 : (int)(u * PIT_BINS)]++;
             }
         }
+        tape_rec_dead |= rec.his_dead;
+        tape_rec_our_dead |= rec.our_dead;
         stats->windows++;
     }
+    stats->death_tapes += tape_rec_dead;
+    stats->our_death_tapes += tape_rec_our_dead;
     stats->seconds += seconds() - started;
     stats->spec_counted += sim->spec_counted;
     stats->spec_predicted += sim->spec_predicted;
@@ -488,6 +513,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
 
 static void print_window_stats(const char* title, const WindowStats* s) {
     if (s->ticks > 0) printf("%s: %.0f rollouts in %.2f s = %.0f rollouts/s with decide in the loop, %.3f decisions per tick (%.0f of %.0f ticks); played spec decisions %.0f, predicted kills %.1f, realized %.1f\n", title, s->rollouts, s->seconds, s->rollouts / s->seconds, s->decisions / s->ticks, s->decisions, s->ticks, s->spec_counted, s->spec_predicted, s->spec_realized);
+    printf("%s: recorded deaths of him in %d tapes, of us in %d tapes; the window sums of the two lines below hold each death in about %d windows when it falls mid-fight and 3-5 when it ends the tape\n", title, s->death_tapes, s->our_death_tapes, 10);
     printf("%s: %d windows\n  %-16s %10s %10s %7s   PIT histogram (10 bins, flat means calibrated)\n", title, s->windows, "metric", "recorded", "sim mean", "ratio");
     for (int m = 0; m < METRICS; m++) {
         printf("  %-16s %10.0f %10.1f %7.2f  ", METRIC[m], s->rec[m], s->sim[m], s->rec[m] > 0 ? s->sim[m] / s->rec[m] : 0.0);
@@ -611,6 +637,10 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     g_thrown_only = getenv("GS_THROWN") != NULL;
     g_no_eat = getenv("GS_NOEAT") != NULL;
     if (getenv("GS_HIDDEN")) g_hidden_meal_chance = atof(getenv("GS_HIDDEN"));
+    if (getenv("GS_GATE_LOW")) g_gate_low = atof(getenv("GS_GATE_LOW"));
+    if (getenv("GS_GATE_HIGH")) g_gate_high = atof(getenv("GS_GATE_HIGH"));
+    if (getenv("GS_EAT_INERT")) g_eat_inert = atof(getenv("GS_EAT_INERT"));
+    if (getenv("GS_NOSURV")) g_survival_seed = 0;
     if (getenv("GS_ESCFLAT")) g_escape_by_hp = 0;
     if (getenv("GS_GATED")) g_hidden_gated = atof(getenv("GS_GATED"));
     if (getenv("GS_SEED_INERT")) g_seed_inert = atof(getenv("GS_SEED_INERT"));
@@ -717,6 +747,12 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
         printf("\n  deciles:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_hb_hist[d] / g_hb_n);
         printf("\n");
     }
+    if (g_ha_n) {
+        printf("sim hp right after the first recorded hit against the bar after it, %.0f windows: mean PIT %.3f, share of rollouts dead there %.3f; by recorded hp after 44-, 45-87, 88+:", g_ha_n, g_ha_sum / g_ha_n, g_ha_dead / g_ha_n);
+        for (int b = 0; b < 3; b++) printf(" PIT %.3f dead %.3f diff %.1f (n %.0f)", g_ha_band_n[b] ? g_ha_band_pit[b] / g_ha_band_n[b] : 0, g_ha_band_n[b] ? g_ha_band_dead[b] / g_ha_band_n[b] : 0, g_ha_band_n[b] ? g_ha_band_diff[b] / g_ha_band_n[b] : 0, g_ha_band_n[b]);
+        printf("\n  deciles:"); for (int d = 0; d < 10; d++) printf(" %.3f", g_ha_hist[d] / g_ha_n);
+        printf("\n");
+    }
     printf("by the planner's expected hp band: mean expected hp, mean true hp:\n");
     for (int b = 0; b < 4; b++) if (g_exp_counted[b]) printf("  band %d  n %5.0f  expected %5.1f  true %5.1f\n", b, g_exp_counted[b], g_exp_mean[b] / g_exp_counted[b], g_exp_true[b] / g_exp_counted[b]);
     {
@@ -800,6 +836,7 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
         for (int b = 0; b < 4; b++) printf(" %.4f (%0.f of %.0f ticks)", exposure[b] ? left[b] / exposure[b] : 0, left[b], exposure[b]);
         printf("\n");
     }
+    printf("seed hp survival conditioning: %ld draws, %ld rejected, %ld windows with no surviving draw in 400\n", g_seed_draws, g_seed_rejected, g_seed_unsatisfied);
     printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);
     if (g_windows) fclose(g_windows);

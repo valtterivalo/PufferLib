@@ -315,6 +315,7 @@ static struct { int on, model, types; double pi[MAX_TYPES]; EatLogit logit; } g_
 /** His chance to leave by teleport each tick: 14 teleports in 5094 ticks of the 38 recorded fights, flat across his hitpoints (0.4 percent a tick at every band). */
 static const double ESCAPE_RATE = 14.0 / 5094;
 static int g_escape_by_hp = 1;
+static double g_eat_inert = 0;
 /** The same by his hitpoints, 44 or less, 45-60, 61-87, 88 and more: 4 of 690, 5 of 729, 5 of 2485 and 0 of 1069 recorded ticks by the health bar. */
 static double escape_rate_at(int hitpoints) { return hitpoints <= 44 ? 4.0 / 690 : hitpoints <= 60 ? 5.0 / 729 : hitpoints <= 87 ? 5.0 / 2485 : 0; }
 
@@ -367,9 +368,11 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
         const float* shares = fit->serving[warning_since(&h->warning) != WARNING_NONE];
         float serving = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 42) % 10000) / 10000.0f;
         int k = serving < shares[0] ? 0 : serving < shares[0] + shares[1] ? 1 : serving < shares[0] + shares[1] + shares[2] ? 2 : 3;
-        actions[RF_FOOD] = inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
-        if (k == 1 || k == 3) actions[RF_COMBO] = inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
-        if ((k == 2 || k == 3) && self.potion_timer == 0) actions[RF_DRINK] = inventory.kind_slot[OSRS_CONSUMABLE_BREW];
+        int inert = (float)(riskfight_sample_hash(seed, (uint32_t)tick, 49) % 10000) / 10000.0f < g_eat_inert && inventory.kind_slot[OSRS_CONSUMABLE_SUPER_RESTORE] > 0;
+        if (inert) actions[RF_DRINK] = inventory.kind_slot[OSRS_CONSUMABLE_SUPER_RESTORE];
+        else actions[RF_FOOD] = inventory.kind_slot[OSRS_CONSUMABLE_ANGLERFISH];
+        if (!inert && (k == 1 || k == 3)) actions[RF_COMBO] = inventory.kind_slot[OSRS_CONSUMABLE_KARAMBWAN];
+        if (!inert && (k == 2 || k == 3) && self.potion_timer == 0) actions[RF_DRINK] = inventory.kind_slot[OSRS_CONSUMABLE_BREW];
         actions[RF_PRIMARY] = RF_STOP;
     }
     int maul = roll(seed, tick, 43, action_probability(fit, &probe, ACT_MAUL_SPEC));
