@@ -65,6 +65,9 @@ typedef struct {
     GsBar bar;
     int damage_since_bar;
     int unseen[GS_UNSEEN_LIMIT], unseen_count;
+    uint8_t watched[GS_WATCHED_LIMIT];
+    int watched_count, ate_at, masked_at;
+    GsHealthRange opponent_bar;
     GsRecoil recoil;
     int struck_tick, has_struck_damage, struck_damage;
 } GsInfer;
@@ -84,6 +87,9 @@ static void gs_eater_reset(GsInfer* s) {
     s->bar = GS_BAR_READ;
     s->damage_since_bar = 0;
     s->unseen_count = 0;
+    s->watched_count = 0;
+    s->ate_at = s->masked_at = INT_MIN;
+    s->opponent_bar = (GsHealthRange){GS_OVERHEALED_HP, GS_OVERHEALED_HP, GS_OVERHEALED_HP};
     s->recoil = GS_RECOIL_UNSEEN;
     s->struck_tick = INT_MIN;
     s->has_struck_damage = 0;
@@ -386,12 +392,18 @@ static GsWarning gs_eater_warning(const GsInfer* s) {
     w.unseen_count = s->unseen_count;
     assert(s->unseen_count <= 64);
     memcpy(w.unseen, s->unseen, (size_t)s->unseen_count * sizeof(int));
+    w.watched_count = s->watched_count;
+    memcpy(w.watched, s->watched, (size_t)s->watched_count);
     return w;
 }
 
 static void gs_eater_observe(GsInfer* s, int tick) {
     const GsClient* c = &s->c;
     gs_armament_of(s);
+#ifdef GS_HP_BELIEF
+    assert(s->watched_count < GS_WATCHED_LIMIT);
+    s->watched[s->watched_count++] = s->ate_at == tick ? GS_SEEN_ATE : s->masked_at == tick ? GS_SEEN_HIDDEN : GS_SEEN_QUIET;
+#endif
     if (c->ratio >= 0 && s->bar != GS_BAR_BEHIND_A_MEAL) {
         GsHealthRange shown = gs_health_of_bar(c->ratio, c->scale, GS_ASSUMED_MAX_HP);
         if (s->bar == GS_BAR_FRESH) {
@@ -399,11 +411,13 @@ static void gs_eater_observe(GsInfer* s, int tick) {
             int kept = 0;
             for (int i = 0; i < s->unseen_count; i++) if (s->unseen[i] >= tick) s->unseen[kept++] = s->unseen[i];
             s->unseen_count = kept;
+            s->watched_count = 0;
             s->damage_since_bar = 0;
             s->bar = GS_BAR_READ;
         }
         int overheal = s->opponent_struck_tick >= tick - GS_FOOD_CAP_TICKS ? GS_FIGHTING_OVERHEAL : GS_OVERHEALED_HP;
         s->opponent_hitpoints = c->ratio == c->scale ? (GsHealthRange){shown.low, overheal, overheal} : shown;
+        s->opponent_bar = s->opponent_hitpoints;
     }
     int weapon = gs_local_weapon(c);
     if (weapon != s->wielded_weapon) {
@@ -425,9 +439,11 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
         s->bar = GS_BAR_BEHIND_A_MEAL;
         s->opponent_hard_food_ready = tick + 3;
         s->opponent_ate = tick;
+        s->ate_at = tick;
     } else {
         assert(s->unseen_count < GS_UNSEEN_LIMIT);
         s->unseen[s->unseen_count++] = tick;
+        s->masked_at = tick;
     }
     if (kind != GS_KIND_ATTACK && kind != GS_KIND_INSTANT_SPEC) return;
     GsArmament* armed;
@@ -790,6 +806,7 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     out->local_opening_accuracy = armed ? 1 : accuracy;
     out->local_accuracy = accuracy;
     out->opponent_hp = s->opponent_hitpoints;
+    out->opponent_bar = s->opponent_bar;
     out->offence = offence;
     out->tolerance = tolerance;
     out->pid_flip = gs_pid_flip_odds(&s->pid, tick);
@@ -874,7 +891,11 @@ typedef struct { int certain; int lands, damage; } GsUnderway;
 static void gs_spec_inputs(GsInfer* s, int tick, GsSpecSituation* out, GsUnderway* underway) {
     memset(out, 0, sizeof(*out));
     GsPid pid = gs_pid_at(s, tick);
+#ifdef GS_HP_BELIEF
+    out->hitpoints = s->opponent_bar;
+#else
     out->hitpoints = s->opponent_hitpoints;
+#endif
     out->hard_food_ready = s->opponent_hard_food_ready;
     out->vengeance = gs_vengeance_reading(s->opponent.vengeance, tick);
     out->pid = pid;

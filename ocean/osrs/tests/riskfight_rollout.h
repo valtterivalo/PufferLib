@@ -263,6 +263,17 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         g_spec_counted[band]++;
         g_spec_predicted[band] += sim->ours.played[i].chance;
         g_spec_realized[band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
+        double expected = sim->ours.played[i].expected;
+        int planner_band = expected <= 60 ? 0 : expected <= 75 ? 1 : expected <= 90 ? 2 : 3;
+        g_exp_counted[planner_band]++;
+        g_exp_mean[planner_band] += expected;
+        g_exp_true[planner_band] += sim->ours.played[i].his_hitpoints;
+        g_exp_meal_p[planner_band] += sim->ours.played[i].meal_p;
+        int ate = 0;
+        for (int t = step; t <= step + sim->ours.played[i].window && t < out->steps; t++) ate |= out->trace_ate[t] != 0;
+        g_exp_meal[planner_band] += ate;
+        g_exp_predicted[planner_band] += sim->ours.played[i].chance;
+        g_exp_realized[planner_band] += out->his_death >= step && out->his_death <= step + OURS_HORIZON;
     }
     out->our_meals = s->consume_ticks[0];
     g_sim_escapes += s->escaped[1];

@@ -606,6 +606,10 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     if (!getenv("GS_OPEN_ONLY")) print_window_stats("closed loop, fit warning", &closed);
     printf("planner kills by his true hp at the spec decision (<=44, 45-87, 88+): played %.0f %.0f %.0f, predicted %.1f %.1f %.1f, realized %.1f %.1f %.1f\n", g_spec_counted[0], g_spec_counted[1], g_spec_counted[2],
         g_spec_predicted[0], g_spec_predicted[1], g_spec_predicted[2], g_spec_realized[0], g_spec_realized[1], g_spec_realized[2]);
+    printf("planner kills by the planner's expected hp (<=60, 60-75, 75-90, 90+): played %.0f %.0f %.0f %.0f, predicted %.1f %.1f %.1f %.1f, realized %.1f %.1f %.1f %.1f\n", g_exp_counted[0], g_exp_counted[1], g_exp_counted[2], g_exp_counted[3],
+        g_exp_predicted[0], g_exp_predicted[1], g_exp_predicted[2], g_exp_predicted[3], g_exp_realized[0], g_exp_realized[1], g_exp_realized[2], g_exp_realized[3]);
+    printf("by the planner's expected hp band: mean expected hp, mean true hp, planner P(he eats before the last hit), actual share who ate:\n");
+    for (int b = 0; b < 4; b++) if (g_exp_counted[b]) printf("  band %d  n %5.0f  expected %5.1f  true %5.1f  planner meal %.3f  actual meal %.3f\n", b, g_exp_counted[b], g_exp_mean[b] / g_exp_counted[b], g_exp_true[b] / g_exp_counted[b], g_exp_meal_p[b] / g_exp_counted[b], g_exp_meal[b] / g_exp_counted[b]);
     {
         long rec_our_a = 0, rec_our_b = 0, rec_his_a = 0, rec_his_b = 0;
         for (int i = 0; i < count; i++) {

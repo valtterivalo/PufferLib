@@ -211,7 +211,9 @@ static GsConsumption consumption_of(int has_potion, int has_fast, int has_hard) 
 
 typedef struct { int low, high, max; } GsHealthRange;
 typedef struct { int seen, next, earliest; } GsTimer;
-typedef struct { int since; int unseen[64]; int unseen_count; } GsWarning;
+enum { GS_WATCHED_LIMIT = 1024 };
+typedef enum { GS_SEEN_QUIET, GS_SEEN_ATE, GS_SEEN_HIDDEN } GsSeen;
+typedef struct { int since; int unseen[64]; int unseen_count; uint8_t watched[GS_WATCHED_LIMIT]; int watched_count; } GsWarning;
 typedef struct { int lands, least, most; double accuracy; int arrows; } GsSwing;
 typedef struct { GsStyle style; int least, most, cost, interval; double accuracy; int godsword; int arrows; } GsAttack;
 

@@ -262,6 +262,9 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;
         ours->played[ours->played_count].his_hitpoints = s->env.players[1].current_hitpoints;
+        ours->played[ours->played_count].expected = g_gs_expected_hp;
+        ours->played[ours->played_count].meal_p = g_gs_meal_p;
+        ours->played[ours->played_count].window = g_gs_last_offset;
         ours->played[ours->played_count++].chance = decision.chance;
     }
     if (decision.choice != GS_CHOICE_HOLD) {

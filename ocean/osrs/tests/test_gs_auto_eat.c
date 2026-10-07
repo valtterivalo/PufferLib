@@ -19,6 +19,16 @@ static GsVengeance vengeance_of(const char* s) {
 }
 static GsDecision decision_of(const char* s) { return !strcmp(s, "EAT_NOW") ? GS_EAT_NOW : !strcmp(s, "WAIT") ? GS_WAIT : GS_EXPOSED; }
 
+#ifdef GS_HP_BELIEF
+static void read_watched(const char* p, GsWarning* w) {
+    while (*p == ' ') p++;
+    for (; *p && *p != '\n' && *p != '-'; p++) {
+        assert(w->watched_count < GS_WATCHED_LIMIT);
+        w->watched[w->watched_count++] = *p == 'Q' ? GS_SEEN_QUIET : *p == 'A' ? GS_SEEN_ATE : GS_SEEN_HIDDEN;
+    }
+}
+#endif
+
 static GsAttack read_attack(char** p) {
     GsAttack a;
     char style[16], source[24];
@@ -69,6 +79,7 @@ static int read_record(FILE* f, Record* r) {
         else if (!strcmp(tag, "OT")) sscanf(p, "%d %d", &s->opponent_timer.seen, &s->opponent_timer.next);
         else if (!strcmp(tag, "LT")) sscanf(p, "%d %d %d", &s->local_timer.seen, &s->local_timer.next, &s->local_timer.earliest);
         else if (!strcmp(tag, "OH")) sscanf(p, "%d %d %d", &s->opponent_hp.low, &s->opponent_hp.high, &s->opponent_hp.max);
+        else if (!strcmp(tag, "OB")) sscanf(p, "%d %d %d", &s->opponent_bar.low, &s->opponent_bar.high, &s->opponent_bar.max);
         else if (!strcmp(tag, "OA")) { assert(s->attack_count < GS_MAX_ATTACKS); s->attacks[s->attack_count++] = read_attack(&p); }
         else if (!strcmp(tag, "GM")) { s->has_maul = 1; s->maul = read_attack(&p); }
         else if (!strcmp(tag, "HID")) {
@@ -85,7 +96,12 @@ static int read_record(FILE* f, Record* r) {
         else if (!strcmp(tag, "W")) {
             s->warning.since = GS_NONE;
             if (strncmp(p, "none", 4)) s->warning.since = (int)strtol(p, &p, 10); else p += 4;
+#ifdef GS_HP_BELIEF
+            read_watched(p, &s->warning);
+            while (0) {
+#else
             while (*p && *p != '\n') {
+#endif
                 char* end;
                 long v = strtol(p, &end, 10);
                 if (end == p) break;

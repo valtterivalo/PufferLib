@@ -4,9 +4,16 @@
 
 /* AutoSpec.java and Appetite.java: the knockout chance of a plan against an opponent that eats to a hitpoints level he wants. */
 enum { GS_REACTION_TICKS = 7, GS_REACTIONS = GS_REACTION_TICKS + 3, GS_MEAL_FOODS = 3 };
+#ifndef GS_HP_BELIEF
 static const double GS_FIRST_MEAL[GS_REACTION_TICKS + 2] = {0.481, 0.250, 0.130, 0.067, 0.035, 0.018, 0.009, 0.005, 0.005};
+#endif
+#ifdef GS_HP_BELIEF
+enum { GS_SAFE_LOW = 50, GS_SAFE_HIGH = 85, GS_CHAIN_LOW = 60, GS_CHAIN_HIGH = 95 };
+static const double GS_ANTICIPATES = 0.04, GS_FIRST_MEAL_PER_TICK = 0.8;
+#else
 enum { GS_SAFE_LOW = 44, GS_SAFE_HIGH = 87 };
 static const double GS_ANTICIPATES = 0.066, GS_HIDES = 0.687;
+#endif
 static const int GS_MEAL_HEALS[GS_MEAL_FOODS] = {22, 18, 16}, GS_MEAL_CAPS[GS_MEAL_FOODS] = {99, 99, 115};
 static const GsConsumable GS_MEAL_KIND[GS_MEAL_FOODS] = {GS_HARD_FOOD, GS_FAST_FOOD, GS_POTION};
 
@@ -16,19 +23,19 @@ static double gs_wants(int hitpoints) {
 }
 
 /* Hitpoints.eat: every living value eats the foods from first to last while it wants to be above where they leave it. */
-static void gs_hp_eat(Arena* arena, double* alive, int length, int first_food, int food_count) {
+static void gs_hp_eat_with(Arena* arena, double* alive, int length, int first_food, int food_count, double (*wants)(int)) {
     size_t mark = arena->used;
     double* after = arena_alloc(arena, (size_t)length * sizeof(double));
     memset(after, 0, (size_t)length * sizeof(double));
     for (int hp = 1; hp < length; hp++) {
         double mass = alive[hp];
         int level = hp;
-        double wanted = gs_wants(level);
+        double wanted = wants(level);
         after[level] += mass * (1 - wanted);
         for (int f = 0; f < food_count; f++) {
             int food = first_food + f;
             level = imax(level, imin(GS_MEAL_CAPS[food], level + GS_MEAL_HEALS[food]));
-            double wanted_after = f + 1 < food_count ? gs_wants(level) : 0;
+            double wanted_after = f + 1 < food_count ? wants(level) : 0;
             after[level] += mass * (wanted - wanted_after);
             wanted = wanted_after;
         }
@@ -37,6 +44,9 @@ static void gs_hp_eat(Arena* arena, double* alive, int length, int first_food, i
     arena->used = mark;
 }
 
+static void gs_hp_eat(Arena* arena, double* alive, int length, int first_food, int food_count) { gs_hp_eat_with(arena, alive, length, first_food, food_count, gs_wants); }
+
+#ifndef GS_HP_BELIEF
 /* Appetite.hiding */
 static void gs_hp_hiding(Arena* arena, double* alive, int length) {
     size_t mark = arena->used;
@@ -47,8 +57,24 @@ static void gs_hp_hiding(Arena* arena, double* alive, int length) {
     arena->used = mark;
 }
 
+#endif
+
 typedef struct { double share; int has_meal; int after; } GsReaction;
 
+#ifdef GS_HP_BELIEF
+/* Appetite.geometric and Appetite.reactions of the hp-belief branch: a meal each tick with chance 0.8, and the meal on the tick before our first hit. */
+static int gs_reactions(int before_our_hit, GsReaction* out) {
+    double shares[GS_REACTION_TICKS + 2];
+    double left = 1;
+    for (int after = 0; after < 8; after++) { shares[after] = left * GS_FIRST_MEAL_PER_TICK; left -= shares[after]; }
+    shares[8] = left;
+    int n = 0;
+    for (int after = 0; after <= GS_REACTION_TICKS; after++) out[n++] = (GsReaction){shares[after] * (1 - GS_ANTICIPATES), 1, after};
+    out[n++] = (GsReaction){shares[GS_REACTION_TICKS + 1] * (1 - GS_ANTICIPATES), 0, 0};
+    out[n++] = (GsReaction){GS_ANTICIPATES, 1, imax(0, before_our_hit)};
+    return n;
+}
+#else
 /* Appetite.reactions: the share of each tick his first meal comes, no meal, and the meal on the tick before our first hit. */
 static int gs_reactions(int before_our_hit, GsReaction* out) {
     int n = 0;
@@ -57,6 +83,8 @@ static int gs_reactions(int before_our_hit, GsReaction* out) {
     out[n++] = (GsReaction){GS_ANTICIPATES, 1, imax(0, before_our_hit)};
     return n;
 }
+
+#endif
 
 typedef enum { GS_ORIGIN_OURS, GS_ORIGIN_REFLECTED } GsOrigin;
 typedef struct { int lands; const double* damage; int damages; GsOrigin origin; } GsSpecHit;
@@ -152,9 +180,88 @@ static int gs_lethal_echo(const GsSpecSituation* s, const GsSpecHit* hit, int da
     return s->vengeance == GS_VENGEANCE_UP && hit->origin == GS_ORIGIN_OURS && damage * 3 / 4 >= s->local.hitpoints;
 }
 
-/* AutoSpec.strikes */
 typedef struct { int tick, first_food, food_count; } GsEating;
 
+#ifdef GS_HP_BELIEF
+/* Belief.java and Hitpoints.meal of the hp-belief branch: what we hold of his hitpoints since his health bar last read. */
+static const int GS_BELIEF_BAND_FROM[5] = {0, 31, 45, 61, 88};
+static const double GS_BELIEF_LATE[5] = {0.26, 0.28, 0.18, 0.10, 0.064}, GS_BELIEF_EAGER[5] = {0.60, 0.53, 0.43, 0.17, 0.098};
+static const double GS_EAGER_SHARE = 0.34, GS_INERT = 0.32, GS_BELIEF_HIDES = 0.687;
+enum { GS_BELIEF_CHAIN_LOW = 31, GS_BELIEF_CHAIN_HIGH = 87 };
+
+static double gs_belief_rate(int hp) {
+    int band = 4;
+    while (hp < GS_BELIEF_BAND_FROM[band]) band--;
+    return (1 - GS_EAGER_SHARE) * GS_BELIEF_LATE[band] + GS_EAGER_SHARE * GS_BELIEF_EAGER[band];
+}
+static double gs_belief_chain(int hp) { return fmax(0, fmin(1, (GS_BELIEF_CHAIN_HIGH - hp) / (double)(GS_BELIEF_CHAIN_HIGH - GS_BELIEF_CHAIN_LOW))); }
+static double gs_appetite_chain(int hp) { return fmax(0, fmin(1, (GS_CHAIN_HIGH - hp) / (double)(GS_CHAIN_HIGH - GS_CHAIN_LOW))); }
+static double gs_gate_ate(int hp) { (void)hp; return 1 - GS_INERT; }
+static double gs_gate_hidden(int hp) { return (1 - GS_INERT) * (hp < GS_BELIEF_BAND_FROM[4] ? GS_BELIEF_HIDES * gs_wants(hp) : gs_belief_rate(hp)); }
+
+/* Hitpoints.meal: the share the gate gives at each value eats its first food, then the others one after the other while chain wants more. */
+static void gs_hp_meal(Arena* arena, double* alive, int length, int first_food, int food_count, double (*gate)(int), double (*chain)(int)) {
+    size_t mark = arena->used;
+    double* eating = arena_alloc(arena, (size_t)length * sizeof(double));
+    memset(eating, 0, (size_t)length * sizeof(double));
+    for (int hp = 1; hp < length; hp++) {
+        eating[hp] = alive[hp] * gate(hp);
+        alive[hp] -= eating[hp];
+    }
+    hp_heal(eating, GS_MEAL_HEALS[first_food], GS_MEAL_CAPS[first_food]);
+    gs_hp_eat_with(arena, eating, length, first_food + 1, food_count - 1, chain);
+    for (int hp = 1; hp < length; hp++) alive[hp] += eating[hp];
+    arena->used = mark;
+}
+
+static void gs_belief_weigh(double* alive, int length, int ate) {
+    double total = 0;
+    for (int hp = 1; hp < length; hp++) {
+        alive[hp] *= ate ? gs_belief_rate(hp) : 1 - gs_belief_rate(hp);
+        total += alive[hp];
+    }
+    for (int hp = 1; hp < length; hp++) alive[hp] /= total;
+}
+
+/* Belief.after */
+static double* gs_belief_after(Arena* arena, const GsHealthRange* band, const GsWarning* warning, int length) {
+    double* alive = hp_uniform(arena, imax(1, band->low), band->high, length);
+    for (int i = 0; i < warning->watched_count; i++) {
+        switch (warning->watched[i]) {
+            case GS_SEEN_QUIET: gs_belief_weigh(alive, length, 0); break;
+            case GS_SEEN_ATE: gs_belief_weigh(alive, length, 1); gs_hp_meal(arena, alive, length, 0, GS_MEAL_FOODS, gs_gate_ate, gs_belief_chain); break;
+            case GS_SEEN_HIDDEN: gs_hp_meal(arena, alive, length, 0, GS_MEAL_FOODS, gs_gate_hidden, gs_belief_chain); break;
+        }
+    }
+    return alive;
+}
+#endif
+
+#ifdef GS_HP_BELIEF
+/* AutoSpec.strikes of the hp-belief branch: from the belief's distribution, his meals gated by his wanted level and chained by his appetite. */
+static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, double* alive, int length, const GsSpecHit* hits, int hit_count, const GsEating* eatings, int eating_count, const GsIncoming* his) {
+    double dead = 0, suicide = 0;
+    int next = 0;
+    for (int i = 0; i < hit_count; i++) {
+        while (next < eating_count && (eatings[next].tick < hits[i].lands || (eatings[next].tick == hits[i].lands && s->pid != GS_PID_LOCAL))) {
+            gs_hp_meal(a, alive, length, eatings[next].first_food, eatings[next].food_count, gs_wants, gs_appetite_chain);
+            next++;
+        }
+        double* spared = arena_alloc(a, (size_t)hits[i].damages * sizeof(double));
+        memcpy(spared, hits[i].damage, (size_t)hits[i].damages * sizeof(double));
+        double lethal = 0;
+        for (int roll = 0; roll < hits[i].damages; roll++)
+            if (gs_lethal_echo(s, &hits[i], roll)) {
+                lethal += spared[roll];
+                spared[roll] = 0;
+            }
+        double chance = gs_spec_alive(a, s, his, &hits[i]);
+        suicide += chance * jdk_sum(alive, length) * lethal;
+        dead += chance * hp_strike_damage(a, alive, length, spared, hits[i].damages);
+    }
+    return (GsOutcome){dead, suicide};
+}
+#else
 /* AutoSpec.strikes */
 static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count, const GsEating* eatings, int eating_count, const GsIncoming* his, int anchor) {
     int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
@@ -182,6 +289,7 @@ static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit*
     }
     return (GsOutcome){dead, suicide};
 }
+#endif
 
 static void spec_hits_sort(GsSpecHit* hits, int count) {
     for (int i = 1; i < count; i++) {
@@ -193,9 +301,8 @@ static void spec_hits_sort(GsSpecHit* hits, int count) {
 }
 
 /* AutoSpec.mealDelay: the foods he eats at the middle of his hitpoints, those he wants at least half the time, one after the other. */
-static int gs_meal_delay(const GsHealthRange* hitpoints) {
+static int gs_meal_delay(int level) {
     int has[GS_CONSUMABLES] = {0};
-    int level = (hitpoints->low + hitpoints->high) / 2;
     for (int food = 0; food < GS_MEAL_FOODS; food++) {
         if (gs_wants(level) < 0.5) break;
         has[GS_MEAL_KIND[food]] = 1;
@@ -203,6 +310,9 @@ static int gs_meal_delay(const GsHealthRange* hitpoints) {
     }
     return consumption_delay(consumption_of(has[GS_POTION], has[GS_FAST_FOOD], has[GS_HARD_FOOD]));
 }
+
+static double g_gs_expected_hp, g_gs_meal_p;
+static int g_gs_last_offset;
 
 /* AutoSpec.knockout(Situation, planned, echo) */
 static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo) {
@@ -219,6 +329,18 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         first = imin(first, undelayed.lands);
     }
     if (first == INT_MAX) { arena->used = mark; return (GsOutcome){0, 0}; }
+#ifdef GS_HP_BELIEF
+    int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
+    double* start = gs_belief_after(arena, &s->hitpoints, &s->warning, length);
+    double mean_products[1024];
+    assert(length <= 1024);
+    for (int hp = 0; hp < length; hp++) mean_products[hp] = hp * start[hp];
+    double expected = jdk_sum(mean_products, length);
+    g_gs_expected_hp = expected;
+    int level = (int)floor(expected + 0.5);
+#else
+    g_gs_expected_hp = (s->hitpoints.low + s->hitpoints.high) / 2.0;
+#endif
     int has_since = s->warning.since != GS_NONE && s->warning.since >= s->tick - GS_REACTION_TICKS;
     int anchor = has_since ? s->warning.since : first;
     int our_first = INT_MAX;
@@ -235,7 +357,11 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         int unseen = 0;
         if (reaction->has_meal)
             for (int u = 0; u < s->warning.unseen_count; u++) unseen |= s->warning.unseen[u] == anchor + reaction->after;
+#ifdef GS_HP_BELIEF
+        if (!has_since || !reaction->has_meal || anchor + reaction->after > s->tick) {
+#else
         if (!has_since || !reaction->has_meal || anchor + reaction->after > s->tick || unseen) {
+#endif
             live[live_count++] = r;
             double tmp = reaction->share - shares_compensation;
             double velvel = shares_sum + tmp;
@@ -244,7 +370,7 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         }
     }
     double shares = shares_sum - shares_compensation;
-    double dead = 0, suicide = 0;
+    double dead = 0, suicide = 0, meal_p = 0;
     for (int li = 0; li < live_count; li++) {
         const GsReaction* reaction = &reactions[live[li]];
         size_t inner = arena->used;
@@ -255,7 +381,12 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         GsIncoming thrown;
         if (s->has_incoming) {
             int delay = 0;
-            if (s->incoming.attack != GS_NONE && reaction->has_meal && anchor + reaction->after < s->incoming.attack) delay = gs_meal_delay(&s->hitpoints);
+            if (s->incoming.attack != GS_NONE && reaction->has_meal && anchor + reaction->after < s->incoming.attack) delay = gs_meal_delay(
+#ifdef GS_HP_BELIEF
+                level);
+#else
+                (s->hitpoints.low + s->hitpoints.high) / 2);
+#endif
             thrown = s->incoming;
             if (delay) {
                 thrown.lands += delay;
@@ -276,11 +407,20 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
             }
             if (eating_count == 2 && eatings[1].tick < eatings[0].tick) { GsEating t = eatings[0]; eatings[0] = eatings[1]; eatings[1] = t; }
         }
+#ifdef GS_HP_BELIEF
+        double* alive = arena_alloc(arena, (size_t)length * sizeof(double));
+        memcpy(alive, start, (size_t)length * sizeof(double));
+        GsOutcome outcome = gs_strikes(arena, s, alive, length, hits, count, eatings, eating_count, landing);
+#else
         GsOutcome outcome = gs_strikes(arena, s, hits, count, eatings, eating_count, landing, anchor);
+#endif
+        if (reaction->has_meal && anchor + reaction->after >= s->tick && anchor + reaction->after <= last) meal_p += reaction->share / shares;
         dead += reaction->share / shares * outcome.kill;
         suicide += reaction->share / shares * outcome.death;
         arena->used = inner;
     }
+    g_gs_meal_p = meal_p;
+    g_gs_last_offset = last - s->tick;
     arena->used = mark;
     return (GsOutcome){dead, suicide};
 }

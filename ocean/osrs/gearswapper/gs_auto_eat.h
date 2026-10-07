@@ -30,7 +30,7 @@ typedef struct {
     int local_most, local_normal, local_interval;
     double local_opening_accuracy, local_accuracy;
     int has_local_swing; GsSwing local_swing;
-    GsHealthRange opponent_hp;
+    GsHealthRange opponent_hp, opponent_bar;
     GsOffence offence;
     double tolerance, pid_flip;
     int drained_normal, drained_most;
@@ -595,7 +595,12 @@ static int eat_delay(const GsEatSituation* s, const GsMeal* meal, const GsFood* 
 }
 
 static GsSpecSituation eat_hunt(const GsEatSituation* s) {
-    return (GsSpecSituation){s->opponent_hp, NULL, 0, GS_NONE, s->vengeance, s->pid, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}, gs_health_of(s->hitpoints)};
+#ifdef GS_HP_BELIEF
+    GsHealthRange his = s->opponent_bar;
+#else
+    GsHealthRange his = s->opponent_hp;
+#endif
+    return (GsSpecSituation){his, NULL, 0, GS_NONE, s->vengeance, s->pid, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}, gs_health_of(s->hitpoints)};
 }
 
 static double eat_knockout(const GsEatCall* call, const GsEatSituation* s, const GsSpecSituation* hunt, const GsVec* consumptions, int until) {

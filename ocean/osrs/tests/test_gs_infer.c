@@ -58,16 +58,24 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     char hp[32];
     if (s->opponent_hitpoints.low == s->opponent_hitpoints.high) sprintf(hp, "%d", s->opponent_hitpoints.low);
     else sprintf(hp, "%d-%d", s->opponent_hitpoints.low, s->opponent_hitpoints.high);
+#ifdef GS_HP_BELIEF
+    char list[GS_WATCHED_LIMIT + 64];
+    if (s->opponent_bar.low == s->opponent_bar.high) sprintf(list, "bandread %d watched ", s->opponent_bar.low);
+    else sprintf(list, "bandread %d-%d watched ", s->opponent_bar.low, s->opponent_bar.high);
+    if (!s->watched_count) strcat(list, "-");
+    for (int i = 0; i < s->watched_count; i++) sprintf(list + strlen(list), "%c", "QAH"[s->watched[i]]);
+#else
     int unseen[GS_UNSEEN_LIMIT];
     memcpy(unseen, s->unseen, sizeof(int) * (size_t)s->unseen_count);
     qsort(unseen, (size_t)s->unseen_count, sizeof(int), cmp_int);
-    char list[1024] = "[";
+    char list[1024] = "unseen [";
     int unique = 0;
     for (int i = 0; i < s->unseen_count; i++) {
         if (i && unseen[i] == unseen[i - 1]) continue;
         sprintf(list + strlen(list), "%s%d", unique++ ? ", " : "", unseen[i]);
     }
     strcat(list, "]");
+#endif
     char landings[160] = "[";
     for (int i = 0; i < s->opponent.spec.landing_count; i++) sprintf(landings + strlen(landings), "%s%d", i ? ", " : "", s->opponent.spec.landings[i]);
     strcat(landings, "]");
@@ -90,7 +98,7 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     }
     char ate[16], reach[16], food[16];
     sprintf(ate, "%d", s->opponent_ate); sprintf(reach, "%d", s->opponent_in_reach_since); sprintf(food, "%d", s->opponent_hard_food_ready);
-    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d landing %s | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d unseen %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
+    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d landing %s | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
         PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor, landings,
         PHASE_NAMES[s->opponent.vengeance.phase], earliest, s->opponent.vengeance.latest, local, hp, ate, reach, BAR_NAMES[s->bar], s->damage_since_bar, list, food,
         RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, gs_hidden_opportunities(&s->opponent), s->surplus.strength, s->surplus.ranged_strength,
@@ -129,11 +137,20 @@ static void format_situation(const GsEatSituation* s, char* out) {
     if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g %d\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy, s->local_swing.arrows);
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
+#ifdef GS_HP_BELIEF
+    strcat(out, " ");
+    if (!s->warning.watched_count) strcat(out, "-");
+    for (int i = 0; i < s->warning.watched_count; i++) sprintf(out + strlen(out), "%c", "QAH"[s->warning.watched[i]]);
+#else
     int sorted[64];
     memcpy(sorted, s->warning.unseen, sizeof(int) * (size_t)s->warning.unseen_count);
     qsort(sorted, (size_t)s->warning.unseen_count, sizeof(int), cmp_int);
     for (int i = 0; i < s->warning.unseen_count; i++) sprintf(out + strlen(out), " %d", sorted[i]);
+#endif
     strcat(out, "\n");
+#ifdef GS_HP_BELIEF
+    sprintf(out + strlen(out), "OB %d %d %d\n", s->opponent_bar.low, s->opponent_bar.high, s->opponent_bar.max);
+#endif
 }
 
 static void format_spec_inputs(const GsSpecSituation* s, const GsUnderway* underway, char* out) {
@@ -148,10 +165,16 @@ static void format_spec_inputs(const GsSpecSituation* s, const GsUnderway* under
     }
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
+#ifdef GS_HP_BELIEF
+    strcat(out, " ");
+    if (!s->warning.watched_count) strcat(out, "-");
+    for (int i = 0; i < s->warning.watched_count; i++) sprintf(out + strlen(out), "%c", "QAH"[s->warning.watched[i]]);
+#else
     int sorted[64];
     memcpy(sorted, s->warning.unseen, sizeof(int) * (size_t)s->warning.unseen_count);
     qsort(sorted, (size_t)s->warning.unseen_count, sizeof(int), cmp_int);
     for (int i = 0; i < s->warning.unseen_count; i++) sprintf(out + strlen(out), " %d", sorted[i]);
+#endif
     strcat(out, "\n");
 }
 

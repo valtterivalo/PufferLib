@@ -23,6 +23,16 @@ typedef struct {
 static double pool[POOL];
 static int pooled;
 
+#ifdef GS_HP_BELIEF
+static void read_watched(const char* p, GsWarning* w) {
+    while (*p == ' ') p++;
+    for (; *p && *p != '\n' && *p != '-'; p++) {
+        assert(w->watched_count < GS_WATCHED_LIMIT);
+        w->watched[w->watched_count++] = *p == 'Q' ? GS_SEEN_QUIET : *p == 'A' ? GS_SEEN_ATE : GS_SEEN_HIDDEN;
+    }
+}
+#endif
+
 static GsPid pid_of(const char* s) { return !strcmp(s, "LOCAL") ? GS_PID_LOCAL : !strcmp(s, "OPPONENT") ? GS_PID_OPPONENT : GS_PID_UNKNOWN; }
 static GsVengeance vengeance_of(const char* s) {
     return !strcmp(s, "UP") ? GS_VENGEANCE_UP : !strcmp(s, "DOWN") ? GS_VENGEANCE_DOWN : !strcmp(s, "MAYBE") ? GS_VENGEANCE_MAYBE : GS_VENGEANCE_UNKNOWN;
@@ -83,7 +93,12 @@ static int read_record(FILE* f, Record* r) {
         } else if (!strcmp(tag, "W")) {
             s->warning.since = GS_NONE;
             if (strncmp(p + 1, "none", 4)) s->warning.since = (int)strtol(p, &p, 10); else p += 5;
+#ifdef GS_HP_BELIEF
+            read_watched(p, &s->warning);
+            while (0) {
+#else
             while (*p && *p != '\n') {
+#endif
                 char* end;
                 long v = strtol(p, &end, 10);
                 if (end == p) break;
