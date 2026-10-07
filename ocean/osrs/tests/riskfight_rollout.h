@@ -34,14 +34,16 @@ typedef struct {
     int his_hits, his_damage, his_vw_specs, his_maul_specs, his_vengs;
     int our_damage, our_hits;
     int first_eat, our_death, his_death, our_meals;
-    int hp_us, hp_him, bar_him;
+    int hp_us, hp_him, bar_him, start_hp;
+    int trace_hp[MAX_STEPS], trace_damage[MAX_STEPS], trace_direct[MAX_STEPS], trace_our_hp[MAX_STEPS];
+    uint8_t trace_ate[MAX_STEPS], trace_our_swing[MAX_STEPS], trace_his_swing[MAX_STEPS], trace_pid[MAX_STEPS];
 } Outcome;
 
 typedef struct {
     RiskfightState state;
     RiskfightContext context;
     Outcome* outcome;
-    int tick_base, step_damage, step_max_hit;
+    int tick_base, step_damage, step_max_hit, step_direct;
     Hist hist;
     Ours ours;
     Observer obs;
@@ -65,11 +67,16 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
     Outcome* out = sim->outcome;
     int step = event->tick - RISKFIGHT_LOAD_TICK;
     if (event->kind == OSRS_HIT_DIRECT && event->source == 1 && event->target == 0) {
+        g_his_events++;
+        g_his_positive += event->hitpoints_lost > 0;
         out->his_hits++;
         out->his_hit_mask |= 1u << step;
         out->his_damage += event->hitpoints_lost;
     }
     if (event->kind == OSRS_HIT_DIRECT && event->source == 0 && event->target == 1) {
+        g_our_events++;
+        g_our_positive += event->hitpoints_lost > 0;
+        if (event->hitpoints_lost > 0 && event->hitpoints_lost < 160) g_hit_hist[event->hitpoints_lost]++;
         out->our_hits++;
         out->our_damage += event->hitpoints_lost;
     }
@@ -77,6 +84,7 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
         sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost};
     if (event->target == 1) {
         sim->step_damage += event->hitpoints_lost;
+        if (event->kind == OSRS_HIT_DIRECT && event->source == 0) sim->step_direct += event->hitpoints_lost;
         if (event->hitpoints_lost > sim->step_max_hit) sim->step_max_hit = event->hitpoints_lost;
     }
 }
@@ -178,6 +186,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     uint32_t seed, Outcome* out) {
     RiskfightState* s = &sim->state;
     memset(out, 0, sizeof(*out));
+    out->start_hp = s->env.players[1].current_hitpoints;
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
     sim->outcome = out;
     g_tape = tape;
@@ -204,7 +213,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             if (holder == 'L' || holder == 'l') s->env.pid_holder = 0;
             else if (holder == 'O' || holder == 'o') s->env.pid_holder = 1;
         }
-        sim->step_damage = sim->step_max_hit = 0;
+        sim->step_damage = sim->step_max_hit = sim->step_direct = 0;
         sim->obs.hit_count = 0;
         riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
         if (g_ablation.damage && s->env.players[1].current_hitpoints > 0 && !s->escaped[1]) {
@@ -226,6 +235,15 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             const Player* t = &s->env.players[1];
             printf("  step %d his hp %d dmg_on_him %d ate %d veng %d | our hp %d\n", step, t->current_hitpoints, sim->step_damage, events.ate, t->veng_active, s->env.players[0].current_hitpoints);
         }
+        g_sim_hp_ticks[imin(12, imax(0, s->env.players[1].current_hitpoints) / 10)]++;
+        out->trace_hp[step] = s->env.players[1].current_hitpoints;
+        out->trace_damage[step] = sim->step_damage;
+        out->trace_direct[step] = sim->step_direct;
+        out->trace_our_hp[step] = s->env.players[0].current_hitpoints;
+        out->trace_ate[step] = (uint8_t)(events.ate ? (events.ate_visible ? 2 : 1) : 0);
+        out->trace_our_swing[step] = (uint8_t)events.swung;
+        out->trace_his_swing[step] = (uint8_t)(s->visible[1].last_attack_tick == s->env.tick - 1);
+        out->trace_pid[step] = (uint8_t)s->env.pid_holder;
         out->steps = step + 1;
         out->his_eat[step] = (uint8_t)consumption_visible(s, 1);
         if (out->his_eat[step] && out->first_eat < 0) out->first_eat = step;

@@ -339,6 +339,50 @@ static double pit_value(const int* sim, int n, int observed, uint32_t* rng) {
 static FILE* g_deaths;
 static FILE* g_windows;
 
+
+/* ---------- death autopsy: how each sim death differs from the recording of the same window ---------- */
+enum { MECH_NO_RECORDED_HIT, MECH_ONE_TICK_OFF, MECH_ROLLED_HIGHER, MECH_REFLECTED, MECH_HP_SKIPPED_EAT, MECH_HP_LOW, MECH_CHAIN, MECHS };
+static const char* MECH_NAME[MECHS] = {"sim hit with no recorded hit that tick (or a block)", "recorded hit one tick off", "rolled higher than the recorded hit (recorded roll would not kill)",
+    "only reflected damage (echo or recoil) kills", "recorded hit also kills at his sim hp: he skipped an eat the real one made", "recorded hit also kills at his sim hp: no meal missed (hp start or heal size)",
+    "earlier damage chain, lethal hit smaller than the recorded one"};
+static long g_mech[MECHS];
+static int g_dump_limit, g_dumped, g_death_seen, g_death_on;
+
+static int rec_eats_between(const Tape* tape, int from, int to) { int n = 0; for (int x = from; x <= to; x++) n += tape_his_anim_at(tape, x, ANIM_EAT); return n; }
+
+static void death_autopsy(const Tape* tape, int t0, int rollout, const Outcome* out) {
+    int d = out->his_death;
+    int x = t0 + 1 + d;
+    int rec = tape_damage_on_him(tape, x), before = x > tape->lo ? tape_damage_on_him(tape, x - 1) : 0, after = x < tape->hi ? tape_damage_on_him(tape, x + 1) : 0;
+    int hp_pre = d > 0 ? out->trace_hp[d - 1] : out->start_hp;
+    int sim = out->trace_damage[d], direct = out->trace_direct[d];
+    int mech;
+    int sim_eats = 0;
+    for (int j = 0; j < d; j++) sim_eats += out->trace_ate[j] > 0;
+    int recorded_eats = rec_eats_between(tape, t0 + 1, x - 1);
+    if (direct == 0 && sim > 0) mech = MECH_REFLECTED;
+    else if (rec == 0 && (before > 0 || after > 0)) mech = MECH_ONE_TICK_OFF;
+    else if (rec == 0) mech = MECH_NO_RECORDED_HIT;
+    else if (sim > rec && hp_pre > rec) mech = MECH_ROLLED_HIGHER;
+    else if (hp_pre <= rec) mech = sim_eats < recorded_eats ? MECH_HP_SKIPPED_EAT : MECH_HP_LOW;
+    else mech = MECH_CHAIN;
+    g_mech[mech]++;
+    g_death_seen++;
+    if (g_dumped < g_dump_limit && g_death_seen % 37 == 1) {
+        g_dumped++;
+        printf("--- death %d: %s window t0 %d rollout %d, died at step %d (tick %d): %s\n", g_dumped, tape->name, t0, rollout, d, x, MECH_NAME[mech]);
+        printf("    start: recorded bar %d/%d, sim hp %d, recorded eats before the lethal tick %d, sim eats %d\n", tape_tick(tape, t0)->bar_ratio, tape_tick(tape, t0)->bar_scale, out->start_hp, recorded_eats, sim_eats);
+        printf("    %5s | recorded: dmg eat his-swing pid | sim: his hp  dmg(direct) eat(1 hidden 2 shown) our-swing his-swing pid our hp\n", "tick");
+        for (int j = 0; j <= d; j++) {
+            int tick = t0 + 1 + j;
+            const TapeTick* tt = tape_tick(tape, tick <= tape->hi ? tick : tape->hi);
+            printf("    %5d |          %3d  %d   %d        %c   |      %5d  %3d(%3d)    %d             %d        %d       %d   %3d\n", tick, tape_damage_on_him(tape, tick), tape_his_anim_at(tape, tick, ANIM_EAT),
+                (tape->his_flags[tick - tape->lo] & FLAG_SWING) != 0, tt->pid, out->trace_hp[j], out->trace_damage[j], out->trace_direct[j], out->trace_ate[j], out->trace_our_swing[j],
+                out->trace_his_swing[j], out->trace_pid[j], out->trace_our_hp[j]);
+        }
+    }
+}
+
 static void evaluate_windows(const Tape* tape, const OppModel* model, const OursPolicy* ours, int n, int k, WindowStats* stats) {
     static int sim_values[METRICS][MAX_ROLLOUTS];
     g_tape = tape;
@@ -369,6 +413,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             stats->decisions += sim->ours.decisions - decisions;
             stats->ticks += sim->ours.ticks - ticks;
             stats->rollouts++;
+            if (g_death_on && g_dump_limit >= 0 && out.his_death >= 0) death_autopsy(tape, t0, i, &out);
             int eats = 0;
             for (int j = 0; j < out.steps; j++) eats += out.his_eat[j];
             int values[METRICS] = {eats, out.his_hits, out.his_damage, out.his_vw_specs, out.his_maul_specs, out.his_vengs,
@@ -539,19 +584,73 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     static WindowStats open, closed;
     memset(&open, 0, sizeof(open));
     memset(&closed, 0, sizeof(closed));
+    g_dump_limit = getenv("GS_DEATH_AUTOPSY") ? atoi(getenv("GS_DEATH_AUTOPSY")) : -1;
     const char* log = getenv("GS_DEATHS");
     g_deaths = log ? fopen(log, "w") : NULL;
     g_windows = getenv("GS_WINDOWS") ? fopen(getenv("GS_WINDOWS"), "w") : NULL;
     for (int i = 0; i < count; i++) {
         if (!in_day(&tapes[i], test_day)) continue;
+        int death_open = getenv("GS_DEATH_LOOP") && !strcmp(getenv("GS_DEATH_LOOP"), "open");
+        g_death_on = death_open;
         evaluate_windows(&tapes[i], &model, &replay, n, k, &open);
+        g_death_on = !death_open;
         if (!getenv("GS_OPEN_ONLY")) evaluate_windows(&tapes[i], &model, &rules, n, k, &closed);
+        g_death_on = 0;
+    }
+    if (getenv("GS_DEATH_AUTOPSY")) {
+        printf("death mechanisms over %d sim deaths in the closed loop:\n", g_death_seen);
+        for (int m = 0; m < MECHS; m++) printf("  %5ld  %5.1f%%  %s\n", g_mech[m], 100.0 * g_mech[m] / (g_death_seen ? g_death_seen : 1), MECH_NAME[m]);
     }
     printf("=== autopsy N=%d k=%d day %d ablation hp %d eats %d escape %d pid %d damage %d ===\n", n, k, test_day, g_ablation.hp, g_ablation.eats, g_ablation.escape, g_ablation.pid, g_ablation.damage);
     print_window_stats("open loop, fit warning", &open);
     if (!getenv("GS_OPEN_ONLY")) print_window_stats("closed loop, fit warning", &closed);
     printf("planner kills by his true hp at the spec decision (<=44, 45-87, 88+): played %.0f %.0f %.0f, predicted %.1f %.1f %.1f, realized %.1f %.1f %.1f\n", g_spec_counted[0], g_spec_counted[1], g_spec_counted[2],
         g_spec_predicted[0], g_spec_predicted[1], g_spec_predicted[2], g_spec_realized[0], g_spec_realized[1], g_spec_realized[2]);
+    {
+        long rec_our_a = 0, rec_our_b = 0, rec_his_a = 0, rec_his_b = 0;
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            for (int h = 0; h < tapes[i].hit_count; h++) {
+                const TapeHit* hit = &tapes[i].hits[h];
+                if (hit->tick <= tapes[i].lo || hit->tick > tapes[i].hi) continue;
+                if (hit->side == SIDE_HIM) { rec_our_a += hit->klass == 'A' && hit->amount > 0; rec_our_b += hit->klass == 'B' || (hit->klass == 'A' && hit->amount == 0); }
+                else { rec_his_a += hit->klass == 'A' && hit->amount > 0; rec_his_b += hit->klass == 'B' || (hit->klass == 'A' && hit->amount == 0); }
+            }
+        }
+        printf("share of hits that deal damage: ours recorded %.3f (%ld of %ld), sim %.3f; his recorded %.3f (%ld of %ld), sim %.3f\n", rec_our_a / (double)(rec_our_a + rec_our_b), rec_our_a, rec_our_a + rec_our_b,
+            g_our_events ? g_our_positive / (double)g_our_events : 0, rec_his_a / (double)(rec_his_a + rec_his_b), rec_his_a, rec_his_a + rec_his_b, g_his_events ? g_his_positive / (double)g_his_events : 0);
+    }
+    {
+        long total = 0, below = 0;
+        double sum = 0;
+        for (int d = 1; d < 160; d++) { total += g_hit_hist[d]; sum += (double)d * g_hit_hist[d]; }
+        int q50 = 0, q90 = 0, q99 = 0;
+        long run = 0, ge40 = 0, ge60 = 0;
+        for (int d = 1; d < 160; d++) { run += g_hit_hist[d]; if (!q50 && run >= total * 0.5) q50 = d; if (!q90 && run >= total * 0.9) q90 = d; if (!q99 && run >= total * 0.99) q99 = d; if (d >= 40) ge40 += g_hit_hist[d]; if (d >= 60) ge60 += g_hit_hist[d]; }
+        (void)below;
+        printf("our damaging hits in the sim: mean %.1f, median %d, p90 %d, p99 %d, share 40+ %.3f, share 60+ %.3f (recorded: mean 23.7, median 23, p90 44, p99 67, share 40+ 0.181, share 60+ 0.023)\n", sum / total, q50, q90, q99, ge40 / (double)total, ge60 / (double)total);
+    }
+    {
+        static long recorded_ticks[13];
+        Sim* seeds = malloc(sizeof(Sim));
+        sim_init(seeds);
+        for (int i = 0; i < count; i++) {
+            if (!in_day(&tapes[i], test_day)) continue;
+            g_tape = &tapes[i];
+            for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++)
+                for (int j = 0; j < 8; j++) {
+                    uint32_t rng = osrs_lowbias32((uint32_t)(t * 7919 + j * 104729 + tapes[i].index * 13 + tapes[i].lo)) | 1;
+                    RiskfightSnapshot snap;
+                    tape_snapshot(&tapes[i], t, &DEFAULT_PRIORS, &rng, &snap);
+                    recorded_ticks[imin(12, imax(0, snap.loadout[1].hitpoints) / 10)]++;
+                }
+        }
+        free(seeds);
+        long rec_total = 0, sim_total = 0;
+        for (int b = 0; b < 13; b++) { rec_total += recorded_ticks[b]; sim_total += g_sim_hp_ticks[b]; }
+        printf("share of ticks by his hp: recorded (seeded hp of every tape tick), sim rollouts\n");
+        for (int b = 0; b < 13; b++) printf("    hp %3d-%3d  recorded %.4f  sim %.4f\n", b * 10, b == 12 ? 199 : b * 10 + 9, recorded_ticks[b] / (double)rec_total, g_sim_hp_ticks[b] / (double)sim_total);
+    }
     printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);
     if (g_windows) fclose(g_windows);
@@ -1310,10 +1409,20 @@ int main(int argc, char** argv) {
     const char* mode = argv[1];
     g_ablation.hp = HP_HIDDEN;
     g_ablation.escape_model = 1;
+    g_ablation.his_defence = 99;
+    g_ablation.panic = 0.8;
+    g_ablation.panic_hp = 25;
     g_unseen_ticks = unseen_ticks;
     const char* ablation = getenv("GS_ABL");
     if (ablation) {
         g_ablation.hp = strstr(ablation, "hp=hidden") ? HP_HIDDEN : strstr(ablation, "hp=uniform") ? HP_UNIFORM : strstr(ablation, "hp=oracle") ? HP_ORACLE : HP_HIDDEN;
+        const char* panic = strstr(ablation, "panic=");
+        g_ablation.panic = panic ? atof(panic + 6) : 0.8;
+        const char* panic_hp = strstr(ablation, "panichp=");
+        g_ablation.panic_hp = panic_hp ? atoi(panic_hp + 8) : 25;
+        const char* def = strstr(ablation, "defence=");
+        g_ablation.his_defence = def ? atoi(def + 8) : 99;
+        g_ablation.no_piety = strstr(ablation, "nopiety") != NULL;
         const char* appetite = strstr(ablation, "appetite=");
         g_ablation.appetite = appetite ? atof(appetite + 9) : 0;
         const char* low = strstr(ablation, "levels=");

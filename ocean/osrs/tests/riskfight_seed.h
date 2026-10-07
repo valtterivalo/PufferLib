@@ -242,11 +242,11 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .seen_last_attack_ago = swing_ago(t, tick->swing_us_tick), .seen_last_attack_speed = tick->swing_us_speed,
     };
     out->side[1] = (RiskfightSideSnapshot){
-        .hitpoints = him->hitpoints, .prayer = HIS_PRAYER, .attack = HIS_BOOST, .strength = HIS_BOOST, .defence = HIS_BOOST,
+        .hitpoints = him->hitpoints, .prayer = HIS_PRAYER, .attack = HIS_BOOST, .strength = HIS_BOOST, .defence = g_ablation.his_defence,
         .magic = HIS_MAGIC, .special_energy = tick->spec_him, .special_regen_phase = tick->spec_phase_him,
         .veng_active = tick->veng_him, .veng_cooldown = tick->veng_cooldown_him,
         .attack_timer = replay_attack_timer(tape, SIDE_HIM, t), .food_timer = lh.food, .potion_timer = lh.potion, .karambwan_timer = lh.karambwan,
-        .recoil_damage_used = damage_dealt_before(tape, SIDE_HIM, t), .offensive_prayer = OFFENSIVE_PRAYER_PIETY,
+        .recoil_damage_used = damage_dealt_before(tape, SIDE_HIM, t), .offensive_prayer = g_ablation.no_piety ? OFFENSIVE_PRAYER_NONE : OFFENSIVE_PRAYER_PIETY,
         .x = tick->ox - tick->ux, .y = tick->oy - tick->uy,
         .interacting = tick->swing_him_tick >= t - ARRIVAL_WINDOW,
         .seen_last_attack_ago = swing_ago(t, tick->swing_him_tick), .seen_last_attack_speed = tick->swing_him_speed,
