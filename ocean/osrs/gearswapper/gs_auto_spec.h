@@ -2,31 +2,60 @@
 #define GS_AUTO_SPEC_H
 #include "gs_core.h"
 
-/* AutoSpec.java: the knockout chance of a plan against an opponent that reacts as the recorded first meals did. */
-enum { GS_REACTION_TICKS = 7 };
-static const double GS_FIRST_MEAL[9] = {0.006, 0.221, 0.493, 0.166, 0.038, 0.032, 0.006, 0.006, 0.032};
-static const double GS_SERVING_SHARES[4] = {0.15, 0.34, 0.34, 0.17};
-typedef enum { GS_FOOD_HARD, GS_FOOD_BREW, GS_FOOD_KARAMBWAN } GsSpecFood;
-static const int GS_FOOD_HEALS[3] = {22, 16, 18};
-static const int GS_FOOD_CAPS[3] = {99, 115, 99};
-static const GsConsumable GS_FOOD_KIND[3] = {GS_HARD_FOOD, GS_POTION, GS_FAST_FOOD};
-static const int GS_SERVING_COUNT[4] = {1, 2, 2, 3};
-static const GsSpecFood GS_SERVINGS[4][3] = {{GS_FOOD_HARD}, {GS_FOOD_HARD, GS_FOOD_KARAMBWAN}, {GS_FOOD_HARD, GS_FOOD_BREW},
-    {GS_FOOD_HARD, GS_FOOD_KARAMBWAN, GS_FOOD_BREW}};
+/* AutoSpec.java and Appetite.java: the knockout chance of a plan against an opponent that eats to a hitpoints level he wants. */
+enum { GS_REACTION_TICKS = 7, GS_REACTIONS = GS_REACTION_TICKS + 3, GS_MEAL_FOODS = 3 };
+static const double GS_FIRST_MEAL[GS_REACTION_TICKS + 2] = {0.481, 0.250, 0.130, 0.067, 0.035, 0.018, 0.009, 0.005, 0.005};
+enum { GS_SAFE_LOW = 44, GS_SAFE_HIGH = 87 };
+static const double GS_ANTICIPATES = 0.066, GS_HIDES = 0.687;
+static const int GS_MEAL_HEALS[GS_MEAL_FOODS] = {22, 18, 16}, GS_MEAL_CAPS[GS_MEAL_FOODS] = {99, 99, 115};
+static const GsConsumable GS_MEAL_KIND[GS_MEAL_FOODS] = {GS_HARD_FOOD, GS_FAST_FOOD, GS_POTION};
 
-typedef struct { int after; int foods; const GsSpecFood* kinds; } GsReactionMeal;
-typedef struct { double share; int has_meal; GsReactionMeal meal; } GsReaction;
-enum { GS_REACTIONS = (GS_REACTION_TICKS + 1) * 4 + 1 };
+static double gs_wants(int hitpoints) {
+    double w = (GS_SAFE_HIGH - hitpoints) / (double)(GS_SAFE_HIGH - GS_SAFE_LOW);
+    return fmax(0, fmin(1, w));
+}
 
-static GsReaction GS_REACTION_TABLE[GS_REACTIONS];
+/* Hitpoints.eat: every living value eats the foods from first to last while it wants to be above where they leave it. */
+static void gs_hp_eat(Arena* arena, double* alive, int length, int first_food, int food_count) {
+    size_t mark = arena->used;
+    double* after = arena_alloc(arena, (size_t)length * sizeof(double));
+    memset(after, 0, (size_t)length * sizeof(double));
+    for (int hp = 1; hp < length; hp++) {
+        double mass = alive[hp];
+        int level = hp;
+        double wanted = gs_wants(level);
+        after[level] += mass * (1 - wanted);
+        for (int f = 0; f < food_count; f++) {
+            int food = first_food + f;
+            level = imax(level, imin(GS_MEAL_CAPS[food], level + GS_MEAL_HEALS[food]));
+            double wanted_after = f + 1 < food_count ? gs_wants(level) : 0;
+            after[level] += mass * (wanted - wanted_after);
+            wanted = wanted_after;
+        }
+    }
+    memcpy(alive, after, (size_t)length * sizeof(double));
+    arena->used = mark;
+}
 
-__attribute__((constructor)) static void gs_build_reactions(void) {
+/* Appetite.hiding */
+static void gs_hp_hiding(Arena* arena, double* alive, int length) {
+    size_t mark = arena->used;
+    double* ate = arena_alloc(arena, (size_t)length * sizeof(double));
+    memcpy(ate, alive, (size_t)length * sizeof(double));
+    gs_hp_eat(arena, ate, length, 0, GS_MEAL_FOODS);
+    for (int hp = 0; hp < length; hp++) alive[hp] += GS_HIDES * (ate[hp] - alive[hp]);
+    arena->used = mark;
+}
+
+typedef struct { double share; int has_meal; int after; } GsReaction;
+
+/* Appetite.reactions: the share of each tick his first meal comes, no meal, and the meal on the tick before our first hit. */
+static int gs_reactions(int before_our_hit, GsReaction* out) {
     int n = 0;
-    for (int after = 0; after <= GS_REACTION_TICKS; after++)
-        for (int serving = 0; serving < 4; serving++)
-            GS_REACTION_TABLE[n++] = (GsReaction){GS_FIRST_MEAL[after] * GS_SERVING_SHARES[serving], 1,
-                {after, GS_SERVING_COUNT[serving], GS_SERVINGS[serving]}};
-    GS_REACTION_TABLE[n++] = (GsReaction){GS_FIRST_MEAL[GS_REACTION_TICKS + 1], 0, {0, 0, NULL}};
+    for (int after = 0; after <= GS_REACTION_TICKS; after++) out[n++] = (GsReaction){GS_FIRST_MEAL[after] * (1 - GS_ANTICIPATES), 1, after};
+    out[n++] = (GsReaction){GS_FIRST_MEAL[GS_REACTION_TICKS + 1] * (1 - GS_ANTICIPATES), 0, 0};
+    out[n++] = (GsReaction){GS_ANTICIPATES, 1, imax(0, before_our_hit)};
+    return n;
 }
 
 typedef enum { GS_ORIGIN_OURS, GS_ORIGIN_REFLECTED } GsOrigin;
@@ -124,15 +153,19 @@ static int gs_lethal_echo(const GsSpecSituation* s, const GsSpecHit* hit, int da
 }
 
 /* AutoSpec.strikes */
-static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count, const GsSpecHeal* heals, int heal_count, const GsIncoming* his) {
+typedef struct { int tick, first_food, food_count; } GsEating;
+
+/* AutoSpec.strikes */
+static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count, const GsEating* eatings, int eating_count, const GsIncoming* his, int anchor) {
     int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
     double* alive = hp_uniform(a, imax(1, s->hitpoints.low), s->hitpoints.high, length);
+    for (int u = 0; u < s->warning.unseen_count; u++)
+        if (s->warning.unseen[u] < anchor) gs_hp_hiding(a, alive, length);
     double dead = 0, suicide = 0;
     int next = 0;
     for (int i = 0; i < hit_count; i++) {
-        size_t mark = a->used;
-        while (next < heal_count && (heals[next].tick < hits[i].lands || (heals[next].tick == hits[i].lands && s->pid != GS_PID_LOCAL))) {
-            hp_heal(alive, heals[next].amount, heals[next].cap);
+        while (next < eating_count && (eatings[next].tick < hits[i].lands || (eatings[next].tick == hits[i].lands && s->pid != GS_PID_LOCAL))) {
+            gs_hp_eat(a, alive, length, eatings[next].first_food, eatings[next].food_count);
             next++;
         }
         double* spared = arena_alloc(a, (size_t)hits[i].damages * sizeof(double));
@@ -146,7 +179,6 @@ static GsOutcome gs_strikes(Arena* a, const GsSpecSituation* s, const GsSpecHit*
         double chance = gs_spec_alive(a, s, his, &hits[i]);
         suicide += chance * jdk_sum(alive, length) * lethal;
         dead += chance * hp_strike_damage(a, alive, length, spared, hits[i].damages);
-        (void)mark;
     }
     return (GsOutcome){dead, suicide};
 }
@@ -160,9 +192,15 @@ static void spec_hits_sort(GsSpecHit* hits, int count) {
     }
 }
 
-static int reaction_delay(const GsReactionMeal* meal) {
+/* AutoSpec.mealDelay: the foods he eats at the middle of his hitpoints, those he wants at least half the time, one after the other. */
+static int gs_meal_delay(const GsHealthRange* hitpoints) {
     int has[GS_CONSUMABLES] = {0};
-    for (int i = 0; i < meal->foods; i++) has[GS_FOOD_KIND[meal->kinds[i]]] = 1;
+    int level = (hitpoints->low + hitpoints->high) / 2;
+    for (int food = 0; food < GS_MEAL_FOODS; food++) {
+        if (gs_wants(level) < 0.5) break;
+        has[GS_MEAL_KIND[food]] = 1;
+        level = imin(GS_MEAL_CAPS[food], level + GS_MEAL_HEALS[food]);
+    }
     return consumption_delay(consumption_of(has[GS_POTION], has[GS_FAST_FOOD], has[GS_HARD_FOOD]));
 }
 
@@ -183,16 +221,21 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
     if (first == INT_MAX) { arena->used = mark; return (GsOutcome){0, 0}; }
     int has_since = s->warning.since != GS_NONE && s->warning.since >= s->tick - GS_REACTION_TICKS;
     int anchor = has_since ? s->warning.since : first;
+    int our_first = INT_MAX;
+    for (int i = 0; i < struck_count; i++) if (struck[i].origin == GS_ORIGIN_OURS) our_first = imin(our_first, struck[i].lands);
+    if (our_first == INT_MAX) our_first = anchor + 1;
     int last = INT_MIN;
     for (int i = 0; i < struck_count; i++) last = imax(last, struck[i].lands);
+    GsReaction reactions[GS_REACTIONS];
+    int reaction_count = gs_reactions(our_first - 1 - anchor, reactions);
     double shares_sum = 0, shares_compensation = 0;
     int live[GS_REACTIONS], live_count = 0;
-    for (int r = 0; r < GS_REACTIONS; r++) {
-        const GsReaction* reaction = &GS_REACTION_TABLE[r];
+    for (int r = 0; r < reaction_count; r++) {
+        const GsReaction* reaction = &reactions[r];
         int unseen = 0;
         if (reaction->has_meal)
-            for (int u = 0; u < s->warning.unseen_count; u++) unseen |= s->warning.unseen[u] == anchor + reaction->meal.after;
-        if (!has_since || !reaction->has_meal || anchor + reaction->meal.after > s->tick || unseen) {
+            for (int u = 0; u < s->warning.unseen_count; u++) unseen |= s->warning.unseen[u] == anchor + reaction->after;
+        if (!has_since || !reaction->has_meal || anchor + reaction->after > s->tick || unseen) {
             live[live_count++] = r;
             double tmp = reaction->share - shares_compensation;
             double velvel = shares_sum + tmp;
@@ -203,7 +246,7 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
     double shares = shares_sum - shares_compensation;
     double dead = 0, suicide = 0;
     for (int li = 0; li < live_count; li++) {
-        const GsReaction* reaction = &GS_REACTION_TABLE[live[li]];
+        const GsReaction* reaction = &reactions[live[li]];
         size_t inner = arena->used;
         GsSpecHit* hits = arena_alloc(arena, (size_t)(struck_count + 1) * sizeof(GsSpecHit));
         int count = struck_count;
@@ -212,8 +255,7 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         GsIncoming thrown;
         if (s->has_incoming) {
             int delay = 0;
-            if (s->incoming.attack != GS_NONE && reaction->has_meal && anchor + reaction->meal.after < s->incoming.attack)
-                delay = reaction_delay(&reaction->meal);
+            if (s->incoming.attack != GS_NONE && reaction->has_meal && anchor + reaction->after < s->incoming.attack) delay = gs_meal_delay(&s->hitpoints);
             thrown = s->incoming;
             if (delay) {
                 thrown.lands += delay;
@@ -223,21 +265,18 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
             if (delay == 0 || thrown.lands <= last) hits[count++] = gs_echo(arena, &thrown, echo, s->recoil_charges, s->pid);
         }
         spec_hits_sort(hits, count);
-        GsSpecHeal heals[3];
-        int heal_count = 0;
-        if (reaction->has_meal)
-            for (int f = 0; f < reaction->meal.foods; f++) {
-                GsSpecFood food = reaction->meal.kinds[f];
-                int at = anchor + reaction->meal.after;
-                heals[heal_count++] = (GsSpecHeal){food == GS_FOOD_HARD ? imax(at, s->hard_food_ready) : at, GS_FOOD_HEALS[food], GS_FOOD_CAPS[food]};
+        GsEating eatings[2];
+        int eating_count = 0;
+        if (reaction->has_meal) {
+            int at = anchor + reaction->after;
+            if (s->hard_food_ready <= at) eatings[eating_count++] = (GsEating){at, 0, GS_MEAL_FOODS};
+            else {
+                eatings[eating_count++] = (GsEating){at, 1, GS_MEAL_FOODS - 1};
+                eatings[eating_count++] = (GsEating){s->hard_food_ready, 0, 1};
             }
-        for (int i = 1; i < heal_count; i++) {
-            GsSpecHeal heal = heals[i];
-            int j = i - 1;
-            while (j >= 0 && heals[j].tick > heal.tick) { heals[j + 1] = heals[j]; j--; }
-            heals[j + 1] = heal;
+            if (eating_count == 2 && eatings[1].tick < eatings[0].tick) { GsEating t = eatings[0]; eatings[0] = eatings[1]; eatings[1] = t; }
         }
-        GsOutcome outcome = gs_strikes(arena, s, hits, count, heals, heal_count, landing);
+        GsOutcome outcome = gs_strikes(arena, s, hits, count, eatings, eating_count, landing, anchor);
         dead += reaction->share / shares * outcome.kill;
         suicide += reaction->share / shares * outcome.death;
         arena->used = inner;

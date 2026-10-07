@@ -89,7 +89,7 @@ static int read_record(FILE* f, Record* r) {
                 char* end;
                 long v = strtol(p, &end, 10);
                 if (end == p) break;
-                assert(s->warning.unseen_count < 16);
+                assert(s->warning.unseen_count < 64);
                 s->warning.unseen[s->warning.unseen_count++] = (int)v;
                 p = end;
             }

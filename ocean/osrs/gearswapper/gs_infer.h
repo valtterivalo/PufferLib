@@ -159,7 +159,8 @@ static GsHealthRange gs_health_of_bar(int ratio, int scale, int max) {
 
 static GsHealthRange gs_health_healed(GsHealthRange r) {
     int least = 16;
-    return (GsHealthRange){imin(r.low + least, r.max), r.max, r.max};
+    int ceiling = imax(r.max, 115);
+    return (GsHealthRange){imin(r.low + least, r.max), ceiling, ceiling};
 }
 
 /* ---- AutoEater: armaments */
@@ -381,12 +382,10 @@ static int gs_eater_opponent_warned(const GsInfer* s, int* out) {
 static GsWarning gs_eater_warning(const GsInfer* s) {
     GsWarning w = {GS_NONE, {0}, 0};
     int warned;
-    if (gs_eater_opponent_warned(s, &warned)) {
-        w.since = warned;
-        w.unseen_count = s->unseen_count;
-        assert(s->unseen_count <= 16);
-        memcpy(w.unseen, s->unseen, (size_t)s->unseen_count * sizeof(int));
-    }
+    if (gs_eater_opponent_warned(s, &warned)) w.since = warned;
+    w.unseen_count = s->unseen_count;
+    assert(s->unseen_count <= 64);
+    memcpy(w.unseen, s->unseen, (size_t)s->unseen_count * sizeof(int));
     return w;
 }
 

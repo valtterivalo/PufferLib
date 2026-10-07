@@ -129,7 +129,7 @@ static void format_situation(const GsEatSituation* s, char* out) {
     if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g %d\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy, s->local_swing.arrows);
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
-    int sorted[16];
+    int sorted[64];
     memcpy(sorted, s->warning.unseen, sizeof(int) * (size_t)s->warning.unseen_count);
     qsort(sorted, (size_t)s->warning.unseen_count, sizeof(int), cmp_int);
     for (int i = 0; i < s->warning.unseen_count; i++) sprintf(out + strlen(out), " %d", sorted[i]);
@@ -148,7 +148,7 @@ static void format_spec_inputs(const GsSpecSituation* s, const GsUnderway* under
     }
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
-    int sorted[16];
+    int sorted[64];
     memcpy(sorted, s->warning.unseen, sizeof(int) * (size_t)s->warning.unseen_count);
     qsort(sorted, (size_t)s->warning.unseen_count, sizeof(int), cmp_int);
     for (int i = 0; i < s->warning.unseen_count; i++) sprintf(out + strlen(out), " %d", sorted[i]);
