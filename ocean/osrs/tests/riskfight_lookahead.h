@@ -122,6 +122,7 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
     work->outcome = &g_la_scratch;
     work->state.env.pvp_runtime.hit_observer = sim_observe_hit;
     work->state.env.pvp_runtime.hit_observer_context = work;
+    work->state.env.pvp_runtime.attack_chance_observer = NULL;
     work->state.env.rng_state = osrs_lowbias32(seed) | 1;
     work->state.script_seed[0] = osrs_lowbias32(seed + 1);
     work->state.script_seed[1] = osrs_lowbias32(seed + 2);

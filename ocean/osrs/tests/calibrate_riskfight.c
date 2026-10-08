@@ -1678,7 +1678,7 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     Sim* sim = malloc(sizeof(Sim));
     sim_init(sim);
     for (int i = 0; i < count; i++) {
-        if (!in_day(&tapes[i], test_day)) continue;
+        if (!in_day(&tapes[i], test_day) || (getenv("GS_ONLY") && !strstr(tapes[i].name, getenv("GS_ONLY")))) continue;
         const Tape* tp = &tapes[i];
         g_tape = tp;
         int t0 = tp->lo + 1, kk = tp->hi - t0;
@@ -1691,7 +1691,9 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
             uint32_t seed = xorshift32(&rng);
             double m[2][CMP_METRICS];
             for (int p = 0; p < 2; p++) {
+                if (getenv("GS_ARM") && atoi(getenv("GS_ARM")) != p) { memset(m[p], 0, sizeof(m[p])); continue; }
                 riskfight_load_state(&sim->state, &sim->context, &snap);
+                fprintf(stderr, "arm %d rollout %d\n", p, r);
                 memset(g_la_memo, 0, sizeof(g_la_memo));
                 g_eat_scale = world_eat_scale;
                 double started = seconds();

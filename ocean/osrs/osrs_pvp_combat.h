@@ -933,9 +933,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         int magic_base_hit = 30;
         int max_hit = calculate_max_hit(attacker, style, 1.0f, magic_base_hit);
 
-        if (env->pvp_runtime.attack_chance_observer) {
-            assert(spec_item_idx == ITEM_VOIDWAKER || spec_item_idx == ITEM_GRANITE_MAUL ||
-                spec_item_idx == ITEM_GRANITE_MAUL_ORNATE);
+        if (env->pvp_runtime.attack_chance_observer && (spec_item_idx == ITEM_VOIDWAKER || spec_item_idx == ITEM_GRANITE_MAUL ||
+                spec_item_idx == ITEM_GRANITE_MAUL_ORNATE)) {
             int voidwaker = spec_item_idx == ITEM_VOIDWAKER;
             pvp_observe_attack_chance(env, attacker_idx, defender_idx,
                 voidwaker ? osrs_voidwaker_min_hit(max_hit) : 0,
