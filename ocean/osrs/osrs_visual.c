@@ -2128,7 +2128,7 @@ static void run_visual(
 #ifdef __EMSCRIPTEN__
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 0);
 #else
-            edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 1);
+            edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", model_path && model_path[0] ? 0 : 1);
             edef->put_int(env->encounter_state, env->encounter_context, "opponent_p0_type", OPP_IMPROVED);
 #endif
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
