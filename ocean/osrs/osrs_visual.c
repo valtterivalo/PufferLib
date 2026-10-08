@@ -176,7 +176,7 @@ static const EntityEncoderDescriptor VISUAL_ENTITY_ENCODER_DESCRIPTORS[] = {
     },
     {
         .env_name = "nh_pvp",
-        .obs_size = 133,
+        .obs_size = NH_PVP_NUM_OBS,
         .num_branches = 2,
         .branches = {
             VISUAL_SHARED_ITEM_BRANCH(
