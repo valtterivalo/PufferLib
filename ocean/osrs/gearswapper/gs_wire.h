@@ -103,6 +103,11 @@ static char gs_wire_apply(GsInfer* inf, GsWire* w, const char* line) {
         w->hp_xp = xp;
         if (gained > 0) gs_on_hitpoints_gain(inf, atoi(t[1]), gained, GS_WIRE_COMBAT_LEVEL);
     }
+    else if (!strcmp(tag, "F")) {
+        assert(n == 3);
+        int gained = atoi(t[2]);
+        if (gained > 0) gs_on_hitpoints_gain(inf, atoi(t[1]), gained, GS_WIRE_COMBAT_LEVEL);
+    }
     else if (!strcmp(tag, "N")) { int units[3] = {atoi(t[2]), atoi(t[3]), atoi(t[4])}; gs_on_inventory(inf, atoi(t[1]), units); }
     else if (!strcmp(tag, "T")) gs_on_game_tick(inf, atoi(t[1]));
     else return 0;
