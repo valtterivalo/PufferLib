@@ -3407,10 +3407,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         result.step_points[points - 1] = result.steps;
     }
 
-    long bot_games = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_bot_games") : 0;
+    long bot_games = puf_ini_get(ini, "selfplay", "eval_bot_games");
     int max_opp = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_pool_size") : 0;
     long pool_games = use_selfplay ? puf_ini_get(ini, "selfplay", "eval_games") : 0;
-    int bot_ladder = use_selfplay && bot_games > 0 && final_checkpoint[0];
+    int bot_ladder = bot_games > 0 && final_checkpoint[0];
     int pool_eval = !bot_ladder && use_selfplay && max_opp > 0
         && pool_games > 0 && final_checkpoint[0];
     long eval_episodes = puf_ini_get(ini, "base", "eval_episodes");

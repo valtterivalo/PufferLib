@@ -50,11 +50,19 @@ def main():
         config.read_file(stream)
     with (repo / 'config/osrs_pvp.ini').open() as stream:
         config.read_file(stream)
-    assert config['selfplay']['enabled'] == '1'
-    assert config['env']['use_c_opponent'] == '0'
+    assert config['selfplay']['enabled'] == '0'
+    assert config['env']['self_play'] == '0'
+    assert config['env']['use_c_opponent'] == '1'
+    assert config['env']['shaping_enabled'] == '0'
+    assert config['vec']['num_policies'] == '1'
+    assert float(config['vec']['hist_policy_percent']) == 0
+    eval_bots = [int(bot) for bot in config['selfplay']['eval_bots'].split(',')]
+    assert eval_bots == [int(config['env']['opponent_type'])]
     assert config['sweep']['metric'] == 'selfplay/bot_ladder_perf'
     assert float(config['sweep.train.total_timesteps']['min']) == 3e7
     assert float(config['sweep.train.total_timesteps']['max']) == 1e11
+    assert not any(section.startswith(('sweep.selfplay.', 'sweep.env.', 'sweep.vec.hist_'))
+        for section in config.sections())
     import wandb
 
     viewer = wandb.Api().viewer
@@ -67,9 +75,11 @@ def main():
     binary = root / 'nh-pvp'
     binary.write_bytes(binary_source.read_bytes())
     binary.chmod(0o755)
+    objective_id = f'nh-bot-{eval_bots[0]}-actual-wins-terminal-reward-v1'
     command = [str(binary), 'sweep',
         f'--base.checkpoint_dir={root}/checkpoints', f'--base.log_dir={root}/logs',
-        f'--sweep.max_suggestion_cost={args.max_suggestion_cost}', '--sweep.resume_dir=']
+        f'--sweep.max_suggestion_cost={args.max_suggestion_cost}', '--sweep.resume_dir=',
+        f'--sweep.objective_id={objective_id}']
     start = time.time()
     manifest = {
         'git_sha': git_sha, 'branch': branch, 'repo': str(repo),
@@ -79,10 +89,13 @@ def main():
         'suggestion_deadline_unix': start + args.seconds,
         'budget_seconds': args.seconds, 'max_suggestion_cost_seconds': args.max_suggestion_cost,
         'max_runs': int(config['sweep']['max_runs']),
-        'eval_bots': [int(bot) for bot in config['selfplay']['eval_bots'].split(',')],
+        'eval_bots': eval_bots,
         'eval_bot_games': int(config['selfplay']['eval_bot_games']),
-        'objective_id': 'nh-visible-observations-fixed-bot-wins-v1',
-        'score': 'Mean actual win rate against the fixed scripted NH bot ladder',
+        'objective_id': objective_id,
+        'score': 'Actual win rate against the single scripted training opponent',
+        'self_play': 0, 'historical_policies': 0, 'shaping_enabled': 0,
+        'environment_seed_offset': int(os.environ.get('PUFFER_ENV_SEED_OFFSET', '0')),
+        'fight_seeding': 'osrs_env_seed(env index,0) plus reset_count*0x9E3779B9 per episode',
         'wandb_entity': args.entity, 'wandb_project': args.project, 'wandb_group': root.name,
         'stop_policy': 'Freeze sweep suggestions at the deadline and finish active trials',
         'checkpoint_policy': 'Retain all checkpoints',
