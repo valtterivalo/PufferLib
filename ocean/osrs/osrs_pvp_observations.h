@@ -9,7 +9,7 @@
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_movement.h"
 
-#define NH_PVP_SPECIFIC_OBS_SIZE 32
+#define NH_PVP_SPECIFIC_OBS_SIZE 22
 #define NH_PVP_NUM_OBS (OSRS_SHARED_OBS_SIZE + NH_PVP_SPECIFIC_OBS_SIZE)
 #define NH_PVP_TARGET_SLOTS 1
 #define NH_PVP_ACTION_MASK_SIZE OSRS_BASE_ACTION_MASK_SIZE(NH_PVP_TARGET_SLOTS)
@@ -114,6 +114,7 @@ static inline void pvp_write_observations(
 ) {
     Player* p = &env->players[agent_idx];
     Player* target = &env->players[1 - agent_idx];
+    const OsrsPvpVisibleActor* visible = &env->pvp_runtime.visible[1 - agent_idx];
     p->last_obs_target_x = target->x;
     p->last_obs_target_y = target->y;
 
@@ -122,8 +123,7 @@ static inline void pvp_write_observations(
     int i = osrs_write_shared_observations(obs, &shared_input);
     if (i != OSRS_SHARED_OBS_SIZE) abort();
 
-    obs[i++] = osrs_policy_ratio(target->current_hitpoints, target->base_hitpoints);
-    obs[i++] = osrs_policy_ratio(target->current_prayer, target->base_prayer);
+    obs[i++] = osrs_policy_ratio(visible->health_bar, OSRS_PLAYER_HEALTH_BAR_SCALE);
     obs[i++] = osrs_policy_ratio(target->x - p->x, FIGHT_AREA_WIDTH);
     obs[i++] = osrs_policy_ratio(target->y - p->y, FIGHT_AREA_HEIGHT);
     obs[i++] = target->prayer == PRAYER_PROTECT_MELEE ? 1.0f : 0.0f;
@@ -131,34 +131,24 @@ static inline void pvp_write_observations(
     obs[i++] = target->prayer == PRAYER_PROTECT_MAGIC ? 1.0f : 0.0f;
     obs[i++] = target->prayer == PRAYER_SMITE ? 1.0f : 0.0f;
     obs[i++] = target->prayer == PRAYER_REDEMPTION ? 1.0f : 0.0f;
-    obs[i++] = target->offensive_prayer == OFFENSIVE_PRAYER_PIETY ? 1.0f : 0.0f;
-    obs[i++] = target->offensive_prayer == OFFENSIVE_PRAYER_RIGOUR ? 1.0f : 0.0f;
-    obs[i++] = target->offensive_prayer == OFFENSIVE_PRAYER_AUGURY ? 1.0f : 0.0f;
-    obs[i++] = osrs_policy_ratio(target->special_energy, 100);
-    obs[i++] = osrs_policy_ratio(target->attack_timer, 8);
-    obs[i++] = osrs_policy_ratio(target->food_timer, 3);
-    obs[i++] = osrs_policy_ratio(target->potion_timer, 3);
-    obs[i++] = osrs_policy_ratio(target->frozen_ticks, 32);
-    obs[i++] = osrs_policy_ratio(target->freeze_immunity_ticks, 5);
-    obs[i++] = target->veng_active ? 1.0f : 0.0f;
-    obs[i++] = osrs_policy_ratio(target->veng_cooldown, 50);
-    obs[i++] = p->observed_target_lunar_spellbook ? 1.0f : 0.0f;
     obs[i++] = target->last_attack_style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
     obs[i++] = target->last_attack_style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
     obs[i++] = target->last_attack_style == ATTACK_STYLE_MAGIC ? 1.0f : 0.0f;
     obs[i++] = target->is_moving ? 1.0f : 0.0f;
-    int pending_damage = 0;
-    for (int hit = 0; hit < p->num_pending_hits; hit++)
-        pending_damage += p->pending_hits[hit].damage;
-    obs[i++] = osrs_policy_ratio(pending_damage, p->base_hitpoints);
-    obs[i++] = osrs_policy_ratio(get_ticks_until_next_hit(target), 6);
-    obs[i++] = agent_idx == env->pid_holder ? 1.0f : 0.0f;
     AttackStyle target_style = get_slot_weapon_attack_style(target);
     obs[i++] = target_style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
     obs[i++] = target_style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
     obs[i++] = target_style == ATTACK_STYLE_MAGIC ? 1.0f : 0.0f;
     obs[i++] = osrs_policy_ratio(
         chebyshev_distance(p->x, p->y, target->x, target->y), 10);
+    const int event_ticks[] = {visible->last_attack_tick, visible->last_consume_tick,
+        visible->last_vengeance_tick};
+    const int event_scales[] = {8, 3, 50};
+    for (int event = 0; event < 3; event++) {
+        obs[i++] = event_ticks[event] >= 0;
+        obs[i++] = event_ticks[event] >= 0
+            ? osrs_policy_ratio(env->tick - event_ticks[event], event_scales[event]) : 0;
+    }
     if (i != NH_PVP_NUM_OBS) abort();
 }
 

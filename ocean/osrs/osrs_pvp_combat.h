@@ -8,6 +8,7 @@
 #include "osrs_bolt_procs.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_chance.h"
+#include "osrs_health_bar.h"
 
 static void pvp_reset_priority(OsrsEnv* env, OsrsPriorityPolicy policy) {
     env->priority_policy = policy;
@@ -418,6 +419,9 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
 
 static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
     const PendingHit* hit, int damage, int hitpoints_before) {
+    env->pvp_runtime.visible[target].health_bar = osrs_health_bar_ratio(
+        env->players[target].current_hitpoints, env->players[target].base_hitpoints,
+        OSRS_PLAYER_HEALTH_BAR_SCALE);
     if (!env->pvp_runtime.hit_observer) return;
     OsrsPvpHitEvent event = {env->tick, source, target, hit->kind, damage,
         hitpoints_before - env->players[target].current_hitpoints};
@@ -605,6 +609,7 @@ static void register_hit_calculated(
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
     GearBonuses* atk_gear = get_slot_gear_bonuses(attacker);
+    env->pvp_runtime.visible[attacker_idx].last_attack_tick = env->tick;
     VisibleGearBonuses visible_buf = {
         .magic_attack = atk_gear->magic_attack,
         .magic_strength = atk_gear->magic_strength,

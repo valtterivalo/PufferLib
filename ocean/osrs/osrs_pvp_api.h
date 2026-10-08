@@ -372,6 +372,12 @@ void pvp_reset(
         env->pvp_runtime.initial_supply_units[i] =
             pvp_remaining_supply_units(&env->players[i]);
         osrs_refresh_player_equipment(&env->players[i]);
+        env->pvp_runtime.visible[i] = (OsrsPvpVisibleActor){
+            .health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE,
+            .last_attack_tick = -1,
+            .last_consume_tick = -1,
+            .last_vengeance_tick = -1,
+        };
     }
 
     if (env->pvp_runtime.use_c_opponent || env->pvp_runtime.opponent.type == OPP_PFSP) {
@@ -505,6 +511,10 @@ void pvp_step(
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         Player* pi = &env->players[i];
+        if (pi->consumable_used_this_tick)
+            env->pvp_runtime.visible[i].last_consume_tick = env->tick;
+        if (pi->cast_veng_this_tick)
+            env->pvp_runtime.visible[i].last_vengeance_tick = env->tick;
         if (pi->food_timer > 0) pi->food_timer--;
         if (pi->potion_timer > 0) pi->potion_timer--;
         if (pi->karambwan_timer > 0) pi->karambwan_timer--;
@@ -568,7 +578,7 @@ void pvp_step(
 
     if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS) {
         env->episode_over = 1;
-        env->winner = 1;
+        env->winner = -1;
     }
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->rewards[i] = calculate_reward(env, i);

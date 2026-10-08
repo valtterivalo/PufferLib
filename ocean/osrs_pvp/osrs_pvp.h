@@ -5,6 +5,7 @@
 #include <string.h>
 
 typedef float obs_t;
+#define PUF_HAS_BOT_POLICY
 #include "pufferenv.h"
 
 #define Log OsrsSharedLog
@@ -25,6 +26,8 @@ struct Log {
     float episode_return;
     float episode_length;
     float wins;
+    float policy_0_score;
+    float draw_rate;
     float damage_dealt;
     float damage_received;
     float prayer_correct;
@@ -42,27 +45,54 @@ struct Env {
     Log log;
     int num_agents;
     unsigned int rng;
-    Agent agents[1];
+    Agent agents[2];
     int tag;
     int boundary_reached;
 
     NhPvpState state;
     NhPvpContext context;
-    int acts_staging[OSRS_BASE_NUM_ACTION_HEADS];
+    int acts_staging[2 * OSRS_BASE_NUM_ACTION_HEADS];
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
 };
 
-static void nh_pvp_write_native_action_mask(Env* env, unsigned char* mask_out) {
-    pvp_write_action_mask_bytes(
-        mask_out, &env->state.env, 0, env->context.route_topology);
+static void nh_pvp_native_observe(Env* env) {
+    for (int i = 0; i < env->num_agents; i++) {
+        pvp_write_observations(env->agents[i].observations, &env->state.env, i);
+        pvp_write_action_mask_bytes(env->agents[i].action_mask, &env->state.env,
+            i, env->context.route_topology);
+    }
 }
 
-static void nh_pvp_apply_shaping(Env* env, int enabled, float scale) {
+
+void puf_init(Env* env, Dict* kwargs) {
+    env->num_agents = (int)dict_get(kwargs, "self_play") ? 2 : 1;
+    for (int i = 0; i < env->num_agents; i++) env->agents[i].policy = i;
+    ENCOUNTER_NH_PVP.init_context(NH_PVP_ENV_CONTEXT(env));
+    ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
+
+    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
+
+    static const char* const int_keys[] = {
+        "opponent_type",
+        "gear_tier",
+        "is_lms",
+        "use_c_opponent",
+        "auto_reset",
+    };
+    for (size_t k = 0; k < sizeof(int_keys) / sizeof(*int_keys); k++) {
+        ENCOUNTER_NH_PVP.put_int(
+            NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
+            int_keys[k], (int)dict_get(kwargs, int_keys[k]));
+    }
+    ENCOUNTER_NH_PVP.put_int(
+        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), "seed", (int)env_seed);
+    env->state.env.pvp_runtime.use_external_opponent_actions = env->num_agents == 2;
+    assert(env->num_agents == 1 || !env->state.env.pvp_runtime.use_c_opponent);
     RewardShapingConfig* shaping = &env->state.env.shaping;
-    shaping->enabled = enabled;
-    shaping->shaping_scale = scale;
+    shaping->enabled = (int)dict_get(kwargs, "shaping_enabled");
+    shaping->shaping_scale = (float)dict_get(kwargs, "shaping_scale");
     shaping->damage_dealt_coef = 0.005f;
     shaping->damage_received_coef = -0.005f;
     shaping->correct_prayer_bonus = 0.03f;
@@ -85,75 +115,50 @@ static void nh_pvp_apply_shaping(Env* env, int enabled, float scale) {
     shaping->ko_bonus = 0.15f;
     shaping->wasted_resources_penalty = -0.07f;
     shaping->prayer_penalty_enabled = 1;
-}
-
-void puf_init(Env* env, Dict* kwargs) {
-    env->num_agents = 1;
-    env->agents[0].policy = 0;
-    ENCOUNTER_NH_PVP.init_context(NH_PVP_ENV_CONTEXT(env));
-    ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
-
-    uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
-
-    static const char* const int_keys[] = {
-        "opponent_type",
-        "gear_tier",
-        "is_lms",
-        "use_c_opponent",
-        "auto_reset",
-    };
-    for (size_t k = 0; k < sizeof(int_keys) / sizeof(*int_keys); k++) {
-        ENCOUNTER_NH_PVP.put_int(
-            NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
-            int_keys[k], (int)dict_get(kwargs, int_keys[k]));
-    }
-    ENCOUNTER_NH_PVP.put_int(
-        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), "seed", (int)env_seed);
-    nh_pvp_apply_shaping(
-        env,
-        (int)dict_get(kwargs, "shaping_enabled"),
-        (float)dict_get(kwargs, "shaping_scale"));
 
     memset(&env->log, 0, sizeof(env->log));
     ENCOUNTER_NH_PVP.finalize_context(
         NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
 }
 
+static inline void puf_set_bot_policy(Env* env, int bot_policy) {
+    assert(bot_policy > OPP_NONE && bot_policy < OPP_SELFPLAY && bot_policy != OPP_PFSP);
+    env->state.env.pvp_runtime.opponent.type = (OpponentType)bot_policy;
+}
+
 void puf_reset(Env* env) {
-    Agent* agent = &env->agents[0];
     ENCOUNTER_NH_PVP.reset(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), 0);
-    ENCOUNTER_NH_PVP.write_obs(
-        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
-        (float*)agent->observations);
-    nh_pvp_write_native_action_mask(env, agent->action_mask);
-    agent->rewards[0] = 0.0f;
-    agent->terminals[0] = 0.0f;
+    nh_pvp_native_observe(env);
+    for (int i = 0; i < env->num_agents; i++) {
+        env->agents[i].rewards[0] = 0;
+        env->agents[i].terminals[0] = 0;
+    }
 }
 
 void puf_step(Env* env) {
-    Agent* agent = &env->agents[0];
-    for (int i = 0; i < NUM_ATNS; i++) {
-        env->acts_staging[i] = (int)agent->actions[i];
-    }
+    for (int i = 0; i < env->num_agents; i++)
+        for (int head = 0; head < NUM_ATNS; head++)
+            env->acts_staging[i * NUM_ATNS + head] = (int)env->agents[i].actions[head];
+    if (env->num_agents == 2)
+        memcpy(env->state.env.pvp_runtime.external_opponent_actions,
+            env->acts_staging + NUM_ATNS, NUM_ATNS * sizeof(int));
 
     ENCOUNTER_NH_PVP.step(
         NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), env->acts_staging);
-    ENCOUNTER_NH_PVP.write_obs(
-        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
-        (float*)agent->observations);
-    nh_pvp_write_native_action_mask(env, agent->action_mask);
-
-    agent->rewards[0] = ENCOUNTER_NH_PVP.get_reward(
-        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
     int is_terminal = ENCOUNTER_NH_PVP.is_terminal(
         NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
-    agent->terminals[0] = (float)is_terminal;
+    for (int i = 0; i < env->num_agents; i++) {
+        env->agents[i].rewards[0] = env->state.env.rewards[i];
+        env->agents[i].terminals[0] = is_terminal;
+    }
 
     if (is_terminal) {
         OsrsSharedLog* episode = &env->state.env.log;
         env->log.episode_return += episode->episode_return;
         env->log.episode_length += episode->episode_length;
         env->log.wins += episode->wins;
+        env->log.policy_0_score += episode->wins;
+        env->log.draw_rate += env->state.env.winner < 0;
         env->log.damage_dealt += episode->damage_dealt;
         env->log.damage_received += episode->damage_received;
         env->log.prayer_correct += episode->prayer_correct;
@@ -169,11 +174,8 @@ void puf_step(Env* env) {
 
         ENCOUNTER_NH_PVP.reset(
             NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), 0);
-        ENCOUNTER_NH_PVP.write_obs(
-            NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
-            (float*)agent->observations);
-        nh_pvp_write_native_action_mask(env, agent->action_mask);
     }
+    nh_pvp_native_observe(env);
 }
 
 void puf_render(Env* env) {
@@ -202,6 +204,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
     dict_set(out, "wins", log->wins);
+    dict_set(out, "policy_0_score", log->policy_0_score);
+    dict_set(out, "draw_rate", log->draw_rate);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
     dict_set(out, "prayer_correct_rate",
@@ -214,8 +218,6 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "off_prayer_hits", log->off_prayer_hits);
     dict_set(out, "damage_per_hit",
         log->attacks_landed > 0.0f ? log->damage_dealt / log->attacks_landed : 0.0f);
-    float damage_fraction = log->damage_dealt / 99.0f;
-    float score = log->wins + (1.0f - log->wins) * damage_fraction * 0.5f;
-    dict_set(out, "score", score);
-    dict_set(out, "perf", score);
+    dict_set(out, "score", log->wins);
+    dict_set(out, "perf", log->wins);
 }

@@ -808,6 +808,13 @@ typedef struct {
 } OpponentState;
 
 typedef struct {
+    int health_bar;
+    int last_attack_tick;
+    int last_consume_tick;
+    int last_vengeance_tick;
+} OsrsPvpVisibleActor;
+
+typedef struct {
     int is_pvp_arena;
     int use_c_opponent;
     int use_c_opponent_p0;
@@ -824,6 +831,7 @@ typedef struct {
     OsrsGraniteMaulState maul[NUM_AGENTS];
     OsrsTeleportState teleport[NUM_AGENTS];
     OsrsTeleportWorld teleport_world;
+    OsrsPvpVisibleActor visible[NUM_AGENTS];
     OsrsPvpHitObserver hit_observer;
     void* hit_observer_context;
     OsrsPvpAttackChanceObserver attack_chance_observer;
