@@ -1310,8 +1310,10 @@ static inline OppAttackStyles opp_submitted_attack_styles(
         return (OppAttackStyles){style, style};
     }
     AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
-    if (style == ATTACK_STYLE_MAGIC) style = ATTACK_STYLE_MELEE;
     int armed = special == 1 || (special != 2 && spec_armed);
+    if (style == ATTACK_STYLE_MAGIC &&
+            !(weapon == ITEM_VOLATILE_STAFF && armed && special_energy >= osrs_spec_cost(weapon)))
+        style = ATTACK_STYLE_MELEE;
     if (weapon == ITEM_VOIDWAKER && armed && special_energy >= osrs_spec_cost(weapon))
         return (OppAttackStyles){ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE};
     return (OppAttackStyles){style, style};

@@ -590,7 +590,9 @@ static void execute_attack_combat(
     switch (decode.attack_action) {
         case PVP_ATTACK_WEAPON:
             if (attack_ready && attack_style != ATTACK_STYLE_NONE) {
-                AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC)
+                int is_special = !pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]) &&
+                    p->spec_armed && is_special_ready(p, attack_style);
+                AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC && !is_special)
                     ? ATTACK_STYLE_MELEE
                     : attack_style;
                 int in_attack_range = 0;
@@ -601,8 +603,6 @@ static void execute_attack_combat(
                     in_attack_range = (dist > 0 && dist <= range);
                 }
                 if (in_attack_range) {
-                    int is_special = !pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]) &&
-                        p->spec_armed && is_special_ready(p, actual_style);
                     perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);

@@ -40,7 +40,7 @@ static void reset(OpponentType bot) {
 }
 
 int main(void) {
-    for (int probe = 0; probe < 8; probe++) {
+    for (int probe = 0; probe < 12; probe++) {
         reset(OPP_NIGHTMARE_NH);
         OsrsEnv* pvp = &env.state.env;
         Player* player = &pvp->players[0];
@@ -70,6 +70,14 @@ int main(void) {
             actions[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
             player->current_magic = 0;
             expected = ATTACK_STYLE_NONE;
+        } else if (probe >= 8) {
+            player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_VOLATILE_STAFF);
+            osrs_equip_from_cell(player, player->inventory_cells, 0);
+            pvp_refresh_visible_gear(player);
+            player->special_energy = osrs_spec_cost(ITEM_VOLATILE_STAFF) - (probe == 11);
+            player->spec_armed = probe == 9 || probe == 10;
+            actions[OSRS_HEAD_SPECIAL] = probe == 9 ? 0 : probe == 10 ? 2 : 1;
+            expected = probe < 10 ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_MELEE;
         }
         puf_step(&env);
         CHECK("submitted read agrees with actual execution", pvp->pvp_runtime.opponent.read_agent_style == expected &&
@@ -93,25 +101,28 @@ int main(void) {
         puf_close(&env);
     }
 
-    reset(OPP_NIGHTMARE_NH);
-    OsrsEnv* pvp = &env.state.env;
-    Player* opponent = &pvp->players[1];
-    opponent->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_VOIDWAKER);
-    osrs_equip_from_cell(opponent, opponent->inventory_cells, 0);
-    pvp_refresh_visible_gear(opponent);
-    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-        const OsrsItemContentMetadata* item = osrs_inventory_cell_metadata(&opponent->inventory_cells[cell]);
-        if (item->gear_slot == GEAR_SLOT_WEAPON)
-            opponent->inventory_cells[cell] = osrs_inventory_cell_empty();
+    for (int magic = 0; magic < 2; magic++) {
+        reset(OPP_NIGHTMARE_NH);
+        OsrsEnv* pvp = &env.state.env;
+        Player* opponent = &pvp->players[1];
+        opponent->inventory_cells[0] = osrs_inventory_cell_from_item(
+            magic ? ITEM_VOLATILE_STAFF : ITEM_VOIDWAKER);
+        osrs_equip_from_cell(opponent, opponent->inventory_cells, 0);
+        pvp_refresh_visible_gear(opponent);
+        for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
+            const OsrsItemContentMetadata* item = osrs_inventory_cell_metadata(&opponent->inventory_cells[cell]);
+            if (item->gear_slot == GEAR_SLOT_WEAPON)
+                opponent->inventory_cells[cell] = osrs_inventory_cell_empty();
+        }
+        opponent->special_energy = 100;
+        pvp->players[0].current_hitpoints = 40;
+        int submitted[NUM_ATNS] = {0};
+        ENCOUNTER_NH_PVP.step(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env), submitted);
+        CHECK("magic damage uses its weapon's offensive boost",
+            opponent->used_special_this_tick && opponent->attack_style_this_tick == ATTACK_STYLE_MAGIC &&
+            opponent->offensive_prayer == (magic ? OFFENSIVE_PRAYER_AUGURY : OFFENSIVE_PRAYER_PIETY));
+        puf_close(&env);
     }
-    opponent->special_energy = 100;
-    pvp->players[0].current_hitpoints = 40;
-    int submitted[NUM_ATNS] = {0};
-    ENCOUNTER_NH_PVP.step(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env), submitted);
-    CHECK("Voidwaker magic damage uses the melee offensive boost",
-        opponent->used_special_this_tick && opponent->attack_style_this_tick == ATTACK_STYLE_MAGIC &&
-        opponent->offensive_prayer == OFFENSIVE_PRAYER_PIETY);
-    puf_close(&env);
 
     for (int bot = OPP_PANICKING; bot <= OPP_RANGE_KITER; bot++) {
         reset((OpponentType)bot);
