@@ -1885,24 +1885,27 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         }
         free(work);
     }
+    char key[64];
+    snprintf(key, sizeof(key), "%s%d", fresh->session, fresh->index);
     FILE* ledger = fopen(ledger_path, "a+");
     assert(ledger);
-    fprintf(ledger, "%s %.5f %.5f %.5f %.5f %.5f %.5f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n", fresh->name, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING],
+    fprintf(ledger, "%s %.5f %.5f %.5f %.5f %.5f %.5f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n", key, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING],
         loss[ACT_SWING], constant[ACT_SWING], loss[ACT_VW_SPEC], constant[ACT_VW_SPEC], events[ACT_EAT_WARNING], events[ACT_SWING], events[ACT_VW_SPEC], points, predicted, predicted_hold, realized,
         hd[0], hd[1], od[0], od[1], (double)rollouts, 0.0, 0.0, 0.0);
     rewind(ledger);
-    double mean_gain[3] = {0}, fights = 0;
+    double mean_gain[3] = {0}, fights = 0, total_points = 0, total_predicted = 0, total_realized = 0;
     char name[128];
     double v[21];
     while (fscanf(ledger, "%127s", name) == 1) {
         for (int k = 0; k < 21; k++) assert(fscanf(ledger, "%lf", &v[k]) == 1);
+        total_points += v[9]; total_predicted += v[10]; total_realized += v[12];
         mean_gain[0] += v[1] - v[0]; mean_gain[1] += v[3] - v[2]; mean_gain[2] += v[5] - v[4];
         fights++;
     }
     fclose(ledger);
-    printf("%s | held-out logloss/tick eat %.4f (const %.4f, running gain %+.4f) swing %.4f (const %.4f, running %+.4f) vwspec %.4f (const %.4f, running %+.4f) | refit on %d fights | recorded spec points %.0f: lookahead spec-now %.3f hold %.3f realized %.3f | sim kill rules %.2f lookahead %.2f die %.2f/%.2f (n=%d) | %.0f s\n",
+    printf("%s | held-out logloss/tick eat %.4f (const %.4f, running gain %+.4f) swing %.4f (const %.4f, running %+.4f) vwspec %.4f (const %.4f, running %+.4f) | refit on %d fights | recorded spec points %.0f: lookahead spec-now %.3f hold %.3f realized %.3f (running %.0f points: predicted %.3f realized %.3f) | sim kill rules %.2f lookahead %.2f die %.2f/%.2f (n=%d) | %.0f s\n",
         fresh->name, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING], mean_gain[0] / fights, loss[ACT_SWING], constant[ACT_SWING], mean_gain[1] / fights, loss[ACT_VW_SPEC], constant[ACT_VW_SPEC],
-        mean_gain[2] / fights, count, points, points ? predicted / points : 0, points ? predicted_hold / points : 0, points ? realized / points : 0, hd[0] / rollouts, hd[1] / rollouts,
+        mean_gain[2] / fights, count, points, points ? predicted / points : 0, points ? predicted_hold / points : 0, points ? realized / points : 0, total_points, total_points ? total_predicted / total_points : 0, total_points ? total_realized / total_points : 0, hd[0] / rollouts, hd[1] / rollouts,
         od[0] / rollouts, od[1] / rollouts, rollouts, seconds() - started);
 }
 

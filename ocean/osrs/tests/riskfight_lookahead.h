@@ -15,6 +15,10 @@ static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spe
 typedef struct { int n, due[LA_SCRIPT]; HumanCommand command[LA_SCRIPT]; } LaScript;
 typedef struct { int kill, death, energy; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
+typedef struct {
+    int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul;
+    double flip;
+} LaBelief;
 
 static int g_la_worlds = 64, g_la_horizon = 15, g_la_stage = 16, g_la_cache = 1;
 static double g_la_prune = 0.03, g_la_belief_hp_shift = 0, g_la_eat_scale_belief = 1;
@@ -48,40 +52,51 @@ static void la_resupply(Player* him, uint32_t* r) {
     }
 }
 
+static int la_is_hidden_weapon(uint8_t item) { return item == ITEM_VOIDWAKER || is_maul_item(item); }
+
 /** One world: the sim as it stands with everything hidden about him replaced by a draw from what the client infers. */
-static void la_world(const Sim* sim, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
-    const GsInfer* inf = &sim->obs.inf;
-    *w = sim->state;
+static void la_world(const RiskfightState* base, const Hist* base_hist, const LaBelief* b, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
+    *w = *base;
     Player* him = &w->env.players[1];
-    GsHealthRange bar = inf->opponent_hitpoints;
-    int low = imax(1, bar.low + (int)g_la_belief_hp_shift), high = imax(low, bar.high + (int)g_la_belief_hp_shift);
+    int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift), high = imax(low, b->hp_high + (int)g_la_belief_hp_shift);
     him->current_hitpoints = la_between(r, low, imin(high, 121));
-    GsEnergyRange energy = gs_energy_range(&inf->opponent.spec, tick);
-    him->special_energy = energy.low + 10 * la_between(r, 0, (energy.high - energy.low) / 10);
+    him->special_energy = b->energy_low + 10 * la_between(r, 0, (b->energy_high - b->energy_low) / 10);
     him->spec_regen_active = him->special_energy < 100;
     him->item_effect_state.special_regen_ticks = la_between(r, 0, 49);
-    GsVengeance reading = gs_vengeance_reading(inf->opponent.vengeance, tick);
-    him->veng_active = reading == GS_VENGEANCE_UP || ((reading == GS_VENGEANCE_MAYBE || reading == GS_VENGEANCE_UNKNOWN) && la_uniform(r, 0, 1) < 0.5);
+    him->veng_active = b->vengeance == GS_VENGEANCE_UP || ((b->vengeance == GS_VENGEANCE_MAYBE || b->vengeance == GS_VENGEANCE_UNKNOWN) && la_uniform(r, 0, 1) < 0.5);
     him->veng_cooldown = 0;
     him->current_attack = him->current_strength = g_la_boost;
-    GsPid owner = inf->pid.owner;
-    double flip = gs_pid_flip_odds(&inf->pid, tick);
-    int holder = owner == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (owner == GS_PID_LOCAL ? 0 : 1);
-    if (owner != GS_PID_UNKNOWN && la_uniform(r, 0, 1) < flip) holder = 1 - holder;
+    int holder = b->pid == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (b->pid == GS_PID_LOCAL ? 0 : 1);
+    if (b->pid != GS_PID_UNKNOWN && la_uniform(r, 0, 1) < b->flip) holder = 1 - holder;
     w->env.pid_holder = holder;
-    GsTimerState timer = inf->opponent.timer;
     int attack_timer = 0;
-    if (timer.seen) {
-        int first = imax(gs_next_attack(timer, tick), tick + 1), last = imax(first, timer.latest);
+    if (b->timer_seen) {
+        int first = imax(b->timer_first, tick + 1), last = imax(first, b->timer_last);
         attack_timer = la_between(r, first, last) - 1 - tick;
     }
     him->attack_timer = him->attack_timer_uncapped = attack_timer;
-    him->food_timer = imax(0, inf->opponent_hard_food_ready - tick);
+    him->food_timer = imax(0, b->food_ready - tick);
     him->potion_timer = him->karambwan_timer = 0;
     la_resupply(him, r);
+    int carries_vw = b->seen_vw || la_uniform(r, 0, 1) < 0.65, carries_maul = b->seen_maul || la_uniform(r, 0, 1) < 0.51;
+    int vw_cell = -1, maul_cell = -1;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        uint8_t item = osrs_inventory_cell_metadata(&him->inventory_cells[slot])->item_idx;
+        if (item == ITEM_NONE || !la_is_hidden_weapon(item)) continue;
+        if (item == ITEM_VOIDWAKER) vw_cell = slot; else maul_cell = slot;
+    }
+    int wielded_vw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER, wielded_maul = is_maul_item(him->equipped[GEAR_SLOT_WEAPON]);
+    for (int pass = 0; pass < 2; pass++) {
+        int cell = pass == 0 ? vw_cell : maul_cell, wanted = (pass == 0 ? carries_vw : carries_maul) && !(pass == 0 ? wielded_vw : wielded_maul);
+        uint8_t item = pass == 0 ? ITEM_VOIDWAKER : ITEM_GRANITE_MAUL_ORNATE;
+        if (cell >= 0 && !wanted) him->inventory_cells[cell] = osrs_inventory_cell_empty();
+        if (cell < 0 && wanted)
+            for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+                if (osrs_inventory_cell_is_empty(&him->inventory_cells[slot])) { him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_item(item)); break; }
+    }
     w->script_seed[1] = osrs_lowbias32(la_next(r));
-    *hist = sim->hist;
-    hist->since_eat = sim->seen_since_eat;
+    *hist = *base_hist;
+    hist->since_eat = b->seen_since_eat;
 }
 
 static void la_eat_at_risk(const RiskfightState* s, HumanInput* hi) {
@@ -160,22 +175,148 @@ static void la_spec_clicks(LaScript* script, uint32_t* r, const Player* us, int 
     la_press(r, script, due_tick, clicks, n);
 }
 
-static int la_hard_slot(const OursFoods* foods) {
-    for (int i = 0; i < foods->food_count; i++) if (foods->foods[i].kind == GS_HARD_FOOD) return i;
-    return foods->food_count > 0 ? 0 : -1;
+typedef struct { int spec_ok, eat_ok, veng_ok, energy; } LaFeasible;
+
+static void la_food_slots(const Player* us, int slot[3]) {
+    slot[GS_HARD_FOOD] = slot_of_kind(us, OSRS_CONSUMABLE_ANGLERFISH);
+    slot[GS_POTION] = slot_of_kind(us, OSRS_CONSUMABLE_BREW);
+    slot[GS_FAST_FOOD] = slot_of_kind(us, OSRS_CONSUMABLE_KARAMBWAN);
 }
 
-static uint64_t la_key(const Sim* sim, const GsInfer* inf, const Player* us, int tick, int energy) {
-    const Player* me = us;
-    GsHealthRange bar = inf->opponent_hitpoints;
-    GsEnergyRange range = gs_energy_range(&inf->opponent.spec, tick);
+/** The macro scripts as clicks timed from the decision, and which of them are possible. The rules' own script is the caller's. */
+static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f, const LaScript* rules, LaScript scripts[LA_MACROS], int feasible[LA_MACROS]) {
+    const Player* us = &base->env.players[0];
+    memset(scripts, 0, LA_MACROS * sizeof(LaScript));
+    memset(feasible, 0, LA_MACROS * sizeof(int));
+    uint32_t saved = osrs_lowbias32((uint32_t)tick * 2654435761u) | 1, r;
+    scripts[LA_RULES] = *rules;
+    feasible[LA_RULES] = feasible[LA_NONE] = 1;
+    if (f->spec_ok) {
+        feasible[LA_SPEC_NOW] = feasible[LA_SPEC_NEXT] = 1;
+        r = saved;
+        la_spec_clicks(&scripts[LA_SPEC_NOW], &r, us, tick);
+        int swing = tick + 1 + imax(0, us->attack_timer);
+        HumanCommand again[2] = {spec_command(), attack_command()};
+        r = saved;
+        la_press(&r, &scripts[LA_SPEC_NEXT], swing, again, 2);
+        if (f->energy >= 2 * GS_TICKET) {
+            feasible[LA_BURST] = 1;
+            r = saved;
+            la_spec_clicks(&scripts[LA_BURST], &r, us, tick);
+            la_press(&r, &scripts[LA_BURST], swing, again, 2);
+        }
+    }
+    int slot[3];
+    la_food_slots(us, slot);
+    if (f->eat_ok) {
+        feasible[LA_EAT_NOW] = 1;
+        int pick = slot[GS_HARD_FOOD] >= 0 ? slot[GS_HARD_FOOD] : slot[GS_FAST_FOOD] >= 0 ? slot[GS_FAST_FOOD] : slot[GS_POTION];
+        HumanCommand clicks[2] = {click_command(pick), attack_command()};
+        r = saved;
+        la_press(&r, &scripts[LA_EAT_NOW], tick, clicks, 2);
+    }
+    if (f->eat_ok && slot[GS_HARD_FOOD] >= 0 && slot[GS_FAST_FOOD] >= 0 && slot[GS_POTION] >= 0) {
+        feasible[LA_EAT_TRIPLE] = feasible[LA_EAT_STAGGER] = 1;
+        HumanCommand triple[4] = {click_command(slot[GS_HARD_FOOD]), click_command(slot[GS_FAST_FOOD]), click_command(slot[GS_POTION]), attack_command()};
+        r = saved;
+        la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
+        HumanCommand first[2] = {click_command(slot[GS_HARD_FOOD]), attack_command()};
+        HumanCommand second[3] = {click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
+        r = saved;
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, first, 2);
+    }
+    if (f->veng_ok) {
+        feasible[LA_VENG_NOW] = 1;
+        HumanCommand clicks[2] = {vengeance_command(), attack_command()};
+        r = saved;
+        la_press(&r, &scripts[LA_VENG_NOW], tick, clicks, 2);
+    }
+}
+
+/** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value, the rules unless another is strictly better. */
+static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, const LaBelief* belief, int tick, GsStakes stakes, uint32_t salt,
+    const LaScript scripts[LA_MACROS], const int feasible[LA_MACROS], LaScore score[LA_MACROS], int alive[LA_MACROS]) {
+    static Sim* work;
+    if (!work) { work = malloc(sizeof(Sim)); sim_init(work); }
+    uint32_t saved_seed = g_rollout_seed;
+    double saved_scale = g_eat_scale;
+    g_eat_scale = g_la_eat_scale_belief;
+    uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + salt) | 1;
+    memset(score, 0, LA_MACROS * sizeof(LaScore));
+    for (int m = 0; m < LA_MACROS; m++) alive[m] = feasible[m];
+    double ratio = stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1;
+    static RiskfightState world;
+    static Hist hist;
+    int done = 0;
+    while (done < g_la_worlds) {
+        int upto = done < g_la_stage && g_la_worlds > g_la_stage ? g_la_stage : g_la_worlds;
+        for (int w = done; w < upto; w++) {
+            uint32_t draw = world_rng ^ (uint32_t)(w * 2246822519u);
+            uint32_t wr = osrs_lowbias32(draw) | 1;
+            la_world(base, base_hist, belief, tick, &wr, &world, &hist);
+            uint32_t seed = osrs_lowbias32(draw + 17);
+            for (int m = 0; m < LA_MACROS; m++) {
+                if (!alive[m]) continue;
+                LaOutcome o = la_rollout(work, &world, &hist, tick, g_la_model, &scripts[m], seed);
+                score[m].kill += o.kill;
+                score[m].death += o.death;
+                score[m].tickets += (1 - o.kill) * la_tickets_worth(o.energy) / (1 - GS_FIGHT_ENDS);
+                score[m].value += o.kill * ratio - o.death + (1 - o.kill) * la_tickets_worth(o.energy) * ratio;
+                score[m].worlds++;
+                g_la.rollouts++;
+            }
+        }
+        done = upto;
+        if (done < g_la_worlds) {
+            double top = -1e300;
+            for (int m = 0; m < LA_MACROS; m++) if (alive[m]) top = fmax(top, score[m].value / score[m].worlds);
+            for (int m = 0; m < LA_MACROS; m++)
+                if (alive[m] && m != LA_RULES && score[m].value / score[m].worlds < top - g_la_prune * (ratio + 1)) alive[m] = 0;
+        }
+    }
+    LaMacro best = LA_RULES;
+    double top = score[LA_RULES].value / score[LA_RULES].worlds;
+    for (int m = 0; m < LA_MACROS; m++) {
+        if (!alive[m] || m == LA_RULES) continue;
+        double v = score[m].value / score[m].worlds;
+        if (v > top) { top = v; best = (LaMacro)m; }
+    }
+    g_rollout_seed = saved_seed;
+    g_eat_scale = saved_scale;
+    return best;
+}
+
+static LaBelief la_belief_of(const Sim* sim, int tick) {
+    const GsInfer* inf = &sim->obs.inf;
+    GsEnergyRange energy = gs_energy_range(&inf->opponent.spec, tick);
+    GsTimerState timer = inf->opponent.timer;
+    int seen_vw = 0, seen_maul = 0;
+    for (int i = 0; i < inf->arsenal_count; i++) {
+        seen_vw |= inf->arsenal[i].weapon == GS_W_VOIDWAKER;
+        seen_maul |= inf->arsenal[i].weapon == GS_W_GRANITE_MAUL;
+    }
+    return (LaBelief){.hp_low = inf->opponent_hitpoints.low, .hp_high = inf->opponent_hitpoints.high, .energy_low = energy.low, .energy_high = energy.high,
+        .vengeance = (int)gs_vengeance_reading(inf->opponent.vengeance, tick), .pid = (int)inf->pid.owner, .timer_seen = timer.seen,
+        .timer_first = timer.seen ? gs_next_attack(timer, tick) : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
+        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .flip = gs_pid_flip_odds(&inf->pid, tick)};
+}
+
+static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
     uint64_t h = 1469598103934665603ull;
-    int parts[] = {me->current_hitpoints, me->attack_timer, me->food_timer, me->potion_timer, me->karambwan_timer, me->spec_armed, energy, me->veng_active, me->veng_cooldown,
-        bar.low, bar.high, range.low, range.high, (int)gs_vengeance_reading(inf->opponent.vengeance, tick), (int)inf->pid.owner,
-        inf->opponent.timer.seen ? gs_next_attack(inf->opponent.timer, tick) - tick : -1, inf->opponent.timer.latest - tick, imax(0, inf->opponent_hard_food_ready - tick),
-        sim->seen_since_eat > 9 ? 9 : sim->seen_since_eat};
+    int parts[] = {us->current_hitpoints, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
+        b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, imax(0, b->food_ready - tick),
+        b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     return h;
+}
+
+static void la_print_report(const LaBelief* b, const Player* us, int energy, int tick, int step, double ratio, LaMacro best, const LaScore score[LA_MACROS], const int feasible[LA_MACROS], const int alive[LA_MACROS]) {
+    printf("tick %d (step %d) our hp %d energy %d his belief hp %d-%d energy %d-%d ratio %.2f\n", tick, step, us->current_hitpoints, energy, b->hp_low, b->hp_high, b->energy_low, b->energy_high, ratio);
+    for (int m = 0; m < LA_MACROS; m++)
+        if (feasible[m]) printf("  %-14s %s worlds %3d kill %.3f death %.3f tickets-worth %.3f value %+.4f%s\n", LA_NAME[m], alive[m] ? " " : "x", score[m].worlds, score[m].kill / score[m].worlds,
+            score[m].death / score[m].worlds, score[m].tickets / score[m].worlds, score[m].value / score[m].worlds, m == (int)best ? "  <- chosen" : "");
 }
 
 /** Plays a macro other than the rules when the rollouts say it beats them. Returns 1 when it queued the clicks. */
@@ -183,151 +324,55 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     double started = la_seconds();
     const GsInfer* inf = &sim->obs.inf;
     const Player* us = &sim->state.env.players[0];
-    int energy = gs_spec_energy(&inf->c);
+    LaFeasible f;
+    f.energy = gs_spec_energy(&inf->c);
     GsStakes stakes = ours->equal_stakes ? (GsStakes){1, 1} : sim->obs.stakes;
-    OursFoods foods;
-    ours_foods(sim, &foods);
+    int slot[3];
+    la_food_slots(us, slot);
     GsRebound rebound = ours_rebound(sim, ours, tick, 0);
-    int spec_ok = gs_spec_plannable(inf) && energy >= GS_TICKET && ours->last_played_step + 2 < step;
-    int eat_ok = foods.food_count > 0 && us->current_hitpoints < GS_ASSUMED_MAX_HP;
-    int veng_ok = rebound.kind == GS_REBOUND_CASTABLE;
-    if (!spec_ok && !(eat_ok && us->current_hitpoints <= 75) && !veng_ok) return 0;
+    f.spec_ok = gs_spec_plannable(inf) && f.energy >= GS_TICKET && ours->last_played_step + 2 < step;
+    f.eat_ok = (slot[0] >= 0 || slot[1] >= 0 || slot[2] >= 0) && us->current_hitpoints < GS_ASSUMED_MAX_HP;
+    f.veng_ok = rebound.kind == GS_REBOUND_CASTABLE;
+    if (!f.spec_ok && !(f.eat_ok && us->current_hitpoints <= 75) && !f.veng_ok) return 0;
 
-    uint64_t key = la_key(sim, inf, us, tick, energy);
-    int slot = (int)(key % LA_CACHE);
-    int cached = g_la_cache && g_la_memo[slot].used && g_la_memo[slot].key == key;
+    LaBelief belief = la_belief_of(sim, tick);
+    uint64_t key = la_key(&belief, us, tick, f.energy);
+    int memo = (int)(key % LA_CACHE);
+    int cached = g_la_cache && g_la_memo[memo].used && g_la_memo[memo].key == key;
     g_la.calls++;
-    LaMacro best = LA_RULES;
-    double predicted = 0;
-    LaScript scripts[LA_MACROS];
-    int feasible[LA_MACROS] = {0};
-    memset(scripts, 0, sizeof(scripts));
-    uint32_t press = osrs_lowbias32((uint32_t)tick * 2654435761u + (uint32_t)step) | 1, saved_press = press;
-
+    LaScript rules = {0};
     Ours trial = *ours;
     trial.lookahead = 0;
     int before = trial.pending_count;
     ours_decide(sim, &trial, step, tick);
     for (int i = before; i < trial.pending_count; i++) {
-        scripts[LA_RULES].due[scripts[LA_RULES].n] = trial.pending[i].due;
-        scripts[LA_RULES].command[scripts[LA_RULES].n++] = trial.pending[i].command;
+        rules.due[rules.n] = trial.pending[i].due;
+        rules.command[rules.n++] = trial.pending[i].command;
     }
-    feasible[LA_RULES] = feasible[LA_NONE] = 1;
-    uint32_t r = saved_press;
-    if (spec_ok) {
-        feasible[LA_SPEC_NOW] = 1;
-        la_spec_clicks(&scripts[LA_SPEC_NOW], &r, us, tick);
-        int swing = tick + 1 + imax(0, us->attack_timer);
-        feasible[LA_SPEC_NEXT] = 1;
-        r = saved_press;
-        HumanCommand again[2] = {spec_command(), attack_command()};
-        la_press(&r, &scripts[LA_SPEC_NEXT], swing, again, 2);
-        if (energy >= 2 * GS_TICKET) {
-            feasible[LA_BURST] = 1;
-            r = saved_press;
-            la_spec_clicks(&scripts[LA_BURST], &r, us, tick);
-            la_press(&r, &scripts[LA_BURST], swing, again, 2);
-        }
-    }
-    if (eat_ok) {
-        feasible[LA_EAT_NOW] = 1;
-        int choice = la_hard_slot(&foods);
-        HumanCommand clicks[2] = {click_command(foods.food_slot[choice]), attack_command()};
-        r = saved_press;
-        la_press(&r, &scripts[LA_EAT_NOW], tick, clicks, 2);
-    }
-    int kind_slot[3] = {-1, -1, -1};
-    for (int i = 0; i < foods.food_count; i++) kind_slot[foods.foods[i].kind] = foods.food_slot[i];
-    if (eat_ok && kind_slot[GS_HARD_FOOD] >= 0 && kind_slot[GS_FAST_FOOD] >= 0 && kind_slot[GS_POTION] >= 0) {
-        feasible[LA_EAT_TRIPLE] = feasible[LA_EAT_STAGGER] = 1;
-        HumanCommand triple[4] = {click_command(kind_slot[GS_HARD_FOOD]), click_command(kind_slot[GS_FAST_FOOD]), click_command(kind_slot[GS_POTION]), attack_command()};
-        r = saved_press;
-        la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
-        HumanCommand first[2] = {click_command(kind_slot[GS_HARD_FOOD]), attack_command()};
-        HumanCommand second[3] = {click_command(kind_slot[GS_POTION]), click_command(kind_slot[GS_FAST_FOOD]), attack_command()};
-        r = saved_press;
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, first, 2);
-    }
-    if (veng_ok) {
-        feasible[LA_VENG_NOW] = 1;
-        HumanCommand clicks[2] = {vengeance_command(), attack_command()};
-        r = saved_press;
-        la_press(&r, &scripts[LA_VENG_NOW], tick, clicks, 2);
-    }
-
+    LaScript scripts[LA_MACROS];
+    int feasible[LA_MACROS];
+    la_scripts(&sim->state, tick, &f, &rules, scripts, feasible);
+    LaMacro best = LA_RULES;
+    double predicted = 0;
     if (cached) {
-        best = (LaMacro)g_la_memo[slot].macro;
-        predicted = g_la_memo[slot].kill;
+        best = (LaMacro)g_la_memo[memo].macro;
+        predicted = g_la_memo[memo].kill;
         g_la.cache_hits++;
     } else {
-        static Sim* work;
-        if (!work) { work = malloc(sizeof(Sim)); sim_init(work); }
-        const OppModel* model = g_la_model;
-        uint32_t saved_seed = g_rollout_seed;
-        double saved_scale = g_eat_scale;
-        g_eat_scale = g_la_eat_scale_belief;
-        uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + (uint32_t)step * 7919u + ours->rng) | 1;
         LaScore score[LA_MACROS];
-        memset(score, 0, sizeof(score));
         int alive[LA_MACROS];
-        for (int m = 0; m < LA_MACROS; m++) alive[m] = feasible[m];
-        double ratio = stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1;
-        static RiskfightState world;
-        static Hist hist;
-        int done = 0;
-        while (done < g_la_worlds) {
-            int upto = done < g_la_stage && g_la_worlds > g_la_stage ? g_la_stage : g_la_worlds;
-            for (int w = done; w < upto; w++) {
-                uint32_t draw = world_rng ^ (uint32_t)(w * 2246822519u);
-                uint32_t wr = osrs_lowbias32(draw) | 1;
-                la_world(sim, tick, &wr, &world, &hist);
-                uint32_t seed = osrs_lowbias32(draw + 17);
-                for (int m = 0; m < LA_MACROS; m++) {
-                    if (!alive[m]) continue;
-                    LaOutcome o = la_rollout(work, &world, &hist, tick, model, &scripts[m], seed);
-                    score[m].kill += o.kill;
-                    score[m].death += o.death;
-                    score[m].tickets += (1 - o.kill) * la_tickets_worth(o.energy) / (1 - GS_FIGHT_ENDS);
-                    score[m].value += o.kill * ratio - o.death + (1 - o.kill) * la_tickets_worth(o.energy) * ratio;
-                    score[m].worlds++;
-                    g_la.rollouts++;
-                }
-            }
-            done = upto;
-            if (done < g_la_worlds) {
-                double top = -1e300;
-                for (int m = 0; m < LA_MACROS; m++) if (alive[m]) top = fmax(top, score[m].value / score[m].worlds);
-                for (int m = 0; m < LA_MACROS; m++)
-                    if (alive[m] && m != LA_RULES && score[m].value / score[m].worlds < top - g_la_prune * (ratio + 1)) alive[m] = 0;
-            }
-        }
-        double top = score[LA_RULES].value / score[LA_RULES].worlds;
-        for (int m = 0; m < LA_MACROS; m++) {
-            if (!alive[m] || m == LA_RULES) continue;
-            double v = score[m].value / score[m].worlds;
-            if (v > top) { top = v; best = (LaMacro)m; }
-        }
+        best = la_evaluate(&sim->state, &sim->hist, &belief, tick, stakes, (uint32_t)step * 7919u + ours->rng, scripts, feasible, score, alive);
         predicted = score[best].kill / score[best].worlds;
         for (int m = 0; m < LA_MACROS; m++) {
             g_la_last_feasible[m] = feasible[m] && score[m].worlds > 0;
             g_la_last_kill[m] = score[m].worlds ? score[m].kill / score[m].worlds : 0;
             g_la_last_value[m] = score[m].worlds ? score[m].value / score[m].worlds : 0;
         }
-        if (g_la_report) {
-            printf("tick %d (step %d) our hp %d energy %d his belief hp %d-%d energy %d-%d ratio %.2f\n", tick, step, us->current_hitpoints, energy, inf->opponent_hitpoints.low, inf->opponent_hitpoints.high,
-                gs_energy_range(&inf->opponent.spec, tick).low, gs_energy_range(&inf->opponent.spec, tick).high, ratio);
-            for (int m = 0; m < LA_MACROS; m++)
-                if (feasible[m]) printf("  %-14s %s worlds %3d kill %.3f death %.3f tickets-worth %.3f value %+.4f%s\n", LA_NAME[m], alive[m] ? " " : "x", score[m].worlds, score[m].kill / score[m].worlds,
-                    score[m].death / score[m].worlds, score[m].tickets / score[m].worlds, score[m].value / score[m].worlds, m == (int)best ? "  <- chosen" : "");
-        }
-        g_rollout_seed = saved_seed;
-        g_eat_scale = saved_scale;
-        g_la_memo[slot].used = 1;
-        g_la_memo[slot].key = key;
-        g_la_memo[slot].macro = best;
-        g_la_memo[slot].kill = predicted;
+        if (g_la_report) la_print_report(&belief, us, f.energy, tick, step, stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1, best, score, feasible, alive);
+        g_la_memo[memo].used = 1;
+        g_la_memo[memo].key = key;
+        g_la_memo[memo].macro = best;
+        g_la_memo[memo].kill = predicted;
     }
     g_la.chosen[best]++;
     int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT;
@@ -351,7 +396,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     ours->decisions++;
     for (int i = 0; i < scripts[best].n; i++) ours_push(ours, scripts[best].due[i], scripts[best].command[i]);
     if (best == LA_VENG_NOW) ours->vengeance_clicked = tick + 1;
-    if (best == LA_SPEC_NOW || best == LA_BURST) { ours->last_played_choice = GS_CHOICE_VOIDWAKER; ours->last_played_step = step; }
+    if (best == LA_SPEC_NOW || best == LA_SPEC_NEXT || best == LA_BURST) { ours->last_played_choice = GS_CHOICE_VOIDWAKER; ours->last_played_step = step; }
     return 1;
 }
 #endif
