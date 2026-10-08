@@ -145,6 +145,7 @@ int main(int argc, char** argv) {
     g_eat_model.logit = mixture.logit;
     if (argc > 3) g_la_worlds = atoi(argv[3]);
     if (argc > 4) g_la_horizon = atoi(argv[4]);
+    assert_fitted(&fit, "server");
     static OppModel model;
     model = (OppModel){MODEL_FIT, &fit};
     g_la_model = &model;

@@ -1645,7 +1645,10 @@ static void fight_metrics(const Outcome* out, double m[CMP_METRICS]) {
     m[8] = out->his_death >= 0 && out->our_death < 0;
 }
 
+static void leakcheck(Tape* tapes, int count);
+
 static void fightcmp(int n, Tape* tapes, int count, int test_day) {
+    leakcheck(tapes, count);
     g_abort_per_8 = 0;
     if (getenv("GS_EAT_RISK")) g_eat_risk = atof(getenv("GS_EAT_RISK"));
     if (getenv("GS_LA_N")) g_la_worlds = atoi(getenv("GS_LA_N"));
@@ -1655,6 +1658,9 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     if (getenv("GS_LA_CACHE")) g_la_cache = atoi(getenv("GS_LA_CACHE"));
     if (getenv("GS_LA_EAT_SCALE")) g_la_eat_scale_belief = atof(getenv("GS_LA_EAT_SCALE"));
     if (getenv("GS_LA_HP_SHIFT")) g_la_belief_hp_shift = atof(getenv("GS_LA_HP_SHIFT"));
+    if (getenv("GS_LA_BURST")) g_la_burst = atoi(getenv("GS_LA_BURST"));
+    if (getenv("GS_LA_WORTH_MODE")) g_la_worth_mode = atoi(getenv("GS_LA_WORTH_MODE"));
+    if (getenv("GS_LA_WORTH")) g_la_worth_scale = atof(getenv("GS_LA_WORTH"));
     if (getenv("GS_LA_BOOST")) g_la_boost = atoi(getenv("GS_LA_BOOST"));
     if (getenv("GS_HIS_BOOST")) g_his_boost = atoi(getenv("GS_HIS_BOOST"));
     double world_eat_scale = getenv("GS_EAT_SCALE") ? atof(getenv("GS_EAT_SCALE")) : 1;
@@ -1669,6 +1675,7 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     }
     fit.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
+    assert_fitted(&fit, "fightcmp");
     OppModel model = {MODEL_FIT, &fit};
     g_la_model = &model;
     OursPolicy policies[2] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED}};
@@ -1693,7 +1700,6 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
             for (int p = 0; p < 2; p++) {
                 if (getenv("GS_ARM") && atoi(getenv("GS_ARM")) != p) { memset(m[p], 0, sizeof(m[p])); continue; }
                 riskfight_load_state(&sim->state, &sim->context, &snap);
-                fprintf(stderr, "arm %d rollout %d\n", p, r);
                 memset(g_la_memo, 0, sizeof(g_la_memo));
                 g_eat_scale = world_eat_scale;
                 double started = seconds();
@@ -1809,9 +1815,15 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
     fit_default_servings(&fit);
-    fit_override(&fit);
+    if (getenv("GS_FIT")) fit_override(&fit);
+    else {
+        int eats, identified[2];
+        fit_model(tapes, count, 0, &fit);
+        infer_servings(tapes, count, 0, &fit, &eats, identified);
+    }
     fit.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
+    assert_fitted(&fit, "branchpoint");
     OppModel model = {MODEL_FIT, &fit};
     g_la_model = &model;
     Sim* sim = malloc(sizeof(Sim));
@@ -1885,6 +1897,8 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
     OppFit planner = after;
     planner.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
+    int cold = fit_unfitted(&planner) != 0;
+    if (!cold) assert_fitted(&planner, "oppstep");
     OppModel model = {MODEL_FIT, &planner};
     g_la_model = &model;
     g_la_worlds = 64;
@@ -1895,7 +1909,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
     g_tape = fresh;
     int death = recorded_death_tick(fresh);
     double points = 0, predicted = 0, realized = 0, predicted_hold = 0;
-    for (int i = 0; i < fresh->action_count; i++) {
+    for (int i = 0; !cold && i < fresh->action_count; i++) {
         const TapeAction* a = &fresh->actions[i];
         if (a->kind != ACTION_SPEC) continue;
         int t = a->tick - 1;
@@ -1917,7 +1931,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         points++;
         predicted += g_la_last_kill[LA_SPEC_NOW];
         predicted_hold += g_la_last_kill[LA_NONE];
-        realized += death >= t && death <= t + g_la_horizon;
+        realized += death > t && death <= t + g_la_horizon;
     }
     free(sim);
     int rollouts = 20;
@@ -1928,7 +1942,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         sim_init(work);
         OursPolicy policies[2] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED}};
         int t0 = fresh->lo + 1, kk = fresh->hi - t0;
-        for (int r = 0; r < rollouts; r++) {
+        for (int r = 0; !cold && r < rollouts; r++) {
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + fresh->index * 13 + fresh->lo)) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(fresh, t0, &DEFAULT_PRIORS, &rng, &snap);
@@ -1967,6 +1981,67 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         fresh->name, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING], mean_gain[0] / fights, loss[ACT_SWING], constant[ACT_SWING], mean_gain[1] / fights, loss[ACT_VW_SPEC], constant[ACT_VW_SPEC],
         mean_gain[2] / fights, count, points, points ? predicted / points : 0, points ? predicted_hold / points : 0, points ? realized / points : 0, total_points, total_points ? total_predicted / total_points : 0, total_points ? total_realized / total_points : 0, hd[0] / rollouts, hd[1] / rollouts,
         od[0] / rollouts, od[1] / rollouts, rollouts, seconds() - started);
+}
+
+/** The sampler may read only what the client knows at the decision tick: worlds drawn from a snapshot of the tape cut at that tick must equal those from the whole tape. */
+static void leakcheck(Tape* tapes, int count) {
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    Sim* a = malloc(sizeof(Sim));
+    Sim* b = malloc(sizeof(Sim));
+    sim_init(a);
+    sim_init(b);
+    long checked = 0, leaked = 0;
+    for (int i = 0; i < count; i++) {
+        Tape* tape = &tapes[i];
+        for (int t = tape->lo + 5; t <= tape->hi; t += 7) {
+            Tape cut = *tape;
+            cut.hi = t;
+            cut.anims = malloc((size_t)tape->anim_count * sizeof(TapeAnim));
+            cut.hits = malloc((size_t)tape->hit_count * sizeof(TapeHit));
+            cut.actions = malloc((size_t)tape->action_count * sizeof(TapeAction));
+            cut.anim_count = cut.hit_count = cut.action_count = 0;
+            for (int k = 0; k < tape->anim_count; k++) if (tape->anims[k].tick <= t) cut.anims[cut.anim_count++] = tape->anims[k];
+            for (int k = 0; k < tape->hit_count; k++) if (tape->hits[k].tick <= t) cut.hits[cut.hit_count++] = tape->hits[k];
+            for (int k = 0; k < tape->action_count; k++) if (tape->actions[k].tick <= t) cut.actions[cut.action_count++] = tape->actions[k];
+            cut.kit_count = 0;
+            for (int k = 0; k < cut.anim_count; k++) {
+                if (cut.anims[k].side != SIDE_HIM) continue;
+                int at = 0;
+                while (at < cut.kit_count && cut.kit_anims[at][0] != cut.anims[k].anim) at++;
+                if (at == cut.kit_count) { cut.kit_anims[at][0] = cut.anims[k].anim; cut.kit_anims[at][1] = 0; cut.kit_count++; }
+                cut.kit_anims[at][1]++;
+            }
+            Sim* sims[2] = {a, b};
+            const Tape* tapes_of[2] = {tape, &cut};
+            LaBelief belief = {.hp_low = 30, .hp_high = 90, .energy_low = 50, .energy_high = 100, .vengeance = GS_VENGEANCE_MAYBE, .pid = GS_PID_LOCAL, .timer_seen = 1, .timer_first = t + 2,
+                .timer_last = t + 4, .food_ready = 0, .seen_since_eat = 5, .bar_ratio = 15, .flip = 0.1};
+            uint64_t print[2][8];
+            static RiskfightState kept[2][8];
+            for (int s = 0; s < 2; s++) {
+                g_tape = tapes_of[s];
+                uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
+                RiskfightSnapshot snap;
+                tape_snapshot(tapes_of[s], t, &DEFAULT_PRIORS, &rng, &snap);
+                riskfight_load_state(&sims[s]->state, &sims[s]->context, &snap);
+                if (s == 1) memcpy(sims[1]->state.env.players[1].equipped, sims[0]->state.env.players[1].equipped, sizeof(sims[1]->state.env.players[1].equipped));
+                for (int d = 0; d < 8; d++) {
+                    static RiskfightState world;
+                    static Hist hist;
+                    uint32_t wr = osrs_lowbias32((uint32_t)(t * 31 + d)) | 1;
+                    la_world(&sims[s]->state, &((const Hist*)tape->hist_series)[t - tape->lo], &belief, t, &wr, &world, &hist);
+                    print[s][d] = la_fingerprint(&world);
+                    kept[s][d] = world;
+                    if (getenv("GS_LEAK_DEBUG")) { static int shown; const Player* h = &world.env.players[1]; if (d == 0 && shown < 12) { shown += s; fprintf(stderr, "t%d s%d hp %d en %d veng %d timer %d food %d %d %d atk %d pid %d bar %d seed %u inv", t, s, h->current_hitpoints, h->special_energy, h->veng_active, h->attack_timer, h->food_timer, h->potion_timer, h->karambwan_timer, h->current_attack, world.env.pid_holder, world.visible[0].health_bar, world.script_seed[1]); for (int q = 0; q < OSRS_INVENTORY_SIZE; q++) fprintf(stderr, " %d", osrs_inventory_cell_metadata(&h->inventory_cells[q])->item_idx); fprintf(stderr, "\n"); } }
+                }
+            }
+            for (int d = 0; d < 8; d++) { checked++; leaked += print[0][d] != print[1][d]; }
+            if (getenv("GS_LEAK_DEBUG")) for (int d = 0; d < 8; d++) if (print[0][d] != print[1][d]) { { fprintf(stderr, "MISMATCH tape %s t %d draw %d\n", tape->name, t, d); for (int s2 = 0; s2 < 2; s2++) { const Player* h = &kept[s2][d].env.players[1]; fprintf(stderr, "  s%d hp %d en %d regen %d/%d veng %d/%d timer %d food %d %d %d atk/str %d %d pid %d bar %d seed %u inv", s2, h->current_hitpoints, h->special_energy, h->spec_regen_active, h->item_effect_state.special_regen_ticks, h->veng_active, h->veng_cooldown, h->attack_timer, h->food_timer, h->potion_timer, h->karambwan_timer, h->current_attack, h->current_strength, kept[s2][d].env.pid_holder, kept[s2][d].visible[0].health_bar, kept[s2][d].script_seed[1]); for (int q = 0; q < OSRS_INVENTORY_SIZE; q++) { const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&h->inventory_cells[q]); fprintf(stderr, " %d:%d:%d", m->item_idx, m->consumable_kind, m->dose_count); } fprintf(stderr, "\n"); } break; } }
+            free(cut.anims); free(cut.hits); free(cut.actions);
+        }
+    }
+    printf("no-leak check: %ld worlds compared between the whole tape and the tape cut at the decision tick, %ld differ\n", checked, leaked);
+    if (leaked) abort();
 }
 
 int main(int argc, char** argv) {
@@ -2017,6 +2092,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else if (!strcmp(mode, "branchpoint")) branchpoint(argv[2], atoi(argv[3]), tapes, count);
+    else if (!strcmp(mode, "leakcheck")) leakcheck(tapes, count);
     else if (!strcmp(mode, "oppstep")) oppstep(argv[2], argv[3], tapes, count);
     else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));
     else abort();

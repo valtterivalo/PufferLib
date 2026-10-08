@@ -52,8 +52,6 @@ static void la_resupply(Player* him, uint32_t* r) {
     }
 }
 
-static int la_is_hidden_weapon(uint8_t item) { return item == ITEM_VOIDWAKER || is_maul_item(item); }
-
 /** One world: the sim as it stands with everything hidden about him replaced by a draw from what the client infers. */
 static void la_world(const RiskfightState* base, const Hist* base_hist, const LaBelief* b, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
     *w = *base;
@@ -80,20 +78,14 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->potion_timer = him->karambwan_timer = 0;
     la_resupply(him, r);
     int carries_vw = b->seen_vw || la_uniform(r, 0, 1) < 0.65, carries_maul = b->seen_maul || la_uniform(r, 0, 1) < 0.51;
-    int vw_cell = -1, maul_cell = -1;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        uint8_t item = osrs_inventory_cell_metadata(&him->inventory_cells[slot])->item_idx;
-        if (item == ITEM_NONE || !la_is_hidden_weapon(item)) continue;
-        if (item == ITEM_VOIDWAKER) vw_cell = slot; else maul_cell = slot;
-    }
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+        if (osrs_inventory_cell_metadata(&him->inventory_cells[slot])->consumable_kind == OSRS_CONSUMABLE_NONE) him->inventory_cells[slot] = osrs_inventory_cell_empty();
     int wielded_vw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER, wielded_maul = is_maul_item(him->equipped[GEAR_SLOT_WEAPON]);
     for (int pass = 0; pass < 2; pass++) {
-        int cell = pass == 0 ? vw_cell : maul_cell, wanted = (pass == 0 ? carries_vw : carries_maul) && !(pass == 0 ? wielded_vw : wielded_maul);
+        int wanted = (pass == 0 ? carries_vw : carries_maul) && !(pass == 0 ? wielded_vw : wielded_maul);
         uint8_t item = pass == 0 ? ITEM_VOIDWAKER : ITEM_GRANITE_MAUL_ORNATE;
-        if (cell >= 0 && !wanted) him->inventory_cells[cell] = osrs_inventory_cell_empty();
-        if (cell < 0 && wanted)
-            for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
-                if (osrs_inventory_cell_is_empty(&him->inventory_cells[slot])) { him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_item(item)); break; }
+        for (int slot = 0; wanted && slot < OSRS_INVENTORY_SIZE; slot++)
+            if (osrs_inventory_cell_is_empty(&him->inventory_cells[slot])) { him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_item(item)); break; }
     }
     w->script_seed[1] = osrs_lowbias32(la_next(r));
     *hist = *base_hist;
@@ -156,7 +148,9 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
     return out;
 }
 
-static double la_tickets_worth(int energy) { return (1 - GS_FIGHT_ENDS) * GS_WORTH[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
+static double g_la_worth_scale = 1, g_la_w[GS_MOST_TICKETS + 1];
+static int g_la_worth_mode = 1, g_la_burst;
+static double la_tickets_worth(int energy) { return g_la_worth_scale * (1 - GS_FIGHT_ENDS) * g_la_w[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
 
 static void la_press(uint32_t* r, LaScript* script, int tick, const HumanCommand* clicks, int count) {
     double ms = la_uniform(r, FIRST_PRESS_MS, FIRST_PRESS_SPAN);
@@ -201,7 +195,7 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
         HumanCommand again[2] = {spec_command(), attack_command()};
         r = saved;
         la_press(&r, &scripts[LA_SPEC_NEXT], swing, again, 2);
-        if (f->energy >= 2 * GS_TICKET) {
+        if (f->energy >= 2 * GS_TICKET && g_la_burst) {
             feasible[LA_BURST] = 1;
             r = saved;
             la_spec_clicks(&scripts[LA_BURST], &r, us, tick);
@@ -238,6 +232,49 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
 }
 
 /** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value, the rules unless another is strictly better. */
+/** The worth of holding k spec tickets, from the sim itself: the extra kill chance over the horizon of throwing a spec at every swing against none, on worlds from the belief. */
+static void la_measure_worth(const RiskfightState* base, const Hist* base_hist, const LaBelief* belief, int tick, uint32_t salt, Sim* work) {
+    enum { WORLDS = 16, SWINGS = 4, SWING_TICKS = 4 };
+    LaScript greedy = {0}, none = {0};
+    int first = tick + 1 + imax(0, base->env.players[0].attack_timer);
+    for (int j = 0; j < SWINGS; j++) {
+        greedy.due[greedy.n] = first + j * SWING_TICKS - 1;
+        greedy.command[greedy.n++] = spec_command();
+    }
+    g_la_w[0] = 0;
+    static RiskfightState world;
+    static Hist hist;
+    for (int k = 1; k <= GS_MOST_TICKETS; k++) {
+        double gain = 0;
+        for (int w = 0; w < WORLDS; w++) {
+            uint32_t draw = salt ^ (uint32_t)(w * 2246822519u);
+            uint32_t wr = osrs_lowbias32(draw) | 1;
+            la_world(base, base_hist, belief, tick, &wr, &world, &hist);
+            world.env.players[0].special_energy = GS_TICKET * k;
+            world.env.players[0].spec_armed = 0;
+            uint32_t seed = osrs_lowbias32(draw + 17);
+            gain += la_rollout(work, &world, &hist, tick, g_la_model, &greedy, seed).kill - la_rollout(work, &world, &hist, tick, g_la_model, &none, seed).kill;
+        }
+        g_la_w[k] = fmax(0, gain / WORLDS);
+    }
+}
+
+/** Everything of a world the sampler may have drawn or copied that is not visible gear, as one number. */
+static uint64_t la_fingerprint(const RiskfightState* w) {
+    uint64_t h = 1469598103934665603ull;
+    const Player* him = &w->env.players[1];
+    int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer,
+        him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
+    for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
+    int counts[256][5] = {{0}};
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&him->inventory_cells[i]);
+        counts[m->item_idx][m->dose_count > 4 ? 4 : m->dose_count] += 1 + 16 * (int)m->consumable_kind;
+    }
+    for (int i = 0; i < 256; i++) for (int d = 0; d < 5; d++) if (counts[i][d]) { h ^= (uint64_t)(i * 5 + d) * 2654435761u + (uint64_t)counts[i][d]; h *= 1099511628211ull; }
+    return h;
+}
+
 static void la_print_base(const RiskfightState* b) {
     for (int a = 0; a < 2; a++) {
         const Player* p = &b->env.players[a];
@@ -263,6 +300,8 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
     g_eat_scale = g_la_eat_scale_belief;
     uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + salt) | 1;
     memset(score, 0, LA_MACROS * sizeof(LaScore));
+    if (g_la_worth_mode == 1) la_measure_worth(base, base_hist, belief, tick, world_rng ^ 0x5bd1e995u, work);
+    else for (int k = 0; k <= GS_MOST_TICKETS; k++) g_la_w[k] = GS_WORTH[k];
     for (int m = 0; m < LA_MACROS; m++) alive[m] = feasible[m];
     double ratio = stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1;
     static RiskfightState world;

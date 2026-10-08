@@ -320,6 +320,23 @@ static double g_eat_inert = 0, g_eat_scale = 1;
 /** The same by his hitpoints, 44 or less, 45-60, 61-87, 88 and more: 4 of 690, 5 of 729, 5 of 2485 and 0 of 1069 recorded ticks by the health bar. */
 static double escape_rate_at(int hitpoints) { return hitpoints <= 44 ? 4.0 / 690 : hitpoints <= 60 ? 5.0 / 729 : hitpoints <= 87 ? 5.0 / 2485 : 0; }
 
+
+/** Every hazard fitted from events and the eat mixture loaded: a policy left at its defaults must never produce a result. */
+static int fit_unfitted(const OppFit* fit) {
+    for (int a = 0; a < ACT_COUNT; a++)
+        if (fit->logit[a].events <= 0 || fit->logit[a].opportunities <= 0 || fit->logit[a].w[0] == 0) return a + 1;
+    return 0;
+}
+
+static void assert_fitted(const OppFit* fit, const char* who) {
+    int bad = fit_unfitted(fit);
+    if (bad) { fprintf(stderr, "%s: hazard %d (%s) sits at its default\n", who, bad - 1, ACTION_NAME[bad - 1]); abort(); }
+    double pi = 0, weights = 0;
+    for (int k = 0; k < g_eat_model.types; k++) pi += g_eat_model.pi[k];
+    for (int i = 0; i < EAT_DIM; i++) weights += fabs(g_eat_model.logit.w[i]);
+    if (!g_eat_model.on || g_eat_model.model != EAT_MIXTURE || g_eat_model.types < 1 || fabs(pi - 1) > 1e-6 || weights == 0) { fprintf(stderr, "%s: eat mixture is not loaded\n", who); abort(); }
+}
+
 static double action_probability(const OppFit* fit, const Probe* p, Action a) {
     if (!p->eligible[a]) return 0;
     return logit_p(&fit->logit[a], &p->x[a]);
