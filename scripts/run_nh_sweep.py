@@ -56,8 +56,19 @@ def main():
     assert config['env']['shaping_enabled'] == '0'
     assert config['vec']['num_policies'] == '1'
     assert float(config['vec']['hist_policy_percent']) == 0
+    assert config['base']['load_model_path'].strip("'\"") == 'None'
+    training_opponent = int(config['env']['opponent_type'])
     eval_bots = [int(bot) for bot in config['selfplay']['eval_bots'].split(',')]
-    assert eval_bots == [int(config['env']['opponent_type'])]
+    if training_opponent == 33:
+        assert eval_bots == [23, 30, 32]
+        training_weights = [34, 33, 33]
+        objective_id = (
+            'nh-mixture-33-bots-23-30-32-history-aba-v1-'
+            f'{git_sha[:12]}-actual-wins-terminal-reward-v1')
+    else:
+        assert eval_bots == [training_opponent]
+        training_weights = [100]
+        objective_id = f'nh-bot-{training_opponent}-actual-wins-terminal-reward-v1'
     assert config['sweep']['metric'] == 'selfplay/bot_ladder_perf'
     assert float(config['sweep.train.total_timesteps']['min']) == 3e7
     assert float(config['sweep.train.total_timesteps']['max']) == 1e11
@@ -75,7 +86,6 @@ def main():
     binary = root / 'nh-pvp'
     binary.write_bytes(binary_source.read_bytes())
     binary.chmod(0o755)
-    objective_id = f'nh-bot-{eval_bots[0]}-actual-wins-terminal-reward-v1'
     command = [str(binary), 'sweep',
         f'--base.checkpoint_dir={root}/checkpoints', f'--base.log_dir={root}/logs',
         f'--sweep.max_suggestion_cost={args.max_suggestion_cost}', '--sweep.resume_dir=',
@@ -92,7 +102,10 @@ def main():
         'eval_bots': eval_bots,
         'eval_bot_games': int(config['selfplay']['eval_bot_games']),
         'objective_id': objective_id,
-        'score': 'Actual win rate against the single scripted training opponent',
+        'training_opponent_type': training_opponent,
+        'training_opponent_members': eval_bots,
+        'training_opponent_weights': training_weights,
+        'score': 'Unweighted mean actual win rates against the scripted training opponents',
         'self_play': 0, 'historical_policies': 0, 'shaping_enabled': 0,
         'environment_seed_offset': int(os.environ.get('PUFFER_ENV_SEED_OFFSET', '0')),
         'fight_seeding': 'osrs_env_seed(env index,0) plus reset_count*0x9E3779B9 per episode',

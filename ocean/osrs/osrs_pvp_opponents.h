@@ -901,14 +901,49 @@ static const OppNhTier NH_TIER_ADVANCED     = {1, 2.0f,  1.0f,  1, 0.0f};
 static const OppNhTier NH_TIER_PROFICIENT   = {1, 2.0f,  1.0f,  1, 0.25f};
 static const OppNhTier NH_TIER_EXPERT       = {1, 2.0f,  1.0f,  1, 0.50f};
 
-static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const OppNhTier* tier) {
+typedef enum {
+    OPP_CURRENT_VISIBLE,
+    OPP_FORECAST_VISIBLE,
+} OppNhDecision;
+
+static inline OppVisibleState opp_forecast_visible(
+    OppVisibleHistory history, OppVisibleState current
+) {
+    OppVisibleState forecast = current;
+    if (history.phase == OPP_HISTORY_READY) {
+        if (current.weapon == history.older.weapon &&
+                current.weapon != history.latest.weapon)
+            forecast.weapon = history.latest.weapon;
+        if (current.prayer == history.older.prayer &&
+                current.prayer != history.latest.prayer)
+            forecast.prayer = history.latest.prayer;
+    }
+    return forecast;
+}
+
+static inline int opp_forecast_offensive_style(OverheadPrayer prayer, int melee_reachable) {
+    if (prayer != PRAYER_PROTECT_RANGED) return OPP_STYLE_RANGED;
+    return melee_reachable ? OPP_STYLE_MELEE : OPP_STYLE_MAGE;
+}
+
+static void opp_nh_tier_decide(
+    OsrsEnv* env, OpponentState* opp, int* actions, const OppNhTier* tier,
+    OppNhDecision decision, OppVisibleState forecast
+) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     float hp_pct = (float)self->current_hitpoints / (float)self->base_hitpoints;
 
     opp_tick_cooldowns(opp);
 
-    opp_apply_defensive_prayer(env, opp, actions, self, target, 0);
+    if (decision == OPP_CURRENT_VISIBLE) {
+        opp_apply_defensive_prayer(env, opp, actions, self, target, 0);
+    } else {
+        int prayer = forecast.weapon == ATTACK_STYLE_MELEE ? OVERHEAD_MELEE
+            : forecast.weapon == ATTACK_STYLE_RANGED ? OVERHEAD_RANGED : OVERHEAD_MAGE;
+        prayer = opp_apply_prayer_mistake(env, opp, prayer);
+        if (!opp_has_prayer_active(self, prayer)) opp_emit_prayer(actions, self, prayer);
+    }
     opp_apply_consumables(env, opp, actions, self, 1);
 
     int eating = opp_check_eating_queued(actions);
@@ -917,7 +952,9 @@ static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const Op
 
     if (opp_attack_ready(self) && !eating) {
         int attack_style;
-        if (rand_float(env) < opp->off_prayer_rate) {
+        if (decision == OPP_FORECAST_VISIBLE) {
+            attack_style = opp_forecast_offensive_style(forecast.prayer, opp_can_reach_melee(self, target));
+        } else if (rand_float(env) < opp->off_prayer_rate) {
             attack_style = tier->biased_style_pick
                 ? opp_pick_off_prayer_style_biased(env, opp, self, target)
                 : opp_pick_from_mask(env, opp_get_off_prayer_mask(self, target));
@@ -933,7 +970,7 @@ static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const Op
         int should_spec =
             self->special_energy >= get_melee_spec_cost(self->melee_spec_weapon) &&
             target_hp_pct < tier->spec_target_hp_gate &&
-            target->prayer != PRAYER_PROTECT_MELEE &&
+            (decision == OPP_FORECAST_VISIBLE ? forecast.prayer : target->prayer) != PRAYER_PROTECT_MELEE &&
             can_spec_range &&
             (tier->spec_trigger_prob >= 1.0f ||
              rand_float(env) < tier->spec_trigger_prob);
@@ -962,6 +999,24 @@ static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const Op
     } else if (tier->has_move_block && !opp_attack_ready(self)) {
         opp_move_when_waiting(env, opp, actions, self, target, tier->move_under_prob);
     }
+}
+
+static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const OppNhTier* tier) {
+    opp_nh_tier_decide(env, opp, actions, tier, OPP_CURRENT_VISIBLE, (OppVisibleState){0});
+}
+
+static void opp_history_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* target = &env->players[0];
+    OppVisibleState current = {
+        .weapon = opp_get_gear_style(target),
+        .prayer = target->prayer,
+    };
+    OppVisibleState forecast = opp_forecast_visible(opp->visible_history, current);
+    opp->visible_history.older = opp->visible_history.latest;
+    opp->visible_history.latest = current;
+    opp->visible_history.phase = opp->visible_history.phase == OPP_HISTORY_EMPTY
+        ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
+    opp_nh_tier_decide(env, opp, actions, &NH_TIER_EXPERT, OPP_FORECAST_VISIBLE, forecast);
 }
 
 static void opp_nh_basic(OsrsEnv* env, OpponentState* opp, int* actions,
@@ -1882,6 +1937,11 @@ static const OpponentType MIXED_HARD_BALANCED_POOL[] = {
 static const int MIXED_HARD_BALANCED_CUM_WEIGHTS[] = {25, 55, 75, 90, 100};
 #define MIXED_HARD_BALANCED_POOL_SIZE 5
 
+static const OpponentType MIXED_NH_POOL[] = {
+    OPP_EXPERT_NH, OPP_RANGE_KITER, OPP_HISTORY_NH,
+};
+static const int MIXED_NH_CUM_WEIGHTS[] = {34, 67, 100};
+
 static OpponentType opp_select_from_pool(
     OsrsEnv* env, const OpponentType* pool, const int* cum_weights, int pool_size
 ) {
@@ -1893,6 +1953,7 @@ static OpponentType opp_select_from_pool(
 }
 
 static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
+    opp->active_sub_policy = OPP_NONE;
     opp->food_cooldown = 0;
     opp->potion_cooldown = 0;
     opp->karambwan_cooldown = 0;
@@ -1917,6 +1978,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = 0;
     opp->prev_dist_to_target = 0;
     opp->target_fleeing_ticks = 0;
+    opp->visible_history = (OppVisibleHistory){0};
 
     if (opp->type == OPP_PANICKING) {
         int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
@@ -1937,6 +1999,9 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         opp->active_sub_policy = opp_select_from_pool(
             env, MIXED_HARD_BALANCED_POOL, MIXED_HARD_BALANCED_CUM_WEIGHTS,
             MIXED_HARD_BALANCED_POOL_SIZE);
+    } else if (opp->type == OPP_MIXED_NH) {
+        opp->active_sub_policy = opp_select_from_pool(
+            env, MIXED_NH_POOL, MIXED_NH_CUM_WEIGHTS, 3);
     } else if (opp->type == OPP_PFSP && env->pvp_runtime.pfsp.pool_size > 0) {
         int idx = 0;
         int r = rand_int(env, 1000);
@@ -1961,8 +2026,9 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     }
 
     OpponentType resolved = opp->active_sub_policy ? opp->active_sub_policy : opp->type;
-    if (resolved > 0 && resolved <= OPP_RANGE_KITER) {
-        const OpponentRandRanges* r = &OPP_RAND_RANGES[resolved];
+    if ((resolved > 0 && resolved <= OPP_RANGE_KITER) || resolved == OPP_HISTORY_NH) {
+        const OpponentRandRanges* r = &OPP_RAND_RANGES[
+            resolved == OPP_HISTORY_NH ? OPP_EXPERT_NH : resolved];
         opp->prayer_accuracy = rand_range(env, r->prayer_accuracy);
         opp->off_prayer_rate = rand_range(env, r->off_prayer_rate);
         opp->offensive_prayer_rate = rand_range(env, r->offensive_prayer_rate);
@@ -1987,7 +2053,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
         resolved == OPP_UNPREDICTABLE_IMPROVED || resolved == OPP_UNPREDICTABLE_ONETICK ||
         (resolved >= OPP_ADVANCED_NH && resolved <= OPP_NIGHTMARE_NH) ||
         resolved == OPP_BLOOD_HEALER || resolved == OPP_GMAUL_COMBO ||
-        resolved == OPP_RANGE_KITER) {
+        resolved == OPP_RANGE_KITER || resolved == OPP_HISTORY_NH) {
         float raw[3];
         for (int i = 0; i < 3; i++) raw[i] = 0.33f + (rand_float(env) - 0.5f) * 0.4f;
         float sum = raw[0] + raw[1] + raw[2];
@@ -2012,7 +2078,7 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
     OpponentType active = opp->type;
     if (active == OPP_MIXED_EASY || active == OPP_MIXED_MEDIUM ||
         active == OPP_MIXED_HARD || active == OPP_MIXED_HARD_BALANCED ||
-        active == OPP_PFSP) {
+        active == OPP_PFSP || active == OPP_MIXED_NH) {
         active = opp->active_sub_policy;
     }
 
@@ -2087,6 +2153,9 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             break;
         case OPP_RANGE_KITER:
             opp_range_kiter(env, opp, actions);
+            break;
+        case OPP_HISTORY_NH:
+            opp_history_nh(env, opp, actions);
             break;
         default:
             break;

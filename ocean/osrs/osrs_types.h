@@ -748,6 +748,8 @@ typedef enum {
     OPP_GMAUL_COMBO,
     OPP_RANGE_KITER,
     OPP_SELFPLAY,
+    OPP_HISTORY_NH,
+    OPP_MIXED_NH,
 } OpponentType;
 
 #define MAX_OPPONENT_POOL 32
@@ -760,6 +762,23 @@ typedef struct {
     float wins[MAX_OPPONENT_POOL];
     float episodes[MAX_OPPONENT_POOL];
 } PFSPState;
+
+typedef enum {
+    OPP_HISTORY_EMPTY,
+    OPP_HISTORY_ONE,
+    OPP_HISTORY_READY,
+} OppHistoryPhase;
+
+typedef struct {
+    AttackStyle weapon;
+    OverheadPrayer prayer;
+} OppVisibleState;
+
+typedef struct {
+    OppHistoryPhase phase;
+    OppVisibleState older;
+    OppVisibleState latest;
+} OppVisibleHistory;
 
 typedef struct {
     OpponentType type;
@@ -805,6 +824,7 @@ typedef struct {
     float offensive_prayer_miss;
 
     float style_bias[3];
+    OppVisibleHistory visible_history;
 } OpponentState;
 
 typedef struct {
