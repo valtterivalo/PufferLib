@@ -181,43 +181,6 @@ static void init_player(Player* p) {
     p->prev_hp_percent = 1.0f;
 }
 
-static void set_fight_positions(OsrsEnv* env) {
-    int x0, y0, x1, y1;
-    if (env->has_rng_seed) {
-        x0 = FIGHT_AREA_BASE_X;
-        y0 = FIGHT_AREA_BASE_Y;
-        x1 = x0 + FIGHT_NEARBY_RADIUS;
-        y1 = y0;
-    } else {
-        int base_x = FIGHT_AREA_BASE_X;
-        int base_y = FIGHT_AREA_BASE_Y;
-        int max_x = base_x + FIGHT_AREA_WIDTH;
-        int max_y = base_y + FIGHT_AREA_HEIGHT;
-
-        x0 = base_x + rand_int(env, FIGHT_AREA_WIDTH);
-        y0 = base_y + rand_int(env, FIGHT_AREA_HEIGHT);
-
-        int near_min_x = max_int(base_x, x0 - FIGHT_NEARBY_RADIUS);
-        int near_min_y = max_int(base_y, y0 - FIGHT_NEARBY_RADIUS);
-        int near_max_x = min_int(max_x, x0 + FIGHT_NEARBY_RADIUS);
-        int near_max_y = min_int(max_y, y0 + FIGHT_NEARBY_RADIUS);
-
-        x1 = near_min_x + rand_int(env, near_max_x - near_min_x);
-        y1 = near_min_y + rand_int(env, near_max_y - near_min_y);
-    }
-
-    env->players[0].x = x0;
-    env->players[0].y = y0;
-    env->players[0].dest_x = x0;
-    env->players[0].dest_y = y0;
-    env->players[0].is_moving = 0;
-
-    env->players[1].x = x1;
-    env->players[1].y = y1;
-    env->players[1].dest_x = x1;
-    env->players[1].dest_y = y1;
-    env->players[1].is_moving = 0;
-}
 static void pvp_seed_inventory_supplies(Player* p) {
     static const struct {
         OsrsConsumableKind kind;
@@ -325,7 +288,61 @@ void pvp_reset(
         }
     }
 
-    set_fight_positions(env);
+    int spawn_tiles[ENCOUNTER_ARENA_TOPOLOGY_MAX_TILES];
+    int spawn_count = 0;
+    for (int tile = 0; tile < topology->tile_count; tile++) {
+        if (topology->legal_step_masks[0][tile]) spawn_tiles[spawn_count++] = tile;
+    }
+    assert(spawn_count >= NUM_AGENTS);
+    int first_tile = spawn_tiles[rand_int(env, spawn_count)];
+    int x0 = topology->origin_x + first_tile / topology->height;
+    int y0 = topology->origin_y + first_tile % topology->height;
+    int min_x = max_int(topology->origin_x, x0 - FIGHT_NEARBY_RADIUS);
+    int min_y = max_int(topology->origin_y, y0 - FIGHT_NEARBY_RADIUS);
+    int max_x = min_int(topology->origin_x + topology->width - 1, x0 + FIGHT_NEARBY_RADIUS);
+    int max_y = min_int(topology->origin_y + topology->height - 1, y0 + FIGHT_NEARBY_RADIUS);
+    spawn_count = 0;
+    for (int x = min_x; x <= max_x; x++) {
+        for (int y = min_y; y <= max_y; y++) {
+            int tile = encounter_arena_topology_index_raw(topology, x, y);
+            if (tile == first_tile || !topology->legal_step_masks[0][tile]) continue;
+            EncounterRouteInput input = {
+                .topology = topology,
+                .source_x = x0,
+                .source_y = y0,
+                .actor_size = 1,
+                .target_x = x,
+                .target_y = y,
+                .target_size = 1,
+                .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
+                .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
+                .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+                .result_detail = ENCOUNTER_ROUTE_RESULT_NEXT_STEPS,
+            };
+            EncounterRouteResult route = encounter_route_solve(&input);
+            if (route.outcome != ROUTE_REACHED_TARGET) continue;
+            input.source_x = x;
+            input.source_y = y;
+            input.target_x = x0;
+            input.target_y = y0;
+            route = encounter_route_solve(&input);
+            if (route.outcome == ROUTE_REACHED_TARGET) spawn_tiles[spawn_count++] = tile;
+        }
+    }
+    assert(spawn_count > 0);
+    int second_tile = spawn_tiles[rand_int(env, spawn_count)];
+    int x1 = topology->origin_x + second_tile / topology->height;
+    int y1 = topology->origin_y + second_tile % topology->height;
+    env->players[0].x = x0;
+    env->players[0].y = y0;
+    env->players[0].dest_x = x0;
+    env->players[0].dest_y = y0;
+    env->players[0].is_moving = 0;
+    env->players[1].x = x1;
+    env->players[1].y = y1;
+    env->players[1].dest_x = x1;
+    env->players[1].dest_y = y1;
+    env->players[1].is_moving = 0;
 
     env->players[0].last_obs_target_x = env->players[1].x;
     env->players[0].last_obs_target_y = env->players[1].y;
