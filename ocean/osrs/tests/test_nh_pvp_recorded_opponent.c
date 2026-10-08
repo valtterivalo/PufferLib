@@ -5,11 +5,11 @@ static Env env;
 static float observations[OBS_SIZE], actions[NUM_ATNS], reward, terminal;
 static unsigned char mask[NH_PVP_ACTION_MASK_SIZE];
 
-static void reset(void) {
+static void reset(OpponentType bot) {
     memset(&env, 0, sizeof(env));
     memset(actions, 0, sizeof(actions));
     DictItem items[] = {
-        {.key = "opponent_type", .value = OPP_RECORDED_NH},
+        {.key = "opponent_type", .value = (double)bot},
         {.key = "gear_tier", .value = 3},
         {.key = "is_lms", .value = 1},
         {.key = "use_c_opponent", .value = 1},
@@ -29,7 +29,7 @@ static void reset(void) {
 int main(void) {
     CHECK("recorded bot preserves previous IDs", OPP_EXPERT_NH == 23 &&
         OPP_RANGE_KITER == 30 && OPP_SELFPLAY == 31 &&
-        OPP_HISTORY_NH == 32 && OPP_MIXED_NH == 33 && OPP_RECORDED_NH == 34);
+        OPP_HISTORY_NH == 32 && OPP_MIXED_NH == 33 && OPP_RECORDED_NH == 34 && OPP_RECORDED_ADAPTIVE_NH == 35);
     unsigned attacks = (1u << RECORDED_NH_ATTACK_COUNT) - 1u;
     RecordedNhWeights prior = recorded_nh_attack_weights(
         RECORDED_NH_ATTACK_DISTANCE_COUNT, ATTACK_STYLE_NONE, PRAYER_NONE, attacks);
@@ -66,50 +66,100 @@ int main(void) {
         projected.total && projected.support != RECORDED_NH_EXACT &&
         recorded_nh_sample(projected, 0) == RECORDED_NH_MELEE_SPECIAL);
 
-    reset();
     OsrsEnv* original = &env.state.env;
-    static OsrsEnv variants[2];
-    int hidden[2][OSRS_BASE_NUM_ACTION_HEADS] = {{0}};
-    hidden[1][OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
-    hidden[1][OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
-    hidden[1][OSRS_HEAD_SPECIAL] = 1;
-    hidden[1][OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
-    for (int idle = 0; idle < 2; idle++) {
-        for (uint32_t seed = 1; seed <= 128; seed++) {
-            for (int i = 0; i < 2; i++) {
-                variants[i] = *original;
-                variants[i].rng_state = seed;
-                variants[i].actions = hidden[i];
-                variants[i].players[1].attack_timer = idle ? 3 : 0;
-                Player* target = &variants[i].players[0];
-                target->current_hitpoints = i ? 1 : target->base_hitpoints;
-                target->current_prayer = i ? 0 : target->base_prayer;
-                target->current_magic = i ? 0 : target->base_magic;
-                target->special_energy = i ? 100 : 0;
-                target->frozen_ticks = i ? 100 : 0;
-                target->freeze_immunity_ticks = i ? 100 : 0;
-                target->attack_timer = i ? 20 : 0;
-                target->num_pending_hits = i;
-                target->pending_hits[0].damage = i ? 100 : 0;
-                for (int head = 0; head < OSRS_BASE_NUM_ACTION_HEADS; head++)
-                    variants[i].pending_actions[head] = hidden[i][head];
-                generate_opponent_action(&variants[i], &variants[i].pvp_runtime.opponent);
+    for (int bot = OPP_RECORDED_NH; bot <= OPP_RECORDED_ADAPTIVE_NH; bot++) {
+        reset((OpponentType)bot);
+        static OsrsEnv variants[2];
+        int hidden[2][OSRS_BASE_NUM_ACTION_HEADS] = {{0}};
+        hidden[1][OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
+        hidden[1][OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
+        hidden[1][OSRS_HEAD_SPECIAL] = 1;
+        hidden[1][OSRS_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE;
+        for (int idle = 0; idle < 2; idle++) {
+            for (uint32_t seed = 1; seed <= 128; seed++) {
+                for (int i = 0; i < 2; i++) {
+                    variants[i] = *original;
+                    variants[i].rng_state = seed;
+                    variants[i].actions = hidden[i];
+                    variants[i].players[1].has_attack_timer = 1;
+                    variants[i].players[1].attack_timer = idle ? 3 : -1;
+                    AttackStyle completed = (AttackStyle)get_item_attack_style(
+                        variants[i].players[0].equipped[GEAR_SLOT_WEAPON]);
+                    variants[i].pvp_runtime.opponent.visible_history = (OppVisibleHistory){
+                        OPP_HISTORY_READY, {completed, PRAYER_PROTECT_MAGIC},
+                        {completed == ATTACK_STYLE_MELEE ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE,
+                            PRAYER_PROTECT_MELEE}};
+                    Player* target = &variants[i].players[0];
+                    target->current_hitpoints = i ? 1 : target->base_hitpoints;
+                    target->current_prayer = i ? 0 : target->base_prayer;
+                    target->current_magic = i ? 0 : target->base_magic;
+                    target->special_energy = i ? 100 : 0;
+                    target->frozen_ticks = i ? 100 : 0;
+                    target->freeze_immunity_ticks = i ? 100 : 0;
+                    target->attack_timer = i ? 20 : 0;
+                    target->num_pending_hits = i;
+                    target->pending_hits[0].damage = i ? 100 : 0;
+                    for (int head = 0; head < OSRS_BASE_NUM_ACTION_HEADS; head++)
+                        variants[i].pending_actions[head] = hidden[i][head];
+                    generate_opponent_action(&variants[i], &variants[i].pvp_runtime.opponent);
+                }
+                CHECK("full dispatch decisions and RNG depend only on completed visible target context",
+                    memcmp(variants[0].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
+                        variants[1].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
+                        OSRS_BASE_NUM_ACTION_HEADS * sizeof(int)) == 0 &&
+                    variants[0].rng_state == variants[1].rng_state &&
+                    memcmp(&variants[0].pvp_runtime.opponent.visible_history,
+                        &variants[1].pvp_runtime.opponent.visible_history,
+                        sizeof(OppVisibleHistory)) == 0);
             }
-            CHECK("full dispatch decisions and RNG depend only on completed visible target context",
-                memcmp(variants[0].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
-                    variants[1].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
-                    OSRS_BASE_NUM_ACTION_HEADS * sizeof(int)) == 0 &&
-                variants[0].rng_state == variants[1].rng_state &&
-                memcmp(&variants[0].pvp_runtime.opponent.visible_history,
-                    &variants[1].pvp_runtime.opponent.visible_history,
-                    sizeof(OppVisibleHistory)) == 0);
         }
+        puf_close(&env);
     }
+    reset(OPP_RECORDED_ADAPTIVE_NH);
     CHECK("recorded controller initializes engineered resources and excludes reads",
         original->pvp_runtime.opponent.eat_triple_threshold == 0.30f &&
         original->pvp_runtime.opponent.eat_double_threshold == 0.50f &&
         original->pvp_runtime.opponent.eat_brew_threshold == 0.70f &&
         original->pvp_runtime.opponent.read_chance == 0.0f);
+    static OsrsEnv fallback[2];
+    for (uint32_t seed = 1; seed <= 32; seed++) {
+        for (int index = 0; index < 2; index++) {
+            fallback[index] = *original;
+            fallback[index].rng_state = seed;
+            fallback[index].pvp_runtime.opponent.type = (OpponentType)(OPP_RECORDED_NH + index);
+            generate_opponent_action(&fallback[index], &fallback[index].pvp_runtime.opponent);
+        }
+        CHECK("adaptive bot without a qualifying forecast preserves fitted actions and RNG",
+            memcmp(fallback[0].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
+                fallback[1].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
+                OSRS_BASE_NUM_ACTION_HEADS * sizeof(int)) == 0 &&
+            fallback[0].rng_state == fallback[1].rng_state);
+    }
+    OppVisibleHistory alternating = {OPP_HISTORY_READY,
+        {ATTACK_STYLE_RANGED, PRAYER_PROTECT_MAGIC},
+        {ATTACK_STYLE_MELEE, PRAYER_PROTECT_MELEE}};
+    original->pvp_runtime.opponent.visible_history = alternating;
+    pvp_apply_equipment_plan(&original->players[0], PVP_EQUIPMENT_RANGED);
+    original->players[0].x = FIGHT_AREA_BASE_X + 10;
+    original->players[0].y = FIGHT_AREA_BASE_Y + 10;
+    original->players[1].x = original->players[0].x + 1;
+    original->players[1].y = original->players[0].y;
+    int submitted[NUM_ATNS] = {0};
+    pvp_emit_equipment_plan_actions(submitted, &original->players[0], PVP_EQUIPMENT_MELEE);
+    submitted[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
+    for (int head = 0; head < NUM_ATNS; head++) actions[head] = submitted[head];
+    puf_step(&env);
+    CHECK("adaptive defense predicts canonical executed next weapon from completed ABA history",
+        original->players[0].just_attacked &&
+        original->players[0].attack_style_this_tick == ATTACK_STYLE_MELEE &&
+        original->players[0].attack_was_on_prayer &&
+        original->players[1].prayer == PRAYER_PROTECT_MELEE &&
+        !original->pvp_runtime.opponent.has_read_this_tick);
+    puf_close(&env);
+    reset(OPP_RECORDED_ADAPTIVE_NH);
+    puf_set_bot_policy(&env, OPP_RECORDED_ADAPTIVE_NH);
+    CHECK("native scripted interface accepts appended adaptive bot35",
+        original->pvp_runtime.opponent.type == OPP_RECORDED_ADAPTIVE_NH);
     original->pvp_runtime.use_c_opponent_p0 = 1;
     original->pvp_runtime.opponent_p0.type = OPP_EXPERT_NH;
     opponent_reset(original, &original->pvp_runtime.opponent_p0);
@@ -135,7 +185,7 @@ int main(void) {
         styles[ATTACK_STYLE_MAGIC] > 0 && styles[ATTACK_STYLE_RANGED] > 0);
     CHECK("native full fight uses ranged and magic defense",
         overheads[PRAYER_PROTECT_MAGIC] > 0 && overheads[PRAYER_PROTECT_RANGED] > 0);
-    printf("RecordedNH full fight ticks%d, attacks M%d R%d C%d, prayers M%d R%d C%d\n",
+    printf("RecordedAdaptiveNH full fight ticks%d, attacks M%d R%d C%d, prayers M%d R%d C%d\n",
         observed_ticks, styles[ATTACK_STYLE_MELEE], styles[ATTACK_STYLE_RANGED],
         styles[ATTACK_STYLE_MAGIC], overheads[PRAYER_PROTECT_MELEE],
         overheads[PRAYER_PROTECT_RANGED], overheads[PRAYER_PROTECT_MAGIC]);

@@ -1021,7 +1021,9 @@ static void opp_history_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     opp_nh_tier_decide(env, opp, actions, &NH_TIER_EXPERT, OPP_FORECAST_VISIBLE, forecast);
 }
 
-static void opp_recorded_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
+static void opp_recorded_nh(
+    OsrsEnv* env, OpponentState* opp, int* actions, OppNhDecision decision
+) {
     Player* self = &env->players[1];
     Player* target = &env->players[0];
     AttackStyle target_style = (AttackStyle)get_item_attack_style(
@@ -1030,6 +1032,14 @@ static void opp_recorded_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
         opp->visible_history.latest.weapon, target_style, self->prayer);
     uint32_t defense_draw = (uint32_t)rand_int(env, (int)defense.total);
     OverheadPrayer prayer = (OverheadPrayer)recorded_nh_sample(defense, defense_draw);
+    if (decision == OPP_FORECAST_VISIBLE) {
+        OppVisibleState forecast = opp_forecast_visible(opp->visible_history,
+            (OppVisibleState){target_style, target->prayer});
+        if (forecast.weapon != target_style && forecast.weapon != ATTACK_STYLE_NONE)
+            prayer = forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE
+                : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
+                    : PRAYER_PROTECT_MAGIC;
+    }
     if (prayer != self->prayer)
         actions[OSRS_HEAD_OVERHEAD] = prayer == PRAYER_NONE
             ? ENCOUNTER_OVERHEAD_OFF : opp_set_refresh_for_prayer(prayer);
@@ -2056,7 +2066,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->pending_prayer_delay = 0;
     opp->last_target_gear_style = -1;
 
-    if (opp->type == OPP_RECORDED_NH) {
+    if (opp->type == OPP_RECORDED_NH || opp->type == OPP_RECORDED_ADAPTIVE_NH) {
         opp->eat_triple_threshold = 0.30f;
         opp->eat_double_threshold = 0.50f;
         opp->eat_brew_threshold = 0.70f;
@@ -2256,7 +2266,10 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             opp_history_nh(env, opp, actions);
             break;
         case OPP_RECORDED_NH:
-            opp_recorded_nh(env, opp, actions);
+            opp_recorded_nh(env, opp, actions, OPP_CURRENT_VISIBLE);
+            break;
+        case OPP_RECORDED_ADAPTIVE_NH:
+            opp_recorded_nh(env, opp, actions, OPP_FORECAST_VISIBLE);
             break;
         default:
             break;
@@ -2269,7 +2282,7 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             self->spec_armed, self->special_energy,
             can_cast_ice_spell(self), can_cast_blood_spell(self));
         if (styles.offensive != ATTACK_STYLE_NONE) {
-            if (active == OPP_RECORDED_NH) {
+            if (active == OPP_RECORDED_NH || active == OPP_RECORDED_ADAPTIVE_NH) {
                 actions[OSRS_HEAD_OFFENSIVE] = styles.offensive == ATTACK_STYLE_MAGIC
                     ? ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY
                     : styles.offensive == ATTACK_STYLE_RANGED
