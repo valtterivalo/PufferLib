@@ -1869,6 +1869,12 @@ typedef struct {
     double excess, pred_eat, pred_kill;
 } SwingPoint;
 
+static int swing_tick(const Tape* tape, const TapeAnim* an, int horizon) {
+    if (an->side != SIDE_US || (an->anim != ANIM_VW_SPEC && an->anim != ANIM_MAUL_SPEC)) return -1;
+    int t = an->tick - 1;
+    return t >= tape->lo + 1 && t + horizon <= tape->hi ? t : -1;
+}
+
 /** One point per recorded VW or maul spec swing: eat in the 6 ticks after, kill within the horizon, and the bar band against the next reveal, scored against worlds drawn at the current globals. */
 static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, SwingPoint* out) {
     enum { WINDOW = 6, WORLDS = 64 };
@@ -1877,9 +1883,8 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
     g_tape = tape;
     for (int a = 0; a < tape->anim_count; a++) {
         const TapeAnim* an = &tape->anims[a];
-        if (an->side != SIDE_US || (an->anim != ANIM_VW_SPEC && an->anim != ANIM_MAUL_SPEC)) continue;
-        int t = an->tick - 1;
-        if (t < tape->lo + 1 || t + g_la_horizon > tape->hi) continue;
+        int t = swing_tick(tape, an, g_la_horizon);
+        if (t < 0) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
         tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2295,87 +2300,122 @@ static void calibration(Tape* tapes, int count) {
     free(sim);
 }
 
-/** Grid over (hp shift, eat scale): fit on all fights, then leave-one-fight-out choice scored on the held-out fight. */
 static void corrections(Tape* tapes, int count) {
-    enum { SHIFTS = 5, SCALES = 5, MAX_POINTS = 1024 };
+    enum { SHIFTS = 5, SCALES = 5 };
     static const double SHIFT[SHIFTS] = {0, 4, 8, 12, 16}, SCALE[SCALES] = {1, 1.5, 2, 2.5, 3};
+    for (int i = 0; i < count; i++) assert(tapes[i].observer_series);
     static OppFit fit;
-    memset(&fit, 0, sizeof(fit));
-    fit_default_servings(&fit);
-    int eats, identified[2];
-    fit_model(tapes, count, 0, &fit);
-    infer_servings(tapes, count, 0, &fit, &eats, identified);
-    fit.eat_action = ACT_EAT_WARNING;
-    eat_model_setup(tapes, count);
-    assert_fitted(&fit, "corrections");
-    OppModel model = {MODEL_FIT, &fit};
-    g_la_model = &model;
-    g_la_worlds = 64;
-    g_la_stage = 64;
-    g_la_cache = 0;
+    static EatMixture mixture;
+    static EatRows rows;
+    Tape* train = malloc((size_t)count * sizeof(Tape));
+    int capacity = 0;
+    for (int i = 0; i < count; i++) capacity = imax(capacity, tapes[i].anim_count);
+    SwingPoint* base = malloc((size_t)capacity * sizeof(SwingPoint));
+    SwingPoint* points = malloc((size_t)capacity * sizeof(SwingPoint));
     Sim* a = malloc(sizeof(Sim));
     Sim* b = malloc(sizeof(Sim));
+    Sim* fit_sim = malloc(sizeof(Sim));
     sim_init(a);
     sim_init(b);
-    static SwingPoint grid[SHIFTS][SCALES][MAX_POINTS];
-    static int fight_of[MAX_POINTS];
-    int total = 0;
-    for (int i = 0; i < count; i++) {
-        int n = 0;
-        for (int s = 0; s < SHIFTS; s++)
-            for (int e = 0; e < SCALES; e++) {
-                g_la_belief_hp_shift = SHIFT[s];
-                g_eat_scale = SCALE[e];
-                n = swing_points(&tapes[i], &model, a, b, &grid[s][e][total]);
-            }
-        for (int k = 0; k < n; k++) fight_of[total + k] = i;
-        total += n;
-        assert(total < MAX_POINTS);
-    }
-    g_la_belief_hp_shift = 0;
-    g_eat_scale = 1;
-    double cost[SHIFTS][SCALES];
-    for (int pass = -1; pass < count; pass++) {
+    sim_init(fit_sim);
+    int folds = 0, swings = 0, observed_eats = 0, observed_kills = 0;
+    double base_eats = 0, base_kills = 0, corrected_eats = 0, corrected_kills = 0;
+    for (int pass = 0; pass < count; pass++) {
+        int eligible = 0;
+        for (int a = 0; a < tapes[pass].anim_count; a++) eligible += swing_tick(&tapes[pass], &tapes[pass].anims[a], g_la_horizon) >= 0;
+        if (!eligible) continue;
+        g_la_belief_hp_shift = 0;
+        g_eat_scale = 1;
+        int train_count = 0;
+        for (int i = 0; i < count; i++) if (i != pass) train[train_count++] = tapes[i];
+        for (int i = 0; i < train_count; i++) assert(train[i].ticks != tapes[pass].ticks);
+        memset(&fit, 0, sizeof(fit));
+        fit_default_servings(&fit);
+        int eats, identified[2];
+        fit_model(train, train_count, 0, &fit);
+        infer_servings(train, train_count, 0, &fit, &eats, identified);
+        fit.eat_action = ACT_EAT_WARNING;
+        rows.count = 0;
+        eat_rows_add(&rows, train, train_count, 0, fit_sim);
+        eat_rows_unmasked(&rows);
+        for (int i = 0; i < rows.count; i++) assert(rows.rows[i].fight / FIT_SAMPLES < train_count);
+        mix_fit(&mixture, 2, &rows);
+        g_eat_model.on = 1;
+        g_eat_model.model = EAT_MIXTURE;
+        g_eat_model.types = mixture.types;
+        memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi));
+        g_eat_model.logit = mixture.logit;
+        assert_fitted(&fit, "corrections");
+        OppModel model = {MODEL_FIT, &fit};
         double best = 1e18;
         int bs = 0, be = 0;
+        int training_swings = 0;
         for (int s = 0; s < SHIFTS; s++)
             for (int e = 0; e < SCALES; e++) {
                 double loss = 0;
-                for (int k = 0; k < total; k++) {
-                    if (fight_of[k] == pass) continue;
-                    const SwingPoint* p = &grid[s][e][k];
-                    double pe = fmin(0.98, fmax(0.02, p->pred_eat));
-                    double pk = fmin(0.98, fmax(0.02, p->pred_kill));
-                    loss -= p->observed_eat ? log(pe) : log(1 - pe);
-                    loss -= p->observed_kill ? log(pk) : log(1 - pk);
+                int n = 0;
+                g_la_belief_hp_shift = SHIFT[s];
+                g_eat_scale = SCALE[e];
+                for (int i = 0; i < train_count; i++) {
+                    int got = swing_points(&train[i], &model, a, b, points);
+                    n += got;
+                    for (int k = 0; k < got; k++) {
+                        double pe = fmin(0.98, fmax(0.02, points[k].pred_eat));
+                        double pk = fmin(0.98, fmax(0.02, points[k].pred_kill));
+                        loss -= points[k].observed_eat ? log(pe) : log(1 - pe);
+                        loss -= points[k].observed_kill ? log(pk) : log(1 - pk);
+                    }
                 }
-                cost[s][e] = loss;
+                if (s == 0 && e == 0) training_swings = n;
+                else assert(n == training_swings);
                 if (loss < best) { best = loss; bs = s; be = e; }
             }
-        if (pass < 0) {
-            printf("fit on all %d fights, %d swings: hp shift %+.0f eat scale %.1f (logloss %.1f, uncorrected %.1f)\n", count, total, SHIFT[bs], SCALE[be], best, cost[0][0]);
-            for (int s = 0; s < SHIFTS; s++) { printf("  shift %+3.0f:", SHIFT[s]); for (int e = 0; e < SCALES; e++) printf(" %7.1f", cost[s][e]); printf("\n"); }
-            for (int s = 0; s < SHIFTS; s += 4) for (int e = 0; e < SCALES; e += 4) {
-                double eo = 0, ep = 0, ko = 0, kp = 0;
-                for (int k = 0; k < total; k++) { eo += grid[s][e][k].observed_eat; ep += grid[s][e][k].pred_eat; ko += grid[s][e][k].observed_kill; kp += grid[s][e][k].pred_kill; }
-                printf("  shift %+3.0f scale %.1f: eat %.3f/%.3f kill %.3f/%.3f (predicted/observed)\n", SHIFT[s], SCALE[e], ep / total, eo / total, kp / total, ko / total);
-            }
-            continue;
+        assert(training_swings > 0);
+        g_la_belief_hp_shift = 0;
+        g_eat_scale = 1;
+        int held_n = swing_points(&tapes[pass], &model, a, b, base);
+        assert(held_n == eligible);
+        g_la_belief_hp_shift = SHIFT[bs];
+        g_eat_scale = SCALE[be];
+        int corrected_n = swing_points(&tapes[pass], &model, a, b, points);
+        assert(corrected_n == held_n);
+        double held_base_eat = 0, held_base_kill = 0, held_corr_eat = 0, held_corr_kill = 0;
+        int held_obs_eat = 0, held_obs_kill = 0;
+        for (int k = 0; k < held_n; k++) {
+            assert(base[k].tick == points[k].tick);
+            assert(base[k].observed_eat == points[k].observed_eat && base[k].observed_kill == points[k].observed_kill);
+            held_obs_eat += base[k].observed_eat;
+            held_obs_kill += base[k].observed_kill;
+            held_base_eat += base[k].pred_eat;
+            held_base_kill += base[k].pred_kill;
+            held_corr_eat += points[k].pred_eat;
+            held_corr_kill += points[k].pred_kill;
         }
-        double held[2][4] = {{0}}; int held_n = 0;
-        for (int k = 0; k < total; k++) {
-            if (fight_of[k] != pass) continue;
-            held_n++;
-            const SwingPoint* base = &grid[0][0][k];
-            const SwingPoint* corr = &grid[bs][be][k];
-            held[0][0] += base->pred_eat; held[0][1] += base->observed_eat; held[0][2] += base->pred_kill; held[0][3] += base->observed_kill;
-            held[1][0] += corr->pred_eat; held[1][1] += corr->observed_eat; held[1][2] += corr->pred_kill; held[1][3] += corr->observed_kill;
-        }
-        if (held_n) printf("held-out %-28s %2d swings picked shift %+.0f scale %.1f | eat obs %.2f base %.2f corrected %.2f | kill obs %.2f base %.2f corrected %.2f\n", tapes[pass].name, held_n, SHIFT[bs], SCALE[be],
-            held[0][1] / held_n, held[0][0] / held_n, held[1][0] / held_n, held[0][3] / held_n, held[0][2] / held_n, held[1][2] / held_n);
+        folds++;
+        swings += held_n;
+        observed_eats += held_obs_eat;
+        observed_kills += held_obs_kill;
+        base_eats += held_base_eat;
+        base_kills += held_base_kill;
+        corrected_eats += held_corr_eat;
+        corrected_kills += held_corr_kill;
+        printf("held-out %-28s train %d fights %d swings, test %d swings, shift %+.0f scale %.1f | eat %.3f/%.3f/%.3f kill %.3f/%.3f/%.3f (observed/base/corrected)\n",
+            tapes[pass].name, train_count, training_swings, held_n, SHIFT[bs], SCALE[be],
+            (double)held_obs_eat / held_n, held_base_eat / held_n, held_corr_eat / held_n,
+            (double)held_obs_kill / held_n, held_base_kill / held_n, held_corr_kill / held_n);
     }
+    assert(swings > 0);
+    printf("held-out total %d/%d fights, %d swings | eat observed %d/%d %.6f base %.6f corrected %.6f | kill observed %d/%d %.6f base %.6f corrected %.6f (expected %.3f/%.3f)\n",
+        folds, count, swings, observed_eats, swings, (double)observed_eats / swings, base_eats / swings, corrected_eats / swings,
+        observed_kills, swings, (double)observed_kills / swings, base_kills / swings, corrected_kills / swings, base_kills, corrected_kills);
+    g_la_belief_hp_shift = 0;
+    g_eat_scale = 1;
+    free(train);
+    free(base);
+    free(points);
     free(a);
     free(b);
+    free(fit_sim);
 }
 
 int main(int argc, char** argv) {
