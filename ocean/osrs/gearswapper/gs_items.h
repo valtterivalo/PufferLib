@@ -5,7 +5,7 @@
 #include "gs_tables.h"
 
 typedef enum { GS_W_VOIDWAKER, GS_W_GRANITE_MAUL, GS_W_ARMADYL_GODSWORD, GS_W_ANCIENT_GODSWORD, GS_W_DRAGON_CLAWS, GS_W_DRAGON_DAGGER,
-    GS_W_ABYSSAL_DAGGER, GS_W_VESTAS_SPEAR, GS_W_DRAGON_MACE_BH, GS_W_DRAGON_MACE, GS_W_VESTAS_LONGSWORD, GS_W_STATIUS_WARHAMMER,
+    GS_W_ABYSSAL_DAGGER_BH, GS_W_ABYSSAL_DAGGER, GS_W_VESTAS_SPEAR, GS_W_DRAGON_MACE_BH, GS_W_DRAGON_MACE, GS_W_VESTAS_LONGSWORD, GS_W_STATIUS_WARHAMMER,
     GS_W_MORRIGANS_THROWING_AXE, GS_W_MORRIGANS_JAVELIN, GS_W_ZURIELS_STAFF, GS_W_NOXIOUS_HALBERD,
     GS_W_DRAGON_WARHAMMER, GS_W_DARK_BOW, GS_W_BALLISTA,
     GS_W_ARMADYL_CROSSBOW, GS_W_ZARYTE_CROSSBOW, GS_W_TOXIC_BLOWPIPE, GS_W_MAGIC_SHORTBOW_I, GS_W_MAGIC_SHORTBOW,
@@ -14,7 +14,7 @@ typedef enum { GS_W_VOIDWAKER, GS_W_GRANITE_MAUL, GS_W_ARMADYL_GODSWORD, GS_W_AN
 typedef struct { int cost; double least, spec_multiplier, accuracy; int assumed_ammo; const char* names[2]; } GsWeaponRow;
 static const GsWeaponRow GS_WEAPON_ROWS[GS_WEAPONS] = {
     {50, 0.5, 1.5, 1, 0, {"voidwaker"}}, {50, 0, 1.0, 1, 0, {"granite maul"}}, {50, 0, 1.375, 2, 0, {"armadyl godsword"}}, {50, 0, 1.1, 2, 0, {"ancient godsword"}},
-    {50, 0, 1.0, 1, 0, {"dragon claws"}}, {25, 0, 2.3, 1.25, 0, {"dragon dagger"}}, {25, 0, 0.85, 1.25, 0, {"abyssal dagger"}},
+    {50, 0, 1.0, 1, 0, {"dragon claws"}}, {25, 0, 2.3, 1.25, 0, {"dragon dagger"}}, {25, 0, 0.95, 1.25, 0, {"abyssal dagger (bh)"}}, {25, 0, 0.85, 1.25, 0, {"abyssal dagger"}},
     {50, 0, 1.0, 1, 0, {"vesta's spear"}}, {15, 0, 1.5, 1.25, 0, {"dragon mace (bh)"}}, {25, 0, 1.5, 1.25, 0, {"dragon mace"}},
     {25, 0.2, 1.2, 1, 0, {"vesta's longsword", "vesta's blighted longsword"}}, {35, 0.25, 1.25, 1, 0, {"statius's warhammer"}},
     {50, 0.5, 1.5, 1.5, 0, {"morrigan's throwing axe"}}, {50, 0, 1.0, 1.5, 0, {"morrigan's javelin"}}, {0, 0, 1.0, 1, 0, {"zuriel's staff"}},
@@ -184,7 +184,7 @@ static int gs_max_spec(GsWeapon weapon, int style, GsLevels l, GsBonuses b, int*
         case GS_W_OTHER: case GS_W_NOXIOUS_HALBERD: case GS_W_DHAROKS_GREATAXE: case GS_W_SOULREAPER_AXE: return 0;
         case GS_W_DRAGON_CLAWS: { int first = gs_max_melee(l, b) - 1; *out = first + first / 2 + first / 4 + first / 4 + 1; return 1; }
         case GS_W_DARK_BOW: *out = imin(96, (int)(2 * row->spec_multiplier * gs_max_ranged(l, b))); return 1;
-        case GS_W_ABYSSAL_DAGGER: *out = 2 * (int)(row->spec_multiplier * gs_max_normal(weapon, style, l, b)); return 1;
+        case GS_W_ABYSSAL_DAGGER_BH: case GS_W_ABYSSAL_DAGGER: *out = 2 * (int)(row->spec_multiplier * gs_max_normal(weapon, style, l, b)); return 1;
         case GS_W_MAGIC_SHORTBOW: case GS_W_MAGIC_SHORTBOW_I: *out = 2 * gs_max_ranged(l, b); return 1;
         case GS_W_VOLATILE_NIGHTMARE_STAFF: *out = gs_max_magic(66, l, b); return 1;
         default: *out = (int)(row->spec_multiplier * gs_max_normal(weapon, style, l, b)); return 1;
