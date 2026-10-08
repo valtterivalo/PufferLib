@@ -92,6 +92,7 @@ static int read_record(FILE* f, Record* r) {
             h->attack = read_attack(&p);
             h->probability = strtod(p, NULL);
         } else if (!strcmp(tag, "OSW")) { s->has_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->swing.lands, &s->swing.least, &s->swing.most, &s->swing.accuracy, &s->swing.arrows); }
+        else if (!strcmp(tag, "OE")) { s->has_owed = 1; s->owed.source = SRC_VENGEANCE_ECHO; sscanf(p, "%d %d", &s->owed.tick, &s->owed.most); s->owed.least = s->owed.most; s->owed.accuracy = 1; }
         else if (!strcmp(tag, "LSW")) { s->has_local_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->local_swing.lands, &s->local_swing.least, &s->local_swing.most, &s->local_swing.accuracy, &s->local_swing.arrows); }
         else if (!strcmp(tag, "W")) {
             s->warning.since = GS_NONE;

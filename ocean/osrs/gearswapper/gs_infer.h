@@ -55,8 +55,9 @@ typedef struct {
     GsArmament arsenal[GS_ARSENAL_SIZE];
     int inventory_units[3], ready[3];
     GsHealthRange opponent_hitpoints;
-    int has_opponent_swing, swing_spec, swing_distance, swing_tick; GsArmament swing_armament;
-    int has_swung, swung_spec, swung_tick; GsArmament swung_armament;
+    int has_opponent_swing, swing_spec, swing_distance, swing_tick, swing_stacks; GsArmament swing_armament;
+    int has_swung, swung_spec, swung_tick, swung_stacks; GsArmament swung_armament;
+    int landed_tick, landed_damage;
     GsBonuses surplus;
     GsReflect swing_reflect;
     GsSoulStacks soul_stacks;
@@ -93,6 +94,7 @@ static void gs_eater_reset(GsInfer* s) {
     s->recoil = GS_RECOIL_UNSEEN;
     s->struck_tick = INT_MIN;
     s->has_struck_damage = 0;
+    s->landed_tick = INT_MIN;
 }
 
 static void gs_infer_init(GsInfer* s) {
@@ -242,8 +244,11 @@ static int gs_dharok_most(const GsInfer* s, const GsArmament* a) {
     return a->weapon == GS_W_DHAROKS_GREATAXE ? gs_dharok(a->normal, s->opponent_hitpoints.low, GS_ASSUMED_MAX_HP) : a->normal;
 }
 
-static int gs_armament_most(const GsInfer* s, const GsArmament* a, int tick) {
-    int stacks = a->weapon == GS_W_SOULREAPER_AXE ? gs_soul_at(s->soul_stacks, tick) : 0;
+static int gs_held_by(const GsInfer* s, const GsArmament* a, int tick) {
+    return a->weapon == GS_W_SOULREAPER_AXE ? gs_soul_at(s->soul_stacks, tick) : 0;
+}
+
+static int gs_armament_most(const GsInfer* s, const GsArmament* a, int stacks) {
     return stacks == 0 ? gs_dharok_most(s, a) : gs_max_behead(GS_ASSUMED_LEVELS, a->bonuses, stacks);
 }
 
@@ -292,10 +297,9 @@ static double gs_spec_accuracy(const GsClient* c, const GsArmament* a) {
 }
 
 /* AutoEater.strike */
-static GsStrike gs_strike(const GsInfer* s, const GsArmament* a, int tick) {
+static GsStrike gs_strike(const GsInfer* s, const GsArmament* a, int stacks) {
     const GsClient* c = &s->c;
-    int stacks = a->weapon == GS_W_SOULREAPER_AXE ? gs_soul_at(s->soul_stacks, tick) : 0;
-    int most = gs_armament_most(s, a, tick);
+    int most = gs_armament_most(s, a, stacks);
     if (stacks == 0) return (GsStrike){0, 0, gs_protected_damage(c, a->style, most), gs_armament_accuracy(c, a)};
     return (GsStrike){0, gs_protected_damage(c, a->style, gs_max_behead_least(most, stacks)), gs_protected_damage(c, a->style, most),
         gs_accuracy_scaled(c, a, 1 + 0.12 * stacks, a->damage, 1)};
@@ -310,8 +314,8 @@ static GsSwing gs_local_swing_of(int attack_tick, GsStyle style, int distance, G
     return (GsSwing){gs_lands_for(attack_tick, style, distance, gs_local_lead(pid)), 0, most, accuracy, 1};
 }
 
-static GsSwing gs_swing_of(const GsInfer* s, const GsArmament* a, int distance, int tick, GsPid pid) {
-    GsStrike strike = gs_strike(s, a, tick);
+static GsSwing gs_swing_of(const GsInfer* s, const GsArmament* a, int distance, int stacks, int tick, GsPid pid) {
+    GsStrike strike = gs_strike(s, a, stacks);
     return gs_opponent_swing(tick, (GsStyle)a->style, distance, pid, strike.least, gs_most_per_arrow(a, strike.most), strike.accuracy);
 }
 
@@ -324,7 +328,7 @@ static GsSwing gs_opponent_swing_for(const GsInfer* s, GsPid pid) {
     if (s->swing_spec)
         swing = gs_opponent_swing(s->swing_tick, (GsStyle)a->style, s->swing_distance, pid, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
             gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->has_spec ? a->spec : a->normal)), gs_spec_accuracy(&s->c, a));
-    else swing = gs_swing_of(s, a, s->swing_distance, s->swing_tick, pid);
+    else swing = gs_swing_of(s, a, s->swing_distance, s->swing_stacks, s->swing_tick, pid);
     swing.arrows = gs_arrows(a->weapon);
     return swing;
 }
@@ -464,14 +468,18 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
     s->swung_armament = *armed;
     s->swung_spec = spec_cost != 0;
     s->swung_tick = tick;
-    s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_most_per_arrow(armed, gs_armament_most(s, armed, tick)));
+    int soul = armed->weapon == GS_W_SOULREAPER_AXE;
+    GsSoulStacks before = s->soul_stacks;
+    if (soul && kind == GS_KIND_ATTACK) s->soul_stacks = animation == GS_BEHEAD_ANIMATION ? gs_soul_beheaded(tick) : gs_soul_swung(before, tick);
+    int stacks = !soul ? 0 : animation == GS_BEHEAD_ANIMATION ? gs_soul_at(before, tick) : gs_soul_at(s->soul_stacks, tick);
+    s->swung_stacks = stacks;
+    s->swing_stacks = stacks;
+    s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_most_per_arrow(armed, gs_armament_most(s, armed, stacks)));
     s->has_opponent_swing = 1;
     s->swing_armament = *armed;
     s->swing_spec = spec_cost != 0;
     s->swing_distance = gs_distance(c);
     s->swing_tick = tick;
-    if (armed->weapon == GS_W_SOULREAPER_AXE && kind == GS_KIND_ATTACK)
-        s->soul_stacks = animation == GS_BEHEAD_ANIMATION ? gs_soul_beheaded(tick) : gs_soul_swung(s->soul_stacks, tick);
 }
 
 static GsBonuses gs_bonuses_of_style(GsStyle style, int points) {
@@ -490,8 +498,8 @@ static GsArmament gs_armament_plus(GsArmament a, GsBonuses extra) {
     return a;
 }
 
-static int gs_most_of(const GsInfer* s, const GsArmament* a, int spec, int tick) {
-    return gs_most_per_arrow(a, spec ? a->spec : gs_armament_most(s, a, tick));
+static int gs_most_of(const GsInfer* s, const GsArmament* a, int spec, int stacks) {
+    return gs_most_per_arrow(a, spec ? a->spec : gs_armament_most(s, a, stacks));
 }
 
 /* AutoEater.maxHit */
@@ -502,7 +510,7 @@ static void gs_eater_max_hit(GsInfer* s, int amount) {
     int points;
     for (points = -GS_MAX_SURPLUS; points <= GS_MAX_SURPLUS; points++) {
         GsArmament candidate = gs_armament_plus(latest, gs_bonuses_of_style((GsStyle)latest.style, points));
-        if (gs_protected_damage(&s->c, latest.style, gs_most_of(s, &candidate, s->swung_spec, s->swung_tick)) >= amount) break;
+        if (gs_protected_damage(&s->c, latest.style, gs_most_of(s, &candidate, s->swung_spec, s->swung_stacks)) >= amount) break;
     }
     assert(points <= GS_MAX_SURPLUS);
     GsBonuses delta = gs_bonuses_of_style((GsStyle)latest.style, points);
@@ -688,7 +696,11 @@ static void gs_on_hitsplat(GsInfer* s, int hit_tick, int who, int amount, int ty
         gs_eater_struck_back(s, amount, hit_tick);
         if (type == GS_ATTACK_HITSPLAT_MAX_ME) gs_eater_max_hit(s, amount);
     }
-    if (struck && rival && who == s->timed && mine && gs_duel(s, 0, s->timed)) s->pid = gs_pid_hit_on_opponent(s->pid, hit_tick, amount);
+    if (struck && rival && who == s->timed && mine && gs_duel(s, 0, s->timed)) {
+        s->pid = gs_pid_hit_on_opponent(s->pid, hit_tick, amount);
+        s->landed_damage = hit_tick == s->landed_tick ? imax(s->landed_damage, amount) : amount;
+        s->landed_tick = hit_tick;
+    }
     if (who != 0 && s->timed == who) {
         s->damage_since_reading = (s->has_damage_since_reading ? s->damage_since_reading : 0) + amount;
         s->has_damage_since_reading = 1;
@@ -836,13 +848,20 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     }
     out->warning = gs_eater_warning(s);
     out->stakes = stakes;
+    if (s->opponent.vengeance.phase == GS_VPHASE_PROCCED && s->opponent.vengeance.proc >= s->landed_tick && s->opponent.vengeance.proc <= s->landed_tick + 1) {
+        int lands = s->landed_tick + (out->pid == GS_PID_LOCAL ? 1 : 0);
+        if (lands > tick) {
+            out->has_owed = 1;
+            out->owed = (GsHit){SRC_VENGEANCE_ECHO, lands, s->landed_damage * 3 / 4, s->landed_damage * 3 / 4, 1};
+        }
+    }
     out->floor = GS_NONE;
     gs_armament_of(s);
     int order[GS_ARSENAL_SIZE];
     int n = gs_arsenal_order(s, order);
     for (int k = 0; k < n; k++) {
         const GsArmament* a = &s->arsenal[order[k]];
-        GsStrike strike = gs_strike(s, a, tick);
+        GsStrike strike = gs_strike(s, a, gs_held_by(s, a, tick));
         out->attacks[out->attack_count++] = (GsAttack){(GsStyle)a->style, strike.least, gs_most_per_arrow(a, strike.most), 0, a->interval, strike.accuracy, 0, gs_arrows(a->weapon)};
         if (a->weapon == GS_W_GRANITE_MAUL) {
             out->has_maul = 1;
@@ -885,7 +904,7 @@ static int gs_incoming(GsInfer* s, int tick, GsPid pid, GsIncoming* out) {
     int due = tick + 1 + gs_timer_until_earliest(s->opponent.timer, tick + 1);
     GsArmament* armament = gs_armament_of(s);
     if (!armament) return 0;
-    GsSwing next = gs_swing_of(s, armament, gs_distance(&s->c), due, pid);
+    GsSwing next = gs_swing_of(s, armament, gs_distance(&s->c), gs_held_by(s, armament, due), due, pid);
     *out = (GsIncoming){next.lands, next.least, next.most, next.accuracy, due};
     return 1;
 }
@@ -924,7 +943,7 @@ static int gs_spec_plannable(const GsInfer* s) {
 /* AutoEater.weaponReflect and opponentSpecCost, the inputs of the Vengeance and Bait rules */
 static GsReflect gs_weapon_reflect(GsInfer* s, int tick) {
     GsArmament* a = gs_armament_of(s);
-    return a ? gs_reflect_of_max(gs_most_per_arrow(a, gs_armament_most(s, a, tick))) : GS_REFLECT_WEAK;
+    return a ? gs_reflect_of_max(gs_most_per_arrow(a, gs_armament_most(s, a, gs_held_by(s, a, tick)))) : GS_REFLECT_WEAK;
 }
 
 static int gs_opponent_spec_cost(const GsInfer* s) {

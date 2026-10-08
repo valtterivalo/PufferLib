@@ -7,6 +7,8 @@
  * eat_forgone_knockout. */
 #define GS_KNOCKOUT_LATER 0.065
 enum { GS_MAX_ATTACKS = 8, GS_MAX_HIDDEN = 6, GS_MAX_FOODS = 8, GS_MAX_MEAL = 4, GS_MAX_MEALS = 128, GS_MAX_HITS = 512 };
+typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_GODSWORD_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
+typedef struct { GsSource source; int tick, least, most; double accuracy; } GsHit;
 typedef enum { GS_EAT_NOW, GS_WAIT, GS_EXPOSED } GsDecision;
 typedef enum { GS_ENGAGED, GS_IDLE } GsOffence;
 
@@ -31,6 +33,7 @@ typedef struct {
     int local_most, local_normal, local_interval;
     double local_opening_accuracy, local_accuracy;
     int has_local_swing; GsSwing local_swing;
+    int has_owed; GsHit owed;
     GsHealthRange opponent_hp, opponent_bar;
     GsOffence offence;
     double tolerance, pid_flip;
@@ -44,8 +47,6 @@ typedef struct {
 typedef enum { GS_URGENT, GS_DEFERRABLE } GsUrgency;
 typedef struct { GsDecision decision; double risk, meal_risk; int foods[GS_MAX_MEAL], food_count, complete; GsUrgency urgency; GsHealth health; } GsVerdict;
 
-typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_GODSWORD_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
-typedef struct { GsSource source; int tick, least, most; double accuracy; } GsHit;
 typedef struct { GsHit* hits; int count; } GsScenario;
 typedef struct { int tick, amount, ceiling; } GsHeal;
 static int gs_ceiling(const GsFood* food) { return GS_ASSUMED_MAX_HP + (food->drained ? food->heal : 0); }
@@ -238,8 +239,9 @@ static GsVec eat_echoes(Arena* arena, const GsEatSituation* s, const GsVec* cons
     for (int timing = 0; timing < 2; timing++) {
         GsVec swings = eat_own_swings(arena, s, consumptions, horizon, (GsResumeTiming)timing);
         for (int first = s->vengeance == GS_VENGEANCE_UP ? 0 : swings.count; first <= swings.count; first++) {
-            GsHit* reflected = arena_alloc(arena, (size_t)(2 * swings.count + 1) * sizeof(GsHit));
+            GsHit* reflected = arena_alloc(arena, (size_t)(2 * swings.count + 2) * sizeof(GsHit));
             int count = 0;
+            if (s->has_owed) reflected[count++] = s->owed;
             for (int i = 0; i < swings.count; i++) {
                 const GsSwing* swing = &VEC_AT(GsSwing, swings, i);
                 int dealt = imin(swing->most, s->opponent_hp.high);

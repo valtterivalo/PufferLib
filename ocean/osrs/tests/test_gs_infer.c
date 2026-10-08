@@ -134,6 +134,7 @@ static void format_situation(const GsEatSituation* s, char* out) {
     }
     if (s->has_swing) sprintf(out + strlen(out), "OSW %d %d %d %.17g %d\n", s->swing.lands, s->swing.least, s->swing.most, s->swing.accuracy, s->swing.arrows);
     if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g %d\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy, s->local_swing.arrows);
+    if (s->has_owed) sprintf(out + strlen(out), "OE %d %d\n", s->owed.tick, s->owed.most);
     if (s->warning.since == GS_NONE) strcat(out, "W none");
     else sprintf(out + strlen(out), "W %d", s->warning.since);
 #ifdef GS_HP_BELIEF
