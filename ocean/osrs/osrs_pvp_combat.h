@@ -1138,6 +1138,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 }
             }
 
+            if (hit_success && attacker->entity_type == ENTITY_PLAYER && damage == 0) damage = 1;
             total_damage += damage;
 
             int queued_freeze_ticks = freeze_ticks;
