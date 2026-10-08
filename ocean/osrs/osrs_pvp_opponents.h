@@ -1002,7 +1002,8 @@ static void opp_nh_tier_decide(
 }
 
 static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const OppNhTier* tier) {
-    opp_nh_tier_decide(env, opp, actions, tier, OPP_CURRENT_VISIBLE, (OppVisibleState){0});
+    opp_nh_tier_decide(env, opp, actions, tier, OPP_CURRENT_VISIBLE,
+        (OppVisibleState){ATTACK_STYLE_NONE, PRAYER_NONE});
 }
 
 static void opp_history_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
@@ -1978,7 +1979,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->read_agent_moving = 0;
     opp->prev_dist_to_target = 0;
     opp->target_fleeing_ticks = 0;
-    opp->visible_history = (OppVisibleHistory){0};
+    opp->visible_history = (OppVisibleHistory){OPP_HISTORY_EMPTY,
+        {ATTACK_STYLE_NONE, PRAYER_NONE}, {ATTACK_STYLE_NONE, PRAYER_NONE}};
 
     if (opp->type == OPP_PANICKING) {
         int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
