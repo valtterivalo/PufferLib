@@ -5685,7 +5685,7 @@ static void test_loadout_divine_potions_and_stat_drift(void) {
     ColoSnapshot snap;
     col_snapshot_ctx((EncounterState*)&s, (EncounterContext*)&ctx, &snap);
     CHECK("snapshot version matches the consolidated state layout",
-        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 26u);
+        snap.version == COLO_SNAPSHOT_VERSION && COLO_SNAPSHOT_VERSION == 27u);
     ColosseumState restored;
     memset(&restored, 0, sizeof(restored));
     col_restore_ctx((EncounterState*)&restored, (EncounterContext*)&ctx, &snap, sizeof(snap));
@@ -6528,7 +6528,7 @@ static void test_combat_fidelity_contract_sizes(void) {
     CHECK("modifier block has 60 features", COLO_MODIFIER_OBS_SIZE == 60);
     CHECK("NPC slots carry a type code, not a type one-hot",
         COLO_FEATURES_PER_NPC == 23);
-    CHECK("snapshot version is v26", COLO_SNAPSHOT_VERSION == 26u);
+    CHECK("snapshot version is v27", COLO_SNAPSHOT_VERSION == 27u);
     CHECK("every active NPC gets an obs slot (no busy-wave drop)",
         COLO_OBS_NPCS == 24 && COLO_OBS_NPCS == COLO_MAX_NPCS);
     CHECK("PRIMARY head covers noop, movement, and NPC obs slots",

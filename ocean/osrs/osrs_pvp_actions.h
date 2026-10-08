@@ -130,6 +130,19 @@ static void pvp_apply_drink_one_dose_effect(
     OsrsConsumableKind kind
 ) {
     Player* p = (Player*)ctx;
+    if (kind == OSRS_CONSUMABLE_SANFEW) {
+        encounter_sanfew_restore_stats(p);
+        encounter_add_prayer_restore(p, osrs_sanfew_restore_amount(p->base_prayer));
+        encounter_cap_prayer_restore(p);
+        osrs_status_cure(&p->status, 600, 0, OSRS_STATUS_CURE_ANTIPOISON);
+        p->last_potion_type = POTION_RESTORE;
+        return;
+    }
+    if (kind == OSRS_CONSUMABLE_ANTIVENOM_PLUS) {
+        osrs_status_cure(&p->status, 1500, 360, OSRS_STATUS_CURE_ANTIVENOM);
+        p->last_potion_type = POTION_ANTIVENOM;
+        return;
+    }
     int potion_type = POTION_NONE;
     if (kind == OSRS_CONSUMABLE_BREW) potion_type = POTION_BREW;
     else if (kind == OSRS_CONSUMABLE_SUPER_RESTORE) potion_type = POTION_RESTORE;

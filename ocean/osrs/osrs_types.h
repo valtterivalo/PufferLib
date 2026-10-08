@@ -10,6 +10,7 @@
 #include "osrs_entity_priority.h"
 #include "osrs_granite_maul.h"
 #include "osrs_teleport.h"
+#include "osrs_status.h"
 
 #define NUM_AGENTS 2
 #define MAX_PENDING_HITS 8
@@ -281,6 +282,9 @@ typedef enum {
     OSRS_HIT_RECOIL,
     OSRS_HIT_VENGEANCE,
     OSRS_HIT_MORRIGAN_BLEED,
+    OSRS_HIT_POISON,
+    OSRS_HIT_VENOM,
+    OSRS_HIT_BURN,
 } OsrsHitKind;
 
 typedef struct {
@@ -295,6 +299,7 @@ typedef struct {
     int drain_percent;
     int flat_heal;
     OsrsHitKind kind;
+    OsrsAfflictionKind affliction;
     OverheadPrayer defender_prayer_at_attack;
 } PendingHit;
 
@@ -415,6 +420,7 @@ typedef struct {
     int spec_armed;
     OsrsInteraction interaction;
     OsrsItemEffectState item_effect_state;
+    OsrsStatusState status;
 
     GearSet current_gear;
     GearSet visible_gear;

@@ -764,7 +764,7 @@ static void inf_step_human_commands_ctx(
 
 
 #define INF_SNAPSHOT_MAGIC 0x1FE00001u
-#define INF_SNAPSHOT_VERSION 22u
+#define INF_SNAPSHOT_VERSION 23u
 
 typedef struct {
     uint32_t magic;

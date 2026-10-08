@@ -55,11 +55,15 @@ static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumab
             if (kind == OSRS_CONSUMABLE_SANFEW) {
                 encounter_sanfew_restore_stats(p);
                 encounter_add_prayer_restore(p, osrs_sanfew_restore_amount(p->base_prayer));
+                osrs_status_cure(&p->status, 600, 0, OSRS_STATUS_CURE_ANTIPOISON);
             } else {
                 encounter_restore_stats(p);
                 encounter_add_prayer_restore(p, osrs_super_restore_amount(p->base_prayer));
             }
             encounter_cap_prayer_restore(p);
+            break;
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+            osrs_status_cure(&p->status, 1500, 360, OSRS_STATUS_CURE_ANTIVENOM);
             break;
         case OSRS_CONSUMABLE_DIVINE_COMBAT:
             osrs_player_self_damage(p, OSRS_DIVINE_DAMAGE, 1);

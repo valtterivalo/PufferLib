@@ -6575,7 +6575,7 @@ static void test_inferno_snapshot_restore_round_trip(void) {
     ASSERT_INT_EQ("snapshot magic stamped",
         (int)snap_A->magic, (int)INF_SNAPSHOT_MAGIC);
     ASSERT_INT_EQ("snapshot version stamped",
-        (int)snap_A->version, 22);
+        (int)snap_A->version, 23);
 
     const int N2 = 18;
     for (int i = 0; i < N2; i++) inf_step_ctx(raw, (EncounterContext*)&test_context, actions_b);

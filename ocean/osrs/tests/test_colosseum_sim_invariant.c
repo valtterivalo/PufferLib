@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
+#include "osrs_test_player_layout.h"
 
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME 1099511628211ULL
@@ -112,13 +113,19 @@ static int skip_cmp(const void* a, const void* b) {
 }
 
 static uint64_t hash_sim(uint64_t h, const ColosseumState* s, const float* mask) {
-    SkipRegion skip[] = {
+    osrs_test_require_pve_status_zero(&s->player);
+    SkipRegion skip[4 + 1 + MAX_PENDING_HITS] = {
+        {offsetof(ColosseumState, player.status), sizeof(s->player.status)},
         {offsetof(ColosseumState, npcs), sizeof(s->npcs)},
         {offsetof(ColosseumState, player.inventory_cells),
             sizeof(s->player.inventory_cells)},
         {offsetof(ColosseumState, player_pending_hits), sizeof(s->player_pending_hits)},
         {offsetof(ColosseumState, log), sizeof(*s) - offsetof(ColosseumState, log)},
     };
+    for (int i = 0; i < MAX_PENDING_HITS; i++)
+        skip[5 + i] = (SkipRegion){offsetof(ColosseumState, player.pending_hits) +
+            (size_t)i * sizeof(PendingHit) + offsetof(PendingHit, affliction),
+            sizeof(s->player.pending_hits[i].affliction)};
     int nskip = (int)(sizeof(skip) / sizeof(skip[0]));
     qsort(skip, (size_t)nskip, sizeof(skip[0]), skip_cmp);
 

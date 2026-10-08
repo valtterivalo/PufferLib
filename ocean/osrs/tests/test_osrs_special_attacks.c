@@ -70,10 +70,9 @@ static void test_consumable_amounts_and_laws(void) {
     CHECK("osrs_drink_potion super restore matches the amount helper",
         osrs_drink_potion(POTION_SUPER_RESTORE, 0, 99, 0).prayer_restored ==
         osrs_super_restore_amount(99));
-    CHECK("osrs_drink_potion sanfew matches and cures venom",
+    CHECK("osrs_drink_potion sanfew matches prayer restore",
         osrs_drink_potion(POTION_SANFEW, 0, 99, 0).prayer_restored ==
-            osrs_sanfew_restore_amount(99) &&
-        osrs_drink_potion(POTION_SANFEW, 0, 99, 0).venom_cured == 1);
+            osrs_sanfew_restore_amount(99));
     CHECK("osrs_drink_potion super combat matches the amount helper",
         osrs_drink_potion(POTION_SUPER_COMBAT, 0, 99, 0).level_boost ==
         osrs_super_combat_boost_amount(99));

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_zulrah.h"
+#include "osrs_test_player_layout.h"
 
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME 1099511628211ULL
@@ -84,8 +85,20 @@ static uint64_t run_episode(const GoldenConfig* cfg, int max_ticks, EpisodeStats
         ENCOUNTER_ZULRAH.step(state, context, actions);
         simulation_hash =
             fnv_bytes(simulation_hash, actions, sizeof(actions));
-        simulation_hash =
-            fnv_bytes(simulation_hash, &s, sizeof(s));
+        const Player* players[] = {&s.player, &s.zulrah, &s.snakelings[0].entity,
+            &s.snakelings[1].entity, &s.snakelings[2].entity, &s.snakelings[3].entity};
+        static_assert(ZUL_MAX_SNAKELINGS == 4, "Zulrah legacy state player projection");
+        const uint8_t* state_bytes = (const uint8_t*)&s;
+        size_t cursor = 0;
+        uint8_t player_bytes[sizeof(Player)];
+        for (size_t i = 0; i < sizeof(players) / sizeof(*players); i++) {
+            size_t offset = (const uint8_t*)players[i] - state_bytes;
+            simulation_hash = fnv_bytes(simulation_hash, state_bytes + cursor, offset - cursor);
+            size_t player_size = osrs_test_legacy_player_bytes(players[i], player_bytes);
+            simulation_hash = fnv_bytes(simulation_hash, player_bytes, player_size);
+            cursor = offset + sizeof(Player);
+        }
+        simulation_hash = fnv_bytes(simulation_hash, state_bytes + cursor, sizeof(s) - cursor);
         ENCOUNTER_ZULRAH.write_obs(state, context, obs);
         ENCOUNTER_ZULRAH.write_mask(state, context, mask);
 

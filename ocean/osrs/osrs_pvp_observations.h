@@ -70,6 +70,9 @@ static inline int pvp_drink_kind_available(
             return can_use_potion(p, POTION_COMBAT) && can_boost_combat_skills(p);
         case OSRS_CONSUMABLE_RANGING:
             return can_use_potion(p, POTION_RANGED) && can_boost_ranged(p);
+        case OSRS_CONSUMABLE_SANFEW:
+        case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
+            return p->potion_timer == 0;
         default:
             return 0;
     }

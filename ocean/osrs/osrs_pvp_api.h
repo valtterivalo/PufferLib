@@ -30,6 +30,7 @@ static void init_player(Player* p) {
     p->spec_armed = 0;
     osrs_interaction_init(&p->interaction);
     osrs_item_effect_state_init(&p->item_effect_state);
+    p->status = (OsrsStatusState){.source = -1};
 
     p->current_gear = GEAR_MAGE;
     p->visible_gear = GEAR_MAGE;

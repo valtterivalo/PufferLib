@@ -33,8 +33,6 @@ typedef struct {
 typedef struct {
     int prayer_restored;
     int level_boost;
-    int venom_cured;
-    int antivenom_ticks;
     int consumed;
 } DrinkResult;
 
@@ -115,7 +113,7 @@ static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp,
 
 static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
                                              int prayer_level, int potion_timer) {
-    DrinkResult r = {0, 0, 0, 0, 0};
+    DrinkResult r = {0};
     if (potion_timer > 0) return r;
 
     switch (type) {
@@ -132,12 +130,9 @@ static inline DrinkResult osrs_drink_potion(PotionType type, int current_prayer,
         case POTION_SANFEW:
             r.consumed = 1;
             r.prayer_restored = osrs_sanfew_restore_amount(prayer_level);
-            r.venom_cured = 1;
             break;
         case POTION_ANTIVENOM_PLUS:
             r.consumed = 1;
-            r.venom_cured = 1;
-            r.antivenom_ticks = 300;
             break;
         case POTION_RANGING:
             r.consumed = 1;

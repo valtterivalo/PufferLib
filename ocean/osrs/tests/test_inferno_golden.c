@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_inferno.h"
+#include "osrs_test_player_layout.h"
 
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME  1099511628211ULL
@@ -56,10 +57,10 @@ typedef struct {
 static uint64_t hash_core_state(uint64_t h, const InfernoState* s) {
     h = fnv_bytes(h, &s->player, offsetof(Player, interaction));
     h = fnv_i32(h, s->player.interaction.target_slot);
-    h = fnv_bytes(
-        h,
-        &s->player.item_effect_state,
-        sizeof(s->player) - offsetof(Player, item_effect_state));
+    uint8_t player_bytes[sizeof(Player)];
+    size_t player_size = osrs_test_legacy_player_bytes(&s->player, player_bytes);
+    h = fnv_bytes(h, player_bytes + offsetof(Player, item_effect_state),
+        player_size - offsetof(Player, item_effect_state));
     h = fnv_bytes(h, s->pillars, sizeof(s->pillars));
     h = fnv_bytes(h, s->npcs, TRACE_NPC_SLOTS * sizeof(s->npcs[0]));
     h = fnv_bytes(h, &s->player_pending_hits, sizeof(s->player_pending_hits));

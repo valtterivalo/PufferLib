@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ocean/osrs/encounters/encounter_colosseum.h"
+#include "osrs_test_player_layout.h"
 
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME 1099511628211ULL
@@ -77,6 +78,7 @@ static uint64_t run_episode(const GoldenConfig* cfg, int max_ticks) {
     for (int t = 0; t < max_ticks; t++) {
         fill_actions(&s, &action_rng, actions);
         col_step_ctx((EncounterState*)&s, (EncounterContext*)&ctx, actions);
+        osrs_test_require_pve_status_zero(&s.player);
         col_write_obs_ctx((EncounterState*)&s, (EncounterContext*)&ctx, obs);
 
         for (int i = 0; i < COLO_NUM_OBS; i++) h = fnv_f32(h, obs[i]);

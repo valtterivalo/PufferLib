@@ -518,6 +518,12 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         (float)defender->current_hitpoints / (float)defender->base_hitpoints;
 
     if (hit->hit_success) {
+        if (hit->affliction == OSRS_AFFLICTION_POISON && damage > 0)
+            osrs_status_apply_affliction(&defender->status, OSRS_AFFLICTION_POISON, 30,
+                defender->equipped[GEAR_SLOT_HEAD] == ITEM_SERPENTINE_HELM, 30, attacker_idx);
+        if (hit->affliction == OSRS_AFFLICTION_VENOM)
+            osrs_status_apply_affliction(&defender->status, OSRS_AFFLICTION_VENOM, 6,
+                defender->equipped[GEAR_SLOT_HEAD] == ITEM_SERPENTINE_HELM, 30, attacker_idx);
         if (hit->drain_type == PVP_DEF_DRAIN_PERCENT_OF_CURRENT && damage > 0) {
             int drain = (int)(defender->current_defence * hit->drain_percent / 100.0f);
             defender->current_defence = clamp(defender->current_defence - drain, 1, 255);
@@ -567,6 +573,33 @@ static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_id
 }
 
 static void pvp_process_incoming_hits(OsrsEnv* env, int recipient_idx) {
+    Player* defender = &env->players[recipient_idx];
+    int affliction_source = defender->status.source;
+    OsrsStatusDamage status_damage = osrs_status_tick(&defender->status);
+    const int amounts[] = {status_damage.poison, status_damage.venom, status_damage.burn};
+    const OsrsHitKind kinds[] = {OSRS_HIT_POISON, OSRS_HIT_VENOM, OSRS_HIT_BURN};
+    for (int i = 0; i < 3 && defender->current_hitpoints > 0; i++) {
+        int damage = amounts[i];
+        if (damage == 0) continue;
+        int before = defender->current_hitpoints;
+        defender->current_hitpoints = max_int(0, before - damage);
+        defender->hit_landed_this_tick = 1;
+        defender->hit_damage += damage;
+        defender->hit_style = ATTACK_STYLE_NONE;
+        int source = i < 2 ? affliction_source : -1;
+        defender->hit_attacker_idx = source;
+        defender->damage_applied_this_tick += damage;
+        pvp_render_hit_events_add(defender, damage);
+        float scale = (float)damage / defender->base_hitpoints;
+        defender->total_damage_received += scale;
+        defender->damage_received_scale += scale;
+        if (source >= 0) {
+            env->players[source].total_damage_dealt += scale;
+            env->players[source].damage_dealt_scale += scale;
+        }
+        PendingHit hit = {.kind = kinds[i]};
+        pvp_observe_hit(env, source, recipient_idx, &hit, damage, before);
+    }
     process_pending_hits(env, 1 - recipient_idx, recipient_idx);
 }
 
@@ -896,6 +929,15 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     float acc_mult = 1.0f;
     float str_mult = 1.0f;
     int spec_cost = 0;
+    int weapon_item = attacker->equipped[GEAR_SLOT_WEAPON];
+    OsrsAfflictionKind affliction = weapon_item == ITEM_DRAGON_DAGGER && style == ATTACK_STYLE_MELEE
+        ? OSRS_AFFLICTION_POISON
+        : weapon_item == ITEM_TOXIC_STAFF_OF_DEAD ||
+            (weapon_item == ITEM_NOXIOUS_HALBERD && style == ATTACK_STYLE_MELEE)
+            ? OSRS_AFFLICTION_VENOM : OSRS_AFFLICTION_NONE;
+    int affliction_denominator = weapon_item == ITEM_NOXIOUS_HALBERD ? 100 : 4;
+    int affliction_numerator = weapon_item == ITEM_NOXIOUS_HALBERD
+        ? (attacker->equipped[GEAR_SLOT_HEAD] == ITEM_SERPENTINE_HELM ? 50 : 33) : 1;
     int was_special_requested = is_special;
     int spec_item_idx = ITEM_NONE;
 
@@ -1005,6 +1047,9 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             queue_hit(env->tick, attacker_idx, defender_idx,
                       attacker, defender, sr.damage[i], hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
+            if (sr.damage[i] > 0 && affliction != OSRS_AFFLICTION_NONE &&
+                    rand_int(env, affliction_denominator) < affliction_numerator)
+                attacker->pending_hits[attacker->num_pending_hits - 1].affliction = affliction;
         }
 
         register_hit_calculated(env, attacker_idx, defender_idx, hit_style, total_damage);
@@ -1108,6 +1153,10 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             queue_hit(env->tick, attacker_idx, defender_idx,
                       attacker, defender, damage, style, hit_delay, is_special,
                       hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
+            if (hit_success && affliction != OSRS_AFFLICTION_NONE &&
+                    (affliction != OSRS_AFFLICTION_POISON || damage > 0) &&
+                    rand_int(env, affliction_denominator) < affliction_numerator)
+                attacker->pending_hits[attacker->num_pending_hits - 1].affliction = affliction;
         }
         register_hit_calculated(env, attacker_idx, defender_idx, style, total_damage);
     }
