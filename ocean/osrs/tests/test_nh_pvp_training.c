@@ -86,11 +86,95 @@ int main(void) {
     CHECK("timeout is a draw for both policies", terminals[0] == 1 && terminals[1] == 1 &&
         rewards[0] == 0 && rewards[1] == 0 && env.log.draw_rate == 1);
     CHECK("timeout gives no selection credit", env.log.wins == 0);
-    env.state.env.players[1].current_hitpoints = 0;
-    puf_step(&env);
-    CHECK("a kill credits the winning policy", rewards[0] == 1 && rewards[1] == 0 && env.log.wins == 1);
-    CHECK("terminal resets both policy observations", env.state.env.tick == 0 &&
-        observations[0][0] == 1 && observations[1][0] == 1);
+    puf_close(&env);
+
+    for (int winner = -1; winner < 2; winner++) {
+        reset(1);
+        for (int i = 0; i < 2; i++)
+            if (i != winner) env.state.env.players[i].current_hitpoints = 0;
+        puf_step(&env);
+        for (int i = 0; i < 2; i++) {
+            float expected = winner < 0 ? 0 : (winner == i ? 1 : -1);
+            CHECK("both actors receive their terminal outcome", rewards[i] == expected && terminals[i] == 1);
+            CHECK("terminal resets each actor observation", observations[i][0] == 1);
+        }
+        CHECK("terminal resets the encounter", env.state.env.tick == 0);
+        CHECK("selection score remains actual actor zero wins", env.log.wins == (winner == 0));
+        CHECK("mutual death remains a draw", env.log.draw_rate == (winner < 0));
+        puf_close(&env);
+    }
+
+    reset(1);
+    OsrsEnv* pvp = &env.state.env;
+    pvp->shaping = (RewardShapingConfig){
+        .damage_dealt_coef = 0.01f,
+        .damage_received_coef = -0.02f,
+        .correct_prayer_bonus = 0.03f,
+        .prayer_penalty_enabled = 1,
+        .prayer_switch_no_attack_penalty = -0.04f,
+        .click_penalty_enabled = 1,
+        .click_penalty_threshold = 1,
+        .click_penalty_coef = -0.05f,
+        .ko_bonus = 0.06f,
+        .wasted_resources_penalty = -0.07f,
+        .ko_supplies_bonus_coef = 0.08f,
+    };
+    for (int i = 0; i < 2; i++) {
+        Player* player = &pvp->players[i];
+        player->base_hitpoints = 100;
+        player->damage_dealt_scale = 0.1f;
+        player->damage_received_scale = 0.025f;
+        player->just_attacked = 1;
+        player->player_prayed_correct = 1;
+        player->clicks_this_tick = 3;
+        pvp->last_executed_actions[i * NUM_ATNS + OSRS_HEAD_OVERHEAD] = OVERHEAD_MAGE;
+    }
+    for (int mode = 0; mode < 2; mode++) {
+        pvp->shaping.enabled = mode;
+        pvp->shaping.shaping_scale = mode ? 0 : 1;
+        for (int winner = -2; winner < 2; winner++) {
+            pvp->episode_over = winner != -2;
+            pvp->winner = winner;
+            for (int i = 0; i < 2; i++) {
+                float expected = winner < 0 ? 0 : (winner == i ? 1 : -1);
+                CHECK("disabled or zero scale leaves only outcomes", calculate_reward(pvp, i) == expected);
+            }
+        }
+        pvp->episode_over = 0;
+        for (int i = 0; i < 2; i++) {
+            pvp->players[i].just_attacked = 0;
+            CHECK("idle prayer switches have no unshaped penalty", calculate_reward(pvp, i) == 0);
+            pvp->players[1 - i].just_attacked = 1;
+            CHECK("idle correct prayer has no unshaped bonus", calculate_reward(pvp, i) == 0);
+            pvp->players[i].just_attacked = 1;
+        }
+    }
+    pvp->shaping.enabled = 1;
+    for (int scale = 1; scale <= 2; scale++) {
+        pvp->shaping.shaping_scale = 0.5f * scale;
+        for (int i = 0; i < 2; i++) {
+            pvp->players[i].just_attacked = 1;
+            pvp->players[1 - i].just_attacked = 1;
+            ASSERT_FLOAT_NEAR("damage prayer and click shaping scale once",
+                calculate_reward(pvp, i), -0.02f * pvp->shaping.shaping_scale, 0.000001f);
+            pvp->players[1 - i].just_attacked = 0;
+            ASSERT_FLOAT_NEAR("prayer switch penalties scale once",
+                calculate_reward(pvp, i), -0.09f * pvp->shaping.shaping_scale, 0.000001f);
+            pvp->players[1 - i].just_attacked = 1;
+        }
+        pvp->episode_over = 1;
+        for (int winner = 0; winner < 2; winner++) {
+            pvp->winner = winner;
+            for (int i = 0; i < 2; i++) {
+                float expected = winner == i
+                    ? 1 + 0.12f * pvp->shaping.shaping_scale
+                    : -1 - 0.09f * pvp->shaping.shaping_scale;
+                ASSERT_FLOAT_NEAR("terminal shaping scales around symmetric outcomes",
+                    calculate_reward(pvp, i), expected, 0.000001f);
+            }
+        }
+        pvp->episode_over = 0;
+    }
     puf_close(&env);
 
     reset(0);

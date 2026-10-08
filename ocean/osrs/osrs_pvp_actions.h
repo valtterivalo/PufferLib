@@ -674,41 +674,32 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     Player* t = &env->players[1 - agent_idx];
     const RewardShapingConfig* cfg = &env->shaping;
 
-    if (env->episode_over) {
-        if (env->winner == agent_idx) {
-            reward += 1.0f;
-        }
+    if (env->episode_over && env->winner >= 0) {
+        reward = env->winner == agent_idx ? 1.0f : -1.0f;
     }
+    if (!cfg->enabled) {
+        return reward;
+    }
+    float shaping_reward = 0.0f;
 
     if (cfg->prayer_penalty_enabled && !t->just_attacked) {
         int overhead = env->last_executed_actions[
             agent_idx * OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD];
         if (overhead == OVERHEAD_MAGE || overhead == OVERHEAD_RANGED || overhead == OVERHEAD_MELEE) {
-            reward += cfg->prayer_switch_no_attack_penalty;
+            shaping_reward += cfg->prayer_switch_no_attack_penalty;
         }
     }
 
     if (cfg->click_penalty_enabled && p->clicks_this_tick > cfg->click_penalty_threshold) {
         int excess = p->clicks_this_tick - cfg->click_penalty_threshold;
-        reward += cfg->click_penalty_coef * (float)excess;
+        shaping_reward += cfg->click_penalty_coef * (float)excess;
     }
 
     float base_hp = (float)p->base_hitpoints;
-    if (p->damage_dealt_scale > 0.0f) {
-        reward += p->damage_dealt_scale * base_hp * 0.005f;
-    }
-    if (t->just_attacked && p->player_prayed_correct) {
-        reward += 0.01f;
-    }
-
-    if (!cfg->enabled) {
-        return reward;
-    }
-
     if (env->episode_over) {
         if (env->winner == agent_idx) {
             if (t->food_count > 0 || t->karambwan_count > 0 || t->brew_doses > 0) {
-                reward += cfg->ko_bonus;
+                shaping_reward += cfg->ko_bonus;
             }
             float opp_total = (float)pvp_remaining_supply_units(t);
             int initial_supply_units =
@@ -719,65 +710,64 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
                     initial_supply_units);
                 abort();
             }
-            reward += cfg->ko_supplies_bonus_coef *
+            shaping_reward += cfg->ko_supplies_bonus_coef *
                 (opp_total / (float)initial_supply_units);
         } else if (env->winner == (1 - agent_idx)) {
             if (p->food_count > 0 || p->karambwan_count > 0 || p->brew_doses > 0) {
-                reward += cfg->wasted_resources_penalty;
+                shaping_reward += cfg->wasted_resources_penalty;
             }
         }
     }
-    float tick_shaping = 0.0f;
 
     if (p->damage_dealt_scale > 0.0f) {
         float damage_hp = p->damage_dealt_scale * base_hp;
-        tick_shaping += damage_hp * cfg->damage_dealt_coef;
+        shaping_reward += damage_hp * cfg->damage_dealt_coef;
         if (damage_hp >= (float)cfg->damage_burst_threshold) {
-            tick_shaping += (damage_hp - (float)cfg->damage_burst_threshold + 1.0f)
+            shaping_reward += (damage_hp - (float)cfg->damage_burst_threshold + 1.0f)
                           * cfg->damage_burst_bonus;
         }
     }
 
     if (p->damage_received_scale > 0.0f) {
-        tick_shaping += p->damage_received_scale * base_hp * cfg->damage_received_coef;
+        shaping_reward += p->damage_received_scale * base_hp * cfg->damage_received_coef;
     }
 
     if (t->just_attacked) {
         if (p->player_prayed_correct) {
-            tick_shaping += cfg->correct_prayer_bonus;
+            shaping_reward += cfg->correct_prayer_bonus;
         } else {
-            tick_shaping += cfg->wrong_prayer_penalty;
+            shaping_reward += cfg->wrong_prayer_penalty;
         }
     }
 
     if (p->just_attacked) {
         if (!p->target_prayed_correct) {
-            tick_shaping += cfg->off_prayer_hit_bonus;
+            shaping_reward += cfg->off_prayer_hit_bonus;
         }
 
         if (p->attack_style_this_tick == ATTACK_STYLE_MELEE
             && p->frozen_ticks > 0 && !is_in_melee_range(p, t)) {
-            tick_shaping += cfg->melee_frozen_penalty;
+            shaping_reward += cfg->melee_frozen_penalty;
         }
 
         if (p->used_special_this_tick) {
             if (t->prayer != PRAYER_PROTECT_MELEE) {
-                tick_shaping += cfg->spec_off_prayer_bonus;
+                shaping_reward += cfg->spec_off_prayer_bonus;
             }
             AttackStyle target_style = get_slot_weapon_attack_style(t);
             if (target_style == ATTACK_STYLE_MAGIC) {
-                tick_shaping += cfg->spec_low_defence_bonus;
+                shaping_reward += cfg->spec_low_defence_bonus;
             }
             float target_hp_pct = (float)t->current_hitpoints / (float)t->base_hitpoints;
             if (target_hp_pct < 0.5f) {
-                tick_shaping += cfg->spec_low_hp_bonus;
+                shaping_reward += cfg->spec_low_hp_bonus;
             }
         }
 
         if (p->attack_style_this_tick == ATTACK_STYLE_MAGIC) {
             AttackStyle weapon_style = get_slot_weapon_attack_style(p);
             if (weapon_style != ATTACK_STYLE_MAGIC) {
-                tick_shaping += cfg->magic_no_staff_penalty;
+                shaping_reward += cfg->magic_no_staff_penalty;
             }
         }
 
@@ -799,7 +789,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
                 break;
         }
         if (attack_bonus < 0) {
-            tick_shaping += cfg->gear_mismatch_penalty;
+            shaping_reward += cfg->gear_mismatch_penalty;
         }
     }
 
@@ -810,7 +800,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
     if (ate_food || ate_karam) {
         float hp_before = p->prev_hp_percent;
         if (hp_before > cfg->premature_eat_threshold) {
-            tick_shaping += cfg->premature_eat_penalty;
+            shaping_reward += cfg->premature_eat_penalty;
         }
         float max_heal;
         if (ate_food) {
@@ -821,7 +811,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
         float wasted = hp_before + max_heal - 1.0f;
         if (wasted > 0.0f) {
             float wasted_hp = wasted * base_hp;
-            tick_shaping += cfg->wasted_eat_penalty * wasted_hp;
+            shaping_reward += cfg->wasted_eat_penalty * wasted_hp;
         }
     }
 
@@ -829,7 +819,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
         float hp_before = p->prev_hp_percent;
         float hp_threshold = 45.0f / base_hp;
         if (hp_before <= hp_threshold) {
-            tick_shaping += cfg->smart_triple_eat_bonus;
+            shaping_reward += cfg->smart_triple_eat_bonus;
         } else {
             float food_brew_heal = (20.0f + 16.0f) / base_hp;
             float hp_after_food_brew = hp_before + food_brew_heal;
@@ -839,12 +829,12 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
             float wasted_karam = karam_heal_norm - missing_after;
             if (wasted_karam > 0.0f) {
                 float wasted_karam_hp = wasted_karam * base_hp;
-                tick_shaping += cfg->wasted_triple_eat_penalty * wasted_karam_hp;
+                shaping_reward += cfg->wasted_triple_eat_penalty * wasted_karam_hp;
             }
         }
     }
 
-    reward += tick_shaping * cfg->shaping_scale;
+    reward += shaping_reward * cfg->shaping_scale;
 
     return reward;
 }
