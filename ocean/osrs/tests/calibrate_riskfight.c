@@ -232,6 +232,10 @@ static void fit_override(OppFit* fit) {
     fclose(f);
 }
 
+static int g_quiet;
+static const Tape* g_only_tape;
+static Score g_last_fitted[ACT_COUNT];
+
 static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test_day) {
     const OppFit fit = *fit_in;
     static Score fitted[ACT_COUNT], profiles[ACT_COUNT];
@@ -243,7 +247,7 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
     OursPolicy replay = {OURS_REPLAY, 0};
     for (int i = 0; i < count; i++) {
         const Tape* tape = &tapes[i];
-        if (tape_day(tape) != test_day) continue;
+        if (g_only_tape ? tape != g_only_tape : tape_day(tape) != test_day) continue;
         for (int t = tape->lo + 1; t <= tape->hi; t++) {
             int flags = tape->his_flags[t - tape->lo];
             Probe probes[SCORE_SAMPLES];
@@ -272,6 +276,8 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
             }
         }
     }
+    memcpy(g_last_fitted, fitted, sizeof(fitted));
+    if (g_quiet) { free(sim); return; }
     printf("test day %d, per action (const = the train-day rate over eligible ticks, profiles = the existing mixture sampled 64 times)\n", test_day);
     for (int a = 0; a < ACT_COUNT; a++)
         print_score(ACTION_NAME[a], &fitted[a], &profiles[a], (double)fit.logit[a].events / fit.logit[a].opportunities);
@@ -1778,6 +1784,128 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
     free(sim);
 }
 
+static int recorded_death_tick(const Tape* tape) {
+    for (int t = tape->lo; t <= tape->hi; t++) {
+        const TapeTick* x = tape_tick(tape, t);
+        if (x->bar_ratio == 0 && x->bar_scale > 1 && x->last_bar_hit > 0) return t;
+    }
+    return -1;
+}
+
+/** One line for a new recording: its held-out score under the model fitted on every earlier fight, the refit including it, and the lookahead's
+ * predicted against realized kill chance at the spec clicks of the recording and in the sim. The last tape is the new one. */
+static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes, int count) {
+    double started = seconds();
+    Tape* fresh = &tapes[count - 1];
+    g_quiet = 1;
+    static OppFit before, after;
+    int eats, identified[2];
+    memset(&before, 0, sizeof(before));
+    fit_default_servings(&before);
+    if (!fit_load(model_path, &before)) {
+        fit_model(tapes, count - 1, 0, &before);
+        infer_servings(tapes, count - 1, 0, &before, &eats, identified);
+    }
+    g_only_tape = fresh;
+    teacher_score(tapes, count, &before, 0);
+    double loss[ACT_COUNT], constant[ACT_COUNT], events[ACT_COUNT];
+    for (int a = 0; a < ACT_COUNT; a++) {
+        const Score* s = &g_last_fitted[a];
+        double train_rate = (double)before.logit[a].events / before.logit[a].opportunities, rate = s->n ? s->y / s->n : 0;
+        events[a] = s->y;
+        loss[a] = s->n ? s->logloss / s->n : 0;
+        constant[a] = s->n ? -(rate * log(clip(train_rate)) + (1 - rate) * log(1 - clip(train_rate))) : 0;
+    }
+    g_only_tape = NULL;
+    memset(&after, 0, sizeof(after));
+    fit_default_servings(&after);
+    fit_model(tapes, count, 0, &after);
+    infer_servings(tapes, count, 0, &after, &eats, identified);
+    fit_save(model_path, &after);
+
+    OppFit planner = after;
+    planner.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
+    OppModel model = {MODEL_FIT, &planner};
+    g_la_model = &model;
+    g_la_worlds = 64;
+    g_la_stage = 16;
+    g_la_cache = 0;
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    g_tape = fresh;
+    int death = recorded_death_tick(fresh);
+    double points = 0, predicted = 0, realized = 0, predicted_hold = 0;
+    for (int i = 0; i < fresh->action_count; i++) {
+        const TapeAction* a = &fresh->actions[i];
+        if (a->kind != ACTION_SPEC) continue;
+        int t = a->tick - 1;
+        if (t < fresh->lo + 1 || t + g_la_horizon > fresh->hi) continue;
+        uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
+        RiskfightSnapshot snap;
+        tape_snapshot(fresh, t, &DEFAULT_PRIORS, &rng, &snap);
+        riskfight_load_state(&sim->state, &sim->context, &snap);
+        sim->obs = ((const Observer*)fresh->observer_series)[t - fresh->lo];
+        ours_reset(&sim->ours, rng, TIMING_MEASURED, STAKES_COMPUTED, 0);
+        observer_branch(&sim->state, &sim->obs);
+        sim->hist = ((const Hist*)fresh->hist_series)[t - fresh->lo];
+        sim->seen_since_eat = 99;
+        sim->tick_base = t;
+        sim->ours.arena.used = 0;
+        memset(g_la_last_feasible, 0, sizeof(g_la_last_feasible));
+        la_override(sim, &sim->ours, 0, t);
+        if (!g_la_last_feasible[LA_SPEC_NOW]) continue;
+        points++;
+        predicted += g_la_last_kill[LA_SPEC_NOW];
+        predicted_hold += g_la_last_kill[LA_NONE];
+        realized += death >= t && death <= t + g_la_horizon;
+    }
+    free(sim);
+    int rollouts = 20;
+    double hd[2] = {0}, od[2] = {0};
+    {
+        static Outcome out;
+        Sim* work = malloc(sizeof(Sim));
+        sim_init(work);
+        OursPolicy policies[2] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED}};
+        int t0 = fresh->lo + 1, kk = fresh->hi - t0;
+        for (int r = 0; r < rollouts; r++) {
+            uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + fresh->index * 13 + fresh->lo)) | 1;
+            RiskfightSnapshot snap;
+            tape_snapshot(fresh, t0, &DEFAULT_PRIORS, &rng, &snap);
+            uint32_t seed = xorshift32(&rng);
+            for (int p = 0; p < 2; p++) {
+                riskfight_load_state(&work->state, &work->context, &snap);
+                memset(g_la_memo, 0, sizeof(g_la_memo));
+                g_la_decision_count = 0;
+                run_steps(work, fresh, t0, kk, &model, &policies[p], seed, &out);
+                hd[p] += out.his_death >= 0;
+                od[p] += out.our_death >= 0;
+            }
+        }
+        free(work);
+    }
+    FILE* ledger = fopen(ledger_path, "a+");
+    assert(ledger);
+    fprintf(ledger, "%s %.5f %.5f %.5f %.5f %.5f %.5f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n", fresh->name, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING],
+        loss[ACT_SWING], constant[ACT_SWING], loss[ACT_VW_SPEC], constant[ACT_VW_SPEC], events[ACT_EAT_WARNING], events[ACT_SWING], events[ACT_VW_SPEC], points, predicted, predicted_hold, realized,
+        hd[0], hd[1], od[0], od[1], (double)rollouts, 0.0, 0.0, 0.0);
+    rewind(ledger);
+    double mean_gain[3] = {0}, fights = 0;
+    char name[128];
+    double v[21];
+    while (fscanf(ledger, "%127s", name) == 1) {
+        for (int k = 0; k < 21; k++) assert(fscanf(ledger, "%lf", &v[k]) == 1);
+        mean_gain[0] += v[1] - v[0]; mean_gain[1] += v[3] - v[2]; mean_gain[2] += v[5] - v[4];
+        fights++;
+    }
+    fclose(ledger);
+    printf("%s | held-out logloss/tick eat %.4f (const %.4f, running gain %+.4f) swing %.4f (const %.4f, running %+.4f) vwspec %.4f (const %.4f, running %+.4f) | refit on %d fights | recorded spec points %.0f: lookahead spec-now %.3f hold %.3f realized %.3f | sim kill rules %.2f lookahead %.2f die %.2f/%.2f (n=%d) | %.0f s\n",
+        fresh->name, loss[ACT_EAT_WARNING], constant[ACT_EAT_WARNING], mean_gain[0] / fights, loss[ACT_SWING], constant[ACT_SWING], mean_gain[1] / fights, loss[ACT_VW_SPEC], constant[ACT_VW_SPEC],
+        mean_gain[2] / fights, count, points, points ? predicted / points : 0, points ? predicted_hold / points : 0, points ? realized / points : 0, hd[0] / rollouts, hd[1] / rollouts,
+        od[0] / rollouts, od[1] / rollouts, rollouts, seconds() - started);
+}
+
 int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
@@ -1826,6 +1954,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else if (!strcmp(mode, "branchpoint")) branchpoint(argv[2], atoi(argv[3]), tapes, count);
+    else if (!strcmp(mode, "oppstep")) oppstep(argv[2], argv[3], tapes, count);
     else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));
     else abort();
     return 0;

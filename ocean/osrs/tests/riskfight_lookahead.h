@@ -25,6 +25,8 @@ static LaStats g_la;
 static struct { uint64_t key; int macro; int used; double kill; } g_la_memo[LA_CACHE];
 static struct { int step, macro, spec; double kill; } g_la_decisions[512];
 static int g_la_decision_count, g_la_report;
+static double g_la_last_kill[LA_MACROS], g_la_last_value[LA_MACROS];
+static int g_la_last_feasible[LA_MACROS];
 
 static uint32_t la_next(uint32_t* r) { *r ^= *r << 13; *r ^= *r >> 17; *r ^= *r << 5; return *r; }
 static double la_uniform(uint32_t* r, double low, double span) { return low + span * (la_next(r) >> 8) / 16777216.0; }
@@ -308,6 +310,11 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
             if (v > top) { top = v; best = (LaMacro)m; }
         }
         predicted = score[best].kill / score[best].worlds;
+        for (int m = 0; m < LA_MACROS; m++) {
+            g_la_last_feasible[m] = feasible[m] && score[m].worlds > 0;
+            g_la_last_kill[m] = score[m].worlds ? score[m].kill / score[m].worlds : 0;
+            g_la_last_value[m] = score[m].worlds ? score[m].value / score[m].worlds : 0;
+        }
         if (g_la_report) {
             printf("tick %d (step %d) our hp %d energy %d his belief hp %d-%d energy %d-%d ratio %.2f\n", tick, step, us->current_hitpoints, energy, inf->opponent_hitpoints.low, inf->opponent_hitpoints.high,
                 gs_energy_range(&inf->opponent.spec, tick).low, gs_energy_range(&inf->opponent.spec, tick).high, ratio);
