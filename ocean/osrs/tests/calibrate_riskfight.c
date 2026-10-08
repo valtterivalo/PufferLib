@@ -968,7 +968,6 @@ static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, Sim* si
 
 /* ---------- latent eater types: his eating as a mixture of K types drawn once per fight ---------- */
 
-typedef struct { int types; double pi[MAX_TYPES]; EatLogit logit; } EatMixture;
 
 static int eat_fights(const EatRows* rows) { int n = 0; for (int i = 0; i < rows->count; i++) n = imax(n, rows->rows[i].fight + 1); return n; }
 
@@ -1662,7 +1661,12 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
     fit_default_servings(&fit);
-    fit_override(&fit);
+    if (getenv("GS_FIT")) fit_override(&fit);
+    else {
+        int eats, identified[2];
+        fit_model(tapes, count, 0, &fit);
+        infer_servings(tapes, count, 0, &fit, &eats, identified);
+    }
     fit.eat_action = ACT_EAT_WARNING;
     eat_model_setup(tapes, count);
     OppModel model = {MODEL_FIT, &fit};
@@ -1741,6 +1745,57 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     free(sim);
 }
 
+static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int tick, const LaFeasible* f, GsStakes stakes, const LaScript* rules) {
+    const Player* us = &sim->state.env.players[0];
+    const Player* him = &sim->state.env.players[1];
+    fprintf(out, "LA %d %d\n", tick, tick);
+    fprintf(out, "B %d %d %d %d %d %d %.17g %d %d %d %d %d %d %d %d\n", b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->flip, b->timer_seen,
+        b->timer_first, b->timer_last, b->food_ready, b->seen_since_eat, b->seen_vw, b->seen_maul, b->bar_ratio);
+    fprintf(out, "K %ld %ld\nF %d %d %d %d\n", stakes.him, stakes.us, f->spec_ok, f->eat_ok, f->veng_ok, f->energy);
+    int overhead = us->prayer == PRAYER_SMITE ? 1 : us->prayer == PRAYER_PROTECT_MELEE ? 2 : us->prayer == PRAYER_PROTECT_RANGED ? 3 : us->prayer == PRAYER_PROTECT_MAGIC ? 4 : us->prayer == PRAYER_REDEMPTION ? 5 : 0;
+    const RiskfightVisibleOpponent* seen = &sim->state.visible[0];
+    int his_raw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_NONE ? -1 : ITEM_DATABASE[him->equipped[GEAR_SLOT_WEAPON]].item_id;
+    fprintf(out, "O %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", us->current_hitpoints, us->current_prayer, us->current_attack, us->current_strength,
+        us->current_defence, us->current_magic, us->special_energy, us->item_effect_state.special_regen_ticks, us->spec_armed, us->veng_active, us->veng_cooldown,
+        sim->state.inventory_use[0].vengeance_sacks, us->item_effect_state.recoil_damage_used, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer,
+        us->offensive_prayer == OFFENSIVE_PRAYER_PIETY, overhead, osrs_interaction_active(&us->interaction) ? 0 : -1, 4, seen->last_attack_tick >= 0 ? tick - (seen->last_attack_tick - RISKFIGHT_LOAD_TICK + sim->tick_base) : -1,
+        seen->last_attack_speed, his_raw, 0, him->x - us->x, him->y - us->y);
+    fprintf(out, "W");
+    for (int i = 0; i < TAPE_WORN; i++) fprintf(out, " %d", WORN_TO_GEAR[i] < 0 || us->equipped[WORN_TO_GEAR[i]] == ITEM_NONE ? -1 : ITEM_DATABASE[us->equipped[WORN_TO_GEAR[i]]].item_id);
+    fprintf(out, "\nG");
+    for (int i = 0; i < TAPE_BAG; i++) {
+        const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&us->inventory_cells[i]);
+        static const int BREW[5] = {-1, 6691, 6689, 6687, 6685}, RESTORE[5] = {-1, 3030, 3028, 3026, 3024}, COMBAT[5] = {-1, 12701, 12699, 12697, 12695};
+        int raw = m->item_idx != ITEM_NONE ? ITEM_DATABASE[m->item_idx].item_id : -1;
+        switch ((OsrsConsumableKind)m->consumable_kind) {
+            case OSRS_CONSUMABLE_ANGLERFISH: raw = 13441; break;
+            case OSRS_CONSUMABLE_KARAMBWAN: raw = 3144; break;
+            case OSRS_CONSUMABLE_BREW: raw = BREW[m->dose_count]; break;
+            case OSRS_CONSUMABLE_SUPER_RESTORE: raw = RESTORE[m->dose_count]; break;
+            case OSRS_CONSUMABLE_SUPER_COMBAT: raw = COMBAT[m->dose_count]; break;
+            case OSRS_CONSUMABLE_VENGEANCE_SACK: raw = 24621; break;
+            default: break;
+        }
+        fprintf(out, " %d", raw);
+    }
+    {
+        int since = warning_since(&sim->hist.warning);
+        if (since == WARNING_NONE) fprintf(out, "\nQ none %d", sim->hist.warning.unseen_count); else fprintf(out, "\nQ %d %d", since, sim->hist.warning.unseen_count);
+        for (int i = 0; i < sim->hist.warning.unseen_count; i++) fprintf(out, " %d", sim->hist.warning.unseen[i]);
+    }
+    fprintf(out, "\nH %d %d %d %d %d", sim->hist.big_hit_tick, sim->hist.since_vw_spec, sim->hist.since_maul_spec, sim->hist.ready_age, sim->hist.last_swing_tick);
+    fprintf(out, "\nR %d\n", rules->n);
+    for (int i = 0; i < rules->n; i++) {
+        const HumanCommand* c = &rules->command[i];
+        fprintf(out, "C %d %d %d\n", rules->due[i], c->kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK ? 0 : c->kind == HUMAN_COMMAND_ATTACK_NPC ? 1 : c->kind == HUMAN_COMMAND_SPEC_TOGGLE ? 2 : 3, c->inventory_slot);
+    }
+    fprintf(out, "END\n");
+}
+
+static FILE* g_dump_file;
+static Sim* g_dump_sim;
+static void dump_to_file(const Sim* sim, const LaBelief* b, int tick, const LaFeasible* f, GsStakes stakes, const LaScript* rules) { la_dump_request(g_dump_file, sim, b, tick, f, stakes, rules); }
+
 static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
     if (getenv("GS_LA_H")) g_la_horizon = atoi(getenv("GS_LA_H"));
     if (getenv("GS_LA_PRUNE")) g_la_prune = atof(getenv("GS_LA_PRUNE"));
@@ -1748,6 +1803,7 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
     g_la_stage = worlds;
     g_la_cache = 0;
     g_la_report = 1;
+    if (getenv("GS_LA_DUMP")) { g_dump_file = fopen(getenv("GS_LA_DUMP"), "w"); g_la_dump = dump_to_file; }
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
     fit_default_servings(&fit);
@@ -1807,6 +1863,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         infer_servings(tapes, count - 1, 0, &before, &eats, identified);
     }
     g_only_tape = fresh;
+    g_tape = fresh;
     teacher_score(tapes, count, &before, 0);
     double loss[ACT_COUNT], constant[ACT_COUNT], events[ACT_COUNT];
     for (int a = 0; a < ACT_COUNT; a++) {
@@ -1899,6 +1956,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
     while (fscanf(ledger, "%127s", name) == 1) {
         for (int k = 0; k < 21; k++) assert(fscanf(ledger, "%lf", &v[k]) == 1);
         total_points += v[9]; total_predicted += v[10]; total_realized += v[12];
+        if (!isfinite(v[0] + v[1] + v[2] + v[3] + v[4] + v[5])) continue;
         mean_gain[0] += v[1] - v[0]; mean_gain[1] += v[3] - v[2]; mean_gain[2] += v[5] - v[4];
         fights++;
     }

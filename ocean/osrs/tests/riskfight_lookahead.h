@@ -16,7 +16,7 @@ typedef struct { int n, due[LA_SCRIPT]; HumanCommand command[LA_SCRIPT]; } LaScr
 typedef struct { int kill, death, energy; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 typedef struct {
-    int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul;
+    int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul, bar_ratio;
     double flip;
 } LaBelief;
 
@@ -65,6 +65,7 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->item_effect_state.special_regen_ticks = la_between(r, 0, 49);
     him->veng_active = b->vengeance == GS_VENGEANCE_UP || ((b->vengeance == GS_VENGEANCE_MAYBE || b->vengeance == GS_VENGEANCE_UNKNOWN) && la_uniform(r, 0, 1) < 0.5);
     him->veng_cooldown = 0;
+    w->visible[0].health_bar = b->bar_ratio;
     him->current_attack = him->current_strength = g_la_boost;
     int holder = b->pid == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (b->pid == GS_PID_LOCAL ? 0 : 1);
     if (b->pid != GS_PID_UNKNOWN && la_uniform(r, 0, 1) < b->flip) holder = 1 - holder;
@@ -236,8 +237,24 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
 }
 
 /** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value, the rules unless another is strictly better. */
+static void la_print_base(const RiskfightState* b) {
+    for (int a = 0; a < 2; a++) {
+        const Player* p = &b->env.players[a];
+        fprintf(stderr, "P%d hp %d atk %d str %d def %d mag %d pray %d spec %d armed %d veng %d/%d timer %d food %d %d %d pos %d,%d int %d prayer %d off %d recoil %d eq", a, p->current_hitpoints, p->current_attack, p->current_strength,
+            p->current_defence, p->current_magic, p->current_prayer, p->special_energy, p->spec_armed, p->veng_active, p->veng_cooldown, p->attack_timer, p->food_timer, p->potion_timer,
+            p->karambwan_timer, p->x, p->y, osrs_interaction_active(&p->interaction), p->prayer, p->offensive_prayer, p->item_effect_state.recoil_damage_used);
+        for (int i = 0; i < NUM_GEAR_SLOTS; i++) fprintf(stderr, " %d", p->equipped[i]);
+        fprintf(stderr, " inv");
+        for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) fprintf(stderr, " %d", osrs_inventory_cell_metadata(&p->inventory_cells[i])->consumable_kind);
+        fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "pid %d visible bars %d %d\n", b->env.pid_holder, b->visible[0].health_bar, b->visible[1].health_bar);
+}
+
 static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, const LaBelief* belief, int tick, GsStakes stakes, uint32_t salt,
     const LaScript scripts[LA_MACROS], const int feasible[LA_MACROS], LaScore score[LA_MACROS], int alive[LA_MACROS]) {
+    if (getenv("GS_LA_BASE")) la_print_base(base);
+    if (getenv("GS_LA_SAVE")) { FILE* f = fopen(getenv("GS_LA_SAVE"), "wb"); fwrite(base, sizeof(*base), 1, f); fclose(f); }
     static Sim* work;
     if (!work) { work = malloc(sizeof(Sim)); sim_init(work); }
     uint32_t saved_seed = g_rollout_seed;
@@ -256,6 +273,12 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
             uint32_t draw = world_rng ^ (uint32_t)(w * 2246822519u);
             uint32_t wr = osrs_lowbias32(draw) | 1;
             la_world(base, base_hist, belief, tick, &wr, &world, &hist);
+            if (getenv("GS_LA_WORLDS")) {
+                const Player* h = &world.env.players[1];
+                int vw = 0, mm = 0, food = 0;
+                for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) { uint8_t it = osrs_inventory_cell_metadata(&h->inventory_cells[i])->item_idx; vw += it == ITEM_VOIDWAKER; mm += is_maul_item(it); food += osrs_inventory_cell_metadata(&h->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH; }
+                fprintf(stderr, "W hp %d en %d timer %d veng %d pid %d vw %d maul %d food %d eqw %d since %d warn %d\n", h->current_hitpoints, h->special_energy, h->attack_timer, h->veng_active, world.env.pid_holder, vw, mm, food, h->equipped[GEAR_SLOT_WEAPON], hist.since_eat, warning_since(&hist.warning));
+            }
             uint32_t seed = osrs_lowbias32(draw + 17);
             for (int m = 0; m < LA_MACROS; m++) {
                 if (!alive[m]) continue;
@@ -300,7 +323,7 @@ static LaBelief la_belief_of(const Sim* sim, int tick) {
     return (LaBelief){.hp_low = inf->opponent_hitpoints.low, .hp_high = inf->opponent_hitpoints.high, .energy_low = energy.low, .energy_high = energy.high,
         .vengeance = (int)gs_vengeance_reading(inf->opponent.vengeance, tick), .pid = (int)inf->pid.owner, .timer_seen = timer.seen,
         .timer_first = timer.seen ? gs_next_attack(timer, tick) : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
-        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .flip = gs_pid_flip_odds(&inf->pid, tick)};
+        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick)};
 }
 
 static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
@@ -320,6 +343,8 @@ static void la_print_report(const LaBelief* b, const Player* us, int energy, int
 }
 
 /** Plays a macro other than the rules when the rollouts say it beats them. Returns 1 when it queued the clicks. */
+static void (*g_la_dump)(const Sim*, const LaBelief*, int, const LaFeasible*, GsStakes, const LaScript*);
+
 static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     double started = la_seconds();
     const GsInfer* inf = &sim->obs.inf;
@@ -349,6 +374,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
         rules.due[rules.n] = trial.pending[i].due;
         rules.command[rules.n++] = trial.pending[i].command;
     }
+    if (g_la_dump) g_la_dump(sim, &belief, tick, &f, stakes, &rules);
     LaScript scripts[LA_MACROS];
     int feasible[LA_MACROS];
     la_scripts(&sim->state, tick, &f, &rules, scripts, feasible);
@@ -361,7 +387,9 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     } else {
         LaScore score[LA_MACROS];
         int alive[LA_MACROS];
-        best = la_evaluate(&sim->state, &sim->hist, &belief, tick, stakes, (uint32_t)step * 7919u + ours->rng, scripts, feasible, score, alive);
+        Hist cold = hist_start();
+        const Hist* chosen_hist = getenv("GS_LA_COLDHIST") ? &cold : &sim->hist;
+        best = la_evaluate(&sim->state, chosen_hist, &belief, tick, stakes, (uint32_t)step * 7919u + ours->rng, scripts, feasible, score, alive);
         predicted = score[best].kill / score[best].worlds;
         for (int m = 0; m < LA_MACROS; m++) {
             g_la_last_feasible[m] = feasible[m] && score[m].worlds > 0;

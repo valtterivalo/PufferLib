@@ -278,6 +278,7 @@ static void fit_default_servings(OppFit* fit) {
 
 enum { EAT_DIM = 24, EAT_MIXTURE = 4, MAX_TYPES = 3 };
 typedef struct { double w[EAT_DIM]; } EatLogit;
+typedef struct { int types; double pi[MAX_TYPES]; EatLogit logit; } EatMixture;
 typedef struct { int base_n, base[9], hp, timer, y, masked, type, fight, group; double weight; } EatRow;
 typedef struct { EatRow* rows; int count, capacity; } EatRows;
 
