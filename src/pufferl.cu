@@ -537,7 +537,7 @@ typedef struct PuffeRL {
     RolloutBuf train_rollouts;  // Pre-allocated transposed copy for train_impl
     EnvBuf env;
     TrainGraph train_buf;
-    Prec train_state;  // (L, A, H) carry in env order; graph reads with dest_off
+    Prec train_state;
     cudaGraphExec_t* rollout_graphs;  // CPU: [slots][horizon][num_buffers]
     cudaGraphExec_t gpu_rollout_graph[2];  // GPU: full net+env horizon per slot
     cudaGraphExec_t train_cudagraph[2];  // per async slot; src pointers differ
@@ -857,7 +857,7 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
         if (!pol->frozen && t == 0 && rollouts.initial_states.data != NULL) {
             Prec slot_st = init_slot(rollouts.initial_states, graph_slot);
             snapshot_state<<<grid_size(state_n), BLOCK_SIZE, 0, stream>>>(
-                slot_st, *st, sub, n);
+                slot_st, *st, buf * n, n);
         }
 
         Prec dec = arch_forward(&pol->arch, *w, *acts, obs_b, *st, stream);
@@ -1405,36 +1405,22 @@ static Float slice_rows(Float p, int off, int n) {
     return out;
 }
 
-// Transpose (A, B, C) → (B, A, C). Sequential, coalesced on dest rows.
-// Two types: actions are float32 (large discrete IDs); everything else is Prec.
-__global__ void transpose_102(precision_t* dst, const precision_t* src,
-        int A, int B, int C) {
+template <typename T>
+__global__ void gather_learner_rollout(T* dst, const T* src,
+        int horizon, int actor_rows, int cols,
+        int actors_per_buf, int learners_per_buf) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = A * B * C;
-    if (idx >= total) {
+    int learner_rows = actor_rows / actors_per_buf * learners_per_buf;
+    if (idx >= horizon * learner_rows * cols) {
         return;
     }
-    int a = idx / (B * C);
-    int rem = idx % (B * C);
-    int b = rem / C;
-    int c = rem % C;
-    dst[b * A * C + a * C + c] = src[idx];
+    int learner = idx / (horizon * cols);
+    int t = idx / cols % horizon;
+    int col = idx % cols;
+    int actor = learner / learners_per_buf * actors_per_buf
+        + learner % learners_per_buf;
+    dst[idx] = src[(t * actor_rows + actor) * cols + col];
 }
-
-#if !defined(PRECISION_FLOAT)
-__global__ void transpose_102(float* dst, const float* src, int A, int B, int C) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = A * B * C;
-    if (idx >= total) {
-        return;
-    }
-    int a = idx / (B * C);
-    int rem = idx % (B * C);
-    int b = rem / C;
-    int c = rem % C;
-    dst[b * A * C + a * C + c] = src[idx];
-}
-#endif
 
 // Cosine decay base → min over t in [0, T). Double for t/T (float loses
 // precision past 2^24). Caller passes epoch and total train epochs.
@@ -1470,20 +1456,30 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     int obs_size = (int)src.observations.shape[2];
     int num_atns = (int)src.actions.shape[2];
     int mask_c = src.action_mask.shape[2];
-    transpose_102<<<grid_size(T * B * obs_size), BLOCK_SIZE, 0, stream>>>(
-        rollouts->observations.data, src.observations.data, T, B, obs_size);
-    transpose_102<<<grid_size(T * B * num_atns), BLOCK_SIZE, 0, stream>>>(
-        rollouts->actions.data, src.actions.data, T, B, num_atns);
-    transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
-        rollouts->logprobs.data, src.logprobs.data, T, B, 1);
-    transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
-        rollouts->rewards.data, src.rewards.data, T, B, 1);
-    transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
-        rollouts->terminals.data, src.terminals.data, T, B, 1);
-    transpose_102<<<grid_size(T * B), BLOCK_SIZE, 0, stream>>>(
-        rollouts->values.data, src.values.data, T, B, 1);
-    transpose_102<<<grid_size(T * B * mask_c), BLOCK_SIZE, 0, stream>>>(
-        rollouts->action_mask.data, src.action_mask.data, T, B, mask_c);
+    int actors_per_buf = pufferl->vec->agents_per_buf;
+    int learners_per_buf = pufferl->vec->policy_layout[1];
+    int learner_rows = pufferl->vec->buffers * learners_per_buf;
+    gather_learner_rollout<<<grid_size(T * learner_rows * obs_size), BLOCK_SIZE, 0, stream>>>(
+        rollouts->observations.data, src.observations.data, T, B, obs_size,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows * num_atns), BLOCK_SIZE, 0, stream>>>(
+        rollouts->actions.data, src.actions.data, T, B, num_atns,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+        rollouts->logprobs.data, src.logprobs.data, T, B, 1,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+        rollouts->rewards.data, src.rewards.data, T, B, 1,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+        rollouts->terminals.data, src.terminals.data, T, B, 1,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+        rollouts->values.data, src.values.data, T, B, 1,
+        actors_per_buf, learners_per_buf);
+    gather_learner_rollout<<<grid_size(T * learner_rows * mask_c), BLOCK_SIZE, 0, stream>>>(
+        rollouts->action_mask.data, src.action_mask.data, T, B, mask_c,
+        actors_per_buf, learners_per_buf);
 
     clamp_precision_kernel<<<grid_size(
         numel(rollouts->rewards.shape)), BLOCK_SIZE, 0, stream>>>(
@@ -1500,7 +1496,7 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     }
     puf_stamp<<<1, 1, 0, stream>>>(st + TE_MID);
 
-    int batch_size = hypers->total_agents * hypers->horizon;
+    int batch_size = learner_rows * hypers->horizon;
     int mb_segs = hypers->minibatch_size / hypers->horizon;
     int total_minibatches = hypers->replay_ratio * batch_size / hypers->minibatch_size;
     int n_rows = (int)rollouts->observations.shape[0];
@@ -1603,7 +1599,8 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
         sizeof(float), cudaMemcpyHostToDevice, train_stream);
 
     int slot = hypers->async ? pufferl->async_ready_slot : 0;
-    int total_minibatches = hypers->replay_ratio * batch_size / hypers->minibatch_size;
+    int train_batch_size = pufferl->train_rollouts.observations.shape[0] * hypers->horizon;
+    int total_minibatches = hypers->replay_ratio * train_batch_size / hypers->minibatch_size;
     bool first = hypers->cudagraphs && pufferl->train_cudagraph[slot] == NULL;
     profile_begin("train_forward_backward", hypers->profile);
     if (first) {
@@ -1913,7 +1910,18 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     int hidden_size = hypers.hidden_size;
     int num_layers = hypers.num_layers;
     int decoder_output_size = is_continuous ? num_action_heads : act_n;
-    int minibatch_segments = hypers.minibatch_size / hypers.horizon;
+    int learner_agents = vec->policy_layout[1] * num_buffers;
+    assert(learner_agents > 0 && "primary policy has no agents");
+    int minibatch_segments = min(hypers.minibatch_size / hypers.horizon, learner_agents);
+    while (learner_agents % minibatch_segments != 0) {
+        minibatch_segments--;
+    }
+    if (minibatch_segments * hypers.horizon != hypers.minibatch_size) {
+        fprintf(stderr, "learner minibatch_size=%d requested=%d learner_agents=%d\n",
+            minibatch_segments * hypers.horizon, hypers.minibatch_size, learner_agents);
+        hypers.minibatch_size = minibatch_segments * hypers.horizon;
+        pufferl->hypers.minibatch_size = hypers.minibatch_size;
+    }
     int B_TT = minibatch_segments * hypers.horizon;
     int horizon = hypers.horizon;
     int agents_per_buf = total_agents / num_buffers;
@@ -1978,15 +1986,15 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     // Carry path: per-slot initial RNN states. reset_every_horizon zeros train_state.
     if (!hypers.reset_every_horizon) {
         pufferl->rollouts.initial_states = {
-            .shape = {async_slots, num_layers, total_agents, hidden_size}};
+            .shape = {async_slots, num_layers, learner_agents, hidden_size}};
         alloc_register(acts, &pufferl->rollouts.initial_states);
     }
     register_train_buffers(pufferl->train_buf, acts, minibatch_segments, horizon);
     register_rollout_buffers(&pufferl->train_rollouts,
-        acts, total_agents, horizon, input_size, num_action_heads, act_n);
+        acts, learner_agents, horizon, input_size, num_action_heads, act_n);
     register_ppo_buffers(pufferl->ppo_bufs, acts, minibatch_segments,
         hypers.horizon, decoder_output_size, is_continuous);
-    pufferl->train_state = {.shape = {num_layers, total_agents, hidden_size}};
+    pufferl->train_state = {.shape = {num_layers, learner_agents, hidden_size}};
     alloc_register(acts, &pufferl->train_state);
 
     cudaMalloc((void**)&pufferl->rng_offset, (num_buffers + 1) * sizeof(long));
@@ -3160,6 +3168,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     snprintf(log_dir, sizeof(log_dir), "%s/%s",
         puf_ini_get_str(ini, "base", "log_dir"),
         puf_ini_get_str(ini, "base", "env_name"));
+    PuffeRL* pufferl = create_pufferl(ini, ctx);
+    char minibatch[32];
+    snprintf(minibatch, sizeof(minibatch), "%d", pufferl->hypers.minibatch_size);
+    puf_ini_put(ini, "train.minibatch_size", minibatch);
     FILE* metric_stream = NULL;
     if (ctx->artifact_owner) {
         mkdir_p(checkpoint_dir);
@@ -3176,7 +3188,6 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         assert(metric_stream);
     }
 
-    PuffeRL* pufferl = create_pufferl(ini, ctx);
     Selfplay selfplay = {0};
     if (use_selfplay) {
         char initial_checkpoint[4096];
