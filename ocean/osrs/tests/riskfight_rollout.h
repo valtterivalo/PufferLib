@@ -6,7 +6,7 @@
 
 enum { MAX_STEPS = 512, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
 typedef enum { MODEL_PROFILES, MODEL_FIT } ModelKind;
-typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES, OURS_IDLE } OursKind;
+typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES, OURS_IDLE, OURS_LOOKAHEAD } OursKind;
 
 typedef struct {
     ModelKind kind;
@@ -26,6 +26,8 @@ typedef struct {
     OursStakes stakes;
     int truth;
 } OursPolicy;
+
+static int policy_rules(const OursPolicy* policy) { return policy->kind == OURS_RULES || policy->kind == OURS_LOOKAHEAD; }
 
 typedef struct {
     int steps;
@@ -49,6 +51,7 @@ typedef struct {
     Observer obs;
     StepEvents previous;
     double spec_predicted, spec_realized, spec_counted;
+    int seen_since_eat;
 } Sim;
 
 #include "riskfight_ours.h"
@@ -159,7 +162,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
             }
             human_input_queue_command(hi, command);
         }
-    } else if (policy->kind == OURS_RULES) {
+    } else if (policy_rules(policy)) {
         ours_act(sim, &sim->ours, hi, step);
     } else if (policy->kind == OURS_EAT_AT_RISK) {
         queue_ours_at_risk(sim, tape, policy, tick, step);
@@ -181,6 +184,8 @@ static int consumption_visible(const RiskfightState* s, int agent) {
         p->ate_karambwan_this_tick, s->inventory_use[agent].potion_animation_tick_plus_one == s->env.tick) && !p->hit_landed_this_tick;
 }
 
+#include "riskfight_lookahead.h"
+
 /** Runs k steps from the loaded sim state. tick_base is the tape tick the state is the end of. */
 static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const OppModel* model, const OursPolicy* policy,
     uint32_t seed, Outcome* out) {
@@ -193,10 +198,12 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     g_rollout_seed = seed;
     sim->tick_base = tick_base;
     sim->previous = (StepEvents){0};
-    if (policy->kind == OURS_RULES) {
+    sim->seen_since_eat = 99;
+    if (policy_rules(policy)) {
         assert(tape->observer_series);
         sim->obs = ((const Observer*)tape->observer_series)[tick_base - tape->lo];
         ours_reset(&sim->ours, seed ^ 0x9e3779b9u, policy->timing, policy->stakes, policy->truth);
+        sim->ours.lookahead = policy->kind == OURS_LOOKAHEAD;
         observer_branch(&sim->state, &sim->obs);
     } else sim->ours.played_count = 0;
     if (tape->hist_series) sim->hist = ((const Hist*)tape->hist_series)[tick_base - tape->lo];
@@ -207,7 +214,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         opponent_actions(model, sim, step, seed + (uint32_t)step * 2654435761u, actions);
         riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
         g_cmd_trace = 0;
-        if (getenv("GS_COMBO_TRACE") && policy->kind == OURS_RULES && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) g_cmd_trace = 1;
+        if (getenv("GS_COMBO_TRACE") && policy_rules(policy) && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) g_cmd_trace = 1;
         queue_ours(sim, tape, policy, tick_base + 1 + step, step);
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1], our_specs = s->spec_voidwaker[0] + s->spec_maul[0];
         if (g_ablation.pid) {
@@ -231,11 +238,12 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
             .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
             .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
         hist_step(&sim->hist, s, tick_base + 1 + step, &events);
-        if (policy->kind == OURS_RULES) observer_step(s, &sim->obs, tick_base + 1 + step);
+        sim->seen_since_eat = events.ate_visible ? 0 : sim->seen_since_eat + 1;
+        if (policy_rules(policy)) observer_step(s, &sim->obs, tick_base + 1 + step);
 #ifdef GS_HP_BELIEF
-        if (policy->kind == OURS_RULES && sim->obs.inf.watched_count > 0) { int c = sim->obs.inf.watched[sim->obs.inf.watched_count - 1]; g_cls[c][events.ate ? 1 : 0]++; }
+        if (policy_rules(policy) && sim->obs.inf.watched_count > 0) { int c = sim->obs.inf.watched[sim->obs.inf.watched_count - 1]; g_cls[c][events.ate ? 1 : 0]++; }
 #endif
-        if (getenv("GS_COMBO_TRACE") && policy->kind == OURS_RULES && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) {
+        if (getenv("GS_COMBO_TRACE") && policy_rules(policy) && sim->ours.played_count > 0 && sim->ours.played[sim->ours.played_count - 1].choice == GS_CHOICE_MAUL_VOIDWAKER && step - sim->ours.played[sim->ours.played_count - 1].step <= 9 && step >= sim->ours.played[sim->ours.played_count - 1].step) {
             static int shown;
             const Player* u = &s->env.players[0];
             if (step == sim->ours.played[sim->ours.played_count - 1].step) shown++;

@@ -750,11 +750,13 @@ static void gs_on_game_tick(GsInfer* s, int tick) {
 }
 
 /* ---- the eat situation of judgeLethality, with the settings and stakes given */
+static int gs_hash_bucket(int id) { unsigned h = (unsigned)id; return (int)((h ^ (h >> 16)) & 15); }
+
 static int gs_arsenal_order(const GsInfer* s, int* order) {
     int n = s->arsenal_count;
-    for (int i = 0; i < n; i++) order[i] = i;
+    for (int i = 0; i < n; i++) order[i] = n - 1 - i;
     for (int i = 1; i < n; i++)
-        for (int j = i; j > 0 && (s->arsenal_id[order[j - 1]] & 15) > (s->arsenal_id[order[j]] & 15); j--) { int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t; }
+        for (int j = i; j > 0 && gs_hash_bucket(s->arsenal_id[order[j - 1]]) > gs_hash_bucket(s->arsenal_id[order[j]]); j--) { int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t; }
     return n;
 }
 
@@ -835,16 +837,13 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     out->warning = gs_eater_warning(s);
     out->stakes = stakes;
     out->floor = GS_NONE;
-    GsArmament* current = gs_armament_of(s);
-    if (current) {
-        GsStrike strike = gs_strike(s, current, tick);
-        out->attacks[out->attack_count++] = (GsAttack){(GsStyle)current->style, strike.least, gs_most_per_arrow(current, strike.most), 0, current->interval, strike.accuracy, 0,
-            gs_arrows(current->weapon)};
-    }
+    gs_armament_of(s);
     int order[GS_ARSENAL_SIZE];
     int n = gs_arsenal_order(s, order);
     for (int k = 0; k < n; k++) {
         const GsArmament* a = &s->arsenal[order[k]];
+        GsStrike strike = gs_strike(s, a, tick);
+        out->attacks[out->attack_count++] = (GsAttack){(GsStyle)a->style, strike.least, gs_most_per_arrow(a, strike.most), 0, a->interval, strike.accuracy, 0, gs_arrows(a->weapon)};
         if (a->weapon == GS_W_GRANITE_MAUL) {
             out->has_maul = 1;
             out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), 50, 1, gs_armament_accuracy(c, a), 0, 1};

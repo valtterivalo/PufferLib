@@ -88,9 +88,7 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     else sprintf(swing, "Optional.empty");
     char arsenal[2048] = "";
     int order[GS_ARSENAL_SIZE];
-    for (int i = 0; i < s->arsenal_count; i++) order[i] = i;
-    for (int i = 1; i < s->arsenal_count; i++)
-        for (int j = i; j > 0 && s->arsenal_id[order[j - 1]] > s->arsenal_id[order[j]]; j--) { int x = order[j]; order[j] = order[j - 1]; order[j - 1] = x; }
+    gs_arsenal_order(s, order);
     for (int k = 0; k < s->arsenal_count; k++) {
         const GsArmament* a = &s->arsenal[order[k]];
         char spec[40];

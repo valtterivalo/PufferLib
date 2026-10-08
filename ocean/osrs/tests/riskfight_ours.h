@@ -254,7 +254,10 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
 }
 
 /* Plans what the plugin would on this tick and queues the clicks. */
+static int la_override(Sim* sim, Ours* ours, int step, int tick);
+
 static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
+    if (ours->lookahead && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
     RiskfightState* s = &sim->state;
     Player* us = &s->env.players[0];
     static GsInfer view;

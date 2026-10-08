@@ -315,7 +315,7 @@ static struct { int on, model, types; double pi[MAX_TYPES]; EatLogit logit; } g_
 /** His chance to leave by teleport each tick: 14 teleports in 5094 ticks of the 38 recorded fights, flat across his hitpoints (0.4 percent a tick at every band). */
 static const double ESCAPE_RATE = 14.0 / 5094;
 static int g_escape_by_hp = 1;
-static double g_eat_inert = 0;
+static double g_eat_inert = 0, g_eat_scale = 1;
 /** The same by his hitpoints, 44 or less, 45-60, 61-87, 88 and more: 4 of 690, 5 of 729, 5 of 2485 and 0 of 1069 recorded ticks by the health bar. */
 static double escape_rate_at(int hitpoints) { return hitpoints <= 44 ? 4.0 / 690 : hitpoints <= 60 ? 5.0 / 729 : hitpoints <= 87 ? 5.0 / 2485 : 0; }
 
@@ -362,6 +362,7 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     }
     /* No recorded tick sits below 30 hitpoints long enough to fit a hazard there: panic is the rate that reproduces the share of ticks the recorded fights spend at 0-29 hp (0.8 a tick at 25 or less). */
     if (g_ablation.panic > 0 && probe.eligible[fit->eat_action] && s->env.players[1].current_hitpoints <= g_ablation.panic_hp && p_eat < g_ablation.panic) p_eat = g_ablation.panic;
+    p_eat = fmin(1.0, p_eat * g_eat_scale);
     int eating = threatened || (g_ablation.eats ? tape_his_anim_at(g_tape, tick, ANIM_EAT) : roll(seed, tick, 41, p_eat));
     if (g_no_eat) eating = 0;
     if (eating) {

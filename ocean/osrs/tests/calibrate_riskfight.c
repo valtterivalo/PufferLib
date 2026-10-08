@@ -1628,6 +1628,154 @@ static void eat_mixture_study(Tape* tapes, int count, int train_day, int test_da
     free(sim);
 }
 
+static int cmp_double(const void* a, const void* b) { double x = *(const double*)a, y = *(const double*)b; return (x > y) - (x < y); }
+
+enum { CMP_METRICS = 9 };
+static const char* const CMP_NAME[CMP_METRICS] = {"kills per fight", "deaths per fight", "specs thrown", "damage dealt", "damage taken", "meals", "ticks", "swings", "kills without dying"};
+
+static void fight_metrics(const Outcome* out, double m[CMP_METRICS]) {
+    double specs = 0, swings = 0;
+    for (int j = 0; j < out->steps; j++) { specs += out->trace_our_spec[j]; swings += out->trace_our_swing[j]; }
+    m[0] = out->his_death >= 0; m[1] = out->our_death >= 0; m[2] = specs; m[3] = out->our_damage; m[4] = out->his_damage; m[5] = out->our_meals; m[6] = out->steps; m[7] = swings;
+    m[8] = out->his_death >= 0 && out->our_death < 0;
+}
+
+static void fightcmp(int n, Tape* tapes, int count, int test_day) {
+    g_abort_per_8 = 0;
+    if (getenv("GS_EAT_RISK")) g_eat_risk = atof(getenv("GS_EAT_RISK"));
+    if (getenv("GS_LA_N")) g_la_worlds = atoi(getenv("GS_LA_N"));
+    if (getenv("GS_LA_H")) g_la_horizon = atoi(getenv("GS_LA_H"));
+    if (getenv("GS_LA_STAGE")) g_la_stage = atoi(getenv("GS_LA_STAGE"));
+    if (getenv("GS_LA_PRUNE")) g_la_prune = atof(getenv("GS_LA_PRUNE"));
+    if (getenv("GS_LA_CACHE")) g_la_cache = atoi(getenv("GS_LA_CACHE"));
+    if (getenv("GS_LA_EAT_SCALE")) g_la_eat_scale_belief = atof(getenv("GS_LA_EAT_SCALE"));
+    if (getenv("GS_LA_HP_SHIFT")) g_la_belief_hp_shift = atof(getenv("GS_LA_HP_SHIFT"));
+    double world_eat_scale = getenv("GS_EAT_SCALE") ? atof(getenv("GS_EAT_SCALE")) : 1;
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    fit_override(&fit);
+    fit.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
+    OppModel model = {MODEL_FIT, &fit};
+    g_la_model = &model;
+    OursPolicy policies[2] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED}};
+    double sum[2][CMP_METRICS] = {{0}}, diff[CMP_METRICS] = {0}, diff2[CMP_METRICS] = {0}, seconds_policy[2] = {0};
+    long rollouts = 0;
+    static double calib_n[LA_MACROS][2], calib_predicted[LA_MACROS][2], calib_realized[LA_MACROS][2];
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    for (int i = 0; i < count; i++) {
+        if (!in_day(&tapes[i], test_day)) continue;
+        const Tape* tp = &tapes[i];
+        g_tape = tp;
+        int t0 = tp->lo + 1, kk = tp->hi - t0;
+        assert(kk <= MAX_STEPS);
+        double fight[2][CMP_METRICS] = {{0}};
+        for (int r = 0; r < n; r++) {
+            uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + tp->index * 13 + tp->lo)) | 1;
+            RiskfightSnapshot snap;
+            tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap);
+            uint32_t seed = xorshift32(&rng);
+            double m[2][CMP_METRICS];
+            for (int p = 0; p < 2; p++) {
+                riskfight_load_state(&sim->state, &sim->context, &snap);
+                memset(g_la_memo, 0, sizeof(g_la_memo));
+                g_eat_scale = world_eat_scale;
+                double started = seconds();
+                Outcome* out = malloc(sizeof(Outcome));
+                g_la_decision_count = 0;
+                run_steps(sim, tp, t0, kk, &model, &policies[p], seed, out);
+                if (p == 1)
+                    for (int d = 0; d < g_la_decision_count; d++) {
+                        int macro = g_la_decisions[d].macro, with_spec = g_la_decisions[d].spec, step = g_la_decisions[d].step;
+                        int realized = out->his_death >= step && out->his_death <= step + g_la_horizon;
+                        calib_n[macro][with_spec]++; calib_predicted[macro][with_spec] += g_la_decisions[d].kill; calib_realized[macro][with_spec] += realized;
+                    }
+                seconds_policy[p] += seconds() - started;
+                fight_metrics(out, m[p]);
+                free(out);
+            }
+            rollouts++;
+            for (int k = 0; k < CMP_METRICS; k++) {
+                sum[0][k] += m[0][k]; sum[1][k] += m[1][k];
+                fight[0][k] += m[0][k]; fight[1][k] += m[1][k];
+                double d = m[1][k] - m[0][k];
+                diff[k] += d; diff2[k] += d * d;
+            }
+        }
+        printf("FIGHT %-44s rules kill %.3f die %.3f specs %.2f | lookahead kill %.3f die %.3f specs %.2f\n", tp->name, fight[0][0] / n, fight[0][1] / n, fight[0][2] / n,
+            fight[1][0] / n, fight[1][1] / n, fight[1][2] / n);
+        fflush(stdout);
+    }
+    printf("N=%d worlds=%d horizon=%d stage=%d prune=%.3f cache=%d eat_scale world %.2f planner %.2f rollouts %ld (paired, same snapshot and seed)\n", n, g_la_worlds, g_la_horizon, g_la_stage, g_la_prune,
+        g_la_cache, world_eat_scale, g_la_eat_scale_belief, rollouts);
+    printf("%-26s %10s %10s %10s %18s\n", "metric", "rules", "lookahead", "diff", "95% CI of diff");
+    for (int k = 0; k < CMP_METRICS; k++) {
+        double mean = diff[k] / rollouts, var = (diff2[k] - rollouts * mean * mean) / (rollouts - 1), se = sqrt(var / rollouts);
+        printf("%-26s %10.4f %10.4f %+10.4f   [%+.4f, %+.4f]\n", CMP_NAME[k], sum[0][k] / rollouts, sum[1][k] / rollouts, mean, mean - 1.96 * se, mean + 1.96 * se);
+    }
+    printf("seconds per rollout-fight: rules %.4f lookahead %.4f\n", seconds_policy[0] / rollouts, seconds_policy[1] / rollouts);
+    printf("lookahead calls %ld (%.1f per fight), cache hits %ld, rollouts per call %.1f\n", g_la.calls, (double)g_la.calls / rollouts, g_la.cache_hits, g_la.calls > g_la.cache_hits ? (double)g_la.rollouts / (g_la.calls - g_la.cache_hits) : 0);
+    printf("calibration of the lookahead's own kill chance, executed macro, decisions that throw a spec or not: predicted vs realized kill within %d ticks in the sim\n", g_la_horizon);
+    for (int m = 0; m < LA_MACROS; m++)
+        for (int sp = 0; sp < 2; sp++)
+            if (calib_n[m][sp]) printf("  %-14s spec %d: %7.0f decisions, predicted %.4f realized %.4f\n", LA_NAME[m], sp, calib_n[m][sp], calib_predicted[m][sp] / calib_n[m][sp], calib_realized[m][sp] / calib_n[m][sp]);
+    printf("macro chosen:");
+    for (int m = 0; m < LA_MACROS; m++) printf(" %s %ld,", LA_NAME[m], g_la.chosen[m]);
+    printf("\n");
+    if (g_la.latency_count) {
+        qsort(g_la.latency, (size_t)g_la.latency_count, sizeof(double), cmp_double);
+        double mean = g_la.seconds / g_la.latency_count;
+        printf("latency per call (one core, includes cache hits): mean %.2f ms p50 %.2f p95 %.2f p99 %.2f max %.2f\n", mean * 1e3, g_la.latency[g_la.latency_count / 2] * 1e3,
+            g_la.latency[g_la.latency_count * 95 / 100] * 1e3, g_la.latency[g_la.latency_count * 99 / 100] * 1e3, g_la.worst * 1e3);
+    }
+    free(sim);
+}
+
+static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
+    if (getenv("GS_LA_H")) g_la_horizon = atoi(getenv("GS_LA_H"));
+    if (getenv("GS_LA_PRUNE")) g_la_prune = atof(getenv("GS_LA_PRUNE"));
+    g_la_worlds = worlds;
+    g_la_stage = worlds;
+    g_la_cache = 0;
+    g_la_report = 1;
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    fit_override(&fit);
+    fit.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
+    OppModel model = {MODEL_FIT, &fit};
+    g_la_model = &model;
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    for (int i = 0; i < count; i++) {
+        const Tape* tp = &tapes[i];
+        g_tape = tp;
+        char list[256];
+        strcpy(list, ticks);
+        for (char* tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
+            int t = atoi(tok);
+            uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
+            RiskfightSnapshot snap;
+            tape_snapshot(tp, t, &DEFAULT_PRIORS, &rng, &snap);
+            riskfight_load_state(&sim->state, &sim->context, &snap);
+            sim->obs = ((const Observer*)tp->observer_series)[t - tp->lo];
+            ours_reset(&sim->ours, rng, TIMING_MEASURED, STAKES_COMPUTED, 0);
+            observer_branch(&sim->state, &sim->obs);
+            sim->hist = ((const Hist*)tp->hist_series)[t - tp->lo];
+            sim->seen_since_eat = 99;
+            sim->tick_base = t;
+            sim->ours.arena.used = 0;
+            printf("%s ", tp->name);
+            int moved = la_override(sim, &sim->ours, 0, t);
+            printf("  -> %s\n", moved ? "override queued" : "rules stand");
+        }
+    }
+    free(sim);
+}
+
 int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
@@ -1675,6 +1823,8 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "eatstudy")) eat_study(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
+    else if (!strcmp(mode, "branchpoint")) branchpoint(argv[2], atoi(argv[3]), tapes, count);
+    else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));
     else abort();
     return 0;
 }

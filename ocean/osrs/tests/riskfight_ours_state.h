@@ -15,7 +15,7 @@ typedef struct {
     int played_count, last_played_step, last_played_choice;
     struct { int step; double chance; int his_hitpoints; double expected, plan_mean, pit, bar_mid; int preempted, plan_land, plan_last, choice; } played[64];
     uint32_t rng;
-    int ideal_timing, equal_stakes, truth;
+    int ideal_timing, equal_stakes, truth, lookahead;
 } Ours;
 
 static void ours_init(Ours* ours) {
