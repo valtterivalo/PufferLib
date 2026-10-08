@@ -3,14 +3,14 @@
 
 /* Our side decides by simulating the next ticks: every macro plan is rolled out on worlds drawn from the plugin's belief about him, with common
  * random numbers across plans, and scored as kill chance times his stakes less death chance times ours, plus the spec tickets left. */
-enum { LA_SCRIPT = 12, LA_CACHE = 4096, LA_MARGIN = 10 };
+enum { LA_SCRIPT = 16, LA_CACHE = 4096, LA_MARGIN = 10 };
 static double la_seconds(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
 }
-typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_MACROS } LaMacro;
-static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spec next", "burst", "eat now", "vengeance now"};
+typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_EAT_TRIPLE, LA_EAT_STAGGER, LA_MACROS } LaMacro;
+static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered"};
 
 typedef struct { int n, due[LA_SCRIPT]; HumanCommand command[LA_SCRIPT]; } LaScript;
 typedef struct { int kill, death, energy; double dealt, taken; } LaOutcome;
@@ -19,6 +19,7 @@ typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 static int g_la_worlds = 64, g_la_horizon = 15, g_la_stage = 16, g_la_cache = 1;
 static double g_la_prune = 0.03, g_la_belief_hp_shift = 0, g_la_eat_scale_belief = 1;
 static const OppModel* g_la_model;
+static int g_la_boost = 118;
 typedef struct { long calls, cache_hits, rollouts; long chosen[LA_MACROS]; double seconds, worst; double* latency; long latency_count, latency_capacity; } LaStats;
 static LaStats g_la;
 static struct { uint64_t key; int macro; int used; double kill; } g_la_memo[LA_CACHE];
@@ -60,6 +61,7 @@ static void la_world(const Sim* sim, int tick, uint32_t* r, RiskfightState* w, H
     GsVengeance reading = gs_vengeance_reading(inf->opponent.vengeance, tick);
     him->veng_active = reading == GS_VENGEANCE_UP || ((reading == GS_VENGEANCE_MAYBE || reading == GS_VENGEANCE_UNKNOWN) && la_uniform(r, 0, 1) < 0.5);
     him->veng_cooldown = 0;
+    him->current_attack = him->current_strength = g_la_boost;
     GsPid owner = inf->pid.owner;
     double flip = gs_pid_flip_odds(&inf->pid, tick);
     int holder = owner == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (owner == GS_PID_LOCAL ? 0 : 1);
@@ -231,6 +233,20 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
         HumanCommand clicks[2] = {click_command(foods.food_slot[choice]), attack_command()};
         r = saved_press;
         la_press(&r, &scripts[LA_EAT_NOW], tick, clicks, 2);
+    }
+    int kind_slot[3] = {-1, -1, -1};
+    for (int i = 0; i < foods.food_count; i++) kind_slot[foods.foods[i].kind] = foods.food_slot[i];
+    if (eat_ok && kind_slot[GS_HARD_FOOD] >= 0 && kind_slot[GS_FAST_FOOD] >= 0 && kind_slot[GS_POTION] >= 0) {
+        feasible[LA_EAT_TRIPLE] = feasible[LA_EAT_STAGGER] = 1;
+        HumanCommand triple[4] = {click_command(kind_slot[GS_HARD_FOOD]), click_command(kind_slot[GS_FAST_FOOD]), click_command(kind_slot[GS_POTION]), attack_command()};
+        r = saved_press;
+        la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
+        HumanCommand first[2] = {click_command(kind_slot[GS_HARD_FOOD]), attack_command()};
+        HumanCommand second[3] = {click_command(kind_slot[GS_POTION]), click_command(kind_slot[GS_FAST_FOOD]), attack_command()};
+        r = saved_press;
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
+        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, first, 2);
     }
     if (veng_ok) {
         feasible[LA_VENG_NOW] = 1;

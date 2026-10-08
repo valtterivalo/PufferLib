@@ -7,6 +7,8 @@ enum { CONSUME_HARD, CONSUME_POTION, CONSUME_KARAMBWAN };
 enum { HIS_SACKS = 27, HIS_PRAYER = 90, HIS_BOOST = 118, HIS_MAGIC = 99, RAW_ANGLERFISH = 13441, RAW_KARAMBWAN = 3144,
     ARRIVAL_WINDOW = 12, ARRIVAL_AGE = 100 };
 
+static int g_his_boost = 118;
+
 typedef struct {
     float recoil_ring;
     int anglerfish, karambwan, brews, restores, combats;
@@ -274,7 +276,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .seen_last_attack_ago = swing_ago(t, tick->swing_us_tick), .seen_last_attack_speed = tick->swing_us_speed,
     };
     out->side[1] = (RiskfightSideSnapshot){
-        .hitpoints = him->hitpoints, .prayer = HIS_PRAYER, .attack = HIS_BOOST, .strength = HIS_BOOST, .defence = g_ablation.his_defence,
+        .hitpoints = him->hitpoints, .prayer = HIS_PRAYER, .attack = g_his_boost, .strength = g_his_boost, .defence = g_ablation.his_defence,
         .magic = HIS_MAGIC, .special_energy = tick->spec_him, .special_regen_phase = tick->spec_phase_him,
         .veng_active = tick->veng_him, .veng_cooldown = tick->veng_cooldown_him,
         .attack_timer = replay_attack_timer(tape, SIDE_HIM, t), .food_timer = lh.food, .potion_timer = lh.potion, .karambwan_timer = lh.karambwan,

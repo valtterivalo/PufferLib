@@ -1650,6 +1650,8 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
     if (getenv("GS_LA_CACHE")) g_la_cache = atoi(getenv("GS_LA_CACHE"));
     if (getenv("GS_LA_EAT_SCALE")) g_la_eat_scale_belief = atof(getenv("GS_LA_EAT_SCALE"));
     if (getenv("GS_LA_HP_SHIFT")) g_la_belief_hp_shift = atof(getenv("GS_LA_HP_SHIFT"));
+    if (getenv("GS_LA_BOOST")) g_la_boost = atoi(getenv("GS_LA_BOOST"));
+    if (getenv("GS_HIS_BOOST")) g_his_boost = atoi(getenv("GS_HIS_BOOST"));
     double world_eat_scale = getenv("GS_EAT_SCALE") ? atof(getenv("GS_EAT_SCALE")) : 1;
     static OppFit fit;
     memset(&fit, 0, sizeof(fit));
