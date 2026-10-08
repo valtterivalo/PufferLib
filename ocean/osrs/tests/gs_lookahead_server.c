@@ -131,6 +131,7 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     snap->side[0].potion_timer = q->potion_timer;
     snap->side[0].karambwan_timer = q->karambwan_timer;
     snap->side[0].spec_armed = q->armed;
+    snap->side[1].seen_health_bar = q->belief.bar_ratio;
     for (int i = 0; i < NUM_ITEMS && q->his_weapon >= 0; i++)
         if (ITEM_DATABASE[i].item_id == q->his_weapon) snap->loadout[1].equipment[GEAR_SLOT_WEAPON] = (uint8_t)i;
     if (item_is_two_handed(snap->loadout[1].equipment[GEAR_SLOT_WEAPON])) snap->loadout[1].equipment[GEAR_SLOT_SHIELD] = ITEM_NONE;

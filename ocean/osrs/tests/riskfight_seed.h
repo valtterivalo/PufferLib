@@ -237,6 +237,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .recoil_damage_used = tick->recoil_used, .offensive_prayer = tick->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE,
         .overhead_prayer = overhead_of(tick->overhead), .x = 0, .y = 0,
         .interacting = tick->swing_us_tick >= t - ARRIVAL_WINDOW,
+        .seen_health_bar = osrs_health_bar_ratio(tick->hp, MAXED_BASE_HITPOINTS, OSRS_PLAYER_HEALTH_BAR_SCALE),
         .seen_last_attack_ago = swing_ago(t, tick->swing_us_tick), .seen_last_attack_speed = tick->swing_us_speed,
     };
     out->side[1] = (RiskfightSideSnapshot){
@@ -247,6 +248,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .recoil_damage_used = damage_dealt_before(tape, SIDE_HIM, t), .offensive_prayer = g_ablation.no_piety ? OFFENSIVE_PRAYER_NONE : OFFENSIVE_PRAYER_PIETY,
         .x = tick->ox - tick->ux, .y = tick->oy - tick->uy,
         .interacting = tick->swing_him_tick >= t - ARRIVAL_WINDOW,
+        .seen_health_bar = tick->bar_ratio,
         .seen_last_attack_ago = swing_ago(t, tick->swing_him_tick), .seen_last_attack_speed = tick->swing_him_speed,
     };
     out->pid_holder = tick->pid == 'L' || tick->pid == 'l' ? 0 : tick->pid == 'O' || tick->pid == 'o' ? 1 : (int)(xorshift32(rng) & 1);

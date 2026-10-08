@@ -16,7 +16,7 @@ typedef struct {
     OffensivePrayer offensive_prayer;
     OverheadPrayer overhead_prayer;
     int x, y, interacting;
-    int seen_last_attack_ago, seen_last_attack_speed;
+    int seen_health_bar, seen_last_attack_ago, seen_last_attack_speed;
     int seen_consume_food, seen_consume_potion, seen_consume_karam, seen_consume_delay;
 } RiskfightSideSnapshot;
 
@@ -78,6 +78,7 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         const RiskfightSideSnapshot* seen = &snapshot->side[1 - viewer];
         RiskfightVisibleOpponent* v = &s->visible[viewer];
         riskfight_observe_visible(s, viewer, 1);
+        v->health_bar = seen->seen_health_bar;
         assert(seen->seen_last_attack_ago < RISKFIGHT_LOAD_TICK);
         v->last_attack_tick = seen->seen_last_attack_ago >= 0 ? RISKFIGHT_LOAD_TICK - seen->seen_last_attack_ago : -1;
         v->last_attack_speed = seen->seen_last_attack_speed;
