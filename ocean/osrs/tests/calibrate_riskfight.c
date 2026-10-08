@@ -2044,6 +2044,149 @@ static void leakcheck(Tape* tapes, int count) {
     if (leaked) abort();
 }
 
+/** The 161-point gap by mechanism: where his hitpoints lie against the belief band at the next bar reveal, and how often he eats in the window a recorded spec lands in, recorded against the worlds. */
+static void calibration(Tape* tapes, int count) {
+    enum { WINDOW = 6, WORLDS = 64, HP_BANDS = 4, LAGS = 4 };
+    static OppFit fit;
+    memset(&fit, 0, sizeof(fit));
+    fit_default_servings(&fit);
+    int eats, identified[2];
+    fit_model(tapes, count, 0, &fit);
+    infer_servings(tapes, count, 0, &fit, &eats, identified);
+    fit.eat_action = ACT_EAT_WARNING;
+    eat_model_setup(tapes, count);
+    assert_fitted(&fit, "calibration");
+    OppModel model = {MODEL_FIT, &fit};
+    g_la_model = &model;
+    g_la_worlds = WORLDS;
+    g_la_stage = WORLDS;
+    g_la_cache = 0;
+    if (getenv("GS_LA_HP_SHIFT")) g_la_belief_hp_shift = atof(getenv("GS_LA_HP_SHIFT"));
+    if (getenv("GS_CAL_EAT")) g_eat_scale = atof(getenv("GS_CAL_EAT"));
+    double band_n[LAGS] = {0}, band_above[LAGS] = {0}, band_below[LAGS] = {0}, band_excess[LAGS] = {0}, band_width[LAGS] = {0};
+    double pt_n[HP_BANDS] = {0}, pt_obs_eat[HP_BANDS] = {0}, pt_pred_eat[HP_BANDS] = {0}, pt_obs_kill[HP_BANDS] = {0}, pt_pred_kill[HP_BANDS] = {0}, pt_pred_hold[HP_BANDS] = {0};
+    double lag_n[LAGS] = {0}, lag_obs_eat[LAGS] = {0}, lag_pred_eat[LAGS] = {0};
+    double rev_n[2] = {0}, rev_above[2] = {0}, rev_below[2] = {0}, rev_excess[2] = {0};
+    double quiet_points = 0, quiet_kills = 0, quiet_pred_kill = 0, quiet_pred_weight = 0, busy_pred_kill = 0, busy_pred_weight = 0;
+    Sim* sim = malloc(sizeof(Sim));
+    sim_init(sim);
+    for (int i = 0; i < count; i++) {
+        Tape* tape = &tapes[i];
+        g_tape = tape;
+        const Observer* series = tape->observer_series;
+        int death = recorded_death_tick(tape);
+        for (int t = tape->lo + 1; t < tape->hi; t++) {
+            const TapeTick* now = tape_tick(tape, t);
+            GsHealthRange belief = series[t - tape->lo].inf.opponent_hitpoints;
+            int reveal = -1;
+            for (int x = t + 1; x <= tape->hi && x <= t + 40; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio >= 0) { reveal = x; break; }
+            if (reveal < 0 || now->bar_ratio < 0) continue;
+            int damage = 0, ate = 0;
+            for (int x = t + 1; x <= reveal; x++) { damage += tape_damage_on_him(tape, x); ate += tape_his_anim_at(tape, x, ANIM_EAT); }
+            const TapeTick* after = tape_tick(tape, reveal);
+            int low = warning_bar_low(after->bar_ratio, after->bar_scale) + damage, high = warning_bar_high(after->bar_ratio, after->bar_scale) + damage;
+            int lag = t - now->last_bar_hit;
+            int bin = lag <= 3 ? 0 : lag <= 6 ? 1 : lag <= 9 ? 2 : 3;
+            band_n[bin]++;
+            band_above[bin] += low > belief.high;
+            band_below[bin] += high < belief.low;
+            band_excess[bin] += ((low + high) / 2.0) - (belief.low + belief.high) / 2.0;
+            band_width[bin] += belief.high - belief.low;
+        }
+        int swings = getenv("GS_POINTS") != NULL;
+        for (int a = 0; a < (swings ? tape->anim_count : tape->action_count); a++) {
+            int t;
+            if (swings) {
+                const TapeAnim* an = &tape->anims[a];
+                if (an->side != SIDE_US || (an->anim != ANIM_VW_SPEC && an->anim != ANIM_MAUL_SPEC)) continue;
+                t = an->tick - 1;
+            } else {
+                if (tape->actions[a].kind != ACTION_SPEC) continue;
+                t = tape->actions[a].tick - 1;
+            }
+            if (t < tape->lo + 1 || t + g_la_horizon > tape->hi) continue;
+            uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
+            RiskfightSnapshot snap;
+            tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
+            riskfight_load_state(&sim->state, &sim->context, &snap);
+            sim->obs = series[t - tape->lo];
+            observer_branch(&sim->state, &sim->obs);
+            sim->hist = ((const Hist*)tape->hist_series)[t - tape->lo];
+            sim->seen_since_eat = 99;
+            sim->tick_base = t;
+            LaBelief belief = la_belief_of(sim, t);
+            int hp_mid = (belief.hp_low + belief.hp_high) / 2;
+            int band = hp_mid <= 44 ? 0 : hp_mid <= 60 ? 1 : hp_mid <= 87 ? 2 : 3;
+            int lag = t - tape_tick(tape, t)->last_bar_hit;
+            int lb = lag <= 3 ? 0 : lag <= 6 ? 1 : lag <= 9 ? 2 : 3;
+            static Sim* work;
+            if (!work) { work = malloc(sizeof(Sim)); sim_init(work); }
+            LaScript none = {0}, spec = {0};
+            uint32_t press = osrs_lowbias32((uint32_t)t * 2654435761u) | 1;
+            const Player* us = &sim->state.env.players[0];
+            HumanCommand clicks[2];
+            int n = 0;
+            if (!us->spec_armed) clicks[n++] = spec_command();
+            clicks[n++] = attack_command();
+            la_press(&press, &spec, t, clicks, n);
+            double pred_eat = 0, pred_kill = 0, pred_hold = 0, quiet_k = 0, quiet_w = 0, busy_k = 0, busy_w = 0;
+            static RiskfightState world;
+            static Hist hist;
+            for (int w = 0; w < WORLDS; w++) {
+                uint32_t draw = osrs_lowbias32((uint32_t)(t * 40503u + w * 2246822519u)) | 1;
+                uint32_t wr = osrs_lowbias32(draw) | 1;
+                la_world(&sim->state, &sim->hist, &belief, t, &wr, &world, &hist);
+                uint32_t seed = osrs_lowbias32(draw + 17);
+                LaOutcome with = la_rollout(work, &world, &hist, t, &model, &spec, seed);
+                LaOutcome without = la_rollout(work, &world, &hist, t, &model, &none, seed);
+                int ate_in = with.ate_at >= 0 && with.ate_at < WINDOW;
+                pred_eat += ate_in;
+                if (ate_in) { busy_w++; busy_k += with.kill; } else { quiet_w++; quiet_k += with.kill; }
+                pred_kill += with.kill;
+                pred_hold += without.kill;
+            }
+            int observed_eat = 0;
+            for (int x = t + 1; x <= t + WINDOW; x++) observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
+            pt_n[band]++; pt_obs_eat[band] += observed_eat; pt_pred_eat[band] += pred_eat / WORLDS;
+            pt_obs_kill[band] += death > t && death <= t + g_la_horizon; pt_pred_kill[band] += pred_kill / WORLDS; pt_pred_hold[band] += pred_hold / WORLDS;
+            {
+                int reveal = -1;
+                for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio >= 0) { reveal = x; break; }
+                if (reveal >= 0) {
+                    int damage = 0;
+                    for (int x = t + 1; x <= reveal; x++) damage += tape_damage_on_him(tape, x);
+                    const TapeTick* after = tape_tick(tape, reveal);
+                    int low = warning_bar_low(after->bar_ratio, after->bar_scale) + damage, high = warning_bar_high(after->bar_ratio, after->bar_scale) + damage;
+                    int k = observed_eat ? 1 : 0;
+                    rev_n[k]++; rev_above[k] += low > belief.hp_high; rev_below[k] += high < belief.hp_low; rev_excess[k] += (low + high) / 2.0 - (belief.hp_low + belief.hp_high) / 2.0;
+                }
+            }
+            quiet_pred_kill += quiet_k; quiet_pred_weight += quiet_w; busy_pred_kill += busy_k; busy_pred_weight += busy_w;
+            if (!observed_eat) { quiet_points++; quiet_kills += death > t && death <= t + g_la_horizon; }
+            lag_n[lb]++; lag_obs_eat[lb] += observed_eat; lag_pred_eat[lb] += pred_eat / WORLDS;
+        }
+    }
+    static const char* const LAG_NAME[LAGS] = {"bar read 0-3 ticks ago", "4-6", "7-9", "10+"};
+    static const char* const HP_NAME[HP_BANDS] = {"belief mid <=44", "45-60", "61-87", "88+"};
+    printf("bar band against the bar at the next reveal (reveal hp = bar band + damage since; above = he healed past the band top unseen)\n");
+    for (int b = 0; b < LAGS; b++)
+        if (band_n[b]) printf("  %-24s %6.0f ticks  band width %5.1f  truth above band %.3f  below %.3f  mean excess over band mid %+.1f hp\n", LAG_NAME[b], band_n[b], band_width[b] / band_n[b], band_above[b] / band_n[b], band_below[b] / band_n[b], band_excess[b] / band_n[b]);
+    printf("eat in the %d ticks after a recorded spec click (visible eat animation), recorded against the worlds; kill within %d ticks\n", WINDOW, g_la_horizon);
+    double tn = 0, to = 0, tp = 0, ko = 0, kp = 0, kh = 0;
+    for (int b = 0; b < HP_BANDS; b++) {
+        if (!pt_n[b]) continue;
+        printf("  %-18s %4.0f points  eat observed %.3f predicted %.3f | kill observed %.3f predicted %.3f (hold %.3f)\n", HP_NAME[b], pt_n[b], pt_obs_eat[b] / pt_n[b], pt_pred_eat[b] / pt_n[b], pt_obs_kill[b] / pt_n[b], pt_pred_kill[b] / pt_n[b], pt_pred_hold[b] / pt_n[b]);
+        tn += pt_n[b]; to += pt_obs_eat[b]; tp += pt_pred_eat[b]; ko += pt_obs_kill[b]; kp += pt_pred_kill[b]; kh += pt_pred_hold[b];
+    }
+    printf("  %-18s %4.0f points  eat observed %.3f predicted %.3f | kill observed %.3f predicted %.3f (hold %.3f)\n", "all", tn, to / tn, tp / tn, ko / tn, kp / tn, kh / tn);
+    printf("  kill given no eat in the window: predicted %.3f of %.0f world-points, observed %.0f kills of %.0f points; kill given an eat: predicted %.3f\n", quiet_pred_weight ? quiet_pred_kill / quiet_pred_weight : 0, quiet_pred_weight, quiet_kills, quiet_points, busy_pred_weight ? busy_pred_kill / busy_pred_weight : 0);
+    for (int k = 0; k < 2; k++)
+        if (rev_n[k]) printf("  hp at the next reveal after the point (bar band + damage since), he %s in the window: %.0f points, truth above the belief band %.3f, below %.3f, mean excess over the band middle %+.1f hp\n", k ? "ate" : "did not eat", rev_n[k], rev_above[k] / rev_n[k], rev_below[k] / rev_n[k], rev_excess[k] / rev_n[k]);
+    for (int b = 0; b < LAGS; b++)
+        if (lag_n[b]) printf("  by bar age %-24s %4.0f points  eat observed %.3f predicted %.3f\n", LAG_NAME[b], lag_n[b], lag_obs_eat[b] / lag_n[b], lag_pred_eat[b] / lag_n[b]);
+    free(sim);
+}
+
 int main(int argc, char** argv) {
     assert(argc >= 4);
     static Tape tapes[MAX_TAPES];
@@ -2092,6 +2235,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "autopsy")) autopsy(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]));
     else if (!strcmp(mode, "branch")) branch(atoi(argv[2]), atoi(argv[3]), tapes, count);
     else if (!strcmp(mode, "branchpoint")) branchpoint(argv[2], atoi(argv[3]), tapes, count);
+    else if (!strcmp(mode, "calibration")) calibration(tapes, count);
     else if (!strcmp(mode, "leakcheck")) leakcheck(tapes, count);
     else if (!strcmp(mode, "oppstep")) oppstep(argv[2], argv[3], tapes, count);
     else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));

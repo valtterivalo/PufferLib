@@ -13,7 +13,7 @@ typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NO
 static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered"};
 
 typedef struct { int n, due[LA_SCRIPT]; HumanCommand command[LA_SCRIPT]; } LaScript;
-typedef struct { int kill, death, energy; double dealt, taken; } LaOutcome;
+typedef struct { int kill, death, energy, ate_at; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 typedef struct {
     int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul, bar_ratio;
@@ -122,6 +122,7 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
     RiskfightState* s = &work->state;
     HumanInput* hi = &work->context.policy_commands[0];
     LaOutcome out = {0};
+    out.ate_at = -1;
     for (int step = 0; step < g_la_horizon && !s->env.episode_over; step++) {
         int actions[RF_HEADS];
         opponent_actions(model, work, step, seed + (uint32_t)step * 2654435761u, actions);
@@ -141,6 +142,7 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
             .hit_on_him = him->hit_landed_this_tick};
         hist_step(&work->hist, s, tick + 1 + step, &events);
         out.dealt += work->step_damage;
+        if (events.ate_visible && out.ate_at < 0) out.ate_at = step;
         if (s->env.players[1].current_hitpoints <= 0) out.kill = 1;
         if (s->env.players[0].current_hitpoints <= 0) out.death = 1;
     }
