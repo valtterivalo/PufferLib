@@ -205,14 +205,19 @@ static int attack_hitsplat(int type) { return type == 16 || type == 17 || type =
 static void hist_series(const Tape* tape, Hist* out) {
     Hist h = hist_start();
     int ready_age = 0;
+    const TapeTick* initial = tape_tick(tape, tape->lo);
+    int clock_observed = initial->swing_him_tick >= 0 && initial->swing_him_speed > 0;
+    int attack_clock = clock_observed ? initial->swing_him_speed - 1 - (tape->lo - 1 - initial->swing_him_tick) : -1;
     for (int x = tape->lo; x <= tape->hi; x++) {
         const TapeTick* t = tape_tick(tape, x);
+        if (clock_observed) attack_clock--;
         HistInput in = {.bar_ratio = t->bar_now_ratio, .bar_scale = t->bar_now_scale};
         int other_anim = 0;
         for (int i = 0; i < tape->anim_count; i++) {
             const TapeAnim* a = &tape->anims[i];
             if (a->tick != x || a->side != SIDE_HIM) continue;
             in.ate |= a->anim == ANIM_EAT;
+            if (clock_observed && a->anim == ANIM_EAT) attack_clock += consume_delay(CONSUME_HARD);
             in.vw |= a->anim == ANIM_VW_SPEC;
             in.maul |= a->anim == ANIM_MAUL_SPEC;
             other_anim |= a->anim != ANIM_EAT;
@@ -232,7 +237,11 @@ static void hist_series(const Tape* tape, Hist* out) {
         kit_of_equipped(equipped, kit);
         in.weapon = t->worn[3];
         in.reach = assumed_reach(kit, in.weapon, &in.has_spec);
-        ready_age = replay_attack_timer(tape, SIDE_HIM, x) <= 0 ? ready_age + 1 : 0;
+        if (t->swing_him_tick == x) {
+            attack_clock = t->swing_him_speed - 1;
+            clock_observed = 1;
+        }
+        ready_age = attack_clock <= 0 ? ready_age + 1 : 0;
         in.ready = ready_age > 0;
         hist_update(&h, x, &in);
         h.ready_age = ready_age;
@@ -276,7 +285,7 @@ static void fit_default_servings(OppFit* fit) {
     for (int w = 0; w < 2; w++) for (int k = 0; k < 4; k++) fit->serving[w][k] = SERVING_SHARES[k];
 }
 
-enum { EAT_DIM = 24, EAT_MIXTURE = 4, MAX_TYPES = 3 };
+enum { EAT_DIM = 24, EAT_SWING_TIMER = 2, EAT_MIXTURE = 4, MAX_TYPES = 3 };
 typedef struct { double w[EAT_DIM]; } EatLogit;
 typedef struct { int types; double pi[MAX_TYPES]; EatLogit logit; } EatMixture;
 typedef struct { int base_n, base[9], hp, timer, y, masked, type, fight, group; double weight; } EatRow;
@@ -366,7 +375,7 @@ static void opp_fit_actions(const OppFit* fit, const RiskfightState* s, const Hi
     }
     double p_eat = action_probability(fit, &probe, fit->eat_action);
     if (g_eat_model.on && probe.eligible[fit->eat_action]) {
-        EatRow row = {.base_n = probe.x[fit->eat_action].n, .hp = s->env.players[1].current_hitpoints, .timer = s->env.players[0].attack_timer};
+        EatRow row = {.base_n = probe.x[fit->eat_action].n, .hp = s->env.players[1].current_hitpoints, .timer = imax(0, s->env.players[0].attack_timer_uncapped)};
         if (g_eat_model.model == EAT_MIXTURE) {
             double u = (riskfight_sample_hash(g_rollout_seed, 0, 78) % 1000000u) / 1e6, acc = 0;
             for (row.type = 0; row.type < g_eat_model.types - 1; row.type++) { acc += g_eat_model.pi[row.type]; if (u < acc) break; }

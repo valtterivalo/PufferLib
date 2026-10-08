@@ -28,6 +28,8 @@ typedef struct {
     LaFeasible feasible;
     TapeTick ours;
     int attack_timer, food_timer, potion_timer, karambwan_timer, armed, his_weapon, ours_last_ago, ours_speed, his_last_ago, his_speed;
+    RiskfightAttackHistory attack_history;
+    int attack_clock_low, attack_clock_high;
     int worn[TAPE_WORN], bag[TAPE_BAG];
     LaScript rules;
     int warned, unseen_count, unseen[WARNING_UNSEEN];
@@ -57,10 +59,19 @@ static void read_request(FILE* in, Request* q) {
         else if (!strcmp(tag, "F")) assert(sscanf(p, "%d %d %d %d", &q->feasible.spec_ok, &q->feasible.eat_ok, &q->feasible.veng_ok, &q->feasible.energy) == 4);
         else if (!strcmp(tag, "O")) {
             TapeTick* t = &q->ours;
-            int overhead_code, piety;
-            assert(sscanf(p, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &t->hp, &t->prayer, &t->attack, &t->strength, &t->defence, &t->magic,
+            int overhead_code, piety, parsed;
+            char history[16];
+            assert(sscanf(p, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %15s %d %d%n", &t->hp, &t->prayer, &t->attack, &t->strength, &t->defence, &t->magic,
                 &t->spec_us, &t->spec_phase_us, &q->armed, &t->veng_us, &t->veng_cooldown_us, &t->sacks, &t->recoil_used, &q->attack_timer, &q->food_timer, &q->potion_timer,
-                &q->karambwan_timer, &piety, &overhead_code, &q->ours_last_ago, &q->ours_speed, &q->his_last_ago, &q->his_speed, &q->his_weapon, &t->recoil_evidence, &t->ox, &t->oy) == 27);
+                &q->karambwan_timer, &piety, &overhead_code, &q->ours_last_ago, &q->ours_speed, &q->his_last_ago, &q->his_speed, &q->his_weapon, &t->recoil_evidence, &t->ox, &t->oy, history, &q->attack_clock_low, &q->attack_clock_high, &parsed) == 30);
+            assert(strspn(p + parsed, " \r\n") == strlen(p + parsed));
+            if (!strcmp(history, "OBSERVED")) {
+                assert(q->attack_clock_low <= q->attack_clock_high);
+                q->attack_history = RISKFIGHT_ATTACK_OBSERVED;
+            } else {
+                assert(!strcmp(history, "UNKNOWN") && q->attack_clock_low == 0 && q->attack_clock_high == 0);
+                q->attack_history = RISKFIGHT_ATTACK_UNKNOWN;
+            }
             t->piety = piety;
             static const char* const overheads[] = {"NONE", "SMITE", "PROTECT_FROM_MELEE", "PROTECT_FROM_MISSILES", "PROTECT_FROM_MAGIC", "REDEMPTION"};
             strcpy(t->overhead, overheads[overhead_code]);
@@ -111,7 +122,11 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     g_tape = &tape;
     uint32_t rng = osrs_lowbias32((uint32_t)q->tick) | 1;
     tape_snapshot(&tape, q->tick, &DEFAULT_PRIORS, &rng, snap);
+    assert(q->attack_history == RISKFIGHT_ATTACK_OBSERVED && q->attack_clock_low == q->attack_clock_high);
+    assert(q->attack_timer == (q->attack_clock_low < -1 ? -1 : q->attack_clock_low));
+    snap->side[0].attack_history = q->attack_history;
     snap->side[0].attack_timer = q->attack_timer;
+    snap->side[0].attack_timer_uncapped = q->attack_clock_low;
     snap->side[0].food_timer = q->food_timer;
     snap->side[0].potion_timer = q->potion_timer;
     snap->side[0].karambwan_timer = q->karambwan_timer;
@@ -157,6 +172,13 @@ int main(int argc, char** argv) {
     if (getenv("GS_SERVER_LOG")) g_log = fopen(getenv("GS_SERVER_LOG"), "w");
     for (;;) {
         read_request(stdin, &q);
+        if (q.attack_history == RISKFIGHT_ATTACK_UNKNOWN || q.attack_clock_low != q.attack_clock_high) {
+            printf("UNAVAILABLE %d %s\n", q.id, q.attack_history == RISKFIGHT_ATTACK_UNKNOWN
+                ? "local_attack_history_unknown" : "local_attack_history_interval");
+            fflush(stdout);
+            if (g_log) fflush(g_log);
+            continue;
+        }
         double started = la_seconds();
         RiskfightSnapshot snap;
         snapshot_of(&q, &snap);

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../encounters/encounter_riskfight.h"
+#include "riskfight_observer_state.h"
 
 enum { TAPE_WORN = 13, TAPE_BAG = 28 };
 enum { SIDE_US = 'U', SIDE_HIM = 'O' };
@@ -32,7 +33,7 @@ typedef struct {
     TapeHit* hits; int hit_count;
     TapeAction* actions; int action_count;
     void* hist_series;
-    void* observer_series;
+    Observer* observer_series;
     uint8_t* his_flags;
 } Tape;
 

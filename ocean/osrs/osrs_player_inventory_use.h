@@ -72,8 +72,8 @@ static inline void osrs_player_inventory_drink_effect(void* player, OsrsConsumab
     }
 }
 
-static inline OsrsInventoryUseResult osrs_player_use_inventory(
-    Player* p, OsrsInventoryUseState* state, const OsrsTeleportState* teleport, int slot, int tick
+static inline OsrsInventoryUseResult osrs_player_use_inventory_with_food_clock(
+    Player* p, OsrsInventoryUseState* state, const OsrsTeleportState* teleport, int slot, int tick, OsrsFoodAttackClock clock
 ) {
     assert(slot >= 0 && slot < OSRS_INVENTORY_SIZE);
     OsrsInventoryCell* cell = &p->inventory_cells[slot];
@@ -96,7 +96,7 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
                 case OSRS_CONSUMABLE_KARAMBWAN: food = FOOD_KARAMBWAN; break;
                 default: abort();
             }
-            if (!osrs_player_eat_food_effects(p, food).consumed)
+            if (!osrs_player_eat_food_effects_with_clock(p, food, clock).consumed)
                 return OSRS_INVENTORY_USE_NONE;
             osrs_inventory_cell_consume_eat(cell);
             osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_EAT);
@@ -132,6 +132,12 @@ static inline OsrsInventoryUseResult osrs_player_use_inventory(
             return OSRS_INVENTORY_USE_NONE;
     }
     abort();
+}
+
+static inline OsrsInventoryUseResult osrs_player_use_inventory(
+    Player* p, OsrsInventoryUseState* state, const OsrsTeleportState* teleport, int slot, int tick
+) {
+    return osrs_player_use_inventory_with_food_clock(p, state, teleport, slot, tick, OSRS_FOOD_ACTIVE_COOLDOWN);
 }
 
 static inline void osrs_player_inventory_tick(Player* p, OsrsInventoryUseState* state) {

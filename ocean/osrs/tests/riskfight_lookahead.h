@@ -70,10 +70,12 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     w->env.pid_holder = holder;
     int attack_timer = 0;
     if (b->timer_seen) {
-        int first = imax(b->timer_first, tick + 1), last = imax(first, b->timer_last);
-        attack_timer = la_between(r, first, last) - 1 - tick;
+        assert(b->timer_first <= b->timer_last);
+        attack_timer = la_between(r, b->timer_first, b->timer_last) - 1 - tick;
     }
-    him->attack_timer = him->attack_timer_uncapped = attack_timer;
+    him->attack_timer_uncapped = attack_timer;
+    him->attack_timer = imax(-1, attack_timer);
+    him->has_attack_timer = 1;
     him->food_timer = imax(0, b->food_ready - tick);
     him->potion_timer = him->karambwan_timer = 0;
     la_resupply(him, r);
@@ -265,7 +267,7 @@ static void la_measure_worth(const RiskfightState* base, const Hist* base_hist, 
 static uint64_t la_fingerprint(const RiskfightState* w) {
     uint64_t h = 1469598103934665603ull;
     const Player* him = &w->env.players[1];
-    int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer,
+    int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer, him->attack_timer_uncapped, him->has_attack_timer,
         him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     int counts[256][5] = {{0}};
@@ -364,13 +366,13 @@ static LaBelief la_belief_of(const Sim* sim, int tick) {
     }
     return (LaBelief){.hp_low = inf->opponent_hitpoints.low, .hp_high = inf->opponent_hitpoints.high, .energy_low = energy.low, .energy_high = energy.high,
         .vengeance = (int)gs_vengeance_reading(inf->opponent.vengeance, tick), .pid = (int)inf->pid.owner, .timer_seen = timer.seen,
-        .timer_first = timer.seen ? gs_next_attack(timer, tick) : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
+        .timer_first = timer.seen ? timer.earliest : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
         .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick)};
 }
 
 static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
     uint64_t h = 1469598103934665603ull;
-    int parts[] = {us->current_hitpoints, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
+    int parts[] = {us->current_hitpoints, us->attack_timer, us->attack_timer_uncapped, us->has_attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
         b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, imax(0, b->food_ready - tick),
         b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }

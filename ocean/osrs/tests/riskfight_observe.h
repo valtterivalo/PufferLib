@@ -8,22 +8,8 @@
 /* The client's view of a sim step. Our side is read from the sim as the client reads it (our own state is certain), his side only as the
  * client shows it: animations with the priority that hides a meal or a cast, hitsplats, his health bar updated by hits and gone ten
  * ticks after the last, the visible gear without ring and ammunition. The events feed the ported plugin handlers. */
-enum { OBSERVE_HITS = 24, BAR_VISIBLE_TICKS = 9, ANIM_BLOCK = 424, ANIM_EAT_ID = 829, ANIM_CAST_ID = 8317, ANIM_VW_SPEC_ID = 11275, ANIM_MAUL_SPEC_ID = 1667,
+enum { BAR_VISIBLE_TICKS = 9, ANIM_BLOCK = 424, ANIM_EAT_ID = 829, ANIM_CAST_ID = 8317, ANIM_VW_SPEC_ID = 11275, ANIM_MAUL_SPEC_ID = 1667,
     SCALE_BAR = 30, HITSPLAT_DAMAGE = 16, HITSPLAT_BLOCK = 12, WORN_INDEX_COUNT = GS_WORN_SLOTS, MAX_HOLDINGS = 64 };
-
-typedef struct { int source, target, kind, damage; } ObservedHit;
-
-typedef struct {
-    GsInfer inf;
-    int bar_hit_tick, bar_ratio, hp_xp, xp_tenths;
-    int rival_worn[48], rival_worn_count, rival_tracked;
-    int interacting[2];
-    int units[3];
-    int hit_count;
-    ObservedHit hits[OBSERVE_HITS];
-    int events;
-    GsStakes stakes;
-} Observer;
 
 typedef struct { Observer seed; } ObserverSeed;
 

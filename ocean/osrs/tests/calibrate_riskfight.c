@@ -97,13 +97,58 @@ static Conditioned conditioned(Action a, const Probe* probe, int flags) {
     abort();
 }
 
-static void load_hidden(Sim* sim, const Tape* tape, int t, int sample, Probe* probe) {
+typedef enum { CLOCK_IRRELEVANT, CLOCK_REQUIRE_EXACT } ClockRequirement;
+typedef enum { CLOCK_EXACT, CLOCK_UNKNOWN, CLOCK_INTERVAL, CLOCK_OUTSIDE, CLOCK_STATUS_COUNT } ClockStatus;
+typedef enum { CLOCK_TEACHER, CLOCK_WINDOWS, CLOCK_EPISODES, CLOCK_WHOLE_FIGHT, CLOCK_BRANCH, CLOCK_BRANCHPOINT,
+    CLOCK_SPEC, CLOCK_OPPSTEP, CLOCK_LEAKCHECK, CLOCK_CALIBRATION, CLOCK_EAT_FEATURES, CLOCK_HAZARD_INPUTS, CLOCK_EAT_HP_INPUTS, CLOCK_COHORT_COUNT } ClockCohort;
+static const char* CLOCK_COHORT_NAME[CLOCK_COHORT_COUNT] = {"teacher_profiles", "windows", "episodes", "whole_fight", "branch", "branchpoint",
+    "spec_points", "oppstep_points", "leakcheck", "calibration_points", "eat_timer_features", "hazard_inputs", "eat_hp_inputs"};
+static const char* CLOCK_STATUS_NAME[CLOCK_STATUS_COUNT] = {"exact", "unknown", "interval", "outside"};
+static long clock_counts[CLOCK_COHORT_COUNT][CLOCK_STATUS_COUNT];
+
+static ClockStatus clock_status(const Tape* tape, int t) {
+    if (t < tape->lo || t > tape->hi) return CLOCK_OUTSIDE;
+    if (!tape->observer_series) return CLOCK_UNKNOWN;
+    GsTimerState timer = tape->observer_series[t - tape->lo].inf.local_timer;
+    return !timer.seen ? CLOCK_UNKNOWN : timer.earliest != timer.latest ? CLOCK_INTERVAL : CLOCK_EXACT;
+}
+
+static int clock_eligible(const Tape* tape, int t, ClockCohort cohort) {
+    ClockStatus status = clock_status(tape, t);
+    clock_counts[cohort][status]++;
+    return status == CLOCK_EXACT;
+}
+
+static int clock_anchor(const Tape* tape, int start) {
+    int t = start;
+    while (t <= tape->hi && !clock_eligible(tape, t, CLOCK_WHOLE_FIGHT)) t++;
+    printf("clock anchor %s requested %d selected %d unavailable_prefix %d source_frames %d\n", tape->name, start,
+        t <= tape->hi ? t : -1, t - start, tape->hi - tape->lo + 1);
+    return t <= tape->hi ? t : -1;
+}
+
+static int snapshot_has_item(const RiskfightLoadout* loadout, int item) {
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) if (loadout->equipment[i] == item) return 1;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
+        OsrsInventoryCell cell = osrs_inventory_cell_from_content_code(loadout->inventory[i]);
+        if (osrs_inventory_cell_metadata(&cell)->item_idx == item) return 1;
+    }
+    return 0;
+}
+
+static Probe hidden_probe(const Tape* tape, int t, int sample, RiskfightSnapshot* snap) {
     uint32_t rng = osrs_lowbias32((uint32_t)(t * 7919 + sample * 104729 + tape->index * 13 + tape->lo)) | 1;
-    RiskfightSnapshot snap;
-    tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, &snap);
-    riskfight_load_state(&sim->state, &sim->context, &snap);
+    tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, snap);
+    const RiskfightSideSnapshot* him = &snap->side[1];
+    HimInputs in = {
+        .hp_ratio = osrs_health_bar_ratio(him->hitpoints, 99, 30),
+        .our_bar_ratio = osrs_health_bar_ratio(snap->side[0].hitpoints, MAXED_BASE_HITPOINTS, OSRS_PLAYER_HEALTH_BAR_SCALE),
+        .vw_ok = snapshot_has_item(&snap->loadout[1], ITEM_VOIDWAKER) && him->special_energy >= ENERGY_FOR_SPEC,
+        .maul_ok = (snapshot_has_item(&snap->loadout[1], ITEM_GRANITE_MAUL) || snapshot_has_item(&snap->loadout[1], ITEM_GRANITE_MAUL_ORNATE)) && him->special_energy >= ENERGY_FOR_SPEC,
+        .veng_ok = !him->veng_active && him->veng_cooldown <= 0,
+    };
     const Hist* hist = &((const Hist*)tape->hist_series)[t - 1 - tape->lo];
-    *probe = probe_state(&sim->state, hist, t, has_item(&sim->state, 1, ITEM_VOIDWAKER), has_maul(&sim->state, 1));
+    return probe_from_inputs(&in, hist, t);
 }
 
 typedef struct { Sample* samples; int count, capacity; } SampleSet;
@@ -111,16 +156,15 @@ typedef struct { Sample* samples; int count, capacity; } SampleSet;
 static void fit_model(Tape* tapes, int count, int day, OppFit* fit) {
     static SampleSet sets[ACT_COUNT];
     for (int a = 0; a < ACT_COUNT; a++) sets[a].count = 0;
-    Sim* sim = malloc(sizeof(Sim));
-    sim_init(sim);
     for (int i = 0; i < count; i++) {
         if (!in_day(&tapes[i], day)) continue;
         g_tape = &tapes[i];
         for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
             int flags = tapes[i].his_flags[t - tapes[i].lo];
+            clock_counts[CLOCK_HAZARD_INPUTS][clock_status(&tapes[i], t - 1)]++;
             for (int j = 0; j < FIT_SAMPLES; j++) {
-                Probe probe;
-                load_hidden(sim, &tapes[i], t, j, &probe);
+                RiskfightSnapshot snap;
+                Probe probe = hidden_probe(&tapes[i], t, j, &snap);
                 for (int a = 0; a < ACT_COUNT; a++) {
                     Conditioned c = conditioned((Action)a, &probe, flags);
                     if (!c.eligible) continue;
@@ -135,7 +179,6 @@ static void fit_model(Tape* tapes, int count, int day, OppFit* fit) {
         }
     }
     for (int a = 0; a < ACT_COUNT; a++) logit_fit(&fit->logit[a], ACTION_DIM[a], sets[a].samples, sets[a].count);
-    free(sim);
 }
 
 enum { SERVING_MIN = 6, SERVING_SINGLE_MAX = 30, SERVING_DOUBLE_MAX = 48, SERVING_WINDOW = 10, BEFORE_WINDOW = 8 };
@@ -212,11 +255,18 @@ static void print_fit(const char* title, const OppFit* fit, int eats, const int 
 }
 
 static void print_score(const char* action, const Score* model, const Score* profiles, double train_rate) {
+    if (model->n == 0) {
+        printf("  %-24s no eligible observations\n", action);
+        return;
+    }
     double rate = model->y / model->n;
     double constant = -model->n * (rate * log(clip(train_rate)) + (1 - rate) * log(1 - clip(train_rate)));
-    printf("  %-24s %5.0f ticks %4.0f events, rate %.3f (train %.3f) | logloss/tick fit %.4f const %.4f (%+.1f%%) profiles %.4f | Brier fit %.4f const %.4f\n",
+    printf("  %-24s %5.0f ticks %4.0f events, rate %.3f (train %.3f) | logloss/tick fit %.4f const %.4f (%+.1f%%) profiles ",
         action, model->n, model->y, rate, train_rate, model->logloss / model->n, constant / model->n,
-        100 * (constant - model->logloss) / constant, profiles->logloss / profiles->n, model->brier / model->n,
+        100 * (constant - model->logloss) / constant);
+    if (profiles->n == 0) printf("no exact-clock observations");
+    else printf("%.4f (%g exact-clock ticks)", profiles->logloss / profiles->n, profiles->n);
+    printf(" | Brier fit %.4f const %.4f\n", model->brier / model->n,
         rate * (1 - rate) + (rate - train_rate) * (rate - train_rate));
     for (int b = 0; b < REL_BINS; b++)
         if (model->rel_n[b]) printf("      pred %-7s %6.0f ticks  mean pred %.3f  observed %.3f\n", REL_LABEL[b], model->rel_n[b],
@@ -248,12 +298,17 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
     for (int i = 0; i < count; i++) {
         const Tape* tape = &tapes[i];
         if (g_only_tape ? tape != g_only_tape : tape_day(tape) != test_day) continue;
+        g_tape = tape;
         for (int t = tape->lo + 1; t <= tape->hi; t++) {
             int flags = tape->his_flags[t - tape->lo];
             Probe probes[SCORE_SAMPLES];
-            for (int j = 0; j < SCORE_SAMPLES; j++) load_hidden(sim, tape, t, j, &probes[j]);
+            for (int j = 0; j < SCORE_SAMPLES; j++) {
+                RiskfightSnapshot snap;
+                probes[j] = hidden_probe(tape, t, j, &snap);
+            }
+            int profile_available = clock_eligible(tape, t - 1, CLOCK_TEACHER);
             int eat = 0, swing_no_eat = 0, no_eat = 0, swing = 0, vw = 0, maul = 0, veng = 0;
-            for (int j = 0; j < PROFILE_SAMPLES; j++) {
+            for (int j = 0; profile_available && j < PROFILE_SAMPLES; j++) {
                 uint32_t rng = osrs_lowbias32((uint32_t)(t * 31 + j * 104729 + tape->index)) | 1;
                 RiskfightSnapshot snap;
                 tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, &snap);
@@ -272,7 +327,7 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
                 double p = 0;
                 for (int j = 0; j < SCORE_SAMPLES; j++) p += action_probability(&fit, &probes[j], (Action)a);
                 score_add(&fitted[a], p / SCORE_SAMPLES, c.y);
-                score_add(&profiles[a], q[a], c.y);
+                if (profile_available) score_add(&profiles[a], q[a], c.y);
             }
         }
     }
@@ -420,6 +475,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
     double started = seconds();
     int tape_rec_dead = 0, tape_rec_our_dead = 0;
     for (int t0 = tape->lo + 1; t0 + k <= tape->hi; t0++) {
+        if (!clock_eligible(tape, t0, CLOCK_WINDOWS)) continue;
         Recorded rec = recorded_window(tape, t0, k);
         double sums[METRICS] = {0};
         int hb_tick = 0, hb_low = 0, hb_high = 0, hb_count = 0;
@@ -563,6 +619,7 @@ static void evaluate_episodes(const Tape* tape, Trigger trigger, const OppModel*
             u = x;
             last_big = x;
         }
+        if (!clock_eligible(tape, x, CLOCK_EPISODES)) continue;
         int e = x + 1;
         while (e <= x + 8 && !rec_eat_at(tape, e)) e++;
         int d = e - u;
@@ -678,7 +735,9 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
             g_tape = tp;
             Sim* sim = malloc(sizeof(Sim));
             sim_init(sim);
-            int t0 = tp->lo + 1, kk = tp->hi - t0;
+            int t0 = clock_anchor(tp, tp->lo + 1);
+            if (t0 < 0) { free(sim); continue; }
+            int kk = tp->hi - t0;
             assert(kk <= MAX_STEPS);
             double hd = 0, od = 0, meals = 0, swings = 0, specs = 0, ticks = 0, hd_first = 0, rr = 0;
             for (int r = 0; r < n; r++) {
@@ -934,22 +993,24 @@ static double appetite_p(double c, double anticipate, const EatRow* r) {
 
 static double eat_ll(double p, const EatRow* r) { double c = clip(p); return r->weight * (r->y ? log(c) : log(1 - c)); }
 
-static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, Sim* sim) {
+static void eat_rows_add(EatRows* rows, Tape* tapes, int count, int day, ClockRequirement clock_requirement) {
     for (int i = 0; i < count; i++) {
         if (!in_day(&tapes[i], day)) continue;
         g_tape = &tapes[i];
         for (int t = tapes[i].lo + 1; t <= tapes[i].hi; t++) {
             int flags = tapes[i].his_flags[t - tapes[i].lo];
+            if (clock_requirement == CLOCK_REQUIRE_EXACT && !clock_eligible(&tapes[i], t - 1, CLOCK_EAT_FEATURES)) continue;
+            if (clock_requirement == CLOCK_IRRELEVANT) clock_counts[CLOCK_EAT_HP_INPUTS][clock_status(&tapes[i], t - 1)]++;
             for (int j = 0; j < FIT_SAMPLES; j++) {
-                Probe probe;
-                load_hidden(sim, &tapes[i], t, j, &probe);
+                RiskfightSnapshot snap;
+                Probe probe = hidden_probe(&tapes[i], t, j, &snap);
                 if (!probe.eligible[ACT_EAT_WARNING]) continue;
                 if (rows->count == rows->capacity) { rows->capacity = rows->capacity ? rows->capacity * 2 : 8192; rows->rows = realloc(rows->rows, rows->capacity * sizeof(EatRow)); }
                 EatRow* r = &rows->rows[rows->count++];
                 r->base_n = probe.x[ACT_EAT_WARNING].n;
                 for (int k = 0; k < r->base_n; k++) r->base[k] = probe.x[ACT_EAT_WARNING].idx[k];
-                r->hp = sim->state.env.players[1].current_hitpoints;
-                r->timer = sim->state.env.players[0].attack_timer;
+                r->hp = snap.side[1].hitpoints;
+                r->timer = clock_status(&tapes[i], t - 1) == CLOCK_EXACT ? imax(0, snap.side[0].attack_timer_uncapped) : INT_MIN;
                 r->y = (flags & FLAG_EAT) != 0;
                 r->masked = 0;
                 r->type = 0;
@@ -1102,16 +1163,13 @@ static void eat_model_setup(Tape* tapes, int count) {
         fclose(f);
         return;
     }
-    Sim* sim = malloc(sizeof(Sim));
-    sim_init(sim);
     static EatRows rows;
     rows.count = 0;
-    eat_rows_add(&rows, tapes, count, atoi(getenv("GS_EAT_TRAIN")), sim);
+    eat_rows_add(&rows, tapes, count, atoi(getenv("GS_EAT_TRAIN")), g_eat_model.model >= EAT_SWING_TIMER ? CLOCK_REQUIRE_EXACT : CLOCK_IRRELEVANT);
     int kept = 0;
     for (int i = 0; i < rows.count; i++) if (!rows.rows[i].masked) rows.rows[kept++] = rows.rows[i];
     rows.count = kept;
     eat_fit(&g_eat_model.logit, g_eat_model.model, &rows);
-    free(sim);
     const char* save = getenv("GS_EAT_SAVE");
     if (save) {
         FILE* f = fopen(save, "wb");
@@ -1121,12 +1179,10 @@ static void eat_model_setup(Tape* tapes, int count) {
 }
 
 static void eat_study(Tape* tapes, int count, int train_day, int test_day) {
-    Sim* sim = malloc(sizeof(Sim));
-    sim_init(sim);
     static EatRows train, test;
     train.count = test.count = 0;
-    eat_rows_add(&train, tapes, count, train_day, sim);
-    eat_rows_add(&test, tapes, count, test_day, sim);
+    eat_rows_add(&train, tapes, count, train_day, CLOCK_REQUIRE_EXACT);
+    eat_rows_add(&test, tapes, count, test_day, CLOCK_REQUIRE_EXACT);
     for (EatRows* rows = &train; rows; rows = rows == &train ? &test : NULL) {
         int kept = 0;
         for (int i = 0; i < rows->count; i++) if (!rows->rows[i].masked) rows->rows[kept++] = rows->rows[i];
@@ -1193,7 +1249,6 @@ static void eat_study(Tape* tapes, int count, int train_day, int test_day) {
         }
         printf("  %-44s test %9.2f\n", "planner constants (0.481, 44-87, 0.066)", ll_test);
     }
-    free(sim);
 }
 
 static void attribute(int n, int k, Tape* tapes, int count, int train_day, int test_day) {
@@ -1262,7 +1317,9 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
     sim_init(sim);
     for (int i = 0; i < count; i++) {
         Tape* tape = &tapes[i];
+        g_tape = tape;
         int t0 = tape->lo + (tape->hi - tape->lo) / 2;
+        if (!clock_eligible(tape, t0, CLOCK_BRANCH)) continue;
         uint32_t rng = 99;
         RiskfightSnapshot snap;
         tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
@@ -1568,12 +1625,10 @@ static void mix_rates(const EatMixture* m, const EatRows* rows, const char* name
 }
 
 static void eat_mixture_study(Tape* tapes, int count, int train_day, int test_day, const char* spectator_path, const char* save) {
-    Sim* sim = malloc(sizeof(Sim));
-    sim_init(sim);
     static EatRows train, test, all;
-    eat_rows_add(&train, tapes, count, train_day, sim);
-    eat_rows_add(&test, tapes, count, test_day, sim);
-    eat_rows_add(&all, tapes, count, 0, sim);
+    eat_rows_add(&train, tapes, count, train_day, CLOCK_IRRELEVANT);
+    eat_rows_add(&test, tapes, count, test_day, CLOCK_IRRELEVANT);
+    eat_rows_add(&all, tapes, count, 0, CLOCK_IRRELEVANT);
     eat_rows_unmasked(&train);
     eat_rows_unmasked(&test);
     eat_rows_unmasked(&all);
@@ -1630,7 +1685,6 @@ static void eat_mixture_study(Tape* tapes, int count, int train_day, int test_da
             mix_rates(&sfull[k], &s_all, k == 2 ? "spectator K=2" : "spectator K=3");
         }
     }
-    free(sim);
 }
 
 static int cmp_double(const void* a, const void* b) { double x = *(const double*)a, y = *(const double*)b; return (x > y) - (x < y); }
@@ -1688,7 +1742,9 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
         if (!in_day(&tapes[i], test_day) || (getenv("GS_ONLY") && !strstr(tapes[i].name, getenv("GS_ONLY")))) continue;
         const Tape* tp = &tapes[i];
         g_tape = tp;
-        int t0 = tp->lo + 1, kk = tp->hi - t0;
+        int t0 = clock_anchor(tp, tp->lo + 1);
+        if (t0 < 0) continue;
+        int kk = tp->hi - t0;
         assert(kk <= MAX_STEPS);
         double fight[2][CMP_METRICS] = {{0}};
         for (int r = 0; r < n; r++) {
@@ -1763,11 +1819,11 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
     int overhead = us->prayer == PRAYER_SMITE ? 1 : us->prayer == PRAYER_PROTECT_MELEE ? 2 : us->prayer == PRAYER_PROTECT_RANGED ? 3 : us->prayer == PRAYER_PROTECT_MAGIC ? 4 : us->prayer == PRAYER_REDEMPTION ? 5 : 0;
     const RiskfightVisibleOpponent* seen = &sim->state.visible[0];
     int his_raw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_NONE ? -1 : ITEM_DATABASE[him->equipped[GEAR_SLOT_WEAPON]].item_id;
-    fprintf(out, "O %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", us->current_hitpoints, us->current_prayer, us->current_attack, us->current_strength,
+    fprintf(out, "O %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d OBSERVED %d %d\n", us->current_hitpoints, us->current_prayer, us->current_attack, us->current_strength,
         us->current_defence, us->current_magic, us->special_energy, us->item_effect_state.special_regen_ticks, us->spec_armed, us->veng_active, us->veng_cooldown,
         sim->state.inventory_use[0].vengeance_sacks, us->item_effect_state.recoil_damage_used, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer,
         us->offensive_prayer == OFFENSIVE_PRAYER_PIETY, overhead, osrs_interaction_active(&us->interaction) ? 0 : -1, 4, seen->last_attack_tick >= 0 ? tick - (seen->last_attack_tick - RISKFIGHT_LOAD_TICK + sim->tick_base) : -1,
-        seen->last_attack_speed, his_raw, 0, him->x - us->x, him->y - us->y);
+        seen->last_attack_speed, his_raw, 0, him->x - us->x, him->y - us->y, us->attack_timer_uncapped, us->attack_timer_uncapped);
     fprintf(out, "W");
     for (int i = 0; i < TAPE_WORN; i++) fprintf(out, " %d", WORN_TO_GEAR[i] < 0 || us->equipped[WORN_TO_GEAR[i]] == ITEM_NONE ? -1 : ITEM_DATABASE[us->equipped[WORN_TO_GEAR[i]]].item_id);
     fprintf(out, "\nG");
@@ -1835,6 +1891,10 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
         strcpy(list, ticks);
         for (char* tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
             int t = atoi(tok);
+            if (!clock_eligible(tp, t, CLOCK_BRANCHPOINT)) {
+                printf("clock unavailable branchpoint %s tick %d reason %s\n", tp->name, t, CLOCK_STATUS_NAME[clock_status(tp, t)]);
+                continue;
+            }
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tp, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -1885,6 +1945,7 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
         const TapeAnim* an = &tape->anims[a];
         int t = swing_tick(tape, an, g_la_horizon, death);
         if (t < 0) continue;
+        if (!clock_eligible(tape, t, CLOCK_SPEC)) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
         tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2024,6 +2085,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         if (a->kind != ACTION_SPEC) continue;
         int t = a->tick - 1;
         if (t < fresh->lo + 1 || t + g_la_horizon > fresh->hi) continue;
+        if (!clock_eligible(fresh, t, CLOCK_OPPSTEP)) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
         tape_snapshot(fresh, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2051,7 +2113,9 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         Sim* work = malloc(sizeof(Sim));
         sim_init(work);
         OursPolicy policies[2] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED}};
-        int t0 = fresh->lo + 1, kk = fresh->hi - t0;
+        int t0 = clock_anchor(fresh, fresh->lo + 1);
+        int kk = t0 >= 0 ? fresh->hi - t0 : 0;
+        if (t0 < 0) rollouts = 0;
         for (int r = 0; !cold && r < rollouts; r++) {
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + fresh->index * 13 + fresh->lo)) | 1;
             RiskfightSnapshot snap;
@@ -2105,6 +2169,7 @@ static void leakcheck(Tape* tapes, int count) {
     for (int i = 0; i < count; i++) {
         Tape* tape = &tapes[i];
         for (int t = tape->lo + 5; t <= tape->hi; t += 7) {
+            if (!clock_eligible(tape, t, CLOCK_LEAKCHECK)) continue;
             Tape cut = *tape;
             cut.hi = t;
             cut.anims = malloc((size_t)tape->anim_count * sizeof(TapeAnim));
@@ -2217,6 +2282,7 @@ static void calibration(Tape* tapes, int count) {
                 t = tape->actions[a].tick - 1;
             }
             if (t < tape->lo + 1 || (t + g_la_horizon > tape->hi && !(death > t && death <= t + g_la_horizon))) continue;
+            if (!clock_eligible(tape, t, CLOCK_CALIBRATION)) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2314,10 +2380,8 @@ static void corrections(Tape* tapes, int count) {
     SwingPoint* points = malloc((size_t)capacity * sizeof(SwingPoint));
     Sim* a = malloc(sizeof(Sim));
     Sim* b = malloc(sizeof(Sim));
-    Sim* fit_sim = malloc(sizeof(Sim));
     sim_init(a);
     sim_init(b);
-    sim_init(fit_sim);
     int folds = 0, swings = 0, observed_eats = 0, observed_kills = 0, terminal_positives = 0, censored_tails = 0;
     for (int i = 0; i < count; i++) {
         int death = recorded_death_tick(&tapes[i]);
@@ -2334,7 +2398,10 @@ static void corrections(Tape* tapes, int count) {
     for (int pass = 0; pass < count; pass++) {
         int eligible = 0;
         int death = recorded_death_tick(&tapes[pass]);
-        for (int a = 0; a < tapes[pass].anim_count; a++) eligible += swing_tick(&tapes[pass], &tapes[pass].anims[a], g_la_horizon, death) >= 0;
+        for (int a = 0; a < tapes[pass].anim_count; a++) {
+            int t = swing_tick(&tapes[pass], &tapes[pass].anims[a], g_la_horizon, death);
+            eligible += t >= 0 && clock_status(&tapes[pass], t) == CLOCK_EXACT;
+        }
         if (!eligible) continue;
         g_la_belief_hp_shift = 0;
         g_eat_scale = 1;
@@ -2348,7 +2415,7 @@ static void corrections(Tape* tapes, int count) {
         infer_servings(train, train_count, 0, &fit, &eats, identified);
         fit.eat_action = ACT_EAT_WARNING;
         rows.count = 0;
-        eat_rows_add(&rows, train, train_count, 0, fit_sim);
+        eat_rows_add(&rows, train, train_count, 0, CLOCK_IRRELEVANT);
         eat_rows_unmasked(&rows);
         for (int i = 0; i < rows.count; i++) assert(rows.rows[i].fight / FIT_SAMPLES < train_count);
         mix_fit(&mixture, 2, &rows);
@@ -2417,7 +2484,7 @@ static void corrections(Tape* tapes, int count) {
             (double)held_obs_kill / held_n, held_base_kill / held_n, held_corr_kill / held_n);
     }
     assert(swings > 0);
-    printf("held-out total %d/%d fights, %d swings, %d known terminal positives, %d censored tails | eat observed %d/%d %.6f base %.6f corrected %.6f | kill observed %d/%d %.6f base %.6f corrected %.6f (expected %.3f/%.3f)\n",
+    printf("held-out total %d/%d fights, %d swings, %d known terminal positives, %d censored tails | eat observed %d/%d %.6f base %.6f corrected %.6f | kill observed %d/%d %.6f base %.6f corrected %.6f (probability_sum %.3f/%.3f)\n",
         folds, count, swings, terminal_positives, censored_tails, observed_eats, swings, (double)observed_eats / swings, base_eats / swings, corrected_eats / swings,
         observed_kills, swings, (double)observed_kills / swings, base_kills / swings, corrected_kills / swings, base_kills, corrected_kills);
     g_la_belief_hp_shift = 0;
@@ -2427,7 +2494,6 @@ static void corrections(Tape* tapes, int count) {
     free(points);
     free(a);
     free(b);
-    free(fit_sim);
 }
 
 int main(int argc, char** argv) {
@@ -2468,6 +2534,16 @@ int main(int argc, char** argv) {
     int first = !strcmp(mode, "autopsy") ? 5 : !strcmp(mode, "eatstudy") ? 4 : !strcmp(mode, "eatmix") ? 5 : !strcmp(mode, "spectator") ? 4 : !strcmp(mode, "rollouts") || !strcmp(mode, "attribute") || !strcmp(mode, "ablate") ? 6 : 4;
     int count = 0;
     for (int i = first; i < argc; i++) { tape_load(&tapes[count], argv[i]); prepare(&tapes[count]); count++; }
+    long source_counts[CLOCK_STATUS_COUNT] = {0};
+    for (int i = 0; i < count; i++)
+        for (int t = tapes[i].lo; t <= tapes[i].hi; t++) {
+            ClockStatus status = clock_status(&tapes[i], t);
+            source_counts[status]++;
+            if (status != CLOCK_EXACT) printf("clock source %s tick %d status %s\n", tapes[i].name, t, CLOCK_STATUS_NAME[status]);
+        }
+    printf("clock source frames %ld exact %ld unknown %ld interval %ld retained_tapes %d/%d\n",
+        source_counts[CLOCK_EXACT] + source_counts[CLOCK_UNKNOWN] + source_counts[CLOCK_INTERVAL], source_counts[CLOCK_EXACT],
+        source_counts[CLOCK_UNKNOWN], source_counts[CLOCK_INTERVAL], count, count);
     if (!strcmp(mode, "spectator")) { spec_load(&corpus, argv[2]); spectator(tapes, count, argv[3]); }
     else if (!strcmp(mode, "teacher")) teacher(tapes, count, atoi(argv[2]), atoi(argv[3]));
     else if (!strcmp(mode, "rollouts")) rollouts(atoi(argv[2]), atoi(argv[3]), tapes, count, atoi(argv[4]), atoi(argv[5]));
@@ -2484,5 +2560,16 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "oppstep")) oppstep(argv[2], argv[3], tapes, count);
     else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));
     else abort();
+    for (int c = 0; c < CLOCK_COHORT_COUNT; c++) {
+        long* n = clock_counts[c];
+        long total = n[CLOCK_EXACT] + n[CLOCK_UNKNOWN] + n[CLOCK_INTERVAL] + n[CLOCK_OUTSIDE];
+        if (c == CLOCK_HAZARD_INPUTS || c == CLOCK_EAT_HP_INPUTS) {
+            if (total) printf("clock independent cohort %s input_frames %ld retained_exact %ld retained_unknown %ld retained_interval %ld\n",
+                CLOCK_COHORT_NAME[c], total, n[CLOCK_EXACT], n[CLOCK_UNKNOWN], n[CLOCK_INTERVAL]);
+            continue;
+        }
+        if (total) printf("clock cohort %s candidate_evaluations %ld accepted_exact %ld excluded_unknown %ld excluded_interval %ld excluded_outside %ld\n",
+            CLOCK_COHORT_NAME[c], total, n[CLOCK_EXACT], n[CLOCK_UNKNOWN], n[CLOCK_INTERVAL], n[CLOCK_OUTSIDE]);
+    }
     return 0;
 }

@@ -4,11 +4,14 @@
 
 enum { RISKFIGHT_LOAD_TICK = 256 };
 
+typedef enum { RISKFIGHT_ATTACK_ABSENT, RISKFIGHT_ATTACK_OBSERVED, RISKFIGHT_ATTACK_LATENT, RISKFIGHT_ATTACK_UNKNOWN } RiskfightAttackHistory;
+
 typedef struct {
+    RiskfightAttackHistory attack_history;
     int hitpoints, prayer, attack, strength, defence, magic;
     int special_energy, special_regen_phase, spec_armed;
     int veng_active, veng_cooldown;
-    int attack_timer, food_timer, potion_timer, karambwan_timer;
+    int attack_timer, attack_timer_uncapped, food_timer, potion_timer, karambwan_timer;
     int recoil_damage_used;
     OffensivePrayer offensive_prayer;
     OverheadPrayer overhead_prayer;
@@ -49,9 +52,10 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         p->spec_armed = side->spec_armed;
         p->veng_active = side->veng_active;
         p->veng_cooldown = side->veng_cooldown;
-        p->has_attack_timer = 1;
+        assert(side->attack_history != RISKFIGHT_ATTACK_UNKNOWN);
+        p->has_attack_timer = side->attack_history != RISKFIGHT_ATTACK_ABSENT;
         p->attack_timer = side->attack_timer;
-        p->attack_timer_uncapped = side->attack_timer;
+        p->attack_timer_uncapped = side->attack_timer_uncapped;
         p->food_timer = side->food_timer;
         p->potion_timer = side->potion_timer;
         p->karambwan_timer = side->karambwan_timer;

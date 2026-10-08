@@ -2179,7 +2179,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
                 human_input_queue_eat(hi, 0, slot);
                 gs->human_clicked_inv_slot = slot;
             }
-            else { osrs_player_eat_food_type(p, FOOD_SHARK); }
+            else { osrs_player_eat_food_type_with_clock(p, FOOD_SHARK, OSRS_FOOD_CONTINUOUS_CLOCK); }
             return INV_ACTION_EAT;
         case INV_SLOT_KARAMBWAN:
             if (human_active) {
@@ -2187,7 +2187,7 @@ static InvAction gui_inv_click(GuiState* gs, Player* p, int slot,
                 human_input_queue_eat(hi, 1, slot);
                 gs->human_clicked_inv_slot = slot;
             }
-            else { osrs_player_eat_food_type(p, FOOD_KARAMBWAN); }
+            else { osrs_player_eat_food_type_with_clock(p, FOOD_KARAMBWAN, OSRS_FOOD_CONTINUOUS_CLOCK); }
             return INV_ACTION_EAT;
         case INV_SLOT_BREW:
             if (human_active) {

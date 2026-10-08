@@ -37,30 +37,6 @@ static int consume_delay(int kind) {
     return kind == CONSUME_HARD ? 3 : kind == CONSUME_KARAMBWAN ? 2 : 0;
 }
 
-/** Attack timer after tick t from the swings (timer set at the tick of the swing) and consumes seen so far. */
-static int replay_attack_timer(const Tape* tape, char side, int t) {
-    int timer = -1;
-    for (int x = tape->lo; x <= t; x++) {
-        const TapeTick* tick = tape_tick(tape, x);
-        if (timer >= 0) timer--;
-        if (side == SIDE_US) {
-            for (int i = 0; i < tape->action_count; i++) {
-                const TapeAction* a = &tape->actions[i];
-                if (a->tick == x && a->kind == ACTION_CLICK && timer > 0 &&
-                        (a->raw_id == RAW_ANGLERFISH || a->raw_id == RAW_KARAMBWAN))
-                    timer += consume_delay(consume_of_raw(a->raw_id));
-            }
-            if (tick->swing_us_tick == x) timer = tick->swing_us_speed - 1;
-        } else {
-            for (int i = 0; i < tape->anim_count; i++)
-                if (tape->anims[i].tick == x && tape->anims[i].side == side && tape->anims[i].anim == ANIM_EAT && timer > 0)
-                    timer += consume_delay(CONSUME_HARD);
-            if (tick->swing_him_tick == x) timer = tick->swing_him_speed - 1;
-        }
-    }
-    return timer;
-}
-
 typedef struct { int food, potion, karambwan; } Locks;
 
 static Locks locks_after(const Tape* tape, char side, int t) {
@@ -265,11 +241,29 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
 
     Locks lu = locks_after(tape, SIDE_US, t), lh = locks_after(tape, SIDE_HIM, t);
     RiskfightSideSnapshot* su = &out->side[0];
+    RiskfightAttackHistory our_history = RISKFIGHT_ATTACK_UNKNOWN;
+    int our_clock = 0;
+    if (tape->observer_series) {
+        GsTimerState timer = tape->observer_series[t - tape->lo].inf.local_timer;
+        if (timer.seen && timer.earliest == timer.latest) {
+            our_history = RISKFIGHT_ATTACK_OBSERVED;
+            our_clock = timer.earliest - t - 1;
+        }
+    }
+    int his_clock = 0;
+    if (tape->observer_series) {
+        GsTimerState timer = tape->observer_series[t - tape->lo].inf.opponent.timer;
+        if (timer.seen) {
+            assert(timer.earliest <= timer.latest);
+            int deadline = timer.earliest + (int)(uniform(rng) * (timer.latest - timer.earliest + 1));
+            his_clock = deadline - t - 1;
+        }
+    }
     *su = (RiskfightSideSnapshot){
         .hitpoints = tick->hp, .prayer = tick->prayer, .attack = tick->attack, .strength = tick->strength,
         .defence = tick->defence, .magic = tick->magic, .special_energy = tick->spec_us, .special_regen_phase = tick->spec_phase_us,
         .spec_armed = armed_after(tape, t), .veng_active = tick->veng_us, .veng_cooldown = tick->veng_cooldown_us,
-        .attack_timer = replay_attack_timer(tape, SIDE_US, t), .food_timer = lu.food, .potion_timer = lu.potion, .karambwan_timer = lu.karambwan,
+        .attack_history = our_history, .attack_timer = our_clock < -1 ? -1 : our_clock, .attack_timer_uncapped = our_clock, .food_timer = lu.food, .potion_timer = lu.potion, .karambwan_timer = lu.karambwan,
         .recoil_damage_used = tick->recoil_used, .offensive_prayer = tick->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE,
         .overhead_prayer = overhead_of(tick->overhead), .x = 0, .y = 0,
         .interacting = tick->swing_us_tick >= t - ARRIVAL_WINDOW,
@@ -279,7 +273,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .hitpoints = him->hitpoints, .prayer = HIS_PRAYER, .attack = g_his_boost, .strength = g_his_boost, .defence = g_ablation.his_defence,
         .magic = HIS_MAGIC, .special_energy = tick->spec_him, .special_regen_phase = tick->spec_phase_him,
         .veng_active = tick->veng_him, .veng_cooldown = tick->veng_cooldown_him,
-        .attack_timer = replay_attack_timer(tape, SIDE_HIM, t), .food_timer = lh.food, .potion_timer = lh.potion, .karambwan_timer = lh.karambwan,
+        .attack_history = RISKFIGHT_ATTACK_LATENT, .attack_timer = his_clock < -1 ? -1 : his_clock, .attack_timer_uncapped = his_clock, .food_timer = lh.food, .potion_timer = lh.potion, .karambwan_timer = lh.karambwan,
         .recoil_damage_used = damage_dealt_before(tape, SIDE_HIM, t), .offensive_prayer = g_ablation.no_piety ? OFFENSIVE_PRAYER_NONE : OFFENSIVE_PRAYER_PIETY,
         .x = tick->ox - tick->ux, .y = tick->oy - tick->uy,
         .interacting = tick->swing_him_tick >= t - ARRIVAL_WINDOW,

@@ -373,7 +373,7 @@ static void execute_switches(
             FoodType type =
                 step.resolution.consumable_kind == OSRS_CONSUMABLE_KARAMBWAN
                     ? FOOD_KARAMBWAN : FOOD_SHARK;
-            OsrsPlayerEatResult result = osrs_player_eat_food_type(p, type);
+            OsrsPlayerEatResult result = osrs_player_eat_food_type_with_clock(p, type, OSRS_FOOD_CONTINUOUS_CLOCK);
             if (result.consumed) {
                 p->inventory_cells[step.cell_idx] = osrs_inventory_cell_empty();
                 p->consumable_used_this_tick = 1;

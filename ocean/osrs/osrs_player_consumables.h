@@ -7,6 +7,8 @@
 #include "osrs_types.h"
 #include "osrs_consumables.h"
 
+typedef enum { OSRS_FOOD_ACTIVE_COOLDOWN, OSRS_FOOD_CONTINUOUS_CLOCK } OsrsFoodAttackClock;
+
 typedef struct {
     int hp_healed;
     int hp_wasted;
@@ -48,7 +50,7 @@ static inline int osrs_player_can_eat_food_type(const Player* p, FoodType type) 
     return r.consumed;
 }
 
-static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodType type) {
+static inline OsrsPlayerEatResult osrs_player_eat_food_effects_with_clock(Player* p, FoodType type, OsrsFoodAttackClock clock) {
     osrs_require_player_food_action(type);
     OsrsPlayerEatResult out = {0, 0, 0, 0};
 
@@ -79,18 +81,29 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
 
     p->current_hitpoints += out.hp_healed;
 
-    if (p->attack_timer > 0) {
-        p->attack_timer += out.attack_delay_ticks;
-        p->attack_timer_uncapped = p->attack_timer;
+    if (clock == OSRS_FOOD_CONTINUOUS_CLOCK) {
+        if (p->has_attack_timer) {
+            p->attack_timer_uncapped += out.attack_delay_ticks;
+            p->attack_timer = p->attack_timer_uncapped < -1 ? -1 : p->attack_timer_uncapped;
+        }
+    } else {
+        if (p->attack_timer > 0) {
+            p->attack_timer += out.attack_delay_ticks;
+            p->attack_timer_uncapped = p->attack_timer;
+        }
+        p->has_attack_timer = 1;
     }
-    p->has_attack_timer = 1;
 
     return out;
 }
 
-static inline OsrsPlayerEatResult osrs_player_eat_food_type(Player* p, FoodType type) {
+static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodType type) {
+    return osrs_player_eat_food_effects_with_clock(p, type, OSRS_FOOD_ACTIVE_COOLDOWN);
+}
+
+static inline OsrsPlayerEatResult osrs_player_eat_food_type_with_clock(Player* p, FoodType type, OsrsFoodAttackClock clock) {
     if (osrs_player_food_count(p, type) <= 0) return (OsrsPlayerEatResult){0, 0, 0, 0};
-    OsrsPlayerEatResult out = osrs_player_eat_food_effects(p, type);
+    OsrsPlayerEatResult out = osrs_player_eat_food_effects_with_clock(p, type, clock);
     if (out.consumed) {
         if ((type == FOOD_KARAMBWAN || type == FOOD_HALIBUT)) p->karambwan_count--;
         else p->food_count--;

@@ -1,8 +1,3 @@
-/**
- * Engine contract (osrs-engine-quirks section 12): food adds its attack delay
- * ONLY to an existing cooldown. From a ready weapon, eating adds nothing.
- * Karambwan adds 2, standard food 3, and they stack onto a live cooldown.
- */
 #include <stdio.h>
 #include <string.h>
 #include "ocean/osrs/encounters/encounter_colosseum.h"
@@ -20,7 +15,7 @@ static Player ready_player(void) {
     return p;
 }
 
-static void test_engine_contract(void) {
+static void test_default_clock_contract(void) {
     Player p = ready_player();
     osrs_player_eat_food_effects(&p, FOOD_SHARK);
     CHECK("shark from ready adds no attack delay", p.attack_timer == 0);
@@ -40,14 +35,12 @@ static void test_engine_contract(void) {
     osrs_player_eat_food_effects(&p, FOOD_KARAMBWAN);
     CHECK("karambwan adds 2 to an existing cooldown", p.attack_timer == 6);
 
-    /* the bug: has_attack_timer unset must not erase a live cooldown */
     p = ready_player();
     p.attack_timer = 5;
     p.has_attack_timer = 0;
     osrs_player_eat_food_effects(&p, FOOD_SHARK);
     CHECK("a live cooldown survives the first eat when has_attack_timer is unset", p.attack_timer == 8);
 
-    /* food then karambwan on a live cooldown stacks 3 + 2 */
     p = ready_player();
     p.attack_timer = 4;
     osrs_player_eat_food_effects(&p, FOOD_SHARK);
@@ -74,6 +67,39 @@ static void test_engine_contract(void) {
         CHECK("zero-heal karambwan records waste", p.last_karambwan_heal == 0 && p.last_karambwan_waste == 18);
         CHECK("zero-heal karambwan applies cooldowns", p.attack_timer == 6 && p.attack_timer_uncapped == 6 && p.food_timer == 3 && p.potion_timer == 3 && p.karambwan_timer == 2);
     }
+
+
+}
+
+static void test_continuous_attack_clock(void) {
+    const struct { int before, after; FoodType food; } cases[] = {
+        {-1, 2, FOOD_SHARK}, {-1, 1, FOOD_KARAMBWAN}, {-2, 0, FOOD_KARAMBWAN},
+        {-9, -6, FOOD_SHARK}, {0, 3, FOOD_SHARK}, {4, 7, FOOD_SHARK},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        Player p = ready_player();
+        p.has_attack_timer = 1;
+        p.attack_timer_uncapped = cases[i].before;
+        p.attack_timer = cases[i].before < -1 ? -1 : cases[i].before;
+        OsrsPlayerEatResult result = osrs_player_eat_food_effects_with_clock(&p, cases[i].food, OSRS_FOOD_CONTINUOUS_CLOCK);
+        CHECK("continuous food adds delay to signed attack history", result.consumed && p.attack_timer_uncapped == cases[i].after);
+        CHECK("continuous display saturates while preserving history", p.attack_timer == (cases[i].after < -1 ? -1 : cases[i].after) && p.has_attack_timer);
+    }
+    Player p = ready_player();
+    p.has_attack_timer = 1;
+    p.attack_timer = p.attack_timer_uncapped = -1;
+    osrs_player_eat_food_effects_with_clock(&p, FOOD_SHARK, OSRS_FOOD_CONTINUOUS_CLOCK);
+    osrs_player_eat_food_effects_with_clock(&p, FOOD_KARAMBWAN, OSRS_FOOD_CONTINUOUS_CLOCK);
+    CHECK("continuous hard and fast food stack from expired history", p.attack_timer == 4 && p.attack_timer_uncapped == 4 && p.current_hitpoints == 88);
+    p = ready_player();
+    OsrsPlayerEatResult result = osrs_player_eat_food_effects_with_clock(&p, FOOD_SHARK, OSRS_FOOD_CONTINUOUS_CLOCK);
+    CHECK("food without prior attack heals without inventing attack history", result.consumed && p.current_hitpoints == 70 && !p.has_attack_timer && p.attack_timer == 0 && p.attack_timer_uncapped == 0);
+    p = ready_player();
+    p.has_attack_timer = 1;
+    p.attack_timer = p.attack_timer_uncapped = 0;
+    p.food_timer = 1;
+    result = osrs_player_eat_food_effects_with_clock(&p, FOOD_SHARK, OSRS_FOOD_CONTINUOUS_CLOCK);
+    CHECK("rejected food preserves continuous clock and HP", !result.consumed && p.attack_timer == 0 && p.attack_timer_uncapped == 0 && p.current_hitpoints == 50);
 }
 
 static void test_colosseum_charges_the_cooldown(void) {
@@ -95,14 +121,14 @@ static void test_colosseum_charges_the_cooldown(void) {
     CHECK("colosseum shark heals", s.player.current_hitpoints > before);
     CHECK("colosseum eating charges the attack cooldown instead of being free", s.player.attack_timer == 7);
 
-    /* refused eat must report not-consumed so the caller keeps the food */
     s.player.food_timer = 3;
     int refused = col_apply_food_cell(&s, OSRS_CONSUMABLE_SHARK_FOOD);
     CHECK("colosseum eat under an active food timer is refused", refused == 0);
 }
 
 int main(void) {
-    test_engine_contract();
+    test_default_clock_contract();
+    test_continuous_attack_clock();
     test_colosseum_charges_the_cooldown();
     return osrs_test_summary();
 }

@@ -82,9 +82,9 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             }
             if (osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot])->gear_slot >= 0)
                 s->last_unequip_result[agent] = OSRS_UNEQUIP_SUCCESS;
-            OsrsInventoryUseResult use_result = osrs_player_use_inventory(p, &s->inventory_use[agent],
+            OsrsInventoryUseResult use_result = osrs_player_use_inventory_with_food_clock(p, &s->inventory_use[agent],
                 &s->env.pvp_runtime.teleport[agent], command->inventory_slot,
-                s->env.tick);
+                s->env.tick, OSRS_FOOD_CONTINUOUS_CLOCK);
             s->escaped[agent] = use_result == OSRS_INVENTORY_USE_ESCAPED;
             if (s->escaped[agent]) {
                 s->escape_tick[agent] = s->env.tick;

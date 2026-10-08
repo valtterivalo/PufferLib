@@ -50,10 +50,12 @@ static RiskfightSnapshot snapshot(void) {
     snap.loadout[0] = fight_loadout(ITEM_VOIDWAKER, ITEM_NONE, osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE));
     snap.loadout[1] = fight_loadout(ITEM_MAGIC_SHORTBOW_I, ITEM_DRAGON_ARROWS, osrs_inventory_content_code_from_item(ITEM_VOIDWAKER));
     snap.side[0] = (RiskfightSideSnapshot){.hitpoints = 77, .prayer = 80, .attack = 118, .strength = 118, .defence = 118, .magic = 99,
+        .attack_history = RISKFIGHT_ATTACK_OBSERVED, .attack_timer_uncapped = 2,
         .special_energy = 60, .special_regen_phase = 12, .spec_armed = 1, .veng_active = 1, .veng_cooldown = 30, .attack_timer = 2,
         .food_timer = 1, .recoil_damage_used = 10, .offensive_prayer = OFFENSIVE_PRAYER_PIETY, .interacting = 1,
         .seen_last_attack_ago = 3, .seen_last_attack_speed = 4};
     snap.side[1] = (RiskfightSideSnapshot){.hitpoints = 55, .prayer = 90, .attack = 118, .strength = 118, .defence = 118, .magic = 99,
+        .attack_history = RISKFIGHT_ATTACK_ABSENT, .attack_timer_uncapped = -1,
         .special_energy = 100, .attack_timer = -1, .offensive_prayer = OFFENSIVE_PRAYER_PIETY, .x = 3, .y = 0, .interacting = 1,
         .seen_last_attack_ago = -1};
     return snap;
@@ -66,13 +68,26 @@ static void test_load_state(void) {
     const Player* him = &state.env.players[1];
     assert(us->current_hitpoints == 77 && us->current_prayer == 80 && us->special_energy == 60 && us->spec_armed);
     assert(us->spec_regen_active && us->item_effect_state.special_regen_ticks == 12);
-    assert(us->veng_active && us->veng_cooldown == 30 && us->attack_timer == 2 && us->food_timer == 1);
+    assert(us->veng_active && us->veng_cooldown == 30 && us->attack_timer == 2 && us->attack_timer_uncapped == 2 && us->has_attack_timer && us->food_timer == 1);
     assert(us->item_effect_state.recoil_damage_used == 10 && us->item_effect_state.recoil_charges == RECOIL_MAX_CHARGES - 10);
     assert(him->current_hitpoints == 55 && him->x - us->x == 3 && him->y == us->y && can_attack_now((Player*)him));
     assert(state.env.pid_holder == 1 && state.env.tick == RISKFIGHT_LOAD_TICK && !state.env.episode_over);
     assert(state.visible[1].last_attack_tick == RISKFIGHT_LOAD_TICK - 3 && state.visible[0].last_attack_tick == -1);
     assert(state.visible[0].health_bar == osrs_health_bar_ratio(55, 99, OSRS_PLAYER_HEALTH_BAR_SCALE));
     assert(context.loadout[0] == NULL);
+}
+
+static void test_continuous_clock_load(void) {
+    RiskfightSnapshot snap = snapshot();
+    snap.side[0].attack_timer = -1;
+    snap.side[0].attack_timer_uncapped = -2;
+    riskfight_load_state(&state, &context, &snap);
+    Player* us = &state.env.players[0];
+    assert(us->has_attack_timer && us->attack_timer == -1 && us->attack_timer_uncapped == -2);
+    assert(!state.env.players[1].has_attack_timer);
+    us->karambwan_timer = 0;
+    OsrsPlayerEatResult eaten = osrs_player_eat_food_effects_with_clock(us, FOOD_KARAMBWAN, OSRS_FOOD_CONTINUOUS_CLOCK);
+    assert(eaten.consumed && us->attack_timer == 0 && us->attack_timer_uncapped == 0);
 }
 
 static void test_clone_is_deterministic(void) {
@@ -113,6 +128,7 @@ int main(void) {
     context.self_play = 1;
     test_anglerfish_overheal();
     test_load_state();
+    test_continuous_clock_load();
     RiskfightSnapshot snap = snapshot();
     snap.side[1].x = 1;
     snap.side[1].interacting = 0;
