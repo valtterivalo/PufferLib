@@ -5,6 +5,7 @@
 /* AutoEat.java: the smallest meal that keeps the opponent's knockout chance at or under a tolerance. Ticks are GameTick numbers.
  * The cost term lives in gs_auto_eat_decide (value = gain - forgone * stakes, gain priced above the tolerance), eat_delay and
  * eat_forgone_knockout. */
+#define GS_KNOCKOUT_LATER 0.065
 enum { GS_MAX_ATTACKS = 8, GS_MAX_HIDDEN = 6, GS_MAX_FOODS = 8, GS_MAX_MEAL = 4, GS_MAX_MEALS = 128, GS_MAX_HITS = 512 };
 typedef enum { GS_EAT_NOW, GS_WAIT, GS_EXPOSED } GsDecision;
 typedef enum { GS_ENGAGED, GS_IDLE } GsOffence;
@@ -560,6 +561,11 @@ static GsEvaluation eat_mixed(const GsEatCall* call, const GsEatSituation* s, co
     double risk = 0;
     int useful = 0, waste = 0;
     int owners = s->pid_flip > 0 ? 2 : 1;
+    int interval = 1;
+    for (int i = 0; i < s->attack_count; i++) interval = imax(interval, s->attacks[i].interval);
+    for (int i = 0; i < s->hidden_count; i++) interval = imax(interval, s->hidden[i].attack.interval);
+    long swings = (((long)answerable - s->tick + interval - 1) / interval);
+    if (swings < 1) swings = 1;
     for (int o = 0; o < owners; o++) {
         GsPid owner = o == 0 ? s->pid : s->pid == GS_PID_LOCAL ? GS_PID_OPPONENT : GS_PID_LOCAL;
         double owner_weight = o == 0 ? 1 - s->pid_flip : s->pid_flip;
@@ -570,10 +576,11 @@ static GsEvaluation eat_mixed(const GsEatCall* call, const GsEatSituation* s, co
             variant.hidden_count = 0;
             for (int i = 0; i < s->hidden_count; i++) {
                 const GsHidden* hidden = &s->hidden[i];
+                double used = 1 - gs_pow(1 - hidden->probability, (int)swings);
                 if ((mask >> i & 1) == 0) {
-                    weight *= 1 - hidden->probability;
+                    weight *= 1 - used;
                 } else {
-                    weight *= hidden->probability;
+                    weight *= used;
                     if (hidden->is_maul) { variant.has_maul = 1; variant.maul = hidden->attack; }
                     else { assert(variant.attack_count < GS_MAX_ATTACKS); variant.attacks[variant.attack_count++] = hidden->attack; }
                 }
@@ -600,7 +607,7 @@ static GsSpecSituation eat_hunt(const GsEatSituation* s) {
 #else
     GsHealthRange his = s->opponent_hp;
 #endif
-    return (GsSpecSituation){his, NULL, 0, GS_NONE, s->vengeance, s->pid, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}, gs_health_of(s->hitpoints)};
+    return (GsSpecSituation){his, NULL, 0, GS_NONE, s->vengeance, s->pid, s->pid_flip, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}, gs_health_of(s->hitpoints)};
 }
 
 static double eat_knockout(const GsEatCall* call, const GsEatSituation* s, const GsSpecSituation* hunt, const GsVec* consumptions, int until) {
@@ -714,7 +721,7 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
         int drain = 0;
         for (int i = 0; i < meal->n; i++) drain |= foods[meal->foods[i]].drained;
         double forgone = delay == 0 && !drain ? 0 : eat_forgone_knockout(&call, s, meal, delay, waiting.risk, evaluation.risk);
-        double value = gain - forgone * s->stakes;
+        double value = gain * (1 + GS_KNOCKOUT_LATER * s->stakes) - forgone * s->stakes;
         if (value >= 0) {
             GsChoice* c = &choices[choice_count++];
             *c = (GsChoice){meal, evaluation, gain, value, meal->n, 0, 0, 0, 0};

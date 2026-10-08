@@ -15,7 +15,8 @@
 enum { LINE = 1 << 16, TOKENS = 256, COMBAT_LEVEL = 126 };
 
 static const char* const WEAPON_NAMES[GS_WEAPONS] = {"VOIDWAKER", "GRANITE_MAUL", "ARMADYL_GODSWORD", "ANCIENT_GODSWORD", "DRAGON_CLAWS", "DRAGON_DAGGER",
-    "ABYSSAL_DAGGER", "VESTAS_LONGSWORD", "STATIUS_WARHAMMER", "DRAGON_WARHAMMER", "DARK_BOW", "BALLISTA", "ARMADYL_CROSSBOW", "ZARYTE_CROSSBOW",
+    "ABYSSAL_DAGGER", "VESTAS_SPEAR", "DRAGON_MACE_BH", "DRAGON_MACE", "VESTAS_LONGSWORD", "STATIUS_WARHAMMER", "MORRIGANS_THROWING_AXE", "MORRIGANS_JAVELIN", "ZURIELS_STAFF", "NOXIOUS_HALBERD",
+    "DRAGON_WARHAMMER", "DARK_BOW", "BALLISTA", "ARMADYL_CROSSBOW", "ZARYTE_CROSSBOW",
     "TOXIC_BLOWPIPE", "MAGIC_SHORTBOW_I", "MAGIC_SHORTBOW", "VOLATILE_NIGHTMARE_STAFF", "DHAROKS_GREATAXE", "SOULREAPER_AXE", "OTHER"};
 static const char* const STYLE_NAMES[3] = {"MELEE", "RANGED", "MAGIC"};
 static const char* const PID_NAMES[3] = {"LOCAL", "OPPONENT", "UNKNOWN"};
@@ -98,10 +99,10 @@ static void format_inference(GsInfer* s, int tick, char* out) {
     }
     char ate[16], reach[16], food[16];
     sprintf(ate, "%d", s->opponent_ate); sprintf(reach, "%d", s->opponent_in_reach_since); sprintf(food, "%d", s->opponent_hard_food_ready);
-    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d landing %s | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d %s food %s recoil %s swing %s soul %d@%d hidden %d surplus %d,%d,%.1f arsenal %s",
+    sprintf(out, "pid %s %s | timer %s | spec %s typical %s possible %s from %d landing %s | veng %s %s..%d | local %s | hp %s ate %s reach %s bar %s dmg %d %s food %s recoil %s swing %s soul %d@%d immune %d surplus %d,%d,%.1f arsenal %s",
         PID_NAMES[s->pid.owner], age, timer, s->opponent.spec.broken ? "BROKEN_PRIOR" : "TYPICAL", typical, possible, s->opponent.spec.anchor, landings,
         PHASE_NAMES[s->opponent.vengeance.phase], earliest, s->opponent.vengeance.latest, local, hp, ate, reach, BAR_NAMES[s->bar], s->damage_since_bar, list, food,
-        RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, gs_hidden_opportunities(&s->opponent), s->surplus.strength, s->surplus.ranged_strength,
+        RECOIL_NAMES[s->recoil], swing, s->soul_stacks.held, s->soul_stacks.tick, s->opponent.immune_through, s->surplus.strength, s->surplus.ranged_strength,
         s->surplus.magic_damage, arsenal);
     sprintf(out + strlen(out), " | reflect %s", reflect_name(s->swing_reflect));
     if (gs_living_rival(s) && s->tick == tick)
@@ -189,7 +190,7 @@ static void canonical_java_spec(const char* record, char* out) {
         strcpy(one, line);
         char* t[TOKENS];
         int n = gs_wire_split(one, t);
-        if (!strcmp(t[0], "SS")) sprintf(out + strlen(out), "SS %s %s %s %s %s %s %s %s\n", t[1], t[2], t[3], t[4], t[5], t[6], t[9], t[10]);
+        if (!strcmp(t[0], "SS")) sprintf(out + strlen(out), "SS %s %s %s %s %s %s %s %s\n", t[1], t[2], t[3], t[4], t[5], t[6], t[10], t[11]);
         else if (!strcmp(t[0], "UW")) {
             if (n == 1) strcat(out, "UW\n");
             else sprintf(out + strlen(out), "UW %s %d\n", t[2], atoi(t[3]) - 1);

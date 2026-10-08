@@ -1,4 +1,4 @@
-/* Differential test of the C ports of VengeanceCast.reason, Bait.decide and PrayerKeeper against the Java oracle.
+/* Differential test of the C ports of VengeanceCast.reason and PrayerKeeper against the Java oracle.
  *
  *   cc -std=c11 -O2 -I. -o /tmp/test_gs_rules ocean/osrs/tests/test_gs_rules.c -lm
  *   /tmp/test_gs_rules [ORACLE.tap]
@@ -10,10 +10,7 @@
 static const char* const CAST[] = {"NOW", "KEEP"};
 static const char* const PIDS[] = {"LOCAL", "OPPONENT", "UNKNOWN"};
 static const char* const VENG[] = {"UNKNOWN", "UP", "DOWN", "MAYBE"};
-static const char* const OURS[] = {"UP", "COOLDOWN", "CLICKED", "BLOCKED", "MAGIC_LEVEL", "CASTABLE"};
-static const char* const OWNERS[] = {"NONE", "HOTKEY", "MEAL", "MEAL_SPEC", "SPEC", "UPKEEP", "ESCAPE", "CAST", "RESTORE", "DISARM", "PRAYER", "BAIT"};
 static const char* const REASONS[] = {"NONE", "PLAN", "CASTABLE", "ANSWER"};
-static const char* const BAITS[] = {"HOLD", "OFF", "NO_RIVAL", "PID", "HIS_VENGEANCE", "OUR_VENGEANCE", "HIS_ENERGY", "OUR_PLAN", "EAT", "BUSY"};
 static const char* const ESCAPES[] = {"STAY", "DISARM", "TELEPORT"};
 
 #define INDEX(table, name) index_of(table, sizeof(table) / sizeof(*(table)), name)
@@ -61,12 +58,6 @@ int main(int argc, char** argv) {
                 reflect_of(g), reflect_of(h), !strcmp(i, "COVERS") ? GS_ENERGY_COVERS : GS_ENERGY_SHORT);
             ok = reason == (GsCastReason)INDEX(REASONS, r1);
             per[0]++;
-        } else if (sscanf(line, "BAIT %127s %127s %127s %127s %127s %127s %127s %127s %127s %127s -> %127s", a, b, c, d, e, g, h, oe, en, i, r1) == 11) {
-            int owner = INDEX(OWNERS, i);
-            GsBait verdict = gs_bait_decide((GsDecision)(!strcmp(a, "EAT_NOW") ? GS_EAT_NOW : !strcmp(a, "WAIT") ? GS_WAIT : GS_EXPOSED), (GsPid)INDEX(PIDS, b),
-                (GsVengeance)INDEX(VENG, c), (GsOurVengeance)INDEX(OURS, d), atoi(e), atoi(g), atoi(h), atoi(oe), !strcmp(en, "INTERACTING"), owner == 2 || owner == 3, owner == 3 || owner == 4);
-            ok = verdict == (GsBait)INDEX(BAITS, r1);
-            per[1]++;
         } else if (sscanf(line, "VU %127s %127s %127s -> %127s", a, b, c, r1) == 4) {
             ok = gs_vengeance_restore(!strcmp(a, "DRAINED"), !strcmp(b, "YES"), !strcmp(c, "COVERS") ? GS_ENERGY_COVERS : GS_ENERGY_SHORT) == !strcmp(r1, "RESTORE");
             per[0]++;
@@ -100,6 +91,6 @@ int main(int argc, char** argv) {
         bad += !ok;
         if (!ok && bad < 6) printf("MISMATCH %s", line);
     }
-    printf("%ld cases, %ld mismatches (VC %ld, Bait %ld, wilderness %ld, upkeep %ld, escape %ld, reenable %ld, observe %ld)\n", total, bad, per[0], per[1], per[2], per[3], per[4], per[5], per[6]);
+    printf("%ld cases, %ld mismatches (VC %ld, wilderness %ld, upkeep %ld, escape %ld, reenable %ld, observe %ld)\n", total, bad, per[0], per[2], per[3], per[4], per[5], per[6]);
     return bad != 0;
 }

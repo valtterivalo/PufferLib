@@ -2,7 +2,7 @@
 #define GS_RULES_H
 #include "gs_auto_eat.h"
 
-/* VengeanceCast.java, Bait.java and PrayerKeeper.java: the small pure rules around the knockout decisions. */
+/* VengeanceCast.java and PrayerKeeper.java: the small pure rules around the knockout decisions. */
 typedef enum { GS_REFLECT_SPEC, GS_REFLECT_WORTH, GS_REFLECT_WEAK } GsReflect;
 typedef enum { GS_ENERGY_COVERS, GS_ENERGY_SHORT } GsEnergyCover;
 typedef enum { GS_REASON_NONE, GS_REASON_PLAN, GS_REASON_CASTABLE, GS_REASON_ANSWER } GsCastReason;
@@ -13,21 +13,6 @@ static GsCastReason gs_vengeance_reason(GsCast planned, const GsRebound* rebound
     if (first != GS_PID_LOCAL) return rebound->kind == GS_REBOUND_CASTABLE && weapon == GS_REFLECT_WORTH ? GS_REASON_CASTABLE : GS_REASON_NONE;
     int worth = thrown == GS_REFLECT_SPEC || (thrown == GS_REFLECT_WORTH && energy == GS_ENERGY_SHORT);
     return worth && has_attack && spec_rebound_casts_before(rebound, attack_lands, first) ? GS_REASON_ANSWER : GS_REASON_NONE;
-}
-
-typedef enum { GS_BAIT_HOLD, GS_BAIT_OFF, GS_BAIT_NO_RIVAL, GS_BAIT_PID, GS_BAIT_HIS_VENGEANCE, GS_BAIT_OUR_VENGEANCE, GS_BAIT_HIS_ENERGY, GS_BAIT_OUR_PLAN,
-    GS_BAIT_EAT, GS_BAIT_BUSY } GsBait;
-typedef enum { GS_OURS_UP, GS_OURS_COOLDOWN, GS_OURS_CLICKED, GS_OURS_BLOCKED, GS_OURS_MAGIC_LEVEL, GS_OURS_CASTABLE } GsOurVengeance;
-
-static GsBait gs_bait_decide(GsDecision eat, GsPid pid, GsVengeance his_vengeance, GsOurVengeance ours, int his_energy_high, int his_spec_cost, int has_plan,
-    int our_energy, int engaged, int run_is_meal, int run_is_spec) {
-    if (pid != GS_PID_LOCAL) return GS_BAIT_PID;
-    if (his_vengeance != GS_VENGEANCE_DOWN) return GS_BAIT_HIS_VENGEANCE;
-    if (ours != GS_OURS_CASTABLE) return GS_BAIT_OUR_VENGEANCE;
-    if (his_energy_high < his_spec_cost) return GS_BAIT_HIS_ENERGY;
-    if (our_energy < 50 || (engaged && !has_plan)) return GS_BAIT_OUR_PLAN;
-    if (eat != GS_WAIT) return GS_BAIT_EAT;
-    return run_is_meal || run_is_spec ? GS_BAIT_BUSY : GS_BAIT_HOLD;
 }
 
 /* VengeanceCast.upkeep: restore a drained magic level while a cast is coming and his energy covers a spec */

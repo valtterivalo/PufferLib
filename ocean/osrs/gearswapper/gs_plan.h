@@ -58,7 +58,15 @@ static int gs_maul(const GsInfer* s, const GsOwn* own, int* most, double* accura
 }
 
 /* Builds the plans with the cast delaying everything by `extra` ticks, the plans of the Java build lambda. Returns the count. */
+static GsSpecHit gs_spec_hit_blocked(Arena* arena, int lands, int least, int most, double accuracy, int immune_through) {
+    if (lands > immune_through) return gs_spec_hit_of(arena, lands, least, most, accuracy);
+    double* damage = arena_alloc(arena, sizeof(double));
+    damage[0] = 1;
+    return (GsSpecHit){lands, damage, 1, GS_ORIGIN_OURS};
+}
+
 static int gs_spec_plans(Arena* arena, const GsInfer* s, int tick, int extra, const GsOwn* own, GsSpecPlan* plans) {
+    int immune = s->opponent.immune_through;
     const GsClient* c = &s->c;
     int energy = gs_spec_energy(c);
     int count = 0;
@@ -75,18 +83,18 @@ static int gs_spec_plans(Arena* arena, const GsInfer* s, int tick, int extra, co
     int vw_least = gs_protect(c, vw_most / 2, GS_HEAD_MAGIC), vw_top = gs_protect(c, vw_most * 3 / 2, GS_HEAD_MAGIC);
     if (has_swing && tick + 1 + extra <= vw_process) {
         GsSpecHit* hit = arena_alloc(arena, sizeof(GsSpecHit));
-        *hit = gs_spec_hit_of(arena, gs_landing(vw_process, pid), vw_least, vw_top, 1.0);
+        *hit = gs_spec_hit_blocked(arena, gs_landing(vw_process, pid), vw_least, vw_top, 1.0, immune);
         plans[count++] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, hit, 1};
     }
     if (wieldable) {
         int maul_process = tick + GS_MAUL_PROCESSED_AFTER + extra;
         GsSpecHit* hits = arena_alloc(arena, 2 * sizeof(GsSpecHit));
-        hits[0] = gs_spec_hit_of(arena, gs_landing(maul_process, pid), 0, maul_most, maul_accuracy);
+        hits[0] = gs_spec_hit_blocked(arena, gs_landing(maul_process, pid), 0, maul_most, maul_accuracy, immune);
         if (energy >= cost) plans[count++] = (GsSpecPlan){GS_CHOICE_MAUL, hits, 1};
         if (energy >= cost + 50 && has_swing) {
             GsSpecHit* both = arena_alloc(arena, 2 * sizeof(GsSpecHit));
             both[0] = hits[0];
-            both[1] = gs_spec_hit_of(arena, gs_landing(imax(maul_process + GS_SPEC_AFTER_MAUL, swing), pid), vw_least, vw_top, 1.0);
+            both[1] = gs_spec_hit_blocked(arena, gs_landing(imax(maul_process + GS_SPEC_AFTER_MAUL, swing), pid), vw_least, vw_top, 1.0, immune);
             plans[count++] = (GsSpecPlan){GS_CHOICE_MAUL_VOIDWAKER, both, 2};
         }
     }

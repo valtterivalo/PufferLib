@@ -117,6 +117,7 @@ typedef struct {
     int hard_food_ready;
     GsVengeance vengeance;
     GsPid pid;
+    double pid_flip;
     int has_incoming; GsIncoming incoming;
     int recoil_charges, tick;
     GsWarning warning;
@@ -479,8 +480,43 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
 }
 #endif
 
+static int gs_spec_shift(const GsSpecSituation* s) { return s->pid == GS_PID_LOCAL ? -1 : 1; }
+
+static int gs_spec_cast_before_hit(const GsSpecSituation* s);
+
+static GsSpecSituation gs_spec_flipped(const GsSpecSituation* s) {
+    assert(s->pid != GS_PID_UNKNOWN);
+    GsSpecSituation other = *s;
+    int shift = gs_spec_shift(s);
+    other.pid = s->pid == GS_PID_LOCAL ? GS_PID_OPPONENT : GS_PID_LOCAL;
+    other.pid_flip = 0;
+    if (other.has_incoming) {
+        other.incoming.lands += shift;
+        if (other.incoming.attack != GS_NONE) other.incoming.attack += shift;
+    }
+    return other;
+}
+
+/* AutoSpec.priced: the outcome as the owner read last holds PID and as the other owner would, weighted by the chance it flipped. */
+static GsOutcome gs_spec_priced(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho standing, int cast_aware) {
+    GsEcho held_echo = cast_aware && gs_spec_cast_before_hit(s) ? GS_ECHO_VENGEANCE : standing;
+    GsOutcome held = gs_spec_outcome(arena, s, planned, planned_count, held_echo);
+    if (s->pid_flip == 0) return held;
+    GsSpecSituation other = gs_spec_flipped(s);
+    size_t mark = arena->used;
+    GsSpecHit* shifted = arena_alloc(arena, (size_t)(planned_count + 1) * sizeof(GsSpecHit));
+    for (int i = 0; i < planned_count; i++) {
+        shifted[i] = planned[i];
+        shifted[i].lands -= gs_spec_shift(s);
+    }
+    GsEcho turned_echo = cast_aware && gs_spec_cast_before_hit(&other) ? GS_ECHO_VENGEANCE : standing;
+    GsOutcome turned = gs_spec_outcome(arena, &other, shifted, planned_count, turned_echo);
+    arena->used = mark;
+    return (GsOutcome){(1 - s->pid_flip) * held.kill + s->pid_flip * turned.kill, (1 - s->pid_flip) * held.death + s->pid_flip * turned.death};
+}
+
 static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo) {
-    return gs_spec_outcome(arena, s, planned, planned_count, echo).kill;
+    return gs_spec_priced(arena, s, planned, planned_count, echo, 0).kill;
 }
 
 /* AutoSpec.decide */
@@ -546,6 +582,10 @@ static int spec_rebound_casts_before(const GsRebound* r, int lands, GsPid first)
     return r->kind == GS_REBOUND_CASTABLE && (r->cast < lands || (r->cast == lands && first == GS_PID_LOCAL));
 }
 
+static int gs_spec_cast_before_hit(const GsSpecSituation* s) {
+    return s->has_incoming && s->incoming.attack == GS_NONE && spec_rebound_casts_before(&s->rebound, s->incoming.lands, s->pid);
+}
+
 static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
     const GsSpecPlan* after_cast, int after_cast_count, int energy) {
     static const GsSpecPlan nothing = {GS_CHOICE_HOLD, NULL, 0};
@@ -555,16 +595,21 @@ static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s
     GsOutcome chosen = {0, 0};
     for (int i = 0; i <= plan_count; i++) {
         const GsSpecPlan* plan = i < plan_count ? &plans[i] : &nothing;
-        GsOutcome kept = gs_spec_outcome(arena, s, plan->hits, plan->hit_count, standing);
+        GsOutcome kept = gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 0);
         if (kept.kill > chosen.kill || (kept.kill == chosen.kill && kept.kill > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
             best = plan;
             chosen = kept;
         }
     }
-    if (s->has_incoming && s->incoming.attack == GS_NONE && spec_rebound_casts_before(&s->rebound, s->incoming.lands, s->pid)) {
+    int casts = gs_spec_cast_before_hit(s);
+    if (!casts && s->pid_flip > 0) {
+        GsSpecSituation other = gs_spec_flipped(s);
+        casts = gs_spec_cast_before_hit(&other);
+    }
+    if (casts) {
         for (int i = 0; i <= after_cast_count; i++) {
             const GsSpecPlan* plan = i < after_cast_count ? &after_cast[i] : &nothing;
-            GsOutcome with_cast = gs_spec_outcome(arena, s, plan->hits, plan->hit_count, GS_ECHO_VENGEANCE);
+            GsOutcome with_cast = gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 1);
             if (with_cast.kill > chosen.kill) {
                 best = plan;
                 cast = GS_CAST_NOW;

@@ -72,7 +72,7 @@ static int read_record(FILE* f, Record* r) {
         GsSpecSituation* s = &r->s;
         if (!strcmp(tag, "SS")) {
             char vengeance[16], pid[16], kind[16];
-            sscanf(p, "%d %d %d %d %15s %15s %15s %d %d %d %d", &s->hitpoints.low, &s->hitpoints.high, &s->hitpoints.max, &s->hard_food_ready, vengeance, pid, kind,
+            sscanf(p, "%d %d %d %d %15s %15s %lf %15s %d %d %d %d", &s->hitpoints.low, &s->hitpoints.high, &s->hitpoints.max, &s->hard_food_ready, vengeance, pid, &s->pid_flip, kind,
                 &s->rebound.cast, &s->recoil_charges, &s->tick, &r->energy);
             s->vengeance = vengeance_of(vengeance); s->pid = pid_of(pid);
             s->rebound.kind = !strcmp(kind, "UP") ? GS_REBOUND_UP : !strcmp(kind, "CASTABLE") ? GS_REBOUND_CASTABLE : GS_REBOUND_SPENT;

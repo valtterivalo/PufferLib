@@ -75,6 +75,40 @@ static int fd_lo(double x) { int64_t b; memcpy(&b, &x, 8); return (int)b; }
 static double fd_with_lo(double x, int lo) { int64_t b; memcpy(&b, &x, 8); b = (b & ~0xffffffffLL) | (uint32_t)lo; memcpy(&x, &b, 8); return x; }
 static double fd_with_hi(double x, int hi) { int64_t b; memcpy(&b, &x, 8); b = (b & 0xffffffffLL) | ((int64_t)hi << 32); memcpy(&x, &b, 8); return x; }
 
+/* StrictMath.exp (fdlibm) for the domain of HiddenWeapon.perAttack: an argument in [-745, 0]. */
+static double gs_exp(double x) {
+    static const double HALF[2] = {0.5, -0.5}, LN2_HI[2] = {6.93147180369123816490e-01, -6.93147180369123816490e-01},
+        LN2_LO[2] = {1.90821492927058770002e-10, -1.90821492927058770002e-10}, INV_LN2 = 1.44269504088896338700e+00, TWOM1000 = 9.33263618503218878990e-302,
+        P1 = 1.66666666666666019037e-01, P2 = -2.77777777770155933842e-03, P3 = 6.61375632143793436117e-05, P4 = -1.65339022054652515390e-06, P5 = 4.13813679705723846039e-08;
+    assert(x <= 0 && x >= -745);
+    unsigned hx = (unsigned)fd_hi(x);
+    int xsb = (int)((hx >> 31) & 1);
+    hx &= 0x7fffffff;
+    double hi = 0, lo = 0;
+    int k = 0;
+    if (hx > 0x3fd62e42) {
+        if (hx < 0x3FF0A2B2) {
+            hi = x - LN2_HI[xsb];
+            lo = LN2_LO[xsb];
+            k = 1 - xsb - xsb;
+        } else {
+            k = (int)(INV_LN2 * x + HALF[xsb]);
+            double t = k;
+            hi = x - t * LN2_HI[0];
+            lo = t * LN2_LO[0];
+        }
+        x = hi - lo;
+    } else if (hx < 0x3e300000) {
+        return 1.0 + x;
+    }
+    double t = x * x;
+    double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+    if (k == 0) return 1.0 - ((x * c) / (c - 2.0) - x);
+    double y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
+    if (k >= -1021) return fd_with_hi(y, fd_hi(y) + (k << 20));
+    return fd_with_hi(y, fd_hi(y) + ((k + 1000) << 20)) * TWOM1000;
+}
+
 static double gs_pow(double x, double y) {
     assert(x > 0 && x < INFINITY && y >= 0 && y < 2147483647.0 && fd_hi(x) >= 0x00100000);
     if (y == 0.0) return 1.0;

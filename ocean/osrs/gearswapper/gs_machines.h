@@ -16,7 +16,6 @@ typedef struct {
     GsStruck local, opponent;
 } GsPidState;
 
-enum { GS_PID_STALE_AFTER = 10 };
 
 static GsPidState gs_pid_unknown(void) {
     GsPidState s = {.owner = GS_PID_UNKNOWN};
@@ -85,9 +84,6 @@ static GsPidState gs_pid_hit_on_opponent(GsPidState s, int tick, int amount) {
     return gs_pid_after_local_pairing(s, gs_pairing_hit_landed(s.local_attacks, tick), tick, (GsStruck){tick, amount});
 }
 
-static GsPid gs_pid_fresh_owner(const GsPidState* s, int tick) {
-    return s->owner != GS_PID_UNKNOWN && tick - s->observed_tick <= GS_PID_STALE_AFTER ? s->owner : GS_PID_UNKNOWN;
-}
 
 /* Consumption.java */
 typedef struct { int delay, lowest, highest; } GsConsumptionRow;
@@ -270,6 +266,7 @@ static GsSoulStacks gs_soul_swung(GsSoulStacks s, int now) { return (GsSoulStack
 static GsSoulStacks gs_soul_beheaded(int now) { return (GsSoulStacks){0, now}; }
 
 /* OpponentInference.java */
+enum { GS_SPEAR_WALL_TICKS = 8 };
 typedef struct { GsTimerState before; int eats; } GsPending;
 typedef struct {
     GsTimerState timer;
@@ -278,18 +275,16 @@ typedef struct {
     int has_pending;
     GsPending pending;
     GsVengeanceState vengeance;
-    int full_energy_swings;
+    int immune_through;
 } GsOpponentInference;
 
-enum { GS_OPPORTUNITY_ENERGY = 50 };
-
 static GsOpponentInference gs_inference_tracked(int tick) {
-    return (GsOpponentInference){.spec = gs_energy_full(tick)};
+    return (GsOpponentInference){.spec = gs_energy_full(tick), .immune_through = INT_MIN};
 }
 
-static GsOpponentInference gs_inference_animated(GsOpponentInference s, GsKind kind, int spec_cost, int tick, GsSpeed speed) {
+static GsOpponentInference gs_inference_animated(GsOpponentInference s, GsKind kind, int spec_cost, int spear_wall, int tick, GsSpeed speed) {
     GsOpponentInference out = s;
-    if ((kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC) && gs_energy_range(&s.spec, tick).low >= GS_OPPORTUNITY_ENERGY) out.full_energy_swings++;
+    if (spear_wall) out.immune_through = tick + GS_SPEAR_WALL_TICKS - 1;
     if (spec_cost > 0) out.spec = gs_energy_spec(s.spec, tick, spec_cost);
     out.timer = gs_timer_observe(s.timer, kind, tick, speed);
     if (kind == GS_KIND_VENGEANCE_CAST) out.vengeance = gs_vengeance_cast_after(s.vengeance, tick);
@@ -312,8 +307,6 @@ static GsOpponentInference gs_inference_revealed(GsOpponentInference s, int hp, 
     out.has_pending = 0;
     return out;
 }
-
-static int gs_hidden_opportunities(const GsOpponentInference* s) { return imax(0, s->full_energy_swings - 1); }
 
 static GsOpponentInference gs_inference_veng_procced(GsOpponentInference s, int tick) {
     s.vengeance = gs_vengeance_procced(s.vengeance, tick);

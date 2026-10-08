@@ -247,7 +247,12 @@ static int gs_armament_most(const GsInfer* s, const GsArmament* a, int tick) {
     return stacks == 0 ? gs_dharok_most(s, a) : gs_max_behead(GS_ASSUMED_LEVELS, a->bonuses, stacks);
 }
 
-static int gs_spec_least(const GsArmament* a) { return a->weapon == GS_W_VOIDWAKER ? a->normal / 2 : 0; }
+static int gs_spec_cost_for(int animation, int weapon) {
+    int shown = gs_animation_spec_cost(animation), own = gs_weapon_spec_cost(weapon);
+    return shown && own ? own : shown;
+}
+
+static int gs_spec_least(const GsArmament* a) { return (int)(GS_WEAPON_ROWS[a->weapon].least * a->normal); }
 static int gs_spec_style(const GsArmament* a) { return a->weapon == GS_W_VOIDWAKER ? GS_MAGIC : a->style; }
 
 static double gs_accuracy_scaled(const GsClient* c, const GsArmament* a, double attack_scale, GsDamage defended, double defence_scale) {
@@ -280,6 +285,7 @@ static double gs_armament_accuracy(const GsClient* c, const GsArmament* a) { ret
 static double gs_spec_accuracy(const GsClient* c, const GsArmament* a) {
     switch (a->weapon) {
         case GS_W_VOIDWAKER: return 1;
+        case GS_W_DRAGON_MACE_BH: return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), a->damage, 0.6);
         case GS_W_VESTAS_LONGSWORD: return gs_accuracy_scaled(c, a, 1, GS_DAMAGE_STAB, 0.25);
         default: return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), a->damage, 1);
     }
@@ -513,6 +519,7 @@ static void gs_eater_local_animated(GsInfer* s, GsKind kind, int animation, int 
     s->has_local_swing = 1;
     s->local_swing = gs_local_swing_of(tick, (GsStyle)gs_local_style(weapon), gs_distance(c), pid,
         cost ? gs_local_spec_or_normal(c, weapon) : gs_local_normal(c, weapon), cost ? 1 : gs_local_accuracy(c, weapon));
+    if (s->local_swing.lands <= s->opponent.immune_through) s->local_swing.accuracy = 0;
 }
 
 static void gs_eater_struck(GsInfer* s, int damage, int tick) {
@@ -561,7 +568,7 @@ static int gs_find_interacting(const GsClient* c, int id) {
     return -1;
 }
 
-static GsPid gs_pid_at(const GsInfer* s, int tick) { return gs_pid_fresh_owner(&s->pid, tick); }
+static GsPid gs_pid_at(const GsInfer* s, int tick) { (void)tick; return s->pid.owner; }
 
 static void gs_sync_opponent_timer(GsInfer* s, int observed_tick) {
     if (s->tracker_current != s->timed) {
@@ -608,7 +615,7 @@ static void gs_on_animation(GsInfer* s, int observed_tick, int who, int animatio
     }
     if (rival && s->timed == who) {
         gs_eater_opponent_animated(s, kind, animation, observed_tick);
-        s->opponent = gs_inference_animated(s->opponent, kind, gs_animation_spec_cost(animation), observed_tick, gs_speed_after(c->oweapon, animation, GS_PACE_UNKNOWN));
+        s->opponent = gs_inference_animated(s->opponent, kind, gs_spec_cost_for(animation, c->oweapon), animation == GS_ANIMATION_SPEAR_WALL, observed_tick, gs_speed_after(c->oweapon, animation, GS_PACE_UNKNOWN));
         if (gs_pid_counts(animation, gs_weapon_style(c->oweapon)) && gs_duel(s, s->timed, 0)) s->pid = gs_pid_opponent_attacked(s->pid, observed_tick);
         if (kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC) s->attack_tick = observed_tick;
     }
@@ -755,13 +762,9 @@ static GsTimer gs_timer_view(GsTimerState t, int tick) {
     return (GsTimer){t.seen, t.seen ? gs_next_attack(t, tick) : 0, t.seen ? t.earliest : 0};
 }
 
-static const double GS_VOIDWAKER_CARRIED = (41 + 103) / (59 + 162.0), GS_VOIDWAKER_USE = 0.0449;
-static const double GS_GRANITE_MAUL_CARRIED = (23 + 90) / (59 + 162.0), GS_GRANITE_MAUL_USE = 0.0834;
-
-/* HiddenWeapon.carried */
-static double gs_hidden_carried(double carried, double use, int opportunities) {
-    double unused = carried * gs_pow(1 - use, opportunities);
-    return unused / (unused + 1 - carried);
+/* HiddenWeapon.perAttack */
+static double gs_hidden_per_attack(double empty, int hitpoints) {
+    return empty * gs_exp(-3.75 * imin(hitpoints, GS_ASSUMED_MAX_HP) / GS_ASSUMED_MAX_HP);
 }
 
 static int gs_brew_in_bag(const GsClient* c) {
@@ -772,8 +775,11 @@ static int gs_brew_in_bag(const GsClient* c) {
 static int gs_brew_drop(int level) { return level > 1 ? -((int)(level * 0.1) + 2) : 0; }
 
 static double gs_pid_flip_odds(const GsPidState* pid, int tick) {
-    if (gs_pid_fresh_owner(pid, tick) == GS_PID_UNKNOWN) return 0;
-    return tick - pid->observed_tick <= 5 ? 6.0 / 69 : 6.0 / 39;
+    static const int FLIPPED[3] = {228, 175, 222}, PAIRED[3] = {1916, 982, 1004};
+    if (pid->owner == GS_PID_UNKNOWN) return 0;
+    int age = tick - pid->observed_tick;
+    int bin = age <= 3 ? 0 : age <= 7 ? 1 : 2;
+    return (double)FLIPPED[bin] / PAIRED[bin];
 }
 
 static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tolerance, double stakes, GsEatSituation* out) {
@@ -847,12 +853,11 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     int has_vw = 0;
     for (int i = 0; i < s->arsenal_count; i++) has_vw |= s->arsenal[i].weapon == GS_W_VOIDWAKER;
     GsArmament hidden;
-    int opportunities = gs_hidden_opportunities(&s->opponent);
     if (!has_vw && gs_armed(c, s->surplus, GS_ITEM_VOIDWAKER, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden), gs_hidden_carried(GS_VOIDWAKER_CARRIED, GS_VOIDWAKER_USE, opportunities)};
+        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden), gs_hidden_per_attack(0.14, c->hitpoints)};
     if (!gs_granite_maul(s) && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
         out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1},
-            gs_hidden_carried(GS_GRANITE_MAUL_CARRIED, GS_GRANITE_MAUL_USE, opportunities)};
+            gs_hidden_per_attack(0.22, c->hitpoints)};
     if (s->has_opponent_swing) {
         GsSwing swing = gs_opponent_swing_for(s, out->pid);
         int landed = imax(0, imin(swing.arrows, tick - swing.lands + 1));
@@ -924,7 +929,7 @@ static GsReflect gs_weapon_reflect(GsInfer* s, int tick) {
 }
 
 static int gs_opponent_spec_cost(const GsInfer* s) {
-    int cost = GS_WEAPON_ROWS[GS_W_VOIDWAKER].cost;
+    int cost = INT_MAX;
     for (int i = 0; i < s->arsenal_count; i++)
         if (s->arsenal[i].has_spec) cost = imin(cost, GS_WEAPON_ROWS[s->arsenal[i].weapon].cost);
     return cost;
