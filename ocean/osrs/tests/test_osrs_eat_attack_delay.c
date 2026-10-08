@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ocean/osrs/encounters/encounter_colosseum.h"
+#include "ocean/osrs/osrs_player_inventory_use.h"
 #include "ocean/osrs/tests/osrs_test_check.h"
 
 static Player ready_player(void) {
@@ -25,8 +26,9 @@ static void test_engine_contract(void) {
     CHECK("shark from ready adds no attack delay", p.attack_timer == 0);
 
     p = ready_player();
-    osrs_player_eat_food_effects(&p, FOOD_KARAMBWAN);
+    OsrsPlayerEatResult eaten = osrs_player_eat_food_effects(&p, FOOD_KARAMBWAN);
     CHECK("karambwan from ready adds no attack delay", p.attack_timer == 0);
+    CHECK("karambwan below max heals normally", eaten.consumed && eaten.hp_healed == 18 && p.current_hitpoints == 68);
 
     p = ready_player();
     p.attack_timer = 4;
@@ -56,6 +58,22 @@ static void test_engine_contract(void) {
     p.current_hitpoints = 50;
     osrs_player_eat_food_effects(&p, FOOD_SHARK);
     CHECK("eating still heals from ready", p.current_hitpoints > 50);
+
+    const int full_hp[] = {99, 115};
+    for (size_t i = 0; i < sizeof(full_hp) / sizeof(full_hp[0]); i++) {
+        p = ready_player();
+        p.current_hitpoints = full_hp[i];
+        p.attack_timer = p.attack_timer_uncapped = 4;
+        p.inventory_cells[0] = osrs_inventory_cell_from_content_code(
+            osrs_inventory_content_code_from_consumable(OSRS_CONSUMABLE_KARAMBWAN, 0));
+        OsrsInventoryUseState inventory_use = {0};
+        CHECK("zero-heal karambwan remains a legal inventory action", osrs_can_eat_consumable_kind(&p, OSRS_CONSUMABLE_KARAMBWAN));
+        OsrsInventoryUseResult used = osrs_player_use_inventory(&p, &inventory_use, NULL, 0, 1);
+        CHECK("zero-heal karambwan is consumed", used == OSRS_INVENTORY_USE_CONSUMED && osrs_inventory_cell_is_empty(&p.inventory_cells[0]));
+        CHECK("zero-heal karambwan preserves existing HP", p.current_hitpoints == full_hp[i]);
+        CHECK("zero-heal karambwan records waste", p.last_karambwan_heal == 0 && p.last_karambwan_waste == 18);
+        CHECK("zero-heal karambwan applies cooldowns", p.attack_timer == 6 && p.attack_timer_uncapped == 6 && p.food_timer == 3 && p.potion_timer == 3 && p.karambwan_timer == 2);
+    }
 }
 
 static void test_colosseum_charges_the_cooldown(void) {

@@ -106,7 +106,10 @@ static inline EatResult osrs_eat_food(FoodType type, int current_hp, int max_hp,
         return r;
     }
 
-    if (current_hp >= max_hp) return r;
+    if (current_hp >= max_hp) {
+        r.consumed = type == FOOD_KARAMBWAN;
+        return r;
+    }
 
     r.consumed = 1;
     r.hp_healed = heal;

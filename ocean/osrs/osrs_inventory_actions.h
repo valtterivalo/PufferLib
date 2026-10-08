@@ -132,9 +132,10 @@ static inline int osrs_can_eat_consumable_kind(
         case OSRS_CONSUMABLE_ANGLERFISH:
             return p->food_timer == 0;
         case OSRS_CONSUMABLE_HALIBUT:
-        case OSRS_CONSUMABLE_KARAMBWAN:
             return p->karambwan_timer == 0 &&
                 p->current_hitpoints < p->base_hitpoints;
+        case OSRS_CONSUMABLE_KARAMBWAN:
+            return p->karambwan_timer == 0;
         case OSRS_CONSUMABLE_BREW:
         case OSRS_CONSUMABLE_SUPER_RESTORE:
         case OSRS_CONSUMABLE_SANFEW:

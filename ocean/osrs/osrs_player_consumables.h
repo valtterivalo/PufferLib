@@ -78,8 +78,6 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
     }
 
     p->current_hitpoints += out.hp_healed;
-    if (type != FOOD_ANGLERFISH && p->current_hitpoints > p->base_hitpoints)
-        p->current_hitpoints = p->base_hitpoints;
 
     if (p->attack_timer > 0) {
         p->attack_timer += out.attack_delay_ticks;
