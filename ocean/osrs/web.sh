@@ -1,4 +1,7 @@
 OSRS_ASSET_GROUP="${ENV#osrs_}"
+if [ "$OSRS_ASSET_GROUP" = "riskfight" ]; then
+    OSRS_ASSET_GROUP=pvp
+fi
 if [ -z "$OSRS_ASSET_GROUP" ] || [ "$OSRS_ASSET_GROUP" = "$ENV" ]; then
     echo "Error: OSRS web hook requires an osrs_* environment" >&2
     exit 1

@@ -717,9 +717,9 @@ static void col_emit_thrall_projectile(
         .dst_size = target_size,
         .model_id = 0,
         .anim_id = -1,
-        .travel_gfx_id = 1907,
+        .travel_gfx_id = GFX_COLOSSEUM_THRALL_TRAVEL,
         .launch_gfx_id = 0,
-        .impact_gfx_id = 1908,
+        .impact_gfx_id = GFX_COLOSSEUM_THRALL_IMPACT,
         .start_delay = timing.visual_start_delay_ticks * 30,
     };
     int idx = osrs_emit_projectile_with_spec(ov, &spec, 1);

@@ -142,7 +142,8 @@
       inferno: "Inferno",
       colosseum: "Colosseum",
       zulrah: "Zulrah",
-      nh_pvp: "NH PvP"
+      nh_pvp: "NH PvP",
+      riskfight: "Riskfight"
     };
     var encounterLabel = encounterLabels[encounter] || "OSRS";
     var modelUrl = query.get("model") || "models/policy.bin";
@@ -217,7 +218,7 @@
       waveInput.max = String(waveSpec.max);
       waveInput.value = String(currentWave);
       waveBoss.textContent = waveSpec.bossLabel;
-      waveBar.hidden = false;
+      waveBar.hidden = window.parent !== window;
       waveBar.addEventListener("submit", function (event) {
         event.preventDefault();
         var wave = parseInt(waveInput.value, 10);
