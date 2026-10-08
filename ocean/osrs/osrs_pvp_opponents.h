@@ -535,12 +535,6 @@ static void opp_apply_defensive_prayer(OsrsEnv* env, OpponentState* opp, int* ac
     }
 }
 
-static inline void opp_offensive_prayer_noop_roll(OsrsEnv* env) {
-    /* dead roll from an unimplemented offensive-prayer branch: removing it shifts
-       every later draw in the opponent RNG stream */
-    (void)rand_float(env);
-}
-
 static inline void opp_emit_attack(int* actions, int actual_attack) {
     actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
     if (actual_attack == 0)
@@ -896,17 +890,16 @@ typedef struct {
     int biased_style_pick;
     float spec_target_hp_gate;
     float spec_trigger_prob;
-    int offensive_noop_roll;
     int has_move_block;
     float move_under_prob;
 } OppNhTier;
 
-static const OppNhTier NH_TIER_IMPROVED     = {1, 2.0f,  1.0f,  0, 1, 2.0f};
-static const OppNhTier NH_TIER_COMPETENT    = {0, 0.60f, 0.50f, 1, 0, 0.0f};
-static const OppNhTier NH_TIER_INTERMEDIATE = {0, 0.60f, 1.0f,  1, 0, 0.0f};
-static const OppNhTier NH_TIER_ADVANCED     = {1, 2.0f,  1.0f,  1, 1, 0.0f};
-static const OppNhTier NH_TIER_PROFICIENT   = {1, 2.0f,  1.0f,  1, 1, 0.25f};
-static const OppNhTier NH_TIER_EXPERT       = {1, 2.0f,  1.0f,  1, 1, 0.50f};
+static const OppNhTier NH_TIER_IMPROVED     = {1, 2.0f,  1.0f,  1, 2.0f};
+static const OppNhTier NH_TIER_COMPETENT    = {0, 0.60f, 0.50f, 0, 0.0f};
+static const OppNhTier NH_TIER_INTERMEDIATE = {0, 0.60f, 1.0f,  0, 0.0f};
+static const OppNhTier NH_TIER_ADVANCED     = {1, 2.0f,  1.0f,  1, 0.0f};
+static const OppNhTier NH_TIER_PROFICIENT   = {1, 2.0f,  1.0f,  1, 0.25f};
+static const OppNhTier NH_TIER_EXPERT       = {1, 2.0f,  1.0f,  1, 0.50f};
 
 static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const OppNhTier* tier) {
     Player* self = &env->players[1];
@@ -963,11 +956,7 @@ static void opp_nh_tier(OsrsEnv* env, OpponentState* opp, int* actions, const Op
             actual_attack = 2;
         }
 
-        if (actual_attack == 3 ||
-                rand_float(env) >= opp->offensive_prayer_miss)
-            opp_apply_gear_switch(actions, self, actual_style);
-
-        if (tier->offensive_noop_roll) opp_offensive_prayer_noop_roll(env);
+        opp_apply_gear_switch(actions, self, actual_style);
 
         opp_emit_attack(actions, actual_attack);
     } else if (tier->has_move_block && !opp_attack_ready(self)) {
@@ -1011,11 +1000,7 @@ static void opp_nh_basic(OsrsEnv* env, OpponentState* opp, int* actions,
                 opp_emit_attack(actions, 2);
             }
         } else {
-            if (rand_float(env) >= opp->offensive_prayer_miss) {
-                opp_apply_gear_switch(actions, self, style);
-            }
-
-            opp_offensive_prayer_noop_roll(env);
+            opp_apply_gear_switch(actions, self, style);
 
             if (style == OPP_STYLE_MAGE) {
                 int spell = coin_flip_spell
@@ -1117,7 +1102,7 @@ static void opp_onetick(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (opp_attack_ready(self) && !eating_queued) {
         if (actual_attack == 3) {
             opp_apply_equipment_plan(actions, self, spec_plan);
-        } else if (rand_float(env) >= opp->offensive_prayer_miss) {
+        } else {
             opp_apply_gear_switch(actions, self, actual_style);
         }
 
@@ -1180,9 +1165,7 @@ static void opp_unpredictable_improved(OsrsEnv* env, OpponentState* opp, int* ac
             actual_attack = 2;
         }
 
-        if (actual_attack == 3 ||
-                rand_float(env) >= opp->offensive_prayer_miss)
-            opp_apply_gear_switch(actions, self, actual_style);
+        opp_apply_gear_switch(actions, self, actual_style);
 
         int action_delay = opp_sample_delay(env, UNPREDICTABLE_IMP_ACTION_CUM, UNPREDICTABLE_IMP_ACTION_CUM_LEN);
         if (action_delay == 0) {
@@ -1288,7 +1271,7 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
         if (action_delay == 0) {
             if (actual_attack == 3) {
                 opp_apply_equipment_plan(actions, self, spec_plan);
-            } else if (rand_float(env) >= opp->offensive_prayer_miss) {
+            } else {
                 opp_apply_gear_switch(actions, self, actual_style);
             }
 
@@ -1297,6 +1280,41 @@ static void opp_unpredictable_onetick(OsrsEnv* env, OpponentState* opp, int* act
     } else if (!opp_attack_ready(self)) {
         opp_move_when_waiting(env, opp, actions, self, target, 2.0f);
     }
+}
+
+typedef struct {
+    AttackStyle damage;
+    AttackStyle offensive;
+} OppAttackStyles;
+
+static inline uint8_t opp_planned_weapon(const Player* player, const int* actions) {
+    int cell = actions[OSRS_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] - 1;
+    if (cell >= 0 && cell < OSRS_INVENTORY_SIZE) {
+        const OsrsItemContentMetadata* item =
+            osrs_inventory_cell_metadata(&player->inventory_cells[cell]);
+        if (item->click_action == OSRS_CLICK_EQUIP && item->gear_slot == GEAR_SLOT_WEAPON)
+            return item->item_idx;
+    }
+    return player->equipped[GEAR_SLOT_WEAPON];
+}
+
+static inline OppAttackStyles opp_submitted_attack_styles(
+    uint8_t weapon, int primary, int spell, int special, int spec_armed,
+    int special_energy, int can_ice, int can_blood
+) {
+    if (primary < OSRS_PRIMARY_MOVE_ACTIONS || primary >= OSRS_PRIMARY_DIM(1))
+        return (OppAttackStyles){ATTACK_STYLE_NONE, ATTACK_STYLE_NONE};
+    if (spell == OSRS_SPELL_ICE_BARRAGE || spell == OSRS_SPELL_BLOOD_BARRAGE) {
+        AttackStyle style = (spell == OSRS_SPELL_ICE_BARRAGE ? can_ice : can_blood)
+            ? ATTACK_STYLE_MAGIC : ATTACK_STYLE_NONE;
+        return (OppAttackStyles){style, style};
+    }
+    AttackStyle style = (AttackStyle)get_item_attack_style(weapon);
+    if (style == ATTACK_STYLE_MAGIC) style = ATTACK_STYLE_MELEE;
+    int armed = special == 1 || (special != 2 && spec_armed);
+    if (weapon == ITEM_VOIDWAKER && armed && special_energy >= osrs_spec_cost(weapon))
+        return (OppAttackStyles){ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE};
+    return (OppAttackStyles){style, style};
 }
 
 static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
@@ -1309,33 +1327,16 @@ static void opp_read_agent_action(OsrsEnv* env, OpponentState* opp) {
         return;
     }
 
-    /* env->actions holds THIS tick's agent actions; pending_actions is last tick's */
-    int* agent_actions = &env->actions[0];
-
+    const int* agent_actions = env->actions;
+    Player* player = &env->players[0];
     int primary = agent_actions[OSRS_HEAD_PRIMARY];
-    int spell = agent_actions[OSRS_HEAD_SPELL];
-    int weapon_cell_action = agent_actions[OSRS_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)];
-
-    if (weapon_cell_action > 0 && weapon_cell_action <= OSRS_INVENTORY_SIZE) {
-        const OsrsItemContentMetadata* metadata = osrs_inventory_cell_metadata(
-            &env->players[0].inventory_cells[weapon_cell_action - 1]);
-        if (metadata->click_action == OSRS_CLICK_EQUIP &&
-                metadata->gear_slot == GEAR_SLOT_WEAPON) {
-            opp->read_agent_style = (AttackStyle)metadata->attack_style;
-            opp->has_read_this_tick = 1;
-        }
-    }
-    if (!opp->has_read_this_tick &&
-            (spell == OSRS_SPELL_ICE_BARRAGE ||
-             spell == OSRS_SPELL_BLOOD_BARRAGE)) {
-        opp->read_agent_style = ATTACK_STYLE_MAGIC;
-        opp->has_read_this_tick = 1;
-    } else if (!opp->has_read_this_tick &&
-            primary >= OSRS_PRIMARY_MOVE_ACTIONS &&
-            primary < OSRS_PRIMARY_DIM(1)) {
-        opp->read_agent_style = get_slot_weapon_attack_style(&env->players[0]);
-        opp->has_read_this_tick = 1;
-    }
+    OppAttackStyles styles = opp_submitted_attack_styles(
+        opp_planned_weapon(player, agent_actions), primary,
+        agent_actions[OSRS_HEAD_SPELL], agent_actions[OSRS_HEAD_SPECIAL],
+        player->spec_armed, player->special_energy,
+        can_cast_ice_spell(player), can_cast_blood_spell(player));
+    opp->read_agent_style = styles.damage;
+    opp->has_read_this_tick = 1;
 
     int overhead = agent_actions[OSRS_HEAD_OVERHEAD];
     if (overhead == ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE)       opp->read_agent_prayer = PRAYER_PROTECT_MELEE;
@@ -1475,7 +1476,7 @@ static void opp_master_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     if (opp_attack_ready(self) && !eating_queued) {
         if (actual_attack == 3) {
             opp_apply_equipment_plan(actions, self, spec_plan);
-        } else if (rand_float(env) >= opp->offensive_prayer_miss) {
+        } else {
             opp_apply_gear_switch(actions, self, actual_style);
         }
 
@@ -1557,9 +1558,7 @@ static void opp_veng_fighter(OsrsEnv* env, OpponentState* opp, int* actions) {
             opp_apply_gear_switch(actions, self, OPP_STYLE_SPEC);
             opp_emit_attack(actions, 2);
         } else {
-            if (rand_float(env) >= opp->offensive_prayer_miss) {
-                opp_apply_gear_switch(actions, self, attack_style);
-            }
+            opp_apply_gear_switch(actions, self, attack_style);
             opp_emit_attack(actions, 2);
         }
     } else if (!opp_attack_ready(self)) {
@@ -1652,9 +1651,7 @@ static void opp_blood_healer(OsrsEnv* env, OpponentState* opp, int* actions) {
 
         opp_apply_boost_potion(env, opp, actions, self, attack_style, 0);
 
-        if (rand_float(env) >= opp->offensive_prayer_miss) {
-            opp_apply_gear_switch(actions, self, attack_style);
-        }
+        opp_apply_gear_switch(actions, self, attack_style);
 
         if (hp_pct < 0.35f && actual_attack != 1) {
             opp_apply_equipment_plan(actions, self, PVP_EQUIPMENT_TANK);
@@ -1754,9 +1751,7 @@ static void opp_gmaul_combo(OsrsEnv* env, OpponentState* opp, int* actions) {
                 opp_apply_gear_switch(actions, self, OPP_STYLE_SPEC);
                 opp_emit_attack(actions, 2);
             } else {
-                if (rand_float(env) >= opp->offensive_prayer_miss) {
-                    opp_apply_gear_switch(actions, self, attack_style);
-                }
+                opp_apply_gear_switch(actions, self, attack_style);
 
                 if (attack_style == OPP_STYLE_MAGE) {
                     int spell = target->frozen_ticks == 0 &&
@@ -1839,9 +1834,7 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
                 opp_apply_gear_switch(actions, self, OPP_STYLE_SPEC);
                 opp_emit_attack(actions, 2);
             } else {
-                if (rand_float(env) >= opp->offensive_prayer_miss) {
-                    opp_apply_gear_switch(actions, self, attack_style);
-                }
+                opp_apply_gear_switch(actions, self, attack_style);
 
                 opp_emit_attack(actions, actual_attack);
             }
@@ -2095,6 +2088,29 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             break;
         default:
             break;
+    }
+    if (active != OPP_TRUE_RANDOM) {
+        Player* self = &env->players[1];
+        OppAttackStyles styles = opp_submitted_attack_styles(
+            opp_planned_weapon(self, actions), actions[OSRS_HEAD_PRIMARY],
+            actions[OSRS_HEAD_SPELL], actions[OSRS_HEAD_SPECIAL],
+            self->spec_armed, self->special_energy,
+            can_cast_ice_spell(self), can_cast_blood_spell(self));
+        if (styles.offensive != ATTACK_STYLE_NONE) {
+            float use_prayer = rand_float(env);
+            float miss_switch = rand_float(env);
+            int prayer = ENCOUNTER_OFFENSIVE_OFF;
+            if (use_prayer < opp->offensive_prayer_rate) {
+                prayer = styles.offensive == ATTACK_STYLE_MAGIC
+                    ? ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY
+                    : styles.offensive == ATTACK_STYLE_RANGED
+                        ? ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR
+                        : ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+                if (miss_switch < opp->offensive_prayer_miss)
+                    prayer = ENCOUNTER_OFFENSIVE_NO_CHANGE;
+            }
+            actions[OSRS_HEAD_OFFENSIVE] = prayer;
+        }
     }
 }
 
