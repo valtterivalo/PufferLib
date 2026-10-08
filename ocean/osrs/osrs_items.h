@@ -77,6 +77,8 @@ static inline int item_supports_ancient_autocast(uint8_t item_index) {
 
 static inline int get_item_attack_style(uint8_t item_index) {
     switch (item_index) {
+        case ITEM_NOXIOUS_HALBERD:
+        case ITEM_CRYSTAL_HALBERD:
         case ITEM_WHIP:
         case ITEM_DRAGON_DAGGER:
         case ITEM_GHRAZI_RAPIER:
@@ -103,12 +105,14 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_HEAVY_BALLISTA:
         case ITEM_MORRIGANS_JAVELIN:
         case ITEM_MAGIC_SHORTBOW_I:
+        case ITEM_BOW_OF_FAERDHINEN_C:
         case ITEM_BOW_OF_FAERDHINEN:
         case ITEM_TWISTED_BOW:
         case ITEM_TOXIC_BLOWPIPE:
         case ITEM_VENATOR_BOW:
             return 2;
         case ITEM_AHRIM_STAFF:
+        case ITEM_TOXIC_STAFF_OF_DEAD:
         case ITEM_STAFF_OF_DEAD:
         case ITEM_KODAI_WAND:
         case ITEM_DRAGON_HUNTER_WAND:

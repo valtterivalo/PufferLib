@@ -116,14 +116,6 @@ static inline const OsrsItemContentMetadata* osrs_item_content_metadata(
     return &OSRS_ITEM_CONTENT_METADATA[content_code];
 }
 
-static inline uint16_t osrs_inventory_content_code_from_item(uint8_t item_idx) {
-    if (item_idx >= NUM_ITEMS) {
-        fprintf(stderr, "inventory content: invalid item index %u\n", item_idx);
-        abort();
-    }
-    return item_idx < 144 ? (uint16_t)(1 + item_idx)
-        : (uint16_t)(201 + item_idx - 144);
-}
 
 #define OSRS_RAW_CONTENT_CODE_CASE( \
     CODE, ITEM_POINTER, ITEM_IDX, RAW_OSRS_ID, GEAR_SLOT, CLICK_ACTION, \
@@ -141,6 +133,15 @@ static inline uint16_t osrs_inventory_content_code_from_raw_osrs_id(
     }
 }
 #undef OSRS_RAW_CONTENT_CODE_CASE
+
+static inline uint16_t osrs_inventory_content_code_from_item(uint8_t item_idx) {
+    if (item_idx >= NUM_ITEMS) {
+        fprintf(stderr, "inventory content: invalid item index %u\n", item_idx);
+        abort();
+    }
+    return osrs_inventory_content_code_from_raw_osrs_id(ITEM_DATABASE[item_idx].item_id);
+}
+
 
 #define OSRS_CONSUMABLE_CONTENT_CODE_CASE(KIND, DOSE, CODE) \
     case (KIND) * 5 + (DOSE): return CODE;

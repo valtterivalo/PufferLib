@@ -394,6 +394,8 @@ static void execute_switches(
         }
     }
     pvp_refresh_visible_gear(p);
+    p->fight_style = get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED
+        ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE;
 
     int overhead_action = actions[OSRS_HEAD_OVERHEAD];
     int offensive_action = actions[OSRS_HEAD_OFFENSIVE];
@@ -485,6 +487,17 @@ static PvpAttackDecode pvp_decode_attack_actions(
     };
 }
 
+/** NULL topology selects coordinate-only attack geometry. */
+static inline int pvp_attack_position_valid(Player* player, Player* target,
+    AttackStyle style, int range, const EncounterArenaTopology* topology) {
+    if (topology != NULL)
+        return encounter_arena_topology_player_can_attack(topology,
+            player->x, player->y, target->x, target->y, 1, range);
+    if (style == ATTACK_STYLE_MELEE && range == 1) return is_in_melee_range(player, target);
+    int distance = chebyshev_distance(player->x, player->y, target->x, target->y);
+    return distance > 0 && distance <= range;
+}
+
 static void execute_attack_movement(
     OsrsEnv* env,
     int agent_idx,
@@ -506,12 +519,12 @@ static void execute_attack_movement(
     int distance = chebyshev_distance(p->x, p->y, t->x, t->y);
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     if (decode.attack_action == PVP_ATTACK_WEAPON)
-        attack_style = get_slot_weapon_attack_style(p);
+        attack_style = pvp_weapon_attack_style(p);
     else if (decode.attack_action == PVP_ATTACK_ICE ||
             decode.attack_action == PVP_ATTACK_BLOOD)
         attack_style = ATTACK_STYLE_MAGIC;
     else if (osrs_interaction_active(&p->interaction))
-        attack_style = get_slot_weapon_attack_style(p);
+        attack_style = pvp_weapon_attack_style(p);
 
     if (decode.attack_action == PVP_ATTACK_ICE && !can_cast_ice_spell(p))
         attack_style = ATTACK_STYLE_NONE;
@@ -527,10 +540,13 @@ static void execute_attack_movement(
 
     int melee_chase =
         attack_style == ATTACK_STYLE_MELEE &&
-        !is_in_melee_range(p, t);
+        !pvp_attack_position_valid(p, t, attack_style, get_attack_range(p, attack_style), topology);
     if (!melee_chase && distance != 0) return;
-    (void)pvp_step_player_melee_chase(
-        env, agent_idx, topology, route_cache);
+    int range = get_attack_range(p, ATTACK_STYLE_MELEE);
+    if (range == 1)
+        (void)pvp_step_player_melee_chase(env, agent_idx, topology, route_cache);
+    else
+        (void)pvp_step_player_ranged_chase(env, agent_idx, range, topology, route_cache);
     p->did_attack_auto_move = melee_chase;
 }
 
@@ -567,7 +583,7 @@ static void execute_attack_combat(
 
     switch (decode.attack_action) {
         case PVP_ATTACK_WEAPON:
-            attack_style = get_slot_weapon_attack_style(p);
+            attack_style = pvp_weapon_attack_style(p);
             break;
         case PVP_ATTACK_ICE:
             attack_style = ATTACK_STYLE_MAGIC;
@@ -592,18 +608,8 @@ static void execute_attack_combat(
             if (attack_ready && attack_style != ATTACK_STYLE_NONE) {
                 int is_special = !pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]) &&
                     p->spec_armed && is_special_ready(p, attack_style);
-                AttackStyle actual_style = (attack_style == ATTACK_STYLE_MAGIC && !is_special)
-                    ? ATTACK_STYLE_MELEE
-                    : attack_style;
-                int in_attack_range = 0;
-                if (actual_style == ATTACK_STYLE_MELEE) {
-                    in_attack_range = is_in_melee_range(p, t);
-                } else {
-                    int range = get_attack_range(p, actual_style);
-                    in_attack_range = (dist > 0 && dist <= range);
-                }
-                if (in_attack_range) {
-                    perform_attack(env, agent_idx, 1 - agent_idx, actual_style, is_special, 0, dist);
+                if (pvp_attack_position_valid(p, t, attack_style, get_attack_range(p, attack_style), topology)) {
+                    perform_attack(env, agent_idx, 1 - agent_idx, attack_style, is_special, 0, dist);
                     if (is_special)
                         osrs_spec_disarm(&p->spec_armed);
                     p->clicks_this_tick++;
@@ -613,8 +619,7 @@ static void execute_attack_combat(
         case PVP_ATTACK_ICE:
         case PVP_ATTACK_BLOOD:
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
-                int range = get_attack_range(p, ATTACK_STYLE_MAGIC);
-                if (dist > 0 && dist <= range) {
+                if (pvp_attack_position_valid(p, t, ATTACK_STYLE_MAGIC, COMBAT_SPELL_ATTACK_RANGE, topology)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
                     p->clicks_this_tick++;
                 }
@@ -626,28 +631,11 @@ static void execute_attack_combat(
 
     if (has_attack && decode.move_action == PVP_MOVE_NONE && !decode.explicit_move_in_progress
             && can_move(p) && !p->did_attack_auto_move) {
-        int in_range = 0;
-        int chase_range = 1;
-        switch (attack_style) {
-            case ATTACK_STYLE_MELEE:
-                in_range = is_in_melee_range(p, t);
-                break;
-            case ATTACK_STYLE_RANGED: {
-                chase_range = get_attack_range(p, ATTACK_STYLE_RANGED);
-                in_range = (dist <= chase_range);
-                break;
-            }
-            case ATTACK_STYLE_MAGIC: {
-                chase_range = get_attack_range(p, ATTACK_STYLE_MAGIC);
-                in_range = (dist <= chase_range);
-                break;
-            }
-            default:
-                in_range = 1;
-                break;
-        }
+        int chase_range = magic_type != 0 ? COMBAT_SPELL_ATTACK_RANGE : get_attack_range(p, attack_style);
+        int in_range = attack_style == ATTACK_STYLE_NONE ||
+            pvp_attack_position_valid(p, t, attack_style, chase_range, topology);
         if (!in_range) {
-            if (attack_style == ATTACK_STYLE_MELEE) {
+            if (attack_style == ATTACK_STYLE_MELEE && chase_range == 1) {
                 (void)pvp_step_player_melee_chase(
                     env, agent_idx, topology, route_cache);
             } else {
@@ -746,7 +734,7 @@ static float calculate_reward(OsrsEnv* env, int agent_idx) {
         }
 
         if (p->attack_style_this_tick == ATTACK_STYLE_MELEE
-            && p->frozen_ticks > 0 && !is_in_melee_range(p, t)) {
+            && p->frozen_ticks > 0 && !pvp_in_melee_reach(p, t)) {
             shaping_reward += cfg->melee_frozen_penalty;
         }
 

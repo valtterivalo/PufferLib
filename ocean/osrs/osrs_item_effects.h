@@ -119,7 +119,11 @@ static inline int osrs_scythe_splats_for_target_size(int target_size) {
 static inline uint8_t osrs_crystal_armour_points(uint8_t item_index) {
     switch (item_index) {
         case ITEM_CRYSTAL_HELM: return 1;
+        case ITEM_HEFIN_CRYSTAL_LEGS:
+        case ITEM_ITHELL_CRYSTAL_LEGS:
         case ITEM_CRYSTAL_LEGS: return 2;
+        case ITEM_HEFIN_CRYSTAL_BODY:
+        case ITEM_TRAHAEARN_CRYSTAL_BODY:
         case ITEM_CRYSTAL_BODY: return 3;
         default: return 0;
     }
@@ -314,7 +318,7 @@ static inline OsrsPreparedAttackEffects osrs_prepare_attack_effects_for_melee_st
     }
 
     if (style == ATTACK_STYLE_RANGED &&
-        weapon_item == ITEM_BOW_OF_FAERDHINEN &&
+        (weapon_item == ITEM_BOW_OF_FAERDHINEN || weapon_item == ITEM_BOW_OF_FAERDHINEN_C) &&
         profile->crystal_armour_points > 0) {
         result.attack_roll =
             result.attack_roll * (20 + profile->crystal_armour_points) / 20;

@@ -149,7 +149,19 @@ typedef enum {
     ITEM_DHAROKS_PLATEBODY = 144,
     ITEM_DHAROKS_GREATAXE = 145,
     ITEM_GRANITE_MAUL_ORNATE = 146,
-    NUM_ITEMS = 147,
+    ITEM_TOXIC_STAFF_OF_DEAD = 147,
+    ITEM_NOXIOUS_HALBERD = 148,
+    ITEM_BOW_OF_FAERDHINEN_C = 149,
+    ITEM_HEFIN_CRYSTAL_BODY = 150,
+    ITEM_HEFIN_CRYSTAL_LEGS = 151,
+    ITEM_TRAHAEARN_CRYSTAL_BODY = 152,
+    ITEM_ITHELL_CRYSTAL_LEGS = 153,
+    ITEM_AHRIMS_ROBETOP_100 = 154,
+    ITEM_NEITIZNOT_FACEGUARD = 155,
+    ITEM_ANCIENT_WYVERN_SHIELD = 156,
+    ITEM_ELIDINIS_WARD_OR = 157,
+    ITEM_ARANEA_BOOTS = 158,
+    NUM_ITEMS = 159,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1487,6 +1499,140 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .attack_crush = 81, .melee_strength = 79
     },
 
+    [ITEM_TOXIC_STAFF_OF_DEAD] = {
+        .item_id = 12904, .name = "Toxic staff of the dead", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 10,
+        .attack_stab = 55, .attack_slash = 70, .attack_crush = 0,
+        .attack_magic = 25, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 3, .defence_crush = 3,
+        .defence_magic = 17, .defence_ranged = 0,
+        .melee_strength = 72, .ranged_strength = 0, .magic_damage = 15,
+        .prayer = 0,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_NOXIOUS_HALBERD] = {
+        .item_id = 29796, .name = "Noxious halberd", .slot = SLOT_WEAPON,
+        .two_handed = 1,
+        .attack_speed = 5, .attack_range = 2,
+        .attack_stab = 80, .attack_slash = 132, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 142, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 0,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_BOW_OF_FAERDHINEN_C] = {
+        .item_id = 25867, .name = "Bow of faerdhinen (c)", .slot = SLOT_WEAPON,
+        .two_handed = 1,
+        .attack_speed = 5, .attack_range = 10,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 128,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 106, .magic_damage = 0,
+        .prayer = 0,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_HEFIN_CRYSTAL_BODY] = {
+        .item_id = 27697, .name = "Crystal body (Hefin)", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -18, .attack_ranged = 31,
+        .defence_stab = 46, .defence_slash = 38, .defence_crush = 48,
+        .defence_magic = 44, .defence_ranged = 68,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 3,
+        .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
+    },
+    [ITEM_HEFIN_CRYSTAL_LEGS] = {
+        .item_id = 27701, .name = "Crystal legs (Hefin)", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -12, .attack_ranged = 18,
+        .defence_stab = 26, .defence_slash = 21, .defence_crush = 30,
+        .defence_magic = 34, .defence_ranged = 38,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 2,
+        .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
+    },
+    [ITEM_TRAHAEARN_CRYSTAL_BODY] = {
+        .item_id = 27733, .name = "Crystal body (Trahaearn)", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -18, .attack_ranged = 31,
+        .defence_stab = 46, .defence_slash = 38, .defence_crush = 48,
+        .defence_magic = 44, .defence_ranged = 68,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 3,
+        .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
+    },
+    [ITEM_ITHELL_CRYSTAL_LEGS] = {
+        .item_id = 27713, .name = "Crystal legs (Ithell)", .slot = SLOT_LEGS,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = -12, .attack_ranged = 18,
+        .defence_stab = 26, .defence_slash = 21, .defence_crush = 30,
+        .defence_magic = 34, .defence_ranged = 38,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 2,
+        .effect_mask = OSRS_ITEM_EFFECT_CRYSTAL_ARMOUR
+    },
+    [ITEM_AHRIMS_ROBETOP_100] = {
+        .item_id = 4868, .name = "Ahrim robe top 100", .slot = SLOT_BODY,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 30, .attack_ranged = -10,
+        .defence_stab = 52, .defence_slash = 37, .defence_crush = 63,
+        .defence_magic = 30, .defence_ranged = 0,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 1,
+        .prayer = 0,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_NEITIZNOT_FACEGUARD] = {
+        .item_id = 24271, .name = "Neitiznot faceguard", .slot = SLOT_HEAD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 0, .attack_ranged = 0,
+        .defence_stab = 36, .defence_slash = 34, .defence_crush = 38,
+        .defence_magic = 3, .defence_ranged = 34,
+        .melee_strength = 6, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 3,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_ANCIENT_WYVERN_SHIELD] = {
+        .item_id = 21633, .name = "Ancient wyvern shield", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = -10, .attack_slash = -10, .attack_crush = -10,
+        .attack_magic = 15, .attack_ranged = -10,
+        .defence_stab = 72, .defence_slash = 80, .defence_crush = 75,
+        .defence_magic = 15, .defence_ranged = -5,
+        .melee_strength = -2, .ranged_strength = 0, .magic_damage = 2,
+        .prayer = 0,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_ELIDINIS_WARD_OR] = {
+        .item_id = 27253, .name = "Elidinis ward (or)", .slot = SLOT_SHIELD,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 25, .attack_ranged = 0,
+        .defence_stab = 53, .defence_slash = 55, .defence_crush = 73,
+        .defence_magic = 2, .defence_ranged = 52,
+        .melee_strength = 0, .ranged_strength = 0, .magic_damage = 5,
+        .prayer = 4,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_ARANEA_BOOTS] = {
+        .item_id = 29806, .name = "Aranea boots", .slot = SLOT_FEET,
+        .attack_speed = 0, .attack_range = 0,
+        .attack_stab = 0, .attack_slash = 0, .attack_crush = 0,
+        .attack_magic = 5, .attack_ranged = 6,
+        .defence_stab = 0, .defence_slash = 0, .defence_crush = 0,
+        .defence_magic = 0, .defence_ranged = 0,
+        .melee_strength = 4, .ranged_strength = 0, .magic_damage = 0,
+        .prayer = 1,
+        .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
 };
 static_assert(
     sizeof(ITEM_DATABASE) / sizeof(ITEM_DATABASE[0]) == NUM_ITEMS,

@@ -97,15 +97,22 @@ static const GenConsumable GEN_CONSUMABLES[] = {
 #define GEN_LEGACY_CONSUMABLES 55
 #define GEN_CONSUMABLE_BASE 145
 #define GEN_INERT_CODE 200
+#define GEN_EXISTING_ITEMS 147
+#define GEN_EXISTING_CONSUMABLES 63
+#define GEN_APPEND_BASE 212
 #define GEN_CONTENT_COUNT (201 + NUM_ITEMS - GEN_LEGACY_ITEMS + GEN_CONSUMABLE_COUNT - GEN_LEGACY_CONSUMABLES)
 
 static int gear_code(int index) {
-    return index < GEN_LEGACY_ITEMS ? index + 1 : 201 + index - GEN_LEGACY_ITEMS;
+    return index < GEN_LEGACY_ITEMS ? index + 1
+        : index < GEN_EXISTING_ITEMS ? 201 + index - GEN_LEGACY_ITEMS
+        : GEN_APPEND_BASE + index - GEN_EXISTING_ITEMS;
 }
 
 static int consumable_code(int index) {
     return index < GEN_LEGACY_CONSUMABLES ? GEN_CONSUMABLE_BASE + index
-        : 201 + NUM_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES;
+        : index < GEN_EXISTING_CONSUMABLES
+            ? 201 + GEN_EXISTING_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES
+            : GEN_APPEND_BASE + NUM_ITEMS - GEN_EXISTING_ITEMS + index - GEN_EXISTING_CONSUMABLES;
 }
 
 static FILE* open_or_die(const char* path) {
@@ -237,7 +244,7 @@ static void emit_gear_row(FILE* out, int item_idx) {
     emit_content_row(out, gear_code(item_idx), item_pointer,
         (uint8_t)item_idx, item->item_id, gear_slot_for_item_slot(item->slot),
         OSRS_CLICK_EQUIP, OSRS_CONSUMABLE_NONE, 0, 0,
-        get_item_attack_style(item_idx), row, 0);
+        get_item_attack_style(item_idx), row, gear_code(item_idx) == GEN_CONTENT_COUNT - 1);
 }
 
 static void emit_consumable_row(FILE* out, int index) {
@@ -264,8 +271,11 @@ static void write_content_rows(FILE* out) {
     emit_content_row(out, GEN_INERT_CODE, "NULL", ITEM_NONE,
         GEN_INERT_RAW_OSRS_ID, -1, OSRS_CLICK_NONE, OSRS_CONSUMABLE_NONE,
         0, 0, 0, row, 0);
-    for (int i = GEN_LEGACY_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
-    for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
+    for (int i = GEN_LEGACY_ITEMS; i < GEN_EXISTING_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_EXISTING_CONSUMABLES; i++)
+        emit_consumable_row(out, i);
+    for (int i = GEN_EXISTING_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_EXISTING_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
         emit_consumable_row(out, i);
 }
 

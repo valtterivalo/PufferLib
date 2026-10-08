@@ -844,16 +844,31 @@ static inline int get_ticks_until_next_hit(Player* p) {
     return min_ticks;
 }
 
-static inline int get_attack_range(Player* p, AttackStyle style) {
-    switch (style) {
-        case ATTACK_STYLE_MELEE:
-            return 1;
-        case ATTACK_STYLE_RANGED:
-        case ATTACK_STYLE_MAGIC:
-            return get_slot_gear_bonuses(p)->attack_range;
-        default:
-            return 1;
-    }
+static inline AttackStyle pvp_weapon_attack_style(Player* player) {
+    AttackStyle style = get_slot_weapon_attack_style(player);
+    return style == ATTACK_STYLE_MAGIC &&
+        !(player->spec_armed && is_special_ready(player, style))
+        ? ATTACK_STYLE_MELEE : style;
+}
+
+static inline int pvp_weapon_attack_range(uint8_t weapon, AttackStyle style, FightStyle stance) {
+    if (weapon == ITEM_NONE || style == ATTACK_STYLE_NONE) return 1;
+    int range = ITEM_DATABASE[weapon].attack_range;
+    if (style == ATTACK_STYLE_MELEE)
+        return get_item_attack_style(weapon) == ATTACK_STYLE_MELEE ? range : 1;
+    return style == ATTACK_STYLE_RANGED
+        ? min_int(COMBAT_MAX_RANGED_ATTACK_RANGE, range + osrs_stance_range_mod(stance)) : range;
+}
+
+static inline int get_attack_range(Player* player, AttackStyle style) {
+    return pvp_weapon_attack_range(player->equipped[GEAR_SLOT_WEAPON], style, player->fight_style);
+}
+
+static inline int pvp_in_melee_reach(Player* player, Player* target) {
+    int range = get_attack_range(player, ATTACK_STYLE_MELEE);
+    int distance = chebyshev_distance(player->x, player->y, target->x, target->y);
+    return range == 1 ? is_in_melee_range(player, target)
+        : distance > 0 && distance <= range;
 }
 
 static void pvp_observe_attack_chance(OsrsEnv* env, int source, int target,
@@ -876,7 +891,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     attacker->last_attack_dy = dy;
     attacker->last_attack_dist = (dx > dy) ? dx : dy;
 
-    if (style == ATTACK_STYLE_MELEE && !is_in_melee_range(attacker, defender)) return;
+    if (style == ATTACK_STYLE_MELEE && !pvp_in_melee_reach(attacker, defender)) return;
 
     float acc_mult = 1.0f;
     float str_mult = 1.0f;
@@ -1111,7 +1126,9 @@ post_attack:
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
 
-    int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed;
+    int attack_speed = magic_type != 0 ? COMBAT_SPELL_CAST_SPEED
+        : get_slot_gear_bonuses(attacker)->attack_speed +
+            (style == ATTACK_STYLE_RANGED ? osrs_stance_speed_mod(attacker->fight_style) : 0);
     int is_instant = (is_special && (spec_item_idx == ITEM_GRANITE_MAUL ||
         spec_item_idx == ITEM_GRANITE_MAUL_ORNATE));
     if (is_instant)

@@ -93,7 +93,8 @@ static inline void pvp_shared_observation_input(
         .attack_style = style,
         .attack_range = get_attack_range(p, style),
         .max_hit = calculate_max_hit(p, style, 1.0f, spell_base_damage),
-        .attack_speed = gear->attack_speed,
+        .attack_speed = gear->attack_speed +
+            (style == ATTACK_STYLE_RANGED ? osrs_stance_speed_mod(p->fight_style) : 0),
         .defence_stab = gear->stab_defence,
         .defence_slash = gear->slash_defence,
         .defence_crush = gear->crush_defence,

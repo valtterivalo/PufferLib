@@ -269,13 +269,8 @@ static int pvp_lookup_attack_target(void* ctx, int target_slot, OsrsAttackTarget
     OsrsEnv* env = (OsrsEnv*)ctx;
     Player* target = &env->players[target_slot];
     Player* self = &env->players[1 - target_slot];
-    AttackStyle style = get_slot_weapon_attack_style(self);
-    int range;
-    if (style == ATTACK_STYLE_MELEE || style == ATTACK_STYLE_NONE) {
-        range = 1;
-    } else {
-        range = get_attack_range(self, style);
-    }
+    AttackStyle style = pvp_weapon_attack_style(self);
+    int range = get_attack_range(self, style);
     out->slot = target_slot;
     out->x = target->x;
     out->y = target->y;
