@@ -154,8 +154,8 @@ static int sample_his_hitpoints_raw(const TapeTick* tick, uint32_t* rng) {
         for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= g_tape->hi; x++) {
             int damage = tape_damage_on_him(g_tape, x);
             const TapeTick* after = tape_tick(g_tape, x);
-            if (damage > 0 && after->bar_ratio > 0 && after->bar_scale > 1 && after->last_bar_hit == x) {
-                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+            if (damage > 0 && after->bar_now_ratio > 0 && after->bar_now_scale > 1 && after->last_bar_hit == x) {
+                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_now_ratio, after->bar_now_scale, 99, 121);
                 int hp = (shown.lower + shown.upper) / 2 + damage;
                 return hp > 121 ? 121 : hp;
             }

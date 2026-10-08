@@ -155,7 +155,7 @@ static void infer_servings(const Tape* tapes, int count, int day, OppFit* fit, i
             if (!rec_eat_at(tape, e)) continue;
             (*eats)++;
             const TapeTick* before = tape_tick(tape, e - 1);
-            if (before->last_bar_hit < e - BEFORE_WINDOW || before->meals_since != 0 || before->bar_ratio <= 0 || before->bar_ratio >= before->bar_scale) continue;
+            if (before->last_bar_hit < imax(tape->lo, e - BEFORE_WINDOW) || tape_tick(tape, before->last_bar_hit)->bar_now_ratio < 0 || before->meals_since != 0 || before->bar_ratio <= 0 || before->bar_ratio >= before->bar_scale) continue;
             int hit_now = 0, after = -1, damage = 0;
             for (int x = e; x <= e + SERVING_WINDOW && after < 0; x++) {
                 if (x > e && rec_eat_at(tape, x)) break;
@@ -164,13 +164,13 @@ static void infer_servings(const Tape* tapes, int count, int day, OppFit* fit, i
                     if (hit->tick != x || hit->side != SIDE_HIM) continue;
                     if (x == e) hit_now = 1;
                     damage += hit->type == 65 ? 0 : hit->amount;
-                    after = x;
+                    if (tape_tick(tape, x)->bar_now_ratio >= 0) after = x;
                 }
             }
             if (hit_now || after < 0) continue;
             const TapeTick* later = tape_tick(tape, after);
-            if (later->bar_ratio <= 0 || later->bar_ratio >= later->bar_scale) continue;
-            int heal = bar_mid(later->bar_ratio, later->bar_scale) + damage - bar_mid(before->bar_ratio, before->bar_scale);
+            if (later->bar_now_ratio <= 0 || later->bar_now_ratio >= later->bar_now_scale) continue;
+            int heal = bar_mid(later->bar_now_ratio, later->bar_now_scale) + damage - bar_mid(before->bar_ratio, before->bar_scale);
             int state = warning_since(&series[e - 1 - tape->lo].warning) != WARNING_NONE;
             counts[state][heal < SERVING_SINGLE_MAX ? 0 : heal < SERVING_DOUBLE_MAX ? 1 : 2]++;
         }
@@ -400,11 +400,11 @@ static int recorded_first_hit(const Tape* tape, int t0, int k, int* tick, int* l
     for (int x = t0 + 1; x <= t0 + k && x <= tape->hi; x++) {
         int damage = tape_damage_on_him(tape, x);
         const TapeTick* after = tape_tick(tape, x);
-        if (damage > 0 && after->bar_ratio > 0 && after->bar_scale > 1 && after->last_bar_hit == x) {
-            OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+        if (damage > 0 && after->bar_now_ratio > 0 && after->bar_now_scale > 1 && after->last_bar_hit == x) {
+            OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_now_ratio, after->bar_now_scale, 99, 121);
             *tick = x;
             *low = shown.lower + damage;
-            *high = after->bar_ratio == after->bar_scale ? (shown.upper + damage > 121 ? shown.upper + damage : 121) : shown.upper + damage;
+            *high = after->bar_now_ratio == after->bar_now_scale ? (shown.upper + damage > 121 ? shown.upper + damage : 121) : shown.upper + damage;
             return 1;
         }
     }
@@ -466,7 +466,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             }
             {
                 const TapeTick* after = tape_tick(tape, hb_tick);
-                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_ratio, after->bar_scale, 99, 121);
+                OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_now_ratio, after->bar_now_scale, 99, 121);
                 int lo = shown.lower, hi = shown.upper, dead = 0;
                 double apit = 0, amean = 0;
                 for (int v = lo; v <= hi; v++) {
@@ -1919,12 +1919,12 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
         for (int x = t + 1; x <= tape->hi && x <= t + WINDOW; x++) s->observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
         s->observed_kill = death > t && death <= t + g_la_horizon;
         int reveal = -1;
-        for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
+        for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_now_ratio > 0) { reveal = x; break; }
         if (reveal >= 0) {
             int damage = 0;
             for (int x = t + 1; x <= reveal; x++) damage += tape_damage_on_him(tape, x);
             const TapeTick* after = tape_tick(tape, reveal);
-            int low = warning_bar_low(after->bar_ratio, after->bar_scale) + damage, high = warning_bar_high(after->bar_ratio, after->bar_scale) + damage;
+            int low = warning_bar_low(after->bar_now_ratio, after->bar_now_scale) + damage, high = warning_bar_high(after->bar_now_ratio, after->bar_now_scale) + damage;
             s->revealed = 1;
             s->above = low > belief.hp_high;
             s->excess = (low + high) / 2.0 - (belief.hp_low + belief.hp_high) / 2.0;
@@ -2190,12 +2190,12 @@ static void calibration(Tape* tapes, int count) {
             const TapeTick* now = tape_tick(tape, t);
             GsHealthRange belief = series[t - tape->lo].inf.opponent_hitpoints;
             int reveal = -1;
-            for (int x = t + 1; x <= tape->hi && x <= t + 40; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
+            for (int x = t + 1; x <= tape->hi && x <= t + 40; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_now_ratio > 0) { reveal = x; break; }
             if (reveal < 0 || now->bar_ratio < 0) continue;
             int damage = 0, ate = 0;
             for (int x = t + 1; x <= reveal; x++) { damage += tape_damage_on_him(tape, x); ate += tape_his_anim_at(tape, x, ANIM_EAT); }
             const TapeTick* after = tape_tick(tape, reveal);
-            int low = warning_bar_low(after->bar_ratio, after->bar_scale) + damage, high = warning_bar_high(after->bar_ratio, after->bar_scale) + damage;
+            int low = warning_bar_low(after->bar_now_ratio, after->bar_now_scale) + damage, high = warning_bar_high(after->bar_now_ratio, after->bar_now_scale) + damage;
             int lag = t - now->last_bar_hit;
             int bin = lag <= 3 ? 0 : lag <= 6 ? 1 : lag <= 9 ? 2 : 3;
             { int u = imin(4, series[t - tape->lo].inf.unseen_count); un_n[u]++; un_excess[u] += ((low + high) / 2.0) - (belief.low + belief.high) / 2.0; un_above[u] += low > belief.high; }
@@ -2263,12 +2263,12 @@ static void calibration(Tape* tapes, int count) {
             pt_obs_kill[band] += death > t && death <= t + g_la_horizon; pt_pred_kill[band] += pred_kill / WORLDS; pt_pred_hold[band] += pred_hold / WORLDS;
             {
                 int reveal = -1;
-                for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
+                for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_now_ratio > 0) { reveal = x; break; }
                 if (reveal >= 0) {
                     int damage = 0;
                     for (int x = t + 1; x <= reveal; x++) damage += tape_damage_on_him(tape, x);
                     const TapeTick* after = tape_tick(tape, reveal);
-                    int low = warning_bar_low(after->bar_ratio, after->bar_scale) + damage, high = warning_bar_high(after->bar_ratio, after->bar_scale) + damage;
+                    int low = warning_bar_low(after->bar_now_ratio, after->bar_now_scale) + damage, high = warning_bar_high(after->bar_now_ratio, after->bar_now_scale) + damage;
                     int k = observed_eat ? 1 : 0;
                     rev_n[k]++; rev_above[k] += low > belief.hp_high; rev_below[k] += high < belief.hp_low; rev_excess[k] += (low + high) / 2.0 - (belief.hp_low + belief.hp_high) / 2.0;
                 }
