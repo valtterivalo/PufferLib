@@ -751,6 +751,7 @@ typedef enum {
     OPP_SELFPLAY,
     OPP_HISTORY_NH,
     OPP_MIXED_NH,
+    OPP_RECORDED_NH,
 } OpponentType;
 
 #define MAX_OPPONENT_POOL 32

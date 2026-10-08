@@ -3,6 +3,7 @@
 
 #include "osrs_policy.h"
 #include "osrs_pvp_actions.h"
+#include "osrs_recorded_nh_profile.h"
 
 #define OPP_STYLE_MAGE    0
 #define OPP_STYLE_RANGED  1
@@ -1020,6 +1021,93 @@ static void opp_history_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
     opp_nh_tier_decide(env, opp, actions, &NH_TIER_EXPERT, OPP_FORECAST_VISIBLE, forecast);
 }
 
+static void opp_recorded_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    AttackStyle target_style = (AttackStyle)get_item_attack_style(
+        target->equipped[GEAR_SLOT_WEAPON]);
+    RecordedNhWeights defense = recorded_nh_defense_weights(
+        opp->visible_history.latest.weapon, target_style, self->prayer);
+    uint32_t defense_draw = (uint32_t)rand_int(env, (int)defense.total);
+    OverheadPrayer prayer = (OverheadPrayer)recorded_nh_sample(defense, defense_draw);
+    if (prayer != self->prayer)
+        actions[OSRS_HEAD_OVERHEAD] = prayer == PRAYER_NONE
+            ? ENCOUNTER_OVERHEAD_OFF : opp_set_refresh_for_prayer(prayer);
+    opp->visible_history.older = opp->visible_history.latest;
+    opp->visible_history.latest = (OppVisibleState){target_style, target->prayer};
+    opp->visible_history.phase = opp->visible_history.phase == OPP_HISTORY_EMPTY
+        ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
+
+    opp_tick_cooldowns(opp);
+    int potion_used = opp_apply_consumables(env, opp, actions, self, 1);
+    int distance = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (opp_attack_ready(self) && !opp_check_eating_queued(actions)) {
+        unsigned allowed = 0;
+        if (distance > 0 && distance <= COMBAT_SPELL_ATTACK_RANGE &&
+                (can_cast_ice_spell(self) || can_cast_blood_spell(self)))
+            allowed |= 1u << RECORDED_NH_MAGIC;
+        for (int attack = RECORDED_NH_RANGED;
+                attack < RECORDED_NH_ATTACK_COUNT; attack++) {
+            PvpEquipmentPlan plan = attack == RECORDED_NH_RANGED
+                ? PVP_EQUIPMENT_RANGED : attack == RECORDED_NH_MELEE
+                    ? PVP_EQUIPMENT_MELEE : PVP_EQUIPMENT_SPEC_MELEE;
+            uint8_t gear[NUM_DYNAMIC_GEAR_SLOTS];
+            pvp_resolve_equipment_plan(self, plan, gear);
+            AttackStyle style = attack == RECORDED_NH_RANGED
+                ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
+            int range = pvp_weapon_attack_range(gear[0], style,
+                style == ATTACK_STYLE_RANGED ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE);
+            if (get_item_attack_style(gear[0]) != style ||
+                    distance == 0 || distance > range) continue;
+            if (style == ATTACK_STYLE_MELEE && range == 1 &&
+                    !is_in_melee_range(self, target)) continue;
+            if (attack == RECORDED_NH_MELEE_SPECIAL &&
+                    (!item_is_spec_weapon(gear[0]) ||
+                     self->special_energy < osrs_spec_cost(gear[0]))) continue;
+            allowed |= 1u << attack;
+        }
+        if (allowed) {
+            RecordedNhWeights attack_weights = recorded_nh_attack_weights(
+                distance, self->last_attack_style, target->prayer, allowed);
+            uint32_t attack_draw = (uint32_t)rand_int(env, (int)attack_weights.total);
+            RecordedNhAttack attack = (RecordedNhAttack)recorded_nh_sample(
+                attack_weights, attack_draw);
+            int style = attack == RECORDED_NH_MAGIC ? OPP_STYLE_MAGE
+                : attack == RECORDED_NH_RANGED ? OPP_STYLE_RANGED
+                    : attack == RECORDED_NH_MELEE ? OPP_STYLE_MELEE : OPP_STYLE_SPEC;
+            opp_apply_boost_potion(env, opp, actions, self, style, potion_used);
+            opp_apply_gear_switch(actions, self, style);
+            actions[OSRS_HEAD_SPECIAL] = attack == RECORDED_NH_MELEE_SPECIAL ? 1 : 2;
+            int spell = 2;
+            if (attack == RECORDED_NH_MAGIC) {
+                int needs_healing = self->current_hitpoints <
+                    self->base_hitpoints * opp->eat_double_threshold;
+                spell = can_cast_blood_spell(self) &&
+                    (needs_healing || !can_cast_ice_spell(self)) ? 1 : 0;
+            }
+            opp_emit_attack(actions, spell);
+            return;
+        }
+        if (self->frozen_ticks == 0) {
+            if (distance == 0) opp_emit_farcast_move(actions, self, target, 1);
+            else opp_emit_move_toward(actions, self, target->x, target->y);
+        }
+        return;
+    }
+    if (self->frozen_ticks > 0) return;
+    AttackStyle own_style = (AttackStyle)get_item_attack_style(
+        self->equipped[GEAR_SLOT_WEAPON]);
+    unsigned move_allowed = (1u << RECORDED_NH_MOVE_COUNT) - 1u;
+    if (distance == 0) move_allowed &= ~(1u << RECORDED_NH_CLOSER);
+    RecordedNhWeights movement = recorded_nh_move_weights(
+        distance, own_style, target_style, move_allowed);
+    uint32_t movement_draw = (uint32_t)rand_int(env, (int)movement.total);
+    RecordedNhMove move = (RecordedNhMove)recorded_nh_sample(movement, movement_draw);
+    if (move != RECORDED_NH_SAME_DISTANCE)
+        opp_emit_farcast_move(actions, self, target,
+            distance + (move == RECORDED_NH_CLOSER ? -1 : 1));
+}
+
 static void opp_nh_basic(OsrsEnv* env, OpponentState* opp, int* actions,
                           float spec_prob, int coin_flip_spell, int drained_restore_tail) {
     Player* self = &env->players[1];
@@ -1968,9 +2056,17 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->pending_prayer_delay = 0;
     opp->last_target_gear_style = -1;
 
-    opp->eat_triple_threshold = 0.30f + (rand_float(env) * 0.10f - 0.05f);
-    opp->eat_double_threshold = 0.50f + (rand_float(env) * 0.10f - 0.05f);
-    opp->eat_brew_threshold   = 0.70f + (rand_float(env) * 0.10f - 0.05f);
+    if (opp->type == OPP_RECORDED_NH) {
+        opp->eat_triple_threshold = 0.30f;
+        opp->eat_double_threshold = 0.50f;
+        opp->eat_brew_threshold = 0.70f;
+        opp->offensive_prayer_rate = 1.0f;
+        opp->offensive_prayer_miss = 0.0f;
+    } else {
+        opp->eat_triple_threshold = 0.30f + (rand_float(env) * 0.10f - 0.05f);
+        opp->eat_double_threshold = 0.50f + (rand_float(env) * 0.10f - 0.05f);
+        opp->eat_brew_threshold   = 0.70f + (rand_float(env) * 0.10f - 0.05f);
+    }
 
     opp->has_read_this_tick = 0;
     opp->read_agent_style = ATTACK_STYLE_NONE;
@@ -2159,6 +2255,9 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
         case OPP_HISTORY_NH:
             opp_history_nh(env, opp, actions);
             break;
+        case OPP_RECORDED_NH:
+            opp_recorded_nh(env, opp, actions);
+            break;
         default:
             break;
     }
@@ -2170,6 +2269,14 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             self->spec_armed, self->special_energy,
             can_cast_ice_spell(self), can_cast_blood_spell(self));
         if (styles.offensive != ATTACK_STYLE_NONE) {
+            if (active == OPP_RECORDED_NH) {
+                actions[OSRS_HEAD_OFFENSIVE] = styles.offensive == ATTACK_STYLE_MAGIC
+                    ? ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY
+                    : styles.offensive == ATTACK_STYLE_RANGED
+                        ? ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR
+                        : ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY;
+                return;
+            }
             float use_prayer = rand_float(env);
             float miss_switch = rand_float(env);
             int prayer = ENCOUNTER_OFFENSIVE_OFF;

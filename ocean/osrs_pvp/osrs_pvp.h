@@ -122,7 +122,7 @@ void puf_init(Env* env, Dict* kwargs) {
 }
 
 static inline void puf_set_bot_policy(Env* env, int bot_policy) {
-    assert(bot_policy > OPP_NONE && bot_policy <= OPP_MIXED_NH &&
+    assert(bot_policy > OPP_NONE && bot_policy <= OPP_RECORDED_NH &&
         bot_policy != OPP_SELFPLAY && bot_policy != OPP_PFSP);
     env->state.env.pvp_runtime.opponent.type = (OpponentType)bot_policy;
 }
