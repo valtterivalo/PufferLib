@@ -705,7 +705,6 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     if (getenv("GS_GATE_HIGH")) g_gate_high = atof(getenv("GS_GATE_HIGH"));
     if (getenv("GS_EAT_RISK")) g_eat_risk = atof(getenv("GS_EAT_RISK"));
     if (getenv("GS_EAT_INERT")) g_eat_inert = atof(getenv("GS_EAT_INERT"));
-    if (getenv("GS_NOSURV")) g_survival_seed = 0;
     if (getenv("GS_ESCFLAT")) g_escape_by_hp = 0;
     if (getenv("GS_GATED")) g_hidden_gated = atof(getenv("GS_GATED"));
     if (getenv("GS_SEED_INERT")) g_seed_inert = atof(getenv("GS_SEED_INERT"));
@@ -940,7 +939,6 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
         for (int b = 0; b < 4; b++) printf(" %.4f (%0.f of %.0f ticks)", exposure[b] ? left[b] / exposure[b] : 0, left[b], exposure[b]);
         printf("\n");
     }
-    printf("seed hp survival conditioning: %ld draws, %ld rejected, %ld windows with no surviving draw in 400\n", g_seed_draws, g_seed_rejected, g_seed_unsatisfied);
     printf("his escapes: sim %.1f per 1000 rollouts\n", 1000.0 * g_sim_escapes / g_sim_rollouts);
     if (g_deaths) fclose(g_deaths);
     if (g_windows) fclose(g_windows);

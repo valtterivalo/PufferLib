@@ -24,6 +24,20 @@ int main(void) {
     g_tape = &tape;
     g_ablation.hp = HP_ORACLE;
     uint32_t rng = 1;
-    CHECK("HP oracle skips carried reveal and reads raw ratio", sample_his_hitpoints_raw(&ticks[0], &rng) == 25);
+    CHECK("HP oracle skips carried reveal and reads raw ratio", sample_his_hitpoints(&tape, &ticks[0], &rng) == 25);
+    Hist history[4];
+    for (int i = 0; i < 4; i++) history[i] = hist_start();
+    tape.hist_series = history;
+    Tape prefix = tape;
+    prefix.hi = 10;
+    Tape future = tape;
+    future.hi = 12;
+    g_ablation.hp = HP_HIDDEN;
+    g_unseen_ticks = unseen_ticks;
+    uint32_t whole_rng = 1, prefix_rng = 1;
+    int whole_hp = sample_his_hitpoints(&future, &ticks[0], &whole_rng);
+    int prefix_hp = sample_his_hitpoints(&prefix, &ticks[0], &prefix_rng);
+    CHECK("future observations do not change sampled HP", whole_hp == prefix_hp);
+    CHECK("future observations do not change HP sampling randomness", whole_rng == prefix_rng);
     return osrs_test_summary();
 }

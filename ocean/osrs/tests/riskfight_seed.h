@@ -124,12 +124,12 @@ static int serve_hitpoints(uint32_t* rng, int hp) {
 
 /** His hitpoints at the end of a tick: drawn inside the health bar band, which only a hit on him refreshes, then raised by one drawn serving for each
  * meal since (a hard food stops at 99, a brew at 115). Without a bar, uniform. The oracle reads them off the bar after the first recorded hit instead. */
-static int sample_his_hitpoints_raw(const TapeTick* tick, uint32_t* rng) {
+static int sample_his_hitpoints(const Tape* tape, const TapeTick* tick, uint32_t* rng) {
     OsrsHealthBarRange bar = osrs_health_bar_range(tick->bar_ratio, tick->bar_scale, 99, 121);
     if (g_ablation.hp == HP_ORACLE) {
-        for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= g_tape->hi; x++) {
-            int damage = tape_damage_on_him(g_tape, x);
-            const TapeTick* after = tape_tick(g_tape, x);
+        for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= tape->hi; x++) {
+            int damage = tape_damage_on_him(tape, x);
+            const TapeTick* after = tape_tick(tape, x);
             if (damage > 0 && after->bar_now_ratio > 0 && after->bar_now_scale > 1 && after->last_bar_hit == x) {
                 OsrsHealthBarRange shown = osrs_health_bar_range(after->bar_now_ratio, after->bar_now_scale, 99, 121);
                 int hp = (shown.lower + shown.upper) / 2 + damage;
@@ -150,43 +150,13 @@ static int sample_his_hitpoints_raw(const TapeTick* tick, uint32_t* rng) {
         if (uniform(rng) >= g_seed_inert) hp = served;
     }
     if (g_ablation.hp == HP_HIDDEN) {
-        int masked = g_unseen_ticks(g_tape, tick->tick);
+        int masked = g_unseen_ticks(tape, tick->tick);
         for (int m = 0; m < masked; m++) {
             double wants = g_hidden_gated ? fmax(0, fmin(1, (g_gate_high - hp) / (g_gate_high - g_gate_low))) : 1;
             if (uniform(rng) < g_hidden_meal_chance * wants) hp = serve_hitpoints(rng, hp);
         }
     }
     return hp > 121 ? 121 : hp;
-}
-
-static int g_survival_seed = 1;
-static long g_seed_draws, g_seed_rejected, g_seed_unsatisfied;
-
-/** The seed hp conditioned on what the recording shows of the window: he survives every recorded hit on him (with the recorded eats served from the hp as drawn), unless the recording shows his bar at zero in the window. */
-static int sample_his_hitpoints(const TapeTick* tick, uint32_t* rng) {
-    if (!g_survival_seed || g_ablation.hp == HP_ORACLE) return sample_his_hitpoints_raw(tick, rng);
-    int death_in_window = 0;
-    for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= g_tape->hi; x++) {
-        const TapeTick* at = tape_tick(g_tape, x);
-        death_in_window |= at->bar_ratio == 0 && at->bar_scale > 1 && at->last_bar_hit > 0 && at->last_bar_hit >= tick->tick;
-    }
-    int best = 0;
-    for (int attempt = 0; attempt < 400; attempt++) {
-        int hp = sample_his_hitpoints_raw(tick, rng);
-        g_seed_draws++;
-        int alive = 1, now = hp;
-        if (!death_in_window)
-            for (int x = tick->tick + 1; x <= tick->tick + 10 && x <= g_tape->hi && alive; x++) {
-                if (tape_his_anim_at(g_tape, x, ANIM_EAT)) now = serve_hitpoints(rng, now);
-                now -= tape_damage_on_him(g_tape, x);
-                alive = now > 0;
-            }
-        if (alive) return hp;
-        g_seed_rejected++;
-        if (hp > best) best = hp;
-    }
-    g_seed_unsatisfied++;
-    return best;
 }
 
 /** Snapshot of the tape at the end of tick t. Hidden values come from the stated priors and the rng. */
@@ -237,7 +207,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
             him->inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
         }
     him->vengeance_sacks = HIS_SACKS;
-    him->hitpoints = sample_his_hitpoints(tick, rng);
+    him->hitpoints = sample_his_hitpoints(tape, tick, rng);
 
     Locks lu = locks_after(tape, SIDE_US, t), lh = locks_after(tape, SIDE_HIM, t);
     RiskfightSideSnapshot* su = &out->side[0];

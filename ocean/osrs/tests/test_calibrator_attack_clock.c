@@ -32,7 +32,6 @@ int main(int argc, char** argv) {
     prepare(&recorded);
     g_tape = &recorded;
     g_unseen_ticks = unseen_ticks;
-    g_survival_seed = 0;
     static Sim sim;
     sim_init(&sim);
     int exact = 0, unknown = 0;
