@@ -73,6 +73,14 @@ int main(void) {
     puf_close(&env);
 
     reset(1);
+    env.state.env.players[1].morr_dot_remaining = 5;
+    env.state.env.players[1].morr_dot_tick_counter = 1;
+    puf_step(&env);
+    CHECK("bleed refreshes visible health bar", env.state.env.players[1].current_hitpoints == 94 &&
+        observations[0][OSRS_SHARED_OBS_SIZE] == 28.0f / 30.0f);
+    puf_close(&env);
+
+    reset(1);
     env.state.env.tick = MAX_EPISODE_TICKS - 1;
     puf_step(&env);
     CHECK("timeout is a draw for both policies", terminals[0] == 1 && terminals[1] == 1 &&

@@ -548,10 +548,13 @@ void pvp_step(
             p->morr_dot_tick_counter--;
             if (p->morr_dot_tick_counter <= 0) {
                 int dot_dmg = (p->morr_dot_remaining >= 5) ? 5 : p->morr_dot_remaining;
+                int hitpoints_before = p->current_hitpoints;
                 p->current_hitpoints -= dot_dmg;
                 p->morr_dot_remaining -= dot_dmg;
                 p->damage_applied_this_tick += dot_dmg;
                 if (p->current_hitpoints < 0) p->current_hitpoints = 0;
+                PendingHit hit = {.kind = OSRS_HIT_MORRIGAN_BLEED};
+                pvp_observe_hit(env, 1 - i, i, &hit, dot_dmg, hitpoints_before);
                 p->morr_dot_tick_counter = 3;
             }
         }
