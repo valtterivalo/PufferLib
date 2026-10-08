@@ -62,6 +62,9 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         p->dest_x = p->x;
         p->dest_y = p->y;
         if (side->interacting) osrs_interaction_set(&p->interaction, 1 - i);
+        if (side->seen_last_attack_ago >= 0)
+            s->env.pvp_runtime.maul[i] = osrs_granite_maul_record_attack(
+                s->env.pvp_runtime.maul[i], RISKFIGHT_LOAD_TICK - side->seen_last_attack_ago, 1 - i);
         p->item_effect_state.recoil_damage_used = side->recoil_damage_used;
         if (p->equipment_effect_profile.recoil_source == OSRS_RECOIL_SOURCE_RING_OF_RECOIL)
             p->item_effect_state.recoil_charges = RECOIL_MAX_CHARGES - side->recoil_damage_used;

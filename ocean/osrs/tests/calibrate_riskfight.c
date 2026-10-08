@@ -1869,10 +1869,10 @@ typedef struct {
     double excess, pred_eat, pred_kill;
 } SwingPoint;
 
-static int swing_tick(const Tape* tape, const TapeAnim* an, int horizon) {
+static int swing_tick(const Tape* tape, const TapeAnim* an, int horizon, int death) {
     if (an->side != SIDE_US || (an->anim != ANIM_VW_SPEC && an->anim != ANIM_MAUL_SPEC)) return -1;
     int t = an->tick - 1;
-    return t >= tape->lo + 1 && t + horizon <= tape->hi ? t : -1;
+    return t >= tape->lo + 1 && (t + horizon <= tape->hi || (death > t && death <= t + horizon)) ? t : -1;
 }
 
 /** One point per recorded VW or maul spec swing: eat in the 6 ticks after, kill within the horizon, and the bar band against the next reveal, scored against worlds drawn at the current globals. */
@@ -1883,7 +1883,7 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
     g_tape = tape;
     for (int a = 0; a < tape->anim_count; a++) {
         const TapeAnim* an = &tape->anims[a];
-        int t = swing_tick(tape, an, g_la_horizon);
+        int t = swing_tick(tape, an, g_la_horizon, death);
         if (t < 0) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
@@ -1916,10 +1916,10 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
         }
         SwingPoint* s = &out[n++];
         *s = (SwingPoint){.tick = t, .pred_eat = pred_eat / WORLDS, .pred_kill = pred_kill / WORLDS};
-        for (int x = t + 1; x <= t + WINDOW; x++) s->observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
+        for (int x = t + 1; x <= tape->hi && x <= t + WINDOW; x++) s->observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
         s->observed_kill = death > t && death <= t + g_la_horizon;
         int reveal = -1;
-        for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio >= 0) { reveal = x; break; }
+        for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
         if (reveal >= 0) {
             int damage = 0;
             for (int x = t + 1; x <= reveal; x++) damage += tape_damage_on_him(tape, x);
@@ -2190,7 +2190,7 @@ static void calibration(Tape* tapes, int count) {
             const TapeTick* now = tape_tick(tape, t);
             GsHealthRange belief = series[t - tape->lo].inf.opponent_hitpoints;
             int reveal = -1;
-            for (int x = t + 1; x <= tape->hi && x <= t + 40; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio >= 0) { reveal = x; break; }
+            for (int x = t + 1; x <= tape->hi && x <= t + 40; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
             if (reveal < 0 || now->bar_ratio < 0) continue;
             int damage = 0, ate = 0;
             for (int x = t + 1; x <= reveal; x++) { damage += tape_damage_on_him(tape, x); ate += tape_his_anim_at(tape, x, ANIM_EAT); }
@@ -2216,7 +2216,7 @@ static void calibration(Tape* tapes, int count) {
                 if (tape->actions[a].kind != ACTION_SPEC) continue;
                 t = tape->actions[a].tick - 1;
             }
-            if (t < tape->lo + 1 || t + g_la_horizon > tape->hi) continue;
+            if (t < tape->lo + 1 || (t + g_la_horizon > tape->hi && !(death > t && death <= t + g_la_horizon))) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2258,12 +2258,12 @@ static void calibration(Tape* tapes, int count) {
                 pred_hold += without.kill;
             }
             int observed_eat = 0;
-            for (int x = t + 1; x <= t + WINDOW; x++) observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
+            for (int x = t + 1; x <= tape->hi && x <= t + WINDOW; x++) observed_eat |= tape_his_anim_at(tape, x, ANIM_EAT) != 0;
             pt_n[band]++; pt_obs_eat[band] += observed_eat; pt_pred_eat[band] += pred_eat / WORLDS;
             pt_obs_kill[band] += death > t && death <= t + g_la_horizon; pt_pred_kill[band] += pred_kill / WORLDS; pt_pred_hold[band] += pred_hold / WORLDS;
             {
                 int reveal = -1;
-                for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio >= 0) { reveal = x; break; }
+                for (int x = t + 1; x <= tape->hi && x <= t + 8; x++) if (tape_tick(tape, x)->last_bar_hit == x && tape_tick(tape, x)->bar_ratio > 0) { reveal = x; break; }
                 if (reveal >= 0) {
                     int damage = 0;
                     for (int x = t + 1; x <= reveal; x++) damage += tape_damage_on_him(tape, x);
@@ -2318,11 +2318,23 @@ static void corrections(Tape* tapes, int count) {
     sim_init(a);
     sim_init(b);
     sim_init(fit_sim);
-    int folds = 0, swings = 0, observed_eats = 0, observed_kills = 0;
+    int folds = 0, swings = 0, observed_eats = 0, observed_kills = 0, terminal_positives = 0, censored_tails = 0;
+    for (int i = 0; i < count; i++) {
+        int death = recorded_death_tick(&tapes[i]);
+        for (int a = 0; a < tapes[i].anim_count; a++) {
+            const TapeAnim* an = &tapes[i].anims[a];
+            if (an->side != SIDE_US || (an->anim != ANIM_VW_SPEC && an->anim != ANIM_MAUL_SPEC)) continue;
+            int t = an->tick - 1;
+            if (t < tapes[i].lo + 1 || t + g_la_horizon <= tapes[i].hi) continue;
+            if (death > t && death <= t + g_la_horizon) terminal_positives++;
+            else censored_tails++;
+        }
+    }
     double base_eats = 0, base_kills = 0, corrected_eats = 0, corrected_kills = 0;
     for (int pass = 0; pass < count; pass++) {
         int eligible = 0;
-        for (int a = 0; a < tapes[pass].anim_count; a++) eligible += swing_tick(&tapes[pass], &tapes[pass].anims[a], g_la_horizon) >= 0;
+        int death = recorded_death_tick(&tapes[pass]);
+        for (int a = 0; a < tapes[pass].anim_count; a++) eligible += swing_tick(&tapes[pass], &tapes[pass].anims[a], g_la_horizon, death) >= 0;
         if (!eligible) continue;
         g_la_belief_hp_shift = 0;
         g_eat_scale = 1;
@@ -2405,8 +2417,8 @@ static void corrections(Tape* tapes, int count) {
             (double)held_obs_kill / held_n, held_base_kill / held_n, held_corr_kill / held_n);
     }
     assert(swings > 0);
-    printf("held-out total %d/%d fights, %d swings | eat observed %d/%d %.6f base %.6f corrected %.6f | kill observed %d/%d %.6f base %.6f corrected %.6f (expected %.3f/%.3f)\n",
-        folds, count, swings, observed_eats, swings, (double)observed_eats / swings, base_eats / swings, corrected_eats / swings,
+    printf("held-out total %d/%d fights, %d swings, %d known terminal positives, %d censored tails | eat observed %d/%d %.6f base %.6f corrected %.6f | kill observed %d/%d %.6f base %.6f corrected %.6f (expected %.3f/%.3f)\n",
+        folds, count, swings, terminal_positives, censored_tails, observed_eats, swings, (double)observed_eats / swings, base_eats / swings, corrected_eats / swings,
         observed_kills, swings, (double)observed_kills / swings, base_kills / swings, corrected_kills / swings, base_kills, corrected_kills);
     g_la_belief_hp_shift = 0;
     g_eat_scale = 1;

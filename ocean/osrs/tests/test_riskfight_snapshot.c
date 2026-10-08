@@ -113,6 +113,18 @@ int main(void) {
     context.self_play = 1;
     test_anglerfish_overheal();
     test_load_state();
+    RiskfightSnapshot snap = snapshot();
+    snap.side[1].x = 1;
+    snap.side[1].interacting = 0;
+    riskfight_load_state(&state, &context, &snap);
+    HumanCommand commands[] = {
+        {.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = 0},
+        {.kind = HUMAN_COMMAND_SPEC_TOGGLE},
+    };
+    HumanCommandQueue queue = {.items = commands, .count = 2};
+    HumanCommandQueue idle = {0};
+    riskfight_step_queues(&state, &context, &queue, &idle);
+    assert(state.spec_maul[0] == 1 && state.env.players[0].special_energy == 10);
     test_clone_is_deterministic();
     test_ranged_opponent_hits_from_distance();
     riskfight_destroy_context((EncounterContext*)&context);
