@@ -9,7 +9,7 @@ static void reset(OpponentType bot) {
     memset(&env, 0, sizeof(env));
     memset(actions, 0, sizeof(actions));
     DictItem items[] = {
-        {.key = "opponent_type", .value = bot},
+        {.key = "opponent_type", .value = (double)bot},
         {.key = "gear_tier", .value = 3},
         {.key = "is_lms", .value = 1},
         {.key = "use_c_opponent", .value = 1},
@@ -55,7 +55,7 @@ static void hidden_contract(OpponentType bot) {
                     OpponentState* opp = actor == 1 ? &pvp->pvp_runtime.opponent
                         : &pvp->pvp_runtime.opponent_p0;
                     opp->type = bot;
-                    opp->read_chance = 1;
+                    opponent_reset(pvp, opp);
                     opp->pressure_control = (OppPressureControl){
                         .phase = OPP_ICE_LAUNCHED, .last_launch_tick = 0,
                         .target_launch_tick = -1,
@@ -94,99 +94,19 @@ static void hidden_contract(OpponentType bot) {
                 OpponentState* b = actor == 1 ? &variants[1].pvp_runtime.opponent
                     : &variants[1].pvp_runtime.opponent_p0;
                 CHECK("hidden target state cannot alter persistent controller history",
-                    memcmp(&a->pressure_control, &b->pressure_control, sizeof(a->pressure_control)) == 0 &&
-                    memcmp(&a->visible_history, &b->visible_history, sizeof(a->visible_history)) == 0);
+                    memcmp(a, b, sizeof(*a)) == 0);
             }
         }
     }
     puf_close(&env);
 }
 
-static uint64_t mix(uint64_t hash, uint32_t value) {
-    for (int i = 0; i < 4; i++) { hash ^= (value >> (i * 8)) & 255; hash *= UINT64_C(1099511628211); }
-    return hash;
-}
-static void legacy_contract(void) {
-    const uint64_t expected[] = {
-        UINT64_C(0x16f202e79a61a373),
-        UINT64_C(0xda5f22b7ce2263b3),
-        UINT64_C(0x941ddc928538f8a3),
-        UINT64_C(0x3120d9a318ba0978),
-        UINT64_C(0xe870bee0555cc39a),
-        UINT64_C(0x57147ab6e3e16ccf),
-        UINT64_C(0x95da4ba14751446a),
-        UINT64_C(0x36d01687a52e57b1),
-        UINT64_C(0x329d440b014bb598),
-        UINT64_C(0xb440190aa37bce88),
-        UINT64_C(0x073d006f481c7c8a),
-        UINT64_C(0x8af87af4b4d56c38),
-        UINT64_C(0x1a20a5a12b1109dd),
-        UINT64_C(0x694d7e264653c424),
-        UINT64_C(0x68926f5d4541a483),
-        UINT64_C(0x17687f09047a1750),
-        UINT64_C(0x329d440b014bb598),
-        UINT64_C(0xed1ebf639e3ae8ab),
-        UINT64_C(0xbc68777073a53426),
-        UINT64_C(0x43218eb526b7e1dd),
-        UINT64_C(0x073da8ecadca0eed),
-        UINT64_C(0xda3ecd3542f395d5),
-        UINT64_C(0x7920f351b0728d4d),
-        UINT64_C(0x7920f351b0728d4d),
-        UINT64_C(0xcd8630039765cb76),
-        UINT64_C(0x77ca22d39620223f),
-        UINT64_C(0x0d3e51b4f385cf04),
-        UINT64_C(0xab92d3f29fdd82a7),
-        UINT64_C(0xac9f3a5db9458b82),
-        UINT64_C(0x500a87a5db9f1e50),
-        UINT64_C(0xd367b18077a21fd8),
-        UINT64_C(0x16f202e79a61a373),
-        UINT64_C(0x541695248c7178d8),
-        UINT64_C(0x338e34184cc551c5),
-        UINT64_C(0x70dc5b686a88e43e),
-        UINT64_C(0x70dc5b686a88e43e),
-    };
-    for (int bot = 0; bot <= 35; bot++) {
-        uint64_t hash = UINT64_C(1469598103934665603);
-        for (int seed = 1; seed <= 8; seed++) {
-            memset(&env, 0, sizeof(env));
-            DictItem items[] = {{.key="opponent_type",.value=bot}, {.key="gear_tier",.value=3}, {.key="is_lms",.value=1}, {.key="use_c_opponent",.value=1}, {.key="self_play",.value=0}, {.key="auto_reset",.value=0}, {.key="shaping_enabled",.value=0}, {.key="shaping_scale",.value=0}};
-            Dict kwargs = {.items=items,.size=8};
-            env.rng = seed;
-            puf_init(&env,&kwargs);
-            env.agents[0]=(Agent){.observations=observations,.actions=actions,.rewards=&reward,.terminals=&terminal,.action_mask=mask};
-            puf_reset(&env);
-            OsrsEnv* p=&env.state.env;
-            for (int tick=0;tick<8;tick++) {
-                p->tick=tick;
-                p->players[0].x=FIGHT_AREA_BASE_X+10;
-                p->players[0].y=FIGHT_AREA_BASE_Y+10;
-                p->players[1].x=p->players[0].x+1+tick%5;
-                p->players[1].y=p->players[0].y;
-                p->players[0].prayer=(OverheadPrayer)(1+tick%3);
-                pvp_apply_equipment_plan(&p->players[0],(PvpEquipmentPlan)(tick%3));
-                p->players[1].attack_timer=tick%3-1;
-                p->players[1].current_hitpoints=99-tick*10;
-                int submitted[NUM_ATNS]={0};
-                submitted[OSRS_HEAD_PRIMARY]=OSRS_PRIMARY_MOVE_ACTIONS;
-                p->actions=submitted;
-                generate_opponent_action(p,&p->pvp_runtime.opponent);
-                for(int head=0;head<OSRS_BASE_NUM_ACTION_HEADS;head++)
-                    hash=mix(hash,p->pending_actions[OSRS_BASE_NUM_ACTION_HEADS+head]);
-                hash=mix(hash,p->rng_state);
-            }
-            puf_close(&env);
-        }
-        CHECK("IDs0through35 preserve pinned action and RNG traces", hash == expected[bot]);
-    }
-}
-
 int main(void) {
-    legacy_contract();
     CHECK("pressure IDs append without changing native dimensions",
         OPP_RECORDED_ADAPTIVE_NH == 35 && OPP_BLOOD_PRESSURE_NH == 36 &&
         OPP_FREEZE_UNDERLAP_NH == 37 && OBS_SIZE == 123 && NH_PVP_ACTION_MASK_SIZE == 423);
-    hidden_contract(OPP_BLOOD_PRESSURE_NH);
-    hidden_contract(OPP_FREEZE_UNDERLAP_NH);
+    for (unsigned i = 0; i < sizeof(NH_SCRIPTED_OPPONENTS) / sizeof(*NH_SCRIPTED_OPPONENTS); i++)
+        hidden_contract(NH_SCRIPTED_OPPONENTS[i]);
     reset(OPP_BLOOD_PRESSURE_NH);
     OsrsEnv* pvp = &env.state.env;
     puf_set_bot_policy(&env, OPP_BLOOD_PRESSURE_NH);
@@ -332,7 +252,7 @@ int main(void) {
         reset((OpponentType)bot);
         pvp = &env.state.env;
         pvp->pvp_runtime.use_c_opponent_p0 = 1;
-        pvp->pvp_runtime.opponent_p0.type = OPP_EXPERT_NH;
+        pvp->pvp_runtime.opponent_p0.type = OPP_GENERALIST_NH;
         opponent_reset(pvp, &pvp->pvp_runtime.opponent_p0);
         int attacks[4] = {0}, spells[3] = {0}, consumed = 0, ticks = 0;
         do {

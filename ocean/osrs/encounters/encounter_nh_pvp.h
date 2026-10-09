@@ -59,8 +59,12 @@ static void nh_pvp_finalize_context(
     EncounterState* state,
     EncounterContext* context
 ) {
-    (void)state;
+    NhPvpState* s = (NhPvpState*)state;
     NhPvpContext* ctx = (NhPvpContext*)context;
+    assert(!s->env.pvp_runtime.use_c_opponent ||
+        osrs_nh_is_scripted_opponent(s->env.pvp_runtime.opponent.type));
+    assert(!s->env.pvp_runtime.use_c_opponent_p0 ||
+        osrs_nh_is_scripted_opponent(s->env.pvp_runtime.opponent_p0.type));
     if (ctx->route_topology) abort();
     ctx->route_topology = pvp_route_topology_finalize();
 }
@@ -181,9 +185,9 @@ static void nh_pvp_put_int(
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
     if (strcmp(key, "opponent_type") == 0) {
-        s->env.pvp_runtime.opponent.type = (OpponentType)value;
+        s->env.pvp_runtime.opponent.type = osrs_nh_opponent_type(value);
     } else if (strcmp(key, "opponent_p0_type") == 0) {
-        s->env.pvp_runtime.opponent_p0.type = (OpponentType)value;
+        s->env.pvp_runtime.opponent_p0.type = osrs_nh_opponent_type(value);
     } else if (strcmp(key, "is_lms") == 0) {
         s->env.is_lms = value;
     } else if (strcmp(key, "use_c_opponent") == 0) {

@@ -244,7 +244,6 @@ void pvp_init(OsrsEnv* env) {
     memset(env->pvp_runtime.external_opponent_actions, 0, sizeof(env->pvp_runtime.external_opponent_actions));
     memset(&env->pvp_runtime.opponent, 0, sizeof(env->pvp_runtime.opponent));
     memset(&env->pvp_runtime.opponent_p0, 0, sizeof(env->pvp_runtime.opponent_p0));
-    memset(&env->pvp_runtime.pfsp, 0, sizeof(env->pvp_runtime.pfsp));
     memset(env->pvp_runtime.gear_tier_weights, 0, sizeof(env->pvp_runtime.gear_tier_weights));
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
@@ -398,7 +397,7 @@ void pvp_reset(
         };
     }
 
-    if (env->pvp_runtime.use_c_opponent || env->pvp_runtime.opponent.type == OPP_PFSP) {
+    if (env->pvp_runtime.use_c_opponent) {
         opponent_reset(env, &env->pvp_runtime.opponent);
     }
     if (env->pvp_runtime.use_c_opponent_p0) {
@@ -614,14 +613,6 @@ void pvp_step(
 
     if (env->episode_over) {
         env->ocean_io.agent_terminals[0] = 1;
-
-        if (env->pvp_runtime.opponent.type == OPP_PFSP && env->pvp_runtime.pfsp.active_pool_idx >= 0) {
-            int idx = env->pvp_runtime.pfsp.active_pool_idx;
-            env->pvp_runtime.pfsp.episodes[idx] += 1.0f;
-            if (env->winner == 0) {
-                env->pvp_runtime.pfsp.wins[idx] += 1.0f;
-            }
-        }
 
         Player* p0 = &env->players[0];
         env->log.episode_return = env->_episode_return;

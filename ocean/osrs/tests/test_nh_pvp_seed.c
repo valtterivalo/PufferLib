@@ -17,7 +17,7 @@ int main(void) {
     CHECK("8192 native environment indices have distinct seeds", collisions == 0);
 
     DictItem items[] = {
-        {.key = "opponent_type", .value = OPP_EXPERT_NH},
+        {.key = "opponent_type", .value = OPP_GENERALIST_NH},
         {.key = "gear_tier", .value = 3},
         {.key = "is_lms", .value = 1},
         {.key = "use_c_opponent", .value = 1},

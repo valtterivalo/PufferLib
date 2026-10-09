@@ -724,55 +724,36 @@ typedef struct {
 
 typedef enum {
     OPP_NONE = 0,
-    OPP_TRUE_RANDOM,
-    OPP_PANICKING,
-    OPP_WEAK_RANDOM,
-    OPP_SEMI_RANDOM,
-    OPP_STICKY_PRAYER,
-    OPP_RANDOM_EATER,
-    OPP_PRAYER_ROOKIE,
-    OPP_IMPROVED,
-    OPP_MIXED_EASY,
-    OPP_MIXED_MEDIUM,
-    OPP_ONETICK,
-    OPP_UNPREDICTABLE_IMPROVED,
-    OPP_UNPREDICTABLE_ONETICK,
-    OPP_MIXED_HARD,
-    OPP_MIXED_HARD_BALANCED,
-    OPP_PFSP,
-    OPP_NOVICE_NH,
-    OPP_APPRENTICE_NH,
-    OPP_COMPETENT_NH,
-    OPP_INTERMEDIATE_NH,
-    OPP_ADVANCED_NH,
-    OPP_PROFICIENT_NH,
-    OPP_EXPERT_NH,
-    OPP_MASTER_NH,
-    OPP_SAVANT_NH,
-    OPP_NIGHTMARE_NH,
-    OPP_VENG_FIGHTER,
-    OPP_BLOOD_HEALER,
-    OPP_GMAUL_COMBO,
-    OPP_RANGE_KITER,
-    OPP_SELFPLAY,
-    OPP_HISTORY_NH,
-    OPP_MIXED_NH,
-    OPP_RECORDED_NH,
-    OPP_RECORDED_ADAPTIVE_NH,
-    OPP_BLOOD_PRESSURE_NH,
-    OPP_FREEZE_UNDERLAP_NH,
+    OPP_UNPREDICTABLE_ONETICK = 13,
+    OPP_GENERALIST_NH = 23,
+    OPP_VENG_FIGHTER = 27,
+    OPP_GMAUL_COMBO = 29,
+    OPP_RANGE_KITER = 30,
+    OPP_SELFPLAY = 31,
+    OPP_MIXED_NH = 33,
+    OPP_RECORDED_ADAPTIVE_NH = 35,
+    OPP_BLOOD_PRESSURE_NH = 36,
+    OPP_FREEZE_UNDERLAP_NH = 37,
 } OpponentType;
 
-#define MAX_OPPONENT_POOL 32
+static const OpponentType NH_SCRIPTED_OPPONENTS[] = {
+    OPP_UNPREDICTABLE_ONETICK, OPP_GENERALIST_NH, OPP_VENG_FIGHTER,
+    OPP_GMAUL_COMBO, OPP_RANGE_KITER, OPP_MIXED_NH,
+    OPP_RECORDED_ADAPTIVE_NH, OPP_BLOOD_PRESSURE_NH, OPP_FREEZE_UNDERLAP_NH,
+};
 
-typedef struct {
-    OpponentType pool[MAX_OPPONENT_POOL];
-    int cum_weights[MAX_OPPONENT_POOL];
-    int pool_size;
-    int active_pool_idx;
-    float wins[MAX_OPPONENT_POOL];
-    float episodes[MAX_OPPONENT_POOL];
-} PFSPState;
+static inline int osrs_nh_is_scripted_opponent(OpponentType type) {
+    for (unsigned i = 0; i < sizeof(NH_SCRIPTED_OPPONENTS) / sizeof(*NH_SCRIPTED_OPPONENTS); i++)
+        if (type == NH_SCRIPTED_OPPONENTS[i]) return 1;
+    return 0;
+}
+
+static inline OpponentType osrs_nh_opponent_type(int value) {
+    OpponentType type = (OpponentType)value;
+    if (type == OPP_NONE || type == OPP_SELFPLAY || osrs_nh_is_scripted_opponent(type))
+        return type;
+    abort();
+}
 
 typedef enum {
     OPP_HISTORY_EMPTY,
@@ -806,50 +787,24 @@ typedef struct {
     unsigned attack_counts[4];
 } OppPressureControl;
 
+typedef enum {
+    OPP_COMBO_IDLE,
+    OPP_COMBO_SUBMITTED,
+} OppComboPhase;
+
+typedef struct {
+    OppComboPhase phase;
+    int launch_tick;
+    int energy;
+} OppComboControl;
+
 typedef struct {
     OpponentType type;
     OpponentType active_sub_policy;
-    int chosen_prayer;
-    int chosen_style;
-    int current_prayer;
-    int current_prayer_set;
-    int food_cooldown;
-    int potion_cooldown;
-    int karambwan_cooldown;
-
     int fake_switch_pending;
-    int fake_switch_style;
-    int opponent_prayer_at_fake;
-    int fake_switch_failed;
-    int pending_prayer_value;
-    int pending_prayer_delay;
-    int last_target_gear_style;
-
-    float eat_triple_threshold;
-    float eat_double_threshold;
-    float eat_brew_threshold;
-
-    float prayer_accuracy;
-    float off_prayer_rate;
-    float offensive_prayer_rate;
-    float action_delay_chance;
-    float mistake_rate;
-
-    float read_chance;
-    int has_read_this_tick;
-    AttackStyle read_agent_style;
-    OverheadPrayer read_agent_prayer;
-    int read_agent_moving;
-
-    int prev_dist_to_target;
-    int target_fleeing_ticks;
-
-    int combo_state;
-    float ko_threshold;
-
-    float offensive_prayer_miss;
-
-    float style_bias[3];
+    OverheadPrayer pending_prayer;
+    int prayer_delay;
+    OppComboControl combo_control;
     OppVisibleHistory visible_history;
     OppPressureControl pressure_control;
 } OpponentState;
@@ -869,7 +824,6 @@ typedef struct {
     int external_opponent_actions[32];
     OpponentState opponent;
     OpponentState opponent_p0;
-    PFSPState pfsp;
     float gear_tier_weights[4];
 
     int walk_dest_x[NUM_AGENTS];

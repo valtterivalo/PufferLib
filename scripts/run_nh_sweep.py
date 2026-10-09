@@ -3,11 +3,99 @@ import configparser
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def opponent_contract(types_source, controller_source):
+    body = re.search(r'typedef enum\s*{\s*(OPP_NONE\b.*?)\}\s*OpponentType;',
+        types_source, re.DOTALL).group(1)
+    opponents = {}
+    value = -1
+    for entry in body.split(','):
+        entry = entry.strip()
+        if not entry:
+            continue
+        name, separator, literal = entry.partition('=')
+        name = name.strip()
+        assert re.fullmatch(r'OPP_[A-Z0-9_]+', name), name
+        value = int(literal.strip(), 0) if separator else value + 1
+        opponents[name] = value
+    members = re.search(r'MIXED_NH_POOL\[\]\s*=\s*{([^}]+)};',
+        controller_source).group(1)
+    members = [opponents[name.strip()] for name in members.split(',') if name.strip()]
+    cumulative = re.search(r'MIXED_NH_CUM_WEIGHTS\[\]\s*=\s*{([^}]+)};',
+        controller_source).group(1)
+    cumulative = [int(value.strip()) for value in cumulative.split(',') if value.strip()]
+    assert len(members) == len(cumulative) and cumulative[-1] == 100
+    weights = [value - previous for value, previous in zip(cumulative, [0, *cumulative[:-1]])]
+    assert len(set(opponents.values())) == len(opponents)
+    assert len(set(members)) == len(members) and all(weight > 0 for weight in weights)
+    return opponents, members, weights
+
+
+def sweep_contract(config, opponents, mixture_members, mixture_weights, source_sha):
+    excluded = {opponents[name] for name in ('OPP_NONE', 'OPP_SELFPLAY', 'OPP_MIXED_NH')}
+    scripted = set(opponents.values()) - excluded
+    assert set(mixture_members) <= scripted
+    eval_bots = [int(bot.strip()) for bot in config['selfplay']['eval_bots'].split(',')]
+    assert eval_bots and len(set(eval_bots)) == len(eval_bots)
+    assert set(eval_bots) <= scripted
+    assert config.getint('selfplay', 'eval_bot_games') > 0
+    assert config.getint('selfplay', 'eval_bot_envs') > 0
+    assert config.getint('selfplay', 'eval_bot_threads') > 0
+    assert config.getint('env', 'shaping_enabled') == 0
+    assert config.getfloat('env', 'shaping_scale') == 0
+    assert config['base']['load_model_path'].strip("'\"") == 'None'
+    assert config['base']['load_enemy_model_path'].strip("'\"") == 'None'
+    assert config.getint('bot_eval', 'self_play') == 0
+    assert config.getint('bot_eval', 'use_c_opponent') == 1
+    assert config.getint('bot_eval', 'shaping_enabled') == 0
+    assert config['sweep']['metric'] == 'selfplay/bot_ladder_perf'
+    assert config.getfloat('sweep.train.total_timesteps', 'min') == 3e7
+    assert config.getfloat('sweep.train.total_timesteps', 'max') == 1e11
+    assert not any(section.startswith(('sweep.selfplay.', 'sweep.env.', 'sweep.vec.hist_'))
+        for section in config.sections())
+    training_opponent = config.getint('env', 'opponent_type')
+    self_play = config.getint('env', 'self_play')
+    history = config.getint('selfplay', 'enabled')
+    policies = config.getint('vec', 'num_policies')
+    history_fraction = config.getfloat('vec', 'hist_policy_percent')
+    assert self_play in (0, 1) and history in (0, 1)
+    if self_play == 0:
+        assert config.getint('env', 'use_c_opponent') == 1
+        assert history == 0 and policies == 1 and history_fraction == 0
+        assert training_opponent in scripted | {opponents['OPP_MIXED_NH']}
+        mode = 'scripted'
+        members, weights = ((mixture_members, mixture_weights)
+            if training_opponent == opponents['OPP_MIXED_NH'] else ([training_opponent], [100]))
+    else:
+        assert config.getint('env', 'use_c_opponent') == 0
+        assert training_opponent in {opponents['OPP_NONE'], opponents['OPP_SELFPLAY']}
+        members, weights = [], []
+        if history == 0:
+            assert policies == 1 and history_fraction == 0
+            mode = 'current_selfplay'
+        else:
+            assert policies == 2 and 0 < history_fraction <= 1
+            assert config.getint('selfplay', 'max_size') > 0
+            assert config.getint('selfplay', 'opp_timeout_steps') > 0
+            assert config.getint('base', 'checkpoint_interval') > 0
+            mode = 'historical_selfplay'
+    identity = json.dumps({'version': 'nh-actual-wins-v2', 'source_sha': source_sha,
+        'training_mode': mode, 'benchmark_bots': eval_bots,
+        'resolved_config': {section: dict(config[section]) for section in config.sections()}},
+        sort_keys=True, separators=(',', ':'))
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    return {'training_mode': mode, 'training_opponent_type': training_opponent,
+        'training_opponent_members': members, 'training_opponent_weights': weights,
+        'eval_bots': eval_bots, 'self_play': self_play, 'historical_policies': history,
+        'history_environment_fraction': history_fraction,
+        'objective_id': f'nh-actual-wins-v2-{digest}'}
 
 
 def write_status(root, status):
@@ -50,30 +138,11 @@ def main():
         config.read_file(stream)
     with (repo / 'config/osrs_pvp.ini').open() as stream:
         config.read_file(stream)
-    assert config['selfplay']['enabled'] == '0'
-    assert config['env']['self_play'] == '0'
-    assert config['env']['use_c_opponent'] == '1'
-    assert config['env']['shaping_enabled'] == '0'
-    assert config['vec']['num_policies'] == '1'
-    assert float(config['vec']['hist_policy_percent']) == 0
-    assert config['base']['load_model_path'].strip("'\"") == 'None'
-    training_opponent = int(config['env']['opponent_type'])
-    eval_bots = [int(bot) for bot in config['selfplay']['eval_bots'].split(',')]
-    if training_opponent == 33:
-        assert eval_bots == [23, 30, 32]
-        training_weights = [34, 33, 33]
-        objective_id = (
-            'nh-mixture-33-bots-23-30-32-history-aba-v1-'
-            f'{git_sha[:12]}-actual-wins-terminal-reward-v1')
-    else:
-        assert eval_bots == [training_opponent]
-        training_weights = [100]
-        objective_id = f'nh-bot-{training_opponent}-actual-wins-terminal-reward-v1'
-    assert config['sweep']['metric'] == 'selfplay/bot_ladder_perf'
-    assert float(config['sweep.train.total_timesteps']['min']) == 3e7
-    assert float(config['sweep.train.total_timesteps']['max']) == 1e11
-    assert not any(section.startswith(('sweep.selfplay.', 'sweep.env.', 'sweep.vec.hist_'))
-        for section in config.sections())
+    config['sweep']['max_suggestion_cost'] = str(args.max_suggestion_cost)
+    opponents, mixture_members, mixture_weights = opponent_contract(
+        (repo / 'ocean/osrs/osrs_types.h').read_text(),
+        (repo / 'ocean/osrs/osrs_pvp_opponents.h').read_text())
+    contract = sweep_contract(config, opponents, mixture_members, mixture_weights, git_sha)
     import wandb
 
     viewer = wandb.Api().viewer
@@ -89,7 +158,7 @@ def main():
     command = [str(binary), 'sweep',
         f'--base.checkpoint_dir={root}/checkpoints', f'--base.log_dir={root}/logs',
         f'--sweep.max_suggestion_cost={args.max_suggestion_cost}', '--sweep.resume_dir=',
-        f'--sweep.objective_id={objective_id}']
+        f'--sweep.objective_id={contract["objective_id"]}']
     start = time.time()
     manifest = {
         'git_sha': git_sha, 'branch': branch, 'repo': str(repo),
@@ -99,14 +168,10 @@ def main():
         'suggestion_deadline_unix': start + args.seconds,
         'budget_seconds': args.seconds, 'max_suggestion_cost_seconds': args.max_suggestion_cost,
         'max_runs': int(config['sweep']['max_runs']),
-        'eval_bots': eval_bots,
+        **contract,
         'eval_bot_games': int(config['selfplay']['eval_bot_games']),
-        'objective_id': objective_id,
-        'training_opponent_type': training_opponent,
-        'training_opponent_members': eval_bots,
-        'training_opponent_weights': training_weights,
-        'score': 'Unweighted mean actual win rates against the scripted training opponents',
-        'self_play': 0, 'historical_policies': 0, 'shaping_enabled': 0,
+        'score': 'Unweighted mean actual win rates against the independent scripted benchmark',
+        'shaping_enabled': 0,
         'environment_seed_offset': int(os.environ.get('PUFFER_ENV_SEED_OFFSET', '0')),
         'fight_seeding': 'osrs_env_seed(env index,0) plus reset_count*0x9E3779B9 per episode',
         'wandb_entity': args.entity, 'wandb_project': args.project, 'wandb_group': root.name,

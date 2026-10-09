@@ -490,8 +490,11 @@ static void test_nh_action_mask_overwrites_dirty_buffer(void) {
 
 static void test_nh_scripted_policy_action_sequences(void) {
     printf("--- NH PvP scripted policies emit canonical action sequences ---\n");
-    for (int type = OPP_TRUE_RANDOM; type < OPP_SELFPLAY; type++) {
-        nh_state->env.pvp_runtime.opponent.type = (OpponentType)type;
+    for (size_t i = 0;
+            i < sizeof(NH_SCRIPTED_OPPONENTS) / sizeof(NH_SCRIPTED_OPPONENTS[0]);
+            i++) {
+        OpponentType type = NH_SCRIPTED_OPPONENTS[i];
+        nh_state->env.pvp_runtime.opponent.type = type;
         nh_state->env.pvp_runtime.use_c_opponent = 1;
         nh_state->env.pvp_runtime.use_external_opponent_actions = 0;
         ENCOUNTER_NH_PVP.reset(

@@ -529,7 +529,7 @@ static void run_profile(
         edef->reset(env->encounter_state, env->encounter_context, profile_seed);
     } else {
         env->pvp_runtime.use_c_opponent = 1;
-        env->pvp_runtime.opponent.type = OPP_IMPROVED;
+        env->pvp_runtime.opponent.type = OPP_GENERALIST_NH;
         env->has_rng_seed = 1;
         env->rng_seed = profile_seed;
         env->is_lms = 1;
@@ -2124,12 +2124,12 @@ static void run_visual(
         if (!edef) return;
         if ((strcmp(encounter_name, "nh_pvp") == 0 || strcmp(encounter_name, "pvp") == 0) && edef->put_int) {
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent", 1);
-            edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_IMPROVED);
+            edef->put_int(env->encounter_state, env->encounter_context, "opponent_type", OPP_GENERALIST_NH);
 #ifdef __EMSCRIPTEN__
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", 0);
 #else
             edef->put_int(env->encounter_state, env->encounter_context, "use_c_opponent_p0", model_path && model_path[0] ? 0 : 1);
-            edef->put_int(env->encounter_state, env->encounter_context, "opponent_p0_type", OPP_IMPROVED);
+            edef->put_int(env->encounter_state, env->encounter_context, "opponent_p0_type", OPP_GENERALIST_NH);
 #endif
             edef->put_int(env->encounter_state, env->encounter_context, "is_lms", 1);
             edef->put_int(env->encounter_state, env->encounter_context, "gear_tier", gear_tier);
@@ -2159,7 +2159,7 @@ static void run_visual(
         osrs_time_log("encounter_reset", &t0);
     } else {
         env->pvp_runtime.use_c_opponent = 1;
-        env->pvp_runtime.opponent.type = OPP_IMPROVED;
+        env->pvp_runtime.opponent.type = OPP_GENERALIST_NH;
         env->is_lms = 1;
         pvp_reset(env, direct_pvp_topology);
     }

@@ -27,9 +27,9 @@ static void reset(OpponentType bot) {
 }
 
 int main(void) {
-    CHECK("recorded bot preserves previous IDs", OPP_EXPERT_NH == 23 &&
-        OPP_RANGE_KITER == 30 && OPP_SELFPLAY == 31 &&
-        OPP_HISTORY_NH == 32 && OPP_MIXED_NH == 33 && OPP_RECORDED_NH == 34 && OPP_RECORDED_ADAPTIVE_NH == 35);
+    CHECK("adaptive bot and interface identity remain stable", OPP_GENERALIST_NH == 23 &&
+        OPP_RANGE_KITER == 30 && OPP_SELFPLAY == 31 && OPP_MIXED_NH == 33 &&
+        OPP_RECORDED_ADAPTIVE_NH == 35 && OBS_SIZE == 123 && NH_PVP_ACTION_MASK_SIZE == 423);
     unsigned attacks = (1u << RECORDED_NH_ATTACK_COUNT) - 1u;
     RecordedNhWeights prior = recorded_nh_attack_weights(
         RECORDED_NH_ATTACK_DISTANCE_COUNT, ATTACK_STYLE_NONE, PRAYER_NONE, attacks);
@@ -67,8 +67,7 @@ int main(void) {
         recorded_nh_sample(projected, 0) == RECORDED_NH_MELEE_SPECIAL);
 
     OsrsEnv* original = &env.state.env;
-    for (int bot = OPP_RECORDED_NH; bot <= OPP_RECORDED_ADAPTIVE_NH; bot++) {
-        reset((OpponentType)bot);
+    reset(OPP_RECORDED_ADAPTIVE_NH);
         static OsrsEnv variants[2];
         int hidden[2][OSRS_BASE_NUM_ACTION_HEADS] = {{0}};
         hidden[1][OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
@@ -114,27 +113,7 @@ int main(void) {
             }
         }
         puf_close(&env);
-    }
     reset(OPP_RECORDED_ADAPTIVE_NH);
-    CHECK("recorded controller initializes engineered resources and excludes reads",
-        original->pvp_runtime.opponent.eat_triple_threshold == 0.30f &&
-        original->pvp_runtime.opponent.eat_double_threshold == 0.50f &&
-        original->pvp_runtime.opponent.eat_brew_threshold == 0.70f &&
-        original->pvp_runtime.opponent.read_chance == 0.0f);
-    static OsrsEnv fallback[2];
-    for (uint32_t seed = 1; seed <= 32; seed++) {
-        for (int index = 0; index < 2; index++) {
-            fallback[index] = *original;
-            fallback[index].rng_state = seed;
-            fallback[index].pvp_runtime.opponent.type = (OpponentType)(OPP_RECORDED_NH + index);
-            generate_opponent_action(&fallback[index], &fallback[index].pvp_runtime.opponent);
-        }
-        CHECK("adaptive bot without a qualifying forecast preserves fitted actions and RNG",
-            memcmp(fallback[0].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
-                fallback[1].pending_actions + OSRS_BASE_NUM_ACTION_HEADS,
-                OSRS_BASE_NUM_ACTION_HEADS * sizeof(int)) == 0 &&
-            fallback[0].rng_state == fallback[1].rng_state);
-    }
     OppVisibleHistory alternating = {OPP_HISTORY_READY,
         {ATTACK_STYLE_RANGED, PRAYER_PROTECT_MAGIC},
         {ATTACK_STYLE_MELEE, PRAYER_PROTECT_MELEE}};
@@ -153,15 +132,14 @@ int main(void) {
         original->players[0].just_attacked &&
         original->players[0].attack_style_this_tick == ATTACK_STYLE_MELEE &&
         original->players[0].attack_was_on_prayer &&
-        original->players[1].prayer == PRAYER_PROTECT_MELEE &&
-        !original->pvp_runtime.opponent.has_read_this_tick);
+        original->players[1].prayer == PRAYER_PROTECT_MELEE);
     puf_close(&env);
     reset(OPP_RECORDED_ADAPTIVE_NH);
     puf_set_bot_policy(&env, OPP_RECORDED_ADAPTIVE_NH);
     CHECK("native scripted interface accepts appended adaptive bot35",
         original->pvp_runtime.opponent.type == OPP_RECORDED_ADAPTIVE_NH);
     original->pvp_runtime.use_c_opponent_p0 = 1;
-    original->pvp_runtime.opponent_p0.type = OPP_EXPERT_NH;
+    original->pvp_runtime.opponent_p0.type = OPP_GENERALIST_NH;
     opponent_reset(original, &original->pvp_runtime.opponent_p0);
     int styles[RECORDED_NH_STYLE_COUNT] = {0};
     int overheads[RECORDED_NH_OUTCOME_COUNT] = {0};

@@ -73,9 +73,13 @@ void puf_init(Env* env, Dict* kwargs) {
     ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env));
 
     uint32_t env_seed = osrs_env_seed((uint32_t)env->rng, 0);
+    double opponent_type = dict_get(kwargs, "opponent_type");
+    assert(opponent_type == (int)opponent_type);
+    ENCOUNTER_NH_PVP.put_int(
+        NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env),
+        "opponent_type", (int)opponent_type);
 
     static const char* const int_keys[] = {
-        "opponent_type",
         "gear_tier",
         "is_lms",
         "use_c_opponent",
@@ -122,9 +126,9 @@ void puf_init(Env* env, Dict* kwargs) {
 }
 
 static inline void puf_set_bot_policy(Env* env, int bot_policy) {
-    assert(bot_policy > OPP_NONE && bot_policy <= OPP_FREEZE_UNDERLAP_NH &&
-        bot_policy != OPP_SELFPLAY && bot_policy != OPP_PFSP);
-    env->state.env.pvp_runtime.opponent.type = (OpponentType)bot_policy;
+    OpponentType type = osrs_nh_opponent_type(bot_policy);
+    assert(osrs_nh_is_scripted_opponent(type));
+    env->state.env.pvp_runtime.opponent.type = type;
 }
 
 void puf_reset(Env* env) {

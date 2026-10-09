@@ -1,15 +1,18 @@
 #include "../../osrs_pvp/osrs_pvp.h"
 #include "osrs_test_check.h"
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static Env env;
 static float observations[2][OBS_SIZE], actions[2][NUM_ATNS], rewards[2], terminals[2];
 static unsigned char masks[2][NH_PVP_ACTION_MASK_SIZE];
 
-static void reset(int self_play) {
+static void reset(int self_play, double opponent_type) {
     memset(&env, 0, sizeof(env));
     memset(actions, 0, sizeof(actions));
     DictItem items[] = {
-        {.key = "opponent_type", .value = OPP_IMPROVED},
+        {.key = "opponent_type", .value = opponent_type},
         {.key = "gear_tier", .value = 3},
         {.key = "is_lms", .value = 1},
         {.key = "use_c_opponent", .value = !self_play},
@@ -29,7 +32,34 @@ static void reset(int self_play) {
 }
 
 int main(void) {
-    reset(1);
+    for (int boundary = 0; boundary < 9; boundary++) {
+        pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            if (boundary < 2) {
+                ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env));
+                ENCOUNTER_NH_PVP.put_int(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env),
+                    boundary == 0 ? "opponent_type" : "opponent_p0_type", boundary == 0 ? 8 : 32);
+            } else if (boundary < 6) {
+                const double rejected_types[] = {8, 13.5, OPP_NONE, OPP_SELFPLAY};
+                reset(0, rejected_types[boundary - 2]);
+            } else if (boundary < 8) {
+                puf_set_bot_policy(&env, boundary == 6 ? OPP_NONE : OPP_SELFPLAY);
+            } else {
+                ENCOUNTER_NH_PVP.init_state(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env));
+                ENCOUNTER_NH_PVP.put_int(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env),
+                    "opponent_p0_type", OPP_SELFPLAY);
+                ENCOUNTER_NH_PVP.put_int(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env),
+                    "use_c_opponent_p0", 1);
+                ENCOUNTER_NH_PVP.finalize_context(NH_PVP_ENV_STATE(&env), NH_PVP_ENV_CONTEXT(&env));
+            }
+            _exit(0);
+        }
+        int status;
+        CHECK("rejected opponent stops at the consumer boundary",
+            waitpid(child, &status, 0) == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    }
+    reset(1, OPP_SELFPLAY);
     CHECK("both players have policy slots", env.num_agents == 2 && env.agents[1].policy == 1);
     for (int i = 0; i < 2; i++) {
         Player* player = &env.state.env.players[i];
@@ -72,7 +102,7 @@ int main(void) {
     CHECK("visible hit refreshes quantized health bar", after[OSRS_SHARED_OBS_SIZE] == 13.0f / 30.0f);
     puf_close(&env);
 
-    reset(1);
+    reset(1, OPP_SELFPLAY);
     env.state.env.players[1].morr_dot_remaining = 5;
     env.state.env.players[1].morr_dot_tick_counter = 1;
     puf_step(&env);
@@ -80,7 +110,7 @@ int main(void) {
         observations[0][OSRS_SHARED_OBS_SIZE] == 28.0f / 30.0f);
     puf_close(&env);
 
-    reset(1);
+    reset(1, OPP_SELFPLAY);
     env.state.env.tick = MAX_EPISODE_TICKS - 1;
     puf_step(&env);
     CHECK("timeout is a draw for both policies", terminals[0] == 1 && terminals[1] == 1 &&
@@ -89,7 +119,7 @@ int main(void) {
     puf_close(&env);
 
     for (int winner = -1; winner < 2; winner++) {
-        reset(1);
+        reset(1, OPP_SELFPLAY);
         for (int i = 0; i < 2; i++)
             if (i != winner) env.state.env.players[i].current_hitpoints = 0;
         puf_step(&env);
@@ -104,7 +134,7 @@ int main(void) {
         puf_close(&env);
     }
 
-    reset(1);
+    reset(1, OPP_SELFPLAY);
     OsrsEnv* pvp = &env.state.env;
     pvp->shaping = (RewardShapingConfig){
         .damage_dealt_coef = 0.01f,
@@ -177,11 +207,14 @@ int main(void) {
     }
     puf_close(&env);
 
-    reset(0);
+    reset(0, OPP_GENERALIST_NH);
     CHECK("bot evaluation uses one policy", env.num_agents == 1);
-    puf_set_bot_policy(&env, OPP_EXPERT_NH);
-    puf_reset(&env);
-    CHECK("ladder opponent survives reset", env.state.env.pvp_runtime.opponent.type == OPP_EXPERT_NH);
+    for (unsigned i = 0; i < sizeof(NH_SCRIPTED_OPPONENTS) / sizeof(*NH_SCRIPTED_OPPONENTS); i++) {
+        puf_set_bot_policy(&env, NH_SCRIPTED_OPPONENTS[i]);
+        puf_reset(&env);
+        CHECK("selected opponent survives reset",
+            env.state.env.pvp_runtime.opponent.type == NH_SCRIPTED_OPPONENTS[i]);
+    }
     env.log.wins = 0;
     env.log.damage_dealt = 99;
     Dict output = {0};
