@@ -54,6 +54,20 @@ static void gs_wire_state(char** t, int n, GsClient* c) {
         assert(c->equipment_count <= GS_MAX_EQUIPMENT);
         for (int k = 0; k < c->equipment_count; k++) c->equipment[k] = atoi(t[i++]);
     } else c->ratio = c->scale = -1;
+    if (i < n) {
+        assert(!strcmp(t[i++], "ANIMATION"));
+        assert(i < n);
+        if (!strcmp(t[i], "OBSERVED")) {
+            i++;
+            assert(i < n);
+            char* end;
+            long id = strtol(t[i++], &end, 10);
+            assert(!*end && id >= -1 && id <= INT_MAX);
+            c->opponent_animation = (GsCurrentAnimation){GS_ANIMATION_OBSERVED, (int)id};
+        } else {
+            assert(!strcmp(t[i++], "UNKNOWN"));
+        }
+    }
     assert(i == n);
 }
 

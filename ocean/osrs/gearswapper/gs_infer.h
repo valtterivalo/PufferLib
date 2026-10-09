@@ -10,6 +10,9 @@ enum { GS_WORN_SLOTS = 14, GS_WORN_WEAPON = 3, GS_WORN_RING = 12, GS_MAX_PLAYERS
 
 typedef enum { GS_HEAD_NONE, GS_HEAD_MELEE, GS_HEAD_RANGED, GS_HEAD_MAGIC, GS_HEAD_OTHER } GsHeadIcon;
 
+typedef enum { GS_ANIMATION_UNKNOWN, GS_ANIMATION_OBSERVED } GsAnimationSource;
+typedef struct { GsAnimationSource source; int id; } GsCurrentAnimation;
+
 typedef struct {
     int hitpoints, attack, strength, defence, ranged, magic, prayer;
     uint64_t prayers;
@@ -21,6 +24,7 @@ typedef struct {
     int ox, oy, ratio, scale, oweapon;
     GsHeadIcon overhead;
     int equipment_count, equipment[GS_MAX_EQUIPMENT];
+    GsCurrentAnimation opponent_animation;
 } GsClient;
 
 typedef struct {
@@ -410,6 +414,11 @@ static GsWarning gs_eater_warning(const GsInfer* s) {
 static void gs_eater_observe(GsInfer* s, int tick) {
     const GsClient* c = &s->c;
     gs_armament_of(s);
+    if (c->opponent_animation.source == GS_ANIMATION_OBSERVED && c->opponent_animation.id >= 0 && s->ate_at != tick && s->masked_at != tick) {
+        assert(s->unseen_count < GS_UNSEEN_LIMIT);
+        s->unseen[s->unseen_count++] = tick;
+        s->masked_at = tick;
+    }
 #ifdef GS_HP_BELIEF
     assert(s->watched_count < GS_WATCHED_LIMIT);
     s->watched[s->watched_count++] = s->ate_at == tick ? GS_SEEN_ATE : s->masked_at == tick ? GS_SEEN_HIDDEN : GS_SEEN_QUIET;
