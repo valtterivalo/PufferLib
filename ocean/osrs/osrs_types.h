@@ -759,6 +759,8 @@ typedef enum {
     OPP_MIXED_NH,
     OPP_RECORDED_NH,
     OPP_RECORDED_ADAPTIVE_NH,
+    OPP_BLOOD_PRESSURE_NH,
+    OPP_FREEZE_UNDERLAP_NH,
 } OpponentType;
 
 #define MAX_OPPONENT_POOL 32
@@ -788,6 +790,21 @@ typedef struct {
     OppVisibleState older;
     OppVisibleState latest;
 } OppVisibleHistory;
+
+typedef enum {
+    OPP_ICE_SEEK,
+    OPP_ICE_SUBMITTED,
+    OPP_ICE_LAUNCHED,
+} OppIcePhase;
+
+typedef struct {
+    OppIcePhase phase;
+    int last_launch_tick;
+    int target_x;
+    int target_y;
+    int target_launch_tick;
+    unsigned attack_counts[4];
+} OppPressureControl;
 
 typedef struct {
     OpponentType type;
@@ -834,6 +851,7 @@ typedef struct {
 
     float style_bias[3];
     OppVisibleHistory visible_history;
+    OppPressureControl pressure_control;
 } OpponentState;
 
 typedef struct {

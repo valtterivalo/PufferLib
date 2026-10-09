@@ -2008,6 +2008,165 @@ static void opp_range_kiter(OsrsEnv* env, OpponentState* opp, int* actions) {
     }
 }
 
+static void opp_pressure_move(
+    int* actions, const Player* self, const Player* target, int desired_distance
+) {
+    if (self->frozen_ticks > 0) return;
+    const EncounterArenaTopology* topology = pvp_route_topology_owner.topology;
+    int best = 0;
+    int distance = chebyshev_distance(self->x, self->y, target->x, target->y);
+    int best_error = abs_int(distance - desired_distance);
+    int dx = self->x - target->x;
+    int dy = self->y - target->y;
+    int best_separation = dx * dx + dy * dy;
+    for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++) {
+        int x = self->x + ENCOUNTER_MOVE_TARGET_DX[action];
+        int y = self->y + ENCOUNTER_MOVE_TARGET_DY[action];
+        if (!pvp_topology_destination_selectable(topology, x, y)) continue;
+        EncounterRouteInput input = {
+            .topology = topology, .source_x = self->x, .source_y = self->y,
+            .actor_size = 1, .target_x = x, .target_y = y, .target_size = 1,
+            .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
+            .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
+            .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+        };
+        EncounterRouteResult route;
+        int local = pvp_local_move_route_lookup(
+            &pvp_route_topology_owner, &input, &route);
+        assert(local);
+        if (route.outcome != ROUTE_REACHED_TARGET || route.distance == 0) continue;
+        int next_x = self->x + route.first_dx + route.run_dx;
+        int next_y = self->y + route.first_dy + route.run_dy;
+        int error = abs_int(chebyshev_distance(
+            next_x, next_y, target->x, target->y) - desired_distance);
+        int next_dx = next_x - target->x;
+        int next_dy = next_y - target->y;
+        int separation = next_dx * next_dx + next_dy * next_dy;
+        if (error < best_error || (error == best_error && error > 0 &&
+                (desired_distance > distance ? separation > best_separation
+                    : separation < best_separation))) {
+            best = action;
+            best_error = error;
+            best_separation = separation;
+        }
+    }
+    actions[OSRS_HEAD_PRIMARY] = best;
+}
+
+static void opp_pressure_nh(OsrsEnv* env, OpponentState* opp, int* actions) {
+    Player* self = &env->players[1];
+    Player* target = &env->players[0];
+    OppVisibleState current = {
+        (AttackStyle)get_item_attack_style(target->equipped[GEAR_SLOT_WEAPON]),
+        target->prayer,
+    };
+    OppVisibleState forecast = opp_forecast_visible(opp->visible_history, current);
+    opp->visible_history.older = opp->visible_history.latest;
+    opp->visible_history.latest = current;
+    opp->visible_history.phase = opp->visible_history.phase == OPP_HISTORY_EMPTY
+        ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
+    int actor = opp == &env->pvp_runtime.opponent_p0 ? 0 : 1;
+    int target_launch = env->pvp_runtime.visible[1 - actor].last_attack_tick;
+    if (target_launch >= 0 && target_launch != opp->pressure_control.target_launch_tick) {
+        opp->pressure_control.target_launch_tick = target_launch;
+        if (target->last_attack_style != ATTACK_STYLE_NONE)
+            opp->pressure_control.attack_counts[target->last_attack_style]++;
+    }
+    unsigned most_attacks = 0;
+    for (int style = ATTACK_STYLE_MELEE; style <= ATTACK_STYLE_MAGIC; style++) {
+        if (opp->pressure_control.attack_counts[style] > most_attacks) {
+            most_attacks = opp->pressure_control.attack_counts[style];
+            forecast.weapon = (AttackStyle)style;
+        }
+    }
+    OverheadPrayer defense = forecast.weapon == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC
+        : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
+            : forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : PRAYER_NONE;
+    if (defense != self->prayer)
+        actions[OSRS_HEAD_OVERHEAD] = defense == PRAYER_NONE
+            ? ENCOUNTER_OVERHEAD_OFF : opp_set_refresh_for_prayer(defense);
+
+    int last_launch = env->pvp_runtime.visible[actor].last_attack_tick;
+    if (opp->pressure_control.phase == OPP_ICE_SUBMITTED) {
+        opp->pressure_control.phase = last_launch != opp->pressure_control.last_launch_tick &&
+                self->last_attack_style == ATTACK_STYLE_MAGIC
+            ? OPP_ICE_LAUNCHED : OPP_ICE_SEEK;
+        if (opp->pressure_control.phase == OPP_ICE_LAUNCHED) {
+            opp->pressure_control.target_x = target->x;
+            opp->pressure_control.target_y = target->y;
+        }
+    }
+    opp->pressure_control.last_launch_tick = last_launch;
+    if (target->x != opp->pressure_control.target_x || target->y != opp->pressure_control.target_y)
+        opp->pressure_control.phase = OPP_ICE_SEEK;
+
+    opp_tick_cooldowns(opp);
+    OppConsumables consumables = opp_get_consumables(opp, self);
+    if (self->current_magic < self->base_magic &&
+            self->current_hitpoints >= self->base_hitpoints * opp->eat_double_threshold &&
+            consumables.can_restore) {
+        opp_emit_consumable(actions, self, OSRS_CONSUMABLE_SUPER_RESTORE);
+        opp->potion_cooldown = 3;
+    } else {
+        opp_apply_consumables(env, opp, actions, self, 1);
+    }
+    int distance = chebyshev_distance(self->x, self->y, target->x, target->y);
+    if (!opp_attack_ready(self) || opp_check_eating_queued(actions)) {
+        if (opp->type == OPP_FREEZE_UNDERLAP_NH &&
+                opp->pressure_control.phase == OPP_ICE_LAUNCHED)
+            opp_pressure_move(actions, self, target, 0);
+        else if (opp->type == OPP_BLOOD_PRESSURE_NH &&
+                forecast.weapon == ATTACK_STYLE_MELEE)
+            opp_pressure_move(actions, self, target, COMBAT_SPELL_ATTACK_RANGE / 2);
+        else if (distance > COMBAT_SPELL_ATTACK_RANGE)
+            opp_pressure_move(actions, self, target, COMBAT_SPELL_ATTACK_RANGE);
+        return;
+    }
+
+    int spell = opp->type == OPP_FREEZE_UNDERLAP_NH && can_cast_ice_spell(self)
+        ? OSRS_SPELL_ICE_BARRAGE : can_cast_blood_spell(self)
+            ? OSRS_SPELL_BLOOD_BARRAGE : OSRS_SPELL_NONE;
+    int chosen = -1;
+    const int repertoire[] = {OPP_STYLE_MAGE, OPP_STYLE_RANGED, OPP_STYLE_SPEC, OPP_STYLE_MELEE};
+    for (int entry = 0; entry < 4; entry++) {
+        int style = repertoire[entry];
+        if (style == OPP_STYLE_MAGE && spell == OSRS_SPELL_NONE) continue;
+        PvpEquipmentPlan plan = opp_equipment_plan(style);
+        uint8_t gear[NUM_DYNAMIC_GEAR_SLOTS];
+        pvp_resolve_equipment_plan(self, plan, gear);
+        if (style == OPP_STYLE_RANGED && get_item_attack_style(gear[0]) != ATTACK_STYLE_RANGED)
+            continue;
+        if ((style == OPP_STYLE_MELEE || style == OPP_STYLE_SPEC) &&
+                get_item_attack_style(gear[0]) != ATTACK_STYLE_MELEE) continue;
+        if (style == OPP_STYLE_SPEC && (!item_is_spec_weapon(gear[0]) ||
+                self->special_energy < osrs_spec_cost(gear[0]))) continue;
+        OppAttackStyles attack = opp_submitted_attack_styles(
+            gear[0], OSRS_PRIMARY_MOVE_ACTIONS,
+            style == OPP_STYLE_MAGE ? spell : OSRS_SPELL_NONE,
+            style == OPP_STYLE_SPEC ? 1 : 2, self->spec_armed,
+            self->special_energy, can_cast_ice_spell(self), can_cast_blood_spell(self));
+        OverheadPrayer protection = attack.damage == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC
+            : attack.damage == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MELEE;
+        if (forecast.prayer == protection) continue;
+        int range = style == OPP_STYLE_MAGE ? COMBAT_SPELL_ATTACK_RANGE
+            : pvp_weapon_attack_range(gear[0], attack.damage,
+                style == OPP_STYLE_RANGED ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE);
+        if (chosen < 0 || distance <= range) chosen = style;
+        if (distance <= range) break;
+    }
+    if (chosen < 0) {
+        opp_pressure_move(actions, self, target, 1);
+        return;
+    }
+    opp_apply_gear_switch(actions, self, chosen);
+    actions[OSRS_HEAD_SPECIAL] = chosen == OPP_STYLE_SPEC ? 1 : 2;
+    actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
+    if (chosen == OPP_STYLE_MAGE) {
+        actions[OSRS_HEAD_SPELL] = spell;
+        if (spell == OSRS_SPELL_ICE_BARRAGE) opp->pressure_control.phase = OPP_ICE_SUBMITTED;
+    }
+}
+
 static const OpponentType MIXED_EASY_POOL[] = {
     OPP_PANICKING, OPP_TRUE_RANDOM, OPP_WEAK_RANDOM, OPP_SEMI_RANDOM,
     OPP_STICKY_PRAYER, OPP_RANDOM_EATER, OPP_PRAYER_ROOKIE, OPP_IMPROVED,
@@ -2066,7 +2225,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->pending_prayer_delay = 0;
     opp->last_target_gear_style = -1;
 
-    if (opp->type == OPP_RECORDED_NH || opp->type == OPP_RECORDED_ADAPTIVE_NH) {
+    if (opp->type == OPP_RECORDED_NH || opp->type == OPP_RECORDED_ADAPTIVE_NH ||
+            opp->type == OPP_BLOOD_PRESSURE_NH || opp->type == OPP_FREEZE_UNDERLAP_NH) {
         opp->eat_triple_threshold = 0.30f;
         opp->eat_double_threshold = 0.50f;
         opp->eat_brew_threshold = 0.70f;
@@ -2087,6 +2247,8 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->target_fleeing_ticks = 0;
     opp->visible_history = (OppVisibleHistory){OPP_HISTORY_EMPTY,
         {ATTACK_STYLE_NONE, PRAYER_NONE}, {ATTACK_STYLE_NONE, PRAYER_NONE}};
+    opp->pressure_control = (OppPressureControl){.phase = OPP_ICE_SEEK, .last_launch_tick = -1,
+        .target_launch_tick = -1};
 
     if (opp->type == OPP_PANICKING) {
         int prayers[] = {OVERHEAD_MELEE, OVERHEAD_RANGED, OVERHEAD_MAGE};
@@ -2271,6 +2433,10 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
         case OPP_RECORDED_ADAPTIVE_NH:
             opp_recorded_nh(env, opp, actions, OPP_FORECAST_VISIBLE);
             break;
+        case OPP_BLOOD_PRESSURE_NH:
+        case OPP_FREEZE_UNDERLAP_NH:
+            opp_pressure_nh(env, opp, actions);
+            break;
         default:
             break;
     }
@@ -2282,7 +2448,8 @@ static void generate_opponent_action(OsrsEnv* env, OpponentState* opp) {
             self->spec_armed, self->special_energy,
             can_cast_ice_spell(self), can_cast_blood_spell(self));
         if (styles.offensive != ATTACK_STYLE_NONE) {
-            if (active == OPP_RECORDED_NH || active == OPP_RECORDED_ADAPTIVE_NH) {
+            if (active == OPP_RECORDED_NH || active == OPP_RECORDED_ADAPTIVE_NH ||
+                    active == OPP_BLOOD_PRESSURE_NH || active == OPP_FREEZE_UNDERLAP_NH) {
                 actions[OSRS_HEAD_OFFENSIVE] = styles.offensive == ATTACK_STYLE_MAGIC
                     ? ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY
                     : styles.offensive == ATTACK_STYLE_RANGED
