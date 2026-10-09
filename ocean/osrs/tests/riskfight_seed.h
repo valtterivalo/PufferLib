@@ -23,7 +23,7 @@ static HisKit his_kit(const Tape* tape) {
     if (tape_has_anim(tape, 1658)) kit.main = ITEM_WHIP;
     else if (tape_has_anim(tape, 7045)) kit.main = ITEM_AGS;
     else if (tape_has_anim(tape, 426)) { kit.main = ITEM_MAGIC_SHORTBOW_I; kit.ammo = ITEM_DRAGON_ARROWS; }
-    else if (tape_has_anim(tape, 10172) || tape_has_anim(tape, 424)) kit.main = ITEM_SOULREAPER_AXE;
+    else if (tape_has_anim(tape, 10172)) kit.main = ITEM_SOULREAPER_AXE;
     else if (tape_has_anim(tape, 390)) kit.main = kit.vw ? ITEM_VOIDWAKER : ITEM_DRAGON_SCIMITAR;
     if (kit.main == ITEM_VOIDWAKER) kit.vw = 0;
     return kit;
@@ -66,20 +66,13 @@ static Locks locks_after(const Tape* tape, char side, int t) {
     return locks;
 }
 
-static int last_anim_tick(const Tape* tape, char side, int t, const int* anims, int count) {
-    int best = -1;
+static int armed_after(const Tape* tape, int t) {
+    int last_spec_use = -1;
     for (int i = 0; i < tape->anim_count; i++) {
         const TapeAnim* a = &tape->anims[i];
-        if (a->side != side || a->tick > t || a->tick < best) continue;
-        for (int k = 0; k < count; k++) if (a->anim == anims[k]) best = a->tick;
+        if (a->side == SIDE_US && a->tick <= t && a->tick > last_spec_use &&
+                (a->anim == ANIM_VW_SPEC || a->anim == ANIM_MAUL_SPEC)) last_spec_use = a->tick;
     }
-    return best;
-}
-
-static const int SWING_ANIMS[] = {390, 1658, 11275, 7045, 426, 10172, 10173, 424, 440, 1667, 7514, 7644, 4230, 1156, 3297, 5865, 5866, 8977, 860, 386};
-
-static int armed_after(const Tape* tape, int t) {
-    int last_spec_use = last_anim_tick(tape, SIDE_US, t, (const int[]){ANIM_VW_SPEC, ANIM_MAUL_SPEC}, 2);
     int clicks = 0;
     for (int i = 0; i < tape->action_count; i++)
         clicks += tape->actions[i].kind == ACTION_SPEC && tape->actions[i].tick > last_spec_use && tape->actions[i].tick <= t;
@@ -174,7 +167,13 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
     us->hitpoints = tick->hp;
     us->vengeance_sacks = tick->sacks;
 
-    int his_last_swing = last_anim_tick(tape, SIDE_HIM, t, SWING_ANIMS, sizeof(SWING_ANIMS) / sizeof(int));
+    int his_last_swing = -1;
+    for (int i = 0; i < tape->anim_count; i++) {
+        const TapeAnim* a = &tape->anims[i];
+        GsKind kind = gs_animation_kind(a->anim);
+        if (a->side == SIDE_HIM && a->tick <= t && a->tick > his_last_swing &&
+                (kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC)) his_last_swing = a->tick;
+    }
     uint8_t his_weapon = kit.main;
     for (int i = 0; i < tape->anim_count; i++) {
         const TapeAnim* a = &tape->anims[i];

@@ -220,7 +220,7 @@ static void hist_series(const Tape* tape, Hist* out) {
             if (clock_observed && a->anim == ANIM_EAT) attack_clock += consume_delay(CONSUME_HARD);
             in.vw |= a->anim == ANIM_VW_SPEC;
             in.maul |= a->anim == ANIM_MAUL_SPEC;
-            other_anim |= a->anim != ANIM_EAT;
+            other_anim |= a->anim != -1 && a->anim != ANIM_EAT;
         }
         in.ate_visible = in.ate;
         in.animated = other_anim;

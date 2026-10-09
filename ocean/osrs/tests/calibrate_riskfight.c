@@ -15,7 +15,7 @@
 
 enum { MAX_TAPES = 2048, METRICS = 12, PIT_BINS = 10, REL_BINS = 7, EPISODE_BINS = 9, MAX_ROLLOUTS = 4096,
     FIT_SAMPLES = 4, SCORE_SAMPLES = 16, PROFILE_SAMPLES = 64, BIG_HIT_EPISODE = 30, REARM_TICKS = 4, MARGIN = 10 };
-enum { FLAG_EAT = 1, FLAG_SWING = 2, FLAG_VW = 4, FLAG_MAUL = 8, FLAG_VENG = 16 };
+enum { FLAG_EAT = 1, FLAG_SWING = 2, FLAG_VW = 4, FLAG_MAUL = 8, FLAG_VENG = 16, FLAG_SWING_UNKNOWN = 32 };
 
 static double seconds(void) {
     struct timespec t;
@@ -46,14 +46,15 @@ static void prepare(Tape* tape) {
     tape->hist_series = calloc(n, sizeof(Hist));
     for (int i = 0; i < tape->anim_count; i++) {
         const TapeAnim* a = &tape->anims[i];
-        if (a->side != SIDE_HIM || a->tick < tape->lo || a->tick > tape->hi) continue;
+        if (a->side != SIDE_HIM || a->tick < tape->lo || a->tick > tape->hi || a->anim == -1) continue;
         uint8_t* f = &tape->his_flags[a->tick - tape->lo];
         if (a->anim == ANIM_EAT) *f |= FLAG_EAT;
         if (a->anim == ANIM_VW_SPEC) *f |= FLAG_VW;
         if (a->anim == ANIM_MAUL_SPEC) *f |= FLAG_MAUL;
         if (a->anim == ANIM_VENG_A || a->anim == ANIM_VENG_B) *f |= FLAG_VENG;
-        for (size_t k = 0; k < sizeof(SWING_ANIMS) / sizeof(int); k++)
-            if (a->anim == SWING_ANIMS[k] && a->anim != ANIM_MAUL_SPEC) *f |= FLAG_SWING;
+        const GsAnimationRow* row = gs_animation_row(a->anim);
+        if (!row) *f |= FLAG_SWING_UNKNOWN;
+        else if (row->kind == GS_KIND_ATTACK) *f |= FLAG_SWING;
     }
     hist_series(tape, tape->hist_series);
 }
@@ -88,8 +89,8 @@ static Conditioned conditioned(Action a, const Probe* probe, int flags) {
     switch (a) {
         case ACT_EAT_BIG:
         case ACT_EAT_WARNING: return (Conditioned){probe->eligible[a], eat != 0};
-        case ACT_SWING: return (Conditioned){probe->eligible[a] && !eat, swing != 0};
-        case ACT_VW_SPEC: return (Conditioned){probe->eligible[a] && swing, (flags & FLAG_VW) != 0};
+        case ACT_SWING: return (Conditioned){probe->eligible[a] && !eat && !(flags & FLAG_SWING_UNKNOWN), swing != 0};
+        case ACT_VW_SPEC: return (Conditioned){probe->eligible[a] && swing && !(flags & FLAG_SWING_UNKNOWN), (flags & FLAG_VW) != 0};
         case ACT_MAUL_SPEC: return (Conditioned){probe->eligible[a], (flags & FLAG_MAUL) != 0};
         case ACT_VENGEANCE: return (Conditioned){probe->eligible[a], (flags & FLAG_VENG) != 0};
         case ACT_COUNT: break;
