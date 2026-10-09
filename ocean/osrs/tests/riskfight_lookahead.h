@@ -25,21 +25,37 @@ typedef enum { LA_GEAR_SUPPORTED, LA_GEAR_UNKNOWN, LA_GEAR_WEAPON_UNSUPPORTED, L
 static const char* const LA_GEAR_STATUS_NAME[] = {"supported", "opponent_gear_unknown", "opponent_weapon_unsupported", "opponent_shield_unsupported", "opponent_ammo_prior_unsupported", "opponent_armor_unknown", "opponent_armor_unsupported"};
 typedef struct { LaGearStatus status; int slot, raw; } LaGearIssue;
 
-static int la_item_supported(int raw) {
-    if (raw == -1) return 1;
-    for (int i = 0; i < NUM_ITEMS; i++) if (ITEM_DATABASE[i].item_id == raw) return 1;
-    return 0;
+typedef enum { LA_ITEM_EMPTY, LA_ITEM_MAPPED, LA_ITEM_UNSUPPORTED } LaItemKind;
+typedef struct { LaItemKind kind; ItemIndex item; } LaItem;
+
+static LaItem la_item_of(int raw) {
+    switch (raw) {
+        case -1: return (LaItem){LA_ITEM_EMPTY, ITEM_NONE};
+        case 1704: return (LaItem){LA_ITEM_MAPPED, ITEM_GLORY};
+        case 4880: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_HELM};
+        case 4892: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_PLATEBODY};
+        case 4898: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_PLATELEGS};
+        case 4994: return (LaItem){LA_ITEM_MAPPED, ITEM_VERACS_PLATESKIRT};
+        case 24133: case 24224: return (LaItem){LA_ITEM_MAPPED, ITEM_INFERNAL_CAPE};
+        case 28055: return (LaItem){LA_ITEM_MAPPED, ITEM_DRAGON_BOOTS};
+        case 28069: return (LaItem){LA_ITEM_MAPPED, ITEM_FIGHTER_TORSO};
+        case 31097: return (LaItem){.kind = LA_ITEM_UNSUPPORTED};
+    }
+    for (int i = 0; i < NUM_ITEMS; i++)
+        if (ITEM_DATABASE[i].item_id == raw) return (LaItem){LA_ITEM_MAPPED, (ItemIndex)i};
+    return (LaItem){.kind = LA_ITEM_UNSUPPORTED};
 }
 
 static LaGearIssue la_gear_status(GsObservedGear gear) {
     if (gear.source == GS_GEAR_UNKNOWN) return (LaGearIssue){.status = LA_GEAR_UNKNOWN};
-    if (!la_item_supported(gear.weapon)) return (LaGearIssue){LA_GEAR_WEAPON_UNSUPPORTED, 0, gear.weapon};
-    if (!la_item_supported(gear.shield)) return (LaGearIssue){LA_GEAR_SHIELD_UNSUPPORTED, 0, gear.shield};
-    if (gear.weapon != -1 && get_item_attack_style(raw_id_to_item(gear.weapon)) == ATTACK_STYLE_RANGED && raw_id_to_item(gear.weapon) != ITEM_MAGIC_SHORTBOW_I)
+    LaItem weapon = la_item_of(gear.weapon), shield = la_item_of(gear.shield);
+    if (weapon.kind == LA_ITEM_UNSUPPORTED) return (LaGearIssue){LA_GEAR_WEAPON_UNSUPPORTED, 0, gear.weapon};
+    if (shield.kind == LA_ITEM_UNSUPPORTED) return (LaGearIssue){LA_GEAR_SHIELD_UNSUPPORTED, 0, gear.shield};
+    if (weapon.kind == LA_ITEM_MAPPED && get_item_attack_style(weapon.item) == ATTACK_STYLE_RANGED && weapon.item != ITEM_MAGIC_SHORTBOW_I)
         return (LaGearIssue){LA_GEAR_AMMO_UNSUPPORTED, 0, gear.weapon};
     if (gear.source == GS_GEAR_WEAPON_SHIELD_OBSERVED) return (LaGearIssue){.status = LA_GEAR_ARMOR_UNKNOWN};
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
-        if (!la_item_supported(gear.armor[slot])) return (LaGearIssue){LA_GEAR_ARMOR_UNSUPPORTED, slot, gear.armor[slot]};
+        if (la_item_of(gear.armor[slot]).kind == LA_ITEM_UNSUPPORTED) return (LaGearIssue){LA_GEAR_ARMOR_UNSUPPORTED, slot, gear.armor[slot]};
     return (LaGearIssue){.status = LA_GEAR_SUPPORTED};
 }
 
@@ -82,12 +98,12 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     *w = *base;
     Player* him = &w->env.players[1];
     assert(la_gear_status(b->gear).status == LA_GEAR_SUPPORTED);
-    him->equipped[GEAR_SLOT_WEAPON] = b->gear.weapon == -1 ? ITEM_NONE : raw_id_to_item(b->gear.weapon);
-    him->equipped[GEAR_SLOT_SHIELD] = b->gear.shield == -1 ? ITEM_NONE : raw_id_to_item(b->gear.shield);
+    him->equipped[GEAR_SLOT_WEAPON] = la_item_of(b->gear.weapon).item;
+    him->equipped[GEAR_SLOT_SHIELD] = la_item_of(b->gear.shield).item;
     assert(!item_is_two_handed(him->equipped[GEAR_SLOT_WEAPON]) || him->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
     him->equipped[GEAR_SLOT_AMMO] = him->equipped[GEAR_SLOT_WEAPON] == ITEM_MAGIC_SHORTBOW_I ? ITEM_AMETHYST_ARROW : ITEM_NONE;
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
-        him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = b->gear.armor[slot] == -1 ? ITEM_NONE : raw_id_to_item(b->gear.armor[slot]);
+        him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = la_item_of(b->gear.armor[slot]).item;
     osrs_refresh_player_equipment(him);
     int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift), high = imax(low, b->hp_high + (int)g_la_belief_hp_shift);
     him->current_hitpoints = la_between(r, low, imin(high, 121));

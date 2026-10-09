@@ -154,7 +154,10 @@ typedef enum {
     ITEM_DRAGON_BOOTS = 149,
     ITEM_DRAGON_PLATELEGS = 150,
     ITEM_RUNE_DEFENDER = 151,
-    NUM_ITEMS = 152,
+    ITEM_FIRE_CAPE = 152,
+    ITEM_RUNE_BOOTS = 153,
+    ITEM_RUNE_GLOVES = 154,
+    NUM_ITEMS = 155,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1520,6 +1523,29 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 20, .defence_slash = 19, .defence_crush = 18,
         .defence_magic = -3, .defence_ranged = -2,
         .melee_strength = 5
+    },
+
+    [ITEM_FIRE_CAPE] = {
+        .item_id = 6570, .name = "Fire cape", .slot = SLOT_CAPE,
+        .attack_stab = 1, .attack_slash = 1, .attack_crush = 1,
+        .attack_magic = 1, .attack_ranged = 1,
+        .defence_stab = 11, .defence_slash = 11, .defence_crush = 11,
+        .defence_magic = 11, .defence_ranged = 11,
+        .melee_strength = 4, .prayer = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_RUNE_BOOTS] = {
+        .item_id = 4131, .name = "Rune boots", .slot = SLOT_FEET,
+        .attack_magic = -3, .attack_ranged = -1,
+        .defence_stab = 12, .defence_slash = 13, .defence_crush = 14,
+        .melee_strength = 2, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    [ITEM_RUNE_GLOVES] = {
+        .item_id = 7460, .name = "Rune gloves", .slot = SLOT_HANDS,
+        .attack_stab = 8, .attack_slash = 8, .attack_crush = 8,
+        .attack_magic = 4, .attack_ranged = 8,
+        .defence_stab = 8, .defence_slash = 8, .defence_crush = 8,
+        .defence_magic = 4, .defence_ranged = 8,
+        .melee_strength = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
     },
 
 };

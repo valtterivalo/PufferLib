@@ -47,6 +47,46 @@ int main(void) {
     CHECK("Rune defender maps to the shield content row", OSRS_ITEM_CONTENT_METADATA[rune_defender_code].item_idx == ITEM_RUNE_DEFENDER && OSRS_ITEM_CONTENT_METADATA[rune_defender_code].gear_slot == GEAR_SLOT_SHIELD);
     CHECK("item-index and raw-ID lookups share the Rune defender code", osrs_inventory_content_code_from_item(ITEM_RUNE_DEFENDER) == rune_defender_code && osrs_inventory_content_code_from_raw_osrs_id(13441) == 216);
     CHECK("Rune defender has supported observed mechanics", la_gear_status(gear).status == LA_GEAR_SUPPORTED);
+    CHECK("existing Rune defender content code remains 217", rune_defender_code == 217);
+    static const struct { int raw; ItemIndex item; int kit_slot; uint32_t effects; } mappings[] = {
+        {6570, ITEM_FIRE_CAPE, 1, OSRS_ITEM_EFFECT_NONE},
+        {4131, ITEM_RUNE_BOOTS, 10, OSRS_ITEM_EFFECT_NONE},
+        {7460, ITEM_RUNE_GLOVES, 9, OSRS_ITEM_EFFECT_NONE},
+        {1704, ITEM_GLORY, 2, OSRS_ITEM_EFFECT_NONE},
+        {4880, ITEM_DHAROKS_HELM, 0, OSRS_ITEM_EFFECT_DHAROK_PIECE},
+        {4892, ITEM_DHAROKS_PLATEBODY, 4, OSRS_ITEM_EFFECT_DHAROK_PIECE},
+        {4898, ITEM_DHAROKS_PLATELEGS, 7, OSRS_ITEM_EFFECT_DHAROK_PIECE},
+        {4994, ITEM_VERACS_PLATESKIRT, 7, OSRS_ITEM_EFFECT_NONE},
+        {24133, ITEM_INFERNAL_CAPE, 1, OSRS_ITEM_EFFECT_NONE},
+        {24224, ITEM_INFERNAL_CAPE, 1, OSRS_ITEM_EFFECT_NONE},
+        {28055, ITEM_DRAGON_BOOTS, 10, OSRS_ITEM_EFFECT_NONE},
+        {28069, ITEM_FIGHTER_TORSO, 4, OSRS_ITEM_EFFECT_NONE}
+    };
+    for (size_t i = 0; i < sizeof(mappings) / sizeof(mappings[0]); i++) {
+        LaItem resolved = la_item_of(mappings[i].raw);
+        CHECK("classical and alias raw IDs resolve to the declared physical item", resolved.kind == LA_ITEM_MAPPED && resolved.item == mappings[i].item);
+        const GsJavaItemRow* raw = NULL;
+        for (size_t j = 0; j < sizeof(GS_JAVA_ITEMS) / sizeof(GS_JAVA_ITEMS[0]); j++)
+            if (GS_JAVA_ITEMS[j].id == mappings[i].raw) { raw = &GS_JAVA_ITEMS[j]; break; }
+        assert(raw);
+        const Item* physical = &ITEM_DATABASE[resolved.item];
+        int observed[] = {raw->astab, raw->aslash, raw->acrush, raw->arange, raw->amagic, raw->dstab, raw->dslash, raw->dcrush, raw->drange, raw->dmagic, raw->str, raw->rstr, raw->prayer, raw->aspeed};
+        int simulated[] = {physical->attack_stab, physical->attack_slash, physical->attack_crush, physical->attack_ranged, physical->attack_magic, physical->defence_stab, physical->defence_slash, physical->defence_crush, physical->defence_ranged, physical->defence_magic, physical->melee_strength, physical->ranged_strength, physical->prayer, physical->attack_speed};
+        CHECK("mapped armor preserves authoritative raw bonuses and slot", !memcmp(observed, simulated, sizeof(observed)) && raw->mdmg == physical->magic_damage && raw->slot == mappings[i].kit_slot);
+        CHECK("mapped armor preserves its physical effect contract", physical->effect_mask == mappings[i].effects);
+        if (i < 3) {
+            CHECK("new gear observation codes append without shifting existing content", osrs_inventory_content_code_from_item(resolved.item) == 218 + i && osrs_inventory_content_code_from_raw_osrs_id(mappings[i].raw) == 218 + i);
+        } else {
+            int global_aliases = 0;
+            for (int j = 0; j < NUM_ITEMS; j++) global_aliases += ITEM_DATABASE[j].item_id == mappings[i].raw;
+            CHECK("raw aliases remain local to the forecast boundary", global_aliases == 0);
+        }
+    }
+    CHECK("empty equipment remains distinct from unsupported mechanics", la_item_of(-1).kind == LA_ITEM_EMPTY && la_item_of(-1).item == ITEM_NONE && la_item_of(31097).kind == LA_ITEM_UNSUPPORTED);
+    gear.armor[6] = 31097;
+    unsupported = la_gear_status(gear);
+    CHECK("disputed Avernic metadata remains explicitly unsupported", unsupported.status == LA_GEAR_ARMOR_UNSUPPORTED && unsupported.slot == 6 && unsupported.raw == 31097);
+    gear.armor[6] = 11840;
     gear.weapon = 20997; gear.shield = -1;
     CHECK("mapped bow without a forecast ammo prior is unavailable", la_gear_status(gear).status == LA_GEAR_AMMO_UNSUPPORTED);
     gear.weapon = gear.shield = -1;
@@ -179,6 +219,33 @@ int main(void) {
     actual->inventory_cells[carried] = osrs_inventory_cell_from_item(ITEM_DRAGON_SCIMITAR);
     osrs_equip_from_cell(actual, actual->inventory_cells, carried);
     CHECK("weapon swaps preserve observed armor bonuses after refresh", actual->equipped[GEAR_SLOT_LEGS] == ITEM_BLACK_DHIDE_CHAPS && actual->slot_cached_bonuses.slash_defence == dhide_legs.defence_slash);
+    LaBelief aliases = belief;
+    aliases.gear.armor[1] = 24133;
+    aliases.gear.armor[2] = 1704;
+    aliases.gear.armor[3] = 28069;
+    aliases.gear.armor[6] = 28055;
+    GsObservedGear raw_gear = aliases.gear;
+    rng = 12345;
+    la_world(&sim.state, &history, &aliases, 895, &rng, &worlds[0], &h);
+    actual = &worlds[0].env.players[1];
+    CHECK("forecast aliases seed canonical equipment through the shared refresh", actual->equipped[GEAR_SLOT_CAPE] == ITEM_INFERNAL_CAPE && actual->equipped[GEAR_SLOT_NECK] == ITEM_GLORY && actual->equipped[GEAR_SLOT_BODY] == ITEM_FIGHTER_TORSO && actual->equipped[GEAR_SLOT_FEET] == ITEM_DRAGON_BOOTS);
+    CHECK("forecast resolution preserves observed raw provenance", !memcmp(&raw_gear, &aliases.gear, sizeof(raw_gear)));
+    LaBelief canonical = aliases;
+    canonical.gear.armor[1] = 21295;
+    canonical.gear.armor[2] = 1712;
+    canonical.gear.armor[3] = 10551;
+    canonical.gear.armor[6] = 11840;
+    CHECK("raw alias changes remain explicit cache inputs", la_key(&aliases, &sim.state.env.players[0], 895, 100) != la_key(&canonical, &sim.state.env.players[0], 895, 100));
+    rng = 12345;
+    la_world(&sim.state, &history, &canonical, 895, &rng, &worlds[1], &h);
+    CHECK("equivalent aliases produce identical physical worlds", la_fingerprint(&worlds[0]) == la_fingerprint(&worlds[1]));
+    dumped = tmpfile();
+    assert(dumped);
+    la_dump_request(dumped, &sim, &aliases, 895, &(LaFeasible){0}, (GsStakes){1, 1}, &(LaScript){0});
+    rewind(dumped);
+    read_request(dumped, &request);
+    fclose(dumped);
+    CHECK("request transport retains actual raw aliases", !memcmp(&request.belief.gear, &aliases.gear, sizeof(aliases.gear)));
     g_tape = NULL;
     return osrs_test_summary();
 }
