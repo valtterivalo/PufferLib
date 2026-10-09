@@ -537,12 +537,10 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             defender->freeze_applied_this_tick = 1;
         }
 
-        if (hit->heal_percent > 0 && attacker->current_hitpoints > 0) {
-            int heal = (damage * hit->heal_percent) / 100;
-            attacker->current_hitpoints = clamp(attacker->current_hitpoints + heal, 0, attacker->base_hitpoints);
-        }
-        if (hit->flat_heal > 0 && attacker->current_hitpoints > 0) {
-            attacker->current_hitpoints = clamp(attacker->current_hitpoints + hit->flat_heal, 0, attacker->base_hitpoints);
+        if ((hit->heal_percent > 0 || hit->flat_heal > 0) && attacker->current_hitpoints > 0) {
+            int heal = (damage * hit->heal_percent) / 100 + hit->flat_heal;
+            attacker->current_hitpoints += min_int(heal,
+                max_int(0, attacker->base_hitpoints - attacker->current_hitpoints));
         }
     }
 
