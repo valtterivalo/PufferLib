@@ -32,8 +32,14 @@ int main(void) {
     CHECK("physical Voidwaker and Avernic are supported", la_gear_status(gear) == LA_GEAR_SUPPORTED);
     gear.weapon = 29796;
     CHECK("unknown weapon mechanics remain unavailable", la_gear_status(gear) == LA_GEAR_WEAPON_UNSUPPORTED);
-    gear.weapon = 27690; gear.shield = 8850;
+    gear.weapon = 27690; gear.shield = 9999;
     CHECK("unknown shield mechanics remain unavailable", la_gear_status(gear) == LA_GEAR_SHIELD_UNSUPPORTED);
+    gear.shield = 8850;
+    uint16_t rune_defender_code = osrs_inventory_content_code_from_raw_osrs_id(8850);
+    CHECK("Rune defender raw ID maps to its physical item", raw_id_to_item(8850) == ITEM_RUNE_DEFENDER);
+    CHECK("Rune defender maps to the shield content row", OSRS_ITEM_CONTENT_METADATA[rune_defender_code].item_idx == ITEM_RUNE_DEFENDER && OSRS_ITEM_CONTENT_METADATA[rune_defender_code].gear_slot == GEAR_SLOT_SHIELD);
+    CHECK("item-index and raw-ID lookups share the Rune defender code", osrs_inventory_content_code_from_item(ITEM_RUNE_DEFENDER) == rune_defender_code && osrs_inventory_content_code_from_raw_osrs_id(13441) == 216);
+    CHECK("Rune defender has supported observed mechanics", la_gear_status(gear) == LA_GEAR_SUPPORTED);
     gear.weapon = 20997; gear.shield = -1;
     CHECK("mapped bow without a forecast ammo prior is unavailable", la_gear_status(gear) == LA_GEAR_AMMO_UNSUPPORTED);
     gear.weapon = gear.shield = -1;
@@ -70,7 +76,7 @@ int main(void) {
     sim_init(&sim);
     static RiskfightState worlds[2];
     LaBelief belief = {.hp_low = 50, .hp_high = 50, .energy_low = 100, .energy_high = 100, .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL,
-        .gear = {GS_GEAR_OBSERVED, 27690, 22322}};
+        .gear = {GS_GEAR_OBSERVED, 27690, 8850}};
     Tape* sources[2] = {&prefix, &future};
     uint32_t end_rng[2];
     for (int arm = 0; arm < 2; arm++) {
@@ -85,10 +91,16 @@ int main(void) {
         la_world(&sim.state, &history, &belief, 895, &rng, &worlds[arm], &h);
         end_rng[arm] = rng;
         Player* p = &worlds[arm].env.players[1];
-        CHECK("forecast uses observed current weapon and shield", p->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER && p->equipped[GEAR_SLOT_SHIELD] == ITEM_AVERNIC_DEFENDER);
+        CHECK("forecast uses observed current weapon and Rune defender", p->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER && p->equipped[GEAR_SLOT_SHIELD] == ITEM_RUNE_DEFENDER);
         EquipmentBonuses bonuses;
         osrs_sum_equipment_bonuses(p->equipped, &bonuses);
         CHECK("forecast equipment refreshes derived bonuses", p->slot_cached_bonuses.melee_strength == bonuses.melee_strength && p->slot_cached_bonuses.attack_speed == bonuses.attack_speed);
+        uint8_t shield = p->equipped[GEAR_SLOT_SHIELD];
+        p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
+        EquipmentBonuses without_defender;
+        osrs_sum_equipment_bonuses(p->equipped, &without_defender);
+        p->equipped[GEAR_SLOT_SHIELD] = shield;
+        CHECK("Rune defender seeded bonuses include attack, defence and strength", bonuses.attack_stab - without_defender.attack_stab == 20 && bonuses.attack_slash - without_defender.attack_slash == 19 && bonuses.attack_crush - without_defender.attack_crush == 18 && bonuses.attack_ranged - without_defender.attack_ranged == -2 && bonuses.attack_magic - without_defender.attack_magic == -3 && bonuses.defence_stab - without_defender.defence_stab == 20 && bonuses.defence_slash - without_defender.defence_slash == 19 && bonuses.defence_crush - without_defender.defence_crush == 18 && bonuses.defence_ranged - without_defender.defence_ranged == -2 && bonuses.defence_magic - without_defender.defence_magic == -3 && bonuses.melee_strength - without_defender.melee_strength == 5);
     }
     CHECK("future kit does not change forecast weapon world", la_fingerprint(&worlds[0]) == la_fingerprint(&worlds[1]));
     CHECK("paired worlds consume identical randomness", end_rng[0] == end_rng[1]);
@@ -136,7 +148,7 @@ int main(void) {
     la_dump_request(dumped, &sim, &belief, 895, &(LaFeasible){0}, (GsStakes){1, 1}, &(LaScript){0});
     rewind(dumped);
     read_request(dumped, &request);
-    CHECK("actual dump transports observed gear rather than privileged seed", request.his_weapon == 27690 && request.belief.gear.source == GS_GEAR_OBSERVED && request.belief.gear.shield == 22322);
+    CHECK("actual dump transports observed gear rather than privileged seed", request.his_weapon == 27690 && request.belief.gear.source == GS_GEAR_OBSERVED && request.belief.gear.shield == 8850);
     fclose(dumped);
     g_tape = NULL;
     return osrs_test_summary();

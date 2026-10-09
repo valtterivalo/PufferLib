@@ -99,6 +99,7 @@ static const GenConsumable GEN_CONSUMABLES[] = {
 #define GEN_FROZEN_ITEMS 147
 #define GEN_FROZEN_CONSUMABLES 63
 #define GEN_FROZEN_COUNT 212
+#define GEN_EXISTING_ITEMS 151
 #define GEN_CONSUMABLE_BASE 145
 #define GEN_INERT_CODE 200
 #define GEN_CONTENT_COUNT (GEN_FROZEN_COUNT + NUM_ITEMS - GEN_FROZEN_ITEMS + GEN_CONSUMABLE_COUNT - GEN_FROZEN_CONSUMABLES)
@@ -106,13 +107,15 @@ static const GenConsumable GEN_CONSUMABLES[] = {
 static int gear_code(int index) {
     return index < GEN_LEGACY_ITEMS ? index + 1
         : index < GEN_FROZEN_ITEMS ? 201 + index - GEN_LEGACY_ITEMS
-        : GEN_FROZEN_COUNT + index - GEN_FROZEN_ITEMS;
+        : index < GEN_EXISTING_ITEMS
+            ? GEN_FROZEN_COUNT + index - GEN_FROZEN_ITEMS
+            : GEN_CONTENT_COUNT - NUM_ITEMS + index;
 }
 
 static int consumable_code(int index) {
     return index < GEN_LEGACY_CONSUMABLES ? GEN_CONSUMABLE_BASE + index
         : index < GEN_FROZEN_CONSUMABLES ? 201 + GEN_FROZEN_ITEMS - GEN_LEGACY_ITEMS + index - GEN_LEGACY_CONSUMABLES
-        : GEN_FROZEN_COUNT + NUM_ITEMS - GEN_FROZEN_ITEMS + index - GEN_FROZEN_CONSUMABLES;
+        : GEN_FROZEN_COUNT + GEN_EXISTING_ITEMS - GEN_FROZEN_ITEMS + index - GEN_FROZEN_CONSUMABLES;
 }
 
 static FILE* open_or_die(const char* path) {
@@ -274,9 +277,10 @@ static void write_content_rows(FILE* out) {
     for (int i = GEN_LEGACY_ITEMS; i < GEN_FROZEN_ITEMS; i++) emit_gear_row(out, i);
     for (int i = GEN_LEGACY_CONSUMABLES; i < GEN_FROZEN_CONSUMABLES; i++)
         emit_consumable_row(out, i);
-    for (int i = GEN_FROZEN_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
+    for (int i = GEN_FROZEN_ITEMS; i < GEN_EXISTING_ITEMS; i++) emit_gear_row(out, i);
     for (int i = GEN_FROZEN_CONSUMABLES; i < GEN_CONSUMABLE_COUNT; i++)
         emit_consumable_row(out, i);
+    for (int i = GEN_EXISTING_ITEMS; i < NUM_ITEMS; i++) emit_gear_row(out, i);
 }
 
 static void write_consumable_rows(FILE* out) {
@@ -336,6 +340,10 @@ int main(int argc, char** argv) {
         fprintf(stderr,
             "OSRS item metadata: %d codes exceeds observation scale %d\n",
             GEN_CONTENT_COUNT, OSRS_ITEM_OBS_CODE_SCALE);
+        return 1;
+    }
+    if (GEN_EXISTING_ITEMS > NUM_ITEMS) {
+        fprintf(stderr, "OSRS item metadata: existing item boundary exceeds database\n");
         return 1;
     }
     for (int item_idx = 0; item_idx < NUM_ITEMS; item_idx++) {
