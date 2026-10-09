@@ -6,7 +6,7 @@
  * The cost term lives in gs_auto_eat_decide (value = gain - forgone * stakes, gain priced above the tolerance), eat_delay and
  * eat_forgone_knockout. */
 #define GS_KNOCKOUT_LATER 0.065
-enum { GS_MAX_ATTACKS = 8, GS_MAX_HIDDEN = 6, GS_MAX_FOODS = 8, GS_MAX_MEAL = 4, GS_MAX_MEALS = 128, GS_MAX_HITS = 512 };
+enum { GS_ARSENAL_SIZE = 12, GS_MAX_HIDDEN = 6, GS_MAX_ATTACKS = 2 * GS_ARSENAL_SIZE + GS_MAX_HIDDEN, GS_MAX_FOODS = 8, GS_MAX_MEAL = 4, GS_MAX_MEALS = 128, GS_MAX_HITS = 512 };
 typedef enum { SRC_SWING, SRC_NORMAL, SRC_SPEC, SRC_GODSWORD_SPEC, SRC_MAUL, SRC_VENGEANCE_ECHO, SRC_RECOIL_ECHO } GsSource;
 typedef struct { GsSource source; int tick, least, most; double accuracy; } GsHit;
 typedef enum { GS_EAT_NOW, GS_WAIT, GS_EXPOSED } GsDecision;
@@ -14,7 +14,7 @@ typedef enum { GS_ENGAGED, GS_IDLE } GsOffence;
 
 typedef struct { GsConsumable kind; int heal, ready, remaining, drained; } GsFood;
 typedef struct { int n, foods[GS_MAX_MEAL], offsets[GS_MAX_MEAL], following[GS_MAX_MEAL], earliest_process, resume, complete; } GsMeal;
-typedef struct { int is_maul; GsAttack attack; double probability; } GsHidden;
+typedef struct { int is_maul; GsAttack attack; } GsHidden;
 
 typedef struct {
     int tick, hitpoints;
@@ -563,35 +563,25 @@ static GsEvaluation eat_mixed(const GsEatCall* call, const GsEatSituation* s, co
     double risk = 0;
     int useful = 0, waste = 0;
     int owners = s->pid_flip > 0 ? 2 : 1;
-    int interval = 1;
-    for (int i = 0; i < s->attack_count; i++) interval = imax(interval, s->attacks[i].interval);
-    for (int i = 0; i < s->hidden_count; i++) interval = imax(interval, s->hidden[i].attack.interval);
-    long swings = (((long)answerable - s->tick + interval - 1) / interval);
-    if (swings < 1) swings = 1;
     for (int o = 0; o < owners; o++) {
-        GsPid owner = o == 0 ? s->pid : s->pid == GS_PID_LOCAL ? GS_PID_OPPONENT : GS_PID_LOCAL;
-        double owner_weight = o == 0 ? 1 - s->pid_flip : s->pid_flip;
-        for (int mask = 0; mask < 1 << s->hidden_count; mask++) {
-            double weight = owner_weight;
-            GsEatSituation variant = *s;
-            variant.pid = owner;
-            variant.hidden_count = 0;
+        GsEatSituation known = *s;
+        known.pid = o == 0 ? s->pid : s->pid == GS_PID_LOCAL ? GS_PID_OPPONENT : GS_PID_LOCAL;
+        known.hidden_count = 0;
+        GsEvaluation evaluation = eat_after(call, &known, current, window);
+        if (s->hidden_count > 0) {
+            GsEatSituation unseen = known;
             for (int i = 0; i < s->hidden_count; i++) {
                 const GsHidden* hidden = &s->hidden[i];
-                double used = 1 - gs_pow(1 - hidden->probability, (int)swings);
-                if ((mask >> i & 1) == 0) {
-                    weight *= 1 - used;
-                } else {
-                    weight *= used;
-                    if (hidden->is_maul) { variant.has_maul = 1; variant.maul = hidden->attack; }
-                    else { assert(variant.attack_count < GS_MAX_ATTACKS); variant.attacks[variant.attack_count++] = hidden->attack; }
-                }
+                if (hidden->is_maul) { unseen.has_maul = 1; unseen.maul = hidden->attack; }
+                else { assert(unseen.attack_count < GS_MAX_ATTACKS); unseen.attacks[unseen.attack_count++] = hidden->attack; }
             }
-            GsEvaluation evaluation = eat_after(call, &variant, current, mask == 0 ? window : imin(window, answerable));
-            risk += weight * evaluation.risk;
-            useful = imax(useful, evaluation.useful);
-            waste = imax(waste, evaluation.waste);
+            GsEvaluation opening = eat_after(call, &unseen, current, imin(window, answerable));
+            if (opening.risk > evaluation.risk) evaluation = opening;
         }
+        double weight = o == 0 ? 1 - s->pid_flip : s->pid_flip;
+        risk += weight * evaluation.risk;
+        useful = imax(useful, evaluation.useful);
+        waste = imax(waste, evaluation.waste);
     }
     return (GsEvaluation){risk, useful, waste};
 }

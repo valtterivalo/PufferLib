@@ -31,7 +31,7 @@ typedef struct {
     int present, has_stats;
     int astab, aslash, acrush, arange, amagic, dstab, dslash, dcrush, drange, dmagic, str, rstr;
     double mdmg;
-    int aspeed;
+    int aspeed, two_handed;
     GsWeapon weapon;
     int style;
 } GsItem;
@@ -56,12 +56,13 @@ static int gs_style_of(int stab, int slash, int crush, int ranged, int ranged_st
     return ranged > imax(stab, imax(slash, crush)) && ranged > magic ? GS_RANGED : GS_MELEE;
 }
 
-static void gs_item_register(int id, const char* name, int has_stats, const int stats[14], double mdmg, int aspeed) {
+static void gs_item_register(int id, const char* name, int has_stats, const int stats[14], double mdmg, int aspeed, int two_handed) {
     assert(id >= 0 && id < GS_ITEM_LIMIT);
     GsItem* item = &GS_ITEMS[id];
     memset(item, 0, sizeof(*item));
     item->present = 1;
     item->has_stats = has_stats;
+    item->two_handed = two_handed;
     item->weapon = gs_weapon_named(name);
     if (has_stats) {
         item->astab = stats[0]; item->aslash = stats[1]; item->acrush = stats[2]; item->arange = stats[3]; item->amagic = stats[4];

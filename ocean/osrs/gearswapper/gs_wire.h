@@ -14,7 +14,7 @@ static void gs_register_java_items(void) {
     for (size_t i = 0; i < sizeof(GS_JAVA_ITEMS) / sizeof(*GS_JAVA_ITEMS); i++) {
         const GsJavaItemRow* r = &GS_JAVA_ITEMS[i];
         int stats[14] = {r->astab, r->aslash, r->acrush, r->arange, r->amagic, r->dstab, r->dslash, r->dcrush, r->drange, r->dmagic, r->str, r->rstr, 0, 0};
-        gs_item_register(r->id, r->name, r->has_stats, stats, r->mdmg, r->aspeed);
+        gs_item_register(r->id, r->name, r->has_stats, stats, r->mdmg, r->aspeed, r->two_handed);
         const GsItem* item = gs_item(r->id);
         assert((int)item->weapon == r->weapon);
         assert(item->style == r->style);

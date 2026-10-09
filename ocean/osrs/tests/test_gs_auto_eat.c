@@ -3,9 +3,6 @@
  *   cc -std=c11 -O2 -I. -o /tmp/test_gs_auto_eat ocean/osrs/tests/test_gs_auto_eat.c -lm
  *   /tmp/test_gs_auto_eat [ORACLE.tap]
  *
- * Without an argument it replays the 150 record fixture of tests/fixtures, run from the repo root. The full oracle of 26368 calls
- * (6592 recorded decisions, each with three repriced variants) is made by the Light repo's rollout-export branch.
- *
  * The oracle is a tap file written by AutoEat.tap during `./gradlew :gear-swapper:fightReplay -Precording=... -Ptap=FILE`
  * in the Light repo: one record per AutoEat.decide call with its inputs and verdict. */
 #include <stdio.h>
@@ -33,7 +30,7 @@ static GsAttack read_attack(char** p) {
     GsAttack a;
     char style[16], source[24];
     int n;
-    sscanf(*p, "%15s %d %d %d %d %lf %23s %d%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, source, &a.arrows, &n);
+    assert(sscanf(*p, "%15s %d %d %d %d %lf %23s %d%n", style, &a.least, &a.most, &a.cost, &a.interval, &a.accuracy, source, &a.arrows, &n) == 8);
     a.style = style_of(style);
     a.godsword = !strcmp(source, "GODSWORD_SPEC");
     *p += n;
@@ -62,13 +59,15 @@ static int read_record(FILE* f, Record* r) {
     char line[4096];
     int started = 0;
     while (fgets(line, sizeof(line), f)) {
+        assert(strchr(line, '\n'));
         char tag[8];
         int consumed = 0;
         if (sscanf(line, "%7s %n", tag, &consumed) < 1) continue;
         char* p = line + consumed;
-        started = 1;
         GsEatSituation* s = &r->s;
         if (!strcmp(tag, "S")) {
+            assert(!started);
+            started = 1;
             char pid[16], style[16], offence[16], vengeance[16], recoil[16];
             sscanf(p, "%d %d %15s %d %15s %d %d %d %lf %lf %15s %lf %lf %lf %d %15s %15s %d", &s->tick, &s->hitpoints, pid, &s->distance, style,
                 &s->local_most, &s->local_normal, &s->local_interval, &s->local_opening_accuracy, &s->local_accuracy, offence, &s->tolerance,
@@ -90,7 +89,8 @@ static int read_record(FILE* f, Record* r) {
             p += n;
             h->is_maul = slot == 1;
             h->attack = read_attack(&p);
-            h->probability = strtod(p, NULL);
+            p += strspn(p, " \n");
+            assert(*p == 0);
         } else if (!strcmp(tag, "OSW")) { s->has_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->swing.lands, &s->swing.least, &s->swing.most, &s->swing.accuracy, &s->swing.arrows); }
         else if (!strcmp(tag, "OE")) { s->has_owed = 1; s->owed.source = SRC_VENGEANCE_ECHO; sscanf(p, "%d %d", &s->owed.tick, &s->owed.most); s->owed.least = s->owed.most; s->owed.accuracy = 1; }
         else if (!strcmp(tag, "LSW")) { s->has_local_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->local_swing.lands, &s->local_swing.least, &s->local_swing.most, &s->local_swing.accuracy, &s->local_swing.arrows); }
@@ -138,9 +138,10 @@ static int read_record(FILE* f, Record* r) {
                 heal->amount = (int)strtol(p, &p, 10); p++;
                 heal->cap = (int)strtol(p, &p, 10);
             }
-        } else if (!strcmp(tag, "END")) return 1;
+        } else if (!strcmp(tag, "END")) { assert(started); return 1; }
     }
-    return started && 0;
+    assert(!started && !ferror(f));
+    return 0;
 }
 
 #ifndef GS_HP_BELIEF
@@ -169,7 +170,28 @@ int main(int argc, char** argv) {
 #ifndef GS_HP_BELIEF
     landing_cutoff_contract();
 #endif
-    if (argc == 2 && !strcmp(argv[1], "--contract-only")) { puts("AutoEat landing cutoff verified"); return 0; }
+    Arena contract_arena = arena_make((size_t)1 << 24);
+    GsEatSituation known = {0};
+    known.tick = 100; known.hitpoints = 50; known.pid = GS_PID_OPPONENT;
+    known.opponent_timer = (GsTimer){1, 102, 102}; known.energy_high = 100;
+    known.local_interval = 4; known.vengeance = GS_VENGEANCE_DOWN;
+    known.opponent_hp = (GsHealthRange){99, 99, 99}; known.floor = GS_NONE;
+    known.warning.since = GS_NONE;
+    GsAttack spec = {GS_MELEE, 0, 99, 50, 4, 0.5, 0, 1};
+    known.attacks[known.attack_count++] = spec;
+    GsVerdict observed = gs_auto_eat_decide(&known, NULL, 0, NULL, 0, &contract_arena);
+    GsEatSituation hidden = known;
+    hidden.attack_count = 0;
+    hidden.hidden[hidden.hidden_count++] = (GsHidden){0, spec};
+    contract_arena.used = 0;
+    GsVerdict unseen = gs_auto_eat_decide(&hidden, NULL, 0, NULL, 0, &contract_arena);
+    assert(observed.risk > 0 && fabs(observed.risk - unseen.risk) < 1e-12);
+    hidden.energy_high = 0;
+    contract_arena.used = 0;
+    GsVerdict unaffordable = gs_auto_eat_decide(&hidden, NULL, 0, NULL, 0, &contract_arena);
+    assert(unaffordable.risk == 0);
+    free(contract_arena.base);
+    if (argc == 2 && !strcmp(argv[1], "--contract-only")) { puts("AutoEat landing cutoff, undiscounted hidden risk and energy legality verified"); return 0; }
     FILE* f = fopen(argc > 1 ? argv[1] : "ocean/osrs/tests/fixtures/auto_eat_oracle.tap", "r");
     assert(f);
     Arena arena = arena_make((size_t)1 << 30);
@@ -203,6 +225,8 @@ int main(int argc, char** argv) {
                 record.decision, record.risk, record.meal_risk, record.verdict_food_count, record.complete, v.decision, v.risk, v.meal_risk, v.food_count, v.complete);
         }
     }
+    fclose(f);
+    assert(total > 0);
     printf("%ld calls, %ld match (%.3f%%); with foods on offer %ld calls, %ld match; mismatches: decision %ld foods %ld complete %ld risk %ld; worst |risk diff| %.3g; C time %.3f s\n",
         total, matched, 100.0 * matched / total, calls_with_foods, matched_with_foods, decision_bad, foods_bad, complete_bad, risk_bad, worst, seconds);
     return matched == total ? 0 : 1;

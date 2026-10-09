@@ -30,7 +30,7 @@ static void observer_register_items(void) {
         if (GS_ITEMS[item->item_id].present) continue;
         int stats[14] = {item->attack_stab, item->attack_slash, item->attack_crush, item->attack_ranged, item->attack_magic,
             item->defence_stab, item->defence_slash, item->defence_crush, item->defence_ranged, item->defence_magic, item->melee_strength, item->ranged_strength, 0, 0};
-        gs_item_register(item->item_id, item->name, 1, stats, item->magic_damage, item->attack_speed);
+        gs_item_register(item->item_id, item->name, 1, stats, item->magic_damage, item->attack_speed, item->two_handed);
     }
 }
 

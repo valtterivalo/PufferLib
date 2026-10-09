@@ -5,8 +5,7 @@
 #include "gs_rules.h"
 #include "gs_items.h"
 
-enum { GS_WORN_SLOTS = 14, GS_WORN_WEAPON = 3, GS_WORN_RING = 12, GS_MAX_PLAYERS = 8, GS_MAX_EQUIPMENT = 16, GS_KIT_WEAPON = 3, GS_ITEM_OFFSET = 2048,
-    GS_ARSENAL_SIZE = 12, GS_TRACKING_MAXIMUM_DISTANCE = 20 };
+enum { GS_WORN_SLOTS = 14, GS_WORN_WEAPON = 3, GS_WORN_RING = 12, GS_MAX_PLAYERS = 8, GS_MAX_EQUIPMENT = 16, GS_KIT_WEAPON = 3, GS_ITEM_OFFSET = 2048, GS_TRACKING_MAXIMUM_DISTANCE = 20 };
 
 typedef enum { GS_HEAD_NONE, GS_HEAD_MELEE, GS_HEAD_RANGED, GS_HEAD_MAGIC, GS_HEAD_OTHER } GsHeadIcon;
 
@@ -198,7 +197,7 @@ static int gs_armed(const GsClient* c, GsBonuses surplus, int weapon_id, GsArmam
     GsBonuses bonuses = gs_bonuses_plus(gs_bonuses_plus(GS_ASSUMED_RING, gs_ammo_bonuses(weapon)), surplus);
     int ids[GS_MAX_EQUIPMENT + 1], count = 0;
     for (int slot = 0; slot < c->equipment_count; slot++)
-        if (slot != GS_KIT_WEAPON && c->equipment[slot] >= GS_ITEM_OFFSET) ids[count++] = c->equipment[slot] - GS_ITEM_OFFSET;
+        if (slot != GS_KIT_WEAPON && !(slot == GS_KIT_SHIELD && gs_item(weapon_id)->two_handed) && c->equipment[slot] >= GS_ITEM_OFFSET) ids[count++] = c->equipment[slot] - GS_ITEM_OFFSET;
     if (weapon_id != -1) ids[count++] = weapon_id;
     const GsItem* worn[GS_MAX_EQUIPMENT + 1];
     int worn_count = 0;
@@ -792,11 +791,6 @@ static GsTimer gs_timer_view(GsTimerState t, int tick) {
     return (GsTimer){t.seen, t.seen ? gs_next_attack(t, tick) : 0, t.seen ? t.earliest : 0};
 }
 
-/* HiddenWeapon.perAttack */
-static double gs_hidden_per_attack(double empty, int hitpoints) {
-    return empty * gs_exp(-3.75 * imin(hitpoints, GS_ASSUMED_MAX_HP) / GS_ASSUMED_MAX_HP);
-}
-
 static int gs_brew_in_bag(const GsClient* c) {
     for (int i = 0; i < 28; i++) if (c->inventory[i] == 6685 || c->inventory[i] == 6687 || c->inventory[i] == 6689 || c->inventory[i] == 6691) return 1;
     return 0;
@@ -878,20 +872,28 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     for (int k = 0; k < n; k++) {
         const GsArmament* a = &s->arsenal[order[k]];
         GsStrike strike = gs_strike(s, a, gs_held_by(s, a, tick));
+        assert(out->attack_count < GS_MAX_ATTACKS);
         out->attacks[out->attack_count++] = (GsAttack){(GsStyle)a->style, strike.least, gs_most_per_arrow(a, strike.most), 0, a->interval, strike.accuracy, 0, gs_arrows(a->weapon)};
         if (a->weapon == GS_W_GRANITE_MAUL) {
             out->has_maul = 1;
             out->maul = (GsAttack){GS_MELEE, 0, gs_protected_damage(c, a->style, a->spec), 50, 1, gs_armament_accuracy(c, a), 0, 1};
-        } else if (a->has_spec) out->attacks[out->attack_count++] = gs_spec_attack(s, a);
+        } else if (a->has_spec) {
+            assert(out->attack_count < GS_MAX_ATTACKS);
+            out->attacks[out->attack_count++] = gs_spec_attack(s, a);
+        }
     }
-    int has_vw = 0;
-    for (int i = 0; i < s->arsenal_count; i++) has_vw |= s->arsenal[i].weapon == GS_W_VOIDWAKER;
+    int has_vw = 0, has_ags = 0;
+    for (int i = 0; i < s->arsenal_count; i++) {
+        has_vw |= s->arsenal[i].weapon == GS_W_VOIDWAKER;
+        has_ags |= s->arsenal[i].weapon == GS_W_ARMADYL_GODSWORD;
+    }
     GsArmament hidden;
     if (!has_vw && gs_armed(c, s->surplus, GS_ITEM_VOIDWAKER, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden), gs_hidden_per_attack(0.14, c->hitpoints)};
+        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden)};
+    if (!has_ags && gs_armed(c, s->surplus, GS_ITEM_ARMADYL_GODSWORD, &hidden))
+        out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden)};
     if (!gs_granite_maul(s) && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
-        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1},
-            gs_hidden_per_attack(0.22, c->hitpoints)};
+        out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1}};
     if (s->has_opponent_swing) {
         GsSwing swing = gs_opponent_swing_for(s, out->pid);
         int landed = imax(0, imin(swing.arrows, tick - swing.lands + 1));

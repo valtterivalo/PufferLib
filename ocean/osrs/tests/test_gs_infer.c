@@ -130,7 +130,7 @@ static void format_situation(const GsEatSituation* s, char* out) {
         char one[256] = "";
         format_attack(one, "", &s->hidden[i].attack, s->hidden[i].is_maul);
         one[strlen(one) - 1] = 0;
-        sprintf(out + strlen(out), "%s %.17g\n", one + 1, s->hidden[i].probability);
+        sprintf(out + strlen(out), "%s\n", one + 1);
     }
     if (s->has_swing) sprintf(out + strlen(out), "OSW %d %d %d %.17g %d\n", s->swing.lands, s->swing.least, s->swing.most, s->swing.accuracy, s->swing.arrows);
     if (s->has_local_swing) sprintf(out + strlen(out), "LSW %d %d %d %.17g %d\n", s->local_swing.lands, s->local_swing.least, s->local_swing.most, s->local_swing.accuracy, s->local_swing.arrows);
@@ -297,7 +297,9 @@ int main(int argc, char** argv) {
     gs_infer_init(&inf);
     int recordings = 0, tracker_mismatch = 0, pending_tick = -1, capturing = 0, captured = 0, have_mine = 0, have_spec = 0, spec_captured = 0;
     while (fgets(line, sizeof(line), f)) {
+        assert(strchr(line, '\n'));
         if (!strncmp(line, "RECORDING", 9)) {
+            assert(capturing == 0 && record[0] == 0 && !have_spec);
             recordings++;
             gs_infer_init(&inf);
             wire = (GsWire){0};
@@ -369,7 +371,7 @@ int main(int argc, char** argv) {
                 strcpy(first, record);
                 char* tokens[GS_WIRE_TOKENS];
                 gs_wire_split(first, tokens);
-                gs_eat_situation(&inf, pending_tick, inf.c.local_interacting >= 0 ? GS_ENGAGED : GS_IDLE, 0.01, atof(tokens[14]), &mine_situation_state);
+                gs_eat_situation(&inf, pending_tick, inf.c.local_interacting >= 0 ? GS_ENGAGED : GS_IDLE, atof(tokens[12]), atof(tokens[14]), &mine_situation_state);
                 format_situation(&mine_situation_state, mine_situation);
             }
             if (have_mine) {
@@ -398,6 +400,9 @@ int main(int argc, char** argv) {
             captured = 0;
         }
     }
+    assert(!ferror(f) && stats.ticks > 0);
+    assert(capturing == 0 && record[0] == 0 && !have_spec);
+    fclose(f);
     printf("recordings %d, ticks %ld, tracker mismatches %d\n", recordings, stats.ticks, tracker_mismatch);
     printf("inference lines %ld, mismatches %ld\n", stats.inference_lines, stats.inference_mismatches);
     printf("situations %ld, mismatches %ld\n", stats.situations, stats.situation_mismatches);
