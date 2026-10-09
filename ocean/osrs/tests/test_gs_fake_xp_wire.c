@@ -8,6 +8,10 @@ int main(int argc, char** argv) {
     GsInfer inf;
     gs_infer_init(&inf);
     GsWire wire = {0};
+    GsInfer unchanged = inf;
+    char legacy_food[] = "F 2 22 -2147483648 12 UNCHANGED\n";
+    assert(gs_wire_apply(&inf, &wire, legacy_food) == 0);
+    assert(memcmp(&inf, &unchanged, sizeof(inf)) == 0 && !wire.hp_xp_known);
     char line[1 << 16];
     int real = 0, fake = 0, witness = 0, after_witness = 0;
     char prior = 0;
@@ -15,8 +19,8 @@ int main(int argc, char** argv) {
         GsInfer expected = inf;
         GsWire before = wire;
         int tick = 0, gained = 0;
-        if (line[0] == 'F' && line[1] == ' ') {
-            assert(sscanf(line, "F %d %d", &tick, &gained) == 2 && prior == 'S');
+        if (strncmp(line, "FHP ", 4) == 0) {
+            assert(sscanf(line, "FHP %d %d", &tick, &gained) == 2 && prior == 'S');
             if (gained > 0) gs_on_hitpoints_gain(&expected, tick, gained, GS_WIRE_COMBAT_LEVEL);
         }
         char applied = gs_wire_apply(&inf, &wire, line);
