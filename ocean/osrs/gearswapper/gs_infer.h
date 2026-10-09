@@ -13,6 +13,9 @@ typedef enum { GS_HEAD_NONE, GS_HEAD_MELEE, GS_HEAD_RANGED, GS_HEAD_MAGIC, GS_HE
 typedef enum { GS_ANIMATION_UNKNOWN, GS_ANIMATION_OBSERVED } GsAnimationSource;
 typedef struct { GsAnimationSource source; int id; } GsCurrentAnimation;
 
+typedef enum { GS_GEAR_UNKNOWN, GS_GEAR_OBSERVED } GsGearSource;
+typedef struct { GsGearSource source; int weapon, shield; } GsObservedGear;
+
 typedef struct {
     int hitpoints, attack, strength, defence, ranged, magic, prayer;
     uint64_t prayers;
@@ -25,6 +28,7 @@ typedef struct {
     GsHeadIcon overhead;
     int equipment_count, equipment[GS_MAX_EQUIPMENT];
     GsCurrentAnimation opponent_animation;
+    GsObservedGear opponent_gear;
 } GsClient;
 
 typedef struct {

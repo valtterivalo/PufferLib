@@ -120,6 +120,17 @@ static int clock_eligible(const Tape* tape, int t, ClockCohort cohort) {
     return status == CLOCK_EXACT;
 }
 
+static long gear_counts[CLOCK_COHORT_COUNT][LA_GEAR_STATUS_COUNT];
+
+static int gear_eligible(const Tape* tape, int t, ClockCohort cohort) {
+    GsObservedGear gear = tape->observer_series[t - tape->lo].inf.c.opponent_gear;
+    LaGearStatus status = la_gear_status(gear);
+    gear_counts[cohort][status]++;
+    if (status != LA_GEAR_SUPPORTED)
+        printf("gear unavailable %s %s tick %d reason %s weapon %d shield %d\n", CLOCK_COHORT_NAME[cohort], tape->name, t, LA_GEAR_STATUS_NAME[status], gear.weapon, gear.shield);
+    return status == LA_GEAR_SUPPORTED;
+}
+
 static int clock_anchor(const Tape* tape, int start) {
     int t = start;
     while (t <= tape->hi && !clock_eligible(tape, t, CLOCK_WHOLE_FIGHT)) t++;
@@ -1819,7 +1830,7 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
     fprintf(out, "K %ld %ld\nF %d %d %d %d\n", stakes.him, stakes.us, f->spec_ok, f->eat_ok, f->veng_ok, f->energy);
     int overhead = us->prayer == PRAYER_SMITE ? 1 : us->prayer == PRAYER_PROTECT_MELEE ? 2 : us->prayer == PRAYER_PROTECT_RANGED ? 3 : us->prayer == PRAYER_PROTECT_MAGIC ? 4 : us->prayer == PRAYER_REDEMPTION ? 5 : 0;
     const RiskfightVisibleOpponent* seen = &sim->state.visible[0];
-    int his_raw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_NONE ? -1 : ITEM_DATABASE[him->equipped[GEAR_SLOT_WEAPON]].item_id;
+    int his_raw = b->gear.source == GS_GEAR_OBSERVED ? b->gear.weapon : raw_of_item(him->equipped[GEAR_SLOT_WEAPON]);
     fprintf(out, "O %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d OBSERVED %d %d\n", us->current_hitpoints, us->current_prayer, us->current_attack, us->current_strength,
         us->current_defence, us->current_magic, us->special_energy, us->item_effect_state.special_regen_ticks, us->spec_armed, us->veng_active, us->veng_cooldown,
         sim->state.inventory_use[0].vengeance_sacks, us->item_effect_state.recoil_damage_used, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer,
@@ -1843,6 +1854,8 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
         }
         fprintf(out, " %d", raw);
     }
+    if (b->gear.source == GS_GEAR_OBSERVED) fprintf(out, "\nSHIELD OBSERVED %d", b->gear.shield);
+    else fprintf(out, "\nSHIELD UNKNOWN");
     {
         int since = warning_since(&sim->hist.warning);
         if (since == WARNING_NONE) fprintf(out, "\nQ none %d", sim->hist.warning.unseen_count); else fprintf(out, "\nQ %d %d", since, sim->hist.warning.unseen_count);
@@ -1896,6 +1909,7 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
                 printf("clock unavailable branchpoint %s tick %d reason %s\n", tp->name, t, CLOCK_STATUS_NAME[clock_status(tp, t)]);
                 continue;
             }
+            if (!gear_eligible(tp, t, CLOCK_BRANCHPOINT)) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tp, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -1947,6 +1961,7 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
         int t = swing_tick(tape, an, g_la_horizon, death);
         if (t < 0) continue;
         if (!clock_eligible(tape, t, CLOCK_SPEC)) continue;
+        if (!gear_eligible(tape, t, CLOCK_SPEC)) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
         tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2171,6 +2186,7 @@ static void leakcheck(Tape* tapes, int count) {
         Tape* tape = &tapes[i];
         for (int t = tape->lo + 5; t <= tape->hi; t += 7) {
             if (!clock_eligible(tape, t, CLOCK_LEAKCHECK)) continue;
+            if (!gear_eligible(tape, t, CLOCK_LEAKCHECK)) continue;
             Tape cut = *tape;
             cut.hi = t;
             cut.anims = malloc((size_t)tape->anim_count * sizeof(TapeAnim));
@@ -2191,7 +2207,7 @@ static void leakcheck(Tape* tapes, int count) {
             Sim* sims[2] = {a, b};
             const Tape* tapes_of[2] = {tape, &cut};
             LaBelief belief = {.hp_low = 30, .hp_high = 90, .energy_low = 50, .energy_high = 100, .vengeance = GS_VENGEANCE_MAYBE, .pid = GS_PID_LOCAL, .timer_seen = 1, .timer_first = t + 2,
-                .timer_last = t + 4, .food_ready = 0, .seen_since_eat = 5, .bar_ratio = 15, .flip = 0.1};
+                .timer_last = t + 4, .food_ready = 0, .seen_since_eat = 5, .bar_ratio = 15, .flip = 0.1, .gear = tape->observer_series[t - tape->lo].inf.c.opponent_gear};
             uint64_t print[2][8];
             static RiskfightState kept[2][8];
             for (int s = 0; s < 2; s++) {
@@ -2284,6 +2300,7 @@ static void calibration(Tape* tapes, int count) {
             }
             if (t < tape->lo + 1 || (t + g_la_horizon > tape->hi && !(death > t && death <= t + g_la_horizon))) continue;
             if (!clock_eligible(tape, t, CLOCK_CALIBRATION)) continue;
+            if (!gear_eligible(tape, t, CLOCK_CALIBRATION)) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
             tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
@@ -2561,6 +2578,13 @@ int main(int argc, char** argv) {
     else if (!strcmp(mode, "oppstep")) oppstep(argv[2], argv[3], tapes, count);
     else if (!strcmp(mode, "fightcmp")) fightcmp(atoi(argv[2]), tapes, count, atoi(argv[3]));
     else abort();
+    for (int c = 0; c < CLOCK_COHORT_COUNT; c++) {
+        long* gear = gear_counts[c];
+        long source = 0;
+        for (int status = 0; status < LA_GEAR_STATUS_COUNT; status++) source += gear[status];
+        if (source) printf("gear cohort %s source %ld supported %ld unknown %ld unsupported_weapon %ld unsupported_shield %ld unsupported_ammo_prior %ld\n", CLOCK_COHORT_NAME[c], source,
+            gear[LA_GEAR_SUPPORTED], gear[LA_GEAR_UNKNOWN], gear[LA_GEAR_WEAPON_UNSUPPORTED], gear[LA_GEAR_SHIELD_UNSUPPORTED], gear[LA_GEAR_AMMO_UNSUPPORTED]);
+    }
     for (int c = 0; c < CLOCK_COHORT_COUNT; c++) {
         long* n = clock_counts[c];
         long total = n[CLOCK_EXACT] + n[CLOCK_UNKNOWN] + n[CLOCK_INTERVAL] + n[CLOCK_OUTSIDE];

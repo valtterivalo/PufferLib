@@ -54,8 +54,8 @@ static void gs_wire_state(char** t, int n, GsClient* c) {
         assert(c->equipment_count <= GS_MAX_EQUIPMENT);
         for (int k = 0; k < c->equipment_count; k++) c->equipment[k] = atoi(t[i++]);
     } else c->ratio = c->scale = -1;
-    if (i < n) {
-        assert(!strcmp(t[i++], "ANIMATION"));
+    if (i < n && !strcmp(t[i], "ANIMATION")) {
+        i++;
         assert(i < n);
         if (!strcmp(t[i], "OBSERVED")) {
             i++;
@@ -67,6 +67,18 @@ static void gs_wire_state(char** t, int n, GsClient* c) {
         } else {
             assert(!strcmp(t[i++], "UNKNOWN"));
         }
+    }
+    if (i < n) {
+        assert(!strcmp(t[i++], "GEAR") && i < n);
+        if (!strcmp(t[i++], "OBSERVED")) {
+            assert(i + 2 == n);
+            char* end;
+            long weapon = strtol(t[i++], &end, 10);
+            assert(!*end && weapon >= -1 && weapon <= INT_MAX);
+            long shield = strtol(t[i++], &end, 10);
+            assert(!*end && shield >= -1 && shield <= INT_MAX);
+            c->opponent_gear = (GsObservedGear){GS_GEAR_OBSERVED, (int)weapon, (int)shield};
+        } else assert(!strcmp(t[i - 1], "UNKNOWN"));
     }
     assert(i == n);
 }

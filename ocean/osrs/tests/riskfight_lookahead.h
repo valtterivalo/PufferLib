@@ -18,7 +18,25 @@ typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 typedef struct {
     int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul, bar_ratio;
     double flip;
+    GsObservedGear gear;
 } LaBelief;
+
+typedef enum { LA_GEAR_SUPPORTED, LA_GEAR_UNKNOWN, LA_GEAR_WEAPON_UNSUPPORTED, LA_GEAR_SHIELD_UNSUPPORTED, LA_GEAR_AMMO_UNSUPPORTED, LA_GEAR_STATUS_COUNT } LaGearStatus;
+static const char* const LA_GEAR_STATUS_NAME[] = {"supported", "opponent_gear_unknown", "opponent_weapon_unsupported", "opponent_shield_unsupported", "opponent_ammo_prior_unsupported"};
+
+static int la_item_supported(int raw) {
+    if (raw == -1) return 1;
+    for (int i = 0; i < NUM_ITEMS; i++) if (ITEM_DATABASE[i].item_id == raw) return 1;
+    return 0;
+}
+
+static LaGearStatus la_gear_status(GsObservedGear gear) {
+    if (gear.source == GS_GEAR_UNKNOWN) return LA_GEAR_UNKNOWN;
+    if (!la_item_supported(gear.weapon)) return LA_GEAR_WEAPON_UNSUPPORTED;
+    if (!la_item_supported(gear.shield)) return LA_GEAR_SHIELD_UNSUPPORTED;
+    if (gear.weapon != -1 && get_item_attack_style(raw_id_to_item(gear.weapon)) == ATTACK_STYLE_RANGED && raw_id_to_item(gear.weapon) != ITEM_MAGIC_SHORTBOW_I) return LA_GEAR_AMMO_UNSUPPORTED;
+    return LA_GEAR_SUPPORTED;
+}
 
 static int g_la_worlds = 64, g_la_horizon = 15, g_la_stage = 16, g_la_cache = 1;
 static double g_la_prune = 0.03, g_la_belief_hp_shift = 0, g_la_eat_scale_belief = 1;
@@ -58,6 +76,12 @@ static void la_resupply(Player* him, uint32_t* r) {
 static void la_world(const RiskfightState* base, const Hist* base_hist, const LaBelief* b, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
     *w = *base;
     Player* him = &w->env.players[1];
+    assert(la_gear_status(b->gear) == LA_GEAR_SUPPORTED);
+    him->equipped[GEAR_SLOT_WEAPON] = b->gear.weapon == -1 ? ITEM_NONE : raw_id_to_item(b->gear.weapon);
+    him->equipped[GEAR_SLOT_SHIELD] = b->gear.shield == -1 ? ITEM_NONE : raw_id_to_item(b->gear.shield);
+    assert(!item_is_two_handed(him->equipped[GEAR_SLOT_WEAPON]) || him->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
+    him->equipped[GEAR_SLOT_AMMO] = him->equipped[GEAR_SLOT_WEAPON] == ITEM_MAGIC_SHORTBOW_I ? ITEM_AMETHYST_ARROW : ITEM_NONE;
+    osrs_refresh_player_equipment(him);
     int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift), high = imax(low, b->hp_high + (int)g_la_belief_hp_shift);
     him->current_hitpoints = la_between(r, low, imin(high, 121));
     him->special_energy = b->energy_low + 10 * la_between(r, 0, (b->energy_high - b->energy_low) / 10);
@@ -270,7 +294,7 @@ static uint64_t la_fingerprint(const RiskfightState* w) {
     uint64_t h = 1469598103934665603ull;
     const Player* him = &w->env.players[1];
     int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer, him->attack_timer_uncapped, him->has_attack_timer,
-        him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
+        him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1], him->equipped[GEAR_SLOT_WEAPON], him->equipped[GEAR_SLOT_SHIELD], him->equipped[GEAR_SLOT_AMMO]};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     int counts[256][5] = {{0}};
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
@@ -369,14 +393,14 @@ static LaBelief la_belief_of(const Sim* sim, int tick) {
     return (LaBelief){.hp_low = inf->opponent_hitpoints.low, .hp_high = inf->opponent_hitpoints.high, .energy_low = energy.low, .energy_high = energy.high,
         .vengeance = (int)gs_vengeance_reading(inf->opponent.vengeance, tick), .pid = (int)inf->pid.owner, .timer_seen = timer.seen,
         .timer_first = timer.seen ? timer.earliest : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
-        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick)};
+        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick), .gear = inf->c.opponent_gear};
 }
 
 static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
     uint64_t h = 1469598103934665603ull;
     int parts[] = {us->current_hitpoints, us->attack_timer, us->attack_timer_uncapped, us->has_attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
         b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, la_food_timer(b->food_ready, tick),
-        b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul};
+        b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul, b->gear.source, b->gear.weapon, b->gear.shield};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     return h;
 }
@@ -407,6 +431,11 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     if (!f.spec_ok && !(f.eat_ok && us->current_hitpoints <= 75) && !f.veng_ok) return 0;
 
     LaBelief belief = la_belief_of(sim, tick);
+    LaGearStatus gear_status = la_gear_status(belief.gear);
+    if (gear_status != LA_GEAR_SUPPORTED) {
+        fprintf(stderr, "lookahead unavailable tick %d reason %s weapon %d shield %d\n", tick, LA_GEAR_STATUS_NAME[gear_status], belief.gear.weapon, belief.gear.shield);
+        return 0;
+    }
     uint64_t key = la_key(&belief, us, tick, f.energy);
     int memo = (int)(key % LA_CACHE);
     int cached = g_la_cache && g_la_memo[memo].used && g_la_memo[memo].key == key;

@@ -75,6 +75,18 @@ static void read_request(FILE* in, Request* q) {
             t->piety = piety;
             static const char* const overheads[] = {"NONE", "SMITE", "PROTECT_FROM_MELEE", "PROTECT_FROM_MISSILES", "PROTECT_FROM_MAGIC", "REDEMPTION"};
             strcpy(t->overhead, overheads[overhead_code]);
+        } else if (!strcmp(tag, "SHIELD")) {
+            char source[16];
+            int consumed;
+            assert(sscanf(p, "%15s%n", source, &consumed) == 1);
+            p += consumed;
+            if (!strcmp(source, "OBSERVED")) {
+                assert(sscanf(p, "%d%n", &q->belief.gear.shield, &consumed) == 1);
+                assert(q->belief.gear.shield >= -1);
+                q->belief.gear.source = GS_GEAR_OBSERVED;
+                p += consumed;
+            } else assert(!strcmp(source, "UNKNOWN"));
+            assert(strspn(p, " \r\n") == strlen(p));
         } else if (!strcmp(tag, "W")) for (int i = 0; i < TAPE_WORN; i++) q->worn[i] = (int)strtol(p, &p, 10);
         else if (!strcmp(tag, "G")) for (int i = 0; i < TAPE_BAG; i++) q->bag[i] = (int)strtol(p, &p, 10);
         else if (!strcmp(tag, "Q")) {
@@ -90,7 +102,7 @@ static void read_request(FILE* in, Request* q) {
             assert(sscanf(p, "%d %d %d", &due, &kind, &slot) == 3 && q->rules.n < LA_SCRIPT);
             q->rules.due[q->rules.n] = due;
             q->rules.command[q->rules.n++] = kind == 0 ? click_command(slot) : kind == 1 ? attack_command() : kind == 2 ? spec_command() : vengeance_command();
-        } else if (!strcmp(tag, "END")) return;
+        } else if (!strcmp(tag, "END")) { q->belief.gear.weapon = q->his_weapon; return; }
     }
     exit(0);
 }
@@ -132,9 +144,6 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     snap->side[0].karambwan_timer = q->karambwan_timer;
     snap->side[0].spec_armed = q->armed;
     snap->side[1].seen_health_bar = q->belief.bar_ratio;
-    for (int i = 0; i < NUM_ITEMS && q->his_weapon >= 0; i++)
-        if (ITEM_DATABASE[i].item_id == q->his_weapon) snap->loadout[1].equipment[GEAR_SLOT_WEAPON] = (uint8_t)i;
-    if (item_is_two_handed(snap->loadout[1].equipment[GEAR_SLOT_WEAPON])) snap->loadout[1].equipment[GEAR_SLOT_SHIELD] = ITEM_NONE;
     g_tape = NULL;
 }
 
@@ -176,6 +185,15 @@ int main(int argc, char** argv) {
         if (q.attack_history == RISKFIGHT_ATTACK_UNKNOWN || q.attack_clock_low != q.attack_clock_high) {
             printf("UNAVAILABLE %d %s\n", q.id, q.attack_history == RISKFIGHT_ATTACK_UNKNOWN
                 ? "local_attack_history_unknown" : "local_attack_history_interval");
+            fflush(stdout);
+            if (g_log) fflush(g_log);
+            continue;
+        }
+        LaGearStatus gear_status = la_gear_status(q.belief.gear);
+        if (gear_status != LA_GEAR_SUPPORTED) {
+            printf("UNAVAILABLE %d %s", q.id, LA_GEAR_STATUS_NAME[gear_status]);
+            if (gear_status != LA_GEAR_UNKNOWN) printf(" %d", gear_status == LA_GEAR_SHIELD_UNSUPPORTED ? q.belief.gear.shield : q.belief.gear.weapon);
+            printf("\n");
             fflush(stdout);
             if (g_log) fflush(g_log);
             continue;

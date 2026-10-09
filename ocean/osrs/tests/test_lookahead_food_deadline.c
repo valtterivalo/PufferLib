@@ -19,7 +19,8 @@ int main(void) {
     assert(him->ate_food_this_tick && him->food_timer == 2);
     Hist initial = hist_start(), history;
     LaBelief belief = {.hp_low = 42, .hp_high = 42, .energy_low = 100, .energy_high = 100,
-        .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL, .food_ready = 103, .seen_since_eat = 0};
+        .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL, .food_ready = 103, .seen_since_eat = 0,
+        .gear = {GS_GEAR_OBSERVED, raw_of_item(him->equipped[GEAR_SLOT_WEAPON]), raw_of_item(him->equipped[GEAR_SLOT_SHIELD])}};
     int accepted[2] = {0};
     for (int arm = 0; arm < 2; arm++) {
         if (arm == 0) world = base;
