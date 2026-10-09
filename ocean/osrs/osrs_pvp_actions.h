@@ -398,7 +398,7 @@ static void pvp_refresh_visible_gear(Player* p) {
 }
 
 static int pvp_consume_food_cell(Player* player, int cell) {
-    OsrsConsumableKind kind = osrs_inventory_cell_metadata(&player->inventory_cells[cell])->consumable_kind;
+    OsrsConsumableKind kind = (OsrsConsumableKind)osrs_inventory_cell_metadata(&player->inventory_cells[cell])->consumable_kind;
     FoodType type;
     switch (kind) {
         case OSRS_CONSUMABLE_SHARK_FOOD: type = FOOD_SHARK; break;
