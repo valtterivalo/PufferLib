@@ -13,8 +13,11 @@ typedef enum { GS_HEAD_NONE, GS_HEAD_MELEE, GS_HEAD_RANGED, GS_HEAD_MAGIC, GS_HE
 typedef enum { GS_ANIMATION_UNKNOWN, GS_ANIMATION_OBSERVED } GsAnimationSource;
 typedef struct { GsAnimationSource source; int id; } GsCurrentAnimation;
 
-typedef enum { GS_GEAR_UNKNOWN, GS_GEAR_OBSERVED } GsGearSource;
-typedef struct { GsGearSource source; int weapon, shield; } GsObservedGear;
+typedef enum { GS_GEAR_UNKNOWN, GS_GEAR_WEAPON_SHIELD_OBSERVED, GS_GEAR_COMPOSITION_OBSERVED } GsGearSource;
+enum { GS_ARMOR_SLOTS = 7 };
+static const int GS_ARMOR_KIT_SLOT[GS_ARMOR_SLOTS] = {0, 1, 2, 4, 7, 9, 10};
+static const char* const GS_ARMOR_SLOT_NAME[GS_ARMOR_SLOTS] = {"head", "cape", "neck", "body", "legs", "gloves", "boots"};
+typedef struct { GsGearSource source; int weapon, shield, armor[GS_ARMOR_SLOTS]; } GsObservedGear;
 
 typedef struct {
     int hitpoints, attack, strength, defence, ranged, magic, prayer;

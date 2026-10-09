@@ -124,10 +124,12 @@ static long gear_counts[CLOCK_COHORT_COUNT][LA_GEAR_STATUS_COUNT];
 
 static int gear_eligible(const Tape* tape, int t, ClockCohort cohort) {
     GsObservedGear gear = tape->observer_series[t - tape->lo].inf.c.opponent_gear;
-    LaGearStatus status = la_gear_status(gear);
+    LaGearIssue issue = la_gear_status(gear);
+    LaGearStatus status = issue.status;
     gear_counts[cohort][status]++;
     if (status != LA_GEAR_SUPPORTED)
         printf("gear unavailable %s %s tick %d reason %s weapon %d shield %d\n", CLOCK_COHORT_NAME[cohort], tape->name, t, LA_GEAR_STATUS_NAME[status], gear.weapon, gear.shield);
+    if (status == LA_GEAR_ARMOR_UNSUPPORTED) printf("  slot %s raw %d\n", GS_ARMOR_SLOT_NAME[issue.slot], issue.raw);
     return status == LA_GEAR_SUPPORTED;
 }
 
@@ -1830,7 +1832,7 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
     fprintf(out, "K %ld %ld\nF %d %d %d %d\n", stakes.him, stakes.us, f->spec_ok, f->eat_ok, f->veng_ok, f->energy);
     int overhead = us->prayer == PRAYER_SMITE ? 1 : us->prayer == PRAYER_PROTECT_MELEE ? 2 : us->prayer == PRAYER_PROTECT_RANGED ? 3 : us->prayer == PRAYER_PROTECT_MAGIC ? 4 : us->prayer == PRAYER_REDEMPTION ? 5 : 0;
     const RiskfightVisibleOpponent* seen = &sim->state.visible[0];
-    int his_raw = b->gear.source == GS_GEAR_OBSERVED ? b->gear.weapon : raw_of_item(him->equipped[GEAR_SLOT_WEAPON]);
+    int his_raw = b->gear.source != GS_GEAR_UNKNOWN ? b->gear.weapon : raw_of_item(him->equipped[GEAR_SLOT_WEAPON]);
     fprintf(out, "O %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d OBSERVED %d %d\n", us->current_hitpoints, us->current_prayer, us->current_attack, us->current_strength,
         us->current_defence, us->current_magic, us->special_energy, us->item_effect_state.special_regen_ticks, us->spec_armed, us->veng_active, us->veng_cooldown,
         sim->state.inventory_use[0].vengeance_sacks, us->item_effect_state.recoil_damage_used, us->attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer,
@@ -1854,8 +1856,12 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
         }
         fprintf(out, " %d", raw);
     }
-    if (b->gear.source == GS_GEAR_OBSERVED) fprintf(out, "\nSHIELD OBSERVED %d", b->gear.shield);
+    if (b->gear.source != GS_GEAR_UNKNOWN) fprintf(out, "\nSHIELD OBSERVED %d", b->gear.shield);
     else fprintf(out, "\nSHIELD UNKNOWN");
+    if (b->gear.source == GS_GEAR_COMPOSITION_OBSERVED) {
+        fprintf(out, "\nARMOR OBSERVED");
+        for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) fprintf(out, " %d", b->gear.armor[slot]);
+    } else fprintf(out, "\nARMOR UNKNOWN");
     {
         int since = warning_since(&sim->hist.warning);
         if (since == WARNING_NONE) fprintf(out, "\nQ none %d", sim->hist.warning.unseen_count); else fprintf(out, "\nQ %d %d", since, sim->hist.warning.unseen_count);
@@ -2582,8 +2588,8 @@ int main(int argc, char** argv) {
         long* gear = gear_counts[c];
         long source = 0;
         for (int status = 0; status < LA_GEAR_STATUS_COUNT; status++) source += gear[status];
-        if (source) printf("gear cohort %s source %ld supported %ld unknown %ld unsupported_weapon %ld unsupported_shield %ld unsupported_ammo_prior %ld\n", CLOCK_COHORT_NAME[c], source,
-            gear[LA_GEAR_SUPPORTED], gear[LA_GEAR_UNKNOWN], gear[LA_GEAR_WEAPON_UNSUPPORTED], gear[LA_GEAR_SHIELD_UNSUPPORTED], gear[LA_GEAR_AMMO_UNSUPPORTED]);
+        if (source) printf("gear cohort %s source %ld supported %ld unknown %ld unsupported_weapon %ld unsupported_shield %ld unsupported_ammo_prior %ld armor_unknown %ld unsupported_armor %ld\n", CLOCK_COHORT_NAME[c], source,
+            gear[LA_GEAR_SUPPORTED], gear[LA_GEAR_UNKNOWN], gear[LA_GEAR_WEAPON_UNSUPPORTED], gear[LA_GEAR_SHIELD_UNSUPPORTED], gear[LA_GEAR_AMMO_UNSUPPORTED], gear[LA_GEAR_ARMOR_UNKNOWN], gear[LA_GEAR_ARMOR_UNSUPPORTED]);
     }
     for (int c = 0; c < CLOCK_COHORT_COUNT; c++) {
         long* n = clock_counts[c];

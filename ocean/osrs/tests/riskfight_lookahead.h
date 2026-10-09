@@ -21,8 +21,9 @@ typedef struct {
     GsObservedGear gear;
 } LaBelief;
 
-typedef enum { LA_GEAR_SUPPORTED, LA_GEAR_UNKNOWN, LA_GEAR_WEAPON_UNSUPPORTED, LA_GEAR_SHIELD_UNSUPPORTED, LA_GEAR_AMMO_UNSUPPORTED, LA_GEAR_STATUS_COUNT } LaGearStatus;
-static const char* const LA_GEAR_STATUS_NAME[] = {"supported", "opponent_gear_unknown", "opponent_weapon_unsupported", "opponent_shield_unsupported", "opponent_ammo_prior_unsupported"};
+typedef enum { LA_GEAR_SUPPORTED, LA_GEAR_UNKNOWN, LA_GEAR_WEAPON_UNSUPPORTED, LA_GEAR_SHIELD_UNSUPPORTED, LA_GEAR_AMMO_UNSUPPORTED, LA_GEAR_ARMOR_UNKNOWN, LA_GEAR_ARMOR_UNSUPPORTED, LA_GEAR_STATUS_COUNT } LaGearStatus;
+static const char* const LA_GEAR_STATUS_NAME[] = {"supported", "opponent_gear_unknown", "opponent_weapon_unsupported", "opponent_shield_unsupported", "opponent_ammo_prior_unsupported", "opponent_armor_unknown", "opponent_armor_unsupported"};
+typedef struct { LaGearStatus status; int slot, raw; } LaGearIssue;
 
 static int la_item_supported(int raw) {
     if (raw == -1) return 1;
@@ -30,12 +31,16 @@ static int la_item_supported(int raw) {
     return 0;
 }
 
-static LaGearStatus la_gear_status(GsObservedGear gear) {
-    if (gear.source == GS_GEAR_UNKNOWN) return LA_GEAR_UNKNOWN;
-    if (!la_item_supported(gear.weapon)) return LA_GEAR_WEAPON_UNSUPPORTED;
-    if (!la_item_supported(gear.shield)) return LA_GEAR_SHIELD_UNSUPPORTED;
-    if (gear.weapon != -1 && get_item_attack_style(raw_id_to_item(gear.weapon)) == ATTACK_STYLE_RANGED && raw_id_to_item(gear.weapon) != ITEM_MAGIC_SHORTBOW_I) return LA_GEAR_AMMO_UNSUPPORTED;
-    return LA_GEAR_SUPPORTED;
+static LaGearIssue la_gear_status(GsObservedGear gear) {
+    if (gear.source == GS_GEAR_UNKNOWN) return (LaGearIssue){.status = LA_GEAR_UNKNOWN};
+    if (!la_item_supported(gear.weapon)) return (LaGearIssue){LA_GEAR_WEAPON_UNSUPPORTED, 0, gear.weapon};
+    if (!la_item_supported(gear.shield)) return (LaGearIssue){LA_GEAR_SHIELD_UNSUPPORTED, 0, gear.shield};
+    if (gear.weapon != -1 && get_item_attack_style(raw_id_to_item(gear.weapon)) == ATTACK_STYLE_RANGED && raw_id_to_item(gear.weapon) != ITEM_MAGIC_SHORTBOW_I)
+        return (LaGearIssue){LA_GEAR_AMMO_UNSUPPORTED, 0, gear.weapon};
+    if (gear.source == GS_GEAR_WEAPON_SHIELD_OBSERVED) return (LaGearIssue){.status = LA_GEAR_ARMOR_UNKNOWN};
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
+        if (!la_item_supported(gear.armor[slot])) return (LaGearIssue){LA_GEAR_ARMOR_UNSUPPORTED, slot, gear.armor[slot]};
+    return (LaGearIssue){.status = LA_GEAR_SUPPORTED};
 }
 
 static int g_la_worlds = 64, g_la_horizon = 15, g_la_stage = 16, g_la_cache = 1;
@@ -76,11 +81,13 @@ static void la_resupply(Player* him, uint32_t* r) {
 static void la_world(const RiskfightState* base, const Hist* base_hist, const LaBelief* b, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
     *w = *base;
     Player* him = &w->env.players[1];
-    assert(la_gear_status(b->gear) == LA_GEAR_SUPPORTED);
+    assert(la_gear_status(b->gear).status == LA_GEAR_SUPPORTED);
     him->equipped[GEAR_SLOT_WEAPON] = b->gear.weapon == -1 ? ITEM_NONE : raw_id_to_item(b->gear.weapon);
     him->equipped[GEAR_SLOT_SHIELD] = b->gear.shield == -1 ? ITEM_NONE : raw_id_to_item(b->gear.shield);
     assert(!item_is_two_handed(him->equipped[GEAR_SLOT_WEAPON]) || him->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE);
     him->equipped[GEAR_SLOT_AMMO] = him->equipped[GEAR_SLOT_WEAPON] == ITEM_MAGIC_SHORTBOW_I ? ITEM_AMETHYST_ARROW : ITEM_NONE;
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
+        him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = b->gear.armor[slot] == -1 ? ITEM_NONE : raw_id_to_item(b->gear.armor[slot]);
     osrs_refresh_player_equipment(him);
     int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift), high = imax(low, b->hp_high + (int)g_la_belief_hp_shift);
     him->current_hitpoints = la_between(r, low, imin(high, 121));
@@ -294,8 +301,9 @@ static uint64_t la_fingerprint(const RiskfightState* w) {
     uint64_t h = 1469598103934665603ull;
     const Player* him = &w->env.players[1];
     int parts[] = {him->current_hitpoints, him->special_energy, him->spec_regen_active, him->item_effect_state.special_regen_ticks, him->veng_active, him->veng_cooldown, him->attack_timer, him->attack_timer_uncapped, him->has_attack_timer,
-        him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1], him->equipped[GEAR_SLOT_WEAPON], him->equipped[GEAR_SLOT_SHIELD], him->equipped[GEAR_SLOT_AMMO]};
+        him->food_timer, him->potion_timer, him->karambwan_timer, him->current_attack, him->current_strength, w->env.pid_holder, w->visible[0].health_bar, (int)w->script_seed[1]};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) { h ^= him->equipped[slot]; h *= 1099511628211ull; }
     int counts[256][5] = {{0}};
     for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
         const OsrsItemContentMetadata* m = osrs_inventory_cell_metadata(&him->inventory_cells[i]);
@@ -402,6 +410,7 @@ static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy
         b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, la_food_timer(b->food_ready, tick),
         b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul, b->gear.source, b->gear.weapon, b->gear.shield};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) { h ^= (uint64_t)(uint32_t)b->gear.armor[slot]; h *= 1099511628211ull; }
     return h;
 }
 
@@ -431,9 +440,11 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     if (!f.spec_ok && !(f.eat_ok && us->current_hitpoints <= 75) && !f.veng_ok) return 0;
 
     LaBelief belief = la_belief_of(sim, tick);
-    LaGearStatus gear_status = la_gear_status(belief.gear);
+    LaGearIssue issue = la_gear_status(belief.gear);
+    LaGearStatus gear_status = issue.status;
     if (gear_status != LA_GEAR_SUPPORTED) {
         fprintf(stderr, "lookahead unavailable tick %d reason %s weapon %d shield %d\n", tick, LA_GEAR_STATUS_NAME[gear_status], belief.gear.weapon, belief.gear.shield);
+        if (gear_status == LA_GEAR_ARMOR_UNSUPPORTED) fprintf(stderr, "  slot %s raw %d\n", GS_ARMOR_SLOT_NAME[issue.slot], issue.raw);
         return 0;
     }
     uint64_t key = la_key(&belief, us, tick, f.energy);

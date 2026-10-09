@@ -83,8 +83,23 @@ static void read_request(FILE* in, Request* q) {
             if (!strcmp(source, "OBSERVED")) {
                 assert(sscanf(p, "%d%n", &q->belief.gear.shield, &consumed) == 1);
                 assert(q->belief.gear.shield >= -1);
-                q->belief.gear.source = GS_GEAR_OBSERVED;
+                q->belief.gear.source = GS_GEAR_WEAPON_SHIELD_OBSERVED;
                 p += consumed;
+            } else assert(!strcmp(source, "UNKNOWN"));
+            assert(strspn(p, " \r\n") == strlen(p));
+        } else if (!strcmp(tag, "ARMOR")) {
+            char source[16];
+            int consumed;
+            assert(sscanf(p, "%15s%n", source, &consumed) == 1);
+            p += consumed;
+            if (!strcmp(source, "OBSERVED")) {
+                assert(q->belief.gear.source == GS_GEAR_WEAPON_SHIELD_OBSERVED);
+                for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) {
+                    assert(sscanf(p, "%d%n", &q->belief.gear.armor[slot], &consumed) == 1);
+                    assert(q->belief.gear.armor[slot] >= -1);
+                    p += consumed;
+                }
+                q->belief.gear.source = GS_GEAR_COMPOSITION_OBSERVED;
             } else assert(!strcmp(source, "UNKNOWN"));
             assert(strspn(p, " \r\n") == strlen(p));
         } else if (!strcmp(tag, "W")) for (int i = 0; i < TAPE_WORN; i++) q->worn[i] = (int)strtol(p, &p, 10);
@@ -189,10 +204,12 @@ int main(int argc, char** argv) {
             if (g_log) fflush(g_log);
             continue;
         }
-        LaGearStatus gear_status = la_gear_status(q.belief.gear);
+        LaGearIssue issue = la_gear_status(q.belief.gear);
+        LaGearStatus gear_status = issue.status;
         if (gear_status != LA_GEAR_SUPPORTED) {
             printf("UNAVAILABLE %d %s", q.id, LA_GEAR_STATUS_NAME[gear_status]);
-            if (gear_status != LA_GEAR_UNKNOWN) printf(" %d", gear_status == LA_GEAR_SHIELD_UNSUPPORTED ? q.belief.gear.shield : q.belief.gear.weapon);
+            if (gear_status == LA_GEAR_ARMOR_UNSUPPORTED) printf(" %s %d", GS_ARMOR_SLOT_NAME[issue.slot], issue.raw);
+            else if (gear_status != LA_GEAR_UNKNOWN && gear_status != LA_GEAR_ARMOR_UNKNOWN) printf(" %d", issue.raw);
             printf("\n");
             fflush(stdout);
             if (g_log) fflush(g_log);

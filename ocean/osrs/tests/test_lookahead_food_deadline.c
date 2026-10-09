@@ -20,7 +20,8 @@ int main(void) {
     Hist initial = hist_start(), history;
     LaBelief belief = {.hp_low = 42, .hp_high = 42, .energy_low = 100, .energy_high = 100,
         .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL, .food_ready = 103, .seen_since_eat = 0,
-        .gear = {GS_GEAR_OBSERVED, raw_of_item(him->equipped[GEAR_SLOT_WEAPON]), raw_of_item(him->equipped[GEAR_SLOT_SHIELD])}};
+        .gear = {GS_GEAR_COMPOSITION_OBSERVED, raw_of_item(him->equipped[GEAR_SLOT_WEAPON]), raw_of_item(him->equipped[GEAR_SLOT_SHIELD])}};
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) belief.gear.armor[slot] = raw_of_item(him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]]);
     int accepted[2] = {0};
     for (int arm = 0; arm < 2; arm++) {
         if (arm == 0) world = base;

@@ -49,7 +49,8 @@ int main(void) {
     sim_init(&sim);
     sim.state.env.players[1].base_hitpoints = 99;
     sim.obs.inf.opponent.timer = (GsTimerState){.seen = 1, .earliest = 104, .latest = 107};
-    sim.obs.inf.c.opponent_gear = (GsObservedGear){GS_GEAR_OBSERVED, raw_of_item(sim.state.env.players[1].equipped[GEAR_SLOT_WEAPON]), raw_of_item(sim.state.env.players[1].equipped[GEAR_SLOT_SHIELD])};
+    sim.obs.inf.c.opponent_gear = (GsObservedGear){GS_GEAR_COMPOSITION_OBSERVED, raw_of_item(sim.state.env.players[1].equipped[GEAR_SLOT_WEAPON]), raw_of_item(sim.state.env.players[1].equipped[GEAR_SLOT_SHIELD])};
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) sim.obs.inf.c.opponent_gear.armor[slot] = raw_of_item(sim.state.env.players[1].equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]]);
     LaBelief known = la_belief_of(&sim, 110);
     assert(known.timer_seen && known.timer_first == 104 && known.timer_last == 107);
     known.hp_low = known.hp_high = 50;

@@ -102,7 +102,9 @@ static void observer_client(const RiskfightState* s, const Observer* ob, int tic
     c->ratio = tick - ob->bar_hit_tick <= BAR_VISIBLE_TICKS ? ob->bar_ratio : -1;
     c->scale = c->ratio >= 0 ? SCALE_BAR : -1;
     c->oweapon = raw_of_item(him->equipped[GEAR_SLOT_WEAPON]);
-    c->opponent_gear = (GsObservedGear){GS_GEAR_OBSERVED, c->oweapon, raw_of_item(him->equipped[GEAR_SLOT_SHIELD])};
+    c->opponent_gear = (GsObservedGear){.source = GS_GEAR_COMPOSITION_OBSERVED, .weapon = c->oweapon, .shield = raw_of_item(him->equipped[GEAR_SLOT_SHIELD])};
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
+        c->opponent_gear.armor[slot] = raw_of_item(him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]]);
     c->overhead = him->prayer == PRAYER_PROTECT_MELEE ? GS_HEAD_MELEE : him->prayer == PRAYER_PROTECT_RANGED ? GS_HEAD_RANGED : him->prayer == PRAYER_PROTECT_MAGIC ? GS_HEAD_MAGIC : GS_HEAD_NONE;
     static const int KIT[12] = {GEAR_SLOT_HEAD, GEAR_SLOT_CAPE, GEAR_SLOT_NECK, GEAR_SLOT_WEAPON, GEAR_SLOT_BODY, GEAR_SLOT_SHIELD, -1, GEAR_SLOT_LEGS, -1, GEAR_SLOT_HANDS, GEAR_SLOT_FEET, -1};
     c->equipment_count = 12;
