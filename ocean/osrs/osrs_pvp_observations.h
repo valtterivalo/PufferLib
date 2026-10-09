@@ -4,15 +4,14 @@
 #include <string.h>
 
 #include "osrs_policy.h"
+#include "osrs_nh_actions.h"
 #include "osrs_player_consumables.h"
+#include "osrs_player_inventory_use.h"
 #include "osrs_pvp_combat.h"
 #include "osrs_pvp_gear.h"
 #include "osrs_pvp_movement.h"
+#include "osrs_nh_observation_layout.h"
 
-#define NH_PVP_SPECIFIC_OBS_SIZE 22
-#define NH_PVP_NUM_OBS (OSRS_SHARED_OBS_SIZE + NH_PVP_SPECIFIC_OBS_SIZE)
-#define NH_PVP_TARGET_SLOTS 1
-#define NH_PVP_ACTION_MASK_SIZE OSRS_BASE_ACTION_MASK_SIZE(NH_PVP_TARGET_SLOTS)
 
 static inline int can_use_brew_boost(Player* p) {
     int def_boost = osrs_brew_defence_boost_amount(p->base_defence);
@@ -46,69 +45,35 @@ static inline int can_boost_ranged(Player* p) {
     return max_ranged > p->current_ranged + 1;
 }
 
-static inline int can_use_potion(Player* p, int potion_type) {
-    if (remaining_ticks(p->potion_timer) > 0) return 0;
-    switch (potion_type) {
-        case POTION_BREW: return p->brew_doses > 0;
-        case POTION_RESTORE: return p->restore_doses > 0;
-        case POTION_COMBAT: return p->combat_potion_doses > 0;
-        case POTION_RANGED: return p->ranged_potion_doses > 0;
-        default: return 0;
-    }
-}
-
 static inline int pvp_drink_kind_available(
-    Player* p,
-    OsrsConsumableKind kind
+    Player* p, OsrsConsumableKind kind
 ) {
+    if (p->potion_timer > 0) return 0;
     switch (kind) {
         case OSRS_CONSUMABLE_BREW:
-            return can_use_potion(p, POTION_BREW) && can_use_brew_boost(p);
+            return p->brew_doses > 0 && can_use_brew_boost(p);
         case OSRS_CONSUMABLE_SUPER_RESTORE:
-            return can_use_potion(p, POTION_RESTORE) && can_restore_stats(p);
+            return p->restore_doses > 0 && can_restore_stats(p);
         case OSRS_CONSUMABLE_SUPER_COMBAT:
-            return can_use_potion(p, POTION_COMBAT) && can_boost_combat_skills(p);
+            return p->combat_potion_doses > 0 && can_boost_combat_skills(p);
         case OSRS_CONSUMABLE_RANGING:
-            return can_use_potion(p, POTION_RANGED) && can_boost_ranged(p);
+            return p->ranged_potion_doses > 0 && can_boost_ranged(p);
         case OSRS_CONSUMABLE_SANFEW:
         case OSRS_CONSUMABLE_ANTIVENOM_PLUS:
-            return p->potion_timer == 0;
+            return 1;
         default:
             return 0;
     }
 }
 
-static inline void pvp_shared_observation_input(
-    Player* p,
-    OsrsSharedObservationInput* out
-) {
-    AttackStyle style = get_slot_weapon_attack_style(p);
-    GearBonuses* gear = get_slot_gear_bonuses(p);
-    int spell_base_damage = style == ATTACK_STYLE_MAGIC
-        ? get_ice_base_hit(p->current_magic) : 0;
-    *out = (OsrsSharedObservationInput){
-        .player = p,
-        .interaction = &p->interaction,
-        .arena_min_x = FIGHT_AREA_BASE_X,
-        .arena_max_x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH,
-        .arena_min_y = FIGHT_AREA_BASE_Y,
-        .arena_max_y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT,
-        .attack_style = style,
-        .attack_range = get_attack_range(p, style),
-        .max_hit = calculate_max_hit(p, style, 1.0f, spell_base_damage),
-        .attack_speed = gear->attack_speed +
-            (style == ATTACK_STYLE_RANGED ? osrs_stance_speed_mod(p->fight_style) : 0),
-        .defence_stab = gear->stab_defence,
-        .defence_slash = gear->slash_defence,
-        .defence_crush = gear->crush_defence,
-        .defence_magic = gear->magic_defence,
-        .defence_ranged = gear->ranged_defence,
-        .effective_level = calculate_effective_attack(p, style),
-        .attack_bonus = get_attack_bonus(p, style),
-        .strength_bonus = get_strength_bonus(p, style),
-        .spell_base_damage = spell_base_damage,
-        .special_attack_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]),
+static inline void nh_pvp_write_item_bonuses(float* out, const int bonuses[NH_PVP_ITEM_BONUS_FEATURES]) {
+    const float scales[NH_PVP_ITEM_BONUS_FEATURES] = {
+        STAT_NORM_ATTACK, STAT_NORM_ATTACK, STAT_NORM_ATTACK, STAT_NORM_ATTACK, STAT_NORM_ATTACK,
+        STAT_NORM_DEFENCE, STAT_NORM_DEFENCE, STAT_NORM_DEFENCE, STAT_NORM_DEFENCE, STAT_NORM_DEFENCE,
+        STAT_NORM_STRENGTH, STAT_NORM_STRENGTH, STAT_NORM_MAGIC_DMG, STAT_NORM_PRAYER,
     };
+    for (int feature = 0; feature < NH_PVP_ITEM_BONUS_FEATURES; feature++)
+        out[feature] = bonuses[feature] / scales[feature];
 }
 
 static inline void pvp_write_observations(
@@ -122,10 +87,86 @@ static inline void pvp_write_observations(
     p->last_obs_target_x = target->x;
     p->last_obs_target_y = target->y;
 
-    OsrsSharedObservationInput shared_input;
-    pvp_shared_observation_input(p, &shared_input);
-    int i = osrs_write_shared_observations(obs, &shared_input);
-    if (i != OSRS_SHARED_OBS_SIZE) abort();
+    AttackStyle style = get_slot_weapon_attack_style(p);
+    if (style == ATTACK_STYLE_MAGIC) style = ATTACK_STYLE_MELEE;
+    GearBonuses* gear = get_slot_gear_bonuses(p);
+    OsrsSharedObservationInput shared_input = {
+        .player = p,
+        .interaction = &p->interaction,
+        .arena_min_x = FIGHT_AREA_BASE_X,
+        .arena_max_x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH,
+        .arena_min_y = FIGHT_AREA_BASE_Y,
+        .arena_max_y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT,
+        .attack_style = style,
+        .attack_range = style == ATTACK_STYLE_NONE ? 0 : get_attack_range(p, style),
+        .max_hit = style == ATTACK_STYLE_NONE ? 0 : calculate_max_hit(p, style, 1.0f, 0),
+        .attack_speed = style == ATTACK_STYLE_NONE ? 0 : gear->attack_speed +
+            (style == ATTACK_STYLE_RANGED ? osrs_stance_speed_mod(p->fight_style) : 0),
+        .defence_stab = gear->stab_defence,
+        .defence_slash = gear->slash_defence,
+        .defence_crush = gear->crush_defence,
+        .defence_magic = gear->magic_defence,
+        .defence_ranged = gear->ranged_defence,
+        .effective_level = style == ATTACK_STYLE_NONE ? 0 : calculate_effective_attack(p, style),
+        .attack_bonus = style == ATTACK_STYLE_NONE ? 0 : get_attack_bonus(p, style),
+        .strength_bonus = style == ATTACK_STYLE_NONE ? 0 : get_strength_bonus(p, style),
+        .spell_base_damage = 0,
+        .special_attack_cost = osrs_spec_cost(p->equipped[GEAR_SLOT_WEAPON]),
+    };
+    int shared_size = osrs_write_self_observations(obs, &shared_input);
+    assert(shared_size == NH_PVP_SELF_CONTROL_START);
+    int i = NH_PVP_SELF_CONTROL_START;
+    const int spell_eligible[] = {can_cast_ice_spell(p), can_cast_blood_spell(p)};
+    const int spell_base[] = {get_ice_base_hit(p->current_magic), get_blood_base_hit(p->current_magic)};
+    for (int spell = 0; spell < 2; spell++) {
+        obs[i++] = spell_eligible[spell];
+        obs[i++] = spell_eligible[spell] ? osrs_policy_ratio(COMBAT_SPELL_ATTACK_RANGE, 15) : 0;
+        obs[i++] = spell_eligible[spell] ? osrs_policy_ratio(COMBAT_SPELL_CAST_SPEED, 8) : 0;
+        obs[i++] = spell_eligible[spell] ? osrs_policy_ratio(
+            calculate_base_max_hit(p, ATTACK_STYLE_MAGIC, 1.0f, spell_base[spell]), 80) : 0;
+    }
+    int has_destination = env->pvp_runtime.walk_dest_x[agent_idx] >= 0;
+    obs[i++] = has_destination;
+    obs[i++] = has_destination ? osrs_policy_ratio(env->pvp_runtime.walk_dest_x[agent_idx] - p->x, FIGHT_AREA_WIDTH) : 0;
+    obs[i++] = has_destination ? osrs_policy_ratio(env->pvp_runtime.walk_dest_y[agent_idx] - p->y, FIGHT_AREA_HEIGHT) : 0;
+    const OsrsGraniteMaulState* maul = &env->pvp_runtime.maul[agent_idx];
+    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_IDLE;
+    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_SELECTED;
+    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_DESELECTED;
+    obs[i++] = osrs_policy_ratio(maul->prepared_hits, 2);
+    obs[i++] = p->is_lunar_spellbook;
+    obs[i++] = p->veng_active;
+    obs[i++] = osrs_policy_ratio(p->veng_cooldown, 50);
+    assert(i == NH_PVP_INVENTORY_START);
+    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
+        const OsrsItemContentMetadata* metadata = osrs_inventory_cell_metadata(&p->inventory_cells[cell]);
+        float* record = obs + i;
+        record[0] = osrs_inventory_cell_obs_code_encode(p->inventory_cells[cell].content_code);
+        osrs_write_item_content_affordance_features_compact(record + 1, metadata, 0,
+            p->base_hitpoints, p->base_prayer, p->base_ranged);
+        int bonuses[NH_PVP_ITEM_BONUS_FEATURES] = {0};
+        if (metadata->item) {
+            const Item* item = metadata->item;
+            const int values[NH_PVP_ITEM_BONUS_FEATURES] = {
+                item->attack_stab, item->attack_slash, item->attack_crush, item->attack_magic, item->attack_ranged,
+                item->defence_stab, item->defence_slash, item->defence_crush, item->defence_magic, item->defence_ranged,
+                item->melee_strength, item->ranged_strength, item->magic_damage, item->prayer,
+            };
+            memcpy(bonuses, values, sizeof(bonuses));
+        }
+        nh_pvp_write_item_bonuses(record + 1 + OSRS_INVENTORY_CELL_OBS_FEATURES_COMPACT, bonuses);
+        record[NH_PVP_INVENTORY_FEATURES - 1] = osrs_policy_ratio(metadata->gear_slot + 1, NUM_GEAR_SLOTS);
+        i += NH_PVP_INVENTORY_FEATURES;
+    }
+    assert(i == NH_PVP_EQUIPPED_START);
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        uint8_t item = p->equipped[slot];
+        obs[i++] = osrs_inventory_cell_obs_code_encode(item == ITEM_NONE ? 0 : osrs_inventory_content_code_from_item(item));
+    }
+    assert(i == NH_PVP_EFFECT_START);
+    osrs_write_equipment_effect_aggregate(obs + i, &p->equipment_effect_profile);
+    i += OSRS_EQUIPMENT_EFFECT_AGGREGATE_FEATURES;
+    assert(i == NH_PVP_TARGET_START);
 
     obs[i++] = osrs_policy_ratio(visible->health_bar, OSRS_PLAYER_HEALTH_BAR_SCALE);
     obs[i++] = osrs_policy_ratio(target->x - p->x, FIGHT_AREA_WIDTH);
@@ -138,7 +179,7 @@ static inline void pvp_write_observations(
     obs[i++] = target->last_attack_style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
     obs[i++] = target->last_attack_style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
     obs[i++] = target->last_attack_style == ATTACK_STYLE_MAGIC ? 1.0f : 0.0f;
-    obs[i++] = target->is_moving ? 1.0f : 0.0f;
+    obs[i++] = visible->move_dx != 0 || visible->move_dy != 0;
     AttackStyle target_style = get_slot_weapon_attack_style(target);
     obs[i++] = target_style == ATTACK_STYLE_MELEE ? 1.0f : 0.0f;
     obs[i++] = target_style == ATTACK_STYLE_RANGED ? 1.0f : 0.0f;
@@ -153,208 +194,146 @@ static inline void pvp_write_observations(
         obs[i++] = event_ticks[event] >= 0
             ? osrs_policy_ratio(env->tick - event_ticks[event], event_scales[event]) : 0;
     }
+    assert(i == NH_PVP_TARGET_EQUIPPED_START);
+    uint8_t visible_equipped[NUM_GEAR_SLOTS];
+    memset(visible_equipped, ITEM_NONE, sizeof(visible_equipped));
+    for (int slot = 0; slot < NH_PVP_VISIBLE_EQUIPPED_SLOTS; slot++) {
+        int gear_slot = NH_PVP_VISIBLE_GEAR_SLOTS[slot];
+        uint8_t item = target->equipped[gear_slot];
+        visible_equipped[gear_slot] = item;
+        obs[i++] = osrs_inventory_cell_obs_code_encode(item == ITEM_NONE ? 0 : osrs_inventory_content_code_from_item(item));
+    }
+    assert(i == NH_PVP_TARGET_BONUS_START);
+    EquipmentBonuses target_bonuses;
+    osrs_sum_equipment_bonuses(visible_equipped, &target_bonuses);
+    const int bonuses[NH_PVP_ITEM_BONUS_FEATURES] = {
+        target_bonuses.attack_stab, target_bonuses.attack_slash, target_bonuses.attack_crush,
+        target_bonuses.attack_magic, target_bonuses.attack_ranged,
+        target_bonuses.defence_stab, target_bonuses.defence_slash, target_bonuses.defence_crush,
+        target_bonuses.defence_magic, target_bonuses.defence_ranged,
+        target_bonuses.melee_strength, target_bonuses.ranged_strength, target_bonuses.magic_damage, target_bonuses.prayer,
+    };
+    nh_pvp_write_item_bonuses(obs + i, bonuses);
+    i += NH_PVP_ITEM_BONUS_FEATURES;
+    assert(i == NH_PVP_TARGET_FREEZE_START);
+    obs[i++] = visible->last_freeze_tick >= 0;
+    obs[i++] = visible->last_freeze_tick >= 0 ? osrs_policy_ratio(env->tick - visible->last_freeze_tick, 32) : 0;
+    assert(i == NH_PVP_PROJECTILE_START);
+    int counts[OSRS_PVP_PROJECTILE_COUNT] = {0};
+    int launch_ticks[OSRS_PVP_PROJECTILE_COUNT] = {0};
+    for (int hit_index = 0; hit_index < target->num_pending_hits; hit_index++) {
+        const OsrsPvpProjectile* projectile = &env->pvp_runtime.projectiles[1 - agent_idx][hit_index];
+        if (projectile->cue == OSRS_PVP_PROJECTILE_NONE) continue;
+        counts[projectile->cue]++;
+        launch_ticks[projectile->cue] = max_int(launch_ticks[projectile->cue], projectile->launch_tick);
+    }
+    for (int cue = OSRS_PVP_PROJECTILE_RANGED; cue < OSRS_PVP_PROJECTILE_COUNT; cue++)
+        obs[i++] = osrs_policy_ratio(counts[cue], MAX_PENDING_HITS);
+    for (int cue = OSRS_PVP_PROJECTILE_RANGED; cue < OSRS_PVP_PROJECTILE_COUNT; cue++)
+        obs[i++] = counts[cue] ? osrs_policy_ratio(env->tick - launch_ticks[cue], 8) : 0;
     if (i != NH_PVP_NUM_OBS) abort();
 }
 
-static inline void pvp_write_action_mask(
-    float* mask,
-    OsrsEnv* env,
-    int agent_idx,
+static inline void pvp_write_action_mask_bytes(
+    unsigned char* mask, OsrsEnv* env, int actor,
     const EncounterArenaTopology* topology
 ) {
-    Player* p = &env->players[agent_idx];
-    Player* target = &env->players[1 - agent_idx];
-
-    int offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_PRIMARY);
-    mask[offset] = 1.0f;
+    Player* player = &env->players[actor];
+    Player* target = &env->players[1 - actor];
+    memset(mask, 0, NH_PVP_ACTION_MASK_SIZE);
+    int offset = nh_pvp_action_head_offset(NH_PVP_HEAD_PRIMARY);
+    mask[offset + NH_PVP_PRIMARY_RETAIN] = 1;
     for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++) {
-        int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[action];
-        int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[action];
-        mask[offset + action] = can_move(p) &&
-            pvp_topology_tile_walkable(topology, nx, ny) ? 1.0f : 0.0f;
+        int x = player->x + ENCOUNTER_MOVE_TARGET_DX[action];
+        int y = player->y + ENCOUNTER_MOVE_TARGET_DY[action];
+        mask[offset + action] = player->frozen_ticks <= 1 &&
+            pvp_topology_tile_walkable(topology, x, y);
     }
-    mask[offset + OSRS_PRIMARY_MOVE_ACTIONS] =
-        target->current_hitpoints > 0 ? 1.0f : 0.0f;
+    int magic = player->current_magic;
+    int has_prayer = player->current_prayer > 0;
+    for (int action = 1; action < NH_PVP_DRINK_DIM; action++) {
+        OsrsConsumableKind kind = NH_PVP_DRINK_KINDS[action];
+        if (nh_pvp_find_consumable_cell(player, kind) < 0 ||
+                !pvp_drink_kind_available(player, kind)) continue;
+        if (kind == OSRS_CONSUMABLE_SUPER_RESTORE || kind == OSRS_CONSUMABLE_SANFEW) {
+            int amount = kind == OSRS_CONSUMABLE_SANFEW
+                ? osrs_sanfew_restore_amount(player->base_magic)
+                : osrs_super_restore_amount(player->base_magic);
+            magic = max_int(magic, min_int(player->base_magic, player->current_magic + amount));
+            has_prayer = 1;
+        }
+    }
+    mask[offset + NH_PVP_PRIMARY_WEAPON] = target->current_hitpoints > 0;
+    mask[offset + NH_PVP_PRIMARY_BLOOD] = target->current_hitpoints > 0 &&
+        !player->is_lunar_spellbook && magic >= BLOOD_RUSH_LEVEL;
+    mask[offset + NH_PVP_PRIMARY_ICE] = target->current_hitpoints > 0 &&
+        !player->is_lunar_spellbook && magic >= ICE_RUSH_LEVEL;
 
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_OVERHEAD);
-    int has_prayer = p->current_prayer > 0;
-    mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1.0f;
-    mask[offset + ENCOUNTER_OVERHEAD_OFF] = p->prayer != PRAYER_NONE;
+    offset = nh_pvp_action_head_offset(NH_PVP_HEAD_OVERHEAD);
+    mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1;
+    mask[offset + ENCOUNTER_OVERHEAD_OFF] = player->prayer != PRAYER_NONE;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE] = has_prayer;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED] = has_prayer;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC] = has_prayer;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE] = has_prayer && !env->is_lms;
     mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] = has_prayer && !env->is_lms;
 
-    int inventory_has_empty_cell =
-        osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
-    int cell_equip_slot[OSRS_INVENTORY_SIZE];
-    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-        const OsrsItemContentMetadata* metadata =
-            osrs_inventory_cell_metadata(&p->inventory_cells[cell]);
-        cell_equip_slot[cell] =
-            osrs_can_equip_metadata(
-                p, metadata, inventory_has_empty_cell)
-                    ? metadata->gear_slot : -1;
-    }
+    int has_empty_cell = osrs_first_empty_inventory_cell(player->inventory_cells, -1) >= 0;
+    int can_arm = item_is_spec_weapon(player->equipped[GEAR_SLOT_WEAPON]) &&
+        player->special_energy >= osrs_spec_cost(player->equipped[GEAR_SLOT_WEAPON]);
     for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        offset = osrs_base_action_head_mask_offset(
-            NH_PVP_TARGET_SLOTS, OSRS_HEAD_EQUIP_SLOT(slot));
-        mask[offset] = 1.0f;
-        for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++)
-            mask[offset + cell + 1] =
-                cell_equip_slot[cell] == slot ? 1.0f : 0.0f;
+        offset = nh_pvp_action_head_offset(NH_PVP_HEAD_EQUIP_SLOT(slot));
+        mask[offset + NH_PVP_EQUIPMENT_NO_CHANGE] = 1;
+        mask[offset + NH_PVP_EQUIPMENT_UNEQUIP] = has_empty_cell && player->equipped[slot] != ITEM_NONE;
+        int count = NH_PVP_ACTION_DIMS[NH_PVP_HEAD_EQUIP_SLOT(slot)] - NH_PVP_EQUIPMENT_ITEM_BASE;
+        for (int index = 0; index < count; index++) {
+            uint8_t item = NH_PVP_EQUIPMENT_ITEMS[slot][index];
+            int cell = nh_pvp_find_item_cell(player, item);
+            if (cell < 0) continue;
+            int equippable = osrs_can_equip_metadata(player,
+                osrs_inventory_cell_metadata(&player->inventory_cells[cell]), has_empty_cell);
+            mask[offset + index + NH_PVP_EQUIPMENT_ITEM_BASE] = equippable;
+            if (slot == GEAR_SLOT_WEAPON && equippable && item_is_spec_weapon(item) &&
+                    player->special_energy >= osrs_spec_cost(item)) can_arm = 1;
+        }
     }
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_EAT);
-    mask[offset] = 1.0f;
-    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-        OsrsInventoryClickResolution resolution =
-            osrs_inventory_cell_click_classify(&p->inventory_cells[cell]);
-        mask[offset + cell + 1] = resolution.click_action == OSRS_CLICK_EAT &&
-            osrs_can_eat_consumable_kind(p, resolution.consumable_kind)
-                ? 1.0f : 0.0f;
+    const int heads[] = {NH_PVP_HEAD_FOOD, NH_PVP_HEAD_DRINK, NH_PVP_HEAD_KARAMBWAN};
+    const OsrsConsumableKind* kinds[] = {NH_PVP_FOOD_KINDS, NH_PVP_DRINK_KINDS, NH_PVP_KARAMBWAN_KINDS};
+    for (int stage = 0; stage < 3; stage++) {
+        offset = nh_pvp_action_head_offset(heads[stage]);
+        mask[offset] = 1;
+        for (int action = 1; action < NH_PVP_ACTION_DIMS[heads[stage]]; action++) {
+            OsrsConsumableKind kind = kinds[stage][action];
+            int present = nh_pvp_find_consumable_cell(player, kind) >= 0;
+            mask[offset + action] = present && (stage == 1
+                ? pvp_drink_kind_available(player, kind)
+                : osrs_can_eat_consumable_kind(player, kind));
+        }
     }
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_DRINK);
-    mask[offset] = 1.0f;
-    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-        OsrsInventoryClickResolution resolution =
-            osrs_inventory_cell_click_classify(&p->inventory_cells[cell]);
-        mask[offset + cell + 1] = resolution.click_action == OSRS_CLICK_DRINK &&
-            pvp_drink_kind_available(p, resolution.consumable_kind)
-                ? 1.0f : 0.0f;
-    }
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_SPELL);
-    mask[offset + OSRS_SPELL_NONE] = 1.0f;
-    mask[offset + OSRS_SPELL_BLOOD_BARRAGE] = can_cast_blood_spell(p);
-    mask[offset + OSRS_SPELL_ICE_BARRAGE] = can_cast_ice_spell(p);
-    mask[offset + OSRS_SPELL_VENGEANCE] = !env->is_lms &&
-        p->is_lunar_spellbook && !p->veng_active &&
-        remaining_ticks(p->veng_cooldown) == 0 && p->current_magic >= 94;
-    mask[offset + OSRS_SPELL_DEATH_CHARGE] = 0.0f;
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_SPECIAL);
-    mask[offset] = 1.0f;
-    mask[offset + 1] = can_toggle_spec(p);
-    mask[offset + 2] = p->spec_armed;
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_OFFENSIVE);
-    mask[offset + ENCOUNTER_OFFENSIVE_NO_CHANGE] = 1.0f;
-    mask[offset + ENCOUNTER_OFFENSIVE_OFF] =
-        p->offensive_prayer != OFFENSIVE_PRAYER_NONE;
+    offset = nh_pvp_action_head_offset(NH_PVP_HEAD_UTILITY);
+    mask[offset + NH_PVP_UTILITY_NONE] = 1;
+    mask[offset + NH_PVP_UTILITY_VENGEANCE] = !env->is_lms &&
+        player->is_lunar_spellbook && !player->veng_active &&
+        player->veng_cooldown <= 1 && magic >= OSRS_VENGEANCE_MAGIC_LEVEL;
+    offset = nh_pvp_action_head_offset(NH_PVP_HEAD_SPECIAL);
+    mask[offset] = 1;
+    mask[offset + 1] = can_arm;
+    mask[offset + 2] = player->spec_armed;
+    offset = nh_pvp_action_head_offset(NH_PVP_HEAD_OFFENSIVE);
+    mask[offset + ENCOUNTER_OFFENSIVE_NO_CHANGE] = 1;
+    mask[offset + ENCOUNTER_OFFENSIVE_OFF] = player->offensive_prayer != OFFENSIVE_PRAYER_NONE;
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY] = has_prayer;
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] = has_prayer;
     mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] = has_prayer;
 }
 
-static inline void pvp_write_action_mask_bytes(
-    unsigned char* mask,
-    OsrsEnv* env,
-    int agent_idx,
+static inline void pvp_write_action_mask(
+    float* mask, OsrsEnv* env, int actor,
     const EncounterArenaTopology* topology
 ) {
-    Player* p = &env->players[agent_idx];
-    Player* target = &env->players[1 - agent_idx];
-    memset(mask, 0, NH_PVP_ACTION_MASK_SIZE);
-
-    int offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_PRIMARY);
-    mask[offset] = 1;
-    if (can_move(p)) {
-        for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++) {
-            int nx = p->x + ENCOUNTER_MOVE_TARGET_DX[action];
-            int ny = p->y + ENCOUNTER_MOVE_TARGET_DY[action];
-            mask[offset + action] =
-                pvp_topology_tile_walkable(topology, nx, ny);
-        }
-    }
-    mask[offset + OSRS_PRIMARY_MOVE_ACTIONS] =
-        target->current_hitpoints > 0;
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_OVERHEAD);
-    int has_prayer = p->current_prayer > 0;
-    mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1;
-    mask[offset + ENCOUNTER_OVERHEAD_OFF] = p->prayer != PRAYER_NONE;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE] = has_prayer;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED] = has_prayer;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC] = has_prayer;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_SMITE] =
-        has_prayer && !env->is_lms;
-    mask[offset + ENCOUNTER_OVERHEAD_SET_REFRESH_REDEMPTION] =
-        has_prayer && !env->is_lms;
-
-    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
-        offset = osrs_base_action_head_mask_offset(
-            NH_PVP_TARGET_SLOTS, OSRS_HEAD_EQUIP_SLOT(slot));
-        mask[offset] = 1;
-    }
-    int eat_offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_EAT);
-    int drink_offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_DRINK);
-    mask[eat_offset] = 1;
-    mask[drink_offset] = 1;
-    int inventory_has_empty_cell =
-        osrs_first_empty_inventory_cell(p->inventory_cells, -1) >= 0;
-    for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {
-        OsrsInventoryClickResolution resolution =
-            osrs_inventory_cell_click_classify(&p->inventory_cells[cell]);
-        if (resolution.click_action == OSRS_CLICK_EQUIP) {
-            const OsrsItemContentMetadata* metadata =
-                osrs_inventory_cell_metadata(
-                    &p->inventory_cells[cell]);
-            if (!osrs_can_equip_metadata(
-                    p, metadata, inventory_has_empty_cell)) {
-                continue;
-            }
-            int gear_slot = metadata->gear_slot;
-            offset = osrs_base_action_head_mask_offset(
-                NH_PVP_TARGET_SLOTS, OSRS_HEAD_EQUIP_SLOT(gear_slot));
-            mask[offset + cell + 1] = 1;
-        } else if (resolution.click_action == OSRS_CLICK_EAT &&
-                osrs_can_eat_consumable_kind(
-                    p, resolution.consumable_kind)) {
-            mask[eat_offset + cell + 1] = 1;
-        } else if (resolution.click_action == OSRS_CLICK_DRINK &&
-                pvp_drink_kind_available(
-                    p, resolution.consumable_kind)) {
-            mask[drink_offset + cell + 1] = 1;
-        }
-    }
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_SPELL);
-    mask[offset + OSRS_SPELL_NONE] = 1;
-    mask[offset + OSRS_SPELL_BLOOD_BARRAGE] = can_cast_blood_spell(p);
-    mask[offset + OSRS_SPELL_ICE_BARRAGE] = can_cast_ice_spell(p);
-    mask[offset + OSRS_SPELL_VENGEANCE] = !env->is_lms &&
-        p->is_lunar_spellbook && !p->veng_active &&
-        remaining_ticks(p->veng_cooldown) == 0 && p->current_magic >= 94;
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_SPECIAL);
-    mask[offset] = 1;
-    mask[offset + 1] = can_toggle_spec(p);
-    mask[offset + 2] = p->spec_armed;
-
-    offset = osrs_base_action_head_mask_offset(
-        NH_PVP_TARGET_SLOTS, OSRS_HEAD_OFFENSIVE);
-    mask[offset + ENCOUNTER_OFFENSIVE_NO_CHANGE] = 1;
-    mask[offset + ENCOUNTER_OFFENSIVE_OFF] =
-        p->offensive_prayer != OFFENSIVE_PRAYER_NONE;
-    mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_PIETY] = has_prayer;
-    mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_RIGOUR] = has_prayer;
-    mask[offset + ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY] = has_prayer;
+    unsigned char bytes[NH_PVP_ACTION_MASK_SIZE];
+    pvp_write_action_mask_bytes(bytes, env, actor, topology);
+    for (int index = 0; index < NH_PVP_ACTION_MASK_SIZE; index++) mask[index] = bytes[index];
 }
 
 #endif

@@ -68,20 +68,30 @@ static void test_pvp_queue_overflow_aborts(void) {
 static void test_pvp_remove_compacts_and_clears_tail(void) {
     printf("--- pvp remove compacts and clears tail ---\n");
 
-    Player attacker = {0};
+    static OsrsEnv env;
+    memset(&env, 0, sizeof(env));
+    Player* attacker = &env.players[0];
     Player defender = {0};
     defender.prayer = PRAYER_NONE;
-    queue_test_hit(&attacker, &defender, 3);
-    queue_test_hit(&attacker, &defender, 7);
-    queue_test_hit(&attacker, &defender, 11);
+    queue_test_hit(attacker, &defender, 3);
+    queue_test_hit(attacker, &defender, 7);
+    queue_test_hit(attacker, &defender, 11);
 
-    pvp_remove_pending_hit(&attacker, 1);
+    env.pvp_runtime.projectiles[0][0] = (OsrsPvpProjectile){OSRS_PVP_PROJECTILE_ICE, 1};
+    env.pvp_runtime.projectiles[0][1] = (OsrsPvpProjectile){OSRS_PVP_PROJECTILE_RANGED, 2};
+    env.pvp_runtime.projectiles[0][2] = (OsrsPvpProjectile){OSRS_PVP_PROJECTILE_BLOOD, 3};
+    pvp_remove_pending_hit(&env, 0, 1);
 
-    ASSERT_INT_EQ("queue count after remove", attacker.num_pending_hits, 2);
-    ASSERT_INT_EQ("first hit remains", attacker.pending_hits[0].damage, 3);
-    ASSERT_INT_EQ("third hit compacted", attacker.pending_hits[1].damage, 11);
-    ASSERT_INT_EQ("tail damage cleared", attacker.pending_hits[2].damage, 0);
-    ASSERT_INT_EQ("tail timer cleared", attacker.pending_hits[2].ticks_until_hit, 0);
+    ASSERT_INT_EQ("queue count after remove", attacker->num_pending_hits, 2);
+    ASSERT_INT_EQ("first hit remains", attacker->pending_hits[0].damage, 3);
+    ASSERT_INT_EQ("third hit compacted", attacker->pending_hits[1].damage, 11);
+    ASSERT_INT_EQ("tail damage cleared", attacker->pending_hits[2].damage, 0);
+    ASSERT_INT_EQ("tail timer cleared", attacker->pending_hits[2].ticks_until_hit, 0);
+    CHECK("projectile identity and age compact with their corresponding hits",
+        env.pvp_runtime.projectiles[0][0].cue == OSRS_PVP_PROJECTILE_ICE &&
+        env.pvp_runtime.projectiles[0][1].cue == OSRS_PVP_PROJECTILE_BLOOD &&
+        env.pvp_runtime.projectiles[0][1].launch_tick == 3 &&
+        env.pvp_runtime.projectiles[0][2].cue == OSRS_PVP_PROJECTILE_NONE);
 }
 
 static const CollisionMap* nh_map;
@@ -242,9 +252,10 @@ static void run_nh_chase_case(
     target->y = FIGHT_AREA_BASE_Y + 4;
     target->dest_x = target->x;
     target->dest_y = target->y;
-    int actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
-    actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
-    actions[OSRS_HEAD_SPELL] = spell;
+    int actions[NH_PVP_NUM_ACTION_HEADS] = {0};
+    actions[NH_PVP_HEAD_PRIMARY] = spell == OSRS_SPELL_BLOOD_BARRAGE
+        ? NH_PVP_PRIMARY_BLOOD : spell == OSRS_SPELL_ICE_BARRAGE
+            ? NH_PVP_PRIMARY_ICE : NH_PVP_PRIMARY_WEAPON;
     ENCOUNTER_NH_PVP.step(
         (EncounterState*)nh_state,
         (EncounterContext*)&nh_context,
@@ -321,15 +332,17 @@ static void test_nh_out_of_arena_destination_fallback(void) {
 
 static void test_nh_shared_contract_and_inventory_actions(void) {
     printf("--- NH PvP shared contract and canonical inventory ---\n");
-    CHECK("NH PvP exposes 18 shared heads",
-        ENCOUNTER_NH_PVP.num_action_heads == OSRS_BASE_NUM_ACTION_HEADS);
-    CHECK("NH PvP exposes shared action dimensions",
-        ENCOUNTER_NH_PVP.action_head_dims[OSRS_HEAD_PRIMARY] ==
-            OSRS_PRIMARY_DIM(1) &&
-        ENCOUNTER_NH_PVP.action_head_dims[OSRS_HEAD_DRINK] ==
-            OSRS_INVENTORY_CLICK_DIM);
-    CHECK("NH PvP observation starts with the exact shared boundary",
-        NH_PVP_NUM_OBS == OSRS_SHARED_OBS_SIZE + NH_PVP_SPECIFIC_OBS_SIZE);
+    CHECK("NH PvP exposes semantic heads",
+        ENCOUNTER_NH_PVP.num_action_heads == NH_PVP_NUM_ACTION_HEADS);
+    CHECK("NH PvP exposes semantic action dimensions",
+        ENCOUNTER_NH_PVP.action_head_dims[NH_PVP_HEAD_PRIMARY] ==
+            NH_PVP_PRIMARY_DIM &&
+        ENCOUNTER_NH_PVP.action_head_dims[NH_PVP_HEAD_DRINK] ==
+            NH_PVP_DRINK_DIM);
+    CHECK("NH dense observations retain the shared self boundary and cell features",
+        NH_PVP_SELF_CONTROL_START == OSRS_SHARED_SELF_OBS_SIZE &&
+        NH_PVP_EQUIPPED_START == NH_PVP_INVENTORY_START +
+            OSRS_INVENTORY_SIZE * NH_PVP_INVENTORY_FEATURES && NH_PVP_NUM_OBS == 984);
 
     ENCOUNTER_NH_PVP.reset(
         (EncounterState*)nh_state,
@@ -353,12 +366,12 @@ static void test_nh_shared_contract_and_inventory_actions(void) {
         observations[0] ==
             (float)player->current_hitpoints / player->base_hitpoints);
     CHECK("shared prefix exposes canonical inventory code",
-        observations[OSRS_SHARED_OBS_INVENTORY_START] ==
+        observations[NH_PVP_INVENTORY_START] ==
             osrs_inventory_cell_obs_code_encode(
                 player->inventory_cells[0].content_code));
     CHECK("shared prefix exposes canonical worn weapon code",
         observations[
-            OSRS_SHARED_OBS_EQUIPPED_START + GEAR_SLOT_WEAPON] ==
+            NH_PVP_EQUIPPED_START + GEAR_SLOT_WEAPON] ==
             osrs_inventory_cell_obs_code_encode(
                 osrs_inventory_content_code_from_item(
                     player->equipped[GEAR_SLOT_WEAPON])));
@@ -367,8 +380,9 @@ static void test_nh_shared_contract_and_inventory_actions(void) {
         pvp_inventory_cell_with_item(player, ITEM_RUNE_CROSSBOW);
     CHECK("reset exposes a ranged weapon cell", ranged_cell >= 0);
     uint8_t previous_weapon = player->equipped[GEAR_SLOT_WEAPON];
-    int equip[OSRS_BASE_NUM_ACTION_HEADS] = {0};
-    equip[OSRS_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] = ranged_cell + 1;
+    int equip[NH_PVP_NUM_ACTION_HEADS] = {0};
+    equip[NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_WEAPON)] =
+        nh_pvp_equipment_action_for_item(GEAR_SLOT_WEAPON, ITEM_RUNE_CROSSBOW);
     ENCOUNTER_NH_PVP.step(
         (EncounterState*)nh_state,
         (EncounterContext*)&nh_context,
@@ -383,8 +397,8 @@ static void test_nh_shared_contract_and_inventory_actions(void) {
         player, OSRS_CONSUMABLE_SHARK_FOOD);
     CHECK("reset exposes a food cell", food_cell >= 0);
     player->current_hitpoints = 50;
-    int eat[OSRS_BASE_NUM_ACTION_HEADS] = {0};
-    eat[OSRS_HEAD_EAT] = food_cell + 1;
+    int eat[NH_PVP_NUM_ACTION_HEADS] = {0};
+    eat[NH_PVP_HEAD_FOOD] = NH_PVP_FOOD_SHARK;
     ENCOUNTER_NH_PVP.step(
         (EncounterState*)nh_state,
         (EncounterContext*)&nh_context,
@@ -504,7 +518,8 @@ static void test_nh_scripted_policy_action_sequences(void) {
         nh_state->env.auto_reset = 0;
 
         int bounded = 1;
-        int actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
+        int actions[NH_PVP_NUM_ACTION_HEADS] = {0};
+        const int engine_dims[OSRS_BASE_NUM_ACTION_HEADS] = OSRS_BASE_ACTION_DIMS_INIT(1);
         for (int tick = 0; tick < 64 && !nh_state->env.episode_over; tick++) {
             ENCOUNTER_NH_PVP.step(
                 (EncounterState*)nh_state,
@@ -515,7 +530,7 @@ static void test_nh_scripted_policy_action_sequences(void) {
                 OSRS_BASE_NUM_ACTION_HEADS;
             for (int head = 0; head < OSRS_BASE_NUM_ACTION_HEADS; head++) {
                 if (opponent_actions[head] < 0 ||
-                        opponent_actions[head] >= NH_PVP_ACTION_DIMS[head]) {
+                        opponent_actions[head] >= engine_dims[head]) {
                     bounded = 0;
                 }
             }

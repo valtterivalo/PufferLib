@@ -68,7 +68,7 @@ int main(void) {
     }
     actions[1][OSRS_HEAD_PRIMARY] = 1;
     puf_step(&env);
-    CHECK("second policy actions reach engine", env.state.env.last_executed_actions[NUM_ATNS] == 1);
+    CHECK("second policy actions reach engine", env.state.env.last_executed_actions[OSRS_BASE_NUM_ACTION_HEADS] == 1);
     for (int i = 0; i < 2; i++) {
         unsigned char expected[NH_PVP_ACTION_MASK_SIZE];
         pvp_write_action_mask_bytes(expected, &env.state.env, i, env.context.route_topology);
@@ -95,11 +95,11 @@ int main(void) {
     pvp_write_observations(after, &env.state.env, 0);
     CHECK("hidden opponent state and rolled damage do not change observations",
         memcmp(before, after, sizeof(before)) == 0);
-    CHECK("health bar stays stale until a hit", after[OSRS_SHARED_OBS_SIZE] == 1);
+    CHECK("health bar stays stale until a hit", after[NH_PVP_TARGET_START] == 1);
     PendingHit hit = {.kind = OSRS_HIT_DIRECT};
     pvp_observe_hit(&env.state.env, 0, 1, &hit, 0, 42);
     pvp_write_observations(after, &env.state.env, 0);
-    CHECK("visible hit refreshes quantized health bar", after[OSRS_SHARED_OBS_SIZE] == 13.0f / 30.0f);
+    CHECK("visible hit refreshes quantized health bar", after[NH_PVP_TARGET_START] == 13.0f / 30.0f);
     puf_close(&env);
 
     reset(1, OPP_SELFPLAY);
@@ -107,7 +107,7 @@ int main(void) {
     env.state.env.players[1].morr_dot_tick_counter = 1;
     puf_step(&env);
     CHECK("bleed refreshes visible health bar", env.state.env.players[1].current_hitpoints == 94 &&
-        observations[0][OSRS_SHARED_OBS_SIZE] == 28.0f / 30.0f);
+        observations[0][NH_PVP_TARGET_START] == 28.0f / 30.0f);
     puf_close(&env);
 
     reset(1, OPP_SELFPLAY);
@@ -157,7 +157,7 @@ int main(void) {
         player->just_attacked = 1;
         player->player_prayed_correct = 1;
         player->clicks_this_tick = 3;
-        pvp->last_executed_actions[i * NUM_ATNS + OSRS_HEAD_OVERHEAD] = OVERHEAD_MAGE;
+        pvp->last_executed_actions[i * OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] = OVERHEAD_MAGE;
     }
     for (int mode = 0; mode < 2; mode++) {
         pvp->shaping.enabled = mode;

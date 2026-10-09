@@ -102,9 +102,9 @@ static void hidden_contract(OpponentType bot) {
 }
 
 int main(void) {
-    CHECK("pressure IDs append without changing native dimensions",
+    CHECK("pressure opponent identities survive the NH interface change",
         OPP_RECORDED_ADAPTIVE_NH == 35 && OPP_BLOOD_PRESSURE_NH == 36 &&
-        OPP_FREEZE_UNDERLAP_NH == 37 && OBS_SIZE == 123 && NH_PVP_ACTION_MASK_SIZE == 423);
+        OPP_FREEZE_UNDERLAP_NH == 37);
     for (unsigned i = 0; i < sizeof(NH_SCRIPTED_OPPONENTS) / sizeof(*NH_SCRIPTED_OPPONENTS); i++)
         hidden_contract(NH_SCRIPTED_OPPONENTS[i]);
     reset(OPP_BLOOD_PRESSURE_NH);

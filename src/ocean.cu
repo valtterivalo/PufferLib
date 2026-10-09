@@ -27,7 +27,7 @@ void puf_normal_init(Prec* dst, float std, ulong seed, cudaStream_t stream) {
 #include "../ocean/asteroids/asteroids.cu"
 #endif
 #if defined(PUFFER_OSRS_COLOSSEUM) || defined(PUFFER_OSRS_INFERNO) \
-    || defined(PUFFER_OSRS_ZULRAH) || defined(PUFFER_OSRS_PVP)
+    || defined(PUFFER_OSRS_ZULRAH)
 #define PUFFER_OSRS_ENTITY_NET
 #endif
 #ifdef PUFFER_OSRS_ENTITY_NET
@@ -76,8 +76,10 @@ static void create_custom_encoder(Encoder* enc) {
     create_osrs_entity_encoder<&OSRS_COLOSSEUM_ENTITY_DESCRIPTOR>(enc);
 #elif defined(PUFFER_OSRS_INFERNO)
     create_osrs_entity_encoder<&OSRS_INFERNO_ENTITY_DESCRIPTOR>(enc);
-#elif defined(PUFFER_OSRS_ZULRAH) || defined(PUFFER_OSRS_PVP)
+#elif defined(PUFFER_OSRS_ZULRAH)
     create_osrs_entity_encoder<&OSRS_EQUIPMENT_ENTITY_DESCRIPTOR>(enc);
+#elif defined(PUFFER_OSRS_PVP)
+    assert(NH_PVP_OBSERVATION_VERSION == 2 && NH_PVP_ACTION_SCHEMA_VERSION == 2 && enc->in_dim == NH_PVP_NUM_OBS);
 #else
     (void)enc;
 #endif

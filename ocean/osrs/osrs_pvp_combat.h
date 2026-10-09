@@ -69,13 +69,6 @@ static inline int pvp_magic_spec_to_item(MagicSpecWeapon w) {
     }
 }
 
-static int get_melee_spec_cost(MeleeSpecWeapon weapon) {
-    if (weapon == MELEE_SPEC_NONE) return 50;
-    int cost = osrs_spec_cost(pvp_melee_spec_to_item(weapon));
-    if (cost <= 0) abort();
-    return cost;
-}
-
 static int get_ranged_spec_cost(RangedSpecWeapon weapon) {
     if (weapon == RANGED_SPEC_NONE) return 50;
     int cost = osrs_spec_cost(pvp_ranged_spec_to_item(weapon));
@@ -361,7 +354,9 @@ typedef enum {
     PVP_DEF_DRAIN_BY_DAMAGE = 2,
 } PvpDefDrainType;
 
-static void pvp_remove_pending_hit(Player* attacker, int idx) {
+static void pvp_remove_pending_hit(OsrsEnv* env, int actor, int idx) {
+    Player* attacker = &env->players[actor];
+    OsrsPvpProjectile* projectiles = env->pvp_runtime.projectiles[actor];
     if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
         fprintf(stderr, "pvp pending-hit queue corrupt before remove count=%d\n",
             attacker->num_pending_hits);
@@ -372,11 +367,14 @@ static void pvp_remove_pending_hit(Player* attacker, int idx) {
             idx, attacker->num_pending_hits);
         abort();
     }
-    for (int i = idx + 1; i < attacker->num_pending_hits; i++)
+    for (int i = idx + 1; i < attacker->num_pending_hits; i++) {
         attacker->pending_hits[i - 1] = attacker->pending_hits[i];
+        projectiles[i - 1] = projectiles[i];
+    }
     attacker->num_pending_hits--;
     memset(&attacker->pending_hits[attacker->num_pending_hits], 0,
         sizeof(attacker->pending_hits[attacker->num_pending_hits]));
+    projectiles[attacker->num_pending_hits] = (OsrsPvpProjectile){OSRS_PVP_PROJECTILE_NONE, 0};
 }
 
 static void queue_hit(int tick, int attacker_idx, int defender_idx,
@@ -426,6 +424,18 @@ static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
     OsrsPvpHitEvent event = {env->tick, source, target, hit->kind, damage,
         hitpoints_before - env->players[target].current_hitpoints};
     env->pvp_runtime.hit_observer(env->pvp_runtime.hit_observer_context, &event);
+}
+
+static inline OsrsPvpProjectileCue pvp_projectile_cue(AttackStyle style, int magic_type, int current_magic) {
+    if (style == ATTACK_STYLE_RANGED) return OSRS_PVP_PROJECTILE_RANGED;
+    if (style != ATTACK_STYLE_MAGIC) return OSRS_PVP_PROJECTILE_NONE;
+    if (magic_type == OSRS_MAGIC_ATTACK_ANCIENT_ICE) return OSRS_PVP_PROJECTILE_ICE;
+    if (magic_type == OSRS_MAGIC_ATTACK_ANCIENT_BLOOD) {
+        int base_hit = get_blood_base_hit(current_magic);
+        if (base_hit == BLOOD_RUSH_MAX_HIT || base_hit == BLOOD_BLITZ_MAX_HIT)
+            return OSRS_PVP_PROJECTILE_BLOOD;
+    }
+    return OSRS_PVP_PROJECTILE_NONE;
 }
 
 static inline void pvp_render_hit_events_add(Player* p, int hit_damage) {
@@ -535,6 +545,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             defender->frozen_ticks = hit->freeze_ticks;
             defender->freeze_immunity_ticks = hit->freeze_ticks + 5;
             defender->freeze_applied_this_tick = 1;
+            env->pvp_runtime.visible[defender_idx].last_freeze_tick = env->tick;
         }
 
         if ((hit->heal_percent > 0 || hit->flat_heal > 0) && attacker->current_hitpoints > 0) {
@@ -564,7 +575,7 @@ static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_id
         if (hit->ticks_until_hit < 0) {
             apply_damage(env, attacker_idx, defender_idx, hit);
 
-            pvp_remove_pending_hit(attacker, i);
+            pvp_remove_pending_hit(env, attacker_idx, i);
             i--;
         }
     }
@@ -1045,6 +1056,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             queue_hit(env->tick, attacker_idx, defender_idx,
                       attacker, defender, sr.damage[i], hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
+            env->pvp_runtime.projectiles[attacker_idx][attacker->num_pending_hits - 1] =
+                (OsrsPvpProjectile){pvp_projectile_cue(style, 0, attacker->current_magic), env->tick};
             if (sr.damage[i] > 0 && affliction != OSRS_AFFLICTION_NONE &&
                     rand_int(env, affliction_denominator) < affliction_numerator)
                 attacker->pending_hits[attacker->num_pending_hits - 1].affliction = affliction;
@@ -1145,6 +1158,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                     defender->frozen_ticks = freeze_ticks;
                     defender->freeze_immunity_ticks = freeze_ticks + 5;
                     defender->freeze_applied_this_tick = 1;
+                    env->pvp_runtime.visible[defender_idx].last_freeze_tick = env->tick;
                     defender->hit_attacker_idx = attacker_idx;
                 }
                 queued_freeze_ticks = 0;
@@ -1152,6 +1166,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             queue_hit(env->tick, attacker_idx, defender_idx,
                       attacker, defender, damage, style, hit_delay, is_special,
                       hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
+            env->pvp_runtime.projectiles[attacker_idx][attacker->num_pending_hits - 1] =
+                (OsrsPvpProjectile){pvp_projectile_cue(style, magic_type, attacker->current_magic), env->tick};
             if (hit_success && affliction != OSRS_AFFLICTION_NONE &&
                     (affliction != OSRS_AFFLICTION_POISON || damage > 0) &&
                     rand_int(env, affliction_denominator) < affliction_numerator)

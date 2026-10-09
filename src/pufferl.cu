@@ -538,6 +538,7 @@ typedef struct PuffeRL {
     EnvBuf env;
     TrainGraph train_buf;
     Prec train_state;
+    Int train_row_offset;
     cudaGraphExec_t* rollout_graphs;  // CPU: [slots][horizon][num_buffers]
     cudaGraphExec_t gpu_rollout_graph[2];  // GPU: full net+env horizon per slot
     cudaGraphExec_t train_cudagraph[2];  // per async slot; src pointers differ
@@ -1408,7 +1409,7 @@ static Float slice_rows(Float p, int off, int n) {
 template <typename T>
 __global__ void gather_learner_rollout(T* dst, const T* src,
         int horizon, int actor_rows, int cols,
-        int actors_per_buf, int learners_per_buf) {
+        int actors_per_buf, int learners_per_buf, const int* row_offset) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int learner_rows = actor_rows / actors_per_buf * learners_per_buf;
     if (idx >= horizon * learner_rows * cols) {
@@ -1417,9 +1418,22 @@ __global__ void gather_learner_rollout(T* dst, const T* src,
     int learner = idx / (horizon * cols);
     int t = idx / cols % horizon;
     int col = idx % cols;
-    int actor = learner / learners_per_buf * actors_per_buf
-        + learner % learners_per_buf;
+    int source_learner = (learner + *row_offset) % learner_rows;
+    int actor = source_learner / learners_per_buf * actors_per_buf
+        + source_learner % learners_per_buf;
     dst[idx] = src[(t * actor_rows + actor) * cols + col];
+}
+
+__global__ void gather_learner_state(Prec dst, Prec src, const int* row_offset) {
+    int learners = dst.shape[1];
+    int hidden = dst.shape[2];
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst.shape[0] * learners * hidden) return;
+    int h = idx % hidden;
+    int learner = idx / hidden % learners;
+    int layer = idx / (learners * hidden);
+    int source_learner = (learner + *row_offset) % learners;
+    dst.data[idx] = src.data[(layer * learners + source_learner) * hidden + h];
 }
 
 // Cosine decay base → min over t in [0, T). Double for t/T (float loses
@@ -1461,25 +1475,25 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     int learner_rows = pufferl->vec->buffers * learners_per_buf;
     gather_learner_rollout<<<grid_size(T * learner_rows * obs_size), BLOCK_SIZE, 0, stream>>>(
         rollouts->observations.data, src.observations.data, T, B, obs_size,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows * num_atns), BLOCK_SIZE, 0, stream>>>(
         rollouts->actions.data, src.actions.data, T, B, num_atns,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->logprobs.data, src.logprobs.data, T, B, 1,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->rewards.data, src.rewards.data, T, B, 1,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->terminals.data, src.terminals.data, T, B, 1,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->values.data, src.values.data, T, B, 1,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
     gather_learner_rollout<<<grid_size(T * learner_rows * mask_c), BLOCK_SIZE, 0, stream>>>(
         rollouts->action_mask.data, src.action_mask.data, T, B, mask_c,
-        actors_per_buf, learners_per_buf);
+        actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
 
     clamp_precision_kernel<<<grid_size(
         numel(rollouts->rewards.shape)), BLOCK_SIZE, 0, stream>>>(
@@ -1490,9 +1504,9 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
             numel(pufferl->train_state.shape) * sizeof(precision_t), stream);
     } else {
         Prec slot_st = init_slot(src.initial_states, slot);
-        cudaMemcpyAsync(pufferl->train_state.data, slot_st.data,
-            numel(pufferl->train_state.shape) * sizeof(precision_t),
-            cudaMemcpyDeviceToDevice, stream);
+        gather_learner_state<<<grid_size(numel(pufferl->train_state.shape)),
+            BLOCK_SIZE, 0, stream>>>(
+            pufferl->train_state, slot_st, pufferl->train_row_offset.data);
     }
     puf_stamp<<<1, 1, 0, stream>>>(st + TE_MID);
 
@@ -1601,6 +1615,11 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     int slot = hypers->async ? pufferl->async_ready_slot : 0;
     int train_batch_size = pufferl->train_rollouts.observations.shape[0] * hypers->horizon;
     int total_minibatches = hypers->replay_ratio * train_batch_size / hypers->minibatch_size;
+    int row_offset = pufferl->epoch * total_minibatches
+        * (hypers->minibatch_size / hypers->horizon)
+        % pufferl->train_rollouts.observations.shape[0];
+    cudaMemcpyAsync(pufferl->train_row_offset.data, &row_offset, sizeof(row_offset),
+        cudaMemcpyHostToDevice, train_stream);
     bool first = hypers->cudagraphs && pufferl->train_cudagraph[slot] == NULL;
     profile_begin("train_forward_backward", hypers->profile);
     if (first) {
@@ -1738,6 +1757,9 @@ void puf_load_weights_into(Float dst, Prec params,
     int64_t nbytes = numel(dst.shape) * sizeof(float);
     FILE* fp = fopen(path, "rb");
     assert(fp && "failed to open weights for reading");
+    struct stat checkpoint;
+    assert(fstat(fileno(fp), &checkpoint) == 0);
+    assert(checkpoint.st_size == nbytes && "checkpoint shape mismatch");
     char* buf = (char*)malloc(nbytes);
     size_t nread = fread(buf, 1, nbytes, fp);
     fclose(fp);
@@ -1996,6 +2018,8 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         hypers.horizon, decoder_output_size, is_continuous);
     pufferl->train_state = {.shape = {num_layers, learner_agents, hidden_size}};
     alloc_register(acts, &pufferl->train_state);
+    pufferl->train_row_offset = {.shape = {1}};
+    alloc_register(acts, &pufferl->train_row_offset);
 
     cudaMalloc((void**)&pufferl->rng_offset, (num_buffers + 1) * sizeof(long));
     cudaMemset(pufferl->rng_offset, 0, (num_buffers + 1) * sizeof(long));

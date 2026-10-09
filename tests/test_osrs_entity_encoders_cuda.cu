@@ -3,6 +3,14 @@
 #define PUFFER_ENV_NAME "minimal"
 #define NUM_GEAR_SLOTS 11
 #include "../src/pufferl.cu"
+#include "../ocean/osrs/osrs_item_obs_generated.h"
+__device__ static const float OSRS_ITEM_OBS_TABLE_DEV
+    [OSRS_ITEM_OBS_TABLE_ROWS][OSRS_ITEM_OBS_TABLE_COLS] = {
+#include "../ocean/osrs/osrs_item_obs_table.inc"
+};
+#include "../ocean/osrs/osrs_entity_encoder.cu"
+#include "../ocean/osrs_colosseum/osrs_colosseum.cu"
+#include "../ocean/osrs_inferno/osrs_inferno.cu"
 
 extern "C" {
 
@@ -39,8 +47,9 @@ void osrs_entity_test_init(int kind, int batch, int obs_size, int hidden) {
     test_encoder = {};
     test_encoder.in_dim = obs_size;
     test_encoder.out_dim = hidden;
-    const char* env_name = kind == 0 ? "osrs_colosseum" : "osrs_inferno";
-    create_custom_encoder(env_name, &test_encoder);
+    assert(kind == 0 || kind == 1);
+    if (kind == 0) create_osrs_entity_encoder<&OSRS_COLOSSEUM_ENTITY_DESCRIPTOR>(&test_encoder);
+    else create_osrs_entity_encoder<&OSRS_INFERNO_ENTITY_DESCRIPTOR>(&test_encoder);
     test_weights = (OsrsEntityEncoderWeights*)test_encoder.create_weights(&test_encoder);
     test_encoder.reg_params(test_weights, &test_params);
     alloc_create(&test_params);

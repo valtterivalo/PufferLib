@@ -117,7 +117,7 @@ static inline int osrs_base_action_head_mask_offset(int target_slots, int head) 
     return offset;
 }
 
-static inline int osrs_write_shared_observations(
+static inline int osrs_write_self_observations(
     float* obs,
     const OsrsSharedObservationInput* input
 ) {
@@ -192,6 +192,15 @@ static inline int osrs_write_shared_observations(
         abort();
     }
 
+    return i;
+}
+
+static inline int osrs_write_shared_observations(
+    float* obs,
+    const OsrsSharedObservationInput* input
+) {
+    int i = osrs_write_self_observations(obs, input);
+    const Player* player = input->player;
     const OsrsInventoryCell* inventory_cells =
         osrs_player_inventory_cells_const(player);
     for (int cell = 0; cell < OSRS_INVENTORY_SIZE; cell++) {

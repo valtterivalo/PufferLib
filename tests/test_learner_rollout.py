@@ -15,9 +15,21 @@ def test_learner_rollout_excludes_historical_rows(tmp_path: Path, backend: str) 
                     source.index("// Cosine decay")]
     snapshot = source[source.index("static __device__ long state_elem_idx"):
                       source.index("// View slot of full")]
+    rotation = source[source.index("    int row_offset ="):source.index(
+        "    cudaMemcpyAsync(pufferl->train_row_offset.data")]
+    rotation = rotation.removeprefix("    int row_offset =").strip().removesuffix(";")
+    for original, local in (
+        ("pufferl->epoch", "epoch"),
+        ("total_minibatches", "updates"),
+        ("hypers->minibatch_size", "minibatch"),
+        ("hypers->horizon", "horizon"),
+        ("pufferl->train_rollouts.observations.shape[0]", "learners"),
+    ):
+        rotation = rotation.replace(original, local)
     harness = tmp_path / ("learner_rollout.cu" if backend == "cuda" else "learner_rollout.cpp")
     harness.write_text(r"""
 #include <cassert>
+#include <numeric>
 #include <vector>
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
@@ -30,7 +42,7 @@ struct { int x; } blockIdx, blockDim, threadIdx;
 struct Prec { float* data; long shape[3]; };
 """ + gather + snapshot + r"""
 template <typename T>
-void check_rollout(int buffers, int learners_per_buf, int horizon, int cols) {
+void check_rollout(int buffers, int learners_per_buf, int horizon, int cols, int offset) {
     const int actors_per_buf = 4;
     const int actors = buffers * actors_per_buf;
     const int learners = buffers * learners_per_buf;
@@ -47,34 +59,37 @@ void check_rollout(int buffers, int learners_per_buf, int horizon, int cols) {
     }
 #ifdef __CUDACC__
     T *device_src, *device_dst;
+    int* device_offset;
     assert(cudaMalloc((void**)&device_src, src.size() * sizeof(T)) == cudaSuccess);
     assert(cudaMalloc((void**)&device_dst, dst.size() * sizeof(T)) == cudaSuccess);
+    assert(cudaMalloc((void**)&device_offset, sizeof(int)) == cudaSuccess);
+    assert(cudaMemcpy(device_offset, &offset, sizeof(int), cudaMemcpyHostToDevice) == cudaSuccess);
     assert(cudaMemcpy(device_src, src.data(), src.size() * sizeof(T), cudaMemcpyHostToDevice) == cudaSuccess);
     gather_learner_rollout<<<(dst.size() + 255) / 256, 256>>>(
-        device_dst, device_src, horizon, actors, cols, actors_per_buf, learners_per_buf);
+        device_dst, device_src, horizon, actors, cols, actors_per_buf, learners_per_buf, device_offset);
     assert(cudaMemcpy(dst.data(), device_dst, dst.size() * sizeof(T), cudaMemcpyDeviceToHost) == cudaSuccess);
     assert(cudaFree(device_src) == cudaSuccess);
     assert(cudaFree(device_dst) == cudaSuccess);
+    assert(cudaFree(device_offset) == cudaSuccess);
 #else
     blockDim.x = 1;
     threadIdx.x = 0;
     for (blockIdx.x = 0; blockIdx.x <= int(dst.size()); blockIdx.x++) {
         gather_learner_rollout(dst.data(), src.data(), horizon, actors, cols,
-            actors_per_buf, learners_per_buf);
+            actors_per_buf, learners_per_buf, &offset);
     }
 #endif
-    int learner = 0;
-    for (int actor = 0; actor < actors; actor++) {
-        if (actor % actors_per_buf >= learners_per_buf) continue;
+    for (int learner = 0; learner < learners; learner++) {
+        int source_learner = (learner + offset) % learners;
+        int actor = source_learner / learners_per_buf * actors_per_buf
+            + source_learner % learners_per_buf;
         for (int t = 0; t < horizon; t++) {
             for (int col = 0; col < cols; col++) {
                 assert(dst[(learner * horizon + t) * cols + col]
                     == T((t * actors + actor) * cols + col + 1));
             }
         }
-        learner++;
     }
-    assert(learner == learners);
 }
 
 void check_states(int buffers, int learners_per_buf) {
@@ -124,23 +139,107 @@ void check_states(int buffers, int learners_per_buf) {
     }
 }
 
+void check_epoch_coverage(int actors_per_buf,int learners_per_buf) {
+    const int buffers=2;
+    const int actors=buffers*actors_per_buf;
+    const int learners=buffers*learners_per_buf, horizon=256, cols=7;
+    const int minibatch=8192, segments=minibatch/horizon;
+    const int updates=int(0.837464094f*learners*horizon/minibatch);
+    const int layers=2, hidden=3;
+    if(learners==1024) assert(updates==26);
+    const int epochs=learners/std::gcd(learners,updates*segments);
+    std::vector<float> src(horizon*actors*cols), dst(horizon*learners*cols);
+    std::vector<float> initial(layers*learners*hidden), state(initial.size());
+    std::vector<int> coverage(learners,0);
+    for(int t=0;t<horizon;t++) for(int row=0;row<actors;row++)
+        for(int col=0;col<cols;col++) src[(t*actors+row)*cols+col]=
+            row%actors_per_buf<learners_per_buf ? row*8+col : -1;
+    for(int layer=0;layer<layers;layer++) for(int row=0;row<learners;row++)
+        for(int h=0;h<hidden;h++) initial[(layer*learners+row)*hidden+h]=layer*10000+row*8+h;
+    int offset=0;
+#ifdef __CUDACC__
+    float *device_src,*device_dst,*device_initial,*device_state;
+    int* device_offset;
+    assert(cudaMalloc((void**)&device_src,src.size()*sizeof(float))==cudaSuccess);
+    assert(cudaMalloc((void**)&device_dst,dst.size()*sizeof(float))==cudaSuccess);
+    assert(cudaMalloc((void**)&device_initial,initial.size()*sizeof(float))==cudaSuccess);
+    assert(cudaMalloc((void**)&device_state,state.size()*sizeof(float))==cudaSuccess);
+    assert(cudaMalloc((void**)&device_offset,sizeof(int))==cudaSuccess);
+    assert(cudaMemcpy(device_src,src.data(),src.size()*sizeof(float),cudaMemcpyHostToDevice)==cudaSuccess);
+    assert(cudaMemcpy(device_initial,initial.data(),initial.size()*sizeof(float),cudaMemcpyHostToDevice)==cudaSuccess);
+    cudaStream_t stream;
+    cudaGraph_t graph;
+    cudaGraphExec_t executable;
+    assert(cudaStreamCreate(&stream)==cudaSuccess);
+    assert(cudaStreamBeginCapture(stream,cudaStreamCaptureModeThreadLocal)==cudaSuccess);
+    gather_learner_rollout<<<(dst.size()+255)/256,256,0,stream>>>(
+        device_dst,device_src,horizon,actors,cols,actors_per_buf,learners_per_buf,device_offset);
+    gather_learner_state<<<(state.size()+255)/256,256,0,stream>>>(
+        Prec{device_state,{layers,learners,hidden}},Prec{device_initial,{layers,learners,hidden}},device_offset);
+    assert(cudaStreamEndCapture(stream,&graph)==cudaSuccess);
+    assert(cudaGraphInstantiate(&executable,graph,0)==cudaSuccess);
+#endif
+    for(int epoch=0;epoch<epochs;epoch++) {
+        offset=__EPOCH_OFFSET__;
+#ifdef __CUDACC__
+        assert(cudaMemcpyAsync(device_offset,&offset,sizeof(int),cudaMemcpyHostToDevice,stream)==cudaSuccess);
+        assert(cudaGraphLaunch(executable,stream)==cudaSuccess);
+        assert(cudaStreamSynchronize(stream)==cudaSuccess);
+        assert(cudaMemcpy(dst.data(),device_dst,dst.size()*sizeof(float),cudaMemcpyDeviceToHost)==cudaSuccess);
+        assert(cudaMemcpy(state.data(),device_state,state.size()*sizeof(float),cudaMemcpyDeviceToHost)==cudaSuccess);
+#else
+        blockDim.x=1;
+        threadIdx.x=0;
+        for(blockIdx.x=0;blockIdx.x<=int(dst.size());blockIdx.x++)
+            gather_learner_rollout(dst.data(),src.data(),horizon,actors,cols,actors_per_buf,learners_per_buf,&offset);
+        for(blockIdx.x=0;blockIdx.x<=int(state.size());blockIdx.x++)
+            gather_learner_state(Prec{state.data(),{layers,learners,hidden}},
+                Prec{initial.data(),{layers,learners,hidden}},&offset);
+#endif
+        for(int row=0;row<learners;row++) {
+            int expected=(row+offset)%learners;
+            int actor=expected/learners_per_buf*actors_per_buf+expected%learners_per_buf;
+            for(int t=0;t<horizon;t++) for(int col=0;col<cols;col++)
+                assert(dst[(row*horizon+t)*cols+col]==actor*8+col);
+            for(int layer=0;layer<layers;layer++) for(int h=0;h<hidden;h++)
+                assert(state[(layer*learners+row)*hidden+h]==layer*10000+expected*8+h);
+            if(row<updates*segments) coverage[expected]++;
+        }
+    }
+    for(int count:coverage) assert(count==epochs*updates*segments/learners);
+#ifdef __CUDACC__
+    assert(cudaGraphExecDestroy(executable)==cudaSuccess);
+    assert(cudaGraphDestroy(graph)==cudaSuccess);
+    assert(cudaStreamDestroy(stream)==cudaSuccess);
+    assert(cudaFree(device_src)==cudaSuccess);
+    assert(cudaFree(device_dst)==cudaSuccess);
+    assert(cudaFree(device_initial)==cudaSuccess);
+    assert(cudaFree(device_state)==cudaSuccess);
+    assert(cudaFree(device_offset)==cudaSuccess);
+#endif
+}
+
 int main() {
     for (int buffers : {1, 2}) {
         for (int learners_per_buf : {1, 3, 4}) {
             check_states(buffers, learners_per_buf);
             for (int horizon : {1, 8}) {
                 for (int cols : {1, 3, 17}) {
-                    check_rollout<float>(buffers, learners_per_buf, horizon, cols);
-                    check_rollout<unsigned short>(buffers, learners_per_buf, horizon, cols);
+                    for(int offset : {0,1,buffers*learners_per_buf-1}) {
+                    check_rollout<float>(buffers, learners_per_buf, horizon, cols, offset);
+                    check_rollout<unsigned short>(buffers, learners_per_buf, horizon, cols, offset);
 #ifdef __CUDACC__
-                    check_rollout<__nv_bfloat16>(buffers, learners_per_buf, horizon, cols);
+                    check_rollout<__nv_bfloat16>(buffers, learners_per_buf, horizon, cols, offset);
 #endif
+                    }
                 }
             }
         }
     }
+    check_epoch_coverage(512,512);
+    check_epoch_coverage(512,384);
 }
-""")
+""".replace("__EPOCH_OFFSET__", rotation))
     executable = tmp_path / "learner_rollout"
     subprocess.run([compiler, "-std=c++17", "-O2", str(harness), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

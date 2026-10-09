@@ -125,6 +125,55 @@ static void human_to_pvp_actions(
         actions[OSRS_HEAD_SPECIAL] = agent->spec_armed ? 2 : 1;
 }
 
+static void human_to_nh_pvp_actions(HumanInput* hi, int* actions, Player* player) {
+    memset(actions, 0, NH_PVP_NUM_ACTION_HEADS * sizeof(int));
+    if (hi->pending_move_x >= 0 && hi->pending_move_y >= 0) {
+        int dx = clamp(hi->pending_move_x - player->x, -2, 2);
+        int dy = clamp(hi->pending_move_y - player->y, -2, 2);
+        for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++)
+            if (ENCOUNTER_MOVE_TARGET_DX[action] == dx && ENCOUNTER_MOVE_TARGET_DY[action] == dy)
+                actions[NH_PVP_HEAD_PRIMARY] = action;
+    }
+    encounter_translate_prayer(hi, actions, NH_PVP_HEAD_OVERHEAD);
+    encounter_translate_offensive_prayer(hi, actions, NH_PVP_HEAD_OFFENSIVE);
+    if (hi->pending_attack) actions[NH_PVP_HEAD_PRIMARY] =
+        hi->pending_spell == PVP_ATTACK_BLOOD ? NH_PVP_PRIMARY_BLOOD :
+        hi->pending_spell == PVP_ATTACK_ICE ? NH_PVP_PRIMARY_ICE : NH_PVP_PRIMARY_WEAPON;
+    if (hi->pending_food) actions[NH_PVP_HEAD_FOOD] = NH_PVP_FOOD_SHARK;
+    if (hi->pending_karambwan) actions[NH_PVP_HEAD_KARAMBWAN] = NH_PVP_KARAMBWAN_KARAMBWAN;
+    if (hi->pending_potion == POTION_BREW) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_BREW;
+    else if (hi->pending_potion == POTION_RESTORE) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_RESTORE;
+    else if (hi->pending_potion == POTION_COMBAT) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_COMBAT;
+    else if (hi->pending_potion == POTION_RANGED) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_RANGING;
+    else if (hi->pending_potion == POTION_ANTIVENOM) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_ANTIVENOM;
+    for (int index = 0; index < hi->commands.count; index++) {
+        const HumanCommand* command = &hi->commands.items[index];
+        if (command->kind == HUMAN_COMMAND_UNEQUIP) {
+            actions[NH_PVP_HEAD_EQUIP_SLOT(command->gear_slot)] = NH_PVP_EQUIPMENT_UNEQUIP;
+            continue;
+        }
+        if (command->kind != HUMAN_COMMAND_EQUIP_INVENTORY_ITEM &&
+            command->kind != HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK &&
+            command->kind != HUMAN_COMMAND_EAT && command->kind != HUMAN_COMMAND_DRINK) continue;
+        assert(command->inventory_slot >= 0 && command->inventory_slot < OSRS_INVENTORY_SIZE);
+        const OsrsItemContentMetadata* metadata =
+            osrs_inventory_cell_metadata(&player->inventory_cells[command->inventory_slot]);
+        if (metadata->click_action == OSRS_CLICK_EQUIP) {
+            actions[NH_PVP_HEAD_EQUIP_SLOT(metadata->gear_slot)] =
+                nh_pvp_equipment_action_for_item(metadata->gear_slot, metadata->item_idx);
+            continue;
+        }
+        const int heads[] = {NH_PVP_HEAD_FOOD, NH_PVP_HEAD_DRINK, NH_PVP_HEAD_KARAMBWAN};
+        const OsrsConsumableKind* kinds[] = {NH_PVP_FOOD_KINDS, NH_PVP_DRINK_KINDS, NH_PVP_KARAMBWAN_KINDS};
+        for (int stage = 0; stage < 3; stage++)
+            for (int action = 1; action < NH_PVP_ACTION_DIMS[heads[stage]]; action++)
+                if (kinds[stage][action] == metadata->consumable_kind)
+                    actions[heads[stage]] = action;
+    }
+    if (hi->pending_veng) actions[NH_PVP_HEAD_UTILITY] = NH_PVP_UTILITY_VENGEANCE;
+    if (hi->pending_spec) actions[NH_PVP_HEAD_SPECIAL] = player->spec_armed ? 2 : 1;
+}
+
 static void pvp_apply_drink_one_dose_effect(
     void* ctx,
     OsrsConsumableKind kind
@@ -348,6 +397,28 @@ static void pvp_refresh_visible_gear(Player* p) {
     p->visible_gear = weapon == ITEM_VOIDWAKER ? GEAR_MAGE : p->current_gear;
 }
 
+static int pvp_consume_food_cell(Player* player, int cell) {
+    OsrsConsumableKind kind = osrs_inventory_cell_metadata(&player->inventory_cells[cell])->consumable_kind;
+    FoodType type;
+    switch (kind) {
+        case OSRS_CONSUMABLE_SHARK_FOOD: type = FOOD_SHARK; break;
+        case OSRS_CONSUMABLE_MARLIN: type = FOOD_MARLIN; break;
+        case OSRS_CONSUMABLE_SUMMER_PIE: type = FOOD_SUMMER_PIE; break;
+        case OSRS_CONSUMABLE_KARAMBWAN: type = FOOD_KARAMBWAN; break;
+        case OSRS_CONSUMABLE_HALIBUT: type = FOOD_HALIBUT; break;
+        default: abort();
+    }
+    if (!osrs_player_eat_food_effects(player, type).consumed) return 0;
+    osrs_inventory_cell_consume_eat(&player->inventory_cells[cell]);
+    if (osrs_inventory_cell_metadata(&player->inventory_cells[cell])->consumable_kind != kind) {
+        if (type == FOOD_KARAMBWAN || type == FOOD_HALIBUT) player->karambwan_count--;
+        else player->food_count--;
+    }
+    return 1;
+}
+
+static void pvp_apply_control_actions(OsrsEnv* env, int agent_idx, int* actions, int utility_spell);
+
 static void execute_switches(
     OsrsEnv* env,
     int agent_idx,
@@ -383,12 +454,7 @@ static void execute_switches(
                 p->clicks_this_tick++;
             }
         } else if (step.kind == OSRS_INVENTORY_APPLY_EAT) {
-            FoodType type =
-                step.resolution.consumable_kind == OSRS_CONSUMABLE_KARAMBWAN
-                    ? FOOD_KARAMBWAN : FOOD_SHARK;
-            OsrsPlayerEatResult result = osrs_player_eat_food_type(p, type);
-            if (result.consumed) {
-                p->inventory_cells[step.cell_idx] = osrs_inventory_cell_empty();
+            if (pvp_consume_food_cell(p, step.cell_idx)) {
                 p->consumable_used_this_tick = 1;
                 p->clicks_this_tick++;
             }
@@ -406,6 +472,12 @@ static void execute_switches(
             }
         }
     }
+    pvp_apply_control_actions(env, agent_idx, actions, actions[OSRS_HEAD_SPELL]);
+    (void)topology;
+}
+
+static void pvp_apply_control_actions(OsrsEnv* env, int agent_idx, int* actions, int utility_spell) {
+    Player* p = &env->players[agent_idx];
     pvp_refresh_visible_gear(p);
     p->fight_style = get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED
         ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE;
@@ -456,17 +528,83 @@ static void execute_switches(
         osrs_interaction_check_interrupt(&p->interaction, OSRS_IACT_MOVE);
     }
 
-    if (actions[OSRS_HEAD_SPELL] == OSRS_SPELL_VENGEANCE &&
+    if (utility_spell == OSRS_SPELL_VENGEANCE &&
             p->is_lunar_spellbook && !p->veng_active &&
             remaining_ticks(p->veng_cooldown) == 0 &&
-            p->current_magic >= 94) {
+            p->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL) {
         p->veng_active = 1;
         p->veng_cooldown = 50;
         p->cast_veng_this_tick = 1;
         p->clicks_this_tick++;
     }
     pvp_maul_finish_inputs(env, agent_idx);
-    (void)topology;
+}
+
+static void nh_pvp_decode_control_actions(const int* semantic, int* engine) {
+    memset(engine, 0, OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
+    for (int head = 0; head < NH_PVP_NUM_ACTION_HEADS; head++)
+        assert(semantic[head] >= 0 && semantic[head] < NH_PVP_ACTION_DIMS[head]);
+    int primary = semantic[NH_PVP_HEAD_PRIMARY];
+    engine[OSRS_HEAD_PRIMARY] = primary >= NH_PVP_PRIMARY_WEAPON
+        ? OSRS_PRIMARY_MOVE_ACTIONS : primary;
+    if (primary == NH_PVP_PRIMARY_BLOOD) engine[OSRS_HEAD_SPELL] = OSRS_SPELL_BLOOD_BARRAGE;
+    if (primary == NH_PVP_PRIMARY_ICE) engine[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
+    engine[OSRS_HEAD_OVERHEAD] = semantic[NH_PVP_HEAD_OVERHEAD];
+    engine[OSRS_HEAD_SPECIAL] = semantic[NH_PVP_HEAD_SPECIAL];
+    engine[OSRS_HEAD_OFFENSIVE] = semantic[NH_PVP_HEAD_OFFENSIVE];
+}
+
+static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, int* engine) {
+    Player* player = &env->players[actor];
+    player->consumable_used_this_tick = 0;
+    if (player->current_hitpoints <= 0) return;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        int action = semantic[NH_PVP_HEAD_EQUIP_SLOT(slot)];
+        if (action == NH_PVP_EQUIPMENT_NO_CHANGE) continue;
+        int old_weapon = player->equipped[GEAR_SLOT_WEAPON];
+        int changed = 0;
+        if (action == NH_PVP_EQUIPMENT_UNEQUIP) {
+            changed = osrs_unequip_to_inventory(player, player->inventory_cells, slot) == OSRS_UNEQUIP_SUCCESS;
+        } else {
+            uint8_t item = NH_PVP_EQUIPMENT_ITEMS[slot][action - NH_PVP_EQUIPMENT_ITEM_BASE];
+            if (player->equipped[slot] == item) continue;
+            int cell = nh_pvp_find_item_cell(player, item);
+            if (cell >= 0) changed = osrs_equip_from_cell(player, player->inventory_cells, cell) >= 0;
+        }
+        if (changed) {
+            osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
+            pvp_maul_weapon_changed(env, actor, old_weapon);
+            player->clicks_this_tick++;
+        }
+    }
+    const int heads[] = {NH_PVP_HEAD_FOOD, NH_PVP_HEAD_DRINK, NH_PVP_HEAD_KARAMBWAN};
+    const OsrsConsumableKind* kinds[] = {NH_PVP_FOOD_KINDS, NH_PVP_DRINK_KINDS, NH_PVP_KARAMBWAN_KINDS};
+    for (int stage = 0; stage < 3; stage++) {
+        int action = semantic[heads[stage]];
+        if (action == 0) continue;
+        OsrsConsumableKind kind = kinds[stage][action];
+        int cell = nh_pvp_find_consumable_cell(player, kind);
+        if (cell < 0) continue;
+        int consumed;
+        if (stage == 1) {
+            if (!pvp_drink_kind_available(player, kind)) continue;
+            OsrsInventoryDrinkConsumeResult result = osrs_inventory_cell_consume_drink_one_dose(
+                &player->inventory_cells[cell],
+                osrs_inventory_cell_click_classify(&player->inventory_cells[cell]),
+                &player->potion_timer, pvp_apply_drink_one_dose_effect, player);
+            consumed = result.consumed;
+        } else {
+            consumed = pvp_consume_food_cell(player, cell);
+        }
+        if (consumed) {
+            osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
+            player->consumable_used_this_tick = 1;
+            player->clicks_this_tick++;
+        }
+    }
+    pvp_apply_control_actions(env, actor, engine,
+        semantic[NH_PVP_HEAD_UTILITY] == NH_PVP_UTILITY_VENGEANCE
+            ? OSRS_SPELL_VENGEANCE : OSRS_SPELL_NONE);
 }
 
 

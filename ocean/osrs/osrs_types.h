@@ -287,6 +287,19 @@ typedef enum {
     OSRS_HIT_BURN,
 } OsrsHitKind;
 
+typedef enum {
+    OSRS_PVP_PROJECTILE_NONE,
+    OSRS_PVP_PROJECTILE_RANGED,
+    OSRS_PVP_PROJECTILE_ICE,
+    OSRS_PVP_PROJECTILE_BLOOD,
+    OSRS_PVP_PROJECTILE_COUNT,
+} OsrsPvpProjectileCue;
+
+typedef struct {
+    OsrsPvpProjectileCue cue;
+    int launch_tick;
+} OsrsPvpProjectile;
+
 typedef struct {
     int damage;
     int ticks_until_hit;
@@ -814,6 +827,9 @@ typedef struct {
     int last_attack_tick;
     int last_consume_tick;
     int last_vengeance_tick;
+    int last_freeze_tick;
+    int move_dx;
+    int move_dy;
 } OsrsPvpVisibleActor;
 
 typedef struct {
@@ -833,6 +849,7 @@ typedef struct {
     OsrsTeleportState teleport[NUM_AGENTS];
     OsrsTeleportWorld teleport_world;
     OsrsPvpVisibleActor visible[NUM_AGENTS];
+    OsrsPvpProjectile projectiles[NUM_AGENTS][MAX_PENDING_HITS];
     OsrsPvpHitObserver hit_observer;
     void* hit_observer_context;
     OsrsPvpAttackChanceObserver attack_chance_observer;

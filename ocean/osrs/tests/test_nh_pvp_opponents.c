@@ -27,9 +27,9 @@ static void reset(OpponentType bot) {
 }
 
 int main(void) {
-    CHECK("sparse retained catalogue and policy dimensions", sizeof(NH_SCRIPTED_OPPONENTS) /
+    CHECK("sparse retained opponent catalogue", sizeof(NH_SCRIPTED_OPPONENTS) /
         sizeof(*NH_SCRIPTED_OPPONENTS) == 9 && OPP_GENERALIST_NH == 23 &&
-        OPP_SELFPLAY == 31 && OPP_MIXED_NH == 33 && OBS_SIZE == 123 && NH_PVP_ACTION_MASK_SIZE == 423);
+        OPP_SELFPLAY == 31 && OPP_MIXED_NH == 33);
     for (int id = -1; id <= 38; id++) {
         int valid = id == OPP_NONE || id == OPP_SELFPLAY || osrs_nh_is_scripted_opponent((OpponentType)id);
         if (valid) {

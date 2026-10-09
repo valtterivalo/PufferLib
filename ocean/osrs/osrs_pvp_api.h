@@ -389,11 +389,13 @@ void pvp_reset(
         env->pvp_runtime.initial_supply_units[i] =
             pvp_remaining_supply_units(&env->players[i]);
         osrs_refresh_player_equipment(&env->players[i]);
+        memset(env->pvp_runtime.projectiles[i], 0, sizeof(env->pvp_runtime.projectiles[i]));
         env->pvp_runtime.visible[i] = (OsrsPvpVisibleActor){
             .health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE,
             .last_attack_tick = -1,
             .last_consume_tick = -1,
             .last_vengeance_tick = -1,
+            .last_freeze_tick = -1,
         };
     }
 
@@ -429,11 +431,15 @@ static inline void pvp_actor_route_caches_clear(
         osrs_actor_route_cache_clear(&route_cache[i]);
 }
 
-void pvp_step(
+void pvp_step_with_nh_actions(
     OsrsEnv* env,
     const EncounterArenaTopology* route_topology,
-    OsrsActorRouteCache route_cache[NUM_AGENTS]
+    OsrsActorRouteCache route_cache[NUM_AGENTS],
+    const int* semantic[NUM_AGENTS]
 ) {
+    for (int actor = 0; actor < NUM_AGENTS; actor++)
+        if (semantic[actor]) nh_pvp_decode_control_actions(semantic[actor],
+            env->actions + actor * OSRS_BASE_NUM_ACTION_HEADS);
     if (!route_cache) {
         fprintf(stderr, "PvP step missing actor route caches\n");
         abort();
@@ -456,14 +462,18 @@ void pvp_step(
     reset_tick_flags(&env->players[0]);
     reset_tick_flags(&env->players[1]);
 
-    if (env->pvp_runtime.use_c_opponent_p0) {
+    if (semantic[0]) {
+        assert(!env->pvp_runtime.use_c_opponent_p0);
+    } else if (env->pvp_runtime.use_c_opponent_p0) {
         memset(env->actions, 0, OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
     } else {
         memcpy(env->actions, env->ocean_io.agent_actions,
             OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
     }
 
-    if (env->pvp_runtime.use_external_opponent_actions) {
+    if (semantic[1]) {
+        assert(env->pvp_runtime.use_external_opponent_actions);
+    } else if (env->pvp_runtime.use_external_opponent_actions) {
         memcpy(
             env->actions + OSRS_BASE_NUM_ACTION_HEADS,
             env->pvp_runtime.external_opponent_actions,
@@ -523,8 +533,11 @@ void pvp_step(
         pre_move_y[i] = env->players[i].y;
     }
 
-    execute_switches(env, first, agent_actions[first], route_topology);
-    execute_switches(env, second, agent_actions[second], route_topology);
+    for (int turn = 0; turn < NUM_AGENTS; turn++) {
+        int actor = first ^ turn;
+        if (semantic[actor]) execute_nh_switches(env, actor, semantic[actor], agent_actions[actor]);
+        else execute_switches(env, actor, agent_actions[actor], route_topology);
+    }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
         Player* pi = &env->players[i];
@@ -557,6 +570,8 @@ void pvp_step(
         int dy = abs(env->players[i].y - pre_move_y[i]);
         int dist = (dx > dy) ? dx : dy;
         env->players[i].is_running = (dist >= 2) ? 1 : 0;
+        env->pvp_runtime.visible[i].move_dx = env->players[i].x - pre_move_x[i];
+        env->pvp_runtime.visible[i].move_dy = env->players[i].y - pre_move_y[i];
     }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -637,6 +652,12 @@ void pvp_step(
     } else {
         env->ocean_io.agent_terminals[0] = 0;
     }
+}
+
+void pvp_step(OsrsEnv* env, const EncounterArenaTopology* topology,
+    OsrsActorRouteCache route_cache[NUM_AGENTS]) {
+    const int* semantic[NUM_AGENTS] = {NULL, NULL};
+    pvp_step_with_nh_actions(env, topology, route_cache, semantic);
 }
 
 void pvp_close(OsrsEnv* env) {

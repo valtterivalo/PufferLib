@@ -174,18 +174,9 @@ static const EntityEncoderDescriptor VISUAL_ENTITY_ENCODER_DESCRIPTORS[] = {
                 "equipped", OSRS_ENT_EQUIPPED_START, OSRS_ENT_EQUIPPED_NUM_RECS),
         },
     },
-    {
-        .env_name = "nh_pvp",
-        .obs_size = NH_PVP_NUM_OBS,
-        .num_branches = 2,
-        .branches = {
-            VISUAL_SHARED_ITEM_BRANCH(
-                "inventory", OSRS_ENT_INV_START, OSRS_ENT_INV_NUM_RECS),
-            VISUAL_SHARED_ITEM_BRANCH(
-                "equipped", OSRS_ENT_EQUIPPED_START, OSRS_ENT_EQUIPPED_NUM_RECS),
-        },
-    },
 };
+
+static const int PVP_ENGINE_ACTION_DIMS[] = OSRS_BASE_ACTION_DIMS_INIT(1);
 
 static const EntityEncoderDescriptor* visual_policy_entity_descriptor(
         const EncounterDef* edef) {
@@ -240,7 +231,7 @@ static void run_random_episode(OsrsEnv* env, int verbose) {
             int* actions =
                 env->actions + agent * OSRS_BASE_NUM_ACTION_HEADS;
             for (int h = 0; h < OSRS_BASE_NUM_ACTION_HEADS; h++) {
-                actions[h] = rand() % NH_PVP_ACTION_DIMS[h];
+                actions[h] = rand() % PVP_ENGINE_ACTION_DIMS[h];
             }
         }
 
@@ -280,7 +271,7 @@ static void benchmark(OsrsEnv* env, int num_steps) {
                 int* actions =
                     env->actions + agent * OSRS_BASE_NUM_ACTION_HEADS;
                 for (int h = 0; h < OSRS_BASE_NUM_ACTION_HEADS; h++) {
-                    actions[h] = rand() % NH_PVP_ACTION_DIMS[h];
+                    actions[h] = rand() % PVP_ENGINE_ACTION_DIMS[h];
                 }
             }
 
@@ -685,7 +676,7 @@ static void run_profile(
                 int* actions =
                     env->actions + agent * OSRS_BASE_NUM_ACTION_HEADS;
                 for (int h = 0; h < OSRS_BASE_NUM_ACTION_HEADS; h++) {
-                    actions[h] = rand() % NH_PVP_ACTION_DIMS[h];
+                    actions[h] = rand() % PVP_ENGINE_ACTION_DIMS[h];
                 }
             }
             pvp_step(env, direct_pvp_topology, direct_pvp_route_cache);
@@ -974,7 +965,8 @@ static VisualPolicyModelShape visual_policy_select_model_shape(
             for (int enc = 0; enc <= enc_max; enc++) {
                 if (cli_entity_encoder > 0 && enc != cli_entity_encoder) continue;
                 for (int value_heads = 0; value_heads <= 1; value_heads++) {
-                    for (int variant = 0; variant <= 1; variant++) {
+                    int input_variants = strcmp(edef->name, "nh_pvp") == 0 ? 1 : 2;
+                    for (int variant = 0; variant < input_variants; variant++) {
                         int input_size = variant ? full_input_size : obs_input_size;
                         if (enc && input_size != edef->obs_size) continue;
                         int64_t expected = visual_policy_expected_weight_count(
@@ -1381,7 +1373,6 @@ static void run_policy_profile(
     int actions[VISUAL_POLICY_MAX_ACTION_HEADS] = {0};
     int total_steps = 0;
     int reset_count = 0;
-    int ep_kills = 0, ep_deaths = 0, ep_escapes = 0, ep_mutual = 0;
     long ep_drink_brew = 0, ep_drink_sanfew = 0, ep_drink_combat = 0;
     long ep_eat_marlin = 0, ep_eat_halibut = 0, ep_eat_pie = 0;
     long ep_spec_vw = 0, ep_spec_maul = 0;
@@ -1440,13 +1431,6 @@ static void run_policy_profile(
         if (terminal) {
             if (encounter_name && strcmp(encounter_name, "riskfight") == 0) {
                 const RiskfightState* rf = (const RiskfightState*)env->encounter_state;
-                switch (rf->outcome[0]) {
-                    case RISKFIGHT_KILL: ep_kills++; break;
-                    case RISKFIGHT_DEATH: ep_deaths++; break;
-                    case RISKFIGHT_ESCAPE: ep_escapes++; break;
-                    case RISKFIGHT_MUTUAL_DEATH: ep_mutual++; break;
-                    default: break;
-                }
                 ep_drink_brew += rf->drink_brew[0]; ep_drink_sanfew += rf->drink_sanfew[0];
                 ep_drink_combat += rf->drink_combat[0];
                 ep_eat_marlin += rf->eat_marlin[0]; ep_eat_halibut += rf->eat_halibut[0];
@@ -1747,7 +1731,7 @@ static void visual_frame(void* arg) {
                 &rc->human_input, env->actions, &env->players[0]);
             int* opp = env->actions + OSRS_BASE_NUM_ACTION_HEADS;
             for (int h = 0; h < OSRS_BASE_NUM_ACTION_HEADS; h++) {
-                opp[h] = rand() % NH_PVP_ACTION_DIMS[h];
+                opp[h] = rand() % PVP_ENGINE_ACTION_DIMS[h];
             }
             human_input_clear_pending(&rc->human_input);
         } else {
@@ -1755,7 +1739,7 @@ static void visual_frame(void* arg) {
                 int* actions =
                     env->actions + agent * OSRS_BASE_NUM_ACTION_HEADS;
                 for (int h = 0; h < OSRS_BASE_NUM_ACTION_HEADS; h++) {
-                    actions[h] = rand() % NH_PVP_ACTION_DIMS[h];
+                    actions[h] = rand() % PVP_ENGINE_ACTION_DIMS[h];
                 }
             }
         }
@@ -2551,11 +2535,11 @@ int main(int argc, char** argv) {
         }
         printf("\n");
 
-        printf("\nAction heads: %d\n", OSRS_BASE_NUM_ACTION_HEADS);
+        printf("\nAction heads: %d\n", NH_PVP_NUM_ACTION_HEADS);
         printf("Action dims: [");
-        for (int i = 0; i < OSRS_BASE_NUM_ACTION_HEADS; i++) {
+        for (int i = 0; i < NH_PVP_NUM_ACTION_HEADS; i++) {
             printf("%d", NH_PVP_ACTION_DIMS[i]);
-            if (i < OSRS_BASE_NUM_ACTION_HEADS - 1) {
+            if (i < NH_PVP_NUM_ACTION_HEADS - 1) {
                 printf(", ");
             }
         }

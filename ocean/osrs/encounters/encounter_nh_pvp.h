@@ -5,15 +5,10 @@
 #include "../osrs_encounter_visual_events.h"
 #include "../osrs_env.h"
 
-#define NH_PVP_TARGET_SLOTS 1
-#define NH_PVP_ACTION_MASK_SIZE \
-    OSRS_BASE_ACTION_MASK_SIZE(NH_PVP_TARGET_SLOTS)
-#define NH_PVP_ACTION_DIMS_INIT OSRS_BASE_ACTION_DIMS_INIT(NH_PVP_TARGET_SLOTS)
-static const int NH_PVP_ACTION_DIMS[OSRS_BASE_NUM_ACTION_HEADS] =
-    NH_PVP_ACTION_DIMS_INIT;
-
 typedef struct {
     OsrsEnv env;
+    int external_actions[NH_PVP_NUM_ACTION_HEADS];
+    int last_semantic_actions[NUM_AGENTS][NH_PVP_NUM_ACTION_HEADS];
 } NhPvpState;
 
 typedef struct {
@@ -82,13 +77,27 @@ static void nh_pvp_reset(EncounterState* state, EncounterContext* context, uint3
     pvp_reset(&s->env, ctx->route_topology);
 }
 
+static inline void nh_pvp_set_external_actions(NhPvpState* state, const int* actions) {
+    for (int head = 0; head < NH_PVP_NUM_ACTION_HEADS; head++)
+        assert(actions[head] >= 0 && actions[head] < NH_PVP_ACTION_DIMS[head]);
+    memcpy(state->external_actions, actions, sizeof(state->external_actions));
+    state->env.pvp_runtime.use_external_opponent_actions = 1;
+}
+
 static void nh_pvp_step(EncounterState* state, EncounterContext* context, const int* actions) {
     NhPvpContext* ctx = (NhPvpContext*)context;
     NhPvpState* s = (NhPvpState*)state;
     encounter_arena_topology_require_finalized(ctx->route_topology);
-    memcpy(s->env.ocean_io.agent_actions, actions,
-        OSRS_BASE_NUM_ACTION_HEADS * sizeof(int));
-    pvp_step(&s->env, ctx->route_topology, ctx->player_route_cache);
+    const int* semantic[NUM_AGENTS] = {
+        s->env.pvp_runtime.use_c_opponent_p0 ? NULL : actions,
+        s->env.pvp_runtime.use_external_opponent_actions ? s->external_actions : NULL,
+    };
+    for (int actor = 0; actor < NUM_AGENTS; actor++) {
+        memset(s->last_semantic_actions[actor], 0, sizeof(s->last_semantic_actions[actor]));
+        if (semantic[actor]) memcpy(s->last_semantic_actions[actor], semantic[actor],
+            sizeof(s->last_semantic_actions[actor]));
+    }
+    pvp_step_with_nh_actions(&s->env, ctx->route_topology, ctx->player_route_cache, semantic);
 }
 
 static void nh_pvp_step_human_commands(
@@ -105,9 +114,9 @@ static void nh_pvp_step_human_commands(
         s->env.pvp_runtime.walk_dest_x[0] = hi->pending_move_x;
         s->env.pvp_runtime.walk_dest_y[0] = hi->pending_move_y;
     }
-    human_to_pvp_actions(
-        hi, s->env.ocean_io.agent_actions, &s->env.players[0]);
-    pvp_step(&s->env, ctx->route_topology, ctx->player_route_cache);
+    int actions[NH_PVP_NUM_ACTION_HEADS];
+    human_to_nh_pvp_actions(hi, actions, &s->env.players[0]);
+    nh_pvp_step(state, context, actions);
     s->env.pvp_runtime.use_c_opponent_p0 = saved_use_c_opponent_p0;
     if (s->env.pvp_runtime.walk_dest_x[0] < 0 ||
             s->env.pvp_runtime.walk_dest_y[0] < 0)
@@ -252,7 +261,7 @@ static const EncounterDef ENCOUNTER_NH_PVP = {
     .name = "nh_pvp",
     .display_name = "PvP",
     .obs_size = NH_PVP_NUM_OBS,
-    .num_action_heads = OSRS_BASE_NUM_ACTION_HEADS,
+    .num_action_heads = NH_PVP_NUM_ACTION_HEADS,
     .action_head_dims = NH_PVP_ACTION_DIMS,
     .mask_size = NH_PVP_ACTION_MASK_SIZE,
     .state_size = sizeof(NhPvpState),

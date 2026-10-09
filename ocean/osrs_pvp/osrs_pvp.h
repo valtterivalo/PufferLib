@@ -16,7 +16,7 @@ typedef float obs_t;
 #endif
 
 #define OBS_SIZE NH_PVP_NUM_OBS
-#define NUM_ATNS OSRS_BASE_NUM_ACTION_HEADS
+#define NUM_ATNS NH_PVP_NUM_ACTION_HEADS
 #define ACT_SIZES NH_PVP_ACTION_DIMS_INIT
 
 #define NH_PVP_ENV_STATE(env) ((EncounterState*)&(env)->state)
@@ -37,7 +37,6 @@ struct Log {
     float brews_remaining;
     float spec_energy_remaining;
     float attacks_landed;
-    float off_prayer_hits;
     float n;
 };
 
@@ -51,7 +50,7 @@ struct Env {
 
     NhPvpState state;
     NhPvpContext context;
-    int acts_staging[2 * OSRS_BASE_NUM_ACTION_HEADS];
+    int acts_staging[2 * NH_PVP_NUM_ACTION_HEADS];
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -145,8 +144,7 @@ void puf_step(Env* env) {
         for (int head = 0; head < NUM_ATNS; head++)
             env->acts_staging[i * NUM_ATNS + head] = (int)env->agents[i].actions[head];
     if (env->num_agents == 2)
-        memcpy(env->state.env.pvp_runtime.external_opponent_actions,
-            env->acts_staging + NUM_ATNS, NUM_ATNS * sizeof(int));
+        nh_pvp_set_external_actions(&env->state, env->acts_staging + NUM_ATNS);
 
     ENCOUNTER_NH_PVP.step(
         NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), env->acts_staging);
@@ -173,7 +171,6 @@ void puf_step(Env* env) {
         env->log.brews_remaining += episode->brews_remaining;
         env->log.spec_energy_remaining += episode->spec_energy_remaining;
         env->log.attacks_landed += episode->attacks_landed;
-        env->log.off_prayer_hits += episode->off_prayer_hits;
         env->log.n += episode->n;
         memset(episode, 0, sizeof(*episode));
 
@@ -213,14 +210,13 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "draw_rate", log->draw_rate);
     dict_set(out, "damage_dealt", log->damage_dealt);
     dict_set(out, "damage_received", log->damage_received);
-    dict_set(out, "prayer_correct_rate",
+    dict_set(out, "opponent_protection_rate",
         log->prayer_total > 0.0f ? log->prayer_correct / log->prayer_total : 0.0f);
     dict_set(out, "food_remaining", log->food_remaining);
     dict_set(out, "karambwan_remaining", log->karambwan_remaining);
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "spec_remaining", log->spec_energy_remaining);
     dict_set(out, "attacks_landed", log->attacks_landed);
-    dict_set(out, "off_prayer_hits", log->off_prayer_hits);
     dict_set(out, "damage_per_hit",
         log->attacks_landed > 0.0f ? log->damage_dealt / log->attacks_landed : 0.0f);
     dict_set(out, "score", log->wins);

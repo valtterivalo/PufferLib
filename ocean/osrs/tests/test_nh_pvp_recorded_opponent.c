@@ -27,9 +27,9 @@ static void reset(OpponentType bot) {
 }
 
 int main(void) {
-    CHECK("adaptive bot and interface identity remain stable", OPP_GENERALIST_NH == 23 &&
+    CHECK("adaptive opponent identities survive the NH interface change", OPP_GENERALIST_NH == 23 &&
         OPP_RANGE_KITER == 30 && OPP_SELFPLAY == 31 && OPP_MIXED_NH == 33 &&
-        OPP_RECORDED_ADAPTIVE_NH == 35 && OBS_SIZE == 123 && NH_PVP_ACTION_MASK_SIZE == 423);
+        OPP_RECORDED_ADAPTIVE_NH == 35);
     unsigned attacks = (1u << RECORDED_NH_ATTACK_COUNT) - 1u;
     RecordedNhWeights prior = recorded_nh_attack_weights(
         RECORDED_NH_ATTACK_DISTANCE_COUNT, ATTACK_STYLE_NONE, PRAYER_NONE, attacks);
@@ -123,10 +123,15 @@ int main(void) {
     original->players[0].y = FIGHT_AREA_BASE_Y + 10;
     original->players[1].x = original->players[0].x + 1;
     original->players[1].y = original->players[0].y;
-    int submitted[NUM_ATNS] = {0};
+    int submitted[OSRS_BASE_NUM_ACTION_HEADS] = {0};
     pvp_emit_equipment_plan_actions(submitted, &original->players[0], PVP_EQUIPMENT_MELEE);
-    submitted[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
-    for (int head = 0; head < NUM_ATNS; head++) actions[head] = submitted[head];
+    actions[NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_WEAPON;
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+        int click = submitted[OSRS_HEAD_EQUIP_SLOT(slot)];
+        if (click > 0)
+            actions[NH_PVP_HEAD_EQUIP_SLOT(slot)] = nh_pvp_equipment_action_for_item(slot,
+                osrs_inventory_cell_item_index(&original->players[0].inventory_cells[click - 1]));
+    }
     puf_step(&env);
     CHECK("adaptive defense predicts canonical executed next weapon from completed ABA history",
         original->players[0].just_attacked &&
