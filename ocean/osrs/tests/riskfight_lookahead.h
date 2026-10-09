@@ -39,7 +39,6 @@ static LaItem la_item_of(int raw) {
         case 24133: case 24224: return (LaItem){LA_ITEM_MAPPED, ITEM_INFERNAL_CAPE};
         case 28055: return (LaItem){LA_ITEM_MAPPED, ITEM_DRAGON_BOOTS};
         case 28069: return (LaItem){LA_ITEM_MAPPED, ITEM_FIGHTER_TORSO};
-        case 31097: return (LaItem){.kind = LA_ITEM_UNSUPPORTED};
     }
     for (int i = 0; i < NUM_ITEMS; i++)
         if (ITEM_DATABASE[i].item_id == raw) return (LaItem){LA_ITEM_MAPPED, (ItemIndex)i};

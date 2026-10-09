@@ -7,6 +7,7 @@
 #include "osrs_test_check.h"
 
 int main(void) {
+    gs_register_java_items();
     GsInfer infer = {0};
     GsWire wire = {0};
     const char* legacy = "S 394 121 118 118 119 99 99 90 0 1000 0 0 3162 3503 -1 10828 21295 1725 27690 10551 22322 -1 4087 -1 7462 11840 -1 2550 -1 24592 24592 24595 24595 24598 24595 24595 24595 24598 24592 24595 24595 24592 6685 24592 6685 -1 24592 24592 24592 24225 12695 24592 24592 24592 24592 24621 8013 1 0 -1 -1";
@@ -82,10 +83,10 @@ int main(void) {
             CHECK("raw aliases remain local to the forecast boundary", global_aliases == 0);
         }
     }
-    CHECK("empty equipment remains distinct from unsupported mechanics", la_item_of(-1).kind == LA_ITEM_EMPTY && la_item_of(-1).item == ITEM_NONE && la_item_of(31097).kind == LA_ITEM_UNSUPPORTED);
+    CHECK("empty equipment remains distinct from unsupported mechanics", la_item_of(-1).kind == LA_ITEM_EMPTY && la_item_of(-1).item == ITEM_NONE && la_item_of(11665).kind == LA_ITEM_UNSUPPORTED);
     gear.armor[6] = 31097;
-    unsupported = la_gear_status(gear);
-    CHECK("disputed Avernic metadata remains explicitly unsupported", unsupported.status == LA_GEAR_ARMOR_UNSUPPORTED && unsupported.slot == 6 && unsupported.raw == 31097);
+    CHECK("Avernic treads preserve official magic damage", gs_item(31097)->has_stats && gs_item(31097)->mdmg == 2 && gs_item(31097)->mdmg == ITEM_DATABASE[ITEM_AVERNIC_TREADS].magic_damage);
+    CHECK("verified Avernic treads use their existing physical item", la_item_of(31097).kind == LA_ITEM_MAPPED && la_item_of(31097).item == ITEM_AVERNIC_TREADS && la_gear_status(gear).status == LA_GEAR_SUPPORTED);
     gear.armor[6] = 11840;
     gear.weapon = 20997; gear.shield = -1;
     CHECK("mapped bow without a forecast ammo prior is unavailable", la_gear_status(gear).status == LA_GEAR_AMMO_UNSUPPORTED);
