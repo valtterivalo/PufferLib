@@ -87,45 +87,54 @@ typedef struct {
     int labels;
 } SpecTick;
 
-enum { SPEC_EAT = 1, SPEC_SWING = 2, SPEC_VW = 4, SPEC_MAUL = 8, SPEC_VENG = 16 };
-
-static int eat_delay_of_heal(double heal) { return heal < 30 ? 3 : heal < 50 ? 4 : 5; }
+enum { SPEC_EAT = 1, SPEC_SWING = 2, SPEC_VW = 4, SPEC_MAUL = 8, SPEC_VENG = 16, SPEC_SWING_UNKNOWN = 32 };
 
 /** Series of a fighter: after each row, his history and inputs, and what he did on that row. `out` has row_count entries. */
 static void spec_series(const SpecDuel* d, int side, SpecTick* out) {
     Hist h = hist_start();
     int other = 1 - side;
     GsSpecEnergy energy = gs_energy_full(d->rows[0].tick);
-    int next_attack = INT_MIN / 2, hp_ratio = 30, our_bar = 30, wielded_vw = 0, wielded_maul = 0, last_cast = INT_MIN / 2, cast_active = 0, ready_age = 0;
+    GsTimerState timer = {0};
+    int hp_ratio = 30, our_bar = 30, wielded_vw = 0, wielded_maul = 0, last_cast = INT_MIN / 2, cast_active = 0;
     for (int i = 0; i < d->row_count; i++) {
         const SpecRow* r = &d->rows[i];
         const SpecSide* x = &r->s[side];
         const SpecSide* y = &r->s[other];
         int tick = r->tick;
         HistInput in = {.ate_visible = x->eat829, .ate = x->meal == MEAL_EAT || x->meal == MEAL_HIDDEN, .hits = x->nhit > 0, .damage = x->dmg,
-            .bar_ratio = x->bar, .bar_scale = 30, .weapon = y->wep, .swing = x->att, .vw = x->vw, .maul = x->maul};
-        for (int k = 0; k < x->anim_count; k++) in.animated |= x->anims[k] != 829;
+            .bar_ratio = x->bar, .bar_scale = 30, .weapon = y->wep, .vw = x->vw, .maul = x->maul};
+        int unclassified = 0, attack_source = 0;
+        for (int k = 0; k < x->anim_count; k++) {
+            int animation = x->anims[k];
+            if (animation == -1) continue;
+            const GsAnimationRow* row = gs_animation_row(animation);
+            in.animated |= animation != ANIM_EAT;
+            if (!row) { unclassified = 1; continue; }
+            GsKind kind = (GsKind)row->kind;
+            in.swing |= kind == GS_KIND_ATTACK;
+            attack_source |= kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC;
+            GsSpeed speed = x->wep >= 0 || row->spell_speed ? gs_speed_after(x->wep, animation, GS_PACE_UNKNOWN) : (GsSpeed){0};
+            timer = gs_timer_observe(timer, kind, tick, speed);
+        }
+        unclassified |= x->att && !attack_source;
+        if (unclassified || x->meal == MEAL_HIDDEN) timer = (GsTimerState){0};
         if (x->bar >= 0) hp_ratio = x->bar;
         if (y->bar >= 0) our_bar = y->bar;
         const int* kit = spec_kit(d, other, tick);
         in.reach = assumed_reach(kit, y->wep, &in.has_spec);
-        int labels = (in.ate ? SPEC_EAT : 0) | (x->att ? SPEC_SWING : 0) | (x->vw ? SPEC_VW : 0) | (x->maul ? SPEC_MAUL : 0) | (x->veng_cast ? SPEC_VENG : 0);
-        int speed = gs_base_speed(x->wep) > 0 ? gs_base_speed(x->wep) : 4;
-        if (in.ate && next_attack - (tick + 1) > 0) next_attack += eat_delay_of_heal(x->meal_heal);
-        if (x->att) next_attack = tick + speed;
-        in.ready = next_attack <= tick + 1;
+        int labels = (in.ate ? SPEC_EAT : 0) | (in.swing ? SPEC_SWING : 0) | (x->vw ? SPEC_VW : 0) | (x->maul ? SPEC_MAUL : 0) | (x->veng_cast ? SPEC_VENG : 0) | (unclassified ? SPEC_SWING_UNKNOWN : 0);
+        in.ready = gs_timer_reading(timer, tick + 1) == GS_READING_READY;
         if (spec_is_vw(x->wep) || x->vw) wielded_vw = 1;
         if (spec_is_maul(x->wep) || x->maul) wielded_maul = 1;
         if (x->vw || x->maul || x->other_spec) energy = gs_energy_spec(energy, tick, 50);
         if (x->veng_cast) { last_cast = tick; cast_active = 1; }
         if (x->veng_proc) cast_active = 0;
         hist_update(&h, tick, &in);
-        ready_age = in.ready ? ready_age + 1 : 0;
-        h.ready_age = ready_age;
         GsEnergyRange e = gs_energy_range(&energy, tick);
         out[i].h = h;
         out[i].labels = labels;
-        out[i].in = (HimInputs){.hp_ratio = hp_ratio, .our_bar_ratio = our_bar, .vw_ok = wielded_vw && e.high >= ENERGY_FOR_SPEC,
+        out[i].in = (HimInputs){.readiness = i + 1 < d->row_count ? gs_timer_reading(timer, d->rows[i + 1].tick) : GS_READING_UNKNOWN,
+            .hp_ratio = hp_ratio, .our_bar_ratio = our_bar, .vw_ok = wielded_vw && e.high >= ENERGY_FOR_SPEC,
             .maul_ok = wielded_maul && e.high >= ENERGY_FOR_SPEC, .veng_ok = !cast_active && tick - last_cast >= 50};
     }
 }

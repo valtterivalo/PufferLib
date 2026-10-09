@@ -54,7 +54,11 @@ int main(int argc, char** argv) {
         const Hist* hist = &((const Hist*)recorded.hist_series)[t - 1 - recorded.lo];
         Probe loaded = probe_state(&sim.state, hist, t, has_item(&sim.state, 1, ITEM_VOIDWAKER), has_maul(&sim.state, 1));
         for (int action = 0; action < ACT_COUNT; action++) {
-            assert(pure.eligible[action] == loaded.eligible[action]);
+            if (action == ACT_SWING) {
+                assert(pure.eligible[action] == (gs_timer_reading(opponent, t) == GS_READING_READY));
+                const Player* him = &sim.state.env.players[1];
+                assert(loaded.eligible[action] == (!him->has_attack_timer || him->attack_timer <= 0));
+            } else assert(pure.eligible[action] == loaded.eligible[action]);
             assert(pure.x[action].n == loaded.x[action].n);
             for (int k = 0; k < pure.x[action].n; k++) assert(pure.x[action].idx[k] == loaded.x[action].idx[k]);
         }
@@ -77,7 +81,7 @@ int main(int argc, char** argv) {
     assert(request.belief.timer_seen && request.belief.timer_first == 104 && request.belief.timer_last == 107);
     fclose(stream);
     assert(exact > 0 && unknown > 0);
-    printf("Pure hazard parity exact %d retained unknown %d source_frames %d\n", exact, unknown, recorded.hi - recorded.lo);
+    printf("Hazard feature parity exact %d retained unknown %d source_frames %d\n", exact, unknown, recorded.hi - recorded.lo);
     puts("Calibrator attack-clock eligibility passed");
     return 0;
 }

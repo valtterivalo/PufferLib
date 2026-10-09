@@ -109,6 +109,7 @@ static int lag_of(int step_tick, int anchor) { return anchor == WARNING_NONE ? L
 typedef struct {
     int hp_ratio, our_bar_ratio;
     int vw_ok, maul_ok, veng_ok;
+    GsReading readiness;
 } HimInputs;
 
 /** The features and the legal actions of the tick `tick` from his inputs and the history after the tick before. */
@@ -118,7 +119,7 @@ static Probe probe_from_inputs(const HimInputs* in, const Hist* h, int tick) {
     int warned = warning_since(&h->warning) != WARNING_NONE;
     p.x[ACT_EAT_BIG] = eat_features(hp_band4(in->hp_ratio), lag_of(tick, h->big_hit_tick), warned);
     p.x[ACT_EAT_WARNING] = eat_features(hp_band4(in->hp_ratio), lag_of(tick, warning_since(&h->warning)), warned);
-    p.eligible[ACT_SWING] = h->ready_age > 0;
+    p.eligible[ACT_SWING] = in->readiness == GS_READING_READY;
     p.x[ACT_SWING] = swing_features(h);
     p.eligible[ACT_VW_SPEC] = in->vw_ok;
     int vw_follow = h->since_vw_spec >= 1 && h->since_vw_spec <= FOLLOW_UP;
@@ -137,6 +138,7 @@ static Probe probe_state(const RiskfightState* s, const Hist* h, int tick, int k
     const Player* him = &s->env.players[1];
     HimInputs in = {
         .hp_ratio = osrs_health_bar_ratio(him->current_hitpoints, 99, 30),
+        .readiness = !him->has_attack_timer || him->attack_timer <= 0 ? GS_READING_READY : GS_READING_COOLDOWN,
         .our_bar_ratio = s->visible[1].health_bar,
         .vw_ok = kit_vw && him->special_energy >= ENERGY_FOR_SPEC,
         .maul_ok = kit_maul && him->special_energy >= ENERGY_FOR_SPEC,
@@ -204,20 +206,16 @@ static int attack_hitsplat(int type) { return type == 16 || type == 17 || type =
 /** Hist after each tape tick lo..hi, from his animations, the hitsplats on him and the bar as shown. */
 static void hist_series(const Tape* tape, Hist* out) {
     Hist h = hist_start();
-    int ready_age = 0;
-    const TapeTick* initial = tape_tick(tape, tape->lo);
-    int clock_observed = initial->swing_him_tick >= 0 && initial->swing_him_speed > 0;
-    int attack_clock = clock_observed ? initial->swing_him_speed - 1 - (tape->lo - 1 - initial->swing_him_tick) : -1;
     for (int x = tape->lo; x <= tape->hi; x++) {
         const TapeTick* t = tape_tick(tape, x);
-        if (clock_observed) attack_clock--;
-        HistInput in = {.bar_ratio = t->bar_now_ratio, .bar_scale = t->bar_now_scale};
+        GsTimerState timer = tape->observer_series ? tape->observer_series[x - tape->lo].inf.opponent.timer : (GsTimerState){0};
+        HistInput in = {.bar_ratio = t->bar_now_ratio, .bar_scale = t->bar_now_scale,
+            .ready = gs_timer_reading(timer, x + 1) == GS_READING_READY};
         int other_anim = 0;
         for (int i = 0; i < tape->anim_count; i++) {
             const TapeAnim* a = &tape->anims[i];
             if (a->tick != x || a->side != SIDE_HIM) continue;
             in.ate |= a->anim == ANIM_EAT;
-            if (clock_observed && a->anim == ANIM_EAT) attack_clock += consume_delay(CONSUME_HARD);
             in.vw |= a->anim == ANIM_VW_SPEC;
             in.maul |= a->anim == ANIM_MAUL_SPEC;
             other_anim |= a->anim != -1 && a->anim != ANIM_EAT;
@@ -237,14 +235,7 @@ static void hist_series(const Tape* tape, Hist* out) {
         kit_of_equipped(equipped, kit);
         in.weapon = t->worn[3];
         in.reach = assumed_reach(kit, in.weapon, &in.has_spec);
-        if (t->swing_him_tick == x) {
-            attack_clock = t->swing_him_speed - 1;
-            clock_observed = 1;
-        }
-        ready_age = attack_clock <= 0 ? ready_age + 1 : 0;
-        in.ready = ready_age > 0;
         hist_update(&h, x, &in);
-        h.ready_age = ready_age;
         out[x - tape->lo] = h;
     }
 }

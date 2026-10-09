@@ -143,6 +143,7 @@ static Probe hidden_probe(const Tape* tape, int t, int sample, RiskfightSnapshot
     const RiskfightSideSnapshot* him = &snap->side[1];
     HimInputs in = {
         .hp_ratio = osrs_health_bar_ratio(him->hitpoints, 99, 30),
+        .readiness = tape->observer_series ? gs_timer_reading(tape->observer_series[t - 1 - tape->lo].inf.opponent.timer, t) : GS_READING_UNKNOWN,
         .our_bar_ratio = osrs_health_bar_ratio(snap->side[0].hitpoints, MAXED_BASE_HITPOINTS, OSRS_PLAYER_HEALTH_BAR_SCALE),
         .vw_ok = snapshot_has_item(&snap->loadout[1], ITEM_VOIDWAKER) && him->special_energy >= ENERGY_FOR_SPEC,
         .maul_ok = (snapshot_has_item(&snap->loadout[1], ITEM_GRANITE_MAUL) || snapshot_has_item(&snap->loadout[1], ITEM_GRANITE_MAUL_ORNATE)) && him->special_energy >= ENERGY_FOR_SPEC,
@@ -1375,7 +1376,8 @@ static void spec_samples(int session_in, int session_out, SampleSet sets[ACT_COU
                 Probe probe = probe_from_inputs(&series[r - 1].in, &series[r - 1].h, d->rows[r].tick);
                 int labels = series[r].labels;
                 int flags = (labels & SPEC_EAT ? FLAG_EAT : 0) | (labels & SPEC_SWING ? FLAG_SWING : 0) | (labels & SPEC_VW ? FLAG_VW : 0) |
-                    (labels & SPEC_MAUL ? FLAG_MAUL : 0) | (labels & SPEC_VENG ? FLAG_VENG : 0);
+                    (labels & SPEC_MAUL ? FLAG_MAUL : 0) | (labels & SPEC_VENG ? FLAG_VENG : 0) |
+                    (labels & SPEC_SWING_UNKNOWN ? FLAG_SWING_UNKNOWN : 0);
                 for (int a = 0; a < ACT_COUNT; a++) {
                     Conditioned c = conditioned((Action)a, &probe, flags);
                     if (!c.eligible) continue;

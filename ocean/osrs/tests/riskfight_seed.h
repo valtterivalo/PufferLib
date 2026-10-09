@@ -33,10 +33,6 @@ static int consume_of_raw(int raw) {
     return raw == RAW_ANGLERFISH ? CONSUME_HARD : raw == RAW_KARAMBWAN ? CONSUME_KARAMBWAN : CONSUME_POTION;
 }
 
-static int consume_delay(int kind) {
-    return kind == CONSUME_HARD ? 3 : kind == CONSUME_KARAMBWAN ? 2 : 0;
-}
-
 typedef struct { int food, potion, karambwan; } Locks;
 
 static Locks locks_after(const Tape* tape, char side, int t) {
