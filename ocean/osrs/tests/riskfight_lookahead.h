@@ -36,6 +36,8 @@ static uint32_t la_next(uint32_t* r) { *r ^= *r << 13; *r ^= *r >> 17; *r ^= *r 
 static double la_uniform(uint32_t* r, double low, double span) { return low + span * (la_next(r) >> 8) / 16777216.0; }
 static int la_between(uint32_t* r, int low, int high) { return high <= low ? low : low + (int)(la_next(r) % (uint32_t)(high - low + 1)); }
 
+static int la_food_timer(int ready, int tick) { return ready > tick + 1 ? ready - tick - 1 : 0; }
+
 static void la_resupply(Player* him, uint32_t* r) {
     int cells[OSRS_INVENTORY_SIZE], n = 0;
     for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
@@ -76,7 +78,7 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->attack_timer_uncapped = attack_timer;
     him->attack_timer = imax(-1, attack_timer);
     him->has_attack_timer = 1;
-    him->food_timer = imax(0, b->food_ready - tick);
+    him->food_timer = la_food_timer(b->food_ready, tick);
     him->potion_timer = him->karambwan_timer = 0;
     la_resupply(him, r);
     int carries_vw = b->seen_vw || la_uniform(r, 0, 1) < 0.65, carries_maul = b->seen_maul || la_uniform(r, 0, 1) < 0.51;
@@ -373,7 +375,7 @@ static LaBelief la_belief_of(const Sim* sim, int tick) {
 static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
     uint64_t h = 1469598103934665603ull;
     int parts[] = {us->current_hitpoints, us->attack_timer, us->attack_timer_uncapped, us->has_attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
-        b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, imax(0, b->food_ready - tick),
+        b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, la_food_timer(b->food_ready, tick),
         b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     return h;
