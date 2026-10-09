@@ -151,6 +151,18 @@ static double gs_health_survives(Arena* a, const GsHealth* health, const GsIncom
     return survives;
 }
 
+static GsIncoming gs_surviving_incoming(Arena* a, const GsHealth* health, const GsIncoming* hit, GsPid pid) {
+    int hp = health->hitpoints;
+    for (int i = 0; i < health->heal_count; i++)
+        if (health->heals[i].tick < hit->lands || (health->heals[i].tick == hit->lands && pid == GS_PID_LOCAL))
+            hp = imax(hp, imin(health->heals[i].cap, hp + health->heals[i].amount));
+    int high = imin(hit->most, hp - 1);
+    if (high < hit->least) return (GsIncoming){hit->lands, 0, 0, 1, hit->attack};
+    double accuracy = hit->accuracy * (high - hit->least + 1) / (hit->most - hit->least + 1)
+            / gs_health_survives(a, health, hit, pid);
+    return (GsIncoming){hit->lands, hit->least, high, accuracy, hit->attack};
+}
+
 static double gs_spec_alive(Arena* a, const GsSpecSituation* s, const GsIncoming* his, const GsSpecHit* hit) {
     if (!his) return 1;
     int first = hit->origin == GS_ORIGIN_OURS && (hit->lands < his->lands || (hit->lands == his->lands && s->pid == GS_PID_LOCAL));
@@ -316,7 +328,10 @@ static GsOutcome gs_walk(Arena* arena, const GsSpecSituation* s, double* alive, 
             if (delay && hits[i].origin != GS_ORIGIN_OURS) continue;
             after[count++] = hits[i];
         }
-        if (delay && delayed.lands <= last) after[count++] = gs_echo(arena, &delayed, echo, s->recoil_charges, s->pid);
+        if (delay && delayed.lands <= last) {
+            GsIncoming surviving = gs_surviving_incoming(arena, &s->local, &delayed, s->pid);
+            after[count++] = gs_echo(arena, &surviving, echo, s->recoil_charges, s->pid);
+        }
         spec_hits_sort(after, count);
         GsOutcome branch = gs_walk(arena, s, eat, length, after, count, tick + GS_MEAL_GAP, last, meals_left - 1, delayed_landing, echo, level, 0);
         dead += branch.kill;
@@ -345,9 +360,9 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
     }
     GsIncoming incoming = s->incoming;
     if (s->has_incoming) {
-        GsSpecHit undelayed = gs_echo(arena, &incoming, echo, s->recoil_charges, s->pid);
-        first = imin(first, undelayed.lands);
-        hits[struck_count] = undelayed;
+        GsIncoming surviving = gs_surviving_incoming(arena, &s->local, &incoming, s->pid);
+        hits[struck_count] = gs_echo(arena, &surviving, echo, s->recoil_charges, s->pid);
+        first = imin(first, hits[struck_count].lands);
     }
     if (first == INT_MAX) { arena->used = mark; return (GsOutcome){0, 0}; }
     int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
@@ -456,7 +471,10 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
                 thrown.attack += delay;
             }
             landing = &thrown;
-            if (delay == 0 || thrown.lands <= last) hits[count++] = gs_echo(arena, &thrown, echo, s->recoil_charges, s->pid);
+            if (delay == 0 || thrown.lands <= last) {
+                GsIncoming surviving = gs_surviving_incoming(arena, &s->local, &thrown, s->pid);
+                hits[count++] = gs_echo(arena, &surviving, echo, s->recoil_charges, s->pid);
+            }
         }
         spec_hits_sort(hits, count);
         GsEating eatings[2];

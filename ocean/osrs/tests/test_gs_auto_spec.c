@@ -122,7 +122,62 @@ static int read_record(FILE* f, Record* r) {
     return 0;
 }
 
+static void incoming_echo_contract(void) {
+    Arena arena = arena_make((size_t)1 << 20);
+    GsIncoming incoming = {101, 0, 100, 1, GS_NONE};
+    GsHealth healed = gs_health_healing(gs_health_of(1), 101, 19, 101);
+    GsIncoming local_range = gs_surviving_incoming(&arena, &healed, &incoming, GS_PID_LOCAL);
+    assert(local_range.least == 0 && local_range.most == 19 && fabs(local_range.accuracy - 1) < 1e-12);
+    arena.used = 0;
+    GsIncoming opponent_range = gs_surviving_incoming(&arena, &healed, &incoming, GS_PID_OPPONENT);
+    assert(opponent_range.least == 0 && opponent_range.most == 0 && fabs(opponent_range.accuracy - 1) < 1e-12);
+    arena.used = 0;
+    GsHealth hale = gs_health_of(101);
+    GsIncoming surviving_range = gs_surviving_incoming(&arena, &hale, &incoming, GS_PID_LOCAL);
+    assert(surviving_range.least == 0 && surviving_range.most == 100 && fabs(surviving_range.accuracy - 1) < 1e-12);
+
+    const double zero_damage[] = {1};
+    GsSpecHit planned = {103, zero_damage, 1, GS_ORIGIN_OURS};
+    GsSpecSituation s = {0};
+    s.hitpoints = (GsHealthRange){1, 1, 1};
+    s.hard_food_ready = 200;
+    s.vengeance = GS_VENGEANCE_DOWN;
+    s.pid = GS_PID_LOCAL;
+    s.incoming = incoming;
+    s.has_incoming = 1;
+    s.tick = 100;
+    s.warning.since = GS_NONE;
+    s.local = gs_health_of(1);
+    GsOutcome fatal = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
+    assert(fatal.kill == 0);
+
+#ifndef GS_HP_BELIEF
+    arena.used = 0;
+    s.hitpoints = (GsHealthRange){14, 14, 14};
+    s.local = gs_health_healing(gs_health_of(1), 101, 19, 101);
+    GsOutcome local = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
+    assert(fabs(local.kill - 1.0 / 101) < 1e-12);
+
+    arena.used = 0;
+    s.pid = GS_PID_OPPONENT;
+    GsOutcome opponent = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
+    assert(opponent.kill == 0);
+
+    arena.used = 0;
+    s.pid = GS_PID_LOCAL;
+    s.local = gs_health_of(101);
+    GsOutcome all_survive = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
+    assert(fabs(all_survive.kill - 82.0 / 101) < 1e-12);
+#endif
+    free(arena.base);
+}
+
 int main(int argc, char** argv) {
+    incoming_echo_contract();
+    if (argc == 2 && !strcmp(argv[1], "--contract-only")) {
+        puts("AutoSpec incoming echo contract verified");
+        return 0;
+    }
     FILE* f = fopen(argc > 1 ? argv[1] : "ocean/osrs/tests/fixtures/auto_spec_oracle.tap", "r");
     assert(f);
     Arena arena = arena_make((size_t)1 << 28);
