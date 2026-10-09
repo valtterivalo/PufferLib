@@ -612,6 +612,7 @@ static GsSpecSituation eat_hunt(const GsEatSituation* s) {
     return (GsSpecSituation){his, NULL, 0, GS_NONE, s->vengeance, s->pid, s->pid_flip, 0, {0}, 0, s->tick, s->warning, {GS_REBOUND_SPENT, GS_NONE}, gs_health_of(s->hitpoints)};
 }
 
+#ifdef GS_HP_BELIEF
 static double eat_knockout(const GsEatCall* call, const GsEatSituation* s, const GsSpecSituation* hunt, const GsVec* consumptions, int until) {
     Arena* arena = call->arena;
     size_t mark = arena->used;
@@ -626,6 +627,8 @@ static double eat_knockout(const GsEatCall* call, const GsEatSituation* s, const
     return chance;
 }
 
+#endif
+
 static double eat_forgone_knockout(const GsEatCall* call, const GsEatSituation* s, const GsMeal* meal, int delay, double waiting_risk, double meal_risk) {
     int resume = s->tick + meal->resume;
     GsVec none = vec_make(call->arena, sizeof(GsConsumptionAt));
@@ -635,7 +638,28 @@ static double eat_forgone_knockout(const GsEatCall* call, const GsEatSituation* 
     for (int i = 0; i < eaten.count; i++) restored = imax(restored, VEC_AT(GsConsumptionAt, eaten, i).restored_at);
     int until = imax(imax(resume, eat_next_local(s) + delay), restored);
     GsSpecSituation hunt = eat_hunt(s);
+#ifdef GS_HP_BELIEF
     return eat_knockout(call, s, &hunt, &none, until) * (1 - waiting_risk) - eat_knockout(call, s, &hunt, &eaten, until) * (1 - meal_risk);
+#else
+    size_t mark = call->arena->used;
+    GsVec waiting_swings = eat_own_swings(call->arena, s, &none, until, GS_RESUME_LATEST);
+    GsVec eaten_swings = eat_own_swings(call->arena, s, &eaten, until, GS_RESUME_LATEST);
+    GsVec programs[2] = {waiting_swings, eaten_swings};
+    GsSpecHit* hits[2];
+    int through = gs_spec_horizon(&hunt, NULL, 0);
+    for (int branch = 0; branch < 2; branch++) {
+        hits[branch] = arena_alloc(call->arena, (size_t)programs[branch].count * sizeof(GsSpecHit));
+        for (int i = 0; i < programs[branch].count; i++) {
+            GsSwing swing = VEC_AT(GsSwing, programs[branch], i);
+            hits[branch][i] = gs_spec_hit_of(call->arena, swing.lands, swing.least, swing.most, swing.accuracy);
+        }
+        through = imax(through, gs_spec_horizon(&hunt, hits[branch], programs[branch].count));
+    }
+    double waiting = gs_spec_knockout(call->arena, &hunt, hits[0], programs[0].count, GS_ECHO_RECOIL, through);
+    double consumed = gs_spec_knockout(call->arena, &hunt, hits[1], programs[1].count, GS_ECHO_RECOIL, through);
+    call->arena->used = mark;
+    return waiting * (1 - waiting_risk) - consumed * (1 - meal_risk);
+#endif
 }
 
 typedef struct { const GsMeal* meal; GsEvaluation evaluation; double gain, value; int size, non_hard, brew, fast_food, heal; } GsChoice;

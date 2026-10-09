@@ -143,7 +143,33 @@ static int read_record(FILE* f, Record* r) {
     return started && 0;
 }
 
+#ifndef GS_HP_BELIEF
+static void landing_cutoff_contract(void) {
+    Arena arena = arena_make((size_t)1 << 20);
+    GsEatSituation s = {0};
+    s.tick = 100; s.hitpoints = 99; s.pid = GS_PID_OPPONENT;
+    s.vengeance = GS_VENGEANCE_DOWN; s.local_style = GS_MELEE;
+    s.local_most = s.local_normal = 200; s.local_interval = 4;
+    s.local_opening_accuracy = s.local_accuracy = 1;
+    s.opponent_hp = (GsHealthRange){99, 99, 99}; s.offence = GS_ENGAGED;
+    s.warning.since = GS_NONE;
+    GsVec none = vec_make(&arena, sizeof(GsConsumptionAt));
+    GsVec waiting = eat_own_swings(&arena, &s, &none, 101, GS_RESUME_LATEST);
+    assert(waiting.count == 1 && VEC_AT(GsSwing, waiting, 0).lands == 102);
+    GsFood food = {GS_HARD_FOOD, 22, 100, 1, 0};
+    GsMeal meal = {1, {0}, {1}, {2}, 1, 1, 1};
+    GsEatCall call = {&food, 1, &meal, 1, &arena};
+    double forgone = eat_forgone_knockout(&call, &s, &meal, 3, 0, 0);
+    assert(fabs(forgone) < 1e-12);
+    free(arena.base);
+}
+#endif
+
 int main(int argc, char** argv) {
+#ifndef GS_HP_BELIEF
+    landing_cutoff_contract();
+#endif
+    if (argc == 2 && !strcmp(argv[1], "--contract-only")) { puts("AutoEat landing cutoff verified"); return 0; }
     FILE* f = fopen(argc > 1 ? argv[1] : "ocean/osrs/tests/fixtures/auto_eat_oracle.tap", "r");
     assert(f);
     Arena arena = arena_make((size_t)1 << 30);

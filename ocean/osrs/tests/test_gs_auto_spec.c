@@ -72,8 +72,9 @@ static int read_record(FILE* f, Record* r) {
         GsSpecSituation* s = &r->s;
         if (!strcmp(tag, "SS")) {
             char vengeance[16], pid[16], kind[16];
-            sscanf(p, "%d %d %d %d %15s %15s %lf %15s %d %d %d %d", &s->hitpoints.low, &s->hitpoints.high, &s->hitpoints.max, &s->hard_food_ready, vengeance, pid, &s->pid_flip, kind,
+            int fields = sscanf(p, "%d %d %d %d %15s %15s %lf %15s %d %d %d %d", &s->hitpoints.low, &s->hitpoints.high, &s->hitpoints.max, &s->hard_food_ready, vengeance, pid, &s->pid_flip, kind,
                 &s->rebound.cast, &s->recoil_charges, &s->tick, &r->energy);
+            if (fields != 12) { fprintf(stderr, "SS requires 12 fields, parsed %d\n", fields); exit(EXIT_FAILURE); }
             s->vengeance = vengeance_of(vengeance); s->pid = pid_of(pid);
             s->rebound.kind = !strcmp(kind, "UP") ? GS_REBOUND_UP : !strcmp(kind, "CASTABLE") ? GS_REBOUND_CASTABLE : GS_REBOUND_SPENT;
         } else if (!strcmp(tag, "LOCAL")) {
@@ -122,6 +123,7 @@ static int read_record(FILE* f, Record* r) {
     return 0;
 }
 
+#ifdef GS_HP_BELIEF
 static void incoming_echo_contract(void) {
     Arena arena = arena_make((size_t)1 << 20);
     GsIncoming incoming = {101, 0, 100, 1, GS_NONE};
@@ -151,26 +153,100 @@ static void incoming_echo_contract(void) {
     GsOutcome fatal = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
     assert(fatal.kill == 0);
 
-#ifndef GS_HP_BELIEF
-    arena.used = 0;
-    s.hitpoints = (GsHealthRange){14, 14, 14};
-    s.local = gs_health_healing(gs_health_of(1), 101, 19, 101);
-    GsOutcome local = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
-    assert(fabs(local.kill - 1.0 / 101) < 1e-12);
-
-    arena.used = 0;
-    s.pid = GS_PID_OPPONENT;
-    GsOutcome opponent = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
-    assert(opponent.kill == 0);
-
-    arena.used = 0;
-    s.pid = GS_PID_LOCAL;
-    s.local = gs_health_of(101);
-    GsOutcome all_survive = gs_spec_outcome(&arena, &s, &planned, 1, GS_ECHO_VENGEANCE);
-    assert(fabs(all_survive.kill - 82.0 / 101) < 1e-12);
-#endif
     free(arena.base);
 }
+#else
+static void incoming_echo_contract(void) {
+    Arena arena = arena_make((size_t)1 << 27);
+    GsSpecSituation s = {0};
+    s.tick = 100; s.warning.since = GS_NONE; s.hard_food_ready = 200;
+    s.pid = GS_PID_LOCAL; s.vengeance = GS_VENGEANCE_UP;
+    s.hitpoints = (GsHealthRange){20, 20, 20};
+    s.local = gs_health_of(50);
+    s.has_incoming = 1; s.incoming = (GsIncoming){101, 40, 40, 1, GS_NONE};
+    GsSpecHit hit = gs_spec_hit_of(&arena, 102, 20, 20, 1);
+    GsOutcome outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(outcome.kill == 0 && fabs(outcome.death - 1) < 1e-12);
+    arena.used = 0;
+    s.has_incoming = 0; s.hitpoints = (GsHealthRange){100, 100, 100};
+    GsSpecHit hits[] = {gs_spec_hit_of(&arena, 101, 4, 4, 1), gs_spec_hit_of(&arena, 102, 100, 100, 1)};
+    outcome = gs_spec_outcome(&arena, &s, hits, 2, GS_ECHO_RECOIL, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12 && outcome.death == 0);
+    arena.used = 0;
+    s.vengeance = GS_VENGEANCE_DOWN; s.hitpoints = (GsHealthRange){1, 1, 1};
+    s.has_incoming = 1; s.incoming = (GsIncoming){102, 100, 100, 1, GS_NONE};
+    hit = gs_spec_hit_of(&arena, 101, 100, 100, 1);
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(outcome.kill == 0 && outcome.death == 0);
+    s.incoming.attack = 102;
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12);
+    s.has_incoming = 0; s.vengeance = GS_VENGEANCE_UP; s.local = gs_health_of(5);
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12 && outcome.death == 0);
+    s.local = gs_health_of(1);
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(outcome.kill == 0 && fabs(outcome.death - 1) < 1e-12);
+    s.local = gs_health_healing(gs_health_of(0), 100, 19, 121);
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(outcome.kill == 0 && outcome.death == 0);
+    s.vengeance = GS_VENGEANCE_DOWN; s.local = gs_health_healing(gs_health_of(1), 100, 19, 121);
+    s.has_incoming = 1; s.incoming = (GsIncoming){101, 10, 10, 1, GS_NONE};
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12);
+    s.local = gs_health_healing(gs_health_of(1), 101, 19, 121);
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12);
+    s.pid = GS_PID_OPPONENT;
+    outcome = gs_spec_outcome(&arena, &s, &hit, 1, GS_ECHO_RECOIL, 103);
+    assert(outcome.kill == 0 && outcome.death == 0);
+    s.has_incoming = 0; s.underway = &hit; s.underway_count = 1;
+    s.pid_flip = 1;
+    assert(gs_spec_horizon(&s, NULL, 0) == 102);
+    const int targets[] = {10, 60, 95}, locals[] = {5, 50, 100}, landings[] = {106, 110};
+    const double accuracies[] = {0.4, 1};
+    int cases = 0;
+    double error = 0;
+    for (int t = 0; t < 3; t++) for (int l = 0; l < 3; l++)
+    for (int pid = 0; pid < 2; pid++) for (int vengeance = 0; vengeance < 2; vengeance++)
+    for (int committed = 0; committed < 2; committed++) for (int at = 0; at < 2; at++)
+    for (int a = 0; a < 2; a++) {
+        arena.used = 0;
+        s.hitpoints = (GsHealthRange){targets[t], targets[t], 121};
+        s.local = gs_health_of(locals[l]); s.pid = (GsPid)pid;
+        s.vengeance = vengeance ? GS_VENGEANCE_UP : GS_VENGEANCE_DOWN;
+        s.has_incoming = 1; s.incoming = (GsIncoming){104, 0, 7, accuracies[a], committed ? GS_NONE : 103};
+        s.underway_count = 0; s.pid_flip = 0;
+        hit = gs_spec_hit_of(&arena, landings[at], 60, 70, 1);
+        GsEating meal = {101, 0, 3};
+        outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 111);
+        double expected = 0;
+        for (int wanted = 45; wanted <= 87; wanted++) {
+            int hp = targets[t], eaten[GS_CONSUMABLES] = {0};
+            for (int food = 0; food < 3 && hp < wanted; food++) {
+                eaten[GS_MEAL_KIND[food]] = 1;
+                hp = imax(hp, imin(GS_MEAL_CAPS[food], hp + GS_MEAL_HEALS[food]));
+            }
+            int delay = committed ? 0 : consumption_delay(consumption_of(eaten[GS_POTION], eaten[GS_FAST_FOOD], eaten[GS_HARD_FOOD]));
+            for (int source = -1; source <= 7; source++) {
+                int damage = imax(0, source);
+                double mass = (source < 0 ? 1 - accuracies[a] : accuracies[a] / 8) / 43 / 11;
+                for (int ours = 60; ours <= 70; ours++) {
+                    if (ours < hp) continue;
+                    int incoming_damage = !committed && 103 + delay > landings[at] ? 0 : damage;
+                    int returned = vengeance ? imax(1, imin(ours, hp) * 3 / 4) : 0;
+                    if (locals[l] > incoming_damage + returned) expected += mass;
+                }
+            }
+        }
+        error = fmax(error, fabs(outcome.kill - expected));
+        assert(fabs(outcome.kill - expected) < 1e-11);
+        cases++;
+    }
+    printf("%d independent joint food/incoming/own-roll cases, maximum error %.3g\n", cases, error);
+    free(arena.base);
+}
+#endif
 
 int main(int argc, char** argv) {
     incoming_echo_contract();
