@@ -179,8 +179,8 @@ static const uint64_t SIMULATION_BASELINE[NUM_CONFIGS] = {
     0x6bdc7249710e9d7eULL,
     0x1ce9b8bfc11e22e5ULL,
     0x0d3a1c9ce3064b59ULL,
-    0xa2d5ee8feef25ff6ULL,
-    0x3bbda1c97ac22120ULL,
+    0xc9c0c647417f66ffULL,
+    0xb1f7b7ea21c9a490ULL,
 };
 
 int main(int argc, char** argv) {

@@ -84,8 +84,8 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects(Player* p, FoodTy
     if (p->attack_timer > 0) {
         p->attack_timer += out.attack_delay_ticks;
         p->attack_timer_uncapped = p->attack_timer;
+        p->has_attack_timer = 1;
     }
-    p->has_attack_timer = 1;
 
     return out;
 }
