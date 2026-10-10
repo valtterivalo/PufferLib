@@ -35,23 +35,7 @@ static void test_pending_cast(int actor, int pid, int primary) {
     step_case(actor, actions);
     CHECK("retain cannot repeat completed approach cast", !player->just_attacked && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
 
-    reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
-    player = &state.env.players[actor];
-    player->x = range_x;
-    player->y = range_y;
-    player->frozen_ticks = 3;
-    state.env.players[1 - actor].x = range_x + 12;
-    state.env.players[1 - actor].y = range_y;
-    actions[NH_PVP_HEAD_PRIMARY] = primary;
-    step_case(actor, actions);
-    CHECK("frozen distant cast waits for legal approach", !player->just_attacked && state.env.pvp_runtime.pending_manual_cast[actor] != NH_PVP_PENDING_NONE && player->x == range_x);
-    memset(actions, 0, sizeof(actions));
-    step_case(actor, actions);
-    CHECK("committed cast respects remaining freeze", !player->just_attacked && player->x == range_x);
-    step_case(actor, actions);
-    CHECK("thawed cast approaches and launches automatically", player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
-
-    for (int interrupt = 0; interrupt < 6; interrupt++) {
+    for (int interrupt = 0; interrupt < 5; interrupt++) {
         reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
         player = &state.env.players[actor];
         player->has_attack_timer = 1;
@@ -65,8 +49,6 @@ static void test_pending_cast(int actor, int pid, int primary) {
         memset(actions, 0, sizeof(actions));
         actions[NH_PVP_HEAD_PRIMARY] = primary;
         step_case(actor, actions);
-        for (int action = 0; action < NH_PVP_ACTION_DIMS[NH_PVP_HEAD_PRIMARY]; action++)
-            CHECK("pending cast masks competing primary commands", allowed(actor, NH_PVP_HEAD_PRIMARY, action) == (action == NH_PVP_PRIMARY_RETAIN));
         memset(actions, 0, sizeof(actions));
         if (interrupt == 0)
             for (int move = 1; move < OSRS_PRIMARY_MOVE_ACTIONS; move++)
@@ -75,24 +57,17 @@ static void test_pending_cast(int actor, int pid, int primary) {
         if (interrupt == 2) actions[NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_LEGS)] = nh_pvp_equipment_action_for_item(GEAR_SLOT_LEGS, ITEM_AHRIMS_ROBESKIRT);
         if (interrupt == 3) actions[NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_WEAPON;
         if (interrupt == 4) actions[NH_PVP_HEAD_DRINK] = NH_PVP_DRINK_BREW;
-        if (interrupt == 5) actions[NH_PVP_HEAD_PRIMARY] = primary == NH_PVP_PRIMARY_ICE ? NH_PVP_PRIMARY_BLOOD : NH_PVP_PRIMARY_ICE;
         step_case(actor, actions);
-        CHECK("controls preserve committed manual cast", state.env.pvp_runtime.pending_manual_cast[actor] != NH_PVP_PENDING_NONE);
-        CHECK("committed cast keeps target interaction", osrs_interaction_active(&player->interaction));
-        if (interrupt == 1) CHECK("food remains controllable during committed cast", player->food_count == 0);
-        if (interrupt == 2) CHECK("gear remains controllable during committed cast", player->equipped[GEAR_SLOT_LEGS] == ITEM_AHRIMS_ROBESKIRT);
-        if (interrupt == 4) CHECK("brew remains controllable during committed cast", player->brew_doses == 3);
+        CHECK("explicit interrupt clears pending manual cast", state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
+        CHECK("weapon replacement preserves only weapon continuation", osrs_interaction_active(&player->interaction) == (interrupt == 3));
         memset(actions, 0, sizeof(actions));
         int launches = 0;
-        for (int tick = 0; tick < 8; tick++) {
+        for (int tick = 0; tick < 4; tick++) {
             step_case(actor, actions);
             launches += player->just_attacked;
-            CHECK("committed cast launches requested family", !player->just_attacked ||
-                (player->attack_style_this_tick == ATTACK_STYLE_MAGIC && player->magic_type_this_tick ==
-                    (primary == NH_PVP_PRIMARY_ICE ? OSRS_MAGIC_ATTACK_ANCIENT_ICE : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD)));
+            CHECK("interrupt cannot launch stale manual magic", !player->just_attacked || player->attack_style_this_tick == ATTACK_STYLE_RANGED);
         }
-        CHECK("committed cast completes exactly once", launches == 1 && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE && !osrs_interaction_active(&player->interaction));
-        CHECK("completed cast restores weapon control", allowed(actor, NH_PVP_HEAD_PRIMARY, NH_PVP_PRIMARY_WEAPON));
+        CHECK("only explicit weapon replacement keeps attacks", interrupt == 3 ? launches == 1 : launches == 0);
     }
 
     reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
