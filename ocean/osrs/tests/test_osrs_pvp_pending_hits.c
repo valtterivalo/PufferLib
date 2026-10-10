@@ -186,7 +186,7 @@ static void test_nh_local_move_routes_match_canonical_solver(void) {
                     .target_size = 1,
                     .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
                     .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
-                    .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+                    .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
                 };
                 EncounterRouteResult expected = encounter_route_solve(&input);
                 EncounterRouteResult actual;
@@ -207,7 +207,7 @@ static void test_nh_local_move_routes_match_canonical_solver(void) {
             }
         }
     }
-    CHECK("cached local routes equal canonical south-first BFS", matches);
+    CHECK("cached local routes equal canonical OSRS routing", matches);
 }
 
 static void test_nh_dynamic_player_occupancy(void) {
@@ -301,7 +301,7 @@ static void test_nh_out_of_arena_destination_fallback(void) {
         .target_size = 1,
         .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
         .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
-        .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+        .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
     };
     EncounterRouteResult route = encounter_route_solve(&route_input);
     ASSERT_INT_EQ("out-of-arena route reaches the arena edge",

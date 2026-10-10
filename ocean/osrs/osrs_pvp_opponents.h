@@ -230,7 +230,7 @@ static void opp_pressure_move(
             .actor_size = 1, .target_x = x, .target_y = y, .target_size = 1,
             .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
             .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
-            .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+            .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
         };
         EncounterRouteResult route;
         int local = pvp_local_move_route_lookup(

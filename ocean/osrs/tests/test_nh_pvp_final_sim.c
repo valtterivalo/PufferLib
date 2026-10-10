@@ -57,6 +57,27 @@ static void test_melee_corner(int actor, int pid, const EncounterArenaTopology* 
     context.route_topology = saved;
 }
 
+static uint32_t diagonal_flags(void* data, int x, int y) {
+    (void)data;
+    return x == origin_x + 1 && y == origin_y + 1 ? COLLISION_BLOCKED | LOS_FULL_MASK : 0;
+}
+
+static void test_ground_route(int actor, int pid, const EncounterArenaTopology* corner) {
+    reset_case(actor, pid, ITEM_WHIP);
+    const EncounterArenaTopology* saved = context.route_topology;
+    context.route_topology = corner;
+    int actions[NH_PVP_NUM_ACTION_HEADS] = {0};
+    for (int action = 1; action < OSRS_PRIMARY_MOVE_ACTIONS; action++)
+        if (ENCOUNTER_MOVE_TARGET_DX[action] == 2 && ENCOUNTER_MOVE_TARGET_DY[action] == 2)
+            actions[NH_PVP_HEAD_PRIMARY] = action;
+    CHECK("ground fixture submits northeast destination", actions[NH_PVP_HEAD_PRIMARY] != 0);
+    step_case(actor, actions);
+    Player* player = &state.env.players[actor];
+    CHECK("equal ground routes follow west east south north BFS priority", player->x == origin_x + 2 && player->y == origin_y);
+    CHECK("ground route keeps its reachable destination", state.env.pvp_runtime.walk_dest_x[actor] == origin_x + 2 && state.env.pvp_runtime.walk_dest_y[actor] == origin_y + 2);
+    context.route_topology = saved;
+}
+
 int main(void) {
     nh_pvp_init_state((EncounterState*)&state, NULL);
     nh_pvp_init_context((EncounterContext*)&context);
@@ -76,6 +97,10 @@ int main(void) {
         .tile_flags = corner_flags, .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED};
     EncounterArenaTopology* corner = encounter_arena_topology_build(&spec);
     encounter_arena_topology_finalize(corner);
+    spec.tile_flags = diagonal_flags;
+    spec.revision = 3;
+    EncounterArenaTopology* diagonal = encounter_arena_topology_build(&spec);
+    encounter_arena_topology_finalize(diagonal);
     for (int actor = 0; actor < NUM_AGENTS; actor++)
         for (int pid = 0; pid < NUM_AGENTS; pid++) {
             test_range_entry(actor, pid, NH_PVP_PRIMARY_ICE, COMBAT_SPELL_ATTACK_RANGE + 2);
@@ -84,7 +109,9 @@ int main(void) {
             test_death_at_horizon(actor, pid, 5);
             test_death_at_horizon(actor, pid, 20);
             test_melee_corner(actor, pid, corner);
+            test_ground_route(actor, pid, diagonal);
         }
     free(corner);
+    free(diagonal);
     return osrs_test_summary();
 }

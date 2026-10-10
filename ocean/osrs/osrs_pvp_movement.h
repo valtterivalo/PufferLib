@@ -72,7 +72,7 @@ static void pvp_local_move_routes_build(PvpRouteTopologyOwner* owner) {
                     .target_size = 1,
                     .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
                     .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
-                    .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+                    .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
                 };
                 EncounterRouteResult route = encounter_route_solve(&input);
                 owner->local_move_routes[source_index][action] =
@@ -109,7 +109,7 @@ static int pvp_local_move_route_lookup(
             input->target_size != 1 ||
             input->target_kind != ENCOUNTER_ROUTE_TARGET_TILE ||
             input->movement_mode != ENCOUNTER_ROUTE_MOVEMENT_RUN ||
-            input->cost_policy != ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS ||
+            input->cost_policy != ENCOUNTER_ROUTE_COST_OSRS ||
             !encounter_arena_topology_contains(
                 input->topology, input->source_x, input->source_y))
         return 0;
@@ -151,7 +151,7 @@ static const EncounterArenaTopology* pvp_route_topology_finalize(void) {
         .width = FIGHT_AREA_WIDTH,
         .height = FIGHT_AREA_HEIGHT,
         .max_footprint_size = 1,
-        .revision = UINT64_C(0x4e48505650000005),
+        .revision = UINT64_C(0x4e48505650000006),
         .tile_flags = pvp_route_topology_flags,
         .tile_flags_ctx = (void*)collision_map_scene(PVP_SCENE),
         .los_build_mode = ENCOUNTER_ARENA_TOPOLOGY_LOS_BUILD_FLAGGED,
@@ -247,7 +247,7 @@ static inline OsrsPlayerStepResult pvp_step_player_movement(
             .target_size = 1,
             .target_kind = ENCOUNTER_ROUTE_TARGET_TILE,
             .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
-            .cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+            .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
         };
         EncounterRouteResult route;
         if (pvp_local_move_route_lookup(
@@ -263,7 +263,7 @@ static inline OsrsPlayerStepResult pvp_step_player_movement(
         .blockers = {0},
         .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
         .cost_policy = ENCOUNTER_ROUTE_COST_OSRS_TARGET_BFS,
-        .destination_cost_policy = ENCOUNTER_ROUTE_COST_SOUTH_FIRST_BFS,
+        .destination_cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
         .attack_geometry = ENCOUNTER_ROUTE_ATTACK_GEOMETRY_TOPOLOGY,
     };
     OsrsPlayerStepInput input = {
