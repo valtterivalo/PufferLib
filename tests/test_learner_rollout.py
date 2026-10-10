@@ -12,7 +12,7 @@ def test_learner_rollout_excludes_historical_rows(tmp_path: Path, backend: str) 
         pytest.skip(f"{backend} compiler unavailable")
     source = (Path(__file__).resolve().parents[1] / "src/pufferl.cu").read_text()
     gather = source[source.index("template <typename T>\n__global__ void gather_learner_rollout"):
-                    source.index("// Cosine decay")]
+                    source.index("static double monotonic_seconds(void)")]
     snapshot = source[source.index("static __device__ long state_elem_idx"):
                       source.index("// View slot of full")]
     rotation = source[source.index("    int row_offset ="):source.index(
