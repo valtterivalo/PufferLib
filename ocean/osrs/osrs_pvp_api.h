@@ -249,7 +249,7 @@ void pvp_init(OsrsEnv* env) {
         env->pvp_runtime.walk_dest_y[i] = -1;
         env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
         env->pvp_runtime.overhead_changed_this_tick[i] = 0;
-        env->pvp_runtime.launch_history[i] = (OsrsPvpLaunchHistory){0};
+        memset(&env->pvp_runtime.launch_history[i], 0, sizeof(env->pvp_runtime.launch_history[i]));
         env->pvp_runtime.decision_weapon[i] = ATTACK_STYLE_NONE;
     }
 #define OSRS_PVP_REWARD_FLOAT_DEFAULT(key, field, value) env->shaping.field = value;
