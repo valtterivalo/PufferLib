@@ -248,6 +248,7 @@ void pvp_init(OsrsEnv* env) {
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.walk_dest_x[i] = -1;
         env->pvp_runtime.walk_dest_y[i] = -1;
+        env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
     }
     memset(&env->shaping, 0, sizeof(env->shaping));
     memset(&env->log, 0, sizeof(env->log));
@@ -393,10 +394,12 @@ void pvp_reset(
         env->pvp_runtime.visible[i] = (OsrsPvpVisibleActor){
             .health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE,
             .last_attack_tick = -1,
+            .last_special_tick = -1,
             .last_consume_tick = -1,
             .last_vengeance_tick = -1,
             .last_freeze_tick = -1,
         };
+        env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
     }
 
     if (env->pvp_runtime.use_c_opponent) {
@@ -437,9 +440,14 @@ void pvp_step_with_nh_actions(
     OsrsActorRouteCache route_cache[NUM_AGENTS],
     const int* semantic[NUM_AGENTS]
 ) {
-    for (int actor = 0; actor < NUM_AGENTS; actor++)
-        if (semantic[actor]) nh_pvp_decode_control_actions(semantic[actor],
-            env->actions + actor * OSRS_BASE_NUM_ACTION_HEADS);
+    for (int actor = 0; actor < NUM_AGENTS; actor++) {
+        if (semantic[actor]) {
+            nh_pvp_decode_control_actions(semantic[actor],
+                env->actions + actor * OSRS_BASE_NUM_ACTION_HEADS);
+        } else {
+            env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
+        }
+    }
     if (!route_cache) {
         fprintf(stderr, "PvP step missing actor route caches\n");
         abort();
@@ -598,6 +606,8 @@ void pvp_step_with_nh_actions(
     if (env->players[1].veng_active) {
         env->players[0].observed_target_lunar_spellbook = 1;
     }
+    for (int i = 0; i < NUM_AGENTS; i++)
+        pvp_refresh_visible_health_bar(env, i);
     env->tick++;
 
     pvp_tick_priority(env);

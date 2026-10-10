@@ -79,7 +79,7 @@ static void create_custom_encoder(Encoder* enc) {
 #elif defined(PUFFER_OSRS_ZULRAH)
     create_osrs_entity_encoder<&OSRS_EQUIPMENT_ENTITY_DESCRIPTOR>(enc);
 #elif defined(PUFFER_OSRS_PVP)
-    assert(NH_PVP_OBSERVATION_VERSION == 2 && NH_PVP_ACTION_SCHEMA_VERSION == 2 && enc->in_dim == NH_PVP_NUM_OBS);
+    assert(NH_PVP_OBSERVATION_VERSION == 3 && NH_PVP_ACTION_SCHEMA_VERSION == 3 && enc->in_dim == NH_PVP_NUM_OBS);
 #else
     (void)enc;
 #endif

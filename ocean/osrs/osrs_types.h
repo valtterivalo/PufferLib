@@ -825,12 +825,19 @@ typedef struct {
 typedef struct {
     int health_bar;
     int last_attack_tick;
+    int last_special_tick;
     int last_consume_tick;
     int last_vengeance_tick;
     int last_freeze_tick;
     int move_dx;
     int move_dy;
 } OsrsPvpVisibleActor;
+
+typedef enum {
+    NH_PVP_PENDING_NONE,
+    NH_PVP_PENDING_ICE,
+    NH_PVP_PENDING_BLOOD,
+} NhPvpPendingManualCast;
 
 typedef struct {
     int is_pvp_arena;
@@ -849,6 +856,7 @@ typedef struct {
     OsrsTeleportState teleport[NUM_AGENTS];
     OsrsTeleportWorld teleport_world;
     OsrsPvpVisibleActor visible[NUM_AGENTS];
+    NhPvpPendingManualCast pending_manual_cast[NUM_AGENTS];
     OsrsPvpProjectile projectiles[NUM_AGENTS][MAX_PENDING_HITS];
     OsrsPvpHitObserver hit_observer;
     void* hit_observer_context;

@@ -5,7 +5,7 @@
 #include <vector>
 
 int main(void) {
-    assert(NH_PVP_NUM_OBS == 984 && NH_PVP_NUM_ACTION_HEADS == 19 && NH_PVP_ACTION_MASK_SIZE == 240);
+    assert(NH_PVP_NUM_OBS == 1003 && NH_PVP_NUM_ACTION_HEADS == 19 && NH_PVP_ACTION_MASK_SIZE == 241);
     static NhPvpState state;
     static NhPvpContext context;
     ENCOUNTER_NH_PVP.init_state((EncounterState*)&state, (EncounterContext*)&context);
@@ -15,12 +15,14 @@ int main(void) {
     Player* player = &state.env.players[0];
     player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_ANCESTRAL_TOP);
     player->inventory_cells[1] = osrs_inventory_cell_from_item(ITEM_BLACK_DHIDE_BODY);
+    slot_equip_item(player, GEAR_SLOT_BODY, ITEM_ANCESTRAL_TOP);
     const int batch = 2, hidden = 16;
     std::vector<float> observations(batch * NH_PVP_NUM_OBS);
     pvp_write_observations(observations.data(), &state.env, 0);
     OsrsInventoryCell swap = player->inventory_cells[0];
     player->inventory_cells[0] = player->inventory_cells[1];
     player->inventory_cells[1] = swap;
+    slot_equip_item(player, GEAR_SLOT_BODY, ITEM_BLACK_DHIDE_BODY);
     pvp_write_observations(observations.data() + NH_PVP_NUM_OBS, &state.env, 0);
     std::vector<precision_t> inputs(observations.size());
     for (int index = 0; index < (int)inputs.size(); index++) inputs[index] = from_float(observations[index]);
@@ -29,6 +31,7 @@ int main(void) {
     weights[feature] = from_float(2);
     weights[feature + NH_PVP_INVENTORY_FEATURES] = from_float(-1);
     weights[NH_PVP_NUM_OBS + NH_PVP_TARGET_EQUIPPED_START + 3] = from_float(0.5f);
+    weights[2 * NH_PVP_NUM_OBS + NH_PVP_SELF_BONUS_START + 3] = from_float(1);
     cublas_init_handle();
     Arch arch = build_arch(NH_PVP_NUM_OBS, hidden, 1, NH_PVP_ACTION_MASK_SIZE + 1, false, batch);
     Encoder* encoder = &arch.encoder;
@@ -57,9 +60,12 @@ int main(void) {
         }
     }
     assert(to_float(output[0]) != to_float(output[hidden]));
+    assert(to_float(output[2]) != to_float(output[hidden + 2]));
     std::vector<precision_t> output_grad(batch * hidden, from_float(0));
     output_grad[0] = from_float(1);
     output_grad[hidden] = from_float(-1);
+    output_grad[2] = from_float(1);
+    output_grad[hidden + 2] = from_float(-1);
     Prec grad = {.shape = {batch, hidden}};
     assert(cudaMalloc((void**)&grad.data, output_grad.size() * sizeof(precision_t)) == cudaSuccess);
     assert(cudaMemcpy(grad.data, output_grad.data(), output_grad.size() * sizeof(precision_t), cudaMemcpyHostToDevice) == cudaSuccess);
@@ -68,7 +74,7 @@ int main(void) {
     assert(cudaMemcpy(weight_grad.data(), activations.wgrad_scratch.data, weight_grad.size() * sizeof(precision_t), cudaMemcpyDeviceToHost) == cudaSuccess);
     for (int channel = 0; channel < hidden; channel++) {
         for (int column = 0; column < NH_PVP_NUM_OBS; column++) {
-            float reference = channel == 0 ? to_float(inputs[column]) - to_float(inputs[NH_PVP_NUM_OBS + column]) : 0;
+            float reference = channel == 0 || channel == 2 ? to_float(inputs[column]) - to_float(inputs[NH_PVP_NUM_OBS + column]) : 0;
             assert(to_float(weight_grad[channel * NH_PVP_NUM_OBS + column]) == to_float(from_float(reference)));
         }
     }

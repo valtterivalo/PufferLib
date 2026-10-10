@@ -415,11 +415,16 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     if (style != ATTACK_STYLE_NONE) attacker->last_queued_hit_damage += actual_damage;
 }
 
+static inline void pvp_refresh_visible_health_bar(OsrsEnv* env, int actor) {
+    Player* player = &env->players[actor];
+    env->pvp_runtime.visible[actor].health_bar = osrs_health_bar_ratio(
+        player->current_hitpoints, player->base_hitpoints,
+        OSRS_PLAYER_HEALTH_BAR_SCALE);
+}
+
 static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
     const PendingHit* hit, int damage, int hitpoints_before) {
-    env->pvp_runtime.visible[target].health_bar = osrs_health_bar_ratio(
-        env->players[target].current_hitpoints, env->players[target].base_hitpoints,
-        OSRS_PLAYER_HEALTH_BAR_SCALE);
+    pvp_refresh_visible_health_bar(env, target);
     if (!env->pvp_runtime.hit_observer) return;
     OsrsPvpHitEvent event = {env->tick, source, target, hit->kind, damage,
         hitpoints_before - env->players[target].current_hitpoints};
@@ -552,6 +557,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             int heal = (damage * hit->heal_percent) / 100 + hit->flat_heal;
             attacker->current_hitpoints += min_int(heal,
                 max_int(0, attacker->base_hitpoints - attacker->current_hitpoints));
+            pvp_refresh_visible_health_bar(env, attacker_idx);
         }
     }
 
@@ -1189,6 +1195,7 @@ post_attack:
     attacker->attack_style_this_tick = attacker->last_attack_style;
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
+    if (is_special) env->pvp_runtime.visible[attacker_idx].last_special_tick = env->tick;
 
     int attack_speed = magic_type != 0 ? COMBAT_SPELL_CAST_SPEED
         : get_slot_gear_bonuses(attacker)->attack_speed +

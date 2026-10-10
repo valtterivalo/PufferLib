@@ -341,8 +341,13 @@ static void test_nh_shared_contract_and_inventory_actions(void) {
             NH_PVP_DRINK_DIM);
     CHECK("NH dense observations retain the shared self boundary and cell features",
         NH_PVP_SELF_CONTROL_START == OSRS_SHARED_SELF_OBS_SIZE &&
+        NH_PVP_SELF_CAST_INTENT_START == NH_PVP_SELF_CONTROL_START + 18 &&
+        NH_PVP_INVENTORY_START == NH_PVP_SELF_CAST_INTENT_START + 3 &&
         NH_PVP_EQUIPPED_START == NH_PVP_INVENTORY_START +
-            OSRS_INVENTORY_SIZE * NH_PVP_INVENTORY_FEATURES && NH_PVP_NUM_OBS == 984);
+            OSRS_INVENTORY_SIZE * NH_PVP_INVENTORY_FEATURES &&
+        NH_PVP_EFFECT_START == NH_PVP_SELF_BONUS_START + NH_PVP_ITEM_BONUS_FEATURES &&
+        NH_PVP_TARGET_EQUIPPED_START == NH_PVP_TARGET_EVENT_START + 8 &&
+        NH_PVP_NUM_OBS == 1003);
 
     ENCOUNTER_NH_PVP.reset(
         (EncounterState*)nh_state,

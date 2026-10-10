@@ -515,12 +515,15 @@ static void pvp_apply_control_actions(OsrsEnv* env, int agent_idx, int* actions,
     }
 
     int primary = actions[OSRS_HEAD_PRIMARY];
+    int manual_cast = primary >= OSRS_PRIMARY_MOVE_ACTIONS && primary < OSRS_PRIMARY_DIM(1) &&
+        (actions[OSRS_HEAD_SPELL] == OSRS_SPELL_ICE_BARRAGE ||
+         actions[OSRS_HEAD_SPELL] == OSRS_SPELL_BLOOD_BARRAGE);
     if (primary >= OSRS_PRIMARY_MOVE_ACTIONS &&
             primary < OSRS_PRIMARY_DIM(1)) {
         osrs_interaction_set(&p->interaction, 1 - agent_idx);
         env->pvp_runtime.walk_dest_x[agent_idx] = -1;
         env->pvp_runtime.walk_dest_y[agent_idx] = -1;
-        if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]))
+        if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON]) && !manual_cast)
             pvp_maul_target_click(env, agent_idx, 1 - agent_idx);
     } else if (primary > 0 && primary < OSRS_PRIMARY_MOVE_ACTIONS) {
         pvp_set_walk_dest_from_head_move(env, agent_idx, primary);
@@ -537,7 +540,8 @@ static void pvp_apply_control_actions(OsrsEnv* env, int agent_idx, int* actions,
         p->cast_veng_this_tick = 1;
         p->clicks_this_tick++;
     }
-    pvp_maul_finish_inputs(env, agent_idx);
+    if (!manual_cast)
+        pvp_maul_finish_inputs(env, agent_idx);
 }
 
 static void nh_pvp_decode_control_actions(const int* semantic, int* engine) {
@@ -550,7 +554,8 @@ static void nh_pvp_decode_control_actions(const int* semantic, int* engine) {
     if (primary == NH_PVP_PRIMARY_BLOOD) engine[OSRS_HEAD_SPELL] = OSRS_SPELL_BLOOD_BARRAGE;
     if (primary == NH_PVP_PRIMARY_ICE) engine[OSRS_HEAD_SPELL] = OSRS_SPELL_ICE_BARRAGE;
     engine[OSRS_HEAD_OVERHEAD] = semantic[NH_PVP_HEAD_OVERHEAD];
-    engine[OSRS_HEAD_SPECIAL] = semantic[NH_PVP_HEAD_SPECIAL];
+    engine[OSRS_HEAD_SPECIAL] = semantic[NH_PVP_HEAD_SPECIAL] < NH_PVP_SPECIAL_PREPARE_DOUBLE
+        ? semantic[NH_PVP_HEAD_SPECIAL] : 0;
     engine[OSRS_HEAD_OFFENSIVE] = semantic[NH_PVP_HEAD_OFFENSIVE];
 }
 
@@ -573,6 +578,7 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
         }
         if (changed) {
             osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
+            env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
             pvp_maul_weapon_changed(env, actor, old_weapon);
             player->clicks_this_tick++;
         }
@@ -598,8 +604,45 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
         }
         if (consumed) {
             osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
+            env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
             player->consumable_used_this_tick = 1;
             player->clicks_this_tick++;
+        }
+    }
+    int primary = semantic[NH_PVP_HEAD_PRIMARY];
+    if (primary == NH_PVP_PRIMARY_ICE || primary == NH_PVP_PRIMARY_BLOOD) {
+        int eligible = primary == NH_PVP_PRIMARY_ICE ? can_cast_ice_spell(player) : can_cast_blood_spell(player);
+        env->pvp_runtime.pending_manual_cast[actor] = !eligible ? NH_PVP_PENDING_NONE
+            : primary == NH_PVP_PRIMARY_ICE ? NH_PVP_PENDING_ICE : NH_PVP_PENDING_BLOOD;
+        if (!eligible) {
+            engine[OSRS_HEAD_PRIMARY] = 0;
+            engine[OSRS_HEAD_SPELL] = 0;
+            osrs_interaction_clear(&player->interaction);
+        }
+    } else if (primary != NH_PVP_PRIMARY_RETAIN)
+        env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
+    NhPvpPendingManualCast pending = env->pvp_runtime.pending_manual_cast[actor];
+    if (pending != NH_PVP_PENDING_NONE) {
+        engine[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
+        engine[OSRS_HEAD_SPELL] = pending == NH_PVP_PENDING_ICE
+            ? OSRS_SPELL_ICE_BARRAGE : OSRS_SPELL_BLOOD_BARRAGE;
+    }
+    int special = semantic[NH_PVP_HEAD_SPECIAL];
+    if (pvp_is_maul(player->equipped[GEAR_SLOT_WEAPON])) {
+        if (special == NH_PVP_SPECIAL_DISARM) {
+            env->pvp_runtime.maul[actor] = osrs_granite_maul_clear_preparation(env->pvp_runtime.maul[actor]);
+            player->spec_armed = 0;
+            engine[OSRS_HEAD_SPECIAL] = 0;
+        } else if (special == NH_PVP_SPECIAL_PREPARE_DOUBLE &&
+                player->special_energy >= 2 * osrs_spec_cost(player->equipped[GEAR_SLOT_WEAPON])) {
+            OsrsGraniteMaulState maul = osrs_granite_maul_expire(env->pvp_runtime.maul[actor], env->tick);
+            if (maul.preparation != OSRS_GRANITE_MAUL_DESELECTED || maul.prepared_hits != 2) {
+                maul = osrs_granite_maul_clear_preparation(maul);
+                maul = osrs_granite_maul_special_click(maul, env->tick);
+                maul = osrs_granite_maul_special_click(maul, env->tick);
+            }
+            env->pvp_runtime.maul[actor] = maul;
+            player->spec_armed = 0;
         }
     }
     pvp_apply_control_actions(env, actor, engine,
@@ -723,7 +766,8 @@ static void execute_attack_combat(
         }
     }
 
-    pvp_maul_continue_attack(env, agent_idx);
+    if (decode.attack_action == PVP_ATTACK_WEAPON)
+        pvp_maul_continue_attack(env, agent_idx);
     int attack_ready = can_attack_now(p) &&
         env->pvp_runtime.maul[agent_idx].last_special_tick != env->tick;
     int has_attack = (decode.attack_action != PVP_ATTACK_NONE);
@@ -772,6 +816,11 @@ static void execute_attack_combat(
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 if (pvp_attack_position_valid(p, t, ATTACK_STYLE_MAGIC, COMBAT_SPELL_ATTACK_RANGE, topology)) {
                     perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
+                    if (p->just_attacked && env->pvp_runtime.pending_manual_cast[agent_idx] != NH_PVP_PENDING_NONE) {
+                        env->pvp_runtime.pending_manual_cast[agent_idx] = NH_PVP_PENDING_NONE;
+                        osrs_interaction_clear(&p->interaction);
+                        has_attack = 0;
+                    }
                     p->clicks_this_tick++;
                 }
             }

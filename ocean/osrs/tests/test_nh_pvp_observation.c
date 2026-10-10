@@ -154,6 +154,100 @@ static void test_own_capabilities(void) {
     CHECK("lunar book disables both manual ancient capabilities", after[NH_PVP_SELF_CONTROL_START] == 0 && after[NH_PVP_SELF_CONTROL_START + 4] == 0);
 }
 
+static void test_own_gear_bonuses(void) {
+    reset();
+    Player* player = &state.env.players[0];
+    for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) slot_equip_item(player, slot, ITEM_NONE);
+    memset(player->inventory_cells, 0, sizeof(player->inventory_cells));
+    slot_equip_item(player, GEAR_SLOT_WEAPON, ITEM_RUNE_CROSSBOW);
+    player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_BLACK_DHIDE_BODY);
+    observations();
+    CHECK("candidate body exposes signed Magic penalty before equip",
+        before[NH_PVP_INVENTORY_START + 15 + 3] < 0);
+    CHECK("body equip executes through canonical inventory transfer",
+        osrs_equip_from_cell(player, player->inventory_cells, 0) == GEAR_SLOT_BODY);
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("equipped candidate leaves its inventory record",
+        after[NH_PVP_INVENTORY_START] == 0 && before[NH_PVP_INVENTORY_START] != 0);
+    CHECK("bow wielding retains explicit equipped Magic penalty",
+        after[NH_PVP_SELF_BONUS_START + 3] < 0 &&
+        after[NH_PVP_SELF_BONUS_START + 3] == get_attack_bonus(player, ATTACK_STYLE_MAGIC) / STAT_NORM_ATTACK &&
+        after[37] == 1 && after[38] == 0);
+    observations();
+    slot_equip_item(player, GEAR_SLOT_RING, ITEM_BERSERKER_RING_I);
+    slot_equip_item(player, GEAR_SLOT_AMMO, ITEM_DRAGON_ARROWS);
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("own known ring and ammo contribute actual strength bonuses",
+        after[NH_PVP_SELF_BONUS_START + 10] - before[NH_PVP_SELF_BONUS_START + 10] ==
+            ITEM_DATABASE[ITEM_BERSERKER_RING_I].melee_strength / STAT_NORM_STRENGTH &&
+        after[NH_PVP_SELF_BONUS_START + 11] - before[NH_PVP_SELF_BONUS_START + 11] ==
+            ITEM_DATABASE[ITEM_DRAGON_ARROWS].ranged_strength / STAT_NORM_STRENGTH);
+}
+
+static void test_special_and_pending_events(void) {
+    reset();
+    observations();
+    CHECK("reset has no observed special", before[NH_PVP_TARGET_SPECIAL_START] == 0 &&
+        before[NH_PVP_TARGET_SPECIAL_START + 1] == 0);
+    Player* target = &state.env.players[1];
+    target->x = state.env.players[0].x + 1;
+    target->y = state.env.players[0].y;
+    slot_equip_item(target, GEAR_SLOT_WEAPON, ITEM_VOIDWAKER);
+    perform_attack(&state.env, 1, 0, ATTACK_STYLE_MELEE, 0, 0, 1);
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("ordinary launch does not manufacture a special cue", after[NH_PVP_TARGET_SPECIAL_START] == 0);
+    perform_attack(&state.env, 1, 0, ATTACK_STYLE_MELEE, 1, 0, 1);
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("actual special launch exposes public presence and age zero",
+        after[NH_PVP_TARGET_SPECIAL_START] == 1 && after[NH_PVP_TARGET_SPECIAL_START + 1] == 0);
+    state.env.tick += 2;
+    perform_attack(&state.env, 1, 0, ATTACK_STYLE_MELEE, 0, 0, 1);
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("normal attack does not refresh prior special age",
+        after[NH_PVP_TARGET_SPECIAL_START] == 1 && after[NH_PVP_TARGET_SPECIAL_START + 1] == 2.0f / 8);
+    reset();
+    observations();
+    CHECK("new episode clears special history", before[NH_PVP_TARGET_SPECIAL_START] == 0);
+    CHECK("own absent queued cast is explicit", before[NH_PVP_SELF_CAST_INTENT_START] == 1 &&
+        before[NH_PVP_SELF_CAST_INTENT_START + 1] == 0 && before[NH_PVP_SELF_CAST_INTENT_START + 2] == 0);
+    state.env.pvp_runtime.pending_manual_cast[0] = NH_PVP_PENDING_ICE;
+    state.env.pvp_runtime.pending_manual_cast[1] = NH_PVP_PENDING_BLOOD;
+    pvp_write_observations(after, &state.env, 0);
+    CHECK("queued Ice belongs to its own actor", after[NH_PVP_SELF_CAST_INTENT_START] == 0 &&
+        after[NH_PVP_SELF_CAST_INTENT_START + 1] == 1 && after[NH_PVP_SELF_CAST_INTENT_START + 2] == 0);
+    pvp_write_observations(after, &state.env, 1);
+    CHECK("actor one independently observes its queued Blood", after[NH_PVP_SELF_CAST_INTENT_START] == 0 &&
+        after[NH_PVP_SELF_CAST_INTENT_START + 1] == 0 && after[NH_PVP_SELF_CAST_INTENT_START + 2] == 1);
+}
+
+static void test_double_maul_mask(void) {
+    reset();
+    Player* player = &state.env.players[0];
+    memset(player->inventory_cells, 0, sizeof(player->inventory_cells));
+    slot_equip_item(player, GEAR_SLOT_SHIELD, ITEM_NONE);
+    slot_equip_item(player, GEAR_SLOT_WEAPON, ITEM_GRANITE_MAUL_ORNATE);
+    unsigned char mask[NH_PVP_ACTION_MASK_SIZE];
+    int special = nh_pvp_action_head_offset(NH_PVP_HEAD_SPECIAL);
+    int cost = osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE);
+    player->special_energy = 2 * cost - 1;
+    pvp_write_action_mask_bytes(mask, &state.env, 0, context.route_topology);
+    CHECK("double maul cannot request two specials with insufficient energy", !mask[special + NH_PVP_SPECIAL_PREPARE_DOUBLE]);
+    player->special_energy = 2 * cost;
+    pvp_write_action_mask_bytes(mask, &state.env, 0, context.route_topology);
+    CHECK("two funded maul specials are selectable", mask[special + NH_PVP_SPECIAL_PREPARE_DOUBLE]);
+    slot_equip_item(player, GEAR_SLOT_WEAPON, ITEM_RUNE_CROSSBOW);
+    pvp_write_action_mask_bytes(mask, &state.env, 0, context.route_topology);
+    CHECK("ordinary ranged weapon cannot prepare maul specials", !mask[special + NH_PVP_SPECIAL_PREPARE_DOUBLE]);
+    player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_GRANITE_MAUL_ORNATE);
+    pvp_write_action_mask_bytes(mask, &state.env, 0, context.route_topology);
+    CHECK("same tick legal maul equip can prepare two funded specials", mask[special + NH_PVP_SPECIAL_PREPARE_DOUBLE]);
+    state.env.pvp_runtime.maul[0].prepared_hits = 2;
+    state.env.pvp_runtime.maul[0].preparation = OSRS_GRANITE_MAUL_DESELECTED;
+    player->spec_armed = 0;
+    pvp_write_action_mask_bytes(mask, &state.env, 0, context.route_topology);
+    CHECK("disarm remains selectable for prepared maul without ordinary armed flag", mask[special + NH_PVP_SPECIAL_DISARM]);
+}
+
 static void test_projectiles(void) {
     const uint8_t weapons[] = {ITEM_AHRIM_STAFF, ITEM_AHRIM_STAFF, ITEM_AHRIM_STAFF,
         ITEM_AHRIM_STAFF, ITEM_AHRIM_STAFF, ITEM_RUNE_CROSSBOW, ITEM_VOLATILE_STAFF, ITEM_VOIDWAKER};
@@ -202,11 +296,14 @@ static void test_projectiles(void) {
 }
 
 int main(void) {
-    CHECK("NH interface versions and dense shape are explicit", NH_PVP_OBSERVATION_VERSION == 2 && NH_PVP_ACTION_SCHEMA_VERSION == 2 && NH_PVP_NUM_OBS == 984);
+    CHECK("NH interface versions and dense shape are explicit", NH_PVP_OBSERVATION_VERSION == 3 && NH_PVP_ACTION_SCHEMA_VERSION == 3 && NH_PVP_NUM_OBS == 1003);
     test_item_association();
     test_visible_boundary();
     test_completed_movement();
     test_own_capabilities();
+    test_own_gear_bonuses();
+    test_special_and_pending_events();
+    test_double_maul_mask();
     test_projectiles();
     return osrs_test_summary();
 }
