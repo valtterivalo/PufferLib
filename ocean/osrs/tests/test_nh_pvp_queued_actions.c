@@ -160,6 +160,47 @@ static void test_pending_safe_controls(int actor, int pid, int primary) {
     actions[NH_PVP_HEAD_PRIMARY] = primary;
     step_case(actor, actions);
     CHECK("inventory equip then new spell request executes both", player->equipped[GEAR_SLOT_LEGS] == ITEM_AHRIMS_ROBESKIRT && player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC);
+
+    reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
+    player = &state.env.players[actor];
+    player->equipped[GEAR_SLOT_BODY] = ITEM_KARILS_TOP;
+    player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_AHRIM_STAFF);
+    player->inventory_cells[1] = osrs_inventory_cell_from_item(ITEM_AHRIMS_ROBETOP);
+    player->inventory_cells[2] = osrs_inventory_cell_from_item(ITEM_AHRIMS_ROBESKIRT);
+    osrs_refresh_player_equipment(player);
+    int bad_bonus = get_attack_bonus(player, ATTACK_STYLE_MAGIC);
+    float observations[NH_PVP_NUM_OBS];
+    pvp_write_observations(observations, &state.env, actor);
+    CHECK("poor magic gear is exposed before a multi-piece cast switch",
+        observations[NH_PVP_SELF_BONUS_START + 3] == osrs_policy_ratio(bad_bonus, STAT_NORM_ATTACK));
+    const int slots[] = {GEAR_SLOT_WEAPON, GEAR_SLOT_BODY, GEAR_SLOT_LEGS};
+    const uint8_t items[] = {ITEM_AHRIM_STAFF, ITEM_AHRIMS_ROBETOP, ITEM_AHRIMS_ROBESKIRT};
+    memset(actions, 0, sizeof(actions));
+    for (int index = 0; index < 3; index++) {
+        int action = nh_pvp_equipment_action_for_item(slots[index], items[index]);
+        CHECK("every piece of the available magic switch is legal",
+            allowed(actor, NH_PVP_HEAD_EQUIP_SLOT(slots[index]), action));
+        actions[NH_PVP_HEAD_EQUIP_SLOT(slots[index])] = action;
+    }
+    player->has_attack_timer = 1;
+    player->attack_timer = 1;
+    actions[NH_PVP_HEAD_PRIMARY] = primary;
+    actions[NH_PVP_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
+    step_case(actor, actions);
+    pvp_write_observations(observations, &state.env, actor);
+    CHECK("mage switch and Augury preserve a new queued spell with improved visible accuracy",
+        !player->just_attacked && get_attack_bonus(player, ATTACK_STYLE_MAGIC) > bad_bonus &&
+        observations[NH_PVP_SELF_CAST_INTENT_START + state.env.pvp_runtime.pending_manual_cast[actor]] == 1 &&
+        player->offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
+    memset(actions, 0, sizeof(actions));
+    step_case(actor, actions);
+    CHECK("retain launches the queued spell in all three selected magic pieces with Augury",
+        player->just_attacked && player->magic_type_this_tick ==
+            (primary == NH_PVP_PRIMARY_ICE ? OSRS_MAGIC_ATTACK_ANCIENT_ICE : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD) &&
+        player->equipped[GEAR_SLOT_WEAPON] == ITEM_AHRIM_STAFF &&
+        player->equipped[GEAR_SLOT_BODY] == ITEM_AHRIMS_ROBETOP &&
+        player->equipped[GEAR_SLOT_LEGS] == ITEM_AHRIMS_ROBESKIRT &&
+        player->offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
 }
 
 static void test_raw_continuation(int actor, int pid) {
