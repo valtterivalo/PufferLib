@@ -307,6 +307,7 @@ typedef struct {
     int minibatch_size;
     float replay_ratio;
     long total_timesteps;
+    double time_budget_seconds;
     float max_grad_norm;
     float clip_coef;
     float vf_clip_coef;
@@ -556,6 +557,7 @@ typedef struct PuffeRL {
     long epoch;
     long global_step;
     double start_time;
+    double training_start_time;
     double last_log_time;
     long last_log_step;
     int write_slot;
@@ -1436,10 +1438,15 @@ __global__ void gather_learner_state(Prec dst, Prec src, const int* row_offset) 
     dst.data[idx] = src.data[(layer * learners + source_learner) * hidden + h];
 }
 
-// Cosine decay base → min over t in [0, T). Double for t/T (float loses
-// precision past 2^24). Caller passes epoch and total train epochs.
-float cosine_annealing(float base, float min_v, long t, long T) {
-    double u = (double)t / (double)T;
+static double monotonic_seconds(void) {
+    struct timespec now;
+    int status = clock_gettime(CLOCK_MONOTONIC, &now);
+    assert(status == 0);
+    return now.tv_sec + now.tv_nsec * 1e-9;
+}
+
+float cosine_annealing(float base, float min_v, double t, double T) {
+    double u = t / T;
     return min_v + 0.5f * (base - min_v) * (1.0f + (float)cos(M_PI * u));
 }
 
@@ -1592,9 +1599,16 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     // total_timesteps/batch — multi-GPU would otherwise only traverse 1/W of the
     // cosine and never reach min_lr / min_ent.
     int total_epochs = hypers->total_timesteps / hypers->world_size / batch_size;
+    double schedule_time = current_epoch;
+    double schedule_duration = total_epochs;
+    if (hypers->time_budget_seconds > 0) {
+        schedule_duration = hypers->time_budget_seconds;
+        schedule_time = fmin(monotonic_seconds() - pufferl->training_start_time,
+            schedule_duration);
+    }
     if (anneal_lr) {
         float lr_min = hypers->min_lr_ratio * hypers->lr;
-        float lr = cosine_annealing(hypers->lr, lr_min, current_epoch, total_epochs);
+        float lr = cosine_annealing(hypers->lr, lr_min, schedule_time, schedule_duration);
         cudaMemcpy(muon->lr, &lr, sizeof(float), cudaMemcpyHostToDevice);
     }
 
@@ -1606,7 +1620,7 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     if (hypers->anneal_ent_coef) {
         float ent_min = hypers->min_ent_coef_ratio * hypers->ent_coef;
         current_ent_coef = cosine_annealing(
-            hypers->ent_coef, ent_min, current_epoch, total_epochs);
+            hypers->ent_coef, ent_min, schedule_time, schedule_duration);
     }
     // Host write + H2D stay outside the graph; device ptr is what kernels read.
     cudaMemcpyAsync(pufferl->ppo_bufs.ent_coef, &current_ent_coef,
@@ -1811,6 +1825,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .minibatch_size = puf_ini_get(ini, "train", "minibatch_size"),
         .replay_ratio = puf_ini_get(ini, "train", "replay_ratio"),
         .total_timesteps = puf_ini_get(ini, "train", "total_timesteps"),
+        .time_budget_seconds = puf_ini_get(ini, "train", "time_budget_seconds"),
         .max_grad_norm = puf_ini_get(ini, "train", "max_grad_norm"),
         .clip_coef = puf_ini_get(ini, "train", "clip_coef"),
         .vf_clip_coef = puf_ini_get(ini, "train", "vf_clip_coef"),
@@ -3243,6 +3258,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         puf_ini_get(ini, "train", "horizon");
     long local_timesteps = total_timesteps / ctx->world_size;
     long train_epochs = local_timesteps / batch_size;
+    double time_budget_seconds = pufferl->hypers.time_budget_seconds;
+    assert(time_budget_seconds >= 0);
+    assert(time_budget_seconds == 0 ||
+        (ctx->world_size == 1 && !pufferl->hypers.async));
     long checkpoint_interval = puf_ini_get(ini, "base", "checkpoint_interval");
     char target_key[128];
     sweep_metric_key(ini, target_key, sizeof(target_key));
@@ -3253,6 +3272,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     TrainResult result = {0};
     char final_checkpoint[4096] = {0};
 
+    pufferl->training_start_time = monotonic_seconds();
     for (long epoch = 0; epoch < train_epochs; epoch++) {
         if (pufferl->hypers.async) {
             // Cleanba 2-slot: warmup fills slot 0; then collect into write
@@ -3289,8 +3309,11 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             train_impl(pufferl, NULL);
         }
 
+        int final_epoch = epoch == train_epochs - 1 ||
+            (time_budget_seconds > 0 && monotonic_seconds() -
+                pufferl->training_start_time >= time_budget_seconds);
         char saved_checkpoint[4096] = {0};
-        if (epoch == train_epochs - 1 || (checkpoint_interval > 0
+        if (final_epoch || (checkpoint_interval > 0
                 && (epoch + 1) % checkpoint_interval == 0)) {
             snprintf(saved_checkpoint, sizeof(saved_checkpoint),
                 "%s/%016ld.bin", checkpoint_dir, pufferl->global_step);
@@ -3320,7 +3343,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         }
 
         if (last_log.size && wall_clock()
-                < pufferl->last_log_time + 0.6 && epoch < train_epochs - 1) {
+                < pufferl->last_log_time + 0.6 && !final_epoch) {
             continue;
         }
 
@@ -3397,6 +3420,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             puf_log_history_add(&log_history, &last_log);
         }
         dict_clear(&new_log);
+        if (final_epoch) break;
     }
 
     // TrainResult curve: bin-mean over log_history (same as artifact metrics).
