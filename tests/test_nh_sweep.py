@@ -81,6 +81,22 @@ class NhSweepTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.contract()
 
+    def test_trained_mixed_selfplay_pins_architecture_and_keeps_benchmark(self):
+        self.selfplay(1)
+        self.config['env'].update(opponent_type='33', use_c_opponent='1', selfplay_match_fraction='0.5')
+        self.config['base']['load_model_path'] = '/exact/trained.bin'
+        for key, value in [('hidden_size', '256'), ('num_layers', '5')]:
+            self.config['policy'][key] = value
+            self.config[f'sweep.policy.{key}'].update(min=value, max=value)
+        result = self.contract()
+        self.assertEqual(result['training_mode'], 'mixed_historical_selfplay')
+        self.assertEqual(result['training_opponent_members'], [23, 35, 36, 37])
+        self.assertEqual(result['eval_bots'], [23, 35, 36, 37])
+        self.assertEqual(result['initial_model_path'], '/exact/trained.bin')
+        self.config['sweep.policy.num_layers']['max'] = '6'
+        with self.assertRaises(AssertionError):
+            self.contract()
+
     def test_rejects_removed_ids_mode_tokens_and_incompatible_modes(self):
         for bots in ['0', '31', '33', '24', '32', '34', '23,23']:
             self.config['selfplay']['eval_bots'] = bots

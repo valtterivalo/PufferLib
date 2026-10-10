@@ -58,7 +58,7 @@ constexpr cublasComputeType_t CUBLAS_COMPUTE = CUBLAS_COMPUTE_32F;
 
 #define PUF_MAX_DIMS 8
 #define BLOCK_SIZE 256
-int grid_size(int N) {
+int grid_size(int64_t N) {
     return (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 }
 
@@ -1049,8 +1049,13 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
         for (int e = 0; e < env_count; e++) {
             Env* eptr = &vec->envs[env_start + e];
             for (int s = 0; s < eptr->num_agents; s++) {
+#ifdef MY_POLICY_ASSIGNMENT
+                int policy = eptr->agents[s].policy;
+#else
                 int policy = e < frozen_start ? 0 : eptr->agents[s].policy;
+#endif
                 assert(policy >= 0 && policy < vec->num_policies);
+                eptr->agents[s].policy = policy;
                 counts[policy]++;
             }
         }
@@ -1074,7 +1079,7 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
             Env* eptr = &vec->envs[env_start + e];
             int tag = 0;
             for (int s = 0; s < eptr->num_agents; s++) {
-                int policy = e < frozen_start ? 0 : eptr->agents[s].policy;
+                int policy = eptr->agents[s].policy;
                 if (policy > tag) {
                     tag = policy;
                 }
@@ -1412,18 +1417,18 @@ template <typename T>
 __global__ void gather_learner_rollout(T* dst, const T* src,
         int horizon, int actor_rows, int cols,
         int actors_per_buf, int learners_per_buf, const int* row_offset) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     int learner_rows = actor_rows / actors_per_buf * learners_per_buf;
-    if (idx >= horizon * learner_rows * cols) {
+    if (idx >= (int64_t)horizon * learner_rows * cols) {
         return;
     }
-    int learner = idx / (horizon * cols);
+    int learner = idx / ((int64_t)horizon * cols);
     int t = idx / cols % horizon;
     int col = idx % cols;
     int source_learner = (learner + *row_offset) % learner_rows;
     int actor = source_learner / learners_per_buf * actors_per_buf
         + source_learner % learners_per_buf;
-    dst[idx] = src[(t * actor_rows + actor) * cols + col];
+    dst[idx] = src[((int64_t)t * actor_rows + actor) * cols + col];
 }
 
 __global__ void gather_learner_state(Prec dst, Prec src, const int* row_offset) {
@@ -1480,25 +1485,25 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     int actors_per_buf = pufferl->vec->agents_per_buf;
     int learners_per_buf = pufferl->vec->policy_layout[1];
     int learner_rows = pufferl->vec->buffers * learners_per_buf;
-    gather_learner_rollout<<<grid_size(T * learner_rows * obs_size), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows * obs_size), BLOCK_SIZE, 0, stream>>>(
         rollouts->observations.data, src.observations.data, T, B, obs_size,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows * num_atns), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows * num_atns), BLOCK_SIZE, 0, stream>>>(
         rollouts->actions.data, src.actions.data, T, B, num_atns,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->logprobs.data, src.logprobs.data, T, B, 1,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->rewards.data, src.rewards.data, T, B, 1,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->terminals.data, src.terminals.data, T, B, 1,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows), BLOCK_SIZE, 0, stream>>>(
         rollouts->values.data, src.values.data, T, B, 1,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
-    gather_learner_rollout<<<grid_size(T * learner_rows * mask_c), BLOCK_SIZE, 0, stream>>>(
+    gather_learner_rollout<<<grid_size((int64_t)T * learner_rows * mask_c), BLOCK_SIZE, 0, stream>>>(
         rollouts->action_mask.data, src.action_mask.data, T, B, mask_c,
         actors_per_buf, learners_per_buf, pufferl->train_row_offset.data);
 
@@ -2671,6 +2676,14 @@ void run_sweep(Ini* ini, const char* exe_path) {
 
         float min_v = dict_get(dict, "min");
         float max_v = dict_get(dict, "max");
+        assert(min_v <= max_v);
+        if (min_v == max_v) {
+            char value[64];
+            snprintf(value, sizeof(value), "%.9g", min_v);
+            puf_ini_set(puf_ini_section(ini, params[n_params].section, 0),
+                params[n_params].key, value);
+            continue;
+        }
         const char* scale_s = dict_get_str(dict, "scale");
         float scale;
         if (strcmp(scale_s, "auto") == 0) {
@@ -3172,6 +3185,7 @@ EvalResult run_eval(Ini* ini, TrainContext* ctx, int mode, int verbose,
 
 TrainResult run_train(Ini* ini, TrainContext* ctx) {
     int use_selfplay = puf_ini_get(ini, "selfplay", "enabled");
+    assert(!use_selfplay || !puf_ini_get(ini, "base", "async"));
     if (!use_selfplay) {
         puf_ini_put(ini, "vec.num_policies", "1");
         puf_ini_put(ini, "vec.hist_policy_percent", "0");
@@ -3208,6 +3222,12 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         puf_ini_get_str(ini, "base", "log_dir"),
         puf_ini_get_str(ini, "base", "env_name"));
     PuffeRL* pufferl = create_pufferl(ini, ctx);
+    char initial_model[4096];
+    const char* initial_path = puf_checkpoint_path_key(ini, "load_model_path",
+        initial_model, sizeof(initial_model));
+    if (initial_path) {
+        pufferl_load_policy(pufferl, 0, initial_path);
+    }
     char minibatch[32];
     snprintf(minibatch, sizeof(minibatch), "%d", pufferl->hypers.minibatch_size);
     puf_ini_put(ini, "train.minibatch_size", minibatch);
@@ -3228,6 +3248,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     }
 
     Selfplay selfplay = {0};
+    long history_resets = 0;
     if (use_selfplay) {
         char initial_checkpoint[4096];
         snprintf(initial_checkpoint, sizeof(initial_checkpoint),
@@ -3329,7 +3350,6 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             selfplay_add_checkpoint(&selfplay, saved_checkpoint);
         }
 
-        // Opponent swap mid-episode: treat as truncate + reset (not boundary wait).
         if (use_selfplay && selfplay.opp_timeout_steps > 0) {
             long step = pufferl->global_step * pufferl->hypers.world_size;
             for (int s = 0; s < selfplay.num_hist; s++) {
@@ -3337,6 +3357,17 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
                 if (step - hist->opp_started_step >= selfplay.opp_timeout_steps) {
                     pufferl_load_policy(pufferl, hist->policy_idx,
                         selfplay_sample(&selfplay));
+                    VecEnv* vec = pufferl->vec;
+                    for (int e = 0; e < vec->size; e++) {
+                        Env* env = &vec->envs[e];
+                        if (env->tag != hist->policy_idx) continue;
+                        puf_reset(env);
+                        history_resets++;
+                        for (int role = 0; role < env->num_agents; role++)
+                            env->agents[role].terminals[0] = 1;
+                    }
+                    cpu_upload(pufferl, 0, vec->total_agents, pufferl->default_stream);
+                    cudaStreamSynchronize(pufferl->default_stream);
                     hist->opp_started_step = step;
                 }
             }
@@ -3399,6 +3430,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             dict_set(&new_log, "pool/size", selfplay.pool_size);
             dict_set(&new_log, "pool/num_hist", selfplay.num_hist);
             dict_set(&new_log, "pool/num_policies", pufferl->num_policies);
+            dict_set(&new_log, "pool/opponent_reset_episodes", history_resets);
         }
         // n=0 logs omit env/*; keep last complete-episode snapshot.
         int episodes = dict_get(&new_log, "env/n") > 0;

@@ -114,7 +114,14 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
         for key, bound in REWARD_FEATURE_BOUNDS.items() if key != 'terminal_reward_coef')
     reward_bound = terminal_bound + reward_space['shaping_scale']['max'] * dense_bound
     assert reward_bound <= 0.95, reward_bound
-    assert config['base']['load_model_path'].strip("'\"") == 'None'
+    initial_path = config['base']['load_model_path'].strip("'\"")
+    if initial_path != 'None':
+        assert initial_path != 'latest'
+        for key in ('hidden_size', 'num_layers'):
+            value = config.getint('policy', key)
+            section = f'sweep.policy.{key}'
+            assert config.getfloat(section, 'min') == value
+            assert config.getfloat(section, 'max') == value
     assert config['base']['load_enemy_model_path'].strip("'\"") == 'None'
     assert config.getint('bot_eval', 'self_play') == 0
     assert config.getint('bot_eval', 'use_c_opponent') == 1
@@ -140,9 +147,17 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
         members, weights = ((mixture_members, mixture_weights)
             if training_opponent == opponents['OPP_MIXED_NH'] else ([training_opponent], [100]))
     else:
-        assert config.getint('env', 'use_c_opponent') == 0
-        assert training_opponent in {opponents['OPP_NONE'], opponents['OPP_SELFPLAY']}
-        members, weights = [], []
+        fraction = config.getfloat('env', 'selfplay_match_fraction')
+        assert 0 < fraction <= 1
+        if fraction < 1:
+            assert config.getint('env', 'use_c_opponent') == 1
+            assert training_opponent in scripted | {opponents['OPP_MIXED_NH']}
+            members, weights = ((mixture_members, mixture_weights)
+                if training_opponent == opponents['OPP_MIXED_NH'] else ([training_opponent], [100]))
+        else:
+            assert config.getint('env', 'use_c_opponent') == 0
+            assert training_opponent in {opponents['OPP_NONE'], opponents['OPP_SELFPLAY']}
+            members, weights = [], []
         if history == 0:
             assert policies == 1 and history_fraction == 0
             mode = 'current_selfplay'
@@ -152,6 +167,8 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
             assert config.getint('selfplay', 'opp_timeout_steps') > 0
             assert config.getint('base', 'checkpoint_interval') > 0
             mode = 'historical_selfplay'
+        if fraction < 1:
+            mode = 'mixed_' + mode
     identity = json.dumps({'version': 'nh-actual-wins-v2', 'source_sha': source_sha,
         'training_mode': mode, 'benchmark_bots': eval_bots,
         'resolved_config': {section: dict(config[section]) for section in config.sections()}},
@@ -161,6 +178,9 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
         'training_opponent_members': members, 'training_opponent_weights': weights,
         'eval_bots': eval_bots, 'self_play': self_play, 'historical_policies': history,
         'history_environment_fraction': history_fraction,
+        'selfplay_match_fraction': config.getfloat('env', 'selfplay_match_fraction'),
+        'initial_model_path': initial_path,
+        'historical_roles': 'Balanced per frozen bank within each rollout buffer',
         'reward_search': reward_space, 'maximum_absolute_step_reward': reward_bound,
         'objective_id': f'nh-actual-wins-v2-{digest}'}
 
@@ -180,6 +200,7 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--binary', type=Path, required=True)
+    parser.add_argument('--config', type=Path)
     parser.add_argument('--seconds', type=int, default=7200)
     parser.add_argument('--max-suggestion-cost', type=int, default=300)
     parser.add_argument('--entity', default='valtterivalo-clock-cloud')
@@ -205,6 +226,9 @@ def main():
         config.read_file(stream)
     with (repo / 'config/osrs_pvp.ini').open() as stream:
         config.read_file(stream)
+    if args.config:
+        with args.config.open() as stream:
+            config.read_file(stream)
     config['sweep']['max_suggestion_cost'] = str(args.max_suggestion_cost)
     opponents, mixture_members, mixture_weights = opponent_contract(
         (repo / 'ocean/osrs/osrs_types.h').read_text(),
@@ -222,7 +246,13 @@ def main():
     binary = root / 'nh-pvp'
     binary.write_bytes(binary_source.read_bytes())
     binary.chmod(0o755)
+    initial_path = contract['initial_model_path']
+    initial_sha = None if initial_path == 'None' else hashlib.sha256(Path(initial_path).read_bytes()).hexdigest()
+    with (root / 'config/resolved-sweep.ini').open('w') as stream:
+        config.write(stream)
     command = [str(binary), 'sweep',
+        *[f'--{section}.{key}={value}' for section in config.sections()
+            if section != 'metrics' for key, value in config[section].items()],
         f'--base.checkpoint_dir={root}/checkpoints', f'--base.log_dir={root}/logs',
         f'--sweep.max_suggestion_cost={args.max_suggestion_cost}', '--sweep.resume_dir=',
         f'--sweep.objective_id={contract["objective_id"]}']
@@ -230,6 +260,7 @@ def main():
     manifest = {
         'git_sha': git_sha, 'branch': branch, 'repo': str(repo),
         'binary_source': str(binary_source),
+        'initial_model_sha256': initial_sha,
         'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
         'command': command, 'started_at_unix': start,
         'suggestion_deadline_unix': start + args.seconds,

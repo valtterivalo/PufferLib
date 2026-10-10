@@ -29,6 +29,7 @@ def test_learner_rollout_excludes_historical_rows(tmp_path: Path, backend: str) 
     harness = tmp_path / ("learner_rollout.cu" if backend == "cuda" else "learner_rollout.cpp")
     harness.write_text(r"""
 #include <cassert>
+#include <cstdint>
 #include <numeric>
 #include <vector>
 #ifdef __CUDACC__
@@ -243,3 +244,45 @@ int main() {
     executable = tmp_path / "learner_rollout"
     subprocess.run([compiler, "-std=c++17", "-O2", str(harness), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
+
+
+def test_learner_gather_large_source_and_destination_indices(tmp_path: Path) -> None:
+    source = (Path(__file__).resolve().parents[1] / "src/pufferl.cu").read_text()
+    gather = source[source.index("template <typename T>\n__global__ void gather_learner_rollout"):
+                    source.index("__global__ void gather_learner_state")]
+    grid = source[source.index("int grid_size("):source.index("// Compile vs a single env")]
+    harness = tmp_path / "large_gather.cpp"
+    harness.write_text(r"""
+#include <cassert>
+#include <cstdint>
+#include <sys/mman.h>
+#define __global__
+#define BLOCK_SIZE 256
+struct { int x; } blockIdx, blockDim, threadIdx;
+""" + grid + gather + r"""
+int main() {
+    int horizon=256, actors=16384, apb=8192, lpb=6822, cols=1003, offset=0;
+    int learners=2*lpb;
+    int64_t src_n=(int64_t)horizon*actors*cols;
+    int64_t dst_n=(int64_t)horizon*learners*cols;
+    assert(src_n>INT32_MAX && dst_n>INT32_MAX);
+    float* src=(float*)mmap(nullptr,src_n*sizeof(float),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+    float* dst=(float*)mmap(nullptr,dst_n*sizeof(float),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+    assert(src!=MAP_FAILED && dst!=MAP_FAILED);
+    int64_t idx=dst_n-1;
+    int actor=apb+lpb-1;
+    int64_t source_idx=((int64_t)(horizon-1)*actors+actor)*cols+cols-1;
+    src[source_idx]=73;
+    blockDim.x=256;
+    blockIdx.x=idx/256;
+    threadIdx.x=idx%256;
+    assert(grid_size(dst_n)==(dst_n+255)/256);
+    gather_learner_rollout(dst,src,horizon,actors,cols,apb,lpb,&offset);
+    assert(dst[idx]==73);
+    assert(munmap(src,src_n*sizeof(float))==0);
+    assert(munmap(dst,dst_n*sizeof(float))==0);
+}
+""")
+    binary = tmp_path / "large_gather"
+    subprocess.run(["clang++", "-std=c++17", "-O2", str(harness), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
