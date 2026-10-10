@@ -36,7 +36,6 @@ struct Log {
     float karambwan_remaining;
     float brews_remaining;
     float spec_energy_remaining;
-    float attacks_landed;
     float n;
 };
 
@@ -93,31 +92,16 @@ void puf_init(Env* env, Dict* kwargs) {
         NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), "seed", (int)env_seed);
     env->state.env.pvp_runtime.use_external_opponent_actions = env->num_agents == 2;
     assert(env->num_agents == 1 || !env->state.env.pvp_runtime.use_c_opponent);
-    RewardShapingConfig* shaping = &env->state.env.shaping;
-    shaping->enabled = (int)dict_get(kwargs, "shaping_enabled");
-    shaping->shaping_scale = (float)dict_get(kwargs, "shaping_scale");
-    shaping->damage_dealt_coef = 0.005f;
-    shaping->damage_received_coef = -0.005f;
-    shaping->correct_prayer_bonus = 0.03f;
-    shaping->wrong_prayer_penalty = -0.02f;
-    shaping->prayer_switch_no_attack_penalty = -0.01f;
-    shaping->off_prayer_hit_bonus = 0.03f;
-    shaping->melee_frozen_penalty = -0.05f;
-    shaping->wasted_eat_penalty = -0.001f;
-    shaping->premature_eat_penalty = -0.02f;
-    shaping->magic_no_staff_penalty = -0.05f;
-    shaping->gear_mismatch_penalty = -0.05f;
-    shaping->spec_off_prayer_bonus = 0.02f;
-    shaping->spec_low_defence_bonus = 0.01f;
-    shaping->spec_low_hp_bonus = 0.02f;
-    shaping->smart_triple_eat_bonus = 0.05f;
-    shaping->wasted_triple_eat_penalty = -0.0005f;
-    shaping->damage_burst_bonus = 0.002f;
-    shaping->damage_burst_threshold = 30;
-    shaping->premature_eat_threshold = 0.7071f;
-    shaping->ko_bonus = 0.15f;
-    shaping->wasted_resources_penalty = -0.07f;
-    shaping->prayer_penalty_enabled = 1;
+#define NH_PVP_LOAD_REWARD_INT(key, field, default_value) \
+    ENCOUNTER_NH_PVP.put_int(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), \
+        key, (int)dict_get(kwargs, key));
+    OSRS_PVP_REWARD_INT_FIELDS(NH_PVP_LOAD_REWARD_INT)
+#undef NH_PVP_LOAD_REWARD_INT
+#define NH_PVP_LOAD_REWARD_FLOAT(key, field, default_value) \
+    ENCOUNTER_NH_PVP.put_float(NH_PVP_ENV_STATE(env), NH_PVP_ENV_CONTEXT(env), \
+        key, (float)dict_get(kwargs, key));
+    OSRS_PVP_REWARD_FLOAT_FIELDS(NH_PVP_LOAD_REWARD_FLOAT)
+#undef NH_PVP_LOAD_REWARD_FLOAT
 
     memset(&env->log, 0, sizeof(env->log));
     ENCOUNTER_NH_PVP.finalize_context(
@@ -170,7 +154,6 @@ void puf_step(Env* env) {
         env->log.karambwan_remaining += episode->karambwan_remaining;
         env->log.brews_remaining += episode->brews_remaining;
         env->log.spec_energy_remaining += episode->spec_energy_remaining;
-        env->log.attacks_landed += episode->attacks_landed;
         env->log.n += episode->n;
         memset(episode, 0, sizeof(*episode));
 
@@ -216,9 +199,6 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "karambwan_remaining", log->karambwan_remaining);
     dict_set(out, "brews_remaining", log->brews_remaining);
     dict_set(out, "spec_remaining", log->spec_energy_remaining);
-    dict_set(out, "attacks_landed", log->attacks_landed);
-    dict_set(out, "damage_per_hit",
-        log->attacks_landed > 0.0f ? log->damage_dealt / log->attacks_landed : 0.0f);
     dict_set(out, "score", log->wins);
     dict_set(out, "perf", log->wins);
 }

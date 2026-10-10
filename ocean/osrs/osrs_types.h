@@ -704,35 +704,45 @@ typedef struct Log {
     float inf_death_restore_doses_hist[6];
 } Log;
 
+#define OSRS_PVP_REWARD_FLOAT_FIELDS(X) \
+    X("damage_dealt_coef", damage_dealt_coef, 0.005f) \
+    X("damage_received_coef", damage_received_coef, -0.005f) \
+    X("correct_prayer_bonus", correct_prayer_bonus, 0.03f) \
+    X("wrong_prayer_penalty", wrong_prayer_penalty, -0.02f) \
+    X("prayer_switch_no_attack_penalty", prayer_switch_no_attack_penalty, -0.01f) \
+    X("off_prayer_hit_bonus", off_prayer_hit_bonus, 0.03f) \
+    X("wasted_eat_penalty", wasted_eat_penalty, -0.001f) \
+    X("premature_eat_penalty", premature_eat_penalty, -0.02f) \
+    X("magic_no_staff_penalty", magic_no_staff_penalty, -0.05f) \
+    X("gear_mismatch_penalty", gear_mismatch_penalty, -0.05f) \
+    X("spec_off_prayer_bonus", spec_off_prayer_bonus, 0.02f) \
+    X("spec_low_defence_bonus", spec_low_defence_bonus, 0.01f) \
+    X("spec_low_hp_bonus", spec_low_hp_bonus, 0.02f) \
+    X("smart_triple_eat_bonus", smart_triple_eat_bonus, 0.05f) \
+    X("wasted_triple_eat_penalty", wasted_triple_eat_penalty, -0.0005f) \
+    X("damage_burst_bonus", damage_burst_bonus, 0.002f) \
+    X("premature_eat_threshold", premature_eat_threshold, 0.7071f) \
+    X("ko_bonus", ko_bonus, 0.15f) \
+    X("ko_supplies_bonus_coef", ko_supplies_bonus_coef, 0.0f) \
+    X("wasted_resources_penalty", wasted_resources_penalty, -0.07f) \
+    X("shaping_scale", shaping_scale, 0.0f) \
+    X("terminal_reward_coef", terminal_reward_coef, 1.0f) \
+    X("click_penalty_coef", click_penalty_coef, 0.0f)
+
+#define OSRS_PVP_REWARD_INT_FIELDS(X) \
+    X("shaping_enabled", enabled, 0) \
+    X("prayer_penalty_enabled", prayer_penalty_enabled, 1) \
+    X("click_penalty_enabled", click_penalty_enabled, 0) \
+    X("click_penalty_threshold", click_penalty_threshold, 0) \
+    X("damage_burst_threshold", damage_burst_threshold, 30)
+
 typedef struct {
-    float damage_dealt_coef;
-    float damage_received_coef;
-    float correct_prayer_bonus;
-    float wrong_prayer_penalty;
-    float prayer_switch_no_attack_penalty;
-    float off_prayer_hit_bonus;
-    float melee_frozen_penalty;
-    float wasted_eat_penalty;
-    float premature_eat_penalty;
-    float magic_no_staff_penalty;
-    float gear_mismatch_penalty;
-    float spec_off_prayer_bonus;
-    float spec_low_defence_bonus;
-    float spec_low_hp_bonus;
-    float smart_triple_eat_bonus;
-    float wasted_triple_eat_penalty;
-    float damage_burst_bonus;
-    int   damage_burst_threshold;
-    float premature_eat_threshold;
-    float ko_bonus;
-    float ko_supplies_bonus_coef;
-    float wasted_resources_penalty;
-    float shaping_scale;
-    int   enabled;
-    int   prayer_penalty_enabled;
-    int   click_penalty_enabled;
-    int   click_penalty_threshold;
-    float click_penalty_coef;
+#define OSRS_PVP_REWARD_FLOAT_FIELD(key, field, value) float field;
+    OSRS_PVP_REWARD_FLOAT_FIELDS(OSRS_PVP_REWARD_FLOAT_FIELD)
+#undef OSRS_PVP_REWARD_FLOAT_FIELD
+#define OSRS_PVP_REWARD_INT_FIELD(key, field, value) int field;
+    OSRS_PVP_REWARD_INT_FIELDS(OSRS_PVP_REWARD_INT_FIELD)
+#undef OSRS_PVP_REWARD_INT_FIELD
 } RewardShapingConfig;
 
 typedef enum {
@@ -857,6 +867,7 @@ typedef struct {
     OsrsTeleportWorld teleport_world;
     OsrsPvpVisibleActor visible[NUM_AGENTS];
     NhPvpPendingManualCast pending_manual_cast[NUM_AGENTS];
+    uint8_t overhead_changed_this_tick[NUM_AGENTS];
     OsrsPvpProjectile projectiles[NUM_AGENTS][MAX_PENDING_HITS];
     OsrsPvpHitObserver hit_observer;
     void* hit_observer_context;

@@ -193,6 +193,10 @@ static void nh_pvp_put_int(
 ) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
+#define NH_PVP_SET_REWARD_INT(key_name, field, default_value) \
+    if (strcmp(key, key_name) == 0) { s->env.shaping.field = value; return; }
+    OSRS_PVP_REWARD_INT_FIELDS(NH_PVP_SET_REWARD_INT)
+#undef NH_PVP_SET_REWARD_INT
     if (strcmp(key, "opponent_type") == 0) {
         s->env.pvp_runtime.opponent.type = osrs_nh_opponent_type(value);
     } else if (strcmp(key, "opponent_p0_type") == 0) {
@@ -234,9 +238,10 @@ static void nh_pvp_put_float(
 ) {
     (void)context;
     NhPvpState* s = (NhPvpState*)state;
-    if (strcmp(key, "shaping_scale") == 0) {
-        s->env.shaping.shaping_scale = value;
-    }
+#define NH_PVP_SET_REWARD_FLOAT(key_name, field, default_value) \
+    if (strcmp(key, key_name) == 0) { s->env.shaping.field = value; return; }
+    OSRS_PVP_REWARD_FLOAT_FIELDS(NH_PVP_SET_REWARD_FLOAT)
+#undef NH_PVP_SET_REWARD_FLOAT
 }
 
 static void* nh_pvp_get_log(EncounterState* state, EncounterContext* context) {

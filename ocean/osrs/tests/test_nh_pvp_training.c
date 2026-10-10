@@ -1,5 +1,6 @@
 #include "../../osrs_pvp/osrs_pvp.h"
 #include "osrs_test_check.h"
+#include "osrs_test_nh_pvp.h"
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -18,8 +19,7 @@ static void reset(int self_play, double opponent_type) {
         {.key = "use_c_opponent", .value = !self_play},
         {.key = "self_play", .value = self_play},
         {.key = "auto_reset", .value = 0},
-        {.key = "shaping_enabled", .value = 0},
-        {.key = "shaping_scale", .value = 0},
+        OSRS_TEST_NH_PVP_REWARD_ITEMS
     };
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     env.rng = 123;
@@ -108,6 +108,9 @@ int main(void) {
     puf_step(&env);
     CHECK("bleed refreshes visible health bar", env.state.env.players[1].current_hitpoints == 94 &&
         observations[0][NH_PVP_TARGET_START] == 28.0f / 30.0f);
+    CHECK("Morrigan bleed contributes actual HP loss to reward scales",
+        env.state.env.players[0].damage_dealt_scale == 5.0f / 99.0f &&
+        env.state.env.players[1].damage_received_scale == 5.0f / 99.0f);
     puf_close(&env);
 
     reset(1, OPP_SELFPLAY);
@@ -137,6 +140,7 @@ int main(void) {
     reset(1, OPP_SELFPLAY);
     OsrsEnv* pvp = &env.state.env;
     pvp->shaping = (RewardShapingConfig){
+        .terminal_reward_coef = 1.0f,
         .damage_dealt_coef = 0.01f,
         .damage_received_coef = -0.02f,
         .correct_prayer_bonus = 0.03f,
@@ -156,6 +160,7 @@ int main(void) {
         player->damage_received_scale = 0.025f;
         player->just_attacked = 1;
         player->player_prayed_correct = 1;
+        pvp->pvp_runtime.overhead_changed_this_tick[i] = 1;
         player->clicks_this_tick = 3;
         pvp->last_executed_actions[i * OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] = OVERHEAD_MAGE;
     }

@@ -1,5 +1,6 @@
 #include "../../osrs_pvp/osrs_pvp.h"
 #include "osrs_test_check.h"
+#include "osrs_test_nh_pvp.h"
 
 static Env env;
 static float observations[OBS_SIZE], actions[NUM_ATNS], reward, terminal;
@@ -15,8 +16,7 @@ static void reset(OpponentType bot) {
         {.key = "use_c_opponent", .value = 1},
         {.key = "self_play", .value = 0},
         {.key = "auto_reset", .value = 0},
-        {.key = "shaping_enabled", .value = 0},
-        {.key = "shaping_scale", .value = 0},
+        OSRS_TEST_NH_PVP_REWARD_ITEMS
     };
     Dict kwargs = {.items = items, .size = sizeof(items) / sizeof(*items)};
     env.rng = 123;

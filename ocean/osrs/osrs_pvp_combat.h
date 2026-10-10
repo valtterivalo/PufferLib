@@ -480,10 +480,12 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         defender->damage_applied_this_tick += hit->damage;
         defender->current_hitpoints = max_int(0, defender->current_hitpoints - hit->damage);
         float scale = (float)hit->damage / (float)defender->base_hitpoints;
+        float actual_scale = (float)(hitpoints_before - defender->current_hitpoints)
+            / (float)defender->base_hitpoints;
         defender->total_damage_received += scale;
         attacker->total_damage_dealt += scale;
-        defender->damage_received_scale += scale;
-        attacker->damage_dealt_scale += scale;
+        defender->damage_received_scale += actual_scale;
+        attacker->damage_dealt_scale += actual_scale;
         pvp_observe_hit(env, attacker_idx, defender_idx, hit, hit->damage, hitpoints_before);
         return;
     }
@@ -537,10 +539,12 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     defender->current_hitpoints -= damage;
     if (defender->current_hitpoints < 0) defender->current_hitpoints = 0;
     float damage_scale = (float)damage / (float)defender->base_hitpoints;
+    float actual_damage_scale = (float)(hitpoints_before - defender->current_hitpoints)
+        / (float)defender->base_hitpoints;
     defender->total_damage_received += damage_scale;
     attacker->total_damage_dealt += damage_scale;
-    defender->damage_received_scale += damage_scale;
-    attacker->damage_dealt_scale += damage_scale;
+    defender->damage_received_scale += actual_damage_scale;
+    attacker->damage_dealt_scale += actual_damage_scale;
     attacker->last_target_health_percent =
         (float)defender->current_hitpoints / (float)defender->base_hitpoints;
 
@@ -610,6 +614,8 @@ static void pvp_process_incoming_hits(OsrsEnv* env, int recipient_idx) {
         if (damage == 0) continue;
         int before = defender->current_hitpoints;
         defender->current_hitpoints = max_int(0, before - damage);
+        float actual_scale = (float)(before - defender->current_hitpoints)
+            / (float)defender->base_hitpoints;
         defender->hit_landed_this_tick = 1;
         defender->hit_damage += damage;
         defender->hit_style = ATTACK_STYLE_NONE;
@@ -619,10 +625,10 @@ static void pvp_process_incoming_hits(OsrsEnv* env, int recipient_idx) {
         pvp_render_hit_events_add(defender, damage);
         float scale = (float)damage / defender->base_hitpoints;
         defender->total_damage_received += scale;
-        defender->damage_received_scale += scale;
+        defender->damage_received_scale += actual_scale;
         if (source >= 0) {
             env->players[source].total_damage_dealt += scale;
-            env->players[source].damage_dealt_scale += scale;
+            env->players[source].damage_dealt_scale += actual_scale;
         }
         PendingHit hit = {.kind = kinds[i]};
         pvp_observe_hit(env, source, recipient_idx, &hit, damage, before);

@@ -248,8 +248,14 @@ void pvp_init(OsrsEnv* env) {
         env->pvp_runtime.walk_dest_x[i] = -1;
         env->pvp_runtime.walk_dest_y[i] = -1;
         env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
+        env->pvp_runtime.overhead_changed_this_tick[i] = 0;
     }
-    memset(&env->shaping, 0, sizeof(env->shaping));
+#define OSRS_PVP_REWARD_FLOAT_DEFAULT(key, field, value) env->shaping.field = value;
+    OSRS_PVP_REWARD_FLOAT_FIELDS(OSRS_PVP_REWARD_FLOAT_DEFAULT)
+#undef OSRS_PVP_REWARD_FLOAT_DEFAULT
+#define OSRS_PVP_REWARD_INT_DEFAULT(key, field, value) env->shaping.field = value;
+    OSRS_PVP_REWARD_INT_FIELDS(OSRS_PVP_REWARD_INT_DEFAULT)
+#undef OSRS_PVP_REWARD_INT_DEFAULT
     memset(&env->log, 0, sizeof(env->log));
 }
 
@@ -276,6 +282,7 @@ void pvp_reset(
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.maul[i] = osrs_granite_maul_init();
         env->pvp_runtime.teleport[i] = (OsrsTeleportState){0};
+        env->pvp_runtime.overhead_changed_this_tick[i] = 0;
     }
 
     for (int i = 0; i < NUM_AGENTS; i++) {
@@ -465,6 +472,7 @@ void pvp_step_with_nh_actions(
         env->players[i].hit_was_on_prayer = 0;
         env->players[i].hit_attacker_idx = -1;
         env->players[i].freeze_applied_this_tick = 0;
+        env->pvp_runtime.overhead_changed_this_tick[i] = 0;
     }
     reset_tick_flags(&env->players[0]);
     reset_tick_flags(&env->players[1]);
@@ -591,6 +599,10 @@ void pvp_step_with_nh_actions(
                 p->morr_dot_remaining -= dot_dmg;
                 p->damage_applied_this_tick += dot_dmg;
                 if (p->current_hitpoints < 0) p->current_hitpoints = 0;
+                float actual_scale = (float)(hitpoints_before - p->current_hitpoints)
+                    / (float)p->base_hitpoints;
+                p->damage_received_scale += actual_scale;
+                env->players[1 - i].damage_dealt_scale += actual_scale;
                 PendingHit hit = {.kind = OSRS_HIT_MORRIGAN_BLEED};
                 pvp_observe_hit(env, 1 - i, i, &hit, dot_dmg, hitpoints_before);
                 p->morr_dot_tick_counter = 3;

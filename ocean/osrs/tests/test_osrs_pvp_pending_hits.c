@@ -469,6 +469,7 @@ static void test_nh_ko_supply_bonus_is_normalized_to_initial_pool(void) {
     nh_state->env.shaping = (RewardShapingConfig){
         .enabled = 1,
         .shaping_scale = 1.0f,
+        .terminal_reward_coef = 1.0f,
         .ko_supplies_bonus_coef = 1.0f,
     };
     nh_state->env.episode_over = 1;

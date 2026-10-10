@@ -10,6 +10,39 @@ import sys
 import time
 from pathlib import Path
 
+REWARD_FEATURE_BOUNDS = {
+    'terminal_reward_coef': 1,
+    'damage_dealt_coef': 120,
+    'damage_received_coef': 120,
+    'damage_burst_bonus': 120,
+    'correct_prayer_bonus': 1,
+    'wrong_prayer_penalty': 1,
+    'prayer_switch_no_attack_penalty': 1,
+    'off_prayer_hit_bonus': 1,
+    'premature_eat_penalty': 1,
+    'magic_no_staff_penalty': 1,
+    'gear_mismatch_penalty': 1,
+    'spec_off_prayer_bonus': 1,
+    'spec_low_defence_bonus': 1,
+    'spec_low_hp_bonus': 1,
+    'smart_triple_eat_bonus': 1,
+    'ko_bonus': 1,
+    'ko_supplies_bonus_coef': 1,
+    'wasted_resources_penalty': 1,
+    'wasted_eat_penalty': 38,
+    'wasted_triple_eat_penalty': 18,
+    'click_penalty_coef': 17,
+}
+REWARD_CONTROLS = {
+    'shaping_enabled': ('int_uniform', 0, 1),
+    'shaping_scale': ('uniform', 0, 1),
+    'prayer_penalty_enabled': ('int_uniform', 0, 1),
+    'click_penalty_enabled': ('int_uniform', 0, 1),
+    'click_penalty_threshold': ('int_uniform', 0, 17),
+    'damage_burst_threshold': ('int_uniform', 1, 99),
+    'premature_eat_threshold': ('uniform', 0, 1),
+}
+
 
 def opponent_contract(types_source, controller_source):
     body = re.search(r'typedef enum\s*{\s*(OPP_NONE\b.*?)\}\s*OpponentType;',
@@ -48,8 +81,39 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
     assert config.getint('selfplay', 'eval_bot_games') > 0
     assert config.getint('selfplay', 'eval_bot_envs') > 0
     assert config.getint('selfplay', 'eval_bot_threads') > 0
-    assert config.getint('env', 'shaping_enabled') == 0
-    assert config.getfloat('env', 'shaping_scale') == 0
+    assert config.getint('env', 'gear_tier') == 3
+    assert config.getint('env', 'is_lms') == 1
+    reward_space = {}
+    for key in REWARD_FEATURE_BOUNDS | REWARD_CONTROLS:
+        section = f'sweep.env.{key}'
+        anchor = config.getfloat('env', key)
+        if section in config:
+            distribution = config[section]['distribution']
+            low, high = (config.getfloat(section, bound) for bound in ('min', 'max'))
+        else:
+            distribution, low, high = 'fixed', anchor, anchor
+        assert low <= anchor <= high, key
+        if key in REWARD_CONTROLS:
+            expected_distribution, minimum, maximum = REWARD_CONTROLS[key]
+            assert minimum <= low <= high <= maximum, key
+            if expected_distribution == 'int_uniform':
+                assert all(value == int(value) for value in (anchor, low, high)), key
+            if section in config:
+                assert distribution == expected_distribution, key
+        else:
+            assert distribution in ('uniform', 'fixed'), key
+            if key == 'terminal_reward_coef':
+                assert 0.25 <= low <= high <= 0.5
+            elif key.endswith('penalty') or key in ('damage_received_coef', 'click_penalty_coef'):
+                assert low <= high <= 0, key
+            else:
+                assert 0 <= low <= high, key
+        reward_space[key] = {'distribution': distribution, 'min': low, 'max': high}
+    terminal_bound = reward_space['terminal_reward_coef']['max']
+    dense_bound = sum(bound * max(abs(reward_space[key]['min']), abs(reward_space[key]['max']))
+        for key, bound in REWARD_FEATURE_BOUNDS.items() if key != 'terminal_reward_coef')
+    reward_bound = terminal_bound + reward_space['shaping_scale']['max'] * dense_bound
+    assert reward_bound <= 0.95, reward_bound
     assert config['base']['load_model_path'].strip("'\"") == 'None'
     assert config['base']['load_enemy_model_path'].strip("'\"") == 'None'
     assert config.getint('bot_eval', 'self_play') == 0
@@ -58,8 +122,10 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
     assert config['sweep']['metric'] == 'selfplay/bot_ladder_perf'
     assert config.getfloat('sweep.train.total_timesteps', 'min') == 3e7
     assert config.getfloat('sweep.train.total_timesteps', 'max') == 1e11
-    assert not any(section.startswith(('sweep.selfplay.', 'sweep.env.', 'sweep.vec.hist_'))
+    assert not any(section.startswith(('sweep.selfplay.', 'sweep.vec.hist_'))
         for section in config.sections())
+    assert {section.removeprefix('sweep.env.') for section in config.sections()
+        if section.startswith('sweep.env.')} <= reward_space.keys()
     training_opponent = config.getint('env', 'opponent_type')
     self_play = config.getint('env', 'self_play')
     history = config.getint('selfplay', 'enabled')
@@ -95,6 +161,7 @@ def sweep_contract(config, opponents, mixture_members, mixture_weights, source_s
         'training_opponent_members': members, 'training_opponent_weights': weights,
         'eval_bots': eval_bots, 'self_play': self_play, 'historical_policies': history,
         'history_environment_fraction': history_fraction,
+        'reward_search': reward_space, 'maximum_absolute_step_reward': reward_bound,
         'objective_id': f'nh-actual-wins-v2-{digest}'}
 
 
@@ -114,7 +181,7 @@ def main():
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--seconds', type=int, default=7200)
-    parser.add_argument('--max-suggestion-cost', type=int, default=600)
+    parser.add_argument('--max-suggestion-cost', type=int, default=300)
     parser.add_argument('--entity', default='valtterivalo-clock-cloud')
     parser.add_argument('--project', default='osrs-nh-pvp')
     args = parser.parse_args()
@@ -171,7 +238,7 @@ def main():
         **contract,
         'eval_bot_games': int(config['selfplay']['eval_bot_games']),
         'score': 'Unweighted mean actual win rates against the independent scripted benchmark',
-        'shaping_enabled': 0,
+        'initial_shaping_enabled': config.getint('env', 'shaping_enabled'),
         'environment_seed_offset': int(os.environ.get('PUFFER_ENV_SEED_OFFSET', '0')),
         'fight_seeding': 'osrs_env_seed(env index,0) plus reset_count*0x9E3779B9 per episode',
         'wandb_entity': args.entity, 'wandb_project': args.project, 'wandb_group': root.name,

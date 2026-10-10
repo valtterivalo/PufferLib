@@ -1,10 +1,11 @@
 import configparser
+import re
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
-from run_nh_sweep import opponent_contract, sweep_contract
+from run_nh_sweep import REWARD_CONTROLS, REWARD_FEATURE_BOUNDS, opponent_contract, sweep_contract
 
 ROOT = Path(__file__).parents[1]
 TYPES = '''typedef enum {
@@ -42,7 +43,7 @@ class NhSweepTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             opponent_contract(TYPES.replace('OPP_FREEZE = 37', 'OPP_FREEZE = 36'), CONTROLLERS)
 
-    def test_default_is_fresh_terminal_only_scripted_benchmark(self):
+    def test_default_is_fresh_with_independent_scripted_benchmark(self):
         result = self.contract()
         self.assertEqual(result['training_mode'], 'scripted')
         self.assertEqual(result['training_opponent_members'], [23, 35, 36, 37])
@@ -109,12 +110,10 @@ class NhSweepTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.contract()
 
-    def test_rejects_warmstart_and_nonterminal_rewards(self):
+    def test_rejects_warmstart_and_shaped_selection(self):
         for section, key, value in [
             ('base', 'load_model_path', '/old-policy.bin'),
             ('base', 'load_enemy_model_path', '/old-opponent.bin'),
-            ('env', 'shaping_enabled', '1'),
-            ('env', 'shaping_scale', '0.5'),
             ('bot_eval', 'shaping_enabled', '1'),
         ]:
             original = self.config[section][key]
@@ -122,6 +121,43 @@ class NhSweepTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 self.contract()
             self.config[section][key] = original
+
+    def test_reward_search_covers_native_fields_and_preserves_headroom(self):
+        source = (ROOT / 'ocean/osrs/osrs_types.h').read_text()
+        registry = source[source.index('#define OSRS_PVP_REWARD_FLOAT_FIELDS'):]
+        registry = registry[:registry.index('typedef struct')]
+        fields = set(re.findall(r'X\("(\w+)",', registry))
+        expected = REWARD_FEATURE_BOUNDS.keys() | REWARD_CONTROLS.keys()
+        self.assertEqual(fields, expected)
+        actual = {section.removeprefix('sweep.env.') for section in self.config.sections()
+            if section.startswith('sweep.env.')}
+        self.assertEqual(actual, expected)
+        result = self.contract()
+        self.assertAlmostEqual(result['maximum_absolute_step_reward'], 0.9465)
+        for enabled in ('0', '1'):
+            self.config['env']['shaping_enabled'] = enabled
+            self.assertEqual(self.contract()['reward_search']['shaping_enabled']['distribution'],
+                'int_uniform')
+
+    def test_reward_search_rejects_saturation_and_fractional_gates(self):
+        for section, key, value in [
+            ('sweep.env.damage_dealt_coef', 'max', '0.01'),
+            ('sweep.env.terminal_reward_coef', 'max', '1'),
+            ('sweep.env.shaping_enabled', 'distribution', 'uniform'),
+            ('env', 'shaping_enabled', '0.5'),
+            ('sweep.env.click_penalty_threshold', 'max', '16.5'),
+            ('sweep.env.damage_burst_threshold', 'min', '0'),
+            ('env', 'gear_tier', '-1'),
+        ]:
+            original = self.config[section][key]
+            self.config[section][key] = value
+            with self.assertRaises(AssertionError):
+                self.contract()
+            self.config[section][key] = original
+        self.config['sweep.env.opponent_type'] = {'distribution': 'int_uniform',
+            'min': '23', 'max': '37', 'scale': 'auto'}
+        with self.assertRaises(AssertionError):
+            self.contract()
 
     def test_actual_source_catalogue_drives_active_mixture(self):
         opponents, members, weights = opponent_contract(
