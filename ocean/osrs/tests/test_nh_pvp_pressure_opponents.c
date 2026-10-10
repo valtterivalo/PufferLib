@@ -110,7 +110,7 @@ static void attack_history_contract(void) {
         history.records[index] = (OsrsPvpLaunchRecord){
             alternating[index], PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
     CHECK("recent R M alternation predicts melee after ranged",
-        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED) == ATTACK_STYLE_MELEE);
+        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, PRAYER_NONE, ATTACK_STYLE_RANGED) == ATTACK_STYLE_MELEE);
 
     const AttackStyle patterns[][HISTORY_SIZE] = {
         {ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED},
@@ -128,7 +128,7 @@ static void attack_history_contract(void) {
                 history.records[(next + age) % HISTORY_SIZE] = (OsrsPvpLaunchRecord){
                     patterns[pattern][age], PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE};
             CHECK("completed attack transitions survive ring rotation and fallback disagreement",
-                opp_predict_attack_style(&history, ATTACK_STYLE_MELEE,
+                opp_predict_attack_style(&history, ATTACK_STYLE_MELEE, PRAYER_NONE,
                     patterns[pattern][HISTORY_SIZE - 1]) == predictions[pattern]);
         }
     }
@@ -141,9 +141,24 @@ static void attack_history_contract(void) {
     history.records[4] = (OsrsPvpLaunchRecord){
         ATTACK_STYLE_RANGED, PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
     CHECK("visible weapon bait ignores launches from another pre-action weapon",
-        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
+        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, PRAYER_NONE, ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
     CHECK("missing weapon context preserves existing forecast",
-        opp_predict_attack_style(&history, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC) == ATTACK_STYLE_MAGIC);
+        opp_predict_attack_style(&history, ATTACK_STYLE_RANGED, PRAYER_NONE, ATTACK_STYLE_MAGIC) == ATTACK_STYLE_MAGIC);
+
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history.records[index] = (OsrsPvpLaunchRecord){
+            index % 2 == 0 ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE,
+            PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE,
+            index % 2 == 0 ? PRAYER_PROTECT_MELEE : PRAYER_PROTECT_RANGED};
+    CHECK("completed attacks learn response to displayed melee protection",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MELEE, PRAYER_PROTECT_MELEE,
+            ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
+    CHECK("completed attacks learn response to displayed ranged protection",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MELEE, PRAYER_PROTECT_RANGED,
+            ATTACK_STYLE_RANGED) == ATTACK_STYLE_MELEE);
+    CHECK("unseen displayed protection retains learned attack transition",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MELEE, PRAYER_PROTECT_MAGIC,
+            ATTACK_STYLE_RANGED) == ATTACK_STYLE_MELEE);
 
     for (int index = 0; index < HISTORY_SIZE; index++)
         history.records[index].target_prayer = index % 2 == 0
@@ -186,7 +201,7 @@ static void attack_history_contract(void) {
             &pvp.pvp_runtime.launch_history[0] &&
         opp_own_launch_history(&pvp, &pvp.pvp_runtime.opponent) ==
             &pvp.pvp_runtime.launch_history[1] &&
-        opp_predict_attack_style(&pvp.pvp_runtime.launch_history[1], ATTACK_STYLE_MAGIC,
+        opp_predict_attack_style(&pvp.pvp_runtime.launch_history[1], ATTACK_STYLE_MAGIC, PRAYER_NONE,
             ATTACK_STYLE_MAGIC) == ATTACK_STYLE_MAGIC);
 
     OppAttackStyles voidwaker = opp_submitted_attack_styles(

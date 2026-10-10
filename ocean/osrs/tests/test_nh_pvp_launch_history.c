@@ -27,6 +27,19 @@ int main(void) {
             step_case(actor, actions);
             CHECK("cooldown and submitted attack do not manufacture event", history->count == 1);
 
+            reset_case(actor, pid, ITEM_WHIP);
+            defender = &state.env.players[1 - actor];
+            defender->prayer = PRAYER_PROTECT_RANGED;
+            int joint[NUM_AGENTS][NH_PVP_NUM_ACTION_HEADS] = {{0}};
+            joint[actor][NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_WEAPON;
+            joint[1 - actor][NH_PVP_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+            nh_pvp_set_external_actions(&state, joint[1]);
+            nh_pvp_step((EncounterState*)&state, (EncounterContext*)&context, joint[0]);
+            history = &state.env.pvp_runtime.launch_history[actor];
+            CHECK("reaction context snapshots displayed prayer before either submitted action",
+                history->count == 1 && history->records[0].observed_target_prayer == PRAYER_PROTECT_RANGED &&
+                history->records[0].target_prayer == PRAYER_PROTECT_MAGIC);
+
             reset_case(actor, pid, ITEM_VOIDWAKER);
             attacker = &state.env.players[actor];
             defender = &state.env.players[1 - actor];

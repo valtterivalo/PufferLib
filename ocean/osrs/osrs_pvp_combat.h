@@ -1222,7 +1222,8 @@ post_attack:
     OsrsPvpLaunchHistory* history = &env->pvp_runtime.launch_history[attacker_idx];
     history->records[history->next] = (OsrsPvpLaunchRecord){
         attacker->last_attack_style, launch_prayer,
-        env->pvp_runtime.decision_weapon[attacker_idx]};
+        env->pvp_runtime.decision_weapon[attacker_idx],
+        env->pvp_runtime.decision_prayer[defender_idx]};
     history->next = (history->next + 1) % HISTORY_SIZE;
     if (history->count < HISTORY_SIZE) history->count++;
     attacker->attack_style_this_tick = attacker->last_attack_style;

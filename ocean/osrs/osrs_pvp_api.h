@@ -468,6 +468,7 @@ void pvp_step_with_nh_actions(
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.decision_weapon[i] = (AttackStyle)get_item_attack_style(
             env->players[i].equipped[GEAR_SLOT_WEAPON]);
+        env->pvp_runtime.decision_prayer[i] = env->players[i].prayer;
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
         env->players[i].hit_damage = 0;

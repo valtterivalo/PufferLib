@@ -197,11 +197,13 @@ static inline const OsrsPvpLaunchHistory* opp_own_launch_history(
 static inline AttackStyle opp_predict_attack_style(
     const OsrsPvpLaunchHistory* history,
     AttackStyle observed_weapon,
+    OverheadPrayer displayed_prayer,
     AttackStyle fallback
 ) {
     if (history->count == 0) return fallback;
     unsigned frequencies[ATTACK_STYLE_MAGIC + 1] = {0};
     unsigned transitions[ATTACK_STYLE_MAGIC + 1] = {0};
+    unsigned responses[ATTACK_STYLE_MAGIC + 1] = {0};
     int latest = (history->next + HISTORY_SIZE - 1) % HISTORY_SIZE;
     AttackStyle last_style = history->records[latest].style;
     for (int age = 0; age < history->count; age++) {
@@ -209,13 +211,17 @@ static inline AttackStyle opp_predict_attack_style(
         OsrsPvpLaunchRecord record = history->records[index];
         if (record.observed_weapon != observed_weapon) continue;
         frequencies[record.style]++;
+        if (record.observed_target_prayer == displayed_prayer && displayed_prayer != PRAYER_NONE)
+            responses[record.style]++;
         int previous = (index + HISTORY_SIZE - 1) % HISTORY_SIZE;
         if (age + 1 < history->count && history->records[previous].style == last_style)
             transitions[record.style]++;
     }
     int transition = transitions[ATTACK_STYLE_MELEE] + transitions[ATTACK_STYLE_RANGED] +
         transitions[ATTACK_STYLE_MAGIC] != 0;
-    const unsigned* counts = transition ? transitions : frequencies;
+    int response = responses[ATTACK_STYLE_MELEE] + responses[ATTACK_STYLE_RANGED] +
+        responses[ATTACK_STYLE_MAGIC] != 0;
+    const unsigned* counts = response ? responses : transition ? transitions : frequencies;
     unsigned total = counts[ATTACK_STYLE_MELEE] + counts[ATTACK_STYLE_RANGED] +
         counts[ATTACK_STYLE_MAGIC];
     if (total == 0) return fallback;
@@ -226,7 +232,8 @@ static inline AttackStyle opp_predict_attack_style(
         int index = (history->next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE;
         OsrsPvpLaunchRecord record = history->records[index];
         int previous = (index + HISTORY_SIZE - 1) % HISTORY_SIZE;
-        if (transition && (age + 1 == history->count || history->records[previous].style != last_style))
+        if (response && record.observed_target_prayer != displayed_prayer) continue;
+        if (!response && transition && (age + 1 == history->count || history->records[previous].style != last_style))
             continue;
         if (record.observed_weapon == observed_weapon && counts[record.style] == best)
             return record.style;
@@ -354,7 +361,7 @@ static void opp_recorded_nh(
         (OppVisibleState){target_style, target->prayer});
     const OsrsPvpLaunchHistory* target_history =
         &env->pvp_runtime.launch_history[1 - opp_actor_index(env, opp)];
-    AttackStyle predicted = opp_predict_attack_style(target_history, target_style, forecast.weapon);
+    AttackStyle predicted = opp_predict_attack_style(target_history, target_style, self->prayer, forecast.weapon);
     int has_context = 0;
     for (int index = 0; index < target_history->count; index++)
         if (target_history->records[index].observed_weapon == target_style) {
@@ -486,7 +493,7 @@ static void opp_pressure_nh(OsrsEnv* env, OpponentState* opp, int* actions, Oppo
         ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
     int actor = opp_actor_index(env, opp);
     const OsrsPvpLaunchHistory* target_history = &env->pvp_runtime.launch_history[1 - actor];
-    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, forecast.weapon);
+    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, self->prayer, forecast.weapon);
     OverheadPrayer defense = forecast.weapon == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC
         : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
             : forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : PRAYER_NONE;
@@ -599,7 +606,7 @@ static void opp_generalist_nh(OsrsEnv* env, OpponentState* opp, int* actions, Op
         ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
     int actor = opp_actor_index(env, opp);
     const OsrsPvpLaunchHistory* target_history = &env->pvp_runtime.launch_history[1 - actor];
-    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, forecast.weapon);
+    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, self->prayer, forecast.weapon);
     OverheadPrayer defense = forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE
         : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
             : forecast.weapon == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC : PRAYER_NONE;

@@ -845,6 +845,7 @@ typedef struct {
     AttackStyle style;
     OverheadPrayer target_prayer;
     AttackStyle observed_weapon;
+    OverheadPrayer observed_target_prayer;
 } OsrsPvpLaunchRecord;
 
 typedef struct {
@@ -869,6 +870,7 @@ typedef struct {
     OpponentState opponent_p0;
     OsrsPvpLaunchHistory launch_history[NUM_AGENTS];
     AttackStyle decision_weapon[NUM_AGENTS];
+    OverheadPrayer decision_prayer[NUM_AGENTS];
     float gear_tier_weights[4];
 
     int walk_dest_x[NUM_AGENTS];
