@@ -578,10 +578,8 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
             if (cell >= 0) changed = osrs_equip_from_cell(player, player->inventory_cells, cell) >= 0;
         }
         if (changed) {
-            if (action != NH_PVP_EQUIPMENT_UNEQUIP) {
+            if (action != NH_PVP_EQUIPMENT_UNEQUIP)
                 osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
-                env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
-            }
             pvp_maul_weapon_changed(env, actor, old_weapon);
             player->clicks_this_tick++;
         }
@@ -607,13 +605,13 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
         }
         if (consumed) {
             osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
-            env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
             player->consumable_used_this_tick = 1;
             player->clicks_this_tick++;
         }
     }
     int primary = semantic[NH_PVP_HEAD_PRIMARY];
-    if (primary == NH_PVP_PRIMARY_ICE || primary == NH_PVP_PRIMARY_BLOOD) {
+    if (env->pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE &&
+            (primary == NH_PVP_PRIMARY_ICE || primary == NH_PVP_PRIMARY_BLOOD)) {
         int eligible = primary == NH_PVP_PRIMARY_ICE ? can_cast_ice_spell(player) : can_cast_blood_spell(player);
         env->pvp_runtime.pending_manual_cast[actor] = !eligible ? NH_PVP_PENDING_NONE
             : primary == NH_PVP_PRIMARY_ICE ? NH_PVP_PENDING_ICE : NH_PVP_PENDING_BLOOD;
@@ -622,8 +620,7 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
             engine[OSRS_HEAD_SPELL] = 0;
             osrs_interaction_clear(&player->interaction);
         }
-    } else if (primary != NH_PVP_PRIMARY_RETAIN)
-        env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
+    }
     NhPvpPendingManualCast pending = env->pvp_runtime.pending_manual_cast[actor];
     if (pending != NH_PVP_PENDING_NONE) {
         engine[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;

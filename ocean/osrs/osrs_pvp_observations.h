@@ -283,6 +283,10 @@ static inline void pvp_write_action_mask_bytes(
         !player->is_lunar_spellbook && magic >= BLOOD_RUSH_LEVEL;
     mask[offset + NH_PVP_PRIMARY_ICE] = target->current_hitpoints > 0 &&
         !player->is_lunar_spellbook && magic >= ICE_RUSH_LEVEL;
+    if (env->pvp_runtime.pending_manual_cast[actor] != NH_PVP_PENDING_NONE) {
+        memset(mask + offset, 0, NH_PVP_ACTION_DIMS[NH_PVP_HEAD_PRIMARY]);
+        mask[offset + NH_PVP_PRIMARY_RETAIN] = 1;
+    }
 
     offset = nh_pvp_action_head_offset(NH_PVP_HEAD_OVERHEAD);
     mask[offset + ENCOUNTER_OVERHEAD_NO_CHANGE] = 1;
