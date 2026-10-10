@@ -109,8 +109,31 @@ static void attack_history_contract(void) {
     for (int index = 0; index < HISTORY_SIZE; index++)
         history.records[index] = (OsrsPvpLaunchRecord){
             alternating[index], PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
-    CHECK("recent R M alternation under current weapon predicts observed ranged mode",
-        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
+    CHECK("recent R M alternation predicts melee after ranged",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_RANGED) == ATTACK_STYLE_MELEE);
+
+    const AttackStyle patterns[][HISTORY_SIZE] = {
+        {ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED},
+        {ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE},
+        {ATTACK_STYLE_MAGIC, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MAGIC},
+        {ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED},
+    };
+    const AttackStyle predictions[] = {
+        ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MAGIC,
+    };
+    for (int pattern = 0; pattern < 4; pattern++) {
+        for (int next = 0; next < HISTORY_SIZE; next++) {
+            history.next = next;
+            for (int age = 0; age < HISTORY_SIZE; age++)
+                history.records[(next + age) % HISTORY_SIZE] = (OsrsPvpLaunchRecord){
+                    patterns[pattern][age], PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE};
+            CHECK("completed attack transitions survive ring rotation and fallback disagreement",
+                opp_predict_attack_style(&history, ATTACK_STYLE_MELEE,
+                    patterns[pattern][HISTORY_SIZE - 1]) == predictions[pattern]);
+        }
+    }
+
+    history.next = 0;
 
     for (int index = 0; index < HISTORY_SIZE; index++)
         history.records[index] = (OsrsPvpLaunchRecord){
@@ -213,8 +236,8 @@ int main(void) {
             index % 2 == 0 ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE,
             PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
     generate_opponent_action(pvp, &pvp->pvp_runtime.opponent);
-    CHECK("recent alternating launches under the visible weapon predict the modal ranged attack",
-        pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] == ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED &&
+    CHECK("recent alternating launches predict melee after ranged in actual bot dispatch",
+        pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] == ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE &&
         history->records[4].style == ATTACK_STYLE_RANGED);
     pvp->players[0].prayer = PRAYER_PROTECT_MAGIC;
     for (int index = 0; index < HISTORY_SIZE; index++)

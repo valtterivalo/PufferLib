@@ -200,13 +200,22 @@ static inline AttackStyle opp_predict_attack_style(
     AttackStyle fallback
 ) {
     if (history->count == 0) return fallback;
-    unsigned counts[ATTACK_STYLE_MAGIC + 1] = {0};
+    unsigned frequencies[ATTACK_STYLE_MAGIC + 1] = {0};
+    unsigned transitions[ATTACK_STYLE_MAGIC + 1] = {0};
+    int latest = (history->next + HISTORY_SIZE - 1) % HISTORY_SIZE;
+    AttackStyle last_style = history->records[latest].style;
     for (int age = 0; age < history->count; age++) {
         int index = (history->next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE;
         OsrsPvpLaunchRecord record = history->records[index];
-        if (record.observed_weapon == observed_weapon)
-            counts[record.style]++;
+        if (record.observed_weapon != observed_weapon) continue;
+        frequencies[record.style]++;
+        int previous = (index + HISTORY_SIZE - 1) % HISTORY_SIZE;
+        if (age + 1 < history->count && history->records[previous].style == last_style)
+            transitions[record.style]++;
     }
+    int transition = transitions[ATTACK_STYLE_MELEE] + transitions[ATTACK_STYLE_RANGED] +
+        transitions[ATTACK_STYLE_MAGIC] != 0;
+    const unsigned* counts = transition ? transitions : frequencies;
     unsigned total = counts[ATTACK_STYLE_MELEE] + counts[ATTACK_STYLE_RANGED] +
         counts[ATTACK_STYLE_MAGIC];
     if (total == 0) return fallback;
@@ -216,6 +225,9 @@ static inline AttackStyle opp_predict_attack_style(
     for (int age = 0; age < history->count; age++) {
         int index = (history->next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE;
         OsrsPvpLaunchRecord record = history->records[index];
+        int previous = (index + HISTORY_SIZE - 1) % HISTORY_SIZE;
+        if (transition && (age + 1 == history->count || history->records[previous].style != last_style))
+            continue;
         if (record.observed_weapon == observed_weapon && counts[record.style] == best)
             return record.style;
     }
