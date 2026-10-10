@@ -710,7 +710,6 @@ static void execute_attack_movement(
     int has_attack =
         decode.attack_action != PVP_ATTACK_NONE ||
         osrs_interaction_active(&p->interaction);
-    int distance = chebyshev_distance(p->x, p->y, t->x, t->y);
     AttackStyle attack_style = ATTACK_STYLE_NONE;
     if (decode.attack_action == PVP_ATTACK_WEAPON)
         attack_style = pvp_weapon_attack_style(p);
@@ -725,33 +724,40 @@ static void execute_attack_movement(
     if (decode.attack_action == PVP_ATTACK_BLOOD && !can_cast_blood_spell(p))
         attack_style = ATTACK_STYLE_NONE;
 
-    p->did_attack_auto_move = 0;
     if (!has_attack ||
             decode.move_action != PVP_MOVE_NONE ||
             decode.explicit_move_in_progress ||
             !can_move(p))
         return;
 
-    int melee_chase =
-        attack_style == ATTACK_STYLE_MELEE &&
-        !pvp_attack_position_valid(p, t, attack_style, get_attack_range(p, attack_style), topology);
-    if (!melee_chase && distance != 0) return;
-    int range = get_attack_range(p, ATTACK_STYLE_MELEE);
-    if (range == 1)
-        (void)pvp_step_player_melee_chase(env, agent_idx, topology, route_cache);
-    else
-        (void)pvp_step_player_ranged_chase(env, agent_idx, range, topology, route_cache);
-    p->did_attack_auto_move = melee_chase;
+    int range = attack_style == ATTACK_STYLE_MAGIC
+        ? COMBAT_SPELL_ATTACK_RANGE : get_attack_range(p, attack_style);
+    if (attack_style == ATTACK_STYLE_NONE ||
+            pvp_attack_position_valid(p, t, attack_style, range, topology))
+        return;
+    EncounterRouteInput route_input = {
+        .topology = topology,
+        .source_x = p->x,
+        .source_y = p->y,
+        .actor_size = 1,
+        .target_x = t->x,
+        .target_y = t->y,
+        .target_size = 1,
+        .target_kind = ENCOUNTER_ROUTE_TARGET_CARDINAL_ADJACENCY,
+        .movement_mode = ENCOUNTER_ROUTE_MOVEMENT_RUN,
+        .cost_policy = ENCOUNTER_ROUTE_COST_OSRS,
+    };
+    EncounterRouteResult route = encounter_route_solve(&route_input);
+    int moved = osrs_player_step_apply_route(p, &route);
+    p->is_moving = moved > 0;
+    osrs_actor_route_cache_clear(route_cache);
 }
 
-/* runs after BOTH players' attack movement so range checks use final positions;
-   checking ranges in the movement phase reintroduces the PID-dependent same-tile bug */
 static void execute_attack_combat(
     OsrsEnv* env,
     int agent_idx,
     int* actions,
-    const EncounterArenaTopology* topology,
-    OsrsActorRouteCache* route_cache
+    const EncounterArenaTopology* topology
 ) {
     Player* p = &env->players[agent_idx];
     Player* t = &env->players[1 - agent_idx];
@@ -770,11 +776,9 @@ static void execute_attack_combat(
         pvp_maul_continue_attack(env, agent_idx);
     int attack_ready = can_attack_now(p) &&
         env->pvp_runtime.maul[agent_idx].last_special_tick != env->tick;
-    int has_attack = (decode.attack_action != PVP_ATTACK_NONE);
     int dist = chebyshev_distance(p->x, p->y, t->x, t->y);
 
     AttackStyle attack_style = ATTACK_STYLE_NONE;
-    int magic_type = 0;
 
     switch (decode.attack_action) {
         case PVP_ATTACK_WEAPON:
@@ -782,11 +786,9 @@ static void execute_attack_combat(
             break;
         case PVP_ATTACK_ICE:
             attack_style = ATTACK_STYLE_MAGIC;
-            magic_type = 1;
             break;
         case PVP_ATTACK_BLOOD:
             attack_style = ATTACK_STYLE_MAGIC;
-            magic_type = 2;
             break;
         default:
             break;
@@ -815,11 +817,10 @@ static void execute_attack_combat(
         case PVP_ATTACK_BLOOD:
             if (attack_ready && attack_style == ATTACK_STYLE_MAGIC) {
                 if (pvp_attack_position_valid(p, t, ATTACK_STYLE_MAGIC, COMBAT_SPELL_ATTACK_RANGE, topology)) {
-                    perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, magic_type, dist);
+                    perform_attack(env, agent_idx, 1 - agent_idx, ATTACK_STYLE_MAGIC, 0, decode.attack_action == PVP_ATTACK_ICE ? 1 : 2, dist);
                     if (p->just_attacked && env->pvp_runtime.pending_manual_cast[agent_idx] != NH_PVP_PENDING_NONE) {
                         env->pvp_runtime.pending_manual_cast[agent_idx] = NH_PVP_PENDING_NONE;
                         osrs_interaction_clear(&p->interaction);
-                        has_attack = 0;
                     }
                     p->clicks_this_tick++;
                 }
@@ -827,26 +828,6 @@ static void execute_attack_combat(
             break;
         default:
             break;
-    }
-
-    if (has_attack && decode.move_action == PVP_MOVE_NONE && !decode.explicit_move_in_progress
-            && can_move(p) && !p->did_attack_auto_move) {
-        int chase_range = magic_type != 0 ? COMBAT_SPELL_ATTACK_RANGE : get_attack_range(p, attack_style);
-        int in_range = attack_style == ATTACK_STYLE_NONE ||
-            pvp_attack_position_valid(p, t, attack_style, chase_range, topology);
-        if (!in_range) {
-            if (attack_style == ATTACK_STYLE_MELEE && chase_range == 1) {
-                (void)pvp_step_player_melee_chase(
-                    env, agent_idx, topology, route_cache);
-            } else {
-                (void)pvp_step_player_ranged_chase(
-                    env,
-                    agent_idx,
-                    chase_range,
-                    topology,
-                    route_cache);
-            }
-        }
     }
 }
 

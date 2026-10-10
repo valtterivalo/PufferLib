@@ -142,11 +142,12 @@ static inline void pvp_write_observations(
     obs[i++] = has_destination;
     obs[i++] = has_destination ? osrs_policy_ratio(env->pvp_runtime.walk_dest_x[agent_idx] - p->x, FIGHT_AREA_WIDTH) : 0;
     obs[i++] = has_destination ? osrs_policy_ratio(env->pvp_runtime.walk_dest_y[agent_idx] - p->y, FIGHT_AREA_HEIGHT) : 0;
-    const OsrsGraniteMaulState* maul = &env->pvp_runtime.maul[agent_idx];
-    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_IDLE;
-    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_SELECTED;
-    obs[i++] = maul->preparation == OSRS_GRANITE_MAUL_DESELECTED;
-    obs[i++] = osrs_policy_ratio(maul->prepared_hits, 2);
+    OsrsGraniteMaulState maul = osrs_granite_maul_expire(
+        env->pvp_runtime.maul[agent_idx], env->tick);
+    obs[i++] = maul.preparation == OSRS_GRANITE_MAUL_IDLE;
+    obs[i++] = maul.preparation == OSRS_GRANITE_MAUL_SELECTED;
+    obs[i++] = maul.preparation == OSRS_GRANITE_MAUL_DESELECTED;
+    obs[i++] = osrs_policy_ratio(maul.prepared_hits, 2);
     obs[i++] = p->is_lunar_spellbook;
     obs[i++] = p->veng_active;
     obs[i++] = osrs_policy_ratio(p->veng_cooldown, 50);

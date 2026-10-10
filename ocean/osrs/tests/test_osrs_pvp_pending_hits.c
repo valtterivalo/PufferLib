@@ -272,7 +272,7 @@ static void test_nh_attack_chase_destinations(void) {
     printf("--- NH PvP attack chase destinations ---\n");
     run_nh_chase_case(
         PVP_EQUIPMENT_MELEE, OSRS_SPELL_NONE,
-        FIGHT_AREA_BASE_X + 2, FIGHT_AREA_BASE_Y + 2,
+        FIGHT_AREA_BASE_X + 2, FIGHT_AREA_BASE_Y,
         "melee chase keeps x destination",
         "melee chase keeps y destination");
     run_nh_chase_case(

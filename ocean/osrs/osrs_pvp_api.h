@@ -94,7 +94,6 @@ static void init_player(Player* p) {
     memset(p->pending_hits, 0, sizeof(p->pending_hits));
     p->num_pending_hits = 0;
     p->damage_applied_this_tick = 0;
-    p->did_attack_auto_move = 0;
 
     p->hit_landed_this_tick = 0;
     p->hit_was_successful = 0;
@@ -568,8 +567,7 @@ void pvp_step_with_nh_actions(
             route_topology, &route_cache[player_idx]);
         pvp_resolve_same_tile(env, first, second, route_topology);
         if (env->players[1 - player_idx].current_hitpoints > 0)
-            execute_attack_combat(env, player_idx, agent_actions[player_idx],
-                route_topology, &route_cache[player_idx]);
+            execute_attack_combat(env, player_idx, agent_actions[player_idx], route_topology);
         pvp_resolve_same_tile(env, first, second, route_topology);
     }
 
@@ -621,7 +619,8 @@ void pvp_step_with_nh_actions(
             env->players[0].current_hitpoints <= 0 ? 1 : 0;
     }
 
-    if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS) {
+    if (!env->episode_over && env->tick >= MAX_EPISODE_TICKS &&
+            env->players[0].current_hitpoints > 0 && env->players[1].current_hitpoints > 0) {
         env->episode_over = 1;
         env->winner = -1;
     }

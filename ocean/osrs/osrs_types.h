@@ -53,9 +53,9 @@
 #define BLOOD_BLITZ_MAX_HIT 25
 #define BLOOD_BARRAGE_MAX_HIT 29
 
-#define BLOOD_RUSH_HEAL_PERCENT 10
-#define BLOOD_BURST_HEAL_PERCENT 15
-#define BLOOD_BLITZ_HEAL_PERCENT 20
+#define BLOOD_RUSH_HEAL_PERCENT 25
+#define BLOOD_BURST_HEAL_PERCENT 25
+#define BLOOD_BLITZ_HEAL_PERCENT 25
 #define BLOOD_BARRAGE_HEAL_PERCENT 25
 
 #define COMBAT_SPELL_CAST_SPEED 5
@@ -509,7 +509,7 @@ typedef struct {
     PendingHit pending_hits[MAX_PENDING_HITS];
     int num_pending_hits;
     int damage_applied_this_tick;
-    int did_attack_auto_move;
+    uint8_t serialized_padding[sizeof(int)];
 
     int hit_landed_this_tick;
     int hit_was_successful;

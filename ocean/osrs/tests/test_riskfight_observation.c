@@ -26,38 +26,45 @@ static void test_initial_scale_and_purity(void) {
         assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
-}
-
-static void test_opponent_vengeance_roundtrip(void) {
-    reset();
-    state.env.players[1].veng_active = 1;
-    state.env.players[1].veng_cooldown = 25;
-    float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.5f);
-    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
-    state.env.players[1].veng_active = 0;
-    state.env.players[1].veng_cooldown = 40;
-    riskfight_write_observation(&state, 0, obs);
     assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.8f);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == -1);
 }
 
-static void test_opponent_spec_and_timer_roundtrip(void) {
-    reset();
-    state.env.players[1].special_energy = 50;
-    state.env.players[1].attack_timer = 6;
-    float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 0.5f);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
-    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
+static void test_hidden_opponent_state_does_not_change_observation(void) {
+    for (int viewer = 0; viewer < 2; viewer++) {
+        reset();
+        float before_obs[RF_OBS_SIZE], after_obs[RF_OBS_SIZE];
+        riskfight_write_observation(&state, viewer, before_obs);
+        Player* opponent = &state.env.players[1 - viewer];
+        opponent->veng_active = 1;
+        opponent->veng_cooldown = 25;
+        opponent->special_energy = 50;
+        riskfight_write_observation(&state, viewer, after_obs);
+        assert(memcmp(before_obs, after_obs, sizeof(before_obs)) == 0);
+    }
+}
+
+static void test_public_opponent_cast_recency(void) {
+    for (int viewer = 0; viewer < 2; viewer++) {
+        reset();
+        state.env.tick = 20;
+        Player* opponent = &state.env.players[1 - viewer];
+        opponent->cast_veng_this_tick = 1;
+        opponent->used_special_this_tick = 1;
+        riskfight_observe_visible(&state, viewer, 0);
+        float obs[RF_OBS_SIZE];
+        riskfight_write_observation(&state, viewer, obs);
+        float* visible = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
+        assert(visible[7] == 1);
+        assert(visible[8] == 0);
+        assert(visible[9] == 0);
+        state.env.tick = 28;
+        riskfight_write_observation(&state, viewer, obs);
+        assert(visible[7] == 1);
+        assert(visible[8] == 0.16f);
+        assert(visible[9] == 0.5f);
+    }
 }
 
 static void test_unbounded_values_are_not_clipped(void) {
@@ -174,7 +181,7 @@ static void test_opponent_consume_timer_inference(void) {
     }
 }
 
-static void test_health_bar_refresh_requires_received_hit(void) {
+static void test_health_bar_tracks_public_quantized_hp(void) {
     reset();
     state.env.players[1].veng_active = 0;
     observe_next_tick();
@@ -183,7 +190,8 @@ static void test_health_bar_refresh_requires_received_hit(void) {
     observe_next_tick();
     use_consumable(OSRS_CONSUMABLE_MARLIN);
     assert(state.env.players[1].current_hitpoints == 54);
-    assert(state.visible[0].health_bar == damaged_bar);
+    assert(state.visible[0].health_bar == osrs_health_bar_ratio(54, 99, 30));
+    assert(state.visible[0].health_bar != damaged_bar);
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(&state, 0, obs);
     assert(obs[RF_HISTORY_START + 3] == 0);
@@ -196,7 +204,8 @@ static void test_health_bar_refresh_requires_received_hit(void) {
     observe_next_tick();
     use_consumable(OSRS_CONSUMABLE_BREW);
     assert(state.env.players[1].current_hitpoints == 70);
-    assert(state.visible[0].health_bar == refreshed_bar);
+    assert(state.visible[0].health_bar == osrs_health_bar_ratio(70, 99, 30));
+    assert(state.visible[0].health_bar != refreshed_bar);
     observe_next_tick();
     use_consumable(OSRS_CONSUMABLE_LOCATOR_ORB);
     assert(state.env.players[1].current_hitpoints == 60);
@@ -210,7 +219,7 @@ static void test_health_bar_refresh_requires_received_hit(void) {
     assert(state.visible[0].health_bar == 0);
 }
 
-static void test_passive_healing_keeps_last_known_bar(void) {
+static void test_passive_healing_refreshes_quantized_bar(void) {
     reset();
     Player* opponent = &state.env.players[1];
     opponent->current_hitpoints = 68;
@@ -222,20 +231,20 @@ static void test_passive_healing_keeps_last_known_bar(void) {
     assert(opponent->current_hitpoints == 69);
     riskfight_observe_visible(&state, 0, 0);
     assert(osrs_health_bar_ratio(opponent->current_hitpoints, 99, 30) != initial_bar);
-    assert(state.visible[0].health_bar == initial_bar);
+    assert(state.visible[0].health_bar == osrs_health_bar_ratio(69, 99, 30));
 }
 
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();
-    test_opponent_vengeance_roundtrip();
-    test_opponent_spec_and_timer_roundtrip();
+    test_hidden_opponent_state_does_not_change_observation();
+    test_public_opponent_cast_recency();
     test_opponent_consume_timer_inference();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();
-    test_health_bar_refresh_requires_received_hit();
-    test_passive_healing_keeps_last_known_bar();
+    test_health_bar_tracks_public_quantized_hp();
+    test_passive_healing_refreshes_quantized_bar();
     riskfight_destroy_context((EncounterContext*)&context);
     puts("Riskfight observation scaling contracts passed");
 }

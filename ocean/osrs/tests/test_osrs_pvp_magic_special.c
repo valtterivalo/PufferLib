@@ -52,7 +52,7 @@ int main(void) {
         actions[OSRS_HEAD_SPECIAL] = cases[i].special_action;
         actions[OSRS_HEAD_SPELL] = cases[i].spell;
         execute_switches(&env, 0, actions, NULL);
-        execute_attack_combat(&env, 0, actions, NULL, NULL);
+        execute_attack_combat(&env, 0, actions, NULL);
         Player* player = &env.players[0];
         CHECK("attack execution", player->just_attacked == (cases[i].style != ATTACK_STYLE_NONE));
         CHECK("executed damage style", player->last_attack_style == cases[i].style);
@@ -74,7 +74,7 @@ int main(void) {
         actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
         actions[OSRS_HEAD_SPECIAL] = 1;
         execute_switches(&env, 0, actions, NULL);
-        execute_attack_combat(&env, 0, actions, NULL, NULL);
+        execute_attack_combat(&env, 0, actions, NULL);
         Player* player = &env.players[0];
         CHECK("magic special queues one hit", player->num_pending_hits == 1);
         assert(player->num_pending_hits == 1);

@@ -85,7 +85,7 @@ int main(void) {
                 int actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
                 actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
                 actions[OSRS_HEAD_SPELL] = cases[i].spell;
-                execute_attack_combat(&env, actor, actions, topology, NULL);
+                execute_attack_combat(&env, actor, actions, topology);
                 Player* player = &env.players[actor];
                 CHECK("attack respects weapon reach and supplied topology", player->just_attacked == cases[i].attacks);
                 CHECK("executed style matches cast or whack", player->last_attack_style == cases[i].style);
@@ -123,13 +123,13 @@ int main(void) {
                 int actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
                 actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
                 actions[OSRS_HEAD_SPELL] = timing[i].spell;
-                execute_attack_combat(&env, actor, actions, topology, NULL);
+                execute_attack_combat(&env, actor, actions, topology);
                 CHECK("first attack starts the cooldown", player->just_attacked);
                 for (int elapsed = 1; elapsed <= timing[i].speed; elapsed++) {
                     env.tick++;
                     reset_tick_flags(player);
                     update_timers(player);
-                    execute_attack_combat(&env, actor, actions, topology, NULL);
+                    execute_attack_combat(&env, actor, actions, topology);
                     CHECK("no early attack and exact earliest next attack", player->just_attacked == (elapsed == timing[i].speed));
                 }
             }
@@ -142,9 +142,9 @@ int main(void) {
         actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
         OsrsActorRouteCache cache = {0};
         execute_attack_movement(&env, actor, actions, topology, &cache);
-        CHECK("halberd chase stops after reaching two-tile attack range", chebyshev_distance(env.players[actor].x, env.players[actor].y,
-            env.players[1 - actor].x, env.players[1 - actor].y) == 2);
-        execute_attack_combat(&env, actor, actions, topology, &cache);
+        CHECK("halberd chase consumes both run steps", chebyshev_distance(env.players[actor].x, env.players[actor].y,
+            env.players[1 - actor].x, env.players[1 - actor].y) == 1);
+        execute_attack_combat(&env, actor, actions, topology);
         CHECK("halberd attacks after range-aware chase", env.players[actor].just_attacked);
         OsrsAttackTarget target;
         CHECK("shared route lookup finds the counterpart", pvp_lookup_attack_target(&env, 1 - actor, &target));
@@ -167,7 +167,7 @@ int main(void) {
             CHECK("cosmetic crystal variants preserve set effect", profile.crystal_armour_points == 5);
             int actions[OSRS_BASE_NUM_ACTION_HEADS] = {0};
             actions[OSRS_HEAD_PRIMARY] = OSRS_PRIMARY_MOVE_ACTIONS;
-            execute_attack_combat(&env, 0, actions, topology, NULL);
+            execute_attack_combat(&env, 0, actions, topology);
             if (variant == 0) {
                 damage = env.players[0].pending_hits[0].damage;
                 rng = env.rng_state;

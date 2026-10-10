@@ -69,7 +69,6 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
         obs[RF_OPPONENT_START + slot] = (float)v->equipment[slot] / RF_OBSERVATION_ITEM_SCALE;
     }
     float* opponent = obs + RF_OPPONENT_START + NUM_GEAR_SLOTS;
-    const Player* opp = &s->env.players[1 - agent];
     opponent[0] = v->health_bar / 30.0f;
     opponent[1] = (float)(v->x - p->x) / RF_OBSERVATION_TILE_SCALE;
     opponent[2] = (float)(v->y - p->y) / RF_OBSERVATION_TILE_SCALE;
@@ -80,9 +79,11 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
     opponent[6] = v->last_attack_tick >= 0 ?
         fmaxf(0, v->last_attack_tick + v->last_attack_speed - s->env.tick) /
             RF_OBSERVATION_ATTACK_AGE_SCALE : 0;
-    opponent[7] = (float)opp->veng_active;
-    opponent[8] = opp->veng_cooldown / 50.0f;
-    opponent[9] = opp->special_energy / 100.0f;
+    opponent[7] = v->last_veng_cast_tick >= 0;
+    opponent[8] = v->last_veng_cast_tick >= 0 ?
+        (float)(s->env.tick - v->last_veng_cast_tick) / 50.0f : 0;
+    opponent[9] = v->last_special_tick >= 0 ?
+        (float)(s->env.tick - v->last_special_tick) / RF_OBSERVATION_ATTACK_AGE_SCALE : -1;
     opponent[10] = v->consume_delay_est / 10.0f;
     opponent[11] = v->consume_food_est / 3.0f;
     opponent[12] = v->consume_potion_est / 3.0f;

@@ -30,10 +30,10 @@ static void test_pending_cast(int actor, int pid, int primary) {
     state.env.players[1 - actor].y = range_y;
     actions[NH_PVP_HEAD_PRIMARY] = primary;
     step_case(actor, actions);
-    CHECK("distant cast approaches without losing request", !player->just_attacked && state.env.pvp_runtime.pending_manual_cast[actor] != NH_PVP_PENDING_NONE);
+    CHECK("distant ready cast approaches and launches in one tick", player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
     actions[NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_RETAIN;
     step_case(actor, actions);
-    CHECK("approach then retain launches requested spell", player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
+    CHECK("retain cannot repeat completed approach cast", !player->just_attacked && state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE);
 
     for (int interrupt = 0; interrupt < 5; interrupt++) {
         reset_case(actor, pid, ITEM_RUNE_CROSSBOW);

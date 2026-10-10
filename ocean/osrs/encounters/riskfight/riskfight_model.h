@@ -79,6 +79,8 @@ typedef struct {
     int interacting;
     int last_attack_tick;
     int last_attack_speed;
+    int last_veng_cast_tick;
+    int last_special_tick;
     int consume_food_est, consume_potion_est, consume_karam_est, consume_delay_est;
     int pending_consume_tick, pending_bar_before, pending_damage_since;
     float events[RF_HISTORY_TICKS][RF_EVENT_WIDTH];
@@ -199,11 +201,12 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     v->y = opponent->y;
     v->interacting = osrs_interaction_active(&opponent->interaction);
     int bar_before = v->health_bar;
-    if (reset || opponent->hit_landed_this_tick)
-        v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
-            opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
+    v->health_bar = osrs_health_bar_ratio(opponent->current_hitpoints,
+        opponent->base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE);
     if (reset) {
         v->last_attack_tick = -1;
+        v->last_veng_cast_tick = -1;
+        v->last_special_tick = -1;
         v->consume_food_est = 0; v->consume_potion_est = 0;
         v->consume_karam_est = 0; v->consume_delay_est = 0;
         v->pending_consume_tick = -1; v->pending_bar_before = 0;
@@ -214,6 +217,8 @@ static void riskfight_observe_visible(RiskfightState* s, int viewer, int reset) 
     if (v->consume_potion_est > 0) v->consume_potion_est--;
     if (v->consume_karam_est > 0) v->consume_karam_est--;
     if (v->consume_delay_est > 0) v->consume_delay_est--;
+    if (opponent->cast_veng_this_tick) v->last_veng_cast_tick = s->env.tick;
+    if (opponent->used_special_this_tick) v->last_special_tick = s->env.tick;
     int index = (s->env.tick - 1) % RF_HISTORY_TICKS;
     float* event = v->events[index];
     event[3] = opponent->hit_landed_this_tick;

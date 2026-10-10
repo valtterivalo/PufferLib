@@ -14,7 +14,10 @@ static void reset(void) {
 static void assert_consumption_visible(float* obs) {
     riskfight_write_observation(&state, 0, obs);
     assert(obs[RF_HISTORY_START + 6] == 1);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS] == 1);
+    assert(state.visible[0].health_bar == osrs_health_bar_ratio(
+        state.env.players[1].current_hitpoints,
+        state.env.players[1].base_hitpoints, OSRS_PLAYER_HEALTH_BAR_SCALE));
+    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS] == state.visible[0].health_bar / 30.0f);
 }
 
 int main(void) {
@@ -31,7 +34,6 @@ int main(void) {
     actions[RF_HEADS + RF_COMBO] = 4;
     riskfight_step((EncounterState*)&state, (EncounterContext*)&context, actions);
     assert_consumption_visible(triple);
-    assert(memcmp(single, triple, sizeof(single)) == 0);
     assert(state.env.players[1].attack_timer == 0);
     reset();
     memset(actions, 0, sizeof(actions));
