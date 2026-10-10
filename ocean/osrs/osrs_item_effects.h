@@ -395,7 +395,7 @@ static inline int osrs_roll_prepared_attack_damage(
     int hit = (prepared->use_fang_accuracy || prepared->use_double_accuracy)
         ? encounter_roll_hit_chance_double(rng_state, prepared->attack_roll, def_roll)
         : encounter_roll_hit_chance(rng_state, prepared->attack_roll, def_roll);
-    return hit ? damage : 0;
+    return hit ? osrs_player_accuracy_passed_damage(damage) : 0;
 }
 
 static inline int osrs_blood_fury_heal_amount(

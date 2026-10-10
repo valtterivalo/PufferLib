@@ -98,7 +98,16 @@ static inline float get_defence_prayer_mult(Player* p) {
     }
 }
 
-static int calculate_effective_attack(Player* p, AttackStyle style) {
+typedef enum {
+    PVP_MAGIC_ACCURACY_WEAPON_STYLE,
+    PVP_MAGIC_ACCURACY_MANUAL_CAST,
+} PvpMagicAccuracyMode;
+
+static int calculate_effective_attack(
+    Player* p,
+    AttackStyle style,
+    PvpMagicAccuracyMode magic_accuracy_mode
+) {
     int base_level;
     float prayer_mult = 1.0f;
 
@@ -122,10 +131,13 @@ static int calculate_effective_attack(Player* p, AttackStyle style) {
             return 0;
     }
 
+    if (style == ATTACK_STYLE_MAGIC) {
+        int effective_level = (int)(base_level * prayer_mult) + 9;
+        if (magic_accuracy_mode == PVP_MAGIC_ACCURACY_WEAPON_STYLE)
+            effective_level += osrs_stance_att_bonus(p->fight_style, style);
+        return effective_level;
+    }
     int style_bonus = osrs_stance_att_bonus(p->fight_style, style);
-
-    if (style == ATTACK_STYLE_MAGIC)
-        return osrs_magic_effective_attack_level(base_level, prayer_mult, p->fight_style);
     return osrs_player_eff_level(base_level, prayer_mult, style_bonus);
 }
 
@@ -151,7 +163,7 @@ static int calculate_effective_strength(Player* p, AttackStyle style) {
             return 0;
     }
 
-    int style_bonus = (style == ATTACK_STYLE_MELEE) ? osrs_stance_str_bonus(p->fight_style) : 0;
+    int style_bonus = osrs_stance_damage_level_bonus(p->fight_style, style);
 
     return osrs_player_eff_level(base_level, prayer_mult, style_bonus);
 }
@@ -237,8 +249,9 @@ static int get_strength_bonus(Player* p, AttackStyle style) {
 }
 
 static float calculate_hit_chance(Player* attacker, Player* defender,
-                                   AttackStyle style, float acc_mult) {
-    int eff_attack = calculate_effective_attack(attacker, style);
+                                   AttackStyle style, float acc_mult,
+                                   PvpMagicAccuracyMode magic_accuracy_mode) {
+    int eff_attack = calculate_effective_attack(attacker, style, magic_accuracy_mode);
     int attack_bonus = get_attack_bonus(attacker, style);
     int attack_roll = (int)(eff_attack * (attack_bonus + 64) * acc_mult);
 
@@ -255,9 +268,8 @@ static int calculate_base_max_hit(Player* p, AttackStyle style, float str_mult, 
 
     int max_hit;
     if (style == ATTACK_STYLE_MAGIC) {
-        int base_damage = magic_base_hit;
-        float magic_mult = osrs_offensive_magic_dmg_mult(p->offensive_prayer);
-        max_hit = (int)(base_damage * (1.0f + strength_bonus / 100.0f) * str_mult * magic_mult);
+        max_hit = osrs_magic_max_hit(
+            magic_base_hit, strength_bonus, p->offensive_prayer, str_mult);
     } else if (style == ATTACK_STYLE_RANGED) {
         max_hit = (int)(osrs_player_ranged_max_hit(eff_strength, strength_bonus) * str_mult);
     } else {
@@ -999,7 +1011,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         attacker->current_gear = GEAR_MAGE;
 
     if (is_special && spec_item_idx != ITEM_NONE) {
-        int eff_attack = calculate_effective_attack(attacker, style);
+        int eff_attack = calculate_effective_attack(
+            attacker, style, PVP_MAGIC_ACCURACY_WEAPON_STYLE);
         int attack_bonus = get_attack_bonus(attacker, style);
         int att_roll = eff_attack * (attack_bonus + 64);
 
@@ -1090,7 +1103,13 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
         if (has_zuriels && style == ATTACK_STYLE_MAGIC && magic_type == 1)
             acc_mult *= 1.10f;
 
-        float hit_chance = calculate_hit_chance(attacker, defender, style, acc_mult);
+        PvpMagicAccuracyMode magic_accuracy_mode =
+            magic_type == OSRS_MAGIC_ATTACK_ANCIENT_ICE ||
+            magic_type == OSRS_MAGIC_ATTACK_ANCIENT_BLOOD
+                ? PVP_MAGIC_ACCURACY_MANUAL_CAST
+                : PVP_MAGIC_ACCURACY_WEAPON_STYLE;
+        float hit_chance = calculate_hit_chance(
+            attacker, defender, style, acc_mult, magic_accuracy_mode);
         int magic_base_hit = 30;
         if (style == ATTACK_STYLE_MAGIC) {
             if (magic_type == 1) magic_base_hit = get_ice_base_hit(attacker->current_magic);
@@ -1155,7 +1174,8 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 }
             }
 
-            if (hit_success && attacker->entity_type == ENTITY_PLAYER && damage == 0) damage = 1;
+            if (hit_success && attacker->entity_type == ENTITY_PLAYER)
+                damage = osrs_player_accuracy_passed_damage(damage);
             total_damage += damage;
 
             int queued_freeze_ticks = freeze_ticks;

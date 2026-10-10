@@ -25,7 +25,7 @@ static inline int osrs_blowpipe_spec_resolve(
     int def_roll = (target_def_level + 9) * (target_ranged_def_bonus + 64);
     int spec_max = base_max_hit * BLOWPIPE_SPEC_DMG_NUM / BLOWPIPE_SPEC_DMG_DEN;
     if (encounter_roll_hit_chance(rng_state, att_roll, def_roll))
-        return encounter_rand_int(rng_state, spec_max + 1);
+        return osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
     return 0;
 }
 
@@ -85,7 +85,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -147,7 +147,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 35;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
             r.def_drain = target_def_level * 30 / 100;
         }
         r.total_damage = r.damage[0];
@@ -160,7 +160,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
             r.def_drain = r.damage[0];
         }
         r.total_damage = r.damage[0];
@@ -173,8 +173,8 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
-            if (r.damage[0] > 0) r.freeze_ticks = 32;
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
+            r.freeze_ticks = 32;
         }
         r.total_damage = r.damage[0];
         break;
@@ -186,7 +186,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         r.total_damage = r.damage[0];
         if (r.total_damage > 0) {
             r.heal = r.total_damage / 2;
@@ -205,7 +205,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -217,7 +217,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 25;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, reduced_def))
-            r.damage[0] = vls_min + encounter_rand_int(rng_state, vls_max - vls_min + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(vls_min + encounter_rand_int(rng_state, vls_max - vls_min + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -238,7 +238,7 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 1;
         r.attack_speed_override = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -250,7 +250,7 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 2;
         for (int i = 0; i < 2; i++) {
             if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-                r.damage[i] = encounter_rand_int(rng_state, spec_max + 1);
+                r.damage[i] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         }
         r.total_damage = r.damage[0] + r.damage[1];
         break;
@@ -261,7 +261,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
-            r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1));
             r.def_drain = target_def_level * 35 / 100;
         }
         r.total_damage = r.damage[0];
@@ -274,7 +274,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         r.total_damage = r.damage[0];
         r.heal = r.total_damage / 2;
         break;
@@ -286,7 +286,7 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 2;
         for (int i = 0; i < 2; i++) {
             if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-                r.damage[i] = encounter_rand_int(rng_state, max_hit + 1);
+                r.damage[i] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1));
         }
         r.total_damage = r.damage[0] + r.damage[1];
         break;
@@ -315,7 +315,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 65;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -327,7 +327,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 75;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -341,7 +341,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, att_roll, reduced_def))
-            r.damage[0] = morr_min + encounter_rand_int(rng_state, morr_max - morr_min + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(morr_min + encounter_rand_int(rng_state, morr_max - morr_min + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -351,7 +351,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 50;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, max_hit + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -363,7 +363,7 @@ static inline SpecResult osrs_resolve_spec(
         r.spec_cost = 55;
         r.num_hits = 1;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll))
-            r.damage[0] = encounter_rand_int(rng_state, vol_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, vol_max + 1));
         r.total_damage = r.damage[0];
         break;
     }
@@ -375,7 +375,7 @@ static inline SpecResult osrs_resolve_spec(
         r.num_hits = 1;
         r.attack_speed_override = 5;
         if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
-            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[0] = osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, spec_max + 1));
             r.magic_def_drain = r.damage[0];
         }
         r.total_damage = r.damage[0];

@@ -6996,8 +6996,8 @@ static void test_magic_set_max_hit_math(void) {
     EncounterLoadoutStats hieff_aug;
     encounter_compute_loadout_stats(COLO_SPEEDRUN_MAGIC_LOADOUT, ATTACK_STYLE_MAGIC,
         OFFENSIVE_PRAYER_AUGURY, 99, FIGHT_STYLE_ACCURATE, 34, &hieff_aug);
-    CHECK("high-eff Shadow augury max hit == floor(34*1.42*1.04) == 50",
-        hieff_aug.max_hit == 50);
+    CHECK("high-eff Shadow augury max hit == floor(34*1.46) == 49",
+        hieff_aug.max_hit == 49 && hieff_aug.strength_bonus == 42);
 
     ColosseumContext ctx;
     ColosseumState s;

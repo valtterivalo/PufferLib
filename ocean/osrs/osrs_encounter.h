@@ -1287,7 +1287,7 @@ static inline void encounter_compute_loadout_stats(
     out->spell_base_damage = spell_base_damage;
 
     int att_stance_bonus = osrs_stance_att_bonus(fight_style, style);
-    int str_stance_bonus = osrs_stance_str_bonus(fight_style);
+    int str_stance_bonus = osrs_stance_damage_level_bonus(fight_style, style);
 
     if (style == ATTACK_STYLE_MAGIC) {
         out->eff_level = osrs_magic_effective_attack_level(
@@ -1298,14 +1298,13 @@ static inline void encounter_compute_loadout_stats(
 
     int eff_str_level = (int)(base_level * str_prayer_mult) + str_stance_bonus + 8;
 
-    float magic_dmg_prayer_mult = osrs_offensive_magic_dmg_mult(offensive_prayer);
-
     if (style == ATTACK_STYLE_RANGED) {
         out->strength_bonus = eb.ranged_strength;
         out->max_hit = (int)(0.5 + eff_str_level * (eb.ranged_strength + 64) / 640.0);
     } else if (style == ATTACK_STYLE_MAGIC) {
         out->strength_bonus = eb.magic_damage;
-        out->max_hit = (int)(spell_base_damage * (1.0 + eb.magic_damage / 100.0) * magic_dmg_prayer_mult);
+        out->max_hit = osrs_magic_max_hit(spell_base_damage, eb.magic_damage,
+            offensive_prayer, 1.0f);
     } else {
         out->strength_bonus = eb.melee_strength;
         out->max_hit = (int)(0.5 + eff_str_level * (eb.melee_strength + 64) / 640.0);
@@ -1323,12 +1322,12 @@ static inline void encounter_update_loadout_level(
     ls->str_prayer_mult = str_prayer_mult;
 
     int att_stance_bonus = osrs_stance_att_bonus(ls->fight_style, ls->style);
-    int str_stance_bonus = osrs_stance_str_bonus(ls->fight_style);
+    int str_stance_bonus = osrs_stance_damage_level_bonus(ls->fight_style, ls->style);
     if (ls->style == ATTACK_STYLE_MAGIC) {
         ls->eff_level = osrs_magic_effective_attack_level(
             current_att_level, att_prayer_mult, ls->fight_style);
-        float magic_dmg_mult = osrs_offensive_magic_dmg_mult(offensive_prayer);
-        ls->max_hit = (int)(ls->spell_base_damage * (1.0 + ls->strength_bonus / 100.0) * magic_dmg_mult);
+        ls->max_hit = osrs_magic_max_hit(ls->spell_base_damage, ls->strength_bonus,
+            offensive_prayer, 1.0f);
     } else {
         ls->eff_level = (int)(current_att_level * att_prayer_mult) + att_stance_bonus + 8;
         int eff_str = (int)(current_str_level * str_prayer_mult) + str_stance_bonus + 8;

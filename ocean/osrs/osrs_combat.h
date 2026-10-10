@@ -8,6 +8,10 @@
 #include "osrs_types.h"
 #include "osrs_items.h"
 
+static inline int osrs_player_accuracy_passed_damage(int damage) {
+    return damage == 0 ? 1 : damage;
+}
+
 /** Standard OSRS accuracy formula over pre-computed rolls
     (eff_level * (bonus + 64)); returns hit probability in [0, 1]. */
 static inline float osrs_hit_chance(int att_roll, int def_roll) {
@@ -159,7 +163,8 @@ static inline BarrageResult osrs_barrage_resolve(
         targets[0].hit = primary_use_double_accuracy
             ? encounter_roll_hit_chance_double(rng_state, att_roll, def_roll)
             : encounter_roll_hit_chance(rng_state, att_roll, def_roll);
-        targets[0].damage = targets[0].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
+        targets[0].damage = targets[0].hit
+            ? osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1)) : 0;
         result.total_damage += targets[0].damage;
         result.num_hits++;
         if (targets[0].hit) {
@@ -178,7 +183,8 @@ static inline BarrageResult osrs_barrage_resolve(
         int def_roll = (targets[i].magic_level + 9) * (targets[i].magic_def_bonus + 64);
         targets[i].rolled = 1;
         targets[i].hit = encounter_roll_hit_chance(rng_state, att_roll, def_roll);
-        targets[i].damage = targets[i].hit ? encounter_rand_int(rng_state, max_hit + 1) : 0;
+        targets[i].damage = targets[i].hit
+            ? osrs_player_accuracy_passed_damage(encounter_rand_int(rng_state, max_hit + 1)) : 0;
         result.total_damage += targets[i].damage;
         result.num_hits++;
         if (targets[i].hit) {
@@ -519,16 +525,28 @@ static inline int osrs_magic_effective_attack_level(
         osrs_stance_att_bonus(fight_style, ATTACK_STYLE_MAGIC) + 9;
 }
 
-static inline float osrs_offensive_magic_dmg_mult(OffensivePrayer op) {
-    return (op == OFFENSIVE_PRAYER_AUGURY) ? 1.04f : 1.0f;
+static inline int osrs_offensive_magic_dmg_bonus(OffensivePrayer op) {
+    if (op == OFFENSIVE_PRAYER_AUGURY) return 4;
+    return op == OFFENSIVE_PRAYER_MAGIC_LOW ? 2 : 0;
 }
 
-static inline int osrs_stance_str_bonus(FightStyle fs) {
-    switch (fs) {
-        case FIGHT_STYLE_AGGRESSIVE: return 3;
-        case FIGHT_STYLE_CONTROLLED: return 1;
-        default:                     return 0;
+static inline int osrs_magic_max_hit(
+    int base_damage, int gear_damage_bonus, OffensivePrayer prayer, float damage_mult
+) {
+    int damage_bonus = gear_damage_bonus + osrs_offensive_magic_dmg_bonus(prayer);
+    int numerator = base_damage * (100 + damage_bonus);
+    return (int)((double)numerator * damage_mult / 100.0);
+}
+
+static inline int osrs_stance_damage_level_bonus(FightStyle fs, AttackStyle style) {
+    if (style == ATTACK_STYLE_MELEE) {
+        switch (fs) {
+            case FIGHT_STYLE_AGGRESSIVE: return 3;
+            case FIGHT_STYLE_CONTROLLED: return 1;
+            default:                     return 0;
+        }
     }
+    return style == ATTACK_STYLE_RANGED && fs == FIGHT_STYLE_ACCURATE ? 3 : 0;
 }
 
 static inline int osrs_stance_def_bonus(FightStyle fs) {

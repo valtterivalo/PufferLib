@@ -120,7 +120,8 @@ static inline void pvp_write_observations(
         .defence_crush = gear->crush_defence,
         .defence_magic = gear->magic_defence,
         .defence_ranged = gear->ranged_defence,
-        .effective_level = style == ATTACK_STYLE_NONE ? 0 : calculate_effective_attack(p, style),
+        .effective_level = style == ATTACK_STYLE_NONE ? 0 : calculate_effective_attack(
+            p, style, PVP_MAGIC_ACCURACY_WEAPON_STYLE),
         .attack_bonus = style == ATTACK_STYLE_NONE ? 0 : get_attack_bonus(p, style),
         .strength_bonus = style == ATTACK_STYLE_NONE ? 0 : get_strength_bonus(p, style),
         .spell_base_damage = 0,

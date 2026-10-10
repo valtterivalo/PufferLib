@@ -9,6 +9,7 @@ static void test_probability_against_damage_enumeration(void) {
                 int lethal = 0;
                 for (int roll = 0; roll <= 60; roll++) {
                     int damage = osrs_dharok_max_hit(roll, 99, attacker_hp);
+                    if (damage == 0) damage = 1;
                     damage = osrs_prayer_reduce_damage(damage, (OverheadPrayer)prayer, ATTACK_STYLE_MELEE, 1);
                     lethal += damage >= hp;
                 }
@@ -22,6 +23,11 @@ static void test_probability_against_damage_enumeration(void) {
     assert(osrs_direct_ko_probability(20, 60, 1, 61, 0, 99, PRAYER_NONE, ATTACK_STYLE_MAGIC) == 0);
     assert(osrs_direct_ko_probability(20, 60, 1, 0, 0, 99, PRAYER_NONE, ATTACK_STYLE_MAGIC) == 0);
     assert(osrs_direct_ko_probability(0, 60, 0, 1, 0, 99, PRAYER_NONE, ATTACK_STYLE_MELEE) == 0);
+    assert(osrs_direct_ko_probability(0, 60, 0.5f, 1, 0, 99, PRAYER_NONE, ATTACK_STYLE_MELEE) == 0.5f);
+    assert(fabsf(osrs_direct_ko_probability(0, 60, 0.5f, 1, 0, 99,
+        PRAYER_PROTECT_MELEE, ATTACK_STYLE_MELEE) - 0.5f * 59 / 61) < 1e-6f);
+    assert(fabsf(osrs_direct_ko_probability(0, 60, 0.5f, 2, 99, 1,
+        PRAYER_NONE, ATTACK_STYLE_MELEE) - 0.5f * 59 / 61) < 1e-6f);
     assert(fabsf(osrs_direct_ko_probability(20, 60, 1, 60, 0, 99, PRAYER_NONE, ATTACK_STYLE_MAGIC) - 1.0f / 41) < 1e-6f);
 }
 

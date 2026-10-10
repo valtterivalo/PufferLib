@@ -157,10 +157,12 @@ int main(int argc, char** argv) {
         attack_multiplier = 1.15f;
         if (style != ATTACK_STYLE_MAGIC) strength_multiplier = 1.15f;
     }
-    int attack_stance = attacker->fight_style == FIGHT_STYLE_ACCURATE ? (style == ATTACK_STYLE_MAGIC ? 2 : 3)
+    int attack_stance = style == ATTACK_STYLE_MAGIC ? 0
+        : attacker->fight_style == FIGHT_STYLE_ACCURATE ? 3
         : attacker->fight_style == FIGHT_STYLE_CONTROLLED && style == ATTACK_STYLE_MELEE ? 1 : 0;
     int strength_stance = style == ATTACK_STYLE_MELEE ? (attacker->fight_style == FIGHT_STYLE_AGGRESSIVE ? 3
-        : attacker->fight_style == FIGHT_STYLE_CONTROLLED ? 1 : 0) : 0;
+        : attacker->fight_style == FIGHT_STYLE_CONTROLLED ? 1 : 0)
+        : style == ATTACK_STYLE_RANGED && attacker->fight_style == FIGHT_STYLE_ACCURATE ? 3 : 0;
     int defence_stance = defender->fight_style == FIGHT_STYLE_DEFENSIVE || defender->fight_style == FIGHT_STYLE_LONGRANGE ? 3
         : defender->fight_style == FIGHT_STYLE_CONTROLLED ? 1 : 0;
     float defence_multiplier = defender->offensive_prayer >= OFFENSIVE_PRAYER_PIETY ? 1.25f
@@ -203,8 +205,9 @@ int main(int argc, char** argv) {
         reference_max_hit = base_hit * (100 + strength[0][2] +
             (attacker->offensive_prayer == OFFENSIVE_PRAYER_AUGURY ? 4
                 : attacker->offensive_prayer == OFFENSIVE_PRAYER_MAGIC_LOW ? 2 : 0)) / 100;
-        max_hit = (int)(base_hit * (1.0f + strength[0][2] / 100.0f) *
-            (attacker->offensive_prayer == OFFENSIVE_PRAYER_AUGURY ? 1.04f : 1.0f));
+        max_hit = base_hit * (100 + strength[0][2] +
+            (attacker->offensive_prayer == OFFENSIVE_PRAYER_AUGURY ? 4
+                : attacker->offensive_prayer == OFFENSIVE_PRAYER_MAGIC_LOW ? 2 : 0)) / 100;
     }
     assert(max_hit > 0 && reference_max_hit > 0);
     float continuous_accuracy = attack_roll > defence_roll
@@ -243,7 +246,7 @@ int main(int argc, char** argv) {
             accuracy / (reference_maximum - reference_minimum + 1);
     uint64_t draw_size = (uint64_t)(maximum - minimum + 1);
     for (int raw = minimum; raw <= maximum; raw++) {
-        int damage = !special && raw == 0 ? 1 : raw;
+        int damage = !(special && weapon == ITEM_VOIDWAKER) && raw == 0 ? 1 : raw;
         uint64_t residue = (uint64_t)(raw - minimum);
         uint64_t multiplicity = UINT32_MAX / draw_size + (residue > 0 && residue <= UINT32_MAX % draw_size);
         native_raw_pmf[damage] += native_accuracy_marginal * multiplicity / UINT32_MAX;
@@ -329,8 +332,8 @@ int main(int argc, char** argv) {
         accurate_zero_flag_false, first_accurate_zero_seed);
     printf("\"reference_assumptions\":{\"reference_probability\":\"externally_specified_ideal_independent_draws\",\"native_marginal_probability\":\"exact_nonzero32bit_accuracy_and_modulo_marginals_product_using_native_mechanics\",\"damage_draw\":\"ideal_uniform_integer\","
         "\"native_seed_draw\":\"splitmix64_to_nonzero_xorshift32_per_attack\",\"live_inputs\":\"declared_not_inferred\","
-        "\"native_hit_success_flags\":\"engine_flag;_maul_special_zero_damage_flag_is_false_not_independent_accuracy_measure\","
-        "\"manual_magic_stance\":\"manual_cast_reference_has_no_accurate_powered_staff_plus2;_live_manual_mapping_requires_confirmation\","
+        "\"native_hit_success_flags\":\"engine_flag;_special_flags_derived_from_positive_damage_not_independent_accuracy_measure\","
+        "\"manual_magic_stance\":\"direct_ice_blood_manual_cast_has_no_accurate_weapon_plus2;_weapon_style_magic_retains_stance_bonus\","
         "\"item_stats\":\"declared_canonical_simulator_table_not_independently_recovered_live_equipment\","
         "\"defence_rounding\":\"declared_PvP_weighted_magic_defence_model_not_exact_server_integer_order_proof\","
         "\"rng_limit\":\"sequential_accuracy_damage_dependence_not_exhaustively_enumerated;_native_marginals_are_not_exact_joint_PMF\"},"

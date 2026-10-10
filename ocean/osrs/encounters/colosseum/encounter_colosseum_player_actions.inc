@@ -819,8 +819,9 @@ static float col_expected_dpt_vs_npc(
         if (forced_max_hit) {
             expected_damage += (float)splat_max;
         } else {
-            expected_damage +=
-                hit_prob * ((float)prepared.min_hit + (float)splat_max) * 0.5f;
+            float mean_damage = ((float)prepared.min_hit + (float)splat_max) * 0.5f;
+            if (prepared.min_hit == 0) mean_damage += 1.0f / (splat_max + 1);
+            expected_damage += hit_prob * mean_damage;
         }
     }
 

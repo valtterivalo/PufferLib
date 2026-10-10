@@ -9,6 +9,7 @@ static int expected_damage(int roll, int dharok_base_hp, int attacker_hp,
     if (dharok_base_hp > attacker_hp)
         damage = damage * (10000 + dharok_base_hp *
             (dharok_base_hp - attacker_hp)) / 10000;
+    if (damage == 0) damage = 1;
     int protected = (style == ATTACK_STYLE_MELEE && prayer == PRAYER_PROTECT_MELEE) ||
         (style == ATTACK_STYLE_RANGED && prayer == PRAYER_PROTECT_RANGED) ||
         (style == ATTACK_STYLE_MAGIC && prayer == PRAYER_PROTECT_MAGIC);

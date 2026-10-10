@@ -13,6 +13,7 @@ static inline float osrs_direct_ko_probability(int min_hit, int max_hit, float a
     while (lower < upper) {
         int roll = lower + (upper - lower) / 2;
         int damage = dharok_base_hp ? osrs_dharok_max_hit(roll, dharok_base_hp, attacker_hp) : roll;
+        damage = osrs_player_accuracy_passed_damage(damage);
         damage = osrs_prayer_reduce_damage(damage, prayer, style, 1);
         if (damage >= target_hp) upper = roll;
         else lower = roll + 1;

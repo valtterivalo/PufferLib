@@ -1267,7 +1267,7 @@ static void zul_player_attack(ZulrahState* s, const ZulrahContext* ctx) {
             &s->rng_state, attack_effects.attack_roll, def_roll);
     int dmg = 0;
     if (hit) {
-        dmg = encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1);
+        dmg = osrs_player_accuracy_passed_damage(encounter_rand_int(&s->rng_state, attack_effects.max_hit + 1));
         dmg = zul_cap_damage(s, dmg);
     }
     zul_queue_zulrah_hit(s, dmg, style, 0);
@@ -1891,7 +1891,7 @@ static void zul_player_attack_snakeling(
     int att_roll = osrs_player_att_roll(ls->eff_level, ls->attack_bonus);
     if (!encounter_roll_hit_chance(&s->rng_state, att_roll, def_roll)) return;
 
-    int dmg = encounter_rand_int(&s->rng_state, ls->max_hit + 1);
+    int dmg = osrs_player_accuracy_passed_damage(encounter_rand_int(&s->rng_state, ls->max_hit + 1));
     encounter_damage_player(&sn->entity, dmg, &s->damage_dealt_this_tick);
     if (sn->entity.current_hitpoints <= 0) sn->active = 0;
 }
