@@ -249,6 +249,8 @@ void pvp_init(OsrsEnv* env) {
         env->pvp_runtime.walk_dest_y[i] = -1;
         env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
         env->pvp_runtime.overhead_changed_this_tick[i] = 0;
+        env->pvp_runtime.launch_history[i] = (OsrsPvpLaunchHistory){0};
+        env->pvp_runtime.decision_weapon[i] = ATTACK_STYLE_NONE;
     }
 #define OSRS_PVP_REWARD_FLOAT_DEFAULT(key, field, value) env->shaping.field = value;
     OSRS_PVP_REWARD_FLOAT_FIELDS(OSRS_PVP_REWARD_FLOAT_DEFAULT)
@@ -408,6 +410,7 @@ void pvp_reset(
         env->pvp_runtime.pending_manual_cast[i] = NH_PVP_PENDING_NONE;
     }
 
+    memset(env->pvp_runtime.launch_history, 0, sizeof(env->pvp_runtime.launch_history));
     if (env->pvp_runtime.use_c_opponent) {
         opponent_reset(env, &env->pvp_runtime.opponent);
     }
@@ -463,6 +466,8 @@ void pvp_step_with_nh_actions(
     memset(env->terminals, 0, NUM_AGENTS);
 
     for (int i = 0; i < NUM_AGENTS; i++) {
+        env->pvp_runtime.decision_weapon[i] = (AttackStyle)get_item_attack_style(
+            env->players[i].equipped[GEAR_SLOT_WEAPON]);
         env->players[i].hit_landed_this_tick = 0;
         env->players[i].hit_was_successful = 0;
         env->players[i].hit_damage = 0;

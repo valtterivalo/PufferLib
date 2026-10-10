@@ -958,6 +958,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
     attacker->last_attack_dist = (dx > dy) ? dx : dy;
 
     if (style == ATTACK_STYLE_MELEE && !pvp_in_melee_reach(attacker, defender)) return;
+    OverheadPrayer launch_prayer = defender->prayer;
 
     float acc_mult = 1.0f;
     float str_mult = 1.0f;
@@ -1218,6 +1219,12 @@ post_attack:
         env->pvp_runtime.maul[attacker_idx], env->tick, defender_idx);
     attacker->just_attacked = 1;
     attacker->last_attack_style = (is_special && spec_item_idx == ITEM_VOIDWAKER) ? ATTACK_STYLE_MAGIC : style;
+    OsrsPvpLaunchHistory* history = &env->pvp_runtime.launch_history[attacker_idx];
+    history->records[history->next] = (OsrsPvpLaunchRecord){
+        attacker->last_attack_style, launch_prayer,
+        env->pvp_runtime.decision_weapon[attacker_idx]};
+    history->next = (history->next + 1) % HISTORY_SIZE;
+    if (history->count < HISTORY_SIZE) history->count++;
     attacker->attack_style_this_tick = attacker->last_attack_style;
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;

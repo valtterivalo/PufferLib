@@ -806,8 +806,6 @@ typedef struct {
     int last_launch_tick;
     int target_x;
     int target_y;
-    int target_launch_tick;
-    unsigned attack_counts[4];
 } OppPressureControl;
 
 typedef enum {
@@ -843,6 +841,18 @@ typedef struct {
     int move_dy;
 } OsrsPvpVisibleActor;
 
+typedef struct {
+    AttackStyle style;
+    OverheadPrayer target_prayer;
+    AttackStyle observed_weapon;
+} OsrsPvpLaunchRecord;
+
+typedef struct {
+    OsrsPvpLaunchRecord records[HISTORY_SIZE];
+    uint8_t count;
+    uint8_t next;
+} OsrsPvpLaunchHistory;
+
 typedef enum {
     NH_PVP_PENDING_NONE,
     NH_PVP_PENDING_ICE,
@@ -857,6 +867,8 @@ typedef struct {
     int external_opponent_actions[32];
     OpponentState opponent;
     OpponentState opponent_p0;
+    OsrsPvpLaunchHistory launch_history[NUM_AGENTS];
+    AttackStyle decision_weapon[NUM_AGENTS];
     float gear_tier_weights[4];
 
     int walk_dest_x[NUM_AGENTS];

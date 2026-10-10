@@ -578,8 +578,10 @@ static void execute_nh_switches(OsrsEnv* env, int actor, const int* semantic, in
             if (cell >= 0) changed = osrs_equip_from_cell(player, player->inventory_cells, cell) >= 0;
         }
         if (changed) {
-            osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
-            env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
+            if (action != NH_PVP_EQUIPMENT_UNEQUIP) {
+                osrs_interaction_check_interrupt(&player->interaction, OSRS_IACT_EQUIP);
+                env->pvp_runtime.pending_manual_cast[actor] = NH_PVP_PENDING_NONE;
+            }
             pvp_maul_weapon_changed(env, actor, old_weapon);
             player->clicks_this_tick++;
         }

@@ -110,6 +110,58 @@ static void test_pending_cast(int actor, int pid, int primary) {
     }
 }
 
+static void test_pending_equipment_remove(int actor, int pid, int primary) {
+    reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
+    Player* player = &state.env.players[actor];
+    player->has_attack_timer = 1;
+    player->attack_timer = 2;
+    int actions[NH_PVP_NUM_ACTION_HEADS] = {0};
+    actions[NH_PVP_HEAD_PRIMARY] = primary;
+    step_case(actor, actions);
+    NhPvpPendingManualCast pending = state.env.pvp_runtime.pending_manual_cast[actor];
+    CHECK("busy cast establishes removable-equipment continuation", pending != NH_PVP_PENDING_NONE && !player->just_attacked);
+    actions[NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_RETAIN;
+    actions[NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_LEGS)] = NH_PVP_EQUIPMENT_UNEQUIP;
+    CHECK("equipment-tab remove remains legal during pending cast", allowed(actor, NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_LEGS), NH_PVP_EQUIPMENT_UNEQUIP));
+    step_case(actor, actions);
+    CHECK("equipment-tab remove actually removes worn legs", player->equipped[GEAR_SLOT_LEGS] == ITEM_NONE);
+    CHECK("equipment-tab remove preserves pending spell interaction", state.env.pvp_runtime.pending_manual_cast[actor] == pending && osrs_interaction_active(&player->interaction));
+    memset(actions, 0, sizeof(actions));
+    step_case(actor, actions);
+    CHECK("removed-equipment cast launches when ready", player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC && player->magic_type_this_tick == pending);
+    CHECK("removed-equipment cast consumes continuation exactly once", state.env.pvp_runtime.pending_manual_cast[actor] == NH_PVP_PENDING_NONE && !osrs_interaction_active(&player->interaction));
+    step_case(actor, actions);
+    CHECK("equipment-tab remove does not create autocast", !player->just_attacked);
+}
+
+static void test_pending_safe_controls(int actor, int pid, int primary) {
+    reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
+    Player* player = &state.env.players[actor];
+    player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_RUNE_PLATELEGS);
+    player->has_attack_timer = 1;
+    player->attack_timer = 1;
+    int actions[NH_PVP_NUM_ACTION_HEADS] = {0};
+    actions[NH_PVP_HEAD_PRIMARY] = primary;
+    step_case(actor, actions);
+    actions[NH_PVP_HEAD_PRIMARY] = NH_PVP_PRIMARY_RETAIN;
+    actions[NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_LEGS)] = nh_pvp_equipment_action_for_item(GEAR_SLOT_LEGS, ITEM_RUNE_PLATELEGS);
+    actions[NH_PVP_HEAD_OVERHEAD] = ENCOUNTER_OVERHEAD_SET_REFRESH_MAGIC;
+    actions[NH_PVP_HEAD_OFFENSIVE] = ENCOUNTER_OFFENSIVE_SET_REFRESH_AUGURY;
+    step_case(actor, actions);
+    CHECK("worn identity request and prayer clicks preserve delayed cast", player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC && player->magic_type_this_tick == (primary == NH_PVP_PRIMARY_ICE ? OSRS_MAGIC_ATTACK_ANCIENT_ICE : OSRS_MAGIC_ATTACK_ANCIENT_BLOOD));
+    CHECK("safe control prayers apply at actual delayed launch", player->prayer == PRAYER_PROTECT_MAGIC && player->offensive_prayer == OFFENSIVE_PRAYER_AUGURY);
+    CHECK("worn identity request produces no equipment swap", player->equipped[GEAR_SLOT_LEGS] == ITEM_RUNE_PLATELEGS && osrs_inventory_cell_item_index(&player->inventory_cells[0]) == ITEM_RUNE_PLATELEGS);
+
+    reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
+    player = &state.env.players[actor];
+    player->inventory_cells[0] = osrs_inventory_cell_from_item(ITEM_AHRIMS_ROBESKIRT);
+    memset(actions, 0, sizeof(actions));
+    actions[NH_PVP_HEAD_EQUIP_SLOT(GEAR_SLOT_LEGS)] = nh_pvp_equipment_action_for_item(GEAR_SLOT_LEGS, ITEM_AHRIMS_ROBESKIRT);
+    actions[NH_PVP_HEAD_PRIMARY] = primary;
+    step_case(actor, actions);
+    CHECK("inventory equip then new spell request executes both", player->equipped[GEAR_SLOT_LEGS] == ITEM_AHRIMS_ROBESKIRT && player->just_attacked && player->attack_style_this_tick == ATTACK_STYLE_MAGIC);
+}
+
 static void test_raw_continuation(int actor, int pid) {
     reset_case(actor, pid, ITEM_RUNE_CROSSBOW);
     Player* player = &state.env.players[actor];
@@ -204,6 +256,10 @@ int main(void) {
         for (int pid = 0; pid < NUM_AGENTS; pid++) {
             test_pending_cast(actor, pid, NH_PVP_PRIMARY_ICE);
             test_pending_cast(actor, pid, NH_PVP_PRIMARY_BLOOD);
+            test_pending_equipment_remove(actor, pid, NH_PVP_PRIMARY_ICE);
+            test_pending_equipment_remove(actor, pid, NH_PVP_PRIMARY_BLOOD);
+            test_pending_safe_controls(actor, pid, NH_PVP_PRIMARY_ICE);
+            test_pending_safe_controls(actor, pid, NH_PVP_PRIMARY_BLOOD);
             test_semantic_maul(actor, pid);
             test_raw_continuation(actor, pid);
         }

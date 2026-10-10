@@ -58,7 +58,6 @@ static void hidden_contract(OpponentType bot) {
                     opponent_reset(pvp, opp);
                     opp->pressure_control = (OppPressureControl){
                         .phase = OPP_ICE_LAUNCHED, .last_launch_tick = 0,
-                        .target_launch_tick = -1,
                         .target_x = pvp->players[1 - actor].x,
                         .target_y = pvp->players[1 - actor].y,
                     };
@@ -101,7 +100,82 @@ static void hidden_contract(OpponentType bot) {
     puf_close(&env);
 }
 
+static void attack_history_contract(void) {
+    OsrsPvpLaunchHistory history = {.count = HISTORY_SIZE};
+    const AttackStyle alternating[] = {
+        ATTACK_STYLE_RANGED, ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED,
+        ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED,
+    };
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history.records[index] = (OsrsPvpLaunchRecord){
+            alternating[index], PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
+    CHECK("recent R M alternation under current weapon predicts observed ranged mode",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
+
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history.records[index] = (OsrsPvpLaunchRecord){
+            ATTACK_STYLE_MELEE, PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE};
+    history.records[4] = (OsrsPvpLaunchRecord){
+        ATTACK_STYLE_RANGED, PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
+    CHECK("visible weapon bait ignores launches from another pre-action weapon",
+        opp_predict_attack_style(&history, ATTACK_STYLE_MAGIC, ATTACK_STYLE_MELEE) == ATTACK_STYLE_RANGED);
+    CHECK("missing weapon context preserves existing forecast",
+        opp_predict_attack_style(&history, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC) == ATTACK_STYLE_MAGIC);
+
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history.records[index].target_prayer = index % 2 == 0
+            ? PRAYER_PROTECT_RANGED : PRAYER_PROTECT_MAGIC;
+    const AttackStyle styles[] = {
+        ATTACK_STYLE_MELEE, ATTACK_STYLE_RANGED, ATTACK_STYLE_MAGIC,
+    };
+    CHECK("full recent history rewards melee only after five attacks without melee protection",
+        opp_target_never_protected_style(&history, ATTACK_STYLE_MELEE) &&
+        !opp_target_never_protected_style(&history, ATTACK_STYLE_RANGED) &&
+        !opp_target_never_protected_style(&history, ATTACK_STYLE_MAGIC) &&
+        opp_weighted_attack_index(styles, &history, 0) == 0 &&
+        opp_weighted_attack_index(styles, &history, 1) == 0 &&
+        opp_weighted_attack_index(styles, &history, 2) == 1 &&
+        opp_weighted_attack_index(styles, &history, 3) == 2);
+    history.count = HISTORY_SIZE - 1;
+    CHECK("incomplete match history does not trigger attack bias",
+        opp_attack_weight(&history, ATTACK_STYLE_MELEE) == 1);
+
+    history.count = HISTORY_SIZE;
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history.records[index].target_prayer = PRAYER_PROTECT_MELEE;
+    CHECK("reversed protection history reverses the attack weights",
+        !opp_target_never_protected_style(&history, ATTACK_STYLE_MELEE) &&
+        opp_target_never_protected_style(&history, ATTACK_STYLE_RANGED) &&
+        opp_weighted_attack_index(styles, &history, 0) == 0 &&
+        opp_weighted_attack_index(styles, &history, 1) == 1 &&
+        opp_weighted_attack_index(styles, &history, 2) == 1 &&
+        opp_weighted_attack_index(styles, &history, 3) == 2 &&
+        opp_weighted_attack_index(styles, &history, 4) == 2);
+
+    OpponentState actor_zero = {0}, actor_one = {0};
+    OsrsEnv pvp = {0};
+    pvp.pvp_runtime.opponent_p0 = actor_zero;
+    pvp.pvp_runtime.opponent = actor_one;
+    pvp.pvp_runtime.launch_history[0] = history;
+    pvp.pvp_runtime.launch_history[1] = (OsrsPvpLaunchHistory){0};
+    CHECK("player-zero and player-one controllers read their own launch histories",
+        opp_own_launch_history(&pvp, &pvp.pvp_runtime.opponent_p0) ==
+            &pvp.pvp_runtime.launch_history[0] &&
+        opp_own_launch_history(&pvp, &pvp.pvp_runtime.opponent) ==
+            &pvp.pvp_runtime.launch_history[1] &&
+        opp_predict_attack_style(&pvp.pvp_runtime.launch_history[1], ATTACK_STYLE_MAGIC,
+            ATTACK_STYLE_MAGIC) == ATTACK_STYLE_MAGIC);
+
+    OppAttackStyles voidwaker = opp_submitted_attack_styles(
+        ITEM_VOIDWAKER, OSRS_PRIMARY_MOVE_ACTIONS, OSRS_SPELL_NONE, 1, 0,
+        100, 1, 1);
+    CHECK("Voidwaker adaptation follows its actual magic damage style",
+        voidwaker.damage == ATTACK_STYLE_MAGIC &&
+        opp_attack_weight(&history, voidwaker.damage) == 2);
+}
+
 int main(void) {
+    attack_history_contract();
     CHECK("pressure opponent identities survive the NH interface change",
         OPP_RECORDED_ADAPTIVE_NH == 35 && OPP_BLOOD_PRESSURE_NH == 36 &&
         OPP_FREEZE_UNDERLAP_NH == 37);
@@ -131,23 +205,36 @@ int main(void) {
     reset(OPP_BLOOD_PRESSURE_NH);
     pvp = &env.state.env;
     pvp_apply_equipment_plan(&pvp->players[0], PVP_EQUIPMENT_MAGIC);
-    pvp->players[0].last_attack_style = ATTACK_STYLE_MELEE;
-    for (int tick = 0; tick < 3; tick++) {
-        pvp->pvp_runtime.visible[0].last_attack_tick = tick;
-        generate_opponent_action(pvp, &pvp->pvp_runtime.opponent);
-    }
-    CHECK("completed melee launches override misleading mage weapon habit",
-        pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] == ENCOUNTER_OVERHEAD_SET_REFRESH_MELEE &&
-        pvp->pvp_runtime.opponent.pressure_control.attack_counts[ATTACK_STYLE_MELEE] == 3);
+    OsrsPvpLaunchHistory* history = &pvp->pvp_runtime.launch_history[0];
+    history->count = HISTORY_SIZE;
+    history->next = 0;
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history->records[index] = (OsrsPvpLaunchRecord){
+            index % 2 == 0 ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE,
+            PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
     generate_opponent_action(pvp, &pvp->pvp_runtime.opponent);
-    CHECK("one completed launch is counted once",
-        pvp->pvp_runtime.opponent.pressure_control.attack_counts[ATTACK_STYLE_MELEE] == 3);
+    CHECK("recent alternating launches under the visible weapon predict the modal ranged attack",
+        pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] == ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED &&
+        history->records[4].style == ATTACK_STYLE_RANGED);
+    pvp->players[0].prayer = PRAYER_PROTECT_MAGIC;
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        history->records[index] = (OsrsPvpLaunchRecord){ATTACK_STYLE_MELEE,
+            PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MELEE};
+    history->records[4] = (OsrsPvpLaunchRecord){ATTACK_STYLE_RANGED,
+        PRAYER_PROTECT_MAGIC, ATTACK_STYLE_MAGIC};
+    generate_opponent_action(pvp, &pvp->pvp_runtime.opponent);
+    CHECK("matching pre-action weapon context excludes unrelated melee bait launches",
+        pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_OVERHEAD] == ENCOUNTER_OVERHEAD_SET_REFRESH_RANGED);
     pvp->pvp_runtime.opponent.visible_history = (OppVisibleHistory){OPP_HISTORY_READY,
         {ATTACK_STYLE_MAGIC, PRAYER_PROTECT_MELEE}, {ATTACK_STYLE_RANGED, PRAYER_PROTECT_MAGIC}};
     pvp->players[0].prayer = PRAYER_PROTECT_MELEE;
     generate_opponent_action(pvp, &pvp->pvp_runtime.opponent);
     CHECK("completed overhead ABA predicts Magic protection and avoids Blood",
         pvp->pending_actions[OSRS_BASE_NUM_ACTION_HEADS + OSRS_HEAD_SPELL] == OSRS_SPELL_NONE);
+    pvp_reset(pvp, env.context.route_topology);
+    CHECK("match reset clears both launch histories",
+        pvp->pvp_runtime.launch_history[0].count == 0 &&
+        pvp->pvp_runtime.launch_history[1].count == 0);
     puf_close(&env);
 
     reset(OPP_BLOOD_PRESSURE_NH);

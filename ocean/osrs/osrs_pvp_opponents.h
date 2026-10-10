@@ -184,6 +184,78 @@ static inline OppVisibleState opp_forecast_visible(
     return forecast;
 }
 
+static inline int opp_actor_index(const OsrsEnv* env, const OpponentState* opp) {
+    return opp == &env->pvp_runtime.opponent_p0 ? 0 : 1;
+}
+
+static inline const OsrsPvpLaunchHistory* opp_own_launch_history(
+    const OsrsEnv* env, const OpponentState* opp
+) {
+    return &env->pvp_runtime.launch_history[opp_actor_index(env, opp)];
+}
+
+static inline AttackStyle opp_predict_attack_style(
+    const OsrsPvpLaunchHistory* history,
+    AttackStyle observed_weapon,
+    AttackStyle fallback
+) {
+    if (history->count == 0) return fallback;
+    unsigned counts[ATTACK_STYLE_MAGIC + 1] = {0};
+    for (int age = 0; age < history->count; age++) {
+        int index = (history->next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE;
+        OsrsPvpLaunchRecord record = history->records[index];
+        if (record.observed_weapon == observed_weapon)
+            counts[record.style]++;
+    }
+    unsigned total = counts[ATTACK_STYLE_MELEE] + counts[ATTACK_STYLE_RANGED] +
+        counts[ATTACK_STYLE_MAGIC];
+    if (total == 0) return fallback;
+    unsigned best = max_int(counts[ATTACK_STYLE_MELEE], max_int(
+        counts[ATTACK_STYLE_RANGED], counts[ATTACK_STYLE_MAGIC]));
+    if (counts[fallback] == best) return fallback;
+    for (int age = 0; age < history->count; age++) {
+        int index = (history->next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE;
+        OsrsPvpLaunchRecord record = history->records[index];
+        if (record.observed_weapon == observed_weapon && counts[record.style] == best)
+            return record.style;
+    }
+    return fallback;
+}
+
+static inline OverheadPrayer opp_protection_for_style(AttackStyle style) {
+    return style == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC
+        : style == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
+            : PRAYER_PROTECT_MELEE;
+}
+
+static inline int opp_target_never_protected_style(
+    const OsrsPvpLaunchHistory* history, AttackStyle style
+) {
+    if (history->count < HISTORY_SIZE) return 0;
+    for (int index = 0; index < HISTORY_SIZE; index++)
+        if (history->records[index].target_prayer == opp_protection_for_style(style)) return 0;
+    return 1;
+}
+
+static inline int opp_attack_weight(
+    const OsrsPvpLaunchHistory* history, AttackStyle style
+) {
+    return opp_target_never_protected_style(history, style) ? 2 : 1;
+}
+
+static inline int opp_weighted_attack_index(
+    const AttackStyle* styles,
+    const OsrsPvpLaunchHistory* history,
+    int draw
+) {
+    int index = 0;
+    while (draw >= opp_attack_weight(history, styles[index])) {
+        draw -= opp_attack_weight(history, styles[index]);
+        index++;
+    }
+    return index;
+}
+
 typedef struct {
     AttackStyle damage;
     AttackStyle offensive;
@@ -268,7 +340,18 @@ static void opp_recorded_nh(
     OverheadPrayer prayer = (OverheadPrayer)recorded_nh_sample(defense, defense_draw);
     OppVisibleState forecast = opp_forecast_visible(opp->visible_history,
         (OppVisibleState){target_style, target->prayer});
-    if (forecast.weapon != target_style && forecast.weapon != ATTACK_STYLE_NONE)
+    const OsrsPvpLaunchHistory* target_history =
+        &env->pvp_runtime.launch_history[1 - opp_actor_index(env, opp)];
+    AttackStyle predicted = opp_predict_attack_style(target_history, target_style, forecast.weapon);
+    int has_context = 0;
+    for (int index = 0; index < target_history->count; index++)
+        if (target_history->records[index].observed_weapon == target_style) {
+            has_context = 1;
+            break;
+        }
+    if (has_context)
+        prayer = opp_protection_for_style(predicted);
+    else if (forecast.weapon != target_style && forecast.weapon != ATTACK_STYLE_NONE)
         prayer = forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE
             : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
                 : PRAYER_PROTECT_MAGIC;
@@ -310,6 +393,27 @@ static void opp_recorded_nh(
         if (allowed) {
             RecordedNhWeights attack_weights = recorded_nh_attack_weights(
                 distance, self->last_attack_style, target->prayer, allowed);
+            const OsrsPvpLaunchHistory* own_history = opp_own_launch_history(env, opp);
+            for (int attack = 0; attack < RECORDED_NH_ATTACK_COUNT; attack++) {
+                if (attack_weights.counts[attack] == 0) continue;
+                int style = attack == RECORDED_NH_MAGIC ? OPP_STYLE_MAGE
+                    : attack == RECORDED_NH_RANGED ? OPP_STYLE_RANGED
+                    : attack == RECORDED_NH_MELEE ? OPP_STYLE_MELEE : OPP_STYLE_SPEC;
+                int spell = attack == RECORDED_NH_MAGIC
+                    ? can_cast_ice_spell(self) ? OSRS_SPELL_ICE_BARRAGE : OSRS_SPELL_BLOOD_BARRAGE
+                    : OSRS_SPELL_NONE;
+                uint8_t gear[NUM_DYNAMIC_GEAR_SLOTS];
+                pvp_resolve_equipment_plan(self, opp_equipment_plan(style), gear);
+                OppAttackStyles attack_styles = opp_submitted_attack_styles(
+                    gear[0], OSRS_PRIMARY_MOVE_ACTIONS, spell,
+                    style == OPP_STYLE_SPEC ? 1 : 2, self->spec_armed,
+                    self->special_energy, can_cast_ice_spell(self), can_cast_blood_spell(self));
+                AttackStyle damage_style = attack_styles.damage;
+                if (opp_target_never_protected_style(own_history, damage_style)) {
+                    attack_weights.total += attack_weights.counts[attack];
+                    attack_weights.counts[attack] *= 2;
+                }
+            }
             uint32_t attack_draw = (uint32_t)rand_int(env, (int)attack_weights.total);
             RecordedNhAttack attack = (RecordedNhAttack)recorded_nh_sample(
                 attack_weights, attack_draw);
@@ -368,20 +472,9 @@ static void opp_pressure_nh(OsrsEnv* env, OpponentState* opp, int* actions, Oppo
     opp->visible_history.latest = current;
     opp->visible_history.phase = opp->visible_history.phase == OPP_HISTORY_EMPTY
         ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
-    int actor = opp == &env->pvp_runtime.opponent_p0 ? 0 : 1;
-    int target_launch = env->pvp_runtime.visible[1 - actor].last_attack_tick;
-    if (target_launch >= 0 && target_launch != opp->pressure_control.target_launch_tick) {
-        opp->pressure_control.target_launch_tick = target_launch;
-        if (target->last_attack_style != ATTACK_STYLE_NONE)
-            opp->pressure_control.attack_counts[target->last_attack_style]++;
-    }
-    unsigned most_attacks = 0;
-    for (int style = ATTACK_STYLE_MELEE; style <= ATTACK_STYLE_MAGIC; style++) {
-        if (opp->pressure_control.attack_counts[style] > most_attacks) {
-            most_attacks = opp->pressure_control.attack_counts[style];
-            forecast.weapon = (AttackStyle)style;
-        }
-    }
+    int actor = opp_actor_index(env, opp);
+    const OsrsPvpLaunchHistory* target_history = &env->pvp_runtime.launch_history[1 - actor];
+    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, forecast.weapon);
     OverheadPrayer defense = forecast.weapon == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC
         : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
             : forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE : PRAYER_NONE;
@@ -427,7 +520,8 @@ static void opp_pressure_nh(OsrsEnv* env, OpponentState* opp, int* actions, Oppo
     int spell = type == OPP_FREEZE_UNDERLAP_NH && can_cast_ice_spell(self)
         ? OSRS_SPELL_ICE_BARRAGE : can_cast_blood_spell(self)
             ? OSRS_SPELL_BLOOD_BARRAGE : OSRS_SPELL_NONE;
-    int chosen = -1;
+    int chosen = -1, fallback = -1, chosen_weight = 0;
+    const OsrsPvpLaunchHistory* own_history = opp_own_launch_history(env, opp);
     const int repertoire[] = {OPP_STYLE_MAGE, OPP_STYLE_RANGED, OPP_STYLE_SPEC, OPP_STYLE_MELEE};
     for (int entry = 0; entry < 4; entry++) {
         int style = repertoire[entry];
@@ -452,9 +546,16 @@ static void opp_pressure_nh(OsrsEnv* env, OpponentState* opp, int* actions, Oppo
         int range = style == OPP_STYLE_MAGE ? COMBAT_SPELL_ATTACK_RANGE
             : pvp_weapon_attack_range(gear[0], attack.damage,
                 style == OPP_STYLE_RANGED ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE);
-        if (chosen < 0 || distance <= range) chosen = style;
-        if (distance <= range) break;
+        fallback = style;
+        if (distance <= range) {
+            int weight = opp_attack_weight(own_history, attack.damage);
+            if (chosen < 0 || weight > chosen_weight) {
+                chosen = style;
+                chosen_weight = weight;
+            }
+        }
     }
+    if (chosen < 0) chosen = fallback;
     if (chosen < 0) {
         opp_pressure_move(actions, self, target, 1);
         return;
@@ -484,6 +585,9 @@ static void opp_generalist_nh(OsrsEnv* env, OpponentState* opp, int* actions, Op
     opp->visible_history.latest = current;
     opp->visible_history.phase = opp->visible_history.phase == OPP_HISTORY_EMPTY
         ? OPP_HISTORY_ONE : OPP_HISTORY_READY;
+    int actor = opp_actor_index(env, opp);
+    const OsrsPvpLaunchHistory* target_history = &env->pvp_runtime.launch_history[1 - actor];
+    forecast.weapon = opp_predict_attack_style(target_history, current.weapon, forecast.weapon);
     OverheadPrayer defense = forecast.weapon == ATTACK_STYLE_MELEE ? PRAYER_PROTECT_MELEE
         : forecast.weapon == ATTACK_STYLE_RANGED ? PRAYER_PROTECT_RANGED
             : forecast.weapon == ATTACK_STYLE_MAGIC ? PRAYER_PROTECT_MAGIC : PRAYER_NONE;
@@ -505,7 +609,6 @@ static void opp_generalist_nh(OsrsEnv* env, OpponentState* opp, int* actions, Op
     if (type == OPP_VENG_FIGHTER && !self->veng_active &&
             remaining_ticks(self->veng_cooldown) == 0 && self->current_magic >= OSRS_VENGEANCE_MAGIC_LEVEL)
         actions[OSRS_HEAD_SPELL] = OSRS_SPELL_VENGEANCE;
-    int actor = opp == &env->pvp_runtime.opponent_p0 ? 0 : 1;
     int combo_ready = opp->combo_control.phase == OPP_COMBO_SUBMITTED &&
         env->pvp_runtime.visible[actor].last_attack_tick != opp->combo_control.launch_tick &&
         self->special_energy < opp->combo_control.energy;
@@ -535,6 +638,7 @@ static void opp_generalist_nh(OsrsEnv* env, OpponentState* opp, int* actions, Op
     }
     opp->fake_switch_pending = 0;
     int choices[4], count = 0, approach_range = 0;
+    AttackStyle choice_styles[4];
     const int repertoire[] = {OPP_STYLE_MAGE, OPP_STYLE_RANGED, OPP_STYLE_MELEE, OPP_STYLE_SPEC};
     for (int index = 0; index < 4; index++) {
         int style = repertoire[index];
@@ -560,13 +664,19 @@ static void opp_generalist_nh(OsrsEnv* env, OpponentState* opp, int* actions, Op
                 style == OPP_STYLE_RANGED ? FIGHT_STYLE_RAPID : FIGHT_STYLE_ACCURATE);
         approach_range = max_int(approach_range, range);
         if (distance > range || (range == 1 && !is_in_melee_range(self, target))) continue;
-        choices[count++] = style;
+        choices[count] = style;
+        choice_styles[count++] = attack.damage;
     }
     if (count == 0) {
         opp_pressure_move(actions, self, target, distance == 0 ? 1 : approach_range);
         return;
     }
-    int chosen = choices[rand_int(env, count)];
+    const OsrsPvpLaunchHistory* own_history = opp_own_launch_history(env, opp);
+    int total_weight = 0;
+    for (int index = 0; index < count; index++)
+        total_weight += opp_attack_weight(own_history, choice_styles[index]);
+    int chosen = choices[opp_weighted_attack_index(
+        choice_styles, own_history, rand_int(env, total_weight))];
     if (type == OPP_RANGE_KITER && distance >= 3 && rand_int(env, 100) < 80)
         for (int index = 0; index < count; index++)
             if (choices[index] == OPP_STYLE_RANGED) chosen = OPP_STYLE_RANGED;
@@ -610,7 +720,7 @@ static void opponent_reset(OsrsEnv* env, OpponentState* opp) {
     opp->visible_history = (OppVisibleHistory){OPP_HISTORY_EMPTY,
         {ATTACK_STYLE_NONE, PRAYER_NONE}, {ATTACK_STYLE_NONE, PRAYER_NONE}};
     opp->pressure_control = (OppPressureControl){.phase = OPP_ICE_SEEK,
-        .last_launch_tick = -1, .target_launch_tick = -1};
+        .last_launch_tick = -1};
     if (type == OPP_VENG_FIGHTER)
         env->players[opp == &env->pvp_runtime.opponent_p0 ? 0 : 1].is_lunar_spellbook = 1;
 }
