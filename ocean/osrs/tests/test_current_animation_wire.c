@@ -22,6 +22,7 @@ int main(void) {
     assert(gs_wire_apply(infer, &wire, line) == 'S');
     assert(infer->c.opponent_animation.source == GS_ANIMATION_UNKNOWN);
     infer->c.ratio = 15; infer->c.scale = 30;
+    infer->c.opponent_combat_level = 126;
     gs_eater_observe(infer, 20);
     assert(infer->unseen_count == 0);
     infer->c.opponent_animation = (GsCurrentAnimation){GS_ANIMATION_OBSERVED, -1};
@@ -34,14 +35,11 @@ int main(void) {
     gs_eater_opponent_animated(infer, GS_KIND_EAT, 829, 21);
     infer->c.opponent_animation = (GsCurrentAnimation){GS_ANIMATION_OBSERVED, 829};
     gs_eater_observe(infer, 21);
-    assert(infer->unseen_count == 1);
-    GsHealthRange hitpoints = infer->opponent_hitpoints;
-    int ready = infer->opponent_hard_food_ready;
+    assert(infer->unseen_count == 0);
     gs_eater_observe(infer, 22);
-    assert(infer->unseen_count == 2 && infer->unseen[1] == 22);
-    assert(infer->opponent_hard_food_ready == ready);
-    assert(!memcmp(&hitpoints, &infer->opponent_hitpoints, sizeof(hitpoints)));
-    gs_eater_opponent_hitsplat(infer);
+    assert(infer->unseen_count == 1 && infer->unseen[0] == 22);
+    assert(infer->health->target.has_history && infer->health->target.has_belief);
+    gs_eater_opponent_hitsplat(infer, 23);
     infer->c.opponent_animation = (GsCurrentAnimation){GS_ANIMATION_OBSERVED, 11275};
     gs_eater_observe(infer, 23);
     assert(infer->unseen_count == 1 && infer->unseen[0] == 23);

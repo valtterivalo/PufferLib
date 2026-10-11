@@ -148,8 +148,126 @@ static int sample_his_hitpoints(const Tape* tape, const TapeTick* tick, uint32_t
     return hp > 121 ? 121 : hp;
 }
 
+static int tape_pending_available(const Tape* tape, int t) {
+    const TapeTick* tick = tape_tick(tape, t);
+    if (tick->pending_known == 1) return 1;
+    if (tick->pending_known != 2 || !tape->observer_series) return 0;
+    const GsInfer* inf = &tape->observer_series[t - tape->lo].inf;
+    if (inf->tracker_current < 0 || inf->timed < 0) return 0;
+    return gs_pending_damage_known(inf, t, GS_PID_LOCAL) &&
+        gs_pending_damage_known(inf, t, GS_PID_OPPONENT);
+}
+
+static void tape_pending_add(PendingHit* hits, PendingHitMetadata* metadata, int* count,
+    int lands, int t, GsSwing swing, int exact) {
+    if (lands <= t) return;
+    if (*count == MAX_PENDING_HITS) {
+        fprintf(stderr, "tape pending queue overflow at tick %d\n", t);
+        abort();
+    }
+    int index = (*count)++;
+    hits[index] = (PendingHit){.ticks_until_hit = lands - t - 1, .attack_type = ATTACK_STYLE_NONE,
+        .hit_success = 1, .damage = exact ? swing.most : 0};
+    metadata[index] = (PendingHitMetadata){.damage_mode = exact ? 1 : 2,
+        .damage_min = swing.least, .damage_max = swing.most, .accuracy_bp = (int)lround(swing.accuracy * 10000)};
+}
+
+/* Translate the causal observation owner's retained queues; never read tape H/KIT
+ * rows to infer a launch, damage roll, or reflection source. */
+static void tape_pending_snapshot(const Tape* tape, int t, RiskfightSnapshot* out) {
+    if (!tape_pending_available(tape, t)) return;
+    out->pending_known = 1;
+    if (tape_tick(tape, t)->pending_known == 1) return;
+    const GsInfer* now = &tape->observer_series[t - tape->lo].inf;
+    out->pending_pid_active = 1;
+    for (int holder = 0; holder < 2; holder++) {
+        GsPid pid = holder == 0 ? GS_PID_LOCAL : GS_PID_OPPONENT;
+        for (int launch = 0; launch < now->local_launch_count; launch++) {
+            const GsLocalLaunch* local = &now->local_launches[launch];
+            GsSwing swing = local->by_pid[pid];
+            for (int arrow = 0; arrow < swing.arrows; arrow++)
+                tape_pending_add(out->pending_pid[holder][0], out->pending_pid_metadata[holder][0],
+                    &out->pending_pid_count[holder][0], swing.lands + arrow, t, swing, local->exact);
+        }
+        for (int launch = 0; launch < now->pending_launch_count; launch++) {
+            GsSwing swing = now->pending_launches[launch].by_pid[pid];
+            for (int arrow = 0; arrow < swing.arrows; arrow++)
+                tape_pending_add(out->pending_pid[holder][1], out->pending_pid_metadata[holder][1],
+                    &out->pending_pid_count[holder][1], swing.lands + arrow, t, swing, 0);
+        }
+        if (pid == GS_PID_LOCAL) {
+            for (int i = 0; i < now->reflection_count; i++) {
+                GsSwing swing = now->reflection_swings[i];
+                if (swing.lands <= t) continue;
+                tape_pending_add(out->pending_pid[holder][1], out->pending_pid_metadata[holder][1],
+                    &out->pending_pid_count[holder][1], swing.lands, t, swing, 1);
+                out->pending_pid[holder][1][out->pending_pid_count[holder][1] - 1].kind = OSRS_HIT_VENGEANCE;
+            }
+        }
+    }
+}
+
+static void source_actor_snapshot(const GsHealthHistory* health, int combat_level, int dead, uint32_t* rng, RiskfightActorStats* stats, int* hitpoints) {
+    if (!health || !health->has_started) abort();
+    int base = 0;
+    for (int candidate = health->base; candidate >= 10; candidate--) {
+        uint64_t alive = health->base_hp_support[candidate][0] & ~UINT64_C(1);
+        if (!(alive || health->base_hp_support[candidate][1])) continue;
+        if (riskfight_model_actor_stats(combat_level, candidate, stats)) { base = candidate; break; }
+    }
+    if (!base) { fprintf(stderr, "source health support contradicts observed combat level %d\n", combat_level); abort(); }
+    if (dead) { *hitpoints = 0; return; }
+    const GsTarget* target = &health->target;
+    if (target->has_belief && base == target->base_hp) {
+        double total = 0;
+        for (int i = 0; i < target->belief_count; i++)
+            for (int hp = 1; hp < target->belief[i].levels; hp++) total += target->belief[i].hp[hp];
+        if (!(total > 0)) abort();
+        double draw = uniform(rng) * total, cumulative = 0;
+        for (int i = 0; i < target->belief_count; i++) for (int hp = 1; hp < target->belief[i].levels; hp++) {
+            cumulative += target->belief[i].hp[hp];
+            if (draw < cumulative) {
+                if (!(health->base_hp_support[base][hp / 64] >> (hp % 64) & 1)) abort();
+                *hitpoints = hp;
+                return;
+            }
+        }
+        abort();
+    }
+    int count = 0;
+    for (int hp = 1; hp <= gs_health_cap(base); hp++) count += (int)(health->base_hp_support[base][hp / 64] >> (hp % 64) & 1);
+    if (!count) abort();
+    int selected = (int)(uniform(rng) * count);
+    for (int hp = 1; hp <= gs_health_cap(base); hp++)
+        if (health->base_hp_support[base][hp / 64] >> (hp % 64) & 1)
+            if (selected-- == 0) { *hitpoints = hp; return; }
+    abort();
+}
+
+static void source_actor_without_history(const GsClient* client, uint32_t* rng, RiskfightActorStats* stats, int* hitpoints) {
+    for (int base = 99; base >= 10; base--) {
+        if (!riskfight_model_actor_stats(client->opponent_combat_level, base, stats)) continue;
+        int low = 1, high = gs_health_cap(base);
+        if (client->ratio >= 0) {
+            if (client->scale <= 1 || client->ratio > client->scale) abort();
+            low = client->ratio == 0 ? 0 : client->ratio == 1 ? 1 : (base * (client->ratio - 1) + client->scale - 2) / (client->scale - 1);
+            high = client->ratio == 0 ? 0 : client->ratio == client->scale ? gs_health_cap(base) : imin(base, (base * client->ratio - 1) / (client->scale - 1));
+        }
+        if (high < low) continue;
+        *hitpoints = low == high ? low : low + (int)(uniform(rng) * (high - low + 1));
+        return;
+    }
+    fprintf(stderr, "observed actor combat/bar have no compatible physical prior\n");
+    abort();
+}
+
+static int actor_profile_boost(int preferred, int base) {
+    int maximum = base + osrs_super_combat_boost_amount(base);
+    return preferred < maximum ? preferred : maximum;
+}
+
 /** Snapshot of the tape at the end of tick t. Hidden values come from the stated priors and the rng. */
-static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint32_t* rng, RiskfightSnapshot* out) {
+static int tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint32_t* rng, RiskfightSnapshot* out) {
     memset(out, 0, sizeof(*out));
     const TapeTick* tick = tape_tick(tape, t);
     HisKit kit = his_kit(tape);
@@ -202,7 +320,16 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
             him->inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
         }
     him->vengeance_sacks = HIS_SACKS;
-    him->hitpoints = sample_his_hitpoints(tape, tick, rng);
+    const GsInfer* source = tape->observer_series ? &tape->observer_series[t - tape->lo].inf : NULL;
+    if (source) {
+        if (!source->c.local_base_known) { fprintf(stderr, "source snapshot requires recorded local base skills\n"); abort(); }
+        const int* base = source->c.local_base;
+        out->actor[0] = (RiskfightActorStats){1, source->c.local_combat_level, base[0], base[1], base[2], base[3], base[4], base[5], base[6]};
+    }
+    if (source && source->health && source->health->has_started)
+        source_actor_snapshot(source->health, source->c.opponent_combat_level, source->c.ratio == 0, rng, &out->actor[1], &him->hitpoints);
+    else if (source) source_actor_without_history(&source->c, rng, &out->actor[1], &him->hitpoints);
+    else him->hitpoints = sample_his_hitpoints(tape, tick, rng);
 
     Locks lu = locks_after(tape, SIDE_US, t), lh = locks_after(tape, SIDE_HIM, t);
     RiskfightSideSnapshot* su = &out->side[0];
@@ -232,7 +359,7 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .recoil_damage_used = tick->recoil_used, .offensive_prayer = tick->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE,
         .overhead_prayer = overhead_of(tick->overhead), .x = 0, .y = 0,
         .interacting = tick->swing_us_tick >= t - ARRIVAL_WINDOW,
-        .seen_health_bar = osrs_health_bar_ratio(tick->hp, MAXED_BASE_HITPOINTS, OSRS_PLAYER_HEALTH_BAR_SCALE),
+        .seen_health_bar = osrs_health_bar_ratio(tick->hp, out->actor[0].present ? out->actor[0].hitpoints : MAXED_BASE_HITPOINTS, OSRS_PLAYER_HEALTH_BAR_SCALE),
         .seen_last_attack_ago = swing_ago(t, tick->swing_us_tick), .seen_last_attack_speed = tick->swing_us_speed,
     };
     out->side[1] = (RiskfightSideSnapshot){
@@ -246,7 +373,22 @@ static void tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uin
         .seen_health_bar = tick->bar_ratio,
         .seen_last_attack_ago = swing_ago(t, tick->swing_him_tick), .seen_last_attack_speed = tick->swing_him_speed,
     };
+    if (out->actor[1].present) {
+        const RiskfightActorStats* actor = &out->actor[1];
+        RiskfightSideSnapshot* side = &out->side[1];
+        side->attack = actor_profile_boost(g_his_boost, actor->attack);
+        side->strength = actor_profile_boost(g_his_boost, actor->strength);
+        int defence_boost = osrs_super_combat_boost_amount(actor->defence);
+        int brew_boost = osrs_brew_defence_boost_amount(actor->defence);
+        int defence_ceiling = actor->defence + (defence_boost > brew_boost ? defence_boost : brew_boost);
+        side->defence = g_ablation.his_defence < defence_ceiling ? g_ablation.his_defence : defence_ceiling;
+        int magic_ceiling = actor->magic + osrs_saturated_heart_magic_boost(actor->magic);
+        side->magic = HIS_MAGIC < magic_ceiling ? HIS_MAGIC : magic_ceiling;
+        side->prayer = HIS_PRAYER < actor->prayer ? HIS_PRAYER : actor->prayer;
+    }
     out->pid_holder = tick->pid == 'L' || tick->pid == 'l' ? 0 : tick->pid == 'O' || tick->pid == 'o' ? 1 : (int)(xorshift32(rng) & 1);
     out->seed = xorshift32(rng) | 1;
+    tape_pending_snapshot(tape, t, out);
+    return out->pending_known;
 }
 #endif

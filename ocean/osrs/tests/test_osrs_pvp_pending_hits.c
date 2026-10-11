@@ -28,20 +28,21 @@ static void assert_child_aborts(const char* label, void (*fn)(void)) {
     }
 }
 
-static void queue_test_hit(Player* attacker, Player* defender, int damage) {
-    queue_hit(123, 0, 1, attacker, defender, damage, ATTACK_STYLE_MAGIC,
+static void queue_test_hit(OsrsEnv* env, Player* attacker, Player* defender, int damage) {
+    queue_hit(env, 0, 1, attacker, defender, damage, ATTACK_STYLE_MAGIC,
         4, 0, damage > 0, 0, 0, 0, 0, 0);
 }
 
 static void test_pvp_queue_accepts_capacity(void) {
     printf("--- pvp queue accepts capacity ---\n");
 
+    OsrsEnv env = {.tick = 123};
     Player attacker = {0};
     Player defender = {0};
     defender.prayer = PRAYER_NONE;
 
     for (int i = 0; i < MAX_PENDING_HITS; i++)
-        queue_test_hit(&attacker, &defender, i + 1);
+        queue_test_hit(&env, &attacker, &defender, i + 1);
 
     ASSERT_INT_EQ("queue reaches capacity", attacker.num_pending_hits, MAX_PENDING_HITS);
     ASSERT_INT_EQ("first damage kept", attacker.pending_hits[0].damage, 1);
@@ -50,13 +51,14 @@ static void test_pvp_queue_accepts_capacity(void) {
 }
 
 static void child_pvp_queue_overflow(void) {
+    OsrsEnv env = {.tick = 123};
     Player attacker = {0};
     Player defender = {0};
     defender.prayer = PRAYER_NONE;
 
     for (int i = 0; i < MAX_PENDING_HITS; i++)
-        queue_test_hit(&attacker, &defender, i + 1);
-    queue_test_hit(&attacker, &defender, 99);
+        queue_test_hit(&env, &attacker, &defender, i + 1);
+    queue_test_hit(&env, &attacker, &defender, 99);
 }
 
 static void test_pvp_queue_overflow_aborts(void) {
@@ -68,14 +70,15 @@ static void test_pvp_queue_overflow_aborts(void) {
 static void test_pvp_remove_compacts_and_clears_tail(void) {
     printf("--- pvp remove compacts and clears tail ---\n");
 
+    OsrsEnv env = {.tick = 123};
     Player attacker = {0};
     Player defender = {0};
     defender.prayer = PRAYER_NONE;
-    queue_test_hit(&attacker, &defender, 3);
-    queue_test_hit(&attacker, &defender, 7);
-    queue_test_hit(&attacker, &defender, 11);
+    queue_test_hit(&env, &attacker, &defender, 3);
+    queue_test_hit(&env, &attacker, &defender, 7);
+    queue_test_hit(&env, &attacker, &defender, 11);
 
-    pvp_remove_pending_hit(&attacker, 1);
+    pvp_remove_pending_hit(&attacker, env.pending_hit_metadata[0], 1);
 
     ASSERT_INT_EQ("queue count after remove", attacker.num_pending_hits, 2);
     ASSERT_INT_EQ("first hit remains", attacker.pending_hits[0].damage, 3);

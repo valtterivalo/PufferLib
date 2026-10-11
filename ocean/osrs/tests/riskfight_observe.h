@@ -73,12 +73,24 @@ static int fight_style_index(FightStyle style) {
     }
 }
 
+static int observer_combat_level(const Player* player) {
+    int offensive = imax(player->base_attack + player->base_strength,
+        imax(3 * player->base_ranged / 2, 3 * player->base_magic / 2));
+    return (10 * (player->base_defence + player->base_hitpoints + player->base_prayer / 2) + 13 * offensive) / 40;
+}
+
 static void observer_client(const RiskfightState* s, const Observer* ob, int tick, GsClient* c) {
     const Player* us = &s->env.players[0];
     const Player* him = &s->env.players[1];
     memset(c, 0, sizeof(*c));
     c->hitpoints = us->current_hitpoints; c->attack = us->current_attack; c->strength = us->current_strength; c->defence = us->current_defence;
     c->ranged = us->current_ranged; c->magic = us->current_magic; c->prayer = us->current_prayer;
+    c->local_combat_level = observer_combat_level(us);
+    c->opponent_combat_level = observer_combat_level(him);
+    c->forecast_available = 1;
+    c->local_base_known = 1;
+    c->local_base[0] = us->base_hitpoints; c->local_base[1] = us->base_attack; c->local_base[2] = us->base_strength;
+    c->local_base[3] = us->base_defence; c->local_base[4] = us->base_ranged; c->local_base[5] = us->base_magic; c->local_base[6] = us->base_prayer;
     c->prayers = prayer_mask(us);
     c->spec_energy_varp = us->special_energy * 10;
     c->sa_attack = us->spec_armed;
@@ -203,7 +215,7 @@ static void observer_step(const RiskfightState* s, Observer* ob, int tick) {
     for (int i = 0; i < ob->hit_count; i++) {
         const ObservedHit* h = &ob->hits[i];
         observer_event(s, ob, tick);
-        gs_on_hitsplat(inf, tick, h->target, h->damage, h->damage > 0 ? HITSPLAT_DAMAGE : HITSPLAT_BLOCK, 1);
+        gs_on_hitsplat(inf, tick, h->target, h->damage, h->damage > 0 ? HITSPLAT_DAMAGE : HITSPLAT_BLOCK, 1, h->damage > 0);
         if (h->target == 1) {
             ob->bar_hit_tick = tick;
             ob->bar_ratio = osrs_health_bar_ratio(s->env.players[1].current_hitpoints, s->env.players[1].base_hitpoints, SCALE_BAR);
@@ -224,7 +236,7 @@ static void observer_step(const RiskfightState* s, Observer* ob, int tick) {
         int xp = ob->xp_tenths / 10;
         if (xp > ob->hp_xp) {
             observer_event(s, ob, tick);
-            gs_on_hitpoints_gain(inf, tick, xp - ob->hp_xp, GS_WIRE_COMBAT_LEVEL);
+            gs_on_hitpoints_gain(inf, tick, xp - ob->hp_xp, inf->c.opponent_combat_level);
             ob->hp_xp = xp;
         }
     }
@@ -285,6 +297,7 @@ static void observer_series_build(const char* wire_path, const WireIndex* index,
     static char line[1 << 16];
     static Observer ob;
     GsWire wire = {0};
+    observer_clear(&ob);
     memset(&ob, 0, sizeof(ob));
     gs_infer_init(&ob.inf);
     ob.bar_hit_tick = INT_MIN / 2;
@@ -302,10 +315,11 @@ static void observer_series_build(const char* wire_path, const WireIndex* index,
         if (applied != 'T') continue;
         int tick = atoi(strchr(line, ' ') + 1);
         if (ob.inf.c.ratio >= 0) ob.bar_ratio = ob.inf.c.ratio;
-        observer_after_tick(&ob, tick);
+        observer_rival_worn(&ob);
+        observer_stakes(&ob);
         if (tick < tape->lo || tick > tape->hi) continue;
         Observer* seed = &out[tick - tape->lo];
-        *seed = ob;
+        observer_assign(seed, &ob);
         seed->hp_xp = wire.hp_xp;
         seed->xp_tenths = wire.hp_xp * 10;
         seed->interacting[0] = ob.inf.c.local_interacting >= 0;
@@ -314,6 +328,9 @@ static void observer_series_build(const char* wire_path, const WireIndex* index,
         if (seed->inf.tracker_current >= 0) seed->inf.tracker_current = 1;
         if (seed->inf.timed >= 0) seed->inf.timed = 1;
     }
+    gs_wire_finish(&wire);
+    if (ferror(f)) { perror(wire_path); abort(); }
     fclose(f);
+    observer_clear(&ob);
 }
 #endif

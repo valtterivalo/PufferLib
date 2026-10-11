@@ -298,6 +298,13 @@ typedef struct {
 } PendingHit;
 
 typedef struct {
+    /* Zero preserves the ordinary queued raw roll. Imported final damage bypasses mitigation only. */
+    int damage_mode; /* 0 raw, 1 final, 2 uncertain final (sample before stepping) */
+    int damage_min, damage_max, accuracy_bp;
+    int smite_snapshot; /* 0 landing-time owner behavior, 1 inactive, 2 active */
+} PendingHitMetadata;
+
+typedef struct {
     int tick;
     int source;
     int target;
@@ -871,6 +878,7 @@ typedef struct {
     RewardShapingConfig shaping;
 
     OsrsPvpRuntime pvp_runtime;
+    PendingHitMetadata pending_hit_metadata[NUM_AGENTS][MAX_PENDING_HITS];
 
     const void* encounter_def;
     void* encounter_state;

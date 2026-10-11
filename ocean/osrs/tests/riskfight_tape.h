@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <ctype.h>
 #include "../encounters/encounter_riskfight.h"
 #include "riskfight_observer_state.h"
 
@@ -18,6 +20,8 @@ typedef struct {
     int swing_him_tick, swing_him_speed, swing_us_tick, swing_us_speed, recoil_evidence, bar_now_ratio, bar_now_scale;
     char pid, overhead[16];
     int piety, worn[TAPE_WORN], bag[TAPE_BAG];
+    /* 0 unavailable, 1 explicitly empty, 2 causal observer history. */
+    int pending_known;
 } TapeTick;
 
 typedef struct { int tick; char side; int anim; } TapeAnim;
@@ -55,7 +59,7 @@ static int g_thrown_only, g_vw_only, g_no_eat, g_plan_land, g_plan_last;
 static double g_plan_mean;
 static double g_cb_split[2][2];
 static double g_react_sim[4][2], g_react_rec[4][2];
-static double g_pc_specs[4], g_pc_n[4], g_pc_plan[4], g_pc_act[4], g_pc_land[4], g_pc_actland[4], g_pc_any[4], g_pc_chance[4], g_pc_dead[4];
+static double g_pc_specs[GS_CHOICE_COUNT], g_pc_n[GS_CHOICE_COUNT], g_pc_plan[GS_CHOICE_COUNT], g_pc_act[GS_CHOICE_COUNT], g_pc_land[GS_CHOICE_COUNT], g_pc_actland[GS_CHOICE_COUNT], g_pc_any[GS_CHOICE_COUNT], g_pc_chance[GS_CHOICE_COUNT], g_pc_dead[GS_CHOICE_COUNT];
 static double g_fm[4][12];
 static double g_dm_n[3], g_dm_lethal[3], g_dm_any[3], g_dm_dead[3], g_dm_ate[3], g_dm_sum[3];
 static double g_diag_n[4][4], g_diag_exp[4][4], g_diag_true[4][4];
@@ -95,27 +99,70 @@ static int tape_damage_on_him(const Tape* tape, int tick) {
     return total;
 }
 
+static void tape_invalid(const char* path, const char* line) {
+    fprintf(stderr, "invalid tape in %s: %s\n", path, line);
+    abort();
+}
+
+static int tape_nonnegative_int(const char** cursor, const char* path, const char* line) {
+    const char* p = *cursor;
+    while (isspace((unsigned char)*p)) p++;
+    if (!isdigit((unsigned char)*p)) tape_invalid(path, line);
+    errno = 0;
+    char* end;
+    long value = strtol(p, &end, 10);
+    if (errno == ERANGE || value > INT_MAX || (*end && !isspace((unsigned char)*end)))
+        tape_invalid(path, line);
+    *cursor = end;
+    return (int)value;
+}
+
+static void tape_line_end(const char* p, const char* path, const char* line) {
+    while (isspace((unsigned char)*p)) p++;
+    if (*p) tape_invalid(path, line);
+}
+
 static int tape_load(Tape* tape, const char* path) {
     FILE* f = fopen(path, "r");
-    assert(f);
+    if (!f) tape_invalid(path, "cannot open file");
     memset(tape, 0, sizeof(*tape));
     int lines = 0;
     char line[4096];
-    while (fgets(line, sizeof(line), f)) lines++;
+    while (fgets(line, sizeof(line), f)) {
+        if (lines == INT_MAX) tape_invalid(path, "too many lines");
+        lines++;
+    }
     rewind(f);
     tape->ticks = calloc(lines, sizeof(TapeTick));
     tape->anims = calloc(lines, sizeof(TapeAnim));
     tape->hits = calloc(lines, sizeof(TapeHit));
     tape->actions = calloc(lines, sizeof(TapeAction));
+    unsigned char* pending_seen = calloc(lines, 1);
+    if (!tape->ticks || !tape->anims || !tape->hits || !tape->actions || !pending_seen)
+        tape_invalid(path, "allocation failed");
+    int header_seen = 0;
     int tick_count = 0;
     while (fgets(line, sizeof(line), f)) {
         char kind[8];
-        int consumed;
-        sscanf(line, "%7s %n", kind, &consumed);
+        int consumed = 0;
+        if (sscanf(line, "%7s %n", kind, &consumed) != 1) continue;
         const char* rest = line + consumed;
         if (!strcmp(kind, "FIGHT")) {
-            int r = sscanf(rest, "%d %31s %63s %d %d", &tape->index, tape->session, tape->name, &tape->lo, &tape->hi);
-            assert(r == 5);
+            if (header_seen) tape_invalid(path, line);
+            const char* p = rest;
+            tape->index = tape_nonnegative_int(&p, path, line);
+            int session_end = 0, n = 0;
+            if (sscanf(p, " %31s%n %63s%n", tape->session, &session_end, tape->name, &n) != 2 ||
+                    !isspace((unsigned char)p[session_end]) || !isspace((unsigned char)p[n]))
+                tape_invalid(path, line);
+            p += n;
+            tape->lo = tape_nonnegative_int(&p, path, line);
+            tape->hi = tape_nonnegative_int(&p, path, line);
+            tape_line_end(p, path, line);
+            /* Every declared tick must fit the line-count-backed allocation. */
+            if (tape->hi < tape->lo || tape->hi - tape->lo >= lines)
+                tape_invalid(path, line);
+            header_seen = 1;
         } else if (!strcmp(kind, "KIT")) {
             char* p = (char*)rest;
             while (*p && *p != '\n') {
@@ -146,7 +193,22 @@ static int tape_load(Tape* tape, const char* path) {
             assert(r == 4);
             a->kind = !strcmp(name, "click") ? ACTION_CLICK : !strcmp(name, "attack") ? ACTION_ATTACK :
                 !strcmp(name, "spec") ? ACTION_SPEC : ACTION_VENGEANCE;
+        } else if (!strcmp(kind, "Q")) {
+            if (!header_seen) tape_invalid(path, line);
+            const char* p = rest;
+            int tick = tape_nonnegative_int(&p, path, line);
+            int source = tape_nonnegative_int(&p, path, line);
+            tape_line_end(p, path, line);
+            if (tick < tape->lo || tick > tape->hi || source > 2)
+                tape_invalid(path, line);
+            int offset = tick - tape->lo;
+            if (pending_seen[offset])
+                tape_invalid(path, line);
+            pending_seen[offset] = 1;
+            tape->ticks[offset].pending_known = source;
         } else if (!strcmp(kind, "T")) {
+            if (!header_seen || tick_count > tape->hi - tape->lo)
+                tape_invalid(path, line);
             TapeTick* t = &tape->ticks[tick_count++];
             int* ints[] = {&t->tick, &t->hp, &t->attack, &t->strength, &t->defence, &t->magic, &t->prayer,
                 &t->ux, &t->uy, &t->ox, &t->oy, &t->spec_us, &t->spec_phase_us, &t->veng_us, &t->veng_cooldown_us,
@@ -154,8 +216,11 @@ static int tape_load(Tape* tape, const char* path) {
                 &t->spec_him, &t->spec_phase_him, &t->veng_him, &t->veng_cooldown_him, &t->swing_him_tick,
                 &t->swing_him_speed, &t->swing_us_tick, &t->swing_us_speed, &t->recoil_evidence,
                 &t->bar_now_ratio, &t->bar_now_scale};
-            char* p = (char*)rest;
-            for (size_t i = 0; i < sizeof(ints) / sizeof(*ints); i++) *ints[i] = (int)strtol(p, &p, 10);
+            const char* tick_cursor = rest;
+            t->tick = tape_nonnegative_int(&tick_cursor, path, line);
+            if (t->tick != tape->lo + (tick_count - 1)) tape_invalid(path, line);
+            char* p = (char*)tick_cursor;
+            for (size_t i = 1; i < sizeof(ints) / sizeof(*ints); i++) *ints[i] = (int)strtol(p, &p, 10);
             while (*p == ' ') p++;
             t->pid = *p++;
             int n = 0;
@@ -167,11 +232,17 @@ static int tape_load(Tape* tape, const char* path) {
         }
     }
     fclose(f);
-    assert(tick_count == tape->hi - tape->lo + 1);
+    free(pending_seen);
+    if (!header_seen || tick_count != tape->hi - tape->lo + 1)
+        tape_invalid(path, "missing or incomplete tick rows");
     return tick_count;
 }
 
 static void tape_free(Tape* tape) {
+    if (tape->observer_series) {
+        for (int i = 0; i <= tape->hi - tape->lo; i++) observer_clear(&tape->observer_series[i]);
+        free(tape->observer_series);
+    }
     free(tape->hist_series); free(tape->his_flags);
     free(tape->ticks); free(tape->anims); free(tape->hits); free(tape->actions);
 }

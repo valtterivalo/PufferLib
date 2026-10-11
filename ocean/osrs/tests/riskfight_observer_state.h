@@ -19,4 +19,15 @@ typedef struct {
     GsStakes stakes;
 } Observer;
 
+static void observer_clear(Observer* observer) {
+    gs_infer_clear(&observer->inf);
+}
+
+static void observer_assign(Observer* out, const Observer* source) {
+    if (out == source) return;
+    observer_clear(out);
+    *out = *source;
+    if (out->inf.health) out->inf.health->references++;
+}
+
 #endif

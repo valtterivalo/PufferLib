@@ -18,7 +18,7 @@ static void reset(void) {
 }
 
 static void queue_damage(int source, int damage, AttackStyle style, int delay) {
-    queue_hit(env.tick, source, 1 - source,
+    queue_hit(&env, source, 1 - source,
         &env.players[source], &env.players[1 - source], damage,
         style, delay, 0, damage > 0, 0, 0, 0, 0, 0);
 }

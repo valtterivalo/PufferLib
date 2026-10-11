@@ -65,6 +65,12 @@ static void sim_init(Sim* sim) {
     riskfight_finalize_context((EncounterState*)&sim->state, (EncounterContext*)&sim->context);
 }
 
+static void sim_clear(Sim* sim) {
+    observer_clear(&sim->obs);
+    free(sim->ours.arena.base);
+    sim->ours.arena = (Arena){0};
+}
+
 static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
     Sim* sim = context;
     Outcome* out = sim->outcome;
@@ -190,6 +196,8 @@ static int consumption_visible(const RiskfightState* s, int agent) {
 static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const OppModel* model, const OursPolicy* policy,
     uint32_t seed, Outcome* out) {
     RiskfightState* s = &sim->state;
+    uint32_t pending_rng = osrs_lowbias32(seed ^ 0x70656e64u) | 1;
+    riskfight_sample_pending(s, &pending_rng);
     memset(out, 0, sizeof(*out));
     out->start_hp = s->env.players[1].current_hitpoints;
     out->first_eat = -1; out->our_death = -1; out->his_death = -1;
@@ -201,7 +209,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
     sim->seen_since_eat = 99;
     if (policy_rules(policy)) {
         assert(tape->observer_series);
-        sim->obs = ((const Observer*)tape->observer_series)[tick_base - tape->lo];
+        observer_assign(&sim->obs, &tape->observer_series[tick_base - tape->lo]);
         ours_reset(&sim->ours, seed ^ 0x9e3779b9u, policy->timing, policy->stakes, policy->truth);
         sim->ours.lookahead = policy->kind == OURS_LOOKAHEAD;
         observer_branch(&sim->state, &sim->obs);
@@ -283,7 +291,8 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         int step = sim->ours.played[i].step;
         if (step + OURS_HORIZON > k) continue;
         if (g_thrown_only && !thrown[i]) continue;
-        if (g_vw_only && sim->ours.played[i].choice != GS_CHOICE_VOIDWAKER) continue;
+        if (g_vw_only && sim->ours.played[i].choice != GS_CHOICE_VOIDWAKER &&
+            sim->ours.played[i].choice != GS_CHOICE_VOIDWAKER_BURST) continue;
         sim->spec_counted++;
         sim->spec_predicted += sim->ours.played[i].chance;
         sim->spec_realized += out->his_death >= step && out->his_death <= step + OURS_HORIZON;

@@ -26,39 +26,8 @@ static void test_initial_scale_and_purity(void) {
         assert(obs[RF_EQUIPPED_START + slot] * RF_OBSERVATION_ITEM_SCALE == state.env.players[0].equipped[slot]);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_RING] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
     assert(obs[RF_OPPONENT_START + GEAR_SLOT_AMMO] * RF_OBSERVATION_ITEM_SCALE == ITEM_NONE);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0);
 }
 
-static void test_opponent_vengeance_roundtrip(void) {
-    reset();
-    state.env.players[1].veng_active = 1;
-    state.env.players[1].veng_cooldown = 25;
-    float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 1);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.5f);
-    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
-    state.env.players[1].veng_active = 0;
-    state.env.players[1].veng_cooldown = 40;
-    riskfight_write_observation(&state, 0, obs);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 7] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 8] == 0.8f);
-}
-
-static void test_opponent_spec_and_timer_roundtrip(void) {
-    reset();
-    state.env.players[1].special_energy = 50;
-    state.env.players[1].attack_timer = 6;
-    float obs[RF_OBS_SIZE];
-    riskfight_write_observation(&state, 0, obs);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 9] == 0.5f);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 10] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 11] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 12] == 0);
-    assert(obs[RF_OPPONENT_START + NUM_GEAR_SLOTS + 13] == 0);
-    for (int i = 0; i < RF_OBS_SIZE; i++) assert(fabsf(obs[i]) <= 1);
-}
 
 static void test_unbounded_values_are_not_clipped(void) {
     reset();
@@ -112,7 +81,7 @@ static void received_hit(int damage, OsrsHitKind kind) {
     hit.kind = kind;
     hit.attack_type = ATTACK_STYLE_MELEE;
     hit.hit_success = damage > 0;
-    apply_damage(&state.env, 0, 1, &hit);
+    apply_damage(&state.env, 0, 1, &hit, &(PendingHitMetadata){0});
     riskfight_observe_visible(&state, 0, 0);
     assert(state.visible[0].health_bar == osrs_health_bar_ratio(
         state.env.players[1].current_hitpoints, 99, OSRS_PLAYER_HEALTH_BAR_SCALE));
@@ -229,8 +198,6 @@ int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
     test_initial_scale_and_purity();
-    test_opponent_vengeance_roundtrip();
-    test_opponent_spec_and_timer_roundtrip();
     test_opponent_consume_timer_inference();
     test_unbounded_values_are_not_clipped();
     test_event_and_position_roundtrip();

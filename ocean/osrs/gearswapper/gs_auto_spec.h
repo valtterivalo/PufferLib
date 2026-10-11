@@ -4,14 +4,14 @@
 
 /* AutoSpec.java and Appetite.java: the knockout chance of a plan against an opponent that eats to a hitpoints level he wants. */
 enum { GS_MEAL_GAP = 3, GS_REACTION_TICKS = 7, GS_REACTIONS = GS_REACTION_TICKS + 3, GS_MEAL_FOODS = 3 };
-static const int GS_MEAL_HEALS[GS_MEAL_FOODS] = {22, 18, 16};
-static const GsConsumable GS_MEAL_KIND[GS_MEAL_FOODS] = {GS_HARD_FOOD, GS_FAST_FOOD, GS_POTION};
+static const int GS_MEAL_HEALS[GS_MEAL_FOODS] = {22, 16, 18};
+static const GsConsumable GS_MEAL_KIND[GS_MEAL_FOODS] = {GS_HARD_FOOD, GS_POTION, GS_FAST_FOOD};
 #ifdef GS_HP_BELIEF
 enum { GS_SAFE_LOW = 50, GS_SAFE_HIGH = 85 };
 static const int GS_MEAL_CAPS[GS_MEAL_FOODS] = {121, 99, 115};
 #else
 enum { GS_SAFE_LOW = 44, GS_SAFE_HIGH = 87 };
-static const int GS_MEAL_CAPS[GS_MEAL_FOODS] = {99, 99, 115};
+static const int GS_MEAL_CAPS[GS_MEAL_FOODS] = {99, 115, 99};
 static const double GS_FIRST_MEAL[GS_REACTION_TICKS + 2] = {0.481, 0.250, 0.130, 0.067, 0.035, 0.018, 0.009, 0.005, 0.005};
 static const double GS_ANTICIPATES = 0.066, GS_HIDES = 0.687;
 #endif
@@ -67,14 +67,14 @@ static int gs_reactions(int before_our_hit, GsReaction* out) {
 #endif
 
 typedef enum { GS_ORIGIN_OURS, GS_ORIGIN_REFLECTED } GsOrigin;
-typedef struct { int lands; const double* damage; int damages; GsOrigin origin; } GsSpecHit;
+typedef struct { int lands; const double* damage; int damages; GsOrigin origin; int first_positive_roll; double positive_each; } GsSpecHit;
 
 static GsSpecHit gs_spec_hit_of(Arena* a, int lands, int least, int most, double accuracy) {
     double* damage = arena_alloc(a, (size_t)(most + 1) * sizeof(double));
     memset(damage, 0, (size_t)(most + 1) * sizeof(double));
     damage[0] = 1 - accuracy;
     for (int roll = least; roll <= most; roll++) damage[roll] += accuracy / (most - least + 1);
-    return (GsSpecHit){lands, damage, most + 1, GS_ORIGIN_OURS};
+    return (GsSpecHit){lands, damage, most + 1, GS_ORIGIN_OURS, imax(1, least), most > 0 ? accuracy / (most - least + 1) : 0};
 }
 
 typedef struct { int lands, least, most; double accuracy; int attack; } GsIncoming;
@@ -98,7 +98,7 @@ static GsSpecHit gs_echo(Arena* a, const GsIncoming* incoming, GsEcho echo, int 
         int reflected = (echo == GS_ECHO_VENGEANCE ? gs_vengeance_return(dealt) : 0) + (dealt > 0 ? imin(recoil_charges, dealt / 10 + 1) : 0);
         damage[reflected] += incoming->accuracy / (incoming->most - incoming->least + 1);
     }
-    return (GsSpecHit){incoming->lands + (pid == GS_PID_LOCAL ? 0 : 1), damage, most + 1, GS_ORIGIN_REFLECTED};
+    return (GsSpecHit){incoming->lands + (pid == GS_PID_LOCAL ? 0 : 1), damage, most + 1, GS_ORIGIN_REFLECTED, 1, 0};
 }
 
 typedef enum { GS_REBOUND_UP, GS_REBOUND_CASTABLE, GS_REBOUND_SPENT } GsReboundKind;
@@ -119,6 +119,14 @@ static GsHealth gs_health_healing(GsHealth health, int tick, int amount, int cap
     return health;
 }
 
+typedef struct { int hard, potion, fast; } GsTargetReady;
+typedef struct { GsTargetReady ready; double* hp; int levels; } GsTargetBranch;
+typedef struct {
+    int has_history, has_belief, base_hp;
+    GsTargetBranch* history; int history_count;
+    GsTargetBranch* belief; int belief_count;
+} GsTarget;
+
 typedef struct {
     GsHealthRange hitpoints;
     const GsSpecHit* underway; int underway_count;
@@ -131,6 +139,7 @@ typedef struct {
     GsWarning warning;
     GsRebound rebound;
     GsHealth local;
+    GsTarget target;
 } GsSpecSituation;
 
 static double jdk_sum(const double* values, int count) {
@@ -399,11 +408,78 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
 }
 #else
 typedef enum { GS_FLIGHT_WAITING, GS_FLIGHT_COMMITTED, GS_FLIGHT_RESOLVED, GS_FLIGHT_CANCELLED } GsFlight;
+typedef struct { const GsTargetReady* values; int count; } GsTargetClocks;
+
+static int gs_ready_compare(GsTargetReady a, GsTargetReady b) {
+    if (a.hard != b.hard) return a.hard < b.hard ? -1 : 1;
+    if (a.potion != b.potion) return a.potion < b.potion ? -1 : 1;
+    return a.fast == b.fast ? 0 : a.fast < b.fast ? -1 : 1;
+}
+
+static void gs_clocks_insert(GsTargetReady* values, int* count, GsTargetReady ready) {
+    int at = 0;
+    while (at < *count && gs_ready_compare(values[at], ready) < 0) at++;
+    if (at < *count && gs_ready_compare(values[at], ready) == 0) return;
+    memmove(values + at + 1, values + at, (size_t)(*count - at) * sizeof(*values));
+    values[at] = ready;
+    (*count)++;
+}
+
+static GsTargetClocks gs_clocks_at(Arena* arena, GsTargetClocks clocks, int tick) {
+    int changes = 0;
+    for (int i = 0; i < clocks.count; i++) {
+        GsTargetReady r = clocks.values[i];
+        changes |= r.hard < tick || r.potion < tick || r.fast < tick;
+    }
+    if (!changes) return clocks;
+    GsTargetReady* values = arena_alloc(arena, (size_t)clocks.count * sizeof(*values));
+    int count = 0;
+    for (int i = 0; i < clocks.count; i++) {
+        GsTargetReady r = clocks.values[i];
+        gs_clocks_insert(values, &count, (GsTargetReady){imax(r.hard, tick), imax(r.potion, tick), imax(r.fast, tick)});
+    }
+    return (GsTargetClocks){values, count};
+}
+
+static GsTargetClocks gs_clocks_consume(Arena* arena, GsTargetClocks clocks, int food, int tick) {
+    int available = 0;
+    for (int i = 0; i < clocks.count; i++) {
+        GsTargetReady r = clocks.values[i];
+        available += (food == 0 ? r.hard : food == 1 ? r.potion : r.fast) <= tick;
+    }
+    if (!available) return (GsTargetClocks){NULL, 0};
+    GsTargetReady* values = arena_alloc(arena, (size_t)available * sizeof(*values));
+    int count = 0;
+    for (int i = 0; i < clocks.count; i++) {
+        GsTargetReady r = clocks.values[i];
+        if ((food == 0 ? r.hard : food == 1 ? r.potion : r.fast) > tick) continue;
+        r.hard = imax(r.hard, tick + 3);
+        r.potion = imax(r.potion, food == 0 ? tick : tick + 3);
+        r.fast = imax(r.fast, food == 2 ? tick + 3 : tick);
+        gs_clocks_insert(values, &count, r);
+    }
+    return (GsTargetClocks){values, count};
+}
+
+static int gs_clocks_hard(GsTargetClocks clocks) {
+    int hard = INT_MAX;
+    for (int i = 0; i < clocks.count; i++) hard = imin(hard, clocks.values[i].hard);
+    return hard;
+}
+
+static int gs_clocks_equal(GsTargetClocks a, GsTargetClocks b) {
+    if (a.count != b.count) return 0;
+    for (int i = 0; i < a.count; i++) if (gs_ready_compare(a.values[i], b.values[i]) != 0) return 0;
+    return 1;
+}
+
 typedef struct {
     int hp, delay;
     GsFlight flight;
     GsVengeance vengeance;
     int returned, returns_at, echoed, echoes_at;
+    GsTargetClocks clocks;
+    int pending_hard;
 } GsJointHealth;
 typedef struct { GsJointHealth key; double* targets; unsigned hash; int next; } GsJointEntry;
 typedef struct { GsVec entries; int* buckets; int capacity, length; } GsJointStates;
@@ -414,16 +490,35 @@ static GsJointStates gs_joint_states(Arena* arena, int length) {
     return states;
 }
 
+static GsJointHealth gs_joint_key(GsJointHealth key) {
+    if ((key.flight == GS_FLIGHT_RESOLVED || key.flight == GS_FLIGHT_CANCELLED) && key.vengeance != GS_VENGEANCE_UP && !key.returned) key.hp = 1;
+    if (key.flight != GS_FLIGHT_WAITING && key.flight != GS_FLIGHT_COMMITTED) key.delay = 0;
+    if (!key.echoed) key.echoes_at = 0;
+    return key;
+}
+
+static int gs_joint_equal(GsJointHealth a, GsJointHealth b) {
+    return a.hp == b.hp && a.delay == b.delay && a.flight == b.flight && a.vengeance == b.vengeance
+        && a.returned == b.returned && a.returns_at == b.returns_at && a.echoed == b.echoed && a.echoes_at == b.echoes_at
+        && a.pending_hard == b.pending_hard && gs_clocks_equal(a.clocks, b.clocks);
+}
+
 static double* gs_joint_target(GsJointStates* states, GsJointHealth key) {
+    key = gs_joint_key(key);
     unsigned hash = 2166136261u;
-    const int fields[] = {key.hp, key.delay, key.flight, key.vengeance, key.returned, key.returns_at, key.echoed, key.echoes_at};
-    for (int i = 0; i < 8; i++) hash = (hash ^ (unsigned)fields[i]) * 16777619u;
+    const int fields[] = {key.hp, key.delay, key.flight, key.vengeance, key.returned, key.returns_at, key.echoed, key.echoes_at, key.pending_hard};
+    for (int i = 0; i < 9; i++) hash = (hash ^ (unsigned)fields[i]) * 16777619u;
+    for (int i = 0; i < key.clocks.count; i++) {
+        GsTargetReady r = key.clocks.values[i];
+        hash = (hash ^ (unsigned)r.hard) * 16777619u;
+        hash = (hash ^ (unsigned)r.potion) * 16777619u;
+        hash = (hash ^ (unsigned)r.fast) * 16777619u;
+    }
     int bucket = hash & (states->capacity - 1);
     for (int index = states->buckets[bucket]; index; index = VEC_AT(GsJointEntry, states->entries, index - 1).next) {
         GsJointEntry* entry = &VEC_AT(GsJointEntry, states->entries, index - 1);
         GsJointHealth k = entry->key;
-        if (entry->hash == hash && k.hp == key.hp && k.delay == key.delay && k.flight == key.flight && k.vengeance == key.vengeance
-                && k.returned == key.returned && k.returns_at == key.returns_at && k.echoed == key.echoed && k.echoes_at == key.echoes_at) return entry->targets;
+        if (entry->hash == hash && gs_joint_equal(k, key)) return entry->targets;
     }
     if (states->entries.count * 4 >= states->capacity * 3) {
         states->capacity *= 2;
@@ -444,23 +539,126 @@ static double* gs_joint_target(GsJointStates* states, GsJointHealth key) {
     return entry->targets;
 }
 
+static void gs_joint_mass(GsJointStates* states, GsJointHealth key, int hp, double mass) {
+    if (mass != 0) gs_joint_target(states, key)[hp] += mass;
+}
+
+static void gs_joint_prune(GsJointStates* states) {
+    int count = 0;
+    for (int i = 0; i < states->entries.count; i++) {
+        GsJointEntry entry = VEC_AT(GsJointEntry, states->entries, i);
+        int live = 0;
+        for (int hp = 0; hp < states->length; hp++) if (entry.targets[hp] != 0) { live = 1; break; }
+        if (live) VEC_AT(GsJointEntry, states->entries, count++) = entry;
+    }
+    if (count == states->entries.count) return;
+    states->entries.count = count;
+    memset(states->buckets, 0, (size_t)states->capacity * sizeof(int));
+    for (int i = 0; i < count; i++) {
+        GsJointEntry* entry = &VEC_AT(GsJointEntry, states->entries, i);
+        int bucket = entry->hash & (states->capacity - 1);
+        entry->next = states->buckets[bucket];
+        states->buckets[bucket] = i + 1;
+    }
+}
+
+typedef struct { GsJointHealth key; double weight; } GsJointArrival;
+
 static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpecHit* hits, int hit_count,
         const GsEating* eatings, int eating_count, GsEcho echo, int anchor, int through) {
     int length = imax(s->hitpoints.max, GS_OVERHEALED_HP) + 1;
-    double* initial = hp_uniform(arena, imax(1, s->hitpoints.low), s->hitpoints.high, length);
-    for (int u = 0; u < s->warning.unseen_count; u++) if (s->warning.unseen[u] < anchor) gs_hp_hiding(arena, initial, length);
+    double* initial = NULL;
+    if (!s->target.has_belief) {
+        if (s->target.has_history) {
+            initial = arena_alloc(arena, (size_t)length * sizeof(double));
+            memset(initial, 0, (size_t)length * sizeof(double));
+            int supported = 0;
+            for (int b = 0; b < s->target.history_count; b++) {
+                GsTargetBranch branch = s->target.history[b];
+                for (int hp = 1; hp < branch.levels; hp++) if (branch.hp[hp] && !initial[hp]) { initial[hp] = 1; supported++; }
+            }
+            for (int hp = 1; hp < length; hp++) initial[hp] /= supported;
+        } else {
+            initial = hp_uniform(arena, imax(1, s->hitpoints.low), s->hitpoints.high, length);
+            for (int u = 0; u < s->warning.unseen_count; u++) if (s->warning.unseen[u] < anchor) gs_hp_hiding(arena, initial, length);
+        }
+    }
     const GsIncoming* his = &s->incoming;
-    GsSpecHit incoming = s->has_incoming ? gs_spec_hit_of(arena, his->lands, his->least, his->most, his->accuracy) : (GsSpecHit){0};
+    int own_hit_max = 0, last_return = INT_MIN;
+    for (int h = 0; h < hit_count; h++) {
+        GsSpecHit hit = hits[h];
+        if (hit.origin != GS_ORIGIN_OURS) continue;
+        own_hit_max = imax(own_hit_max, hit.damages - 1);
+        if (hit.damages > 1 && hit.lands <= through)
+            last_return = imax(last_return, hit.lands + (s->pid == GS_PID_LOCAL ? 1 : 0));
+    }
+    if (last_return == INT_MIN) last_return = through;
+    int return_max = s->vengeance == GS_VENGEANCE_UP && own_hit_max > 0 ? imax(1, own_hit_max * 3 / 4) : 0;
+    int survives = s->local.hitpoints > (s->has_incoming ? his->most : 0) + return_max
+        && (s->vengeance != GS_VENGEANCE_UP || last_return <= through);
+    static const double zero_roll[] = {1};
+    GsSpecHit incoming = {0, zero_roll, 1, GS_ORIGIN_OURS, 1, 0};
+    if (!(survives && echo == GS_ECHO_RECOIL && s->recoil_charges == 0) && s->has_incoming)
+        incoming = gs_spec_hit_of(arena, his->lands, his->least, his->most, his->accuracy);
+    double* prefix = !survives && s->vengeance == GS_VENGEANCE_UP ? arena_alloc(arena, (size_t)(length + 1) * sizeof(double)) : NULL;
+    GsJointArrival* arrivals = s->has_incoming ? arena_alloc(arena, (size_t)incoming.damages * sizeof(*arrivals)) : NULL;
     double totals[4] = {0};
     GsJointStates states = gs_joint_states(arena, length);
-    GsJointHealth start = {s->local.hitpoints, 0, !s->has_incoming ? GS_FLIGHT_RESOLVED : his->attack != GS_NONE ? GS_FLIGHT_WAITING : GS_FLIGHT_COMMITTED, s->vengeance, 0, 0, 0, 0};
-    memcpy(gs_joint_target(&states, start), initial, (size_t)length * sizeof(double));
+    GsJointHealth start = {.hp = s->local.hitpoints,
+        .flight = !s->has_incoming ? GS_FLIGHT_RESOLVED : his->attack != GS_NONE ? GS_FLIGHT_WAITING : GS_FLIGHT_COMMITTED,
+        .vengeance = s->vengeance, .pending_hard = GS_NONE};
+    if (s->target.has_belief) {
+        for (int b = 0; b < s->target.belief_count; b++) {
+            GsTargetBranch branch = s->target.belief[b];
+            start.clocks = (GsTargetClocks){&s->target.belief[b].ready, 1};
+            for (int hp = 1; hp < branch.levels; hp++) gs_joint_mass(&states, start, hp, branch.hp[hp]);
+        }
+    } else if (s->target.has_history) {
+        GsTargetReady* scratch = arena_alloc(arena, (size_t)s->target.history_count * sizeof(*scratch));
+        for (int hp = 1; hp < length; hp++) {
+            if (!initial[hp]) continue;
+            int count = 0;
+            for (int b = 0; b < s->target.history_count; b++) {
+                GsTargetBranch branch = s->target.history[b];
+                if (hp < branch.levels && branch.hp[hp]) gs_clocks_insert(scratch, &count, branch.ready);
+            }
+            GsTargetClocks clocks = {scratch, count};
+            int found = 0;
+            for (int i = 0; i < states.entries.count; i++) {
+                GsTargetClocks existing = VEC_AT(GsJointEntry, states.entries, i).key.clocks;
+                if (gs_clocks_equal(existing, clocks)) { clocks = existing; found = 1; break; }
+            }
+            if (!found) {
+                GsTargetReady* values = arena_alloc(arena, (size_t)count * sizeof(*values));
+                memcpy(values, scratch, (size_t)count * sizeof(*values));
+                clocks.values = values;
+            }
+            start.clocks = clocks;
+            gs_joint_target(&states, start)[hp] += initial[hp];
+        }
+    } else {
+        GsTargetReady* ready = arena_alloc(arena, sizeof(*ready));
+        *ready = (GsTargetReady){s->hard_food_ready, GS_NONE, GS_NONE};
+        start.clocks = (GsTargetClocks){ready, 1};
+        memcpy(gs_joint_target(&states, start), initial, (size_t)length * sizeof(double));
+    }
     int first = s->tick + 1;
     for (int i = 0; i < hit_count; i++) first = imin(first, hits[i].lands);
     for (int i = 0; i < eating_count; i++) first = imin(first, eatings[i].tick);
     if (s->has_incoming) first = imin(first, his->attack == GS_NONE ? his->lands : his->attack);
     for (int i = 0; i < s->local.heal_count; i++) first = imin(first, s->local.heals[i].tick);
     for (int tick = first; tick <= through; tick++) {
+        int scheduled = 0;
+        for (int e = 0; e < eating_count; e++) scheduled |= eatings[e].tick >= tick;
+        GsJointStates normalized = gs_joint_states(arena, length);
+        for (int i = 0; i < states.entries.count; i++) {
+            GsJointEntry entry = VEC_AT(GsJointEntry, states.entries, i);
+            GsJointHealth key = entry.key;
+            key.clocks = scheduled || key.pending_hard != GS_NONE ? gs_clocks_at(arena, key.clocks, tick) : (GsTargetClocks){NULL, 0};
+            double* out = gs_joint_target(&normalized, key);
+            for (int hp = 0; hp < length; hp++) out[hp] += entry.targets[hp];
+        }
+        states = normalized;
         int commits = 0;
         if (s->has_incoming && his->attack != GS_NONE)
             for (int i = 0; i < states.entries.count; i++) {
@@ -483,7 +681,7 @@ static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpec
             states = next;
         }
         for (int phase = 0; phase < 3; phase++) {
-            if (phase == (s->pid == GS_PID_LOCAL ? 0 : 2)) {
+            if (!survives && phase == (s->pid == GS_PID_LOCAL ? 0 : 2)) {
                 for (int h = 0; h < s->local.heal_count; h++) {
                     GsSpecHeal heal = s->local.heals[h];
                     if (heal.tick != tick) continue;
@@ -499,39 +697,64 @@ static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpec
                 }
             }
             if (phase == (s->pid == GS_PID_LOCAL ? 2 : 0)) {
-                for (int e = 0; e < eating_count; e++) {
-                    GsEating eating = eatings[e];
+                int retries = 0;
+                for (int i = 0; i < states.entries.count; i++) {
+                    int pending = VEC_AT(GsJointEntry, states.entries, i).key.pending_hard;
+                    retries |= pending != GS_NONE && pending <= tick;
+                }
+                for (int e = 0; e < eating_count + retries; e++) {
+                    int retry = e == eating_count;
+                    GsEating eating = retry ? (GsEating){tick, 0, 1} : eatings[e];
                     if (eating.tick != tick) continue;
                     GsJointStates next = gs_joint_states(arena, length);
                     for (int i = 0; i < states.entries.count; i++) {
                         GsJointEntry entry = VEC_AT(GsJointEntry, states.entries, i);
-                        double* portions = arena_alloc(arena, (size_t)(eating.food_count + 1) * length * sizeof(double));
-                        memset(portions, 0, (size_t)(eating.food_count + 1) * length * sizeof(double));
-                        portions[0] = entry.targets[0];
+                        GsJointHealth key = entry.key;
+                        if (retry && (key.pending_hard == GS_NONE || key.pending_hard > tick)) {
+                            double* out = gs_joint_target(&next, key);
+                            for (int hp = 0; hp < length; hp++) out[hp] += entry.targets[hp];
+                            continue;
+                        }
+                        gs_joint_mass(&next, key, 0, entry.targets[0]);
+                        int pending = key.pending_hard;
+                        if (eating.first_food == 0 && eating.food_count > 0) {
+                            int hard = gs_clocks_hard(key.clocks);
+                            pending = hard <= tick ? GS_NONE : hard;
+                        }
+                        GsJointHealth refused = key;
+                        refused.pending_hard = pending;
+                        GsJointHealth eaten[GS_MEAL_FOODS];
+                        int available[GS_MEAL_FOODS], count = 0;
+                        GsTargetClocks clocks = key.clocks;
+                        int delay = key.delay;
+                        for (int food = eating.first_food; food < eating.first_food + eating.food_count; food++) {
+                            GsTargetClocks consumed = gs_clocks_consume(arena, clocks, food, tick);
+                            if (!consumed.count) continue;
+                            clocks = consumed;
+                            if (tick > s->tick && key.flight == GS_FLIGHT_WAITING && tick < his->attack + delay)
+                                delay += food == 0 ? 3 : food == 2 ? 2 : 0;
+                            available[count] = food;
+                            eaten[count] = key;
+                            eaten[count].delay = delay;
+                            eaten[count].clocks = clocks;
+                            eaten[count].pending_hard = pending == GS_NONE ? GS_NONE : gs_clocks_hard(clocks);
+                            count++;
+                        }
+                        int base = s->target.has_history ? s->target.base_hp : 99;
                         for (int hp = 1; hp < length; hp++) {
                             double mass = entry.targets[hp];
                             if (mass == 0) continue;
                             int level = hp;
                             double wanted = gs_wants(level);
-                            portions[level] += mass * (1 - wanted);
-                            for (int food = 0; food < eating.food_count; food++) {
-                                int f = eating.first_food + food;
-                                level = imax(level, imin(GS_MEAL_CAPS[f], level + GS_MEAL_HEALS[f]));
-                                double after = food + 1 < eating.food_count ? gs_wants(level) : 0;
-                                portions[(food + 1) * length + level] += mass * (wanted - after);
+                            gs_joint_mass(&next, refused, level, mass * (1 - wanted));
+                            for (int f = 0; f < count; f++) {
+                                int food = available[f], heal = food == 1 ? base * 15 / 100 + 2 : GS_MEAL_HEALS[food];
+                                level = imax(level, imin(food == 1 ? base + heal : base, level + heal));
+                                double after = f + 1 < count ? gs_wants(level) : 0;
+                                gs_joint_mass(&next, eaten[f], level, mass * (wanted - after));
                                 wanted = after;
                             }
-                        }
-                        int consumed[GS_CONSUMABLES] = {0};
-                        for (int count = 0; count <= eating.food_count; count++) {
-                            if (count) consumed[GS_MEAL_KIND[eating.first_food + count - 1]] = 1;
-                            double* portion = portions + count * length;
-                            if (jdk_sum(portion, length) == 0) continue;
-                            GsJointHealth key = entry.key;
-                            if (count && tick > s->tick && key.flight == GS_FLIGHT_WAITING && tick < his->attack + key.delay)
-                                key.delay += consumption_delay(consumption_of(consumed[GS_POTION], consumed[GS_FAST_FOOD], consumed[GS_HARD_FOOD]));
-                            double* out = gs_joint_target(&next, key);
-                            for (int hp = 0; hp < length; hp++) out[hp] += portion[hp];
+                            gs_joint_mass(&next, count ? eaten[count - 1] : refused, level, mass * wanted);
                         }
                     }
                     states = next;
@@ -562,37 +785,67 @@ static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpec
                         double* tail = arena_alloc(arena, (size_t)hit.damages * sizeof(double));
                         double remaining = 0;
                         for (int roll = hit.damages - 1; roll >= 1; roll--) { remaining += hit.damage[roll]; tail[roll] = remaining; }
+                        int at = hit.lands + (s->pid == GS_PID_LOCAL ? 1 : 0);
+                        int can_rescue = 0;
+                        if (s->pid == GS_PID_LOCAL)
+                            for (int h = 0; h < s->local.heal_count; h++) can_rescue |= s->local.heals[h].tick == at;
                         for (int i = 0; i < states.entries.count; i++) {
                             GsJointEntry entry = VEC_AT(GsJointEntry, states.entries, i);
                             GsJointHealth key = entry.key;
                             double* unchanged = gs_joint_target(&next, key);
                             unchanged[0] += entry.targets[0];
-                            if (hit.origin != GS_ORIGIN_OURS || key.vengeance != GS_VENGEANCE_UP) {
+                            if (survives || hit.origin != GS_ORIGIN_OURS || key.vengeance != GS_VENGEANCE_UP) {
                                 for (int hp = 1; hp < length; hp++) {
                                     if (entry.targets[hp] == 0) continue;
                                     for (int roll = 0; roll < hit.damages; roll++) unchanged[imax(0, hp - roll)] += entry.targets[hp] * hit.damage[roll];
                                 }
                                 continue;
                             }
-                            for (int hp = 1; hp < length; hp++) unchanged[hp] += entry.targets[hp] * hit.damage[0];
-                            for (int dealt = 1; dealt < imin(hit.damages, length); dealt++) {
+                            int highest = length - 1;
+                            while (highest > 0 && entry.targets[highest] == 0) highest--;
+                            for (int hp = 1; hp <= highest; hp++) unchanged[hp] += entry.targets[hp] * hit.damage[0];
+                            if ((key.flight == GS_FLIGHT_RESOLVED || key.flight == GS_FLIGHT_CANCELLED) && at <= through && !can_rescue) {
+                                int lethal = key.hp == 1 ? 1 : (4 * key.hp + 2) / 3;
+                                if (lethal < hit.damages) {
+                                    double endangered = 0;
+                                    for (int hp = lethal; hp <= highest; hp++) endangered += entry.targets[hp];
+                                    totals[1] += tail[lethal] * endangered;
+                                }
+                                if (lethal > 1) {
+                                    GsJointHealth changed = key;
+                                    changed.hp = 1; changed.vengeance = GS_VENGEANCE_DOWN;
+                                    changed.returned = 0; changed.returns_at = 0;
+                                    double* out = gs_joint_target(&next, changed);
+                                    int most = imin(lethal - 1, hit.damages - 1);
+                                    for (int dealt = 1; dealt <= most && dealt <= highest; dealt++) out[0] += entry.targets[dealt] * tail[dealt];
+                                    prefix[1] = 0;
+                                    for (int hp = 1; hp <= highest; hp++) prefix[hp + 1] = prefix[hp] + entry.targets[hp];
+                                    for (int hp = 1; hp <= highest; hp++)
+                                        out[hp] += hit.positive_each * (prefix[imin(highest + 1, hp + most + 1)]
+                                            - prefix[imin(highest + 1, hp + imin(most + 1, hit.first_positive_roll))]);
+                                }
+                                continue;
+                            }
+                            for (int dealt = 1; dealt < hit.damages && dealt <= highest; dealt++) {
+                                if (hit.damage[dealt] == 0 && entry.targets[dealt] * tail[dealt] == 0) continue;
                                 int returned = gs_vengeance_return(dealt);
-                                int at = hit.lands + (s->pid == GS_PID_LOCAL ? 1 : 0);
                                 GsJointHealth changed = key;
                                 changed.vengeance = GS_VENGEANCE_DOWN;
-                                if (at == hit.lands) {
+                                if (at == hit.lands || ((key.flight == GS_FLIGHT_RESOLVED || key.flight == GS_FLIGHT_CANCELLED)
+                                        && at <= through && returned < key.hp)) {
                                     if (returned >= key.hp) {
                                         totals[1] += entry.targets[dealt] * tail[dealt];
-                                        for (int hp = dealt + 1; hp < length; hp++) totals[1] += entry.targets[hp] * hit.damage[dealt];
+                                        for (int hp = dealt + 1; hp <= highest; hp++) totals[1] += entry.targets[hp] * hit.damage[dealt];
                                         continue;
                                     }
                                     changed.hp -= returned; changed.returned = 0; changed.returns_at = 0;
                                 } else { changed.returned = returned; changed.returns_at = at; }
                                 double* out = gs_joint_target(&next, changed);
                                 out[0] += entry.targets[dealt] * tail[dealt];
-                                for (int hp = dealt + 1; hp < length; hp++) out[hp - dealt] += entry.targets[hp] * hit.damage[dealt];
+                                for (int hp = dealt + 1; hp <= highest; hp++) out[hp - dealt] += entry.targets[hp] * hit.damage[dealt];
                             }
                         }
+                        gs_joint_prune(&next);
                         states = next;
                     }
                 } else if (s->has_incoming) {
@@ -611,16 +864,42 @@ static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpec
                             for (int hp = 0; hp < length; hp++) out[hp] += entry.targets[hp];
                             continue;
                         }
+                        double mass = jdk_sum(entry.targets, length);
+                        int highest = length - 1;
+                        while (highest > 0 && entry.targets[highest] == 0) highest--;
+                        int lowest = 0;
+                        while (lowest < highest && entry.targets[lowest] == 0) lowest++;
+                        int arrival_count = 0;
                         for (int roll = 0; roll < incoming.damages; roll++) {
                             double weight = incoming.damage[roll];
                             if (weight == 0) continue;
-                            if (roll >= key.hp) { totals[2] += weight * jdk_sum(entry.targets, length); continue; }
+                            if (roll >= key.hp) { totals[2] += weight * mass; continue; }
+                            int remaining_hp = survives ? key.hp : key.hp - roll;
+                            if (key.vengeance != GS_VENGEANCE_UP && key.returned >= remaining_hp && key.returns_at <= through && s->local.heal_count == 0) {
+                                totals[1] += weight * mass;
+                                continue;
+                            }
+                            int risk = key.vengeance == GS_VENGEANCE_UP ? return_max : key.returned;
+                            int survives_return = remaining_hp > risk && (key.vengeance == GS_VENGEANCE_UP ? last_return <= through : key.returns_at <= through);
                             GsJointHealth changed = key;
-                            changed.hp -= roll; changed.flight = GS_FLIGHT_RESOLVED;
+                            changed.hp = survives_return ? 1 : remaining_hp;
+                            changed.flight = GS_FLIGHT_RESOLVED;
+                            changed.vengeance = survives_return ? GS_VENGEANCE_DOWN : key.vengeance;
+                            changed.returned = survives_return ? 0 : key.returned;
+                            changed.returns_at = survives_return ? 0 : key.returns_at;
                             changed.echoed = (echo == GS_ECHO_VENGEANCE ? gs_vengeance_return(roll) : 0) + (roll > 0 ? imin(s->recoil_charges, roll / 10 + 1) : 0);
                             changed.echoes_at = tick + (s->pid == GS_PID_LOCAL ? 0 : 1);
-                            double* out = gs_joint_target(&next, changed);
-                            for (int hp = 0; hp < length; hp++) out[hp] += weight * entry.targets[hp];
+                            changed = gs_joint_key(changed);
+                            int a = 0;
+                            while (a < arrival_count && !gs_joint_equal(arrivals[a].key, changed)) a++;
+                            if (a == arrival_count) arrivals[arrival_count++] = (GsJointArrival){changed, weight};
+                            else arrivals[a].weight += weight;
+                        }
+                        for (int a = 0; a < arrival_count; a++) {
+                            double* out = gs_joint_target(&next, arrivals[a].key);
+                            double weight = arrivals[a].weight;
+                            for (int hp = lowest; hp <= highest; hp++)
+                                if (entry.targets[hp] != 0) out[hp] += weight * entry.targets[hp];
                         }
                     }
                     states = next;
@@ -645,6 +924,7 @@ static GsOutcome gs_strikes(Arena* arena, const GsSpecSituation* s, const GsSpec
             GsJointEntry entry = VEC_AT(GsJointEntry, states.entries, i);
             if (entry.key.flight != GS_FLIGHT_COMMITTED && entry.key.returns_at <= tick) { totals[0] += entry.targets[0]; entry.targets[0] = 0; }
         }
+        gs_joint_prune(&states);
     }
     for (int i = 0; i < states.entries.count; i++) totals[3] += jdk_sum(VEC_AT(GsJointEntry, states.entries, i).targets, length);
     assert(fabs(jdk_sum(totals, 4) - 1) < 1e-9);
@@ -682,7 +962,7 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
         int unseen = 0;
         if (reaction->has_meal)
             for (int u = 0; u < s->warning.unseen_count; u++) unseen |= s->warning.unseen[u] == anchor + reaction->after;
-        if (!has_since || !reaction->has_meal || anchor + reaction->after > s->tick || unseen) {
+        if (!reaction->has_meal || anchor + reaction->after > s->tick || (!s->target.has_history && (!has_since || unseen))) {
             live[live_count++] = r;
             double tmp = reaction->share - shares_compensation;
             double velvel = shares_sum + tmp;
@@ -695,16 +975,12 @@ static GsOutcome gs_spec_outcome(Arena* arena, const GsSpecSituation* s, const G
     for (int li = 0; li < live_count; li++) {
         const GsReaction* reaction = &reactions[live[li]];
         size_t inner = arena->used;
-        GsEating eatings[2];
+        GsEating eatings[1];
         int eating_count = 0;
         if (reaction->has_meal) {
             int at = anchor + reaction->after;
-            if (s->hard_food_ready <= at) eatings[eating_count++] = (GsEating){at, 0, GS_MEAL_FOODS};
-            else {
-                eatings[eating_count++] = (GsEating){at, 1, GS_MEAL_FOODS - 1};
-                eatings[eating_count++] = (GsEating){s->hard_food_ready, 0, 1};
-            }
-            if (eating_count == 2 && eatings[1].tick < eatings[0].tick) { GsEating t = eatings[0]; eatings[0] = eatings[1]; eatings[1] = t; }
+            if (at <= through && (!s->target.has_history || at > s->tick))
+                eatings[eating_count++] = (GsEating){at, 0, GS_MEAL_FOODS};
         }
         GsOutcome outcome = gs_strikes(arena, s, struck, struck_count, eatings, eating_count, echo, anchor, through);
         dead += reaction->share / shares * outcome.kill;
@@ -763,18 +1039,16 @@ static GsOutcome gs_spec_priced(Arena* arena, const GsSpecSituation* s, const Gs
     return (GsOutcome){(1 - s->pid_flip) * held.kill + s->pid_flip * turned.kill, (1 - s->pid_flip) * held.death + s->pid_flip * turned.death};
 }
 
-static GsOutcome gs_spec_calibrated(GsOutcome modelled) { return (GsOutcome){modelled.kill * (1 / 29.67), modelled.death}; }
-
 static double gs_spec_knockout(Arena* arena, const GsSpecSituation* s, const GsSpecHit* planned, int planned_count, GsEcho echo
 #ifndef GS_HP_BELIEF
     , int through
 #endif
 ) {
-    return gs_spec_calibrated(gs_spec_priced(arena, s, planned, planned_count, echo, 0
+    return gs_spec_priced(arena, s, planned, planned_count, echo, 0
 #ifndef GS_HP_BELIEF
         , through
 #endif
-    )).kill;
+    ).kill;
 }
 
 #ifndef GS_HP_BELIEF
@@ -794,74 +1068,32 @@ static int gs_spec_horizon(const GsSpecSituation* s, const GsSpecHit* programs, 
 #endif
 
 /* AutoSpec.decide */
-typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS_CHOICE_MAUL } GsChoiceKind;
-static const int GS_CHOICE_TICKETS[4] = {0, 1, 2, 1};
+typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS_CHOICE_MAUL, GS_CHOICE_VOIDWAKER_BURST, GS_CHOICE_COUNT } GsChoiceKind;
+static const int GS_CHOICE_TICKETS[GS_CHOICE_COUNT] = {0, 1, 2, 1, 2};
 typedef enum { GS_CAST_NOW, GS_CAST_KEEP } GsCast;
 typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; } GsSpecPlan;
-typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death, held, kept; } GsSpecDecision;
+typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death, held, kept, burst_bar; int through; } GsSpecDecision;
 
 enum { GS_TICKET = 50, GS_MOST_TICKETS = 2 };
-#define GS_WINDOW_PEAK_COUNT 342
-static const double GS_WINDOW_PEAKS[GS_WINDOW_PEAK_COUNT] = {
-    0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000,
-    0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000,
-    0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000,
-    0.00000, 0.00000, 0.00002, 0.00002, 0.00003, 0.00010, 0.00011, 0.00012, 0.00013, 0.00014, 0.00016, 0.00019,
-    0.00021, 0.00025, 0.00028, 0.00030, 0.00030, 0.00031, 0.00035, 0.00038, 0.00043, 0.00043, 0.00047, 0.00049,
-    0.00049, 0.00052, 0.00055, 0.00061, 0.00062, 0.00062, 0.00062, 0.00064, 0.00066, 0.00070, 0.00071, 0.00071,
-    0.00073, 0.00073, 0.00074, 0.00083, 0.00085, 0.00087, 0.00088, 0.00090, 0.00090, 0.00093, 0.00093, 0.00093,
-    0.00093, 0.00093, 0.00095, 0.00099, 0.00103, 0.00108, 0.00120, 0.00122, 0.00125, 0.00129, 0.00133, 0.00134,
-    0.00135, 0.00136, 0.00137, 0.00137, 0.00139, 0.00140, 0.00142, 0.00145, 0.00146, 0.00157, 0.00164, 0.00164,
-    0.00166, 0.00167, 0.00176, 0.00178, 0.00181, 0.00185, 0.00185, 0.00185, 0.00186, 0.00188, 0.00189, 0.00192,
-    0.00199, 0.00201, 0.00202, 0.00213, 0.00214, 0.00216, 0.00216, 0.00217, 0.00218, 0.00220, 0.00222, 0.00223,
-    0.00224, 0.00228, 0.00230, 0.00230, 0.00232, 0.00236, 0.00241, 0.00242, 0.00243, 0.00245, 0.00246, 0.00249,
-    0.00251, 0.00253, 0.00263, 0.00267, 0.00267, 0.00271, 0.00272, 0.00273, 0.00274, 0.00277, 0.00280, 0.00284,
-    0.00285, 0.00293, 0.00293, 0.00294, 0.00298, 0.00300, 0.00303, 0.00309, 0.00313, 0.00314, 0.00316, 0.00320,
-    0.00321, 0.00325, 0.00325, 0.00329, 0.00333, 0.00334, 0.00338, 0.00344, 0.00345, 0.00348, 0.00352, 0.00354,
-    0.00358, 0.00358, 0.00363, 0.00365, 0.00365, 0.00369, 0.00376, 0.00382, 0.00383, 0.00385, 0.00385, 0.00389,
-    0.00391, 0.00392, 0.00397, 0.00398, 0.00401, 0.00407, 0.00408, 0.00411, 0.00412, 0.00416, 0.00427, 0.00428,
-    0.00428, 0.00433, 0.00434, 0.00434, 0.00437, 0.00446, 0.00450, 0.00466, 0.00469, 0.00473, 0.00476, 0.00478,
-    0.00483, 0.00484, 0.00493, 0.00499, 0.00500, 0.00502, 0.00503, 0.00505, 0.00506, 0.00510, 0.00511, 0.00513,
-    0.00517, 0.00519, 0.00521, 0.00521, 0.00524, 0.00534, 0.00535, 0.00536, 0.00536, 0.00536, 0.00536, 0.00541,
-    0.00544, 0.00544, 0.00546, 0.00551, 0.00554, 0.00554, 0.00559, 0.00559, 0.00561, 0.00561, 0.00562, 0.00566,
-    0.00573, 0.00573, 0.00581, 0.00583, 0.00584, 0.00589, 0.00589, 0.00592, 0.00595, 0.00597, 0.00599, 0.00609,
-    0.00616, 0.00618, 0.00619, 0.00628, 0.00628, 0.00631, 0.00640, 0.00647, 0.00648, 0.00650, 0.00652, 0.00655,
-    0.00655, 0.00669, 0.00672, 0.00688, 0.00700, 0.00702, 0.00716, 0.00733, 0.00735, 0.00739, 0.00740, 0.00742,
-    0.00748, 0.00750, 0.00756, 0.00766, 0.00769, 0.00775, 0.00800, 0.00804, 0.00804, 0.00823, 0.00838, 0.00844,
-    0.00885, 0.00937, 0.00952, 0.00963, 0.00970, 0.00974, 0.00995, 0.01009, 0.01038, 0.01047, 0.01050, 0.01064,
-    0.01073, 0.01075, 0.01078, 0.01083, 0.01085, 0.01155, 0.01162, 0.01170, 0.01204, 0.01207, 0.01221, 0.01249,
-    0.01301, 0.01308, 0.01373, 0.01390, 0.01399, 0.01427, 0.01440, 0.01461, 0.01473, 0.01623, 0.01624, 0.01680,
-    0.01836, 0.01839, 0.01858, 0.02342, 0.02414, 0.02856};
-static double GS_WORTH[GS_MOST_TICKETS + 1];
-#define GS_FIGHT_ENDS (65 / 640.0)
-
-__attribute__((constructor)) static void gs_build_worth(void) {
-    GS_WORTH[0] = 0;
-    for (int k = 1; k <= GS_MOST_TICKETS; k++) {
-        double previous;
-        GS_WORTH[k] = 0;
-        do {
-            previous = GS_WORTH[k];
-            double total = 0;
-            for (int i = 0; i < GS_WINDOW_PEAK_COUNT; i++) {
-                double peak = GS_WINDOW_PEAKS[i];
-                total += fmax(peak + (1 - peak) * (1 - GS_FIGHT_ENDS) * GS_WORTH[k - 1], (1 - GS_FIGHT_ENDS) * GS_WORTH[k]);
-            }
-            GS_WORTH[k] = total / GS_WINDOW_PEAK_COUNT;
-        } while (fabs(GS_WORTH[k] - previous) > 1e-12);
-    }
-}
+/* AutoSpec.CONTINUATION: port the policy values, not its retired calibration input. */
+static const double GS_CONTINUATION[GS_MOST_TICKETS + 1] = {0, 0.30164267160692, 0.39811423486135994};
 
 /* AutoSpec.bar: the chance a plan costing cost specs must reach with energy to be played. */
-static double gs_spec_held(int energy) { return (1 - GS_FIGHT_ENDS) * GS_WORTH[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
+static double gs_spec_held(int energy) { return GS_CONTINUATION[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
 static double gs_spec_kept(int energy, int cost) {
     int tickets = imin(GS_MOST_TICKETS, energy / GS_TICKET);
-    return tickets < cost ? 0 : (1 - GS_FIGHT_ENDS) * GS_WORTH[tickets - cost];
+    return tickets < cost ? 0 : GS_CONTINUATION[tickets - cost];
 }
 static double gs_spec_bar(int energy, int cost) {
     if (imin(GS_MOST_TICKETS, energy / GS_TICKET) < cost) return INFINITY;
     double spent = gs_spec_kept(energy, cost);
     return (gs_spec_held(energy) - spent) / (1 - spent);
+}
+
+static double gs_spec_value(GsOutcome outcome, int energy, GsChoiceKind choice) {
+    int cost = GS_CHOICE_TICKETS[choice];
+    if (energy < cost * GS_TICKET) return -INFINITY;
+    return outcome.kill + (1 - outcome.kill) * gs_spec_kept(energy, cost);
 }
 
 static int spec_plan_done(const GsSpecPlan* plan) {
@@ -878,13 +1110,19 @@ static int gs_spec_cast_before_hit(const GsSpecSituation* s) {
     return s->has_incoming && s->incoming.attack == GS_NONE && spec_rebound_casts_before(&s->rebound, s->incoming.lands, s->pid);
 }
 
-static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
-    const GsSpecPlan* after_cast, int after_cast_count, int energy) {
+static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
+    const GsSpecPlan* after_cast, int after_cast_count, int energy, double death_price) {
     static const GsSpecPlan nothing = {GS_CHOICE_HOLD, NULL, 0};
+    int casts = gs_spec_cast_before_hit(s);
+    if (!casts && s->pid_flip > 0) {
+        GsSpecSituation other = gs_spec_flipped(s);
+        casts = gs_spec_cast_before_hit(&other);
+    }
+    int through = 0;
 #ifndef GS_HP_BELIEF
-    int through = gs_spec_horizon(s, NULL, 0);
+    through = gs_spec_horizon(s, NULL, 0);
     for (int i = 0; i < plan_count; i++) through = imax(through, gs_spec_horizon(s, plans[i].hits, plans[i].hit_count));
-    for (int i = 0; i < after_cast_count; i++) through = imax(through, gs_spec_horizon(s, after_cast[i].hits, after_cast[i].hit_count));
+    if (casts) for (int i = 0; i < after_cast_count; i++) through = imax(through, gs_spec_horizon(s, after_cast[i].hits, after_cast[i].hit_count));
 #endif
     GsEcho standing = s->rebound.kind == GS_REBOUND_UP ? GS_ECHO_VENGEANCE : GS_ECHO_RECOIL;
     const GsSpecPlan* best = &nothing;
@@ -892,30 +1130,45 @@ static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s
     GsOutcome chosen = {0, 0};
     for (int i = 0; i <= plan_count; i++) {
         const GsSpecPlan* plan = i < plan_count ? &plans[i] : &nothing;
-        GsOutcome kept = gs_spec_calibrated(gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 0
+        if (plan->choice == GS_CHOICE_VOIDWAKER_BURST) continue;
+        GsOutcome kept = gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 0
 #ifndef GS_HP_BELIEF
             , through
 #endif
-        ));
+        );
         if (kept.kill > chosen.kill || (kept.kill == chosen.kill && kept.kill > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
             best = plan;
             chosen = kept;
         }
     }
-    int casts = gs_spec_cast_before_hit(s);
-    if (!casts && s->pid_flip > 0) {
-        GsSpecSituation other = gs_spec_flipped(s);
-        casts = gs_spec_cast_before_hit(&other);
+    for (int i = 0; i < plan_count; i++) {
+        const GsSpecPlan* plan = &plans[i];
+        if (plan->choice != GS_CHOICE_VOIDWAKER_BURST || energy < 2 * GS_TICKET) continue;
+        GsOutcome burst = gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 0
+#ifndef GS_HP_BELIEF
+            , through
+#endif
+        );
+        if (gs_spec_value(burst, energy, plan->choice) - death_price * burst.death
+                > gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death) {
+            best = plan;
+            chosen = burst;
+        }
     }
     if (casts) {
         for (int i = 0; i <= after_cast_count; i++) {
             const GsSpecPlan* plan = i < after_cast_count ? &after_cast[i] : &nothing;
-            GsOutcome with_cast = gs_spec_calibrated(gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 1
+            GsOutcome with_cast = gs_spec_priced(arena, s, plan->hits, plan->hit_count, standing, 1
 #ifndef GS_HP_BELIEF
                 , through
 #endif
-            ));
-            if (with_cast.kill > chosen.kill) {
+            );
+            int better = plan->choice == GS_CHOICE_VOIDWAKER_BURST || best->choice == GS_CHOICE_VOIDWAKER_BURST
+                ? energy >= GS_CHOICE_TICKETS[plan->choice] * GS_TICKET
+                    && gs_spec_value(with_cast, energy, plan->choice) - death_price * with_cast.death
+                        > gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death
+                : with_cast.kill > chosen.kill;
+            if (better) {
                 best = plan;
                 cast = GS_CAST_NOW;
                 chosen = with_cast;
@@ -924,7 +1177,37 @@ static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s
     }
     double bar = gs_spec_bar(energy, GS_CHOICE_TICKETS[best->choice]);
     double held = gs_spec_held(energy), kept = gs_spec_kept(energy, GS_CHOICE_TICKETS[best->choice]);
-    if (chosen.kill < bar) return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death, held, kept};
-    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death, held, kept};
+    if (chosen.kill < bar || chosen.kill + (1 - chosen.kill) * kept - death_price * chosen.death < held)
+        return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death, held, kept, 0, through};
+    double burst_bar = 0;
+    if (best->choice == GS_CHOICE_VOIDWAKER_BURST) {
+        GsOutcome first = gs_spec_priced(arena, s, best->hits, 1, standing, cast == GS_CAST_NOW
+#ifndef GS_HP_BELIEF
+            , through
+#endif
+        );
+        burst_bar = fmax(0, (held - first.kill) / (1 - first.kill));
+    }
+    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death, held, kept, burst_bar, through};
+}
+
+static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
+    const GsSpecPlan* after_cast, int after_cast_count, int energy) {
+    return gs_auto_spec_decide_priced(arena, s, plans, plan_count, after_cast, after_cast_count, energy, 0);
+}
+
+static GsSpecDecision gs_spec_continue_burst(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* single,
+    double reserved_bar, double death_price, int through) {
+#ifdef GS_HP_BELIEF
+    (void)through;
+#endif
+    GsEcho standing = s->rebound.kind == GS_REBOUND_UP ? GS_ECHO_VENGEANCE : GS_ECHO_RECOIL;
+    GsOutcome outcome = gs_spec_priced(arena, s, single->hits, single->hit_count, standing, 0
+#ifndef GS_HP_BELIEF
+        , through
+#endif
+    );
+    GsChoiceKind choice = outcome.kill > 0 && outcome.kill - death_price * outcome.death >= reserved_bar ? GS_CHOICE_VOIDWAKER : GS_CHOICE_HOLD;
+    return (GsSpecDecision){choice, GS_CAST_KEEP, GS_CHOICE_VOIDWAKER, outcome.kill, reserved_bar, outcome.death, reserved_bar, 0, 0, through};
 }
 #endif

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "../gearswapper/gs_auto_spec.h"
+#include "gs_target_oracle.h"
 
 enum { MAX_PLANS = 16, MAX_HITS = 16, POOL = 1 << 20 };
 typedef struct { GsSpecHit hits[MAX_HITS]; int count; GsChoiceKind choice; } Plan;
@@ -38,39 +39,82 @@ static GsVengeance vengeance_of(const char* s) {
     return !strcmp(s, "UP") ? GS_VENGEANCE_UP : !strcmp(s, "DOWN") ? GS_VENGEANCE_DOWN : !strcmp(s, "MAYBE") ? GS_VENGEANCE_MAYBE : GS_VENGEANCE_UNKNOWN;
 }
 static GsChoiceKind choice_of(const char* s) {
-    return !strcmp(s, "VOIDWAKER") ? GS_CHOICE_VOIDWAKER : !strcmp(s, "MAUL_VOIDWAKER") ? GS_CHOICE_MAUL_VOIDWAKER : !strcmp(s, "MAUL") ? GS_CHOICE_MAUL : GS_CHOICE_HOLD;
+    if (!strcmp(s, "HOLD")) return GS_CHOICE_HOLD;
+    if (!strcmp(s, "VOIDWAKER")) return GS_CHOICE_VOIDWAKER;
+    if (!strcmp(s, "MAUL_VOIDWAKER")) return GS_CHOICE_MAUL_VOIDWAKER;
+    if (!strcmp(s, "MAUL")) return GS_CHOICE_MAUL;
+    if (!strcmp(s, "VOIDWAKER_BURST")) return GS_CHOICE_VOIDWAKER_BURST;
+    fprintf(stderr, "Unknown spec choice: %s\n", s);
+    exit(EXIT_FAILURE);
 }
 
 static int read_hits(char* p, GsSpecHit* hits) {
     int count = 0;
     while (*p == ' ' && p[1] == 'H') {
         p += 2;
+        if (count == MAX_HITS) { fputs("Too many oracle hits\n", stderr); exit(EXIT_FAILURE); }
         GsSpecHit* hit = &hits[count++];
-        hit->lands = (int)strtol(p, &p, 10);
-        hit->damages = (int)strtol(p, &p, 10);
-        while (*p == ' ') p++;
-        hit->origin = *p == 'O' ? GS_ORIGIN_OURS : GS_ORIGIN_REFLECTED;
-        while (*p != ' ') p++;
-        assert(pooled + hit->damages <= POOL);
+        const char* cursor = p;
+        hit->lands = gs_target_int(&cursor);
+        hit->damages = gs_target_int(&cursor);
+        if (hit->damages < 1 || hit->damages > POOL - pooled) {
+            fputs("Invalid spec hit damage length\n", stderr);
+            exit(EXIT_FAILURE);
+        }
+        char origin[16];
+        int consumed;
+        if (sscanf(cursor, " %15s%n", origin, &consumed) != 1 || (strcmp(origin, "OURS") && strcmp(origin, "REFLECTED"))) {
+            fputs("Invalid spec hit origin\n", stderr);
+            exit(EXIT_FAILURE);
+        }
+        hit->origin = !strcmp(origin, "OURS") ? GS_ORIGIN_OURS : GS_ORIGIN_REFLECTED;
+        cursor += consumed;
+        hit->first_positive_roll = gs_target_int(&cursor);
+        p = (char*)cursor;
+        char* end;
+        hit->positive_each = strtod(p, &end);
+        if (end == p || hit->first_positive_roll < 1 || hit->first_positive_roll > imax(1, hit->damages - 1)
+                || !isfinite(hit->positive_each) || hit->positive_each < 0 || hit->positive_each > 1) {
+            fputs("Invalid required spec hit roll metadata\n", stderr);
+            exit(EXIT_FAILURE);
+        }
+        p = end;
         double* damage = &pool[pooled];
         pooled += hit->damages;
-        for (int i = 0; i < hit->damages; i++) damage[i] = strtod(p, &p);
+        for (int i = 0; i < hit->damages; i++) {
+            damage[i] = strtod(p, &end);
+            if (end == p || !isfinite(damage[i]) || damage[i] < 0
+                    || (hit->origin == GS_ORIGIN_OURS && i > 0
+                        && damage[i] != (i >= hit->first_positive_roll ? hit->positive_each : 0))) {
+                fputs("Invalid spec hit damage distribution\n", stderr);
+                exit(EXIT_FAILURE);
+            }
+            p = end;
+        }
+        if (fabs(jdk_sum(damage, hit->damages) - 1) > 1e-12) {
+            fputs("Spec hit distribution must be normalized\n", stderr);
+            exit(EXIT_FAILURE);
+        }
         hit->damage = damage;
     }
     return count;
 }
 
 static int read_record(FILE* f, Record* r) {
+    gs_target_clear(&r->s.target);
     memset(r, 0, sizeof(*r));
     pooled = 0;
     static char line[1 << 16];
+    int started = 0;
     while (fgets(line, sizeof(line), f)) {
-        char tag[8];
+        char tag[16];
         int consumed = 0;
-        if (sscanf(line, "%7s%n", tag, &consumed) < 1) continue;
+        if (sscanf(line, "%15s%n", tag, &consumed) < 1) continue;
         char* p = line + consumed;
         GsSpecSituation* s = &r->s;
         if (!strcmp(tag, "SS")) {
+            if (started) { fputs("Spec record missing END\n", stderr); exit(EXIT_FAILURE); }
+            started = 1;
             char vengeance[16], pid[16], kind[16];
             int fields = sscanf(p, "%d %d %d %d %15s %15s %lf %15s %d %d %d %d", &s->hitpoints.low, &s->hitpoints.high, &s->hitpoints.max, &s->hard_food_ready, vengeance, pid, &s->pid_flip, kind,
                 &s->rebound.cast, &s->recoil_charges, &s->tick, &r->energy);
@@ -107,19 +151,35 @@ static int read_record(FILE* f, Record* r) {
                 p = end;
             }
         } else if (!strcmp(tag, "PL") || !strcmp(tag, "AC")) {
+            if ((!strcmp(tag, "PL") ? r->plan_count : r->after_count) == MAX_PLANS) {
+                fputs("Too many oracle plans\n", stderr); exit(EXIT_FAILURE);
+            }
             Plan* plan = !strcmp(tag, "PL") ? &r->plans[r->plan_count++] : &r->after[r->after_count++];
             char choice[24];
             int n;
             sscanf(p, "%23s%n", choice, &n);
             plan->choice = choice_of(choice);
             plan->count = read_hits(p + n, plan->hits);
+            if (plan->choice == GS_CHOICE_VOIDWAKER_BURST &&
+                    (plan->count != 2 || plan->hits[1].lands <= plan->hits[0].lands)) {
+                fputs("Voidwaker burst requires two separated hits\n", stderr); exit(EXIT_FAILURE);
+            }
         } else if (!strcmp(tag, "D")) {
             char choice[24], cast[8], aim[24], bar[32];
             sscanf(p, "%23s %7s %23s %lf %31s %lf %lf %lf", choice, cast, aim, &r->chance, bar, &r->death, &r->held, &r->kept);
             r->choice = choice_of(choice); r->aim = choice_of(aim); r->cast = !strcmp(cast, "NOW") ? GS_CAST_NOW : GS_CAST_KEEP;
             r->bar = strtod(bar, NULL);
-        } else if (!strcmp(tag, "END")) return 1;
+        } else if (!strcmp(tag, "END")) {
+            gs_target_validate(&s->target);
+            return 1;
+        } else if (!strcmp(tag, "RECORDING")) {
+            if (started) { fputs("Spec recording provenance inside a record\n", stderr); exit(EXIT_FAILURE); }
+        } else if (!gs_target_read_line(&s->target, tag, p)) {
+            fprintf(stderr, "Unknown spec oracle tag: %s\n", tag);
+            exit(EXIT_FAILURE);
+        }
     }
+    if (started) { fputs("Incomplete spec record\n", stderr); exit(EXIT_FAILURE); }
     return 0;
 }
 
@@ -139,7 +199,7 @@ static void incoming_echo_contract(void) {
     assert(surviving_range.least == 0 && surviving_range.most == 100 && fabs(surviving_range.accuracy - 1) < 1e-12);
 
     const double zero_damage[] = {1};
-    GsSpecHit planned = {103, zero_damage, 1, GS_ORIGIN_OURS};
+    GsSpecHit planned = {103, zero_damage, 1, GS_ORIGIN_OURS, 1, 0};
     GsSpecSituation s = {0};
     s.hitpoints = (GsHealthRange){1, 1, 1};
     s.hard_food_ready = 200;
@@ -205,6 +265,7 @@ static void incoming_echo_contract(void) {
     assert(gs_spec_horizon(&s, NULL, 0) == 102);
     const int targets[] = {10, 60, 95}, locals[] = {5, 50, 100}, landings[] = {106, 110};
     const double accuracies[] = {0.4, 1};
+    s.hard_food_ready = 101; /* The independent enumeration offers all three foods at its meal. */
     int cases = 0;
     double error = 0;
     for (int t = 0; t < 3; t++) for (int l = 0; l < 3; l++)
@@ -248,8 +309,119 @@ static void incoming_echo_contract(void) {
 }
 #endif
 
+#ifndef GS_HP_BELIEF
+static void target_contract(void) {
+    Arena arena = arena_make((size_t)1 << 27);
+    GsSpecSituation s = {0};
+    s.tick = 100; s.warning.since = GS_NONE; s.hard_food_ready = 100;
+    s.hitpoints = (GsHealthRange){20, 80, 99};
+    s.local = gs_health_of(99); s.pid = GS_PID_LOCAL; s.vengeance = GS_VENGEANCE_DOWN;
+    double low[81] = {0}, high[81] = {0};
+    low[20] = 0.25; high[80] = 0.75;
+    GsTargetBranch belief[] = {{{100, 100, 100}, low, 81}, {{200, 200, 200}, high, 81}};
+    s.target = (GsTarget){.has_belief = 1, .base_hp = 99, .belief = belief, .belief_count = 2};
+    GsEating meal = {101, 0, 3};
+    GsSpecHit hit = gs_spec_hit_of(&arena, 102, 70, 70, 1);
+    GsOutcome outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 103);
+    assert(fabs(outcome.kill - 0.25 * (1 - gs_wants(58))) < 1e-12);
+    belief[0].ready = (GsTargetReady){200, 200, 200};
+    belief[1].ready = (GsTargetReady){100, 100, 100};
+    outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 103);
+    assert(fabs(outcome.kill - 0.25) < 1e-12);
+
+    /* Alternative clocks for one supported HP form a set, not equally weighted states. */
+    double support[81] = {0}; support[20] = 1;
+    GsTargetBranch history[] = {{{100, 200, 200}, support, 81}, {{200, 100, 200}, support, 81}};
+    s.target = (GsTarget){.has_history = 1, .base_hp = 99, .history = history, .history_count = 2};
+    hit = gs_spec_hit_of(&arena, 102, 40, 40, 1);
+    outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 103);
+    assert(outcome.kill == 0);
+
+    /* A refused hard food remains pending until its own clock, beyond the sole scheduled meal. */
+    support[20] = 0; support[1] = 1;
+    history[0].ready = (GsTargetReady){103, 200, 200};
+    s.target.history_count = 1;
+    hit = gs_spec_hit_of(&arena, 104, 10, 10, 1);
+    outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 105);
+    assert(outcome.kill == 0);
+
+    /* Brewing uses the opponent's actual base HP, not the range ceiling or local base. */
+    history[0].ready = (GsTargetReady){200, 100, 200};
+    s.target.base_hp = 50;
+    hit = gs_spec_hit_of(&arena, 102, 11, 11, 1);
+    outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 103);
+    assert(fabs(outcome.kill - 1) < 1e-12);
+    s.target.base_hp = 99;
+    outcome = gs_strikes(&arena, &s, &hit, 1, &meal, 1, GS_ECHO_RECOIL, 100, 103);
+    assert(outcome.kill == 0);
+    GsSpecPlan single = {GS_CHOICE_VOIDWAKER, &hit, 1};
+    GsSpecDecision at = gs_spec_continue_burst(&arena, &s, &single, 0, 0, 103);
+    assert(at.chance > 0);
+    double boundary = at.chance;
+    at = gs_spec_continue_burst(&arena, &s, &single, boundary, 0, 103);
+    assert(at.choice == GS_CHOICE_VOIDWAKER);
+    at = gs_spec_continue_burst(&arena, &s, &single, nextafter(boundary, INFINITY), 0, 103);
+    assert(at.choice == GS_CHOICE_HOLD);
+    at = gs_spec_continue_burst(&arena, &s, &single, nextafter(boundary, 0), 0, 103);
+    assert(at.choice == GS_CHOICE_VOIDWAKER);
+    free(arena.base);
+}
+
+static void burst_contract(void) {
+    Arena arena = arena_make((size_t)1 << 27);
+    GsSpecSituation s = {0};
+    s.tick = 100; s.warning.since = GS_NONE; s.hard_food_ready = 102;
+    s.pid = GS_PID_LOCAL; s.vengeance = GS_VENGEANCE_DOWN;
+    s.rebound.kind = GS_REBOUND_SPENT;
+    s.hitpoints = (GsHealthRange){80, 80, 99};
+    s.local = gs_health_of(99);
+    GsSpecHit hits[] = {gs_spec_hit_of(&arena, 101, 50, 50, 1), gs_spec_hit_of(&arena, 105, 50, 50, 1)};
+    GsEating meal = {102, 0, GS_MEAL_FOODS};
+    GsOutcome fed = gs_strikes(&arena, &s, hits, 2, &meal, 1, GS_ECHO_RECOIL, 100, 106);
+    GsOutcome unfed = gs_strikes(&arena, &s, hits, 2, NULL, 0, GS_ECHO_RECOIL, 100, 106);
+    assert(fed.kill == 0 && fabs(unfed.kill - 1) < 1e-12);
+    hits[1] = gs_spec_hit_of(&arena, 105, 121, 121, 1);
+    GsSpecPlan plans[] = {{GS_CHOICE_VOIDWAKER, hits, 1}, {GS_CHOICE_VOIDWAKER_BURST, hits, 2}};
+    size_t mark = arena.used;
+    for (int energy = 0; energy <= 100; energy += 50) {
+        arena.used = mark;
+        GsSpecDecision d = gs_auto_spec_decide(&arena, &s, plans, 2, NULL, 0, energy);
+        if (energy < 100) assert(d.choice != GS_CHOICE_VOIDWAKER_BURST);
+        else {
+            assert(d.choice == GS_CHOICE_VOIDWAKER_BURST);
+            assert(d.bar == gs_spec_bar(100, 2) && d.kept == 0 && d.held == gs_spec_held(100));
+            assert(d.burst_bar == d.held);
+            GsSpecDecision followup = gs_spec_continue_burst(&arena, &s, &plans[0], d.burst_bar, 0, d.through);
+            assert(followup.choice == GS_CHOICE_HOLD && followup.kept == 0 && followup.bar == d.burst_bar);
+        }
+    }
+    assert(isinf(gs_spec_bar(99, GS_CHOICE_TICKETS[GS_CHOICE_VOIDWAKER_BURST])));
+    free(arena.base);
+}
+#endif
+
+static void continuation_contract(void) {
+    /* These are the production Java policy probabilities, not fitted test outputs. */
+    const double continuation[] = {0, 0.30164267160692, 0.39811423486135994};
+    for (int energy = 0; energy <= 100; energy++) {
+        int tickets = energy / GS_TICKET;
+        assert(fabs(gs_spec_held(energy) - continuation[tickets]) < 1e-12);
+        for (int cost = 0; cost <= GS_MOST_TICKETS; cost++) {
+            double kept = tickets < cost ? 0 : continuation[tickets - cost];
+            assert(fabs(gs_spec_kept(energy, cost) - kept) < 1e-12);
+            if (tickets < cost) assert(isinf(gs_spec_bar(energy, cost)));
+            else assert(fabs(gs_spec_bar(energy, cost) - (continuation[tickets] - kept) / (1 - kept)) < 1e-12);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
+    continuation_contract();
     incoming_echo_contract();
+#ifndef GS_HP_BELIEF
+    target_contract();
+    burst_contract();
+#endif
     if (argc == 2 && !strcmp(argv[1], "--contract-only")) {
         puts("AutoSpec incoming echo contract verified");
         return 0;
@@ -258,7 +430,7 @@ int main(int argc, char** argv) {
     assert(f);
     Arena arena = arena_make((size_t)1 << 28);
     static Record record;
-    long total = 0, matched = 0, choices[4] = {0}, casts = 0;
+    long total = 0, matched = 0, choices[GS_CHOICE_COUNT] = {0}, casts = 0;
     int shown = 0;
     double seconds = 0;
     while (read_record(f, &record)) {
@@ -277,10 +449,12 @@ int main(int argc, char** argv) {
         choices[record.choice]++;
         casts += record.cast == GS_CAST_NOW;
         if (!ok && shown++ < 8)
-            printf("MISMATCH call %ld tick %d energy %d: java %d/%d aim %d chance %.17g bar %.17g | c %d/%d aim %d chance %.17g bar %.17g\n", total, record.s.tick, record.energy,
-                record.choice, record.cast, record.aim, record.chance, record.bar, d.choice, d.cast, d.aim, d.chance, d.bar);
+            printf("MISMATCH call %ld tick %d energy %d: java %d/%d aim %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g | c %d/%d aim %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g\n", total, record.s.tick, record.energy,
+                record.choice, record.cast, record.aim, record.chance, record.bar, record.death, record.held, record.kept,
+                d.choice, d.cast, d.aim, d.chance, d.bar, d.death, d.held, d.kept);
     }
-    printf("%ld calls, %ld bit-exact (%.3f%%); outcomes hold %ld voidwaker %ld maul+voidwaker %ld maul %ld, casts now %ld; C time %.3f s\n", total, matched,
-        100.0 * matched / total, choices[0], choices[1], choices[2], choices[3], casts, seconds);
+    if (!total) { fputs("Spec oracle contains no decisions\n", stderr); exit(EXIT_FAILURE); }
+    printf("%ld calls, %ld bit-exact (%.3f%%); outcomes hold %ld voidwaker %ld maul+voidwaker %ld maul %ld voidwaker-burst %ld, casts now %ld; C time %.3f s\n", total, matched,
+        100.0 * matched / total, choices[GS_CHOICE_HOLD], choices[GS_CHOICE_VOIDWAKER], choices[GS_CHOICE_MAUL_VOIDWAKER], choices[GS_CHOICE_MAUL], choices[GS_CHOICE_VOIDWAKER_BURST], casts, seconds);
     return matched == total ? 0 : 1;
 }

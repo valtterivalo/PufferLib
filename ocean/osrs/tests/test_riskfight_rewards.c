@@ -22,7 +22,7 @@ static void reset(float damage_coeff, float teleport_penalty) {
 
 static void queued_hit(int source, int damage, OsrsHitKind kind) {
     OsrsEnv* simulation = &env->state.env;
-    queue_hit(simulation->tick, source, 1 - source,
+    queue_hit(simulation, source, 1 - source,
         &simulation->players[source], &simulation->players[1 - source],
         damage, ATTACK_STYLE_MELEE, 0, 0, damage > 0, 0, 0, 0, 0, 0);
     Player* attacker = &simulation->players[source];

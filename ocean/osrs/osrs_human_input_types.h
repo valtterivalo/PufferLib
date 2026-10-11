@@ -42,6 +42,12 @@ typedef enum {
     HUMAN_COMMAND_UNEQUIP,
 } HumanCommandKind;
 
+typedef enum {
+    HUMAN_SPEC_TOGGLE = 0,
+    HUMAN_SPEC_ENABLE,
+    HUMAN_SPEC_DISARM,
+} HumanSpecMode;
+
 typedef struct {
     HumanCommandKind kind;
     int world_x, world_y;
@@ -61,6 +67,7 @@ typedef struct {
     int autocast_spell;
     int autocast_defensive;
     uint32_t widget_component_id;
+    HumanSpecMode spec_mode;
 } HumanCommand;
 
 typedef struct {

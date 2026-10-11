@@ -5,11 +5,7 @@
  * tick, a maul is processed two ticks on and a Voidwaker spec after it two ticks later (Light #175, #176). */
 #include "gs_infer.h"
 
-enum { GS_MAUL_PROCESSED_AFTER = 2, GS_SPEC_AFTER_MAUL = 2, GS_INVENTORY_SIZE = 28, GS_MAUL_STANCES = 3 };
-
-typedef struct { int maul_id; int inventory_count, shield_worn; } GsOwn;
-
-static int gs_protect(const GsClient* c, int damage, GsHeadIcon prayer) { return c->overhead == prayer ? (int)(damage * 0.6) : damage; }
+enum { GS_MAUL_PROCESSED_AFTER = 2, GS_SPEC_AFTER_MAUL = 2, GS_INVENTORY_SIZE = 28 };
 
 static int gs_ornate_maul(int id) { return id == GS_ITEM_GRANITE_MAUL_PLUS || id == GS_ITEM_GRANITE_MAUL_PRETTY_PLUS; }
 
@@ -24,45 +20,12 @@ static int gs_next_swing(GsTimerState timer, int tick, int* out) {
 
 static int gs_landing(int process, GsPid pid) { return gs_lands(process, GS_MELEE, 1, gs_local_lead(pid)); }
 
-/* AutoSpecialAttack.maul: the maul spec's most and chance against his visible gear, empty without a held ornate maul */
-static int gs_maul(const GsInfer* s, const GsOwn* own, int* most, double* accuracy) {
-    const GsClient* c = &s->c;
-    if (!own->maul_id || c->com_mode >= GS_MAUL_STANCES) return 0;
-    const GsItem* ours[GS_WORN_SLOTS + 1];
-    int count = 0;
-    ours[count++] = gs_item(own->maul_id);
-    GsBonuses strength = gs_bonuses_of(own->maul_id);
-    for (int slot = 0; slot < GS_WORN_SLOTS; slot++) {
-        if (c->worn[slot] <= 0 || slot == GS_WORN_WEAPON || slot == 5) continue;
-        if (!gs_item(c->worn[slot])->has_stats) return 0;
-        ours[count++] = gs_item(c->worn[slot]);
-        strength = gs_bonuses_plus(strength, gs_bonuses_of(c->worn[slot]));
-    }
-    if (!gs_item(own->maul_id)->has_stats) return 0;
-    const GsItem* theirs[GS_MAX_EQUIPMENT];
-    int theirs_count = 0;
-    for (int i = 0; i < c->equipment_count; i++)
-        if (c->equipment[i] >= GS_ITEM_OFFSET) {
-            if (!gs_item(c->equipment[i] - GS_ITEM_OFFSET)->has_stats) return 0;
-            theirs[theirs_count++] = gs_item(c->equipment[i] - GS_ITEM_OFFSET);
-        }
-    int stance = c->com_mode == 0 ? 3 : 0;
-    int prayer = gs_prayer_active(c, GS_PRAYER_PIETY) ? 120 : gs_prayer_active(c, GS_PRAYER_CHIVALRY) || gs_prayer_active(c, GS_PRAYER_INCREDIBLE_REFLEXES) ? 115
-        : gs_prayer_active(c, GS_PRAYER_IMPROVED_REFLEXES) ? 110 : gs_prayer_active(c, GS_PRAYER_CLARITY_OF_THOUGHT) ? 105 : 100;
-    int defence_bonus = 0;
-    for (int i = 0; i < theirs_count; i++) defence_bonus += gs_damage_defence(GS_DAMAGE_CRUSH, theirs[i]);
-    int attack_bonus = gs_sum_attack(GS_DAMAGE_CRUSH, ours, count);
-    *accuracy = gs_chance(gs_roll(gs_effective_level(c->attack, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
-    *most = gs_protect(c, gs_max_normal(GS_W_GRANITE_MAUL, GS_MELEE, gs_local_levels(c), strength), GS_HEAD_MELEE);
-    return 1;
-}
-
 /* Builds the plans with the cast delaying everything by `extra` ticks, the plans of the Java build lambda. Returns the count. */
 static GsSpecHit gs_spec_hit_blocked(Arena* arena, int lands, int least, int most, double accuracy, int immune_through) {
     if (lands > immune_through) return gs_spec_hit_of(arena, lands, least, most, accuracy);
     double* damage = arena_alloc(arena, sizeof(double));
     damage[0] = 1;
-    return (GsSpecHit){lands, damage, 1, GS_ORIGIN_OURS};
+    return (GsSpecHit){lands, damage, 1, GS_ORIGIN_OURS, 1, 0};
 }
 
 static int gs_spec_plans(Arena* arena, const GsInfer* s, int tick, int extra, const GsOwn* own, GsSpecPlan* plans) {
@@ -85,6 +48,13 @@ static int gs_spec_plans(Arena* arena, const GsInfer* s, int tick, int extra, co
         GsSpecHit* hit = arena_alloc(arena, sizeof(GsSpecHit));
         *hit = gs_spec_hit_blocked(arena, gs_landing(vw_process, pid), vw_least, vw_top, 1.0, immune);
         plans[count++] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, hit, 1};
+        if (energy >= 2 * GS_TICKET) {
+            GsSpecHit* burst = arena_alloc(arena, 2 * sizeof(GsSpecHit));
+            burst[0] = *hit;
+            burst[1] = gs_spec_hit_blocked(arena, gs_landing(vw_process + gs_base_speed(GS_ITEM_VOIDWAKER), pid),
+                vw_least, vw_top, 1.0, immune);
+            plans[count++] = (GsSpecPlan){GS_CHOICE_VOIDWAKER_BURST, burst, 2};
+        }
     }
     if (wieldable) {
         int maul_process = tick + GS_MAUL_PROCESSED_AFTER + extra;

@@ -117,6 +117,11 @@ static ClockStatus clock_status(const Tape* tape, int t) {
 static int clock_eligible(const Tape* tape, int t, ClockCohort cohort) {
     ClockStatus status = clock_status(tape, t);
     clock_counts[cohort][status]++;
+    int loads_snapshot = cohort != CLOCK_EAT_FEATURES && cohort != CLOCK_HAZARD_INPUTS && cohort != CLOCK_EAT_HP_INPUTS;
+    if (status == CLOCK_EXACT && loads_snapshot && !tape_pending_available(tape, t)) {
+        printf("pending unavailable %s %s tick %d reason missing_or_unsupported_observed_queue\n", CLOCK_COHORT_NAME[cohort], tape->name, t);
+        return 0;
+    }
     return status == CLOCK_EXACT;
 }
 
@@ -152,7 +157,7 @@ static int snapshot_has_item(const RiskfightLoadout* loadout, int item) {
 
 static Probe hidden_probe(const Tape* tape, int t, int sample, RiskfightSnapshot* snap) {
     uint32_t rng = osrs_lowbias32((uint32_t)(t * 7919 + sample * 104729 + tape->index * 13 + tape->lo)) | 1;
-    tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, snap);
+    (void)tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, snap); /* Pure resource probe; does not load the pending queue. */
     const RiskfightSideSnapshot* him = &snap->side[1];
     HimInputs in = {
         .hp_ratio = osrs_health_bar_ratio(him->hitpoints, 99, 30),
@@ -326,7 +331,7 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
             for (int j = 0; profile_available && j < PROFILE_SAMPLES; j++) {
                 uint32_t rng = osrs_lowbias32((uint32_t)(t * 31 + j * 104729 + tape->index)) | 1;
                 RiskfightSnapshot snap;
-                tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, &snap);
+                if (!tape_snapshot(tape, t - 1, &DEFAULT_PRIORS, &rng, &snap)) continue;
                 riskfight_load_state(&sim->state, &sim->context, &snap);
                 Outcome out;
                 run_steps(sim, tape, t - 1, 1, &model, &replay, xorshift32(&rng), &out);
@@ -347,11 +352,11 @@ static void teacher_score(Tape* tapes, int count, const OppFit* fit_in, int test
         }
     }
     memcpy(g_last_fitted, fitted, sizeof(fitted));
-    if (g_quiet) { free(sim); return; }
+    if (g_quiet) { sim_clear(sim); free(sim); return; }
     printf("test day %d, per action (const = the train-day rate over eligible ticks, profiles = the existing mixture sampled 64 times)\n", test_day);
     for (int a = 0; a < ACT_COUNT; a++)
         print_score(ACTION_NAME[a], &fitted[a], &profiles[a], (double)fit.logit[a].events / fit.logit[a].opportunities);
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static void teacher(Tape* tapes, int count, int train_day, int test_day) {
@@ -508,7 +513,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
             }
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + i * 104729 + tape->index * 13 + tape->lo)) | 1;
             RiskfightSnapshot snap;
-            tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
+            if (!tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap)) continue;
             riskfight_load_state(&sim->state, &sim->context, &snap);
             Outcome out;
             long decisions = sim->ours.decisions, ticks = sim->ours.ticks;
@@ -586,7 +591,7 @@ static void evaluate_windows(const Tape* tape, const OppModel* model, const Ours
     stats->spec_counted += sim->spec_counted;
     stats->spec_predicted += sim->spec_predicted;
     stats->spec_realized += sim->spec_realized;
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static void print_window_stats(const char* title, const WindowStats* s) {
@@ -644,7 +649,7 @@ static void evaluate_episodes(const Tape* tape, Trigger trigger, const OppModel*
             for (int i = 0; i < n; i++) {
                 uint32_t rng = osrs_lowbias32((uint32_t)(x * 7919 + i * 104729 + tape->index * 13)) | 1;
                 RiskfightSnapshot snap;
-                tape_snapshot(tape, x, &DEFAULT_PRIORS, &rng, &snap);
+                if (!tape_snapshot(tape, x, &DEFAULT_PRIORS, &rng, &snap)) continue;
                 riskfight_load_state(&sim->state, &sim->context, &snap);
                 Outcome out;
                 run_steps(sim, tape, x, 8, &models[m], ours, xorshift32(&rng), &out);
@@ -652,7 +657,7 @@ static void evaluate_episodes(const Tape* tape, Trigger trigger, const OppModel*
                 stats->sim[m][delay > 7 ? 8 : delay] += 1.0 / n;
             }
     }
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static void print_episodes(const char* title, const EpisodeStats* s, const char* names[3]) {
@@ -750,14 +755,14 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
             Sim* sim = malloc(sizeof(Sim));
             sim_init(sim);
             int t0 = clock_anchor(tp, tp->lo + 1);
-            if (t0 < 0) { free(sim); continue; }
+            if (t0 < 0) { sim_clear(sim); free(sim); continue; }
             int kk = tp->hi - t0;
             assert(kk <= MAX_STEPS);
             double hd = 0, od = 0, meals = 0, swings = 0, specs = 0, ticks = 0, hd_first = 0, rr = 0;
             for (int r = 0; r < n; r++) {
                 uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + tp->index * 13 + tp->lo)) | 1;
                 RiskfightSnapshot snap;
-                tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap);
+                if (!tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap)) continue;
                 riskfight_load_state(&sim->state, &sim->context, &snap);
                 Outcome out;
                 run_steps(sim, tp, t0, kk, &model, getenv("GS_REPLAY") ? &replay : &rules, xorshift32(&rng), &out);
@@ -774,7 +779,7 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
                 (void)hd_first;
             }
             printf("FIGHT %s rollouts %d his_dead %.4f our_dead %.4f meals %.3f swings %.3f specs %.3f ticks %.2f r %.3f\n", tp->name, n, hd / n, od / n, meals / n, swings / n, specs / n, ticks / n, rr);
-            free(sim);
+            sim_clear(sim); free(sim);
         }
         printf("HAZARD by his hp before the tick (44-, 45-87, 88+), exposure ticks / deaths:");
         for (int b = 0; b < 3; b++) printf(" %.0f / %.1f", g_haz_exposure[b] / n, g_haz_deaths[b] / n);
@@ -831,8 +836,8 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
     }
     printf("combo groups started %ld, aborted by the hand %ld, Voidwaker leg preempted by our meal %ld\n", g_cb_total, g_cb_abort, g_cb_preempt);
     printf("combo decisions: not preempted %.0f of which both specs thrown %.0f; preempted %.0f of which both specs thrown %.0f\n", g_cb_split[0][0] + g_cb_split[0][1], g_cb_split[0][1], g_cb_split[1][0] + g_cb_split[1][1], g_cb_split[1][1]);
-    for (int c = 1; c < 4; c++) if (g_pc_n[c]) { printf("specs thrown per decision %.2f; ", g_pc_specs[c] / g_pc_n[c]);
-        printf("choice %d (1 vw, 2 maul+vw, 3 maul): n %.0f planned mean damage %.1f realized damage in the plan window %.1f, first hit planned +%.2f realized +%.2f, any damage %.3f, planner chance %.3f he dies %.3f\n", c, g_pc_n[c], g_pc_plan[c] / g_pc_n[c], g_pc_act[c] / g_pc_n[c], g_pc_land[c] / g_pc_n[c], g_pc_actland[c] / g_pc_n[c], g_pc_any[c] / g_pc_n[c], g_pc_chance[c] / g_pc_n[c], g_pc_dead[c] / g_pc_n[c]); }
+    for (int c = 1; c < GS_CHOICE_COUNT; c++) if (g_pc_n[c]) { printf("specs thrown per decision %.2f; ", g_pc_specs[c] / g_pc_n[c]);
+        printf("choice %d (1 vw, 2 maul+vw, 3 maul, 4 vw burst): n %.0f planned mean damage %.1f realized damage in the plan window %.1f, first hit planned +%.2f realized +%.2f, any damage %.3f, planner chance %.3f he dies %.3f\n", c, g_pc_n[c], g_pc_plan[c] / g_pc_n[c], g_pc_act[c] / g_pc_n[c], g_pc_land[c] / g_pc_n[c], g_pc_actland[c] / g_pc_n[c], g_pc_any[c] / g_pc_n[c], g_pc_chance[c] / g_pc_n[c], g_pc_dead[c] / g_pc_n[c]); }
     {
         static const char* FB[4] = {"hp<=44", "45-60", "61-87", "88+"};
         for (int b = 0; b < 4; b++) {
@@ -908,11 +913,11 @@ static void autopsy(int n, int k, Tape* tapes, int count, int test_day) {
                 for (int j = 0; j < 8; j++) {
                     uint32_t rng = osrs_lowbias32((uint32_t)(t * 7919 + j * 104729 + tapes[i].index * 13 + tapes[i].lo)) | 1;
                     RiskfightSnapshot snap;
-                    tape_snapshot(&tapes[i], t, &DEFAULT_PRIORS, &rng, &snap);
+                    (void)tape_snapshot(&tapes[i], t, &DEFAULT_PRIORS, &rng, &snap); /* HP marginal only. */
                     recorded_ticks[imin(12, imax(0, snap.loadout[1].hitpoints) / 10)]++;
                 }
         }
-        free(seeds);
+        sim_clear(seeds); free(seeds);
         long rec_total = 0, sim_total = 0;
         for (int b = 0; b < 13; b++) { rec_total += recorded_ticks[b]; sim_total += g_sim_hp_ticks[b]; }
         printf("share of ticks by his hp: recorded (seeded hp of every tape tick), sim rollouts\n");
@@ -1335,7 +1340,7 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
         if (!clock_eligible(tape, t0, CLOCK_BRANCH)) continue;
         uint32_t rng = 99;
         RiskfightSnapshot snap;
-        tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap);
+        if (!tape_snapshot(tape, t0, &DEFAULT_PRIORS, &rng, &snap)) continue;
         riskfight_load_state(&sim->state, &sim->context, &snap);
         RiskfightState base = sim->state;
         printf("%s tick %d: our hp %d  stakes r %.1f (us %ld gp, him %ld gp)\n", tape->name, t0, base.env.players[0].current_hitpoints,
@@ -1358,7 +1363,7 @@ static void branch(int n, int horizon, Tape* tapes, int count) {
                 names[p], (double)die / n, (double)kill / n, n, horizon, elapsed, n / elapsed);
         }
     }
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 /* ---------- the opponent fitted on spectated duels ---------- */
@@ -1764,7 +1769,7 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
         for (int r = 0; r < n; r++) {
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + tp->index * 13 + tp->lo)) | 1;
             RiskfightSnapshot snap;
-            tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap);
+            if (!tape_snapshot(tp, t0, &DEFAULT_PRIORS, &rng, &snap)) continue;
             uint32_t seed = xorshift32(&rng);
             double m[2][CMP_METRICS];
             for (int p = 0; p < 2; p++) {
@@ -1820,7 +1825,7 @@ static void fightcmp(int n, Tape* tapes, int count, int test_day) {
         printf("latency per call (one core, includes cache hits): mean %.2f ms p50 %.2f p95 %.2f p99 %.2f max %.2f\n", mean * 1e3, g_la.latency[g_la.latency_count / 2] * 1e3,
             g_la.latency[g_la.latency_count * 95 / 100] * 1e3, g_la.latency[g_la.latency_count * 99 / 100] * 1e3, g_la.worst * 1e3);
     }
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int tick, const LaFeasible* f, GsStakes stakes, const LaScript* rules) {
@@ -1868,10 +1873,83 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
         for (int i = 0; i < sim->hist.warning.unseen_count; i++) fprintf(out, " %d", sim->hist.warning.unseen[i]);
     }
     fprintf(out, "\nH %d %d %d %d %d", sim->hist.big_hit_tick, sim->hist.since_vw_spec, sim->hist.since_maul_spec, sim->hist.ready_age, sim->hist.last_swing_tick);
-    fprintf(out, "\nR %d\n", rules->n);
-    for (int i = 0; i < rules->n; i++) {
+    int pending_known = 1, pending_count[2] = {0}, variants = sim->state.pending_pid_active ? 2 : 1;
+    for (int holder = 0; holder < variants; holder++) for (int source = 0; source < 2; source++) {
+        int count = sim->state.pending_pid_active ? sim->state.pending_pid_count[holder][source] : sim->state.env.players[source].num_pending_hits;
+        const PendingHit* hits = sim->state.pending_pid_active ? sim->state.pending_pid[holder][source] : sim->state.env.players[source].pending_hits;
+        pending_count[holder] += count;
+        for (int i = 0; i < count; i++) {
+            const PendingHit* h = &hits[i];
+            if (h->kind > OSRS_HIT_VENGEANCE || h->freeze_ticks || h->heal_percent || h->drain_type || h->drain_percent || h->flat_heal)
+                pending_known = 0;
+        }
+    }
+    if (!pending_known) fprintf(out, "\nP UNKNOWN\n");
+    else {
+        if (sim->state.pending_pid_active) fprintf(out, "\nP VARIANTS %d %d\n", pending_count[0], pending_count[1]);
+        else fprintf(out, "\nP KNOWN %d\n", pending_count[0]);
+        for (int holder = 0; holder < variants; holder++) for (int source = 0; source < 2; source++) {
+            int count = sim->state.pending_pid_active ? sim->state.pending_pid_count[holder][source] : sim->state.env.players[source].num_pending_hits;
+            const PendingHit* hits = sim->state.pending_pid_active ? sim->state.pending_pid[holder][source] : sim->state.env.players[source].pending_hits;
+            const PendingHitMetadata* metadata = sim->state.pending_pid_active ? sim->state.pending_pid_metadata[holder][source] : sim->state.env.pending_hit_metadata[source];
+            for (int i = 0; i < count; i++) {
+                const PendingHit* h = &hits[i];
+                const PendingHitMetadata* metadata_at = &metadata[i];
+                if (sim->state.pending_pid_active) fprintf(out, "D %d ", holder);
+                else fprintf(out, "D ");
+                fprintf(out, "%d %d %d %d %d %d %d %d %d %d %d %d %d\n", source, h->ticks_until_hit,
+                    h->kind, h->attack_type, h->is_special, h->hit_success, metadata_at->damage_mode, h->damage,
+                    metadata_at->damage_min, metadata_at->damage_max, metadata_at->accuracy_bp, h->defender_prayer_at_attack, metadata_at->smite_snapshot - 1);
+            }
+        }
+    }
+    int kinds[LA_SCRIPT], args[LA_SCRIPT], rules_known = rules->native_rules == NULL;
+    for (int i = 0; rules_known && i < rules->n; i++) {
         const HumanCommand* c = &rules->command[i];
-        fprintf(out, "C %d %d %d\n", rules->due[i], c->kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK ? 0 : c->kind == HUMAN_COMMAND_ATTACK_NPC ? 1 : c->kind == HUMAN_COMMAND_SPEC_TOGGLE ? 2 : 3, c->inventory_slot);
+        args[i] = 0;
+        if (rules->production && rules->op[i]) {
+            int op = rules->op[i];
+            if (op < 1 || op > 10) { rules_known = 0; break; }
+            kinds[i] = op >= 8 ? op + 6 : op == 1 ? 2 : op == 2 ? 4 : op + 3;
+            args[i] = op >= 8 ? 0 : rules->arg[i];
+        } else switch (c->kind) {
+            case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
+                kinds[i] = c->item_osrs_id ? 12 : 0;
+                args[i] = c->item_osrs_id ? c->item_osrs_id : c->inventory_slot;
+                break;
+            case HUMAN_COMMAND_ATTACK_NPC: kinds[i] = 1; rules_known = c->npc_slot == 1; break;
+            case HUMAN_COMMAND_VENGEANCE: kinds[i] = 3; break;
+            case HUMAN_COMMAND_SPEC_TOGGLE:
+                kinds[i] = c->spec_mode == HUMAN_SPEC_ENABLE ? 2 : c->spec_mode == HUMAN_SPEC_DISARM ? 4 : 13;
+                rules_known = c->spec_mode == HUMAN_SPEC_TOGGLE || c->spec_mode == HUMAN_SPEC_ENABLE || c->spec_mode == HUMAN_SPEC_DISARM;
+                break;
+            case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+                kinds[i] = 11;
+                args[i] = c->item_osrs_id;
+                if (args[i] <= 0 && c->item_db_idx >= 0 && c->item_db_idx < NUM_ITEMS)
+                    args[i] = ITEM_DATABASE[c->item_db_idx].item_id;
+                rules_known = args[i] > 0;
+                break;
+            case HUMAN_COMMAND_UNEQUIP:
+                kinds[i] = 5;
+                args[i] = -1;
+                for (int slot = 0; slot < TAPE_WORN; slot++) if (WORN_TO_GEAR[slot] >= 0 && WORN_TO_GEAR[slot] == c->gear_slot) args[i] = slot;
+                rules_known = args[i] >= 0;
+                break;
+            default: rules_known = 0; break;
+        }
+    }
+    if (!rules_known) fprintf(out, "R UNKNOWN\n");
+    else {
+        fprintf(out, "R KNOWN %d\n", rules->n);
+        for (int i = 0; i < rules->n; i++) {
+            fprintf(out, "C %d %d %d %d", rules->due[i], kinds[i], args[i], rules->production ? rules->fixed[i] : 1);
+            if (kinds[i] >= 14) {
+                fprintf(out, " %d", rules->candidate_count[i]);
+                for (int c = 0; c < rules->candidate_count[i]; c++) fprintf(out, " %d", rules->candidates[i][c]);
+            }
+            fputc('\n', out);
+        }
     }
     fprintf(out, "END\n");
 }
@@ -1918,9 +1996,9 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
             if (!gear_eligible(tp, t, CLOCK_BRANCHPOINT)) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
-            tape_snapshot(tp, t, &DEFAULT_PRIORS, &rng, &snap);
+            if (!tape_snapshot(tp, t, &DEFAULT_PRIORS, &rng, &snap)) continue;
             riskfight_load_state(&sim->state, &sim->context, &snap);
-            sim->obs = ((const Observer*)tp->observer_series)[t - tp->lo];
+            observer_assign(&sim->obs, &tp->observer_series[t - tp->lo]);
             ours_reset(&sim->ours, rng, TIMING_MEASURED, STAKES_COMPUTED, 0);
             observer_branch(&sim->state, &sim->obs);
             sim->hist = ((const Hist*)tp->hist_series)[t - tp->lo];
@@ -1932,7 +2010,7 @@ static void branchpoint(const char* ticks, int worlds, Tape* tapes, int count) {
             printf("  -> %s\n", moved ? "override queued" : "rules stand");
         }
     }
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static int recorded_death_tick(const Tape* tape) {
@@ -1970,9 +2048,9 @@ static int swing_points(Tape* tape, const OppModel* model, Sim* sim, Sim* work, 
         if (!gear_eligible(tape, t, CLOCK_SPEC)) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
-        tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
+        if (!tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap)) continue;
         riskfight_load_state(&sim->state, &sim->context, &snap);
-        sim->obs = series[t - tape->lo];
+        observer_assign(&sim->obs, &series[t - tape->lo]);
         observer_branch(&sim->state, &sim->obs);
         sim->hist = ((const Hist*)tape->hist_series)[t - tape->lo];
         sim->seen_since_eat = 99;
@@ -2077,8 +2155,8 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
                 g_la_belief_hp_shift = shift;
                 g_eat_scale = scale;
             }
-            free(a);
-            free(b);
+            sim_clear(a); free(a);
+            sim_clear(b); free(b);
         }
     }
     memset(&after, 0, sizeof(after));
@@ -2110,9 +2188,9 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         if (!clock_eligible(fresh, t, CLOCK_OPPSTEP)) continue;
         uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
         RiskfightSnapshot snap;
-        tape_snapshot(fresh, t, &DEFAULT_PRIORS, &rng, &snap);
+        if (!tape_snapshot(fresh, t, &DEFAULT_PRIORS, &rng, &snap)) continue;
         riskfight_load_state(&sim->state, &sim->context, &snap);
-        sim->obs = ((const Observer*)fresh->observer_series)[t - fresh->lo];
+        observer_assign(&sim->obs, &fresh->observer_series[t - fresh->lo]);
         ours_reset(&sim->ours, rng, TIMING_MEASURED, STAKES_COMPUTED, 0);
         observer_branch(&sim->state, &sim->obs);
         sim->hist = ((const Hist*)fresh->hist_series)[t - fresh->lo];
@@ -2127,7 +2205,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         predicted_hold += g_la_last_kill[LA_NONE];
         realized += death > t && death <= t + g_la_horizon;
     }
-    free(sim);
+    sim_clear(sim); free(sim);
     int rollouts = 20;
     double hd[2] = {0}, od[2] = {0};
     {
@@ -2141,7 +2219,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
         for (int r = 0; !cold && r < rollouts; r++) {
             uint32_t rng = osrs_lowbias32((uint32_t)(t0 * 7919 + r * 104729 + fresh->index * 13 + fresh->lo)) | 1;
             RiskfightSnapshot snap;
-            tape_snapshot(fresh, t0, &DEFAULT_PRIORS, &rng, &snap);
+            if (!tape_snapshot(fresh, t0, &DEFAULT_PRIORS, &rng, &snap)) continue;
             uint32_t seed = xorshift32(&rng);
             for (int p = 0; p < 2; p++) {
                 riskfight_load_state(&work->state, &work->context, &snap);
@@ -2152,7 +2230,7 @@ static void oppstep(const char* model_path, const char* ledger_path, Tape* tapes
                 od[p] += out.our_death >= 0;
             }
         }
-        free(work);
+        sim_clear(work); free(work);
     }
     char key[64];
     snprintf(key, sizeof(key), "%s%d", fresh->session, fresh->index);
@@ -2220,7 +2298,10 @@ static void leakcheck(Tape* tapes, int count) {
                 g_tape = tapes_of[s];
                 uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
                 RiskfightSnapshot snap;
-                tape_snapshot(tapes_of[s], t, &DEFAULT_PRIORS, &rng, &snap);
+                if (!tape_snapshot(tapes_of[s], t, &DEFAULT_PRIORS, &rng, &snap)) {
+                    fprintf(stderr, "eligible leakcheck branch lost pending source at tick %d\n", t);
+                    abort();
+                }
                 riskfight_load_state(&sims[s]->state, &sims[s]->context, &snap);
                 if (s == 1) memcpy(sims[1]->state.env.players[1].equipped, sims[0]->state.env.players[1].equipped, sizeof(sims[1]->state.env.players[1].equipped));
                 for (int d = 0; d < 8; d++) {
@@ -2309,9 +2390,9 @@ static void calibration(Tape* tapes, int count) {
             if (!gear_eligible(tape, t, CLOCK_CALIBRATION)) continue;
             uint32_t rng = osrs_lowbias32((uint32_t)t) | 1;
             RiskfightSnapshot snap;
-            tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap);
+            if (!tape_snapshot(tape, t, &DEFAULT_PRIORS, &rng, &snap)) continue;
             riskfight_load_state(&sim->state, &sim->context, &snap);
-            sim->obs = series[t - tape->lo];
+            observer_assign(&sim->obs, &series[t - tape->lo]);
             observer_branch(&sim->state, &sim->obs);
             sim->hist = ((const Hist*)tape->hist_series)[t - tape->lo];
             sim->seen_since_eat = 99;
@@ -2387,7 +2468,7 @@ static void calibration(Tape* tapes, int count) {
         if (rev_n[k]) printf("  hp at the next reveal after the point (bar band + damage since), he %s in the window: %.0f points, truth above the belief band %.3f, below %.3f, mean excess over the band middle %+.1f hp\n", k ? "ate" : "did not eat", rev_n[k], rev_above[k] / rev_n[k], rev_below[k] / rev_n[k], rev_excess[k] / rev_n[k]);
     for (int b = 0; b < LAGS; b++)
         if (lag_n[b]) printf("  by bar age %-24s %4.0f points  eat observed %.3f predicted %.3f\n", LAG_NAME[b], lag_n[b], lag_obs_eat[b] / lag_n[b], lag_pred_eat[b] / lag_n[b]);
-    free(sim);
+    sim_clear(sim); free(sim);
 }
 
 static void corrections(Tape* tapes, int count) {

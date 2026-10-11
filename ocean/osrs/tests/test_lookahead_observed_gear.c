@@ -94,8 +94,15 @@ int main(void) {
     CHECK("observed empty slots are supported", la_gear_status(gear).status == LA_GEAR_SUPPORTED);
     FILE* stream = tmpfile();
     assert(stream);
-    fputs("LA 1 895\nO 99 90 118 118 118 99 100 0 0 0 0 27 0 -1 0 0 0 1 0 1 4 1 4 27690 0 0 1 OBSERVED -6 -6\nEND\n", stream);
-    fputs("LA 2 895\nO 99 90 118 118 118 99 100 0 0 0 0 27 0 -1 0 0 0 1 0 1 4 1 4 -1 0 0 1 OBSERVED -6 -6\nSHIELD OBSERVED -1\nARMOR OBSERVED -1 -1 -1 -1 -1 -1 -1\nEND\n", stream);
+    for (int id = 1; id <= 2; id++) {
+        fprintf(stream, "LA %d 895\nO 99 90 118 118 118 99 100 0 0 0 0 27 0 -1 0 0 0 1 0 1 4 1 4 %d 0 0 1 OBSERVED -6 -6\n", id, id == 1 ? 27690 : -1);
+        if (id == 2) fputs("SHIELD OBSERVED -1\nARMOR OBSERVED -1 -1 -1 -1 -1 -1 -1\n", stream);
+        fputs("B 99 99 0 100 0 2 0 0 0 0 0 0 0 0 0\nW", stream);
+        for (int i = 0; i < TAPE_WORN; i++) fputs(" -1", stream);
+        fputs("\nG", stream);
+        for (int i = 0; i < TAPE_BAG; i++) fputs(" -1", stream);
+        fputs("\nP UNKNOWN\nR UNKNOWN\nEND\n", stream);
+    }
     rewind(stream);
     Request request;
     read_request(stream, &request);
@@ -104,6 +111,7 @@ int main(void) {
     CHECK("known unarmed request never inherits whip", request.id == 2 && request.belief.gear.weapon == -1 && request.belief.gear.shield == -1 && la_gear_status(request.belief.gear).status == LA_GEAR_SUPPORTED);
     fclose(stream);
     static TapeTick tick;
+    tick.pending_known = 1; /* This equipment-only fixture explicitly starts with no queued hits. */
     tick.tick = 895; tick.hp = 99; tick.attack = tick.strength = tick.defence = 118; tick.magic = 99; tick.prayer = 90; tick.spec_us = 100;
     tick.bar_ratio = tick.bar_now_ratio = 15; tick.bar_scale = tick.bar_now_scale = 30; tick.last_bar_hit = 895;
     strcpy(tick.overhead, "NONE");
@@ -111,7 +119,11 @@ int main(void) {
     for (int i = 0; i < TAPE_BAG; i++) tick.bag[i] = -1;
     tick.worn[3] = 27690;
     static TapeAnim attack = {894, SIDE_HIM, 390};
+    static Sim sim;
+    sim_init(&sim);
+    riskfight_reset((EncounterState*)&sim.state, (EncounterContext*)&sim.context, 7);
     static Observer observed;
+    observer_sync(&sim.state, &observed, 895);
     observed.inf.local_timer = (GsTimerState){.seen = 1, .earliest = 899, .latest = 899};
     observed.inf.c.opponent_gear = (GsObservedGear){GS_GEAR_COMPOSITION_OBSERVED, 27690, 22322, {10828, 21295, 1725, 10551, 4087, 7462, 11840}};
     static Hist history;
@@ -120,8 +132,6 @@ int main(void) {
     prefix.kit_anims[0][0] = 390; prefix.kit_anims[0][1] = 11;
     Tape future = prefix;
     future.kit_anims[1][0] = 11275; future.kit_anims[1][1] = 1; future.kit_count = 2;
-    static Sim sim;
-    sim_init(&sim);
     static RiskfightState worlds[2];
     LaBelief belief = {.hp_low = 50, .hp_high = 50, .energy_low = 100, .energy_high = 100, .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL,
         .gear = {GS_GEAR_COMPOSITION_OBSERVED, 27690, 8850, {10828, 21295, 1725, 10551, 4087, 7462, 11840}}};
@@ -131,7 +141,7 @@ int main(void) {
         g_tape = sources[arm];
         uint32_t seed = 7;
         RiskfightSnapshot snapshot;
-        tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot);
+        CHECK("explicit empty queue permits kit fixture", tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot));
         CHECK("future kit changes privileged seed main", snapshot.loadout[1].equipment[GEAR_SLOT_WEAPON] == (arm == 0 ? ITEM_DRAGON_SCIMITAR : ITEM_VOIDWAKER));
         riskfight_load_state(&sim.state, &sim.context, &snapshot);
         uint32_t rng = 12345;
@@ -171,7 +181,7 @@ int main(void) {
         g_tape = sources[arm];
         uint32_t seed = 7;
         RiskfightSnapshot snapshot;
-        tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot);
+        CHECK("explicit empty queue permits ammo fixture", tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot));
         CHECK("future426 changes privileged ammo seed", snapshot.loadout[1].equipment[GEAR_SLOT_AMMO] == (arm == 0 ? ITEM_NONE : ITEM_DRAGON_ARROWS));
         riskfight_load_state(&sim.state, &sim.context, &snapshot);
         uint32_t rng = 12345;
@@ -188,7 +198,7 @@ int main(void) {
     g_tape = &future;
     uint32_t seed = 7;
     RiskfightSnapshot snapshot;
-    tape_snapshot(&future, 895, &DEFAULT_PRIORS, &seed, &snapshot);
+    CHECK("explicit empty queue permits melee fixture", tape_snapshot(&future, 895, &DEFAULT_PRIORS, &seed, &snapshot));
     riskfight_load_state(&sim.state, &sim.context, &snapshot);
     uint32_t rng = 12345;
     Hist h;

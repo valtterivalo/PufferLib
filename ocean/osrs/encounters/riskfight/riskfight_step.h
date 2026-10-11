@@ -70,20 +70,37 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_DRINK:
         case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM: {
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
-            if (command->inventory_slot < 0 || command->inventory_slot >= OSRS_INVENTORY_SIZE) return;
+            int slot = command->inventory_slot;
+            if (command->item_osrs_id > 0) {
+                slot = -1;
+                for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+                    if (osrs_inventory_cell_metadata(&p->inventory_cells[i])->raw_osrs_id == command->item_osrs_id) {
+                        slot = i;
+                        break;
+                    }
+                if (slot < 0 && command->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
+                    for (int i = 0; i < NUM_GEAR_SLOTS; i++)
+                        if (ITEM_DATABASE[p->equipped[i]].item_id == command->item_osrs_id) return;
+                }
+                if (slot < 0) {
+                    fprintf(stderr, "production command item unavailable: %d\n", command->item_osrs_id);
+                    abort();
+                }
+            }
+            if (slot < 0 || slot >= OSRS_INVENTORY_SIZE) return;
             OsrsConsumableKind pre_kind = OSRS_CONSUMABLE_NONE;
             OsrsClickAction pre_click = OSRS_CLICK_NONE;
             {
                 const OsrsItemContentMetadata* pre_meta =
-                    osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot]);
+                    osrs_inventory_cell_metadata(&p->inventory_cells[slot]);
                 pre_click = (OsrsClickAction)pre_meta->click_action;
                 if (pre_click == OSRS_CLICK_DRINK || pre_click == OSRS_CLICK_EAT)
                     pre_kind = (OsrsConsumableKind)pre_meta->consumable_kind;
             }
-            if (osrs_inventory_cell_metadata(&p->inventory_cells[command->inventory_slot])->gear_slot >= 0)
+            if (osrs_inventory_cell_metadata(&p->inventory_cells[slot])->gear_slot >= 0)
                 s->last_unequip_result[agent] = OSRS_UNEQUIP_SUCCESS;
             OsrsInventoryUseResult use_result = osrs_player_use_inventory_with_food_clock(p, &s->inventory_use[agent],
-                &s->env.pvp_runtime.teleport[agent], command->inventory_slot,
+                &s->env.pvp_runtime.teleport[agent], slot,
                 s->env.tick, OSRS_FOOD_CONTINUOUS_CLOCK);
             s->escaped[agent] = use_result == OSRS_INVENTORY_USE_ESCAPED;
             if (s->escaped[agent]) {
@@ -133,6 +150,13 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             s->env.pvp_runtime.walk_dest_y[agent] = command->world_y;
             break;
         case HUMAN_COMMAND_SPEC_TOGGLE:
+            if (command->spec_mode == HUMAN_SPEC_DISARM) {
+                s->env.pvp_runtime.maul[agent] =
+                    osrs_granite_maul_clear_preparation(s->env.pvp_runtime.maul[agent]);
+                osrs_spec_disarm(&p->spec_armed);
+                break;
+            }
+            if (command->spec_mode == HUMAN_SPEC_ENABLE && p->spec_armed) break;
             if (pvp_is_maul(p->equipped[GEAR_SLOT_WEAPON])) {
                 pvp_maul_special_click(&s->env, agent);
             } else
@@ -312,6 +336,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         int i = s->env.pid_holder ^ turn;
         if (s->escaped[i]) {
             s->env.players[1 - i].num_pending_hits = 0;
+            memset(s->env.pending_hit_metadata[1 - i], 0, sizeof(s->env.pending_hit_metadata[1 - i]));
         } else {
             int active = s->env.players[i].veng_active;
             pvp_process_incoming_hits(&s->env, i);

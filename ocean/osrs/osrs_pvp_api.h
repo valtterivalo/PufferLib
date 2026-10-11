@@ -310,6 +310,7 @@ void pvp_reset(
 
     init_player(&env->players[0]);
     init_player(&env->players[1]);
+    memset(env->pending_hit_metadata, 0, sizeof(env->pending_hit_metadata));
     for (int i = 0; i < NUM_AGENTS; i++) {
         env->pvp_runtime.maul[i] = osrs_granite_maul_init();
         env->pvp_runtime.teleport[i] = (OsrsTeleportState){0};

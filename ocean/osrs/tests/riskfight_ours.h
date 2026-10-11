@@ -82,7 +82,7 @@ static GsSpecHit gs_certain_hit(Arena* arena, int lands, int damage) {
     double* d = arena_alloc(arena, (size_t)(damage + 1) * sizeof(double));
     memset(d, 0, (size_t)(damage + 1) * sizeof(double));
     d[damage] = 1;
-    return (GsSpecHit){lands, d, damage + 1, GS_ORIGIN_OURS};
+    return (GsSpecHit){lands, d, damage + 1, GS_ORIGIN_OURS, imax(1, damage), damage > 0 ? 1 : 0};
 }
 
 static int ours_maul_slot(const Player* p) {
@@ -199,7 +199,10 @@ static void ours_truth(const Sim* sim, int truth, int tick, GsInfer* view) {
     if (truth & TRUTH_PID) { view->pid = gs_pid_unknown(); view->pid.owner = s->env.pid_holder == 0 ? GS_PID_LOCAL : GS_PID_OPPONENT; view->pid.observed_tick = tick; }
     if (truth & TRUTH_ENERGY) view->opponent.spec = (GsSpecEnergy){tick, {him->special_energy, him->special_energy}, {him->special_energy, him->special_energy}, 0};
     if (truth & TRUTH_VENGEANCE) view->opponent.vengeance = him->veng_active ? gs_vengeance_cast(tick) : (GsVengeanceState){GS_VPHASE_DISARMED, 0, 0, 0, 0};
-    if (truth & TRUTH_HP) view->opponent_hitpoints = (GsHealthRange){imax(1, him->current_hitpoints), imax(1, him->current_hitpoints), imax(GS_ASSUMED_MAX_HP, him->current_hitpoints)};
+    if (truth & TRUTH_HP) {
+        view->opponent_hitpoints = (GsHealthRange){imax(1, him->current_hitpoints), imax(1, him->current_hitpoints), imax(GS_ASSUMED_MAX_HP, him->current_hitpoints)};
+        view->health = NULL; /* This ablation deliberately supplies its exact range instead of inferred target histories. */
+    }
     if (truth & TRUTH_TIMER) {
         const RiskfightVisibleOpponent* seen = &s->visible[0];
         int next = sim->tick_base + (seen->last_attack_tick - RISKFIGHT_LOAD_TICK) + seen->last_attack_speed;
@@ -214,7 +217,10 @@ static double ours_value(double kill, double death, GsStakes stakes) { return ki
 static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, const GsRebound* rebound, GsStakes stakes, int* planned) {
     GsSpecDecision decision = {GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0};
     *planned = gs_spec_plannable(inf);
-    if (!*planned) return decision;
+    if (!*planned) {
+        ours->burst_pending = 0;
+        return decision;
+    }
     GsSpecSituation spec;
     GsUnderway underway;
     gs_spec_inputs(inf, tick, &spec, &underway);
@@ -224,10 +230,49 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
     GsOwn own = ours_own(sim);
     GsSpecPlan plans[4], after[4];
     int plan_count = gs_spec_plans(&ours->arena, inf, tick, 0, &own, plans);
-    int after_count = rebound->kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
+    int after_count = !ours->burst_pending && rebound->kind == GS_REBOUND_CASTABLE ? gs_spec_plans(&ours->arena, inf, tick, 1, &own, after) : 0;
     g_gs_expected_hp = -1;
     g_gs_truth_hp = sim->state.env.players[1].current_hitpoints;
-    decision = gs_auto_spec_decide(&ours->arena, &spec, plans, plan_count, after, after_count, gs_spec_energy(&inf->c));
+    int energy = gs_spec_energy(&inf->c);
+    if (ours->burst_pending) {
+        const Player* us = &sim->state.env.players[0];
+        if ((!ours->burst_spent && energy != 2 * GS_TICKET && energy != GS_TICKET)
+                || (ours->burst_spent && (energy < GS_TICKET || energy < ours->burst_energy))
+                || us->equipped[GEAR_SLOT_WEAPON] != ITEM_VOIDWAKER || inf->timed != ours->burst_target
+                || inf->c.ratio == 0 || us->current_hitpoints <= 0) {
+            ours->burst_pending = 0;
+            return decision;
+        }
+        if (!ours->burst_spent && energy == GS_TICKET) {
+            ours->burst_spent = 1;
+            ours->burst_spend_tick = tick;
+        }
+        ours->burst_energy = energy;
+        if (ours->burst_first == INT_MIN && inf->local_spec_tick >= ours->burst_started)
+            ours->burst_first = inf->local_spec_tick;
+        int speed = gs_base_speed(GS_ITEM_VOIDWAKER);
+        if ((ours->burst_first == INT_MIN && ours->burst_spent && tick > ours->burst_spend_tick + 1)
+                || (ours->burst_first != INT_MIN && (tick >= ours->burst_first + speed
+                    || inf->local_spec_tick > ours->burst_first))) {
+            ours->burst_pending = 0;
+            return decision;
+        }
+        if (!ours->burst_spent || ours->burst_first == INT_MIN || tick != ours->burst_first + speed - 1) return decision;
+        const GsSpecPlan* single = NULL;
+        for (int i = 0; i < plan_count; i++)
+            if (plans[i].choice == GS_CHOICE_VOIDWAKER) { single = &plans[i]; break; }
+        if (!single) {
+            ours->burst_pending = 0;
+            return decision;
+        }
+        int through = 0;
+#ifndef GS_HP_BELIEF
+        through = gs_spec_horizon(&spec, single->hits, single->hit_count);
+#endif
+        decision = gs_spec_continue_burst(&ours->arena, &spec, single, ours->burst_bar, gs_stakes_ratio(stakes), through);
+    } else {
+        decision = gs_auto_spec_decide_priced(&ours->arena, &spec, plans, plan_count, after, after_count, energy, gs_stakes_ratio(stakes));
+    }
 #ifdef GS_HP_BELIEF
     if (g_gs_expected_hp >= 0) {
         int h = 0, a = 0, q = 0;
@@ -250,6 +295,7 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
             g_plan_land = plans[i].hits[0].lands - tick;
         }
     if (decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, decision.death, stakes) <= 0) decision.choice = GS_CHOICE_HOLD;
+    if (ours->burst_pending == 2 && decision.choice == GS_CHOICE_HOLD) ours->burst_pending = 0;
     return decision;
 }
 
@@ -257,10 +303,11 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
 static int la_override(Sim* sim, Ours* ours, int step, int tick);
 
 static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
-    if (ours->lookahead && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
+    if (ours->lookahead && !ours->burst_pending && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
     RiskfightState* s = &sim->state;
     Player* us = &s->env.players[0];
     static GsInfer view;
+    /* Borrowed immutable health owner; this decision mutates only the scalar view. */
     view = sim->obs.inf;
     ours_truth(sim, ours->truth, tick, &view);
     GsInfer* inf = &view;
@@ -276,13 +323,16 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     GsStakes stakes = ours->equal_stakes ? (GsStakes){1, 1} : sim->obs.stakes;
     GsRebound rebound = ours_rebound(sim, ours, tick, 0);
     int planned;
-    GsSpecDecision decision = verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0};
+    int had_burst = ours->burst_pending;
+    GsSpecDecision decision = ours->burst_pending || verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0, 0};
     int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) + (1 - decision.chance) * decision.kept * (double)stakes.him > ours_value(0, verdict.meal_risk, stakes) + decision.held * (double)stakes.him);
     if (meal) {
         for (int i = 0; i < ours->pending_count; i++) if (ours->pending[i].command.inventory_slot == WIELD_VOIDWAKER) { g_cb_preempt++; if (ours->played_count) ours->played[ours->played_count - 1].preempted = 1; break; }
         ours->pending_count = 0;
+        ours->burst_pending = 0;
         HumanCommand clicks[8];
         int n = 0;
+        if (had_burst) clicks[n++] = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM};
         for (int i = 0; i < verdict.food_count; i++) clicks[n++] = click_command(foods.food_slot[verdict.foods[i]]);
         GsRebound rebound = ours_rebound(sim, ours, tick, verdict.food_count);
         int drain = 0;
@@ -295,12 +345,23 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         ours_run(ours, tick, clicks, n);
         return;
     }
+    if (had_burst && !ours->burst_pending) ours->pending_count = 0;
     if (ours->pending_count > 0) return;
+    if (had_burst) {
+        if (ours->burst_pending && decision.aim == GS_CHOICE_HOLD) return;
+        ours->burst_pending = 0;
+        if (decision.choice == GS_CHOICE_HOLD) {
+            HumanCommand disarm = {.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM};
+            ours_run(ours, tick, &disarm, 1);
+            return;
+        }
+        ours->burst_pending = 2;
+    }
     if (getenv("GS_COMBO_TRACE") && decision.choice == GS_CHOICE_MAUL_VOIDWAKER) {
         static int shown;
         if (shown++ < 30) fprintf(stderr, "maul slot %d shield %d | combo decision step %d: inferred energy %d actual %d weapon vw %d maul %d armed %d\n", ours_maul_slot(us), us->equipped[GEAR_SLOT_SHIELD], step, gs_spec_energy(&inf->c), us->special_energy, us->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER, is_maul_item(us->equipped[GEAR_SLOT_WEAPON]), us->spec_armed);
     }
-    if (decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
+    if (!had_burst && decision.choice != GS_CHOICE_HOLD && (decision.choice != ours->last_played_choice || step - ours->last_played_step > OURS_PLAY_GAP)) {
         assert(ours->played_count < 64);
         ours->played[ours->played_count].step = step;
         ours->played[ours->played_count].his_hitpoints = s->env.players[1].current_hitpoints;
@@ -320,15 +381,26 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     }
     HumanCommand clicks[10];
     int n = 0;
-    GsCastReason reason = planned || inf->timed >= 0 ? ours_venged_reason(inf, tick, decision.cast, &rebound, pid) : GS_REASON_NONE;
+    GsCastReason reason = !had_burst && (planned || inf->timed >= 0) ? ours_venged_reason(inf, tick, decision.cast, &rebound, pid) : GS_REASON_NONE;
     if (reason != GS_REASON_NONE && rebound.kind == GS_REBOUND_CASTABLE) {
         clicks[n++] = vengeance_command();
         ours->vengeance_clicked = tick + 1;
     }
     int maul_slot = ours_maul_slot(us);
     switch (decision.choice) {
+        case GS_CHOICE_VOIDWAKER_BURST:
+            ours->burst_pending = 1;
+            if (!gs_next_swing(inf->local_timer, tick, &ours->burst_started)) abort();
+            ours->burst_first = INT_MIN;
+            ours->burst_spent = 0;
+            ours->burst_energy = gs_spec_energy(&inf->c);
+            ours->burst_target = inf->timed;
+            ours->burst_bar = decision.burst_bar;
+            clicks[n++] = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_ENABLE};
+            clicks[n++] = attack_command();
+            break;
         case GS_CHOICE_VOIDWAKER:
-            if (!us->spec_armed) clicks[n++] = spec_command();
+            clicks[n++] = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_ENABLE};
             clicks[n++] = attack_command();
             break;
         case GS_CHOICE_MAUL:
@@ -339,6 +411,9 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
             break;
         case GS_CHOICE_HOLD:
             break;
+        case GS_CHOICE_COUNT:
+            fprintf(stderr, "Invalid spec choice sentinel\n");
+            abort();
     }
     if (n) ours_run(ours, tick, clicks, n);
     if (decision.choice == GS_CHOICE_MAUL || decision.choice == GS_CHOICE_MAUL_VOIDWAKER) ours_group_two(ours, us, tick, decision.choice);
@@ -353,7 +428,12 @@ static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step) {
     ours->ticks++;
     const GsInfer* inf = &sim->obs.inf;
     int rival = inf->timed >= 0 && inf->c.ratio != 0;
-    if (rival && (step == 0 || sim->obs.events > 0 || tick - ours->last_decision >= OURS_REFRESH)) ours_decide(sim, ours, step, tick);
+    if (!rival && ours->burst_pending) {
+        ours->burst_pending = 0;
+        ours->pending_count = 0;
+        command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM});
+    }
+    if (rival && inf->c.forecast_available && (ours->burst_pending || step == 0 || sim->obs.events > 0 || tick - ours->last_decision >= OURS_REFRESH)) ours_decide(sim, ours, step, tick);
     ours_pop_due(ours, us, hi, tick + 1);
     if (!osrs_interaction_active(&us->interaction) && ours->pending_count == 0 && hi->commands.count == 0) command(hi, attack_command());
 }

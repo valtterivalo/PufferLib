@@ -5,7 +5,9 @@
 enum { OURS_PENDING = 48 };
 typedef struct { int due; HumanCommand command; } OursPending;
 
-/* What our side remembers between decisions: the clicks of its run still to execute, and the spec decisions it played. */
+/* What our side remembers between decisions: queued clicks and spec decisions.
+ * A burst confirms the first 50-energy spend before accepting nondecreasing regeneration;
+ * burst_energy tracks subsequent observations so another spend invalidates the reservation. */
 typedef struct {
     Arena arena;
     OursPending pending[OURS_PENDING];
@@ -13,6 +15,8 @@ typedef struct {
     int last_decision;
     long decisions, ticks;
     int played_count, last_played_step, last_played_choice;
+    int burst_pending, burst_started, burst_first, burst_spent, burst_spend_tick, burst_energy, burst_target;
+    double burst_bar;
     struct { int step; double chance; int his_hitpoints; double expected, plan_mean, pit, bar_mid; int preempted, plan_land, plan_last, choice; } played[64];
     uint32_t rng;
     int ideal_timing, equal_stakes, truth, lookahead;
@@ -31,6 +35,7 @@ static void ours_reset(Ours* ours, uint32_t rng, int ideal_timing, int equal_sta
     ours->ideal_timing = ideal_timing;
     ours->equal_stakes = equal_stakes;
     ours->pending_count = 0;
+    ours->burst_pending = 0;
     ours->busy_until = INT_MIN / 2;
     ours->vengeance_clicked = INT_MIN / 2;
     ours->last_decision = INT_MIN / 2;

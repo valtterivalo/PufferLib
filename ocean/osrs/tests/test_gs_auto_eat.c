@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "../gearswapper/gs_auto_eat.h"
+#include "gs_target_oracle.h"
 
 static GsStyle style_of(const char* s) { return !strcmp(s, "MELEE") ? GS_MELEE : !strcmp(s, "RANGED") ? GS_RANGED : GS_MAGIC; }
 static GsPid pid_of(const char* s) { return !strcmp(s, "LOCAL") ? GS_PID_LOCAL : !strcmp(s, "OPPONENT") ? GS_PID_OPPONENT : GS_PID_UNKNOWN; }
@@ -55,6 +56,7 @@ typedef struct {
 } Record;
 
 static int read_record(FILE* f, Record* r) {
+    gs_target_clear(&r->s.target);
     memset(r, 0, sizeof(*r));
     char line[4096];
     int started = 0;
@@ -91,7 +93,14 @@ static int read_record(FILE* f, Record* r) {
             h->attack = read_attack(&p);
             p += strspn(p, " \n");
             assert(*p == 0);
-        } else if (!strcmp(tag, "OSW")) { s->has_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->swing.lands, &s->swing.least, &s->swing.most, &s->swing.accuracy, &s->swing.arrows); }
+        } else if (!strcmp(tag, "OSW")) {
+            if (s->swing_count == GS_MAX_PENDING_SWINGS) { fprintf(stderr, "too many OSW records\n"); abort(); }
+            GsSwing* swing = &s->swings[s->swing_count++];
+            if (sscanf(p, "%d %d %d %lf %d", &swing->lands, &swing->least, &swing->most, &swing->accuracy, &swing->arrows) != 5
+                    || swing->arrows <= 0 || swing->arrows > GS_MAX_HITS) {
+                fprintf(stderr, "invalid OSW record\n"); abort();
+            }
+        }
         else if (!strcmp(tag, "OE")) { s->has_owed = 1; s->owed.source = SRC_VENGEANCE_ECHO; sscanf(p, "%d %d", &s->owed.tick, &s->owed.most); s->owed.least = s->owed.most; s->owed.accuracy = 1; }
         else if (!strcmp(tag, "LSW")) { s->has_local_swing = 1; sscanf(p, "%d %d %d %lf %d", &s->local_swing.lands, &s->local_swing.least, &s->local_swing.most, &s->local_swing.accuracy, &s->local_swing.arrows); }
         else if (!strcmp(tag, "W")) {
@@ -138,7 +147,13 @@ static int read_record(FILE* f, Record* r) {
                 heal->amount = (int)strtol(p, &p, 10); p++;
                 heal->cap = (int)strtol(p, &p, 10);
             }
-        } else if (!strcmp(tag, "END")) { assert(started); return 1; }
+        } else if (gs_target_read_line(&s->target, tag, p)) {
+            assert(started);
+        } else if (!strcmp(tag, "END")) {
+            assert(started);
+            gs_target_validate(&s->target);
+            return 1;
+        }
     }
     assert(!started && !ferror(f));
     return 0;
@@ -164,11 +179,48 @@ static void landing_cutoff_contract(void) {
     assert(fabs(forgone) < 1e-12);
     free(arena.base);
 }
+
+static void opportunity_program_contract(void) {
+    Arena arena = arena_make((size_t)1 << 24);
+    GsEatSituation s = {0};
+    s.tick = 100; s.hitpoints = 35; s.pid = GS_PID_LOCAL;
+    s.vengeance = GS_VENGEANCE_DOWN; s.local_style = GS_MELEE;
+    s.local_timer = (GsTimer){1, 101, 101};
+    s.local_most = s.local_normal = 70; s.local_interval = 4;
+    s.local_opening_accuracy = s.local_accuracy = 1;
+    s.opponent_hp = (GsHealthRange){42, 99, 121}; s.offence = GS_ENGAGED;
+    s.warning.since = GS_NONE;
+    double support[100] = {0}, mass[100] = {0};
+    support[42] = support[99] = 1;
+    mass[42] = 0.25; mass[99] = 0.75;
+    GsTargetBranch history = {.ready = {.hard = 103, .potion = 102, .fast = 101}, .hp = support, .levels = 100};
+    GsTargetBranch belief = {.ready = {.hard = 103, .potion = 102, .fast = 101}, .hp = mass, .levels = 100};
+    s.target = (GsTarget){.has_history = 1, .has_belief = 1, .base_hp = 99,
+            .history = &history, .belief = &belief, .history_count = 1, .belief_count = 1};
+    GsFood food = {GS_HARD_FOOD, 22, 100, 1, 0};
+    GsMeal meal = {1, {0}, {1}, {1}, 1, 1, 2};
+    GsEatCall call = {&food, 1, &meal, 1, &arena};
+    GsSpecSituation hunt = eat_hunt(&s);
+    assert(hunt.target.has_history && hunt.target.has_belief);
+    assert(hunt.target.history == &history && hunt.target.history_count == 1);
+    assert(hunt.target.belief == &belief && hunt.target.belief_count == 1);
+    GsSpecHit waiting = gs_spec_hit_of(&arena, 101, 0, 70, 1);
+    GsSpecHit eaten = gs_spec_hit_of(&arena, 104, 0, 70, 1);
+    int waiting_through = gs_spec_horizon(&hunt, &waiting, 1);
+    int eaten_through = gs_spec_horizon(&hunt, &eaten, 1);
+    assert(waiting_through < eaten_through);
+    double expected = gs_spec_knockout(&arena, &hunt, &waiting, 1, GS_ECHO_RECOIL, waiting_through) * 0.9
+            - gs_spec_knockout(&arena, &hunt, &eaten, 1, GS_ECHO_RECOIL, eaten_through) * 0.98;
+    double forgone = eat_forgone_knockout(&call, &s, &meal, 3, 0.1, 0.02);
+    assert(fabs(expected - forgone) < 1e-12);
+    free(arena.base);
+}
 #endif
 
 int main(int argc, char** argv) {
 #ifndef GS_HP_BELIEF
     landing_cutoff_contract();
+    opportunity_program_contract();
 #endif
     Arena contract_arena = arena_make((size_t)1 << 24);
     GsEatSituation known = {0};
@@ -191,7 +243,7 @@ int main(int argc, char** argv) {
     GsVerdict unaffordable = gs_auto_eat_decide(&hidden, NULL, 0, NULL, 0, &contract_arena);
     assert(unaffordable.risk == 0);
     free(contract_arena.base);
-    if (argc == 2 && !strcmp(argv[1], "--contract-only")) { puts("AutoEat landing cutoff, undiscounted hidden risk and energy legality verified"); return 0; }
+    if (argc == 2 && !strcmp(argv[1], "--contract-only")) { puts("AutoEat landing cutoff, per-program opportunity price, undiscounted hidden risk and energy legality verified"); return 0; }
     FILE* f = fopen(argc > 1 ? argv[1] : "ocean/osrs/tests/fixtures/auto_eat_oracle.tap", "r");
     assert(f);
     Arena arena = arena_make((size_t)1 << 30);
@@ -223,6 +275,11 @@ int main(int argc, char** argv) {
             shown++;
             printf("MISMATCH call %ld tick %d hp %d: java %s risk %.9g meal %.9g foods %d complete %d | c %d risk %.9g meal %.9g foods %d complete %d\n", total, record.s.tick, record.s.hitpoints,
                 record.decision, record.risk, record.meal_risk, record.verdict_food_count, record.complete, v.decision, v.risk, v.meal_risk, v.food_count, v.complete);
+            printf("  selected java:");
+            for (int i = 0; i < record.verdict_food_count; i++) printf(" %d", record.verdict_foods[i]);
+            printf(" | c:");
+            for (int i = 0; i < v.food_count; i++) printf(" %d", v.foods[i]);
+            putchar('\n');
         }
     }
     fclose(f);

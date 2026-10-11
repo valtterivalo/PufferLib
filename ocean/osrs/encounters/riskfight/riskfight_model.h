@@ -87,6 +87,10 @@ typedef struct {
 
 typedef struct {
     OsrsEnv env;
+    int pending_pid_active;
+    int pending_pid_count[2][2];
+    PendingHit pending_pid[2][2][MAX_PENDING_HITS];
+    PendingHitMetadata pending_pid_metadata[2][2][MAX_PENDING_HITS];
     OsrsInventoryUseState inventory_use[2];
     RiskfightVisibleOpponent visible[2];
     RiskfightOutcome outcome[2];

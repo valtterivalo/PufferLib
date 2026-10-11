@@ -42,7 +42,7 @@ static void emit_conditioned_attacks(OsrsEnv* env, const RecordedPvpWindow* wind
         if (attack->tick != env->tick || attack->phase != phase) continue;
         if (phase == RECORDED_AFTER_SOURCE_PASS && attack->source != source) continue;
         int actor = attack->source ^ actor_swap;
-        queue_hit(env->tick, actor, 1 - actor, &env->players[actor],
+        queue_hit(env, actor, 1 - actor, &env->players[actor],
             &env->players[1 - actor], attack->damage, attack->style, 0,
             0, attack->damage > 0, 0, 0, 0, 0, 0);
     }

@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     prepare(&maul);
     uint32_t rng = 7;
     RiskfightSnapshot snapshot;
-    tape_snapshot(&maul, 3346, &DEFAULT_PRIORS, &rng, &snapshot);
+    (void)tape_snapshot(&maul, 3346, &DEFAULT_PRIORS, &rng, &snapshot); /* Inspect equipment only; this fixture does not load a combat world. */
     assert(snapshot.loadout[1].equipment[GEAR_SLOT_WEAPON] == ITEM_GRANITE_MAUL_ORNATE);
     puts("Canonical labels preserve raw block, timer, unknown classification and maul context");
 }

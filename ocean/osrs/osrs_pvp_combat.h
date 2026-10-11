@@ -360,7 +360,7 @@ typedef enum {
     PVP_DEF_DRAIN_BY_DAMAGE = 2,
 } PvpDefDrainType;
 
-static void pvp_remove_pending_hit(Player* attacker, int idx) {
+static void pvp_remove_pending_hit(Player* attacker, PendingHitMetadata metadata[MAX_PENDING_HITS], int idx) {
     if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
         fprintf(stderr, "pvp pending-hit queue corrupt before remove count=%d\n",
             attacker->num_pending_hits);
@@ -371,14 +371,17 @@ static void pvp_remove_pending_hit(Player* attacker, int idx) {
             idx, attacker->num_pending_hits);
         abort();
     }
-    for (int i = idx + 1; i < attacker->num_pending_hits; i++)
+    for (int i = idx + 1; i < attacker->num_pending_hits; i++) {
         attacker->pending_hits[i - 1] = attacker->pending_hits[i];
+        metadata[i - 1] = metadata[i];
+    }
     attacker->num_pending_hits--;
     memset(&attacker->pending_hits[attacker->num_pending_hits], 0,
         sizeof(attacker->pending_hits[attacker->num_pending_hits]));
+    metadata[attacker->num_pending_hits] = (PendingHitMetadata){0};
 }
 
-static void queue_hit(int tick, int attacker_idx, int defender_idx,
+static void queue_hit(OsrsEnv* env, int attacker_idx, int defender_idx,
                      Player* attacker, Player* defender, int damage,
                      AttackStyle style, int delay, int is_special, int hit_success,
                      int freeze_ticks, int heal_percent, int drain_type, int drain_percent,
@@ -386,18 +389,19 @@ static void queue_hit(int tick, int attacker_idx, int defender_idx,
     if (attacker->num_pending_hits < 0 || attacker->num_pending_hits > MAX_PENDING_HITS) {
         fprintf(stderr,
             "pvp pending-hit queue corrupt tick=%d attacker=%d defender=%d count=%d\n",
-            tick, attacker_idx, defender_idx, attacker->num_pending_hits);
+            env->tick, attacker_idx, defender_idx, attacker->num_pending_hits);
         abort();
     }
     if (attacker->num_pending_hits >= MAX_PENDING_HITS) {
         fprintf(stderr,
             "pvp pending-hit queue overflow tick=%d attacker=%d defender=%d "
             "count=%d delay=%d style=%d special=%d damage=%d\n",
-            tick, attacker_idx, defender_idx, attacker->num_pending_hits,
+            env->tick, attacker_idx, defender_idx, attacker->num_pending_hits,
             delay, style, is_special, damage);
         abort();
     }
 
+    env->pending_hit_metadata[attacker_idx][attacker->num_pending_hits] = (PendingHitMetadata){0};
     PendingHit* hit = &attacker->pending_hits[attacker->num_pending_hits++];
     *hit = (PendingHit){0};
     hit->damage = damage;
@@ -434,7 +438,7 @@ static inline void pvp_render_hit_events_add(Player* p, int hit_damage) {
 }
 
 static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
-                         PendingHit* hit) {
+                         PendingHit* hit, const PendingHitMetadata* metadata) {
     Player* attacker = &env->players[attacker_idx];
     Player* defender = &env->players[defender_idx];
 
@@ -458,13 +462,21 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     }
 
     osrs_ensure_player_equipment(defender);
+    if (metadata->damage_mode != 0 && metadata->damage_mode != 1) {
+        fprintf(stderr, "pending hit must be sampled before application\n");
+        abort();
+    }
+    int smite = metadata->smite_snapshot ? metadata->smite_snapshot == 2 : attacker->prayer == PRAYER_SMITE;
 
-    DamageResult dr = osrs_apply_passive_damage_pipeline(
+    DamageResult dr = metadata->damage_mode == 1 ? osrs_apply_post_mitigation_pipeline(
+        hit->damage, defender->current_hitpoints, 0, defender->veng_active,
+        defender->equipment_effect_profile.recoil_source != OSRS_RECOIL_SOURCE_NONE,
+        smite && !defender->is_lms) : osrs_apply_passive_damage_pipeline(
         hit->damage, defender->current_hitpoints, hit->attack_type,
         hit->defender_prayer_at_attack,
         /* is_pvp */ 1,
         defender->veng_active,
-        attacker->prayer == PRAYER_SMITE && !defender->is_lms
+        smite && !defender->is_lms
         ,
         &defender->equipment_effect_profile,
         &defender->item_effect_state,
@@ -491,14 +503,14 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
             recoil = defender->item_effect_state.recoil_charges;
         }
         osrs_consume_recoil_charges(defender, recoil);
-        queue_hit(env->tick, defender_idx, attacker_idx, defender, attacker,
+        queue_hit(env, defender_idx, attacker_idx, defender, attacker,
             recoil, ATTACK_STYLE_NONE, 0, 0, 1, 0, 0, 0, 0, 0);
         defender->pending_hits[defender->num_pending_hits - 1].kind = OSRS_HIT_RECOIL;
     }
 
     if (dr.veng_damage > 0) {
         defender->said_taste_vengeance_this_tick = 1;
-        queue_hit(env->tick, defender_idx, attacker_idx, defender, attacker,
+        queue_hit(env, defender_idx, attacker_idx, defender, attacker,
             dr.veng_damage, ATTACK_STYLE_NONE, 0, 0, 1, 0, 0, 0, 0, 0);
         defender->pending_hits[defender->num_pending_hits - 1].kind = OSRS_HIT_VENGEANCE;
     }
@@ -554,9 +566,9 @@ static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_id
         hit->ticks_until_hit--;
 
         if (hit->ticks_until_hit < 0) {
-            apply_damage(env, attacker_idx, defender_idx, hit);
+            apply_damage(env, attacker_idx, defender_idx, hit, &env->pending_hit_metadata[attacker_idx][i]);
 
-            pvp_remove_pending_hit(attacker, i);
+            pvp_remove_pending_hit(attacker, env->pending_hit_metadata[attacker_idx], i);
             i--;
         }
     }
@@ -981,7 +993,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             int this_delay = hit_delay;
             if (spec_item_idx == ITEM_DARK_BOW && i == 1)
                 this_delay = pvp_ranged_hit_delay_dbow_second(distance);
-            queue_hit(env->tick, attacker_idx, defender_idx,
+            queue_hit(env, attacker_idx, defender_idx,
                       attacker, defender, sr.damage[i], hit_style, this_delay, 1,
                       sr.damage[i] > 0, freeze_ticks, heal_percent, drain_type, drain_percent, flat_heal);
         }
@@ -990,7 +1002,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         if (spec_item_idx == ITEM_ANCIENT_GS && total_damage > 0) {
             int ags_heal = clamp((int)(defender->base_hitpoints * 0.15f), 0, 15);
-            queue_hit(env->tick, attacker_idx, defender_idx,
+            queue_hit(env, attacker_idx, defender_idx,
                       attacker, defender, 25, ATTACK_STYLE_MAGIC, 8, 1, 1, 0, 0, 0, 0, ags_heal);
         }
 
@@ -1083,7 +1095,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
                 }
                 queued_freeze_ticks = 0;
             }
-            queue_hit(env->tick, attacker_idx, defender_idx,
+            queue_hit(env, attacker_idx, defender_idx,
                       attacker, defender, damage, style, hit_delay, is_special,
                       hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
         }

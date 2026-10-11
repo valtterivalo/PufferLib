@@ -4,6 +4,8 @@
  * client shows. Our side is read through GsClient, the client as the recording or the sim's observation layer shows it. */
 #include "gs_rules.h"
 #include "gs_items.h"
+#include "../osrs_damage.h"
+#include "gs_health_history.h"
 
 enum { GS_WORN_SLOTS = 14, GS_WORN_WEAPON = 3, GS_WORN_RING = 12, GS_MAX_PLAYERS = 8, GS_MAX_EQUIPMENT = 16, GS_KIT_WEAPON = 3, GS_ITEM_OFFSET = 2048, GS_TRACKING_MAXIMUM_DISTANCE = 20 };
 
@@ -31,6 +33,9 @@ typedef struct {
     int equipment_count, equipment[GS_MAX_EQUIPMENT];
     GsCurrentAnimation opponent_animation;
     GsObservedGear opponent_gear;
+    int local_combat_level, opponent_combat_level;
+    int forecast_available;
+    int local_base_known, local_base[7];
 } GsClient;
 
 typedef struct {
@@ -41,10 +46,12 @@ typedef struct {
     GsBonuses bonuses;
 } GsArmament;
 
-typedef enum { GS_BAR_READ, GS_BAR_FRESH, GS_BAR_BEHIND_A_MEAL } GsBar;
+typedef enum { GS_BAR_UNREAD, GS_BAR_READ, GS_BAR_FRESH } GsBar;
 typedef enum { GS_RECOIL_UNSEEN, GS_RECOIL_SEEN } GsRecoil;
 typedef struct { int lands, least, most; double accuracy; } GsStrike;
 enum { GS_UNSEEN_HEAL = 8, GS_FOOD_CAP_TICKS = 16, GS_FIGHTING_OVERHEAL = 115, GS_UNSEEN_LIMIT = 64 };
+typedef struct { int tick; GsSwing by_pid[3]; } GsPendingLaunch;
+typedef struct { int tick, exact; GsSwing by_pid[3]; } GsLocalLaunch;
 
 typedef struct {
     GsClient c;
@@ -58,14 +65,20 @@ typedef struct {
     int has_unprocced, unprocced;
     int has_pulse, pulse_tick, pulse_superseded, pulse_kinds;
     GsTimerState pulse_before;
-    int local_attack_tick, own_hit_lands, own_hit_damage, attack_tick;
+    int local_attack_tick, local_spec_tick, own_hit_lands, own_hit_damage, attack_tick;
     int recoil_charges;
 
     int arsenal_count, arsenal_id[GS_ARSENAL_SIZE];
     GsArmament arsenal[GS_ARSENAL_SIZE];
     int inventory_units[3], ready[3];
     GsHealthRange opponent_hitpoints;
-    int has_opponent_swing, swing_spec, swing_distance, swing_tick, swing_stacks; GsArmament swing_armament;
+    GsPendingLaunch pending_launches[GS_MAX_PENDING_SWINGS];
+    int pending_launch_count, pending_launch_unknown;
+    GsLocalLaunch local_launches[GS_MAX_PENDING_SWINGS];
+    int local_launch_count, local_launch_unknown, local_xp_tick, local_xp_count, local_xp_damage, local_xp_matched;
+    GsSwing reflection_swings[GS_MAX_PENDING_SWINGS];
+    int reflection_count, vengeance_proc_tick, reflected_proc_tick, landed_count, landed_owned, echo_unknown;
+    int echo_unknown_lands, vengeance_proc_lands;
     int has_swung, swung_spec, swung_tick, swung_stacks; GsArmament swung_armament;
     int landed_tick, landed_damage;
     GsBonuses surplus;
@@ -81,12 +94,27 @@ typedef struct {
     GsHealthRange opponent_bar;
     GsRecoil recoil;
     int struck_tick, has_struck_damage, struck_damage;
+    GsHealthHistory* health;
 } GsInfer;
 
 static void gs_eater_reset(GsInfer* s) {
+    gs_health_history_release(s->health);
+    s->health = NULL;
     s->arsenal_count = 0;
     s->opponent_hitpoints = (GsHealthRange){GS_OVERHEALED_HP, GS_OVERHEALED_HP, GS_OVERHEALED_HP};
-    s->has_opponent_swing = 0;
+    s->pending_launch_count = 0;
+    s->pending_launch_unknown = 0;
+    s->local_launch_count = s->local_launch_unknown = 0;
+    s->local_xp_tick = INT_MIN;
+    s->local_xp_count = 0;
+    s->local_xp_matched = 0;
+    s->echo_unknown = 0;
+    s->echo_unknown_lands = INT_MIN;
+    s->vengeance_proc_lands = INT_MIN;
+    s->reflection_count = 0;
+    s->landed_owned = 0;
+    s->vengeance_proc_tick = s->reflected_proc_tick = INT_MIN;
+    s->landed_count = 0;
     s->has_swung = 0;
     s->surplus = GS_NO_BONUSES;
     s->soul_stacks = GS_NO_STACKS;
@@ -95,7 +123,7 @@ static void gs_eater_reset(GsInfer* s) {
     s->opponent_struck_tick = INT_MIN;
     s->opponent_in_reach_since = INT_MIN;
     s->opponent_ate = INT_MIN;
-    s->bar = GS_BAR_READ;
+    s->bar = GS_BAR_UNREAD;
     s->damage_since_bar = 0;
     s->unseen_count = 0;
     s->watched_count = 0;
@@ -115,6 +143,7 @@ static void gs_infer_init(GsInfer* s) {
     s->pid = gs_pid_unknown();
     s->own_hit_lands = INT_MIN;
     s->local_attack_tick = INT_MIN;
+    s->local_spec_tick = INT_MIN;
     s->attack_tick = INT_MIN;
     s->recoil_charges = 40;
     s->wielded_weapon = INT_MIN;
@@ -123,6 +152,16 @@ static void gs_infer_init(GsInfer* s) {
     s->swing_reflect = GS_REFLECT_WEAK;
     for (int i = 0; i < 3; i++) s->ready[i] = INT_MIN;
     gs_eater_reset(s);
+}
+
+static void gs_infer_clear(GsInfer* s) {
+    gs_health_history_release(s->health);
+    s->health = NULL;
+}
+
+static void gs_infer_clone(GsInfer* out, const GsInfer* source) {
+    *out = *source;
+    if (out->health) out->health->references++;
 }
 
 /* ---- the client */
@@ -331,17 +370,143 @@ static GsSwing gs_swing_of(const GsInfer* s, const GsArmament* a, int distance, 
 
 static GsReflect gs_reflect_of_max(int max) { return max >= 40 ? GS_REFLECT_WORTH : GS_REFLECT_WEAK; }
 
-/* AutoEater.opponentSwing: the animated swing as the pid applies, the numbers read from the client now */
-static GsSwing gs_opponent_swing_for(const GsInfer* s, GsPid pid) {
-    const GsArmament* a = &s->swing_armament;
+/* Freeze launch damage under each PID hypothesis; later gear/prayer changes cannot rewrite it. */
+static GsSwing gs_launch_swing(const GsInfer* s, const GsArmament* a, int spec, int distance, int stacks, int tick, GsPid pid) {
     GsSwing swing;
-    if (s->swing_spec)
-        swing = gs_opponent_swing(s->swing_tick, (GsStyle)a->style, s->swing_distance, pid, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
-            gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->has_spec ? a->spec : a->normal)), gs_spec_accuracy(&s->c, a));
-    else swing = gs_swing_of(s, a, s->swing_distance, s->swing_stacks, s->swing_tick, pid);
+    if (spec)
+        swing = gs_opponent_swing(tick, (GsStyle)a->style, distance, pid, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
+            gs_protected_damage(&s->c, gs_spec_style(a), gs_most_per_arrow(a, a->spec)), gs_spec_accuracy(&s->c, a));
+    else swing = gs_swing_of(s, a, distance, stacks, tick, pid);
     swing.arrows = gs_arrows(a->weapon);
     return swing;
 }
+
+static GsSwing gs_pending_remaining(GsSwing swing, int tick) {
+    int landed = imax(0, imin(swing.arrows, tick - swing.lands + 1));
+    swing.lands += landed;
+    swing.arrows -= landed;
+    return swing;
+}
+
+static void gs_pending_settle(GsInfer* s, int tick) {
+    int kept = 0;
+    for (int i = 0; i < s->pending_launch_count; i++) {
+        GsPendingLaunch* launch = &s->pending_launches[i];
+        int remaining = 0;
+        for (int p = 0; p < 3; p++) remaining |= gs_pending_remaining(launch->by_pid[p], tick).arrows > 0;
+        if (remaining) s->pending_launches[kept++] = *launch;
+    }
+    s->pending_launch_count = kept;
+}
+
+/* Only call when the observation owns the opponent's direct hit, not an ambiguous raw hitsplat. */
+static void gs_pending_landed(GsInfer* s, int tick, int amount, GsPid pid) {
+    int matched = -1;
+    for (int i = 0; i < s->pending_launch_count; i++) {
+        GsSwing swing = s->pending_launches[i].by_pid[pid];
+        if (swing.lands <= tick && tick < swing.lands + swing.arrows
+                && (amount == 0 || (amount >= swing.least && amount <= swing.most))) {
+            if (matched >= 0) { s->pending_launch_unknown = 1; return; }
+            matched = i;
+        }
+    }
+    if (matched < 0) { s->pending_launch_unknown = 1; return; }
+    for (int p = 0; p < 3; p++)
+        s->pending_launches[matched].by_pid[p] = gs_pending_remaining(s->pending_launches[matched].by_pid[p], tick);
+}
+
+/* Applied direct hits can only answer on this tick or the next, as eat_echoes schedules.
+ * Unlike unsupported launches, their unknown echo has a proven terminal landing clock. */
+static int gs_applied_echo_lands(const GsInfer* s, int tick, int local_reflector) {
+    GsPid pid = s->pid.owner;
+    GsLead lead = local_reflector ? gs_local_lead(pid) : gs_opponent_lead(pid);
+    return tick + (pid == GS_PID_UNKNOWN || lead == GS_LEAD_TARGET);
+}
+
+static void gs_unknown_applied_echo(GsInfer* s, int tick, int local_reflector) {
+    int lands = gs_applied_echo_lands(s, tick, local_reflector);
+    s->echo_unknown_lands = s->echo_unknown ? imax(s->echo_unknown_lands, lands) : lands;
+    s->echo_unknown = 1;
+}
+
+static void gs_local_pending_settle(GsInfer* s, int tick) {
+    int kept = 0;
+    if (s->local_xp_tick != INT_MIN && s->local_xp_tick < tick && !s->local_xp_matched)
+        s->local_launch_unknown = 1;
+    for (int i = 0; i < s->local_launch_count; i++) {
+        int remaining = 0;
+        for (int p = 0; p < 3; p++) remaining |= gs_pending_remaining(s->local_launches[i].by_pid[p], tick).arrows > 0;
+        if (remaining) s->local_launches[kept++] = s->local_launches[i];
+    }
+    s->local_launch_count = kept;
+    kept = 0;
+    for (int i = 0; i < s->reflection_count; i++)
+        if (s->reflection_swings[i].lands > tick) s->reflection_swings[kept++] = s->reflection_swings[i];
+    s->reflection_count = kept;
+    if (s->echo_unknown && tick >= s->echo_unknown_lands) s->echo_unknown = 0;
+    if (tick >= s->vengeance_proc_lands) s->vengeance_proc_lands = INT_MIN;
+}
+
+static void gs_local_pending_experience(GsInfer* s) {
+    int matched = -1;
+    for (int i = 0; i < s->local_launch_count; i++) {
+        if (s->local_launches[i].tick != s->local_xp_tick) continue;
+        if (matched >= 0) { s->local_launch_unknown = 1; return; }
+        matched = i;
+    }
+    if (matched < 0) return; /* The animation event may follow its XP event in the same tick. */
+    GsLocalLaunch* launch = &s->local_launches[matched];
+    if (s->local_xp_count != 1 || launch->by_pid[GS_PID_UNKNOWN].arrows != 1) {
+        s->local_launch_unknown = 1;
+        return;
+    }
+    for (int p = 0; p < 3; p++) {
+        launch->by_pid[p].least = launch->by_pid[p].most = s->local_xp_damage;
+        launch->by_pid[p].accuracy = 1;
+    }
+    launch->exact = 1;
+    s->local_xp_matched = 1;
+}
+
+static int gs_local_pending_known(const GsInfer* s, int tick) {
+    (void)tick;
+    return !s->local_launch_unknown && (s->local_xp_tick == INT_MIN || s->local_xp_matched);
+}
+
+static void gs_record_reflection(GsInfer* s) {
+    if (s->vengeance_proc_tick == INT_MIN || s->vengeance_proc_tick == s->reflected_proc_tick
+            || s->landed_count != 1 || !s->landed_owned || s->landed_tick > s->vengeance_proc_tick
+            || s->vengeance_proc_tick > s->landed_tick + 1) return;
+    if (s->reflection_count == GS_MAX_PENDING_SWINGS) abort();
+    int damage = osrs_apply_post_mitigation_pipeline(s->landed_damage, s->landed_damage, 0, 1, 0, 0).veng_damage;
+    s->reflection_swings[s->reflection_count++] = (GsSwing){s->landed_tick + 1, damage, damage, 1, 1};
+    s->reflected_proc_tick = s->vengeance_proc_tick;
+}
+
+static int gs_vengeance_reflections_known(const GsInfer* s, int tick, GsPid pid) {
+    (void)tick; /* Only a fresh observation retires possible echoes, not a future query. */
+    if (s->vengeance_proc_lands != INT_MIN
+            && (s->landed_count != 1 || s->reflected_proc_tick != s->vengeance_proc_tick)) return 0;
+    if (pid == GS_PID_UNKNOWN && s->reflection_count > 0) return 0;
+    return 1;
+}
+
+/* AutoEater.PendingDamage covers opponent attack launches and vengeance returns.
+ * The native snapshot additionally covers local launches and unresolved recoil. */
+static int gs_pending_attacks_known(const GsInfer* s, int tick, GsPid pid) {
+    return !s->pending_launch_unknown && gs_vengeance_reflections_known(s, tick, pid);
+}
+
+static int gs_reflection_known(const GsInfer* s, int tick, GsPid pid) {
+    return !s->echo_unknown && gs_vengeance_reflections_known(s, tick, pid);
+}
+
+/* All native pending sources must be available; unknown is never an empty queue. */
+static int gs_pending_damage_known(const GsInfer* s, int tick, GsPid pid) {
+    return !s->pending_launch_unknown
+        && gs_local_pending_known(s, tick) && gs_reflection_known(s, tick, pid);
+}
+
 
 static GsAttack gs_spec_attack(const GsInfer* s, const GsArmament* a) {
     return (GsAttack){(GsStyle)a->style, gs_protected_damage(&s->c, gs_spec_style(a), gs_spec_least(a)),
@@ -392,11 +557,65 @@ static double gs_local_accuracy_dropped(const GsClient* c, int weapon, int level
 
 static double gs_local_accuracy(const GsClient* c, int weapon) { return gs_local_accuracy_dropped(c, weapon, 0); }
 
+typedef struct { int maul_id; int inventory_count, shield_worn; } GsOwn;
+
+static int gs_protect(const GsClient* c, int damage, GsHeadIcon prayer) { return c->overhead == prayer ? (int)(damage * 0.6) : damage; }
+
+enum { GS_MAUL_STANCES = 3 };
+
+/* AutoSpecialAttack.maul: the maul spec's most and chance against his visible gear, empty without a held ornate maul */
+static int gs_maul(const GsInfer* s, const GsOwn* own, int* most, double* accuracy) {
+    const GsClient* c = &s->c;
+    if (!own->maul_id || c->com_mode >= GS_MAUL_STANCES) return 0;
+    const GsItem* ours[GS_WORN_SLOTS + 1];
+    int count = 0;
+    ours[count++] = gs_item(own->maul_id);
+    GsBonuses strength = gs_bonuses_of(own->maul_id);
+    for (int slot = 0; slot < GS_WORN_SLOTS; slot++) {
+        if (c->worn[slot] <= 0 || slot == GS_WORN_WEAPON || slot == 5) continue;
+        if (!gs_item(c->worn[slot])->has_stats) return 0;
+        ours[count++] = gs_item(c->worn[slot]);
+        strength = gs_bonuses_plus(strength, gs_bonuses_of(c->worn[slot]));
+    }
+    if (!gs_item(own->maul_id)->has_stats) return 0;
+    const GsItem* theirs[GS_MAX_EQUIPMENT];
+    int theirs_count = 0;
+    for (int i = 0; i < c->equipment_count; i++)
+        if (c->equipment[i] >= GS_ITEM_OFFSET) {
+            if (!gs_item(c->equipment[i] - GS_ITEM_OFFSET)->has_stats) return 0;
+            theirs[theirs_count++] = gs_item(c->equipment[i] - GS_ITEM_OFFSET);
+        }
+    int stance = c->com_mode == 0 ? 3 : 0;
+    int prayer = gs_prayer_active(c, GS_PRAYER_PIETY) ? 120 : gs_prayer_active(c, GS_PRAYER_CHIVALRY) || gs_prayer_active(c, GS_PRAYER_INCREDIBLE_REFLEXES) ? 115
+        : gs_prayer_active(c, GS_PRAYER_IMPROVED_REFLEXES) ? 110 : gs_prayer_active(c, GS_PRAYER_CLARITY_OF_THOUGHT) ? 105 : 100;
+    int defence_bonus = 0;
+    for (int i = 0; i < theirs_count; i++) defence_bonus += gs_damage_defence(GS_DAMAGE_CRUSH, theirs[i]);
+    int attack_bonus = gs_sum_attack(GS_DAMAGE_CRUSH, ours, count);
+    *accuracy = gs_chance(gs_roll(gs_effective_level(c->attack, prayer, stance), attack_bonus), gs_roll(gs_effective_level(120, 125, 3), defence_bonus));
+    *most = gs_protect(c, gs_max_normal(GS_W_GRANITE_MAUL, GS_MELEE, gs_local_levels(c), strength), GS_HEAD_MELEE);
+    return 1;
+}
 /* ---- AutoEater: events */
-static void gs_eater_opponent_hitsplat(GsInfer* s) { s->bar = GS_BAR_FRESH; }
+static void gs_eater_unseen(GsInfer* s, int tick) {
+    for (int i = 0; i < s->unseen_count; i++) if (s->unseen[i] == tick) return;
+    if (s->unseen_count == GS_UNSEEN_LIMIT) {
+        fprintf(stderr, "unseen consumption history full at tick %d: target=%d count=%d last_game_tick=%d health_boundary=%d\n",
+            tick, s->timed, s->unseen_count, s->tick, s->health && s->health->has_started ? s->health->incorporated_before : INT_MIN);
+        abort();
+    }
+    s->unseen[s->unseen_count++] = tick;
+}
+static void gs_eater_opponent_hitsplat(GsInfer* s, int tick) {
+    s->bar = GS_BAR_FRESH;
+    if (s->opponent_ate != tick) {
+        gs_eater_unseen(s, tick);
+        gs_health_consumption(&s->health, tick, 0);
+    }
+}
 static void gs_eater_opponent_struck(GsInfer* s, int tick, int amount) {
     s->opponent_struck_tick = tick;
     s->damage_since_bar += amount;
+    gs_health_damage(&s->health, tick, amount);
 }
 
 static int gs_eater_opponent_warned(const GsInfer* s, int* out) {
@@ -420,30 +639,49 @@ static GsWarning gs_eater_warning(const GsInfer* s) {
 static void gs_eater_observe(GsInfer* s, int tick) {
     const GsClient* c = &s->c;
     gs_armament_of(s);
-    if (c->opponent_animation.source == GS_ANIMATION_OBSERVED && c->opponent_animation.id >= 0 && s->ate_at != tick && s->masked_at != tick) {
-        assert(s->unseen_count < GS_UNSEEN_LIMIT);
-        s->unseen[s->unseen_count++] = tick;
+    if (c->opponent_animation.source == GS_ANIMATION_OBSERVED && c->opponent_animation.id >= 0 && s->ate_at != tick) {
+        gs_eater_unseen(s, tick);
         s->masked_at = tick;
+        gs_health_consumption(&s->health, tick, 0);
     }
-#ifdef GS_HP_BELIEF
-    assert(s->watched_count < GS_WATCHED_LIMIT);
-    s->watched[s->watched_count++] = s->ate_at == tick ? GS_SEEN_ATE : s->masked_at == tick ? GS_SEEN_HIDDEN : GS_SEEN_QUIET;
-#endif
-    if (c->ratio >= 0 && s->bar != GS_BAR_BEHIND_A_MEAL) {
-        GsHealthRange shown = gs_health_of_bar(c->ratio, c->scale, GS_ASSUMED_MAX_HP);
-        if (s->bar == GS_BAR_FRESH) {
-            if (shown.low - (s->opponent_hitpoints.high - s->damage_since_bar) >= GS_UNSEEN_HEAL) s->opponent_ate = tick - 1;
-            int kept = 0;
-            for (int i = 0; i < s->unseen_count; i++) if (s->unseen[i] >= tick) s->unseen[kept++] = s->unseen[i];
-            s->unseen_count = kept;
-            s->watched_count = 0;
-            s->damage_since_bar = 0;
-            s->bar = GS_BAR_READ;
+    int read = c->ratio >= 0 && s->bar != GS_BAR_READ;
+    if (read) {
+        int base = GS_ASSUMED_MAX_HP;
+        if (s->health && s->health->has_started) {
+            base = 0;
+            int lower = imax(10, 4 * c->opponent_combat_level - 405);
+            for (int i = 0; i < s->health->prior.count; i++)
+                if (s->health->prior.branches[i].base >= lower) base = imax(base, s->health->prior.branches[i].base);
+            if (!base) abort();
         }
-        int overheal = s->opponent_struck_tick >= tick - GS_FOOD_CAP_TICKS ? GS_FIGHTING_OVERHEAL : GS_OVERHEALED_HP;
-        s->opponent_hitpoints = c->ratio == c->scale ? (GsHealthRange){shown.low, overheal, overheal} : shown;
-        s->opponent_bar = s->opponent_hitpoints;
+        int low = c->ratio == 0 ? 0 : c->ratio == 1 ? 1 : (base * (c->ratio - 1) + c->scale - 2) / (c->scale - 1);
+        if (s->bar == GS_BAR_FRESH) {
+            if (low - (s->opponent_hitpoints.high - s->damage_since_bar) >= GS_UNSEEN_HEAL) s->opponent_ate = tick - 1;
+            s->damage_since_bar = 0;
+        }
+        s->bar = GS_BAR_READ;
     }
+    gs_health_observe(&s->health, tick, imax(10, 4 * c->opponent_combat_level - 405), read, c->ratio, c->scale, s->bar == GS_BAR_UNREAD);
+    const GsTarget* target = &s->health->target;
+    int low = INT_MAX, high = INT_MIN, ready = s->health->earliest_hard_ready;
+    for (int i = 0; i < target->history_count; i++) {
+        const GsTargetBranch* b = &target->history[i];
+        for (int hp = 0; hp < b->levels; hp++) if (b->hp[hp]) { low = imin(low, hp); high = imax(high, hp); }
+    }
+    if (s->bar != GS_BAR_UNREAD) s->opponent_hitpoints = (GsHealthRange){low, high, gs_health_cap(99)};
+    s->opponent_bar = s->opponent_hitpoints;
+    s->opponent_hard_food_ready = ready;
+    int kept = 0;
+    for (int i = 0; i < s->unseen_count; i++) {
+        int remove = 0;
+        for (int e = 0; e < s->health->evidence_count; e++) {
+            const GsHealthEvidence* evidence = &s->health->evidence[e];
+            remove |= (evidence->has_bar && s->unseen[i] < evidence->tick)
+                || (evidence->consumption == 2 && s->unseen[i] <= evidence->tick);
+        }
+        if (!remove) s->unseen[kept++] = s->unseen[i];
+    }
+    s->unseen_count = kept;
     int weapon = gs_local_weapon(c);
     if (weapon != s->wielded_weapon) {
         s->wielded_weapon = weapon;
@@ -460,15 +698,13 @@ enum { GS_GRANITE_MAUL_SPEC_ANIMATION = 1667 };
 static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, int tick) {
     const GsClient* c = &s->c;
     if (kind == GS_KIND_EAT) {
-        s->opponent_hitpoints = gs_health_healed(s->opponent_hitpoints);
-        s->bar = GS_BAR_BEHIND_A_MEAL;
-        s->opponent_hard_food_ready = tick + 3;
+        gs_health_consumption(&s->health, tick, 1);
         s->opponent_ate = tick;
         s->ate_at = tick;
     } else {
-        assert(s->unseen_count < GS_UNSEEN_LIMIT);
-        s->unseen[s->unseen_count++] = tick;
+        gs_eater_unseen(s, tick);
         s->masked_at = tick;
+        gs_health_consumption(&s->health, tick, 0);
     }
     if (kind != GS_KIND_ATTACK && kind != GS_KIND_INSTANT_SPEC) return;
     GsArmament* armed;
@@ -477,8 +713,11 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
         GsArmament seen;
         if (!armed && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &seen)) armed = gs_arsenal_merge(s, GS_ITEM_GRANITE_MAUL_PLUS, seen);
     } else armed = gs_armament_of(s);
-    if (!armed) return;
     int spec_cost = gs_animation_spec_cost(animation);
+    if (!armed || (spec_cost && !armed->has_spec)) {
+        s->pending_launch_unknown = 1;
+        return;
+    }
     s->has_swung = 1;
     s->swung_armament = *armed;
     s->swung_spec = spec_cost != 0;
@@ -488,13 +727,14 @@ static void gs_eater_opponent_animated(GsInfer* s, GsKind kind, int animation, i
     if (soul && kind == GS_KIND_ATTACK) s->soul_stacks = animation == GS_BEHEAD_ANIMATION ? gs_soul_beheaded(tick) : gs_soul_swung(before, tick);
     int stacks = !soul ? 0 : animation == GS_BEHEAD_ANIMATION ? gs_soul_at(before, tick) : gs_soul_at(s->soul_stacks, tick);
     s->swung_stacks = stacks;
-    s->swing_stacks = stacks;
     s->swing_reflect = spec_cost ? GS_REFLECT_SPEC : gs_reflect_of_max(gs_most_per_arrow(armed, gs_armament_most(s, armed, stacks)));
-    s->has_opponent_swing = 1;
-    s->swing_armament = *armed;
-    s->swing_spec = spec_cost != 0;
-    s->swing_distance = gs_distance(c);
-    s->swing_tick = tick;
+    gs_pending_settle(s, tick);
+    if (s->pending_launch_count == GS_MAX_PENDING_SWINGS) abort();
+    GsPendingLaunch* launch = &s->pending_launches[s->pending_launch_count++];
+    launch->tick = tick;
+    for (int p = 0; p < 3; p++)
+        launch->by_pid[p] = gs_launch_swing(s, armed, spec_cost != 0, gs_distance(c), stacks, tick,
+            s->pid.owner == GS_PID_UNKNOWN ? (GsPid)p : s->pid.owner);
 }
 
 static GsBonuses gs_bonuses_of_style(GsStyle style, int points) {
@@ -539,10 +779,47 @@ static void gs_eater_local_animated(GsInfer* s, GsKind kind, int animation, int 
     const GsClient* c = &s->c;
     int weapon = gs_local_weapon(c);
     int cost = gs_animation_spec_cost(animation);
+    int weapon_kind = gs_weapon_kind(weapon);
+    /* Only Voidwaker and maul have owned local spec distributions here; other specials, including multi-hit shapes, stay unknown. */
+    if (gs_weapon_style(weapon) < 0 || (cost && weapon_kind != GS_W_VOIDWAKER && weapon_kind != GS_W_GRANITE_MAUL)) {
+        s->local_launch_unknown = 1;
+        return;
+    }
+    /* Retained bounds are final launch-time damage; correlated XP replaces them without another prayer reduction. */
+    int least = 0, most;
+    double accuracy;
+    if (cost && weapon_kind == GS_W_GRANITE_MAUL) {
+        GsOwn own = {.maul_id = weapon};
+        if (!gs_maul(s, &own, &most, &accuracy)) {
+            s->local_launch_unknown = 1;
+            return;
+        }
+    } else if (cost) {
+        int normal = gs_local_normal(c, weapon);
+        least = gs_protect(c, normal / 2, GS_HEAD_MAGIC);
+        most = gs_protect(c, normal * 3 / 2, GS_HEAD_MAGIC);
+        accuracy = 1;
+    } else {
+        most = gs_local_normal(c, weapon);
+        accuracy = gs_local_accuracy(c, weapon);
+    }
     s->has_local_swing = 1;
     s->local_swing = gs_local_swing_of(tick, (GsStyle)gs_local_style(weapon), gs_distance(c), pid,
-        cost ? gs_local_spec_or_normal(c, weapon) : gs_local_normal(c, weapon), cost ? 1 : gs_local_accuracy(c, weapon));
+        most, accuracy);
     if (s->local_swing.lands <= s->opponent.immune_through) s->local_swing.accuracy = 0;
+    gs_local_pending_settle(s, tick - 1);
+    if (s->local_launch_count == GS_MAX_PENDING_SWINGS) abort();
+    GsLocalLaunch* launch = &s->local_launches[s->local_launch_count++];
+    *launch = (GsLocalLaunch){.tick = tick};
+    int arrows = gs_arrows(weapon_kind);
+    for (int p = 0; p < 3; p++) {
+        launch->by_pid[p] = gs_local_swing_of(tick, (GsStyle)gs_local_style(weapon), gs_distance(c), pid == GS_PID_UNKNOWN ? (GsPid)p : pid,
+            most / arrows, accuracy);
+        launch->by_pid[p].least = least;
+        launch->by_pid[p].arrows = arrows;
+        if (launch->by_pid[p].lands <= s->opponent.immune_through) launch->by_pid[p].accuracy = 0;
+    }
+    if (s->local_xp_tick == tick) gs_local_pending_experience(s);
 }
 
 static void gs_eater_struck(GsInfer* s, int damage, int tick) {
@@ -564,6 +841,8 @@ static void gs_eater_struck_back(GsInfer* s, int amount, int tick) {
 }
 
 static void gs_eater_settle(GsInfer* s, int tick) {
+    gs_pending_settle(s, tick);
+    gs_local_pending_settle(s, tick);
     if (s->has_struck_damage && tick > s->struck_tick + 1) {
         s->recoil = GS_RECOIL_UNSEEN;
         s->has_struck_damage = 0;
@@ -631,6 +910,7 @@ static void gs_on_animation(GsInfer* s, int observed_tick, int who, int animatio
             s->local_timer = gs_timer_observe(s->local_timer, kind, observed_tick, gs_speed_after(gs_local_weapon(c), animation, GS_PACE_NOT_RAPID));
         if (kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC) {
             s->local_attack_tick = observed_tick;
+            if (gs_animation_spec_cost(animation) > 0) s->local_spec_tick = observed_tick;
             if (s->has_pulse) s->pulse_superseded = 1;
         }
         if (rival && gs_pid_counts(animation, gs_weapon_style(gs_local_weapon(c))) && gs_duel(s, 0, s->timed)) s->pid = gs_pid_local_attacked(s->pid, observed_tick);
@@ -645,9 +925,15 @@ static void gs_on_animation(GsInfer* s, int observed_tick, int who, int animatio
 }
 
 static void gs_on_overhead_text(GsInfer* s, int observed_tick, int who) {
+    if (who == 0) { gs_unknown_applied_echo(s, observed_tick, 1); return; }
     if (s->tracker_current != who) return;
     gs_sync_opponent_timer(s, observed_tick);
     s->opponent = gs_inference_veng_procced(s->opponent, observed_tick);
+    s->vengeance_proc_tick = observed_tick;
+    /* An unresolved proc association survives until the next fresh observation,
+     * even when PID would let an already-paired reflection land this tick. */
+    s->vengeance_proc_lands = observed_tick + 1;
+    gs_record_reflection(s);
 }
 
 static void gs_on_surge(GsInfer* s, int observed_tick) {
@@ -698,23 +984,36 @@ static int gs_ring_charges_taken(GsInfer* s, int ring, int damage) {
 enum { GS_ATTACK_HITSPLAT_ME = 16, GS_ATTACK_HITSPLAT_OTHER = 17, GS_ATTACK_HITSPLAT_MAX_ME = 43 };
 static int gs_attack_hitsplat(int type) { return type == GS_ATTACK_HITSPLAT_ME || type == GS_ATTACK_HITSPLAT_OTHER || type == GS_ATTACK_HITSPLAT_MAX_ME; }
 
-static void gs_on_hitsplat(GsInfer* s, int hit_tick, int who, int amount, int type, int mine) {
+static void gs_on_hitsplat(GsInfer* s, int hit_tick, int who, int amount, int type, int mine, int hp_damage) {
     if (who != 0 && s->tracker_current != who) return;
     gs_sync_opponent_timer(s, hit_tick);
     int rival = s->timed >= 0;
     int struck = gs_attack_hitsplat(type);
+    if (rival && who == s->timed) gs_eater_opponent_hitsplat(s, hit_tick);
+    if (hp_damage && rival && who == s->timed) gs_eater_opponent_struck(s, hit_tick, amount);
+    /* Raw recorder hitsplats cannot identify recoil as a distinct causal source. */
+    if (struck && rival && amount > 0
+            && ((who == 0 && gs_recoil_reflectable(s) > 0)
+                || (who == s->timed && s->recoil == GS_RECOIL_SEEN))) gs_unknown_applied_echo(s, hit_tick, who == 0);
     if (struck && who == 0) gs_ring_charges_taken(s, s->c.worn[GS_WORN_RING], amount);
-    if (rival && who == s->timed) gs_eater_opponent_hitsplat(s);
-    if (struck && rival && who == s->timed) gs_eater_opponent_struck(s, hit_tick, amount);
     if (struck && rival && who == 0 && gs_duel(s, s->timed, 0)) {
         s->pid = gs_pid_hit_on_local(s->pid, hit_tick, amount);
         gs_eater_struck_back(s, amount, hit_tick);
         if (type == GS_ATTACK_HITSPLAT_MAX_ME) gs_eater_max_hit(s, amount);
     }
     if (struck && rival && who == s->timed && mine && gs_duel(s, 0, s->timed)) {
+        s->landed_owned = 1;
         s->pid = gs_pid_hit_on_opponent(s->pid, hit_tick, amount);
+        s->landed_count = hit_tick == s->landed_tick ? s->landed_count + 1 : 1;
         s->landed_damage = hit_tick == s->landed_tick ? imax(s->landed_damage, amount) : amount;
         s->landed_tick = hit_tick;
+        if (s->landed_count > 1) {
+            int kept = 0;
+            for (int i = 0; i < s->reflection_count; i++)
+                if (s->reflection_swings[i].lands != hit_tick + 1) s->reflection_swings[kept++] = s->reflection_swings[i];
+            s->reflection_count = kept;
+        }
+        gs_record_reflection(s);
     }
     if (who != 0 && s->timed == who) {
         s->damage_since_reading = (s->has_damage_since_reading ? s->damage_since_reading : 0) + amount;
@@ -727,11 +1026,19 @@ static int gs_damage_of_experience(int experience, int combat_level) {
     return (experience * 30 + per_thirty / 2) / per_thirty;
 }
 
-/* StatChanged of hitpoints with a gain: our hit on the tracked player */
-static void gs_on_hitpoints_gain(GsInfer* s, int observed_tick, int gained, int combat_level) {
+/* Real or fake hitpoints XP from our hit on the tracked player; the XP modifier is the target's combat level. */
+static void gs_on_hitpoints_gain(GsInfer* s, int observed_tick, int gained, int target_combat_level) {
     gs_sync_opponent_timer(s, observed_tick);
     if (!(s->timed >= 0 && s->c.local_interacting == s->timed)) return;
-    int damage = gs_damage_of_experience(gained, combat_level);
+    int damage = gs_damage_of_experience(gained, target_combat_level);
+    s->local_xp_count = s->local_xp_tick == observed_tick ? s->local_xp_count + 1 : 1;
+    if (s->local_xp_tick != observed_tick) {
+        if (s->local_xp_tick != INT_MIN && !s->local_xp_matched) s->local_launch_unknown = 1;
+        s->local_xp_matched = 0;
+    }
+    s->local_xp_tick = observed_tick;
+    s->local_xp_damage = damage;
+    gs_local_pending_experience(s);
     int style = gs_weapon_style(gs_local_weapon(&s->c));
     if (style < 0) return;
     s->own_hit_damage = damage;
@@ -837,6 +1144,7 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
     out->local_accuracy = accuracy;
     out->opponent_hp = s->opponent_hitpoints;
     out->opponent_bar = s->opponent_bar;
+    if (s->health) out->target = s->health->target;
     out->offence = offence;
     out->tolerance = tolerance;
     out->pid_flip = gs_pid_flip_odds(&s->pid, tick);
@@ -894,13 +1202,18 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
         out->hidden[out->hidden_count++] = (GsHidden){0, gs_spec_attack(s, &hidden)};
     if (!gs_granite_maul(s) && gs_armed(c, s->surplus, GS_ITEM_GRANITE_MAUL_PLUS, &hidden))
         out->hidden[out->hidden_count++] = (GsHidden){1, (GsAttack){GS_MELEE, 0, gs_protected_damage(c, hidden.style, hidden.spec), 50, 1, gs_armament_accuracy(c, &hidden), 0, 1}};
-    if (s->has_opponent_swing) {
-        GsSwing swing = gs_opponent_swing_for(s, out->pid);
-        int landed = imax(0, imin(swing.arrows, tick - swing.lands + 1));
-        if (landed != swing.arrows) {
-            out->has_swing = 1;
-            out->swing = (GsSwing){swing.lands + landed, swing.least, swing.most, swing.accuracy, swing.arrows - landed};
+    for (int i = 0; i < s->pending_launch_count; i++) {
+        GsSwing swing = gs_pending_remaining(s->pending_launches[i].by_pid[out->pid], tick);
+        if (swing.arrows) out->swings[out->swing_count++] = swing;
+    }
+    for (int i = 1; i < out->swing_count; i++) {
+        GsSwing swing = out->swings[i];
+        int j = i;
+        while (j > 0 && out->swings[j - 1].lands > swing.lands) {
+            out->swings[j] = out->swings[j - 1];
+            j--;
         }
+        out->swings[j] = swing;
     }
     if (s->has_local_swing && s->local_swing.lands > tick) { out->has_local_swing = 1; out->local_swing = s->local_swing; }
 }
@@ -909,11 +1222,15 @@ static void gs_eat_situation(GsInfer* s, int tick, GsOffence offence, double tol
 static int gs_living_rival(const GsInfer* s) { return s->timed >= 0 && s->c.ratio != 0; }
 
 static int gs_swing_underway(const GsInfer* s, int tick, GsPid pid, GsIncoming* out) {
-    if (!s->has_opponent_swing) return 0;
-    GsSwing swing = gs_opponent_swing_for(s, pid);
-    if (swing.lands <= tick) return 0;
-    *out = (GsIncoming){swing.lands, swing.least, swing.most, swing.accuracy, GS_NONE};
-    return 1;
+    int found = 0;
+    for (int i = 0; i < s->pending_launch_count; i++) {
+        GsSwing swing = gs_pending_remaining(s->pending_launches[i].by_pid[pid], tick);
+        if (swing.arrows && (!found || swing.lands < out->lands)) {
+            *out = (GsIncoming){swing.lands, swing.least, swing.most, swing.accuracy, GS_NONE};
+            found = 1;
+        }
+    }
+    return found;
 }
 
 static int gs_incoming(GsInfer* s, int tick, GsPid pid, GsIncoming* out) {
@@ -932,14 +1249,18 @@ typedef struct { int certain; int lands, damage; } GsUnderway;
 static void gs_spec_inputs(GsInfer* s, int tick, GsSpecSituation* out, GsUnderway* underway) {
     memset(out, 0, sizeof(*out));
     GsPid pid = gs_pid_at(s, tick);
-#ifdef GS_HP_BELIEF
-    out->hitpoints = s->opponent_bar;
-#else
     out->hitpoints = s->opponent_hitpoints;
-#endif
+    if (s->health) out->target = s->health->target;
     out->hard_food_ready = s->opponent_hard_food_ready;
+    if (out->target.has_history) {
+        assert(out->target.history_count > 0);
+        out->hard_food_ready = INT_MAX;
+        for (int i = 0; i < out->target.history_count; i++)
+            out->hard_food_ready = imin(out->hard_food_ready, imax(tick, out->target.history[i].ready.hard));
+    }
     out->vengeance = gs_vengeance_reading(s->opponent.vengeance, tick);
     out->pid = pid;
+    out->pid_flip = gs_pid_flip_odds(&s->pid, tick);
     out->has_incoming = gs_incoming(s, tick, pid, &out->incoming);
     out->recoil_charges = gs_recoil_reflectable(s);
     out->tick = tick;
@@ -953,7 +1274,7 @@ static int gs_cardinal(const GsClient* c) { return abs(c->lx - c->ox) + abs(c->l
 /* AutoSpecialAttack.plan's gates: a Voidwaker wielder adjacent to a target it fights with the energy */
 static int gs_spec_plannable(const GsInfer* s) {
     const GsClient* c = &s->c;
-    if (!gs_living_rival(s) || gs_weapon_kind(gs_local_weapon(c)) != GS_W_VOIDWAKER) return 0;
+    if (!s->c.forecast_available || !c->opponent_combat_level || !gs_living_rival(s) || gs_weapon_kind(gs_local_weapon(c)) != GS_W_VOIDWAKER) return 0;
     int engaged = c->local_interacting == s->timed;
     return gs_spec_energy(c) >= 50 && gs_cardinal(c) && (engaged || c->tracked_interacting == 0);
 }

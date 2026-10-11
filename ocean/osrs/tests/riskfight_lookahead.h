@@ -3,7 +3,7 @@
 
 /* Our side decides by simulating the next ticks: every macro plan is rolled out on worlds drawn from the plugin's belief about him, with common
  * random numbers across plans, and scored as kill chance times his stakes less death chance times ours, plus the spec tickets left. */
-enum { LA_SCRIPT = 16, LA_CACHE = 4096, LA_MARGIN = 10 };
+enum { LA_SCRIPT = 64, LA_CACHE = 4096, LA_MARGIN = 10 };
 static double la_seconds(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -12,13 +12,27 @@ static double la_seconds(void) {
 typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_EAT_TRIPLE, LA_EAT_STAGGER, LA_MACROS } LaMacro;
 static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered"};
 
-typedef struct { int n, due[LA_SCRIPT]; HumanCommand command[LA_SCRIPT]; } LaScript;
+typedef struct {
+    int n, due[LA_SCRIPT];
+    HumanCommand command[LA_SCRIPT];
+    int production, op[LA_SCRIPT], arg[LA_SCRIPT], fixed[LA_SCRIPT];
+    int candidate_count[LA_SCRIPT], candidates[LA_SCRIPT][OSRS_INVENTORY_SIZE];
+    int motor_active, motor_tick, motor_chain, motor_bound;
+    double motor_ms;
+    int attack_after, attack_tracking, registered, ready_index, ready_due, ready_sent;
+    uint32_t timing_rng;
+    const Ours* native_rules;
+    const Observer* native_observer;
+    int native_step;
+} LaScript;
 typedef struct { int kill, death, energy, ate_at; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 typedef struct {
     int hp_low, hp_high, energy_low, energy_high, vengeance, pid, timer_seen, timer_first, timer_last, food_ready, seen_since_eat, seen_vw, seen_maul, bar_ratio;
     double flip;
     GsObservedGear gear;
+    int combat_level;
+    const GsHealthHistory* health; /* Borrowed immutable source support for this decision's world samples. */
 } LaBelief;
 
 typedef enum { LA_GEAR_SUPPORTED, LA_GEAR_UNKNOWN, LA_GEAR_WEAPON_UNSUPPORTED, LA_GEAR_SHIELD_UNSUPPORTED, LA_GEAR_AMMO_UNSUPPORTED, LA_GEAR_ARMOR_UNKNOWN, LA_GEAR_ARMOR_UNSUPPORTED, LA_GEAR_STATUS_COUNT } LaGearStatus;
@@ -104,18 +118,40 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
         him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = la_item_of(b->gear.armor[slot]).item;
     osrs_refresh_player_equipment(him);
-    int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift), high = imax(low, b->hp_high + (int)g_la_belief_hp_shift);
-    him->current_hitpoints = la_between(r, low, imin(high, 121));
+    if (b->health && b->health->has_started) {
+        if (g_la_belief_hp_shift != 0) { fprintf(stderr, "source-conditioned actor does not permit unsupported HP shifts\n"); abort(); }
+        RiskfightActorStats stats;
+        int hitpoints;
+        source_actor_snapshot(b->health, b->combat_level, b->bar_ratio == 0, r, &stats, &hitpoints);
+        riskfight_apply_actor_stats(him, &stats);
+        him->current_hitpoints = hitpoints;
+    } else {
+        RiskfightActorStats stats;
+        if (!riskfight_model_actor_stats(b->combat_level, him->base_hitpoints, &stats)) {
+            fprintf(stderr, "actor profile contradicts observed combat level %d\n", b->combat_level); abort();
+        }
+        riskfight_apply_actor_stats(him, &stats);
+        int low = imax(1, b->hp_low + (int)g_la_belief_hp_shift);
+        int high = imin(imax(low, b->hp_high + (int)g_la_belief_hp_shift), gs_health_cap(him->base_hitpoints));
+        if (high < low) { fprintf(stderr, "actor base/health prior have no compatible HP support\n"); abort(); }
+        him->current_hitpoints = la_between(r, low, high);
+    }
+    int defence_boost = imax(osrs_super_combat_boost_amount(him->base_defence), osrs_brew_defence_boost_amount(him->base_defence));
+    him->current_defence = imin(him->current_defence, him->base_defence + defence_boost);
+    him->current_magic = imin(him->current_magic, him->base_magic + osrs_saturated_heart_magic_boost(him->base_magic));
+    him->current_prayer = imin(him->current_prayer, him->base_prayer);
     him->special_energy = b->energy_low + 10 * la_between(r, 0, (b->energy_high - b->energy_low) / 10);
     him->spec_regen_active = him->special_energy < 100;
     him->item_effect_state.special_regen_ticks = la_between(r, 0, 49);
     him->veng_active = b->vengeance == GS_VENGEANCE_UP || ((b->vengeance == GS_VENGEANCE_MAYBE || b->vengeance == GS_VENGEANCE_UNKNOWN) && la_uniform(r, 0, 1) < 0.5);
     him->veng_cooldown = 0;
     w->visible[0].health_bar = b->bar_ratio;
-    him->current_attack = him->current_strength = g_la_boost;
+    him->current_attack = actor_profile_boost(g_la_boost, him->base_attack);
+    him->current_strength = actor_profile_boost(g_la_boost, him->base_strength);
     int holder = b->pid == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (b->pid == GS_PID_LOCAL ? 0 : 1);
     if (b->pid != GS_PID_UNKNOWN && la_uniform(r, 0, 1) < b->flip) holder = 1 - holder;
     w->env.pid_holder = holder;
+    riskfight_sample_pending(w, r);
     int attack_timer = 0;
     if (b->timer_seen) {
         assert(b->timer_first <= b->timer_last);
@@ -157,7 +193,171 @@ static void la_eat_at_risk(const RiskfightState* s, HumanInput* hi) {
 
 static Outcome g_la_scratch;
 
-static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* hist, int tick, const OppModel* model, const LaScript* script, uint32_t seed) {
+/* Production guards cost no click: keep the motor clock, resume Ready through
+ * the human executor once, and distinguish attack registration from damage. */
+static double la_press_cost(uint32_t* rng, int first);
+static int la_press_tick(int tick, double ms);
+
+static int la_motor_due(LaScript* script, int earliest) {
+    double start = (earliest - script->motor_tick - 1) * (double)TICK_MS;
+    int first = !script->motor_chain || start > script->motor_ms;
+    script->motor_ms = fmax(start, script->motor_ms) +
+        la_press_cost(&script->timing_rng, first);
+    script->motor_chain = 1;
+    return la_press_tick(script->motor_tick, script->motor_ms);
+}
+
+/* Bind recipes against observed state, not the inventory at request time. */
+static int la_recipe(const LaScript* script, int i, const Player* us, HumanCommand* command) {
+    int op = script->op[i];
+    for (int c = 0; c < script->candidate_count[i]; c++) {
+        int raw = script->candidates[i][c];
+        if (op == 9 || op == 10) {
+            for (int slot = 0; slot < NUM_GEAR_SLOTS; slot++) {
+                ItemIndex item = us->equipped[slot];
+                if (item != ITEM_NONE && ITEM_DATABASE[item].item_id == raw) {
+                    if (op == 9) return 0;
+                    *command = (HumanCommand){.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = slot};
+                    return 1;
+                }
+            }
+        }
+    }
+    if (op == 10) return 0;
+    for (int c = 0; c < script->candidate_count[i]; c++) {
+        int raw = script->candidates[i][c];
+        OsrsConsumableKind family = OSRS_CONSUMABLE_NONE;
+        if (raw < 0) {
+            uint16_t code = osrs_inventory_content_code_from_raw_osrs_id(-raw);
+            family = osrs_item_content_metadata(code)->consumable_kind;
+        }
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+            const OsrsItemContentMetadata* item = osrs_inventory_cell_metadata(&us->inventory_cells[slot]);
+            if ((raw > 0 && item->raw_osrs_id == raw) ||
+                (raw < 0 && item->consumable_kind == family)) {
+                *command = (HumanCommand){.kind = op == 8 ? HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK :
+                    HUMAN_COMMAND_EQUIP_INVENTORY_ITEM, .item_osrs_id = item->raw_osrs_id};
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
+    int now, int* cursor, int* resume, int hit, int damage) {
+    if (!script->attack_tracking) {
+        script->attack_after = s->env.tick;
+        script->attack_tracking = 1;
+    }
+    int previous = s->env.tick - 1;
+    if (s->visible[1].last_attack_tick >= script->attack_after ||
+        (previous >= script->attack_after &&
+         s->visible[1].events[previous % RF_HISTORY_TICKS][0] > 0)) script->registered = 1;
+    if (now < *resume) return;
+    while (*cursor < script->n && script->due[*cursor] <= now) {
+        int i = *cursor, op = script->op[i], arg = script->arg[i];
+        Player* us = &s->env.players[0];
+        if (op == 3) {
+            /* Observe queued acquisitions/cancellations, not unrelated interface clicks. */
+            for (int j = 0; j < hi->commands.count; j++) {
+                HumanCommandKind kind = hi->commands.items[j].kind;
+                if (kind == HUMAN_COMMAND_ATTACK_NPC || kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK ||
+                    kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM || kind == HUMAN_COMMAND_UNEQUIP ||
+                    kind == HUMAN_COMMAND_STOP || kind == HUMAN_COMMAND_WALK) return;
+            }
+            if (!osrs_interaction_active(&us->interaction)) {
+                if (script->ready_index != i + 1) {
+                    script->ready_index = i + 1;
+                    script->ready_due = script->motor_active ?
+                        la_motor_due(script, now) : la_press_tick(now - 1,
+                            la_press_cost(&script->timing_rng, i == 0));
+                    script->ready_sent = 0;
+                }
+                if (script->ready_sent) { *cursor = script->n; return; }
+                if (now < script->ready_due) return;
+                human_input_queue_command(hi, attack_command());
+                script->attack_after = s->env.tick;
+                script->registered = 0;
+                script->ready_sent = 1;
+                return; /* Observe acquisition, including rejection, next tick. */
+            }
+            if (us->attack_timer > arg) return;
+        }
+        if (op == 4) {
+            if (!script->registered && !hit) {
+                if (!osrs_interaction_active(&us->interaction) && !hi->commands.count)
+                    *cursor = script->n;
+                return;
+            }
+            if (arg >= 0 && !hit) return;
+        }
+        if (op < 3 || op >= 8) {
+            if (op >= 8 && script->motor_bound != i + 1 &&
+                !la_recipe(script, i, us, &script->command[i])) {
+                (*cursor)++;
+                continue; /* Established recipe satisfaction/absence skips without a click. */
+            }
+            if (script->motor_active) {
+                if (script->fixed[i]) {
+                    script->motor_ms = fmax(script->motor_ms,
+                        (script->due[i] - script->motor_tick - 1) * (double)TICK_MS);
+                    script->motor_chain = 1;
+                } else if (script->motor_bound != i + 1) {
+                    script->due[i] = la_motor_due(script, script->due[i]);
+                    script->motor_bound = i + 1;
+                }
+                if (script->due[i] > now) return;
+            }
+        }
+        (*cursor)++;
+        if (script->production && (op == 3 || op == 4 || op == 7)) {
+            int lag = now - script->due[i] + (op == 7);
+            for (int j = i + 1; lag > 0 && j < script->n; j++)
+                if (!script->fixed[j]) script->due[j] += lag;
+        }
+        if (op == 3) continue;
+        if (op == 4) {
+            if (arg >= 0 && damage < arg) *cursor = script->n;
+            continue;
+        }
+        if (op == 5) {
+            if (us->special_energy < arg) {
+                while (*cursor < script->n && script->op[*cursor] != 7) (*cursor)++;
+            }
+            continue;
+        }
+        if (op == 6) {
+            if (us->current_hitpoints >= arg && *cursor < script->n) (*cursor)++;
+            continue;
+        }
+        if (op == 7) {
+            script->motor_chain = 0;
+            *resume = now + 1;
+            return;
+        }
+        if (op == 1 || op == 2) {
+            if (op == 1) {
+                script->attack_after = s->env.tick;
+                script->registered = 0;
+                hit = 0;
+            }
+            human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE,
+                .spec_mode = op == 1 ? HUMAN_SPEC_ENABLE : HUMAN_SPEC_DISARM});
+            continue;
+        }
+        if (script->command[i].kind == HUMAN_COMMAND_ATTACK_NPC) {
+            script->attack_after = s->env.tick;
+            script->registered = 0;
+            hit = 0;
+        }
+        human_input_queue_command(hi, script->command[i]);
+    }
+}
+
+static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* hist, int tick, const OppModel* model, const LaScript* plan, uint32_t seed) {
+    LaScript running = *plan;
+    LaScript* script = &running;
     work->state = *world;
     work->hist = *hist;
     work->tick_base = tick;
@@ -171,20 +371,53 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
     g_rollout_seed = seed;
     RiskfightState* s = &work->state;
     HumanInput* hi = &work->context.policy_commands[0];
+    if (script->native_rules) {
+        Arena arena = work->ours.arena;
+        work->ours = *script->native_rules;
+        work->ours.arena = arena;
+        work->ours.lookahead = 0;
+        observer_assign(&work->obs, script->native_observer);
+        observer_branch(s, &work->obs);
+    } else {
+        work->ours.burst_pending = 0;
+    }
     LaOutcome out = {0};
     out.ate_at = -1;
+    int cursor = 0, resume = tick + 1, direct_hit = 0, direct_damage = 0;
     for (int step = 0; step < g_la_horizon && !s->env.episode_over; step++) {
         int actions[RF_HEADS];
         opponent_actions(model, work, step, seed + (uint32_t)step * 2654435761u, actions);
         riskfight_policy_commands(s, 1, actions, &work->context.policy_commands[1]);
         human_input_clear_pending(hi);
-        for (int i = 0; i < script->n; i++) if (script->due[i] == tick + 1 + step) human_input_queue_command(hi, script->command[i]);
-        la_eat_at_risk(s, hi);
-        if (!osrs_interaction_active(&s->env.players[0].interaction) && hi->commands.count == 0) human_input_queue_command(hi, attack_command());
+        if (script->native_rules) {
+            if (step == 0) {
+                ours_pop_due(&work->ours, &s->env.players[0], hi, tick + 1);
+            } else {
+                work->tick_base = tick - script->native_step;
+                ours_act(work, &work->ours, hi, script->native_step + step);
+                work->tick_base = tick;
+            }
+        } else {
+            la_script_step(script, s, hi, tick + 1 + step, &cursor, &resume, direct_hit, direct_damage);
+        }
+        if (!script->production && !script->native_rules) {
+            la_eat_at_risk(s, hi);
+            if (!osrs_interaction_active(&s->env.players[0].interaction) && hi->commands.count == 0)
+                human_input_queue_command(hi, attack_command());
+        }
+        for (int i = 0; i < hi->commands.count; i++)
+            if (hi->commands.items[i].kind == HUMAN_COMMAND_ATTACK_NPC ||
+                (hi->commands.items[i].kind == HUMAN_COMMAND_SPEC_TOGGLE &&
+                 hi->commands.items[i].spec_mode == HUMAN_SPEC_ENABLE)) direct_hit = 0;
         int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
         work->step_damage = work->step_max_hit = work->step_direct = 0;
         work->obs.hit_count = 0;
         riskfight_step_queues(s, &work->context, &hi->commands, &work->context.policy_commands[1].commands);
+        if (script->native_rules) observer_step(s, &work->obs, tick + 1 + step);
+        int landed_direct = 0;
+        for (int i = 0; i < work->obs.hit_count; i++)
+            landed_direct |= work->obs.hits[i].source == 0 && work->obs.hits[i].kind == OSRS_HIT_DIRECT;
+        if (landed_direct) { direct_hit = 1; direct_damage = work->step_direct; }
         const Player* him = &s->env.players[1];
         int ate_true = him->ate_food_this_tick || him->ate_karambwan_this_tick || s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick;
         StepEvents events = {.ate_visible = consumption_visible(s, 1), .ate = ate_true, .swung = s->visible[0].last_attack_tick == s->env.tick - 1,
@@ -197,23 +430,39 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
         if (s->env.players[0].current_hitpoints <= 0) out.death = 1;
     }
     out.energy = s->env.players[0].special_energy;
+    observer_clear(&work->obs);
     return out;
 }
 
 static double g_la_worth_scale = 1, g_la_w[GS_MOST_TICKETS + 1];
 static int g_la_worth_mode = 1, g_la_burst;
-static double la_tickets_worth(int energy) { return g_la_worth_scale * (1 - GS_FIGHT_ENDS) * g_la_w[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
+static double la_tickets_worth(int energy) { return g_la_worth_scale * g_la_w[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
+
+static double la_press_cost(uint32_t* rng, int first) {
+    return first ? la_uniform(rng, FIRST_PRESS_MS, FIRST_PRESS_SPAN) : la_uniform(rng, GAP_MS, GAP_SPAN);
+}
+static int la_press_tick(int tick, double ms) {
+    return tick + (ms < CUTOFF_MS ? 1 : 2 + (int)((ms - CUTOFF_MS) / TICK_MS));
+}
 
 static void la_press(uint32_t* r, LaScript* script, int tick, const HumanCommand* clicks, int count) {
-    double ms = la_uniform(r, FIRST_PRESS_MS, FIRST_PRESS_SPAN);
+    double ms = la_press_cost(r, 1);
     for (int i = 0; i < count; i++) {
-        if (i) ms += la_uniform(r, GAP_MS, GAP_SPAN);
-        int rel = ms < CUTOFF_MS ? 1 : 2 + (int)((ms - CUTOFF_MS) / TICK_MS);
+        if (i) ms += la_press_cost(r, 0);
         assert(script->n < LA_SCRIPT);
-        script->due[script->n] = tick + rel;
+        script->due[script->n] = la_press_tick(tick, ms);
         script->command[script->n++] = clicks[i];
     }
 }
+
+static void la_time_production(uint32_t* rng, int tick, LaScript* script) {
+    script->motor_active = 1;
+    script->motor_tick = tick;
+    script->motor_ms = 0;
+    script->motor_chain = script->motor_bound = 0;
+    script->timing_rng = *rng;
+}
+
 
 static void la_spec_clicks(LaScript* script, uint32_t* r, const Player* us, int due_tick) {
     HumanCommand clicks[2];
@@ -238,6 +487,10 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
     memset(feasible, 0, LA_MACROS * sizeof(int));
     uint32_t saved = osrs_lowbias32((uint32_t)tick * 2654435761u) | 1, r;
     scripts[LA_RULES] = *rules;
+    if (scripts[LA_RULES].production) {
+        r = saved;
+        la_time_production(&r, tick, &scripts[LA_RULES]);
+    }
     feasible[LA_RULES] = feasible[LA_NONE] = 1;
     if (f->spec_ok) {
         feasible[LA_SPEC_NOW] = feasible[LA_SPEC_NEXT] = 1;
@@ -354,7 +607,7 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
     uint32_t world_rng = osrs_lowbias32((uint32_t)tick * 40503u + salt) | 1;
     memset(score, 0, LA_MACROS * sizeof(LaScore));
     if (g_la_worth_mode == 1) la_measure_worth(base, base_hist, belief, tick, world_rng ^ 0x5bd1e995u, work);
-    else for (int k = 0; k <= GS_MOST_TICKETS; k++) g_la_w[k] = GS_WORTH[k];
+    else for (int k = 0; k <= GS_MOST_TICKETS; k++) g_la_w[k] = GS_CONTINUATION[k];
     for (int m = 0; m < LA_MACROS; m++) alive[m] = feasible[m];
     double ratio = stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1;
     static RiskfightState world;
@@ -378,7 +631,7 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
                 LaOutcome o = la_rollout(work, &world, &hist, tick, g_la_model, &scripts[m], seed);
                 score[m].kill += o.kill;
                 score[m].death += o.death;
-                score[m].tickets += (1 - o.kill) * la_tickets_worth(o.energy) / (1 - GS_FIGHT_ENDS);
+                score[m].tickets += (1 - o.kill) * la_tickets_worth(o.energy);
                 score[m].value += o.kill * ratio - o.death + (1 - o.kill) * la_tickets_worth(o.energy) * ratio;
                 score[m].worlds++;
                 g_la.rollouts++;
@@ -416,14 +669,15 @@ static LaBelief la_belief_of(const Sim* sim, int tick) {
     return (LaBelief){.hp_low = inf->opponent_hitpoints.low, .hp_high = inf->opponent_hitpoints.high, .energy_low = energy.low, .energy_high = energy.high,
         .vengeance = (int)gs_vengeance_reading(inf->opponent.vengeance, tick), .pid = (int)inf->pid.owner, .timer_seen = timer.seen,
         .timer_first = timer.seen ? timer.earliest : 0, .timer_last = timer.latest, .food_ready = inf->opponent_hard_food_ready,
-        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick), .gear = inf->c.opponent_gear};
+        .seen_since_eat = sim->seen_since_eat, .seen_vw = seen_vw, .seen_maul = seen_maul, .bar_ratio = sim->state.visible[0].health_bar, .flip = gs_pid_flip_odds(&inf->pid, tick), .gear = inf->c.opponent_gear,
+        .combat_level = inf->c.opponent_combat_level, .health = inf->health};
 }
 
 static uint64_t la_key(const LaBelief* b, const Player* us, int tick, int energy) {
     uint64_t h = 1469598103934665603ull;
     int parts[] = {us->current_hitpoints, us->attack_timer, us->attack_timer_uncapped, us->has_attack_timer, us->food_timer, us->potion_timer, us->karambwan_timer, us->spec_armed, energy, us->veng_active, us->veng_cooldown,
         b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->timer_seen ? b->timer_first - tick : -1, b->timer_last - tick, la_food_timer(b->food_ready, tick),
-        b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul, b->gear.source, b->gear.weapon, b->gear.shield};
+        b->seen_since_eat > 9 ? 9 : b->seen_since_eat, b->seen_vw, b->seen_maul, b->gear.source, b->gear.weapon, b->gear.shield, b->combat_level};
     for (size_t i = 0; i < sizeof(parts) / sizeof(*parts); i++) { h ^= (uint64_t)(uint32_t)parts[i]; h *= 1099511628211ull; }
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) { h ^= (uint64_t)(uint32_t)b->gear.armor[slot]; h *= 1099511628211ull; }
     return h;
@@ -464,14 +718,22 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     }
     uint64_t key = la_key(&belief, us, tick, f.energy);
     int memo = (int)(key % LA_CACHE);
-    int cached = g_la_cache && g_la_memo[memo].used && g_la_memo[memo].key == key;
+    int cacheable = g_la_cache && !belief.health && !sim->state.pending_pid_active && !sim->state.env.players[0].num_pending_hits &&
+        !sim->state.env.players[1].num_pending_hits;
+    int cached = cacheable && g_la_memo[memo].used && g_la_memo[memo].key == key;
     g_la.calls++;
     LaScript rules = {0};
     Ours trial = *ours;
     trial.lookahead = 0;
-    int before = trial.pending_count;
     ours_decide(sim, &trial, step, tick);
-    for (int i = before; i < trial.pending_count; i++) {
+    if (trial.burst_pending) {
+        rules.native_rules = &trial;
+        rules.native_observer = &sim->obs;
+        rules.native_step = step;
+        cached = cacheable = 0;
+        if (g_la_report) printf("rules baseline: native closed-loop production policy (not Java current-run open-loop)\n");
+    }
+    for (int i = 0; i < trial.pending_count; i++) {
         rules.due[rules.n] = trial.pending[i].due;
         rules.command[rules.n++] = trial.pending[i].command;
     }
@@ -498,10 +760,12 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
             g_la_last_value[m] = score[m].worlds ? score[m].value / score[m].worlds : 0;
         }
         if (g_la_report) la_print_report(&belief, us, f.energy, tick, step, stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1, best, score, feasible, alive);
-        g_la_memo[memo].used = 1;
-        g_la_memo[memo].key = key;
-        g_la_memo[memo].macro = best;
-        g_la_memo[memo].kill = predicted;
+        if (cacheable) {
+            g_la_memo[memo].used = 1;
+            g_la_memo[memo].key = key;
+            g_la_memo[memo].macro = best;
+            g_la_memo[memo].kill = predicted;
+        }
     }
     g_la.chosen[best]++;
     int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT;
@@ -521,6 +785,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     }
     g_la.latency[g_la.latency_count++] = elapsed;
     if (best == LA_RULES) return 0;
+    ours->burst_pending = 0;
     ours->last_decision = tick;
     ours->decisions++;
     for (int i = 0; i < scripts[best].n; i++) ours_push(ours, scripts[best].due[i], scripts[best].command[i]);
