@@ -11,6 +11,18 @@
  * kinds 14/15/16 add count and candidates for eat/equip/unequip live recipes;
  * negative eat candidates denote a dose family, positive candidates an exact raw ID.
  * timing 0 samples an unsent lower bound; 1 preserves a known landing (guards cost no click).
+ * PS side KNOWN severity pulse immunity imports exact actor state.
+ * PS side IMMUNE negativeVarp [observationAgeTicks] imports a conservative
+ * immunity lower bound; age defaults to zero for a current-tick observation.
+ * Admission requires lowerBound > horizon + age (unknown pulse phase excluded).
+ * PS side CLEAR_PRIOR declares a clean initial-state cohort, not observed truth.
+ * PS side UNKNOWN explicitly excludes poison-sensitive requests. Missing PS is
+ * supported only in the legacy no-poison-weapon, clean-initial-status cohort.
+ * BH p++ supports immune-target horizons only until multi-hit
+ * proc granularity and application timer phase are independently established.
+ * C kind17 STOP arg0 timing0; kind18 AlignedReady absoluteTick timing1 (op11).
+ * RA OBSERVED raw172 (0 ON, 1 OFF), RA OFF_PRIOR declared simulation cohort,
+ * or RA UNKNOWN. Missing RA is UNKNOWN; only OFF admits STOP-based programs.
  * Empty queues/plans require explicit KNOWN 0. Response: R id micros best, then each macro's feasible kill death value worlds. */
 #define _POSIX_C_SOURCE 200809L
 #include <time.h>
@@ -25,12 +37,19 @@ enum { INERT_ID = 27281 };
 static const int CANONICAL_FROM[] = {24592, 24595, 24598, 24601, 24603, 24605, 22441, 20513, 28067, 28070, 21287};
 static const int CANONICAL_TO[] = {13441, 3144, 3024, 3026, 3028, 3030, 22322, 10551, 10551, 10828, 21295};
 static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6689, 6691, 12695, 12697, 12699, 12701, 23691, 23694, 8013, 24621, 24225, 27690, 12954,
-    22322, 10551, 10828, 21295, 1725, 1079, 4087, 7462, 11840, 2550, -1};
+    22322, 10551, 10828, 21295, 1725, 1079, 4087, 7462, 11840, 2550,
+    27861, 27857, 24617, 27867, 22114, 29280, 29560, 29564, 12904, 8850, 4131, 7460, -1};
 
 static int canonical(int id) {
+    if (id >= 0 && id <= UINT16_MAX) id = osrs_item_canonical_raw_id((uint16_t)id);
     for (size_t i = 0; i < sizeof(CANONICAL_FROM) / sizeof(int); i++) if (CANONICAL_FROM[i] == id) id = CANONICAL_TO[i];
     for (size_t i = 0; i < sizeof(SIM_IDS) / sizeof(int); i++) if (SIM_IDS[i] == id) return id;
-    return INERT_ID;
+    switch (id) {
+        case INERT_ID: case 229: case 995: case 27997: case 30000: case 26651: case 28098:
+            return INERT_ID;
+        default:
+            return -2;
+    }
 }
 
 typedef struct {
@@ -53,6 +72,11 @@ typedef struct {
     PendingHitMetadata pending_pid_metadata[2][2][MAX_PENDING_HITS];
     int rules_known, rules_expected, rules_unsupported;
     int big_hit, since_vw, since_maul, ready_age, last_swing;
+    int poison_source[2]; /* 0 missing/unknown, 1 exact, 2 horizon immunity, 3 declared clean prior */
+    int poison_seen[2];
+    int poison_observation_age[2];
+    OsrsPoisonState poison[2];
+    int auto_retaliate_seen, auto_retaliate_source, auto_retaliate_varp; /* 0 unknown, 1 observed, 2 OFF prior */
 } Request;
 
 static FILE* g_log;
@@ -66,10 +90,38 @@ static int request_int(char** p) {
     return (int)n;
 }
 static void request_end(const char* p) { assert(strspn(p, " \t\r\n") == strlen(p)); }
+static int request_poison_weapon(int raw) { return raw == 27867 || raw == 12904; }
+static int request_poison_attack(const Request* q, int side) {
+    if (side == 1) return request_poison_weapon(q->his_weapon);
+    for (int i = 0; i < TAPE_WORN; i++) if (request_poison_weapon(q->worn[i])) return 1;
+    for (int i = 0; i < TAPE_BAG; i++) if (request_poison_weapon(q->bag[i])) return 1;
+    for (int i = 0; i < q->rules.n; i++)
+        if (request_poison_weapon(q->rules.arg[i])) return 1;
+    return 0;
+}
 static const char* request_unavailable(const Request* q) {
     if (!q->pending_known) return "pending_unknown";
     if (!q->rules_known || q->rules_unsupported) return "production_plan_unknown";
+    for (int i = 0; i < q->rules.n; i++)
+        if (q->rules.command[i].kind == HUMAN_COMMAND_STOP && !q->feasible.pause_ok)
+            return q->auto_retaliate_source == 1 ? "auto_retaliate_on" : "auto_retaliate_unknown";
+    int poison_attack[2] = {request_poison_attack(q, 0), request_poison_attack(q, 1)};
+    for (int side = 0; side < 2; side++) {
+        if (!q->poison_source[side] && (q->poison_seen[side] || poison_attack[0] || poison_attack[1]))
+            return "poison_state_unknown";
+        if (q->poison_source[side] == 2 &&
+            q->poison[side].immunity_ticks <= g_la_horizon + q->poison_observation_age[side])
+            return "poison_immunity_phase_unknown";
+        if (poison_attack[1 - side] &&
+            q->poison[side].immunity_ticks <= g_la_horizon + q->poison_observation_age[side])
+            return "poison_application_unverified";
+    }
     for (int i = 0; i < TAPE_BAG; i++) if (q->bag[i] == 24589) return "local_food_unsupported";
+    for (int i = 0; i < TAPE_WORN; i++)
+        if (canonical(q->worn[i]) == -2 || canonical(q->worn[i]) == INERT_ID)
+            return "local_equipment_unsupported";
+    for (int i = 0; i < TAPE_BAG; i++)
+        if (canonical(q->bag[i]) == -2) return "local_inventory_unsupported";
     for (int i = 0; i < q->rules.n; i++) if (q->rules.op[i] == 8) {
         int matches = 0;
         for (int slot = 0; slot < TAPE_BAG; slot++) {
@@ -85,6 +137,14 @@ static const char* request_unavailable(const Request* q) {
         if (matches > 1) return "production_plan_unknown"; /* Cursor-path choice is not in the snapshot contract. */
     }
     return NULL;
+}
+
+
+static void request_alignment_windows(Request* q) {
+    int holder = q->belief.pid == GS_PID_LOCAL ? 0 : 1;
+    int count = q->pending_pid_active ? q->pending_pid_count[holder][1] : q->pending_count[1];
+    const PendingHit* incoming = q->pending_pid_active ? q->pending_pid[holder][1] : q->pending[1];
+    la_alignment_windows(incoming, count, &q->belief, q->tick, &q->feasible);
 }
 static void read_request(FILE* in, Request* q) {
     memset(q, 0, sizeof(*q));
@@ -163,11 +223,17 @@ static void read_request(FILE* in, Request* q) {
             assert(strspn(p, " \r\n") == strlen(p));
         } else if (!strcmp(tag, "W")) {
             assert(!(seen & 8)); seen |= 8;
-            for (int i = 0; i < TAPE_WORN; i++) q->worn[i] = request_int(&p);
+            for (int i = 0; i < TAPE_WORN; i++) {
+                q->worn[i] = request_int(&p);
+                assert(q->worn[i] >= -1 && q->worn[i] <= UINT16_MAX);
+            }
             request_end(p);
         } else if (!strcmp(tag, "G")) {
             assert(!(seen & 16)); seen |= 16;
-            for (int i = 0; i < TAPE_BAG; i++) q->bag[i] = request_int(&p);
+            for (int i = 0; i < TAPE_BAG; i++) {
+                q->bag[i] = request_int(&p);
+                assert(q->bag[i] >= -1 && q->bag[i] <= UINT16_MAX);
+            }
             request_end(p);
         }
         else if (!strcmp(tag, "Q")) {
@@ -179,6 +245,47 @@ static void read_request(FILE* in, Request* q) {
             for (int i = 0; i < q->unseen_count; i++) q->unseen[i] = request_int(&p);
             request_end(p);
         } else if (!strcmp(tag, "H")) assert(sscanf(p, "%d %d %d %d %d", &q->big_hit, &q->since_vw, &q->since_maul, &q->ready_age, &q->last_swing) == 5);
+        else if (!strcmp(tag, "RA")) {
+            assert(!q->auto_retaliate_seen);
+            q->auto_retaliate_seen = 1;
+            char source[16];
+            assert(sscanf(p, "%15s%n", source, &used) == 1);
+            p += used;
+            if (!strcmp(source, "OBSERVED")) {
+                q->auto_retaliate_source = 1;
+                q->auto_retaliate_varp = request_int(&p);
+                assert(q->auto_retaliate_varp == 0 || q->auto_retaliate_varp == 1);
+                q->feasible.pause_ok = q->auto_retaliate_varp == 1;
+            } else if (!strcmp(source, "OFF_PRIOR")) {
+                q->auto_retaliate_source = 2;
+                q->feasible.pause_ok = 1;
+            } else assert(!strcmp(source, "UNKNOWN"));
+            request_end(p);
+        }
+        else if (!strcmp(tag, "PS")) {
+            int side = request_int(&p);
+            assert(side >= 0 && side < 2 && !q->poison_seen[side]);
+            q->poison_seen[side] = 1;
+            char status[16];
+            assert(sscanf(p, "%15s%n", status, &used) == 1);
+            p += used;
+            if (!strcmp(status, "KNOWN")) {
+                q->poison_source[side] = 1;
+                q->poison[side].severity = request_int(&p);
+                q->poison[side].ticks_until_pulse = request_int(&p);
+                q->poison[side].immunity_ticks = request_int(&p);
+                assert(osrs_poison_state_valid(q->poison[side]));
+            } else if (!strcmp(status, "IMMUNE")) {
+                int varp = request_int(&p);
+                assert(varp < 0 && varp != INT_MIN && varp >= -INT_MAX / OSRS_POISON_PERIOD);
+                q->poison_source[side] = 2;
+                q->poison[side].immunity_ticks = osrs_poison_immunity_lower_bound(varp);
+                if (strspn(p, " \t\r\n") != strlen(p)) q->poison_observation_age[side] = request_int(&p);
+                assert(q->poison_observation_age[side] >= 0 && q->poison_observation_age[side] <= 1000000);
+            } else if (!strcmp(status, "CLEAR_PRIOR")) q->poison_source[side] = 3;
+            else assert(!strcmp(status, "UNKNOWN"));
+            request_end(p);
+        }
         else if (!strcmp(tag, "P") || !strcmp(tag, "R")) {
             int pending = tag[0] == 'P', bit = pending ? 32 : 64;
             assert(!(seen & bit)); seen |= bit;
@@ -227,7 +334,7 @@ static void read_request(FILE* in, Request* q) {
             metadata->smite_snapshot = smite + 1;
             request_end(p);
             assert(h->ticks_until_hit >= 0 && h->ticks_until_hit <= 1000);
-            assert(h->kind >= OSRS_HIT_DIRECT && h->kind <= OSRS_HIT_VENGEANCE);
+            assert(h->kind >= OSRS_HIT_DIRECT && h->kind <= OSRS_HIT_POISON);
             assert(h->attack_type >= ATTACK_STYLE_NONE && h->attack_type <= ATTACK_STYLE_MAGIC);
             assert((h->is_special == 0 || h->is_special == 1) && (h->hit_success == 0 || h->hit_success == 1));
             assert(metadata->damage_mode >= 0 && metadata->damage_mode <= 2);
@@ -241,11 +348,12 @@ static void read_request(FILE* in, Request* q) {
             int due = request_int(&p), kind = request_int(&p), arg = request_int(&p);
             int timing = request_int(&p);
             assert(timing == 0 || timing == 1);
-            assert(due > q->tick && kind >= 0 && kind <= 16);
+            assert(due > q->tick && kind >= 0 && kind <= 18);
             int i = q->rules.n++;
-            if (timing == 1 && (kind < 6 || kind > 10)) {
+            if (timing == 1 && (kind < 6 || kind > 10) && kind != 18) {
                 for (int j = 0; j < i; j++)
-                    if (q->rules.fixed[j] && (q->rules.op[j] < 3 || q->rules.op[j] >= 8)) assert(due >= q->rules.due[j]);
+                    if (q->rules.fixed[j] && (q->rules.op[j] < 3 ||
+                        (q->rules.op[j] >= 8 && q->rules.op[j] <= 10))) assert(due >= q->rules.due[j]);
             }
             q->rules.due[i] = due;
             q->rules.arg[i] = arg;
@@ -276,6 +384,14 @@ static void read_request(FILE* in, Request* q) {
                     .item_osrs_id = canonical(arg)};
                 break;
             case 13: assert(arg == 0); q->rules.command[i] = spec_command(); break;
+            case 17:
+                assert(arg == 0 && timing == 0);
+                q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_STOP};
+                break;
+            case 18:
+                assert(arg > q->tick && timing == 1);
+                q->rules.op[i] = 11;
+                break;
             case 14: case 15: case 16: {
                 assert(arg == 0);
                 int count = request_int(&p);
@@ -301,6 +417,7 @@ static void read_request(FILE* in, Request* q) {
             assert(seen == 127 && q->pending_read == q->pending_expected && q->rules.n == q->rules_expected);
             assert(!q->pending_pid_active || (q->pending_pid_read[0] == q->pending_pid_expected[0] && q->pending_pid_read[1] == q->pending_pid_expected[1]));
             q->belief.gear.weapon = q->his_weapon;
+            request_alignment_windows(q);
             return;
         } else assert(0 && "unknown request tag");
     }
@@ -311,6 +428,7 @@ static void read_request(FILE* in, Request* q) {
 static Hist g_hist_storage[1];
 
 static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
+    assert(request_unavailable(q) == NULL);
     static Tape tape;
     memset(&tape, 0, sizeof(tape));
     static TapeTick tick;
@@ -326,7 +444,15 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     tick.swing_him_tick = q->his_last_ago >= 0 ? q->tick - q->his_last_ago : -100;
     tick.swing_him_speed = q->his_speed;
     tick.spec_him = 100;
-    for (int i = 0; i < TAPE_WORN; i++) tick.worn[i] = q->worn[i] < 0 || canonical(q->worn[i]) == INERT_ID ? -1 : canonical(q->worn[i]);
+    assert(la_gear_status(q->belief.gear).status == LA_GEAR_SUPPORTED);
+    tick.opponent_gear_source = 1;
+    tick.opponent_gear_count = TAPE_WORN;
+    for (int slot = 0; slot < TAPE_WORN; slot++) tick.opponent_gear[slot] = -1;
+    tick.opponent_gear[3] = q->belief.gear.weapon;
+    tick.opponent_gear[5] = q->belief.gear.shield;
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
+        tick.opponent_gear[GS_ARMOR_KIT_SLOT[slot]] = q->belief.gear.armor[slot];
+    for (int i = 0; i < TAPE_WORN; i++) tick.worn[i] = canonical(q->worn[i]);
     for (int i = 0; i < TAPE_BAG; i++) tick.bag[i] = q->bag[i] < 0 ? -1 : canonical(q->bag[i]);
     tape.ticks = &tick;
     tape.lo = tape.hi = q->tick;
@@ -334,7 +460,7 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     tape.hist_series = g_hist_storage;
     g_tape = &tape;
     uint32_t rng = osrs_lowbias32((uint32_t)q->tick) | 1;
-    (void)tape_snapshot(&tape, q->tick, &DEFAULT_PRIORS, &rng, snap); /* Explicit request queue replaces the tape source. */
+    assert(tape_snapshot_construct(&tape, q->tick, &DEFAULT_PRIORS, &rng, snap));
     assert(q->attack_history == RISKFIGHT_ATTACK_OBSERVED && q->attack_clock_low == q->attack_clock_high);
     assert(q->attack_timer == (q->attack_clock_low < -1 ? -1 : q->attack_clock_low));
     snap->side[0].attack_history = q->attack_history;
@@ -345,6 +471,13 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     snap->side[0].karambwan_timer = q->karambwan_timer;
     snap->side[0].spec_armed = q->armed;
     snap->side[1].seen_health_bar = q->belief.bar_ratio;
+    for (int side = 0; side < 2; side++) {
+        snap->side[side].poison = q->poison[side];
+        if (q->poison_source[side] == 2)
+            snap->side[side].poison.immunity_ticks -= q->poison_observation_age[side];
+        snap->side[side].poison_source = q->poison_source[side]
+            ? (OsrsPoisonSource)q->poison_source[side] : OSRS_POISON_CLEAR_PRIOR;
+    }
     snap->pending_known = q->pending_known;
     snap->pending_pid_active = q->pending_pid_active;
     memcpy(snap->pending_pid_count, q->pending_pid_count, sizeof(snap->pending_pid_count));
@@ -434,7 +567,7 @@ int main(int argc, char** argv) {
         hist.ready_age = q.ready_age;
         hist.last_swing_tick = q.last_swing;
         LaScore score[LA_MACROS];
-        LaMacro best = la_evaluate(&base.state, &hist, &q.belief, q.tick, (GsStakes){q.him, q.us}, (uint32_t)q.id, scripts, feasible, score, alive);
+        LaMacro best = la_evaluate(&base.state, &hist, &q.belief, q.tick, (GsStakes){.us = q.us, .him = q.him}, (uint32_t)q.id, scripts, feasible, score, alive);
         printf("R %d %.0f %d", q.id, (la_seconds() - started) * 1e6, (int)best);
         for (int m = 0; m < LA_MACROS; m++)
             printf(" %d %.4f %.4f %.4f %d", feasible[m] && score[m].worlds > 0, score[m].worlds ? score[m].kill / score[m].worlds : 0, score[m].worlds ? score[m].death / score[m].worlds : 0,

@@ -64,6 +64,8 @@ typedef struct {
     int hitpoints, prayer, attack, strength, defence, magic;
     int special_energy, special_regen_phase, spec_armed;
     int veng_active, veng_cooldown;
+    OsrsPoisonState poison;
+    OsrsPoisonSource poison_source;
     int attack_timer, attack_timer_uncapped, food_timer, potion_timer, karambwan_timer;
     int recoil_damage_used;
     OffensivePrayer offensive_prayer;
@@ -102,6 +104,16 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         abort();
     }
     int variants = snapshot->pending_pid_active ? 2 : 1;
+    for (int i = 0; i < 2; i++) {
+        if (!osrs_poison_state_valid(snapshot->side[i].poison) ||
+            snapshot->side[i].poison_source < OSRS_POISON_ENGINE_STATE ||
+            snapshot->side[i].poison_source > OSRS_POISON_CAUSAL_STATE ||
+            snapshot->side[i].poison_source == OSRS_POISON_UNKNOWN_STATE ||
+            (i != 0 && snapshot->side[i].poison_source == OSRS_POISON_CAUSAL_STATE)) {
+            fprintf(stderr, "invalid snapshot poison state side=%d\n", i);
+            abort();
+        }
+    }
     for (int pid = 0; pid < variants; pid++) for (int i = 0; i < 2; i++) {
         int count = snapshot->pending_pid_active ? snapshot->pending_pid_count[pid][i] : snapshot->pending_count[i];
         const PendingHit* hits = snapshot->pending_pid_active ? snapshot->pending_pid[pid][i] : snapshot->pending[i];
@@ -115,7 +127,7 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
             const PendingHit* h = &hits[j];
             const PendingHitMetadata* m = &metadata[j];
             if (h->ticks_until_hit < 0 || h->damage < 0 || m->damage_mode < 0 || m->damage_mode > 2 ||
-                h->kind < OSRS_HIT_DIRECT || h->kind > OSRS_HIT_MORRIGAN_BLEED ||
+                h->kind < OSRS_HIT_DIRECT || h->kind > OSRS_HIT_POISON ||
                 h->attack_type < ATTACK_STYLE_NONE || h->attack_type > ATTACK_STYLE_MAGIC ||
                 m->smite_snapshot < 0 || m->smite_snapshot > 2 ||
                 (m->damage_mode == 2 && (m->damage_min < 0 || m->damage_max < m->damage_min ||
@@ -168,6 +180,8 @@ static void riskfight_load_state(RiskfightState* s, RiskfightContext* ctx, const
         p->spec_armed = side->spec_armed;
         p->veng_active = side->veng_active;
         p->veng_cooldown = side->veng_cooldown;
+        s->poison[i] = side->poison;
+        s->poison_source[i] = side->poison_source;
         assert(side->attack_history != RISKFIGHT_ATTACK_UNKNOWN);
         p->has_attack_timer = side->attack_history != RISKFIGHT_ATTACK_ABSENT;
         p->attack_timer = side->attack_timer;

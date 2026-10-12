@@ -3,9 +3,23 @@
  *   cc -std=c11 -O2 -I. -o /tmp/test_gs_infer ocean/osrs/tests/test_gs_infer.c -lm
  *   /tmp/test_gs_infer WIRE.tap
  *
- * The source wire contains actual producer inputs once per call, separate from the repriced/counterfactual consumer tapes.
- * Typed pending queues, target support/belief, causal input fields and damage distributions in shared timing contexts are gated.
- * INF remains diagnostic; plan availability/timing is explicitly unavailable without the Java hand model's causal inputs. */
+ * Regenerate from current isolated Light sources (use fresh output paths; taps append):
+ *   ./gradlew :gear-swapper:fightReplay -Precording=RECORDING -PautoEatRisk=3 \
+ *       -Ptap=/tmp/current-eat.tap -Pspectap=/tmp/current-spec.tap -Pwiretap=/tmp/current-wire.tap
+ * Then from the native root:
+ *   cc -std=c11 -O2 -I. -o /tmp/test_gs_auto_eat ocean/osrs/tests/test_gs_auto_eat.c -lm
+ *   cc -std=c11 -O2 -I. -o /tmp/test_gs_auto_spec ocean/osrs/tests/test_gs_auto_spec.c -lm
+ *   /tmp/test_gs_auto_eat /tmp/current-eat.tap
+ *   /tmp/test_gs_auto_spec /tmp/current-spec.tap
+ *   /tmp/test_gs_infer /tmp/current-wire.tap
+ *
+ * Keep existing fixtures unchanged: old Java policy taps must expose drift, not be re-pinned to unsupported native inputs.
+ * The source wire contains producer inputs, separate from counterfactual consumer tapes.
+ * Pure rule equality does not certify actuator parity: Java hand-derived plan availability,
+ * launch/attack-click return latency, partial spend/launch confirmation and accepted reservations
+ * are not reconstructed by this inference adapter. GsMeal.resume is supplied by its owner;
+ * follow-up hypothetical meals still lack measured future return geometry. INF is diagnostic,
+ * while serialized causal inputs, typed pending queues and target belief are gated. */
 #include <stdio.h>
 #include <time.h>
 #include <ctype.h>
@@ -135,7 +149,7 @@ static void compare_plans(char* java_plans, GsInfer* inf, int tick, Stats* stats
         strcpy(one, l);
         char* t[GS_WIRE_TOKENS];
         int n = gs_wire_split(one, t);
-        if (n < 2) abort();
+        if (n < 3) abort();
         stats->plan_records++;
         int source_choice = -1;
         for (int i = 0; i < GS_CHOICE_COUNT; i++) if (!strcmp(PLAN_NAMES[i], t[1])) source_choice = i;
@@ -145,7 +159,7 @@ static void compare_plans(char* java_plans, GsInfer* inf, int tick, Stats* stats
         for (int i = 0; i < count; i++) if (!strcmp(PLAN_NAMES[mine[i].choice], t[1])) match = i;
         if (match < 0) { stats->unavailable_plan_damage++; continue; }
         int bad = 0, unavailable = 0;
-        int at = 2;
+        int at = 3;
         for (int h = 0; h < mine[match].hit_count && !bad; h++) {
             if (at + 6 > n || strcmp(t[at], "H")) { bad = 1; break; }
             int len = atoi(t[at + 2]);
@@ -362,10 +376,107 @@ static void unread_bar_provenance(void) {
     assert(s.bar == GS_BAR_UNREAD);
 }
 
+static void blocked_hits_pair_without_erasing_damage(void) {
+    for (int outgoing = 0; outgoing < 2; outgoing++) {
+        for (int delay = 0; delay <= 1; delay++) {
+            GsInfer s;
+            gs_infer_init(&s);
+            s.tracker_current = s.timed = 1;
+            s.pid.local = (GsStruck){99, 20};
+            s.pid.opponent = (GsStruck){99, 30};
+            s.pid = outgoing ? gs_pid_local_attacked(s.pid, 100) : gs_pid_opponent_attacked(s.pid, 100);
+            gs_on_hitsplat(&s, 100 + delay, outgoing ? 1 : 0, 0,
+                outgoing ? GS_ATTACK_HITSPLAT_BLOCK_ME : GS_ATTACK_HITSPLAT_BLOCK_OTHER, outgoing, 0);
+            assert(s.pid.owner == (outgoing == !delay ? GS_PID_LOCAL : GS_PID_OPPONENT));
+            assert(s.pid.observed_tick == 100 + delay);
+            assert(s.pid.local.tick == 99 && s.pid.local.amount == 20);
+            assert(s.pid.opponent.tick == 99 && s.pid.opponent.amount == 30);
+            gs_infer_clear(&s);
+        }
+    }
+    GsPidState s = gs_pid_hit_on_opponent(gs_pid_unknown(), 200, 0);
+    s = gs_pid_local_attacked(s, 200);
+    assert(s.owner == GS_PID_LOCAL && s.observed_tick == 200);
+    s = gs_pid_unknown();
+    s = gs_pid_hit_on_local(s, 300, 20);
+    s = gs_pid_hit_on_local(s, 301, 0);
+    s = gs_pid_local_attacked(s, 301);
+    s = gs_pid_hit_on_opponent(s, 301, 3);
+    assert(s.owner == GS_PID_UNKNOWN && s.local.amount == 20);
+    s = gs_pid_hit_on_opponent(s, 301, 15);
+    assert(s.owner == GS_PID_UNKNOWN && s.opponent.amount == 0);
+}
+
+static void meals_use_earliest_complete_rescue_and_finite_risk(void) {
+    Arena arena = arena_make((size_t)1 << 24);
+    GsEatSituation s = {0};
+    s.tick = 100;
+    s.hitpoints = 99;
+    s.pid = GS_PID_OPPONENT;
+    s.opponent_timer = (GsTimer){1, 101, 101};
+    s.attacks[s.attack_count++] = (GsAttack){GS_MELEE, 0, 20, 0, 4, 1, 0, 1};
+    s.local_interval = 4;
+    s.vengeance = GS_VENGEANCE_DOWN;
+    s.opponent_hp = (GsHealthRange){99, 99, 99};
+    s.floor = GS_NONE;
+    s.warning.since = GS_NONE;
+    GsVerdict no_food = gs_auto_eat_decide(&s, NULL, 0, NULL, 0, &arena);
+    assert(no_food.decision == GS_WAIT && no_food.risk == 0);
+    GsFood foods[] = {{GS_HARD_FOOD, 22, 101, 1, 0}, {GS_FAST_FOOD, 18, 101, 1, 0}};
+    GsMeal meals[] = {
+        {2, {0, 1}, {1, 3}, {1, 3}, 1, 4, 4},
+        {1, {0}, {1}, {1}, 1, 2, 2}
+    };
+    GsEatCall call = {foods, 2, meals, 2, &arena};
+    GsBranch rescue = eat_branch(&call, &s, NULL, INT_MIN);
+    assert(branch_last(&rescue, 101) == 102);
+    call.meal_count = 1;
+    rescue = eat_branch(&call, &s, NULL, INT_MIN);
+    assert(branch_last(&rescue, 101) == 104);
+    arena.used = 0;
+    s.hitpoints = 85;
+    s.attacks[0] = (GsAttack){GS_MELEE, 50, 50, 50, 4, 1, 0, 1};
+    s.has_maul = 1;
+    s.maul = (GsAttack){GS_MELEE, 0, 40, 50, 4, 1, 0, 1};
+    s.energy_high = 100;
+    s.tolerance = 0.01;
+    GsVerdict combo = gs_auto_eat_decide(&s, NULL, 0, NULL, 0, &arena);
+    assert(combo.risk > s.tolerance && combo.decision == GS_EXPOSED);
+    s.energy_high = 50;
+    GsVerdict one_ticket = gs_auto_eat_decide(&s, NULL, 0, NULL, 0, &arena);
+    assert(one_ticket.risk == 0 && one_ticket.decision == GS_WAIT);
+    free(arena.base);
+}
+
+static void dagger_special_defends_slash_not_normal_stab(void) {
+    GsClient c = {0};
+    c.defence = c.magic = 99;
+    c.worn[4] = 1127; /* Rune platebody: stab82, slash80, crush72. */
+    GsArmament dagger;
+    assert(gs_armed(&c, GS_NO_BONUSES, 27867, &dagger));
+    assert(dagger.weapon == GS_W_ABYSSAL_DAGGER_BH && dagger.damage == GS_DAMAGE_STAB && dagger.attack_bonus == 85);
+    double normal = gs_armament_accuracy(&c, &dagger);
+    assert(fabs(normal - gs_chance(22648, 15622)) < 1e-12);
+    double special = gs_spec_accuracy(&c, &dagger);
+    assert(fabs(special - gs_chance(28310, 15408)) < 1e-12);
+    assert(special != gs_chance(28310, 15622));
+    dagger.weapon = GS_W_ABYSSAL_DAGGER;
+    assert(fabs(gs_spec_accuracy(&c, &dagger) - special) < 1e-12);
+    GsArmament mace;
+    assert(gs_armed(&c, GS_NO_BONUSES, 27857, &mace));
+    assert(mace.damage == GS_DAMAGE_CRUSH && mace.attack_bonus == 64);
+    assert(fabs(gs_spec_accuracy(&c, &mace) - gs_chance(24320, 8731)) < 1e-12);
+    dagger.weapon = GS_W_VESTAS_LONGSWORD;
+    assert(fabs(gs_spec_accuracy(&c, &dagger) - gs_chance(22648, 3905)) < 1e-12);
+}
+
 int main(int argc, char** argv) {
     assert(argc == 2);
     gs_register_java_items();
     unread_bar_provenance();
+    blocked_hits_pair_without_erasing_damage();
+    meals_use_earliest_complete_rescue_and_finite_risk();
+    dagger_special_defends_slash_not_normal_stab();
     FILE* f = fopen(argv[1], "r");
     assert(f);
     static char plan_lines[LINE * 4], line[LINE], record[LINE * 4], mine_situation[LINE * 2], mine_spec[LINE * 2], spec_record[LINE * 4], copy[LINE];

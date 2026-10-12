@@ -157,7 +157,15 @@ typedef enum {
     ITEM_FIRE_CAPE = 152,
     ITEM_RUNE_BOOTS = 153,
     ITEM_RUNE_GLOVES = 154,
-    NUM_ITEMS = 155,
+    ITEM_ABYSSAL_DAGGER_BH = 155,
+    ITEM_DRAGON_MACE_BH = 156,
+    ITEM_VESTAS_BLIGHTED = 157,
+    ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS = 158,
+    ITEM_MYTHICAL_CAPE = 159,
+    ITEM_MIXED_HIDE_TOP = 160,
+    ITEM_ELITE_BLACK_FULL_HELM = 161,
+    ITEM_ELITE_BLACK_PLATELEGS = 162,
+    NUM_ITEMS = 163,
     ITEM_NONE = 255
 } ItemIndex;
 
@@ -1546,6 +1554,59 @@ static const Item ITEM_DATABASE[NUM_ITEMS] = {
         .defence_stab = 8, .defence_slash = 8, .defence_crush = 8,
         .defence_magic = 4, .defence_ranged = 8,
         .melee_strength = 8, .effect_mask = OSRS_ITEM_EFFECT_NONE
+    },
+    /* BH/blighted identities are distinct from ordinary/Deadman weapons.
+       Stats: OSRS Wiki Abyssal dagger (bh), Dragon mace (bh), Vesta's blighted longsword. */
+    [ITEM_ABYSSAL_DAGGER_BH] = {
+        .item_id = 27861, .name = "Abyssal dagger (bh)", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 1,
+        .attack_stab = 85, .attack_slash = 40, .attack_crush = -4,
+        .attack_magic = 1, .defence_magic = 1, .melee_strength = 75
+    },
+    [ITEM_DRAGON_MACE_BH] = {
+        .item_id = 27857, .name = "Dragon mace (bh)", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 1,
+        .attack_stab = 44, .attack_slash = -2, .attack_crush = 64,
+        .melee_strength = 55, .prayer = 5
+    },
+    [ITEM_VESTAS_BLIGHTED] = {
+        .item_id = 24617, .name = "Vesta's blighted longsword", .slot = SLOT_WEAPON,
+        .attack_speed = 5, .attack_range = 1,
+        .attack_stab = 106, .attack_slash = 121, .attack_crush = -2,
+        .defence_stab = 1, .defence_slash = 4, .defence_crush = 3,
+        .melee_strength = 118
+    },
+    [ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS] = {
+        .item_id = 27867, .name = "Abyssal dagger (bh)(p++)", .slot = SLOT_WEAPON,
+        .attack_speed = 4, .attack_range = 1,
+        .attack_stab = 85, .attack_slash = 40, .attack_crush = -4,
+        .attack_magic = 1, .defence_magic = 1, .melee_strength = 75
+    },
+    /* Recorded manual opponent gear; stats: corresponding OSRS Wiki pages. */
+    [ITEM_MYTHICAL_CAPE] = {
+        .item_id = 22114, .name = "Mythical cape", .slot = SLOT_CAPE,
+        .attack_crush = 6, .melee_strength = 1, .prayer = 1,
+        .defence_stab = 8, .defence_slash = 8, .defence_crush = 8,
+        .defence_magic = 8, .defence_ranged = 8
+    },
+    [ITEM_MIXED_HIDE_TOP] = {
+        .item_id = 29280, .name = "Mixed hide top", .slot = SLOT_BODY,
+        .attack_stab = 4, .attack_slash = -2, .attack_crush = -3,
+        .attack_magic = -15, .attack_ranged = 27, .melee_strength = 2,
+        .defence_stab = 33, .defence_slash = 39, .defence_crush = 43,
+        .defence_magic = 30, .defence_ranged = 32
+    },
+    [ITEM_ELITE_BLACK_FULL_HELM] = {
+        .item_id = 29560, .name = "Elite black full helm", .slot = SLOT_HEAD,
+        .attack_magic = -6, .attack_ranged = -3, .prayer = 4,
+        .defence_stab = 13, .defence_slash = 14, .defence_crush = 11,
+        .defence_magic = -1, .defence_ranged = 13
+    },
+    [ITEM_ELITE_BLACK_PLATELEGS] = {
+        .item_id = 29564, .name = "Elite black platelegs", .slot = SLOT_LEGS,
+        .attack_magic = -21, .attack_ranged = -11, .prayer = 6,
+        .defence_stab = 24, .defence_slash = 22, .defence_crush = 20,
+        .defence_magic = -4, .defence_ranged = 22
     },
 
 };

@@ -180,7 +180,12 @@ static int calculate_effective_defence(Player* p, AttackStyle incoming_style) {
 }
 
 static MeleeBonusType get_melee_bonus_type(Player* p) {
-    if (p->current_gear == GEAR_SPEC) {
+    int weapon = p->equipped[GEAR_SLOT_WEAPON];
+    if (p->current_gear == GEAR_SPEC &&
+            weapon != ITEM_ABYSSAL_DAGGER_BH &&
+            weapon != ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS &&
+            weapon != ITEM_DRAGON_MACE_BH &&
+            weapon != ITEM_VESTAS_BLIGHTED) {
         return MELEE_SPEC_BONUS_TYPES[p->melee_spec_weapon];
     }
     GearBonuses* g = get_slot_gear_bonuses(p);
@@ -445,7 +450,8 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (defender->current_hitpoints <= 0) return;
     int hitpoints_before = defender->current_hitpoints;
 
-    if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE) {
+    if (hit->kind == OSRS_HIT_RECOIL || hit->kind == OSRS_HIT_VENGEANCE ||
+            hit->kind == OSRS_HIT_POISON) {
         defender->hit_landed_this_tick = 1;
         defender->hit_damage += hit->damage;
         pvp_render_hit_events_add(defender, hit->damage);
@@ -940,6 +946,15 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
 
         int eff_defence = calculate_effective_defence(defender, style);
         int defence_bonus = get_defence_bonus(defender, style, attacker);
+        /* Feint uses the selected attack bonus against stab defence; Abyssal
+           Puncture uses slash, and Shatter uses crush (OSRS Wiki weapon pages). */
+        if (spec_item_idx == ITEM_VESTAS || spec_item_idx == ITEM_VESTAS_BLIGHTED)
+            defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_STAB);
+        else if (spec_item_idx == ITEM_ABYSSAL_DAGGER_BH ||
+                spec_item_idx == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS)
+            defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_SLASH);
+        else if (spec_item_idx == ITEM_DRAGON_MACE_BH)
+            defence_bonus = get_defence_bonus_for_melee_type(defender, MELEE_BONUS_CRUSH);
         int def_roll = eff_defence * (defence_bonus + 64);
 
         int magic_base_hit = 30;

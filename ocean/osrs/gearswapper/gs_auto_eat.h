@@ -54,7 +54,6 @@ typedef struct { int tick, amount, ceiling; } GsHeal;
 static int gs_ceiling(const GsFood* food) { return GS_ASSUMED_MAX_HP + (food->drained ? food->heal : 0); }
 typedef struct { int tick, resume, delay, earliest_resume, restored_at; } GsConsumptionAt;
 typedef struct { double risk; int useful, waste; } GsEvaluation;
-typedef enum { GS_SCHEDULE_ANY, GS_SCHEDULE_EARLIEST } GsSchedule;
 typedef enum { GS_RESUME_LATEST, GS_RESUME_EARLIEST } GsResumeTiming;
 
 typedef struct {
@@ -151,10 +150,11 @@ static void plan_followed(const GsEatCall* call, const GsPlan* plan, GsVec* plan
 
 static int plan_last_heal(const GsPlan* plan) { return VEC_AT(GsHeal, plan->heals, plan->heals.count - 1).tick; }
 
-static int branch_last(const GsBranch* branch) {
-    int last = INT_MIN;
-    for (int i = 0; i < branch->follows.count; i++) last = imax(last, plan_last_heal(&VEC_AT(GsPlan, branch->follows, i)));
-    return last;
+static int branch_last(const GsBranch* branch, int next_decision) {
+    int first = INT_MAX;
+    for (int i = 0; i < branch->follows.count; i++)
+        first = imin(first, plan_last_heal(&VEC_AT(GsPlan, branch->follows, i)));
+    return branch->follows.count ? first : next_decision;
 }
 
 static GsBranch eat_branch(const GsEatCall* call, const GsEatSituation* s, const GsMeal* current, int window) {
@@ -398,7 +398,7 @@ static int eat_volley(GsHit* hits, int count, GsSource source, int lands, int ar
 }
 
 static void eat_regulars(Arena* arena, const GsEatSituation* s, int due, int energy, const GsHit* hits, int hit_count, const int* mauled, int mauled_count,
-    int horizon, GsSchedule schedule, const GsVec* heals, GsVec* scenarios) {
+    int horizon, GsVec* scenarios) {
     GsScenario* self = vec_push(scenarios);
     self->hits = arena_alloc(arena, (size_t)(hit_count + 1) * sizeof(GsHit));
     memcpy(self->hits, hits, (size_t)hit_count * sizeof(GsHit));
@@ -407,19 +407,10 @@ static void eat_regulars(Arena* arena, const GsEatSituation* s, int due, int ene
         const GsAttack* attack = &s->attacks[a];
         if (attack->cost > energy || attack->most == 0) continue;
         size_t mark = arena->used;
-        int cap = imax(horizon - due + 2, 0) + 2 * heals->count + 4;
+        int cap = imax(horizon - due + 2, 0) + 4;
         int* starts = arena_alloc(arena, (size_t)cap * sizeof(int));
         int start_count = set_insert(starts, 0, due);
-        if (schedule == GS_SCHEDULE_ANY) {
-            for (int started = due + 1; started <= horizon; started++) start_count = set_insert(starts, start_count, started);
-        } else {
-            int delay = gs_lands(0, attack->style, s->distance, gs_opponent_lead(s->pid));
-            for (int h = 0; h < heals->count; h++) {
-                int tick = VEC_AT(GsHeal, *heals, h).tick;
-                start_count = set_insert(starts, start_count, imax(due, tick - delay));
-                start_count = set_insert(starts, start_count, imax(due, tick + 1 - delay));
-            }
-        }
+        for (int started = due + 1; started <= horizon; started++) start_count = set_insert(starts, start_count, started);
         for (int i = 0; i < start_count; i++) {
             int started = starts[i];
             int at = gs_lands(started, attack->style, s->distance, gs_opponent_lead(s->pid));
@@ -431,25 +422,17 @@ static void eat_regulars(Arena* arena, const GsEatSituation* s, int due, int ene
             assert(hit_count + attack->arrows <= GS_MAX_HITS);
             memcpy(next, hits, (size_t)hit_count * sizeof(GsHit));
             int next_count = eat_volley(next, hit_count, attack->cost == 0 ? SRC_NORMAL : attack->godsword ? SRC_GODSWORD_SPEC : SRC_SPEC, at, attack->arrows, attack->least, attack->most, attack->accuracy);
-            eat_regulars(arena, s, started + attack->interval, energy - attack->cost, next, next_count, mauled, mauled_count, horizon, schedule, heals, scenarios);
+            eat_regulars(arena, s, started + attack->interval, energy - attack->cost, next, next_count, mauled, mauled_count, horizon, scenarios);
         }
         (void)mark;
     }
 }
 
-static GsVec eat_scenarios(Arena* arena, const GsEatSituation* s, int horizon, GsSchedule schedule, const GsVec* heals) {
+static GsVec eat_scenarios(Arena* arena, const GsEatSituation* s, int horizon) {
     int due = eat_next_opponent(s);
     int placements[512];
     int placement_count = set_insert(placements, 0, s->tick + 1);
-    if (schedule == GS_SCHEDULE_ANY) {
-        for (int at = s->tick + 2; at <= horizon; at++) placement_count = set_insert(placements, placement_count, at);
-    } else {
-        for (int h = 0; h < heals->count; h++) {
-            int tick = VEC_AT(GsHeal, *heals, h).tick;
-            placement_count = set_insert(placements, placement_count, imax(s->tick + 1, tick));
-            placement_count = set_insert(placements, placement_count, imax(s->tick + 1, tick + 1));
-        }
-    }
+    for (int at = s->tick + 2; at <= horizon; at++) placement_count = set_insert(placements, placement_count, at);
     assert(placement_count < 512);
     GsHit committed[GS_MAX_HITS];
     int committed_count = 0;
@@ -459,7 +442,7 @@ static GsVec eat_scenarios(Arena* arena, const GsEatSituation* s, int horizon, G
         committed_count = eat_volley(committed, committed_count, SRC_SWING, swing->lands, swing->arrows, swing->least, swing->most, swing->accuracy);
     }
     GsVec scenarios = vec_make(arena, sizeof(GsScenario));
-    eat_regulars(arena, s, due, s->energy_high, committed, committed_count, NULL, 0, horizon, schedule, heals, &scenarios);
+    eat_regulars(arena, s, due, s->energy_high, committed, committed_count, NULL, 0, horizon, &scenarios);
     if (!s->has_maul) return scenarios;
     const GsAttack* maul = &s->maul;
     int mauls = s->energy_high / maul->cost;
@@ -471,7 +454,7 @@ static GsVec eat_scenarios(Arena* arena, const GsEatSituation* s, int horizon, G
         int one_count = committed_count;
         one[one_count++] = (GsHit){SRC_MAUL, gs_lands(first, GS_MELEE, s->distance, gs_opponent_lead(s->pid)), 0, maul->most, maul->accuracy};
         int mauled1[1] = {first};
-        eat_regulars(arena, s, due, s->energy_high - maul->cost, one, one_count, mauled1, 1, horizon, schedule, heals, &scenarios);
+        eat_regulars(arena, s, due, s->energy_high - maul->cost, one, one_count, mauled1, 1, horizon, &scenarios);
         for (int si = 0; si < placement_count; si++) {
             int second = placements[si];
             if (mauls < 2 || second < first) continue;
@@ -480,7 +463,7 @@ static GsVec eat_scenarios(Arena* arena, const GsEatSituation* s, int horizon, G
             int two_count = one_count;
             two[two_count++] = (GsHit){SRC_MAUL, gs_lands(second, GS_MELEE, s->distance, gs_opponent_lead(s->pid)), 0, maul->most, maul->accuracy};
             int mauled2[2] = {first, second};
-            eat_regulars(arena, s, due, s->energy_high - 2 * maul->cost, two, two_count, mauled2, 2, horizon, schedule, heals, &scenarios);
+            eat_regulars(arena, s, due, s->energy_high - 2 * maul->cost, two, two_count, mauled2, 2, horizon, &scenarios);
         }
     }
     return scenarios;
@@ -493,47 +476,41 @@ static GsEvaluation eat_after(const GsEatCall* call, const GsEatSituation* s, co
     GsBranch branch = eat_branch(call, s, current, window);
     GsEvaluation result;
     if (branch.follows.count == 0) {
-        int strongest = 0, interval = 1, interval_set = 0;
-        for (int i = 0; i < s->attack_count; i++) {
-            if (s->attacks[i].cost == 0) strongest = imax(strongest, s->attacks[i].most * s->attacks[i].arrows);
-            interval = interval_set ? imax(interval, s->attacks[i].interval) : s->attacks[i].interval;
-            interval_set = 1;
-        }
-        if (!interval_set) interval = 1;
-        int total = s->hitpoints;
-        for (int i = 0; i < branch.heals.count; i++) total += VEC_AT(GsHeal, branch.heals, i).amount;
-        int attacks = strongest > 0 ? (total + strongest - 1) / strongest : s->energy_high;
         int due = eat_next_opponent(s);
-        int travel = INT_MIN;
-        for (int i = 0; i < s->attack_count; i++) travel = imax(travel, gs_lands(0, s->attacks[i].style, s->distance, gs_opponent_lead(s->pid)));
-        if (s->attack_count == 0) travel = gs_lands(0, GS_RANGED, s->distance, GS_LEAD_ATTACKER);
-        int horizon = due + attacks * interval + travel;
-        if (strongest == 0) {
-            horizon = imax(horizon, s->tick);
-            for (int i = 0; i < s->swing_count; i++)
-                horizon = imax(horizon, s->swings[i].lands + s->swings[i].arrows - 1);
-            horizon = imax(horizon, s->has_local_swing ? s->local_swing.lands + 1 : s->tick);
-            if (s->offence == GS_ENGAGED || branch.consumptions.count > 0) {
-                int next = eat_next_local(s);
-                int reflected = imin(s->local_normal, s->opponent_hp.high);
-                int echoes = s->recoil_seen && reflected > 0 ? (total + reflected / 10) / (reflected / 10 + 1) : 1;
-                int delayed = 0;
-                for (int i = 0; i < branch.consumptions.count; i++) delayed += VEC_AT(GsConsumptionAt, branch.consumptions, i).delay;
-                horizon = imax(horizon, next + delayed + echoes * s->local_interval + gs_lands(0, s->local_style, s->distance, gs_local_lead(s->pid)) + 1);
-                for (int i = 0; i < branch.consumptions.count; i++) {
-                    const GsConsumptionAt* c = &VEC_AT(GsConsumptionAt, branch.consumptions, i);
-                    if (c->resume != GS_NONE)
-                        horizon = imax(horizon, c->resume + delayed + echoes * s->local_interval + gs_lands(0, s->local_style, s->distance, gs_local_lead(s->pid)) + 1);
-                }
+        int reach = imax(window, s->tick + 1);
+        for (int i = 0; i < s->swing_count; i++)
+            reach = imax(reach, s->swings[i].lands + s->swings[i].arrows - 1);
+        for (int i = 0; i < s->attack_count; i++) {
+            const GsAttack* attack = &s->attacks[i];
+            if (attack->cost <= s->energy_high)
+                reach = imax(reach, gs_lands(due, attack->style, s->distance, gs_opponent_lead(s->pid)) + attack->arrows - 1);
+        }
+        if (s->has_maul && s->maul.cost <= s->energy_high) {
+            int maul_at = s->tick + 1;
+            for (int i = 0; i < s->attack_count; i++)
+                if (s->attacks[i].cost + s->maul.cost <= s->energy_high)
+                    maul_at = imax(maul_at, due + 1);
+            if (2 * s->maul.cost <= s->energy_high) maul_at = imax(maul_at, s->tick + 2);
+            reach = imax(reach, gs_lands(maul_at, GS_MELEE, s->distance, gs_opponent_lead(s->pid)));
+        }
+        if (s->has_local_swing) reach = imax(reach, s->local_swing.lands + 1);
+        int resumes = s->offence == GS_ENGAGED;
+        int delayed = eat_stored_local(s), resume = s->tick + 1;
+        for (int i = 0; i < branch.consumptions.count; i++) {
+            const GsConsumptionAt* consumption = &VEC_AT(GsConsumptionAt, branch.consumptions, i);
+            delayed += consumption->delay;
+            if (consumption->resume != GS_NONE) {
+                resumes = 1;
+                resume = imax(resume, consumption->resume);
             }
         }
-        int reach = imax(horizon, window);
-        GsVec scenarios = eat_scenarios(arena, s, reach, GS_SCHEDULE_EARLIEST, &branch.heals);
+        if (resumes) reach = imax(reach, eat_own_lands(s, imax(imax(delayed, resume), s->tick + 1)) + 1);
+        GsVec scenarios = eat_scenarios(arena, s, reach);
         result = eat_danger(arena, s, &branch.heals, branch.heals.count, reach, &branch.consumptions, &scenarios, INFINITY);
         arena->used = mark;
         return result;
     }
-    GsVec everything = eat_scenarios(arena, s, window, GS_SCHEDULE_ANY, &(GsVec){0, 0, 0, sizeof(GsHeal), arena});
+    GsVec everything = eat_scenarios(arena, s, window);
     int count = branch.follows.count;
     int order[256];
     assert(count <= 256);
@@ -663,7 +640,7 @@ static double eat_forgone_knockout(const GsEatCall* call, const GsEatSituation* 
 #endif
 }
 
-typedef struct { const GsMeal* meal; GsEvaluation evaluation; double gain, value; int size, non_hard, brew, fast_food, heal; } GsChoice;
+typedef struct { const GsMeal* meal; GsEvaluation evaluation; double gain, value; int size, non_hard, brew, fast_food, heal, remaining; } GsChoice;
 
 /* Double.compare of the negated values, the first key of the Java comparator. */
 static int value_order(double a, double b) {
@@ -680,7 +657,8 @@ static int choice_less(const GsChoice* a, const GsChoice* b) {
     if (a->brew != b->brew) return a->brew < b->brew;
     if (a->fast_food != b->fast_food) return a->fast_food < b->fast_food;
     if (a->heal != b->heal) return a->heal < b->heal;
-    return a->evaluation.waste < b->evaluation.waste;
+    if (a->evaluation.waste != b->evaluation.waste) return a->evaluation.waste < b->evaluation.waste;
+    return a->remaining > b->remaining;
 }
 
 static GsMeal eat_meal_later(const GsMeal* meal) {
@@ -722,58 +700,62 @@ static GsVerdict gs_auto_eat_decide(const GsEatSituation* s, const GsFood* foods
     {
         size_t mark = arena->used;
         GsBranch branch = eat_branch(&call, s, NULL, INT_MIN);
-        answerable = branch_last(&branch);
+        answerable = branch_last(&branch, s->tick + 1);
         arena->used = mark;
     }
     int window = answerable;
-    for (int l = 0; l < legal_count; l++) {
-        size_t mark = arena->used;
-        GsBranch branch = eat_branch(&call, s, legal[l], INT_MIN);
-        window = imax(window, branch_last(&branch));
-        arena->used = mark;
-    }
     GsEvaluation waiting = eat_mixed(&call, s, NULL, window, answerable);
     GsVerdict verdict = {GS_WAIT, waiting.risk, waiting.risk, {0}, 0, s->tick, GS_URGENT, gs_health_of(s->hitpoints)};
     if (waiting.risk <= s->tolerance) { arena->used = base; return verdict; }
     GsEatSituation late = eat_late(s);
-    double avoidable = eat_mixed(&call, &late, NULL, window, answerable).risk;
     GsChoice choices[GS_MAX_MEALS];
     int choice_count = 0;
     for (int l = 0; l < legal_count; l++) {
         const GsMeal* meal = legal[l];
-        GsEvaluation evaluation = eat_mixed(&call, s, meal, window, answerable);
+        size_t mark = arena->used;
+        GsBranch branch = eat_branch(&call, s, meal, window);
+        int meal_window = imax(window, branch_last(&branch, s->tick + meal->complete));
+        arena->used = mark;
+        GsEvaluation evaluation = eat_mixed(&call, s, meal, meal_window, answerable);
         if (evaluation.useful == 0) continue;
-        double gain = avoidable - eat_mixed(&call, &late, meal, window, answerable).risk;
+        double gain = eat_mixed(&call, &late, NULL, meal_window, answerable).risk
+            - eat_mixed(&call, &late, meal, meal_window, answerable).risk;
         int delay = eat_delay(s, meal, foods);
         int drain = 0;
         for (int i = 0; i < meal->n; i++) drain |= foods[meal->foods[i]].drained;
-        double forgone = delay == 0 && !drain ? 0 : eat_forgone_knockout(&call, s, meal, delay, waiting.risk, evaluation.risk);
+        double waiting_risk = eat_mixed(&call, s, NULL, meal_window, answerable).risk;
+        double forgone = delay == 0 && meal->resume <= 1 && !drain ? 0 : eat_forgone_knockout(&call, s, meal, delay, waiting_risk, evaluation.risk);
         double value = gain * (1 + GS_KNOCKOUT_LATER * s->stakes) - forgone * s->stakes;
         if (value >= 0) {
             GsChoice* c = &choices[choice_count++];
-            *c = (GsChoice){meal, evaluation, gain, value, meal->n, 0, 0, 0, 0};
+            *c = (GsChoice){meal, evaluation, gain, value, meal->n, 0, 0, 0, 0, INT_MAX};
             for (int i = 0; i < meal->n; i++) {
                 const GsFood* food = &foods[meal->foods[i]];
                 c->non_hard += food->kind != GS_HARD_FOOD;
                 c->brew += food->drained;
                 c->fast_food += food->kind == GS_FAST_FOOD;
                 c->heal += food->heal;
+                c->remaining = imin(c->remaining, food->remaining);
             }
         }
     }
     const GsChoice* selected = NULL;
-    int fewest = INT_MAX;
-    for (int c = 0; c < choice_count; c++) if (choices[c].evaluation.risk <= s->tolerance) fewest = imin(fewest, choices[c].size);
+    int have_sufficient = 0;
+    for (int c = 0; c < choice_count; c++) have_sufficient |= choices[c].evaluation.risk <= s->tolerance;
     for (int c = 0; c < choice_count; c++) {
         int sufficient = choices[c].evaluation.risk <= s->tolerance;
-        int taken = fewest != INT_MAX ? sufficient && choices[c].size == fewest : choices[c].gain >= s->tolerance;
+        int taken = have_sufficient ? sufficient : choices[c].gain >= s->tolerance;
         if (taken && (!selected || choice_less(&choices[c], selected))) selected = &choices[c];
     }
     int eats = selected && selected->evaluation.risk <= s->tolerance;
     verdict.decision = eats ? GS_EAT_NOW : GS_EXPOSED;
     if (eats) {
         GsMeal later = eat_meal_later(selected->meal);
-        double deferred = eat_mixed(&call, s, &later, window, answerable).risk;
+        size_t mark = arena->used;
+        GsBranch branch = eat_branch(&call, s, selected->meal, window);
+        int selected_window = imax(window, branch_last(&branch, s->tick + selected->meal->complete));
+        arena->used = mark;
+        double deferred = eat_mixed(&call, s, &later, selected_window, answerable).risk;
         verdict.urgency = deferred - selected->evaluation.risk < s->tolerance ? GS_DEFERRABLE : GS_URGENT;
     }
     verdict.meal_risk = selected ? selected->evaluation.risk : waiting.risk;

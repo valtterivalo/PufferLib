@@ -11,6 +11,7 @@ typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES,
 typedef struct {
     ModelKind kind;
     const OppFit* fit;
+    int profile_first, profile_count;
 } OppModel;
 
 typedef enum { TIMING_MEASURED, TIMING_IDEAL } OursTiming;
@@ -63,6 +64,10 @@ static void sim_init(Sim* sim) {
     sim->context.self_play = 1;
     ours_init(&sim->ours);
     riskfight_finalize_context((EncounterState*)&sim->state, (EncounterContext*)&sim->context);
+    /* This constructor creates a fresh synthetic clean cohort. Loaded source
+     * snapshots subsequently replace this declaration with their own status. */
+    for (int side = 0; side < 2; side++)
+        sim->state.poison_source[side] = OSRS_POISON_CLEAR_PRIOR;
 }
 
 static void sim_clear(Sim* sim) {
@@ -79,7 +84,7 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
         g_his_events++;
         g_his_positive += event->hitpoints_lost > 0;
         out->his_hits++;
-        out->his_hit_mask |= 1u << step;
+        if (step >= 0 && step < 32) out->his_hit_mask |= 1u << step;
         out->his_damage += event->hitpoints_lost;
     }
     if (event->kind == OSRS_HIT_DIRECT && event->source == 0 && event->target == 1) {
@@ -89,8 +94,10 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
         out->our_hits++;
         out->our_damage += event->hitpoints_lost;
     }
-    if (sim->obs.hit_count < OBSERVE_HITS)
-        sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost};
+    if (sim->obs.hit_count >= OBSERVE_HITS) {
+        fprintf(stderr, "observed hit capacity exceeded\n"); abort();
+    }
+    sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost};
     if (event->target == 1) {
         sim->step_damage += event->hitpoints_lost;
         if (event->kind == OSRS_HIT_DIRECT && event->source == 0) sim->step_direct += event->hitpoints_lost;
@@ -106,7 +113,8 @@ static void opponent_actions(const OppModel* model, Sim* sim, int step, uint32_t
     }
     float obs[RF_OBS_SIZE];
     riskfight_write_observation(s, 1, obs);
-    RiskfightProfile profile = RISKFIGHT_HUMAN_PROFILES[osrs_lowbias32(seed) % PROFILE_COUNT];
+    int count = model->profile_count ? model->profile_count : PROFILE_COUNT;
+    RiskfightProfile profile = RISKFIGHT_HUMAN_PROFILES[model->profile_first + osrs_lowbias32(g_rollout_seed) % count];
     riskfight_script(obs, &profile, s->script_seed[1], s->consume_ticks[1], actions);
 }
 

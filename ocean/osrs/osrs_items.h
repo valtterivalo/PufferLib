@@ -66,6 +66,41 @@ typedef struct {
 
 #include "osrs_items_generated.h"
 
+/* Equivalent combat gear variants. Locked cape stats: OSRS Wiki,
+ * https://oldschool.runescape.wiki/w/Infernal_cape#Combat_stats .
+ * Raw 24224 is the locked infernal cape, not granite maul 24225. */
+#define OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(X) \
+    X(1704, ITEM_GLORY) \
+    X(4880, ITEM_DHAROKS_HELM) \
+    X(4892, ITEM_DHAROKS_PLATEBODY) \
+    X(4898, ITEM_DHAROKS_PLATELEGS) \
+    X(4994, ITEM_VERACS_PLATESKIRT) \
+    X(24133, ITEM_INFERNAL_CAPE) \
+    X(24224, ITEM_INFERNAL_CAPE) \
+    X(28055, ITEM_DRAGON_BOOTS) \
+    X(28069, ITEM_FIGHTER_TORSO)
+
+static inline int osrs_item_index_from_raw_id(int raw) {
+#define OSRS_RAW_GEAR_ALIAS_CASE(RAW, INDEX) case RAW: return INDEX;
+    switch (raw) {
+        OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(OSRS_RAW_GEAR_ALIAS_CASE)
+    }
+#undef OSRS_RAW_GEAR_ALIAS_CASE
+    for (int i = 0; i < NUM_ITEMS; i++)
+        if (ITEM_DATABASE[i].item_id == raw) return i;
+    return -1;
+}
+
+static inline uint16_t osrs_item_canonical_raw_id(uint16_t raw) {
+#define OSRS_CANONICAL_GEAR_CASE(RAW, INDEX) \
+    case RAW: return ITEM_DATABASE[INDEX].item_id;
+    switch (raw) {
+        OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(OSRS_CANONICAL_GEAR_CASE)
+        default: return raw;
+    }
+#undef OSRS_CANONICAL_GEAR_CASE
+}
+
 static inline const Item* get_item(uint8_t item_index) {
     if (item_index >= NUM_ITEMS) return NULL;
     return &ITEM_DATABASE[item_index];
@@ -94,6 +129,10 @@ static inline int get_item_attack_style(uint8_t item_index) {
         case ITEM_OSMUMTENS_FANG:
         case ITEM_ABYSSAL_TENTACLE:
         case ITEM_VESTAS:
+        case ITEM_VESTAS_BLIGHTED:
+        case ITEM_ABYSSAL_DAGGER_BH:
+        case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS:
+        case ITEM_DRAGON_MACE_BH:
         case ITEM_VOIDWAKER:
         case ITEM_STATIUS_WARHAMMER:
             return 1;

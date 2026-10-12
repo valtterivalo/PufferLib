@@ -294,6 +294,16 @@ static void write_consumable_rows(FILE* out) {
     }
 }
 
+static void write_raw_alias_rows(FILE* out) {
+    fprintf(out, "\n#define OSRS_ITEM_RAW_ALIAS_ROWS(X) \\\n");
+#define GEN_EMIT_RAW_ALIAS(RAW, INDEX) \
+    fprintf(out, "    X(%u, %u) \\\n", (unsigned)(RAW), \
+        (unsigned)ITEM_DATABASE[INDEX].item_id);
+    OSRS_ITEM_RAW_GEAR_ALIAS_ROWS(GEN_EMIT_RAW_ALIAS)
+#undef GEN_EMIT_RAW_ALIAS
+    fprintf(out, "\n");
+}
+
 static void write_header(const char* path) {
     FILE* out = open_or_die(path);
     fprintf(out,
@@ -316,6 +326,7 @@ static void write_header(const char* path) {
         OSRS_ITEM_OBS_CODE_SCALE);
     write_content_rows(out);
     write_consumable_rows(out);
+    write_raw_alias_rows(out);
     fprintf(out, "\n#endif\n");
     fclose(out);
 }

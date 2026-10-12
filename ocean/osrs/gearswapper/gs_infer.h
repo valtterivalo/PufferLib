@@ -137,6 +137,7 @@ static void gs_eater_reset(GsInfer* s) {
 
 static void gs_infer_init(GsInfer* s) {
     memset(s, 0, sizeof(*s));
+    s->c.ratio = s->c.scale = -1;
     s->tracker_current = -1;
     s->timed = -1;
     s->opponent = gs_inference_tracked(0);
@@ -339,7 +340,10 @@ static double gs_armament_accuracy(const GsClient* c, const GsArmament* a) { ret
 static double gs_spec_accuracy(const GsClient* c, const GsArmament* a) {
     switch (a->weapon) {
         case GS_W_VOIDWAKER: return 1;
-        case GS_W_DRAGON_MACE_BH: return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), a->damage, 0.6);
+        case GS_W_ABYSSAL_DAGGER:
+        case GS_W_ABYSSAL_DAGGER_BH:
+            return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), GS_DAMAGE_SLASH, 1);
+        case GS_W_DRAGON_MACE_BH: return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), GS_DAMAGE_CRUSH, 0.6);
         case GS_W_VESTAS_LONGSWORD: return gs_accuracy_scaled(c, a, 1, GS_DAMAGE_STAB, 0.25);
         default: return gs_accuracy_scaled(c, a, gs_spec_accuracy_multiplier(a->weapon), a->damage, 1);
     }
@@ -873,8 +877,9 @@ static int gs_find_interacting(const GsClient* c, int id) {
 static GsPid gs_pid_at(const GsInfer* s, int tick) { (void)tick; return s->pid.owner; }
 
 static void gs_sync_opponent_timer(GsInfer* s, int observed_tick) {
-    if (s->tracker_current != s->timed) {
-        s->timed = s->tracker_current;
+    int current = s->c.ratio != 0 ? s->tracker_current : -1;
+    if (current != s->timed) {
+        s->timed = current;
         s->opponent = gs_inference_tracked(observed_tick);
         s->pid = gs_pid_unknown();
         s->has_damage_since_reading = 0;
@@ -981,8 +986,12 @@ static int gs_ring_charges_taken(GsInfer* s, int ring, int damage) {
     return s->recoil_charges;
 }
 
-enum { GS_ATTACK_HITSPLAT_ME = 16, GS_ATTACK_HITSPLAT_OTHER = 17, GS_ATTACK_HITSPLAT_MAX_ME = 43 };
-static int gs_attack_hitsplat(int type) { return type == GS_ATTACK_HITSPLAT_ME || type == GS_ATTACK_HITSPLAT_OTHER || type == GS_ATTACK_HITSPLAT_MAX_ME; }
+enum { GS_ATTACK_HITSPLAT_BLOCK_ME = 12, GS_ATTACK_HITSPLAT_BLOCK_OTHER = 13,
+    GS_ATTACK_HITSPLAT_ME = 16, GS_ATTACK_HITSPLAT_OTHER = 17, GS_ATTACK_HITSPLAT_MAX_ME = 43 };
+static int gs_attack_hitsplat(int type) {
+    return type == GS_ATTACK_HITSPLAT_BLOCK_ME || type == GS_ATTACK_HITSPLAT_BLOCK_OTHER
+        || type == GS_ATTACK_HITSPLAT_ME || type == GS_ATTACK_HITSPLAT_OTHER || type == GS_ATTACK_HITSPLAT_MAX_ME;
+}
 
 static void gs_on_hitsplat(GsInfer* s, int hit_tick, int who, int amount, int type, int mine, int hp_damage) {
     if (who != 0 && s->tracker_current != who) return;

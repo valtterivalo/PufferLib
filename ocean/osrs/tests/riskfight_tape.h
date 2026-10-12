@@ -22,7 +22,23 @@ typedef struct {
     int piety, worn[TAPE_WORN], bag[TAPE_BAG];
     /* 0 unavailable, 1 explicitly empty, 2 causal observer history. */
     int pending_known;
+    /* P tick source value anchorTick: source 1 is raw local varp102, not phase truth. */
+    int poison_source, poison_value, poison_anchor_tick;
+    /* E tick source count rawItems...: exposed composition slots only; no hidden ring. */
+    int opponent_gear_source, opponent_gear_count, opponent_gear[TAPE_WORN];
 } TapeTick;
+
+static OsrsPoisonSource tape_local_poison(const TapeTick* tick, OsrsPoisonState* state) {
+    *state = (OsrsPoisonState){0};
+    if (!tick->poison_source || tick->poison_value > 0) return OSRS_POISON_UNKNOWN_STATE;
+    if (tick->poison_value == 0)
+        return tick->tick == tick->poison_anchor_tick ? OSRS_POISON_OBSERVED_STATE : OSRS_POISON_UNKNOWN_STATE;
+    int lower = osrs_poison_immunity_lower_bound(tick->poison_value);
+    int age = tick->tick - tick->poison_anchor_tick;
+    if (age > lower) return OSRS_POISON_UNKNOWN_STATE;
+    state->immunity_ticks = lower - age;
+    return OSRS_POISON_HORIZON_IMMUNITY;
+}
 
 typedef struct { int tick; char side; int anim; } TapeAnim;
 typedef struct { int tick; char side; int amount, type; char klass; } TapeHit;
@@ -117,6 +133,18 @@ static int tape_nonnegative_int(const char** cursor, const char* path, const cha
     return (int)value;
 }
 
+static int tape_signed_int(const char** cursor, const char* path, const char* line) {
+    const char* p = *cursor;
+    while (isspace((unsigned char)*p)) p++;
+    errno = 0;
+    char* end;
+    long value = strtol(p, &end, 10);
+    if (p == end || errno == ERANGE || value < INT_MIN || value > INT_MAX ||
+        (*end && !isspace((unsigned char)*end))) tape_invalid(path, line);
+    *cursor = end;
+    return (int)value;
+}
+
 static void tape_line_end(const char* p, const char* path, const char* line) {
     while (isspace((unsigned char)*p)) p++;
     if (*p) tape_invalid(path, line);
@@ -138,7 +166,9 @@ static int tape_load(Tape* tape, const char* path) {
     tape->hits = calloc(lines, sizeof(TapeHit));
     tape->actions = calloc(lines, sizeof(TapeAction));
     unsigned char* pending_seen = calloc(lines, 1);
-    if (!tape->ticks || !tape->anims || !tape->hits || !tape->actions || !pending_seen)
+    unsigned char* poison_seen = calloc(lines, 1);
+    unsigned char* gear_seen = calloc(lines, 1);
+    if (!tape->ticks || !tape->anims || !tape->hits || !tape->actions || !pending_seen || !poison_seen || !gear_seen)
         tape_invalid(path, "allocation failed");
     int header_seen = 0;
     int tick_count = 0;
@@ -206,6 +236,44 @@ static int tape_load(Tape* tape, const char* path) {
                 tape_invalid(path, line);
             pending_seen[offset] = 1;
             tape->ticks[offset].pending_known = source;
+        } else if (!strcmp(kind, "P")) {
+            if (!header_seen) tape_invalid(path, line);
+            const char* p = rest;
+            int tick = tape_nonnegative_int(&p, path, line);
+            int source = tape_nonnegative_int(&p, path, line);
+            int value = tape_signed_int(&p, path, line);
+            int anchor = tape_signed_int(&p, path, line);
+            tape_line_end(p, path, line);
+            if (tick < tape->lo || tick > tape->hi || source > 1 ||
+                (source == 0 && (value != 0 || anchor != -1)) ||
+                (source == 1 && (anchor < 0 || anchor > tick ||
+                    value < -INT_MAX / OSRS_POISON_PERIOD))) tape_invalid(path, line);
+            int offset = tick - tape->lo;
+            if (poison_seen[offset]) tape_invalid(path, line);
+            poison_seen[offset] = 1;
+            TapeTick* t = &tape->ticks[offset];
+            t->poison_source = source;
+            t->poison_value = value;
+            t->poison_anchor_tick = anchor;
+        } else if (!strcmp(kind, "E")) {
+            if (!header_seen) tape_invalid(path, line);
+            const char* p = rest;
+            int tick = tape_nonnegative_int(&p, path, line);
+            int source = tape_nonnegative_int(&p, path, line);
+            int count = tape_nonnegative_int(&p, path, line);
+            if (tick < tape->lo || tick > tape->hi || source > 1 || count > TAPE_WORN ||
+                (source == 0 && count != 0) || (source == 1 && count <= 3)) tape_invalid(path, line);
+            int offset = tick - tape->lo;
+            if (gear_seen[offset]) tape_invalid(path, line);
+            gear_seen[offset] = 1;
+            TapeTick* t = &tape->ticks[offset];
+            t->opponent_gear_source = source;
+            t->opponent_gear_count = count;
+            for (int i = 0; i < count; i++) {
+                t->opponent_gear[i] = tape_signed_int(&p, path, line);
+                if (t->opponent_gear[i] < -1) tape_invalid(path, line);
+            }
+            tape_line_end(p, path, line);
         } else if (!strcmp(kind, "T")) {
             if (!header_seen || tick_count > tape->hi - tape->lo)
                 tape_invalid(path, line);
@@ -233,6 +301,8 @@ static int tape_load(Tape* tape, const char* path) {
     }
     fclose(f);
     free(pending_seen);
+    free(poison_seen);
+    free(gear_seen);
     if (!header_seen || tick_count != tape->hi - tape->lo + 1)
         tape_invalid(path, "missing or incomplete tick rows");
     return tick_count;
@@ -248,7 +318,8 @@ static void tape_free(Tape* tape) {
 }
 
 static uint8_t raw_id_to_item(int raw) {
-    for (int i = 0; i < NUM_ITEMS; i++) if (ITEM_DATABASE[i].item_id == raw) return (uint8_t)i;
+    int item = osrs_item_index_from_raw_id(raw);
+    if (item >= 0) return (uint8_t)item;
     fprintf(stderr, "no sim item for raw id %d\n", raw);
     abort();
 }

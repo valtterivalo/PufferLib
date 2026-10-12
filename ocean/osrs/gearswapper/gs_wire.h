@@ -3,10 +3,18 @@
 /* The wire the Light replay writes with -Pwiretap: one line per plugin input, fed to the C inference port. */
 #include <ctype.h>
 #include <stdio.h>
+#include <errno.h>
 #include "gs_infer.h"
 #include "gs_java_items.h"
 
 enum { GS_WIRE_TOKENS = 1024 };
+
+#define GS_WIRE_REQUIRE(condition) do { \
+    if (!(condition)) { \
+        fprintf(stderr, "invalid Gear Swapper source wire: %s\n", #condition); \
+        abort(); \
+    } \
+} while (0)
 
 typedef struct { int hp_xp_known, hp_xp, oracle_block; } GsWire;
 
@@ -37,6 +45,7 @@ static GsHeadIcon gs_wire_head(const char* name) {
 
 static void gs_wire_state(char** t, int n, GsClient* c) {
     int i = 2;
+    GS_WIRE_REQUIRE(n >= i + 14 + GS_WORN_SLOTS + 28 + 2);
     memset(c, 0, sizeof(*c));
     c->hitpoints = atoi(t[i++]); c->attack = atoi(t[i++]); c->strength = atoi(t[i++]); c->defence = atoi(t[i++]);
     c->ranged = atoi(t[i++]); c->magic = atoi(t[i++]); c->prayer = atoi(t[i++]);
@@ -46,52 +55,55 @@ static void gs_wire_state(char** t, int n, GsClient* c) {
     for (int k = 0; k < GS_WORN_SLOTS; k++) c->worn[k] = atoi(t[i++]);
     for (int k = 0; k < 28; k++) c->inventory[k] = atoi(t[i++]);
     c->player_count = atoi(t[i++]);
-    assert(c->player_count <= GS_MAX_PLAYERS);
+    GS_WIRE_REQUIRE(c->player_count >= 0 && c->player_count <= GS_MAX_PLAYERS);
+    GS_WIRE_REQUIRE(n >= i + 2 * c->player_count + 1);
     for (int k = 0; k < c->player_count; k++) { c->player_id[k] = atoi(t[i++]); c->player_interacting[k] = atoi(t[i++]); }
     c->tracked = atoi(t[i++]);
     if (c->tracked >= 0) {
+        GS_WIRE_REQUIRE(n >= i + 8);
         c->tracked_interacting = atoi(t[i++]);
         c->ox = atoi(t[i++]); c->oy = atoi(t[i++]); c->ratio = atoi(t[i++]); c->scale = atoi(t[i++]); c->oweapon = atoi(t[i++]);
         c->overhead = gs_wire_head(t[i++]);
         c->equipment_count = atoi(t[i++]);
-        assert(c->equipment_count <= GS_MAX_EQUIPMENT);
+        GS_WIRE_REQUIRE(c->equipment_count >= 0 && c->equipment_count <= GS_MAX_EQUIPMENT);
+        GS_WIRE_REQUIRE(n >= i + c->equipment_count);
         for (int k = 0; k < c->equipment_count; k++) c->equipment[k] = atoi(t[i++]);
     } else c->ratio = c->scale = -1;
     if (i < n && !strcmp(t[i], "ANIMATION")) {
         i++;
-        assert(i < n);
+        GS_WIRE_REQUIRE(i < n);
         if (!strcmp(t[i], "OBSERVED")) {
             i++;
-            assert(i < n);
+            GS_WIRE_REQUIRE(i < n);
             char* end;
             long id = strtol(t[i++], &end, 10);
-            assert(!*end && id >= -1 && id <= INT_MAX);
+            GS_WIRE_REQUIRE(!*end && id >= -1 && id <= INT_MAX);
             c->opponent_animation = (GsCurrentAnimation){GS_ANIMATION_OBSERVED, (int)id};
         } else {
-            assert(!strcmp(t[i++], "UNKNOWN"));
+            GS_WIRE_REQUIRE(!strcmp(t[i++], "UNKNOWN"));
         }
     }
     if (i < n) {
-        assert(!strcmp(t[i++], "GEAR") && i < n);
+        GS_WIRE_REQUIRE(!strcmp(t[i++], "GEAR") && i < n);
         if (!strcmp(t[i++], "OBSERVED")) {
             int end_gear = i;
             while (end_gear < n && strcmp(t[end_gear], "COMBAT_LEVEL")) end_gear++;
-            assert(end_gear - i == 2 || end_gear - i == 2 + GS_ARMOR_SLOTS);
+            GS_WIRE_REQUIRE(end_gear - i == 2 || end_gear - i == 2 + GS_ARMOR_SLOTS);
             char* end;
             long weapon = strtol(t[i++], &end, 10);
-            assert(!*end && weapon >= -1 && weapon <= INT_MAX);
+            GS_WIRE_REQUIRE(!*end && weapon >= -1 && weapon <= INT_MAX);
             long shield = strtol(t[i++], &end, 10);
-            assert(!*end && shield >= -1 && shield <= INT_MAX);
+            GS_WIRE_REQUIRE(!*end && shield >= -1 && shield <= INT_MAX);
             c->opponent_gear = (GsObservedGear){.source = GS_GEAR_WEAPON_SHIELD_OBSERVED, .weapon = (int)weapon, .shield = (int)shield};
             if (i < end_gear) {
                 c->opponent_gear.source = GS_GEAR_COMPOSITION_OBSERVED;
                 for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) {
                     long raw = strtol(t[i++], &end, 10);
-                    assert(!*end && raw >= -1 && raw <= INT_MAX);
+                    GS_WIRE_REQUIRE(!*end && raw >= -1 && raw <= INT_MAX);
                     c->opponent_gear.armor[slot] = (int)raw;
                 }
             }
-        } else assert(!strcmp(t[i - 1], "UNKNOWN"));
+        } else GS_WIRE_REQUIRE(!strcmp(t[i - 1], "UNKNOWN"));
     }
     while (i < n) {
         if (!strcmp(t[i], "LOCAL_BASE")) {
@@ -114,25 +126,25 @@ static void gs_wire_state(char** t, int n, GsClient* c) {
         }
         if (!strcmp(t[i], "FORECAST")) {
             i++;
-            assert(i < n && (!strcmp(t[i], "AVAILABLE") || !strcmp(t[i], "UNKNOWN")));
+            GS_WIRE_REQUIRE(i < n && (!strcmp(t[i], "AVAILABLE") || !strcmp(t[i], "UNKNOWN")));
             c->forecast_available = !strcmp(t[i++], "AVAILABLE");
             continue;
         }
         int* level;
         if (!strcmp(t[i], "COMBAT_LEVEL")) level = &c->opponent_combat_level;
-        else { assert(!strcmp(t[i], "LOCAL_LEVEL")); level = &c->local_combat_level; }
+        else { GS_WIRE_REQUIRE(!strcmp(t[i], "LOCAL_LEVEL")); level = &c->local_combat_level; }
         i++;
-        assert(i < n);
+        GS_WIRE_REQUIRE(i < n);
         if (!strcmp(t[i], "OBSERVED")) {
             i++;
-            assert(i < n);
+            GS_WIRE_REQUIRE(i < n);
             char* end;
             long value = strtol(t[i++], &end, 10);
-            assert(!*end && value >= 3 && value <= 126);
+            GS_WIRE_REQUIRE(!*end && value >= 3 && value <= 126);
             *level = (int)value;
-        } else assert(!strcmp(t[i++], "UNKNOWN"));
+        } else GS_WIRE_REQUIRE(!strcmp(t[i++], "UNKNOWN"));
     }
-    assert(i == n);
+    GS_WIRE_REQUIRE(i == n);
 }
 
 static void gs_wire_strip_tags(const char* in, char* out) {
@@ -148,6 +160,16 @@ static void gs_wire_strip_tags(const char* in, char* out) {
 static void gs_wire_finish(const GsWire* wire) {
     if (wire->oracle_block) {
         fprintf(stderr, "unterminated source wire oracle block\n");
+        abort();
+    }
+}
+
+static void gs_wire_spec_timing(const char* text) {
+    char* end;
+    errno = 0;
+    long tick = strtol(text, &end, 10);
+    if (errno || end == text || *end || tick < 0 || tick > INT_MAX) {
+        fputs("invalid required source spec timing\n", stderr);
         abort();
     }
 }
@@ -169,11 +191,18 @@ static char gs_wire_apply(GsInfer* inf, GsWire* w, const char* line) {
             fprintf(stderr, "source wire oracle block missing END before %s\n", tag);
             abort();
         }
+        if (w->oracle_block == 2 && (!strcmp(tag, "PL") || !strcmp(tag, "AC"))) {
+            if (n < 3) abort();
+            gs_wire_spec_timing(t[2]);
+        } else if (w->oracle_block == 2 && !strcmp(tag, "D")) {
+            if (n != 10) abort();
+            gs_wire_spec_timing(t[9]);
+        }
         return 0;
     }
     if (!strcmp(tag, "SS")) {
         if (n != 13) abort();
-        w->oracle_block = 1;
+        w->oracle_block = 2;
         return 0;
     }
     if (!strcmp(tag, "END")) {
@@ -192,7 +221,7 @@ static char gs_wire_apply(GsInfer* inf, GsWire* w, const char* line) {
     if (!strcmp(tag, "I")) gs_on_interacting(inf, atoi(t[2]), atoi(t[3]));
     else if (!strcmp(tag, "A")) gs_on_animation(inf, atoi(t[1]), atoi(t[2]), atoi(t[3]));
     else if (!strcmp(tag, "H")) {
-        assert(n == 7 && (!strcmp(t[6], "true") || !strcmp(t[6], "false")));
+        GS_WIRE_REQUIRE(n == 7 && (!strcmp(t[6], "true") || !strcmp(t[6], "false")));
         gs_on_hitsplat(inf, atoi(t[1]), atoi(t[2]), atoi(t[3]), atoi(t[4]), !strcmp(t[5], "true"), !strcmp(t[6], "true"));
     }
     else if (!strcmp(tag, "O")) { if (!strcmp(t[3], "true")) gs_on_overhead_text(inf, atoi(t[1]), atoi(t[2])); }
@@ -219,7 +248,7 @@ static char gs_wire_apply(GsInfer* inf, GsWire* w, const char* line) {
         }
     }
     else if (!strcmp(tag, "FHP")) {
-        assert(n == 3);
+        GS_WIRE_REQUIRE(n == 3);
         int gained = atoi(t[2]);
         if (gained > 0) {
             if (inf->c.opponent_combat_level) gs_on_hitpoints_gain(inf, atoi(t[1]), gained, inf->c.opponent_combat_level);

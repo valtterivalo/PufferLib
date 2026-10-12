@@ -43,7 +43,7 @@ static GsPaired gs_pairing_hit_landed(GsPairing p, int tick) {
 }
 
 static int gs_struck_echoed_by(GsStruck s, int tick, int amount) {
-    return (tick == s.tick || tick == s.tick + 1) && (amount == s.amount / 10 + 1 || amount == s.amount * 3 / 4);
+    return s.amount > 0 && (tick == s.tick || tick == s.tick + 1) && (amount == s.amount / 10 + 1 || amount == s.amount * 3 / 4);
 }
 
 static GsPidState gs_pid_after_opponent_pairing(GsPidState s, GsPaired paired, int tick, GsStruck local) {
@@ -71,8 +71,8 @@ static GsPidState gs_pid_opponent_attacked(GsPidState s, int tick) {
 }
 
 static GsPidState gs_pid_hit_on_local(GsPidState s, int tick, int amount) {
-    if (amount == 0 || gs_struck_echoed_by(s.opponent, tick, amount)) return s;
-    return gs_pid_after_opponent_pairing(s, gs_pairing_hit_landed(s.opponent_attacks, tick), tick, (GsStruck){tick, amount});
+    if (gs_struck_echoed_by(s.opponent, tick, amount)) return s;
+    return gs_pid_after_opponent_pairing(s, gs_pairing_hit_landed(s.opponent_attacks, tick), tick, amount == 0 ? s.local : (GsStruck){tick, amount});
 }
 
 static GsPidState gs_pid_local_attacked(GsPidState s, int tick) {
@@ -80,8 +80,8 @@ static GsPidState gs_pid_local_attacked(GsPidState s, int tick) {
 }
 
 static GsPidState gs_pid_hit_on_opponent(GsPidState s, int tick, int amount) {
-    if (amount == 0 || gs_struck_echoed_by(s.local, tick, amount)) return s;
-    return gs_pid_after_local_pairing(s, gs_pairing_hit_landed(s.local_attacks, tick), tick, (GsStruck){tick, amount});
+    if (gs_struck_echoed_by(s.local, tick, amount)) return s;
+    return gs_pid_after_local_pairing(s, gs_pairing_hit_landed(s.local_attacks, tick), tick, amount == 0 ? s.opponent : (GsStruck){tick, amount});
 }
 
 

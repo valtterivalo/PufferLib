@@ -60,7 +60,8 @@ guard. Command kinds are inventory slot (0), attack (1), enable spec (2),
 Vengeance (3), disarm (4), remove worn slot (5), Ready (6), Hit (7),
 Energy (8), HP (9), next-tick group (10), equip raw ID (11), consume raw
 ID (12), toggle spec (13), live eat recipe (14), live equip recipe (15),
-and live unequip recipe (16). Recipes bind after guards to the current inventory
+live unequip recipe (16), stop attack (17), and absolute aligned-ready (18).
+Recipes bind after guards to the current inventory
 and equipment, not the initial slot. Positive candidates are exact IDs; negative
 eat candidates select the supported consumable dose family. Candidate order
 preserves preference; equip skips any already-worn alternative. Empty equip and
@@ -72,6 +73,10 @@ rather than advertising a healing macro over an inert slot.
 Guards do not consume clicks or reset the motor clock. Ready reengages the target
 when required; bare Hit waits for attack registration, while a minimum-damage
 Hit waits for damage.
+Stop processing and observed clear are separate phases; commands after stop
+cannot run before the following observation. Its motor clock remains charged.
+Aligned-ready retires an expired launch instead of moving its deadline; ordinary
+Ready remains a lower-bound cooldown guard.
 
 Macro 0 scores the actual production plan; macro 1 is no action. Native
 rule comparisons continue their closed-loop controller and observer in each
@@ -80,7 +85,43 @@ excluding an uncommitted conditional second ticket. Native closed-loop dumps
 use `R UNKNOWN` when their future policy cannot be represented by this script.
 Unknown pending or plan state yields unavailable scores, never a fabricated
 empty baseline. The fourth response token is the best macro index, followed
-by nine feasibility/kill/death/value/world-count groups.
+by eighteen feasibility/kill/death/value/world-count groups.
+These include immediate single/burst specials, Vengeance combinations and three
+delayed single/burst alignment windows. A delayed stop cannot be admitted when
+its required observation and motor work cannot reach the absolute launch tick.
+
+`RA OBSERVED <varp-172>` admits a stop only for observed OFF (`1`).
+`RA OFF_PRIOR` and `PS <side> CLEAR_PRIOR` are explicit synthetic assumptions,
+not historical facts. `PS <side> KNOWN <damage> <timer> <immunity>` retains
+poison state; causal observer knowledge is admitted only for the local side.
+Unknown poison or an unsupported local item makes the request unavailable;
+occupied known inert slots are not erased or treated as consumables.
+The world retains the sampled PID's priority-rank order while preserving its
+independent shuffle clocks. Poison hits retain HP damage without attack credit,
+PID evidence, recoil or Vengeance.
+
+The Java recorder captures the exact live `PRODUCTION_PLAN_OBSERVED` frame before
+transport. Historical replay without that event sends `R UNKNOWN`, not an empty
+production baseline. Native closed-loop policy comparisons are bounded model
+experiments, not certification of Java closed-loop parity or optimal play.
+
+The 2026-10-12 release fixes reversed stake ownership in the server and evaluator:
+wire `K` is opponent then local; `GsStakes` is initialized by named fields.
+The final sealed 169-input candidate completed 2,880 bounded experiments:
+76,677,120 evaluation outcomes plus 9,584,640 selector rollouts, two seeds,
+separate trained/held-out opponent profiles, exact/uncertain PID, three stakes
+ratios, 18 macro labels and a 15-tick horizon. The selector used 512 worlds;
+the production server retains its existing 64-world default.
+Held-out mean empirical regret was 0–0.000426 local-stake units against the
+best independently measured admitted macro. Individual cases still reversed
+rankings, including a measured 0.0400 gap. These are conditional model estimates,
+not rigorous small-regret bounds or a live production improvement claim.
+The baseline was an explicit synthetic plan, continuation scale zero and
+auto-retaliate OFF a declared prior; no uncaptured Java baseline was invented.
+Final recording inference matched all 622 automated and 240 manual ticks;
+causal Java planner availability and unresolved recoil still remain unavailable.
+The 30,000,000-step seeded clone/replay run completed 278,848 episodes with
+consumer hash `730b37f0135dbb1c`. Repeated source epochs are not independent data.
 
 Exported tapes use one `Q <tick> <source>` row per tick: 0 is unavailable,
 1 is explicitly empty synthetic state, and 2 is causal observer provenance.

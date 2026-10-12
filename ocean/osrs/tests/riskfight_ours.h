@@ -1,9 +1,9 @@
 #ifndef RISKFIGHT_OURS_H
 #define RISKFIGHT_OURS_H
 
-/* Our side of a rollout driven by the ported Gear Swapper rules on what the client shows: every belief about him is the plugin's inference
- * from the observed events, ours is read from the sim as the client reads it. Clicks are timed as the hand times them: the first press lands
- * 130 to 460 ms after the decision, the next 80 to 170 ms after the one before, and a press after the 490 ms server cutoff is processed a tick later. */
+/* Closed-loop C rule-port proxy, not a certified Java production baseline.
+ * Opponent beliefs come from observed events; clicks use the historical motor
+ * timing model below, which must be named in every experiment's provenance. */
 enum { OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, CUTOFF_MS = 490, TICK_MS = 600, FIRST_PRESS_MS = 130, FIRST_PRESS_SPAN = 330,
     GAP_MS = 80, GAP_SPAN = 90, MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
 enum { KIND_HARD, KIND_BREW, KIND_KARAMBWAN };
@@ -112,8 +112,8 @@ static void ours_meals(OursFoods* f, int next, int* selected, int depth) {
             meal->following[j] = j == 0 ? 1 : 2;
         }
         meal->earliest_process = 1;
-        meal->resume = 1;
         meal->complete = 2;
+        meal->resume = meal->complete;
     }
     for (int i = next; i < f->food_count; i++) {
         selected[depth] = i;
@@ -204,9 +204,8 @@ static void ours_truth(const Sim* sim, int truth, int tick, GsInfer* view) {
         view->health = NULL; /* This ablation deliberately supplies its exact range instead of inferred target histories. */
     }
     if (truth & TRUTH_TIMER) {
-        const RiskfightVisibleOpponent* seen = &s->visible[0];
-        int next = sim->tick_base + (seen->last_attack_tick - RISKFIGHT_LOAD_TICK) + seen->last_attack_speed;
-        view->opponent.timer = seen->last_attack_tick >= 0 ? (GsTimerState){1, next, next} : (GsTimerState){0, 0, 0};
+        int next = tick + 1 + imax(0, him->attack_timer);
+        view->opponent.timer = (GsTimerState){1, next, next};
     }
 }
 
@@ -260,7 +259,7 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
         if (!ours->burst_spent || ours->burst_first == INT_MIN || tick != ours->burst_first + speed - 1) return decision;
         const GsSpecPlan* single = NULL;
         for (int i = 0; i < plan_count; i++)
-            if (plans[i].choice == GS_CHOICE_VOIDWAKER) { single = &plans[i]; break; }
+            if (plans[i].choice == GS_CHOICE_VOIDWAKER && plans[i].attack_tick == 0) { single = &plans[i]; break; }
         if (!single) {
             ours->burst_pending = 0;
             return decision;
@@ -285,9 +284,13 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
         for (int k = 0; k < 4; k++) { g_diag_n[k][keys[k]]++; g_diag_exp[k][keys[k]] += g_gs_expected_hp; g_diag_true[k][keys[k]] += truth; }
     }
 #endif
+    if (decision.choice != GS_CHOICE_HOLD && decision.attack_tick != 0) {
+        fprintf(stderr, "C proxy has no timed spec actuator for attack tick %d\n", decision.attack_tick);
+        abort();
+    }
     g_plan_mean = 0; g_plan_land = 0; g_plan_last = 0;
     for (int i = 0; i < plan_count; i++)
-        if (plans[i].choice == decision.choice) {
+        if (plans[i].choice == decision.choice && plans[i].attack_tick == decision.attack_tick) {
             for (int h = 0; h < plans[i].hit_count; h++) {
                 for (int r = 0; r < plans[i].hits[h].damages; r++) g_plan_mean += r * plans[i].hits[h].damage[r];
                 g_plan_last = plans[i].hits[h].lands - tick;
@@ -301,9 +304,11 @@ static GsSpecDecision ours_spec(Sim* sim, Ours* ours, GsInfer* inf, int tick, co
 
 /* Plans what the plugin would on this tick and queues the clicks. */
 static int la_override(Sim* sim, Ours* ours, int step, int tick);
+static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
+    int now, int* cursor, int* resume, int hit, int damage);
 
 static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
-    if (ours->lookahead && !ours->burst_pending && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
+    if (ours->lookahead && !ours->native_active && !ours->burst_pending && ours->pending_count == 0 && la_override(sim, ours, step, tick)) return;
     RiskfightState* s = &sim->state;
     Player* us = &s->env.players[0];
     static GsInfer view;
@@ -324,7 +329,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
     GsRebound rebound = ours_rebound(sim, ours, tick, 0);
     int planned;
     int had_burst = ours->burst_pending;
-    GsSpecDecision decision = ours->burst_pending || verdict.food_count > 0 || ours->pending_count == 0 ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0, 0};
+    GsSpecDecision decision = !ours->native_active && (ours->burst_pending || verdict.food_count > 0 || ours->pending_count == 0) ? ours_spec(sim, ours, inf, tick, &rebound, stakes, &planned) : (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, GS_CHOICE_HOLD, 0, 0, 0, 0, 0, 0};
     int meal = verdict.food_count > 0 && !(decision.choice != GS_CHOICE_HOLD && ours_value(decision.chance, verdict.risk + decision.death, stakes) + (1 - decision.chance) * decision.kept * (double)stakes.him > ours_value(0, verdict.meal_risk, stakes) + decision.held * (double)stakes.him);
     if (meal) {
         for (int i = 0; i < ours->pending_count; i++) if (ours->pending[i].command.inventory_slot == WIELD_VOIDWAKER) { g_cb_preempt++; if (ours->played_count) ours->played[ours->played_count - 1].preempted = 1; break; }
@@ -332,7 +337,9 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         ours->burst_pending = 0;
         HumanCommand clicks[8];
         int n = 0;
-        if (had_burst) clicks[n++] = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM};
+        if (had_burst || ours->native_active) clicks[n++] = (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM};
+        ours->native_active = 0;
+        ours->native_cursor = ours->native_program.n;
         for (int i = 0; i < verdict.food_count; i++) clicks[n++] = click_command(foods.food_slot[verdict.foods[i]]);
         GsRebound rebound = ours_rebound(sim, ours, tick, verdict.food_count);
         int drain = 0;
@@ -345,6 +352,7 @@ static void ours_decide(Sim* sim, Ours* ours, int step, int tick) {
         ours_run(ours, tick, clicks, n);
         return;
     }
+    if (ours->native_active) return;
     if (had_burst && !ours->burst_pending) ours->pending_count = 0;
     if (ours->pending_count > 0) return;
     if (had_burst) {
@@ -427,14 +435,32 @@ static void ours_act(Sim* sim, Ours* ours, HumanInput* hi, int step) {
     human_input_clear_pending(hi);
     ours->ticks++;
     const GsInfer* inf = &sim->obs.inf;
+    if (s->env.episode_over || us->current_hitpoints <= 0 ||
+        s->env.players[1].current_hitpoints <= 0) {
+        ours->native_active = ours->burst_pending = ours->pending_count = 0;
+        ours->native_cursor = ours->native_program.n;
+        return;
+    }
     int rival = inf->timed >= 0 && inf->c.ratio != 0;
-    if (!rival && ours->burst_pending) {
+    if (!rival && (ours->burst_pending || ours->native_active)) {
+        ours->native_active = 0;
+        ours->native_cursor = ours->native_program.n;
         ours->burst_pending = 0;
         ours->pending_count = 0;
         command(hi, (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM});
     }
     if (rival && inf->c.forecast_available && (ours->burst_pending || step == 0 || sim->obs.events > 0 || tick - ours->last_decision >= OURS_REFRESH)) ours_decide(sim, ours, step, tick);
+    if (ours->native_active) {
+        la_script_step(&ours->native_program, s, hi, tick + 1,
+            &ours->native_cursor, &ours->native_resume, 0, 0);
+        ours->native_active = ours->native_cursor < ours->native_program.n;
+        return; /* STOP owns engagement; no automatic re-acquisition while paused. */
+    }
     ours_pop_due(ours, us, hi, tick + 1);
-    if (!osrs_interaction_active(&us->interaction) && ours->pending_count == 0 && hi->commands.count == 0) command(hi, attack_command());
+    if (rival && !osrs_interaction_active(&us->interaction) && ours->pending_count == 0 && hi->commands.count == 0) {
+        HumanCommand attack = attack_command();
+        ours_run(ours, tick, &attack, 1);
+        ours_pop_due(ours, us, hi, tick + 1);
+    }
 }
 #endif

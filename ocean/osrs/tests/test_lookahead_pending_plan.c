@@ -12,6 +12,7 @@ static void reset_plan_state(void) {
         p->current_hitpoints = 99;
         p->current_prayer = 99;
         p->veng_active = 0;
+        sim.state.poison_source[a] = OSRS_POISON_CLEAR_PRIOR;
         p->equipped[GEAR_SLOT_RING] = ITEM_NONE;
         p->equipped[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
         p->equipped[GEAR_SLOT_SHIELD] = ITEM_NONE;
@@ -82,22 +83,28 @@ static void test_identity_after_inventory_mutation(void) {
     assert(osrs_interaction_active(&us->interaction));
 }
 
-static void test_pending_before_actions_and_common_world(void) {
-    reset_plan_state();
-    Player* us = &sim.state.env.players[0];
-    us->current_hitpoints = 10;
-    us->inventory_cells[0] = osrs_inventory_cell_from_content_code(raw_id_to_content(13441));
-    sim.state.env.players[1].num_pending_hits = 1;
-    sim.state.env.players[1].pending_hits[0] = (PendingHit){.damage = 20,
-        .hit_success = 1, .attack_type = ATTACK_STYLE_MELEE};
-    sim.state.env.pending_hit_metadata[1][0] = (PendingHitMetadata){.damage_mode = 1};
-    LaScript meal = {.production = 1, .n = 2, .due = {102, 102}};
-    meal.command[0] = click_command(0);
-    meal.command[1] = attack_command();
-    int cursor = 0, resume = 101;
-    apply_script(&meal, 101, &cursor, &resume, 0, 0);
-    assert(us->current_hitpoints == 0);
-    assert(us->inventory_cells[0].content_code == raw_id_to_content(13441));
+static void test_reactive_pid_and_common_world(void) {
+    /* Recorded t206: LOCAL PID CAST precedes an already-launched 24 incoming
+     * and reflects18; opposite PID incoming precedes CAST and cannot proc it. */
+    for (int holder = 0; holder < 2; holder++) {
+        reset_plan_state();
+        Player* us = &sim.state.env.players[0];
+        Player* him = &sim.state.env.players[1];
+        sim.state.env.pid_holder = holder;
+        us->veng_cooldown = 0;
+        us->current_magic = 99;
+        him->num_pending_hits = 1;
+        him->pending_hits[0] = (PendingHit){.damage = 24, .hit_success = 1,
+            .attack_type = ATTACK_STYLE_MELEE, .kind = OSRS_HIT_DIRECT};
+        sim.state.env.pending_hit_metadata[1][0] = (PendingHitMetadata){.damage_mode = 1};
+        LaScript cast = {.production = 1, .n = 1, .due = {101}};
+        cast.command[0] = vengeance_command();
+        int cursor = 0, resume = 101;
+        apply_script(&cast, 101, &cursor, &resume, 0, 0);
+        assert(us->current_hitpoints == 75);
+        assert(us->veng_cooldown > 0 && us->veng_active == (holder == 1));
+        assert(him->current_hitpoints == (holder == 0 ? 81 : 99));
+    }
 
     reset_plan_state();
     sim.state.env.players[1].num_pending_hits = 1;
@@ -189,34 +196,46 @@ static void test_shared_click_timing(void) {
 }
 
 static void test_conditional_two_ticket_plan(void) {
-    reset_plan_state();
-    Player* us = &sim.state.env.players[0];
-    Player* him = &sim.state.env.players[1];
-    us->special_energy = 100;
-    us->spec_armed = 0;
-    us->attack_timer = us->attack_timer_uncapped = -1;
-    him->attack_timer = him->attack_timer_uncapped = 100;
-    him->current_hitpoints = 121;
-    him->x = us->x + 1;
-    him->y = us->y;
-    LaScript burst = {.production = 1, .n = 8,
-        .due = {101, 101, 101, 101, 101, 101, 101, 101},
-        .op = {1, 0, 7, 3, 4, 5, 1, 0},
-        .arg = {0, 0, 0, 0, -1, 50, 0, 0}};
-    burst.command[1] = burst.command[7] = attack_command();
-    int cursor = 0, resume = 101, hit = 0, damage = 0, first_tick = -1, second_tick = -1;
-    for (int now = 101; now < 112 && !sim.state.env.episode_over; now++) {
-        int before = sim.state.spec_voidwaker[0];
-        apply_script(&burst, now, &cursor, &resume, hit, damage);
-        if (sim.state.spec_voidwaker[0] > before) {
-            if (first_tick < 0) first_tick = now;
-            else second_tick = now;
+    int saved_burst = g_la_burst;
+    g_la_burst = 1;
+    for (int timer = 0; timer <= 7; timer += 7) {
+        reset_plan_state();
+        Player* us = &sim.state.env.players[0];
+        Player* him = &sim.state.env.players[1];
+        us->special_energy = 100;
+        us->spec_armed = 0;
+        us->attack_timer = us->attack_timer_uncapped = timer;
+        him->attack_timer = him->attack_timer_uncapped = 100;
+        him->current_hitpoints = 121;
+        him->x = us->x + 1; him->y = us->y;
+        LaFeasible f = {.spec_ok = 1, .energy = 100};
+        LaScript scripts[LA_MACROS], rules = {0};
+        int feasible[LA_MACROS];
+        la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+        assert(feasible[LA_BURST]);
+        LaScript burst = scripts[LA_BURST];
+        int cursor = 0, resume = 101, first = -1, second = -1, cooldown = -1;
+        for (int now = 101; now < 130 && !sim.state.env.episode_over; now++) {
+            int before = sim.state.spec_voidwaker[0];
+            apply_script(&burst, now, &cursor, &resume, 0, 0);
+            if (sim.state.spec_voidwaker[0] > before) {
+                if (first < 0) {
+                    first = now;
+                    cooldown = sim.state.visible[1].last_attack_speed;
+                    assert(us->special_energy == 50 && !us->spec_armed);
+                } else {
+                    second = now;
+                    assert(us->special_energy == 0 && !us->spec_armed);
+                }
+            }
+            if (first < 0) assert(us->special_energy == 100);
+            if (second >= 0) break;
         }
-        if (him->hit_landed_this_tick) { hit = 1; damage = him->hit_damage; }
-        if (second_tick >= 0) break;
+        assert(first >= 101 + timer - 1 && second > first);
+        assert(cooldown > 0 && second - first >= cooldown);
+        assert(sim.state.spec_voidwaker[0] == 2);
     }
-    assert(sim.state.spec_voidwaker[0] == 2 && us->special_energy == 0);
-    assert(second_tick - first_tick >= 4);
+    g_la_burst = saved_burst;
 }
 
 static void test_strict_hp_equality(void) {
@@ -552,14 +571,270 @@ static void test_source_actor_constraints_and_clone(void) {
     observer_clear(&source);
 }
 
+static void test_absolute_alignment_and_stop(void) {
+    reset_plan_state();
+    Player* us = &sim.state.env.players[0];
+    us->attack_timer = us->attack_timer_uncapped = -1;
+    osrs_interaction_set(&us->interaction, 1);
+    LaScript plan = {.production = 1, .n = 3, .due = {101, 101, 101},
+        .op = {0, 11, 1}, .arg = {0, 104, 0}, .fixed = {0, 1, 0}};
+    plan.command[0] = (HumanCommand){.kind = HUMAN_COMMAND_STOP};
+    int cursor = 0, resume = 101;
+    apply_script(&plan, 101, &cursor, &resume, 0, 0);
+    assert(cursor == 1 && !osrs_interaction_active(&us->interaction));
+    assert(!us->spec_armed);
+    apply_script(&plan, 102, &cursor, &resume, 0, 0);
+    apply_script(&plan, 103, &cursor, &resume, 0, 0);
+    assert(cursor == 1 && !us->spec_armed); /* Upcoming103 is not absolute104. */
+    apply_script(&plan, 104, &cursor, &resume, 0, 0);
+    assert(cursor == 3 && us->spec_armed);
+}
+
+static void test_uncertain_pid_alignment_executes(void) {
+    LaBelief belief = {.pid = GS_PID_LOCAL, .flip = 228.0 / 1916,
+        .timer_seen = 1, .timer_first = 104, .timer_last = 104,
+        .gear = {GS_GEAR_COMPOSITION_OBSERVED, 27690, -1, {-1, -1, -1, -1, -1, -1, -1}}};
+    for (int holder = 0; holder < 2; holder++) {
+        reset_plan_state();
+        Player* us = &sim.state.env.players[0];
+        Player* them = &sim.state.env.players[1];
+        us->attack_timer = us->attack_timer_uncapped = -1;
+        us->special_energy = 100;
+        them->x = us->x + 1; them->y = us->y;
+        sim.state.env.pid_holder = holder;
+        LaFeasible f = {.spec_ok = 1, .veng_ok = 1, .energy = 100, .pause_ok = 1};
+        la_alignment_windows(NULL, 0, &belief, 100, &f);
+        LaScript scripts[LA_MACROS], rules = {0};
+        int feasible[LA_MACROS], cursor = 0, resume = 101;
+        la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+        LaScript* plan = &scripts[LA_WAIT_VENG_SPEC_1];
+        for (int now = 101; now < 104; now++)
+            apply_script(plan, now, &cursor, &resume, 0, 0);
+        assert(us->special_energy == 100);
+        apply_script(plan, 104, &cursor, &resume, 0, 0);
+        assert(us->special_energy == 50);
+    }
+}
+
+static void test_sampled_pid_retains_priority_order(void) {
+    reset_plan_state();
+    for (int side = 0; side < 2; side++) sim.state.env.priority[side].shuffle_ticks = 30;
+    LaBelief belief = {.hp_low = 99, .hp_high = 99, .energy_low = 0, .energy_high = 0,
+        .gear = {GS_GEAR_COMPOSITION_OBSERVED, 27690, -1, {-1, -1, -1, -1, -1, -1, -1}}};
+    for (int holder = 0; holder < 2; holder++) {
+        belief.pid = holder == 0 ? GS_PID_LOCAL : GS_PID_OPPONENT;
+        uint32_t rng = 12345;
+        Hist hist;
+        la_world(&sim.state, &sim.hist, &belief, 100, &rng, &world, &hist);
+        HumanCommandQueue empty = {0};
+        for (int tick = 0; tick < 3; tick++) {
+            riskfight_step_queues(&world, &sim.context, &empty, &empty);
+            assert(world.env.pid_holder == holder);
+            for (int side = 0; side < 2; side++)
+                assert(world.env.priority[side].shuffle_ticks == 29 - tick);
+        }
+    }
+}
+
+static void test_stop_observation_and_absolute_deadline(void) {
+    reset_plan_state();
+    Player* us = &sim.state.env.players[0];
+    us->attack_timer = us->attack_timer_uncapped = -1;
+    osrs_interaction_set(&us->interaction, 1);
+    LaScript plan = {.production = 1, .n = 3, .due = {101, 101, 101},
+        .op = {0, 11, 0}, .arg = {0, 102, 0}, .fixed = {0, 1, 0}};
+    plan.command[0] = (HumanCommand){.kind = HUMAN_COMMAND_STOP};
+    plan.command[2] = attack_command();
+    int cursor = 0, resume = 101;
+    apply_script(&plan, 101, &cursor, &resume, 0, 0);
+    assert(cursor == 1 && !osrs_interaction_active(&us->interaction));
+    apply_script(&plan, 102, &cursor, &resume, 0, 0);
+    assert(cursor == 1 && sim.context.policy_commands[0].commands.count == 0);
+    apply_script(&plan, 103, &cursor, &resume, 0, 0);
+    assert(cursor == plan.n && !osrs_interaction_active(&us->interaction));
+    assert(sim.context.policy_commands[0].commands.count == 0);
+
+    reset_plan_state();
+    us = &sim.state.env.players[0];
+    us->attack_timer = us->attack_timer_uncapped = -1;
+    plan = (LaScript){.production = 1, .n = 2, .due = {101, 101},
+        .op = {11, 0}, .arg = {101, 0}, .fixed = {1, 0},
+        .motor_active = 1, .motor_tick = 100, .motor_ms = 2 * TICK_MS, .timing_rng = 1};
+    plan.command[1] = attack_command();
+    cursor = 0; resume = 101;
+    apply_script(&plan, 101, &cursor, &resume, 0, 0);
+    assert(cursor == 1 && sim.context.policy_commands[0].commands.count == 0);
+    apply_script(&plan, 102, &cursor, &resume, 0, 0);
+    assert(cursor == plan.n && !osrs_interaction_active(&us->interaction));
+    assert(sim.context.policy_commands[0].commands.count == 0);
+}
+
+static void test_poison_observer_preserves_non_attack_damage(void) {
+    for (int target = 0; target < 2; target++) {
+        reset_plan_state();
+        observer_clear(&sim.obs);
+        memset(&sim.obs, 0, sizeof(sim.obs));
+        gs_infer_init(&sim.obs.inf);
+        sim.obs.inf.tracker_current = sim.obs.inf.timed = 1;
+        sim.state.env.players[0].equipped[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+        osrs_refresh_player_equipment(&sim.state.env.players[0]);
+        osrs_interaction_set(&sim.state.env.players[0].interaction, 1);
+        osrs_interaction_set(&sim.state.env.players[1].interaction, 0);
+        observer_branch(&sim.state, &sim.obs);
+        observer_sync(&sim.state, &sim.obs, 99);
+        gs_on_animation(&sim.obs.inf, 99, 1 - target, 390);
+        sim.obs.inf.recoil_charges = 40;
+        sim.state.env.players[target].current_hitpoints -= 6;
+        sim.obs.hits[0] = (ObservedHit){.source = target, .target = target,
+            .kind = OSRS_HIT_POISON, .damage = 6};
+        sim.obs.hit_count = 1;
+        observer_step(&sim.state, &sim.obs, 100);
+        assert(sim.obs.inf.recoil_charges == 40);
+        assert(gs_pid_at(&sim.obs.inf, 100) == GS_PID_UNKNOWN);
+        assert(!sim.obs.inf.landed_owned && sim.obs.hp_xp == 0);
+        if (target == 1)
+            assert(sim.obs.bar_ratio == osrs_health_bar_ratio(93,
+                sim.state.env.players[1].base_hitpoints, SCALE_BAR));
+        else assert(sim.obs.inf.c.hitpoints == 93);
+        observer_clear(&sim.obs);
+    }
+}
+
+static void test_terminal_world_has_no_ticket_credit(void) {
+    int saved_worlds = g_la_worlds, saved_horizon = g_la_horizon, saved_mode = g_la_worth_mode;
+    const OppModel* saved_model = g_la_model;
+    OppModel opponent = {.kind = MODEL_PROFILES, .profile_first = 0, .profile_count = 1};
+    g_la_worlds = 1; g_la_horizon = 1; g_la_worth_mode = 0; g_la_model = &opponent;
+    LaBelief belief = {.hp_low = 99, .hp_high = 99, .energy_low = 0, .energy_high = 0,
+        .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL, .timer_seen = 1,
+        .timer_first = 1000, .timer_last = 1000,
+        .gear = {GS_GEAR_COMPOSITION_OBSERVED, 27690, -1, {-1, -1, -1, -1, -1, -1, -1}}};
+    LaScript scripts[LA_MACROS] = {0};
+    int feasible[LA_MACROS] = {0}, alive[LA_MACROS];
+    LaScore score[LA_MACROS];
+    feasible[LA_NONE] = 1;
+    for (int energy = 0; energy <= 100; energy += 50) {
+        for (int terminal = 0; terminal < 3; terminal++) {
+            reset_plan_state();
+            sim.state.env.players[0].special_energy = energy;
+            if (terminal) {
+                int source = terminal == 1 ? 1 : 0;
+                sim.state.env.players[source].num_pending_hits = 1;
+                sim.state.env.players[source].pending_hits[0] = (PendingHit){
+                    .damage = 1000, .hit_success = 1, .attack_type = ATTACK_STYLE_MELEE};
+                sim.state.env.pending_hit_metadata[source][0].damage_mode = 1;
+            }
+            (void)la_evaluate(&sim.state, &sim.hist, &belief, 100, (GsStakes){1, 1}, 123,
+                scripts, feasible, score, alive);
+            LaScore* measured = &score[LA_NONE];
+            assert(measured->worlds == 1);
+            assert(measured->death == (terminal == 1) && measured->kill == (terminal == 2));
+            double expected = terminal ? 0 : la_tickets_worth(energy);
+            assert((!terminal && energy > 0) ? expected > 0 : expected == 0);
+            assert(measured->tickets == expected);
+            assert(measured->value == (terminal == 2) - (terminal == 1) + expected);
+        }
+    }
+    g_la_worlds = saved_worlds; g_la_horizon = saved_horizon; g_la_worth_mode = saved_mode;
+    g_la_model = saved_model;
+}
+
+static void test_joint_candidate_admission_and_guards(void) {
+    reset_plan_state();
+    Player* us = &sim.state.env.players[0];
+    LaScript scripts[LA_MACROS], rules = {0};
+    int feasible[LA_MACROS], saved_burst = g_la_burst;
+    g_la_burst = 1;
+    LaFeasible f = {.spec_ok = 1, .veng_ok = 1, .energy = 100,
+        .incoming_count = 3, .incoming = {104, 106, 108}, .pid = GS_PID_LOCAL};
+    /* Unknown and observed ON producers both have pause_ok false. */
+    la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+    assert(!feasible[LA_WAIT_ALIGN] && feasible[LA_VENG_SPEC_NOW] && feasible[LA_VENG_SPEC_NOW_BURST]);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(!feasible[m]);
+    f.pause_ok = 1; /* Explicit observed OFF or declared OFF_PRIOR only. */
+    la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+    assert(feasible[LA_WAIT_ALIGN]);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(feasible[m]);
+    for (int window = 0; window < 3; window++) {
+        LaScript* p = &scripts[LA_WAIT_VENG_SPEC_1 + window];
+        assert(p->command[1].kind == HUMAN_COMMAND_STOP &&
+            p->command[2].kind == HUMAN_COMMAND_VENGEANCE);
+        int found = 0;
+        for (int i = 0; i < p->n; i++) if (p->op[i] == 11) {
+            assert(p->arg[i] == f.incoming[window]); found++;
+        }
+        assert(found == 1);
+    }
+    f.pid = GS_PID_UNKNOWN;
+    la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(!feasible[m]);
+    f.veng_ok = 0;
+    la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+    for (int m = LA_VENG_SPEC_NOW; m < LA_MACROS; m++) assert(!feasible[m]);
+    f.veng_ok = 1; f.pid = GS_PID_OPPONENT;
+    la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
+    LaScript dead = scripts[LA_WAIT_VENG_SPEC_BURST_1];
+    int cursor = 0, resume = 101;
+    sim.state.env.players[1].current_hitpoints = 0;
+    HumanInput* hi = &sim.context.policy_commands[0];
+    human_input_clear_pending(hi);
+    la_script_step(&dead, &sim.state, hi, 101, &cursor, &resume, 0, 0);
+    assert(cursor == dead.n && hi->commands.count == 0);
+    reset_plan_state();
+    LaScript noenergy = scripts[LA_BURST];
+    us = &sim.state.env.players[0]; us->special_energy = 0;
+    cursor = 0; resume = 101;
+    human_input_clear_pending(hi);
+    la_script_step(&noenergy, &sim.state, hi, 101, &cursor, &resume, 0, 0);
+    assert(cursor == noenergy.n && hi->commands.count == 0);
+    g_la_burst = saved_burst;
+}
+
+static void test_native_program_clone_reset_and_pause(void) {
+    reset_plan_state();
+    Player* us = &sim.state.env.players[0];
+    us->attack_timer = us->attack_timer_uncapped = -1;
+    osrs_interaction_set(&us->interaction, 1);
+    sim.tick_base = 100;
+    sim.obs.inf.timed = 100; sim.obs.inf.c.ratio = 30;
+    sim.obs.inf.c.forecast_available = 0;
+    sim.ours.native_program = (LaScript){.production = 1, .n = 3,
+        .due = {101, 101, 101}, .op = {0, 11, 0}, .arg = {0, 104, 0}};
+    sim.ours.native_program.command[0] = (HumanCommand){.kind = HUMAN_COMMAND_STOP};
+    sim.ours.native_program.command[2] = attack_command();
+    sim.ours.native_active = 1; sim.ours.native_cursor = 0; sim.ours.native_resume = 101;
+    Ours clone = sim.ours;
+    HumanInput* hi = &sim.context.policy_commands[0];
+    ours_act(&sim, &clone, hi, 0);
+    assert(clone.native_cursor == 1 && sim.ours.native_cursor == 0);
+    HumanCommandQueue empty = {0};
+    riskfight_step_queues(&sim.state, &sim.context, &hi->commands, &empty);
+    assert(!osrs_interaction_active(&us->interaction));
+    ours_act(&sim, &clone, hi, 1);
+    assert(clone.native_active && clone.native_cursor == 1 && hi->commands.count == 0);
+    sim.state.env.players[1].current_hitpoints = 0;
+    ours_act(&sim, &clone, hi, 2);
+    assert(!clone.native_active && clone.native_cursor == clone.native_program.n && hi->commands.count == 0);
+    ours_reset(&sim.ours, 9, 0, 0, 0);
+    assert(!sim.ours.native_active && !sim.ours.native_cursor && !sim.ours.native_resume && !sim.ours.native_program.n);
+}
+
 int main(void) {
     observer_register_items();
     sim_init(&sim);
+    test_absolute_alignment_and_stop();
+    test_uncertain_pid_alignment_executes();
+    test_sampled_pid_retains_priority_order();
+    test_stop_observation_and_absolute_deadline();
+    test_poison_observer_preserves_non_attack_damage();
+    test_joint_candidate_admission_and_guards();
+    test_native_program_clone_reset_and_pause();
+    test_terminal_world_has_no_ticket_credit();
     test_source_actor_constraints_and_clone();
     test_commands_and_barriers();
     test_shared_click_timing();
     test_identity_after_inventory_mutation();
-    test_pending_before_actions_and_common_world();
+    test_reactive_pid_and_common_world();
     test_pending_metadata_compact_and_reuse();
     test_conditional_two_ticket_plan();
     test_strict_hp_equality();

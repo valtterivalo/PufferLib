@@ -280,6 +280,7 @@ typedef enum {
     OSRS_HIT_RECOIL,
     OSRS_HIT_VENGEANCE,
     OSRS_HIT_MORRIGAN_BLEED,
+    OSRS_HIT_POISON,
 } OsrsHitKind;
 
 typedef struct {
@@ -390,6 +391,23 @@ typedef struct {
     OsrsMagicAttackKind confliction_magic_kind;
     OsrsTargetRef confliction_target;
 } OsrsItemEffectState;
+
+/* Actor-owned state, not the local-only varp 102 observation. Timers count ticks
+ * remaining at the end of a tick; immunity and active poison are exclusive. */
+typedef struct {
+    int severity;
+    int ticks_until_pulse;
+    int immunity_ticks;
+} OsrsPoisonState;
+typedef enum {
+    OSRS_POISON_ENGINE_STATE,
+    OSRS_POISON_OBSERVED_STATE,
+    OSRS_POISON_HORIZON_IMMUNITY,
+    OSRS_POISON_CLEAR_PRIOR,
+    OSRS_POISON_UNKNOWN_STATE,
+    /* Observed local successful consumable action, not a hidden actor prior. */
+    OSRS_POISON_CAUSAL_STATE,
+} OsrsPoisonSource;
 
 typedef struct {
     EntityType entity_type;

@@ -7,7 +7,10 @@ static RiskfightContext context;
 int main(void) {
     riskfight_reset((EncounterState*)&base, (EncounterContext*)&context, 12345);
     context.self_play = 1;
-    for (int side = 0; side < 2; side++) osrs_interaction_clear(&base.env.players[side].interaction);
+    for (int side = 0; side < 2; side++) {
+        osrs_interaction_clear(&base.env.players[side].interaction);
+        base.poison_source[side] = OSRS_POISON_CLEAR_PRIOR;
+    }
     Player* him = &base.env.players[1];
     him->current_hitpoints = 20;
     him->inventory_cells[9] = osrs_inventory_cell_from_content_code(riskfight_supply_code(OSRS_CONSUMABLE_ANGLERFISH, 0));
@@ -20,6 +23,7 @@ int main(void) {
     Hist initial = hist_start(), history;
     LaBelief belief = {.hp_low = 42, .hp_high = 42, .energy_low = 100, .energy_high = 100,
         .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL, .food_ready = 103, .seen_since_eat = 0,
+        .combat_level = observer_combat_level(him),
         .gear = {GS_GEAR_COMPOSITION_OBSERVED, raw_of_item(him->equipped[GEAR_SLOT_WEAPON]), raw_of_item(him->equipped[GEAR_SLOT_SHIELD])}};
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) belief.gear.armor[slot] = raw_of_item(him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]]);
     int accepted[2] = {0};

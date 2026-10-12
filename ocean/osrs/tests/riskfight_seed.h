@@ -19,12 +19,11 @@ static const SeedPriors DEFAULT_PRIORS = {0.35f, 12, 4, 3, 2, 1};
 typedef struct { uint8_t main, vw, maul, ammo; } HisKit;
 
 static HisKit his_kit(const Tape* tape) {
-    HisKit kit = {ITEM_WHIP, tape_has_anim(tape, ANIM_VW_SPEC), tape_has_anim(tape, ANIM_MAUL_SPEC), ITEM_NONE};
-    if (tape_has_anim(tape, 1658)) kit.main = ITEM_WHIP;
-    else if (tape_has_anim(tape, 7045)) kit.main = ITEM_AGS;
-    else if (tape_has_anim(tape, 426)) { kit.main = ITEM_MAGIC_SHORTBOW_I; kit.ammo = ITEM_DRAGON_ARROWS; }
-    else if (tape_has_anim(tape, 10172)) kit.main = ITEM_SOULREAPER_AXE;
-    else if (tape_has_anim(tape, 390)) kit.main = kit.vw ? ITEM_VOIDWAKER : ITEM_DRAGON_SCIMITAR;
+    const TapeTick* first = tape_tick(tape, tape->lo);
+    HisKit kit = {ITEM_NONE, tape_has_anim(tape, ANIM_VW_SPEC), tape_has_anim(tape, ANIM_MAUL_SPEC), ITEM_NONE};
+    if (first->opponent_gear_source && first->opponent_gear[3] >= 0)
+        kit.main = raw_id_to_item(first->opponent_gear[3]);
+    if (kit.main == ITEM_MAGIC_SHORTBOW_I) kit.ammo = ITEM_DRAGON_ARROWS;
     if (kit.main == ITEM_VOIDWAKER) kit.vw = 0;
     return kit;
 }
@@ -266,10 +265,26 @@ static int actor_profile_boost(int preferred, int base) {
     return preferred < maximum ? preferred : maximum;
 }
 
-/** Snapshot of the tape at the end of tick t. Hidden values come from the stated priors and the rng. */
-static int tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint32_t* rng, RiskfightSnapshot* out) {
+static int tape_poison_weapon(int raw) {
+    return raw == 27867 || raw == 12904;
+}
+
+static int tape_local_poison_cohort(const Tape* tape, int tick) {
+    for (int t = tape->lo; t <= tick; t++) {
+        const TapeTick* row = tape_tick(tape, t);
+        for (int i = 0; i < TAPE_WORN; i++) if (tape_poison_weapon(row->worn[i])) return 1;
+        for (int i = 0; i < TAPE_BAG; i++) if (tape_poison_weapon(row->bag[i])) return 1;
+    }
+    return 0;
+}
+
+
+/* Construct actor/loadout state from validated exposed gear and declared hidden priors.
+ * Poison provenance and launched queues are supplied by the owning source adapter. */
+static int tape_snapshot_construct(const Tape* tape, int t, const SeedPriors* priors, uint32_t* rng, RiskfightSnapshot* out) {
     memset(out, 0, sizeof(*out));
     const TapeTick* tick = tape_tick(tape, t);
+    if (!tick->opponent_gear_source) return 0;
     HisKit kit = his_kit(tape);
 
     RiskfightLoadout* us = &out->loadout[0];
@@ -281,27 +296,15 @@ static int tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint
     us->hitpoints = tick->hp;
     us->vengeance_sacks = tick->sacks;
 
-    int his_last_swing = -1;
-    for (int i = 0; i < tape->anim_count; i++) {
-        const TapeAnim* a = &tape->anims[i];
-        GsKind kind = gs_animation_kind(a->anim);
-        if (a->side == SIDE_HIM && a->tick <= t && a->tick > his_last_swing &&
-                (kind == GS_KIND_ATTACK || kind == GS_KIND_INSTANT_SPEC)) his_last_swing = a->tick;
-    }
-    uint8_t his_weapon = kit.main;
-    for (int i = 0; i < tape->anim_count; i++) {
-        const TapeAnim* a = &tape->anims[i];
-        if (a->side != SIDE_HIM || a->tick != his_last_swing) continue;
-        if (a->anim == ANIM_VW_SPEC) his_weapon = ITEM_VOIDWAKER;
-        else if (a->anim == ANIM_MAUL_SPEC) his_weapon = ITEM_GRANITE_MAUL_ORNATE;
-    }
+    uint8_t his_weapon = tick->opponent_gear[3] < 0 ? ITEM_NONE : raw_id_to_item(tick->opponent_gear[3]);
     RiskfightLoadout* him = &out->loadout[1];
-    memcpy(him->equipment, us->equipment, sizeof(him->equipment));
-    him->equipment[GEAR_SLOT_WEAPON] = his_weapon;
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) him->equipment[i] = ITEM_NONE;
+    for (int i = 0; i < tick->opponent_gear_count; i++)
+        if (WORN_TO_GEAR[i] >= 0 && tick->opponent_gear[i] >= 0)
+            him->equipment[WORN_TO_GEAR[i]] = raw_id_to_item(tick->opponent_gear[i]);
     him->equipment[GEAR_SLOT_AMMO] = kit.ammo;
-    int shield = us->equipment[GEAR_SLOT_SHIELD] != ITEM_NONE ? us->equipment[GEAR_SLOT_SHIELD] : ITEM_AVERNIC_DEFENDER;
+    int shield = him->equipment[GEAR_SLOT_SHIELD];
     int two_handed = item_is_two_handed(his_weapon);
-    him->equipment[GEAR_SLOT_SHIELD] = two_handed ? ITEM_NONE : shield;
     int recoil = tick->recoil_evidence > 0 || uniform(rng) < priors->recoil_ring;
     him->equipment[GEAR_SLOT_RING] = recoil ? ITEM_RING_OF_RECOIL : ITEM_NONE;
     int slot = 0;
@@ -386,8 +389,22 @@ static int tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint
         side->magic = HIS_MAGIC < magic_ceiling ? HIS_MAGIC : magic_ceiling;
         side->prayer = HIS_PRAYER < actor->prayer ? HIS_PRAYER : actor->prayer;
     }
+    /* Unknown observed PID chooses only a concrete prototype cohort. World draws
+     * still use the caller's uncertain PID belief and retain both queue variants. */
     out->pid_holder = tick->pid == 'L' || tick->pid == 'l' ? 0 : tick->pid == 'O' || tick->pid == 'o' ? 1 : (int)(xorshift32(rng) & 1);
     out->seed = xorshift32(rng) | 1;
+    return 1;
+}
+
+/** Snapshot of the tape at the end of tick t. Hidden values come from the stated priors and the rng. */
+static int tape_snapshot(const Tape* tape, int t, const SeedPriors* priors, uint32_t* rng, RiskfightSnapshot* out) {
+    const TapeTick* tick = tape_tick(tape, t);
+    if (!tape_snapshot_construct(tape, t, priors, rng, out)) return 0;
+    int local_poison = tape_local_poison_cohort(tape, t);
+    out->side[0].poison_source = tape_local_poison(tick, &out->side[0].poison);
+    out->side[1].poison_source = local_poison ? OSRS_POISON_UNKNOWN_STATE : OSRS_POISON_CLEAR_PRIOR;
+    if (out->side[0].poison_source == OSRS_POISON_UNKNOWN_STATE ||
+        out->side[1].poison_source == OSRS_POISON_UNKNOWN_STATE) return 0;
     tape_pending_snapshot(tape, t, out);
     return out->pending_known;
 }

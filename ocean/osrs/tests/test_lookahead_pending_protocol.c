@@ -14,6 +14,9 @@ static void prefix(FILE* f) {
     fputs("\nG", f);
     for (int i = 0; i < TAPE_BAG; i++) fprintf(f, " %d", i == 0 ? 13441 : -1);
     fputc('\n', f);
+    fputs("SHIELD OBSERVED -1\nARMOR OBSERVED", f);
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) fputs(" -1", f);
+    fputc('\n', f);
 }
 
 static FILE* wire(const char* body) {
@@ -86,7 +89,12 @@ static void test_boundary(void) {
         "P VARIANTS 1 0\nD 2 1 0 0 0 0 1 2 0 20 40 10000 0 -1\nR KNOWN 0\nEND\n",
         "P VARIANTS 1 0\nD 0 2 0 0 0 0 1 2 0 20 40 10000 0 -1\nR KNOWN 0\nEND\n",
         "P KNOWN 0\nR KNOWN 1\nC 101 14 0 0 0\nEND\n",
-        "P KNOWN 0\nR KNOWN 1\nC 101 15 0 0 1 -27690\nEND\n"
+        "P KNOWN 0\nR KNOWN 1\nC 101 15 0 0 1 -27690\nEND\n",
+        "RA OBSERVED -1\nP KNOWN 0\nR KNOWN 0\nEND\n",
+        "RA OBSERVED 2\nP KNOWN 0\nR KNOWN 0\nEND\n",
+        "RA UNKNOWN 1\nP KNOWN 0\nR KNOWN 0\nEND\n",
+        "RA OFF_PRIOR 1\nP KNOWN 0\nR KNOWN 0\nEND\n",
+        "RA OBSERVED 1\nRA UNKNOWN\nP KNOWN 0\nR KNOWN 0\nEND\n"
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) rejects(bad[i]);
     /* Each field independently crosses a pending-hit boundary. */
@@ -153,6 +161,22 @@ static void test_knowledge(void) {
     q = parse("P KNOWN 0\nR KNOWN 0\nEND\n");
     q.bag[0] = 24589;
     CHECK(!strcmp(request_unavailable(&q), "local_food_unsupported"));
+    q.bag[0] = 9999;
+    CHECK(!strcmp(request_unavailable(&q), "local_inventory_unsupported"));
+    q.bag[0] = 13441;
+    q.worn[0] = 9999;
+    CHECK(!strcmp(request_unavailable(&q), "local_equipment_unsupported"));
+    q.worn[0] = -1;
+    const int inert[] = {229, 995, 27997, 30000, 26651, 28098};
+    for (size_t i = 0; i < sizeof(inert) / sizeof(inert[0]); i++) {
+        q.bag[0] = inert[i];
+        CHECK(request_unavailable(&q) == NULL);
+        RiskfightSnapshot snapshot;
+        snapshot_of(&q, &snapshot);
+        OsrsInventoryCell cell = osrs_inventory_cell_from_content_code(snapshot.loadout[0].inventory[0]);
+        CHECK(!osrs_inventory_cell_is_empty(&cell));
+        CHECK(osrs_inventory_cell_metadata(&cell)->consumable_kind == OSRS_CONSUMABLE_NONE);
+    }
     q = parse("P KNOWN 0\nR KNOWN 3\nC 101 14 0 0 1 -6685\nC 102 15 0 0 1 27690\nC 103 16 0 0 0\nEND\n");
     CHECK(request_unavailable(&q) == NULL);
     q.bag[0] = 6685; q.bag[1] = 6687;
@@ -166,9 +190,43 @@ static void test_knowledge(void) {
 }
 
 static Sim loaded;
+static void test_auto_retaliate(void) {
+    const char* sources[] = {"", "RA UNKNOWN\n", "RA OBSERVED 0\n", "RA OBSERVED 1\n", "RA OFF_PRIOR\n"};
+    for (int source = 0; source < 5; source++) {
+        char body[512];
+        snprintf(body, sizeof(body), "%sPS 0 KNOWN 0 0 0\nPS 1 CLEAR_PRIOR\n"
+            "P KNOWN 1\nD 1 1 0 0 0 1 1 24 0 24 10000 0 0\nR KNOWN 0\nEND\n", sources[source]);
+        Request q = parse(body);
+        CHECK(request_unavailable(&q) == NULL);
+        CHECK(q.poison_source[0] == 1 && q.poison_source[1] == 3);
+        CHECK(q.pending_count[1] == 1 && q.pending[1][0].damage == 24);
+        snprintf(body, sizeof(body), "%sP KNOWN 0\nR KNOWN 1\nC 101 17 0 0\nEND\n", sources[source]);
+        q = parse(body);
+        const char* unavailable = request_unavailable(&q);
+        if (source >= 3) CHECK(unavailable == NULL);
+        else CHECK(unavailable && !strcmp(unavailable, source == 2 ? "auto_retaliate_on" : "auto_retaliate_unknown"));
+    }
+    Request q = parse("RA OFF_PRIOR\nP VARIANTS 1 1\n"
+        "D 0 1 2 0 0 0 1 1 24 0 24 10000 0 0\n"
+        "D 1 1 5 0 0 0 1 1 24 0 24 10000 0 0\nR KNOWN 0\nEND\n");
+    /* Isolate PID-conditioned pending queues from the separately observed swing clock. */
+    q.belief.timer_seen = 0;
+    request_alignment_windows(&q);
+    CHECK(q.feasible.incoming_count == 1 && q.feasible.incoming[0] == 103);
+    q.belief.pid = GS_PID_OPPONENT;
+    q.feasible.incoming_count = 0;
+    request_alignment_windows(&q);
+    CHECK(q.feasible.incoming_count == 1 && q.feasible.incoming[0] == 106);
+    q.belief.pid = GS_PID_UNKNOWN;
+    q.feasible.incoming_count = 0;
+    request_alignment_windows(&q);
+    CHECK(q.feasible.pid == GS_PID_UNKNOWN && q.feasible.incoming_count == 0);
+}
+
 static void load(Request* q) {
     RiskfightSnapshot snap;
     snapshot_of(q, &snap);
+    CHECK(snap.side[0].hitpoints == q->ours.hp && snap.side[1].hitpoints > 0);
     CHECK(!snap.pending_pid_active);
     CHECK(memcmp(snap.pending, q->pending, sizeof(q->pending)) == 0);
     CHECK(memcmp(snap.pending_metadata, q->pending_metadata, sizeof(q->pending_metadata)) == 0);
@@ -359,6 +417,7 @@ int main(void) {
     test_knowledge();
     observer_register_items();
     sim_init(&loaded);
+    test_auto_retaliate();
     test_loaded_damage();
     test_loaded_commands();
     test_loaded_timing();

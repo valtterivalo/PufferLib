@@ -113,6 +113,11 @@ int main(void) {
     static TapeTick tick;
     tick.pending_known = 1; /* This equipment-only fixture explicitly starts with no queued hits. */
     tick.tick = 895; tick.hp = 99; tick.attack = tick.strength = tick.defence = 118; tick.magic = 99; tick.prayer = 90; tick.spec_us = 100;
+    tick.pid = 'L';
+    tick.poison_source = 1; tick.poison_value = 0; tick.poison_anchor_tick = tick.tick;
+    tick.opponent_gear_source = 1; tick.opponent_gear_count = TAPE_WORN;
+    for (int i = 0; i < TAPE_WORN; i++) tick.opponent_gear[i] = -1;
+    tick.opponent_gear[3] = 4587;
     tick.bar_ratio = tick.bar_now_ratio = 15; tick.bar_scale = tick.bar_now_scale = 30; tick.last_bar_hit = 895;
     strcpy(tick.overhead, "NONE");
     for (int i = 0; i < TAPE_WORN; i++) tick.worn[i] = -1;
@@ -135,14 +140,24 @@ int main(void) {
     static RiskfightState worlds[2];
     LaBelief belief = {.hp_low = 50, .hp_high = 50, .energy_low = 100, .energy_high = 100, .vengeance = GS_VENGEANCE_DOWN, .pid = GS_PID_LOCAL,
         .gear = {GS_GEAR_COMPOSITION_OBSERVED, 27690, 8850, {10828, 21295, 1725, 10551, 4087, 7462, 11840}}};
+    belief.combat_level = observed.inf.c.opponent_combat_level;
     Tape* sources[2] = {&prefix, &future};
     uint32_t end_rng[2];
+    uint32_t unavailable_seed = 7;
+    RiskfightSnapshot unavailable;
+    tick.pending_known = 0;
+    CHECK("missing recorded queue makes the snapshot unavailable",
+        !tape_snapshot(&prefix, 895, &DEFAULT_PRIORS, &unavailable_seed, &unavailable));
+    tick.pending_known = 1;
+    tick.poison_source = 0;
+    CHECK("missing recorded poison status makes the snapshot unavailable",
+        !tape_snapshot(&prefix, 895, &DEFAULT_PRIORS, &unavailable_seed, &unavailable));
+    tick.poison_source = 1;
     for (int arm = 0; arm < 2; arm++) {
         g_tape = sources[arm];
         uint32_t seed = 7;
         RiskfightSnapshot snapshot;
         CHECK("explicit empty queue permits kit fixture", tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot));
-        CHECK("future kit changes privileged seed main", snapshot.loadout[1].equipment[GEAR_SLOT_WEAPON] == (arm == 0 ? ITEM_DRAGON_SCIMITAR : ITEM_VOIDWAKER));
         riskfight_load_state(&sim.state, &sim.context, &snapshot);
         uint32_t rng = 12345;
         Hist h;
@@ -182,7 +197,7 @@ int main(void) {
         uint32_t seed = 7;
         RiskfightSnapshot snapshot;
         CHECK("explicit empty queue permits ammo fixture", tape_snapshot(sources[arm], 895, &DEFAULT_PRIORS, &seed, &snapshot));
-        CHECK("future426 changes privileged ammo seed", snapshot.loadout[1].equipment[GEAR_SLOT_AMMO] == (arm == 0 ? ITEM_NONE : ITEM_DRAGON_ARROWS));
+        CHECK("recorded weapon is unchanged by future kit", snapshot.loadout[1].equipment[GEAR_SLOT_WEAPON] == ITEM_DRAGON_SCIMITAR);
         riskfight_load_state(&sim.state, &sim.context, &snapshot);
         uint32_t rng = 12345;
         Hist h;
@@ -203,14 +218,34 @@ int main(void) {
     uint32_t rng = 12345;
     Hist h;
     la_world(&sim.state, &history, &belief, 895, &rng, &worlds[0], &h);
+    static RiskfightState hidden_bags[2];
+    hidden_bags[0] = hidden_bags[1] = sim.state;
+    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
+        hidden_bags[0].env.players[1].inventory_cells[slot] = osrs_inventory_cell_empty();
+        hidden_bags[1].env.players[1].inventory_cells[slot] = slot % 2 ?
+            osrs_inventory_cell_from_item(ITEM_GRANITE_MAUL_ORNATE) :
+            osrs_inventory_cell_from_content_code(raw_id_to_content(13441));
+    }
+    for (int arm = 0; arm < 2; arm++) {
+        rng = 12345;
+        la_world(&hidden_bags[arm], &history, &belief, 895, &rng, &worlds[arm], &h);
+        end_rng[arm] = rng;
+    }
+    CHECK("same visible belief and seed ignore hidden bag occupancy", la_fingerprint(&worlds[0]) == la_fingerprint(&worlds[1]));
+    CHECK("same visible belief reconstructs identical carried supplies and weapons",
+        !memcmp(worlds[0].env.players[1].inventory_cells, worlds[1].env.players[1].inventory_cells,
+            sizeof(worlds[0].env.players[1].inventory_cells)));
+    CHECK("hidden bag occupancy cannot perturb world RNG", end_rng[0] == end_rng[1]);
     CHECK("observed melee strips futureKIT ammo", worlds[0].env.players[1].equipped[GEAR_SLOT_AMMO] == ITEM_NONE);
     sim.state.env.players[1].equipped[GEAR_SLOT_WEAPON] = ITEM_DRAGON_SCIMITAR;
     FILE* dumped = tmpfile();
     assert(dumped);
-    la_dump_request(dumped, &sim, &belief, 895, &(LaFeasible){0}, (GsStakes){1, 1}, &(LaScript){0});
+    /* Explicit synthetic OFF cohort; no actor field is treated as observed varp172. */
+    la_dump_request(dumped, &sim, &belief, 895, &(LaFeasible){.pause_ok = 1}, (GsStakes){1, 1}, &(LaScript){0});
     rewind(dumped);
     read_request(dumped, &request);
     CHECK("actual dump transports observed gear rather than privileged seed", request.his_weapon == 27690 && request.belief.gear.source == GS_GEAR_COMPOSITION_OBSERVED && request.belief.gear.shield == 8850);
+    CHECK("synthetic dump declares OFF prior rather than observed actor truth", request.auto_retaliate_source == 2 && request.feasible.pause_ok);
     fclose(dumped);
     CHECK("request transports every observed armor slot", !memcmp(request.belief.gear.armor, belief.gear.armor, sizeof(belief.gear.armor)));
     LaBelief dhide = belief;
@@ -252,7 +287,7 @@ int main(void) {
     CHECK("equivalent aliases produce identical physical worlds", la_fingerprint(&worlds[0]) == la_fingerprint(&worlds[1]));
     dumped = tmpfile();
     assert(dumped);
-    la_dump_request(dumped, &sim, &aliases, 895, &(LaFeasible){0}, (GsStakes){1, 1}, &(LaScript){0});
+    la_dump_request(dumped, &sim, &aliases, 895, &(LaFeasible){.pause_ok = 1}, (GsStakes){1, 1}, &(LaScript){0});
     rewind(dumped);
     read_request(dumped, &request);
     fclose(dumped);

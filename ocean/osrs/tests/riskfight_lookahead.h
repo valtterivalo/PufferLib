@@ -3,28 +3,19 @@
 
 /* Our side decides by simulating the next ticks: every macro plan is rolled out on worlds drawn from the plugin's belief about him, with common
  * random numbers across plans, and scored as kill chance times his stakes less death chance times ours, plus the spec tickets left. */
-enum { LA_SCRIPT = 64, LA_CACHE = 4096, LA_MARGIN = 10 };
+enum { LA_CACHE = 4096, LA_MARGIN = 10 };
 static double la_seconds(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
 }
-typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_EAT_TRIPLE, LA_EAT_STAGGER, LA_MACROS } LaMacro;
-static const char* const LA_NAME[LA_MACROS] = {"rules", "none", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered"};
+typedef enum { LA_RULES, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_EAT_TRIPLE, LA_EAT_STAGGER, LA_WAIT_ALIGN,
+    LA_VENG_SPEC_NOW, LA_VENG_SPEC_NOW_BURST, LA_WAIT_VENG_SPEC_1, LA_WAIT_VENG_SPEC_2, LA_WAIT_VENG_SPEC_3,
+    LA_WAIT_VENG_SPEC_BURST_1, LA_WAIT_VENG_SPEC_BURST_2, LA_WAIT_VENG_SPEC_BURST_3, LA_MACROS } LaMacro;
+static const char* const LA_NAME[LA_MACROS] = {"rules", "no new clicks", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered", "stop and align",
+    "vengeance spec now", "vengeance spec now burst", "wait vengeance spec 1", "wait vengeance spec 2", "wait vengeance spec 3",
+    "wait vengeance spec burst 1", "wait vengeance spec burst 2", "wait vengeance spec burst 3"};
 
-typedef struct {
-    int n, due[LA_SCRIPT];
-    HumanCommand command[LA_SCRIPT];
-    int production, op[LA_SCRIPT], arg[LA_SCRIPT], fixed[LA_SCRIPT];
-    int candidate_count[LA_SCRIPT], candidates[LA_SCRIPT][OSRS_INVENTORY_SIZE];
-    int motor_active, motor_tick, motor_chain, motor_bound;
-    double motor_ms;
-    int attack_after, attack_tracking, registered, ready_index, ready_due, ready_sent;
-    uint32_t timing_rng;
-    const Ours* native_rules;
-    const Observer* native_observer;
-    int native_step;
-} LaScript;
 typedef struct { int kill, death, energy, ate_at; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
 typedef struct {
@@ -43,20 +34,10 @@ typedef enum { LA_ITEM_EMPTY, LA_ITEM_MAPPED, LA_ITEM_UNSUPPORTED } LaItemKind;
 typedef struct { LaItemKind kind; ItemIndex item; } LaItem;
 
 static LaItem la_item_of(int raw) {
-    switch (raw) {
-        case -1: return (LaItem){LA_ITEM_EMPTY, ITEM_NONE};
-        case 1704: return (LaItem){LA_ITEM_MAPPED, ITEM_GLORY};
-        case 4880: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_HELM};
-        case 4892: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_PLATEBODY};
-        case 4898: return (LaItem){LA_ITEM_MAPPED, ITEM_DHAROKS_PLATELEGS};
-        case 4994: return (LaItem){LA_ITEM_MAPPED, ITEM_VERACS_PLATESKIRT};
-        case 24133: case 24224: return (LaItem){LA_ITEM_MAPPED, ITEM_INFERNAL_CAPE};
-        case 28055: return (LaItem){LA_ITEM_MAPPED, ITEM_DRAGON_BOOTS};
-        case 28069: return (LaItem){LA_ITEM_MAPPED, ITEM_FIGHTER_TORSO};
-    }
-    for (int i = 0; i < NUM_ITEMS; i++)
-        if (ITEM_DATABASE[i].item_id == raw) return (LaItem){LA_ITEM_MAPPED, (ItemIndex)i};
-    return (LaItem){.kind = LA_ITEM_UNSUPPORTED};
+    if (raw == -1) return (LaItem){LA_ITEM_EMPTY, ITEM_NONE};
+    int item = osrs_item_index_from_raw_id(raw);
+    return item < 0 ? (LaItem){.kind = LA_ITEM_UNSUPPORTED}
+        : (LaItem){LA_ITEM_MAPPED, (ItemIndex)item};
 }
 
 static LaGearIssue la_gear_status(GsObservedGear gear) {
@@ -77,6 +58,7 @@ static double g_la_prune = 0.03, g_la_belief_hp_shift = 0, g_la_eat_scale_belief
 static const OppModel* g_la_model;
 static int g_la_boost = 118;
 typedef struct { long calls, cache_hits, rollouts; long chosen[LA_MACROS]; double seconds, worst; double* latency; long latency_count, latency_capacity; } LaStats;
+static int g_la_collect_latency = 1;
 static LaStats g_la;
 static struct { uint64_t key; int macro; int used; double kill; } g_la_memo[LA_CACHE];
 static struct { int step, macro, spec; double kill; } g_la_decisions[512];
@@ -91,23 +73,46 @@ static int la_between(uint32_t* r, int low, int high) { return high <= low ? low
 static int la_food_timer(int ready, int tick) { return ready > tick + 1 ? ready - tick - 1 : 0; }
 
 static void la_resupply(Player* him, uint32_t* r) {
-    int cells[OSRS_INVENTORY_SIZE], n = 0;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++) {
-        OsrsConsumableKind k = osrs_inventory_cell_metadata(&him->inventory_cells[slot])->consumable_kind;
-        if (k == OSRS_CONSUMABLE_ANGLERFISH || k == OSRS_CONSUMABLE_KARAMBWAN || k == OSRS_CONSUMABLE_BREW) cells[n++] = slot;
-    }
+    /* Hidden bag occupancy is not an observation. Reconstruct the whole bag
+     * from the declared supply prior, then add sampled carried weapons. */
     int hard = la_between(r, 8, 14), fast = la_between(r, 2, 6), brew = la_between(r, 2, 4);
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) {
         int pick = i < hard ? 0 : i < hard + fast ? 1 : i < hard + fast + brew ? 2 : 3;
-        if (pick == 3) { him->inventory_cells[cells[i]] = osrs_inventory_cell_empty(); continue; }
+        if (pick == 3) { him->inventory_cells[i] = osrs_inventory_cell_empty(); continue; }
         uint16_t code = pick == 0 ? riskfight_supply_code(OSRS_CONSUMABLE_ANGLERFISH, 0) : pick == 1 ? riskfight_supply_code(OSRS_CONSUMABLE_KARAMBWAN, 0) :
             riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4);
-        him->inventory_cells[cells[i]] = osrs_inventory_cell_from_content_code(code);
+        him->inventory_cells[i] = osrs_inventory_cell_from_content_code(code);
     }
 }
 
 /** One world: the sim as it stands with everything hidden about him replaced by a draw from what the client infers. */
 static void la_world(const RiskfightState* base, const Hist* base_hist, const LaBelief* b, int tick, uint32_t* r, RiskfightState* w, Hist* hist) {
+    if (g_la_horizon <= 0 || g_la_horizon > 32) {
+        fprintf(stderr, "lookahead horizon is outside the supported bound\n");
+        abort();
+    }
+    for (int side = 0; side < 2; side++) {
+        OsrsPoisonSource source = base->poison_source[side];
+        if (source != OSRS_POISON_OBSERVED_STATE &&
+            source != OSRS_POISON_HORIZON_IMMUNITY &&
+            source != OSRS_POISON_CLEAR_PRIOR &&
+            !(side == 0 && source == OSRS_POISON_CAUSAL_STATE)) {
+            fprintf(stderr, "lookahead poison status is not admitted side=%d source=%d\n", side, (int)source);
+            abort();
+        }
+        if (source == OSRS_POISON_HORIZON_IMMUNITY &&
+            base->poison[side].immunity_ticks <= g_la_horizon) {
+            fprintf(stderr, "lookahead poison immunity does not cover horizon side=%d\n", side);
+            abort();
+        }
+        uint8_t weapon = side == 1 ? la_item_of(b->gear.weapon).item :
+            base->env.players[side].equipped[GEAR_SLOT_WEAPON];
+        if (weapon == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS &&
+            base->poison[1 - side].immunity_ticks <= g_la_horizon) {
+            fprintf(stderr, "lookahead weapon-poison application is unverified side=%d\n", side);
+            abort();
+        }
+    }
     *w = *base;
     Player* him = &w->env.players[1];
     assert(la_gear_status(b->gear).status == LA_GEAR_SUPPORTED);
@@ -150,6 +155,11 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->current_strength = actor_profile_boost(g_la_boost, him->base_strength);
     int holder = b->pid == GS_PID_UNKNOWN ? (int)(la_next(r) & 1) : (b->pid == GS_PID_LOCAL ? 0 : 1);
     if (b->pid != GS_PID_UNKNOWN && la_uniform(r, 0, 1) < b->flip) holder = 1 - holder;
+    if (w->env.pid_holder != holder) {
+        uint32_t rank = w->env.priority[0].rank;
+        w->env.priority[0].rank = w->env.priority[1].rank;
+        w->env.priority[1].rank = rank;
+    }
     w->env.pid_holder = holder;
     riskfight_sample_pending(w, r);
     int attack_timer = 0;
@@ -178,18 +188,6 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     hist->since_eat = b->seen_since_eat;
 }
 
-static void la_eat_at_risk(const RiskfightState* s, HumanInput* hi) {
-    const Player* p = &s->env.players[0];
-    const Player* him = &s->env.players[1];
-    AttackStyle style = get_slot_weapon_attack_style((Player*)him) == ATTACK_STYLE_RANGED ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE;
-    int normal = calculate_max_hit((Player*)him, style, 1.0f, 30);
-    int worst = him->special_energy >= ENERGY_FOR_SPEC && style == ATTACK_STYLE_MELEE ? osrs_voidwaker_max_hit(normal) : normal;
-    if (p->current_hitpoints > worst + LA_MARGIN) return;
-    int hard = slot_of_kind(p, OSRS_CONSUMABLE_ANGLERFISH), karambwan = slot_of_kind(p, OSRS_CONSUMABLE_KARAMBWAN), brew = slot_of_kind(p, OSRS_CONSUMABLE_BREW);
-    if (p->food_timer == 0 && hard >= 0) human_input_queue_command(hi, click_command(hard));
-    if (p->karambwan_timer == 0 && karambwan >= 0 && p->current_hitpoints <= worst) human_input_queue_command(hi, click_command(karambwan));
-    if (p->potion_timer == 0 && brew >= 0 && p->current_hitpoints <= worst) human_input_queue_command(hi, click_command(brew));
-}
 
 static Outcome g_la_scratch;
 
@@ -246,6 +244,8 @@ static int la_recipe(const LaScript* script, int i, const Player* us, HumanComma
 
 static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
     int now, int* cursor, int* resume, int hit, int damage) {
+    if (s->env.episode_over || s->env.players[0].current_hitpoints <= 0 ||
+        s->env.players[1].current_hitpoints <= 0) { *cursor = script->n; return; }
     if (!script->attack_tracking) {
         script->attack_after = s->env.tick;
         script->attack_tracking = 1;
@@ -255,9 +255,26 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
         (previous >= script->attack_after &&
          s->visible[1].events[previous % RF_HISTORY_TICKS][0] > 0)) script->registered = 1;
     if (now < *resume) return;
+    if (script->aligned_active && now > script->aligned_tick) {
+        *cursor = script->n;
+        return;
+    }
     while (*cursor < script->n && script->due[*cursor] <= now) {
         int i = *cursor, op = script->op[i], arg = script->arg[i];
         Player* us = &s->env.players[0];
+        /* now is the upcoming processing tick, not the observed GameTick.
+         * Alignment costs no click; the following attack pays motor timing. */
+        if (op == 11) {
+            if (now > arg) { *cursor = script->n; return; }
+            if (now < arg || us->attack_timer > 1) return;
+            script->aligned_active = 1;
+            script->aligned_tick = arg;
+        }
+        /* VW launch counter certifies the ticket spend; the energy drop may
+         * include regeneration on that same tick, so do not demand exactly50. */
+        if (op == 12 && (!script->spec_tracking ||
+            s->spec_voidwaker[0] <= script->spec_before ||
+            us->special_energy >= script->energy_before)) return;
         if (op == 3) {
             /* Observe queued acquisitions/cancellations, not unrelated interface clicks. */
             for (int j = 0; j < hi->commands.count; j++) {
@@ -292,8 +309,8 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
             }
             if (arg >= 0 && !hit) return;
         }
-        if (op < 3 || op >= 8) {
-            if (op >= 8 && script->motor_bound != i + 1 &&
+        if (op < 3 || (op >= 8 && op <= 10)) {
+            if (op >= 8 && op <= 10 && script->motor_bound != i + 1 &&
                 !la_recipe(script, i, us, &script->command[i])) {
                 (*cursor)++;
                 continue; /* Established recipe satisfaction/absence skips without a click. */
@@ -311,12 +328,12 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
             }
         }
         (*cursor)++;
-        if (script->production && (op == 3 || op == 4 || op == 7)) {
+        if (script->production && (op == 3 || op == 4 || op == 7 || op == 11 || op == 12)) {
             int lag = now - script->due[i] + (op == 7);
             for (int j = i + 1; lag > 0 && j < script->n; j++)
                 if (!script->fixed[j]) script->due[j] += lag;
         }
-        if (op == 3) continue;
+        if (op == 3 || op == 11 || op == 12) continue;
         if (op == 4) {
             if (arg >= 0 && damage < arg) *cursor = script->n;
             continue;
@@ -338,6 +355,9 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
         }
         if (op == 1 || op == 2) {
             if (op == 1) {
+                script->spec_before = s->spec_voidwaker[0];
+                script->energy_before = us->special_energy;
+                script->spec_tracking = 1;
                 script->attack_after = s->env.tick;
                 script->registered = 0;
                 hit = 0;
@@ -347,11 +367,20 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
             continue;
         }
         if (script->command[i].kind == HUMAN_COMMAND_ATTACK_NPC) {
+            script->aligned_active = 0;
             script->attack_after = s->env.tick;
             script->registered = 0;
             hit = 0;
         }
         human_input_queue_command(hi, script->command[i]);
+        if (script->command[i].kind == HUMAN_COMMAND_STOP) {
+            script->motor_chain = 0;
+            *resume = now + 2;
+            if (script->motor_active)
+                script->motor_ms = fmax(script->motor_ms,
+                    (*resume - script->motor_tick - 1) * (double)TICK_MS);
+            return;
+        }
     }
 }
 
@@ -362,6 +391,7 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
     work->hist = *hist;
     work->tick_base = tick;
     work->outcome = &g_la_scratch;
+    memset(&g_la_scratch, 0, sizeof(g_la_scratch));
     work->state.env.pvp_runtime.hit_observer = sim_observe_hit;
     work->state.env.pvp_runtime.hit_observer_context = work;
     work->state.env.pvp_runtime.attack_chance_observer = NULL;
@@ -399,11 +429,6 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
             }
         } else {
             la_script_step(script, s, hi, tick + 1 + step, &cursor, &resume, direct_hit, direct_damage);
-        }
-        if (!script->production && !script->native_rules) {
-            la_eat_at_risk(s, hi);
-            if (!osrs_interaction_active(&s->env.players[0].interaction) && hi->commands.count == 0)
-                human_input_queue_command(hi, attack_command());
         }
         for (int i = 0; i < hi->commands.count; i++)
             if (hi->commands.items[i].kind == HUMAN_COMMAND_ATTACK_NPC ||
@@ -464,15 +489,81 @@ static void la_time_production(uint32_t* rng, int tick, LaScript* script) {
 }
 
 
-static void la_spec_clicks(LaScript* script, uint32_t* r, const Player* us, int due_tick) {
-    HumanCommand clicks[2];
-    int n = 0;
-    if (!us->spec_armed) clicks[n++] = spec_command();
-    clicks[n++] = attack_command();
-    la_press(r, script, due_tick, clicks, n);
+
+/* pause_ok is an explicit observed-OFF or declared simulation OFF prior.
+ * Missing/UNKNOWN/ON producers leave it false, never silently become OFF. */
+typedef struct { int spec_ok, eat_ok, veng_ok, energy, pause_ok, incoming_count, incoming[3], pid; } LaFeasible;
+
+/* First three distinct source-visible windows, never rollout future truth. */
+static void la_incoming_window(LaFeasible* f, int decision, int tick) {
+    if (tick <= decision || tick - decision > g_la_horizon) return;
+    int at = 0;
+    while (at < f->incoming_count && f->incoming[at] < tick) at++;
+    if ((at < f->incoming_count && f->incoming[at] == tick) || at == 3) return;
+    if (f->incoming_count < 3) f->incoming_count++;
+    for (int i = f->incoming_count - 1; i > at; i--) f->incoming[i] = f->incoming[i - 1];
+    f->incoming[at] = tick;
 }
 
-typedef struct { int spec_ok, eat_ok, veng_ok, energy; } LaFeasible;
+static void la_alignment_windows(const PendingHit* incoming, int count,
+    const LaBelief* belief, int tick, LaFeasible* f) {
+    f->incoming_count = 0;
+    f->pid = belief->pid;
+    if (f->pid == GS_PID_UNKNOWN) return;
+    for (int i = 0; i < count; i++)
+        if (incoming[i].kind == OSRS_HIT_DIRECT)
+            la_incoming_window(f, tick, tick + 1 + incoming[i].ticks_until_hit);
+    LaItem weapon = la_item_of(belief->gear.weapon);
+    if (belief->gear.source == GS_GEAR_COMPOSITION_OBSERVED && belief->timer_seen &&
+        weapon.kind == LA_ITEM_MAPPED && get_item_attack_style(weapon.item) == ATTACK_STYLE_MELEE) {
+        la_incoming_window(f, tick, belief->timer_first);
+        la_incoming_window(f, tick, belief->timer_first + (belief->timer_last - belief->timer_first) / 2);
+        la_incoming_window(f, tick, belief->timer_last);
+    }
+}
+
+static void la_op(LaScript* s, int tick, int op, int arg, HumanCommand command) {
+    assert(s->n < LA_SCRIPT);
+    int i = s->n++;
+    s->due[i] = tick + 1;
+    s->op[i] = op;
+    s->arg[i] = arg;
+    s->command[i] = command;
+}
+
+/* Current/carried supported weapon only; never a sampled future inventory. */
+static int la_has_voidwaker(const Player* us) {
+    if (us->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER) return 1;
+    if (slot_with_item(us, is_voidwaker) < 0) return 0;
+    if (us->equipped[GEAR_SLOT_SHIELD] == ITEM_NONE) return 1;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        if (osrs_inventory_cell_is_empty(&us->inventory_cells[i])) return 1;
+    return 0;
+}
+
+static void la_spec_program(LaScript* s, int tick, int ready, int stop,
+    int cast, int burst, uint32_t seed) {
+    la_op(s, tick, 5, GS_TICKET, (HumanCommand){0});
+    if (stop) la_op(s, tick, 0, 0, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
+    if (cast) la_op(s, tick, 0, 0, vengeance_command());
+    la_op(s, tick, 9, 0, (HumanCommand){0});
+    s->candidate_count[s->n - 1] = 1;
+    s->candidates[s->n - 1][0] = ITEM_DATABASE[ITEM_VOIDWAKER].item_id;
+    la_op(s, tick, 1, 0, (HumanCommand){0});
+    la_op(s, tick, stop ? 11 : 3, stop ? ready : 1, (HumanCommand){0});
+    s->fixed[s->n - 1] = stop;
+    la_op(s, tick, 0, 0, attack_command());
+    if (burst) {
+        la_op(s, tick, 12, 0, (HumanCommand){0});
+        la_op(s, tick, 5, GS_TICKET, (HumanCommand){0});
+        /* Arm after observed spend, before actual cooldown can auto-launch.
+         * Ready resumes acquisition once; ENABLE never toggles an armed bar off. */
+        la_op(s, tick, 1, 0, (HumanCommand){0});
+        la_op(s, tick, 3, 1, (HumanCommand){0});
+        la_op(s, tick, 0, 0, attack_command());
+    }
+    la_time_production(&seed, tick, s);
+}
 
 static void la_food_slots(const Player* us, int slot[3]) {
     slot[GS_HARD_FOOD] = slot_of_kind(us, OSRS_CONSUMABLE_ANGLERFISH);
@@ -486,25 +577,57 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
     memset(scripts, 0, LA_MACROS * sizeof(LaScript));
     memset(feasible, 0, LA_MACROS * sizeof(int));
     uint32_t saved = osrs_lowbias32((uint32_t)tick * 2654435761u) | 1, r;
+    /* Every alternative is an admitted timed command sequence, not a policy
+     * secretly rescued by exact opponent HP/energy-dependent meals. */
+    for (int m = 0; m < LA_MACROS; m++) scripts[m].production = 1;
     scripts[LA_RULES] = *rules;
     if (scripts[LA_RULES].production) {
         r = saved;
         la_time_production(&r, tick, &scripts[LA_RULES]);
     }
     feasible[LA_RULES] = feasible[LA_NONE] = 1;
-    if (f->spec_ok) {
+    feasible[LA_WAIT_ALIGN] = f->pause_ok && us->attack_timer >= 3;
+    if (feasible[LA_WAIT_ALIGN]) {
+        LaScript* wait = &scripts[LA_WAIT_ALIGN];
+        la_op(wait, tick, 0, 0, (HumanCommand){.kind = HUMAN_COMMAND_STOP});
+        la_op(wait, tick, 11, tick + imax(1, us->attack_timer), (HumanCommand){0});
+        wait->fixed[wait->n - 1] = 1;
+        la_op(wait, tick, 0, 0, attack_command());
+        r = saved;
+        la_time_production(&r, tick, wait);
+    }
+    if (f->spec_ok && la_has_voidwaker(us)) {
         feasible[LA_SPEC_NOW] = feasible[LA_SPEC_NEXT] = 1;
-        r = saved;
-        la_spec_clicks(&scripts[LA_SPEC_NOW], &r, us, tick);
-        int swing = tick + 1 + imax(0, us->attack_timer);
-        HumanCommand again[2] = {spec_command(), attack_command()};
-        r = saved;
-        la_press(&r, &scripts[LA_SPEC_NEXT], swing, again, 2);
+        la_spec_program(&scripts[LA_SPEC_NOW], tick, tick + 1, 0, 0, 0, saved);
+        la_spec_program(&scripts[LA_SPEC_NEXT], tick, tick + imax(1, us->attack_timer), 0, 0, 0, saved);
         if (f->energy >= 2 * GS_TICKET && g_la_burst) {
             feasible[LA_BURST] = 1;
-            r = saved;
-            la_spec_clicks(&scripts[LA_BURST], &r, us, tick);
-            la_press(&r, &scripts[LA_BURST], swing, again, 2);
+            la_spec_program(&scripts[LA_BURST], tick, tick + 1, 0, 0, 1, saved);
+        }
+        if (f->veng_ok) {
+            feasible[LA_VENG_SPEC_NOW] = 1;
+            la_spec_program(&scripts[LA_VENG_SPEC_NOW], tick, tick + 1, 0, 1, 0, saved);
+            if (f->energy >= 2 * GS_TICKET && g_la_burst) {
+                feasible[LA_VENG_SPEC_NOW_BURST] = 1;
+                la_spec_program(&scripts[LA_VENG_SPEC_NOW_BURST], tick, tick + 1, 0, 1, 1, saved);
+            }
+            assert(f->incoming_count >= 0 && f->incoming_count <= 3);
+            if (f->pause_ok && (f->pid == GS_PID_LOCAL || f->pid == GS_PID_OPPONENT)) {
+                for (int window = 0; window < f->incoming_count; window++) {
+                    /* First actor can cast before this tick's incoming; second
+                     * actor needs the next processing tick. Motor lag still pays. */
+                    int ready = f->incoming[window] + (f->pid == GS_PID_OPPONENT);
+                    if (ready < tick + 3 || ready > tick + g_la_horizon) continue;
+                    int single = LA_WAIT_VENG_SPEC_1 + window;
+                    int burst = LA_WAIT_VENG_SPEC_BURST_1 + window;
+                    feasible[single] = 1;
+                    la_spec_program(&scripts[single], tick, ready, 1, 1, 0, saved);
+                    if (f->energy >= 2 * GS_TICKET && g_la_burst) {
+                        feasible[burst] = 1;
+                        la_spec_program(&scripts[burst], tick, ready, 1, 1, 1, saved);
+                    }
+                }
+            }
         }
     }
     int slot[3];
@@ -537,19 +660,17 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
 }
 
 /** Rolls every feasible macro out on worlds drawn from the belief and picks the best by value, the rules unless another is strictly better. */
-/** The worth of holding k spec tickets, from the sim itself: the extra kill chance over the horizon of throwing a spec at every swing against none, on worlds from the belief. */
+/** Finite executable one/two-ticket continuation prior; not global policy value. */
 static void la_measure_worth(const RiskfightState* base, const Hist* base_hist, const LaBelief* belief, int tick, uint32_t salt, Sim* work) {
-    enum { WORLDS = 16, SWINGS = 4, SWING_TICKS = 4 };
-    LaScript greedy = {0}, none = {0};
-    int first = tick + 1 + imax(0, base->env.players[0].attack_timer);
-    for (int j = 0; j < SWINGS; j++) {
-        greedy.due[greedy.n] = first + j * SWING_TICKS - 1;
-        greedy.command[greedy.n++] = spec_command();
-    }
+    enum { WORLDS = 16 };
+    LaScript none = {0};
     g_la_w[0] = 0;
     static RiskfightState world;
     static Hist hist;
     for (int k = 1; k <= GS_MOST_TICKETS; k++) {
+        LaScript greedy = {.production = 1};
+        if (la_has_voidwaker(&base->env.players[0]))
+            la_spec_program(&greedy, tick, tick + 1, 0, 0, k > 1, salt | 1);
         double gain = 0;
         for (int w = 0; w < WORLDS; w++) {
             uint32_t draw = salt ^ (uint32_t)(w * 2246822519u);
@@ -631,8 +752,9 @@ static LaMacro la_evaluate(const RiskfightState* base, const Hist* base_hist, co
                 LaOutcome o = la_rollout(work, &world, &hist, tick, g_la_model, &scripts[m], seed);
                 score[m].kill += o.kill;
                 score[m].death += o.death;
-                score[m].tickets += (1 - o.kill) * la_tickets_worth(o.energy);
-                score[m].value += o.kill * ratio - o.death + (1 - o.kill) * la_tickets_worth(o.energy) * ratio;
+                double continuation = !o.kill && !o.death ? la_tickets_worth(o.energy) : 0;
+                score[m].tickets += continuation;
+                score[m].value += o.kill * ratio - o.death + continuation * ratio;
                 score[m].worlds++;
                 g_la.rollouts++;
             }
@@ -697,7 +819,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     double started = la_seconds();
     const GsInfer* inf = &sim->obs.inf;
     const Player* us = &sim->state.env.players[0];
-    LaFeasible f;
+    LaFeasible f = {0};
     f.energy = gs_spec_energy(&inf->c);
     GsStakes stakes = ours->equal_stakes ? (GsStakes){1, 1} : sim->obs.stakes;
     int slot[3];
@@ -706,9 +828,17 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     f.spec_ok = gs_spec_plannable(inf) && f.energy >= GS_TICKET && ours->last_played_step + 2 < step;
     f.eat_ok = (slot[0] >= 0 || slot[1] >= 0 || slot[2] >= 0) && us->current_hitpoints < GS_ASSUMED_MAX_HP;
     f.veng_ok = rebound.kind == GS_REBOUND_CASTABLE;
+    f.pause_ok = 1; /* Explicit synthetic simulation OFF_PRIOR, not recorded OFF. */
     if (!f.spec_ok && !(f.eat_ok && us->current_hitpoints <= 75) && !f.veng_ok) return 0;
 
     LaBelief belief = la_belief_of(sim, tick);
+    int holder = belief.pid == GS_PID_LOCAL ? 0 : 1;
+    const RiskfightState* observed = &sim->state;
+    const PendingHit* incoming = observed->pending_pid_active ?
+        observed->pending_pid[holder][1] : observed->env.players[1].pending_hits;
+    int incoming_count = observed->pending_pid_active ?
+        observed->pending_pid_count[holder][1] : observed->env.players[1].num_pending_hits;
+    la_alignment_windows(incoming, incoming_count, &belief, tick, &f);
     LaGearIssue issue = la_gear_status(belief.gear);
     LaGearStatus gear_status = issue.status;
     if (gear_status != LA_GEAR_SUPPORTED) {
@@ -726,13 +856,11 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     Ours trial = *ours;
     trial.lookahead = 0;
     ours_decide(sim, &trial, step, tick);
-    if (trial.burst_pending) {
-        rules.native_rules = &trial;
-        rules.native_observer = &sim->obs;
-        rules.native_step = step;
-        cached = cacheable = 0;
-        if (g_la_report) printf("rules baseline: native closed-loop production policy (not Java current-run open-loop)\n");
-    }
+    rules.native_rules = &trial;
+    rules.native_observer = &sim->obs;
+    rules.native_step = step;
+    cached = cacheable = 0;
+    if (g_la_report) printf("rules baseline: closed-loop C proxy; motor timing historical; auto-retaliate OFF_PRIOR simulation-conditioned, not observed; Java parity is not certified\n");
     for (int i = 0; i < trial.pending_count; i++) {
         rules.due[rules.n] = trial.pending[i].due;
         rules.command[rules.n++] = trial.pending[i].command;
@@ -768,7 +896,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
         }
     }
     g_la.chosen[best]++;
-    int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT;
+    int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT || best >= LA_VENG_SPEC_NOW;
     for (int i = 0; best == LA_RULES && i < scripts[LA_RULES].n; i++) spec |= scripts[LA_RULES].command[i].kind == HUMAN_COMMAND_SPEC_TOGGLE;
     if (g_la_decision_count < 512) {
         g_la_decisions[g_la_decision_count].step = step;
@@ -779,18 +907,26 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     double elapsed = la_seconds() - started;
     g_la.seconds += elapsed;
     if (elapsed > g_la.worst) g_la.worst = elapsed;
-    if (g_la.latency_count == g_la.latency_capacity) {
-        g_la.latency_capacity = g_la.latency_capacity ? 2 * g_la.latency_capacity : 1 << 16;
-        g_la.latency = realloc(g_la.latency, (size_t)g_la.latency_capacity * sizeof(double));
+    if (g_la_collect_latency) {
+        if (g_la.latency_count == g_la.latency_capacity) {
+            long capacity = g_la.latency_capacity ? 2 * g_la.latency_capacity : 1 << 16;
+            double* latency = realloc(g_la.latency, (size_t)capacity * sizeof(double));
+            if (!latency) { fprintf(stderr, "lookahead latency allocation failed\n"); abort(); }
+            g_la.latency = latency;
+            g_la.latency_capacity = capacity;
+        }
+        g_la.latency[g_la.latency_count++] = elapsed;
     }
-    g_la.latency[g_la.latency_count++] = elapsed;
     if (best == LA_RULES) return 0;
     ours->burst_pending = 0;
     ours->last_decision = tick;
     ours->decisions++;
-    for (int i = 0; i < scripts[best].n; i++) ours_push(ours, scripts[best].due[i], scripts[best].command[i]);
-    if (best == LA_VENG_NOW) ours->vengeance_clicked = tick + 1;
-    if (best == LA_SPEC_NOW || best == LA_SPEC_NEXT || best == LA_BURST) { ours->last_played_choice = GS_CHOICE_VOIDWAKER; ours->last_played_step = step; }
+    ours->native_program = scripts[best];
+    ours->native_cursor = 0;
+    ours->native_resume = tick + 1;
+    ours->native_active = 1; /* Even NONE owns this processing phase: no fallback click. */
+    if (best == LA_VENG_NOW || best >= LA_VENG_SPEC_NOW) ours->vengeance_clicked = tick + 1;
+    if (spec) { ours->last_played_choice = GS_CHOICE_VOIDWAKER; ours->last_played_step = step; }
     return 1;
 }
 #endif

@@ -332,12 +332,19 @@ int main(void) {
     situation.swings[0] = (GsSwing){102, 30, 30, 1, 1};
     situation.swings[1] = (GsSwing){102, 30, 30, 1, 1};
     GsVec heals = vec_make(&arena, sizeof(GsHeal));
-    GsVec scenarios = eat_scenarios(&arena, &situation, 102, GS_SCHEDULE_EARLIEST, &heals);
-    assert(scenarios.count == 1);
-    GsScenario scenario = VEC_AT(GsScenario, scenarios, 0);
-    assert(scenario.count == 2);
-    assert(eat_odds(&arena, scenario.hits, 1, &heals, 0, 50, GS_PID_LOCAL, GS_NONE).risk == 0);
-    assert(eat_odds(&arena, scenario.hits, 2, &heals, 0, 50, GS_PID_LOCAL, GS_NONE).risk == 1);
+    GsVec scenarios = eat_scenarios(&arena, &situation, 102);
+    assert(scenarios.count > 0);
+    for (int i = 0; i < scenarios.count; i++) {
+        GsScenario scenario = VEC_AT(GsScenario, scenarios, i);
+        assert(scenario.count == 2);
+        for (int h = 0; h < scenario.count; h++) {
+            assert(scenario.hits[h].source == SRC_SWING);
+            assert(scenario.hits[h].tick == 102);
+            assert(scenario.hits[h].least == 30 && scenario.hits[h].most == 30);
+        }
+        assert(eat_odds(&arena, scenario.hits, 1, &heals, 0, 50, GS_PID_LOCAL, GS_NONE).risk == 0);
+        assert(eat_odds(&arena, scenario.hits, 2, &heals, 0, 50, GS_PID_LOCAL, GS_NONE).risk == 1);
+    }
     free(arena.base);
     return 0;
 }

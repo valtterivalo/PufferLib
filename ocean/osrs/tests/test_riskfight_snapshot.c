@@ -1,6 +1,9 @@
+#define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <stdio.h>
 #include "../encounters/encounter_riskfight.h"
+#include <unistd.h>
+#include "riskfight_tape.h"
 
 static RiskfightState state, copy;
 static int bow_hits;
@@ -58,6 +61,7 @@ static RiskfightSnapshot snapshot(void) {
         .attack_history = RISKFIGHT_ATTACK_ABSENT, .attack_timer_uncapped = -1,
         .special_energy = 100, .attack_timer = -1, .offensive_prayer = OFFENSIVE_PRAYER_PIETY, .x = 3, .y = 0, .interacting = 1,
         .seen_health_bar = osrs_health_bar_ratio(55, 99, OSRS_PLAYER_HEALTH_BAR_SCALE), .seen_last_attack_ago = -1};
+    snap.side[0].poison_source = snap.side[1].poison_source = OSRS_POISON_CLEAR_PRIOR;
     return snap;
 }
 
@@ -252,6 +256,84 @@ static void test_pending_pid_resolution(void) {
     assert(state.env.pending_hit_metadata[1][0].damage_mode == 0);
 }
 
+static void test_tape_poison_and_observed_gear(void) {
+    char path[] = "/tmp/riskfight-snapshot-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    FILE* file = fdopen(fd, "w");
+    assert(file);
+    fputs("FIGHT 0 source actor 198 199\nP 198 1 -54 198\nE 198 1 12 -1 -1 -1 27867 -1 22322 -1 -1 -1 -1 -1 -1\nQ 198 1\n", file);
+    for (int tick = 198; tick <= 199; tick++) {
+        fprintf(file, "T %d", tick);
+        for (int i = 1; i < 32; i++) fputs(" 0", file);
+        fputs(" L NONE 0", file);
+        for (int i = 0; i < TAPE_WORN + TAPE_BAG; i++) fputs(" -1", file);
+        fputc('\n', file);
+    }
+    assert(fclose(file) == 0);
+    Tape tape;
+    assert(tape_load(&tape, path) == 2);
+    assert(unlink(path) == 0);
+    const TapeTick* row = tape_tick(&tape, 198);
+    assert(row->pending_known == 1 && row->opponent_gear_source == 1);
+    assert(row->opponent_gear_count == 12 && row->opponent_gear[3] == 27867 && row->opponent_gear[5] == 22322);
+    OsrsPoisonState poison;
+    const TapeTick* missing = tape_tick(&tape, 199);
+    assert(!missing->poison_source && !missing->opponent_gear_source && !missing->pending_known);
+    assert(tape_local_poison(missing, &poison) == OSRS_POISON_UNKNOWN_STATE);
+    assert(tape_local_poison(row, &poison) == OSRS_POISON_HORIZON_IMMUNITY && poison.immunity_ticks == 1590);
+    TapeTick aged = *row;
+    aged.tick = 228;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_HORIZON_IMMUNITY && poison.immunity_ticks == 1560);
+    aged.tick = 1788;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_HORIZON_IMMUNITY && poison.immunity_ticks == 0);
+    aged.tick++;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_UNKNOWN_STATE);
+    aged = *row;
+    aged.poison_value = -1;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_HORIZON_IMMUNITY && poison.immunity_ticks == 0);
+    aged.poison_value = 0;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_OBSERVED_STATE && poison.severity == 0);
+    aged.tick++;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_UNKNOWN_STATE);
+    aged.tick--;
+    aged.poison_value = 30;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_UNKNOWN_STATE);
+    aged.poison_source = 0;
+    assert(tape_local_poison(&aged, &poison) == OSRS_POISON_UNKNOWN_STATE);
+    tape_free(&tape);
+}
+
+static void test_poison_snapshot_clone(void) {
+    RiskfightSnapshot snap = snapshot();
+    snap.side[0].interacting = snap.side[1].interacting = 0;
+    snap.side[0].poison = (OsrsPoisonState){.immunity_ticks = 2};
+    snap.side[0].poison_source = OSRS_POISON_HORIZON_IMMUNITY;
+    snap.side[1].poison = (OsrsPoisonState){.severity = 30, .ticks_until_pulse = 2};
+    snap.side[1].poison_source = OSRS_POISON_OBSERVED_STATE;
+    snap.pending_count[1] = 1;
+    snap.pending[1][0] = (PendingHit){.damage = 7, .hit_success = 1, .ticks_until_hit = 3};
+    snap.pending_metadata[1][0] = (PendingHitMetadata){.damage_mode = 1};
+    riskfight_load_state(&state, &context, &snap);
+    copy = state;
+    HumanCommandQueue idle = {0};
+    for (int run = 0; run < 2; run++) {
+        RiskfightState* s = run ? &copy : &state;
+        assert(s->poison_source[0] == OSRS_POISON_HORIZON_IMMUNITY);
+        assert(s->poison_source[1] == OSRS_POISON_OBSERVED_STATE);
+        riskfight_step_queues(s, &context, &idle, &idle);
+        assert(s->poison[0].immunity_ticks == 1);
+        assert(s->env.players[1].current_hitpoints == 55 && s->poison[1].ticks_until_pulse == 1);
+        assert(s->env.players[1].num_pending_hits == 1 && s->env.players[1].pending_hits[0].damage == 7 &&
+            s->env.pending_hit_metadata[1][0].damage_mode == 1);
+        riskfight_step_queues(s, &context, &idle, &idle);
+        assert(s->poison[0].immunity_ticks == 0);
+        assert(s->env.players[1].current_hitpoints == 49 && s->poison[1].severity == 29);
+    }
+    assert(!memcmp(copy.poison, state.poison, sizeof(state.poison)));
+    assert(!memcmp(copy.env.pending_hit_metadata, state.env.pending_hit_metadata, sizeof(copy.env.pending_hit_metadata)));
+}
+
 int main(void) {
     riskfight_init_context((EncounterContext*)&context);
     riskfight_finalize_context((EncounterState*)&state, (EncounterContext*)&context);
@@ -262,6 +344,8 @@ int main(void) {
     test_carried_health_bar();
     test_pending_damage();
     test_pending_pid_resolution();
+    test_tape_poison_and_observed_gear();
+    test_poison_snapshot_clone();
     RiskfightSnapshot snap = snapshot();
     snap.side[1].x = 1;
     snap.side[1].interacting = 0;

@@ -53,6 +53,10 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_SGS:                  return 50;
         case ITEM_ANCIENT_GS:           return 50;
         case ITEM_VESTAS:               return 25;
+        case ITEM_VESTAS_BLIGHTED:      return 25;
+        case ITEM_ABYSSAL_DAGGER_BH:    return 35;
+        case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS: return 35;
+        case ITEM_DRAGON_MACE_BH:       return 15;
         case ITEM_VOIDWAKER:            return 50;
         case ITEM_GRANITE_MAUL:         return 60;
         case ITEM_GRANITE_MAUL_ORNATE:  return 50;
@@ -210,6 +214,7 @@ static inline SpecResult osrs_resolve_spec(
         break;
     }
 
+    case ITEM_VESTAS_BLIGHTED:
     case ITEM_VESTAS: {
         int vls_max = max_hit * 6 / 5;
         int vls_min = max_hit / 5;
@@ -255,6 +260,33 @@ static inline SpecResult osrs_resolve_spec(
         r.total_damage = r.damage[0] + r.damage[1];
         break;
     }
+    /* OSRS Wiki: Abyssal dagger (bh), Dragon mace (bh).
+       The caller supplies slash/crush defence respectively. */
+    case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS:
+    case ITEM_ABYSSAL_DAGGER_BH: {
+        int spec_att = att_roll * 5 / 4;
+        int spec_max = max_hit * 19 / 20;
+        r.spec_cost = 35;
+        r.num_hits = 2;
+        if (encounter_roll_hit_chance(rng_state, spec_att, def_roll)) {
+            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+            r.damage[1] = encounter_rand_int(rng_state, spec_max + 1);
+        }
+        r.total_damage = r.damage[0] + r.damage[1];
+        break;
+    }
+
+    case ITEM_DRAGON_MACE_BH: {
+        int spec_att = att_roll * 5 / 4;
+        int spec_max = max_hit * 3 / 2;
+        r.spec_cost = 15;
+        r.num_hits = 1;
+        if (encounter_roll_hit_chance(rng_state, spec_att, def_roll * 3 / 5))
+            r.damage[0] = encounter_rand_int(rng_state, spec_max + 1);
+        r.total_damage = r.damage[0];
+        break;
+    }
+
 
     case ITEM_ELDER_MAUL: {
         int spec_att = att_roll * 5 / 4;
@@ -449,6 +481,7 @@ static inline void osrs_spec_result_force_max(
         break;
 
     case ITEM_VESTAS:
+    case ITEM_VESTAS_BLIGHTED:
         forced.num_hits = 1;
         forced.damage[0] = max_hit * 6 / 5;
         break;
@@ -472,6 +505,18 @@ static inline void osrs_spec_result_force_max(
         forced.damage[1] = spec_max;
         break;
     }
+    case ITEM_ABYSSAL_DAGGER_BH:
+    case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS:
+        forced.num_hits = 2;
+        forced.damage[0] = max_hit * 19 / 20;
+        forced.damage[1] = max_hit * 19 / 20;
+        break;
+
+    case ITEM_DRAGON_MACE_BH:
+        forced.num_hits = 1;
+        forced.damage[0] = max_hit * 3 / 2;
+        break;
+
 
     case ITEM_ELDER_MAUL:
         forced.num_hits = 1;

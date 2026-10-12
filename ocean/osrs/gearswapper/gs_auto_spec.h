@@ -1071,8 +1071,8 @@ static int gs_spec_horizon(const GsSpecSituation* s, const GsSpecHit* programs, 
 typedef enum { GS_CHOICE_HOLD, GS_CHOICE_VOIDWAKER, GS_CHOICE_MAUL_VOIDWAKER, GS_CHOICE_MAUL, GS_CHOICE_VOIDWAKER_BURST, GS_CHOICE_COUNT } GsChoiceKind;
 static const int GS_CHOICE_TICKETS[GS_CHOICE_COUNT] = {0, 1, 2, 1, 2};
 typedef enum { GS_CAST_NOW, GS_CAST_KEEP } GsCast;
-typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; } GsSpecPlan;
-typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death, held, kept, burst_bar; int through; } GsSpecDecision;
+typedef struct { GsChoiceKind choice; const GsSpecHit* hits; int hit_count; int attack_tick; } GsSpecPlan;
+typedef struct { GsChoiceKind choice; GsCast cast; GsChoiceKind aim; double chance, bar, death, held, kept, burst_bar; int through; int attack_tick; } GsSpecDecision;
 
 enum { GS_TICKET = 50, GS_MOST_TICKETS = 2 };
 /* AutoSpec.CONTINUATION: port the policy values, not its retired calibration input. */
@@ -1094,6 +1094,10 @@ static double gs_spec_value(GsOutcome outcome, int energy, GsChoiceKind choice) 
     int cost = GS_CHOICE_TICKETS[choice];
     if (energy < cost * GS_TICKET) return -INFINITY;
     return outcome.kill + (1 - outcome.kill) * gs_spec_kept(energy, cost);
+}
+
+static int gs_spec_better_timed(double candidate, const GsSpecPlan* plan, double current, const GsSpecPlan* best) {
+    return candidate > current || (candidate == current && plan->attack_tick == 0 && best->attack_tick > 0);
 }
 
 static int spec_plan_done(const GsSpecPlan* plan) {
@@ -1118,6 +1122,9 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
         GsSpecSituation other = gs_spec_flipped(s);
         casts = gs_spec_cast_before_hit(&other);
     }
+    int timed = 0;
+    for (int i = 0; i < plan_count; i++) timed |= plans[i].attack_tick > 0;
+    for (int i = 0; i < after_cast_count; i++) timed |= after_cast[i].attack_tick > 0;
     int through = 0;
 #ifndef GS_HP_BELIEF
     through = gs_spec_horizon(s, NULL, 0);
@@ -1136,7 +1143,10 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
             , through
 #endif
         );
-        if (kept.kill > chosen.kill || (kept.kill == chosen.kill && kept.kill > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
+        if (timed
+                ? gs_spec_better_timed(gs_spec_value(kept, energy, plan->choice) - death_price * kept.death, plan,
+                    gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death, best)
+                : kept.kill > chosen.kill || (kept.kill == chosen.kill && kept.kill > 0 && spec_plan_done(plan) < spec_plan_done(best))) {
             best = plan;
             chosen = kept;
         }
@@ -1149,8 +1159,8 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
             , through
 #endif
         );
-        if (gs_spec_value(burst, energy, plan->choice) - death_price * burst.death
-                > gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death) {
+        if (gs_spec_better_timed(gs_spec_value(burst, energy, plan->choice) - death_price * burst.death, plan,
+                gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death, best)) {
             best = plan;
             chosen = burst;
         }
@@ -1163,10 +1173,10 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
                 , through
 #endif
             );
-            int better = plan->choice == GS_CHOICE_VOIDWAKER_BURST || best->choice == GS_CHOICE_VOIDWAKER_BURST
+            int better = timed || plan->choice == GS_CHOICE_VOIDWAKER_BURST || best->choice == GS_CHOICE_VOIDWAKER_BURST
                 ? energy >= GS_CHOICE_TICKETS[plan->choice] * GS_TICKET
-                    && gs_spec_value(with_cast, energy, plan->choice) - death_price * with_cast.death
-                        > gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death
+                    && gs_spec_better_timed(gs_spec_value(with_cast, energy, plan->choice) - death_price * with_cast.death, plan,
+                        gs_spec_value(chosen, energy, best->choice) - death_price * chosen.death, best)
                 : with_cast.kill > chosen.kill;
             if (better) {
                 best = plan;
@@ -1178,7 +1188,7 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
     double bar = gs_spec_bar(energy, GS_CHOICE_TICKETS[best->choice]);
     double held = gs_spec_held(energy), kept = gs_spec_kept(energy, GS_CHOICE_TICKETS[best->choice]);
     if (chosen.kill < bar || chosen.kill + (1 - chosen.kill) * kept - death_price * chosen.death < held)
-        return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death, held, kept, 0, through};
+        return (GsSpecDecision){GS_CHOICE_HOLD, GS_CAST_KEEP, best->choice, chosen.kill, bar, chosen.death, held, kept, 0, through, best->attack_tick};
     double burst_bar = 0;
     if (best->choice == GS_CHOICE_VOIDWAKER_BURST) {
         GsOutcome first = gs_spec_priced(arena, s, best->hits, 1, standing, cast == GS_CAST_NOW
@@ -1188,7 +1198,7 @@ static GsSpecDecision gs_auto_spec_decide_priced(Arena* arena, const GsSpecSitua
         );
         burst_bar = fmax(0, (held - first.kill) / (1 - first.kill));
     }
-    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death, held, kept, burst_bar, through};
+    return (GsSpecDecision){best->choice, cast, best->choice, chosen.kill, bar, chosen.death, held, kept, burst_bar, through, best->attack_tick};
 }
 
 static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* plans, int plan_count,
@@ -1196,6 +1206,28 @@ static GsSpecDecision gs_auto_spec_decide(Arena* arena, const GsSpecSituation* s
     return gs_auto_spec_decide_priced(arena, s, plans, plan_count, after_cast, after_cast_count, energy, 0);
 }
 
+/* Reprice every fresh plan with the accepted absolute launch identity, including
+ * zero's immediate program. Choice-only or first-match lookup can borrow a wait. */
+static GsSpecDecision gs_spec_commitment(Arena* arena, const GsSpecSituation* s, const GsSpecDecision* accepted,
+    const GsSpecPlan* plans, int plan_count, const GsSpecPlan* after_cast, int after_cast_count, int energy, double death_price) {
+    size_t mark = arena->used;
+    GsSpecPlan* remaining = arena_alloc(arena, (size_t)plan_count * sizeof(GsSpecPlan));
+    GsSpecPlan* cast_remaining = arena_alloc(arena, (size_t)after_cast_count * sizeof(GsSpecPlan));
+    int count = 0, cast_count = 0;
+    for (int i = 0; i < plan_count; i++)
+        if (plans[i].choice == accepted->aim && plans[i].attack_tick == accepted->attack_tick) remaining[count++] = plans[i];
+    if (accepted->cast == GS_CAST_NOW) for (int i = 0; i < after_cast_count; i++)
+        if (after_cast[i].choice == accepted->aim && after_cast[i].attack_tick == accepted->attack_tick) cast_remaining[cast_count++] = after_cast[i];
+    GsSpecDecision result = gs_auto_spec_decide_priced(arena, s, remaining, count, cast_remaining, cast_count, energy, death_price);
+    arena->used = mark;
+    return result;
+}
+
+/* AutoSpec.continueBurst: reprice the fresh feasible standing single against the accepted
+ * reservation's bar, never the fresh standalone last-ticket bar. The actuator owns whether
+ * first-launch/spend confirmation is complete and when a second click is due; this rule
+ * does not authorize a click early or reconstruct a missing single from the old forecast.
+ * Non-belief callers price through gs_spec_horizon(s, single->hits, single->hit_count). */
 static GsSpecDecision gs_spec_continue_burst(Arena* arena, const GsSpecSituation* s, const GsSpecPlan* single,
     double reserved_bar, double death_price, int through) {
 #ifdef GS_HP_BELIEF
@@ -1208,6 +1240,6 @@ static GsSpecDecision gs_spec_continue_burst(Arena* arena, const GsSpecSituation
 #endif
     );
     GsChoiceKind choice = outcome.kill > 0 && outcome.kill - death_price * outcome.death >= reserved_bar ? GS_CHOICE_VOIDWAKER : GS_CHOICE_HOLD;
-    return (GsSpecDecision){choice, GS_CAST_KEEP, GS_CHOICE_VOIDWAKER, outcome.kill, reserved_bar, outcome.death, reserved_bar, 0, 0, through};
+    return (GsSpecDecision){choice, GS_CAST_KEEP, GS_CHOICE_VOIDWAKER, outcome.kill, reserved_bar, outcome.death, reserved_bar, 0, 0, through, single->attack_tick};
 }
 #endif

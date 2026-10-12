@@ -124,6 +124,7 @@ static inline const OsrsItemContentMetadata* osrs_item_content_metadata(
 static inline uint16_t osrs_inventory_content_code_from_raw_osrs_id(
     uint16_t raw_osrs_id
 ) {
+    raw_osrs_id = osrs_item_canonical_raw_id(raw_osrs_id);
     switch (raw_osrs_id) {
         OSRS_ITEM_CONTENT_ROWS(OSRS_RAW_CONTENT_CODE_CASE)
         default:

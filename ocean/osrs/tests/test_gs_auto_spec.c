@@ -1,23 +1,28 @@
-/* Differential test of the C AutoSpec.decide port against the Java oracle.
+/* Differential test of pure C AutoSpec decisions against fresh Java oracle inputs.
+ * PL/AC require choice, absolute attack tick (zero means immediate), then hits;
+ * D requires the selected attack tick after the eight decision fields.
+ * This does not certify native timed producer, strip admission, or actuator parity.
  *
  *   cc -std=c11 -O2 -I. -o /tmp/test_gs_auto_spec ocean/osrs/tests/test_gs_auto_spec.c -lm
- *   /tmp/test_gs_auto_spec [ORACLE.tap]
+ *   /tmp/test_gs_auto_spec FRESH_ORACLE.tap
  *
- * Without an argument it replays the fixture of tests/fixtures, run from the repo root. The oracle is written by AutoSpec.tap during
- * `./gradlew :gear-swapper:fightReplay -Precording=... -Pspectap=FILE` in the Light repo, each decision also at energies 0, 50 and 100. */
+ * The oracle is emitted by :gear-swapper:fightReplay -Precording=... -Pspectap=FILE.
+ * Existing external fixtures must be regenerated, never assigned missing timing. */
 #include <stdio.h>
+#include <ctype.h>
 #include <time.h>
 #include "../gearswapper/gs_auto_spec.h"
 #include "gs_target_oracle.h"
 
-enum { MAX_PLANS = 16, MAX_HITS = 16, POOL = 1 << 20 };
-typedef struct { GsSpecHit hits[MAX_HITS]; int count; GsChoiceKind choice; } Plan;
+enum { MAX_PLANS = 256, MAX_HITS = 16, POOL = 1 << 20 };
+typedef struct { GsSpecHit hits[MAX_HITS]; int count; GsChoiceKind choice; int attack_tick; } Plan;
 typedef struct {
     GsSpecSituation s;
     GsSpecHit underway[MAX_HITS];
     Plan plans[MAX_PLANS]; int plan_count;
     Plan after[MAX_PLANS]; int after_count;
     int energy;
+    int attack_tick;
     GsChoiceKind choice, aim; GsCast cast; double chance, bar, death, held, kept;
 } Record;
 
@@ -97,6 +102,8 @@ static int read_hits(char* p, GsSpecHit* hits) {
         }
         hit->damage = damage;
     }
+    while (isspace((unsigned char)*p)) p++;
+    if (*p) { fputs("Extra or malformed spec hit fields\n", stderr); exit(EXIT_FAILURE); }
     return count;
 }
 
@@ -105,7 +112,7 @@ static int read_record(FILE* f, Record* r) {
     memset(r, 0, sizeof(*r));
     pooled = 0;
     static char line[1 << 16];
-    int started = 0;
+    int started = 0, decision_seen = 0;
     while (fgets(line, sizeof(line), f)) {
         char tag[16];
         int consumed = 0;
@@ -157,19 +164,34 @@ static int read_record(FILE* f, Record* r) {
             Plan* plan = !strcmp(tag, "PL") ? &r->plans[r->plan_count++] : &r->after[r->after_count++];
             char choice[24];
             int n;
-            sscanf(p, "%23s%n", choice, &n);
+            if (sscanf(p, "%23s%n", choice, &n) != 1) { fputs("Missing plan choice\n", stderr); exit(EXIT_FAILURE); }
             plan->choice = choice_of(choice);
-            plan->count = read_hits(p + n, plan->hits);
+            const char* cursor = p + n;
+            plan->attack_tick = gs_target_int(&cursor);
+            if (plan->attack_tick < 0) { fputs("Invalid absolute plan attack tick\n", stderr); exit(EXIT_FAILURE); }
+            plan->count = read_hits((char*)cursor, plan->hits);
             if (plan->choice == GS_CHOICE_VOIDWAKER_BURST &&
                     (plan->count != 2 || plan->hits[1].lands <= plan->hits[0].lands)) {
                 fputs("Voidwaker burst requires two separated hits\n", stderr); exit(EXIT_FAILURE);
             }
         } else if (!strcmp(tag, "D")) {
+            if (!started || decision_seen) { fputs("Unexpected or duplicate spec decision\n", stderr); exit(EXIT_FAILURE); }
+            decision_seen = 1;
             char choice[24], cast[8], aim[24], bar[32];
-            sscanf(p, "%23s %7s %23s %lf %31s %lf %lf %lf", choice, cast, aim, &r->chance, bar, &r->death, &r->held, &r->kept);
+            int n;
+            if (sscanf(p, "%23s %7s %23s %lf %31s %lf %lf %lf%n", choice, cast, aim, &r->chance, bar, &r->death, &r->held, &r->kept, &n) != 8) {
+                fputs("Invalid spec decision fields\n", stderr); exit(EXIT_FAILURE);
+            }
+            const char* cursor = p + n;
+            r->attack_tick = gs_target_int(&cursor);
+            while (isspace((unsigned char)*cursor)) cursor++;
+            if (*cursor || r->attack_tick < 0 || (strcmp(cast, "NOW") && strcmp(cast, "KEEP"))) {
+                fputs("Invalid required decision timing or cast\n", stderr); exit(EXIT_FAILURE);
+            }
             r->choice = choice_of(choice); r->aim = choice_of(aim); r->cast = !strcmp(cast, "NOW") ? GS_CAST_NOW : GS_CAST_KEEP;
             r->bar = strtod(bar, NULL);
         } else if (!strcmp(tag, "END")) {
+            if (!started || !decision_seen) { fputs("Spec record missing required decision\n", stderr); exit(EXIT_FAILURE); }
             gs_target_validate(&s->target);
             return 1;
         } else if (!strcmp(tag, "RECORDING")) {
@@ -398,6 +420,48 @@ static void burst_contract(void) {
     assert(isinf(gs_spec_bar(99, GS_CHOICE_TICKETS[GS_CHOICE_VOIDWAKER_BURST])));
     free(arena.base);
 }
+
+static void timed_contract(void) {
+    Arena arena = arena_make((size_t)1 << 27);
+    GsSpecSituation s = {0};
+    s.tick = 100; s.warning.since = GS_NONE; s.hard_food_ready = 200;
+    s.pid = GS_PID_LOCAL; s.vengeance = GS_VENGEANCE_DOWN; s.rebound.kind = GS_REBOUND_SPENT;
+    s.hitpoints = (GsHealthRange){40, 40, 99}; s.local = gs_health_of(99);
+    double support[41] = {0}; support[40] = 1;
+    GsTargetBranch history = {{200, 200, 200}, support, 41};
+    s.target = (GsTarget){.has_history = 1, .base_hp = 99, .history = &history, .history_count = 1};
+    GsSpecHit single_hit = gs_spec_hit_of(&arena, 105, 40, 40, 0.5);
+    GsSpecHit combo_hits[] = {gs_spec_hit_of(&arena, 105, 40, 40, 0.6), gs_spec_hit_of(&arena, 106, 0, 0, 1)};
+    GsSpecPlan options[] = {{GS_CHOICE_MAUL_VOIDWAKER, combo_hits, 2, 104}, {GS_CHOICE_VOIDWAKER, &single_hit, 1, 104}};
+    GsSpecDecision d = gs_auto_spec_decide(&arena, &s, options, 2, NULL, 0, 100);
+    assert(d.choice == GS_CHOICE_VOIDWAKER);
+    GsSpecHit good = gs_spec_hit_of(&arena, 105, 40, 40, 0.8);
+    GsSpecHit better = gs_spec_hit_of(&arena, 105, 40, 40, 0.81);
+    GsSpecHit zero = gs_spec_hit_of(&arena, 105, 0, 0, 1);
+    options[0] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, &good, 1, 104};
+    options[1] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, &good, 1, 0};
+    d = gs_auto_spec_decide(&arena, &s, options, 2, NULL, 0, 100);
+    assert(d.choice == GS_CHOICE_VOIDWAKER && d.attack_tick == 0);
+    options[0].attack_tick = 0; options[1].attack_tick = 104;
+    d = gs_auto_spec_decide(&arena, &s, options, 2, NULL, 0, 100);
+    assert(d.attack_tick == 0);
+    options[1].hits = &better;
+    d = gs_auto_spec_decide(&arena, &s, options, 2, NULL, 0, 100);
+    assert(d.attack_tick == 104);
+    for (int mode = 0; mode < 2; mode++) {
+        int accepted_tick = mode ? 104 : 0;
+        GsSpecPlan original = {GS_CHOICE_VOIDWAKER, &good, 1, accepted_tick};
+        GsSpecDecision accepted = gs_auto_spec_decide(&arena, &s, &original, 1, NULL, 0, 100);
+        options[0] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, &good, 1, mode ? 103 : 104};
+        options[1] = (GsSpecPlan){GS_CHOICE_VOIDWAKER, &zero, 1, accepted_tick};
+        d = gs_spec_commitment(&arena, &s, &accepted, options, 2, NULL, 0, 100, 1);
+        assert(d.choice == GS_CHOICE_HOLD);
+        options[0] = options[1]; options[1] = original;
+        d = gs_spec_commitment(&arena, &s, &accepted, options, 2, NULL, 0, 100, 1);
+        assert(d.choice == GS_CHOICE_VOIDWAKER && d.attack_tick == accepted_tick);
+    }
+    free(arena.base);
+}
 #endif
 
 static void continuation_contract(void) {
@@ -421,6 +485,7 @@ int main(int argc, char** argv) {
 #ifndef GS_HP_BELIEF
     target_contract();
     burst_contract();
+    timed_contract();
 #endif
     if (argc == 2 && !strcmp(argv[1], "--contract-only")) {
         puts("AutoSpec incoming echo contract verified");
@@ -435,8 +500,8 @@ int main(int argc, char** argv) {
     double seconds = 0;
     while (read_record(f, &record)) {
         GsSpecPlan plans[MAX_PLANS], after[MAX_PLANS];
-        for (int i = 0; i < record.plan_count; i++) plans[i] = (GsSpecPlan){record.plans[i].choice, record.plans[i].hits, record.plans[i].count};
-        for (int i = 0; i < record.after_count; i++) after[i] = (GsSpecPlan){record.after[i].choice, record.after[i].hits, record.after[i].count};
+        for (int i = 0; i < record.plan_count; i++) plans[i] = (GsSpecPlan){record.plans[i].choice, record.plans[i].hits, record.plans[i].count, record.plans[i].attack_tick};
+        for (int i = 0; i < record.after_count; i++) after[i] = (GsSpecPlan){record.after[i].choice, record.after[i].hits, record.after[i].count, record.after[i].attack_tick};
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         arena.used = 0;
@@ -444,14 +509,14 @@ int main(int argc, char** argv) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         seconds += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
         total++;
-        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.chance == record.chance && d.bar == record.bar && d.death == record.death && d.held == record.held && d.kept == record.kept;
+        int ok = d.choice == record.choice && d.cast == record.cast && d.aim == record.aim && d.attack_tick == record.attack_tick && d.chance == record.chance && d.bar == record.bar && d.death == record.death && d.held == record.held && d.kept == record.kept;
         matched += ok;
         choices[record.choice]++;
         casts += record.cast == GS_CAST_NOW;
         if (!ok && shown++ < 8)
-            printf("MISMATCH call %ld tick %d energy %d: java %d/%d aim %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g | c %d/%d aim %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g\n", total, record.s.tick, record.energy,
-                record.choice, record.cast, record.aim, record.chance, record.bar, record.death, record.held, record.kept,
-                d.choice, d.cast, d.aim, d.chance, d.bar, d.death, d.held, d.kept);
+            printf("MISMATCH call %ld tick %d energy %d: java %d/%d aim %d attack %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g | c %d/%d aim %d attack %d chance %.17g bar %.17g death %.17g held %.17g kept %.17g\n", total, record.s.tick, record.energy,
+                record.choice, record.cast, record.aim, record.attack_tick, record.chance, record.bar, record.death, record.held, record.kept,
+                d.choice, d.cast, d.aim, d.attack_tick, d.chance, d.bar, d.death, d.held, d.kept);
     }
     if (!total) { fputs("Spec oracle contains no decisions\n", stderr); exit(EXIT_FAILURE); }
     printf("%ld calls, %ld bit-exact (%.3f%%); outcomes hold %ld voidwaker %ld maul+voidwaker %ld maul %ld voidwaker-burst %ld, casts now %ld; C time %.3f s\n", total, matched,

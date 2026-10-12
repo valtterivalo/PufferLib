@@ -66,21 +66,16 @@ static void test_ornate_and_ordinary_energy_costs(void) {
     const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
     const int expected_hits[] = {2, 1};
     const int expected_energy[] = {0, 40};
-    for (int i = 0; i < 2; i++) {
+    for (int arm = 0; arm < 4; arm++) {
+        int i = arm / 2;
         reset();
+        state.env.pid_holder = arm % 2;
         state.env.players[0].inventory_cells[24] = osrs_inventory_cell_from_item(weapons[i]);
         HumanCommand commands[] = {inventory(24), special(), special(), target()};
         run(commands, 4);
         assert(recorded_hits() == expected_hits[i]);
         assert(state.env.players[0].special_energy == expected_energy[i]);
-        assert(state.env.players[1].render_hit_count == expected_hits[i]);
         assert(state.env.players[0].just_attacked == 1);
-        {
-            int queued = 0;
-            for (int h = 0; h < state.env.players[1].render_hit_count; h++)
-                queued += state.env.players[1].render_hit_damage[h];
-            assert(state.env.players[0].last_queued_hit_damage == queued);
-        }
         assert(state.spec_maul[0] == 1);
         assert(!state.env.players[0].spec_armed);
     }

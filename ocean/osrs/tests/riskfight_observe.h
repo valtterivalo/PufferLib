@@ -9,7 +9,7 @@
  * client shows it: animations with the priority that hides a meal or a cast, hitsplats, his health bar updated by hits and gone ten
  * ticks after the last, the visible gear without ring and ammunition. The events feed the ported plugin handlers. */
 enum { BAR_VISIBLE_TICKS = 9, ANIM_BLOCK = 424, ANIM_EAT_ID = 829, ANIM_CAST_ID = 8317, ANIM_VW_SPEC_ID = 11275, ANIM_MAUL_SPEC_ID = 1667,
-    SCALE_BAR = 30, HITSPLAT_DAMAGE = 16, HITSPLAT_BLOCK = 12, WORN_INDEX_COUNT = GS_WORN_SLOTS, MAX_HOLDINGS = 64 };
+    SCALE_BAR = 30, HITSPLAT_DAMAGE = 16, HITSPLAT_BLOCK = 12, HITSPLAT_POISON = 65, WORN_INDEX_COUNT = GS_WORN_SLOTS, MAX_HOLDINGS = 64 };
 
 typedef struct { Observer seed; } ObserverSeed;
 
@@ -215,7 +215,10 @@ static void observer_step(const RiskfightState* s, Observer* ob, int tick) {
     for (int i = 0; i < ob->hit_count; i++) {
         const ObservedHit* h = &ob->hits[i];
         observer_event(s, ob, tick);
-        gs_on_hitsplat(inf, tick, h->target, h->damage, h->damage > 0 ? HITSPLAT_DAMAGE : HITSPLAT_BLOCK, 1, h->damage > 0);
+        int type = h->kind == OSRS_HIT_POISON ? HITSPLAT_POISON :
+            h->damage > 0 ? HITSPLAT_DAMAGE : HITSPLAT_BLOCK;
+        gs_on_hitsplat(inf, tick, h->target, h->damage, type,
+            h->kind != OSRS_HIT_POISON, h->damage > 0);
         if (h->target == 1) {
             ob->bar_hit_tick = tick;
             ob->bar_ratio = osrs_health_bar_ratio(s->env.players[1].current_hitpoints, s->env.players[1].base_hitpoints, SCALE_BAR);

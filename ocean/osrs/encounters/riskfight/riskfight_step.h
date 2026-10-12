@@ -1,6 +1,7 @@
 #ifndef OSRS_RISKFIGHT_STEP_H
 #define OSRS_RISKFIGHT_STEP_H
 #include "riskfight_policy.h"
+#include "../../osrs_poison.h"
 
 static void riskfight_stop(RiskfightState* s, int agent) {
     Player* p = &s->env.players[agent];
@@ -44,6 +45,14 @@ static void riskfight_attack(RiskfightState* s, RiskfightContext* ctx, int agent
         s->escaped[agent] || s->escaped[1 - agent] ||
         !in_range || !can_attack_now(p) ||
         s->env.pvp_runtime.maul[agent].last_special_tick == s->env.tick) return;
+    /* Melee delay is zero, but the second actor lands next tick because its
+     * recipient's incoming phase has already run. Immunity ticks before inputs. */
+    if (weapon == ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS &&
+        s->poison[1 - agent].immunity_ticks <= (agent != s->env.pid_holder)) {
+        fprintf(stderr, "unverified weapon-poison application tick=%d attacker=%d defender=%d\n",
+            s->env.tick, agent, 1 - agent);
+        abort();
+    }
     if (special && weapon == ITEM_VOIDWAKER) s->spec_voidwaker[agent]++;
     perform_attack(&s->env, agent, 1 - agent, style, special, 0, distance);
     riskfight_record_attack(s, agent, 1, 0);
@@ -60,10 +69,12 @@ static int riskfight_encode_offensive_prayer(int offensive) {
     }
 }
 
-static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
+/* Return whether this command actually consumed food or a potion, not a
+ * debug-kind counter delta (which does not cover every inventory consumable). */
+static int riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
     int agent, const HumanCommand* command) {
     Player* p = &s->env.players[agent];
-    if (p->current_hitpoints <= 0 || s->escaped[agent]) return;
+    if (p->current_hitpoints <= 0 || s->escaped[agent]) return 0;
     switch (command->kind) {
         case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK:
         case HUMAN_COMMAND_EAT:
@@ -80,14 +91,14 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
                     }
                 if (slot < 0 && command->kind == HUMAN_COMMAND_EQUIP_INVENTORY_ITEM) {
                     for (int i = 0; i < NUM_GEAR_SLOTS; i++)
-                        if (ITEM_DATABASE[p->equipped[i]].item_id == command->item_osrs_id) return;
+                        if (ITEM_DATABASE[p->equipped[i]].item_id == command->item_osrs_id) return 0;
                 }
                 if (slot < 0) {
                     fprintf(stderr, "production command item unavailable: %d\n", command->item_osrs_id);
                     abort();
                 }
             }
-            if (slot < 0 || slot >= OSRS_INVENTORY_SIZE) return;
+            if (slot < 0 || slot >= OSRS_INVENTORY_SIZE) return 0;
             OsrsConsumableKind pre_kind = OSRS_CONSUMABLE_NONE;
             OsrsClickAction pre_click = OSRS_CLICK_NONE;
             {
@@ -111,7 +122,11 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             if (use_result == OSRS_INVENTORY_USE_CONSUMED) {
                 switch (pre_kind) {
                     case OSRS_CONSUMABLE_BREW: s->drink_brew[agent]++; break;
-                    case OSRS_CONSUMABLE_SANFEW: s->drink_sanfew[agent]++; break;
+                    case OSRS_CONSUMABLE_SANFEW:
+                        s->drink_sanfew[agent]++;
+                        osrs_poison_cure(&s->poison[agent], OSRS_SANFEW_IMMUNITY_TICKS);
+                        if (agent == 0) s->poison_source[agent] = OSRS_POISON_CAUSAL_STATE;
+                        break;
                     case OSRS_CONSUMABLE_SUPER_COMBAT:
                     case OSRS_CONSUMABLE_DIVINE_COMBAT: s->drink_combat[agent]++; break;
                     case OSRS_CONSUMABLE_MARLIN: s->eat_marlin[agent]++; break;
@@ -122,7 +137,8 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
             }
             pvp_maul_weapon_changed(&s->env, agent, old_weapon);
             pvp_refresh_visible_gear(p);
-            break;
+            return use_result == OSRS_INVENTORY_USE_CONSUMED &&
+                (pre_click == OSRS_CLICK_EAT || pre_click == OSRS_CLICK_DRINK);
         }
         case HUMAN_COMMAND_UNEQUIP: {
             int old_weapon = p->equipped[GEAR_SLOT_WEAPON];
@@ -187,6 +203,7 @@ static void riskfight_execute_command(RiskfightState* s, RiskfightContext* ctx,
         case HUMAN_COMMAND_SPELL_ON_WIDGET:
             break;
     }
+    return 0;
 }
 
 static void riskfight_policy_commands(const RiskfightState* s, int agent,
@@ -243,11 +260,6 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     }
 }
 
-static int riskfight_consumed_units(const RiskfightState* s, int agent) {
-    return s->drink_brew[agent] + s->drink_sanfew[agent] + s->drink_combat[agent] +
-        s->eat_marlin[agent] + s->eat_halibut[agent] + s->eat_pie[agent];
-}
-
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     int escaped = s->escaped[0] || s->escaped[1];
@@ -289,6 +301,20 @@ static void riskfight_observe_attack_chance(void* context, const OsrsPvpAttackCh
     if (observer->next) observer->next(observer->next_context, event);
 }
 
+static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
+    int agent, const HumanCommandQueue* queue) {
+    if (s->env.players[agent].current_hitpoints <= 0 || s->escaped[agent]) return;
+    int consumed = 0;
+    for (int n = 0; n < queue->count; n++)
+        consumed |= riskfight_execute_command(s, ctx, agent, &queue->items[n]);
+    s->consume_ticks[agent] += consumed;
+    if (!s->escaped[0] && !s->escaped[1] && s->env.players[agent].current_hitpoints > 0) {
+        int maul_hits = pvp_maul_finish_inputs(&s->env, agent);
+        riskfight_count_maul_spec(s, agent, maul_hits);
+        riskfight_record_attack(s, agent, maul_hits, 1);
+    }
+}
+
 static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     const HumanCommandQueue* first, const HumanCommandQueue* second) {
     assert(!s->env.episode_over);
@@ -318,32 +344,43 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         p->render_hit_count = 0;
         p->hit_landed_this_tick = 0;
         update_player_timers(p, encounter_player_prayer_bonus(p));
+        osrs_poison_tick_immunity(&s->poison[i]);
     }
+    /* Recorded local-PID t206 cast precedes the previous-tick opponent normal
+     * landing (automated recording seq37192,37252-37270). The first actor's
+     * inputs therefore precede its incoming phase; the second actor receives
+     * first-actor zero-delay melee before its own inputs. */
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
-        const HumanCommandQueue* queue = queues[i];
-        int consumed = riskfight_consumed_units(s, i);
-        for (int n = 0; n < queue->count; n++)
-            riskfight_execute_command(s, ctx, i, &queue->items[n]);
-        s->consume_ticks[i] += riskfight_consumed_units(s, i) != consumed;
-        if (!s->escaped[0] && !s->escaped[1]) {
-            int maul_hits = pvp_maul_finish_inputs(&s->env, i);
-            riskfight_count_maul_spec(s, i, maul_hits);
-            riskfight_record_attack(s, i, maul_hits, 1);
-        }
-    }
-    for (int turn = 0; turn < 2; turn++) {
-        int i = s->env.pid_holder ^ turn;
+        if (turn == 0) riskfight_actor_inputs(s, ctx, i, queues[i]);
         if (s->escaped[i]) {
             s->env.players[1 - i].num_pending_hits = 0;
             memset(s->env.pending_hit_metadata[1 - i], 0, sizeof(s->env.pending_hit_metadata[1 - i]));
         } else {
             int active = s->env.players[i].veng_active;
+            int poison_damage = osrs_poison_tick(&s->poison[i]);
+            if (poison_damage > 0 && s->env.players[i].current_hitpoints > 0) {
+                Player* target = &s->env.players[i];
+                int before = target->current_hitpoints;
+                PendingHit poison_hit = {.damage = poison_damage, .kind = OSRS_HIT_POISON};
+                target->current_hitpoints = max_int(0, before - poison_damage);
+                target->hit_landed_this_tick = 1;
+                target->hit_damage += poison_damage;
+                target->damage_applied_this_tick += poison_damage;
+                pvp_render_hit_events_add(target, poison_damage);
+                float scale = (float)poison_damage / target->base_hitpoints;
+                target->total_damage_received += scale;
+                target->damage_received_scale += scale;
+                /* Initial status has no observed attacker identity. A self-source
+                 * status event does not invent opponent credit or direct reward. */
+                pvp_observe_hit(&s->env, i, i, &poison_hit, poison_damage, before);
+            }
             pvp_process_incoming_hits(&s->env, i);
             if (active && !s->env.players[i].veng_active)
                 s->inventory_use[i].vengeance_consumed_tick = s->env.tick;
         }
         if (s->env.players[i].current_hitpoints <= 0) continue;
+        if (turn == 1) riskfight_actor_inputs(s, ctx, i, queues[i]);
         pvp_step_player_movement(&s->env, i, ctx->route_topology, &ctx->routes[i]);
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);
