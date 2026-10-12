@@ -129,10 +129,6 @@ static void eval_plan(int argc, char** argv) {
     if (q->attack_history != RISKFIGHT_ATTACK_OBSERVED || q->attack_clock_low != q->attack_clock_high) eval_fail("exact observed local clock required");
     if (la_gear_status(q->belief.gear).status != LA_GEAR_SUPPORTED) eval_fail("unsupported opponent gear");
     if (q->him <= 0 || q->us <= 0) eval_fail("positive stakes required");
-    for (int i = 0; i < TAPE_WORN; i++)
-        if (q->worn[i] >= 0 && canonical(q->worn[i]) == INERT_ID) eval_fail("unsupported local worn item");
-    for (int i = 0; i < TAPE_BAG; i++)
-        if (q->bag[i] >= 0 && canonical(q->bag[i]) == INERT_ID) eval_fail("unsupported local inventory item");
     Sim* base = eval_alloc(sizeof(*base)); Sim* work = eval_alloc(sizeof(*work)); sim_init(base); sim_init(work);
     RiskfightSnapshot snap; snapshot_of(q, &snap); riskfight_load_state(&base->state, &base->context, &snap);
     Hist hist = eval_request_hist(q); LaScript scripts[LA_MACROS]; int feasible[LA_MACROS], alive[LA_MACROS];
@@ -146,8 +142,8 @@ static void eval_plan(int argc, char** argv) {
         q->us, q->him, (double)q->him / q->us, g_la_worth_scale);
     printf("evaluation_scope\t%s\n", !strcmp(argv[7], "heldout") ?
         "heldout_profiles_separate_from_training_selection" : "training_diagnostic_not_heldout_regret");
-    printf("candidate_contract\tmacros=%d\tvisible_alignment_windows=%d\tpause_admitted=%d\tpid=%d\tcontinuation=live_only\tglobal_optimality=not_claimed\n",
-        LA_MACROS, q->feasible.incoming_count, q->feasible.pause_ok, q->feasible.pid);
+    printf("candidate_contract\tmacros=%d\tburst_admitted=%d\tvisible_alignment_windows=%d\tpause_admitted=%d\tpid=%d\tcontinuation=live_only\tglobal_optimality=not_claimed\n",
+        LA_MACROS, g_la_burst, q->feasible.incoming_count, q->feasible.pause_ok, q->feasible.pid);
     for (int m = 0; m < LA_MACROS; m++) if (feasible[m]) {
         printf("candidate\t%s", LA_NAME[m]);
         for (int i = 0; i < scripts[m].n; i++)

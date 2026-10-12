@@ -1835,6 +1835,7 @@ static void la_dump_request(FILE* out, const Sim* sim, const LaBelief* b, int ti
     fprintf(out, "B %d %d %d %d %d %d %.17g %d %d %d %d %d %d %d %d\n", b->hp_low, b->hp_high, b->energy_low, b->energy_high, b->vengeance, b->pid, b->flip, b->timer_seen,
         b->timer_first, b->timer_last, b->food_ready, b->seen_since_eat, b->seen_vw, b->seen_maul, b->bar_ratio);
     fprintf(out, "K %ld %ld\nF %d %d %d %d\n", stakes.him, stakes.us, f->spec_ok, f->eat_ok, f->veng_ok, f->energy);
+    fprintf(out, "RA %s\n", f->pause_ok ? "OFF_PRIOR" : "UNKNOWN");
     int overhead = us->prayer == PRAYER_SMITE ? 1 : us->prayer == PRAYER_PROTECT_MELEE ? 2 : us->prayer == PRAYER_PROTECT_RANGED ? 3 : us->prayer == PRAYER_PROTECT_MAGIC ? 4 : us->prayer == PRAYER_REDEMPTION ? 5 : 0;
     const RiskfightVisibleOpponent* seen = &sim->state.visible[0];
     int his_raw = b->gear.source != GS_GEAR_UNKNOWN ? b->gear.weapon : raw_of_item(him->equipped[GEAR_SLOT_WEAPON]);
@@ -2346,6 +2347,7 @@ static void calibration(Tape* tapes, int count) {
     double pt_n[HP_BANDS] = {0}, pt_obs_eat[HP_BANDS] = {0}, pt_pred_eat[HP_BANDS] = {0}, pt_obs_kill[HP_BANDS] = {0}, pt_pred_kill[HP_BANDS] = {0}, pt_pred_hold[HP_BANDS] = {0};
     double lag_n[LAGS] = {0}, lag_obs_eat[LAGS] = {0}, lag_pred_eat[LAGS] = {0};
     double un_n[5] = {0}, un_excess[5] = {0}, un_above[5] = {0};
+    double fb_n[2][2] = {{0}}, fb_above[2][2] = {{0}}, fb_excess[2][2] = {{0}}, fb_low[2][2] = {{0}};
     double rev_n[2] = {0}, rev_above[2] = {0}, rev_below[2] = {0}, rev_excess[2] = {0};
     double quiet_points = 0, quiet_kills = 0, quiet_pred_kill = 0, quiet_pred_weight = 0, busy_pred_kill = 0, busy_pred_weight = 0;
     Sim* sim = malloc(sizeof(Sim));
@@ -2368,6 +2370,10 @@ static void calibration(Tape* tapes, int count) {
             int lag = t - now->last_bar_hit;
             int bin = lag <= 3 ? 0 : lag <= 6 ? 1 : lag <= 9 ? 2 : 3;
             { int u = imin(4, series[t - tape->lo].inf.unseen_count); un_n[u]++; un_excess[u] += ((low + high) / 2.0) - (belief.low + belief.high) / 2.0; un_above[u] += low > belief.high; }
+            {
+                int full = now->bar_ratio == now->bar_scale, reveal_full = after->bar_ratio == after->bar_scale;
+                fb_n[full][reveal_full]++; fb_above[full][reveal_full] += low > belief.high; fb_excess[full][reveal_full] += (low + high) / 2.0 - (belief.low + belief.high) / 2.0; fb_low[full][reveal_full] += low;
+            }
             band_n[bin]++;
             band_above[bin] += low > belief.high;
             band_below[bin] += high < belief.low;
@@ -2455,6 +2461,8 @@ static void calibration(Tape* tapes, int count) {
     for (int b = 0; b < LAGS; b++)
         if (band_n[b]) printf("  %-24s %6.0f ticks  band width %5.1f  truth above band %.3f  below %.3f  mean excess over band mid %+.1f hp\n", LAG_NAME[b], band_n[b], band_width[b] / band_n[b], band_above[b] / band_n[b], band_below[b] / band_n[b], band_excess[b] / band_n[b]);
     for (int u = 0; u < 5; u++) if (un_n[u]) printf("  by unseen-meal opportunities %d%s: %6.0f ticks, truth above band %.3f, mean excess %+.1f hp\n", u, u == 4 ? "+" : "", un_n[u], un_above[u] / un_n[u], un_excess[u] / un_n[u]);
+    for (int f = 0; f < 2; f++) for (int r = 0; r < 2; r++)
+        if (fb_n[f][r]) printf("  bar at tick %s, at next reveal %s: %6.0f ticks, truth above band %.3f, mean excess %+.1f hp, mean reveal low %.1f\n", f ? "FULL" : "not full", r ? "FULL" : "not full", fb_n[f][r], fb_above[f][r] / fb_n[f][r], fb_excess[f][r] / fb_n[f][r], fb_low[f][r] / fb_n[f][r]);
     printf("eat in the %d ticks after a recorded spec click (visible eat animation), recorded against the worlds; kill within %d ticks\n", WINDOW, g_la_horizon);
     double tn = 0, to = 0, tp = 0, ko = 0, kp = 0, kh = 0;
     for (int b = 0; b < HP_BANDS; b++) {

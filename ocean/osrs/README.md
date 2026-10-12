@@ -110,12 +110,12 @@ wire `K` is opponent then local; `GsStakes` is initialized by named fields.
 The final sealed 169-input candidate completed 2,880 bounded experiments:
 76,677,120 evaluation outcomes plus 9,584,640 selector rollouts, two seeds,
 separate trained/held-out opponent profiles, exact/uncertain PID, three stakes
-ratios, 18 macro labels and a 15-tick horizon. The selector used 512 worlds;
-the production server retains its existing 64-world default.
-Held-out mean empirical regret was 0–0.000426 local-stake units against the
-best independently measured admitted macro. Individual cases still reversed
-rankings, including a measured 0.0400 gap. These are conditional model estimates,
-not rigorous small-regret bounds or a live production improvement claim.
+ratios, 18 macro labels and a 15-tick horizon. The winning recording audit found
+that eligible two-ticket bursts were disabled by default in these experiments
+and the advisory server. The historical held-out mean empirical regret
+(0–0.000426 local-stake units, with individual ranking reversals up to 0.0400)
+therefore covers a restricted candidate set, not two-ticket burst optimality.
+The selector used 512 worlds; production retains its 64-world default.
 The baseline was an explicit synthetic plan, continuation scale zero and
 auto-retaliate OFF a declared prior; no uncaptured Java baseline was invented.
 Final recording inference matched all 622 automated and 240 manual ticks;
@@ -126,6 +126,27 @@ The retained 52 legacy tapes have 8,117 unknown-clock frames and zero exact
 clock frames. Their calibration run also rejects an unfitted ready-swing hazard
 (`hazard 2 ... sits at its default`). These exports cannot certify snapshot
 replay or that fitted hazard; fresh causal observer exports are required.
+
+The winning `20261012T095332.861Z` recording exposed and corrected default burst
+admission. The default producer regression now executes both tickets at legal
+cooldowns without first enabling bursts inside the test. `GS_LA_BURST=0` remains
+an explicit calibration ablation. The standalone evaluator uses the owning
+`request_unavailable` validation: a known vial stays an occupied inert slot,
+while unsupported items and unknown pending damage or production plans remain
+unavailable. Usable Dharok axe variants 4886–4889 retain the full-set low-HP
+damage effect; broken 4890 remains unsupported.
+
+Five exact original live requests (ticks 617, 618, 685, 737 and 753) were compared
+with 8,192 held-out damage worlds and 512 selector worlds per request over
+15 ticks. Selection uses 36 training profiles and evaluation uses 8 held-out
+profiles mined from spectator archives, not the advisory server's `MODEL_FIT`
+or a fit to this particular opponent. Three evaluation seeds agreed at tick 618;
+they vary damage worlds, not the tick-derived motor schedule. No subsequent
+Java replanning is simulated, so these are not complete live-fight probabilities.
+The tick-756 original frame is
+not suitable for a kill counterfactual: it declared `P KNOWN 0` between the local
+Vengeance proc and the 39+6 return hits. The Java producer now marks that
+unresolved outgoing echo unavailable until a fresh observation settles its bound.
 
 Exported tapes use one `Q <tick> <source>` row per tick: 0 is unavailable,
 1 is explicitly empty synthetic state, and 2 is causal observer provenance.

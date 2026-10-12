@@ -196,8 +196,6 @@ static void test_shared_click_timing(void) {
 }
 
 static void test_conditional_two_ticket_plan(void) {
-    int saved_burst = g_la_burst;
-    g_la_burst = 1;
     for (int timer = 0; timer <= 7; timer += 7) {
         reset_plan_state();
         Player* us = &sim.state.env.players[0];
@@ -235,7 +233,6 @@ static void test_conditional_two_ticket_plan(void) {
         assert(cooldown > 0 && second - first >= cooldown);
         assert(sim.state.spec_voidwaker[0] == 2);
     }
-    g_la_burst = saved_burst;
 }
 
 static void test_strict_hp_equality(void) {

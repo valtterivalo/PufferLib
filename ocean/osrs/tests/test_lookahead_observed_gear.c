@@ -285,6 +285,25 @@ int main(void) {
     rng = 12345;
     la_world(&sim.state, &history, &canonical, 895, &rng, &worlds[1], &h);
     CHECK("equivalent aliases produce identical physical worlds", la_fingerprint(&worlds[0]) == la_fingerprint(&worlds[1]));
+    LaBelief dharok = belief;
+    dharok.hp_low = dharok.hp_high = 30;
+    dharok.gear = (GsObservedGear){GS_GEAR_COMPOSITION_OBSERVED, 4718, -1,
+        {4880, 24224, 1725, 4892, 4898, 7462, 11840}};
+    int axe_max = -1;
+    const int axes[] = {4718, 4886, 4887, 4888, 4889};
+    for (size_t i = 0; i < sizeof(axes) / sizeof(axes[0]); i++) {
+        dharok.gear.weapon = axes[i];
+        CHECK("usable degraded Dharok axes admit observed full-set mechanics", la_gear_status(dharok.gear).status == LA_GEAR_SUPPORTED);
+        rng = 12345;
+        la_world(&sim.state, &history, &dharok, 895, &rng, &worlds[0], &h);
+        actual = &worlds[0].env.players[1];
+        int max_hit = calculate_max_hit(actual, ATTACK_STYLE_MELEE, 1.0f, 30);
+        CHECK("recorded full set increases low-health axe damage", max_hit > calculate_base_max_hit(actual, ATTACK_STYLE_MELEE, 1.0f, 30));
+        if (i == 0) axe_max = max_hit;
+        else CHECK("degradation preserves the full-set attack damage ceiling", max_hit == axe_max);
+    }
+    dharok.gear.weapon = 4890;
+    CHECK("broken Dharok axe cannot be forecast as usable gear", la_gear_status(dharok.gear).status == LA_GEAR_WEAPON_UNSUPPORTED);
     dumped = tmpfile();
     assert(dumped);
     la_dump_request(dumped, &sim, &aliases, 895, &(LaFeasible){.pause_ok = 1}, (GsStakes){1, 1}, &(LaScript){0});

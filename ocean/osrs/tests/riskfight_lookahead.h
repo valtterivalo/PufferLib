@@ -460,7 +460,7 @@ static LaOutcome la_rollout(Sim* work, const RiskfightState* world, const Hist* 
 }
 
 static double g_la_worth_scale = 1, g_la_w[GS_MOST_TICKETS + 1];
-static int g_la_worth_mode = 1, g_la_burst;
+static int g_la_worth_mode = 1, g_la_burst = 1;
 static double la_tickets_worth(int energy) { return g_la_worth_scale * g_la_w[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
 
 static double la_press_cost(uint32_t* rng, int first) {
