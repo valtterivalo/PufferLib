@@ -122,6 +122,10 @@ Final recording inference matched all 622 automated and 240 manual ticks;
 causal Java planner availability and unresolved recoil still remain unavailable.
 The 30,000,000-step seeded clone/replay run completed 278,848 episodes with
 consumer hash `730b37f0135dbb1c`. Repeated source epochs are not independent data.
+The retained 52 legacy tapes have 8,117 unknown-clock frames and zero exact
+clock frames. Their calibration run also rejects an unfitted ready-swing hazard
+(`hazard 2 ... sits at its default`). These exports cannot certify snapshot
+replay or that fitted hazard; fresh causal observer exports are required.
 
 Exported tapes use one `Q <tick> <source>` row per tick: 0 is unavailable,
 1 is explicitly empty synthetic state, and 2 is causal observer provenance.
