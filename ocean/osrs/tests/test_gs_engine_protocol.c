@@ -249,6 +249,50 @@ static void test_gear_priors(void) {
     compose(text, sizeof(text), "SHIELD UNKNOWN\nARMOR UNKNOWN\nPS 0 KNOWN 0 0 0\nPS 1 CLEAR_PRIOR\nRA OBSERVED 1\nP KNOWN 0\nR KNOWN 0\nEND\n");
 }
 
+/* Own-side observations the plugin cannot complete are declared priors named in the response, never UNAVAILABLE and never silent. */
+static void test_declared_priors(void) {
+    static char text[1 << 13], tail[1 << 12];
+    const char* base = WARM_REQUESTS[0];
+    const char* cut = strstr(base, "P KNOWN");
+    const char* timer = strstr(base, " 22 0 3 0 ");
+    const char* clock = strstr(base, "OBSERVED 3 3\n");
+    CHECK(cut && timer && clock && timer < clock && clock < cut);
+    static char head[1 << 13];
+    int n = snprintf(head, sizeof(head), "%.*s 22 0 -1 0 %.*sUNKNOWN 0 0\n%.*s", (int)(timer - base), base, (int)(clock - timer - 10), timer + 10,
+        (int)(cut - clock - 13), clock + 13);
+    CHECK(n > 0 && (size_t)n < sizeof(head));
+    CHECK(strstr(head, "UNKNOWN 0 0\n") && !strstr(head, "OBSERVED 3 3"));
+    static Request q;
+    snprintf(text, sizeof(text), "%sP UNKNOWN\nR KNOWN 0\nEND\n", head);
+    parse_text(text, &q);
+    CHECK(!q.pending_known && !strcmp(server_unavailable(&q), "pending_unknown")); /* undeclared, the request stays unavailable */
+    request_declare_priors(&q);
+    CHECK(q.assumed == (GS_ASSUME_PENDING_EMPTY | GS_ASSUME_OWN_ATTACK_READY));
+    CHECK(server_unavailable(&q) == NULL && q.pending_known && q.pending_count[0] == 0 && q.pending_count[1] == 0);
+    CHECK(q.attack_history == RISKFIGHT_ATTACK_OBSERVED && q.attack_clock_low == -1 && q.attack_clock_high == -1 && q.attack_timer == -1);
+    static char line[1 << 14];
+    LaDecision* d = &g_decision;
+    memset(d, 0, sizeof(*d));
+    d->best = LA_CONTINUE;
+    d->feasible[LA_CONTINUE] = 1;
+    RiskfightSnapshot snap;
+    snapshot_of(&q, &snap);
+    FILE* out = fmemopen(line, sizeof(line), "w");
+    server_respond(out, &q, 1.0);
+    fclose(out);
+    CHECK(strstr(line, " ASSUME 2 pending_empty own_attack_ready\n") != NULL);
+    /* an observed pending queue and clock are untouched: no ASSUME suffix, the already answered requests keep their bytes */
+    snprintf(tail, sizeof(tail), "P KNOWN 0\nR KNOWN 0\nEND\n");
+    compose(text, sizeof(text), tail);
+    parse_text(text, &q);
+    request_declare_priors(&q);
+    CHECK(q.assumed == 0 && server_unavailable(&q) == NULL);
+    out = fmemopen(line, sizeof(line), "w");
+    server_respond(out, &q, 1.0);
+    fclose(out);
+    CHECK(strstr(line, "ASSUME") == NULL);
+}
+
 int main(void) {
     g_ablation.hp = HP_UNIFORM;
     observer_register_items();
@@ -257,6 +301,7 @@ int main(void) {
     test_meals_never_click_empty();
     test_literal_plan_round_trip();
     test_gear_priors();
+    test_declared_priors();
     puts("Engine wire v2 contracts passed");
     return 0;
 }

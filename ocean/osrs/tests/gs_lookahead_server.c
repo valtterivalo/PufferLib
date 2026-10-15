@@ -31,7 +31,9 @@
  * `A n` followed by n records `due kind arg timing [count candidates...]`: the chosen macro's plan in the same grammar as the C records.
  * Macro 0 `continue` keeps the committed remainder (its A records echo it). Macro 1 `no new clicks` is a CANCEL of the remainder (A 0).
  * Another macro replaces the remainder with its own script. Ties go to continue: another macro must be strictly better by value.
- * Unavailable: `UNAVAILABLE id reason [raw]`, only for missing own-side observations (pending hits, poison state, auto-retaliate, attack history).
+ * Unavailable: `UNAVAILABLE id reason [raw]`, only for missing own-side observations (poison state, auto-retaliate, attack history interval).
+ * Declared priors (request_declare_priors): `P UNKNOWN` is served as an empty queue and an UNKNOWN own attack clock as ready, and the response ends ` ASSUME n name...`
+ * (pending_empty, own_attack_ready), so a tick the plugin could not observe fully still gets a decision and says what it assumed.
  *
  * Opponent weapon/shield/armor/ammo are never UNAVAILABLE: unknown/unsupported ids get declared priors (see request_gear_priors), the raw ids stay
  * in the request and in the stderr prior line, never silently dropped. */
@@ -189,7 +191,12 @@ typedef struct {
     int poison_observation_age[2];
     OsrsPoisonState poison[2];
     int auto_retaliate_seen, auto_retaliate_source, auto_retaliate_varp; /* 0 unknown, 1 observed, 2 OFF prior */
+    unsigned assumed; /* GS_ASSUME_* bits: own-side observations the plugin could not complete, replaced by a declared prior (request_declare_priors) */
 } Request;
+
+/* Declared priors for own-side observations that are genuinely unobservable on a tick (the response lists them as ` ASSUME n name...`). */
+enum { GS_ASSUME_PENDING_EMPTY = 1, GS_ASSUME_OWN_ATTACK_READY = 2, GS_ASSUME_COUNT = 2 };
+static const char* const GS_ASSUME_NAME[GS_ASSUME_COUNT] = {"pending_empty", "own_attack_ready"};
 
 static FILE* g_log;
 
@@ -211,6 +218,28 @@ static int request_poison_attack(const Request* q, int side) {
         if (request_poison_weapon(q->rules.arg[i])) return 1;
     return 0;
 }
+/* Declared priors, applied after parsing and before request_unavailable; each is named in the response (ASSUME) and once on stderr:
+ *  pending_empty     `P UNKNOWN` (a hit launch, an echo or a proc the plugin could not pin down) is served as `P KNOWN 0`: no hit in flight beyond what the sim launches itself.
+ *  own_attack_ready  our attack clock UNKNOWN (no swing of ours seen to time it from) is served as ready since before this tick (OBSERVED -1 -1), the state after any swing a full weapon
+ *                    cooldown ago; a cooldown still running is the one thing this prior can get wrong, in the optimistic direction. */
+static void request_declare_priors(Request* q) {
+    static unsigned noted;
+    if (!q->pending_known) {
+        q->pending_known = 1;
+        q->assumed |= GS_ASSUME_PENDING_EMPTY;
+    }
+    if (q->attack_history == RISKFIGHT_ATTACK_UNKNOWN) {
+        q->attack_history = RISKFIGHT_ATTACK_OBSERVED;
+        q->attack_clock_low = q->attack_clock_high = q->attack_timer = -1;
+        q->assumed |= GS_ASSUME_OWN_ATTACK_READY;
+    }
+    for (int i = 0; i < GS_ASSUME_COUNT; i++)
+        if ((q->assumed >> i & 1) && !(noted >> i & 1)) {
+            noted |= 1u << i;
+            fprintf(stderr, "[prior] tick %d declared %s\n", q->tick, GS_ASSUME_NAME[i]);
+        }
+}
+
 /* Only genuinely missing own-side observations make a request unavailable; opponent gear and the plan never do. */
 static const char* request_unavailable(const Request* q) {
     if (!q->pending_known) return "pending_unknown";
@@ -648,7 +677,8 @@ static double server_decide(Request* q) {
     return (la_seconds() - started) * 1e6;
 }
 
-/* One response line: scores of every macro, the chosen macro's plan as A records, and `PRIOR k side slot raw ...` when priors were used. */
+/* One response line: scores of every macro, the chosen macro's plan as A records, `PRIOR k side slot raw ...` when gear priors were used, and `ASSUME n name...`
+ * when an own-side observation was replaced by a declared prior (request_declare_priors). */
 static void server_respond(FILE* out, const Request* q, double micros) {
     const LaDecision* d = &g_decision;
     fprintf(out, "R %d %.0f %d", q->id, micros, (int)d->best);
@@ -661,6 +691,11 @@ static void server_respond(FILE* out, const Request* q, double micros) {
     if (q->prior_count) {
         fprintf(out, " PRIOR %d", q->prior_count);
         for (int i = 0; i < q->prior_count; i++) fprintf(out, " %d %d %d", q->prior[i][0], q->prior[i][1], q->prior[i][2]);
+    }
+    if (q->assumed) {
+        fprintf(out, " ASSUME %d", __builtin_popcount(q->assumed));
+        for (int i = 0; i < GS_ASSUME_COUNT; i++)
+            if (q->assumed >> i & 1) fprintf(out, " %s", GS_ASSUME_NAME[i]);
     }
     fprintf(out, "\n");
 }
@@ -740,6 +775,7 @@ int main(int argc, char** argv) {
     static Request q;
     for (;;) {
         read_request(stdin, &q);
+        request_declare_priors(&q);
         const char* unavailable = server_unavailable(&q);
         if (unavailable) {
             printf("UNAVAILABLE %d %s\n", q.id, unavailable);

@@ -23,7 +23,10 @@ Field-by-field grammar of the existing tags: header comment of `gs_lookahead_ser
 ## Response (one line)
 `R id server_micros best_index` then 18 x `feasible kill death value worlds` (macro order = READY names), then
 `A n` + n records, then optionally `PRIOR k` + k triples `side slot raw` (what the engine substituted a declared prior for; side 1 = opponent, slot 0 weapon, 1 shield, 2.. armor kit slots).
-or `UNAVAILABLE id reason [raw...]` when an own-side observation is missing (pending hits unknown, attack history unknown, poison unknown, auto-retaliate unknown). Opponent gear is never a reason.
+then optionally `ASSUME n name...` = the declared priors the answer rests on (own-side observations the plugin could not complete on that tick, once per name on stderr too):
+`pending_empty` (`P UNKNOWN`: a launch, echo or proc it could not pin down, served as `P KNOWN 0`) and `own_attack_ready` (attack clock `UNKNOWN`, served as ready: `OBSERVED -1 -1`; the one thing it can get wrong is a cooldown still running).
+or `UNAVAILABLE id reason [raw...]` when an own-side observation is missing that has no declared prior (poison state unknown, auto-retaliate unknown, attack clock interval). Opponent gear, pending hits and the first-swing clock are never a reason.
+The plugin completes what it can before it falls back on a prior: both holders of PID are sent as `P VARIANTS` (his Vengeance echo on us lands a tick later only if we hold PID; our echo on him only if he does, as `D 0 .. 2 ..` of exact damage when one damaging hit can have procced it), and an attack clock never seen is sent as ready once the plugin has watched longer than the slowest weapon plus the longest meal without a swing of ours.
 `best_index` 0 `continue` keeps the committed remainder (A echoes it); 1 `no new clicks` cancels it (`A 0`); any other macro replaces the remainder with its own plan.
 Ties go to `continue`: another macro needs a strictly better value.
 
