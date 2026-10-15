@@ -497,19 +497,7 @@ int main(int argc, char** argv) {
     g_ablation.panic = 0.8;
     g_ablation.panic_hp = 25;
     static OppFit fit;
-    FILE* f = fopen(argv[1], "rb");
-    assert(f && fread(&fit, sizeof(fit), 1, f) == 1);
-    fclose(f);
-    fit.eat_action = ACT_EAT_WARNING;
-    static EatMixture mixture;
-    f = fopen(argv[2], "rb");
-    assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1);
-    fclose(f);
-    g_eat_model.on = 1;
-    g_eat_model.model = EAT_MIXTURE;
-    g_eat_model.types = mixture.types;
-    memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi));
-    g_eat_model.logit = mixture.logit;
+    opp_load(argv[1], argv[2], &fit, &g_eat_model);
     if (argc > 3) { char* arg = argv[3]; g_la_worlds = request_int(&arg); request_end(arg); }
     if (argc > 4) { char* arg = argv[4]; g_la_horizon = request_int(&arg); request_end(arg); }
     assert(g_la_worlds > 0 && g_la_horizon > 0 && g_la_horizon <= 32); /* Outcome.his_hit_mask is uint32_t. */
