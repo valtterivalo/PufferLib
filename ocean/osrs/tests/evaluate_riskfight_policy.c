@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 typedef struct { uint64_t n; double mean, m2; } EvalMoment;
 typedef struct { EvalMoment ko, death, survival, draw, value; } EvalStats;
@@ -219,9 +220,9 @@ static void eval_trace(int argc, char** argv) {
         cut.kit_anims[at][1]++;
     }
     Sim* base = eval_alloc(sizeof(*base)); Sim* work = eval_alloc(sizeof(*work)); sim_init(base); sim_init(work);
-    const char* names[3] = {"closed_loop_C_proxy_uncertified", "closed_loop_lookahead_C_proxy_follower", "recorded_click_replay_not_admissible_policy"};
+    const char* names[3] = {"rules_proxy_C_uncertified", "deployed_macro_policy", "recorded_click_replay_not_admissible_policy"};
     OursPolicy policies[3] = {{OURS_RULES, 0, TIMING_MEASURED, STAKES_COMPUTED, truth}, {OURS_LOOKAHEAD, 0, TIMING_MEASURED, STAKES_COMPUTED, truth}, {OURS_REPLAY, 0, TIMING_MEASURED, STAKES_COMPUTED, 0}};
-    printf("baseline\tC_proxy_Java_parity_uncertified\tproduction_baseline=unavailable\tauto_retaliate=OFF_PRIOR_simulation_conditioned_not_observed\tablation=%s\tevaluation_profiles=%s\tselector_profiles=train\n", truth ? "privileged_PID_energy_vengeance_HP_timer" : "matched_observed_information", argv[9]);
+    printf("baseline\tC_rules_proxy_Java_planner_stand_in_uncertified\tdeployed=la_decide_every_tick_continue_is_committed_remainder_hold_continuation\tauto_retaliate=OFF_PRIOR_simulation_conditioned_not_observed\tablation=%s\tevaluation_profiles=%s\tselector_profiles=train\n", truth ? "privileged_PID_energy_vengeance_HP_timer" : "matched_observed_information", argv[9]);
     if (truth) puts("privileged_scope\tC_rule_decisions_only\tlookahead_world_sampler_remains_observed_belief\treplay_has_no_truth_override");
     EvalStats stats[3] = {0}; EvalMoment gain = {0}; Outcome out;
     RiskfightState* world = eval_alloc(sizeof(*world));
@@ -252,16 +253,238 @@ static void eval_trace(int argc, char** argv) {
         eval_add(&gain, values[1] - values[0]);
     }
     for (int p = 0; p < 3; p++) eval_print(names[p], &stats[p]);
-    eval_metric(names[1], "paired_value_minus_C_proxy", &gain, 0);
-    printf("decision_regret\tfinite_policy_set=C_proxy,lookahead\tfinite_horizon=%d\tempirical_best_mean_minus_C_proxy=%.12g\tproduction_regret=unavailable\n", horizon, fmax(0, stats[1].value.mean - stats[0].value.mean));
+    eval_metric(names[1], "paired_value_minus_rules_proxy", &gain, 0);
+    printf("decision_regret\tfinite_policy_set=rules_proxy,deployed\tfinite_horizon=%d\tempirical_best_mean_minus_rules_proxy=%.12g\tproduction_regret=unavailable\n", horizon, fmax(0, stats[1].value.mean - stats[0].value.mean));
     sim_clear(base); sim_clear(work); free(base); free(work); free(world); free(cut.anims); tape_free(&tape);
 }
+/* ---- Synthetic scenario corpus (no admissible recorded tape/wire pair exists for the current parsers: the retained tapes have no exact local clock and
+ * the 20261011 wires predate the spec-timing grammar). A scenario is a RiskfightSnapshot drawn from (corpus seed, index), loaded through the
+ * production loader, then warmed for SC_WARM ticks with both sides auto-attacking so the plugin-side observer infers timers, PID, bar and gear
+ * from sim events exactly as in a rollout. The decision point is the end of the warm-up. ---- */
+enum { SC_TICK0 = 100 };
+typedef struct { RiskfightSnapshot snap; int warm; } Scenario;
+static uint32_t sc_draw(uint32_t* r, uint32_t low, uint32_t high) { return low + la_next(r) % (high - low + 1); }
+static RiskfightLoadout sc_loadout(uint32_t* r, int ours) {
+    RiskfightLoadout l = RISKFIGHT_DEFAULT_LOADOUT;
+    l.hitpoints = 121; l.vengeance_sacks = 100; l.equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    memset(l.inventory, 0, sizeof(l.inventory));
+    uint32_t weapon_roll = sc_draw(r, 0, 9);
+    uint8_t weapon = ours ? ITEM_VOIDWAKER : weapon_roll < 4 ? ITEM_VOIDWAKER : weapon_roll < 8 ? ITEM_ABYSSAL_TENTACLE : ITEM_DHAROKS_GREATAXE;
+    l.equipment[GEAR_SLOT_WEAPON] = weapon;
+    if (item_is_two_handed(weapon)) l.equipment[GEAR_SLOT_SHIELD] = ITEM_NONE;
+    /* He carries one karambwan: the sim lets him eat a second after 2 ticks, the plugin's HP-history meal model (3 ticks) then has no support and aborts. */
+    int hard = (int)sc_draw(r, ours ? 2 : 6, ours ? 8 : 12), fast = (int)sc_draw(r, 1, 4), brew = (int)sc_draw(r, 1, 3), slot = 0;
+    if (!ours) fast = 1;
+    for (int i = 0; i < hard; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_ANGLERFISH, 0);
+    for (int i = 0; i < fast; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_KARAMBWAN, 0);
+    for (int i = 0; i < brew; i++) l.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_BREW, 4);
+    if (weapon != ITEM_VOIDWAKER) l.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_VOIDWAKER);
+    l.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE);
+    return l;
+}
+static void sc_make(Scenario* sc, uint32_t corpus_seed, uint32_t index) {
+    uint32_t r = osrs_lowbias32(corpus_seed * 2654435761u + index * 40503u + 17) | 1;
+    memset(sc, 0, sizeof(*sc));
+    RiskfightSnapshot* s = &sc->snap;
+    s->pid_holder = (int)sc_draw(&r, 0, 1); s->pending_known = 1; s->seed = osrs_lowbias32(la_next(&r)) | 1;
+    s->loadout[0] = sc_loadout(&r, 1); s->loadout[1] = sc_loadout(&r, 0);
+    int hp[2] = {(int)sc_draw(&r, 25, 99), (int)sc_draw(&r, 12, 99)};
+    for (int i = 0; i < 2; i++) {
+        int energy_roll = (int)sc_draw(&r, 0, 9);
+        int energy = i == 0 ? (energy_roll < 8 ? 50 + 10 * (int)sc_draw(&r, 0, 5) : 10 * (int)sc_draw(&r, 0, 4)) : 10 * (int)sc_draw(&r, 0, 10);
+        int timer = (int)sc_draw(&r, 0, 4) - 1;
+        s->side[i] = (RiskfightSideSnapshot){.hitpoints = hp[i], .prayer = 99, .attack = 118, .strength = 118, .defence = 118, .magic = 99,
+            .attack_history = RISKFIGHT_ATTACK_OBSERVED, .attack_timer = timer, .attack_timer_uncapped = timer,
+            .special_energy = energy, .special_regen_phase = (int)sc_draw(&r, 0, 49), .veng_active = sc_draw(&r, 0, 1), .veng_cooldown = 0,
+            .offensive_prayer = OFFENSIVE_PRAYER_PIETY, .x = i, .y = 0, .interacting = 1,
+            .seen_health_bar = osrs_health_bar_ratio(hp[i], 99, OSRS_PLAYER_HEALTH_BAR_SCALE), .seen_last_attack_ago = -1, .poison_source = OSRS_POISON_CLEAR_PRIOR};
+    }
+    sc->warm = (int)sc_draw(&r, 6, 12);
+}
+/* Builds the decision-point Sim for a scenario: loaded state, warmed observer and history. Deterministic in (scenario, truth model). */
+static int sc_start(Sim* sim, const Scenario* sc, const OppModel* truth) {
+    static Outcome scratch;
+    riskfight_load_state(&sim->state, &sim->context, &sc->snap);
+    sim->tick_base = SC_TICK0; sim->outcome = &scratch; sim->seen_since_eat = 99; sim->previous = (StepEvents){0};
+    sim->hist = hist_start();
+    const Player* us = &sim->state.env.players[0];
+    Observer* ob = &sim->obs;
+    observer_clear(ob); memset(ob, 0, sizeof(*ob)); gs_infer_init(&ob->inf);
+    ob->inf.tracker_current = 1; ob->bar_hit_tick = SC_TICK0 - 3;
+    ob->bar_ratio = osrs_health_bar_ratio(sim->state.env.players[1].current_hitpoints, 99, SCALE_BAR);
+    observer_sync(&sim->state, ob, SC_TICK0 - 3);
+    gs_on_animation(&ob->inf, SC_TICK0 - 3, 0, attack_animation(us));
+    observer_sync(&sim->state, ob, SC_TICK0);
+    gs_on_game_tick(&ob->inf, SC_TICK0);
+    observer_after_tick(ob, SC_TICK0);
+    observer_branch(&sim->state, ob);
+    sim->state.env.pvp_runtime.hit_observer = sim_observe_hit; sim->state.env.pvp_runtime.hit_observer_context = sim;
+    g_rollout_seed = sc->snap.seed;
+    for (int step = 0; step < sc->warm; step++) {
+        RiskfightState* s = &sim->state; int actions[RF_HEADS];
+        opponent_actions(truth, sim, step, sc->snap.seed + (uint32_t)step * 2654435761u, actions);
+        riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
+        human_input_clear_pending(&sim->context.policy_commands[0]);
+        int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
+        sim->step_damage = sim->step_max_hit = sim->step_direct = 0; ob->hit_count = 0;
+        riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
+        if (s->env.episode_over || s->env.players[0].current_hitpoints <= 0 || s->env.players[1].current_hitpoints <= 0) return 1; /* a fight that ends here has no decision point */
+        observer_step(s, ob, SC_TICK0 + 1 + step);
+        const Player* him = &s->env.players[1];
+        StepEvents events = {.ate_visible = consumption_visible(s, 1), .ate = him->ate_food_this_tick || him->ate_karambwan_this_tick,
+            .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
+            .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
+        hist_step(&sim->hist, s, SC_TICK0 + 1 + step, &events);
+        sim->seen_since_eat = events.ate_visible ? 0 : sim->seen_since_eat + 1;
+    }
+    sim->tick_base = SC_TICK0 + sc->warm;
+    if (sim->obs.inf.timed < 0 || !sim->obs.inf.c.forecast_available) return 2;
+    if (la_gear_status(la_belief_of(sim, sim->tick_base).gear).status != LA_GEAR_SUPPORTED) return 3;
+    if (sim->obs.stakes.us <= 0 || sim->obs.stakes.him <= 0) return 4;
+    return 0;
+}
+typedef struct { int ko, death; double value; } ScOutcome;
+typedef enum { SC_RULES, SC_DEPLOYED } ScPolicy;
+/* Puts the decision-point state of `base` into `sim` with a fresh Ours: the plugin has just attached, nothing committed. */
+static void sc_load(Sim* sim, const Sim* base, int lookahead, uint32_t seed) {
+    sim->state = base->state; sim->hist = base->hist; sim->tick_base = base->tick_base; sim->seen_since_eat = base->seen_since_eat; sim->previous = (StepEvents){0};
+    observer_assign(&sim->obs, &base->obs);
+    ours_reset(&sim->ours, seed ^ 0x9e3779b9u, TIMING_MEASURED, STAKES_COMPUTED, 0);
+    sim->ours.lookahead = lookahead;
+}
+/* One closed-loop episode from a decision-point Sim. `first` (optional) is the macro committed at step 0; the policy decides from step 1 on. */
+static ScOutcome sc_episode(Sim* sim, const Sim* base, ScPolicy policy, const LaScript* first, const OppModel* truth, uint32_t seed, int horizon) {
+    static Outcome out;
+    memset(&out, 0, sizeof(out)); sim->outcome = &out;
+    sc_load(sim, base, policy == SC_DEPLOYED, seed);
+    if (first) { sim->ours.native_program = *first; sim->ours.native_active = first->n > 0; sim->ours.native_resume = base->tick_base + 1; }
+    RiskfightState* s = &sim->state; g_rollout_seed = seed;
+    uint32_t pending_rng = osrs_lowbias32(seed ^ 0x70656e64u) | 1;
+    riskfight_sample_pending(s, &pending_rng);
+    s->env.pvp_runtime.hit_observer = sim_observe_hit; s->env.pvp_runtime.hit_observer_context = sim;
+    ScOutcome result = {0}; HumanInput* hi = &sim->context.policy_commands[0];
+    for (int step = 0; step < horizon && !s->env.episode_over; step++) {
+        int actions[RF_HEADS];
+        opponent_actions(truth, sim, step, seed + (uint32_t)step * 2654435761u, actions);
+        riskfight_policy_commands(s, 1, actions, &sim->context.policy_commands[1]);
+        if (first && step == 0) {
+            human_input_clear_pending(hi);
+            if (sim->ours.native_active) {
+                la_script_step(&sim->ours.native_program, s, hi, sim->tick_base + 1, &sim->ours.native_cursor, &sim->ours.native_resume, 0, 0);
+                sim->ours.native_active = sim->ours.native_cursor < sim->ours.native_program.n;
+            }
+        } else ours_act(sim, &sim->ours, hi, step);
+        int vw = s->spec_voidwaker[1], maul = s->spec_maul[1];
+        sim->step_damage = sim->step_max_hit = sim->step_direct = 0; sim->obs.hit_count = 0;
+        riskfight_step_queues(s, &sim->context, &hi->commands, &sim->context.policy_commands[1].commands);
+        const Player* him = &s->env.players[1];
+        int tick = sim->tick_base + 1 + step;
+        StepEvents events = {.ate_visible = consumption_visible(s, 1), .ate = him->ate_food_this_tick || him->ate_karambwan_this_tick || s->inventory_use[1].potion_animation_tick_plus_one == s->env.tick,
+            .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - vw, .maul = s->spec_maul[1] - maul,
+            .damage_on_him = sim->step_damage, .max_hit_on_him = sim->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
+        hist_step(&sim->hist, s, tick, &events);
+        sim->seen_since_eat = events.ate_visible ? 0 : sim->seen_since_eat + 1;
+        if (s->env.players[1].current_hitpoints <= 0) result.ko = 1;
+        if (s->env.players[0].current_hitpoints <= 0) result.death = 1;
+        if (result.ko || result.death) break; /* the kill tick is never observed: nothing is decided after it */
+        observer_step(s, &sim->obs, tick);
+    }
+    observer_clear(&sim->obs);
+    result.value = result.ko * (double)base->obs.stakes.him - result.death * (double)base->obs.stakes.us;
+    return result;
+}
+typedef struct { uint32_t index; double sum[2][3]; } ScRow; /* per policy: ko, death, value summed over episodes */
+typedef struct { long chosen[LA_MACROS], calls, unavailable, rejected[5]; double seconds; } ScFooter;
+/* corpus SCENARIOS EPISODES HORIZON SELECT_WORLDS SEED train|heldout JOBS NATIVE_REV JAVA_REV MANIFEST
+ * Rules proxy vs the deployed macro policy over the synthetic scenario corpus, paired by scenario and episode seed, forked across JOBS shards. */
+static void eval_corpus(int argc, char** argv) {
+    uint32_t scenarios = eval_uint(argv[2], 2, 1000000), episodes = eval_uint(argv[3], 1, 100000), seed = eval_uint(argv[7], 1, UINT32_MAX);
+    int horizon = (int)eval_uint(argv[4], 1, 32), worlds = (int)eval_uint(argv[5], 2, 1000000), jobs = (int)eval_uint(argv[8], 1, 256);
+    OppModel train = eval_pool("train"), held = eval_pool(argv[6]); eval_config(scenarios, seed, horizon, worlds); g_la_model = &train;
+    eval_provenance(argv[9], argv[10], argv[11], argc, argv);
+    printf("corpus\tsynthetic_scenarios=%u\tepisodes_per_scenario=%u\twarm_ticks=6..12\tour_hp=25..99\this_hp=12..99\tpolicies=rules_proxy,deployed_macro\tpairing=scenario_and_episode_seed\n", scenarios, episodes);
+    int fds[256];
+    for (int j = 0; j < jobs; j++) {
+        int pipefd[2]; if (pipe(pipefd)) eval_fail("pipe");
+        pid_t pid = fork(); if (pid < 0) eval_fail("fork");
+        if (pid == 0) {
+            close(pipefd[0]);
+            Sim* base = eval_alloc(sizeof(*base)); Sim* work = eval_alloc(sizeof(*work)); sim_init(base); sim_init(work);
+            long rejected[5] = {0};
+            for (uint32_t i = j; i < scenarios; i += (uint32_t)jobs) {
+                Scenario sc; uint32_t draw = i;
+                for (;;) { /* admitted scenario i is the first candidate of its stream whose warm-up leaves a live, tracked, supported, priced fight */
+                    sc_make(&sc, seed, draw); int why = sc_start(base, &sc, &held);
+                    if (!why) break;
+                    rejected[why]++; draw += scenarios;
+                }
+                ScRow row = {.index = i};
+                for (uint32_t e = 0; e < episodes; e++) {
+                    uint32_t episode = osrs_lowbias32(seed + i * 7919u + e) | 1;
+                    for (int p = 0; p < 2; p++) {
+                        ScOutcome o = sc_episode(work, base, p == 0 ? SC_RULES : SC_DEPLOYED, NULL, &held, episode, horizon);
+                        row.sum[p][0] += o.ko; row.sum[p][1] += o.death; row.sum[p][2] += o.value;
+                    }
+                }
+                if (write(pipefd[1], &row, sizeof(row)) != (ssize_t)sizeof(row)) eval_fail("row write");
+            }
+            ScFooter foot = {.calls = g_la.calls, .unavailable = g_la_unavailable, .seconds = g_la.seconds};
+            memcpy(foot.rejected, rejected, sizeof(rejected));
+            memcpy(foot.chosen, g_la.chosen, sizeof(foot.chosen));
+            ScRow marker = {.index = UINT32_MAX};
+            if (write(pipefd[1], &marker, sizeof(marker)) != (ssize_t)sizeof(marker) || write(pipefd[1], &foot, sizeof(foot)) != (ssize_t)sizeof(foot)) eval_fail("footer write");
+            _exit(0);
+        }
+        close(pipefd[1]); fds[j] = pipefd[0];
+    }
+    EvalStats pooled[2] = {0}; EvalMoment dko = {0}, ddeath = {0}, dvalue = {0}; ScFooter total = {0}; uint32_t seen = 0;
+    for (int j = 0; j < jobs; j++) {
+        for (;;) {
+            ScRow row; ssize_t got = read(fds[j], &row, sizeof(row));
+            if (got != (ssize_t)sizeof(row)) eval_fail("shard row read");
+            if (row.index == UINT32_MAX) {
+                ScFooter foot; if (read(fds[j], &foot, sizeof(foot)) != (ssize_t)sizeof(foot)) eval_fail("shard footer read");
+                for (int m = 0; m < LA_MACROS; m++) total.chosen[m] += foot.chosen[m];
+                for (int w = 0; w < 5; w++) total.rejected[w] += foot.rejected[w];
+                total.calls += foot.calls; total.unavailable += foot.unavailable; total.seconds += foot.seconds;
+                break;
+            }
+            seen++;
+            for (int p = 0; p < 2; p++) {
+                eval_add(&pooled[p].ko, row.sum[p][0] / episodes); eval_add(&pooled[p].death, row.sum[p][1] / episodes);
+                eval_add(&pooled[p].survival, 1 - row.sum[p][1] / episodes); eval_add(&pooled[p].draw, 1 - (row.sum[p][0] + row.sum[p][1]) / episodes);
+                eval_add(&pooled[p].value, row.sum[p][2] / episodes);
+            }
+            eval_add(&dko, (row.sum[1][0] - row.sum[0][0]) / episodes); eval_add(&ddeath, (row.sum[1][1] - row.sum[0][1]) / episodes);
+            eval_add(&dvalue, (row.sum[1][2] - row.sum[0][2]) / episodes);
+        }
+        close(fds[j]);
+    }
+    for (int j = 0; j < jobs; j++) { int status; if (wait(&status) < 0 || !WIFEXITED(status) || WEXITSTATUS(status)) eval_fail("shard failed"); }
+    if (seen != scenarios) eval_fail("missing scenarios");
+    printf("note\tmetric rows are scenario means (n=scenarios); KO/death/survival/draw CIs are scenario-clustered normal, not Wilson\n");
+    const char* names[2] = {"rules_proxy_C_uncertified", "deployed_macro_policy"};
+    for (int p = 0; p < 2; p++) {
+        eval_metric(names[p], "KO_scenario_mean", &pooled[p].ko, 0); eval_metric(names[p], "death_scenario_mean", &pooled[p].death, 0);
+        eval_metric(names[p], "finite_horizon_draw_scenario_mean", &pooled[p].draw, 0); eval_metric(names[p], "expected_stake_value", &pooled[p].value, 0);
+    }
+    eval_metric(names[1], "paired_KO_minus_rules", &dko, 0); eval_metric(names[1], "paired_death_minus_rules", &ddeath, 0);
+    eval_metric(names[1], "paired_value_minus_rules", &dvalue, 0);
+    printf("admission\tscenarios=%u\trejected_ended_in_warmup=%ld\trejected_no_rival=%ld\trejected_gear=%ld\trejected_stakes=%ld\n", scenarios, total.rejected[1], total.rejected[2], total.rejected[3], total.rejected[4]);
+    printf("deployed_choices\tcalls=%ld\tunavailable_ticks=%ld\tmean_ms=%.3f", total.calls, total.unavailable, total.calls ? 1e3 * total.seconds / total.calls : 0.0);
+    for (int m = 0; m < LA_MACROS; m++) if (total.chosen[m]) printf("\t%s=%ld", LA_NAME[m], total.chosen[m]);
+    puts("");
+}
+
+#ifndef RISKFIGHT_EVALUATOR_LIBRARY /* tests/evaluate_continuation.c reuses everything above */
 int main(int argc, char** argv) {
     double started = la_seconds();
     if (argc == 11 && !strcmp(argv[1], "plan")) eval_plan(argc, argv);
     else if (argc == 14 && !strcmp(argv[1], "trace")) eval_trace(argc, argv);
-    else eval_fail("usage: plan REQUEST N H SELECT_WORLDS SEED train|heldout NATIVE_REV JAVA_REV MANIFEST; trace TAPE WIRE TICK N H SELECT_WORLDS SEED train|heldout none|all NATIVE_REV JAVA_REV MANIFEST; production closed-loop baseline is not available");
+    else if (argc == 12 && !strcmp(argv[1], "corpus")) eval_corpus(argc, argv);
+    else eval_fail("usage: plan REQUEST N H SELECT_WORLDS SEED train|heldout NATIVE_REV JAVA_REV MANIFEST; trace TAPE WIRE TICK N H SELECT_WORLDS SEED train|heldout none|all NATIVE_REV JAVA_REV MANIFEST; corpus SCENARIOS EPISODES H SELECT_WORLDS train|heldout SEED JOBS NATIVE_REV JAVA_REV MANIFEST");
     printf("completion\tstatus=success\telapsed_monotonic_seconds=%.9f\tlookahead_calls=%ld\tlookahead_rollouts=%ld\n", la_seconds() - started, g_la.calls, g_la.rollouts);
     if (fflush(stdout) || ferror(stdout)) eval_fail("output write");
     return 0;
 }
+#endif
