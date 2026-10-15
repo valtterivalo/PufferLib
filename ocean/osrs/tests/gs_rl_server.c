@@ -131,6 +131,13 @@ static int rt_records(const int* actions, const RiskfightState* s, RtRecord* out
         if (actions[head]) out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, actions[head] - 1};
     if (actions[RF_VENGEANCE]) out[n++] = (RtRecord){GS_WIRE_CAST_VENGEANCE, 0};
     for (int k = 0; k < actions[RF_SPECIAL]; k++) out[n++] = (RtRecord){GS_WIRE_SPEC_TOGGLE, 0};
+    if (actions[RF_PRIMARY] == RF_TELEPORT) {
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+            if (osrs_inventory_cell_metadata(&s->env.players[0].inventory_cells[slot])->consumable_kind == OSRS_CONSUMABLE_TELEPORT) {
+                out[n++] = (RtRecord){GS_WIRE_CLICK_SLOT, slot};
+                break;
+            }
+    }
     int attacking = osrs_interaction_active(&s->env.players[0].interaction);
     if (actions[RF_PRIMARY] == RF_ATTACK && !attacking) out[n++] = (RtRecord){GS_WIRE_ATTACK, 0};
     if (actions[RF_PRIMARY] == RF_STOP && attacking) out[n++] = (RtRecord){GS_WIRE_STOP_ATTACK, 0};
