@@ -531,7 +531,8 @@ static void test_source_actor_constraints_and_clone(void) {
     snapshot.loadout[0] = snapshot.loadout[1] = RISKFIGHT_DEFAULT_LOADOUT;
     uint32_t rng = 11;
     int hitpoints;
-    source_actor_snapshot(inf->health, 121, 0, &rng, &snapshot.actor[1], &hitpoints);
+    GsTargetReady clocks;
+    source_actor_snapshot(inf->health, 121, 0, &rng, &snapshot.actor[1], &hitpoints, &clocks);
     assert(snapshot.actor[1].hitpoints == 82 && snapshot.actor[1].attack == 99
         && snapshot.actor[1].strength == 99 && snapshot.actor[1].defence == 99);
     assert(riskfight_actor_combat_level(&snapshot.actor[1]) == 121);
@@ -750,11 +751,11 @@ static void test_joint_candidate_admission_and_guards(void) {
     /* Unknown and observed ON producers both have pause_ok false. */
     la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
     assert(!feasible[LA_WAIT_ALIGN] && feasible[LA_VENG_SPEC_NOW] && feasible[LA_VENG_SPEC_NOW_BURST]);
-    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(!feasible[m]);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_DRINK_PRAYER; m++) assert(!feasible[m]);
     f.pause_ok = 1; /* Explicit observed OFF or declared OFF_PRIOR only. */
     la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
     assert(feasible[LA_WAIT_ALIGN]);
-    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(feasible[m]);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_DRINK_PRAYER; m++) assert(feasible[m]);
     for (int window = 0; window < 3; window++) {
         LaScript* p = &scripts[LA_WAIT_VENG_SPEC_1 + window];
         assert(p->command[1].kind == HUMAN_COMMAND_STOP &&
@@ -767,10 +768,10 @@ static void test_joint_candidate_admission_and_guards(void) {
     }
     f.pid = GS_PID_UNKNOWN;
     la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
-    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_MACROS; m++) assert(!feasible[m]);
+    for (int m = LA_WAIT_VENG_SPEC_1; m < LA_DRINK_PRAYER; m++) assert(!feasible[m]);
     f.veng_ok = 0;
     la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
-    for (int m = LA_VENG_SPEC_NOW; m < LA_MACROS; m++) assert(!feasible[m]);
+    for (int m = LA_VENG_SPEC_NOW; m < LA_DRINK_PRAYER; m++) assert(!feasible[m]);
     f.veng_ok = 1; f.pid = GS_PID_OPPONENT;
     la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
     LaScript dead = scripts[LA_WAIT_VENG_SPEC_BURST_1];

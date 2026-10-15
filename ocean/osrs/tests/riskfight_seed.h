@@ -206,7 +206,10 @@ static void tape_pending_snapshot(const Tape* tape, int t, RiskfightSnapshot* ou
     }
 }
 
-static void source_actor_snapshot(const GsHealthHistory* health, int combat_level, int dead, uint32_t* rng, RiskfightActorStats* stats, int* hitpoints) {
+/* One draw of his hidden HP and meal clocks. HP and clocks are one hypothesis: HP 19 after an anglerfish at T comes with its hard food locked
+ * until T+3. Sampling HP from the branch mixture and the clocks from elsewhere builds worlds in which he eats inside his own lock,
+ * which the history model (rightly) has no support for. `ready` is the sampled branch's clocks. */
+static void source_actor_snapshot(const GsHealthHistory* health, int combat_level, int dead, uint32_t* rng, RiskfightActorStats* stats, int* hitpoints, GsTargetReady* ready) {
     if (!health || !health->has_started) abort();
     int base = 0;
     for (int candidate = health->base; candidate >= 10; candidate--) {
@@ -215,8 +218,12 @@ static void source_actor_snapshot(const GsHealthHistory* health, int combat_leve
         if (riskfight_model_actor_stats(combat_level, candidate, stats)) { base = candidate; break; }
     }
     if (!base) { fprintf(stderr, "source health support contradicts observed combat level %d\n", combat_level); abort(); }
-    if (dead) { *hitpoints = 0; return; }
     const GsTarget* target = &health->target;
+    if (dead) {
+        *hitpoints = 0;
+        *ready = (GsTargetReady){INT_MIN, INT_MIN, INT_MIN}; /* no meals once dead */
+        return;
+    }
     if (target->has_belief && base == target->base_hp) {
         double total = 0;
         for (int i = 0; i < target->belief_count; i++)
@@ -228,15 +235,18 @@ static void source_actor_snapshot(const GsHealthHistory* health, int combat_leve
             if (draw < cumulative) {
                 if (!(health->base_hp_support[base][hp / 64] >> (hp % 64) & 1)) abort();
                 *hitpoints = hp;
+                *ready = target->belief[i].ready;
                 return;
             }
         }
         abort();
     }
+    /* Bar unread, or a base the belief does not cover: the supported HP of that base, with his hard food clock at the earliest and the other two free. */
     int count = 0;
     for (int hp = 1; hp <= gs_health_cap(base); hp++) count += (int)(health->base_hp_support[base][hp / 64] >> (hp % 64) & 1);
     if (!count) abort();
     int selected = (int)(uniform(rng) * count);
+    *ready = (GsTargetReady){health->earliest_hard_ready, INT_MIN, INT_MIN};
     for (int hp = 1; hp <= gs_health_cap(base); hp++)
         if (health->base_hp_support[base][hp / 64] >> (hp % 64) & 1)
             if (selected-- == 0) { *hitpoints = hp; return; }
@@ -329,8 +339,10 @@ static int tape_snapshot_construct(const Tape* tape, int t, const SeedPriors* pr
         const int* base = source->c.local_base;
         out->actor[0] = (RiskfightActorStats){1, source->c.local_combat_level, base[0], base[1], base[2], base[3], base[4], base[5], base[6]};
     }
-    if (source && source->health && source->health->has_started)
-        source_actor_snapshot(source->health, source->c.opponent_combat_level, source->c.ratio == 0, rng, &out->actor[1], &him->hitpoints);
+    if (source && source->health && source->health->has_started) {
+        GsTargetReady clocks; /* the tape carries his meal clocks itself (lh.food ...) */
+        source_actor_snapshot(source->health, source->c.opponent_combat_level, source->c.ratio == 0, rng, &out->actor[1], &him->hitpoints, &clocks);
+    }
     else if (source) source_actor_without_history(&source->c, rng, &out->actor[1], &him->hitpoints);
     else him->hitpoints = sample_his_hitpoints(tape, tick, rng);
 

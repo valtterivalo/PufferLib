@@ -14,10 +14,10 @@ static double la_seconds(void) {
 }
 typedef enum { LA_CONTINUE, LA_NONE, LA_SPEC_NOW, LA_SPEC_NEXT, LA_BURST, LA_EAT_NOW, LA_VENG_NOW, LA_EAT_TRIPLE, LA_EAT_STAGGER, LA_WAIT_ALIGN,
     LA_VENG_SPEC_NOW, LA_VENG_SPEC_NOW_BURST, LA_WAIT_VENG_SPEC_1, LA_WAIT_VENG_SPEC_2, LA_WAIT_VENG_SPEC_3,
-    LA_WAIT_VENG_SPEC_BURST_1, LA_WAIT_VENG_SPEC_BURST_2, LA_WAIT_VENG_SPEC_BURST_3, LA_MACROS } LaMacro;
+    LA_WAIT_VENG_SPEC_BURST_1, LA_WAIT_VENG_SPEC_BURST_2, LA_WAIT_VENG_SPEC_BURST_3, LA_DRINK_PRAYER, LA_DRINK_RESTORE, LA_DRINK_COMBAT, LA_MACROS } LaMacro;
 static const char* const LA_NAME[LA_MACROS] = {"continue", "no new clicks", "spec now", "spec next", "burst", "eat now", "vengeance now", "eat triple", "eat staggered", "stop and align",
     "vengeance spec now", "vengeance spec now burst", "wait vengeance spec 1", "wait vengeance spec 2", "wait vengeance spec 3",
-    "wait vengeance spec burst 1", "wait vengeance spec burst 2", "wait vengeance spec burst 3"};
+    "wait vengeance spec burst 1", "wait vengeance spec burst 2", "wait vengeance spec burst 3", "drink prayer", "drink restore", "drink combat"};
 
 typedef struct { int kill, death, energy, ate_at; double dealt, taken; } LaOutcome;
 typedef struct { double kill, death, tickets, value; int worlds; } LaScore;
@@ -76,6 +76,7 @@ static int la_gear_wearable(GsObservedGear gear) {
 }
 
 static int g_la_worlds = 64, g_la_horizon = 15, g_la_stage = 16, g_la_cache = 1;
+static int g_la_upkeep = 1; /* the three drink macros are offered; 0 only for the with/without comparison of tests/evaluate_riskfight_policy.c */
 static double g_la_prune = 0.03, g_la_belief_hp_shift = 0, g_la_eat_scale_belief = 1;
 static const OppModel* g_la_model;
 static int g_la_boost = 118;
@@ -145,11 +146,13 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
         him->equipped[WORN_TO_GEAR[GS_ARMOR_KIT_SLOT[slot]]] = la_item_of(b->gear.armor[slot]).item;
     osrs_refresh_player_equipment(him);
+    GsTargetReady clocks = {0};
+    int source_clocks = b->health && b->health->has_started;
     if (b->health && b->health->has_started) {
         if (g_la_belief_hp_shift != 0) { fprintf(stderr, "source-conditioned actor does not permit unsupported HP shifts\n"); abort(); }
         RiskfightActorStats stats;
         int hitpoints;
-        source_actor_snapshot(b->health, b->combat_level, b->bar_ratio == 0, r, &stats, &hitpoints);
+        source_actor_snapshot(b->health, b->combat_level, b->bar_ratio == 0, r, &stats, &hitpoints, &clocks);
         riskfight_apply_actor_stats(him, &stats);
         him->current_hitpoints = hitpoints;
     } else {
@@ -192,8 +195,14 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->attack_timer_uncapped = attack_timer;
     him->attack_timer = imax(-1, attack_timer);
     him->has_attack_timer = 1;
-    him->food_timer = la_food_timer(b->food_ready, tick);
-    him->potion_timer = him->karambwan_timer = 0;
+    if (source_clocks) {
+        him->food_timer = la_food_timer(clocks.hard, tick);
+        him->potion_timer = la_food_timer(clocks.potion, tick);
+        him->karambwan_timer = la_food_timer(clocks.fast, tick);
+    } else {
+        him->food_timer = la_food_timer(b->food_ready, tick);
+        him->potion_timer = him->karambwan_timer = 0;
+    }
     la_resupply(him, r);
     /* The first-use hazards of the fitted opponent are rates per swing over every fight, carriers or not, so his kit always holds the whole arsenal; what he has already
      * used (the belief's seen flags, the spec weapon in his hands) is what switches him to the rates of a weapon used before. */
@@ -672,6 +681,52 @@ static void la_food_slots(const Player* us, int slot[3]) {
     slot[GS_FAST_FOOD] = slot_of_kind(us, OSRS_CONSUMABLE_KARAMBWAN);
 }
 
+/* Upkeep drinks. The rollouts are exact about what prayer points and drained levels do inside the horizon (test_riskfight_upkeep): an empty prayer
+ * switches Piety, Protect and Smite off, a drained level lowers accuracy and max hit, a brewed-down magic level blocks Vengeance, and a drink restores
+ * all of it at once. So no worth term is added to the value: a drink is feasible only in a state where its effect shows inside the horizon, and the
+ * value, kill and death over the rollout, says whether the click is worth its attack delay. Where nothing differs the drink is not a macro at all (its
+ * rollouts would equal `continue` plus the click's cost, and the successive elimination could never drop them). Each decision re-asks, so a drink goes
+ * out when the horizon first sees the loss, not at an arbitrary level. */
+
+/** The prayers that are on drain the points dry inside the horizon. The drain counter is not observed: taken at its fullest, the first point goes on the first tick that drains anything. */
+static int la_prayer_runs_dry(const Player* us) {
+    if (us->current_prayer <= 0 || us->current_prayer >= us->base_prayer) return 0;
+    Player drain = *us;
+    int bonus = encounter_player_prayer_bonus(&drain);
+    drain.prayer_just_activated = drain.offensive_prayer_just_activated = 0;
+    drain.prayer_drain_counter = 60 + 2 * bonus;
+    for (int tick = 0; tick < g_la_horizon; tick++) {
+        encounter_drain_all_prayers(&drain, bonus);
+        if (drain.current_prayer <= 0) return 1;
+    }
+    return 0;
+}
+
+/** A level the weapon swings with, or defence, is below its base: a super restore would raise it. */
+static int la_restore_raises(const Player* us) {
+    AttackStyle style = get_slot_weapon_attack_style((Player*)us);
+    return us->current_defence < us->base_defence ||
+        (style == ATTACK_STYLE_MELEE && (us->current_attack < us->base_attack || us->current_strength < us->base_strength)) ||
+        (style == ATTACK_STYLE_RANGED && us->current_ranged < us->base_ranged) ||
+        (style == ATTACK_STYLE_MAGIC && us->current_magic < us->base_magic);
+}
+
+/** Magic is below the Vengeance level, a restore brings it back to it, and the cast itself is otherwise possible (not up, off cooldown, a sack carried). */
+static int la_restore_unlocks_vengeance(const RiskfightState* base) {
+    const Player* us = &base->env.players[0];
+    return us->current_magic < OSRS_VENGEANCE_MAGIC_LEVEL && us->base_magic >= OSRS_VENGEANCE_MAGIC_LEVEL &&
+        imin(us->base_magic, us->current_magic + osrs_super_restore_amount(us->base_magic)) >= OSRS_VENGEANCE_MAGIC_LEVEL &&
+        !us->veng_active && us->veng_cooldown == 0 && base->inventory_use[0].vengeance_sacks > 0;
+}
+
+/** A super combat would raise a level the weapon swings with, or defence, to base plus the boost (a brew's defence above that is left alone). */
+static int la_combat_raises(const Player* us) {
+    AttackStyle style = get_slot_weapon_attack_style((Player*)us);
+    return us->current_defence < us->base_defence + osrs_super_combat_boost_amount(us->base_defence) ||
+        (style == ATTACK_STYLE_MELEE && (us->current_attack < us->base_attack + osrs_super_combat_boost_amount(us->base_attack) ||
+            us->current_strength < us->base_strength + osrs_super_combat_boost_amount(us->base_strength)));
+}
+
 /** The macro scripts as clicks timed from the decision, and which of them are possible. The rules' own script is the caller's. */
 static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f, const LaScript* rules, LaScript scripts[LA_MACROS], int feasible[LA_MACROS]) {
     const Player* us = &base->env.players[0];
@@ -768,6 +823,33 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
         HumanCommand clicks[2] = {vengeance_command(), attack_command()};
         r = saved;
         la_press(&r, &scripts[LA_VENG_NOW], tick, clicks, 2);
+    }
+    /* Upkeep: [click the carried potion's slot, (Vengeance), attack], timed through the motor model like the meals. A plain slot click, not a family
+     * recipe: the wire's candidates are canonical ids, the plugin's bag holds client ids. Dead clicks are never offered: the potion timer is ready,
+     * the potion is carried, and the gate of its effect inside the horizon holds. */
+    if (g_la_upkeep && us->potion_timer == 0) {
+        int prayer_slot = slot_of_kind(us, OSRS_CONSUMABLE_PRAYER_RESTORE);
+        if (prayer_slot < 0) prayer_slot = slot_of_kind(us, OSRS_CONSUMABLE_SUPER_RESTORE);
+        int restore_slot = slot_of_kind(us, OSRS_CONSUMABLE_SUPER_RESTORE), combat_slot = slot_of_kind(us, OSRS_CONSUMABLE_SUPER_COMBAT);
+        if (prayer_slot >= 0 && la_prayer_runs_dry(us)) {
+            feasible[LA_DRINK_PRAYER] = 1;
+            HumanCommand clicks[2] = {click_command(prayer_slot), attack_command()};
+            r = saved;
+            la_press(&r, &scripts[LA_DRINK_PRAYER], tick, clicks, 2);
+        }
+        int unlocks = !f->veng_ok && la_restore_unlocks_vengeance(base);
+        if (restore_slot >= 0 && (la_restore_raises(us) || unlocks)) {
+            feasible[LA_DRINK_RESTORE] = 1;
+            HumanCommand clicks[3] = {click_command(restore_slot), unlocks ? vengeance_command() : attack_command(), attack_command()};
+            r = saved;
+            la_press(&r, &scripts[LA_DRINK_RESTORE], tick, clicks, unlocks ? 3 : 2);
+        }
+        if (combat_slot >= 0 && la_combat_raises(us)) {
+            feasible[LA_DRINK_COMBAT] = 1;
+            HumanCommand clicks[2] = {click_command(combat_slot), attack_command()};
+            r = saved;
+            la_press(&r, &scripts[LA_DRINK_COMBAT], tick, clicks, 2);
+        }
     }
 }
 
@@ -1138,7 +1220,7 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     }
     if (g_la_report) la_print_report(&belief, us, f.energy, tick, step, stakes.us > 0 ? (double)stakes.him / (double)stakes.us : 1, best, score, decision->feasible, decision->alive);
     g_la.chosen[best]++;
-    int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT || best >= LA_VENG_SPEC_NOW;
+    int spec = best == LA_SPEC_NOW || best == LA_BURST || best == LA_SPEC_NEXT || (best >= LA_VENG_SPEC_NOW && best <= LA_WAIT_VENG_SPEC_BURST_3);
     for (int i = 0; best == LA_CONTINUE && i < committed.n; i++) spec |= committed.op[i] == 1;
     if (g_la_decision_count < 512) {
         g_la_decisions[g_la_decision_count].step = step;
@@ -1167,7 +1249,8 @@ static int la_override(Sim* sim, Ours* ours, int step, int tick) {
     ours->native_cursor = 0;
     ours->native_resume = tick + 1;
     ours->native_active = decision->scripts[best].n > 0;
-    if (best == LA_VENG_NOW || best >= LA_VENG_SPEC_NOW) ours->vengeance_clicked = tick + 1;
+    for (int i = 0; best != LA_CONTINUE && i < decision->scripts[best].n; i++) /* a replacing plan that casts: the three vengeance macros, the spec ones that cast, a restore that unlocks it */
+        if (decision->scripts[best].op[i] == 0 && decision->scripts[best].command[i].kind == HUMAN_COMMAND_VENGEANCE) ours->vengeance_clicked = tick + 1;
     if (spec) { ours->last_played_choice = GS_CHOICE_VOIDWAKER; ours->last_played_step = step; }
     return 1;
 }
