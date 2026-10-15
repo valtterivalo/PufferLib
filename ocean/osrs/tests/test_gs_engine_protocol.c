@@ -87,6 +87,7 @@ static void test_macro_round_trip(void) {
     CHECK(checked >= 14);
     CHECK(kinds_seen[GS_WIRE_STOP_ATTACK] && kinds_seen[GS_WIRE_ALIGNED_READY] && kinds_seen[GS_WIRE_WAIT_SPEC_LAUNCH]);
     CHECK(kinds_seen[GS_WIRE_EQUIP_RECIPE] && kinds_seen[GS_WIRE_COND_ENERGY] && kinds_seen[GS_WIRE_CLICK_SLOT] && kinds_seen[GS_WIRE_CAST_VENGEANCE]);
+    CHECK(kinds_seen[GS_WIRE_EAT_RECIPE] >= 2 && feasible[LA_EAT_STAGGER]);
 
     /* The response's A records, echoed back verbatim as R, are a valid request with the same plan. */
     for (int m = 0; m < LA_MACROS; m++) {
@@ -132,6 +133,56 @@ static void test_macro_round_trip(void) {
         compose(text, sizeof(text), tail);
         parse_text(text, &g_parsed);
         same_script(&scripts[m], &g_parsed.rules);
+    }
+}
+
+/* Every meal click of every macro targets a carried item when it is pressed: single-dose food emptied by an earlier press of the same plan is never clicked
+ * again (the staggered plan eats the hard food twice and needs two carried), and a recipe never skips for lack of food. */
+static void test_meals_never_click_empty(void) {
+    static char text[1 << 12];
+    compose(text, sizeof(text), "P KNOWN 2\nD 1 4 0 1 0 1 0 20 0 30 8000 0 0\nD 1 7 0 1 0 1 0 20 0 30 8000 0 0\nR KNOWN 0\nEND\n");
+    static Request q;
+    parse_text(text, &q);
+    CHECK(server_unavailable(&q) == NULL && q.feasible.eat_ok);
+    RiskfightSnapshot snap;
+    snapshot_of(&q, &snap);
+    riskfight_load_state(&g_base.state, &g_base.context, &snap);
+    Player bag = g_base.state.env.players[0];
+    int hard_total = 0;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++) hard_total += osrs_inventory_cell_metadata(&bag.inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH;
+    CHECK(hard_total >= 2 && slot_of_kind(&bag, OSRS_CONSUMABLE_KARAMBWAN) >= 0 && slot_of_kind(&bag, OSRS_CONSUMABLE_BREW) >= 0);
+    for (int carry = 1; carry <= hard_total; carry++) {
+        g_base.state.env.players[0] = bag;
+        Player* us = &g_base.state.env.players[0];
+        for (int i = 0, kept = 0; i < OSRS_INVENTORY_SIZE; i++)
+            if (osrs_inventory_cell_metadata(&us->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH && kept++ >= carry)
+                us->inventory_cells[i] = osrs_inventory_cell_empty();
+        LaScript scripts[LA_MACROS];
+        int feasible[LA_MACROS];
+        la_scripts(&g_base.state, q.tick, &q.feasible, &q.rules, scripts, feasible);
+        CHECK(feasible[LA_EAT_TRIPLE] && feasible[LA_EAT_NOW]);
+        CHECK(feasible[LA_EAT_STAGGER] == (carry >= 2));
+        int stagger_meals = 0;
+        for (int m = 0; m < LA_MACROS; m++) {
+            if (!feasible[m]) continue;
+            Player walk = *us;
+            for (int i = 0; i < scripts[m].n; i++) {
+                HumanCommand click = scripts[m].command[i];
+                int slot = -1;
+                if (scripts[m].op[i] == 8) {
+                    CHECK(la_recipe(&scripts[m], i, &walk, &click)); /* a recipe that finds nothing would skip: not enough food for the plan */
+                    for (int s = 0; s < OSRS_INVENTORY_SIZE && slot < 0; s++)
+                        if (osrs_inventory_cell_metadata(&walk.inventory_cells[s])->raw_osrs_id == click.item_osrs_id) slot = s;
+                    stagger_meals += m == LA_EAT_STAGGER;
+                } else if (scripts[m].op[i] == 0 && click.kind == HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK) {
+                    slot = click.inventory_slot;
+                } else continue;
+                CHECK(slot >= 0 && slot < OSRS_INVENTORY_SIZE && !osrs_inventory_cell_is_empty(&walk.inventory_cells[slot]));
+                OsrsConsumableKind kind = osrs_inventory_cell_metadata(&walk.inventory_cells[slot])->consumable_kind;
+                if (kind == OSRS_CONSUMABLE_ANGLERFISH || kind == OSRS_CONSUMABLE_KARAMBWAN) walk.inventory_cells[slot] = osrs_inventory_cell_empty();
+            }
+        }
+        CHECK(stagger_meals == (carry >= 2 ? 2 : 0));
     }
 }
 
@@ -208,6 +259,7 @@ int main(void) {
     observer_register_items();
     sim_init(&g_base);
     test_macro_round_trip();
+    test_meals_never_click_empty();
     test_literal_plan_round_trip();
     test_gear_priors();
     puts("Engine wire v2 contracts passed");

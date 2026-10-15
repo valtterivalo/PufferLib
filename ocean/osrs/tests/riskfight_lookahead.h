@@ -667,6 +667,14 @@ static void la_script_emit_record(FILE* out, const LaScript* s, int i) {
     }
 }
 
+/** Turns the click at `index` into a kind 14 eat recipe over the dose family of `raw`: bound to the first carried item of that family when the click is due. */
+static void la_family_recipe(LaScript* s, int index, int raw) {
+    s->op[index] = 8;
+    s->command[index] = (HumanCommand){0};
+    s->candidate_count[index] = 1;
+    s->candidates[index][0] = -raw;
+}
+
 static void la_food_slots(const Player* us, int slot[3]) {
     slot[GS_HARD_FOOD] = slot_of_kind(us, OSRS_CONSUMABLE_ANGLERFISH);
     slot[GS_POTION] = slot_of_kind(us, OSRS_CONSUMABLE_BREW);
@@ -741,17 +749,31 @@ static void la_scripts(const RiskfightState* base, int tick, const LaFeasible* f
         r = saved;
         la_press(&r, &scripts[LA_EAT_NOW], tick, clicks, 2);
     }
+    int hard_carried = 0;
+    for (int i = 0; i < OSRS_INVENTORY_SIZE; i++)
+        hard_carried += osrs_inventory_cell_metadata(&us->inventory_cells[i])->consumable_kind == OSRS_CONSUMABLE_ANGLERFISH;
     if (f->eat_ok && slot[GS_HARD_FOOD] >= 0 && slot[GS_FAST_FOOD] >= 0 && slot[GS_POTION] >= 0) {
-        feasible[LA_EAT_TRIPLE] = feasible[LA_EAT_STAGGER] = 1;
+        /* The triple clicks three distinct slots, each carried now and untouched by the other two clicks. */
+        feasible[LA_EAT_TRIPLE] = 1;
         HumanCommand triple[4] = {click_command(slot[GS_HARD_FOOD]), click_command(slot[GS_FAST_FOOD]), click_command(slot[GS_POTION]), attack_command()};
         r = saved;
         la_press(&r, &scripts[LA_EAT_TRIPLE], tick, triple, 4);
-        HumanCommand first[2] = {click_command(slot[GS_HARD_FOOD]), attack_command()};
-        HumanCommand second[3] = {click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
-        r = saved;
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick, first, 2);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 3, second, 3);
-        la_press(&r, &scripts[LA_EAT_STAGGER], tick + 6, first, 2);
+        /* The staggered plan eats the hard food twice: the second press must find a carried one after the first emptied its slot, so both presses are
+         * family recipes bound against the bag at press time, and the plan exists only when two are carried. */
+        if (hard_carried >= 2) {
+            feasible[LA_EAT_STAGGER] = 1;
+            int hard_raw = osrs_inventory_cell_metadata(&us->inventory_cells[slot[GS_HARD_FOOD]])->raw_osrs_id;
+            HumanCommand first[2] = {click_command(slot[GS_HARD_FOOD]), attack_command()};
+            HumanCommand second[3] = {click_command(slot[GS_POTION]), click_command(slot[GS_FAST_FOOD]), attack_command()};
+            LaScript* stagger = &scripts[LA_EAT_STAGGER];
+            r = saved;
+            la_press(&r, stagger, tick, first, 2);
+            la_family_recipe(stagger, stagger->n - 2, hard_raw);
+            la_press(&r, stagger, tick + 3, second, 3);
+            int again = stagger->n;
+            la_press(&r, stagger, tick + 6, first, 2);
+            la_family_recipe(stagger, again, hard_raw);
+        }
     }
     if (f->veng_ok) {
         feasible[LA_VENG_NOW] = 1;
