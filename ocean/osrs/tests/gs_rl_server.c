@@ -50,6 +50,7 @@ static void rt_fight_reset(RtFight* f, int start_tick) {
     v->last_cast_tick = v->last_proc_tick = -1000;
     v->last_attack_tick = -1;
     v->pending_consume_tick = -1;
+    v->health_bar = OSRS_PLAYER_HEALTH_BAR_SCALE; /* a fight starts at a full bar, as the sim's first observation */
 }
 
 /* What riskfight_observe_visible does after a sim tick, from what the client showed instead of the sim's players. `n` is the fight tick after this one. */
@@ -62,8 +63,11 @@ static void rt_observe(RiskfightVisibleOpponent* v, const RtSeen* seen, int n, c
         event[0] = 1;
         event[1] = item == ITEM_NONE ? 0 : item;
         event[2] = seen->swing_style;
-        v->last_attack_tick = n - 1;
-        v->last_attack_speed = q->his_speed > 0 ? q->his_speed : item == ITEM_NONE ? 4 : ITEM_DATABASE[item].attack_speed;
+        /* The maul special is instant: the sim logs the hits but does not move his swing clock. */
+        if (item == ITEM_NONE || !pvp_is_maul(item)) {
+            v->last_attack_tick = n - 1;
+            v->last_attack_speed = q->his_speed > 0 ? q->his_speed : item == ITEM_NONE ? 4 : ITEM_DATABASE[item].attack_speed;
+        }
     }
     if (seen->hit_landed && seen->bar_scale == OSRS_PLAYER_HEALTH_BAR_SCALE && seen->bar_ratio >= 0) v->health_bar = seen->bar_ratio;
     if (seen->veng_cast) v->last_cast_tick = n;
@@ -212,6 +216,7 @@ static void rt_respond(FILE* out, const Request* q, double micros, const RtRecor
     fprintf(out, "\n");
 }
 
+#ifndef GS_RL_SERVER_NO_MAIN
 int main(int argc, char** argv) {
     assert(argc >= 4);
     static RfNet* net;
@@ -274,3 +279,4 @@ int main(int argc, char** argv) {
     }
     return 0;
 }
+#endif
