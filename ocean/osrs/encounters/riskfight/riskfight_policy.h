@@ -99,6 +99,7 @@ static void riskfight_write_observation(const RiskfightState* s, int agent, floa
             out[7] /= RF_OBSERVATION_HEALTH_BAR_SCALE;
         } else memset(out, 0, RF_EVENT_WIDTH * sizeof(float));
     }
+    obs[RF_PRICE] = s->death_price * 10.0f / RF_PRICE_MAX_X10;
 }
 
 /** Head offsets into the mask, and the mask every state starts from: action 0 of every head and all

@@ -8,6 +8,7 @@ typedef struct {
     int session_rounds;
     float curveball_probability;
     int randomize;
+    float death_price; /* 0: drawn per fight, log-uniform in [0.4, 2.5]; else fixed */
 } RiskfightTrainingConfig;
 
 typedef enum { RF_TRAIN_LEARNED, RF_TRAIN_SCRIPTED } RiskfightTrainingOpponent;
@@ -35,6 +36,9 @@ static RiskfightTrainingConfig riskfight_training_config(Dict* kwargs) {
     DictItem* curveball = dict_find(kwargs, "curveball_probability");
     assert(curveball && curveball->value >= 0 && curveball->value <= 1);
     config.curveball_probability = (float)curveball->value;
+    DictItem* price = dict_find(kwargs, "death_price");
+    config.death_price = price ? (float)price->value : 1.0f;
+    assert(config.death_price >= 0 && config.death_price <= RF_PRICE_MAX_X10 / 10.0f);
     DictItem* randomize = dict_find(kwargs, "domain_randomization");
     config.randomize = randomize ? (int)randomize->value : 0;
     assert(config.randomize == 0 || config.randomize == 1);
@@ -153,6 +157,8 @@ static void riskfight_training_randomize(RiskfightTraining* training, RiskfightS
 static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context, int frozen_policy) {
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
+    state->death_price = training->config.death_price > 0 ? training->config.death_price :
+        0.4f * powf(RF_PRICE_MAX_X10 / 4.0f, encounter_rand_float(&training->rng));
     training->opponent = RF_TRAIN_LEARNED;
     const RiskfightProfile* scripted = NULL;
     if (frozen_policy > 0 && riskfight_training_draw(training, training->config.scripted_probability)) {
@@ -178,8 +184,10 @@ static RiskfightTrainingStart riskfight_training_reset(RiskfightTraining* traini
 static void riskfight_training_next_round(RiskfightTraining* training,
     RiskfightState* state, RiskfightContext* context) {
     const RiskfightProfile* profile = state->opponent_profile;
+    float price = state->death_price;
     riskfight_reset((EncounterState*)state, (EncounterContext*)context, 0);
     state->opponent_profile = profile;
+    state->death_price = price;
     training->start_tick = 0;
 }
 

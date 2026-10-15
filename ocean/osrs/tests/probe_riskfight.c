@@ -106,6 +106,7 @@ int main(int argc, char** argv) {
         uint32_t seed = first + (uint32_t)e;
         riskfight_reset((EncounterState*)&g_sim.state, (EncounterContext*)&g_sim.context, osrs_lowbias32(seed) | 1);
         for (int side = 0; side < 2; side++) g_sim.state.poison_source[side] = OSRS_POISON_CLEAR_PRIOR;
+        if (getenv("PROBE_PRICE")) g_sim.state.death_price = (float)atof(getenv("PROBE_PRICE"));
         if (getenv("PROBE_HP")) for (int i = 0; i < 2; i++) g_sim.state.env.players[i].current_hitpoints = atoi(getenv("PROBE_HP"));
         if (g_net) { rf_net_reset(g_net); g_net_rng = osrs_lowbias32(seed ^ 0x6e6574u) | 1; }
         memset(&observer, 0, sizeof(observer));

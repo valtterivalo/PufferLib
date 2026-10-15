@@ -161,6 +161,8 @@ static double rt_decide(Request* q, const RtSeen* seen, int new_fight, int fight
     f->vis.y = us->y + q->ours.oy;
     s->visible[0] = f->vis;
     s->env.tick = n;
+    /* Stakes: K him us in gp; the price of our death in units of his. */
+    s->death_price = q->him > 0 && q->us > 0 ? fminf(RF_PRICE_MAX_X10 / 10.0f, fmaxf(0.1f, (float)((double)q->us / (double)q->him))) : 1.0f;
     s->inventory_use[0].divine_combat_ticks = OSRS_DIVINE_DURATION > n ? OSRS_DIVINE_DURATION - n : 0;
     float obs[RF_OBS_SIZE];
     unsigned char mask[RF_MASK_SIZE];

@@ -8,6 +8,7 @@
 #include "../../osrs_pvp_escape.h"
 #include "../../tests/riskfight_motor.h"
 
+enum { RF_PRICE_MAX_X10 = 25 };
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
@@ -62,7 +63,8 @@ enum {
     RF_EQUIPPED_START = RF_INVENTORY_START + OSRS_INVENTORY_SIZE * RF_INVENTORY_WIDTH,
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
-    RF_OBS_SIZE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,
+    RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
+    RF_OBS_SIZE = RF_PRICE + 1,
 };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
@@ -129,6 +131,8 @@ typedef struct {
     /* Scripted opponent reaction lag in ticks (domain randomization): his actions are those of opp_lag ticks ago. */
     int opp_lag;
     int opp_ring[4][RF_HEADS];
+    /* Stakes: the death price us/him (Stakes.ratio is him/us) of this fight; the reward of a death is minus this, of a kill 1. */
+    float death_price;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -157,8 +161,10 @@ typedef struct {
     RiskfightMotor motor;
 } RiskfightContext;
 
-static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
-    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -1 : 0;
+/** Stake-weighted outcome: a kill wins his gear (1), a death loses ours (price), both at once nets 1 - price, a timeout costs a death. */
+static inline float riskfight_outcome_reward(RiskfightOutcome outcome, float price) {
+    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -price :
+        outcome == RISKFIGHT_MUTUAL_DEATH ? 1 - price : 0;
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
@@ -374,6 +380,7 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     ctx->motor.rng = osrs_lowbias32(rng ^ 0x6d6f746fu) | 1;
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
+    s->death_price = 1;
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);

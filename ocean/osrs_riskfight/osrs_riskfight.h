@@ -208,7 +208,7 @@ void puf_step(Env* env) {
             env->log.escapes += outcome == RISKFIGHT_ESCAPE;
             env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
             env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
-            float net_stake = riskfight_outcome_reward(outcome);
+            float net_stake = riskfight_outcome_reward(outcome, 1);
             env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
             env->log.draw_rate += net_stake == 0;
             env->log.net_stake += net_stake;

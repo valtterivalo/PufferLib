@@ -312,7 +312,7 @@ static void riskfight_finish(RiskfightState* s) {
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
             escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
-        s->rewards[i] = riskfight_outcome_reward(s->outcome[i]);
+        s->rewards[i] = riskfight_outcome_reward(s->outcome[i], s->death_price);
     }
     s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :
         s->outcome[1] == RISKFIGHT_KILL ? 1 : -1;
