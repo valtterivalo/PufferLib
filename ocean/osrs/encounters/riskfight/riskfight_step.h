@@ -303,9 +303,9 @@ static void riskfight_observe_attack_chance(void* context, const OsrsPvpAttackCh
 
 /* A meal's animation is visible to the other side with a probability that depends on what else the eater shows (fit_meal_visibility.py over our
  * own meals, whose animations the other side sees exactly as we see his; Fact 7 has the spectator side of the same hiding): never on a swing tick
- * (Fact 6), p(quiet: no animation the tick before, no hit landing) 0.91, p(an animation carried from the tick before) 0.48, p(a hit lands, its
- * block animation competing) 0.56. The old rule hid a meal exactly on swing and hit ticks and showed every other one. */
-static const double RF_MEAL_VISIBLE_QUIET = 0.91, RF_MEAL_VISIBLE_CARRY = 0.48, RF_MEAL_VISIBLE_HIT = 0.56;
+ * (Fact 6), p(quiet: no animation the tick before, no hit landing) 0.89 (961 of 1,077 meals), p(an animation carried from the tick before) 0.45
+ * (114 of 252), p(a hit lands, its block animation competing) 0.49 (151 of 311); 0 of 10 on a swing tick. Refit on the 159 tapes of c-engine, Oct 16. The old rule hid a meal exactly on swing and hit ticks and showed every other one. */
+static const double RF_MEAL_VISIBLE_QUIET = 0.89, RF_MEAL_VISIBLE_CARRY = 0.45, RF_MEAL_VISIBLE_HIT = 0.49;
 
 static int riskfight_meal_visible(const RiskfightState* s, int agent) {
     const Player* p = &s->env.players[agent];
