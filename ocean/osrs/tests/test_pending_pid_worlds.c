@@ -22,7 +22,7 @@ static void launch_snapshot(int ranged) {
         snapshot.side[source] = (RiskfightSideSnapshot){.hitpoints = 99, .prayer = 99,
             .attack = 118, .strength = 118, .defence = 118, .magic = 99,
             .attack_history = RISKFIGHT_ATTACK_OBSERVED, .attack_timer = 10,
-            .attack_timer_uncapped = 10, .seen_last_attack_ago = -1};
+            .attack_timer_uncapped = 10, .seen_last_attack_ago = -1, .poison_source = OSRS_POISON_CLEAR_PRIOR};
     }
     gs_infer_init(&observer.inf);
     observer.inf.tracker_current = observer.inf.timed = 1;

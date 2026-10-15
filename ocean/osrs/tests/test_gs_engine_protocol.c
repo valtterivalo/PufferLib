@@ -175,10 +175,12 @@ static void test_gear_priors(void) {
     CHECK(server_unavailable(&q) == NULL);
     CHECK(q.his_weapon == 1434); /* the observation keeps the raw id */
     CHECK(la_gear_wearable(q.belief.gear));
-    CHECK(q.belief.gear.weapon != 1434 && la_item_of(q.belief.gear.weapon).kind == LA_ITEM_MAPPED);
+    /* items the Java table has stats for are priced from their own stats and kept (a PRIOR triple still reports them) */
+    CHECK(q.belief.gear.weapon == 1434);
+    CHECK(la_item_of(q.belief.gear.weapon).kind == LA_ITEM_MAPPED && la_item_of(q.belief.gear.weapon).item >= NUM_ITEMS);
     CHECK(get_item_attack_style((uint8_t)la_item_of(q.belief.gear.weapon).item) == ATTACK_STYLE_MELEE);
-    CHECK(q.belief.gear.shield == 8850);
-    CHECK(q.belief.gear.armor[3] == 10551); /* rune platebody -> nearest body */
+    CHECK(q.belief.gear.shield == 8849);
+    CHECK(q.belief.gear.armor[3] == 1127);
     CHECK(q.belief.gear.armor[5] == -1);    /* an id the table has no stats for: bare */
     int weapon = 0, shield_triple = 0, body = 0, legs = 0;
     for (int i = 0; i < q.prior_count; i++) {
