@@ -1,6 +1,7 @@
 #ifndef ENCOUNTER_RISKFIGHT_H
 #define ENCOUNTER_RISKFIGHT_H
 #include "riskfight/riskfight_snapshot.h"
+#include "riskfight/riskfight_align.h"
 
 static void riskfight_obs(EncounterState* state, EncounterContext* context, float* out) {
     riskfight_write_observation((RiskfightState*)state, ((RiskfightContext*)context)->human_player, out);
@@ -44,6 +45,9 @@ static void riskfight_put_int(EncounterState* state, EncounterContext* context, 
         ctx->opponent = (RiskfightOpponent)value;
     } else if (strcmp(key, "self_play") == 0) {
         assert(value == 0 || value == 1); ctx->self_play = value;
+    } else if (strcmp(key, "live_loadout") == 0) {
+        assert(value == 0 || value == 1);
+        for (int i = 0; i < 2; i++) ctx->loadout[i] = value ? &RISKFIGHT_LIVE_LOADOUT : NULL;
     } else if (strcmp(key, "human_player") == 0) {
         assert(value == 0 || value == 1); ctx->human_player = value;
     } else if (strcmp(key, "seed") == 0) {

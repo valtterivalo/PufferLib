@@ -159,6 +159,12 @@ static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
 }
 
 static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
+/* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
+ * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. */
+static const RiskfightLoadout RISKFIGHT_LIVE_LOADOUT = {
+    .equipment = {0, 46, 148, 255, 33, 115, 138, 150, 13, 149, 79},
+    .inventory = {216, 216, 199, 199, 149, 199, 199, 199, 149, 216, 199, 199, 216, 145, 216, 145, 0, 216, 216, 216, 203, 157, 216, 216, 216, 216, 211, 210},
+    .hitpoints = 121, .vengeance_sacks = 27};
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};

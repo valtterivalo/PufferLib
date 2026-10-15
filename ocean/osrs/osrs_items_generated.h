@@ -1586,28 +1586,28 @@ static Item ITEM_DATABASE[NUM_ITEMS + OSRS_STAT_ITEM_SLOTS] = {
     /* Recorded manual opponent gear; stats: corresponding OSRS Wiki pages. */
     [ITEM_MYTHICAL_CAPE] = {
         .item_id = 22114, .name = "Mythical cape", .slot = SLOT_CAPE,
-        .attack_crush = 6, .melee_strength = 1, .prayer = 1,
+        .attack_crush = 6,
         .defence_stab = 8, .defence_slash = 8, .defence_crush = 8,
-        .defence_magic = 8, .defence_ranged = 8
+        .defence_magic = 8, .defence_ranged = 8, .melee_strength = 1, .prayer = 1
     },
     [ITEM_MIXED_HIDE_TOP] = {
         .item_id = 29280, .name = "Mixed hide top", .slot = SLOT_BODY,
         .attack_stab = 4, .attack_slash = -2, .attack_crush = -3,
-        .attack_magic = -15, .attack_ranged = 27, .melee_strength = 2,
+        .attack_magic = -15, .attack_ranged = 27,
         .defence_stab = 33, .defence_slash = 39, .defence_crush = 43,
-        .defence_magic = 30, .defence_ranged = 32
+        .defence_magic = 30, .defence_ranged = 32, .melee_strength = 2
     },
     [ITEM_ELITE_BLACK_FULL_HELM] = {
         .item_id = 29560, .name = "Elite black full helm", .slot = SLOT_HEAD,
-        .attack_magic = -6, .attack_ranged = -3, .prayer = 4,
+        .attack_magic = -6, .attack_ranged = -3,
         .defence_stab = 13, .defence_slash = 14, .defence_crush = 11,
-        .defence_magic = -1, .defence_ranged = 13
+        .defence_magic = -1, .defence_ranged = 13, .prayer = 4
     },
     [ITEM_ELITE_BLACK_PLATELEGS] = {
         .item_id = 29564, .name = "Elite black platelegs", .slot = SLOT_LEGS,
-        .attack_magic = -21, .attack_ranged = -11, .prayer = 6,
+        .attack_magic = -21, .attack_ranged = -11,
         .defence_stab = 24, .defence_slash = 22, .defence_crush = 20,
-        .defence_magic = -4, .defence_ranged = 22
+        .defence_magic = -4, .defence_ranged = 22, .prayer = 6
     },
 
 };

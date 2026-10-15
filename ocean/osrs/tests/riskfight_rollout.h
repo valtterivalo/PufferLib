@@ -6,7 +6,13 @@
 
 enum { MAX_STEPS = 512, PROFILE_COUNT = RISKFIGHT_HUMAN_TRAIN_PROFILES + RISKFIGHT_HUMAN_HELDOUT_PROFILES };
 typedef enum { MODEL_PROFILES, MODEL_FIT } ModelKind;
-typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES, OURS_IDLE, OURS_LOOKAHEAD } OursKind;
+typedef enum { OURS_REPLAY, OURS_EAT_AT_THRESHOLD, OURS_EAT_AT_RISK, OURS_RULES, OURS_IDLE, OURS_LOOKAHEAD, OURS_SCRIPT, OURS_NET } OursKind;
+/* Trained network acting for our side: fills the 21 head actions from the state. */
+static void (*g_policy_hook)(const RiskfightState* s, int* actions);
+/* Optional per-step observer, called after the queues ran with the step index; used by standalone probes. */
+static void (*g_step_hook)(const void* sim, int step);
+static const RiskfightProfile* g_script_profile;
+static int g_attack_first;
 
 typedef struct {
     ModelKind kind;
@@ -177,8 +183,19 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
             }
             human_input_queue_command(hi, command);
         }
+    } else if (policy->kind == OURS_NET) {
+        int actions[RF_HEADS];
+        g_policy_hook(&sim->state, actions);
+        riskfight_policy_commands(&sim->state, 0, actions, hi);
+    } else if (policy->kind == OURS_SCRIPT) {
+        float obs[RF_OBS_SIZE];
+        int actions[RF_HEADS];
+        riskfight_write_observation(&sim->state, 0, obs);
+        riskfight_script(obs, g_script_profile, sim->state.script_seed[0], sim->state.consume_ticks[0], actions);
+        riskfight_policy_commands(&sim->state, 0, actions, hi);
     } else if (policy_rules(policy)) {
         ours_act(sim, &sim->ours, hi, step);
+        if (g_attack_first && step == 0) human_input_queue_command(hi, (HumanCommand){.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 1});
     } else if (policy->kind == OURS_EAT_AT_RISK) {
         queue_ours_at_risk(sim, tape, policy, tick, step);
     } else if (policy->kind == OURS_EAT_AT_THRESHOLD) {
@@ -238,6 +255,7 @@ static void run_steps(Sim* sim, const Tape* tape, int tick_base, int k, const Op
         sim->step_damage = sim->step_max_hit = sim->step_direct = 0;
         sim->obs.hit_count = 0;
         riskfight_step_queues(s, &sim->context, &sim->context.policy_commands[0].commands, &sim->context.policy_commands[1].commands);
+        if (g_step_hook) g_step_hook(sim, step);
         if (g_ablation.damage && s->env.players[1].current_hitpoints > 0 && !s->escaped[1]) {
             int adjust = sim->step_damage - tape_damage_on_him(tape, tick_base + 1 + step);
             Player* target = &s->env.players[1];
