@@ -85,7 +85,7 @@ static void meal_infer(Rec* rec, const Tape* tape) {
     for (int t = tape->lo; t <= tape->hi; t++) {
         const RecTick* rt = &rec->at[t - tape->lo];
         if (rt->eat && eat_count < 16) eats[eat_count++] = t;
-        if (!rt->swing[1] || rt->spec_swing[1] > 0 && 0) continue;
+        if (!rt->swing[1]) continue;
         int speed = tape_tick(tape, t)->swing_him_speed;
         if (previous_swing >= 0 && eat_count > 0 && speed > 0 && t - previous_swing - speed >= 0 && eat_count <= 4) {
             uint8_t picked[16] = {0};
@@ -203,7 +203,7 @@ typedef struct {
     int div_first[DIV_KINDS], div_ticks[DIV_KINDS], div_last_tick[DIV_KINDS];
     char div_text[DIV_KINDS][200];
     int unknown_weapon_noted[8], unknown_weapon_count;
-    long ch_ok[16], ch_n[16];
+    long ch_ok[16], ch_n[16], ev_rec[8], ev_sim[8], ev_both[8];
 } Run;
 
 static void run_alloc(Run* r, const Tape* tape, const Rec* rec, int t0) {
@@ -230,6 +230,7 @@ static void run_reset(Run* r) {
     memset(r->extra, 0, (size_t)r->steps * 2 * sizeof(int));
     r->hit_count = 0; r->steps_done = 0; r->outcome = 0; r->unknown_weapon_count = 0;
     memset(r->ch_ok, 0, sizeof(r->ch_ok)); memset(r->ch_n, 0, sizeof(r->ch_n));
+    memset(r->ev_rec, 0, sizeof(r->ev_rec)); memset(r->ev_sim, 0, sizeof(r->ev_sim)); memset(r->ev_both, 0, sizeof(r->ev_both));
     for (int i = 0; i < DIV_KINDS; i++) { r->div_first[i] = -1; r->div_ticks[i] = 0; r->div_last_tick[i] = -1; r->div_text[i][0] = 0; }
 }
 
@@ -340,8 +341,17 @@ static void build_commands(Run* r, int x, RiskfightState* s, Cmds cmds[2]) {
         if (!him->spec_armed) push(&cmds[1], (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE});
     } else if (rt->swing[1] && him->spec_armed)
         push(&cmds[1], (HumanCommand){.kind = HUMAN_COMMAND_SPEC_TOGGLE, .spec_mode = HUMAN_SPEC_DISARM});
-    for (int e = 0; e < rt->eat; e++) {
-        /* The animation does not say which food: the first one the locks allow, hard food then karambwan then brew. */
+    int mask = r->rec->meal[x - tape->lo];
+    if (rt->eat && mask) {
+        static const struct { int bit; OsrsConsumableKind kind; } order[3] = {{1, OSRS_CONSUMABLE_ANGLERFISH}, {4, OSRS_CONSUMABLE_BREW}, {2, OSRS_CONSUMABLE_KARAMBWAN}};
+        for (int i = 0; i < 3; i++) {
+            if (!(mask & order[i].bit)) continue;
+            int slot = find_kind_slot(him, order[i].kind);
+            if (slot >= 0) push_click(&cmds[1], slot);
+            else note_div(r, DIV_CMD, x, "his meal kind %d inferred from his swing delay has no supply in the sim", order[i].bit);
+        }
+    } else for (int e = 0; e < rt->eat; e++) {
+        /* Kind not explained by the swing delays: the first one the locks allow, hard food then karambwan then brew. */
         int slot = -1;
         int hard_locked = him->food_timer > 0 || e > 0;
         if (!hard_locked) slot = find_kind_slot(him, OSRS_CONSUMABLE_ANGLERFISH);
@@ -367,6 +377,7 @@ enum { CH_HP_US, CH_HIS_BAND, CH_SWING_US, CH_SWING_HIM, CH_CONSUME_US, CH_CONSU
 static const char* const CH_NAME[CH_COUNT] = {"our hit points", "his hit points in bar band", "our swing ticks", "his swing ticks", "our consumption ticks", "his consumption ticks",
     "attack landings on us (count)", "attack landings on him (count)", "echoes on us", "echoes on him", "our Vengeance state", "his Vengeance state", "our spec energy", "his spec energy"};
 static void chan(Run* r, int c, int ok) { r->ch_n[c]++; r->ch_ok[c] += ok; }
+static void chane(Run* r, int e, int rec, int sim) { r->ev_rec[e] += rec; r->ev_sim[e] += sim; r->ev_both[e] += rec < sim ? rec : sim; }
 
 static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_before, int consumed_before[2]) {
     const Tape* tape = r->tape;
@@ -385,7 +396,7 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
             s->env.players[0].food_timer, s->env.players[1].food_timer);
         printf(" veng us %d/%d him %d/%d spec us %d/%d him %d/%d", s->env.players[0].veng_active, row->veng_us, s->env.players[1].veng_active, row->veng_him,
             s->env.players[0].special_energy, row->spec_us, s->env.players[1].special_energy, row->spec_him);
-        printf(" vcd %d mag %d", s->env.players[0].veng_cooldown, s->env.players[0].current_magic);
+        printf(" pot %d kar %d vcd %d mag %d meal %d", s->env.players[1].potion_timer, s->env.players[1].karambwan_timer, s->env.players[0].veng_cooldown, s->env.players[0].current_magic, r->rec->meal[x - tape->lo]);
         printf("\n");
     }
     if (hp0 != row->hp) note_div(r, DIV_HP_US, x, "our hit points sim %d recording %d", hp0, row->hp);
@@ -452,6 +463,14 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
     chan(r, CH_VENG_HIM, s->env.players[1].veng_active == row->veng_him);
     chan(r, CH_SPEC_US, s->env.players[0].special_energy == row->spec_us);
     chan(r, CH_SPEC_HIM, s->env.players[1].special_energy == row->spec_him);
+    chane(r, 0, rt->swing[0] > 0, r->swing[0][k]);
+    chane(r, 1, rt->swing[1] > 0, r->swing[1][k]);
+    chane(r, 2, rec_attack[0], sim_attack[0]);
+    chane(r, 3, rec_attack[1], sim_attack[1]);
+    chane(r, 4, rt->echo[0].n, echo_sim_n[0]);
+    chane(r, 5, rt->echo[1].n, echo_sim_n[1]);
+    chane(r, 6, our_expect, s->consume_ticks[0] > consumed_before[0]);
+    chane(r, 7, his_ate_rec, s->consume_ticks[1] > consumed_before[1]);
     if (row->bar_now_ratio >= 0 && row->bar_now_scale > 1) {
         OsrsHealthBarRange band = osrs_health_bar_range(row->bar_now_ratio, row->bar_now_scale, 99, 121);
         if (band.kind == OSRS_HEALTH_BAR_KNOWN) chan(r, CH_HIS_BAND, hp1 >= band.lower && hp1 <= band.upper);
@@ -567,6 +586,7 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
         int mode = 1;
         for (int g = 2; g < 8; g++) if (gaps[g] > gaps[mode]) mode = g;
         Player* p = &state->env.players[side];
+        if (g_trace && r->trace_active) printf("[rapid check side %d mode %d count %d style %d speed %d]\n", side, mode, gaps[mode], (int)get_slot_weapon_attack_style(p), get_slot_gear_bonuses(p)->attack_speed);
         if (gaps[mode] >= 3 && get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED && mode == get_slot_gear_bonuses(p)->attack_speed - 1)
             riskfight_execute_command(state, ctx, side, &(HumanCommand){.kind = HUMAN_COMMAND_FIGHT_STYLE, .fight_style = FIGHT_STYLE_RAPID});
     }
@@ -634,7 +654,7 @@ typedef struct {
     double outcome_agree; long outcome_n; double outcome_rec[OUTCOMES], outcome_sim[OUTCOMES];
     double swing_rec[2], swing_hit[2], swing_sim_extra[2];
     long ex_fights, ex_clean[DIV_KINDS], ex_clean_all, ex_ticks, ex_div_ticks[DIV_KINDS], ex_seed_runs, ex_seed_clean;
-    long ch_ok[16], ch_n[16], tch_ok[16], tch_n[16];
+    long ch_ok[16], ch_n[16], tch_ok[16], tch_n[16], tev_rec[8], tev_sim[8], tev_both[8];
     long ex_first_hist[DIV_KINDS];
 } Agg;
 
@@ -824,9 +844,14 @@ int main(int argc, char** argv) {
             }
         }
         /* Teacher-forced pass (seed 0): each step starts from the recorded state of the previous tick, so a channel's error is that tick's mechanics alone. */
-        run.trace_active = 0;
+        run.trace_active = g_trace;
+        if (g_trace) printf("--- teacher-forced pass %s\n", base);
         if (run_fight(&run, osrs_lowbias32(tape_salt + 0x51ED270Bu), 2, &state, &ctx))
             for (int c = 0; c < CH_COUNT; c++) { agg[0].tch_ok[c] += run.ch_ok[c]; agg[0].tch_n[c] += run.ch_n[c]; if (clean) { agg[1].tch_ok[c] += run.ch_ok[c]; agg[1].tch_n[c] += run.ch_n[c]; } }
+        for (int e = 0; e < 8; e++) {
+            agg[0].tev_rec[e] += run.ev_rec[e]; agg[0].tev_sim[e] += run.ev_sim[e]; agg[0].tev_both[e] += run.ev_both[e];
+            if (clean) { agg[1].tev_rec[e] += run.ev_rec[e]; agg[1].tev_sim[e] += run.ev_sim[e]; agg[1].tev_both[e] += run.ev_both[e]; }
+        }
         if (dfile) for (int kd = 0; kd < DIV_KINDS; kd++)
             if (seed0_first[kd] >= 0) fprintf(dfile, "%s\t%s\t%d\t%d\t%s\n", base, DIV_NAME[kd], seed0_first[kd], seed0_ticks[kd], seed0_text[kd]);
 
@@ -933,6 +958,9 @@ int main(int argc, char** argv) {
         for (int c = 0; c < CH_COUNT; c++)
             printf("| exact-mode channel, %s: ticks agreeing, free run / teacher-forced (n ticks %ld) | - | %.2f%% / %.2f%% |\n", CH_NAME[c], g->ch_n[c],
                 g->ch_n[c] ? 100.0 * (double)g->ch_ok[c] / (double)g->ch_n[c] : NAN, g->tch_n[c] ? 100.0 * (double)g->tch_ok[c] / (double)g->tch_n[c] : NAN);
+        static const char* const EV_NAME[8] = {"our swings", "his swings", "attack landings on us", "attack landings on him", "echoes on us", "echoes on him", "our consumption ticks", "his consumption ticks"};
+        for (int e = 0; e < 8; e++)
+            printf("| teacher-forced events, %s: recorded / sim / matched | %ld | %ld / %ld |\n", EV_NAME[e], g->tev_rec[e], g->tev_sim[e], g->tev_both[e]);
     }
     return 0;
 }

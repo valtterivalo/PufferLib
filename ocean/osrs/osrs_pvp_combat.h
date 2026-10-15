@@ -1143,7 +1143,8 @@ post_attack:
     attacker->magic_type_this_tick = magic_type;
     attacker->used_special_this_tick = is_special;
 
-    int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed;
+    /* The cached gear bonuses carry the weapon's base speed only; Rapid takes one tick off (own recordings: a Rapid msb(i) swings every 3 ticks). */
+    int attack_speed = get_slot_gear_bonuses(attacker)->attack_speed + osrs_stance_speed_mod(attacker->fight_style);
     int is_instant = (is_special && (spec_item_idx == ITEM_GRANITE_MAUL ||
         spec_item_idx == ITEM_GRANITE_MAUL_ORNATE));
     if (is_instant)
