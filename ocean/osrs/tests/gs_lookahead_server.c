@@ -1,29 +1,40 @@
-/* The lookahead as a process: one request per decision on stdin, one scored line per request on stdout.
+/* The lookahead as a process: protocol v2. One request per decision on stdin, one scored line per request on stdout.
  *
- *   cc -std=c11 -O2 -I. -o gs_lookahead_server ocean/osrs/tests/gs_lookahead_server.c -lm
- *   gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON]
+ *   cc -std=c11 -O2 -I. -o gs_lookahead_server ocean/osrs/tests/gs_lookahead_server.c -lm      (cwd = repo root: the .cmap maps under ocean/osrs/data are relative)
+ *   gs_lookahead_server MODEL.fit EAT_MIXTURE.fit [WORLDS HORIZON [THREADS]]      defaults: 512 worlds, horizon 15, 8 threads
  *
- * Request lines end in END. P KNOWN n followed by n D records, or P UNKNOWN.
- * P VARIANTS localCount opponentCount retains both concrete-holder queues; each D
+ * STARTUP: the server loads the fits, runs a synthetic decision stream through the whole path, then prints exactly one line
+ *   READY <worst_warm_micros> <macro names joined with ';'>
+ * before it reads stdin (worst_warm_micros = slowest decision after the first two cold ones). stderr carries one line per gear prior used.
+ *
+ * REQUEST: LA id tick, B belief, K stakes, F feasibility, O own state, W worn, G bag, SHIELD/ARMOR/Q/H/RA/PS observations, P pending hits, R plan, END.
+ * P KNOWN n followed by n D records, or P UNKNOWN. P VARIANTS localCount opponentCount retains both concrete-holder queues; each D
  * adds a holder (0 LOCAL, 1 OPPONENT) before source. Fixed D records omit holder.
  * D [holder] source delay kind style special success mode damage min max accuracyBp prayer smite.
- * R KNOWN n followed by n C records, or R UNKNOWN. C due kind arg timing:
- * kinds 14/15/16 add count and candidates for eat/equip/unequip live recipes;
- * negative eat candidates denote a dose family, positive candidates an exact raw ID.
- * timing 0 samples an unsent lower bound; 1 preserves a known landing (guards cost no click).
+ * R KNOWN n followed by n C records: ONLY the unsent remainder of the plan this engine emitted earlier (an earlier response's A records echoed back,
+ * due rebased to > tick). R KNOWN 0 = nothing committed. R UNKNOWN is rejected: Java never invents C records.
+ * C due kind arg timing [count candidates...]  (the record grammar below). timing 0 samples an unsent lower bound; 1 preserves a known landing.
+ * kind 0 click inventory slot arg, 1 attack, 2 spec enable, 3 vengeance, 4 spec disarm, 5 unequip worn slot arg, 6 ready (arg early),
+ * 7 hit wait (arg min damage or -1), 8 energy>=arg else skip to group end, 9 hp>=arg skip next, 10 GROUP BOUNDARY, 11 equip raw item,
+ * 12 inventory primary click raw item, 13 spec toggle, 14/15/16 eat/equip/unequip by recipe (count + candidates; negative eat candidates denote a dose
+ * family, positive an exact raw id), 17 STOP, 18 AlignedReady(absolute attackTick, timing 1), 19 wait until our Voidwaker special swing has launched.
  * PS side KNOWN severity pulse immunity imports exact actor state.
- * PS side IMMUNE negativeVarp [observationAgeTicks] imports a conservative
- * immunity lower bound; age defaults to zero for a current-tick observation.
+ * PS side IMMUNE negativeVarp [observationAgeTicks] imports a conservative immunity lower bound; age defaults to zero.
  * Admission requires lowerBound > horizon + age (unknown pulse phase excluded).
- * PS side CLEAR_PRIOR declares a clean initial-state cohort, not observed truth.
- * PS side UNKNOWN explicitly excludes poison-sensitive requests. Missing PS is
- * supported only in the legacy no-poison-weapon, clean-initial-status cohort.
- * BH p++ supports immune-target horizons only until multi-hit
- * proc granularity and application timer phase are independently established.
- * C kind17 STOP arg0 timing0; kind18 AlignedReady absoluteTick timing1 (op11).
- * RA OBSERVED raw172 (0 ON, 1 OFF), RA OFF_PRIOR declared simulation cohort,
- * or RA UNKNOWN. Missing RA is UNKNOWN; only OFF admits STOP-based programs.
- * Empty queues/plans require explicit KNOWN 0. Response: R id micros best, then each macro's feasible kill death value worlds. */
+ * PS side CLEAR_PRIOR declares a clean initial-state cohort, not observed truth. PS side UNKNOWN excludes poison-sensitive requests.
+ * Missing PS is supported only in the legacy no-poison-weapon, clean-initial-status cohort.
+ * BH p++ supports immune-target horizons only until multi-hit proc granularity and application timer phase are independently established.
+ * RA OBSERVED raw172 (0 ON, 1 OFF), RA OFF_PRIOR declared simulation cohort, or RA UNKNOWN. Only OFF admits STOP-based programs.
+ * Empty queues/plans require explicit KNOWN 0.
+ *
+ * RESPONSE (one line): R id server_micros best_index, then for each of the 18 macros `feasible kill death value worlds` (LA_NAME order), then
+ * `A n` followed by n records `due kind arg timing [count candidates...]`: the chosen macro's plan in the same grammar as the C records.
+ * Macro 0 `continue` keeps the committed remainder (its A records echo it). Macro 1 `no new clicks` is a CANCEL of the remainder (A 0).
+ * Another macro replaces the remainder with its own script. Ties go to continue: another macro must be strictly better by value.
+ * Unavailable: `UNAVAILABLE id reason [raw]`, only for missing own-side observations (pending hits, poison state, auto-retaliate, attack history).
+ *
+ * Opponent weapon/shield/armor/ammo are never UNAVAILABLE: unknown/unsupported ids get declared priors (see request_gear_priors), the raw ids stay
+ * in the request and in the stderr prior line, never silently dropped. */
 #define _POSIX_C_SOURCE 200809L
 #include <time.h>
 #include "riskfight_rollout.h"
@@ -33,7 +44,7 @@
 #undef assert
 #define assert(condition) do { if (!(condition)) { fprintf(stderr, "invalid lookahead request: %s\n", #condition); exit(2); } } while (0)
 
-enum { INERT_ID = 27281 };
+enum { INERT_ID = 27281, SERVER_WORLDS = 512, SERVER_THREADS = 8 };
 static const int CANONICAL_FROM[] = {24592, 24595, 24598, 24601, 24603, 24605, 22441, 20513, 28067, 28070, 21287};
 static const int CANONICAL_TO[] = {13441, 3144, 3024, 3026, 3028, 3030, 22322, 10551, 10551, 10828, 21295};
 static const int SIM_IDS[] = {13441, 3144, 3024, 3026, 3028, 3030, 6685, 6687, 6689, 6691, 12695, 12697, 12699, 12701, 23691, 23694, 8013, 24621, 24225, 27690, 12954,
@@ -50,6 +61,106 @@ static int canonical(int id) {
         default:
             return -2;
     }
+}
+
+/* Declared gear priors. The sim item table covers a fixed set; any other worn item is simulated as the nearest supported item of the same slot:
+ * weapons share attack style and two-handedness, carry no special attack or effect, and are nearest by attack speed, then bonuses; other slots are
+ * nearest by bonuses among effect-free items, or bare when the id has no known stats. Unknown ids are told apart from known ones in the stderr line,
+ * printed once per substitution; the raw id always stays in the request. */
+typedef struct { int atk[5], def[5], str, rstr, mdmg, prayer, speed, two_handed, style; } GearStats;
+enum { GS_PRIOR_MAX = 64 };
+static int g_prior_seen[256][2], g_prior_seen_count;
+static int g_prior_out[GS_PRIOR_MAX][3], g_prior_out_count; /* triples of the request being parsed */
+
+static int prior_db_slot(int kit) {
+    switch (kit) {
+        case 0: return SLOT_HEAD; case 1: return SLOT_CAPE; case 2: return SLOT_NECK; case 3: return SLOT_WEAPON; case 4: return SLOT_BODY;
+        case 5: return SLOT_SHIELD; case 7: return SLOT_LEGS; case 9: return SLOT_HANDS; case 10: return SLOT_FEET; case 12: return SLOT_RING;
+        default: return -1;
+    }
+}
+static const GsJavaItemRow* prior_row(int raw) {
+    for (size_t i = 0; i < sizeof(GS_JAVA_ITEMS) / sizeof(*GS_JAVA_ITEMS); i++) if (GS_JAVA_ITEMS[i].id == raw) return &GS_JAVA_ITEMS[i];
+    return NULL;
+}
+static GearStats prior_stats_row(const GsJavaItemRow* r) {
+    int style = gs_style_of(r->astab, r->aslash, r->acrush, r->arange, r->rstr, r->amagic);
+    return (GearStats){{r->astab, r->aslash, r->acrush, r->arange, r->amagic}, {r->dstab, r->dslash, r->dcrush, r->drange, r->dmagic}, r->str, r->rstr,
+        (int)(r->mdmg + 0.5), r->prayer, r->aspeed, r->two_handed,
+        style == GS_MAGIC ? ATTACK_STYLE_MAGIC : style == GS_RANGED ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE};
+}
+static GearStats prior_stats_item(int idx) {
+    const Item* it = &ITEM_DATABASE[idx];
+    int style = gs_style_of(it->attack_stab, it->attack_slash, it->attack_crush, it->attack_ranged, it->ranged_strength, it->attack_magic);
+    return (GearStats){{it->attack_stab, it->attack_slash, it->attack_crush, it->attack_ranged, it->attack_magic},
+        {it->defence_stab, it->defence_slash, it->defence_crush, it->defence_ranged, it->defence_magic}, it->melee_strength, it->ranged_strength,
+        it->magic_damage, it->prayer, it->attack_speed, it->two_handed,
+        style == GS_MAGIC ? ATTACK_STYLE_MAGIC : style == GS_RANGED ? ATTACK_STYLE_RANGED : ATTACK_STYLE_MELEE};
+}
+static int prior_distance(const GearStats* a, const GearStats* b, int weapon) {
+    int d = 3 * (abs(a->str - b->str) + abs(a->rstr - b->rstr) + abs(a->mdmg - b->mdmg));
+    for (int i = 0; i < 5; i++) d += abs(a->atk[i] - b->atk[i]);
+    if (weapon) return d + 100 * abs(a->speed - b->speed);
+    for (int i = 0; i < 5; i++) d += abs(a->def[i] - b->def[i]);
+    return d + 2 * abs(a->prayer - b->prayer);
+}
+static int prior_eligible(int idx, int db_slot, const GearStats* want) {
+    const Item* it = &ITEM_DATABASE[idx];
+    if (it->slot != db_slot || it->effect_mask != OSRS_ITEM_EFFECT_NONE) return 0;
+    if (db_slot != SLOT_WEAPON) return 1;
+    return get_item_attack_style((uint8_t)idx) == want->style && it->two_handed == want->two_handed && osrs_spec_cost(idx) == 0 && it->attack_speed > 0;
+}
+static void prior_triple(int side, int wire_slot, int raw) {
+    if (g_prior_out_count == GS_PRIOR_MAX) { fprintf(stderr, "more than %d gear priors in one request\n", GS_PRIOR_MAX); exit(2); }
+    g_prior_out[g_prior_out_count][0] = side;
+    g_prior_out[g_prior_out_count][1] = wire_slot;
+    g_prior_out[g_prior_out_count++][2] = raw;
+}
+static void prior_note(int tick, int side, int wire_slot, int kit, int raw, int proxy, const char* how) {
+    prior_triple(side, wire_slot, raw);
+    for (int i = 0; i < g_prior_seen_count; i++) if (g_prior_seen[i][0] == kit * 100000 + raw && g_prior_seen[i][1] == proxy) return;
+    if (g_prior_seen_count < 256) { g_prior_seen[g_prior_seen_count][0] = kit * 100000 + raw; g_prior_seen[g_prior_seen_count++][1] = proxy; }
+    const GsJavaItemRow* row = prior_row(raw);
+    int own = osrs_item_index_from_raw_id(raw);
+    fprintf(stderr, "[prior] tick %d slot %d raw %d (%s) -> %d (%s): %s\n", tick, kit, raw, own >= 0 ? ITEM_DATABASE[own].name : row ? row->name : "id unknown to the item table",
+        proxy, proxy >= 0 ? ITEM_DATABASE[osrs_item_index_from_raw_id(proxy)].name : "bare", how);
+}
+/* The raw id to simulate for raw worn in kit slot `kit` (wire slot as in request_gear_priors); -1 is bare. Items the sim can use are returned unchanged:
+ * mapped, and for weapons also with an attack style (mapped weapons without one, e.g. godswords, cannot attack in the sim and take the weapon prior). */
+static int prior_resolve(int tick, int side, int wire_slot, int kit, int raw, int observed_speed) {
+    if (raw == -1) return raw;
+    int db_slot = prior_db_slot(kit);
+    assert(db_slot >= 0);
+    LaItem own = la_item_of(raw);
+    if (own.kind == LA_ITEM_MAPPED && (db_slot != SLOT_WEAPON || get_item_attack_style((uint8_t)own.item) != ATTACK_STYLE_NONE)) return raw;
+    const GsJavaItemRow* row = prior_row(raw);
+    int known = own.kind == LA_ITEM_MAPPED || (row && row->has_stats && row->slot == kit);
+    GearStats want;
+    const char* how;
+    if (known) {
+        want = own.kind == LA_ITEM_MAPPED ? prior_stats_item(own.item) : prior_stats_row(row);
+        how = db_slot == SLOT_WEAPON ? "known stats, nearest same-style special-free weapon" : "known stats, nearest effect-free item of the slot";
+    }
+    else if (db_slot == SLOT_WEAPON) {
+        want = prior_stats_item(ITEM_WHIP);
+        want.speed = observed_speed > 0 ? observed_speed : want.speed;
+        how = "no stats for the id: whip-class melee at the observed attack speed";
+    } else { prior_note(tick, side, wire_slot, kit, raw, -1, "no stats for the id: bare slot"); return -1; }
+    int best = -1, best_distance = INT_MAX;
+    for (int idx = 0; idx < NUM_ITEMS; idx++) {
+        if (!prior_eligible(idx, db_slot, &want)) continue;
+        GearStats have = prior_stats_item(idx);
+        int d = prior_distance(&want, &have, db_slot == SLOT_WEAPON);
+        if (d < best_distance) { best_distance = d; best = idx; }
+    }
+    if (db_slot != SLOT_WEAPON) {
+        GearStats bare = {0};
+        if (prior_distance(&want, &bare, 0) < best_distance) best = -1;
+    }
+    assert(best >= 0 || db_slot != SLOT_WEAPON);
+    int proxy = best < 0 ? -1 : ITEM_DATABASE[best].item_id;
+    prior_note(tick, side, wire_slot, kit, raw, proxy, how);
+    return proxy;
 }
 
 typedef struct {
@@ -70,7 +181,8 @@ typedef struct {
     int pending_pid_active, pending_pid_expected[2], pending_pid_read[2], pending_pid_count[2][2];
     PendingHit pending_pid[2][2][MAX_PENDING_HITS];
     PendingHitMetadata pending_pid_metadata[2][2][MAX_PENDING_HITS];
-    int rules_known, rules_expected, rules_unsupported;
+    int rules_expected;
+    int prior_count, prior[GS_PRIOR_MAX][3]; /* side slot raw, see request_gear_priors */
     int big_hit, since_vw, since_maul, ready_age, last_swing;
     int poison_source[2]; /* 0 missing/unknown, 1 exact, 2 horizon immunity, 3 declared clean prior */
     int poison_seen[2];
@@ -99,9 +211,9 @@ static int request_poison_attack(const Request* q, int side) {
         if (request_poison_weapon(q->rules.arg[i])) return 1;
     return 0;
 }
+/* Only genuinely missing own-side observations make a request unavailable; opponent gear and the plan never do. */
 static const char* request_unavailable(const Request* q) {
     if (!q->pending_known) return "pending_unknown";
-    if (!q->rules_known || q->rules_unsupported) return "production_plan_unknown";
     for (int i = 0; i < q->rules.n; i++)
         if (q->rules.command[i].kind == HUMAN_COMMAND_STOP && !q->feasible.pause_ok)
             return q->auto_retaliate_source == 1 ? "auto_retaliate_on" : "auto_retaliate_unknown";
@@ -116,27 +228,45 @@ static const char* request_unavailable(const Request* q) {
             q->poison[side].immunity_ticks <= g_la_horizon + q->poison_observation_age[side])
             return "poison_application_unverified";
     }
-    for (int i = 0; i < TAPE_BAG; i++) if (q->bag[i] == 24589) return "local_food_unsupported";
-    for (int i = 0; i < TAPE_WORN; i++)
-        if (canonical(q->worn[i]) == -2 || canonical(q->worn[i]) == INERT_ID)
-            return "local_equipment_unsupported";
-    for (int i = 0; i < TAPE_BAG; i++)
-        if (canonical(q->bag[i]) == -2) return "local_inventory_unsupported";
-    for (int i = 0; i < q->rules.n; i++) if (q->rules.op[i] == 8) {
-        int matches = 0;
-        for (int slot = 0; slot < TAPE_BAG; slot++) {
-            int held = canonical(q->bag[slot]), matched = 0;
-            for (int c = 0; c < q->rules.candidate_count[i]; c++) {
-                int candidate = q->rules.candidates[i][c];
-                if (candidate > 0) matched |= held == candidate;
-                else matched |= osrs_item_content_metadata(raw_id_to_content(held))->consumable_kind ==
-                    osrs_item_content_metadata(raw_id_to_content(-candidate))->consumable_kind;
-            }
-            matches += matched;
-        }
-        if (matches > 1) return "production_plan_unknown"; /* Cursor-path choice is not in the snapshot contract. */
-    }
     return NULL;
+}
+
+/* Replaces everything the sim has no item for with declared priors (opponent: weapon, shield, armor, unobserved composition; own side: worn items
+ * by the same nearest-item rule, bag items as inert filler). Afterwards every id is one the sim can wear or hold. The triples `side slot raw` of this
+ * request (side 1 opponent: slot 0 weapon, 1 shield, 2 + armor index; 13 ammo; side 0 own: worn kit slot, bag 100 + slot) feed the response PRIOR suffix. */
+static void request_gear_priors(Request* q) {
+    static int unobserved_noted;
+    g_prior_out_count = 0;
+    GsObservedGear* g = &q->belief.gear;
+    if (g->source != GS_GEAR_COMPOSITION_OBSERVED) {
+        if (g->source == GS_GEAR_UNKNOWN) { g->shield = -1; prior_triple(1, 1, -1); }
+        for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) { g->armor[slot] = -1; prior_triple(1, 2 + slot, -1); }
+        if (!(unobserved_noted & (1 << g->source))) {
+            unobserved_noted |= 1 << g->source;
+            fprintf(stderr, "[prior] tick %d opponent %s not observed: bare\n", q->tick, g->source == GS_GEAR_UNKNOWN ? "shield and armor" : "armor");
+        }
+    }
+    g->weapon = prior_resolve(q->tick, 1, 0, 3, g->weapon, q->his_speed);
+    g->shield = prior_resolve(q->tick, 1, 1, 5, g->shield, q->his_speed);
+    for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++) g->armor[slot] = prior_resolve(q->tick, 1, 2 + slot, GS_ARMOR_KIT_SLOT[slot], g->armor[slot], q->his_speed);
+    if (g->shield != -1 && item_is_two_handed((uint8_t)la_item_of(g->weapon).item)) {
+        prior_note(q->tick, 1, 1, 5, g->shield, -1, "shield under a two-handed weapon: bare");
+        g->shield = -1;
+    }
+    uint8_t ammo = la_ammo_prior((uint8_t)la_item_of(g->weapon).item);
+    if (ammo != ITEM_NONE && la_item_of(g->weapon).item != ITEM_MAGIC_SHORTBOW_I)
+        prior_note(q->tick, 1, 13, 13, ITEM_DATABASE[la_item_of(g->weapon).item].item_id, ITEM_DATABASE[ammo].item_id, "declared ammo prior for the ranged weapon");
+    for (int i = 0; i < TAPE_WORN; i++) {
+        int c = canonical(q->worn[i]);
+        q->worn[i] = c >= 0 && c != INERT_ID ? c : prior_resolve(q->tick, 0, i, i, q->worn[i], q->ours_speed);
+    }
+    for (int i = 0; i < TAPE_BAG; i++) {
+        int c = canonical(q->bag[i]);
+        if (c == -2) prior_note(q->tick, 0, 100 + i, 99, q->bag[i], INERT_ID, "own bag item the sim has no model for: inert filler");
+        q->bag[i] = c == -2 ? INERT_ID : c;
+    }
+    q->prior_count = g_prior_out_count;
+    memcpy(q->prior, g_prior_out, sizeof(g_prior_out[0]) * (size_t)g_prior_out_count);
 }
 
 
@@ -293,7 +423,7 @@ static void read_request(FILE* in, Request* q) {
             assert(sscanf(p, "%15s%n", source, &used) == 1); p += used;
             int variants = pending && !strcmp(source, "VARIANTS");
             int known = variants || !strcmp(source, "KNOWN");
-            assert(known || !strcmp(source, "UNKNOWN"));
+            assert(known || (pending && !strcmp(source, "UNKNOWN"))); /* R UNKNOWN is gone: Java never invents committed plans. */
             int count = known ? request_int(&p) : 0;
             assert(count >= 0 && count <= (pending ? 2 * MAX_PENDING_HITS : LA_SCRIPT));
             if (variants) {
@@ -305,7 +435,7 @@ static void read_request(FILE* in, Request* q) {
             }
             request_end(p);
             if (pending) { q->pending_known = known; q->pending_expected = count; }
-            else { q->rules_known = known; q->rules_expected = count; q->rules.production = 1; }
+            else { q->rules_expected = count; q->rules.production = 1; }
         } else if (!strcmp(tag, "D")) {
             assert((seen & 32) && q->pending_known && q->pending_read < q->pending_expected);
             int holder = q->pending_pid_active ? request_int(&p) : 0;
@@ -344,13 +474,13 @@ static void read_request(FILE* in, Request* q) {
             assert(h->kind == OSRS_HIT_DIRECT || metadata->damage_mode == 1);
             q->pending_read++;
         } else if (!strcmp(tag, "C")) {
-            assert((seen & 64) && q->rules_known && q->rules.n < q->rules_expected);
+            assert((seen & 64) && q->rules.n < q->rules_expected);
             int due = request_int(&p), kind = request_int(&p), arg = request_int(&p);
             int timing = request_int(&p);
             assert(timing == 0 || timing == 1);
-            assert(due > q->tick && kind >= 0 && kind <= 18);
+            assert(due > q->tick && kind >= 0 && kind < GS_WIRE_KIND_COUNT);
             int i = q->rules.n++;
-            if (timing == 1 && (kind < 6 || kind > 10) && kind != 18) {
+            if (timing == 1 && (kind < GS_WIRE_WAIT_READY || kind > GS_WIRE_GROUP) && kind != GS_WIRE_ALIGNED_READY && kind != GS_WIRE_WAIT_SPEC_LAUNCH) {
                 for (int j = 0; j < i; j++)
                     if (q->rules.fixed[j] && (q->rules.op[j] < 3 ||
                         (q->rules.op[j] >= 8 && q->rules.op[j] <= 10))) assert(due >= q->rules.due[j]);
@@ -359,53 +489,58 @@ static void read_request(FILE* in, Request* q) {
             q->rules.arg[i] = arg;
             q->rules.fixed[i] = timing;
             switch (kind) {
-            case 0: assert(arg >= 0 && arg < OSRS_INVENTORY_SIZE); q->rules.command[i] = click_command(arg); break;
-            case 1: assert(arg == 0); q->rules.command[i] = attack_command(); break;
-            case 2: assert(arg == 0); q->rules.op[i] = 1; break;
-            case 3: assert(arg == 0); q->rules.command[i] = vengeance_command(); break;
-            case 4: assert(arg == 0); q->rules.op[i] = 2; break;
-            case 5: assert(arg >= 0 && arg < TAPE_WORN && WORN_TO_GEAR[arg] >= 0); q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = WORN_TO_GEAR[arg]}; break;
-            case 6: assert(arg >= 0 && arg <= 1000); q->rules.op[i] = 3; break;
-            case 7: assert(arg >= -1 && arg <= 1000); q->rules.op[i] = 4; break;
-            case 8: assert(arg >= 0 && arg <= 100); q->rules.op[i] = 5; break;
-            case 9: assert(arg >= 0 && arg <= 121); q->rules.op[i] = 6; break;
-            case 10: assert(arg == 0); q->rules.op[i] = 7; break;
-            case 11: {
+            case GS_WIRE_CLICK_SLOT: assert(arg >= 0 && arg < OSRS_INVENTORY_SIZE); q->rules.command[i] = click_command(arg); break;
+            case GS_WIRE_ATTACK: assert(arg == 0); q->rules.command[i] = attack_command(); break;
+            case GS_WIRE_SPEC_ENABLE: assert(arg == 0); q->rules.op[i] = 1; break;
+            case GS_WIRE_CAST_VENGEANCE: assert(arg == 0); q->rules.command[i] = vengeance_command(); break;
+            case GS_WIRE_SPEC_DISARM: assert(arg == 0); q->rules.op[i] = 2; break;
+            case GS_WIRE_UNEQUIP_SLOT: assert(arg >= 0 && arg < TAPE_WORN && WORN_TO_GEAR[arg] >= 0); q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_UNEQUIP, .gear_slot = WORN_TO_GEAR[arg]}; break;
+            case GS_WIRE_WAIT_READY: assert(arg >= 0 && arg <= 1000); q->rules.op[i] = 3; break;
+            case GS_WIRE_WAIT_HIT: assert(arg >= -1 && arg <= 1000); q->rules.op[i] = 4; break;
+            case GS_WIRE_COND_ENERGY: assert(arg >= 0 && arg <= 100); q->rules.op[i] = 5; break;
+            case GS_WIRE_COND_HP: assert(arg >= 0 && arg <= 121); q->rules.op[i] = 6; break;
+            case GS_WIRE_GROUP: assert(arg == 0); q->rules.op[i] = 7; break;
+            case GS_WIRE_EQUIP_ITEM: {
                 LaItem item = la_item_of(canonical(arg));
                 assert(item.kind == LA_ITEM_MAPPED);
                 q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_EQUIP_INVENTORY_ITEM,
                     .item_osrs_id = ITEM_DATABASE[item.item].item_id};
                 break;
             }
-            case 12:
+            case GS_WIRE_CLICK_ITEM:
                 assert(canonical(arg) != INERT_ID);
                 assert(raw_id_to_content(canonical(arg)) != 0);
                 q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK,
                     .item_osrs_id = canonical(arg)};
                 break;
-            case 13: assert(arg == 0); q->rules.command[i] = spec_command(); break;
-            case 17:
-                assert(arg == 0 && timing == 0);
+            case GS_WIRE_SPEC_TOGGLE: assert(arg == 0); q->rules.command[i] = spec_command(); break;
+            case GS_WIRE_STOP_ATTACK:
+                assert(arg == 0);
                 q->rules.command[i] = (HumanCommand){.kind = HUMAN_COMMAND_STOP};
                 break;
-            case 18:
+            case GS_WIRE_ALIGNED_READY:
                 assert(arg > q->tick && timing == 1);
                 q->rules.op[i] = 11;
                 break;
-            case 14: case 15: case 16: {
+            case GS_WIRE_WAIT_SPEC_LAUNCH:
+                assert(arg == 0);
+                q->rules.op[i] = 12;
+                break;
+            case GS_WIRE_EAT_RECIPE: case GS_WIRE_EQUIP_RECIPE: case GS_WIRE_UNEQUIP_RECIPE: {
                 assert(arg == 0);
                 int count = request_int(&p);
-                assert(count >= (kind == 14 ? 1 : 0) && count <= OSRS_INVENTORY_SIZE);
-                q->rules.op[i] = kind - 6;
+                assert(count >= (kind == GS_WIRE_EAT_RECIPE ? 1 : 0) && count <= GS_WIRE_MAX_CANDIDATES);
+                q->rules.op[i] = kind - GS_WIRE_EAT_RECIPE + 8;
                 q->rules.candidate_count[i] = count;
                 for (int c = 0; c < count; c++) {
                     int raw = request_int(&p);
-                    assert(raw != 0 && raw != INT_MIN && (kind == 14 || raw > 0));
+                    assert(raw != 0 && raw != INT_MIN && (kind == GS_WIRE_EAT_RECIPE || raw > 0));
                     int mapped = canonical(raw < 0 ? -raw : raw);
                     uint16_t code = raw_id_to_content(mapped);
-                    if (mapped == INERT_ID || mapped != (raw < 0 ? -raw : raw) || code == 0 ||
-                            (kind == 14 && osrs_item_content_metadata(code)->consumable_kind == OSRS_CONSUMABLE_NONE) ||
-                            (kind != 14 && la_item_of(mapped).kind != LA_ITEM_MAPPED)) q->rules_unsupported = 1;
+                    /* The engine emitted these itself: a candidate the sim cannot bind is a protocol violation, not a missing observation. */
+                    assert(mapped != INERT_ID && mapped == (raw < 0 ? -raw : raw) && code != 0);
+                    assert(kind != GS_WIRE_EAT_RECIPE || osrs_item_content_metadata(code)->consumable_kind != OSRS_CONSUMABLE_NONE);
+                    assert(kind == GS_WIRE_EAT_RECIPE || la_item_of(mapped).kind == LA_ITEM_MAPPED);
                     q->rules.candidates[i][c] = raw < 0 ? -mapped : mapped;
                 }
                 break;
@@ -417,6 +552,7 @@ static void read_request(FILE* in, Request* q) {
             assert(seen == 127 && q->pending_read == q->pending_expected && q->rules.n == q->rules_expected);
             assert(!q->pending_pid_active || (q->pending_pid_read[0] == q->pending_pid_expected[0] && q->pending_pid_read[1] == q->pending_pid_expected[1]));
             q->belief.gear.weapon = q->his_weapon;
+            request_gear_priors(q);
             request_alignment_windows(q);
             return;
         } else assert(0 && "unknown request tag");
@@ -444,7 +580,7 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     tick.swing_him_tick = q->his_last_ago >= 0 ? q->tick - q->his_last_ago : -100;
     tick.swing_him_speed = q->his_speed;
     tick.spec_him = 100;
-    assert(la_gear_status(q->belief.gear).status == LA_GEAR_SUPPORTED);
+    assert(la_gear_wearable(q->belief.gear));
     tick.opponent_gear_source = 1;
     tick.opponent_gear_count = TAPE_WORN;
     for (int slot = 0; slot < TAPE_WORN; slot++) tick.opponent_gear[slot] = -1;
@@ -452,8 +588,8 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     tick.opponent_gear[5] = q->belief.gear.shield;
     for (int slot = 0; slot < GS_ARMOR_SLOTS; slot++)
         tick.opponent_gear[GS_ARMOR_KIT_SLOT[slot]] = q->belief.gear.armor[slot];
-    for (int i = 0; i < TAPE_WORN; i++) tick.worn[i] = canonical(q->worn[i]);
-    for (int i = 0; i < TAPE_BAG; i++) tick.bag[i] = q->bag[i] < 0 ? -1 : canonical(q->bag[i]);
+    for (int i = 0; i < TAPE_WORN; i++) tick.worn[i] = q->worn[i];
+    for (int i = 0; i < TAPE_BAG; i++) tick.bag[i] = q->bag[i];
     tape.ticks = &tick;
     tape.lo = tape.hi = q->tick;
     g_hist_storage[0] = hist_start();
@@ -489,8 +625,78 @@ static void snapshot_of(Request* q, RiskfightSnapshot* snap) {
     g_tape = NULL;
 }
 
+static Sim g_base;
+static LaDecision g_decision;
+
+/* One decision on the request already read: snapshot, load, macro scripts around the committed remainder, common-world rollouts. Returns micros. */
+static double server_decide(Request* q) {
+    double started = la_seconds();
+    RiskfightSnapshot snap;
+    snapshot_of(q, &snap);
+    riskfight_load_state(&g_base.state, &g_base.context, &snap);
+    Hist hist = hist_start();
+    hist.warning.in_reach_since = q->warned;
+    hist.warning.unseen_count = q->unseen_count;
+    memcpy(hist.warning.unseen, q->unseen, sizeof(q->unseen));
+    hist.since_eat = q->belief.seen_since_eat;
+    hist.big_hit_tick = q->big_hit;
+    hist.since_vw_spec = q->since_vw;
+    hist.since_maul_spec = q->since_maul;
+    hist.ready_age = q->ready_age;
+    hist.last_swing_tick = q->last_swing;
+    la_decide(&g_base.state, &hist, &q->belief, q->tick, (GsStakes){.us = q->us, .him = q->him}, &q->feasible, &q->rules, (uint32_t)q->id, &g_decision);
+    return (la_seconds() - started) * 1e6;
+}
+
+/* One response line: scores of every macro, the chosen macro's plan as A records, and `PRIOR k side slot raw ...` when priors were used. */
+static void server_respond(FILE* out, const Request* q, double micros) {
+    const LaDecision* d = &g_decision;
+    fprintf(out, "R %d %.0f %d", q->id, micros, (int)d->best);
+    for (int m = 0; m < LA_MACROS; m++)
+        fprintf(out, " %d %.4f %.4f %.4f %d", d->feasible[m] && d->score[m].worlds > 0, d->score[m].worlds ? d->score[m].kill / d->score[m].worlds : 0,
+            d->score[m].worlds ? d->score[m].death / d->score[m].worlds : 0, d->score[m].worlds ? d->score[m].value / d->score[m].worlds : 0, d->score[m].worlds);
+    const LaScript* chosen = &d->scripts[d->best];
+    fprintf(out, " A %d", chosen->n);
+    for (int i = 0; i < chosen->n; i++) la_script_emit_record(out, chosen, i);
+    if (q->prior_count) {
+        fprintf(out, " PRIOR %d", q->prior_count);
+        for (int i = 0; i < q->prior_count; i++) fprintf(out, " %d %d %d", q->prior[i][0], q->prior[i][1], q->prior[i][2]);
+    }
+    fprintf(out, "\n");
+}
+
+/* The own-side observations a request must carry; everything else the sim has priors for. Returns the UNAVAILABLE reason or NULL. */
+static const char* server_unavailable(const Request* q) {
+    const char* reason = request_unavailable(q);
+    if (reason) return reason;
+    if (q->attack_history == RISKFIGHT_ATTACK_UNKNOWN) return "local_attack_history_unknown";
+    if (q->attack_clock_low != q->attack_clock_high) return "local_attack_history_interval";
+    return NULL;
+}
+
+#include "gs_lookahead_warm.h"
+
+/* Runs the synthetic stream through the whole decision path so page faults, lazy tables and caches are paid before READY. */
+static double server_warm(void) {
+    enum { WARM = 24, COLD = 2 };
+    double worst = 0;
+    for (int i = 0; i < WARM; i++) {
+        const char* text = WARM_REQUESTS[i % WARM_REQUEST_COUNT];
+        FILE* in = fmemopen((void*)text, strlen(text), "r");
+        static Request q;
+        read_request(in, &q);
+        fclose(in);
+        q.id = i;
+        const char* unavailable = server_unavailable(&q);
+        if (unavailable) { fprintf(stderr, "warm-up request %d is unavailable: %s\n", i % WARM_REQUEST_COUNT, unavailable); exit(2); }
+        double micros = server_decide(&q);
+        if (i >= COLD && micros > worst) worst = micros;
+    }
+    return worst;
+}
+
 int main(int argc, char** argv) {
-    assert(argc >= 3 && argc <= 5);
+    assert(argc >= 3 && argc <= 6);
     g_ablation.hp = HP_UNIFORM;
     g_ablation.escape_model = 1;
     g_ablation.his_defence = 99;
@@ -510,69 +716,39 @@ int main(int argc, char** argv) {
     g_eat_model.types = mixture.types;
     memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi));
     g_eat_model.logit = mixture.logit;
+    /* Defaults measured for this host class (bench_lookahead_server): 512 common worlds is the knee of decision regret, 8 threads keep the round trip ~2 ms. */
+    g_la_worlds = SERVER_WORLDS;
+    g_la_threads = SERVER_THREADS;
     if (argc > 3) { char* arg = argv[3]; g_la_worlds = request_int(&arg); request_end(arg); }
     if (argc > 4) { char* arg = argv[4]; g_la_horizon = request_int(&arg); request_end(arg); }
+    if (argc > 5) { char* arg = argv[5]; g_la_threads = request_int(&arg); request_end(arg); }
     assert(g_la_worlds > 0 && g_la_horizon > 0 && g_la_horizon <= 32); /* Outcome.his_hit_mask is uint32_t. */
+    assert(g_la_threads >= 1 && g_la_threads <= LA_MAX_THREADS);
     assert_fitted(&fit, "server");
     static OppModel model;
     model = (OppModel){MODEL_FIT, &fit};
     g_la_model = &model;
     g_la_cache = 0;
     observer_register_items();
-    static Sim base;
-    sim_init(&base);
-    static Request q;
+    sim_init(&g_base);
+    double worst = server_warm();
+    printf("READY %.0f", worst);
+    for (int m = 0; m < LA_MACROS; m++) printf("%c%s", m ? ';' : ' ', LA_NAME[m]);
+    printf("\n");
+    fflush(stdout);
     if (getenv("GS_SERVER_LOG")) g_log = fopen(getenv("GS_SERVER_LOG"), "w");
+    static Request q;
     for (;;) {
         read_request(stdin, &q);
-        const char* unavailable = request_unavailable(&q);
+        const char* unavailable = server_unavailable(&q);
         if (unavailable) {
             printf("UNAVAILABLE %d %s\n", q.id, unavailable);
             fflush(stdout);
-            continue;
-        }
-        if (q.attack_history == RISKFIGHT_ATTACK_UNKNOWN || q.attack_clock_low != q.attack_clock_high) {
-            printf("UNAVAILABLE %d %s\n", q.id, q.attack_history == RISKFIGHT_ATTACK_UNKNOWN
-                ? "local_attack_history_unknown" : "local_attack_history_interval");
-            fflush(stdout);
             if (g_log) fflush(g_log);
             continue;
         }
-        LaGearIssue issue = la_gear_status(q.belief.gear);
-        LaGearStatus gear_status = issue.status;
-        if (gear_status != LA_GEAR_SUPPORTED) {
-            printf("UNAVAILABLE %d %s", q.id, LA_GEAR_STATUS_NAME[gear_status]);
-            if (gear_status == LA_GEAR_ARMOR_UNSUPPORTED) printf(" %s %d", GS_ARMOR_SLOT_NAME[issue.slot], issue.raw);
-            else if (gear_status != LA_GEAR_UNKNOWN && gear_status != LA_GEAR_ARMOR_UNKNOWN) printf(" %d", issue.raw);
-            printf("\n");
-            fflush(stdout);
-            if (g_log) fflush(g_log);
-            continue;
-        }
-        double started = la_seconds();
-        RiskfightSnapshot snap;
-        snapshot_of(&q, &snap);
-        riskfight_load_state(&base.state, &base.context, &snap);
-        LaScript scripts[LA_MACROS];
-        int feasible[LA_MACROS], alive[LA_MACROS];
-        la_scripts(&base.state, q.tick, &q.feasible, &q.rules, scripts, feasible);
-        Hist hist = hist_start();
-        hist.warning.in_reach_since = q.warned;
-        hist.warning.unseen_count = q.unseen_count;
-        memcpy(hist.warning.unseen, q.unseen, sizeof(q.unseen));
-        hist.since_eat = q.belief.seen_since_eat;
-        hist.big_hit_tick = q.big_hit;
-        hist.since_vw_spec = q.since_vw;
-        hist.since_maul_spec = q.since_maul;
-        hist.ready_age = q.ready_age;
-        hist.last_swing_tick = q.last_swing;
-        LaScore score[LA_MACROS];
-        LaMacro best = la_evaluate(&base.state, &hist, &q.belief, q.tick, (GsStakes){.us = q.us, .him = q.him}, (uint32_t)q.id, scripts, feasible, score, alive);
-        printf("R %d %.0f %d", q.id, (la_seconds() - started) * 1e6, (int)best);
-        for (int m = 0; m < LA_MACROS; m++)
-            printf(" %d %.4f %.4f %.4f %d", feasible[m] && score[m].worlds > 0, score[m].worlds ? score[m].kill / score[m].worlds : 0, score[m].worlds ? score[m].death / score[m].worlds : 0,
-                score[m].worlds ? score[m].value / score[m].worlds : 0, score[m].worlds);
-        printf("\n");
+        double micros = server_decide(&q);
+        server_respond(stdout, &q, micros);
         fflush(stdout);
         if (g_log) fflush(g_log);
     }

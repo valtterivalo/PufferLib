@@ -152,41 +152,36 @@ static void test_boundary(void) {
 
 static void test_knowledge(void) {
     Request q = parse("P KNOWN 0\nR KNOWN 0\nEND\n");
-    CHECK(q.pending_known && q.pending_read == 0 && q.rules_known && q.rules.n == 0);
+    CHECK(q.pending_known && q.pending_read == 0 && q.rules.n == 0);
     CHECK(request_unavailable(&q) == NULL);
     q = parse("P UNKNOWN\nR KNOWN 0\nEND\n");
     CHECK(!q.pending_known && !strcmp(request_unavailable(&q), "pending_unknown"));
-    q = parse("P KNOWN 0\nR UNKNOWN\nEND\n");
-    CHECK(!q.rules_known && !strcmp(request_unavailable(&q), "production_plan_unknown"));
+    rejects("P KNOWN 0\nR UNKNOWN\nEND\n"); /* R UNKNOWN is not part of protocol v2 */
+    /* Own bag items the sim has no model for become inert filler, never UNAVAILABLE. */
     q = parse("P KNOWN 0\nR KNOWN 0\nEND\n");
-    q.bag[0] = 24589;
-    CHECK(!strcmp(request_unavailable(&q), "local_food_unsupported"));
-    q.bag[0] = 9999;
-    CHECK(!strcmp(request_unavailable(&q), "local_inventory_unsupported"));
-    q.bag[0] = 13441;
-    q.worn[0] = 9999;
-    CHECK(!strcmp(request_unavailable(&q), "local_equipment_unsupported"));
-    q.worn[0] = -1;
-    const int inert[] = {229, 995, 27997, 30000, 26651, 28098};
+    const int inert[] = {229, 995, 27997, 30000, 26651, 28098, 24589, 9999};
     for (size_t i = 0; i < sizeof(inert) / sizeof(inert[0]); i++) {
         q.bag[0] = inert[i];
-        CHECK(request_unavailable(&q) == NULL);
+        request_gear_priors(&q);
+        CHECK(q.bag[0] == INERT_ID && request_unavailable(&q) == NULL);
         RiskfightSnapshot snapshot;
         snapshot_of(&q, &snapshot);
         OsrsInventoryCell cell = osrs_inventory_cell_from_content_code(snapshot.loadout[0].inventory[0]);
         CHECK(!osrs_inventory_cell_is_empty(&cell));
         CHECK(osrs_inventory_cell_metadata(&cell)->consumable_kind == OSRS_CONSUMABLE_NONE);
     }
+    q.worn[0] = 9999; /* an id with no stats anywhere: bare slot */
+    request_gear_priors(&q);
+    CHECK(q.worn[0] == -1 && request_unavailable(&q) == NULL);
     q = parse("P KNOWN 0\nR KNOWN 3\nC 101 14 0 0 1 -6685\nC 102 15 0 0 1 27690\nC 103 16 0 0 0\nEND\n");
-    CHECK(request_unavailable(&q) == NULL);
+    CHECK(request_unavailable(&q) == NULL && q.rules.n == 3 && q.rules.op[0] == 8 && q.rules.op[1] == 9 && q.rules.op[2] == 10);
+    /* Several bag slots matching one recipe are no longer a reason to give up: the sim binds the first match. */
     q.bag[0] = 6685; q.bag[1] = 6687;
-    CHECK(!strcmp(request_unavailable(&q), "production_plan_unknown"));
-    q = parse("P KNOWN 0\nR KNOWN 2\nC 101 14 0 0 1 -24589\nC 102 1 0 0\nEND\n");
-    CHECK(!strcmp(request_unavailable(&q), "production_plan_unknown"));
-    q = parse("P KNOWN 0\nR KNOWN 1\nC 101 14 0 0 1 24592\nEND\n");
-    CHECK(!strcmp(request_unavailable(&q), "production_plan_unknown"));
-    q = parse("P KNOWN 0\nR KNOWN 2\nC 101 15 0 0 1 20513\nC 102 16 0 0 1 20513\nEND\n");
-    CHECK(!strcmp(request_unavailable(&q), "production_plan_unknown"));
+    CHECK(request_unavailable(&q) == NULL);
+    /* Recipe candidates the engine could not have emitted are protocol violations. */
+    rejects("P KNOWN 0\nR KNOWN 2\nC 101 14 0 0 1 -24589\nC 102 1 0 0 0\nEND\n");
+    rejects("P KNOWN 0\nR KNOWN 1\nC 101 14 0 0 1 24592\nEND\n");
+    rejects("P KNOWN 0\nR KNOWN 2\nC 101 15 0 0 1 20513\nC 102 16 0 0 1 20513\nEND\n");
 }
 
 static Sim loaded;
@@ -328,8 +323,8 @@ static void test_loaded_timing(void) {
         LaScript scripts[LA_MACROS];
         int feasible[LA_MACROS];
         la_scripts(&loaded.state, q.tick, &q.feasible, &q.rules, scripts, feasible);
-        LaScript* script = &scripts[LA_RULES];
-        CHECK(feasible[LA_RULES]);
+        LaScript* script = &scripts[LA_CONTINUE];
+        CHECK(feasible[LA_CONTINUE]);
         int meal_tick = -1;
         HumanInput* hi = &loaded.context.policy_commands[0];
         HumanCommandQueue idle = {0};
@@ -358,8 +353,8 @@ static void test_mixed_timing(void) {
     LaScript scripts[LA_MACROS];
     int feasible[LA_MACROS];
     la_scripts(&loaded.state, q.tick, &q.feasible, &q.rules, scripts, feasible);
-    LaScript* script = &scripts[LA_RULES];
-    CHECK(feasible[LA_RULES]);
+    LaScript* script = &scripts[LA_CONTINUE];
+    CHECK(feasible[LA_CONTINUE]);
     HumanInput* hi = &loaded.context.policy_commands[0];
     HumanCommandQueue idle = {0};
     int cursor = 0, resume = 0;

@@ -89,7 +89,7 @@ int main(void) {
     CHECK("verified Avernic treads use their existing physical item", la_item_of(31097).kind == LA_ITEM_MAPPED && la_item_of(31097).item == ITEM_AVERNIC_TREADS && la_gear_status(gear).status == LA_GEAR_SUPPORTED);
     gear.armor[6] = 11840;
     gear.weapon = 20997; gear.shield = -1;
-    CHECK("mapped bow without a forecast ammo prior is unavailable", la_gear_status(gear).status == LA_GEAR_AMMO_UNSUPPORTED);
+    CHECK("mapped bow is outside the calibrated gear status but has a declared ammo prior", la_gear_status(gear).status == LA_GEAR_AMMO_UNSUPPORTED && la_ammo_prior(ITEM_TWISTED_BOW) == ITEM_DRAGON_ARROWS && la_gear_wearable(gear));
     gear.weapon = gear.shield = -1;
     CHECK("observed empty slots are supported", la_gear_status(gear).status == LA_GEAR_SUPPORTED);
     FILE* stream = tmpfile();
@@ -101,7 +101,7 @@ int main(void) {
         for (int i = 0; i < TAPE_WORN; i++) fputs(" -1", stream);
         fputs("\nG", stream);
         for (int i = 0; i < TAPE_BAG; i++) fputs(" -1", stream);
-        fputs("\nP UNKNOWN\nR UNKNOWN\nEND\n", stream);
+        fputs("\nP UNKNOWN\nR KNOWN 0\nEND\n", stream);
     }
     rewind(stream);
     Request request;
