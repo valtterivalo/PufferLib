@@ -12,6 +12,7 @@ typedef float obs_t;
 #include "../osrs/encounters/encounter_riskfight.h"
 #undef Log
 #include "riskfight_training.h"
+#include "riskfight_oppfit_bridge.h"
 #ifdef OSRS_PUFFER_RENDER
 #include "../osrs/osrs_puffer_render.h"
 #endif
@@ -33,6 +34,9 @@ struct Log {
     float spec_voidwaker, spec_maul;
     float combat_opp, maul_opp;
     float ticks_tentacle, ticks_axe, ticks_voidwaker, ticks_maul;
+    float swings, aligned_swings, adjacent_swings, spec_swings, spec_aligned, spec_adjacent;
+    float oppfit_episodes;
+    float stops, ready_idle, vengs, eats, stop_spec, veng_spec, stop_veng_spec, spec_delay, norm_delay;
 };
 struct Env {
     Log log;
@@ -43,6 +47,9 @@ struct Env {
     RiskfightState state;
     RiskfightContext context;
     RiskfightTraining training;
+    RiskfightAlign align;
+    void* oppfit;
+    float oppfit_probability;
 #ifdef OSRS_PUFFER_RENDER
     void* renderer;
 #endif
@@ -54,6 +61,16 @@ void puf_init(Env* env, Dict* kwargs) {
     const char* keys[] = {"opponent_type", "self_play"};
     for (int i = 0; i < 2; i++) riskfight_put_int((EncounterState*)&env->state,
         (EncounterContext*)&env->context, keys[i], (int)dict_get(kwargs, keys[i]));
+    DictItem* oppfit_p = dict_find(kwargs, "oppfit_probability");
+    env->oppfit_probability = oppfit_p ? (float)oppfit_p->value : 0;
+    assert(env->oppfit_probability >= 0 && env->oppfit_probability <= 1);
+    env->oppfit = env->oppfit_probability > 0 ? oppfit_create() : NULL;
+    DictItem* motor = dict_find(kwargs, "motor");
+    if (motor) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "motor", (int)motor->value);
+    DictItem* deployable = dict_find(kwargs, "deployable");
+    if (deployable) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "deployable", (int)deployable->value);
+    DictItem* live = dict_find(kwargs, "live_loadout");
+    if (live) riskfight_put_int((EncounterState*)&env->state, (EncounterContext*)&env->context, "live_loadout", (int)live->value);
     const char* reward_keys[] = {"damage_reward_coeff", "teleport_penalty", "chance_reward_coeff"};
     for (int i = 0; i < 3; i++) {
         DictItem* item = dict_find(kwargs, reward_keys[i]);
@@ -98,7 +115,17 @@ static void riskfight_native_observe(Env* env) {
     }
 }
 static void riskfight_native_reset(Env* env) {
+    riskfight_align_reset(&env->align);
     riskfight_training_reset(&env->training, &env->state, &env->context, env->tag);
+    env->context.opp_hook = NULL;
+    env->context.opp_after = NULL;
+    env->context.opp_user = NULL;
+    if (env->oppfit && encounter_rand_float(&env->training.rng) < env->oppfit_probability) {
+        oppfit_reset(env->oppfit, &env->state, xorshift32(&env->training.rng) | 1);
+        env->context.opp_user = env->oppfit;
+        env->context.opp_hook = oppfit_actions;
+        env->context.opp_after = oppfit_after;
+    }
 }
 void puf_reset(Env* env) {
     riskfight_native_reset(env);
@@ -133,6 +160,14 @@ static void riskfight_native_log_round(Env* env) {
     env->log.episode_length += s->env.tick - env->training.start_tick;
     if (env->training.opponent == RF_TRAIN_SCRIPTED)
         env->log.scripted_ticks += s->env.tick - env->training.start_tick;
+    {
+        const RiskfightAlign* a = &env->align;
+        env->log.swings += a->swings; env->log.aligned_swings += a->aligned; env->log.adjacent_swings += a->adjacent;
+        env->log.spec_swings += a->spec_swings; env->log.spec_aligned += a->spec_aligned; env->log.spec_adjacent += a->spec_adjacent;
+        env->log.stops += a->stops; env->log.ready_idle += a->ready_idle; env->log.vengs += a->vengs; env->log.eats += a->eats;
+        env->log.stop_spec += a->stop_spec; env->log.veng_spec += a->veng_spec; env->log.stop_veng_spec += a->stop_veng_spec; env->log.spec_delay += a->spec_delay; env->log.norm_delay += a->norm_delay;
+    }
+    env->log.oppfit_episodes += env->context.opp_hook != NULL;
     env->log.drink_brew += s->drink_brew[0];
     env->log.drink_sanfew += s->drink_sanfew[0];
     env->log.drink_combat += s->drink_combat[0];
@@ -156,10 +191,12 @@ void puf_step(Env* env) {
     int actions[2 * RF_HEADS] = {0};
     for (int i = 0; i < env->num_agents; i++)
         for (int j = 0; j < RF_HEADS; j++) actions[i * RF_HEADS + j] = (int)env->agents[i].actions[j];
+    int stop_issued = actions[RF_PRIMARY] == RF_STOP;
     env->training.omissions += riskfight_training_actions(&env->training,
         &env->state, env->tag, actions);
     env->training.ticks++;
     riskfight_step((EncounterState*)&env->state, (EncounterContext*)&env->context, actions);
+    riskfight_align_observe(&env->state, 0, stop_issued, &env->align);
     env->log.ticks_tentacle += env->state.ticks_tentacle[0];
     env->log.ticks_axe += env->state.ticks_axe[0];
     env->log.ticks_voidwaker += env->state.ticks_voidwaker[0];
@@ -181,6 +218,7 @@ void puf_step(Env* env) {
         RiskfightOutcome outcome = env->state.outcome[0];
         if (outcome == RISKFIGHT_ESCAPE && ++env->round < env->training.config.session_rounds) {
             for (int i = 0; i < env->num_agents; i++) env->agents[i].terminals[0] = 0;
+            riskfight_align_reset(&env->align);
             riskfight_training_next_round(&env->training, &env->state, &env->context);
         } else {
             env->log.kills += outcome == RISKFIGHT_KILL;
@@ -188,7 +226,7 @@ void puf_step(Env* env) {
             env->log.escapes += outcome == RISKFIGHT_ESCAPE;
             env->log.mutual_deaths += outcome == RISKFIGHT_MUTUAL_DEATH;
             env->log.timeouts += outcome == RISKFIGHT_TIMEOUT;
-            float net_stake = riskfight_outcome_reward(outcome);
+            float net_stake = riskfight_outcome_reward(outcome, 1);
             env->log.policy_0_score += 0.5f * (net_stake + 1.0f);
             env->log.draw_rate += net_stake == 0;
             env->log.net_stake += net_stake;
@@ -216,53 +254,70 @@ void puf_render(Env* env) {
 #endif
 }
 void puf_close(Env* env) {
+    if (env->oppfit) oppfit_destroy(env->oppfit);
 #ifdef OSRS_PUFFER_RENDER
     if (env->renderer) osrs_puffer_render_destroy(env->renderer);
 #endif
     riskfight_destroy_context((EncounterContext*)&env->context);
 }
 void puf_log(Log* log, Dict* out) {
-    dict_set(out, "episode_return", log->episode_return);
-    dict_set(out, "episode_length", log->episode_length);
-    dict_set(out, "policy_0_score", log->policy_0_score);
-    dict_set(out, "draw_rate", log->draw_rate);
-    dict_set(out, "damage_reward", log->damage_reward);
-    dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
-    dict_set(out, "chance_reward", log->chance_reward);
-    dict_set(out, "teleport_penalty", log->teleport_penalty);
     dict_set(out, "kills", log->kills);
     dict_set(out, "deaths", log->deaths);
     dict_set(out, "escapes", log->escapes);
     dict_set(out, "mutual_deaths", log->mutual_deaths);
     dict_set(out, "timeouts", log->timeouts);
     dict_set(out, "net_stake", log->net_stake);
+    dict_set(out, "episode_length", log->episode_length);
+    dict_set(out, "oppfit_episodes", log->oppfit_episodes);
+    dict_set(out, "swings", log->swings);
+    dict_set(out, "aligned_swings", log->aligned_swings);
+    dict_set(out, "adjacent_swings", log->adjacent_swings);
+    dict_set(out, "spec_swings", log->spec_swings);
+    dict_set(out, "spec_aligned", log->spec_aligned);
+    dict_set(out, "spec_adjacent", log->spec_adjacent);
+    dict_set(out, "stops", log->stops);
+    dict_set(out, "ready_idle", log->ready_idle);
+    dict_set(out, "vengs", log->vengs);
+    dict_set(out, "eats", log->eats);
+    dict_set(out, "stop_spec", log->stop_spec);
+    dict_set(out, "veng_spec", log->veng_spec);
+    dict_set(out, "stop_veng_spec", log->stop_veng_spec);
+    dict_set(out, "spec_delay", log->spec_delay);
+    dict_set(out, "norm_delay", log->norm_delay);
+    dict_set(out, "eat_marlin", log->eat_marlin);
+    dict_set(out, "eat_halibut", log->eat_halibut);
+    dict_set(out, "eat_pie", log->eat_pie);
+    dict_set(out, "drink_brew", log->drink_brew);
+    dict_set(out, "drink_sanfew", log->drink_sanfew);
+    dict_set(out, "drink_combat", log->drink_combat);
+    dict_set(out, "spec_voidwaker", log->spec_voidwaker);
+    dict_set(out, "spec_maul", log->spec_maul);
+    dict_set(out, "self_teleports", log->self_teleports);
+    dict_set(out, "opponent_teleports", log->opponent_teleports);
     dict_set(out, "rounds", log->rounds);
+    dict_set(out, "episode_return", log->episode_return);
+    dict_set(out, "policy_0_score", log->policy_0_score);
+    dict_set(out, "draw_rate", log->draw_rate);
+    dict_set(out, "damage_reward", log->damage_reward);
+    dict_set(out, "direct_ko_chance_mass", log->direct_ko_chance_mass);
+    dict_set(out, "chance_reward", log->chance_reward);
+    dict_set(out, "teleport_penalty", log->teleport_penalty);
     dict_set(out, "score", log->net_stake);
     dict_set(out, "perf", log->net_stake);
     dict_set(out, "scripted_ticks", log->scripted_ticks);
     dict_set(out, "scripted_omissions", log->scripted_omissions);
     dict_set(out, "midfight_ticks", log->midfight_ticks);
     dict_set(out, "prefix_terminal", log->prefix_terminal);
-    dict_set(out, "self_teleports", log->self_teleports);
-    dict_set(out, "opponent_teleports", log->opponent_teleports);
     dict_set(out, "both_teleports", log->both_teleports);
-    const char* healing_keys[] = {"self_escape_no_healing", "self_escape_other_healing",
-        "self_escape_double_eats", "self_escape_triple_eats"};
-    for (int i = 0; i < 4; i++) dict_set(out, healing_keys[i], log->self_escape_healing[i]);
     dict_set(out, "self_escape_no_boost", log->self_escape_no_boost);
     dict_set(out, "self_escape_both_no_special", log->self_escape_both_no_special);
-    dict_set(out, "drink_brew", log->drink_brew);
-    dict_set(out, "drink_sanfew", log->drink_sanfew);
-    dict_set(out, "drink_combat", log->drink_combat);
-    dict_set(out, "eat_marlin", log->eat_marlin);
-    dict_set(out, "eat_halibut", log->eat_halibut);
-    dict_set(out, "eat_pie", log->eat_pie);
-    dict_set(out, "spec_voidwaker", log->spec_voidwaker);
-    dict_set(out, "spec_maul", log->spec_maul);
     dict_set(out, "combat_opp", log->combat_opp);
     dict_set(out, "maul_opp", log->maul_opp);
     dict_set(out, "ticks_tentacle", log->ticks_tentacle);
     dict_set(out, "ticks_axe", log->ticks_axe);
     dict_set(out, "ticks_voidwaker", log->ticks_voidwaker);
     dict_set(out, "ticks_maul", log->ticks_maul);
+    const char* healing_keys[] = {"self_escape_no_healing", "self_escape_other_healing",
+        "self_escape_double_eats", "self_escape_triple_eats"};
+    for (int i = 0; i < 4; i++) dict_set(out, healing_keys[i], log->self_escape_healing[i]);
 }

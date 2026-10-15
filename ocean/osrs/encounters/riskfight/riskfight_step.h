@@ -260,6 +260,49 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     }
 }
 
+
+static int riskfight_is_click(const HumanCommand* c) {
+    switch (c->kind) {
+        case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: case HUMAN_COMMAND_EAT: case HUMAN_COMMAND_DRINK: case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+        case HUMAN_COMMAND_UNEQUIP: case HUMAN_COMMAND_VENGEANCE: case HUMAN_COMMAND_SPEC_TOGGLE: case HUMAN_COMMAND_ATTACK_NPC:
+        case HUMAN_COMMAND_WALK: case HUMAN_COMMAND_STOP: return 1;
+        default: return 0;
+    }
+}
+
+/** Replaces the commands of one decision by what our hand lands on the tick about to be processed. */
+static void riskfight_motor_filter(RiskfightContext* ctx, const RiskfightState* s, HumanInput* hi) {
+    RiskfightMotor* m = &ctx->motor;
+    if (!m->enabled) return;
+    int decision = s->env.tick;
+    HumanCommand fresh[48], instant[48];
+    int fresh_count = 0, instant_count = 0;
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* c = &hi->commands.items[i];
+        if (riskfight_is_click(c)) { assert(fresh_count < 48); fresh[fresh_count++] = *c; }
+        else { assert(instant_count < 48); instant[instant_count++] = *c; }
+    }
+    human_input_clear_pending(hi);
+    human_input_clear_commands(hi);
+    for (int i = 0; i < instant_count; i++) human_input_queue_command(hi, instant[i]);
+    int busy = m->pending_count > 0;
+    if (!busy) {
+        double t0 = (decision - 1) * (double)MOTOR_TICK_MS, press = 0;
+        for (int k = 0; k < fresh_count && m->pending_count < 24; k++) {
+            uint32_t x = m->rng; x ^= x << 13; x ^= x >> 17; x ^= x << 5; m->rng = x;
+            press += motor_gap_ms(((x >> 8) + 0.5) / 16777216.0, k);
+            m->pending[m->pending_count++] = (RiskfightMotorClick){fresh[k], motor_land_tick(decision - 1, press)};
+        }
+        (void)t0;
+    }
+    int kept = 0;
+    for (int i = 0; i < m->pending_count; i++) {
+        if (m->pending[i].land <= decision) human_input_queue_command(hi, m->pending[i].cmd);
+        else m->pending[kept++] = m->pending[i];
+    }
+    m->pending_count = kept;
+}
+
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     int escaped = s->escaped[0] || s->escaped[1];
@@ -269,7 +312,7 @@ static void riskfight_finish(RiskfightState* s) {
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
             escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
-        s->rewards[i] = riskfight_outcome_reward(s->outcome[i]);
+        s->rewards[i] = riskfight_outcome_reward(s->outcome[i], s->death_price);
     }
     s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :
         s->outcome[1] == RISKFIGHT_KILL ? 1 : -1;
@@ -474,13 +517,23 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     RiskfightContext* ctx = (RiskfightContext*)context;
     int opponent_actions[RF_HEADS];
     if (!ctx->self_play) {
-        float obs[RF_OBS_SIZE];
-        riskfight_write_observation(s, 1, obs);
-        riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
+        if (ctx->opp_hook) ctx->opp_hook(ctx->opp_user, s, opponent_actions);
+        else {
+            float obs[RF_OBS_SIZE];
+            riskfight_write_observation(s, 1, obs);
+            riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
+        }
+        if (s->opp_lag > 0) {
+            for (int k = 3; k > 0; k--) memcpy(s->opp_ring[k], s->opp_ring[k - 1], sizeof(s->opp_ring[k]));
+            memcpy(s->opp_ring[0], opponent_actions, sizeof(s->opp_ring[0]));
+            memcpy(opponent_actions, s->opp_ring[s->opp_lag], sizeof(opponent_actions));
+        }
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
+    riskfight_motor_filter(ctx, s, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
+    if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }
 
 static void riskfight_step_human(EncounterState* state, EncounterContext* context, HumanInput* hi) {

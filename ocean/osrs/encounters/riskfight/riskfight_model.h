@@ -6,7 +6,9 @@
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
 #include "../../osrs_pvp_escape.h"
+#include "../../tests/riskfight_motor.h"
 
+enum { RF_PRICE_MAX_X10 = 25 };
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
 /** Per-mille rates of one scripted fighter. Consume bands split own HP at 40, 65, 73 and 90,
@@ -61,7 +63,8 @@ enum {
     RF_EQUIPPED_START = RF_INVENTORY_START + OSRS_INVENTORY_SIZE * RF_INVENTORY_WIDTH,
     RF_OPPONENT_START = RF_EQUIPPED_START + NUM_GEAR_SLOTS,
     RF_HISTORY_START = RF_OPPONENT_START + NUM_GEAR_SLOTS + 14,
-    RF_OBS_SIZE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,
+    RF_PRICE = RF_HISTORY_START + RF_HISTORY_TICKS * RF_EVENT_WIDTH,   /* death price: what our death costs us over what his kill wins us, scaled by 1 / RF_PRICE_MAX */
+    RF_OBS_SIZE = RF_PRICE + 1,
 };
 #define RF_ACTION_DIMS_INIT {30,30,30,29,29,29,2,2,3,28,5,4,30,30,30,30,30,30,30,30,7}
 static const int RF_ACTION_DIMS[RF_HEADS] = RF_ACTION_DIMS_INIT;
@@ -125,6 +128,11 @@ typedef struct {
     int ticks_axe[2];
     int ticks_voidwaker[2];
     int ticks_maul[2];
+    /* Scripted opponent reaction lag in ticks (domain randomization): his actions are those of opp_lag ticks ago. */
+    int opp_lag;
+    int opp_ring[4][RF_HEADS];
+    /* Stakes: the death price us/him (Stakes.ratio is him/us) of this fight; the reward of a death is minus this, of a kill 1. */
+    float death_price;
 } RiskfightState;
 typedef struct {
     uint8_t equipment[NUM_GEAR_SLOTS];
@@ -132,6 +140,12 @@ typedef struct {
     int hitpoints;
     int vengeance_sacks;
 } RiskfightLoadout;
+
+/* Our hand when motor modelling is on: clicks of one decision are pressed in a chain whose gaps are the measured motor clock; a click is processed on the first
+ * tick after the decision when it is pressed before the 465 ms cutoff, later otherwise. While a chain is unfinished new clicks are dropped, as the plugin does
+ * not ask while a run is committed. */
+typedef struct { HumanCommand cmd; int land; } RiskfightMotorClick;
+typedef struct { int enabled, pending_count; uint32_t rng; RiskfightMotorClick pending[24]; } RiskfightMotor;
 
 typedef struct {
     const EncounterArenaTopology* route_topology;
@@ -144,10 +158,17 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     float teleport_penalty;
+    RiskfightMotor motor;
+    /* His actions from a fitted policy instead of the script: opp_hook fills them for the tick about to be processed, opp_after sees the tick that ran. */
+    void* opp_user;
+    void (*opp_hook)(void* user, const void* state, int* actions);
+    void (*opp_after)(void* user, void* state);
 } RiskfightContext;
 
-static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
-    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -1 : 0;
+/** Stake-weighted outcome: a kill wins his gear (1), a death loses ours (price), both at once nets 1 - price, a timeout costs a death. */
+static inline float riskfight_outcome_reward(RiskfightOutcome outcome, float price) {
+    return outcome == RISKFIGHT_KILL ? 1 : outcome == RISKFIGHT_DEATH || outcome == RISKFIGHT_TIMEOUT ? -price :
+        outcome == RISKFIGHT_MUTUAL_DEATH ? 1 - price : 0;
 }
 
 static void riskfight_write_observation(const RiskfightState*, int, float*);
@@ -158,7 +179,12 @@ static uint16_t riskfight_supply_code(OsrsConsumableKind kind, int doses) {
     return osrs_inventory_content_code_from_consumable(kind, (uint8_t)doses);
 }
 
+/* Restricts the action mask to what the plugin can click: no prayers, style, orb, armour swaps other than weapon/shield/ring, no movement or teleport. Set once at start-up. */
+static int riskfight_deployable;
 static RiskfightLoadout RISKFIGHT_DEFAULT_LOADOUT;
+/* The bag and gear of the recorded live fights (tape 20261005T193654 KeengCr1mson): Voidwaker, ornate granite maul, anglerfish, karambwan, brews,
+ * restores, a super combat, a Vengeance sack and a teleport; both sides carry it. Built at load from names, not item codes. */
+static RiskfightLoadout RISKFIGHT_LIVE_LOADOUT;
 
 __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 100};
@@ -194,6 +220,33 @@ __attribute__((constructor)) static void riskfight_build_default_loadout(void) {
     loadout.inventory[slot++] = riskfight_supply_code(OSRS_CONSUMABLE_LOCATOR_ORB, 0);
     assert(slot == 27);
     RISKFIGHT_DEFAULT_LOADOUT = loadout;
+}
+
+__attribute__((constructor)) static void riskfight_build_live_loadout(void) {
+    RiskfightLoadout loadout = {.hitpoints = 121, .vengeance_sacks = 27};
+    for (int i = 0; i < NUM_GEAR_SLOTS; i++) loadout.equipment[i] = ITEM_NONE;
+    loadout.equipment[GEAR_SLOT_HEAD] = ITEM_HELM_NEITIZNOT;
+    loadout.equipment[GEAR_SLOT_CAPE] = ITEM_INFERNAL_CAPE;
+    loadout.equipment[GEAR_SLOT_NECK] = ITEM_AMULET_OF_STRENGTH;
+    loadout.equipment[GEAR_SLOT_WEAPON] = ITEM_VOIDWAKER;
+    loadout.equipment[GEAR_SLOT_SHIELD] = ITEM_AVERNIC_DEFENDER;
+    loadout.equipment[GEAR_SLOT_BODY] = ITEM_FIGHTER_TORSO;
+    loadout.equipment[GEAR_SLOT_LEGS] = ITEM_DRAGON_PLATELEGS;
+    loadout.equipment[GEAR_SLOT_HANDS] = ITEM_BARROWS_GLOVES;
+    loadout.equipment[GEAR_SLOT_FEET] = ITEM_DRAGON_BOOTS;
+    loadout.equipment[GEAR_SLOT_RING] = ITEM_RING_OF_RECOIL;
+    const struct { OsrsConsumableKind kind; int doses, count; } supplies[] = {
+        {OSRS_CONSUMABLE_ANGLERFISH, 0, 12}, {OSRS_CONSUMABLE_KARAMBWAN, 0, 7}, {OSRS_CONSUMABLE_BREW, 4, 2},
+        {OSRS_CONSUMABLE_SUPER_RESTORE, 4, 2}, {OSRS_CONSUMABLE_SUPER_COMBAT, 4, 1},
+        {OSRS_CONSUMABLE_TELEPORT, 0, 1}, {OSRS_CONSUMABLE_VENGEANCE_SACK, 0, 1},
+    };
+    int slot = 0;
+    for (size_t k = 0; k < sizeof(supplies) / sizeof(*supplies); k++)
+        for (int n = 0; n < supplies[k].count; n++)
+            loadout.inventory[slot++] = riskfight_supply_code(supplies[k].kind, supplies[k].doses);
+    loadout.inventory[slot++] = osrs_inventory_content_code_from_item(ITEM_GRANITE_MAUL_ORNATE);
+    assert(slot == 27);
+    RISKFIGHT_LIVE_LOADOUT = loadout;
 }
 
 static void riskfight_init_context(EncounterContext* context) {
@@ -327,8 +380,11 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
     uint32_t rng = seed ? seed : s->env.rng_state;
+    ctx->motor.pending_count = 0;
+    ctx->motor.rng = osrs_lowbias32(rng ^ 0x6d6f746fu) | 1;
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
+    s->death_price = 1;
     s->env.winner = -1;
     s->env.pvp_runtime.teleport_world = OSRS_TELEPORT_WORLD_PVP;
     pvp_reset_priority(&s->env, OSRS_PRIORITY_PVP_WORLD);
