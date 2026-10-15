@@ -66,5 +66,12 @@ void oppfit_after(void* bridge, void* state) {
     StepEvents events = {.ate_visible = riskfight_meal_visible(s, 1), .ate = ate_true,
         .swung = s->visible[0].last_attack_tick == s->env.tick - 1, .vw = s->spec_voidwaker[1] - b->vw, .maul = s->spec_maul[1] - b->maul,
         .damage_on_him = b->step_damage, .max_hit_on_him = b->step_max_hit, .hit_on_him = him->hit_landed_this_tick};
+    /* The list of his unseen animations is pruned only when his bar is read; a 500-tick fight can outlast its capacity and nothing reads more than its count. */
+    Warning* w = &b->hist.warning;
+    if (w->unseen_count >= WARNING_UNSEEN - 2) {
+        int drop = w->unseen_count / 2;
+        memmove(w->unseen, w->unseen + drop, (size_t)(w->unseen_count - drop) * sizeof(int));
+        w->unseen_count -= drop;
+    }
     hist_step(&b->hist, s, s->env.tick, &events);
 }
