@@ -1,11 +1,12 @@
 #ifndef RISKFIGHT_OURS_H
 #define RISKFIGHT_OURS_H
+#include "riskfight_motor.h"
 
 /* Closed-loop C rule-port proxy, not a certified Java production baseline.
- * Opponent beliefs come from observed events; clicks use the historical motor
- * timing model below, which must be named in every experiment's provenance. */
-enum { OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, CUTOFF_MS = 490, TICK_MS = 600, FIRST_PRESS_MS = 130, FIRST_PRESS_SPAN = 330,
-    GAP_MS = 80, GAP_SPAN = 90, MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
+ * Opponent beliefs come from observed events; clicks use the measured motor
+ * model of riskfight_motor.h (Fact 20). */
+enum { OURS_REFRESH = 5, OURS_PLAY_GAP = 6, OURS_HORIZON = 8, TICK_MS = MOTOR_TICK_MS,
+    MAUL_GROUP_WIELD = 3, MAUL_GROUP_BAR = 4, ABORT_RESTORE = 8, HANDS_FOOD_SLOTS = 3 };
 enum { KIND_HARD, KIND_BREW, KIND_KARAMBWAN };
 
 static uint32_t ours_random(Ours* ours) {
@@ -56,10 +57,10 @@ static void ours_run(Ours* ours, int tick, const HumanCommand* clicks, int count
         for (int i = 0; i < count; i++) ours_push(ours, tick + 1, clicks[i]);
         return;
     }
-    double ms = ours_uniform(ours, FIRST_PRESS_MS, FIRST_PRESS_SPAN);
+    double ms = 0;
     for (int i = 0; i < count; i++) {
-        if (i) ms += ours_uniform(ours, GAP_MS, GAP_SPAN);
-        int rel = ms < CUTOFF_MS ? 1 : 2 + (int)((ms - CUTOFF_MS) / TICK_MS);
+        ms += motor_gap_ms(ours_uniform(ours, 0, 1), i);
+        int rel = motor_land_tick(0, ms);
         ours_push(ours, tick + rel, clicks[i]);
     }
 }

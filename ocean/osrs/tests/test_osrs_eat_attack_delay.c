@@ -65,7 +65,7 @@ static void test_default_clock_contract(void) {
         CHECK("zero-heal karambwan is consumed", used == OSRS_INVENTORY_USE_CONSUMED && osrs_inventory_cell_is_empty(&p.inventory_cells[0]));
         CHECK("zero-heal karambwan preserves existing HP", p.current_hitpoints == full_hp[i]);
         CHECK("zero-heal karambwan records waste", p.last_karambwan_heal == 0 && p.last_karambwan_waste == 18);
-        CHECK("zero-heal karambwan applies cooldowns", p.attack_timer == 6 && p.attack_timer_uncapped == 6 && p.food_timer == 3 && p.potion_timer == 3 && p.karambwan_timer == 2);
+        CHECK("zero-heal karambwan applies cooldowns", p.attack_timer == 6 && p.attack_timer_uncapped == 6 && p.food_timer == 3 && p.potion_timer == 3 && p.karambwan_timer == 3);
     }
 
 

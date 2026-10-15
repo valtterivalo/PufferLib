@@ -84,7 +84,7 @@ static void eval_provenance(const char* native, const char* java, const char* ma
     if (ferror(f) || !count) eval_fail("empty or unreadable manifest");
     if (fclose(f)) eval_fail("manifest close");
     puts("contract\tfinite_horizon_only\tKO_and_death_can_overlap\tdraw=neither_dead_by_horizon_including_escape\tCI=Monte_Carlo_not_model_uncertainty\tpaired_seed_not_identical_RNG_consumption");
-    printf("timing\tfirst_press_ms=%d+U(0,%d)\tgap_ms=%d+U(0,%d)\tcutoff_ms=%d\ttick_ms=%d\n", FIRST_PRESS_MS, FIRST_PRESS_SPAN, GAP_MS, GAP_SPAN, CUTOFF_MS, TICK_MS);
+    printf("timing\tmotor=lognormal_gaps_Fact20\tcutoff_ms=%d\ttick_ms=%d\n", MOTOR_CUTOFF_MS, MOTOR_TICK_MS);
     puts("timing_scope\tplan=one_seeded_motor_schedule_per_scenario\ttrace=C_proxy_motor_rng_reseeded_per_episode\tno_claim_of_exact_live_latency");
 }
 static OppModel eval_pool(const char* split) {

@@ -50,14 +50,16 @@ static void test_food_and_vengeance(void) {
         HumanCommand attack = {.kind = HUMAN_COMMAND_ATTACK_NPC, .npc_slot = 0};
         HumanCommand food = {.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = 0};
         step(&food, 1, &attack, 1);
+        /* Fact 3: the meal resolves before any damage landing on its tick, either PID. */
+        assert(osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
+        assert(state.consume_ticks[0] == 1);
         if (holder == 0) {
             assert(us->current_hitpoints == 32);
-            assert(osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
             assert(him->num_pending_hits == 1); /* Second actor's attack has not reached us yet. */
         } else {
-            assert(us->current_hitpoints == 0);
-            assert(!osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
-            assert(state.consume_ticks[0] == 0);
+            /* First actor's zero-delay melee lands in our incoming phase after the meal: 32 minus the spec hit. */
+            assert(us->current_hitpoints < 32);
+            assert(him->num_pending_hits == 0);
         }
         reset(holder);
         us = &state.env.players[0]; him = &state.env.players[1];
@@ -67,13 +69,16 @@ static void test_food_and_vengeance(void) {
         int sacks = state.inventory_use[0].vengeance_sacks;
         HumanCommand veng = {.kind = HUMAN_COMMAND_VENGEANCE};
         step(&veng, 1, &attack, 1);
+        assert(state.inventory_use[0].vengeance_sacks == sacks - 1);
         if (holder == 0) {
-            assert(us->veng_active && state.inventory_use[0].vengeance_sacks == sacks - 1);
+            assert(us->veng_active && him->current_hitpoints == 99);
             step(NULL, 0, NULL, 0);
             assert(!us->veng_active && him->current_hitpoints < 99);
         } else {
-            assert(!us->veng_active && state.inventory_use[0].vengeance_sacks == sacks);
-            assert(him->current_hitpoints == 99);
+            /* The cast precedes his hit landing on us; the echo reaches him a tick later (we are processed after him). */
+            assert(!us->veng_active && him->current_hitpoints == 99);
+            step(NULL, 0, NULL, 0);
+            assert(him->current_hitpoints < 99);
         }
     }
 }
@@ -92,13 +97,8 @@ static void test_launched_hit_reactive_food_by_pid(void) {
         state.env.pending_hit_metadata[1][0].damage_mode = 1;
         HumanCommand food = {.kind = HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK, .inventory_slot = 0};
         step(&food, 1, NULL, 0);
-        if (holder == 0) {
-            assert(us->current_hitpoints == 12 && state.consume_ticks[0] == 1);
-            assert(osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
-        } else {
-            assert(us->current_hitpoints == 0 && state.consume_ticks[0] == 0);
-            assert(!osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
-        }
+        assert(us->current_hitpoints == 12 && state.consume_ticks[0] == 1);
+        assert(osrs_inventory_cell_is_empty(&us->inventory_cells[0]));
     }
 }
 
@@ -121,11 +121,9 @@ static void test_captured_reactive_vengeance_by_pid(void) {
         step(&veng, 1, NULL, 0);
         assert(us->current_hitpoints == 62);
         assert(state.inventory_use[0].vengeance_sacks == sacks - 1);
-        if (holder == 0) {
-            assert(!us->veng_active && him->current_hitpoints == 81);
-        } else {
-            assert(us->veng_active && him->current_hitpoints == 99);
-        }
+        assert(!us->veng_active);
+        if (holder == 0) assert(him->current_hitpoints == 81);
+        else assert(him->current_hitpoints == 99); /* echo lands next tick: we are processed after the attacker */
     }
 }
 
@@ -198,11 +196,8 @@ static void test_maul_input_before_first_actor_incoming(void) {
         };
         step(commands, 2, NULL, 0);
         assert(us->current_hitpoints == 0);
-        if (holder == 0) {
-            assert(state.spec_maul[0] == 1 && us->special_energy == 50);
-        } else {
-            assert(state.spec_maul[0] == 0 && us->special_energy == 100);
-        }
+        /* The instant maul spec is an input of its tick, ahead of the lethal incoming hit, whichever actor is processed first. */
+        assert(state.spec_maul[0] == 1 && us->special_energy == 50);
     }
 }
 

@@ -303,6 +303,7 @@ typedef struct {
     int damage_mode; /* 0 raw, 1 final, 2 uncertain final (sample before stepping) */
     int damage_min, damage_max, accuracy_bp;
     int smite_snapshot; /* 0 landing-time owner behavior, 1 inactive, 2 active */
+    int rolled_max; /* the roll was the attack's maximum (hitsplat type 43 for our own hit); 0 when the attack path does not record it */
 } PendingHitMetadata;
 
 typedef struct {
@@ -312,7 +313,18 @@ typedef struct {
     OsrsHitKind kind;
     int damage;
     int hitpoints_lost;
+    int rolled_max;
 } OsrsPvpHitEvent;
+
+/* Hitsplat ids as the client reports them to the local player (calib README Fact 14): damage by me 16, my maximum hit 43, damage by another player
+ * 17, block of mine 12, block of another's 13. My Recoil and Vengeance echoes are type 16 (the source of their event is my side). */
+enum { OSRS_HITSPLAT_BLOCK_ME = 12, OSRS_HITSPLAT_BLOCK_OTHER = 13, OSRS_HITSPLAT_DAMAGE_ME = 16, OSRS_HITSPLAT_DAMAGE_OTHER = 17,
+    OSRS_HITSPLAT_MAX_ME = 43 };
+static inline int osrs_hitsplat_type(int source_is_viewer, int damage, int rolled_max) {
+    if (damage <= 0) return source_is_viewer ? OSRS_HITSPLAT_BLOCK_ME : OSRS_HITSPLAT_BLOCK_OTHER;
+    if (!source_is_viewer) return OSRS_HITSPLAT_DAMAGE_OTHER;
+    return rolled_max ? OSRS_HITSPLAT_MAX_ME : OSRS_HITSPLAT_DAMAGE_ME;
+}
 
 typedef void (*OsrsPvpHitObserver)(void* context, const OsrsPvpHitEvent* event);
 

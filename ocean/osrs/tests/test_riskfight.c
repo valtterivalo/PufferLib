@@ -163,7 +163,7 @@ static void test_special_and_outcomes(void) {
     step(actions);
     assert(p->special_energy == 0 && p->attack_timer == 4);
     assert(state.spec_maul[0] == 1);
-    assert(osrs_spec_cost(ITEM_GRANITE_MAUL) == 60 && osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE) == 50);
+    assert(osrs_spec_cost(ITEM_GRANITE_MAUL) == 50 && osrs_spec_cost(ITEM_GRANITE_MAUL_ORNATE) == 50);
     reset(); memset(actions, 0, sizeof(actions)); actions[RF_PRIMARY] = RF_TELEPORT;
     step(actions); assert(state.env.episode_over && state.outcome[0] == RISKFIGHT_ESCAPE);
     assert(osrs_inventory_cell_is_empty(&state.env.players[0].inventory_cells[20]));
