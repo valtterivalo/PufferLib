@@ -195,19 +195,18 @@ static void la_world(const RiskfightState* base, const Hist* base_hist, const La
     him->food_timer = la_food_timer(b->food_ready, tick);
     him->potion_timer = him->karambwan_timer = 0;
     la_resupply(him, r);
-    int carries_vw = b->seen_vw || la_uniform(r, 0, 1) < 0.65, carries_maul = b->seen_maul || la_uniform(r, 0, 1) < 0.51;
-    for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
-        if (osrs_inventory_cell_metadata(&him->inventory_cells[slot])->consumable_kind == OSRS_CONSUMABLE_NONE) him->inventory_cells[slot] = osrs_inventory_cell_empty();
-    int wielded_vw = him->equipped[GEAR_SLOT_WEAPON] == ITEM_VOIDWAKER, wielded_maul = is_maul_item(him->equipped[GEAR_SLOT_WEAPON]);
-    for (int pass = 0; pass < 2; pass++) {
-        int wanted = (pass == 0 ? carries_vw : carries_maul) && !(pass == 0 ? wielded_vw : wielded_maul);
-        uint8_t item = pass == 0 ? ITEM_VOIDWAKER : ITEM_GRANITE_MAUL_ORNATE;
-        for (int slot = 0; wanted && slot < OSRS_INVENTORY_SIZE; slot++)
-            if (osrs_inventory_cell_is_empty(&him->inventory_cells[slot])) { him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_item(item)); break; }
+    /* The first-use hazards of the fitted opponent are rates per swing over every fight, carriers or not, so his kit always holds the whole arsenal; what he has already
+     * used (the belief's seen flags, the spec weapon in his hands) is what switches him to the rates of a weapon used before. */
+    int wielded_kind = weapon_kind_of_item(him->equipped[GEAR_SLOT_WEAPON]);
+    for (int k = 0; k < WK_COUNT; k++) {
+        if (k == wielded_kind) continue;
+        for (int slot = 0; slot < OSRS_INVENTORY_SIZE; slot++)
+            if (osrs_inventory_cell_is_empty(&him->inventory_cells[slot])) { him->inventory_cells[slot] = osrs_inventory_cell_from_content_code(osrs_inventory_content_code_from_item(WK_ITEM[k])); break; }
     }
     w->script_seed[1] = osrs_lowbias32(la_next(r));
     *hist = *base_hist;
     hist->since_eat = b->seen_since_eat;
+    hist->seen_mask |= (b->seen_vw ? 1 << WK_VW : 0) | (b->seen_maul ? 1 << WK_MAUL : 0) | (wielded_kind != WK_NONE ? 1 << wielded_kind : 0);
 }
 
 
