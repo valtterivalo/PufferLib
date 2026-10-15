@@ -426,10 +426,10 @@ static void queue_hit(OsrsEnv* env, int attacker_idx, int defender_idx,
 }
 
 static inline void pvp_observe_hit(OsrsEnv* env, int source, int target,
-    const PendingHit* hit, int damage, int hitpoints_before) {
+    const PendingHit* hit, int damage, int hitpoints_before, int rolled_max) {
     if (!env->pvp_runtime.hit_observer) return;
     OsrsPvpHitEvent event = {env->tick, source, target, hit->kind, damage,
-        hitpoints_before - env->players[target].current_hitpoints};
+        hitpoints_before - env->players[target].current_hitpoints, rolled_max};
     env->pvp_runtime.hit_observer(env->pvp_runtime.hit_observer_context, &event);
 }
 
@@ -463,7 +463,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
         attacker->total_damage_dealt += scale;
         defender->damage_received_scale += scale;
         attacker->damage_dealt_scale += scale;
-        pvp_observe_hit(env, attacker_idx, defender_idx, hit, hit->damage, hitpoints_before);
+        pvp_observe_hit(env, attacker_idx, defender_idx, hit, hit->damage, hitpoints_before, 0);
         return;
     }
 
@@ -561,7 +561,7 @@ static void apply_damage(OsrsEnv* env, int attacker_idx, int defender_idx,
     if (dr.smite_drain > 0) {
         defender->current_prayer = clamp(defender->current_prayer - dr.smite_drain, 0, defender->base_prayer);
     }
-    pvp_observe_hit(env, attacker_idx, defender_idx, hit, damage, hitpoints_before);
+    pvp_observe_hit(env, attacker_idx, defender_idx, hit, damage, hitpoints_before, metadata->rolled_max);
 }
 
 static void process_pending_hits(OsrsEnv* env, int attacker_idx, int defender_idx) {
@@ -1113,6 +1113,7 @@ static void perform_attack(OsrsEnv* env, int attacker_idx, int defender_idx,
             queue_hit(env, attacker_idx, defender_idx,
                       attacker, defender, damage, style, hit_delay, is_special,
                       hit_success, queued_freeze_ticks, heal_percent, 0, 0, 0);
+            env->pending_hit_metadata[attacker_idx][attacker->num_pending_hits - 1].rolled_max = damage > 0 && damage >= max_hit;
         }
         register_hit_calculated(env, attacker_idx, defender_idx, style, total_damage);
     }

@@ -58,7 +58,7 @@ static inline int osrs_spec_cost(int weapon_item_idx) {
         case ITEM_ABYSSAL_DAGGER_BH_P_PLUS_PLUS: return 35;
         case ITEM_DRAGON_MACE_BH:       return 15;
         case ITEM_VOIDWAKER:            return 50;
-        case ITEM_GRANITE_MAUL:         return 60;
+        case ITEM_GRANITE_MAUL:         return 50;
         case ITEM_GRANITE_MAUL_ORNATE:  return 50;
         case ITEM_DRAGON_DAGGER:        return 25;
         case ITEM_ELDER_MAUL:           return 50;

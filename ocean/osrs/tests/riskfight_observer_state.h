@@ -5,7 +5,7 @@
 
 enum { OBSERVE_HITS = 24 };
 
-typedef struct { int source, target, kind, damage; } ObservedHit;
+typedef struct { int source, target, kind, damage, hitsplat; } ObservedHit; /* hitsplat: client id 16/43/17/12/13 seen from our side */
 
 typedef struct {
     GsInfer inf;

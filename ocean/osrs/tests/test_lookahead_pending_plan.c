@@ -84,8 +84,8 @@ static void test_identity_after_inventory_mutation(void) {
 }
 
 static void test_reactive_pid_and_common_world(void) {
-    /* Recorded t206: LOCAL PID CAST precedes an already-launched 24 incoming
-     * and reflects18; opposite PID incoming precedes CAST and cannot proc it. */
+    /* Recorded t206: LOCAL PID CAST precedes an already-launched 24 incoming and reflects18. Opposite PID: the cast is an input of its tick like a
+     * meal (Fact 3, either PID), so it precedes the incoming hit too [INFERENCE: no recorded second-actor cast]; the echo then lands a tick later. */
     for (int holder = 0; holder < 2; holder++) {
         reset_plan_state();
         Player* us = &sim.state.env.players[0];
@@ -102,7 +102,7 @@ static void test_reactive_pid_and_common_world(void) {
         int cursor = 0, resume = 101;
         apply_script(&cast, 101, &cursor, &resume, 0, 0);
         assert(us->current_hitpoints == 75);
-        assert(us->veng_cooldown > 0 && us->veng_active == (holder == 1));
+        assert(us->veng_cooldown > 0 && !us->veng_active);
         assert(him->current_hitpoints == (holder == 0 ? 81 : 99));
     }
 
@@ -334,7 +334,7 @@ static void test_skipped_guards_at_cutoff(void) {
         assert(plan.due[attack_index] == single.due[0] + energy_group);
         assert(us->inventory_cells[0].content_code == raw_id_to_content(13441));
         uint32_t expected = seed;
-        la_press_cost(&expected, 1);
+        la_press_cost(&expected, 0);
         assert(plan.timing_rng == expected); /* Skipped tails consumed no RNG or click time. */
     }
 }
@@ -605,6 +605,9 @@ static void test_uncertain_pid_alignment_executes(void) {
         int feasible[LA_MACROS], cursor = 0, resume = 101;
         la_scripts(&sim.state, 100, &f, &rules, scripts, feasible);
         LaScript* plan = &scripts[LA_WAIT_VENG_SPEC_1];
+        /* Alignment logic only: under the measured motor clock the five-click chain cannot finish by the aligned tick (three clicks in one tick:
+         * 0 of 757 live), so this test presses on the due ticks. */
+        plan->motor_active = 0;
         for (int now = 101; now < 104; now++)
             apply_script(plan, now, &cursor, &resume, 0, 0);
         assert(us->special_energy == 100);

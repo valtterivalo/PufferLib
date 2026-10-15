@@ -64,7 +64,7 @@ static inline OsrsPlayerEatResult osrs_player_eat_food_effects_with_clock(Player
     out.hp_wasted = heal_amount - r.hp_healed;
 
     if ((type == FOOD_KARAMBWAN || type == FOOD_HALIBUT)) {
-        p->karambwan_timer = 2;
+        p->karambwan_timer = 3; /* Live: after a karambwan at T nothing, karambwan included, is consumed before T+3 (3,898 click-matched meals). */
         p->food_timer = 3;
         p->potion_timer = 3;
         p->ate_karambwan_this_tick = 1;

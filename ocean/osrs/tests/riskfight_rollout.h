@@ -97,7 +97,8 @@ static void sim_observe_hit(void* context, const OsrsPvpHitEvent* event) {
     if (sim->obs.hit_count >= OBSERVE_HITS) {
         fprintf(stderr, "observed hit capacity exceeded\n"); abort();
     }
-    sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost};
+    sim->obs.hits[sim->obs.hit_count++] = (ObservedHit){event->source, event->target, event->kind, event->hitpoints_lost,
+        osrs_hitsplat_type(event->source == 0, event->damage, event->rolled_max)};
     if (event->target == 1) {
         sim->step_damage += event->hitpoints_lost;
         if (event->kind == OSRS_HIT_DIRECT && event->source == 0) sim->step_direct += event->hitpoints_lost;

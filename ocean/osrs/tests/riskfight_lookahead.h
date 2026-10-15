@@ -215,14 +215,15 @@ static _Thread_local Outcome g_la_scratch;
 
 /* Production guards cost no click: keep the motor clock, resume Ready through
  * the human executor once, and distinguish attack registration from damage. */
-static double la_press_cost(uint32_t* rng, int first);
+static double la_press_cost(uint32_t* rng, int index);
 static int la_press_tick(int tick, double ms);
 
 static int la_motor_due(LaScript* script, int earliest) {
     double start = (earliest - script->motor_tick - 1) * (double)TICK_MS;
     int first = !script->motor_chain || start > script->motor_ms;
+    script->motor_index = first ? 0 : script->motor_index + 1;
     script->motor_ms = fmax(start, script->motor_ms) +
-        la_press_cost(&script->timing_rng, first);
+        la_press_cost(&script->timing_rng, script->motor_index);
     script->motor_chain = 1;
     return la_press_tick(script->motor_tick, script->motor_ms);
 }
@@ -317,7 +318,7 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
                     script->ready_index = i + 1;
                     script->ready_due = script->motor_active ?
                         la_motor_due(script, now) : la_press_tick(now - 1,
-                            la_press_cost(&script->timing_rng, i == 0));
+                            la_press_cost(&script->timing_rng, 0));
                     script->ready_sent = 0;
                 }
                 if (script->ready_sent) { *cursor = script->n; return; }
@@ -349,6 +350,7 @@ static void la_script_step(LaScript* script, RiskfightState* s, HumanInput* hi,
                     script->motor_ms = fmax(script->motor_ms,
                         (script->due[i] - script->motor_tick - 1) * (double)TICK_MS);
                     script->motor_chain = 1;
+                    script->motor_index = 0;
                 } else if (script->motor_bound != i + 1) {
                     script->due[i] = la_motor_due(script, script->due[i]);
                     script->motor_bound = i + 1;
@@ -509,17 +511,14 @@ static double g_la_worth_scale = 1, g_la_w[GS_MOST_TICKETS + 1];
 static int g_la_worth_mode = 1, g_la_burst = 1;
 static double la_tickets_worth(int energy) { return g_la_worth_scale * g_la_w[imin(GS_MOST_TICKETS, energy / GS_TICKET)]; }
 
-static double la_press_cost(uint32_t* rng, int first) {
-    return first ? la_uniform(rng, FIRST_PRESS_MS, FIRST_PRESS_SPAN) : la_uniform(rng, GAP_MS, GAP_SPAN);
-}
-static int la_press_tick(int tick, double ms) {
-    return tick + (ms < CUTOFF_MS ? 1 : 2 + (int)((ms - CUTOFF_MS) / TICK_MS));
-}
+/** Milliseconds from the previous click of a chain (the tick start for index 0) to click `index`. */
+static double la_press_cost(uint32_t* rng, int index) { return motor_gap_ms(la_uniform(rng, 0, 1), index); }
+static int la_press_tick(int tick, double ms) { return motor_land_tick(tick, ms); }
 
 static void la_press(uint32_t* r, LaScript* script, int tick, const HumanCommand* clicks, int count) {
-    double ms = la_press_cost(r, 1);
+    double ms = 0;
     for (int i = 0; i < count; i++) {
-        if (i) ms += la_press_cost(r, 0);
+        ms += la_press_cost(r, i);
         assert(script->n < LA_SCRIPT);
         script->due[script->n] = la_press_tick(tick, ms);
         script->command[script->n++] = clicks[i];
@@ -530,7 +529,7 @@ static void la_time_production(uint32_t* rng, int tick, LaScript* script) {
     script->motor_active = 1;
     script->motor_tick = tick;
     script->motor_ms = 0;
-    script->motor_chain = script->motor_bound = 0;
+    script->motor_chain = script->motor_bound = script->motor_index = 0;
     script->timing_rng = *rng;
 }
 

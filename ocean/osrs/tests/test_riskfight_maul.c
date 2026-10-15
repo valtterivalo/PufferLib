@@ -64,8 +64,9 @@ static void test_double_click_needs_target_or_third_click(void) {
 
 static void test_ornate_and_ordinary_energy_costs(void) {
     const uint8_t weapons[] = {ITEM_GRANITE_MAUL_ORNATE, ITEM_GRANITE_MAUL};
-    const int expected_hits[] = {2, 1};
-    const int expected_energy[] = {0, 40};
+    /* Both mauls cost 50 (the plain maul was charged 60 in this sim before). */
+    const int expected_hits[] = {2, 2};
+    const int expected_energy[] = {0, 0};
     for (int arm = 0; arm < 4; arm++) {
         int i = arm / 2;
         reset();

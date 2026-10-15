@@ -346,13 +346,15 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
         update_player_timers(p, encounter_player_prayer_bonus(p));
         osrs_poison_tick_immunity(&s->poison[i]);
     }
-    /* Recorded local-PID t206 cast precedes the previous-tick opponent normal
-     * landing (automated recording seq37192,37252-37270). The first actor's
-     * inputs therefore precede its incoming phase; the second actor receives
-     * first-actor zero-delay melee before its own inputs. */
+    /* Inputs of both actors (meals, casts, equips, clicks) resolve before either actor's incoming hits: a meal heals before the damage landing on
+     * its tick, whichever actor is processed first (Fact 3, 28 of 28 order-discriminating own-exact-HP cases). The local-PID recording
+     * (seq37192, 37252-37270: cast on t206 precedes the previous-tick opponent landing) is the first-actor case of the same rule. */
     for (int turn = 0; turn < 2; turn++) {
         int i = s->env.pid_holder ^ turn;
-        if (turn == 0) riskfight_actor_inputs(s, ctx, i, queues[i]);
+        riskfight_actor_inputs(s, ctx, i, queues[i]);
+    }
+    for (int turn = 0; turn < 2; turn++) {
+        int i = s->env.pid_holder ^ turn;
         if (s->escaped[i]) {
             s->env.players[1 - i].num_pending_hits = 0;
             memset(s->env.pending_hit_metadata[1 - i], 0, sizeof(s->env.pending_hit_metadata[1 - i]));
@@ -373,14 +375,13 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
                 target->damage_received_scale += scale;
                 /* Initial status has no observed attacker identity. A self-source
                  * status event does not invent opponent credit or direct reward. */
-                pvp_observe_hit(&s->env, i, i, &poison_hit, poison_damage, before);
+                pvp_observe_hit(&s->env, i, i, &poison_hit, poison_damage, before, 0);
             }
             pvp_process_incoming_hits(&s->env, i);
             if (active && !s->env.players[i].veng_active)
                 s->inventory_use[i].vengeance_consumed_tick = s->env.tick;
         }
         if (s->env.players[i].current_hitpoints <= 0) continue;
-        if (turn == 1) riskfight_actor_inputs(s, ctx, i, queues[i]);
         pvp_step_player_movement(&s->env, i, ctx->route_topology, &ctx->routes[i]);
         pvp_resolve_same_tile(&s->env, s->env.pid_holder, 1 - s->env.pid_holder,
             ctx->route_topology);

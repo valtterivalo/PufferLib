@@ -12,7 +12,7 @@ typedef struct {
     HumanCommand command[LA_SCRIPT];
     int production, op[LA_SCRIPT], arg[LA_SCRIPT], fixed[LA_SCRIPT];
     int candidate_count[LA_SCRIPT], candidates[LA_SCRIPT][OSRS_INVENTORY_SIZE];
-    int motor_active, motor_tick, motor_chain, motor_bound;
+    int motor_active, motor_tick, motor_chain, motor_bound, motor_index;
     double motor_ms;
     int attack_after, attack_tracking, registered, ready_index, ready_due, ready_sent;
     int aligned_active, aligned_tick;
