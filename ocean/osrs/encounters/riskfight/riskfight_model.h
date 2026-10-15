@@ -6,6 +6,7 @@
 #include "../../osrs_player_inventory_use.h"
 #include "../../osrs_encounter_visual_events.h"
 #include "../../osrs_pvp_escape.h"
+#include "../../tests/riskfight_motor.h"
 
 typedef enum { RISKFIGHT_HUMAN, RISKFIGHT_HUMAN_HELDOUT, RISKFIGHT_ALL_IN, RISKFIGHT_ESCAPER, RISKFIGHT_OPPONENTS } RiskfightOpponent;
 enum { RISKFIGHT_CONSUME_BANDS = 5, RISKFIGHT_AXE_BANDS = 3, RISKFIGHT_TAB_SUPPLY_BANDS = 3, RISKFIGHT_TAB_SUPPLY_TICKS = 8 };
@@ -136,6 +137,12 @@ typedef struct {
     int vengeance_sacks;
 } RiskfightLoadout;
 
+/* Our hand when motor modelling is on: clicks of one decision are pressed in a chain whose gaps are the measured motor clock; a click is processed on the first
+ * tick after the decision when it is pressed before the 465 ms cutoff, later otherwise. While a chain is unfinished new clicks are dropped, as the plugin does
+ * not ask while a run is committed. */
+typedef struct { HumanCommand cmd; int land; } RiskfightMotorClick;
+typedef struct { int enabled, pending_count; uint32_t rng; RiskfightMotorClick pending[24]; } RiskfightMotor;
+
 typedef struct {
     const EncounterArenaTopology* route_topology;
     const RiskfightLoadout* loadout[2];
@@ -147,6 +154,7 @@ typedef struct {
     float damage_reward_coeff;
     float chance_reward_coeff;
     float teleport_penalty;
+    RiskfightMotor motor;
 } RiskfightContext;
 
 static inline float riskfight_outcome_reward(RiskfightOutcome outcome) {
@@ -362,6 +370,8 @@ static void riskfight_reset(EncounterState* state, EncounterContext* context, ui
     RiskfightState* s = (RiskfightState*)state;
     RiskfightContext* ctx = (RiskfightContext*)context;
     uint32_t rng = seed ? seed : s->env.rng_state;
+    ctx->motor.pending_count = 0;
+    ctx->motor.rng = osrs_lowbias32(rng ^ 0x6d6f746fu) | 1;
     memset(s, 0, sizeof(*s));
     s->env.rng_state = rng;
     s->env.winner = -1;

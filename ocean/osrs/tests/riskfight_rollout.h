@@ -187,6 +187,7 @@ static void queue_ours(Sim* sim, const Tape* tape, const OursPolicy* policy, int
         int actions[RF_HEADS];
         g_policy_hook(&sim->state, actions);
         riskfight_policy_commands(&sim->state, 0, actions, hi);
+        riskfight_motor_filter(&sim->context, &sim->state, hi);
     } else if (policy->kind == OURS_SCRIPT) {
         float obs[RF_OBS_SIZE];
         int actions[RF_HEADS];

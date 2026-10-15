@@ -11,6 +11,7 @@
 #include "rf_net.h"
 
 static RiskfightAlign g_align, g_total;
+static int g_last_actions[RF_HEADS], g_trace_episodes, g_episode;
 static void probe_hook(const void* p, int step) {
     (void)step;
     const Sim* sim = p;
@@ -18,6 +19,23 @@ static void probe_hook(const void* p, int step) {
     int stop = 0;
     for (int i = 0; i < q->count; i++) stop |= q->items[i].kind == HUMAN_COMMAND_STOP;
     riskfight_align_observe(&sim->state, 0, stop, &g_align);
+    if (g_episode < g_trace_episodes) {
+        const RiskfightState* s = &sim->state;
+        const Player* us = &s->env.players[0];
+        const Player* him = &s->env.players[1];
+        printf("TRACE ep %d t %d us %d him %d", g_episode, s->env.tick, us->current_hitpoints, him->current_hitpoints);
+        printf(" w %s", ITEM_DATABASE[us->equipped[GEAR_SLOT_WEAPON]].name);
+        if (us->attack_style_this_tick) printf(" SWING%s", us->used_special_this_tick ? "-SPEC" : "");
+        if (us->cast_veng_this_tick) printf(" VENG");
+        if (us->ate_food_this_tick || us->ate_karambwan_this_tick) printf(" ATE");
+        if (him->attack_style_this_tick) printf(" HIS-SWING%s", him->used_special_this_tick ? "-SPEC" : "");
+        if (him->ate_food_this_tick || him->ate_karambwan_this_tick) printf(" HIS-ATE");
+        if (him->cast_veng_this_tick) printf(" HIS-VENG");
+        printf(" |");
+        static const char* const HEAD[RF_HEADS] = {"weapon","shield","ring","food","drink","combo","orb","veng","spec","primary","prayer","style","head","cape","neck","body","legs","hands","feet","ammo","overhead"};
+        for (int h = 0; h < RF_HEADS; h++) if (g_last_actions[h]) printf(" %s=%d", HEAD[h], g_last_actions[h]);
+        printf("\n");
+    }
 }
 
 static RfNet* g_net;
@@ -29,6 +47,7 @@ static void net_policy(const RiskfightState* s, int* actions) {
     riskfight_write_observation(s, 0, obs);
     riskfight_write_action_mask(s, 0, mask);
     rf_net_act(g_net, obs, mask, &g_net_rng, g_net_hard, RF_ACTION_DIMS, RF_HEADS, actions);
+    memcpy(g_last_actions, actions, sizeof(g_last_actions));
 }
 static Outcome g_out;
 static Sim g_sim;
@@ -72,7 +91,9 @@ int main(int argc, char** argv) {
     sim_init(&g_sim);
     if (getenv("PROBE_LIVE")) for (int i = 0; i < 2; i++) g_sim.context.loadout[i] = &RISKFIGHT_LIVE_LOADOUT;
     riskfight_deployable = getenv("PROBE_DEPLOY") != NULL;
+    g_sim.context.motor.enabled = getenv("PROBE_MOTOR") != NULL;
     g_step_hook = probe_hook;
+    g_trace_episodes = getenv("PROBE_TRACE") ? atoi(getenv("PROBE_TRACE")) : 0;
     g_attack_first = getenv("PROBE_ATTACK_FIRST") != NULL;
     Tape tape = {0};
     static Observer observer;
@@ -96,6 +117,7 @@ int main(int argc, char** argv) {
         memset(g_la_memo, 0, sizeof(g_la_memo));
         g_sim.hist = hist;
         riskfight_align_reset(&g_align);
+        g_episode = e;
         run_steps(&g_sim, &tape, 0, MAX_STEPS, &model, &policy, osrs_lowbias32(seed ^ 0x6576616cu), &g_out);
         const RiskfightState* s = &g_sim.state;
         outcome_count[s->outcome[0]]++;
