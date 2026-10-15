@@ -328,6 +328,10 @@ static inline int osrs_hitsplat_type(int source_is_viewer, int damage, int rolle
 
 typedef void (*OsrsPvpHitObserver)(void* context, const OsrsPvpHitEvent* event);
 
+/* Fidelity replays only: called by apply_damage right before a direct hit's damage is computed. Returns -1 to keep the sim's roll, else the recorded
+ * final damage (>= 0), applied through the damage_mode 1 path (mitigation bypassed, Vengeance/recoil/Smite still derived from it). */
+typedef int (*OsrsPvpDamageOverride)(void* context, int tick, int attacker, int defender, const PendingHit* hit);
+
 typedef struct {
     int tick, source, target, target_hitpoints;
     float ko_probability;
@@ -865,6 +869,8 @@ typedef struct {
     void* hit_observer_context;
     OsrsPvpAttackChanceObserver attack_chance_observer;
     void* attack_chance_observer_context;
+    OsrsPvpDamageOverride damage_override;
+    void* damage_override_context;
 } OsrsPvpRuntime;
 
 typedef struct {

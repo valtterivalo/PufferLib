@@ -260,6 +260,49 @@ static void riskfight_policy_commands(const RiskfightState* s, int agent,
     }
 }
 
+
+static int riskfight_is_click(const HumanCommand* c) {
+    switch (c->kind) {
+        case HUMAN_COMMAND_INVENTORY_PRIMARY_CLICK: case HUMAN_COMMAND_EAT: case HUMAN_COMMAND_DRINK: case HUMAN_COMMAND_EQUIP_INVENTORY_ITEM:
+        case HUMAN_COMMAND_UNEQUIP: case HUMAN_COMMAND_VENGEANCE: case HUMAN_COMMAND_SPEC_TOGGLE: case HUMAN_COMMAND_ATTACK_NPC:
+        case HUMAN_COMMAND_WALK: case HUMAN_COMMAND_STOP: return 1;
+        default: return 0;
+    }
+}
+
+/** Replaces the commands of one decision by what our hand lands on the tick about to be processed. */
+static void riskfight_motor_filter(RiskfightContext* ctx, const RiskfightState* s, HumanInput* hi) {
+    RiskfightMotor* m = &ctx->motor;
+    if (!m->enabled) return;
+    int decision = s->env.tick;
+    HumanCommand fresh[48], instant[48];
+    int fresh_count = 0, instant_count = 0;
+    for (int i = 0; i < hi->commands.count; i++) {
+        const HumanCommand* c = &hi->commands.items[i];
+        if (riskfight_is_click(c)) { assert(fresh_count < 48); fresh[fresh_count++] = *c; }
+        else { assert(instant_count < 48); instant[instant_count++] = *c; }
+    }
+    human_input_clear_pending(hi);
+    human_input_clear_commands(hi);
+    for (int i = 0; i < instant_count; i++) human_input_queue_command(hi, instant[i]);
+    int busy = m->pending_count > 0;
+    if (!busy) {
+        double t0 = (decision - 1) * (double)MOTOR_TICK_MS, press = 0;
+        for (int k = 0; k < fresh_count && m->pending_count < 24; k++) {
+            uint32_t x = m->rng; x ^= x << 13; x ^= x >> 17; x ^= x << 5; m->rng = x;
+            press += motor_gap_ms(((x >> 8) + 0.5) / 16777216.0, k);
+            m->pending[m->pending_count++] = (RiskfightMotorClick){fresh[k], motor_land_tick(decision - 1, press)};
+        }
+        (void)t0;
+    }
+    int kept = 0;
+    for (int i = 0; i < m->pending_count; i++) {
+        if (m->pending[i].land <= decision) human_input_queue_command(hi, m->pending[i].cmd);
+        else m->pending[kept++] = m->pending[i];
+    }
+    m->pending_count = kept;
+}
+
 static void riskfight_finish(RiskfightState* s) {
     int dead[2] = {s->env.players[0].current_hitpoints <= 0, s->env.players[1].current_hitpoints <= 0};
     int escaped = s->escaped[0] || s->escaped[1];
@@ -269,7 +312,7 @@ static void riskfight_finish(RiskfightState* s) {
             dead[0] && dead[1] ? RISKFIGHT_MUTUAL_DEATH :
             dead[i] ? RISKFIGHT_DEATH : dead[1 - i] ? RISKFIGHT_KILL :
             escaped ? RISKFIGHT_ESCAPE : RISKFIGHT_TIMEOUT;
-        s->rewards[i] = riskfight_outcome_reward(s->outcome[i]);
+        s->rewards[i] = riskfight_outcome_reward(s->outcome[i], s->death_price);
     }
     s->env.winner = s->outcome[0] == RISKFIGHT_KILL ? 0 :
         s->outcome[1] == RISKFIGHT_KILL ? 1 : -1;
@@ -299,6 +342,20 @@ static void riskfight_observe_attack_chance(void* context, const OsrsPvpAttackCh
     float* chance = &observer->state->direct_ko_chance_mass[event->source];
     *chance += (1.0f - *chance) * event->ko_probability;
     if (observer->next) observer->next(observer->next_context, event);
+}
+
+/* A meal's animation is visible to the other side with a probability that depends on what else the eater shows (fit_meal_visibility.py over our
+ * own meals, whose animations the other side sees exactly as we see his; Fact 7 has the spectator side of the same hiding): never on a swing tick
+ * (Fact 6), p(quiet: no animation the tick before, no hit landing) 0.89 (961 of 1,077 meals), p(an animation carried from the tick before) 0.45
+ * (114 of 252), p(a hit lands, its block animation competing) 0.49 (151 of 311); 0 of 10 on a swing tick. Refit on the 159 tapes of c-engine, Oct 16. The old rule hid a meal exactly on swing and hit ticks and showed every other one. */
+static const double RF_MEAL_VISIBLE_QUIET = 0.89, RF_MEAL_VISIBLE_CARRY = 0.45, RF_MEAL_VISIBLE_HIT = 0.49;
+
+static int riskfight_meal_visible(const RiskfightState* s, int agent) {
+    const Player* p = &s->env.players[agent];
+    if (!osrs_consumption_animation_visible(p->current_hitpoints, p->attack_style_this_tick, p->ate_food_this_tick,
+            p->ate_karambwan_this_tick, s->inventory_use[agent].potion_animation_tick_plus_one == s->env.tick)) return 0;
+    double visible = p->hit_landed_this_tick ? RF_MEAL_VISIBLE_HIT : s->anim_carry[agent] ? RF_MEAL_VISIBLE_CARRY : RF_MEAL_VISIBLE_QUIET;
+    return (riskfight_sample_hash(s->script_seed[agent], (uint32_t)s->env.tick, 91) % 1000000u) < (uint32_t)(visible * 1e6);
 }
 
 static void riskfight_actor_inputs(RiskfightState* s, RiskfightContext* ctx,
@@ -339,6 +396,7 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
     for (int i = 0; i < 2; i++) {
         Player* p = &s->env.players[i];
         memset(s->visible[i].events[s->env.tick % RF_HISTORY_TICKS], 0, RF_EVENT_WIDTH * sizeof(float));
+        s->anim_carry[i] = s->anim_now[i];
         reset_tick_flags(p);
         p->hit_damage = 0;
         p->render_hit_count = 0;
@@ -427,6 +485,11 @@ static void riskfight_step_queues(RiskfightState* s, RiskfightContext* ctx,
             if (pvp_is_maul(weapon) && p->special_energy >= 50) s->maul_opp[i]++;
         }
     }
+    for (int i = 0; i < 2; i++) {
+        const Player* p = &s->env.players[i];
+        s->anim_now[i] = p->attack_style_this_tick != ATTACK_STYLE_NONE || p->ate_food_this_tick || p->ate_karambwan_this_tick ||
+            s->inventory_use[i].potion_animation_tick_plus_one == s->env.tick + 1 || p->hit_landed_this_tick || p->cast_veng_this_tick;
+    }
     s->env.tick++;
     pvp_tick_priority(&s->env);
     riskfight_finish(s);
@@ -454,13 +517,23 @@ static void riskfight_step(EncounterState* state, EncounterContext* context, con
     RiskfightContext* ctx = (RiskfightContext*)context;
     int opponent_actions[RF_HEADS];
     if (!ctx->self_play) {
-        float obs[RF_OBS_SIZE];
-        riskfight_write_observation(s, 1, obs);
-        riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
+        if (ctx->opp_hook) ctx->opp_hook(ctx->opp_user, s, opponent_actions);
+        else {
+            float obs[RF_OBS_SIZE];
+            riskfight_write_observation(s, 1, obs);
+            riskfight_script(obs, s->opponent_profile, s->script_seed[1], s->consume_ticks[1], opponent_actions);
+        }
+        if (s->opp_lag > 0) {
+            for (int k = 3; k > 0; k--) memcpy(s->opp_ring[k], s->opp_ring[k - 1], sizeof(s->opp_ring[k]));
+            memcpy(s->opp_ring[0], opponent_actions, sizeof(s->opp_ring[0]));
+            memcpy(opponent_actions, s->opp_ring[s->opp_lag], sizeof(opponent_actions));
+        }
     }
     riskfight_policy_commands(s, 0, actions, &ctx->policy_commands[0]);
+    riskfight_motor_filter(ctx, s, &ctx->policy_commands[0]);
     riskfight_policy_commands(s, 1, ctx->self_play ? actions + RF_HEADS : opponent_actions, &ctx->policy_commands[1]);
     riskfight_step_queues(s, ctx, &ctx->policy_commands[0].commands, &ctx->policy_commands[1].commands);
+    if (ctx->opp_after) ctx->opp_after(ctx->opp_user, s);
 }
 
 static void riskfight_step_human(EncounterState* state, EncounterContext* context, HumanInput* hi) {

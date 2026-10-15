@@ -136,12 +136,13 @@ static inline uint16_t osrs_inventory_content_code_from_raw_osrs_id(
 #undef OSRS_RAW_CONTENT_CODE_CASE
 
 static inline uint16_t osrs_inventory_content_code_from_item(uint8_t item_idx) {
-    if (item_idx >= NUM_ITEMS) {
+    if (!osrs_item_row_valid(item_idx)) {
         fprintf(stderr, "inventory content: invalid item index %u\n", item_idx);
         abort();
     }
+    /* A stat-priced row has no content code of its own: it is the inert occupant in observations (27281, same as other non-combat ids). */
     return osrs_inventory_content_code_from_raw_osrs_id(
-        ITEM_DATABASE[item_idx].item_id);
+        item_idx >= NUM_ITEMS ? 27281 : ITEM_DATABASE[item_idx].item_id);
 }
 
 #define OSRS_CONSUMABLE_CONTENT_CODE_CASE(KIND, DOSE, CODE) \

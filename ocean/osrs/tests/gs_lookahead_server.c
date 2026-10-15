@@ -134,6 +134,10 @@ static int prior_resolve(int tick, int side, int wire_slot, int kit, int raw, in
     int db_slot = prior_db_slot(kit);
     assert(db_slot >= 0);
     LaItem own = la_item_of(raw);
+    if (own.kind == LA_ITEM_UNSUPPORTED && gs_item_priced_from_stats(raw, observed_speed) >= 0) {
+        prior_note(tick, side, wire_slot, kit, raw, raw, "priced from its own stats");
+        return raw;
+    }
     if (own.kind == LA_ITEM_MAPPED && (db_slot != SLOT_WEAPON || get_item_attack_style((uint8_t)own.item) != ATTACK_STYLE_NONE)) return raw;
     const GsJavaItemRow* row = prior_row(raw);
     int known = own.kind == LA_ITEM_MAPPED || (row && row->has_stats && row->slot == kit);
@@ -266,6 +270,7 @@ static const char* request_unavailable(const Request* q) {
 static void request_gear_priors(Request* q) {
     static int unobserved_noted;
     g_prior_out_count = 0;
+    osrs_stat_items_clear(); /* request boundary: no world of an earlier request is alive */
     GsObservedGear* g = &q->belief.gear;
     if (g->source != GS_GEAR_COMPOSITION_OBSERVED) {
         if (g->source == GS_GEAR_UNKNOWN) { g->shield = -1; prior_triple(1, 1, -1); }
@@ -738,19 +743,7 @@ int main(int argc, char** argv) {
     g_ablation.panic = 0.8;
     g_ablation.panic_hp = 25;
     static OppFit fit;
-    FILE* f = fopen(argv[1], "rb");
-    assert(f && fread(&fit, sizeof(fit), 1, f) == 1);
-    fclose(f);
-    fit.eat_action = ACT_EAT_WARNING;
-    static EatMixture mixture;
-    f = fopen(argv[2], "rb");
-    assert(f && fread(&mixture, sizeof(mixture), 1, f) == 1);
-    fclose(f);
-    g_eat_model.on = 1;
-    g_eat_model.model = EAT_MIXTURE;
-    g_eat_model.types = mixture.types;
-    memcpy(g_eat_model.pi, mixture.pi, sizeof(mixture.pi));
-    g_eat_model.logit = mixture.logit;
+    opp_load(argv[1], argv[2], &fit, &g_eat_model);
     /* Defaults measured for this host class (bench_lookahead_server): 512 common worlds is the knee of decision regret, 8 threads keep the round trip ~2 ms. */
     g_la_worlds = SERVER_WORLDS;
     g_la_threads = SERVER_THREADS;

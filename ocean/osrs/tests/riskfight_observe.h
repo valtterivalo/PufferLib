@@ -167,11 +167,7 @@ static int attack_animation(const Player* p) {
     return osrs_combat_visual_weapon_attack_anim_for_fight_style(weapon, style, p->fight_style, p->used_special_this_tick, OSRS_PLAYER_UNARMED_ATTACK_ANIM);
 }
 
-static int consumption_seen(const RiskfightState* s, int agent) {
-    const Player* p = &s->env.players[agent];
-    return osrs_consumption_animation_visible(p->current_hitpoints, p->attack_style_this_tick, p->ate_food_this_tick, p->ate_karambwan_this_tick,
-        s->inventory_use[agent].potion_animation_tick_plus_one == s->env.tick) && !p->hit_landed_this_tick;
-}
+static int consumption_seen(const RiskfightState* s, int agent) { return riskfight_meal_visible(s, agent); }
 
 /* The animation a player shows this tick, -1 for none: an attack hides a meal, a meal hides a cast, a cast hides the block. */
 static int animation_shown(const RiskfightState* s, int agent) {
