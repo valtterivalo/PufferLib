@@ -49,7 +49,8 @@ typedef struct {
     int weapon_raw; /* his wielded raw id from the E row, -2 unobserved, -1 none */
     int act_first, act_count;
 } RecTick;
-typedef struct { const Tape* tape; RecTick* at; } Rec;
+/* pid[tick - lo]: the PID holder (0 us, 1 him) the echo timing of Fact 4 implies (nearest evidence tick), -1 without evidence in the fight. */
+typedef struct { const Tape* tape; RecTick* at; int8_t* pid; } Rec;
 
 static void rec_hit_add(RecHits* h, int amount, char klass) {
     if (h->n == MAXH) { fprintf(stderr, "more than %d recorded landings on one tick\n", MAXH); abort(); }
@@ -86,6 +87,38 @@ static void rec_build(Rec* rec, const Tape* tape) {
         if (h->klass == 'A' || h->klass == 'B') rec_hit_add(&r->attack[defender], h->amount, h->klass);
         else rec_hit_add(&r->echo[defender], h->amount, h->klass);
     }
+    /* PID from echoes: an echo on S of a hit taken by R = 1 - S lands on the tick of that hit iff R was processed before S (Fact 4). */
+    {
+        rec->pid = malloc((size_t)n);
+        int8_t* evidence = malloc((size_t)n);
+        if (!rec->pid || !evidence) abort();
+        memset(evidence, -1, (size_t)n);
+        for (int y = tape->lo; y <= tape->hi; y++) {
+            for (int s = 0; s < 2; s++) {
+                const RecHits* echoes = &rec->at[y - tape->lo].echo[s];
+                for (int e = 0; e < echoes->n; e++) {
+                    int same = 0, next = 0, amount = echoes->amount[e];
+                    const RecHits* now = &rec->at[y - tape->lo].attack[1 - s];
+                    for (int i = 0; i < now->n; i++) same |= now->amount[i] > 0 && (amount == now->amount[i] / 10 + 1 || amount == now->amount[i] * 3 / 4);
+                    if (y > tape->lo) {
+                        const RecHits* before = &rec->at[y - 1 - tape->lo].attack[1 - s];
+                        for (int i = 0; i < before->n; i++) next |= before->amount[i] > 0 && (amount == before->amount[i] / 10 + 1 || amount == before->amount[i] * 3 / 4);
+                    }
+                    if (same && !next) evidence[y - tape->lo] = (int8_t)(1 - s);
+                    if (next && !same) evidence[y - 1 - tape->lo] = (int8_t)s;
+                }
+            }
+        }
+        for (int t = 0; t < n; t++) {
+            int best = -1;
+            for (int d = 0; d < n && best < 0; d++) {
+                if (t - d >= 0 && evidence[t - d] >= 0) best = evidence[t - d];
+                else if (t + d < n && evidence[t + d] >= 0) best = evidence[t + d];
+            }
+            rec->pid[t] = (int8_t)best;
+        }
+        free(evidence);
+    }
     for (int i = 0; i < tape->action_count; i++) {
         const TapeAction* a = &tape->actions[i];
         if (a->tick < tape->lo || a->tick > tape->hi) continue;
@@ -117,7 +150,7 @@ typedef struct {
     int* extra; /* [steps][2] sim attack landings without a recorded counterpart */
     SimHit* hits; int hit_count, hit_cap;
     int* hp[2]; int* bar_sim; uint8_t* swing[2]; uint8_t* consumed[2];
-    int steps_done, outcome, his_weapon_raw, clock_unknown;
+    int steps_done, outcome, his_weapon_raw, clock_unknown, trace_active;
     int div_first[DIV_KINDS], div_ticks[DIV_KINDS], div_last_tick[DIV_KINDS];
     char div_text[DIV_KINDS][200];
     int unknown_weapon_noted[8], unknown_weapon_count;
@@ -283,6 +316,14 @@ static void compare_step(Run* r, int k, int x, RiskfightState* s, int hits_befor
     const TapeTick* row = tape_tick(tape, x);
     const RecTick* rt = &r->rec->at[x - tape->lo];
     int hp0 = s->env.players[0].current_hitpoints, hp1 = s->env.players[1].current_hitpoints;
+    if (g_trace && r->exact && r->trace_active) {
+        printf("t%d pid%d hp us %d/%d him %d | rec land us %d him %d echo us %d him %d swing %d%d eat %d | sim:", x, s->env.pid_holder, hp0, row->hp, hp1,
+            rt->attack[0].n, rt->attack[1].n, rt->echo[0].n, rt->echo[1].n, rt->swing[0] > 0, rt->swing[1] > 0, rt->eat);
+        for (int i = hits_before; i < r->hit_count; i++) printf(" [k%d %d>%d %d]", r->hits[i].kind, r->hits[i].attacker, r->hits[i].target, r->hits[i].damage);
+        printf(" swing %d%d | rec hits:", r->swing[0][k], r->swing[1][k]);
+        for (int d = 0; d < 2; d++) { for (int i = 0; i < rt->attack[d].n; i++) printf(" %c%d@%d", rt->attack[d].klass[i], rt->attack[d].amount[i], d); for (int i = 0; i < rt->echo[d].n; i++) printf(" %c%d@%d", rt->echo[d].klass[i], rt->echo[d].amount[i], d); }
+        printf("\n");
+    }
     if (hp0 != row->hp) note_div(r, DIV_HP_US, x, "our hit points sim %d recording %d", hp0, row->hp);
     int sim_attack[2] = {0, 0}, rec_attack[2] = {rt->attack[0].n, rt->attack[1].n};
     int echo_sim[2][MAXH], echo_rec[2][MAXH], echo_sim_n[2] = {0, 0};
@@ -388,6 +429,26 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
         else if (replace >= 0) him->inventory[replace] = code;
     }
     /* Pending hits launched on tick t0 that land on t0+1: no launch is in the window, so they are given (recorded damage) and left out of the statistics. */
+    /* His hit points: drawn inside the first bar band the recording shows after the seed tick, then raised by the damage recorded on him up to that tick (no meal
+     * is assumed in between). Without any bar in the window the calibrator's uniform prior stays. The PID before the first recorded pairing is the first known one. */
+    for (int x = t0 + 1; x <= tape->hi; x++) {
+        const TapeTick* bar = tape_tick(tape, x);
+        if (bar->bar_now_ratio < 0 || bar->bar_now_scale <= 1) continue;
+        OsrsHealthBarRange band = osrs_health_bar_range(bar->bar_now_ratio, bar->bar_now_scale, 99, 121);
+        if (band.kind != OSRS_HEALTH_BAR_KNOWN) continue;
+        int damage = 0;
+        for (int y = t0 + 1; y <= x; y++) damage += tape_damage_on_him(tape, y);
+        int hp = band.lower + (int)(uniform(&rng) * (band.upper - band.lower + 1)) + damage;
+        snap.loadout[1].hitpoints = snap.side[1].hitpoints = hp > 121 ? 121 : hp;
+        break;
+    }
+    snap.pid_holder = r->rec->pid[t0 - tape->lo] >= 0 ? r->rec->pid[t0 - tape->lo] : snap.pid_holder;
+    if (r->rec->pid[t0 - tape->lo] < 0) {
+        for (int x = t0; x <= tape->hi; x++) {
+            char pid = tape_tick(tape, x)->pid;
+            if (pid == 'L' || pid == 'l' || pid == 'O' || pid == 'o') { snap.pid_holder = pid == 'L' || pid == 'l' ? 0 : 1; break; }
+        }
+    }
     snap.pending_known = 1;
     memset(r->exclude_label1, 0, sizeof(r->exclude_label1));
     if (t0 + 1 <= tape->hi) {
@@ -412,6 +473,20 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
     state->env.pvp_runtime.damage_override = exact ? override_cb : NULL;
     state->env.pvp_runtime.damage_override_context = r;
     r->his_weapon_raw = row0->opponent_gear[3];
+    /* A ranged side whose commonest recorded swing gap is one tick under its weapon's speed fights on Rapid. */
+    for (int side = 0; side < 2; side++) {
+        int gaps[8] = {0}, previous = -1;
+        for (int x = t0 + 1; x <= tape->hi; x++) {
+            if (!r->rec->at[x - tape->lo].swing[side] || r->rec->at[x - tape->lo].spec_swing[side]) continue;
+            if (previous >= 0 && x - previous < 8) gaps[x - previous]++;
+            previous = x;
+        }
+        int mode = 1;
+        for (int g = 2; g < 8; g++) if (gaps[g] > gaps[mode]) mode = g;
+        Player* p = &state->env.players[side];
+        if (gaps[mode] >= 3 && get_slot_weapon_attack_style(p) == ATTACK_STYLE_RANGED && mode == get_slot_gear_bonuses(p)->attack_speed - 1)
+            riskfight_execute_command(state, ctx, side, &(HumanCommand){.kind = HUMAN_COMMAND_FIGHT_STYLE, .fight_style = FIGHT_STYLE_RAPID});
+    }
     int base_x = FIGHT_AREA_BASE_X + FIGHT_AREA_WIDTH / 2, base_y = FIGHT_AREA_BASE_Y + FIGHT_AREA_HEIGHT / 2;
     Cmds cmds[2];
     for (int k = 0; k < r->steps && !state->env.episode_over; k++) {
@@ -423,8 +498,10 @@ static int run_fight(Run* r, uint32_t seed, int exact, RiskfightState* state, Ri
         us->x = base_x; us->y = base_y;
         him_p->x = base_x + row->ox - row->ux; him_p->y = base_y + row->oy - row->uy;
         us->dest_x = us->x; us->dest_y = us->y; him_p->dest_x = him_p->x; him_p->dest_y = him_p->y;
-        if (row->pid == 'L' || row->pid == 'l') state->env.pid_holder = 0;
+        if (r->rec->pid[x - tape->lo] >= 0) state->env.pid_holder = r->rec->pid[x - tape->lo];
+        else if (row->pid == 'L' || row->pid == 'l') state->env.pid_holder = 0;
         else if (row->pid == 'O' || row->pid == 'o') state->env.pid_holder = 1;
+        else state->env.pid_holder = snap.pid_holder;
         us->prayer = overhead_of(row->overhead);
         us->offensive_prayer = row->piety ? OFFENSIVE_PRAYER_PIETY : OFFENSIVE_PRAYER_NONE;
         build_commands(r, x, state, cmds);
@@ -492,6 +569,7 @@ int main(int argc, char** argv) {
     const char* tsv_path = NULL;
     const char* div_path = NULL;
     for (; first < argc && argv[first][0] == '-'; first += 2) {
+        if (!strcmp(argv[first], "-v")) { g_trace = 1; first--; continue; }
         if (first + 1 >= argc) { fprintf(stderr, "option %s needs a value\n", argv[first]); return 2; }
         if (!strcmp(argv[first], "-s")) seeds = atoi(argv[first + 1]);
         else if (!strcmp(argv[first], "-e")) exact_seeds = atoi(argv[first + 1]);
@@ -522,6 +600,9 @@ int main(int argc, char** argv) {
     int skipped = 0;
     for (int ti = first; ti < argc; ti++) {
         Tape tape;
+#ifndef FID_NO_STAT_ITEMS /* the pre-fix engine has no stat-priced rows */
+        osrs_stat_items_clear();
+#endif
         tape_load(&tape, argv[ti]);
         const char* base = strrchr(argv[ti], '/') ? strrchr(argv[ti], '/') + 1 : argv[ti];
         int t0 = -1;
@@ -613,7 +694,7 @@ int main(int argc, char** argv) {
         if (!seeded) {
             skipped++;
             if (tsv) fprintf(tsv, "%s\t%s\t%d\t-\t%d\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\tskipped: tape cannot be seeded\t-\t-\t-\t-\t-\t-\t-\n", base, tape.name, tape.unknown_count, t0);
-            run_free(&run); free(rec.at); tape_free(&tape);
+            run_free(&run); free(rec.at); free(rec.pid); tape_free(&tape);
             continue;
         }
         for (int d = 0; d < 2; d++) { sim_land[d] /= seeded; sim_pos[d] /= seeded; sim_swing[d] /= seeded; for (int a = 0; a < 2; a++) sim_echo[d][a] /= seeded; }
@@ -625,6 +706,7 @@ int main(int argc, char** argv) {
         int seed0_ticks[DIV_KINDS] = {0}, seed0_first[DIV_KINDS]; char seed0_text[DIV_KINDS][200];
         for (int k = 0; k < DIV_KINDS; k++) { seed0_first[k] = -1; seed0_text[k][0] = 0; }
         for (int s = 0; s < exact_seeds; s++) {
+            run.trace_active = s == 0;
             if (!run_fight(&run, osrs_lowbias32(tape_salt + 0x51ED270Bu + (uint32_t)s * 0x9E3779B9u), 1, &state, &ctx)) break;
             exact_total++;
             /* Recorded attack landings the sim never produced. */
@@ -705,7 +787,7 @@ int main(int argc, char** argv) {
                 first_div >= 0 ? DIV_NAME[first_kind] : "-", first_div >= 0 ? first_text : "-");
         }
         free(rec_d[0].v); free(rec_d[1].v); free(sim_d[0].v); free(sim_d[1].v);
-        run_free(&run); free(rec.at); tape_free(&tape);
+        run_free(&run); free(rec.at); free(rec.pid); tape_free(&tape);
     }
     if (tsv) fclose(tsv);
     if (dfile) fclose(dfile);
