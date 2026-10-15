@@ -42,7 +42,12 @@ static OsrsPoisonSource tape_local_poison(const TapeTick* tick, OsrsPoisonState*
 
 typedef struct { int tick; char side; int anim; } TapeAnim;
 typedef struct { int tick; char side; int amount, type; char klass; } TapeHit;
-typedef struct { int tick; TapeActionKind kind; int slot, raw_id; } TapeAction;
+/* origin_unknown: the recording could not attribute the menu action to the human or the plugin (origin UNKNOWN/AMBIGUOUS); the action is still replayed. */
+typedef struct { int tick; TapeActionKind kind; int slot, raw_id, origin_unknown; } TapeAction;
+
+/* A raw client item id that has no native row. The tape carries it unchanged (worn/bag/opponent_gear/action raw ids); `where` is a mask of the places it occurs. */
+enum { TAPE_UNKNOWN_MAX = 64, TAPE_UNKNOWN_WORN = 1, TAPE_UNKNOWN_BAG = 2, TAPE_UNKNOWN_ACTION = 4 };
+typedef struct { int raw, where; } TapeUnknownItem;
 
 typedef struct {
     char name[64], session[32];
@@ -55,6 +60,7 @@ typedef struct {
     void* hist_series;
     Observer* observer_series;
     uint8_t* his_flags;
+    TapeUnknownItem unknown[TAPE_UNKNOWN_MAX]; int unknown_count;
 } Tape;
 
 /* Components of a rollout that an ablation replaces by what the recording shows, read from GS_ABL: hp=uniform|heals|oracle, eats, escape, pid, damage,
@@ -150,6 +156,43 @@ static void tape_line_end(const char* p, const char* path, const char* line) {
     if (*p) tape_invalid(path, line);
 }
 
+/* A raw id is a content (inventory) id when the generated content table has a row for it. */
+#define TAPE_CONTENT_CASE(CODE, ITEM_POINTER, ITEM_IDX, RAW_OSRS_ID, ...) case RAW_OSRS_ID: return 1;
+static int raw_content_known(int raw) {
+    if (raw < 0 || raw > UINT16_MAX) return 0;
+    switch (osrs_item_canonical_raw_id((uint16_t)raw)) {
+        OSRS_ITEM_CONTENT_ROWS(TAPE_CONTENT_CASE)
+        default: return 0;
+    }
+}
+#undef TAPE_CONTENT_CASE
+
+static void tape_note_unknown(Tape* tape, int raw, int where, const char* path) {
+    for (int i = 0; i < tape->unknown_count; i++)
+        if (tape->unknown[i].raw == raw) { tape->unknown[i].where |= where; return; }
+    if (tape->unknown_count == TAPE_UNKNOWN_MAX) tape_invalid(path, "too many distinct unknown item ids");
+    tape->unknown[tape->unknown_count++] = (TapeUnknownItem){raw, where};
+}
+
+/** Every raw id of the tape without a native row, recorded once: worn and opponent slots need an ITEM_DATABASE row, bag slots and clicked items a content row. */
+static void tape_collect_unknowns(Tape* tape, const char* path) {
+    for (int t = 0; t < tape->hi - tape->lo + 1; t++) {
+        const TapeTick* row = &tape->ticks[t];
+        for (int i = 0; i < TAPE_WORN; i++)
+            if (row->worn[i] >= 0 && osrs_item_index_from_raw_id(row->worn[i]) < 0) tape_note_unknown(tape, row->worn[i], TAPE_UNKNOWN_WORN, path);
+        for (int i = 0; i < row->opponent_gear_count; i++)
+            if (row->opponent_gear[i] >= 0 && osrs_item_index_from_raw_id(row->opponent_gear[i]) < 0)
+                tape_note_unknown(tape, row->opponent_gear[i], TAPE_UNKNOWN_WORN, path);
+        for (int i = 0; i < TAPE_BAG; i++)
+            if (row->bag[i] >= 0 && !raw_content_known(row->bag[i])) tape_note_unknown(tape, row->bag[i], TAPE_UNKNOWN_BAG, path);
+    }
+    for (int i = 0; i < tape->action_count; i++) {
+        const TapeAction* a = &tape->actions[i];
+        if (a->kind == ACTION_CLICK && a->raw_id >= 0 && !raw_content_known(a->raw_id) && osrs_item_index_from_raw_id(a->raw_id) < 0)
+            tape_note_unknown(tape, a->raw_id, TAPE_UNKNOWN_ACTION, path);
+    }
+}
+
 static int tape_load(Tape* tape, const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) tape_invalid(path, "cannot open file");
@@ -219,8 +262,14 @@ static int tape_load(Tape* tape, const char* path) {
         } else if (!strcmp(kind, "M")) {
             TapeAction* a = &tape->actions[tape->action_count++];
             char name[16];
-            int r = sscanf(rest, "%d %15s %d %d", &a->tick, name, &a->slot, &a->raw_id);
-            assert(r == 4);
+            int fields_end = 0;
+            int r = sscanf(rest, "%d %15s %d %d%n", &a->tick, name, &a->slot, &a->raw_id, &fields_end);
+            if (r != 4) tape_invalid(path, line);
+            const char* tail = rest + fields_end;
+            while (isspace((unsigned char)*tail)) tail++;
+            a->origin_unknown = *tail == 'X';
+            if (a->origin_unknown) tail++;
+            tape_line_end(tail, path, line);
             a->kind = !strcmp(name, "click") ? ACTION_CLICK : !strcmp(name, "attack") ? ACTION_ATTACK :
                 !strcmp(name, "spec") ? ACTION_SPEC : ACTION_VENGEANCE;
         } else if (!strcmp(kind, "Q")) {
@@ -300,6 +349,7 @@ static int tape_load(Tape* tape, const char* path) {
         }
     }
     fclose(f);
+    tape_collect_unknowns(tape, path);
     free(pending_seen);
     free(poison_seen);
     free(gear_seen);
@@ -317,15 +367,18 @@ static void tape_free(Tape* tape) {
     free(tape->ticks); free(tape->anims); free(tape->hits); free(tape->actions);
 }
 
+/** An id without an ITEM_DATABASE row is an explicit unknown: the raw id stays in the tape, the sim slot is ITEM_NONE until a stats-priced row is plugged in here
+ * (osrs_item_priced_from_stats(raw)). Never an abort. */
 static uint8_t raw_id_to_item(int raw) {
+    if (raw < 0) return ITEM_NONE;
     int item = osrs_item_index_from_raw_id(raw);
     if (item >= 0) return (uint8_t)item;
-    fprintf(stderr, "no sim item for raw id %d\n", raw);
-    abort();
+    return ITEM_NONE;
 }
 
+/** Inventory content code of a raw id; 0 (empty) for an explicit unknown, see tape_unknown_count. */
 static uint16_t raw_id_to_content(int raw) {
-    return raw < 0 ? 0 : osrs_inventory_content_code_from_raw_osrs_id((uint16_t)raw);
+    return raw_content_known(raw) ? osrs_inventory_content_code_from_raw_osrs_id((uint16_t)raw) : 0;
 }
 
 static int tape_has_anim(const Tape* tape, int anim) {
